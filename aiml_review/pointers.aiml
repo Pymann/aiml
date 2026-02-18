@@ -1,0 +1,31 @@
+# Pointer Syntax Verification
+
+# Declaration
+- decl: [x, i32, 42]
+# Syntax: ptr<Type>
+- decl: [p, ptr<i32>, { '&': [x] }]
+
+# Address of Address (Syntax: '&&' or '&&&')
+# Creates a temporary pointer to 'p'
+- decl: [pp_temp, ptr<ptr<i32>>, { '&&': [x] }]
+
+# Dereference (Read)
+# Syntax: {'?': [ptr]}
+- print: ["Value of X via P: ${ { '?': [p] } }"]
+
+# Store (Write to address)
+# Syntax: store: [ptr, value, (optional)depth]
+# depth 1 (default): *ptr = value
+# depth N: *(*...*ptr) = value (N dereferences acting on ptr)
+- store: [p, 100]
+- print: ["New value of X: ${x}"]
+
+# Pointer to Pointer
+- decl: [pp, ptr<ptr<i32>>, { '&': [p] }]
+# Double Dereference (Syntax: '??' or '???')
+- print: ["Value of X via PP: ${ { '??': [pp] } }"]
+
+# Deep Store (Depth 1)
+# Writes to *(*pp) which is x
+- store: [pp, 99, 1]
+- print: ["Modified X via PP deep store: ${x}"]

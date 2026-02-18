@@ -1,0 +1,38 @@
+# Test Enums
+
+- enum:
+    name: Color
+    values:
+      - Red
+      - Green
+      - Blue: 10
+      - Yellow
+
+- decl: [c, Color, Color.Red]
+- print: ["Color Red is: ", c]
+
+- decl: [c2, Color, Color.Blue]
+- print: ["Color Blue is: ", c2]
+
+- decl: [c3, Color, Color.Yellow]
+- print: ["Color Yellow (Blue+1) is: ", c3]
+
+
+- if:
+    condition: {eq: [c, Color.Red]}
+    then:
+      - print: ["Confirmed: c is Red"]
+
+- if:
+    condition: {eq: [c, Color.Green]}
+    else:
+      - print: ["Confirmed: c is NOT Green"]
+
+# Test Map with Enum (should be map<i32, ...>)
+- decl: [colorMap, map<Color:string>]
+- call: [colorMap.put, Color.Red, "This is Red"]
+- call: [colorMap.put, Color.Blue, "This is Blue"]
+
+- print: ["Map[Red]: ", {call: [colorMap.get, Color.Red]}]
+- print: ["Map[Blue]: ", {call: [colorMap.get, Color.Blue]}]
+

@@ -1,0 +1,19 @@
+- def:
+    name: add_two
+    args: [[a, i32], [b, i32]]
+    return: i32
+    body:
+      - return: { +: [a, b] }
+
+- def:
+    name: greet
+    args: []
+    return: void
+    body:
+      - print: ["Hello from Function!"]
+
+- print: ["Testing Functions..."]
+- decl: [res, i32, { call: [add_two, 10, 20] }]
+- print: ["Result of add_two(10, 20): ${res}"]
+
+- call: [greet]

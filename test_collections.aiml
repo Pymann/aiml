@@ -1,0 +1,7 @@
+- print: ["Testing Arrays with Hyphen Syntax..."]
+- decl: [arr, i32-3]
+- set: [arr-0, 10]
+- set: [arr-1, 20]
+- set: [arr-2, { +: [arr-0, arr-1] }]
+- print: ["arr-2 = ${arr-2}"]
+- call: [sys.exit, arr-2]

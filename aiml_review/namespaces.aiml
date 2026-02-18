@@ -1,0 +1,36 @@
+# Modules and Namespaces
+
+# 1. Defining a Namespace
+# Usually at the top of the file.
+# Affects all declarations in the file.
+# Internally prefixes symbols: my_math_calc -> "my.math.calc"
+
+- namespace: my.math
+
+- def:
+    name: calc
+    args: []
+    return: i32
+    body: ...
+
+# 2. Importing a Namespace
+# Makes symbols available in the current scope.
+
+- import: my.math
+# - import: my.math as mm  (Alias?)
+
+- def:
+    name: main
+    args: []
+    return: void
+    body:
+      # Direct usage if imported
+      - call: [calc]
+      
+# 3. File Inclusion (Physical Import)
+# Compiles referenced files together with the current one.
+# Simplifies build commands (no need to pass all files manually).
+- include: "utils/math.aiml"
+- include: "../lib/common.aiml"
+
+
