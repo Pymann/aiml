@@ -14,7 +14,7 @@ class CallDispatcher {
 public:
     using Evaluator = std::function<llvm::Value*(CompilerContext&, const YAML::Node&)>;
 
-    static llvm::Value* dispatch(CompilerContext& ctx, const std::string& funcName, const std::vector<YAML::Node>& args, Evaluator evaluator) {
+    static llvm::Value* dispatch(CompilerContext& ctx, const std::string& funcName, const std::vector<YAML::Node>& args, Evaluator evaluator, llvm::BasicBlock* exceptionBlock = nullptr) {
         // Method Call Check: obj.method
         size_t methodDotPos = funcName.rfind('.');
         if (methodDotPos != std::string::npos) {
@@ -67,7 +67,14 @@ public:
                     return nullptr;
                 }
                 
-                return ctx.builder.CreateCall(func, llvmArgs, "call_method");
+                if (exceptionBlock) {
+                    llvm::BasicBlock* normalBB = llvm::BasicBlock::Create(ctx.context, "invoke_normal", ctx.builder.GetInsertBlock()->getParent());
+                    llvm::Value* res = ctx.builder.CreateInvoke(func, normalBB, exceptionBlock, llvmArgs, "invoke_method");
+                    ctx.builder.SetInsertPoint(normalBB);
+                    return res;
+                } else {
+                    return ctx.builder.CreateCall(func, llvmArgs, "call_method");
+                }
             }
             
             // --- LIST ---
@@ -276,8 +283,14 @@ public:
                  callArgs.push_back(val);
              }
              
-             llvm::Value* res = ctx.builder.CreateCall(func, callArgs);
-             return res;
+             if (exceptionBlock) {
+                 llvm::BasicBlock* normalBB = llvm::BasicBlock::Create(ctx.context, "invoke_normal", ctx.builder.GetInsertBlock()->getParent());
+                 llvm::Value* res = ctx.builder.CreateInvoke(func, normalBB, exceptionBlock, callArgs);
+                 ctx.builder.SetInsertPoint(normalBB);
+                 return res;
+             } else {
+                 return ctx.builder.CreateCall(func, callArgs);
+             }
         }
 
         LOG_ERROR("Function '" + funcName + "' not implemented or invalid format.");

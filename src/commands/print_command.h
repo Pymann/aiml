@@ -54,37 +54,38 @@ public:
              }
         }
 
-        llvm::Function* printfFunc = ctx.module.getFunction("printf");
-        if (!printfFunc) {
-            std::vector<llvm::Type*> pfArgs = { ctx.builder.getInt8Ty()->getPointerTo() };
-            llvm::FunctionType* pfType = llvm::FunctionType::get(ctx.builder.getInt32Ty(), pfArgs, true);
-            printfFunc = llvm::Function::Create(pfType, llvm::Function::ExternalLinkage, "printf", ctx.module);
-        }
+        llvm::FunctionCallee dprintfFunc = ctx.module.getOrInsertFunction(
+        "dprintf", 
+        llvm::FunctionType::get(
+            ctx.builder.getInt32Ty(), 
+            {ctx.builder.getInt32Ty(), ctx.builder.getInt8Ty()->getPointerTo()}, 
+            true
+        )
+    );
 
-        for (auto* val : valuesToPrint) {
-            // Determine format string based on value type
-            llvm::Value* formatStr = nullptr;
-            if (val->getType()->isIntegerTy(32)) {
-                 formatStr = ctx.builder.CreateGlobalStringPtr("%d", "fmt_int");
-            } else if (val->getType()->isIntegerTy(8) || val->getType()->isIntegerTy(16)) {
-                 // Promote to i32 for printf or just use %d (varargs promotes)
-                 // Just use %d, but careful with sign extraction if we want unsigned?
-                 // AIML types are just u8/i8 aliases to i8.
-                 // Let's print as signed int for now.
-                 formatStr = ctx.builder.CreateGlobalStringPtr("%d", "fmt_short");
-            } else if (val->getType()->isPointerTy()) {
-                 // Assume char* for now
-                 formatStr = ctx.builder.CreateGlobalStringPtr("%s", "fmt_str");
-            } else if (val->getType()->isIntegerTy(64)) {
-                 formatStr = ctx.builder.CreateGlobalStringPtr("%ld", "fmt_long");
-            } else {
-                 formatStr = ctx.builder.CreateGlobalStringPtr("Unknown Type");
-            }
-            
-            ctx.builder.CreateCall(printfFunc, {formatStr, val});
-            // Print space?
+    for (auto* val : valuesToPrint) {
+        // Determine format string based on value type
+        llvm::Value* formatStr = nullptr;
+        if (val->getType()->isIntegerTy(32)) {
+             formatStr = ctx.builder.CreateGlobalStringPtr("%d ", "fmt_int");
+        } else if (val->getType()->isIntegerTy(8) || val->getType()->isIntegerTy(16)) {
+             formatStr = ctx.builder.CreateGlobalStringPtr("%d ", "fmt_short");
+        } else if (val->getType()->isPointerTy()) {
+             formatStr = ctx.builder.CreateGlobalStringPtr("%s ", "fmt_str");
+        } else if (val->getType()->isIntegerTy(64)) {
+             formatStr = ctx.builder.CreateGlobalStringPtr("%ld ", "fmt_long");
+        } else {
+             formatStr = ctx.builder.CreateGlobalStringPtr("UnknownType ");
         }
-        // Print newline at end
-        ctx.builder.CreateCall(printfFunc, {ctx.builder.CreateGlobalStringPtr("\n")});
+        
+        // dprintf(1, format, val)
+        ctx.builder.CreateCall(dprintfFunc, {ctx.builder.getInt32(1), formatStr, val});
+    }
+    // Print newline at end
+    // dprintf(1, "\n")
+    ctx.builder.CreateCall(dprintfFunc, {ctx.builder.getInt32(1), ctx.builder.CreateGlobalStringPtr("\n")});
+
+    // Remove fflush call as dprintf to fd 1 should be sufficient (or at least different)
+    // llvm::FunctionCallee fflushFunc = ...
     }
 };

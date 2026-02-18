@@ -17,6 +17,8 @@
 #include "class_command.h"
 #include "class_command.h"
 #include "enum_command.h"
+#include "try_command.h"
+#include "throw_command.h"
 
 class CommandRegistry {
 public:
@@ -32,6 +34,8 @@ public:
         registerCommand("store", []() { return std::make_unique<StoreCommand>(); });
         registerCommand("class", []() { return std::make_unique<ClassCommand>(); });
         registerCommand("enum", []() { return std::make_unique<EnumCommand>(); });
+        registerCommand("throw", []() { return std::make_unique<ThrowCommand>(); });
+        registerCommand("try", []() { return std::make_unique<TryCommand>(); });
     }
 
     std::unique_ptr<AIMLCommand> create(const std::string& name) {

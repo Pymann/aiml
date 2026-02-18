@@ -39,13 +39,16 @@
             - print: ["Success"] # Skipped if throw happens
           catch: 
             # Catch specific exception type
-            - [DivisionByZeroException, e, 
+            - type: DivisionByZeroException
+              var: e
+              body:
                 - print: ["Caught localized math error: ${e.message}"]
-              ]
+
             # Catch generic exception (polymorphism)
-            - [Exception, e,
+            - type: Exception
+              var: e
+              body:
                 - print: ["Caught generic error: ${e.message}"]
-              ]
               
       - print: ["Program continues..."]
       - return: [0]

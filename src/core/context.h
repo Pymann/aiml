@@ -79,6 +79,17 @@
     llvm::Module& module;
     llvm::IRBuilder<>& builder;
 
+    // Exception Handling State
+    llvm::BasicBlock* currentExceptionBlock = nullptr;
+
+    // Helper: Get or declare __gxx_personality_v0
+    llvm::FunctionCallee getPersonalityFunction() {
+        llvm::FunctionType* persType = llvm::FunctionType::get(
+            llvm::Type::getInt32Ty(context), true // varargs (i32 (...))
+        );
+        return module.getOrInsertFunction("__gxx_personality_v0", persType);
+    }
+
     // Symbol Table (Scope-aware in future)
     std::map<std::string, Symbol> symbol_table;
     std::map<std::string, FunctionInfo> functions;

@@ -45,6 +45,9 @@ public:
         llvm::FunctionType* funcType = llvm::FunctionType::get(retType, argTypes, false);
         llvm::Function* func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, name, ctx.module);
         
+        // Set Personality Function for Exception Handling
+        func->setPersonalityFn(llvm::cast<llvm::Constant>(ctx.getPersonalityFunction().getCallee()));
+        
         // 4. Create Body
         llvm::BasicBlock* entryBB = llvm::BasicBlock::Create(ctx.context, "entry", func);
         

@@ -21,9 +21,9 @@ public:
             args.push_back(arg);
         }
 
-        // Use CallDispatcher
+        // Use CallDispatcher with Exception Handling Support
         CallDispatcher::dispatch(ctx, funcName, args, [](CompilerContext& c, const YAML::Node& n) {
             return Expression::evaluate(c, n);
-        });
+        }, ctx.currentExceptionBlock); // Pass exception block
     }
 };
