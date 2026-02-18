@@ -69,7 +69,7 @@
 # Process Configuration Model
 # Equivalent to subprocess.run kwargs
 - model:
-    name: sys.models.ProcessOptions
+    name: sys.model.ProcessOptions
     fields:
       - [cwd, string, ""]             # Working directory
       - [env, map, {}]                # Environment variables (empty = inherit)
@@ -105,10 +105,10 @@
 
 # sys.exe
 # Spawns a new process
-# Signature: sys.exe(argv: list<string>, options: sys.models.ProcessOptions) -> process
+# Signature: sys.exe(argv: list<string>, options: sys.model.ProcessOptions) -> process
 - def:
     name: sys.exe
-    args: [[argv, list<string>], [options, sys.models.ProcessOptions]]
+    args: [[argv, list<string>], [options, sys.model.ProcessOptions]]
     return: process
 
 # Example Usage
@@ -116,8 +116,8 @@
 - set: [args, ["ls", "-la"]]
 
 # Option 1: Using Model Instance
-- decl: [opts, sys.models.ProcessOptions]
-- set: [opts, { new: sys.models.ProcessOptions }]
+- decl: [opts, sys.model.ProcessOptions]
+- set: [opts, { new: sys.model.ProcessOptions }]
 - set: [opts.cwd, "/tmp"]
 - decl: [proc, process]
 - set: [proc, { call: [sys.exe, args, opts] }]

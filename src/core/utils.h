@@ -22,6 +22,10 @@ inline llvm::Value* resolveLValue(CompilerContext& ctx, const std::string& argSt
             
             // Resolve Base Object
             if (ctx.symbol_table.count(objName) == 0) {
+                 // Check if it is '<' (this)
+                 if (objName == "<") {
+                      // It should be in symbol table if we are in a method!
+                 }
                  // Could be a string literal with a dot (e.g. "file.txt" or "Done.")
                  // Return null so resolveValue can handle it as string.
                  return nullptr;

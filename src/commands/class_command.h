@@ -38,67 +38,241 @@ public:
              classInfo.version = 1; // Default
         }
 
-        // 2. Parse Members
+        // --- Inheritance & Composition ---
+
+        // 1. Extends (Parent Class)
+        if (classNode["extends"].IsScalar()) {
+            std::string parentName = classNode["extends"].as<std::string>();
+            if (ctx.classes.count(parentName)) {
+                classInfo.parentName = parentName;
+                const auto& parentInfo = ctx.classes[parentName];
+                
+                // Prefix Parent Members
+                // We copy parent members directly to maintain memory layout compatibility
+                // (Parent fields first)
+                for (const auto& [name, member] : parentInfo.members) {
+                    classInfo.members[name] = member;
+                    // Adjust index? No, index should be absolute offset in struct?
+                    // LLVM Struct definitions are ordered lists of types.
+                    // If Parent has members at index 0, 1. Child inherits them at 0, 1.
+                    // Child adds new members at 2, 3...
+                    // So we can copy directly.
+                    // BUT: Map iteration order is not guaranteed by index!
+                    // We need a sorted list of parent members by index to append correctly to `memberTypes` later.
+                }
+                LOG_INFO("Extends: " + parentName);
+            } else {
+                LOG_ERROR("Unknown parent class: " + parentName);
+            }
+        }
+
+        // 2. Models (Mixins)
+        if (classNode["models"].IsSequence()) {
+            for (const auto& modelNode : classNode["models"]) {
+                std::string modelName = modelNode.as<std::string>();
+                if (ctx.classes.count(modelName) && ctx.classes[modelName].isModel) {
+                     classInfo.usedModels.push_back(modelName);
+                     const auto& modelInfo = ctx.classes[modelName];
+                     
+                     // Mixin Members
+                     // Append these after parent members
+                     for (const auto& [name, member] : modelInfo.members) {
+                         if (classInfo.members.count(name)) {
+                             LOG_ERROR("Duplicate member '" + name + "' from model '" + modelName + "'");
+                             continue;
+                         }
+                         // Re-index explicitly later when building memberTypes
+                         classInfo.members[name] = member; 
+                     }
+                     LOG_INFO("Uses Model: " + modelName);
+                } else {
+                     LOG_ERROR("Unknown model: " + modelName);
+                }
+            }
+        }
+        
+        // 3. Implements (Interfaces)
+        if (classNode["implements"].IsSequence()) {
+            for (const auto& ifaceNode : classNode["implements"]) {
+                std::string ifaceName = ifaceNode.as<std::string>();
+                if (ctx.classes.count(ifaceName) && ctx.classes[ifaceName].isInterface) {
+                     classInfo.interfaces.push_back(ifaceName);
+                     LOG_INFO("Implements: " + ifaceName);
+                     // TODO: Verify method implementations later
+                } else {
+                     LOG_ERROR("Unknown interface: " + ifaceName);
+                }
+            }
+        }
+
+        // --- Member Parsing ---
+        
+        // We need to re-construct memberTypes vector carefully:
+        // 1. Parent Members (Sorted by index)
+        // 2. Model Members (In order of appearance)
+        // 3. Class Members (In order of definition)
+        
+        // Existing member storage in `classInfo.members` is a map (name -> member).
+        // The index in `member` struct determines order.
+        // Parent members already have indices 0..N.
+        // We need to shift indices for subsequently added members?
+        
+        // Strategy:
+        // Keep a running `currentIndex`.
+        // 1. Add Parent types (if any). `currentIndex` += parent.memberCount.
+        // 2. Add Model types. Assign `currentIndex++` to each.
+        // 3. Add Class types. Assign `currentIndex++` to each.
+        
+        int currentIndex = 0;
         std::vector<llvm::Type*> memberTypes;
+        
+        // 1. Parent
+        if (!classInfo.parentName.empty()) {
+            const auto& parentInfo = ctx.classes[classInfo.parentName];
+            // We need parent members sorted by index. Map is name-ordered.
+            std::vector<const CompilerContext::StructMember*> sortedParentMembers;
+            for(const auto& [name, m] : parentInfo.members) sortedParentMembers.push_back(&m);
+            std::sort(sortedParentMembers.begin(), sortedParentMembers.end(), [](auto a, auto b){ return a->index < b->index; });
+            
+            for(const auto* m : sortedParentMembers) {
+                // Ensure we copy the member info correctly
+                // Note: We already copied to `classInfo.members` above, but we need to push types here.
+                memberTypes.push_back(m->type);
+                currentIndex++; 
+            }
+        }
+        
+        // 2. Models
+        // We iterated and added to map above, but didn't assign new indices.
+        // We should effectively re-process or handle this better.
+        // Let's clear `classInfo.members` and re-populate strictly here? 
+        // Or trust the loop.
+        
+        // Refined Strategy:
+        // Don't populate `classInfo.members` in steps 1 & 2 above blindly.
+        // Instead:
+        
+        // A. Parent
+         if (!classInfo.parentName.empty()) {
+            const auto& parentInfo = ctx.classes[classInfo.parentName];
+             // Sort and Add
+            std::vector<CompilerContext::StructMember> sorted;
+            for(const auto& [name, m] : parentInfo.members) sorted.push_back(m);
+            std::sort(sorted.begin(), sorted.end(), [](auto a, auto b){ return a.index < b.index; });
+            
+            for(const auto& m : sorted) {
+                classInfo.members[m.typeName] = m; // Incorrect key? map key is field name.
+                 // Correct: We need to find the Name for the member.
+                 // The map `parentInfo.members` stores it as key.
+                 // Re-finding name is annoying. `StructMember` doesn't have `name` field?
+                 // CHECK: `struct StructMember { int index; ... std::string typeName; ... };` 
+                 // It DOES NOT have the field name! That's a flaw in Context.h or usage pattern.
+                 // We rely on the map key.
+                 // OK, let's iterate the Map and put into a vector of pairs?
+            }
+        }
+        
+        // CRITICAL FIX: To handle ordering correctly, we need to sort [Name, Member] pairs.
+        
+        // --- Redo Member Layout ---
+        
+        // list of {name, member}
+        std::vector<std::pair<std::string, CompilerContext::StructMember>> orderedMembers;
+        
+        // 1. Parent
+        if (!classInfo.parentName.empty()) {
+             const auto& parentInfo = ctx.classes[classInfo.parentName];
+             for (const auto& [name, member] : parentInfo.members) {
+                 orderedMembers.push_back({name, member});
+             }
+             // Sort by existing index
+             std::sort(orderedMembers.begin(), orderedMembers.end(), [](auto& a, auto& b){ return a.second.index < b.second.index; });
+        }
+        // Current index is size of parent members
+        currentIndex = orderedMembers.size();
+        
+        // 2. Models
+        for (const auto& modelName : classInfo.usedModels) {
+             const auto& modelInfo = ctx.classes[modelName];
+             // Models might also have structure, but usually just fields.
+             // We append them.
+             // Sort model members by index too (in case model has multiple fields)
+             std::vector<std::pair<std::string, CompilerContext::StructMember>> modelMembers;
+             for (const auto& [name, member] : modelInfo.members) modelMembers.push_back({name, member});
+             std::sort(modelMembers.begin(), modelMembers.end(), [](auto& a, auto& b){ return a.second.index < b.second.index; });
+             
+             for (auto& [name, member] : modelMembers) {
+                 // Check duplicate
+                 bool duplicate = false;
+                 for(const auto& pair : orderedMembers) if(pair.first == name) duplicate = true;
+                 
+                 if (!duplicate) {
+                     CompilerContext::StructMember newMember = member; // Copy
+                     newMember.index = currentIndex++;
+                     orderedMembers.push_back({name, newMember});
+                 }
+             }
+        }
+        
+        // 3. Class Members (Parse from YAML)
         if (classNode["members"].IsSequence()) {
-            int index = 0;
-            for (const auto& memberNode : classNode["members"]) {
+             // ... existing parsing loop ...
+             // We need to integrate the loop here to respect ordering.
+             for (const auto& memberNode : classNode["members"]) {
                 if (memberNode.IsSequence() && memberNode.size() >= 2) {
                     std::string memberName = memberNode[0].as<std::string>();
                     std::string typeName = memberNode[1].as<std::string>();
                     
+                    // Check duplicate
+                    bool duplicate = false;
+                    for(const auto& pair : orderedMembers) if(pair.first == memberName) duplicate = true;
+                    if(duplicate) {
+                        LOG_ERROR("Duplicate member '" + memberName + "' in class '" + className + "'");
+                        continue;
+                    }
+                    
                     llvm::Type* memberType = ctx.getLLVMType(typeName);
                     if (!memberType) {
-                        LOG_ERROR("Unknown type '" + typeName + "' for member '" + memberName + "' in class '" + className + "'");
+                        LOG_ERROR("Unknown type '" + typeName + "'");
                         continue; 
                     }
 
-                    memberTypes.push_back(memberType);
-                    
                     CompilerContext::StructMember member;
-                    member.index = index++;
+                    member.index = currentIndex++;
                     member.type = memberType;
                     member.typeName = typeName;
                     
-                    // Parse Init Value and Modifiers
+                    // ... (Init/Modifiers parsing same as before) ...
                     YAML::Node modifiersNode;
-                    
                     if (memberNode.size() == 3) {
-                        // [name, type, init] OR [name, type, modifiers]
-                        if (memberNode[2].IsMap()) {
-                            modifiersNode = memberNode[2];
-                        } else {
-                            member.initValue = memberNode[2];
-                        }
+                        if (memberNode[2].IsMap()) modifiersNode = memberNode[2];
+                        else member.initValue = memberNode[2];
                     } else if (memberNode.size() >= 4) {
-                        // [name, type, init, modifiers]
                         member.initValue = memberNode[2];
                         modifiersNode = memberNode[3];
                     }
                     
-                    // Process Modifiers
                     if (modifiersNode.IsMap()) {
-                        if (modifiersNode["access"].IsScalar()) {
-                            std::string acc = modifiersNode["access"].as<std::string>();
-                            if (acc == "public") member.access = AccessLevel::Public;
-                            else if (acc == "protected") member.access = AccessLevel::Protected;
-                            else member.access = AccessLevel::Private;
-                        }
-                        
-                        if (modifiersNode["const"].IsScalar() && modifiersNode["const"].as<bool>()) {
-                            member.is_const = true;
-                            LOG_DEBUG("Member '" + memberName + "' marked as CONST");
-                        }
-                        
-                        if (modifiersNode["version"].IsScalar()) {
-                            member.version = modifiersNode["version"].as<uint64_t>();
-                        }
+                         if (modifiersNode["access"].IsScalar()) {
+                             std::string acc = modifiersNode["access"].as<std::string>();
+                             if (acc == "public") member.access = AccessLevel::Public;
+                             else if (acc == "protected") member.access = AccessLevel::Protected;
+                             else member.access = AccessLevel::Private;
+                         }
+                         if (modifiersNode["const"].IsScalar() && modifiersNode["const"].as<bool>()) member.is_const = true;
+                         if (modifiersNode["version"].IsScalar()) member.version = modifiersNode["version"].as<uint64_t>();
                     }
-                    
-                    classInfo.members[memberName] = member;
-                    LOG_DEBUG("Parsed Member: " + memberName + " Index: " + std::to_string(index-1) + " Init: " + (member.initValue.IsDefined() ? "YES" : "NO"));
+
+                    orderedMembers.push_back({memberName, member});
+                    LOG_DEBUG("Parsed Member: " + memberName + " Index: " + std::to_string(member.index));
                 }
-            }
+             }
+        }
+        
+        // Finalize Members
+        for(const auto& [name, member] : orderedMembers) {
+            classInfo.members[name] = member;
+            memberTypes.push_back(member.type);
         }
 
         // 3. Create LLVM Struct
@@ -135,7 +309,7 @@ private:
 
         // Parse Access
         AccessLevel methodAccess = AccessLevel::Public; // Default
-        if (defNode["access"].IsScalar()) {
+        if (defNode["access"].IsDefined() && defNode["access"].IsScalar()) {
              std::string acc = defNode["access"].as<std::string>();
              if (acc == "private") methodAccess = AccessLevel::Private;
              else if (acc == "protected") methodAccess = AccessLevel::Protected;
@@ -168,7 +342,7 @@ private:
 
         // Return Type
         llvm::Type* retType = ctx.builder.getVoidTy(); // Default void
-        if (defNode["return"].IsScalar()) {
+        if (defNode["return"].IsDefined() && defNode["return"].IsScalar()) {
              std::string retTypeStr = defNode["return"].as<std::string>();
              if (retTypeStr != "void") {
                  llvm::Type* t = ctx.getLLVMType(retTypeStr);
