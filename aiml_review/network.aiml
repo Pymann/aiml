@@ -1,0 +1,39 @@
+# Network Stack (Sockets)
+
+# 1. Client (TCP)
+- decl: [sock, socket_handle]
+- set: [sock, { call: [net.socket, "tcp"] }]
+
+- call: [net.connect, sock, "127.0.0.1", 8080]
+
+# Sending Data (using buffer)
+- decl: [buf, buffer]
+- call: [buf.alloc, 1024]
+- call: [buf.write_string, "GET / HTTP/1.1\r\n\r\n"]
+- call: [net.send, sock, buf]
+
+# Receiving Data
+- call: [buf.clear]
+- call: [net.recv, sock, buf] # Blocks
+- print: [buf.to_string]
+
+- call: [net.close, sock]
+
+# 2. Server (TCP)
+- decl: [server, socket_handle]
+- set: [server, { call: [net.socket, "tcp"] }]
+- call: [net.bind, server, "0.0.0.0", 8080]
+- call: [net.listen, server]
+
+# Accept Loop
+- decl: [client, socket_handle]
+- while:
+    condition: { const: true }
+    body:
+       - set: [client, { call: [net.accept, server] }]
+       # Spawn thread for client?
+       - spawn: [handle_client, client]
+
+# 3. HTTP (High Level - Future)
+# - decl: [resp, http_response]
+# - set: [resp, { call: [http.get, "https://google.com"] }]

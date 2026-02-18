@@ -1,0 +1,43 @@
+# Test Versioned Classes
+
+# Define V1 Class for writing
+- class:
+    name: UserV1
+    version: 1
+    members:
+      - [name, string, { version: 1, access: public }]
+
+# Define V2 Class for reading
+- class:
+    name: UserV2
+    version: 2
+    members:
+      - [name, string, { version: 1, access: public }]
+      - [email, string, "no-email", { version: 2, access: public }] 
+
+- decl: [buf, buffer]
+- call: [buf.alloc, 1024]
+
+- decl: [u1, UserV1]
+- set: [u1.name, "Bob"]
+
+# Write V1 Object (Auto-prepends Version 1)
+- call: [buf.write, u1, UserV1]
+
+# Reset data cursor
+- call: [buf.seek, 0]
+
+# Read as UserV2 (Auto-reads Version 1 Header and migrates)
+- decl: [u, UserV2]
+- set: [u, {call: [buf.read_versioned, UserV2]}]
+
+- print: ["Name: ", u.name]
+- print: ["Email: ", u.email]
+
+# Validation
+- if:
+    condition: {eq: [u.email, "no-email"]}
+    then:
+      - print: ["SUCCESS: Email skipped and defaulted"]
+    else:
+      - print: ["FAIL: Email was overwritten or wrong"]

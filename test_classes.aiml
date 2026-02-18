@@ -1,0 +1,28 @@
+# Class Definition Test
+
+- class:
+    name: Point
+    members:
+      - [x, i32]
+      - [y, i32]
+    methods:
+      - def:
+          name: print
+          args: []
+          return: void
+          body:
+            - print: ["Inside Point.print"]
+            - print: ["Point(${<.x}, ${<.y})"]
+
+- decl: [p1, Point] # Stack allocation
+- set: [p1.x, 10]
+- set: [p1.y, 20]
+- call: [p1.print]
+
+- print: ["Done."]
+
+- decl: [p2, ptr<Point>, {new: Point}] # Heap allocation
+- set: [p2.x, 100]
+- set: [p2.y, 200]
+- call: [p2.print]
+- call: [free, p2]

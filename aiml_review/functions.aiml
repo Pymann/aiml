@@ -1,0 +1,70 @@
+# Function Syntax Proposal
+
+# Definition
+# Syntax: def: { name: ..., args: [[name, type], ...], return: type, body: [...] }
+- def:
+    name: add_two
+    version: 1
+    args: [[a, int], [b, int]]
+    return: int
+    body:
+      - set: [res, { add: [a, b] }]
+      - return: [res]
+
+# Void Function
+- def:
+    name: greet
+    version: 0
+    args: [] # No args
+    return: void
+    body:
+      - print: ["Hello World"]
+
+# Main Execution Flow (implicit or explicit 'main'?)
+# Assuming top-level is 'main', we can call functions here.
+
+# Function Call (as Statement)
+- call: [greet]
+
+# Function Call (as Expression)
+- set: [sum, { call: [add_two, 5, 10] }]
+- print: [sum]
+
+
+# Indirect Call (Function Pointers - Future?)
+# - set: [func_ptr, { ref: [add_two] }]
+# - call: [func_ptr, 1, 2]
+
+# Keyword Arguments & Default Values (Syntax Proposal)
+# 1. Definition: Add 3rd element to args list for default value.
+#    args: [[name, type, default_value], ...]
+- def:
+    name: connect
+    args: [[host, string], [port, int, 8080], [timeout, float, 5.0]]
+    return: void
+    body:
+      - print: ["Connecting to ${host}:${port} with timeout ${timeout}"]
+
+# 2. Call:
+#    a) Positional:
+#    - call: [connect, "localhost", 9000] # timeout = 5.0
+#    b) Named (Map at end):
+#    - call: [connect, "localhost", {timeout: 10.0}] # port = 8080
+
+# 3. Model Validation (Auto-Unboxing)
+# When passing a map<string, any> (or generic container) to a function,
+# the system automatically validates fields against the signature.
+#
+# Definition:
+# - def: { name: config, args: [[timeout, float], [debug, bool]] }
+#
+# Call with generic map:
+# - decl: [options, map<string, any>]
+# - call: [options.put, "timeout", 10.0]
+# - call: [options.put, "debug", true]
+# - call: [config, options]
+#
+# Logic:
+# 1. "timeout" found in map? -> Yes. Value is 10.0 (float). Compatible? -> Yes. Unbox to float.
+# 2. "debug" found in map? -> Yes. Value true (bool). Compatible? -> Yes. Unbox to bool.
+# 3. If type mismatch (e.g. "timeout": "fast") -> Runtime Error / Validation Exception.

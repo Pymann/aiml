@@ -1,0 +1,51 @@
+# Test Buffer
+
+- enum:
+    name: TypeId
+    values:
+      - Player: 1
+      - Enemy: 2
+
+- class:
+    name: PacketHeader
+    members:
+      - [id, i32, { access: public }]
+      - [type, TypeId, { access: public }]
+
+- decl: [buf, buffer]
+- call: [buf.alloc, 1024]
+
+# Write Primitives
+- call: [buf.write, 0xAA, u8]
+- call: [buf.write, 0x12345678, i32]
+
+# Write Struct
+- decl: [h, PacketHeader]
+- set: [h.id, 99]
+- set: [h.type, TypeId.Enemy]
+- call: [buf.write, h, PacketHeader]
+
+# Reset Read Cursor to 0 (Implied by not moving it? Or separate seek?)
+# BufferImpl separated indices. read starts at 0.
+
+# Read Primitives
+- decl: [b1, u8]
+- set: [b1, {call: [buf.read, u8]}]
+- print: ["Read u8: ", b1]
+
+- decl: [i1, i32]
+- set: [i1, {call: [buf.read, i32]}]
+- print: ["Read i32: ", i1]
+
+# Read Struct
+- decl: [h2, PacketHeader]
+- set: [h2, {call: [buf.read, PacketHeader]}]
+- print: ["Read Header ID: ", h2.id]
+- print: ["Read Header Type: ", h2.type]
+
+- if:
+    condition: {eq: [h2.id, 99]}
+    then:
+      - print: ["SUCCESS: Header ID Match"]
+    else:
+      - print: ["FAIL: Header ID Mismatch"]

@@ -1,0 +1,19 @@
+- decl: [scores, map<string:i32>]
+- print: ["Testing Maps..."]
+- call: [scores.put, "Alice", 100]
+- call: [scores.put, "Bob", 200]
+
+- print: ['Alice Score: ${ { call: [scores.get, "Alice"] } }']
+- print: ['Bob Score: ${ { call: [scores.get, "Bob"] } }']
+
+- print: ["Size before remove: ${scores.size}"] 
+
+- call: [scores.remove, "Alice"]
+- print: ["Size after remove: ${scores.size}"]
+
+- print: ['Has Alice? ${ { call: [scores.contains, "Alice"] } }']
+- print: ['Has Bob? ${ { call: [scores.contains, "Bob"] } }']
+
+- print: ["Math Test: 10 + 20 = ${ { +: [10, 20] } }"]
+
+- call: [sys.exit, 0]

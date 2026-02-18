@@ -1,0 +1,46 @@
+# Modifiers Test
+
+- class:
+    name: Bank
+    members:
+      - [balance, i32, 0, { access: private }]
+      - [id, i32, 12345, { access: public, const: true }]
+    methods:
+      - def:
+          name: deposit
+          access: public
+          args: [[amount, i32]]
+          return: void
+          body:
+            # Internal access to private member allowed
+            - set: [<.balance, {+: [<.balance, amount]}]
+            - print: ["Deposited: ", amount]
+
+      - def:
+          name: getBalance
+          access: public
+          args: []
+          return: i32
+          body:
+             - return: <.balance
+
+- decl: [b, Bank] # Stack allocation, default init (id=12345, balance=0)
+
+- print: ["Bank ID: ", b.id]
+
+# Valid: Call public method
+- call: [b.deposit, 100]
+- print: ["Balance: ", {call: [b.getBalance]}]
+
+# Invalid: Write to const member (Uncomment to test error)
+- set: [b.id, 999]
+- print: ["Bank ID: ", b.id]
+
+# Invalid: Access private member (Uncomment to test error)
+# - set: [b.balance, 500]
+- print: [b.balance]
+
+- decl: [const_var, i32, 10, { const: true }]
+- print: ["Const Var: ", const_var]
+# Invalid: Write to const var
+- set: [const_var, 20]

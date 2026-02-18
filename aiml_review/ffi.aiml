@@ -1,0 +1,37 @@
+# FFI (Foreign Function Interface)
+# Essential for UI/Graphics (OpenGL, Vulkan, SDL, GTK).
+# Allows calling existing C libraries.
+
+# 1. Loading a Library
+# Works in both Compilation (AOT) and JIT modes.
+# AOT: Maps to linker flags (-lGL -lSDL2).
+# JIT: Maps to dlopen()/LoadLibrary() at runtime.
+
+- config:
+    link: ["GL", "SDL2", "m"] # Link against libGL, libSDL2, libm
+
+# 2. Declaring External Functions
+# These map to C symbols.
+
+- extern: "C"
+  defs:
+    - def:
+        name: SDL_Init
+        args: [[flags, i32]]
+        return: i32
+    
+    - def:
+        name: SDL_CreateWindow
+        args: [[title, string], [x, i32], [y, i32], [w, i32], [h, i32], [flags, i32]]
+        return: ptr # void*
+
+# 3. Usage (Graphics Example)
+- def:
+    name: main
+    args: []
+    return: i32
+    body:
+      - call: [SDL_Init, 0x00000020] # SDL_INIT_VIDEO
+      - decl: [win, ptr]
+      - set: [win, { call: [SDL_CreateWindow, "AIML Window", 100, 100, 800, 600, 4] }]
+      # ... Game Loop ...

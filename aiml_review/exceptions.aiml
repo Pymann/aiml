@@ -1,0 +1,68 @@
+# Exception Handling
+
+# 1. Exception Hierarchy
+- class:
+    name: Exception
+    members:
+      - [message, string]
+
+- class:
+    name: DivisionByZeroException
+    extends: Exception
+    # Inherits [message, string] from Exception
+
+# 2. Throwing an Exception
+# Syntax: throw: { new: ExceptionType, args: [...] }
+- def:
+    name: divide
+    args: [[a, i32], [b, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [b, 0] }
+          then:
+            # Throwing an instance of DivisionByZeroException
+            - throw: { new: DivisionByZeroException, message: "Division by zero" }
+      - return: { div: [a, b] }
+
+# 3. Try-Catch Block
+# Syntax: try: [body], catch: [[Type, var, body], ...]
+
+- def:
+    name: main
+    args: []
+    return: i32
+    body:
+      - try:
+          body:
+            - call: [divide, 10, 0]
+            - print: ["Success"] # Skipped if throw happens
+          catch: 
+            # Catch specific exception type
+            - [DivisionByZeroException, e, 
+                - print: ["Caught localized math error: ${e.message}"]
+              ]
+            # Catch generic exception (polymorphism)
+            - [Exception, e,
+                - print: ["Caught generic error: ${e.message}"]
+              ]
+              
+      - print: ["Program continues..."]
+      - return: [0]
+
+# Implementation Detail:
+# The compiler maps 'catch' types to LLVM landing pads and type descriptors (C++ RTTI / Itanium ABI style).
+# 4. Built-in System Exceptions
+# These are implicitly defined and thrown by the runtime or standard library.
+
+# - NullPointerException      : Accessing null reference
+# - TypeMismatchException     : Dynamic type cast failure
+# - IndexOutOfBoundsException : List/Array access out of range
+# - DivisionByZeroException   : Arithmetic error
+# - StackOverflowException    : Recursion depth exceeded
+# - OutOfMemoryException      : Heap allocation failed
+# - TimeoutException          : Remote call or agent task timeout
+# - SerializationException    : Serialization error
+# - DeserializationException  : Deserialization error
+# - BufferOverflowException   : Buffer overflow error (putting to much in buffer)
+# - BufferUnderflowException  : Buffer underflow error (reading to much from buffer)

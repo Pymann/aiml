@@ -1,0 +1,31 @@
+- decl: [x, i32, 10]
+- decl: [y, i32, 20]
+
+- print: ["Testing Control Flow"]
+
+- print: ["X is ${x}, Y is ${y}"]
+
+- if:
+    condition: { lt: [x, y] }
+    then:
+      - print: ["X is less than Y (Correct)"]
+    else:
+      - print: ["X is NOT less than Y (Wrong)"]
+
+- if:
+    condition: { gt: [x, y] }
+    then:
+      - print: ["X is greater than Y (Wrong)"]
+    else:
+      - print: ["X is NOT greater than Y (Correct)"]
+
+- decl: [counter, i32, 0]
+- print: ["Starting Loop..."]
+
+- while:
+    condition: { lt: [counter, 5] }
+    body:
+      - print: ["Counter: ${counter}"]
+      - set: [counter, { +: [counter, 1] }]
+
+- print: ["Loop Finished. Counter should be 5: ${counter}"]
