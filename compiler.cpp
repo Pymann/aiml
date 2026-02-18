@@ -177,6 +177,10 @@ int AIMLCompiler::jitRun() {
     // Explicitly add malloc/free
     llvm::sys::DynamicLibrary::AddSymbol("malloc", (void*)(intptr_t)malloc);
     llvm::sys::DynamicLibrary::AddSymbol("free", (void*)(intptr_t)free);
+    llvm::sys::DynamicLibrary::AddSymbol("fflush", (void*)(intptr_t)fflush);
+    llvm::sys::DynamicLibrary::AddSymbol("fprintf", (void*)(intptr_t)fprintf);
+    llvm::sys::DynamicLibrary::AddSymbol("dprintf", (void*)(intptr_t)dprintf);
+    // llvm::sys::DynamicLibrary::AddSymbol("stderr", (void*)(intptr_t)stderr); // Removed to avoid macro issues for now
 
     std::string errStr;
     if (!module_) {
@@ -206,9 +210,13 @@ int AIMLCompiler::jitRun() {
     }
     LOG_DEBUG("Found main. Running...");
 
+    // Explicitly add printf
+    llvm::sys::DynamicLibrary::AddSymbol("printf", (void*)(intptr_t)printf);
+
+    LOG_DEBUG("Running main...");
     std::vector<llvm::GenericValue> args;
     llvm::GenericValue result = engine->runFunction(mainFunc, args);
-    LOG_DEBUG("Main finished.");
+    LOG_DEBUG("Main finished. Result: " + std::to_string(result.IntVal.getSExtValue()));
     
     return result.IntVal.getSExtValue();
 }

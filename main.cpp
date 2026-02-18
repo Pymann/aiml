@@ -66,7 +66,8 @@ int main(int argc, char** argv) {
 
     if (runMode) {
         // JIT Mode
-        compiler.compile(inputFile, "/dev/null"); 
+        LOG_DEBUG("JIT Run Mode. Saving IR to " + outputFile);
+        compiler.compile(inputFile, outputFile); 
         return compiler.jitRun();
     } else if (isObjectFile) {
         // Compile to Object Mode
