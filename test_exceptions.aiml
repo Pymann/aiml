@@ -4,27 +4,22 @@
 # 2. 'try' generates 'invoke' + 'landingpad'
 # 3. 'catch' handles the exception and resume execution
 
-- def:
-    name: main
-    args: []
-    return: i32
+- print: ["Starting Exception Test..."]
+
+- try:
     body:
-      - print: ["Starting Exception Test..."]
-      
-      - try:
-          body:
-            - print: ["Inside Try - About to throw"]
-            - throw: { new: DivisionByZeroException, message: "Division by Zero Error!" }
-            - print: ["This should NOT be printed"]
-          catch:
-            # Catching DivisionByZeroException
-            # In MVP, our landingpad catches ANY, and we assume it's the right one or cast it.
-            # We bind it to 'e' conceptually.
-            - type: DivisionByZeroException
-              var: e
-              body: 
-                - print: ["Caught Exception!"]
-                # - print: ["Message: ${e.message}"] # Requires symbol binding, skipping for now
-      
-      - print: ["Program recovered and finished."]
-      - return: [0]
+      - print: ["Inside Try - About to throw"]
+      - throw: { new: DivisionByZeroException, message: "Division by Zero Error!" }
+      - print: ["This should NOT be printed"]
+    catch:
+      # Catching DivisionByZeroException
+      # In MVP, our landingpad catches ANY, and we assume it's the right one or cast it.
+      # We bind it to 'e' conceptually.
+      - type: DivisionByZeroException
+        var: e
+        body: 
+          - print: ["Caught Exception!"]
+          # - print: ["Message: ${e.message}"] # Requires symbol binding, skipping for now
+
+- print: ["Program recovered and finished."]
+
