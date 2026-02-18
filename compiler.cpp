@@ -73,6 +73,9 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     // Initialize Compiler Context
     CompilerContext ctx(*context_, *module_, builder);
     
+    // Set Personality Function for main (Crucial for exception handling in top-level code)
+    mainFunc->setPersonalityFn(llvm::cast<llvm::Constant>(ctx.getPersonalityFunction().getCallee()));
+    
     // Initialize Command Registry
     CommandRegistry registry;
 
