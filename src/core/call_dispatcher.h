@@ -61,10 +61,43 @@ public:
                     llvmArgs.push_back(argVal);
                 }
                 
-                llvm::Function* func = ctx.module.getFunction(mangledName);
+                llvm::Function* func = nullptr;
+                std::string currentClassLookup = className;
+                
+                // Walk up the inheritance chain
+                while (true) {
+                    std::string mangledName = currentClassLookup + "_" + methodName;
+                    func = ctx.module.getFunction(mangledName);
+                    
+                    if (func) break; // Found it!
+                    
+                    // Check parent
+                    if (ctx.classes.count(currentClassLookup) && !ctx.classes[currentClassLookup].parentName.empty()) {
+                         currentClassLookup = ctx.classes[currentClassLookup].parentName;
+                    } else {
+                         break; // No parent or unknown class
+                    }
+                }
+
                 if (!func) {
-                    LOG_ERROR("Method '" + methodName + "' not found in class '" + className + "' (Function " + mangledName + " missing)");
+                    LOG_ERROR("Method '" + methodName + "' not found in class '" + className + "' or its parents.");
                     return nullptr;
+                }
+                
+                // Cast 'this' pointer if necessary (if method belongs to parent)
+                // Actually, if we use opaque pointers, no cast needed! 
+                // But strictly for typed pointer logic (if we ever go back), we might need it.
+                // For now, func expects ptr<Parent>, we have ptr<Child>.
+                // In opaque ptr world, they are same.
+                // In typed ptr world, bitcast.
+                // Adding bitcast is safe.
+                
+                // Get Expected Argument Type for 'this' (Arg 0)
+                if (func->arg_size() > 0) {
+                    llvm::Type* expectedThisTy = func->getFunctionType()->getParamType(0);
+                    if (thisPtr->getType() != expectedThisTy) {
+                        thisPtr = ctx.builder.CreateBitCast(thisPtr, expectedThisTy);
+                    }
                 }
                 
                 if (exceptionBlock) {

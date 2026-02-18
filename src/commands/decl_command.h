@@ -101,8 +101,11 @@ public:
         // Determine Class Name if applicable
         if (ctx.classes.count(typeName)) {
             sym.className = typeName;
-        } else if (typeName.rfind("ptr<", 0) == 0 && typeName.back() == '>') {
-             std::string innerType = typeName.substr(4, typeName.length() - 5);
+        } else if ((typeName.rfind("ptr<", 0) == 0 || typeName.rfind("ref<", 0) == 0) && typeName.back() == '>') {
+             std::string innerType;
+             if (typeName.rfind("ptr<", 0) == 0) innerType = typeName.substr(4, typeName.length() - 5);
+             else innerType = typeName.substr(4, typeName.length() - 5);
+             
              if (ctx.classes.count(innerType)) {
                  sym.className = innerType;
              }

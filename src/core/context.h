@@ -62,6 +62,14 @@
             uint64_t version = 1; // Version of the class (u64)
             std::map<std::string, StructMember> members;
             std::map<std::string, FunctionInfo> methods;
+            
+            // Inheritance and Composition
+            std::string parentName;
+            std::vector<std::string> interfaces;
+            std::vector<std::string> usedModels;
+            
+            bool isInterface = false;
+            bool isModel = false; 
         };
 
     CompilerContext(llvm::LLVMContext& ctx, llvm::Module& mod, llvm::IRBuilder<>& b)
@@ -132,9 +140,12 @@
              return classes[typeName].type;
         }
 
-        // Check for Pointer type: "ptr<T>"
-        if (typeName.rfind("ptr<", 0) == 0 && typeName.back() == '>') {
-            std::string innerType = typeName.substr(4, typeName.length() - 5);
+        // Check for Pointer type: "ptr<T>" or "ref<T>"
+        if ((typeName.rfind("ptr<", 0) == 0 || typeName.rfind("ref<", 0) == 0) && typeName.back() == '>') {
+            std::string innerType;
+            if (typeName.rfind("ptr<", 0) == 0) innerType = typeName.substr(4, typeName.length() - 5);
+            else innerType = typeName.substr(4, typeName.length() - 5); // ref< is also 4 chars
+            
             llvm::Type* elemType = getLLVMType(innerType);
             if (!elemType) return nullptr;
             return llvm::PointerType::get(context, 0); // Opaque pointer
