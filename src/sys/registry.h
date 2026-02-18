@@ -5,6 +5,7 @@
 #include <functional>
 #include "syscall.h"
 #include "intrinsics.h"
+#include "io_commands.h"
 
 class SystemRegistry {
 public:
@@ -24,6 +25,10 @@ private:
     SystemRegistry() {
         registerCall("sys.exit", std::make_unique<SysExit>());
         registerCall("io.write", std::make_unique<IoWrite>());
+        registerCall("io.read", std::make_unique<IoRead>());
+        registerCall("io.open", std::make_unique<IoOpen>());
+        registerCall("io.close", std::make_unique<IoClose>());
+        registerCall("io.read_all", std::make_unique<IoReadAll>());
         registerCall("time.sleep_ms", std::make_unique<TimeSleepMs>());
         registerCall("free", std::make_unique<MemoryFree>());
     }
