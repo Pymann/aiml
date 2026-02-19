@@ -1,5 +1,6 @@
 # Inheritance and Interfaces
 
+```yaml
 # 1. Inheritance
 # Syntax: extends: ParentClass
 # Memory Layout: Parent fields come first (C++ style).
@@ -52,3 +53,4 @@
 # - decl: [d, ref<Drawable>]
 # - set: [d, { new: Button }]
 # - call: [d.draw]  # Virtual call via VTable
+```

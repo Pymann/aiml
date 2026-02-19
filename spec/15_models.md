@@ -1,4 +1,6 @@
 # Models & Schema Definition
+
+```yaml
 # Models define the structure of dynamic data (like maps or JSON).
 # They are similar to Pydantic models or C structs but with runtime validation capabilities.
 
@@ -88,3 +90,4 @@
 # Call with mixed Map (Structural Typing)
 # The second argument is a map that matches ServerConfig schema.
 - call: [update_server, 456, {host: "10.0.0.5", port: 9090}, false]
+```

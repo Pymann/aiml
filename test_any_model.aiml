@@ -1,0 +1,49 @@
+# Test Any and Model Parameters
+
+# 1. Define a Model
+- class:
+    name: TestModel
+    members:
+      - [id, i32, {access: public}]
+      - [name, string, {access: public}]
+
+# 2. Function taking 'any' (void*)
+- def:
+    name: print_any_id
+    args: [[obj, any]] 
+    return: void
+    body:
+      # Cast back to TestModel to access fields
+      - decl: [m, ptr<TestModel>]
+      - set: [m, obj] # Implicit bitcast from any -> ptr<TestModel>
+      - print: ["ID from Any: ", m.id]
+      - print: ["Name from Any: ", m.name]
+
+# 3. Function taking 'Model'
+- def:
+    name: process_model
+    args: [[m, ptr<TestModel>]]
+    return: void
+    body:
+      - print: ["Processing Model: ", m.name]
+      - call: [print_any_id, m] # Implicit cast ptr<TestModel> -> any
+
+# 4. Main Execution
+- decl: [myModel, TestModel]
+- set: [myModel.id, 123]
+- set: [myModel.name, "TestObject"]
+
+- print: ["--- Calling process_model ---"]
+- call: [process_model, myModel]
+
+- print: ["--- Calling print_any_id directly ---"]
+- call: [print_any_id, myModel]
+
+- print: ["--- Map<String, Any> Test ---"]
+- decl: [genericMap, "map<string:any>"]
+- call: [genericMap.put, "item", myModel] # Store model as any
+- decl: [retrieved, any]
+- set: [retrieved, { call: [genericMap.get, "item"] }]
+- decl: [restored, ptr<TestModel>]
+- set: [restored, retrieved]
+- print: ["Restored Type ID: ", restored.id]

@@ -1,5 +1,6 @@
 # System & Standard Library Proposal
 
+```yaml
 # 1. File I/O
 # Maps to fopen/fwrite/fread/fclose (C Std Lib)
 
@@ -60,8 +61,6 @@
 - decl: [size2, u64]
 - set: [size2, { call: [sys.size, {call: [sys.type, any_class]}] }]
 - print: ["${size} == ${size2}"]
-
-
 
 
 # 5. Process Management
@@ -127,3 +126,4 @@
 
 # Option 3: Default Options (Empty Map)
 - set: [proc, { call: [sys.exe, args, {}] }]
+```

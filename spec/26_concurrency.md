@@ -1,5 +1,6 @@
 # Concurrency: Parallel Execution
 
+```yaml
 # To run things in parallel, we need to create execution units.
 # AIML v1 uses Native OS Threads (1:1 Mapping to pthreads/Windows Threads).
 # This means they are "heavyweight" (Stack per thread) but offer true parallelism on multi-core CPUs.
@@ -73,3 +74,4 @@
        - call: [t2.join]
        
        - return: [0]
+```

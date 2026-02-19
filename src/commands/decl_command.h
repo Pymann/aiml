@@ -48,8 +48,20 @@ public:
                          if (sepPos != std::string::npos) {
                              std::string keyTypeStr = content.substr(0, sepPos);
                              std::string valTypeStr = content.substr(sepPos + 1);
+                             
+                             // Trim spaces
+                             keyTypeStr.erase(0, keyTypeStr.find_first_not_of(' '));
+                             keyTypeStr.erase(keyTypeStr.find_last_not_of(' ') + 1);
+                             valTypeStr.erase(0, valTypeStr.find_first_not_of(' '));
+                             valTypeStr.erase(valTypeStr.find_last_not_of(' ') + 1);
+
                              keyType = ctx.getLLVMType(keyTypeStr);
-                             valType = ctx.getLLVMType(valTypeStr);
+                             valType = nullptr;
+                             if (valTypeStr == "any") {
+                                  valType = llvm::Type::getInt8Ty(ctx.context)->getPointerTo();
+                             } else {
+                                  valType = ctx.getLLVMType(valTypeStr);
+                             }
                          }
                      }
                      

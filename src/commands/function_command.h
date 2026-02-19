@@ -97,6 +97,28 @@ public:
             Symbol sym;
             sym.alloca_inst = alloca;
             sym.type = argTypes[argIdx];
+            
+            // Resolve Class Name for Argument
+            std::string argTypeStr = "";
+            if (defNode["args"][argIdx][1].IsScalar()) {
+                 argTypeStr = defNode["args"][argIdx][1].as<std::string>();
+            }
+            
+            if (!argTypeStr.empty()) {
+                 if (ctx.classes.count(argTypeStr)) {
+                     sym.className = argTypeStr;
+                 } else if ((argTypeStr.rfind("ptr<", 0) == 0 || argTypeStr.rfind("ref<", 0) == 0) && argTypeStr.back() == '>') {
+                      std::string innerType;
+                      if (argTypeStr.rfind("ptr<", 0) == 0) innerType = argTypeStr.substr(4, argTypeStr.length() - 5);
+                      else innerType = argTypeStr.substr(4, argTypeStr.length() - 5);
+                      
+                      // Check access for innerType or if it's a class
+                      if (ctx.classes.count(innerType)) {
+                          sym.className = innerType;
+                      }
+                 }
+            }
+            
             ctx.symbol_table[argNames[argIdx]] = sym;
             
             argIdx++;

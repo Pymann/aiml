@@ -1,8 +1,65 @@
 # Buffer Type (Binary Data)
 
+```yaml
 # Declaration
 - decl: [packet, buffer]
 - call: [packet.alloc, 1024] # Allocate 1KB
+
+# Unified Write Method
+# Syntax: buffer.write(value, type)
+# - For primitives (i32, f64, etc.), it writes the raw bytes (Little Endian default?).
+# - For primitives (i32, f64, etc.), it writes the raw bytes.
+# - For complex types (structs, lists, maps), it recursively serializes the content (Deep Copy/Serialization).
+#   (A simple memcpy would fail for pointers/references)
+
+- decl: [x, i32, 0x12345678]
+- call: [packet.write, x, i32]
+
+- decl: [pi, f64, 3.14159]
+- decl: [pi, f64, 3.14159]
+- call: [packet.write, pi, f64]
+
+# Strings
+# Strings are written as [Length: u32] + [UTF-8 Bytes].
+# Example: "Hi" -> [02 00 00 00] [48 69] (Assuming Little Endian)
+- decl: [msg, string, "Hello"]
+- call: [packet.write, msg, string]
+
+# Buffer Metadata
+# - packet.size: Current number of bytes written
+# - packet.capacity: Total allocated size
+- print: ["Bytes written: ", packet.size]
+- print: ["Total capacity: ", packet.capacity]
+
+# Writing Structs
+- enum:
+    name: TypeId
+    values:
+      - Player: 1
+      - Enemy: 2
+
+- class:
+    name: Header
+    members:
+      - [id, i32]
+      - [type, TypeId]
+
+- decl: [h, Header]
+- set: [h.id, 1]
+- set: [h.type, TypeId.Player]
+
+# Writes sizeof(Header) bytes directly from &h
+- call: [packet.write, h, Header]
+
+# Reading
+# Syntax: val = buffer.read(type)
+# Reads sizeof(type) bytes and returns the value/struct.
+
+- decl: [h2, Header]
+- set: [h2, {call: [packet.read, Header]}] 
+
+- print: ["Read Header ID: ", h2.id]
+```
 
 # Unified Write Method
 # Syntax: buffer.write(value, type)

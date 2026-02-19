@@ -1,8 +1,9 @@
 # Modules and Namespaces
 
+```yaml
 # 1. Defining a Namespace
 # Usually at the top of the file.
-# Affects all declarations in the file.
+# Affects all declaration in the file.
 # Internally prefixes symbols: my_math_calc -> "my.math.calc"
 
 - namespace: my.math
@@ -32,5 +33,4 @@
 # Simplifies build commands (no need to pass all files manually).
 - include: "utils/math.aiml"
 - include: "../lib/common.aiml"
-
-
+```

@@ -1,7 +1,38 @@
 # Type System Proposal
 
+```yaml
 # Implicit Typing (Inference from Literal)
 - set: [i, 42]        # Inferred as int32
+- set: [f, 3.14]      # Inferred as float (double)
+- set: [s, "Hello"]   # Inferred as string (char*)
+- set: [b, true]      # Inferred as bool (i1)
+
+# Explicit Typing (Declaration)
+# Syntax: decl: [name, type, (optional_value)]
+- decl: [count, i32, 0]
+- decl: [ratio, float]   # Uninitialized (or default 0.0)
+- decl: [name, string]
+
+# Casting / Conversion
+# Syntax: { cast: [value, target_type] }
+- set: [x, { cast: [3.14, i32] }] # x is 3
+
+# Type Safety
+# - set: [i, "text"] -> Compiler Error (Type Mismatch)
+# - add: [i, f] -> Implicit promotion (int -> float) or Error? (Let's say promotion to float)
+# Dynamic Typing
+# The 'any' type can hold a value of any other type (boxed).
+# Usage:
+# - Generic containers (list<any>, map<string, any>)
+# - Dynamic function arguments
+# Validation:
+# Assigning 'any' to a specific type triggers automatic "Model Validation".
+# If the boxed value is compatible, it is unboxed/converted.
+# If not, a TypeMismatch error triggers.
+- decl: [dynamic_val, any]
+- set: [dynamic_val, 42]
+- set: [dynamic_val, "string now"]
+```
 - set: [f, 3.14]      # Inferred as float (double)
 - set: [s, "Hello"]   # Inferred as string (char*)
 - set: [b, true]      # Inferred as bool (i1)
