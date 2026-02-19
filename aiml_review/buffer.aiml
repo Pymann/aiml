@@ -7,7 +7,9 @@
 # Unified Write Method
 # Syntax: buffer.write(value, type)
 # - For primitives (i32, f64, etc.), it writes the raw bytes (Little Endian default?).
-# - For classes/structs, it performs a shallow copy (memcpy) of the struct data.
+# - For primitives (i32, f64, etc.), it writes the raw bytes.
+# - For complex types (structs, lists, maps), it recursively serializes the content (Deep Copy/Serialization).
+#   (A simple memcpy would fail for pointers/references)
 
 - decl: [x, i32, 0x12345678]
 - call: [packet.write, x, i32]
