@@ -41,20 +41,23 @@ target triple = "x86_64-pc-linux-gnu"
 @24 = private unnamed_addr constant [15 x i8] c"--- System ---\00", align 1
 @fmt_str.6 = private unnamed_addr constant [4 x i8] c"%s \00", align 1
 @25 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
-@26 = private unnamed_addr constant [1 x i8] zeroinitializer, align 1
-@27 = private unnamed_addr constant [1 x i8] zeroinitializer, align 1
-@28 = private unnamed_addr constant [8 x i8] c"Arg 0: \00", align 1
+@26 = private unnamed_addr constant [46 x i8] c"[SysGetArg] argc: %d, argvPtr: %p, index: %d\0A\00", align 1
+@27 = private unnamed_addr constant [31 x i8] c"[SysGetArg] Returning arg: %s\0A\00", align 1
+@28 = private unnamed_addr constant [1 x i8] zeroinitializer, align 1
+@29 = private unnamed_addr constant [45 x i8] c"[SysGetArg] Unsafe access! Returning empty.\0A\00", align 1
+@30 = private unnamed_addr constant [1 x i8] zeroinitializer, align 1
+@31 = private unnamed_addr constant [8 x i8] c"Arg 0: \00", align 1
 @fmt_str.7 = private unnamed_addr constant [4 x i8] c"%s \00", align 1
-@29 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
-@30 = private unnamed_addr constant [16 x i8] c"--- Process ---\00", align 1
+@32 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
+@33 = private unnamed_addr constant [16 x i8] c"--- Process ---\00", align 1
 @fmt_str.8 = private unnamed_addr constant [4 x i8] c"%s \00", align 1
-@31 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
-@32 = private unnamed_addr constant [3 x i8] c"ls\00", align 1
-@33 = private unnamed_addr constant [3 x i8] c"-l\00", align 1
-@34 = private unnamed_addr constant [12 x i8] c"test_io.txt\00", align 1
-@35 = private unnamed_addr constant [19 x i8] c"System Tests Done.\00", align 1
+@34 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
+@35 = private unnamed_addr constant [3 x i8] c"ls\00", align 1
+@36 = private unnamed_addr constant [3 x i8] c"-l\00", align 1
+@37 = private unnamed_addr constant [12 x i8] c"test_io.txt\00", align 1
+@38 = private unnamed_addr constant [19 x i8] c"System Tests Done.\00", align 1
 @fmt_str.9 = private unnamed_addr constant [4 x i8] c"%s \00", align 1
-@36 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
+@39 = private unnamed_addr constant [2 x i8] c"\0A\00", align 1
 
 define i32 @main(i32 %argc, ptr %argv) personality ptr @__gxx_personality_v0 {
 entry:
@@ -164,117 +167,138 @@ entry:
   %76 = call i32 (i32, ptr, ...) @dprintf(i32 1, ptr @25)
   %arg0 = alloca ptr, align 8
   store ptr null, ptr %arg0, align 8
-  store ptr @26, ptr %arg0, align 8
-  %77 = call i64 @strlen(ptr @27)
-  %78 = call i64 @strlen(ptr @28)
-  %79 = add i64 %77, %78
-  %80 = add i64 %79, 1
-  %81 = call ptr @malloc(i64 %80)
-  %82 = call ptr @strcpy(ptr %81, ptr @27)
-  %83 = call ptr @strcat(ptr %81, ptr @28)
+  %77 = load ptr, ptr @__argv, align 8
+  %78 = load i32, ptr @__argc, align 4
+  %79 = call i32 (ptr, ...) @printf(ptr @26, i32 %78, ptr %77, i32 0)
+  %80 = icmp eq ptr %77, null
+  %81 = icmp slt i32 0, %78
+  %82 = xor i1 %80, true
+  %83 = and i1 %82, %81
+  br i1 %83, label %arg_safe, label %arg_error
+
+arg_safe:                                         ; preds = %entry
+  %84 = getelementptr inbounds ptr, ptr %77, i32 0
+  %85 = load ptr, ptr %84, align 8
+  %86 = call i32 (ptr, ...) @printf(ptr @27, ptr %85)
+  br label %arg_merge
+
+arg_error:                                        ; preds = %entry
+  %87 = call i32 (ptr, ...) @printf(ptr @29)
+  br label %arg_merge
+
+arg_merge:                                        ; preds = %arg_error, %arg_safe
+  %88 = phi ptr [ %85, %arg_safe ], [ @28, %arg_error ]
+  store ptr %88, ptr %arg0, align 8
+  %89 = call i64 @strlen(ptr @30)
+  %90 = call i64 @strlen(ptr @31)
+  %91 = add i64 %89, %90
+  %92 = add i64 %91, 1
+  %93 = call ptr @malloc(i64 %92)
+  %94 = call ptr @strcpy(ptr %93, ptr @30)
+  %95 = call ptr @strcat(ptr %93, ptr @31)
   %arg0_val = load ptr, ptr %arg0, align 8
-  %84 = call i64 @strlen(ptr %81)
-  %85 = call i64 @strlen(ptr %arg0_val)
-  %86 = add i64 %84, %85
-  %87 = add i64 %86, 1
-  %88 = call ptr @malloc(i64 %87)
-  %89 = call ptr @strcpy(ptr %88, ptr %81)
-  %90 = call ptr @strcat(ptr %88, ptr %arg0_val)
-  %91 = call i32 (i32, ptr, ...) @dprintf(i32 1, ptr @fmt_str.7, ptr %88)
-  %92 = call i32 (i32, ptr, ...) @dprintf(i32 1, ptr @29)
-  %93 = call i32 (i32, ptr, ...) @dprintf(i32 1, ptr @fmt_str.8, ptr @30)
-  %94 = call i32 (i32, ptr, ...) @dprintf(i32 1, ptr @31)
+  %96 = call i64 @strlen(ptr %93)
+  %97 = call i64 @strlen(ptr %arg0_val)
+  %98 = add i64 %96, %97
+  %99 = add i64 %98, 1
+  %100 = call ptr @malloc(i64 %99)
+  %101 = call ptr @strcpy(ptr %100, ptr %93)
+  %102 = call ptr @strcat(ptr %100, ptr %arg0_val)
+  %103 = call i32 (i32, ptr, ...) @dprintf(i32 1, ptr @fmt_str.7, ptr %100)
+  %104 = call i32 (i32, ptr, ...) @dprintf(i32 1, ptr @32)
+  %105 = call i32 (i32, ptr, ...) @dprintf(i32 1, ptr @fmt_str.8, ptr @33)
+  %106 = call i32 (i32, ptr, ...) @dprintf(i32 1, ptr @34)
   %args = alloca %list_string, align 8
   %sizePtr = getelementptr inbounds %GenericList, ptr %args, i32 0, i32 0
   store i32 0, ptr %sizePtr, align 4
   %capPtr = getelementptr inbounds %GenericList, ptr %args, i32 0, i32 1
   store i32 4, ptr %capPtr, align 4
-  %95 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), i64 4))
+  %107 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), i64 4))
   %dataPtr = getelementptr inbounds %GenericList, ptr %args, i32 0, i32 2
-  store ptr %95, ptr %dataPtr, align 8
+  store ptr %107, ptr %dataPtr, align 8
   %sizePtr4 = getelementptr inbounds %GenericList, ptr %args, i32 0, i32 0
   %capPtr5 = getelementptr inbounds %GenericList, ptr %args, i32 0, i32 1
   %size = load i32, ptr %sizePtr4, align 4
   %capacity = load i32, ptr %capPtr5, align 4
-  %96 = icmp eq i32 %size, %capacity
-  br i1 %96, label %grow, label %cont
+  %108 = icmp eq i32 %size, %capacity
+  br i1 %108, label %grow, label %cont
 
-grow:                                             ; preds = %entry
-  %97 = mul i32 %capacity, 2
-  store i32 %97, ptr %capPtr5, align 4
+grow:                                             ; preds = %arg_merge
+  %109 = mul i32 %capacity, 2
+  store i32 %109, ptr %capPtr5, align 4
   %dataPtr6 = getelementptr inbounds %GenericList, ptr %args, i32 0, i32 2
-  %98 = load ptr, ptr %dataPtr6, align 8
-  %99 = zext i32 %97 to i64
-  %100 = mul i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), %99
-  %101 = call ptr @realloc(ptr %98, i64 %100)
-  store ptr %101, ptr %dataPtr6, align 8
+  %110 = load ptr, ptr %dataPtr6, align 8
+  %111 = zext i32 %109 to i64
+  %112 = mul i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), %111
+  %113 = call ptr @realloc(ptr %110, i64 %112)
+  store ptr %113, ptr %dataPtr6, align 8
   br label %cont
 
-cont:                                             ; preds = %grow, %entry
+cont:                                             ; preds = %grow, %arg_merge
   %dataPtr7 = getelementptr inbounds %GenericList, ptr %args, i32 0, i32 2
   %dataBase = load ptr, ptr %dataPtr7, align 8
-  %102 = getelementptr inbounds ptr, ptr %dataBase, i32 %size
-  store ptr @32, ptr %102, align 8
-  %103 = add i32 %size, 1
-  store i32 %103, ptr %sizePtr4, align 4
+  %114 = getelementptr inbounds ptr, ptr %dataBase, i32 %size
+  store ptr @35, ptr %114, align 8
+  %115 = add i32 %size, 1
+  store i32 %115, ptr %sizePtr4, align 4
   %sizePtr8 = getelementptr inbounds %GenericList, ptr %args, i32 0, i32 0
   %capPtr9 = getelementptr inbounds %GenericList, ptr %args, i32 0, i32 1
   %size10 = load i32, ptr %sizePtr8, align 4
   %capacity11 = load i32, ptr %capPtr9, align 4
-  %104 = icmp eq i32 %size10, %capacity11
-  br i1 %104, label %grow12, label %cont13
+  %116 = icmp eq i32 %size10, %capacity11
+  br i1 %116, label %grow12, label %cont13
 
 grow12:                                           ; preds = %cont
-  %105 = mul i32 %capacity11, 2
-  store i32 %105, ptr %capPtr9, align 4
+  %117 = mul i32 %capacity11, 2
+  store i32 %117, ptr %capPtr9, align 4
   %dataPtr14 = getelementptr inbounds %GenericList, ptr %args, i32 0, i32 2
-  %106 = load ptr, ptr %dataPtr14, align 8
-  %107 = zext i32 %105 to i64
-  %108 = mul i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), %107
-  %109 = call ptr @realloc(ptr %106, i64 %108)
-  store ptr %109, ptr %dataPtr14, align 8
+  %118 = load ptr, ptr %dataPtr14, align 8
+  %119 = zext i32 %117 to i64
+  %120 = mul i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), %119
+  %121 = call ptr @realloc(ptr %118, i64 %120)
+  store ptr %121, ptr %dataPtr14, align 8
   br label %cont13
 
 cont13:                                           ; preds = %grow12, %cont
   %dataPtr15 = getelementptr inbounds %GenericList, ptr %args, i32 0, i32 2
   %dataBase16 = load ptr, ptr %dataPtr15, align 8
-  %110 = getelementptr inbounds ptr, ptr %dataBase16, i32 %size10
-  store ptr @33, ptr %110, align 8
-  %111 = add i32 %size10, 1
-  store i32 %111, ptr %sizePtr8, align 4
+  %122 = getelementptr inbounds ptr, ptr %dataBase16, i32 %size10
+  store ptr @36, ptr %122, align 8
+  %123 = add i32 %size10, 1
+  store i32 %123, ptr %sizePtr8, align 4
   %sizePtr17 = getelementptr inbounds %GenericList, ptr %args, i32 0, i32 0
   %capPtr18 = getelementptr inbounds %GenericList, ptr %args, i32 0, i32 1
   %size19 = load i32, ptr %sizePtr17, align 4
   %capacity20 = load i32, ptr %capPtr18, align 4
-  %112 = icmp eq i32 %size19, %capacity20
-  br i1 %112, label %grow21, label %cont22
+  %124 = icmp eq i32 %size19, %capacity20
+  br i1 %124, label %grow21, label %cont22
 
 grow21:                                           ; preds = %cont13
-  %113 = mul i32 %capacity20, 2
-  store i32 %113, ptr %capPtr18, align 4
+  %125 = mul i32 %capacity20, 2
+  store i32 %125, ptr %capPtr18, align 4
   %dataPtr23 = getelementptr inbounds %GenericList, ptr %args, i32 0, i32 2
-  %114 = load ptr, ptr %dataPtr23, align 8
-  %115 = zext i32 %113 to i64
-  %116 = mul i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), %115
-  %117 = call ptr @realloc(ptr %114, i64 %116)
-  store ptr %117, ptr %dataPtr23, align 8
+  %126 = load ptr, ptr %dataPtr23, align 8
+  %127 = zext i32 %125 to i64
+  %128 = mul i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), %127
+  %129 = call ptr @realloc(ptr %126, i64 %128)
+  store ptr %129, ptr %dataPtr23, align 8
   br label %cont22
 
 cont22:                                           ; preds = %grow21, %cont13
   %dataPtr24 = getelementptr inbounds %GenericList, ptr %args, i32 0, i32 2
   %dataBase25 = load ptr, ptr %dataPtr24, align 8
-  %118 = getelementptr inbounds ptr, ptr %dataBase25, i32 %size19
-  store ptr @34, ptr %118, align 8
-  %119 = add i32 %size19, 1
-  store i32 %119, ptr %sizePtr17, align 4
+  %130 = getelementptr inbounds ptr, ptr %dataBase25, i32 %size19
+  store ptr @37, ptr %130, align 8
+  %131 = add i32 %size19, 1
+  store i32 %131, ptr %sizePtr17, align 4
   %proc = alloca ptr, align 8
   store ptr null, ptr %proc, align 8
-  %120 = call ptr @sys_exe_runtime(ptr %args, ptr null, ptr null, i1 false, i32 -1, i1 false)
-  store ptr %120, ptr %proc, align 8
-  %121 = load ptr, ptr %proc, align 8
-  %122 = call i32 @process_wait(ptr %121)
-  %123 = call i32 (i32, ptr, ...) @dprintf(i32 1, ptr @fmt_str.9, ptr @35)
-  %124 = call i32 (i32, ptr, ...) @dprintf(i32 1, ptr @36)
+  %132 = call ptr @sys_exe_runtime(ptr %args, ptr null, ptr null, i1 false, i32 -1, i1 false)
+  store ptr %132, ptr %proc, align 8
+  %133 = load ptr, ptr %proc, align 8
+  %134 = call i32 @process_wait(ptr %133)
+  %135 = call i32 (i32, ptr, ...) @dprintf(i32 1, ptr @fmt_str.9, ptr @38)
+  %136 = call i32 (i32, ptr, ...) @dprintf(i32 1, ptr @39)
   ret i32 0
 }
 
@@ -311,6 +335,8 @@ declare i64 @time_now_ms()
 declare i32 @sprintf(ptr, ptr, ...)
 
 declare void @time_sleep_ms(i32)
+
+declare i32 @printf(ptr, ...)
 
 declare ptr @realloc(ptr, i64)
 

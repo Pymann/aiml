@@ -298,9 +298,11 @@ inline llvm::Value* resolveValue(CompilerContext& ctx, const YAML::Node& argNode
              // Updated StringUtils to check?
              // StringUtils currently assumes evaluator exists.
              // I'll update StringUtils next to be safe.
-             return StringUtils::expandExpression(ctx, argStr, [](CompilerContext& c, const YAML::Node& n){
-                  return resolveValue(c, n, nullptr); // recursive without evaluator
-             });
+             // If no evaluator, we cannot expand expressions that require evaluation (like function calls).
+             // However, StringUtils might handle simple variable lookups if we pass a simple resolver?
+             // Or we just pass nullptr and let StringUtils fail gracefully or do partial expansion.
+             // Given the crash/empty return, let's try to be safer.
+             return StringUtils::expandExpression(ctx, argStr, nullptr);
         }
     }
     

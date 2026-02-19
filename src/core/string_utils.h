@@ -160,6 +160,11 @@ namespace StringUtils {
                         val = ctx.builder.CreateGlobalStringPtr("ERROR"); 
                     }
                 } else {
+                     // No evaluator provided (e.g. from resolveValue fallback)
+                     // Does this happen in SysGetArg? Only if arg is "${...}"
+                     // Just return the raw string or empty?
+                     // Let's return the content as is, wrapped in braces? or just "<???>"
+                     LOG_ERROR("String Expansion requires evaluator: " + content);
                      val = ctx.builder.CreateGlobalStringPtr("<???>");
                 }
                 
