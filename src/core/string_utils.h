@@ -60,6 +60,25 @@ namespace StringUtils {
         return buf;
     }
 
+    inline llvm::Value* int64ToString(CompilerContext& ctx, llvm::Value* intVal) {
+        // char* int64ToString(int64_t i)
+        // malloc(24) -> enough for i64
+        // sprintf(buf, "%ld", i)
+        
+        llvm::Type* i8Ptr = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i64 = ctx.builder.getInt64Ty();
+        
+        llvm::Function* mallocFunc = ctx.getFunction("malloc", i8Ptr, {i64});
+        // sprintf varargs
+        llvm::Function* sprintfFunc = ctx.getFunction("sprintf", ctx.builder.getInt32Ty(), {i8Ptr, i8Ptr}, true);
+        
+        llvm::Value* buf = ctx.builder.CreateCall(mallocFunc, {ctx.builder.getInt64(24)});
+        llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("%ld");
+        
+        ctx.builder.CreateCall(sprintfFunc, {buf, fmt, intVal});
+        return buf;
+    }
+
     inline llvm::Value* expandExpression(CompilerContext& ctx, const std::string& input, CompilerContext::Evaluator evaluator) {
         llvm::Value* currentStr = ctx.builder.CreateGlobalStringPtr("");
         
@@ -149,6 +168,8 @@ namespace StringUtils {
                 if (val) {
                      if (val->getType()->isIntegerTy(32)) {
                          varStr = intToString(ctx, val);
+                     } else if (val->getType()->isIntegerTy(64)) {
+                         varStr = int64ToString(ctx, val);
                      } else if (val->getType()->isPointerTy()) {
                          // Check if i8*
                          varStr = val; 

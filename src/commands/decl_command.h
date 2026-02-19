@@ -109,6 +109,8 @@ public:
              if (ctx.classes.count(innerType)) {
                  sym.className = innerType;
              }
+        } else if (typeName == "process") {
+             sym.className = "process";
         }
         
         if (typeName.rfind("list<", 0) == 0) {

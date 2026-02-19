@@ -6,6 +6,9 @@
 #include "syscall.h"
 #include "intrinsics.h"
 #include "io_commands.h"
+#include "time_commands.h"
+#include "sys_commands.h"
+#include "process_commands.h"
 
 class SystemRegistry {
 public:
@@ -29,7 +32,13 @@ private:
         registerCall("io.open", std::make_unique<IoOpen>());
         registerCall("io.close", std::make_unique<IoClose>());
         registerCall("io.read_all", std::make_unique<IoReadAll>());
+        registerCall("time.now", std::make_unique<TimeNow>());
         registerCall("time.sleep_ms", std::make_unique<TimeSleepMs>());
+        registerCall("sys.get_arg", std::make_unique<SysGetArg>());
+        registerCall("sys.size", std::make_unique<SysSize>());
+        registerCall("sys.type", std::make_unique<SysType>());
+        registerCall("sys.env", std::make_unique<SysEnv>());
+        registerCall("sys.exe", std::make_unique<SysExe>());
         registerCall("free", std::make_unique<MemoryFree>());
     }
 

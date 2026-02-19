@@ -15,6 +15,11 @@ public:
     using Evaluator = std::function<llvm::Value*(CompilerContext&, const YAML::Node&)>;
 
     static llvm::Value* dispatch(CompilerContext& ctx, const std::string& funcName, const std::vector<YAML::Node>& args, Evaluator evaluator, llvm::BasicBlock* exceptionBlock = nullptr) {
+        // 0. Check System Intrinsics FIRST to avoid "Undefined object" for sys.exit, io.write, etc.
+        if (auto sysCall = SystemRegistry::instance().get(funcName)) {
+            return sysCall->compile(ctx, args);
+        }
+
         // Method Call Check: obj.method
         size_t methodDotPos = funcName.rfind('.');
         if (methodDotPos != std::string::npos) {
@@ -275,18 +280,36 @@ public:
                      BufferImpl::reset(ctx, sym.alloca_inst);
                      return nullptr;
                 }
+            } 
+            // --- PROCESS ---
+            else if (sym.className == "process") {
+                 llvm::Function* waitFunc = ctx.module.getFunction("process_wait");
+                 if (!waitFunc) {
+                     llvm::FunctionType* wt = llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false);
+                     waitFunc = llvm::Function::Create(wt, llvm::Function::ExternalLinkage, "process_wait", ctx.module);
+                 }
+                 
+                 llvm::Function* killFunc = ctx.module.getFunction("process_kill");
+                 if (!killFunc) {
+                     llvm::FunctionType* kt = llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt8Ty()->getPointerTo()}, false);
+                     killFunc = llvm::Function::Create(kt, llvm::Function::ExternalLinkage, "process_kill", ctx.module);
+                 }
+                 
+                 if (methodName == "wait") {
+                     llvm::Value* val = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), sym.alloca_inst);
+                     return ctx.builder.CreateCall(waitFunc, {val});
+                 } else if (methodName == "kill") {
+                     llvm::Value* val = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), sym.alloca_inst);
+                     ctx.builder.CreateCall(killFunc, {val});
+                     return nullptr;
+                 }
             } else {
                 LOG_ERROR("Method call on unknown class type or method not found: " + objName);
                 return nullptr;
             }
         }
 
-        // 1. Check System Intrinsics
-        if (auto sysCall = SystemRegistry::instance().get(funcName)) {
-            // SystemCalls take raw Nodes for now.
-            // In future, they should take Evaluated Values to be consistent.
-            return sysCall->compile(ctx, args);
-        }
+
 
         // 2. [REMOVED DUPLICATE LOGIC]
 

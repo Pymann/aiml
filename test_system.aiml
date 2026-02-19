@@ -1,0 +1,48 @@
+- print: ["Running System Tests..."]
+
+# 1. File I/O
+- print: ["--- File I/O ---"]
+- decl: [f, file_handle]
+- set: [f, {call: [io.open, "test_io.txt", "w"]}]
+- call: [io.write, f, "Hello AIML World\n"]
+- call: [io.close, f]
+
+- set: [f, {call: [io.open, "test_io.txt", "r"]}]
+- decl: [content, string]
+- set: [content, {call: [io.read_all, f]}]
+- call: [io.close, f]
+- print: ["Read content: ${content}"]
+
+- call: [io.write, io.stdout, "Direct write to stdout\n"]
+
+# 2. Time
+- print: ["--- Time ---"]
+- decl: [t1, i64]
+- set: [t1, {call: [time.now]}]
+- print: ["Start time: ${t1}"]
+- call: [time.sleep_ms, 500]
+- decl: [t2, i64]
+- set: [t2, {call: [time.now]}]
+- print: ["End time: ${t2}"]
+- decl: [diff, i64]
+#- set: [diff, {-: [t2, t1]}] # Need sub operator or math call
+#- print: ["Diff ~500ms? ${diff}"]
+
+# 3. System
+- print: ["--- System ---"]
+- decl: [arg0, string]
+- set: [arg0, {call: [sys.get_arg, 0]}]
+- print: ["Arg 0: ${arg0}"]
+
+# 4. Process (sys.exe)
+- print: ["--- Process ---"]
+- decl: [args, list<string>]
+- call: [args.push, "ls"]
+- call: [args.push, "-l"]
+- call: [args.push, "test_io.txt"]
+
+- decl: [proc, process]
+- set: [proc, {call: [sys.exe, args]}] # Simplified call
+- call: [proc.wait]
+
+- print: ["System Tests Done."]
