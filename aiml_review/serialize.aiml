@@ -51,7 +51,7 @@ A `Code` object represents a serialized code bundle.
     members:
       - [id, string, { access: public }]       # SHA-256 hash of content
       - [start_call, map]                      # AST Node to execute (e.g. { call: [func, args] })
-      - [content, buffer, { access: private }] # The serialized code as a buffer of strings (YAML source)
+      - [chunks, list<string>, { access: private }] # List of code segments (StringBuilder pattern)
     methods:
       - def:
           name: contains
@@ -60,6 +60,9 @@ A `Code` object represents a serialized code bundle.
       - def:
           name: size
           return: u64
+      - def:
+          name: toString
+          return: string
       - def:
           name: merge
           args: [[other, Code]]
