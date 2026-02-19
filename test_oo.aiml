@@ -1,0 +1,54 @@
+
+# 1. Define Interface
+- interface:
+    name: Printable
+    methods:
+      - [print, void, []]
+
+# 2. Define Model (Mixin)
+- model:
+    name: Point2D
+    fields:
+      - [x, i32, 10]
+      - [y, i32, 20]
+
+# 3. Define Base Class
+- class:
+    name: Shape
+    members:
+      - [id, i32, 1]
+    methods:
+      - def: { name: getId, return: i32, args: [], body: [ { return: [<.id] } ] }
+
+# 4. Define Child Class with Inheritance and Mixin
+- class:
+    name: Circle
+    extends: Shape
+    models: [Point2D]
+    implements: [Printable]
+    members:
+      - [radius, i32, 5]
+    methods:
+      - def: 
+          name: print
+          return: void
+          args: []
+          body:
+            - print: ["Circle ID: ${<.id}, Pos: (${<.x}, ${<.y}), Radius: ${<.radius}"]
+
+# 5. Test Instantiation and Methods
+- decl: [c, ref<Circle>]
+- set: [c, { new: Circle }]
+
+- print: ["Testing OO Features..."]
+- call: [c.print]
+
+# Test inherited method
+- decl: [shapeId, i32]
+- set: [shapeId, { call: [c.getId] }]
+- print: ["Shape ID (Inherited): ${shapeId}"]
+
+# Test Mixin fields
+- print: ["Mixin Field X: ${c.x}"]
+
+- free: [c]

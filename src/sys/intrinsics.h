@@ -25,23 +25,7 @@ public:
 };
 
 
-class TimeSleepMs : public SystemCall {
-public:
-    llvm::Value* compile(CompilerContext& ctx, const std::vector<YAML::Node>& args) override {
-         llvm::Function* usleepFunc = ctx.module.getFunction("usleep");
-         if (!usleepFunc) {
-            std::vector<llvm::Type*> usArgs = { ctx.builder.getInt32Ty() };
-            llvm::FunctionType* usType = llvm::FunctionType::get(ctx.builder.getInt32Ty(), usArgs, false);
-            usleepFunc = llvm::Function::Create(usType, llvm::Function::ExternalLinkage, "usleep", ctx.module);
-         }
-         
-         if (args.size() > 1) {
-             int ms = args[1].as<int>();
-             return ctx.builder.CreateCall(usleepFunc, { ctx.builder.getInt32(ms * 1000) });
-         }
-         return nullptr;
-    }
-};
+
 
 class MemoryFree : public SystemCall {
 public:

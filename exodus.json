@@ -18,7 +18,9 @@
     "sources": [
         "*.c",
         "*.cpp",
-        "*.cc"
+        "*.cc",
+        "src/sys/process_runtime.cpp",
+        "src/sys/time_runtime.cpp"
     ],
     "defines": {},
     "pre_compilation": "hook_example.py",

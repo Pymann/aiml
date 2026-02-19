@@ -2,6 +2,10 @@
 #include <iostream>
 #include <fstream>
 #include <yaml-cpp/yaml.h>
+#include <sys/time.h>
+#include <unistd.h>
+#include "src/sys/time_runtime.h"
+#include "src/sys/process_runtime.h"
 
 // LLVM includes
 #include <llvm/IR/LLVMContext.h>
@@ -64,17 +68,42 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
 
     llvm::IRBuilder<> builder(*context_);
 
-    // Create main function
-    llvm::FunctionType* funcType = llvm::FunctionType::get(builder.getInt32Ty(), false);
+    // Create main function: int main(int argc, char** argv)
+    std::vector<llvm::Type*> mainArgs = { builder.getInt32Ty(), builder.getInt8Ty()->getPointerTo()->getPointerTo() };
+    llvm::FunctionType* funcType = llvm::FunctionType::get(builder.getInt32Ty(), mainArgs, false);
     llvm::Function* mainFunc = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "main", *module_);
+    
+    // Create Globals for argc/argv
+    module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
+    llvm::GlobalVariable* argcGlobal = module_->getNamedGlobal("__argc");
+    argcGlobal->setLinkage(llvm::GlobalValue::InternalLinkage);
+    argcGlobal->setInitializer(builder.getInt32(0));
+    
+    module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
+    llvm::GlobalVariable* argvGlobal = module_->getNamedGlobal("__argv");
+    argvGlobal->setLinkage(llvm::GlobalValue::InternalLinkage);
+    argvGlobal->setInitializer(llvm::ConstantPointerNull::get(builder.getInt8Ty()->getPointerTo()->getPointerTo()));
+
     llvm::BasicBlock* entry = llvm::BasicBlock::Create(*context_, "entry", mainFunc);
     builder.SetInsertPoint(entry);
+    
+    // Store argc/argv inputs into globals
+    llvm::Function::arg_iterator args = mainFunc->arg_begin();
+    llvm::Value* argcVal = args++;
+    argcVal->setName("argc");
+    llvm::Value* argvVal = args++;
+    argvVal->setName("argv");
+    
+    builder.CreateStore(argcVal, argcGlobal);
+    builder.CreateStore(argvVal, argvGlobal);
     
     // Initialize Compiler Context
     CompilerContext ctx(*context_, *module_, builder);
     
-    // Set Personality Function for main (Crucial for exception handling in top-level code)
-    mainFunc->setPersonalityFn(llvm::cast<llvm::Constant>(ctx.getPersonalityFunction().getCallee()));
+    // Set Personality Function
+    if (ctx.getPersonalityFunction().getCallee()) {
+         mainFunc->setPersonalityFn(llvm::cast<llvm::Constant>(ctx.getPersonalityFunction().getCallee()));
+    }
     
     // Initialize Command Registry
     CommandRegistry registry;
@@ -183,6 +212,14 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("fflush", (void*)(intptr_t)fflush);
     llvm::sys::DynamicLibrary::AddSymbol("fprintf", (void*)(intptr_t)fprintf);
     llvm::sys::DynamicLibrary::AddSymbol("dprintf", (void*)(intptr_t)dprintf);
+    llvm::sys::DynamicLibrary::AddSymbol("fprintf", (void*)(intptr_t)fprintf);
+    llvm::sys::DynamicLibrary::AddSymbol("dprintf", (void*)(intptr_t)dprintf);
+    
+    // Runtime Library Symbols
+    llvm::sys::DynamicLibrary::AddSymbol("time_now_ms", (void*)(intptr_t)time_now_ms);
+    llvm::sys::DynamicLibrary::AddSymbol("time_sleep_ms", (void*)(intptr_t)time_sleep_ms);
+    llvm::sys::DynamicLibrary::AddSymbol("sys_exe_runtime", (void*)(intptr_t)sys_exe_runtime);
+    
     // llvm::sys::DynamicLibrary::AddSymbol("stderr", (void*)(intptr_t)stderr); // Removed to avoid macro issues for now
 
     std::string errStr;
@@ -216,8 +253,18 @@ int AIMLCompiler::jitRun() {
     // Explicitly add printf
     llvm::sys::DynamicLibrary::AddSymbol("printf", (void*)(intptr_t)printf);
 
-    LOG_DEBUG("Running main...");
+    LOG_DEBUG("Running main with fixed argv...");
+    
+    // Create dummy argv for JIT safety
+    // We need to keep the memory alive during execution
+    static char* dummyArgv[] = { (char*)"aiml_jit", nullptr };
+    
     std::vector<llvm::GenericValue> args;
+    args.push_back(llvm::GenericValue()); // argc
+    args[0].IntVal = llvm::APInt(32, 1); 
+    args.push_back(llvm::GenericValue()); // argv
+    args[1].PointerVal = dummyArgv;
+
     llvm::GenericValue result = engine->runFunction(mainFunc, args);
     LOG_DEBUG("Main finished. Result: " + std::to_string(result.IntVal.getSExtValue()));
     

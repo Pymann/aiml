@@ -239,6 +239,9 @@
             return bufferType;
         }
 
+        if (typeName == "file_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // FILE*
+        if (typeName == "process") return llvm::Type::getInt8Ty(context)->getPointerTo();     // ProcessHandle*
+
         LOG_ERROR("Unknown Type: '" + typeName + "' -> defaulting to i32");
         return llvm::Type::getInt32Ty(context); // Default
     }
