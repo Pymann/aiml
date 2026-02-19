@@ -161,12 +161,23 @@
              if (sepPos != std::string::npos) {
                  std::string keyTypeStr = content.substr(0, sepPos);
                  std::string valTypeStr = content.substr(sepPos + 1);
+
+                 // Trim spaces
+                 keyTypeStr.erase(0, keyTypeStr.find_first_not_of(' '));
+                 keyTypeStr.erase(keyTypeStr.find_last_not_of(' ') + 1);
+                 valTypeStr.erase(0, valTypeStr.find_first_not_of(' '));
+                 valTypeStr.erase(valTypeStr.find_last_not_of(' ') + 1);
                  
                  LOG_DEBUG("KeyType: '" + keyTypeStr + "', ValType: '" + valTypeStr + "'");
                  
                  // Trim spaces? Assuming no spaces for now or strict parsing
                  llvm::Type* keyType = getLLVMType(keyTypeStr);
-                 llvm::Type* valType = getLLVMType(valTypeStr);
+                 llvm::Type* valType = nullptr;
+                 if (valTypeStr == "any") {
+                      valType = llvm::Type::getInt8Ty(context)->getPointerTo();
+                 } else {
+                      valType = getLLVMType(valTypeStr);
+                 }
                  
                  if (!keyType || !valType) { 
                      LOG_ERROR("Failed to resolve key/val types for map");
@@ -241,6 +252,7 @@
 
         if (typeName == "file_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // FILE*
         if (typeName == "process") return llvm::Type::getInt8Ty(context)->getPointerTo();     // ProcessHandle*
+        if (typeName == "any") return llvm::Type::getInt8Ty(context)->getPointerTo();         // void*
 
         LOG_ERROR("Unknown Type: '" + typeName + "' -> defaulting to i32");
         return llvm::Type::getInt32Ty(context); // Default

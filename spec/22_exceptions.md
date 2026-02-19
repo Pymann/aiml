@@ -1,5 +1,6 @@
 # Exception Handling
 
+```yaml
 # 1. Exception Hierarchy
 - class:
     name: Exception
@@ -69,3 +70,4 @@
 # - DeserializationException  : Deserialization error
 # - BufferOverflowException   : Buffer overflow error (putting to much in buffer)
 # - BufferUnderflowException  : Buffer underflow error (reading to much from buffer)
+```

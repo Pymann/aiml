@@ -1,5 +1,6 @@
 # AIML Configuration Directives
 
+```yaml
 # Metadata to configure the Runtime / Compiler Environment.
 # Usually at the top of the file.
 
@@ -24,3 +25,4 @@
     body:
        - print: ["Config loaded"]
        - return: [0]
+```

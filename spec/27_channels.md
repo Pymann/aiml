@@ -1,5 +1,6 @@
 # Concurrency & Channels (Future / Experimental)
 
+```yaml
 # Channels are typed pipes for communication between threads/coroutines.
 # Syntax: chan<Type>
 
@@ -29,3 +30,4 @@
 #       body: ...
 #     - case: { call: [ch2.send, 1] }
 #       body: ...
+```

@@ -101,7 +101,11 @@ public:
                 if (func->arg_size() > 0) {
                     llvm::Type* expectedThisTy = func->getFunctionType()->getParamType(0);
                     if (thisPtr->getType() != expectedThisTy) {
-                        thisPtr = ctx.builder.CreateBitCast(thisPtr, expectedThisTy);
+                         // Generic check: if both are pointers, bitcast.
+                         // This handles 'this' being void* (any) or a specific class pointer.
+                         if (thisPtr->getType()->isPointerTy() && expectedThisTy->isPointerTy()) {
+                             thisPtr = ctx.builder.CreateBitCast(thisPtr, expectedThisTy);
+                         }
                     }
                 }
                 
@@ -119,7 +123,17 @@ public:
             if (sym.type->isStructTy() && sym.type->getStructName().startswith("list_")) {
                 if (methodName == "push") {
                      if (args.size() > 1) {
-                         llvm::Value* val = evaluator(ctx, args[1]);
+                         llvm::Value* val = nullptr;
+                         // Implicit reference handling for list<any>
+                         if (sym.element_type && sym.element_type->isPointerTy() && args[1].IsScalar()) {
+                              std::string argName = args[1].as<std::string>();
+                              if (ctx.symbol_table.count(argName)) {
+                                  Symbol& s = ctx.symbol_table[argName];
+                                  if (s.type->isStructTy()) val = s.alloca_inst;
+                              }
+                         }
+                         if (!val) val = evaluator(ctx, args[1]);
+                         
                          ListImpl::push(ctx, sym.alloca_inst, val);
                      }
                      return nullptr; // Void
@@ -134,7 +148,17 @@ public:
                 } else if (methodName == "insert") {
                      if (args.size() > 2) {
                          llvm::Value* idx = evaluator(ctx, args[1]);
-                         llvm::Value* val = evaluator(ctx, args[2]);
+                         
+                         llvm::Value* val = nullptr;
+                         if (sym.element_type && sym.element_type->isPointerTy() && args[2].IsScalar()) {
+                              std::string argName = args[2].as<std::string>();
+                              if (ctx.symbol_table.count(argName)) {
+                                  Symbol& s = ctx.symbol_table[argName];
+                                  if (s.type->isStructTy()) val = s.alloca_inst;
+                              }
+                         }
+                         if (!val) val = evaluator(ctx, args[2]);
+
                          ListImpl::insert(ctx, sym.alloca_inst, idx, val);
                      }
                      return nullptr;
@@ -160,7 +184,18 @@ public:
                 if (methodName == "put") {
                     if (args.size() > 2) {
                         llvm::Value* key = evaluator(ctx, args[1]);
-                        llvm::Value* val = evaluator(ctx, args[2]);
+                        
+                        llvm::Value* val = nullptr;
+                        // Implicit Ref for Map value (e.g. map<string:any>)
+                        if (sym.value_type && sym.value_type->isPointerTy() && args[2].IsScalar()) {
+                              std::string argName = args[2].as<std::string>();
+                              if (ctx.symbol_table.count(argName)) {
+                                  Symbol& s = ctx.symbol_table[argName];
+                                  if (s.type->isStructTy()) val = s.alloca_inst;
+                              }
+                        }
+                        if (!val) val = evaluator(ctx, args[2]);
+
                         MapImpl::put(ctx, sym.alloca_inst, key, val, mapType);
                     }
                     return nullptr;
@@ -335,7 +370,55 @@ public:
              }
              
              for (size_t i = 1; i < args.size(); ++i) {
-                 llvm::Value* val = evaluator(ctx, args[i]);
+                 // Check Expected Type first to decide how to resolve
+                 llvm::Type* expectedTy = nullptr;
+                 if (i-1 < func->arg_size()) {
+                     expectedTy = func->getFunctionType()->getParamType(i-1);
+                 }
+
+                 llvm::Value* val = nullptr;
+                 
+                 // Implicit Reference Passing: If expected is Ptr, and arg is LValue, pass Address.
+                 // Only if arg is a variable (Scalar string in YAML)
+                 if (expectedTy && expectedTy->isPointerTy() && args[i].IsScalar()) {
+                      std::string argName = args[i].as<std::string>();
+                      // Is it a variable in symbol table?
+                      if (ctx.symbol_table.count(argName)) {
+                          Symbol& sym = ctx.symbol_table[argName];
+                          // If symbol is struct/class (LValue), and we need pointer
+                          // But wait, resolveValue loads it.
+                          // We should use resolveLValue if we want address.
+                          // But we need to know IF we want address.
+                          // If sym.type matches expectedTy (both pointers), we load (to get the pointer value).
+                          // If sym.type is Struct, and expected is Pointer, we pass address (alloca).
+                          
+                          if (sym.type->isStructTy()) {
+                               // Start with address
+                               val = sym.alloca_inst;
+                               // If expected is pointer to this struct, we are good?
+                               // expected: ptr<TestModel> -> i8* (opaque) or %TestModel* (typed)
+                               // val: %TestModel* (alloca)
+                               // If opaque pointers, types match (ptr vs ptr).
+                               
+                               // BUT: resolveValue would return 'load %TestModel'.
+                               // So we avoid resolveValue here.
+                               LOG_DEBUG("Implicit Reference Pass for " + argName);
+                          }
+                      }
+                 }
+                 
+                 if (!val) {
+                      val = evaluator(ctx, args[i]);
+                 }
+                 
+                 // Generic Casting Logic ...
+                 if (expectedTy && val->getType() != expectedTy) {
+                     // Check for Any (i8*) or generic pointer cast
+                     if (val->getType()->isPointerTy() && expectedTy->isPointerTy()) {
+                         val = ctx.builder.CreateBitCast(val, expectedTy);
+                     }
+                 }
+                 
                  callArgs.push_back(val);
              }
              

@@ -1,7 +1,50 @@
 # Collections & Complex Types
 
+```yaml
 # 1. Fixed-Size Arrays (Primitive)
 # Allocated on Stack (via 'alloca' array type)
+# Syntax: type-size (e.g. i32-3)
+# Note: We use hyphen syntax because YAML flow collections reserve [] characters.
+- decl: [coords, i32-3]
+- set: [coords-0, 10]
+
+# 2. Dynamic List (Strongly Typed)
+# Syntax: list<Type>
+- decl: [scores, list<i32>]
+
+# Standard List Methods
+- call: [scores.push, 100]        # Add to end
+- call: [scores.pop]              # Remove from end (returns value)
+- call: [scores.insert, 0, 50]    # Insert at index
+- call: [scores.remove, 0]     # Remove at index
+- call: [scores.clear]            # Remove all
+- set: [len, scores.size]         # Get size
+- set: [is_empty, scores.empty]   # Check if empty
+
+# Access
+- set: [val, scores-0]           # Get (Syntactic sugar for scores.get(0))
+- set: [subset, scores-1-3]      # Slice (Get elements 1 and 2)
+- set: [scores-0, 99]            # Set
+
+# Memory
+- call: [scores.free]             # Explicit free (if no RAII)
+
+# 3. Maps (Dictionaries)
+# Syntax: map<KeyType:ValueType>
+- decl: [users, map<string:i32>]
+
+# Standard Map Methods
+- call: [users.put, "alice", 1]   # Insert or Update
+- set: [val, { call: [users.get, "alice"] }] # Retrieve (Error if missing?)
+                                             # Or returns pointer? (null if missing)
+- set: [exists, { call: [users.has, "alice"] }] # Check existence
+- call: [users.remove, "alice"]   # Remove key
+- call: [users.clear]             # Remove all
+- set: [len, users.size]          # Get count
+
+# Access (Future Sugar)
+# - set: [users["alice"], 2]
+```
 # Syntax: type-size (e.g. i32-3)
 # Note: We use hyphen syntax because YAML flow collections reserve [] characters.
 - decl: [coords, i32-3]

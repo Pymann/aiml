@@ -1,4 +1,6 @@
 # FFI (Foreign Function Interface)
+
+```yaml
 # Essential for UI/Graphics (OpenGL, Vulkan, SDL, GTK).
 # Allows calling existing C libraries.
 
@@ -35,3 +37,4 @@
       - decl: [win, ptr]
       - set: [win, { call: [SDL_CreateWindow, "AIML Window", 100, 100, 800, 600, 4] }]
       # ... Game Loop ...
+```

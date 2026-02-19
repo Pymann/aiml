@@ -1,5 +1,6 @@
 # Network Stack (Sockets)
 
+```yaml
 # 1. Client (TCP)
 - decl: [sock, socket_handle]
 - set: [sock, { call: [net.socket, "tcp"] }]
@@ -37,3 +38,4 @@
 # 3. HTTP (High Level - Future)
 # - decl: [resp, http_response]
 # - set: [resp, { call: [http.get, "https://google.com"] }]
+```

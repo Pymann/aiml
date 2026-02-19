@@ -1,5 +1,6 @@
 # Security Model
 
+```yaml
 # 1. Memory Safety (Default)
 # - Array bounds checking is ON by default.
 # - Null pointer checks are ON (runtime panic or result type).
@@ -27,3 +28,4 @@
 # - config:
 #     capabilities: [network, fs_read]
 # If a script tries 'fs_write', it fails.
+```
