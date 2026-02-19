@@ -15,25 +15,22 @@ public:
         llvm::Value* indexVal = resolveValue(ctx, args[1]); // i64 or i32
         
         // Ensure globals exist (created in Compiler::compile)
-        llvm::GlobalVariable* argvVar = ctx.module.getGlobalVariable("__argv");
-        llvm::GlobalVariable* argcVar = ctx.module.getGlobalVariable("__argc");
+        llvm::GlobalVariable* argvVar = ctx.module.getGlobalVariable("__argv", true);
+        llvm::GlobalVariable* argcVar = ctx.module.getGlobalVariable("__argc", true);
         
         if (!argvVar || !argcVar) {
              // Fallback or error?
              // If JIT/Compiler didn't create them, return empty string or null?
+             LOG_ERROR("[SysGetArg] argv or argc not found!");
              return ctx.builder.CreateGlobalStringPtr("");
         }
         
-        // Load argv (char**)
+        // Check argc/argv
         llvm::Value* argvPtr = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo()->getPointerTo(), argvVar);
         llvm::Value* argcVal = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), argcVar);
         
         // Safety Check: if argv is null (JIT) or index >= argc
         llvm::Value* argvIsNull = ctx.builder.CreateICmpEQ(argvPtr, llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()->getPointerTo()));
-        
-        // We can't easily return early in middle of block without splitting blocks.
-        // Instead, use Select to pick safe pointer or safe value.
-        // Or split blocks. Splitting is cleaner.
         
         llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
         llvm::BasicBlock* safeBB = llvm::BasicBlock::Create(ctx.context, "arg_safe", parentFunc);
@@ -41,8 +38,6 @@ public:
         llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(ctx.context, "arg_merge", parentFunc);
         
         llvm::Value* idxOk = ctx.builder.CreateICmpSLT(indexVal, argcVal); // index < argc
-        // Also check index >= 0 if signed? assume checked or u32
-        
         llvm::Value* isSafe = ctx.builder.CreateAnd(ctx.builder.CreateNot(argvIsNull), idxOk);
         
         ctx.builder.CreateCondBr(isSafe, safeBB, errorBB);
