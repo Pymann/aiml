@@ -19,9 +19,9 @@ rm -rf __aiml_cache
 echo "Running AIML Tests..." | tee -a "$OUTPUT_FILE"
 echo "======================" | tee -a "$OUTPUT_FILE"
 
-# Find all .aiml files in the current directory (or tests/ directory)
+# Find all .aiml files in the tests/ directory
 # Exclude the ones in __aiml_cache or build directories
-TEST_FILES=$(find . -name "*.aiml" | grep -v "__aiml_cache" | grep -v "build" | grep -v "out")
+TEST_FILES=$(find tests/ -name "*.aiml" | grep -v "__aiml_cache" | grep -v "build" | grep -v "out")
 
 TOTAL=0
 PASSED=0
