@@ -10,7 +10,7 @@ static llvm::Value* resolveLValueMemberAccess(CompilerContext& ctx, const std::s
     
     Symbol& sym = ctx.symbol_table[objName];
     if (sym.type->isStructTy() && sym.is_const && forWrite) {
-         LOG_ERROR("Cannot assign to member  + memberName +  of const variable  + objName + ");
+         LOG_ERROR("Cannot assign to member " + memberName + " of const variable " + objName);
          return nullptr;
     }
 
@@ -33,15 +33,15 @@ static llvm::Value* resolveLValueMemberAccess(CompilerContext& ctx, const std::s
              int index = member.index;
              
              if (member.access == AccessLevel::Private && ctx.currentClassName != className) {
-                 LOG_ERROR("Cannot access private member  + memberName + ");
+                 LOG_ERROR("Cannot access private member " + memberName);
                  return nullptr;
              } else if (member.access == AccessLevel::Protected && ctx.currentClassName != className) {
-                 LOG_ERROR("Cannot access protected member  + memberName + ");
+                 LOG_ERROR("Cannot access protected member " + memberName);
                  return nullptr;
              }
 
              if (forWrite && member.is_const) {
-                  LOG_ERROR("Cannot assign to const member  + memberName + ");
+                  LOG_ERROR("Cannot assign to const member " + memberName);
                   return nullptr; 
              }
              
@@ -51,10 +51,10 @@ static llvm::Value* resolveLValueMemberAccess(CompilerContext& ctx, const std::s
              }
              return ctx.builder.CreateStructGEP(classInfo.type, structPtr, index, "member_addr");
         }
-        LOG_ERROR("Member  + memberName +  not found in class  + className + ");
+        LOG_ERROR("Member " + memberName + " not found in class " + className);
         return nullptr;
     }
-    LOG_ERROR("Cannot access member  + memberName +  on " + objName);
+    LOG_ERROR("Cannot access member " + memberName + " on " + objName);
     return nullptr;
 }
 
