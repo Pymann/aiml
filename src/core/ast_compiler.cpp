@@ -41,7 +41,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
     // Note: To fully decouple, we'd add `createFunction` to IRGenerator.
     // Since Phase 3 isn't 100% complete for functions, we mix abstraction.
     // For now, let's just create a prototype print statement to prove AST walk works.
-    std::cout << "Compiling Function: " << mangledName << " via AST\n";
+    LOG_DEBUG("Compiling Function: " + mangledName + " via AST");
     
     // TODO: Create the actual function using IRGenerator (requires extending IRGenerator)
 }
@@ -66,7 +66,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
     sym.typeName = decl->typeName;
     ctx.symbol_table[decl->varName] = sym;
     
-    std::cout << "Compiled AST Decl: " << decl->varName << " of " << decl->typeName << "\n";
+    LOG_DEBUG("Compiled AST Decl: " + decl->varName + " of " + decl->typeName);
     
     if (decl->initialValue) {
         IRValue* initVal = visitExpression(decl->initialValue.get());
@@ -116,7 +116,7 @@ IRValue* Compiler::visitExpression(Expr* expr) {
 IRValue* Compiler::visitLiteral(LiteralExpr* lit) {
     // Need to cast to LLVM via wrapper or extend IRGenerator Context
     // Simplification for now
-    std::cout << "Visit Literal: " << lit->value << "\n";
+    LOG_DEBUG("Visit Literal: " + lit->value);
     return nullptr; // Stub
 }
 
