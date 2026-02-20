@@ -62,7 +62,7 @@ const llvm::Module& AIMLCompiler::getModule() const {
 #include "src/core/context.h"
 #include "src/core/ir_generator.h"
 #include "src/commands/registry.h"
-#include "src/core/ast_parser.h"
+#include "src/core/ast_builder.h"
 #include "src/core/ast_compiler.h"
 
 // ... (Functions compile, compileToObject, etc.)
@@ -117,13 +117,20 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     // before the AST compiler attempts to resolve them.
     ctx.params.compileCallback(ctx, config);
 
-    // 5. Compile Root Nodes (AST Pipeline)
-    AIML::AST::Parser astParser;
-    auto programAST = astParser.parseProgram(config);
-    
-    if (programAST) {
-        AIML::AST::Compiler astCompiler(ctx);
-        astCompiler.compile(programAST.get());
+    // 5. Compile Root Nodes (Streaming AST Pipeline)
+    AIML::AST::Builder astBuilder;
+    try {
+        std::ifstream fin(filename);
+        YAML::Parser parser(fin);
+        parser.HandleNextDocument(astBuilder);
+        
+        auto programAST = astBuilder.takeProgram();
+        if (programAST) {
+            AIML::AST::Compiler astCompiler(ctx);
+            astCompiler.compile(programAST.get());
+        }
+    } catch (const YAML::Exception& e) {
+        LOG_ERROR("YAML Parsing Error during AST Build: " + std::string(e.what()));
     }
     
     // Propagate linked objects

@@ -19,8 +19,7 @@
         "*.c",
         "*.cpp",
         "*.cc",
-        "src/*/*.cpp",
-        "src/*/*/*.cpp"
+        "src/**/*.cpp"
     ],
     "defines": {},
     "pre_compilation": "hook_example.py",
