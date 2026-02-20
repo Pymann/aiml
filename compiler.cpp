@@ -105,6 +105,10 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
         }
     };
 
+    // Pre-declare globals so sys commands can reference them during compilation
+    module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
+    module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
+
     // 4. Compile Root Nodes (Populate module and __aiml_init)
     ctx.params.compileCallback(ctx, config);
     

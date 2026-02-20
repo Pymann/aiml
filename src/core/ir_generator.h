@@ -6,9 +6,23 @@
 namespace AIML {
 
     // Opaque wrappers to isolate LLVM from the rest of the compiler
-    struct IRValue { virtual ~IRValue() = default; virtual void* getRawPtr() = 0; };
-    struct IRType { virtual ~IRType() = default; virtual void* getRawPtr() = 0; };
-    struct IRBlock { virtual ~IRBlock() = default; virtual void* getRawPtr() = 0; };
+    struct IRType;
+    struct IRValue { 
+        virtual ~IRValue() = default; 
+        virtual void* getRawPtr() = 0; 
+        virtual IRType* getType() = 0;
+    };
+    struct IRType { 
+        virtual ~IRType() = default; 
+        virtual void* getRawPtr() = 0; 
+        virtual bool isPointer() = 0;
+        virtual bool isInteger() = 0;
+        virtual bool isStruct() = 0;
+    };
+    struct IRBlock { 
+        virtual ~IRBlock() = default; 
+        virtual void* getRawPtr() = 0; 
+    };
 
     class IRGenerator {
     public:

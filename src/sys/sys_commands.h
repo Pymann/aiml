@@ -128,3 +128,10 @@ public:
          return ctx.builder.CreateGlobalStringPtr("unknown");
     }
 };
+
+class SysConfigVersion : public SystemCall {
+public:
+    llvm::Value* compile(CompilerContext& ctx, const std::vector<YAML::Node>& args) override {
+        return ctx.builder.CreateGlobalStringPtr(ctx.config.version);
+    }
+};
