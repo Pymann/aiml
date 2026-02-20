@@ -6,10 +6,10 @@
 - print: ['Alice Score: ${ { call: [scores.get, "Alice"] } }']
 - print: ['Bob Score: ${ { call: [scores.get, "Bob"] } }']
 
-- print: ["Size before remove: ${scores.size}"] 
+- print: ["Size before remove: ${scores.len}"] 
 
 - call: [scores.remove, "Alice"]
-- print: ["Size after remove: ${scores.size}"]
+- print: ["Size after remove: ${scores.len}"]
 
 - print: ['Has Alice? ${ { call: [scores.contains, "Alice"] } }']
 - print: ['Has Bob? ${ { call: [scores.contains, "Bob"] } }']

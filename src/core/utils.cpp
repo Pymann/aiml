@@ -140,11 +140,11 @@ static llvm::Value* resolvePropertyOrEnum(CompilerContext& ctx, const std::strin
      if (ctx.symbol_table.count(objName)) {
          Symbol& sym = ctx.symbol_table[objName];
          if (sym.type->isStructTy() && sym.type->getStructName().startswith("list_")) {
-             if (propName == "size") return ListImpl::getSize(ctx, sym.alloca_inst);
+             if (propName == "len") return ListImpl::getSize(ctx, sym.alloca_inst);
              else if (propName == "empty") return ctx.builder.CreateZExt(ListImpl::isEmpty(ctx, sym.alloca_inst), ctx.builder.getInt32Ty());
          }
          else if (sym.type->isStructTy() && sym.type->getStructName().startswith("map_")) {
-              if (propName == "size") return MapImpl::getSize(ctx, sym.alloca_inst, llvm::cast<llvm::StructType>(sym.type));
+              if (propName == "len") return MapImpl::getSize(ctx, sym.alloca_inst, llvm::cast<llvm::StructType>(sym.type));
          }
      }
      

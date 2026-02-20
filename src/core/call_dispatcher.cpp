@@ -93,7 +93,7 @@ static llvm::Value* dispatchListMethod(CompilerContext& ctx, const std::string& 
     } else if (methodName == "clear") {
          ListImpl::clear(ctx, sym.alloca_inst);
          return nullptr;
-    } else if (methodName == "size") {
+    } else if (methodName == "len") {
          return ListImpl::getSize(ctx, sym.alloca_inst);
     } else if (methodName == "empty") {
          return ctx.builder.CreateZExt(ListImpl::isEmpty(ctx, sym.alloca_inst), ctx.builder.getInt32Ty());
@@ -142,7 +142,7 @@ static llvm::Value* dispatchMapMethod(CompilerContext& ctx, const std::string& m
          llvm::Value* sizePtr = ctx.builder.CreateStructGEP(mapType, sym.alloca_inst, 0);
          ctx.builder.CreateStore(ctx.builder.getInt32(0), sizePtr);
          return nullptr;
-    } else if (methodName == "size") {
+    } else if (methodName == "len") {
          return MapImpl::getSize(ctx, sym.alloca_inst, mapType);
     }
     return nullptr;

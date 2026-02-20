@@ -18,7 +18,7 @@
 - call: [scores.insert, 0, 50]    # Insert at index
 - call: [scores.remove, 0]     # Remove at index
 - call: [scores.clear]            # Remove all
-- set: [len, scores.size]         # Get size
+- set: [len, scores.len]         # Get size
 - set: [is_empty, scores.empty]   # Check if empty
 
 # Access
@@ -40,7 +40,7 @@
 - set: [exists, { call: [users.has, "alice"] }] # Check existence
 - call: [users.remove, "alice"]   # Remove key
 - call: [users.clear]             # Remove all
-- set: [len, users.size]          # Get count
+- set: [len, users.len]          # Get count
 
 # Access (Future Sugar)
 # - set: [users["alice"], 2]
@@ -60,7 +60,7 @@
 - call: [scores.insert, 0, 50]    # Insert at index
 - call: [scores.remove, 0]     # Remove at index
 - call: [scores.clear]            # Remove all
-- set: [len, scores.size]         # Get size
+- set: [len, scores.len]         # Get size
 - set: [is_empty, scores.empty]   # Check if empty
 
 # Access
@@ -82,7 +82,7 @@
 - set: [exists, { call: [users.has, "alice"] }] # Check existence
 - call: [users.remove, "alice"]   # Remove key
 - call: [users.clear]             # Remove all
-- set: [len, users.size]          # Get count
+- set: [len, users.len]          # Get count
 
 # Access (Future Sugar)
 # - set: [users["alice"], 2]
