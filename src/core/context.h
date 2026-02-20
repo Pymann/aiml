@@ -118,6 +118,7 @@
 
     // Exception Handling State
     llvm::BasicBlock* currentExceptionBlock = nullptr;
+    AIML::IRBlock* ir_exception_block = nullptr;
 
     // Helper: Get or declare __gxx_personality_v0
     llvm::FunctionCallee getPersonalityFunction() {

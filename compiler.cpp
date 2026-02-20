@@ -84,6 +84,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     // builder points to __aiml_init entry block.
     CompilerContext ctx(*context_, *module_, builder);
     ctx.compilerPath = compilerPath;
+    ctx.ir_gen = AIML::createLLVMGenerator(ctx);
     
     // 3. Initialize Command Registry and Callback
     CommandRegistry registry;

@@ -11,18 +11,18 @@ public:
         
         llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
         
-        if (!parentFunc->hasPersonalityFn()) {
-             parentFunc->setPersonalityFn(llvm::cast<llvm::Constant>(ctx.getPersonalityFunction().getCallee()));
+        if (!ctx.ir_gen->hasPersonalityFunction()) {
+             ctx.ir_gen->setPersonalityFunction(ctx.ir_gen->getPersonalityFunction());
         }
         
         // 1. Create Blocks
-        llvm::BasicBlock* tryCont = llvm::BasicBlock::Create(ctx.context, "try_cont", parentFunc);
-        llvm::BasicBlock* catchBlock = llvm::BasicBlock::Create(ctx.context, "catch_block", parentFunc);
-        llvm::BasicBlock* endBlock = llvm::BasicBlock::Create(ctx.context, "try_end");
+        AIML::IRBlock* tryCont = ctx.ir_gen->createBasicBlock("try_cont");
+        AIML::IRBlock* catchBlock = ctx.ir_gen->createBasicBlock("catch_block");
+        AIML::IRBlock* endBlock = ctx.ir_gen->createBasicBlock("try_end");
         
         // 2. Set Unwind Destination
-        llvm::BasicBlock* oldUnwind = ctx.currentExceptionBlock;
-        ctx.currentExceptionBlock = catchBlock;
+        AIML::IRBlock* oldUnwind = ctx.ir_exception_block;
+        ctx.ir_exception_block = catchBlock;
         
         // 3. Compile Try Body
         // Calls inside here will now generate 'invoke' to catchBlock
@@ -33,33 +33,36 @@ public:
         }
         
         // Restore Unwind
-        ctx.currentExceptionBlock = oldUnwind;
+        ctx.ir_exception_block = oldUnwind;
         
         // Jump to End (Success Path)
         // If last instruction is not terminator (e.g. return)
-        if (!ctx.builder.GetInsertBlock()->getTerminator()) {
-            ctx.builder.CreateBr(endBlock);
-        }
+        // Note: For now, we assume if we reach here we can branch
+        ctx.ir_gen->createBr(endBlock);
         
         // 4. Generate Catch Block (Landing Pad)
-        ctx.builder.SetInsertPoint(catchBlock);
+        ctx.ir_gen->setInsertPoint(catchBlock);
         
-        llvm::Type* lpType = llvm::StructType::get(
+        llvm::Type* llType = llvm::StructType::get(
             llvm::PointerType::getUnqual(ctx.context), 
-            llvm::Type::getInt32Ty(ctx.context)
+            llvm::Type::getInt32Ty(ctx.context)   
         );
-        llvm::LandingPadInst* lp = ctx.builder.CreateLandingPad(lpType, 1);
-        lp->setCleanup(true); // Acts as catch-all / finally for now
-        lp->addClause(llvm::Constant::getNullValue(llvm::PointerType::getUnqual(ctx.context))); // Catch Any
+        AIML::IRType* lpType = ctx.ir_gen->wrapType((void*)llType);
+        
+        AIML::IRValue* lp = ctx.ir_gen->createLandingPad(lpType, 1, "lp");
+        ctx.ir_gen->setCleanupToLandingPad(lp, true);
+        
+        AIML::IRValue* nullPtr = ctx.ir_gen->wrap((void*)llvm::Constant::getNullValue(llvm::PointerType::getUnqual(ctx.context)));
+        ctx.ir_gen->addClauseToLandingPad(lp, nullPtr);
         
         // Call __cxa_begin_catch(obj) -> void*
         llvm::FunctionCallee beginCatch = ctx.module.getOrInsertFunction(
             "__cxa_begin_catch", 
             llvm::FunctionType::get(llvm::PointerType::getUnqual(ctx.context), {llvm::PointerType::getUnqual(ctx.context)}, false)
         );
-        // Extract exception object from landingpad {i8*, i32}
-        llvm::Value* exObj = ctx.builder.CreateExtractValue(lp, 0);
-        llvm::Value* adjustedEx = ctx.builder.CreateCall(beginCatch, {exObj});
+        
+        AIML::IRValue* exObj = ctx.ir_gen->createExtractValue(lp, 0, "ex_obj");
+        AIML::IRValue* adjustedEx = ctx.ir_gen->createCall("__cxa_begin_catch", {exObj}, "adjusted_ex");
         
         // Compile Catch Body
         // For now, we assume simple catch-all and bind generic 'e' if requested
@@ -76,8 +79,8 @@ public:
             std::string varName = catchClause["var"].as<std::string>();
             
             // Bind 'e' 
-            llvm::Value* msgPtrPtr = ctx.builder.CreateBitCast(adjustedEx, llvm::PointerType::getUnqual(ctx.context));
-            llvm::Value* msgPtr = ctx.builder.CreateLoad(llvm::PointerType::getUnqual(ctx.context), msgPtrPtr, "ex_msg");
+            AIML::IRValue* msgPtrPtr = ctx.ir_gen->createBitCast(adjustedEx, ctx.ir_gen->getPointerTy(), "msg_ptr_ptr");
+            AIML::IRValue* msgPtr = ctx.ir_gen->createLoad(ctx.ir_gen->getPointerTy(), msgPtrPtr, "ex_msg");
             
             // Create or lookup a pseudo-struct for the exception to allow `e.message`
             llvm::StructType* exStructTy = nullptr;
@@ -98,12 +101,14 @@ public:
                  ctx.classes[exType] = ci;
             }
             
-            llvm::Value* exAlloca = ctx.builder.CreateAlloca(exStructTy, nullptr, varName + "_alloc");
-            llvm::Value* exMsgDest = ctx.builder.CreateStructGEP(exStructTy, exAlloca, 0);
-            ctx.builder.CreateStore(msgPtr, exMsgDest);
+            AIML::IRType* irExStructTy = ctx.ir_gen->wrapType((void*)exStructTy);
+            AIML::IRValue* exAlloca = ctx.ir_gen->createAlloca(irExStructTy, varName + "_alloc");
+            AIML::IRValue* exMsgDest = ctx.ir_gen->createStructGEP(irExStructTy, exAlloca, 0, "msg_dest");
+            ctx.ir_gen->createStore(msgPtr, exMsgDest);
             
             Symbol sym;
-            sym.alloca_inst = exAlloca;
+            sym.alloca_inst = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(exAlloca));
+            sym.ir_alloca_inst = exAlloca;
             sym.type = exStructTy;
             sym.typeName = exType;
             sym.className = exType;
@@ -123,16 +128,16 @@ public:
         }
         
         // Call __cxa_end_catch()
-        llvm::FunctionCallee endCatch = ctx.module.getOrInsertFunction(
+        ctx.module.getOrInsertFunction(
             "__cxa_end_catch", 
             llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.context), {}, false)
         );
-        ctx.builder.CreateCall(endCatch, {});
         
-        ctx.builder.CreateBr(endBlock);
+        ctx.ir_gen->createCall("__cxa_end_catch", {}, "end_catch");
+        
+        ctx.ir_gen->createBr(endBlock);
         
         // 5. Resume Normal Flow
-        parentFunc->insert(parentFunc->end(), endBlock);
-        ctx.builder.SetInsertPoint(endBlock);
+        ctx.ir_gen->setInsertPoint(endBlock);
     }
 };

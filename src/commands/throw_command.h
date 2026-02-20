@@ -53,16 +53,18 @@ public:
         // We use null for typeinfo and dtor for now (Simplification)
         llvm::Value* nullPtr = llvm::Constant::getNullValue(llvm::PointerType::getUnqual(ctx.context));
         
-        if (ctx.currentExceptionBlock) {
-             llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
-             llvm::BasicBlock* normalBlock = llvm::BasicBlock::Create(ctx.context, "throw_cont", parentFunc);
-             ctx.builder.CreateInvoke(throwFunc, normalBlock, ctx.currentExceptionBlock, {exceptionObj, nullPtr, nullPtr});
-             ctx.builder.SetInsertPoint(normalBlock);
+        AIML::IRValue* irExceptionObj = ctx.ir_gen->wrap((void*)exceptionObj);
+        AIML::IRValue* irNullPtr = ctx.ir_gen->wrap((void*)nullPtr);
+
+        if (ctx.ir_exception_block) {
+             AIML::IRBlock* normalBlock = ctx.ir_gen->createBasicBlock("throw_cont");
+             ctx.ir_gen->createInvoke("__cxa_throw", normalBlock, ctx.ir_exception_block, {irExceptionObj, irNullPtr, irNullPtr}, "");
+             ctx.ir_gen->setInsertPoint(normalBlock);
         } else {
-             ctx.builder.CreateCall(throwFunc, {exceptionObj, nullPtr, nullPtr});
+             ctx.ir_gen->createCall("__cxa_throw", {irExceptionObj, irNullPtr, irNullPtr}, "");
         }
 
         // 6. Unreachable (Throw never returns)
-        ctx.builder.CreateUnreachable();
+        ctx.ir_gen->createUnreachable();
     }
 };
