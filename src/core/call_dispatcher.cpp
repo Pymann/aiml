@@ -282,7 +282,7 @@ llvm::Value* CallDispatcher::dispatch(CompilerContext& ctx, const std::string& f
          }
          return ctx.builder.CreateCall(func, callArgs);
     }
-    LOG_ERROR("Function  + funcName +  not implemented or invalid format.");
+    LOG_ERROR("Function " + funcName + " not implemented or invalid format.");
     return nullptr;
 }
 
