@@ -162,8 +162,37 @@ namespace Expression {
         if (op == "-") return ctx.builder.CreateSub(lhs, rhs, "sub_tmp");
         if (op == "*") return ctx.builder.CreateMul(lhs, rhs, "mul_tmp");
         if (op == "/") return ctx.builder.CreateSDiv(lhs, rhs, "div_tmp");
+        if (op == "%") return ctx.builder.CreateSRem(lhs, rhs, "mod_tmp");
+        if (op == "and") {
+            // Simplified boolean AND - bitwise or boolean depending on type, assuming i1 mapped from bool
+            return ctx.builder.CreateAnd(lhs, rhs, "and_tmp");
+        }
+        if (op == "or") {
+            return ctx.builder.CreateOr(lhs, rhs, "or_tmp");
+        }
 
         return ctx.builder.getInt32(0);
+    }
+    
+    inline llvm::Value* handleCast(CompilerContext& ctx, const YAML::Node& args) {
+         if (args.IsSequence() && args.size() == 2) {
+             llvm::Value* val = evaluate(ctx, args[0]);
+             std::string targetTypeName = args[1].as<std::string>();
+             llvm::Type* targetType = ctx.getLLVMType(targetTypeName);
+             if (val && targetType) {
+                  // Perform simple bitcast or int cast for MVP
+                  if (val->getType()->isPointerTy() && targetType->isPointerTy()) {
+                       // Opaque pointers might not even need bits casts, but CreateBitCast is safe
+                       return ctx.builder.CreateBitCast(val, targetType, "cast_ptr");
+                  } else if (val->getType()->isIntegerTy() && targetType->isIntegerTy()) {
+                       return ctx.builder.CreateIntCast(val, targetType, true, "cast_int"); // Assume signed
+                  } else {
+                       // General fallback bitcast
+                       return ctx.builder.CreateBitCast(val, targetType, "cast_fallback");
+                  }
+             }
+         }
+         return ctx.builder.getInt32(0);
     }
 
     // --- Registry ---
@@ -179,7 +208,11 @@ namespace Expression {
         {"+", [](CompilerContext& c, const YAML::Node& n){ return handleBinary(c, n, "+"); }},
         {"-", [](CompilerContext& c, const YAML::Node& n){ return handleBinary(c, n, "-"); }},
         {"*", [](CompilerContext& c, const YAML::Node& n){ return handleBinary(c, n, "*"); }},
-        {"/", [](CompilerContext& c, const YAML::Node& n){ return handleBinary(c, n, "/"); }}
+        {"/", [](CompilerContext& c, const YAML::Node& n){ return handleBinary(c, n, "/"); }},
+        {"%", [](CompilerContext& c, const YAML::Node& n){ return handleBinary(c, n, "%"); }},
+        {"and", [](CompilerContext& c, const YAML::Node& n){ return handleBinary(c, n, "and"); }},
+        {"or", [](CompilerContext& c, const YAML::Node& n){ return handleBinary(c, n, "or"); }},
+        {"cast", handleCast}
         // Legacy 'ref' could go here, but address-of '&' is dynamic
         // {"ref", handleRef} 
     };
@@ -253,18 +286,37 @@ namespace Expression {
                 // Deref Logic
                 int depth = op.length();
                 llvm::Value* ptrVal = nullptr;
-                if (args.IsSequence() && args.size() > 0) ptrVal = evaluate(ctx, args[0]);
-                else ptrVal = evaluate(ctx, args);
+                std::string varName;
+                if (args.IsSequence() && args.size() > 0) {
+                     ptrVal = evaluate(ctx, args[0]);
+                     if (args[0].IsScalar()) varName = args[0].as<std::string>();
+                } else {
+                     ptrVal = evaluate(ctx, args);
+                     if (args.IsScalar()) varName = args.as<std::string>();
+                }
                 
                 llvm::Value* currentVal = ptrVal;
+                llvm::Type* baseType = nullptr;
+                
+                // Extract base type by parsing the original type string
+                if (!varName.empty() && ctx.symbol_table.count(varName)) {
+                     std::string tName = ctx.symbol_table[varName].typeName;
+                     // Strip out all 'ptr<' and '>'
+                     while (tName.rfind("ptr<", 0) == 0 || tName.rfind("ref<", 0) == 0) {
+                          tName = tName.substr(4, tName.length() - 5);
+                     }
+                     baseType = ctx.getLLVMType(tName);
+                }
+
                 for(int i=0; i<depth; ++i) {
                     if (currentVal && currentVal->getType()->isPointerTy()) {
-                         // Simplify load type deduction for brevity
-                         llvm::Type* loadType = ctx.builder.getInt32Ty(); // Default fallback
-                         // Try to deduce ... (Skipping full symbol lookup for brevity in this refactor step, assumes simple deref works or fix later)
-                         // Actually, we need the symbol lookup to know the type!
-                         // Restoring basic fallback logic:
-                         if (i < depth - 1) loadType = llvm::PointerType::get(ctx.context, 0);
+                         llvm::Type* loadType = baseType;
+                         if (!loadType) loadType = ctx.builder.getInt32Ty(); // Default fallback
+                         
+                         // If we deref multiple times, intermediates are pointers
+                         if (i < depth - 1) {
+                              loadType = ctx.builder.getInt8Ty()->getPointerTo(); // Opaque pointer
+                         }
                          
                          currentVal = ctx.builder.CreateLoad(loadType, currentVal, "deref_chain");
                     } else {

@@ -11,6 +11,10 @@ public:
         
         llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
         
+        if (!parentFunc->hasPersonalityFn()) {
+             parentFunc->setPersonalityFn(llvm::cast<llvm::Constant>(ctx.getPersonalityFunction().getCallee()));
+        }
+        
         // 1. Create Blocks
         llvm::BasicBlock* tryCont = llvm::BasicBlock::Create(ctx.context, "try_cont", parentFunc);
         llvm::BasicBlock* catchBlock = llvm::BasicBlock::Create(ctx.context, "catch_block", parentFunc);

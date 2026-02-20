@@ -178,6 +178,19 @@ public:
                      return ctx.builder.CreateZExt(isEmpty, ctx.builder.getInt32Ty());
                 }
             } 
+            // --- STRING ---
+            else if (sym.typeName == "string") {
+                 if (methodName == "len") {
+                     llvm::Function* strlenFunc = ctx.module.getFunction("strlen");
+                     if (!strlenFunc) {
+                         llvm::FunctionType* ft = llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false);
+                         strlenFunc = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "strlen", ctx.module);
+                     }
+                     llvm::Value* strPtr = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), sym.alloca_inst);
+                     llvm::Value* len64 = ctx.builder.CreateCall(strlenFunc, {strPtr});
+                     return ctx.builder.CreateTruncOrBitCast(len64, ctx.builder.getInt32Ty());
+                 }
+            }
             // --- MAP ---
             else if (sym.type->isStructTy() && sym.type->getStructName().startswith("map_")) {
                 llvm::StructType* mapType = llvm::cast<llvm::StructType>(sym.type);

@@ -1,0 +1,9 @@
+- decl: [name, string, "OpenAI"]
+- decl: [length, i32, { call: [name.len] }]
+- print: ["Length: ${length}"]
+- if:
+    condition: { eq: [length, 6] }
+    then:
+      - call: [sys.exit, 0]
+    else:
+      - call: [sys.exit, 1]
