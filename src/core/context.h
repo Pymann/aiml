@@ -16,13 +16,22 @@
     enum class AccessLevel { Public, Private, Protected };
     
     struct Symbol {
-        llvm::Value* alloca_inst; // Address of the variable
-        llvm::Type* type;         // Type of the variable (ptr if alloca)
-        llvm::Type* element_type; // Type of the value stored (e.g. i32, Struct, or ptr)
-        std::string typeName;     // Original AIML type string
-        std::string className;    // Name of the class if this is an object or pointer to object
+        // --- Legacy LLVM pointers (being phased out) ---
+        llvm::Value* alloca_inst = nullptr; // Address of the variable
+        llvm::Type* type = nullptr;         // Type of the variable (ptr if alloca)
+        llvm::Type* element_type = nullptr; // Type of the value stored (e.g. i32, Struct, or ptr)
         llvm::Type* key_type = nullptr;     // For maps
         llvm::Type* value_type = nullptr;   // For maps
+
+        // --- New IR Abstraction pointers ---
+        AIML::IRValue* ir_alloca_inst = nullptr;
+        AIML::IRType* ir_type = nullptr;
+        AIML::IRType* ir_element_type = nullptr;
+        AIML::IRType* ir_key_type = nullptr;
+        AIML::IRType* ir_value_type = nullptr;
+
+        std::string typeName;     // Original AIML type string
+        std::string className;    // Name of the class if this is an object or pointer to object
         bool is_const = false;
         bool is_volatile = false;
         AccessLevel access = AccessLevel::Public; // Default for vars

@@ -10,16 +10,19 @@ namespace AIML {
     struct LLVMIRValue : public IRValue {
         llvm::Value* val;
         LLVMIRValue(llvm::Value* v) : val(v) {}
+        void* getRawPtr() override { return val; }
     };
 
     struct LLVMIRType : public IRType {
         llvm::Type* ty;
         LLVMIRType(llvm::Type* t) : ty(t) {}
+        void* getRawPtr() override { return ty; }
     };
 
     struct LLVMIRBlock : public IRBlock {
         llvm::BasicBlock* bb;
         LLVMIRBlock(llvm::BasicBlock* b) : bb(b) {}
+        void* getRawPtr() override { return bb; }
     };
 
     class LLVMGenerator : public IRGenerator {
