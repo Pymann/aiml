@@ -75,22 +75,51 @@ public:
             std::string exType = catchClause["type"].as<std::string>();
             std::string varName = catchClause["var"].as<std::string>();
             
-            // Bind 'e' (message via casting?)
-            // We cast exception object to i8** (string*) to get message?
-            // Assuming standardized DivisionByZero Layout
+            // Bind 'e' 
             llvm::Value* msgPtrPtr = ctx.builder.CreateBitCast(adjustedEx, llvm::PointerType::getUnqual(ctx.context));
             llvm::Value* msgPtr = ctx.builder.CreateLoad(llvm::PointerType::getUnqual(ctx.context), msgPtrPtr, "ex_msg");
             
-            // Store in symbol table as local var?
-            // Simple: just evaluate body with access to 'e.message' via special handling or temporary symbol
-            // TODO: Proper symbol binding. 
-            // For MVP: Let's skip variable binding or mock it? 
-            // If user does "print ${e.message}", we need 'e'.
-            // For now, let's just compile body.
+            // Create or lookup a pseudo-struct for the exception to allow `e.message`
+            llvm::StructType* exStructTy = nullptr;
+            if (ctx.classes.count(exType)) {
+                 exStructTy = llvm::cast<llvm::StructType>(ctx.classes[exType].type);
+            } else {
+                 exStructTy = llvm::StructType::create(ctx.context, exType);
+                 exStructTy->setBody({ llvm::PointerType::getUnqual(ctx.context) });
+                 
+                 CompilerContext::ClassInfo ci;
+                 ci.type = exStructTy;
+                 CompilerContext::StructMember sm;
+                 sm.index = 0;
+                 sm.type = llvm::PointerType::getUnqual(ctx.context);
+                 sm.typeName = "string";
+                 sm.access = AccessLevel::Public;
+                 ci.members["message"] = sm;
+                 ctx.classes[exType] = ci;
+            }
+            
+            llvm::Value* exAlloca = ctx.builder.CreateAlloca(exStructTy, nullptr, varName + "_alloc");
+            llvm::Value* exMsgDest = ctx.builder.CreateStructGEP(exStructTy, exAlloca, 0);
+            ctx.builder.CreateStore(msgPtr, exMsgDest);
+            
+            Symbol sym;
+            sym.alloca_inst = exAlloca;
+            sym.type = exStructTy;
+            sym.typeName = exType;
+            sym.className = exType;
+            
+            bool shadowed = ctx.symbol_table.count(varName) > 0;
+            Symbol oldSym;
+            if (shadowed) oldSym = ctx.symbol_table[varName];
+            
+            ctx.symbol_table[varName] = sym;
             
             if (ctx.params.compileCallback) {
                   ctx.params.compileCallback(ctx, catchClause["body"]);
             }
+            
+            if (shadowed) ctx.symbol_table[varName] = oldSym;
+            else ctx.symbol_table.erase(varName);
         }
         
         // Call __cxa_end_catch()

@@ -82,23 +82,39 @@ public:
         // sys.size(obj or type) -> u64
         if (args.size() < 2) return nullptr;
         
-        // If args[1] is a type name (string literal?) -> how to resolve?
-        // resolveValue resolves expressions.
-        // If it's a variable, we get the value.
-        // We need the TYPE of the value.
+        // 1. Check if argument is a direct type name (compile-time)
+        if (args[1].IsScalar()) {
+            std::string typeName = args[1].as<std::string>();
+            llvm::Type* targetType = ctx.getLLVMType(typeName);
+            if (targetType) {
+                llvm::DataLayout dl(&ctx.module);
+                uint64_t size = dl.getTypeAllocSize(targetType);
+                return ctx.builder.getInt64(size);
+            }
+        }
         
+        // 2. Check if nested call to sys.type
+        if (args[1].IsMap() && args[1]["call"] && args[1]["call"].IsSequence()) {
+             auto callNode = args[1]["call"];
+             if (callNode.size() > 1 && callNode[0].as<std::string>() == "sys.type") {
+                 std::string varName = callNode[1].as<std::string>();
+                 if (ctx.symbol_table.count(varName)) {
+                      llvm::Type* symType = ctx.symbol_table[varName].type;
+                      llvm::DataLayout dl(&ctx.module);
+                      uint64_t size = dl.getTypeAllocSize(symType);
+                      return ctx.builder.getInt64(size);
+                 }
+             }
+        }
+        
+        // 3. Fallback to runtime resolution
         llvm::Value* val = resolveValue(ctx, args[1]);
         if (!val) return ctx.builder.getInt64(0);
         
         llvm::Type* type = val->getType();
-        if (type->isPointerTy()) {
-            // If it's a pointer, do we want size of pointer (8) or size of pointee?
-            // Usually size of object.
-            // But we don't know if it's an object or primitive pointer.
-            // For now, return size of the value itself.
-        }
-        
         llvm::DataLayout dl(&ctx.module);
+        
+        // Note: For pointers, this returns pointer size (8).
         uint64_t size = dl.getTypeAllocSize(type);
         return ctx.builder.getInt64(size);
     }

@@ -62,6 +62,7 @@
             std::string typeName;
             AccessLevel access = AccessLevel::Private; // Default Private
             bool is_const = false;
+            bool is_volatile = false;
             uint64_t version = 1; // Version of the field (u64)
             // storing init value: simple literal or expression node?
             // For simplicity, let's store the raw YAML node if provided, so we can evaluate it during 'new'

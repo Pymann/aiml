@@ -261,6 +261,7 @@ public:
                              else member.access = AccessLevel::Private;
                          }
                          if (modifiersNode["const"].IsScalar() && modifiersNode["const"].as<bool>()) member.is_const = true;
+                         if (modifiersNode["volatile"].IsScalar() && modifiersNode["volatile"].as<bool>()) member.is_volatile = true;
                          if (modifiersNode["version"].IsScalar()) member.version = modifiersNode["version"].as<uint64_t>();
                     }
 

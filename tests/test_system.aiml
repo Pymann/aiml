@@ -45,4 +45,18 @@
 - set: [proc, {call: [sys.exe, args]}] # Simplified call
 - call: [proc.wait]
 
+# 5. Type sizes and Env
+- print: ["--- Env & Size ---"]
+- decl: [env_map, map<string:string>]
+- set: [env_map, {call: [sys.env]}]
+- print: ["sys.env evaluated successfully"]
+
+- decl: [size_i32, u64]
+- set: [size_i32, {call: [sys.size, "i32"]}]
+- print: ["sys.size(i32) = ${size_i32}"]
+
+- decl: [size_str, u64]
+- set: [size_str, {call: [sys.size, "string"]}]
+- print: ["sys.size(string) = ${size_str}"]
+
 - print: ["System Tests Done."]

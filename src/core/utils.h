@@ -133,6 +133,41 @@ inline llvm::Value* resolveLValue(CompilerContext& ctx, const std::string& argSt
                  LOG_ERROR("Cannot modify element of const array/list '" + varName + "'");
                  return nullptr;
             }
+            
+            // Slicing Check (e.g., arr-start:end)
+            size_t colonPos = indexStr.find(':');
+            if (colonPos != std::string::npos) {
+                if (forWrite) {
+                     LOG_ERROR("Slice assignment is not yet supported.");
+                     return nullptr;
+                }
+                
+                std::string startStr = indexStr.substr(0, colonPos);
+                std::string endStr = indexStr.substr(colonPos + 1);
+                
+                llvm::Value* startVal = nullptr;
+                llvm::Value* endVal = nullptr;
+                
+                if (startStr.empty()) startVal = ctx.builder.getInt32(0);
+                else startVal = resolveValue(ctx, YAML::Node(startStr), evaluator);
+                
+                if (endStr.empty()) {
+                    if (sym.type->isArrayTy()) {
+                        endVal = ctx.builder.getInt32(sym.type->getArrayNumElements());
+                    } else if (sym.type->isStructTy() && sym.type->getStructName().startswith("list_")) {
+                        endVal = ListImpl::getSize(ctx, sym.alloca_inst);
+                    }
+                } else {
+                    endVal = resolveValue(ctx, YAML::Node(endStr), evaluator);
+                }
+                
+                if (sym.type->isArrayTy()) {
+                     LOG_ERROR("Slicing not supported for fixed arrays yet.");
+                     return nullptr;
+                } else if (sym.type->isStructTy() && sym.type->getStructName().startswith("list_")) {
+                     return ListImpl::slice(ctx, sym.alloca_inst, startVal, endVal, sym.element_type);
+                }
+            }
              
             if (sym.type->isArrayTy()) {
                 llvm::Value* indexVal = resolveValue(ctx, YAML::Node(indexStr), evaluator); 
@@ -233,7 +268,9 @@ inline llvm::Value* resolveValue(CompilerContext& ctx, const YAML::Node& argNode
     if (lvalue) {
         // Load the value from the address
         if (ctx.symbol_table.count(argStr)) {
-             return ctx.builder.CreateLoad(ctx.symbol_table[argStr].type, lvalue, argStr + "_val");
+             llvm::LoadInst* load = ctx.builder.CreateLoad(ctx.symbol_table[argStr].type, lvalue, argStr + "_val");
+             if (ctx.symbol_table[argStr].is_volatile) load->setVolatile(true);
+             return load;
         }
         
         // If it was an array access, we need to deduce the type.
@@ -244,10 +281,14 @@ inline llvm::Value* resolveValue(CompilerContext& ctx, const YAML::Node& argNode
              if (ctx.symbol_table.count(varName)) {
                  llvm::Type* type = ctx.symbol_table[varName].type;
                  if (type->isArrayTy()) {
-                     return ctx.builder.CreateLoad(type->getArrayElementType(), lvalue, "arr_elem_load");
+                     llvm::LoadInst* load = ctx.builder.CreateLoad(type->getArrayElementType(), lvalue, "arr_elem_load");
+                     if (ctx.symbol_table[varName].is_volatile) load->setVolatile(true);
+                     return load;
                  } else if (type->isStructTy() && type->getStructName().startswith("list_")) {
                       // List load
-                      return ctx.builder.CreateLoad(ctx.symbol_table[varName].element_type, lvalue, "list_elem_load");
+                      llvm::LoadInst* load = ctx.builder.CreateLoad(ctx.symbol_table[varName].element_type, lvalue, "list_elem_load");
+                      if (ctx.symbol_table[varName].is_volatile) load->setVolatile(true);
+                      return load;
                  }
              }
         }
@@ -273,7 +314,9 @@ inline llvm::Value* resolveValue(CompilerContext& ctx, const YAML::Node& argNode
                      auto& classInfo = ctx.classes[className];
                      if (classInfo.members.count(memberName)) {
                           llvm::Type* memberType = classInfo.members[memberName].type;
-                          return ctx.builder.CreateLoad(memberType, lvalue, memberName + "_val");
+                          llvm::LoadInst* load = ctx.builder.CreateLoad(memberType, lvalue, memberName + "_val");
+                          if (classInfo.members[memberName].is_volatile) load->setVolatile(true);
+                          return load;
                      }
                  }
              }
