@@ -161,9 +161,9 @@ public:
              }
         }
 
-        // Store in Symbol Table
         Symbol sym;
         sym.alloca_inst = alloca;
+        sym.typeName = typeName;
         sym.type = varType; // The actual type of the variable (e.g., i32, {list_i32}, or ptr)
         sym.element_type = varType; // Default to varType, override below if needed
         

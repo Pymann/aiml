@@ -18,6 +18,7 @@
         llvm::Value* alloca_inst; // Address of the variable
         llvm::Type* type;         // Type of the variable (ptr if alloca)
         llvm::Type* element_type; // Type of the value stored (e.g. i32, Struct, or ptr)
+        std::string typeName;     // Original AIML type string
         std::string className;    // Name of the class if this is an object or pointer to object
         llvm::Type* key_type = nullptr;     // For maps
         llvm::Type* value_type = nullptr;   // For maps
@@ -253,6 +254,8 @@
             }
         }
 
+        if (typeName == "i8" || typeName == "i8_least" || typeName == "i8_fast") return llvm::Type::getInt8Ty(context);
+        if (typeName == "i16") return llvm::Type::getInt16Ty(context);
         if (typeName == "i32") return llvm::Type::getInt32Ty(context);
         if (typeName == "i64") return llvm::Type::getInt64Ty(context);
         if (typeName == "f32") return llvm::Type::getFloatTy(context);
