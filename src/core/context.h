@@ -11,6 +11,7 @@
 #include <yaml-cpp/yaml.h>
 #include "../../compiler.h" // For Symbol struct
 #include <set>
+#include "ir_generator.h"
 
     enum class AccessLevel { Public, Private, Protected };
     
@@ -89,7 +90,9 @@
 
 
     CompilerContext(llvm::LLVMContext& ctx, llvm::Module& mod, llvm::IRBuilder<>& b)
-        : context(ctx), module(mod), builder(b) {}
+        : context(ctx), module(mod), builder(b) {
+        // initialized lazily or explicitly later to avoid circular dependency here
+    }
 
     // Original constructor was:
     // CompilerContext(llvm::LLVMContext& ctx, llvm::Module& mod, llvm::IRBuilder<>& b)
@@ -102,6 +105,7 @@
     llvm::LLVMContext& context;
     llvm::Module& module;
     llvm::IRBuilder<>& builder;
+    std::unique_ptr<AIML::IRGenerator> ir_gen;
 
     // Exception Handling State
     llvm::BasicBlock* currentExceptionBlock = nullptr;
