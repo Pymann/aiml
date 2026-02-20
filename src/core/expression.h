@@ -30,16 +30,15 @@ namespace Expression {
              LOG_DEBUG("Allocating " + std::to_string(typeSize) + " bytes for class " + className);
              llvm::Value* sizeVal = ctx.builder.getInt64(typeSize);
 
-              // Call malloc: i8* malloc(i64)
-              llvm::Function* mallocFunc = ctx.module.getFunction("malloc");
-              if (!mallocFunc) {
-                   std::vector<llvm::Type*> mallocArgs;
-                   mallocArgs.push_back(ctx.builder.getInt64Ty());
-                   llvm::FunctionType* mallocType = llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), mallocArgs, false);
-                   mallocFunc = llvm::Function::Create(mallocType, llvm::Function::ExternalLinkage, "malloc", ctx.module);
+              // Call calloc: i8* calloc(i64, i64)
+              llvm::Function* callocFunc = ctx.module.getFunction("calloc");
+              if (!callocFunc) {
+                   std::vector<llvm::Type*> callocArgs = {ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty()};
+                   llvm::FunctionType* callocType = llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), callocArgs, false);
+                   callocFunc = llvm::Function::Create(callocType, llvm::Function::ExternalLinkage, "calloc", ctx.module);
               }
               
-              llvm::Value* rawPtr = ctx.builder.CreateCall(mallocFunc, sizeVal, "malloc_call");
+              llvm::Value* rawPtr = ctx.builder.CreateCall(callocFunc, {ctx.builder.getInt64(1), sizeVal}, "calloc_call");
               
               // Initialize Default Values
               auto& classInfo = ctx.classes[className];

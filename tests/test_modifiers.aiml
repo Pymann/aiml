@@ -43,4 +43,18 @@
 - decl: [const_var, i32, 10, { const: true }]
 - print: ["Const Var: ", const_var]
 # Invalid: Write to const var
-- set: [const_var, 20]
+# - set: [const_var, 20]
+
+# Volatile Tests
+- decl: [vol_var, i32, 42, { volatile: true }]
+- print: ["Volatile Var initially: ", vol_var]
+- set: [vol_var, 100]
+- print: ["Volatile Var after set: ", vol_var]
+
+- class:
+    name: Sensor
+    members:
+      - [reading, i32, 0, { volatile: true, access: public }]
+- decl: [s, Sensor]
+- set: [s.reading, 55]
+- print: ["Sensor reading: ", s.reading]

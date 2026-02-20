@@ -17,13 +17,38 @@ public:
         
         if (lvalue) {
             // Assignment to existing storage
-            // TODO: Type checking/casting?
-            ctx.builder.CreateStore(val, lvalue);
+            bool isVolatile = false;
+            
+            // Determine if the target is volatile
+            if (varName.find('.') == std::string::npos && varName.find('-') == std::string::npos && ctx.symbol_table.count(varName)) {
+                 isVolatile = ctx.symbol_table[varName].is_volatile;
+            } else if (varName.find('.') != std::string::npos) {
+                 size_t dotPos = varName.rfind('.');
+                 std::string objName = varName.substr(0, dotPos);
+                 std::string memName = varName.substr(dotPos + 1);
+                 if (ctx.symbol_table.count(objName)) {
+                      Symbol& sym = ctx.symbol_table[objName];
+                      std::string clsName = sym.className;
+                      if (!clsName.empty() && ctx.classes.count(clsName) && ctx.classes[clsName].members.count(memName)) {
+                           isVolatile = ctx.classes[clsName].members[memName].is_volatile;
+                      }
+                 }
+            } else if (varName.find('-') != std::string::npos) {
+                 size_t hyphenPos = varName.find('-');
+                 std::string arrName = varName.substr(0, hyphenPos);
+                 if (ctx.symbol_table.count(arrName)) {
+                     isVolatile = ctx.symbol_table[arrName].is_volatile;
+                 }
+            }
+            
+            llvm::StoreInst* store = ctx.builder.CreateStore(val, lvalue);
+            if (isVolatile) store->setVolatile(true);
         } else {
             // Implicit declaration (Infer type from value) - Only for simple names
-            if (varName.find('-') != std::string::npos || varName.find('.') != std::string::npos) {
+            if (varName.find('-') != std::string::npos || varName.find('.') != std::string::npos || ctx.symbol_table.count(varName)) {
                 // Potential array or member access on non-existent array/object OR invalid operation
-                LOG_INFO("Cannot implicitly declare array element or member or invalid name: " + varName + ". Did assignment fail due to const/access?");
+                // If it exists in symbol_table, resolveLValue returned nullptr because it's const or private!
+                LOG_INFO("Assignment to '" + varName + "' failed (likely const, private, or invalid implicit).");
                 return;
             }
 

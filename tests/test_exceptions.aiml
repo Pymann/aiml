@@ -19,7 +19,7 @@
         var: e
         body: 
           - print: ["Caught Exception!"]
-          # - print: ["Message: ${e.message}"] # Requires symbol binding, skipping for now
+          - print: ["Message: ${e.message}"]
 
 - print: ["Program recovered and finished."]
 

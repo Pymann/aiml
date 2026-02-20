@@ -1,0 +1,28 @@
+- print: ["Testing List Slicing..."]
+- decl: [lst, list<i32>]
+- call: [lst.push, 10]
+- call: [lst.push, 20]
+- call: [lst.push, 30]
+- call: [lst.push, 40]
+- call: [lst.push, 50]
+
+- print: ["Original Size: ${lst.size}"]
+
+- decl: [sliced, list<i32>]
+- set: [sliced, lst-1:4] # Elements at index 1, 2, 3 (20, 30, 40)
+- print: ["Sliced Size: ${sliced.size}"]
+- print: ["sliced-0 = ${sliced-0}"]
+- print: ["sliced-1 = ${sliced-1}"]
+- print: ["sliced-2 = ${sliced-2}"]
+
+- decl: [sliced2, list<i32>]
+- set: [sliced2, lst-2:] # Elements at index 2, 3, 4 (30, 40, 50)
+- print: ["Sliced2 Size: ${sliced2.size}"]
+- print: ["sliced2-0 = ${sliced2-0}"]
+
+- decl: [sliced3, list<i32>]
+- set: [sliced3, lst-:2] # Elements at index 0, 1 (10, 20)
+- print: ["Sliced3 Size: ${sliced3.size}"]
+- print: ["sliced3-1 = ${sliced3-1}"]
+
+- call: [sys.exit, 0]

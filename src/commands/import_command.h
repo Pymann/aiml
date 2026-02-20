@@ -49,29 +49,18 @@ public:
             // JIT Mode: Compile source in-place
             LOG_INFO("Importing (JIT): " + fullPathStr);
             
-            // recursive parse
+            std::string oldNamespace = ctx.currentNamespace;
+            ctx.currentNamespace = "";
             try {
                 YAML::Node importedConfig = YAML::LoadFile(fullPathStr);
-                
-                // Save context state if needed?
-                // For now, assume single module, shared context.
-                // But imported file might have 'namespace' command.
-                // We must restore user's namespace after import!
-                std::string oldNamespace = ctx.currentNamespace;
-                ctx.currentNamespace = ""; // Reset for imported file? Or inherit?
-                // Spec says "namespace command sets namespace for entire file".
-                // So imported file should start with empty (global) or set its own.
-                // It should NOT inherit.
                 
                 if (ctx.params.compileCallback) {
                     ctx.params.compileCallback(ctx, importedConfig);
                 }
-                
-                ctx.currentNamespace = oldNamespace; // Restore
-                
             } catch (const std::exception& e) {
                 LOG_ERROR("Failed to parse import " + fullPathStr + ": " + e.what());
             }
+            ctx.currentNamespace = oldNamespace; // Restore (finally block equivalent)
 
         } else {
             // Static Compilation Mode (Split)
@@ -190,8 +179,7 @@ private:
                   msg += "Redundant filenames (no matter folder location) are not allowed.\n";
                   msg += "Aborting to prevent inconsistent build.";
                   LOG_ERROR(msg);
-                  std::cerr << msg << std::endl;
-                  std::exit(1); // Abort immediately
+                  throw std::runtime_error(msg); // Fail gracefully instead of std::exit
              }
         } else {
              // New entry
