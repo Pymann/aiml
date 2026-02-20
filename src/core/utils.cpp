@@ -17,13 +17,18 @@ static llvm::Value* resolveLValueMemberAccess(CompilerContext& ctx, const std::s
     llvm::Value* basePtr = sym.alloca_inst; 
     std::string className;
     bool isPointer = false;
-
-    if (sym.type->isStructTy()) {
+    if (!sym.className.empty()) {
+        className = sym.className;
+        isPointer = sym.type->isPointerTy();
+    } else if (sym.type->isStructTy()) {
          llvm::StructType* st = llvm::cast<llvm::StructType>(sym.type);
-         if (st->hasName()) className = st->getName().str();
-    } else if (sym.type->isPointerTy() && !sym.className.empty()) {
-         className = sym.className;
-         isPointer = true;
+         if (st->hasName()) {
+             className = st->getName().str();
+             size_t dotPos = className.rfind('.');
+             if (dotPos != std::string::npos && className.find_first_not_of("0123456789", dotPos + 1) == std::string::npos) {
+                 className = className.substr(0, dotPos);
+             }
+         }
     }
 
     if (!className.empty() && ctx.classes.count(className)) {
@@ -47,14 +52,19 @@ static llvm::Value* resolveLValueMemberAccess(CompilerContext& ctx, const std::s
              
              llvm::Value* structPtr = basePtr;
              if (isPointer) {
-                 structPtr = ctx.builder.CreateLoad(ctx.getLLVMType("ptr<" + className + ">"), basePtr, objName + "_ptr");
+                 if (sym.type->isPointerTy() && sym.element_type == nullptr) {
+                     // Exception payload proxy case
+                     structPtr = ctx.builder.CreateBitCast(basePtr, llvm::PointerType::getUnqual(classInfo.type), objName + "_cast");
+                 } else {
+                     structPtr = ctx.builder.CreateLoad(ctx.getLLVMType("ptr<" + className + ">"), basePtr, objName + "_ptr");
+                 }
              }
              return ctx.builder.CreateStructGEP(classInfo.type, structPtr, index, "member_addr");
         }
-        LOG_ERROR("Member " + memberName + " not found in class " + className);
+        LOG_ERROR("Member '" + memberName + "' not found in class '" + className + "' (total members: " + std::to_string(classInfo.members.size()) + ")");
         return nullptr;
     }
-    LOG_ERROR("Cannot access member " + memberName + " on " + objName);
+    LOG_ERROR("Cannot access member '" + memberName + "' on '" + objName + "' (sym.className='" + sym.className + "', resolved className='" + className + "')");
     return nullptr;
 }
 
@@ -186,8 +196,15 @@ static llvm::Value* resolveLValueLoad(CompilerContext& ctx, const std::string& a
          if (ctx.symbol_table.count(objName)) {
              Symbol& sym = ctx.symbol_table[objName];
              std::string className;
-             if (sym.element_type && sym.element_type->isStructTy()) className = sym.element_type->getStructName().str();
-             else if (!sym.className.empty()) className = sym.className;
+             if (!sym.className.empty()) {
+                 className = sym.className;
+             } else if (sym.element_type && sym.element_type->isStructTy()) {
+                 className = sym.element_type->getStructName().str();
+                 size_t dotPos = className.rfind('.');
+                 if (dotPos != std::string::npos && className.find_first_not_of("0123456789", dotPos + 1) == std::string::npos) {
+                     className = className.substr(0, dotPos);
+                 }
+             }
              
              if (!className.empty() && ctx.classes.count(className)) {
                  auto& classInfo = ctx.classes[className];

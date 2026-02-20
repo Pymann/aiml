@@ -2,6 +2,9 @@
 #include <vector>
 #include <string>
 #include <cstdint>
+#include <memory>
+
+class CompilerContext;
 
 namespace AIML {
 
@@ -70,9 +73,20 @@ namespace AIML {
          // Control Flow
          virtual IRValue* createCall(const std::string& funcName, const std::vector<IRValue*>& args, const std::string& name = "") = 0;
          virtual IRValue* createCall(IRValue* func, const std::vector<IRValue*>& args, const std::string& name = "") = 0;
+         virtual IRValue* createInvoke(const std::string& funcName, IRBlock* normalBlock, IRBlock* unwindBlock, const std::vector<IRValue*>& args, const std::string& name = "") = 0;
          virtual void createBr(IRBlock* dest) = 0;
          virtual void createCondBr(IRValue* cond, IRBlock* trueBlock, IRBlock* falseBlock) = 0;
          virtual void createRet(IRValue* val = nullptr) = 0;
+         virtual void createUnreachable() = 0;
+         
+         // Exceptions
+         virtual IRValue* createLandingPad(IRType* type, unsigned numClauses, const std::string& name = "") = 0;
+         virtual void addClauseToLandingPad(IRValue* landingPad, IRValue* clauseVal) = 0;
+         virtual void setCleanupToLandingPad(IRValue* landingPad, bool isCleanup) = 0;
+         virtual IRValue* createExtractValue(IRValue* agg, unsigned idx, const std::string& name = "") = 0;
+         virtual bool hasPersonalityFunction() = 0;
+         virtual void setPersonalityFunction(IRValue* func) = 0;
+         virtual IRValue* getPersonalityFunction() = 0;
 
          // Casting
          virtual IRValue* createBitCast(IRValue* val, IRType* destTy, const std::string& name = "") = 0;
@@ -84,6 +98,14 @@ namespace AIML {
          virtual IRBlock* createBasicBlock(const std::string& name) = 0;
          virtual void setInsertPoint(IRBlock* block) = 0;
          virtual IRBlock* getInsertBlock() = 0;
+         
+         // Migration Helpers (Side-by-side transition)
+         virtual IRValue* wrap(void* llvmValue) = 0;
+         virtual IRType* wrapType(void* llvmType) = 0;
+         virtual void* unwrap(IRValue* val) = 0;
+         virtual void* unwrapType(IRType* type) = 0;
     };
+
+    std::unique_ptr<IRGenerator> createLLVMGenerator(CompilerContext& ctx);
 
 } // namespace AIML
