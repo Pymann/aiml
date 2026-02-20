@@ -23,6 +23,7 @@ private:
     void visitDeclStmt(DeclStmt* decl);
     void visitSetStmt(SetStmt* setStmt);
     void visitExprStmt(ExprStmt* exprStmt);
+    void visitRetStmt(RetStmt* retStmt);
     
     IRValue* visitExpression(Expr* expr);
     IRValue* visitLiteral(LiteralExpr* lit);

@@ -186,7 +186,9 @@ static llvm::Value* handleDeref(CompilerContext& ctx, const std::string& op, con
     if (!varName.empty() && ctx.symbol_table.count(varName)) {
          std::string tName = ctx.symbol_table[varName].typeName;
          while (tName.rfind("ptr<", 0) == 0 || tName.rfind("ref<", 0) == 0) tName = tName.substr(4, tName.length() - 5);
-         baseType = ctx.getLLVMType(tName);
+         if (!tName.empty()) {
+             baseType = ctx.getLLVMType(tName);
+         }
     }
 
     for(int i=0; i<depth; ++i) {

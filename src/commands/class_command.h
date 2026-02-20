@@ -375,6 +375,8 @@ private:
         // Save previous builder point
         auto prevBlock = ctx.builder.GetInsertBlock();
         ctx.builder.SetInsertPoint(entryBlock);
+        
+        ctx.currentClassName = className;
 
         // Create Allocas for Args (including 'this')
         int argIdx = 0;
@@ -401,14 +403,12 @@ private:
             if (argName == "<") {
                  sym.element_type = llvm::PointerType::get(ctx.context, 0); // '<' is a pointer (the instance)
                  sym.className = className; 
+                 sym.typeName = "ptr<" + className + ">";
             } else {
-                 // Try to deduce className for other args?
-                 // Sym.element_type is set to arg.getType().
-                 // If arg.getType() is ptr, we don't know needed info unless we parse the type string again
-                 // But we have argNames and argTypes in vectors, checking original YAML is hard here effectively?
-                 // Actually we parsed YAML above into argTypes.
-                 // We didn't store typeNames.
-                 // Ideally we should store typeName in FunctionInfo/Argument info.
+                 // Try to deduce className for other args
+                 // We can find the type string from the original defNode args if needed
+                 // But for now just copy the typeName from argTypes if we had them or leave empty
+                 // Since we didn't store typeNames parallel to argnames, let's leave it.
             }
             
             ctx.symbol_table[argName] = sym; // Shadow global symbols

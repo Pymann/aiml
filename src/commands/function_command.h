@@ -25,8 +25,11 @@ public:
         
         // 1. Parse Return Type
         llvm::Type* retType = ctx.builder.getVoidTy();
-        if (defNode["return"]) {
-            retType = ctx.getLLVMType(defNode["return"].as<std::string>());
+        if (defNode["return"] && defNode["return"].IsScalar()) {
+            std::string retStr = defNode["return"].as<std::string>();
+            if (!retStr.empty() && retStr != "void") {
+                 retType = ctx.getLLVMType(retStr);
+            }
         }
         
         // 2. Parse Args
