@@ -3,20 +3,77 @@
 class DeclCommand : public AIMLCommand {
 public:
     void compile(CompilerContext& ctx, const YAML::Node& node) override {
-        // Syntax: decl: [name, type, (optional)init_val]
+        // Syntax: 
+        // 1. decl: [name, type, (optional)init_val]
+        // 2. decl: { name: "x", type: "i32", value: ... }
+        
         auto args = node["decl"];
-        std::string varName = args[0].as<std::string>();
-        std::string typeName = args[1].as<std::string>();
+        std::string varName;
+        std::string typeName;
+        YAML::Node initNode;
+
+        if (args.IsSequence()) {
+             varName = args[0].as<std::string>();
+             typeName = args[1].as<std::string>();
+             if (args.size() > 2) initNode = args[2];
+        } else if (args.IsMap()) {
+             varName = args["name"].as<std::string>();
+             typeName = args["type"].as<std::string>();
+             if (args["value"]) initNode = args["value"];
+        } else {
+             LOG_ERROR("Invalid decl syntax");
+             return;
+        }
         
         llvm::Type* varType = ctx.getLLVMType(typeName);
         llvm::AllocaInst* alloca = ctx.builder.CreateAlloca(varType, nullptr, varName);
         
         // Initialization
-        if (args.size() > 2) {
-            llvm::Value* initVal = Expression::evaluate(ctx, args[2]);
-            // TODO: Implicit cast if types mismatch?
-            ctx.builder.CreateStore(initVal, alloca);
-            LOG_DEBUG("Declared " + varName + " as " + typeName + " (initialized)");
+        if (initNode.IsDefined() && !initNode.IsNull()) {
+             // Safe evaluation
+             try {
+                if (initNode.IsScalar() || initNode.IsMap() || initNode.IsSequence()) {
+                    LOG_DEBUG("Evaluating init value for " + varName);
+                    llvm::Value* initVal = Expression::evaluate(ctx, initNode);
+                    if (initVal) {
+                        // Implicit Casting Logic
+                        if (initVal->getType() == varType) {
+                             ctx.builder.CreateStore(initVal, alloca);
+                        } else if (initVal->getType()->isPointerTy() && varType->isIntegerTy()) {
+                            // String to Int (atoi) - Assumption: Valid integer string
+                            llvm::Function* atoiFunc = ctx.module.getFunction("atoi");
+                            if (!atoiFunc) {
+                                 llvm::FunctionType* ft = llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false);
+                                 atoiFunc = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "atoi", ctx.module);
+                            }
+                            llvm::Value* castVal = ctx.builder.CreateCall(atoiFunc, {initVal});
+                            if (varType->isIntegerTy(64)) castVal = ctx.builder.CreateSExt(castVal, varType);
+                            ctx.builder.CreateStore(castVal, alloca);
+                            LOG_DEBUG("Implicit cast String -> Int for " + varName);
+                        } else if (initVal->getType()->isIntegerTy() && varType->isIntegerTy()) {
+                            // Int Width Cast
+                            llvm::Value* castVal = ctx.builder.CreateIntCast(initVal, varType, true);
+                            ctx.builder.CreateStore(castVal, alloca);
+                        } else if (initVal->getType()->isPointerTy() && varType->isPointerTy()) {
+                            // Pointer Cast
+                            llvm::Value* castVal = ctx.builder.CreateBitCast(initVal, varType);
+                            ctx.builder.CreateStore(castVal, alloca);
+                        } else {
+                             LOG_ERROR("Type mismatch for " + varName + ". Check your AIML code.");
+                             // Attempt store anyway (might crash LLVM but better than silence?)
+                             // No, safe return.
+                        }
+                        
+                        LOG_DEBUG("Declared " + varName + " as " + typeName + " (initialized)");
+                    } else {
+                        LOG_ERROR("Failed to evaluate init value for " + varName);
+                    }
+                } else {
+                     LOG_ERROR("Invalid init value node type for " + varName);
+                }
+             } catch (const std::exception& e) {
+                 LOG_ERROR("Exception evaluating init value for " + varName + ": " + e.what());
+             }
         } else {
              // Default Initialization (Zero or List/Map Init)
              if (varType->isStructTy()) {

@@ -23,6 +23,8 @@
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/TargetParser/Host.h>
 #include <llvm/Support/DynamicLibrary.h>
+#include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Object/ObjectFile.h>
 #include <optional>
 
 AIMLCompiler::AIMLCompiler() {
@@ -62,50 +64,27 @@ const llvm::Module& AIMLCompiler::getModule() const {
 
 // ... (Functions compile, compileToObject, etc.)
 
+
 void AIMLCompiler::compile(const std::string& filename, const std::string& outputFilename) {
     LOG_DEBUG("Compiling " + filename);
     YAML::Node config = YAML::LoadFile(filename);
 
     llvm::IRBuilder<> builder(*context_);
 
-    // Create main function: int main(int argc, char** argv)
-    std::vector<llvm::Type*> mainArgs = { builder.getInt32Ty(), builder.getInt8Ty()->getPointerTo()->getPointerTo() };
-    llvm::FunctionType* funcType = llvm::FunctionType::get(builder.getInt32Ty(), mainArgs, false);
-    llvm::Function* mainFunc = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "main", *module_);
+    // 1. Create __aiml_init Function (Void, No Args)
+    // This function will hold all top-level executable code.
+    llvm::FunctionType* initFuncType = llvm::FunctionType::get(builder.getVoidTy(), false);
+    llvm::Function* initFunc = llvm::Function::Create(initFuncType, llvm::Function::InternalLinkage, "__aiml_init", *module_);
     
-    // Create Globals for argc/argv
-    module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
-    llvm::GlobalVariable* argcGlobal = module_->getNamedGlobal("__argc");
-    argcGlobal->setLinkage(llvm::GlobalValue::InternalLinkage);
-    argcGlobal->setInitializer(builder.getInt32(0));
-    
-    module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
-    llvm::GlobalVariable* argvGlobal = module_->getNamedGlobal("__argv");
-    argvGlobal->setLinkage(llvm::GlobalValue::InternalLinkage);
-    argvGlobal->setInitializer(llvm::ConstantPointerNull::get(builder.getInt8Ty()->getPointerTo()->getPointerTo()));
+    llvm::BasicBlock* initEntry = llvm::BasicBlock::Create(*context_, "entry", initFunc);
+    builder.SetInsertPoint(initEntry);
 
-    llvm::BasicBlock* entry = llvm::BasicBlock::Create(*context_, "entry", mainFunc);
-    builder.SetInsertPoint(entry);
-    
-    // Store argc/argv inputs into globals
-    llvm::Function::arg_iterator args = mainFunc->arg_begin();
-    llvm::Value* argcVal = args++;
-    argcVal->setName("argc");
-    llvm::Value* argvVal = args++;
-    argvVal->setName("argv");
-    
-    builder.CreateStore(argcVal, argcGlobal);
-    builder.CreateStore(argvVal, argvGlobal);
-    
-    // Initialize Compiler Context
+    // 2. Initialize Compiler Context
+    // builder points to __aiml_init entry block.
     CompilerContext ctx(*context_, *module_, builder);
+    ctx.compilerPath = compilerPath;
     
-    // Set Personality Function
-    if (ctx.getPersonalityFunction().getCallee()) {
-         mainFunc->setPersonalityFn(llvm::cast<llvm::Constant>(ctx.getPersonalityFunction().getCallee()));
-    }
-    
-    // Initialize Command Registry
+    // 3. Initialize Command Registry and Callback
     CommandRegistry registry;
 
     // Define Recursive Compile Callback
@@ -125,12 +104,21 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
         }
     };
 
-    // Process Root Nodes
+    // 4. Compile Root Nodes (Populate module and __aiml_init)
     ctx.params.compileCallback(ctx, config);
     
-    builder.CreateRet(builder.getInt32(0));
+    // Propagate linked objects
+    this->linkedObjects = ctx.objectFilesToLink;
+    
+    // 5. Terminate __aiml_init
+    if (!builder.GetInsertBlock()->getTerminator()) {
+        builder.CreateRetVoid();
+    }
 
-    // Output IR
+    // 6. Output IR (Module Checkpoint)
+    // Note: We do NOT generate 'main' here anymore. 
+    // 'main' should be generated only if this is the entry point file.
+    
     std::error_code EC;
     llvm::raw_fd_ostream dest(outputFilename, EC, llvm::sys::fs::OF_None);
     if (EC) {
@@ -138,7 +126,99 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
         return;
     }
     module_->print(dest, nullptr);
+    // Save State for JIT/Linker
+    linkedObjects = ctx.objectFilesToLink;
+    entryPointName = ctx.config.entryPointName;
+
     LOG_DEBUG("Compiled to " + outputFilename);
+}
+
+void AIMLCompiler::generateEntryPoint() {
+    // This method generates the 'int main(int argc, char** argv)' entry point.
+    // It should only be called if we are building an executable or running JIT.
+    
+    LOG_DEBUG("Generating Entry Point...");
+    llvm::IRBuilder<> builder(*context_);
+    
+    // 1. Check for User-Defined 'main' (or custom entry point)
+    llvm::Function* userMain = module_->getFunction(entryPointName);
+    if (userMain) {
+        LOG_DEBUG("User defined entry point found. Renaming to __aiml_user_" + entryPointName);
+        userMain->setName("__aiml_user_" + entryPointName);
+    }
+
+    // 2. Create Standard Main: int main(int argc, char** argv)
+    std::vector<llvm::Type*> mainArgs = { builder.getInt32Ty(), builder.getInt8Ty()->getPointerTo()->getPointerTo() };
+    llvm::FunctionType* funcType = llvm::FunctionType::get(builder.getInt32Ty(), mainArgs, false);
+    llvm::Function* mainFunc = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "main", *module_);
+    
+    llvm::BasicBlock* entry = llvm::BasicBlock::Create(*context_, "entry", mainFunc);
+    builder.SetInsertPoint(entry);
+    
+    // 3. Setup Globals: __argc, __argv
+    module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
+    llvm::GlobalVariable* argcGlobal = module_->getNamedGlobal("__argc");
+    argcGlobal->setLinkage(llvm::GlobalValue::InternalLinkage);
+    argcGlobal->setInitializer(builder.getInt32(0));
+    
+    module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
+    llvm::GlobalVariable* argvGlobal = module_->getNamedGlobal("__argv");
+    argvGlobal->setLinkage(llvm::GlobalValue::InternalLinkage);
+    argvGlobal->setInitializer(llvm::ConstantPointerNull::get(builder.getInt8Ty()->getPointerTo()->getPointerTo()));
+
+    // Store Arguments
+    llvm::Function::arg_iterator args = mainFunc->arg_begin();
+    llvm::Value* argcVal = args++;
+    argcVal->setName("argc");
+    llvm::Value* argvVal = args++;
+    argvVal->setName("argv");
+    
+    builder.CreateStore(argcVal, argcGlobal);
+    builder.CreateStore(argvVal, argvGlobal);
+    
+    // 4. Call __aiml_init()
+    llvm::Function* initFunc = module_->getFunction("__aiml_init");
+    if (initFunc) {
+        builder.CreateCall(initFunc);
+    } else {
+        LOG_WARNING("__aiml_init not found, skipping initialization.");
+    }
+    
+    // 5. Call User Main (if exists)
+    if (userMain) {
+        // Check signature of user main
+        // We support:
+        // - void main()
+        // - int main()
+        // - int main(int argc, char** argv)
+        // - void main(int argc, char** argv)
+        
+        // Actually, LLVM Function Type check is strict.
+        llvm::FunctionType* userType = userMain->getFunctionType();
+        size_t numParams = userType->getNumParams();
+        
+        std::vector<llvm::Value*> callArgs;
+        if (numParams == 2) {
+             callArgs.push_back(argcVal);
+             callArgs.push_back(argvVal);
+        }
+        // If 0 params, callArgs empty.
+        
+        llvm::Value* result = builder.CreateCall(userMain, callArgs);
+        
+        // Return Result
+        if (result->getType()->isIntegerTy()) {
+            builder.CreateRet(result);
+        } else {
+             builder.CreateRet(builder.getInt32(0));
+        }
+        
+    } else {
+        // No user main, just return 0 (Script mode finished)
+        builder.CreateRet(builder.getInt32(0));
+    }
+    
+    LOG_DEBUG("Entry Point generated.");
 }
 
 void AIMLCompiler::compileToObject(const std::string& /*filename*/, const std::string& outputFilename) {
@@ -195,9 +275,6 @@ void AIMLCompiler::compileToObject(const std::string& /*filename*/, const std::s
 }
 
 int AIMLCompiler::jitRun() {
-    // Targets initialized in constructor
-
-    
     // EXTREMELY IMPORTANT: Load host process symbols so JIT can find malloc, printf, etc.
     LOG_DEBUG("LoadLibraryPermanently...");
     bool loadFailed = llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
@@ -248,6 +325,33 @@ int AIMLCompiler::jitRun() {
         LOG_ERROR("Function 'main' not found in module.");
         return 1;
     }
+
+    // Load External Object Files (Imports) into Engine
+    for (const auto& objPath : linkedObjects) {
+        auto bufferOrErr = llvm::MemoryBuffer::getFile(objPath);
+    }
+    // Load External Object Files (Imports) into Engine
+    std::vector<std::unique_ptr<llvm::MemoryBuffer>> keptBuffers;
+    for (const auto& objPath : linkedObjects) {
+        auto bufferOrErr = llvm::MemoryBuffer::getFile(objPath);
+        if (std::error_code EC = bufferOrErr.getError()) {
+             LOG_ERROR("Failed to load object file for JIT: " + objPath + " -> " + EC.message());
+        } else {
+             std::unique_ptr<llvm::MemoryBuffer> buf = std::move(bufferOrErr.get());
+             llvm::MemoryBufferRef bufRef = buf->getMemBufferRef();
+             auto objOrErr = llvm::object::ObjectFile::createObjectFile(bufRef);
+             
+             if (!objOrErr) {
+                 LOG_ERROR("Failed to create ObjectFile from buffer: " + objPath);
+                 llvm::logAllUnhandledErrors(objOrErr.takeError(), llvm::errs(), "[JIT Error] ");
+             } else {
+                 engine->addObjectFile(std::move(objOrErr.get()));
+                 keptBuffers.push_back(std::move(buf));
+                 LOG_DEBUG("Loaded object file into Engine: " + objPath);
+             }
+        }
+    }
+
     LOG_DEBUG("Found main. Running...");
 
     // Explicitly add printf

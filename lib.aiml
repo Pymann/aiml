@@ -1,0 +1,8 @@
+- namespace: my.lib
+
+- def:
+    name: add
+    args: [[a, i32], [b, i32]]
+    return: string
+    body:
+      - return: "${ { +: [a, b] } }"

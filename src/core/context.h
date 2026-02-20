@@ -10,6 +10,7 @@
 #include <functional>
 #include <yaml-cpp/yaml.h>
 #include "../../compiler.h" // For Symbol struct
+#include <set>
 
     enum class AccessLevel { Public, Private, Protected };
     
@@ -33,6 +34,16 @@
         struct Params {
              CompilerCallback compileCallback;
         } params;
+
+        struct CompilerConfig {
+            std::string entryPointName = "main";
+            size_t stackSize = 1048576;
+            size_t heapSize = 16777216;
+            std::string target = "";
+            std::string version = "1.0";
+        };
+
+        CompilerConfig config;
 
         // Compile Context State
         std::string currentClassName;
@@ -67,10 +78,13 @@
             std::string parentName;
             std::vector<std::string> interfaces;
             std::vector<std::string> usedModels;
+            std::vector<std::string> objectFilesToLink; // New member for ClassInfo
             
             bool isInterface = false;
             bool isModel = false; 
         };
+
+
 
     CompilerContext(llvm::LLVMContext& ctx, llvm::Module& mod, llvm::IRBuilder<>& b)
         : context(ctx), module(mod), builder(b) {}
@@ -103,6 +117,20 @@
     std::map<std::string, FunctionInfo> functions;
     std::map<std::string, ClassInfo> classes; // Class Registry
     std::map<std::string, std::map<std::string, int>> enums; // Enum Registry
+
+    // Namespace & Import State
+    std::string currentNamespace;
+    std::set<std::string> loadedFiles; // Full paths to loaded files
+    std::vector<std::string> objectFilesToLink;
+    std::string compilerPath; // Path to the aiml executable
+    bool jitMode = false;
+    bool headerOnlyMode = false;
+
+    // Helper: Qualify name with current namespace
+    std::string qualify(const std::string& name) {
+        if (currentNamespace.empty()) return name;
+        return currentNamespace + "." + name;
+    }
 
     // Helper: Get LLVM Type from string
     llvm::Type* getLLVMType(const std::string& typeName) {
@@ -138,6 +166,11 @@
         // Check for User-Defined Classes
         if (classes.count(typeName)) {
              return classes[typeName].type;
+        }
+        // Try resolving with current namespace (e.g. "Point" -> "my.lib.Point")
+        std::string qualified = qualify(typeName);
+        if (classes.count(qualified)) {
+             return classes[qualified].type;
         }
 
         // Check for Pointer type: "ptr<T>" or "ref<T>"

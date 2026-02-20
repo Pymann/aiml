@@ -1,0 +1,13 @@
+- import: "lib.aiml"
+
+- def:
+    name: main
+    args: [[argc, i32], [argv, ptr<ptr<string>>]]
+    return: i32
+    body:
+      - decl:
+          name: result
+          type: i32
+          value: "${ { call: [my.lib.add, 10, 20] } }"
+      - print: "10 + 20 = ${result}"
+      - return: 0

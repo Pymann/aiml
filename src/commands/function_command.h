@@ -15,7 +15,8 @@ public:
         //     body: [...]
         
         auto defNode = node["def"];
-        std::string name = defNode["name"].as<std::string>();
+        std::string rawName = defNode["name"].as<std::string>();
+        std::string name = ctx.qualify(rawName); // Qualified Name
         
         uint64_t version = 0;
         if (defNode["version"]) {
@@ -47,6 +48,22 @@ public:
         
         // Set Personality Function for Exception Handling
         func->setPersonalityFn(llvm::cast<llvm::Constant>(ctx.getPersonalityFunction().getCallee()));
+
+        // Register Function Info with Version (Available even in header mode)
+        CompilerContext::FunctionInfo funcInfo;
+        funcInfo.func = func;
+        funcInfo.argNames = argNames;
+        funcInfo.version = version;
+        ctx.functions[rawName] = funcInfo; // Register short name? OR qualified?
+        // Register Qualified Name too?
+        // Users might call `my.lib.func`.
+        // CallCommand needs to resolve.
+        ctx.functions[name] = funcInfo;
+
+        if (ctx.headerOnlyMode) {
+             LOG_DEBUG("HeaderOnly: Skipping body for " + name);
+             return; 
+        }
         
         // 4. Create Body
         llvm::BasicBlock* entryBB = llvm::BasicBlock::Create(ctx.context, "entry", func);
@@ -150,13 +167,6 @@ public:
         // 8. Restore Context
         ctx.builder.SetInsertPoint(prevBlock);
         ctx.symbol_table = oldSymbols; // Restore
-        
-        // Register Function Info with Version
-        CompilerContext::FunctionInfo funcInfo;
-        funcInfo.func = func;
-        funcInfo.argNames = argNames;
-        funcInfo.version = version;
-        ctx.functions[name] = funcInfo;
         
         LOG_DEBUG("Function " + name + " compiled.");
     }

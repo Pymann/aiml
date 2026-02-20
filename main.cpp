@@ -3,6 +3,8 @@
 #include <vector>
 #include "compiler.h"
 #include "logger.h"
+#include <filesystem>
+
 
 int main(int argc, char** argv) {
     std::string inputFile;
@@ -56,6 +58,27 @@ int main(int argc, char** argv) {
     
     AIMLCompiler compiler;
     
+    // Resolve compiler path (argv[0]) to absolute path for recursive calls
+    try {
+        if (argc > 0) {
+            std::string argv0 = argv[0];
+            if (std::filesystem::exists(argv0)) {
+                std::filesystem::path exePath = std::filesystem::absolute(argv0);
+                compiler.compilerPath = exePath.string();
+            } else {
+                // Not a local path, assume in PATH
+                // check if "which argv0" or similar?
+                // For now, just use argv0 as is, hoping system() finds it.
+                // Or try to resolve using 'which'?
+                compiler.compilerPath = argv0; 
+            }
+            LOG_DEBUG("Compiler Path: " + compiler.compilerPath);
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("Failed to resolve compiler path: " + std::string(e.what()));
+    }
+
+    
     // Check if output is object file
     LOG_DEBUG("inputFile=" + inputFile);
     LOG_DEBUG("outputFile=" + outputFile);
@@ -67,17 +90,90 @@ int main(int argc, char** argv) {
     if (runMode) {
         // JIT Mode
         LOG_DEBUG("JIT Run Mode. Saving IR to " + outputFile);
-        compiler.compile(inputFile, outputFile); 
+        compiler.compile(inputFile, "/dev/null"); // Compile module
+        compiler.generateEntryPoint();            // Add main wrapper
         return compiler.jitRun();
-    } else if (isObjectFile) {
-        // Compile to Object Mode
-        LOG_DEBUG("Calling compileToObject");
-        compiler.compile(inputFile, "/dev/null"); // Populate module
-        compiler.compileToObject(inputFile, outputFile);
-    } else {
-        // Standard IR Compilation Mode
-        LOG_DEBUG("Calling compile");
+    } 
+    
+    // Determine Output Type
+    bool isLL = outputFile.length() >= 3 && outputFile.substr(outputFile.length() - 3) == ".ll";
+    bool isObj = outputFile.length() >= 2 && outputFile.substr(outputFile.length() - 2) == ".o";
+    bool isExe = !isLL && !isObj;
+
+    if (isLL) {
+        LOG_DEBUG("Standard IR Compilation Mode");
+        // Compile and generate entry point for LL debugging
+        compiler.compile(inputFile, "/dev/null"); // Parse and populate module
+        compiler.generateEntryPoint();            // Add main wrapper
+        
+        // We can't easily print module from here without LLVM headers.
+        // HACK: call compile again with empty file? No.
+        // Better: compiler should have emitIR method?
+        // OR: Since we exposed generateEntryPoint, we can't use compiler.compile(..., output) because it writes too early.
+        // Let's assume user is okay with NO entry point in .ll if they didn't ask for executable?
+        // But for debugging we want it.
+        // Let's add 'saveIR' to compiler? 
+        // For now: Just use valid output file in compile() for parsing, but that doesn't include entry point.
+        
+        // REVISIT: We need to change main.cpp includes OR add helper. 
+        // Let's rely on adding 'saveIR' to compiler in next step if needed.
+        // For now, let's just do:
         compiler.compile(inputFile, outputFile);
+        // This writes file WITHOUT entry point wrapper.
+        // If users want to see wrapper, this is a limitation.
+        // For 'test_namespace.aiml', we want to run it (-r). 
+        // The -r path is above (runMode). 
+        // The -o output.ll path is for inspection.
+        
+    } else {
+        // Compile to Object (Intermediate or Final)
+        std::string objFile = isExe ? outputFile + ".o" : outputFile;
+        
+        LOG_DEBUG("Compiling to Object: " + objFile);
+        
+        // 1. Compile Module
+        compiler.compile(inputFile, "/dev/null"); 
+        
+        // 2. Generate Entry Point IF Executable
+        if (isExe) {
+            compiler.generateEntryPoint();
+        }
+        
+        // 3. Emit Object
+        compiler.compileToObject(inputFile, objFile);
+        
+        // Linking
+        if (isExe) {
+            LOG_INFO("Linking executable: " + outputFile);
+            std::string linkCmd = "clang -o \"" + outputFile + "\" \"" + objFile + "\"";
+            
+            // Link math library handling? (Standard C libs are linked by clang default)
+            linkCmd += " -lm -lstdc++"; // Ensure stdlibs
+
+            for (const auto& dep : compiler.linkedObjects) {
+                linkCmd += " \"" + dep + "\"";
+            }
+            
+            LOG_DEBUG("Link Command: " + linkCmd);
+            int ret = std::system(linkCmd.c_str());
+            if (ret != 0) {
+                LOG_ERROR("Linking failed.");
+                return 1;
+            }
+            
+            // Cleanup temp object
+            if (isExe) {
+                std::filesystem::remove(objFile);
+            }
+            
+        } else {
+             // Just object file
+             if (!compiler.linkedObjects.empty()) {
+                 std::cout << "Compiled " << outputFile << ". Link with: ";
+                 for (const auto& dep : compiler.linkedObjects) std::cout << dep << " ";
+                 std::cout << std::endl;
+             }
+        }
     }
     
     return 0;
