@@ -70,7 +70,7 @@
             int index;
             llvm::Type* type;
             std::string typeName;
-            AccessLevel access = AccessLevel::Private; // Default Private
+            AccessLevel access = AccessLevel::Public; // Default Public
             bool is_const = false;
             bool is_volatile = false;
             uint64_t version = 1; // Version of the field (u64)

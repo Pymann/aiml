@@ -256,9 +256,9 @@ public:
                     if (modifiersNode.IsMap()) {
                          if (modifiersNode["access"].IsScalar()) {
                              std::string acc = modifiersNode["access"].as<std::string>();
-                             if (acc == "public") member.access = AccessLevel::Public;
+                             if (acc == "private") member.access = AccessLevel::Private;
                              else if (acc == "protected") member.access = AccessLevel::Protected;
-                             else member.access = AccessLevel::Private;
+                             else member.access = AccessLevel::Public;
                          }
                          if (modifiersNode["const"].IsScalar() && modifiersNode["const"].as<bool>()) member.is_const = true;
                          if (modifiersNode["volatile"].IsScalar() && modifiersNode["volatile"].as<bool>()) member.is_volatile = true;

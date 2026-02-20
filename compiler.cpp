@@ -112,7 +112,12 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
     module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
 
-    // 4. Compile Root Nodes (AST Pipeline)
+    // 4. Compile Root Nodes (Legacy Pipeline first for type registration)
+    // Run the old legacy pipeline first so struct types are registered
+    // before the AST compiler attempts to resolve them.
+    ctx.params.compileCallback(ctx, config);
+
+    // 5. Compile Root Nodes (AST Pipeline)
     AIML::AST::Parser astParser;
     auto programAST = astParser.parseProgram(config);
     
@@ -120,10 +125,6 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
         AIML::AST::Compiler astCompiler(ctx);
         astCompiler.compile(programAST.get());
     }
-    
-    // Fallback: Also run the old legacy pipeline so tests don't immediately break 100% 
-    // while we are mid-migration. 
-    ctx.params.compileCallback(ctx, config);
     
     // Propagate linked objects
     this->linkedObjects = ctx.objectFilesToLink;
