@@ -60,6 +60,7 @@ const llvm::Module& AIMLCompiler::getModule() const {
 }
 
 #include "src/core/context.h"
+#include "src/core/ir_generator.h"
 #include "src/commands/registry.h"
 
 // ... (Functions compile, compileToObject, etc.)
