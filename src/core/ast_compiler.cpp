@@ -34,7 +34,8 @@ void Compiler::visitFunction(FunctionDecl* func) {
         }
     }
     
-    IRType* retTy = ctx.ir_gen->resolveType(func->returnType);
+    IRType* retTy = nullptr;
+    if (!func->returnType.empty()) retTy = ctx.ir_gen->resolveType(func->returnType);
     if (!retTy) retTy = ctx.ir_gen->resolveType("void");
     
     // Note: To fully decouple, we'd add `createFunction` to IRGenerator.
@@ -49,6 +50,7 @@ void Compiler::visitStatement(Stmt* stmt) {
     if (auto decl = dynamic_cast<DeclStmt*>(stmt)) visitDeclStmt(decl);
     else if (auto setStmt = dynamic_cast<SetStmt*>(stmt)) visitSetStmt(setStmt);
     else if (auto exprStmt = dynamic_cast<ExprStmt*>(stmt)) visitExprStmt(exprStmt);
+    else if (auto retStmt = dynamic_cast<RetStmt*>(stmt)) visitRetStmt(retStmt);
 }
 
 void Compiler::visitDeclStmt(DeclStmt* decl) {
@@ -91,6 +93,16 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
 
 void Compiler::visitExprStmt(ExprStmt* exprStmt) {
     visitExpression(exprStmt->expr.get());
+}
+
+void Compiler::visitRetStmt(RetStmt* retStmt) {
+    if (retStmt->value) {
+        IRValue* val = visitExpression(retStmt->value.get());
+        if (val) ctx.ir_gen->createRet(val);
+        else ctx.ir_gen->createRet(nullptr);
+    } else {
+        ctx.ir_gen->createRet(nullptr);
+    }
 }
 
 IRValue* Compiler::visitExpression(Expr* expr) {

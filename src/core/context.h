@@ -150,6 +150,10 @@
 
     // Helper: Get LLVM Type from string
     llvm::Type* getLLVMType(const std::string& typeName) {
+        if (typeName == "" || typeName == "<.balance" || typeName == "${ { +: [a, b] } }") {
+             LOG_ERROR("CRITICAL ERROR: getLLVMType called with invalid typeName: '" + typeName + "'");
+             throw std::runtime_error("INVALID TYPE NAME FOUND: " + typeName);
+        }
         LOG_DEBUG("getLLVMType: '" + typeName + "'");
 
         // Check for Enums (Trace back to i32)
@@ -269,6 +273,7 @@
             }
         }
 
+        if (typeName == "any") return llvm::Type::getInt8Ty(context)->getPointerTo();
         if (typeName == "i8" || typeName == "i8_least" || typeName == "i8_fast") return llvm::Type::getInt8Ty(context);
         if (typeName == "i16") return llvm::Type::getInt16Ty(context);
         if (typeName == "i32") return llvm::Type::getInt32Ty(context);

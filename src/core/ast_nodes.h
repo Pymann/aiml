@@ -114,6 +114,21 @@ public:
     std::string toString() const override { return "If(...)"; }
 };
 
+class WhileStmt : public Stmt {
+public:
+    std::unique_ptr<Expr> condition;
+    std::unique_ptr<BlockStmt> body;
+
+    std::string toString() const override { return "While(...)"; }
+};
+
+class RetStmt : public Stmt {
+public:
+    std::unique_ptr<Expr> value; // Optional
+
+    std::string toString() const override { return "Ret(...)"; }
+};
+
 // --- Top-Level Declarations ---
 
 class FunctionDecl : public Node {

@@ -84,6 +84,7 @@ public:
     bool OnSequenceEnd() override;
     bool OnScalar(const std::string& value) override;
     bool OnMapStart() override;
+    bool OnMapEnd() override;
     void receiveChildNode(std::unique_ptr<Node> node) override;
     std::unique_ptr<Node> finish() override;
 };
@@ -96,6 +97,7 @@ public:
     bool OnSequenceStart() override;
     bool OnSequenceEnd() override;
     bool OnMapStart() override;
+    bool OnMapEnd() override;
     bool OnScalar(const std::string& value) override;
     void receiveChildNode(std::unique_ptr<Node> node) override;
     std::unique_ptr<Node> finish() override;
@@ -109,6 +111,26 @@ class FunctionBuilder : public StateHandler {
     bool expectingValue = false;
 public:
     FunctionBuilder(Builder* b) : StateHandler(b) { func = std::make_unique<FunctionDecl>(); }
+    bool OnMapStart() override;
+    bool OnMapEnd() override;
+    bool OnScalar(const std::string& value) override;
+    bool OnSequenceStart() override;
+    void receiveChildNode(std::unique_ptr<Node> node) override;
+    std::unique_ptr<Node> finish() override;
+};
+
+// Parses a `if`, `while`, or `ret` block
+class ControlFlowBuilder : public StateHandler {
+    std::string type;
+    std::unique_ptr<Expr> condition;
+    std::unique_ptr<BlockStmt> thenBranch;
+    std::unique_ptr<BlockStmt> elseBranch; 
+    std::unique_ptr<BlockStmt> body;
+    
+    std::string currentKey;
+    bool expectingKey = false;
+public:
+    ControlFlowBuilder(Builder* b, std::string t) : StateHandler(b), type(t) {}
     bool OnMapStart() override;
     bool OnMapEnd() override;
     bool OnScalar(const std::string& value) override;
