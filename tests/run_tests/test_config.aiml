@@ -1,0 +1,11 @@
+- config:
+    entrypoint: app_start
+    version: "2.5"
+
+- def:
+    name: app_start
+    args: []
+    return: i32
+    body:
+      - print: ["Custom entry point works! Version: ", {call: [sys.config_version]}]
+      - return: 0

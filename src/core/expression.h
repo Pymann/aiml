@@ -5,6 +5,7 @@
 #include <yaml-cpp/yaml.h>
 #include <llvm/IR/IRBuilder.h>
 #include "call_dispatcher.h"
+#include "string_utils.h"
 
 namespace Expression {
 
@@ -192,6 +193,13 @@ namespace Expression {
 
         // 1. Scalar
         if (node.IsScalar()) {
+            std::string val = node.as<std::string>();
+            if (val.find("${") != std::string::npos) {
+                 // Pass self as evaluator for recursive expansion
+                 return StringUtils::expandExpression(ctx, val, [](CompilerContext& c, const YAML::Node& n) {
+                     return evaluate(c, n);
+                 });
+            }
             try {
                 return Utils::resolveValue(ctx, node);
             } catch (const std::exception& e) {

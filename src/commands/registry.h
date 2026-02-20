@@ -12,6 +12,7 @@
 #include "if_command.h"
 #include "while_command.h"
 #include "function_command.h"
+#include "import_command.h"
 #include "return_command.h"
 #include "store_command.h"
 #include "class_command.h"
@@ -23,11 +24,15 @@
 #include "model_command.h"
 #include "interface_command.h"
 #include "free_command.h"
+#include "config_command.h"
+
+#include "namespace_command.h"
 
 class CommandRegistry {
 public:
     CommandRegistry() {
         registerCommand("decl", []() { return std::make_unique<DeclCommand>(); });
+        registerCommand("namespace", []() { return std::make_unique<NamespaceCommand>(); });
         registerCommand("set", []() { return std::make_unique<SetCommand>(); });
         registerCommand("print", []() { return std::make_unique<PrintCommand>(); });
         registerCommand("call", []() { return std::make_unique<CallCommand>(); });
@@ -37,12 +42,14 @@ public:
         registerCommand("return", []() { return std::make_unique<ReturnCommand>(); });
         registerCommand("store", []() { return std::make_unique<StoreCommand>(); });
         registerCommand("class", []() { return std::make_unique<ClassCommand>(); });
+        registerCommand("import", []() { return std::make_unique<ImportCommand>(); });
         registerCommand("enum", []() { return std::make_unique<EnumCommand>(); });
         registerCommand("throw", []() { return std::make_unique<ThrowCommand>(); });
         registerCommand("try", []() { return std::make_unique<TryCommand>(); });
         registerCommand("model", []() { return std::make_unique<ModelCommand>(); });
         registerCommand("interface", []() { return std::make_unique<InterfaceCommand>(); });
         registerCommand("free", []() { return std::make_unique<FreeCommand>(); });
+        registerCommand("config", []() { return std::make_unique<ConfigCommand>(); });
     }
 
     std::unique_ptr<AIMLCommand> create(const std::string& name) {

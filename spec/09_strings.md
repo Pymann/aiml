@@ -65,9 +65,10 @@
 #   ...
 - print: ["Hello ${name}, you are ${age} years old."]
 
-# Complex Expressions inside?
-# - print: ["Next year: ${ { add: [age, 1] } }"]
-# Keeping it simple (variables only) first is easier.
+# Complex Expressions inside
+# Uses nested YAML expression syntax inside the string interpolation block.
+# See `09_1_string_expansions.md` for full details.
+- print: ["Next year: ${ { +: [age, 1] } }"]
 
 # Compile Time Optimization (Const)
 # If the compiler sees:

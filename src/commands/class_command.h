@@ -21,7 +21,8 @@ public:
             LOG_ERROR("Class definition missing 'name'");
             return;
         }
-        std::string className = classNode["name"].as<std::string>();
+        std::string rawName = classNode["name"].as<std::string>();
+        std::string className = ctx.qualify(rawName); // Qualified
         LOG_INFO("Defining Class: " + className);
 
         if (ctx.classes.count(className)) {
@@ -30,7 +31,7 @@ public:
         }
 
         CompilerContext::ClassInfo classInfo;
-        classInfo.name = className;
+        classInfo.name = className; // Use qualified name
 
         if (classNode["version"].IsScalar()) {
              classInfo.version = classNode["version"].as<uint64_t>();
@@ -360,6 +361,11 @@ private:
         funcInfo.argNames = argNames; // includes "this" at index 0
         funcInfo.access = methodAccess;
         classInfo.methods[methodName] = funcInfo;
+
+        if (ctx.headerOnlyMode) {
+             LOG_DEBUG("HeaderOnly: Skipping method body for " + mangledName);
+             return;
+        }
 
         // Compile Body
         llvm::BasicBlock* entryBlock = llvm::BasicBlock::Create(ctx.context, "entry", function);

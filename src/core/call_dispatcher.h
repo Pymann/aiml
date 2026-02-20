@@ -27,8 +27,8 @@ public:
             std::string methodName = funcName.substr(methodDotPos + 1);
             
             if (ctx.symbol_table.count(objName) == 0) {
-                 LOG_ERROR("Undefined object for method call: " + objName);
-                 return nullptr;
+                 // Not a variable, likely a namespace function (e.g. my.lib.add)
+                 goto try_function_lookup;
             }
             
             Symbol& sym = ctx.symbol_table[objName];
@@ -350,6 +350,7 @@ public:
 
 
         // 3. User Defined Function Call (or Externals)
+        try_function_lookup:
         llvm::Function* func = ctx.module.getFunction(funcName);
         if (!func) {
              // Auto-declare libc functions if used

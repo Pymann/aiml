@@ -30,9 +30,17 @@ public:
     ~AIMLCompiler();
 
     void compile(const std::string& filename, const std::string& outputFilename);
-    void compileToObject(const std::string& filename, const std::string& outputFilename); // New method
     const llvm::Module& getModule() const; // Helper for JIT
+    
+    // Generates the standard C main() entry point wrapper.
+    // Call this ONLY when building an executable or running JIT.
+    void generateEntryPoint(); 
+    
+    void compileToObject(const std::string& filename, const std::string& outputFilename);
     int jitRun(); // JIT execution method
+    std::vector<std::string> linkedObjects;
+    std::string compilerPath;
+    std::string entryPointName = "main";
 
 private:
     void generateIR(const YAML::Node& node);
