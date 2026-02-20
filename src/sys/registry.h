@@ -39,6 +39,7 @@ private:
         registerCall("sys.type", std::make_unique<SysType>());
         registerCall("sys.env", std::make_unique<SysEnv>());
         registerCall("sys.exe", std::make_unique<SysExe>());
+        registerCall("sys.config_version", std::make_unique<SysConfigVersion>());
         registerCall("free", std::make_unique<MemoryFree>());
     }
 

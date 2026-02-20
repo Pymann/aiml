@@ -11,12 +11,16 @@ namespace AIML {
         llvm::Value* val;
         LLVMIRValue(llvm::Value* v) : val(v) {}
         void* getRawPtr() override { return val; }
+        IRType* getType() override; // Implemented below after LLVMGenerator / wrap
     };
 
     struct LLVMIRType : public IRType {
         llvm::Type* ty;
         LLVMIRType(llvm::Type* t) : ty(t) {}
         void* getRawPtr() override { return ty; }
+        bool isPointer() override { return ty && ty->isPointerTy(); }
+        bool isInteger() override { return ty && ty->isIntegerTy(); }
+        bool isStruct() override { return ty && ty->isStructTy(); }
     };
 
     struct LLVMIRBlock : public IRBlock {
@@ -123,5 +127,9 @@ namespace AIML {
         void setInsertPoint(IRBlock* block) override { ctx.builder.SetInsertPoint(unwrap(block)); }
         IRBlock* getInsertBlock() override { return wrap(ctx.builder.GetInsertBlock()); }
     };
+
+    inline IRType* LLVMIRValue::getType() {
+        return val ? new LLVMIRType(val->getType()) : nullptr;
+    }
 
 } // namespace AIML

@@ -1,4 +1,4 @@
-- import: "lib.aiml"
+- import: "tests/lib.aiml"
 
 - def:
     name: main
