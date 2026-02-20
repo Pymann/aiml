@@ -62,6 +62,8 @@ const llvm::Module& AIMLCompiler::getModule() const {
 #include "src/core/context.h"
 #include "src/core/ir_generator.h"
 #include "src/commands/registry.h"
+#include "src/core/ast_parser.h"
+#include "src/core/ast_compiler.h"
 
 // ... (Functions compile, compileToObject, etc.)
 
@@ -89,7 +91,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     // 3. Initialize Command Registry and Callback
     CommandRegistry registry;
 
-    // Define Recursive Compile Callback
+    // Define Recursive Compile Callback (Legacy, used by inner blocks for now)
     ctx.params.compileCallback = [&](CompilerContext& c, const YAML::Node& nodes) {
         if (nodes.IsSequence()) {
             for (const auto& node : nodes) {
@@ -110,7 +112,17 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
     module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
 
-    // 4. Compile Root Nodes (Populate module and __aiml_init)
+    // 4. Compile Root Nodes (AST Pipeline)
+    AIML::AST::Parser astParser;
+    auto programAST = astParser.parseProgram(config);
+    
+    if (programAST) {
+        AIML::AST::Compiler astCompiler(ctx);
+        astCompiler.compile(programAST.get());
+    }
+    
+    // Fallback: Also run the old legacy pipeline so tests don't immediately break 100% 
+    // while we are mid-migration. 
     ctx.params.compileCallback(ctx, config);
     
     // Propagate linked objects
