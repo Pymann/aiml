@@ -19,8 +19,8 @@
         "*.c",
         "*.cpp",
         "*.cc",
-        "src/sys/process_runtime.cpp",
-        "src/sys/time_runtime.cpp"
+        "src/*/*.cpp",
+        "src/*/*/*.cpp"
     ],
     "defines": {},
     "pre_compilation": "hook_example.py",
