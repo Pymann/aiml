@@ -71,6 +71,9 @@ namespace AIML {
          virtual IRValue* createStructGEP(IRType* type, IRValue* ptr, unsigned idx, const std::string& name = "") = 0;
 
          // Control Flow
+         virtual IRValue* createFunction(const std::string& name, IRType* retTy, const std::vector<IRType*>& argTys) = 0;
+         virtual IRValue* getFunctionArg(IRValue* func, unsigned idx) = 0;
+         virtual void setPersonalityFunction(IRValue* func, IRValue* persFn) = 0;
          virtual IRValue* createCall(const std::string& funcName, const std::vector<IRValue*>& args, const std::string& name = "") = 0;
          virtual IRValue* createCall(IRValue* func, const std::vector<IRValue*>& args, const std::string& name = "") = 0;
          virtual IRValue* createInvoke(const std::string& funcName, IRBlock* normalBlock, IRBlock* unwindBlock, const std::vector<IRValue*>& args, const std::string& name = "") = 0;
@@ -102,8 +105,10 @@ namespace AIML {
          // Migration Helpers (Side-by-side transition)
          virtual IRValue* wrap(void* llvmValue) = 0;
          virtual IRType* wrapType(void* llvmType) = 0;
+         virtual IRBlock* wrapBlock(void* llvmBlock) = 0;
          virtual void* unwrap(IRValue* val) = 0;
          virtual void* unwrapType(IRType* type) = 0;
+         virtual void* unwrapBlock(IRBlock* block) = 0;
     };
 
     std::unique_ptr<IRGenerator> createLLVMGenerator(CompilerContext& ctx);

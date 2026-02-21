@@ -44,8 +44,10 @@ namespace AIML {
         // Migration Helpers Interface Implementation
         IRValue* wrap(void* llvmValue) override { return wrapLocal(static_cast<llvm::Value*>(llvmValue)); }
         IRType* wrapType(void* llvmType) override { return wrapLocal(static_cast<llvm::Type*>(llvmType)); }
+        IRBlock* wrapBlock(void* llvmBlock) override { return wrapLocal(static_cast<llvm::BasicBlock*>(llvmBlock)); }
         void* unwrap(IRValue* val) override { return unwrapLocal(val); }
         void* unwrapType(IRType* type) override { return unwrapLocal(type); }
+        void* unwrapBlock(IRBlock* block) override { return unwrapLocal(block); }
 
         LLVMGenerator(CompilerContext& c) : ctx(c) {}
 
@@ -88,6 +90,26 @@ namespace AIML {
         }
         IRValue* createStructGEP(IRType* type, IRValue* ptr, unsigned idx, const std::string& name) override {
             return wrapLocal(ctx.builder.CreateStructGEP(unwrapLocal(type), unwrapLocal(ptr), idx, name));
+        }
+
+        IRValue* createFunction(const std::string& name, IRType* retTy, const std::vector<IRType*>& argTys) override {
+            std::vector<llvm::Type*> rawArgTys;
+            for (auto* t : argTys) rawArgTys.push_back(unwrapLocal(t));
+            
+            llvm::FunctionType* funcType = llvm::FunctionType::get(unwrapLocal(retTy), rawArgTys, false);
+            llvm::Function* func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, name, ctx.module);
+            return wrapLocal(func);
+        }
+
+        IRValue* getFunctionArg(IRValue* func, unsigned idx) override {
+            llvm::Function* F = llvm::cast<llvm::Function>(unwrapLocal(func));
+            if (idx >= F->arg_size()) return nullptr;
+            return wrapLocal(F->getArg(idx));
+        }
+
+        void setPersonalityFunction(IRValue* func, IRValue* persFn) override {
+            llvm::Function* F = llvm::cast<llvm::Function>(unwrapLocal(func));
+            F->setPersonalityFn(llvm::cast<llvm::Constant>(unwrapLocal(persFn)));
         }
 
         IRValue* createCall(const std::string& funcName, const std::vector<IRValue*>& args, const std::string& name) override {
@@ -141,8 +163,8 @@ namespace AIML {
         bool hasPersonalityFunction() override {
             return ctx.builder.GetInsertBlock()->getParent()->hasPersonalityFn();
         }
-        void setPersonalityFunction(IRValue* func) override {
-            ctx.builder.GetInsertBlock()->getParent()->setPersonalityFn(llvm::cast<llvm::Constant>(unwrapLocal(func)));
+        void setPersonalityFunction(IRValue* persFn) override {
+            ctx.builder.GetInsertBlock()->getParent()->setPersonalityFn(llvm::cast<llvm::Constant>(unwrapLocal(persFn)));
         }
         IRValue* getPersonalityFunction() override {
              return wrapLocal(ctx.getPersonalityFunction().getCallee());

@@ -64,6 +64,21 @@ public:
     std::string toString() const override { return "Call(" + functionName + ")"; }
 };
 
+class StringInterpolationExpr : public Expr {
+public:
+    std::vector<std::unique_ptr<Expr>> parts;
+
+    std::string toString() const override { return "StringInterpolation(...)"; }
+};
+
+class NewExpr : public Expr {
+public:
+    std::string typeName;
+
+    NewExpr(std::string tName) : typeName(tName) {}
+    std::string toString() const override { return "New(" + typeName + ")"; }
+};
+
 // --- Statements (Perform an action) ---
 
 class Stmt : public Node {
