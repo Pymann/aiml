@@ -1,8 +1,92 @@
 #include "ast_builder.h"
 #include <iostream>
+#include <yaml-cpp/yaml.h>
 
 namespace AIML {
 namespace AST {
+
+static std::unique_ptr<Expr> parseInterpolatedString(const std::string& input);
+
+static std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node) {
+    if (node.IsScalar()) {
+        std::string val = node.as<std::string>();
+        if (node.Tag() == "!") {
+            if (val.find("${") != std::string::npos) return parseInterpolatedString(val);
+            return std::make_unique<LiteralExpr>(val, "string");
+        }
+        if (val == "true" || val == "false" || (val.length() > 0 && isdigit(val[0])) || (val.length() > 0 && val[0] == '-')) {
+            return std::make_unique<LiteralExpr>(val, "unknown");
+        }
+        return std::make_unique<VariableExpr>(val);
+    }
+    if (node.IsMap()) {
+        std::string op = node.begin()->first.as<std::string>();
+        auto argsNode = node.begin()->second;
+        
+        if (op == "call" && argsNode.IsSequence() && argsNode.size() > 0) {
+            std::string funcName;
+            if (argsNode[0].IsScalar()) funcName = argsNode[0].as<std::string>();
+            else if (argsNode[0].IsMap() && argsNode[0].begin()->first.as<std::string>() == "call") {
+                // Should not happen as function name 
+            }
+            auto callExpr = std::make_unique<CallExpr>(funcName);
+            for(size_t i=1; i<argsNode.size(); ++i) {
+                callExpr->args.push_back(nodeToExpr(argsNode[i]));
+            }
+            return callExpr;
+        }
+        
+        // binary Expr
+        if (argsNode.IsSequence() && argsNode.size() == 2) {
+             return std::make_unique<BinaryExpr>(op, nodeToExpr(argsNode[0]), nodeToExpr(argsNode[1]));
+        }
+    }
+    return nullptr;
+}
+
+static std::unique_ptr<Expr> parseInterpolatedString(const std::string& input) {
+    if (input.find("${") == std::string::npos) {
+        return std::make_unique<LiteralExpr>(input, "string");
+    }
+    
+    auto interp = std::make_unique<StringInterpolationExpr>();
+    size_t pos = 0;
+    while (pos < input.length()) {
+        size_t start = input.find("${", pos);
+        if (start == std::string::npos) {
+            std::string suffix = input.substr(pos);
+            if (!suffix.empty()) interp->parts.push_back(std::make_unique<LiteralExpr>(suffix, "string"));
+            break;
+        }
+        
+        if (start > pos) {
+            interp->parts.push_back(std::make_unique<LiteralExpr>(input.substr(pos, start - pos), "string"));
+        }
+        
+        size_t end = input.find("}", start);
+        if (end == std::string::npos) break; // Malformed
+        
+        std::string exprStr = input.substr(start + 2, end - start - 2);
+        try {
+            YAML::Node node = YAML::Load(exprStr);
+            auto astExpr = nodeToExpr(node);
+            if (astExpr) {
+                interp->parts.push_back(std::move(astExpr));
+            } else {
+                interp->parts.push_back(std::make_unique<LiteralExpr>("${" + exprStr + "}", "string"));
+            }
+        } catch (...) {
+            interp->parts.push_back(std::make_unique<LiteralExpr>("${" + exprStr + "}", "string"));
+        }
+        
+        pos = end + 1;
+    }
+    
+    if (interp->parts.size() == 1) {
+        return std::move(interp->parts[0]);
+    }
+    return interp;
+}
 
 Builder::Builder() {
     program = std::make_unique<Program>();
@@ -36,8 +120,8 @@ void Builder::popState() {
 }
 
 // Event Router
-void Builder::OnScalar(const YAML::Mark&, const std::string&, YAML::anchor_t, const std::string& value) {
-    stateStack.top()->OnScalar(value);
+void Builder::OnScalar(const YAML::Mark&, const std::string& tag, YAML::anchor_t, const std::string& value) {
+    stateStack.top()->OnScalar(value, tag);
 }
 
 void Builder::OnSequenceStart(const YAML::Mark&, const std::string&, YAML::anchor_t, YAML::EmitterStyle::value) {
@@ -83,10 +167,10 @@ public:
         else depth--; 
         return true; 
     }
-    bool OnScalar(const std::string&) override { return true; }
+    bool OnScalar(const std::string&, const std::string&) override { return true; }
 };
 
-bool RootState::OnScalar(const std::string& value) {
+bool RootState::OnScalar(const std::string& value, const std::string& tag) {
     if (expectingKey) {
         currentKey = value;
         expectingKey = false;
@@ -134,16 +218,23 @@ bool StatementBuilder::OnMapEnd() {
     return true;
 }
 
-bool StatementBuilder::OnScalar(const std::string& value) {
+bool StatementBuilder::OnScalar(const std::string& value, const std::string& tag) {
     if (expectingValue) {
         // We received the RHS of a `set: [x, value]`
-        exprArg = std::make_unique<LiteralExpr>(value, "unknown");
+        if (tag == "!") {
+            if (value.find("${") != std::string::npos) exprArg = parseInterpolatedString(value);
+            else exprArg = std::make_unique<LiteralExpr>(value, "string");
+        } else if (value == "true" || value == "false" || isdigit(value[0]) || (value.length() > 0 && value[0] == '-')) {
+            exprArg = std::make_unique<LiteralExpr>(value, "unknown");
+        } else {
+            exprArg = std::make_unique<VariableExpr>(value);
+        }
         expectingValue = false;
         return true;
     }
     
     // Collecting arguments inside the sequence `[x, i32, 5]`
-    args.push_back(value);
+    args.push_back({value, tag});
     
     if (type == "set" && args.size() == 1) {
         // After reading `x`, the next thing might be an expression map instead of a scalar
@@ -151,7 +242,14 @@ bool StatementBuilder::OnScalar(const std::string& value) {
     }
     
     if (type == "return") {
-        exprArg = std::make_unique<LiteralExpr>(value, "unknown");
+        if (tag == "!") {
+            if (value.find("${") != std::string::npos) exprArg = parseInterpolatedString(value);
+            else exprArg = std::make_unique<LiteralExpr>(value, "string");
+        } else if (value == "true" || value == "false" || isdigit(value[0]) || (value.length() > 0 && value[0] == '-')) {
+            exprArg = std::make_unique<LiteralExpr>(value, "unknown");
+        } else {
+            exprArg = std::make_unique<VariableExpr>(value);
+        }
     }
     
     return true;
@@ -172,23 +270,64 @@ void StatementBuilder::receiveChildNode(std::unique_ptr<Node> node) {
 
 std::unique_ptr<Node> StatementBuilder::finish() {
     if (type == "decl" && args.size() >= 2) {
-         auto decl = std::make_unique<DeclStmt>(args[0], args[1]);
+         auto decl = std::make_unique<DeclStmt>(args[0].first, args[1].first);
          if (exprArg) decl->initialValue = std::move(exprArg);
-         else if (args.size() >= 3) decl->initialValue = std::make_unique<LiteralExpr>(args[2], "unknown");
+         else if (args.size() >= 3) {
+             const std::string& val = args[2].first;
+             const std::string& tag = args[2].second;
+             if (tag == "!") {
+                 if (val.find("${") != std::string::npos) decl->initialValue = parseInterpolatedString(val);
+                 else decl->initialValue = std::make_unique<LiteralExpr>(val, "string");
+             } else if (val == "true" || val == "false" || isdigit(val[0]) || (val.length() > 0 && val[0] == '-')) {
+                 decl->initialValue = std::make_unique<LiteralExpr>(val, "unknown");
+             } else {
+                 decl->initialValue = std::make_unique<VariableExpr>(val);
+             }
+         }
          return decl;
     }
     if (type == "set" && args.size() >= 1) {
-         auto set = std::make_unique<SetStmt>(args[0], std::move(exprArg));
+         if (!exprArg && args.size() >= 2) {
+             const std::string& val = args[1].first;
+             const std::string& tag = args[1].second;
+             if (tag == "!") {
+                 if (val.find("${") != std::string::npos) exprArg = parseInterpolatedString(val);
+                 else exprArg = std::make_unique<LiteralExpr>(val, "string");
+             } else if (val == "true" || val == "false" || isdigit(val[0]) || (val.length() > 0 && val[0] == '-')) {
+                 exprArg = std::make_unique<LiteralExpr>(val, "unknown");
+             } else {
+                 exprArg = std::make_unique<VariableExpr>(val);
+             }
+         }
+         auto set = std::make_unique<SetStmt>(args[0].first, std::move(exprArg));
          return set;
     }
     if (type == "call" && args.size() >= 1) {
-         auto call = std::make_unique<CallExpr>(args[0]);
-         // TODO arguments
+         auto call = std::make_unique<CallExpr>(args[0].first);
+         for (size_t i = 1; i < args.size(); ++i) {
+             const std::string& val = args[i].first;
+             const std::string& tag = args[i].second;
+             if (tag == "!") {
+                  if (val.find("${") != std::string::npos) call->args.push_back(parseInterpolatedString(val));
+                  else call->args.push_back(std::make_unique<LiteralExpr>(val, "string"));
+             } else if (val == "true" || val == "false" || isdigit(val[0]) || (val.length() > 0 && val[0] == '-')) {
+                  call->args.push_back(std::make_unique<LiteralExpr>(val, "unknown"));
+             } else {
+                  call->args.push_back(std::make_unique<VariableExpr>(val));
+             }
+         }
+         if (exprArg) call->args.push_back(std::move(exprArg));
+         
          return std::make_unique<ExprStmt>(std::move(call));
     }
     if (type == "print" && args.size() >= 1) {
          auto call = std::make_unique<CallExpr>("print");
-         call->args.push_back(std::make_unique<LiteralExpr>(args[0], "string"));
+         if (args[0].second == "!") {
+             if (args[0].first.find("${") != std::string::npos) call->args.push_back(parseInterpolatedString(args[0].first));
+             else call->args.push_back(std::make_unique<LiteralExpr>(args[0].first, "string"));
+         } else {
+             call->args.push_back(std::make_unique<VariableExpr>(args[0].first));
+         }
          return std::make_unique<ExprStmt>(std::move(call));
     }
     if (type == "return") {
@@ -218,7 +357,7 @@ bool BlockBuilder::OnMapEnd() {
     return true; 
 }
 
-bool BlockBuilder::OnScalar(const std::string& value) {
+bool BlockBuilder::OnScalar(const std::string& value, const std::string& tag) {
     if (value == "if" || value == "while" || value == "ret") {
         builder->pushState(std::make_unique<ControlFlowBuilder>(builder, value));
     } else {
@@ -258,7 +397,7 @@ public:
         return true;
     }
     
-    bool OnScalar(const std::string& value) override {
+    bool OnScalar(const std::string& value, const std::string& tag) override {
         if (currentArgName.empty()) {
             currentArgName = value;
         } else {
@@ -295,7 +434,7 @@ bool FunctionBuilder::OnSequenceStart() {
     return true;
 }
 
-bool FunctionBuilder::OnScalar(const std::string& value) {
+bool FunctionBuilder::OnScalar(const std::string& value, const std::string& tag) {
     if (expectingKey) {
         currentKey = value;
         expectingKey = false;
@@ -357,7 +496,7 @@ bool ControlFlowBuilder::OnSequenceStart() {
     return true;
 }
 
-bool ControlFlowBuilder::OnScalar(const std::string& value) {
+bool ControlFlowBuilder::OnScalar(const std::string& value, const std::string& tag) {
     if (expectingKey) {
         currentKey = value;
         expectingKey = false;
@@ -367,10 +506,15 @@ bool ControlFlowBuilder::OnScalar(const std::string& value) {
     // We are expecting a value for `cond:` or `ret:`
     // Example: `ret: 1` or `cond: true`
     if (!expectingKey) {
-        if (currentKey == "cond") {
-             condition = std::make_unique<LiteralExpr>(value, "unknown");
-        } else if (type == "ret") {
-             condition = std::make_unique<LiteralExpr>(value, "unknown"); // repurposing condition as return value
+        if (currentKey == "cond" || type == "ret") {
+             if (tag == "!") {
+                 if (value.find("${") != std::string::npos) condition = parseInterpolatedString(value);
+                 else condition = std::make_unique<LiteralExpr>(value, "string");
+             } else if (value == "true" || value == "false" || isdigit(value[0]) || (value.length() > 0 && value[0] == '-')) {
+                 condition = std::make_unique<LiteralExpr>(value, "unknown");
+             } else {
+                 condition = std::make_unique<VariableExpr>(value);
+             }
         }
         expectingKey = true;
         return true;
@@ -431,7 +575,7 @@ bool ExpressionBuilder::OnMapEnd() {
     return true;
 }
 
-bool ExpressionBuilder::OnScalar(const std::string& value) {
+bool ExpressionBuilder::OnScalar(const std::string& value, const std::string& tag) {
     if (expectingKey) {
         op = value;
         expectingKey = false;
@@ -441,26 +585,16 @@ bool ExpressionBuilder::OnScalar(const std::string& value) {
         return true;
     }
     
-    if (expectingArgs) {
-        // e.g., `{ add: [a, b] }` inside the array
-        // Differentiate literal from variable based on quotes or simple heuristic
-        // For prototype, if it's a number/true/false, literal, else var
-        if (value == "true" || value == "false" || isdigit(value[0]) || (value.length() > 0 && value[0] == '-')) {
+    if (expectingArgs || (!op.empty() && !expectingArgs)) {
+        if (tag == "!") {
+            if (value.find("${") != std::string::npos) args.push_back(parseInterpolatedString(value));
+            else args.push_back(std::make_unique<LiteralExpr>(value, "string"));
+        } else if (value == "true" || value == "false" || isdigit(value[0]) || (value.length() > 0 && value[0] == '-')) {
              args.push_back(std::make_unique<LiteralExpr>(value, "unknown"));
         } else {
              args.push_back(std::make_unique<VariableExpr>(value));
         }
         return true;
-    }
-    
-    // Single scalar arg to an operation: e.g. `ret: 5` mapped to expression builder?
-    // Let's assume an operation can have a single scalar `not: true`
-    if (!op.empty() && !expectingArgs) {
-        if (value == "true" || value == "false" || isdigit(value[0]) || (value.length() > 0 && value[0] == '-')) {
-             args.push_back(std::make_unique<LiteralExpr>(value, "unknown"));
-        } else {
-             args.push_back(std::make_unique<VariableExpr>(value));
-        }
     }
     
     return true;
@@ -501,6 +635,15 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
              call->args.push_back(std::move(args[i]));
          }
          return call;
+    }
+    if (op == "new" && !args.empty()) {
+         auto newName = dynamic_cast<VariableExpr*>(args[0].get());
+         auto newLiteral = dynamic_cast<LiteralExpr*>(args[0].get());
+         std::string name = "unknown_class";
+         if (newName) name = newName->name;
+         else if (newLiteral) name = newLiteral->value;
+         
+         return std::make_unique<NewExpr>(name);
     }
     // Fallback: Just return a literal of the operation or wrap it
     if (args.size() == 1) {

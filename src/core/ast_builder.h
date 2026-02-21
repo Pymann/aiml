@@ -21,7 +21,7 @@ public:
     virtual ~StateHandler() = default;
 
     // Return true if the child handled it, false if it's invalid
-    virtual bool OnScalar(const std::string& value) { return false; }
+    virtual bool OnScalar(const std::string& value, const std::string& tag) { return false; }
     virtual bool OnSequenceStart() { return false; }
     virtual bool OnSequenceEnd() { return false; }
     virtual bool OnMapStart() { return false; }
@@ -68,21 +68,21 @@ public:
     RootState(Builder* b) : StateHandler(b) {}
     bool OnMapStart() override;
     bool OnMapEnd() override;
-    bool OnScalar(const std::string& value) override;
+    bool OnScalar(const std::string& value, const std::string& tag) override;
     void receiveChildNode(std::unique_ptr<Node> node) override;
 };
 
 // Parses a single statement like `decl: [x, i32]` or `set: [x, 5]`
 class StatementBuilder : public StateHandler {
     std::string type;
-    std::vector<std::string> args;
+    std::vector<std::pair<std::string, std::string>> args;
     std::unique_ptr<Expr> exprArg;
     bool expectingValue = false;
 public:
     StatementBuilder(Builder* b, std::string t) : StateHandler(b), type(t) {}
     bool OnSequenceStart() override;
     bool OnSequenceEnd() override;
-    bool OnScalar(const std::string& value) override;
+    bool OnScalar(const std::string& value, const std::string& tag) override;
     bool OnMapStart() override;
     bool OnMapEnd() override;
     void receiveChildNode(std::unique_ptr<Node> node) override;
@@ -98,7 +98,7 @@ public:
     bool OnSequenceEnd() override;
     bool OnMapStart() override;
     bool OnMapEnd() override;
-    bool OnScalar(const std::string& value) override;
+    bool OnScalar(const std::string& value, const std::string& tag) override;
     void receiveChildNode(std::unique_ptr<Node> node) override;
     std::unique_ptr<Node> finish() override;
 };
@@ -113,7 +113,7 @@ public:
     FunctionBuilder(Builder* b) : StateHandler(b) { func = std::make_unique<FunctionDecl>(); }
     bool OnMapStart() override;
     bool OnMapEnd() override;
-    bool OnScalar(const std::string& value) override;
+    bool OnScalar(const std::string& value, const std::string& tag) override;
     bool OnSequenceStart() override;
     void receiveChildNode(std::unique_ptr<Node> node) override;
     std::unique_ptr<Node> finish() override;
@@ -133,7 +133,7 @@ public:
     ControlFlowBuilder(Builder* b, std::string t) : StateHandler(b), type(t) {}
     bool OnMapStart() override;
     bool OnMapEnd() override;
-    bool OnScalar(const std::string& value) override;
+    bool OnScalar(const std::string& value, const std::string& tag) override;
     bool OnSequenceStart() override;
     void receiveChildNode(std::unique_ptr<Node> node) override;
     std::unique_ptr<Node> finish() override;
@@ -149,7 +149,7 @@ public:
     ExpressionBuilder(Builder* b) : StateHandler(b) {}
     bool OnMapStart() override;
     bool OnMapEnd() override;
-    bool OnScalar(const std::string& value) override;
+    bool OnScalar(const std::string& value, const std::string& tag) override;
     bool OnSequenceStart() override;
     bool OnSequenceEnd() override;
     void receiveChildNode(std::unique_ptr<Node> node) override;

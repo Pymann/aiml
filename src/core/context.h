@@ -96,8 +96,21 @@
             bool isModel = false; 
         };
 
+        class Scope {
+        public:
+            std::map<std::string, Symbol> variables;
+            Scope* parent = nullptr;
+            Scope() = default;
+            Scope(Scope* p) : parent(p) {}
+        };
 
-
+        struct Namespace {
+            std::map<std::string, FunctionInfo> functions;
+            std::map<std::string, ClassInfo> classes;
+            std::map<std::string, std::map<std::string, int>> enums;
+            std::map<std::string, Symbol> globals;
+        };
+        
     CompilerContext(llvm::LLVMContext& ctx, llvm::Module& mod, llvm::IRBuilder<>& b)
         : context(ctx), module(mod), builder(b) {
         // initialized lazily or explicitly later to avoid circular dependency here
@@ -136,6 +149,10 @@
 
     // Namespace & Import State
     std::string currentNamespace;
+    std::map<std::string, Namespace> namespaces;
+    Scope* currentScope = nullptr;
+    Namespace* currentNs = nullptr;
+    
     std::set<std::string> loadedFiles; // Full paths to loaded files
     std::vector<std::string> objectFilesToLink;
     std::string compilerPath; // Path to the aiml executable
