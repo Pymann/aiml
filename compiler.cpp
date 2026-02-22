@@ -85,6 +85,36 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
     module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
 
+    ctx.resolveImportCallback = [this, &ctx](const std::string& path) {
+        this->resolveImport(path);
+        
+        // Important: also copy over the linked objects discovered!
+        for (const auto& obj : this->linkedObjects) {
+             if (std::find(ctx.objectFilesToLink.begin(), ctx.objectFilesToLink.end(), obj) == ctx.objectFilesToLink.end()) {
+                 ctx.objectFilesToLink.push_back(obj);
+             }
+        }
+        
+        // Header-Only Mode for current compiler: Parse the import for signatures!
+        std::string prevNs = ctx.currentNamespace;
+        AIML::AST::Builder subBuilder;
+        std::ifstream fin(path);
+        if (fin.is_open()) {
+            try {
+                YAML::Parser parser(fin);
+                parser.HandleNextDocument(subBuilder);
+                auto subProg = subBuilder.takeProgram();
+                if (subProg) {
+                    AIML::AST::Compiler subCompiler(ctx);
+                    subCompiler.registerTypes(subProg.get());
+                }
+            } catch (...) {
+                LOG_ERROR("Failed to parse import signatures: " + path);
+            }
+        }
+        ctx.currentNamespace = prevNs;
+    };
+
     // 4. Parse YAML to AST & Compile (Two-Pass)
     AIML::AST::Builder astBuilder;
     try {
@@ -385,4 +415,81 @@ llvm::Function* AIMLCompiler::getPrintfPrototype(llvm::Module& module, llvm::IRB
     llvm::FunctionType* printfType = llvm::FunctionType::get(builder.getInt32Ty(), printfArgs, true); // true = varargs
     
     return llvm::Function::Create(printfType, llvm::Function::ExternalLinkage, "printf", module);
+}
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <filesystem>
+#include <yaml-cpp/yaml.h>
+#include "compiler.h"
+
+namespace fs = std::filesystem;
+
+bool AIMLCompiler::checkCache(const std::string& sourcePath, std::string& outHash) {
+    if (!fs::exists(sourcePath)) {
+        LOG_ERROR("Import source not found: " + sourcePath);
+        return false;
+    }
+    
+    // Hash based on file size and modification time for fast checks
+    auto ftime = fs::last_write_time(sourcePath);
+    auto fsize = fs::file_size(sourcePath);
+    
+    std::stringstream ss;
+    ss << ftime.time_since_epoch().count() << "_" << fsize;
+    std::hash<std::string> hasher;
+    outHash = std::to_string(hasher(ss.str()));
+    
+    std::string cacheDir = "__aiml_cache";
+    if (!fs::exists(cacheDir)) {
+        fs::create_directory(cacheDir);
+    }
+    
+    std::string manifestPath = cacheDir + "/compilations.yaml";
+    YAML::Node manifest;
+    if (fs::exists(manifestPath)) {
+        try {
+            manifest = YAML::LoadFile(manifestPath);
+        } catch (...) {}
+    }
+    
+    if (manifest[sourcePath] && manifest[sourcePath].as<std::string>() == outHash) {
+        // Cache hit. Ensure object file exists
+        std::string objPath = cacheDir + "/" + fs::path(sourcePath).filename().string() + ".o";
+        if (fs::exists(objPath)) return true;
+    }
+    
+    return false;
+}
+
+void AIMLCompiler::resolveImport(const std::string& path) {
+    std::string outHash;
+    if (checkCache(path, outHash)) {
+        LOG_INFO("Cache HIT for import: " + path);
+        std::string objPath = "__aiml_cache/" + fs::path(path).filename().string() + ".o";
+        linkedObjects.push_back(objPath);
+        return;
+    }
+    
+    LOG_INFO("Cache MISS for import: " + path + ". Compiling...");
+    
+    // Create isolated compiler instance for the imported file
+    AIMLCompiler subCompiler;
+    subCompiler.compilerPath = this->compilerPath;
+    
+    std::string objPath = "__aiml_cache/" + fs::path(path).filename().string() + ".o";
+    subCompiler.compileToObject(path, objPath);
+    
+    // Update manifest
+    std::string manifestPath = "__aiml_cache/compilations.yaml";
+    YAML::Node manifest;
+    if (fs::exists(manifestPath)) {
+        try { manifest = YAML::LoadFile(manifestPath); } catch (...) {}
+    }
+    manifest[path] = outHash;
+    
+    std::ofstream fout(manifestPath);
+    fout << manifest;
+    
+    linkedObjects.push_back(objPath);
 }

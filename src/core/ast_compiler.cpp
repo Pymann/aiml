@@ -50,8 +50,12 @@ void Compiler::registerTypeDecl(Node* node) {
         if (!cfg->target.empty()) ctx.config.target = cfg->target;
         if (!cfg->version.empty()) ctx.config.version = cfg->version;
     } else if (auto imp = dynamic_cast<ImportDecl*>(node)) {
-        // Import logic will require structural dependencies. For now just log.
-        LOG_DEBUG("AST Passed Import: " + imp->path);
+        LOG_DEBUG("AST Processing Import: " + imp->path);
+        if (ctx.resolveImportCallback) {
+            ctx.resolveImportCallback(imp->path);
+        } else {
+            LOG_ERROR("resolveImportCallback not bound! Cannot process import: " + imp->path);
+        }
     } else if (auto cls = dynamic_cast<ClassDecl*>(node)) {
         std::string className = ctx.qualify(cls->name);
         if (ctx.classes.count(className)) return; // Already registered
@@ -666,6 +670,10 @@ Symbol* Compiler::resolveVariable(const std::string& name) {
     // Legacy fallback during transition
     if (ctx.symbol_table.count(name)) return &ctx.symbol_table[name];
     
+    // Check FQN fallback (e.g. `math.pi` -> `my.math.pi`)
+    std::string qualifiedName = ctx.qualify(name);
+    if (ctx.symbol_table.count(qualifiedName)) return &ctx.symbol_table[qualifiedName];
+    
     return nullptr;
 }
 
@@ -740,6 +748,11 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
 CompilerContext::FunctionInfo* Compiler::resolveFunction(const std::string& name) {
     if (ctx.currentNs && ctx.currentNs->functions.count(name)) return &ctx.currentNs->functions[name];
     if (ctx.functions.count(name)) return &ctx.functions[name];
+    
+    // Check FQN fallback (e.g., calling `calc` inside `my.math` resolves to `my.math.calc`)
+    std::string qualifiedName = ctx.qualify(name);
+    if (ctx.functions.count(qualifiedName)) return &ctx.functions[qualifiedName];
+    
     return nullptr;
 }
 
