@@ -936,23 +936,13 @@ std::unique_ptr<Node> EnumBuilder::finish() {
 // --- Modular Builders Implementation ---
 
 bool NamespaceBuilder::OnScalar(const std::string& value, const std::string& tag) {
-    if (expectingKey) {
-        currentKey = value;
-        expectingKey = false;
-        return true;
-    }
-    if (currentKey == "namespace") nsNode->name = value;
+    if (nsNode->name.empty()) nsNode->name = value;
     return true;
 }
 std::unique_ptr<Node> NamespaceBuilder::finish() { return std::move(nsNode); }
 
 bool ImportBuilder::OnScalar(const std::string& value, const std::string& tag) {
-    if (expectingKey) {
-        currentKey = value;
-        expectingKey = false;
-        return true;
-    }
-    if (currentKey == "import") importNode->path = value;
+    if (importNode->path.empty()) importNode->path = value;
     return true;
 }
 std::unique_ptr<Node> ImportBuilder::finish() { return std::move(importNode); }

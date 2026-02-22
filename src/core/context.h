@@ -156,6 +156,8 @@
     std::set<std::string> loadedFiles; // Full paths to loaded files
     std::vector<std::string> objectFilesToLink;
     std::string compilerPath; // Path to the aiml executable
+    std::function<void(const std::string&)> resolveImportCallback;
+    
     bool jitMode = false;
     bool headerOnlyMode = false;
 

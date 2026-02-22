@@ -38,6 +38,11 @@ public:
     
     void compileToObject(const std::string& filename, const std::string& outputFilename);
     int jitRun(); // JIT execution method
+    
+    // Dependency & Caching Methods
+    void resolveImport(const std::string& path);
+    bool checkCache(const std::string& sourcePath, std::string& outHash);
+    
     std::vector<std::string> linkedObjects;
     std::string compilerPath;
     std::string entryPointName = "main";
