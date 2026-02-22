@@ -1,0 +1,22 @@
+import: tests/namespaces/math_lib.aiml
+
+def:
+  main:
+    return: i32
+    body:
+      - decl: [res1, i32]
+      - decl: [res2, i32]
+      - set: [res1, { call: [my.math.add, 10, 5] }]
+      - set: [res2, { call: [my.math.sub, 10, 5] }]
+      
+      - if:
+          cond: { neq: [res1, 15] }
+          then:
+            - ret: 1
+          
+      - if:
+          cond: { neq: [res2, 5] }
+          then:
+            - ret: 2
+          
+      - ret: 0
