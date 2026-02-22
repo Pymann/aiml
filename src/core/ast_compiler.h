@@ -11,11 +11,13 @@ public:
     Compiler(CompilerContext& ctx) : ctx(ctx) {}
     
     void compile(Program* prog);
+    void registerTypes(Program* prog);
     
 private:
     CompilerContext& ctx;
     
     // Visit methods
+    void registerTypeDecl(Node* node);
     void visitTopLevel(Node* node);
     void visitFunction(FunctionDecl* func);
     

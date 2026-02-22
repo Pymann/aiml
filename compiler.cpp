@@ -61,7 +61,6 @@ const llvm::Module& AIMLCompiler::getModule() const {
 
 #include "src/core/context.h"
 #include "src/core/ir_generator.h"
-#include "src/commands/registry.h"
 #include "src/core/ast_builder.h"
 #include "src/core/ast_compiler.h"
 
@@ -74,13 +73,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
 
     llvm::IRBuilder<> builder(*context_);
 
-    // 1. Create __aiml_init Function (Void, No Args)
-    // This function will hold all top-level executable code.
-    llvm::FunctionType* initFuncType = llvm::FunctionType::get(builder.getVoidTy(), false);
-    llvm::Function* initFunc = llvm::Function::Create(initFuncType, llvm::Function::InternalLinkage, "__aiml_init", *module_);
-    
-    llvm::BasicBlock* initEntry = llvm::BasicBlock::Create(*context_, "entry", initFunc);
-    builder.SetInsertPoint(initEntry);
+    // 1. (Legacy __aiml_init creation removed. AST::Compiler now handles it)
 
     // 2. Initialize Compiler Context
     // builder points to __aiml_init entry block.
@@ -88,59 +81,41 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     ctx.compilerPath = compilerPath;
     ctx.ir_gen = AIML::createLLVMGenerator(ctx);
     
-    // 3. Initialize Command Registry and Callback
-    CommandRegistry registry;
-
-    // Define Recursive Compile Callback (Legacy, used by inner blocks for now)
-    ctx.params.compileCallback = [&](CompilerContext& c, const YAML::Node& nodes) {
-        if (nodes.IsSequence()) {
-            for (const auto& node : nodes) {
-                if (node.IsMap()) {
-                    std::string commandName = node.begin()->first.as<std::string>();
-                    auto cmd = registry.create(commandName);
-                    if (cmd) {
-                        cmd->compile(c, node);
-                    } else {
-                        LOG_ERROR("Unknown command: " + commandName);
-                    }
-                }
-            }
-        }
-    };
-
-    // Pre-declare globals so sys commands can reference them during compilation
+    // 3. Setup Globals: __argc, __argv for sys commands
     module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
     module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
 
-    // 4. Compile Root Nodes (Legacy Pipeline first for type registration)
-    // Run the old legacy pipeline first so struct types are registered
-    // before the AST compiler attempts to resolve them.
-    ctx.params.compileCallback(ctx, config);
-
-    // 5. Compile Root Nodes (Streaming AST Pipeline)
+    // 4. Parse YAML to AST & Compile (Two-Pass)
     AIML::AST::Builder astBuilder;
     try {
         std::ifstream fin(filename);
+        if (!fin.is_open()) {
+             LOG_ERROR("Could not open file: " + filename);
+             return;
+        }
         YAML::Parser parser(fin);
         parser.HandleNextDocument(astBuilder);
         
         auto programAST = astBuilder.takeProgram();
         if (programAST) {
             AIML::AST::Compiler astCompiler(ctx);
+            
+            // Pass 1: Global Type and Signature Registration
+            astCompiler.registerTypes(programAST.get());
+            
+            // Pass 2: Full Code Generation
             astCompiler.compile(programAST.get());
+        } else {
+            LOG_ERROR("AST Builder failed to produce a valid program.");
         }
     } catch (const YAML::Exception& e) {
         LOG_ERROR("YAML Parsing Error during AST Build: " + std::string(e.what()));
     }
     
-    // Propagate linked objects
+    // Propagate linked objects from pass 1
     this->linkedObjects = ctx.objectFilesToLink;
     
-    // 5. Terminate __aiml_init
-    if (!builder.GetInsertBlock()->getTerminator()) {
-        builder.CreateRetVoid();
-    }
-
+    // 5. (Legacy __aiml_init terminator removed)
     // 6. Output IR (Module Checkpoint)
     // Note: We do NOT generate 'main' here anymore. 
     // 'main' should be generated only if this is the entry point file.
@@ -157,6 +132,9 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     entryPointName = ctx.config.entryPointName;
 
     LOG_DEBUG("Compiled to " + outputFilename);
+    
+    // TEMPORARY: Dump module to see what's wrong with __aiml_init
+    module_->print(llvm::errs(), nullptr);
 }
 
 void AIMLCompiler::generateEntryPoint() {

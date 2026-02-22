@@ -103,6 +103,126 @@ public:
     std::unique_ptr<Node> finish() override;
 };
 
+// Parses a `class:` node
+class ClassBuilder : public StateHandler {
+    std::unique_ptr<ClassDecl> classNode;
+    std::string currentKey;
+    bool expectingKey = false;
+    bool insideMembers = false;
+    bool insideMethods = false;
+    
+    // State for parsing member sequence entry
+    std::string currentField;
+    std::string currentType;
+public:
+    ClassBuilder(Builder* b) : StateHandler(b) { classNode = std::make_unique<ClassDecl>(); }
+    bool OnMapStart() override;
+    bool OnMapEnd() override;
+    bool OnScalar(const std::string& value, const std::string& tag) override;
+    bool OnSequenceStart() override;
+    bool OnSequenceEnd() override;
+    void receiveChildNode(std::unique_ptr<Node> node) override;
+    std::unique_ptr<Node> finish() override;
+};
+
+// Parses a `model:` node
+class ModelBuilder : public StateHandler {
+    std::unique_ptr<ModelDecl> modelNode;
+    std::string currentKey;
+    bool expectingKey = false;
+    bool insideFields = false;
+    
+    // State for parsing member sequence entry
+    std::string currentField;
+    std::string currentType;
+public:
+    ModelBuilder(Builder* b) : StateHandler(b) { modelNode = std::make_unique<ModelDecl>(); }
+    bool OnMapStart() override;
+    bool OnMapEnd() override;
+    bool OnScalar(const std::string& value, const std::string& tag) override;
+    bool OnSequenceStart() override;
+    bool OnSequenceEnd() override;
+    void receiveChildNode(std::unique_ptr<Node> node) override;
+    std::unique_ptr<Node> finish() override;
+};
+
+// Parses an `interface:` node
+class InterfaceBuilder : public StateHandler {
+    std::unique_ptr<InterfaceDecl> interfaceNode;
+    std::string currentKey;
+    bool expectingKey = false;
+    bool insideMethods = false;
+    
+    bool insideMethodDef = false;
+    MethodSignature currentMethod;
+public:
+    InterfaceBuilder(Builder* b) : StateHandler(b) { interfaceNode = std::make_unique<InterfaceDecl>(); }
+    bool OnMapStart() override;
+    bool OnMapEnd() override;
+    bool OnScalar(const std::string& value, const std::string& tag) override;
+    bool OnSequenceStart() override;
+    bool OnSequenceEnd() override;
+    std::unique_ptr<Node> finish() override;
+};
+
+// Parses an `enum:` node
+class EnumBuilder : public StateHandler {
+    std::unique_ptr<EnumDecl> enumNode;
+    std::string currentKey;
+    bool expectingKey = false;
+    bool insideValues = false;
+    int overrideValue = -1;
+    std::string activeValueName;
+public:
+    EnumBuilder(Builder* b) : StateHandler(b) { enumNode = std::make_unique<EnumDecl>(); }
+    bool OnMapStart() override;
+    bool OnMapEnd() override;
+    bool OnScalar(const std::string& value, const std::string& tag) override;
+    bool OnSequenceStart() override;
+    bool OnSequenceEnd() override;
+    std::unique_ptr<Node> finish() override;
+};
+
+// Parses a `namespace:` node (string value)
+class NamespaceBuilder : public StateHandler {
+    std::unique_ptr<NamespaceDecl> nsNode;
+    std::string currentKey;
+    bool expectingKey = false;
+public:
+    NamespaceBuilder(Builder* b) : StateHandler(b) { nsNode = std::make_unique<NamespaceDecl>(); }
+    bool OnMapStart() override { expectingKey = true; return true; }
+    bool OnMapEnd() override { builder->popState(); return true; }
+    bool OnScalar(const std::string& value, const std::string& tag) override;
+    std::unique_ptr<Node> finish() override;
+};
+
+// Parses an `import:` node (string value)
+class ImportBuilder : public StateHandler {
+    std::unique_ptr<ImportDecl> importNode;
+    std::string currentKey;
+    bool expectingKey = false;
+public:
+    ImportBuilder(Builder* b) : StateHandler(b) { importNode = std::make_unique<ImportDecl>(); }
+    bool OnMapStart() override { expectingKey = true; return true; }
+    bool OnMapEnd() override { builder->popState(); return true; }
+    bool OnScalar(const std::string& value, const std::string& tag) override;
+    std::unique_ptr<Node> finish() override;
+};
+
+// Parses a `config:` node (map value)
+class ConfigBuilder : public StateHandler {
+    std::unique_ptr<ConfigDecl> configNode;
+    std::string currentKey;
+    bool expectingKey = false;
+    bool insideConfig = false;
+public:
+    ConfigBuilder(Builder* b) : StateHandler(b) { configNode = std::make_unique<ConfigDecl>(); }
+    bool OnMapStart() override;
+    bool OnMapEnd() override;
+    bool OnScalar(const std::string& value, const std::string& tag) override;
+    std::unique_ptr<Node> finish() override;
+};
+
 // Parses a `def:` node
 class FunctionBuilder : public StateHandler {
     std::unique_ptr<FunctionDecl> func;

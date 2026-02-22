@@ -188,8 +188,36 @@ bool RootState::OnScalar(const std::string& value, const std::string& tag) {
              builder->pushState(std::make_unique<ControlFlowBuilder>(builder, currentKey));
              return true;
         }
+        else if (currentKey == "class") {
+             builder->pushState(std::make_unique<ClassBuilder>(builder));
+             return true;
+        }
+        else if (currentKey == "model") {
+             builder->pushState(std::make_unique<ModelBuilder>(builder));
+             return true;
+        }
+        else if (currentKey == "interface") {
+             builder->pushState(std::make_unique<InterfaceBuilder>(builder));
+             return true;
+        }
+        else if (currentKey == "enum") {
+             builder->pushState(std::make_unique<EnumBuilder>(builder));
+             return true;
+        }
+        else if (currentKey == "namespace") {
+             builder->pushState(std::make_unique<NamespaceBuilder>(builder));
+             return true;
+        }
+        else if (currentKey == "import") {
+             builder->pushState(std::make_unique<ImportBuilder>(builder));
+             return true;
+        }
+        else if (currentKey == "config") {
+             builder->pushState(std::make_unique<ConfigBuilder>(builder));
+             return true;
+        }
         
-        // Unhandled top-level (e.g. class, interface) 
+        // Unhandled top-level 
         builder->pushState(std::make_unique<SkipBuilder>(builder));
         return true;
     }
@@ -258,7 +286,9 @@ bool StatementBuilder::OnScalar(const std::string& value, const std::string& tag
 bool StatementBuilder::OnMapStart() {
     // A statement received a map, likely an expression like `set: [x, { add: [1, 2] }]`
     expectingValue = false;
-    builder->pushState(std::make_unique<ExpressionBuilder>(builder));
+    auto exprBuilder = std::make_unique<ExpressionBuilder>(builder);
+    exprBuilder->OnMapStart();
+    builder->pushState(std::move(exprBuilder));
     return true;
 }
 
@@ -492,7 +522,11 @@ bool ControlFlowBuilder::OnSequenceStart() {
     
     // Could also be an expression `cond: { eq: [...] }` but the ExpressionBuilder handles its own sequence.
     // If we reach here, maybe `cond` itself is a direct array? Push expression builder.
-    builder->pushState(std::make_unique<ExpressionBuilder>(builder));
+    auto exprBuilder = std::make_unique<ExpressionBuilder>(builder);
+    if (!expectingKey && currentKey == "cond") {
+        exprBuilder->OnMapStart();
+    }
+    builder->pushState(std::move(exprBuilder));
     return true;
 }
 
@@ -651,6 +685,311 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
     }
     return nullptr;
 }
+
+// --- ClassBuilder Implementation ---
+
+bool ClassBuilder::OnMapStart() {
+    expectingKey = true;
+    // If inside methods sequence and we start a map, it must be a method definition (e.g., `- def:`)
+    if (insideMethods && !expectingKey) {
+         // The YAML parser will send OnScalar("def") next.
+         // We can push a SkipBuilder for now, or let FunctionBuilder handle it.
+         // Actually, if it's a list of maps, OnMapStart triggers here.
+    }
+    return true;
+}
+
+bool ClassBuilder::OnMapEnd() {
+    if (insideMethods) return true; 
+    if (insideMembers) return true; // Ignore nested maps inside members like modifiers
+    builder->popState();
+    return true;
+}
+
+bool ClassBuilder::OnScalar(const std::string& value, const std::string& tag) {
+    if (expectingKey) {
+        currentKey = value;
+        expectingKey = false;
+        
+        if (insideMethods && currentKey == "def") {
+             builder->pushState(std::make_unique<FunctionBuilder>(builder));
+             return true;
+        }
+        return true;
+    }
+    
+    if (currentKey == "name") classNode->name = value;
+    else if (currentKey == "extends") classNode->parentName = value;
+    else if (currentKey == "version") {
+        if (!value.empty()) {
+            try { classNode->version = std::stoull(value); } catch (...) {}
+        }
+    }
+    else if (insideMembers) {
+        if (currentField.empty()) currentField = value;
+        else if (currentType.empty()) currentType = value;
+        // third value would be default, ignoring for now in AST
+    }
+    
+    if (!insideMembers && !insideMethods) expectingKey = true;
+    return true;
+}
+
+bool ClassBuilder::OnSequenceStart() {
+    if (currentKey == "members") insideMembers = true;
+    else if (currentKey == "methods") insideMethods = true;
+    else if (insideMembers) {
+        currentField = "";
+        currentType = "";
+    }
+    return true;
+}
+
+bool ClassBuilder::OnSequenceEnd() {
+    if (insideMembers) {
+        if (!currentField.empty() && !currentType.empty()) {
+            StructMember m; m.name = currentField; m.type = currentType;
+            classNode->members.push_back(std::move(m));
+            currentField = ""; currentType = "";
+            return true;
+        } else {
+            insideMembers = false;
+            expectingKey = true;
+        }
+    } else if (insideMethods) {
+        insideMethods = false;
+        expectingKey = true;
+    }
+    return true;
+}
+
+void ClassBuilder::receiveChildNode(std::unique_ptr<Node> node) {
+    if (auto f = dynamic_cast<FunctionDecl*>(node.get())) {
+        classNode->methods.push_back(std::unique_ptr<FunctionDecl>(static_cast<FunctionDecl*>(node.release())));
+        expectingKey = true; // wait for next map or end of sequence
+    }
+}
+
+std::unique_ptr<Node> ClassBuilder::finish() {
+    return std::move(classNode);
+}
+
+// --- ModelBuilder Implementation ---
+
+bool ModelBuilder::OnMapStart() {
+    expectingKey = true;
+    return true;
+}
+
+bool ModelBuilder::OnMapEnd() {
+    if (insideFields) return true;
+    builder->popState();
+    return true;
+}
+
+bool ModelBuilder::OnScalar(const std::string& value, const std::string& tag) {
+    if (expectingKey) {
+        currentKey = value;
+        expectingKey = false;
+        return true;
+    }
+    
+    if (currentKey == "name") modelNode->name = value;
+    else if (currentKey == "version") {
+        if (!value.empty()) {
+            try { modelNode->version = std::stoull(value); } catch (...) {}
+        }
+    }
+    else if (insideFields) {
+        if (currentField.empty()) currentField = value;
+        else if (currentType.empty()) currentType = value;
+    }
+    
+    if (!insideFields) expectingKey = true;
+    return true;
+}
+
+bool ModelBuilder::OnSequenceStart() {
+    if (currentKey == "fields") insideFields = true;
+    else if (insideFields) {
+        currentField = "";
+        currentType = "";
+    }
+    return true;
+}
+
+bool ModelBuilder::OnSequenceEnd() {
+    if (insideFields) {
+        if (!currentField.empty() && !currentType.empty()) {
+            StructMember m; m.name = currentField; m.type = currentType;
+            modelNode->fields.push_back(std::move(m));
+            currentField = ""; currentType = "";
+            return true;
+        } else {
+            insideFields = false;
+            expectingKey = true;
+        }
+    }
+    return true;
+}
+
+void ModelBuilder::receiveChildNode(std::unique_ptr<Node> node) { }
+std::unique_ptr<Node> ModelBuilder::finish() { return std::move(modelNode); }
+
+
+// --- InterfaceBuilder Implementation ---
+
+bool InterfaceBuilder::OnMapStart() {
+    expectingKey = true;
+    return true;
+}
+bool InterfaceBuilder::OnMapEnd() {
+    builder->popState();
+    return true;
+}
+bool InterfaceBuilder::OnScalar(const std::string& value, const std::string& tag) {
+    if (expectingKey) {
+        currentKey = value;
+        expectingKey = false;
+        return true;
+    }
+    if (currentKey == "name") interfaceNode->name = value;
+    else if (insideMethodDef) {
+        if (currentMethod.name.empty()) currentMethod.name = value;
+        else if (currentMethod.returnType.empty()) currentMethod.returnType = value;
+        // arguments would be in next sequence
+    }
+    if (!insideMethods) expectingKey = true;
+    return true;
+}
+bool InterfaceBuilder::OnSequenceStart() {
+    if (currentKey == "methods") insideMethods = true;
+    else if (insideMethods) { insideMethodDef = true; currentMethod.name = ""; currentMethod.returnType = ""; }
+    return true;
+}
+bool InterfaceBuilder::OnSequenceEnd() {
+    if (insideMethodDef) {
+        if (!currentMethod.name.empty()) {
+            interfaceNode->methods.push_back(currentMethod);
+        }
+        insideMethodDef = false;
+    } else if (insideMethods) {
+        insideMethods = false;
+        expectingKey = true;
+    }
+    return true;
+}
+std::unique_ptr<Node> InterfaceBuilder::finish() { return std::move(interfaceNode); }
+
+// --- EnumBuilder Implementation ---
+
+bool EnumBuilder::OnMapStart() {
+    expectingKey = true;
+    return true;
+}
+bool EnumBuilder::OnMapEnd() {
+    // If inside values map: `Green: 1`
+    if (insideValues) {
+        if (!activeValueName.empty() && overrideValue != -1) {
+             enumNode->values.push_back({activeValueName, overrideValue});
+        }
+        activeValueName = ""; overrideValue = -1;
+        return true; 
+    }
+    builder->popState();
+    return true;
+}
+bool EnumBuilder::OnScalar(const std::string& value, const std::string& tag) {
+    if (expectingKey) {
+        currentKey = value;
+        expectingKey = false;
+        if (insideValues) { activeValueName = value; expectingKey = false; }
+        return true;
+    }
+    if (currentKey == "name") enumNode->name = value;
+    else if (insideValues) {
+        if (!activeValueName.empty()) { overrideValue = std::stoi(value); }
+        else { enumNode->values.push_back({value, -1}); }
+    }
+    if (!insideValues) expectingKey = true;
+    return true;
+}
+bool EnumBuilder::OnSequenceStart() {
+    if (currentKey == "values") insideValues = true;
+    return true;
+}
+bool EnumBuilder::OnSequenceEnd() {
+    if (insideValues) { insideValues = false; expectingKey = true; }
+    return true;
+}
+std::unique_ptr<Node> EnumBuilder::finish() { 
+    // Fix implicit values
+    int current = 0;
+    for (auto& pair : enumNode->values) {
+         if (pair.second != -1) current = pair.second;
+         else pair.second = current;
+         current++;
+    }
+    return std::move(enumNode); 
+}
+
+// --- Modular Builders Implementation ---
+
+bool NamespaceBuilder::OnScalar(const std::string& value, const std::string& tag) {
+    if (expectingKey) {
+        currentKey = value;
+        expectingKey = false;
+        return true;
+    }
+    if (currentKey == "namespace") nsNode->name = value;
+    return true;
+}
+std::unique_ptr<Node> NamespaceBuilder::finish() { return std::move(nsNode); }
+
+bool ImportBuilder::OnScalar(const std::string& value, const std::string& tag) {
+    if (expectingKey) {
+        currentKey = value;
+        expectingKey = false;
+        return true;
+    }
+    if (currentKey == "import") importNode->path = value;
+    return true;
+}
+std::unique_ptr<Node> ImportBuilder::finish() { return std::move(importNode); }
+
+bool ConfigBuilder::OnMapStart() {
+    expectingKey = true;
+    return true;
+}
+bool ConfigBuilder::OnMapEnd() {
+    if (insideConfig) {
+        insideConfig = false;
+        return true;
+    }
+    builder->popState();
+    return true;
+}
+bool ConfigBuilder::OnScalar(const std::string& value, const std::string& tag) {
+    if (expectingKey) {
+        currentKey = value;
+        expectingKey = false;
+        if (currentKey == "config" && !insideConfig) {
+             insideConfig = true; // The value is a map, so next event is MapStart
+             expectingKey = true;
+        }
+        return true;
+    }
+    if (insideConfig) {
+        if (currentKey == "entrypoint") configNode->entryPoint = value;
+        else if (currentKey == "stack_size") configNode->stackSize = std::stoull(value);
+        else if (currentKey == "heap_size") configNode->heapSize = std::stoull(value);
+        else if (currentKey == "target") configNode->target = value;
+        else if (currentKey == "version") configNode->version = value;
+        expectingKey = true;
+    }
+    return true;
+}
+std::unique_ptr<Node> ConfigBuilder::finish() { return std::move(configNode); }
 
 } // namespace AST
 } // namespace AIML

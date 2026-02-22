@@ -1,5 +1,8 @@
 #!/bin/bash
 
+source ../../exvenv/bin/activate
+exodus build
+
 # Define the AIML executable path
 AIML_BIN="./build/aiml"
 if [ ! -f "$AIML_BIN" ]; then

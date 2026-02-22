@@ -156,6 +156,78 @@ public:
     std::string toString() const override { return "FunctionDecl(" + name + ")"; }
 };
 
+struct StructMember {
+    std::string name;
+    std::string type;
+    std::unique_ptr<Expr> initialValue; // Applicable for classes/models
+};
+
+struct MethodSignature {
+    std::string name;
+    std::string returnType;
+    std::vector<std::pair<std::string, std::string>> args;
+};
+
+class ClassDecl : public Node {
+public:
+    std::string name;
+    std::string parentName; // for "extends"
+    uint64_t version = 1;
+    std::vector<StructMember> members;
+    std::vector<std::unique_ptr<FunctionDecl>> methods;
+
+    std::string toString() const override { return "ClassDecl(" + name + ")"; }
+};
+
+class ModelDecl : public Node {
+public:
+    std::string name;
+    uint64_t version = 1;
+    std::vector<StructMember> fields;
+    
+    std::string toString() const override { return "ModelDecl(" + name + ")"; }
+};
+
+class InterfaceDecl : public Node {
+public:
+    std::string name;
+    std::vector<MethodSignature> methods;
+
+    std::string toString() const override { return "InterfaceDecl(" + name + ")"; }
+};
+
+class EnumDecl : public Node {
+public:
+    std::string name;
+    std::vector<std::pair<std::string, int>> values; // enum name, integer value
+
+    std::string toString() const override { return "EnumDecl(" + name + ")"; }
+};
+
+// --- Modular Declarations ---
+
+class NamespaceDecl : public Node {
+public:
+    std::string name;
+    std::string toString() const override { return "NamespaceDecl(" + name + ")"; }
+};
+
+class ImportDecl : public Node {
+public:
+    std::string path;
+    std::string toString() const override { return "ImportDecl(" + path + ")"; }
+};
+
+class ConfigDecl : public Node {
+public:
+    std::string entryPoint;
+    size_t stackSize = 0;
+    size_t heapSize = 0;
+    std::string target;
+    std::string version;
+    std::string toString() const override { return "ConfigDecl(...)"; }
+};
+
 class Program : public Node {
 public:
     std::vector<std::unique_ptr<Node>> declarations; // Functions, Classes, Global Stmts
