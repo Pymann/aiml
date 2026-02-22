@@ -10,15 +10,6 @@ namespace StringUtils {
     // MOVED TO utils.h for shared use
 
     inline llvm::Value* concat(CompilerContext& ctx, llvm::Value* s1, llvm::Value* s2) {
-        // char* concat(char* s1, char* s2)
-        // 1. len1 = strlen(s1)
-        // 2. len2 = strlen(s2)
-        // 3. new_len = len1 + len2 + 1
-        // 4. ptr = malloc(new_len)
-        // 5. strcpy(ptr, s1)
-        // 6. strcat(ptr, s2)
-        // 7. return ptr
-        
         llvm::Type* i8Ptr = ctx.builder.getInt8Ty()->getPointerTo();
         llvm::Type* i64 = ctx.builder.getInt64Ty();
 
@@ -27,16 +18,26 @@ namespace StringUtils {
         llvm::Function* strcpyFunc = ctx.getFunction("strcpy", i8Ptr, {i8Ptr, i8Ptr});
         llvm::Function* strcatFunc = ctx.getFunction("strcat", i8Ptr, {i8Ptr, i8Ptr});
 
-        llvm::Value* len1 = ctx.builder.CreateCall(strlenFunc, {s1});
-        llvm::Value* len2 = ctx.builder.CreateCall(strlenFunc, {s2});
+        // Null checks for s1 and s2
+        llvm::Value* nullPtr = llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo());
+        llvm::Value* emptyStr = ctx.builder.CreateGlobalStringPtr("");
+        
+        llvm::Value* isS1Null = ctx.builder.CreateICmpEQ(s1, nullPtr);
+        llvm::Value* safeS1 = ctx.builder.CreateSelect(isS1Null, emptyStr, s1);
+        
+        llvm::Value* isS2Null = ctx.builder.CreateICmpEQ(s2, nullPtr);
+        llvm::Value* safeS2 = ctx.builder.CreateSelect(isS2Null, emptyStr, s2);
+
+        llvm::Value* len1 = ctx.builder.CreateCall(strlenFunc, {safeS1});
+        llvm::Value* len2 = ctx.builder.CreateCall(strlenFunc, {safeS2});
         
         llvm::Value* sum = ctx.builder.CreateAdd(len1, len2);
         llvm::Value* size = ctx.builder.CreateAdd(sum, ctx.builder.getInt64(1)); // +1 for null
         
         llvm::Value* newStr = ctx.builder.CreateCall(mallocFunc, {size});
         
-        ctx.builder.CreateCall(strcpyFunc, {newStr, s1});
-        ctx.builder.CreateCall(strcatFunc, {newStr, s2});
+        ctx.builder.CreateCall(strcpyFunc, {newStr, safeS1});
+        ctx.builder.CreateCall(strcatFunc, {newStr, safeS2});
         
         return newStr;
     }

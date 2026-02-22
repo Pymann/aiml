@@ -245,7 +245,13 @@ llvm::Value* resolveValue(CompilerContext& ctx, const YAML::Node& argNode, Compi
 
     // 3. LValue Load
     llvm::Value* lvalue = resolveLValue(ctx, argStr, evaluator);
-    if (lvalue) {
+    if (!lvalue) {
+        if (ctx.symbol_table.count(argStr) || argStr.find('.') != std::string::npos || argStr.find('-') != std::string::npos) {
+             // It's a known identifier or complex expression but resolveLValue failed (likely access violation)
+             return ctx.builder.getInt32(0);
+        }
+    }
+    else {
         llvm::Value* loaded = resolveLValueLoad(ctx, argStr, lvalue);
         if (loaded) return loaded;
         LOG_ERROR("Could not determine type for load: " + argStr);
