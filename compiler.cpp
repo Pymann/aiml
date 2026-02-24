@@ -331,11 +331,12 @@ int AIMLCompiler::jitRun() {
     // Explicitly add malloc/free
     llvm::sys::DynamicLibrary::AddSymbol("malloc", (void*)(intptr_t)malloc);
     llvm::sys::DynamicLibrary::AddSymbol("free", (void*)(intptr_t)free);
-    llvm::sys::DynamicLibrary::AddSymbol("fflush", (void*)(intptr_t)fflush);
-    llvm::sys::DynamicLibrary::AddSymbol("fprintf", (void*)(intptr_t)fprintf);
-    llvm::sys::DynamicLibrary::AddSymbol("dprintf", (void*)(intptr_t)dprintf);
-    llvm::sys::DynamicLibrary::AddSymbol("fprintf", (void*)(intptr_t)fprintf);
-    llvm::sys::DynamicLibrary::AddSymbol("dprintf", (void*)(intptr_t)dprintf);
+    llvm::sys::DynamicLibrary::AddSymbol("strlen", (void*)(intptr_t)strlen);
+    llvm::sys::DynamicLibrary::AddSymbol("strcpy", (void*)(intptr_t)strcpy);
+    llvm::sys::DynamicLibrary::AddSymbol("strcat", (void*)(intptr_t)strcat);
+    llvm::sys::DynamicLibrary::AddSymbol("sprintf", (void*)(intptr_t)sprintf);
+    llvm::sys::DynamicLibrary::AddSymbol("strcmp", (void*)(intptr_t)strcmp);
+    llvm::sys::DynamicLibrary::AddSymbol("fdopen", (void*)(intptr_t)fdopen);
     
     // Runtime Library Symbols
     llvm::sys::DynamicLibrary::AddSymbol("time_now_ms", (void*)(intptr_t)time_now_ms);

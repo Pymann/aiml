@@ -5,4 +5,5 @@
     args: [[a, i32], [b, i32]]
     return: string
     body:
+      - print: "Inside my.lib.add, a=${a}, b=${b}"
       - return: "${ { +: [a, b] } }"
