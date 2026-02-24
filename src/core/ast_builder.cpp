@@ -1,4 +1,6 @@
+#define DEBUG_MODE
 #include "ast_builder.h"
+#include "../../logger.h"
 #include <iostream>
 #include <yaml-cpp/yaml.h>
 
@@ -104,6 +106,7 @@ void Builder::addDeclaration(std::unique_ptr<Node> node) {
 }
 
 void Builder::pushState(std::unique_ptr<StateHandler> state) {
+    LOG_DEBUG("Pushing new state into Builder stack.");
     stateStack.push(std::move(state));
 }
 
@@ -112,33 +115,126 @@ void Builder::popState() {
         auto finishedState = std::move(stateStack.top());
         stateStack.pop();
         
+        LOG_DEBUG("Popping state in Builder");
         auto finishedNode = finishedState->finish();
         if (finishedNode) {
+            LOG_DEBUG("Passing finishedNode to parent state.");
             stateStack.top()->receiveChildNode(std::move(finishedNode));
+        } else {
+            LOG_DEBUG("Finished state returned nullptr.");
         }
     }
 }
 
 // Event Router
 void Builder::OnScalar(const YAML::Mark&, const std::string& tag, YAML::anchor_t, const std::string& value) {
+    LOG_DEBUG("Router OnScalar: " + value);
     stateStack.top()->OnScalar(value, tag);
 }
 
 void Builder::OnSequenceStart(const YAML::Mark&, const std::string&, YAML::anchor_t, YAML::EmitterStyle::value) {
+    LOG_DEBUG("Router OnSequenceStart");
     stateStack.top()->OnSequenceStart();
 }
 
 void Builder::OnSequenceEnd() {
+    LOG_DEBUG("Router OnSequenceEnd");
     stateStack.top()->OnSequenceEnd();
 }
 
 void Builder::OnMapStart(const YAML::Mark&, const std::string&, YAML::anchor_t, YAML::EmitterStyle::value) {
+    LOG_DEBUG("Router OnMapStart");
     stateStack.top()->OnMapStart();
 }
 
 void Builder::OnMapEnd() {
+    LOG_DEBUG("Router OnMapEnd");
     stateStack.top()->OnMapEnd();
 }
+
+// --- TryBuilder Implementation ---
+
+class TryBuilder : public StateHandler {
+    std::unique_ptr<TryStmt> tryStmt;
+    std::string currentKey;
+    bool expectingKey = true;
+    int depth = 0;
+    
+public:
+    TryBuilder(Builder* b) : StateHandler(b), tryStmt(std::make_unique<TryStmt>()) {}
+
+    bool OnMapStart() override {
+        depth++;
+        expectingKey = true;
+        LOG_DEBUG("TryBuilder OnMapStart: depth=" + std::to_string(depth));
+        return true;
+    }
+
+    bool OnMapEnd() override {
+        depth--;
+        LOG_DEBUG("TryBuilder OnMapEnd: depth=" + std::to_string(depth));
+        if (depth == 0) {
+            builder->popState();
+        }
+        return true;
+    }
+
+    bool OnSequenceStart() override {
+        depth++;
+        LOG_DEBUG("TryBuilder OnSequenceStart: currentKey=" + currentKey + " depth=" + std::to_string(depth));
+        if (currentKey == "body") {
+            builder->pushState(std::make_unique<BlockBuilder>(builder));
+        }
+        return true;
+    }
+
+    bool OnSequenceEnd() override {
+        depth--;
+        expectingKey = true;
+        LOG_DEBUG("TryBuilder OnSequenceEnd: currentKey=" + currentKey + " depth=" + std::to_string(depth));
+        if (depth == 0) {
+            builder->popState();
+        }
+        return true;
+    }
+
+    bool OnScalar(const std::string& value, const std::string& tag) override {
+        if (expectingKey) {
+            currentKey = value;
+            expectingKey = false;
+            
+            if (currentKey == "catch") {
+                 expectingKey = true; 
+            }
+            return true;
+        } else {
+            if (currentKey == "type") tryStmt->catchType = value;
+            else if (currentKey == "var") tryStmt->catchVar = value;
+            expectingKey = true;
+            return true;
+        }
+    }
+
+    void receiveChildNode(std::unique_ptr<Node> node) override {
+        if (auto b = dynamic_cast<BlockStmt*>(node.get())) {
+            b = dynamic_cast<BlockStmt*>(node.release());
+            if (currentKey == "body") {
+                if (!tryStmt->tryBlock) {
+                    LOG_DEBUG("TryBuilder: Received tryBlock with " + std::to_string(b->statements.size()) + " statements");
+                    tryStmt->tryBlock = std::unique_ptr<BlockStmt>(b);
+                } else {
+                    LOG_DEBUG("TryBuilder: Received catchBlock with " + std::to_string(b->statements.size()) + " statements");
+                    tryStmt->catchBlock = std::unique_ptr<BlockStmt>(b);
+                }
+            }
+        }
+        expectingKey = true;
+    }
+
+    std::unique_ptr<Node> finish() override {
+        return std::move(tryStmt);
+    }
+};
 
 // --- RootState Implementation ---
 
@@ -188,6 +284,10 @@ bool RootState::OnScalar(const std::string& value, const std::string& tag) {
              builder->pushState(std::make_unique<ControlFlowBuilder>(builder, currentKey));
              return true;
         }
+        else if (currentKey == "try") {
+             builder->pushState(std::make_unique<TryBuilder>(builder));
+             return true;
+        }
         else if (currentKey == "class") {
              builder->pushState(std::make_unique<ClassBuilder>(builder));
              return true;
@@ -226,6 +326,7 @@ bool RootState::OnScalar(const std::string& value, const std::string& tag) {
 
 void RootState::receiveChildNode(std::unique_ptr<Node> node) {
     if (node) {
+        LOG_DEBUG("RootState received child node.");
         builder->addDeclaration(std::move(node));
     }
 }
@@ -352,11 +453,17 @@ std::unique_ptr<Node> StatementBuilder::finish() {
     }
     if (type == "print" && args.size() >= 1) {
          auto call = std::make_unique<CallExpr>("print");
-         if (args[0].second == "!") {
-             if (args[0].first.find("${") != std::string::npos) call->args.push_back(parseInterpolatedString(args[0].first));
-             else call->args.push_back(std::make_unique<LiteralExpr>(args[0].first, "string"));
-         } else {
-             call->args.push_back(std::make_unique<VariableExpr>(args[0].first));
+         for (size_t i = 0; i < args.size(); ++i) {
+             const std::string& val = args[i].first;
+             const std::string& tag = args[i].second;
+             if (tag == "!") {
+                 if (val.find("${") != std::string::npos) call->args.push_back(parseInterpolatedString(val));
+                 else call->args.push_back(std::make_unique<LiteralExpr>(val, "string"));
+             } else if (val == "true" || val == "false" || isdigit(val[0]) || (val.length() > 0 && val[0] == '-')) {
+                 call->args.push_back(std::make_unique<LiteralExpr>(val, "unknown"));
+             } else {
+                 call->args.push_back(std::make_unique<VariableExpr>(val));
+             }
          }
          return std::make_unique<ExprStmt>(std::move(call));
     }
@@ -364,6 +471,13 @@ std::unique_ptr<Node> StatementBuilder::finish() {
          auto ret = std::make_unique<RetStmt>();
          if (exprArg) ret->value = std::move(exprArg);
          return ret;
+    }
+    if (type == "throw") {
+         if (exprArg) return std::make_unique<ThrowStmt>(std::move(exprArg));
+         else {
+             LOG_ERROR("throw statement must have a value");
+             return nullptr;
+         }
     }
     return nullptr;
 }
@@ -390,6 +504,8 @@ bool BlockBuilder::OnMapEnd() {
 bool BlockBuilder::OnScalar(const std::string& value, const std::string& tag) {
     if (value == "if" || value == "while" || value == "ret") {
         builder->pushState(std::make_unique<ControlFlowBuilder>(builder, value));
+    } else if (value == "try") {
+        builder->pushState(std::make_unique<TryBuilder>(builder));
     } else {
         builder->pushState(std::make_unique<StatementBuilder>(builder, value));
     }
@@ -499,6 +615,12 @@ std::unique_ptr<Node> FunctionBuilder::finish() {
 // --- ControlFlowBuilder Implementation ---
 
 bool ControlFlowBuilder::OnMapStart() {
+    if (!expectingKey && (currentKey == "cond" || currentKey == "condition" || type == "ret")) {
+        auto exprBuilder = std::make_unique<ExpressionBuilder>(builder);
+        exprBuilder->OnMapStart();
+        builder->pushState(std::move(exprBuilder));
+        return true;
+    }
     expectingKey = true;
     return true; // We are inside e.g. `if: { cond: ..., then: ... }`
 }
@@ -523,7 +645,7 @@ bool ControlFlowBuilder::OnSequenceStart() {
     // Could also be an expression `cond: { eq: [...] }` but the ExpressionBuilder handles its own sequence.
     // If we reach here, maybe `cond` itself is a direct array? Push expression builder.
     auto exprBuilder = std::make_unique<ExpressionBuilder>(builder);
-    if (!expectingKey && currentKey == "cond") {
+    if (!expectingKey && (currentKey == "cond" || currentKey == "condition")) {
         exprBuilder->OnMapStart();
     }
     builder->pushState(std::move(exprBuilder));
@@ -540,7 +662,7 @@ bool ControlFlowBuilder::OnScalar(const std::string& value, const std::string& t
     // We are expecting a value for `cond:` or `ret:`
     // Example: `ret: 1` or `cond: true`
     if (!expectingKey) {
-        if (currentKey == "cond" || type == "ret") {
+        if (currentKey == "cond" || currentKey == "condition" || type == "ret") {
              if (tag == "!") {
                  if (value.find("${") != std::string::npos) condition = parseInterpolatedString(value);
                  else condition = std::make_unique<LiteralExpr>(value, "string");
@@ -557,13 +679,15 @@ bool ControlFlowBuilder::OnScalar(const std::string& value, const std::string& t
 }
 
 void ControlFlowBuilder::receiveChildNode(std::unique_ptr<Node> node) {
-    if (auto e = dynamic_cast<Expr*>(node.release())) {
+    if (auto e = dynamic_cast<Expr*>(node.get())) {
+        e = dynamic_cast<Expr*>(node.release());
         if (type == "ret") {
             condition = std::unique_ptr<Expr>(e);
-        } else if (currentKey == "cond") {
+        } else if (currentKey == "cond" || currentKey == "condition") {
             condition = std::unique_ptr<Expr>(e);
         }
-    } else if (auto b = dynamic_cast<BlockStmt*>(node.release())) {
+    } else if (auto b = dynamic_cast<BlockStmt*>(node.get())) {
+        b = dynamic_cast<BlockStmt*>(node.release());
         if (currentKey == "then") thenBranch = std::unique_ptr<BlockStmt>(b);
         else if (currentKey == "else") elseBranch = std::unique_ptr<BlockStmt>(b);
         else if (currentKey == "body") body = std::unique_ptr<BlockStmt>(b);
@@ -654,9 +778,6 @@ void ExpressionBuilder::receiveChildNode(std::unique_ptr<Node> node) {
 }
 
 std::unique_ptr<Node> ExpressionBuilder::finish() {
-    if (args.size() == 2) {
-         return std::make_unique<BinaryExpr>(op, std::move(args[0]), std::move(args[1]));
-    }
     if (op == "call" && !args.empty()) {
          auto callName = dynamic_cast<VariableExpr*>(args[0].get());
          auto callLiteral = dynamic_cast<LiteralExpr*>(args[0].get());
@@ -679,6 +800,9 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
          
          return std::make_unique<NewExpr>(name);
     }
+    if (args.size() == 2) {
+         return std::make_unique<BinaryExpr>(op, std::move(args[0]), std::move(args[1]));
+    }
     // Fallback: Just return a literal of the operation or wrap it
     if (args.size() == 1) {
          return std::move(args[0]); // A bit hacky: `not: x` becomes just `x`
@@ -689,94 +813,205 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
 // --- ClassBuilder Implementation ---
 
 bool ClassBuilder::OnMapStart() {
-    expectingKey = true;
-    // If inside methods sequence and we start a map, it must be a method definition (e.g., `- def:`)
-    if (insideMethods && !expectingKey) {
-         // The YAML parser will send OnScalar("def") next.
-         // We can push a SkipBuilder for now, or let FunctionBuilder handle it.
-         // Actually, if it's a list of maps, OnMapStart triggers here.
+    if (insideMembers && sequenceDepth == 2) {
+         if (memberAttrIndex == 2) {
+             // Let ExpressionBuilder handle the default value AST node
+             auto exprBuilder = std::make_unique<ExpressionBuilder>(builder);
+             exprBuilder->OnMapStart();
+             builder->pushState(std::move(exprBuilder));
+             return true;
+         }
+         if (memberAttrIndex == 3) {
+             // Handle modifiers map naturally
+             expectingKey = true;
+             return true;
+         }
     }
+    if (insideMethods) {
+        expectingKey = true;
+        return true; 
+    }
+    if (insideMembers || insideModels || insideImplements) {
+        return true;
+    }
+    
+    if (mapDepth++ > 0) return true;
+    expectingKey = true;
     return true;
 }
 
 bool ClassBuilder::OnMapEnd() {
-    if (insideMethods) return true; 
-    if (insideMembers) return true; // Ignore nested maps inside members like modifiers
+    if (insideMethods) return true;
+    if (insideMembers && sequenceDepth > 1) return true; // Map inside member types
+    if (--mapDepth > 0) return true;
     builder->popState();
     return true;
 }
 
 bool ClassBuilder::OnScalar(const std::string& value, const std::string& tag) {
-    if (expectingKey) {
+    if (insideMethods && expectingKey && value == "def") {
+         builder->pushState(std::make_unique<FunctionBuilder>(builder));
+         expectingKey = true; // For when FunctionBuilder returns
+         return true;
+    }
+
+    if (mapDepth > 1) return true;
+
+    // Ignore expectingKey if we are within a member definition sequence and not at the modifiers map yet
+    if (expectingKey && !(insideMembers && sequenceDepth == 2 && memberAttrIndex < 3)) {
         currentKey = value;
         expectingKey = false;
-        
-        if (insideMethods && currentKey == "def") {
-             builder->pushState(std::make_unique<FunctionBuilder>(builder));
-             return true;
-        }
         return true;
     }
     
-    if (currentKey == "name") classNode->name = value;
-    else if (currentKey == "extends") classNode->parentName = value;
-    else if (currentKey == "version") {
-        if (!value.empty()) {
-            try { classNode->version = std::stoull(value); } catch (...) {}
+    if (!insideMembers && !insideMethods && !insideModels && !insideImplements) {
+        if (currentKey == "name") classNode->name = value;
+        else if (currentKey == "extends") classNode->parentName = value;
+        else if (currentKey == "version") {
+            if (!value.empty()) {
+                try { classNode->version = std::stoull(value); } catch (...) {}
+            }
         }
     }
+    else if (insideModels) {
+        if (!value.empty()) classNode->models.push_back(value);
+    }
+    else if (insideImplements) {
+        if (!value.empty()) classNode->interfaces.push_back(value);
+    }
     else if (insideMembers) {
-        if (currentField.empty()) currentField = value;
-        else if (currentType.empty()) currentType = value;
-        // third value would be default, ignoring for now in AST
+        LOG_VERBOSE("insideMembers scalar: " + value);
+        if (sequenceDepth == 2) {
+            if (memberAttrIndex == 0) { currentField = value; memberAttrIndex++; return true; }
+            if (memberAttrIndex == 1) { currentType = value; memberAttrIndex++; return true; }
+            if (memberAttrIndex == 2) { 
+                 if (tag == "!") {
+                     currentInitValue = std::make_unique<LiteralExpr>(value, "string");
+                 } else if (value == "true" || value == "false" || isdigit(value[0]) || (value.length() > 0 && value[0] == '-')) {
+                     currentInitValue = std::make_unique<LiteralExpr>(value, "unknown");
+                 } else {
+                     currentInitValue = std::make_unique<VariableExpr>(value);
+                 }
+                 memberAttrIndex++;
+                 return true;
+            }
+            if (memberAttrIndex == 3) {
+                // We are inside the modifiers map!
+                if (!expectingKey) {
+                    if (currentKey == "version") {
+                        try { currentVersion = std::stoull(value); } catch(...) {}
+                    } else if (currentKey == "access") {
+                        currentAccess = value;
+                    }
+                    expectingKey = true;
+                } else {
+                    currentKey = value;
+                    expectingKey = false;
+                }
+                return true;
+            }
+        }
     }
     
-    if (!insideMembers && !insideMethods) expectingKey = true;
+    if (!insideMembers && !insideMethods && !insideModels && !insideImplements) expectingKey = true;
     return true;
 }
 
 bool ClassBuilder::OnSequenceStart() {
-    if (currentKey == "members") insideMembers = true;
-    else if (currentKey == "methods") insideMethods = true;
+    if (currentKey == "members") {
+        insideMembers = true;
+        currentKey = ""; // consumed
+        sequenceDepth++;
+    }
+    else if (currentKey == "methods") {
+        insideMethods = true;
+        currentKey = ""; // consumed
+    }
+    else if (currentKey == "models") {
+        insideModels = true;
+        currentKey = ""; // consumed
+    }
+    else if (currentKey == "implements") {
+        insideImplements = true;
+        currentKey = ""; // consumed
+    }
     else if (insideMembers) {
-        currentField = "";
-        currentType = "";
+        if (sequenceDepth == 2 && memberAttrIndex >= 2) {
+             auto exprBuilder = std::make_unique<ExpressionBuilder>(builder);
+             exprBuilder->OnSequenceStart();
+             builder->pushState(std::move(exprBuilder));
+             return true;
+        }
+        sequenceDepth++;
+        if (sequenceDepth == 2) {
+            memberAttrIndex = 0;
+            currentField = "";
+            currentType = "";
+            currentInitValue = nullptr;
+            currentVersion = 1;
+            currentAccess = "public";
+        }
     }
     return true;
 }
 
 bool ClassBuilder::OnSequenceEnd() {
     if (insideMembers) {
-        if (!currentField.empty() && !currentType.empty()) {
-            StructMember m; m.name = currentField; m.type = currentType;
-            classNode->members.push_back(std::move(m));
-            currentField = ""; currentType = "";
-            return true;
-        } else {
+        sequenceDepth--;
+        if (sequenceDepth == 1) {
+            if (!currentField.empty() && !currentType.empty()) {
+                StructMember m; m.name = currentField; m.type = currentType;
+                m.initialValue = std::move(currentInitValue);
+                m.version = currentVersion;
+                m.access = currentAccess;
+                classNode->members.push_back(std::move(m));
+                currentField = ""; currentType = "";
+                return true;
+            }
+        } else if (sequenceDepth == 0) {
             insideMembers = false;
             expectingKey = true;
         }
     } else if (insideMethods) {
         insideMethods = false;
         expectingKey = true;
+    } else if (insideModels) {
+        insideModels = false;
+        expectingKey = true;
+    } else if (insideImplements) {
+        insideImplements = false;
+        expectingKey = true;
     }
     return true;
 }
 
 void ClassBuilder::receiveChildNode(std::unique_ptr<Node> node) {
+    if (auto e = dynamic_cast<Expr*>(node.get())) {
+        e = dynamic_cast<Expr*>(node.release());
+        if (insideMembers && sequenceDepth == 2) {
+             if (memberAttrIndex == 2) {
+                  currentInitValue = std::unique_ptr<Expr>(e);
+             }
+             memberAttrIndex++;
+             return; 
+        }
+    }
     if (auto f = dynamic_cast<FunctionDecl*>(node.get())) {
+        LOG_DEBUG("ClassBuilder received method: " + f->name);
         classNode->methods.push_back(std::unique_ptr<FunctionDecl>(static_cast<FunctionDecl*>(node.release())));
         expectingKey = true; // wait for next map or end of sequence
     }
 }
 
 std::unique_ptr<Node> ClassBuilder::finish() {
+    LOG_DEBUG("ClassBuilder::finish called for class: " + classNode->name);
     return std::move(classNode);
 }
 
 // --- ModelBuilder Implementation ---
 
 bool ModelBuilder::OnMapStart() {
+    if (mapDepth++ > 0) return true;
     expectingKey = true;
     return true;
 }
@@ -788,6 +1023,8 @@ bool ModelBuilder::OnMapEnd() {
 }
 
 bool ModelBuilder::OnScalar(const std::string& value, const std::string& tag) {
+    if (mapDepth > 1) return true;
+
     if (expectingKey) {
         currentKey = value;
         expectingKey = false;
@@ -810,7 +1047,10 @@ bool ModelBuilder::OnScalar(const std::string& value, const std::string& tag) {
 }
 
 bool ModelBuilder::OnSequenceStart() {
-    if (currentKey == "fields") insideFields = true;
+    if (currentKey == "fields") {
+        insideFields = true;
+        currentKey = ""; // consumed
+    }
     else if (insideFields) {
         currentField = "";
         currentType = "";

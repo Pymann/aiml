@@ -12,6 +12,7 @@ public:
     
     void compile(Program* prog);
     void registerTypes(Program* prog);
+    void visitFunction(FunctionDecl* func);
     
 private:
     CompilerContext& ctx;
@@ -19,7 +20,6 @@ private:
     // Visit methods
     void registerTypeDecl(Node* node);
     void visitTopLevel(Node* node);
-    void visitFunction(FunctionDecl* func);
     
     void visitStatement(Stmt* stmt);
     void visitDeclStmt(DeclStmt* decl);
@@ -29,6 +29,8 @@ private:
     void visitBlockStmt(BlockStmt* block);
     void visitIfStmt(IfStmt* ifStmt);
     void visitWhileStmt(WhileStmt* whileStmt);
+    void visitTry(TryStmt* tryStmt);
+    void visitThrow(ThrowStmt* throwStmt);
     
     IRValue* visitExpression(Expr* expr);
     IRValue* visitLiteral(LiteralExpr* lit);

@@ -63,6 +63,7 @@ const llvm::Module& AIMLCompiler::getModule() const {
 #include "src/core/ir_generator.h"
 #include "src/core/ast_builder.h"
 #include "src/core/ast_compiler.h"
+#include <unordered_set>
 
 // ... (Functions compile, compileToObject, etc.)
 
@@ -86,6 +87,10 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
 
     ctx.resolveImportCallback = [this, &ctx](const std::string& path) {
+        static std::unordered_set<std::string> parsedImports;
+        if (parsedImports.count(path)) return;
+        parsedImports.insert(path);
+        
         this->resolveImport(path);
         
         // Important: also copy over the linked objects discovered!
@@ -97,6 +102,9 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
         
         // Header-Only Mode for current compiler: Parse the import for signatures!
         std::string prevNs = ctx.currentNamespace;
+        bool prevHeaderOnly = ctx.headerOnlyMode;
+        ctx.headerOnlyMode = true;
+        
         AIML::AST::Builder subBuilder;
         std::ifstream fin(path);
         if (fin.is_open()) {
@@ -107,14 +115,20 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                 if (subProg) {
                     AIML::AST::Compiler subCompiler(ctx);
                     subCompiler.registerTypes(subProg.get());
+                    for (const auto& decl : subProg->declarations) {
+                        if (auto func = dynamic_cast<AIML::AST::FunctionDecl*>(decl.get())) {
+                            subCompiler.visitFunction(func);
+                        }
+                    }
                 }
             } catch (...) {
                 LOG_ERROR("Failed to parse import signatures: " + path);
             }
         }
         ctx.currentNamespace = prevNs;
+        ctx.headerOnlyMode = prevHeaderOnly;
     };
-
+    
     // 4. Parse YAML to AST & Compile (Two-Pass)
     AIML::AST::Builder astBuilder;
     try {
@@ -162,9 +176,6 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     entryPointName = ctx.config.entryPointName;
 
     LOG_DEBUG("Compiled to " + outputFilename);
-    
-    // TEMPORARY: Dump module to see what's wrong with __aiml_init
-    module_->print(llvm::errs(), nullptr);
 }
 
 void AIMLCompiler::generateEntryPoint() {
@@ -425,22 +436,50 @@ llvm::Function* AIMLCompiler::getPrintfPrototype(llvm::Module& module, llvm::IRB
 
 namespace fs = std::filesystem;
 
+static std::string getCacheDir() {
+    const char* envCache = std::getenv("AIML_CACHE");
+    if (envCache && std::strlen(envCache) > 0) {
+        return std::string(envCache);
+    }
+    return "__aiml_cache";
+}
+
+static std::string computeSHA512(const std::string& path) {
+    std::string command = "sha512sum \"" + path + "\" 2>/dev/null";
+    char buffer[128];
+    std::string result = "";
+    FILE* pipe = popen(command.c_str(), "r");
+    if (!pipe) return "";
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        result += buffer;
+    }
+    pclose(pipe);
+    // sha512sum outputs: "<hash>  <filename>"
+    size_t spacePos = result.find(' ');
+    if (spacePos != std::string::npos) {
+        return result.substr(0, spacePos);
+    }
+    return result;
+}
+
 bool AIMLCompiler::checkCache(const std::string& sourcePath, std::string& outHash) {
     if (!fs::exists(sourcePath)) {
         LOG_ERROR("Import source not found: " + sourcePath);
         return false;
     }
     
-    // Hash based on file size and modification time for fast checks
-    auto ftime = fs::last_write_time(sourcePath);
-    auto fsize = fs::file_size(sourcePath);
+    outHash = computeSHA512(sourcePath);
+    if (outHash.empty()) {
+        LOG_WARNING("Failed to compute SHA512 for " + sourcePath + ". Falling back to modification time.");
+        auto ftime = fs::last_write_time(sourcePath);
+        auto fsize = fs::file_size(sourcePath);
+        std::stringstream ss;
+        ss << ftime.time_since_epoch().count() << "_" << fsize;
+        std::hash<std::string> hasher;
+        outHash = std::to_string(hasher(ss.str()));
+    }
     
-    std::stringstream ss;
-    ss << ftime.time_since_epoch().count() << "_" << fsize;
-    std::hash<std::string> hasher;
-    outHash = std::to_string(hasher(ss.str()));
-    
-    std::string cacheDir = "__aiml_cache";
+    std::string cacheDir = getCacheDir();
     if (!fs::exists(cacheDir)) {
         fs::create_directory(cacheDir);
     }
@@ -466,7 +505,7 @@ void AIMLCompiler::resolveImport(const std::string& path) {
     std::string outHash;
     if (checkCache(path, outHash)) {
         LOG_INFO("Cache HIT for import: " + path);
-        std::string objPath = "__aiml_cache/" + fs::path(path).filename().string() + ".o";
+        std::string objPath = getCacheDir() + "/" + fs::path(path).filename().string() + ".o";
         linkedObjects.push_back(objPath);
         return;
     }
@@ -477,11 +516,12 @@ void AIMLCompiler::resolveImport(const std::string& path) {
     AIMLCompiler subCompiler;
     subCompiler.compilerPath = this->compilerPath;
     
-    std::string objPath = "__aiml_cache/" + fs::path(path).filename().string() + ".o";
+    std::string objPath = getCacheDir() + "/" + fs::path(path).filename().string() + ".o";
+    subCompiler.compile(path, "/dev/null");
     subCompiler.compileToObject(path, objPath);
     
     // Update manifest
-    std::string manifestPath = "__aiml_cache/compilations.yaml";
+    std::string manifestPath = getCacheDir() + "/compilations.yaml";
     YAML::Node manifest;
     if (fs::exists(manifestPath)) {
         try { manifest = YAML::LoadFile(manifestPath); } catch (...) {}

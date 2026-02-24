@@ -2,11 +2,15 @@
 
 source ../../exvenv/bin/activate
 exodus build
+if [ $? -ne 0 ]; then
+    echo "Error: Compilation failed. Aborting tests."
+    exit 1
+fi
 
 # Define the AIML executable path
-AIML_BIN="./build/aiml"
+AIML_BIN="./out/aiml"
 if [ ! -f "$AIML_BIN" ]; then
-    AIML_BIN="./out/aiml"
+    AIML_BIN="./build/aiml"
 fi
 
 # Define the output file
@@ -15,9 +19,14 @@ OUTPUT_FILE="test_results.txt"
 # Clear the output file
 > "$OUTPUT_FILE"
 
+# Check for custom AIML_CACHE environment variable
+if [ -z "$AIML_CACHE" ]; then
+    AIML_CACHE="__aiml_cache"
+fi
+
 # Clear the AIML cache
-echo "Clearing AIML Cache..." | tee -a "$OUTPUT_FILE"
-rm -rf __aiml_cache
+echo "Clearing AIML Cache ($AIML_CACHE)..." | tee -a "$OUTPUT_FILE"
+rm -rf "$AIML_CACHE"
 
 echo "Running AIML Tests..." | tee -a "$OUTPUT_FILE"
 echo "======================" | tee -a "$OUTPUT_FILE"

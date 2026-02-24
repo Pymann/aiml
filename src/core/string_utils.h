@@ -80,7 +80,7 @@ namespace StringUtils {
         return buf;
     }
 
-    inline llvm::Value* expandExpression(CompilerContext& ctx, const std::string& input, CompilerContext::Evaluator evaluator) {
+    inline llvm::Value* expandExpression(CompilerContext& ctx, const std::string& input, std::function<llvm::Value*(CompilerContext&, const YAML::Node&)> evaluator) {
         llvm::Value* currentStr = ctx.builder.CreateGlobalStringPtr("");
         
         size_t pos = 0;

@@ -13,6 +13,12 @@
 #include <set>
 #include "ir_generator.h"
 
+namespace AIML {
+    namespace AST {
+        class Expr;
+    }
+}
+
     enum class AccessLevel { Public, Private, Protected };
     
     struct Symbol {
@@ -74,9 +80,7 @@
             bool is_const = false;
             bool is_volatile = false;
             uint64_t version = 1; // Version of the field (u64)
-            // storing init value: simple literal or expression node?
-            // For simplicity, let's store the raw YAML node if provided, so we can evaluate it during 'new'
-            YAML::Node initValue; 
+            std::shared_ptr<AIML::AST::Expr> initValue; 
         };
 
         struct ClassInfo {
@@ -130,6 +134,7 @@
     std::unique_ptr<AIML::IRGenerator> ir_gen;
 
     // Exception Handling State
+    llvm::BasicBlock* catchBlock = nullptr;
     llvm::BasicBlock* currentExceptionBlock = nullptr;
     AIML::IRBlock* ir_exception_block = nullptr;
 
@@ -292,6 +297,14 @@
             }
         }
 
+        if (typeName.rfind("ptr<", 0) == 0 && typeName.back() == '>') {
+            return getLLVMType(typeName.substr(4, typeName.length() - 5))->getPointerTo();
+        }
+        if (typeName.rfind("ref<", 0) == 0 && typeName.back() == '>') {
+            return getLLVMType(typeName.substr(4, typeName.length() - 5))->getPointerTo();
+        }
+        if (typeName == "ptr") return llvm::Type::getInt8Ty(context)->getPointerTo();
+        
         if (typeName == "any") return llvm::Type::getInt8Ty(context)->getPointerTo();
         if (typeName == "i8" || typeName == "i8_least" || typeName == "i8_fast") return llvm::Type::getInt8Ty(context);
         if (typeName == "i16") return llvm::Type::getInt16Ty(context);

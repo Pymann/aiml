@@ -1,8 +1,10 @@
+#define DEBUG_MODE
 #include "ast_compiler.h"
 #include "list_impl.h"
 #include "map_impl.h"
 #include "buffer_impl.h"
 #include "string_utils.h"
+#include "expression.h"
 #include <iostream>
 
 namespace AIML {
@@ -34,6 +36,39 @@ void Compiler::compile(Program* prog) {
 
 void Compiler::registerTypes(Program* prog) {
     if (!prog) return;
+
+    // Inject BuiltIn Exception Classes
+    std::vector<std::string> builtinExceptions = {
+        "Exception", "NullPointerException", "TypeMismatchException", "IndexOutOfBoundsException",
+        "DivisionByZeroException", "StackOverflowException", "OutOfMemoryException", "TimeoutException",
+        "SerializationException", "DeserializationException", "BufferOverflowException", "BufferUnderflowException"
+    };
+
+    for (const auto& excName : builtinExceptions) {
+        if (!ctx.classes.count(excName)) {
+             CompilerContext::ClassInfo classInfo;
+             classInfo.name = excName;
+             classInfo.version = 0;
+             classInfo.parentName = excName == "Exception" ? "" : "Exception";
+             
+             CompilerContext::StructMember msgMember;
+             msgMember.typeName = "string";
+             msgMember.type = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType("string")));
+             msgMember.index = 0;
+             msgMember.access = AccessLevel::Public;
+             classInfo.members["message"] = msgMember;
+             
+             std::vector<llvm::Type*> llvmMemberTypes;
+             llvmMemberTypes.push_back(msgMember.type);
+             
+             llvm::StructType* structType = llvm::StructType::create(ctx.context, excName);
+             structType->setBody(llvmMemberTypes);
+             classInfo.type = structType;
+             
+             ctx.classes[excName] = classInfo;
+        }
+    }
+
     for (const auto& decl : prog->declarations) {
         registerTypeDecl(decl.get());
     }
@@ -80,10 +115,25 @@ void Compiler::registerTypeDecl(Node* node) {
                  LOG_ERROR("Unknown parent class: " + classInfo.parentName);
              }
         }
+        
+        // 1.5 Models (Mixins)
+        for (const auto& modelName : cls->models) {
+             if (ctx.classes.count(modelName)) {
+                 const auto& modelInfo = ctx.classes[modelName];
+                 // Models are appended sequentially after parent fields
+                 for (auto [name, member] : modelInfo.members) {
+                     // Need to re-index so they follow sequentially
+                     orderedMembers.push_back({name, member});
+                 }
+             } else {
+                 LOG_ERROR("Unknown model: " + modelName);
+             }
+        }
+        
         currentIndex = orderedMembers.size();
         
         // 2. Class Members (Parsed from AST)
-        for (const auto& astMember : cls->members) {
+        for (auto& astMember : cls->members) {
             std::string memberName = astMember.name;
             std::string typeName = astMember.type;
             
@@ -104,6 +154,12 @@ void Compiler::registerTypeDecl(Node* node) {
             member.index = currentIndex++;
             member.type = memberType;
             member.typeName = typeName;
+            member.version = astMember.version;
+            member.initValue = std::shared_ptr<Expr>(const_cast<Expr*>(astMember.initialValue.release()));
+            
+            if (astMember.access == "public") member.access = AccessLevel::Public;
+            else if (astMember.access == "private") member.access = AccessLevel::Private;
+            else if (astMember.access == "protected") member.access = AccessLevel::Protected;
             
             // Note: Access modifiers, const, and volatile are intentionally lost here 
             // since they weren't fully parsed by the new ClassBuilder yet (it ignored the 3rd/4th elements).
@@ -188,12 +244,21 @@ void Compiler::visitTopLevel(Node* node) {
         visitFunction(func);
     } else if (auto stmt = dynamic_cast<Stmt*>(node)) {
         visitStatement(stmt);
+    } else if (auto cls = dynamic_cast<ClassDecl*>(node)) {
+        for (const auto& method : cls->methods) {
+            std::string oldName = method->name;
+            method->name = cls->name + "_" + method->name;
+            auto it = method->args.insert(method->args.begin(), {"this", "ref<" + cls->name + ">"});
+            visitFunction(method.get());
+            method->args.erase(it);
+            method->name = oldName;
+        }
     }
 }
 
 void Compiler::visitFunction(FunctionDecl* func) {
     // Basic mapping using our old context structure for now
-    std::string mangledName = func->name;
+    std::string mangledName = ctx.qualify(func->name);
     
     std::vector<IRType*> argTypes;
     std::vector<std::string> argNames;
@@ -296,6 +361,8 @@ void Compiler::visitStatement(Stmt* stmt) {
     else if (auto blockStmt = dynamic_cast<BlockStmt*>(stmt)) visitBlockStmt(blockStmt);
     else if (auto ifStmt = dynamic_cast<IfStmt*>(stmt)) visitIfStmt(ifStmt);
     else if (auto whileStmt = dynamic_cast<WhileStmt*>(stmt)) visitWhileStmt(whileStmt);
+    else if (auto tryStmt = dynamic_cast<TryStmt*>(stmt)) visitTry(tryStmt);
+    else if (auto throwStmt = dynamic_cast<ThrowStmt*>(stmt)) visitThrow(throwStmt);
 }
 
 void Compiler::visitDeclStmt(DeclStmt* decl) {
@@ -345,6 +412,9 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
 
 void Compiler::visitSetStmt(SetStmt* setStmt) {
     std::string targetStr = setStmt->target;
+    if (targetStr.find("<.") == 0) {
+        targetStr = "this." + targetStr.substr(2);
+    }
     
     // Support dot-notation (obj.prop) and dash-notation (arr-index)
     size_t dotPos = targetStr.find('.');
@@ -355,24 +425,27 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     std::string baseName = (sepPos != std::string::npos) ? targetStr.substr(0, sepPos) : targetStr;
     std::string propName = (sepPos != std::string::npos) ? targetStr.substr(sepPos + 1) : "";
 
-    auto it = ctx.symbol_table.find(baseName);
-    if (it == ctx.symbol_table.end()) {
-        std::cerr << "Undefined variable (set target): " << targetStr << "\n";
+    Symbol* sym = resolveVariable(baseName);
+    if (!sym) {
+        LOG_ERROR("Undefined variable (set target): " + targetStr);
         return;
     }
     
-    IRValue* baseAlloca = it->second.ir_alloca_inst ? it->second.ir_alloca_inst : ctx.ir_gen->wrap(it->second.alloca_inst);
-    IRType* baseElemTy = it->second.ir_element_type ? it->second.ir_element_type : ctx.ir_gen->wrapType(it->second.element_type);
+    IRValue* baseAlloca = sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst);
+    IRType* baseElemTy = sym->ir_element_type ? sym->ir_element_type : ctx.ir_gen->wrapType(sym->element_type);
     
     if (!baseAlloca) return;
     
     IRValue* val = visitExpression(setStmt->value.get());
-    if (!val) return;
+    if (!val) {
+        LOG_ERROR("Failed to evaluate value expression for assignment to: " + targetStr);
+        return;
+    }
     
     if (propName.empty()) {
         ctx.ir_gen->createStore(val, baseAlloca);
     } else {
-        std::string className = it->second.typeName;
+        std::string className = sym->typeName;
         if ((className.rfind("ptr<", 0) == 0 || className.rfind("ref<", 0) == 0) && className.back() == '>') {
              className = className.substr(4, className.length() - 5);
         }
@@ -381,7 +454,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         if (isDash && (className.find("list<") == 0 || llvmBaseElemTy->isArrayTy())) {
             size_t colonPos = propName.find(':');
             if (colonPos != std::string::npos) {
-                std::cerr << "Warning: Slice assignment is not supported yet: " << targetStr << "\n";
+                LOG_ERROR("Slice assignment is not supported yet: " + targetStr);
                 return;
             }
             
@@ -440,7 +513,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 return;
             }
         }
-        std::cerr << "Undefined property for set: " << targetStr << "\n";
+        LOG_ERROR("Undefined property for set: " + targetStr);
     }
 }
 
@@ -449,12 +522,25 @@ void Compiler::visitExprStmt(ExprStmt* exprStmt) {
 }
 
 void Compiler::visitRetStmt(RetStmt* retStmt) {
+    llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
+    llvm::Type* retTy = currentFunc->getReturnType();
+    
     if (retStmt->value) {
         IRValue* val = visitExpression(retStmt->value.get());
-        if (val) ctx.ir_gen->createRet(val);
-        else ctx.ir_gen->createRet(nullptr);
+        if (val) {
+            ctx.ir_gen->createRet(val);
+        } else {
+             LOG_ERROR("Failed to evaluate return expression");
+             if (!retTy->isVoidTy()) ctx.ir_gen->createRet(ctx.ir_gen->wrap(llvm::Constant::getNullValue(retTy)));
+             else ctx.ir_gen->createRet(nullptr);
+        }
     } else {
-        ctx.ir_gen->createRet(nullptr);
+        if (!retTy->isVoidTy()) {
+             LOG_ERROR("Empty return statement in non-void function!");
+             ctx.ir_gen->createRet(ctx.ir_gen->wrap(llvm::Constant::getNullValue(retTy)));
+        } else {
+             ctx.ir_gen->createRet(nullptr);
+        }
     }
 }
 
@@ -539,6 +625,154 @@ void Compiler::visitWhileStmt(WhileStmt* whileStmt) {
     ctx.ir_gen->setInsertPoint(endBB);
 }
 
+void Compiler::visitTry(TryStmt* tryStmt) {
+    LOG_DEBUG("Compiling TryStmt. Has TryBlock: " + std::to_string(tryStmt->tryBlock != nullptr));
+    if (!tryStmt->tryBlock) {
+        LOG_ERROR("AST Error: Try statement is missing a body. The try block will not execute.");
+        return; 
+    }
+
+    llvm::Function* func = ctx.builder.GetInsertBlock()->getParent();
+
+    llvm::BasicBlock* tryBlock = llvm::BasicBlock::Create(ctx.context, "try_block", func);
+    llvm::BasicBlock* catchBlock = llvm::BasicBlock::Create(ctx.context, "catch_block", func);
+    llvm::BasicBlock* contBlock = llvm::BasicBlock::Create(ctx.context, "try_cont", func);
+
+    ctx.builder.CreateBr(tryBlock);
+    ctx.builder.SetInsertPoint(tryBlock);
+
+    // Save previous catch block logically if we implement nested tries.
+    // For now, assume top-level single try/catch handling via IRGen's context or just emit blocks.
+    // To properly support invoke, any call inside tryBlock must be an invoke.
+    // Since we don't know which call throws, we need to instruct ir_gen to use invoke instead of call!
+    // We'll set a state in ctx to emit invokes to our catch block.
+    
+    llvm::BasicBlock* oldCatch = ctx.catchBlock;
+    ctx.catchBlock = catchBlock;
+
+    if (tryStmt->tryBlock) {
+        visitBlockStmt(tryStmt->tryBlock.get());
+    }
+    
+    // Jump to contBlock if we haven't returned/thrown
+    if (!ctx.builder.GetInsertBlock()->getTerminator()) {
+        ctx.builder.CreateBr(contBlock);
+    }
+
+    // Restore catch block
+    ctx.catchBlock = oldCatch;
+
+    ctx.builder.SetInsertPoint(catchBlock);
+    
+    // Emit LandingPad
+    llvm::PointerType* ptrTy = llvm::PointerType::getUnqual(ctx.context);
+    llvm::StructType* landingPadTy = llvm::StructType::get(ctx.context, {ptrTy, ctx.builder.getInt32Ty()});
+    llvm::LandingPadInst* lpad = ctx.builder.CreateLandingPad(landingPadTy, 1, "lpad");
+    
+    // We only catch C++ exceptions (or our own type) roughly.
+    // We need typeinfo of __cxa_exceptio n or equivalent.
+    // Null catches all in C++ LLVM IR usually: `catch i8* null`
+    lpad->addClause(llvm::ConstantPointerNull::get(ptrTy));
+    lpad->setCleanup(false); // We are catching it.
+    
+    // Extract exception pointer
+    llvm::Value* excPtr = ctx.builder.CreateExtractValue(lpad, 0, "exc_ptr");
+
+    // Begin Catch
+    llvm::Function* beginCatchFunc = ctx.module.getFunction("__cxa_begin_catch");
+    if (!beginCatchFunc) {
+        llvm::FunctionType* fty = llvm::FunctionType::get(ptrTy, {ptrTy}, false);
+        beginCatchFunc = llvm::Function::Create(fty, llvm::Function::ExternalLinkage, "__cxa_begin_catch", ctx.module);
+    }
+    
+    llvm::Value* rawExc = ctx.builder.CreateCall(beginCatchFunc, {excPtr}, "raw_exc");
+    
+    // If catch type specified, cast to it. 
+    // Wait, AIML dynamic typing or we cast to an Object base?
+    // For MVP we just give them the pointer and let them cast, or assume it is an Exception object.
+    
+    if (tryStmt->catchBlock && !tryStmt->catchVar.empty()) {
+        // Assume exception is a ptr to `catchType` struct
+        llvm::Type* excType = ctx.getLLVMType(tryStmt->catchType);
+        if (!excType) excType = ctx.builder.getInt8Ty(); // fallback
+        
+        // Since Opaque Pointers (LLVM 18), we don't need BitCast for ptr -> ptr!
+        // We just use the ptr rawExc directly, but wrap it in our IRSystem
+        llvm::Value* userExc = rawExc;
+        
+        // Register variable in scope
+        IRType* targetTy = ctx.ir_gen->wrapType(ptrTy); // Opaque pointer
+        IRValue* alloca = ctx.ir_gen->createAlloca(targetTy, tryStmt->catchVar);
+        ctx.builder.CreateStore(userExc, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca)));
+        
+        Symbol sym;
+        sym.ir_alloca_inst = alloca;
+        sym.ir_type = ctx.ir_gen->getPointerTy();
+        sym.ir_element_type = targetTy;
+        sym.typeName = tryStmt->catchType;
+        ctx.symbol_table[tryStmt->catchVar] = sym;
+        
+        visitBlockStmt(tryStmt->catchBlock.get());
+    }
+
+    // End Catch
+    llvm::Function* endCatchFunc = ctx.module.getFunction("__cxa_end_catch");
+    if (!endCatchFunc) {
+        llvm::FunctionType* fty = llvm::FunctionType::get(ctx.builder.getVoidTy(), false);
+        endCatchFunc = llvm::Function::Create(fty, llvm::Function::ExternalLinkage, "__cxa_end_catch", ctx.module);
+    }
+    
+    if (!ctx.builder.GetInsertBlock()->getTerminator()) {
+        ctx.builder.CreateCall(endCatchFunc);
+        ctx.builder.CreateBr(contBlock);
+    } else {
+        // If it terminates, we still need to end catch before returning/throwing?
+        // Actually C++ requires invoking end_catch before returning from catch!
+        // This is complex for MVP, we'll assume people don't branch directly out of catch without it manually, 
+        // or we just put it right before.
+    }
+
+    ctx.builder.SetInsertPoint(contBlock);
+}
+
+void Compiler::visitThrow(ThrowStmt* throwStmt) {
+    if (!throwStmt->value) return;
+    
+    IRValue* excVal = visitExpression(throwStmt->value.get());
+    if (!excVal) return;
+
+    llvm::Value* rawObj = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(excVal));
+    llvm::PointerType* ptrTy = llvm::PointerType::getUnqual(ctx.context);
+
+    llvm::Function* allocExcFunc = ctx.module.getFunction("__cxa_allocate_exception");
+    if (!allocExcFunc) {
+        llvm::FunctionType* fty = llvm::FunctionType::get(ptrTy, {ctx.builder.getInt64Ty()}, false);
+        allocExcFunc = llvm::Function::Create(fty, llvm::Function::ExternalLinkage, "__cxa_allocate_exception", ctx.module);
+    }
+
+    llvm::Function* throwFunc = ctx.module.getFunction("__cxa_throw");
+    if (!throwFunc) {
+        llvm::FunctionType* fty = llvm::FunctionType::get(ctx.builder.getVoidTy(), 
+            {ptrTy, ptrTy, ptrTy}, false);
+        throwFunc = llvm::Function::Create(fty, llvm::Function::ExternalLinkage, "__cxa_throw", ctx.module);
+    }
+
+    const llvm::DataLayout& dl = ctx.module.getDataLayout();
+    uint64_t excSize = 8; // Pointer size for thrown object reference
+    
+    llvm::Value* excAlloc = ctx.builder.CreateCall(allocExcFunc, {ctx.builder.getInt64(excSize)}, "exc_alloc");
+    
+    // cast rawObj to i8* and store it in excAlloc? No, AIML uses objects. We can just store the pointer.
+    // With Opaque Pointers, excAlloc is `ptr`. `rawObj` is `ptr`.
+    ctx.builder.CreateStore(rawObj, excAlloc);
+
+    llvm::Value* nullTypeInfo = llvm::ConstantPointerNull::get(ptrTy);
+    llvm::Value* nullDtor = llvm::ConstantPointerNull::get(ptrTy);
+
+    ctx.builder.CreateCall(throwFunc, {excAlloc, nullTypeInfo, nullDtor});
+    ctx.builder.CreateUnreachable();
+}
+
 IRValue* Compiler::visitExpression(Expr* expr) {
     if (auto lit = dynamic_cast<LiteralExpr*>(expr)) return visitLiteral(lit);
     if (auto var = dynamic_cast<VariableExpr*>(expr)) return visitVariable(var);
@@ -604,15 +838,20 @@ IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
         // Auto-initialize defined members
         auto& classInfo = ctx.classes[className];
         for (auto& [name, member] : classInfo.members) {
-             if (member.initValue.IsDefined() && !member.initValue.IsNull()) {
-                  // Legacy evaluation bridge for AST... it's a bit dirty, wait!
-                  // Ideally the AST `DeclStmt` doesn't have YAML nodes for `initValue`.
-                  // Since `AST::ClassDecl` will eventually replace YAML nodes, we might skip initialization here
-                  // in favor of generating initialization code in a constructor function.
-                  // For now, let's keep it simple: skip YAML evaluation in AST Compiler for `new`.
-                  // The user can just initialize themselves. Wait, the old compiler did `evaluate`.
-                  // But `evaluator` evaluates YAML nodes! Since we are purely AST, we don't have evaluator here!
-                  // We'll skip member defaults for the {new: Point} command since it's just allocation!
+             if (member.initValue != nullptr) {
+                  IRValue* fieldInitV = visitExpression(member.initValue.get());
+                  if (fieldInitV) {
+                      llvm::Value* initVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldInitV));
+                      if (initVal) {
+                          llvm::Value* rawPtrCast = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rawPtr));
+                          llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(classInfo.type, rawPtrCast, member.index, name + "_gep");
+                          ctx.builder.CreateStore(initVal, fieldPtr);
+                      } else {
+                          LOG_ERROR("Null LLVM value evaluated for default initialization of member: " + name);
+                      }
+                  } else {
+                      LOG_ERROR("Failed to compile AST expression for default initialization of member: " + name);
+                  }
              }
         }
         return rawPtr;
@@ -691,7 +930,7 @@ IRValue* Compiler::resolveEnum(const std::string& baseName, const std::string& p
     }
     
     LOG_ERROR("Undefined enum variant: " + propName + " on enum " + baseName);
-    return ctx.ir_gen->getInt32(0);
+    return nullptr;
 }
 
 IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName) {
@@ -742,7 +981,7 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
     }
     
     LOG_ERROR("Undefined property: " + propName + " on type " + className);
-    return ctx.ir_gen->getInt32(0);
+    return nullptr;
 }
 
 CompilerContext::FunctionInfo* Compiler::resolveFunction(const std::string& name) {
@@ -758,6 +997,10 @@ CompilerContext::FunctionInfo* Compiler::resolveFunction(const std::string& name
 
 IRValue* Compiler::visitVariable(VariableExpr* var) {
     std::string varName = var->name;
+    if (varName.find("<.") == 0) {
+        varName = "this." + varName.substr(2);
+    }
+    
     size_t dotPos = varName.find('.');
     size_t dashPos = varName.find('-');
     size_t sepPos = (dotPos != std::string::npos) ? dotPos : dashPos;
@@ -793,7 +1036,7 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
         }
 
         LOG_ERROR("Undefined variable: " + baseName);
-        return ctx.ir_gen->getInt32(0); 
+        return nullptr; 
     }
     
     IRValue* baseAlloca = sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst);
@@ -821,7 +1064,7 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
                     // Slicing
                     if (!isDynamicList) {
                         LOG_ERROR("Array Slicing not supported on raw arrays yet.");
-                        return ctx.ir_gen->getInt32(0);
+                        return nullptr;
                     }
                     
                     std::string startStr = propName.substr(0, colonPos);
@@ -914,7 +1157,34 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                     BufferImpl::seek(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), pos64, false);
                     BufferImpl::seek(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), pos64, true);
                     return ctx.ir_gen->getInt32(0);
+                } else if (methodName == "read_versioned" && call->args.size() >= 1) {
+                    std::string typeName = "unknown";
+                    if (auto varExpr = dynamic_cast<VariableExpr*>(call->args[0].get())) typeName = varExpr->name;
+                    else if (auto litExpr = dynamic_cast<LiteralExpr*>(call->args[0].get())) typeName = litExpr->value;
+                    
+                    llvm::Type* ty = ctx.getLLVMType(typeName);
+                    if (ty) {
+                        auto realEval = [this](CompilerContext& c, std::shared_ptr<AIML::AST::Expr> e) -> llvm::Value* { 
+                             IRValue* v = this->visitExpression(e.get());
+                             if (!v) return llvm::Constant::getNullValue(ctx.getLLVMType("buffer")); // or better err
+                             return static_cast<llvm::Value*>(c.ir_gen->unwrap(v));
+                        };
+                        llvm::Value* explicitVer = nullptr;
+                        if (call->args.size() >= 2) {
+                            IRValue* verVal = visitExpression(call->args[1].get());
+                            if (verVal) explicitVer = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(verVal));
+                        }
+                        return ctx.ir_gen->wrap(BufferImpl::read_versioned(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), ty, realEval, explicitVer));
+                    }
+                    return ctx.ir_gen->getInt32(0);
                 }
+            } else if (className == "string" && methodName == "len") {
+                  llvm::Function* strlenFunc = ctx.module.getFunction("strlen");
+                  if (!strlenFunc) strlenFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "strlen", ctx.module);
+                  llvm::Value* strPtr = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
+                  llvm::Value* len64 = ctx.builder.CreateCall(strlenFunc, {strPtr});
+                  llvm::Value* len32 = ctx.builder.CreateTrunc(len64, ctx.builder.getInt32Ty());
+                  return ctx.ir_gen->wrap(len32);
             }
             
             // Eagerly evaluate arguments for everything else
@@ -950,13 +1220,47 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             // Map Methods
             else if (className.find("map<") == 0) {
                  llvm::StructType* mapStructTy = static_cast<llvm::StructType*>(ctx.ir_gen->unwrapType(baseElemTy));
+                 
+                 llvm::Type* vTy = nullptr;
+                 std::string inner = className.substr(4, className.length() - 5);
+                 size_t colon = inner.find(':');
+                 if (colon != std::string::npos) {
+                     std::string vName = inner.substr(colon + 1);
+                     vTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
+                 }
+                 if (!vTy) vTy = ctx.builder.getInt8Ty()->getPointerTo(); // Fallback string
+
                  if (methodName == "put" && argVals.size() > 1) {
-                     MapImpl::put(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1])), mapStructTy);
+                     llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+                     llvm::Value* valVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
+                     
+                     if (vTy->isPointerTy() && valVal->getType()->isStructTy()) {
+                         if (auto varExpr = dynamic_cast<VariableExpr*>(call->args[1].get())) {
+                             Symbol* sym = resolveVariable(varExpr->name);
+                             if (sym) valVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst)));
+                         }
+                     }
+                     if (vTy->isPointerTy() && valVal->getType()->isPointerTy() && valVal->getType() != vTy) {
+                         valVal = ctx.builder.CreateBitCast(valVal, vTy);
+                     }
+                     if (keyVal->getType()->isPointerTy() && keyVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
+                         keyVal = ctx.builder.CreateBitCast(keyVal, ctx.builder.getInt8Ty()->getPointerTo());
+                     }
+                     
+                     MapImpl::put(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, valVal, mapStructTy);
                      return nullptr;
                  } else if (methodName == "get" && argVals.size() > 0) {
-                     return ctx.ir_gen->wrap(MapImpl::get(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(baseElemTy)), mapStructTy));
+                     llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+                     if (keyVal->getType()->isPointerTy() && keyVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
+                         keyVal = ctx.builder.CreateBitCast(keyVal, ctx.builder.getInt8Ty()->getPointerTo());
+                     }
+                     return ctx.ir_gen->wrap(MapImpl::get(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, vTy, mapStructTy));
                  } else if (methodName == "remove" && argVals.size() > 0) {
-                     MapImpl::remove(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(baseElemTy)), mapStructTy);
+                     llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+                     if (keyVal->getType()->isPointerTy() && keyVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
+                         keyVal = ctx.builder.CreateBitCast(keyVal, ctx.builder.getInt8Ty()->getPointerTo());
+                     }
+                     MapImpl::remove(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, vTy, mapStructTy);
                      return nullptr;
                  } else if (methodName == "contains" && argVals.size() > 0) {
                      return ctx.ir_gen->wrap(MapImpl::contains(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), mapStructTy));
@@ -983,7 +1287,20 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                  std::string mangledName = className + "_" + methodName;
                  llvm::Function* func = ctx.module.getFunction(mangledName);
                  if (!func) {
-                     LOG_ERROR("Unknown method: " + mangledName);
+                     std::string currClass = className;
+                     while (!currClass.empty() && ctx.classes.count(currClass)) {
+                         std::string pName = ctx.classes[currClass].parentName;
+                         if (!pName.empty()) {
+                             currClass = pName;
+                             func = ctx.module.getFunction(currClass + "_" + methodName);
+                             if (func) break;
+                         } else {
+                             break;
+                         }
+                     }
+                 }
+                 if (!func) {
+                     LOG_ERROR("Unknown method: " + className + "_" + methodName);
                      return ctx.ir_gen->getInt32(0);
                  }
                  
@@ -991,12 +1308,20 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                  if (baseElemTy->isPointer()) {
                      thisPtr = ctx.ir_gen->createLoad(baseElemTy, baseAlloca, "this_ptr");
                  }
+                 if (!thisPtr) return ctx.ir_gen->getInt32(0);
+                 
+                 llvm::Type* expectedThisTy = func->getFunctionType()->getParamType(0);
+                 llvm::Value* rawThis = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(thisPtr));
+                 if (rawThis->getType() != expectedThisTy) {
+                     rawThis = ctx.builder.CreateBitCast(rawThis, expectedThisTy, "this_cast");
+                     thisPtr = ctx.ir_gen->wrap(rawThis);
+                 }
                  
                  std::vector<IRValue*> methodArgs;
                  methodArgs.push_back(thisPtr);
                  for (auto* a : argVals) methodArgs.push_back(a);
                  
-                 return ctx.ir_gen->createCall(mangledName, methodArgs, "call_method");
+                 return ctx.ir_gen->createCall(func->getName().str(), methodArgs, "call_method");
             }
             
             LOG_ERROR("Unknown method: " + methodName + " on variable " + baseName);
@@ -1254,30 +1579,62 @@ IRValue* Compiler::visitCall(CallExpr* call) {
              return ctx.ir_gen->createCall(mangledSys, argVals, "call_sys");
         }
         
+        // FQN Fallback (e.g. my.math.add)
+        CompilerContext::FunctionInfo* fInfo = resolveFunction(funcName);
+        llvm::Function* f = fInfo ? fInfo->func : ctx.module.getFunction(funcName);
+        if (f) {
+            std::vector<llvm::Value*> finalArgs;
+            for (size_t i = 0; i < argVals.size(); ++i) {
+                 finalArgs.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[i])));
+            }
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, finalArgs));
+        }
+        
         LOG_ERROR("Unknown method or namespace function: " + funcName);
         return ctx.ir_gen->getInt32(0);
     }
     
     // Eagerly evaluate arguments for system functions and standard functions
     std::vector<IRValue*> argVals;
-    for (auto& arg : call->args) {
-        IRValue* val = visitExpression(arg.get());
-        if (val) argVals.push_back(val);
-        else return ctx.ir_gen->getInt32(0);
+    for (size_t i = 0; i < call->args.size(); ++i) {
+        IRValue* val = visitExpression(call->args[i].get());
+        if (val) {
+            argVals.push_back(val);
+        } else {
+            LOG_ERROR("Failed to evaluate argument " + std::to_string(i) + " for call to: " + funcName);
+            return ctx.ir_gen->getInt32(0);
+        }
     }
 
     // System Call Hook (Print)
     if (funcName == "print") {
-         // Create or get printf
          std::vector<IRValue*> printArgs;
-         IRValue* fmt = ctx.ir_gen->createGlobalStringPtr("%d\n"); // Just a hack, real print needs formatting
-         if (!argVals.empty()) {
-             llvm::Type* argTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(argVals[0]->getType()));
-             if (argTy->isPointerTy()) fmt = ctx.ir_gen->createGlobalStringPtr("%s\n");
-         }
+         std::string formatStr = "";
          
-         printArgs.push_back(fmt);
-         if (!argVals.empty()) printArgs.push_back(argVals[0]); 
+         // Build format string and arguments list
+         for (size_t i = 0; i < argVals.size(); ++i) {
+             IRValue* argVal = argVals[i];
+             llvm::Type* argTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(argVal->getType()));
+             
+             if (argTy->isPointerTy()) {
+                 formatStr += "%s";
+                 
+                 // Null pointer guard
+                 llvm::Value* rawVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVal));
+                 llvm::Value* isNull = ctx.builder.CreateIsNull(rawVal, "print_null_check");
+                 llvm::Value* emptyStr = ctx.builder.CreateGlobalStringPtr("(null)", "print_null_str");
+                 llvm::Value* safeStr = ctx.builder.CreateSelect(isNull, emptyStr, rawVal, "print_safe_str");
+                 printArgs.push_back(ctx.ir_gen->wrap(safeStr));
+             } else {
+                 formatStr += "%d";
+                 printArgs.push_back(argVal);
+             }
+         }
+         formatStr += "\n";
+         
+         // Insert format string as first argument
+         IRValue* fmt = ctx.ir_gen->createGlobalStringPtr(formatStr);
+         printArgs.insert(printArgs.begin(), fmt);
          
          llvm::Function* printfFunc = ctx.module.getFunction("printf");
          if (!printfFunc) {
@@ -1285,6 +1642,16 @@ IRValue* Compiler::visitCall(CallExpr* call) {
              printfFunc = llvm::Function::Create(printfType, llvm::Function::ExternalLinkage, "printf", ctx.module);
          }
          return ctx.ir_gen->createCall("printf", printArgs, "print_call");
+    } else if (funcName == "free") {
+         llvm::Function* freeFunc = ctx.module.getFunction("free");
+         if (!freeFunc) freeFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "free", ctx.module);
+         if (argVals.empty()) return ctx.ir_gen->getInt32(0);
+         llvm::Value* ptrVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+         if (ptrVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
+             ptrVal = ctx.builder.CreateBitCast(ptrVal, ctx.builder.getInt8Ty()->getPointerTo());
+         }
+         ctx.builder.CreateCall(freeFunc, {ptrVal});
+         return ctx.ir_gen->getInt32(0);
     }
     
     // Normal Call
@@ -1293,10 +1660,17 @@ IRValue* Compiler::visitCall(CallExpr* call) {
     llvm::Function* f = funcInfo ? funcInfo->func : ctx.module.getFunction(funcName);
     
     if (f) {
+        if (!f->isVarArg() && argVals.size() < f->arg_size()) {
+            LOG_ERROR("Not enough arguments for function " + funcName + ". Expected " + std::to_string(f->arg_size()) + ", got " + std::to_string(argVals.size()));
+        }
         for (size_t i = 0; i < argVals.size(); ++i) {
             if (i < f->arg_size()) {
                 llvm::Type* expectedTy = f->getFunctionType()->getParamType(i);
                 llvm::Value* actualVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[i]));
+                if (!actualVal) {
+                    LOG_ERROR("Null LLVM value passed as argument " + std::to_string(i) + " for function " + funcName);
+                    continue;
+                }
                 llvm::Type* actualTy = actualVal->getType();
                 
                 if (expectedTy->isPointerTy() && actualTy->isStructTy()) {
@@ -1315,12 +1689,24 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                 }
             }
         }
-        callRes = ctx.ir_gen->createCall(f->getName().str(), argVals);
+        if (ctx.catchBlock) {
+             llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
+             llvm::BasicBlock* invokeCont = llvm::BasicBlock::Create(ctx.context, "invoke_cont", currentFunc);
+             
+             std::vector<llvm::Value*> rawArgs;
+             for (auto arg : argVals) rawArgs.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(arg)));
+             
+             llvm::Value* invRes = ctx.builder.CreateInvoke(f, invokeCont, ctx.catchBlock, rawArgs, funcName + "_inv");
+             callRes = ctx.ir_gen->wrap(invRes);
+             ctx.builder.SetInsertPoint(invokeCont);
+        } else {
+             callRes = ctx.ir_gen->createCall(f->getName().str(), argVals);
+        }
     }
     
     if (!callRes) {
          LOG_ERROR("Unknown function: " + funcName);
-         return ctx.ir_gen->getInt32(0);
+         return nullptr;
     }
     return callRes;
 }
@@ -1357,8 +1743,86 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
     if (bin->op == "/") return ctx.ir_gen->createSDiv(lhs, rhs);
     if (bin->op == "%") return ctx.ir_gen->createSRem(lhs, rhs);
     
-    if (bin->op == "eq") return ctx.ir_gen->createICmpEQ(lhs, rhs);
-    if (bin->op == "neq") return ctx.ir_gen->createICmpNE(lhs, rhs);
+    if (bin->op == "eq") {
+        if (lTy->isPointerTy() && rTy->isPointerTy()) {
+            llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
+            llvm::BasicBlock* checkNullBB = llvm::BasicBlock::Create(ctx.context, "cmp_check_null", parentFunc);
+            llvm::BasicBlock* doStrcmpBB = llvm::BasicBlock::Create(ctx.context, "cmp_do_strcmp", parentFunc);
+            llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(ctx.context, "cmp_merge", parentFunc);
+            
+            llvm::Value* rawLhs = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs));
+            llvm::Value* rawRhs = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs));
+            
+            llvm::Value* isLhsNull = ctx.builder.CreateIsNull(rawLhs);
+            llvm::Value* isRhsNull = ctx.builder.CreateIsNull(rawRhs);
+            
+            // If both null -> true (eq), if one null -> false (neq)
+            llvm::Value* ptrEq = ctx.builder.CreateICmpEQ(rawLhs, rawRhs);
+            llvm::Value* anyNull = ctx.builder.CreateOr(isLhsNull, isRhsNull);
+            
+            ctx.builder.CreateCondBr(anyNull, checkNullBB, doStrcmpBB);
+            
+            // Check null case (fast path or actually null ptr)
+            ctx.builder.SetInsertPoint(checkNullBB);
+            ctx.builder.CreateBr(mergeBB);
+            
+            // Do Strcmp
+            ctx.builder.SetInsertPoint(doStrcmpBB);
+            llvm::Function* strcmpFunc = ctx.module.getFunction("strcmp");
+            if (!strcmpFunc) strcmpFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "strcmp", ctx.module);
+            llvm::Value* cmpRes = ctx.builder.CreateCall(strcmpFunc, {rawLhs, rawRhs});
+            llvm::Value* strEq = ctx.builder.CreateICmpEQ(cmpRes, ctx.builder.getInt32(0));
+            ctx.builder.CreateBr(mergeBB);
+            
+            // Merge
+            ctx.builder.SetInsertPoint(mergeBB);
+            llvm::PHINode* resultNode = ctx.builder.CreatePHI(ctx.builder.getInt1Ty(), 2, "streq_res");
+            resultNode->addIncoming(ptrEq, checkNullBB);
+            resultNode->addIncoming(strEq, doStrcmpBB);
+            
+            return ctx.ir_gen->wrap(resultNode);
+        }
+        return ctx.ir_gen->createICmpEQ(lhs, rhs);
+    }
+    if (bin->op == "neq") {
+        if (lTy->isPointerTy() && rTy->isPointerTy()) {
+            // Re-use logic above but invert result
+            llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
+            llvm::BasicBlock* checkNullBB = llvm::BasicBlock::Create(ctx.context, "cmp_check_null_ne", parentFunc);
+            llvm::BasicBlock* doStrcmpBB = llvm::BasicBlock::Create(ctx.context, "cmp_do_strcmp_ne", parentFunc);
+            llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(ctx.context, "cmp_merge_ne", parentFunc);
+            
+            llvm::Value* rawLhs = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs));
+            llvm::Value* rawRhs = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs));
+            
+            llvm::Value* isLhsNull = ctx.builder.CreateIsNull(rawLhs);
+            llvm::Value* isRhsNull = ctx.builder.CreateIsNull(rawRhs);
+            
+            llvm::Value* ptrEq = ctx.builder.CreateICmpEQ(rawLhs, rawRhs);
+            llvm::Value* ptrNeq = ctx.builder.CreateNot(ptrEq);
+            llvm::Value* anyNull = ctx.builder.CreateOr(isLhsNull, isRhsNull);
+            
+            ctx.builder.CreateCondBr(anyNull, checkNullBB, doStrcmpBB);
+            
+            ctx.builder.SetInsertPoint(checkNullBB);
+            ctx.builder.CreateBr(mergeBB);
+            
+            ctx.builder.SetInsertPoint(doStrcmpBB);
+            llvm::Function* strcmpFunc = ctx.module.getFunction("strcmp");
+            if (!strcmpFunc) strcmpFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "strcmp", ctx.module);
+            llvm::Value* cmpRes = ctx.builder.CreateCall(strcmpFunc, {rawLhs, rawRhs});
+            llvm::Value* strNeq = ctx.builder.CreateICmpNE(cmpRes, ctx.builder.getInt32(0));
+            ctx.builder.CreateBr(mergeBB);
+            
+            ctx.builder.SetInsertPoint(mergeBB);
+            llvm::PHINode* resultNode = ctx.builder.CreatePHI(ctx.builder.getInt1Ty(), 2, "strneq_res");
+            resultNode->addIncoming(ptrNeq, checkNullBB);
+            resultNode->addIncoming(strNeq, doStrcmpBB);
+            
+            return ctx.ir_gen->wrap(resultNode);
+        }
+        return ctx.ir_gen->createICmpNE(lhs, rhs);
+    }
     if (bin->op == "lt") return ctx.ir_gen->createICmpSLT(lhs, rhs);
     if (bin->op == "gt") return ctx.ir_gen->createICmpSGT(lhs, rhs);
     if (bin->op == "le") return ctx.ir_gen->createICmpSLE(lhs, rhs);
@@ -1368,7 +1832,7 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
     if (bin->op == "or") return ctx.ir_gen->createOr(lhs, rhs);
 
     LOG_ERROR("Unknown binary operator: " + bin->op);
-    return ctx.ir_gen->getInt32(0);
+    return nullptr;
 }
 
 } // namespace AST

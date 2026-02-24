@@ -6,6 +6,7 @@
 #include <iomanip>
 
 enum class LogLevel {
+    VERBOSE,
     DEBUG,
     INFO,
     WARNING,
@@ -23,6 +24,15 @@ public:
         level_ = level;
     }
 
+    bool hasErrors() const {
+        return errorCount_ > 0;
+    }
+    
+    void clearErrors() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        errorCount_ = 0;
+    }
+
     template<typename T>
     void log(LogLevel level, const T& msg, const char* file = nullptr, int line = 0) {
         if (level < level_) return;
@@ -30,6 +40,9 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         
         switch (level) {
+            case LogLevel::VERBOSE:
+                std::cout << "[VERBOSE] ";
+                break;
             case LogLevel::DEBUG:
                 std::cout << "[DEBUG] ";
                 break;
@@ -53,6 +66,7 @@ public:
         }
         
         if (level == LogLevel::ERROR) {
+            errorCount_++;
             std::cerr << msg << std::endl;
         } else {
             std::cout << msg << std::endl;
@@ -60,12 +74,14 @@ public:
     }
 
 private:
-    Logger() : level_(LogLevel::INFO) {} // Default level
+    Logger() : level_(LogLevel::INFO), errorCount_(0) {} // Default level
     LogLevel level_;
+    int errorCount_;
     std::mutex mutex_;
 };
 
 // Macros for cleaner usage
+#define LOG_VERBOSE(msg) Logger::instance().log(LogLevel::VERBOSE, msg, __FILE__, __LINE__)
 #define LOG_DEBUG(msg) Logger::instance().log(LogLevel::DEBUG, msg, __FILE__, __LINE__)
 #define LOG_INFO(msg) Logger::instance().log(LogLevel::INFO, msg, __FILE__, __LINE__)
 #define LOG_WARNING(msg) Logger::instance().log(LogLevel::WARNING, msg, __FILE__, __LINE__)

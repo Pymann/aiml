@@ -25,6 +25,15 @@ namespace BufferImpl {
     }
 
     inline void write(CompilerContext& ctx, llvm::Value* bufPtr, llvm::Value* val, llvm::Type* type) {
+        if (!bufPtr) {
+            LOG_ERROR("Buffer pointer is null in write operation");
+            return;
+        }
+        if (!val) {
+            LOG_ERROR("Value is null in write operation for buffer");
+            return;
+        }
+        
         llvm::StructType* bufType = llvm::cast<llvm::StructType>(ctx.getLLVMType("buffer"));
         
         // Check if it is a Class
@@ -85,12 +94,15 @@ namespace BufferImpl {
     }
     
     inline llvm::Value* read(CompilerContext& ctx, llvm::Value* bufPtr, llvm::Type* type) {
+        if (!bufPtr) {
+            LOG_ERROR("Buffer pointer is null in read operation");
+            return llvm::Constant::getNullValue(type);
+        }
+        
         // If Class, Consume Version Header first
         if (type->isStructTy()) {
              llvm::StructType* st = llvm::cast<llvm::StructType>(type);
              if (st->hasName() && ctx.classes.count(st->getName().str())) {
-                  // Read u64 and discard/ignore?
-                  // Recursively call read(u64)?
                   read(ctx, bufPtr, ctx.builder.getInt64Ty());
              }
         }
@@ -111,7 +123,16 @@ namespace BufferImpl {
         
         // Bitcast and Load
         llvm::Value* castPtr = ctx.builder.CreateBitCast(currentPtr, type->getPointerTo());
-        llvm::Value* val = ctx.builder.CreateLoad(type, castPtr);
+        
+        llvm::Value* val = nullptr;
+        if (type->isPointerTy()) {
+             // For pointers (like strings), we stored the pointer value itself (i8*)
+             // castPtr is i8** (pointer to pointer-type slot in buffer)
+             // So loading from castPtr gives us the i8* value back.
+             val = ctx.builder.CreateLoad(type, castPtr); 
+        } else {
+             val = ctx.builder.CreateLoad(type, castPtr);
+        }
         
         // Update Read Index
         const llvm::DataLayout& dl = ctx.module.getDataLayout();
@@ -137,7 +158,12 @@ namespace BufferImpl {
         ctx.builder.CreateStore(zero, ctx.builder.CreateStructGEP(bufType, bufPtr, 3)); // write
     }
 
-    inline llvm::Value* read_versioned(CompilerContext& ctx, llvm::Value* bufPtr, llvm::Type* type, CompilerContext::Evaluator evaluator, llvm::Value* explicitVersion = nullptr) {
+    inline llvm::Value* read_versioned(CompilerContext& ctx, llvm::Value* bufPtr, llvm::Type* type, std::function<llvm::Value*(CompilerContext&, std::shared_ptr<AIML::AST::Expr>)> evaluator, llvm::Value* explicitVersion = nullptr) {
+        if (!bufPtr) {
+            LOG_ERROR("Buffer pointer is null in read_versioned operation");
+            return llvm::Constant::getNullValue(type);
+        }
+        
         // Only supports Structs (Classes)
         if (!type->isStructTy()) {
              return read(ctx, bufPtr, type);
@@ -194,7 +220,7 @@ namespace BufferImpl {
         // Initialize with Defaults
         for(auto& [memName, member] : classInfo.members) {
              llvm::Value* initVal = nullptr;
-             if (member.initValue.IsDefined() && !member.initValue.IsNull()) {
+             if (member.initValue != nullptr) {
                  initVal = evaluator(ctx, member.initValue);
              } else {
                  initVal = llvm::Constant::getNullValue(member.type);
@@ -236,6 +262,10 @@ namespace BufferImpl {
              // This is correct behavior for nested objects!
              
              llvm::Value* val = read(ctx, bufPtr, member->type);
+             if (!val) {
+                 LOG_ERROR("Failed to read versioned value from buffer for member index: " + std::to_string(member->index));
+                 val = llvm::Constant::getNullValue(member->type);
+             }
              llvm::Value* memPtr = ctx.builder.CreateStructGEP(type, alloca, member->index);
              ctx.builder.CreateStore(val, memPtr);
              ctx.builder.CreateBr(skipBlock);

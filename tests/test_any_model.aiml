@@ -16,8 +16,8 @@
       # Cast back to TestModel to access fields
       - decl: [m, ptr<TestModel>]
       - set: [m, obj] # Implicit bitcast from any -> ptr<TestModel>
-      - print: ["ID from Any: ", m.id]
-      - print: ["Name from Any: ", m.name]
+      - print: ["ID from Any: ${m.id}"]
+      - print: ["Name from Any: ${m.name}"]
 
 # 3. Function taking 'Model'
 - def:
@@ -25,7 +25,7 @@
     args: [[m, ptr<TestModel>]]
     return: void
     body:
-      - print: ["Processing Model: ", m.name]
+      - print: ["Processing Model: ${m.name}"]
       - call: [print_any_id, m] # Implicit cast ptr<TestModel> -> any
 
 # 4. Main Execution
@@ -46,4 +46,4 @@
 - set: [retrieved, { call: [genericMap.get, "item"] }]
 - decl: [restored, ptr<TestModel>]
 - set: [restored, retrieved]
-- print: ["Restored Type ID: ", restored.id]
+- print: ["Restored Type ID: ${restored.id}"]

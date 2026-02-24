@@ -166,7 +166,7 @@ static llvm::Value* dispatchBufferMethod(CompilerContext& ctx, const std::string
              llvm::Type* readType = typeName.empty() ? nullptr : ctx.getLLVMType(typeName);
              if (readType) {
                  llvm::Value* verVal = args.size() > 2 ? evaluator(ctx, args[2]) : nullptr;
-                 return BufferImpl::read_versioned(ctx, sym.alloca_inst, readType, evaluator, verVal);
+                 return BufferImpl::read_versioned(ctx, sym.alloca_inst, readType, [](CompilerContext&, std::shared_ptr<AIML::AST::Expr>) -> llvm::Value* { return nullptr; }, verVal);
              }
          }
          return nullptr;
