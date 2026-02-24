@@ -5,9 +5,11 @@
 #include <stack>
 #include "../ast_nodes.h"
 #include "../../../logger.h"
+#include "block_builder.h"
 
 namespace AIML {
 namespace AST {
+
 class Builder;
 class StateHandler;
 

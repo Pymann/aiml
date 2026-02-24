@@ -1,0 +1,159 @@
+#include "../../../logger.h"
+#include "../ast_builder.h"
+#include "statement_builder.h"
+#include "expression_builder.h"
+
+namespace AIML {
+namespace AST {
+
+bool StatementBuilder::OnSequenceStart() {
+    return true; // e.g. `decl: [x, i32]`
+}
+
+bool StatementBuilder::OnSequenceEnd() {
+    builder->popState();
+    return true;
+}
+
+bool StatementBuilder::OnMapEnd() {
+    builder->popState();
+    return true;
+}
+
+bool StatementBuilder::OnScalar(const std::string& value, const std::string& tag) {
+    if (expectingValue) {
+        // We received the RHS of a `set: [x, value]`
+        if (tag == "!") {
+            if (value.find("${") != std::string::npos) exprArg = parseInterpolatedString(value);
+            else exprArg = std::make_unique<LiteralExpr>(value, "string");
+        } else if (value == "true" || value == "false" || isdigit(value[0]) || (value.length() > 0 && value[0] == '-')) {
+            exprArg = std::make_unique<LiteralExpr>(value, "unknown");
+        } else {
+            exprArg = std::make_unique<VariableExpr>(value);
+        }
+        expectingValue = false;
+        return true;
+    }
+    
+    // Collecting arguments inside the sequence `[x, i32, 5]`
+    args.push_back({value, tag});
+    
+    if (type == "set" && args.size() == 1) {
+        // After reading `x`, the next thing might be an expression map instead of a scalar
+        expectingValue = true; 
+    }
+    
+    if (type == "return") {
+        if (tag == "!") {
+            if (value.find("${") != std::string::npos) exprArg = parseInterpolatedString(value);
+            else exprArg = std::make_unique<LiteralExpr>(value, "string");
+        } else if (value == "true" || value == "false" || isdigit(value[0]) || (value.length() > 0 && value[0] == '-')) {
+            exprArg = std::make_unique<LiteralExpr>(value, "unknown");
+        } else {
+            exprArg = std::make_unique<VariableExpr>(value);
+        }
+    }
+    
+    return true;
+}
+
+bool StatementBuilder::OnMapStart() {
+    // A statement received a map, likely an expression like `set: [x, { add: [1, 2] }]`
+    expectingValue = false;
+    auto exprBuilder = std::make_unique<ExpressionBuilder>(builder);
+    exprBuilder->OnMapStart();
+    builder->pushState(std::move(exprBuilder));
+    return true;
+}
+
+void StatementBuilder::receiveChildNode(std::unique_ptr<Node> node) {
+    if (auto e = dynamic_cast<Expr*>(node.release())) {
+        exprArg = std::unique_ptr<Expr>(e);
+    }
+}
+
+std::unique_ptr<Node> StatementBuilder::finish() {
+    if (type == "decl" && args.size() >= 2) {
+         auto decl = std::make_unique<DeclStmt>(args[0].first, args[1].first);
+         if (exprArg) decl->initialValue = std::move(exprArg);
+         else if (args.size() >= 3) {
+             const std::string& val = args[2].first;
+             const std::string& tag = args[2].second;
+             if (tag == "!") {
+                 if (val.find("${") != std::string::npos) decl->initialValue = parseInterpolatedString(val);
+                 else decl->initialValue = std::make_unique<LiteralExpr>(val, "string");
+             } else if (val == "true" || val == "false" || isdigit(val[0]) || (val.length() > 0 && val[0] == '-')) {
+                 decl->initialValue = std::make_unique<LiteralExpr>(val, "unknown");
+             } else {
+                 decl->initialValue = std::make_unique<VariableExpr>(val);
+             }
+         }
+         return decl;
+    }
+    if (type == "set" && args.size() >= 1) {
+         if (!exprArg && args.size() >= 2) {
+             const std::string& val = args[1].first;
+             const std::string& tag = args[1].second;
+             if (tag == "!") {
+                 if (val.find("${") != std::string::npos) exprArg = parseInterpolatedString(val);
+                 else exprArg = std::make_unique<LiteralExpr>(val, "string");
+             } else if (val == "true" || val == "false" || isdigit(val[0]) || (val.length() > 0 && val[0] == '-')) {
+                 exprArg = std::make_unique<LiteralExpr>(val, "unknown");
+             } else {
+                 exprArg = std::make_unique<VariableExpr>(val);
+             }
+         }
+         auto set = std::make_unique<SetStmt>(args[0].first, std::move(exprArg));
+         return set;
+    }
+    if (type == "call" && args.size() >= 1) {
+         auto call = std::make_unique<CallExpr>(args[0].first);
+         for (size_t i = 1; i < args.size(); ++i) {
+             const std::string& val = args[i].first;
+             const std::string& tag = args[i].second;
+             if (tag == "!") {
+                  if (val.find("${") != std::string::npos) call->args.push_back(parseInterpolatedString(val));
+                  else call->args.push_back(std::make_unique<LiteralExpr>(val, "string"));
+             } else if (val == "true" || val == "false" || isdigit(val[0]) || (val.length() > 0 && val[0] == '-')) {
+                  call->args.push_back(std::make_unique<LiteralExpr>(val, "unknown"));
+             } else {
+                  call->args.push_back(std::make_unique<VariableExpr>(val));
+             }
+         }
+         if (exprArg) call->args.push_back(std::move(exprArg));
+         
+         return std::make_unique<ExprStmt>(std::move(call));
+    }
+    if (type == "print" && args.size() >= 1) {
+         auto call = std::make_unique<CallExpr>("print");
+         for (size_t i = 0; i < args.size(); ++i) {
+             const std::string& val = args[i].first;
+             const std::string& tag = args[i].second;
+             if (tag == "!") {
+                 if (val.find("${") != std::string::npos) call->args.push_back(parseInterpolatedString(val));
+                 else call->args.push_back(std::make_unique<LiteralExpr>(val, "string"));
+             } else if (val == "true" || val == "false" || isdigit(val[0]) || (val.length() > 0 && val[0] == '-')) {
+                 call->args.push_back(std::make_unique<LiteralExpr>(val, "unknown"));
+             } else {
+                 call->args.push_back(std::make_unique<VariableExpr>(val));
+             }
+         }
+         return std::make_unique<ExprStmt>(std::move(call));
+    }
+    if (type == "return") {
+         auto ret = std::make_unique<RetStmt>();
+         if (exprArg) ret->value = std::move(exprArg);
+         return ret;
+    }
+    if (type == "throw") {
+         if (exprArg) return std::make_unique<ThrowStmt>(std::move(exprArg));
+         else {
+             LOG_ERROR("throw statement must have a value");
+             return nullptr;
+         }
+    }
+    return nullptr;
+}
+
+} // namespace AST
+} // namespace AIML
