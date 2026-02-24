@@ -29,6 +29,8 @@ class ClassBuilder : public StateHandler {
     std::unique_ptr<Expr> currentInitValue;
     uint64_t currentVersion = 1;
     std::string currentAccess = "public";
+    bool currentConst = false;
+    bool currentVolatile = false;
 public:
     ClassBuilder(Builder* b) : StateHandler(b) { classNode = std::make_unique<ClassDecl>(); }
     bool OnMapStart() override;

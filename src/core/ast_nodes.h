@@ -99,6 +99,8 @@ public:
     std::string varName;
     std::string typeName;
     std::unique_ptr<Expr> initialValue;
+    bool is_const = false;
+    bool is_volatile = false;
 
     DeclStmt(std::string n, std::string t) : varName(n), typeName(t) {}
     std::string toString() const override { return "Decl(" + typeName + " " + varName + ")"; }
@@ -181,6 +183,8 @@ struct StructMember {
     std::unique_ptr<Expr> initialValue; // Applicable for classes/models
     uint64_t version = 1;
     std::string access = "public";
+    bool is_const = false;
+    bool is_volatile = false;
 };
 
 struct MethodSignature {

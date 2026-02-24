@@ -16,6 +16,8 @@ class StatementBuilder : public StateHandler {
     std::vector<std::pair<std::string, std::string>> args;
     std::unique_ptr<Expr> exprArg;
     bool expectingValue = false;
+    bool is_const = false;
+    bool is_volatile = false;
 public:
     StatementBuilder(Builder* b, std::string t) : StateHandler(b), type(t) {}
     bool OnSequenceStart() override;
