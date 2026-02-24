@@ -57,6 +57,12 @@ for TEST in $TEST_FILES; do
         EXPECTED_CODE=30
     elif [[ "$TEST" == *"test.aiml" ]]; then
         EXPECTED_CODE=42
+    elif [[ "$TEST" == *"test_const_var.aiml" ]]; then
+        EXPECTED_CODE=1
+    elif [[ "$TEST" == *"test_modifiers_const.aiml" ]]; then
+        EXPECTED_CODE=1
+    elif [[ "$TEST" == *"test_modifiers_private.aiml" ]]; then
+        EXPECTED_CODE=1
     fi
 
     if [ $EXIT_CODE -eq $EXPECTED_CODE ]; then

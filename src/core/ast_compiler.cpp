@@ -161,9 +161,11 @@ void Compiler::registerTypeDecl(Node* node) {
             else if (astMember.access == "private") member.access = AccessLevel::Private;
             else if (astMember.access == "protected") member.access = AccessLevel::Protected;
             
-            // Note: Access modifiers, const, and volatile are intentionally lost here 
-            // since they weren't fully parsed by the new ClassBuilder yet (it ignored the 3rd/4th elements).
-            // Fast follow: we need to parse modifiers in ASTBuilder later.
+            member.is_const = astMember.is_const;
+            #ifdef LLVM 18
+            // member.is_volatile not supported structurally in opaque pointers.
+            // Requires attaching volatile flag to the underlying Load/Store instructions.
+            #endif
             
             orderedMembers.push_back({memberName, member});
         }
@@ -249,7 +251,14 @@ void Compiler::visitTopLevel(Node* node) {
             std::string oldName = method->name;
             method->name = cls->name + "_" + method->name;
             auto it = method->args.insert(method->args.begin(), {"this", "ref<" + cls->name + ">"});
+            
+            std::string oldClassName = ctx.currentClassName;
+            ctx.currentClassName = cls->name;
+            
             visitFunction(method.get());
+            
+            ctx.currentClassName = oldClassName;
+            
             method->args.erase(it);
             method->name = oldName;
         }
@@ -398,6 +407,8 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
     sym.ir_type = ctx.ir_gen->getPointerTy();
     sym.ir_element_type = ty;
     sym.typeName = decl->typeName;
+    sym.is_const = decl->is_const;
+    sym.is_volatile = decl->is_volatile;
     ctx.symbol_table[decl->varName] = sym;
     
     LOG_DEBUG("Compiled AST Decl: " + decl->varName + " of " + decl->typeName);
@@ -443,6 +454,10 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     }
     
     if (propName.empty()) {
+        if (sym->is_const) {
+             LOG_ERROR("Cannot assign to const variable " + targetStr);
+             return;
+        }
         ctx.ir_gen->createStore(val, baseAlloca);
     } else {
         std::string className = sym->typeName;

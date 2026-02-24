@@ -97,6 +97,10 @@ bool ClassBuilder::OnScalar(const std::string& value, const std::string& tag) {
                         try { currentVersion = std::stoull(value); } catch(...) {}
                     } else if (currentKey == "access") {
                         currentAccess = value;
+                    } else if (currentKey == "const") {
+                        currentConst = (value == "true" || value == "1");
+                    } else if (currentKey == "volatile") {
+                        currentVolatile = (value == "true" || value == "1");
                     }
                     expectingKey = true;
                 } else {
@@ -145,6 +149,8 @@ bool ClassBuilder::OnSequenceStart() {
             currentInitValue = nullptr;
             currentVersion = 1;
             currentAccess = "public";
+            currentConst = false;
+            currentVolatile = false;
         }
     }
     return true;
@@ -159,6 +165,8 @@ bool ClassBuilder::OnSequenceEnd() {
                 m.initialValue = std::move(currentInitValue);
                 m.version = currentVersion;
                 m.access = currentAccess;
+                m.is_const = currentConst;
+                m.is_volatile = currentVolatile;
                 classNode->members.push_back(std::move(m));
                 currentField = ""; currentType = "";
                 return true;

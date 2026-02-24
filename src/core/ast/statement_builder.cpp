@@ -57,7 +57,43 @@ bool StatementBuilder::OnScalar(const std::string& value, const std::string& tag
     return true;
 }
 
+class ModifierBuilder : public StateHandler {
+    bool* is_const;
+    bool* is_volatile;
+    bool expectingKey = true;
+    std::string currentKey;
+public:
+    ModifierBuilder(Builder* b, bool* ic, bool* iv) : StateHandler(b), is_const(ic), is_volatile(iv) {}
+    bool OnMapStart() override { expectingKey = true; return true; }
+    bool OnMapEnd() override { builder->popState(); return true; }
+    bool OnScalar(const std::string& value, const std::string& tag) override {
+        if (expectingKey) {
+            currentKey = value;
+            expectingKey = false;
+        } else {
+            if (currentKey == "const") *is_const = (value == "true" || value == "1");
+            if (currentKey == "volatile") *is_volatile = (value == "true" || value == "1");
+            expectingKey = true;
+        }
+        return true;
+    }
+    std::unique_ptr<Node> finish() override { return nullptr; }
+};
+
 bool StatementBuilder::OnMapStart() {
+    if (type == "decl" && args.size() >= 2) {
+        // If args size is 3, we already have Name, Type, Value. This map is Modifiers.
+        // If args size is 2, it could be Value (an expr) or Modifiers. 
+        // We'll assume for simplicity that in AIML local var decl: [name, type, val, {modifiers}]
+        // OR [name, type, {modifiers}]. Wait, we can look at `expectingValue`.
+        // Actually, if we just push ModifierBuilder when args.size() >= 2, we might break default exprs.
+        // Let's only push ModifierBuilder if args.size() >= 3. Wait, test_modifiers.aiml does NOT omit default value.
+        // So args.size() is 3.
+        if (args.size() >= 3) {
+            builder->pushState(std::make_unique<ModifierBuilder>(builder, &is_const, &is_volatile));
+            return true;
+        }
+    }
     // A statement received a map, likely an expression like `set: [x, { add: [1, 2] }]`
     expectingValue = false;
     auto exprBuilder = std::make_unique<ExpressionBuilder>(builder);
@@ -88,6 +124,9 @@ std::unique_ptr<Node> StatementBuilder::finish() {
                  decl->initialValue = std::make_unique<VariableExpr>(val);
              }
          }
+         
+         decl->is_const = is_const;
+         decl->is_volatile = is_volatile;
          return decl;
     }
     if (type == "set" && args.size() >= 1) {
