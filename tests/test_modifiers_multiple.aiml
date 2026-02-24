@@ -1,0 +1,49 @@
+# Modifiers Test
+
+- class:
+    name: Bank
+    members:
+      - [balance, i32, 0, { access: private }]
+      - [id, i32, 12345, { access: public, const: true }]
+    methods:
+      - def:
+          name: deposit
+          access: public
+          args: [[amount, i32]]
+          return: void
+          body:
+            # Internal access to private member allowed
+            - set: [<.balance, {+: [<.balance, amount]}]
+            - print: ["Deposited: ", amount]
+
+      - def:
+          name: getBalance
+          access: public
+          args: []
+          return: i32
+          body:
+             - return: <.balance
+
+- decl: [b, Bank] # Stack allocation, default init (id=12345, balance=0)
+
+- print: ["Bank ID: ", b.id]
+
+# Valid: Call public method
+- call: [b.deposit, 100]
+- print: ["Balance: ", {call: [b.getBalance]}]
+
+
+
+# Volatile Tests
+- decl: [vol_var, i32, 42, { volatile: true }]
+- print: ["Volatile Var initially: ", vol_var]
+- set: [vol_var, 100]
+- print: ["Volatile Var after set: ", vol_var]
+
+- class:
+    name: Sensor
+    members:
+      - [reading, i32, 0, { volatile: true, access: public }]
+- decl: [s, Sensor]
+- set: [s.reading, 55]
+- print: ["Sensor reading: ", s.reading]

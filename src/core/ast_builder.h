@@ -13,6 +13,7 @@ namespace AST {
 class Builder;
 
 std::unique_ptr<Expr> parseInterpolatedString(const std::string& input);
+std::unique_ptr<Expr> parseScalarExpr(const std::string& val, const std::string& tag);
 std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node);
 
 // Base class for object-oriented states in the streaming parser

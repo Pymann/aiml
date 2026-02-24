@@ -5,6 +5,6 @@
     args: [[argc, i32], [argv, ptr<ptr<string>>]]
     return: i32
     body:
-      - decl: [result, i32, "${ { call: [my.lib.add, 10, 20] } }"]
+      - decl: [result, string, "${ { call: [my.lib.add, 10, 20] } }"]
       - print: "10 + 20 = ${result}"
       - return: 0

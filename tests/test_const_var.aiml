@@ -1,0 +1,4 @@
+- decl: [const_var, i32, 10, { const: true }]
+- print: ["Const Var: ", const_var]
+# Invalid: Write to const var
+- set: [const_var, 20]

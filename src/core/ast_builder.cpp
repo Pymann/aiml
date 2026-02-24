@@ -75,6 +75,21 @@ std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node) {
     return nullptr;
 }
 
+std::unique_ptr<Expr> parseScalarExpr(const std::string& val, const std::string& tag) {
+    if (tag == "!") {
+        if (val.find("${") != std::string::npos) return parseInterpolatedString(val);
+        else return std::make_unique<LiteralExpr>(val, "string");
+    } else if (val == "true" || val == "false" || isdigit(val[0]) || (val.length() > 0 && val[0] == '-')) {
+        return std::make_unique<LiteralExpr>(val, "unknown");
+    } else if (val.find("${") != std::string::npos) {
+        return parseInterpolatedString(val);
+    } else if (val.length() > 0 && (val[0] == '"' || val[0] == '\'')) {
+        return std::make_unique<LiteralExpr>(val, "string");
+    } else {
+        return std::make_unique<VariableExpr>(val);
+    }
+}
+
 std::unique_ptr<Expr> parseInterpolatedString(const std::string& input) {
     if (input.find("${") == std::string::npos) {
         return std::make_unique<LiteralExpr>(input, "string");
@@ -94,7 +109,18 @@ std::unique_ptr<Expr> parseInterpolatedString(const std::string& input) {
             interp->parts.push_back(std::make_unique<LiteralExpr>(input.substr(pos, start - pos), "string"));
         }
         
-        size_t end = input.find("}", start);
+        size_t end = std::string::npos;
+        int braceDepth = 0;
+        for (size_t i = start + 2; i < input.length(); ++i) {
+             if (input[i] == '{') braceDepth++;
+             else if (input[i] == '}') {
+                 if (braceDepth > 0) braceDepth--;
+                 else {
+                      end = i;
+                      break;
+                 }
+             }
+        }
         if (end == std::string::npos) break; // Malformed
         
         std::string exprStr = input.substr(start + 2, end - start - 2);
