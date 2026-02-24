@@ -74,6 +74,7 @@ public:
 class NewExpr : public Expr {
 public:
     std::string typeName;
+    std::map<std::string, std::unique_ptr<Expr>> initValues;
 
     NewExpr(std::string tName) : typeName(tName) {}
     std::string toString() const override { return "New(" + typeName + ")"; }

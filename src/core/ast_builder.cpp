@@ -36,6 +36,21 @@ std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node) {
         return std::make_unique<VariableExpr>(val);
     }
     if (node.IsMap()) {
+        if (node["new"]) {
+            std::string className;
+            if (node["new"].IsScalar()) className = node["new"].as<std::string>();
+            else if (node["new"].IsMap() && node["new"].begin()->first.as<std::string>() == "new") {} // Ignore
+            
+            auto newExpr = std::make_unique<NewExpr>(className);
+            for (auto it = node.begin(); it != node.end(); ++it) {
+                std::string key = it->first.as<std::string>();
+                if (key != "new") {
+                    newExpr->initValues[key] = nodeToExpr(it->second);
+                }
+            }
+            return newExpr;
+        }
+
         std::string op = node.begin()->first.as<std::string>();
         auto argsNode = node.begin()->second;
         

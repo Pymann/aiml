@@ -664,6 +664,17 @@ void Compiler::visitTry(TryStmt* tryStmt) {
 
     ctx.builder.SetInsertPoint(catchBlock);
     
+    // Set Personality Function
+    llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
+    if (!parentFunc->hasPersonalityFn()) {
+        llvm::Function* persFunc = ctx.module.getFunction("__gxx_personality_v0");
+        if (!persFunc) {
+            llvm::FunctionType* fty = llvm::FunctionType::get(ctx.builder.getInt32Ty(), true);
+            persFunc = llvm::Function::Create(fty, llvm::Function::ExternalLinkage, "__gxx_personality_v0", ctx.module);
+        }
+        parentFunc->setPersonalityFn(persFunc);
+    }
+
     // Emit LandingPad
     llvm::PointerType* ptrTy = llvm::PointerType::getUnqual(ctx.context);
     llvm::StructType* landingPadTy = llvm::StructType::get(ctx.context, {ptrTy, ctx.builder.getInt32Ty()});
@@ -696,9 +707,9 @@ void Compiler::visitTry(TryStmt* tryStmt) {
         llvm::Type* excType = ctx.getLLVMType(tryStmt->catchType);
         if (!excType) excType = ctx.builder.getInt8Ty(); // fallback
         
-        // Since Opaque Pointers (LLVM 18), we don't need BitCast for ptr -> ptr!
-        // We just use the ptr rawExc directly, but wrap it in our IRSystem
-        llvm::Value* userExc = rawExc;
+        // Since we allocated 8 bytes in __cxa_allocate_exception and stored the actual object ptr inside it,
+        // we must load the object ptr from the returned envelope.
+        llvm::Value* userExc = ctx.builder.CreateLoad(ptrTy, rawExc, "actual_exc_ptr");
         
         // Register variable in scope
         IRType* targetTy = ctx.ir_gen->wrapType(ptrTy); // Opaque pointer
@@ -769,8 +780,16 @@ void Compiler::visitThrow(ThrowStmt* throwStmt) {
     llvm::Value* nullTypeInfo = llvm::ConstantPointerNull::get(ptrTy);
     llvm::Value* nullDtor = llvm::ConstantPointerNull::get(ptrTy);
 
-    ctx.builder.CreateCall(throwFunc, {excAlloc, nullTypeInfo, nullDtor});
-    ctx.builder.CreateUnreachable();
+    if (ctx.catchBlock) {
+        llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* unreachableBB = llvm::BasicBlock::Create(ctx.context, "throw_unreachable", currentFunc);
+        ctx.builder.CreateInvoke(throwFunc, unreachableBB, ctx.catchBlock, {excAlloc, nullTypeInfo, nullDtor});
+        ctx.builder.SetInsertPoint(unreachableBB);
+        ctx.builder.CreateUnreachable();
+    } else {
+        ctx.builder.CreateCall(throwFunc, {excAlloc, nullTypeInfo, nullDtor});
+        ctx.builder.CreateUnreachable();
+    }
 }
 
 IRValue* Compiler::visitExpression(Expr* expr) {
@@ -838,8 +857,15 @@ IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
         // Auto-initialize defined members
         auto& classInfo = ctx.classes[className];
         for (auto& [name, member] : classInfo.members) {
-             if (member.initValue != nullptr) {
-                  IRValue* fieldInitV = visitExpression(member.initValue.get());
+             Expr* initExpr = nullptr;
+             if (newExpr->initValues.count(name)) {
+                 initExpr = newExpr->initValues[name].get();
+             } else if (member.initValue != nullptr) {
+                 initExpr = member.initValue.get();
+             }
+             
+             if (initExpr != nullptr) {
+                  IRValue* fieldInitV = visitExpression(initExpr);
                   if (fieldInitV) {
                       llvm::Value* initVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldInitV));
                       if (initVal) {
@@ -847,10 +873,10 @@ IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
                           llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(classInfo.type, rawPtrCast, member.index, name + "_gep");
                           ctx.builder.CreateStore(initVal, fieldPtr);
                       } else {
-                          LOG_ERROR("Null LLVM value evaluated for default initialization of member: " + name);
+                          LOG_ERROR("Null LLVM value evaluated for initialization of member: " + name);
                       }
                   } else {
-                      LOG_ERROR("Failed to compile AST expression for default initialization of member: " + name);
+                      LOG_ERROR("Failed to compile AST expression for initialization of member: " + name);
                   }
              }
         }

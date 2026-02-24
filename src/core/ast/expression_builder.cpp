@@ -86,7 +86,14 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
          if (newName) name = newName->name;
          else if (newLiteral) name = newLiteral->value;
          
-         return std::make_unique<NewExpr>(name);
+         auto newExpr = std::make_unique<NewExpr>(name);
+         for (size_t i = 1; i + 1 < args.size(); i += 2) {
+             auto keyExpr = dynamic_cast<VariableExpr*>(args[i].get());
+             if (keyExpr) {
+                 newExpr->initValues[keyExpr->name] = std::move(args[i+1]);
+             }
+         }
+         return newExpr;
     }
     if (args.size() == 2) {
          return std::make_unique<BinaryExpr>(op, std::move(args[0]), std::move(args[1]));
