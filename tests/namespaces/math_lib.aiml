@@ -1,18 +1,15 @@
-namespace: my.math
+- namespace: my.math
 
-def:
-  add:
-    args:
-      a: i32
-      b: i32
+- def:
+    name: add
+    args: [[a, i32], [b, i32]]
     return: i32
     body:
       - ret: { +: [a, b] }
 
-  sub:
-    args:
-      a: i32
-      b: i32
+- def:
+    name: sub
+    args: [[a, i32], [b, i32]]
     return: i32
     body:
       - ret: { -: [a, b] }

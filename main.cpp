@@ -22,8 +22,7 @@ int main(int argc, char** argv) {
             else if (levelStr == "INFO") logLevel = LogLevel::INFO;
             else if (levelStr == "WARN") logLevel = LogLevel::WARNING;
             else if (levelStr == "ERROR") logLevel = LogLevel::ERROR;
-        } else if (arg == "-v") {
-            logLevel = LogLevel::DEBUG;
+            else if (levelStr == "VERBOSE") logLevel = LogLevel::VERBOSE;
         } else if (arg == "-r" || arg == "--run") {
             runMode = true;
         } else if (arg == "-o" && i + 1 < argc) {
@@ -91,6 +90,12 @@ int main(int argc, char** argv) {
         // JIT Mode
         LOG_DEBUG("JIT Run Mode. Saving IR to " + outputFile);
         compiler.compile(inputFile, "/dev/null"); // Compile module
+        
+        if (Logger::instance().hasErrors()) {
+            LOG_ERROR("Compilation failed with errors.");
+            return 1;
+        }
+
         compiler.generateEntryPoint();            // Add main wrapper
         return compiler.jitRun();
     } 
@@ -103,8 +108,14 @@ int main(int argc, char** argv) {
     if (isLL) {
         LOG_DEBUG("Standard IR Compilation Mode");
         // Compile and generate entry point for LL debugging
-        compiler.compile(inputFile, "/dev/null"); // Parse and populate module
-        compiler.generateEntryPoint();            // Add main wrapper
+        compiler.compile(inputFile, outputFile); // Parse and populate module
+        
+        if (Logger::instance().hasErrors()) {
+            LOG_ERROR("Compilation failed with errors.");
+            return 1;
+        }
+        
+        // This writes file WITHOUT entry point wrapper.
         
         // We can't easily print module from here without LLVM headers.
         // HACK: call compile again with empty file? No.
@@ -115,11 +126,6 @@ int main(int argc, char** argv) {
         // Let's add 'saveIR' to compiler? 
         // For now: Just use valid output file in compile() for parsing, but that doesn't include entry point.
         
-        // REVISIT: We need to change main.cpp includes OR add helper. 
-        // Let's rely on adding 'saveIR' to compiler in next step if needed.
-        // For now, let's just do:
-        compiler.compile(inputFile, outputFile);
-        // This writes file WITHOUT entry point wrapper.
         // If users want to see wrapper, this is a limitation.
         // For 'test_namespace.aiml', we want to run it (-r). 
         // The -r path is above (runMode). 
@@ -133,6 +139,11 @@ int main(int argc, char** argv) {
         
         // 1. Compile Module
         compiler.compile(inputFile, "/dev/null"); 
+        
+        if (Logger::instance().hasErrors()) {
+            LOG_ERROR("Compilation failed with errors.");
+            return 1;
+        }
         
         // 2. Generate Entry Point IF Executable
         if (isExe) {
@@ -169,9 +180,9 @@ int main(int argc, char** argv) {
         } else {
              // Just object file
              if (!compiler.linkedObjects.empty()) {
-                 std::cout << "Compiled " << outputFile << ". Link with: ";
-                 for (const auto& dep : compiler.linkedObjects) std::cout << dep << " ";
-                 std::cout << std::endl;
+                 std::string linkMsg = "Compiled " + outputFile + ". Link with: ";
+                 for (const auto& dep : compiler.linkedObjects) linkMsg += dep + " ";
+                 LOG_INFO(linkMsg);
              }
         }
     }

@@ -144,6 +144,24 @@ public:
     std::string toString() const override { return "Ret(...)"; }
 };
 
+class ThrowStmt : public Stmt {
+public:
+    std::unique_ptr<Expr> value;
+
+    ThrowStmt(std::unique_ptr<Expr> v) : value(std::move(v)) {}
+    std::string toString() const override { return "Throw(" + value->toString() + ")"; }
+};
+
+class TryStmt : public Stmt {
+public:
+    std::unique_ptr<BlockStmt> tryBlock;
+    std::unique_ptr<BlockStmt> catchBlock;
+    std::string catchVar;
+    std::string catchType;
+
+    std::string toString() const override { return "Try(...) Catch(...)"; }
+};
+
 // --- Top-Level Declarations ---
 
 class FunctionDecl : public Node {
@@ -160,6 +178,8 @@ struct StructMember {
     std::string name;
     std::string type;
     std::unique_ptr<Expr> initialValue; // Applicable for classes/models
+    uint64_t version = 1;
+    std::string access = "public";
 };
 
 struct MethodSignature {
@@ -173,6 +193,8 @@ public:
     std::string name;
     std::string parentName; // for "extends"
     uint64_t version = 1;
+    std::vector<std::string> models;
+    std::vector<std::string> interfaces;
     std::vector<StructMember> members;
     std::vector<std::unique_ptr<FunctionDecl>> methods;
 

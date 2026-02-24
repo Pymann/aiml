@@ -1,0 +1,44 @@
+#pragma once
+#include <memory>
+#include <string>
+#include <vector>
+#include <stack>
+#include "../ast_nodes.h"
+
+namespace AIML {
+namespace AST {
+
+class Builder;
+class StateHandler;
+
+class ClassBuilder : public StateHandler {
+    std::unique_ptr<ClassDecl> classNode;
+    std::string currentKey;
+    bool expectingKey = false;
+    bool insideMembers = false;
+    bool insideMethods = false;
+    bool insideModels = false;
+    bool insideImplements = false;
+    int mapDepth = 0; // Start at 0
+    int sequenceDepth = 0;
+    int memberAttrIndex = 0; // Tracks which column [name, type, default, modifiers]
+    
+    // State for parsing member sequence entry
+    std::string currentField;
+    std::string currentType;
+    std::unique_ptr<Expr> currentInitValue;
+    uint64_t currentVersion = 1;
+    std::string currentAccess = "public";
+public:
+    ClassBuilder(Builder* b) : StateHandler(b) { classNode = std::make_unique<ClassDecl>(); }
+    bool OnMapStart() override;
+    bool OnMapEnd() override;
+    bool OnScalar(const std::string& value, const std::string& tag) override;
+    bool OnSequenceStart() override;
+    bool OnSequenceEnd() override;
+    void receiveChildNode(std::unique_ptr<Node> node) override;
+    std::unique_ptr<Node> finish() override;
+};
+
+} // namespace AST
+} // namespace AIML

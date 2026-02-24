@@ -77,15 +77,8 @@ llvm::Value* handleNew(CompilerContext& ctx, const YAML::Node& args) {
         llvm::Value* rawPtr = ctx.builder.CreateCall(callocFunc, {ctx.builder.getInt64(1), sizeVal}, "calloc_call");
           
         auto& classInfo = ctx.classes[className];
-        for (auto& [name, member] : classInfo.members) {
-             if (member.initValue.IsDefined() && !member.initValue.IsNull()) {
-                  llvm::Value* initVal = evaluate(ctx, member.initValue);
-                  if (initVal) {
-                       llvm::Value* memberPtr = ctx.builder.CreateStructGEP(classInfo.type, rawPtr, member.index);
-                       ctx.builder.CreateStore(initVal, memberPtr);
-                  }
-             }
-        }
+        // Note: Default struct initialization for YAML expressions has been stripped
+        // in favor of the full AST compilation model. 
         return rawPtr;
     }
     if (!className.empty()) LOG_ERROR("Unknown class for new: " + className);

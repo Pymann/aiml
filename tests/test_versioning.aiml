@@ -5,14 +5,14 @@
     name: UserV1
     version: 1
     members:
-      - [name, string, { version: 1, access: public }]
+      - [name, string, "", { version: 1, access: public }]
 
 # Define V2 Class for reading
 - class:
     name: UserV2
     version: 2
     members:
-      - [name, string, { version: 1, access: public }]
+      - [name, string, "", { version: 1, access: public }]
       - [email, string, "no-email", { version: 2, access: public }] 
 
 - decl: [buf, buffer]

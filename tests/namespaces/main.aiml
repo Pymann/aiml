@@ -1,7 +1,8 @@
-import: tests/namespaces/math_lib.aiml
+- import: tests/namespaces/math_lib.aiml
 
-def:
-  main:
+- def:
+    name: main
+    args: [[argc, i32], [argv, ptr]]
     return: i32
     body:
       - decl: [res1, i32]
