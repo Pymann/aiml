@@ -53,6 +53,7 @@ std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node) {
 
         std::string op = node.begin()->first.as<std::string>();
         auto argsNode = node.begin()->second;
+        LOG_DEBUG("nodeToExpr: Map op=" + op + " isSeq=" + std::to_string(argsNode.IsSequence()) + " size=" + std::to_string(argsNode.size()));
         
         if (op == "call" && argsNode.IsSequence() && argsNode.size() > 0) {
             std::string funcName;
@@ -126,8 +127,10 @@ std::unique_ptr<Expr> parseInterpolatedString(const std::string& input) {
         std::string exprStr = input.substr(start + 2, end - start - 2);
         try {
             YAML::Node node = YAML::Load(exprStr);
+            LOG_DEBUG("parseInterpolatedString: Loaded YAML node for: " + exprStr);
             auto astExpr = nodeToExpr(node);
             if (astExpr) {
+                LOG_DEBUG("parseInterpolatedString: Successfully created AST expr for: " + exprStr);
                 interp->parts.push_back(std::move(astExpr));
             } else {
                 interp->parts.push_back(std::make_unique<LiteralExpr>("${" + exprStr + "}", "string"));
@@ -139,9 +142,6 @@ std::unique_ptr<Expr> parseInterpolatedString(const std::string& input) {
         pos = end + 1;
     }
     
-    if (interp->parts.size() == 1) {
-        return std::move(interp->parts[0]);
-    }
     return interp;
 }
 

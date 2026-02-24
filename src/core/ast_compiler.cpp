@@ -458,6 +458,18 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
              LOG_ERROR("Cannot assign to const variable " + targetStr);
              return;
         }
+        if (sym->typeName.find("list<") == 0) {
+            llvm::StructType* listStructTy = ListImpl::getListStructType(ctx);
+            uint64_t structSize = ctx.module.getDataLayout().getTypeAllocSize(listStructTy);
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
+            ctx.builder.CreateCall(memcpyFunc, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)),
+                ctx.builder.getInt64(structSize)
+            });
+            return;
+        }
         ctx.ir_gen->createStore(val, baseAlloca);
     } else {
         std::string className = sym->typeName;
@@ -467,8 +479,8 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         
         llvm::Type* llvmBaseElemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(baseElemTy));
         if (isDash && (className.find("list<") == 0 || llvmBaseElemTy->isArrayTy())) {
-            size_t colonPos = propName.find(':');
-            if (colonPos != std::string::npos) {
+            size_t dashInProp = propName.find('-');
+            if (dashInProp != std::string::npos) {
                 LOG_ERROR("Slice assignment is not supported yet: " + targetStr);
                 return;
             }
@@ -828,6 +840,9 @@ IRValue* Compiler::visitStringInterpolation(StringInterpolationExpr* expr) {
         llvm::Value* val = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(irVal));
         llvm::Type* ty = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(irVal->getType()));
         
+        LOG_DEBUG("Interpolation Part Ty: " + std::to_string(ty->getTypeID()));
+        if (ty->isIntegerTy()) LOG_DEBUG("  Bitwidth: " + std::to_string(ty->getIntegerBitWidth()));
+        
         llvm::Value* strVal = val;
         // Basic type conversions to string
         if (ty->isIntegerTy(32)) {
@@ -835,10 +850,9 @@ IRValue* Compiler::visitStringInterpolation(StringInterpolationExpr* expr) {
         } else if (ty->isIntegerTy(64)) {
             strVal = StringUtils::int64ToString(ctx, val);
         } else if (ty->isIntegerTy(1)) {
-            llvm::Value* cond = ctx.builder.CreateICmpEQ(val, ctx.builder.getInt32(1));
             llvm::Value* trueStr = ctx.builder.CreateGlobalStringPtr("true");
             llvm::Value* falseStr = ctx.builder.CreateGlobalStringPtr("false");
-            strVal = ctx.builder.CreateSelect(cond, trueStr, falseStr);
+            strVal = ctx.builder.CreateSelect(val, trueStr, falseStr); // val is already i1
         }
         
         if (!currentStr) currentStr = strVal;
@@ -1100,16 +1114,16 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
                     elemType = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
                 }
 
-                size_t colonPos = propName.find(':');
-                if (colonPos != std::string::npos) {
-                    // Slicing
+                size_t dashInProp = propName.find('-');
+                if (dashInProp != std::string::npos) {
+                    // Slicing: varname-start-end (e.g. lst-1-4, lst-2-, lst--2)
                     if (!isDynamicList) {
                         LOG_ERROR("Array Slicing not supported on raw arrays yet.");
                         return nullptr;
                     }
-                    
-                    std::string startStr = propName.substr(0, colonPos);
-                    std::string endStr = propName.substr(colonPos + 1);
+
+                    std::string startStr = propName.substr(0, dashInProp);
+                    std::string endStr = propName.substr(dashInProp + 1);
                     
                     llvm::Value* startVal = startStr.empty() ? ctx.builder.getInt32(0) : ctx.builder.getInt32(std::stoi(startStr));
                     llvm::Value* endVal = nullptr;
@@ -1194,9 +1208,9 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                 } else if (methodName == "seek" && call->args.size() >= 1) {
                     IRValue* rawPos = visitExpression(call->args[0].get());
                     llvm::Value* rawVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rawPos));
-                    llvm::Value* pos64 = ctx.builder.CreateZExtOrTrunc(rawVal, ctx.builder.getInt64Ty());
-                    BufferImpl::seek(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), pos64, false);
-                    BufferImpl::seek(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), pos64, true);
+                    llvm::Value* pos32 = ctx.builder.CreateZExtOrTrunc(rawVal, ctx.builder.getInt32Ty());
+                    BufferImpl::seek(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), pos32, false);
+                    BufferImpl::seek(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), pos32, true);
                     return ctx.ir_gen->getInt32(0);
                 } else if (methodName == "read_versioned" && call->args.size() >= 1) {
                     std::string typeName = "unknown";
@@ -1238,18 +1252,20 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             
             // List Methods
             if (className.find("list<") == 0) {
+                 std::string listElemName = className.substr(5, className.length() - 6);
+                 llvm::Type* llvmListElemType = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(listElemName)));
                  if (methodName == "push" && argVals.size() > 0) {
                      ListImpl::push(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])));
                      return nullptr;
                  } else if (methodName == "pop") {
-                     return ctx.ir_gen->wrap(ListImpl::pop(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(baseElemTy))));
+                     return ctx.ir_gen->wrap(ListImpl::pop(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), llvmListElemType));
                  } else if (methodName == "get" && argVals.size() > 0) {
-                     return ctx.ir_gen->wrap(ListImpl::get(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(baseElemTy))));
+                     return ctx.ir_gen->wrap(ListImpl::get(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), llvmListElemType));
                  } else if (methodName == "insert" && argVals.size() > 1) {
                      ListImpl::insert(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1])));
                      return nullptr;
                  } else if (methodName == "remove" && argVals.size() > 0) {
-                     ListImpl::remove(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(baseElemTy)));
+                     ListImpl::remove(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), llvmListElemType);
                      return nullptr;
                  } else if (methodName == "clear") {
                      ListImpl::clear(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
@@ -1628,6 +1644,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             for (size_t i = 0; i < argVals.size(); ++i) {
                  finalArgs.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[i])));
             }
+            LOG_DEBUG("Call Result Ty: " + std::to_string(f->getReturnType()->getTypeID()));
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, finalArgs));
         }
         

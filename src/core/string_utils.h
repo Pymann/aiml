@@ -35,7 +35,9 @@ namespace StringUtils {
         llvm::Value* size = ctx.builder.CreateAdd(sum, ctx.builder.getInt64(1)); // +1 for null
         
         llvm::Value* newStr = ctx.builder.CreateCall(mallocFunc, {size});
-        
+
+        LOG_VERBOSE("[IR] concat: generating string concat");
+
         ctx.builder.CreateCall(strcpyFunc, {newStr, safeS1});
         ctx.builder.CreateCall(strcatFunc, {newStr, safeS2});
         
@@ -55,8 +57,10 @@ namespace StringUtils {
         llvm::Function* sprintfFunc = ctx.getFunction("sprintf", ctx.builder.getInt32Ty(), {i8Ptr, i8Ptr}, true);
         
         llvm::Value* buf = ctx.builder.CreateCall(mallocFunc, {ctx.builder.getInt64(12)});
+
+        LOG_VERBOSE("[IR] intToString: generating int-to-string conversion");
+
         llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("%d");
-        
         ctx.builder.CreateCall(sprintfFunc, {buf, fmt, intVal});
         return buf;
     }
