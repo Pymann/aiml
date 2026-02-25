@@ -68,7 +68,12 @@ std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node) {
             return callExpr;
         }
         
-        // binary Expr
+        // Unary operators: single-argument maps like { '?': [p] }, { '&': [x] }
+        if (argsNode.IsSequence() && argsNode.size() == 1) {
+            return std::make_unique<UnaryExpr>(op, nodeToExpr(argsNode[0]));
+        }
+
+        // Binary operators
         if (argsNode.IsSequence() && argsNode.size() == 2) {
              return std::make_unique<BinaryExpr>(op, nodeToExpr(argsNode[0]), nodeToExpr(argsNode[1]));
         }

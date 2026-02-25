@@ -17,6 +17,7 @@ IRValue* Compiler::visitExpression(Expr* expr) {
     if (auto newExpr = dynamic_cast<NewExpr*>(expr)) return visitNewExpr(newExpr);
     if (auto interp = dynamic_cast<StringInterpolationExpr*>(expr)) return visitStringInterpolation(interp);
     if (auto bin = dynamic_cast<BinaryExpr*>(expr)) return visitBinary(bin);
+    if (auto unary = dynamic_cast<UnaryExpr*>(expr)) return visitUnary(unary);
     return nullptr;
 }
 IRValue* Compiler::visitStringInterpolation(StringInterpolationExpr* expr) {
@@ -331,6 +332,73 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
     if (bin->op == "or") return ctx.ir_gen->createOr(lhs, rhs);
 
     LOG_ERROR("Unknown binary operator: " + bin->op);
+    return nullptr;
+}
+// Helper: strip one level of ptr<...> or ref<...> wrapper, returns inner type string
+static std::string stripPtrWrapper(const std::string& typeName) {
+    if ((typeName.rfind("ptr<", 0) == 0 || typeName.rfind("ref<", 0) == 0) && typeName.back() == '>')
+        return typeName.substr(4, typeName.size() - 5);
+    return "";
+}
+
+IRValue* Compiler::visitUnary(UnaryExpr* unary) {
+    // '&'  / '&&'  — address-of (N levels): return the alloca pointer of the variable
+    if (unary->op.find_first_not_of('&') == std::string::npos) {
+        auto* varExpr = dynamic_cast<VariableExpr*>(unary->operand.get());
+        if (!varExpr) { LOG_ERROR("Unary '&': operand must be a variable"); return nullptr; }
+        Symbol* sym = resolveVariable(varExpr->name);
+        if (!sym) { LOG_ERROR("Unary '&': undefined variable: " + varExpr->name); return nullptr; }
+        IRValue* alloca = sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst);
+        if (unary->op == "&") {
+            return alloca; // pointer to x
+        }
+        // '&&x' → alloca of a pointer-to-x (temp)
+        llvm::Value* rawAlloca = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
+        llvm::AllocaInst* ptrToPtr = ctx.builder.CreateAlloca(rawAlloca->getType(), nullptr, "addr_of_addr");
+        ctx.builder.CreateStore(rawAlloca, ptrToPtr);
+        return ctx.ir_gen->wrap(ptrToPtr);
+    }
+
+    // '?', '??', '???' — dereference (N levels)
+    if (unary->op.find_first_not_of('?') == std::string::npos) {
+        int depth = (int)unary->op.size();
+
+        // Resolve base symbol to get the type chain
+        auto* varExpr = dynamic_cast<VariableExpr*>(unary->operand.get());
+        Symbol* sym = varExpr ? resolveVariable(varExpr->name) : nullptr;
+
+        // Get the current pointer value (evaluating the operand loads its value)
+        IRValue* val = visitExpression(unary->operand.get());
+        if (!val) return nullptr;
+        llvm::Value* ptr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+
+        // Build the type chain from the symbol's typeName (e.g. "ptr<ptr<i32>>")
+        std::string curTypeName = sym ? sym->typeName : "";
+        for (int i = 0; i < depth; ++i) {
+            std::string inner = stripPtrWrapper(curTypeName);
+            llvm::Type* loadTy = nullptr;
+            if (!inner.empty()) {
+                loadTy = ctx.getLLVMType(inner);
+                curTypeName = inner; // advance one level
+            }
+            if (!loadTy) {
+                // Fallback: load as opaque pointer (handles string/any)
+                loadTy = ctx.builder.getInt8Ty()->getPointerTo();
+            }
+            ptr = ctx.builder.CreateLoad(loadTy, ptr, "deref");
+        }
+        return ctx.ir_gen->wrap(ptr);
+    }
+
+    // '!' — logical not
+    if (unary->op == "!") {
+        IRValue* val = visitExpression(unary->operand.get());
+        if (!val) return nullptr;
+        llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+        return ctx.ir_gen->wrap(ctx.builder.CreateNot(v, "not"));
+    }
+
+    LOG_ERROR("Unknown unary operator: " + unary->op);
     return nullptr;
 }
 } // namespace AST

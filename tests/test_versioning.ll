@@ -75,9 +75,9 @@ entry:
   %25 = select i1 %24, i32 %21, i32 %23
   store i32 %25, ptr %22, align 4
   %26 = getelementptr inbounds %buffer, ptr %buf, i32 0, i32 3
-  store i64 0, ptr %26, align 8
+  store i32 0, ptr %26, align 4
   %27 = getelementptr inbounds %buffer, ptr %buf, i32 0, i32 2
-  store i64 0, ptr %27, align 8
+  store i32 0, ptr %27, align 4
   %u = alloca %UserV2, align 8
   store %UserV2 zeroinitializer, ptr %u, align 8
   %28 = getelementptr inbounds %buffer, ptr %buf, i32 0, i32 2
@@ -155,8 +155,8 @@ cmp_do_strcmp:                                    ; preds = %ver_skip2
   br label %cmp_merge
 
 cmp_merge:                                        ; preds = %cmp_do_strcmp, %cmp_check_null
-  %streq_res = phi i1 [ %56, %cmp_check_null ], [ %59, %cmp_do_strcmp ]
-  br i1 %streq_res, label %if_then, label %if_else
+  %strcmp_res = phi i1 [ %56, %cmp_check_null ], [ %59, %cmp_do_strcmp ]
+  br i1 %strcmp_res, label %if_then, label %if_else
 
 if_then:                                          ; preds = %cmp_merge
   %print_call9 = call i32 (ptr, ...) @printf(ptr @9, ptr @8)
