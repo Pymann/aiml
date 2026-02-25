@@ -39,11 +39,13 @@ public:
     }
 
     bool OnSequenceStart() override {
-        depth++;
         LOG_DEBUG("TryBuilder OnSequenceStart: currentKey=" + currentKey + " depth=" + std::to_string(depth));
         if (currentKey == "body") {
+            // BlockBuilder consumes its own matching SequenceEnd — do NOT increment depth here.
             builder->pushState(std::make_unique<BlockBuilder>(builder));
+            return true;
         }
+        depth++;
         return true;
     }
 

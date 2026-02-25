@@ -51,7 +51,8 @@
         ],
         "libraries": [
             "yaml-cpp",
-            "LLVM-18"
+            "LLVM-18",
+            "pthread"
         ],
         "library_paths": [
             "/usr/lib/x86_64-linux-gnu",

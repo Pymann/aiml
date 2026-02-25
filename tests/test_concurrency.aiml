@@ -1,0 +1,41 @@
+- def:
+    name: worker
+    args: [[id, i32]]
+    return: void
+    body:
+      - print: ["Worker ${id}: started"]
+      - print: ["Worker ${id}: done"]
+
+# Thread spawn and join
+- decl: [t1, thread_handle]
+- decl: [t2, thread_handle]
+
+- set: [t1, { spawn: [worker, 1] }]
+- set: [t2, { spawn: [worker, 2] }]
+
+- print: ["Main: threads spawned"]
+
+- call: [t1.join]
+- call: [t2.join]
+
+- print: ["Main: threads joined"]
+
+# InvalidThreadStateException: join on already-joined thread
+- try:
+    body:
+      - call: [t1.join]
+      - print: ["ERROR: should not reach here"]
+    catch:
+      - type: InvalidThreadStateException
+        var: e
+        body:
+          - print: ["Caught InvalidThreadStateException on double-join"]
+
+# Mutex test
+- decl: [mutex, lock]
+- call: [mutex.init]
+- call: [mutex.acquire]
+- print: ["Main: in critical section"]
+- call: [mutex.release]
+
+- print: ["Main: done"]

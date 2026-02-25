@@ -59,13 +59,21 @@ std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node) {
             std::string funcName;
             if (argsNode[0].IsScalar()) funcName = argsNode[0].as<std::string>();
             else if (argsNode[0].IsMap() && argsNode[0].begin()->first.as<std::string>() == "call") {
-                // Should not happen as function name 
+                // Should not happen as function name
             }
             auto callExpr = std::make_unique<CallExpr>(funcName);
             for(size_t i=1; i<argsNode.size(); ++i) {
                 callExpr->args.push_back(nodeToExpr(argsNode[i]));
             }
             return callExpr;
+        }
+
+        if (op == "spawn" && argsNode.IsSequence() && argsNode.size() >= 1) {
+            std::string funcName = argsNode[0].IsScalar() ? argsNode[0].as<std::string>() : "unknown";
+            auto spawnExpr = std::make_unique<SpawnExpr>(funcName);
+            for (size_t i = 1; i < argsNode.size(); ++i)
+                spawnExpr->args.push_back(nodeToExpr(argsNode[i]));
+            return spawnExpr;
         }
         
         // Unary operators: single-argument maps like { '?': [p] }, { '&': [x] }

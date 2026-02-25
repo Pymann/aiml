@@ -363,6 +363,22 @@ namespace AIML {
         if (typeName == "process") return llvm::Type::getInt8Ty(context)->getPointerTo();     // ProcessHandle*
         if (typeName == "any") return llvm::Type::getInt8Ty(context)->getPointerTo();         // void*
 
+        // thread_handle: pointer to { i64 tid, i8 joined, i8 detached }
+        if (typeName == "thread_handle") {
+            llvm::StructType* handleTy = llvm::StructType::getTypeByName(context, "thread_handle");
+            if (!handleTy) {
+                handleTy = llvm::StructType::create(context,
+                    {llvm::Type::getInt64Ty(context),
+                     llvm::Type::getInt8Ty(context),
+                     llvm::Type::getInt8Ty(context)},
+                    "thread_handle");
+            }
+            return handleTy->getPointerTo();
+        }
+
+        // lock: pointer to heap-allocated pthread_mutex_t (opaque i8*)
+        if (typeName == "lock") return llvm::Type::getInt8Ty(context)->getPointerTo();
+
         LOG_ERROR("Unknown Type: '" + typeName + "' -> defaulting to i32");
         return llvm::Type::getInt32Ty(context); // Default
     }
