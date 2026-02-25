@@ -98,9 +98,9 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
     if (args.size() == 2) {
          return std::make_unique<BinaryExpr>(op, std::move(args[0]), std::move(args[1]));
     }
-    // Fallback: Just return a literal of the operation or wrap it
+    // Unary operators (single argument)
     if (args.size() == 1) {
-         return std::move(args[0]); // A bit hacky: `not: x` becomes just `x`
+        return std::make_unique<UnaryExpr>(op, std::move(args[0]));
     }
     return nullptr;
 }

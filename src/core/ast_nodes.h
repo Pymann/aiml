@@ -55,6 +55,17 @@ public:
     std::string toString() const override { return "Binary(" + op + ", " + lhs->toString() + ", " + rhs->toString() + ")"; }
 };
 
+// Unary operators: '?' (deref), '??' (double-deref), '&' (addr-of), '&&' (addr-of-addr), '!' (logical not)
+class UnaryExpr : public Expr {
+public:
+    std::string op;
+    std::unique_ptr<Expr> operand;
+
+    UnaryExpr(std::string op, std::unique_ptr<Expr> operand)
+        : op(op), operand(std::move(operand)) {}
+    std::string toString() const override { return "Unary(" + op + ", " + operand->toString() + ")"; }
+};
+
 class CallExpr : public Expr {
 public:
     std::string functionName;

@@ -1,5 +1,6 @@
 #define DEBUG_MODE
 #include "ast_compiler.h"
+#include "builtin_registry.h"
 #include "list_impl.h"
 #include "map_impl.h"
 #include "buffer_impl.h"
@@ -12,7 +13,9 @@ namespace AST {
 
 void Compiler::compile(Program* prog) {
     if (!prog) return;
-    
+
+    registerBuiltins(ctx);
+
     // Create __aiml_init function to hold top-level statements
     IRType* voidTy = ctx.ir_gen->resolveType("void");
     std::vector<IRType*> noArgs;

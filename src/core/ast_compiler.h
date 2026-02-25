@@ -42,6 +42,7 @@ private:
     IRValue* visitNewExpr(NewExpr* newExpr);
     IRValue* visitStringInterpolation(StringInterpolationExpr* expr);
     IRValue* visitBinary(BinaryExpr* bin);
+    IRValue* visitUnary(UnaryExpr* unary);
 
     // Strict Symbol Resolution Helpers
     Symbol* resolveVariable(const std::string& name);

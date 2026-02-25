@@ -220,7 +220,31 @@ void AIMLCompiler::generateEntryPoint() {
     
     builder.CreateStore(argcVal, argcGlobal);
     builder.CreateStore(argvVal, argvGlobal);
-    
+
+    // 3.5. Disable stdout buffering: setvbuf(stdout, NULL, _IONBF, 0)
+    {
+        llvm::Type* i8p = builder.getInt8Ty()->getPointerTo();
+        llvm::GlobalVariable* stdoutGV = module_->getGlobalVariable("stdout");
+        if (!stdoutGV) {
+            stdoutGV = new llvm::GlobalVariable(
+                *module_, i8p, false,
+                llvm::GlobalValue::ExternalLinkage,
+                nullptr, "stdout");
+        }
+        llvm::Value* stdoutVal = builder.CreateLoad(i8p, stdoutGV, "stdout_ptr");
+        llvm::FunctionType* setvbufTy = llvm::FunctionType::get(
+            builder.getInt32Ty(),
+            {i8p, i8p, builder.getInt32Ty(), builder.getInt64Ty()},
+            false);
+        llvm::FunctionCallee setvbufFn = module_->getOrInsertFunction("setvbuf", setvbufTy);
+        builder.CreateCall(setvbufFn, {
+            stdoutVal,
+            llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)),
+            builder.getInt32(2),   // _IONBF
+            builder.getInt64(0)    // size (ignored for _IONBF)
+        });
+    }
+
     // 4. Call __aiml_init()
     llvm::Function* initFunc = module_->getFunction("__aiml_init");
     if (initFunc) {

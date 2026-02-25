@@ -16,6 +16,7 @@
 namespace AIML {
     namespace AST {
         class Expr;
+        class CallExpr;
     }
 }
 
@@ -83,21 +84,38 @@ namespace AIML {
             std::shared_ptr<AIML::AST::Expr> initValue; 
         };
 
+        // Builtin method handler: receives base alloca (raw ptr), full CallExpr for
+        // lazy arg evaluation, and an evaluator callback.
+        using MethodHandler = std::function<AIML::IRValue*(
+            CompilerContext& ctx,
+            llvm::Value* baseAlloca,
+            AIML::AST::CallExpr* call,
+            std::function<AIML::IRValue*(AIML::AST::Expr*)> evalExpr)>;
+
+        // Builtin namespace function handler: args are eagerly pre-evaluated.
+        using FuncHandler = std::function<AIML::IRValue*(
+            CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args)>;
+
         struct ClassInfo {
-            llvm::StructType* type;
+            llvm::StructType* type = nullptr;
             std::string name;
             uint64_t version = 1; // Version of the class (u64)
             std::map<std::string, StructMember> members;
             std::map<std::string, FunctionInfo> methods;
-            
+
             // Inheritance and Composition
             std::string parentName;
             std::vector<std::string> interfaces;
             std::vector<std::string> usedModels;
-            std::vector<std::string> objectFilesToLink; // New member for ClassInfo
-            
+            std::vector<std::string> objectFilesToLink;
+
             bool isInterface = false;
-            bool isModel = false; 
+            bool isModel = false;
+
+            // Builtin dispatch (set for intrinsic types like buffer, process)
+            bool isBuiltin = false;
+            std::map<std::string, MethodHandler> builtinMethods;
         };
 
         class Scope {
@@ -113,6 +131,8 @@ namespace AIML {
             std::map<std::string, ClassInfo> classes;
             std::map<std::string, std::map<std::string, int>> enums;
             std::map<std::string, Symbol> globals;
+            // Builtin function dispatch (sys, io, time)
+            std::map<std::string, FuncHandler> builtinFuncs;
         };
         
     CompilerContext(llvm::LLVMContext& ctx, llvm::Module& mod, llvm::IRBuilder<>& b)
@@ -207,13 +227,14 @@ namespace AIML {
             return listType;
         }
 
-        // Check for User-Defined Classes
-        if (classes.count(typeName)) {
+        // Check for User-Defined Classes (skip builtins with null type — they have
+        // their own type definition further below)
+        if (classes.count(typeName) && classes[typeName].type != nullptr) {
              return classes[typeName].type;
         }
         // Try resolving with current namespace (e.g. "Point" -> "my.lib.Point")
         std::string qualified = qualify(typeName);
-        if (classes.count(qualified)) {
+        if (classes.count(qualified) && classes[qualified].type != nullptr) {
              return classes[qualified].type;
         }
 
