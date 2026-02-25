@@ -1,8 +1,20 @@
 # Models & Schema Definition
 
+## Model vs Class
+
+| | Model | Class |
+|--|-------|-------|
+| **Purpose** | Data structure for serialization and validation | Type with behaviour (methods) |
+| **Methods** | Not allowed — CompilationError if methods defined | Supported |
+| **Instantiation** | `decl: [x, MyModel]` or assignment from map | `decl: [x, MyClass]` or `{ new: MyClass }` |
+| **Map assignment** | Supported — runtime validates map against schema | Not supported |
+| **Serialization** | Automatic via `sys.serialize` / `sys.deserialize` | Manual implementation required |
+
+Use `model` for data, `class` for behaviour.
+
 ```yaml
 # Models define the structure of dynamic data (like maps or JSON).
-# They are similar to Pydantic models or C structs but with runtime validation capabilities.
+# Similar to Pydantic models: field names, types, defaults, and descriptions.
 
 # Syntax:
 # - model:
@@ -12,8 +24,6 @@
 #     fields:
 #       - [name, type]              # Required Field
 #       - [name, type, default_val] # Optional Field with Default
-#     descriptions:
-#       name: "Field description"
 
 # Example 1: Simple Config Model
 - model:
@@ -21,7 +31,7 @@
     description: "Configuration for the HTTP server"
     fields:
       - [host, string]
-      - [port, int]
+      - [port, i32]
       - [ssl, bool, false]
     descriptions:
       host: "Hostname or IP address"
@@ -33,61 +43,42 @@
     name: DatabaseConfig
     fields:
       - [connection_string, string]
-      - [pool_size, int, 10]
-    descriptions:
-      connection_string: "JDBC/ODBC connection string"
-      pool_size: "Max connections in pool"
+      - [pool_size, i32, 10]
 
 - model:
     name: AppConfig
     fields:
       - [server, ServerConfig]
       - [db, DatabaseConfig]
-    descriptions:
-      server: "Web server settings"
-      db: "Database settings"
 
 # Usage in Code
 
 # 1. Declaration & Instantiation
-# Models are first-class citizens and can be instantiated similarly to classes.
 - decl: [conf, ServerConfig]
 - set: [conf, { new: ServerConfig }]
 
 # 2. Assignment from Map (Validation)
-# You can assign a map to a model variable. The runtime validates the map against the schema.
+# The runtime validates the map against the schema.
 - set: [conf, {host: "localhost", port: 8080}]
 
 # 3. Serialization
-# Models support automatic serialization via system functions. No manual implementation needed.
 - decl: [yaml_str, string]
 - set: [yaml_str, { call: [sys.serialize, conf] }]
 - decl: [restored, ServerConfig]
 - set: [restored, { call: [sys.deserialize, yaml_str, ServerConfig] }]
 
-# 4. Usage in Functions (Polymorphism)
+# 4. Usage in Functions (Structural Typing)
 # Functions accepting a Model type can be called with:
 # A) An instance of that Model
-# B) A Map structure matching the Model's fields (Structural Typing)
+# B) A Map structure matching the Model's fields
 
-- def: 
+- def:
     name: start_server
     args: [[c, ServerConfig]]
     body: ...
 
-# Call with Instance
 - call: [start_server, conf]
 
-# Example 5: Function with Multiple Parameters
-# - def: 
-#     name: update_server
-#     args: [[id, int], [config, ServerConfig], [force, bool]]
-#     body: ...
-
-# Call with Instance
-- call: [update_server, 123, conf, true]
-
 # Call with mixed Map (Structural Typing)
-# The second argument is a map that matches ServerConfig schema.
-- call: [update_server, 456, {host: "10.0.0.5", port: 9090}, false]
+- call: [start_server, {host: "10.0.0.5", port: 9090}]
 ```

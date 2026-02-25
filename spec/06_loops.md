@@ -6,19 +6,10 @@
 
 # While loop
 - while:
-    condition: [lt, counter, limit]
+    condition: { lt: [counter, limit] }
     body:
       - print: [counter]
-      - add: [counter, 1]
+      - set: [counter, { +: [counter, 1] }]
 
 - print: [counter] # Should be 5
 ```
-
-# While loop
-- while:
-    condition: [lt, counter, limit]
-    body:
-      - print: [counter]
-      - add: [counter, 1]
-
-- print: [counter] # Should be 5

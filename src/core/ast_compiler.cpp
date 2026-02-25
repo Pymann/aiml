@@ -1175,214 +1175,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
         
         Symbol* sym = resolveVariable(baseName);
         if (sym) {
-            std::string className = sym->typeName;
-            if ((className.rfind("ptr<", 0) == 0 || className.rfind("ref<", 0) == 0) && className.back() == '>') {
-                 className = className.substr(4, className.length() - 5);
-            }
-            
-            IRValue* baseAlloca = sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst);
-            IRType* baseElemTy = sym->ir_element_type ? sym->ir_element_type : ctx.ir_gen->wrapType(sym->element_type);
-            
-            if (className == "buffer") {
-                if (methodName == "alloc" && call->args.size() == 1) {
-                    IRValue* sizeVal = visitExpression(call->args[0].get());
-                    if (sizeVal) BufferImpl::alloc(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sizeVal)));
-                    return ctx.ir_gen->getInt32(0);
-                } else if (methodName == "write" && call->args.size() >= 2) {
-                    IRValue* val = visitExpression(call->args[0].get());
-                    std::string typeName = "unknown";
-                    if (auto varExpr = dynamic_cast<VariableExpr*>(call->args[1].get())) typeName = varExpr->name;
-                    else if (auto litExpr = dynamic_cast<LiteralExpr*>(call->args[1].get())) typeName = litExpr->value;
-                    
-                    llvm::Type* ty = ctx.getLLVMType(typeName);
-                    if (ty && val) BufferImpl::write(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)), ty);
-                    return ctx.ir_gen->getInt32(0);
-                } else if (methodName == "read" && call->args.size() >= 1) {
-                    std::string typeName = "unknown";
-                    if (auto varExpr = dynamic_cast<VariableExpr*>(call->args[0].get())) typeName = varExpr->name;
-                    else if (auto litExpr = dynamic_cast<LiteralExpr*>(call->args[0].get())) typeName = litExpr->value;
-                    
-                    llvm::Type* ty = ctx.getLLVMType(typeName);
-                    if (ty) return ctx.ir_gen->wrap(BufferImpl::read(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), ty));
-                    return ctx.ir_gen->getInt32(0);
-                } else if (methodName == "seek" && call->args.size() >= 1) {
-                    IRValue* rawPos = visitExpression(call->args[0].get());
-                    llvm::Value* rawVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rawPos));
-                    llvm::Value* pos32 = ctx.builder.CreateZExtOrTrunc(rawVal, ctx.builder.getInt32Ty());
-                    BufferImpl::seek(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), pos32, false);
-                    BufferImpl::seek(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), pos32, true);
-                    return ctx.ir_gen->getInt32(0);
-                } else if (methodName == "read_versioned" && call->args.size() >= 1) {
-                    std::string typeName = "unknown";
-                    if (auto varExpr = dynamic_cast<VariableExpr*>(call->args[0].get())) typeName = varExpr->name;
-                    else if (auto litExpr = dynamic_cast<LiteralExpr*>(call->args[0].get())) typeName = litExpr->value;
-                    
-                    llvm::Type* ty = ctx.getLLVMType(typeName);
-                    if (ty) {
-                        auto realEval = [this](CompilerContext& c, std::shared_ptr<AIML::AST::Expr> e) -> llvm::Value* { 
-                             IRValue* v = this->visitExpression(e.get());
-                             if (!v) return llvm::Constant::getNullValue(ctx.getLLVMType("buffer")); // or better err
-                             return static_cast<llvm::Value*>(c.ir_gen->unwrap(v));
-                        };
-                        llvm::Value* explicitVer = nullptr;
-                        if (call->args.size() >= 2) {
-                            IRValue* verVal = visitExpression(call->args[1].get());
-                            if (verVal) explicitVer = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(verVal));
-                        }
-                        return ctx.ir_gen->wrap(BufferImpl::read_versioned(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), ty, realEval, explicitVer));
-                    }
-                    return ctx.ir_gen->getInt32(0);
-                }
-            } else if (className == "string" && methodName == "len") {
-                  llvm::Function* strlenFunc = ctx.module.getFunction("strlen");
-                  if (!strlenFunc) strlenFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "strlen", ctx.module);
-                  llvm::Value* strPtr = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
-                  llvm::Value* len64 = ctx.builder.CreateCall(strlenFunc, {strPtr});
-                  llvm::Value* len32 = ctx.builder.CreateTrunc(len64, ctx.builder.getInt32Ty());
-                  return ctx.ir_gen->wrap(len32);
-            }
-            
-            // Eagerly evaluate arguments for everything else
-            std::vector<IRValue*> argVals;
-            for (auto& arg : call->args) {
-                IRValue* val = visitExpression(arg.get());
-                if (val) argVals.push_back(val);
-                else return ctx.ir_gen->getInt32(0); // Abort if arg evaluation fails
-            }
-            
-            // List Methods
-            if (className.find("list<") == 0) {
-                 std::string listElemName = className.substr(5, className.length() - 6);
-                 llvm::Type* llvmListElemType = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(listElemName)));
-                 if (methodName == "push" && argVals.size() > 0) {
-                     ListImpl::push(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])));
-                     return nullptr;
-                 } else if (methodName == "pop") {
-                     return ctx.ir_gen->wrap(ListImpl::pop(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), llvmListElemType));
-                 } else if (methodName == "get" && argVals.size() > 0) {
-                     return ctx.ir_gen->wrap(ListImpl::get(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), llvmListElemType));
-                 } else if (methodName == "insert" && argVals.size() > 1) {
-                     ListImpl::insert(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1])));
-                     return nullptr;
-                 } else if (methodName == "remove" && argVals.size() > 0) {
-                     ListImpl::remove(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), llvmListElemType);
-                     return nullptr;
-                 } else if (methodName == "clear") {
-                     ListImpl::clear(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
-                     return nullptr;
-                 } else if (methodName == "len") {
-                     return ctx.ir_gen->wrap(ListImpl::getSize(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca))));
-                 }
-            }
-            // Map Methods
-            else if (className.find("map<") == 0) {
-                 llvm::StructType* mapStructTy = static_cast<llvm::StructType*>(ctx.ir_gen->unwrapType(baseElemTy));
-                 
-                 llvm::Type* vTy = nullptr;
-                 std::string inner = className.substr(4, className.length() - 5);
-                 size_t colon = inner.find(':');
-                 if (colon != std::string::npos) {
-                     std::string vName = inner.substr(colon + 1);
-                     vTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
-                 }
-                 if (!vTy) vTy = ctx.builder.getInt8Ty()->getPointerTo(); // Fallback string
-
-                 if (methodName == "put" && argVals.size() > 1) {
-                     llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
-                     llvm::Value* valVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
-                     
-                     if (vTy->isPointerTy() && valVal->getType()->isStructTy()) {
-                         if (auto varExpr = dynamic_cast<VariableExpr*>(call->args[1].get())) {
-                             Symbol* sym = resolveVariable(varExpr->name);
-                             if (sym) valVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst)));
-                         }
-                     }
-                     if (vTy->isPointerTy() && valVal->getType()->isPointerTy() && valVal->getType() != vTy) {
-                         valVal = ctx.builder.CreateBitCast(valVal, vTy);
-                     }
-                     if (keyVal->getType()->isPointerTy() && keyVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
-                         keyVal = ctx.builder.CreateBitCast(keyVal, ctx.builder.getInt8Ty()->getPointerTo());
-                     }
-                     
-                     MapImpl::put(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, valVal, mapStructTy);
-                     return nullptr;
-                 } else if (methodName == "get" && argVals.size() > 0) {
-                     llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
-                     if (keyVal->getType()->isPointerTy() && keyVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
-                         keyVal = ctx.builder.CreateBitCast(keyVal, ctx.builder.getInt8Ty()->getPointerTo());
-                     }
-                     return ctx.ir_gen->wrap(MapImpl::get(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, vTy, mapStructTy));
-                 } else if (methodName == "remove" && argVals.size() > 0) {
-                     llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
-                     if (keyVal->getType()->isPointerTy() && keyVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
-                         keyVal = ctx.builder.CreateBitCast(keyVal, ctx.builder.getInt8Ty()->getPointerTo());
-                     }
-                     MapImpl::remove(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, vTy, mapStructTy);
-                     return nullptr;
-                 } else if (methodName == "contains" && argVals.size() > 0) {
-                     return ctx.ir_gen->wrap(MapImpl::contains(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), mapStructTy));
-                 } else if (methodName == "len") {
-                     return ctx.ir_gen->wrap(MapImpl::getSize(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), mapStructTy));
-                 }
-            }
-            // Process Methods
-            else if (className == "process") {
-                 llvm::Value* procPtr = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
-                 if (methodName == "wait") {
-                     llvm::Function* waitFunc = ctx.module.getFunction("process_wait");
-                     if (!waitFunc) waitFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "process_wait", ctx.module);
-                     return ctx.ir_gen->wrap(ctx.builder.CreateCall(waitFunc, {procPtr}));
-                 } else if (methodName == "kill") {
-                     llvm::Function* killFunc = ctx.module.getFunction("process_kill");
-                     if (!killFunc) killFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "process_kill", ctx.module);
-                     ctx.builder.CreateCall(killFunc, {procPtr});
-                     return ctx.ir_gen->getInt32(0);
-                 }
-            }
-            // User Class Methods
-            else if (!className.empty() && ctx.classes.count(className)) {
-                 std::string mangledName = className + "_" + methodName;
-                 llvm::Function* func = ctx.module.getFunction(mangledName);
-                 if (!func) {
-                     std::string currClass = className;
-                     while (!currClass.empty() && ctx.classes.count(currClass)) {
-                         std::string pName = ctx.classes[currClass].parentName;
-                         if (!pName.empty()) {
-                             currClass = pName;
-                             func = ctx.module.getFunction(currClass + "_" + methodName);
-                             if (func) break;
-                         } else {
-                             break;
-                         }
-                     }
-                 }
-                 if (!func) {
-                     LOG_ERROR("Unknown method: " + className + "_" + methodName);
-                     return ctx.ir_gen->getInt32(0);
-                 }
-                 
-                 IRValue* thisPtr = baseAlloca;
-                 if (baseElemTy->isPointer()) {
-                     thisPtr = ctx.ir_gen->createLoad(baseElemTy, baseAlloca, "this_ptr");
-                 }
-                 if (!thisPtr) return ctx.ir_gen->getInt32(0);
-                 
-                 llvm::Type* expectedThisTy = func->getFunctionType()->getParamType(0);
-                 llvm::Value* rawThis = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(thisPtr));
-                 if (rawThis->getType() != expectedThisTy) {
-                     rawThis = ctx.builder.CreateBitCast(rawThis, expectedThisTy, "this_cast");
-                     thisPtr = ctx.ir_gen->wrap(rawThis);
-                 }
-                 
-                 std::vector<IRValue*> methodArgs;
-                 methodArgs.push_back(thisPtr);
-                 for (auto* a : argVals) methodArgs.push_back(a);
-                 
-                 return ctx.ir_gen->createCall(func->getName().str(), methodArgs, "call_method");
-            }
-            
-            LOG_ERROR("Unknown method: " + methodName + " on variable " + baseName);
-            return ctx.ir_gen->getInt32(0);
+            return visitObjectMethodCall(baseName, methodName, sym, call);
         }
         
         // Eagerly evaluate arguments for other functions (sys)
@@ -1393,243 +1186,11 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             else return ctx.ir_gen->getInt32(0);
         }
         
-        // System Namespaces (sys, io, time) - Fallback for now
+        // System Namespaces (sys, io, time)
         if (baseName == "sys" || baseName == "io" || baseName == "time") {
-            if (baseName == "sys" && methodName == "exit") {
-                llvm::Function* exitFunc = ctx.module.getFunction("exit");
-                if (!exitFunc) exitFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt32Ty()}, false), llvm::Function::ExternalLinkage, "exit", ctx.module);
-                llvm::Value* exitCode = argVals.empty() ? ctx.builder.getInt32(0) : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
-                ctx.builder.CreateCall(exitFunc, {exitCode});
-                return ctx.ir_gen->getInt32(0);
-            } else if (baseName == "sys" && methodName == "get_arg") {
-                if (argVals.empty()) return ctx.ir_gen->createGlobalStringPtr("");
-                llvm::Value* indexVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
-                llvm::GlobalVariable* argvVar = ctx.module.getGlobalVariable("__argv", true);
-                llvm::GlobalVariable* argcVar = ctx.module.getGlobalVariable("__argc", true);
-                if (!argvVar || !argcVar) return ctx.ir_gen->createGlobalStringPtr("");
-                llvm::Value* argvPtr = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo()->getPointerTo(), argvVar);
-                llvm::Value* argcVal = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), argcVar);
-                llvm::Value* argvIsNull = ctx.builder.CreateICmpEQ(argvPtr, llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()->getPointerTo()));
-                llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
-                llvm::BasicBlock* safeBB = llvm::BasicBlock::Create(ctx.context, "arg_safe", parentFunc);
-                llvm::BasicBlock* errorBB = llvm::BasicBlock::Create(ctx.context, "arg_error", parentFunc);
-                llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(ctx.context, "arg_merge", parentFunc);
-                llvm::Value* idxOk = ctx.builder.CreateICmpSLT(indexVal, argcVal);
-                llvm::Value* isSafe = ctx.builder.CreateAnd(ctx.builder.CreateNot(argvIsNull), idxOk);
-                ctx.builder.CreateCondBr(isSafe, safeBB, errorBB);
-                ctx.builder.SetInsertPoint(safeBB);
-                llvm::Value* argStrPtr = ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty()->getPointerTo(), argvPtr, indexVal);
-                llvm::Value* argStr = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), argStrPtr);
-                ctx.builder.CreateBr(mergeBB);
-                ctx.builder.SetInsertPoint(errorBB);
-                llvm::Value* emptyStr = ctx.builder.CreateGlobalStringPtr("");
-                ctx.builder.CreateBr(mergeBB);
-                ctx.builder.SetInsertPoint(mergeBB);
-                llvm::PHINode* result = ctx.builder.CreatePHI(ctx.builder.getInt8Ty()->getPointerTo(), 2);
-                result->addIncoming(argStr, safeBB);
-                result->addIncoming(emptyStr, errorBB);
-                return ctx.ir_gen->wrap(result);
-            } else if (baseName == "sys" && methodName == "env") {
-                llvm::Type* strTy = ctx.builder.getInt8Ty()->getPointerTo();
-                llvm::StructType* mapTy = llvm::StructType::get(ctx.context, {
-                    ctx.builder.getInt32Ty(),
-                    ctx.builder.getInt32Ty(),
-                    ctx.builder.getInt8Ty()->getPointerTo(),
-                    strTy->getPointerTo(),
-                    strTy->getPointerTo()
-                });
-                llvm::DataLayout dl(&ctx.module);
-                uint64_t mapSize = dl.getTypeAllocSize(mapTy);
-                llvm::Function* callocFunc = ctx.module.getFunction("calloc");
-                if (!callocFunc) callocFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty()}, false), llvm::Function::ExternalLinkage, "calloc", ctx.module);
-                llvm::Value* mapVoidPtr = ctx.builder.CreateCall(callocFunc, {ctx.builder.getInt64(1), ctx.builder.getInt64(mapSize)});
-                llvm::Value* mapPtr = ctx.builder.CreateBitCast(mapVoidPtr, mapTy->getPointerTo(), "sys_env_map");
-                MapImpl::initMap(ctx, mapPtr, strTy, strTy, 4);
-                return ctx.ir_gen->wrap(mapPtr);
-            } else if (baseName == "sys" && methodName == "size") {
-                if (argVals.empty()) return ctx.ir_gen->getInt32(0);
-                llvm::Type* ty = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(argVals[0]->getType()));
-                llvm::DataLayout dl(&ctx.module);
-                return ctx.ir_gen->wrap(ctx.builder.getInt64(dl.getTypeAllocSize(ty)));
-            } else if (baseName == "sys" && methodName == "exe") {
-                if (argVals.empty()) return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()));
-                llvm::Value* argvList = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
-                if (argvList->getType()->isStructTy()) {
-                    llvm::AllocaInst* temp = ctx.builder.CreateAlloca(argvList->getType());
-                    ctx.builder.CreateStore(argvList, temp);
-                    argvList = ctx.builder.CreateBitCast(temp, ctx.builder.getInt8Ty()->getPointerTo());
-                } else if (argvList->getType()->isPointerTy()) {
-                    argvList = ctx.builder.CreateBitCast(argvList, ctx.builder.getInt8Ty()->getPointerTo());
-                } else return ctx.ir_gen->getInt32(0);
-                llvm::Value* cwd = llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo());
-                llvm::Value* env = llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo());
-                llvm::Value* shell = ctx.builder.getInt1(false);
-                llvm::Value* timeout = ctx.builder.getInt32(-1);
-                llvm::Value* capture = ctx.builder.getInt1(false);
-                llvm::Function* runtimeFunc = ctx.module.getFunction("sys_exe_runtime");
-                if (!runtimeFunc) runtimeFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt1Ty(), ctx.builder.getInt32Ty(), ctx.builder.getInt1Ty()}, false), llvm::Function::ExternalLinkage, "sys_exe_runtime", ctx.module);
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(runtimeFunc, {argvList, cwd, env, shell, timeout, capture}));
-            } else if (baseName == "io" && methodName == "write") {
-                if (argVals.size() < 2) return ctx.ir_gen->getInt32(0);
-                llvm::Value* handle = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
-                llvm::Value* text = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
-                
-                llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
-                llvm::BasicBlock* validHandleBB = llvm::BasicBlock::Create(ctx.context, "valid_write_handle", parentFunc);
-                llvm::BasicBlock* invalidHandleBB = llvm::BasicBlock::Create(ctx.context, "invalid_write_handle", parentFunc);
-                llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(ctx.context, "merge_write", parentFunc);
-                
-                llvm::Value* isNull = ctx.builder.CreateICmpEQ(handle, llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()));
-                ctx.builder.CreateCondBr(isNull, invalidHandleBB, validHandleBB);
-                
-                // Invalid Handle
-                ctx.builder.SetInsertPoint(invalidHandleBB);
-                ctx.builder.CreateBr(mergeBB);
-                
-                // Valid Handle
-                ctx.builder.SetInsertPoint(validHandleBB);
-                llvm::Function* strlenFunc = ctx.module.getFunction("strlen");
-                if (!strlenFunc) strlenFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "strlen", ctx.module);
-                llvm::Value* len = ctx.builder.CreateCall(strlenFunc, {text});
-                llvm::Function* fwFunc = ctx.module.getFunction("fwrite");
-                if (!fwFunc) fwFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty(), ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "fwrite", ctx.module);
-                llvm::Value* writeBytes = ctx.builder.CreateCall(fwFunc, {text, ctx.builder.getInt64(1), len, handle});
-                ctx.builder.CreateBr(mergeBB);
-                
-                // Merge
-                ctx.builder.SetInsertPoint(mergeBB);
-                llvm::PHINode* phi = ctx.builder.CreatePHI(ctx.builder.getInt64Ty(), 2, "write_res");
-                phi->addIncoming(ctx.builder.getInt64(0), invalidHandleBB);
-                phi->addIncoming(writeBytes, validHandleBB);
-                
-                // fwrite returns size_t, we return the i32 casted value wrapped.
-                return ctx.ir_gen->wrap(ctx.builder.CreateTrunc(phi, ctx.builder.getInt32Ty()));
-            } else if (baseName == "io" && methodName == "read") {
-                if (argVals.size() < 2) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
-                llvm::Value* handle = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
-                
-                llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
-                llvm::BasicBlock* validHandleBB = llvm::BasicBlock::Create(ctx.context, "valid_handle", parentFunc);
-                llvm::BasicBlock* invalidHandleBB = llvm::BasicBlock::Create(ctx.context, "invalid_handle", parentFunc);
-                llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(ctx.context, "merge_read", parentFunc);
-                
-                llvm::Value* isNull = ctx.builder.CreateICmpEQ(handle, llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()));
-                ctx.builder.CreateCondBr(isNull, invalidHandleBB, validHandleBB);
-                
-                // Invalid Handle
-                ctx.builder.SetInsertPoint(invalidHandleBB);
-                llvm::Value* emptyStr = ctx.builder.CreateGlobalStringPtr("");
-                ctx.builder.CreateBr(mergeBB);
-                
-                // Valid Handle
-                ctx.builder.SetInsertPoint(validHandleBB);
-                llvm::Value* size = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
-                if (size->getType()->isIntegerTy(32)) size = ctx.builder.CreateZExt(size, ctx.builder.getInt64Ty());
-                
-                // Check if size > 0
-                llvm::BasicBlock* doReadBB = llvm::BasicBlock::Create(ctx.context, "do_read", parentFunc);
-                llvm::Value* isValidSize = ctx.builder.CreateICmpSGT(size, ctx.builder.getInt64(0));
-                ctx.builder.CreateCondBr(isValidSize, doReadBB, invalidHandleBB);
-                
-                ctx.builder.SetInsertPoint(doReadBB);
-                llvm::Function* mallocFunc = ctx.module.getFunction("malloc");
-                if (!mallocFunc) mallocFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt64Ty()}, false), llvm::Function::ExternalLinkage, "malloc", ctx.module);
-                llvm::Value* sizePlus1 = ctx.builder.CreateAdd(size, ctx.builder.getInt64(1));
-                llvm::Value* buffer = ctx.builder.CreateCall(mallocFunc, {sizePlus1});
-                llvm::Function* freadFunc = ctx.module.getFunction("fread");
-                if (!freadFunc) freadFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty(), ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "fread", ctx.module);
-                llvm::Value* readBytes = ctx.builder.CreateCall(freadFunc, {buffer, ctx.builder.getInt64(1), size, handle});
-                llvm::Value* endPtr = ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty(), buffer, readBytes);
-                ctx.builder.CreateStore(ctx.builder.getInt8(0), endPtr);
-                ctx.builder.CreateBr(mergeBB);
-                
-                // Merge
-                ctx.builder.SetInsertPoint(mergeBB);
-                llvm::PHINode* phi = ctx.builder.CreatePHI(ctx.builder.getInt8Ty()->getPointerTo(), 2, "read_res");
-                phi->addIncoming(emptyStr, invalidHandleBB);
-                phi->addIncoming(buffer, doReadBB);
-                
-                return ctx.ir_gen->wrap(phi);
-            } else if (baseName == "io" && methodName == "open") {
-                if (argVals.size() < 2) return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()));
-                llvm::Value* path = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
-                llvm::Value* mode = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
-                llvm::Function* fopenFunc = ctx.module.getFunction("fopen");
-                if (!fopenFunc) fopenFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "fopen", ctx.module);
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fopenFunc, {path, mode}));
-            } else if (baseName == "io" && methodName == "close") {
-                if (argVals.empty()) return ctx.ir_gen->getInt32(0);
-                llvm::Function* fcloseFunc = ctx.module.getFunction("fclose");
-                if (!fcloseFunc) fcloseFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "fclose", ctx.module);
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fcloseFunc, {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]))}));
-            } else if (baseName == "io" && methodName == "read_all") {
-                if (argVals.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
-                llvm::Value* handle = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
-                
-                llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
-                llvm::BasicBlock* validHandleBB = llvm::BasicBlock::Create(ctx.context, "valid_handle", parentFunc);
-                llvm::BasicBlock* invalidHandleBB = llvm::BasicBlock::Create(ctx.context, "invalid_handle", parentFunc);
-                llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(ctx.context, "merge_read_all", parentFunc);
-                
-                llvm::Value* isNull = ctx.builder.CreateICmpEQ(handle, llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()));
-                ctx.builder.CreateCondBr(isNull, invalidHandleBB, validHandleBB);
-                
-                // Invalid Handle
-                ctx.builder.SetInsertPoint(invalidHandleBB);
-                llvm::Value* emptyStr = ctx.builder.CreateGlobalStringPtr("");
-                ctx.builder.CreateBr(mergeBB);
-                
-                // Valid Handle
-                ctx.builder.SetInsertPoint(validHandleBB);
-                llvm::Function* fseekFunc = ctx.module.getFunction("fseek");
-                if (!fseekFunc) fseekFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt64Ty(), ctx.builder.getInt32Ty()}, false), llvm::Function::ExternalLinkage, "fseek", ctx.module);
-                llvm::Function* ftellFunc = ctx.module.getFunction("ftell");
-                if (!ftellFunc) ftellFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "ftell", ctx.module);
-                llvm::Function* rewindFunc = ctx.module.getFunction("rewind");
-                if (!rewindFunc) rewindFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "rewind", ctx.module);
-                ctx.builder.CreateCall(fseekFunc, {handle, ctx.builder.getInt64(0), ctx.builder.getInt32(2)});
-                llvm::Value* size = ctx.builder.CreateCall(ftellFunc, {handle});
-                ctx.builder.CreateCall(rewindFunc, {handle});
-                
-                // Check if size > 0
-                llvm::BasicBlock* doReadBB = llvm::BasicBlock::Create(ctx.context, "do_read_all", parentFunc);
-                llvm::Value* isValidSize = ctx.builder.CreateICmpSGT(size, ctx.builder.getInt64(0));
-                ctx.builder.CreateCondBr(isValidSize, doReadBB, invalidHandleBB);
-                
-                ctx.builder.SetInsertPoint(doReadBB);
-                llvm::Function* mallocFunc = ctx.module.getFunction("malloc");
-                if (!mallocFunc) mallocFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt64Ty()}, false), llvm::Function::ExternalLinkage, "malloc", ctx.module);
-                llvm::Value* sizePlus1 = ctx.builder.CreateAdd(size, ctx.builder.getInt64(1));
-                llvm::Value* buffer = ctx.builder.CreateCall(mallocFunc, {sizePlus1});
-                llvm::Function* freadFunc = ctx.module.getFunction("fread");
-                if (!freadFunc) freadFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty(), ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "fread", ctx.module);
-                llvm::Value* readBytes = ctx.builder.CreateCall(freadFunc, {buffer, ctx.builder.getInt64(1), size, handle});
-                llvm::Value* endPtr = ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty(), buffer, readBytes);
-                ctx.builder.CreateStore(ctx.builder.getInt8(0), endPtr);
-                ctx.builder.CreateBr(mergeBB);
-                
-                // Merge
-                ctx.builder.SetInsertPoint(mergeBB);
-                llvm::PHINode* phi = ctx.builder.CreatePHI(ctx.builder.getInt8Ty()->getPointerTo(), 2, "read_all_res");
-                phi->addIncoming(emptyStr, invalidHandleBB);
-                phi->addIncoming(buffer, doReadBB);
-                
-                return ctx.ir_gen->wrap(phi);
-            } else if (baseName == "time" && methodName == "now") {
-                llvm::Function* timeFunc = ctx.module.getFunction("time_now_ms");
-                if (!timeFunc) timeFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), false), llvm::Function::ExternalLinkage, "time_now_ms", ctx.module);
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(timeFunc));
-            } else if (baseName == "time" && methodName == "sleep_ms") {
-                if (argVals.empty()) return ctx.ir_gen->getInt32(0);
-                llvm::Function* sleepFunc = ctx.module.getFunction("time_sleep_ms");
-                if (!sleepFunc) sleepFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt32Ty()}, false), llvm::Function::ExternalLinkage, "time_sleep_ms", ctx.module);
-                llvm::Value* msVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
-                if (msVal->getType()->isIntegerTy(64)) msVal = ctx.builder.CreateTrunc(msVal, ctx.builder.getInt32Ty());
-                ctx.builder.CreateCall(sleepFunc, {msVal});
-                return ctx.ir_gen->getInt32(0);
-            }
+            IRValue* sysResult = visitSysNamespaceCall(baseName, methodName, argVals);
+            if (sysResult) return sysResult;
         }
-        
         // For standard compilation, we just emit a call to their mangled C names.
         std::string mangledSys = baseName + "_" + methodName;
         if (ctx.module.getFunction(mangledSys)) {
@@ -1769,6 +1330,478 @@ IRValue* Compiler::visitCall(CallExpr* call) {
     return callRes;
 }
 
+IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std::string& methodName, Symbol* sym, CallExpr* call) {
+    std::string className = sym->typeName;
+    if ((className.rfind("ptr<", 0) == 0 || className.rfind("ref<", 0) == 0) && className.back() == '>') {
+         className = className.substr(4, className.length() - 5);
+    }
+
+    IRValue* baseAlloca = sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst);
+    IRType* baseElemTy = sym->ir_element_type ? sym->ir_element_type : ctx.ir_gen->wrapType(sym->element_type);
+
+    // Buffer methods (lazy arg evaluation)
+    if (className == "buffer") {
+        if (methodName == "alloc" && call->args.size() == 1) {
+            IRValue* sizeVal = visitExpression(call->args[0].get());
+            if (sizeVal) BufferImpl::alloc(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sizeVal)));
+            return ctx.ir_gen->getInt32(0);
+        } else if (methodName == "write" && call->args.size() >= 2) {
+            IRValue* val = visitExpression(call->args[0].get());
+            std::string typeName = "unknown";
+            if (auto varExpr = dynamic_cast<VariableExpr*>(call->args[1].get())) typeName = varExpr->name;
+            else if (auto litExpr = dynamic_cast<LiteralExpr*>(call->args[1].get())) typeName = litExpr->value;
+            llvm::Type* ty = ctx.getLLVMType(typeName);
+            if (ty && val) BufferImpl::write(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)), ty);
+            return ctx.ir_gen->getInt32(0);
+        } else if (methodName == "read" && call->args.size() >= 1) {
+            std::string typeName = "unknown";
+            if (auto varExpr = dynamic_cast<VariableExpr*>(call->args[0].get())) typeName = varExpr->name;
+            else if (auto litExpr = dynamic_cast<LiteralExpr*>(call->args[0].get())) typeName = litExpr->value;
+            llvm::Type* ty = ctx.getLLVMType(typeName);
+            if (ty) return ctx.ir_gen->wrap(BufferImpl::read(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), ty));
+            return ctx.ir_gen->getInt32(0);
+        } else if (methodName == "seek" && call->args.size() >= 1) {
+            IRValue* rawPos = visitExpression(call->args[0].get());
+            llvm::Value* rawVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rawPos));
+            llvm::Value* pos32 = ctx.builder.CreateZExtOrTrunc(rawVal, ctx.builder.getInt32Ty());
+            BufferImpl::seek(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), pos32, false);
+            BufferImpl::seek(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), pos32, true);
+            return ctx.ir_gen->getInt32(0);
+        } else if (methodName == "read_versioned" && call->args.size() >= 1) {
+            std::string typeName = "unknown";
+            if (auto varExpr = dynamic_cast<VariableExpr*>(call->args[0].get())) typeName = varExpr->name;
+            else if (auto litExpr = dynamic_cast<LiteralExpr*>(call->args[0].get())) typeName = litExpr->value;
+            llvm::Type* ty = ctx.getLLVMType(typeName);
+            if (ty) {
+                auto realEval = [this](CompilerContext& c, std::shared_ptr<AIML::AST::Expr> e) -> llvm::Value* {
+                     IRValue* v = this->visitExpression(e.get());
+                     if (!v) return llvm::Constant::getNullValue(ctx.getLLVMType("buffer"));
+                     return static_cast<llvm::Value*>(c.ir_gen->unwrap(v));
+                };
+                llvm::Value* explicitVer = nullptr;
+                if (call->args.size() >= 2) {
+                    IRValue* verVal = visitExpression(call->args[1].get());
+                    if (verVal) explicitVer = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(verVal));
+                }
+                return ctx.ir_gen->wrap(BufferImpl::read_versioned(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), ty, realEval, explicitVer));
+            }
+            return ctx.ir_gen->getInt32(0);
+        }
+    }
+
+    // String.len (lazy — needs only the alloca, no args)
+    if (className == "string" && methodName == "len") {
+        llvm::Function* strlenFunc = ctx.module.getFunction("strlen");
+        if (!strlenFunc) strlenFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "strlen", ctx.module);
+        llvm::Value* strPtr = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
+        llvm::Value* len64 = ctx.builder.CreateCall(strlenFunc, {strPtr});
+        llvm::Value* len32 = ctx.builder.CreateTrunc(len64, ctx.builder.getInt32Ty());
+        return ctx.ir_gen->wrap(len32);
+    }
+
+    // Eagerly evaluate arguments for collection and class methods
+    std::vector<IRValue*> argVals;
+    for (auto& arg : call->args) {
+        IRValue* val = visitExpression(arg.get());
+        if (val) argVals.push_back(val);
+        else return ctx.ir_gen->getInt32(0);
+    }
+
+    // List Methods
+    if (className.find("list<") == 0) {
+         std::string listElemName = className.substr(5, className.length() - 6);
+         llvm::Type* llvmListElemType = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(listElemName)));
+         if (methodName == "push" && argVals.size() > 0) {
+             ListImpl::push(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])));
+             return nullptr;
+         } else if (methodName == "pop") {
+             return ctx.ir_gen->wrap(ListImpl::pop(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), llvmListElemType));
+         } else if (methodName == "get" && argVals.size() > 0) {
+             return ctx.ir_gen->wrap(ListImpl::get(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), llvmListElemType));
+         } else if (methodName == "insert" && argVals.size() > 1) {
+             ListImpl::insert(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1])));
+             return nullptr;
+         } else if (methodName == "remove" && argVals.size() > 0) {
+             ListImpl::remove(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), llvmListElemType);
+             return nullptr;
+         } else if (methodName == "clear") {
+             ListImpl::clear(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
+             return nullptr;
+         } else if (methodName == "len") {
+             return ctx.ir_gen->wrap(ListImpl::getSize(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca))));
+         }
+    }
+    // Map Methods
+    else if (className.find("map<") == 0) {
+         llvm::StructType* mapStructTy = static_cast<llvm::StructType*>(ctx.ir_gen->unwrapType(baseElemTy));
+         llvm::Type* vTy = nullptr;
+         std::string inner = className.substr(4, className.length() - 5);
+         size_t colon = inner.find(':');
+         if (colon != std::string::npos) {
+             std::string vName = inner.substr(colon + 1);
+             vTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
+         }
+         if (!vTy) vTy = ctx.builder.getInt8Ty()->getPointerTo();
+         if (methodName == "put" && argVals.size() > 1) {
+             llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+             llvm::Value* valVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
+             if (vTy->isPointerTy() && valVal->getType()->isStructTy()) {
+                 if (auto varExpr = dynamic_cast<VariableExpr*>(call->args[1].get())) {
+                     Symbol* s = resolveVariable(varExpr->name);
+                     if (s) valVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(s->ir_alloca_inst ? s->ir_alloca_inst : ctx.ir_gen->wrap(s->alloca_inst)));
+                 }
+             }
+             if (vTy->isPointerTy() && valVal->getType()->isPointerTy() && valVal->getType() != vTy) {
+                 valVal = ctx.builder.CreateBitCast(valVal, vTy);
+             }
+             if (keyVal->getType()->isPointerTy() && keyVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
+                 keyVal = ctx.builder.CreateBitCast(keyVal, ctx.builder.getInt8Ty()->getPointerTo());
+             }
+             MapImpl::put(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, valVal, mapStructTy);
+             return nullptr;
+         } else if (methodName == "get" && argVals.size() > 0) {
+             llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+             if (keyVal->getType()->isPointerTy() && keyVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
+                 keyVal = ctx.builder.CreateBitCast(keyVal, ctx.builder.getInt8Ty()->getPointerTo());
+             }
+             return ctx.ir_gen->wrap(MapImpl::get(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, vTy, mapStructTy));
+         } else if (methodName == "remove" && argVals.size() > 0) {
+             llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+             if (keyVal->getType()->isPointerTy() && keyVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
+                 keyVal = ctx.builder.CreateBitCast(keyVal, ctx.builder.getInt8Ty()->getPointerTo());
+             }
+             MapImpl::remove(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, vTy, mapStructTy);
+             return nullptr;
+         } else if (methodName == "contains" && argVals.size() > 0) {
+             return ctx.ir_gen->wrap(MapImpl::contains(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), mapStructTy));
+         } else if (methodName == "len") {
+             return ctx.ir_gen->wrap(MapImpl::getSize(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), mapStructTy));
+         }
+    }
+    // Process Methods
+    else if (className == "process") {
+         llvm::Value* procPtr = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
+         if (methodName == "wait") {
+             llvm::Function* waitFunc = ctx.module.getFunction("process_wait");
+             if (!waitFunc) waitFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "process_wait", ctx.module);
+             return ctx.ir_gen->wrap(ctx.builder.CreateCall(waitFunc, {procPtr}));
+         } else if (methodName == "kill") {
+             llvm::Function* killFunc = ctx.module.getFunction("process_kill");
+             if (!killFunc) killFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "process_kill", ctx.module);
+             ctx.builder.CreateCall(killFunc, {procPtr});
+             return ctx.ir_gen->getInt32(0);
+         }
+    }
+    // User Class Methods
+    else if (!className.empty() && ctx.classes.count(className)) {
+         std::string mangledName = className + "_" + methodName;
+         llvm::Function* func = ctx.module.getFunction(mangledName);
+         if (!func) {
+             std::string currClass = className;
+             while (!currClass.empty() && ctx.classes.count(currClass)) {
+                 std::string pName = ctx.classes[currClass].parentName;
+                 if (!pName.empty()) {
+                     currClass = pName;
+                     func = ctx.module.getFunction(currClass + "_" + methodName);
+                     if (func) break;
+                 } else {
+                     break;
+                 }
+             }
+         }
+         if (!func) {
+             LOG_ERROR("Unknown method: " + className + "_" + methodName);
+             return ctx.ir_gen->getInt32(0);
+         }
+         IRValue* thisPtr = baseAlloca;
+         if (baseElemTy->isPointer()) {
+             thisPtr = ctx.ir_gen->createLoad(baseElemTy, baseAlloca, "this_ptr");
+         }
+         if (!thisPtr) return ctx.ir_gen->getInt32(0);
+         llvm::Type* expectedThisTy = func->getFunctionType()->getParamType(0);
+         llvm::Value* rawThis = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(thisPtr));
+         if (rawThis->getType() != expectedThisTy) {
+             rawThis = ctx.builder.CreateBitCast(rawThis, expectedThisTy, "this_cast");
+             thisPtr = ctx.ir_gen->wrap(rawThis);
+         }
+         std::vector<IRValue*> methodArgs;
+         methodArgs.push_back(thisPtr);
+         for (auto* a : argVals) methodArgs.push_back(a);
+         return ctx.ir_gen->createCall(func->getName().str(), methodArgs, "call_method");
+    }
+
+    LOG_ERROR("Unknown method: " + methodName + " on variable " + baseName);
+    return ctx.ir_gen->getInt32(0);
+}
+
+IRValue* Compiler::visitSysNamespaceCall(const std::string& baseName, const std::string& methodName, const std::vector<IRValue*>& argVals) {
+    if (baseName == "sys" && methodName == "exit") {
+        llvm::Function* exitFunc = ctx.module.getFunction("exit");
+        if (!exitFunc) exitFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt32Ty()}, false), llvm::Function::ExternalLinkage, "exit", ctx.module);
+        llvm::Value* exitCode = argVals.empty() ? ctx.builder.getInt32(0) : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+        ctx.builder.CreateCall(exitFunc, {exitCode});
+        return ctx.ir_gen->getInt32(0);
+    }
+
+    if (baseName == "sys" && methodName == "get_arg") {
+        if (argVals.empty()) return ctx.ir_gen->createGlobalStringPtr("");
+        llvm::Value* indexVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+        llvm::GlobalVariable* argvVar = ctx.module.getGlobalVariable("__argv", true);
+        llvm::GlobalVariable* argcVar = ctx.module.getGlobalVariable("__argc", true);
+        if (!argvVar || !argcVar) return ctx.ir_gen->createGlobalStringPtr("");
+
+        // Emit outlined helper once per module to avoid IR duplication
+        llvm::Function* impl = ctx.module.getFunction("__aiml_sys_get_arg");
+        if (!impl) {
+            llvm::PointerType* i8Ptr    = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::PointerType* i8PtrPtr = i8Ptr->getPointerTo();
+            llvm::Type* i32      = ctx.builder.getInt32Ty();
+            llvm::IRBuilder<>::InsertPoint savedIP = ctx.builder.saveIP();
+            llvm::FunctionType* ft = llvm::FunctionType::get(i8Ptr, {i32}, false);
+            impl = llvm::Function::Create(ft, llvm::Function::InternalLinkage, "__aiml_sys_get_arg", ctx.module);
+            impl->addFnAttr(llvm::Attribute::NoInline);
+            llvm::BasicBlock* entryBB = llvm::BasicBlock::Create(ctx.context, "entry",     impl);
+            llvm::BasicBlock* safeBB  = llvm::BasicBlock::Create(ctx.context, "arg_safe",  impl);
+            llvm::BasicBlock* errorBB = llvm::BasicBlock::Create(ctx.context, "arg_error", impl);
+            llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(ctx.context, "arg_merge", impl);
+            ctx.builder.SetInsertPoint(entryBB);
+            llvm::Value* idxArg  = impl->getArg(0);
+            llvm::Value* argvPtr = ctx.builder.CreateLoad(i8PtrPtr, argvVar);
+            llvm::Value* argcVal = ctx.builder.CreateLoad(i32, argcVar);
+            llvm::Value* argvIsNull = ctx.builder.CreateICmpEQ(argvPtr, llvm::ConstantPointerNull::get(i8PtrPtr));
+            llvm::Value* idxOk   = ctx.builder.CreateICmpSLT(idxArg, argcVal);
+            llvm::Value* isSafe  = ctx.builder.CreateAnd(ctx.builder.CreateNot(argvIsNull), idxOk);
+            ctx.builder.CreateCondBr(isSafe, safeBB, errorBB);
+            ctx.builder.SetInsertPoint(safeBB);
+            llvm::Value* argStrPtr = ctx.builder.CreateInBoundsGEP(i8Ptr, argvPtr, idxArg);
+            llvm::Value* argStr    = ctx.builder.CreateLoad(i8Ptr, argStrPtr);
+            ctx.builder.CreateBr(mergeBB);
+            ctx.builder.SetInsertPoint(errorBB);
+            llvm::Value* emptyStr = ctx.builder.CreateGlobalStringPtr("");
+            ctx.builder.CreateBr(mergeBB);
+            ctx.builder.SetInsertPoint(mergeBB);
+            llvm::PHINode* result = ctx.builder.CreatePHI(i8Ptr, 2);
+            result->addIncoming(argStr, safeBB);
+            result->addIncoming(emptyStr, errorBB);
+            ctx.builder.CreateRet(result);
+            ctx.builder.restoreIP(savedIP);
+        }
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(impl, {indexVal}));
+    }
+
+    if (baseName == "sys" && methodName == "env") {
+        llvm::Type* strTy = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::StructType* mapTy = llvm::StructType::get(ctx.context, {
+            ctx.builder.getInt32Ty(), ctx.builder.getInt32Ty(),
+            ctx.builder.getInt8Ty()->getPointerTo(),
+            strTy->getPointerTo(), strTy->getPointerTo()
+        });
+        llvm::DataLayout dl(&ctx.module);
+        uint64_t mapSize = dl.getTypeAllocSize(mapTy);
+        llvm::Function* callocFunc = ctx.module.getFunction("calloc");
+        if (!callocFunc) callocFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty()}, false), llvm::Function::ExternalLinkage, "calloc", ctx.module);
+        llvm::Value* mapVoidPtr = ctx.builder.CreateCall(callocFunc, {ctx.builder.getInt64(1), ctx.builder.getInt64(mapSize)});
+        llvm::Value* mapPtr = ctx.builder.CreateBitCast(mapVoidPtr, mapTy->getPointerTo(), "sys_env_map");
+        MapImpl::initMap(ctx, mapPtr, strTy, strTy, 4);
+        return ctx.ir_gen->wrap(mapPtr);
+    }
+
+    if (baseName == "sys" && methodName == "size") {
+        if (argVals.empty()) return ctx.ir_gen->getInt32(0);
+        llvm::Type* ty = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(argVals[0]->getType()));
+        llvm::DataLayout dl(&ctx.module);
+        return ctx.ir_gen->wrap(ctx.builder.getInt64(dl.getTypeAllocSize(ty)));
+    }
+
+    if (baseName == "sys" && methodName == "exe") {
+        if (argVals.empty()) return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()));
+        llvm::Value* argvList = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+        if (argvList->getType()->isStructTy()) {
+            llvm::AllocaInst* temp = ctx.builder.CreateAlloca(argvList->getType());
+            ctx.builder.CreateStore(argvList, temp);
+            argvList = ctx.builder.CreateBitCast(temp, ctx.builder.getInt8Ty()->getPointerTo());
+        } else if (argvList->getType()->isPointerTy()) {
+            argvList = ctx.builder.CreateBitCast(argvList, ctx.builder.getInt8Ty()->getPointerTo());
+        } else return ctx.ir_gen->getInt32(0);
+        llvm::Value* cwd     = llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo());
+        llvm::Value* env     = llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo());
+        llvm::Value* shell   = ctx.builder.getInt1(false);
+        llvm::Value* timeout = ctx.builder.getInt32(-1);
+        llvm::Value* capture = ctx.builder.getInt1(false);
+        llvm::Function* runtimeFunc = ctx.module.getFunction("sys_exe_runtime");
+        if (!runtimeFunc) runtimeFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt1Ty(), ctx.builder.getInt32Ty(), ctx.builder.getInt1Ty()}, false), llvm::Function::ExternalLinkage, "sys_exe_runtime", ctx.module);
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(runtimeFunc, {argvList, cwd, env, shell, timeout, capture}));
+    }
+
+    if (baseName == "io" && methodName == "write") {
+        if (argVals.size() < 2) return ctx.ir_gen->getInt32(0);
+        llvm::Value* handle = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+        llvm::Value* text   = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
+        llvm::Function* parentFunc    = ctx.builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* validBB     = llvm::BasicBlock::Create(ctx.context, "valid_write_handle",   parentFunc);
+        llvm::BasicBlock* invalidBB   = llvm::BasicBlock::Create(ctx.context, "invalid_write_handle", parentFunc);
+        llvm::BasicBlock* mergeBB     = llvm::BasicBlock::Create(ctx.context, "merge_write",          parentFunc);
+        llvm::Value* isNull = ctx.builder.CreateICmpEQ(handle, llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()));
+        ctx.builder.CreateCondBr(isNull, invalidBB, validBB);
+        ctx.builder.SetInsertPoint(invalidBB);
+        ctx.builder.CreateBr(mergeBB);
+        ctx.builder.SetInsertPoint(validBB);
+        llvm::Function* strlenFunc = ctx.module.getFunction("strlen");
+        if (!strlenFunc) strlenFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "strlen", ctx.module);
+        llvm::Value* len = ctx.builder.CreateCall(strlenFunc, {text});
+        llvm::Function* fwFunc = ctx.module.getFunction("fwrite");
+        if (!fwFunc) fwFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty(), ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "fwrite", ctx.module);
+        llvm::Value* writeBytes = ctx.builder.CreateCall(fwFunc, {text, ctx.builder.getInt64(1), len, handle});
+        ctx.builder.CreateBr(mergeBB);
+        ctx.builder.SetInsertPoint(mergeBB);
+        llvm::PHINode* phi = ctx.builder.CreatePHI(ctx.builder.getInt64Ty(), 2, "write_res");
+        phi->addIncoming(ctx.builder.getInt64(0), invalidBB);
+        phi->addIncoming(writeBytes, validBB);
+        return ctx.ir_gen->wrap(ctx.builder.CreateTrunc(phi, ctx.builder.getInt32Ty()));
+    }
+
+    if (baseName == "io" && methodName == "read") {
+        if (argVals.size() < 2) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+        llvm::Value* handle = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+        llvm::Function* parentFunc  = ctx.builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* validBB   = llvm::BasicBlock::Create(ctx.context, "valid_handle",   parentFunc);
+        llvm::BasicBlock* invalidBB = llvm::BasicBlock::Create(ctx.context, "invalid_handle", parentFunc);
+        llvm::BasicBlock* mergeBB   = llvm::BasicBlock::Create(ctx.context, "merge_read",     parentFunc);
+        llvm::Value* isNull = ctx.builder.CreateICmpEQ(handle, llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()));
+        ctx.builder.CreateCondBr(isNull, invalidBB, validBB);
+        ctx.builder.SetInsertPoint(invalidBB);
+        llvm::Value* emptyStr = ctx.builder.CreateGlobalStringPtr("");
+        ctx.builder.CreateBr(mergeBB);
+        ctx.builder.SetInsertPoint(validBB);
+        llvm::Value* size = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
+        if (size->getType()->isIntegerTy(32)) size = ctx.builder.CreateZExt(size, ctx.builder.getInt64Ty());
+        llvm::BasicBlock* doReadBB  = llvm::BasicBlock::Create(ctx.context, "do_read", parentFunc);
+        llvm::Value* isValidSize    = ctx.builder.CreateICmpSGT(size, ctx.builder.getInt64(0));
+        ctx.builder.CreateCondBr(isValidSize, doReadBB, invalidBB);
+        ctx.builder.SetInsertPoint(doReadBB);
+        llvm::Function* mallocFunc = ctx.module.getFunction("malloc");
+        if (!mallocFunc) mallocFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt64Ty()}, false), llvm::Function::ExternalLinkage, "malloc", ctx.module);
+        llvm::Value* sizePlus1 = ctx.builder.CreateAdd(size, ctx.builder.getInt64(1));
+        llvm::Value* buffer    = ctx.builder.CreateCall(mallocFunc, {sizePlus1});
+        llvm::Function* freadFunc = ctx.module.getFunction("fread");
+        if (!freadFunc) freadFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty(), ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "fread", ctx.module);
+        llvm::Value* readBytes = ctx.builder.CreateCall(freadFunc, {buffer, ctx.builder.getInt64(1), size, handle});
+        llvm::Value* endPtr    = ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty(), buffer, readBytes);
+        ctx.builder.CreateStore(ctx.builder.getInt8(0), endPtr);
+        ctx.builder.CreateBr(mergeBB);
+        ctx.builder.SetInsertPoint(mergeBB);
+        llvm::PHINode* phi = ctx.builder.CreatePHI(ctx.builder.getInt8Ty()->getPointerTo(), 2, "read_res");
+        phi->addIncoming(emptyStr, invalidBB);
+        phi->addIncoming(buffer,   doReadBB);
+        return ctx.ir_gen->wrap(phi);
+    }
+
+    if (baseName == "io" && methodName == "open") {
+        if (argVals.size() < 2) return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()));
+        llvm::Value* path = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+        llvm::Value* mode = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
+        llvm::Function* fopenFunc = ctx.module.getFunction("fopen");
+        if (!fopenFunc) fopenFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "fopen", ctx.module);
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(fopenFunc, {path, mode}));
+    }
+
+    if (baseName == "io" && methodName == "close") {
+        if (argVals.empty()) return ctx.ir_gen->getInt32(0);
+        llvm::Function* fcloseFunc = ctx.module.getFunction("fclose");
+        if (!fcloseFunc) fcloseFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "fclose", ctx.module);
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(fcloseFunc, {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]))}));
+    }
+
+    if (baseName == "io" && methodName == "read_all") {
+        if (argVals.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+        llvm::Value* handle = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+        llvm::Function* parentFunc  = ctx.builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* validBB   = llvm::BasicBlock::Create(ctx.context, "valid_handle",     parentFunc);
+        llvm::BasicBlock* invalidBB = llvm::BasicBlock::Create(ctx.context, "invalid_handle",   parentFunc);
+        llvm::BasicBlock* mergeBB   = llvm::BasicBlock::Create(ctx.context, "merge_read_all",   parentFunc);
+        llvm::Value* isNull = ctx.builder.CreateICmpEQ(handle, llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()));
+        ctx.builder.CreateCondBr(isNull, invalidBB, validBB);
+        ctx.builder.SetInsertPoint(invalidBB);
+        llvm::Value* emptyStr = ctx.builder.CreateGlobalStringPtr("");
+        ctx.builder.CreateBr(mergeBB);
+        ctx.builder.SetInsertPoint(validBB);
+        llvm::Function* fseekFunc = ctx.module.getFunction("fseek");
+        if (!fseekFunc) fseekFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt64Ty(), ctx.builder.getInt32Ty()}, false), llvm::Function::ExternalLinkage, "fseek", ctx.module);
+        llvm::Function* ftellFunc = ctx.module.getFunction("ftell");
+        if (!ftellFunc) ftellFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "ftell", ctx.module);
+        llvm::Function* rewindFunc = ctx.module.getFunction("rewind");
+        if (!rewindFunc) rewindFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "rewind", ctx.module);
+        ctx.builder.CreateCall(fseekFunc, {handle, ctx.builder.getInt64(0), ctx.builder.getInt32(2)});
+        llvm::Value* size = ctx.builder.CreateCall(ftellFunc, {handle});
+        ctx.builder.CreateCall(rewindFunc, {handle});
+        llvm::BasicBlock* doReadBB = llvm::BasicBlock::Create(ctx.context, "do_read_all", parentFunc);
+        llvm::Value* isValidSize   = ctx.builder.CreateICmpSGT(size, ctx.builder.getInt64(0));
+        ctx.builder.CreateCondBr(isValidSize, doReadBB, invalidBB);
+        ctx.builder.SetInsertPoint(doReadBB);
+        llvm::Function* mallocFunc = ctx.module.getFunction("malloc");
+        if (!mallocFunc) mallocFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt64Ty()}, false), llvm::Function::ExternalLinkage, "malloc", ctx.module);
+        llvm::Value* sizePlus1 = ctx.builder.CreateAdd(size, ctx.builder.getInt64(1));
+        llvm::Value* buffer    = ctx.builder.CreateCall(mallocFunc, {sizePlus1});
+        llvm::Function* freadFunc = ctx.module.getFunction("fread");
+        if (!freadFunc) freadFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty(), ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "fread", ctx.module);
+        llvm::Value* readBytes = ctx.builder.CreateCall(freadFunc, {buffer, ctx.builder.getInt64(1), size, handle});
+        llvm::Value* endPtr    = ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty(), buffer, readBytes);
+        ctx.builder.CreateStore(ctx.builder.getInt8(0), endPtr);
+        ctx.builder.CreateBr(mergeBB);
+        ctx.builder.SetInsertPoint(mergeBB);
+        llvm::PHINode* phi = ctx.builder.CreatePHI(ctx.builder.getInt8Ty()->getPointerTo(), 2, "read_all_res");
+        phi->addIncoming(emptyStr, invalidBB);
+        phi->addIncoming(buffer,   doReadBB);
+        return ctx.ir_gen->wrap(phi);
+    }
+
+    if (baseName == "time" && methodName == "now") {
+        llvm::Function* timeFunc = ctx.module.getFunction("time_now_ms");
+        if (!timeFunc) timeFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), false), llvm::Function::ExternalLinkage, "time_now_ms", ctx.module);
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(timeFunc));
+    }
+
+    if (baseName == "time" && methodName == "sleep_ms") {
+        if (argVals.empty()) return ctx.ir_gen->getInt32(0);
+        llvm::Function* sleepFunc = ctx.module.getFunction("time_sleep_ms");
+        if (!sleepFunc) sleepFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt32Ty()}, false), llvm::Function::ExternalLinkage, "time_sleep_ms", ctx.module);
+        llvm::Value* msVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+        if (msVal->getType()->isIntegerTy(64)) msVal = ctx.builder.CreateTrunc(msVal, ctx.builder.getInt32Ty());
+        ctx.builder.CreateCall(sleepFunc, {msVal});
+        return ctx.ir_gen->getInt32(0);
+    }
+
+    return nullptr; // No matching handler — caller tries FQN fallback
+}
+
+IRValue* Compiler::visitStringCompare(bool negate, llvm::Value* rawLhs, llvm::Value* rawRhs) {
+    llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
+    std::string suffix = negate ? "_ne" : "";
+    llvm::BasicBlock* checkNullBB = llvm::BasicBlock::Create(ctx.context, "cmp_check_null" + suffix, parentFunc);
+    llvm::BasicBlock* doStrcmpBB  = llvm::BasicBlock::Create(ctx.context, "cmp_do_strcmp"  + suffix, parentFunc);
+    llvm::BasicBlock* mergeBB     = llvm::BasicBlock::Create(ctx.context, "cmp_merge"       + suffix, parentFunc);
+    llvm::Value* isLhsNull = ctx.builder.CreateIsNull(rawLhs);
+    llvm::Value* ptrEq     = ctx.builder.CreateICmpEQ(rawLhs, rawRhs);
+    llvm::Value* anyNull   = ctx.builder.CreateOr(isLhsNull, ctx.builder.CreateIsNull(rawRhs));
+    ctx.builder.CreateCondBr(anyNull, checkNullBB, doStrcmpBB);
+    ctx.builder.SetInsertPoint(checkNullBB);
+    ctx.builder.CreateBr(mergeBB);
+    ctx.builder.SetInsertPoint(doStrcmpBB);
+    llvm::Function* strcmpFunc = ctx.module.getFunction("strcmp");
+    if (!strcmpFunc) strcmpFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "strcmp", ctx.module);
+    llvm::Value* cmpRes    = ctx.builder.CreateCall(strcmpFunc, {rawLhs, rawRhs});
+    llvm::Value* strResult = negate
+        ? ctx.builder.CreateICmpNE(cmpRes, ctx.builder.getInt32(0))
+        : ctx.builder.CreateICmpEQ(cmpRes, ctx.builder.getInt32(0));
+    ctx.builder.CreateBr(mergeBB);
+    ctx.builder.SetInsertPoint(mergeBB);
+    llvm::PHINode* phi = ctx.builder.CreatePHI(ctx.builder.getInt1Ty(), 2, "strcmp_res" + suffix);
+    llvm::Value* ptrResult = negate ? ctx.builder.CreateNot(ptrEq) : ptrEq;
+    phi->addIncoming(ptrResult, checkNullBB);
+    phi->addIncoming(strResult, doStrcmpBB);
+    return ctx.ir_gen->wrap(phi);
+}
+
 IRValue* Compiler::visitBinary(BinaryExpr* bin) {
     IRValue* lhs = visitExpression(bin->lhs.get());
     IRValue* rhs = visitExpression(bin->rhs.get());
@@ -1803,83 +1836,19 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
     
     if (bin->op == "eq") {
         if (lTy->isPointerTy() && rTy->isPointerTy()) {
-            llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
-            llvm::BasicBlock* checkNullBB = llvm::BasicBlock::Create(ctx.context, "cmp_check_null", parentFunc);
-            llvm::BasicBlock* doStrcmpBB = llvm::BasicBlock::Create(ctx.context, "cmp_do_strcmp", parentFunc);
-            llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(ctx.context, "cmp_merge", parentFunc);
-            
-            llvm::Value* rawLhs = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs));
-            llvm::Value* rawRhs = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs));
-            
-            llvm::Value* isLhsNull = ctx.builder.CreateIsNull(rawLhs);
-            llvm::Value* isRhsNull = ctx.builder.CreateIsNull(rawRhs);
-            
-            // If both null -> true (eq), if one null -> false (neq)
-            llvm::Value* ptrEq = ctx.builder.CreateICmpEQ(rawLhs, rawRhs);
-            llvm::Value* anyNull = ctx.builder.CreateOr(isLhsNull, isRhsNull);
-            
-            ctx.builder.CreateCondBr(anyNull, checkNullBB, doStrcmpBB);
-            
-            // Check null case (fast path or actually null ptr)
-            ctx.builder.SetInsertPoint(checkNullBB);
-            ctx.builder.CreateBr(mergeBB);
-            
-            // Do Strcmp
-            ctx.builder.SetInsertPoint(doStrcmpBB);
-            llvm::Function* strcmpFunc = ctx.module.getFunction("strcmp");
-            if (!strcmpFunc) strcmpFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "strcmp", ctx.module);
-            llvm::Value* cmpRes = ctx.builder.CreateCall(strcmpFunc, {rawLhs, rawRhs});
-            llvm::Value* strEq = ctx.builder.CreateICmpEQ(cmpRes, ctx.builder.getInt32(0));
-            ctx.builder.CreateBr(mergeBB);
-            
-            // Merge
-            ctx.builder.SetInsertPoint(mergeBB);
-            llvm::PHINode* resultNode = ctx.builder.CreatePHI(ctx.builder.getInt1Ty(), 2, "streq_res");
-            resultNode->addIncoming(ptrEq, checkNullBB);
-            resultNode->addIncoming(strEq, doStrcmpBB);
-            
-            return ctx.ir_gen->wrap(resultNode);
+            return visitStringCompare(false,
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs)),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs)));
         }
-        return ctx.ir_gen->createICmpEQ(lhs, rhs);
+                return ctx.ir_gen->createICmpEQ(lhs, rhs);
     }
     if (bin->op == "neq") {
         if (lTy->isPointerTy() && rTy->isPointerTy()) {
-            // Re-use logic above but invert result
-            llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
-            llvm::BasicBlock* checkNullBB = llvm::BasicBlock::Create(ctx.context, "cmp_check_null_ne", parentFunc);
-            llvm::BasicBlock* doStrcmpBB = llvm::BasicBlock::Create(ctx.context, "cmp_do_strcmp_ne", parentFunc);
-            llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(ctx.context, "cmp_merge_ne", parentFunc);
-            
-            llvm::Value* rawLhs = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs));
-            llvm::Value* rawRhs = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs));
-            
-            llvm::Value* isLhsNull = ctx.builder.CreateIsNull(rawLhs);
-            llvm::Value* isRhsNull = ctx.builder.CreateIsNull(rawRhs);
-            
-            llvm::Value* ptrEq = ctx.builder.CreateICmpEQ(rawLhs, rawRhs);
-            llvm::Value* ptrNeq = ctx.builder.CreateNot(ptrEq);
-            llvm::Value* anyNull = ctx.builder.CreateOr(isLhsNull, isRhsNull);
-            
-            ctx.builder.CreateCondBr(anyNull, checkNullBB, doStrcmpBB);
-            
-            ctx.builder.SetInsertPoint(checkNullBB);
-            ctx.builder.CreateBr(mergeBB);
-            
-            ctx.builder.SetInsertPoint(doStrcmpBB);
-            llvm::Function* strcmpFunc = ctx.module.getFunction("strcmp");
-            if (!strcmpFunc) strcmpFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "strcmp", ctx.module);
-            llvm::Value* cmpRes = ctx.builder.CreateCall(strcmpFunc, {rawLhs, rawRhs});
-            llvm::Value* strNeq = ctx.builder.CreateICmpNE(cmpRes, ctx.builder.getInt32(0));
-            ctx.builder.CreateBr(mergeBB);
-            
-            ctx.builder.SetInsertPoint(mergeBB);
-            llvm::PHINode* resultNode = ctx.builder.CreatePHI(ctx.builder.getInt1Ty(), 2, "strneq_res");
-            resultNode->addIncoming(ptrNeq, checkNullBB);
-            resultNode->addIncoming(strNeq, doStrcmpBB);
-            
-            return ctx.ir_gen->wrap(resultNode);
+            return visitStringCompare(true,
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs)),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs)));
         }
-        return ctx.ir_gen->createICmpNE(lhs, rhs);
+                return ctx.ir_gen->createICmpNE(lhs, rhs);
     }
     if (bin->op == "lt") return ctx.ir_gen->createICmpSLT(lhs, rhs);
     if (bin->op == "gt") return ctx.ir_gen->createICmpSGT(lhs, rhs);

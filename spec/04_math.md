@@ -1,18 +1,16 @@
-# Math Operations Proposal (Revised for Safety)
+# Math Operations
 
 ```yaml
-# Solution for Ambiguity:
 # Operations are Dictionaries: { op: [args] }
 # Lists are Lists: [item1, item2]
+# Using [op, arg1, arg2] for operations is NOT allowed — it creates a plain list of strings.
 
 # Basic Statements (Imperative)
-# These are top-level list items, which differ from "Expressions"
 - set: [a, 10]
 - set: [b, 5]
 
 # Expressions (Nested)
-# Instead of [+, a, b] which looks like a list of strings,
-# we use { +: [a, b] } to denote an operation.
+# Use { op: [args] } dict syntax for all operations.
 
 # Example: res = (a + b) * 2
 - set: [res, { *: [ { +: [a, b] }, 2 ] }]
@@ -22,31 +20,7 @@
 - set: [m, { %: [10, 3] }]
 - print: [m]
 
-# Comparison with Lists (Data)
-# This is a list with symbols/strings, NOT an operation:
-- set: [my_list, [+, a, b]] 
-# my_list is now ["+", 10, 5] (resolved) or ["+", "a", "b"] depending on resolution rules.
+# Division by Zero:
+# - Integer division by zero raises DivisionByZeroException.
+# - Float division by zero returns Inf or NaN per IEEE 754.
 ```
-# Lists are Lists: [item1, item2]
-
-# Basic Statements (Imperative)
-# These are top-level list items, which differ from "Expressions"
-- set: [a, 10]
-- set: [b, 5]
-
-# Expressions (Nested)
-# Instead of [+, a, b] which looks like a list of strings,
-# we use { +: [a, b] } to denote an operation.
-
-# Example: res = (a + b) * 2
-- set: [res, { *: [ { +: [a, b] }, 2 ] }]
-- print: [res]
-
-# Modulo
-- set: [m, { %: [10, 3] }]
-- print: [m]
-
-# Comparison with Lists (Data)
-# This is a list with symbols/strings, NOT an operation:
-- set: [my_list, [+, a, b]] 
-# my_list is now ["+", 10, 5] (resolved) or ["+", "a", "b"] depending on resolution rules.

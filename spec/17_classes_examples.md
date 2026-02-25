@@ -14,104 +14,47 @@
           args: [[dx, i32], [dy, i32]]
           return: void
           body:
-            # 'this' is implicit or explicit? Let's say explicit for clarity here.
-            - set: [this.x, { add: [this.x, dx] }]
-            - set: [this.y, { add: [this.y, dy] }]
+            # '<.' is the self-reference operator inside a method body.
+            - set: [<.x, { +: [<.x, dx] }]
+            - set: [<.y, { +: [<.y, dy] }]
 
-# Class Composition (Mixin Models)
-# Access fields defined in a model directly in the class.
-# - model:
-#     name: Entity
-#     fields: [[id, i32]]
+# Class Composition
+# 'extends:' = single inheritance (inherits fields and methods from parent).
+# 'models:' = structural composition (injects fields from a model; no method inheritance).
 - class:
     name: GamePoint
-    extends: Point
-    models: [Entity] # Mixin 'id' field
+    extends: Point        # Inherits x, y, move()
+    models: [Entity]      # Injects 'id' field from the Entity model
     members:
       - [color, string]
 
 # Packed Class (No Padding)
-# Useful for binary formats / hardware mapping
-# Maps to LLVM 'packed' struct type
+# Default alignment follows target platform rules (typically 8-byte for i64/f64).
+# packed: true uses 1-byte alignment — no padding between fields.
 - class:
     name: Header
     packed: true
     members:
       - [id, u8]
-      - [count, i32] # Normally would align to 4 bytes, here it follows u8 immediately
+      - [count, i32] # Follows u8 immediately without alignment padding
 
 # Instantiation (Stack)
-- decl: [p1, Point] 
+# Direct declaration -> stack allocation (alloca).
+- decl: [p1, Point]
 
-# Instantiation (Heap) - Full Control
-- decl: [p2, ref<Point>]       # Declare pointer
-- set: [p2, { new: Point }]    # Allocate on Heap
-- set: [p2.x, 99]              # Access (Arrow-like)
-- free: [p2]                   # Manual Free
+# Instantiation (Heap)
+# { new: ClassName } -> heap allocation (malloc).
+- decl: [p2, ptr<Point>]
+- set: [p2, { new: Point }]
+- set: [p2.x, 99]
+- free: [p2]
 
 # Member Access
-# Syntax: object.member
 - set: [p1.x, 10]
 - set: [p1.y, 20]
 
 # Method Call
-# Syntax: object.method(args) -> { call: [object.method, args...] }
 - call: [p1.move, 5, 5]
 
 - print: [p1.x] # Should be 15
 ```
-    name: Point
-    members:
-      - [x, i32]
-      - [y, i32]
-    methods:
-      - def:
-          name: move
-          args: [[dx, i32], [dy, i32]]
-          return: void
-          body:
-            # 'this' is implicit or explicit? Let's say explicit for clarity here.
-            - set: [this.x, { add: [this.x, dx] }]
-            - set: [this.y, { add: [this.y, dy] }]
-
-# Class Composition (Mixin Models)
-# Access fields defined in a model directly in the class.
-# - model:
-#     name: Entity
-#     fields: [[id, i32]]
-- class:
-    name: GamePoint
-    extends: Point
-    models: [Entity] # Mixin 'id' field
-    members:
-      - [color, string]
-
-# Packed Class (No Padding)
-# Useful for binary formats / hardware mapping
-# Maps to LLVM 'packed' struct type
-- class:
-    name: Header
-    packed: true
-    members:
-      - [id, u8]
-      - [count, i32] # Normally would align to 4 bytes, here it follows u8 immediately
-
-# Instantiation (Stack)
-- decl: [p1, Point] 
-
-# Instantiation (Heap) - Full Control
-- decl: [p2, ref<Point>]       # Declare pointer
-- set: [p2, { new: Point }]    # Allocate on Heap
-- set: [p2.x, 99]              # Access (Arrow-like)
-- free: [p2]                   # Manual Free
-
-# Member Access
-# Syntax: object.member
-- set: [p1.x, 10]
-- set: [p1.y, 20]
-
-# Method Call
-# Syntax: object.method(args) -> { call: [object.method, args...] }
-- call: [p1.move, 5, 5]
-
-- print: [p1.x] # Should be 15

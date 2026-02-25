@@ -36,25 +36,34 @@ AIML automatically handles casting between compatible pointer types, primarily t
 
 ## 3. Explicit Casting (Future)
 
-While implicit casts handle common pointer scenarios, explicit casting will be required for value conversions (e.g., `float` -> `int`, `any` -> `struct` copy).
+While implicit casts handle common pointer scenarios, explicit casting will be required for value conversions (e.g., `f64` -> `int`, `any` -> `struct` copy).
 
 ```yaml
 # Proposed Syntax
 - set: [val, { cast: [any_val, MyStruct] }] # Copies data from pointer
 ```
 
-## 4. Map & List Conversion
+## 4. Heterogeneous Collections (`map<K:any>`, `list<any>`)
 
-Collections like `map<string, any>` rely on these implicit casting rules:
-*   **Storing**: Storing a struct in a `map<string, any>` stores its address.
-*   **Retrieving**: Retrieving a value yields `any` (a pointer), which can then be cast back to the specific pointer type.
+Collections with `any` value type store values as **tagged variants** — the runtime
+preserves the real type of each value alongside the value itself.
+
+**Storing**: The value is stored with its runtime type tag. No explicit annotation needed.
+
+**Retrieving**: `get()` / index access **auto-unboxes**. The returned value has the
+real runtime type, not `any`. The receiving variable (via `set:`) inherits this type.
 
 ```yaml
 - decl: [m, map<string:any>]
-- call: [m.put, "key", myStruct]   # Stores &myStruct
-- decl: [p, ptr<MyStruct>]
-- set: [p, { call: [m.get, "key"] }] # Casts any -> ptr<MyStruct>
+- decl: [myStruct, MyStruct]
+- call: [m.put, "key", myStruct]            # stored as MyStruct (tagged)
+- set: [retrieved, { call: [m.get, "key"] }] # retrieved is MyStruct — auto-unboxed
+- set: [retrieved.field, 99]                # works because real type is known
 ```
+
+This means `map<string:any>` behaves like a **Python dict**: you put values of any type in,
+you get the real type back out. Comparisons and field access work on the retrieved value
+without any explicit `cast:`.
 
 ## 5. Dereferencing (Accessing Values)
 

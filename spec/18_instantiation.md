@@ -20,7 +20,7 @@ You are responsible for freeing the memory.
 ### Syntax
 ```yaml
 # 1. Declare a Reference (Pointer) to a Point
-- decl: [p_heap, ref<Point>]
+- decl: [p_heap, ptr<Point>]
 
 # 2. Allocate on Heap
 - set: [p_heap, { new: Point }]

@@ -3,7 +3,7 @@
 ```yaml
 # 1. Inheritance
 # Syntax: extends: ParentClass
-# Memory Layout: Parent fields come first (C++ style).
+# Single inheritance only. Memory layout: parent fields come first (C++ style).
 
 - class:
     name: Shape
@@ -16,9 +16,9 @@
     extends: Shape
     members:
       - [radius, i32]
-    # Circle memory: [x, y, radius]
+    # Circle memory layout: [x, y, radius]
 
-# method overriding?
+# Method overriding
 - def:
     name: Shape.draw
     args: []
@@ -26,13 +26,13 @@
     body: ...
 
 # 2. Interfaces (Contracts)
-# Defines a set of methods that strict classes must implement.
-# Maps to VTable / Fat Pointers in implementation.
+# Defines a set of method signatures that implementing classes must provide.
+# All interface methods MUST be implemented by the class, or a CompilationError is raised.
 
 - interface:
     name: Drawable
     methods:
-      - [draw, [], void]  # name, args, return
+      - [draw, [], void]  # [name, args, return_type]
 
 # 3. Implementation
 - class:
@@ -43,14 +43,19 @@
       - [label, string]
     methods:
       - def:
-          name: draw    # Must match Interface
+          name: draw    # Must match Interface signature exactly
           args: []
           return: void
           body:
             - print: ["Drawing Button"]
 
 # Polymorphism
-# - decl: [d, ref<Drawable>]
+# - decl: [d, ptr<Drawable>]
 # - set: [d, { new: Button }]
 # - call: [d.draw]  # Virtual call via VTable
+
+# 4. Composition with models:
+# 'models: [ModelName]' injects fields from a Model into the class.
+# This is structural composition — fields only, no method inheritance.
+# See 17_classes_examples.md for usage.
 ```
