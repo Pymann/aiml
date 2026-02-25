@@ -79,6 +79,18 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
          }
          return call;
     }
+    if (op == "spawn" && !args.empty()) {
+         auto spawnName = dynamic_cast<VariableExpr*>(args[0].get());
+         auto spawnLiteral = dynamic_cast<LiteralExpr*>(args[0].get());
+         std::string name = "unknown_func";
+         if (spawnName) name = spawnName->name;
+         else if (spawnLiteral) name = spawnLiteral->value;
+
+         auto spawnExpr = std::make_unique<SpawnExpr>(name);
+         for (size_t i = 1; i < args.size(); ++i)
+             spawnExpr->args.push_back(std::move(args[i]));
+         return spawnExpr;
+    }
     if (op == "new" && !args.empty()) {
          auto newName = dynamic_cast<VariableExpr*>(args[0].get());
          auto newLiteral = dynamic_cast<LiteralExpr*>(args[0].get());

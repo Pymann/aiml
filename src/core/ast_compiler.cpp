@@ -43,7 +43,8 @@ void Compiler::registerTypes(Program* prog) {
     std::vector<std::string> builtinExceptions = {
         "Exception", "NullPointerException", "TypeMismatchException", "IndexOutOfBoundsException",
         "DivisionByZeroException", "StackOverflowException", "OutOfMemoryException", "TimeoutException",
-        "SerializationException", "DeserializationException", "BufferOverflowException", "BufferUnderflowException"
+        "SerializationException", "DeserializationException", "BufferOverflowException", "BufferUnderflowException",
+        "InvalidThreadStateException"
     };
 
     for (const auto& excName : builtinExceptions) {

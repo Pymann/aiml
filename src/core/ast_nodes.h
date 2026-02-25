@@ -91,6 +91,15 @@ public:
     std::string toString() const override { return "New(" + typeName + ")"; }
 };
 
+class SpawnExpr : public Expr {
+public:
+    std::string functionName;
+    std::vector<std::unique_ptr<Expr>> args;
+
+    SpawnExpr(std::string name) : functionName(name) {}
+    std::string toString() const override { return "Spawn(" + functionName + ")"; }
+};
+
 // --- Statements (Perform an action) ---
 
 class Stmt : public Node {

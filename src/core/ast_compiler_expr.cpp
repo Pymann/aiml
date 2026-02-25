@@ -18,6 +18,7 @@ IRValue* Compiler::visitExpression(Expr* expr) {
     if (auto interp = dynamic_cast<StringInterpolationExpr*>(expr)) return visitStringInterpolation(interp);
     if (auto bin = dynamic_cast<BinaryExpr*>(expr)) return visitBinary(bin);
     if (auto unary = dynamic_cast<UnaryExpr*>(expr)) return visitUnary(unary);
+    if (auto spawn = dynamic_cast<SpawnExpr*>(expr)) return visitSpawn(spawn);
     return nullptr;
 }
 IRValue* Compiler::visitStringInterpolation(StringInterpolationExpr* expr) {
@@ -401,5 +402,116 @@ IRValue* Compiler::visitUnary(UnaryExpr* unary) {
     LOG_ERROR("Unknown unary operator: " + unary->op);
     return nullptr;
 }
+IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
+    // 1. Resolve the target function
+    CompilerContext::FunctionInfo* fi = resolveFunction(spawn->functionName);
+    if (!fi || !fi->func) {
+        LOG_ERROR("spawn: unknown function: " + spawn->functionName);
+        return nullptr;
+    }
+    llvm::Function* targetFn = fi->func;
+
+    // 2. Evaluate arguments
+    std::vector<llvm::Value*> argVals;
+    for (auto& arg : spawn->args) {
+        IRValue* v = visitExpression(arg.get());
+        if (v) argVals.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v)));
+    }
+
+    llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+
+    // 3. Build or reuse a trampoline: void*(void*) that unpacks args and calls targetFn
+    std::string trampolineName = "__aiml_spawn_" + spawn->functionName;
+    llvm::Function* trampoline = ctx.module.getFunction(trampolineName);
+    if (!trampoline) {
+        std::vector<llvm::Type*> argTypes;
+        for (auto* v : argVals) argTypes.push_back(v->getType());
+        llvm::StructType* argStructTy = argTypes.empty()
+            ? nullptr : llvm::StructType::get(ctx.context, argTypes);
+
+        llvm::FunctionType* trampolineTy = llvm::FunctionType::get(i8p, {i8p}, false);
+        trampoline = llvm::Function::Create(trampolineTy,
+            llvm::Function::InternalLinkage, trampolineName, ctx.module);
+
+        llvm::IRBuilder<>::InsertPoint savedIP = ctx.builder.saveIP();
+        llvm::BasicBlock* tBB = llvm::BasicBlock::Create(ctx.context, "entry", trampoline);
+        ctx.builder.SetInsertPoint(tBB);
+
+        llvm::Value* rawArgPtr = trampoline->arg_begin();
+        std::vector<llvm::Value*> callArgs;
+        if (argStructTy) {
+            llvm::Value* argStructPtr = ctx.builder.CreateBitCast(
+                rawArgPtr, argStructTy->getPointerTo(), "args");
+            for (size_t i = 0; i < argTypes.size(); ++i) {
+                llvm::Value* gep = ctx.builder.CreateStructGEP(argStructTy, argStructPtr, (unsigned)i);
+                callArgs.push_back(ctx.builder.CreateLoad(argTypes[i], gep));
+            }
+            llvm::Function* freeFn = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
+            ctx.builder.CreateCall(targetFn, callArgs);
+            ctx.builder.CreateCall(freeFn, {rawArgPtr});
+        } else {
+            ctx.builder.CreateCall(targetFn, callArgs);
+        }
+        ctx.builder.CreateRet(llvm::ConstantPointerNull::get(
+            static_cast<llvm::PointerType*>(i8p)));
+        ctx.builder.restoreIP(savedIP);
+    }
+
+    // 4. Malloc args struct and fill it
+    llvm::Value* argsVoidPtr = llvm::ConstantPointerNull::get(
+        static_cast<llvm::PointerType*>(i8p));
+    if (!argVals.empty()) {
+        std::vector<llvm::Type*> argTypes;
+        for (auto* v : argVals) argTypes.push_back(v->getType());
+        llvm::StructType* argStructTy = llvm::StructType::get(ctx.context, argTypes);
+        llvm::DataLayout dl(&ctx.module);
+        uint64_t argStructSize = dl.getTypeAllocSize(argStructTy);
+
+        llvm::Function* mallocFn = ctx.getFunction("malloc", i8p, {ctx.builder.getInt64Ty()});
+        llvm::Value* rawArgsPtr  = ctx.builder.CreateCall(mallocFn,
+            {ctx.builder.getInt64(argStructSize)}, "args_raw");
+        llvm::Value* argsPtr = ctx.builder.CreateBitCast(
+            rawArgsPtr, argStructTy->getPointerTo(), "args_ptr");
+        for (size_t i = 0; i < argVals.size(); ++i) {
+            llvm::Value* gep = ctx.builder.CreateStructGEP(argStructTy, argsPtr, (unsigned)i);
+            ctx.builder.CreateStore(argVals[i], gep);
+        }
+        argsVoidPtr = rawArgsPtr;
+    }
+
+    // 5. Malloc the thread_handle struct { i64 tid, i8 joined, i8 detached }
+    llvm::StructType* handleTy = llvm::StructType::getTypeByName(ctx.context, "thread_handle");
+    if (!handleTy) {
+        LOG_ERROR("spawn: thread_handle type not found");
+        return nullptr;
+    }
+    llvm::DataLayout dl(&ctx.module);
+    llvm::Function* mallocFn = ctx.getFunction("malloc", i8p, {ctx.builder.getInt64Ty()});
+    llvm::Value* rawHandle = ctx.builder.CreateCall(mallocFn,
+        {ctx.builder.getInt64(dl.getTypeAllocSize(handleTy))}, "handle_raw");
+    llvm::Value* handlePtr = ctx.builder.CreateBitCast(rawHandle, handleTy->getPointerTo(), "handle_ptr");
+    ctx.builder.CreateStore(ctx.builder.getInt8(0),
+        ctx.builder.CreateStructGEP(handleTy, handlePtr, 1, "joined_ptr"));
+    ctx.builder.CreateStore(ctx.builder.getInt8(0),
+        ctx.builder.CreateStructGEP(handleTy, handlePtr, 2, "detached_ptr"));
+
+    // 6. pthread_create(&handle->tid, NULL, trampoline, args)
+    llvm::Type* i64p = ctx.builder.getInt64Ty()->getPointerTo();
+    llvm::Value* tidGEP = ctx.builder.CreateBitCast(
+        ctx.builder.CreateStructGEP(handleTy, handlePtr, 0, "tid_gep"), i64p);
+    llvm::Value* trampolinePtr = ctx.builder.CreateBitCast(trampoline, i8p);
+    llvm::Function* pthreadCreate = ctx.getFunction("pthread_create",
+        ctx.builder.getInt32Ty(), {i64p, i8p, i8p, i8p});
+    ctx.builder.CreateCall(pthreadCreate, {
+        tidGEP,
+        llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)),
+        trampolinePtr,
+        argsVoidPtr
+    });
+
+    // 7. Return the handle pointer (stored into the thread_handle* alloca by visitSetStmt)
+    return ctx.ir_gen->wrap(handlePtr);
+}
+
 } // namespace AST
 } // namespace AIML
