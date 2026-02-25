@@ -20,19 +20,3 @@
 
 - print: [result]
 ```
-- set: [z, 5]
-
-# If statement with Nested Dict Expressions
-# condition: { and: [ { lt: [x, y] }, { gt: [x, z] } ] }
-# This is unambiguous.
-
-- if:
-    condition: { and: [ { lt: [x, y] }, { gt: [x, z] } ] }
-    then:
-      - print: [x]
-      - set: [result, 1]
-    else:
-      - print: [z]
-      - set: [result, 0]
-
-- print: [result]

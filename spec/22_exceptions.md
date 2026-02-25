@@ -10,10 +10,8 @@
 - class:
     name: DivisionByZeroException
     extends: Exception
-    # Inherits [message, string] from Exception
 
 # 2. Throwing an Exception
-# Syntax: throw: { new: ExceptionType, args: [...] }
 - def:
     name: divide
     args: [[a, i32], [b, i32]]
@@ -22,13 +20,10 @@
       - if:
           condition: { eq: [b, 0] }
           then:
-            # Throwing an instance of DivisionByZeroException
             - throw: { new: DivisionByZeroException, message: "Division by zero" }
       - return: { div: [a, b] }
 
 # 3. Try-Catch Block
-# Syntax: try: [body], catch: [[Type, var, body], ...]
-
 - def:
     name: main
     args: []
@@ -38,36 +33,42 @@
           body:
             - call: [divide, 10, 0]
             - print: ["Success"] # Skipped if throw happens
-          catch: 
-            # Catch specific exception type
+          catch:
             - type: DivisionByZeroException
               var: e
               body:
-                - print: ["Caught localized math error: ${e.message}"]
+                - print: ["Caught: ${e.message}"]
 
-            # Catch generic exception (polymorphism)
             - type: Exception
               var: e
               body:
                 - print: ["Caught generic error: ${e.message}"]
-              
+
       - print: ["Program continues..."]
       - return: [0]
-
-# Implementation Detail:
-# The compiler maps 'catch' types to LLVM landing pads and type descriptors (C++ RTTI / Itanium ABI style).
-# 4. Built-in System Exceptions
-# These are implicitly defined and thrown by the runtime or standard library.
-
-# - NullPointerException      : Accessing null reference
-# - TypeMismatchException     : Dynamic type cast failure
-# - IndexOutOfBoundsException : List/Array access out of range
-# - DivisionByZeroException   : Arithmetic error
-# - StackOverflowException    : Recursion depth exceeded
-# - OutOfMemoryException      : Heap allocation failed
-# - TimeoutException          : Remote call or agent task timeout
-# - SerializationException    : Serialization error
-# - DeserializationException  : Deserialization error
-# - BufferOverflowException   : Buffer overflow error (putting to much in buffer)
-# - BufferUnderflowException  : Buffer underflow error (reading to much from buffer)
 ```
+
+## Exception Propagation
+
+- Unhandled exceptions propagate up the call stack to the caller.
+- If no `catch` block matches at any level, the program calls `sys.exit(2)` and prints
+  the exception message to stderr.
+
+## Built-in System Exceptions
+
+| Exception | Trigger |
+|-----------|---------|
+| `NullPointerException` | Dereferencing a null pointer |
+| `TypeMismatchException` | Dynamic type cast failure (`any` vs concrete type) |
+| `IndexOutOfBoundsException` | Array/list access out of range |
+| `DivisionByZeroException` | Integer division or modulo by zero |
+| `StackOverflowException` | Recursion depth exceeded |
+| `OutOfMemoryException` | Heap allocation failed |
+| `TimeoutException` | Remote call or agent task timeout |
+| `SerializationException` | Serialization error |
+| `DeserializationException` | Deserialization error |
+| `BufferOverflowException` | `write()` when `size + sizeof(value) > capacity` |
+| `BufferUnderflowException` | `read()` past written data |
+| `InvalidThreadStateException` | e.g. `join()` on a detached thread |
+| `MissingKeyError` | `map.remove()` on a non-existent key |
+| `NamespaceCollisionError` | Two imports define the same FQN |

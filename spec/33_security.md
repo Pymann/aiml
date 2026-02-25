@@ -18,8 +18,8 @@
 - unsafe:
     body:
        # Raw pointer magic
-       - decl: [p, ref<i32>]
-       - set: [p, { cast: [0xB8000, ref<i32>] }] # VGA Memory?
+       - decl: [p, ptr<i32>]
+       - set: [p, { cast: [0xB8000, ptr<i32>] }] # VGA Memory?
        - set: [p + 1, 0xFF]
 
 # 3. Capability-based Security (Future)

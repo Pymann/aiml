@@ -8,7 +8,7 @@ Strings can contain one or more expansion blocks.
 
 ```yaml
 - decl: [name, string, "World"]
-- print: "Hello, ${name}!" 
+- print: ["Hello, ${name}!"]
 # Output: Hello, World!
 ```
 
@@ -23,7 +23,7 @@ If the content inside `${...}` is a scalar value (e.g., a variable name or liter
 
 ```yaml
 - decl: [count, i32, 42]
-- print: "The answer is ${count}."
+- print: ["The answer is ${count}."]
 # Output: The answer is 42.
 ```
 
@@ -43,7 +43,7 @@ You can call functions within a string. The return value of the function is conv
     body:
       - return: 30
 
-- print: "Result: ${ { call: [add, 10, 20] } }"
+- print: ["Result: ${ { call: [add, 10, 20] } }"]
 # Output: Result: 30
 ```
 
@@ -55,7 +55,7 @@ Object methods (on lists, maps, or custom classes) can also be called.
 - decl: [my_list, list<i32>]
 - call: [my_list.push, 100]
 
-- print: "List size: ${ { call: [my_list.size] } }"
+- print: ["List size: ${ { call: [my_list.size] } }"]
 # Output: List size: 1
 ```
 
@@ -65,7 +65,7 @@ Binary operations (like `+`, `-`, `*`, `/`) work as expected.
 
 ```yaml
 - decl: [x, i32, 5]
-- print: "Calculated: ${ { +: [x, 5] } }"
+- print: ["Calculated: ${ { +: [x, 5] } }"]
 # Output: Calculated: 10
 ```
 
@@ -109,10 +109,10 @@ When the compiler encounters a string with expansions:
 - decl: [b, i32, 20]
 
 # Math inside expansion
-- print: "Sum: ${ { +: [a, b] } }"
+- print: ["Sum: ${ { +: [a, b] } }"]
 
 # Call inside expansion
-- print: "Max: ${ { call: [math.max, a, b] } }"
+- print: ["Max: ${ { call: [math.max, a, b] } }"]
 
 # Nested (conceptually supported via recursion in evaluator)
 # "${ { +: [ { call: [f1] }, { call: [f2] } ] } }"
@@ -125,6 +125,6 @@ If evaluating a function in a namespace, ensure full qualification or correct sc
 ```yaml
 - import: "lib.aiml"
 # Calls 'my.lib.add' from 'lib.aiml'
-- print: "Lib Call: ${ { call: [my.lib.add, 1, 2] } }"
+- print: ["Lib Call: ${ { call: [my.lib.add, 1, 2] } }"]
 ```
 
