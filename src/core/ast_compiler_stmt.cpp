@@ -3,6 +3,7 @@
 #include "list_impl.h"
 #include "map_impl.h"
 #include "buffer_impl.h"
+#include "chan_impl.h"
 #include "string_utils.h"
 #include "expression.h"
 #include <iostream>
@@ -47,6 +48,9 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             llvm::Type* vTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
             if (kTy && vTy) MapImpl::initMap(ctx, unwrappedAlloca, kTy, vTy, 4);
         }
+    } else if (tName.find("chan<") == 0 && tName.back() == '>') {
+        // Auto-init with capacity=0 (true rendezvous). Use chan.init(N) for buffered.
+        ChanImpl::init(ctx, unwrappedAlloca, ctx.builder.getInt64(0));
     }
     
     Symbol sym;

@@ -379,6 +379,10 @@ namespace AIML {
         // lock: pointer to heap-allocated pthread_mutex_t (opaque i8*)
         if (typeName == "lock") return llvm::Type::getInt8Ty(context)->getPointerTo();
 
+        // chan<T>: pointer to heap-allocated channel struct (opaque i8*)
+        if (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>')
+            return llvm::Type::getInt8Ty(context)->getPointerTo();
+
         LOG_ERROR("Unknown Type: '" + typeName + "' -> defaulting to i32");
         return llvm::Type::getInt32Ty(context); // Default
     }
