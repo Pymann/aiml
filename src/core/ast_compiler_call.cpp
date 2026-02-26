@@ -2,6 +2,7 @@
 #include "ast_compiler.h"
 #include "list_impl.h"
 #include "map_impl.h"
+#include "chan_impl.h"
 #include "string_utils.h"
 #include "expression.h"
 #include <iostream>
@@ -289,6 +290,33 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          } else if (methodName == "len") {
              return ctx.ir_gen->wrap(MapImpl::getSize(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), mapStructTy));
          }
+    }
+    // Channel Methods: chan<T>.send / chan<T>.recv / chan<T>.init
+    else if (className.rfind("chan<", 0) == 0 && className.back() == '>') {
+        std::string elemName = className.substr(5, className.length() - 6); // skip "chan<", drop ">"
+        llvm::Type* elemTy = static_cast<llvm::Type*>(
+            ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
+        if (!elemTy) elemTy = ctx.builder.getInt64Ty();
+
+        llvm::Value* rawAlloca = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+
+        if (methodName == "send" && !argVals.empty()) {
+            llvm::Value* val = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            ChanImpl::send(ctx, rawAlloca, val, elemTy);
+            return nullptr;
+        } else if (methodName == "recv") {
+            return ctx.ir_gen->wrap(ChanImpl::recv(ctx, rawAlloca, elemTy));
+        } else if (methodName == "init") {
+            llvm::Value* cap = argVals.empty()
+                ? ctx.builder.getInt64(1)
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            if (cap->getType()->isIntegerTy(32))
+                cap = ctx.builder.CreateZExt(cap, ctx.builder.getInt64Ty(), "cap_i64");
+            ChanImpl::init(ctx, rawAlloca, cap);
+            return nullptr;
+        }
+        LOG_ERROR("Unknown channel method: " + methodName);
+        return ctx.ir_gen->getInt32(0);
     }
     // User Class Methods
     else if (!className.empty() && ctx.classes.count(className)) {

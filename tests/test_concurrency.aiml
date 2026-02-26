@@ -6,6 +6,14 @@
       - print: ["Worker ${id}: started"]
       - print: ["Worker ${id}: done"]
 
+- def:
+    name: producer
+    args: [[ch, chan<i32>]]
+    return: void
+    body:
+      - call: [ch.send, 42]
+      - call: [ch.send, 99]
+
 # Thread spawn and join
 - decl: [t1, thread_handle]
 - decl: [t2, thread_handle]
@@ -39,3 +47,15 @@
 - call: [mutex.release]
 
 - print: ["Main: done"]
+
+# Channel test: producer sends 42 and 99, main receives both
+- decl: [ch, chan<i32>]
+- decl: [tp, thread_handle]
+- set: [tp, { spawn: [producer, ch] }]
+- decl: [v1, i32]
+- decl: [v2, i32]
+- set: [v1, { call: [ch.recv] }]
+- set: [v2, { call: [ch.recv] }]
+- call: [tp.join]
+- print: ["Received: ${v1}"]
+- print: ["Received: ${v2}"]
