@@ -139,14 +139,25 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
         }
         YAML::Parser parser(fin);
         parser.HandleNextDocument(astBuilder);
-        
+
         auto programAST = astBuilder.takeProgram();
         if (programAST) {
+            // Assign sourceNode to each top-level declaration for sys.bundle.
+            // Load the file as a YAML tree and zip entries with AST nodes.
+            try {
+                YAML::Node rawSeq = YAML::LoadFile(filename);
+                if (rawSeq.IsSequence()) {
+                    size_t n = std::min(rawSeq.size(), programAST->declarations.size());
+                    for (size_t i = 0; i < n; ++i)
+                        programAST->declarations[i]->sourceNode = rawSeq[i];
+                }
+            } catch (...) {}
+
             AIML::AST::Compiler astCompiler(ctx);
-            
+
             // Pass 1: Global Type and Signature Registration
             astCompiler.registerTypes(programAST.get());
-            
+
             // Pass 2: Full Code Generation
             astCompiler.compile(programAST.get());
         } else {

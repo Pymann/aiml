@@ -3,9 +3,14 @@
 #include "list_impl.h"
 #include "map_impl.h"
 #include "chan_impl.h"
+#include "code_impl.h"
 #include "string_utils.h"
 #include "expression.h"
+#include "serialize_impl.h"
 #include <iostream>
+#include <queue>
+#include <set>
+#include <cstdio>
 
 namespace AIML {
 namespace AST {
@@ -24,6 +29,14 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             return visitObjectMethodCall(baseName, methodName, sym, call);
         }
         
+        // sys.serialize / sys.deserialize / sys.bundle need arg type info — intercept before eager eval
+        if (baseName == "sys" && (methodName == "serialize" || methodName == "deserialize")) {
+            return visitSysSerializeCall(methodName, call);
+        }
+        if (baseName == "sys" && methodName == "bundle") {
+            return visitSysBundleCall(call);
+        }
+
         // Eagerly evaluate arguments for other functions (sys)
         std::vector<IRValue*> argVals;
         for (auto& arg : call->args) {
@@ -31,7 +44,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             if (val) argVals.push_back(val);
             else return ctx.ir_gen->getInt32(0);
         }
-        
+
         // System Namespaces (sys, io, time)
         if (baseName == "sys" || baseName == "io" || baseName == "time") {
             IRValue* sysResult = visitSysNamespaceCall(baseName, methodName, argVals);
@@ -369,5 +382,306 @@ IRValue* Compiler::visitSysNamespaceCall(const std::string& baseName, const std:
     }
     return nullptr; // No matching handler — caller tries FQN fallback
 }
+
+// ---------------------------------------------------------------------------
+// sys.serialize / sys.deserialize
+// Intercepted before eager arg evaluation so we can inspect argument types.
+// ---------------------------------------------------------------------------
+IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* call) {
+    llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+
+    if (method == "serialize") {
+        if (call->args.empty())
+            return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+
+        // Resolve argument type and symbol from the symbol table
+        std::string argType;
+        Symbol* argSym = nullptr;
+        if (auto* var = dynamic_cast<VariableExpr*>(call->args[0].get())) {
+            argSym = resolveVariable(var->name);
+            if (argSym) argType = argSym->typeName;
+        }
+
+        // any → compiler error
+        if (argType == "any") {
+            LOG_ERROR("sys.serialize: 'any' type is not serialisable");
+            return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr("(error)"));
+        }
+
+        // ptr<T> → auto-deref: load the pointer value, serialize as T
+        if (argType.rfind("ptr<", 0) == 0 && argType.back() == '>') {
+            std::string innerType = argType.substr(4, argType.size() - 5);
+            if (!SerializeImpl::isSerializable(ctx, innerType)) {
+                LOG_ERROR("sys.serialize: ptr<" + innerType + "> inner type is not serialisable");
+                return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr("(error)"));
+            }
+            if (argSym) {
+                IRValue* baseAlloca = argSym->ir_alloca_inst
+                    ? argSym->ir_alloca_inst : ctx.ir_gen->wrap(argSym->alloca_inst);
+                llvm::Value* ptrVal = ctx.builder.CreateLoad(
+                    llvm::PointerType::get(ctx.context, 0),
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), "deref_ptr");
+                return ctx.ir_gen->wrap(SerializeImpl::serialize(ctx, ptrVal, innerType));
+            }
+        }
+
+        // Validate serializability
+        if (!argType.empty() && !SerializeImpl::isSerializable(ctx, argType)) {
+            LOG_ERROR("sys.serialize: type '" + argType + "' is not serialisable");
+            return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr("(error)"));
+        }
+
+        // Structs, lists, maps: pass alloca pointer directly (not loaded value)
+        bool needsAlloca = !argType.empty() && argSym &&
+            (ctx.classes.count(argType) ||
+             argType.find("list<") == 0 ||
+             argType.find("map<")  == 0);
+
+        if (needsAlloca) {
+            IRValue* baseAlloca = argSym->ir_alloca_inst
+                ? argSym->ir_alloca_inst : ctx.ir_gen->wrap(argSym->alloca_inst);
+            llvm::Value* rawAlloca = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+            return ctx.ir_gen->wrap(SerializeImpl::serialize(ctx, rawAlloca, argType));
+        }
+
+        // Scalars and enums: evaluate expression to get the loaded value
+        IRValue* argVal = visitExpression(call->args[0].get());
+        if (!argVal) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+        llvm::Value* val = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVal));
+
+        return ctx.ir_gen->wrap(SerializeImpl::serialize(ctx, val, argType));
+
+    } else if (method == "deserialize") {
+        // Requires at least one argument (the source string).
+        if (call->args.empty()) {
+            LOG_ERROR("sys.deserialize: requires at least one argument (source string)");
+            return ctx.ir_gen->getInt32(0);
+        }
+
+        // Type is taken from explicit 2nd string-literal arg, or inferred from
+        // the set-statement target variable type (ctx.deserializeTargetType).
+        std::string typeName;
+        if (call->args.size() > 1) {
+            if (auto* lit = dynamic_cast<LiteralExpr*>(call->args[1].get()))
+                typeName = lit->value;
+            else {
+                LOG_ERROR("sys.deserialize: second argument must be a string literal type name");
+                return ctx.ir_gen->getInt32(0);
+            }
+        } else {
+            typeName = ctx.deserializeTargetType;
+        }
+
+        if (typeName.empty()) {
+            LOG_ERROR("sys.deserialize: type cannot be inferred — provide a second argument or use inside a typed set statement");
+            return ctx.ir_gen->getInt32(0);
+        }
+
+        IRValue* strVal = visitExpression(call->args[0].get());
+        if (!strVal) return ctx.ir_gen->getInt32(0);
+        llvm::Value* src = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(strVal));
+
+        // any → compiler error
+        if (typeName == "any") {
+            LOG_ERROR("sys.deserialize: 'any' type is not serialisable");
+            return ctx.ir_gen->getInt32(0);
+        }
+
+        // ptr<T> → deserialize as T, return heap pointer directly
+        if (typeName.rfind("ptr<", 0) == 0 && typeName.back() == '>') {
+            std::string innerType = typeName.substr(4, typeName.size() - 5);
+            if (!SerializeImpl::isSerializable(ctx, innerType)) {
+                LOG_ERROR("sys.deserialize: ptr<" + innerType + "> inner type is not serialisable");
+                return ctx.ir_gen->getInt32(0);
+            }
+            return ctx.ir_gen->wrap(SerializeImpl::deserialize(ctx, src, innerType));
+        }
+
+        // Validate type
+        if (!SerializeImpl::isSerializable(ctx, typeName)) {
+            LOG_ERROR("sys.deserialize: type '" + typeName + "' is not serialisable");
+            return ctx.ir_gen->getInt32(0);
+        }
+
+        return ctx.ir_gen->wrap(SerializeImpl::deserialize(ctx, src, typeName));
+    }
+
+    return ctx.ir_gen->getInt32(0);
+}
+
+// ---------------------------------------------------------------------------
+// sys.bundle helpers (file-scope, not members)
+// ---------------------------------------------------------------------------
+namespace {
+
+// DFS post-order: dependencies are inserted before the node that references them.
+static void dfsCollect(CompilerContext& ctx,
+                       const std::string& name,
+                       std::set<std::string>& visited,
+                       std::vector<std::string>& result) {
+    if (!visited.insert(name).second) return;
+
+    if (ctx.functions.count(name)) {
+        auto& fi = ctx.functions[name];
+        for (auto& dep : fi.referencedTypes) dfsCollect(ctx, dep, visited, result);
+        if (!fi.sourceYaml.empty()) result.push_back(fi.sourceYaml);
+    } else if (ctx.classes.count(name)) {
+        auto& ci = ctx.classes[name];
+        if (!ci.isBuiltin) {
+            for (auto& dep : ci.referencedTypes) dfsCollect(ctx, dep, visited, result);
+            // Also pull in types used inside method bodies (tracked via bundleTrackingTarget)
+            for (const auto& mname : ci.methodNames) {
+                if (ctx.functions.count(mname)) {
+                    for (auto& dep : ctx.functions[mname].referencedTypes)
+                        dfsCollect(ctx, dep, visited, result);
+                }
+            }
+            if (!ci.sourceYaml.empty()) result.push_back(ci.sourceYaml);
+        }
+    } else if (ctx.enumSources.count(name)) {
+        result.push_back(ctx.enumSources[name]);
+    } else if (ctx.interfaceSources.count(name)) {
+        result.push_back(ctx.interfaceSources[name]);
+    }
+}
+
+// Transitively collect YAML source strings for rootName.
+// Dependencies come before the root in the result vector (post-order DFS).
+static std::vector<std::string> collectCodeChunks(CompilerContext& ctx,
+                                                   const std::string& rootName) {
+    std::set<std::string>    visited;
+    std::vector<std::string> result;
+    dfsCollect(ctx, rootName, visited, result);
+    return result;
+}
+
+// FNV-1a 32-bit hash, returned as 8-char hex string.
+static std::string fnv1a_hex(const std::string& s) {
+    uint32_t h = 2166136261u;
+    for (unsigned char c : s) { h ^= c; h *= 16777619u; }
+    char buf[9];
+    std::snprintf(buf, sizeof(buf), "%08x", h);
+    return std::string(buf);
+}
+
+} // anonymous namespace
+
+// ---------------------------------------------------------------------------
+// sys.bundle intercept
+// ---------------------------------------------------------------------------
+IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
+    if (call->args.empty()) {
+        LOG_ERROR("sys.bundle: requires 1 argument (function name or instance)");
+        return ctx.ir_gen->getInt32(0);
+    }
+
+    llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+    llvm::Type* i64 = ctx.builder.getInt64Ty();
+
+    // Helper: malloc a new empty GenericList, init it, return raw i8*
+    llvm::StructType* listTy  = ListImpl::getListStructType(ctx);
+    llvm::DataLayout  dl(&ctx.module);
+    uint64_t          listBytes = dl.getTypeAllocSize(listTy);
+    llvm::Function*   mallocFn  = ctx.getFunction("malloc", i8p, {i64});
+
+    auto makeEmptyList = [&]() -> llvm::Value* {
+        llvm::Value* mem = ctx.builder.CreateCall(mallocFn,
+            {ctx.builder.getInt64(listBytes)}, "bl_mem");
+        llvm::Value* lp = ctx.builder.CreateBitCast(mem, listTy->getPointerTo(), "bl_ptr");
+        ListImpl::initList(ctx, lp, i8p, 4);
+        return mem; // returned as i8*
+    };
+
+    // ── Case 1: string literal → function/class bundle ─────────────────────
+    if (auto* lit = dynamic_cast<LiteralExpr*>(call->args[0].get())) {
+        std::string selector = lit->value;
+        std::vector<std::string> chunks = collectCodeChunks(ctx, selector);
+
+        if (chunks.empty()) {
+            LOG_ERROR("sys.bundle: no YAML source found for '" + selector + "'");
+            return ctx.ir_gen->getInt32(0);
+        }
+
+        // id = FNV-1a of all chunks joined
+        std::string allChunks;
+        for (auto& c : chunks) allChunks += c;
+        llvm::Value* idVal = ctx.builder.CreateGlobalStringPtr(fnv1a_hex(allChunks), "b_id");
+
+        // code_chunks list: push each YAML chunk
+        llvm::Value* ccMem  = makeEmptyList();
+        llvm::Value* ccList = ctx.builder.CreateBitCast(ccMem, listTy->getPointerTo(), "b_ccl");
+        for (auto& chunk : chunks) {
+            llvm::Value* s = ctx.builder.CreateGlobalStringPtr(chunk, "b_chunk");
+            ListImpl::push(ctx, ccList, s);
+        }
+
+        // data_chunks: empty
+        llvm::Value* dcMem = makeEmptyList();
+
+        llvm::Value* startCall = ctx.builder.CreateGlobalStringPtr(
+            "{\"call\":[\"" + selector + "\"]}", "b_sc");
+
+        return ctx.ir_gen->wrap(CodeImpl::create(ctx, idVal, startCall, ccMem, dcMem));
+    }
+
+    // ── Case 2: variable → instance bundle ─────────────────────────────────
+    if (auto* var = dynamic_cast<VariableExpr*>(call->args[0].get())) {
+        Symbol* sym = resolveVariable(var->name);
+        if (!sym) {
+            LOG_ERROR("sys.bundle: unknown variable '" + var->name + "'");
+            return ctx.ir_gen->getInt32(0);
+        }
+        std::string typeName = sym->typeName;
+
+        std::vector<std::string> chunks = collectCodeChunks(ctx, typeName);
+        if (chunks.empty()) {
+            LOG_ERROR("sys.bundle: no YAML source found for type '" + typeName + "'");
+            return ctx.ir_gen->getInt32(0);
+        }
+
+        // code_chunks list
+        llvm::Value* ccMem  = makeEmptyList();
+        llvm::Value* ccList = ctx.builder.CreateBitCast(ccMem, listTy->getPointerTo(), "bi_ccl");
+        for (auto& chunk : chunks) {
+            llvm::Value* s = ctx.builder.CreateGlobalStringPtr(chunk, "bi_chunk");
+            ListImpl::push(ctx, ccList, s);
+        }
+
+        // id
+        std::string allChunks;
+        for (auto& c : chunks) allChunks += c;
+        llvm::Value* idVal = ctx.builder.CreateGlobalStringPtr(fnv1a_hex(allChunks), "bi_id");
+
+        // Serialize the instance to JSON at runtime
+        IRValue* baseAlloca = sym->ir_alloca_inst
+            ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst);
+        llvm::Value* rawAlloca = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+        llvm::Value* jsonStr   = SerializeImpl::serialize(ctx, rawAlloca, typeName);
+
+        // Build data chunk: "- decl: [_v, <T>]\n- set: [_v, {call:[sys.deserialize,'<json>','<T>']}]\n"
+        // prefix + jsonStr + suffix are concatenated at runtime
+        std::string prefix = "- decl: [_v, " + typeName + "]\n"
+                             "- set: [_v, {call:[sys.deserialize,'";
+        std::string suffix = "','" + typeName + "']}]\n";
+
+        llvm::Value* prefixVal = ctx.builder.CreateGlobalStringPtr(prefix, "bi_pfx");
+        llvm::Value* suffixVal = ctx.builder.CreateGlobalStringPtr(suffix, "bi_sfx");
+        llvm::Value* part1     = StringUtils::concat(ctx, prefixVal, jsonStr);
+        llvm::Value* dataChunk = StringUtils::concat(ctx, part1, suffixVal);
+
+        // data_chunks list: push the single data chunk
+        llvm::Value* dcMem  = makeEmptyList();
+        llvm::Value* dcList = ctx.builder.CreateBitCast(dcMem, listTy->getPointerTo(), "bi_dcl");
+        ListImpl::push(ctx, dcList, dataChunk);
+
+        llvm::Value* startCall = ctx.builder.CreateGlobalStringPtr("", "bi_sc");
+
+        return ctx.ir_gen->wrap(CodeImpl::create(ctx, idVal, startCall, ccMem, dcMem));
+    }
+
+    LOG_ERROR("sys.bundle: argument must be a string literal (function name) or a variable (instance)");
+    return ctx.ir_gen->getInt32(0);
+}
+
 } // namespace AST
 } // namespace AIML

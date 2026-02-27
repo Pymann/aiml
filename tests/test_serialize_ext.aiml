@@ -1,0 +1,51 @@
+# Extended serialization tests: structs, enums, lists, maps, round-trips
+
+# --- Type definitions ---
+- enum:
+    name: Status
+    values:
+      - Ok
+      - Error: 5
+      - Unknown
+
+- class:
+    name: Vec2
+    members:
+      - [x, i32]
+      - [y, i32]
+
+# --- Enum serialize ---
+- decl: [st1, Status, Status.Ok]
+- decl: [s_st1, string]
+- set: [s_st1, { call: [sys.serialize, st1] }]
+- print: ["enum Ok serialized: ${s_st1}"]
+
+- decl: [st2, Status, Status.Error]
+- decl: [s_st2, string]
+- set: [s_st2, { call: [sys.serialize, st2] }]
+- print: ["enum Error serialized: ${s_st2}"]
+
+# --- Struct serialize ---
+- decl: [v, Vec2]
+- set: [v.x, 10]
+- set: [v.y, 20]
+- decl: [s_v, string]
+- set: [s_v, { call: [sys.serialize, v] }]
+- print: ["struct Vec2 serialized: ${s_v}"]
+
+# --- List serialize ---
+- decl: [nums, list<i32>]
+- call: [nums.push, 1]
+- call: [nums.push, 2]
+- call: [nums.push, 3]
+- decl: [s_nums, string]
+- set: [s_nums, { call: [sys.serialize, nums] }]
+- print: ["list serialized: ${s_nums}"]
+
+# --- Struct deserialize round-trip ---
+- decl: [json_v, string]
+- set: [json_v, "{\"__type\":\"Vec2\",\"x\":5,\"y\":7}"]
+- decl: [v2, Vec2]
+- set: [v2, { call: [sys.deserialize, json_v, "Vec2"] }]
+- print: ["deserialized Vec2.x: ${v2.x}"]
+- print: ["deserialized Vec2.y: ${v2.y}"]

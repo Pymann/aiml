@@ -97,7 +97,10 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     
     if (!baseAlloca) return;
     
+    // Expose the target variable's type so sys.deserialize can infer it without an explicit arg.
+    if (propName.empty()) ctx.deserializeTargetType = sym->typeName;
     IRValue* val = visitExpression(setStmt->value.get());
+    ctx.deserializeTargetType.clear();
     if (!val) {
         LOG_ERROR("Failed to evaluate value expression for assignment to: " + targetStr);
         return;
@@ -119,6 +122,38 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 ctx.builder.getInt64(structSize)
             });
             return;
+        }
+        if (sym->typeName.find("map<") == 0) {
+            llvm::Type* mapTy = ctx.getLLVMType(sym->typeName);
+            if (mapTy) {
+                uint64_t structSize = ctx.module.getDataLayout().getTypeAllocSize(mapTy);
+                llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
+                ctx.builder.CreateCall(memcpyFunc, {
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)),
+                    ctx.builder.getInt64(structSize)
+                });
+                return;
+            }
+        }
+        // User struct/class assigned from deserialized i8* heap pointer → memcpy
+        auto classIt = ctx.classes.find(sym->typeName);
+        if (classIt != ctx.classes.end() && !classIt->second.isBuiltin && classIt->second.type) {
+            llvm::StructType* structTy = classIt->second.type;
+            uint64_t structSize = ctx.module.getDataLayout().getTypeAllocSize(structTy);
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
+            llvm::Value* rawVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+            // Only memcpy if the value is a pointer (i8* from deserializer), not a struct value
+            if (rawVal->getType()->isPointerTy()) {
+                ctx.builder.CreateCall(memcpyFunc, {
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
+                    rawVal,
+                    ctx.builder.getInt64(structSize)
+                });
+                return;
+            }
         }
         ctx.ir_gen->createStore(val, baseAlloca);
     } else {

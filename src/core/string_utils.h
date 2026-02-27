@@ -98,6 +98,66 @@ namespace StringUtils {
         return ctx.builder.CreateCall(impl, {intVal});
     }
 
+    // Emit __aiml_f32_to_string once per module: sprintf(buf, "%.6g", val) -> i8*
+    inline llvm::Value* floatToString(CompilerContext& ctx, llvm::Value* floatVal) {
+        llvm::PointerType* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type*        i64  = ctx.builder.getInt64Ty();
+        llvm::Type*        f32  = ctx.builder.getFloatTy();
+
+        llvm::Function* impl = ctx.module.getFunction("__aiml_f32_to_string");
+        if (!impl) {
+            llvm::Function* mallocFn  = ctx.getFunction("malloc",  i8p, {i64});
+            llvm::Function* sprintfFn = ctx.getFunction("sprintf", ctx.builder.getInt32Ty(), {i8p, i8p}, true);
+            llvm::IRBuilder<>::InsertPoint savedIP = ctx.builder.saveIP();
+            llvm::FunctionType* ft = llvm::FunctionType::get(i8p, {f32}, false);
+            impl = llvm::Function::Create(ft, llvm::Function::InternalLinkage, "__aiml_f32_to_string", ctx.module);
+            impl->addFnAttr(llvm::Attribute::NoInline);
+            llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx.context, "entry", impl);
+            ctx.builder.SetInsertPoint(entry);
+            llvm::Value* buf = ctx.builder.CreateCall(mallocFn, {ctx.builder.getInt64(32)});
+            llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("%.6g", "fmt_f32");
+            // widen f32 to f64 for vararg sprintf
+            llvm::Value* ext = ctx.builder.CreateFPExt(impl->getArg(0), ctx.builder.getDoubleTy());
+            ctx.builder.CreateCall(sprintfFn, {buf, fmt, ext});
+            ctx.builder.CreateRet(buf);
+            ctx.builder.restoreIP(savedIP);
+        }
+        return ctx.builder.CreateCall(impl, {floatVal});
+    }
+
+    // Emit __aiml_f64_to_string once per module: sprintf(buf, "%.15g", val) -> i8*
+    inline llvm::Value* doubleToString(CompilerContext& ctx, llvm::Value* dblVal) {
+        llvm::PointerType* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type*        i64 = ctx.builder.getInt64Ty();
+        llvm::Type*        f64 = ctx.builder.getDoubleTy();
+
+        llvm::Function* impl = ctx.module.getFunction("__aiml_f64_to_string");
+        if (!impl) {
+            llvm::Function* mallocFn  = ctx.getFunction("malloc",  i8p, {i64});
+            llvm::Function* sprintfFn = ctx.getFunction("sprintf", ctx.builder.getInt32Ty(), {i8p, i8p}, true);
+            llvm::IRBuilder<>::InsertPoint savedIP = ctx.builder.saveIP();
+            llvm::FunctionType* ft = llvm::FunctionType::get(i8p, {f64}, false);
+            impl = llvm::Function::Create(ft, llvm::Function::InternalLinkage, "__aiml_f64_to_string", ctx.module);
+            impl->addFnAttr(llvm::Attribute::NoInline);
+            llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx.context, "entry", impl);
+            ctx.builder.SetInsertPoint(entry);
+            llvm::Value* buf = ctx.builder.CreateCall(mallocFn, {ctx.builder.getInt64(32)});
+            llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("%.15g", "fmt_f64");
+            ctx.builder.CreateCall(sprintfFn, {buf, fmt, impl->getArg(0)});
+            ctx.builder.CreateRet(buf);
+            ctx.builder.restoreIP(savedIP);
+        }
+        return ctx.builder.CreateCall(impl, {dblVal});
+    }
+
+    // bool (i8) -> "true" or "false" via select on a constant
+    inline llvm::Value* boolToString(CompilerContext& ctx, llvm::Value* boolVal) {
+        llvm::Value* trueStr  = ctx.builder.CreateGlobalStringPtr("true",  "str_true");
+        llvm::Value* falseStr = ctx.builder.CreateGlobalStringPtr("false", "str_false");
+        llvm::Value* cond = ctx.builder.CreateICmpNE(boolVal, ctx.builder.getInt8(0), "bool_cond");
+        return ctx.builder.CreateSelect(cond, trueStr, falseStr, "bool_str");
+    }
+
     inline llvm::Value* expandExpression(CompilerContext& ctx, const std::string& input, std::function<llvm::Value*(CompilerContext&, const YAML::Node&)> evaluator) {
         llvm::Value* currentStr = ctx.builder.CreateGlobalStringPtr("");
         
@@ -190,17 +250,24 @@ namespace StringUtils {
                 // Convert to String
                 llvm::Value* varStr = nullptr;
                 if (val) {
-                     if (val->getType()->isIntegerTy(32)) {
-                         varStr = intToString(ctx, val);
-                     } else if (val->getType()->isIntegerTy(64)) {
+                     if (val->getType()->isIntegerTy(64)) {
                          varStr = int64ToString(ctx, val);
+                     } else if (val->getType()->isIntegerTy(32)) {
+                         varStr = intToString(ctx, val);
+                     } else if (val->getType()->isIntegerTy(1)
+                             || val->getType()->isIntegerTy(8)
+                             || val->getType()->isIntegerTy(16)) {
+                         // bool / i8 / i16 — widen to i32 before converting
+                         llvm::Value* wide = ctx.builder.CreateZExt(val, ctx.builder.getInt32Ty());
+                         varStr = intToString(ctx, wide);
+                     } else if (val->getType()->isFloatTy()) {
+                         varStr = floatToString(ctx, val);
+                     } else if (val->getType()->isDoubleTy()) {
+                         varStr = doubleToString(ctx, val);
                      } else if (val->getType()->isPointerTy()) {
-                         // Check if i8*
-                         varStr = val; 
+                         varStr = val; // assume i8* string
                      } else {
-                         // Try to cast or print error?
-                         // For now assume all pointers are strings (risky)
-                         varStr = ctx.builder.CreateBitCast(val, ctx.builder.getInt8Ty()->getPointerTo());
+                         varStr = ctx.builder.CreateGlobalStringPtr("?");
                      }
                 } else {
                      varStr = ctx.builder.CreateGlobalStringPtr("null");

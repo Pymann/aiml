@@ -36,15 +36,28 @@ IRValue* Compiler::visitStringInterpolation(StringInterpolationExpr* expr) {
         if (ty->isIntegerTy()) LOG_DEBUG("  Bitwidth: " + std::to_string(ty->getIntegerBitWidth()));
         
         llvm::Value* strVal = val;
-        // Basic type conversions to string
-        if (ty->isIntegerTy(32)) {
-            strVal = StringUtils::intToString(ctx, val);
-        } else if (ty->isIntegerTy(64)) {
+        // Type-dispatch: convert any non-string value to i8* for concatenation
+        if (ty->isIntegerTy(64)) {
             strVal = StringUtils::int64ToString(ctx, val);
-        } else if (ty->isIntegerTy(1)) {
-            llvm::Value* trueStr = ctx.builder.CreateGlobalStringPtr("true");
+        } else if (ty->isIntegerTy(32)) {
+            strVal = StringUtils::intToString(ctx, val);
+        } else if (ty->isIntegerTy(16)) {
+            strVal = StringUtils::intToString(ctx,
+                ctx.builder.CreateZExt(val, ctx.builder.getInt32Ty()));
+        } else if (ty->isIntegerTy(8)) {
+            // bool (u8) — show as "true" / "false"
+            llvm::Value* cond     = ctx.builder.CreateICmpNE(val, ctx.builder.getInt8(0));
+            llvm::Value* trueStr  = ctx.builder.CreateGlobalStringPtr("true");
             llvm::Value* falseStr = ctx.builder.CreateGlobalStringPtr("false");
-            strVal = ctx.builder.CreateSelect(val, trueStr, falseStr); // val is already i1
+            strVal = ctx.builder.CreateSelect(cond, trueStr, falseStr);
+        } else if (ty->isIntegerTy(1)) {
+            llvm::Value* trueStr  = ctx.builder.CreateGlobalStringPtr("true");
+            llvm::Value* falseStr = ctx.builder.CreateGlobalStringPtr("false");
+            strVal = ctx.builder.CreateSelect(val, trueStr, falseStr);
+        } else if (ty->isFloatTy()) {
+            strVal = StringUtils::floatToString(ctx, val);
+        } else if (ty->isDoubleTy()) {
+            strVal = StringUtils::doubleToString(ctx, val);
         }
         
         if (!currentStr) currentStr = strVal;

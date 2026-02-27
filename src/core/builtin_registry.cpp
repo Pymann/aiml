@@ -3,6 +3,7 @@
 #include "ast_nodes.h"
 #include "buffer_impl.h"
 #include "map_impl.h"
+#include "code_impl.h"
 #include "ir_generator.h"
 #include <llvm/IR/IRBuilder.h>
 
@@ -534,4 +535,50 @@ void registerBuiltins(CompilerContext& ctx) {
     };
 
     ctx.classes["lock"] = std::move(lockInfo);
+
+    // -----------------------------------------------------------------------
+    // Code builtin class: opaque i8* → heap-allocated __aiml_code_t
+    // { id: i8*, source: i8*, src_len: i64, entry: i8* }
+    // -----------------------------------------------------------------------
+    CompilerContext::ClassInfo codeInfo;
+    codeInfo.name      = "Code";
+    codeInfo.isBuiltin = true;
+
+    codeInfo.builtinMethods["contains"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Value* codePtr = ctx.builder.CreateLoad(i8p, baseAlloca, "code_ptr");
+        if (call->args.empty()) return ctx.ir_gen->wrap(ctx.builder.getInt8(0));
+        IRValue* nameVal = evalExpr(call->args[0].get());
+        if (!nameVal) return ctx.ir_gen->wrap(ctx.builder.getInt8(0));
+        llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(nameVal));
+        return ctx.ir_gen->wrap(CodeImpl::contains(ctx, codePtr, name));
+    };
+
+    codeInfo.builtinMethods["size"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Value* codePtr = ctx.builder.CreateLoad(i8p, baseAlloca, "code_ptr");
+        return ctx.ir_gen->wrap(CodeImpl::size(ctx, codePtr));
+    };
+
+    codeInfo.builtinMethods["toString"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Value* codePtr = ctx.builder.CreateLoad(i8p, baseAlloca, "code_ptr");
+        return ctx.ir_gen->wrap(CodeImpl::toString(ctx, codePtr));
+    };
+
+    codeInfo.builtinMethods["merge"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Value* aPtr = ctx.builder.CreateLoad(i8p, baseAlloca, "code_a");
+        if (call->args.empty()) return ctx.ir_gen->wrap(aPtr);
+        IRValue* bVal = evalExpr(call->args[0].get());
+        if (!bVal) return ctx.ir_gen->wrap(aPtr);
+        llvm::Value* bPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bVal));
+        return ctx.ir_gen->wrap(CodeImpl::merge(ctx, aPtr, bPtr));
+    };
+
+    ctx.classes["Code"] = std::move(codeInfo);
 }
