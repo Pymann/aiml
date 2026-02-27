@@ -5,7 +5,7 @@ target triple = "x86_64-pc-linux-gnu"
 
 %GenericList = type { i32, i32, ptr }
 %Payload = type { i32 }
-%__aiml_code_t = type { ptr, ptr, ptr, ptr }
+%__aiml_code_t = type { ptr, ptr, ptr, ptr, i8 }
 
 @__argc = external global i32
 @__argv = external global ptr
@@ -128,7 +128,7 @@ cont11:                                           ; preds = %grow10, %cont
   %17 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), i64 4))
   %dataPtr18 = getelementptr inbounds %GenericList, ptr %bl_mem15, i32 0, i32 2
   store ptr %17, ptr %dataPtr18, align 8
-  %code_new = call ptr @__aiml_code_new(ptr @b_id, ptr @b_sc, ptr %bl_mem, ptr %bl_mem15)
+  %code_new = call ptr @__aiml_code_new(ptr @b_id, ptr @b_sc, ptr %bl_mem, ptr %bl_mem15, i8 0)
   store ptr %code_new, ptr %pkg, align 8
   %src = alloca ptr, align 8
   store ptr null, ptr %src, align 8
@@ -251,7 +251,7 @@ cont55:                                           ; preds = %grow54, %cont42
   store ptr %38, ptr %46, align 8
   %47 = add i32 %size52, 1
   store i32 %47, ptr %sizePtr50, align 4
-  %code_new59 = call ptr @__aiml_code_new(ptr @bi_id, ptr @bi_sc, ptr %bl_mem33, ptr %bl_mem46)
+  %code_new59 = call ptr @__aiml_code_new(ptr @bi_id, ptr @bi_sc, ptr %bl_mem33, ptr %bl_mem46, i8 0)
   store ptr %code_new59, ptr %inst_pkg, align 8
   %inst_src = alloca ptr, align 8
   store ptr null, ptr %inst_src, align 8
@@ -334,9 +334,9 @@ declare i32 @printf(ptr, ...)
 declare ptr @realloc(ptr, i64)
 
 ; Function Attrs: noinline
-define internal ptr @__aiml_code_new(ptr %0, ptr %1, ptr %2, ptr %3) #0 {
+define internal ptr @__aiml_code_new(ptr %0, ptr %1, ptr %2, ptr %3, i8 %4) #0 {
 entry:
-  %code_raw = call ptr @malloc(i64 32)
+  %code_raw = call ptr @malloc(i64 40)
   %id_gep = getelementptr inbounds %__aiml_code_t, ptr %code_raw, i32 0, i32 0
   store ptr %0, ptr %id_gep, align 8
   %sc_gep = getelementptr inbounds %__aiml_code_t, ptr %code_raw, i32 0, i32 1
@@ -345,6 +345,8 @@ entry:
   store ptr %2, ptr %cc_gep, align 8
   %dc_gep = getelementptr inbounds %__aiml_code_t, ptr %code_raw, i32 0, i32 3
   store ptr %3, ptr %dc_gep, align 8
+  %nc_gep = getelementptr inbounds %__aiml_code_t, ptr %code_raw, i32 0, i32 4
+  store i8 %4, ptr %nc_gep, align 1
   ret ptr %code_raw
 }
 

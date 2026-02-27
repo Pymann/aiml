@@ -7,9 +7,11 @@ namespace CodeImpl {
 
 // ---------------------------------------------------------------------------
 // Field indices in __aiml_code_t
-// { i8* id, i8* start_call, i8* code_chunks, i8* data_chunks }
+// { i8* id, i8* start_call, i8* code_chunks, i8* data_chunks, i8 new_context }
 // ---------------------------------------------------------------------------
-enum Field : unsigned { ID = 0, START_CALL = 1, CODE_CHUNKS = 2, DATA_CHUNKS = 3 };
+enum Field : unsigned {
+    ID = 0, START_CALL = 1, CODE_CHUNKS = 2, DATA_CHUNKS = 3, NEW_CONTEXT = 4
+};
 
 // ---------------------------------------------------------------------------
 // getStructType
@@ -18,23 +20,26 @@ llvm::StructType* getStructType(CompilerContext& ctx) {
     if (auto* ty = llvm::StructType::getTypeByName(ctx.context, "__aiml_code_t"))
         return ty;
     llvm::Type* i8p = llvm::Type::getInt8Ty(ctx.context)->getPointerTo();
-    return llvm::StructType::create(ctx.context, {i8p, i8p, i8p, i8p}, "__aiml_code_t");
+    llvm::Type* i8  = llvm::Type::getInt8Ty(ctx.context);
+    return llvm::StructType::create(ctx.context, {i8p, i8p, i8p, i8p, i8}, "__aiml_code_t");
 }
 
 // ---------------------------------------------------------------------------
-// emitNewFn — __aiml_code_new(i8* id, i8* start_call, i8* code_chunks, i8* data_chunks) -> i8*
-// Allocates __aiml_code_t on the heap, stores all 4 fields, returns raw i8*.
+// emitNewFn
+// __aiml_code_new(i8* id, i8* start_call, i8* code_chunks, i8* data_chunks, i8 new_context) -> i8*
+// Allocates __aiml_code_t on the heap, stores all 5 fields, returns raw i8*.
 // ---------------------------------------------------------------------------
 static llvm::Function* emitNewFn(CompilerContext& ctx) {
     if (auto* f = ctx.module.getFunction("__aiml_code_new")) return f;
 
     llvm::Type*       i8p    = llvm::Type::getInt8Ty(ctx.context)->getPointerTo();
+    llvm::Type*       i8     = llvm::Type::getInt8Ty(ctx.context);
     llvm::Type*       i64    = llvm::Type::getInt64Ty(ctx.context);
     llvm::StructType* codeTy = getStructType(ctx);
 
     auto savedIP = ctx.builder.saveIP();
 
-    auto* ft = llvm::FunctionType::get(i8p, {i8p, i8p, i8p, i8p}, false);
+    auto* ft = llvm::FunctionType::get(i8p, {i8p, i8p, i8p, i8p, i8}, false);
     auto* fn = llvm::Function::Create(ft, llvm::Function::InternalLinkage,
                                       "__aiml_code_new", ctx.module);
     fn->addFnAttr(llvm::Attribute::NoInline);
@@ -57,8 +62,38 @@ static llvm::Function* emitNewFn(CompilerContext& ctx) {
         ctx.builder.CreateStructGEP(codeTy, codePtr, Field::CODE_CHUNKS, "cc_gep"));
     ctx.builder.CreateStore(fn->getArg(3),
         ctx.builder.CreateStructGEP(codeTy, codePtr, Field::DATA_CHUNKS, "dc_gep"));
+    ctx.builder.CreateStore(fn->getArg(4),
+        ctx.builder.CreateStructGEP(codeTy, codePtr, Field::NEW_CONTEXT, "nc_gep"));
 
     ctx.builder.CreateRet(raw);
+    ctx.builder.restoreIP(savedIP);
+    return fn;
+}
+
+// ---------------------------------------------------------------------------
+// emitExecFn — __aiml_code_exec(i8* code) -> i32
+// Delegates to C runtime: int aiml_exec_code(void*)
+// ---------------------------------------------------------------------------
+static llvm::Function* emitExecFn(CompilerContext& ctx) {
+    if (auto* f = ctx.module.getFunction("__aiml_code_exec")) return f;
+
+    llvm::Type* i8p = llvm::Type::getInt8Ty(ctx.context)->getPointerTo();
+    llvm::Type* i32 = llvm::Type::getInt32Ty(ctx.context);
+
+    auto savedIP = ctx.builder.saveIP();
+
+    auto* ft = llvm::FunctionType::get(i32, {i8p}, false);
+    auto* fn = llvm::Function::Create(ft, llvm::Function::InternalLinkage,
+                                      "__aiml_code_exec", ctx.module);
+    fn->addFnAttr(llvm::Attribute::NoInline);
+
+    auto* entry = llvm::BasicBlock::Create(ctx.context, "entry", fn);
+    ctx.builder.SetInsertPoint(entry);
+
+    llvm::Function* cFn = ctx.getFunction("aiml_exec_code", i32, {i8p});
+    llvm::Value* rc     = ctx.builder.CreateCall(cFn, {fn->getArg(0)}, "rc");
+    ctx.builder.CreateRet(rc);
+
     ctx.builder.restoreIP(savedIP);
     return fn;
 }
@@ -215,10 +250,15 @@ llvm::Value* create(CompilerContext& ctx,
                     llvm::Value* id,
                     llvm::Value* start_call,
                     llvm::Value* code_chunks,
-                    llvm::Value* data_chunks) {
+                    llvm::Value* data_chunks,
+                    llvm::Value* new_context) {
     return ctx.builder.CreateCall(emitNewFn(ctx),
-                                  {id, start_call, code_chunks, data_chunks},
+                                  {id, start_call, code_chunks, data_chunks, new_context},
                                   "code_new");
+}
+
+llvm::Value* exec(CompilerContext& ctx, llvm::Value* codePtr) {
+    return ctx.builder.CreateCall(emitExecFn(ctx), {codePtr}, "code_exec");
 }
 
 llvm::Value* contains(CompilerContext& ctx, llvm::Value* codePtr, llvm::Value* name) {

@@ -1,4 +1,5 @@
 #include "compiler.h"
+#include "exec_impl.h"
 #include <iostream>
 #include <fstream>
 #include <yaml-cpp/yaml.h>
@@ -27,6 +28,14 @@
 #include <llvm/Object/ObjectFile.h>
 #include <optional>
 
+// Core compiler headers (pulled up so CompilerContext is available in
+// the constructor, destructor and all methods below)
+#include "src/core/context.h"
+#include "src/core/ir_generator.h"
+#include "src/core/ast_builder.h"
+#include "src/core/ast_compiler.h"
+#include <unordered_set>
+
 AIMLCompiler::AIMLCompiler() {
     context_ = std::make_unique<llvm::LLVMContext>();
     module_ = std::make_unique<llvm::Module>("AIML_Module", *context_);
@@ -53,17 +62,17 @@ AIMLCompiler::AIMLCompiler() {
 }
 
 AIMLCompiler::~AIMLCompiler() {
+    // Destroy in reverse-construction order:
+    // CompilerContext holds refs to module + builder → destroy first.
+    delete static_cast<CompilerContext*>(compiler_ctx_);
+    compiler_ctx_ = nullptr;
+    delete static_cast<llvm::IRBuilder<>*>(builder_inst_);
+    builder_inst_ = nullptr;
 }
 
 const llvm::Module& AIMLCompiler::getModule() const {
     return *module_;
 }
-
-#include "src/core/context.h"
-#include "src/core/ir_generator.h"
-#include "src/core/ast_builder.h"
-#include "src/core/ast_compiler.h"
-#include <unordered_set>
 
 // ... (Functions compile, compileToObject, etc.)
 
@@ -72,13 +81,21 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     LOG_DEBUG("Compiling " + filename);
     YAML::Node config = YAML::LoadFile(filename);
 
-    llvm::IRBuilder<> builder(*context_);
-
     // 1. (Legacy __aiml_init creation removed. AST::Compiler now handles it)
 
-    // 2. Initialize Compiler Context
-    // builder points to __aiml_init entry block.
-    CompilerContext ctx(*context_, *module_, builder);
+    // 2. Initialize Compiler Context — heap-allocated so it survives into jitRun()
+    //    allowing aiml_exec_code to access the symbol table during JIT execution.
+    delete static_cast<CompilerContext*>(compiler_ctx_);
+    compiler_ctx_ = nullptr;
+    delete static_cast<llvm::IRBuilder<>*>(builder_inst_);
+    builder_inst_ = nullptr;
+
+    builder_inst_ = new llvm::IRBuilder<>(*context_);
+    auto& builder  = *static_cast<llvm::IRBuilder<>*>(builder_inst_);
+
+    compiler_ctx_ = new CompilerContext(*context_, *module_, builder);
+    CompilerContext& ctx = *static_cast<CompilerContext*>(compiler_ctx_);
+
     ctx.compilerPath = compilerPath;
     ctx.ir_gen = AIML::createLLVMGenerator(ctx);
     
@@ -450,9 +467,13 @@ int AIMLCompiler::jitRun() {
     args.push_back(llvm::GenericValue()); // argv
     args[1].PointerVal = dummyArgv;
 
+    // Expose CompilerContext + engine to aiml_exec_code (called from JIT)
+    aiml_set_active_context(compiler_ctx_, engine);
     llvm::GenericValue result = engine->runFunction(mainFunc, args);
+    aiml_set_active_context(nullptr, nullptr);
+
     LOG_DEBUG("Main finished. Result: " + std::to_string(result.IntVal.getSExtValue()));
-    
+
     return result.IntVal.getSExtValue();
 }
 

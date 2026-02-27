@@ -8,9 +8,9 @@
 //     → matches ListImpl::getListStructType() = { i32, i32, ptr }
 //     → on x86-64: offsets 0, 4, 8 (total 16 bytes)
 //
-//   __aiml_code_t: { char* id, char* start_call, void* code_chunks, void* data_chunks }
-//     → matches code_impl.cpp getStructType() = { i8*, i8*, i8*, i8* }
-//     → on x86-64: offsets 0, 8, 16, 24 (total 32 bytes)
+//   __aiml_code_t: { char* id, char* start_call, void* code_chunks, void* data_chunks, int8_t new_context }
+//     → matches code_impl.cpp getStructType() = { i8*, i8*, i8*, i8*, i8 }
+//     → on x86-64: offsets 0, 8, 16, 24, 32 (sizeof = 40 with 7 bytes padding)
 
 #include <cstdlib>
 #include <cstring>
@@ -29,6 +29,7 @@ struct AimlCode {
     char*     start_call;
     AimlList* code_chunks;
     AimlList* data_chunks;
+    int8_t    new_context;  // 0 = shared context (default), 1 = isolated context
 };
 
 // ── Internal helpers ──────────────────────────────────────────────────────────

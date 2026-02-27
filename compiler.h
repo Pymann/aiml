@@ -50,8 +50,14 @@ public:
 private:
     void generateIR(const YAML::Node& node);
     llvm::Function* getPrintfPrototype(llvm::Module& module, llvm::IRBuilderBase& builder);
-    
+
     // LLVM Context & Module
     std::unique_ptr<llvm::LLVMContext> context_;
     std::unique_ptr<llvm::Module> module_;
+
+    // Heap-allocated state kept alive across compile() → jitRun()
+    // so that aiml_exec_code can access the symbol table during JIT execution.
+    // context.h cannot be included here (circular), so void* is used.
+    void* builder_inst_ = nullptr;  // owned: llvm::IRBuilder<>*
+    void* compiler_ctx_ = nullptr;  // owned: CompilerContext*
 };

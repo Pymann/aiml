@@ -1,0 +1,19 @@
+# test_exec.aiml — basic sys.exec test
+#
+# exec_target: a no-arg function that prints a line and returns 0.
+# sys.bundle packs its YAML source into a Code object.
+# sys.exec calls exec_target via the JIT engine and returns its exit code.
+
+- def:
+    name: exec_target
+    return: i32
+    body:
+      - print: ["exec_target called"]
+      - return: 0
+
+- decl: [pkg, Code]
+- set: [pkg, {call: [sys.bundle, "exec_target"]}]
+
+- decl: [rc, i32]
+- set: [rc, {call: [sys.exec, pkg]}]
+- print: ["rc: ${rc}"]
