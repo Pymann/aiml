@@ -101,6 +101,7 @@ void Compiler::registerTypeDecl(Node* node) {
         classInfo.name = className;
         classInfo.version = cls->version;
         classInfo.parentName = cls->parentName;
+        classInfo.sourceYaml = YAML::Dump(cls->sourceNode);
         
         std::vector<std::pair<std::string, CompilerContext::StructMember>> orderedMembers;
         int currentIndex = 0;
@@ -182,7 +183,25 @@ void Compiler::registerTypeDecl(Node* node) {
         llvm::StructType* structType = llvm::StructType::create(ctx.context, className);
         structType->setBody(llvmMemberTypes);
         classInfo.type = structType;
-        
+
+        // Track user-defined types for sys.bundle dependency closure.
+        // collectUserTypes recurses into list<T> / map<K,V> to find inner types.
+        auto track = [&](const std::string& typeName) {
+            std::set<std::string> found;
+            ctx.collectUserTypes(typeName, found);
+            classInfo.referencedTypes.insert(found.begin(), found.end());
+        };
+        for (const auto& [mname, member] : classInfo.members) track(member.typeName);
+        track(classInfo.parentName);
+        for (const auto& modelName : cls->models)  track(modelName);
+        for (const auto& ifaceName : cls->interfaces) track(ifaceName);
+        for (const auto& method : cls->methods) {
+            for (const auto& arg : method->args) track(arg.second);
+            track(method->returnType);
+            // Record the mangled method name so dfsCollect can recurse into body types
+            classInfo.methodNames.push_back(ctx.qualify(method->name));
+        }
+
         ctx.classes[className] = classInfo;
         LOG_DEBUG("AST Registered Class: " + className);
     } else if (auto mod = dynamic_cast<ModelDecl*>(node)) {
@@ -231,9 +250,12 @@ void Compiler::registerTypeDecl(Node* node) {
             enumValues[val.first] = val.second;
         }
         ctx.enums[enumName] = enumValues;
+        ctx.enumSources[enumName] = YAML::Dump(enm->sourceNode);
         LOG_DEBUG("AST Registered Enum: " + enumName);
     } else if (auto iface = dynamic_cast<InterfaceDecl*>(node)) {
-        
+        std::string ifaceName = ctx.qualify(iface->name);
+        ctx.interfaceSources[ifaceName] = YAML::Dump(iface->sourceNode);
+        LOG_DEBUG("AST Registered Interface: " + ifaceName);
     }
 }
 void Compiler::visitTopLevel(Node* node) {
@@ -296,6 +318,15 @@ void Compiler::visitFunction(FunctionDecl* func) {
     funcInfo.func = static_cast<llvm::Function*>(ctx.ir_gen->unwrap(funcVal));
     funcInfo.argNames = argNames;
     funcInfo.version = 0; // Not handling versioning in AST yet
+    funcInfo.sourceYaml = YAML::Dump(func->sourceNode);
+    // Track user-defined arg + return types for sys.bundle (recurses into list<T>/map<K,V>)
+    auto trackType = [&](const std::string& typeName) {
+        std::set<std::string> found;
+        ctx.collectUserTypes(typeName, found);
+        funcInfo.referencedTypes.insert(found.begin(), found.end());
+    };
+    for (const auto& arg : func->args) trackType(arg.second);
+    trackType(func->returnType);
     ctx.functions[func->name] = funcInfo;
     ctx.functions[mangledName] = funcInfo;
 
@@ -336,10 +367,12 @@ void Compiler::visitFunction(FunctionDecl* func) {
         ctx.symbol_table[argNames[i]] = sym;
     }
 
-    // Compile Body
+    // Compile Body (track referenced user types for sys.bundle)
+    ctx.bundleTrackingTarget = mangledName;
     if (func->body) {
         visitBlockStmt(func->body.get());
     }
+    ctx.bundleTrackingTarget.clear();
 
     // Check if the last block has a terminator (like ret)
     llvm::BasicBlock* currentBB = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));

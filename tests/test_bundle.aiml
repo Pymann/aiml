@@ -1,0 +1,48 @@
+# Tests for sys.bundle
+
+# --- Define types for bundling ---
+- class:
+    name: Payload
+    members:
+      - [id, i32]
+
+- def:
+    name: worker_task
+    args: [[p, Payload]]
+    body:
+      - print: ["worker_task: id=${p.id}"]
+
+# --- Function bundle ---
+- decl: [pkg, Code]
+- set: [pkg, { call: [sys.bundle, "worker_task"] }]
+
+- decl: [src, string]
+- set: [src, { call: [pkg.toString] }]
+- print: ["bundle toString length > 0: ${src}"]
+
+- decl: [has_worker, bool]
+- set: [has_worker, { call: [pkg.contains, "worker_task"] }]
+- print: ["contains worker_task: ${has_worker}"]
+
+- decl: [has_payload, bool]
+- set: [has_payload, { call: [pkg.contains, "Payload"] }]
+- print: ["contains Payload: ${has_payload}"]
+
+- decl: [has_xyz, bool]
+- set: [has_xyz, { call: [pkg.contains, "xyz_not_there"] }]
+- print: ["contains xyz_not_there: ${has_xyz}"]
+
+# --- Instance bundle ---
+- decl: [p, Payload]
+- set: [p.id, 99]
+
+- decl: [inst_pkg, Code]
+- set: [inst_pkg, { call: [sys.bundle, p] }]
+
+- decl: [inst_src, string]
+- set: [inst_src, { call: [inst_pkg.toString] }]
+- print: ["instance bundle toString: ${inst_src}"]
+
+- decl: [inst_has_payload, bool]
+- set: [inst_has_payload, { call: [inst_pkg.contains, "Payload"] }]
+- print: ["instance bundle contains Payload: ${inst_has_payload}"]

@@ -70,7 +70,9 @@ namespace AIML {
             llvm::Function* func;
             std::vector<std::string> argNames;
             AccessLevel access = AccessLevel::Public;
-            uint64_t version = 0; // Version of the function, default 0
+            uint64_t version = 0;             // Version of the function, default 0
+            std::string sourceYaml;           // YAML dump of the function AST node (for sys.bundle)
+            std::set<std::string> referencedTypes; // User-defined types referenced in the body
         };
 
         struct StructMember {
@@ -110,12 +112,20 @@ namespace AIML {
             std::vector<std::string> usedModels;
             std::vector<std::string> objectFilesToLink;
 
+            // Mangled names of compiled methods — used by dfsCollect to include
+            // types that appear in method bodies (tracked via bundleTrackingTarget).
+            std::vector<std::string> methodNames;
+
             bool isInterface = false;
             bool isModel = false;
 
             // Builtin dispatch (set for intrinsic types like buffer, process)
             bool isBuiltin = false;
             std::map<std::string, MethodHandler> builtinMethods;
+
+            // Source preservation (for sys.bundle)
+            std::string sourceYaml;                // YAML dump of the class AST node
+            std::set<std::string> referencedTypes; // User-defined types in members/methods
         };
 
         class Scope {
@@ -171,6 +181,8 @@ namespace AIML {
     std::map<std::string, FunctionInfo> functions;
     std::map<std::string, ClassInfo> classes; // Class Registry
     std::map<std::string, std::map<std::string, int>> enums; // Enum Registry
+    std::map<std::string, std::string> enumSources;          // enum name → YAML source (for sys.bundle)
+    std::map<std::string, std::string> interfaceSources;     // interface name → YAML source (for sys.bundle)
 
     // Namespace & Import State
     std::string currentNamespace;
@@ -185,6 +197,43 @@ namespace AIML {
     
     bool jitMode = false;
     bool headerOnlyMode = false;
+
+    // When non-empty, name of the function/class currently being compiled.
+    // getLLVMType uses this to record transitive type dependencies for sys.bundle.
+    std::string bundleTrackingTarget;
+
+    // When non-empty, the type name of the current set-statement target variable.
+    // Used by sys.deserialize to infer the type without an explicit second argument.
+    std::string deserializeTargetType;
+
+    // Recursively collects all user-defined type names from a type expression.
+    // Handles list<T>, map<K,V> (and nesting thereof).  Only names found in
+    // classes (non-builtin), enumSources, or interfaceSources are emitted.
+    void collectUserTypes(const std::string& typeName, std::set<std::string>& out) const {
+        if (typeName.empty()) return;
+        // list<T>
+        if (typeName.size() > 5 && typeName.rfind("list<", 0) == 0 && typeName.back() == '>') {
+            collectUserTypes(typeName.substr(5, typeName.size() - 6), out);
+            return;
+        }
+        // map<K:V>  (AIML uses colon as separator)
+        if (typeName.size() > 4 && typeName.rfind("map<", 0) == 0 && typeName.back() == '>') {
+            std::string inner = typeName.substr(4, typeName.size() - 5);
+            size_t sep = inner.find(':');
+            if (sep != std::string::npos) {
+                collectUserTypes(inner.substr(0, sep), out);
+                collectUserTypes(inner.substr(sep + 1), out);
+            }
+            return;
+        }
+        // Direct type — emit only if user-defined
+        if (classes.count(typeName) && !classes.at(typeName).isBuiltin)
+            out.insert(typeName);
+        else if (enumSources.count(typeName))
+            out.insert(typeName);
+        else if (interfaceSources.count(typeName))
+            out.insert(typeName);
+    }
 
     // Helper: Qualify name with current namespace
     std::string qualify(const std::string& name) {
@@ -230,12 +279,16 @@ namespace AIML {
         // Check for User-Defined Classes (skip builtins with null type — they have
         // their own type definition further below)
         if (classes.count(typeName) && classes[typeName].type != nullptr) {
-             return classes[typeName].type;
+            if (!bundleTrackingTarget.empty() && functions.count(bundleTrackingTarget))
+                functions[bundleTrackingTarget].referencedTypes.insert(typeName);
+            return classes[typeName].type;
         }
         // Try resolving with current namespace (e.g. "Point" -> "my.lib.Point")
         std::string qualified = qualify(typeName);
         if (classes.count(qualified) && classes[qualified].type != nullptr) {
-             return classes[qualified].type;
+            if (!bundleTrackingTarget.empty() && functions.count(bundleTrackingTarget))
+                functions[bundleTrackingTarget].referencedTypes.insert(qualified);
+            return classes[qualified].type;
         }
 
         // Check for Pointer type: "ptr<T>" or "ref<T>"
@@ -381,6 +434,10 @@ namespace AIML {
 
         // chan<T>: pointer to heap-allocated channel struct (opaque i8*)
         if (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>')
+            return llvm::Type::getInt8Ty(context)->getPointerTo();
+
+        // Code: pointer to heap-allocated __aiml_code_t (opaque i8*)
+        if (typeName == "Code")
             return llvm::Type::getInt8Ty(context)->getPointerTo();
 
         LOG_ERROR("Unknown Type: '" + typeName + "' -> defaulting to i32");

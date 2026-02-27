@@ -1,0 +1,60 @@
+{
+    "name": "aiml",
+    "version": "0.1.0",
+    "license": [],
+    "dependencies": [],
+    "output_type": "shared_lib",
+    "optimization": "0",
+    "debug": true,
+    "warnings": [],
+    "werror": false,
+    "source_root": ".",
+    "build_root": "out",
+    "search_paths": [
+        "/usr/include",
+        "/usr/local/include",
+        "/usr/lib/llvm-18/include"
+    ],
+    "sources": [
+        "compiler.cpp",
+        "src/**/*.cpp"
+    ],
+    "defines": {},
+    "pre_compilation": "hook_example.py",
+    "pre_linkage": null,
+    "architecture": {
+        "arch": "x86_64",
+        "cpu": null,
+        "fpu": null,
+        "float_abi": null
+    },
+    "compiler": {
+        "name": "g++",
+        "path": null,
+        "flags": [
+            "-std=c++17",
+            "-fPIC",
+            "-D__STDC_CONSTANT_MACROS",
+            "-D__STDC_FORMAT_MACROS",
+            "-D__STDC_LIMIT_MACROS",
+            "-w"
+        ]
+    },
+    "linker": {
+        "name": "g++",
+        "path": null,
+        "script": null,
+        "map_file": null,
+        "flags": [],
+        "libraries": [
+            "yaml-cpp",
+            "LLVM-18",
+            "pthread"
+        ],
+        "library_paths": [
+            "/usr/lib/x86_64-linux-gnu",
+            "/usr/local/lib",
+            "/usr/lib/llvm-18/lib"
+        ]
+    }
+}
