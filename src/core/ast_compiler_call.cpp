@@ -36,6 +36,9 @@ IRValue* Compiler::visitCall(CallExpr* call) {
         if (baseName == "sys" && methodName == "bundle") {
             return visitSysBundleCall(call);
         }
+        if (baseName == "sys" && methodName == "exec") {
+            return visitSysExecCall(call);
+        }
 
         // Eagerly evaluate arguments for other functions (sys)
         std::vector<IRValue*> argVals;
@@ -621,7 +624,8 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
         llvm::Value* startCall = ctx.builder.CreateGlobalStringPtr(
             "{\"call\":[\"" + selector + "\"]}", "b_sc");
 
-        return ctx.ir_gen->wrap(CodeImpl::create(ctx, idVal, startCall, ccMem, dcMem));
+        llvm::Value* newCtxF = ctx.builder.getInt8(0); // default: shared context
+        return ctx.ir_gen->wrap(CodeImpl::create(ctx, idVal, startCall, ccMem, dcMem, newCtxF));
     }
 
     // ── Case 2: variable → instance bundle ─────────────────────────────────
@@ -676,11 +680,43 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
 
         llvm::Value* startCall = ctx.builder.CreateGlobalStringPtr("", "bi_sc");
 
-        return ctx.ir_gen->wrap(CodeImpl::create(ctx, idVal, startCall, ccMem, dcMem));
+        llvm::Value* newCtxI = ctx.builder.getInt8(0); // default: shared context
+        return ctx.ir_gen->wrap(CodeImpl::create(ctx, idVal, startCall, ccMem, dcMem, newCtxI));
     }
 
     LOG_ERROR("sys.bundle: argument must be a string literal (function name) or a variable (instance)");
     return ctx.ir_gen->getInt32(0);
+}
+
+// ---------------------------------------------------------------------------
+// sys.exec intercept
+// ---------------------------------------------------------------------------
+IRValue* Compiler::visitSysExecCall(CallExpr* call) {
+    if (call->args.empty()) {
+        LOG_ERROR("sys.exec: requires exactly 1 argument (Code object)");
+        return ctx.ir_gen->getInt32(-2);
+    }
+
+    // Validate arg type: must be a Code variable
+    if (auto* var = dynamic_cast<VariableExpr*>(call->args[0].get())) {
+        Symbol* sym = resolveVariable(var->name);
+        if (!sym || sym->typeName != "Code") {
+            LOG_ERROR("sys.exec: argument must be a Code variable (got: " +
+                      (sym ? sym->typeName : "unknown") + ")");
+            return ctx.ir_gen->getInt32(-1);
+        }
+    }
+
+    // Evaluate the Code argument (load the i8* pointer from alloca)
+    IRValue* codeVal = visitExpression(call->args[0].get());
+    if (!codeVal) {
+        LOG_ERROR("sys.exec: failed to evaluate Code argument");
+        return ctx.ir_gen->getInt32(-1);
+    }
+
+    // Emit call to __aiml_code_exec(i8*) → i32 via CodeImpl::exec
+    llvm::Value* codePtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(codeVal));
+    return ctx.ir_gen->wrap(CodeImpl::exec(ctx, codePtr));
 }
 
 } // namespace AST

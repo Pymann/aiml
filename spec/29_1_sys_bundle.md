@@ -162,14 +162,11 @@ Code-Struct (die reflektierte Definition stimmt nicht mit der Impl überein):
     members:
       - [id,         string]   # SHA-256 von code_chunk
       - [start_call, string]   # YAML-serialisierter Call-Node
-      - [code_chunk, string]   # AIML-Defs (enum/class/def)
-      - [data_chunk, string]   # AIML-State-Inits (decl/set via deserialize)
+      - [code_chunk, List<string>]   # AIML-Defs (enum/class/def)
+      - [data_chunk, List<string>]   # AIML-State-Inits (decl/set via deserialize)
     methods:
-      - push(chunk: string)          → void   # hängt an code_chunk an
-      - push_data(chunk: string)     → void   # hängt an data_chunk an
       - set_entry(call_yaml: string) → void   # setzt start_call
       - contains(name: string)       → bool
-      - size()                       → u64
       - toString()                   → string # = code_chunk + data_chunk
       - merge(other: Code)           → Code
 sys.bundle:

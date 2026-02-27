@@ -6,15 +6,17 @@
 // CodeImpl — runtime support for the AIML built-in `Code` type.
 //
 // A Code object is heap-allocated and represented as an opaque i8* in AIML.
-// The underlying struct (__aiml_code_t) has four fields:
+// The underlying struct (__aiml_code_t) has five fields:
 //   field 0: i8*  id          — FNV-1a hex hash of code_chunks content
 //   field 1: i8*  start_call  — JSON/YAML call-node string
 //   field 2: i8*  code_chunks — pointer to heap-allocated list<string> (definitions)
 //   field 3: i8*  data_chunks — pointer to heap-allocated list<string> (state-init)
+//   field 4: i8   new_context — 0 = shared context (default), 1 = isolated context
 //
 // sys.bundle fills code_chunks with AIML YAML source of the selected function/class
 // and all its transitive dependencies (compile-time operation).
 // data_chunks carries instance-state initialisation code (decl + sys.deserialize).
+// new_context controls execution isolation in sys.exec.
 //
 // All runtime helpers are emitted once per module (saveIP / restoreIP pattern).
 // ---------------------------------------------------------------------------
@@ -28,12 +30,14 @@ llvm::StructType* getStructType(CompilerContext& ctx);
 // start_call:  i8*  — JSON call-node (may be empty string)
 // code_chunks: i8*  — pointer to heap-alloc'd list<string> struct
 // data_chunks: i8*  — pointer to heap-alloc'd list<string> struct
+// new_context: i8   — 0 = shared context (default), 1 = isolated context
 // Returns i8* (raw pointer to __aiml_code_t).
 llvm::Value* create(CompilerContext& ctx,
                     llvm::Value* id,
                     llvm::Value* start_call,
                     llvm::Value* code_chunks,
-                    llvm::Value* data_chunks);
+                    llvm::Value* data_chunks,
+                    llvm::Value* new_context);
 
 // Push a string chunk onto code_chunks list.
 void push_code(CompilerContext& ctx, llvm::Value* codePtr, llvm::Value* chunk);
@@ -53,5 +57,9 @@ llvm::Value* toString(CompilerContext& ctx, llvm::Value* codePtr);
 // Code merge(a: Code, b: Code) — new Code with a.code_chunks + b.code_chunks and
 // a.data_chunks + b.data_chunks. start_call inherited from a.
 llvm::Value* merge(CompilerContext& ctx, llvm::Value* aPtr, llvm::Value* bPtr);
+
+// i32 exec(Code) — executes the bundle via aiml_exec_code() C runtime.
+// Returns exit code (0 = success, -1 = compile error, -2 = no active context).
+llvm::Value* exec(CompilerContext& ctx, llvm::Value* codePtr);
 
 } // namespace CodeImpl

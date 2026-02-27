@@ -40,6 +40,7 @@ private:
     IRValue* visitSysNamespaceCall(const std::string& baseName, const std::string& methodName, const std::vector<IRValue*>& argVals);
     IRValue* visitSysSerializeCall(const std::string& method, CallExpr* call);
     IRValue* visitSysBundleCall(CallExpr* call);
+    IRValue* visitSysExecCall(CallExpr* call);
     IRValue* visitStringCompare(bool negate, llvm::Value* lhs, llvm::Value* rhs);
     IRValue* visitNewExpr(NewExpr* newExpr);
     IRValue* visitStringInterpolation(StringInterpolationExpr* expr);
