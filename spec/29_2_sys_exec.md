@@ -35,13 +35,16 @@ Der Nutzer kann es nachträglich setzen (zukünftig via `pkg.set_context(true)`)
 
 ### 3.1 `context = false` — Shared Context (Standard, Hot-Reload-fähig)
 
-Das Bundle wird in den **laufenden** Compiler-Context eingeladen:
+**Nur im JIT-Modus verfügbar.** Im AOT-Modus gibt sys.exec immer -2 zurück
+(kein aktiver JIT-Context — siehe Abschnitt 11).
+
+Das Bundle wird in die **laufende** JIT-Session eingeladen:
 
 ```
-sys.exec(pkg)  [context=false]
+sys.exec(pkg)  [context=false, JIT-Modus]
   → C-Runtime: aiml_exec_code(void* code_obj)
       ↓
-  1. Zugriff auf g_active_context (globaler CompilerContext-Zeiger)
+  1. g_active_context / g_active_ee prüfen (nullptr → -2)
   2. Für jedes code_chunk (YAML-String):
        Parse → AST-Nodes
        Für jede Declaration:
@@ -49,12 +52,14 @@ sys.exec(pkg)  [context=false]
             → Versions-Check:
               bundle.version <= ctx.version  → SKIP (bereits aktuell)
               bundle.version >  ctx.version  → HOT-RELOAD (Neukompilierung)
-         b. Nicht vorhanden → Normal kompilieren in neues llvm::Module
-  3. Neues Module in denselben ExecutionEngine einlinken:
+         b. Nicht vorhanden → Kompilieren in neues llvm::Module
+  3. Neues Module in dieselbe ExecutionEngine einlinken:
        ee->addModule(std::move(newModule))
        ee->finalizeObject()
   4. data_chunks als Statements kompilieren + ausführen
-  5. start_call als Statement ausführen (falls nicht leer)
+  5. start_call als Statement ausführen (falls nicht leer):
+       getFunctionAddress(funcName) → direkt als Funktionszeiger aufrufen
+       (kein neues llvm::Module nötig für bereits kompilierte Funktionen)
   6. Rückgabe: i32 Exit-Code
 ```
 
@@ -76,12 +81,14 @@ und Struct-Typen kompatibel.
 
 ### 3.2 `context = true` — Isolierter Context
 
+**Im JIT-Modus und im AOT-Modus verfügbar** (spätere Phase).
+
 Neuer `LLVMContext` + `Module` + `Compiler` + eigener `ExecutionEngine`.
 Keine Verbindung zum Host-Programm. Immer sauber, keine Konflikte.
 Nützlich für untrusted Code oder vollständige Sandboxing.
 
 ```
-sys.exec(pkg)  [context=true]
+sys.exec(pkg)  [context=true, JIT oder AOT]
   → aiml_exec_code():
       Erstellt neuen Compiler (frischer LLVMContext + Module)
       Kompiliert code_chunks vollständig (keine Skip-Logik nötig)
@@ -127,12 +134,22 @@ elif bundle_version > current_version:
 
 ### 4.3 Hot-Reload (Implementierung — spätere Phase)
 
-- Neue Funktion in frischem Module kompilieren
-- Alten Entry-Point atomar überschreiben (Function-Pointer-Umlenkung)
-- `ctx.functions[name]` mit neuer `FunctionInfo` aktualisieren
+**Im JIT-Modus:**
+- Neue Funktion in frischem LLVM-Module kompilieren
+- `ee->addModule(newModule)` + `ee->finalizeObject()`
+- Alten Symbol-Eintrag in `ctx.functions[name]` aktualisieren
+- `getFunctionAddress(name)` liefert fortan die neue Version
 - Struct-Layout-Änderungen von Klassen: Fehler (Breaking Change)
 
-Für die initiale Implementierung:
+**Im AOT-Modus** (siehe Abschnitt 11.3):
+Nativ kompilierter Code ist prinzipiell hot-reloadbar — er ist nur RAM-Bytes.
+Die Voraussetzung ist eine **Call-Table-Indirektion**: statt `call foo` emittiert
+der AOT-Compiler `call [__aiml_fptable + foo_idx]`. Ein Hot-Reload patcht dann
+nur den Tabellenzeiger, alle Aufrufer sehen automatisch die neue Implementierung.
+Aktuell emittiert AIML AOT direkte Call-Instruktionen (keine Indirektionsschicht),
+daher ist AOT-Hot-Reload noch nicht unterstützt.
+
+Für die initiale Implementierung (JIT und AOT):
 - Gleiche oder ältere Version → SKIP
 - Neuere Version → SKIP + `LOG_WARNING("hot-reload not yet supported: " + name)`
 
@@ -276,7 +293,128 @@ und ist zunächst zurückgestellt.
 ## 10. Bekannte Einschränkungen (initiale Implementierung)
 
 - Hot-Reload: SKIP + Warning (keine echte Umlenkung)
-- AOT-Modus: noch nicht implementiert
+- AOT-Modus: `context=false` gibt -2; `context=true` noch nicht implementiert
 - `context = true` (isolierter Modus): zweite Phase
-- Struct-Layout-Änderungen bei Hot-Reload: nicht unterstützt (Fehler)
+- `data_chunks`-Ausführung: noch nicht implementiert (LOG_WARNING)
+- Dynamisches Laden neuer Definitionen (nicht im Symboltabelle): noch nicht implementiert
+- start_call: nur 0-Argument-Funktionen unterstützt; Funktionen mit Argumenten werden übersprungen
+- Struct-Layout-Änderungen bei Hot-Reload: nicht unterstützt (Breaking Change)
 - `sys.load_bundle`: zurückgestellt (braucht ORC JIT)
+
+## 11. JIT-Modus vs. AOT-Modus
+
+### JIT-Modus (`aiml -r file.aiml`)
+
+Das AIML-Programm wird durch `AIMLCompiler::jitRun()` per MCJIT ausgeführt.
+Direkt vor `engine->runFunction(mainFn, args)` werden die globalen Zeiger gesetzt:
+
+```cpp
+// compiler.cpp, jitRun():
+aiml_set_active_context(compiler_ctx_, engine);
+engine->runFunction(mainFn, args);
+aiml_set_active_context(nullptr, nullptr);
+```
+
+Damit stehen in `aiml_exec_code` sowohl `g_active_context` (Symboltabelle,
+LLVMContext) als auch `g_active_ee` (kompilierter Code, getFunctionAddress)
+zur Verfügung.
+
+| sys.exec-Aufruf | JIT-Modus | Ergebnis |
+|---|---|---|
+| `context=false` | ✓ | g_active_context + g_active_ee vorhanden |
+| `context=true` | ✓ (Phase 2) | Frischer isolierter JIT |
+
+**start_call (context=false):**
+Bereits im Haupt-Modul kompilierte Funktionen sind über `getFunctionAddress(name)`
+direkt aufrufbar — kein erneutes Kompilieren nötig. Das ist der typische Fall,
+wenn ein Bundle derselben Datei ausgeführt wird.
+
+### AOT-Modus (`aiml file.aiml` → Binary)
+
+Das AIML-Programm wird zu nativem Maschinencode kompiliert und als Binary
+gelinkt. Es gibt weder eine `jitRun()`-Phase noch eine `ExecutionEngine` zur
+Laufzeit. `aiml_set_active_context` wird nie aufgerufen:
+
+```
+g_active_context = nullptr
+g_active_ee      = nullptr
+```
+
+| sys.exec-Aufruf | AOT-Modus | Ergebnis |
+|---|---|---|
+| `context=false` | ✗ | gibt -2 zurück (kein aktiver JIT-Context) |
+| `context=true` | ✓ (Phase 2) | frischen JIT intern starten via libaiml |
+
+**context=false ist im AOT-Modus prinzipiell nicht sinnvoll:** Es gibt keine
+laufende LLVM ExecutionEngine, die man teilen könnte. Neue Definitionen aus dem
+Bundle müssten von Grund auf JIT-kompiliert werden — das ist dann de facto
+identisch mit `context=true`.
+
+**Empfehlung für AOT:** Statt `context=false` (default) explizit `context=true`
+setzen, wenn sys.exec in einer AOT-kompilierten Anwendung genutzt wird.
+
+### 11.3 Hot-Reload im AOT-Modus
+
+> **"Ist AOT-Hot-Reload prinzipiell unmöglich?"**
+> Nein. Ein kompiliertes Binary ist nur Maschinencode im RAM — und RAM-Bytes
+> lassen sich zur Laufzeit ersetzen. Die aktuelle Einschränkung ist **nicht**
+> die Natur von nativem Code, sondern das Fehlen einer Indirektionsschicht.
+
+**Warum es aktuell nicht geht:**
+
+AIML AOT emittiert direkte Call-Instruktionen:
+
+```
+; AOT-generierter LLVM IR:
+call i32 @worker_task()   ; direkte Verknüpfung — Adresse zur Link-Zeit fixiert
+```
+
+Der Linker löst `worker_task` zu einer festen Adresse auf. Nach dem Start gibt
+es keine Stelle, die man tauschen könnte, ohne alle Call-Sites zu patchen.
+
+**Wie es gehen könnte — Call-Table (PLT-Prinzip):**
+
+```cpp
+// Zur Compile-Zeit emittiert der AOT-Compiler eine globale Zeigertabelle:
+void* __aiml_fptable[] = {
+    (void*)worker_task,   // Index 0
+    (void*)other_func,    // Index 1
+    ...
+};
+
+// Jeder Funktionsaufruf geht durch den Tabelleneintrag:
+; LLVM IR mit Indirektion:
+%fp = load i8*, i8** getelementptr([__aiml_fptable, 0, 0])
+call i32 %fp()
+```
+
+Ein Hot-Reload patcht dann nur einen Zeiger in der Tabelle:
+```cpp
+__aiml_fptable[0] = (void*)worker_task_v2;  // atomar; alle Aufrufer sehen v2
+```
+
+Kein Patchen von Call-Sites, kein `mprotect`, keine Trampoline nötig.
+
+**Was auch mit Call-Table nicht geht:**
+- Struct-Layout-Änderungen: bereits allokierte Instanzen haben das alte Layout
+  im Heap; neuer Code mit anderem Offset liest falsche Bytes → Breaking Change
+
+**Aktueller Status:**
+AIML AOT emittiert keine `__aiml_fptable`. Hot-Reload ist daher im AOT-Modus
+nicht verfügbar. Die Call-Table-Indirektion ist ein bekanntes Zukünftig-Feature.
+
+### Warum `context=false` trotzdem der Default ist
+
+Im JIT-Modus (der häufigste Entwicklungsfall) ist Shared Context die
+leistungsfähigste Option: bereits definierte Typen und Funktionen werden
+nicht doppelt kompiliert, Hot-Reload ist möglich, Struct-Typen sind kompatibel.
+Ein AOT-Binary, das sys.exec benötigt, muss `context=true` explizit setzen
+oder ist speziell für den JIT-Betrieb via `libaiml` gebaut.
+
+### `libaiml` (zukünftig)
+
+Eine Shared-Library `libaiml.so` könnte einen eingebetteten AIML-JIT
+bereitstellen, der von AOT-Binaries zur Laufzeit verwendet wird.
+Damit würde `context=false` auch im AOT-Modus funktionieren:
+`libaiml` stellt einen persistenten `CompilerContext` + `ExecutionEngine` bereit,
+in den sys.exec neue Module laden kann.
