@@ -191,6 +191,7 @@ class FunctionDecl : public Node {
 public:
     std::string name;
     std::string returnType;
+    uint64_t    version = 1;  // Hot-Reload version (default 1)
     std::vector<std::pair<std::string, std::string>> args; // name, type
     std::unique_ptr<BlockStmt> body;
 

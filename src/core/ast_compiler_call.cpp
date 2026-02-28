@@ -135,59 +135,111 @@ IRValue* Compiler::visitCall(CallExpr* call) {
          return ctx.ir_gen->getInt32(0);
     }
     
-    // Normal Call
+    // Normal Call — prefer indirect call via fptable_current for hot-reload support
     IRValue* callRes = nullptr;
     CompilerContext::FunctionInfo* funcInfo = resolveFunction(funcName);
     llvm::Function* f = funcInfo ? funcInfo->func : ctx.module.getFunction(funcName);
-    
-    if (f) {
-        if (!f->isVarArg() && argVals.size() < f->arg_size()) {
-            LOG_ERROR("Not enough arguments for function " + funcName + ". Expected " + std::to_string(f->arg_size()) + ", got " + std::to_string(argVals.size()));
-        }
+
+    // Coerce argument types (pointer/struct adjustments) — shared for both paths
+    auto coerceArgs = [&]() {
+        if (!f) return;
         for (size_t i = 0; i < argVals.size(); ++i) {
-            if (i < f->arg_size()) {
-                llvm::Type* expectedTy = f->getFunctionType()->getParamType(i);
-                llvm::Value* actualVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[i]));
-                if (!actualVal) {
-                    LOG_ERROR("Null LLVM value passed as argument " + std::to_string(i) + " for function " + funcName);
-                    continue;
-                }
-                llvm::Type* actualTy = actualVal->getType();
-                
-                if (expectedTy->isPointerTy() && actualTy->isStructTy()) {
-                    if (auto varExpr = dynamic_cast<VariableExpr*>(call->args[i].get())) {
-                        Symbol* sym = resolveVariable(varExpr->name);
-                        if (sym) {
-                            actualVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst)));
-                            argVals[i] = ctx.ir_gen->wrap(actualVal);
-                            actualTy = actualVal->getType();
-                        }
+            if (i >= f->arg_size()) continue;
+            llvm::Type* expectedTy = f->getFunctionType()->getParamType(i);
+            llvm::Value* actualVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[i]));
+            if (!actualVal) {
+                LOG_ERROR("Null LLVM value passed as argument " + std::to_string(i) +
+                          " for function " + funcName);
+                continue;
+            }
+            llvm::Type* actualTy = actualVal->getType();
+
+            if (expectedTy->isPointerTy() && actualTy->isStructTy()) {
+                if (auto varExpr = dynamic_cast<VariableExpr*>(call->args[i].get())) {
+                    Symbol* sym = resolveVariable(varExpr->name);
+                    if (sym) {
+                        actualVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+                            sym->ir_alloca_inst ? sym->ir_alloca_inst
+                                                : ctx.ir_gen->wrap(sym->alloca_inst)));
+                        argVals[i] = ctx.ir_gen->wrap(actualVal);
+                        actualTy   = actualVal->getType();
                     }
                 }
-                
-                if (expectedTy->isPointerTy() && actualTy->isPointerTy() && expectedTy != actualTy) {
-                    argVals[i] = ctx.ir_gen->wrap(ctx.builder.CreateBitCast(actualVal, expectedTy));
-                }
             }
+            if (expectedTy->isPointerTy() && actualTy->isPointerTy() && expectedTy != actualTy)
+                argVals[i] = ctx.ir_gen->wrap(ctx.builder.CreateBitCast(actualVal, expectedTy));
         }
-        if (ctx.catchBlock) {
-             llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
-             llvm::BasicBlock* invokeCont = llvm::BasicBlock::Create(ctx.context, "invoke_cont", currentFunc);
-             
-             std::vector<llvm::Value*> rawArgs;
-             for (auto arg : argVals) rawArgs.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(arg)));
-             
-             llvm::Value* invRes = ctx.builder.CreateInvoke(f, invokeCont, ctx.catchBlock, rawArgs, funcName + "_inv");
-             callRes = ctx.ir_gen->wrap(invRes);
-             ctx.builder.SetInsertPoint(invokeCont);
+    };
+
+    if (f && funcInfo && funcInfo->fptable_index >= 0) {
+        // ── Indirect call via __aiml_fptable_current[idx] ────────────────────
+        llvm::GlobalVariable* cur_gv =
+            ctx.module.getNamedGlobal("__aiml_fptable_current");
+        if (cur_gv) {
+            coerceArgs();
+            if (!f->isVarArg() && argVals.size() < f->arg_size())
+                LOG_ERROR("Not enough arguments for function " + funcName);
+
+            auto* i8p  = llvm::PointerType::get(ctx.context, 0);  // opaque ptr (LLVM 18+)
+            auto* i32  = llvm::Type::getInt32Ty(ctx.context);
+            llvm::Value* slot = ctx.builder.CreateGEP(
+                cur_gv->getValueType(), cur_gv,
+                {llvm::ConstantInt::get(i32, 0),
+                 llvm::ConstantInt::get(i32, funcInfo->fptable_index)},
+                "fptable_slot");
+            llvm::Value* fp_raw = ctx.builder.CreateLoad(i8p, slot, "fp_raw");
+            llvm::Value* fp = ctx.builder.CreateBitCast(
+                fp_raw, f->getType(), "fp");
+
+            std::vector<llvm::Value*> rawArgs;
+            for (auto& av : argVals)
+                rawArgs.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(av)));
+
+            if (ctx.catchBlock) {
+                llvm::Function* cur = ctx.builder.GetInsertBlock()->getParent();
+                llvm::BasicBlock* cont =
+                    llvm::BasicBlock::Create(ctx.context, "invoke_cont", cur);
+                llvm::Value* invRes = ctx.builder.CreateInvoke(
+                    f->getFunctionType(), fp, cont, ctx.catchBlock, rawArgs,
+                    funcName + "_inv");
+                callRes = ctx.ir_gen->wrap(invRes);
+                ctx.builder.SetInsertPoint(cont);
+            } else {
+                llvm::Value* res = ctx.builder.CreateCall(
+                    f->getFunctionType(), fp, rawArgs, funcName + "_icall");
+                callRes = ctx.ir_gen->wrap(res);
+            }
         } else {
-             callRes = ctx.ir_gen->createCall(f->getName().str(), argVals);
+            // fptable not yet emitted (e.g. during registerTypes pass) — direct call
+            coerceArgs();
+            callRes = ctx.ir_gen->createCall(f->getName().str(), argVals);
+        }
+    } else if (f) {
+        // ── Direct call (builtins / external / functions outside fptable) ─────
+        if (!f->isVarArg() && argVals.size() < f->arg_size())
+            LOG_ERROR("Not enough arguments for function " + funcName +
+                      ". Expected " + std::to_string(f->arg_size()) +
+                      ", got " + std::to_string(argVals.size()));
+        coerceArgs();
+        if (ctx.catchBlock) {
+            llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
+            llvm::BasicBlock* invokeCont =
+                llvm::BasicBlock::Create(ctx.context, "invoke_cont", currentFunc);
+            std::vector<llvm::Value*> rawArgs;
+            for (auto arg : argVals)
+                rawArgs.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(arg)));
+            llvm::Value* invRes = ctx.builder.CreateInvoke(
+                f, invokeCont, ctx.catchBlock, rawArgs, funcName + "_inv");
+            callRes = ctx.ir_gen->wrap(invRes);
+            ctx.builder.SetInsertPoint(invokeCont);
+        } else {
+            callRes = ctx.ir_gen->createCall(f->getName().str(), argVals);
         }
     }
-    
+
     if (!callRes) {
-         LOG_ERROR("Unknown function: " + funcName);
-         return nullptr;
+        LOG_ERROR("Unknown function: " + funcName);
+        return nullptr;
     }
     return callRes;
 }

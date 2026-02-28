@@ -1,6 +1,8 @@
 #define DEBUG_MODE
 #include "ast_compiler.h"
 #include "builtin_registry.h"
+#include "fptable.h"
+#include "schema_registry.h"
 #include "list_impl.h"
 #include "map_impl.h"
 #include "buffer_impl.h"
@@ -35,6 +37,10 @@ void Compiler::compile(Program* prog) {
     if (!static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(currentBlock))->getTerminator()) {
         ctx.ir_gen->createRet(nullptr);
     }
+
+    // Emit hot-reload support tables (after all functions and types are registered)
+    emitFptable(ctx);
+    emitSchemaRegistry(ctx);
 }
 void Compiler::registerTypes(Program* prog) {
     if (!prog) return;
@@ -100,6 +106,7 @@ void Compiler::registerTypeDecl(Node* node) {
         CompilerContext::ClassInfo classInfo;
         classInfo.name = className;
         classInfo.version = cls->version;
+        classInfo.compiled_version = cls->version;  // locked at compile time
         classInfo.parentName = cls->parentName;
         classInfo.sourceYaml = YAML::Dump(cls->sourceNode);
         
@@ -184,6 +191,15 @@ void Compiler::registerTypeDecl(Node* node) {
         structType->setBody(llvmMemberTypes);
         classInfo.type = structType;
 
+        // Compute packed_size / padded_size for hot-reload calloc padding
+        {
+            int packed = (int)ctx.module.getDataLayout().getTypeAllocSize(structType);
+            classInfo.packed_size = packed;
+            int padded = 1;
+            while (padded < packed) padded <<= 1;
+            classInfo.padded_size = padded;
+        }
+
         // Track user-defined types for sys.bundle dependency closure.
         // collectUserTypes recurses into list<T> / map<K,V> to find inner types.
         auto track = [&](const std::string& typeName) {
@@ -240,7 +256,16 @@ void Compiler::registerTypeDecl(Node* node) {
         llvm::StructType* structType = llvm::StructType::create(ctx.context, modelName);
         structType->setBody(fieldTypes);
         classInfo.type = structType;
-        
+
+        // Compute packed_size / padded_size for hot-reload calloc padding
+        {
+            int packed = (int)ctx.module.getDataLayout().getTypeAllocSize(structType);
+            classInfo.packed_size = packed;
+            int padded = 1;
+            while (padded < packed) padded <<= 1;
+            classInfo.padded_size = padded;
+        }
+
         ctx.classes[modelName] = classInfo;
         LOG_DEBUG("AST Registered Model: " + modelName);
     } else if (auto enm = dynamic_cast<EnumDecl*>(node)) {
@@ -260,16 +285,40 @@ void Compiler::registerTypeDecl(Node* node) {
 }
 void Compiler::visitTopLevel(Node* node) {
     if (auto func = dynamic_cast<FunctionDecl*>(node)) {
-        // Prevent duplicate generation if legacy pipeline already compiled it
+        // Prevent duplicate IR generation if function was already compiled.
+        // BUT: if a newer version is declared (higher `version:` value), update
+        // sourceYaml + version in the symbol table so sys.bundle picks up the
+        // new YAML for hot-reload bundles at runtime.
         std::string mangledName = func->name;
         if (ctx.functions.find(mangledName) != ctx.functions.end()) {
-             // Already compiled by FunctionCommand. Skip.
-             return;
+            auto& fi = ctx.functions[mangledName];
+            if (func->version > fi.version) {
+                fi.version    = func->version;
+                fi.sourceYaml = YAML::Dump(func->sourceNode);
+                // Propagate to unqualified name too (may be same key)
+                if (ctx.functions.count(func->name))
+                    ctx.functions[func->name] = fi;
+                LOG_INFO("visitTopLevel: updated sourceYaml for " + mangledName +
+                         " to v" + std::to_string(func->version));
+            }
+            return;
         }
         visitFunction(func);
     } else if (auto stmt = dynamic_cast<Stmt*>(node)) {
         visitStatement(stmt);
     } else if (auto cls = dynamic_cast<ClassDecl*>(node)) {
+        // If this is a higher-version re-definition, update sourceYaml + version (not compiled_version)
+        std::string qualName = ctx.qualify(cls->name);
+        if (ctx.classes.count(qualName) && cls->version > ctx.classes[qualName].version) {
+            ctx.classes[qualName].version    = cls->version;
+            ctx.classes[qualName].sourceYaml = YAML::Dump(cls->sourceNode);
+            if (ctx.classes.count(cls->name)) {
+                ctx.classes[cls->name].version    = cls->version;
+                ctx.classes[cls->name].sourceYaml = YAML::Dump(cls->sourceNode);
+            }
+            LOG_INFO("visitTopLevel: updated sourceYaml for " + cls->name + " to v"
+                     + std::to_string(cls->version));
+        }
         for (const auto& method : cls->methods) {
             std::string oldName = method->name;
             method->name = cls->name + "_" + method->name;
@@ -317,7 +366,13 @@ void Compiler::visitFunction(FunctionDecl* func) {
     CompilerContext::FunctionInfo funcInfo;
     funcInfo.func = static_cast<llvm::Function*>(ctx.ir_gen->unwrap(funcVal));
     funcInfo.argNames = argNames;
-    funcInfo.version = 0; // Not handling versioning in AST yet
+    funcInfo.version = func->version;
+    funcInfo.compiled_version = func->version;  // locked at compile time
+    // Assign fptable slot — preserve any pre-existing index (e.g. from an alias entry)
+    if (ctx.functions.count(mangledName) && ctx.functions[mangledName].fptable_index >= 0)
+        funcInfo.fptable_index = ctx.functions[mangledName].fptable_index;
+    else
+        funcInfo.fptable_index = ctx.fptable_next_index++;
     funcInfo.sourceYaml = YAML::Dump(func->sourceNode);
     // Track user-defined arg + return types for sys.bundle (recurses into list<T>/map<K,V>)
     auto trackType = [&](const std::string& typeName) {

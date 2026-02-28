@@ -73,7 +73,10 @@ bool FunctionBuilder::OnScalar(const std::string& value, const std::string& tag)
     if (expectingValue) {
         if (currentKey == "name") func->name = value;
         else if (currentKey == "return") func->returnType = value;
-        
+        else if (currentKey == "version") {
+            try { func->version = std::stoull(value); } catch (...) {}
+        }
+
         expectingKey = true;
         expectingValue = false;
         return true;

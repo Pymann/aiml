@@ -1,0 +1,45 @@
+# Hot-Reload Test — sys.bundle + sys.exec version guard
+#
+# Current output (compileYamlChunk stub — no actual JIT re-compilation):
+#   v1 rc: 1       (hr_worker v1 compiled at startup, called via fptable)
+#   v2 rc: 1       (hot-reload attempted, deferred — fptable unchanged)
+#   v1 skip rc: 1  (v1 <= live v1 → guard skips, fptable unchanged)
+#
+# Expected output (after compileYamlChunk is wired):
+#   v1 rc: 1
+#   v2 rc: 2
+#   v1 skip rc: 2
+
+# Define worker v1
+- def:
+    name: hr_worker
+    version: 1
+    return: i32
+    body:
+      - return: 1
+
+# Bundle v1 and execute it
+- decl: [pkg1, Code]
+- set: [pkg1, {call: [sys.bundle, "hr_worker"]}]
+- decl: [rc, i32]
+- set: [rc, {call: [sys.exec, pkg1]}]
+- print: ["v1 rc: ${rc}"]
+
+# Define worker v2 (hot-reload candidate)
+- def:
+    name: hr_worker
+    version: 2
+    return: i32
+    body:
+      - return: 2
+
+# Bundle v2 and exec — should hot-reload hr_worker
+- decl: [pkg2, Code]
+- set: [pkg2, {call: [sys.bundle, "hr_worker"]}]
+- set: [rc, {call: [sys.exec, pkg2]}]
+- print: ["v2 rc: ${rc}"]
+
+# Execute v1 bundle again — version guard should skip (1 <= 2)
+# rc stays at 2 (v2 remains active)
+- set: [rc, {call: [sys.exec, pkg1]}]
+- print: ["v1 skip rc: ${rc}"]

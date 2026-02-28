@@ -69,26 +69,29 @@ IRValue* Compiler::visitStringInterpolation(StringInterpolationExpr* expr) {
 IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
     std::string className = newExpr->typeName;
     if (!className.empty() && ctx.classes.count(className)) {
-        llvm::StructType* structTy = ctx.classes[className].type;
-        uint64_t typeSize = ctx.module.getDataLayout().getTypeAllocSize(structTy);
-        
+        auto& classInfo = ctx.classes[className];
+        llvm::StructType* structTy = classInfo.type;
+
+        // Use padded_size for calloc so hot-reloaded versions with new append-only
+        // fields fit without reallocation (new slots are zero-initialized by calloc).
+        uint64_t allocSize = (classInfo.padded_size > 0)
+            ? (uint64_t)classInfo.padded_size
+            : ctx.module.getDataLayout().getTypeAllocSize(structTy);
+
         // Ensure calloc exists
         llvm::Function* callocFunc = ctx.module.getFunction("calloc");
         if (!callocFunc) {
              llvm::FunctionType* callocType = llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty()}, false);
              llvm::Function::Create(callocType, llvm::Function::ExternalLinkage, "calloc", ctx.module);
         }
-        
+
         std::vector<IRValue*> callArgs;
-        // Assuming we add a way to get Int64. If not, Int32 will probably implicitly cast or we can use getInt32.
-        // Actually `ast_compiler` can just use `ctx.ir_gen->wrap(ctx.builder.getInt64(...))` for literal bridging.
         callArgs.push_back(ctx.ir_gen->wrap(ctx.builder.getInt64(1)));
-        callArgs.push_back(ctx.ir_gen->wrap(ctx.builder.getInt64(typeSize)));
+        callArgs.push_back(ctx.ir_gen->wrap(ctx.builder.getInt64(allocSize)));
         
         IRValue* rawPtr = ctx.ir_gen->createCall("calloc", callArgs, "calloc_call");
-        
+
         // Auto-initialize defined members
-        auto& classInfo = ctx.classes[className];
         for (auto& [name, member] : classInfo.members) {
              Expr* initExpr = nullptr;
              if (newExpr->initValues.count(name)) {
