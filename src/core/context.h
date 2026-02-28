@@ -67,10 +67,12 @@ namespace AIML {
         std::string currentClassName;
 
         struct FunctionInfo {
-            llvm::Function* func;
+            llvm::Function* func = nullptr;
             std::vector<std::string> argNames;
             AccessLevel access = AccessLevel::Public;
-            uint64_t version = 0;             // Version of the function, default 0
+            uint64_t version = 1;             // Latest version (updated by visitTopLevel re-def)
+            uint64_t compiled_version = 1;    // Version actually compiled into IR (set once in visitFunction)
+            int fptable_index = -1;           // Index in __aiml_fptable / fptable_current (-1 = not in table)
             std::string sourceYaml;           // YAML dump of the function AST node (for sys.bundle)
             std::set<std::string> referencedTypes; // User-defined types referenced in the body
         };
@@ -126,6 +128,11 @@ namespace AIML {
             // Source preservation (for sys.bundle)
             std::string sourceYaml;                // YAML dump of the class AST node
             std::set<std::string> referencedTypes; // User-defined types in members/methods
+
+            // Hot-Reload: size info for calloc padding
+            uint64_t compiled_version = 1; // Version actually compiled into IR (set once, never updated by re-def)
+            int packed_size = 0;   // Actual size of all declared fields (LLVM DataLayout)
+            int padded_size = 0;   // Next power-of-2 of packed_size (allocation size for calloc)
         };
 
         class Scope {
@@ -197,6 +204,9 @@ namespace AIML {
     
     bool jitMode = false;
     bool headerOnlyMode = false;
+
+    // Hot-Reload: next free fptable slot index (incremented in visitFunction)
+    int fptable_next_index = 0;
 
     // When non-empty, name of the function/class currently being compiled.
     // getLLVMType uses this to record transitive type dependencies for sys.bundle.

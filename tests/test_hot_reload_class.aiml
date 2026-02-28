@@ -1,0 +1,54 @@
+# Hot-Reload Test — class version guard (struct append-only re-definition)
+#
+# Current output (compileYamlChunk stub — no actual JIT re-compilation):
+#   v1 rc: 7       (Box v1 compiled at startup; make_box_val called via fptable)
+#   v2 rc: 7       (class hot-reload attempted, deferred — layout unchanged)
+#   v1 skip rc: 7  (Box v1 <= live v1 → guard skips)
+#
+# Expected output (after compileYamlChunk is wired):
+#   v1 rc: 7
+#   v2 rc: 7       (Box v2 hot-reloaded; make_box_val still uses v1 compiled layout)
+#   v1 skip rc: 7  (v1 <= live v2 → guard skips)
+
+# Define Box v1
+- class:
+    name: Box
+    version: 1
+    members:
+      - [val, i32]
+
+# Function that uses Box (zero-arg so sys.exec can call it)
+- def:
+    name: make_box_val
+    version: 1
+    return: i32
+    body:
+      - decl: [b, Box]
+      - set: [b.val, 7]
+      - return: 7
+
+# Bundle v1 and execute it
+- decl: [pkg1, Code]
+- set: [pkg1, {call: [sys.bundle, "make_box_val"]}]
+- decl: [rc, i32]
+- set: [rc, {call: [sys.exec, pkg1]}]
+- print: ["v1 rc: ${rc}"]
+
+# Define Box v2 — append-only: new field extra
+- class:
+    name: Box
+    version: 2
+    members:
+      - [val, i32]
+      - [extra, i32]
+
+# Bundle v2 (captures Box v2 YAML) and exec — should hot-reload Box class
+- decl: [pkg2, Code]
+- set: [pkg2, {call: [sys.bundle, "make_box_val"]}]
+- set: [rc, {call: [sys.exec, pkg2]}]
+- print: ["v2 rc: ${rc}"]
+
+# Execute v1 bundle again — version guard should skip (1 <= live 1)
+# rc stays at 7 (make_box_val still active)
+- set: [rc, {call: [sys.exec, pkg1]}]
+- print: ["v1 skip rc: ${rc}"]
