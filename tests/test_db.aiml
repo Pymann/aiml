@@ -1,0 +1,80 @@
+# Tests for AionDB: Store<T>, Kv<K:V>, VecStore + VecResult
+# Expected exit code: 0
+
+# ── Phase A: Store<T> ─────────────────────────────────────────────────────────
+
+- class:
+    name: Entity
+    members: [[id, i32], [hp, i32]]
+
+- decl: [entities, Store<Entity>]
+- set: [entities, { call: [db.open, "entities"] }]
+
+# Insert an entity
+- decl: [e, Entity]
+- set: [e.id, 42]
+- set: [e.hp, 100]
+- decl: [eid, i32]
+- set: [eid, { call: [entities.insert, e] }]
+- print: ["inserted id: ${eid}"]
+
+# Get entity back via ptr
+- decl: [p, ptr<Entity>]
+- set: [p, { call: [entities.get, 1] }]
+- print: ["hp: ${p.hp}"]
+
+# len
+- decl: [n, i32]
+- set: [n, { call: [entities.len] }]
+- print: ["len: ${n}"]
+
+# ── Phase B: Kv<string:string> ────────────────────────────────────────────────
+
+- decl: [cfg, Kv<string:string>]
+- set: [cfg, { call: [db.open_kv, "cfg"] }]
+
+- call: [cfg.set, "theme", "dark"]
+
+- decl: [v, string]
+- set: [v, { call: [cfg.get, "theme"] }]
+- print: ["theme: ${v}"]
+
+- decl: [has, i32]
+- set: [has, { call: [cfg.has, "theme"] }]
+- print: ["has: ${has}"]
+
+- decl: [klen, i32]
+- set: [klen, { call: [cfg.len] }]
+- print: ["klen: ${klen}"]
+
+# ── Phase C: VecStore + VecResult ─────────────────────────────────────────────
+
+- decl: [vs, VecStore]
+- set: [vs, { call: [db.open_vec, "vecs", 3] }]
+
+# Insert vector doc1 = [1, 0, 0]
+- decl: [v1, list<f32>]
+- call: [v1.push, 1.0]
+- call: [v1.push, 0.0]
+- call: [v1.push, 0.0]
+- call: [vs.insert, "doc1", v1]
+
+# Insert vector doc2 = [0, 1, 0]
+- decl: [v2, list<f32>]
+- call: [v2.push, 0.0]
+- call: [v2.push, 1.0]
+- call: [v2.push, 0.0]
+- call: [vs.insert, "doc2", v2]
+
+# Search with query = [1, 0, 0] — should match doc1 first
+- decl: [q, list<f32>]
+- call: [q.push, 1.0]
+- call: [q.push, 0.0]
+- call: [q.push, 0.0]
+
+- decl: [results, list<ptr<VecResult>>]
+- set: [results, { call: [vs.search, q, 2] }]
+
+- decl: [r, ptr<VecResult>]
+- set: [r, { call: [results.get, 0] }]
+- print: ["top id: ${r.id}"]

@@ -7,6 +7,7 @@
 #include "string_utils.h"
 #include "expression.h"
 #include "serialize_impl.h"
+#include "../../src/sys/db_runtime.h"
 #include <iostream>
 #include <queue>
 #include <set>
@@ -384,6 +385,199 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             return nullptr;
         }
         LOG_ERROR("Unknown channel method: " + methodName);
+        return ctx.ir_gen->getInt32(0);
+    }
+    // ── Store<T> methods ─────────────────────────────────────────────────────
+    else if (className.rfind("Store<", 0) == 0 && className.back() == '>') {
+        std::string elemName = className.substr(6, className.size() - 7);
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        llvm::Type* i64 = ctx.builder.getInt64Ty();
+        llvm::Value* storePtr = ctx.builder.CreateLoad(i8p,
+            static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), "store_ptr");
+
+        if (methodName == "insert" && !call->args.empty()) {
+            // Need raw address of entity element, not loaded value
+            llvm::Value* elemPtr = nullptr;
+            if (auto* varE = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get())) {
+                Symbol* varSym = resolveVariable(varE->name);
+                if (varSym) {
+                    llvm::Value* allocaV = varSym->alloca_inst
+                        ? static_cast<llvm::Value*>(varSym->alloca_inst)
+                        : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(varSym->ir_alloca_inst));
+                    elemPtr = ctx.builder.CreateBitCast(allocaV, i8p);
+                }
+            }
+            if (!elemPtr && !argVals.empty()) {
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+                if (v->getType()->isPointerTy()) {
+                    elemPtr = ctx.builder.CreateBitCast(v, i8p);
+                } else {
+                    llvm::AllocaInst* tmp = ctx.builder.CreateAlloca(v->getType(), nullptr, "ins_tmp");
+                    ctx.builder.CreateStore(v, tmp);
+                    elemPtr = ctx.builder.CreateBitCast(tmp, i8p);
+                }
+            }
+            if (!elemPtr) return ctx.ir_gen->getInt32(-1);
+
+            int64_t elemSize = 8;
+            if (ctx.classes.count(elemName) && ctx.classes[elemName].type) {
+                llvm::DataLayout dl(&ctx.module);
+                elemSize = static_cast<int64_t>(dl.getTypeAllocSize(ctx.classes[elemName].type));
+            } else if (ctx.classes.count(elemName) && ctx.classes[elemName].packed_size > 0) {
+                elemSize = static_cast<int64_t>(ctx.classes[elemName].packed_size);
+            }
+            llvm::Function* f = ctx.getFunction("aiml_db_store_insert", i32, {i8p, i8p, i64});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {storePtr, elemPtr,
+                ctx.builder.getInt64(elemSize)}));
+
+        } else if (methodName == "get" && !argVals.empty()) {
+            llvm::Value* idVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            llvm::Function* f = ctx.getFunction("aiml_db_store_get", i8p, {i8p, i32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {storePtr, idVal}));
+
+        } else if (methodName == "delete" && !argVals.empty()) {
+            llvm::Value* idVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            llvm::Function* f = ctx.getFunction("aiml_db_store_delete",
+                ctx.builder.getVoidTy(), {i8p, i32});
+            ctx.builder.CreateCall(f, {storePtr, idVal});
+            return nullptr;
+
+        } else if (methodName == "len") {
+            llvm::Function* f = ctx.getFunction("aiml_db_store_len", i32, {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {storePtr}));
+        }
+        LOG_ERROR("Unknown Store method: " + methodName);
+        return ctx.ir_gen->getInt32(0);
+    }
+    // ── Kv<K:V> methods ──────────────────────────────────────────────────────
+    else if (className.rfind("Kv<", 0) == 0 && className.back() == '>') {
+        std::string inner = className.substr(3, className.size() - 4);
+        size_t colon = inner.find(':');
+        std::string vName = (colon != std::string::npos) ? inner.substr(colon + 1) : "string";
+
+        int64_t valSize = 0;
+        if      (vName == "string") valSize = 0;
+        else if (vName == "i32")    valSize = 4;
+        else if (vName == "i64")    valSize = 8;
+        else if (vName == "f32")    valSize = 4;
+        else if (vName == "f64")    valSize = 8;
+        else if (ctx.classes.count(vName) && ctx.classes[vName].type) {
+            llvm::DataLayout dl(&ctx.module);
+            valSize = static_cast<int64_t>(dl.getTypeAllocSize(ctx.classes[vName].type));
+        }
+
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        llvm::Type* i64 = ctx.builder.getInt64Ty();
+        llvm::Value* kvPtr = ctx.builder.CreateLoad(i8p,
+            static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), "kv_ptr");
+
+        if (methodName == "set" && argVals.size() >= 2) {
+            llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            llvm::Value* valVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
+            llvm::Value* valPtr = nullptr;
+            if (valSize == 0) {
+                valPtr = valVal; // string: pass char* directly
+            } else {
+                llvm::AllocaInst* tmp = ctx.builder.CreateAlloca(valVal->getType(), nullptr, "kv_val_tmp");
+                ctx.builder.CreateStore(valVal, tmp);
+                valPtr = ctx.builder.CreateBitCast(tmp, i8p);
+            }
+            llvm::Function* f = ctx.getFunction("aiml_db_kv_set",
+                ctx.builder.getVoidTy(), {i8p, i8p, i8p, i64});
+            ctx.builder.CreateCall(f, {kvPtr, keyVal, valPtr, ctx.builder.getInt64(valSize)});
+            return nullptr;
+
+        } else if (methodName == "get" && !argVals.empty()) {
+            llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            llvm::Function* f = ctx.getFunction("aiml_db_kv_get", i8p, {i8p, i8p});
+            llvm::Value* retPtr = ctx.builder.CreateCall(f, {kvPtr, keyVal});
+            if (valSize == 0) {
+                return ctx.ir_gen->wrap(retPtr); // string: char* directly
+            } else if (vName == "f32") {
+                return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getFloatTy(), retPtr, "kv_f32"));
+            } else if (vName == "f64") {
+                return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getDoubleTy(), retPtr, "kv_f64"));
+            } else if (vName == "i64") {
+                return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getInt64Ty(), retPtr, "kv_i64"));
+            } else if (vName == "i32") {
+                return ctx.ir_gen->wrap(ctx.builder.CreateLoad(i32, retPtr, "kv_i32"));
+            }
+            return ctx.ir_gen->wrap(retPtr);
+
+        } else if (methodName == "has" && !argVals.empty()) {
+            llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            llvm::Function* f = ctx.getFunction("aiml_db_kv_has", i32, {i8p, i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {kvPtr, keyVal}));
+
+        } else if (methodName == "len") {
+            llvm::Function* f = ctx.getFunction("aiml_db_kv_len", i32, {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {kvPtr}));
+        }
+        LOG_ERROR("Unknown Kv method: " + methodName);
+        return ctx.ir_gen->getInt32(0);
+    }
+    // ── VecStore methods ──────────────────────────────────────────────────────
+    else if (className == "VecStore") {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+        llvm::Value* vsPtr = ctx.builder.CreateLoad(i8p,
+            static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), "vs_ptr");
+
+        // Helper: get alloca for a VariableExpr argument
+        auto getArgAlloca = [&](size_t argIdx) -> llvm::Value* {
+            if (argIdx >= call->args.size()) return nullptr;
+            if (auto* varE = dynamic_cast<AIML::AST::VariableExpr*>(call->args[argIdx].get())) {
+                Symbol* sym = resolveVariable(varE->name);
+                if (sym) {
+                    return sym->alloca_inst
+                        ? static_cast<llvm::Value*>(sym->alloca_inst)
+                        : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
+                }
+            }
+            return nullptr;
+        };
+
+        // Helper: get data ptr and size from list<f32> alloca
+        auto getListDataAndSize = [&](llvm::Value* listAlloca)
+                -> std::pair<llvm::Value*, llvm::Value*> {
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            llvm::Value* sizeFld = ctx.builder.CreateStructGEP(listTy, listAlloca, 0, "vsz_fld");
+            llvm::Value* listSz  = ctx.builder.CreateLoad(i32, sizeFld, "list_sz");
+            llvm::Value* dataFld = ctx.builder.CreateStructGEP(listTy, listAlloca, 2, "vdata_fld");
+            llvm::Value* dataPtr = ctx.builder.CreateLoad(ptrTy, dataFld, "data_ptr");
+            return {dataPtr, listSz};
+        };
+
+        if (methodName == "insert" && call->args.size() >= 2) {
+            llvm::Value* idStr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            llvm::Value* embedAlloca = getArgAlloca(1);
+            if (!embedAlloca) return ctx.ir_gen->getInt32(-1);
+            auto [dataPtr, listSz] = getListDataAndSize(embedAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_db_vec_insert",
+                ctx.builder.getVoidTy(), {i8p, i8p, ptrTy, i32});
+            ctx.builder.CreateCall(f, {vsPtr, idStr, dataPtr, listSz});
+            return nullptr;
+
+        } else if (methodName == "search" && call->args.size() >= 2) {
+            llvm::Value* queryAlloca = getArgAlloca(0);
+            if (!queryAlloca) return ctx.ir_gen->getInt32(-1);
+            auto [queryPtr, querySz] = getListDataAndSize(queryAlloca);
+            (void)querySz;
+            llvm::Value* kVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
+
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            llvm::Value* listAlloca  = ctx.builder.CreateAlloca(listTy, nullptr, "vecres_alloca");
+            ListImpl::initList(ctx, listAlloca, ptrTy, 8);
+
+            llvm::Function* f = ctx.getFunction("aiml_db_vec_search",
+                ctx.builder.getVoidTy(), {i8p, ptrTy, i32, ptrTy});
+            ctx.builder.CreateCall(f, {vsPtr, queryPtr, kVal, listAlloca});
+            return ctx.ir_gen->wrap(listAlloca);
+        }
+        LOG_ERROR("Unknown VecStore method: " + methodName);
         return ctx.ir_gen->getInt32(0);
     }
     // User Class Methods
