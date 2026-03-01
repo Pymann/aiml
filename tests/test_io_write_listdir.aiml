@@ -1,0 +1,56 @@
+# Tests for io.write_file and io.list_dir
+# Expected exit code: 0
+
+# --- io.write_file: create a temp file ---
+- decl: [tmpdir, path]
+- set: [tmpdir, { call: [path.temp_dir] }]
+
+- decl: [testfile, path]
+- set: [testfile, { call: [tmpdir.join, "aiml_test_write.txt"] }]
+
+- decl: [wrc, i32]
+- set: [wrc, { call: [io.write_file, testfile, "hello from aiml"] }]
+- print: ["write_file rc: ${wrc}"]
+# expected: write_file rc: 0
+
+# --- verify the file now exists ---
+- decl: [fexists, i32]
+- set: [fexists, { call: [io.is_file, testfile] }]
+- print: ["file exists: ${fexists}"]
+# expected: file exists: 1
+
+# --- read it back ---
+- decl: [content, string]
+- set: [content, { call: [io.read_file, testfile] }]
+- print: ["content: ${content}"]
+# expected: content: hello from aiml
+
+# --- io.list_dir: create a temp dir with known content ---
+- decl: [testdir, path]
+- set: [testdir, { call: [tmpdir.join, "aiml_test_listdir"] }]
+
+# mkdir the test dir (ignore rc if already exists)
+- call: [io.mkdir, testdir]
+
+# write two files into it
+- decl: [fa, path]
+- set: [fa, { call: [testdir.join, "a.txt"] }]
+- decl: [fb, path]
+- set: [fb, { call: [testdir.join, "b.txt"] }]
+- call: [io.write_file, fa, "aaa"]
+- call: [io.write_file, fb, "bbb"]
+
+# list the dir
+- decl: [entries, list<path>]
+- set: [entries, { call: [io.list_dir, testdir] }]
+
+- decl: [entry_count, i32]
+- set: [entry_count, { call: [entries.len] }]
+- print: ["entry_count: ${entry_count}"]
+# expected: entry_count: 2
+
+# --- cleanup ---
+- call: [io.remove, testfile]
+- call: [io.remove_all, testdir]
+
+- print: ["io write+listdir tests done"]

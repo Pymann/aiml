@@ -1,0 +1,31 @@
+# Tests for sys.exec with new_context=true (isolated execution)
+#
+# Isolated execution compiles the Code's code_chunks into a brand-new
+# LLVM JIT context — no shared fptable, no shared globals, no hot-reload.
+# The inner program runs to completion and its exit code is returned.
+#
+# Expected output:
+#   shared rc: 42
+#   isolated rc: 42
+
+# --- Define a simple zero-arg function that returns a known value ---
+- def:
+    name: ctx_probe
+    return: i32
+    body:
+      - return: 42
+
+# --- Shared-context execution (default: new_context=0) ---
+- decl: [pkg, Code]
+- set: [pkg, { call: [sys.bundle, "ctx_probe"] }]
+
+- decl: [rc, i32]
+- set: [rc, { call: [sys.exec, pkg] }]
+- print: ["shared rc: ${rc}"]
+
+# --- Isolated-context execution (new_context=1) ---
+- decl: [ipkg, Code]
+- set: [ipkg, { call: [sys.bundle, "ctx_probe", {context: true}] }]
+
+- set: [rc, { call: [sys.exec, ipkg] }]
+- print: ["isolated rc: ${rc}"]

@@ -2,11 +2,13 @@
 #include "exec_impl.h"
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <yaml-cpp/yaml.h>
 #include <sys/time.h>
 #include <unistd.h>
 #include "src/sys/time_runtime.h"
 #include "src/sys/process_runtime.h"
+#include "src/core/path_runtime.h"
 
 // LLVM includes
 #include <llvm/IR/LLVMContext.h>
@@ -206,6 +208,67 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     LOG_DEBUG("Compiled to " + outputFilename);
 }
 
+// ── compileFromString ─────────────────────────────────────────────────────────
+// Like compile() but parses from an in-memory YAML string instead of a file.
+// No IR file is written; the compiled module stays in module_ for jitRun().
+void AIMLCompiler::compileFromString(const std::string& yaml_source) {
+    LOG_DEBUG("compileFromString: " + std::to_string(yaml_source.size()) + " bytes");
+
+    delete static_cast<CompilerContext*>(compiler_ctx_);
+    compiler_ctx_ = nullptr;
+    delete static_cast<llvm::IRBuilder<>*>(builder_inst_);
+    builder_inst_ = nullptr;
+
+    builder_inst_ = new llvm::IRBuilder<>(*context_);
+    auto& builder  = *static_cast<llvm::IRBuilder<>*>(builder_inst_);
+
+    compiler_ctx_ = new CompilerContext(*context_, *module_, builder);
+    CompilerContext& ctx = *static_cast<CompilerContext*>(compiler_ctx_);
+
+    ctx.compilerPath = compilerPath;
+    ctx.ir_gen = AIML::createLLVMGenerator(ctx);
+
+    module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
+    module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
+
+    try {
+        YAML::Node rawSeq = YAML::Load(yaml_source);
+
+        AIML::AST::Builder astBuilder;
+        // Feed each node to the AST builder via a synthesised YAML stream
+        std::istringstream ss(yaml_source);
+        YAML::Parser parser(ss);
+        parser.HandleNextDocument(astBuilder);
+
+        auto programAST = astBuilder.takeProgram();
+        if (programAST) {
+            // Assign sourceNodes (zip raw sequence with AST declarations)
+            if (rawSeq.IsSequence()) {
+                size_t n = std::min(rawSeq.size(), programAST->declarations.size());
+                for (size_t i = 0; i < n; ++i)
+                    programAST->declarations[i]->sourceNode = rawSeq[i];
+            }
+
+            AIML::AST::Compiler astCompiler(ctx);
+            astCompiler.registerTypes(programAST.get());
+            astCompiler.compile(programAST.get());
+        } else {
+            LOG_ERROR("compileFromString: AST builder produced no program");
+        }
+    } catch (const YAML::Exception& e) {
+        LOG_ERROR("compileFromString: YAML parse error: " + std::string(e.what()));
+    }
+
+    linkedObjects = ctx.objectFilesToLink;
+    entryPointName = ctx.config.entryPointName;
+}
+
+int AIMLCompiler::compileAndRun(const std::string& yaml_source) {
+    compileFromString(yaml_source);
+    generateEntryPoint();
+    return jitRun();
+}
+
 void AIMLCompiler::generateEntryPoint() {
     // This method generates the 'int main(int argc, char** argv)' entry point.
     // It should only be called if we are building an executable or running JIT.
@@ -394,6 +457,43 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("time_now_ms", (void*)(intptr_t)time_now_ms);
     llvm::sys::DynamicLibrary::AddSymbol("time_sleep_ms", (void*)(intptr_t)time_sleep_ms);
     llvm::sys::DynamicLibrary::AddSymbol("sys_exe_runtime", (void*)(intptr_t)sys_exe_runtime);
+
+    // Path runtime symbols
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_intern",      (void*)(intptr_t)aiml_path_intern);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_join",        (void*)(intptr_t)aiml_path_join);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_parent",      (void*)(intptr_t)aiml_path_parent);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_name",        (void*)(intptr_t)aiml_path_name);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_stem",        (void*)(intptr_t)aiml_path_stem);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_extension",   (void*)(intptr_t)aiml_path_extension);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_root",        (void*)(intptr_t)aiml_path_root);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_is_absolute", (void*)(intptr_t)aiml_path_is_absolute);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_is_relative", (void*)(intptr_t)aiml_path_is_relative);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_is_empty",    (void*)(intptr_t)aiml_path_is_empty);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_depth",       (void*)(intptr_t)aiml_path_depth);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_relative_to", (void*)(intptr_t)aiml_path_relative_to);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_safe_join",   (void*)(intptr_t)aiml_path_safe_join);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_to_string",   (void*)(intptr_t)aiml_path_to_string);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_home",        (void*)(intptr_t)aiml_path_home);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_temp_dir",    (void*)(intptr_t)aiml_path_temp_dir);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_cwd",         (void*)(intptr_t)aiml_path_cwd);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_current_exe", (void*)(intptr_t)aiml_path_current_exe);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_path_config_dir",  (void*)(intptr_t)aiml_path_config_dir);
+    // IO / filesystem symbols
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_exists",     (void*)(intptr_t)aiml_io_exists);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_is_dir",     (void*)(intptr_t)aiml_io_is_dir);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_is_file",    (void*)(intptr_t)aiml_io_is_file);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_file_size",  (void*)(intptr_t)aiml_io_file_size);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_mkdir",      (void*)(intptr_t)aiml_io_mkdir);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_mkdir_all",  (void*)(intptr_t)aiml_io_mkdir_all);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_remove",     (void*)(intptr_t)aiml_io_remove);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_remove_all", (void*)(intptr_t)aiml_io_remove_all);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_rename",     (void*)(intptr_t)aiml_io_rename);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_read_file",      (void*)(intptr_t)aiml_io_read_file);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_write_file",     (void*)(intptr_t)aiml_io_write_file);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_list_dir_fill",  (void*)(intptr_t)aiml_io_list_dir_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_can_read",       (void*)(intptr_t)aiml_io_can_read);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_can_write",      (void*)(intptr_t)aiml_io_can_write);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_can_exec",       (void*)(intptr_t)aiml_io_can_exec);
     
     // llvm::sys::DynamicLibrary::AddSymbol("stderr", (void*)(intptr_t)stderr); // Removed to avoid macro issues for now
 

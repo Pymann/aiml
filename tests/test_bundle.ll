@@ -3,6 +3,8 @@ source_filename = "AIML_Module"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-linux-gnu"
 
+%AimlClassSchema = type { ptr, i32, i32, i32, i32, [32 x %AimlFieldInfo] }
+%AimlFieldInfo = type { ptr }
 %GenericList = type { i32, i32, ptr }
 %Payload = type { i32 }
 %__aiml_code_t = type { ptr, ptr, ptr, ptr, i8 }
@@ -55,6 +57,16 @@ target triple = "x86_64-pc-linux-gnu"
 @24 = private unnamed_addr constant [6 x i8] c"false\00", align 1
 @print_null_str.7 = private unnamed_addr constant [7 x i8] c"(null)\00", align 1
 @25 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
+@__aiml_fptable = global [1 x [16 x ptr]] [[16 x ptr] [ptr @worker_task, ptr null, ptr null, ptr null, ptr null, ptr null, ptr null, ptr null, ptr null, ptr null, ptr null, ptr null, ptr null, ptr null, ptr null, ptr null]]
+@__aiml_fptable_current = global [1 x ptr] [ptr @worker_task]
+@__aiml_fptable_versions = global [1 x i32] [i32 1]
+@__aiml_fname_worker_task = private constant [12 x i8] c"worker_task\00"
+@__aiml_func_names = constant [1 x ptr] [ptr @__aiml_fname_worker_task]
+@__aiml_func_count = constant i32 1
+@__aiml_sname_Payload = private constant [8 x i8] c"Payload\00"
+@__aiml_sfield_Payload_id = private constant [3 x i8] c"id\00"
+@__aiml_schemas = global [1 x %AimlClassSchema] [%AimlClassSchema { ptr @__aiml_sname_Payload, i32 1, i32 1, i32 4, i32 4, [32 x %AimlFieldInfo] [%AimlFieldInfo { ptr @__aiml_sfield_Payload_id }, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer] }]
+@__aiml_schema_count = constant i32 1
 
 define void @__aiml_init() {
 entry:
