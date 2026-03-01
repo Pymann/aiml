@@ -67,6 +67,13 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
     if (decl->initialValue) {
         IRValue* initVal = visitExpression(decl->initialValue.get());
         if (initVal) {
+            // path: auto-intern so pointer identity == path equality
+            if (decl->typeName == "path") {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* internFn = ctx.getFunction("aiml_path_intern", i8p, {i8p});
+                llvm::Value* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal));
+                initVal = ctx.ir_gen->wrap(ctx.builder.CreateCall(internFn, {raw}, "path_init"));
+            }
             ctx.ir_gen->createStore(initVal, alloca);
         }
     }
@@ -154,6 +161,14 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 });
                 return;
             }
+        }
+        // path type: auto-intern the value so pointer equality == path equality
+        if (sym->typeName == "path") {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* internFn = ctx.getFunction("aiml_path_intern", i8p, {i8p});
+            llvm::Value* rawVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+            llvm::Value* interned = ctx.builder.CreateCall(internFn, {rawVal}, "path_interned");
+            val = ctx.ir_gen->wrap(interned);
         }
         ctx.ir_gen->createStore(val, baseAlloca);
     } else {

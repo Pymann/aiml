@@ -48,8 +48,8 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             else return ctx.ir_gen->getInt32(0);
         }
 
-        // System Namespaces (sys, io, time)
-        if (baseName == "sys" || baseName == "io" || baseName == "time") {
+        // Dispatch any registered namespace (sys, io, time, path, and future ones)
+        if (ctx.namespaces.count(baseName)) {
             IRValue* sysResult = visitSysNamespaceCall(baseName, methodName, argVals);
             if (sysResult) return sysResult;
         }
@@ -676,7 +676,16 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
         llvm::Value* startCall = ctx.builder.CreateGlobalStringPtr(
             "{\"call\":[\"" + selector + "\"]}", "b_sc");
 
-        llvm::Value* newCtxF = ctx.builder.getInt8(0); // default: shared context
+        // Check for options argument: sys.bundle("fn", {context: true})
+        int8_t newCtxVal = 0;
+        if (call->args.size() >= 2) {
+            if (auto* dict = dynamic_cast<DictLiteralExpr*>(call->args[1].get())) {
+                auto it = dict->entries.find("context");
+                if (it != dict->entries.end() && it->second == "true")
+                    newCtxVal = 1;
+            }
+        }
+        llvm::Value* newCtxF = ctx.builder.getInt8(newCtxVal);
         return ctx.ir_gen->wrap(CodeImpl::create(ctx, idVal, startCall, ccMem, dcMem, newCtxF));
     }
 

@@ -100,6 +100,15 @@ public:
     std::string toString() const override { return "Spawn(" + functionName + ")"; }
 };
 
+// Inline option map: {key: value, ...} used as call argument (e.g. {context: true}).
+// Values are kept as strings; callers parse booleans/numbers as needed.
+class DictLiteralExpr : public Expr {
+public:
+    std::map<std::string, std::string> entries;
+    explicit DictLiteralExpr(std::map<std::string, std::string> e) : entries(std::move(e)) {}
+    std::string toString() const override { return "Dict(...)"; }
+};
+
 // --- Statements (Perform an action) ---
 
 class Stmt : public Node {

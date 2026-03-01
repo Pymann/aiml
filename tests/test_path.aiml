@@ -1,0 +1,126 @@
+# Tests for the built-in path type
+# Expected exit code: 0
+
+# --- Basic decl + set (auto-intern) ---
+- decl: [p, path]
+- set: [p, "/usr/local/bin"]
+- print: ["path: ${p}"]
+# expected output: path: /usr/local/bin
+
+# --- path namespace: from_string ---
+- decl: [q, path]
+- set: [q, { call: [path.from_string, "/home/user/docs"] }]
+- print: ["from_string: ${q}"]
+
+# --- path.join ---
+- decl: [joined, path]
+- set: [joined, { call: [p.join, "tool"] }]
+- print: ["join: ${joined}"]
+# expected: join: /usr/local/bin/tool
+
+# --- path.parent ---
+- decl: [par, path]
+- set: [par, { call: [p.parent] }]
+- print: ["parent: ${par}"]
+# expected: parent: /usr/local
+
+# --- path.name ---
+- decl: [nm, string]
+- set: [nm, { call: [p.name] }]
+- print: ["name: ${nm}"]
+# expected: name: bin
+
+# --- path.stem and extension ---
+- decl: [fp, path]
+- set: [fp, "/etc/config.toml"]
+- decl: [st, string]
+- set: [st, { call: [fp.stem] }]
+- decl: [ext, string]
+- set: [ext, { call: [fp.extension] }]
+- print: ["stem: ${st}"]
+- print: ["ext: ${ext}"]
+# expected: stem: config
+# expected: ext: .toml
+
+# --- path.root ---
+- decl: [rt, string]
+- set: [rt, { call: [p.root] }]
+- print: ["root: ${rt}"]
+# expected: root: /
+
+# --- path.is_absolute / is_relative ---
+- decl: [abs_flag, i32]
+- set: [abs_flag, { call: [p.is_absolute] }]
+- print: ["is_absolute: ${abs_flag}"]
+# expected: is_absolute: 1
+
+- decl: [rel, path]
+- set: [rel, "foo/bar"]
+- decl: [rel_flag, i32]
+- set: [rel_flag, { call: [rel.is_relative] }]
+- print: ["is_relative: ${rel_flag}"]
+# expected: is_relative: 1
+
+# --- path.is_empty ---
+- decl: [empty_p, path]
+- set: [empty_p, ""]
+- decl: [empty_flag, i32]
+- set: [empty_flag, { call: [empty_p.is_empty] }]
+- print: ["is_empty: ${empty_flag}"]
+# expected: is_empty: 1
+
+# --- path.depth ---
+- decl: [dep, i32]
+- set: [dep, { call: [p.depth] }]
+- print: ["depth: ${dep}"]
+# expected: depth: 3
+
+# --- Normalization: double slashes and dots resolved ---
+- decl: [messy, path]
+- set: [messy, "/usr//local/./bin"]
+- print: ["normalized: ${messy}"]
+# expected: normalized: /usr/local/bin
+
+# --- path namespace: cwd returns non-empty string ---
+- decl: [cwd, path]
+- set: [cwd, { call: [path.cwd] }]
+- decl: [cwd_empty, i32]
+- set: [cwd_empty, { call: [cwd.is_empty] }]
+- print: ["cwd_empty: ${cwd_empty}"]
+# expected: cwd_empty: 0
+
+# --- path namespace: home returns non-empty string ---
+- decl: [home, path]
+- set: [home, { call: [path.home] }]
+- decl: [home_abs, i32]
+- set: [home_abs, { call: [home.is_absolute] }]
+- print: ["home_abs: ${home_abs}"]
+# expected: home_abs: 1
+
+# --- io.exists on /tmp (always exists) ---
+- decl: [tmp_path, path]
+- set: [tmp_path, "/tmp"]
+- decl: [tmp_exists, i32]
+- set: [tmp_exists, { call: [io.exists, tmp_path] }]
+- print: ["tmp_exists: ${tmp_exists}"]
+# expected: tmp_exists: 1
+
+# --- io.is_dir on /tmp ---
+- decl: [tmp_isdir, i32]
+- set: [tmp_isdir, { call: [io.is_dir, tmp_path] }]
+- print: ["tmp_isdir: ${tmp_isdir}"]
+# expected: tmp_isdir: 1
+
+# --- io.is_file on /tmp (should be 0) ---
+- decl: [tmp_isfile, i32]
+- set: [tmp_isfile, { call: [io.is_file, tmp_path] }]
+- print: ["tmp_isfile: ${tmp_isfile}"]
+# expected: tmp_isfile: 0
+
+# --- String interpolation with path ---
+- decl: [msg, string]
+- set: [msg, "My path is: ${p}"]
+- print: ["${msg}"]
+# expected: My path is: /usr/local/bin
+
+- print: ["path tests done"]

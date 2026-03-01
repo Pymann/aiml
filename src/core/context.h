@@ -399,6 +399,7 @@ namespace AIML {
         if (typeName == "bool") return llvm::Type::getInt8Ty(context);
         if (typeName == "void") return llvm::Type::getVoidTy(context);
         if (typeName == "string") return llvm::Type::getInt8Ty(context)->getPointerTo(); // char*
+        if (typeName == "path")   return llvm::Type::getInt8Ty(context)->getPointerTo(); // interned char*
         
         // Unsigned aliases (LLVM types are sign-agnostic)
         if (typeName == "u8") return llvm::Type::getInt8Ty(context);

@@ -14,3 +14,8 @@ extern "C" int aiml_exec_code(void* code_obj);
 //                      atomically updates fptable_current[func_idx]
 extern "C" int  aiml_fptable_find(const char* name);
 extern "C" void aiml_fptable_update(int func_idx, int version, void* fn_ptr);
+
+// Execute a Code object in a fully isolated LLVM context (new_context == 1).
+// Saves and restores the caller's active context/engine around the inner JIT run.
+// Returns the exit code of the isolated program.
+extern "C" int aiml_isolated_exec(void* code_obj);

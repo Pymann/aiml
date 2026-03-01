@@ -31,13 +31,20 @@ public:
 
     void compile(const std::string& filename, const std::string& outputFilename);
     const llvm::Module& getModule() const; // Helper for JIT
-    
+
     // Generates the standard C main() entry point wrapper.
     // Call this ONLY when building an executable or running JIT.
-    void generateEntryPoint(); 
-    
+    void generateEntryPoint();
+
     void compileToObject(const std::string& filename, const std::string& outputFilename);
     int jitRun(); // JIT execution method
+
+    // Compile a complete AIML program from an in-memory YAML string (no file I/O).
+    // Used by aiml_isolated_exec to run Code objects in a fresh LLVM context.
+    void compileFromString(const std::string& yaml_source);
+
+    // Convenience: compileFromString + generateEntryPoint + jitRun.
+    int compileAndRun(const std::string& yaml_source);
     
     // Dependency & Caching Methods
     void resolveImport(const std::string& path);

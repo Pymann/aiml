@@ -85,6 +85,19 @@ std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node) {
         if (argsNode.IsSequence() && argsNode.size() == 2) {
              return std::make_unique<BinaryExpr>(op, nodeToExpr(argsNode[0]), nodeToExpr(argsNode[1]));
         }
+
+        // Unrecognised map (e.g. option bags like {context: true}) → DictLiteralExpr.
+        // Iterate all keys; values are coerced to string.
+        {
+            std::map<std::string, std::string> entries;
+            for (auto it = node.begin(); it != node.end(); ++it) {
+                try {
+                    entries[it->first.as<std::string>()] = it->second.as<std::string>();
+                } catch (...) {}
+            }
+            if (!entries.empty())
+                return std::make_unique<DictLiteralExpr>(std::move(entries));
+        }
     }
     return nullptr;
 }

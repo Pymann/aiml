@@ -3,8 +3,10 @@
 #include "ast_nodes.h"
 #include "buffer_impl.h"
 #include "map_impl.h"
+#include "list_impl.h"
 #include "code_impl.h"
 #include "ir_generator.h"
+#include "path_runtime.h"
 #include <llvm/IR/IRBuilder.h>
 
 using IRValue = AIML::IRValue;
@@ -581,4 +583,275 @@ void registerBuiltins(CompilerContext& ctx) {
     };
 
     ctx.classes["Code"] = std::move(codeInfo);
+
+    // ── path builtin class (instance methods) ────────────────────────────────
+    // path values are i8* pointers into the global intern table.
+    // The base alloca holds an i8* — we load it before every call.
+    {
+        CompilerContext::ClassInfo pi;
+        pi.name      = "path";
+        pi.isBuiltin = true;
+
+        llvm::Type* i8p_ty = llvm::Type::getInt8Ty(ctx.context)->getPointerTo();
+        llvm::Type* i32_ty = llvm::Type::getInt32Ty(ctx.context);
+        llvm::Type* i8_ty  = llvm::Type::getInt8Ty(ctx.context);
+        llvm::Type* i64_ty = llvm::Type::getInt64Ty(ctx.context);
+
+        // Helper: load i8* from the alloca
+        auto loadPath = [](CompilerContext& ctx, llvm::Value* alloca) -> llvm::Value* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            return ctx.builder.CreateLoad(i8p, alloca, "pv");
+        };
+        // Helper: emit call to path runtime fn(i8*) -> i8*
+        auto callP2P = [loadPath](CompilerContext& ctx, llvm::Value* alloca,
+                                  const char* fn_name) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction(fn_name, i8p, {i8p});
+            llvm::Value* pv   = loadPath(ctx, alloca);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {pv}));
+        };
+        // Helper: emit call to path runtime fn(i8*) -> i32
+        auto callP2I = [loadPath](CompilerContext& ctx, llvm::Value* alloca,
+                                  const char* fn_name) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction(fn_name, i32, {i8p});
+            llvm::Value* pv   = loadPath(ctx, alloca);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {pv}));
+        };
+
+        // join(seg...) — sequential joins for up to N args
+        pi.builtinMethods["join"] = [loadPath](CompilerContext& ctx, llvm::Value* alloca,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> eval) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* joinFn = ctx.getFunction("aiml_path_join", i8p, {i8p, i8p});
+            llvm::Value* acc = loadPath(ctx, alloca);
+            for (auto& arg : call->args) {
+                IRValue* av = eval(arg.get());
+                if (!av) continue;
+                llvm::Value* seg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(av));
+                acc = ctx.builder.CreateCall(joinFn, {acc, seg}, "joined");
+            }
+            return ctx.ir_gen->wrap(acc);
+        };
+
+        // safe_join(rhs)
+        pi.builtinMethods["safe_join"] = [loadPath](CompilerContext& ctx, llvm::Value* alloca,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> eval) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_path_safe_join", i8p, {i8p, i8p});
+            llvm::Value* base = loadPath(ctx, alloca);
+            if (call->args.empty()) return ctx.ir_gen->wrap(base);
+            IRValue* rv = eval(call->args[0].get());
+            llvm::Value* rhs = rv ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rv))
+                                  : ctx.builder.CreateGlobalStringPtr("");
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {base, rhs}));
+        };
+
+        pi.builtinMethods["parent"] = [callP2P](CompilerContext& ctx, llvm::Value* alloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            return callP2P(ctx, alloca, "aiml_path_parent");
+        };
+        pi.builtinMethods["name"] = [callP2P](CompilerContext& ctx, llvm::Value* alloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            return callP2P(ctx, alloca, "aiml_path_name");
+        };
+        pi.builtinMethods["stem"] = [callP2P](CompilerContext& ctx, llvm::Value* alloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            return callP2P(ctx, alloca, "aiml_path_stem");
+        };
+        pi.builtinMethods["extension"] = [callP2P](CompilerContext& ctx, llvm::Value* alloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            return callP2P(ctx, alloca, "aiml_path_extension");
+        };
+        pi.builtinMethods["root"] = [callP2P](CompilerContext& ctx, llvm::Value* alloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            return callP2P(ctx, alloca, "aiml_path_root");
+        };
+        pi.builtinMethods["to_string"] = [callP2P](CompilerContext& ctx, llvm::Value* alloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            return callP2P(ctx, alloca, "aiml_path_to_string");
+        };
+        pi.builtinMethods["normalize"] = [callP2P](CompilerContext& ctx, llvm::Value* alloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            // Already normalized at intern time; intern again for safety
+            return callP2P(ctx, alloca, "aiml_path_intern");
+        };
+
+        // relative_to(base: path)
+        pi.builtinMethods["relative_to"] = [loadPath](CompilerContext& ctx, llvm::Value* alloca,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> eval) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_path_relative_to", i8p, {i8p, i8p});
+            llvm::Value* pv = loadPath(ctx, alloca);
+            if (call->args.empty()) return ctx.ir_gen->wrap(pv);
+            IRValue* bv = eval(call->args[0].get());
+            llvm::Value* base = bv ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bv))
+                                   : ctx.builder.CreateGlobalStringPtr("");
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {pv, base}));
+        };
+
+        pi.builtinMethods["is_absolute"] = [callP2I](CompilerContext& ctx, llvm::Value* alloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            return callP2I(ctx, alloca, "aiml_path_is_absolute");
+        };
+        pi.builtinMethods["is_relative"] = [callP2I](CompilerContext& ctx, llvm::Value* alloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            return callP2I(ctx, alloca, "aiml_path_is_relative");
+        };
+        pi.builtinMethods["is_empty"] = [callP2I](CompilerContext& ctx, llvm::Value* alloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            return callP2I(ctx, alloca, "aiml_path_is_empty");
+        };
+        pi.builtinMethods["depth"] = [callP2I](CompilerContext& ctx, llvm::Value* alloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            return callP2I(ctx, alloca, "aiml_path_depth");
+        };
+
+        // Filesystem predicates on the path itself
+        pi.builtinMethods["exists"] = [callP2I](CompilerContext& ctx, llvm::Value* alloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            return callP2I(ctx, alloca, "aiml_io_exists");
+        };
+        pi.builtinMethods["is_dir"] = [callP2I](CompilerContext& ctx, llvm::Value* alloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            return callP2I(ctx, alloca, "aiml_io_is_dir");
+        };
+        pi.builtinMethods["is_file"] = [callP2I](CompilerContext& ctx, llvm::Value* alloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            return callP2I(ctx, alloca, "aiml_io_is_file");
+        };
+
+        ctx.classes["path"] = pi;
+    }
+
+    // ── path namespace (static / constructor functions) ───────────────────────
+    {
+        auto& pathNs = ctx.namespaces["path"];
+
+        auto internLit = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_path_intern", i8p, {i8p});
+            if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {v}));
+        };
+
+        pathNs.builtinFuncs["from_string"] = internLit;
+
+        auto noArgPathFn = [](const char* fn_name) {
+            return [fn_name](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* f = ctx.getFunction(fn_name, i8p, {});
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {}));
+            };
+        };
+
+        pathNs.builtinFuncs["home"]        = noArgPathFn("aiml_path_home");
+        pathNs.builtinFuncs["temp_dir"]    = noArgPathFn("aiml_path_temp_dir");
+        pathNs.builtinFuncs["cwd"]         = noArgPathFn("aiml_path_cwd");
+        pathNs.builtinFuncs["current_exe"] = noArgPathFn("aiml_path_current_exe");
+
+        pathNs.builtinFuncs["config_dir"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_path_config_dir", i8p, {i8p});
+            llvm::Value* app = args.empty()
+                ? ctx.builder.CreateGlobalStringPtr("")
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {app}));
+        };
+    }
+
+    // ── io namespace: path-aware filesystem operations ────────────────────────
+    {
+        auto& io = ctx.namespaces["io"];
+
+        auto ioP2I = [](const char* fn_name) {
+            return [fn_name](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32 = ctx.builder.getInt32Ty();
+                llvm::Function* f = ctx.getFunction(fn_name, i32, {i8p});
+                if (args.empty()) return ctx.ir_gen->getInt32(0);
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {v}));
+            };
+        };
+
+        io.builtinFuncs["exists"]   = ioP2I("aiml_io_exists");
+        io.builtinFuncs["is_dir"]   = ioP2I("aiml_io_is_dir");
+        io.builtinFuncs["is_file"]  = ioP2I("aiml_io_is_file");
+        io.builtinFuncs["mkdir"]    = ioP2I("aiml_io_mkdir");
+        io.builtinFuncs["mkdir_all"]= ioP2I("aiml_io_mkdir_all");
+        io.builtinFuncs["remove"]   = ioP2I("aiml_io_remove");
+        io.builtinFuncs["can_read"] = ioP2I("aiml_io_can_read");
+        io.builtinFuncs["can_write"]= ioP2I("aiml_io_can_write");
+        io.builtinFuncs["can_exec"] = ioP2I("aiml_io_can_exec");
+
+        io.builtinFuncs["file_size"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i64 = ctx.builder.getInt64Ty();
+            llvm::Function* f = ctx.getFunction("aiml_io_file_size", i64, {i8p});
+            if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.getInt64(-1));
+            llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {v}));
+        };
+
+        io.builtinFuncs["remove_all"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_io_remove_all", i32, {i8p});
+            if (args.empty()) return ctx.ir_gen->getInt32(-1);
+            llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {v}));
+        };
+
+        io.builtinFuncs["rename"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_io_rename", i32, {i8p, i8p});
+            if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
+            llvm::Value* src = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* dst = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {src, dst}));
+        };
+
+        io.builtinFuncs["read_file"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_io_read_file", i8p, {i8p});
+            if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {v}));
+        };
+
+        // io.write_file(path, content) -> i32  (0=ok, -1=error)
+        io.builtinFuncs["write_file"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32  = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_io_write_file", i32, {i8p, i8p});
+            if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
+            llvm::Value* p = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* c = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p, c}));
+        };
+
+        // io.list_dir(path) -> list<path>
+        // Allocates a GenericList on the stack, inits it, calls aiml_io_list_dir_fill, returns list ptr.
+        io.builtinFuncs["list_dir"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32ty = ctx.builder.getInt32Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            llvm::Value* listAlloca  = ctx.builder.CreateAlloca(listTy, nullptr, "listdir_alloca");
+            ListImpl::initList(ctx, listAlloca, i8p, 8);
+
+            llvm::Function* fillFn = ctx.getFunction("aiml_io_list_dir_fill", i32ty, {i8p, ptrTy});
+            llvm::Value* pathVal = args.empty()
+                ? ctx.builder.CreateGlobalStringPtr("")
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            ctx.builder.CreateCall(fillFn, {pathVal, listAlloca});
+
+            return ctx.ir_gen->wrap(listAlloca);
+        };
+    }
 }

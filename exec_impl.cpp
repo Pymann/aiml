@@ -10,6 +10,7 @@
 //   3. Execute start_call via fptable_current (or engine lookup fallback)
 
 #include "exec_impl.h"
+#include "compiler.h"                  // AIMLCompiler (for aiml_isolated_exec)
 #include "src/core/context.h"
 #include "src/core/fptable.h"          // AIML_MAX_VERSIONS
 #include "src/core/schema_registry.h"  // AimlClassSchema, AIML_MAX_FIELDS
@@ -177,9 +178,94 @@ static std::string parseStartCallFuncName(const char* sc) {
 
 // ── aiml_exec_code ────────────────────────────────────────────────────────────
 
+// ── aiml_isolated_exec ────────────────────────────────────────────────────────
+// Runs a Code object (new_context == 1) in a completely fresh LLVM context:
+//   1. Reconstruct YAML source from code_chunks.
+//   2. Append start_call as a top-level call node.
+//   3. Create a new AIMLCompiler, compile + JIT-run the source.
+//   4. Restore the caller's active context/engine.
+
+extern "C" int aiml_isolated_exec(void* raw) {
+    if (!raw) return -2;
+    ExecCode* code = static_cast<ExecCode*>(raw);
+
+    // ── Build YAML sequence from code_chunks ──────────────────────────────────
+    std::string yaml_source;
+    ExecList* cc = code->code_chunks;
+    if (!cc || cc->size == 0) {
+        LOG_WARNING("aiml_isolated_exec: no code_chunks — nothing to compile");
+        return 0;
+    }
+
+    try {
+        YAML::Node seq(YAML::NodeType::Sequence);
+
+        for (int i = 0; i < cc->size; i++) {
+            if (!cc->data[i]) continue;
+            YAML::Node chunk = YAML::Load(std::string(cc->data[i]));
+            if (chunk.IsDefined() && !chunk.IsNull())
+                seq.push_back(chunk);
+        }
+
+        // Append start_call as a top-level call node (becomes a stmt in __aiml_init)
+        if (code->start_call && code->start_call[0] != '\0') {
+            try {
+                YAML::Node sc = YAML::Load(std::string(code->start_call));
+                if (sc.IsDefined() && !sc.IsNull())
+                    seq.push_back(sc);
+            } catch (...) {
+                LOG_WARNING("aiml_isolated_exec: could not parse start_call — appending raw");
+                // Fallback: wrap as inline YAML
+                std::string raw_sc = std::string(code->start_call);
+                seq.push_back(YAML::Load("call: " + raw_sc));
+            }
+        }
+
+        yaml_source = YAML::Dump(seq);
+    } catch (const std::exception& e) {
+        LOG_ERROR("aiml_isolated_exec: failed to build YAML source: " + std::string(e.what()));
+        return -1;
+    }
+
+    LOG_INFO("aiml_isolated_exec: compiled source (" +
+             std::to_string(yaml_source.size()) + " bytes)");
+
+    // ── Save caller's global context ──────────────────────────────────────────
+    auto* saved_ctx      = g_active_context;
+    auto* saved_ee       = g_active_ee;
+    auto* saved_fptable  = g_fptable_current;
+
+    // ── Compile + run in isolated AIMLCompiler ────────────────────────────────
+    int rc = -1;
+    {
+        AIMLCompiler iso;
+        if (g_active_context)
+            iso.compilerPath = g_active_context->compilerPath;
+        rc = iso.compileAndRun(yaml_source);
+    } // iso destructor frees its LLVMContext, Module, IRBuilder, CompilerContext
+
+    // ── Restore caller's global context ──────────────────────────────────────
+    // (inner jitRun sets them to nullptr via aiml_set_active_context(nullptr,nullptr))
+    g_active_context   = saved_ctx;
+    g_active_ee        = saved_ee;
+    g_fptable_current  = saved_fptable;
+    // Invalidate other cached fptable pointers — will re-cache on next use
+    g_fptable          = nullptr;
+    g_fptable_versions = nullptr;
+    g_func_names       = nullptr;
+    g_func_count       = 0;
+
+    LOG_INFO("aiml_isolated_exec: finished with rc=" + std::to_string(rc));
+    return rc;
+}
+
 extern "C" int aiml_exec_code(void* raw) {
     if (!raw) return -2;
     ExecCode* code = static_cast<ExecCode*>(raw);
+
+    // Isolated context: compile code_chunks in a fresh LLVM engine (no shared state)
+    if (code->new_context)
+        return aiml_isolated_exec(raw);
 
     // Locate fptable (JIT: engine; AOT: dlsym)
     cache_fptable_globals();
