@@ -3,7 +3,10 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <poll.h>
+#include <fcntl.h>
 #include <unistd.h>
+#include <cerrno>
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
@@ -12,6 +15,7 @@
 
 struct AimlSocket {
     int fd;
+    int timeout_ms; // 0 = blocking; >0 = connect/recv/send timeout in ms
 };
 
 // Must match buffer_impl.h field order: size, capacity, readIndex, writeIndex, data
@@ -46,7 +50,7 @@ extern "C" void* aiml_net_socket(const char* proto) {
     if (fd < 0) return nullptr;
     int yes = 1;
     ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-    return new AimlSocket{fd};
+    return new AimlSocket{fd, 0};
 }
 
 extern "C" int aiml_net_close(void* sock) {
@@ -65,7 +69,8 @@ extern "C" int32_t aiml_net_fd(void* sock) {
 
 extern "C" int aiml_net_connect(void* sock, const char* host, int32_t port) {
     if (!sock || !host) return -1;
-    int fd = to_sock(sock)->fd;
+    AimlSocket* s = to_sock(sock);
+    int fd = s->fd;
 
     char port_str[16];
     std::snprintf(port_str, sizeof(port_str), "%d", port);
@@ -75,12 +80,57 @@ extern "C" int aiml_net_connect(void* sock, const char* host, int32_t port) {
     hints.ai_socktype = SOCK_STREAM;
 
     struct addrinfo* res = nullptr;
-    int rc = ::getaddrinfo(host, port_str, &hints, &res);
-    if (rc != 0 || !res) return -1;
+    if (::getaddrinfo(host, port_str, &hints, &res) != 0 || !res) return -1;
 
-    int ret = ::connect(fd, res->ai_addr, res->ai_addrlen);
+    if (s->timeout_ms <= 0) {
+        // Blocking connect
+        int ret = ::connect(fd, res->ai_addr, res->ai_addrlen);
+        ::freeaddrinfo(res);
+        return ret;
+    }
+
+    // Non-blocking connect + poll (for timeout support)
+    int flags = ::fcntl(fd, F_GETFL, 0);
+    ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+    int rc = ::connect(fd, res->ai_addr, res->ai_addrlen);
     ::freeaddrinfo(res);
-    return ret;
+
+    if (rc == 0) {
+        ::fcntl(fd, F_SETFL, flags); // Connected immediately — restore blocking
+        return 0;
+    }
+    if (errno != EINPROGRESS) {
+        ::fcntl(fd, F_SETFL, flags);
+        return -1;
+    }
+
+    // Wait until writable or timeout
+    struct pollfd pfd{ fd, POLLOUT, 0 };
+    int ready = ::poll(&pfd, 1, s->timeout_ms);
+    ::fcntl(fd, F_SETFL, flags); // Restore blocking regardless of outcome
+
+    if (ready <= 0) return -1; // 0 = timeout, <0 = error
+
+    // Check if the connection actually succeeded
+    int err = 0;
+    socklen_t len = sizeof(err);
+    ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
+    return (err == 0) ? 0 : -1;
+}
+
+extern "C" int aiml_net_set_timeout(void* sock, int32_t timeout_ms) {
+    if (!sock) return -1;
+    AimlSocket* s = to_sock(sock);
+    s->timeout_ms = timeout_ms;
+
+    // Apply recv/send timeouts via setsockopt (connect timeout handled in aiml_net_connect)
+    struct timeval tv{};
+    tv.tv_sec  = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    ::setsockopt(s->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    ::setsockopt(s->fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    return 0;
 }
 
 // ── Server ────────────────────────────────────────────────────────────────────

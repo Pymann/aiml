@@ -10,6 +10,7 @@
 #include "src/sys/process_runtime.h"
 #include "src/core/path_runtime.h"
 #include "src/sys/net_runtime.h"
+#include "src/sys/db_runtime.h"
 
 // LLVM includes
 #include <llvm/IR/LLVMContext.h>
@@ -508,7 +509,23 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_net_recv_string",  (void*)(intptr_t)aiml_net_recv_string);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_net_close",        (void*)(intptr_t)aiml_net_close);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_net_fd",           (void*)(intptr_t)aiml_net_fd);
-    
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_net_set_timeout",  (void*)(intptr_t)aiml_net_set_timeout);
+
+    // db namespace (AionDB in-memory store)
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_open",    (void*)(intptr_t)aiml_db_store_open);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_insert",  (void*)(intptr_t)aiml_db_store_insert);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_get",     (void*)(intptr_t)aiml_db_store_get);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_delete",  (void*)(intptr_t)aiml_db_store_delete);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_len",     (void*)(intptr_t)aiml_db_store_len);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_open",       (void*)(intptr_t)aiml_db_kv_open);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_set",        (void*)(intptr_t)aiml_db_kv_set);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_get",        (void*)(intptr_t)aiml_db_kv_get);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_has",        (void*)(intptr_t)aiml_db_kv_has);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_len",        (void*)(intptr_t)aiml_db_kv_len);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_open",      (void*)(intptr_t)aiml_db_vec_open);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_insert",    (void*)(intptr_t)aiml_db_vec_insert);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_search",    (void*)(intptr_t)aiml_db_vec_search);
+
     // llvm::sys::DynamicLibrary::AddSymbol("stderr", (void*)(intptr_t)stderr); // Removed to avoid macro issues for now
 
     std::string errStr;

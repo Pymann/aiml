@@ -448,6 +448,16 @@ namespace AIML {
         if (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>')
             return llvm::Type::getInt8Ty(context)->getPointerTo();
 
+        // db types: all opaque i8* pointers to heap-allocated C++ structs
+        if (typeName.rfind("Store<", 0) == 0 && typeName.back() == '>')
+            return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName.rfind("Kv<", 0) == 0 && typeName.back() == '>')
+            return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName.rfind("TimeSeries<", 0) == 0 && typeName.back() == '>')
+            return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "VecStore")
+            return llvm::Type::getInt8Ty(context)->getPointerTo();
+
         // Code: pointer to heap-allocated __aiml_code_t (opaque i8*)
         if (typeName == "Code")
             return llvm::Type::getInt8Ty(context)->getPointerTo();

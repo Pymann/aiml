@@ -8,6 +8,7 @@
 #include "ir_generator.h"
 #include "path_runtime.h"
 #include "../../src/sys/net_runtime.h"
+#include "../../src/sys/db_runtime.h"
 #include <llvm/IR/IRBuilder.h>
 
 using IRValue = AIML::IRValue;
@@ -74,6 +75,37 @@ static llvm::BasicBlock* emitGuard(CompilerContext& ctx, llvm::Value* flag,
 // registerBuiltins
 // ---------------------------------------------------------------------------
 void registerBuiltins(CompilerContext& ctx) {
+
+    // -----------------------------------------------------------------------
+    // VecResult class — real LLVM struct {i8*, f32} so that r.id / r.score
+    // work via resolveProperty's GEP path. Must be registered before db namespace.
+    // -----------------------------------------------------------------------
+    {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::StructType* vrTy = llvm::StructType::getTypeByName(ctx.context, "VecResult");
+        if (!vrTy) {
+            vrTy = llvm::StructType::create(ctx.context,
+                {i8p, ctx.builder.getFloatTy()}, "VecResult");
+        }
+        CompilerContext::ClassInfo vrInfo;
+        vrInfo.name      = "VecResult";
+        vrInfo.type      = vrTy;
+        vrInfo.isBuiltin = false;
+
+        CompilerContext::StructMember idMember;
+        idMember.index    = 0;
+        idMember.type     = i8p;
+        idMember.typeName = "string";
+
+        CompilerContext::StructMember scoreMember;
+        scoreMember.index    = 1;
+        scoreMember.type     = ctx.builder.getFloatTy();
+        scoreMember.typeName = "f32";
+
+        vrInfo.members["id"]    = idMember;
+        vrInfo.members["score"] = scoreMember;
+        ctx.classes["VecResult"] = std::move(vrInfo);
+    }
 
     // -----------------------------------------------------------------------
     // sys namespace
@@ -928,6 +960,18 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {sockPtr, maxBytes}));
         };
 
+        sockInfo.builtinMethods["set_timeout"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* sockPtr = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_net_set_timeout", i32, {i8p, i32});
+            llvm::Value* ms = call->args.empty()
+                ? ctx.builder.getInt32(0)
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {sockPtr, ms}));
+        };
+
         ctx.classes["socket_handle"] = std::move(sockInfo);
     }
 
@@ -1074,6 +1118,118 @@ void registerBuiltins(CompilerContext& ctx) {
             }));
         };
 
+        // net.set_timeout(sock, ms) → i32
+        net.builtinFuncs["set_timeout"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_net_set_timeout", i32, {i8p, i32});
+            if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+            }));
+        };
+
         (void)ptrTy; // suppress unused warning
+    }
+
+    // ── db namespace ─────────────────────────────────────────────────────────
+    // db.open("name")      → Store<T>  (reads ctx.deserializeTargetType for elem type)
+    // db.open_kv("name")   → Kv<K:V>   (reads ctx.deserializeTargetType for val type)
+    // db.open_vec("n", d)  → VecStore
+    // db.begin/commit/rollback/checkpoint → stubs (i32 0)
+    {
+        auto& db = ctx.namespaces["db"];
+
+        // db.open("name") → Store<T>
+        db.builtinFuncs["open"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i64 = ctx.builder.getInt64Ty();
+
+            // Extract element type name from deserializeTargetType "Store<ElementName>"
+            std::string targetType = ctx.deserializeTargetType;
+            std::string elemName;
+            if (targetType.rfind("Store<", 0) == 0 && targetType.back() == '>') {
+                elemName = targetType.substr(6, targetType.size() - 7);
+            }
+
+            // Compute elem size: look up class or use DataLayout
+            int64_t elemSize = 8; // fallback
+            if (!elemName.empty()) {
+                if (ctx.classes.count(elemName)) {
+                    auto& ci = ctx.classes[elemName];
+                    if (ci.type) {
+                        llvm::DataLayout dl(&ctx.module);
+                        elemSize = static_cast<int64_t>(dl.getTypeAllocSize(ci.type));
+                    } else if (ci.packed_size > 0) {
+                        elemSize = static_cast<int64_t>(ci.packed_size);
+                    }
+                }
+            }
+
+            llvm::Function* f = ctx.getFunction("aiml_db_store_open", i8p, {i8p, i8p, i64});
+            llvm::Value* nameVal = args.empty()
+                ? ctx.builder.CreateGlobalStringPtr("")
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* tnVal  = ctx.builder.CreateGlobalStringPtr(
+                elemName.empty() ? "?" : elemName);
+            llvm::Value* szVal  = ctx.builder.getInt64(elemSize);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {nameVal, tnVal, szVal}));
+        };
+
+        // db.open_kv("name") → Kv<K:V>
+        db.builtinFuncs["open_kv"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i64 = ctx.builder.getInt64Ty();
+
+            // Extract value type from deserializeTargetType "Kv<string:ValueType>"
+            std::string targetType = ctx.deserializeTargetType;
+            std::string vName = "string";
+            if (targetType.rfind("Kv<", 0) == 0 && targetType.back() == '>') {
+                std::string inner = targetType.substr(3, targetType.size() - 4);
+                size_t colon = inner.find(':');
+                if (colon != std::string::npos) vName = inner.substr(colon + 1);
+            }
+
+            int64_t valSize = 0; // 0 = string
+            if      (vName == "string") valSize = 0;
+            else if (vName == "i32")    valSize = 4;
+            else if (vName == "i64")    valSize = 8;
+            else if (vName == "f32")    valSize = 4;
+            else if (vName == "f64")    valSize = 8;
+            else if (ctx.classes.count(vName) && ctx.classes[vName].type) {
+                llvm::DataLayout dl(&ctx.module);
+                valSize = static_cast<int64_t>(dl.getTypeAllocSize(ctx.classes[vName].type));
+            }
+
+            llvm::Function* f = ctx.getFunction("aiml_db_kv_open", i8p, {i8p, i64});
+            llvm::Value* nameVal = args.empty()
+                ? ctx.builder.CreateGlobalStringPtr("")
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {nameVal, ctx.builder.getInt64(valSize)}));
+        };
+
+        // db.open_vec("name", dims) → VecStore
+        db.builtinFuncs["open_vec"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_db_vec_open", i8p, {i8p, i32});
+            llvm::Value* nameVal = args.empty()
+                ? ctx.builder.CreateGlobalStringPtr("")
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* dimsVal = args.size() >= 2
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+                : ctx.builder.getInt32(0);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {nameVal, dimsVal}));
+        };
+
+        // Stubs: begin / commit / rollback / checkpoint → return i32(0)
+        auto stubFn = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+            return ctx.ir_gen->getInt32(0);
+        };
+        db.builtinFuncs["begin"]      = stubFn;
+        db.builtinFuncs["commit"]     = stubFn;
+        db.builtinFuncs["rollback"]   = stubFn;
+        db.builtinFuncs["checkpoint"] = stubFn;
     }
 }

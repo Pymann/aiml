@@ -31,8 +31,9 @@ int     aiml_net_send_string(void* sock, const char* str);
 char*   aiml_net_recv_string(void* sock, int32_t max_bytes); // malloc'd, caller frees
 
 // ── Common ────────────────────────────────────────────────────────────────────
-int     aiml_net_close(void* sock);  // closes fd, frees AimlSocket
-int32_t aiml_net_fd(void* sock);     // raw fd (for debugging)
+int     aiml_net_close(void* sock);              // closes fd, frees AimlSocket
+int32_t aiml_net_fd(void* sock);                 // raw fd (for debugging)
+int     aiml_net_set_timeout(void* sock, int32_t timeout_ms); // 0=blocking; sets SO_RCVTIMEO/SNDTIMEO + connect timeout
 
 #ifdef __cplusplus
 }
