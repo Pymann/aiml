@@ -7,6 +7,7 @@
 #include "code_impl.h"
 #include "ir_generator.h"
 #include "path_runtime.h"
+#include "../../src/sys/net_runtime.h"
 #include <llvm/IR/IRBuilder.h>
 
 using IRValue = AIML::IRValue;
@@ -853,5 +854,226 @@ void registerBuiltins(CompilerContext& ctx) {
 
             return ctx.ir_gen->wrap(listAlloca);
         };
+    }
+
+    // ── socket_handle builtin class ──────────────────────────────────────────
+    {
+        CompilerContext::ClassInfo sockInfo;
+        sockInfo.name      = "socket_handle";
+        sockInfo.isBuiltin = true;
+
+        // Helper: load the AimlSocket* from the i8* alloca
+        // All methods: loadSock = CreateLoad(i8p, baseAlloca) → call aiml_net_*(loadSock, ...)
+
+        sockInfo.builtinMethods["close"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* sockPtr = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_net_close", ctx.builder.getInt32Ty(), {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {sockPtr}));
+        };
+
+        sockInfo.builtinMethods["fd"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* sockPtr = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_net_fd", ctx.builder.getInt32Ty(), {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {sockPtr}));
+        };
+
+        sockInfo.builtinMethods["send"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* sockPtr = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_net_send", ctx.builder.getInt32Ty(), {i8p, ptrTy});
+            if (call->args.empty()) return ctx.ir_gen->getInt32(-1);
+            IRValue* bufVal = evalExpr(call->args[0].get());
+            llvm::Value* bufPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bufVal));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {sockPtr, bufPtr}));
+        };
+
+        sockInfo.builtinMethods["recv"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* sockPtr = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_net_recv", ctx.builder.getInt32Ty(), {i8p, ptrTy});
+            if (call->args.empty()) return ctx.ir_gen->getInt32(-1);
+            IRValue* bufVal = evalExpr(call->args[0].get());
+            llvm::Value* bufPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bufVal));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {sockPtr, bufPtr}));
+        };
+
+        sockInfo.builtinMethods["send_string"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* sockPtr = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_net_send_string", ctx.builder.getInt32Ty(), {i8p, i8p});
+            if (call->args.empty()) return ctx.ir_gen->getInt32(-1);
+            IRValue* strVal = evalExpr(call->args[0].get());
+            llvm::Value* strPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(strVal));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {sockPtr, strPtr}));
+        };
+
+        sockInfo.builtinMethods["recv_string"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            llvm::Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32  = ctx.builder.getInt32Ty();
+            llvm::Value* sockPtr = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_net_recv_string", i8p, {i8p, i32});
+            llvm::Value* maxBytes = call->args.empty()
+                ? ctx.builder.getInt32(4096)
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {sockPtr, maxBytes}));
+        };
+
+        ctx.classes["socket_handle"] = std::move(sockInfo);
+    }
+
+    // ── net namespace ────────────────────────────────────────────────────────
+    {
+        auto& net = ctx.namespaces["net"];
+        llvm::Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32  = ctx.builder.getInt32Ty();
+        llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+
+        // net.socket(proto) → socket_handle (i8*)
+        net.builtinFuncs["socket"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_net_socket", i8p, {i8p});
+            llvm::Value* proto = args.empty()
+                ? ctx.builder.CreateGlobalStringPtr("tcp")
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {proto}));
+        };
+
+        // net.connect(sock, host, port) → i32
+        net.builtinFuncs["connect"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_net_connect", i32, {i8p, i8p, i32});
+            if (args.size() < 3) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))
+            }));
+        };
+
+        // net.bind(sock, host, port) → i32
+        net.builtinFuncs["bind"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_net_bind", i32, {i8p, i8p, i32});
+            if (args.size() < 3) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))
+            }));
+        };
+
+        // net.listen(sock [,backlog]) → i32
+        net.builtinFuncs["listen"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_net_listen", i32, {i8p, i32});
+            if (args.empty()) return ctx.ir_gen->getInt32(-1);
+            llvm::Value* backlog = args.size() >= 2
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+                : ctx.builder.getInt32(0);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                backlog
+            }));
+        };
+
+        // net.accept(sock) → socket_handle (i8*)
+        net.builtinFuncs["accept"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_net_accept", i8p, {i8p});
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+            }));
+        };
+
+        // net.send(sock, buf) → i32
+        net.builtinFuncs["send"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32  = ctx.builder.getInt32Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Function* f = ctx.getFunction("aiml_net_send", i32, {i8p, ptrTy});
+            if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+            }));
+        };
+
+        // net.recv(sock, buf) → i32
+        net.builtinFuncs["recv"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32  = ctx.builder.getInt32Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Function* f = ctx.getFunction("aiml_net_recv", i32, {i8p, ptrTy});
+            if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+            }));
+        };
+
+        // net.send_string(sock, str) → i32
+        net.builtinFuncs["send_string"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_net_send_string", i32, {i8p, i8p});
+            if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+            }));
+        };
+
+        // net.recv_string(sock, max_bytes) → string (i8*)
+        net.builtinFuncs["recv_string"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_net_recv_string", i8p, {i8p, i32});
+            if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            llvm::Value* maxBytes = args.size() >= 2
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+                : ctx.builder.getInt32(4096);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                maxBytes
+            }));
+        };
+
+        // net.close(sock) → i32
+        net.builtinFuncs["close"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_net_close", i32, {i8p});
+            if (args.empty()) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+            }));
+        };
+
+        // net.fd(sock) → i32
+        net.builtinFuncs["fd"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_net_fd", i32, {i8p});
+            if (args.empty()) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+            }));
+        };
+
+        (void)ptrTy; // suppress unused warning
     }
 }
