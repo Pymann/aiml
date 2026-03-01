@@ -9,6 +9,7 @@
 #include "src/sys/time_runtime.h"
 #include "src/sys/process_runtime.h"
 #include "src/core/path_runtime.h"
+#include "src/sys/net_runtime.h"
 
 // LLVM includes
 #include <llvm/IR/LLVMContext.h>
@@ -494,6 +495,19 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_can_read",       (void*)(intptr_t)aiml_io_can_read);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_can_write",      (void*)(intptr_t)aiml_io_can_write);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_can_exec",       (void*)(intptr_t)aiml_io_can_exec);
+
+    // net namespace (POSIX sockets)
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_net_socket",       (void*)(intptr_t)aiml_net_socket);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_net_connect",      (void*)(intptr_t)aiml_net_connect);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_net_bind",         (void*)(intptr_t)aiml_net_bind);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_net_listen",       (void*)(intptr_t)aiml_net_listen);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_net_accept",       (void*)(intptr_t)aiml_net_accept);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_net_send",         (void*)(intptr_t)aiml_net_send);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_net_recv",         (void*)(intptr_t)aiml_net_recv);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_net_send_string",  (void*)(intptr_t)aiml_net_send_string);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_net_recv_string",  (void*)(intptr_t)aiml_net_recv_string);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_net_close",        (void*)(intptr_t)aiml_net_close);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_net_fd",           (void*)(intptr_t)aiml_net_fd);
     
     // llvm::sys::DynamicLibrary::AddSymbol("stderr", (void*)(intptr_t)stderr); // Removed to avoid macro issues for now
 

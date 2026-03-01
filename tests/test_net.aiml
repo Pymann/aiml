@@ -1,0 +1,61 @@
+# Tests for net namespace + socket_handle
+# Expected exit code: 0
+
+# ── Phase A: Lifecycle (no real network traffic) ──────────────────────────────
+
+# socket creation → fd must be positive
+- decl: [sock, socket_handle]
+- set: [sock, { call: [net.socket, "tcp"] }]
+- decl: [fd, i32]
+- set: [fd, { call: [net.fd, sock] }]
+- print: ["socket created (fd should be > 0): ${fd}"]
+- call: [net.close, sock]
+
+# bind to 127.0.0.1:0 (OS picks port) + listen
+- decl: [srv, socket_handle]
+- set: [srv, { call: [net.socket, "tcp"] }]
+- decl: [brc, i32]
+- set: [brc, { call: [net.bind, srv, "127.0.0.1", 0] }]
+- print: ["bind_rc: ${brc}"]
+- decl: [lrc, i32]
+- set: [lrc, { call: [net.listen, srv, 5] }]
+- print: ["listen_rc: ${lrc}"]
+- call: [net.close, srv]
+- print: ["lifecycle done"]
+
+# ── Phase B: Loopback via spawn (ping/pong) ───────────────────────────────────
+
+- def:
+    name: net_server
+    args: []
+    body:
+      - decl: [s, socket_handle]
+      - set: [s, { call: [net.socket, "tcp"] }]
+      - call: [net.bind, s, "127.0.0.1", 19876]
+      - call: [net.listen, s, 5]
+      - decl: [c, socket_handle]
+      - set: [c, { call: [net.accept, s] }]
+      - decl: [msg, string]
+      - set: [msg, { call: [net.recv_string, c, 64] }]
+      - print: ["server got: ${msg}"]
+      - call: [net.send_string, c, "pong"]
+      - call: [net.close, c]
+      - call: [net.close, s]
+
+- decl: [srv_thread, thread_handle]
+- set: [srv_thread, { spawn: [net_server] }]
+- call: [time.sleep_ms, 100]
+
+- decl: [client, socket_handle]
+- set: [client, { call: [net.socket, "tcp"] }]
+- call: [net.connect, client, "127.0.0.1", 19876]
+- call: [net.send_string, client, "ping"]
+- decl: [resp, string]
+- set: [resp, { call: [net.recv_string, client, 64] }]
+- print: ["client got: ${resp}"]
+- call: [net.close, client]
+
+# Wait for server thread to finish (ensures its print is flushed)
+- call: [srv_thread.join]
+
+- print: ["net tests done"]
