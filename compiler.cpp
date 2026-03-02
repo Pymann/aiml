@@ -11,6 +11,7 @@
 #include "src/core/path_runtime.h"
 #include "src/sys/net_runtime.h"
 #include "src/sys/tls_runtime.h"
+#include "src/sys/ws_runtime.h"
 #include "src/sys/db_runtime.h"
 
 // LLVM includes
@@ -575,6 +576,19 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_set_verify",      (void*)(intptr_t)aiml_tls_set_verify);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_peer_cert_cn",    (void*)(intptr_t)aiml_tls_peer_cert_cn);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_peer_cert_valid", (void*)(intptr_t)aiml_tls_peer_cert_valid);
+
+    // ws/wss namespace (WebSocket — RFC 6455, from scratch)
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_connect",      (void*)(intptr_t)aiml_ws_connect);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_wss_connect",     (void*)(intptr_t)aiml_wss_connect);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_server",       (void*)(intptr_t)aiml_ws_server);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_wss_server",      (void*)(intptr_t)aiml_wss_server);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_accept",       (void*)(intptr_t)aiml_ws_accept);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_send",         (void*)(intptr_t)aiml_ws_send);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_send_binary",  (void*)(intptr_t)aiml_ws_send_binary);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_recv",         (void*)(intptr_t)aiml_ws_recv);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_ping",         (void*)(intptr_t)aiml_ws_ping);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_close",        (void*)(intptr_t)aiml_ws_close);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_fd",           (void*)(intptr_t)aiml_ws_fd);
 
     // db namespace (AionDB)
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_open",          (void*)(intptr_t)aiml_db_store_open);

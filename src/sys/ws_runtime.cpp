@@ -1,0 +1,567 @@
+#include "ws_runtime.h"
+
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+
+#include <sys/socket.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <unistd.h>
+#include <strings.h>    // strncasecmp
+
+#include <cstring>
+#include <cstdlib>
+#include <cstdio>
+#include <cstdint>
+#include <ctime>
+#include <mutex>
+#include <signal.h>
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SHA-1  (FIPS 180-4 / RFC 3174)  — no external dependency
+// ══════════════════════════════════════════════════════════════════════════════
+
+static inline uint32_t rot32(uint32_t x, int n) { return (x << n) | (x >> (32 - n)); }
+
+static void sha1_compress(uint32_t h[5], const uint8_t blk[64]) {
+    uint32_t w[80];
+    for (int i = 0; i < 16; i++)
+        w[i] = (uint32_t(blk[i*4])   << 24) | (uint32_t(blk[i*4+1]) << 16)
+             | (uint32_t(blk[i*4+2]) <<  8) |  uint32_t(blk[i*4+3]);
+    for (int i = 16; i < 80; i++)
+        w[i] = rot32(w[i-3] ^ w[i-8] ^ w[i-14] ^ w[i-16], 1);
+
+    uint32_t a=h[0], b=h[1], c=h[2], d=h[3], e=h[4];
+    for (int i = 0; i < 80; i++) {
+        uint32_t f, k;
+        if      (i < 20) { f = (b & c) | (~b & d);          k = 0x5A827999u; }
+        else if (i < 40) { f = b ^ c ^ d;                   k = 0x6ED9EBA1u; }
+        else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDCu; }
+        else             { f = b ^ c ^ d;                   k = 0xCA62C1D6u; }
+        uint32_t t = rot32(a, 5) + f + e + k + w[i];
+        e = d; d = c; c = rot32(b, 30); b = a; a = t;
+    }
+    h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
+}
+
+static void sha1(const uint8_t* data, size_t len, uint8_t out[20]) {
+    uint32_t h[5] = { 0x67452301u, 0xEFCDAB89u, 0x98BADCFEu, 0x10325476u, 0xC3D2E1F0u };
+
+    size_t i = 0;
+    for (; i + 64 <= len; i += 64) sha1_compress(h, data + i);
+
+    uint8_t blk[64] = {};
+    size_t rem = len - i;
+    memcpy(blk, data + i, rem);
+    blk[rem] = 0x80;
+    if (rem >= 56) { sha1_compress(h, blk); memset(blk, 0, 64); }
+
+    uint64_t bits = uint64_t(len) * 8;
+    for (int j = 0; j < 8; j++) blk[56 + j] = (bits >> (56 - j * 8)) & 0xFF;
+    sha1_compress(h, blk);
+
+    for (int j = 0; j < 5; j++) {
+        out[j*4]   = (h[j] >> 24) & 0xFF;
+        out[j*4+1] = (h[j] >> 16) & 0xFF;
+        out[j*4+2] = (h[j] >>  8) & 0xFF;
+        out[j*4+3] =  h[j]        & 0xFF;
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Base64 encode  — no external dependency
+// ══════════════════════════════════════════════════════════════════════════════
+
+static const char B64T[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+// out must be at least ceil(len/3)*4 + 1 bytes
+static void b64_encode(const uint8_t* in, size_t len, char* out) {
+    size_t i = 0, j = 0;
+    for (; i + 2 < len; i += 3) {
+        out[j++] = B64T[(in[i]   >> 2) & 0x3F];
+        out[j++] = B64T[((in[i]   & 0x03) << 4) | ((in[i+1] >> 4) & 0x0F)];
+        out[j++] = B64T[((in[i+1] & 0x0F) << 2) | ((in[i+2] >> 6) & 0x03)];
+        out[j++] = B64T[ in[i+2] & 0x3F];
+    }
+    if (i < len) {
+        out[j++] = B64T[(in[i] >> 2) & 0x3F];
+        if (i + 1 < len) {
+            out[j++] = B64T[((in[i] & 0x03) << 4) | ((in[i+1] >> 4) & 0x0F)];
+            out[j++] = B64T[ (in[i+1] & 0x0F) << 2];
+        } else {
+            out[j++] = B64T[(in[i] & 0x03) << 4];
+            out[j++] = '=';
+        }
+        out[j++] = '=';
+    }
+    out[j] = '\0';
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// WebSocket handshake helpers
+// ══════════════════════════════════════════════════════════════════════════════
+
+static const char WS_GUID[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+// Compute Sec-WebSocket-Accept from client's Sec-WebSocket-Key
+static void ws_accept_key(const char* client_key, char out[29]) {
+    size_t klen = strlen(client_key);
+    size_t glen = sizeof(WS_GUID) - 1;
+    uint8_t* cat = (uint8_t*)malloc(klen + glen);
+    memcpy(cat, client_key, klen);
+    memcpy(cat + klen, WS_GUID, glen);
+    uint8_t hash[20];
+    sha1(cat, klen + glen, hash);
+    free(cat);
+    b64_encode(hash, 20, out);
+}
+
+// Generate a random 16-byte client key, base64-encoded
+static void ws_gen_key(char out[25]) {
+    uint8_t raw[16];
+    FILE* f = fopen("/dev/urandom", "rb");
+    if (f) { fread(raw, 1, 16, f); fclose(f); }
+    else   { for (int i = 0; i < 16; i++) raw[i] = (uint8_t)(rand() >> 3); }
+    b64_encode(raw, 16, out);
+}
+
+// Simple PRNG for mask keys (seeded once from time)
+static uint32_t ws_next_mask() {
+    static std::once_flag flag;
+    std::call_once(flag, [] { srand((unsigned)time(nullptr)); });
+    return ((uint32_t)rand() << 16) ^ (uint32_t)rand();
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Internal struct
+// ══════════════════════════════════════════════════════════════════════════════
+
+struct AimlWs {
+    int      fd;
+    SSL*     ssl;            // null = plain TCP
+    SSL_CTX* ctx;            // server listener holds CTX here; client SSL_CTX freed after connect
+    bool     is_listener;    // true = server listen socket
+    bool     is_client_side; // true = WS client role (must mask outgoing frames)
+};
+
+static AimlWs* to_ws(void* p) { return static_cast<AimlWs*>(p); }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Low-level I/O (unified TCP / TLS)
+// ══════════════════════════════════════════════════════════════════════════════
+
+static int ws_read_n(AimlWs* ws, void* buf, int n) {
+    int done = 0;
+    while (done < n) {
+        int r = ws->ssl
+            ? SSL_read(ws->ssl, (char*)buf + done, n - done)
+            : (int)::recv(ws->fd, (char*)buf + done, n - done, 0);
+        if (r <= 0) return -1;
+        done += r;
+    }
+    return done;
+}
+
+static int ws_write_n(AimlWs* ws, const void* buf, int n) {
+    int done = 0;
+    while (done < n) {
+        int r = ws->ssl
+            ? SSL_write(ws->ssl, (const char*)buf + done, n - done)
+            : (int)::send(ws->fd, (const char*)buf + done, n - done, MSG_NOSIGNAL);
+        if (r <= 0) return -1;
+        done += r;
+    }
+    return done;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HTTP header helpers
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Read until \r\n\r\n; returns malloc'd string (caller frees)
+static char* read_http_head(AimlWs* ws) {
+    char* buf = (char*)malloc(8193);
+    int pos = 0;
+    while (pos < 8192) {
+        char c;
+        if (ws_read_n(ws, &c, 1) < 0) { free(buf); return nullptr; }
+        buf[pos++] = c;
+        if (pos >= 4 && buf[pos-4]=='\r' && buf[pos-3]=='\n'
+                     && buf[pos-2]=='\r' && buf[pos-1]=='\n') {
+            buf[pos] = '\0';
+            return buf;
+        }
+    }
+    free(buf);
+    return nullptr;
+}
+
+// Find header value (case-insensitive name); returns malloc'd string (caller frees)
+static char* hdr_get(const char* hdrs, const char* name) {
+    size_t nlen = strlen(name);
+    // Skip request/status line
+    const char* p = strstr(hdrs, "\r\n");
+    if (!p) return nullptr;
+    p += 2;
+    while (*p && !(*p == '\r' && *(p+1) == '\n' && *(p+2) == '\0')) {
+        if (strncasecmp(p, name, nlen) == 0 && p[nlen] == ':') {
+            const char* v = p + nlen + 1;
+            while (*v == ' ' || *v == '\t') v++;
+            const char* e = strstr(v, "\r\n");
+            if (!e) e = v + strlen(v);
+            while (e > v && (e[-1] == ' ' || e[-1] == '\t')) e--;
+            size_t vl = (size_t)(e - v);
+            char* out = (char*)malloc(vl + 1);
+            memcpy(out, v, vl);
+            out[vl] = '\0';
+            return out;
+        }
+        const char* nl = strstr(p, "\r\n");
+        if (!nl) break;
+        p = nl + 2;
+    }
+    return nullptr;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// HTTP Upgrade handshake
+// ══════════════════════════════════════════════════════════════════════════════
+
+static int ws_client_handshake(AimlWs* ws, const char* host, int32_t port, const char* path) {
+    char key[25];
+    ws_gen_key(key);
+
+    char req[1024];
+    snprintf(req, sizeof(req),
+        "GET %s HTTP/1.1\r\n"
+        "Host: %s:%d\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: %s\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n",
+        path, host, port, key);
+
+    if (ws_write_n(ws, req, (int)strlen(req)) < 0) return -1;
+
+    char* resp = read_http_head(ws);
+    if (!resp) return -1;
+    bool ok = strncmp(resp, "HTTP/1.1 101", 12) == 0;
+    free(resp);
+    return ok ? 0 : -1;
+}
+
+static int ws_server_handshake(AimlWs* ws) {
+    char* req = read_http_head(ws);
+    if (!req) return -1;
+
+    char* client_key = hdr_get(req, "Sec-WebSocket-Key");
+    free(req);
+    if (!client_key) return -1;
+
+    char accept[29];
+    ws_accept_key(client_key, accept);
+    free(client_key);
+
+    char resp[512];
+    snprintf(resp, sizeof(resp),
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Accept: %s\r\n"
+        "\r\n",
+        accept);
+
+    return ws_write_n(ws, resp, (int)strlen(resp)) > 0 ? 0 : -1;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RFC 6455 frame codec
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// Frame layout:
+//   [0] FIN(1) RSV(3) Opcode(4)
+//   [1] MASK(1) Payload-len(7)   [126→next 2B, 127→next 8B]
+//   [mask key 4B if MASK=1]
+//   [payload]
+//
+// Opcodes: 0=continuation, 1=text, 2=binary, 8=close, 9=ping, 0xA=pong
+
+static int ws_send_frame(AimlWs* ws, uint8_t opcode,
+                         const char* data, size_t len, bool masked) {
+    uint8_t hdr[14]; int hl = 0;
+    hdr[hl++] = 0x80 | opcode;          // FIN=1
+
+    uint8_t mbit = masked ? 0x80 : 0;
+    if      (len < 126)   { hdr[hl++] = mbit | (uint8_t)len; }
+    else if (len < 65536) { hdr[hl++] = mbit | 126;
+                            hdr[hl++] = (len >> 8) & 0xFF;
+                            hdr[hl++] =  len       & 0xFF; }
+    else                  { hdr[hl++] = mbit | 127;
+                            for (int i = 7; i >= 0; i--)
+                                hdr[hl++] = (len >> (i * 8)) & 0xFF; }
+
+    uint8_t mk[4] = {};
+    if (masked) {
+        uint32_t r = ws_next_mask();
+        mk[0] = r; mk[1] = r >> 8; mk[2] = r >> 16; mk[3] = r >> 24;
+        hdr[hl++] = mk[0]; hdr[hl++] = mk[1];
+        hdr[hl++] = mk[2]; hdr[hl++] = mk[3];
+    }
+
+    if (ws_write_n(ws, hdr, hl) < 0) return -1;
+    if (len == 0) return 0;
+
+    if (!masked) return ws_write_n(ws, data, (int)len) < 0 ? -1 : 0;
+
+    // Masked: XOR payload in 4 KB chunks, send each chunk immediately
+    char chunk[4096];
+    size_t sent = 0;
+    while (sent < len) {
+        size_t batch = len - sent;
+        if (batch > sizeof(chunk)) batch = sizeof(chunk);
+        for (size_t i = 0; i < batch; i++)
+            chunk[i] = data[sent + i] ^ mk[(sent + i) & 3];
+        if (ws_write_n(ws, chunk, (int)batch) < 0) return -1;
+        sent += batch;
+    }
+    return 0;
+}
+
+// Returns malloc'd payload (caller frees), sets out_opcode and out_len
+static char* ws_recv_frame_raw(AimlWs* ws, uint8_t* out_opcode, size_t* out_len) {
+    uint8_t h2[2];
+    if (ws_read_n(ws, h2, 2) < 0) return nullptr;
+
+    uint8_t opcode  = h2[0] & 0x0F;
+    bool    masked  = (h2[1] & 0x80) != 0;
+    uint64_t plen   = h2[1] & 0x7F;
+
+    if (plen == 126) {
+        uint8_t e[2];
+        if (ws_read_n(ws, e, 2) < 0) return nullptr;
+        plen = ((uint64_t)e[0] << 8) | e[1];
+    } else if (plen == 127) {
+        uint8_t e[8];
+        if (ws_read_n(ws, e, 8) < 0) return nullptr;
+        plen = 0;
+        for (int i = 0; i < 8; i++) plen = (plen << 8) | e[i];
+    }
+
+    uint8_t mk[4] = {};
+    if (masked && ws_read_n(ws, mk, 4) < 0) return nullptr;
+
+    char* payload = (char*)malloc(plen + 1);
+    if (!payload) return nullptr;
+
+    if (plen > 0 && ws_read_n(ws, payload, (int)plen) < 0) {
+        free(payload); return nullptr;
+    }
+
+    if (masked)
+        for (size_t i = 0; i < plen; i++) payload[i] ^= mk[i & 3];
+
+    payload[plen] = '\0';
+    *out_opcode = opcode;
+    *out_len    = (size_t)plen;
+    return payload;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TCP + OpenSSL helpers
+// ══════════════════════════════════════════════════════════════════════════════
+
+static int tcp_connect(const char* host, int32_t port) {
+    char ps[16];
+    snprintf(ps, sizeof(ps), "%d", port);
+    struct addrinfo hints{}, *res = nullptr;
+    hints.ai_family   = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host, ps, &hints, &res) != 0 || !res) return -1;
+    int fd = ::socket(res->ai_family, SOCK_STREAM, 0);
+    if (fd < 0) { freeaddrinfo(res); return -1; }
+    int rc = ::connect(fd, res->ai_addr, res->ai_addrlen);
+    freeaddrinfo(res);
+    if (rc != 0) { ::close(fd); return -1; }
+    return fd;
+}
+
+static std::once_flag g_ws_ssl_once;
+static void ws_ssl_init() {
+    signal(SIGPIPE, SIG_IGN); // SSL_write has no MSG_NOSIGNAL equivalent
+    OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS |
+                     OPENSSL_INIT_LOAD_CRYPTO_STRINGS, nullptr);
+}
+
+// Also ignore SIGPIPE for plain ws:// (early init)
+static std::once_flag g_ws_sigpipe_once;
+static void ws_ignore_sigpipe() { signal(SIGPIPE, SIG_IGN); }
+
+static int tcp_server_fd(const char* host, int32_t port) {
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    int yes = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons((uint16_t)port);
+    if (!host || strcmp(host, "0.0.0.0") == 0)
+        addr.sin_addr.s_addr = INADDR_ANY;
+    else
+        inet_pton(AF_INET, host, &addr.sin_addr);
+    if (bind(fd, (sockaddr*)&addr, sizeof(addr)) < 0 ||
+        listen(fd, 128) < 0) { ::close(fd); return -1; }
+    return fd;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Public API
+// ══════════════════════════════════════════════════════════════════════════════
+
+extern "C" void* aiml_ws_connect(const char* host, int32_t port, const char* path) {
+    std::call_once(g_ws_sigpipe_once, ws_ignore_sigpipe);
+    int fd = tcp_connect(host, port);
+    if (fd < 0) return nullptr;
+    AimlWs* ws = new AimlWs{fd, nullptr, nullptr, false, true};
+    if (ws_client_handshake(ws, host, port, path ? path : "/") < 0) {
+        ::close(fd); delete ws; return nullptr;
+    }
+    return ws;
+}
+
+extern "C" void* aiml_wss_connect(const char* host, int32_t port, const char* path) {
+    std::call_once(g_ws_ssl_once, ws_ssl_init);
+    int fd = tcp_connect(host, port);
+    if (fd < 0) return nullptr;
+
+    SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+    SSL_CTX_set_default_verify_paths(ctx);
+    SSL* ssl = SSL_new(ctx);
+    SSL_set_fd(ssl, fd);
+    SSL_set_tlsext_host_name(ssl, host);
+    SSL_set1_host(ssl, host);
+
+    if (SSL_connect(ssl) != 1) {
+        SSL_free(ssl); SSL_CTX_free(ctx); ::close(fd); return nullptr;
+    }
+    // ctx is no longer needed after connect; free it to save memory
+    SSL_CTX_free(ctx);
+
+    AimlWs* ws = new AimlWs{fd, ssl, nullptr, false, true};
+    if (ws_client_handshake(ws, host, port, path ? path : "/") < 0) {
+        SSL_free(ssl); ::close(fd); delete ws; return nullptr;
+    }
+    return ws;
+}
+
+extern "C" void* aiml_ws_server(const char* host, int32_t port) {
+    std::call_once(g_ws_sigpipe_once, ws_ignore_sigpipe);
+    int fd = tcp_server_fd(host, port);
+    if (fd < 0) return nullptr;
+    return new AimlWs{fd, nullptr, nullptr, true, false};
+}
+
+extern "C" void* aiml_wss_server(const char* host, int32_t port,
+                                  const char* cert, const char* key) {
+    std::call_once(g_ws_ssl_once, ws_ssl_init);
+    SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
+    if (!ctx) return nullptr;
+    SSL_CTX_use_certificate_file(ctx, cert, SSL_FILETYPE_PEM);
+    SSL_CTX_use_PrivateKey_file(ctx, key, SSL_FILETYPE_PEM);
+
+    int fd = tcp_server_fd(host, port);
+    if (fd < 0) { SSL_CTX_free(ctx); return nullptr; }
+    // ctx stored in listener socket; used when accepting clients
+    return new AimlWs{fd, nullptr, ctx, true, false};
+}
+
+extern "C" void* aiml_ws_accept(void* srv_ptr) {
+    if (!srv_ptr) return nullptr;
+    AimlWs* srv = to_ws(srv_ptr);
+
+    struct sockaddr_in addr{};
+    socklen_t len = sizeof(addr);
+    int cfd = ::accept(srv->fd, (sockaddr*)&addr, &len);
+    if (cfd < 0) return nullptr;
+
+    SSL* ssl = nullptr;
+    if (srv->ctx) {
+        // wss: do TLS handshake first
+        ssl = SSL_new(srv->ctx);
+        SSL_set_fd(ssl, cfd);
+        if (SSL_accept(ssl) != 1) {
+            SSL_free(ssl); ::close(cfd); return nullptr;
+        }
+    }
+
+    AimlWs* client = new AimlWs{cfd, ssl, nullptr, false, false};
+    if (ws_server_handshake(client) < 0) {
+        if (ssl) SSL_free(ssl);
+        ::close(cfd); delete client; return nullptr;
+    }
+    return client;
+}
+
+extern "C" int aiml_ws_send(void* p, const char* text) {
+    if (!p || !text) return -1;
+    AimlWs* ws = to_ws(p);
+    return ws_send_frame(ws, 0x1, text, strlen(text), ws->is_client_side);
+}
+
+extern "C" int aiml_ws_send_binary(void* p, void* buf_ptr) {
+    if (!p || !buf_ptr) return -1;
+    struct AimlBuf { int32_t size, cap, rIdx, wIdx; char* data; };
+    AimlWs*  ws  = to_ws(p);
+    AimlBuf* buf = (AimlBuf*)buf_ptr;
+    if (!buf->data || buf->wIdx <= 0) return 0;
+    return ws_send_frame(ws, 0x2, buf->data, (size_t)buf->wIdx, ws->is_client_side);
+}
+
+extern "C" char* aiml_ws_recv(void* p) {
+    if (!p) return nullptr;
+    AimlWs* ws = to_ws(p);
+    while (true) {
+        uint8_t opcode; size_t len;
+        char* payload = ws_recv_frame_raw(ws, &opcode, &len);
+        if (!payload) return nullptr;
+        switch (opcode) {
+            case 0x0:  // continuation
+            case 0x1:  // text
+            case 0x2:  // binary
+                return payload;
+            case 0x8:  // close — echo close frame, return null
+                ws_send_frame(ws, 0x8, "", 0, ws->is_client_side);
+                free(payload); return nullptr;
+            case 0x9:  // ping → auto-pong
+                ws_send_frame(ws, 0xA, payload, len, ws->is_client_side);
+                free(payload); continue;
+            case 0xA:  // pong — discard
+                free(payload); continue;
+            default:
+                free(payload); return nullptr;
+        }
+    }
+}
+
+extern "C" int aiml_ws_ping(void* p) {
+    if (!p) return -1;
+    AimlWs* ws = to_ws(p);
+    return ws_send_frame(ws, 0x9, "", 0, ws->is_client_side);
+}
+
+extern "C" int aiml_ws_close(void* p) {
+    if (!p) return -1;
+    AimlWs* ws = to_ws(p);
+    if (!ws->is_listener)
+        ws_send_frame(ws, 0x8, "\x03\xE8", 2, ws->is_client_side); // close code 1000
+    if (ws->ssl) { SSL_shutdown(ws->ssl); SSL_free(ws->ssl); }
+    if (ws->ctx) SSL_CTX_free(ws->ctx);
+    ::close(ws->fd);
+    delete ws;
+    return 0;
+}
+
+extern "C" int32_t aiml_ws_fd(void* p) {
+    return p ? to_ws(p)->fd : -1;
+}
