@@ -1,14 +1,9 @@
 # Hot-Reload Test — sys.bundle + sys.exec version guard
 #
-# Current output (compileYamlChunk stub — no actual JIT re-compilation):
-#   v1 rc: 1       (hr_worker v1 compiled at startup, called via fptable)
-#   v2 rc: 1       (hot-reload attempted, deferred — fptable unchanged)
-#   v1 skip rc: 1  (v1 <= live v1 → guard skips, fptable unchanged)
-#
-# Expected output (after compileYamlChunk is wired):
-#   v1 rc: 1
-#   v2 rc: 2
-#   v1 skip rc: 2
+# Expected output:
+#   v1 rc: 1       (hr_worker v1 called via fptable)
+#   v2 rc: 2       (hot-reload: fptable swapped to v2 code)
+#   v1 skip rc: 2  (v1 <= live v2 → version guard skips, v2 stays active)
 
 # Define worker v1
 - def:
