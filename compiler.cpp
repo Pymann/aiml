@@ -10,6 +10,7 @@
 #include "src/sys/process_runtime.h"
 #include "src/core/path_runtime.h"
 #include "src/sys/net_runtime.h"
+#include "src/sys/tls_runtime.h"
 #include "src/sys/db_runtime.h"
 
 // LLVM includes
@@ -555,6 +556,25 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_net_close",        (void*)(intptr_t)aiml_net_close);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_net_fd",           (void*)(intptr_t)aiml_net_fd);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_net_set_timeout",  (void*)(intptr_t)aiml_net_set_timeout);
+
+    // tls namespace (OpenSSL TLS sockets)
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_socket",          (void*)(intptr_t)aiml_tls_socket);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_connect",         (void*)(intptr_t)aiml_tls_connect);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_bind",            (void*)(intptr_t)aiml_tls_bind);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_listen",          (void*)(intptr_t)aiml_tls_listen);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_accept",          (void*)(intptr_t)aiml_tls_accept);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_send",            (void*)(intptr_t)aiml_tls_send);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_recv",            (void*)(intptr_t)aiml_tls_recv);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_send_string",     (void*)(intptr_t)aiml_tls_send_string);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_recv_string",     (void*)(intptr_t)aiml_tls_recv_string);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_close",           (void*)(intptr_t)aiml_tls_close);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_fd",              (void*)(intptr_t)aiml_tls_fd);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_set_timeout",     (void*)(intptr_t)aiml_tls_set_timeout);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_set_cert",        (void*)(intptr_t)aiml_tls_set_cert);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_set_ca",          (void*)(intptr_t)aiml_tls_set_ca);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_set_verify",      (void*)(intptr_t)aiml_tls_set_verify);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_peer_cert_cn",    (void*)(intptr_t)aiml_tls_peer_cert_cn);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tls_peer_cert_valid", (void*)(intptr_t)aiml_tls_peer_cert_valid);
 
     // db namespace (AionDB)
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_open",          (void*)(intptr_t)aiml_db_store_open);
