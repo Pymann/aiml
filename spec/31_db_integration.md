@@ -130,28 +130,107 @@ woanders. Das ist **cache-feindlich** und damit langsam.
 
 ECS trennt **Identität**, **Daten** und **Logik** vollständig:
 
-- **Entity**: Nur eine eindeutige ID (ein `i32`). Eine Entity *ist* nichts — sie *hat* Komponenten.
+- **Entity**: Eine eindeutige ID. Eine Entity *ist* nichts — sie *hat* Komponenten.
 - **Component**: Reine Datenstruct, keine Methoden. `Position`, `Velocity`, `Health` sind Components.
 - **System**: Eine Funktion, die alle Entities mit bestimmten Components abarbeitet.
 
+#### `model` vs `class` für ECS-Komponenten
+
+In AIML verwendet ECS **`model`-Typen** statt `class`. Der Unterschied:
+
+| | `class` | `model` |
+|--|---------|---------|
+| Methoden | ja | **nein** (pure data) |
+| Vererbung | ja | nein |
+| ECS / `db.run_system` | nein | **ja** |
+| Column-Layout default | nein | ja |
+
 ```aiml
-# Komponenten sind normale AIML-Klassen (nur Daten, keine Methoden):
-- class:
+# ECS-Komponenten als model (pure data, keine Methoden):
+- model:
     name: Position
     members: [[x, f32], [y, f32]]
 
-- class:
+- model:
     name: Velocity
     members: [[dx, f32], [dy, f32]]
 
-- class:
+- model:
     name: Health
     members: [[hp, i32], [max_hp, i32]]
 
-- class:
+- model:
     name: Sprite
     members: [[texture_id, i32], [scale, f32]]
 ```
+
+#### `primary_key` — natürliche Entity-Identität
+
+Standardmäßig ist die Entity-ID der **Slot-Index** im Store (ein `i32`). Das ist der
+schnellste Pfad (O(1) Pointer-Arithmetik). Wenn Entities einen natürlichen Schlüssel
+haben (UUID, Username, IP-Adresse…), kann man `primary_key` im Model angeben:
+
+```aiml
+# Kein primary_key → Entity-ID = Slot-Index (i32), schnellster Pfad
+- model:
+    name: Particle
+    members: [[x, f32], [y, f32], [vx, f32], [vy, f32]]
+
+# Mit primary_key → Entity-ID = uuid (string), intern HashMap<string, slot>
+- model:
+    name: Player
+    primary_key: uuid
+    members: [[uuid, string], [score, i32], [hp, i32]]
+```
+
+Der Typ von `eid` in System-Funktionen wird automatisch aus `primary_key` abgeleitet:
+- Kein `primary_key` → `eid: i32` (Slot-Index)
+- `primary_key: uuid` (string) → `eid: string`
+
+#### `db.run_system` — der ECS-Loop
+
+Der Compiler liest die Signatur der System-Funktion und leitet daraus ab, welche
+Stores gejoint werden müssen. Die Schleife wird direkt zu LLVM IR kompiliert —
+kein Runtime-Dispatch, kein String-Parsing:
+
+```aiml
+- decl: [positions,  Store<Position>]
+- decl: [velocities, Store<Velocity>]
+- decl: [health,     Store<Health>]
+- set:  [positions,  { call: [db.open, "positions"] }]
+- set:  [velocities, { call: [db.open, "velocities"] }]
+- set:  [health,     { call: [db.open, "health"] }]
+
+# Movement-System: kein eid nötig — reine Datentransformation
+- fn:
+    name: move_system
+    args: [[pos, ptr<Position>], [vel, ptr<Velocity>]]
+    body:
+      - set: [pos.x, { call: [pos.x + vel.dx] }]
+      - set: [pos.y, { call: [pos.y + vel.dy] }]
+
+# Damage-System: eid nötig — löscht Entity aus mehreren Stores
+- fn:
+    name: damage_system
+    args: [[eid, i32], [h, ptr<Health>]]
+    body:
+      - if:
+          condition: { call: [h.hp <= 0] }
+          body:
+            - call: [health.delete, eid]
+            - call: [positions.delete, eid]
+            - call: [velocities.delete, eid]
+
+# Compiler sieht ptr<Position> + ptr<Velocity> → iteriert über positions ∩ velocities
+- call: [db.run_system, move_system, positions, velocities]
+
+# Compiler sieht nur ptr<Health> → iteriert über health allein
+- call: [db.run_system, damage_system, health]
+```
+
+`db.run_system` iteriert über alle Entity-IDs, die in **allen** übergebenen Stores
+vorhanden sind (Intersection). Für jeden Treffer wird die System-Funktion mit den
+entsprechenden Component-Zeigern aufgerufen — zero-copy, keine Allokation.
 
 Eine `Entity` ist jetzt nur noch eine ID. Die Kombination ihrer Components beschreibt,
 was sie ist:
@@ -162,10 +241,6 @@ was sie ist:
 | 2 (Enemy) | ✓        | ✓        | ✓      | ✓      |        |
 | 3 (Bullet)| ✓        | ✓        |        | ✓      | ✓      |
 | 4 (Particle)| ✓      | ✓        |        | ✓      |        |
-
-Das **Movement-System** fragt einfach: "Gib mir alle Entities mit `Position` UND `Velocity`"
-— und erhält IDs 1, 2, 3, 4. Es addiert Velocity zu Position. Es braucht nicht zu wissen,
-ob das ein Player, Enemy oder Bullet ist.
 
 #### Warum ist ECS schnell?
 
@@ -186,7 +261,8 @@ Speicher mit ECS (Column-Layout):
 → SIMD kann 4 pos_x-Werte auf einmal verarbeiten (128-bit Register)
 ```
 
-In AionDB aktiviert man das Column-Layout via `{layout: "column"}`. Der Rest ist automatisch.
+`model`-Typen aktivieren Column-Layout automatisch. Bei `class`-basierten Stores
+muss es explizit via `{layout: "column"}` angegeben werden.
 
 ---
 
@@ -304,50 +380,66 @@ Er ist schneller als brute-force (O(log N) statt O(N)) und skaliert auf Millione
 
 ---
 
-## 4. Query-DSL
+## 4. Abfragen
 
-Statt SQL-Text zu parsen, verwendet AionDB eine **chainbare, typsichere API**.
-Der Abfrageplan wird zur Compile-Zeit analysiert — der Compiler kann Indizes nutzen
-und unnötige Scans vermeiden.
+AionDB vermeidet Runtime-Parsing vollständig. Es gibt zwei Abfragemodi:
+
+- **`db.query`** — für einzelne Stores mit optionalem Filter und Sortierung
+- **`db.run_system`** — für ECS-Queries über mehrere Stores (siehe §3.2)
+
+### 4.1 `db.query` — Einzel-Store-Abfragen
+
+Das `{where: ...}`-Argument nimmt eine **Funktion** entgegen, keinen String.
+Die Funktion wird zu einem Funktionszeiger compiliert und per Element aufgerufen —
+kein Parser, direktes IR:
 
 ```aiml
-# Alle aktiven Entities mit HP > 0, sortiert nach Position, maximal 100 Stück:
+# Predicate-Funktion — vom Compiler zu LLVM IR compiliert:
+- fn:
+    name: is_alive
+    args: [[e, ptr<Entity>]]
+    return: i32
+    body:
+      - return: { call: [e.hp > 0] }
+
+- fn:
+    name: is_active_enemy
+    args: [[e, ptr<Entity>]]
+    return: i32
+    body:
+      - return: { call: [e.hp > 0 and e.ai_state == 2] }
+
+# Alle lebenden Entities, sortiert nach pos_x, maximal 100:
 - decl: [alive, list<ptr<Entity>>]
-- set:  [alive, {
-    call: [
-      db.query, "entities",
-      {where: "hp > 0"},
-      {order_by: "pos_x"},
-      {limit: 100}
-    ]
-  }]
+- set:  [alive, { call: [db.query, entities,
+    {where: is_alive},
+    {order_by: "pos_x"},
+    {limit: 100}
+  ]}]
 ```
 
-### 4.1 Verfügbare Operatoren
+### 4.2 Verfügbare Operatoren
 
 | Operator | Beschreibung | Beispiel |
 |----------|-------------|---------|
-| `where`  | Filterbedingung | `{where: "hp > 0 and ai_state == 2"}` |
-| `order_by` | Sortierung | `{order_by: "pos_x", dir: "asc"}` |
+| `where`  | Filterfunktion `(ptr<T>) → i32` | `{where: is_alive}` |
+| `order_by` | Feldname (Compile-Zeit validiert) | `{order_by: "pos_x", dir: "asc"}` |
 | `limit` | Maximale Ergebnisse | `{limit: 100}` |
 | `offset` | Ergebnisse überspringen | `{offset: 50}` |
-| `select` | Nur bestimmte Felder | `{select: ["id", "hp"]}` |
-| `join`   | Zwei Stores verbinden | `{join: "inventory", on: "id"}` |
-| `at`     | Time-Travel-Snapshot | `{at: 1000}` |
+| `at`     | Time-Travel-Snapshot (mit TimeSeries) | `{at: 1000}` |
 
-### 4.2 ECS-Query: Archetype-Suche
+**Hinweis:** `order_by` und `select` verwenden Feldnamen als Strings — diese werden
+jedoch **zur Compile-Zeit** gegen das Schema von `T` validiert. Ein unbekanntes Feld
+ist ein Compilerfehler, kein Runtime-Fehler.
 
-Für ECS verwendet man `db.archetype`, das alle Entities findet, die eine bestimmte
-**Kombination von Komponenten** besitzen:
+### 4.3 ECS-Query: `db.run_system`
+
+Für Queries über mehrere Stores (ECS-Archetype-Intersection) verwendet man
+`db.run_system`. Siehe §3.2 für die vollständige Erklärung mit Beispielen.
 
 ```aiml
-# Alle Entities mit Position AND Velocity (Movement-System):
-- decl: [movable, list<i32>]   # Gibt Entity-IDs zurück
-- set:  [movable, { call: [db.archetype, ["Position", "Velocity"]] }]
-
-# Alle Entities mit Health (für Damage-System):
-- decl: [mortal, list<i32>]
-- set:  [mortal, { call: [db.archetype, ["Health"]] }]
+# Compiler sieht ptr<Position> + ptr<Velocity> → iteriert über Intersection
+- call: [db.run_system, move_system, positions, velocities]
 ```
 
 ---
@@ -469,25 +561,52 @@ Erkennt es eine höhere Version mit neuen Feldern, wendet es die **In-Place-Migr
 ### 8.1 Game Loop mit ECS
 
 ```aiml
-# --- Schema ---
-- class:
-    name: Entity
-    version: 1
-    members:
-      - [id,       i32]
-      - [pos_x,    f32]
-      - [pos_y,    f32]
-      - [vel_x,    f32]
-      - [vel_y,    f32]
-      - [hp,       i32]
-      - [alive,    bool]
+# --- ECS-Komponenten als model (pure data, Column-Layout automatisch) ---
+- model:
+    name: Position
+    members: [[x, f32], [y, f32]]
+
+- model:
+    name: Velocity
+    members: [[dx, f32], [dy, f32]]
+
+- model:
+    name: Health
+    members: [[hp, i32]]
 
 # --- Stores öffnen ---
-- decl: [entities, Store<Entity>]
-- set:  [entities, { call: [db.open, "entities", {layout: "column"}] }]
+- decl: [positions,  Store<Position>]
+- decl: [velocities, Store<Velocity>]
+- decl: [health,     Store<Health>]
+- set:  [positions,  { call: [db.open, "positions"] }]
+- set:  [velocities, { call: [db.open, "velocities"] }]
+- set:  [health,     { call: [db.open, "health"] }]
 
-- decl: [history, TimeSeries<Entity>]
-- set:  [history, { call: [db.open_timeseries, "entity_history"] }]
+- decl: [history, TimeSeries<Health>]
+- set:  [history, { call: [db.open_timeseries, "health_history"] }]
+
+# --- Systeme definieren ---
+
+# Movement-System: kein eid nötig — reine Datentransformation
+# Column-Layout → SIMD verarbeitet 8 pos_x-Werte gleichzeitig
+- fn:
+    name: move_system
+    args: [[pos, ptr<Position>], [vel, ptr<Velocity>]]
+    body:
+      - set: [pos.x, { call: [pos.x + vel.dx] }]
+      - set: [pos.y, { call: [pos.y + vel.dy] }]
+
+# Damage-System: eid nötig — löscht Entity aus mehreren Stores
+- fn:
+    name: damage_system
+    args: [[eid, i32], [h, ptr<Health>]]
+    body:
+      - if:
+          condition: { call: [h.hp <= 0] }
+          body:
+            - call: [health.delete, eid]
+            - call: [positions.delete, eid]
+            - call: [velocities.delete, eid]
 
 # --- Initialisierung: 1000 Enemies spawnen ---
 - decl: [i, i32]
@@ -495,38 +614,29 @@ Erkennt es eine höhere Version mit neuen Feldern, wendet es die **In-Place-Migr
 - while:
     condition: { call: [i < 1000] }
     body:
-      - decl: [e, Entity]
-      - set: [e.id, i]
-      - set: [e.pos_x, { call: [math.random, 0.0, 1000.0] }]
-      - set: [e.hp, 100]
-      - set: [e.alive, true]
-      - call: [entities.insert, e]
+      - decl: [pos, Position]
+      - decl: [vel, Velocity]
+      - decl: [hp,  Health]
+      - set: [pos.x, { call: [math.random, 0.0, 1000.0] }]
+      - set: [vel.dx, 1.0]
+      - set: [hp.hp, 100]
+      - call: [positions.insert,  pos]
+      - call: [velocities.insert, vel]
+      - call: [health.insert,     hp]
       - set: [i, { call: [i + 1] }]
 
 # --- Game Loop ---
-- def:
+- fn:
     name: game_loop
     return: void
     body:
       - call: [db.begin_frame, { call: [time.now] }]
 
-      # Movement-System: alle Entities mit vel_x/vel_y bewegen
-      # (Column-Layout: SIMD verarbeitet 8 pos_x-Werte gleichzeitig)
-      - decl: [movable, list<ptr<Entity>>]
-      - set:  [movable, { call: [db.query, "entities", {where: "alive == true"}] }]
-      - decl: [e, ptr<Entity>]
-      - for: [e, movable]
-        body:
-          - set: [e.pos_x, { call: [e.pos_x + e.vel_x] }]
-          - set: [e.pos_y, { call: [e.pos_y + e.vel_y] }]
+      # Compiler generiert Intersection-Loop: positions ∩ velocities
+      - call: [db.run_system, move_system, positions, velocities]
 
-      # Damage-System: tote Entities markieren
-      - for: [e, movable]
-        body:
-          - if:
-              condition: { call: [e.hp <= 0] }
-              body:
-                - set: [e.alive, false]
+      # Compiler generiert Loop über health allein
+      - call: [db.run_system, damage_system, health]
 
       - call: [db.end_frame]
 ```
@@ -615,9 +725,10 @@ Erkennt es eine höhere Version mit neuen Feldern, wendet es die **In-Place-Migr
 
 | Operation | Komplexität | Notiz |
 |-----------|------------|-------|
-| `store.get(id)` | O(1) | Hash-Index |
+| `store.get(id)` | O(1) | Slot-Index (kein primary_key) oder HashMap-Lookup |
 | `store.insert(v)` | O(1) amortisiert | Append auf aktive Page |
-| `store.query(...)` | O(N) | Kann mit Index O(log N) werden |
+| `db.query(store, ...)` | O(N) | Kann mit Index O(log N) werden |
+| `db.run_system(fn, s1, s2)` | O(min(|s1|,|s2|)) | Intersection via Slot-Bitmap |
 | `kv.get(key)` | O(1) | Hash-Tabelle |
 | `kv.set(key, val)` | O(1) amortisiert | — |
 | `timeseries.at(t)` | O(log N) | Binärsuche auf Timestamps |

@@ -1,0 +1,65 @@
+# Test: db.query with order_by, dir, limit, offset
+# Expected exit code: 0
+
+- class:
+    name: Score
+    members: [[pts, i32]]
+
+- decl: [scores, Store<Score>]
+- set: [scores, { call: [db.open, "scores"] }]
+
+- decl: [s, Score]
+- set: [s.pts, 50]
+- call: [scores.insert, s]
+
+- set: [s.pts, 100]
+- call: [scores.insert, s]
+
+- set: [s.pts, 30]
+- call: [scores.insert, s]
+
+# Ascending by pts → first = 30
+- decl: [asc, list<ptr<Score>>]
+- set: [asc, { call: [db.query, scores, {order_by: pts}] }]
+- decl: [first, ptr<Score>]
+- set: [first, { call: [asc.get, 0] }]
+- print: ["asc first: ${first.pts}"]
+
+# Descending by pts → first = 100
+- decl: [desc, list<ptr<Score>>]
+- set: [desc, { call: [db.query, scores, {order_by: pts}, {dir: desc}] }]
+- set: [first, { call: [desc.get, 0] }]
+- print: ["desc first: ${first.pts}"]
+
+# Descending + limit 2 → [100, 50]; second = 50
+- decl: [top2, list<ptr<Score>>]
+- set: [top2, { call: [db.query, scores, {order_by: pts}, {dir: desc}, {limit: 2}] }]
+- set: [first, { call: [top2.get, 1] }]
+- print: ["top2 second: ${first.pts}"]
+
+# Ascending + offset 1 → skip 30, first of rest = 50
+- decl: [skipped, list<ptr<Score>>]
+- set: [skipped, { call: [db.query, scores, {order_by: pts}, {offset: 1}] }]
+- set: [first, { call: [skipped.get, 0] }]
+- print: ["offset1 first: ${first.pts}"]
+
+# where predicate + order_by desc
+- def:
+    name: above_40
+    args: [[p, ptr<Score>]]
+    return: i32
+    body:
+      - if:
+          condition: { gt: [p.pts, 40] }
+          then:
+            - return: 1
+          else:
+            - return: 0
+
+- decl: [filtered, list<ptr<Score>>]
+- set: [filtered, { call: [db.query, scores, {where: above_40}, {order_by: pts}, {dir: desc}] }]
+- decl: [flen, i32]
+- set: [flen, { call: [filtered.len] }]
+- print: ["filtered len: ${flen}"]
+- set: [first, { call: [filtered.get, 0] }]
+- print: ["filtered first: ${first.pts}"]

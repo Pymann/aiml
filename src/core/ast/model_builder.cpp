@@ -32,6 +32,7 @@ bool ModelBuilder::OnScalar(const std::string& value, const std::string& tag) {
             try { modelNode->version = std::stoull(value); } catch (...) {}
         }
     }
+    else if (currentKey == "primary_key") modelNode->primaryKey = value;
     else if (insideFields) {
         if (currentField.empty()) currentField = value;
         else if (currentType.empty()) currentType = value;

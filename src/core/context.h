@@ -120,6 +120,7 @@ namespace AIML {
 
             bool isInterface = false;
             bool isModel = false;
+            std::string primaryKey;   // empty = slot-index (i32); else field name + type determines eid type
 
             // Builtin dispatch (set for intrinsic types like buffer, process)
             bool isBuiltin = false;
@@ -215,6 +216,21 @@ namespace AIML {
     // When non-empty, the type name of the current set-statement target variable.
     // Used by sys.deserialize to infer the type without an explicit second argument.
     std::string deserializeTargetType;
+
+    // Set by visitCall before dispatching db namespace functions when a
+    // DictLiteralExpr option bag is present (e.g. {persist: true}, {layout: "column"}).
+    bool        dbOpenPersist      = false;
+    bool        dbOpenColumnLayout = false;
+    llvm::Value* dbOpenBasePathVal = nullptr;  // null = default "./aiondb/"
+
+    // Set by visitCall for db.query option bags:
+    // {where: fn_name}, {order_by: "field"}, {dir: "asc"/"desc"}, {limit: N}, {offset: N}
+    std::string dbQueryStoreType;   // type of the first arg (e.g. "Store<Score>") for order_by field lookup
+    std::string dbQueryWhere;       // predicate function name (empty = no filter)
+    std::string dbQueryOrderBy;     // field name (empty = no sort)
+    int32_t     dbQueryOrderDir = 0; // 0 = asc, 1 = desc
+    int32_t     dbQueryLimit    = -1; // -1 = no limit
+    int32_t     dbQueryOffset   = 0;
 
     // Recursively collects all user-defined type names from a type expression.
     // Handles list<T>, map<K,V> (and nesting thereof).  Only names found in

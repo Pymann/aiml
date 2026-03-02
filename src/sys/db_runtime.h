@@ -6,51 +6,81 @@ extern "C" {
 #endif
 
 // ── Store<T> ──────────────────────────────────────────────────────────────────
-// name:      logical store name (for future persistence)
-// type_name: element type name string (e.g. "Entity")
-// elem_size: sizeof(T) in bytes
-// Returns heap-allocated AimlStore* cast to void*, or nullptr on failure.
 void*   aiml_db_store_open(const char* name, const char* type_name, int64_t elem_size);
-
-// insert: memcpy elem into store; returns 1-based id on success, -1 on error
 int32_t aiml_db_store_insert(void* store, const void* elem, int64_t elem_size);
-
-// get: returns zero-copy pointer into store data for given 1-based id, or nullptr
+int32_t aiml_db_store_update(void* store, int32_t id, const void* elem, int64_t elem_size);
 void*   aiml_db_store_get(void* store, int32_t id);
-
-// delete: marks slot as inactive (logical delete, slot not reused in v1)
+// get_by_key: linear scan for elem where field at key_offset matches key_ptr.
+// is_string=1: strcmp; is_string=0: memcmp(key_size bytes).
+void*   aiml_db_store_get_by_key(void* store, const void* key_ptr,
+                                  int32_t key_offset, int32_t key_size, int32_t is_string);
 void    aiml_db_store_delete(void* store, int32_t id);
-
-// len: number of active (non-deleted) elements
 int32_t aiml_db_store_len(void* store);
 
+// ── Store<T> — Persistent (WAL + mmap) ───────────────────────────────────────
+// base_path: directory for .db/.wal files (e.g. "./aiondb/")
+void*   aiml_db_store_open_persist(const char* name, const char* type_name,
+                                    int64_t elem_size, const char* base_path);
+// checkpoint: msync pages + truncate WAL
+int32_t aiml_db_store_checkpoint(void* store);
+// checkpoint_all: checkpoint every persistent store opened in this session
+int32_t aiml_db_checkpoint_all(void);
+
+// ── Store<T> — Iteration helpers (for db.run_system / db.query) ───────────────
+// total:     number of slots ever allocated (1-based loop bound for run_system)
+// is_active: 1 if slot (1-based) is occupied, 0 otherwise
+// get_ptr:   direct pointer to slot data
+int32_t aiml_db_store_total(void* store);
+int32_t aiml_db_store_is_active(void* store, int32_t slot);
+void*   aiml_db_store_get_ptr(void* store, int32_t slot);
+
+// query: iterate store, apply optional predicate, collect results into AimlListRaw.
+// pred_fn: (int32_t)(const void*) — NULL = no filter.
+// ord_off/ord_sz/ord_dir: field offset/size/direction for ordering (-1 = no order).
+// limit/offset: -1/0 = unlimited/no skip.
+void    aiml_db_store_query(void* store, void* pred_fn,
+                             int32_t ord_off, int32_t ord_sz, int32_t ord_dir,
+                             int32_t limit, int32_t offset,
+                             void* result_list);
+
+// ── Store<T> — Column Layout ──────────────────────────────────────────────────
+// n_fields:    number of struct fields
+// field_sizes: array of sizeof per field (compile-time constant, n_fields entries)
+// elem_size:   total sizeof(T)
+void*   aiml_db_store_open_col(const char* name, const char* type_name,
+                                int32_t n_fields, const int32_t* field_sizes,
+                                int64_t elem_size);
+
 // ── Kv<K:V> ───────────────────────────────────────────────────────────────────
-// val_size: sizeof(V) — for string keys, val_size is passed as 0 (string stored as i8*)
 void*   aiml_db_kv_open(const char* name, int64_t val_size);
-
-// set: copies val_size bytes from val under key (val_size==0 → stores i8* pointer)
+// Persistent Kv: WAL-backed append-only log (.kvwal file).
+void*   aiml_db_kv_open_persist(const char* name, int64_t val_size, const char* base_path);
+int32_t aiml_db_kv_checkpoint(void* kv);  // compact WAL to current state
 void    aiml_db_kv_set(void* kv, const char* key, const void* val, int64_t val_size);
-
-// get: returns pointer to stored bytes (i8* for strings, elem ptr for structs)
-//      Returns nullptr if key not found.
 void*   aiml_db_kv_get(void* kv, const char* key);
-
-// has: returns 1 if key exists, 0 otherwise
 int32_t aiml_db_kv_has(void* kv, const char* key);
-
-// len: number of entries
 int32_t aiml_db_kv_len(void* kv);
+void    aiml_db_kv_delete(void* kv, const char* key);
+void    aiml_db_kv_clear(void* kv);
 
 // ── VecStore ──────────────────────────────────────────────────────────────────
-// dims: number of float dimensions per vector
 void*   aiml_db_vec_open(const char* name, int32_t dims);
-
-// insert: id is a string label; emb is a float[dims] array
 void    aiml_db_vec_insert(void* vs, const char* id, const float* emb, int32_t dims);
-
-// search: fills result_list (AimlListRaw*) with up to k heap-alloc'd AimlVecResult*
-//         (i8* pointers); caller must cast list elements to AimlVecResult*
 void    aiml_db_vec_search(void* vs, const float* query, int32_t k, void* result_list);
+int32_t aiml_db_vec_len(void* vs);
+
+// ── TimeSeries<T> ─────────────────────────────────────────────────────────────
+// Append-only log: each entry has a monotone int64 timestamp.
+void*   aiml_db_ts_open(const char* name, int64_t elem_size);
+// Persistent TimeSeries: binary log file (.tslog), replayed on open.
+void*   aiml_db_ts_open_persist(const char* name, int64_t elem_size, const char* base_path);
+int32_t aiml_db_ts_checkpoint(void* ts);  // fsync the log file
+void    aiml_db_ts_append(void* ts, const void* elem, int64_t elem_size, int64_t timestamp);
+// at: returns ptr to last entry with timestamp <= t, or nullptr
+void*   aiml_db_ts_at(void* ts, int64_t timestamp);
+// range: fills result_list (AimlListRaw*) with void* ptrs for entries in [from, to]
+void    aiml_db_ts_range(void* ts, int64_t from, int64_t to, void* result_list);
+int32_t aiml_db_ts_len(void* ts);
 
 #ifdef __cplusplus
 }

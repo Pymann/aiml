@@ -1,0 +1,68 @@
+# Test: db.open_kv {persist: true} + db.open_timeseries {persist: true}
+# Expected exit code: 0
+
+# ── Phase A: Persistent Kv ────────────────────────────────────────────────────
+
+- decl: [cfg, Kv<string:string>]
+- set: [cfg, { call: [db.open_kv, "persist_cfg", {persist: true}] }]
+
+- call: [cfg.set, "mode", "fast"]
+- call: [cfg.set, "debug", "true"]
+
+- decl: [v, string]
+- set: [v, { call: [cfg.get, "mode"] }]
+- print: ["mode: ${v}"]
+
+- decl: [has, i32]
+- set: [has, { call: [cfg.has, "debug"] }]
+- print: ["has debug: ${has}"]
+
+- decl: [klen, i32]
+- set: [klen, { call: [cfg.len] }]
+- print: ["kv len: ${klen}"]
+
+# delete + verify
+- call: [cfg.delete, "debug"]
+- set: [has, { call: [cfg.has, "debug"] }]
+- print: ["has after del: ${has}"]
+
+# clear + verify
+- call: [cfg.set, "x", "1"]
+- call: [cfg.clear]
+- set: [klen, { call: [cfg.len] }]
+- print: ["kv after clear: ${klen}"]
+
+# ── Phase B: Persistent TimeSeries ───────────────────────────────────────────
+
+- class:
+    name: Reading
+    members: [[val, i32]]
+
+- decl: [ts, TimeSeries<Reading>]
+- set: [ts, { call: [db.open_timeseries, "persist_ts", {persist: true}] }]
+
+- decl: [r, Reading]
+- set: [r.val, 42]
+- call: [ts.append, r, 1000]
+
+- set: [r.val, 99]
+- call: [ts.append, r, 2000]
+
+- set: [r.val, 7]
+- call: [ts.append, r, 3000]
+
+- decl: [tlen, i32]
+- set: [tlen, { call: [ts.len] }]
+- print: ["ts len: ${tlen}"]
+
+- decl: [tp, ptr<Reading>]
+- set: [tp, { call: [ts.at, 1500] }]
+- print: ["at 1500: ${tp.val}"]
+
+- set: [tp, { call: [ts.at, 2500] }]
+- print: ["at 2500: ${tp.val}"]
+
+# checkpoint flushes both
+- decl: [rc, i32]
+- set: [rc, { call: [db.checkpoint] }]
+- print: ["checkpoint rc: ${rc}"]

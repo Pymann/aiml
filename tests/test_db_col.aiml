@@ -1,0 +1,35 @@
+# Test: Store<T> with column layout ({layout: "column"})
+# Expected exit code: 0
+
+- class:
+    name: Particle
+    members: [[x, i32], [y, i32], [z, i32]]
+
+- decl: [parts, Store<Particle>]
+- set: [parts, { call: [db.open, "particles", {layout: "column"}] }]
+
+- decl: [p, Particle]
+- set: [p.x, 10]
+- set: [p.y, 20]
+- set: [p.z, 30]
+- call: [parts.insert, p]
+
+- set: [p.x, 40]
+- set: [p.y, 50]
+- set: [p.z, 60]
+- call: [parts.insert, p]
+
+- decl: [got, ptr<Particle>]
+- set: [got, { call: [parts.get, 1] }]
+- print: ["p1: ${got.x}, ${got.y}, ${got.z}"]
+
+- set: [got, { call: [parts.get, 2] }]
+- print: ["p2: ${got.x}, ${got.y}, ${got.z}"]
+
+- decl: [n, i32]
+- set: [n, { call: [parts.len] }]
+- print: ["col len: ${n}"]
+
+- call: [parts.delete, 1]
+- set: [n, { call: [parts.len] }]
+- print: ["after del: ${n}"]

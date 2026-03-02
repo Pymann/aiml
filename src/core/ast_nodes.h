@@ -240,8 +240,9 @@ class ModelDecl : public Node {
 public:
     std::string name;
     uint64_t version = 1;
+    std::string primaryKey;   // field name used as entity ID; empty = slot-index (i32)
     std::vector<StructMember> fields;
-    
+
     std::string toString() const override { return "ModelDecl(" + name + ")"; }
 };
 

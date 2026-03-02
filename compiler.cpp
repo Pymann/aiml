@@ -511,20 +511,42 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_net_fd",           (void*)(intptr_t)aiml_net_fd);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_net_set_timeout",  (void*)(intptr_t)aiml_net_set_timeout);
 
-    // db namespace (AionDB in-memory store)
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_open",    (void*)(intptr_t)aiml_db_store_open);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_insert",  (void*)(intptr_t)aiml_db_store_insert);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_get",     (void*)(intptr_t)aiml_db_store_get);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_delete",  (void*)(intptr_t)aiml_db_store_delete);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_len",     (void*)(intptr_t)aiml_db_store_len);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_open",       (void*)(intptr_t)aiml_db_kv_open);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_set",        (void*)(intptr_t)aiml_db_kv_set);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_get",        (void*)(intptr_t)aiml_db_kv_get);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_has",        (void*)(intptr_t)aiml_db_kv_has);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_len",        (void*)(intptr_t)aiml_db_kv_len);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_open",      (void*)(intptr_t)aiml_db_vec_open);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_insert",    (void*)(intptr_t)aiml_db_vec_insert);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_search",    (void*)(intptr_t)aiml_db_vec_search);
+    // db namespace (AionDB)
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_open",          (void*)(intptr_t)aiml_db_store_open);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_insert",        (void*)(intptr_t)aiml_db_store_insert);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_update",        (void*)(intptr_t)aiml_db_store_update);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_get",           (void*)(intptr_t)aiml_db_store_get);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_get_by_key",    (void*)(intptr_t)aiml_db_store_get_by_key);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_delete",        (void*)(intptr_t)aiml_db_store_delete);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_len",           (void*)(intptr_t)aiml_db_store_len);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_open_persist",  (void*)(intptr_t)aiml_db_store_open_persist);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_checkpoint",    (void*)(intptr_t)aiml_db_store_checkpoint);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_checkpoint_all",      (void*)(intptr_t)aiml_db_checkpoint_all);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_open_col",      (void*)(intptr_t)aiml_db_store_open_col);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_open",             (void*)(intptr_t)aiml_db_kv_open);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_open_persist",     (void*)(intptr_t)aiml_db_kv_open_persist);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_checkpoint",       (void*)(intptr_t)aiml_db_kv_checkpoint);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_set",              (void*)(intptr_t)aiml_db_kv_set);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_get",              (void*)(intptr_t)aiml_db_kv_get);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_has",              (void*)(intptr_t)aiml_db_kv_has);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_len",              (void*)(intptr_t)aiml_db_kv_len);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_delete",           (void*)(intptr_t)aiml_db_kv_delete);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_clear",            (void*)(intptr_t)aiml_db_kv_clear);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_open",            (void*)(intptr_t)aiml_db_vec_open);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_insert",          (void*)(intptr_t)aiml_db_vec_insert);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_search",          (void*)(intptr_t)aiml_db_vec_search);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_len",             (void*)(intptr_t)aiml_db_vec_len);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_ts_open",             (void*)(intptr_t)aiml_db_ts_open);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_ts_open_persist",     (void*)(intptr_t)aiml_db_ts_open_persist);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_ts_checkpoint",       (void*)(intptr_t)aiml_db_ts_checkpoint);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_ts_append",           (void*)(intptr_t)aiml_db_ts_append);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_ts_at",               (void*)(intptr_t)aiml_db_ts_at);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_ts_range",            (void*)(intptr_t)aiml_db_ts_range);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_ts_len",              (void*)(intptr_t)aiml_db_ts_len);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_total",         (void*)(intptr_t)aiml_db_store_total);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_is_active",     (void*)(intptr_t)aiml_db_store_is_active);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_get_ptr",       (void*)(intptr_t)aiml_db_store_get_ptr);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_query",         (void*)(intptr_t)aiml_db_store_query);
 
     // llvm::sys::DynamicLibrary::AddSymbol("stderr", (void*)(intptr_t)stderr); // Removed to avoid macro issues for now
 

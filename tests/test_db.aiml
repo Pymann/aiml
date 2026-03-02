@@ -28,6 +28,12 @@
 - set: [n, { call: [entities.len] }]
 - print: ["len: ${n}"]
 
+# update
+- set: [e.hp, 200]
+- call: [entities.update, 1, e]
+- set: [p, { call: [entities.get, 1] }]
+- print: ["hp after update: ${p.hp}"]
+
 # ── Phase B: Kv<string:string> ────────────────────────────────────────────────
 
 - decl: [cfg, Kv<string:string>]
@@ -46,6 +52,19 @@
 - decl: [klen, i32]
 - set: [klen, { call: [cfg.len] }]
 - print: ["klen: ${klen}"]
+
+- call: [cfg.delete, "theme"]
+- set: [has, { call: [cfg.has, "theme"] }]
+- print: ["has after del: ${has}"]
+
+- call: [cfg.set, "a", "1"]
+- call: [cfg.set, "b", "2"]
+- set: [klen, { call: [cfg.len] }]
+- print: ["klen before clear: ${klen}"]
+
+- call: [cfg.clear]
+- set: [klen, { call: [cfg.len] }]
+- print: ["klen after clear: ${klen}"]
 
 # ── Phase C: VecStore + VecResult ─────────────────────────────────────────────
 
@@ -66,6 +85,10 @@
 - call: [v2.push, 0.0]
 - call: [vs.insert, "doc2", v2]
 
+- decl: [vlen, i32]
+- set: [vlen, { call: [vs.len] }]
+- print: ["vs len: ${vlen}"]
+
 # Search with query = [1, 0, 0] — should match doc1 first
 - decl: [q, list<f32>]
 - call: [q.push, 1.0]
@@ -78,3 +101,94 @@
 - decl: [r, ptr<VecResult>]
 - set: [r, { call: [results.get, 0] }]
 - print: ["top id: ${r.id}"]
+
+# ── Phase D: TimeSeries<T> ────────────────────────────────────────────────
+
+- class:
+    name: GameState
+    members: [[score, i32], [hp, i32]]
+
+- decl: [history, TimeSeries<GameState>]
+- set: [history, { call: [db.open_timeseries, "game_history"] }]
+
+- decl: [gs, GameState]
+- set: [gs.score, 100]
+- set: [gs.hp, 75]
+- call: [history.append, gs, 1000]
+
+- set: [gs.score, 200]
+- set: [gs.hp, 50]
+- call: [history.append, gs, 2000]
+
+- decl: [tlen, i32]
+- set: [tlen, { call: [history.len] }]
+- print: ["ts len: ${tlen}"]
+
+- decl: [tp, ptr<GameState>]
+- set: [tp, { call: [history.at, 1500] }]
+- print: ["score at 1500: ${tp.score}"]
+
+# ── Phase E: db.run_system (ECS loop) + db.query (function predicate) ─────────
+# Expected output:
+#   "sys hp: 80"      — run_system: slot 1 active in both stores
+#   "query count: 1"  — db.query: only hp=80 passes is_high_hp predicate
+
+- class:
+    name: Health
+    members: [[hp, i32]]
+
+- class:
+    name: Pos
+    members: [[x, i32]]
+
+# Open two stores
+- decl: [hp_store, Store<Health>]
+- set: [hp_store, { call: [db.open, "health_data"] }]
+
+- decl: [pos_store, Store<Pos>]
+- set: [pos_store, { call: [db.open, "pos_data"] }]
+
+# Entity 1: has both Health (hp=80) and Pos
+- decl: [h1, Health]
+- set: [h1.hp, 80]
+- call: [hp_store.insert, h1]
+
+- decl: [p1, Pos]
+- set: [p1.x, 10]
+- call: [pos_store.insert, p1]
+
+# Entity 2: only has Health (hp=30) — no Pos → excluded from run_system
+- decl: [h2, Health]
+- set: [h2.hp, 30]
+- call: [hp_store.insert, h2]
+
+# System function: prints hp of entities with BOTH stores active
+- def:
+    name: tick_hp
+    args: [[h, ptr<Health>]]
+    return: void
+    body:
+      - print: ["sys hp: ${h.hp}"]
+
+# Predicate: returns 1 if hp > 50
+- def:
+    name: is_high_hp
+    args: [[h, ptr<Health>]]
+    return: i32
+    body:
+      - if:
+          condition: { gt: [h.hp, 50] }
+          then:
+            - return: 1
+          else:
+            - return: 0
+
+# ECS run_system — only slot 1 is active in both stores
+- call: [db.run_system, tick_hp, hp_store, pos_store]
+
+# db.query with function predicate — only hp=80 qualifies
+- decl: [high_hp, list<ptr<Health>>]
+- set: [high_hp, { call: [db.query, hp_store, {where: is_high_hp}] }]
+- decl: [qlen, i32]
+- set: [qlen, { call: [high_hp.len] }]
+- print: ["query count: ${qlen}"]
