@@ -1142,39 +1142,75 @@ void registerBuiltins(CompilerContext& ctx) {
         auto& db = ctx.namespaces["db"];
 
         // db.open("name") → Store<T>
+        // Options pre-parsed into ctx.dbOpenPersist / ctx.dbOpenColumnLayout by visitCall.
         db.builtinFuncs["open"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
-            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-            llvm::Type* i64 = ctx.builder.getInt64Ty();
+            llvm::Type* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32   = ctx.builder.getInt32Ty();
+            llvm::Type* i64   = ctx.builder.getInt64Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
 
-            // Extract element type name from deserializeTargetType "Store<ElementName>"
             std::string targetType = ctx.deserializeTargetType;
             std::string elemName;
-            if (targetType.rfind("Store<", 0) == 0 && targetType.back() == '>') {
+            if (targetType.rfind("Store<", 0) == 0 && targetType.back() == '>')
                 elemName = targetType.substr(6, targetType.size() - 7);
-            }
 
-            // Compute elem size: look up class or use DataLayout
-            int64_t elemSize = 8; // fallback
-            if (!elemName.empty()) {
-                if (ctx.classes.count(elemName)) {
-                    auto& ci = ctx.classes[elemName];
-                    if (ci.type) {
-                        llvm::DataLayout dl(&ctx.module);
-                        elemSize = static_cast<int64_t>(dl.getTypeAllocSize(ci.type));
-                    } else if (ci.packed_size > 0) {
-                        elemSize = static_cast<int64_t>(ci.packed_size);
-                    }
+            int64_t elemSize = 8;
+            if (!elemName.empty() && ctx.classes.count(elemName)) {
+                auto& ci = ctx.classes[elemName];
+                if (ci.type) {
+                    llvm::DataLayout dl(&ctx.module);
+                    elemSize = static_cast<int64_t>(dl.getTypeAllocSize(ci.type));
+                } else if (ci.packed_size > 0) {
+                    elemSize = static_cast<int64_t>(ci.packed_size);
                 }
             }
 
-            llvm::Function* f = ctx.getFunction("aiml_db_store_open", i8p, {i8p, i8p, i64});
             llvm::Value* nameVal = args.empty()
                 ? ctx.builder.CreateGlobalStringPtr("")
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
-            llvm::Value* tnVal  = ctx.builder.CreateGlobalStringPtr(
+            llvm::Value* tnVal = ctx.builder.CreateGlobalStringPtr(
                 elemName.empty() ? "?" : elemName);
-            llvm::Value* szVal  = ctx.builder.getInt64(elemSize);
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {nameVal, tnVal, szVal}));
+
+            // ── Column Layout ─────────────────────────────────────────────────
+            if (ctx.dbOpenColumnLayout && !elemName.empty() &&
+                ctx.classes.count(elemName) && ctx.classes[elemName].type) {
+                auto& ci = ctx.classes[elemName];
+                llvm::DataLayout dl(&ctx.module);
+                int n = (int)ci.members.size();
+                std::vector<std::pair<int,int>> flds;
+                for (auto& [fname, fm] : ci.members)
+                    if (fm.type) flds.push_back({fm.index, (int)dl.getTypeAllocSize(fm.type)});
+                std::sort(flds.begin(), flds.end());
+
+                auto* arrTy = llvm::ArrayType::get(i32, (size_t)n);
+                std::vector<llvm::Constant*> cs;
+                for (auto& [idx, sz] : flds) cs.push_back(ctx.builder.getInt32(sz));
+                auto* gv = new llvm::GlobalVariable(ctx.module, arrTy, true,
+                    llvm::GlobalValue::InternalLinkage,
+                    llvm::ConstantArray::get(arrTy, cs), ".col_fsizes");
+
+                llvm::Function* f = ctx.getFunction("aiml_db_store_open_col",
+                    i8p, {i8p, i8p, i32, ptrTy, i64});
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(f,
+                    {nameVal, tnVal, ctx.builder.getInt32(n), gv,
+                     ctx.builder.getInt64(elemSize)}));
+            }
+
+            // ── Persistent (WAL + mmap) ───────────────────────────────────────
+            if (ctx.dbOpenPersist) {
+                llvm::Value* pathVal = ctx.dbOpenBasePathVal
+                    ? ctx.dbOpenBasePathVal
+                    : ctx.builder.CreateGlobalStringPtr("./aiondb/");
+                llvm::Function* f = ctx.getFunction("aiml_db_store_open_persist",
+                    i8p, {i8p, i8p, i64, i8p});
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(f,
+                    {nameVal, tnVal, ctx.builder.getInt64(elemSize), pathVal}));
+            }
+
+            // ── Default: in-memory ────────────────────────────────────────────
+            llvm::Function* f = ctx.getFunction("aiml_db_store_open", i8p, {i8p, i8p, i64});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f,
+                {nameVal, tnVal, ctx.builder.getInt64(elemSize)}));
         };
 
         // db.open_kv("name") → Kv<K:V>
@@ -1202,10 +1238,18 @@ void registerBuiltins(CompilerContext& ctx) {
                 valSize = static_cast<int64_t>(dl.getTypeAllocSize(ctx.classes[vName].type));
             }
 
-            llvm::Function* f = ctx.getFunction("aiml_db_kv_open", i8p, {i8p, i64});
             llvm::Value* nameVal = args.empty()
                 ? ctx.builder.CreateGlobalStringPtr("")
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            if (ctx.dbOpenPersist) {
+                llvm::Value* pathVal = ctx.dbOpenBasePathVal
+                    ? ctx.dbOpenBasePathVal
+                    : ctx.builder.CreateGlobalStringPtr("./aiondb/");
+                llvm::Function* f = ctx.getFunction("aiml_db_kv_open_persist", i8p, {i8p, i64, i8p});
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(f,
+                    {nameVal, ctx.builder.getInt64(valSize), pathVal}));
+            }
+            llvm::Function* f = ctx.getFunction("aiml_db_kv_open", i8p, {i8p, i64});
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {nameVal, ctx.builder.getInt64(valSize)}));
         };
 
@@ -1223,13 +1267,125 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {nameVal, dimsVal}));
         };
 
-        // Stubs: begin / commit / rollback / checkpoint → return i32(0)
+        // db.open_timeseries("name") → TimeSeries<T>
+        db.builtinFuncs["open_timeseries"] = [](CompilerContext& ctx,
+                const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i64 = ctx.builder.getInt64Ty();
+
+            std::string targetType = ctx.deserializeTargetType;
+            std::string elemName;
+            if (targetType.rfind("TimeSeries<", 0) == 0 && targetType.back() == '>')
+                elemName = targetType.substr(11, targetType.size() - 12);
+
+            int64_t elemSize = 8;
+            if (!elemName.empty() && ctx.classes.count(elemName)) {
+                auto& ci = ctx.classes[elemName];
+                if (ci.type) {
+                    llvm::DataLayout dl(&ctx.module);
+                    elemSize = static_cast<int64_t>(dl.getTypeAllocSize(ci.type));
+                } else if (ci.packed_size > 0) {
+                    elemSize = static_cast<int64_t>(ci.packed_size);
+                }
+            }
+
+            llvm::Value* nameVal = args.empty()
+                ? ctx.builder.CreateGlobalStringPtr("")
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            if (ctx.dbOpenPersist) {
+                llvm::Value* pathVal = ctx.dbOpenBasePathVal
+                    ? ctx.dbOpenBasePathVal
+                    : ctx.builder.CreateGlobalStringPtr("./aiondb/");
+                llvm::Function* f = ctx.getFunction("aiml_db_ts_open_persist", i8p, {i8p, i64, i8p});
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(f,
+                    {nameVal, ctx.builder.getInt64(elemSize), pathVal}));
+            }
+            llvm::Function* f = ctx.getFunction("aiml_db_ts_open", i8p, {i8p, i64});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f,
+                {nameVal, ctx.builder.getInt64(elemSize)}));
+        };
+
+        // Stubs: begin / commit / rollback → return i32(0)
         auto stubFn = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
             return ctx.ir_gen->getInt32(0);
         };
-        db.builtinFuncs["begin"]      = stubFn;
-        db.builtinFuncs["commit"]     = stubFn;
-        db.builtinFuncs["rollback"]   = stubFn;
-        db.builtinFuncs["checkpoint"] = stubFn;
+        db.builtinFuncs["begin"]    = stubFn;
+        db.builtinFuncs["commit"]   = stubFn;
+        db.builtinFuncs["rollback"] = stubFn;
+
+        // db.checkpoint → checkpoints all persistent stores
+        db.builtinFuncs["checkpoint"] = [](CompilerContext& ctx,
+                const std::vector<IRValue*>&) -> IRValue* {
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_db_checkpoint_all", i32, {});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {}));
+        };
+
+        // db.query(store, {where: fn}, {order_by: "field"}, {limit: N}, {offset: N})
+        // → list<ptr<T>>
+        // Option bags are pre-parsed into ctx.dbQuery* by visitCall before this handler runs.
+        db.builtinFuncs["query"] = [](CompilerContext& ctx,
+                const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.empty()) return ctx.ir_gen->getInt32(0);
+
+            llvm::Type* i8p   = llvm::PointerType::getUnqual(ctx.context);
+            llvm::Type* i32t  = ctx.builder.getInt32Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+
+            llvm::Value* storeVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+
+            // Predicate function pointer (NULL if no where clause)
+            llvm::Value* predPtr = llvm::ConstantPointerNull::get(
+                llvm::cast<llvm::PointerType>(i8p));
+            if (!ctx.dbQueryWhere.empty()) {
+                llvm::Function* predFn = ctx.module.getFunction(ctx.dbQueryWhere);
+                if (predFn) {
+                    predPtr = ctx.builder.CreateBitCast(predFn, i8p, "pred_ptr");
+                } else {
+                    LOG_ERROR("db.query: predicate function '" + ctx.dbQueryWhere + "' not found");
+                }
+            }
+
+            // order_by: compute field offset + size from Store element type
+            // (extracted from ctx.dbQueryStoreType "Store<ElemType>", set by visitCall pre-parse)
+            int32_t ordOff = -1, ordSz = 0;
+            if (!ctx.dbQueryOrderBy.empty() && !ctx.dbQueryStoreType.empty()) {
+                std::string tgt = ctx.dbQueryStoreType;
+                if (tgt.rfind("Store<", 0) == 0 && tgt.back() == '>') {
+                    std::string elemN = tgt.substr(6, tgt.size() - 7);
+                    if (ctx.classes.count(elemN) && ctx.classes[elemN].type) {
+                        auto& ci = ctx.classes[elemN];
+                        llvm::DataLayout dl(&ctx.module);
+                        const llvm::StructLayout* sl = dl.getStructLayout(ci.type);
+                        auto mit = ci.members.find(ctx.dbQueryOrderBy);
+                        if (mit != ci.members.end()) {
+                            ordOff = (int32_t)sl->getElementOffset(
+                                (unsigned)mit->second.index);
+                            ordSz  = (int32_t)dl.getTypeAllocSize(mit->second.type);
+                        }
+                    }
+                }
+            }
+
+            // Allocate result list
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            llvm::Value* listAlloca  = ctx.builder.CreateAlloca(listTy, nullptr, "query_list");
+            ListImpl::initList(ctx, listAlloca, ptrTy, 8);
+
+            // Call C runtime
+            llvm::Function* f = ctx.getFunction("aiml_db_store_query",
+                ctx.builder.getVoidTy(),
+                {i8p, i8p, i32t, i32t, i32t, i32t, i32t, ptrTy});
+            ctx.builder.CreateCall(f, {
+                storeVal, predPtr,
+                ctx.builder.getInt32(ordOff),
+                ctx.builder.getInt32(ordSz),
+                ctx.builder.getInt32(ctx.dbQueryOrderDir),
+                ctx.builder.getInt32(ctx.dbQueryLimit),
+                ctx.builder.getInt32(ctx.dbQueryOffset),
+                listAlloca
+            });
+            return ctx.ir_gen->wrap(listAlloca);
+        };
     }
 }

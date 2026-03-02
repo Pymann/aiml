@@ -227,6 +227,7 @@ void Compiler::registerTypeDecl(Node* node) {
         CompilerContext::ClassInfo classInfo;
         classInfo.name = modelName;
         classInfo.isModel = true;
+        classInfo.primaryKey = mod->primaryKey;
         classInfo.version = mod->version;
 
         std::vector<llvm::Type*> fieldTypes;

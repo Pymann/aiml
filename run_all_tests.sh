@@ -28,6 +28,9 @@ fi
 echo "Clearing AIML Cache ($AIML_CACHE)..." | tee -a "$OUTPUT_FILE"
 rm -rf "$AIML_CACHE"
 
+# Clear AionDB persistent store (created by test_persist.aiml and similar tests)
+rm -rf aiondb/
+
 echo "Running AIML Tests..." | tee -a "$OUTPUT_FILE"
 echo "======================" | tee -a "$OUTPUT_FILE"
 

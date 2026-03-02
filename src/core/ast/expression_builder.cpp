@@ -9,7 +9,11 @@ bool ExpressionBuilder::OnMapStart() {
     if (!op.empty()) {
         // We are already inside an operator like `{ add: [ { mul: [1, 2] }, 3 ] }`
         // We just encountered the inner map `{ mul: ... }`
-        builder->pushState(std::make_unique<ExpressionBuilder>(builder));
+        // Must initialise the inner ExpressionBuilder via its own OnMapStart so that
+        // expectingKey = true is set, mirroring what StatementBuilder does.
+        auto inner = std::make_unique<ExpressionBuilder>(builder);
+        inner->OnMapStart();
+        builder->pushState(std::move(inner));
         return true;
     }
     expectingKey = true;

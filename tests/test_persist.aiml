@@ -1,0 +1,28 @@
+# Test: db.open with persist:true and configurable path
+
+- class:
+    name: Player
+    members: [[score, i32], [level, i32]]
+
+- decl: [mydb, path]
+- set: [mydb, "./aiondb/"]
+
+- decl: [players, Store<Player>]
+- set: [players, { call: [db.open, "players", {persist: true, path: mydb}] }]
+
+- decl: [p1, Player]
+- set: [p1.score, 999]
+- set: [p1.level, 42]
+- call: [players.insert, p1]
+
+- decl: [n, i32]
+- set: [n, { call: [players.len] }]
+- print: ["players: ${n}"]
+
+- decl: [got, ptr<Player>]
+- set: [got, { call: [players.get, 1] }]
+- print: ["score: ${got.score}, level: ${got.level}"]
+
+- decl: [rc, i32]
+- set: [rc, { call: [db.checkpoint] }]
+- print: ["checkpoint rc: ${rc}"]

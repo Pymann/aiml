@@ -1,0 +1,49 @@
+# Test: model: with primary_key + Store<T>.get_by_key
+# Expected exit code: 0
+
+# String primary key
+- model:
+    name: User
+    primary_key: username
+    fields: [[username, string], [score, i32]]
+
+- decl: [users, Store<User>]
+- set: [users, { call: [db.open, "users"] }]
+
+- decl: [u, User]
+- set: [u.username, "alice"]
+- set: [u.score, 100]
+- call: [users.insert, u]
+
+- set: [u.username, "bob"]
+- set: [u.score, 200]
+- call: [users.insert, u]
+
+- decl: [found, ptr<User>]
+- set: [found, { call: [users.get_by_key, "alice"] }]
+- print: ["alice score: ${found.score}"]
+
+- set: [found, { call: [users.get_by_key, "bob"] }]
+- print: ["bob score: ${found.score}"]
+
+# Integer primary key
+- model:
+    name: Item
+    primary_key: item_id
+    fields: [[item_id, i32], [value, i32]]
+
+- decl: [items, Store<Item>]
+- set: [items, { call: [db.open, "items"] }]
+
+- decl: [it, Item]
+- set: [it.item_id, 42]
+- set: [it.value, 999]
+- call: [items.insert, it]
+
+- set: [it.item_id, 7]
+- set: [it.value, 777]
+- call: [items.insert, it]
+
+- decl: [fi, ptr<Item>]
+- set: [fi, { call: [items.get_by_key, 7] }]
+- print: ["item 7 value: ${fi.value}"]

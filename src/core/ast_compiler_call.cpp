@@ -41,9 +41,78 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             return visitSysExecCall(call);
         }
 
-        // Eagerly evaluate arguments for other functions (sys)
+        // db.run_system — ECS system loop, intercept before eager arg eval
+        if (baseName == "db" && methodName == "run_system") {
+            return visitDbRunSystem(call);
+        }
+
+        // Pre-parse db namespace option bags before arg eval.
+        // Supports both DictLiteralExpr (from nodeToExpr path) and UnaryExpr
+        // (from event-based ExpressionBuilder: {key: val} → UnaryExpr(key, val)).
+        ctx.dbOpenPersist      = false;
+        ctx.dbOpenColumnLayout = false;
+        ctx.dbOpenBasePathVal  = nullptr;
+        ctx.dbQueryStoreType   = "";
+        ctx.dbQueryWhere       = "";
+        ctx.dbQueryOrderBy     = "";
+        ctx.dbQueryOrderDir    = 0;
+        ctx.dbQueryLimit       = -1;
+        ctx.dbQueryOffset      = 0;
+        if (baseName == "db") {
+            // For db.query: capture the store argument's type so order_by can look up field offsets.
+            if (methodName == "query" && !call->args.empty()) {
+                if (auto* var = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get())) {
+                    Symbol* sym = resolveVariable(var->name);
+                    if (sym) ctx.dbQueryStoreType = sym->typeName;
+                }
+            }
+            // Helper: apply a single key=value option pair
+            auto applyDbOpt = [&](const std::string& key, const std::string& val) {
+                if      (key == "persist"  && val == "true")  ctx.dbOpenPersist = true;
+                else if (key == "layout"   && val == "column") ctx.dbOpenColumnLayout = true;
+                else if (key == "where")    ctx.dbQueryWhere   = val;
+                else if (key == "order_by") ctx.dbQueryOrderBy = val;
+                else if (key == "dir")      ctx.dbQueryOrderDir = (val == "desc") ? 1 : 0;
+                else if (key == "limit")  { try { ctx.dbQueryLimit  = std::stoi(val); } catch (...) {} }
+                else if (key == "offset") { try { ctx.dbQueryOffset = std::stoi(val); } catch (...) {} }
+            };
+            for (size_t i = 1; i < call->args.size(); i++) {
+                if (auto* d = dynamic_cast<AIML::AST::DictLiteralExpr*>(call->args[i].get())) {
+                    // nodeToExpr path: unrecognized map → DictLiteralExpr
+                    for (auto& [k, v] : d->entries) {
+                        if (k == "path")
+                            ctx.dbOpenBasePathVal = ctx.builder.CreateGlobalStringPtr(v);
+                        else
+                            applyDbOpt(k, v);
+                    }
+                } else if (auto* u = dynamic_cast<AIML::AST::UnaryExpr*>(call->args[i].get())) {
+                    // ExpressionBuilder path: {key: val} → UnaryExpr(key, LiteralExpr/VariableExpr)
+                    if (u->op == "path") {
+                        // Evaluate operand as expression to get the runtime i8* value
+                        IRValue* pv = visitExpression(u->operand.get());
+                        if (pv) ctx.dbOpenBasePathVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(pv));
+                    } else {
+                        std::string val;
+                        if (auto* lit  = dynamic_cast<AIML::AST::LiteralExpr*>(u->operand.get()))
+                            val = lit->value;
+                        else if (auto* var = dynamic_cast<AIML::AST::VariableExpr*>(u->operand.get()))
+                            val = var->name;
+                        if (!val.empty()) applyDbOpt(u->op, val);
+                    }
+                }
+            }
+        }
+
+        // Eagerly evaluate arguments; skip option bags (DictLiteralExpr or db UnaryExpr options).
+        static const std::set<std::string> kDbOpts = {
+            "persist","layout","where","order_by","dir","limit","offset","path"};
         std::vector<IRValue*> argVals;
         for (auto& arg : call->args) {
+            if (dynamic_cast<AIML::AST::DictLiteralExpr*>(arg.get())) continue;
+            if (baseName == "db") {
+                if (auto* u = dynamic_cast<AIML::AST::UnaryExpr*>(arg.get()))
+                    if (kDbOpts.count(u->op)) continue;
+            }
             IRValue* val = visitExpression(arg.get());
             if (val) argVals.push_back(val);
             else return ctx.ir_gen->getInt32(0);
@@ -431,10 +500,82 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {storePtr, elemPtr,
                 ctx.builder.getInt64(elemSize)}));
 
+        } else if (methodName == "update" && call->args.size() >= 2) {
+            // args: [id (i32), elem (struct)] — id already in argVals[0], elem needs alloca
+            llvm::Value* idVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            llvm::Value* elemPtr = nullptr;
+            if (auto* varE = dynamic_cast<AIML::AST::VariableExpr*>(call->args[1].get())) {
+                Symbol* varSym = resolveVariable(varE->name);
+                if (varSym) {
+                    llvm::Value* allocaV = varSym->alloca_inst
+                        ? static_cast<llvm::Value*>(varSym->alloca_inst)
+                        : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(varSym->ir_alloca_inst));
+                    elemPtr = ctx.builder.CreateBitCast(allocaV, i8p);
+                }
+            }
+            if (!elemPtr && argVals.size() >= 2) {
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
+                if (v->getType()->isPointerTy()) {
+                    elemPtr = ctx.builder.CreateBitCast(v, i8p);
+                } else {
+                    llvm::AllocaInst* tmp = ctx.builder.CreateAlloca(v->getType(), nullptr, "upd_tmp");
+                    ctx.builder.CreateStore(v, tmp);
+                    elemPtr = ctx.builder.CreateBitCast(tmp, i8p);
+                }
+            }
+            if (!elemPtr) return ctx.ir_gen->getInt32(-1);
+
+            int64_t elemSize = 8;
+            if (ctx.classes.count(elemName) && ctx.classes[elemName].type) {
+                llvm::DataLayout dl(&ctx.module);
+                elemSize = static_cast<int64_t>(dl.getTypeAllocSize(ctx.classes[elemName].type));
+            } else if (ctx.classes.count(elemName) && ctx.classes[elemName].packed_size > 0) {
+                elemSize = static_cast<int64_t>(ctx.classes[elemName].packed_size);
+            }
+            llvm::Function* f = ctx.getFunction("aiml_db_store_update", i32, {i8p, i32, i8p, i64});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f,
+                {storePtr, idVal, elemPtr, ctx.builder.getInt64(elemSize)}));
+
         } else if (methodName == "get" && !argVals.empty()) {
             llvm::Value* idVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
             llvm::Function* f = ctx.getFunction("aiml_db_store_get", i8p, {i8p, i32});
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {storePtr, idVal}));
+
+        } else if (methodName == "get_by_key" && !argVals.empty()) {
+            if (!ctx.classes.count(elemName) || ctx.classes[elemName].primaryKey.empty() ||
+                !ctx.classes[elemName].members.count(ctx.classes[elemName].primaryKey)) {
+                LOG_ERROR("get_by_key: no primary_key defined for " + elemName);
+                return ctx.ir_gen->getInt32(0);
+            }
+            auto& ci       = ctx.classes[elemName];
+            auto& pkMember = ci.members[ci.primaryKey];
+            int32_t keyOffset = 0, keySize = 0;
+            if (ci.type) {
+                llvm::DataLayout dl(&ctx.module);
+                auto* sl  = dl.getStructLayout(llvm::cast<llvm::StructType>(ci.type));
+                keyOffset = (int32_t)sl->getElementOffset((unsigned)pkMember.index);
+                keySize   = (int32_t)dl.getTypeAllocSize(pkMember.type);
+            }
+            int32_t isStr = (pkMember.typeName == "string") ? 1 : 0;
+
+            llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            llvm::Value* keyPtr;
+            if (keyVal->getType()->isPointerTy()) {
+                keyPtr = keyVal;
+            } else {
+                llvm::AllocaInst* tmp = ctx.builder.CreateAlloca(
+                    keyVal->getType(), nullptr, "pk_tmp");
+                ctx.builder.CreateStore(keyVal, tmp);
+                keyPtr = ctx.builder.CreateBitCast(tmp, i8p);
+            }
+            llvm::Function* f = ctx.getFunction("aiml_db_store_get_by_key",
+                i8p, {i8p, i8p, i32, i32, i32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                storePtr, keyPtr,
+                ctx.builder.getInt32(keyOffset),
+                ctx.builder.getInt32(keySize),
+                ctx.builder.getInt32(isStr)
+            }));
 
         } else if (methodName == "delete" && !argVals.empty()) {
             llvm::Value* idVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
@@ -514,6 +655,19 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         } else if (methodName == "len") {
             llvm::Function* f = ctx.getFunction("aiml_db_kv_len", i32, {i8p});
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {kvPtr}));
+
+        } else if (methodName == "delete" && !argVals.empty()) {
+            llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            llvm::Function* f = ctx.getFunction("aiml_db_kv_delete",
+                ctx.builder.getVoidTy(), {i8p, i8p});
+            ctx.builder.CreateCall(f, {kvPtr, keyVal});
+            return nullptr;
+
+        } else if (methodName == "clear") {
+            llvm::Function* f = ctx.getFunction("aiml_db_kv_clear",
+                ctx.builder.getVoidTy(), {i8p});
+            ctx.builder.CreateCall(f, {kvPtr});
+            return nullptr;
         }
         LOG_ERROR("Unknown Kv method: " + methodName);
         return ctx.ir_gen->getInt32(0);
@@ -576,8 +730,101 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 ctx.builder.getVoidTy(), {i8p, ptrTy, i32, ptrTy});
             ctx.builder.CreateCall(f, {vsPtr, queryPtr, kVal, listAlloca});
             return ctx.ir_gen->wrap(listAlloca);
+
+        } else if (methodName == "len") {
+            llvm::Function* f = ctx.getFunction("aiml_db_vec_len", i32, {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {vsPtr}));
         }
         LOG_ERROR("Unknown VecStore method: " + methodName);
+        return ctx.ir_gen->getInt32(0);
+    }
+    // ── TimeSeries<T> methods ─────────────────────────────────────────────────
+    else if (className.rfind("TimeSeries<", 0) == 0 && className.back() == '>') {
+        std::string elemName = className.substr(11, className.size() - 12);
+        llvm::Type* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32t  = ctx.builder.getInt32Ty();
+        llvm::Type* i64t  = ctx.builder.getInt64Ty();
+        llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+        llvm::Value* tsPtr = ctx.builder.CreateLoad(i8p,
+            static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), "ts_ptr");
+
+        // Helper: get alloca for VariableExpr arg (same pattern as store.insert)
+        auto getTsArgAlloca = [&](size_t argIdx) -> llvm::Value* {
+            if (argIdx >= call->args.size()) return nullptr;
+            if (auto* varE = dynamic_cast<AIML::AST::VariableExpr*>(call->args[argIdx].get())) {
+                Symbol* sym = resolveVariable(varE->name);
+                if (sym) {
+                    return sym->alloca_inst
+                        ? static_cast<llvm::Value*>(sym->alloca_inst)
+                        : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
+                }
+            }
+            return nullptr;
+        };
+
+        // Compute elem size from class info
+        int64_t elemSize = 8;
+        if (ctx.classes.count(elemName) && ctx.classes[elemName].type) {
+            llvm::DataLayout dl(&ctx.module);
+            elemSize = (int64_t)dl.getTypeAllocSize(ctx.classes[elemName].type);
+        }
+
+        if (methodName == "append" && call->args.size() >= 2) {
+            llvm::Value* elemPtr = nullptr;
+            if (llvm::Value* alloca = getTsArgAlloca(0))
+                elemPtr = ctx.builder.CreateBitCast(alloca, i8p);
+            if (!elemPtr && !argVals.empty()) {
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+                if (v->getType()->isPointerTy()) {
+                    elemPtr = ctx.builder.CreateBitCast(v, i8p);
+                } else {
+                    llvm::AllocaInst* tmp = ctx.builder.CreateAlloca(v->getType(), nullptr, "ts_tmp");
+                    ctx.builder.CreateStore(v, tmp);
+                    elemPtr = ctx.builder.CreateBitCast(tmp, i8p);
+                }
+            }
+            if (!elemPtr) return ctx.ir_gen->getInt32(-1);
+
+            // timestamp arg (may come as i32 — cast to i64)
+            llvm::Value* tsVal = argVals.size() >= 2
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]))
+                : ctx.builder.getInt64(0);
+            if (tsVal->getType() != i64t)
+                tsVal = ctx.builder.CreateZExtOrTrunc(tsVal, i64t, "ts64");
+
+            llvm::Function* f = ctx.getFunction("aiml_db_ts_append",
+                ctx.builder.getVoidTy(), {i8p, i8p, i64t, i64t});
+            ctx.builder.CreateCall(f, {tsPtr, elemPtr,
+                ctx.builder.getInt64(elemSize), tsVal});
+            return nullptr;
+
+        } else if (methodName == "at" && !argVals.empty()) {
+            llvm::Value* tsVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            if (tsVal->getType() != i64t)
+                tsVal = ctx.builder.CreateZExtOrTrunc(tsVal, i64t, "at64");
+            llvm::Function* f = ctx.getFunction("aiml_db_ts_at", i8p, {i8p, i64t});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tsPtr, tsVal}));
+
+        } else if (methodName == "range" && argVals.size() >= 2) {
+            llvm::Value* fromV = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            llvm::Value* toV   = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
+            if (fromV->getType() != i64t) fromV = ctx.builder.CreateZExtOrTrunc(fromV, i64t);
+            if (toV->getType()   != i64t) toV   = ctx.builder.CreateZExtOrTrunc(toV,   i64t);
+
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            llvm::Value* listAlloca  = ctx.builder.CreateAlloca(listTy, nullptr, "tsrange_alloca");
+            ListImpl::initList(ctx, listAlloca, ptrTy, 8);
+
+            llvm::Function* f = ctx.getFunction("aiml_db_ts_range",
+                ctx.builder.getVoidTy(), {i8p, i64t, i64t, ptrTy});
+            ctx.builder.CreateCall(f, {tsPtr, fromV, toV, listAlloca});
+            return ctx.ir_gen->wrap(listAlloca);
+
+        } else if (methodName == "len") {
+            llvm::Function* f = ctx.getFunction("aiml_db_ts_len", i32t, {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tsPtr}));
+        }
+        LOG_ERROR("Unknown TimeSeries method: " + methodName);
         return ctx.ir_gen->getInt32(0);
     }
     // User Class Methods
@@ -972,6 +1219,150 @@ IRValue* Compiler::visitSysExecCall(CallExpr* call) {
     // Emit call to __aiml_code_exec(i8*) → i32 via CodeImpl::exec
     llvm::Value* codePtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(codeVal));
     return ctx.ir_gen->wrap(CodeImpl::exec(ctx, codePtr));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// db.run_system — ECS intersection loop
+//
+// Syntax: - call: [db.run_system, system_fn, store1, store2, ...]
+//
+// The compiler:
+//   1. Extracts fn name from arg[0] (VariableExpr)
+//   2. Looks up the LLVM function, checks if first param is i32 (eid)
+//   3. For each store arg, resolves the store pointer
+//   4. Generates a loop over slot 1..max_total, calling fn for every slot
+//      that is active in ALL stores simultaneously.
+// ─────────────────────────────────────────────────────────────────────────────
+IRValue* Compiler::visitDbRunSystem(CallExpr* call) {
+    if (call->args.empty()) {
+        LOG_ERROR("db.run_system: requires at least one argument (function name)");
+        return ctx.ir_gen->getInt32(0);
+    }
+
+    // arg[0] must be the system function name (VariableExpr)
+    std::string fnName;
+    if (auto* v = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get()))
+        fnName = v->name;
+    else {
+        LOG_ERROR("db.run_system: first arg must be a function name");
+        return ctx.ir_gen->getInt32(0);
+    }
+
+    llvm::Function* sysFn = ctx.module.getFunction(fnName);
+    if (!sysFn) {
+        LOG_ERROR("db.run_system: function '" + fnName + "' not found in module");
+        return ctx.ir_gen->getInt32(0);
+    }
+
+    // Does the fn start with an eid (i32) parameter?
+    llvm::FunctionType* fnTy = sysFn->getFunctionType();
+    bool hasEid = (fnTy->getNumParams() > 0 &&
+                   fnTy->getParamType(0)->isIntegerTy(32));
+
+    int numStoreArgs = (int)call->args.size() - 1;
+    if (numStoreArgs < 1) {
+        LOG_ERROR("db.run_system: need at least one store argument");
+        return ctx.ir_gen->getInt32(0);
+    }
+
+    llvm::Type* i8p  = llvm::PointerType::getUnqual(ctx.context);
+    llvm::Type* i32t = ctx.builder.getInt32Ty();
+
+    // Resolve store pointers (load from variable alloca)
+    std::vector<llvm::Value*> storePtrs;
+    for (int i = 1; i < (int)call->args.size(); i++) {
+        if (auto* varE = dynamic_cast<AIML::AST::VariableExpr*>(call->args[i].get())) {
+            Symbol* sym = resolveVariable(varE->name);
+            if (sym) {
+                llvm::Value* alloca = sym->alloca_inst
+                    ? static_cast<llvm::Value*>(sym->alloca_inst)
+                    : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
+                storePtrs.push_back(ctx.builder.CreateLoad(i8p, alloca, varE->name + "_sptr"));
+                continue;
+            }
+        }
+        IRValue* v = visitExpression(call->args[i].get());
+        if (!v) return ctx.ir_gen->getInt32(0);
+        storePtrs.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v)));
+    }
+
+    // Declare runtime helpers
+    llvm::Function* totalFn    = ctx.getFunction("aiml_db_store_total",     i32t, {i8p});
+    llvm::Function* isActiveFn = ctx.getFunction("aiml_db_store_is_active", i32t, {i8p, i32t});
+    llvm::Function* getPtrFn   = ctx.getFunction("aiml_db_store_get_ptr",   i8p,  {i8p, i32t});
+
+    // Compute max total across stores (loop bound)
+    llvm::Value* maxTotal = ctx.builder.getInt32(0);
+    for (auto* sp : storePtrs) {
+        llvm::Value* t   = ctx.builder.CreateCall(totalFn, {sp}, "st_total");
+        llvm::Value* cmp = ctx.builder.CreateICmpSGT(t, maxTotal, "is_bigger");
+        maxTotal = ctx.builder.CreateSelect(cmp, t, maxTotal, "max_total");
+    }
+
+    // Alloca for loop counter (1-based slot index)
+    llvm::AllocaInst* eidAlloca = ctx.builder.CreateAlloca(i32t, nullptr, "rs_eid");
+    ctx.builder.CreateStore(ctx.builder.getInt32(1), eidAlloca);
+    llvm::AllocaInst* maxAlloca = ctx.builder.CreateAlloca(i32t, nullptr, "rs_max");
+    ctx.builder.CreateStore(maxTotal, maxAlloca);
+
+    // Basic blocks
+    llvm::Function* parentFn   = ctx.builder.GetInsertBlock()->getParent();
+    llvm::BasicBlock* hdrBB    = llvm::BasicBlock::Create(ctx.context, "rs_hdr",  parentFn);
+    llvm::BasicBlock* checkBB  = llvm::BasicBlock::Create(ctx.context, "rs_chk",  parentFn);
+    llvm::BasicBlock* callBB   = llvm::BasicBlock::Create(ctx.context, "rs_call", parentFn);
+    llvm::BasicBlock* nextBB   = llvm::BasicBlock::Create(ctx.context, "rs_next", parentFn);
+    llvm::BasicBlock* exitBB   = llvm::BasicBlock::Create(ctx.context, "rs_exit", parentFn);
+
+    ctx.builder.CreateBr(hdrBB);
+
+    // rs_hdr: eid <= max?
+    ctx.builder.SetInsertPoint(hdrBB);
+    {
+        llvm::Value* eid = ctx.builder.CreateLoad(i32t, eidAlloca, "eid");
+        llvm::Value* mx  = ctx.builder.CreateLoad(i32t, maxAlloca,  "mx");
+        llvm::Value* ok  = ctx.builder.CreateICmpSLE(eid, mx, "in_range");
+        ctx.builder.CreateCondBr(ok, checkBB, exitBB);
+    }
+
+    // rs_chk: all stores active at eid?
+    ctx.builder.SetInsertPoint(checkBB);
+    {
+        llvm::Value* eid = ctx.builder.CreateLoad(i32t, eidAlloca, "eid");
+        llvm::Value* allOk = ctx.builder.getInt32(1);
+        for (auto* sp : storePtrs) {
+            llvm::Value* a = ctx.builder.CreateCall(isActiveFn, {sp, eid}, "active");
+            allOk = ctx.builder.CreateAnd(allOk, a, "all_ok");
+        }
+        llvm::Value* allBool = ctx.builder.CreateICmpNE(allOk, ctx.builder.getInt32(0), "all_bool");
+        ctx.builder.CreateCondBr(allBool, callBB, nextBB);
+    }
+
+    // rs_call: get component ptrs, call system fn
+    ctx.builder.SetInsertPoint(callBB);
+    {
+        llvm::Value* eid = ctx.builder.CreateLoad(i32t, eidAlloca, "eid");
+        std::vector<llvm::Value*> fnArgs;
+        if (hasEid) fnArgs.push_back(eid);
+        for (auto* sp : storePtrs) {
+            llvm::Value* ptr = ctx.builder.CreateCall(getPtrFn, {sp, eid}, "comp_ptr");
+            fnArgs.push_back(ptr);
+        }
+        ctx.builder.CreateCall(sysFn, fnArgs);
+        ctx.builder.CreateBr(nextBB);
+    }
+
+    // rs_next: eid++
+    ctx.builder.SetInsertPoint(nextBB);
+    {
+        llvm::Value* eid  = ctx.builder.CreateLoad(i32t, eidAlloca, "eid");
+        llvm::Value* next = ctx.builder.CreateAdd(eid, ctx.builder.getInt32(1), "eid_next");
+        ctx.builder.CreateStore(next, eidAlloca);
+        ctx.builder.CreateBr(hdrBB);
+    }
+
+    // rs_exit: continue after loop
+    ctx.builder.SetInsertPoint(exitBB);
+    return nullptr;
 }
 
 } // namespace AST
