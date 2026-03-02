@@ -52,7 +52,9 @@
         "libraries": [
             "yaml-cpp",
             "LLVM-18",
-            "pthread"
+            "pthread",
+            "ssl",
+            "crypto"
         ],
         "library_paths": [
             "/usr/lib/x86_64-linux-gnu",

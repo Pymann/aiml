@@ -1,0 +1,67 @@
+# Tests for tls namespace + tls_socket_handle
+# Expected exit code: 0
+
+# ── Phase A: Lifecycle (no TLS traffic) ──────────────────────────────────────
+
+# Socket creation → fd must be >= 0
+- decl: [sock, tls_socket_handle]
+- set: [sock, { call: [tls.socket] }]
+- decl: [fd, i32]
+- set: [fd, { call: [tls.fd, sock] }]
+- print: ["tls socket created (fd should be > 0): ${fd}"]
+- call: [tls.close, sock]
+
+# bind to 127.0.0.1 + listen (no TLS handshake)
+- decl: [srv, tls_socket_handle]
+- set: [srv, { call: [tls.socket] }]
+- decl: [brc, i32]
+- set: [brc, { call: [tls.bind, srv, "127.0.0.1", 0] }]
+- print: ["bind_rc: ${brc}"]
+- decl: [lrc, i32]
+- set: [lrc, { call: [tls.listen, srv, 5] }]
+- print: ["listen_rc: ${lrc}"]
+- call: [tls.close, srv]
+- print: ["lifecycle done"]
+
+# ── Phase B: TLS loopback via spawn (ping/pong, self-signed cert) ─────────────
+
+- def:
+    name: tls_server
+    args: []
+    body:
+      - decl: [cert, path]
+      - set: [cert, "tests/tls_certs/server.crt"]
+      - decl: [key, path]
+      - set: [key, "tests/tls_certs/server.key"]
+      - decl: [s, tls_socket_handle]
+      - set: [s, { call: [tls.socket] }]
+      - call: [tls.set_cert, s, cert, key]
+      - call: [tls.set_verify, s, "none"]
+      - call: [tls.bind, s, "127.0.0.1", 19877]
+      - call: [tls.listen, s, 5]
+      - decl: [c, tls_socket_handle]
+      - set: [c, { call: [tls.accept, s] }]
+      - decl: [msg, string]
+      - set: [msg, { call: [tls.recv_string, c, 64] }]
+      - print: ["tls server got: ${msg}"]
+      - call: [tls.send_string, c, "tls_pong"]
+      - call: [tls.close, c]
+      - call: [tls.close, s]
+
+- decl: [srv_thread, thread_handle]
+- set: [srv_thread, { spawn: [tls_server] }]
+- call: [time.sleep_ms, 200]
+
+- decl: [client, tls_socket_handle]
+- set: [client, { call: [tls.socket] }]
+- call: [tls.set_verify, client, "none"]
+- call: [tls.connect, client, "127.0.0.1", 19877]
+- call: [tls.send_string, client, "tls_ping"]
+- decl: [resp, string]
+- set: [resp, { call: [tls.recv_string, client, 64] }]
+- print: ["tls client got: ${resp}"]
+- call: [tls.close, client]
+
+- call: [srv_thread.join]
+
+- print: ["tls tests done"]

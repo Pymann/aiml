@@ -1133,6 +1133,295 @@ void registerBuiltins(CompilerContext& ctx) {
         (void)ptrTy; // suppress unused warning
     }
 
+    // ── tls_socket_handle builtin class ──────────────────────────────────────
+    {
+        CompilerContext::ClassInfo tlsInfo;
+        tlsInfo.name      = "tls_socket_handle";
+        tlsInfo.isBuiltin = true;
+
+        tlsInfo.builtinMethods["close"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* p = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_tls_close", ctx.builder.getInt32Ty(), {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p}));
+        };
+
+        tlsInfo.builtinMethods["fd"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* p = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_tls_fd", ctx.builder.getInt32Ty(), {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p}));
+        };
+
+        tlsInfo.builtinMethods["send"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            llvm::Type* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* p = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_tls_send", ctx.builder.getInt32Ty(), {i8p, ptrTy});
+            if (call->args.empty()) return ctx.ir_gen->getInt32(-1);
+            llvm::Value* buf = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p, buf}));
+        };
+
+        tlsInfo.builtinMethods["recv"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            llvm::Type* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* p = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_tls_recv", ctx.builder.getInt32Ty(), {i8p, ptrTy});
+            if (call->args.empty()) return ctx.ir_gen->getInt32(-1);
+            llvm::Value* buf = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p, buf}));
+        };
+
+        tlsInfo.builtinMethods["send_string"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* p = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_tls_send_string", ctx.builder.getInt32Ty(), {i8p, i8p});
+            if (call->args.empty()) return ctx.ir_gen->getInt32(-1);
+            llvm::Value* str = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p, str}));
+        };
+
+        tlsInfo.builtinMethods["recv_string"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* p = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_tls_recv_string", i8p, {i8p, i32});
+            llvm::Value* maxBytes = call->args.empty()
+                ? ctx.builder.getInt32(4096)
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p, maxBytes}));
+        };
+
+        tlsInfo.builtinMethods["set_timeout"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* p = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_tls_set_timeout", i32, {i8p, i32});
+            llvm::Value* ms = call->args.empty()
+                ? ctx.builder.getInt32(0)
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p, ms}));
+        };
+
+        tlsInfo.builtinMethods["peer_cert_cn"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* p = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_tls_peer_cert_cn", i8p, {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p}));
+        };
+
+        tlsInfo.builtinMethods["peer_cert_valid"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* p = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_tls_peer_cert_valid", ctx.builder.getInt32Ty(), {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p}));
+        };
+
+        ctx.classes["tls_socket_handle"] = std::move(tlsInfo);
+    }
+
+    // ── tls namespace ─────────────────────────────────────────────────────────
+    {
+        auto& tls = ctx.namespaces["tls"];
+        llvm::Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32  = ctx.builder.getInt32Ty();
+        llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+
+        // tls.socket() → tls_socket_handle (i8*)
+        tls.builtinFuncs["socket"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_tls_socket", i8p, {});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {}));
+        };
+
+        // tls.connect(sock, host, port) → i32
+        tls.builtinFuncs["connect"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_tls_connect", i32, {i8p, i8p, i32});
+            if (args.size() < 3) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))
+            }));
+        };
+
+        // tls.bind(sock, host, port) → i32
+        tls.builtinFuncs["bind"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_tls_bind", i32, {i8p, i8p, i32});
+            if (args.size() < 3) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))
+            }));
+        };
+
+        // tls.listen(sock [,backlog]) → i32
+        tls.builtinFuncs["listen"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_tls_listen", i32, {i8p, i32});
+            if (args.empty()) return ctx.ir_gen->getInt32(-1);
+            llvm::Value* backlog = args.size() >= 2
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+                : ctx.builder.getInt32(0);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                backlog
+            }));
+        };
+
+        // tls.accept(sock) → tls_socket_handle (i8*)
+        tls.builtinFuncs["accept"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_tls_accept", i8p, {i8p});
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+            }));
+        };
+
+        // tls.send(sock, buf) → i32
+        tls.builtinFuncs["send"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32   = ctx.builder.getInt32Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Function* f = ctx.getFunction("aiml_tls_send", i32, {i8p, ptrTy});
+            if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+            }));
+        };
+
+        // tls.recv(sock, buf) → i32
+        tls.builtinFuncs["recv"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32   = ctx.builder.getInt32Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Function* f = ctx.getFunction("aiml_tls_recv", i32, {i8p, ptrTy});
+            if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+            }));
+        };
+
+        // tls.send_string(sock, str) → i32
+        tls.builtinFuncs["send_string"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_tls_send_string", i32, {i8p, i8p});
+            if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+            }));
+        };
+
+        // tls.recv_string(sock, max_bytes) → string (i8*)
+        tls.builtinFuncs["recv_string"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_tls_recv_string", i8p, {i8p, i32});
+            if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            llvm::Value* maxBytes = args.size() >= 2
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+                : ctx.builder.getInt32(4096);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                maxBytes
+            }));
+        };
+
+        // tls.close(sock) → i32
+        tls.builtinFuncs["close"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_tls_close", i32, {i8p});
+            if (args.empty()) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+            }));
+        };
+
+        // tls.fd(sock) → i32
+        tls.builtinFuncs["fd"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_tls_fd", i32, {i8p});
+            if (args.empty()) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+            }));
+        };
+
+        // tls.set_timeout(sock, ms) → i32
+        tls.builtinFuncs["set_timeout"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_tls_set_timeout", i32, {i8p, i32});
+            if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+            }));
+        };
+
+        // tls.set_cert(sock, cert, key) → i32
+        tls.builtinFuncs["set_cert"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_tls_set_cert", i32, {i8p, i8p, i8p});
+            if (args.size() < 3) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))
+            }));
+        };
+
+        // tls.set_ca(sock, ca) → i32
+        tls.builtinFuncs["set_ca"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_tls_set_ca", i32, {i8p, i8p});
+            if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+            }));
+        };
+
+        // tls.set_verify(sock, mode) → i32
+        tls.builtinFuncs["set_verify"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_tls_set_verify", i32, {i8p, i8p});
+            if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+            }));
+        };
+
+        (void)ptrTy; // suppress unused warning
+    }
+
     // ── db namespace ─────────────────────────────────────────────────────────
     // db.open("name")      → Store<T>  (reads ctx.deserializeTargetType for elem type)
     // db.open_kv("name")   → Kv<K:V>   (reads ctx.deserializeTargetType for val type)
