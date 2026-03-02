@@ -1,0 +1,78 @@
+# Tests for ws namespace + ws_handle (WebSocket RFC 6455, from scratch)
+# Expected exit code: 0
+
+# ── Phase A: Lifecycle (no WS traffic) ───────────────────────────────────────
+
+- decl: [srv, ws_handle]
+- set: [srv, { call: [ws.server, "127.0.0.1", 19890] }]
+- decl: [fd, i32]
+- set: [fd, { call: [ws.fd, srv] }]
+- print: ["ws server fd (should be > 0): ${fd}"]
+- call: [ws.close, srv]
+- print: ["lifecycle done"]
+
+# ── Phase B: ws:// loopback (echo, text frames) ───────────────────────────────
+
+- def:
+    name: ws_echo_server
+    args: []
+    body:
+      - decl: [srv, ws_handle]
+      - set: [srv, { call: [ws.server, "127.0.0.1", 19891] }]
+      - decl: [client, ws_handle]
+      - set: [client, { call: [ws.accept, srv] }]
+      - decl: [msg, string]
+      - set: [msg, { call: [ws.recv, client] }]
+      - print: ["ws server got: ${msg}"]
+      - call: [ws.send, client, "ws_pong"]
+      - call: [ws.close, client]
+      - call: [ws.close, srv]
+
+- decl: [t, thread_handle]
+- set: [t, { spawn: [ws_echo_server] }]
+- call: [time.sleep_ms, 150]
+
+- decl: [c, ws_handle]
+- set: [c, { call: [ws.connect, "127.0.0.1", 19891, "/chat"] }]
+- call: [ws.send, c, "ws_ping"]
+- decl: [resp, string]
+- set: [resp, { call: [ws.recv, c] }]
+- print: ["ws client got: ${resp}"]
+- call: [ws.close, c]
+- call: [t.join]
+
+# ── Phase C: wss:// loopback (TLS WebSocket) ─────────────────────────────────
+
+- def:
+    name: wss_echo_server
+    args: []
+    body:
+      - decl: [cert, path]
+      - set: [cert, "tests/tls_certs/server.crt"]
+      - decl: [key, path]
+      - set: [key, "tests/tls_certs/server.key"]
+      - decl: [srv, ws_handle]
+      - set: [srv, { call: [wss.server, "127.0.0.1", 19892, cert, key] }]
+      - decl: [client, ws_handle]
+      - set: [client, { call: [ws.accept, srv] }]
+      - decl: [msg, string]
+      - set: [msg, { call: [ws.recv, client] }]
+      - print: ["wss server got: ${msg}"]
+      - call: [ws.send, client, "wss_pong"]
+      - call: [ws.close, client]
+      - call: [ws.close, srv]
+
+- decl: [t2, thread_handle]
+- set: [t2, { spawn: [wss_echo_server] }]
+- call: [time.sleep_ms, 200]
+
+- decl: [c2, ws_handle]
+- set: [c2, { call: [wss.connect, "127.0.0.1", 19892, "/"] }]
+- call: [ws.send, c2, "wss_ping"]
+- decl: [resp2, string]
+- set: [resp2, { call: [ws.recv, c2] }]
+- print: ["wss client got: ${resp2}"]
+- call: [ws.close, c2]
+- call: [t2.join]
+
+- print: ["ws tests done"]

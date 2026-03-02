@@ -443,6 +443,7 @@ namespace AIML {
         if (typeName == "process") return llvm::Type::getInt8Ty(context)->getPointerTo();     // ProcessHandle*
         if (typeName == "socket_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlSocket*
         if (typeName == "tls_socket_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlTlsSocket*
+        if (typeName == "ws_handle") return llvm::Type::getInt8Ty(context)->getPointerTo();          // AimlWs*
         if (typeName == "any") return llvm::Type::getInt8Ty(context)->getPointerTo();         // void*
 
         // thread_handle: pointer to { i64 tid, i8 joined, i8 detached }

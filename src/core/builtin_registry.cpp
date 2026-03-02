@@ -1422,6 +1422,218 @@ void registerBuiltins(CompilerContext& ctx) {
         (void)ptrTy; // suppress unused warning
     }
 
+    // ── ws_handle builtin class ───────────────────────────────────────────────
+    {
+        CompilerContext::ClassInfo wsInfo;
+        wsInfo.name      = "ws_handle";
+        wsInfo.isBuiltin = true;
+
+        // Helper lambda that loads the AimlWs* from the i8* alloca
+        wsInfo.builtinMethods["send"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* p = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_ws_send", i32, {i8p, i8p});
+            if (call->args.empty()) return ctx.ir_gen->getInt32(-1);
+            llvm::Value* text = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p, text}));
+        };
+
+        wsInfo.builtinMethods["recv"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* p = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_ws_recv", i8p, {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p}));
+        };
+
+        wsInfo.builtinMethods["close"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* p = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_ws_close", ctx.builder.getInt32Ty(), {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p}));
+        };
+
+        wsInfo.builtinMethods["ping"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* p = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_ws_ping", ctx.builder.getInt32Ty(), {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p}));
+        };
+
+        wsInfo.builtinMethods["fd"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* p = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_ws_fd", ctx.builder.getInt32Ty(), {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p}));
+        };
+
+        ctx.classes["ws_handle"] = std::move(wsInfo);
+    }
+
+    // ── ws namespace ──────────────────────────────────────────────────────────
+    {
+        auto& ws = ctx.namespaces["ws"];
+        llvm::Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32  = ctx.builder.getInt32Ty();
+        llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+
+        // ws.connect(host, port, path) → ws_handle
+        ws.builtinFuncs["connect"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_ws_connect", i8p, {i8p, i32, i8p});
+            if (args.size() < 3) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))
+            }));
+        };
+
+        // ws.server(host, port) → ws_handle
+        ws.builtinFuncs["server"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_ws_server", i8p, {i8p, i32});
+            if (args.size() < 2) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+            }));
+        };
+
+        // ws.accept(srv) → ws_handle  (also handles wss servers)
+        ws.builtinFuncs["accept"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_ws_accept", i8p, {i8p});
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+            }));
+        };
+
+        // ws.send(ws, text) → i32
+        ws.builtinFuncs["send"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_ws_send", i32, {i8p, i8p});
+            if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+            }));
+        };
+
+        // ws.send_binary(ws, buf) → i32
+        ws.builtinFuncs["send_binary"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32   = ctx.builder.getInt32Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Function* f = ctx.getFunction("aiml_ws_send_binary", i32, {i8p, ptrTy});
+            if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+            }));
+        };
+
+        // ws.recv(ws) → string
+        ws.builtinFuncs["recv"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_ws_recv", i8p, {i8p});
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+            }));
+        };
+
+        // ws.ping(ws) → i32
+        ws.builtinFuncs["ping"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_ws_ping", i32, {i8p});
+            if (args.empty()) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+            }));
+        };
+
+        // ws.close(ws) → i32
+        ws.builtinFuncs["close"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_ws_close", i32, {i8p});
+            if (args.empty()) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+            }));
+        };
+
+        // ws.fd(ws) → i32
+        ws.builtinFuncs["fd"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_ws_fd", i32, {i8p});
+            if (args.empty()) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+            }));
+        };
+
+        (void)i32; (void)ptrTy;
+    }
+
+    // ── wss namespace ─────────────────────────────────────────────────────────
+    {
+        auto& wss = ctx.namespaces["wss"];
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+
+        // wss.connect(host, port, path) → ws_handle  (TLS)
+        wss.builtinFuncs["connect"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_wss_connect", i8p, {i8p, i32, i8p});
+            if (args.size() < 3) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))
+            }));
+        };
+
+        // wss.server(host, port, cert, key) → ws_handle  (TLS listener)
+        wss.builtinFuncs["server"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_wss_server", i8p, {i8p, i32, i8p, i8p});
+            if (args.size() < 4) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[3]))
+            }));
+        };
+
+        // wss.accept(srv) → ws_handle  (delegates to aiml_ws_accept — it's TLS-aware)
+        wss.builtinFuncs["accept"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_ws_accept", i8p, {i8p});
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+            }));
+        };
+
+        (void)i32;
+    }
+
     // ── db namespace ─────────────────────────────────────────────────────────
     // db.open("name")      → Store<T>  (reads ctx.deserializeTargetType for elem type)
     // db.open_kv("name")   → Kv<K:V>   (reads ctx.deserializeTargetType for val type)
