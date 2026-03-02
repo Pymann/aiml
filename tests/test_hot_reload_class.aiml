@@ -1,14 +1,10 @@
 # Hot-Reload Test — class version guard (struct append-only re-definition)
 #
-# Current output (compileYamlChunk stub — no actual JIT re-compilation):
-#   v1 rc: 7       (Box v1 compiled at startup; make_box_val called via fptable)
-#   v2 rc: 7       (class hot-reload attempted, deferred — layout unchanged)
-#   v1 skip rc: 7  (Box v1 <= live v1 → guard skips)
-#
-# Expected output (after compileYamlChunk is wired):
-#   v1 rc: 7
-#   v2 rc: 7       (Box v2 hot-reloaded; make_box_val still uses v1 compiled layout)
-#   v1 skip rc: 7  (v1 <= live v2 → guard skips)
+# Expected output:
+#   v1 rc: 7       (make_box_val v1 called via fptable; Box v1 layout)
+#   v2 rc: 7       (Box v2 hot-reloaded: compiled_version bumped to 2;
+#                   make_box_val still returns 7 — GEP index 0 unchanged)
+#   v1 skip rc: 7  (Box v1 <= live v2 → version guard skips)
 
 # Define Box v1
 - class:

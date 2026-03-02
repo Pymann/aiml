@@ -21,7 +21,8 @@ namespace llvm {
     class Function;
     class Value;
     class Type;
-    class AllocaInst; // Forward declare AllocaInst
+    class AllocaInst;
+    class ExecutionEngine;
 }
 
 class AIMLCompiler {
@@ -45,6 +46,13 @@ public:
 
     // Convenience: compileFromString + generateEntryPoint + jitRun.
     int compileAndRun(const std::string& yaml_source);
+
+    // Compile yaml_source and return the address of funcName (0 on failure).
+    // For classes/models (no callable function), returns 1 as a success sentinel.
+    // The internal JIT engine is kept alive as long as this AIMLCompiler exists.
+    // Used by compileYamlChunk in exec_impl.cpp for hot-reload.
+    uint64_t compileChunkAndGetAddress(const std::string& yaml_source,
+                                        const std::string& funcName);
     
     // Dependency & Caching Methods
     void resolveImport(const std::string& path);
@@ -67,4 +75,8 @@ private:
     // context.h cannot be included here (circular), so void* is used.
     void* builder_inst_ = nullptr;  // owned: llvm::IRBuilder<>*
     void* compiler_ctx_ = nullptr;  // owned: CompilerContext*
+
+    // JIT engine kept alive for compileChunkAndGetAddress (hot-reload chunks).
+    // Null for normal compile/jitRun flows (engine is local there).
+    llvm::ExecutionEngine* engine_ = nullptr;
 };

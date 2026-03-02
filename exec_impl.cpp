@@ -15,6 +15,7 @@
 #include "src/core/fptable.h"          // AIML_MAX_VERSIONS
 #include "src/core/schema_registry.h"  // AimlClassSchema, AIML_MAX_FIELDS
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
+#include <llvm/Support/DynamicLibrary.h>
 #include <yaml-cpp/yaml.h>
 #include <cstdint>
 #include <cstring>
@@ -53,8 +54,8 @@ static int32_t*     g_fptable_versions = nullptr;
 static const char** g_func_names       = nullptr;
 static int32_t      g_func_count       = 0;
 
-// AOT mode: MCJIT engines created for hot-reloaded chunks must stay alive
-static std::vector<llvm::ExecutionEngine*> g_aot_engines;
+// Hot-reloaded AIMLCompiler instances must stay alive (they own the JIT engines).
+static std::vector<AIMLCompiler*> g_aot_compilers;
 
 extern "C" void aiml_set_active_context(void* ctx, void* ee) {
     g_active_context = static_cast<CompilerContext*>(ctx);
@@ -154,13 +155,53 @@ extern "C" void aiml_fptable_update(int func_idx, int version, void* fn_ptr) {
 
 // ── compileYamlChunk ──────────────────────────────────────────────────────────
 
-// Compiles a single YAML chunk (one def/class) into machine code.
-// Returns the address of the named function, or 0 if not yet wired.
-// Full wiring (addModule to engine) requires linking ast_builder/compiler into
-// this TU — deferred until Phase 5b.
-static uint64_t compileYamlChunk(const char* /*yaml*/, const std::string& /*funcName*/) {
-    LOG_WARNING("compileYamlChunk: hot compilation not yet wired — skipping");
-    return 0;
+// Compiles all code_chunks of a bundle into machine code and returns the address
+// of funcName (a def) or 1 (sentinel for class/model success), or 0 on failure.
+//
+// All chunks are compiled together so that class/model type definitions are
+// available when the def function is compiled (full dependency context).
+//
+// Before compiling, all currently compiled user functions are exported to
+// llvm::sys::DynamicLibrary so the new JIT module can resolve calls to them.
+static uint64_t compileYamlChunk(ExecList* cc, const std::string& funcName) {
+    if (!cc || cc->size == 0 || !g_active_context || !g_active_ee) return 0;
+
+    // Step 1: Export all user-defined functions from the live engine so the new
+    //         JIT module can resolve inter-function calls as external symbols.
+    for (auto& [nm, fi] : g_active_context->functions) {
+        uint64_t addr = g_active_ee->getFunctionAddress(nm);
+        if (addr) llvm::sys::DynamicLibrary::AddSymbol(nm, (void*)addr);
+    }
+
+    // Step 2: Build a single YAML sequence from all chunks (preserves dep order).
+    std::string yaml_source;
+    try {
+        YAML::Node seq(YAML::NodeType::Sequence);
+        for (int i = 0; i < cc->size; i++) {
+            if (!cc->data[i]) continue;
+            YAML::Node chunk = YAML::Load(std::string(cc->data[i]));
+            if (chunk.IsDefined() && !chunk.IsNull())
+                seq.push_back(chunk);
+        }
+        yaml_source = YAML::Dump(seq);
+    } catch (...) {
+        LOG_ERROR("compileYamlChunk: YAML parse error for bundle of '" + funcName + "'");
+        return 0;
+    }
+
+    if (yaml_source.empty()) return 0;
+
+    // Step 3: Compile in a fresh LLVM context and retrieve the function address.
+    AIMLCompiler* comp = new AIMLCompiler();
+    uint64_t addr = comp->compileChunkAndGetAddress(yaml_source, funcName);
+    if (addr) {
+        g_aot_compilers.push_back(comp);  // keep JIT engine alive
+        LOG_INFO("compileYamlChunk: hot-compiled '" + funcName + "' @ 0x" +
+                 std::to_string(addr));
+    } else {
+        delete comp;
+    }
+    return addr;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -310,17 +351,21 @@ extern "C" int aiml_exec_code(void* raw) {
                                  " v" + std::to_string(cur_ver) +
                                  " → v" + std::to_string(bundle_ver));
 
-                        uint64_t new_addr = compileYamlChunk(cc->data[i], nm);
+                        uint64_t new_addr = compileYamlChunk(cc, nm);
                         if (new_addr) {
                             if (fidx >= 0) {
+                                // Function in fptable: atomic pointer swap
                                 aiml_fptable_update(fidx, (int)bundle_ver, (void*)new_addr);
                             } else {
-                                LOG_WARNING("sys.exec: " + nm +
-                                            " not in fptable — new function, cannot hot-reload");
+                                // Class/model: no fptable entry — bump compiled_version so
+                                // subsequent sys.exec calls see the updated version and skip.
+                                table.at(nm).compiled_version = bundle_ver;
+                                LOG_INFO("sys.exec: " + key + " '" + nm +
+                                         "' compiled_version → " + std::to_string(bundle_ver));
                             }
                         } else {
-                            LOG_WARNING("sys.exec: compilation deferred for " + nm +
-                                        " — function stays at v" + std::to_string(cur_ver));
+                            LOG_WARNING("sys.exec: hot-compile failed for " + nm +
+                                        " — stays at v" + std::to_string(cur_ver));
                         }
                     } else {
                         LOG_WARNING("sys.exec: new " + key + " '" + nm +
@@ -330,6 +375,7 @@ extern "C" int aiml_exec_code(void* raw) {
 
                 tryHotReload("def",   g_active_context->functions);
                 tryHotReload("class", g_active_context->classes);
+                tryHotReload("model", g_active_context->classes);  // model: also in classes map
                 // enums: baked immediates, no hot-reload
 
             } catch (...) {}

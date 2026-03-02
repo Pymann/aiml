@@ -72,6 +72,10 @@ AIMLCompiler::~AIMLCompiler() {
     compiler_ctx_ = nullptr;
     delete static_cast<llvm::IRBuilder<>*>(builder_inst_);
     builder_inst_ = nullptr;
+    // engine_ is only set by compileChunkAndGetAddress (hot-reload path).
+    // The ExecutionEngine took ownership of module_ via std::move, so do NOT
+    // delete module_ separately when engine_ is set.
+    if (engine_) { delete engine_; engine_ = nullptr; }
 }
 
 const llvm::Module& AIMLCompiler::getModule() const {
@@ -269,6 +273,47 @@ int AIMLCompiler::compileAndRun(const std::string& yaml_source) {
     compileFromString(yaml_source);
     generateEntryPoint();
     return jitRun();
+}
+
+uint64_t AIMLCompiler::compileChunkAndGetAddress(const std::string& yaml_source,
+                                                   const std::string& funcName) {
+    // Compile the YAML (may contain class/model/def nodes — full dependency context).
+    compileFromString(yaml_source);
+
+    // Create a JIT engine without running any entry point.
+    llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
+
+    std::string errStr;
+    module_->setTargetTriple(llvm::sys::getDefaultTargetTriple());
+
+    llvm::EngineBuilder eb(std::move(module_));
+    eb.setErrorStr(&errStr);
+    eb.setEngineKind(llvm::EngineKind::JIT);
+
+    llvm::ExecutionEngine* eng = eb.create();
+    if (!eng) {
+        LOG_ERROR("compileChunkAndGetAddress: engine creation failed: " + errStr);
+        return 0;
+    }
+    eng->finalizeObject();
+
+    // Try to look up the function by name.
+    uint64_t addr = eng->getFunctionAddress(funcName);
+    if (addr) {
+        engine_ = eng;
+        return addr;
+    }
+
+    // No callable function found — check if it's a class/model (sentinel 1 = success).
+    CompilerContext* ctx = static_cast<CompilerContext*>(compiler_ctx_);
+    if (ctx && ctx->classes.count(funcName)) {
+        engine_ = eng;
+        return 1;  // sentinel: class/model compiled successfully
+    }
+
+    LOG_WARNING("compileChunkAndGetAddress: '" + funcName + "' not found in compiled chunk");
+    delete eng;
+    return 0;
 }
 
 void AIMLCompiler::generateEntryPoint() {
