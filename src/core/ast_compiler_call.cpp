@@ -322,19 +322,74 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
     IRValue* baseAlloca = sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst);
     IRType* baseElemTy = sym->ir_element_type ? sym->ir_element_type : ctx.ir_gen->wrapType(sym->element_type);
 
-    // Builtin class dispatch (buffer, process, ...)
+    // Builtin class dispatch (buffer, process, http handles, ...)
     {
         auto classIt = ctx.classes.find(className);
         if (classIt != ctx.classes.end() && classIt->second.isBuiltin) {
-            auto methodIt = classIt->second.builtinMethods.find(methodName);
-            if (methodIt != classIt->second.builtinMethods.end()) {
+            auto& bm = classIt->second.builtinMethods;
+
+            // If preLoadBase, load the handle ptr from alloca before invoking the handler.
+            // HTTP handles use this. Existing builtins (socket, ws, etc.) load internally.
+            llvm::Value* rawAlloca = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+            llvm::Value* baseForHandler = classIt->second.preLoadBase
+                ? ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), rawAlloca, "h_base")
+                : rawAlloca;
+
+            // Direct method match
+            auto methodIt = bm.find(methodName);
+            if (methodIt != bm.end()) {
                 auto evalExpr = [this](AIML::AST::Expr* e) -> IRValue* {
                     return this->visitExpression(e);
                 };
-                return methodIt->second(ctx,
-                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
-                    call, evalExpr);
+                return methodIt->second(ctx, baseForHandler, call, evalExpr);
             }
+
+            // Chained method dispatch: methodName contains a dot (e.g., "headers.put" on resp)
+            // The first segment is a zero-arg field accessor, the rest is dispatched on the result.
+            size_t chainDot = methodName.find('.');
+            if (chainDot != std::string::npos) {
+                std::string fieldName = methodName.substr(0, chainDot);
+                std::string subMethod = methodName.substr(chainDot + 1);
+                auto fieldIt = bm.find(fieldName);
+                if (fieldIt != bm.end()) {
+                    auto dummyEval = [](AIML::AST::Expr*) -> IRValue* { return nullptr; };
+                    IRValue* fieldWrapped = fieldIt->second(ctx, baseForHandler, nullptr, dummyEval);
+                    llvm::Value* fieldVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldWrapped));
+
+                    // Evaluate call args eagerly
+                    std::vector<llvm::Value*> argRaw;
+                    for (auto& arg : call->args) {
+                        IRValue* av = visitExpression(arg.get());
+                        if (av) argRaw.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(av)));
+                    }
+
+                    // Dispatch map operations on the field value (AimlHttpMap*)
+                    llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                    if (subMethod == "put" && argRaw.size() >= 2) {
+                        llvm::Function* fn = ctx.module.getFunction("aiml_http_map_put");
+                        if (!fn) fn = llvm::Function::Create(
+                            llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p, i8p}, false),
+                            llvm::Function::ExternalLinkage, "aiml_http_map_put", ctx.module);
+                        ctx.builder.CreateCall(fn, {fieldVal, argRaw[0], argRaw[1]});
+                        return nullptr;
+                    } else if (subMethod == "get" && argRaw.size() >= 1) {
+                        llvm::Function* fn = ctx.module.getFunction("aiml_http_map_get");
+                        if (!fn) fn = llvm::Function::Create(
+                            llvm::FunctionType::get(i8p, {i8p, i8p}, false),
+                            llvm::Function::ExternalLinkage, "aiml_http_map_get", ctx.module);
+                        return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {fieldVal, argRaw[0]}));
+                    } else if (subMethod == "len") {
+                        llvm::Function* fn = ctx.module.getFunction("aiml_http_map_len");
+                        if (!fn) fn = llvm::Function::Create(
+                            llvm::FunctionType::get(ctx.builder.getInt32Ty(), {i8p}, false),
+                            llvm::Function::ExternalLinkage, "aiml_http_map_len", ctx.module);
+                        return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {fieldVal}));
+                    }
+                    LOG_ERROR("Unknown chained sub-method: " + subMethod + " on field " + fieldName);
+                    return ctx.ir_gen->getInt32(0);
+                }
+            }
+
             LOG_ERROR("Unknown builtin method: " + methodName + " on " + className);
             return ctx.ir_gen->getInt32(0);
         }

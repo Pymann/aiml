@@ -215,7 +215,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             auto& classInfo = ctx.classes[className];
             if (classInfo.members.count(propName)) {
                 auto& member = classInfo.members[propName];
-                
+
                 if (member.access == AccessLevel::Private && ctx.currentClassName != className) {
                      LOG_ERROR("Cannot access private member " + propName);
                      return;
@@ -227,16 +227,25 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                      LOG_ERROR("Cannot assign to const member " + propName);
                      return;
                 }
-                
+
                 IRType* structTy = ctx.ir_gen->wrapType(classInfo.type);
                 IRValue* structPtr = baseAlloca;
-                
+
                 if (baseElemTy->isPointer()) {
                      structPtr = ctx.ir_gen->createLoad(baseElemTy, baseAlloca, baseName + "_ptr");
                 }
-                
+
                 IRValue* gep = ctx.ir_gen->createStructGEP(structTy, structPtr, member.index, "set_prop_ptr");
                 ctx.ir_gen->createStore(val, gep);
+                return;
+            }
+
+            // Builtin property setter for handle types (e.g. resp.status, resp.body)
+            if (classInfo.isBuiltin && classInfo.builtinSetters.count(propName)) {
+                llvm::Value* baseVal = ctx.builder.CreateLoad(
+                    ctx.builder.getInt8Ty()->getPointerTo(),
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), "bs_load");
+                classInfo.builtinSetters.at(propName)(ctx, baseVal, val);
                 return;
             }
         }

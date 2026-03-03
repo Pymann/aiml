@@ -9,6 +9,7 @@
 #include "path_runtime.h"
 #include "../../src/sys/net_runtime.h"
 #include "../../src/sys/db_runtime.h"
+#include "../../src/sys/http_runtime.h"
 #include <llvm/IR/IRBuilder.h>
 
 using IRValue = AIML::IRValue;
@@ -1888,5 +1889,527 @@ void registerBuiltins(CompilerContext& ctx) {
             });
             return ctx.ir_gen->wrap(listAlloca);
         };
+    }
+
+    // -----------------------------------------------------------------------
+    // HTTP namespace + handle types
+    // -----------------------------------------------------------------------
+    {
+        llvm::Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32t = ctx.builder.getInt32Ty();
+        llvm::Type* i8t  = ctx.builder.getInt8Ty();
+        llvm::Type* voidT = ctx.builder.getVoidTy();
+
+        // Helper: call a void* → i8* C function with a base ptr
+        auto callGet = [&](const char* fnName, llvm::Value* base) -> IRValue* {
+            llvm::Function* fn = ctx.module.getFunction(fnName);
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(i8p, {i8p}, false),
+                llvm::Function::ExternalLinkage, fnName, ctx.module);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+        };
+        auto callGetI32 = [&](const char* fnName, llvm::Value* base) -> IRValue* {
+            llvm::Function* fn = ctx.module.getFunction(fnName);
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(i32t, {i8p}, false),
+                llvm::Function::ExternalLinkage, fnName, ctx.module);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+        };
+        auto callGetI8 = [&](const char* fnName, llvm::Value* base) -> IRValue* {
+            llvm::Function* fn = ctx.module.getFunction(fnName);
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(i8t, {i8p}, false),
+                llvm::Function::ExternalLinkage, fnName, ctx.module);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+        };
+
+        // ── url ──────────────────────────────────────────────────────────
+        // Convention: builtinMethod handlers receive the alloca (base); they load from
+        // it to obtain the actual pointer before calling C runtime functions.
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name      = "url";
+            ci.isBuiltin = true;
+            // preLoadBase = false (default): URL handlers load from alloca internally.
+#define URL_GETTER_STR(mName, cFn) \
+            ci.builtinMethods[mName] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* { \
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo(); \
+                llvm::Value* ptr = ctx.builder.CreateLoad(i8p, base, "url_ptr"); \
+                llvm::Function* fn = ctx.module.getFunction(cFn); \
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p}, false), llvm::Function::ExternalLinkage, cFn, ctx.module); \
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {ptr})); \
+            }
+            URL_GETTER_STR("protocol",  "aiml_url_protocol");
+            URL_GETTER_STR("host",      "aiml_url_host");
+            URL_GETTER_STR("path",      "aiml_url_path");
+            URL_GETTER_STR("fragment",  "aiml_url_fragment");
+            URL_GETTER_STR("get_param", "aiml_url_get_param");
+            URL_GETTER_STR("to_string", "aiml_url_to_string");
+#undef URL_GETTER_STR
+            ci.builtinMethods["port"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Value* ptr = ctx.builder.CreateLoad(i8p, base, "url_ptr");
+                llvm::Function* fn = ctx.module.getFunction("aiml_url_port");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(), {i8p}, false), llvm::Function::ExternalLinkage, "aiml_url_port", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {ptr}));
+            };
+            ci.builtinMethods["is_https"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Value* ptr = ctx.builder.CreateLoad(i8p, base, "url_ptr");
+                llvm::Function* fn = ctx.module.getFunction("aiml_url_is_https");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty(), {i8p}, false), llvm::Function::ExternalLinkage, "aiml_url_is_https", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {ptr}));
+            };
+            ctx.classes["url"] = std::move(ci);
+        }
+
+        // ── http namespace functions ──────────────────────────────────────
+        {
+            auto& http = ctx.namespaces["http"];
+            // http.get(url) → http_response_handle
+            http.builtinFuncs["get"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                if (args.empty()) return ctx.ir_gen->getInt32(0);
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_get");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_get", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))}));
+            };
+            // http.post(url, body) → http_response_handle
+            http.builtinFuncs["post"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                if (args.size() < 2) return ctx.ir_gen->getInt32(0);
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_post");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_post", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))}));
+            };
+            // http.put(url, body) → http_response_handle
+            http.builtinFuncs["put"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                if (args.size() < 2) return ctx.ir_gen->getInt32(0);
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_put");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_put", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))}));
+            };
+            // http.delete(url) → http_response_handle
+            http.builtinFuncs["delete"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                if (args.empty()) return ctx.ir_gen->getInt32(0);
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_delete");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_delete", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))}));
+            };
+            // http.head(url) → http_response_handle
+            http.builtinFuncs["head"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                if (args.empty()) return ctx.ir_gen->getInt32(0);
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_head");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_head", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))}));
+            };
+            // http.new_request(method, url) → http_client_handle
+            http.builtinFuncs["new_request"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                if (args.size() < 2) return ctx.ir_gen->getInt32(0);
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_new_request");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_new_request", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))}));
+            };
+            // http.parse_url(str) → url
+            http.builtinFuncs["parse_url"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                if (args.empty()) return ctx.ir_gen->getInt32(0);
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_url_parse");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p}, false), llvm::Function::ExternalLinkage, "aiml_url_parse", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))}));
+            };
+            // http.server(host, port) → http_server_handle
+            http.builtinFuncs["server"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                if (args.size() < 2) return ctx.ir_gen->getInt32(0);
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_server");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p, ctx.builder.getInt32Ty()}, false), llvm::Function::ExternalLinkage, "aiml_http_server", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))}));
+            };
+            // http.server_tls(host, port, cert, key) → http_server_handle
+            http.builtinFuncs["server_tls"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                if (args.size() < 4) return ctx.ir_gen->getInt32(0);
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_server_tls");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p, ctx.builder.getInt32Ty(), i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_server_tls", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2])),
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[3]))
+                }));
+            };
+            // http.fs_options() → fs_options
+            http.builtinFuncs["fs_options"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_fs_options_new");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {}, false), llvm::Function::ExternalLinkage, "aiml_fs_options_new", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {}));
+            };
+        }
+
+        // ── http_server_handle ────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name      = "http_server_handle";
+            ci.isBuiltin = true;
+            ci.preLoadBase = true;
+            // srv.route(method, path, handler)
+            ci.builtinMethods["route"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_server_route");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p, i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_server_route", ctx.module);
+                if (!call || call->args.size() < 3) return nullptr;
+                IRValue* a0 = evalExpr(call->args[0].get());
+                IRValue* a1 = evalExpr(call->args[1].get());
+                // arg[2] is a function name → get its LLVM Function* and bitcast to i8*
+                llvm::Value* handlerPtr = nullptr;
+                if (auto* ve = dynamic_cast<AIML::AST::VariableExpr*>(call->args[2].get())) {
+                    llvm::Function* hf = ctx.module.getFunction(ve->name);
+                    if (hf) handlerPtr = ctx.builder.CreateBitCast(hf, i8p);
+                }
+                if (!handlerPtr) {
+                    IRValue* a2 = evalExpr(call->args[2].get());
+                    handlerPtr = a2 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a2)) : llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+                }
+                ctx.builder.CreateCall(fn, {base,
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a0)),
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a1)),
+                    handlerPtr});
+                return nullptr;
+            };
+            // srv.use(middleware)
+            ci.builtinMethods["use"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_server_use");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_server_use", ctx.module);
+                if (!call || call->args.empty()) return nullptr;
+                llvm::Value* mwPtr = nullptr;
+                if (auto* ve = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get()))
+                    if (llvm::Function* mf = ctx.module.getFunction(ve->name))
+                        mwPtr = ctx.builder.CreateBitCast(mf, i8p);
+                if (!mwPtr) { IRValue* a = evalExpr(call->args[0].get()); mwPtr = a ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)) : llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p)); }
+                ctx.builder.CreateCall(fn, {base, mwPtr});
+                return nullptr;
+            };
+            // srv.group(prefix, middleware?) → http_route_handle
+            ci.builtinMethods["group"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_server_group");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p, i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_server_group", ctx.module);
+                if (!call || call->args.empty()) return ctx.ir_gen->getInt32(0);
+                IRValue* prefix = evalExpr(call->args[0].get());
+                llvm::Value* mwPtr = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+                if (call->args.size() > 1) {
+                    if (auto* ve = dynamic_cast<AIML::AST::VariableExpr*>(call->args[1].get()))
+                        if (llvm::Function* mf = ctx.module.getFunction(ve->name))
+                            mwPtr = ctx.builder.CreateBitCast(mf, i8p);
+                    if (mwPtr == llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p))) {
+                        IRValue* a = evalExpr(call->args[1].get());
+                        if (a) mwPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                    }
+                }
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(prefix)), mwPtr}));
+            };
+            // srv.set_header(name, val)
+            ci.builtinMethods["set_header"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_server_set_header");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_server_set_header", ctx.module);
+                if (!call || call->args.size() < 2) return nullptr;
+                IRValue* a0 = evalExpr(call->args[0].get());
+                IRValue* a1 = evalExpr(call->args[1].get());
+                ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a0)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a1))});
+                return nullptr;
+            };
+            // srv.start() — blocking
+            ci.builtinMethods["start"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_server_start");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_server_start", ctx.module);
+                ctx.builder.CreateCall(fn, {base});
+                return nullptr;
+            };
+            // srv.start_async() → thread_handle
+            ci.builtinMethods["start_async"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_server_start_async");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_server_start_async", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+            };
+            // srv.stop()
+            ci.builtinMethods["stop"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_server_stop");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_server_stop", ctx.module);
+                ctx.builder.CreateCall(fn, {base});
+                return nullptr;
+            };
+            ctx.classes["http_server_handle"] = std::move(ci);
+        }
+
+        // ── http_route_handle ─────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name      = "http_route_handle";
+            ci.isBuiltin = true;
+            ci.preLoadBase = true;
+
+            auto makeRouteMethod = [](const char* cFn, bool hasPrefix) {
+                return [cFn, hasPrefix](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                    llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                    llvm::Function* fn = ctx.module.getFunction(cFn);
+                    if (hasPrefix) {
+                        // route(method, path, handler)
+                        if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p, i8p, i8p}, false), llvm::Function::ExternalLinkage, cFn, ctx.module);
+                        if (!call || call->args.size() < 3) return nullptr;
+                        IRValue* a0 = evalExpr(call->args[0].get());
+                        IRValue* a1 = evalExpr(call->args[1].get());
+                        llvm::Value* hPtr = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+                        if (auto* ve = dynamic_cast<AIML::AST::VariableExpr*>(call->args[2].get()))
+                            if (llvm::Function* hf = ctx.module.getFunction(ve->name))
+                                hPtr = ctx.builder.CreateBitCast(hf, i8p);
+                        ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a0)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a1)), hPtr});
+                    } else {
+                        // use(middleware)
+                        if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p}, false), llvm::Function::ExternalLinkage, cFn, ctx.module);
+                        if (!call || call->args.empty()) return nullptr;
+                        llvm::Value* mwPtr = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+                        if (auto* ve = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get()))
+                            if (llvm::Function* mf = ctx.module.getFunction(ve->name))
+                                mwPtr = ctx.builder.CreateBitCast(mf, i8p);
+                        ctx.builder.CreateCall(fn, {base, mwPtr});
+                    }
+                    return nullptr;
+                };
+            };
+
+            ci.builtinMethods["route"] = makeRouteMethod("aiml_http_route_route", true);
+            ci.builtinMethods["use"]   = makeRouteMethod("aiml_http_route_use",   false);
+            // group(prefix, middleware?) → http_route_handle
+            ci.builtinMethods["group"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_route_group");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p, i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_route_group", ctx.module);
+                if (!call || call->args.empty()) return ctx.ir_gen->getInt32(0);
+                IRValue* prefix = evalExpr(call->args[0].get());
+                llvm::Value* mwPtr = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+                if (call->args.size() > 1) {
+                    if (auto* ve = dynamic_cast<AIML::AST::VariableExpr*>(call->args[1].get()))
+                        if (llvm::Function* mf = ctx.module.getFunction(ve->name))
+                            mwPtr = ctx.builder.CreateBitCast(mf, i8p);
+                }
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(prefix)), mwPtr}));
+            };
+            ctx.classes["http_route_handle"] = std::move(ci);
+        }
+
+        // ── http_response_handle ──────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name      = "http_response_handle";
+            ci.isBuiltin = true;
+            ci.preLoadBase = true;
+            // Property getters (zero-arg, called via resolveProperty → builtinMethods)
+            ci.builtinMethods["status"]  = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_resp_status");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_status", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+            };
+            ci.builtinMethods["ok"]      = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_resp_ok");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_ok", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+            };
+            ci.builtinMethods["body"]    = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_resp_body");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_body", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+            };
+            // headers field (returns AimlHttpMap* for chained dispatch)
+            ci.builtinMethods["headers"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_resp_get_headers");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_get_headers", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+            };
+            // Methods: send, write, write_bytes, flush, close, free
+            ci.builtinMethods["send"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_resp_send");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_send", ctx.module);
+                ctx.builder.CreateCall(fn, {base}); return nullptr;
+            };
+            ci.builtinMethods["write"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_resp_write");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_write", ctx.module);
+                if (call && !call->args.empty()) {
+                    IRValue* a = evalExpr(call->args[0].get());
+                    if (a) ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a))});
+                }
+                return nullptr;
+            };
+            ci.builtinMethods["flush"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_resp_flush");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_flush", ctx.module);
+                ctx.builder.CreateCall(fn, {base}); return nullptr;
+            };
+            ci.builtinMethods["close"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_resp_close");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_close", ctx.module);
+                ctx.builder.CreateCall(fn, {base}); return nullptr;
+            };
+            ci.builtinMethods["free"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_resp_free");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_free", ctx.module);
+                ctx.builder.CreateCall(fn, {base}); return nullptr;
+            };
+            // Property setters (called via visitSetStmt → builtinSetters)
+            ci.builtinSetters["status"] = [](CompilerContext& ctx, llvm::Value* base, AIML::IRValue* newVal) {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_resp_set_status");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, ctx.builder.getInt32Ty()}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_set_status", ctx.module);
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(newVal));
+                if (v->getType()->isPointerTy()) v = ctx.builder.CreatePtrToInt(v, ctx.builder.getInt32Ty());
+                ctx.builder.CreateCall(fn, {base, v});
+            };
+            ci.builtinSetters["body"] = [](CompilerContext& ctx, llvm::Value* base, AIML::IRValue* newVal) {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_resp_set_body");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_set_body", ctx.module);
+                ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(newVal))});
+            };
+            ctx.classes["http_response_handle"] = std::move(ci);
+        }
+
+        // ── http_request_handle ───────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name      = "http_request_handle";
+            ci.isBuiltin = true;
+            ci.preLoadBase = true;
+            // Property getters
+            ci.builtinMethods["method"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_req_method");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_req_method", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+            };
+            ci.builtinMethods["path"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_req_path");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_req_path", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+            };
+            ci.builtinMethods["body"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_req_body");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_req_body", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+            };
+            ci.builtinMethods["url"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_req_url");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_req_url", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+            };
+            // params / cookies — AimlHttpMap* for chained dispatch (req.params.get(k))
+            ci.builtinMethods["params"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_req_params");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_req_params", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+            };
+            ci.builtinMethods["cookies"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_req_cookies");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_req_cookies", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+            };
+            // req.header(name) — method with arg
+            ci.builtinMethods["header"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_req_header");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_req_header", ctx.module);
+                llvm::Value* nameArg = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+                if (call && !call->args.empty()) { IRValue* a = evalExpr(call->args[0].get()); if (a) nameArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)); }
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base, nameArg}));
+            };
+            // req.cookie(name) — method with arg
+            ci.builtinMethods["cookie"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_req_cookie");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_req_cookie", ctx.module);
+                llvm::Value* nameArg = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+                if (call && !call->args.empty()) { IRValue* a = evalExpr(call->args[0].get()); if (a) nameArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)); }
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base, nameArg}));
+            };
+            ctx.classes["http_request_handle"] = std::move(ci);
+        }
+
+        // ── http_client_handle ────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name      = "http_client_handle";
+            ci.isBuiltin = true;
+            ci.preLoadBase = true;
+            // headers field → AimlHttpMap* for chained dispatch
+            ci.builtinMethods["headers"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_client_get_headers");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_client_get_headers", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+            };
+            // client.send() → http_response_handle
+            ci.builtinMethods["send"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_client_send");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_client_send", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
+            };
+            // Property setters
+            ci.builtinSetters["body"] = [](CompilerContext& ctx, llvm::Value* base, AIML::IRValue* newVal) {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_client_set_body");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_client_set_body", ctx.module);
+                ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(newVal))});
+            };
+            ci.builtinSetters["timeout"] = [](CompilerContext& ctx, llvm::Value* base, AIML::IRValue* newVal) {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_client_set_timeout");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, ctx.builder.getInt32Ty()}, false), llvm::Function::ExternalLinkage, "aiml_http_client_set_timeout", ctx.module);
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(newVal));
+                if (v->getType()->isPointerTy()) v = ctx.builder.CreatePtrToInt(v, ctx.builder.getInt32Ty());
+                ctx.builder.CreateCall(fn, {base, v});
+            };
+            ctx.classes["http_client_handle"] = std::move(ci);
+        }
+
+        // ── fs_options ────────────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name      = "fs_options";
+            ci.isBuiltin = true;
+            ci.preLoadBase = true;
+            ci.builtinSetters["index"] = [](CompilerContext& ctx, llvm::Value* base, AIML::IRValue* newVal) {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_fs_options_set_index");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_fs_options_set_index", ctx.module);
+                ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(newVal))});
+            };
+            ci.builtinSetters["spa"] = [](CompilerContext& ctx, llvm::Value* base, AIML::IRValue* newVal) {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_fs_options_set_spa");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, ctx.builder.getInt8Ty()}, false), llvm::Function::ExternalLinkage, "aiml_fs_options_set_spa", ctx.module);
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(newVal));
+                if (!v->getType()->isIntegerTy(8)) v = ctx.builder.CreateTrunc(v, ctx.builder.getInt8Ty());
+                ctx.builder.CreateCall(fn, {base, v});
+            };
+            ci.builtinSetters["cache_max_age"] = [](CompilerContext& ctx, llvm::Value* base, AIML::IRValue* newVal) {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_fs_options_set_cache_max_age");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, ctx.builder.getInt32Ty()}, false), llvm::Function::ExternalLinkage, "aiml_fs_options_set_cache_max_age", ctx.module);
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(newVal));
+                if (v->getType()->isPointerTy()) v = ctx.builder.CreatePtrToInt(v, ctx.builder.getInt32Ty());
+                ctx.builder.CreateCall(fn, {base, v});
+            };
+            ctx.classes["fs_options"] = std::move(ci);
+        }
     }
 }

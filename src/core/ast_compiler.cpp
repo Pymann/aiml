@@ -525,17 +525,28 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
             auto& member = classInfo->members[propName];
             IRType* structTy = ctx.ir_gen->wrapType(classInfo->type);
             IRValue* structPtr = baseAlloca;
-            
+
             if (baseElemTy->isPointer()) {
                 structPtr = ctx.ir_gen->createLoad(baseElemTy, baseAlloca, "prop_ptr_base");
             }
-            
+
             IRValue* gep = ctx.ir_gen->createStructGEP(structTy, structPtr, member.index, "prop_ptr");
             IRType* propTy = ctx.ir_gen->wrapType(member.type);
             return ctx.ir_gen->createLoad(propTy, gep, propName + "_val");
         }
+
+        // Builtin property getter: dispatch builtinMethod with same name (zero-arg accessor).
+        // If preLoadBase, load the handle ptr from alloca first (HTTP handles).
+        if (classInfo->isBuiltin && classInfo->builtinMethods.count(propName)) {
+            llvm::Value* rawAlloca = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+            llvm::Value* baseForHandler = classInfo->preLoadBase
+                ? ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), rawAlloca, "h_base_p")
+                : rawAlloca;
+            auto dummyEval = [](AIML::AST::Expr*) -> AIML::IRValue* { return nullptr; };
+            return classInfo->builtinMethods.at(propName)(ctx, baseForHandler, nullptr, dummyEval);
+        }
     }
-    
+
     LOG_ERROR("Undefined property: " + propName + " on type " + className);
     return nullptr;
 }

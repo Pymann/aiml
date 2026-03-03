@@ -124,7 +124,20 @@ namespace AIML {
 
             // Builtin dispatch (set for intrinsic types like buffer, process)
             bool isBuiltin = false;
+            // When true the dispatch layer loads the handle ptr from the alloca before
+            // invoking the MethodHandler (so handlers receive the ptr, not the alloca).
+            // Existing builtins (socket, ws, process, buffer) load internally → false.
+            // HTTP handles set this to true.
+            bool preLoadBase = false;
             std::map<std::string, MethodHandler> builtinMethods;
+
+            // Setter handler for property writes on builtin handle types
+            // Signature: (ctx, base_i8ptr, new_value) -> void
+            using SetterHandler = std::function<void(
+                CompilerContext& ctx,
+                llvm::Value* base,
+                AIML::IRValue* newVal)>;
+            std::map<std::string, SetterHandler> builtinSetters;
 
             // Source preservation (for sys.bundle)
             std::string sourceYaml;                // YAML dump of the class AST node
@@ -302,9 +315,9 @@ namespace AIML {
             return listType;
         }
 
-        // Check for User-Defined Classes (skip builtins with null type — they have
-        // their own type definition further below)
-        if (classes.count(typeName) && classes[typeName].type != nullptr) {
+        // Check for User-Defined Classes (skip builtins — they have their own
+        // type definition further below, even if type != nullptr for GEP purposes)
+        if (classes.count(typeName) && classes[typeName].type != nullptr && !classes[typeName].isBuiltin) {
             if (!bundleTrackingTarget.empty() && functions.count(bundleTrackingTarget))
                 functions[bundleTrackingTarget].referencedTypes.insert(typeName);
             return classes[typeName].type;
@@ -416,6 +429,18 @@ namespace AIML {
         if (typeName == "void") return llvm::Type::getVoidTy(context);
         if (typeName == "string") return llvm::Type::getInt8Ty(context)->getPointerTo(); // char*
         if (typeName == "path")   return llvm::Type::getInt8Ty(context)->getPointerTo(); // interned char*
+
+        // HTTP handle types — all opaque i8* pointers to heap-allocated C structs
+        // (struct type for GEP is stored in ClassInfo.type, retrieved via ctx.classes)
+        if (typeName == "url")                  return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "url_credential")       return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "http_server_handle")   return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "http_route_handle")    return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "http_request_handle")  return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "http_response_handle") return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "http_client_handle")   return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "http_session_handle")  return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "fs_options")           return llvm::Type::getInt8Ty(context)->getPointerTo();
         
         // Unsigned aliases (LLVM types are sign-agnostic)
         if (typeName == "u8") return llvm::Type::getInt8Ty(context);

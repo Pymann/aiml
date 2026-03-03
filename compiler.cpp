@@ -13,6 +13,7 @@
 #include "src/sys/tls_runtime.h"
 #include "src/sys/ws_runtime.h"
 #include "src/sys/db_runtime.h"
+#include "src/sys/http_runtime.h"
 
 // LLVM includes
 #include <llvm/IR/LLVMContext.h>
@@ -626,6 +627,77 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_is_active",     (void*)(intptr_t)aiml_db_store_is_active);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_get_ptr",       (void*)(intptr_t)aiml_db_store_get_ptr);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_query",         (void*)(intptr_t)aiml_db_store_query);
+
+    // HTTP runtime
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_url_parse",              (void*)(intptr_t)aiml_url_parse);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_url_to_string",          (void*)(intptr_t)aiml_url_to_string);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_url_is_https",           (void*)(intptr_t)aiml_url_is_https);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_url_protocol",           (void*)(intptr_t)aiml_url_protocol);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_url_host",               (void*)(intptr_t)aiml_url_host);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_url_path",               (void*)(intptr_t)aiml_url_path);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_url_fragment",           (void*)(intptr_t)aiml_url_fragment);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_url_port",               (void*)(intptr_t)aiml_url_port);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_url_get_param",          (void*)(intptr_t)aiml_url_get_param);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_url_credential",         (void*)(intptr_t)aiml_url_credential);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_url_cred_user",          (void*)(intptr_t)aiml_url_cred_user);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_url_cred_pass",          (void*)(intptr_t)aiml_url_cred_pass);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_map_new",           (void*)(intptr_t)aiml_http_map_new);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_map_put",           (void*)(intptr_t)aiml_http_map_put);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_map_get",           (void*)(intptr_t)aiml_http_map_get);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_map_len",           (void*)(intptr_t)aiml_http_map_len);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_map_free",          (void*)(intptr_t)aiml_http_map_free);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_get",               (void*)(intptr_t)aiml_http_get);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_post",              (void*)(intptr_t)aiml_http_post);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_put",               (void*)(intptr_t)aiml_http_put);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_delete",            (void*)(intptr_t)aiml_http_delete);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_head",              (void*)(intptr_t)aiml_http_head);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_new_request",       (void*)(intptr_t)aiml_http_new_request);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_client_new",        (void*)(intptr_t)aiml_http_client_new);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_client_send",       (void*)(intptr_t)aiml_http_client_send);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_status",       (void*)(intptr_t)aiml_http_resp_status);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_ok",           (void*)(intptr_t)aiml_http_resp_ok);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_headers",      (void*)(intptr_t)aiml_http_resp_headers);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_body",         (void*)(intptr_t)aiml_http_resp_body);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_free",         (void*)(intptr_t)aiml_http_resp_free);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_send",         (void*)(intptr_t)aiml_http_resp_send);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_write",        (void*)(intptr_t)aiml_http_resp_write);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_write_bytes",  (void*)(intptr_t)aiml_http_resp_write_bytes);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_flush",        (void*)(intptr_t)aiml_http_resp_flush);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_close",        (void*)(intptr_t)aiml_http_resp_close);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_set_status",   (void*)(intptr_t)aiml_http_resp_set_status);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_set_body",     (void*)(intptr_t)aiml_http_resp_set_body);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_set_body_bytes",(void*)(intptr_t)aiml_http_resp_set_body_bytes);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_resp_get_headers",  (void*)(intptr_t)aiml_http_resp_get_headers);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_method",        (void*)(intptr_t)aiml_http_req_method);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_path",          (void*)(intptr_t)aiml_http_req_path);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_body",          (void*)(intptr_t)aiml_http_req_body);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_url",           (void*)(intptr_t)aiml_http_req_url);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_params",        (void*)(intptr_t)aiml_http_req_params);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_cookies",       (void*)(intptr_t)aiml_http_req_cookies);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_header",        (void*)(intptr_t)aiml_http_req_header);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_req_cookie",        (void*)(intptr_t)aiml_http_req_cookie);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_client_set_body",   (void*)(intptr_t)aiml_http_client_set_body);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_client_set_timeout",(void*)(intptr_t)aiml_http_client_set_timeout);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_client_set_stream", (void*)(intptr_t)aiml_http_client_set_stream);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_client_get_headers",(void*)(intptr_t)aiml_http_client_get_headers);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_server",            (void*)(intptr_t)aiml_http_server);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_server_tls",        (void*)(intptr_t)aiml_http_server_tls);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_server_route",      (void*)(intptr_t)aiml_http_server_route);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_server_use",        (void*)(intptr_t)aiml_http_server_use);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_server_group",      (void*)(intptr_t)aiml_http_server_group);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_server_set_header", (void*)(intptr_t)aiml_http_server_set_header);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_server_start",      (void*)(intptr_t)aiml_http_server_start);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_server_start_async",(void*)(intptr_t)aiml_http_server_start_async);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_server_stop",       (void*)(intptr_t)aiml_http_server_stop);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_server_filesystem", (void*)(intptr_t)aiml_http_server_filesystem);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_route_route",       (void*)(intptr_t)aiml_http_route_route);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_route_use",         (void*)(intptr_t)aiml_http_route_use);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_route_group",       (void*)(intptr_t)aiml_http_route_group);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_http_route_filesystem",  (void*)(intptr_t)aiml_http_route_filesystem);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_fs_options_new",         (void*)(intptr_t)aiml_fs_options_new);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_fs_options_set_index",   (void*)(intptr_t)aiml_fs_options_set_index);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_fs_options_set_spa",     (void*)(intptr_t)aiml_fs_options_set_spa);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_fs_options_set_cache_max_age",(void*)(intptr_t)aiml_fs_options_set_cache_max_age);
 
     // llvm::sys::DynamicLibrary::AddSymbol("stderr", (void*)(intptr_t)stderr); // Removed to avoid macro issues for now
 

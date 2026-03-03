@@ -140,8 +140,10 @@ Seltenerer Fall: Das Proxy-Kontrollprotokoll selbst ist TLS-verschlüsselt.
 ```aiml
 - decl: [px, proxy_config_handle]
 - set: [px, { call: [proxy.new, "secure-proxy.corp.com", 8443] }]
-- call: [px.set_proxy_tls, true]          # Verbindung zum Proxy selbst via TLS
-- call: [px.set_ca, "/etc/corp/proxy_ca.crt"]   # CA für Proxy-TLS-Zertifikat
+- call: [px.set_proxy_tls, true]
+- decl: [proxy_ca, path]
+- set: [proxy_ca, "/etc/corp/proxy_ca.crt"]
+- call: [px.set_ca, proxy_ca]
 - call: [px.set_auth_ntlm, "CORP\\user", "pass"]
 ```
 
@@ -231,36 +233,36 @@ Implementiert via `libgssapi_krb5` (`-lgssapi_krb5`).
 
 ## 5. Vollständige `proxy_config_handle`-Methoden
 
-| Methode | Signatur | Beschreibung |
-|---------|----------|--------------|
-| `set_auth_none` | `() → void` | Kein Auth (Default) |
-| `set_auth_basic` | `(user: string, pass: string) → void` | HTTP Basic / SOCKS5 User-Pass |
-| `set_auth_digest` | `(user: string, pass: string) → void` | HTTP Digest (MD5) |
-| `set_auth_ntlm` | `(user: string, pass: string) → void` | NTLMv2 |
-| `set_auth_ntlm` | `(user: string, pass: string, domain: string) → void` | NTLMv2 + Domain |
-| `set_auth_kerberos` | `(spn: string) → void` | Kerberos via GSSAPI (bestehended Ticket) |
-| `set_auth_kerberos_keytab` | `(spn: string, keytab: path) → void` | Kerberos mit Keytab |
-| `set_auth_bearer` | `(token: string) → void` | Bearer Token (OAuth2) |
-| `set_ca` | `(ca_path: path) → void` | CA für Proxy-Zertifikat (SSL-Inspection oder HTTPS-Proxy) |
-| `set_proxy_tls` | `(enabled: bool) → void` | Proxy-Kontrollkanal selbst via TLS (Default: false) |
-| `set_timeout` | `(ms: i32) → void` | Timeout für Proxy-Verbindung + Auth-Handshake |
-| `set_no_proxy` | `(hosts: string) → void` | Komma-sep. Hostnamen, die direkt verbunden werden |
-| `set_resolve_via_proxy` | `(enabled: bool) → void` | DNS-Auflösung am Proxy (SOCKS4a/SOCKS5, Default: true) |
+| Methode                    | Argumente                              | Rückgabe | Beschreibung |
+|----------------------------|----------------------------------------|----------|--------------|
+| `set_auth_none`            | —                                      | —        | Kein Auth (Default) |
+| `set_auth_basic`           | `user: string, pass: string`           | —        | HTTP Basic / SOCKS5 User-Pass |
+| `set_auth_digest`          | `user: string, pass: string`           | —        | HTTP Digest (MD5) |
+| `set_auth_ntlm`            | `user: string, pass: string`           | —        | NTLMv2 |
+| `set_auth_ntlm`            | `user: string, pass: string, domain: string` | — | NTLMv2 + explizite Domain |
+| `set_auth_kerberos`        | `spn: string`                          | —        | Kerberos via GSSAPI (bestehendes Ticket) |
+| `set_auth_kerberos_keytab` | `spn: string, keytab: path`            | —        | Kerberos mit Keytab |
+| `set_auth_bearer`          | `token: string`                        | —        | Bearer Token (OAuth2) |
+| `set_ca`                   | `ca: path`                             | —        | CA für Proxy-Zertifikat (SSL-Inspection oder HTTPS-Proxy) |
+| `set_proxy_tls`            | `enabled: bool`                        | —        | Proxy-Kontrollkanal selbst via TLS (Default: false) |
+| `set_timeout`              | `ms: i32`                              | —        | Timeout für Proxy-Verbindung + Auth-Handshake |
+| `set_no_proxy`             | `hosts: string`                        | —        | Komma-sep. Hostnamen, die direkt verbunden werden |
+| `set_resolve_via_proxy`    | `enabled: bool`                        | —        | DNS-Auflösung am Proxy (SOCKS4a/SOCKS5, Default: true) |
 
 ---
 
 ## 6. `proxy`-Namespace-Referenz
 
-| Funktion | Signatur | Beschreibung |
-|----------|----------|--------------|
-| `proxy.new` | `(host: string, port: i32) → proxy_config_handle` | HTTP CONNECT Proxy |
-| `proxy.new_socks4` | `(host: string, port: i32) → proxy_config_handle` | SOCKS4 |
-| `proxy.new_socks4a` | `(host: string, port: i32) → proxy_config_handle` | SOCKS4a (DNS at Proxy) |
-| `proxy.new_socks5` | `(host: string, port: i32) → proxy_config_handle` | SOCKS5 |
-| `proxy.from_env` | `() → proxy_config_handle` | Liest `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` / `NO_PROXY` |
-| `proxy.from_pac` | `(pac_url: string) → proxy_config_handle` | PAC-Datei (Proxy Auto-Config) |
-| `proxy.from_pac_file` | `(pac_path: path) → proxy_config_handle` | Lokale PAC-Datei |
-| `proxy.none` | `() → proxy_config_handle` | Explizit kein Proxy (überschreibt Umgebung) |
+| Aufruf | Rückgabe | Beschreibung |
+|--------|----------|--------------|
+| `{ call: [proxy.new, host, port] }` | `proxy_config_handle` | HTTP CONNECT Proxy |
+| `{ call: [proxy.new_socks4, host, port] }` | `proxy_config_handle` | SOCKS4 |
+| `{ call: [proxy.new_socks4a, host, port] }` | `proxy_config_handle` | SOCKS4a (DNS at Proxy) |
+| `{ call: [proxy.new_socks5, host, port] }` | `proxy_config_handle` | SOCKS5 |
+| `{ call: [proxy.from_env] }` | `proxy_config_handle` | Liest `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` |
+| `{ call: [proxy.from_pac, pac_url] }` | `proxy_config_handle` | PAC-Datei via URL (`pac_url: url`) |
+| `{ call: [proxy.from_pac_file, pac_path] }` | `proxy_config_handle` | Lokale PAC-Datei (`pac_path: path`) |
+| `{ call: [proxy.none] }` | `proxy_config_handle` | Explizit kein Proxy (überschreibt Umgebung) |
 
 ### 6.1 Umgebungsvariablen (`proxy.from_env`)
 
@@ -287,15 +289,21 @@ verwendet werden soll (`FindProxyForURL`-Funktion). Weit verbreitet in Unternehm
 
 ```aiml
 # PAC von URL laden (typischer Unternehmensfall: WPAD)
+- decl: [wpad_url, url]
+- set: [wpad_url, "http://wpad.corp.com/wpad.dat"]
 - decl: [px, proxy_config_handle]
-- set: [px, { call: [proxy.from_pac, "http://wpad.corp.com/wpad.dat"] }]
+- set: [px, { call: [proxy.from_pac, wpad_url] }]
 
 # Oder lokale PAC-Datei
-- set: [px, { call: [proxy.from_pac_file, "/etc/myapp/proxy.pac"] }]
+- decl: [pac_file, path]
+- set: [pac_file, "/etc/myapp/proxy.pac"]
+- set: [px, { call: [proxy.from_pac_file, pac_file] }]
 
 # set_auth gilt dann für alle Proxies die das PAC zurückgibt
 - call: [px.set_auth_ntlm, "CORP\\user", "pass"]
-- call: [px.set_ca, "/etc/corp/inspection_ca.crt"]
+- decl: [insp_ca, path]
+- set: [insp_ca, "/etc/corp/inspection_ca.crt"]
+- call: [px.set_ca, insp_ca]
 
 - decl: [sock, tls_socket_handle]
 - set: [sock, { call: [tls.socket] }]
