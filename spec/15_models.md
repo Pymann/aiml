@@ -82,3 +82,25 @@ Use `model` for data, `class` for behaviour.
 # Call with mixed Map (Structural Typing)
 - call: [start_server, {host: "10.0.0.5", port: 9090}]
 ```
+
+## Heap-Allokation und ptr<Model>
+
+Models können auch auf dem Heap alloziert werden. Punkt-Notation dereferenziert
+`ptr<Model>` automatisch — identisch zu Klassen:
+
+```yaml
+- decl: [conf, ptr<ServerConfig>, { new: ServerConfig }]
+
+# Schreiben — (*conf).host = "0.0.0.0"
+- set: [conf.host, "0.0.0.0"]
+
+# Lesen
+- decl: [h, string]
+- set: [h, conf.host]
+
+- free: [conf]
+```
+
+Type-Aliases (z.B. `ServerConfig` als Name für `ptr<ServerConfig>`) können für
+häufig verwendete Handle-Typen definiert werden, damit `ptr<...>` nicht
+überall ausgeschrieben werden muss.

@@ -395,19 +395,23 @@ kein Parser, direktes IR:
 
 ```aiml
 # Predicate-Funktion — vom Compiler zu LLVM IR compiliert:
-- fn:
+- def:
     name: is_alive
     args: [[e, ptr<Entity>]]
     return: i32
     body:
-      - return: { call: [e.hp > 0] }
+      - return: { >: [e.hp, 0] }
 
-- fn:
+- def:
     name: is_active_enemy
     args: [[e, ptr<Entity>]]
     return: i32
     body:
-      - return: { call: [e.hp > 0 and e.ai_state == 2] }
+      - decl: [alive, i32]
+      - set: [alive, { >: [e.hp, 0] }]
+      - decl: [enemy, i32]
+      - set: [enemy, { ==: [e.ai_state, 2] }]
+      - return: { and: [alive, enemy] }
 
 # Alle lebenden Entities, sortiert nach pos_x, maximal 100:
 - decl: [alive, list<ptr<Entity>>]
@@ -589,44 +593,42 @@ Erkennt es eine höhere Version mit neuen Feldern, wendet es die **In-Place-Migr
 
 # Movement-System: kein eid nötig — reine Datentransformation
 # Column-Layout → SIMD verarbeitet 8 pos_x-Werte gleichzeitig
-- fn:
+- def:
     name: move_system
     args: [[pos, ptr<Position>], [vel, ptr<Velocity>]]
     body:
-      - set: [pos.x, { call: [pos.x + vel.dx] }]
-      - set: [pos.y, { call: [pos.y + vel.dy] }]
+      - set: [pos.x, { +: [pos.x, vel.dx] }]
+      - set: [pos.y, { +: [pos.y, vel.dy] }]
 
 # Damage-System: eid nötig — löscht Entity aus mehreren Stores
-- fn:
+- def:
     name: damage_system
     args: [[eid, i32], [h, ptr<Health>]]
     body:
-      - if:
-          condition: { call: [h.hp <= 0] }
-          body:
-            - call: [health.delete, eid]
-            - call: [positions.delete, eid]
-            - call: [velocities.delete, eid]
+      - if: [{ <=: [h.hp, 0] }, true]
+        then:
+          - call: [health.delete, eid]
+          - call: [positions.delete, eid]
+          - call: [velocities.delete, eid]
 
 # --- Initialisierung: 1000 Enemies spawnen ---
 - decl: [i, i32]
 - set: [i, 0]
-- while:
-    condition: { call: [i < 1000] }
-    body:
-      - decl: [pos, Position]
-      - decl: [vel, Velocity]
-      - decl: [hp,  Health]
-      - set: [pos.x, { call: [math.random, 0.0, 1000.0] }]
-      - set: [vel.dx, 1.0]
-      - set: [hp.hp, 100]
-      - call: [positions.insert,  pos]
-      - call: [velocities.insert, vel]
-      - call: [health.insert,     hp]
-      - set: [i, { call: [i + 1] }]
+- while: [{ <: [i, 1000] }]
+  body:
+    - decl: [pos, Position]
+    - decl: [vel, Velocity]
+    - decl: [hp,  Health]
+    - set: [pos.x, { call: [math.random, 0.0, 1000.0] }]
+    - set: [vel.dx, 1.0]
+    - set: [hp.hp, 100]
+    - call: [positions.insert,  pos]
+    - call: [velocities.insert, vel]
+    - call: [health.insert,     hp]
+    - set: [i, { +: [i, 1] }]
 
 # --- Game Loop ---
-- fn:
+- def:
     name: game_loop
     return: void
     body:

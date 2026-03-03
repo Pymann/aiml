@@ -38,3 +38,28 @@
 - store: [pp, 99, 1]
 - print: [["Modified X via PP deep store: ${x}"]]
 ```
+
+## Auto-Dereferenzierung bei Member-Zugriff
+
+Für `ptr<T>` wo `T` eine Klasse oder ein Model ist, wird der Pointer bei Punkt-Notation
+automatisch dereferenziert — explizites `{ ?: [...] }` ist nicht nötig:
+
+```yaml
+- decl: [p, ptr<Point>, { new: Point }]
+
+# Schreiben — automatisch (*p).x = 10
+- set: [p.x, 10]
+
+# Lesen — automatisch x = (*p).y
+- decl: [y, i32]
+- set: [y, p.y]
+
+# Methoden — automatisch (*p).move(dx, dy)
+- call: [p.move, 5, 3]
+```
+
+Gilt für beliebige Tiefe: `p.nested.field` dereferenziert `p` und greift dann auf das
+Feld `nested` des resultierenden Structs zu.
+
+Für primitive Typen (`ptr<i32>` etc.) ist weiterhin `{ ?: [p] }` zum Lesen und
+`store: [p, val]` zum Schreiben erforderlich.

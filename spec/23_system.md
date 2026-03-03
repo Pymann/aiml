@@ -55,7 +55,7 @@
 - set: [first_arg, { call: [sys.get_arg, 1] }]
 
 # 4. Size and Type
-- decl [any_class, AnyClass]
+- decl: [any_class, AnyClass]
 - decl: [size, u64]
 - set: [size, { call: [sys.size, AnyClass] }]
 - decl: [size2, u64]

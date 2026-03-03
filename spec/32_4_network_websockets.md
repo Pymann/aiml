@@ -23,8 +23,10 @@
 
 ```aiml
 # WS-Client (unverschlüsselt)
+- decl: [ws_url, url]
+- set: [ws_url, "ws://echo.websocket.org/"]
 - decl: [ws, ws_handle]
-- set: [ws, { call: [ws.connect, "ws://echo.websocket.org/"] }]
+- set: [ws, { call: [ws.connect, ws_url] }]
 
 # Text senden
 - call: [ws.send, "Hello WebSocket!"]
@@ -34,15 +36,17 @@
 - set: [msg, { call: [ws.recv] }]
 - print: ["Echo: ${msg}"]
 
-- call: [ws.close, 1000, "normal closure"]
+- call: [ws.close]
 ```
 
 ### 2.2 WSS (verschlüsselt via TLS)
 
 ```aiml
 # URL-Schema "wss://" → TLS-Transport automatisch
+- decl: [stream_url, url]
+- set: [stream_url, "wss://stream.example.com/live"]
 - decl: [ws, ws_handle]
-- set: [ws, { call: [ws.connect, "wss://stream.example.com/live"] }]
+- set: [ws, { call: [ws.connect, stream_url] }]
 
 - call: [ws.send, "{\"subscribe\": \"btc_usd\"}"]
 
@@ -50,16 +54,19 @@
 - set: [event, { call: [ws.recv] }]
 - print: ["Event: ${event}"]
 
-- call: [ws.close, 1000, "done"]
+- call: [ws.close]
 ```
 
-`ws.connect` erkennt `ws://` vs. `wss://` und wählt `net.*` bzw. `tls.*` als Transport.
+`ws.connect` erkennt `ws://` vs. `wss://` anhand des URL-Schemas und wählt
+`net.*` bzw. `tls.*` als Transport.
 
 ### 2.3 Binäre Nachrichten
 
 ```aiml
+- decl: [bin_url, url]
+- set: [bin_url, "ws://localhost:9001/binary"]
 - decl: [ws, ws_handle]
-- set: [ws, { call: [ws.connect, "ws://localhost:9001/binary"] }]
+- set: [ws, { call: [ws.connect, bin_url] }]
 
 # Binär senden (buffer)
 - decl: [buf, buffer]
@@ -70,9 +77,11 @@
 # Binär empfangen
 - decl: [data, buffer]
 - set: [data, { call: [ws.recv_bytes] }]
-- print: ["Binary size: ${ call: [data.size] }"]
+- decl: [sz, i32]
+- set: [sz, { call: [data.size] }]
+- print: ["Binary size: ${sz}"]
 
-- call: [ws.close, 1000, ""]
+- call: [ws.close]
 ```
 
 ### 2.4 Ping / Pong
@@ -89,16 +98,17 @@ Ping-Frames vom Peer werden automatisch mit Pong beantwortet.
 
 ### 2.5 `ws_handle`-Methoden
 
-| Methode | Signatur | Beschreibung |
-|---------|----------|--------------|
-| `send` | `(msg: string) → i32` | Text-Frame senden (Opcode 0x1) |
-| `send_bytes` | `(buf: buffer) → i32` | Binary-Frame senden (Opcode 0x2) |
-| `recv` | `() → string` | Nächste vollständige Text-Nachricht empfangen |
-| `recv_bytes` | `() → buffer` | Nächste vollständige Binary-Nachricht empfangen |
-| `ping` | `(data: string) → i32` | Ping-Frame senden |
-| `close` | `(code: i32, reason: string) → i32` | Close-Frame senden + Connection schließen |
-| `is_open` | `() → bool` | `false` nach Close-Frame oder TCP-Fehler |
-| `set_timeout` | `(ms: i32) → void` | Recv/Send-Timeout |
+| Methode       | Argumente       | Rückgabe | Beschreibung |
+|---------------|-----------------|----------|--------------|
+| `send`        | `msg: string`   | `i32`    | Text-Frame senden (Opcode 0x1) |
+| `send_bytes`  | `buf: buffer`   | `i32`    | Binary-Frame senden (Opcode 0x2) |
+| `recv`        | —               | `string` | Nächste vollständige Text-Nachricht empfangen |
+| `recv_bytes`  | —               | `buffer` | Nächste vollständige Binary-Nachricht empfangen |
+| `ping`        | —               | `i32`    | Ping-Frame senden |
+| `close`       | —               | `i32`    | Close-Frame senden + Connection schließen |
+| `is_open`     | —               | `bool`   | `false` nach Close-Frame oder TCP-Fehler |
+| `set_timeout` | `ms: i32`       | —        | Recv/Send-Timeout |
+| `fd`          | —               | `i32`    | Raw TCP-File-Descriptor |
 
 ---
 
@@ -147,7 +157,9 @@ Ping-Frames vom Peer werden automatisch mit Pong beantwortet.
     args: [[conn, ws_handle]]
     body:
       - call: [clients.push, conn]
-      - print: ["Client joined. Total: ${ call: [clients.len] }"]
+      - decl: [n, i32]
+      - set: [n, { call: [clients.len] }]
+      - print: ["Client joined. Total: ${n}"]
 
 - def:
     name: ws_on_message
@@ -177,10 +189,13 @@ Ping-Frames vom Peer werden automatisch mit Pong beantwortet.
 ### 3.3 WSS-Server (TLS)
 
 ```aiml
+- decl: [cert, path]
+- set: [cert, "/etc/myapp/server.crt"]
+- decl: [key, path]
+- set: [key, "/etc/myapp/server.key"]
+
 - decl: [srv, ws_server_handle]
-- set: [srv, { call: [ws.server_tls, "0.0.0.0", 9443,
-                       "/etc/myapp/server.crt",
-                       "/etc/myapp/server.key"] }]
+- set: [srv, { call: [ws.server_tls, "0.0.0.0", 9443, cert, key] }]
 
 - call: [srv.on_message, on_message]
 - call: [srv.start]
@@ -188,17 +203,17 @@ Ping-Frames vom Peer werden automatisch mit Pong beantwortet.
 
 ### 3.4 `ws_server_handle`-Methoden
 
-| Methode | Signatur | Beschreibung |
-|---------|----------|--------------|
-| `on_connect` | `(fn: (ws_handle) → void) → void` | Callback bei neuer Verbindung |
-| `on_message` | `(fn: (ws_handle, string) → void) → void` | Callback bei Text-Nachricht |
-| `on_binary` | `(fn: (ws_handle, buffer) → void) → void` | Callback bei Binary-Nachricht |
-| `on_close` | `(fn: (ws_handle, i32) → void) → void` | Callback bei Verbindungs-Close |
-| `on_error` | `(fn: (ws_handle, string) → void) → void` | Callback bei Fehler |
-| `start` | `() → void` | Blockierender Accept-Loop |
-| `start_async` | `() → thread_handle` | Nicht-blockierend |
-| `stop` | `() → void` | Stoppt Accept-Loop |
-| `set_max_frame_size` | `(bytes: i32) → void` | Max. Frame-Größe (Default: 1 MB) |
+| Methode             | Argumente              | Rückgabe        | Beschreibung |
+|---------------------|------------------------|-----------------|--------------|
+| `on_connect`        | `handler: fn`          | —               | Callback bei neuer Verbindung; `fn(conn: ws_handle)` |
+| `on_message`        | `handler: fn`          | —               | Callback bei Text-Nachricht; `fn(conn: ws_handle, msg: string)` |
+| `on_binary`         | `handler: fn`          | —               | Callback bei Binary-Nachricht; `fn(conn: ws_handle, buf: buffer)` |
+| `on_close`          | `handler: fn`          | —               | Callback bei Close; `fn(conn: ws_handle, code: i32)` |
+| `on_error`          | `handler: fn`          | —               | Callback bei Fehler; `fn(conn: ws_handle, err: string)` |
+| `start`             | —                      | —               | Blockierender Accept-Loop |
+| `start_async`       | —                      | `thread_handle` | Nicht-blockierend |
+| `stop`              | —                      | —               | Stoppt Accept-Loop |
+| `set_max_frame_size`| `bytes: i32`           | —               | Max. Frame-Größe (Default: 1 MB) |
 
 ---
 
@@ -214,14 +229,14 @@ Ein laufender HTTP-Server kann einzelne Verbindungen auf WebSocket upgraden:
       - decl: [msg, string]
       - set: [msg, { call: [conn.recv] }]
       - call: [conn.send, "Echo: ${msg}"]
-      - call: [conn.close, 1000, ""]
+      - call: [conn.close]
 
 - def:
     name: upgrade_endpoint
-    args: [[ctx, http_ctx_handle]]
+    args: [[req, http_request_handle], [resp, http_response_handle]]
     body:
       # Prüft Upgrade-Headers, führt Handshake durch, ruft ws_handler auf
-      - call: [ctx.upgrade_ws, ws_handler]
+      - call: [resp.upgrade_ws, ws_handler]
 
 - decl: [srv, http_server_handle]
 - set: [srv, { call: [http.server, "0.0.0.0", 8080] }]
@@ -238,13 +253,11 @@ Ein laufender HTTP-Server kann einzelne Verbindungen auf WebSocket upgraden:
 
 ## 5. Vollständige `ws`-Namespace-Referenz
 
-| Funktion | Signatur | Beschreibung |
-|----------|----------|--------------|
-| `ws.connect` | `(url: string) → ws_handle` | Verbindet mit WS/WSS-URL |
-| `ws.connect_raw` | `(sock, host: string, path: string) → ws_handle` | Upgrade eines bestehenden `socket_handle` |
-| `ws.connect_tls` | `(sock, host: string, path: string) → ws_handle` | Upgrade eines bestehenden `tls_socket_handle` |
-| `ws.server` | `(host: string, port: i32) → ws_server_handle` | Plain-WS-Server |
-| `ws.server_tls` | `(host, port, cert, key) → ws_server_handle` | WSS-Server |
+| Aufruf | Rückgabe | Beschreibung |
+|--------|----------|--------------|
+| `{ call: [ws.connect, u] }` | `ws_handle` | Verbindet mit WS/WSS-URL (`u: url`); Schema bestimmt Transport |
+| `{ call: [ws.server, host, port] }` | `ws_server_handle` | Plain-WS-Server |
+| `{ call: [ws.server_tls, host, port, cert, key] }` | `ws_server_handle` | WSS-Server (`cert, key: path`) |
 
 ---
 
