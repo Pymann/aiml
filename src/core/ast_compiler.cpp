@@ -284,8 +284,62 @@ void Compiler::registerTypeDecl(Node* node) {
         LOG_DEBUG("AST Registered Interface: " + ifaceName);
     }
 }
+void Compiler::visitExternBlock(ExternBlock* ext) {
+    // Register each extern "C" function as an LLVM ExternalLinkage declaration.
+    // No function body is generated — the linker (AOT) or dlopen/dlsym (JIT) resolve it.
+    auto* i8p = llvm::PointerType::get(ctx.context, 0);
+
+    for (const auto& fd : ext->funcs) {
+        // Build LLVM arg types
+        std::vector<llvm::Type*> paramTys;
+        for (const auto& arg : fd.args) {
+            llvm::Type* t = nullptr;
+            // `fn` type — passes an AIML function pointer as i8* (void*)
+            if (arg.second == "fn") {
+                t = i8p;
+            } else {
+                IRType* irt = ctx.ir_gen->resolveType(arg.second);
+                t = irt ? static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(irt)) : i8p;
+            }
+            paramTys.push_back(t ? t : i8p);
+        }
+
+        // Return type
+        llvm::Type* retTy = nullptr;
+        if (fd.returnType.empty() || fd.returnType == "void") {
+            retTy = llvm::Type::getVoidTy(ctx.context);
+        } else {
+            IRType* irt = ctx.ir_gen->resolveType(fd.returnType);
+            retTy = irt ? static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(irt)) : i8p;
+        }
+
+        // Skip if already declared (e.g. extern block appears twice)
+        if (ctx.module.getFunction(fd.name)) {
+            LOG_DEBUG("visitExternBlock: " + fd.name + " already declared, skipping");
+            continue;
+        }
+
+        llvm::FunctionType* ft = llvm::FunctionType::get(retTy, paramTys, false);
+        llvm::Function* f = llvm::Function::Create(
+            ft, llvm::Function::ExternalLinkage, fd.name, ctx.module);
+
+        // Store in context so visitCall can find it via resolveFunction / ctx.module.getFunction
+        CompilerContext::FunctionInfo fi;
+        fi.func           = f;
+        fi.fptable_index  = -1;   // external → no fptable slot
+        fi.version        = 1;
+        fi.compiled_version = 1;
+        ctx.functions[fd.name] = fi;
+
+        LOG_DEBUG("visitExternBlock: registered extern " + fd.name);
+    }
+}
+
 void Compiler::visitTopLevel(Node* node) {
-    if (auto func = dynamic_cast<FunctionDecl*>(node)) {
+    if (auto ext = dynamic_cast<ExternBlock*>(node)) {
+        visitExternBlock(ext);
+        return;
+    } else if (auto func = dynamic_cast<FunctionDecl*>(node)) {
         // Prevent duplicate IR generation if function was already compiled.
         // BUT: if a newer version is declared (higher `version:` value), update
         // sourceYaml + version in the symbol table so sys.bundle picks up the

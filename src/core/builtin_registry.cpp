@@ -214,6 +214,43 @@ void registerBuiltins(CompilerContext& ctx) {
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(impl, {indexVal}));
     };
 
+    // sys.load_lib(path_str) → ptr   (dlopen wrapper)
+    sys.builtinFuncs["load_lib"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+        auto* i8p  = llvm::PointerType::get(ctx.context, 0);
+        auto* i32  = ctx.builder.getInt32Ty();
+        // Declare dlopen if needed: void* dlopen(const char*, int)
+        llvm::Function* dlopen_fn = ctx.module.getFunction("dlopen");
+        if (!dlopen_fn) {
+            auto* ft = llvm::FunctionType::get(i8p, {i8p, i32}, false);
+            dlopen_fn = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "dlopen", ctx.module);
+        }
+        llvm::Value* pathArg = args.empty()
+            ? llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p))
+            : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+        // RTLD_LAZY = 1
+        llvm::Value* handle = ctx.builder.CreateCall(dlopen_fn, {pathArg, ctx.builder.getInt32(1)});
+        return ctx.ir_gen->wrap(handle);
+    };
+
+    // sys.load_sym(handle: ptr, name: string) → ptr   (dlsym wrapper)
+    sys.builtinFuncs["load_sym"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+        auto* i8p = llvm::PointerType::get(ctx.context, 0);
+        // Declare dlsym if needed: void* dlsym(void*, const char*)
+        llvm::Function* dlsym_fn = ctx.module.getFunction("dlsym");
+        if (!dlsym_fn) {
+            auto* ft = llvm::FunctionType::get(i8p, {i8p, i8p}, false);
+            dlsym_fn = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "dlsym", ctx.module);
+        }
+        llvm::Value* handle = args.size() > 0
+            ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+            : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p));
+        llvm::Value* name = args.size() > 1
+            ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+            : ctx.builder.CreateGlobalStringPtr("");
+        llvm::Value* sym = ctx.builder.CreateCall(dlsym_fn, {handle, name});
+        return ctx.ir_gen->wrap(sym);
+    };
+
     // -----------------------------------------------------------------------
     // io namespace
     // -----------------------------------------------------------------------

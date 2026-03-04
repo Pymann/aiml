@@ -20,6 +20,7 @@ private:
     // Visit methods
     void registerTypeDecl(Node* node);
     void visitTopLevel(Node* node);
+    void visitExternBlock(ExternBlock* ext);
     
     void visitStatement(Stmt* stmt);
     void visitDeclStmt(DeclStmt* decl);
