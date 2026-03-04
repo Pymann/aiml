@@ -12,6 +12,7 @@
 #include "import_builder.h"
 #include "config_builder.h"
 #include "function_builder.h"
+#include "extern_builder.h"
 
 namespace AIML {
 namespace AST {
@@ -94,11 +95,26 @@ bool RootState::OnScalar(const std::string& value, const std::string& tag) {
              builder->pushState(std::make_unique<ConfigBuilder>(builder));
              return true;
         }
-        
-        // Unhandled top-level 
+        else if (currentKey == "extern") {
+            // ABI value ("C") comes as the scalar on the same line.
+            // Do NOT push yet — wait for the value in the branch below.
+            return true;
+        }
+
+        // Unhandled top-level
         builder->pushState(std::make_unique<SkipBuilder>(builder));
         return true;
     }
+
+    // Value side (expectingKey == false)
+    if (currentKey == "extern") {
+        // value = ABI string, e.g. "C"
+        builder->pushState(std::make_unique<ExternBuilder>(builder, value));
+        currentKey   = "";
+        expectingKey = false;  // ExternBuilder consumes the rest of this map item
+        return true;
+    }
+
     return false;
 }
 

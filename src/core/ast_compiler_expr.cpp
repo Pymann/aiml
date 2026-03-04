@@ -192,8 +192,25 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
             return ctx.ir_gen->getInt32(0); 
         }
 
+        // Check if the name refers to an AIML function (used as callback / fn arg)
+        // e.g. `call: [glfwSetKeyCallback, win, on_key]` where on_key is a def
+        {
+            auto* i8p = llvm::PointerType::get(ctx.context, 0);
+            // First try ctx.functions (covers user-defined defs)
+            llvm::Function* fn = nullptr;
+            auto fit = ctx.functions.find(varName);
+            if (fit != ctx.functions.end() && fit->second.func)
+                fn = fit->second.func;
+            // Fallback: module symbol (covers extern "C" and builtins)
+            if (!fn) fn = ctx.module.getFunction(varName);
+            if (fn) {
+                llvm::Value* fp = ctx.builder.CreateBitCast(fn, i8p, varName + "_fnptr");
+                return ctx.ir_gen->wrap(fp);
+            }
+        }
+
         LOG_ERROR("Undefined variable: " + baseName);
-        return nullptr; 
+        return nullptr;
     }
     
     IRValue* baseAlloca = sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst);

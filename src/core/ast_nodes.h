@@ -194,6 +194,22 @@ public:
     std::string toString() const override { return "Try(...) Catch(...)"; }
 };
 
+// --- Extern "C" Declarations ---
+
+struct ExternFuncDecl {
+    std::string name;
+    std::string returnType;
+    std::vector<std::pair<std::string, std::string>> args; // name, type
+};
+
+class ExternBlock : public Node {
+public:
+    std::string abi;  // "C" (only supported ABI for now)
+    std::vector<ExternFuncDecl> funcs;
+
+    std::string toString() const override { return "ExternBlock(\"" + abi + "\")"; }
+};
+
 // --- Top-Level Declarations ---
 
 class FunctionDecl : public Node {

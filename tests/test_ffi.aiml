@@ -1,0 +1,66 @@
+# Tests for extern "C" FFI
+# Expected exit code: 0
+
+# ── Phase A: Block-Syntax — POSIX-Funktionen ──────────────────────────────────
+
+- extern: "C"
+  defs:
+    - def:
+        name: strlen
+        args: [[s, string]]
+        return: i64
+    - def:
+        name: abs
+        args: [[n, i32]]
+        return: i32
+    - def:
+        name: puts
+        args: [[s, string]]
+        return: i32
+
+- decl: [msg, string, "hello ffi"]
+- decl: [len, i64, { call: [strlen, msg] }]
+- print: ["strlen: ${len}"]
+
+- decl: [n, i32, { call: [abs, -99] }]
+- print: ["abs(-99): ${n}"]
+
+# ── Phase B: Inline-Syntax ────────────────────────────────────────────────────
+
+- extern: "C"
+  defs:
+    - def: { name: malloc, args: [[size, i64]], return: ptr }
+    - def: { name: free,   args: [[p, ptr]],   return: void }
+
+- decl: [buf, ptr, { call: [malloc, 32] }]
+- print: ["malloc returned non-null"]
+- call: [free, buf]
+- print: ["free ok"]
+
+# ── Phase C: Mehrfache extern-Blöcke (darf kein Duplikat-Fehler geben) ────────
+
+- extern: "C"
+  defs:
+    - def: { name: strlen, args: [[s, string]], return: i64 }
+
+- decl: [len2, i64, { call: [strlen, "duplicate extern block"] }]
+- print: ["duplicate extern block ok: ${len2}"]
+
+# ── Phase D: ptr-Typ + Adresse-von (&) ────────────────────────────────────────
+
+- extern: "C"
+  defs:
+    - def: { name: memset, args: [[dst, ptr], [c, i32], [n, i64]], return: ptr }
+
+- decl: [buf2, ptr, { call: [malloc, 16] }]
+- call: [memset, buf2, 0, 16]
+- print: ["memset ok"]
+- call: [free, buf2]
+
+# ── Phase E: sys.load_lib / sys.load_sym ─────────────────────────────────────
+
+- decl: [lib, ptr, { call: [sys.load_lib, ""] }]    # null → current process
+- decl: [sym, ptr, { call: [sys.load_sym, lib, "strlen"] }]
+- print: ["sys.load_sym returned non-null"]
+
+- print: ["ffi tests passed"]

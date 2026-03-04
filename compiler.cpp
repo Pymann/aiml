@@ -6,6 +6,7 @@
 #include <yaml-cpp/yaml.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <dlfcn.h>
 #include "src/sys/time_runtime.h"
 #include "src/sys/process_runtime.h"
 #include "src/core/path_runtime.h"
@@ -491,6 +492,36 @@ int AIMLCompiler::jitRun() {
     if (loadFailed) {
         LOG_ERROR("LoadLibraryPermanently failed!");
         return 1;
+    }
+
+    // Pre-load user libraries declared in exodus.json linker.libraries so that
+    // extern "C" symbols are resolvable in JIT mode (AOT lets the linker handle it).
+    {
+        std::string exodusPath = "exodus.json";
+        std::ifstream ef(exodusPath);
+        if (ef.good()) {
+            try {
+                YAML::Node ecfg = YAML::LoadFile(exodusPath);
+                if (ecfg["linker"] && ecfg["linker"]["libraries"]) {
+                    for (const auto& lib : ecfg["linker"]["libraries"]) {
+                        std::string libName = lib.as<std::string>();
+                        // Convert short name → full .so name: "SDL2" → "libSDL2.so"
+                        std::string soName = "lib" + libName + ".so";
+                        std::string err;
+                        if (llvm::sys::DynamicLibrary::LoadLibraryPermanently(soName.c_str(), &err)) {
+                            LOG_DEBUG("JIT: could not load " + soName + ": " + err);
+                        } else {
+                            LOG_DEBUG("JIT: loaded " + soName);
+                        }
+                    }
+                }
+            } catch (...) {
+                LOG_DEBUG("JIT: could not parse exodus.json for library preloading");
+            }
+        }
+        // Also expose dlopen/dlsym so sys.load_lib/load_sym work at JIT time
+        llvm::sys::DynamicLibrary::AddSymbol("dlopen",  (void*)(intptr_t)dlopen);
+        llvm::sys::DynamicLibrary::AddSymbol("dlsym",   (void*)(intptr_t)dlsym);
     }
     
     // Explicitly add malloc/free
