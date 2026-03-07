@@ -395,6 +395,96 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         }
     }
 
+    // buffer<T>: normalize for existing builtinMethods (len, alloc, write, …)
+    // and dispatch typed push / get / ptr / byte_len here.
+    if (className.rfind("buffer<", 0) == 0 && className.back() == '>') {
+        std::string elemName = className.substr(7, className.size() - 8);
+        llvm::Type* elemTy   = ctx.getLLVMType(elemName);
+        llvm::Type* bufTy    = ctx.getLLVMType("buffer");
+        llvm::Type* ptrTy    = llvm::PointerType::get(ctx.context, 0);
+        llvm::Value* buf     = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+
+        // Eagerly evaluate args for these methods
+        std::vector<IRValue*> bArgVals;
+        for (auto& arg : call->args) {
+            IRValue* v = visitExpression(arg.get());
+            if (v) bArgVals.push_back(v);
+        }
+
+        if (methodName == "push" && !bArgVals.empty()) {
+            llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bArgVals[0]));
+            // Coerce to elem type (e.g. double literal → float)
+            if (elemTy && v->getType() != elemTy) {
+                if (elemTy->isFloatingPointTy() && v->getType()->isFloatingPointTy())
+                    v = ctx.builder.CreateFPCast(v, elemTy, "fp_cast");
+                else if (elemTy->isIntegerTy() && v->getType()->isIntegerTy())
+                    v = ctx.builder.CreateZExtOrTrunc(v, elemTy, "int_cast");
+            }
+            llvm::Type* useTy = elemTy ? elemTy : v->getType();
+            BufferImpl::write(ctx, buf, v, useTy);
+            return ctx.ir_gen->getInt32(0);
+
+        } else if (methodName == "get" && !bArgVals.empty()) {
+            llvm::Value* idxVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bArgVals[0]));
+            if (!elemTy) { LOG_ERROR("buffer<T>.get: unknown elem type " + elemName); return ctx.ir_gen->getInt32(0); }
+            llvm::DataLayout dl(&ctx.module);
+            uint64_t esz    = dl.getTypeAllocSize(elemTy);
+            llvm::Value* idx64    = ctx.builder.CreateZExtOrTrunc(idxVal, ctx.builder.getInt64Ty(), "bidx64");
+            llvm::Value* byteOff  = ctx.builder.CreateMul(idx64, ctx.builder.getInt64(esz), "byte_off");
+            llvm::Value* dataFld  = ctx.builder.CreateStructGEP(bufTy, buf, 4, "data_fld");
+            llvm::Value* dataPtr  = ctx.builder.CreateLoad(ptrTy, dataFld, "data_ptr");
+            llvm::Value* elemPtr  = ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty(), dataPtr, byteOff, "elem_ptr");
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(elemTy, elemPtr, "elem_val"));
+
+        } else if (methodName == "len" || methodName == "byte_len") {
+            llvm::Value* szPtr = ctx.builder.CreateStructGEP(bufTy, buf, 0, "sz_ptr");
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), szPtr, "buf_len"));
+
+        } else if (methodName == "ptr") {
+            llvm::Value* dataFld = ctx.builder.CreateStructGEP(bufTy, buf, 4, "data_fld");
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ptrTy, dataFld, "data_ptr"));
+
+        } else if (methodName == "append" && !bArgVals.empty()) {
+            // append(other: buffer<T>) — memcpy other's data into this buffer
+            llvm::Value* src = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bArgVals[0]));
+            // src is alloca of the other buffer; get its size and data
+            llvm::Value* srcSzPtr  = ctx.builder.CreateStructGEP(bufTy, src, 0, "src_sz_ptr");
+            llvm::Value* srcSz     = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), srcSzPtr, "src_sz");
+            llvm::Value* srcDataFl = ctx.builder.CreateStructGEP(bufTy, src, 4, "src_data_fld");
+            llvm::Value* srcData   = ctx.builder.CreateLoad(ptrTy, srcDataFl, "src_data");
+            // Write each byte via memcpy: get current write pointer
+            llvm::Value* wIdxPtr   = ctx.builder.CreateStructGEP(bufTy, buf, 3, "w_idx_ptr");
+            llvm::Value* wIdx      = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), wIdxPtr, "w_idx");
+            llvm::Value* dataFld   = ctx.builder.CreateStructGEP(bufTy, buf, 4, "data_fld");
+            llvm::Value* dataPtr   = ctx.builder.CreateLoad(ptrTy, dataFld, "data_ptr");
+            llvm::Value* dstPtr    = ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty(), dataPtr, ctx.builder.CreateZExt(wIdx, ctx.builder.getInt64Ty()), "dst_ptr");
+            llvm::Function* mcf    = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
+            ctx.builder.CreateCall(mcf, {dstPtr, srcData, ctx.builder.CreateZExt(srcSz, ctx.builder.getInt64Ty())});
+            // Update write index and size
+            llvm::Value* newW = ctx.builder.CreateAdd(wIdx, srcSz, "new_w");
+            ctx.builder.CreateStore(newW, wIdxPtr);
+            llvm::Value* szPtr  = ctx.builder.CreateStructGEP(bufTy, buf, 0, "sz_ptr");
+            llvm::Value* curSz  = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), szPtr, "cur_sz");
+            llvm::Value* newSz  = ctx.builder.CreateSelect(ctx.builder.CreateICmpSGT(newW, curSz), newW, curSz);
+            ctx.builder.CreateStore(newSz, szPtr);
+            return ctx.ir_gen->getInt32(0);
+
+        } else {
+            // Fall through to normalized builtin dispatch for alloc/write/read/seek/read_versioned
+            std::string normName = "buffer";
+            auto classIt = ctx.classes.find(normName);
+            if (classIt != ctx.classes.end()) {
+                auto methodIt = classIt->second.builtinMethods.find(methodName);
+                if (methodIt != classIt->second.builtinMethods.end()) {
+                    auto evalExpr = [this](AIML::AST::Expr* e) -> IRValue* { return this->visitExpression(e); };
+                    return methodIt->second(ctx, buf, call, evalExpr);
+                }
+            }
+        }
+        LOG_ERROR("Unknown method: " + methodName + " on " + className);
+        return ctx.ir_gen->getInt32(0);
+    }
+
     // String.len (lazy — needs only the alloca, no args)
     if (className == "string" && methodName == "len") {
         llvm::Function* strlenFunc = ctx.module.getFunction("strlen");
@@ -928,7 +1018,10 @@ IRValue* Compiler::visitSysNamespaceCall(const std::string& baseName, const std:
     if (nsIt != ctx.namespaces.end()) {
         auto funcIt = nsIt->second.builtinFuncs.find(methodName);
         if (funcIt != nsIt->second.builtinFuncs.end()) {
-            return funcIt->second(ctx, argVals);
+            IRValue* result = funcIt->second(ctx, argVals);
+            // Void handlers return nullptr — promote to i32(0) so the caller
+            // knows the method was found and handled (nullptr = "not found").
+            return result ? result : ctx.ir_gen->getInt32(0);
         }
     }
     return nullptr; // No matching handler — caller tries FQN fallback

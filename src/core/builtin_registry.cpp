@@ -11,6 +11,8 @@
 #include "../../src/sys/db_runtime.h"
 #include "../../src/sys/http_runtime.h"
 #include "../../src/sys/compress_runtime.h"
+#include "../../src/sys/gltf_runtime.h"
+#include "../../src/sys/gl_runtime.h"
 #include <llvm/IR/IRBuilder.h>
 
 using IRValue = AIML::IRValue;
@@ -161,6 +163,13 @@ void registerBuiltins(CompilerContext& ctx) {
     // sys namespace
     // -----------------------------------------------------------------------
     auto& sys = ctx.namespaces["sys"];
+
+    // null_ptr() → ptr  —  returns a typed null pointer (i8*); useful for FFI
+    // calls that require a NULL argument (e.g. glfwCreateWindow monitor/share).
+    sys.builtinFuncs["null_ptr"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+        auto* i8p = static_cast<llvm::PointerType*>(llvm::PointerType::get(ctx.context, 0));
+        return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(i8p));
+    };
 
     sys.builtinFuncs["exit"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
         llvm::Function* f = ctx.getFunction("exit", ctx.builder.getVoidTy(), {ctx.builder.getInt32Ty()});
@@ -3678,4 +3687,888 @@ void registerBuiltins(CompilerContext& ctx) {
 #undef COMP_HEAP_TO_ALLOCA
 #undef COMP_IN_ALLOCA
     } // end compress namespace
+
+    // =======================================================================
+    // gltf — 3D asset loader (cgltf + stb_image backend)
+    // All handle types are opaque i8* pointers with preLoadBase = true.
+    // =======================================================================
+    {
+        // ── Helper: memcpy a heap AimlGltfBuffer* into a stack alloca ──────
+#define GLTF_HEAP_TO_ALLOCA(heapPtr) \
+        ([&]() -> llvm::Value* { \
+            auto* _p  = llvm::PointerType::get(ctx.context, 0); \
+            auto* _i64= ctx.builder.getInt64Ty(); \
+            auto* _bt = ctx.getLLVMType("buffer"); \
+            auto* _out= ctx.builder.CreateAlloca(_bt, nullptr, "gltf_buf"); \
+            uint64_t _sz = ctx.module.getDataLayout().getTypeAllocSize(_bt); \
+            ctx.builder.CreateCall(ctx.getFunction("memcpy", _p, {_p, _p, _i64}), \
+                {_out, (heapPtr), ctx.builder.getInt64(_sz)}); \
+            return _out; \
+        }())
+
+        // ── Simple method macros ────────────────────────────────────────────
+        // ci: ClassInfo&, aimlName: string literal, cName: C symbol string literal
+#define GLTF_STR(ci, aimlName, cName) \
+        (ci).builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
+            AIML::AST::CallExpr*, auto) -> IRValue* { \
+            auto* p = llvm::PointerType::get(ctx.context, 0); \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
+                ctx.getFunction(cName, p, {p}), {base})); \
+        };
+
+#define GLTF_I32M(ci, aimlName, cName) \
+        (ci).builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
+            AIML::AST::CallExpr*, auto) -> IRValue* { \
+            auto* p   = llvm::PointerType::get(ctx.context, 0); \
+            auto* i32 = ctx.builder.getInt32Ty(); \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
+                ctx.getFunction(cName, i32, {p}), {base})); \
+        };
+
+#define GLTF_F32M(ci, aimlName, cName) \
+        (ci).builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
+            AIML::AST::CallExpr*, auto) -> IRValue* { \
+            auto* p   = llvm::PointerType::get(ctx.context, 0); \
+            auto* f32 = ctx.builder.getFloatTy(); \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
+                ctx.getFunction(cName, f32, {p}), {base})); \
+        };
+
+#define GLTF_PTRM(ci, aimlName, cName) \
+        (ci).builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
+            AIML::AST::CallExpr*, auto) -> IRValue* { \
+            auto* p = llvm::PointerType::get(ctx.context, 0); \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
+                ctx.getFunction(cName, p, {p}), {base})); \
+        };
+
+        // Buffer-returning method: C fn returns heap AimlGltfBuffer* → memcpy to alloca
+#define GLTF_BUFM(ci, aimlName, cName) \
+        (ci).builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
+            AIML::AST::CallExpr*, auto) -> IRValue* { \
+            auto* p = llvm::PointerType::get(ctx.context, 0); \
+            llvm::Value* hp = ctx.builder.CreateCall( \
+                ctx.getFunction(cName, p, {p}), {base}); \
+            return ctx.ir_gen->wrap(GLTF_HEAP_TO_ALLOCA(hp)); \
+        };
+
+        // List-fill method: C fn takes (scene/node/skin, list*) → void
+#define GLTF_LIST(ci, aimlName, cName) \
+        (ci).builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
+            AIML::AST::CallExpr*, auto) -> IRValue* { \
+            auto* p  = llvm::PointerType::get(ctx.context, 0); \
+            auto* vt = ctx.builder.getVoidTy(); \
+            llvm::StructType* lt = ListImpl::getListStructType(ctx); \
+            llvm::Value* la = ctx.builder.CreateAlloca(lt, nullptr, "gltf_list"); \
+            ListImpl::initList(ctx, la, p, 8); \
+            ctx.builder.CreateCall(ctx.getFunction(cName, vt, {p, p}), {base, la}); \
+            return ctx.ir_gen->wrap(la); \
+        };
+
+        // ── gltf_scene ──────────────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name        = "gltf_scene";
+            ci.isBuiltin   = true;
+            ci.preLoadBase = true;
+
+            GLTF_I32M(ci, "valid",  "aiml_gltf_scene_valid")
+            GLTF_STR (ci, "error",  "aiml_gltf_scene_error")
+            GLTF_LIST(ci, "nodes",       "aiml_gltf_scene_nodes_fill")
+            GLTF_LIST(ci, "meshes",      "aiml_gltf_scene_meshes_fill")
+            GLTF_LIST(ci, "materials",   "aiml_gltf_scene_materials_fill")
+            GLTF_LIST(ci, "animations",  "aiml_gltf_scene_animations_fill")
+            GLTF_LIST(ci, "skins",       "aiml_gltf_scene_skins_fill")
+            GLTF_LIST(ci, "images",      "aiml_gltf_scene_images_fill")
+
+            ci.builtinMethods["free"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr*, auto) -> IRValue* {
+                auto* p  = llvm::PointerType::get(ctx.context, 0);
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gltf_scene_free",
+                    ctx.builder.getVoidTy(), {p}), {base});
+                return nullptr;
+            };
+
+            ctx.classes["gltf_scene"] = std::move(ci);
+        }
+
+        // ── gltf_node ───────────────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name        = "gltf_node";
+            ci.isBuiltin   = true;
+            ci.preLoadBase = true;
+
+            GLTF_STR (ci, "name",          "aiml_gltf_node_name")
+            GLTF_F32M(ci, "translation_x", "aiml_gltf_node_translation_x")
+            GLTF_F32M(ci, "translation_y", "aiml_gltf_node_translation_y")
+            GLTF_F32M(ci, "translation_z", "aiml_gltf_node_translation_z")
+            GLTF_F32M(ci, "rotation_x",    "aiml_gltf_node_rotation_x")
+            GLTF_F32M(ci, "rotation_y",    "aiml_gltf_node_rotation_y")
+            GLTF_F32M(ci, "rotation_z",    "aiml_gltf_node_rotation_z")
+            GLTF_F32M(ci, "rotation_w",    "aiml_gltf_node_rotation_w")
+            GLTF_F32M(ci, "scale_x",       "aiml_gltf_node_scale_x")
+            GLTF_F32M(ci, "scale_y",       "aiml_gltf_node_scale_y")
+            GLTF_F32M(ci, "scale_z",       "aiml_gltf_node_scale_z")
+            GLTF_PTRM(ci, "mesh",          "aiml_gltf_node_mesh")
+            GLTF_PTRM(ci, "skin",          "aiml_gltf_node_skin")
+            GLTF_LIST(ci, "children",      "aiml_gltf_node_children_fill")
+            GLTF_BUFM(ci, "world_matrix",  "aiml_gltf_node_world_matrix")
+
+            ctx.classes["gltf_node"] = std::move(ci);
+        }
+
+        // ── gltf_mesh ───────────────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name        = "gltf_mesh";
+            ci.isBuiltin   = true;
+            ci.preLoadBase = true;
+
+            GLTF_STR (ci, "name",            "aiml_gltf_mesh_name")
+            GLTF_I32M(ci, "primitive_count", "aiml_gltf_mesh_primitive_count")
+
+            ci.builtinMethods["primitive"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* i32 = ctx.builder.getInt32Ty();
+                llvm::Value* idx = ctx.builder.getInt32(0);
+                if (call && !call->args.empty()) {
+                    IRValue* a = evalExpr(call->args[0].get());
+                    if (a) idx = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                }
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_gltf_mesh_primitive", p, {p, i32}), {base, idx}));
+            };
+
+            ctx.classes["gltf_mesh"] = std::move(ci);
+        }
+
+        // ── gltf_primitive ──────────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name        = "gltf_primitive";
+            ci.isBuiltin   = true;
+            ci.preLoadBase = true;
+
+            GLTF_BUFM(ci, "positions", "aiml_gltf_prim_positions")
+            GLTF_BUFM(ci, "normals",   "aiml_gltf_prim_normals")
+            GLTF_BUFM(ci, "tangents",  "aiml_gltf_prim_tangents")
+            GLTF_BUFM(ci, "indices",   "aiml_gltf_prim_indices")
+            GLTF_I32M(ci, "vertex_count", "aiml_gltf_prim_vertex_count")
+            GLTF_I32M(ci, "index_count",  "aiml_gltf_prim_index_count")
+            GLTF_PTRM(ci, "material",     "aiml_gltf_prim_material")
+
+            // uvs(set), colors(set), joints(set), weights(set): buffer return + 1 i32 arg
+#define GLTF_BUF1(ci, aimlName, cName) \
+            (ci).builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* { \
+                auto* p   = llvm::PointerType::get(ctx.context, 0); \
+                auto* i32 = ctx.builder.getInt32Ty(); \
+                llvm::Value* set = ctx.builder.getInt32(0); \
+                if (call && !call->args.empty()) { \
+                    IRValue* a = evalExpr(call->args[0].get()); \
+                    if (a) set = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)); \
+                } \
+                llvm::Value* hp = ctx.builder.CreateCall( \
+                    ctx.getFunction(cName, p, {p, i32}), {base, set}); \
+                return ctx.ir_gen->wrap(GLTF_HEAP_TO_ALLOCA(hp)); \
+            };
+
+            GLTF_BUF1(ci, "uvs",     "aiml_gltf_prim_uvs")
+            GLTF_BUF1(ci, "colors",  "aiml_gltf_prim_colors")
+            GLTF_BUF1(ci, "joints",  "aiml_gltf_prim_joints")
+            GLTF_BUF1(ci, "weights", "aiml_gltf_prim_weights")
+#undef GLTF_BUF1
+
+            ctx.classes["gltf_primitive"] = std::move(ci);
+        }
+
+        // ── gltf_material ───────────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name        = "gltf_material";
+            ci.isBuiltin   = true;
+            ci.preLoadBase = true;
+
+            GLTF_STR (ci, "name",          "aiml_gltf_mat_name")
+            GLTF_F32M(ci, "base_color_r",  "aiml_gltf_mat_base_color_r")
+            GLTF_F32M(ci, "base_color_g",  "aiml_gltf_mat_base_color_g")
+            GLTF_F32M(ci, "base_color_b",  "aiml_gltf_mat_base_color_b")
+            GLTF_F32M(ci, "base_color_a",  "aiml_gltf_mat_base_color_a")
+            GLTF_F32M(ci, "metallic",      "aiml_gltf_mat_metallic")
+            GLTF_F32M(ci, "roughness",     "aiml_gltf_mat_roughness")
+            GLTF_F32M(ci, "emissive_r",    "aiml_gltf_mat_emissive_r")
+            GLTF_F32M(ci, "emissive_g",    "aiml_gltf_mat_emissive_g")
+            GLTF_F32M(ci, "emissive_b",    "aiml_gltf_mat_emissive_b")
+            GLTF_PTRM(ci, "base_color_texture",          "aiml_gltf_mat_base_color_texture")
+            GLTF_PTRM(ci, "normal_texture",               "aiml_gltf_mat_normal_texture")
+            GLTF_PTRM(ci, "metallic_roughness_texture",   "aiml_gltf_mat_metallic_roughness_texture")
+            GLTF_PTRM(ci, "emissive_texture",             "aiml_gltf_mat_emissive_texture")
+            GLTF_PTRM(ci, "occlusion_texture",            "aiml_gltf_mat_occlusion_texture")
+            GLTF_STR (ci, "alpha_mode",    "aiml_gltf_mat_alpha_mode")
+            GLTF_F32M(ci, "alpha_cutoff",  "aiml_gltf_mat_alpha_cutoff")
+            GLTF_I32M(ci, "double_sided",  "aiml_gltf_mat_double_sided")
+
+            ctx.classes["gltf_material"] = std::move(ci);
+        }
+
+        // ── gltf_texture ────────────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name        = "gltf_texture";
+            ci.isBuiltin   = true;
+            ci.preLoadBase = true;
+
+            GLTF_PTRM(ci, "image",      "aiml_gltf_tex_image")
+            GLTF_STR (ci, "wrap_s",     "aiml_gltf_tex_wrap_s")
+            GLTF_STR (ci, "wrap_t",     "aiml_gltf_tex_wrap_t")
+            GLTF_STR (ci, "min_filter", "aiml_gltf_tex_min_filter")
+            GLTF_STR (ci, "mag_filter", "aiml_gltf_tex_mag_filter")
+
+            ctx.classes["gltf_texture"] = std::move(ci);
+        }
+
+        // ── gltf_image ──────────────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name        = "gltf_image";
+            ci.isBuiltin   = true;
+            ci.preLoadBase = true;
+
+            GLTF_BUFM(ci, "pixels_rgba", "aiml_gltf_img_pixels_rgba")
+            GLTF_I32M(ci, "width",       "aiml_gltf_img_width")
+            GLTF_I32M(ci, "height",      "aiml_gltf_img_height")
+
+            ctx.classes["gltf_image"] = std::move(ci);
+        }
+
+        // ── gltf_animation ──────────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name        = "gltf_animation";
+            ci.isBuiltin   = true;
+            ci.preLoadBase = true;
+
+            GLTF_STR (ci, "name",     "aiml_gltf_anim_name")
+            GLTF_F32M(ci, "duration", "aiml_gltf_anim_duration")
+
+            // sample_translation_x/y/z and sample_rotation_x/y/z/w: (anim, node, t) → f32
+#define GLTF_SAMPLE(ci, aimlName, cName) \
+            (ci).builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* { \
+                auto* p   = llvm::PointerType::get(ctx.context, 0); \
+                auto* f32 = ctx.builder.getFloatTy(); \
+                llvm::Value* nodeArg = llvm::ConstantPointerNull::get( \
+                    llvm::cast<llvm::PointerType>(p)); \
+                llvm::Value* tArg = llvm::ConstantFP::get(f32, 0.0); \
+                if (call && call->args.size() >= 1) { \
+                    IRValue* a = evalExpr(call->args[0].get()); \
+                    if (a) nodeArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)); \
+                } \
+                if (call && call->args.size() >= 2) { \
+                    IRValue* a = evalExpr(call->args[1].get()); \
+                    if (a) tArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)); \
+                } \
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
+                    ctx.getFunction(cName, f32, {p, p, f32}), {base, nodeArg, tArg})); \
+            };
+
+            GLTF_SAMPLE(ci, "sample_translation_x", "aiml_gltf_anim_sample_translation_x")
+            GLTF_SAMPLE(ci, "sample_translation_y", "aiml_gltf_anim_sample_translation_y")
+            GLTF_SAMPLE(ci, "sample_translation_z", "aiml_gltf_anim_sample_translation_z")
+            GLTF_SAMPLE(ci, "sample_rotation_x",    "aiml_gltf_anim_sample_rotation_x")
+            GLTF_SAMPLE(ci, "sample_rotation_y",    "aiml_gltf_anim_sample_rotation_y")
+            GLTF_SAMPLE(ci, "sample_rotation_z",    "aiml_gltf_anim_sample_rotation_z")
+            GLTF_SAMPLE(ci, "sample_rotation_w",    "aiml_gltf_anim_sample_rotation_w")
+#undef GLTF_SAMPLE
+
+            ctx.classes["gltf_animation"] = std::move(ci);
+        }
+
+        // ── gltf_skin ────────────────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name        = "gltf_skin";
+            ci.isBuiltin   = true;
+            ci.preLoadBase = true;
+
+            GLTF_I32M(ci, "joint_count",             "aiml_gltf_skin_joint_count")
+            GLTF_BUFM(ci, "inverse_bind_matrices",   "aiml_gltf_skin_inverse_bind_matrices")
+            GLTF_LIST(ci, "joints",                  "aiml_gltf_skin_joints_fill")
+
+            ctx.classes["gltf_skin"] = std::move(ci);
+        }
+
+#undef GLTF_HEAP_TO_ALLOCA
+#undef GLTF_STR
+#undef GLTF_I32M
+#undef GLTF_F32M
+#undef GLTF_PTRM
+#undef GLTF_BUFM
+#undef GLTF_LIST
+
+        // ── gltf namespace: gltf.load(path) → gltf_scene ───────────────────
+        {
+            auto& gltf = ctx.namespaces["gltf"];
+            gltf.builtinFuncs["load"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* p = llvm::PointerType::get(ctx.context, 0);
+                llvm::Value* pathArg = args.empty()
+                    ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                    : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                llvm::Value* scenePtr = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_gltf_load", p, {p}), {pathArg});
+                return ctx.ir_gen->wrap(scenePtr);
+            };
+        }
+    } // end gltf
+
+    // =======================================================================
+    // gl — OpenGL 3.3+ Core (GLEW backend)
+    // Handle types: gl_buffer, gl_vao, gl_shader, gl_texture, gl_framebuffer
+    // All handles are opaque i8* with preLoadBase = true.
+    // =======================================================================
+    {
+        // ── Helper: store a loaded struct value to a temp alloca ──────────
+#define GL_STORE_TMP(val, ty) \
+        ([&]() -> llvm::Value* { \
+            llvm::AllocaInst* _a = ctx.builder.CreateAlloca((ty), nullptr, "gl_tmp"); \
+            ctx.builder.CreateStore((val), _a); \
+            return _a; \
+        }())
+
+        // ── Simple method macros (same style as gltf section) ─────────────
+#define GL_VOID0(ci, aimlName, cName) \
+        (ci).builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
+            AIML::AST::CallExpr*, auto) -> IRValue* { \
+            auto* p = llvm::PointerType::get(ctx.context, 0); \
+            ctx.builder.CreateCall(ctx.getFunction(cName, ctx.builder.getVoidTy(), {p}), {base}); \
+            return nullptr; \
+        };
+
+#define GL_PTR0(ci, aimlName, cName) \
+        (ci).builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
+            AIML::AST::CallExpr*, auto) -> IRValue* { \
+            auto* p = llvm::PointerType::get(ctx.context, 0); \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
+                ctx.getFunction(cName, p, {p}), {base})); \
+        };
+
+        // ── gl_buffer ───────────────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name = "gl_buffer"; ci.isBuiltin = true; ci.preLoadBase = true;
+
+            ci.builtinMethods["update"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* p  = llvm::PointerType::get(ctx.context, 0);
+                auto* bt = ctx.getLLVMType("buffer");
+                llvm::Value* dataArg = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+                if (call && !call->args.empty()) {
+                    IRValue* a = evalExpr(call->args[0].get());
+                    if (a) {
+                        llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                        if (v->getType()->isPointerTy()) dataArg = v;
+                        else dataArg = GL_STORE_TMP(v, bt);
+                    }
+                }
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gl_buffer_update",
+                    ctx.builder.getVoidTy(), {p, p}), {base, dataArg});
+                return nullptr;
+            };
+            GL_VOID0(ci, "delete", "aiml_gl_buffer_delete")
+
+            ctx.classes["gl_buffer"] = std::move(ci);
+        }
+
+        // ── gl_vao ──────────────────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name = "gl_vao"; ci.isBuiltin = true; ci.preLoadBase = true;
+
+            // bind_vbo / bind_ibo: (vao*, vbo*) → void
+#define GL_VAO_BIND(aimlName, cName) \
+            ci.builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* { \
+                auto* p = llvm::PointerType::get(ctx.context, 0); \
+                llvm::Value* arg = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p)); \
+                if (call && !call->args.empty()) { \
+                    IRValue* a = evalExpr(call->args[0].get()); \
+                    if (a) arg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)); \
+                } \
+                ctx.builder.CreateCall(ctx.getFunction(cName, ctx.builder.getVoidTy(), {p, p}), \
+                    {base, arg}); \
+                return nullptr; \
+            };
+            GL_VAO_BIND("bind_vbo", "aiml_gl_vao_bind_vbo")
+            GL_VAO_BIND("bind_ibo", "aiml_gl_vao_bind_ibo")
+#undef GL_VAO_BIND
+
+            // attrib / attrib_i: (vao*, idx, components, stride, offset) → void
+#define GL_VAO_ATTRIB(aimlName, cName) \
+            ci.builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* { \
+                auto* p   = llvm::PointerType::get(ctx.context, 0); \
+                auto* i32 = ctx.builder.getInt32Ty(); \
+                auto g = [&](int i) -> llvm::Value* { \
+                    if (!call || (int)call->args.size() <= i) return ctx.builder.getInt32(0); \
+                    IRValue* a = evalExpr(call->args[i].get()); \
+                    if (!a) return ctx.builder.getInt32(0); \
+                    llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)); \
+                    return ctx.builder.CreateZExtOrTrunc(v, i32); \
+                }; \
+                ctx.builder.CreateCall( \
+                    ctx.getFunction(cName, ctx.builder.getVoidTy(), {p, i32, i32, i32, i32}), \
+                    {base, g(0), g(1), g(2), g(3)}); \
+                return nullptr; \
+            };
+            GL_VAO_ATTRIB("attrib",   "aiml_gl_vao_attrib")
+            GL_VAO_ATTRIB("attrib_i", "aiml_gl_vao_attrib_i")
+#undef GL_VAO_ATTRIB
+
+            GL_VOID0(ci, "delete", "aiml_gl_vao_delete")
+
+            ctx.classes["gl_vao"] = std::move(ci);
+        }
+
+        // ── gl_shader ───────────────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name = "gl_shader"; ci.isBuiltin = true; ci.preLoadBase = true;
+
+            GL_VOID0(ci, "use", "aiml_gl_shader_use")
+
+            // uniform_f32(name, v)
+            ci.builtinMethods["uniform_f32"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* f32 = ctx.builder.getFloatTy();
+                llvm::Value* nameArg = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+                llvm::Value* vArg    = llvm::ConstantFP::get(f32, 0.0);
+                if (call && call->args.size() >= 1) {
+                    IRValue* a = evalExpr(call->args[0].get());
+                    if (a) nameArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                }
+                if (call && call->args.size() >= 2) {
+                    IRValue* a = evalExpr(call->args[1].get());
+                    if (a) {
+                        llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                        vArg = v->getType()->isFloatTy() ? v : ctx.builder.CreateFPCast(v, f32);
+                    }
+                }
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gl_shader_uniform_f32",
+                    ctx.builder.getVoidTy(), {p, p, f32}), {base, nameArg, vArg});
+                return nullptr;
+            };
+
+            // uniform_i32(name, v)
+            ci.builtinMethods["uniform_i32"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* i32 = ctx.builder.getInt32Ty();
+                llvm::Value* nameArg = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+                llvm::Value* vArg    = ctx.builder.getInt32(0);
+                if (call && call->args.size() >= 1) {
+                    IRValue* a = evalExpr(call->args[0].get());
+                    if (a) nameArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                }
+                if (call && call->args.size() >= 2) {
+                    IRValue* a = evalExpr(call->args[1].get());
+                    if (a) {
+                        llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                        vArg = ctx.builder.CreateZExtOrTrunc(v, i32);
+                    }
+                }
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gl_shader_uniform_i32",
+                    ctx.builder.getVoidTy(), {p, p, i32}), {base, nameArg, vArg});
+                return nullptr;
+            };
+
+            // uniform_vec2/vec3/vec4: (name, struct_val) — struct stored to temp alloca
+#define GL_UNI_VEC(aimlName, cName, structTyName) \
+            ci.builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* { \
+                auto* p   = llvm::PointerType::get(ctx.context, 0); \
+                auto* sTy = ctx.getLLVMType(structTyName); \
+                llvm::Value* nameArg = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p)); \
+                llvm::Value* vPtr    = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p)); \
+                if (call && call->args.size() >= 1) { \
+                    IRValue* a = evalExpr(call->args[0].get()); \
+                    if (a) nameArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)); \
+                } \
+                if (call && call->args.size() >= 2) { \
+                    IRValue* a = evalExpr(call->args[1].get()); \
+                    if (a) { \
+                        llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)); \
+                        vPtr = v->getType()->isPointerTy() ? v : GL_STORE_TMP(v, sTy); \
+                    } \
+                } \
+                ctx.builder.CreateCall(ctx.getFunction(cName, ctx.builder.getVoidTy(), {p, p, p}), \
+                    {base, nameArg, vPtr}); \
+                return nullptr; \
+            };
+            GL_UNI_VEC("uniform_vec2", "aiml_gl_shader_uniform_vec2", "vec2")
+            GL_UNI_VEC("uniform_vec3", "aiml_gl_shader_uniform_vec3", "vec3")
+            GL_UNI_VEC("uniform_vec4", "aiml_gl_shader_uniform_vec4", "vec4")
+#undef GL_UNI_VEC
+
+            // uniform_mat4: (name, mat4_val)
+            ci.builtinMethods["uniform_mat4"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* p    = llvm::PointerType::get(ctx.context, 0);
+                auto* m4Ty = ctx.getLLVMType("mat4");
+                llvm::Value* nameArg = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+                llvm::Value* mPtr    = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+                if (call && call->args.size() >= 1) {
+                    IRValue* a = evalExpr(call->args[0].get());
+                    if (a) nameArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                }
+                if (call && call->args.size() >= 2) {
+                    IRValue* a = evalExpr(call->args[1].get());
+                    if (a) {
+                        llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                        mPtr = v->getType()->isPointerTy() ? v : GL_STORE_TMP(v, m4Ty);
+                    }
+                }
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gl_shader_uniform_mat4",
+                    ctx.builder.getVoidTy(), {p, p, p}), {base, nameArg, mPtr});
+                return nullptr;
+            };
+
+            // uniform_mat4_array: (name, buffer<f32>, count)
+            ci.builtinMethods["uniform_mat4_array"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* i32 = ctx.builder.getInt32Ty();
+                auto* bt  = ctx.getLLVMType("buffer");
+                llvm::Value* nameArg  = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+                llvm::Value* bufArg   = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+                llvm::Value* cntArg   = ctx.builder.getInt32(0);
+                if (call && call->args.size() >= 1) {
+                    IRValue* a = evalExpr(call->args[0].get()); if (a) nameArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                }
+                if (call && call->args.size() >= 2) {
+                    IRValue* a = evalExpr(call->args[1].get());
+                    if (a) {
+                        llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                        bufArg = v->getType()->isPointerTy() ? v : GL_STORE_TMP(v, bt);
+                    }
+                }
+                if (call && call->args.size() >= 3) {
+                    IRValue* a = evalExpr(call->args[2].get());
+                    if (a) cntArg = ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)), i32);
+                }
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gl_shader_uniform_mat4_array",
+                    ctx.builder.getVoidTy(), {p, p, p, i32}), {base, nameArg, bufArg, cntArg});
+                return nullptr;
+            };
+
+            GL_VOID0(ci, "delete", "aiml_gl_shader_delete")
+
+            ctx.classes["gl_shader"] = std::move(ci);
+        }
+
+        // ── gl_texture ──────────────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name = "gl_texture"; ci.isBuiltin = true; ci.preLoadBase = true;
+
+            // set_wrap(s, t)
+            ci.builtinMethods["set_wrap"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* i32 = ctx.builder.getInt32Ty();
+                auto g = [&](int i) -> llvm::Value* {
+                    if (!call || (int)call->args.size() <= i) return ctx.builder.getInt32(0x2901 /*GL_REPEAT*/);
+                    IRValue* a = evalExpr(call->args[i].get()); if (!a) return ctx.builder.getInt32(0x2901);
+                    return ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)), i32);
+                };
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gl_texture_set_wrap",
+                    ctx.builder.getVoidTy(), {p, i32, i32}), {base, g(0), g(1)});
+                return nullptr;
+            };
+
+            // set_filter(min, mag)
+            ci.builtinMethods["set_filter"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* i32 = ctx.builder.getInt32Ty();
+                auto g = [&](int i) -> llvm::Value* {
+                    if (!call || (int)call->args.size() <= i) return ctx.builder.getInt32(0x2601 /*GL_LINEAR*/);
+                    IRValue* a = evalExpr(call->args[i].get()); if (!a) return ctx.builder.getInt32(0x2601);
+                    return ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)), i32);
+                };
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gl_texture_set_filter",
+                    ctx.builder.getVoidTy(), {p, i32, i32}), {base, g(0), g(1)});
+                return nullptr;
+            };
+
+            GL_VOID0(ci, "gen_mipmaps", "aiml_gl_texture_gen_mipmaps")
+            GL_VOID0(ci, "delete",      "aiml_gl_texture_delete")
+
+            ctx.classes["gl_texture"] = std::move(ci);
+        }
+
+        // ── gl_framebuffer ──────────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name = "gl_framebuffer"; ci.isBuiltin = true; ci.preLoadBase = true;
+
+            GL_PTR0(ci, "color_texture", "aiml_gl_framebuffer_color_texture")
+
+            ci.builtinMethods["resize"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* i32 = ctx.builder.getInt32Ty();
+                auto g = [&](int i) -> llvm::Value* {
+                    if (!call || (int)call->args.size() <= i) return ctx.builder.getInt32(0);
+                    IRValue* a = evalExpr(call->args[i].get()); if (!a) return ctx.builder.getInt32(0);
+                    return ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)), i32);
+                };
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gl_framebuffer_resize",
+                    ctx.builder.getVoidTy(), {p, i32, i32}), {base, g(0), g(1)});
+                return nullptr;
+            };
+            GL_VOID0(ci, "delete", "aiml_gl_framebuffer_delete")
+
+            ctx.classes["gl_framebuffer"] = std::move(ci);
+        }
+
+#undef GL_STORE_TMP
+#undef GL_VOID0
+#undef GL_PTR0
+
+        // ── gl namespace functions ──────────────────────────────────────────
+        {
+            auto& gl = ctx.namespaces["gl"];
+
+            // Zero-arg void functions
+#define GL_NS_VOID0(name, cName) \
+            gl.builtinFuncs[name] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* { \
+                ctx.builder.CreateCall(ctx.getFunction(cName, ctx.builder.getVoidTy(), {}), {}); \
+                return nullptr; \
+            };
+            GL_NS_VOID0("init",               "aiml_gl_init")
+            GL_NS_VOID0("clear_depth",         "aiml_gl_clear_depth")
+            GL_NS_VOID0("enable_depth_test",   "aiml_gl_enable_depth_test")
+            GL_NS_VOID0("disable_depth_test",  "aiml_gl_disable_depth_test")
+            GL_NS_VOID0("enable_blend",        "aiml_gl_enable_blend")
+            GL_NS_VOID0("disable_blend",       "aiml_gl_disable_blend")
+            GL_NS_VOID0("enable_cull_face",    "aiml_gl_enable_cull_face")
+            GL_NS_VOID0("cull_back",           "aiml_gl_cull_back")
+            GL_NS_VOID0("cull_front",          "aiml_gl_cull_front")
+            GL_NS_VOID0("bind_default_framebuffer", "aiml_gl_bind_default_framebuffer")
+            GL_NS_VOID0("create_vao",          "aiml_gl_create_vao")  /* overridden below */
+#undef GL_NS_VOID0
+
+            // gl.viewport(x, y, w, h: i32) → void
+            gl.builtinFuncs["viewport"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* i32 = ctx.builder.getInt32Ty();
+                auto g = [&](int i) -> llvm::Value* {
+                    if ((int)args.size() <= i) return ctx.builder.getInt32(0);
+                    return ctx.builder.CreateZExtOrTrunc(
+                        static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])), i32);
+                };
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gl_viewport",
+                    ctx.builder.getVoidTy(), {i32, i32, i32, i32}), {g(0), g(1), g(2), g(3)});
+                return nullptr;
+            };
+
+            // gl.clear(r, g, b, a: f32) / gl.clear_all(r, g, b, a)
+#define GL_NS_CLEAR(name, cName) \
+            gl.builtinFuncs[name] = [](CompilerContext& ctx, \
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
+                auto* f32 = ctx.builder.getFloatTy(); \
+                auto g = [&](int i) -> llvm::Value* { \
+                    if ((int)args.size() <= i) return llvm::ConstantFP::get(f32, 0.0); \
+                    llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])); \
+                    return v->getType()->isFloatTy() ? v : ctx.builder.CreateFPCast(v, f32); \
+                }; \
+                ctx.builder.CreateCall(ctx.getFunction(cName, ctx.builder.getVoidTy(), {f32,f32,f32,f32}), \
+                    {g(0), g(1), g(2), g(3)}); \
+                return nullptr; \
+            };
+            GL_NS_CLEAR("clear",     "aiml_gl_clear")
+            GL_NS_CLEAR("clear_all", "aiml_gl_clear_all")
+#undef GL_NS_CLEAR
+
+            // gl.wireframe(on: i8) → void
+            gl.builtinFuncs["wireframe"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                llvm::Value* on = args.empty() ? ctx.builder.getInt8(0)
+                    : ctx.builder.CreateZExtOrTrunc(
+                        static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                        ctx.builder.getInt8Ty());
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gl_wireframe",
+                    ctx.builder.getVoidTy(), {ctx.builder.getInt8Ty()}), {on});
+                return nullptr;
+            };
+
+            // gl.create_buffer / create_buffer_dynamic / create_index_buffer: (data_buf) → gl_buffer
+#define GL_NS_MKBUF(name, cName) \
+            gl.builtinFuncs[name] = [](CompilerContext& ctx, \
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
+                auto* p  = llvm::PointerType::get(ctx.context, 0); \
+                auto* bt = ctx.getLLVMType("buffer"); \
+                llvm::Value* arg = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p)); \
+                if (!args.empty()) { \
+                    llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])); \
+                    arg = v->getType()->isPointerTy() ? v : \
+                          ([&]() -> llvm::Value* { \
+                              auto* _a = ctx.builder.CreateAlloca(bt, nullptr, "gl_buf_in"); \
+                              ctx.builder.CreateStore(v, _a); return _a; }()); \
+                } \
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
+                    ctx.getFunction(cName, p, {p}), {arg})); \
+            };
+            GL_NS_MKBUF("create_buffer",         "aiml_gl_create_buffer")
+            GL_NS_MKBUF("create_buffer_dynamic",  "aiml_gl_create_buffer_dynamic")
+            GL_NS_MKBUF("create_index_buffer",    "aiml_gl_create_index_buffer")
+#undef GL_NS_MKBUF
+
+            // gl.create_vao() → gl_vao
+            gl.builtinFuncs["create_vao"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+                auto* p = llvm::PointerType::get(ctx.context, 0);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_gl_create_vao", p, {}), {}));
+            };
+
+            // gl.compile_shader(vert_src, frag_src) → gl_shader
+            gl.builtinFuncs["compile_shader"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* p = llvm::PointerType::get(ctx.context, 0);
+                auto null = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+                llvm::Value* vs = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) : null;
+                llvm::Value* fs = args.size() > 1 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])) : null;
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_gl_compile_shader", p, {p, p}), {vs, fs}));
+            };
+
+            // gl.load_shader(vert_path, frag_path) → gl_shader
+            gl.builtinFuncs["load_shader"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* p = llvm::PointerType::get(ctx.context, 0);
+                auto null = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+                llvm::Value* vp = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) : null;
+                llvm::Value* fp = args.size() > 1 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])) : null;
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_gl_load_shader", p, {p, p}), {vp, fp}));
+            };
+
+            // gl.load_texture(path) → gl_texture
+            gl.builtinFuncs["load_texture"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* p = llvm::PointerType::get(ctx.context, 0);
+                llvm::Value* arg = args.empty()
+                    ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                    : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_gl_load_texture", p, {p}), {arg}));
+            };
+
+            // gl.create_texture(w, h, px_buf) → gl_texture
+            gl.builtinFuncs["create_texture"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* i32 = ctx.builder.getInt32Ty();
+                auto* bt  = ctx.getLLVMType("buffer");
+                auto g32 = [&](int i) -> llvm::Value* {
+                    if ((int)args.size() <= i) return ctx.builder.getInt32(0);
+                    return ctx.builder.CreateZExtOrTrunc(
+                        static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])), i32);
+                };
+                llvm::Value* pxArg = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+                if (args.size() >= 3) {
+                    llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]));
+                    pxArg = v->getType()->isPointerTy() ? v :
+                            ([&]() -> llvm::Value* {
+                                auto* _a = ctx.builder.CreateAlloca(bt, nullptr, "gl_px_in");
+                                ctx.builder.CreateStore(v, _a); return _a; }());
+                }
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_gl_create_texture", p, {i32, i32, p}),
+                    {g32(0), g32(1), pxArg}));
+            };
+
+            // gl.bind_texture(tex, slot) → void
+            gl.builtinFuncs["bind_texture"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* i32 = ctx.builder.getInt32Ty();
+                llvm::Value* tex  = args.size() > 0
+                    ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+                    : llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+                llvm::Value* slot = args.size() > 1
+                    ? ctx.builder.CreateZExtOrTrunc(
+                        static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])), i32)
+                    : ctx.builder.getInt32(0);
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gl_bind_texture",
+                    ctx.builder.getVoidTy(), {p, i32}), {tex, slot});
+                return nullptr;
+            };
+
+            // gl.draw_arrays(vao, count) / gl.draw_elements(vao, count)
+#define GL_NS_DRAW(name, cName) \
+            gl.builtinFuncs[name] = [](CompilerContext& ctx, \
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
+                auto* p   = llvm::PointerType::get(ctx.context, 0); \
+                auto* i32 = ctx.builder.getInt32Ty(); \
+                llvm::Value* vao = args.size() > 0 \
+                    ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) \
+                    : llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p)); \
+                llvm::Value* cnt = args.size() > 1 \
+                    ? ctx.builder.CreateZExtOrTrunc( \
+                        static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])), i32) \
+                    : ctx.builder.getInt32(0); \
+                ctx.builder.CreateCall(ctx.getFunction(cName, ctx.builder.getVoidTy(), {p, i32}), \
+                    {vao, cnt}); \
+                return nullptr; \
+            };
+            GL_NS_DRAW("draw_arrays",   "aiml_gl_draw_arrays")
+            GL_NS_DRAW("draw_elements", "aiml_gl_draw_elements")
+#undef GL_NS_DRAW
+
+            // gl.draw_arrays_mode(vao, mode, count) → void
+            gl.builtinFuncs["draw_arrays_mode"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* i32 = ctx.builder.getInt32Ty();
+                llvm::Value* vao  = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) : llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+                llvm::Value* mode = args.size() > 1 ? ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])), i32) : ctx.builder.getInt32(0x0004);
+                llvm::Value* cnt  = args.size() > 2 ? ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2])), i32) : ctx.builder.getInt32(0);
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gl_draw_arrays_mode",
+                    ctx.builder.getVoidTy(), {p, i32, i32}), {vao, mode, cnt});
+                return nullptr;
+            };
+
+            // gl.create_framebuffer(w, h) → gl_framebuffer
+            gl.builtinFuncs["create_framebuffer"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* i32 = ctx.builder.getInt32Ty();
+                auto g32 = [&](int i) -> llvm::Value* {
+                    if ((int)args.size() <= i) return ctx.builder.getInt32(0);
+                    return ctx.builder.CreateZExtOrTrunc(
+                        static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])), i32);
+                };
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_gl_create_framebuffer", p, {i32, i32}), {g32(0), g32(1)}));
+            };
+
+            // gl.bind_framebuffer(fbo) → void
+            gl.builtinFuncs["bind_framebuffer"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* p = llvm::PointerType::get(ctx.context, 0);
+                llvm::Value* fb = args.empty()
+                    ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                    : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gl_bind_framebuffer",
+                    ctx.builder.getVoidTy(), {p}), {fb});
+                return nullptr;
+            };
+        }
+    } // end gl
 }

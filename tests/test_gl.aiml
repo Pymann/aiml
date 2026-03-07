@@ -1,0 +1,53 @@
+# Tests für gl namespace: type/constant resolution (kein GL-Context nötig)
+# Echte Render-Tests benötigen einen Display und GL-Context — dieser Test
+# prüft nur Compile-Zeit-Aspekte (Konstanten, Typ-Erkennung).
+# Expected exit code: 0
+
+# ── Phase A: GL-Konstanten (Compile-Zeit i32) ─────────────────────────────
+
+- decl: [tri, i32, gl.TRIANGLES]
+- decl: [lin, i32, gl.LINES]
+- decl: [pts, i32, gl.POINTS]
+- decl: [ts,  i32, gl.TRIANGLE_STRIP]
+- print: ["Phase A: TRIANGLES=${tri} LINES=${lin} POINTS=${pts} TRIANGLE_STRIP=${ts}"]
+
+- if: [{ !=: [tri, 4] }, true]
+  then:
+    - print: ["FAIL: gl.TRIANGLES != 4"]
+    - exit: 1
+- if: [{ !=: [lin, 1] }, true]
+  then:
+    - print: ["FAIL: gl.LINES != 1"]
+    - exit: 1
+- if: [{ !=: [pts, 0] }, true]
+  then:
+    - print: ["FAIL: gl.POINTS != 0"]
+    - exit: 1
+
+- print: ["Phase A OK"]
+
+# ── Phase B: Textur-Konstanten ─────────────────────────────────────────────
+
+- decl: [rep, i32, gl.REPEAT]
+- decl: [cte, i32, gl.CLAMP_TO_EDGE]
+- decl: [mr,  i32, gl.MIRRORED_REPEAT]
+- print: ["Phase B: REPEAT=${rep} CLAMP_TO_EDGE=${cte} MIRRORED_REPEAT=${mr}"]
+
+- if: [{ !=: [rep, 10497] }, true]   # 0x2901 = 10497
+  then:
+    - print: ["FAIL: gl.REPEAT != 10497"]
+    - exit: 1
+
+- decl: [lin2, i32, gl.LINEAR]
+- decl: [near, i32, gl.NEAREST]
+- decl: [lml,  i32, gl.LINEAR_MIPMAP_LINEAR]
+- print: ["Phase B: LINEAR=${lin2} NEAREST=${near} LINEAR_MIPMAP_LINEAR=${lml}"]
+
+- if: [{ !=: [lin2, 9729] }, true]   # 0x2601 = 9729
+  then:
+    - print: ["FAIL: gl.LINEAR != 9729"]
+    - exit: 1
+
+- print: ["Phase B OK"]
+
+- print: ["All gl tests passed"]
