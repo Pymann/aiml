@@ -144,20 +144,60 @@
 - call: [vao.bind_ibo, ibo]
 - call: [vao.attrib, 0, 3, 12, 0]   # attrib 0: 3 floats, stride 12, offset 0
 
+# Kanten-IBO: 12 echte Würfelkanten (keine Diagonalen), 24 Indizes für GL_LINES
+#   Vertex-Layout: 0=vorne-unten-links  1=vorne-unten-rechts
+#                  2=vorne-oben-rechts  3=vorne-oben-links
+#                  4=hinten-unten-links 5=hinten-unten-rechts
+#                  6=hinten-oben-rechts 7=hinten-oben-links
+- decl: [edge_idxs, buffer<u32>]
+# Vordere Fläche
+- call: [edge_idxs.push, 0]
+- call: [edge_idxs.push, 1]
+- call: [edge_idxs.push, 1]
+- call: [edge_idxs.push, 2]
+- call: [edge_idxs.push, 2]
+- call: [edge_idxs.push, 3]
+- call: [edge_idxs.push, 3]
+- call: [edge_idxs.push, 0]
+# Hintere Fläche
+- call: [edge_idxs.push, 4]
+- call: [edge_idxs.push, 5]
+- call: [edge_idxs.push, 5]
+- call: [edge_idxs.push, 6]
+- call: [edge_idxs.push, 6]
+- call: [edge_idxs.push, 7]
+- call: [edge_idxs.push, 7]
+- call: [edge_idxs.push, 4]
+# Verbindungskanten vorne↔hinten
+- call: [edge_idxs.push, 0]
+- call: [edge_idxs.push, 4]
+- call: [edge_idxs.push, 1]
+- call: [edge_idxs.push, 5]
+- call: [edge_idxs.push, 2]
+- call: [edge_idxs.push, 6]
+- call: [edge_idxs.push, 3]
+- call: [edge_idxs.push, 7]
+
+- decl: [edge_ibo, gl_buffer, { call: [gl.create_index_buffer, edge_idxs] }]
+- decl: [edge_vao, gl_vao,    { call: [gl.create_vao] }]
+- call: [edge_vao.bind_vbo, vbo]
+- call: [edge_vao.bind_ibo, edge_ibo]
+- call: [edge_vao.attrib, 0, 3, 12, 0]
+
 - print: ["Phase C OK: Würfel-Geometrie hochgeladen"]
 
 # ── Phase D: Shader kompilieren ───────────────────────────────────────────────
 
 - decl: [vert_src, string, "#version 330 core\nlayout(location=0) in vec3 pos;\nuniform mat4 mvp;\nvoid main(){\n  gl_Position = mvp * vec4(pos, 1.0);\n}\n"]
-- decl: [frag_src, string, "#version 330 core\nout vec4 color;\nvoid main(){\n  color = vec4(1.0, 0.0, 0.0, 1.0);\n}\n"]
-- decl: [sh, gl_shader, { call: [gl.compile_shader, vert_src, frag_src] }]
+- decl: [frag_white, string, "#version 330 core\nout vec4 color;\nvoid main(){\n  color = vec4(1.0, 1.0, 1.0, 1.0);\n}\n"]
+- decl: [frag_red,   string, "#version 330 core\nout vec4 color;\nvoid main(){\n  color = vec4(1.0, 0.0, 0.0, 1.0);\n}\n"]
+- decl: [sh_white, gl_shader, { call: [gl.compile_shader, vert_src, frag_white] }]
+- decl: [sh_red,   gl_shader, { call: [gl.compile_shader, vert_src, frag_red] }]
 
 - print: ["Phase D OK: Shader kompiliert"]
 
-# Drahtgitter-Modus: nur Kanten sichtbar
-- call: [gl.wireframe, 1]
-
 # ── Phase E: Rotations-Render-Schleife (~10 s, 300 Frames à 33 ms) ────────────
+# Two-Pass: 1) weiße Flächen (Fill + Polygon-Offset), 2) rote Kanten (GL_LINES)
 
 - decl: [proj,   mat4, { call: [math.mat4_perspective, 0.785, 1.333, 0.1, 100.0] }]
 - decl: [eye,    vec3, { call: [math.vec3, 2.0, 1.5, 3.0] }]
@@ -176,9 +216,17 @@
       - set: [mvp, { "*": [proj, view] }]
       - set: [mvp, { "*": [mvp, model] }]
       - call: [gl.clear_all, 0.05, 0.05, 0.1, 1.0]
-      - call: [sh.use]
-      - call: [sh.uniform_mat4, "mvp", mvp]
+      # Pass 1: weiße Flächen, leicht zurückgeschoben
+      - call: [gl.polygon_offset, 1.0, 1.0]
+      - call: [gl.enable_polygon_offset_fill]
+      - call: [sh_white.use]
+      - call: [sh_white.uniform_mat4, "mvp", mvp]
       - call: [gl.draw_elements, vao, 36]
+      - call: [gl.disable_polygon_offset_fill]
+      # Pass 2: rote Kanten via GL_LINES (keine Diagonalen)
+      - call: [sh_red.use]
+      - call: [sh_red.uniform_mat4, "mvp", mvp]
+      - call: [gl.draw_lines, edge_vao, 24]
       - call: [glfwSwapBuffers, win]
       - call: [glfwPollEvents]
       - call: [time.sleep_ms, 33]
@@ -189,10 +237,13 @@
 
 # ── Aufräumen ─────────────────────────────────────────────────────────────────
 
+- call: [edge_vao.delete]
+- call: [edge_ibo.delete]
 - call: [vao.delete]
 - call: [vbo.delete]
 - call: [ibo.delete]
-- call: [sh.delete]
+- call: [sh_white.delete]
+- call: [sh_red.delete]
 - call: [glfwTerminate]
 
 - print: ["All gl_window tests passed"]

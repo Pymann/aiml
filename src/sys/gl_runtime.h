@@ -24,6 +24,9 @@ void aiml_gl_enable_cull_face(void);
 void aiml_gl_cull_back(void);
 void aiml_gl_cull_front(void);
 void aiml_gl_wireframe(int8_t on);
+void aiml_gl_polygon_offset(float factor, float units);
+void aiml_gl_enable_polygon_offset_fill(void);
+void aiml_gl_disable_polygon_offset_fill(void);
 
 /* ── Buffer (VBO / IBO) ────────────────────────────────────────────────────── */
 
@@ -82,6 +85,7 @@ void aiml_gl_bind_texture(void* tex, int32_t slot);
 
 void aiml_gl_draw_arrays      (void* vao, int32_t count);          /* GL_TRIANGLES */
 void aiml_gl_draw_elements    (void* vao, int32_t count);          /* GL_TRIANGLES, GL_UNSIGNED_INT */
+void aiml_gl_draw_lines       (void* vao, int32_t count);          /* GL_LINES,     GL_UNSIGNED_INT */
 void aiml_gl_draw_arrays_mode (void* vao, int32_t mode, int32_t count);
 
 /* ── Framebuffer ───────────────────────────────────────────────────────────── */

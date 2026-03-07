@@ -978,6 +978,9 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_cull_back",                      (void*)(intptr_t)aiml_gl_cull_back);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_cull_front",                     (void*)(intptr_t)aiml_gl_cull_front);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_wireframe",                      (void*)(intptr_t)aiml_gl_wireframe);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_polygon_offset",                 (void*)(intptr_t)aiml_gl_polygon_offset);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_enable_polygon_offset_fill",     (void*)(intptr_t)aiml_gl_enable_polygon_offset_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_disable_polygon_offset_fill",    (void*)(intptr_t)aiml_gl_disable_polygon_offset_fill);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_create_buffer",                  (void*)(intptr_t)aiml_gl_create_buffer);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_create_buffer_dynamic",          (void*)(intptr_t)aiml_gl_create_buffer_dynamic);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_create_index_buffer",            (void*)(intptr_t)aiml_gl_create_index_buffer);
@@ -1009,6 +1012,7 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_bind_texture",                   (void*)(intptr_t)aiml_gl_bind_texture);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_draw_arrays",                    (void*)(intptr_t)aiml_gl_draw_arrays);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_draw_elements",                  (void*)(intptr_t)aiml_gl_draw_elements);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_draw_lines",                     (void*)(intptr_t)aiml_gl_draw_lines);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_draw_arrays_mode",               (void*)(intptr_t)aiml_gl_draw_arrays_mode);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_create_framebuffer",             (void*)(intptr_t)aiml_gl_create_framebuffer);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_bind_framebuffer",               (void*)(intptr_t)aiml_gl_bind_framebuffer);
