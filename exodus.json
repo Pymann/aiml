@@ -3,17 +3,66 @@
     "version": "0.1.0",
     "license": [],
     "dependencies": [],
+    "apt_packages": [
+        {
+            "name": "libyaml-cpp-dev",
+            "version": "0.8.0+dfsg-6build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "1b5a9ef5de12f24a6f99168f054346614a7a6060934c47067a9495cb239a8f51"
+        },
+        {
+            "name": "llvm-18-dev",
+            "version": "1:18.1.3-1ubuntu1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "1e68b8c3f788832c5c83d56a1b3dbbba1ee148407f61c873ed659bb373ae6388"
+        },
+        {
+            "name": "libssl-dev",
+            "version": "3.0.13-0ubuntu3.7",
+            "arch": "amd64",
+            "required": true,
+            "digest": "5b58822de937202c6c7881f63ac6ccc1933109953075c9d158b45afcac90cbf2"
+        },
+        {
+            "name": "libc6-dev",
+            "version": "2.39-0ubuntu8.7",
+            "arch": "amd64",
+            "required": true,
+            "digest": "bbf5a155039042634961a61276650631ee47b9e721f91f8dbb731b0bbe046df3"
+        }
+    ],
     "output_type": "executable",
     "optimization": "0",
     "debug": true,
     "warnings": [],
     "werror": false,
+    "misra_profile": "cpp2008",
+    "misra_heuristics": {
+        "rule_2_10_1": {
+            "enabled": true,
+            "min_identifier_length": 3,
+            "case_insensitive": true,
+            "confusable_groups": [
+                "o0",
+                "il1",
+                "s5",
+                "z2",
+                "b8",
+                "g6",
+                "q9"
+            ]
+        }
+    },
     "source_root": ".",
     "build_root": "out",
     "search_paths": [
-        "/usr/include",
-        "/usr/local/include",
-        "/usr/lib/llvm-18/include"
+        "__exodus_cache/apt/libyaml-cpp-dev/amd64/0.8.0+dfsg-6build1/payload/usr/include",
+        "__exodus_cache/apt/llvm-18-dev/amd64/1:18.1.3-1ubuntu1/payload/usr/include/llvm-18",
+        "__exodus_cache/apt/llvm-18-dev/amd64/1:18.1.3-1ubuntu1/payload/usr/include/llvm-c-18",
+        "__exodus_cache/apt/libssl-dev/amd64/3.0.13-0ubuntu3.7/payload/usr/include",
+        "__exodus_cache/apt/libc6-dev/amd64/2.39-0ubuntu8.7/payload/usr/include"
     ],
     "sources": [
         "*.c",
@@ -33,13 +82,17 @@
     "compiler": {
         "name": "g++",
         "path": null,
+        "lang_standard": null,
         "flags": [
             "-std=c++17",
             "-D__STDC_CONSTANT_MACROS",
             "-D__STDC_FORMAT_MACROS",
             "-D__STDC_LIMIT_MACROS",
             "-w"
-        ]
+        ],
+        "additional_compilers": [],
+        "common_interface_defined": true,
+        "integer_division_documented": false
     },
     "linker": {
         "name": "g++",
@@ -57,9 +110,11 @@
             "crypto"
         ],
         "library_paths": [
-            "/usr/lib/x86_64-linux-gnu",
-            "/usr/local/lib",
-            "/usr/lib/llvm-18/lib"
+            "__exodus_cache/apt/libyaml-cpp-dev/amd64/0.8.0+dfsg-6build1/payload/usr/lib",
+            "__exodus_cache/apt/llvm-18-dev/amd64/1:18.1.3-1ubuntu1/payload/usr/lib/llvm-18/lib",
+            "__exodus_cache/apt/libssl-dev/amd64/3.0.13-0ubuntu3.7/payload/usr/lib",
+            "__exodus_cache/apt/libc6-dev/amd64/2.39-0ubuntu8.7/payload/usr/lib",
+            "__exodus_cache/apt/libc6-dev/amd64/2.39-0ubuntu8.7/payload/usr/share/gdb/auto-load/lib"
         ]
     }
 }

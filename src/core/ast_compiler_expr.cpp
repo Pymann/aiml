@@ -6,6 +6,7 @@
 #include "string_utils.h"
 #include "expression.h"
 #include <iostream>
+#include <cmath>
 
 namespace AIML {
 namespace AST {
@@ -137,13 +138,25 @@ IRValue* Compiler::visitLiteral(LiteralExpr* lit) {
         // Strict parsing for unquoted scalars that are numbers or booleans
         if (lit->value == "true") return ctx.ir_gen->getInt32(1);
         if (lit->value == "false") return ctx.ir_gen->getInt32(0);
-        
+
+        // Float literal if it contains '.', 'e', or 'E' — emit as f32
+        const std::string& sv = lit->value;
+        bool looksFloat = sv.find('.') != std::string::npos ||
+                          sv.find('e') != std::string::npos ||
+                          sv.find('E') != std::string::npos;
+        if (looksFloat) {
+            try {
+                float f = std::stof(sv);
+                return ctx.ir_gen->wrap(llvm::ConstantFP::get(ctx.builder.getFloatTy(), (double)f));
+            } catch (...) {}
+        }
+
         try {
             size_t pos = 0;
-            int num = std::stoi(lit->value, &pos, 0);
+            int num = std::stoi(sv, &pos, 0);
             return ctx.ir_gen->getInt32(num);
         } catch (...) {
-            LOG_ERROR("Invalid unknown literal (expected bool or number): " + lit->value);
+            LOG_ERROR("Invalid unknown literal (expected bool or number): " + sv);
             return ctx.ir_gen->getInt32(0);
         }
     }
@@ -165,6 +178,18 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
     
     std::string baseName = (sepPos != std::string::npos) ? varName.substr(0, sepPos) : varName;
     std::string propName = (sepPos != std::string::npos) ? varName.substr(sepPos + 1) : "";
+
+    // 0. math namespace constants (compile-time f32 literals)
+    if (baseName == "math" && !propName.empty()) {
+        auto f = [&](double v) -> IRValue* {
+            return ctx.ir_gen->wrap(llvm::ConstantFP::get(ctx.builder.getFloatTy(), v));
+        };
+        if (propName == "PI")  return f(M_PI);
+        if (propName == "TAU") return f(2.0 * M_PI);
+        if (propName == "E")   return f(M_E);
+        if (propName == "INF") return f((double)INFINITY);
+        if (propName == "NAN") return f((double)NAN);
+    }
 
     // 1. Unambiguous Enum Check
     if (dotPos != std::string::npos) {
@@ -335,6 +360,63 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
         }
     }
     
+    // ── Math struct operator overloading ──────────────────────────────────
+    if (lTy->isStructTy()) {
+        auto* structTy = static_cast<llvm::StructType*>(lTy);
+        std::string sn = structTy->getName().str();
+        llvm::Value* lv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs));
+        llvm::Value* rv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs));
+
+        // Store helper
+        auto store = [&](llvm::Value* val, llvm::Type* ty) -> llvm::Value* {
+            llvm::AllocaInst* a = ctx.builder.CreateAlloca(ty); ctx.builder.CreateStore(val,a); return a;
+        };
+        auto callVoidFn = [&](const char* nm, std::vector<llvm::Type*> pts, std::vector<llvm::Value*> xs, llvm::Type* outTy) -> llvm::Value* {
+            llvm::Function* fn = ctx.module.getFunction(nm);
+            if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),pts,false),llvm::Function::ExternalLinkage,nm,ctx.module);
+            llvm::AllocaInst* out = ctx.builder.CreateAlloca(outTy);
+            xs.push_back(out);
+            ctx.builder.CreateCall(fn,xs);
+            return ctx.builder.CreateLoad(outTy,out);
+        };
+        auto op = llvm::PointerType::get(ctx.context,0);
+
+        bool isVec2=(sn=="vec2"), isVec3=(sn=="vec3"), isVec4=(sn=="vec4"), isQuat=(sn=="quat"), isMat4=(sn=="mat4");
+
+        if (isVec2 || isVec3 || isVec4 || isQuat) {
+            // Check if rhs is f32/scalar (for scale/div)
+            bool rhsIsScalar = rTy->isFloatTy() || rTy->isDoubleTy() || rTy->isIntegerTy();
+            if (rhsIsScalar) rv = rTy->isFloatTy() ? rv : rTy->isDoubleTy() ?
+                ctx.builder.CreateFPTrunc(rv, ctx.builder.getFloatTy()) :
+                ctx.builder.CreateSIToFP(rv, ctx.builder.getFloatTy());
+
+            std::string pre = "aiml_math_" + sn + "_";
+            if (bin->op == "+" && !rhsIsScalar) return ctx.ir_gen->wrap(callVoidFn((pre+"add").c_str(),{op,op,op},{store(lv,structTy),store(rv,structTy)},structTy));
+            if (bin->op == "-" && !rhsIsScalar) return ctx.ir_gen->wrap(callVoidFn((pre+"sub").c_str(),{op,op,op},{store(lv,structTy),store(rv,structTy)},structTy));
+            if (bin->op == "*" && !rhsIsScalar) return ctx.ir_gen->wrap(callVoidFn((pre+"mul").c_str(),{op,op,op},{store(lv,structTy),store(rv,structTy)},structTy));
+            if (bin->op == "*" &&  rhsIsScalar) return ctx.ir_gen->wrap(callVoidFn((pre+"scale").c_str(),{op,ctx.builder.getFloatTy(),op},{store(lv,structTy),rv},structTy));
+            if (bin->op == "/" &&  rhsIsScalar) return ctx.ir_gen->wrap(callVoidFn((pre+"div").c_str(),{op,ctx.builder.getFloatTy(),op},{store(lv,structTy),rv},structTy));
+            if (bin->op == "==") {
+                llvm::Function* fn=ctx.module.getFunction((pre+"eq").c_str());
+                if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(),{op,op},false),llvm::Function::ExternalLinkage,(pre+"eq").c_str(),ctx.module);
+                llvm::Value* res=ctx.builder.CreateCall(fn,{store(lv,structTy),store(rv,structTy)});
+                return ctx.ir_gen->wrap(ctx.builder.CreateICmpNE(res,ctx.builder.getInt32(0)));
+            }
+        }
+
+        if (isMat4) {
+            // mat4 * mat4
+            if (rTy == structTy) {
+                return ctx.ir_gen->wrap(callVoidFn("aiml_math_mat4_mul",{op,op,op},{store(lv,structTy),store(rv,structTy)},structTy));
+            }
+            // mat4 * vec4
+            llvm::Type* vec4Ty = ctx.getLLVMType("vec4");
+            if (rTy == vec4Ty) {
+                return ctx.ir_gen->wrap(callVoidFn("aiml_math_mat4_mul_vec4",{op,op,op},{store(lv,structTy),store(rv,vec4Ty)},vec4Ty));
+            }
+        }
+    }
+
     if (bin->op == "+") return ctx.ir_gen->createAdd(lhs, rhs);
     if (bin->op == "-") return ctx.ir_gen->createSub(lhs, rhs);
     if (bin->op == "*") return ctx.ir_gen->createMul(lhs, rhs);
@@ -422,6 +504,31 @@ IRValue* Compiler::visitUnary(UnaryExpr* unary) {
             ptr = ctx.builder.CreateLoad(loadTy, ptr, "deref");
         }
         return ctx.ir_gen->wrap(ptr);
+    }
+
+    // '-' — arithmetic negation (scalar or math struct)
+    if (unary->op == "-") {
+        IRValue* val = visitExpression(unary->operand.get());
+        if (!val) return nullptr;
+        llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+        llvm::Type* ty = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(val->getType()));
+        if (ty->isStructTy()) {
+            auto* structTy = static_cast<llvm::StructType*>(ty);
+            std::string sn = structTy->getName().str();
+            std::string nm = "aiml_math_" + sn + "_neg";
+            auto op2 = llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn = ctx.module.getFunction(nm.c_str());
+            if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op2,op2},false),
+                llvm::Function::ExternalLinkage,nm.c_str(),ctx.module);
+            llvm::AllocaInst* src = ctx.builder.CreateAlloca(structTy);
+            ctx.builder.CreateStore(v, src);
+            llvm::AllocaInst* out = ctx.builder.CreateAlloca(structTy);
+            ctx.builder.CreateCall(fn,{src,out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(structTy,out));
+        }
+        if (ty->isFloatTy() || ty->isDoubleTy())
+            return ctx.ir_gen->wrap(ctx.builder.CreateFNeg(v, "fneg"));
+        return ctx.ir_gen->wrap(ctx.builder.CreateNeg(v, "neg"));
     }
 
     // '!' — logical not

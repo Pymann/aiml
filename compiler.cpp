@@ -15,6 +15,8 @@
 #include "src/sys/ws_runtime.h"
 #include "src/sys/db_runtime.h"
 #include "src/sys/http_runtime.h"
+#include "src/sys/math_runtime.h"
+#include "src/sys/hash_runtime.h"
 
 // LLVM includes
 #include <llvm/IR/LLVMContext.h>
@@ -731,6 +733,117 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_fs_options_set_cache_max_age",(void*)(intptr_t)aiml_fs_options_set_cache_max_age);
 
     // llvm::sys::DynamicLibrary::AddSymbol("stderr", (void*)(intptr_t)stderr); // Removed to avoid macro issues for now
+
+    // ── math namespace C runtime ─────────────────────────────────────────
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec2_add",       (void*)(intptr_t)aiml_math_vec2_add);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec2_sub",       (void*)(intptr_t)aiml_math_vec2_sub);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec2_mul",       (void*)(intptr_t)aiml_math_vec2_mul);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec2_scale",     (void*)(intptr_t)aiml_math_vec2_scale);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec2_div",       (void*)(intptr_t)aiml_math_vec2_div);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec2_neg",       (void*)(intptr_t)aiml_math_vec2_neg);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec2_dot",       (void*)(intptr_t)aiml_math_vec2_dot);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec2_length",    (void*)(intptr_t)aiml_math_vec2_length);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec2_length_sq", (void*)(intptr_t)aiml_math_vec2_length_sq);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec2_normalize", (void*)(intptr_t)aiml_math_vec2_normalize);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec2_lerp",      (void*)(intptr_t)aiml_math_vec2_lerp);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec2_distance",  (void*)(intptr_t)aiml_math_vec2_distance);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec2_angle",     (void*)(intptr_t)aiml_math_vec2_angle);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec2_perp",      (void*)(intptr_t)aiml_math_vec2_perp);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec2_eq",        (void*)(intptr_t)aiml_math_vec2_eq);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec3_add",       (void*)(intptr_t)aiml_math_vec3_add);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec3_sub",       (void*)(intptr_t)aiml_math_vec3_sub);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec3_mul",       (void*)(intptr_t)aiml_math_vec3_mul);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec3_scale",     (void*)(intptr_t)aiml_math_vec3_scale);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec3_div",       (void*)(intptr_t)aiml_math_vec3_div);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec3_neg",       (void*)(intptr_t)aiml_math_vec3_neg);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec3_dot",       (void*)(intptr_t)aiml_math_vec3_dot);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec3_cross",     (void*)(intptr_t)aiml_math_vec3_cross);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec3_length",    (void*)(intptr_t)aiml_math_vec3_length);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec3_length_sq", (void*)(intptr_t)aiml_math_vec3_length_sq);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec3_normalize", (void*)(intptr_t)aiml_math_vec3_normalize);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec3_lerp",      (void*)(intptr_t)aiml_math_vec3_lerp);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec3_distance",  (void*)(intptr_t)aiml_math_vec3_distance);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec3_reflect",   (void*)(intptr_t)aiml_math_vec3_reflect);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec3_refract",   (void*)(intptr_t)aiml_math_vec3_refract);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec3_eq",        (void*)(intptr_t)aiml_math_vec3_eq);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec4_add",       (void*)(intptr_t)aiml_math_vec4_add);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec4_sub",       (void*)(intptr_t)aiml_math_vec4_sub);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec4_mul",       (void*)(intptr_t)aiml_math_vec4_mul);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec4_scale",     (void*)(intptr_t)aiml_math_vec4_scale);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec4_div",       (void*)(intptr_t)aiml_math_vec4_div);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec4_neg",       (void*)(intptr_t)aiml_math_vec4_neg);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec4_lerp",      (void*)(intptr_t)aiml_math_vec4_lerp);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec4_eq",        (void*)(intptr_t)aiml_math_vec4_eq);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_quat_identity",     (void*)(intptr_t)aiml_math_quat_identity);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_quat_axis_angle",   (void*)(intptr_t)aiml_math_quat_axis_angle);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_quat_euler",        (void*)(intptr_t)aiml_math_quat_euler);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_quat_mul",          (void*)(intptr_t)aiml_math_quat_mul);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_quat_normalize",    (void*)(intptr_t)aiml_math_quat_normalize);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_quat_inverse",      (void*)(intptr_t)aiml_math_quat_inverse);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_quat_rotate_vec3",  (void*)(intptr_t)aiml_math_quat_rotate_vec3);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_quat_lerp",         (void*)(intptr_t)aiml_math_quat_lerp);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_quat_slerp",        (void*)(intptr_t)aiml_math_quat_slerp);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_quat_to_mat4",      (void*)(intptr_t)aiml_math_quat_to_mat4);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_to_quat",      (void*)(intptr_t)aiml_math_mat4_to_quat);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_identity",     (void*)(intptr_t)aiml_math_mat4_identity);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_mul",          (void*)(intptr_t)aiml_math_mat4_mul);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_mul_vec4",     (void*)(intptr_t)aiml_math_mat4_mul_vec4);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_translate",    (void*)(intptr_t)aiml_math_mat4_translate);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_rotate",       (void*)(intptr_t)aiml_math_mat4_rotate);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_rotate_x",     (void*)(intptr_t)aiml_math_mat4_rotate_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_rotate_y",     (void*)(intptr_t)aiml_math_mat4_rotate_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_rotate_z",     (void*)(intptr_t)aiml_math_mat4_rotate_z);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_scale",        (void*)(intptr_t)aiml_math_mat4_scale);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_perspective",  (void*)(intptr_t)aiml_math_mat4_perspective);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_ortho",        (void*)(intptr_t)aiml_math_mat4_ortho);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_lookat",       (void*)(intptr_t)aiml_math_mat4_lookat);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_inverse",      (void*)(intptr_t)aiml_math_mat4_inverse);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_transpose",    (void*)(intptr_t)aiml_math_mat4_transpose);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_to_buffer",    (void*)(intptr_t)aiml_math_mat4_to_buffer);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_get",          (void*)(intptr_t)aiml_math_mat4_get);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_mat4_set",          (void*)(intptr_t)aiml_math_mat4_set);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_ivec2_add",         (void*)(intptr_t)aiml_math_ivec2_add);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_ivec2_div",         (void*)(intptr_t)aiml_math_ivec2_div);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_ivec2_to_vec2",     (void*)(intptr_t)aiml_math_ivec2_to_vec2);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec2_to_ivec2",     (void*)(intptr_t)aiml_math_vec2_to_ivec2);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_ivec3_add",         (void*)(intptr_t)aiml_math_ivec3_add);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_fmin_list",         (void*)(intptr_t)aiml_math_fmin_list);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_fmax_list",         (void*)(intptr_t)aiml_math_fmax_list);
+    // hash namespace
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_sha256",         (void*)(intptr_t)aiml_hash_sha256);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_sha512",         (void*)(intptr_t)aiml_hash_sha512);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_sha3_256",       (void*)(intptr_t)aiml_hash_sha3_256);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_keccak256",      (void*)(intptr_t)aiml_hash_keccak256);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_ripemd160",      (void*)(intptr_t)aiml_hash_ripemd160);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_blake2b",        (void*)(intptr_t)aiml_hash_blake2b);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_blake2s",        (void*)(intptr_t)aiml_hash_blake2s);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_md5",            (void*)(intptr_t)aiml_hash_md5);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_crc32",          (void*)(intptr_t)aiml_hash_crc32);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_hmac_sha256",    (void*)(intptr_t)aiml_hash_hmac_sha256);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_hmac_sha512",    (void*)(intptr_t)aiml_hash_hmac_sha512);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_sha256_raw",     (void*)(intptr_t)aiml_hash_sha256_raw);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_sha512_raw",     (void*)(intptr_t)aiml_hash_sha512_raw);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_sha3_256_raw",   (void*)(intptr_t)aiml_hash_sha3_256_raw);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_keccak256_raw",  (void*)(intptr_t)aiml_hash_keccak256_raw);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_ripemd160_raw",  (void*)(intptr_t)aiml_hash_ripemd160_raw);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_blake2b_raw",    (void*)(intptr_t)aiml_hash_blake2b_raw);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_hmac_sha256_raw",(void*)(intptr_t)aiml_hash_hmac_sha256_raw);
+    // libm scalar functions (resolved from libc.so at runtime, but AddSymbol ensures JIT finds them)
+    llvm::sys::DynamicLibrary::AddSymbol("sinf",   (void*)(intptr_t)sinf);
+    llvm::sys::DynamicLibrary::AddSymbol("cosf",   (void*)(intptr_t)cosf);
+    llvm::sys::DynamicLibrary::AddSymbol("tanf",   (void*)(intptr_t)tanf);
+    llvm::sys::DynamicLibrary::AddSymbol("asinf",  (void*)(intptr_t)asinf);
+    llvm::sys::DynamicLibrary::AddSymbol("acosf",  (void*)(intptr_t)acosf);
+    llvm::sys::DynamicLibrary::AddSymbol("sqrtf",  (void*)(intptr_t)sqrtf);
+    llvm::sys::DynamicLibrary::AddSymbol("logf",   (void*)(intptr_t)logf);
+    llvm::sys::DynamicLibrary::AddSymbol("log2f",  (void*)(intptr_t)log2f);
+    llvm::sys::DynamicLibrary::AddSymbol("floorf", (void*)(intptr_t)floorf);
+    llvm::sys::DynamicLibrary::AddSymbol("ceilf",  (void*)(intptr_t)ceilf);
+    llvm::sys::DynamicLibrary::AddSymbol("roundf", (void*)(intptr_t)roundf);
+    llvm::sys::DynamicLibrary::AddSymbol("fabsf",  (void*)(intptr_t)fabsf);
+    llvm::sys::DynamicLibrary::AddSymbol("atan2f", (void*)(intptr_t)atan2f);
+    llvm::sys::DynamicLibrary::AddSymbol("powf",   (void*)(intptr_t)powf);
+    llvm::sys::DynamicLibrary::AddSymbol("fmodf",  (void*)(intptr_t)fmodf);
 
     std::string errStr;
     if (!module_) {
