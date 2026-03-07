@@ -1,0 +1,148 @@
+# Tests für compress namespace: gzip, deflate, zlib, brotli, zstd, lz4, tar.gz, zip
+# Expected exit code: 0
+
+- decl: [orig, string, "Hello World! This is a test string for compression round-trip testing."]
+
+# ── Phase A: gzip / gunzip ────────────────────────────────────────────────
+
+- decl: [gz, buffer<u8>, { call: [compress.gzip, orig] }]
+- decl: [back_gz, string, { call: [compress.gunzip_str, gz] }]
+- print: ["gzip round-trip: ${back_gz}"]
+
+- decl: [gz9, buffer<u8>, { call: [compress.gzip, orig, 9] }]
+- decl: [back_gz9, string, { call: [compress.gunzip_str, gz9] }]
+- print: ["gzip level=9: ${back_gz9}"]
+
+- decl: [gz1, buffer<u8>, { call: [compress.gzip, orig, 1] }]
+- decl: [back_gz1, string, { call: [compress.gunzip_str, gz1] }]
+- print: ["gzip level=1: ${back_gz1}"]
+
+# Also test buffer output variant
+- decl: [gz_buf, buffer<u8>, { call: [compress.gunzip, gz] }]
+- print: ["gunzip buf size: ${gz_buf.len}"]
+
+# ── Phase B: deflate / inflate ────────────────────────────────────────────
+
+- decl: [def, buffer<u8>, { call: [compress.deflate, orig] }]
+- decl: [inf, string, { call: [compress.inflate_str, def] }]
+- print: ["deflate round-trip: ${inf}"]
+
+# ── Phase C: zlib / zlib_decompress ──────────────────────────────────────
+
+- decl: [zc, buffer<u8>, { call: [compress.zlib, orig] }]
+- decl: [zd, string, { call: [compress.zlib_decompress_str, zc] }]
+- print: ["zlib round-trip: ${zd}"]
+
+# ── Phase D: brotli / brotli_decompress ──────────────────────────────────
+
+- decl: [br, buffer<u8>, { call: [compress.brotli, orig] }]
+- decl: [brd, string, { call: [compress.brotli_decompress_str, br] }]
+- print: ["brotli round-trip: ${brd}"]
+
+- decl: [br6, buffer<u8>, { call: [compress.brotli, orig, 6] }]
+- decl: [br6d, string, { call: [compress.brotli_decompress_str, br6] }]
+- print: ["brotli level=6: ${br6d}"]
+
+- decl: [br11, buffer<u8>, { call: [compress.brotli, orig, 11] }]
+- decl: [br11d, string, { call: [compress.brotli_decompress_str, br11] }]
+- print: ["brotli level=11: ${br11d}"]
+
+# Also test buffer output variant
+- decl: [br_buf, buffer<u8>, { call: [compress.brotli_decompress, br] }]
+- print: ["brotli_decompress buf size: ${br_buf.len}"]
+
+# ── Phase E: zstd / zstd_decompress ──────────────────────────────────────
+
+- decl: [zs, buffer<u8>, { call: [compress.zstd, orig] }]
+- decl: [zsd, string, { call: [compress.zstd_decompress_str, zs] }]
+- print: ["zstd round-trip: ${zsd}"]
+
+- decl: [zs1, buffer<u8>, { call: [compress.zstd, orig, 1] }]
+- decl: [zs1d, string, { call: [compress.zstd_decompress_str, zs1] }]
+- print: ["zstd level=1: ${zs1d}"]
+
+- decl: [zs22, buffer<u8>, { call: [compress.zstd, orig, 22] }]
+- decl: [zs22d, string, { call: [compress.zstd_decompress_str, zs22] }]
+- print: ["zstd level=22: ${zs22d}"]
+
+# Also test buffer output variant
+- decl: [zs_buf, buffer<u8>, { call: [compress.zstd_decompress, zs] }]
+- print: ["zstd_decompress buf size: ${zs_buf.len}"]
+
+# ── Phase F: lz4 / lz4_decompress ────────────────────────────────────────
+
+- decl: [l4, buffer<u8>, { call: [compress.lz4, orig] }]
+- decl: [l4d, string, { call: [compress.lz4_decompress_str, l4] }]
+- print: ["lz4 round-trip: ${l4d}"]
+
+# Also test buffer output variant
+- decl: [l4_buf, buffer<u8>, { call: [compress.lz4_decompress, l4] }]
+- print: ["lz4_decompress buf size: ${l4_buf.len}"]
+
+# ── Phase G: compressed size check (gzip < orig, zstd < orig, etc.) ──────
+
+- print: ["orig len: ${gz.len}"]
+- print: ["gzip compressed size: ${gz.len}"]
+- print: ["brotli compressed size: ${br.len}"]
+- print: ["zstd compressed size: ${zs.len}"]
+- print: ["lz4 compressed size: ${l4.len}"]
+
+# ── Phase H: tar.gz archive ───────────────────────────────────────────────
+
+# Create test directory and files using io/path
+- decl: [td, path, "/tmp/aiml_compress_test"]
+- call: [io.write_file, "/tmp/aiml_compress_test_a.txt", "File A content for tar.gz test"]
+- call: [io.write_file, "/tmp/aiml_compress_test_b.txt", "File B content for tar.gz test"]
+
+- decl: [tar_src, path, "/tmp/aiml_compress_test_a.txt"]
+- decl: [tar_dst, path, "/tmp/aiml_test_out.tar.gz"]
+- decl: [tar_rc, i32, { call: [compress.tar_gz, tar_src, tar_dst] }]
+- print: ["tar.gz rc: ${tar_rc}"]
+
+- decl: [untar_dir, path, "/tmp/aiml_untar_out"]
+- decl: [untar_rc, i32, { call: [compress.untar_gz, tar_dst, untar_dir] }]
+- print: ["untar.gz rc: ${untar_rc}"]
+
+# ── Phase I: zip archive ──────────────────────────────────────────────────
+
+- decl: [zip_src, path, "/tmp/aiml_compress_test_b.txt"]
+- decl: [zip_dst, path, "/tmp/aiml_test_out.zip"]
+- decl: [zip_rc, i32, { call: [compress.zip, zip_src, zip_dst] }]
+- print: ["zip rc: ${zip_rc}"]
+
+- decl: [unzip_dir, path, "/tmp/aiml_unzip_out"]
+- decl: [unzip_rc, i32, { call: [compress.unzip, zip_dst, unzip_dir] }]
+- print: ["unzip rc: ${unzip_rc}"]
+
+- print: ["Phase I: archive OK"]
+
+# ── Phase J: archive traversal ───────────────────────────────────────────
+# Re-use /tmp/aiml_test_out.zip and /tmp/aiml_test_out.tar.gz from Phase H/I
+
+# ZIP entries
+- decl: [zip_ents, list<ptr<zip_entry>>]
+- set: [zip_ents, { call: [compress.zip_entries, "/tmp/aiml_test_out.zip"] }]
+- decl: [zip_len, i32, zip_ents.len]
+- print: ["zip entry count: ${zip_len}"]
+- decl: [ze, ptr<zip_entry>]
+- set: [ze, zip_ents-0]
+- print: ["zip[0] name: ${ze.name}"]
+- print: ["zip[0] size: ${ze.size}"]
+- print: ["zip[0] compressed_size: ${ze.compressed_size}"]
+- print: ["zip[0] is_dir: ${ze.is_dir}"]
+- print: ["zip[0] crc32: ${ze.crc32}"]
+- print: ["zip[0] method: ${ze.method}"]
+
+# TAR.GZ entries
+- decl: [tar_ents, list<ptr<tar_entry>>]
+- set: [tar_ents, { call: [compress.tar_entries, "/tmp/aiml_test_out.tar.gz"] }]
+- decl: [tar_len, i32, tar_ents.len]
+- print: ["tar entry count: ${tar_len}"]
+- decl: [te, ptr<tar_entry>]
+- set: [te, tar_ents-0]
+- print: ["tar[0] name: ${te.name}"]
+- print: ["tar[0] size: ${te.size}"]
+- print: ["tar[0] is_dir: ${te.is_dir}"]
+- print: ["tar[0] mode: ${te.mode}"]
+
+- print: ["Phase J: archive traversal OK"]

@@ -548,6 +548,10 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
     if ((className.rfind("ptr<", 0) == 0 || className.rfind("ref<", 0) == 0) && className.back() == '>') {
          className = className.substr(4, className.length() - 5);
     }
+    // buffer<T> → "buffer" (all buffer variants share the same class registration)
+    if (className.rfind("buffer<", 0) == 0 && className.back() == '>') {
+        className = "buffer";
+    }
     
     IRValue* baseAlloca = baseSym->ir_alloca_inst ? baseSym->ir_alloca_inst : ctx.ir_gen->wrap(baseSym->alloca_inst);
     IRType* baseElemTy = baseSym->ir_element_type ? baseSym->ir_element_type : ctx.ir_gen->wrapType(baseSym->element_type);
