@@ -191,6 +191,26 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
         if (propName == "NAN") return f((double)NAN);
     }
 
+    // 0b. gl namespace constants (compile-time i32 literals — OpenGL enum values)
+    if (baseName == "gl" && !propName.empty()) {
+        auto i = [&](int32_t v) -> IRValue* {
+            return ctx.ir_gen->wrap(ctx.builder.getInt32(v));
+        };
+        if (propName == "TRIANGLES")              return i(0x0004);
+        if (propName == "LINES")                  return i(0x0001);
+        if (propName == "POINTS")                 return i(0x0000);
+        if (propName == "TRIANGLE_STRIP")         return i(0x0005);
+        if (propName == "REPEAT")                 return i(0x2901);
+        if (propName == "CLAMP_TO_EDGE")          return i(0x812F);
+        if (propName == "MIRRORED_REPEAT")        return i(0x8370);
+        if (propName == "LINEAR")                 return i(0x2601);
+        if (propName == "NEAREST")                return i(0x2600);
+        if (propName == "LINEAR_MIPMAP_LINEAR")   return i(0x2703);
+        if (propName == "NEAREST_MIPMAP_LINEAR")  return i(0x2702);
+        if (propName == "LINEAR_MIPMAP_NEAREST")  return i(0x2701);
+        if (propName == "NEAREST_MIPMAP_NEAREST") return i(0x2700);
+    }
+
     // 1. Unambiguous Enum Check
     if (dotPos != std::string::npos) {
         if ((ctx.currentNs && ctx.currentNs->enums.count(baseName)) || ctx.enums.count(baseName)) {
@@ -417,12 +437,39 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
         }
     }
 
+    // Float arithmetic and comparison — must come before integer fallback
+    if (lTy->isFloatTy() || lTy->isDoubleTy()) {
+        llvm::Value* lv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs));
+        llvm::Value* rv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs));
+        if (bin->op == "+" || bin->op == "add") return ctx.ir_gen->wrap(ctx.builder.CreateFAdd(lv, rv));
+        if (bin->op == "-" || bin->op == "sub") return ctx.ir_gen->wrap(ctx.builder.CreateFSub(lv, rv));
+        if (bin->op == "*" || bin->op == "mul") return ctx.ir_gen->wrap(ctx.builder.CreateFMul(lv, rv));
+        if (bin->op == "/" || bin->op == "div") return ctx.ir_gen->wrap(ctx.builder.CreateFDiv(lv, rv));
+        if (bin->op == "==" || bin->op == "eq")  return ctx.ir_gen->wrap(ctx.builder.CreateFCmpOEQ(lv, rv));
+        if (bin->op == "!=" || bin->op == "neq") return ctx.ir_gen->wrap(ctx.builder.CreateFCmpONE(lv, rv));
+        if (bin->op == "<"  || bin->op == "lt")  return ctx.ir_gen->wrap(ctx.builder.CreateFCmpOLT(lv, rv));
+        if (bin->op == ">"  || bin->op == "gt")  return ctx.ir_gen->wrap(ctx.builder.CreateFCmpOGT(lv, rv));
+        if (bin->op == "<=" || bin->op == "le")  return ctx.ir_gen->wrap(ctx.builder.CreateFCmpOLE(lv, rv));
+        if (bin->op == ">=" || bin->op == "ge")  return ctx.ir_gen->wrap(ctx.builder.CreateFCmpOGE(lv, rv));
+    }
+
     if (bin->op == "+") return ctx.ir_gen->createAdd(lhs, rhs);
     if (bin->op == "-") return ctx.ir_gen->createSub(lhs, rhs);
     if (bin->op == "*") return ctx.ir_gen->createMul(lhs, rhs);
     if (bin->op == "/") return ctx.ir_gen->createSDiv(lhs, rhs);
     if (bin->op == "%") return ctx.ir_gen->createSRem(lhs, rhs);
-    
+
+    // `==` / `!=` — identity comparison (integer or pointer address equality).
+    // Distinct from `eq`/`neq` which do string comparison for ptr types.
+    if (bin->op == "==" || bin->op == "!=") {
+        bool isEq = (bin->op == "==");
+        llvm::Value* lv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs));
+        llvm::Value* rv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs));
+        llvm::Value* cmp = isEq ? ctx.builder.CreateICmpEQ(lv, rv)
+                                : ctx.builder.CreateICmpNE(lv, rv);
+        return ctx.ir_gen->wrap(cmp);
+    }
+
     if (bin->op == "eq") {
         if (lTy->isPointerTy() && rTy->isPointerTy()) {
             return visitStringCompare(false,
@@ -439,13 +486,13 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
         }
                 return ctx.ir_gen->createICmpNE(lhs, rhs);
     }
-    if (bin->op == "lt") return ctx.ir_gen->createICmpSLT(lhs, rhs);
-    if (bin->op == "gt") return ctx.ir_gen->createICmpSGT(lhs, rhs);
-    if (bin->op == "le") return ctx.ir_gen->createICmpSLE(lhs, rhs);
-    if (bin->op == "ge") return ctx.ir_gen->createICmpSGE(lhs, rhs);
-    
-    if (bin->op == "and") return ctx.ir_gen->createAnd(lhs, rhs);
-    if (bin->op == "or") return ctx.ir_gen->createOr(lhs, rhs);
+    if (bin->op == "lt" || bin->op == "<")  return ctx.ir_gen->createICmpSLT(lhs, rhs);
+    if (bin->op == "gt" || bin->op == ">")  return ctx.ir_gen->createICmpSGT(lhs, rhs);
+    if (bin->op == "le" || bin->op == "<=") return ctx.ir_gen->createICmpSLE(lhs, rhs);
+    if (bin->op == "ge" || bin->op == ">=") return ctx.ir_gen->createICmpSGE(lhs, rhs);
+
+    if (bin->op == "and" || bin->op == "&&") return ctx.ir_gen->createAnd(lhs, rhs);
+    if (bin->op == "or"  || bin->op == "||") return ctx.ir_gen->createOr(lhs, rhs);
 
     LOG_ERROR("Unknown binary operator: " + bin->op);
     return nullptr;

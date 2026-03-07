@@ -1,0 +1,827 @@
+/*
+ * gltf_runtime.cpp — AIML gltf namespace runtime
+ *
+ * Backend: cgltf (single-header, MIT)  for parsing
+ *          stb_image (single-header)    for image decoding
+ *
+ * All vertex-data accessors normalise to float32 / uint32 and return a
+ * heap-allocated AimlGltfBuffer* that the caller (compiler stub) copies
+ * into a stack-alloca via memcpy.
+ */
+
+#define CGLTF_IMPLEMENTATION
+#include "../../src/vendor/cgltf.h"
+
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb/stb_image.h>
+
+#include "gltf_runtime.h"
+
+#include <cstdlib>
+#include <cstring>
+#include <cmath>
+#include <cstdio>
+
+/* ── Internal helpers ────────────────────────────────────────────────────── */
+
+struct AimlGltfScene {
+    cgltf_data* data;
+    char*       error_msg;
+};
+
+/* Wrapper carrying an image pointer + owning scene for buffer resolution */
+struct AimlGltfImageRef {
+    cgltf_image* ptr;
+    cgltf_data*  data;
+};
+
+/* Wrapper for gltf_texture (needs data for sampler lookup) */
+struct AimlGltfTexRef {
+    cgltf_texture* ptr;
+    cgltf_data*    data;
+};
+
+/* ── Buffer helpers ──────────────────────────────────────────────────────── */
+
+static AimlGltfBuffer* make_buffer(uint32_t byte_count) {
+    AimlGltfBuffer* b = (AimlGltfBuffer*)malloc(sizeof(AimlGltfBuffer));
+    b->data       = byte_count ? (uint8_t*)malloc(byte_count) : nullptr;
+    b->size       = (int32_t)byte_count;
+    b->capacity   = (int32_t)byte_count;
+    b->read_idx   = 0;
+    b->write_idx  = (int32_t)byte_count;
+    return b;
+}
+
+static AimlGltfBuffer* make_empty_buffer() {
+    return make_buffer(0);
+}
+
+/* Fill an AimlGltfListRaw; realloc if needed */
+static void list_push_ptr(AimlGltfListRaw* lst, void* ptr) {
+    if (lst->size >= lst->capacity) {
+        int32_t new_cap = lst->capacity ? lst->capacity * 2 : 8;
+        lst->data     = (void**)realloc(lst->data, (size_t)new_cap * sizeof(void*));
+        lst->capacity = new_cap;
+    }
+    lst->data[lst->size++] = ptr;
+}
+
+/* ── cgltf accessor → float buffer ──────────────────────────────────────── */
+
+/*
+ * Unpack a cgltf_accessor into a freshly malloc'd float array.
+ * Always returns float32 regardless of source component type.
+ * Returns NULL if accessor is NULL or has no data.
+ */
+static AimlGltfBuffer* accessor_to_float_buf(const cgltf_accessor* acc) {
+    if (!acc || acc->count == 0) return make_empty_buffer();
+
+    int num_components = (int)cgltf_num_components(acc->type);
+    uint32_t total     = (uint32_t)(acc->count * num_components);
+    AimlGltfBuffer* b  = make_buffer(total * sizeof(float));
+    float* dst         = (float*)b->data;
+
+    for (cgltf_size i = 0; i < acc->count; ++i) {
+        cgltf_accessor_read_float(acc, i, dst, (cgltf_size)num_components);
+        dst += num_components;
+    }
+    return b;
+}
+
+/* Unpack accessor → uint32 buffer (for indices; normalises u8/u16/u32). */
+static AimlGltfBuffer* accessor_to_u32_buf(const cgltf_accessor* acc) {
+    if (!acc || acc->count == 0) return make_empty_buffer();
+
+    uint32_t total    = (uint32_t)acc->count;
+    AimlGltfBuffer* b = make_buffer(total * sizeof(uint32_t));
+    uint32_t* dst     = (uint32_t*)b->data;
+
+    for (cgltf_size i = 0; i < acc->count; ++i) {
+        uint32_t idx = 0;
+        cgltf_accessor_read_uint(acc, i, &idx, 1);
+        dst[i] = idx;
+    }
+    return b;
+}
+
+/* Unpack accessor → uint16 buffer (for joint indices). */
+static AimlGltfBuffer* accessor_to_u16_buf(const cgltf_accessor* acc) {
+    if (!acc || acc->count == 0) return make_empty_buffer();
+
+    int num_comp      = (int)cgltf_num_components(acc->type);
+    uint32_t total    = (uint32_t)(acc->count * num_comp);
+    AimlGltfBuffer* b = make_buffer(total * sizeof(uint16_t));
+    uint16_t* dst     = (uint16_t*)b->data;
+
+    for (cgltf_size i = 0; i < acc->count; ++i) {
+        /* Read as uint (cgltf normalises) then truncate to u16 */
+        uint32_t tmp[4] = {};
+        cgltf_accessor_read_uint(acc, i, tmp, (cgltf_size)num_comp);
+        for (int c = 0; c < num_comp; ++c)
+            dst[i * num_comp + c] = (uint16_t)tmp[c];
+    }
+    return b;
+}
+
+/* ── find accessors by attribute name ───────────────────────────────────── */
+
+static const cgltf_accessor* find_attr(const cgltf_primitive* prim,
+                                       cgltf_attribute_type type, int idx) {
+    for (cgltf_size i = 0; i < prim->attributes_count; ++i) {
+        auto& a = prim->attributes[i];
+        if (a.type == type && a.index == idx)
+            return a.data;
+    }
+    return nullptr;
+}
+
+/* ── Sampler constant → string ───────────────────────────────────────────── */
+
+static const char* wrap_str(int w) {
+    switch (w) {
+        case 33071: return "CLAMP_TO_EDGE";
+        case 33648: return "MIRRORED_REPEAT";
+        default:    return "REPEAT";
+    }
+}
+
+static const char* filter_str(int f) {
+    switch (f) {
+        case 9728: return "NEAREST";
+        case 9729: return "LINEAR";
+        case 9984: return "NEAREST_MIPMAP_NEAREST";
+        case 9985: return "LINEAR_MIPMAP_NEAREST";
+        case 9986: return "NEAREST_MIPMAP_LINEAR";
+        case 9987: return "LINEAR_MIPMAP_LINEAR";
+        default:   return "LINEAR";
+    }
+}
+
+/* ── Node world matrix (TRS → 4x4 column-major) ─────────────────────────── */
+
+static void mat4_identity(float* m) {
+    memset(m, 0, 16 * sizeof(float));
+    m[0] = m[5] = m[10] = m[15] = 1.f;
+}
+
+static void mat4_mul(float* out, const float* a, const float* b) {
+    float tmp[16];
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r) {
+            float s = 0.f;
+            for (int k = 0; k < 4; ++k)
+                s += a[k*4+r] * b[c*4+k];
+            tmp[c*4+r] = s;
+        }
+    memcpy(out, tmp, 16 * sizeof(float));
+}
+
+static void node_local_matrix(const cgltf_node* n, float* m) {
+    if (n->has_matrix) {
+        memcpy(m, n->matrix, 16 * sizeof(float));
+        return;
+    }
+    mat4_identity(m);
+    /* Translation */
+    if (n->has_translation) {
+        m[12] = n->translation[0];
+        m[13] = n->translation[1];
+        m[14] = n->translation[2];
+    }
+    /* Rotation (quaternion → mat3 embedded in mat4) */
+    if (n->has_rotation) {
+        float x = n->rotation[0], y = n->rotation[1],
+              z = n->rotation[2], w = n->rotation[3];
+        m[0]  = 1 - 2*(y*y + z*z);
+        m[1]  =     2*(x*y + w*z);
+        m[2]  =     2*(x*z - w*y);
+        m[4]  =     2*(x*y - w*z);
+        m[5]  = 1 - 2*(x*x + z*z);
+        m[6]  =     2*(y*z + w*x);
+        m[8]  =     2*(x*z + w*y);
+        m[9]  =     2*(y*z - w*x);
+        m[10] = 1 - 2*(x*x + y*y);
+    }
+    /* Scale */
+    if (n->has_scale) {
+        m[0]  *= n->scale[0];
+        m[1]  *= n->scale[0];
+        m[2]  *= n->scale[0];
+        m[4]  *= n->scale[1];
+        m[5]  *= n->scale[1];
+        m[6]  *= n->scale[1];
+        m[8]  *= n->scale[2];
+        m[9]  *= n->scale[2];
+        m[10] *= n->scale[2];
+    }
+}
+
+static void node_world_matrix_impl(const cgltf_data* data,
+                                   const cgltf_node* n, float* out) {
+    float local[16];
+    node_local_matrix(n, local);
+    if (n->parent) {
+        float parent[16];
+        node_world_matrix_impl(data, n->parent, parent);
+        mat4_mul(out, parent, local);
+    } else {
+        memcpy(out, local, 16 * sizeof(float));
+    }
+}
+
+/* ── Animation sampling ──────────────────────────────────────────────────── */
+
+/* Linear interpolation between two scalar keyframe arrays. */
+static float anim_sample_scalar(const cgltf_animation_sampler* sampler,
+                                 float t, int component) {
+    const cgltf_accessor* input  = sampler->input;
+    const cgltf_accessor* output = sampler->output;
+    if (!input || !output || input->count < 2) {
+        /* Return first value */
+        float v = 0.f;
+        if (output && output->count > 0)
+            cgltf_accessor_read_float(output, 0, &v + component, 1);
+        return v;
+    }
+
+    /* Clamp */
+    float t0 = 0.f, t1 = 0.f;
+    cgltf_accessor_read_float(input, 0, &t0, 1);
+    cgltf_accessor_read_float(input, input->count - 1, &t1, 1);
+    t = t < t0 ? t0 : (t > t1 ? t1 : t);
+
+    /* Find segment */
+    cgltf_size seg = 0;
+    for (cgltf_size i = 0; i + 1 < input->count; ++i) {
+        float ta = 0.f, tb = 0.f;
+        cgltf_accessor_read_float(input, i,     &ta, 1);
+        cgltf_accessor_read_float(input, i + 1, &tb, 1);
+        if (t >= ta && t <= tb) { seg = i; break; }
+    }
+
+    float ta = 0.f, tb = 0.f;
+    cgltf_accessor_read_float(input, seg,     &ta, 1);
+    cgltf_accessor_read_float(input, seg + 1, &tb, 1);
+    float alpha = (tb > ta) ? ((t - ta) / (tb - ta)) : 0.f;
+
+    int nc = (int)cgltf_num_components(output->type);
+    float va = 0.f, vb = 0.f;
+    {
+        float tmp[4] = {};
+        cgltf_accessor_read_float(output, seg,     tmp, (cgltf_size)nc);
+        va = tmp[component];
+    }
+    {
+        float tmp[4] = {};
+        cgltf_accessor_read_float(output, seg + 1, tmp, (cgltf_size)nc);
+        vb = tmp[component];
+    }
+    return va + alpha * (vb - va);
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Public API                                                                 */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+extern "C" {
+
+/* ── Load / free ─────────────────────────────────────────────────────────── */
+
+void* aiml_gltf_load(const char* path) {
+    AimlGltfScene* s = (AimlGltfScene*)calloc(1, sizeof(AimlGltfScene));
+
+    cgltf_options opts = {};
+    cgltf_result  rc   = cgltf_parse_file(&opts, path, &s->data);
+    if (rc != cgltf_result_success) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "cgltf_parse_file failed: %d", (int)rc);
+        s->error_msg = strdup(buf);
+        return s;
+    }
+    rc = cgltf_load_buffers(&opts, s->data, path);
+    if (rc != cgltf_result_success) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "cgltf_load_buffers failed: %d", (int)rc);
+        s->error_msg = strdup(buf);
+        cgltf_free(s->data);
+        s->data = nullptr;
+        return s;
+    }
+    return s;
+}
+
+int32_t aiml_gltf_scene_valid(void* scene) {
+    auto* s = (AimlGltfScene*)scene;
+    return (s && s->data && !s->error_msg) ? 1 : 0;
+}
+
+const char* aiml_gltf_scene_error(void* scene) {
+    auto* s = (AimlGltfScene*)scene;
+    return (s && s->error_msg) ? s->error_msg : "";
+}
+
+void aiml_gltf_scene_free(void* scene) {
+    auto* s = (AimlGltfScene*)scene;
+    if (!s) return;
+    if (s->data)      cgltf_free(s->data);
+    if (s->error_msg) free(s->error_msg);
+    free(s);
+}
+
+/* ── Scene list fills ────────────────────────────────────────────────────── */
+
+void aiml_gltf_scene_nodes_fill(void* scene, void* list_ptr) {
+    auto* s   = (AimlGltfScene*)scene;
+    auto* lst = (AimlGltfListRaw*)list_ptr;
+    if (!s || !s->data) return;
+    /* Use the first scene's root nodes if present, otherwise all nodes */
+    if (s->data->scenes_count > 0) {
+        auto& sc = s->data->scenes[0];
+        for (cgltf_size i = 0; i < sc.nodes_count; ++i)
+            list_push_ptr(lst, sc.nodes[i]);
+    } else {
+        for (cgltf_size i = 0; i < s->data->nodes_count; ++i)
+            list_push_ptr(lst, &s->data->nodes[i]);
+    }
+}
+
+void aiml_gltf_scene_meshes_fill(void* scene, void* list_ptr) {
+    auto* s   = (AimlGltfScene*)scene;
+    auto* lst = (AimlGltfListRaw*)list_ptr;
+    if (!s || !s->data) return;
+    for (cgltf_size i = 0; i < s->data->meshes_count; ++i)
+        list_push_ptr(lst, &s->data->meshes[i]);
+}
+
+void aiml_gltf_scene_materials_fill(void* scene, void* list_ptr) {
+    auto* s   = (AimlGltfScene*)scene;
+    auto* lst = (AimlGltfListRaw*)list_ptr;
+    if (!s || !s->data) return;
+    for (cgltf_size i = 0; i < s->data->materials_count; ++i)
+        list_push_ptr(lst, &s->data->materials[i]);
+}
+
+void aiml_gltf_scene_animations_fill(void* scene, void* list_ptr) {
+    auto* s   = (AimlGltfScene*)scene;
+    auto* lst = (AimlGltfListRaw*)list_ptr;
+    if (!s || !s->data) return;
+    for (cgltf_size i = 0; i < s->data->animations_count; ++i)
+        list_push_ptr(lst, &s->data->animations[i]);
+}
+
+void aiml_gltf_scene_skins_fill(void* scene, void* list_ptr) {
+    auto* s   = (AimlGltfScene*)scene;
+    auto* lst = (AimlGltfListRaw*)list_ptr;
+    if (!s || !s->data) return;
+    for (cgltf_size i = 0; i < s->data->skins_count; ++i)
+        list_push_ptr(lst, &s->data->skins[i]);
+}
+
+void aiml_gltf_scene_images_fill(void* scene, void* list_ptr) {
+    auto* s   = (AimlGltfScene*)scene;
+    auto* lst = (AimlGltfListRaw*)list_ptr;
+    if (!s || !s->data) return;
+    for (cgltf_size i = 0; i < s->data->images_count; ++i) {
+        AimlGltfImageRef* ref = (AimlGltfImageRef*)malloc(sizeof(AimlGltfImageRef));
+        ref->ptr  = &s->data->images[i];
+        ref->data = s->data;
+        list_push_ptr(lst, ref);
+    }
+}
+
+/* ── gltf_node ───────────────────────────────────────────────────────────── */
+
+const char* aiml_gltf_node_name(void* node) {
+    auto* n = (cgltf_node*)node;
+    return (n && n->name) ? n->name : "";
+}
+float aiml_gltf_node_translation_x(void* node) {
+    auto* n = (cgltf_node*)node;
+    return (n && n->has_translation) ? n->translation[0] : 0.f;
+}
+float aiml_gltf_node_translation_y(void* node) {
+    auto* n = (cgltf_node*)node;
+    return (n && n->has_translation) ? n->translation[1] : 0.f;
+}
+float aiml_gltf_node_translation_z(void* node) {
+    auto* n = (cgltf_node*)node;
+    return (n && n->has_translation) ? n->translation[2] : 0.f;
+}
+float aiml_gltf_node_rotation_x(void* node) {
+    auto* n = (cgltf_node*)node;
+    return (n && n->has_rotation) ? n->rotation[0] : 0.f;
+}
+float aiml_gltf_node_rotation_y(void* node) {
+    auto* n = (cgltf_node*)node;
+    return (n && n->has_rotation) ? n->rotation[1] : 0.f;
+}
+float aiml_gltf_node_rotation_z(void* node) {
+    auto* n = (cgltf_node*)node;
+    return (n && n->has_rotation) ? n->rotation[2] : 0.f;
+}
+float aiml_gltf_node_rotation_w(void* node) {
+    auto* n = (cgltf_node*)node;
+    return (n && n->has_rotation) ? n->rotation[3] : 1.f;
+}
+float aiml_gltf_node_scale_x(void* node) {
+    auto* n = (cgltf_node*)node;
+    return (n && n->has_scale) ? n->scale[0] : 1.f;
+}
+float aiml_gltf_node_scale_y(void* node) {
+    auto* n = (cgltf_node*)node;
+    return (n && n->has_scale) ? n->scale[1] : 1.f;
+}
+float aiml_gltf_node_scale_z(void* node) {
+    auto* n = (cgltf_node*)node;
+    return (n && n->has_scale) ? n->scale[2] : 1.f;
+}
+void* aiml_gltf_node_mesh(void* node) {
+    auto* n = (cgltf_node*)node;
+    return n ? n->mesh : nullptr;
+}
+void* aiml_gltf_node_skin(void* node) {
+    auto* n = (cgltf_node*)node;
+    return n ? n->skin : nullptr;
+}
+void aiml_gltf_node_children_fill(void* node, void* list_ptr) {
+    auto* n   = (cgltf_node*)node;
+    auto* lst = (AimlGltfListRaw*)list_ptr;
+    if (!n) return;
+    for (cgltf_size i = 0; i < n->children_count; ++i)
+        list_push_ptr(lst, n->children[i]);
+}
+void* aiml_gltf_node_world_matrix(void* node) {
+    /* We need the cgltf_data* for parent traversal — walk parent chain to root */
+    auto* n = (cgltf_node*)node;
+    if (!n) return make_empty_buffer();
+    AimlGltfBuffer* b = make_buffer(16 * sizeof(float));
+    /* cgltf provides cgltf_node_transform_world if CGLTF_IMPLEMENTATION is defined */
+    cgltf_node_transform_world(n, (float*)b->data);
+    return b;
+}
+
+/* ── gltf_mesh ───────────────────────────────────────────────────────────── */
+
+const char* aiml_gltf_mesh_name(void* mesh) {
+    auto* m = (cgltf_mesh*)mesh;
+    return (m && m->name) ? m->name : "";
+}
+int32_t aiml_gltf_mesh_primitive_count(void* mesh) {
+    auto* m = (cgltf_mesh*)mesh;
+    return m ? (int32_t)m->primitives_count : 0;
+}
+void* aiml_gltf_mesh_primitive(void* mesh, int32_t idx) {
+    auto* m = (cgltf_mesh*)mesh;
+    if (!m || idx < 0 || (cgltf_size)idx >= m->primitives_count) return nullptr;
+    return &m->primitives[idx];
+}
+
+/* ── gltf_primitive ──────────────────────────────────────────────────────── */
+
+void* aiml_gltf_prim_positions(void* prim) {
+    auto* p = (cgltf_primitive*)prim;
+    return accessor_to_float_buf(p ? find_attr(p, cgltf_attribute_type_position, 0) : nullptr);
+}
+void* aiml_gltf_prim_normals(void* prim) {
+    auto* p = (cgltf_primitive*)prim;
+    return accessor_to_float_buf(p ? find_attr(p, cgltf_attribute_type_normal, 0) : nullptr);
+}
+void* aiml_gltf_prim_tangents(void* prim) {
+    auto* p = (cgltf_primitive*)prim;
+    return accessor_to_float_buf(p ? find_attr(p, cgltf_attribute_type_tangent, 0) : nullptr);
+}
+void* aiml_gltf_prim_uvs(void* prim, int32_t set) {
+    auto* p = (cgltf_primitive*)prim;
+    return accessor_to_float_buf(p ? find_attr(p, cgltf_attribute_type_texcoord, set) : nullptr);
+}
+void* aiml_gltf_prim_colors(void* prim, int32_t set) {
+    auto* p = (cgltf_primitive*)prim;
+    return accessor_to_float_buf(p ? find_attr(p, cgltf_attribute_type_color, set) : nullptr);
+}
+void* aiml_gltf_prim_joints(void* prim, int32_t set) {
+    auto* p = (cgltf_primitive*)prim;
+    return accessor_to_u16_buf(p ? find_attr(p, cgltf_attribute_type_joints, set) : nullptr);
+}
+void* aiml_gltf_prim_weights(void* prim, int32_t set) {
+    auto* p = (cgltf_primitive*)prim;
+    return accessor_to_float_buf(p ? find_attr(p, cgltf_attribute_type_weights, set) : nullptr);
+}
+void* aiml_gltf_prim_indices(void* prim) {
+    auto* p = (cgltf_primitive*)prim;
+    return accessor_to_u32_buf(p ? p->indices : nullptr);
+}
+int32_t aiml_gltf_prim_vertex_count(void* prim) {
+    auto* p = (cgltf_primitive*)prim;
+    if (!p) return 0;
+    const cgltf_accessor* pos = find_attr(p, cgltf_attribute_type_position, 0);
+    return pos ? (int32_t)pos->count : 0;
+}
+int32_t aiml_gltf_prim_index_count(void* prim) {
+    auto* p = (cgltf_primitive*)prim;
+    return (p && p->indices) ? (int32_t)p->indices->count : 0;
+}
+void* aiml_gltf_prim_material(void* prim) {
+    auto* p = (cgltf_primitive*)prim;
+    return p ? p->material : nullptr;
+}
+
+/* ── gltf_material ───────────────────────────────────────────────────────── */
+
+const char* aiml_gltf_mat_name(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return (m && m->name) ? m->name : "";
+}
+float aiml_gltf_mat_base_color_r(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return (m && m->has_pbr_metallic_roughness)
+        ? m->pbr_metallic_roughness.base_color_factor[0] : 1.f;
+}
+float aiml_gltf_mat_base_color_g(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return (m && m->has_pbr_metallic_roughness)
+        ? m->pbr_metallic_roughness.base_color_factor[1] : 1.f;
+}
+float aiml_gltf_mat_base_color_b(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return (m && m->has_pbr_metallic_roughness)
+        ? m->pbr_metallic_roughness.base_color_factor[2] : 1.f;
+}
+float aiml_gltf_mat_base_color_a(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return (m && m->has_pbr_metallic_roughness)
+        ? m->pbr_metallic_roughness.base_color_factor[3] : 1.f;
+}
+float aiml_gltf_mat_metallic(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return (m && m->has_pbr_metallic_roughness)
+        ? m->pbr_metallic_roughness.metallic_factor : 0.f;
+}
+float aiml_gltf_mat_roughness(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return (m && m->has_pbr_metallic_roughness)
+        ? m->pbr_metallic_roughness.roughness_factor : 1.f;
+}
+float aiml_gltf_mat_emissive_r(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return m ? m->emissive_factor[0] : 0.f;
+}
+float aiml_gltf_mat_emissive_g(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return m ? m->emissive_factor[1] : 0.f;
+}
+float aiml_gltf_mat_emissive_b(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return m ? m->emissive_factor[2] : 0.f;
+}
+
+static AimlGltfTexRef* make_tex_ref(cgltf_texture* tex, cgltf_data* data) {
+    if (!tex) return nullptr;
+    AimlGltfTexRef* r = (AimlGltfTexRef*)malloc(sizeof(AimlGltfTexRef));
+    r->ptr  = tex;
+    r->data = data;
+    return r;
+}
+
+void* aiml_gltf_mat_base_color_texture(void* mat) {
+    /* mat is cgltf_material*, but we need data* for tex ref creation.
+     * We use a workaround: cgltf_material is owned by cgltf_data; traverse
+     * parent pointer is not available. Return raw texture ptr for simplicity
+     * — callers that need sampler info can still use it. */
+    auto* m = (cgltf_material*)mat;
+    if (!m || !m->has_pbr_metallic_roughness) return nullptr;
+    return m->pbr_metallic_roughness.base_color_texture.texture;
+}
+void* aiml_gltf_mat_normal_texture(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return m ? m->normal_texture.texture : nullptr;
+}
+void* aiml_gltf_mat_metallic_roughness_texture(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    if (!m || !m->has_pbr_metallic_roughness) return nullptr;
+    return m->pbr_metallic_roughness.metallic_roughness_texture.texture;
+}
+void* aiml_gltf_mat_emissive_texture(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return m ? m->emissive_texture.texture : nullptr;
+}
+void* aiml_gltf_mat_occlusion_texture(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return m ? m->occlusion_texture.texture : nullptr;
+}
+
+const char* aiml_gltf_mat_alpha_mode(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    if (!m) return "OPAQUE";
+    switch (m->alpha_mode) {
+        case cgltf_alpha_mode_mask:  return "MASK";
+        case cgltf_alpha_mode_blend: return "BLEND";
+        default:                     return "OPAQUE";
+    }
+}
+float aiml_gltf_mat_alpha_cutoff(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return m ? m->alpha_cutoff : 0.5f;
+}
+int32_t aiml_gltf_mat_double_sided(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return (m && m->double_sided) ? 1 : 0;
+}
+
+/* ── gltf_texture ────────────────────────────────────────────────────────── */
+
+void* aiml_gltf_tex_image(void* tex) {
+    /* tex = cgltf_texture* */
+    auto* t = (cgltf_texture*)tex;
+    if (!t || !t->image) return nullptr;
+    AimlGltfImageRef* ref = (AimlGltfImageRef*)malloc(sizeof(AimlGltfImageRef));
+    ref->ptr  = t->image;
+    ref->data = nullptr; /* No scene backref from texture path — decode from URI if needed */
+    return ref;
+}
+
+const char* aiml_gltf_tex_wrap_s(void* tex) {
+    auto* t = (cgltf_texture*)tex;
+    return (t && t->sampler) ? wrap_str(t->sampler->wrap_s) : "REPEAT";
+}
+const char* aiml_gltf_tex_wrap_t(void* tex) {
+    auto* t = (cgltf_texture*)tex;
+    return (t && t->sampler) ? wrap_str(t->sampler->wrap_t) : "REPEAT";
+}
+const char* aiml_gltf_tex_min_filter(void* tex) {
+    auto* t = (cgltf_texture*)tex;
+    return (t && t->sampler) ? filter_str(t->sampler->min_filter) : "LINEAR";
+}
+const char* aiml_gltf_tex_mag_filter(void* tex) {
+    auto* t = (cgltf_texture*)tex;
+    return (t && t->sampler) ? filter_str(t->sampler->mag_filter) : "LINEAR";
+}
+
+/* ── gltf_image ──────────────────────────────────────────────────────────── */
+
+void* aiml_gltf_img_pixels_rgba(void* img) {
+    auto* ref = (AimlGltfImageRef*)img;
+    if (!ref || !ref->ptr) return make_empty_buffer();
+
+    cgltf_image* ci = ref->ptr;
+
+    /* Case 1: embedded buffer view */
+    if (ci->buffer_view && ci->buffer_view->buffer &&
+        ci->buffer_view->buffer->data) {
+        const uint8_t* raw  = (const uint8_t*)ci->buffer_view->buffer->data
+                              + ci->buffer_view->offset;
+        int len             = (int)ci->buffer_view->size;
+        int w = 0, h = 0, ch = 0;
+        stbi_uc* px = stbi_load_from_memory(raw, len, &w, &h, &ch, 4);
+        if (!px) return make_empty_buffer();
+        uint32_t sz = (uint32_t)(w * h * 4);
+        AimlGltfBuffer* b = make_buffer(sz);
+        memcpy(b->data, px, sz);
+        stbi_image_free(px);
+        return b;
+    }
+
+    /* Case 2: URI file path */
+    if (ci->uri) {
+        int w = 0, h = 0, ch = 0;
+        stbi_uc* px = stbi_load(ci->uri, &w, &h, &ch, 4);
+        if (!px) return make_empty_buffer();
+        uint32_t sz = (uint32_t)(w * h * 4);
+        AimlGltfBuffer* b = make_buffer(sz);
+        memcpy(b->data, px, sz);
+        stbi_image_free(px);
+        return b;
+    }
+
+    return make_empty_buffer();
+}
+
+int32_t aiml_gltf_img_width(void* img) {
+    auto* ref = (AimlGltfImageRef*)img;
+    if (!ref || !ref->ptr) return 0;
+    cgltf_image* ci = ref->ptr;
+    if (ci->buffer_view && ci->buffer_view->buffer && ci->buffer_view->buffer->data) {
+        const uint8_t* raw = (const uint8_t*)ci->buffer_view->buffer->data
+                             + ci->buffer_view->offset;
+        int w = 0, h = 0, ch = 0;
+        stbi_info_from_memory(raw, (int)ci->buffer_view->size, &w, &h, &ch);
+        return w;
+    }
+    if (ci->uri) {
+        int w = 0, h = 0, ch = 0;
+        stbi_info(ci->uri, &w, &h, &ch);
+        return w;
+    }
+    return 0;
+}
+
+int32_t aiml_gltf_img_height(void* img) {
+    auto* ref = (AimlGltfImageRef*)img;
+    if (!ref || !ref->ptr) return 0;
+    cgltf_image* ci = ref->ptr;
+    if (ci->buffer_view && ci->buffer_view->buffer && ci->buffer_view->buffer->data) {
+        const uint8_t* raw = (const uint8_t*)ci->buffer_view->buffer->data
+                             + ci->buffer_view->offset;
+        int w = 0, h = 0, ch = 0;
+        stbi_info_from_memory(raw, (int)ci->buffer_view->size, &w, &h, &ch);
+        return h;
+    }
+    if (ci->uri) {
+        int w = 0, h = 0, ch = 0;
+        stbi_info(ci->uri, &w, &h, &ch);
+        return h;
+    }
+    return 0;
+}
+
+/* ── gltf_animation ──────────────────────────────────────────────────────── */
+
+const char* aiml_gltf_anim_name(void* anim) {
+    auto* a = (cgltf_animation*)anim;
+    return (a && a->name) ? a->name : "";
+}
+
+float aiml_gltf_anim_duration(void* anim) {
+    auto* a = (cgltf_animation*)anim;
+    if (!a) return 0.f;
+    float dur = 0.f;
+    for (cgltf_size i = 0; i < a->samplers_count; ++i) {
+        const cgltf_accessor* inp = a->samplers[i].input;
+        if (inp && inp->count > 0) {
+            float t = 0.f;
+            cgltf_accessor_read_float(inp, inp->count - 1, &t, 1);
+            if (t > dur) dur = t;
+        }
+    }
+    return dur;
+}
+
+static const cgltf_animation_sampler* find_channel_sampler(
+        const cgltf_animation* a, const cgltf_node* node,
+        cgltf_animation_path_type path_type) {
+    for (cgltf_size i = 0; i < a->channels_count; ++i) {
+        auto& ch = a->channels[i];
+        if (ch.target_node == node && ch.target_path == path_type && ch.sampler)
+            return ch.sampler;
+    }
+    return nullptr;
+}
+
+float aiml_gltf_anim_sample_translation_x(void* anim, void* node, float t) {
+    auto* a = (cgltf_animation*)anim; auto* n = (cgltf_node*)node;
+    if (!a || !n) return 0.f;
+    auto* s = find_channel_sampler(a, n, cgltf_animation_path_type_translation);
+    return s ? anim_sample_scalar(s, t, 0) : 0.f;
+}
+float aiml_gltf_anim_sample_translation_y(void* anim, void* node, float t) {
+    auto* a = (cgltf_animation*)anim; auto* n = (cgltf_node*)node;
+    auto* s = find_channel_sampler(a, n, cgltf_animation_path_type_translation);
+    return s ? anim_sample_scalar(s, t, 1) : 0.f;
+}
+float aiml_gltf_anim_sample_translation_z(void* anim, void* node, float t) {
+    auto* a = (cgltf_animation*)anim; auto* n = (cgltf_node*)node;
+    auto* s = find_channel_sampler(a, n, cgltf_animation_path_type_translation);
+    return s ? anim_sample_scalar(s, t, 2) : 0.f;
+}
+float aiml_gltf_anim_sample_rotation_x(void* anim, void* node, float t) {
+    auto* a = (cgltf_animation*)anim; auto* n = (cgltf_node*)node;
+    auto* s = find_channel_sampler(a, n, cgltf_animation_path_type_rotation);
+    return s ? anim_sample_scalar(s, t, 0) : 0.f;
+}
+float aiml_gltf_anim_sample_rotation_y(void* anim, void* node, float t) {
+    auto* a = (cgltf_animation*)anim; auto* n = (cgltf_node*)node;
+    auto* s = find_channel_sampler(a, n, cgltf_animation_path_type_rotation);
+    return s ? anim_sample_scalar(s, t, 1) : 0.f;
+}
+float aiml_gltf_anim_sample_rotation_z(void* anim, void* node, float t) {
+    auto* a = (cgltf_animation*)anim; auto* n = (cgltf_node*)node;
+    auto* s = find_channel_sampler(a, n, cgltf_animation_path_type_rotation);
+    return s ? anim_sample_scalar(s, t, 2) : 0.f;
+}
+float aiml_gltf_anim_sample_rotation_w(void* anim, void* node, float t) {
+    auto* a = (cgltf_animation*)anim; auto* n = (cgltf_node*)node;
+    auto* s = find_channel_sampler(a, n, cgltf_animation_path_type_rotation);
+    return s ? anim_sample_scalar(s, t, 3) : 1.f;
+}
+
+/* ── gltf_skin ───────────────────────────────────────────────────────────── */
+
+int32_t aiml_gltf_skin_joint_count(void* skin) {
+    auto* s = (cgltf_skin*)skin;
+    return s ? (int32_t)s->joints_count : 0;
+}
+
+void* aiml_gltf_skin_inverse_bind_matrices(void* skin) {
+    auto* s = (cgltf_skin*)skin;
+    return accessor_to_float_buf(s ? s->inverse_bind_matrices : nullptr);
+}
+
+void aiml_gltf_skin_joints_fill(void* skin, void* list_ptr) {
+    auto* s   = (cgltf_skin*)skin;
+    auto* lst = (AimlGltfListRaw*)list_ptr;
+    if (!s) return;
+    for (cgltf_size i = 0; i < s->joints_count; ++i)
+        list_push_ptr(lst, s->joints[i]);
+}
+
+} /* extern "C" */

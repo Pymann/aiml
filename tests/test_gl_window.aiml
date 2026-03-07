@@ -1,0 +1,198 @@
+# OpenGL window test: weißer Würfel, 3 Sekunden sichtbar, dann Exit.
+# Erfordert einen aktiven Display (X11 oder Wayland).
+# Ausführen: ./out/aiml -r tests/test_gl_window.aiml
+# Expected exit code: 0
+# Requires: display
+
+# ── GLFW window management via FFI ────────────────────────────────────────────
+- extern: "C"
+  defs:
+    - def: { name: glfwInit,              args: [],                                                                    return: i32 }
+    - def: { name: glfwWindowHint,        args: [[hint, i32], [value, i32]],                                          return: void }
+    - def: { name: glfwCreateWindow,      args: [[w, i32], [h, i32], [title, string], [mon, ptr], [sh, ptr]],         return: ptr }
+    - def: { name: glfwMakeContextCurrent, args: [[win, ptr]],                                                        return: void }
+    - def: { name: glfwSwapBuffers,       args: [[win, ptr]],                                                         return: void }
+    - def: { name: glfwPollEvents,        args: [],                                                                    return: void }
+    - def: { name: glfwWindowShouldClose, args: [[win, ptr]],                                                         return: i32 }
+    - def: { name: glfwTerminate,         args: [],                                                                    return: void }
+
+# ── Phase A: GLFW initialisieren und Fenster öffnen ───────────────────────────
+
+- decl: [ok, i32, { call: [glfwInit] }]
+- if: [{ ==: [ok, 0] }, true]
+  then:
+    - print: ["FAIL: glfwInit failed"]
+    - exit: 1
+
+# OpenGL 3.3 Core Profile
+- call: [glfwWindowHint, 139266, 3]   # GLFW_CONTEXT_VERSION_MAJOR = 3
+- call: [glfwWindowHint, 139267, 3]   # GLFW_CONTEXT_VERSION_MINOR = 3
+- call: [glfwWindowHint, 139272, 204801]  # GLFW_OPENGL_PROFILE = GLFW_OPENGL_CORE_PROFILE
+
+- decl: [null_mon, ptr, { call: [sys.null_ptr] }]
+- decl: [null_sh,  ptr, { call: [sys.null_ptr] }]
+- decl: [win, ptr, { call: [glfwCreateWindow, 800, 600, "AIML — weißer Würfel", null_mon, null_sh] }]
+
+- if: [{ ==: [win, null_mon] }, true]
+  then:
+    - print: ["FAIL: glfwCreateWindow failed"]
+    - call: [glfwTerminate]
+    - exit: 1
+
+- call: [glfwMakeContextCurrent, win]
+
+# ── Phase B: OpenGL initialisieren ────────────────────────────────────────────
+
+- call: [gl.init]
+- call: [gl.enable_depth_test]
+- call: [gl.viewport, 0, 0, 800, 600]
+
+- print: ["Phase A+B OK: Fenster und GL-Kontext erstellt"]
+
+# ── Phase C: Würfel-Geometrie ─────────────────────────────────────────────────
+#
+# 8 Ecken eines Einheitswürfels (−0.5 … +0.5 in X/Y/Z).
+#
+# Vertex-Layout:  x, y, z   (stride = 12 Bytes)
+#
+#   7──────6
+#  /|     /|
+# 4──────5 |
+# | 3────|─2
+# |/     |/
+# 0──────1
+#
+# Indizes: 2 Dreiecke pro Fläche, 6 Flächen = 36 Indizes
+
+- decl: [verts, buffer<f32>]
+
+# Vorne   (z=+0.5)
+- call: [verts.push, -0.5]   # 0
+- call: [verts.push, -0.5]
+- call: [verts.push,  0.5]
+- call: [verts.push,  0.5]   # 1
+- call: [verts.push, -0.5]
+- call: [verts.push,  0.5]
+- call: [verts.push,  0.5]   # 2
+- call: [verts.push,  0.5]
+- call: [verts.push,  0.5]
+- call: [verts.push, -0.5]   # 3
+- call: [verts.push,  0.5]
+- call: [verts.push,  0.5]
+# Hinten  (z=−0.5)
+- call: [verts.push, -0.5]   # 4
+- call: [verts.push, -0.5]
+- call: [verts.push, -0.5]
+- call: [verts.push,  0.5]   # 5
+- call: [verts.push, -0.5]
+- call: [verts.push, -0.5]
+- call: [verts.push,  0.5]   # 6
+- call: [verts.push,  0.5]
+- call: [verts.push, -0.5]
+- call: [verts.push, -0.5]   # 7
+- call: [verts.push,  0.5]
+- call: [verts.push, -0.5]
+
+- decl: [idxs, buffer<u32>]
+# Vorne
+- call: [idxs.push, 0]
+- call: [idxs.push, 1]
+- call: [idxs.push, 2]
+- call: [idxs.push, 0]
+- call: [idxs.push, 2]
+- call: [idxs.push, 3]
+# Hinten
+- call: [idxs.push, 5]
+- call: [idxs.push, 4]
+- call: [idxs.push, 7]
+- call: [idxs.push, 5]
+- call: [idxs.push, 7]
+- call: [idxs.push, 6]
+# Links
+- call: [idxs.push, 4]
+- call: [idxs.push, 0]
+- call: [idxs.push, 3]
+- call: [idxs.push, 4]
+- call: [idxs.push, 3]
+- call: [idxs.push, 7]
+# Rechts
+- call: [idxs.push, 1]
+- call: [idxs.push, 5]
+- call: [idxs.push, 6]
+- call: [idxs.push, 1]
+- call: [idxs.push, 6]
+- call: [idxs.push, 2]
+# Oben
+- call: [idxs.push, 3]
+- call: [idxs.push, 2]
+- call: [idxs.push, 6]
+- call: [idxs.push, 3]
+- call: [idxs.push, 6]
+- call: [idxs.push, 7]
+# Unten
+- call: [idxs.push, 4]
+- call: [idxs.push, 5]
+- call: [idxs.push, 1]
+- call: [idxs.push, 4]
+- call: [idxs.push, 1]
+- call: [idxs.push, 0]
+
+- decl: [vbo, gl_buffer, { call: [gl.create_buffer, verts] }]
+- decl: [ibo, gl_buffer, { call: [gl.create_index_buffer, idxs] }]
+- decl: [vao, gl_vao,    { call: [gl.create_vao] }]
+- call: [vao.bind_vbo, vbo]
+- call: [vao.bind_ibo, ibo]
+- call: [vao.attrib, 0, 3, 12, 0]   # attrib 0: 3 floats, stride 12, offset 0
+
+- print: ["Phase C OK: Würfel-Geometrie hochgeladen"]
+
+# ── Phase D: Shader kompilieren ───────────────────────────────────────────────
+
+- decl: [vert_src, string, "#version 330 core\nlayout(location=0) in vec3 pos;\nuniform mat4 mvp;\nvoid main(){\n  gl_Position = mvp * vec4(pos, 1.0);\n}\n"]
+- decl: [frag_src, string, "#version 330 core\nout vec4 color;\nvoid main(){\n  color = vec4(1.0, 0.0, 0.0, 1.0);\n}\n"]
+- decl: [sh, gl_shader, { call: [gl.compile_shader, vert_src, frag_src] }]
+
+- print: ["Phase D OK: Shader kompiliert"]
+
+# Drahtgitter-Modus: nur Kanten sichtbar
+- call: [gl.wireframe, 1]
+
+# ── Phase E: Rotations-Render-Schleife (~10 s, 300 Frames à 33 ms) ────────────
+
+- decl: [proj,   mat4, { call: [math.mat4_perspective, 0.785, 1.333, 0.1, 100.0] }]
+- decl: [eye,    vec3, { call: [math.vec3, 2.0, 1.5, 3.0] }]
+- decl: [center, vec3, { call: [math.vec3, 0.0, 0.0, 0.0] }]
+- decl: [up,     vec3, { call: [math.vec3, 0.0, 1.0, 0.0] }]
+- decl: [view,   mat4, { call: [math.mat4_lookat, eye, center, up] }]
+- decl: [model,  mat4]
+- decl: [mvp,    mat4]
+- decl: [angle,  f32, 0.0]
+- decl: [frame,  i32, 0]
+
+- while:
+    condition: { lt: [frame, 300] }
+    body:
+      - set: [model, { call: [math.mat4_rotate_y, angle] }]
+      - set: [mvp, { "*": [proj, view] }]
+      - set: [mvp, { "*": [mvp, model] }]
+      - call: [gl.clear_all, 0.05, 0.05, 0.1, 1.0]
+      - call: [sh.use]
+      - call: [sh.uniform_mat4, "mvp", mvp]
+      - call: [gl.draw_elements, vao, 36]
+      - call: [glfwSwapBuffers, win]
+      - call: [glfwPollEvents]
+      - call: [time.sleep_ms, 33]
+      - set: [angle, { +: [angle, 0.02] }]
+      - set: [frame, { +: [frame, 1] }]
+
+- print: ["Phase E OK: Rotation gerendert"]
+
+# ── Aufräumen ─────────────────────────────────────────────────────────────────
+
+- call: [vao.delete]
+- call: [vbo.delete]
+- call: [ibo.delete]
+- call: [sh.delete]
+- call: [glfwTerminate]
+
+- print: ["All gl_window tests passed"]

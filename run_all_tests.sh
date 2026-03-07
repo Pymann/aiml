@@ -42,11 +42,35 @@ TOTAL=0
 PASSED=0
 FAILED=0
 
+SKIPPED=0
+
 for TEST in $TEST_FILES; do
+    # Check for resource requirements declared in test file comments.
+    # A line "# Requires: display" means the test needs a graphical display.
+    if grep -q "# Requires: display" "$TEST"; then
+        DISPLAY_OK=0
+        # Require both an accessible display AND an interactive terminal.
+        # Non-interactive contexts (CI, IDE sub-processes) may crash GLFW even
+        # when DISPLAY is technically set.
+        if tty -s; then
+            if [ -n "$DISPLAY" ] && xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
+                DISPLAY_OK=1
+            elif [ -n "$WAYLAND_DISPLAY" ] && [ -S "/run/user/$(id -u)/$WAYLAND_DISPLAY" ]; then
+                DISPLAY_OK=1
+            fi
+        fi
+        if [ $DISPLAY_OK -eq 0 ]; then
+            echo "[ SKIP ] $TEST (Requires: display — no interactive display available)" | tee -a "$OUTPUT_FILE"
+            ((SKIPPED++))
+            ((TOTAL++))
+            continue
+        fi
+    fi
+
     echo "--------------------------------------------------------" | tee -a "$OUTPUT_FILE"
     echo "Running: $TEST" | tee -a "$OUTPUT_FILE"
     echo "--------------------------------------------------------" | tee -a "$OUTPUT_FILE"
-    
+
     # Run the test, capture stdout and stderr, and append to the output file
     # Allow the script to continue even if the command fails
     $AIML_BIN -r "$TEST" >> "$OUTPUT_FILE" 2>&1
@@ -85,5 +109,8 @@ echo "Test Run Summary:" | tee -a "$OUTPUT_FILE"
 echo "Total:  $TOTAL" | tee -a "$OUTPUT_FILE"
 echo "Passed: $PASSED" | tee -a "$OUTPUT_FILE"
 echo "Failed: $FAILED" | tee -a "$OUTPUT_FILE"
+if [ $SKIPPED -gt 0 ]; then
+    echo "Skipped: $SKIPPED" | tee -a "$OUTPUT_FILE"
+fi
 
 echo "Detailed results saved to $OUTPUT_FILE"

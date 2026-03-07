@@ -18,6 +18,8 @@
 #include "src/sys/math_runtime.h"
 #include "src/sys/hash_runtime.h"
 #include "src/sys/compress_runtime.h"
+#include "src/sys/gltf_runtime.h"
+#include "src/sys/gl_runtime.h"
 
 // LLVM includes
 #include <llvm/IR/LLVMContext.h>
@@ -505,17 +507,47 @@ int AIMLCompiler::jitRun() {
         if (ef.good()) {
             try {
                 YAML::Node ecfg = YAML::LoadFile(exodusPath);
+
+                // Collect library_paths for fallback search
+                std::vector<std::string> libPaths;
+                if (ecfg["linker"] && ecfg["linker"]["library_paths"]) {
+                    for (const auto& lp : ecfg["linker"]["library_paths"])
+                        libPaths.push_back(lp.as<std::string>());
+                }
+
+                // Helper: try to load soName; if that fails, search libPaths for
+                // soName or soName.N (versioned) and load the first match found.
+                auto tryLoad = [&](const std::string& soName) {
+                    std::string err;
+                    if (!llvm::sys::DynamicLibrary::LoadLibraryPermanently(soName.c_str(), &err)) {
+                        LOG_DEBUG("JIT: loaded " + soName);
+                        return;
+                    }
+                    // Fallback: search library_paths
+                    for (const auto& dir : libPaths) {
+                        // Try exact name first
+                        std::string full = dir + "/" + soName;
+                        if (!llvm::sys::DynamicLibrary::LoadLibraryPermanently(full.c_str(), &err)) {
+                            LOG_DEBUG("JIT: loaded " + full);
+                            return;
+                        }
+                        // Try versioned names: libfoo.so.3, .2, .1
+                        for (int v = 9; v >= 1; --v) {
+                            std::string vfull = full + "." + std::to_string(v);
+                            if (!llvm::sys::DynamicLibrary::LoadLibraryPermanently(vfull.c_str(), &err)) {
+                                LOG_DEBUG("JIT: loaded " + vfull);
+                                return;
+                            }
+                        }
+                    }
+                    LOG_DEBUG("JIT: could not load " + soName + ": " + err);
+                };
+
                 if (ecfg["linker"] && ecfg["linker"]["libraries"]) {
                     for (const auto& lib : ecfg["linker"]["libraries"]) {
                         std::string libName = lib.as<std::string>();
                         // Convert short name → full .so name: "SDL2" → "libSDL2.so"
-                        std::string soName = "lib" + libName + ".so";
-                        std::string err;
-                        if (llvm::sys::DynamicLibrary::LoadLibraryPermanently(soName.c_str(), &err)) {
-                            LOG_DEBUG("JIT: could not load " + soName + ": " + err);
-                        } else {
-                            LOG_DEBUG("JIT: loaded " + soName);
-                        }
+                        tryLoad("lib" + libName + ".so");
                     }
                 }
             } catch (...) {
@@ -854,6 +886,136 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_unzip",                (void*)(intptr_t)aiml_compress_unzip);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_zip_entries_fill",     (void*)(intptr_t)aiml_compress_zip_entries_fill);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_tar_entries_fill",     (void*)(intptr_t)aiml_compress_tar_entries_fill);
+    // gltf
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_load",                         (void*)(intptr_t)aiml_gltf_load);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_scene_valid",                  (void*)(intptr_t)aiml_gltf_scene_valid);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_scene_error",                  (void*)(intptr_t)aiml_gltf_scene_error);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_scene_free",                   (void*)(intptr_t)aiml_gltf_scene_free);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_scene_nodes_fill",             (void*)(intptr_t)aiml_gltf_scene_nodes_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_scene_meshes_fill",            (void*)(intptr_t)aiml_gltf_scene_meshes_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_scene_materials_fill",         (void*)(intptr_t)aiml_gltf_scene_materials_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_scene_animations_fill",        (void*)(intptr_t)aiml_gltf_scene_animations_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_scene_skins_fill",             (void*)(intptr_t)aiml_gltf_scene_skins_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_scene_images_fill",            (void*)(intptr_t)aiml_gltf_scene_images_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_node_name",                    (void*)(intptr_t)aiml_gltf_node_name);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_node_translation_x",           (void*)(intptr_t)aiml_gltf_node_translation_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_node_translation_y",           (void*)(intptr_t)aiml_gltf_node_translation_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_node_translation_z",           (void*)(intptr_t)aiml_gltf_node_translation_z);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_node_rotation_x",              (void*)(intptr_t)aiml_gltf_node_rotation_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_node_rotation_y",              (void*)(intptr_t)aiml_gltf_node_rotation_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_node_rotation_z",              (void*)(intptr_t)aiml_gltf_node_rotation_z);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_node_rotation_w",              (void*)(intptr_t)aiml_gltf_node_rotation_w);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_node_scale_x",                 (void*)(intptr_t)aiml_gltf_node_scale_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_node_scale_y",                 (void*)(intptr_t)aiml_gltf_node_scale_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_node_scale_z",                 (void*)(intptr_t)aiml_gltf_node_scale_z);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_node_mesh",                    (void*)(intptr_t)aiml_gltf_node_mesh);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_node_skin",                    (void*)(intptr_t)aiml_gltf_node_skin);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_node_children_fill",           (void*)(intptr_t)aiml_gltf_node_children_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_node_world_matrix",            (void*)(intptr_t)aiml_gltf_node_world_matrix);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mesh_name",                    (void*)(intptr_t)aiml_gltf_mesh_name);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mesh_primitive_count",         (void*)(intptr_t)aiml_gltf_mesh_primitive_count);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mesh_primitive",               (void*)(intptr_t)aiml_gltf_mesh_primitive);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_positions",               (void*)(intptr_t)aiml_gltf_prim_positions);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_normals",                 (void*)(intptr_t)aiml_gltf_prim_normals);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_tangents",                (void*)(intptr_t)aiml_gltf_prim_tangents);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_uvs",                     (void*)(intptr_t)aiml_gltf_prim_uvs);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_colors",                  (void*)(intptr_t)aiml_gltf_prim_colors);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_joints",                  (void*)(intptr_t)aiml_gltf_prim_joints);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_weights",                 (void*)(intptr_t)aiml_gltf_prim_weights);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_indices",                 (void*)(intptr_t)aiml_gltf_prim_indices);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_vertex_count",            (void*)(intptr_t)aiml_gltf_prim_vertex_count);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_index_count",             (void*)(intptr_t)aiml_gltf_prim_index_count);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_material",                (void*)(intptr_t)aiml_gltf_prim_material);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_name",                     (void*)(intptr_t)aiml_gltf_mat_name);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_base_color_r",             (void*)(intptr_t)aiml_gltf_mat_base_color_r);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_base_color_g",             (void*)(intptr_t)aiml_gltf_mat_base_color_g);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_base_color_b",             (void*)(intptr_t)aiml_gltf_mat_base_color_b);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_base_color_a",             (void*)(intptr_t)aiml_gltf_mat_base_color_a);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_metallic",                 (void*)(intptr_t)aiml_gltf_mat_metallic);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_roughness",                (void*)(intptr_t)aiml_gltf_mat_roughness);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_emissive_r",               (void*)(intptr_t)aiml_gltf_mat_emissive_r);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_emissive_g",               (void*)(intptr_t)aiml_gltf_mat_emissive_g);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_emissive_b",               (void*)(intptr_t)aiml_gltf_mat_emissive_b);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_base_color_texture",       (void*)(intptr_t)aiml_gltf_mat_base_color_texture);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_normal_texture",           (void*)(intptr_t)aiml_gltf_mat_normal_texture);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_metallic_roughness_texture",(void*)(intptr_t)aiml_gltf_mat_metallic_roughness_texture);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_emissive_texture",         (void*)(intptr_t)aiml_gltf_mat_emissive_texture);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_occlusion_texture",        (void*)(intptr_t)aiml_gltf_mat_occlusion_texture);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_alpha_mode",               (void*)(intptr_t)aiml_gltf_mat_alpha_mode);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_alpha_cutoff",             (void*)(intptr_t)aiml_gltf_mat_alpha_cutoff);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mat_double_sided",             (void*)(intptr_t)aiml_gltf_mat_double_sided);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_tex_image",                    (void*)(intptr_t)aiml_gltf_tex_image);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_tex_wrap_s",                   (void*)(intptr_t)aiml_gltf_tex_wrap_s);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_tex_wrap_t",                   (void*)(intptr_t)aiml_gltf_tex_wrap_t);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_tex_min_filter",               (void*)(intptr_t)aiml_gltf_tex_min_filter);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_tex_mag_filter",               (void*)(intptr_t)aiml_gltf_tex_mag_filter);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_img_pixels_rgba",              (void*)(intptr_t)aiml_gltf_img_pixels_rgba);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_img_width",                    (void*)(intptr_t)aiml_gltf_img_width);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_img_height",                   (void*)(intptr_t)aiml_gltf_img_height);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_anim_name",                    (void*)(intptr_t)aiml_gltf_anim_name);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_anim_duration",                (void*)(intptr_t)aiml_gltf_anim_duration);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_anim_sample_translation_x",    (void*)(intptr_t)aiml_gltf_anim_sample_translation_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_anim_sample_translation_y",    (void*)(intptr_t)aiml_gltf_anim_sample_translation_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_anim_sample_translation_z",    (void*)(intptr_t)aiml_gltf_anim_sample_translation_z);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_anim_sample_rotation_x",       (void*)(intptr_t)aiml_gltf_anim_sample_rotation_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_anim_sample_rotation_y",       (void*)(intptr_t)aiml_gltf_anim_sample_rotation_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_anim_sample_rotation_z",       (void*)(intptr_t)aiml_gltf_anim_sample_rotation_z);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_anim_sample_rotation_w",       (void*)(intptr_t)aiml_gltf_anim_sample_rotation_w);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_skin_joint_count",             (void*)(intptr_t)aiml_gltf_skin_joint_count);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_skin_inverse_bind_matrices",   (void*)(intptr_t)aiml_gltf_skin_inverse_bind_matrices);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_skin_joints_fill",             (void*)(intptr_t)aiml_gltf_skin_joints_fill);
+    // gl
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_init",                           (void*)(intptr_t)aiml_gl_init);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_viewport",                       (void*)(intptr_t)aiml_gl_viewport);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_clear",                          (void*)(intptr_t)aiml_gl_clear);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_clear_depth",                    (void*)(intptr_t)aiml_gl_clear_depth);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_clear_all",                      (void*)(intptr_t)aiml_gl_clear_all);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_enable_depth_test",              (void*)(intptr_t)aiml_gl_enable_depth_test);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_disable_depth_test",             (void*)(intptr_t)aiml_gl_disable_depth_test);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_enable_blend",                   (void*)(intptr_t)aiml_gl_enable_blend);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_disable_blend",                  (void*)(intptr_t)aiml_gl_disable_blend);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_enable_cull_face",               (void*)(intptr_t)aiml_gl_enable_cull_face);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_cull_back",                      (void*)(intptr_t)aiml_gl_cull_back);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_cull_front",                     (void*)(intptr_t)aiml_gl_cull_front);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_wireframe",                      (void*)(intptr_t)aiml_gl_wireframe);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_create_buffer",                  (void*)(intptr_t)aiml_gl_create_buffer);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_create_buffer_dynamic",          (void*)(intptr_t)aiml_gl_create_buffer_dynamic);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_create_index_buffer",            (void*)(intptr_t)aiml_gl_create_index_buffer);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_buffer_update",                  (void*)(intptr_t)aiml_gl_buffer_update);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_buffer_delete",                  (void*)(intptr_t)aiml_gl_buffer_delete);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_create_vao",                     (void*)(intptr_t)aiml_gl_create_vao);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_vao_bind_vbo",                   (void*)(intptr_t)aiml_gl_vao_bind_vbo);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_vao_bind_ibo",                   (void*)(intptr_t)aiml_gl_vao_bind_ibo);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_vao_attrib",                     (void*)(intptr_t)aiml_gl_vao_attrib);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_vao_attrib_i",                   (void*)(intptr_t)aiml_gl_vao_attrib_i);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_vao_delete",                     (void*)(intptr_t)aiml_gl_vao_delete);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_compile_shader",                 (void*)(intptr_t)aiml_gl_compile_shader);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_load_shader",                    (void*)(intptr_t)aiml_gl_load_shader);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_shader_use",                     (void*)(intptr_t)aiml_gl_shader_use);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_shader_uniform_f32",             (void*)(intptr_t)aiml_gl_shader_uniform_f32);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_shader_uniform_i32",             (void*)(intptr_t)aiml_gl_shader_uniform_i32);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_shader_uniform_vec2",            (void*)(intptr_t)aiml_gl_shader_uniform_vec2);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_shader_uniform_vec3",            (void*)(intptr_t)aiml_gl_shader_uniform_vec3);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_shader_uniform_vec4",            (void*)(intptr_t)aiml_gl_shader_uniform_vec4);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_shader_uniform_mat4",            (void*)(intptr_t)aiml_gl_shader_uniform_mat4);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_shader_uniform_mat4_array",      (void*)(intptr_t)aiml_gl_shader_uniform_mat4_array);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_shader_delete",                  (void*)(intptr_t)aiml_gl_shader_delete);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_load_texture",                   (void*)(intptr_t)aiml_gl_load_texture);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_create_texture",                 (void*)(intptr_t)aiml_gl_create_texture);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_texture_set_wrap",               (void*)(intptr_t)aiml_gl_texture_set_wrap);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_texture_set_filter",             (void*)(intptr_t)aiml_gl_texture_set_filter);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_texture_gen_mipmaps",            (void*)(intptr_t)aiml_gl_texture_gen_mipmaps);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_texture_delete",                 (void*)(intptr_t)aiml_gl_texture_delete);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_bind_texture",                   (void*)(intptr_t)aiml_gl_bind_texture);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_draw_arrays",                    (void*)(intptr_t)aiml_gl_draw_arrays);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_draw_elements",                  (void*)(intptr_t)aiml_gl_draw_elements);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_draw_arrays_mode",               (void*)(intptr_t)aiml_gl_draw_arrays_mode);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_create_framebuffer",             (void*)(intptr_t)aiml_gl_create_framebuffer);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_bind_framebuffer",               (void*)(intptr_t)aiml_gl_bind_framebuffer);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_bind_default_framebuffer",       (void*)(intptr_t)aiml_gl_bind_default_framebuffer);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_framebuffer_color_texture",      (void*)(intptr_t)aiml_gl_framebuffer_color_texture);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_framebuffer_resize",             (void*)(intptr_t)aiml_gl_framebuffer_resize);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_framebuffer_delete",             (void*)(intptr_t)aiml_gl_framebuffer_delete);
     // libm scalar functions (resolved from libc.so at runtime, but AddSymbol ensures JIT finds them)
     llvm::sys::DynamicLibrary::AddSymbol("sinf",   (void*)(intptr_t)sinf);
     llvm::sys::DynamicLibrary::AddSymbol("cosf",   (void*)(intptr_t)cosf);

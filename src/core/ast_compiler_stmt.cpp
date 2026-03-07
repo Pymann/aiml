@@ -51,6 +51,10 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
     } else if (tName.find("chan<") == 0 && tName.back() == '>') {
         // Auto-init with capacity=0 (true rendezvous). Use chan.init(N) for buffered.
         ChanImpl::init(ctx, unwrappedAlloca, ctx.builder.getInt64(0));
+    } else if (tName.rfind("buffer<", 0) == 0 && tName.back() == '>' && !decl->initialValue) {
+        // Auto-alloc buffer with a default capacity of 4096 bytes so that push()
+        // works without an explicit alloc() call (data ptr would otherwise be null).
+        BufferImpl::alloc(ctx, unwrappedAlloca, ctx.builder.getInt32(4096));
     }
     
     Symbol sym;
@@ -78,6 +82,17 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             if (decl->typeName.find("buffer<") == 0) {
                 llvm::Type* bufTy = ctx.getLLVMType("buffer");
                 uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(bufTy);
+                llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
+                ctx.builder.CreateCall(mcf, {
+                    unwrappedAlloca,
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal)),
+                    ctx.builder.getInt64(sz)
+                });
+            } else if (decl->typeName.find("list<") == 0) {
+                // list: handler returns a fresh alloca → memcpy struct into target alloca
+                llvm::StructType* listStructTy = ListImpl::getListStructType(ctx);
+                uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(listStructTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                 llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
                 ctx.builder.CreateCall(mcf, {

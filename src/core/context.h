@@ -517,6 +517,25 @@ namespace AIML {
         if (typeName == "ws_handle") return llvm::Type::getInt8Ty(context)->getPointerTo();          // AimlWs*
         if (typeName == "any") return llvm::Type::getInt8Ty(context)->getPointerTo();         // void*
 
+        // gltf handle types — all opaque i8* pointers
+        if (typeName == "gltf_scene")     return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "gltf_node")      return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "gltf_mesh")      return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "gltf_primitive") return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "gltf_material")  return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "gltf_animation") return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "gltf_skin")      return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "gltf_texture")   return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "gltf_image")     return llvm::Type::getInt8Ty(context)->getPointerTo();
+
+        // gl handle types — all opaque i8* pointers
+        if (typeName == "gl_buffer")       return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "gl_vao")          return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "gl_shader")       return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "gl_texture")      return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "gl_framebuffer")  return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "gl_renderbuffer") return llvm::Type::getInt8Ty(context)->getPointerTo();
+
         // thread_handle: pointer to { i64 tid, i8 joined, i8 detached }
         if (typeName == "thread_handle") {
             llvm::StructType* handleTy = llvm::StructType::getTypeByName(context, "thread_handle");
