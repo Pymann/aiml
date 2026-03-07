@@ -1,0 +1,379 @@
+# Tests für math namespace: vec2/3/4, quat, mat4, ivec2/3, Skalare, Operatoren
+# Expected exit code: 0
+
+# ── Phase A: Konstanten ────────────────────────────────────────────────────────
+
+- decl: [pi,  f32, math.PI]
+- decl: [tau, f32, math.TAU]
+- decl: [e,   f32, math.E]
+- print: ["PI=${pi}  TAU=${tau}  E=${e}"]
+
+# ── Phase B: Skalare Funktionen ───────────────────────────────────────────────
+
+- decl: [rad, f32, { call: [math.to_radians, 180.0] }]
+- decl: [deg, f32, { call: [math.to_degrees, 3.14159] }]
+- print: ["to_radians(180)=${rad}  to_degrees(PI)=${deg}"]
+
+- decl: [s, f32, { call: [math.sin, 0.0] }]
+- decl: [c, f32, { call: [math.cos, 0.0] }]
+- print: ["sin(0)=${s}  cos(0)=${c}"]
+
+- decl: [sq, f32, { call: [math.sqrt, 4.0] }]
+- print: ["sqrt(4)=${sq}"]
+
+- decl: [p, f32, { call: [math.pow, 2.0, 10.0] }]
+- print: ["pow(2,10)=${p}"]
+
+- decl: [fl, f32, { call: [math.floor, 2.7] }]
+- decl: [cl, f32, { call: [math.ceil,  2.3] }]
+- decl: [ro, f32, { call: [math.round, 2.5] }]
+- print: ["floor(2.7)=${fl}  ceil(2.3)=${cl}  round(2.5)=${ro}"]
+
+- decl: [fr, f32, { call: [math.fract, 2.7] }]
+- print: ["fract(2.7)=${fr}"]
+
+- decl: [mn, f32, { call: [math.min,   1.0, 2.0] }]
+- decl: [mx, f32, { call: [math.max,   1.0, 2.0] }]
+- print: ["min(1,2)=${mn}  max(1,2)=${mx}"]
+
+- decl: [cl2, f32, { call: [math.clamp, 1.5, 0.0, 1.0] }]
+- print: ["clamp(1.5,0,1)=${cl2}"]
+
+- decl: [ab, f32, { call: [math.abs,  -3.5] }]
+- decl: [sg, f32, { call: [math.sign, -3.5] }]
+- print: ["abs(-3.5)=${ab}  sign(-3.5)=${sg}"]
+
+- decl: [lp, f32, { call: [math.lerp, 0.0, 10.0, 0.3] }]
+- print: ["lerp(0,10,0.3)=${lp}"]
+
+- decl: [md, f32, { call: [math.fmod, 7.5, 3.0] }]
+- print: ["fmod(7.5,3.0)=${md}"]
+
+- decl: [sm, f32, { call: [math.smoothstep, 0.0, 1.0, 0.5] }]
+- print: ["smoothstep(0,1,0.5)=${sm}"]
+
+- print: ["Phase B: scalar functions OK"]
+
+# ── Phase C: vec2 ─────────────────────────────────────────────────────────────
+
+- decl: [v2, vec2, { call: [math.vec2, 3.0, 4.0] }]
+- decl: [vx, f32, v2.x]
+- decl: [vy, f32, v2.y]
+- print: ["vec2: x=${vx}  y=${vy}"]
+
+# Member write
+- set: [v2.x, 1.0]
+- set: [vx, v2.x]
+- print: ["vec2.x after set: ${vx}"]
+
+# Operators
+- decl: [va, vec2, { call: [math.vec2, 1.0, 2.0] }]
+- decl: [vb, vec2, { call: [math.vec2, 3.0, 4.0] }]
+- decl: [vsum, vec2, { +: [va, vb] }]
+- decl: [vsumx, f32, vsum.x]
+- print: ["vec2 add x: ${vsumx}"]
+
+- decl: [vscaled, vec2, { "*": [va, 2.0] }]
+- decl: [vscx, f32, vscaled.x]
+- print: ["vec2 scale x: ${vscx}"]
+
+- decl: [vneg, vec2, { -: [va] }]
+- decl: [vnx, f32, vneg.x]
+- print: ["vec2 neg x: ${vnx}"]
+
+# vec2-specific: angle, perp
+- decl: [ang, f32, { call: [math.angle, va] }]
+- print: ["vec2 angle: ${ang}"]
+
+- decl: [perp, vec2, { call: [math.perp, va] }]
+- decl: [perpx, f32, perp.x]
+- print: ["vec2 perp x: ${perpx}"]
+
+# length
+- decl: [v34, vec2, { call: [math.vec2, 3.0, 4.0] }]
+- decl: [vlen, f32, { call: [math.length, v34] }]
+- print: ["vec2 length(3,4)=${vlen}"]
+
+- print: ["Phase C: vec2 OK"]
+
+# ── Phase D: vec3 ─────────────────────────────────────────────────────────────
+
+- decl: [a, vec3, { call: [math.vec3, 1.0, 0.0, 0.0] }]
+- decl: [b, vec3, { call: [math.vec3, 0.0, 1.0, 0.0] }]
+
+- decl: [ax, f32, a.x]
+- decl: [ay, f32, a.y]
+- decl: [az, f32, a.z]
+- print: ["vec3 a: ${ax} ${ay} ${az}"]
+
+# Member write
+- set: [a.x, 2.0]
+- set: [ax, a.x]
+- print: ["vec3 a.x after set: ${ax}"]
+- set: [a.x, 1.0]
+
+# Operator overloading
+- decl: [sum, vec3, { +: [a, b] }]
+- decl: [sumx, f32, sum.x]
+- decl: [sumy, f32, sum.y]
+- print: ["vec3 add: ${sumx} ${sumy}"]
+
+- decl: [diff, vec3, { -: [a, b] }]
+- decl: [difx, f32, diff.x]
+- print: ["vec3 sub x: ${difx}"]
+
+- decl: [scaled, vec3, { "*": [a, 2.5] }]
+- decl: [scalx, f32, scaled.x]
+- print: ["vec3 scale x: ${scalx}"]
+
+- decl: [neg, vec3, { -: [a] }]
+- decl: [negx, f32, neg.x]
+- print: ["vec3 neg x: ${negx}"]
+
+- decl: [divv, vec3, { /: [a, 2.0] }]
+- decl: [divx, f32, divv.x]
+- print: ["vec3 div x: ${divx}"]
+
+# Hadamard (component-wise mul)
+- decl: [aa, vec3, { call: [math.vec3, 2.0, 3.0, 4.0] }]
+- decl: [bb, vec3, { call: [math.vec3, 2.0, 2.0, 2.0] }]
+- decl: [prod, vec3, { "*": [aa, bb] }]
+- decl: [prodx, f32, prod.x]
+- print: ["vec3 hadamard x: ${prodx}"]
+
+# dot, cross
+- decl: [d, f32, { call: [math.dot, a, b] }]
+- print: ["dot(a,b)=${d}"]
+
+- decl: [cr, vec3, { call: [math.cross, a, b] }]
+- decl: [crz, f32, cr.z]
+- print: ["cross(x,y).z=${crz}"]
+
+# length, normalize
+- decl: [len, f32, { call: [math.length, a] }]
+- print: ["length(1,0,0)=${len}"]
+
+- decl: [n, vec3, { call: [math.normalize, aa] }]
+- decl: [nx, f32, n.x]
+- print: ["normalize(2,3,4).x=${nx}"]
+
+# lerp (vec3)
+- decl: [lerped, vec3, { call: [math.lerp, a, b, 0.5] }]
+- decl: [lerpx, f32, lerped.x]
+- decl: [lerpy, f32, lerped.y]
+- print: ["lerp vec3: ${lerpx} ${lerpy}"]
+
+# distance
+- decl: [dist, f32, { call: [math.distance, a, b] }]
+- print: ["distance(a,b)=${dist}"]
+
+# reflect
+- decl: [normal, vec3, { call: [math.vec3, 0.0, 1.0, 0.0] }]
+- decl: [incident, vec3, { call: [math.vec3, 1.0, -1.0, 0.0] }]
+- decl: [refl, vec3, { call: [math.reflect, incident, normal] }]
+- decl: [reflx, f32, refl.x]
+- decl: [refly, f32, refl.y]
+- print: ["reflect x=${reflx} y=${refly}"]
+
+- print: ["Phase D: vec3 OK"]
+
+# ── Phase E: vec4 ─────────────────────────────────────────────────────────────
+
+- decl: [col, vec4, { call: [math.vec4, 1.0, 0.5, 0.2, 1.0] }]
+- decl: [colr, f32, col.x]
+- decl: [colg, f32, col.y]
+- decl: [colb, f32, col.z]
+- decl: [cola, f32, col.w]
+- print: ["vec4: r=${colr} g=${colg} b=${colb} a=${cola}"]
+
+# lerp (vec4)
+- decl: [black, vec4, { call: [math.vec4, 0.0, 0.0, 0.0, 1.0] }]
+- decl: [mid, vec4, { call: [math.lerp, col, black, 0.5] }]
+- decl: [midr, f32, mid.x]
+- print: ["vec4 lerp r: ${midr}"]
+
+# == operator (returns i8/bool)
+- decl: [eq, i8, { ==: [col, col] }]
+- print: ["vec4 eq self: ${eq}"]
+
+- print: ["Phase E: vec4 OK"]
+
+# ── Phase F: mat4 ─────────────────────────────────────────────────────────────
+
+# Identity
+- decl: [m, mat4, { call: [math.mat4_identity] }]
+- decl: [m00, f32, { call: [m.get, 0, 0] }]
+- decl: [m11, f32, { call: [m.get, 1, 1] }]
+- print: ["mat4 identity m00=${m00} m11=${m11}"]
+
+# set element
+- call: [m.set, 0, 3, 5.0]
+- decl: [m03, f32, { call: [m.get, 0, 3] }]
+- print: ["mat4 set m03=${m03}"]
+
+# mat4_translate
+- decl: [tvec, vec3, { call: [math.vec3, 1.0, 2.0, 0.0] }]
+- decl: [t, mat4, { call: [math.mat4_translate, tvec] }]
+- decl: [t03, f32, { call: [t.get, 0, 3] }]
+- print: ["mat4_translate m03=${t03}"]
+
+# mat4_scale
+- decl: [svec, vec3, { call: [math.vec3, 2.0, 2.0, 2.0] }]
+- decl: [s, mat4, { call: [math.mat4_scale, svec] }]
+- decl: [s00, f32, { call: [s.get, 0, 0] }]
+- print: ["mat4_scale m00=${s00}"]
+
+# mat4_rotate_y
+- decl: [ry, mat4, { call: [math.mat4_rotate_y, { call: [math.to_radians, 90.0] }] }]
+- decl: [ry00, f32, { call: [ry.get, 0, 0] }]
+- print: ["mat4_rotate_y m00=${ry00}"]
+
+# mat4 * mat4
+- decl: [ts, mat4, { "*": [t, s] }]
+- decl: [ts00, f32, { call: [ts.get, 0, 0] }]
+- print: ["mat4*mat4 m00=${ts00}"]
+
+# mat4 * vec4
+- decl: [pos, vec4, { call: [math.vec4, 0.0, 0.0, 0.0, 1.0] }]
+- decl: [world, vec4, { "*": [t, pos] }]
+- decl: [wx, f32, world.x]
+- print: ["mat4*vec4 x=${wx}"]
+
+# Perspective matrix (just check it doesn't crash)
+- decl: [proj, mat4, { call: [math.mat4_perspective,
+    { call: [math.to_radians, 60.0] }, 1.777, 0.1, 1000.0] }]
+- decl: [p11, f32, { call: [proj.get, 1, 1] }]
+- print: ["perspective m11=${p11}"]
+
+# lookat
+- decl: [eye,    vec3, { call: [math.vec3, 0.0, 0.0, 5.0] }]
+- decl: [center, vec3, { call: [math.vec3, 0.0, 0.0, 0.0] }]
+- decl: [up,     vec3, { call: [math.vec3, 0.0, 1.0, 0.0] }]
+- decl: [view, mat4, { call: [math.mat4_lookat, eye, center, up] }]
+- decl: [v22, f32, { call: [view.get, 2, 2] }]
+- print: ["lookat m22=${v22}"]
+
+# mat4_inverse
+- decl: [inv, mat4, { call: [math.mat4_inverse, view] }]
+- decl: [inv00, f32, { call: [inv.get, 0, 0] }]
+- print: ["mat4_inverse m00=${inv00}"]
+
+# mat4_transpose
+- decl: [tran, mat4, { call: [math.mat4_transpose, proj] }]
+- decl: [tran01, f32, { call: [tran.get, 0, 1] }]
+- print: ["mat4_transpose m01=${tran01}"]
+
+# mat4_to_buffer
+- decl: [buf, buffer<f32>, { call: [math.mat4_to_buffer, proj] }]
+- print: ["mat4_to_buffer ok"]
+
+- print: ["Phase F: mat4 OK"]
+
+# ── Phase G: quat ─────────────────────────────────────────────────────────────
+
+# Identity
+- decl: [q_id, quat, { call: [math.quat_identity] }]
+- decl: [qw, f32, q_id.w]
+- print: ["quat identity w=${qw}"]
+
+# axis-angle (90° around Y)
+- decl: [yaxis, vec3, { call: [math.vec3, 0.0, 1.0, 0.0] }]
+- decl: [q, quat, { call: [math.quat_axis_angle, yaxis, { call: [math.to_radians, 90.0] }] }]
+- decl: [qy, f32, q.y]
+- print: ["quat axis_angle y=${qy}"]
+
+# euler
+- decl: [q2, quat, { call: [math.quat_euler, 0.0, { call: [math.to_radians, 45.0] }, 0.0] }]
+- decl: [q2y, f32, q2.y]
+- print: ["quat euler y=${q2y}"]
+
+# quat_mul
+- decl: [combined, quat, { call: [math.quat_mul, q, q2] }]
+- decl: [cw, f32, combined.w]
+- print: ["quat_mul w=${cw}"]
+
+# quat_normalize
+- decl: [qn, quat, { call: [math.quat_normalize, combined] }]
+- decl: [qnw, f32, qn.w]
+- print: ["quat_normalize w=${qnw}"]
+
+# quat_inverse
+- decl: [qi, quat, { call: [math.quat_inverse, q] }]
+- decl: [qiy, f32, qi.y]
+- print: ["quat_inverse y=${qiy}"]
+
+# quat_rotate_vec3: rotate X-axis by 90° around Y → should give -Z
+- decl: [xvec, vec3, { call: [math.vec3, 1.0, 0.0, 0.0] }]
+- decl: [rotated, vec3, { call: [math.quat_rotate_vec3, q, xvec] }]
+- decl: [rz, f32, rotated.z]
+- print: ["quat_rotate_vec3 z=${rz}"]
+
+# quat_slerp
+- decl: [slerped, quat, { call: [math.quat_slerp, q_id, q, 0.5] }]
+- decl: [slw, f32, slerped.w]
+- print: ["quat_slerp w=${slw}"]
+
+# quat_to_mat4
+- decl: [rot_mat, mat4, { call: [math.quat_to_mat4, q] }]
+- decl: [rm00, f32, { call: [rot_mat.get, 0, 0] }]
+- print: ["quat_to_mat4 m00=${rm00}"]
+
+# mat4_to_quat
+- decl: [back, quat, { call: [math.mat4_to_quat, rot_mat] }]
+- decl: [bw, f32, back.w]
+- print: ["mat4_to_quat w=${bw}"]
+
+# lerp (quat via math.lerp)
+- decl: [ql, quat, { call: [math.lerp, q_id, q, 0.5] }]
+- decl: [qlw, f32, ql.w]
+- print: ["quat lerp w=${qlw}"]
+
+- print: ["Phase G: quat OK"]
+
+# ── Phase H: ivec2 / ivec3 ────────────────────────────────────────────────────
+
+- decl: [screen, ivec2, { call: [math.ivec2, 1920, 1080] }]
+- decl: [sw, i32, screen.x]
+- decl: [sh, i32, screen.y]
+- print: ["ivec2 screen: ${sw}x${sh}"]
+
+- decl: [tile, ivec3, { call: [math.ivec3, 5, 0, 3] }]
+- decl: [tx, i32, tile.x]
+- decl: [tz, i32, tile.z]
+- print: ["ivec3 tile: x=${tx} z=${tz}"]
+
+# idiv
+- decl: [half, ivec2, { call: [math.idiv, screen, 2] }]
+- decl: [hx, i32, half.x]
+- print: ["idiv(1920,2)=${hx}"]
+
+# iadd
+- decl: [sum2, ivec2, { call: [math.iadd, half, { call: [math.ivec2, 10, 10] }] }]
+- decl: [sumx, i32, sum2.x]
+- print: ["iadd x=${sumx}"]
+
+# conversions
+- decl: [fv, vec2, { call: [math.ivec2_to_vec2, screen] }]
+- decl: [fvx, f32, fv.x]
+- print: ["ivec2_to_vec2 x=${fvx}"]
+
+- decl: [iv, ivec2, { call: [math.vec2_to_ivec2, fv] }]
+- decl: [ivx, i32, iv.x]
+- print: ["vec2_to_ivec2 x=${ivx}"]
+
+- print: ["Phase H: ivec OK"]
+
+# ── Phase I: min/max mit list<f32> und ptr+len ────────────────────────────────
+
+# list<f32>
+- decl: [vals, list<f32>]
+- call: [vals.push, 3.5]
+- call: [vals.push, 1.2]
+- call: [vals.push, 7.8]
+- call: [vals.push, 0.4]
+- call: [vals.push, 5.1]
+
+- decl: [lo, f32, { call: [math.min, vals] }]
+- decl: [hi, f32, { call: [math.max, vals] }]
+- print: ["list min=${lo}  max=${hi}"]
+

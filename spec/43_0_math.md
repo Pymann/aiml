@@ -80,12 +80,12 @@ Bei Funktionsübergabe wird eine Kopie erstellt (analog zu `i32`).
 # Arithmetik via Operator-Overloading
 - decl: [sum,    vec3, { +: [a, b] }]      # a + b
 - decl: [diff,   vec3, { -: [a, b] }]      # a - b
-- decl: [scaled, vec3, { *: [a, 2.5] }]    # a * 2.5
+- decl: [scaled, vec3, { "*": [a, 2.5] }]   # a * 2.5
 - decl: [neg,    vec3, { -: [a] }]         # -a  (unär)
 - decl: [div,    vec3, { /: [a, 2.0] }]    # a / 2.0
 
 # Komponentenweises Produkt (Hadamard)
-- decl: [prod, vec3, { *: [a, b] }]        # (ax*bx, ay*by, az*bz)
+- decl: [prod, vec3, { "*": [a, b] }]       # (ax*bx, ay*by, az*bz)
 
 # Skalarprodukt und Kreuzprodukt
 - decl: [d, f32,  { call: [math.dot,   a, b] }]        # 0.0 (senkrecht)
@@ -133,8 +133,8 @@ Bei Funktionsübergabe wird eine Kopie erstellt (analog zu `i32`).
 - decl: [rot, mat4, { call: [math.mat4_rotate, axis, { call: [math.to_radians, 90.0] }] }]
 
 # Multiplikation (Model-Matrix = T * R * S)
-- decl: [tr,  mat4, { *: [t, r] }]
-- decl: [trs, mat4, { *: [tr, s] }]
+- decl: [tr,  mat4, { "*": [t, r] }]
+- decl: [trs, mat4, { "*": [tr, s] }]
 
 # Kamera-Matrizen
 - decl: [eye,    vec3, { call: [math.vec3, 0.0, 0.0, 5.0] }]
@@ -155,7 +155,7 @@ Bei Funktionsübergabe wird eine Kopie erstellt (analog zu `i32`).
 - decl: [tran, mat4, { call: [math.mat4_transpose, proj] }]
 
 # Vektor mit Matrix transformieren
-- decl: [world_pos, vec4, { *: [trs, { call: [math.vec4, 0.0, 0.0, 0.0, 1.0] }] }]
+- decl: [world_pos, vec4, { "*": [trs, { call: [math.vec4, 0.0, 0.0, 0.0, 1.0] }] }]
 
 # Für GPU-Upload: als buffer<f32> (column-major, 16 Werte)
 - decl: [buf, buffer<f32>, { call: [math.mat4_to_buffer, proj] }]
@@ -224,8 +224,24 @@ Bei Funktionsübergabe wird eine Kopie erstellt (analog zu `i32`).
 - decl: [fr, f32, { call: [math.fract, 2.7] }]         # 0.7
 
 # Min / Max / Clamp
+# --- 2-Argument-Form (Skalare) ---
 - decl: [mn, f32, { call: [math.min,   1.0, 2.0] }]    # 1.0
 - decl: [mx, f32, { call: [math.max,   1.0, 2.0] }]    # 2.0
+
+# --- 1-Argument-Form: list<f32> ---
+- decl: [vals, list<f32>]
+- call: [vals.push, 3.5]
+- call: [vals.push, 1.2]
+- call: [vals.push, 7.8]
+- decl: [lo, f32, { call: [math.min, vals] }]   # 1.2
+- decl: [hi, f32, { call: [math.max, vals] }]   # 7.8
+
+# --- 2-Argument-Form: Rohspeicher (ptr: i8*, len: i32) ---
+# Ermöglicht direkte Reduktion über einen float-Speicherbereich ohne List-Overhead.
+# (Typischer Einsatz: Buffer-Slices, GPU-Upload-Arrays, FFI-Daten)
+# - decl: [lo2, f32, { call: [math.min, data_ptr, 1024] }]
+# - decl: [hi2, f32, { call: [math.max, data_ptr, 1024] }]
+
 - decl: [cl2, f32, { call: [math.clamp, 1.5, 0.0, 1.0] }]  # 1.0
 - decl: [sm, f32, { call: [math.smoothstep, 0.0, 1.0, 0.5] }]  # smoothstep
 
@@ -302,12 +318,12 @@ Bei Funktionsübergabe wird eine Kopie erstellt (analog zu `i32`).
 |----------|-------|----------|
 | `{ +: [a, b] }` | `vec2/3/4` + gleich | gleich |
 | `{ -: [a, b] }` | `vec2/3/4` + gleich | gleich |
-| `{ *: [a, b] }` | `vec2/3/4` + gleich | gleich (Hadamard) |
-| `{ *: [a, s] }` | `vec2/3/4` + `f32` | gleich (Scale) |
+| `{ "*": [a, b] }` | `vec2/3/4` + gleich | gleich (Hadamard) |
+| `{ "*": [a, s] }` | `vec2/3/4` + `f32` | gleich (Scale) |
 | `{ /: [a, s] }` | `vec2/3/4` + `f32` | gleich |
 | `{ -: [a] }` | `vec2/3/4` (unär) | gleich (Negation) |
-| `{ *: [m1, m2] }` | `mat4` + `mat4` | `mat4` |
-| `{ *: [m, v] }` | `mat4` + `vec4` | `vec4` |
+| `{ "*": [m1, m2] }` | `mat4` + `mat4` | `mat4` |
+| `{ "*": [m, v] }` | `mat4` + `vec4` | `vec4` |
 | `{ ==: [a, b] }` | `vec2/3/4` + gleich | `i8` |
 
 ### Vektor-Funktionen (math-Namespace)
@@ -341,6 +357,22 @@ Bei Funktionsübergabe wird eine Kopie erstellt (analog zu `i32`).
 | `math.quat_lerp(a, b, t)` | `quat` |
 | `math.quat_slerp(a, b, t)` | `quat` |
 | `math.quat_to_mat4(q)` | `mat4` |
+
+### Skalare Reduktionen (min/max Overloads)
+
+`math.min` und `math.max` unterstützen drei Signaturen:
+
+| Aufruf | Beschreibung | Rückgabe |
+|--------|--------------|----------|
+| `math.min(a, b)` | Kleinstes von zwei `f32`-Werten | `f32` |
+| `math.max(a, b)` | Größtes von zwei `f32`-Werten | `f32` |
+| `math.min(lst)` | Minimum über eine `list<f32>` | `f32` |
+| `math.max(lst)` | Maximum über eine `list<f32>` | `f32` |
+| `math.min(ptr, len)` | Minimum über Rohspeicher (`i8*`, `i32`) | `f32` |
+| `math.max(ptr, len)` | Maximum über Rohspeicher (`i8*`, `i32`) | `f32` |
+
+Die `ptr`-Form ist für FFI-Szenarien gedacht (Buffer-Slices, externe Float-Arrays).
+Bei leerer Liste / `len=0` wird `0.0` zurückgegeben.
 
 ---
 

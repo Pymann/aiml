@@ -1,0 +1,89 @@
+# Tests für hash namespace: SHA-256/512, SHA-3, Keccak-256, RIPEMD-160, BLAKE2, MD5, CRC32, HMAC
+# Expected exit code: 0
+
+# ── Phase A: SHA-256 / SHA-512 ─────────────────────────────────────────────
+
+- decl: [h256, string, { call: [hash.sha256, "hello world"] }]
+- print: ["SHA-256: ${h256}"]
+# expected: b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9
+
+- decl: [h512, string, { call: [hash.sha512, "hello world"] }]
+- print: ["SHA-512: ${h512}"]
+# expected (first 32 chars): 309ecc489c12d6eb4cc40f50c902f2b4d0ed77ee511a7c7a9bcd3ca86d4cd86f
+
+- decl: [hempty, string, { call: [hash.sha256, ""] }]
+- print: ["SHA-256(empty): ${hempty}"]
+# expected: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+# ── Phase B: SHA-3-256 ────────────────────────────────────────────────────
+
+- decl: [h3, string, { call: [hash.sha3_256, "abc"] }]
+- print: ["SHA3-256(abc): ${h3}"]
+# expected: 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532
+
+# ── Phase C: Keccak-256 (Ethereum-compatible) ─────────────────────────────
+
+- decl: [kec, string, { call: [hash.keccak256, ""] }]
+- print: ["Keccak-256(empty): ${kec}"]
+# expected: c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470
+
+- decl: [kec2, string, { call: [hash.keccak256, "abc"] }]
+- print: ["Keccak-256(abc): ${kec2}"]
+# expected: 4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45
+
+# ── Phase D: RIPEMD-160 ───────────────────────────────────────────────────
+
+- decl: [rmd, string, { call: [hash.ripemd160, "hello world"] }]
+- print: ["RIPEMD-160: ${rmd}"]
+# expected: 98c615784ccb5fe5936fbc0cbe9dfdb408d92f0f
+
+- decl: [rmd2, string, { call: [hash.ripemd160, ""] }]
+- print: ["RIPEMD-160(empty): ${rmd2}"]
+# expected: 9c1185a5c5e9fc54612808977ee8f548b2258d31
+
+# ── Phase E: BLAKE2b / BLAKE2s ────────────────────────────────────────────
+
+- decl: [b2b, string, { call: [hash.blake2b, "hello world"] }]
+- print: ["BLAKE2b-512: ${b2b}"]
+
+- decl: [b2s, string, { call: [hash.blake2s, "hello world"] }]
+- print: ["BLAKE2s-256: ${b2s}"]
+
+# ── Phase F: MD5 ──────────────────────────────────────────────────────────
+
+- decl: [m, string, { call: [hash.md5, "hello world"] }]
+- print: ["MD5: ${m}"]
+# expected: 5eb63bbbe01eeed093cb22bb8f5acdc3
+
+# ── Phase G: CRC32 ────────────────────────────────────────────────────────
+
+- decl: [crc, i32, { call: [hash.crc32, "hello world"] }]
+- print: ["CRC32: ${crc}"]
+# expected: 222957957  (0x0D4A1185 unsigned = 222957957 signed)
+
+# ── Phase H: HMAC-SHA256 / HMAC-SHA512 ───────────────────────────────────
+
+- decl: [secret, string, "mysecret"]
+- decl: [body,   string, "hello world"]
+
+- decl: [hmac256, string, { call: [hash.hmac_sha256, secret, body] }]
+- print: ["HMAC-SHA256: ${hmac256}"]
+
+- decl: [hmac512, string, { call: [hash.hmac_sha512, secret, body] }]
+- print: ["HMAC-SHA512: ${hmac512}"]
+
+# ── Phase I: _raw variants (check that result is non-null / usable) ───────
+
+- decl: [raw256, buffer<u8>, { call: [hash.sha256_raw, "hello world"] }]
+- print: ["sha256_raw returned (not null)"]
+
+- decl: [rawkec, buffer<u8>, { call: [hash.keccak256_raw, "abc"] }]
+- print: ["keccak256_raw returned (not null)"]
+
+- decl: [rawrmd, buffer<u8>, { call: [hash.ripemd160_raw, "hello world"] }]
+- print: ["ripemd160_raw returned (not null)"]
+
+- decl: [rawhmac, buffer<u8>, { call: [hash.hmac_sha256_raw, secret, body] }]
+- print: ["hmac_sha256_raw returned (not null)"]
+
+- print: ["Phase I: raw OK"]

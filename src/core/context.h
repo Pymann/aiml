@@ -419,6 +419,48 @@ namespace AIML {
         if (typeName == "ptr") return llvm::Type::getInt8Ty(context)->getPointerTo();
         
         if (typeName == "any") return llvm::Type::getInt8Ty(context)->getPointerTo();
+
+        // ── Math value types ──────────────────────────────────────────────
+        // These are real structs on the stack (not i8* pointers).
+        // The LLVM StructType is created once and cached by name.
+        {
+            auto makeMathF4 = [&](const char* nm) -> llvm::Type* {
+                llvm::StructType* t = llvm::StructType::getTypeByName(context, nm);
+                if (!t) t = llvm::StructType::create(context,
+                    {llvm::Type::getFloatTy(context), llvm::Type::getFloatTy(context),
+                     llvm::Type::getFloatTy(context), llvm::Type::getFloatTy(context)}, nm);
+                return t;
+            };
+            if (typeName == "vec2") {
+                llvm::StructType* t = llvm::StructType::getTypeByName(context, "vec2");
+                if (!t) t = llvm::StructType::create(context,
+                    {llvm::Type::getFloatTy(context), llvm::Type::getFloatTy(context)}, "vec2");
+                return t;
+            }
+            if (typeName == "vec3") return makeMathF4("vec3");
+            if (typeName == "vec4") return makeMathF4("vec4");
+            if (typeName == "quat") return makeMathF4("quat");
+            if (typeName == "mat4") {
+                llvm::StructType* t = llvm::StructType::getTypeByName(context, "mat4");
+                if (!t) t = llvm::StructType::create(context,
+                    {llvm::ArrayType::get(llvm::Type::getFloatTy(context), 16)}, "mat4");
+                return t;
+            }
+            if (typeName == "ivec2") {
+                llvm::StructType* t = llvm::StructType::getTypeByName(context, "ivec2");
+                if (!t) t = llvm::StructType::create(context,
+                    {llvm::Type::getInt32Ty(context), llvm::Type::getInt32Ty(context)}, "ivec2");
+                return t;
+            }
+            if (typeName == "ivec3") {
+                llvm::StructType* t = llvm::StructType::getTypeByName(context, "ivec3");
+                if (!t) t = llvm::StructType::create(context,
+                    {llvm::Type::getInt32Ty(context), llvm::Type::getInt32Ty(context),
+                     llvm::Type::getInt32Ty(context), llvm::Type::getInt32Ty(context)}, "ivec3");
+                return t;
+            }
+        }
+
         if (typeName == "i8" || typeName == "i8_least" || typeName == "i8_fast") return llvm::Type::getInt8Ty(context);
         if (typeName == "i16") return llvm::Type::getInt16Ty(context);
         if (typeName == "i32") return llvm::Type::getInt32Ty(context);
@@ -448,6 +490,10 @@ namespace AIML {
         if (typeName == "u32") return llvm::Type::getInt32Ty(context);
         if (typeName == "u64") return llvm::Type::getInt64Ty(context);
         
+        // buffer<T> — template param is ignored, all buffers share the same struct layout
+        if (typeName.rfind("buffer<", 0) == 0 && typeName.back() == '>') {
+            return getLLVMType("buffer");
+        }
         if (typeName == "buffer") {
             llvm::StructType* bufferType = llvm::StructType::getTypeByName(context, "buffer");
             if (!bufferType) {

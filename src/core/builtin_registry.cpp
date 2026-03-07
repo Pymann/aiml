@@ -2449,4 +2449,1010 @@ void registerBuiltins(CompilerContext& ctx) {
             ctx.classes["fs_options"] = std::move(ci);
         }
     }
+
+    // -----------------------------------------------------------------------
+    // math namespace + math value types (vec2/vec3/vec4/quat/mat4/ivec2/ivec3)
+    // -----------------------------------------------------------------------
+    {
+        llvm::Type* f32  = llvm::Type::getFloatTy(ctx.context);
+        llvm::Type* i32  = llvm::Type::getInt32Ty(ctx.context);
+        llvm::Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* voidT = ctx.builder.getVoidTy();
+
+        // Ensure struct types exist (getLLVMType has the same logic, call it to be safe)
+        llvm::StructType* vec2Ty  = static_cast<llvm::StructType*>(ctx.getLLVMType("vec2"));
+        llvm::StructType* vec3Ty  = static_cast<llvm::StructType*>(ctx.getLLVMType("vec3"));
+        llvm::StructType* vec4Ty  = static_cast<llvm::StructType*>(ctx.getLLVMType("vec4"));
+        llvm::StructType* quatTy  = static_cast<llvm::StructType*>(ctx.getLLVMType("quat"));
+        llvm::StructType* mat4Ty  = static_cast<llvm::StructType*>(ctx.getLLVMType("mat4"));
+        llvm::StructType* ivec2Ty = static_cast<llvm::StructType*>(ctx.getLLVMType("ivec2"));
+        llvm::StructType* ivec3Ty = static_cast<llvm::StructType*>(ctx.getLLVMType("ivec3"));
+
+        // ── Helper lambdas ────────────────────────────────────────────────
+
+        // Store a loaded struct value to a temp alloca and return the alloca ptr
+        auto storeToTmp = [](CompilerContext& ctx, llvm::Value* val, llvm::Type* ty) -> llvm::Value* {
+            llvm::AllocaInst* a = ctx.builder.CreateAlloca(ty, nullptr, "mtmp");
+            ctx.builder.CreateStore(val, a);
+            return a;
+        };
+
+        // Get or declare a void C function with given pointer arg types
+        auto getVoidFn = [&](const char* name, std::vector<llvm::Type*> args) -> llvm::Function* {
+            llvm::Function* fn = ctx.module.getFunction(name);
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(voidT, args, false),
+                llvm::Function::ExternalLinkage, name, ctx.module);
+            return fn;
+        };
+        auto getF32Fn = [&](const char* name, std::vector<llvm::Type*> args) -> llvm::Function* {
+            llvm::Function* fn = ctx.module.getFunction(name);
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(f32, args, false),
+                llvm::Function::ExternalLinkage, name, ctx.module);
+            return fn;
+        };
+        auto getI32Fn = [&](const char* name, std::vector<llvm::Type*> args) -> llvm::Function* {
+            llvm::Function* fn = ctx.module.getFunction(name);
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(i32, args, false),
+                llvm::Function::ExternalLinkage, name, ctx.module);
+            return fn;
+        };
+
+        // Pointer types (opaque for passing structs by reference)
+        llvm::Type* pVec2  = llvm::PointerType::get(ctx.context, 0);
+        llvm::Type* pVec3  = llvm::PointerType::get(ctx.context, 0);
+        llvm::Type* pVec4  = llvm::PointerType::get(ctx.context, 0);
+        llvm::Type* pQuat  = llvm::PointerType::get(ctx.context, 0);
+        llvm::Type* pMat4  = llvm::PointerType::get(ctx.context, 0);
+        llvm::Type* pIVec2 = llvm::PointerType::get(ctx.context, 0);
+        llvm::Type* pIVec3 = llvm::PointerType::get(ctx.context, 0);
+        (void)pVec2; (void)pVec3; (void)pVec4; (void)pQuat; (void)pMat4;
+        (void)pIVec2; (void)pIVec3;
+
+        // ── Register ClassInfo for each math value type ───────────────────
+        // Members are x→0, y→1, z→2, w→3 for vec types.
+        // Registering as non-builtin with a real StructType so resolveProperty
+        // uses the GEP path for member access (v.x, v.y, ...).
+        // mat4 uses builtinMethods for get/set (no plain member access).
+
+        auto addMember = [&](CompilerContext::ClassInfo& ci, const std::string& nm, int idx, llvm::Type* ty, const std::string& typNm) {
+            CompilerContext::StructMember m;
+            m.index    = idx;
+            m.type     = ty;
+            m.typeName = typNm;
+            m.access   = AccessLevel::Public;
+            ci.members[nm] = m;
+        };
+
+        // vec2 {f32, f32}
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name = "vec2"; ci.type = vec2Ty; ci.isBuiltin = false;
+            addMember(ci, "x", 0, f32, "f32");
+            addMember(ci, "y", 1, f32, "f32");
+            ctx.classes["vec2"] = std::move(ci);
+        }
+        // vec3 {f32, f32, f32, f32}
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name = "vec3"; ci.type = vec3Ty; ci.isBuiltin = false;
+            addMember(ci, "x", 0, f32, "f32");
+            addMember(ci, "y", 1, f32, "f32");
+            addMember(ci, "z", 2, f32, "f32");
+            ctx.classes["vec3"] = std::move(ci);
+        }
+        // vec4 {f32, f32, f32, f32}
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name = "vec4"; ci.type = vec4Ty; ci.isBuiltin = false;
+            addMember(ci, "x", 0, f32, "f32");
+            addMember(ci, "y", 1, f32, "f32");
+            addMember(ci, "z", 2, f32, "f32");
+            addMember(ci, "w", 3, f32, "f32");
+            ctx.classes["vec4"] = std::move(ci);
+        }
+        // quat {f32, f32, f32, f32}
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name = "quat"; ci.type = quatTy; ci.isBuiltin = false;
+            addMember(ci, "x", 0, f32, "f32");
+            addMember(ci, "y", 1, f32, "f32");
+            addMember(ci, "z", 2, f32, "f32");
+            addMember(ci, "w", 3, f32, "f32");
+            ctx.classes["quat"] = std::move(ci);
+        }
+        // mat4 {[16 x f32]} — get/set methods only, no plain member access
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name = "mat4"; ci.type = mat4Ty; ci.isBuiltin = true;
+            ci.preLoadBase = false;
+
+            ci.builtinMethods["get"] = [mat4Ty](CompilerContext& ctx, llvm::Value* baseAlloca,
+                                                  AIML::AST::CallExpr* call,
+                                                  std::function<AIML::IRValue*(AIML::AST::Expr*)> evalExpr) -> AIML::IRValue* {
+                // args: row (i32), col (i32)
+                if (!call || call->args.size() < 2) return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getFloatTy(), baseAlloca, "m_get_err"));
+                AIML::IRValue* rowV = evalExpr(call->args[0].get());
+                AIML::IRValue* colV = evalExpr(call->args[1].get());
+                llvm::Value* row = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rowV));
+                llvm::Value* col = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(colV));
+                llvm::Function* fn = ctx.module.getFunction("aiml_math_mat4_get");
+                if (!fn) fn = llvm::Function::Create(
+                    llvm::FunctionType::get(ctx.builder.getFloatTy(),
+                        {llvm::PointerType::get(ctx.context,0), ctx.builder.getInt32Ty(), ctx.builder.getInt32Ty()}, false),
+                    llvm::Function::ExternalLinkage, "aiml_math_mat4_get", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {baseAlloca, row, col}, "mat4_get"));
+            };
+
+            ci.builtinMethods["set"] = [mat4Ty](CompilerContext& ctx, llvm::Value* baseAlloca,
+                                                  AIML::AST::CallExpr* call,
+                                                  std::function<AIML::IRValue*(AIML::AST::Expr*)> evalExpr) -> AIML::IRValue* {
+                // args: row (i32), col (i32), val (f32)
+                if (!call || call->args.size() < 3) return ctx.ir_gen->getInt32(0);
+                AIML::IRValue* rowV = evalExpr(call->args[0].get());
+                AIML::IRValue* colV = evalExpr(call->args[1].get());
+                AIML::IRValue* valV = evalExpr(call->args[2].get());
+                llvm::Value* row = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rowV));
+                llvm::Value* col = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(colV));
+                llvm::Value* val = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(valV));
+                if (!val->getType()->isFloatTy())
+                    val = ctx.builder.CreateSIToFP(val, ctx.builder.getFloatTy());
+                llvm::Function* fn = ctx.module.getFunction("aiml_math_mat4_set");
+                if (!fn) fn = llvm::Function::Create(
+                    llvm::FunctionType::get(ctx.builder.getVoidTy(),
+                        {llvm::PointerType::get(ctx.context,0), ctx.builder.getInt32Ty(), ctx.builder.getInt32Ty(), ctx.builder.getFloatTy()}, false),
+                    llvm::Function::ExternalLinkage, "aiml_math_mat4_set", ctx.module);
+                ctx.builder.CreateCall(fn, {baseAlloca, row, col, val});
+                return ctx.ir_gen->getInt32(0);
+            };
+
+            ctx.classes["mat4"] = std::move(ci);
+        }
+        // ivec2 {i32, i32}
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name = "ivec2"; ci.type = ivec2Ty; ci.isBuiltin = false;
+            addMember(ci, "x", 0, i32, "i32");
+            addMember(ci, "y", 1, i32, "i32");
+            ctx.classes["ivec2"] = std::move(ci);
+        }
+        // ivec3 {i32, i32, i32, i32}
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name = "ivec3"; ci.type = ivec3Ty; ci.isBuiltin = false;
+            addMember(ci, "x", 0, i32, "i32");
+            addMember(ci, "y", 1, i32, "i32");
+            addMember(ci, "z", 2, i32, "i32");
+            ctx.classes["ivec3"] = std::move(ci);
+        }
+
+        // ── math namespace functions ──────────────────────────────────────
+        auto& math = ctx.namespaces["math"];
+
+        // Helper: cast a loaded value to f32 (from f64 or integer literals)
+        auto toF32 = [](CompilerContext& ctx, llvm::Value* v) -> llvm::Value* {
+            if (v->getType()->isFloatTy()) return v;
+            if (v->getType()->isDoubleTy()) return ctx.builder.CreateFPTrunc(v, ctx.builder.getFloatTy());
+            if (v->getType()->isIntegerTy()) return ctx.builder.CreateSIToFP(v, ctx.builder.getFloatTy());
+            return v;
+        };
+
+        // Constructors ─────────────────────────────────────────────────────
+        math.builtinFuncs["vec2"] = [vec2Ty, toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            llvm::Value* x = args.size()>0 ? toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))) : ctx.builder.CreateFPCast(llvm::ConstantFP::get(ctx.context, llvm::APFloat(0.0f)), ctx.builder.getFloatTy());
+            llvm::Value* y = args.size()>1 ? toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))) : ctx.builder.CreateFPCast(llvm::ConstantFP::get(ctx.context, llvm::APFloat(0.0f)), ctx.builder.getFloatTy());
+            llvm::Value* v = llvm::UndefValue::get(vec2Ty);
+            v = ctx.builder.CreateInsertValue(v, x, 0);
+            v = ctx.builder.CreateInsertValue(v, y, 1);
+            return ctx.ir_gen->wrap(v);
+        };
+        math.builtinFuncs["vec3"] = [vec3Ty, toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto zero = [&]{ return llvm::ConstantFP::get(ctx.builder.getFloatTy(), 0.0); };
+            llvm::Value* x = args.size()>0 ? toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))) : zero();
+            llvm::Value* y = args.size()>1 ? toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))) : zero();
+            llvm::Value* z = args.size()>2 ? toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))) : zero();
+            llvm::Value* v = llvm::UndefValue::get(vec3Ty);
+            v = ctx.builder.CreateInsertValue(v, x, 0);
+            v = ctx.builder.CreateInsertValue(v, y, 1);
+            v = ctx.builder.CreateInsertValue(v, z, 2);
+            v = ctx.builder.CreateInsertValue(v, zero(), 3);
+            return ctx.ir_gen->wrap(v);
+        };
+        math.builtinFuncs["vec4"] = [vec4Ty, toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto zero = [&]{ return llvm::ConstantFP::get(ctx.builder.getFloatTy(), 0.0); };
+            llvm::Value* x = args.size()>0 ? toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))) : zero();
+            llvm::Value* y = args.size()>1 ? toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))) : zero();
+            llvm::Value* z = args.size()>2 ? toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))) : zero();
+            llvm::Value* w = args.size()>3 ? toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[3]))) : zero();
+            llvm::Value* v = llvm::UndefValue::get(vec4Ty);
+            v = ctx.builder.CreateInsertValue(v, x, 0);
+            v = ctx.builder.CreateInsertValue(v, y, 1);
+            v = ctx.builder.CreateInsertValue(v, z, 2);
+            v = ctx.builder.CreateInsertValue(v, w, 3);
+            return ctx.ir_gen->wrap(v);
+        };
+        math.builtinFuncs["quat_identity"] = [quatTy](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            llvm::Function* fn = ctx.module.getFunction("aiml_math_quat_identity");
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(ctx.builder.getVoidTy(), {llvm::PointerType::get(ctx.context,0)}, false),
+                llvm::Function::ExternalLinkage, "aiml_math_quat_identity", ctx.module);
+            llvm::AllocaInst* out = ctx.builder.CreateAlloca(quatTy, nullptr, "qi");
+            ctx.builder.CreateCall(fn, {out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(quatTy, out, "qi_val"));
+        };
+        math.builtinFuncs["mat4_identity"] = [mat4Ty](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            llvm::Function* fn = ctx.module.getFunction("aiml_math_mat4_identity");
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(ctx.builder.getVoidTy(), {llvm::PointerType::get(ctx.context,0)}, false),
+                llvm::Function::ExternalLinkage, "aiml_math_mat4_identity", ctx.module);
+            llvm::AllocaInst* out = ctx.builder.CreateAlloca(mat4Ty, nullptr, "mi");
+            ctx.builder.CreateCall(fn, {out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(mat4Ty, out, "mi_val"));
+        };
+        math.builtinFuncs["ivec2"] = [ivec2Ty](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto getI32 = [&](int idx) -> llvm::Value* {
+                if ((int)args.size() <= idx) return ctx.builder.getInt32(0);
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[idx]));
+                if (!v->getType()->isIntegerTy(32)) v = ctx.builder.CreateSExtOrTrunc(v, ctx.builder.getInt32Ty());
+                return v;
+            };
+            llvm::Value* v = llvm::UndefValue::get(ivec2Ty);
+            v = ctx.builder.CreateInsertValue(v, getI32(0), 0);
+            v = ctx.builder.CreateInsertValue(v, getI32(1), 1);
+            return ctx.ir_gen->wrap(v);
+        };
+        math.builtinFuncs["ivec3"] = [ivec3Ty](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto getI32 = [&](int idx) -> llvm::Value* {
+                if ((int)args.size() <= idx) return ctx.builder.getInt32(0);
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[idx]));
+                if (!v->getType()->isIntegerTy(32)) v = ctx.builder.CreateSExtOrTrunc(v, ctx.builder.getInt32Ty());
+                return v;
+            };
+            llvm::Value* v = llvm::UndefValue::get(ivec3Ty);
+            v = ctx.builder.CreateInsertValue(v, getI32(0), 0);
+            v = ctx.builder.CreateInsertValue(v, getI32(1), 1);
+            v = ctx.builder.CreateInsertValue(v, getI32(2), 2);
+            v = ctx.builder.CreateInsertValue(v, ctx.builder.getInt32(0), 3);
+            return ctx.ir_gen->wrap(v);
+        };
+
+        // ── Scalar math (libm wrappers or LLVM intrinsics) ────────────────
+        // to_radians / to_degrees
+        math.builtinFuncs["to_radians"] = [toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            llvm::Value* v = args.empty() ? llvm::ConstantFP::get(ctx.builder.getFloatTy(), 0.0)
+                                          : toF32(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])));
+            llvm::Value* pi = llvm::ConstantFP::get(ctx.builder.getFloatTy(), 3.14159265358979323846f);
+            llvm::Value* d180 = llvm::ConstantFP::get(ctx.builder.getFloatTy(), 180.0f);
+            return ctx.ir_gen->wrap(ctx.builder.CreateFMul(v, ctx.builder.CreateFDiv(pi, d180)));
+        };
+        math.builtinFuncs["to_degrees"] = [toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            llvm::Value* v = args.empty() ? llvm::ConstantFP::get(ctx.builder.getFloatTy(), 0.0)
+                                          : toF32(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])));
+            llvm::Value* pi = llvm::ConstantFP::get(ctx.builder.getFloatTy(), 3.14159265358979323846f);
+            llvm::Value* d180 = llvm::ConstantFP::get(ctx.builder.getFloatTy(), 180.0f);
+            return ctx.ir_gen->wrap(ctx.builder.CreateFMul(v, ctx.builder.CreateFDiv(d180, pi)));
+        };
+
+        // Declare libm f32 functions once
+        auto libmF1 = [&](const char* aimlName, const char* cName) {
+            math.builtinFuncs[aimlName] = [cName, toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                llvm::Function* fn = ctx.module.getFunction(cName);
+                if (!fn) fn = llvm::Function::Create(
+                    llvm::FunctionType::get(ctx.builder.getFloatTy(), {ctx.builder.getFloatTy()}, false),
+                    llvm::Function::ExternalLinkage, cName, ctx.module);
+                llvm::Value* v = args.empty() ? llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0)
+                                             : toF32(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])));
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {v}));
+            };
+        };
+        libmF1("sin",   "sinf");
+        libmF1("cos",   "cosf");
+        libmF1("tan",   "tanf");
+        libmF1("asin",  "asinf");
+        libmF1("acos",  "acosf");
+        libmF1("sqrt",  "sqrtf");
+        libmF1("log",   "logf");
+        libmF1("log2",  "log2f");
+        libmF1("floor", "floorf");
+        libmF1("ceil",  "ceilf");
+        libmF1("round", "roundf");
+        libmF1("abs",   "fabsf");
+
+        // atan2 (2-arg)
+        math.builtinFuncs["atan2"] = [toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            llvm::Function* fn = ctx.module.getFunction("atan2f");
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(ctx.builder.getFloatTy(),
+                    {ctx.builder.getFloatTy(), ctx.builder.getFloatTy()}, false),
+                llvm::Function::ExternalLinkage, "atan2f", ctx.module);
+            auto g = [&](int i) { return args.size()>(size_t)i ? toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))) : llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0); };
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {g(0), g(1)}));
+        };
+
+        // pow (2-arg)
+        math.builtinFuncs["pow"] = [toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            llvm::Function* fn = ctx.module.getFunction("powf");
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(ctx.builder.getFloatTy(),
+                    {ctx.builder.getFloatTy(), ctx.builder.getFloatTy()}, false),
+                llvm::Function::ExternalLinkage, "powf", ctx.module);
+            auto g = [&](int i) { return args.size()>(size_t)i ? toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))) : llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0); };
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {g(0), g(1)}));
+        };
+
+        // fmod
+        math.builtinFuncs["fmod"] = [toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            llvm::Function* fn = ctx.module.getFunction("fmodf");
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(ctx.builder.getFloatTy(),
+                    {ctx.builder.getFloatTy(), ctx.builder.getFloatTy()}, false),
+                llvm::Function::ExternalLinkage, "fmodf", ctx.module);
+            auto g = [&](int i) { return args.size()>(size_t)i ? toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))) : llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0); };
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {g(0), g(1)}));
+        };
+
+        // fract = x - floor(x)
+        math.builtinFuncs["fract"] = [toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            llvm::Value* v = args.empty() ? llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0)
+                                          : toF32(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])));
+            llvm::Function* flFn = ctx.module.getFunction("floorf");
+            if (!flFn) flFn = llvm::Function::Create(
+                llvm::FunctionType::get(ctx.builder.getFloatTy(),{ctx.builder.getFloatTy()},false),
+                llvm::Function::ExternalLinkage,"floorf",ctx.module);
+            return ctx.ir_gen->wrap(ctx.builder.CreateFSub(v, ctx.builder.CreateCall(flFn,{v})));
+        };
+
+        // sign
+        math.builtinFuncs["sign"] = [toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            llvm::Value* v = args.empty() ? llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0)
+                                          : toF32(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])));
+            llvm::Value* pos = ctx.builder.CreateFCmpOGT(v, llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0));
+            llvm::Value* neg = ctx.builder.CreateFCmpOLT(v, llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0));
+            llvm::Value* p = ctx.builder.CreateUIToFP(pos, ctx.builder.getFloatTy());
+            llvm::Value* n = ctx.builder.CreateUIToFP(neg, ctx.builder.getFloatTy());
+            return ctx.ir_gen->wrap(ctx.builder.CreateFSub(p, n));
+        };
+
+        // min / max (f32)
+        // Helper: emit call to aiml_math_fmin_list / aiml_math_fmax_list(float* data, i32 len)
+        auto callListReduce = [](CompilerContext& ctx, const char* cName,
+                                  llvm::Value* dataPtr, llvm::Value* len) -> llvm::Value* {
+            auto* op = llvm::PointerType::get(ctx.context, 0);
+            llvm::Function* fn = ctx.module.getFunction(cName);
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(ctx.builder.getFloatTy(),
+                    {op, ctx.builder.getInt32Ty()}, false),
+                llvm::Function::ExternalLinkage, cName, ctx.module);
+            return ctx.builder.CreateCall(fn, {dataPtr, len});
+        };
+        // Helper: detect if a loaded value is a list struct {i32, i32, i8*}
+        auto isListStruct = [](llvm::Type* ty) -> bool {
+            auto* st = llvm::dyn_cast<llvm::StructType>(ty);
+            return st && st->getNumElements() == 3 &&
+                   st->getElementType(0)->isIntegerTy(32) &&
+                   st->getElementType(1)->isIntegerTy(32) &&
+                   st->getElementType(2)->isPointerTy();
+        };
+
+        math.builtinFuncs["min"] = [toF32, callListReduce, isListStruct]
+            (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0));
+            llvm::Value* a0 = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            // list<f32>: single struct arg {i32, i32, i8*}
+            if (args.size() == 1 && isListStruct(a0->getType())) {
+                llvm::Value* len  = ctx.builder.CreateExtractValue(a0, {0u});
+                llvm::Value* data = ctx.builder.CreateExtractValue(a0, {2u});
+                return ctx.ir_gen->wrap(callListReduce(ctx, "aiml_math_fmin_list", data, len));
+            }
+            // ptr+len: (i8*, i32)
+            if (args.size() == 2) {
+                llvm::Value* a1 = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+                if (a0->getType()->isPointerTy() && a1->getType()->isIntegerTy(32))
+                    return ctx.ir_gen->wrap(callListReduce(ctx, "aiml_math_fmin_list", a0, a1));
+            }
+            // 2-scalar fallback
+            auto g = [&](int i) { return args.size()>(size_t)i ? toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))) : llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0); };
+            llvm::Value* fa=g(0), *fb=g(1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateSelect(ctx.builder.CreateFCmpOLT(fa,fb), fa, fb));
+        };
+        math.builtinFuncs["max"] = [toF32, callListReduce, isListStruct]
+            (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0));
+            llvm::Value* a0 = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            // list<f32>: single struct arg {i32, i32, i8*}
+            if (args.size() == 1 && isListStruct(a0->getType())) {
+                llvm::Value* len  = ctx.builder.CreateExtractValue(a0, {0u});
+                llvm::Value* data = ctx.builder.CreateExtractValue(a0, {2u});
+                return ctx.ir_gen->wrap(callListReduce(ctx, "aiml_math_fmax_list", data, len));
+            }
+            // ptr+len: (i8*, i32)
+            if (args.size() == 2) {
+                llvm::Value* a1 = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+                if (a0->getType()->isPointerTy() && a1->getType()->isIntegerTy(32))
+                    return ctx.ir_gen->wrap(callListReduce(ctx, "aiml_math_fmax_list", a0, a1));
+            }
+            // 2-scalar fallback
+            auto g = [&](int i) { return args.size()>(size_t)i ? toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))) : llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0); };
+            llvm::Value* fa=g(0), *fb=g(1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateSelect(ctx.builder.CreateFCmpOGT(fa,fb), fa, fb));
+        };
+
+        // clamp(x, lo, hi)
+        math.builtinFuncs["clamp"] = [toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto g = [&](int i) { return args.size()>(size_t)i ? toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))) : llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0); };
+            llvm::Value* x=g(0), *lo=g(1), *hi=g(2);
+            llvm::Value* clamped = ctx.builder.CreateSelect(ctx.builder.CreateFCmpOLT(x,lo), lo,
+                                   ctx.builder.CreateSelect(ctx.builder.CreateFCmpOGT(x,hi), hi, x));
+            return ctx.ir_gen->wrap(clamped);
+        };
+
+        // smoothstep(edge0, edge1, x)
+        math.builtinFuncs["smoothstep"] = [toF32](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto g = [&](int i) { return args.size()>(size_t)i ? toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))) : llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0); };
+            llvm::Value* e0=g(0), *e1=g(1), *x=g(2);
+            // t = clamp((x-e0)/(e1-e0), 0, 1)
+            llvm::Value* range = ctx.builder.CreateFSub(e1, e0);
+            llvm::Value* t = ctx.builder.CreateFDiv(ctx.builder.CreateFSub(x, e0), range);
+            llvm::Value* zero = llvm::ConstantFP::get(ctx.builder.getFloatTy(), 0.0);
+            llvm::Value* one  = llvm::ConstantFP::get(ctx.builder.getFloatTy(), 1.0);
+            llvm::Value* two  = llvm::ConstantFP::get(ctx.builder.getFloatTy(), 2.0);
+            llvm::Value* three= llvm::ConstantFP::get(ctx.builder.getFloatTy(), 3.0);
+            t = ctx.builder.CreateSelect(ctx.builder.CreateFCmpOLT(t,zero),zero,
+                ctx.builder.CreateSelect(ctx.builder.CreateFCmpOGT(t,one),one,t));
+            // t*t*(3 - 2*t)
+            llvm::Value* result = ctx.builder.CreateFMul(t, ctx.builder.CreateFMul(t,
+                ctx.builder.CreateFSub(three, ctx.builder.CreateFMul(two, t))));
+            return ctx.ir_gen->wrap(result);
+        };
+
+        // lerp scalar: lerp(a, b, t) = a + (b-a)*t
+        math.builtinFuncs["lerp"] = [toF32, vec2Ty, vec3Ty, vec4Ty, quatTy, storeToTmp]
+                                    (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            if (args.size() < 3) return ctx.ir_gen->getInt32(0);
+            llvm::Value* a = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* b = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            llvm::Value* t = toF32(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2])));
+            llvm::Type*  ty = a->getType();
+
+            // Scalar f32
+            if (ty->isFloatTy() || ty->isDoubleTy()) {
+                llvm::Value* av = toF32(ctx,a); llvm::Value* bv = toF32(ctx,b);
+                return ctx.ir_gen->wrap(ctx.builder.CreateFAdd(av, ctx.builder.CreateFMul(ctx.builder.CreateFSub(bv,av), t)));
+            }
+            // Vec types — call C runtime
+            const char* fnName = nullptr;
+            llvm::Type* structTy = nullptr;
+            if (ty == vec2Ty) { fnName="aiml_math_vec2_lerp"; structTy=vec2Ty; }
+            else if (ty == vec3Ty) { fnName="aiml_math_vec3_lerp"; structTy=vec3Ty; }
+            else if (ty == vec4Ty) { fnName="aiml_math_vec4_lerp"; structTy=vec4Ty; }
+            else if (ty == quatTy) { fnName="aiml_math_quat_lerp"; structTy=quatTy; }
+            if (!fnName) return ctx.ir_gen->getInt32(0);
+            auto opty = llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn = ctx.module.getFunction(fnName);
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(ctx.builder.getVoidTy(),{opty,opty,ctx.builder.getFloatTy(),opty},false),
+                llvm::Function::ExternalLinkage, fnName, ctx.module);
+            llvm::Value* pa = storeToTmp(ctx,a,structTy);
+            llvm::Value* pb = storeToTmp(ctx,b,structTy);
+            llvm::AllocaInst* out = ctx.builder.CreateAlloca(structTy);
+            ctx.builder.CreateCall(fn,{pa,pb,t,out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(structTy,out));
+        };
+
+        // ── Vector functions ──────────────────────────────────────────────
+
+        // dot (works for vec2, vec3)
+        math.builtinFuncs["dot"] = [vec2Ty, vec3Ty, storeToTmp]
+                                   (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            if (args.size() < 2) return ctx.ir_gen->wrap(llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0));
+            llvm::Value* a = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* b = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            llvm::Type* ty = a->getType();
+            const char* nm = (ty == vec2Ty) ? "aiml_math_vec2_dot" : "aiml_math_vec3_dot";
+            llvm::Type* st = (ty == vec2Ty) ? vec2Ty : vec3Ty;
+            auto op = llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn = ctx.module.getFunction(nm);
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(ctx.builder.getFloatTy(),{op,op},false),
+                llvm::Function::ExternalLinkage, nm, ctx.module);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,st),storeToTmp(ctx,b,st)}));
+        };
+
+        // cross
+        math.builtinFuncs["cross"] = [vec3Ty, storeToTmp]
+                                     (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            if (args.size() < 2) return ctx.ir_gen->wrap(llvm::UndefValue::get(vec3Ty));
+            auto op = llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn = ctx.module.getFunction("aiml_math_vec3_cross");
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op,op},false),
+                llvm::Function::ExternalLinkage, "aiml_math_vec3_cross", ctx.module);
+            llvm::Value* a=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* b=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(vec3Ty);
+            ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,vec3Ty),storeToTmp(ctx,b,vec3Ty),out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(vec3Ty,out));
+        };
+
+        // length / length_sq / normalize / distance
+        auto makeVecF = [&](const std::string& mathName, const char* c2, const char* c3, bool returnsVec,
+                            llvm::StructType* fallbackSt, bool isScalar2arg = false) {
+            math.builtinFuncs[mathName] = [c2,c3,returnsVec,fallbackSt,vec2Ty,vec3Ty,storeToTmp,isScalar2arg]
+                (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                if (args.empty()) return ctx.ir_gen->wrap(llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0));
+                llvm::Value* a=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                llvm::Type* ty=a->getType();
+                bool isV2 = (ty==vec2Ty);
+                const char* nm = isV2 ? c2 : c3;
+                llvm::Type* st = isV2 ? (llvm::Type*)vec2Ty : (llvm::Type*)vec3Ty;
+                if (!nm) { nm=c3; st=fallbackSt; }
+                auto op = llvm::PointerType::get(ctx.context,0);
+                if (returnsVec) {
+                    llvm::Function* fn=ctx.module.getFunction(nm);
+                    if (!fn) {
+                        std::vector<llvm::Type*> pts={op,op};
+                        if (isScalar2arg) pts={op,ctx.builder.getFloatTy(),op};
+                        fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),pts,false),
+                            llvm::Function::ExternalLinkage,nm,ctx.module);
+                    }
+                    llvm::AllocaInst* out=ctx.builder.CreateAlloca(st);
+                    if (isScalar2arg && args.size()>=2) {
+                        llvm::Value* t2=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+                        if (!t2->getType()->isFloatTy()) t2=ctx.builder.CreateSIToFP(t2,ctx.builder.getFloatTy());
+                        ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,st),t2,out});
+                    } else {
+                        llvm::Value* b=args.size()>1?storeToTmp(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),st):nullptr;
+                        if (b) ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,st),b,out});
+                        else   ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,st),out});
+                    }
+                    return ctx.ir_gen->wrap(ctx.builder.CreateLoad(static_cast<llvm::Type*>(st),out));
+                } else {
+                    llvm::Function* fn=ctx.module.getFunction(nm);
+                    if (!fn) {
+                        std::vector<llvm::Type*> pts=(args.size()>1)?std::vector<llvm::Type*>{op,op}:std::vector<llvm::Type*>{op};
+                        fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getFloatTy(),pts,false),
+                            llvm::Function::ExternalLinkage,nm,ctx.module);
+                    }
+                    if (args.size()>1){
+                        llvm::Value* b=storeToTmp(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),st);
+                        return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,st),b}));
+                    }
+                    return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,st)}));
+                }
+            };
+        };
+
+        makeVecF("length",    "aiml_math_vec2_length",    "aiml_math_vec3_length",    false, vec3Ty);
+        makeVecF("length_sq", "aiml_math_vec2_length_sq", "aiml_math_vec3_length_sq", false, vec3Ty);
+        makeVecF("normalize", "aiml_math_vec2_normalize", "aiml_math_vec3_normalize", true,  vec3Ty);
+        makeVecF("distance",  "aiml_math_vec2_distance",  "aiml_math_vec3_distance",  false, vec3Ty);
+
+        // angle (vec2 only)
+        math.builtinFuncs["angle"] = [vec2Ty, storeToTmp]
+                                     (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0));
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_vec2_angle");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getFloatTy(),{op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_vec2_angle",ctx.module);
+            llvm::Value* a=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,vec2Ty)}));
+        };
+        // perp (vec2 only)
+        math.builtinFuncs["perp"] = [vec2Ty, storeToTmp]
+                                    (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::UndefValue::get(vec2Ty));
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_vec2_perp");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_vec2_perp",ctx.module);
+            llvm::Value* a=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(vec2Ty);
+            ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,vec2Ty),out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(vec2Ty,out));
+        };
+
+        // reflect / refract
+        math.builtinFuncs["reflect"] = [vec3Ty, storeToTmp]
+                                       (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            if (args.size()<2) return ctx.ir_gen->wrap(llvm::UndefValue::get(vec3Ty));
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_vec3_reflect");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op,op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_vec3_reflect",ctx.module);
+            llvm::Value* a=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* b=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(vec3Ty);
+            ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,vec3Ty),storeToTmp(ctx,b,vec3Ty),out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(vec3Ty,out));
+        };
+        math.builtinFuncs["refract"] = [vec3Ty, storeToTmp, toF32]
+                                        (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            if (args.size()<3) return ctx.ir_gen->wrap(llvm::UndefValue::get(vec3Ty));
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_vec3_refract");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op,ctx.builder.getFloatTy(),op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_vec3_refract",ctx.module);
+            llvm::Value* a=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* b=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            llvm::Value* ior=toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2])));
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(vec3Ty);
+            ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,vec3Ty),storeToTmp(ctx,b,vec3Ty),ior,out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(vec3Ty,out));
+        };
+
+        // ── Matrix functions ──────────────────────────────────────────────
+        auto mathMat1V3Out = [&](const std::string& aimlNm, const char* cNm) {
+            math.builtinFuncs[aimlNm] = [cNm, mat4Ty, vec3Ty, storeToTmp]
+                (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto op=llvm::PointerType::get(ctx.context,0);
+                llvm::Function* fn=ctx.module.getFunction(cNm);
+                if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op},false),
+                    llvm::Function::ExternalLinkage,cNm,ctx.module);
+                llvm::AllocaInst* out=ctx.builder.CreateAlloca(mat4Ty);
+                if (!args.empty()) {
+                    llvm::Value* v=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                    ctx.builder.CreateCall(fn,{storeToTmp(ctx,v,vec3Ty),out});
+                }
+                return ctx.ir_gen->wrap(ctx.builder.CreateLoad(mat4Ty,out));
+            };
+        };
+        mathMat1V3Out("mat4_translate", "aiml_math_mat4_translate");
+        mathMat1V3Out("mat4_scale",     "aiml_math_mat4_scale");
+
+        auto mathMatRotXYZ = [&](const std::string& aimlNm, const char* cNm) {
+            math.builtinFuncs[aimlNm] = [cNm, mat4Ty, toF32]
+                (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto op=llvm::PointerType::get(ctx.context,0);
+                llvm::Function* fn=ctx.module.getFunction(cNm);
+                if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{ctx.builder.getFloatTy(),op},false),
+                    llvm::Function::ExternalLinkage,cNm,ctx.module);
+                llvm::AllocaInst* out=ctx.builder.CreateAlloca(mat4Ty);
+                llvm::Value* a=args.empty()?llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0):toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])));
+                ctx.builder.CreateCall(fn,{a,out});
+                return ctx.ir_gen->wrap(ctx.builder.CreateLoad(mat4Ty,out));
+            };
+        };
+        mathMatRotXYZ("mat4_rotate_x", "aiml_math_mat4_rotate_x");
+        mathMatRotXYZ("mat4_rotate_y", "aiml_math_mat4_rotate_y");
+        mathMatRotXYZ("mat4_rotate_z", "aiml_math_mat4_rotate_z");
+
+        // mat4_rotate(axis, angle)
+        math.builtinFuncs["mat4_rotate"] = [mat4Ty, vec3Ty, storeToTmp, toF32]
+            (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_mat4_rotate");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,ctx.builder.getFloatTy(),op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_mat4_rotate",ctx.module);
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(mat4Ty);
+            llvm::Value* axis=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(vec3Ty);
+            llvm::Value* ang =args.size()>1?toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))):llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0);
+            ctx.builder.CreateCall(fn,{storeToTmp(ctx,axis,vec3Ty),ang,out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(mat4Ty,out));
+        };
+
+        // mat4_perspective(fov, aspect, near, far)
+        math.builtinFuncs["mat4_perspective"] = [mat4Ty, toF32]
+            (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_mat4_perspective");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),
+                {ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_mat4_perspective",ctx.module);
+            auto g=[&](int i){return args.size()>(size_t)i?toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))):llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0);};
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(mat4Ty);
+            ctx.builder.CreateCall(fn,{g(0),g(1),g(2),g(3),out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(mat4Ty,out));
+        };
+
+        // mat4_ortho(l, r, b, t, near, far)
+        math.builtinFuncs["mat4_ortho"] = [mat4Ty, toF32]
+            (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_mat4_ortho");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),
+                {ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_mat4_ortho",ctx.module);
+            auto g=[&](int i){return args.size()>(size_t)i?toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))):llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0);};
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(mat4Ty);
+            ctx.builder.CreateCall(fn,{g(0),g(1),g(2),g(3),g(4),g(5),out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(mat4Ty,out));
+        };
+
+        // mat4_lookat(eye, center, up)
+        math.builtinFuncs["mat4_lookat"] = [mat4Ty, vec3Ty, storeToTmp]
+            (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_mat4_lookat");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op,op,op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_mat4_lookat",ctx.module);
+            auto gv=[&](int i)->llvm::Value*{return args.size()>(size_t)i?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])):llvm::UndefValue::get(vec3Ty);};
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(mat4Ty);
+            ctx.builder.CreateCall(fn,{storeToTmp(ctx,gv(0),vec3Ty),storeToTmp(ctx,gv(1),vec3Ty),storeToTmp(ctx,gv(2),vec3Ty),out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(mat4Ty,out));
+        };
+
+        // mat4_inverse / mat4_transpose
+        auto mathMat1MatOut = [&](const std::string& aimlNm, const char* cNm) {
+            math.builtinFuncs[aimlNm] = [cNm, mat4Ty, storeToTmp]
+                (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto op=llvm::PointerType::get(ctx.context,0);
+                llvm::Function* fn=ctx.module.getFunction(cNm);
+                if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op},false),
+                    llvm::Function::ExternalLinkage,cNm,ctx.module);
+                llvm::AllocaInst* out=ctx.builder.CreateAlloca(mat4Ty);
+                if (!args.empty()) {
+                    llvm::Value* m=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                    ctx.builder.CreateCall(fn,{storeToTmp(ctx,m,mat4Ty),out});
+                }
+                return ctx.ir_gen->wrap(ctx.builder.CreateLoad(mat4Ty,out));
+            };
+        };
+        mathMat1MatOut("mat4_inverse",   "aiml_math_mat4_inverse");
+        mathMat1MatOut("mat4_transpose", "aiml_math_mat4_transpose");
+
+        // mat4_to_buffer
+        math.builtinFuncs["mat4_to_buffer"] = [mat4Ty, storeToTmp]
+            (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_mat4_to_buffer");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(op,{op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_mat4_to_buffer",ctx.module);
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(op)));
+            llvm::Value* m=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn,{storeToTmp(ctx,m,mat4Ty)}));
+        };
+
+        // mat4_to_quat
+        math.builtinFuncs["mat4_to_quat"] = [mat4Ty, quatTy, storeToTmp]
+            (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_mat4_to_quat");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_mat4_to_quat",ctx.module);
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(quatTy);
+            if (!args.empty()) {
+                llvm::Value* m=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                ctx.builder.CreateCall(fn,{storeToTmp(ctx,m,mat4Ty),out});
+            }
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(quatTy,out));
+        };
+
+        // ── Quaternion functions ──────────────────────────────────────────
+        // quat_axis_angle(axis, angle)
+        math.builtinFuncs["quat_axis_angle"] = [quatTy, vec3Ty, storeToTmp, toF32]
+            (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_quat_axis_angle");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,ctx.builder.getFloatTy(),op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_quat_axis_angle",ctx.module);
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(quatTy);
+            llvm::Value* axis=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(vec3Ty);
+            llvm::Value* ang =args.size()>1?toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))):llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0);
+            ctx.builder.CreateCall(fn,{storeToTmp(ctx,axis,vec3Ty),ang,out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(quatTy,out));
+        };
+
+        // quat_euler(x, y, z)
+        math.builtinFuncs["quat_euler"] = [quatTy, toF32]
+            (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_quat_euler");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),
+                {ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_quat_euler",ctx.module);
+            auto g=[&](int i){return args.size()>(size_t)i?toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))):llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0);};
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(quatTy);
+            ctx.builder.CreateCall(fn,{g(0),g(1),g(2),out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(quatTy,out));
+        };
+
+        // quat_mul / quat_normalize / quat_inverse / quat_to_mat4
+        auto quatBin = [&](const std::string& nm, const char* cn) {
+            math.builtinFuncs[nm] = [cn, quatTy, storeToTmp]
+                (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto op=llvm::PointerType::get(ctx.context,0);
+                llvm::Function* fn=ctx.module.getFunction(cn);
+                if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op,op},false),
+                    llvm::Function::ExternalLinkage,cn,ctx.module);
+                llvm::AllocaInst* out=ctx.builder.CreateAlloca(quatTy);
+                llvm::Value* a=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(quatTy);
+                llvm::Value* b=args.size()>1?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])):a;
+                ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,quatTy),storeToTmp(ctx,b,quatTy),out});
+                return ctx.ir_gen->wrap(ctx.builder.CreateLoad(quatTy,out));
+            };
+        };
+        auto quatUn = [&](const std::string& nm, const char* cn) {
+            math.builtinFuncs[nm] = [cn, quatTy, storeToTmp]
+                (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto op=llvm::PointerType::get(ctx.context,0);
+                llvm::Function* fn=ctx.module.getFunction(cn);
+                if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op},false),
+                    llvm::Function::ExternalLinkage,cn,ctx.module);
+                llvm::AllocaInst* out=ctx.builder.CreateAlloca(quatTy);
+                llvm::Value* a=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(quatTy);
+                ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,quatTy),out});
+                return ctx.ir_gen->wrap(ctx.builder.CreateLoad(quatTy,out));
+            };
+        };
+        quatBin("quat_mul",  "aiml_math_quat_mul");
+        quatUn ("quat_normalize", "aiml_math_quat_normalize");
+        quatUn ("quat_inverse",   "aiml_math_quat_inverse");
+
+        // quat_rotate_vec3(q, v)
+        math.builtinFuncs["quat_rotate_vec3"] = [quatTy, vec3Ty, storeToTmp]
+            (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_quat_rotate_vec3");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op,op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_quat_rotate_vec3",ctx.module);
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(vec3Ty);
+            llvm::Value* q=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(quatTy);
+            llvm::Value* v=args.size()>1?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])):llvm::UndefValue::get(vec3Ty);
+            ctx.builder.CreateCall(fn,{storeToTmp(ctx,q,quatTy),storeToTmp(ctx,v,vec3Ty),out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(vec3Ty,out));
+        };
+
+        // quat_to_mat4
+        math.builtinFuncs["quat_to_mat4"] = [quatTy, mat4Ty, storeToTmp]
+            (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_quat_to_mat4");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_quat_to_mat4",ctx.module);
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(mat4Ty);
+            llvm::Value* q=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(quatTy);
+            ctx.builder.CreateCall(fn,{storeToTmp(ctx,q,quatTy),out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(mat4Ty,out));
+        };
+
+        // quat_slerp
+        math.builtinFuncs["quat_slerp"] = [quatTy, storeToTmp, toF32]
+            (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_quat_slerp");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op,ctx.builder.getFloatTy(),op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_quat_slerp",ctx.module);
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(quatTy);
+            llvm::Value* a=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(quatTy);
+            llvm::Value* b=args.size()>1?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])):a;
+            llvm::Value* t=args.size()>2?toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))):llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.5);
+            ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,quatTy),storeToTmp(ctx,b,quatTy),t,out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(quatTy,out));
+        };
+
+        // ── Integer vector ops ────────────────────────────────────────────
+        math.builtinFuncs["idiv"] = [ivec2Ty, storeToTmp]
+            (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_ivec2_div");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,ctx.builder.getInt32Ty(),op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_ivec2_div",ctx.module);
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(ivec2Ty);
+            llvm::Value* a=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(ivec2Ty);
+            llvm::Value* s=args.size()>1?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])):ctx.builder.getInt32(1);
+            if (s->getType()->isFloatTy()||s->getType()->isDoubleTy()) s=ctx.builder.CreateFPToSI(s,ctx.builder.getInt32Ty());
+            ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,ivec2Ty),s,out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ivec2Ty,out));
+        };
+        math.builtinFuncs["iadd"] = [ivec2Ty, storeToTmp]
+            (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_ivec2_add");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op,op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_ivec2_add",ctx.module);
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(ivec2Ty);
+            llvm::Value* a=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(ivec2Ty);
+            llvm::Value* b=args.size()>1?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])):a;
+            ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,ivec2Ty),storeToTmp(ctx,b,ivec2Ty),out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ivec2Ty,out));
+        };
+        math.builtinFuncs["ivec2_to_vec2"] = [ivec2Ty, vec2Ty, storeToTmp]
+            (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_ivec2_to_vec2");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_ivec2_to_vec2",ctx.module);
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(vec2Ty);
+            llvm::Value* a=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(ivec2Ty);
+            ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,ivec2Ty),out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(vec2Ty,out));
+        };
+        math.builtinFuncs["vec2_to_ivec2"] = [ivec2Ty, vec2Ty, storeToTmp]
+            (CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto op=llvm::PointerType::get(ctx.context,0);
+            llvm::Function* fn=ctx.module.getFunction("aiml_math_vec2_to_ivec2");
+            if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op},false),
+                llvm::Function::ExternalLinkage,"aiml_math_vec2_to_ivec2",ctx.module);
+            llvm::AllocaInst* out=ctx.builder.CreateAlloca(ivec2Ty);
+            llvm::Value* a=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(vec2Ty);
+            ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,vec2Ty),out});
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ivec2Ty,out));
+        };
+    } // end math namespace
+
+    // -----------------------------------------------------------------------
+    // hash namespace
+    // -----------------------------------------------------------------------
+    {
+        auto& hash = ctx.namespaces["hash"];
+        auto* i32t = ctx.builder.getInt32Ty();
+
+        /* Helper: declare or get (ptr→ptr) function for 1-arg hash functions */
+        auto declHash1 = [&](const char* name) -> llvm::Function* {
+            llvm::Function* fn = ctx.module.getFunction(name);
+            if (!fn)
+                fn = llvm::Function::Create(
+                    llvm::FunctionType::get(llvm::PointerType::get(ctx.context,0),
+                                            {llvm::PointerType::get(ctx.context,0)}, false),
+                    llvm::Function::ExternalLinkage, name, ctx.module);
+            return fn;
+        };
+        /* Helper: declare or get (ptr,ptr→ptr) function for 2-arg hash functions */
+        auto declHash2 = [&](const char* name) -> llvm::Function* {
+            llvm::Function* fn = ctx.module.getFunction(name);
+            auto* p = llvm::PointerType::get(ctx.context,0);
+            if (!fn)
+                fn = llvm::Function::Create(
+                    llvm::FunctionType::get(p, {p, p}, false),
+                    llvm::Function::ExternalLinkage, name, ctx.module);
+            return fn;
+        };
+
+#define REG_HASH1(aimlName, cName) \
+        hash.builtinFuncs[aimlName] = [declHash1](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
+            auto* fn = declHash1(cName); \
+            auto* p = llvm::PointerType::get(ctx.context,0); \
+            llvm::Value* a = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) \
+                                              : llvm::Constant::getNullValue(p); \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {a})); \
+        };
+
+#define REG_HASH2(aimlName, cName) \
+        hash.builtinFuncs[aimlName] = [declHash2](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
+            auto* fn = declHash2(cName); \
+            auto* p = llvm::PointerType::get(ctx.context, 0); \
+            llvm::Value* a0 = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) \
+                                               : llvm::Constant::getNullValue(p); \
+            llvm::Value* a1 = args.size() > 1 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])) \
+                                               : llvm::Constant::getNullValue(p); \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {a0, a1})); \
+        };
+
+        REG_HASH1("sha256",        "aiml_hash_sha256")
+        REG_HASH1("sha512",        "aiml_hash_sha512")
+        REG_HASH1("sha3_256",      "aiml_hash_sha3_256")
+        REG_HASH1("keccak256",     "aiml_hash_keccak256")
+        REG_HASH1("ripemd160",     "aiml_hash_ripemd160")
+        REG_HASH1("blake2b",       "aiml_hash_blake2b")
+        REG_HASH1("blake2s",       "aiml_hash_blake2s")
+        REG_HASH1("md5",           "aiml_hash_md5")
+        REG_HASH1("sha256_raw",    "aiml_hash_sha256_raw")
+        REG_HASH1("sha512_raw",    "aiml_hash_sha512_raw")
+        REG_HASH1("sha3_256_raw",  "aiml_hash_sha3_256_raw")
+        REG_HASH1("keccak256_raw", "aiml_hash_keccak256_raw")
+        REG_HASH1("ripemd160_raw", "aiml_hash_ripemd160_raw")
+        REG_HASH1("blake2b_raw",   "aiml_hash_blake2b_raw")
+        REG_HASH2("hmac_sha256",      "aiml_hash_hmac_sha256")
+        REG_HASH2("hmac_sha512",      "aiml_hash_hmac_sha512")
+        REG_HASH2("hmac_sha256_raw",  "aiml_hash_hmac_sha256_raw")
+
+#undef REG_HASH1
+#undef REG_HASH2
+
+        /* crc32: returns i32 */
+        hash.builtinFuncs["crc32"] = [i32t](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Function* fn = ctx.module.getFunction("aiml_hash_crc32");
+            if (!fn)
+                fn = llvm::Function::Create(
+                    llvm::FunctionType::get(i32t, {p}, false),
+                    llvm::Function::ExternalLinkage, "aiml_hash_crc32", ctx.module);
+            llvm::Value* a = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+                                             : llvm::Constant::getNullValue(p);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {a}));
+        };
+    } // end hash namespace
 }
