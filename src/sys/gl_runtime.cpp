@@ -70,9 +70,20 @@ static AimlGLBuffer* make_buffer(GLenum target, const AimlGLRawBuf* src, GLenum 
     AimlGLBuffer* b = new AimlGLBuffer();
     b->target = target;
     glGenBuffers(1, &b->id);
+    /* For element array buffers, temporarily unbind any active VAO.
+       In OpenGL Core Profile the GL_ELEMENT_ARRAY_BUFFER binding is stored
+       per-VAO; glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0) at the end of this
+       function would otherwise silently clear the currently-bound VAO's IBO. */
+    GLint prev_vao = 0;
+    if (target == GL_ELEMENT_ARRAY_BUFFER) {
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prev_vao);
+        if (prev_vao) glBindVertexArray(0);
+    }
     glBindBuffer(target, b->id);
     glBufferData(target, src ? src->size : 0, src ? src->data : nullptr, usage);
     glBindBuffer(target, 0);
+    if (target == GL_ELEMENT_ARRAY_BUFFER && prev_vao)
+        glBindVertexArray((GLuint)prev_vao);
     return b;
 }
 
@@ -163,6 +174,9 @@ void aiml_gl_cull_front(void)  { glCullFace(GL_FRONT); }
 void aiml_gl_wireframe(int8_t on) {
     glPolygonMode(GL_FRONT_AND_BACK, on ? GL_LINE : GL_FILL);
 }
+void aiml_gl_polygon_offset(float factor, float units) { glPolygonOffset(factor, units); }
+void aiml_gl_enable_polygon_offset_fill(void)  { glEnable(GL_POLYGON_OFFSET_FILL); }
+void aiml_gl_disable_polygon_offset_fill(void) { glDisable(GL_POLYGON_OFFSET_FILL); }
 
 /* ── Buffer ─────────────────────────────────────────────────────────────── */
 
@@ -424,6 +438,12 @@ void aiml_gl_draw_elements(void* vao, int32_t count) {
     if (!vao) return;
     glBindVertexArray(((AimlGLVao*)vao)->id);
     glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, nullptr);
+}
+
+void aiml_gl_draw_lines(void* vao, int32_t count) {
+    if (!vao) return;
+    glBindVertexArray(((AimlGLVao*)vao)->id);
+    glDrawElements(GL_LINES, count, GL_UNSIGNED_INT, nullptr);
 }
 
 void aiml_gl_draw_arrays_mode(void* vao, int32_t mode, int32_t count) {

@@ -4406,6 +4406,31 @@ void registerBuiltins(CompilerContext& ctx) {
                 return nullptr;
             };
 
+            // gl.polygon_offset(factor, units: f32) → void
+            gl.builtinFuncs["polygon_offset"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* f32 = ctx.builder.getFloatTy();
+                auto g = [&](int i) -> llvm::Value* {
+                    if ((int)args.size() <= i) return llvm::ConstantFP::get(f32, 0.0);
+                    llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
+                    return v->getType()->isFloatTy() ? v : ctx.builder.CreateFPCast(v, f32);
+                };
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gl_polygon_offset",
+                    ctx.builder.getVoidTy(), {f32, f32}), {g(0), g(1)});
+                return nullptr;
+            };
+            // gl.enable_polygon_offset_fill() / disable_polygon_offset_fill()
+#define GL_NS_VOID0_INLINE(name, cName) \
+            gl.builtinFuncs[name] = [](CompilerContext& ctx, \
+                const std::vector<AIML::IRValue*>&) -> AIML::IRValue* { \
+                ctx.builder.CreateCall(ctx.getFunction(cName, \
+                    ctx.builder.getVoidTy(), {}), {}); \
+                return nullptr; \
+            };
+            GL_NS_VOID0_INLINE("enable_polygon_offset_fill",  "aiml_gl_enable_polygon_offset_fill")
+            GL_NS_VOID0_INLINE("disable_polygon_offset_fill", "aiml_gl_disable_polygon_offset_fill")
+#undef GL_NS_VOID0_INLINE
+
             // gl.create_buffer / create_buffer_dynamic / create_index_buffer: (data_buf) → gl_buffer
 #define GL_NS_MKBUF(name, cName) \
             gl.builtinFuncs[name] = [](CompilerContext& ctx, \
@@ -4529,6 +4554,7 @@ void registerBuiltins(CompilerContext& ctx) {
             };
             GL_NS_DRAW("draw_arrays",   "aiml_gl_draw_arrays")
             GL_NS_DRAW("draw_elements", "aiml_gl_draw_elements")
+            GL_NS_DRAW("draw_lines",    "aiml_gl_draw_lines")
 #undef GL_NS_DRAW
 
             // gl.draw_arrays_mode(vao, mode, count) → void
