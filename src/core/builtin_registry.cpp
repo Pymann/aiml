@@ -10,6 +10,7 @@
 #include "../../src/sys/net_runtime.h"
 #include "../../src/sys/db_runtime.h"
 #include "../../src/sys/http_runtime.h"
+#include "../../src/sys/compress_runtime.h"
 #include <llvm/IR/IRBuilder.h>
 
 using IRValue = AIML::IRValue;
@@ -106,6 +107,54 @@ void registerBuiltins(CompilerContext& ctx) {
         vrInfo.members["id"]    = idMember;
         vrInfo.members["score"] = scoreMember;
         ctx.classes["VecResult"] = std::move(vrInfo);
+    }
+
+    // -----------------------------------------------------------------------
+    // zip_entry — archive entry struct for compress.zip_entries
+    // Layout: { ptr name, i64 size, i64 compressed_size, i32 is_dir, i32 crc32, i32 method, i32 _pad }
+    // -----------------------------------------------------------------------
+    {
+        llvm::Type* p   = llvm::PointerType::get(ctx.context, 0);
+        llvm::Type* i64 = ctx.builder.getInt64Ty();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        llvm::StructType* zeTy = llvm::StructType::getTypeByName(ctx.context, "zip_entry");
+        if (!zeTy) zeTy = llvm::StructType::create(ctx.context, {p, i64, i64, i32, i32, i32, i32}, "zip_entry");
+
+        CompilerContext::ClassInfo zi;
+        zi.name = "zip_entry"; zi.type = zeTy; zi.isBuiltin = false;
+        auto mk = [](llvm::Type* t, int idx, const std::string& tn) {
+            CompilerContext::StructMember m; m.type = t; m.index = idx; m.typeName = tn; return m;
+        };
+        zi.members["name"]            = mk(p,   0, "string");
+        zi.members["size"]            = mk(i64, 1, "i64");
+        zi.members["compressed_size"] = mk(i64, 2, "i64");
+        zi.members["is_dir"]          = mk(i32, 3, "i32");
+        zi.members["crc32"]           = mk(i32, 4, "i32");
+        zi.members["method"]          = mk(i32, 5, "i32");
+        ctx.classes["zip_entry"] = std::move(zi);
+    }
+
+    // -----------------------------------------------------------------------
+    // tar_entry — archive entry struct for compress.tar_entries
+    // Layout: { ptr name, i64 size, i32 is_dir, i32 mode }
+    // -----------------------------------------------------------------------
+    {
+        llvm::Type* p   = llvm::PointerType::get(ctx.context, 0);
+        llvm::Type* i64 = ctx.builder.getInt64Ty();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        llvm::StructType* teTy = llvm::StructType::getTypeByName(ctx.context, "tar_entry");
+        if (!teTy) teTy = llvm::StructType::create(ctx.context, {p, i64, i32, i32}, "tar_entry");
+
+        CompilerContext::ClassInfo ti;
+        ti.name = "tar_entry"; ti.type = teTy; ti.isBuiltin = false;
+        auto mk = [](llvm::Type* t, int idx, const std::string& tn) {
+            CompilerContext::StructMember m; m.type = t; m.index = idx; m.typeName = tn; return m;
+        };
+        ti.members["name"]   = mk(p,   0, "string");
+        ti.members["size"]   = mk(i64, 1, "i64");
+        ti.members["is_dir"] = mk(i32, 2, "i32");
+        ti.members["mode"]   = mk(i32, 3, "i32");
+        ctx.classes["tar_entry"] = std::move(ti);
     }
 
     // -----------------------------------------------------------------------
@@ -438,6 +487,12 @@ void registerBuiltins(CompilerContext& ctx) {
         BufferImpl::seek(ctx, baseAlloca, pos32, false);
         BufferImpl::seek(ctx, baseAlloca, pos32, true);
         return ctx.ir_gen->getInt32(0);
+    };
+
+    bufInfo.builtinMethods["len"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+        auto* sizePtr = ctx.builder.CreateStructGEP(ctx.getLLVMType("buffer"), baseAlloca, 0, "buf_len_ptr");
+        return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), sizePtr, "buf_len"));
     };
 
     bufInfo.builtinMethods["read_versioned"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
@@ -3455,4 +3510,172 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {a}));
         };
     } // end hash namespace
+
+    // ── compress namespace ────────────────────────────────────────────────
+    // NOTE: Handler lambdas must NOT capture local variables by reference —
+    // they are stored and called later after registerBuiltins() has returned.
+    // All LLVM types must be recomputed from the ctx parameter inside the lambda.
+    {
+        auto& compress = ctx.namespaces["compress"];
+
+        /* Helper: memcpy a heap AimlCompressBuffer* into a fresh stack alloca and return it.
+         * visitDeclStmt will then memcpy the alloca content into the target buffer<u8> alloca. */
+#define COMP_HEAP_TO_ALLOCA(heapPtr) \
+        ([&]() -> llvm::Value* { \
+            auto* _p   = llvm::PointerType::get(ctx.context, 0); \
+            auto* _i64 = ctx.builder.getInt64Ty(); \
+            auto* _bt  = ctx.getLLVMType("buffer"); \
+            auto* _out = ctx.builder.CreateAlloca(_bt, nullptr, "comp_alloca"); \
+            uint64_t _sz = ctx.module.getDataLayout().getTypeAllocSize(_bt); \
+            llvm::Function* _mcf = ctx.getFunction("memcpy", _p, {_p, _p, _i64}); \
+            ctx.builder.CreateCall(_mcf, {_out, (heapPtr), ctx.builder.getInt64(_sz)}); \
+            return _out; \
+        }())
+
+        /* Helper: store input buffer<u8> struct value into a temp alloca → AimlCompressBuffer* */
+#define COMP_IN_ALLOCA(argVal) \
+        ([&]() -> llvm::Value* { \
+            auto* _bt  = ctx.getLLVMType("buffer"); \
+            auto* _tmp = ctx.builder.CreateAlloca(_bt, nullptr, "decomp_in"); \
+            ctx.builder.CreateStore((argVal), _tmp); \
+            return _tmp; \
+        }())
+
+        /* compress.X(data, [level]): string/buffer<u8> → buffer<u8>
+         * Always passes len=-1 so the C runtime uses strlen for string inputs. */
+#define REG_COMP(aimlName, cName) \
+        compress.builtinFuncs[aimlName] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
+            auto* p   = llvm::PointerType::get(ctx.context, 0); \
+            auto* i32 = ctx.builder.getInt32Ty(); \
+            llvm::Function* fn = ctx.module.getFunction(cName); \
+            if (!fn) fn = llvm::Function::Create( \
+                llvm::FunctionType::get(p, {p, i32, i32}, false), \
+                llvm::Function::ExternalLinkage, cName, ctx.module); \
+            llvm::Value* data  = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) \
+                                                 : llvm::Constant::getNullValue(p); \
+            llvm::Value* level = args.size() > 1 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])) \
+                                                 : ctx.builder.getInt32(0); \
+            llvm::Value* heapPtr = ctx.builder.CreateCall(fn, {data, ctx.builder.getInt32(-1), level}); \
+            return ctx.ir_gen->wrap(COMP_HEAP_TO_ALLOCA(heapPtr)); \
+        };
+
+        /* compress.X_decompress_str(buf): buffer<u8> → string (char*) */
+#define REG_DECOMP_STR(aimlName, cName) \
+        compress.builtinFuncs[aimlName] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
+            auto* p = llvm::PointerType::get(ctx.context, 0); \
+            llvm::Function* fn = ctx.module.getFunction(cName); \
+            if (!fn) fn = llvm::Function::Create( \
+                llvm::FunctionType::get(p, {p}, false), \
+                llvm::Function::ExternalLinkage, cName, ctx.module); \
+            llvm::Value* inPtr = (args.size() > 0) \
+                ? COMP_IN_ALLOCA(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))) \
+                : llvm::Constant::getNullValue(p); \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {inPtr})); \
+        };
+
+        /* compress.X_decompress(buf): buffer<u8> → buffer<u8> */
+#define REG_DECOMP_BUF(aimlName, cName) \
+        compress.builtinFuncs[aimlName] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
+            auto* p = llvm::PointerType::get(ctx.context, 0); \
+            llvm::Function* fn = ctx.module.getFunction(cName); \
+            if (!fn) fn = llvm::Function::Create( \
+                llvm::FunctionType::get(p, {p}, false), \
+                llvm::Function::ExternalLinkage, cName, ctx.module); \
+            llvm::Value* inPtr = (args.size() > 0) \
+                ? COMP_IN_ALLOCA(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))) \
+                : llvm::Constant::getNullValue(p); \
+            llvm::Value* heapPtr = ctx.builder.CreateCall(fn, {inPtr}); \
+            return ctx.ir_gen->wrap(COMP_HEAP_TO_ALLOCA(heapPtr)); \
+        };
+
+        /* compress.tar_gz / zip: (i8* src, i8* dst) → i32 */
+#define REG_ARCHIVE(aimlName, cName) \
+        compress.builtinFuncs[aimlName] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
+            auto* p   = llvm::PointerType::get(ctx.context, 0); \
+            auto* i32 = ctx.builder.getInt32Ty(); \
+            llvm::Function* fn = ctx.module.getFunction(cName); \
+            if (!fn) fn = llvm::Function::Create( \
+                llvm::FunctionType::get(i32, {p, p}, false), \
+                llvm::Function::ExternalLinkage, cName, ctx.module); \
+            llvm::Value* a0 = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) \
+                                              : llvm::Constant::getNullValue(p); \
+            llvm::Value* a1 = args.size() > 1 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])) \
+                                              : llvm::Constant::getNullValue(p); \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {a0, a1})); \
+        };
+
+        REG_COMP("gzip",    "aiml_compress_gzip")
+        REG_COMP("deflate", "aiml_compress_deflate")
+        REG_COMP("zlib",    "aiml_compress_zlib")
+        REG_COMP("brotli",  "aiml_compress_brotli")
+        REG_COMP("zstd",    "aiml_compress_zstd")
+
+        REG_DECOMP_BUF("gunzip",                "aiml_compress_gunzip")
+        REG_DECOMP_STR("gunzip_str",            "aiml_compress_gunzip_str")
+        REG_DECOMP_BUF("inflate",               "aiml_compress_inflate")
+        REG_DECOMP_STR("inflate_str",           "aiml_compress_inflate_str")
+        REG_DECOMP_BUF("zlib_decompress",       "aiml_compress_zlib_decompress")
+        REG_DECOMP_STR("zlib_decompress_str",   "aiml_compress_zlib_decompress_str")
+        REG_DECOMP_BUF("brotli_decompress",     "aiml_compress_brotli_decompress")
+        REG_DECOMP_STR("brotli_decompress_str", "aiml_compress_brotli_decompress_str")
+        REG_DECOMP_BUF("zstd_decompress",       "aiml_compress_zstd_decompress")
+        REG_DECOMP_STR("zstd_decompress_str",   "aiml_compress_zstd_decompress_str")
+        REG_DECOMP_BUF("lz4_decompress",        "aiml_compress_lz4_decompress")
+        REG_DECOMP_STR("lz4_decompress_str",    "aiml_compress_lz4_decompress_str")
+
+        /* lz4 compress: (i8* data, i32 len) → buffer<u8>  — no level parameter */
+        compress.builtinFuncs["lz4"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p   = llvm::PointerType::get(ctx.context, 0);
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* fn = ctx.module.getFunction("aiml_compress_lz4");
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(p, {p, i32}, false),
+                llvm::Function::ExternalLinkage, "aiml_compress_lz4", ctx.module);
+            llvm::Value* data = args.size() > 0
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+                : llvm::Constant::getNullValue(p);
+            llvm::Value* heapPtr = ctx.builder.CreateCall(fn, {data, ctx.builder.getInt32(-1)});
+            return ctx.ir_gen->wrap(COMP_HEAP_TO_ALLOCA(heapPtr));
+        };
+
+        REG_ARCHIVE("tar_gz",   "aiml_compress_tar_gz")
+        REG_ARCHIVE("untar_gz", "aiml_compress_untar_gz")
+        REG_ARCHIVE("zip",      "aiml_compress_zip")
+        REG_ARCHIVE("unzip",    "aiml_compress_unzip")
+
+        /* compress.zip_entries(path) → list<ptr<zip_entry>> */
+        compress.builtinFuncs["zip_entries"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p   = llvm::PointerType::get(ctx.context, 0);
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            llvm::Value* listAlloca  = ctx.builder.CreateAlloca(listTy, nullptr, "zip_entries_list");
+            ListImpl::initList(ctx, listAlloca, p, 8);
+            llvm::Value* pathStr = args.empty() ? llvm::Constant::getNullValue(p)
+                                                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Function* fn = ctx.getFunction("aiml_compress_zip_entries_fill",
+                ctx.builder.getVoidTy(), {p, p});
+            ctx.builder.CreateCall(fn, {pathStr, listAlloca});
+            return ctx.ir_gen->wrap(listAlloca);
+        };
+
+        /* compress.tar_entries(path) → list<ptr<tar_entry>> */
+        compress.builtinFuncs["tar_entries"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p   = llvm::PointerType::get(ctx.context, 0);
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            llvm::Value* listAlloca  = ctx.builder.CreateAlloca(listTy, nullptr, "tar_entries_list");
+            ListImpl::initList(ctx, listAlloca, p, 8);
+            llvm::Value* pathStr = args.empty() ? llvm::Constant::getNullValue(p)
+                                                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Function* fn = ctx.getFunction("aiml_compress_tar_entries_fill",
+                ctx.builder.getVoidTy(), {p, p});
+            ctx.builder.CreateCall(fn, {pathStr, listAlloca});
+            return ctx.ir_gen->wrap(listAlloca);
+        };
+
+#undef REG_COMP
+#undef REG_DECOMP_STR
+#undef REG_DECOMP_BUF
+#undef REG_ARCHIVE
+#undef COMP_HEAP_TO_ALLOCA
+#undef COMP_IN_ALLOCA
+    } // end compress namespace
 }

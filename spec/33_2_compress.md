@@ -275,7 +275,56 @@ das Programm eine Exception-Behandlung nutzt:
       - print: ["Error: ${e.message}"]
 ```
 
-### 5.4 Streaming (v2)
+### 5.4 Archive-Traversal (seit v1.1)
+
+Archiv-Einträge können inspiziert werden ohne den Inhalt zu extrahieren.
+
+```aiml
+# ZIP-Einträge auflisten
+- decl: [entries, list<ptr<zip_entry>>]
+- set: [entries, { call: [compress.zip_entries, archive_path] }]
+- decl: [e, ptr<zip_entry>]
+- set: [e, entries-0]
+- print: ["name: ${e.name}, size: ${e.size}, method: ${e.method}"]
+
+# tar.gz-Einträge auflisten
+- decl: [tents, list<ptr<tar_entry>>]
+- set: [tents, { call: [compress.tar_entries, tgz_path] }]
+- decl: [te, ptr<tar_entry>]
+- set: [te, tents-0]
+- print: ["name: ${te.name}, size: ${te.size}, is_dir: ${te.is_dir}"]
+```
+
+**`zip_entry`-Felder:**
+
+| Feld               | Typ     | Beschreibung |
+|--------------------|---------|--------------|
+| `name`             | `string`| Eintragspfad im Archiv |
+| `size`             | `i64`   | Unkomprimierte Größe in Bytes |
+| `compressed_size`  | `i64`   | Komprimierte Größe in Bytes |
+| `is_dir`           | `i32`   | 1 wenn Verzeichnis, 0 wenn Datei |
+| `crc32`            | `i32`   | CRC-32-Prüfsumme |
+| `method`           | `i32`   | Kompressionsmethode (0=stored, 8=deflated) |
+
+**`tar_entry`-Felder:**
+
+| Feld      | Typ     | Beschreibung |
+|-----------|---------|--------------|
+| `name`    | `string`| Eintragspfad im Archiv |
+| `size`    | `i64`   | Dateigröße in Bytes |
+| `is_dir`  | `i32`   | 1 wenn Verzeichnis, 0 wenn Datei |
+| `mode`    | `i32`   | Unix-Dateimodus (Oktal) |
+
+**Neue Namespace-Funktionen:**
+
+| Aufruf | Argumente | Rückgabe | Beschreibung |
+|--------|-----------|----------|--------------|
+| `{ call: [compress.zip_entries, path] }` | `path` | `list<ptr<zip_entry>>` | Alle Einträge eines ZIP-Archivs |
+| `{ call: [compress.tar_entries, path] }` | `path` | `list<ptr<tar_entry>>` | Alle Einträge eines tar.gz-Archivs |
+
+**Hinweis:** Die zurückgegebene Liste enthält `ptr<zip_entry>` / `ptr<tar_entry>` — Pointer auf heap-allozierte Entry-Structs (analog zu `ptr<VecResult>` bei AionDB).
+
+### 5.5 Streaming (v2)
 
 In v1: alle Operationen arbeiten vollständig in-memory (kein Streaming).
 Für sehr große Dateien: Archiv-Funktionen (`tar_gz`, `zip`) arbeiten blockweise intern —

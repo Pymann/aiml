@@ -74,7 +74,20 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 llvm::Value* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal));
                 initVal = ctx.ir_gen->wrap(ctx.builder.CreateCall(internFn, {raw}, "path_init"));
             }
-            ctx.ir_gen->createStore(initVal, alloca);
+            // buffer<u8>: handler returns a fresh alloca → memcpy struct content into target alloca
+            if (decl->typeName.find("buffer<") == 0) {
+                llvm::Type* bufTy = ctx.getLLVMType("buffer");
+                uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(bufTy);
+                llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
+                ctx.builder.CreateCall(mcf, {
+                    unwrappedAlloca,
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal)),
+                    ctx.builder.getInt64(sz)
+                });
+            } else {
+                ctx.ir_gen->createStore(initVal, alloca);
+            }
         }
     }
 }

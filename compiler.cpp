@@ -17,6 +17,7 @@
 #include "src/sys/http_runtime.h"
 #include "src/sys/math_runtime.h"
 #include "src/sys/hash_runtime.h"
+#include "src/sys/compress_runtime.h"
 
 // LLVM includes
 #include <llvm/IR/LLVMContext.h>
@@ -828,6 +829,31 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_ripemd160_raw",  (void*)(intptr_t)aiml_hash_ripemd160_raw);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_blake2b_raw",    (void*)(intptr_t)aiml_hash_blake2b_raw);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_hmac_sha256_raw",(void*)(intptr_t)aiml_hash_hmac_sha256_raw);
+    // compress namespace
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_gzip",                (void*)(intptr_t)aiml_compress_gzip);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_gunzip",               (void*)(intptr_t)aiml_compress_gunzip);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_gunzip_str",           (void*)(intptr_t)aiml_compress_gunzip_str);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_deflate",              (void*)(intptr_t)aiml_compress_deflate);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_inflate",              (void*)(intptr_t)aiml_compress_inflate);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_inflate_str",          (void*)(intptr_t)aiml_compress_inflate_str);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_zlib",                 (void*)(intptr_t)aiml_compress_zlib);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_zlib_decompress",      (void*)(intptr_t)aiml_compress_zlib_decompress);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_zlib_decompress_str",  (void*)(intptr_t)aiml_compress_zlib_decompress_str);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_brotli",               (void*)(intptr_t)aiml_compress_brotli);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_brotli_decompress",    (void*)(intptr_t)aiml_compress_brotli_decompress);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_brotli_decompress_str",(void*)(intptr_t)aiml_compress_brotli_decompress_str);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_zstd",                 (void*)(intptr_t)aiml_compress_zstd);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_zstd_decompress",      (void*)(intptr_t)aiml_compress_zstd_decompress);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_zstd_decompress_str",  (void*)(intptr_t)aiml_compress_zstd_decompress_str);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_lz4",                  (void*)(intptr_t)aiml_compress_lz4);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_lz4_decompress",       (void*)(intptr_t)aiml_compress_lz4_decompress);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_lz4_decompress_str",   (void*)(intptr_t)aiml_compress_lz4_decompress_str);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_tar_gz",               (void*)(intptr_t)aiml_compress_tar_gz);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_untar_gz",             (void*)(intptr_t)aiml_compress_untar_gz);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_zip",                  (void*)(intptr_t)aiml_compress_zip);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_unzip",                (void*)(intptr_t)aiml_compress_unzip);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_zip_entries_fill",     (void*)(intptr_t)aiml_compress_zip_entries_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_tar_entries_fill",     (void*)(intptr_t)aiml_compress_tar_entries_fill);
     // libm scalar functions (resolved from libc.so at runtime, but AddSymbol ensures JIT finds them)
     llvm::sys::DynamicLibrary::AddSymbol("sinf",   (void*)(intptr_t)sinf);
     llvm::sys::DynamicLibrary::AddSymbol("cosf",   (void*)(intptr_t)cosf);
