@@ -29,11 +29,9 @@
 - call: [glfwWindowHint, 139267, 3]   # GLFW_CONTEXT_VERSION_MINOR = 3
 - call: [glfwWindowHint, 139272, 204801]  # GLFW_OPENGL_PROFILE = GLFW_OPENGL_CORE_PROFILE
 
-- decl: [null_mon, ptr, { call: [sys.null_ptr] }]
-- decl: [null_sh,  ptr, { call: [sys.null_ptr] }]
-- decl: [win, ptr, { call: [glfwCreateWindow, 800, 600, "AIML — weißer Würfel", null_mon, null_sh] }]
+- decl: [win, ptr, { call: [glfwCreateWindow, 800, 600, "AIML — weißer Würfel", null, null] }]
 
-- if: [{ ==: [win, null_mon] }, true]
+- if: [{ ==: [win, null] }, true]
   then:
     - print: ["FAIL: glfwCreateWindow failed"]
     - call: [glfwTerminate]
@@ -102,9 +100,31 @@
 
 # ── Phase D: Shader kompilieren ───────────────────────────────────────────────
 
-- decl: [vert_src, string, "#version 330 core\nlayout(location=0) in vec3 pos;\nuniform mat4 mvp;\nvoid main(){\n  gl_Position = mvp * vec4(pos, 1.0);\n}\n"]
-- decl: [frag_white, string, "#version 330 core\nout vec4 color;\nvoid main(){\n  color = vec4(1.0, 1.0, 1.0, 1.0);\n}\n"]
-- decl: [frag_red,   string, "#version 330 core\nout vec4 color;\nvoid main(){\n  color = vec4(1.0, 0.0, 0.0, 1.0);\n}\n"]
+- text: vert_src
+  value: |
+    #version 330 core
+    layout(location=0) in vec3 pos;
+    uniform mat4 mvp;
+    void main(){
+      gl_Position = mvp * vec4(pos, 1.0);
+    }
+
+- text: frag_white
+  value: |
+    #version 330 core
+    out vec4 color;
+    void main(){
+      color = vec4(1.0, 1.0, 1.0, 1.0);
+    }
+
+- text: frag_red
+  value: |
+    #version 330 core
+    out vec4 color;
+    void main(){
+      color = vec4(1.0, 0.0, 0.0, 1.0);
+    }
+
 - decl: [sh_white, gl_shader, { call: [gl.compile_shader, vert_src, frag_white] }]
 - decl: [sh_red,   gl_shader, { call: [gl.compile_shader, vert_src, frag_red] }]
 
