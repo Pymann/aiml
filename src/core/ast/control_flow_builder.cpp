@@ -71,12 +71,20 @@ bool ControlFlowBuilder::OnScalar(const std::string& value, const std::string& t
     return false;
 }
 
+bool ControlFlowBuilder::OnSequenceEnd() {
+    // After the condition array [cond, guard] ends, restore key-reading state so
+    // subsequent map keys ("then", "body", "else") are correctly identified.
+    expectingKey = true;
+    return true;
+}
+
 void ControlFlowBuilder::receiveChildNode(std::unique_ptr<Node> node) {
     if (auto e = dynamic_cast<Expr*>(node.get())) {
         e = dynamic_cast<Expr*>(node.release());
         if (type == "ret") {
             condition = std::unique_ptr<Expr>(e);
-        } else if (currentKey == "cond" || currentKey == "condition") {
+        } else if (currentKey == "cond" || currentKey == "condition" || currentKey.empty()) {
+            // currentKey.empty() handles the array form: if: [condition, true]
             condition = std::unique_ptr<Expr>(e);
         }
     } else if (auto b = dynamic_cast<BlockStmt*>(node.get())) {

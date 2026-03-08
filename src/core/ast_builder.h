@@ -50,7 +50,7 @@ public:
     // YAML::EventHandler Overrides
     void OnDocumentStart(const YAML::Mark& mark) override {}
     void OnDocumentEnd() override {}
-    void OnNull(const YAML::Mark& mark, YAML::anchor_t anchor) override {}
+    void OnNull(const YAML::Mark& mark, YAML::anchor_t anchor) override;
     void OnAlias(const YAML::Mark& mark, YAML::anchor_t anchor) override {}
     void OnScalar(const YAML::Mark& mark, const std::string& tag, YAML::anchor_t anchor, const std::string& value) override;
     void OnSequenceStart(const YAML::Mark& mark, const std::string& tag, YAML::anchor_t anchor, YAML::EmitterStyle::value style) override;

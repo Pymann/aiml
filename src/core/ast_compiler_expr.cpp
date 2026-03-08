@@ -340,6 +340,9 @@ IRValue* Compiler::visitStringCompare(bool negate, llvm::Value* rawLhs, llvm::Va
     llvm::BasicBlock* mergeBB     = llvm::BasicBlock::Create(ctx.context, "cmp_merge"       + suffix, parentFunc);
     llvm::Value* isLhsNull = ctx.builder.CreateIsNull(rawLhs);
     llvm::Value* ptrEq     = ctx.builder.CreateICmpEQ(rawLhs, rawRhs);
+    // ptrResult must be computed in the entry block (before any SetInsertPoint calls),
+    // because PHI nodes must precede all non-PHI instructions in their basic block.
+    llvm::Value* ptrResult = negate ? ctx.builder.CreateNot(ptrEq) : ptrEq;
     llvm::Value* anyNull   = ctx.builder.CreateOr(isLhsNull, ctx.builder.CreateIsNull(rawRhs));
     ctx.builder.CreateCondBr(anyNull, checkNullBB, doStrcmpBB);
     ctx.builder.SetInsertPoint(checkNullBB);
@@ -354,7 +357,6 @@ IRValue* Compiler::visitStringCompare(bool negate, llvm::Value* rawLhs, llvm::Va
     ctx.builder.CreateBr(mergeBB);
     ctx.builder.SetInsertPoint(mergeBB);
     llvm::PHINode* phi = ctx.builder.CreatePHI(ctx.builder.getInt1Ty(), 2, "strcmp_res" + suffix);
-    llvm::Value* ptrResult = negate ? ctx.builder.CreateNot(ptrEq) : ptrEq;
     phi->addIncoming(ptrResult, checkNullBB);
     phi->addIncoming(strResult, doStrcmpBB);
     return ctx.ir_gen->wrap(phi);

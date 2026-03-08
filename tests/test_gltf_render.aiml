@@ -1,0 +1,186 @@
+# GLTF render test: texturierten Würfel aus cube_textured.glb laden und anzeigen.
+# Erfordert einen aktiven Display (X11 oder Wayland).
+# Ausführen: ./out/aiml -r tests/test_gltf_render.aiml
+# Expected exit code: 0
+# Requires: display
+
+# ── GLFW window management via FFI ────────────────────────────────────────────
+- extern: "C"
+  defs:
+    - def: { name: glfwInit,               args: [],                                                             return: i32 }
+    - def: { name: glfwWindowHint,         args: [[hint, i32], [value, i32]],                                    return: void }
+    - def: { name: glfwCreateWindow,       args: [[w, i32], [h, i32], [title, string], [mon, ptr], [sh, ptr]],   return: ptr }
+    - def: { name: glfwMakeContextCurrent, args: [[win, ptr]],                                                   return: void }
+    - def: { name: glfwSwapBuffers,        args: [[win, ptr]],                                                   return: void }
+    - def: { name: glfwPollEvents,         args: [],                                                             return: void }
+    - def: { name: glfwTerminate,          args: [],                                                             return: void }
+
+# ── Phase A: GLB laden und Geometrie + Textur extrahieren ─────────────────────
+
+- decl: [p, path, "tests/cube_textured.glb"]
+- decl: [scene, gltf_scene, { call: [gltf.load, p] }]
+- decl: [ok, i32, { call: [scene.valid] }]
+- if: [{ ==: [ok, 0] }, true]
+  then:
+    - print: ["FAIL: gltf.load failed"]
+    - call: [sys.exit, 1]
+
+- decl: [meshes, list<gltf_mesh>]
+- set:  [meshes, { call: [scene.meshes] }]
+- decl: [mc, i32, { call: [meshes.len] }]
+- if: [{ <: [mc, 1] }, true]
+  then:
+    - print: ["FAIL: no meshes in scene"]
+    - call: [sys.exit, 1]
+
+- decl: [mesh, gltf_mesh, { call: [meshes.get, 0] }]
+- decl: [prim, gltf_primitive, { call: [mesh.primitive, 0] }]
+
+- decl: [positions, buffer<f32>, { call: [prim.positions] }]
+- decl: [uvs,       buffer<f32>, { call: [prim.uvs, 0] }]
+- decl: [indices,   buffer<u32>, { call: [prim.indices] }]
+- decl: [icnt,      i32,         { call: [prim.index_count] }]
+
+- print: ["Phase A: index_count=", icnt]
+
+- decl: [mat, gltf_material, { call: [prim.material] }]
+- if: [{ ==: [mat, null] }, true]
+  then:
+    - print: ["FAIL: no material on primitive"]
+    - call: [sys.exit, 1]
+
+- decl: [tex, gltf_texture, { call: [mat.base_color_texture] }]
+- if: [{ ==: [tex, null] }, true]
+  then:
+    - print: ["FAIL: no base_color_texture on material"]
+    - call: [sys.exit, 1]
+
+- decl: [img, gltf_image, { call: [tex.image] }]
+- if: [{ ==: [img, null] }, true]
+  then:
+    - print: ["FAIL: gltf_texture.image() returned null"]
+    - call: [sys.exit, 1]
+
+- decl: [tw, i32, { call: [img.width] }]
+- decl: [th, i32, { call: [img.height] }]
+- decl: [pixels, buffer<u8>, { call: [img.pixels_rgba] }]
+- print: ["Phase A OK: texture ", tw, "x", th, ", indices=", icnt]
+
+# ── Phase B: GLFW-Fenster + GL-Kontext ───────────────────────────────────────
+
+- decl: [ok2, i32, { call: [glfwInit] }]
+- if: [{ ==: [ok2, 0] }, true]
+  then:
+    - print: ["FAIL: glfwInit failed"]
+    - call: [sys.exit, 1]
+
+- call: [glfwWindowHint, 139266, 3]       # GLFW_CONTEXT_VERSION_MAJOR = 3
+- call: [glfwWindowHint, 139267, 3]       # GLFW_CONTEXT_VERSION_MINOR = 3
+- call: [glfwWindowHint, 139272, 204801]  # GLFW_OPENGL_PROFILE = CORE
+
+- decl: [win, ptr, { call: [glfwCreateWindow, 800, 600, "AIML — texturierter Würfel", null, null] }]
+- if: [{ ==: [win, null] }, true]
+  then:
+    - print: ["FAIL: glfwCreateWindow failed"]
+    - call: [glfwTerminate]
+    - call: [sys.exit, 1]
+
+- call: [glfwMakeContextCurrent, win]
+- call: [gl.init]
+- call: [gl.enable_depth_test]
+- call: [gl.viewport, 0, 0, 800, 600]
+- print: ["Phase B OK: Fenster und GL-Kontext erstellt"]
+
+# ── Phase C: GPU-Ressourcen hochladen ────────────────────────────────────────
+
+# Positions-VBO (attrib 0: xyz, 3 floats, stride 12)
+- decl: [pos_vbo, gl_buffer, { call: [gl.create_buffer, positions] }]
+# UV-VBO (attrib 1: uv, 2 floats, stride 8)
+- decl: [uv_vbo, gl_buffer, { call: [gl.create_buffer, uvs] }]
+# IBO
+- decl: [ibo, gl_buffer, { call: [gl.create_index_buffer, indices] }]
+
+# VAO: erst Positions-Attrib (0), dann UV-Attrib (1)
+- decl: [vao, gl_vao, { call: [gl.create_vao] }]
+- call: [vao.bind_vbo, pos_vbo]
+- call: [vao.attrib, 0, 3, 12, 0]
+- call: [vao.bind_ibo, ibo]
+- call: [vao.bind_vbo, uv_vbo]
+- call: [vao.attrib, 1, 2, 8, 0]
+
+# Textur aus gltf-Pixeln
+- decl: [gltex, gl_texture, { call: [gl.create_texture, tw, th, pixels] }]
+- call: [gltex.gen_mipmaps]
+- print: ["Phase C OK: Geometrie und Textur hochgeladen"]
+
+# ── Phase D: Shader kompilieren ───────────────────────────────────────────────
+
+- text: vert_src
+  value: |
+    #version 330 core
+    layout(location=0) in vec3 pos;
+    layout(location=1) in vec2 uv;
+    uniform mat4 mvp;
+    out vec2 vUv;
+    void main(){
+      gl_Position = mvp * vec4(pos, 1.0);
+      vUv = uv;
+    }
+
+- text: frag_src
+  value: |
+    #version 330 core
+    in vec2 vUv;
+    uniform sampler2D tex;
+    out vec4 color;
+    void main(){
+      color = texture(tex, vUv);
+    }
+
+- decl: [shader, gl_shader, { call: [gl.compile_shader, vert_src, frag_src] }]
+- print: ["Phase D OK: Shader kompiliert"]
+
+# ── Phase E: Rotations-Render-Schleife (300 Frames à 33 ms) ──────────────────
+
+- decl: [proj,   mat4, { call: [math.mat4_perspective, 0.785, 1.333, 0.1, 100.0] }]
+- decl: [eye,    vec3, { call: [math.vec3, 0.0, 0.0, 3.0] }]
+- decl: [center, vec3, { call: [math.vec3, 0.0, 0.0, 0.0] }]
+- decl: [up,     vec3, { call: [math.vec3, 0.0, 1.0, 0.0] }]
+- decl: [view,   mat4, { call: [math.mat4_lookat, eye, center, up] }]
+- decl: [model,  mat4]
+- decl: [mvp,    mat4]
+- decl: [angle,  f32, 0.0]
+- decl: [frame,  i32, 0]
+
+- while:
+    condition: { lt: [frame, 300] }
+    body:
+      - set: [model, { call: [math.mat4_rotate_y, angle] }]
+      - set: [mvp, { "*": [proj, view] }]
+      - set: [mvp, { "*": [mvp, model] }]
+      - call: [gl.clear_all, 0.1, 0.1, 0.15, 1.0]
+      - call: [shader.use]
+      - call: [shader.uniform_mat4, "mvp", mvp]
+      - call: [shader.uniform_i32,  "tex", 0]
+      - call: [gl.bind_texture, gltex, 0]
+      - call: [gl.draw_elements, vao, icnt]
+      - call: [glfwSwapBuffers, win]
+      - call: [glfwPollEvents]
+      - call: [time.sleep_ms, 33]
+      - set: [angle, { +: [angle, 0.02] }]
+      - set: [frame, { +: [frame, 1] }]
+
+- print: ["Phase E OK: texturierter Würfel gerendert"]
+
+# ── Aufräumen ─────────────────────────────────────────────────────────────────
+
+- call: [gltex.delete]
+- call: [vao.delete]
+- call: [ibo.delete]
+- call: [uv_vbo.delete]
+- call: [pos_vbo.delete]
+- call: [shader.delete]
+- call: [scene.free]
+- call: [glfwTerminate]
+
+- print: ["All gltf_render tests passed"]
