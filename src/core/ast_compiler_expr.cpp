@@ -134,6 +134,9 @@ IRValue* Compiler::visitLiteral(LiteralExpr* lit) {
         return ctx.ir_gen->createGlobalStringPtr(lit->value);
     } else if (lit->type == "bool") {
         return ctx.ir_gen->getInt32(lit->value == "true" ? 1 : 0);
+    } else if (lit->type == "null") {
+        auto* i8p = static_cast<llvm::PointerType*>(llvm::PointerType::get(ctx.context, 0));
+        return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(i8p));
     } else if (lit->type == "unknown") {
         // Strict parsing for unquoted scalars that are numbers or booleans
         if (lit->value == "true") return ctx.ir_gen->getInt32(1);

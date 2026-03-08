@@ -8,6 +8,31 @@
 namespace AIML {
 namespace AST {
 
+// ── TextBuilder ─────────────────────────────────────────────────────────────
+// Handles: - text: <varname>
+//            value: |
+//              multiline content...
+// Produces a DeclStmt(varname, "string", LiteralExpr(content, "string")).
+class TextBuilder : public StateHandler {
+    std::string varName;
+    std::string content;
+    int scalarCount = 0; // 0=varname, 1="value" key (ignored), 2=content
+public:
+    TextBuilder(Builder* b) : StateHandler(b) {}
+    bool OnScalar(const std::string& value, const std::string&) override {
+        if      (scalarCount == 0) varName = value;
+        else if (scalarCount == 2) content = value;
+        ++scalarCount;
+        return true;
+    }
+    bool OnMapEnd() override { builder->popState(); return true; }
+    std::unique_ptr<Node> finish() override {
+        auto decl = std::make_unique<DeclStmt>(varName, "string");
+        decl->initialValue = std::make_unique<LiteralExpr>(content, "string");
+        return decl;
+    }
+};
+
 bool BlockBuilder::OnSequenceStart() {
     return true; // The block itself is a sequence
 }
@@ -30,6 +55,8 @@ bool BlockBuilder::OnScalar(const std::string& value, const std::string& tag) {
         builder->pushState(std::make_unique<ControlFlowBuilder>(builder, value));
     } else if (value == "try") {
         builder->pushState(std::make_unique<TryBuilder>(builder));
+    } else if (value == "text") {
+        builder->pushState(std::make_unique<TextBuilder>(builder));
     } else {
         builder->pushState(std::make_unique<StatementBuilder>(builder, value));
     }

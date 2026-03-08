@@ -106,6 +106,8 @@ std::unique_ptr<Expr> parseScalarExpr(const std::string& val, const std::string&
     if (tag == "!") {
         if (val.find("${") != std::string::npos) return parseInterpolatedString(val);
         else return std::make_unique<LiteralExpr>(val, "string");
+    } else if (val == "null" || tag == "!!null") {
+        return std::make_unique<LiteralExpr>("null", "null");
     } else if (val == "true" || val == "false" || isdigit(val[0]) || (val.length() > 0 && val[0] == '-')) {
         return std::make_unique<LiteralExpr>(val, "unknown");
     } else if (val.find("${") != std::string::npos) {
