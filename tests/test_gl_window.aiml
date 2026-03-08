@@ -51,9 +51,7 @@
 
 # ── Phase C: Würfel-Geometrie ─────────────────────────────────────────────────
 #
-# 8 Ecken eines Einheitswürfels (−0.5 … +0.5 in X/Y/Z).
-#
-# Vertex-Layout:  x, y, z   (stride = 12 Bytes)
+# 8 Ecken eines Einheitswürfels (−0.5 … +0.5 in X/Y/Z), Vertex-Layout: x y z
 #
 #   7──────6
 #  /|     /|
@@ -61,81 +59,25 @@
 # | 3────|─2
 # |/     |/
 # 0──────1
-#
-# Indizes: 2 Dreiecke pro Fläche, 6 Flächen = 36 Indizes
 
-- decl: [verts, buffer<f32>]
+- decl: [verts, buffer<f32>, [
+    -0.5, -0.5,  0.5,
+     0.5, -0.5,  0.5,
+     0.5,  0.5,  0.5,
+    -0.5,  0.5,  0.5,
+    -0.5, -0.5, -0.5,
+     0.5, -0.5, -0.5,
+     0.5,  0.5, -0.5,
+    -0.5,  0.5, -0.5]]
 
-# Vorne   (z=+0.5)
-- call: [verts.push, -0.5]   # 0
-- call: [verts.push, -0.5]
-- call: [verts.push,  0.5]
-- call: [verts.push,  0.5]   # 1
-- call: [verts.push, -0.5]
-- call: [verts.push,  0.5]
-- call: [verts.push,  0.5]   # 2
-- call: [verts.push,  0.5]
-- call: [verts.push,  0.5]
-- call: [verts.push, -0.5]   # 3
-- call: [verts.push,  0.5]
-- call: [verts.push,  0.5]
-# Hinten  (z=−0.5)
-- call: [verts.push, -0.5]   # 4
-- call: [verts.push, -0.5]
-- call: [verts.push, -0.5]
-- call: [verts.push,  0.5]   # 5
-- call: [verts.push, -0.5]
-- call: [verts.push, -0.5]
-- call: [verts.push,  0.5]   # 6
-- call: [verts.push,  0.5]
-- call: [verts.push, -0.5]
-- call: [verts.push, -0.5]   # 7
-- call: [verts.push,  0.5]
-- call: [verts.push, -0.5]
-
-- decl: [idxs, buffer<u32>]
-# Vorne
-- call: [idxs.push, 0]
-- call: [idxs.push, 1]
-- call: [idxs.push, 2]
-- call: [idxs.push, 0]
-- call: [idxs.push, 2]
-- call: [idxs.push, 3]
-# Hinten
-- call: [idxs.push, 5]
-- call: [idxs.push, 4]
-- call: [idxs.push, 7]
-- call: [idxs.push, 5]
-- call: [idxs.push, 7]
-- call: [idxs.push, 6]
-# Links
-- call: [idxs.push, 4]
-- call: [idxs.push, 0]
-- call: [idxs.push, 3]
-- call: [idxs.push, 4]
-- call: [idxs.push, 3]
-- call: [idxs.push, 7]
-# Rechts
-- call: [idxs.push, 1]
-- call: [idxs.push, 5]
-- call: [idxs.push, 6]
-- call: [idxs.push, 1]
-- call: [idxs.push, 6]
-- call: [idxs.push, 2]
-# Oben
-- call: [idxs.push, 3]
-- call: [idxs.push, 2]
-- call: [idxs.push, 6]
-- call: [idxs.push, 3]
-- call: [idxs.push, 6]
-- call: [idxs.push, 7]
-# Unten
-- call: [idxs.push, 4]
-- call: [idxs.push, 5]
-- call: [idxs.push, 1]
-- call: [idxs.push, 4]
-- call: [idxs.push, 1]
-- call: [idxs.push, 0]
+# 2 Dreiecke pro Fläche, 6 Flächen = 36 Indizes
+- decl: [idxs, buffer<u32>, [
+    0, 1, 2,  0, 2, 3,
+    5, 4, 7,  5, 7, 6,
+    4, 0, 3,  4, 3, 7,
+    1, 5, 6,  1, 6, 2,
+    3, 2, 6,  3, 6, 7,
+    4, 5, 1,  4, 1, 0]]
 
 - decl: [vbo, gl_buffer, { call: [gl.create_buffer, verts] }]
 - decl: [ibo, gl_buffer, { call: [gl.create_index_buffer, idxs] }]
@@ -145,38 +87,10 @@
 - call: [vao.attrib, 0, 3, 12, 0]   # attrib 0: 3 floats, stride 12, offset 0
 
 # Kanten-IBO: 12 echte Würfelkanten (keine Diagonalen), 24 Indizes für GL_LINES
-#   Vertex-Layout: 0=vorne-unten-links  1=vorne-unten-rechts
-#                  2=vorne-oben-rechts  3=vorne-oben-links
-#                  4=hinten-unten-links 5=hinten-unten-rechts
-#                  6=hinten-oben-rechts 7=hinten-oben-links
-- decl: [edge_idxs, buffer<u32>]
-# Vordere Fläche
-- call: [edge_idxs.push, 0]
-- call: [edge_idxs.push, 1]
-- call: [edge_idxs.push, 1]
-- call: [edge_idxs.push, 2]
-- call: [edge_idxs.push, 2]
-- call: [edge_idxs.push, 3]
-- call: [edge_idxs.push, 3]
-- call: [edge_idxs.push, 0]
-# Hintere Fläche
-- call: [edge_idxs.push, 4]
-- call: [edge_idxs.push, 5]
-- call: [edge_idxs.push, 5]
-- call: [edge_idxs.push, 6]
-- call: [edge_idxs.push, 6]
-- call: [edge_idxs.push, 7]
-- call: [edge_idxs.push, 7]
-- call: [edge_idxs.push, 4]
-# Verbindungskanten vorne↔hinten
-- call: [edge_idxs.push, 0]
-- call: [edge_idxs.push, 4]
-- call: [edge_idxs.push, 1]
-- call: [edge_idxs.push, 5]
-- call: [edge_idxs.push, 2]
-- call: [edge_idxs.push, 6]
-- call: [edge_idxs.push, 3]
-- call: [edge_idxs.push, 7]
+- decl: [edge_idxs, buffer<u32>, [
+    0, 1,  1, 2,  2, 3,  3, 0,
+    4, 5,  5, 6,  6, 7,  7, 4,
+    0, 4,  1, 5,  2, 6,  3, 7]]
 
 - decl: [edge_ibo, gl_buffer, { call: [gl.create_index_buffer, edge_idxs] }]
 - decl: [edge_vao, gl_vao,    { call: [gl.create_vao] }]

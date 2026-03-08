@@ -100,6 +100,15 @@ public:
     std::string toString() const override { return "Spawn(" + functionName + ")"; }
 };
 
+// Sequence literal used as buffer<T> initializer: decl: [buf, buffer<f32>, [v1, v2, ...]]
+// Compiler expands each element into a BufferImpl::write call.
+class BufferLiteralExpr : public Expr {
+public:
+    std::vector<std::unique_ptr<Expr>> elements;
+    BufferLiteralExpr() {}
+    std::string toString() const override { return "BufferLiteral(...)"; }
+};
+
 // Inline option map: {key: value, ...} used as call argument (e.g. {context: true}).
 // Values are kept as strings; callers parse booleans/numbers as needed.
 class DictLiteralExpr : public Expr {

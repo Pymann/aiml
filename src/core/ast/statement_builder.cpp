@@ -7,7 +7,11 @@ namespace AIML {
 namespace AST {
 
 bool StatementBuilder::OnSequenceStart() {
-    return true; // e.g. `decl: [x, i32]`
+    seqDepth++;
+    // Detect inner sequence in `decl: [name, buffer<T>, [v1, v2, ...]]`
+    if (seqDepth == 2 && type == "decl" && (int)args.size() == 2)
+        innerSeqStart = (int)args.size(); // always 2, but keep it explicit
+    return true;
 }
 
 bool StatementBuilder::OnSequenceEnd() {
@@ -97,13 +101,23 @@ void StatementBuilder::receiveChildNode(std::unique_ptr<Node> node) {
 std::unique_ptr<Node> StatementBuilder::finish() {
     if (type == "decl" && args.size() >= 2) {
          auto decl = std::make_unique<DeclStmt>(args[0].first, args[1].first);
-         if (exprArg) decl->initialValue = std::move(exprArg);
-         else if (args.size() >= 3) {
+         if (exprArg) {
+             decl->initialValue = std::move(exprArg);
+         } else if (innerSeqStart >= 0
+                    && decl->typeName.rfind("buffer<", 0) == 0
+                    && decl->typeName.back() == '>') {
+             // Buffer literal: decl: [name, buffer<T>, [v1, v2, ...]]
+             // Expand into a BufferLiteralExpr — visitDeclStmt emits push calls.
+             auto lit = std::make_unique<BufferLiteralExpr>();
+             for (int i = innerSeqStart; i < (int)args.size(); ++i)
+                 lit->elements.push_back(parseScalarExpr(args[i].first, args[i].second));
+             decl->initialValue = std::move(lit);
+         } else if (args.size() >= 3) {
              const std::string& val = args[2].first;
              const std::string& tag = args[2].second;
              decl->initialValue = parseScalarExpr(val, tag);
          }
-         
+
          decl->is_const = is_const;
          decl->is_volatile = is_volatile;
          return decl;
