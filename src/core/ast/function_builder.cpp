@@ -9,28 +9,48 @@ namespace AST {
 class ArgsBuilder : public StateHandler {
     std::vector<std::pair<std::string, std::string>>* args_out;
     std::string currentArgName;
+    std::string pendingType;  // accumulates split type names like "fn<i32"
+    int typeDepth = 0;        // unbalanced '<' count in pendingType
     int depth = 1; // Start at 1 because FunctionBuilder consumed the first OnSequenceStart
 public:
-    ArgsBuilder(Builder* b, std::vector<std::pair<std::string, std::string>>* out) 
+    ArgsBuilder(Builder* b, std::vector<std::pair<std::string, std::string>>* out)
         : StateHandler(b), args_out(out) {}
-        
+
     bool OnSequenceStart() override {
         depth++;
         return true;
     }
-    
+
     bool OnSequenceEnd() override {
         depth--;
         if (depth == 0) builder->popState();
         return true;
     }
-    
+
     bool OnScalar(const std::string& value, const std::string& tag) override {
-        if (currentArgName.empty()) {
+        if (!pendingType.empty()) {
+            // Continuation of a split type name (YAML comma inside angle brackets)
+            pendingType += ", " + value;
+            for (char c : value) { if (c=='<') ++typeDepth; else if (c=='>') --typeDepth; }
+            if (typeDepth <= 0) {
+                args_out->push_back({currentArgName, pendingType});
+                currentArgName = "";
+                pendingType = "";
+                typeDepth = 0;
+            }
+        } else if (currentArgName.empty()) {
             currentArgName = value;
         } else {
-            args_out->push_back({currentArgName, value});
-            currentArgName = "";
+            // Check if the type name has unbalanced angle brackets (e.g. "fn<i32")
+            int d = 0;
+            for (char c : value) { if (c=='<') ++d; else if (c=='>') --d; }
+            if (d > 0) {
+                pendingType = value;
+                typeDepth = d;
+            } else {
+                args_out->push_back({currentArgName, value});
+                currentArgName = "";
+            }
         }
         return true;
     }

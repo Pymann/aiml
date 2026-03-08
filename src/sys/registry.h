@@ -26,7 +26,6 @@ public:
 
 private:
     SystemRegistry() {
-        registerCall("sys.exit", std::make_unique<SysExit>());
         registerCall("io.write", std::make_unique<IoWrite>());
         registerCall("io.read", std::make_unique<IoRead>());
         registerCall("io.open", std::make_unique<IoOpen>());

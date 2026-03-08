@@ -1,0 +1,90 @@
+# Function pointer tests
+# Expected exit code: 0
+
+# ── Helper functions ───────────────────────────────────────────────────────────
+
+- def:
+    name: add
+    args: [[a, i32], [b, i32]]
+    return: i32
+    body:
+      - return: { +: [a, b] }
+
+- def:
+    name: double
+    args: [[n, i32]]
+    return: i32
+    body:
+      - return: { "*": [n, 2] }
+
+- def:
+    name: apply
+    args: [[f, fn<i32:i32>], [x, i32]]
+    return: i32
+    body:
+      - return: { call: [f, x] }
+
+- def:
+    name: greet
+    args: [[name, string]]
+    return: string
+    body:
+      - return: "hello"
+
+# ── Phase A: decl + set + call ────────────────────────────────────────────────
+
+- decl: [fp, fn<i32, i32:i32>]
+- set: [fp, add]
+- decl: [r, i32, { call: [fp, 3, 4] }]
+- if: [{ !=: [r, 7] }, true]
+  then:
+    - print: ["FAIL A: fp(3,4) expected 7, got ", r]
+    - call: [sys.exit, 1]
+- print: ["Phase A OK: fn<i32,i32:i32> call via fp = ", r]
+
+# ── Phase B: reassign to different function ────────────────────────────────────
+
+- set: [fp, double]   # fn<i32, i32:i32> = double — only uses first arg
+- decl: [fp2, fn<i32:i32>]
+- set: [fp2, double]
+- decl: [r2, i32, { call: [fp2, 5] }]
+- if: [{ !=: [r2, 10] }, true]
+  then:
+    - print: ["FAIL B: fp2(5) expected 10, got ", r2]
+    - call: [sys.exit, 1]
+- print: ["Phase B OK: fn<i32:i32> call via fp2 = ", r2]
+
+# ── Phase C: fn as function parameter ─────────────────────────────────────────
+
+- decl: [r3, i32, { call: [apply, double, 6] }]
+- if: [{ !=: [r3, 12] }, true]
+  then:
+    - print: ["FAIL C: apply(double,6) expected 12, got ", r3]
+    - call: [sys.exit, 1]
+- print: ["Phase C OK: fn parameter = ", r3]
+
+# ── Phase D: null check ────────────────────────────────────────────────────────
+
+- decl: [cb, fn<>]
+- decl: [called, i32, 0]
+- if: [{ ==: [cb, 0] }, true]
+  then:
+    - set: [called, 1]
+- if: [{ !=: [called, 1] }, true]
+  then:
+    - print: ["FAIL D: null fn<> should be 0"]
+    - call: [sys.exit, 1]
+- print: ["Phase D OK: null fn<> == 0"]
+
+# ── Phase E: string-returning fn ──────────────────────────────────────────────
+
+- decl: [sfp, fn<string:string>]
+- set: [sfp, greet]
+- decl: [msg, string, { call: [sfp, "world"] }]
+- if: [{ neq: [msg, "hello"] }, true]
+  then:
+    - print: ["FAIL E: expected hello"]
+    - call: [sys.exit, 1]
+- print: ["Phase E OK: fn<string:string> = ", msg]
+
+- print: ["All fn_ptr tests passed"]

@@ -22,7 +22,7 @@
 - if: [{ ==: [ok, 0] }, true]
   then:
     - print: ["FAIL: glfwInit failed"]
-    - exit: 1
+    - call: [sys.exit, 1]
 
 # OpenGL 3.3 Core Profile
 - call: [glfwWindowHint, 139266, 3]   # GLFW_CONTEXT_VERSION_MAJOR = 3
@@ -37,7 +37,7 @@
   then:
     - print: ["FAIL: glfwCreateWindow failed"]
     - call: [glfwTerminate]
-    - exit: 1
+    - call: [sys.exit, 1]
 
 - call: [glfwMakeContextCurrent, win]
 

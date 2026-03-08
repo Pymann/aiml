@@ -490,6 +490,10 @@ namespace AIML {
         if (typeName == "u32") return llvm::Type::getInt32Ty(context);
         if (typeName == "u64") return llvm::Type::getInt64Ty(context);
         
+        // fn<params:ret> — function pointer stored as opaque i8*
+        if (typeName.rfind("fn<", 0) == 0 && typeName.back() == '>')
+            return llvm::Type::getInt8Ty(context)->getPointerTo();
+
         // buffer<T> — template param is ignored, all buffers share the same struct layout
         if (typeName.rfind("buffer<", 0) == 0 && typeName.back() == '>') {
             return getLLVMType("buffer");

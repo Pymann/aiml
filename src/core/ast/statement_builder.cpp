@@ -100,22 +100,35 @@ void StatementBuilder::receiveChildNode(std::unique_ptr<Node> node) {
 
 std::unique_ptr<Node> StatementBuilder::finish() {
     if (type == "decl" && args.size() >= 2) {
-         auto decl = std::make_unique<DeclStmt>(args[0].first, args[1].first);
+         // Rejoin type-name fragments split by YAML commas inside angle brackets.
+         // e.g. args=["fp", "fn<i32", "i32:i32>"] → typeName="fn<i32, i32:i32>", initStart=2
+         std::string typeName = args[1].first;
+         int typeEndIdx = 1;
+         {
+             int depth = 0;
+             for (char c : typeName) { if (c=='<') ++depth; else if (c=='>') --depth; }
+             while (depth > 0 && typeEndIdx + 1 < (int)args.size()) {
+                 ++typeEndIdx;
+                 typeName += ", " + args[typeEndIdx].first;
+                 for (char c : args[typeEndIdx].first) { if (c=='<') ++depth; else if (c=='>') --depth; }
+             }
+         }
+         int initStart = typeEndIdx + 1; // index of first init-value arg
+
+         auto decl = std::make_unique<DeclStmt>(args[0].first, typeName);
          if (exprArg) {
              decl->initialValue = std::move(exprArg);
          } else if (innerSeqStart >= 0
-                    && decl->typeName.rfind("buffer<", 0) == 0
-                    && decl->typeName.back() == '>') {
+                    && typeName.rfind("buffer<", 0) == 0
+                    && typeName.back() == '>') {
              // Buffer literal: decl: [name, buffer<T>, [v1, v2, ...]]
              // Expand into a BufferLiteralExpr — visitDeclStmt emits push calls.
              auto lit = std::make_unique<BufferLiteralExpr>();
              for (int i = innerSeqStart; i < (int)args.size(); ++i)
                  lit->elements.push_back(parseScalarExpr(args[i].first, args[i].second));
              decl->initialValue = std::move(lit);
-         } else if (args.size() >= 3) {
-             const std::string& val = args[2].first;
-             const std::string& tag = args[2].second;
-             decl->initialValue = parseScalarExpr(val, tag);
+         } else if (initStart < (int)args.size()) {
+             decl->initialValue = parseScalarExpr(args[initStart].first, args[initStart].second);
          }
 
          decl->is_const = is_const;

@@ -221,9 +221,11 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
     // 2. Strict Variable Lookup
     Symbol* sym = resolveVariable(baseName);
     if (!sym) {
+        // special built-in names
         if (baseName == "sys" && propName == "env") {
             return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()));
-        } else if (baseName == "io" && (propName == "stdout" || propName == "stderr" || propName == "stdin")) {
+        }
+        if (baseName == "io" && (propName == "stdout" || propName == "stderr" || propName == "stdin")) {
             int fd = (propName == "stdin") ? 0 : (propName == "stdout" ? 1 : 2);
             std::string fmode = (propName == "stdin") ? "r" : "w";
             llvm::Function* fdopenFunc = ctx.module.getFunction("fdopen");
@@ -233,26 +235,26 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
             }
             llvm::Value* modeStr = ctx.builder.CreateGlobalStringPtr(fmode);
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(fdopenFunc, {ctx.builder.getInt32(fd), modeStr}));
-        } else if (ctx.getLLVMType(varName) || varName == "string" || varName == "i32" || varName == "i64" || varName == "u8" || varName == "f32" || varName == "f64") {
-            return ctx.ir_gen->getInt32(0); 
         }
 
-        // Check if the name refers to an AIML function (used as callback / fn arg)
-        // e.g. `call: [glfwSetKeyCallback, win, on_key]` where on_key is a def
+        // Check if varName is an AIML function used as a function pointer / callback.
+        // Must come BEFORE getLLVMType so function names don't trigger "Unknown Type" errors.
         {
             auto* i8p = llvm::PointerType::get(ctx.context, 0);
-            // First try ctx.functions (covers user-defined defs)
             llvm::Function* fn = nullptr;
             auto fit = ctx.functions.find(varName);
             if (fit != ctx.functions.end() && fit->second.func)
                 fn = fit->second.func;
-            // Fallback: module symbol (covers extern "C" and builtins)
             if (!fn) fn = ctx.module.getFunction(varName);
             if (fn) {
                 llvm::Value* fp = ctx.builder.CreateBitCast(fn, i8p, varName + "_fnptr");
                 return ctx.ir_gen->wrap(fp);
             }
         }
+
+        // Type-name used as an expression (e.g. type-cast syntax) — return 0 as placeholder
+        if (ctx.getLLVMType(varName) || varName == "string" || varName == "i32" || varName == "i64" || varName == "u8" || varName == "f32" || varName == "f64")
+            return ctx.ir_gen->getInt32(0);
 
         LOG_ERROR("Undefined variable: " + baseName);
         return nullptr;

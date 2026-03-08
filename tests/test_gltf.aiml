@@ -9,7 +9,7 @@
 - if: [{ ==: [bad_ok, 1] }, true]
   then:
     - print: ["FAIL: expected valid=0 for nonexistent file"]
-    - exit: 1
+    - call: [sys.exit, 1]
 
 - decl: [bad_err, string, { call: [bad.error] }]
 - print: ["bad.error=${bad_err}"]
@@ -27,7 +27,7 @@
   then:
     - decl: [err, string, { call: [scene.error] }]
     - print: ["FAIL: load error: ${err}"]
-    - exit: 1
+    - call: [sys.exit, 1]
 
 - print: ["Phase B OK: scene loaded"]
 
@@ -39,7 +39,7 @@
 - if: [{ <: [nc, 1] }, true]
   then:
     - print: ["FAIL: expected >= 1 node"]
-    - exit: 1
+    - call: [sys.exit, 1]
 
 - decl: [meshes, list<gltf_mesh>, { call: [scene.meshes] }]
 - decl: [mc, i32, { call: [meshes.len] }]
@@ -47,7 +47,7 @@
 - if: [{ <: [mc, 1] }, true]
   then:
     - print: ["FAIL: expected >= 1 mesh"]
-    - exit: 1
+    - call: [sys.exit, 1]
 
 - decl: [mats, list<gltf_material>, { call: [scene.materials] }]
 - decl: [matc, i32, { call: [mats.len] }]
@@ -55,7 +55,7 @@
 - if: [{ <: [matc, 1] }, true]
   then:
     - print: ["FAIL: expected >= 1 material"]
-    - exit: 1
+    - call: [sys.exit, 1]
 
 - print: ["Phase C OK"]
 
@@ -93,7 +93,7 @@
 - if: [{ <: [pc, 1] }, true]
   then:
     - print: ["FAIL: expected >= 1 primitive"]
-    - exit: 1
+    - call: [sys.exit, 1]
 
 - decl: [prim, gltf_primitive, { call: [mesh.primitive, 0] }]
 
@@ -103,11 +103,11 @@
 - if: [{ ==: [vc, 0] }, true]
   then:
     - print: ["FAIL: expected > 0 vertices"]
-    - exit: 1
+    - call: [sys.exit, 1]
 - if: [{ ==: [ic, 0] }, true]
   then:
     - print: ["FAIL: expected > 0 indices"]
-    - exit: 1
+    - call: [sys.exit, 1]
 
 - print: ["Phase E OK"]
 
@@ -119,7 +119,7 @@
 - if: [{ <: [pos_bytes, 1] }, true]
   then:
     - print: ["FAIL: expected positions bytes > 0"]
-    - exit: 1
+    - call: [sys.exit, 1]
 
 - decl: [indices, buffer<u32>, { call: [prim.indices] }]
 - decl: [idx_bytes, i32, { call: [indices.len] }]
@@ -127,7 +127,7 @@
 - if: [{ <: [idx_bytes, 1] }, true]
   then:
     - print: ["FAIL: expected indices bytes > 0"]
-    - exit: 1
+    - call: [sys.exit, 1]
 
 # Ersten Positions-Wert lesen (x der ersten Position)
 - decl: [x0, f32, { call: [positions.get, 0] }]
