@@ -36,7 +36,7 @@
 - decl: [fp, fn<i32, i32:i32>]
 - set: [fp, add]
 - decl: [r, i32, { call: [fp, 3, 4] }]
-- if: [{ !=: [r, 7] }, true]
+- if: [{ "!=": [r, 7] }, true]
   then:
     - print: ["FAIL A: fp(3,4) expected 7, got ", r]
     - call: [sys.exit, 1]
@@ -48,7 +48,7 @@
 - decl: [fp2, fn<i32:i32>]
 - set: [fp2, double]
 - decl: [r2, i32, { call: [fp2, 5] }]
-- if: [{ !=: [r2, 10] }, true]
+- if: [{ "!=": [r2, 10] }, true]
   then:
     - print: ["FAIL B: fp2(5) expected 10, got ", r2]
     - call: [sys.exit, 1]
@@ -57,7 +57,7 @@
 # ── Phase C: fn as function parameter ─────────────────────────────────────────
 
 - decl: [r3, i32, { call: [apply, double, 6] }]
-- if: [{ !=: [r3, 12] }, true]
+- if: [{ "!=": [r3, 12] }, true]
   then:
     - print: ["FAIL C: apply(double,6) expected 12, got ", r3]
     - call: [sys.exit, 1]
@@ -70,7 +70,7 @@
 - if: [{ ==: [cb, 0] }, true]
   then:
     - set: [called, 1]
-- if: [{ !=: [called, 1] }, true]
+- if: [{ "!=": [called, 1] }, true]
   then:
     - print: ["FAIL D: null fn<> should be 0"]
     - call: [sys.exit, 1]

@@ -181,6 +181,20 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             });
             return;
         }
+        if (sym->typeName.find("buffer<") == 0) {
+            llvm::Type* bufTy = ctx.getLLVMType("buffer");
+            if (bufTy) {
+                uint64_t structSize = ctx.module.getDataLayout().getTypeAllocSize(bufTy);
+                llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
+                ctx.builder.CreateCall(memcpyFunc, {
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)),
+                    ctx.builder.getInt64(structSize)
+                });
+                return;
+            }
+        }
         if (sym->typeName.find("map<") == 0) {
             llvm::Type* mapTy = ctx.getLLVMType(sym->typeName);
             if (mapTy) {

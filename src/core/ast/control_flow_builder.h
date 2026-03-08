@@ -26,6 +26,7 @@ public:
     bool OnMapEnd() override;
     bool OnScalar(const std::string& value, const std::string& tag) override;
     bool OnSequenceStart() override;
+    bool OnSequenceEnd() override;
     void receiveChildNode(std::unique_ptr<Node> node) override;
     std::unique_ptr<Node> finish() override;
 };

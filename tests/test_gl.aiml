@@ -11,15 +11,15 @@
 - decl: [ts,  i32, gl.TRIANGLE_STRIP]
 - print: ["Phase A: TRIANGLES=${tri} LINES=${lin} POINTS=${pts} TRIANGLE_STRIP=${ts}"]
 
-- if: [{ !=: [tri, 4] }, true]
+- if: [{ "!=": [tri, 4] }, true]
   then:
     - print: ["FAIL: gl.TRIANGLES != 4"]
     - call: [sys.exit, 1]
-- if: [{ !=: [lin, 1] }, true]
+- if: [{ "!=": [lin, 1] }, true]
   then:
     - print: ["FAIL: gl.LINES != 1"]
     - call: [sys.exit, 1]
-- if: [{ !=: [pts, 0] }, true]
+- if: [{ "!=": [pts, 0] }, true]
   then:
     - print: ["FAIL: gl.POINTS != 0"]
     - call: [sys.exit, 1]
@@ -33,7 +33,7 @@
 - decl: [mr,  i32, gl.MIRRORED_REPEAT]
 - print: ["Phase B: REPEAT=${rep} CLAMP_TO_EDGE=${cte} MIRRORED_REPEAT=${mr}"]
 
-- if: [{ !=: [rep, 10497] }, true]   # 0x2901 = 10497
+- if: [{ "!=": [rep, 10497] }, true]   # 0x2901 = 10497
   then:
     - print: ["FAIL: gl.REPEAT != 10497"]
     - call: [sys.exit, 1]
@@ -43,7 +43,7 @@
 - decl: [lml,  i32, gl.LINEAR_MIPMAP_LINEAR]
 - print: ["Phase B: LINEAR=${lin2} NEAREST=${near} LINEAR_MIPMAP_LINEAR=${lml}"]
 
-- if: [{ !=: [lin2, 9729] }, true]   # 0x2601 = 9729
+- if: [{ "!=": [lin2, 9729] }, true]   # 0x2601 = 9729
   then:
     - print: ["FAIL: gl.LINEAR != 9729"]
     - call: [sys.exit, 1]

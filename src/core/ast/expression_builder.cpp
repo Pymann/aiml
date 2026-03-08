@@ -39,6 +39,8 @@ bool ExpressionBuilder::OnScalar(const std::string& value, const std::string& ta
         if (tag == "!") {
             if (value.find("${") != std::string::npos) args.push_back(parseInterpolatedString(value));
             else args.push_back(std::make_unique<LiteralExpr>(value, "string"));
+        } else if (value == "null") {
+            args.push_back(std::make_unique<LiteralExpr>("null", "null"));
         } else if (value == "true" || value == "false" || isdigit(value[0]) || (value.length() > 0 && value[0] == '-')) {
              args.push_back(std::make_unique<LiteralExpr>(value, "unknown"));
         } else {

@@ -210,6 +210,11 @@ void Builder::popState() {
 }
 
 // Event Router
+void Builder::OnNull(const YAML::Mark&, YAML::anchor_t) {
+    LOG_DEBUG("Router OnNull");
+    stateStack.top()->OnScalar("null", "null");
+}
+
 void Builder::OnScalar(const YAML::Mark&, const std::string& tag, YAML::anchor_t, const std::string& value) {
     LOG_DEBUG("Router OnScalar: " + value);
     stateStack.top()->OnScalar(value, tag);

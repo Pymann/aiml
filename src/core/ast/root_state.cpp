@@ -13,6 +13,7 @@
 #include "config_builder.h"
 #include "function_builder.h"
 #include "extern_builder.h"
+#include "text_builder.h"
 
 namespace AIML {
 namespace AST {
@@ -93,6 +94,10 @@ bool RootState::OnScalar(const std::string& value, const std::string& tag) {
         }
         else if (currentKey == "config") {
              builder->pushState(std::make_unique<ConfigBuilder>(builder));
+             return true;
+        }
+        else if (currentKey == "text") {
+             builder->pushState(std::make_unique<TextBuilder>(builder));
              return true;
         }
         else if (currentKey == "extern") {
