@@ -14,15 +14,15 @@
 - if: [{ !=: [tri, 4] }, true]
   then:
     - print: ["FAIL: gl.TRIANGLES != 4"]
-    - exit: 1
+    - call: [sys.exit, 1]
 - if: [{ !=: [lin, 1] }, true]
   then:
     - print: ["FAIL: gl.LINES != 1"]
-    - exit: 1
+    - call: [sys.exit, 1]
 - if: [{ !=: [pts, 0] }, true]
   then:
     - print: ["FAIL: gl.POINTS != 0"]
-    - exit: 1
+    - call: [sys.exit, 1]
 
 - print: ["Phase A OK"]
 
@@ -36,7 +36,7 @@
 - if: [{ !=: [rep, 10497] }, true]   # 0x2901 = 10497
   then:
     - print: ["FAIL: gl.REPEAT != 10497"]
-    - exit: 1
+    - call: [sys.exit, 1]
 
 - decl: [lin2, i32, gl.LINEAR]
 - decl: [near, i32, gl.NEAREST]
@@ -46,7 +46,7 @@
 - if: [{ !=: [lin2, 9729] }, true]   # 0x2601 = 9729
   then:
     - print: ["FAIL: gl.LINEAR != 9729"]
-    - exit: 1
+    - call: [sys.exit, 1]
 
 - print: ["Phase B OK"]
 

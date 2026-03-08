@@ -16,6 +16,49 @@
 namespace AIML {
 namespace AST {
 
+// ── fn<params:ret> type parser ────────────────────────────────────────────────
+// Handles nested generics correctly, e.g. fn<map<string:string>:bool>
+struct FnTypeInfo {
+    std::vector<std::string> paramTypes;
+    std::string retType; // empty = void
+};
+static FnTypeInfo parseFnType(const std::string& typeName) {
+    // Strip "fn<" (3 chars) and ">" (1 char)
+    std::string inner = typeName.substr(3, typeName.size() - 4);
+
+    // Find the last ":" at angle-bracket depth 0 — that separates params from return type
+    int depth = 0, retSep = -1;
+    for (int i = 0; i < (int)inner.size(); ++i) {
+        if      (inner[i] == '<') ++depth;
+        else if (inner[i] == '>') --depth;
+        else if (inner[i] == ':' && depth == 0) retSep = i;
+    }
+
+    std::string paramStr = (retSep >= 0) ? inner.substr(0, retSep) : inner;
+    FnTypeInfo info;
+    info.retType = (retSep >= 0) ? inner.substr(retSep + 1) : "";
+
+    // Split paramStr by "," at depth 0
+    if (!paramStr.empty()) {
+        depth = 0;
+        std::string cur;
+        auto push = [&]() {
+            while (!cur.empty() && cur.front() == ' ') cur.erase(cur.begin());
+            while (!cur.empty() && cur.back()  == ' ') cur.pop_back();
+            if (!cur.empty()) info.paramTypes.push_back(cur);
+            cur.clear();
+        };
+        for (char c : paramStr) {
+            if      (c == '<') { ++depth; cur += c; }
+            else if (c == '>') { --depth; cur += c; }
+            else if (c == ',' && depth == 0) push();
+            else cur += c;
+        }
+        push();
+    }
+    return info;
+}
+
 IRValue* Compiler::visitCall(CallExpr* call) {
     std::string funcName = call->functionName;
     size_t dotPos = funcName.find('.');
@@ -304,6 +347,40 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             ctx.builder.SetInsertPoint(invokeCont);
         } else {
             callRes = ctx.ir_gen->createCall(f->getName().str(), argVals);
+        }
+    }
+
+    // ── fn<...> variable — indirect call through stored function pointer ──────
+    if (!callRes) {
+        Symbol* fnSym = resolveVariable(funcName);
+        if (fnSym && fnSym->typeName.rfind("fn<", 0) == 0 && fnSym->typeName.back() == '>') {
+            auto* i8p = llvm::PointerType::get(ctx.context, 0);
+
+            // Load the i8* function pointer from its alloca
+            llvm::Value* fnAlloca = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+                fnSym->ir_alloca_inst ? fnSym->ir_alloca_inst
+                                      : ctx.ir_gen->wrap(fnSym->alloca_inst)));
+            llvm::Value* fnPtr = ctx.builder.CreateLoad(i8p, fnAlloca, funcName + "_fp");
+
+            // Build LLVM FunctionType from the fn<params:ret> annotation
+            FnTypeInfo fi = parseFnType(fnSym->typeName);
+            std::vector<llvm::Type*> paramTys;
+            for (auto& pt : fi.paramTypes) {
+                llvm::Type* t = ctx.getLLVMType(pt);
+                paramTys.push_back(t ? t : i8p);
+            }
+            llvm::Type* retTy = (fi.retType.empty() || fi.retType == "void")
+                ? llvm::Type::getVoidTy(ctx.context)
+                : (ctx.getLLVMType(fi.retType) ? ctx.getLLVMType(fi.retType) : i8p);
+
+            llvm::FunctionType* fnTy = llvm::FunctionType::get(retTy, paramTys, false);
+
+            std::vector<llvm::Value*> rawArgs;
+            for (auto& av : argVals)
+                rawArgs.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(av)));
+
+            llvm::Value* res = ctx.builder.CreateCall(fnTy, fnPtr, rawArgs, funcName + "_icall");
+            return ctx.ir_gen->wrap(res);
         }
     }
 

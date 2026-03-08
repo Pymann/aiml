@@ -6,26 +6,6 @@
 
 using Utils::resolveValue;
 
-class SysExit : public SystemCall {
-public:
-    llvm::Value* compile(CompilerContext& ctx, const std::vector<YAML::Node>& args) override {
-        llvm::Function* exitFunc = ctx.module.getFunction("exit");
-        if (!exitFunc) {
-            std::vector<llvm::Type*> exitArgs = { ctx.builder.getInt32Ty() };
-            llvm::FunctionType* exitType = llvm::FunctionType::get(ctx.builder.getVoidTy(), exitArgs, false);
-            exitFunc = llvm::Function::Create(exitType, llvm::Function::ExternalLinkage, "exit", ctx.module);
-        }
-
-        llvm::Value* code = ctx.builder.getInt32(0);
-        if (args.size() > 1) {
-             code = resolveValue(ctx, args[1]);
-        }
-        return ctx.builder.CreateCall(exitFunc, {code});
-    }
-};
-
-
-
 
 class MemoryFree : public SystemCall {
 public:
