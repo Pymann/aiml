@@ -13,6 +13,8 @@
 #include "../../src/sys/compress_runtime.h"
 #include "../../src/sys/gltf_runtime.h"
 #include "../../src/sys/gl_runtime.h"
+#include "../../src/sys/engine_runtime.h"
+#include "../../src/sys/input_runtime.h"
 #include <llvm/IR/IRBuilder.h>
 
 using IRValue = AIML::IRValue;
@@ -3858,6 +3860,7 @@ void registerBuiltins(CompilerContext& ctx) {
             GLTF_I32M(ci, "vertex_count", "aiml_gltf_prim_vertex_count")
             GLTF_I32M(ci, "index_count",  "aiml_gltf_prim_index_count")
             GLTF_PTRM(ci, "material",     "aiml_gltf_prim_material")
+            GLTF_PTRM(ci, "to_gl_mesh",   "aiml_gltf_prim_to_gl_mesh")
 
             // uvs(set), colors(set), joints(set), weights(set): buffer return + 1 i32 arg
 #define GLTF_BUF1(ci, aimlName, cName) \
@@ -3936,9 +3939,10 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.isBuiltin   = true;
             ci.preLoadBase = true;
 
-            GLTF_BUFM(ci, "pixels_rgba", "aiml_gltf_img_pixels_rgba")
-            GLTF_I32M(ci, "width",       "aiml_gltf_img_width")
-            GLTF_I32M(ci, "height",      "aiml_gltf_img_height")
+            GLTF_BUFM(ci, "pixels_rgba",    "aiml_gltf_img_pixels_rgba")
+            GLTF_I32M(ci, "width",          "aiml_gltf_img_width")
+            GLTF_I32M(ci, "height",         "aiml_gltf_img_height")
+            GLTF_PTRM(ci, "to_gl_texture",  "aiml_gltf_img_to_gl_texture")
 
             ctx.classes["gltf_image"] = std::move(ci);
         }
@@ -4596,5 +4600,650 @@ void registerBuiltins(CompilerContext& ctx) {
                 return nullptr;
             };
         }
+
+        // ── gl_mesh ─────────────────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name = "gl_mesh"; ci.isBuiltin = true; ci.preLoadBase = true;
+
+            // mesh.draw() → void
+            ci.builtinMethods["draw"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr*, auto) -> IRValue* {
+                auto* p = llvm::PointerType::get(ctx.context, 0);
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gl_mesh_draw",
+                    ctx.builder.getVoidTy(), {p}), {base});
+                return nullptr;
+            };
+            // mesh.draw_count(n: i32) → void
+            ci.builtinMethods["draw_count"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* i32 = ctx.builder.getInt32Ty();
+                llvm::Value* cnt = ctx.builder.getInt32(0);
+                if (call && !call->args.empty()) {
+                    IRValue* a = evalExpr(call->args[0].get());
+                    if (a) cnt = ctx.builder.CreateZExtOrTrunc(
+                        static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)), i32);
+                }
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gl_mesh_draw_count",
+                    ctx.builder.getVoidTy(), {p, i32}), {base, cnt});
+                return nullptr;
+            };
+            // mesh.index_count() → i32
+            ci.builtinMethods["index_count"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr*, auto) -> IRValue* {
+                auto* p = llvm::PointerType::get(ctx.context, 0);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_gl_mesh_index_count",
+                        ctx.builder.getInt32Ty(), {p}), {base}));
+            };
+            // mesh.delete() → void
+            ci.builtinMethods["delete"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr*, auto) -> IRValue* {
+                auto* p = llvm::PointerType::get(ctx.context, 0);
+                ctx.builder.CreateCall(ctx.getFunction("aiml_gl_mesh_delete",
+                    ctx.builder.getVoidTy(), {p}), {base});
+                return nullptr;
+            };
+            ctx.classes["gl_mesh"] = std::move(ci);
+        }
+
+        // ── gl.create_mesh ──────────────────────────────────────────────────
+        {
+            auto& gl = ctx.namespaces["gl"];
+            gl.builtinFuncs["create_mesh"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto null = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+                auto getArg = [&](int i) -> llvm::Value* {
+                    if ((int)args.size() <= i) return null;
+                    llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
+                    if (v->getType()->isPointerTy()) return v;
+                    /* buffer<T> struct — store to alloca and pass as pointer */
+                    auto* tmp = ctx.builder.CreateAlloca(v->getType(), nullptr, "mesh_buf");
+                    ctx.builder.CreateStore(v, tmp); return tmp;
+                };
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_gl_create_mesh", p, {p, p, p, p}),
+                    {getArg(0), getArg(1), getArg(2), getArg(3)}));
+            };
+        }
     } // end gl
+
+    // ==========================================================================
+    // engine — cross-platform window + game loop
+    // ==========================================================================
+    {
+        // ── window_handle type ───────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name = "window_handle"; ci.isBuiltin = true; ci.preLoadBase = true;
+            // No methods needed on window_handle directly — use engine.* namespace
+            ctx.classes["window_handle"] = std::move(ci);
+        }
+
+        auto& eng = ctx.namespaces["engine"];
+        auto* p   = llvm::PointerType::get(ctx.context, 0);
+        auto* i32 = ctx.builder.getInt32Ty();
+        auto* f32 = ctx.builder.getFloatTy();
+        auto* f64 = ctx.builder.getDoubleTy();
+        auto* i64 = ctx.builder.getInt64Ty();
+        auto* vd  = ctx.builder.getVoidTy();
+        auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        auto null = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+
+#define ENG_WIN_RET_PTR(name, cName) \
+        eng.builtinFuncs[name] = [](CompilerContext& ctx, \
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
+            auto* p   = llvm::PointerType::get(ctx.context, 0); \
+            auto* i32 = ctx.builder.getInt32Ty(); \
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo(); \
+            auto null = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p)); \
+            auto g = [&](int i) -> llvm::Value* { \
+                if ((int)args.size() <= i) return null; \
+                return static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])); \
+            }; \
+            (void)i32; (void)i8p; (void)null; (void)g; \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
+                ctx.getFunction(cName, p, {i32, i32, i8p}), \
+                {ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])), i32), \
+                 ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])), i32), \
+                 args.size() > 2 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2])) \
+                                 : llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p))})); \
+        };
+
+        // engine.create_window(w, h, title) → window_handle
+        ENG_WIN_RET_PTR("create_window", "aiml_engine_create_window")
+#undef ENG_WIN_RET_PTR
+
+        // engine.create_window_fullscreen(title) → window_handle
+        eng.builtinFuncs["create_window_fullscreen"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p   = llvm::PointerType::get(ctx.context, 0);
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* title = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_engine_create_window_fullscreen", p, {i8p}), {title}));
+        };
+
+        // engine.destroy_window(win) → void
+        eng.builtinFuncs["destroy_window"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* w = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            ctx.builder.CreateCall(ctx.getFunction("aiml_engine_destroy_window",
+                ctx.builder.getVoidTy(), {p}), {w});
+            return nullptr;
+        };
+
+        // engine.set_title(win, title)
+        eng.builtinFuncs["set_title"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p   = llvm::PointerType::get(ctx.context, 0);
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* w = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+                : llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+            llvm::Value* t = args.size() > 1 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+                : llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+            ctx.builder.CreateCall(ctx.getFunction("aiml_engine_set_title",
+                ctx.builder.getVoidTy(), {p, i8p}), {w, t});
+            return nullptr;
+        };
+
+        // engine.window_size(win) → ivec2  (return {w, h} as i32 pair)
+        // We expose as two functions here; ivec2 construction requires math types
+        // For now: engine.window_size_x / engine.window_size_y returning i32
+        eng.builtinFuncs["window_size_x"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* w = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_engine_window_size_x", ctx.builder.getInt32Ty(), {p}), {w}));
+        };
+        eng.builtinFuncs["window_size_y"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* w = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_engine_window_size_y", ctx.builder.getInt32Ty(), {p}), {w}));
+        };
+
+        // engine.make_current(win), engine.set_vsync(on)
+        eng.builtinFuncs["make_current"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* w = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            ctx.builder.CreateCall(ctx.getFunction("aiml_engine_make_current",
+                ctx.builder.getVoidTy(), {p}), {w});
+            return nullptr;
+        };
+        eng.builtinFuncs["set_vsync"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            llvm::Value* on = args.empty() ? ctx.builder.getInt32(0)
+                : ctx.builder.CreateZExtOrTrunc(
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                    ctx.builder.getInt32Ty());
+            ctx.builder.CreateCall(ctx.getFunction("aiml_engine_set_vsync",
+                ctx.builder.getVoidTy(), {ctx.builder.getInt32Ty()}), {on});
+            return nullptr;
+        };
+
+        // engine.run(win, update_fn, render_fn) — passes fn pointers as i8*
+        eng.builtinFuncs["run"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            auto null = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+            auto g = [&](int i) -> llvm::Value* {
+                if ((int)args.size() <= i) return null;
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
+                return v->getType()->isPointerTy() ? v
+                    : ctx.builder.CreateIntToPtr(v, p);
+            };
+            ctx.builder.CreateCall(ctx.getFunction("aiml_engine_run",
+                ctx.builder.getVoidTy(), {p, p, p}), {g(0), g(1), g(2)});
+            return nullptr;
+        };
+
+        // engine.running(win) → bool(i32)
+        eng.builtinFuncs["running"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* w = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_engine_running", ctx.builder.getInt32Ty(), {p}), {w}));
+        };
+
+        // engine.swap(win), engine.quit(win)
+        eng.builtinFuncs["swap"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* w = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            ctx.builder.CreateCall(ctx.getFunction("aiml_engine_swap",
+                ctx.builder.getVoidTy(), {p}), {w});
+            return nullptr;
+        };
+        eng.builtinFuncs["quit"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* w = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            ctx.builder.CreateCall(ctx.getFunction("aiml_engine_quit",
+                ctx.builder.getVoidTy(), {p}), {w});
+            return nullptr;
+        };
+
+        // engine.dt() → f32, engine.time() → f64, engine.fps() → f32, engine.frame() → i64
+        eng.builtinFuncs["dt"]    = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_engine_dt", ctx.builder.getFloatTy(), {}), {})); };
+        eng.builtinFuncs["time"]  = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_engine_time", ctx.builder.getDoubleTy(), {}), {})); };
+        eng.builtinFuncs["fps"]   = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_engine_fps", ctx.builder.getFloatTy(), {}), {})); };
+        eng.builtinFuncs["frame"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_engine_frame", ctx.builder.getInt64Ty(), {}), {})); };
+
+        // engine.target_fps(fps: i32)
+        eng.builtinFuncs["target_fps"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            llvm::Value* fps = args.empty() ? ctx.builder.getInt32(0)
+                : ctx.builder.CreateZExtOrTrunc(
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                    ctx.builder.getInt32Ty());
+            ctx.builder.CreateCall(ctx.getFunction("aiml_engine_target_fps",
+                ctx.builder.getVoidTy(), {ctx.builder.getInt32Ty()}), {fps});
+            return nullptr;
+        };
+
+        // engine.platform() → string
+        eng.builtinFuncs["platform"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_engine_platform", i8p, {}), {})); };
+
+        // engine.screen_size_x/y → i32
+        eng.builtinFuncs["screen_size_x"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_engine_screen_size_x", ctx.builder.getInt32Ty(), {}), {})); };
+        eng.builtinFuncs["screen_size_y"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_engine_screen_size_y", ctx.builder.getInt32Ty(), {}), {})); };
+
+        // engine.dpi() → f32, engine.is_mobile/is_web → i32
+        eng.builtinFuncs["dpi"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_engine_dpi", ctx.builder.getFloatTy(), {}), {})); };
+        eng.builtinFuncs["is_mobile"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_engine_is_mobile", ctx.builder.getInt32Ty(), {}), {})); };
+        eng.builtinFuncs["is_web"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_engine_is_web", ctx.builder.getInt32Ty(), {}), {})); };
+    } // end engine
+
+    // ==========================================================================
+    // input — keyboard / mouse / gamepad / event-queue / mapping layer
+    // ==========================================================================
+    {
+        // ── input_event type ─────────────────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name = "input_event"; ci.isBuiltin = true; ci.preLoadBase = true;
+            // Property getters (zero-arg, accessed via resolveProperty → builtinMethods)
+#define INP_STR_GETTER(aimlName, cName) \
+            ci.builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
+                AIML::AST::CallExpr*, auto) -> IRValue* { \
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo(); \
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
+                    ctx.getFunction(cName, i8p, {i8p}), {base})); \
+            };
+#define INP_I32_GETTER(aimlName, cName) \
+            ci.builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
+                AIML::AST::CallExpr*, auto) -> IRValue* { \
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo(); \
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
+                    ctx.getFunction(cName, ctx.builder.getInt32Ty(), {i8p}), {base})); \
+            };
+#define INP_F32_GETTER(aimlName, cName) \
+            ci.builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
+                AIML::AST::CallExpr*, auto) -> IRValue* { \
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo(); \
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
+                    ctx.getFunction(cName, ctx.builder.getFloatTy(), {i8p}), {base})); \
+            };
+            INP_STR_GETTER("type",     "aiml_input_event_type")
+            INP_STR_GETTER("key",      "aiml_input_event_key")
+            INP_I32_GETTER("btn",      "aiml_input_event_btn")
+            INP_F32_GETTER("pos_x",    "aiml_input_event_pos_x")
+            INP_F32_GETTER("pos_y",    "aiml_input_event_pos_y")
+            INP_F32_GETTER("scroll_x", "aiml_input_event_scroll_x")
+            INP_F32_GETTER("scroll_y", "aiml_input_event_scroll_y")
+            INP_STR_GETTER("char_",    "aiml_input_event_char_")
+#undef INP_STR_GETTER
+#undef INP_I32_GETTER
+#undef INP_F32_GETTER
+            ctx.classes["input_event"] = std::move(ci);
+        }
+
+        auto& inp = ctx.namespaces["input"];
+        auto* p   = llvm::PointerType::get(ctx.context, 0);
+        auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        auto* i32 = ctx.builder.getInt32Ty();
+        auto* f32 = ctx.builder.getFloatTy();
+        auto* vd  = ctx.builder.getVoidTy();
+        auto null = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+
+        // Helper: get string arg i (i8*)
+        // Helper: get i32 arg i
+        // Helper: get f32 arg i
+
+        // input.init(win)
+        inp.builtinFuncs["init"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p   = llvm::PointerType::get(ctx.context, 0);
+            auto* vd  = ctx.builder.getVoidTy();
+            llvm::Value* w = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            ctx.builder.CreateCall(ctx.getFunction("aiml_input_init", vd, {p}), {w});
+            return nullptr;
+        };
+
+        // input.update() / input.set_capture(on)
+        inp.builtinFuncs["update"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            ctx.builder.CreateCall(ctx.getFunction("aiml_input_update", ctx.builder.getVoidTy(), {}), {});
+            return nullptr;
+        };
+        inp.builtinFuncs["set_capture"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            llvm::Value* on = args.empty() ? ctx.builder.getInt32(0)
+                : ctx.builder.CreateZExtOrTrunc(
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                    ctx.builder.getInt32Ty());
+            ctx.builder.CreateCall(ctx.getFunction("aiml_input_set_capture",
+                ctx.builder.getVoidTy(), {ctx.builder.getInt32Ty()}), {on});
+            return nullptr;
+        };
+
+        // input.key_down/pressed/released(key: string) → i32
+#define INP_KEY_FUNC(name, cName) \
+        inp.builtinFuncs[name] = [](CompilerContext& ctx, \
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo(); \
+            llvm::Value* k = args.empty() \
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p)) \
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])); \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
+                ctx.getFunction(cName, ctx.builder.getInt32Ty(), {i8p}), {k})); \
+        };
+        INP_KEY_FUNC("key_down",     "aiml_input_key_down")
+        INP_KEY_FUNC("key_pressed",  "aiml_input_key_pressed")
+        INP_KEY_FUNC("key_released", "aiml_input_key_released")
+#undef INP_KEY_FUNC
+
+        // input.mouse_pos_x/y / delta_x/y / scroll_x/y → f32
+#define INP_F32_0(name, cName) \
+        inp.builtinFuncs[name] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* { \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
+                ctx.getFunction(cName, ctx.builder.getFloatTy(), {}), {})); \
+        };
+        INP_F32_0("mouse_pos_x",    "aiml_input_mouse_pos_x")
+        INP_F32_0("mouse_pos_y",    "aiml_input_mouse_pos_y")
+        INP_F32_0("mouse_delta_x",  "aiml_input_mouse_delta_x")
+        INP_F32_0("mouse_delta_y",  "aiml_input_mouse_delta_y")
+        INP_F32_0("mouse_scroll_x", "aiml_input_mouse_scroll_x")
+        INP_F32_0("mouse_scroll_y", "aiml_input_mouse_scroll_y")
+#undef INP_F32_0
+
+        // input.mouse_button/pressed/released(btn: i32) → i32
+#define INP_BTN_FUNC(name, cName) \
+        inp.builtinFuncs[name] = [](CompilerContext& ctx, \
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
+            llvm::Value* b = args.empty() ? ctx.builder.getInt32(0) \
+                : ctx.builder.CreateZExtOrTrunc( \
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])), \
+                    ctx.builder.getInt32Ty()); \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
+                ctx.getFunction(cName, ctx.builder.getInt32Ty(), \
+                    {ctx.builder.getInt32Ty()}), {b})); \
+        };
+        INP_BTN_FUNC("mouse_button",   "aiml_input_mouse_button")
+        INP_BTN_FUNC("mouse_pressed",  "aiml_input_mouse_pressed")
+        INP_BTN_FUNC("mouse_released", "aiml_input_mouse_released")
+#undef INP_BTN_FUNC
+
+        // input.gamepad_connected(pad) → i32
+        inp.builtinFuncs["gamepad_connected"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* pad = args.empty() ? ctx.builder.getInt32(0)
+                : ctx.builder.CreateZExtOrTrunc(
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])), i32);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_input_gamepad_connected", i32, {i32}), {pad}));
+        };
+
+        // input.gamepad_axis(pad, axis) → f32
+        inp.builtinFuncs["gamepad_axis"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto* f32 = ctx.builder.getFloatTy();
+            auto g32 = [&](int i) -> llvm::Value* {
+                if ((int)args.size() <= i) return ctx.builder.getInt32(0);
+                return ctx.builder.CreateZExtOrTrunc(
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])), i32);
+            };
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_input_gamepad_axis", f32, {i32, i32}),
+                {g32(0), g32(1)}));
+        };
+
+        // input.gamepad_button/pressed(pad, btn) → i32
+#define INP_GP_FUNC(name, cName) \
+        inp.builtinFuncs[name] = [](CompilerContext& ctx, \
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
+            auto* i32 = ctx.builder.getInt32Ty(); \
+            auto g32 = [&](int i) -> llvm::Value* { \
+                if ((int)args.size() <= i) return ctx.builder.getInt32(0); \
+                return ctx.builder.CreateZExtOrTrunc( \
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])), i32); \
+            }; \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
+                ctx.getFunction(cName, i32, {i32, i32}), {g32(0), g32(1)})); \
+        };
+        INP_GP_FUNC("gamepad_button",  "aiml_input_gamepad_button")
+        INP_GP_FUNC("gamepad_pressed", "aiml_input_gamepad_pressed")
+#undef INP_GP_FUNC
+
+        // input.has_event() → i32
+        inp.builtinFuncs["has_event"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_input_has_event", ctx.builder.getInt32Ty(), {}), {}));
+        };
+
+        // input.next_event() → input_event (returns opaque i8* pointer)
+        inp.builtinFuncs["next_event"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_input_next_event", p, {}), {}));
+        };
+
+        // input.clear_events()
+        inp.builtinFuncs["clear_events"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            ctx.builder.CreateCall(ctx.getFunction("aiml_input_clear_events",
+                ctx.builder.getVoidTy(), {}), {});
+            return nullptr;
+        };
+
+        // input.map_axis(name, key, scale)
+        inp.builtinFuncs["map_axis"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            auto null8 = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+            auto gstr = [&](int i) -> llvm::Value* {
+                if ((int)args.size() <= i) return null8;
+                return static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
+            };
+            llvm::Value* scale = args.size() > 2
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))
+                : llvm::ConstantFP::get(f32, 1.0);
+            if (!scale->getType()->isFloatTy()) scale = ctx.builder.CreateFPCast(scale, f32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_input_map_axis",
+                ctx.builder.getVoidTy(), {i8p, i8p, f32}),
+                {gstr(0), gstr(1), scale});
+            return nullptr;
+        };
+
+        // input.map_axis_mouse(name, comp, scale)
+        inp.builtinFuncs["map_axis_mouse"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            auto null8 = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+            auto gstr = [&](int i) -> llvm::Value* {
+                if ((int)args.size() <= i) return null8;
+                return static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
+            };
+            llvm::Value* scale = args.size() > 2
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))
+                : llvm::ConstantFP::get(f32, 1.0);
+            if (!scale->getType()->isFloatTy()) scale = ctx.builder.CreateFPCast(scale, f32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_input_map_axis_mouse",
+                ctx.builder.getVoidTy(), {i8p, i8p, f32}),
+                {gstr(0), gstr(1), scale});
+            return nullptr;
+        };
+
+        // input.map_axis_gamepad(name, pad, axis, scale)
+        inp.builtinFuncs["map_axis_gamepad"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto* f32 = ctx.builder.getFloatTy();
+            auto null8 = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+            llvm::Value* name = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) : null8;
+            auto g32 = [&](int i) -> llvm::Value* {
+                if ((int)args.size() <= i) return ctx.builder.getInt32(0);
+                return ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])), i32);
+            };
+            llvm::Value* scale = args.size() > 3
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[3]))
+                : llvm::ConstantFP::get(f32, 1.0);
+            if (!scale->getType()->isFloatTy()) scale = ctx.builder.CreateFPCast(scale, f32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_input_map_axis_gamepad",
+                ctx.builder.getVoidTy(), {i8p, i32, i32, f32}),
+                {name, g32(1), g32(2), scale});
+            return nullptr;
+        };
+
+        // input.map_action(name, key)
+        inp.builtinFuncs["map_action"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto null8 = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+            auto gstr = [&](int i) -> llvm::Value* {
+                if ((int)args.size() <= i) return null8;
+                return static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
+            };
+            ctx.builder.CreateCall(ctx.getFunction("aiml_input_map_action",
+                ctx.builder.getVoidTy(), {i8p, i8p}), {gstr(0), gstr(1)});
+            return nullptr;
+        };
+
+        // input.map_action_mouse(name, btn)
+        inp.builtinFuncs["map_action_mouse"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto null8 = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+            llvm::Value* name = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) : null8;
+            llvm::Value* btn  = args.size() > 1
+                ? ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])), i32)
+                : ctx.builder.getInt32(0);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_input_map_action_mouse",
+                ctx.builder.getVoidTy(), {i8p, i32}), {name, btn});
+            return nullptr;
+        };
+
+        // input.map_action_gamepad(name, pad, btn)
+        inp.builtinFuncs["map_action_gamepad"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto null8 = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+            llvm::Value* name = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) : null8;
+            auto g32 = [&](int i) -> llvm::Value* {
+                if ((int)args.size() <= i) return ctx.builder.getInt32(0);
+                return ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])), i32);
+            };
+            ctx.builder.CreateCall(ctx.getFunction("aiml_input_map_action_gamepad",
+                ctx.builder.getVoidTy(), {i8p, i32, i32}), {name, g32(1), g32(2)});
+            return nullptr;
+        };
+
+        // input.unmap(name) / input.clear_mappings()
+        inp.builtinFuncs["unmap"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* name = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            ctx.builder.CreateCall(ctx.getFunction("aiml_input_unmap",
+                ctx.builder.getVoidTy(), {i8p}), {name});
+            return nullptr;
+        };
+        inp.builtinFuncs["clear_mappings"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            ctx.builder.CreateCall(ctx.getFunction("aiml_input_clear_mappings",
+                ctx.builder.getVoidTy(), {}), {});
+            return nullptr;
+        };
+
+        // input.axis(name) → f32
+        inp.builtinFuncs["axis"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* name = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_input_axis", ctx.builder.getFloatTy(), {i8p}), {name}));
+        };
+
+        // input.action_down/pressed/released(name) → i32
+#define INP_ACTION_FUNC(name, cName) \
+        inp.builtinFuncs[name] = [](CompilerContext& ctx, \
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo(); \
+            llvm::Value* n = args.empty() \
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p)) \
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])); \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
+                ctx.getFunction(cName, ctx.builder.getInt32Ty(), {i8p}), {n})); \
+        };
+        INP_ACTION_FUNC("action_down",     "aiml_input_action_down")
+        INP_ACTION_FUNC("action_pressed",  "aiml_input_action_pressed")
+        INP_ACTION_FUNC("action_released", "aiml_input_action_released")
+#undef INP_ACTION_FUNC
+
+        (void)p; (void)i8p; (void)i32; (void)f32; (void)vd; (void)null;
+    } // end input
 }

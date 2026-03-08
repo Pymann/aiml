@@ -18,6 +18,7 @@
 | `gl_texture`     | `i8*`   | 2D-Textur auf der GPU |
 | `gl_framebuffer` | `i8*`   | Offscreen Render-Target (FBO) |
 | `gl_renderbuffer`| `i8*`   | Depth/Stencil-Attachment eines FBO |
+| `gl_mesh`        | `i8*`   | Gebündeltes Draw-Objekt: VAO + VBOs + IBO + index_count |
 
 Alle Handles sind opak — sie wrappen intern einen `GLuint` auf dem Heap,
 damit NULL-Semantik und Lebensdauer-Tracking möglich sind.
@@ -105,6 +106,52 @@ Für dynamische Daten (jedes Frame neu):
 - call: [vao.bind_ibo, ibo]
 ```
 
+### 3.4 `gl_mesh` — gebündeltes Mesh-Objekt
+
+`gl_mesh` fasst VAO, VBOs, IBO und den Index-Count in einem Handle zusammen.
+Erstellt mit `gl.create_mesh` (allgemein) oder `prim.to_gl_mesh()` (direkt aus glTF).
+
+**Allgemeine Erstellung:**
+
+```aiml
+# positions = buffer<f32>  (3 floats/vertex: xyz)
+# uvs       = buffer<f32>  (2 floats/vertex: uv)    — optional, null erlaubt
+# normals   = buffer<f32>  (3 floats/vertex: xyz)   — optional, null erlaubt
+# indices   = buffer<u32>
+
+- decl: [mesh, gl_mesh, { call: [gl.create_mesh, positions, uvs, normals, indices] }]
+```
+
+Intern generiert `gl.create_mesh` separate VBOs je Accessor und konfiguriert
+das VAO mit festem Attrib-Layout:
+
+| Attrib-Index | Inhalt    | Komponenten | Stride |
+|-------------|-----------|-------------|--------|
+| 0           | position  | 3 × f32     | 12 B   |
+| 1           | uv        | 2 × f32     | 8 B    |
+| 2           | normal    | 3 × f32     | 12 B   |
+
+**Aus glTF-Primitive (Kurzform):**
+
+```aiml
+# prim.to_gl_mesh() erkennt automatisch vorhandene Accessoren
+# (POSITION, TEXCOORD_0, NORMAL) und ruft intern gl.create_mesh auf.
+- decl: [mesh, gl_mesh, { call: [prim.to_gl_mesh] }]
+```
+
+**Draw-Call:**
+
+```aiml
+- call: [mesh.draw]                  # gl.draw_elements mit gespeichertem index_count
+- call: [mesh.draw_count, 36]        # override: nur n Indizes zeichnen
+```
+
+**Cleanup:**
+
+```aiml
+- call: [mesh.delete]   # gibt VAO + alle VBOs + IBO frei
+```
+
 ---
 
 ## 4. Shader
@@ -181,6 +228,17 @@ Default-Filterung: `GL_LINEAR_MIPMAP_LINEAR` (min) / `GL_LINEAR` (mag).
 # pixels = buffer<u8> (RGBA, width*height*4 Bytes)
 - decl: [tex, gl_texture, { call: [gl.create_texture, w, h, pixels] }]
 ```
+
+### 5.3 Direkt aus glTF-Image (Kurzform)
+
+```aiml
+# Decode (stb_image) + GPU-Upload in einem Schritt — kein buffer<u8> nötig
+- decl: [tex, gl_texture, { call: [img.to_gl_texture] }]
+- call: [tex.gen_mipmaps]
+```
+
+`img` ist ein `gltf_image`-Handle (aus `tex.image()` oder `scene.images().get(i)`).
+Intern: stb_image dekodiert direkt → `glTexImage2D`, kein AIML-seitiger Pixel-Buffer.
 
 ### 5.3 Sampler-Parameter setzen
 
@@ -399,62 +457,52 @@ Verwendung:
 
 ## 11. glTF-Mesh zu OpenGL
 
-Mit dem `gltf`-Namespace (43.1) und `gl` lassen sich glTF-Assets direkt rendern:
+Mit `prim.to_gl_mesh()` und `img.to_gl_texture()` lassen sich glTF-Assets
+in wenigen Zeilen rendern. Die manuelle VBO/VAO-Einrichtung entfällt vollständig.
+
+**Kurzform (empfohlen):**
 
 ```aiml
-- decl: [scene, gltf_scene, { call: [gltf.load, "/assets/character.glb"] }]
-- decl: [mesh,  gltf_mesh,  { call: [{ call: [scene.meshes] }.get, 0] }]
-- decl: [prim,  gltf_primitive, { call: [mesh.primitive, 0] }]
+- decl: [scene, gltf_scene,     { call: [gltf.load, "/assets/character.glb"] }]
+- decl: [meshes, list<gltf_mesh>]
+- set:  [meshes, { call: [scene.meshes] }]
+- decl: [prim,  gltf_primitive, { call: [{ call: [meshes.get, 0] }.primitive, 0] }]
 
-# Vertex-Daten direkt als buffer<f32> — kein Zwischenkopieren
-- decl: [positions, buffer<f32>, { call: [prim.positions] }]
-- decl: [normals,   buffer<f32>, { call: [prim.normals] }]
-- decl: [uvs,       buffer<f32>, { call: [prim.uvs, 0] }]
-- decl: [indices,   buffer<u32>, { call: [prim.indices] }]
-- decl: [ic, i32, { call: [prim.index_count] }]
-
-# Interleaved Buffer aufbauen (pos + normal + uv)
-- decl: [vc, i32, { call: [prim.vertex_count] }]
-- decl: [interleaved, buffer<f32>]
-- decl: [i, i32, 0]
-- while: [{ <: [i, vc] }]
-  body:
-    - call: [interleaved.push, { call: [positions.get, { *: [i, 3] }] }]         # x
-    - call: [interleaved.push, { call: [positions.get, { +: [{ *: [i, 3] }, 1] }] }] # y
-    - call: [interleaved.push, { call: [positions.get, { +: [{ *: [i, 3] }, 2] }] }] # z
-    - call: [interleaved.push, { call: [normals.get,   { *: [i, 3] }] }]
-    - call: [interleaved.push, { call: [normals.get,   { +: [{ *: [i, 3] }, 1] }] }]
-    - call: [interleaved.push, { call: [normals.get,   { +: [{ *: [i, 3] }, 2] }] }]
-    - call: [interleaved.push, { call: [uvs.get, { *: [i, 2] }] }]               # u
-    - call: [interleaved.push, { call: [uvs.get, { +: [{ *: [i, 2] }, 1] }] }]  # v
-    - set: [i, { +: [i, 1] }]
-
-# VBO + VAO (Stride = 8 floats = 32 Byte)
-- decl: [vbo, gl_buffer, { call: [gl.create_buffer, interleaved] }]
-- decl: [ibo, gl_buffer, { call: [gl.create_index_buffer, indices] }]
-- decl: [vao, gl_vao, { call: [gl.create_vao] }]
-- call: [vao.bind_vbo, vbo]
-- call: [vao.attrib, 0, 3, 32, 0]    # position
-- call: [vao.attrib, 1, 3, 32, 12]   # normal
-- call: [vao.attrib, 2, 2, 32, 24]   # uv
-- call: [vao.bind_ibo, ibo]
-
-# Material — Albedo-Textur
-- decl: [mat, gltf_material, { call: [prim.material] }]
-- decl: [albedo_gltf, gltf_texture, { call: [mat.base_color_texture] }]
-- decl: [img, gltf_image, { call: [albedo_gltf.image] }]
-- decl: [pixels, buffer<u8>, { call: [img.pixels_rgba] }]
-- decl: [tw, i32, { call: [img.width] }]
-- decl: [th, i32, { call: [img.height] }]
-- decl: [tex, gl_texture, { call: [gl.create_texture, tw, th, pixels] }]
+# Geometrie + Textur auf GPU laden — je eine Zeile
+- decl: [mesh, gl_mesh,    { call: [prim.to_gl_mesh] }]
+- decl: [mat,  gltf_material, { call: [prim.material] }]
+- decl: [img,  gltf_image, { call: [{ call: [mat.base_color_texture] }.image] }]
+- decl: [tex,  gl_texture, { call: [img.to_gl_texture] }]
+- call: [tex.gen_mipmaps]
 
 # Draw
 - call: [sh.use]
 - call: [sh.uniform_mat4, "uMVP", mvp]
 - call: [gl.bind_texture, tex, 0]
-- call: [gl.draw_elements, vao, ic]
+- call: [mesh.draw]
 
+# Cleanup
+- call: [mesh.delete]
+- call: [tex.delete]
 - call: [scene.free]
+```
+
+**Ausführliche Form** (wenn Zugriff auf einzelne Buffer nötig, z.B. für Physik-Mesh):
+
+```aiml
+- decl: [positions, buffer<f32>, { call: [prim.positions] }]
+- decl: [normals,   buffer<f32>, { call: [prim.normals] }]
+- decl: [uvs,       buffer<f32>, { call: [prim.uvs, 0] }]
+- decl: [indices,   buffer<u32>, { call: [prim.indices] }]
+- decl: [ic,        i32,         { call: [prim.index_count] }]
+
+- decl: [vbo, gl_buffer, { call: [gl.create_buffer, positions] }]
+- decl: [ibo, gl_buffer, { call: [gl.create_index_buffer, indices] }]
+- decl: [vao, gl_vao,   { call: [gl.create_vao] }]
+- call: [vao.bind_vbo, vbo]
+- call: [vao.attrib, 0, 3, 12, 0]
+- call: [vao.bind_ibo, ibo]
+- call: [gl.draw_elements, vao, ic]
 ```
 
 ---
@@ -486,6 +534,7 @@ Mit dem `gltf`-Namespace (43.1) und `gl` lassen sich glTF-Assets direkt rendern:
 | `gl.load_shader` | `vert: path, frag: path` | `gl_shader` | Shader aus Dateien |
 | `gl.load_texture` | `p: path` | `gl_texture` | PNG/JPG → GPU (stb_image) |
 | `gl.create_texture` | `w, h: i32, px: buffer<u8>` | `gl_texture` | RGBA-Daten → GPU |
+| `gl.create_mesh` | `pos, uvs, normals: buffer<f32>, idx: buffer<u32>` | `gl_mesh` | VAO+VBOs+IBO bündeln; `uvs`/`normals` dürfen null sein |
 | `gl.bind_texture` | `tex: gl_texture, slot: i32` | — | Texture Unit binden |
 | `gl.draw_arrays` | `vao: gl_vao, count: i32` | — | GL_TRIANGLES |
 | `gl.draw_elements` | `vao: gl_vao, count: i32` | — | GL_TRIANGLES, GL_UNSIGNED_INT |
@@ -534,6 +583,15 @@ Mit dem `gltf`-Namespace (43.1) und `gl` lassen sich glTF-Assets direkt rendern:
 | `set_filter` | `min, mag: i32` | Filter-Modi |
 | `gen_mipmaps` | — | `glGenerateMipmap` |
 | `delete` | — | `glDeleteTextures` |
+
+### `gl_mesh`-Methoden
+
+| Methode | Argumente | Rückgabe | Beschreibung |
+|---------|-----------|----------|--------------|
+| `draw` | — | — | `gl.draw_elements` mit gespeichertem index_count |
+| `draw_count` | `n: i32` | — | Draw mit override index_count |
+| `index_count` | — | `i32` | Anzahl Indizes |
+| `delete` | — | — | VAO + alle VBOs + IBO freigeben |
 
 ### `gl_framebuffer`-Methoden
 

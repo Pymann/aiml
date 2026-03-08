@@ -71,7 +71,9 @@ void  aiml_gl_shader_delete(void* shader);
 /* Load from file (stb_image: PNG/JPG/…) */
 void* aiml_gl_load_texture   (const char* path);
 /* Create from raw RGBA pixel buffer (w*h*4 bytes) */
-void* aiml_gl_create_texture (int32_t w, int32_t h, void* px_buf);
+void* aiml_gl_create_texture    (int32_t w, int32_t h, void* px_buf);
+/* Create directly from a raw stbi_uc* RGBA pointer (no buffer wrapper needed) */
+void* aiml_gl_create_texture_raw(int32_t w, int32_t h, const uint8_t* rgba);
 
 void  aiml_gl_texture_set_wrap   (void* tex, int32_t wrap_s, int32_t wrap_t);
 void  aiml_gl_texture_set_filter (void* tex, int32_t min_filter, int32_t mag_filter);
@@ -80,6 +82,24 @@ void  aiml_gl_texture_delete     (void* tex);
 
 /* Bind texture to a texture unit slot (for shader samplers) */
 void aiml_gl_bind_texture(void* tex, int32_t slot);
+
+/* ── gl_mesh — bundled VAO + VBOs + IBO ────────────────────────────────────── */
+
+/*
+ * gl.create_mesh(pos, uvs, normals, indices) — Standard layout:
+ *   Attrib 0: position  (xyz)  3×f32, stride 12
+ *   Attrib 1: uv        (uv)   2×f32, stride  8
+ *   Attrib 2: normal    (xyz)  3×f32, stride 12  (pass NULL buf for no normals)
+ *
+ * pos / uvs / normals / indices are AimlGltfBuffer* (same layout as buffer<T>).
+ * normals_buf may be NULL — attrib 2 is skipped in that case.
+ */
+void* aiml_gl_create_mesh(void* pos_buf, void* uvs_buf, void* normals_buf, void* idx_buf);
+
+void    aiml_gl_mesh_draw       (void* mesh);               /* GL_TRIANGLES, all indices */
+void    aiml_gl_mesh_draw_count (void* mesh, int32_t count);/* GL_TRIANGLES, count indices */
+int32_t aiml_gl_mesh_index_count(void* mesh);
+void    aiml_gl_mesh_delete     (void* mesh);
 
 /* ── Draw calls ────────────────────────────────────────────────────────────── */
 

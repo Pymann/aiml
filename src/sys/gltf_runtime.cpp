@@ -16,6 +16,7 @@
 #include <stb/stb_image.h>
 
 #include "gltf_runtime.h"
+#include "gl_runtime.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -734,6 +735,28 @@ int32_t aiml_gltf_img_height(void* img) {
     return 0;
 }
 
+void* aiml_gltf_img_to_gl_texture(void* img) {
+    auto* ref = (AimlGltfImageRef*)img;
+    if (!ref || !ref->ptr) return nullptr;
+
+    cgltf_image* ci = ref->ptr;
+    int w = 0, h = 0, ch = 0;
+    stbi_uc* px = nullptr;
+
+    if (ci->buffer_view && ci->buffer_view->buffer && ci->buffer_view->buffer->data) {
+        const uint8_t* raw = (const uint8_t*)ci->buffer_view->buffer->data
+                             + ci->buffer_view->offset;
+        px = stbi_load_from_memory(raw, (int)ci->buffer_view->size, &w, &h, &ch, 4);
+    } else if (ci->uri) {
+        px = stbi_load(ci->uri, &w, &h, &ch, 4);
+    }
+
+    if (!px) return nullptr;
+    void* tex = aiml_gl_create_texture_raw(w, h, px);
+    stbi_image_free(px);
+    return tex;
+}
+
 /* ── gltf_animation ──────────────────────────────────────────────────────── */
 
 const char* aiml_gltf_anim_name(void* anim) {
@@ -822,6 +845,27 @@ void aiml_gltf_skin_joints_fill(void* skin, void* list_ptr) {
     if (!s) return;
     for (cgltf_size i = 0; i < s->joints_count; ++i)
         list_push_ptr(lst, s->joints[i]);
+}
+
+/* ── prim.to_gl_mesh() ───────────────────────────────────────────────────── */
+
+void* aiml_gltf_prim_to_gl_mesh(void* prim) {
+    if (!prim) return nullptr;
+    /* Extract buffers (heap-allocated AimlGltfBuffer*) */
+    void* pos  = aiml_gltf_prim_positions(prim);
+    void* uvs  = aiml_gltf_prim_uvs(prim, 0);
+    void* norm = aiml_gltf_prim_normals(prim);
+    void* idx  = aiml_gltf_prim_indices(prim);
+
+    void* mesh = aiml_gl_create_mesh(pos, uvs, norm, idx);
+
+    /* Free intermediate heap buffers — gl_create_mesh has already uploaded to GPU */
+    if (pos)  { free(((AimlGltfBuffer*)pos)->data);  free(pos); }
+    if (uvs)  { free(((AimlGltfBuffer*)uvs)->data);  free(uvs); }
+    if (norm) { free(((AimlGltfBuffer*)norm)->data); free(norm); }
+    if (idx)  { free(((AimlGltfBuffer*)idx)->data);  free(idx); }
+
+    return mesh;
 }
 
 } /* extern "C" */

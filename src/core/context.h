@@ -539,6 +539,11 @@ namespace AIML {
         if (typeName == "gl_texture")      return llvm::Type::getInt8Ty(context)->getPointerTo();
         if (typeName == "gl_framebuffer")  return llvm::Type::getInt8Ty(context)->getPointerTo();
         if (typeName == "gl_renderbuffer") return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "gl_mesh")         return llvm::Type::getInt8Ty(context)->getPointerTo();
+
+        // engine / input handle types
+        if (typeName == "window_handle")   return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "input_event")     return llvm::Type::getInt8Ty(context)->getPointerTo();
 
         // thread_handle: pointer to { i64 tid, i8 joined, i8 detached }
         if (typeName == "thread_handle") {

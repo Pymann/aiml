@@ -84,6 +84,10 @@ void* aiml_gltf_prim_indices     (void* prim);              /* indices → u32  
 int32_t aiml_gltf_prim_vertex_count (void* prim);
 int32_t aiml_gltf_prim_index_count  (void* prim);
 void*   aiml_gltf_prim_material     (void* prim);           /* gltf_material* or NULL */
+/* Upload pos + uvs + normals + indices to GPU in one step.
+ * Returns AimlGLMesh* (gl_mesh). No intermediate buffer<T> needed in AIML.
+ * normals are optional; if accessor is missing, attrib 2 is skipped. */
+void*   aiml_gltf_prim_to_gl_mesh   (void* prim);
 
 /* ── gltf_material ───────────────────────────────────────────────────────── */
 
@@ -119,9 +123,12 @@ const char* aiml_gltf_tex_mag_filter (void* tex);
 
 /* gltf_image handles are AimlGltfImageRef* (ptr + scene backref).
  * pixels_rgba returns heap-alloc'd AimlGltfBuffer* (RGBA u8 data). */
-void*   aiml_gltf_img_pixels_rgba (void* img);
-int32_t aiml_gltf_img_width       (void* img);
-int32_t aiml_gltf_img_height      (void* img);
+void*   aiml_gltf_img_pixels_rgba   (void* img);
+int32_t aiml_gltf_img_width         (void* img);
+int32_t aiml_gltf_img_height        (void* img);
+/* Decode + upload to GPU in one step — returns AimlGLTexture* (gl_texture).
+ * No intermediate buffer<u8> needed in AIML code. */
+void*   aiml_gltf_img_to_gl_texture (void* img);
 
 /* ── gltf_animation ──────────────────────────────────────────────────────── */
 
