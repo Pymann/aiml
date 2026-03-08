@@ -20,6 +20,8 @@
 #include "src/sys/compress_runtime.h"
 #include "src/sys/gltf_runtime.h"
 #include "src/sys/gl_runtime.h"
+#include "src/sys/engine_runtime.h"
+#include "src/sys/input_runtime.h"
 
 // LLVM includes
 #include <llvm/IR/LLVMContext.h>
@@ -952,6 +954,7 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_img_pixels_rgba",              (void*)(intptr_t)aiml_gltf_img_pixels_rgba);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_img_width",                    (void*)(intptr_t)aiml_gltf_img_width);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_img_height",                   (void*)(intptr_t)aiml_gltf_img_height);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_img_to_gl_texture",            (void*)(intptr_t)aiml_gltf_img_to_gl_texture);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_anim_name",                    (void*)(intptr_t)aiml_gltf_anim_name);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_anim_duration",                (void*)(intptr_t)aiml_gltf_anim_duration);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_anim_sample_translation_x",    (void*)(intptr_t)aiml_gltf_anim_sample_translation_x);
@@ -964,6 +967,8 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_skin_joint_count",             (void*)(intptr_t)aiml_gltf_skin_joint_count);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_skin_inverse_bind_matrices",   (void*)(intptr_t)aiml_gltf_skin_inverse_bind_matrices);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_skin_joints_fill",             (void*)(intptr_t)aiml_gltf_skin_joints_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_img_to_gl_texture",            (void*)(intptr_t)aiml_gltf_img_to_gl_texture);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_to_gl_mesh",              (void*)(intptr_t)aiml_gltf_prim_to_gl_mesh);
     // gl
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_init",                           (void*)(intptr_t)aiml_gl_init);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_viewport",                       (void*)(intptr_t)aiml_gl_viewport);
@@ -1020,6 +1025,83 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_framebuffer_color_texture",      (void*)(intptr_t)aiml_gl_framebuffer_color_texture);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_framebuffer_resize",             (void*)(intptr_t)aiml_gl_framebuffer_resize);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_framebuffer_delete",             (void*)(intptr_t)aiml_gl_framebuffer_delete);
+    // gl_mesh
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_create_mesh",                    (void*)(intptr_t)aiml_gl_create_mesh);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_mesh_draw",                      (void*)(intptr_t)aiml_gl_mesh_draw);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_mesh_draw_count",                (void*)(intptr_t)aiml_gl_mesh_draw_count);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_mesh_index_count",               (void*)(intptr_t)aiml_gl_mesh_index_count);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_mesh_delete",                    (void*)(intptr_t)aiml_gl_mesh_delete);
+    // gltf prim.to_gl_mesh
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_to_gl_mesh",              (void*)(intptr_t)aiml_gltf_prim_to_gl_mesh);
+    // engine namespace
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_create_window",              (void*)(intptr_t)aiml_engine_create_window);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_create_window_fullscreen",   (void*)(intptr_t)aiml_engine_create_window_fullscreen);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_destroy_window",             (void*)(intptr_t)aiml_engine_destroy_window);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_set_title",                  (void*)(intptr_t)aiml_engine_set_title);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_window_size_x",              (void*)(intptr_t)aiml_engine_window_size_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_window_size_y",              (void*)(intptr_t)aiml_engine_window_size_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_make_current",               (void*)(intptr_t)aiml_engine_make_current);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_set_vsync",                  (void*)(intptr_t)aiml_engine_set_vsync);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_run",                        (void*)(intptr_t)aiml_engine_run);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_running",                    (void*)(intptr_t)aiml_engine_running);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_swap",                       (void*)(intptr_t)aiml_engine_swap);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_quit",                       (void*)(intptr_t)aiml_engine_quit);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_dt",                         (void*)(intptr_t)aiml_engine_dt);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_time",                       (void*)(intptr_t)aiml_engine_time);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_fps",                        (void*)(intptr_t)aiml_engine_fps);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_frame",                      (void*)(intptr_t)aiml_engine_frame);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_target_fps",                 (void*)(intptr_t)aiml_engine_target_fps);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_platform",                   (void*)(intptr_t)aiml_engine_platform);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_screen_size_x",              (void*)(intptr_t)aiml_engine_screen_size_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_screen_size_y",              (void*)(intptr_t)aiml_engine_screen_size_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_dpi",                        (void*)(intptr_t)aiml_engine_dpi);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_is_mobile",                  (void*)(intptr_t)aiml_engine_is_mobile);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_is_web",                     (void*)(intptr_t)aiml_engine_is_web);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_glfw_window",                (void*)(intptr_t)aiml_engine_glfw_window);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_register_input_update",      (void*)(intptr_t)aiml_engine_register_input_update);
+    // input namespace
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_event_type",                  (void*)(intptr_t)aiml_input_event_type);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_event_key",                   (void*)(intptr_t)aiml_input_event_key);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_event_btn",                   (void*)(intptr_t)aiml_input_event_btn);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_event_pos_x",                 (void*)(intptr_t)aiml_input_event_pos_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_event_pos_y",                 (void*)(intptr_t)aiml_input_event_pos_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_event_scroll_x",              (void*)(intptr_t)aiml_input_event_scroll_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_event_scroll_y",              (void*)(intptr_t)aiml_input_event_scroll_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_event_char_",                 (void*)(intptr_t)aiml_input_event_char_);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_init",                        (void*)(intptr_t)aiml_input_init);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_update",                      (void*)(intptr_t)aiml_input_update);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_set_capture",                 (void*)(intptr_t)aiml_input_set_capture);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_key_down",                    (void*)(intptr_t)aiml_input_key_down);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_key_pressed",                 (void*)(intptr_t)aiml_input_key_pressed);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_key_released",                (void*)(intptr_t)aiml_input_key_released);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_mouse_pos_x",                 (void*)(intptr_t)aiml_input_mouse_pos_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_mouse_pos_y",                 (void*)(intptr_t)aiml_input_mouse_pos_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_mouse_delta_x",               (void*)(intptr_t)aiml_input_mouse_delta_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_mouse_delta_y",               (void*)(intptr_t)aiml_input_mouse_delta_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_mouse_button",                (void*)(intptr_t)aiml_input_mouse_button);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_mouse_pressed",               (void*)(intptr_t)aiml_input_mouse_pressed);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_mouse_released",              (void*)(intptr_t)aiml_input_mouse_released);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_mouse_scroll_x",              (void*)(intptr_t)aiml_input_mouse_scroll_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_mouse_scroll_y",              (void*)(intptr_t)aiml_input_mouse_scroll_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_gamepad_connected",           (void*)(intptr_t)aiml_input_gamepad_connected);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_gamepad_axis",                (void*)(intptr_t)aiml_input_gamepad_axis);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_gamepad_button",              (void*)(intptr_t)aiml_input_gamepad_button);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_gamepad_pressed",             (void*)(intptr_t)aiml_input_gamepad_pressed);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_has_event",                   (void*)(intptr_t)aiml_input_has_event);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_next_event",                  (void*)(intptr_t)aiml_input_next_event);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_clear_events",                (void*)(intptr_t)aiml_input_clear_events);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_map_axis",                    (void*)(intptr_t)aiml_input_map_axis);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_map_axis_mouse",              (void*)(intptr_t)aiml_input_map_axis_mouse);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_map_axis_gamepad",            (void*)(intptr_t)aiml_input_map_axis_gamepad);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_map_action",                  (void*)(intptr_t)aiml_input_map_action);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_map_action_mouse",            (void*)(intptr_t)aiml_input_map_action_mouse);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_map_action_gamepad",          (void*)(intptr_t)aiml_input_map_action_gamepad);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_unmap",                       (void*)(intptr_t)aiml_input_unmap);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_clear_mappings",              (void*)(intptr_t)aiml_input_clear_mappings);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_axis",                        (void*)(intptr_t)aiml_input_axis);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_action_down",                 (void*)(intptr_t)aiml_input_action_down);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_action_pressed",              (void*)(intptr_t)aiml_input_action_pressed);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_action_released",             (void*)(intptr_t)aiml_input_action_released);
     // libm scalar functions (resolved from libc.so at runtime, but AddSymbol ensures JIT finds them)
     llvm::sys::DynamicLibrary::AddSymbol("sinf",   (void*)(intptr_t)sinf);
     llvm::sys::DynamicLibrary::AddSymbol("cosf",   (void*)(intptr_t)cosf);

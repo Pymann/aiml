@@ -64,6 +64,16 @@ struct AimlGLFramebuffer {
     int    w, h;
 };
 
+/* gl_mesh: VAO + up to 3 VBOs (pos, uv, normals) + IBO */
+struct AimlGLMesh {
+    GLuint vao;
+    GLuint vbo_pos;
+    GLuint vbo_uv;
+    GLuint vbo_norm;   /* 0 if no normals */
+    GLuint ibo;
+    int32_t index_count;
+};
+
 /* ── Hilfsfunktionen ────────────────────────────────────────────────────── */
 
 static AimlGLBuffer* make_buffer(GLenum target, const AimlGLRawBuf* src, GLenum usage) {
@@ -390,6 +400,13 @@ void* aiml_gl_create_texture(int32_t w, int32_t h, void* px_buf) {
     return t;
 }
 
+void* aiml_gl_create_texture_raw(int32_t w, int32_t h, const uint8_t* rgba) {
+    AimlGLTexture* t = new AimlGLTexture();
+    glGenTextures(1, &t->id);
+    upload_texture(t->id, w, h, rgba);
+    return t;
+}
+
 void aiml_gl_texture_set_wrap(void* tex, int32_t wrap_s, int32_t wrap_t) {
     if (!tex) return;
     glBindTexture(GL_TEXTURE_2D, ((AimlGLTexture*)tex)->id);
@@ -530,4 +547,99 @@ void aiml_gl_framebuffer_delete(void* fbo) {
     glDeleteTextures(1, &fb->color_tex);
     glDeleteRenderbuffers(1, &fb->depth_rbo);
     delete fb;
+}
+
+/* ── gl_mesh ─────────────────────────────────────────────────────────────── */
+
+static GLuint upload_vbo(const AimlGLRawBuf* buf) {
+    if (!buf || !buf->data || buf->size <= 0) return 0;
+    GLuint id = 0;
+    glGenBuffers(1, &id);
+    glBindBuffer(GL_ARRAY_BUFFER, id);
+    glBufferData(GL_ARRAY_BUFFER, buf->size, buf->data, GL_STATIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    return id;
+}
+
+void* aiml_gl_create_mesh(void* pos_buf, void* uvs_buf, void* normals_buf, void* idx_buf) {
+    if (!pos_buf || !idx_buf) return nullptr;
+
+    auto* p  = (AimlGLRawBuf*)pos_buf;
+    auto* u  = (AimlGLRawBuf*)uvs_buf;
+    auto* n  = (AimlGLRawBuf*)normals_buf;
+    auto* ix = (AimlGLRawBuf*)idx_buf;
+
+    AimlGLMesh* m = new AimlGLMesh();
+    m->index_count = (ix->size > 0) ? (ix->size / (int32_t)sizeof(uint32_t)) : 0;
+
+    /* Upload VBOs before binding VAO so GL_ARRAY_BUFFER state is independent */
+    m->vbo_pos  = upload_vbo(p);
+    m->vbo_uv   = u  ? upload_vbo(u) : 0;
+    m->vbo_norm = n  ? upload_vbo(n) : 0;
+
+    /* IBO */
+    glGenBuffers(1, &m->ibo);
+
+    /* VAO */
+    glGenVertexArrays(1, &m->vao);
+    glBindVertexArray(m->vao);
+
+    /* Bind IBO inside VAO so it's remembered */
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m->ibo);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, ix->size, ix->data, GL_STATIC_DRAW);
+
+    /* Attrib 0: position (xyz, 3×f32, stride 12) */
+    glBindBuffer(GL_ARRAY_BUFFER, m->vbo_pos);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, (void*)0);
+
+    /* Attrib 1: UV (uv, 2×f32, stride 8) */
+    if (m->vbo_uv) {
+        glBindBuffer(GL_ARRAY_BUFFER, m->vbo_uv);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 8, (void*)0);
+    }
+
+    /* Attrib 2: normal (xyz, 3×f32, stride 12) */
+    if (m->vbo_norm) {
+        glBindBuffer(GL_ARRAY_BUFFER, m->vbo_norm);
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 12, (void*)0);
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+
+    return m;
+}
+
+void aiml_gl_mesh_draw(void* mesh) {
+    if (!mesh) return;
+    auto* m = (AimlGLMesh*)mesh;
+    glBindVertexArray(m->vao);
+    glDrawElements(GL_TRIANGLES, m->index_count, GL_UNSIGNED_INT, nullptr);
+    glBindVertexArray(0);
+}
+
+void aiml_gl_mesh_draw_count(void* mesh, int32_t count) {
+    if (!mesh) return;
+    auto* m = (AimlGLMesh*)mesh;
+    glBindVertexArray(m->vao);
+    glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, nullptr);
+    glBindVertexArray(0);
+}
+
+int32_t aiml_gl_mesh_index_count(void* mesh) {
+    return mesh ? ((AimlGLMesh*)mesh)->index_count : 0;
+}
+
+void aiml_gl_mesh_delete(void* mesh) {
+    if (!mesh) return;
+    auto* m = (AimlGLMesh*)mesh;
+    glDeleteVertexArrays(1, &m->vao);
+    glDeleteBuffers(1, &m->ibo);
+    if (m->vbo_pos)  glDeleteBuffers(1, &m->vbo_pos);
+    if (m->vbo_uv)   glDeleteBuffers(1, &m->vbo_uv);
+    if (m->vbo_norm) glDeleteBuffers(1, &m->vbo_norm);
+    delete m;
 }
