@@ -51,10 +51,13 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
     } else if (tName.find("chan<") == 0 && tName.back() == '>') {
         // Auto-init with capacity=0 (true rendezvous). Use chan.init(N) for buffered.
         ChanImpl::init(ctx, unwrappedAlloca, ctx.builder.getInt64(0));
-    } else if (tName.rfind("buffer<", 0) == 0 && tName.back() == '>' && !decl->initialValue) {
-        // Auto-alloc buffer with a default capacity of 4096 bytes so that push()
-        // works without an explicit alloc() call (data ptr would otherwise be null).
-        BufferImpl::alloc(ctx, unwrappedAlloca, ctx.builder.getInt32(4096));
+    } else if (tName.rfind("buffer<", 0) == 0 && tName.back() == '>') {
+        // Auto-alloc when there is no initializer OR when the initializer is a
+        // buffer literal [v1, v2, ...] (which expands to push calls, not a struct copy).
+        bool isLiteral = decl->initialValue &&
+                         dynamic_cast<BufferLiteralExpr*>(decl->initialValue.get());
+        if (!decl->initialValue || isLiteral)
+            BufferImpl::alloc(ctx, unwrappedAlloca, ctx.builder.getInt32(4096));
     }
     
     Symbol sym;
@@ -69,6 +72,26 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
     LOG_DEBUG("Compiled AST Decl: " + decl->varName + " of " + decl->typeName);
     
     if (decl->initialValue) {
+        // Buffer literal: decl: [name, buffer<T>, [v1, v2, ...]]
+        // Buffer is already alloc'd above; emit one write per element.
+        if (auto* bufLit = dynamic_cast<BufferLiteralExpr*>(decl->initialValue.get())) {
+            std::string elemName = tName.substr(7, tName.size() - 8); // strip "buffer<" + ">"
+            llvm::Type* elemTy = ctx.getLLVMType(elemName);
+            for (auto& elem : bufLit->elements) {
+                IRValue* val = visitExpression(elem.get());
+                if (!val) continue;
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                if (elemTy && v->getType() != elemTy) {
+                    if (elemTy->isFloatingPointTy() && v->getType()->isFloatingPointTy())
+                        v = ctx.builder.CreateFPCast(v, elemTy, "fp_cast");
+                    else if (elemTy->isIntegerTy() && v->getType()->isIntegerTy())
+                        v = ctx.builder.CreateZExtOrTrunc(v, elemTy, "int_cast");
+                }
+                BufferImpl::write(ctx, unwrappedAlloca, v, elemTy ? elemTy : v->getType());
+            }
+            return; // done — skip normal expression init
+        }
+
         IRValue* initVal = visitExpression(decl->initialValue.get());
         if (initVal) {
             // path: auto-intern so pointer identity == path equality
