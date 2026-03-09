@@ -58,6 +58,13 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                          dynamic_cast<BufferLiteralExpr*>(decl->initialValue.get());
         if (!decl->initialValue || isLiteral)
             BufferImpl::alloc(ctx, unwrappedAlloca, ctx.builder.getInt32(4096));
+    } else if (tName == "ui_style" && !decl->initialValue) {
+        // Initialize ui_style with current top-of-style-stack defaults
+        auto* p    = llvm::PointerType::get(ctx.context, 0);
+        auto* voidTy = ctx.builder.getVoidTy();
+        ctx.builder.CreateCall(
+            ctx.getFunction("aiml_ui_copy_current_style", voidTy, {p}),
+            {unwrappedAlloca});
     }
     
     Symbol sym;

@@ -360,8 +360,7 @@ void aiml_input_init(void* win_handle) {
         return;
     }
     if (g_input) delete g_input;
-    g_input = new AimlInputState();
-    memset(g_input, 0, sizeof(*g_input));
+    g_input = new AimlInputState();   // value-init: PODs = 0, C++ members properly constructed
     g_input->window = glfw;
 
     /* Seed mouse position so first delta is 0 */
@@ -381,6 +380,9 @@ void aiml_input_init(void* win_handle) {
 
 void aiml_input_update(void) {
     if (!g_input) return;
+
+    /* 0. Clear events from previous frame (prevents unbounded deque growth) */
+    g_input->events.clear();
 
     /* 1. Save prev state */
     memcpy(g_input->prev_keys,  g_input->curr_keys,  AIML_MAX_KEYS);
