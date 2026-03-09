@@ -131,6 +131,18 @@ void* aiml_engine_create_window(int32_t w, int32_t h, const char* title) {
         return nullptr;
     }
 
+    /* Initial viewport matches actual framebuffer (may differ from window size on HiDPI) */
+    {
+        int fbw, fbh;
+        glfwGetFramebufferSize(glfw, &fbw, &fbh);
+        glViewport(0, 0, fbw, fbh);
+    }
+
+    /* Keep viewport in sync when the user resizes the window */
+    glfwSetFramebufferSizeCallback(glfw, [](GLFWwindow*, int fbw, int fbh) {
+        glViewport(0, 0, fbw, fbh);
+    });
+
     AimlWindow* win = new AimlWindow();
     memset(win, 0, sizeof(*win));
     win->glfw        = glfw;

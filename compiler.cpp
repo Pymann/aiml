@@ -22,6 +22,7 @@
 #include "src/sys/gl_runtime.h"
 #include "src/sys/engine_runtime.h"
 #include "src/sys/input_runtime.h"
+#include "src/sys/ui_runtime.h"
 
 // LLVM includes
 #include <llvm/IR/LLVMContext.h>
@@ -1102,6 +1103,47 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_input_action_down",                 (void*)(intptr_t)aiml_input_action_down);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_input_action_pressed",              (void*)(intptr_t)aiml_input_action_pressed);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_input_action_released",             (void*)(intptr_t)aiml_input_action_released);
+    // ui namespace
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_init",                           (void*)(intptr_t)aiml_ui_init);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_begin",                          (void*)(intptr_t)aiml_ui_begin);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_end",                            (void*)(intptr_t)aiml_ui_end);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_begin_grid",                     (void*)(intptr_t)aiml_ui_begin_grid);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_end_grid",                       (void*)(intptr_t)aiml_ui_end_grid);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_set_gap",                        (void*)(intptr_t)aiml_ui_set_gap);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_begin_cell",                     (void*)(intptr_t)aiml_ui_begin_cell);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_end_cell",                       (void*)(intptr_t)aiml_ui_end_cell);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_set_align",                      (void*)(intptr_t)aiml_ui_set_align);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_label",                          (void*)(intptr_t)aiml_ui_label);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_label_colored",                  (void*)(intptr_t)aiml_ui_label_colored);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_text_input",                     (void*)(intptr_t)aiml_ui_text_input);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_text_area",                      (void*)(intptr_t)aiml_ui_text_area);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button",                         (void*)(intptr_t)aiml_ui_button);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_icon",                    (void*)(intptr_t)aiml_ui_button_icon);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_checkbox",                       (void*)(intptr_t)aiml_ui_checkbox);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_toggle",                         (void*)(intptr_t)aiml_ui_toggle);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_radio",                          (void*)(intptr_t)aiml_ui_radio);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider",                         (void*)(intptr_t)aiml_ui_slider);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider_int",                     (void*)(intptr_t)aiml_ui_slider_int);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_set_slider_thumb",               (void*)(intptr_t)aiml_ui_set_slider_thumb);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_set_slider_track",               (void*)(intptr_t)aiml_ui_set_slider_track);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_drag_f32",                       (void*)(intptr_t)aiml_ui_drag_f32);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_bar",                   (void*)(intptr_t)aiml_ui_progress_bar);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_bar_colored",           (void*)(intptr_t)aiml_ui_progress_bar_colored);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_image",                          (void*)(intptr_t)aiml_ui_image);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_image_sized",                    (void*)(intptr_t)aiml_ui_image_sized);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_rect",                           (void*)(intptr_t)aiml_ui_rect);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_rect_rounded",                   (void*)(intptr_t)aiml_ui_rect_rounded);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_separator",                      (void*)(intptr_t)aiml_ui_separator);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_spacer",                         (void*)(intptr_t)aiml_ui_spacer);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_same_line",                      (void*)(intptr_t)aiml_ui_same_line);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_newline",                        (void*)(intptr_t)aiml_ui_newline);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_push_style",                     (void*)(intptr_t)aiml_ui_push_style);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_pop_style",                      (void*)(intptr_t)aiml_ui_pop_style);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_set_default_style",              (void*)(intptr_t)aiml_ui_set_default_style);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_copy_current_style",             (void*)(intptr_t)aiml_ui_copy_current_style);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_load_font",                      (void*)(intptr_t)aiml_ui_load_font);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_load_font_default",              (void*)(intptr_t)aiml_ui_load_font_default);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_set_default_font",               (void*)(intptr_t)aiml_ui_set_default_font);
     // libm scalar functions (resolved from libc.so at runtime, but AddSymbol ensures JIT finds them)
     llvm::sys::DynamicLibrary::AddSymbol("sinf",   (void*)(intptr_t)sinf);
     llvm::sys::DynamicLibrary::AddSymbol("cosf",   (void*)(intptr_t)cosf);

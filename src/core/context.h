@@ -545,6 +545,23 @@ namespace AIML {
         if (typeName == "window_handle")   return llvm::Type::getInt8Ty(context)->getPointerTo();
         if (typeName == "input_event")     return llvm::Type::getInt8Ty(context)->getPointerTo();
 
+        // ui types
+        if (typeName == "ui_font") return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "ui_style") {
+            // AimlUIStyle: {i32×5, f32×6, f32(_pad), i8*} — 13 fields, 56 bytes
+            auto* i8p = llvm::Type::getInt8Ty(context)->getPointerTo();
+            auto* i32t = llvm::Type::getInt32Ty(context);
+            auto* f32t = llvm::Type::getFloatTy(context);
+            llvm::StructType* t = llvm::StructType::getTypeByName(context, "ui_style");
+            if (!t) t = llvm::StructType::create(context,
+                {i32t, i32t, i32t, i32t, i32t,   /* color..border_color */
+                 f32t, f32t, f32t, f32t, f32t, f32t,  /* font_size..opacity */
+                 f32t,                              /* _pad */
+                 i8p},                             /* font */
+                "ui_style");
+            return t;
+        }
+
         // thread_handle: pointer to { i64 tid, i8 joined, i8 detached }
         if (typeName == "thread_handle") {
             llvm::StructType* handleTy = llvm::StructType::getTypeByName(context, "thread_handle");
