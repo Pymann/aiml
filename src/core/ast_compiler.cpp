@@ -267,6 +267,10 @@ void Compiler::registerTypeDecl(Node* node) {
             classInfo.padded_size = padded;
         }
 
+        // Mirror: propagate sync/rpc annotations
+        classInfo.syncFields = mod->syncFields;
+        classInfo.rpcMethods = mod->rpcMethods;
+
         ctx.classes[modelName] = classInfo;
         LOG_DEBUG("AST Registered Model: " + modelName);
     } else if (auto enm = dynamic_cast<EnumDecl*>(node)) {

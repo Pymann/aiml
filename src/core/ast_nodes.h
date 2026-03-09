@@ -257,6 +257,8 @@ public:
     std::vector<std::string> interfaces;
     std::vector<StructMember> members;
     std::vector<std::unique_ptr<FunctionDecl>> methods;
+    std::vector<std::string> syncFields;   // mirror: sync: [...]
+    std::vector<std::string> rpcMethods;   // mirror: rpc:  [...]
 
     std::string toString() const override { return "ClassDecl(" + name + ")"; }
 };
@@ -267,6 +269,8 @@ public:
     uint64_t version = 1;
     std::string primaryKey;   // field name used as entity ID; empty = slot-index (i32)
     std::vector<StructMember> fields;
+    std::vector<std::string> syncFields;   // mirror: sync: [...]
+    std::vector<std::string> rpcMethods;   // mirror: rpc:  [...]
 
     std::string toString() const override { return "ModelDecl(" + name + ")"; }
 };

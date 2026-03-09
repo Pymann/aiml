@@ -33,7 +33,7 @@
 #include "engine_runtime.h"
 
 /* ── AimlUIStyle C struct ─────────────────────────────────────────────────────
- * LLVM struct {i32×5, f32×6, f32(_pad), i8*} — 56 bytes, naturally aligned.
+ * LLVM struct {i32×5, f32×6, f32(padding_x), i8*, f32×3, f32(_pad2)} — 17 fields, 72 bytes.
  * Field order matches GEP indices in builtin_registry.cpp.
  * ─────────────────────────────────────────────────────────────────────────── */
 struct AimlUIStyle {
@@ -48,10 +48,14 @@ struct AimlUIStyle {
     float   padding_h;      /* 8  — horizontal padding (logical px)   */
     float   padding_v;      /* 9  — vertical padding   (logical px)   */
     float   opacity;        /* 10 — 0.0=invisible, 1.0=opaque         */
-    float   _pad;           /* 11 — alignment padding                 */
+    float   padding_x;      /* 11 — was _pad; horiz outside margin as fraction of cell width */
     void*   font;           /* 12 — AimlUIFont* (i8*)                 */
+    float   padding_y;      /* 13 — vert outside margin as fraction of cell height */
+    float   size_w;         /* 14 — absolute widget width in logical px; -1.0 = fill */
+    float   size_h;         /* 15 — absolute widget height in logical px; -1.0 = auto */
+    float   _pad2;          /* 16 — alignment reserve                 */
 };
-static_assert(sizeof(AimlUIStyle) == 56, "AimlUIStyle must be 56 bytes");
+static_assert(sizeof(AimlUIStyle) == 72, "AimlUIStyle must be 72 bytes");
 static_assert(offsetof(AimlUIStyle, font) == 48, "font must be at offset 48");
 
 /* ── Internal structs ────────────────────────────────────────────────────── */
@@ -82,6 +86,7 @@ struct UiDrawCmd {
     int    offset;
     int    count;
     int    image_mode; /* 1 = full RGBA sample (images), 0 = .r only (font/solid) */
+    int    scissor[4]; /* x, y, w, h in physical pixels (y=0 at BOTTOM for GL); all 0 = disabled */
 };
 
 /* Raw buffer layout: {i32 size, i32 capacity, i32 read_idx, i32 write_idx, u8* data} */
@@ -98,6 +103,35 @@ struct AimlGLTexture {
     GLuint id;
     int    width, height;
     int    channels;
+};
+
+/* ── Widget style presets ─────────────────────────────────────────────────── *
+ * Each carries a full AimlUIStyle snapshot + widget-specific texture slots.
+ * Created via ui.XXX_style_new() — captures current style stack top.
+ * Pass as last arg to widget functions; null = use global style unchanged.
+ * ─────────────────────────────────────────────────────────────────────────── */
+struct AimlUISliderStyle {
+    AimlUIStyle base;
+    GLuint thumb_tex; int thumb_w, thumb_h;
+    GLuint track_tex; int track_w, track_h;
+};
+struct AimlUIButtonStyle {
+    AimlUIStyle base;
+    GLuint bg_tex;     int bg_w,     bg_h;
+    GLuint hover_tex;  int hover_w,  hover_h;
+    GLuint active_tex; int active_w, active_h;
+};
+struct AimlUILabelStyle {
+    AimlUIStyle base;  /* font is in base.font; all appearance via base */
+};
+struct AimlUIProgressStyle {
+    AimlUIStyle base;
+    GLuint fill_tex; int fill_w, fill_h;
+    GLuint bg_tex;   int bg_w,   bg_h;
+};
+struct AimlUIPanelStyle {
+    AimlUIStyle base;
+    GLuint bg_tex; int bg_w, bg_h;
 };
 
 struct UiGridState {
@@ -170,14 +204,6 @@ struct AimlUIState {
     /* Text input buffers */
     std::unordered_map<uint32_t, std::string> text_bufs;
 
-    /* Optional thumb texture for sliders (0 = use SDF rect) */
-    GLuint slider_thumb_tex;
-    int    slider_thumb_w, slider_thumb_h;
-
-    /* Optional track texture for sliders (0 = use SDF pill) */
-    GLuint slider_track_tex;
-    int    slider_track_w, slider_track_h;
-
     bool initialized;
 };
 
@@ -213,8 +239,12 @@ static AimlUIStyle default_style() {
     s.padding_h    = 8.0f;
     s.padding_v    = 4.0f;
     s.opacity      = 1.0f;
-    s._pad         = 0.0f;
+    s.padding_x    = 0.0f;
     s.font         = nullptr;
+    s.padding_y    = 0.0f;
+    s.size_w       = -1.0f;
+    s.size_h       = -1.0f;
+    s._pad2        = 0.0f;
     return s;
 }
 
@@ -233,6 +263,7 @@ static void ensure_cmd(GLuint tex, int image_mode) {
         c.offset     = (int)g_ui->verts.size();
         c.count      = 0;
         c.image_mode = image_mode;
+        c.scissor[0] = c.scissor[1] = c.scissor[2] = c.scissor[3] = 0;
         g_ui->cmds.push_back(c);
     }
 }
@@ -327,6 +358,74 @@ static void cell_advance(float item_w, float item_h, float* out_x, float* out_y)
     cell.prev_item_h = item_h;
     if (out_x) *out_x = x;
     if (out_y) *out_y = y;
+}
+
+/* ── Scissor helper ──────────────────────────────────────────────────────── */
+
+/* Push a new draw cmd that inherits tex/image_mode from the previous one but
+ * sets a new scissor rect.  scissor[2]==0 means "disable scissor". */
+static void push_scissor_cmd(int scissor[4]) {
+    if (g_ui->cmds.empty()) return;
+    UiDrawCmd c = g_ui->cmds.back();
+    c.offset = (int)g_ui->verts.size();
+    c.count  = 0;
+    memcpy(c.scissor, scissor, sizeof(c.scissor));
+    g_ui->cmds.push_back(c);
+}
+
+/* ── Widget layout helper ────────────────────────────────────────────────── */
+
+/* Returned by apply_widget_layout */
+struct WidgetRect { float x, y, w, h; };
+
+/* Compute widget x/y/w/h honouring padding_x/y and size_w/h from cur_style().
+ * cell_x/y/w = base cell position and width.
+ * cell_h_avail = available height (pass 0 when unknown, skips padding_y on height).
+ * auto_h       = content-driven height (used when size_h == -1).
+ * out_scissor[4] is set to the padded cell rect in physical pixels (GL y=0 at bottom)
+ * if clipping is needed, or all-zeros if no clipping required.
+ * Returns the final widget rect {x, y, w, h}. */
+static WidgetRect apply_widget_layout(float cell_x, float cell_y,
+                                       float cell_w, float cell_h_avail,
+                                       float auto_h,
+                                       int out_scissor[4]) {
+    const AimlUIStyle& st = cur_style();
+    float dpi = cur_dpi();
+
+    /* Padded available area */
+    float px = st.padding_x, py = st.padding_y;
+    float avail_x = cell_x + cell_w * px;
+    float avail_w = cell_w * (1.0f - 2.0f * px);
+    float avail_y = cell_y + (cell_h_avail > 0 ? cell_h_avail * py : 0.0f);
+    float avail_h = (cell_h_avail > 0) ? cell_h_avail * (1.0f - 2.0f * py) : auto_h;
+
+    /* Widget size */
+    float ww = (st.size_w > 0.0f) ? st.size_w * dpi : avail_w;
+    float wh = (st.size_h > 0.0f) ? st.size_h * dpi : auto_h;
+
+    /* Center widget within padded area */
+    float wx = avail_x + (avail_w - fminf(ww, avail_w)) * 0.5f;
+    float wy = avail_y;
+
+    /* Scissor: needed only when widget exceeds available area */
+    bool needs_scissor = (ww > avail_w + 0.5f || wh > avail_h + 0.5f);
+    if (out_scissor) {
+        if (needs_scissor) {
+            int win_h = g_ui->win_h;
+            int sx = (int)(avail_x);
+            int sy = (int)(avail_y);
+            int sw = (int)(avail_w + 0.5f);
+            int sh = (int)(avail_h + 0.5f);
+            out_scissor[0] = sx;
+            out_scissor[1] = win_h - (sy + sh);   /* flip Y for GL */
+            out_scissor[2] = sw;
+            out_scissor[3] = sh;
+        } else {
+            out_scissor[0] = out_scissor[1] = out_scissor[2] = out_scissor[3] = 0;
+        }
+    }
+
+    return {wx, wy, ww, wh};
 }
 
 /* ── Hit testing ─────────────────────────────────────────────────────────── */
@@ -652,10 +751,17 @@ void aiml_ui_end(void) {
 
     for (auto& cmd : g_ui->cmds) {
         if (cmd.count == 0) continue;
+        if (cmd.scissor[2] > 0 && cmd.scissor[3] > 0) {
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(cmd.scissor[0], cmd.scissor[1], cmd.scissor[2], cmd.scissor[3]);
+        } else {
+            glDisable(GL_SCISSOR_TEST);
+        }
         glBindTexture(GL_TEXTURE_2D, cmd.tex);
         glUniform1i(g_ui->u_image_mode, cmd.image_mode);
         glDrawArrays(GL_TRIANGLES, cmd.offset, cmd.count);
     }
+    glDisable(GL_SCISSOR_TEST);
 
     glBindVertexArray(0);
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -802,6 +908,19 @@ static void draw_widget_rect(float x, float y, float w, float h,
               radius, border_w, bg, true);
 }
 
+/* Query GL texture dimensions from GL state (AimlGLTexture only stores id) */
+static void style_set_tex(GLuint* tex, int* w, int* h, void* gl_tex) {
+    if (!gl_tex) { *tex = 0; *w = *h = 0; return; }
+    GLuint id = ((AimlGLTexture*)gl_tex)->id;
+    *tex = id;
+    GLint tw = 1, th = 1;
+    glBindTexture(GL_TEXTURE_2D, id);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH,  &tw);
+    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    *w = (int)tw; *h = (int)th;
+}
+
 static void draw_label_in_rect(const char* text, float x, float y, float w, float h,
                                 int32_t color) {
     AimlUIFont* f = active_font();
@@ -817,32 +936,66 @@ static void draw_label_in_rect(const char* text, float x, float y, float w, floa
 
 /* ── Text widgets ─────────────────────────────────────────────────────────── */
 
-void aiml_ui_label(const char* text) {
+void aiml_ui_label(const char* text, void* preset) {
     if (!text || g_ui->cell_stack.empty()) return;
+    AimlUILabelStyle* st = (AimlUILabelStyle*)preset;
+    if (st) g_ui->style_stack.push_back(st->base);
     AimlUIFont* f = active_font();
     float fh = f ? f->line_height : lp(cur_style().font_size);
     float fw = f ? text_width(f, text) : 100.0f;
+    UiCellState& cell = cur_cell();
+
+    int scissor[4];
+    WidgetRect wr = apply_widget_layout(cell.x, cell.y + cell.cursor_y,
+                                         cell.w, 0, fh, scissor);
     float ix, iy;
     cell_advance(fw, fh, &ix, &iy);
+
     uint32_t rgba = style_rgba(cur_style().color, cur_style().opacity);
     float pad = lp(4.0f);
-    push_text(f, text, ix + pad, iy, cur_cell().w - pad, rgba);
+
+    if (scissor[2] > 0) push_scissor_cmd(scissor);
+    push_text(f, text, wr.x + pad, wr.y, wr.w - pad, rgba);
+    if (scissor[2] > 0) {
+        int clear[4] = {0,0,0,0};
+        push_scissor_cmd(clear);
+    }
+
+    if (st) g_ui->style_stack.pop_back();
 }
 
-void aiml_ui_label_colored(const char* text, int32_t color) {
+void aiml_ui_label_colored(const char* text, int32_t color, void* preset) {
     if (!text || g_ui->cell_stack.empty()) return;
+    AimlUILabelStyle* st = (AimlUILabelStyle*)preset;
+    if (st) g_ui->style_stack.push_back(st->base);
     AimlUIFont* f = active_font();
     float fh = f ? f->line_height : lp(cur_style().font_size);
     float fw = f ? text_width(f, text) : 100.0f;
+    UiCellState& cell = cur_cell();
+
+    int scissor[4];
+    WidgetRect wr = apply_widget_layout(cell.x, cell.y + cell.cursor_y,
+                                         cell.w, 0, fh, scissor);
     float ix, iy;
     cell_advance(fw, fh, &ix, &iy);
+
     uint32_t rgba = style_rgba(color, cur_style().opacity);
     float pad = lp(4.0f);
-    push_text(f, text, ix + pad, iy, cur_cell().w - pad, rgba);
+
+    if (scissor[2] > 0) push_scissor_cmd(scissor);
+    push_text(f, text, wr.x + pad, wr.y, wr.w - pad, rgba);
+    if (scissor[2] > 0) {
+        int clear[4] = {0,0,0,0};
+        push_scissor_cmd(clear);
+    }
+
+    if (st) g_ui->style_stack.pop_back();
 }
 
-const char* aiml_ui_text_input(const char* id, const char* buf) {
+const char* aiml_ui_text_input(const char* id, const char* buf, void* preset) {
     if (!id || g_ui->cell_stack.empty()) return buf ? buf : "";
+    AimlUILabelStyle* st = (AimlUILabelStyle*)preset;
+    if (st) g_ui->style_stack.push_back(st->base);
     uint32_t wid = fnv1a(id);
     /* Init buffer if not tracked */
     auto it = g_ui->text_bufs.find(wid);
@@ -864,51 +1017,90 @@ const char* aiml_ui_text_input(const char* id, const char* buf) {
     draw_border(x, y, w, h, cur_style().border_color, lp(cur_style().border_width));
     draw_label_in_rect(it->second.c_str(), x, y, w, h, cur_style().color);
 
+    if (st) g_ui->style_stack.pop_back();
     return it->second.c_str();
 }
 
-const char* aiml_ui_text_area(const char* id, const char* buf) {
+const char* aiml_ui_text_area(const char* id, const char* buf, void* preset) {
     /* Simple single-line implementation for now */
-    return aiml_ui_text_input(id, buf);
+    return aiml_ui_text_input(id, buf, preset);
 }
 
 /* ── Interactive widgets ──────────────────────────────────────────────────── */
 
-int32_t aiml_ui_button(const char* label) {
+int32_t aiml_ui_button(const char* label, void* preset) {
     if (!label || g_ui->cell_stack.empty()) return 0;
+    AimlUIButtonStyle* st = (AimlUIButtonStyle*)preset;
+    if (st) g_ui->style_stack.push_back(st->base);
     uint32_t wid = fnv1a(label);
     AimlUIFont* f = active_font();
     float fh = f ? f->line_height : lp(cur_style().font_size);
     float ph = lp(cur_style().padding_v);
-    float bh = fh + ph * 2;
-    float bw = cur_cell().w;  /* full cell width */
+    float auto_h = fh + ph * 2;
+    UiCellState& cell = cur_cell();
 
-    float ix, iy;
-    cell_advance(bw, bh, &ix, &iy);
+    int scissor[4];
+    WidgetRect wr = apply_widget_layout(cell.x, cell.y + cell.cursor_y,
+                                         cell.w, 0, auto_h, scissor);
+    float bw = wr.w;
+    float bh = wr.h;
+    float ix = wr.x, iy = wr.y;
+
+    /* cursor advances by full cell width so layout is predictable */
+    cell_advance(cell.w, bh, nullptr, nullptr);
 
     bool hot = widget_hot(wid, ix, iy, bw, bh);
     if (hot) g_ui->hot = wid;
     if (hot && g_ui->mouse_pressed) g_ui->active_w = wid;
 
-    int32_t bg;
-    if (g_ui->active_w == wid && hot)  bg = cur_style().active_color;
-    else if (hot)                       bg = cur_style().hover_color;
-    else                                bg = cur_style().bg_color;
+    bool is_active = (g_ui->active_w == wid && hot);
+    bool is_hover  = hot && !is_active;
 
-    draw_widget_rect(ix, iy, bw, bh, bg, cur_style().border_color,
-                     lp(cur_style().border_width), lp(cur_style().corner_radius));
+    if (scissor[2] > 0) push_scissor_cmd(scissor);
+
+    if (st) {
+        GLuint use_tex = 0;
+        if (is_active && st->active_tex) use_tex = st->active_tex;
+        else if (is_hover && st->hover_tex) use_tex = st->hover_tex;
+        else if (st->bg_tex) use_tex = st->bg_tex;
+        if (use_tex) {
+            push_quad(ix, iy, bw, bh, 0, 0, 1, 1, 0xFFFFFFFF, use_tex, 1, 0.0f, 0.0f, 0, false);
+        } else {
+            int32_t bg;
+            if (is_active)    bg = cur_style().active_color;
+            else if (is_hover) bg = cur_style().hover_color;
+            else               bg = cur_style().bg_color;
+            draw_widget_rect(ix, iy, bw, bh, bg, cur_style().border_color,
+                             lp(cur_style().border_width), lp(cur_style().corner_radius));
+        }
+    } else {
+        int32_t bg;
+        if (is_active)    bg = cur_style().active_color;
+        else if (is_hover) bg = cur_style().hover_color;
+        else               bg = cur_style().bg_color;
+        draw_widget_rect(ix, iy, bw, bh, bg, cur_style().border_color,
+                         lp(cur_style().border_width), lp(cur_style().corner_radius));
+    }
     draw_label_in_rect(label, ix, iy, bw, bh, cur_style().color);
 
+    if (scissor[2] > 0) {
+        int clear[4] = {0,0,0,0};
+        push_scissor_cmd(clear);
+    }
+
+    if (st) g_ui->style_stack.pop_back();
     return (hot && g_ui->mouse_released) ? 1 : 0;
 }
 
 int32_t aiml_ui_button_icon(const char* label, void* tex) {
     /* For now, just render as regular button */
-    return aiml_ui_button(label);
+    return aiml_ui_button(label, nullptr);
 }
 
-int32_t aiml_ui_checkbox(const char* id, int32_t value) {
+int32_t aiml_ui_checkbox(const char* id, int32_t value, void* preset) {
     if (!id || g_ui->cell_stack.empty()) return value;
+    AimlUIButtonStyle* st = (AimlUIButtonStyle*)preset;
+    if (st) g_ui->style_stack.push_back(st->base);
     uint32_t wid = fnv1a(id);
     float sz = lp(cur_style().font_size);
     float ix, iy;
@@ -919,26 +1111,45 @@ int32_t aiml_ui_checkbox(const char* id, int32_t value) {
     int32_t new_val = value;
     if (hot && g_ui->mouse_released) new_val = value ? 0 : 1;
 
-    int32_t bg = hot ? cur_style().hover_color : cur_style().bg_color;
-    draw_filled_rect(ix, iy, sz, sz, bg);
-    draw_border(ix, iy, sz, sz, cur_style().border_color, lp(1.0f));
-    if (new_val) {
-        float m = sz * 0.2f;
-        draw_filled_rect(ix+m, iy+m, sz-m*2, sz-m*2, cur_style().color);
+    if (st) {
+        GLuint use_tex = (new_val && st->active_tex) ? st->active_tex :
+                         (!new_val && st->bg_tex) ? st->bg_tex : 0;
+        if (use_tex) {
+            push_quad(ix, iy, sz, sz, 0, 0, 1, 1, 0xFFFFFFFF, use_tex, 1, 0.0f, 0.0f, 0, false);
+        } else {
+            int32_t bg = hot ? cur_style().hover_color : cur_style().bg_color;
+            draw_filled_rect(ix, iy, sz, sz, bg);
+            draw_border(ix, iy, sz, sz, cur_style().border_color, lp(1.0f));
+            if (new_val) {
+                float m = sz * 0.2f;
+                draw_filled_rect(ix+m, iy+m, sz-m*2, sz-m*2, cur_style().color);
+            }
+        }
+    } else {
+        int32_t bg = hot ? cur_style().hover_color : cur_style().bg_color;
+        draw_filled_rect(ix, iy, sz, sz, bg);
+        draw_border(ix, iy, sz, sz, cur_style().border_color, lp(1.0f));
+        if (new_val) {
+            float m = sz * 0.2f;
+            draw_filled_rect(ix+m, iy+m, sz-m*2, sz-m*2, cur_style().color);
+        }
     }
 
     AimlUIFont* f = active_font();
     uint32_t rgba = style_rgba(cur_style().color, cur_style().opacity);
     push_text(f, id, ix + sz + lp(4.0f), iy, cur_cell().w, rgba);
+    if (st) g_ui->style_stack.pop_back();
     return new_val;
 }
 
-int32_t aiml_ui_toggle(const char* id, int32_t value) {
-    return aiml_ui_checkbox(id, value);
+int32_t aiml_ui_toggle(const char* id, int32_t value, void* preset) {
+    return aiml_ui_checkbox(id, value, preset);
 }
 
-int32_t aiml_ui_radio(const char* id, int32_t option, int32_t current) {
+int32_t aiml_ui_radio(const char* id, int32_t option, int32_t current, void* preset) {
     if (!id || g_ui->cell_stack.empty()) return current;
+    AimlUIButtonStyle* st = (AimlUIButtonStyle*)preset;
+    if (st) g_ui->style_stack.push_back(st->base);
     char wid_str[64]; snprintf(wid_str, 64, "%s_%d", id, option);
     uint32_t wid = fnv1a(wid_str);
     float sz = lp(cur_style().font_size);
@@ -959,18 +1170,27 @@ int32_t aiml_ui_radio(const char* id, int32_t option, int32_t current) {
     AimlUIFont* f = active_font();
     uint32_t rgba = style_rgba(cur_style().color, cur_style().opacity);
     push_text(f, id, ix + sz + lp(4.0f), iy, cur_cell().w, rgba);
+    if (st) g_ui->style_stack.pop_back();
     return current;
 }
 
 /* ── Value widgets ────────────────────────────────────────────────────────── */
 
-float aiml_ui_slider(const char* id, float value, float mn, float mx) {
+float aiml_ui_slider(const char* id, float value, float mn, float mx, void* preset) {
     if (!id || g_ui->cell_stack.empty()) return value;
+    AimlUISliderStyle* st = (AimlUISliderStyle*)preset;
+    if (st) g_ui->style_stack.push_back(st->base);
     uint32_t wid = fnv1a(id);
     UiCellState& cell = cur_cell();
-    float h   = lp(cur_style().font_size + cur_style().padding_v * 2);
-    float x   = cell.x, y = cell.y + cell.cursor_y, w = cell.w;
-    cell_advance(w, h, nullptr, nullptr);
+    float auto_h = lp(cur_style().font_size + cur_style().padding_v * 2);
+
+    int scissor[4];
+    WidgetRect wr = apply_widget_layout(cell.x, cell.y + cell.cursor_y,
+                                         cell.w, auto_h, auto_h, scissor);
+    float x = wr.x, y = wr.y, w = wr.w, h = wr.h;
+    cell_advance(cell.w, h, nullptr, nullptr);
+
+    if (scissor[2] > 0) push_scissor_cmd(scissor);
 
     bool hot = widget_hot(wid, x, y, w, h);
     if (hot) g_ui->hot = wid;
@@ -984,15 +1204,18 @@ float aiml_ui_slider(const char* id, float value, float mn, float mx) {
     }
 
     /* Track — textured or pill-shaped SDF */
+    GLuint track_tex = st ? st->track_tex : 0;
+    int    track_tw  = st ? st->track_w   : 0;
+    int    track_th  = st ? st->track_h   : 0;
     float track_h, track_y;
-    if (g_ui->slider_track_tex && g_ui->slider_track_h > 0) {
-        float aspect = (float)g_ui->slider_track_w / g_ui->slider_track_h;
-        track_h = h * 0.55f;                          /* height = ~55% of slot  */
-        float tw = track_h * aspect;                  /* stretch to full width  */
+    if (track_tex && track_th > 0) {
+        float aspect = (float)track_tw / track_th;
+        track_h = h * 0.55f;
+        float tw = track_h * aspect;
         (void)tw;
         track_y = y + (h - track_h) * 0.5f;
         push_quad(x, track_y, w, track_h, 0, 0, 1, 1,
-                  0xFFFFFFFF, g_ui->slider_track_tex, 1,
+                  0xFFFFFFFF, track_tex, 1,
                   0.0f, 0.0f, 0, false);
     } else {
         track_h = h * 0.2f;
@@ -1002,19 +1225,21 @@ float aiml_ui_slider(const char* id, float value, float mn, float mx) {
                          cur_style().border_color, (int32_t)0x00000000, 0.0f, track_r);
     }
     /* Thumb — textured sprite or rounded rect */
-    float t = (mx > mn) ? (value - mn) / (mx - mn) : 0.0f;
+    GLuint thumb_tex = st ? st->thumb_tex : 0;
+    int    thumb_tw  = st ? st->thumb_w   : 0;
+    int    thumb_th  = st ? st->thumb_h   : 0;
+    float fval = (mx > mn) ? (value - mn) / (mx - mn) : 0.0f;
     float thumb_h = h * 0.85f;
-    float thumb_w = (g_ui->slider_thumb_tex && g_ui->slider_thumb_h > 0)
-                    ? thumb_h * ((float)g_ui->slider_thumb_w / g_ui->slider_thumb_h)
+    float thumb_w = (thumb_tex && thumb_th > 0)
+                    ? thumb_h * ((float)thumb_tw / thumb_th)
                     : h * 0.7f;
-    float tx = x + t * (w - thumb_w);
+    float tx = x + fval * (w - thumb_w);
     float ty = y + (h - thumb_h) * 0.5f;
-    if (g_ui->slider_thumb_tex) {
-        /* Tint: slightly brighter on hover/active */
+    if (thumb_tex) {
         uint32_t tint = (hot || g_ui->active_w == wid) ? 0xFFFFFFFF : 0xCCCCCCFF;
         push_quad(tx, ty, thumb_w, thumb_h, 0, 0, 1, 1,
-                  tint, g_ui->slider_thumb_tex, 1,
-                  0.0f, 0.0f, 0, false);  /* use_sdf=false: full texture, no clipping */
+                  tint, thumb_tex, 1,
+                  0.0f, 0.0f, 0, false);
     } else {
         int32_t thumb_col = (hot || g_ui->active_w == wid)
                             ? cur_style().hover_color : cur_style().active_color;
@@ -1022,59 +1247,31 @@ float aiml_ui_slider(const char* id, float value, float mn, float mx) {
                          thumb_col, cur_style().border_color,
                          lp(cur_style().border_width), lp(cur_style().corner_radius));
     }
+    if (scissor[2] > 0) {
+        int clear[4] = {0,0,0,0};
+        push_scissor_cmd(clear);
+    }
+    if (st) g_ui->style_stack.pop_back();
     return value;
 }
 
-void aiml_ui_set_slider_thumb(void* tex) {
-    if (!g_ui) return;
-    if (!tex) {
-        g_ui->slider_thumb_tex = 0;
-        g_ui->slider_thumb_w   = 0;
-        g_ui->slider_thumb_h   = 0;
-        return;
-    }
-    AimlGLTexture* t = (AimlGLTexture*)tex;
-    g_ui->slider_thumb_tex = t->id;
-    /* Query actual texture dimensions via GL (AimlGLTexture only stores id) */
-    GLint tw = 1, th = 1;
-    glBindTexture(GL_TEXTURE_2D, t->id);
-    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH,  &tw);
-    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    g_ui->slider_thumb_w = (int)tw;
-    g_ui->slider_thumb_h = (int)th;
+int32_t aiml_ui_slider_int(const char* id, int32_t value, int32_t mn, int32_t mx, void* preset) {
+    return (int32_t)aiml_ui_slider(id, (float)value, (float)mn, (float)mx, preset);
 }
 
-void aiml_ui_set_slider_track(void* tex) {
-    if (!g_ui) return;
-    if (!tex) {
-        g_ui->slider_track_tex = 0;
-        g_ui->slider_track_w   = 0;
-        g_ui->slider_track_h   = 0;
-        return;
-    }
-    AimlGLTexture* t = (AimlGLTexture*)tex;
-    g_ui->slider_track_tex = t->id;
-    GLint tw = 1, th = 1;
-    glBindTexture(GL_TEXTURE_2D, t->id);
-    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH,  &tw);
-    glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
-    glBindTexture(GL_TEXTURE_2D, 0);
-    g_ui->slider_track_w = (int)tw;
-    g_ui->slider_track_h = (int)th;
-}
-
-int32_t aiml_ui_slider_int(const char* id, int32_t value, int32_t mn, int32_t mx) {
-    return (int32_t)aiml_ui_slider(id, (float)value, (float)mn, (float)mx);
-}
-
-float aiml_ui_drag_f32(const char* id, float value, float speed) {
+float aiml_ui_drag_f32(const char* id, float value, float speed, void* preset) {
     if (!id || g_ui->cell_stack.empty()) return value;
+    AimlUISliderStyle* st = (AimlUISliderStyle*)preset;
+    if (st) g_ui->style_stack.push_back(st->base);
     uint32_t wid = fnv1a(id);
     UiCellState& cell = cur_cell();
-    float h = lp(cur_style().font_size + cur_style().padding_v * 2);
-    float x = cell.x, y = cell.y + cell.cursor_y, w = cell.w;
-    cell_advance(w, h, nullptr, nullptr);
+    float auto_h = lp(cur_style().font_size + cur_style().padding_v * 2);
+
+    int scissor[4];
+    WidgetRect wr = apply_widget_layout(cell.x, cell.y + cell.cursor_y,
+                                         cell.w, auto_h, auto_h, scissor);
+    float x = wr.x, y = wr.y, w = wr.w, h = wr.h;
+    cell_advance(cell.w, h, nullptr, nullptr);
 
     bool hot = widget_hot(wid, x, y, w, h);
     if (hot) g_ui->hot = wid;
@@ -1084,33 +1281,65 @@ float aiml_ui_drag_f32(const char* id, float value, float speed) {
         value += dx * speed;
     }
 
+    if (scissor[2] > 0) push_scissor_cmd(scissor);
     int32_t bg = (g_ui->active_w == wid) ? cur_style().active_color : cur_style().bg_color;
     draw_filled_rect(x, y, w, h, bg);
     char buf[64]; snprintf(buf, 64, "%.3f", value);
     draw_label_in_rect(buf, x, y, w, h, cur_style().color);
+    if (scissor[2] > 0) {
+        int clear[4] = {0,0,0,0};
+        push_scissor_cmd(clear);
+    }
+    if (st) g_ui->style_stack.pop_back();
     return value;
 }
 
 /* ── Visualization ────────────────────────────────────────────────────────── */
 
-void aiml_ui_progress_bar(float value) {
-    aiml_ui_progress_bar_colored(value, (int32_t)0x44BB44FF, (int32_t)0x223322FF);
+void aiml_ui_progress_bar(float value, void* preset) {
+    aiml_ui_progress_bar_colored(value, (int32_t)0x44BB44FF, (int32_t)0x223322FF, preset);
 }
 
-void aiml_ui_progress_bar_colored(float value, int32_t fg, int32_t bg) {
+void aiml_ui_progress_bar_colored(float value, int32_t fg, int32_t bg, void* preset) {
     if (g_ui->cell_stack.empty()) return;
+    AimlUIProgressStyle* st = (AimlUIProgressStyle*)preset;
+    if (st) g_ui->style_stack.push_back(st->base);
     UiCellState& cell = cur_cell();
-    float h = lp(cur_style().font_size);
+    float auto_h = lp(cur_style().font_size);
+
+    int scissor[4];
+    WidgetRect wr = apply_widget_layout(cell.x, cell.y + cell.cursor_y,
+                                         cell.w, 0, auto_h, scissor);
     float pad = lp(4.0f);
-    float x = cell.x + pad, y = cell.y + cell.cursor_y, w = cell.w - pad * 2.0f;
+    float x = wr.x + pad, y = wr.y, w = wr.w - pad * 2.0f, h = wr.h;
     cell_advance(cell.w, h, nullptr, nullptr);
 
     if (value < 0) value = 0; if (value > 1) value = 1;
     float bar_r = h * 0.5f;  /* pill-shaped background */
-    draw_widget_rect(x, y, w, h, bg, cur_style().border_color,
-                     lp(cur_style().border_width), bar_r);
-    if (value > 0.0f)
-        draw_filled_rect(x, y, w * value, h, fg);  /* flat fill — no corner clipping needed */
+
+    if (scissor[2] > 0) push_scissor_cmd(scissor);
+
+    /* Background */
+    if (st && st->bg_tex) {
+        push_quad(x, y, w, h, 0, 0, 1, 1, 0xFFFFFFFF, st->bg_tex, 1, 0.0f, 0.0f, 0, false);
+    } else {
+        draw_widget_rect(x, y, w, h, bg, cur_style().border_color,
+                         lp(cur_style().border_width), bar_r);
+    }
+    /* Fill */
+    if (value > 0.0f) {
+        if (st && st->fill_tex) {
+            push_quad(x, y, w * value, h, 0, 0, value, 1, 0xFFFFFFFF, st->fill_tex, 1, 0.0f, 0.0f, 0, false);
+        } else {
+            draw_filled_rect(x, y, w * value, h, fg);
+        }
+    }
+
+    if (scissor[2] > 0) {
+        int clear[4] = {0,0,0,0};
+        push_scissor_cmd(clear);
+    }
+    if (st) g_ui->style_stack.pop_back();
 }
 
 void aiml_ui_image(void* tex) {
@@ -1146,10 +1375,36 @@ void aiml_ui_rect(int32_t color) {
     cell.cursor_y += h;
 }
 
-void aiml_ui_rect_rounded(int32_t color, float radius) {
-    /* Simplified: render as regular rect (SDF shader trick deferred) */
-    aiml_ui_rect(color);
-    (void)radius;
+void aiml_ui_rect_rounded(int32_t color, float radius, void* preset) {
+    if (g_ui->cell_stack.empty()) return;
+    AimlUIPanelStyle* st = (AimlUIPanelStyle*)preset;
+    if (st) g_ui->style_stack.push_back(st->base);
+    UiCellState& cell = cur_cell();
+    float cell_h_avail = cell.h - cell.cursor_y;
+
+    int scissor[4];
+    WidgetRect wr = apply_widget_layout(cell.x, cell.y + cell.cursor_y,
+                                         cell.w, cell_h_avail, cell_h_avail, scissor);
+    float r = lp(radius);
+
+    if (scissor[2] > 0) push_scissor_cmd(scissor);
+
+    if (st && st->bg_tex) {
+        push_quad(wr.x, wr.y, wr.w, wr.h,
+                  0, 0, 1, 1, 0xFFFFFFFF, st->bg_tex, 1, 0.0f, 0.0f, 0, false);
+    } else {
+        draw_widget_rect(wr.x, wr.y, wr.w, wr.h,
+                         color, cur_style().border_color,
+                         lp(cur_style().border_width), r);
+    }
+
+    if (scissor[2] > 0) {
+        int clear[4] = {0,0,0,0};
+        push_scissor_cmd(clear);
+    }
+
+    cell.cursor_y += cell_h_avail;
+    if (st) g_ui->style_stack.pop_back();
 }
 
 void aiml_ui_separator(void) {
@@ -1182,6 +1437,96 @@ void aiml_ui_newline(void) {
     if (!g_ui->cell_stack.empty())
         cur_cell().cursor_y += cur_style().font_size * cur_dpi();
 }
+
+/* ── Style preset factories ───────────────────────────────────────────────── */
+
+static AimlUIStyle capture_style() {
+    return g_ui ? cur_style() : AimlUIStyle{};
+}
+
+void* aiml_ui_slider_style_new()   { auto* s = new AimlUISliderStyle{};   s->base = capture_style(); return s; }
+void* aiml_ui_button_style_new()   { auto* s = new AimlUIButtonStyle{};   s->base = capture_style(); return s; }
+void* aiml_ui_label_style_new()    { auto* s = new AimlUILabelStyle{};    s->base = capture_style(); return s; }
+void* aiml_ui_progress_style_new() { auto* s = new AimlUIProgressStyle{}; s->base = capture_style(); return s; }
+void* aiml_ui_panel_style_new()    { auto* s = new AimlUIPanelStyle{};    s->base = capture_style(); return s; }
+
+/* ── Slider style setters ─────────────────────────────────────────────────── */
+void aiml_ui_slider_style_set_thumb(void* s, void* t)          { style_set_tex(&((AimlUISliderStyle*)s)->thumb_tex, &((AimlUISliderStyle*)s)->thumb_w, &((AimlUISliderStyle*)s)->thumb_h, t); }
+void aiml_ui_slider_style_set_track(void* s, void* t)          { style_set_tex(&((AimlUISliderStyle*)s)->track_tex, &((AimlUISliderStyle*)s)->track_w, &((AimlUISliderStyle*)s)->track_h, t); }
+void aiml_ui_slider_style_set_color(void* s, int32_t c)        { ((AimlUISliderStyle*)s)->base.color = c; }
+void aiml_ui_slider_style_set_bg_color(void* s, int32_t c)     { ((AimlUISliderStyle*)s)->base.bg_color = c; }
+void aiml_ui_slider_style_set_hover_color(void* s, int32_t c)  { ((AimlUISliderStyle*)s)->base.hover_color = c; }
+void aiml_ui_slider_style_set_active_color(void* s, int32_t c) { ((AimlUISliderStyle*)s)->base.active_color = c; }
+void aiml_ui_slider_style_set_border_color(void* s, int32_t c) { ((AimlUISliderStyle*)s)->base.border_color = c; }
+void aiml_ui_slider_style_set_corner_radius(void* s, float r)  { ((AimlUISliderStyle*)s)->base.corner_radius = r; }
+void aiml_ui_slider_style_set_border_width(void* s, float w)   { ((AimlUISliderStyle*)s)->base.border_width = w; }
+void aiml_ui_slider_style_set_font(void* s, void* f)           { ((AimlUISliderStyle*)s)->base.font = f; }
+void aiml_ui_slider_style_set_padding_x(void* s, float v)      { ((AimlUISliderStyle*)s)->base.padding_x = v; }
+void aiml_ui_slider_style_set_padding_y(void* s, float v)      { ((AimlUISliderStyle*)s)->base.padding_y = v; }
+void aiml_ui_slider_style_set_size_w(void* s, float v)         { ((AimlUISliderStyle*)s)->base.size_w = v; }
+void aiml_ui_slider_style_set_size_h(void* s, float v)         { ((AimlUISliderStyle*)s)->base.size_h = v; }
+
+/* ── Button style setters ─────────────────────────────────────────────────── */
+void aiml_ui_button_style_set_bg(void* s, void* t)             { style_set_tex(&((AimlUIButtonStyle*)s)->bg_tex, &((AimlUIButtonStyle*)s)->bg_w, &((AimlUIButtonStyle*)s)->bg_h, t); }
+void aiml_ui_button_style_set_hover(void* s, void* t)          { style_set_tex(&((AimlUIButtonStyle*)s)->hover_tex, &((AimlUIButtonStyle*)s)->hover_w, &((AimlUIButtonStyle*)s)->hover_h, t); }
+void aiml_ui_button_style_set_active(void* s, void* t)         { style_set_tex(&((AimlUIButtonStyle*)s)->active_tex, &((AimlUIButtonStyle*)s)->active_w, &((AimlUIButtonStyle*)s)->active_h, t); }
+void aiml_ui_button_style_set_color(void* s, int32_t c)        { ((AimlUIButtonStyle*)s)->base.color = c; }
+void aiml_ui_button_style_set_bg_color(void* s, int32_t c)     { ((AimlUIButtonStyle*)s)->base.bg_color = c; }
+void aiml_ui_button_style_set_hover_color(void* s, int32_t c)  { ((AimlUIButtonStyle*)s)->base.hover_color = c; }
+void aiml_ui_button_style_set_active_color(void* s, int32_t c) { ((AimlUIButtonStyle*)s)->base.active_color = c; }
+void aiml_ui_button_style_set_border_color(void* s, int32_t c) { ((AimlUIButtonStyle*)s)->base.border_color = c; }
+void aiml_ui_button_style_set_corner_radius(void* s, float r)  { ((AimlUIButtonStyle*)s)->base.corner_radius = r; }
+void aiml_ui_button_style_set_border_width(void* s, float w)   { ((AimlUIButtonStyle*)s)->base.border_width = w; }
+void aiml_ui_button_style_set_font(void* s, void* f)           { ((AimlUIButtonStyle*)s)->base.font = f; }
+void aiml_ui_button_style_set_padding_x(void* s, float v)      { ((AimlUIButtonStyle*)s)->base.padding_x = v; }
+void aiml_ui_button_style_set_padding_y(void* s, float v)      { ((AimlUIButtonStyle*)s)->base.padding_y = v; }
+void aiml_ui_button_style_set_size_w(void* s, float v)         { ((AimlUIButtonStyle*)s)->base.size_w = v; }
+void aiml_ui_button_style_set_size_h(void* s, float v)         { ((AimlUIButtonStyle*)s)->base.size_h = v; }
+
+/* ── Label style setters ──────────────────────────────────────────────────── */
+void aiml_ui_label_style_set_color(void* s, int32_t c)        { ((AimlUILabelStyle*)s)->base.color = c; }
+void aiml_ui_label_style_set_bg_color(void* s, int32_t c)     { ((AimlUILabelStyle*)s)->base.bg_color = c; }
+void aiml_ui_label_style_set_hover_color(void* s, int32_t c)  { ((AimlUILabelStyle*)s)->base.hover_color = c; }
+void aiml_ui_label_style_set_active_color(void* s, int32_t c) { ((AimlUILabelStyle*)s)->base.active_color = c; }
+void aiml_ui_label_style_set_border_color(void* s, int32_t c) { ((AimlUILabelStyle*)s)->base.border_color = c; }
+void aiml_ui_label_style_set_corner_radius(void* s, float r)  { ((AimlUILabelStyle*)s)->base.corner_radius = r; }
+void aiml_ui_label_style_set_border_width(void* s, float w)   { ((AimlUILabelStyle*)s)->base.border_width = w; }
+void aiml_ui_label_style_set_font(void* s, void* f)           { ((AimlUILabelStyle*)s)->base.font = f; }
+void aiml_ui_label_style_set_padding_x(void* s, float v)      { ((AimlUILabelStyle*)s)->base.padding_x = v; }
+void aiml_ui_label_style_set_padding_y(void* s, float v)      { ((AimlUILabelStyle*)s)->base.padding_y = v; }
+void aiml_ui_label_style_set_size_w(void* s, float v)         { ((AimlUILabelStyle*)s)->base.size_w = v; }
+void aiml_ui_label_style_set_size_h(void* s, float v)         { ((AimlUILabelStyle*)s)->base.size_h = v; }
+
+/* ── Progress style setters ───────────────────────────────────────────────── */
+void aiml_ui_progress_style_set_fill(void* s, void* t)          { style_set_tex(&((AimlUIProgressStyle*)s)->fill_tex, &((AimlUIProgressStyle*)s)->fill_w, &((AimlUIProgressStyle*)s)->fill_h, t); }
+void aiml_ui_progress_style_set_bg_tex(void* s, void* t)        { style_set_tex(&((AimlUIProgressStyle*)s)->bg_tex, &((AimlUIProgressStyle*)s)->bg_w, &((AimlUIProgressStyle*)s)->bg_h, t); }
+void aiml_ui_progress_style_set_color(void* s, int32_t c)       { ((AimlUIProgressStyle*)s)->base.color = c; }
+void aiml_ui_progress_style_set_bg_color(void* s, int32_t c)    { ((AimlUIProgressStyle*)s)->base.bg_color = c; }
+void aiml_ui_progress_style_set_hover_color(void* s, int32_t c) { ((AimlUIProgressStyle*)s)->base.hover_color = c; }
+void aiml_ui_progress_style_set_active_color(void* s, int32_t c){ ((AimlUIProgressStyle*)s)->base.active_color = c; }
+void aiml_ui_progress_style_set_border_color(void* s, int32_t c){ ((AimlUIProgressStyle*)s)->base.border_color = c; }
+void aiml_ui_progress_style_set_corner_radius(void* s, float r) { ((AimlUIProgressStyle*)s)->base.corner_radius = r; }
+void aiml_ui_progress_style_set_border_width(void* s, float w)  { ((AimlUIProgressStyle*)s)->base.border_width = w; }
+void aiml_ui_progress_style_set_font(void* s, void* f)          { ((AimlUIProgressStyle*)s)->base.font = f; }
+void aiml_ui_progress_style_set_padding_x(void* s, float v)     { ((AimlUIProgressStyle*)s)->base.padding_x = v; }
+void aiml_ui_progress_style_set_padding_y(void* s, float v)     { ((AimlUIProgressStyle*)s)->base.padding_y = v; }
+void aiml_ui_progress_style_set_size_w(void* s, float v)        { ((AimlUIProgressStyle*)s)->base.size_w = v; }
+void aiml_ui_progress_style_set_size_h(void* s, float v)        { ((AimlUIProgressStyle*)s)->base.size_h = v; }
+
+/* ── Panel style setters ──────────────────────────────────────────────────── */
+void aiml_ui_panel_style_set_bg_tex(void* s, void* t)          { style_set_tex(&((AimlUIPanelStyle*)s)->bg_tex, &((AimlUIPanelStyle*)s)->bg_w, &((AimlUIPanelStyle*)s)->bg_h, t); }
+void aiml_ui_panel_style_set_color(void* s, int32_t c)         { ((AimlUIPanelStyle*)s)->base.color = c; }
+void aiml_ui_panel_style_set_bg_color(void* s, int32_t c)      { ((AimlUIPanelStyle*)s)->base.bg_color = c; }
+void aiml_ui_panel_style_set_hover_color(void* s, int32_t c)   { ((AimlUIPanelStyle*)s)->base.hover_color = c; }
+void aiml_ui_panel_style_set_active_color(void* s, int32_t c)  { ((AimlUIPanelStyle*)s)->base.active_color = c; }
+void aiml_ui_panel_style_set_border_color(void* s, int32_t c)  { ((AimlUIPanelStyle*)s)->base.border_color = c; }
+void aiml_ui_panel_style_set_corner_radius(void* s, float r)   { ((AimlUIPanelStyle*)s)->base.corner_radius = r; }
+void aiml_ui_panel_style_set_border_width(void* s, float w)    { ((AimlUIPanelStyle*)s)->base.border_width = w; }
+void aiml_ui_panel_style_set_font(void* s, void* f)            { ((AimlUIPanelStyle*)s)->base.font = f; }
+void aiml_ui_panel_style_set_padding_x(void* s, float v)       { ((AimlUIPanelStyle*)s)->base.padding_x = v; }
+void aiml_ui_panel_style_set_padding_y(void* s, float v)       { ((AimlUIPanelStyle*)s)->base.padding_y = v; }
+void aiml_ui_panel_style_set_size_w(void* s, float v)          { ((AimlUIPanelStyle*)s)->base.size_w = v; }
+void aiml_ui_panel_style_set_size_h(void* s, float v)          { ((AimlUIPanelStyle*)s)->base.size_h = v; }
 
 /* ── Style ────────────────────────────────────────────────────────────────── */
 

@@ -147,6 +147,10 @@ namespace AIML {
             uint64_t compiled_version = 1; // Version actually compiled into IR (set once, never updated by re-def)
             int packed_size = 0;   // Actual size of all declared fields (LLVM DataLayout)
             int padded_size = 0;   // Next power-of-2 of packed_size (allocation size for calloc)
+
+            // Mirror: sync/rpc annotations (from model: sync:[...] rpc:[...])
+            std::vector<std::string> syncFields;
+            std::vector<std::string> rpcMethods;
         };
 
         class Scope {
@@ -545,19 +549,58 @@ namespace AIML {
         if (typeName == "window_handle")   return llvm::Type::getInt8Ty(context)->getPointerTo();
         if (typeName == "input_event")     return llvm::Type::getInt8Ty(context)->getPointerTo();
 
+        // audio handle types — all opaque i8* pointers
+        if (typeName == "audio_sound") return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "audio_group") return llvm::Type::getInt8Ty(context)->getPointerTo();
+
+        // mirror handle types
+        if (typeName == "mirror_session") return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "mirror_peer")    return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "mirror_event") {
+            // Real struct for field access: {i8*(type), i8*(peer), i32(net_id)}
+            llvm::StructType* t = llvm::StructType::getTypeByName(context, "mirror_event");
+            if (!t) {
+                t = llvm::StructType::create(context,
+                    {llvm::Type::getInt8Ty(context)->getPointerTo(),
+                     llvm::Type::getInt8Ty(context)->getPointerTo(),
+                     llvm::Type::getInt32Ty(context)},
+                    "mirror_event");
+            }
+            return t;
+        }
+        if (typeName == "rpc_event") {
+            // Real struct: {i8*(method), i32(net_id), i32(arg)}
+            llvm::StructType* t = llvm::StructType::getTypeByName(context, "rpc_event");
+            if (!t) {
+                t = llvm::StructType::create(context,
+                    {llvm::Type::getInt8Ty(context)->getPointerTo(),
+                     llvm::Type::getInt32Ty(context),
+                     llvm::Type::getInt32Ty(context)},
+                    "rpc_event");
+            }
+            return t;
+        }
+
         // ui types
         if (typeName == "ui_font") return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "ui_slider_style")   return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "ui_button_style")   return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "ui_label_style")    return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "ui_progress_style") return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "ui_panel_style")    return llvm::Type::getInt8Ty(context)->getPointerTo();
         if (typeName == "ui_style") {
-            // AimlUIStyle: {i32×5, f32×6, f32(_pad), i8*} — 13 fields, 56 bytes
-            auto* i8p = llvm::Type::getInt8Ty(context)->getPointerTo();
+            // AimlUIStyle: {i32×5, f32×6, f32(padding_x), i8*, f32×3, f32(_pad2)} — 17 fields, 72 bytes
+            auto* i8p  = llvm::Type::getInt8Ty(context)->getPointerTo();
             auto* i32t = llvm::Type::getInt32Ty(context);
             auto* f32t = llvm::Type::getFloatTy(context);
             llvm::StructType* t = llvm::StructType::getTypeByName(context, "ui_style");
             if (!t) t = llvm::StructType::create(context,
-                {i32t, i32t, i32t, i32t, i32t,   /* color..border_color */
-                 f32t, f32t, f32t, f32t, f32t, f32t,  /* font_size..opacity */
-                 f32t,                              /* _pad */
-                 i8p},                             /* font */
+                {i32t, i32t, i32t, i32t, i32t,         /* color..border_color  [0-4] */
+                 f32t, f32t, f32t, f32t, f32t, f32t,    /* font_size..opacity   [5-10] */
+                 f32t,                                   /* padding_x            [11] */
+                 i8p,                                    /* font                 [12] */
+                 f32t, f32t, f32t,                       /* padding_y,size_w,size_h [13-15] */
+                 f32t},                                  /* _pad2                [16] */
                 "ui_style");
             return t;
         }

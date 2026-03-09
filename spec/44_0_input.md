@@ -18,9 +18,13 @@
 ├──────────────────────────────────────────────────────────┤
 │  Polling-Layer    input.key_down("W") → bool             │
 │                   input.mouse_delta()  → vec2            │
+│                   input.drag_active(btn) → bool          │
+│                   input.drag_delta_x/y(btn) → f32        │
 │                                                          │
 │  Queue-Layer      input.has_event() → bool               │
 │                   input.next_event() → input_event       │
+│                   Events: drag_start / drag_move /       │
+│                           drag_end                       │
 ├──────────────────────────────────────────────────────────┤
 │  GLFW             glfwGetKey / glfwGetCursorPos          │
 │                   glfwSetScrollCallback (akkumuliert)    │
@@ -88,6 +92,67 @@ Gamepad-Buttons (GLFW_GAMEPAD_BUTTON_*):
 `10`=L3, `11`=R3,
 `12`=Up, `13`=Right, `14`=Down, `15`=Left (D-Pad).
 
+### 2.4 Drag & Drop
+
+Drag-and-Drop wird erkannt, sobald eine Maustaste gehalten UND der Cursor mehr als `threshold`
+Pixel (Standard: 5.0) von der Startposition entfernt wurde. Das System trackt bis zu `AIML_MAX_MOUSE`
+Buttons gleichzeitig.
+
+| Aufruf | Rückgabe | Beschreibung |
+|--------|----------|--------------|
+| `input.drag_active(btn: i32)` | `bool` | Drag läuft gerade für Button `btn` |
+| `input.drag_started(btn: i32)` | `bool` | Drag startete in **diesem Frame** |
+| `input.drag_ended(btn: i32)` | `bool` | Drag endete in **diesem Frame** |
+| `input.drag_origin_x(btn: i32)` | `f32` | X-Position wo der Drag begann |
+| `input.drag_origin_y(btn: i32)` | `f32` | Y-Position wo der Drag begann |
+| `input.drag_delta_x(btn: i32)` | `f32` | Gesamtbewegung X seit Drag-Start |
+| `input.drag_delta_y(btn: i32)` | `f32` | Gesamtbewegung Y seit Drag-Start |
+| `input.drag_set_payload(data: ptr)` | — | Benutzer-Daten an den aktiven Drag hängen |
+| `input.drag_get_payload()` | `ptr` | Drag-Payload lesen (null wenn keiner) |
+| `input.drag_set_threshold(px: f32)` | — | Mindest-Bewegung in Pixel (Standard: `5.0`) |
+
+**Drag-Events** in der Event-Queue (`input.next_event()`):
+
+| Typ | Beschreibung |
+|-----|--------------|
+| `"drag_start"` | Drag begann (`btn`, `pos`, `delta` gesetzt) |
+| `"drag_move"` | Cursor bewegt während Drag (`btn`, `pos`, `delta` gesetzt) |
+| `"drag_end"` | Button losgelassen während Drag (`btn`, `pos`, `delta` gesetzt) |
+
+`ev.delta_x` / `ev.delta_y` = Gesamtbewegung seit Drag-Start (Shortcut für `pos - origin`).
+
+#### Beispiel: Drag-and-Drop
+
+```aiml
+# Polling-basiert (Empfehlung für Echtzeit-Feedback):
+- if: [{ call: [input.drag_started, 0] }, true]
+  then:
+    - call: [begin_drag, { call: [input.drag_origin_x, 0] }, { call: [input.drag_origin_y, 0] }]
+
+- if: [{ call: [input.drag_active, 0] }, true]
+  then:
+    - call: [update_drag, { call: [input.drag_delta_x, 0] }, { call: [input.drag_delta_y, 0] }]
+
+- if: [{ call: [input.drag_ended, 0] }, true]
+  then:
+    - call: [drop_item, { call: [input.mouse_pos_x] }, { call: [input.mouse_pos_y] }]
+
+# Event-basiert (verlustfrei für komplexe Drag-Pfade):
+- while:
+    condition: { call: [input.has_event] }
+    body:
+      - decl: [ev, input_event, { call: [input.next_event] }]
+      - if: [{ eq: [ev.type, "drag_start"] }, true]
+        then:
+          - call: [on_drag_start, ev.pos_x, ev.pos_y]
+      - if: [{ eq: [ev.type, "drag_move"] }, true]
+        then:
+          - call: [on_drag_move, ev.delta_x, ev.delta_y]
+      - if: [{ eq: [ev.type, "drag_end"] }, true]
+        then:
+          - call: [on_drag_end, ev.pos_x, ev.pos_y]
+```
+
 ---
 
 ## 3. Event-Queue
@@ -112,6 +177,8 @@ fields:
   - [pos,    vec2]     # Cursor-Position in Pixel; gesetzt bei mouse_move / mouse_button_*
   - [scroll, vec2]     # Scroll-Delta; gesetzt bei mouse_scroll
   - [char_,  string]   # Unicode-Zeichen (ein Codepoint); gesetzt bei text
+  - [delta_x, f32]     # Gesamtdelta X seit Drag-Start; gesetzt bei drag_start / drag_move / drag_end
+  - [delta_y, f32]     # Gesamtdelta Y seit Drag-Start
 ```
 
 Event-Typen (`type`-Feld):
@@ -125,6 +192,9 @@ Event-Typen (`type`-Feld):
 | `"mouse_button_up"` | Mouse-Button losgelassen (`btn`, `pos` gesetzt) |
 | `"mouse_scroll"` | Mausrad (`scroll` gesetzt) |
 | `"text"` | Text-Input eines Unicode-Zeichens (`char_` gesetzt) |
+| `"drag_start"` | Drag-Schwellwert überschritten (`btn`, `pos_x/y`, `delta_x/y` gesetzt) |
+| `"drag_move"` | Cursor bewegt während Drag (`btn`, `pos_x/y`, `delta_x/y` gesetzt) |
+| `"drag_end"` | Button losgelassen während Drag (`btn`, `pos_x/y`, `delta_x/y` gesetzt) |
 
 ### Beispiel: Text-Eingabefeld
 

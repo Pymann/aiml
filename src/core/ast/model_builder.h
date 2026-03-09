@@ -16,8 +16,10 @@ class ModelBuilder : public StateHandler {
     std::string currentKey;
     bool expectingKey = false;
     bool insideFields = false;
+    bool insideSync   = false;
+    bool insideRpc    = false;
     int mapDepth = 0; // Start at 0
-    
+
     // State for parsing member sequence entry
     std::string currentField;
     std::string currentType;

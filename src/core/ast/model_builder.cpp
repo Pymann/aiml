@@ -33,21 +33,34 @@ bool ModelBuilder::OnScalar(const std::string& value, const std::string& tag) {
         }
     }
     else if (currentKey == "primary_key") modelNode->primaryKey = value;
+    else if (insideSync) {
+        modelNode->syncFields.push_back(value);
+        return true;
+    }
+    else if (insideRpc) {
+        modelNode->rpcMethods.push_back(value);
+        return true;
+    }
     else if (insideFields) {
         if (currentField.empty()) currentField = value;
         else if (currentType.empty()) currentType = value;
     }
-    
-    if (!insideFields) expectingKey = true;
+
+    if (!insideFields && !insideSync && !insideRpc) expectingKey = true;
     return true;
 }
 
 bool ModelBuilder::OnSequenceStart() {
     if (currentKey == "fields") {
         insideFields = true;
-        currentKey = ""; // consumed
-    }
-    else if (insideFields) {
+        currentKey = "";
+    } else if (currentKey == "sync") {
+        insideSync = true;
+        currentKey = "";
+    } else if (currentKey == "rpc") {
+        insideRpc = true;
+        currentKey = "";
+    } else if (insideFields) {
         currentField = "";
         currentType = "";
     }
@@ -55,6 +68,16 @@ bool ModelBuilder::OnSequenceStart() {
 }
 
 bool ModelBuilder::OnSequenceEnd() {
+    if (insideSync) {
+        insideSync = false;
+        expectingKey = true;
+        return true;
+    }
+    if (insideRpc) {
+        insideRpc = false;
+        expectingKey = true;
+        return true;
+    }
     if (insideFields) {
         if (!currentField.empty() && !currentType.empty()) {
             StructMember m; m.name = currentField; m.type = currentType;

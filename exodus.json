@@ -776,7 +776,9 @@
             "GL",
             "glfw",
             "png",
-            "GLEW"
+            "GLEW",
+            "m",
+            "dl"
         ],
         "library_paths": [
             "__exodus_cache/apt/libyaml-cpp-dev/amd64/0.8.0+dfsg-6build1/payload/usr/lib/x86_64-linux-gnu",
