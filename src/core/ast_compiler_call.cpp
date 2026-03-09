@@ -399,6 +399,17 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
     IRValue* baseAlloca = sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst);
     IRType* baseElemTy = sym->ir_element_type ? sym->ir_element_type : ctx.ir_gen->wrapType(sym->element_type);
 
+    // mirror_session.register/register_id/unregister: capture object type for builtin handler
+    if (className == "mirror_session" &&
+        (methodName == "register" || methodName == "register_id" || methodName == "unregister")) {
+        if (!call->args.empty()) {
+            if (auto* varEx = dynamic_cast<VariableExpr*>(call->args[0].get())) {
+                Symbol* objSym = resolveVariable(varEx->name);
+                if (objSym) ctx.deserializeTargetType = objSym->typeName;
+            }
+        }
+    }
+
     // Builtin class dispatch (buffer, process, http handles, ...)
     {
         auto classIt = ctx.classes.find(className);

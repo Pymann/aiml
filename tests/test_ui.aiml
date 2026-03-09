@@ -1,0 +1,121 @@
+# UI namespace test (44.3)
+#
+# Verwendet engine.running(win) als Loop-Bedingung.
+# Schließen des Fensters beendet automatisch die Schleife.
+#
+# Empfehlung für Browser-Kompatibilität: engine.run(win, update, render)
+# (see spec/44_1_engine.md §4.1)
+#
+# Requires: display
+# Run: ./out/aiml -r tests/test_ui.aiml
+# Expected exit code: 0
+
+# ── Setup ─────────────────────────────────────────────────────────────────────
+
+- decl: [win, window_handle, { call: [engine.create_window, 800, 600, "AIML UI Test"] }]
+- if: [{ ==: [win, null] }, true]
+  then:
+    - print: ["FAIL: engine.create_window returned null"]
+    - call: [sys.exit, 1]
+
+- call: [ui.init]
+- call: [input.init, win]
+- call: [engine.target_fps, 60]
+
+- decl: [font, ui_font, { call: [ui.load_font_default, 16.0] }]
+- if: [{ "!=": [font, null] }, true]
+  then:
+    - call: [ui.set_default_font, font]
+
+# Slider-Style Preset
+- decl: [sl_style, ui_slider_style, { call: [ui.slider_style_new] }]
+- decl: [thumb_tex, gl_texture, { call: [gl.load_texture, "tests/png/slider.png"] }]
+- if: [{ "!=": [thumb_tex, null] }, true]
+  then:
+    - call: [sl_style.set_thumb, thumb_tex]
+
+- decl: [track_tex, gl_texture, { call: [gl.load_texture, "tests/png/slider_track.png"] }]
+- if: [{ "!=": [track_tex, null] }, true]
+  then:
+    - call: [sl_style.set_track, track_tex]
+
+# Geteilter Zustand für den Loop
+- decl: [progress,   f32, 0.0]
+- decl: [click_count, i32, 0]
+- decl: [slider_val,  f32, 0.5]
+- decl: [cols, buffer<f32>, [0.4, 0.6]]
+- decl: [rows, buffer<f32>, [1.0]]
+
+- print: ["Setup OK — schließe das Fenster zum Beenden"]
+
+# ── Loop via engine.running — exit on window close ────────────────────────────
+#
+# Cross-Platform-Alternative (Desktop + Browser + Android):
+#   - call: [engine.run, win, update, render]
+# (benötigt def: update + def: render mit Zugriff auf globale Variablen)
+
+- while:
+    condition: { call: [engine.running, win] }
+    body:
+      # ── Update: progress bar animieren ──────────────────────────────────
+      - set: [progress, { +: [progress, 0.004] }]
+      - if: [{ gt: [progress, 1.0] }, true]
+        then:
+          - set: [progress, 0.0]
+
+      # ── Render ──────────────────────────────────────────────────────────
+      - call: [gl.clear_all, 0.08, 0.08, 0.12, 1.0]
+      - call: [ui.begin, win]
+      - call: [ui.begin_grid, cols, rows]
+
+      # Linke Spalte
+      - call: [ui.begin_cell, 0, 0, 1, 1]
+      - call: [ui.label, "AIML UI Demo"]
+      - call: [ui.separator]
+      - call: [ui.spacer, 4.0]
+      - call: [ui.label, "Progress (animiert):"]
+      - call: [ui.progress_bar, progress]
+      - call: [ui.spacer, 8.0]
+      - decl: [fps, f32, { call: [engine.fps] }]
+      - call: [ui.label, "FPS: ${fps}"]
+      - call: [ui.progress_bar_colored, fps, -16711936, -2139062144]
+      - call: [ui.end_cell]
+
+      # Rechte Spalte
+      - call: [ui.begin_cell, 1, 0, 1, 1]
+      - call: [ui.label, "Widgets:"]
+      - call: [ui.separator]
+      - call: [ui.spacer, 4.0]
+      - decl: [clicked, i32, { call: [ui.button, "Click me!"] }]
+      - if: [{ "!=": [clicked, 0] }, true]
+        then:
+          - set: [click_count, { +: [click_count, 1] }]
+      - call: [ui.label, "Slider:"]
+      - set:  [slider_val, { call: [ui.slider, "demo_slider", slider_val, 0.0, 1.0, sl_style] }]
+      - call: [ui.spacer, 4.0]
+      - call: [ui.rect_rounded, -2139062144, 6.0]
+      - call: [ui.end_cell]
+
+      - call: [ui.end_grid]
+      - call: [ui.end]
+      - call: [engine.swap, win]
+
+# ── Post-Loop-Checks ─────────────────────────────────────────────────────────
+
+- if: [{ lt: [click_count, 0] }, true]
+  then:
+    - print: ["FAIL: click_count < 0: ${click_count}"]
+    - call: [sys.exit, 1]
+
+- if: [{ lt: [slider_val, 0.0] }, true]
+  then:
+    - print: ["FAIL: slider_val < 0: ${slider_val}"]
+    - call: [sys.exit, 1]
+
+- if: [{ gt: [slider_val, 1.0] }, true]
+  then:
+    - print: ["FAIL: slider_val > 1: ${slider_val}"]
+    - call: [sys.exit, 1]
+
+- call: [engine.destroy_window, win]
+- print: ["All ui tests passed (clicks=${click_count} slider=${slider_val})"]

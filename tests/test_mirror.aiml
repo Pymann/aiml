@@ -1,0 +1,145 @@
+# Tests for mirror namespace (44.5 — network object synchronisation)
+# Expected exit code: 0
+
+# ── Model with sync:/rpc: annotations ─────────────────────────────────────────
+- model:
+    name: NetPlayer
+    sync: [health, score]
+    rpc:  [take_damage]
+    fields:
+      - [health, i32]
+      - [score, i32]
+
+# ── Phase A: listen → returns non-null handle ─────────────────────────────────
+- decl: [srv_a, mirror_session]
+- set: [srv_a, { call: [mirror.listen, "tcp://127.0.0.1:19880"] }]
+- print: ["Phase A: listen handle created"]
+- call: [srv_a.close]
+- print: ["Phase A PASS"]
+
+# ── Phase B–G: TCP loopback via spawn ─────────────────────────────────────────
+# Host thread: listen on 19881, register player (health=0), wait 200 ms,
+# then set health=77, send deltas for another 150 ms, then close.
+
+- def:
+    name: mirror_host_fn
+    args: []
+    body:
+      - decl: [sess, mirror_session]
+      - set: [sess, { call: [mirror.listen, "tcp://127.0.0.1:19881"] }]
+      - decl: [player, NetPlayer]
+      - set: [player.health, 77]
+      - set: [player.score, 42]
+      - decl: [nid, i32]
+      - set: [nid, { call: [sess.register, player] }]
+      - print: ["host: registered net_id=${nid}"]
+      # Phase C/D: loop, accept client and send initial delta (health=77)
+      - decl: [i, i32]
+      - set: [i, 0]
+      - while:
+          condition: { lt: [i, 20] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+      # Phase H: process incoming RPC calls for up to 200ms
+      - set: [i, 0]
+      - while:
+          condition: { lt: [i, 20] }
+          body:
+            - call: [sess.update]
+            - decl: [hr, i32]
+            - set: [hr, { call: [sess.has_rpc] }]
+            - if:
+                condition: { gt: [hr, 0] }
+                then:
+                  - decl: [rpc_ev, rpc_event]
+                  - set: [rpc_ev, { call: [sess.next_rpc] }]
+                  - decl: [rpc_arg, i32]
+                  - set: [rpc_arg, rpc_ev.arg]
+                  - print: ["host: RPC take_damage(${rpc_arg})"]
+                  - set: [player.health, { -: [player.health, rpc_arg] }]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+      - call: [sess.close]
+      - print: ["host: done"]
+
+- decl: [host_th, thread_handle]
+- set: [host_th, { spawn: [mirror_host_fn] }]
+- call: [time.sleep_ms, 50]
+
+# Phase B: connect_timeout → non-null
+- decl: [client, mirror_session]
+- set: [client, { call: [mirror.connect_timeout, "tcp://127.0.0.1:19881", 2000] }]
+- print: ["Phase B: connect OK"]
+
+# Phase C: is_connected
+- decl: [conn, i32]
+- set: [conn, { call: [client.is_connected] }]
+- print: ["Phase C: is_connected=${conn}"]
+
+# Phase D: receive object_registered event from host
+# Sleep first so host has time to accept the connection and send PKT_REGISTER
+- call: [time.sleep_ms, 60]
+- call: [client.update]
+- decl: [hev, i32]
+- set: [hev, { call: [client.has_event] }]
+- print: ["Phase D: has_event=${hev}"]
+
+- decl: [ev, mirror_event]
+- decl: [ev_nid, i32]
+- set: [ev_nid, 0]
+- if:
+    condition: { gt: [hev, 0] }
+    then:
+      - set: [ev, { call: [client.next_event] }]
+      - set: [ev_nid, ev.net_id]
+      - print: ["Phase D: event net_id=${ev_nid}"]
+
+# Phase E: register replica with the received net_id, wait for delta
+- decl: [replica, NetPlayer]
+- set: [replica.health, 0]
+- set: [replica.score, 0]
+- call: [client.register_id, replica, ev_nid]
+- print: ["Phase E: replica registered as net_id=${ev_nid}"]
+
+# Phase F: peer_count — check while host is still connected
+- decl: [pc, i32]
+- set: [pc, { call: [client.peer_count] }]
+- print: ["Phase F: client peer_count=${pc}"]
+
+# Phase E: receive initial delta (health=77 was set before register)
+- call: [time.sleep_ms, 100]
+- call: [client.update]
+- decl: [rh, i32]
+- set: [rh, replica.health]
+- decl: [rs, i32]
+- set: [rs, replica.score]
+- print: ["Phase E: replica.health=${rh} replica.score=${rs}"]
+- if:
+    condition: { "==": [rh, 77] }
+    then:
+      - print: ["Phase E PASS: health synced correctly"]
+    else:
+      - print: ["Phase E FAIL: expected 77 got ${rh}"]
+
+# Phase H: send RPC take_damage(10) → host subtracts 10 → health becomes 67
+- call: [client.send_rpc, ev_nid, "take_damage", 10]
+- print: ["Phase H: sent RPC take_damage(10)"]
+# Wait for host to process RPC + send updated delta
+- call: [time.sleep_ms, 150]
+- call: [client.update]
+- decl: [rh2, i32]
+- set: [rh2, replica.health]
+- print: ["Phase H: replica.health=${rh2}"]
+- if:
+    condition: { "==": [rh2, 67] }
+    then:
+      - print: ["Phase H PASS: health after RPC = 67"]
+    else:
+      - print: ["Phase H FAIL: expected 67 got ${rh2}"]
+
+# Phase G: close and join
+- call: [client.close]
+- call: [host_th.join]
+- print: ["Phase G: mirror tests done"]

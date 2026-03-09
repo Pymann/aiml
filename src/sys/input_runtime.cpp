@@ -47,6 +47,8 @@ float       aiml_input_event_pos_y   (void* ev) { return ev ? ((AimlInputEvent*)
 float       aiml_input_event_scroll_x(void* ev) { return ev ? ((AimlInputEvent*)ev)->scroll_x : 0.f;}
 float       aiml_input_event_scroll_y(void* ev) { return ev ? ((AimlInputEvent*)ev)->scroll_y : 0.f;}
 const char* aiml_input_event_char_   (void* ev) { return ev ? ((AimlInputEvent*)ev)->char_buf : ""; }
+float aiml_input_event_delta_x(void* ev) { return ev ? ((AimlInputEvent*)ev)->scroll_x : 0.f; }
+float aiml_input_event_delta_y(void* ev) { return ev ? ((AimlInputEvent*)ev)->scroll_y : 0.f; }
 
 /* ══════════════════════════════════════════════════════════════════════════ */
 /* DESKTOP IMPLEMENTATION                                                     */
@@ -111,6 +113,19 @@ struct AimlInputState {
         int         pad, btn_idx;
     };
     std::vector<ActionEntry> actions;
+
+    /* ── Drag-and-drop state ──────────────────────────────────────────────── */
+    struct ButtonDragState {
+        bool  held;               /* button currently down */
+        bool  active;             /* drag threshold exceeded */
+        bool  started_this_frame; /* active became true this polling cycle */
+        bool  ended_this_frame;   /* drag ended this polling cycle */
+        float origin_x, origin_y; /* cursor pos when button pressed */
+        float acc_x, acc_y;       /* total delta from origin */
+    };
+    ButtonDragState drag[AIML_MAX_MOUSE] = {};
+    void*  drag_payload   = nullptr;
+    float  drag_threshold = 5.0f;
 };
 
 static AimlInputState* g_input = nullptr;
@@ -337,6 +352,36 @@ static void glfw_cursor_cb(GLFWwindow*, double x, double y) {
     ev.pos_x = (float)x;
     ev.pos_y = (float)y;
     g_input->events.push_back(ev);
+
+    /* Update drag accumulators for all held buttons */
+    for (int b = 0; b < AIML_MAX_MOUSE; b++) {
+        auto& ds = g_input->drag[b];
+        if (!ds.held) continue;
+        ds.acc_x = (float)x - ds.origin_x;
+        ds.acc_y = (float)y - ds.origin_y;
+        float dist = sqrtf(ds.acc_x * ds.acc_x + ds.acc_y * ds.acc_y);
+        if (!ds.active && dist >= g_input->drag_threshold) {
+            ds.active             = true;
+            ds.started_this_frame = true;
+            AimlInputEvent dev = {};
+            dev.type     = "drag_start";
+            dev.btn      = b;
+            dev.pos_x    = (float)x;
+            dev.pos_y    = (float)y;
+            dev.scroll_x = ds.acc_x;
+            dev.scroll_y = ds.acc_y;
+            g_input->events.push_back(dev);
+        } else if (ds.active) {
+            AimlInputEvent dev = {};
+            dev.type     = "drag_move";
+            dev.btn      = b;
+            dev.pos_x    = (float)x;
+            dev.pos_y    = (float)y;
+            dev.scroll_x = ds.acc_x;
+            dev.scroll_y = ds.acc_y;
+            g_input->events.push_back(dev);
+        }
+    }
 }
 
 static void glfw_mbtn_cb(GLFWwindow*, int btn, int action, int /*mods*/) {
@@ -349,6 +394,35 @@ static void glfw_mbtn_cb(GLFWwindow*, int btn, int action, int /*mods*/) {
     ev.pos_x = (float)g_input->curr_pos_x;
     ev.pos_y = (float)g_input->curr_pos_y;
     g_input->events.push_back(ev);
+
+    /* Update drag state */
+    if (action == GLFW_PRESS) {
+        auto& ds = g_input->drag[btn];
+        ds.held               = true;
+        ds.active             = false;
+        ds.started_this_frame = false;
+        ds.ended_this_frame   = false;
+        ds.origin_x = (float)g_input->curr_pos_x;
+        ds.origin_y = (float)g_input->curr_pos_y;
+        ds.acc_x = 0.f;
+        ds.acc_y = 0.f;
+    } else { /* RELEASE */
+        auto& ds = g_input->drag[btn];
+        if (ds.active) {
+            ds.ended_this_frame = true;
+            g_input->drag_payload = nullptr;
+            AimlInputEvent dev = {};
+            dev.type     = "drag_end";
+            dev.btn      = btn;
+            dev.pos_x    = (float)g_input->curr_pos_x;
+            dev.pos_y    = (float)g_input->curr_pos_y;
+            dev.scroll_x = ds.acc_x;
+            dev.scroll_y = ds.acc_y;
+            g_input->events.push_back(dev);
+        }
+        ds.held   = false;
+        ds.active = false;
+    }
 }
 
 /* ── Lifecycle ───────────────────────────────────────────────────────────── */
@@ -428,6 +502,12 @@ void aiml_input_update(void) {
     }
     g_input->prev_pos_x = g_input->curr_pos_x;
     g_input->prev_pos_y = g_input->curr_pos_y;
+
+    /* Reset per-frame drag flags */
+    for (int b = 0; b < AIML_MAX_MOUSE; b++) {
+        g_input->drag[b].started_this_frame = false;
+        g_input->drag[b].ended_this_frame   = false;
+    }
 }
 
 void aiml_input_set_capture(int32_t on) {
@@ -677,6 +757,46 @@ int32_t aiml_input_action_released(const char* name) {
     return 0;
 }
 
+/* ── Drag-and-drop polling ───────────────────────────────────────────────── */
+
+int32_t aiml_input_drag_active(int32_t btn) {
+    if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return 0;
+    return g_input->drag[btn].active ? 1 : 0;
+}
+int32_t aiml_input_drag_started(int32_t btn) {
+    if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return 0;
+    return g_input->drag[btn].started_this_frame ? 1 : 0;
+}
+int32_t aiml_input_drag_ended(int32_t btn) {
+    if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return 0;
+    return g_input->drag[btn].ended_this_frame ? 1 : 0;
+}
+float aiml_input_drag_origin_x(int32_t btn) {
+    if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return 0.f;
+    return g_input->drag[btn].origin_x;
+}
+float aiml_input_drag_origin_y(int32_t btn) {
+    if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return 0.f;
+    return g_input->drag[btn].origin_y;
+}
+float aiml_input_drag_delta_x(int32_t btn) {
+    if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return 0.f;
+    return g_input->drag[btn].acc_x;
+}
+float aiml_input_drag_delta_y(int32_t btn) {
+    if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return 0.f;
+    return g_input->drag[btn].acc_y;
+}
+void aiml_input_drag_set_payload(void* data) {
+    if (g_input) g_input->drag_payload = data;
+}
+void* aiml_input_drag_get_payload(void) {
+    return g_input ? g_input->drag_payload : nullptr;
+}
+void aiml_input_drag_set_threshold(float px) {
+    if (g_input) g_input->drag_threshold = (px > 0.f) ? px : 0.f;
+}
+
 /* ══════════════════════════════════════════════════════════════════════════ */
 /* STUB IMPLEMENTATIONS (Emscripten + Android)                               */
 /* ══════════════════════════════════════════════════════════════════════════ */
@@ -727,5 +847,16 @@ float   aiml_input_axis           (const char*) { return 0.f; }
 int32_t aiml_input_action_down    (const char*) { return 0; }
 int32_t aiml_input_action_pressed (const char*) { return 0; }
 int32_t aiml_input_action_released(const char*) { return 0; }
+
+int32_t aiml_input_drag_active       (int32_t) { return 0; }
+int32_t aiml_input_drag_started      (int32_t) { return 0; }
+int32_t aiml_input_drag_ended        (int32_t) { return 0; }
+float   aiml_input_drag_origin_x     (int32_t) { return 0.f; }
+float   aiml_input_drag_origin_y     (int32_t) { return 0.f; }
+float   aiml_input_drag_delta_x      (int32_t) { return 0.f; }
+float   aiml_input_drag_delta_y      (int32_t) { return 0.f; }
+void    aiml_input_drag_set_payload  (void*)    {}
+void*   aiml_input_drag_get_payload  (void)     { return nullptr; }
+void    aiml_input_drag_set_threshold(float)    {}
 
 #endif /* platform stubs */

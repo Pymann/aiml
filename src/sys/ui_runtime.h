@@ -16,7 +16,13 @@ extern "C" {
  *   - Input integration (via aiml_input_* polling)
  *
  * ui_font   = i8*  (opaque AimlUIFont*)
- * ui_style  = LLVM struct {i32×5, f32×7, i8*}  (56 bytes, see AimlUIStyle in .cpp)
+ * ui_style  = LLVM struct {i32×5, f32×6, f32(padding_x), i8*, f32×3, f32(_pad2)}
+ *             72 bytes, 17 fields (see AimlUIStyle in .cpp)
+ *   New fields (indices 11,13-15): padding_x, padding_y, size_w, size_h
+ *
+ * Widget style presets (all are heap-allocated opaque i8* handles):
+ *   ui_slider_style, ui_button_style, ui_label_style,
+ *   ui_progress_style, ui_panel_style
  *
  * AimlGLRawBuf (same layout as AIML buffer<T>):
  *   { i32 size, i32 capacity, i32 read_idx, i32 write_idx, u8* data }
@@ -49,40 +55,37 @@ void aiml_ui_set_align (const char* h, const char* v);
 
 /* ── Text widgets ─────────────────────────────────────────────────────────── */
 
-void        aiml_ui_label         (const char* text);
-void        aiml_ui_label_colored (const char* text, int32_t color);
+void        aiml_ui_label         (const char* text, void* preset);
+void        aiml_ui_label_colored (const char* text, int32_t color, void* preset);
 /* Returns currently edited string (static buffer, valid until next text_input call). */
-const char* aiml_ui_text_input    (const char* id, const char* buf);
-const char* aiml_ui_text_area     (const char* id, const char* buf);
+const char* aiml_ui_text_input    (const char* id, const char* buf, void* preset);
+const char* aiml_ui_text_area     (const char* id, const char* buf, void* preset);
 
 /* ── Interactive widgets ──────────────────────────────────────────────────── */
 
-/* Returns 1 on the frame the button is clicked, 0 otherwise. */
-int32_t aiml_ui_button      (const char* label);
+/* Returns 1 on the frame the button is clicked, 0 otherwise.
+ * preset = AimlUIButtonStyle* (ui_button_style*) or null. */
+int32_t aiml_ui_button      (const char* label, void* preset);
 /* Button with icon texture (gl_texture* = AimlGLTexture*) left of text. */
 int32_t aiml_ui_button_icon (const char* label, void* tex);
 /* Returns new checked state (0/1). */
-int32_t aiml_ui_checkbox    (const char* id, int32_t value);
+int32_t aiml_ui_checkbox    (const char* id, int32_t value, void* preset);
 /* Returns new toggled state (0/1). */
-int32_t aiml_ui_toggle      (const char* id, int32_t value);
+int32_t aiml_ui_toggle      (const char* id, int32_t value, void* preset);
 /* Returns selected option index. */
-int32_t aiml_ui_radio       (const char* id, int32_t option, int32_t current);
+int32_t aiml_ui_radio       (const char* id, int32_t option, int32_t current, void* preset);
 
 /* ── Value widgets ────────────────────────────────────────────────────────── */
 
-float   aiml_ui_slider     (const char* id, float value, float mn, float mx);
-int32_t aiml_ui_slider_int (const char* id, int32_t value, int32_t mn, int32_t mx);
-float   aiml_ui_drag_f32   (const char* id, float value, float speed);
-/* Set a texture (gl_texture*) to use as the slider thumb sprite. Pass null to reset. */
-void    aiml_ui_set_slider_thumb(void* tex);
-/* Set a texture (gl_texture*) to use as the slider track. Pass null to reset. */
-void    aiml_ui_set_slider_track(void* tex);
+float   aiml_ui_slider     (const char* id, float value, float mn, float mx, void* preset);
+int32_t aiml_ui_slider_int (const char* id, int32_t value, int32_t mn, int32_t mx, void* preset);
+float   aiml_ui_drag_f32   (const char* id, float value, float speed, void* preset);
 
 /* ── Visualization ────────────────────────────────────────────────────────── */
 
 /* value in [0.0, 1.0] — fills cell width. */
-void aiml_ui_progress_bar        (float value);
-void aiml_ui_progress_bar_colored(float value, int32_t fg, int32_t bg);
+void aiml_ui_progress_bar        (float value, void* preset);
+void aiml_ui_progress_bar_colored(float value, int32_t fg, int32_t bg, void* preset);
 /* tex = AimlGLTexture* (gl_texture). Image fills available cell space. */
 void aiml_ui_image               (void* tex);
 /* Image at explicit size in logical pixels. */
@@ -90,7 +93,7 @@ void aiml_ui_image_sized         (void* tex, float w, float h);
 /* Solid filled rect (fills cell). color = RGBA i32. */
 void aiml_ui_rect                (int32_t color);
 /* Rounded rect via SDF in fragment shader. */
-void aiml_ui_rect_rounded        (int32_t color, float radius);
+void aiml_ui_rect_rounded        (int32_t color, float radius, void* preset);
 /* Horizontal separator line. */
 void aiml_ui_separator           (void);
 /* Vertical empty space in logical pixels. */
@@ -121,6 +124,97 @@ void* aiml_ui_load_font        (void* path_ptr, float size);
 void* aiml_ui_load_font_default(float size);
 /* Set default font for all subsequent ui_style declarations. */
 void  aiml_ui_set_default_font (void* font);
+
+/* ── Widget style preset factories ───────────────────────────────────────── */
+
+void* aiml_ui_slider_style_new   (void);
+void* aiml_ui_button_style_new   (void);
+void* aiml_ui_label_style_new    (void);
+void* aiml_ui_progress_style_new (void);
+void* aiml_ui_panel_style_new    (void);
+
+/* ── Slider style setters ─────────────────────────────────────────────────── */
+
+void aiml_ui_slider_style_set_thumb        (void* s, void* t);
+void aiml_ui_slider_style_set_track        (void* s, void* t);
+void aiml_ui_slider_style_set_color        (void* s, int32_t c);
+void aiml_ui_slider_style_set_bg_color     (void* s, int32_t c);
+void aiml_ui_slider_style_set_hover_color  (void* s, int32_t c);
+void aiml_ui_slider_style_set_active_color (void* s, int32_t c);
+void aiml_ui_slider_style_set_border_color (void* s, int32_t c);
+void aiml_ui_slider_style_set_corner_radius(void* s, float r);
+void aiml_ui_slider_style_set_border_width (void* s, float w);
+void aiml_ui_slider_style_set_font         (void* s, void* f);
+void aiml_ui_slider_style_set_padding_x    (void* s, float v);
+void aiml_ui_slider_style_set_padding_y    (void* s, float v);
+void aiml_ui_slider_style_set_size_w       (void* s, float v);
+void aiml_ui_slider_style_set_size_h       (void* s, float v);
+
+/* ── Button style setters ─────────────────────────────────────────────────── */
+
+void aiml_ui_button_style_set_bg           (void* s, void* t);
+void aiml_ui_button_style_set_hover        (void* s, void* t);
+void aiml_ui_button_style_set_active       (void* s, void* t);
+void aiml_ui_button_style_set_color        (void* s, int32_t c);
+void aiml_ui_button_style_set_bg_color     (void* s, int32_t c);
+void aiml_ui_button_style_set_hover_color  (void* s, int32_t c);
+void aiml_ui_button_style_set_active_color (void* s, int32_t c);
+void aiml_ui_button_style_set_border_color (void* s, int32_t c);
+void aiml_ui_button_style_set_corner_radius(void* s, float r);
+void aiml_ui_button_style_set_border_width (void* s, float w);
+void aiml_ui_button_style_set_font         (void* s, void* f);
+void aiml_ui_button_style_set_padding_x    (void* s, float v);
+void aiml_ui_button_style_set_padding_y    (void* s, float v);
+void aiml_ui_button_style_set_size_w       (void* s, float v);
+void aiml_ui_button_style_set_size_h       (void* s, float v);
+
+/* ── Label style setters ──────────────────────────────────────────────────── */
+
+void aiml_ui_label_style_set_color        (void* s, int32_t c);
+void aiml_ui_label_style_set_bg_color     (void* s, int32_t c);
+void aiml_ui_label_style_set_hover_color  (void* s, int32_t c);
+void aiml_ui_label_style_set_active_color (void* s, int32_t c);
+void aiml_ui_label_style_set_border_color (void* s, int32_t c);
+void aiml_ui_label_style_set_corner_radius(void* s, float r);
+void aiml_ui_label_style_set_border_width (void* s, float w);
+void aiml_ui_label_style_set_font         (void* s, void* f);
+void aiml_ui_label_style_set_padding_x    (void* s, float v);
+void aiml_ui_label_style_set_padding_y    (void* s, float v);
+void aiml_ui_label_style_set_size_w       (void* s, float v);
+void aiml_ui_label_style_set_size_h       (void* s, float v);
+
+/* ── Progress style setters ───────────────────────────────────────────────── */
+
+void aiml_ui_progress_style_set_fill        (void* s, void* t);
+void aiml_ui_progress_style_set_bg_tex      (void* s, void* t);
+void aiml_ui_progress_style_set_color       (void* s, int32_t c);
+void aiml_ui_progress_style_set_bg_color    (void* s, int32_t c);
+void aiml_ui_progress_style_set_hover_color (void* s, int32_t c);
+void aiml_ui_progress_style_set_active_color(void* s, int32_t c);
+void aiml_ui_progress_style_set_border_color(void* s, int32_t c);
+void aiml_ui_progress_style_set_corner_radius(void* s, float r);
+void aiml_ui_progress_style_set_border_width(void* s, float w);
+void aiml_ui_progress_style_set_font        (void* s, void* f);
+void aiml_ui_progress_style_set_padding_x   (void* s, float v);
+void aiml_ui_progress_style_set_padding_y   (void* s, float v);
+void aiml_ui_progress_style_set_size_w      (void* s, float v);
+void aiml_ui_progress_style_set_size_h      (void* s, float v);
+
+/* ── Panel style setters ──────────────────────────────────────────────────── */
+
+void aiml_ui_panel_style_set_bg_tex       (void* s, void* t);
+void aiml_ui_panel_style_set_color        (void* s, int32_t c);
+void aiml_ui_panel_style_set_bg_color     (void* s, int32_t c);
+void aiml_ui_panel_style_set_hover_color  (void* s, int32_t c);
+void aiml_ui_panel_style_set_active_color (void* s, int32_t c);
+void aiml_ui_panel_style_set_border_color (void* s, int32_t c);
+void aiml_ui_panel_style_set_corner_radius(void* s, float r);
+void aiml_ui_panel_style_set_border_width (void* s, float w);
+void aiml_ui_panel_style_set_font         (void* s, void* f);
+void aiml_ui_panel_style_set_padding_x    (void* s, float v);
+void aiml_ui_panel_style_set_padding_y    (void* s, float v);
+void aiml_ui_panel_style_set_size_w       (void* s, float v);
+void aiml_ui_panel_style_set_size_h       (void* s, float v);
 
 #ifdef __cplusplus
 }

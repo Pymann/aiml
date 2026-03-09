@@ -22,6 +22,8 @@
 #include "src/sys/gl_runtime.h"
 #include "src/sys/engine_runtime.h"
 #include "src/sys/input_runtime.h"
+#include "src/sys/audio_runtime.h"
+#include "src/sys/mirror_runtime.h"
 #include "src/sys/ui_runtime.h"
 
 // LLVM includes
@@ -1103,6 +1105,74 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_input_action_down",                 (void*)(intptr_t)aiml_input_action_down);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_input_action_pressed",              (void*)(intptr_t)aiml_input_action_pressed);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_input_action_released",             (void*)(intptr_t)aiml_input_action_released);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_event_delta_x",              (void*)(intptr_t)aiml_input_event_delta_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_event_delta_y",              (void*)(intptr_t)aiml_input_event_delta_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_drag_active",                (void*)(intptr_t)aiml_input_drag_active);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_drag_started",               (void*)(intptr_t)aiml_input_drag_started);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_drag_ended",                 (void*)(intptr_t)aiml_input_drag_ended);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_drag_origin_x",              (void*)(intptr_t)aiml_input_drag_origin_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_drag_origin_y",              (void*)(intptr_t)aiml_input_drag_origin_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_drag_delta_x",               (void*)(intptr_t)aiml_input_drag_delta_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_drag_delta_y",               (void*)(intptr_t)aiml_input_drag_delta_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_drag_set_payload",           (void*)(intptr_t)aiml_input_drag_set_payload);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_drag_get_payload",           (void*)(intptr_t)aiml_input_drag_get_payload);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_input_drag_set_threshold",         (void*)(intptr_t)aiml_input_drag_set_threshold);
+    // audio namespace
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_init",                              (void*)(intptr_t)aiml_audio_init);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_shutdown",                          (void*)(intptr_t)aiml_audio_shutdown);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_set_volume",                        (void*)(intptr_t)aiml_audio_set_volume);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_load",                              (void*)(intptr_t)aiml_audio_load);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_load_stream",                       (void*)(intptr_t)aiml_audio_load_stream);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_create_group",                      (void*)(intptr_t)aiml_audio_create_group);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_play",                        (void*)(intptr_t)aiml_audio_sound_play);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_pause",                       (void*)(intptr_t)aiml_audio_sound_pause);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_stop",                        (void*)(intptr_t)aiml_audio_sound_stop);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_set_loop",                    (void*)(intptr_t)aiml_audio_sound_set_loop);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_set_volume",                  (void*)(intptr_t)aiml_audio_sound_set_volume);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_set_pitch",                   (void*)(intptr_t)aiml_audio_sound_set_pitch);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_set_pan",                     (void*)(intptr_t)aiml_audio_sound_set_pan);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_seek",                        (void*)(intptr_t)aiml_audio_sound_seek);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_free",                        (void*)(intptr_t)aiml_audio_sound_free);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_is_playing",                  (void*)(intptr_t)aiml_audio_sound_is_playing);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_is_finished",                 (void*)(intptr_t)aiml_audio_sound_is_finished);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_duration",                    (void*)(intptr_t)aiml_audio_sound_duration);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_position",                    (void*)(intptr_t)aiml_audio_sound_position);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_set_group",                   (void*)(intptr_t)aiml_audio_sound_set_group);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_set_position",                (void*)(intptr_t)aiml_audio_sound_set_position);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_set_velocity",                (void*)(intptr_t)aiml_audio_sound_set_velocity);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_set_attenuation",             (void*)(intptr_t)aiml_audio_sound_set_attenuation);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_set_spatialization",          (void*)(intptr_t)aiml_audio_sound_set_spatialization);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_sound_set_directional_attenuation", (void*)(intptr_t)aiml_audio_sound_set_directional_attenuation);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_group_set_volume",                  (void*)(intptr_t)aiml_audio_group_set_volume);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_group_pause_all",                   (void*)(intptr_t)aiml_audio_group_pause_all);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_group_resume_all",                  (void*)(intptr_t)aiml_audio_group_resume_all);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_group_stop_all",                    (void*)(intptr_t)aiml_audio_group_stop_all);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_set_listener",                      (void*)(intptr_t)aiml_audio_set_listener);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_audio_set_listener_velocity",             (void*)(intptr_t)aiml_audio_set_listener_velocity);
+    // mirror namespace
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_listen",                     (void*)(intptr_t)aiml_mirror_listen);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_listen_max",                 (void*)(intptr_t)aiml_mirror_listen_max);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_connect",                    (void*)(intptr_t)aiml_mirror_connect);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_connect_timeout",            (void*)(intptr_t)aiml_mirror_connect_timeout);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_close",              (void*)(intptr_t)aiml_mirror_session_close);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_update",             (void*)(intptr_t)aiml_mirror_session_update);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_is_connected",       (void*)(intptr_t)aiml_mirror_session_is_connected);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_peer_count",         (void*)(intptr_t)aiml_mirror_session_peer_count);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_register",           (void*)(intptr_t)aiml_mirror_session_register);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_register_id",        (void*)(intptr_t)aiml_mirror_session_register_id);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_unregister",         (void*)(intptr_t)aiml_mirror_session_unregister);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_has_event",          (void*)(intptr_t)aiml_mirror_session_has_event);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_next_event",         (void*)(intptr_t)aiml_mirror_session_next_event);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_set_sync_rate",      (void*)(intptr_t)aiml_mirror_session_set_sync_rate);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_sync_now",           (void*)(intptr_t)aiml_mirror_session_sync_now);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_set_sync_mode",      (void*)(intptr_t)aiml_mirror_session_set_sync_mode);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_set_rpc_target",     (void*)(intptr_t)aiml_mirror_session_set_rpc_target);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_event_type",                 (void*)(intptr_t)aiml_mirror_event_type);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_event_peer",                 (void*)(intptr_t)aiml_mirror_event_peer);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_event_net_id",               (void*)(intptr_t)aiml_mirror_event_net_id);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_send_rpc",           (void*)(intptr_t)aiml_mirror_session_send_rpc);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_has_rpc",            (void*)(intptr_t)aiml_mirror_session_has_rpc);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_next_rpc",           (void*)(intptr_t)aiml_mirror_session_next_rpc);
     // ui namespace
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_init",                           (void*)(intptr_t)aiml_ui_init);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_begin",                          (void*)(intptr_t)aiml_ui_begin);
@@ -1124,8 +1194,6 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_radio",                          (void*)(intptr_t)aiml_ui_radio);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider",                         (void*)(intptr_t)aiml_ui_slider);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider_int",                     (void*)(intptr_t)aiml_ui_slider_int);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_set_slider_thumb",               (void*)(intptr_t)aiml_ui_set_slider_thumb);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_set_slider_track",               (void*)(intptr_t)aiml_ui_set_slider_track);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_drag_f32",                       (void*)(intptr_t)aiml_ui_drag_f32);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_bar",                   (void*)(intptr_t)aiml_ui_progress_bar);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_bar_colored",           (void*)(intptr_t)aiml_ui_progress_bar_colored);
@@ -1144,6 +1212,85 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_load_font",                      (void*)(intptr_t)aiml_ui_load_font);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_load_font_default",              (void*)(intptr_t)aiml_ui_load_font_default);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_set_default_font",               (void*)(intptr_t)aiml_ui_set_default_font);
+    // Widget style preset factories
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider_style_new",               (void*)(intptr_t)aiml_ui_slider_style_new);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_style_new",               (void*)(intptr_t)aiml_ui_button_style_new);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_label_style_new",                (void*)(intptr_t)aiml_ui_label_style_new);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_style_new",             (void*)(intptr_t)aiml_ui_progress_style_new);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_panel_style_new",                (void*)(intptr_t)aiml_ui_panel_style_new);
+    // Slider style setters
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider_style_set_thumb",         (void*)(intptr_t)aiml_ui_slider_style_set_thumb);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider_style_set_track",         (void*)(intptr_t)aiml_ui_slider_style_set_track);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider_style_set_color",         (void*)(intptr_t)aiml_ui_slider_style_set_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider_style_set_bg_color",      (void*)(intptr_t)aiml_ui_slider_style_set_bg_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider_style_set_hover_color",   (void*)(intptr_t)aiml_ui_slider_style_set_hover_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider_style_set_active_color",  (void*)(intptr_t)aiml_ui_slider_style_set_active_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider_style_set_border_color",  (void*)(intptr_t)aiml_ui_slider_style_set_border_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider_style_set_corner_radius", (void*)(intptr_t)aiml_ui_slider_style_set_corner_radius);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider_style_set_border_width",  (void*)(intptr_t)aiml_ui_slider_style_set_border_width);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider_style_set_font",          (void*)(intptr_t)aiml_ui_slider_style_set_font);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider_style_set_padding_x",     (void*)(intptr_t)aiml_ui_slider_style_set_padding_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider_style_set_padding_y",     (void*)(intptr_t)aiml_ui_slider_style_set_padding_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider_style_set_size_w",        (void*)(intptr_t)aiml_ui_slider_style_set_size_w);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider_style_set_size_h",        (void*)(intptr_t)aiml_ui_slider_style_set_size_h);
+    // Button style setters
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_style_set_bg",            (void*)(intptr_t)aiml_ui_button_style_set_bg);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_style_set_hover",         (void*)(intptr_t)aiml_ui_button_style_set_hover);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_style_set_active",        (void*)(intptr_t)aiml_ui_button_style_set_active);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_style_set_color",         (void*)(intptr_t)aiml_ui_button_style_set_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_style_set_bg_color",      (void*)(intptr_t)aiml_ui_button_style_set_bg_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_style_set_hover_color",   (void*)(intptr_t)aiml_ui_button_style_set_hover_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_style_set_active_color",  (void*)(intptr_t)aiml_ui_button_style_set_active_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_style_set_border_color",  (void*)(intptr_t)aiml_ui_button_style_set_border_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_style_set_corner_radius", (void*)(intptr_t)aiml_ui_button_style_set_corner_radius);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_style_set_border_width",  (void*)(intptr_t)aiml_ui_button_style_set_border_width);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_style_set_font",          (void*)(intptr_t)aiml_ui_button_style_set_font);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_style_set_padding_x",     (void*)(intptr_t)aiml_ui_button_style_set_padding_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_style_set_padding_y",     (void*)(intptr_t)aiml_ui_button_style_set_padding_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_style_set_size_w",        (void*)(intptr_t)aiml_ui_button_style_set_size_w);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_style_set_size_h",        (void*)(intptr_t)aiml_ui_button_style_set_size_h);
+    // Label style setters
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_label_style_set_color",          (void*)(intptr_t)aiml_ui_label_style_set_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_label_style_set_bg_color",       (void*)(intptr_t)aiml_ui_label_style_set_bg_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_label_style_set_hover_color",    (void*)(intptr_t)aiml_ui_label_style_set_hover_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_label_style_set_active_color",   (void*)(intptr_t)aiml_ui_label_style_set_active_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_label_style_set_border_color",   (void*)(intptr_t)aiml_ui_label_style_set_border_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_label_style_set_corner_radius",  (void*)(intptr_t)aiml_ui_label_style_set_corner_radius);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_label_style_set_border_width",   (void*)(intptr_t)aiml_ui_label_style_set_border_width);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_label_style_set_font",           (void*)(intptr_t)aiml_ui_label_style_set_font);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_label_style_set_padding_x",      (void*)(intptr_t)aiml_ui_label_style_set_padding_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_label_style_set_padding_y",      (void*)(intptr_t)aiml_ui_label_style_set_padding_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_label_style_set_size_w",         (void*)(intptr_t)aiml_ui_label_style_set_size_w);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_label_style_set_size_h",         (void*)(intptr_t)aiml_ui_label_style_set_size_h);
+    // Progress style setters
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_style_set_fill",        (void*)(intptr_t)aiml_ui_progress_style_set_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_style_set_bg_tex",      (void*)(intptr_t)aiml_ui_progress_style_set_bg_tex);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_style_set_color",       (void*)(intptr_t)aiml_ui_progress_style_set_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_style_set_bg_color",    (void*)(intptr_t)aiml_ui_progress_style_set_bg_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_style_set_hover_color", (void*)(intptr_t)aiml_ui_progress_style_set_hover_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_style_set_active_color",(void*)(intptr_t)aiml_ui_progress_style_set_active_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_style_set_border_color",(void*)(intptr_t)aiml_ui_progress_style_set_border_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_style_set_corner_radius",(void*)(intptr_t)aiml_ui_progress_style_set_corner_radius);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_style_set_border_width",(void*)(intptr_t)aiml_ui_progress_style_set_border_width);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_style_set_font",        (void*)(intptr_t)aiml_ui_progress_style_set_font);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_style_set_padding_x",   (void*)(intptr_t)aiml_ui_progress_style_set_padding_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_style_set_padding_y",   (void*)(intptr_t)aiml_ui_progress_style_set_padding_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_style_set_size_w",      (void*)(intptr_t)aiml_ui_progress_style_set_size_w);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_progress_style_set_size_h",      (void*)(intptr_t)aiml_ui_progress_style_set_size_h);
+    // Panel style setters
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_panel_style_set_bg_tex",         (void*)(intptr_t)aiml_ui_panel_style_set_bg_tex);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_panel_style_set_color",          (void*)(intptr_t)aiml_ui_panel_style_set_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_panel_style_set_bg_color",       (void*)(intptr_t)aiml_ui_panel_style_set_bg_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_panel_style_set_hover_color",    (void*)(intptr_t)aiml_ui_panel_style_set_hover_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_panel_style_set_active_color",   (void*)(intptr_t)aiml_ui_panel_style_set_active_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_panel_style_set_border_color",   (void*)(intptr_t)aiml_ui_panel_style_set_border_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_panel_style_set_corner_radius",  (void*)(intptr_t)aiml_ui_panel_style_set_corner_radius);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_panel_style_set_border_width",   (void*)(intptr_t)aiml_ui_panel_style_set_border_width);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_panel_style_set_font",           (void*)(intptr_t)aiml_ui_panel_style_set_font);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_panel_style_set_padding_x",      (void*)(intptr_t)aiml_ui_panel_style_set_padding_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_panel_style_set_padding_y",      (void*)(intptr_t)aiml_ui_panel_style_set_padding_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_panel_style_set_size_w",         (void*)(intptr_t)aiml_ui_panel_style_set_size_w);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_panel_style_set_size_h",         (void*)(intptr_t)aiml_ui_panel_style_set_size_h);
     // libm scalar functions (resolved from libc.so at runtime, but AddSymbol ensures JIT finds them)
     llvm::sys::DynamicLibrary::AddSymbol("sinf",   (void*)(intptr_t)sinf);
     llvm::sys::DynamicLibrary::AddSymbol("cosf",   (void*)(intptr_t)cosf);

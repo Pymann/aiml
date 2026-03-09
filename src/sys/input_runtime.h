@@ -33,6 +33,10 @@ float       aiml_input_event_scroll_x(void* ev);  /* scroll delta x; set for mou
 float       aiml_input_event_scroll_y(void* ev);  /* scroll delta y; set for mouse_scroll */
 const char* aiml_input_event_char_   (void* ev);  /* UTF-8 char string; set for text */
 
+/* delta accessor: aliases scroll_x/y — set for drag_start/drag_move/drag_end */
+float   aiml_input_event_delta_x(void* ev);
+float   aiml_input_event_delta_y(void* ev);
+
 /* ── Lifecycle ────────────────────────────────────────────────────────────── */
 
 /* Call once after engine.create_window.  win is a window_handle (AimlWindow*).
@@ -101,6 +105,20 @@ float   aiml_input_axis           (const char* name);
 int32_t aiml_input_action_down    (const char* name);
 int32_t aiml_input_action_pressed (const char* name);
 int32_t aiml_input_action_released(const char* name);
+
+/* ── Drag-and-drop polling ───────────────────────────────────────────────── */
+
+/* btn: 0=Left, 1=Right, 2=Middle */
+int32_t aiml_input_drag_active       (int32_t btn);  /* drag in progress */
+int32_t aiml_input_drag_started      (int32_t btn);  /* drag started this frame */
+int32_t aiml_input_drag_ended        (int32_t btn);  /* drag ended this frame */
+float   aiml_input_drag_origin_x     (int32_t btn);  /* cursor position when drag began */
+float   aiml_input_drag_origin_y     (int32_t btn);
+float   aiml_input_drag_delta_x      (int32_t btn);  /* total delta from origin */
+float   aiml_input_drag_delta_y      (int32_t btn);
+void    aiml_input_drag_set_payload  (void* data);   /* attach user data */
+void*   aiml_input_drag_get_payload  (void);         /* retrieve (nullptr if none) */
+void    aiml_input_drag_set_threshold(float px);     /* min pixels to start drag (default 5.0) */
 
 #ifdef __cplusplus
 }

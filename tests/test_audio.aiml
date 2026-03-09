@@ -1,0 +1,170 @@
+# audio namespace test (44.2)
+#
+# Tests the AIML audio namespace built on miniaudio.
+# Audio engine init/shutdown, load, group creation, sound control.
+#
+# Headless-safe: all tests run without an audio device.
+# If no device is available, miniaudio uses a null backend (silent mode).
+#
+# Ausführen: ./out/aiml -r tests/test_audio.aiml
+# Expected exit code: 0
+
+# ── Phase A: Engine lifecycle ─────────────────────────────────────────────────
+
+# A1: explicit init — must not crash
+- call: [audio.init]
+- print: ["A1 ok"]
+
+# A2: set_volume on initialized engine — must not crash
+- call: [audio.set_volume, 0.5]
+- print: ["A2 ok"]
+
+# A3: double init is a no-op (idempotent)
+- call: [audio.init]
+- print: ["A3 ok"]
+
+# ── Phase B: Group creation ───────────────────────────────────────────────────
+
+# B1: create_group returns non-null
+- decl: [music_grp, audio_group, { call: [audio.create_group] }]
+- if:   [{ "!=": [music_grp, 0] }, true]
+  then:
+    - print: ["B1 ok"]
+  else:
+    - print: ["FAIL B1: create_group returned null"]
+    - call:  [sys.exit, 1]
+
+- decl: [sfx_grp, audio_group, { call: [audio.create_group] }]
+- if:   [{ "!=": [sfx_grp, 0] }, true]
+  then:
+    - print: ["B2 ok"]
+  else:
+    - print: ["FAIL B2: sfx create_group returned null"]
+    - call:  [sys.exit, 1]
+
+# B3: group volume — must not crash
+- call: [music_grp.set_volume, 0.7]
+- call: [sfx_grp.set_volume,   1.0]
+- print: ["B3 ok"]
+
+# ── Phase C: Sound load ───────────────────────────────────────────────────────
+
+# C1: load -> returns non-null (file exists)
+- decl: [snd, audio_sound, { call: [audio.load, "tests/test_beep.wav"] }]
+- if:   [{ "!=": [snd, 0] }, true]
+  then:
+    - print: ["C1 ok"]
+  else:
+    - print: ["FAIL C1: audio.load returned null"]
+    - call:  [sys.exit, 1]
+
+# C2: load missing file -> returns null (graceful failure)
+- decl: [snd_missing, audio_sound, { call: [audio.load, "tests/__nonexistent__.wav"] }]
+- if:   [{ "==": [snd_missing, 0] }, true]
+  then:
+    - print: ["C2 ok"]
+  else:
+    - print: ["FAIL C2: load missing file should return null"]
+    - call:  [sys.exit, 1]
+
+# ── Phase D: Sound control ────────────────────────────────────────────────────
+
+# D1: set_loop/volume/pitch/pan — no crash
+- call: [snd.set_loop,   false]
+- call: [snd.set_volume, 0.5]
+- call: [snd.set_pitch,  1.0]
+- call: [snd.set_pan,    0.0]
+- print: ["D1 ok"]
+
+# D2: is_playing before play -> 0
+- decl: [playing_before, i32, { call: [snd.is_playing] }]
+- if:   [{ "==": [playing_before, 0] }, true]
+  then:
+    - print: ["D2 ok"]
+  else:
+    - print: ["FAIL D2: is_playing=${playing_before} before play (expected 0)"]
+    - call:  [sys.exit, 1]
+
+# D3: duration >= 0.0
+- decl: [dur, f32, { call: [snd.duration] }]
+- if:   [{ ">=": [dur, 0.0] }, true]
+  then:
+    - print: ["D3 ok (duration=${dur})"]
+  else:
+    - print: ["FAIL D3: duration=${dur} should be >= 0.0"]
+    - call:  [sys.exit, 1]
+
+# D4: set_group — assign to sfx_grp (no crash)
+- call: [snd.set_group, sfx_grp]
+- print: ["D4 ok"]
+
+# D5: play -> no crash
+- call: [snd.play]
+- print: ["D5 ok"]
+
+# D6: stop -> no crash
+- call: [snd.stop]
+- print: ["D6 ok"]
+
+# D7: seek to 0.0 — no crash
+- call: [snd.seek, 0.0]
+- print: ["D7 ok"]
+
+# D8: is_finished — callable, returns 0 or 1 (stop+seek resets to start, not "at end")
+- decl: [finished, i32, { call: [snd.is_finished] }]
+- print: ["D8 ok (is_finished=${finished})"]
+
+# D9: position >= 0.0 — no crash
+- decl: [pos, f32, { call: [snd.position] }]
+- if:   [{ ">=": [pos, 0.0] }, true]
+  then:
+    - print: ["D9 ok (position=${pos})"]
+  else:
+    - print: ["FAIL D9: position=${pos} should be >= 0.0"]
+    - call:  [sys.exit, 1]
+
+# D10: free — no crash
+- call: [snd.free]
+- print: ["D10 ok"]
+
+# ── Phase E: load_stream ──────────────────────────────────────────────────────
+
+# E1: load_stream -> returns non-null
+- decl: [snd2, audio_sound, { call: [audio.load_stream, "tests/test_beep.wav"] }]
+- if:   [{ "!=": [snd2, 0] }, true]
+  then:
+    - print: ["E1 ok"]
+    - call: [snd2.free]
+  else:
+    - print: ["FAIL E1: audio.load_stream returned null"]
+    - call:  [sys.exit, 1]
+
+# ── Phase F: Group control ────────────────────────────────────────────────────
+
+# F1: group methods — no crash
+- call: [sfx_grp.pause_all]
+- call: [sfx_grp.resume_all]
+- call: [sfx_grp.stop_all]
+- call: [music_grp.stop_all]
+- print: ["F1 ok"]
+
+# ── Phase G: Master volume ────────────────────────────────────────────────────
+
+# G1: set_volume full range — no crash
+- call: [audio.set_volume, 0.0]
+- call: [audio.set_volume, 1.0]
+- call: [audio.set_volume, 0.8]
+- print: ["G1 ok"]
+
+# ── Phase H: Shutdown ─────────────────────────────────────────────────────────
+
+# H1: shutdown — no crash
+- call: [audio.shutdown]
+- print: ["H1 ok"]
+
+# H2: double shutdown — idempotent
+- call: [audio.shutdown]
+- print: ["H2 ok"]
+
+# ── Result ────────────────────────────────────────────────────────────────────
+- print: ["All audio tests passed"]
