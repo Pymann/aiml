@@ -125,25 +125,35 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
     module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
 
-    ctx.resolveImportCallback = [this, &ctx](const std::string& path) {
-        static std::unordered_set<std::string> parsedImports;
-        if (parsedImports.count(path)) return;
-        parsedImports.insert(path);
-        
-        this->resolveImport(path);
-        
+    // Per-instance set: each compiler gets its own header-propagation guard.
+    // Shared via shared_ptr so the lambda can capture by value.
+    auto headerDone = std::make_shared<std::unordered_set<std::string>>();
+
+    ctx.resolveImportCallback = [this, &ctx, headerDone](const std::string& path) {
+        // Global guard: compile each imported file to .o at most once across ALL instances.
+        static std::unordered_set<std::string> compiledObjects;
+        if (!compiledObjects.count(path)) {
+            compiledObjects.insert(path);
+            this->resolveImport(path);
+        }
+
         // Important: also copy over the linked objects discovered!
         for (const auto& obj : this->linkedObjects) {
              if (std::find(ctx.objectFilesToLink.begin(), ctx.objectFilesToLink.end(), obj) == ctx.objectFilesToLink.end()) {
                  ctx.objectFilesToLink.push_back(obj);
              }
         }
-        
+
+        // Per-instance guard: header-propagate into THIS context at most once per file.
+        // Each sub-compiler gets its own headerDone set, so it always sees all imported types.
+        if (headerDone->count(path)) return;
+        headerDone->insert(path);
+
         // Header-Only Mode for current compiler: Parse the import for signatures!
         std::string prevNs = ctx.currentNamespace;
         bool prevHeaderOnly = ctx.headerOnlyMode;
         ctx.headerOnlyMode = true;
-        
+
         AIML::AST::Builder subBuilder;
         std::ifstream fin(path);
         if (fin.is_open()) {

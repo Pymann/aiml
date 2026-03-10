@@ -1,0 +1,80 @@
+# Tests for string.substr, string.starts_with, string.index_of
+
+- decl: [pass, i32, 0]
+- decl: [fail, i32, 0]
+
+# ── substr(start) ────────────────────────────────────────────────────────────
+
+- decl: [s, string, "Bearer abc123"]
+
+- decl: [tok, string]
+- set:  [tok, { call: [s.substr, 7] }]
+- print: ["substr(7): ${tok}"]
+- if:
+    condition: { eq: [tok, "abc123"] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL substr(7)"] }]
+
+# ── substr(start, len) ───────────────────────────────────────────────────────
+
+- decl: [bearer, string]
+- set:  [bearer, { call: [s.substr, 0, 6] }]
+- print: ["substr(0,6): ${bearer}"]
+- if:
+    condition: { eq: [bearer, "Bearer"] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL substr(0,6)"] }]
+
+- decl: [mid, string]
+- set:  [mid, { call: [s.substr, 8, 3] }]
+- print: ["substr(8,3): ${mid}"]
+- if:
+    condition: { eq: [mid, "bc1"] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL substr(8,3)"] }]
+
+# ── starts_with ──────────────────────────────────────────────────────────────
+
+- decl: [sw1, i32]
+- set:  [sw1, { call: [s.starts_with, "Bearer "] }]
+- print: ["starts_with Bearer: ${sw1}"]
+- if:
+    condition: { "==": [sw1, 1] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL starts_with true"] }]
+
+- decl: [sw2, i32]
+- set:  [sw2, { call: [s.starts_with, "Token "] }]
+- print: ["starts_with Token: ${sw2}"]
+- if:
+    condition: { "==": [sw2, 0] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL starts_with false"] }]
+
+# ── index_of ─────────────────────────────────────────────────────────────────
+
+- decl: [idx1, i32]
+- set:  [idx1, { call: [s.index_of, "abc"] }]
+- print: ["index_of abc: ${idx1}"]
+- if:
+    condition: { "==": [idx1, 7] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL index_of found"] }]
+
+- decl: [idx2, i32]
+- set:  [idx2, { call: [s.index_of, "xyz"] }]
+- print: ["index_of xyz: ${idx2}"]
+- if:
+    condition: { "==": [idx2, -1] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL index_of not found"] }]
+
+# ── Result ───────────────────────────────────────────────────────────────────
+
+- print: ["string methods: ${pass} passed, ${fail} failed"]
+- if:
+    condition: { "==": [fail, 0] }
+    then:
+      - call: [sys.exit, 0]
+    else:
+      - call: [sys.exit, 1]

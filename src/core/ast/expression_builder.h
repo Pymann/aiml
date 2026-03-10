@@ -15,6 +15,7 @@ class ExpressionBuilder : public StateHandler {
     std::string op;
     bool expectingKey = false;
     bool expectingArgs = false;
+    bool hadSequence = false;   // true if args came from a [...] sequence (operator), false for dict
     std::vector<std::unique_ptr<Expr>> args;
 public:
     ExpressionBuilder(Builder* b) : StateHandler(b) {}
