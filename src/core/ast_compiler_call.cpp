@@ -578,9 +578,24 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         llvm::Function* strlenFunc = ctx.module.getFunction("strlen");
         if (!strlenFunc) strlenFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "strlen", ctx.module);
         llvm::Value* strPtr = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
+        // Null-safe: if strPtr is null, return 0
+        llvm::Value* isNull = ctx.builder.CreateIsNull(strPtr, "str_is_null");
+        llvm::Function* parent = ctx.builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* nullBB  = llvm::BasicBlock::Create(ctx.context, "str_len_null",  parent);
+        llvm::BasicBlock* okBB    = llvm::BasicBlock::Create(ctx.context, "str_len_ok",    parent);
+        llvm::BasicBlock* mergeBB = llvm::BasicBlock::Create(ctx.context, "str_len_merge", parent);
+        ctx.builder.CreateCondBr(isNull, nullBB, okBB);
+        ctx.builder.SetInsertPoint(nullBB);
+        ctx.builder.CreateBr(mergeBB);
+        ctx.builder.SetInsertPoint(okBB);
         llvm::Value* len64 = ctx.builder.CreateCall(strlenFunc, {strPtr});
         llvm::Value* len32 = ctx.builder.CreateTrunc(len64, ctx.builder.getInt32Ty());
-        return ctx.ir_gen->wrap(len32);
+        ctx.builder.CreateBr(mergeBB);
+        ctx.builder.SetInsertPoint(mergeBB);
+        llvm::PHINode* phi = ctx.builder.CreatePHI(ctx.builder.getInt32Ty(), 2, "str_len");
+        phi->addIncoming(ctx.builder.getInt32(0), nullBB);
+        phi->addIncoming(len32, okBB);
+        return ctx.ir_gen->wrap(phi);
     }
 
     // Eagerly evaluate arguments for collection and class methods
@@ -589,6 +604,66 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         IRValue* val = visitExpression(arg.get());
         if (val) argVals.push_back(val);
         else return ctx.ir_gen->getInt32(0);
+    }
+
+    // String methods (substr, starts_with, index_of)
+    if (className == "string" && !argVals.empty()) {
+        llvm::Value* strPtr = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(),
+                                                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
+        if (methodName == "substr") {
+            llvm::Value* start = ctx.builder.CreateSExt(
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), ctx.builder.getInt64Ty());
+            llvm::Value* offsetPtr = ctx.builder.CreateGEP(ctx.builder.getInt8Ty(), strPtr, start);
+            if (argVals.size() >= 2) {
+                // strndup(str + start, len)
+                llvm::Function* strndupFn = ctx.module.getFunction("strndup");
+                if (!strndupFn) strndupFn = llvm::Function::Create(
+                    llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(),
+                        {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt64Ty()}, false),
+                    llvm::Function::ExternalLinkage, "strndup", ctx.module);
+                llvm::Value* len64 = ctx.builder.CreateSExt(
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1])), ctx.builder.getInt64Ty());
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(strndupFn, {offsetPtr, len64}));
+            } else {
+                // strdup(str + start)
+                llvm::Function* strdupFn = ctx.module.getFunction("strdup");
+                if (!strdupFn) strdupFn = llvm::Function::Create(
+                    llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(),
+                        {ctx.builder.getInt8Ty()->getPointerTo()}, false),
+                    llvm::Function::ExternalLinkage, "strdup", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(strdupFn, {offsetPtr}));
+            }
+        } else if (methodName == "starts_with") {
+            // starts_with(prefix) → i32 (1 or 0)
+            llvm::Function* strncmpFn = ctx.module.getFunction("strncmp");
+            if (!strncmpFn) strncmpFn = llvm::Function::Create(
+                llvm::FunctionType::get(ctx.builder.getInt32Ty(),
+                    {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt64Ty()}, false),
+                llvm::Function::ExternalLinkage, "strncmp", ctx.module);
+            llvm::Function* strlenFn = ctx.module.getFunction("strlen");
+            if (!strlenFn) strlenFn = llvm::Function::Create(
+                llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false),
+                llvm::Function::ExternalLinkage, "strlen", ctx.module);
+            llvm::Value* prefix = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            llvm::Value* prefixLen = ctx.builder.CreateCall(strlenFn, {prefix});
+            llvm::Value* cmp = ctx.builder.CreateCall(strncmpFn, {strPtr, prefix, prefixLen});
+            llvm::Value* eq = ctx.builder.CreateICmpEQ(cmp, ctx.builder.getInt32(0));
+            return ctx.ir_gen->wrap(ctx.builder.CreateZExt(eq, ctx.builder.getInt32Ty()));
+        } else if (methodName == "index_of") {
+            // index_of(needle) → i32 (-1 if not found)
+            llvm::Function* strstrFn = ctx.module.getFunction("strstr");
+            if (!strstrFn) strstrFn = llvm::Function::Create(
+                llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(),
+                    {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo()}, false),
+                llvm::Function::ExternalLinkage, "strstr", ctx.module);
+            llvm::Value* needle = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            llvm::Value* found = ctx.builder.CreateCall(strstrFn, {strPtr, needle});
+            llvm::Value* isNull = ctx.builder.CreateICmpEQ(found, llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()));
+            llvm::Value* offset = ctx.builder.CreatePtrDiff(ctx.builder.getInt8Ty(), found, strPtr);
+            llvm::Value* offset32 = ctx.builder.CreateTrunc(offset, ctx.builder.getInt32Ty());
+            llvm::Value* result = ctx.builder.CreateSelect(isNull, ctx.builder.getInt32(-1), offset32);
+            return ctx.ir_gen->wrap(result);
+        }
     }
 
     // List Methods

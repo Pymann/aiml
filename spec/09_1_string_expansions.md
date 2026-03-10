@@ -71,21 +71,35 @@ Binary operations (like `+`, `-`, `*`, `/`) work as expected.
 
 ## 4. Implicit Type Conversion (String -> Int)
 
-A unique feature of AIML string expansion used in declarations is the ability to implicitly convert the *resulting string* back to an integer type if the target variable requires it.
+Whenever the result of a string assignment is a `ptr<i8>` (i.e., a string) but the target
+variable is `i32` or `i64`, the compiler **automatically inserts `atoi` / `atoll`**.
 
-This is useful for initializing variables with complex string-based logic.
+This covers all forms of string assignment, not just complex expressions:
 
 ```yaml
-# 1. Expansion happens: "10" + "20" -> "30" (as string)
-# 2. Assignment detects target is i32.
-# 3. Compiler inserts 'atoi("30")' to convert "30" -> 30 (int).
-- decl: 
+# Expression expansion
+- decl:
     name: result
     type: i32
     value: "${ { +: [10, 20] } }"
+# Expansion produces "30" (string), atoi converts to 30 (int).
+
+# Simple variable expansion
+- decl: [s, string, "99"]
+- decl: [n, i32, "${s}"]   # atoi called → n == 99
+
+# set: statement
+- decl: [m, i32]
+- set:  [m, "${s}"]        # atoi called → m == 99
+
+# i64 variant uses atoll
+- decl: [big, i64]
+- set:  [big, "${s}"]      # atoll called → big == 99
 ```
 
-This acts as a bridge between string-based templating and typed logic.
+The coercion is triggered by the **target type**, not the expression form. Any string value
+(literal, interpolated, or returned by a function) assigned to `i32`/`i64` goes through this
+conversion automatically.
 
 ## 5. Runtime Behavior
 

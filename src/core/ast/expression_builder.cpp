@@ -55,6 +55,7 @@ bool ExpressionBuilder::OnScalar(const std::string& value, const std::string& ta
 bool ExpressionBuilder::OnSequenceStart() {
     if (!op.empty() && !expectingArgs) {
         expectingArgs = true;
+        hadSequence = true;
         return true;
     }
     return false;
@@ -113,10 +114,41 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
          }
          return newExpr;
     }
+    if (hadSequence) {
+        if (args.size() == 2) {
+            return std::make_unique<BinaryExpr>(op, std::move(args[0]), std::move(args[1]));
+        }
+        if (args.size() == 1) {
+            return std::make_unique<UnaryExpr>(op, std::move(args[0]));
+        }
+        return nullptr;
+    }
+
+    // No sequence: dict-style map {key1: val1, key2: val2, ...}
+    // op = first key, args = [val1, key2, val2, key3, val3, ...]
+    if (!op.empty() && !args.empty()) {
+        auto getStr = [](Expr* e) -> std::string {
+            if (auto* lit = dynamic_cast<LiteralExpr*>(e)) return lit->value;
+            if (auto* var = dynamic_cast<VariableExpr*>(e)) return var->name;
+            return "";
+        };
+        std::map<std::string, std::string> entries;
+        std::string firstVal = getStr(args[0].get());
+        entries[op] = firstVal;
+        bool ok = true;
+        for (size_t i = 1; i + 1 < args.size(); i += 2) {
+            auto* k = dynamic_cast<VariableExpr*>(args[i].get());
+            if (!k) { ok = false; break; }
+            entries[k->name] = getStr(args[i+1].get());
+        }
+        if (ok && !entries.empty())
+            return std::make_unique<DictLiteralExpr>(std::move(entries));
+    }
+
+    // Unary/binary fallback for args that didn't come via sequence
     if (args.size() == 2) {
          return std::make_unique<BinaryExpr>(op, std::move(args[0]), std::move(args[1]));
     }
-    // Unary operators (single argument)
     if (args.size() == 1) {
         return std::make_unique<UnaryExpr>(op, std::move(args[0]));
     }

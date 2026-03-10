@@ -108,6 +108,20 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 llvm::Value* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal));
                 initVal = ctx.ir_gen->wrap(ctx.builder.CreateCall(internFn, {raw}, "path_init"));
             }
+            // String → int coercion: decl: [x, i32/i64, "${str_var}"]
+            if ((decl->typeName == "i32" || decl->typeName == "i64") && !decl->typeName.empty()) {
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal));
+                if (v->getType()->isPointerTy()) {
+                    llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                    if (decl->typeName == "i32") {
+                        llvm::Function* fn = ctx.getFunction("atoi", ctx.builder.getInt32Ty(), {i8p});
+                        initVal = ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {v}, "str2i32"));
+                    } else {
+                        llvm::Function* fn = ctx.getFunction("atoll", ctx.builder.getInt64Ty(), {i8p});
+                        initVal = ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {v}, "str2i64"));
+                    }
+                }
+            }
             // buffer<u8>: handler returns a fresh alloca → memcpy struct content into target alloca
             if (decl->typeName.find("buffer<") == 0) {
                 llvm::Type* bufTy = ctx.getLLVMType("buffer");
@@ -241,6 +255,20 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             llvm::Value* rawVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
             llvm::Value* interned = ctx.builder.CreateCall(internFn, {rawVal}, "path_interned");
             val = ctx.ir_gen->wrap(interned);
+        }
+        // String → int coercion: set: [x, "${str_var}"] where x is i32/i64
+        if (sym->typeName == "i32" || sym->typeName == "i64") {
+            llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+            if (v->getType()->isPointerTy()) {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                if (sym->typeName == "i32") {
+                    llvm::Function* fn = ctx.getFunction("atoi", ctx.builder.getInt32Ty(), {i8p});
+                    val = ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {v}, "str2i32"));
+                } else {
+                    llvm::Function* fn = ctx.getFunction("atoll", ctx.builder.getInt64Ty(), {i8p});
+                    val = ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {v}, "str2i64"));
+                }
+            }
         }
         ctx.ir_gen->createStore(val, baseAlloca);
     } else {

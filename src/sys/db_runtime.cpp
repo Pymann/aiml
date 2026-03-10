@@ -208,6 +208,9 @@ static std::vector<AimlStore*>         g_persistent_stores;
 static std::vector<AimlKv*>            g_persistent_kvs;
 static std::vector<AimlTimeSeries*>    g_persistent_ts;
 
+// Global name-based registry: base_path+name → open handle (for reuse across calls)
+static std::unordered_map<std::string, AimlStore*> g_persistent_stores_by_name;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Column Layout helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -256,14 +259,21 @@ extern "C" void* aiml_db_store_open(const char* name, const char* type_name, int
 extern "C" void* aiml_db_store_open_persist(const char* name, const char* type_name,
                                               int64_t elem_size, const char* base_path) {
     if (elem_size <= 0) return nullptr;
+
+    std::string bp = base_path ? base_path : "./aiondb/";
+    if (!bp.empty() && bp.back() != '/') bp += '/';
+    std::string nm = name ? name : "store";
+
+    // Return existing handle if already open (same process, same name+path)
+    std::string registry_key = bp + nm;
+    auto it = g_persistent_stores_by_name.find(registry_key);
+    if (it != g_persistent_stores_by_name.end()) return it->second;
+
     AimlStore* s = new AimlStore();
     s->type_name  = type_name ? type_name : "";
     s->elem_size  = elem_size;
     s->persistent = true;
 
-    std::string bp = base_path ? base_path : "./aiondb/";
-    if (!bp.empty() && bp.back() != '/') bp += '/';
-    std::string nm = name ? name : "store";
     std::string db_path  = bp + nm + ".db";
     std::string wal_path = bp + nm + ".wal";
 
@@ -327,6 +337,7 @@ extern "C" void* aiml_db_store_open_persist(const char* name, const char* type_n
         lseek(s->wal_fd, 0, SEEK_END);
     }
 
+    g_persistent_stores_by_name[registry_key] = s;
     g_persistent_stores.push_back(s);
     return s;
 }
