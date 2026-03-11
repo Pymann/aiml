@@ -1,0 +1,117 @@
+# Tests for Spec-45: Heap Serialization (typed Kv + mirror typed register)
+# Verifies correct encode/decode of structs with heap fields (string, list<string>).
+# Expected exit code: 0
+
+# ── Player class: has a heap field (name: string) ────────────────────────────
+- class:
+    name: Player
+    members: [[name, string], [score, i32]]
+
+# ── Phase A: Kv<string:Player> — basic set/get/has/delete/clear ──────────────
+- decl: [players, Kv<string:Player>]
+- set: [players, { call: [db.open_kv, "players_ser"] }]
+
+# Set two entries
+- decl: [p1, Player]
+- set: [p1.name, "Alice"]
+- set: [p1.score, 100]
+- call: [players.set, "alice", p1]
+
+- decl: [p2, Player]
+- set: [p2.name, "Bob"]
+- set: [p2.score, 200]
+- call: [players.set, "bob", p2]
+
+# Get and verify
+- decl: [got, ptr<Player>]
+- set: [got, { call: [players.get, "alice"] }]
+- print: ["Phase A alice name: ${got.name}"]
+- print: ["Phase A alice score: ${got.score}"]
+
+- decl: [got2, ptr<Player>]
+- set: [got2, { call: [players.get, "bob"] }]
+- print: ["Phase A bob name: ${got2.name}"]
+- print: ["Phase A bob score: ${got2.score}"]
+
+# has
+- decl: [has, i32]
+- set: [has, { call: [players.has, "alice"] }]
+- print: ["Phase A has alice: ${has}"]
+
+- set: [has, { call: [players.has, "charlie"] }]
+- print: ["Phase A has charlie: ${has}"]
+
+# len
+- decl: [klen, i32]
+- set: [klen, { call: [players.len] }]
+- print: ["Phase A len: ${klen}"]
+
+# delete
+- call: [players.delete, "alice"]
+- set: [has, { call: [players.has, "alice"] }]
+- print: ["Phase A has after delete: ${has}"]
+
+# clear
+- call: [players.clear]
+- set: [klen, { call: [players.len] }]
+- print: ["Phase A len after clear: ${klen}"]
+
+- print: ["Phase A PASS"]
+
+# ── Phase B: Kv<string:Player> overwrite — get after set returns new value ───
+- decl: [kv2, Kv<string:Player>]
+- set: [kv2, { call: [db.open_kv, "kv2_ser"] }]
+
+- decl: [px, Player]
+- set: [px.name, "Charlie"]
+- set: [px.score, 42]
+- call: [kv2.set, "cx", px]
+
+# Overwrite with new value
+- set: [px.name, "David"]
+- set: [px.score, 99]
+- call: [kv2.set, "cx", px]
+
+- decl: [got3, ptr<Player>]
+- set: [got3, { call: [kv2.get, "cx"] }]
+- print: ["Phase B overwrite name: ${got3.name}"]
+- print: ["Phase B overwrite score: ${got3.score}"]
+
+- print: ["Phase B PASS"]
+
+# ── Phase C: WAL persist smoke test ──────────────────────────────────────────
+- decl: [pdb, Kv<string:Player>]
+- set: [pdb, { call: [db.open_kv, "pdb_wal_ser", {persist: true, path: "/tmp/aiml_test_heap_ser/"}] }]
+
+- decl: [pe, Player]
+- set: [pe.name, "Eve"]
+- set: [pe.score, 77]
+- call: [pdb.set, "eve", pe]
+
+- decl: [gpe, ptr<Player>]
+- set: [gpe, { call: [pdb.get, "eve"] }]
+- print: ["Phase C persist name: ${gpe.name}"]
+- print: ["Phase C persist score: ${gpe.score}"]
+
+# Checkpoint (writes WAL to disk without crash)
+- call: [db.checkpoint]
+
+- print: ["Phase C PASS"]
+
+# ── Phase D: mirror session.register_typed smoke test ────────────────────────
+# Open a listen session, register a Player (has string field), verify non-negative net_id.
+- decl: [srv, mirror_session]
+- set: [srv, { call: [mirror.listen, "tcp://127.0.0.1:19892"] }]
+
+- decl: [mp, Player]
+- set: [mp.name, "Frank"]
+- set: [mp.score, 55]
+
+- decl: [nid, i32]
+- set: [nid, { call: [srv.register, mp] }]
+- print: ["Phase D net_id: ${nid}"]
+
+- call: [srv.close]
+- print: ["Phase D PASS"]
+
+- print: ["All heap-ser tests PASSED"]

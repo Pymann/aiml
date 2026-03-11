@@ -3,6 +3,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Value.h>
+#include <llvm/IR/GlobalVariable.h>
 #include <map>
 #include <string>
 #include <memory>
@@ -151,6 +152,13 @@ namespace AIML {
             // Mirror: sync/rpc annotations (from model: sync:[...] rpc:[...])
             std::vector<std::string> syncFields;
             std::vector<std::string> rpcMethods;
+
+            // Heap serialization (spec 45): set during registerTypeDecl
+            // when the struct has at least one heap field (string, list, map, buffer).
+            // serNodesVar is the emitted @__aiml_sernodes_<Name> LLVM global.
+            bool                  hasHeapFields  = false;
+            llvm::GlobalVariable* serNodesVar    = nullptr;  // nullptr = not yet emitted
+            int32_t               serNodesCount  = 0;
         };
 
         class Scope {

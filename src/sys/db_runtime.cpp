@@ -67,7 +67,12 @@ struct AimlStore {
 
 struct AimlKv {
     int64_t val_size;
-    std::unordered_map<std::string, std::vector<uint8_t>> map;
+    std::unordered_map<std::string, std::vector<uint8_t>> map;  // raw bytes OR blob (typed)
+    // Typed Kv: descriptor for recursive serialization of heap fields
+    const AimlTypeNode* ser_nodes = nullptr;
+    int32_t             ser_n     = 0;
+    // Decoded cache: key → decoded struct (live heap pointers, freed on eviction)
+    std::unordered_map<std::string, std::vector<uint8_t>> decoded_cache;
     // Persistence (WAL)
     bool        persistent = false;
     int         wal_fd     = -1;
@@ -543,6 +548,15 @@ static void kv_wal_write_delete(AimlKv* kv, const char* key) {
     write(kv->wal_fd,  key,           key_len);
 }
 
+// Helper: free decoded_cache entry and remove it
+static void kv_decoded_evict(AimlKv* kv, const std::string& key) {
+    auto dc = kv->decoded_cache.find(key);
+    if (dc != kv->decoded_cache.end()) {
+        aiml_ser_free_decoded(dc->second.data(), kv->ser_nodes, kv->ser_n);
+        kv->decoded_cache.erase(dc);
+    }
+}
+
 // Replay WAL from current fd position (file must be seeked to start)
 static void kv_wal_replay(AimlKv* kv) {
     lseek(kv->wal_fd, 0, SEEK_SET);
@@ -556,7 +570,13 @@ static void kv_wal_replay(AimlKv* kv) {
         if (op == KV_WAL_SET) {
             uint32_t val_bytes;
             if (read(kv->wal_fd, &val_bytes, 4) != 4) break;
-            if (kv->val_size == 0) {
+            if (kv->ser_nodes) {
+                // Typed: stored as serialized blob
+                std::vector<uint8_t> blob(val_bytes);
+                if ((uint32_t)read(kv->wal_fd, blob.data(), val_bytes) != val_bytes) break;
+                kv_decoded_evict(kv, key);
+                kv->map[key] = std::move(blob);
+            } else if (kv->val_size == 0) {
                 // String value stored as raw chars (no null terminator in WAL)
                 std::string sval(val_bytes, '\0');
                 if ((uint32_t)read(kv->wal_fd, sval.data(), val_bytes) != val_bytes) break;
@@ -572,7 +592,9 @@ static void kv_wal_replay(AimlKv* kv) {
         } else if (op == KV_WAL_DELETE) {
             auto it = kv->map.find(key);
             if (it != kv->map.end()) {
-                if (kv->val_size == 0) {
+                if (kv->ser_nodes) {
+                    kv_decoded_evict(kv, key);
+                } else if (kv->val_size == 0) {
                     char* ptr = nullptr;
                     memcpy(&ptr, it->second.data(), sizeof(char*));
                     free(ptr);
@@ -611,7 +633,10 @@ extern "C" int32_t aiml_db_kv_checkpoint(void* kv_ptr) {
     ftruncate(kv->wal_fd, 0);
     lseek(kv->wal_fd, 0, SEEK_SET);
     for (auto& [k, v] : kv->map) {
-        if (kv->val_size == 0) {
+        if (kv->ser_nodes) {
+            // Blob already stored in v (includes the 4-byte length prefix)
+            kv_wal_write_set(kv, k.c_str(), v.data(), (uint32_t)v.size());
+        } else if (kv->val_size == 0) {
             char* ptr = nullptr;
             memcpy(&ptr, v.data(), sizeof(char*));
             const char* str = ptr ? ptr : "";
@@ -624,10 +649,54 @@ extern "C" int32_t aiml_db_kv_checkpoint(void* kv_ptr) {
     return 0;
 }
 
+extern "C" void* aiml_db_kv_open_typed(const char* name, int64_t val_size,
+                                         const AimlTypeNode* nodes, int32_t n_nodes) {
+    AimlKv* kv    = new AimlKv();
+    kv->val_size  = val_size;
+    kv->ser_nodes = nodes;
+    kv->ser_n     = n_nodes;
+    return kv;
+}
+
+extern "C" void* aiml_db_kv_open_typed_persist(const char* name, int64_t val_size,
+                                                 const char* base_path,
+                                                 const AimlTypeNode* nodes, int32_t n_nodes) {
+    std::string dir = base_path ? base_path : "./aiondb/";
+    mkdir(dir.c_str(), 0755);
+    AimlKv* kv    = new AimlKv();
+    kv->val_size   = val_size;
+    kv->ser_nodes  = nodes;
+    kv->ser_n      = n_nodes;
+    kv->persistent = true;
+    kv->wal_path   = dir + std::string(name) + ".kvwal";
+    int fd = open(kv->wal_path.c_str(), O_RDWR | O_CREAT, 0644);
+    if (fd >= 0) {
+        kv->wal_fd = fd;
+        kv_wal_replay(kv);
+        lseek(fd, 0, SEEK_END);
+    }
+    g_persistent_kvs.push_back(kv);
+    return kv;
+}
+
 extern "C" void aiml_db_kv_set(void* kv_ptr, const char* key, const void* val, int64_t val_size) {
     if (!kv_ptr || !key) return;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
-    if (val_size == 0) {
+    if (kv->ser_nodes && val) {
+        // Typed: encode struct → blob, invalidate decoded cache
+        kv_decoded_evict(kv, key);
+        char* blob = aiml_ser_encode(val, kv->ser_nodes, kv->ser_n);
+        if (!blob) return;
+        int32_t data_len;
+        memcpy(&data_len, blob, 4);
+        uint32_t total_blob = (uint32_t)(4 + data_len);
+        if (kv->persistent && kv->wal_fd >= 0)
+            kv_wal_write_set(kv, key, blob, total_blob);
+        std::vector<uint8_t> buf(total_blob);
+        memcpy(buf.data(), blob, total_blob);
+        free(blob);
+        kv->map[key] = std::move(buf);
+    } else if (val_size == 0) {
         const char* str = val ? static_cast<const char*>(val) : "";
         if (kv->persistent && kv->wal_fd >= 0)
             kv_wal_write_set(kv, key, str, (uint32_t)strlen(str));
@@ -649,6 +718,17 @@ extern "C" void* aiml_db_kv_get(void* kv_ptr, const char* key) {
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
     auto it = kv->map.find(key);
     if (it == kv->map.end()) return nullptr;
+    if (kv->ser_nodes) {
+        // Typed: return from decoded cache (populate on miss)
+        auto dc = kv->decoded_cache.find(key);
+        if (dc != kv->decoded_cache.end()) return dc->second.data();
+        std::vector<uint8_t> decoded((size_t)kv->val_size, 0);
+        aiml_ser_decode(reinterpret_cast<const char*>(it->second.data()),
+                        decoded.data(), kv->ser_nodes, kv->ser_n);
+        auto& cached = kv->decoded_cache[key];
+        cached = std::move(decoded);
+        return cached.data();
+    }
     if (kv->val_size == 0) {
         char* ptr = nullptr;
         memcpy(&ptr, it->second.data(), sizeof(char*));
@@ -674,7 +754,9 @@ extern "C" void aiml_db_kv_delete(void* kv_ptr, const char* key) {
     if (it == kv->map.end()) return;
     if (kv->persistent && kv->wal_fd >= 0)
         kv_wal_write_delete(kv, key);
-    if (kv->val_size == 0) {
+    if (kv->ser_nodes) {
+        kv_decoded_evict(kv, key);
+    } else if (kv->val_size == 0) {
         char* ptr = nullptr;
         memcpy(&ptr, it->second.data(), sizeof(char*));
         free(ptr);
@@ -690,7 +772,11 @@ extern "C" void aiml_db_kv_clear(void* kv_ptr) {
         ftruncate(kv->wal_fd, 0);
         lseek(kv->wal_fd, 0, SEEK_SET);
     }
-    if (kv->val_size == 0) {
+    if (kv->ser_nodes) {
+        for (auto& [k, v] : kv->decoded_cache)
+            aiml_ser_free_decoded(v.data(), kv->ser_nodes, kv->ser_n);
+        kv->decoded_cache.clear();
+    } else if (kv->val_size == 0) {
         for (auto& [k, v] : kv->map) {
             char* ptr = nullptr;
             memcpy(&ptr, v.data(), sizeof(char*));

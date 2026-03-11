@@ -9,6 +9,9 @@
 #include "string_utils.h"
 #include "expression.h"
 #include <iostream>
+#include "../sys/ser_runtime.h"  // AimlTypeNode, AimlTDKind (spec 45)
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/DerivedTypes.h>
 
 namespace AIML {
 namespace AST {
@@ -82,6 +85,176 @@ void Compiler::registerTypes(Program* prog) {
         registerTypeDecl(decl.get());
     }
 }
+
+// ── Spec-45: Heap-type descriptor helpers ────────────────────────────────────
+
+// Shift the absolute child-index fields of a descriptor node by delta.
+static AimlTypeNode snShift(AimlTypeNode n, int32_t delta) {
+    switch (n.kind) {
+        case AIML_TD_LIST:
+        case AIML_TD_BUFFER: n.param1 += delta; break;
+        case AIML_TD_MAP:    n.param1 += delta; n.param2 += delta; break;
+        case AIML_TD_STRUCT: n.param2 += delta; break; // param1 = n_fields (not an index)
+        default: break;
+    }
+    return n;
+}
+
+// Returns true if typeName contains at least one heap-allocated component
+// (string, list<T>, map<K:V>, buffer<T>, or user struct with heap members).
+static bool serHasHeap(const std::string& typeName, CompilerContext& ctx) {
+    if (typeName == "string") return true;
+    if (typeName.size() > 5 && typeName.substr(0,5) == "list<")   return true;
+    if (typeName.size() > 4 && typeName.substr(0,4) == "map<")    return true;
+    if (typeName.size() > 7 && typeName.substr(0,7) == "buffer<") return true;
+    auto it = ctx.classes.find(typeName);
+    if (it != ctx.classes.end() && !it->second.isBuiltin)
+        for (auto& [mn, mem] : it->second.members)
+            if (serHasHeap(mem.typeName, ctx)) return true;
+    return false;
+}
+
+// Assemble the flat STRUCT node array from per-field subtrees.
+// Each fsub[j] has been built by serBuildSubtree with the field's byte offset.
+static std::vector<AimlTypeNode> serBuildStructNodes(
+    const std::vector<std::vector<AimlTypeNode>>& fsubs,
+    int32_t offset, int32_t struct_sz)
+{
+    int32_t nf = (int32_t)fsubs.size();
+    // children_start[j] = index in result where fsubs[j][1..] begin
+    std::vector<int32_t> cs;
+    int32_t acc = 1 + nf;
+    for (int j = 0; j < nf; ++j) { cs.push_back(acc); acc += (int32_t)fsubs[j].size() - 1; }
+
+    std::vector<AimlTypeNode> out;
+    out.push_back({AIML_TD_STRUCT, nf, 1, offset, struct_sz, 0}); // root
+    for (int j = 0; j < nf; ++j)                                  // field roots
+        out.push_back(snShift(fsubs[j][0], cs[j] - 1));
+    for (int j = 0; j < nf; ++j) {                                // field children
+        int32_t d = cs[j] - 1;
+        for (size_t k = 1; k < fsubs[j].size(); ++k)
+            out.push_back(snShift(fsubs[j][k], d));
+    }
+    return out;
+}
+
+// Forward declaration.
+static std::vector<AimlTypeNode> serBuildSubtree(
+    const std::string& typeName, int32_t offset,
+    CompilerContext& ctx, const llvm::DataLayout& dl);
+
+// Build a flat DFS descriptor node array for typeName.  Root is at index 0.
+// offset = byte offset of this value within its parent struct (0 = top-level).
+static std::vector<AimlTypeNode> serBuildSubtree(
+    const std::string& typeName, int32_t offset,
+    CompilerContext& ctx, const llvm::DataLayout& dl)
+{
+    std::vector<AimlTypeNode> res;
+
+    // ── Primitive scalars ─────────────────────────────────────────────────────
+    if (typeName=="string")                                    { res.push_back({AIML_TD_STRING, 0,0,offset,0,0}); return res; }
+    if (typeName=="i8"||typeName=="u8"||typeName=="bool")      { res.push_back({AIML_TD_I8,     0,0,offset,0,0}); return res; }
+    if (typeName=="i16"||typeName=="u16")                      { res.push_back({AIML_TD_I16,    0,0,offset,0,0}); return res; }
+    if (typeName=="i32"||typeName=="u32"||typeName=="f32")     { res.push_back({AIML_TD_I32,    0,0,offset,0,0}); return res; }
+    if (typeName=="i64"||typeName=="u64"||typeName=="f64")     { res.push_back({AIML_TD_I64,    0,0,offset,0,0}); return res; }
+
+    // ── list<T> ───────────────────────────────────────────────────────────────
+    if (typeName.size()>5 && typeName.substr(0,5)=="list<") {
+        std::string inner = typeName.substr(5, typeName.size()-6);
+        llvm::Type* iT = ctx.getLLVMType(inner);
+        int32_t esz = iT ? (int32_t)dl.getTypeAllocSize(iT) : 4;
+        res.push_back({AIML_TD_LIST, 1, 0, offset, esz, 0});
+        for (auto& n : serBuildSubtree(inner, 0, ctx, dl)) res.push_back(snShift(n, 1));
+        return res;
+    }
+
+    // ── buffer<T> ─────────────────────────────────────────────────────────────
+    if (typeName.size()>7 && typeName.substr(0,7)=="buffer<") {
+        std::string inner = typeName.substr(7, typeName.size()-8);
+        llvm::Type* iT = ctx.getLLVMType(inner);
+        int32_t esz = iT ? (int32_t)dl.getTypeAllocSize(iT) : 1;
+        res.push_back({AIML_TD_BUFFER, 1, 0, offset, esz, 0});
+        for (auto& n : serBuildSubtree(inner, 0, ctx, dl)) res.push_back(snShift(n, 1));
+        return res;
+    }
+
+    // ── map<K:V> ──────────────────────────────────────────────────────────────
+    if (typeName.size()>4 && typeName.substr(0,4)=="map<") {
+        std::string inner = typeName.substr(4, typeName.size()-5);
+        size_t col = inner.find(':');
+        std::string kT = (col!=std::string::npos) ? inner.substr(0,col)   : "string";
+        std::string vT = (col!=std::string::npos) ? inner.substr(col+1)   : inner;
+        auto ksub = serBuildSubtree(kT, 0, ctx, dl);
+        auto vsub = serBuildSubtree(vT, 0, ctx, dl);
+        int32_t kc = (int32_t)ksub.size();
+        llvm::Type* vLT = ctx.getLLVMType(vT);
+        int32_t vsz = vLT ? (int32_t)dl.getTypeAllocSize(vLT) : 0;
+        res.push_back({AIML_TD_MAP, 1, 1+kc, offset, vsz, 0});
+        for (auto& n : ksub) res.push_back(snShift(n, 1));
+        for (auto& n : vsub) res.push_back(snShift(n, 1+kc));
+        return res;
+    }
+
+    // ── User struct (must already be in ctx.classes) ──────────────────────────
+    {
+        auto it = ctx.classes.find(typeName);
+        if (it != ctx.classes.end() && !it->second.isBuiltin && it->second.type) {
+            auto& ci = it->second;
+            const llvm::StructLayout* sl = dl.getStructLayout(ci.type);
+            int32_t sz = (int32_t)dl.getTypeAllocSize(ci.type);
+            std::vector<std::pair<std::string, CompilerContext::StructMember>> sm;
+            for (auto& [mn, mem] : ci.members) sm.push_back({mn, mem});
+            std::sort(sm.begin(), sm.end(),
+                      [](auto& a, auto& b){ return a.second.index < b.second.index; });
+            std::vector<std::vector<AimlTypeNode>> fsubs;
+            for (auto& [mn, mem] : sm)
+                fsubs.push_back(serBuildSubtree(mem.typeName,
+                    (int32_t)sl->getElementOffset(mem.index), ctx, dl));
+            return serBuildStructNodes(fsubs, offset, sz);
+        }
+    }
+
+    // ── Fallback: opaque / value-only type → raw bytes ────────────────────────
+    llvm::Type* t = ctx.getLLVMType(typeName);
+    int32_t sz = t ? (int32_t)dl.getTypeAllocSize(t) : 8;
+    res.push_back({AIML_TD_RAWBYTES, sz, 0, offset, 0, 0});
+    return res;
+}
+
+// Emit @__aiml_sernodes_<name> as a private constant global; update classInfo.
+static void serEmitGlobal(
+    const std::string& name,
+    const std::vector<AimlTypeNode>& nodes,
+    CompilerContext& ctx,
+    CompilerContext::ClassInfo& classInfo)
+{
+    if (nodes.empty()) return;
+    llvm::LLVMContext& lctx = ctx.context;
+    llvm::Type* i32 = llvm::Type::getInt32Ty(lctx);
+    llvm::StructType* nodeTy = llvm::StructType::get(lctx, {i32,i32,i32,i32,i32,i32});
+    std::vector<llvm::Constant*> elems;
+    for (auto& n : nodes) {
+        llvm::Constant* f[6] = {
+            llvm::ConstantInt::get(i32, (uint64_t)n.kind),
+            llvm::ConstantInt::get(i32, (uint64_t)n.param1),
+            llvm::ConstantInt::get(i32, (uint64_t)n.param2),
+            llvm::ConstantInt::get(i32, (uint64_t)n.offset),
+            llvm::ConstantInt::get(i32, (uint64_t)n.elem_size),
+            llvm::ConstantInt::get(i32, 0),
+        };
+        elems.push_back(llvm::ConstantStruct::get(nodeTy, f));
+    }
+    llvm::ArrayType* arrTy = llvm::ArrayType::get(nodeTy, elems.size());
+    auto* gv = new llvm::GlobalVariable(ctx.module, arrTy, /*isConstant=*/true,
+        llvm::GlobalValue::PrivateLinkage,
+        llvm::ConstantArray::get(arrTy, elems),
+        "__aiml_sernodes_" + name);
+    gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+    classInfo.hasHeapFields = true;
+    classInfo.serNodesVar   = gv;
+    classInfo.serNodesCount = (int32_t)nodes.size();
+}
+
 void Compiler::registerTypeDecl(Node* node) {
     if (auto ns = dynamic_cast<NamespaceDecl*>(node)) {
         ctx.currentNamespace = ns->name;
@@ -200,6 +373,24 @@ void Compiler::registerTypeDecl(Node* node) {
             classInfo.padded_size = padded;
         }
 
+        // Spec 45: emit @__aiml_sernodes_<Name> if the struct has heap fields.
+        {
+            bool anyHeap = false;
+            for (auto& [mn, mem] : classInfo.members)
+                if (serHasHeap(mem.typeName, ctx)) { anyHeap = true; break; }
+            if (anyHeap) {
+                const llvm::DataLayout& dl = ctx.module.getDataLayout();
+                const llvm::StructLayout* sl = dl.getStructLayout(structType);
+                int32_t sz = (int32_t)dl.getTypeAllocSize(structType);
+                std::vector<std::vector<AimlTypeNode>> fsubs;
+                for (auto& [mn, mem] : orderedMembers)
+                    fsubs.push_back(serBuildSubtree(mem.typeName,
+                        (int32_t)sl->getElementOffset(mem.index), ctx, dl));
+                auto nodes = serBuildStructNodes(fsubs, 0, sz);
+                serEmitGlobal(className, nodes, ctx, classInfo);
+            }
+        }
+
         // Track user-defined types for sys.bundle dependency closure.
         // collectUserTypes recurses into list<T> / map<K,V> to find inner types.
         auto track = [&](const std::string& typeName) {
@@ -265,6 +456,28 @@ void Compiler::registerTypeDecl(Node* node) {
             int padded = 1;
             while (padded < packed) padded <<= 1;
             classInfo.padded_size = padded;
+        }
+
+        // Spec 45: emit @__aiml_sernodes_<Name> if the model has heap fields.
+        {
+            bool anyHeap = false;
+            for (auto& [mn, mem] : classInfo.members)
+                if (serHasHeap(mem.typeName, ctx)) { anyHeap = true; break; }
+            if (anyHeap) {
+                const llvm::DataLayout& dl = ctx.module.getDataLayout();
+                const llvm::StructLayout* sl = dl.getStructLayout(structType);
+                int32_t sz = (int32_t)dl.getTypeAllocSize(structType);
+                std::vector<std::pair<std::string, CompilerContext::StructMember>> sm;
+                for (auto& [mn, mem] : classInfo.members) sm.push_back({mn, mem});
+                std::sort(sm.begin(), sm.end(),
+                          [](auto& a, auto& b){ return a.second.index < b.second.index; });
+                std::vector<std::vector<AimlTypeNode>> fsubs;
+                for (auto& [mn, mem] : sm)
+                    fsubs.push_back(serBuildSubtree(mem.typeName,
+                        (int32_t)sl->getElementOffset(mem.index), ctx, dl));
+                auto nodes = serBuildStructNodes(fsubs, 0, sz);
+                serEmitGlobal(modelName, nodes, ctx, classInfo);
+            }
         }
 
         // Mirror: propagate sync/rpc annotations

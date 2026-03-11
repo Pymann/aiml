@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "ser_runtime.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -41,6 +42,15 @@ int32_t aiml_mirror_session_register    (void* session, void* obj, int64_t obj_s
 void    aiml_mirror_session_register_id (void* session, void* obj, int64_t obj_size, int32_t id);
 /* Remove from sync */
 void    aiml_mirror_session_unregister  (void* session, void* obj);
+
+/* Typed variants: obj struct contains heap fields (strings, lists, …).
+ * nodes/n_nodes: compiler-emitted @__aiml_sernodes_<Type> descriptor.
+ * Delta packets use aiml_ser_encode/decode; WAL-replay is pointer-safe. */
+int32_t aiml_mirror_session_register_typed   (void* session, void* obj, int64_t obj_size,
+                                              const AimlTypeNode* nodes, int32_t n_nodes);
+void    aiml_mirror_session_register_id_typed(void* session, void* obj, int64_t obj_size,
+                                              int32_t id,
+                                              const AimlTypeNode* nodes, int32_t n_nodes);
 
 /* ── Event queue ──────────────────────────────────────────────────────────── */
 
