@@ -14,6 +14,7 @@
  */
 
 #include "mirror_runtime.h"
+#include "ser_runtime.h"
 #include "ws_runtime.h"
 
 #include <cstdlib>
@@ -60,6 +61,10 @@ struct AimlMirrorRegistered {
     bool     is_owner = false;
     float    sync_rate   = 0.0f;   /* Hz; 0 = every update */
     bool     manual_sync = false;
+    /* Typed serialization (heap-field structs) */
+    const AimlTypeNode* ser_nodes   = nullptr;
+    int32_t             ser_n       = 0;
+    bool                has_decoded = false;  /* true after first aiml_ser_decode */
 };
 
 struct AimlMirrorEvent {
@@ -214,14 +219,56 @@ static void send_unregister_pkt(AimlMirrorSession* s, int32_t net_id, AimlMirror
     broadcast_pkt(s, pkt, 6, exclude);
 }
 
+/* Send a delta packet to a single peer (typed or untyped).
+ * Does NOT update the shadow. */
+static void send_delta_to_peer(AimlMirrorPeer* peer, AimlMirrorRegistered* reg) {
+    if (!peer || !reg || !reg->obj_ptr) return;
+    if (reg->ser_nodes) {
+        /* Typed: encode struct → blob, reserved byte = 1 */
+        char* blob = aiml_ser_encode(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
+        if (!blob) return;
+        int32_t data_len;
+        memcpy(&data_len, blob, 4);
+        uint32_t total_blob = 4 + (uint32_t)data_len;
+        std::vector<uint8_t> pkt(6 + total_blob);
+        write_u32_le(pkt.data(), (uint32_t)reg->net_id);
+        pkt[4] = PKT_DELTA; pkt[5] = 1;  /* reserved=1: typed/serialized */
+        memcpy(pkt.data() + 6, blob, total_blob);
+        free(blob);
+        mirror_send(peer, pkt.data(), pkt.size());
+    } else {
+        /* Untyped: raw struct bytes, reserved byte = 0 */
+        uint8_t hdr[6];
+        write_u32_le(hdr, (uint32_t)reg->net_id);
+        hdr[4] = PKT_DELTA; hdr[5] = 0;
+        mirror_send(peer, hdr, 6);
+        mirror_send(peer, reg->obj_ptr, (size_t)reg->obj_size);
+    }
+}
+
 static void send_delta_pkt(AimlMirrorSession* s, AimlMirrorRegistered* reg, AimlMirrorPeer* exclude) {
-    size_t total = 6 + (size_t)reg->obj_size;
-    std::vector<uint8_t> pkt(total);
-    write_u32_le(pkt.data(), (uint32_t)reg->net_id);
-    pkt[4] = PKT_DELTA; pkt[5] = 0;
-    memcpy(pkt.data() + 6, reg->obj_ptr, (size_t)reg->obj_size);
-    broadcast_pkt(s, pkt.data(), total, exclude);
-    /* update shadow */
+    if (!reg || !reg->obj_ptr) return;
+    if (reg->ser_nodes) {
+        char* blob = aiml_ser_encode(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
+        if (!blob) return;
+        int32_t data_len;
+        memcpy(&data_len, blob, 4);
+        uint32_t total_blob = 4 + (uint32_t)data_len;
+        std::vector<uint8_t> pkt(6 + total_blob);
+        write_u32_le(pkt.data(), (uint32_t)reg->net_id);
+        pkt[4] = PKT_DELTA; pkt[5] = 1;
+        memcpy(pkt.data() + 6, blob, total_blob);
+        free(blob);
+        broadcast_pkt(s, pkt.data(), pkt.size(), exclude);
+    } else {
+        size_t total = 6 + (size_t)reg->obj_size;
+        std::vector<uint8_t> pkt(total);
+        write_u32_le(pkt.data(), (uint32_t)reg->net_id);
+        pkt[4] = PKT_DELTA; pkt[5] = 0;
+        memcpy(pkt.data() + 6, reg->obj_ptr, (size_t)reg->obj_size);
+        broadcast_pkt(s, pkt.data(), total, exclude);
+    }
+    /* update shadow (raw pointer-value copy for dirty detection) */
     memcpy(reg->shadow, reg->obj_ptr, (size_t)reg->obj_size);
 }
 
@@ -234,21 +281,36 @@ static void process_packet(AimlMirrorSession* s, AimlMirrorPeer* from_peer,
     uint8_t  type  = data[4];
 
     if (type == PKT_DELTA) {
+        uint8_t reserved = data[5];
         auto it = s->by_net_id.find(net_id);
         if (it != s->by_net_id.end()) {
             AimlMirrorRegistered* reg = it->second;
-            int payload_len = data_len - 6;
-            int copy_len = (reg->obj_size > 0 && payload_len > 0)
-                ? (payload_len < (int)reg->obj_size ? payload_len : (int)reg->obj_size)
-                : 0;
-            if (!reg->is_owner && reg->obj_ptr && copy_len > 0) {
-                /* Normal path: apply delta to live object */
-                memcpy(reg->obj_ptr, data + 6, (size_t)copy_len);
+            if (!reg->is_owner && reg->obj_ptr) {
+                if (reg->ser_nodes && reserved == 1) {
+                    /* Typed: decode blob (data+6 = blob with 4-byte length prefix) */
+                    if (reg->has_decoded)
+                        aiml_ser_free_decoded(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
+                    aiml_ser_decode((const char*)(data + 6), reg->obj_ptr,
+                                    reg->ser_nodes, reg->ser_n);
+                    reg->has_decoded = true;
+                } else {
+                    /* Untyped: raw memcpy */
+                    int payload_len = data_len - 6;
+                    int copy_len = (reg->obj_size > 0 && payload_len > 0)
+                        ? (payload_len < (int)reg->obj_size ? payload_len : (int)reg->obj_size)
+                        : 0;
+                    if (copy_len > 0) memcpy(reg->obj_ptr, data + 6, (size_t)copy_len);
+                }
                 if (reg->shadow) memcpy(reg->shadow, reg->obj_ptr, (size_t)reg->obj_size);
-            } else if (!reg->is_owner && !reg->obj_ptr && copy_len > 0 && reg->shadow) {
-                /* register_id not yet called: cache delta in shadow so it can
-                 * be applied to obj_ptr when register_id is eventually called. */
-                memcpy(reg->shadow, data + 6, (size_t)copy_len);
+            } else if (!reg->is_owner && !reg->obj_ptr && reg->shadow) {
+                /* register_id not yet called: cache raw bytes in shadow (untyped only) */
+                if (!(reg->ser_nodes && reserved == 1)) {
+                    int payload_len = data_len - 6;
+                    int copy_len = (reg->obj_size > 0 && payload_len > 0)
+                        ? (payload_len < (int)reg->obj_size ? payload_len : (int)reg->obj_size)
+                        : 0;
+                    if (copy_len > 0) memcpy(reg->shadow, data + 6, (size_t)copy_len);
+                }
             }
         }
         /* If host: forward delta to all other peers */
@@ -283,6 +345,8 @@ static void process_packet(AimlMirrorSession* s, AimlMirrorPeer* from_peer,
         if (it != s->by_net_id.end()) {
             AimlMirrorRegistered* reg = it->second;
             if (!reg->is_owner) {
+                if (reg->ser_nodes && reg->has_decoded && reg->obj_ptr)
+                    aiml_ser_free_decoded(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
                 free(reg->shadow);
                 delete reg;
                 s->by_net_id.erase(it);
@@ -340,11 +404,7 @@ static void mirror_try_accept(AimlMirrorSession* s) {
         for (auto& [id, reg] : s->by_net_id) {
             if (reg->is_owner) {
                 send_register_pkt(peer, reg->net_id, (int32_t)reg->obj_size);
-                /* Also send current delta */
-                uint8_t hdr[6]; write_u32_le(hdr, (uint32_t)reg->net_id);
-                hdr[4] = PKT_DELTA; hdr[5] = 0;
-                mirror_send(peer, hdr, 6);
-                mirror_send(peer, reg->obj_ptr, (size_t)reg->obj_size);
+                send_delta_to_peer(peer, reg);  /* typed-aware */
             }
         }
 
@@ -374,9 +434,25 @@ static void mirror_recv_from_peers(AimlMirrorSession* s) {
                 if (n < 6) { disconnected.push_back(peer); break; }
 
                 uint8_t pkt_type = hdr[4];
+                uint8_t reserved = hdr[5];
                 size_t  payload_len = 0;
-                if (pkt_type == PKT_DELTA) {
-                    /* Need obj_size — look up by net_id */
+                if (pkt_type == PKT_DELTA && reserved == 1) {
+                    /* Typed delta: payload = blob (starts with 4-byte data_len) */
+                    uint8_t len_buf[4];
+                    if (tcp_recv_all(fd, len_buf, 4) < 4) { disconnected.push_back(peer); break; }
+                    int32_t blob_data_len = (int32_t)read_u32_le(len_buf);
+                    size_t full_size = 6 + 4 + (size_t)blob_data_len;
+                    std::vector<uint8_t> full(full_size);
+                    memcpy(full.data(), hdr, 6);
+                    memcpy(full.data() + 6, len_buf, 4);
+                    if (blob_data_len > 0) {
+                        ssize_t got = tcp_recv_all(fd, full.data() + 10, (size_t)blob_data_len);
+                        if ((size_t)got < (size_t)blob_data_len) { disconnected.push_back(peer); break; }
+                    }
+                    process_packet(s, peer, full.data(), (int)full.size());
+                    continue;
+                } else if (pkt_type == PKT_DELTA) {
+                    /* Untyped delta: payload = raw struct bytes, size from registered obj */
                     int32_t nid = read_i32_le(hdr);
                     auto it = s->by_net_id.find(nid);
                     payload_len = (it != s->by_net_id.end()) ? (size_t)it->second->obj_size : 0;
@@ -571,6 +647,8 @@ void aiml_mirror_session_close(void* session) {
     }
     /* Free registered objects */
     for (auto& [id, reg] : s->by_net_id) {
+        if (!reg->is_owner && reg->ser_nodes && reg->has_decoded && reg->obj_ptr)
+            aiml_ser_free_decoded(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
         free(reg->shadow);
         delete reg;
     }
@@ -692,8 +770,62 @@ void aiml_mirror_session_unregister(void* session, void* obj) {
 
     s->by_net_id.erase(nid);
     s->by_ptr.erase(pit);
+    /* Owners never have has_decoded set (they're only encoded) */
     free(reg->shadow);
     delete reg;
+}
+
+/* ── Typed registration ───────────────────────────────────────────────────── */
+
+int32_t aiml_mirror_session_register_typed(void* session, void* obj, int64_t obj_size,
+                                            const AimlTypeNode* nodes, int32_t n_nodes) {
+    auto* s = (AimlMirrorSession*)session;
+    if (!s || !obj || obj_size <= 0) return -1;
+    int32_t nid = s->next_net_id++;
+    aiml_mirror_session_register_id_typed(session, obj, obj_size, nid, nodes, n_nodes);
+    return nid;
+}
+
+void aiml_mirror_session_register_id_typed(void* session, void* obj, int64_t obj_size,
+                                            int32_t id,
+                                            const AimlTypeNode* nodes, int32_t n_nodes) {
+    auto* s = (AimlMirrorSession*)session;
+    if (!s || !obj || obj_size <= 0) return;
+
+    /* If a placeholder was created by PKT_REGISTER, fill it in */
+    if (s->by_net_id.count(id)) {
+        AimlMirrorRegistered* existing = s->by_net_id[id];
+        if (existing->obj_ptr == nullptr) {
+            existing->obj_ptr   = obj;
+            existing->obj_size  = obj_size;
+            existing->ser_nodes = nodes;
+            existing->ser_n     = n_nodes;
+            /* For typed replicas: zero-init shadow; don't apply cached bytes */
+            if (!existing->shadow)
+                existing->shadow = (uint8_t*)calloc(1, (size_t)obj_size);
+            s->by_ptr[obj] = existing;
+        }
+        return;
+    }
+
+    AimlMirrorRegistered* reg = new AimlMirrorRegistered();
+    reg->obj_ptr   = obj;
+    reg->obj_size  = obj_size;
+    reg->net_id    = id;
+    reg->is_owner  = s->is_host;
+    reg->ser_nodes = nodes;
+    reg->ser_n     = n_nodes;
+    reg->shadow = (uint8_t*)malloc((size_t)obj_size);
+    memcpy(reg->shadow, obj, (size_t)obj_size);
+
+    s->by_net_id[id] = reg;
+    s->by_ptr[obj]   = reg;
+
+    /* Notify all peers of new object, send initial typed delta */
+    for (auto* peer : s->peers) {
+        send_register_pkt(peer, id, (int32_t)obj_size);
+        send_delta_to_peer(peer, reg);
+    }
 }
 
 /* ── Event queue ──────────────────────────────────────────────────────────── */

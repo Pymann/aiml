@@ -1823,6 +1823,7 @@ void registerBuiltins(CompilerContext& ctx) {
         db.builtinFuncs["open_kv"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Type* i64 = ctx.builder.getInt64Ty();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
 
             // Extract value type from deserializeTargetType "Kv<string:ValueType>"
             std::string targetType = ctx.deserializeTargetType;
@@ -1847,6 +1848,29 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Value* nameVal = args.empty()
                 ? ctx.builder.CreateGlobalStringPtr("")
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+
+            // Spec 45: typed Kv — use WAL-safe open when value type has heap fields.
+            bool hasHeap = vName != "string"
+                && ctx.classes.count(vName) && ctx.classes[vName].hasHeapFields
+                && ctx.classes[vName].serNodesVar;
+            if (hasHeap) {
+                auto& ci = ctx.classes[vName];
+                llvm::Value* nodesPtr = ci.serNodesVar;
+                llvm::Value* nNodes   = ctx.builder.getInt32((uint32_t)ci.serNodesCount);
+                if (ctx.dbOpenPersist) {
+                    llvm::Value* pathVal = ctx.dbOpenBasePathVal
+                        ? ctx.dbOpenBasePathVal
+                        : ctx.builder.CreateGlobalStringPtr("./aiondb/");
+                    llvm::Function* f = ctx.getFunction("aiml_db_kv_open_typed_persist",
+                        i8p, {i8p, i64, i8p, i8p, i32});
+                    return ctx.ir_gen->wrap(ctx.builder.CreateCall(f,
+                        {nameVal, ctx.builder.getInt64(valSize), pathVal, nodesPtr, nNodes}));
+                }
+                llvm::Function* f = ctx.getFunction("aiml_db_kv_open_typed", i8p, {i8p, i64, i8p, i32});
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(f,
+                    {nameVal, ctx.builder.getInt64(valSize), nodesPtr, nNodes}));
+            }
+
             if (ctx.dbOpenPersist) {
                 llvm::Value* pathVal = ctx.dbOpenBasePathVal
                     ? ctx.dbOpenBasePathVal
@@ -6465,6 +6489,17 @@ void registerBuiltins(CompilerContext& ctx) {
                     llvm::DataLayout dl(&ctx.module);
                     objSize = (int64_t)dl.getTypeAllocSize(ctx.classes[tn].type);
                 }
+                // Spec 45: typed register for heap-containing structs.
+                if (!tn.empty() && ctx.classes.count(tn)
+                        && ctx.classes[tn].hasHeapFields && ctx.classes[tn].serNodesVar) {
+                    auto& ci2 = ctx.classes[tn];
+                    llvm::Value* nodesPtr = ci2.serNodesVar;
+                    llvm::Value* nNodes   = ctx.builder.getInt32((uint32_t)ci2.serNodesCount);
+                    return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                        ctx.getFunction("aiml_mirror_session_register_typed",
+                            i32, {i8p, i8p, i64, i8p, i32}),
+                        {s, objPtr, ctx.builder.getInt64(objSize), nodesPtr, nNodes}));
+                }
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                     ctx.getFunction("aiml_mirror_session_register", i32, {i8p, i8p, i64}),
                     {s, objPtr, ctx.builder.getInt64(objSize)}));
@@ -6487,6 +6522,18 @@ void registerBuiltins(CompilerContext& ctx) {
                 if (!tn.empty() && ctx.classes.count(tn) && ctx.classes[tn].type) {
                     llvm::DataLayout dl(&ctx.module);
                     objSize = (int64_t)dl.getTypeAllocSize(ctx.classes[tn].type);
+                }
+                // Spec 45: typed register_id for heap-containing structs.
+                if (!tn.empty() && ctx.classes.count(tn)
+                        && ctx.classes[tn].hasHeapFields && ctx.classes[tn].serNodesVar) {
+                    auto& ci2 = ctx.classes[tn];
+                    llvm::Value* nodesPtr = ci2.serNodesVar;
+                    llvm::Value* nNodes   = ctx.builder.getInt32((uint32_t)ci2.serNodesCount);
+                    ctx.builder.CreateCall(
+                        ctx.getFunction("aiml_mirror_session_register_id_typed",
+                            vd, {i8p, i8p, i64, i32, i8p, i32}),
+                        {s, objPtr, ctx.builder.getInt64(objSize), idVal, nodesPtr, nNodes});
+                    return ctx.ir_gen->wrap(ctx.builder.getInt32(0));
                 }
                 ctx.builder.CreateCall(
                     ctx.getFunction("aiml_mirror_session_register_id", vd, {i8p, i8p, i64, i32}),

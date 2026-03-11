@@ -686,6 +686,8 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_open_col",      (void*)(intptr_t)aiml_db_store_open_col);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_open",             (void*)(intptr_t)aiml_db_kv_open);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_open_persist",     (void*)(intptr_t)aiml_db_kv_open_persist);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_open_typed",        (void*)(intptr_t)aiml_db_kv_open_typed);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_open_typed_persist",(void*)(intptr_t)aiml_db_kv_open_typed_persist);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_checkpoint",       (void*)(intptr_t)aiml_db_kv_checkpoint);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_set",              (void*)(intptr_t)aiml_db_kv_set);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_get",              (void*)(intptr_t)aiml_db_kv_get);
@@ -1168,8 +1170,10 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_update",             (void*)(intptr_t)aiml_mirror_session_update);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_is_connected",       (void*)(intptr_t)aiml_mirror_session_is_connected);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_peer_count",         (void*)(intptr_t)aiml_mirror_session_peer_count);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_register",           (void*)(intptr_t)aiml_mirror_session_register);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_register_id",        (void*)(intptr_t)aiml_mirror_session_register_id);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_register",            (void*)(intptr_t)aiml_mirror_session_register);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_register_id",         (void*)(intptr_t)aiml_mirror_session_register_id);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_register_typed",      (void*)(intptr_t)aiml_mirror_session_register_typed);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_register_id_typed",   (void*)(intptr_t)aiml_mirror_session_register_id_typed);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_unregister",         (void*)(intptr_t)aiml_mirror_session_unregister);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_has_event",          (void*)(intptr_t)aiml_mirror_session_has_event);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_next_event",         (void*)(intptr_t)aiml_mirror_session_next_event);

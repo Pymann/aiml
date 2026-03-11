@@ -145,10 +145,8 @@ int main(int argc, char** argv) {
             return 1;
         }
         
-        // 2. Generate Entry Point IF Executable
-        if (isExe) {
-            compiler.generateEntryPoint();
-        }
+        // 2. Generate Entry Point — always for .o and .exe
+        compiler.generateEntryPoint();
         
         // 3. Emit Object
         compiler.compileToObject(inputFile, objFile);
