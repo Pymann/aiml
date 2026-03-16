@@ -1,0 +1,253 @@
+# test_prefab.aiml — Prefab system test (headless, no rendering)
+# Requires: display
+
+- config:
+    entry: main
+
+# ── Prefab definitions ──────────────────────────────────────────────────────
+
+- prefab:
+    name: TestCard
+    width: 140
+    height: 196
+    texture: ""
+    draggable: true
+    children:
+      - name: card_name
+        type: label
+        x: 70
+        y: 175
+        anchor: center
+        font_size: 11
+        color: 0xFFFFFF
+      - name: art_area
+        type: sprite
+        x: 15
+        y: 100
+        width: 110
+        height: 80
+      - name: stat_bg
+        type: rect
+        x: 0
+        y: 0
+        width: 140
+        height: 30
+        color: 0x222244
+
+- prefab:
+    name: BoardZone
+    width: 180
+    height: 140
+    draggable: false
+    children:
+      - name: bg
+        type: rect
+        x: 0
+        y: 0
+        width: 180
+        height: 140
+        color: 0x1A1A2E
+      - name: zone_label
+        type: label
+        x: 90
+        y: 130
+        anchor: center
+        font_size: 9
+        color: 0x444466
+
+# ── Test functions ──────────────────────────────────────────────────────────
+
+- def:
+    name: test_prefab_registration
+    body:
+      # Prefab defs are auto-registered at program startup via visitTopLevel.
+      # If we get here without crashing, registration worked.
+      - print: ["PASS: prefab registration"]
+
+- def:
+    name: test_prefab_instantiate
+    args: [[win, window_handle]]
+    body:
+      # Initialize scene
+      - call: [engine.prefab_scene_init, 1280, 720]
+
+      # Load a default font for labels
+      - decl: [font, ui_font]
+      - set:  [font, { call: [ui.load_font_default, 14.0] }]
+      - call: [engine.prefab_set_font, font]
+
+      # Instantiate a TestCard
+      - decl: [card, prefab_instance]
+      - set:  [card, { call: [engine.instantiate, "TestCard"] }]
+
+      - if:
+          condition: { "==": [card, 0] }
+          then:
+            - print: ["FAIL: instantiate returned null"]
+            - return: ""
+
+      - print: ["PASS: prefab instantiate"]
+
+      # Test set/get position
+      - call: [card.set_pos, 100.0, 200.0]
+      - decl: [px, f32, { call: [card.get_x] }]
+      - decl: [py, f32, { call: [card.get_y] }]
+
+      - if:
+          condition: { "==": [px, 100.0] }
+          then:
+            - print: ["PASS: get_x == 100"]
+          else:
+            - print: ["FAIL: get_x != 100"]
+
+      - if:
+          condition: { "==": [py, 200.0] }
+          then:
+            - print: ["PASS: get_y == 200"]
+          else:
+            - print: ["FAIL: get_y != 200"]
+
+      # Test set/get scale
+      - call: [card.set_scale, 1.5]
+      - decl: [sc, f32, { call: [card.get_scale] }]
+      - if:
+          condition: { "==": [sc, 1.5] }
+          then:
+            - print: ["PASS: get_scale == 1.5"]
+          else:
+            - print: ["FAIL: get_scale != 1.5"]
+
+      # Test set/get z
+      - call: [card.set_z, 10]
+      - decl: [z, i32, { call: [card.get_z] }]
+      - if:
+          condition: { "==": [z, 10] }
+          then:
+            - print: ["PASS: get_z == 10"]
+          else:
+            - print: ["FAIL: get_z != 10"]
+
+      # Test set/get visible
+      - call: [card.set_visible, 0]
+      - decl: [vis, i32, { call: [card.get_visible] }]
+      - if:
+          condition: { "==": [vis, 0] }
+          then:
+            - print: ["PASS: get_visible == 0 after hide"]
+          else:
+            - print: ["FAIL: get_visible != 0"]
+
+      - call: [card.set_visible, 1]
+
+      # Test set/get alpha
+      - call: [card.set_alpha, 0.5]
+      - decl: [al, f32, { call: [card.get_alpha] }]
+      - if:
+          condition: { "==": [al, 0.5] }
+          then:
+            - print: ["PASS: get_alpha == 0.5"]
+          else:
+            - print: ["FAIL: get_alpha != 0.5"]
+
+      # Test width/height with scale
+      - decl: [w, f32, { call: [card.get_width] }]
+      - decl: [h, f32, { call: [card.get_height] }]
+      - print: ["width=${w} height=${h}"]
+      # width = 140 * 1.5 = 210, height = 196 * 1.5 = 294
+      - if:
+          condition: { "==": [w, 210.0] }
+          then:
+            - print: ["PASS: width == 210 (140*1.5)"]
+          else:
+            - print: ["FAIL: width != 210"]
+
+      # Test child text setting
+      - call: [card.set_text, "card_name", "Fire Dragon"]
+      - print: ["PASS: set_text (no crash)"]
+
+      # Test child color
+      - call: [card.set_color, "card_name", 16711680]
+      - print: ["PASS: set_color (no crash)"]
+
+      # Test child visibility
+      - call: [card.set_child_visible, "art_area", 0]
+      - print: ["PASS: set_child_visible (no crash)"]
+
+      # Test BoardZone instantiation
+      - decl: [zone, prefab_instance]
+      - set:  [zone, { call: [engine.instantiate, "BoardZone"] }]
+      - if:
+          condition: { "!=": [zone, 0] }
+          then:
+            - print: ["PASS: BoardZone instantiate"]
+          else:
+            - print: ["FAIL: BoardZone instantiate returned null"]
+
+      - call: [zone.set_pos, 300.0, 100.0]
+      - call: [zone.set_text, "zone_label", "Combat Zone 1"]
+
+      # Test hit_test
+      - decl: [hit, prefab_instance]
+      - set:  [hit, { call: [engine.hit_test, 110.0, 210.0] }]
+      # card is at (100, 200), size 210x294, so (110, 210) should hit it
+      - if:
+          condition: { "!=": [hit, 0] }
+          then:
+            - print: ["PASS: hit_test found instance"]
+          else:
+            - print: ["FAIL: hit_test returned null"]
+
+      # Test hit_test miss
+      - set:  [hit, { call: [engine.hit_test, 0.0, 0.0] }]
+      - if:
+          condition: { "==": [hit, 0] }
+          then:
+            - print: ["PASS: hit_test miss returns null"]
+          else:
+            - print: ["FAIL: hit_test miss should be null"]
+
+      # Test draw_scene (should not crash even without GL context... well, it will
+      # because we have GL. Let's just call it.)
+      - call: [engine.draw_scene]
+      - print: ["PASS: draw_scene (no crash)"]
+
+      # Test destroy
+      - call: [engine.destroy, card]
+      - print: ["PASS: destroy (no crash)"]
+
+      # Test get_dragged (should be null)
+      - decl: [drag, prefab_instance]
+      - set:  [drag, { call: [engine.get_dragged] }]
+      - if:
+          condition: { "==": [drag, 0] }
+          then:
+            - print: ["PASS: get_dragged == null"]
+          else:
+            - print: ["FAIL: get_dragged should be null"]
+
+      - call: [engine.destroy, zone]
+
+      - return: ""
+
+# ── Main ────────────────────────────────────────────────────────────────────
+
+- def:
+    name: main
+    return: i32
+    body:
+      - print: ["=== Prefab System Tests ==="]
+
+      - call: [test_prefab_registration]
+
+      # Create window for GL context
+      - decl: [win, window_handle]
+      - set:  [win, { call: [engine.create_window, 800, 600, "Prefab Test"] }]
+
+      - call: [gl.init]
+      - call: [ui.init]
+
+      - call: [test_prefab_instantiate, win]
+
+      - call: [engine.destroy_window, win]
+      - print: ["=== All Prefab Tests Done ==="]
+      - return: 0

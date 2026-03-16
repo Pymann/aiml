@@ -161,6 +161,17 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             else return ctx.ir_gen->getInt32(0);
         }
 
+        // Spec 46: inject source location as hidden 2nd argument for log.* calls
+        if (baseName == "log" && methodName != "set_level" && methodName != "set_file") {
+            std::string loc = ctx.currentSourceFile;
+            if (call->sourceNode.IsDefined() && call->sourceNode.Mark().line >= 0)
+                loc += ":" + std::to_string(call->sourceNode.Mark().line + 1);
+            else
+                loc += ":?";
+            llvm::Value* locStr = ctx.builder.CreateGlobalStringPtr(loc, "log_loc");
+            argVals.push_back(ctx.ir_gen->wrap(locStr));
+        }
+
         // Dispatch any registered namespace (sys, io, time, path, and future ones)
         if (ctx.namespaces.count(baseName)) {
             IRValue* sysResult = visitSysNamespaceCall(baseName, methodName, argVals);
@@ -676,6 +687,10 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          } else if (methodName == "pop") {
              return ctx.ir_gen->wrap(ListImpl::pop(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), llvmListElemType));
          } else if (methodName == "get" && argVals.size() > 0) {
+             // For struct element types, return a pointer (ptr<T>) instead of by-value copy
+             if (llvmListElemType->isStructTy()) {
+                 return ctx.ir_gen->wrap(ListImpl::getElementPtr(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), llvmListElemType));
+             }
              return ctx.ir_gen->wrap(ListImpl::get(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), llvmListElemType));
          } else if (methodName == "insert" && argVals.size() > 1) {
              ListImpl::insert(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1])));
@@ -1153,6 +1168,32 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              }
          }
          if (!func) {
+             // Chained field-method dispatch: e.g. c.mana_cost.put → fieldName="mana_cost", subMethod="put"
+             size_t chainDot = methodName.find('.');
+             if (chainDot != std::string::npos) {
+                 std::string fieldName = methodName.substr(0, chainDot);
+                 std::string subMethod = methodName.substr(chainDot + 1);
+                 auto& classInfo = ctx.classes[className];
+                 auto fieldIt = classInfo.members.find(fieldName);
+                 if (fieldIt != classInfo.members.end()) {
+                     // Get GEP to the field within the struct
+                     llvm::Value* rawBase = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+                     // If base is a pointer (ref/ptr), load it first
+                     auto* baseElemRaw = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(baseElemTy));
+                     if (baseElemRaw->isPointerTy())
+                         rawBase = ctx.builder.CreateLoad(baseElemRaw, rawBase, "deref_this");
+                     llvm::StructType* structTy = classInfo.type;
+                     llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(structTy, rawBase, fieldIt->second.index, fieldName + "_ptr");
+
+                     // Create a temporary Symbol for the field, then recursively dispatch
+                     Symbol fieldSym;
+                     fieldSym.ir_alloca_inst = ctx.ir_gen->wrap(static_cast<llvm::Value*>(fieldPtr));
+                     fieldSym.typeName = fieldIt->second.typeName;
+                     fieldSym.ir_element_type = ctx.ir_gen->wrapType(fieldIt->second.type);
+                     fieldSym.ir_type = ctx.ir_gen->getPointerTy();
+                     return visitObjectMethodCall(baseName + "." + fieldName, subMethod, &fieldSym, call);
+                 }
+             }
              LOG_ERROR("Unknown method: " + className + "_" + methodName);
              return ctx.ir_gen->getInt32(0);
          }

@@ -15,7 +15,9 @@ bool StatementBuilder::OnSequenceStart() {
 }
 
 bool StatementBuilder::OnSequenceEnd() {
-    builder->popState();
+    seqDepth--;
+    if (seqDepth <= 0)
+        builder->popState();
     return true;
 }
 

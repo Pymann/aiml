@@ -103,6 +103,19 @@ static llvm::Function* gJrMapValI64(CompilerContext& c){return c.getFunction("ai
 static llvm::Function* gJrMapValF32(CompilerContext& c){return c.getFunction("aiml_jr_map_val_f32",f32T(c),{ptrT(c),i8pT(c),i32T(c)});}
 static llvm::Function* gJrMapValF64(CompilerContext& c){return c.getFunction("aiml_jr_map_val_f64",f64T(c),{ptrT(c),i8pT(c),i32T(c)});}
 static llvm::Function* gJrMapValStr(CompilerContext& c){return c.getFunction("aiml_jr_map_val_str",i8pT(c),{ptrT(c),i8pT(c),i32T(c)});}
+static llvm::Function* gJrArrSub   (CompilerContext& c){return c.getFunction("aiml_jr_arr_sub",ptrT(c),{ptrT(c),i8pT(c),i32T(c)});}
+static llvm::Function* gJwArrObjBgn(CompilerContext& c){return c.getFunction("aiml_jw_arr_obj_begin",voidT(c),{ptrT(c)});}
+static llvm::Function* gJwArrObjEnd(CompilerContext& c){return c.getFunction("aiml_jw_arr_obj_end",voidT(c),{ptrT(c)});}
+static llvm::Function* gJwArrArrBgn(CompilerContext& c){return c.getFunction("aiml_jw_arr_arr_begin",voidT(c),{ptrT(c)});}
+static llvm::Function* gJwArrArrEnd(CompilerContext& c){return c.getFunction("aiml_jw_arr_arr_end",voidT(c),{ptrT(c)});}
+static llvm::Function* gJrValLen   (CompilerContext& c){return c.getFunction("aiml_jr_val_len",i32T(c),{ptrT(c)});}
+static llvm::Function* gJrValI32   (CompilerContext& c){return c.getFunction("aiml_jr_val_i32",i32T(c),{ptrT(c),i32T(c)});}
+static llvm::Function* gJrValI64   (CompilerContext& c){return c.getFunction("aiml_jr_val_i64",i64T(c),{ptrT(c),i32T(c)});}
+static llvm::Function* gJrValF32   (CompilerContext& c){return c.getFunction("aiml_jr_val_f32",f32T(c),{ptrT(c),i32T(c)});}
+static llvm::Function* gJrValF64   (CompilerContext& c){return c.getFunction("aiml_jr_val_f64",f64T(c),{ptrT(c),i32T(c)});}
+static llvm::Function* gJrValBool  (CompilerContext& c){return c.getFunction("aiml_jr_val_bool",i32T(c),{ptrT(c),i32T(c)});}
+static llvm::Function* gJrValStr   (CompilerContext& c){return c.getFunction("aiml_jr_val_str",i8pT(c),{ptrT(c),i32T(c)});}
+static llvm::Function* gJrValSub   (CompilerContext& c){return c.getFunction("aiml_jr_val_sub",ptrT(c),{ptrT(c),i32T(c)});}
 
 // ─── sorted members helper ────────────────────────────────────────────────────
 using MemberList = std::vector<std::pair<std::string, CompilerContext::StructMember>>;
@@ -162,7 +175,53 @@ static void emitWriteField(CompilerContext& ctx, llvm::Value* writer,
         ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(idx,sz),lb,le);
         ctx.builder.SetInsertPoint(lb);
         llvm::Value* ep = ctx.builder.CreateGEP(elemTy,dp,idx,"aep");
-        if(elemTn=="string"){
+        if(ctx.classes.count(elemTn) && ctx.classes[elemTn].type){
+            // list<Struct> → arr_obj_begin, write fields, arr_obj_end
+            ctx.builder.CreateCall(gJwArrObjBgn(ctx),{writer});
+            emitWriteStructFields(ctx,writer,ep,elemTn);
+            ctx.builder.CreateCall(gJwArrObjEnd(ctx),{writer});
+        } else if(isListType(elemTn)){
+            // list<list<T>> → arr_arr_begin, write inner elements, arr_arr_end
+            std::string innerTn = listElem(elemTn);
+            llvm::Type* innerTy = ctx.getLLVMType(innerTn);
+            llvm::Type* innerListTy = ctx.getLLVMType(elemTn);
+            ctx.builder.CreateCall(gJwArrArrBgn(ctx),{writer});
+            llvm::Value* isg = ctx.builder.CreateStructGEP(innerListTy,ep,0,"isg");
+            llvm::Value* isz = ctx.builder.CreateLoad(i32T(ctx),isg,"isz");
+            llvm::Value* idg = ctx.builder.CreateStructGEP(innerListTy,ep,2,"idg");
+            llvm::Value* idp = ctx.builder.CreateLoad(ptrT(ctx),idg,"idp");
+            llvm::Function* ipfn = ctx.builder.GetInsertBlock()->getParent();
+            llvm::BasicBlock* iph = ctx.builder.GetInsertBlock();
+            llvm::BasicBlock* ilc = llvm::BasicBlock::Create(ctx.context,fname+"_ilc",ipfn);
+            llvm::BasicBlock* ilb = llvm::BasicBlock::Create(ctx.context,fname+"_ilb",ipfn);
+            llvm::BasicBlock* ile = llvm::BasicBlock::Create(ctx.context,fname+"_ile",ipfn);
+            ctx.builder.CreateBr(ilc);
+            ctx.builder.SetInsertPoint(ilc);
+            llvm::PHINode* iidx = ctx.builder.CreatePHI(i32T(ctx),2,"iidx");
+            iidx->addIncoming(ctx.builder.getInt32(0),iph);
+            ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(iidx,isz),ilb,ile);
+            ctx.builder.SetInsertPoint(ilb);
+            llvm::Value* iep = ctx.builder.CreateGEP(innerTy,idp,iidx,"iep");
+            if(innerTn=="string"){
+                ctx.builder.CreateCall(gJwArrStr(ctx),{writer,ctx.builder.CreateLoad(i8pT(ctx),iep,"isv")});
+            } else if(innerTn=="i64"||innerTn=="u64"){
+                ctx.builder.CreateCall(gJwArrI64(ctx),{writer,ctx.builder.CreateLoad(i64T(ctx),iep,"iev")});
+            } else if(innerTn=="f32"){
+                ctx.builder.CreateCall(gJwArrF32(ctx),{writer,ctx.builder.CreateLoad(f32T(ctx),iep,"iev")});
+            } else if(innerTn=="f64"){
+                ctx.builder.CreateCall(gJwArrF64(ctx),{writer,ctx.builder.CreateLoad(f64T(ctx),iep,"iev")});
+            } else if(innerTn=="bool"){
+                llvm::Value* iev=ctx.builder.CreateLoad(i8T(ctx),iep,"iev");
+                ctx.builder.CreateCall(gJwArrBool(ctx),{writer,ctx.builder.CreateZExt(iev,i32T(ctx))});
+            } else {
+                ctx.builder.CreateCall(gJwArrI32(ctx),{writer,ctx.builder.CreateLoad(i32T(ctx),iep,"iev")});
+            }
+            llvm::Value* ini=ctx.builder.CreateAdd(iidx,ctx.builder.getInt32(1),"ini");
+            iidx->addIncoming(ini,ctx.builder.GetInsertBlock());
+            ctx.builder.CreateBr(ilc);
+            ctx.builder.SetInsertPoint(ile);
+            ctx.builder.CreateCall(gJwArrArrEnd(ctx),{writer});
+        } else if(elemTn=="string"){
             llvm::Value* sv=ctx.builder.CreateLoad(i8pT(ctx),ep,"sv");
             ctx.builder.CreateCall(gJwArrStr(ctx),{writer,sv});
         } else if(elemTn=="i64"||elemTn=="u64"){
@@ -358,7 +417,50 @@ static llvm::Function* emitSerializeList(CompilerContext& ctx,
     ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(idx,sz),lb,le);
     ctx.builder.SetInsertPoint(lb);
     llvm::Value* ep = ctx.builder.CreateGEP(elemTy,dp,idx,"ep");
-    if(elemTn=="string"){
+    if(ctx.classes.count(elemTn) && ctx.classes[elemTn].type){
+        ctx.builder.CreateCall(gJwArrObjBgn(ctx),{writer});
+        emitWriteStructFields(ctx,writer,ep,elemTn);
+        ctx.builder.CreateCall(gJwArrObjEnd(ctx),{writer});
+    } else if(isListType(elemTn)){
+        std::string innerTn = listElem(elemTn);
+        llvm::Type* innerTy = ctx.getLLVMType(innerTn);
+        llvm::Type* innerListTy = ctx.getLLVMType(elemTn);
+        ctx.builder.CreateCall(gJwArrArrBgn(ctx),{writer});
+        llvm::Value* isg = ctx.builder.CreateStructGEP(innerListTy,ep,0,"isg");
+        llvm::Value* isz = ctx.builder.CreateLoad(i32T(ctx),isg,"isz");
+        llvm::Value* idg = ctx.builder.CreateStructGEP(innerListTy,ep,2,"idg");
+        llvm::Value* idp = ctx.builder.CreateLoad(ptrT(ctx),idg,"idp");
+        llvm::BasicBlock* iph = ctx.builder.GetInsertBlock();
+        llvm::BasicBlock* ilc = llvm::BasicBlock::Create(ctx.context,"sl_ilc",fn);
+        llvm::BasicBlock* ilb = llvm::BasicBlock::Create(ctx.context,"sl_ilb",fn);
+        llvm::BasicBlock* ile = llvm::BasicBlock::Create(ctx.context,"sl_ile",fn);
+        ctx.builder.CreateBr(ilc);
+        ctx.builder.SetInsertPoint(ilc);
+        llvm::PHINode* iidx = ctx.builder.CreatePHI(i32T(ctx),2,"iidx");
+        iidx->addIncoming(ctx.builder.getInt32(0),iph);
+        ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(iidx,isz),ilb,ile);
+        ctx.builder.SetInsertPoint(ilb);
+        llvm::Value* iep = ctx.builder.CreateGEP(innerTy,idp,iidx,"iep");
+        if(innerTn=="string"){
+            ctx.builder.CreateCall(gJwArrStr(ctx),{writer,ctx.builder.CreateLoad(i8pT(ctx),iep,"isv")});
+        } else if(innerTn=="i64"||innerTn=="u64"){
+            ctx.builder.CreateCall(gJwArrI64(ctx),{writer,ctx.builder.CreateLoad(i64T(ctx),iep,"iev")});
+        } else if(innerTn=="f32"){
+            ctx.builder.CreateCall(gJwArrF32(ctx),{writer,ctx.builder.CreateLoad(f32T(ctx),iep,"iev")});
+        } else if(innerTn=="f64"){
+            ctx.builder.CreateCall(gJwArrF64(ctx),{writer,ctx.builder.CreateLoad(f64T(ctx),iep,"iev")});
+        } else if(innerTn=="bool"){
+            llvm::Value* iev=ctx.builder.CreateLoad(i8T(ctx),iep,"iev");
+            ctx.builder.CreateCall(gJwArrBool(ctx),{writer,ctx.builder.CreateZExt(iev,i32T(ctx))});
+        } else {
+            ctx.builder.CreateCall(gJwArrI32(ctx),{writer,ctx.builder.CreateLoad(i32T(ctx),iep,"iev")});
+        }
+        llvm::Value* ini=ctx.builder.CreateAdd(iidx,ctx.builder.getInt32(1),"ini");
+        iidx->addIncoming(ini,ctx.builder.GetInsertBlock());
+        ctx.builder.CreateBr(ilc);
+        ctx.builder.SetInsertPoint(ile);
+        ctx.builder.CreateCall(gJwArrArrEnd(ctx),{writer});
+    } else if(elemTn=="string"){
         ctx.builder.CreateCall(gJwArrStr(ctx),{writer,ctx.builder.CreateLoad(i8pT(ctx),ep,"sv")});
     } else if(elemTn=="i64"||elemTn=="u64"){
         ctx.builder.CreateCall(gJwArrI64(ctx),{writer,ctx.builder.CreateLoad(i64T(ctx),ep,"ev")});
@@ -462,6 +564,202 @@ static llvm::Function* emitSerializeMap(CompilerContext& ctx,
     return fn;
 }
 
+// ─── helper: read scalar from reader into ptr ───────────────────────────────
+static void emitReadScalar(CompilerContext& ctx, llvm::Value* reader, llvm::Value* fkey,
+                           llvm::Value* dst, const std::string& tn, llvm::Type* fmType){
+    llvm::Value* v;
+    if(tn=="string")        v=ctx.builder.CreateCall(gJrStr(ctx),{reader,fkey},"sv");
+    else if(tn=="i64"||tn=="u64") v=ctx.builder.CreateCall(gJrI64(ctx),{reader,fkey},"sv");
+    else if(tn=="f32")      v=ctx.builder.CreateCall(gJrF32(ctx),{reader,fkey},"sv");
+    else if(tn=="f64")      v=ctx.builder.CreateCall(gJrF64(ctx),{reader,fkey},"sv");
+    else if(tn=="bool"){
+        llvm::Value* bv=ctx.builder.CreateCall(gJrBool(ctx),{reader,fkey},"bv");
+        v=ctx.builder.CreateTrunc(bv,i8T(ctx));
+    } else {
+        v=ctx.builder.CreateCall(gJrI32(ctx),{reader,fkey},"sv");
+        if(fmType && !fmType->isIntegerTy(32))
+            v=ctx.builder.CreateIntCast(v,fmType,true,"sc");
+    }
+    ctx.builder.CreateStore(v,dst);
+}
+
+// ─── helper: read array element of primitive type via val_* (keyless) ────────
+static llvm::Value* emitReadValElem(CompilerContext& ctx, llvm::Value* reader,
+                                    llvm::Value* idx, const std::string& elemTn){
+    if(elemTn=="string")        return ctx.builder.CreateCall(gJrValStr(ctx),{reader,idx},"ve");
+    if(elemTn=="i64"||elemTn=="u64") return ctx.builder.CreateCall(gJrValI64(ctx),{reader,idx},"ve");
+    if(elemTn=="f32")           return ctx.builder.CreateCall(gJrValF32(ctx),{reader,idx},"ve");
+    if(elemTn=="f64")           return ctx.builder.CreateCall(gJrValF64(ctx),{reader,idx},"ve");
+    if(elemTn=="bool"){
+        llvm::Value* bv=ctx.builder.CreateCall(gJrValBool(ctx),{reader,idx},"bv");
+        return ctx.builder.CreateTrunc(bv,i8T(ctx));
+    }
+    return ctx.builder.CreateCall(gJrValI32(ctx),{reader,idx},"ve");
+}
+
+// ─── helper: read array element of primitive type via arr_* (keyed) ──────────
+static llvm::Value* emitReadArrElem(CompilerContext& ctx, llvm::Value* reader,
+                                    llvm::Value* key, llvm::Value* idx,
+                                    const std::string& elemTn){
+    if(elemTn=="string")        return ctx.builder.CreateCall(gJrArrStr(ctx),{reader,key,idx},"ae");
+    if(elemTn=="i64"||elemTn=="u64") return ctx.builder.CreateCall(gJrArrI64(ctx),{reader,key,idx},"ae");
+    if(elemTn=="f32")           return ctx.builder.CreateCall(gJrArrF32(ctx),{reader,key,idx},"ae");
+    if(elemTn=="f64")           return ctx.builder.CreateCall(gJrArrF64(ctx),{reader,key,idx},"ae");
+    if(elemTn=="bool"){
+        llvm::Value* bv=ctx.builder.CreateCall(gJrArrBool(ctx),{reader,key,idx},"bv");
+        return ctx.builder.CreateTrunc(bv,i8T(ctx));
+    }
+    return ctx.builder.CreateCall(gJrArrI32(ctx),{reader,key,idx},"ae");
+}
+
+// ─── helper: deserialize struct fields from a reader into structPtr ──────────
+// reader must be a valid (non-null) reader pointing at a JSON object.
+// Handles scalar fields, list fields (including list<list<T>>), and map fields.
+static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
+                                  llvm::Value* structPtr, const std::string& typeName,
+                                  llvm::Function* parentFn){
+    if(!ctx.classes.count(typeName)) return;
+    llvm::StructType* st = ctx.classes[typeName].type;
+    if(!st) return;
+    for(auto& [fname,fm]: sortedMembers(ctx,typeName)){
+        llvm::Value* fkey = ctx.builder.CreateGlobalStringPtr(fname,"fk_"+fname);
+        llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(st,structPtr,fm.index,"fp_"+fname);
+        std::string tn = fm.typeName;
+
+        if(isListType(tn)){
+            std::string elemTn = listElem(tn);
+            llvm::Type* elemTy = ctx.getLLVMType(elemTn);
+            ListImpl::initList(ctx,fieldPtr,elemTy,4);
+            llvm::Value* cnt = ctx.builder.CreateCall(gJrArrLen(ctx),{reader,fkey},"cnt");
+            llvm::BasicBlock* ph = ctx.builder.GetInsertBlock();
+            llvm::BasicBlock* lc = llvm::BasicBlock::Create(ctx.context,fname+"_dlc",parentFn);
+            llvm::BasicBlock* lb = llvm::BasicBlock::Create(ctx.context,fname+"_dlb",parentFn);
+            llvm::BasicBlock* le = llvm::BasicBlock::Create(ctx.context,fname+"_dle",parentFn);
+            ctx.builder.CreateBr(lc);
+            ctx.builder.SetInsertPoint(lc);
+            llvm::PHINode* idx = ctx.builder.CreatePHI(i32T(ctx),2,"dli");
+            idx->addIncoming(ctx.builder.getInt32(0),ph);
+            ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(idx,cnt),lb,le);
+            ctx.builder.SetInsertPoint(lb);
+
+            if(ctx.classes.count(elemTn) && ctx.classes[elemTn].type){
+                // list<Struct>: sub-reader per element
+                llvm::StructType* subSt = ctx.classes[elemTn].type;
+                uint64_t subSz = ctx.module.getDataLayout().getTypeAllocSize(subSt);
+                llvm::Value* sr = ctx.builder.CreateCall(gJrArrSub(ctx),{reader,fkey,idx},"sr");
+                // null-safe: skip if sub-reader is null
+                llvm::BasicBlock* srOk = llvm::BasicBlock::Create(ctx.context,fname+"_srok",parentFn);
+                llvm::BasicBlock* srDone = llvm::BasicBlock::Create(ctx.context,fname+"_srdone",parentFn);
+                ctx.builder.CreateCondBr(
+                    ctx.builder.CreateICmpNE(sr,llvm::Constant::getNullValue(ptrT(ctx))),srOk,srDone);
+                ctx.builder.SetInsertPoint(srOk);
+                llvm::Value* tmp = ctx.builder.CreateAlloca(subSt,nullptr,"stmp");
+                // zero-init: string fields → null (but gJrStr returns strdup("") so safe)
+                // Still zero-init lists/maps need explicit initList/initMap below
+                ctx.builder.CreateMemSet(tmp,ctx.builder.getInt8(0),subSz,llvm::MaybeAlign(8));
+                // recursively deserialize sub-struct fields
+                emitDeserStructFields(ctx,sr,tmp,elemTn,parentFn);
+                // load struct value from alloca so push copies struct data (not pointer)
+                llvm::Value* sval = ctx.builder.CreateLoad(subSt,tmp,"sval");
+                ListImpl::push(ctx,fieldPtr,sval);
+                ctx.builder.CreateCall(gJrFree(ctx),{sr});
+                ctx.builder.CreateBr(srDone);
+                ctx.builder.SetInsertPoint(srDone);
+            } else if(isListType(elemTn)){
+                // list<list<T>>: sub-reader per inner array, use keyless val_* API
+                std::string innerTn = listElem(elemTn);
+                llvm::Type* innerTy = ctx.getLLVMType(innerTn);
+                llvm::Type* innerListTy = ctx.getLLVMType(elemTn);
+                llvm::Value* ilAlloca = ctx.builder.CreateAlloca(innerListTy,nullptr,"ila");
+                ListImpl::initList(ctx,ilAlloca,innerTy,4);
+                llvm::Value* isr = ctx.builder.CreateCall(gJrArrSub(ctx),{reader,fkey,idx},"isr");
+                llvm::BasicBlock* isrOk = llvm::BasicBlock::Create(ctx.context,fname+"_isrok",parentFn);
+                llvm::BasicBlock* isrDone = llvm::BasicBlock::Create(ctx.context,fname+"_isrdone",parentFn);
+                ctx.builder.CreateCondBr(
+                    ctx.builder.CreateICmpNE(isr,llvm::Constant::getNullValue(ptrT(ctx))),isrOk,isrDone);
+                ctx.builder.SetInsertPoint(isrOk);
+                // isr->val IS the inner JSON array; use val_len / val_* to read elements
+                llvm::Value* icnt = ctx.builder.CreateCall(gJrValLen(ctx),{isr},"icnt");
+                llvm::BasicBlock* iph = ctx.builder.GetInsertBlock();
+                llvm::BasicBlock* ilc = llvm::BasicBlock::Create(ctx.context,fname+"_ilc",parentFn);
+                llvm::BasicBlock* ilb = llvm::BasicBlock::Create(ctx.context,fname+"_ilb",parentFn);
+                llvm::BasicBlock* ile = llvm::BasicBlock::Create(ctx.context,fname+"_ile",parentFn);
+                ctx.builder.CreateBr(ilc);
+                ctx.builder.SetInsertPoint(ilc);
+                llvm::PHINode* iidx = ctx.builder.CreatePHI(i32T(ctx),2,"iidx");
+                iidx->addIncoming(ctx.builder.getInt32(0),iph);
+                ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(iidx,icnt),ilb,ile);
+                ctx.builder.SetInsertPoint(ilb);
+                llvm::Value* ie = emitReadValElem(ctx,isr,iidx,innerTn);
+                ListImpl::push(ctx,ilAlloca,ie);
+                llvm::Value* ini=ctx.builder.CreateAdd(iidx,ctx.builder.getInt32(1),"ini");
+                iidx->addIncoming(ini,ctx.builder.GetInsertBlock());
+                ctx.builder.CreateBr(ilc);
+                ctx.builder.SetInsertPoint(ile);
+                ctx.builder.CreateCall(gJrFree(ctx),{isr});
+                ctx.builder.CreateBr(isrDone);
+                ctx.builder.SetInsertPoint(isrDone);
+                // load inner list struct value so push copies list data (not pointer)
+                llvm::Value* ilVal = ctx.builder.CreateLoad(innerListTy,ilAlloca,"ilval");
+                ListImpl::push(ctx,fieldPtr,ilVal);
+            } else {
+                // list of primitives
+                llvm::Value* elem = emitReadArrElem(ctx,reader,fkey,idx,elemTn);
+                ListImpl::push(ctx,fieldPtr,elem);
+            }
+            llvm::Value* ni=ctx.builder.CreateAdd(idx,ctx.builder.getInt32(1),"ni");
+            idx->addIncoming(ni,ctx.builder.GetInsertBlock());
+            ctx.builder.CreateBr(lc);
+            ctx.builder.SetInsertPoint(le);
+        } else if(isMapType(tn)){
+            std::string valTn = mapValTn(tn);
+            llvm::Type* keyTy = ctx.getLLVMType("string");
+            llvm::Type* valTy = ctx.getLLVMType(valTn);
+            llvm::StructType* mapTy = MapImpl::getMapStructType(ctx,keyTy,valTy);
+            MapImpl::initMap(ctx,fieldPtr,keyTy,valTy,8);
+            llvm::Value* cnt = ctx.builder.CreateCall(gJrMapCount(ctx),{reader,fkey},"cnt");
+            llvm::BasicBlock* ph = ctx.builder.GetInsertBlock();
+            llvm::BasicBlock* lc = llvm::BasicBlock::Create(ctx.context,fname+"_dmc",parentFn);
+            llvm::BasicBlock* lb = llvm::BasicBlock::Create(ctx.context,fname+"_dmb",parentFn);
+            llvm::BasicBlock* le = llvm::BasicBlock::Create(ctx.context,fname+"_dme",parentFn);
+            ctx.builder.CreateBr(lc);
+            ctx.builder.SetInsertPoint(lc);
+            llvm::PHINode* idx = ctx.builder.CreatePHI(i32T(ctx),2,"dmi");
+            idx->addIncoming(ctx.builder.getInt32(0),ph);
+            ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(idx,cnt),lb,le);
+            ctx.builder.SetInsertPoint(lb);
+            llvm::Value* kv = ctx.builder.CreateCall(gJrMapKey(ctx),{reader,fkey,idx},"k");
+            llvm::Value* vv;
+            if(valTn=="string")        vv=ctx.builder.CreateCall(gJrMapValStr(ctx),{reader,fkey,idx},"v");
+            else if(valTn=="i64"||valTn=="u64") vv=ctx.builder.CreateCall(gJrMapValI64(ctx),{reader,fkey,idx},"v");
+            else if(valTn=="f32")      vv=ctx.builder.CreateCall(gJrMapValF32(ctx),{reader,fkey,idx},"v");
+            else if(valTn=="f64")      vv=ctx.builder.CreateCall(gJrMapValF64(ctx),{reader,fkey,idx},"v");
+            else                       vv=ctx.builder.CreateCall(gJrMapValI32(ctx),{reader,fkey,idx},"v");
+            MapImpl::put(ctx,fieldPtr,kv,vv,mapTy);
+            llvm::Value* ni=ctx.builder.CreateAdd(idx,ctx.builder.getInt32(1),"ni");
+            idx->addIncoming(ni,ctx.builder.GetInsertBlock());
+            ctx.builder.CreateBr(lc);
+            ctx.builder.SetInsertPoint(le);
+        } else if(ctx.classes.count(tn) && ctx.classes[tn].type){
+            // nested struct: sub-reader, recursive
+            llvm::Value* sr = ctx.builder.CreateCall(gJrSub(ctx),{reader,fkey},"sr");
+            // null-safe: if sub-reader null, zero-init the field
+            llvm::BasicBlock* srOk = llvm::BasicBlock::Create(ctx.context,fname+"_nsrok",parentFn);
+            llvm::BasicBlock* srDone = llvm::BasicBlock::Create(ctx.context,fname+"_nsrdone",parentFn);
+            ctx.builder.CreateCondBr(
+                ctx.builder.CreateICmpNE(sr,llvm::Constant::getNullValue(ptrT(ctx))),srOk,srDone);
+            ctx.builder.SetInsertPoint(srOk);
+            emitDeserStructFields(ctx,sr,fieldPtr,tn,parentFn);
+            ctx.builder.CreateCall(gJrFree(ctx),{sr});
+            ctx.builder.CreateBr(srDone);
+            ctx.builder.SetInsertPoint(srDone);
+        } else {
+            // scalar
+            emitReadScalar(ctx,reader,fkey,fieldPtr,tn,fm.type);
+        }
+    }
+}
+
 // ─── emitDeserializeStruct ────────────────────────────────────────────────────
 // Emits IR function: __aiml_deser_TYPENAME(ptr json) -> ptr (heap struct, caller memcpy's)
 static llvm::Function* emitDeserializeStruct(CompilerContext& ctx,
@@ -484,110 +782,10 @@ static llvm::Function* emitDeserializeStruct(CompilerContext& ctx,
     llvm::Function* mallocFn = ctx.getFunction("malloc",ptrT(ctx),{i64T(ctx)});
     uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(st);
     llvm::Value* heap = ctx.builder.CreateCall(mallocFn,{ctx.builder.getInt64(sz)},"hp");
+    // zero-init entire struct — prevents null pointers for string/list/map fields
+    ctx.builder.CreateMemSet(heap,ctx.builder.getInt8(0),sz,llvm::MaybeAlign(8));
 
-    for(auto& [fname,fm]: sortedMembers(ctx,typeName)){
-        llvm::Value* fkey = ctx.builder.CreateGlobalStringPtr(fname,"fk_"+fname);
-        llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(st,heap,fm.index,"fp_"+fname);
-        std::string tn = fm.typeName;
-
-        if(isListType(tn)){
-            std::string elemTn = listElem(tn);
-            llvm::Type* elemTy = ctx.getLLVMType(elemTn);
-            ListImpl::initList(ctx,fieldPtr,elemTy,4);
-            llvm::Value* cnt = ctx.builder.CreateCall(gJrArrLen(ctx),{reader,fkey},"cnt");
-            llvm::BasicBlock* ph = ctx.builder.GetInsertBlock();
-            llvm::BasicBlock* lc = llvm::BasicBlock::Create(ctx.context,fname+"_dlc",fn);
-            llvm::BasicBlock* lb = llvm::BasicBlock::Create(ctx.context,fname+"_dlb",fn);
-            llvm::BasicBlock* le = llvm::BasicBlock::Create(ctx.context,fname+"_dle",fn);
-            ctx.builder.CreateBr(lc);
-            ctx.builder.SetInsertPoint(lc);
-            llvm::PHINode* idx = ctx.builder.CreatePHI(i32T(ctx),2,"dli");
-            idx->addIncoming(ctx.builder.getInt32(0),ph);
-            ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(idx,cnt),lb,le);
-            ctx.builder.SetInsertPoint(lb);
-            llvm::Value* elem;
-            if(elemTn=="string")        elem=ctx.builder.CreateCall(gJrArrStr(ctx),{reader,fkey,idx},"e");
-            else if(elemTn=="i64"||elemTn=="u64") elem=ctx.builder.CreateCall(gJrArrI64(ctx),{reader,fkey,idx},"e");
-            else if(elemTn=="f32")      elem=ctx.builder.CreateCall(gJrArrF32(ctx),{reader,fkey,idx},"e");
-            else if(elemTn=="f64")      elem=ctx.builder.CreateCall(gJrArrF64(ctx),{reader,fkey,idx},"e");
-            else if(elemTn=="bool"){
-                llvm::Value* bv=ctx.builder.CreateCall(gJrArrBool(ctx),{reader,fkey,idx},"bv");
-                elem=ctx.builder.CreateTrunc(bv,i8T(ctx));
-            } else                      elem=ctx.builder.CreateCall(gJrArrI32(ctx),{reader,fkey,idx},"e");
-            ListImpl::push(ctx,fieldPtr,elem);
-            llvm::Value* ni=ctx.builder.CreateAdd(idx,ctx.builder.getInt32(1),"ni");
-            idx->addIncoming(ni,ctx.builder.GetInsertBlock());
-            ctx.builder.CreateBr(lc);
-            ctx.builder.SetInsertPoint(le);
-        } else if(isMapType(tn)){
-            std::string valTn = mapValTn(tn);
-            llvm::Type* keyTy = ctx.getLLVMType("string");
-            llvm::Type* valTy = ctx.getLLVMType(valTn);
-            llvm::StructType* mapTy = MapImpl::getMapStructType(ctx,keyTy,valTy);
-            MapImpl::initMap(ctx,fieldPtr,keyTy,valTy,8);
-            llvm::Value* cnt = ctx.builder.CreateCall(gJrMapCount(ctx),{reader,fkey},"cnt");
-            llvm::BasicBlock* ph = ctx.builder.GetInsertBlock();
-            llvm::BasicBlock* lc = llvm::BasicBlock::Create(ctx.context,fname+"_dmc",fn);
-            llvm::BasicBlock* lb = llvm::BasicBlock::Create(ctx.context,fname+"_dmb",fn);
-            llvm::BasicBlock* le = llvm::BasicBlock::Create(ctx.context,fname+"_dme",fn);
-            ctx.builder.CreateBr(lc);
-            ctx.builder.SetInsertPoint(lc);
-            llvm::PHINode* idx = ctx.builder.CreatePHI(i32T(ctx),2,"dmi");
-            idx->addIncoming(ctx.builder.getInt32(0),ph);
-            ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(idx,cnt),lb,le);
-            ctx.builder.SetInsertPoint(lb);
-            llvm::Value* kv = ctx.builder.CreateCall(gJrMapKey(ctx),{reader,fkey,idx},"k");
-            llvm::Value* vv;
-            if(valTn=="string")        vv=ctx.builder.CreateCall(gJrMapValStr(ctx),{reader,fkey,idx},"v");
-            else if(valTn=="i64"||valTn=="u64") vv=ctx.builder.CreateCall(gJrMapValI64(ctx),{reader,fkey,idx},"v");
-            else if(valTn=="f32")      vv=ctx.builder.CreateCall(gJrMapValF32(ctx),{reader,fkey,idx},"v");
-            else if(valTn=="f64")      vv=ctx.builder.CreateCall(gJrMapValF64(ctx),{reader,fkey,idx},"v");
-            else                       vv=ctx.builder.CreateCall(gJrMapValI32(ctx),{reader,fkey,idx},"v");
-            MapImpl::put(ctx,fieldPtr,kv,vv,mapTy);
-            llvm::Value* ni=ctx.builder.CreateAdd(idx,ctx.builder.getInt32(1),"ni");
-            idx->addIncoming(ni,ctx.builder.GetInsertBlock());
-            ctx.builder.CreateBr(lc);
-            ctx.builder.SetInsertPoint(le);
-        } else if(ctx.classes.count(tn) && ctx.classes[tn].type){
-            // nested struct: sub-reader
-            llvm::Value* sr = ctx.builder.CreateCall(gJrSub(ctx),{reader,fkey},"sr");
-            llvm::StructType* subTy = ctx.classes[tn].type;
-            for(auto& [sfn,sfm]: sortedMembers(ctx,tn)){
-                llvm::Value* sfkey = ctx.builder.CreateGlobalStringPtr(sfn,"sfk");
-                llvm::Value* sfp   = ctx.builder.CreateStructGEP(subTy,fieldPtr,sfm.index,"sfp");
-                std::string stn = sfm.typeName;
-                llvm::Value* sv;
-                if(stn=="string")        sv=ctx.builder.CreateCall(gJrStr(ctx),{sr,sfkey},"sv");
-                else if(stn=="i64"||stn=="u64") sv=ctx.builder.CreateCall(gJrI64(ctx),{sr,sfkey},"sv");
-                else if(stn=="f32")      sv=ctx.builder.CreateCall(gJrF32(ctx),{sr,sfkey},"sv");
-                else if(stn=="f64")      sv=ctx.builder.CreateCall(gJrF64(ctx),{sr,sfkey},"sv");
-                else if(stn=="bool"){
-                    llvm::Value* bv=ctx.builder.CreateCall(gJrBool(ctx),{sr,sfkey},"bv");
-                    sv=ctx.builder.CreateTrunc(bv,i8T(ctx));
-                } else                   sv=ctx.builder.CreateCall(gJrI32(ctx),{sr,sfkey},"sv");
-                if(sfm.type && !sv->getType()->isIntegerTy() == sfm.type->isIntegerTy())
-                    sv=ctx.builder.CreateIntCast(sv,sfm.type,true,"sc");
-                ctx.builder.CreateStore(sv,sfp);
-            }
-            ctx.builder.CreateCall(gJrFree(ctx),{sr});
-        } else {
-            // scalar
-            llvm::Value* v;
-            if(tn=="string")        v=ctx.builder.CreateCall(gJrStr(ctx),{reader,fkey},"v");
-            else if(tn=="i64"||tn=="u64") v=ctx.builder.CreateCall(gJrI64(ctx),{reader,fkey},"v");
-            else if(tn=="f32")      v=ctx.builder.CreateCall(gJrF32(ctx),{reader,fkey},"v");
-            else if(tn=="f64")      v=ctx.builder.CreateCall(gJrF64(ctx),{reader,fkey},"v");
-            else if(tn=="bool"){
-                llvm::Value* bv=ctx.builder.CreateCall(gJrBool(ctx),{reader,fkey},"bv");
-                v=ctx.builder.CreateTrunc(bv,i8T(ctx));
-            } else {
-                v=ctx.builder.CreateCall(gJrI32(ctx),{reader,fkey},"v");
-                if(fm.type && !fm.type->isIntegerTy(32))
-                    v=ctx.builder.CreateIntCast(v,fm.type,true,"vc");
-            }
-            ctx.builder.CreateStore(v,fieldPtr);
-        }
-    }
+    emitDeserStructFields(ctx,reader,heap,typeName,fn);
 
     ctx.builder.CreateCall(gJrFree(ctx),{reader});
     ctx.builder.CreateRet(heap);
@@ -631,16 +829,63 @@ static llvm::Function* emitDeserializeList(CompilerContext& ctx,
     idx->addIncoming(ctx.builder.getInt32(0),ph);
     ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(idx,cnt),lb,le);
     ctx.builder.SetInsertPoint(lb);
-    llvm::Value* elem;
-    if(elemTn=="string")        elem=ctx.builder.CreateCall(gJrArrStr(ctx),{reader,vk,idx},"e");
-    else if(elemTn=="i64"||elemTn=="u64") elem=ctx.builder.CreateCall(gJrArrI64(ctx),{reader,vk,idx},"e");
-    else if(elemTn=="f32")      elem=ctx.builder.CreateCall(gJrArrF32(ctx),{reader,vk,idx},"e");
-    else if(elemTn=="f64")      elem=ctx.builder.CreateCall(gJrArrF64(ctx),{reader,vk,idx},"e");
-    else if(elemTn=="bool"){
-        llvm::Value* bv=ctx.builder.CreateCall(gJrArrBool(ctx),{reader,vk,idx},"bv");
-        elem=ctx.builder.CreateTrunc(bv,i8T(ctx));
-    } else                      elem=ctx.builder.CreateCall(gJrArrI32(ctx),{reader,vk,idx},"e");
-    ListImpl::push(ctx,heap,elem);
+    if(ctx.classes.count(elemTn) && ctx.classes[elemTn].type){
+        // list<Struct>: sub-reader, deserialize into temp alloca, push
+        llvm::StructType* subSt = ctx.classes[elemTn].type;
+        uint64_t subSz = ctx.module.getDataLayout().getTypeAllocSize(subSt);
+        llvm::Value* sr = ctx.builder.CreateCall(gJrArrSub(ctx),{reader,vk,idx},"sr");
+        llvm::BasicBlock* srOk = llvm::BasicBlock::Create(ctx.context,"dl_srok",fn);
+        llvm::BasicBlock* srDone = llvm::BasicBlock::Create(ctx.context,"dl_srdone",fn);
+        ctx.builder.CreateCondBr(
+            ctx.builder.CreateICmpNE(sr,llvm::Constant::getNullValue(ptrT(ctx))),srOk,srDone);
+        ctx.builder.SetInsertPoint(srOk);
+        llvm::Value* tmp = ctx.builder.CreateAlloca(subSt,nullptr,"stmp");
+        ctx.builder.CreateMemSet(tmp,ctx.builder.getInt8(0),subSz,llvm::MaybeAlign(8));
+        emitDeserStructFields(ctx,sr,tmp,elemTn,fn);
+        llvm::Value* sval = ctx.builder.CreateLoad(subSt,tmp,"sval");
+        ListImpl::push(ctx,heap,sval);
+        ctx.builder.CreateCall(gJrFree(ctx),{sr});
+        ctx.builder.CreateBr(srDone);
+        ctx.builder.SetInsertPoint(srDone);
+    } else if(isListType(elemTn)){
+        // list<list<T>>: sub-reader for inner array
+        std::string innerTn = listElem(elemTn);
+        llvm::Type* innerTy = ctx.getLLVMType(innerTn);
+        llvm::Type* innerListTy = ctx.getLLVMType(elemTn);
+        llvm::Value* ilAlloca = ctx.builder.CreateAlloca(innerListTy,nullptr,"ila");
+        ListImpl::initList(ctx,ilAlloca,innerTy,4);
+        llvm::Value* isr = ctx.builder.CreateCall(gJrArrSub(ctx),{reader,vk,idx},"isr");
+        llvm::BasicBlock* isrOk = llvm::BasicBlock::Create(ctx.context,"dl_isrok",fn);
+        llvm::BasicBlock* isrDone = llvm::BasicBlock::Create(ctx.context,"dl_isrdone",fn);
+        ctx.builder.CreateCondBr(
+            ctx.builder.CreateICmpNE(isr,llvm::Constant::getNullValue(ptrT(ctx))),isrOk,isrDone);
+        ctx.builder.SetInsertPoint(isrOk);
+        llvm::Value* icnt = ctx.builder.CreateCall(gJrValLen(ctx),{isr},"icnt");
+        llvm::BasicBlock* iph = ctx.builder.GetInsertBlock();
+        llvm::BasicBlock* ilc = llvm::BasicBlock::Create(ctx.context,"dl_ilc",fn);
+        llvm::BasicBlock* ilb = llvm::BasicBlock::Create(ctx.context,"dl_ilb",fn);
+        llvm::BasicBlock* ile = llvm::BasicBlock::Create(ctx.context,"dl_ile",fn);
+        ctx.builder.CreateBr(ilc);
+        ctx.builder.SetInsertPoint(ilc);
+        llvm::PHINode* iidx = ctx.builder.CreatePHI(i32T(ctx),2,"iidx");
+        iidx->addIncoming(ctx.builder.getInt32(0),iph);
+        ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(iidx,icnt),ilb,ile);
+        ctx.builder.SetInsertPoint(ilb);
+        llvm::Value* ie = emitReadValElem(ctx,isr,iidx,innerTn);
+        ListImpl::push(ctx,ilAlloca,ie);
+        llvm::Value* ini=ctx.builder.CreateAdd(iidx,ctx.builder.getInt32(1),"ini");
+        iidx->addIncoming(ini,ctx.builder.GetInsertBlock());
+        ctx.builder.CreateBr(ilc);
+        ctx.builder.SetInsertPoint(ile);
+        ctx.builder.CreateCall(gJrFree(ctx),{isr});
+        ctx.builder.CreateBr(isrDone);
+        ctx.builder.SetInsertPoint(isrDone);
+        llvm::Value* ilVal = ctx.builder.CreateLoad(innerListTy,ilAlloca,"ilval");
+        ListImpl::push(ctx,heap,ilVal);
+    } else {
+        llvm::Value* elem = emitReadArrElem(ctx,reader,vk,idx,elemTn);
+        ListImpl::push(ctx,heap,elem);
+    }
     llvm::Value* ni=ctx.builder.CreateAdd(idx,ctx.builder.getInt32(1),"ni");
     idx->addIncoming(ni,ctx.builder.GetInsertBlock());
     ctx.builder.CreateBr(lc);

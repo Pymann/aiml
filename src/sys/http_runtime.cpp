@@ -517,7 +517,9 @@ extern "C" void* aiml_http_resp_headers(void* resp) {
     return resp ? static_cast<AimlHttpResponse*>(resp)->headers : nullptr;
 }
 extern "C" char* aiml_http_resp_body(void* resp) {
-    return resp ? static_cast<AimlHttpResponse*>(resp)->body : nullptr;
+    if (!resp) return (char*)"";
+    char* b = static_cast<AimlHttpResponse*>(resp)->body;
+    return b ? b : (char*)"";
 }
 extern "C" void aiml_http_resp_free(void* resp) {
     if (!resp) return;

@@ -143,10 +143,12 @@ IRValue* Compiler::visitLiteral(LiteralExpr* lit) {
         if (lit->value == "false") return ctx.ir_gen->getInt32(0);
 
         // Float literal if it contains '.', 'e', or 'E' — emit as f32
+        // But NOT if the string starts with 0x/0X (hex literal with A-F digits)
         const std::string& sv = lit->value;
-        bool looksFloat = sv.find('.') != std::string::npos ||
+        bool isHex = sv.size() > 2 && sv[0] == '0' && (sv[1] == 'x' || sv[1] == 'X');
+        bool looksFloat = !isHex && (sv.find('.') != std::string::npos ||
                           sv.find('e') != std::string::npos ||
-                          sv.find('E') != std::string::npos;
+                          sv.find('E') != std::string::npos);
         if (looksFloat) {
             try {
                 float f = std::stof(sv);
@@ -156,6 +158,11 @@ IRValue* Compiler::visitLiteral(LiteralExpr* lit) {
 
         try {
             size_t pos = 0;
+            if (isHex) {
+                // Hex literals may exceed signed int range — parse as unsigned
+                unsigned long ul = std::stoul(sv, &pos, 16);
+                return ctx.ir_gen->getInt32(static_cast<int32_t>(static_cast<uint32_t>(ul)));
+            }
             int num = std::stoi(sv, &pos, 0);
             return ctx.ir_gen->getInt32(num);
         } catch (...) {

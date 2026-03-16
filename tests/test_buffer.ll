@@ -3,6 +3,8 @@ source_filename = "AIML_Module"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-linux-gnu"
 
+%AimlClassSchema = type { ptr, i32, i32, i32, i32, [32 x %AimlFieldInfo] }
+%AimlFieldInfo = type { ptr }
 %buffer = type { i32, i32, i32, i32, ptr }
 %PacketHeader = type { i32, i32 }
 
@@ -26,6 +28,11 @@ target triple = "x86_64-pc-linux-gnu"
 @10 = private unnamed_addr constant [25 x i8] c"FAIL: Header ID Mismatch\00", align 1
 @print_null_str.5 = private unnamed_addr constant [7 x i8] c"(null)\00", align 1
 @11 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
+@__aiml_sname_PacketHeader = private constant [13 x i8] c"PacketHeader\00"
+@__aiml_sfield_PacketHeader_id = private constant [3 x i8] c"id\00"
+@__aiml_sfield_PacketHeader_type = private constant [5 x i8] c"type\00"
+@__aiml_schemas = global [1 x %AimlClassSchema] [%AimlClassSchema { ptr @__aiml_sname_PacketHeader, i32 1, i32 2, i32 8, i32 8, [32 x %AimlFieldInfo] [%AimlFieldInfo { ptr @__aiml_sfield_PacketHeader_id }, %AimlFieldInfo { ptr @__aiml_sfield_PacketHeader_type }, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer] }]
+@__aiml_schema_count = constant i32 1
 
 define void @__aiml_init() {
 entry:
@@ -172,3 +179,5 @@ if_merge:                                         ; preds = %if_else, %if_then
 declare ptr @malloc(i64)
 
 declare i32 @printf(ptr, ...)
+
+declare ptr @memcpy(ptr, ptr, i64)

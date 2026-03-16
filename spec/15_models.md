@@ -83,6 +83,44 @@ Use `model` for data, `class` for behaviour.
 - call: [start_server, {host: "10.0.0.5", port: 9090}]
 ```
 
+## Model Inheritance (inherits:)
+
+Models support single inheritance via `inherits:`. The parent must be a model
+(not a class). Parent fields come first in memory, followed by the child's own
+fields — identical layout to class `extends:`.
+
+```yaml
+- model:
+    name: BaseCard
+    fields:
+      - [name,      string]
+      - [card_type, string]
+      - [mkp,       i32]
+
+- model:
+    name: CreatureCard
+    inherits: BaseCard    # inherits name, card_type, mkp
+    fields:
+      - [lp,       i32]
+      - [attack,   i32]
+      - [defense,  i32]
+
+# Memory layout of CreatureCard: [name, card_type, mkp, lp, attack, defense]
+
+- decl: [c, CreatureCard]
+- set:  [c.name,     "Dragon"]
+- set:  [c.card_type, "creature"]
+- set:  [c.mkp,      5]
+- set:  [c.lp,       30]
+- set:  [c.attack,   4]
+- set:  [c.defense,  2]
+```
+
+Constraints:
+- A model can only inherit from another model, not from a class.
+- Only single inheritance (one `inherits:` parent).
+- Duplicate field names between parent and child are a CompilationError.
+
 ## Heap-Allokation und ptr<Model>
 
 Models können auch auf dem Heap alloziert werden. Punkt-Notation dereferenziert

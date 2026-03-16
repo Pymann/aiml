@@ -3,6 +3,8 @@
 #include <cstdlib>
 #include <vector>
 #include <cstdint>
+#include <cstdio>
+#include <unistd.h>
 
 // ── Internal struct mirrors ────────────────────────────────────────────────────
 // These MUST match the LLVM-generated layouts exactly.
@@ -135,10 +137,9 @@ static void enc(std::vector<uint8_t>& buf,
     }
 
     case AIML_TD_LIST: {
-        // data points to an i8* field holding a heap SerList*
-        SerList* list = nullptr;
-        memcpy(&list, data, sizeof(void*));
-        int32_t count = (list && list->size > 0) ? list->size : 0;
+        // data points directly to the inline SerList struct
+        const SerList* list = (const SerList*)data;
+        int32_t count = (list->size > 0) ? list->size : 0;
         w_i32(buf, count);
         if (count > 0 && list->data) {
             int esz = n.elem_size;
@@ -150,11 +151,10 @@ static void enc(std::vector<uint8_t>& buf,
     }
 
     case AIML_TD_MAP: {
-        // data points to an i8* field holding a heap SerMap*
-        SerMap* map = nullptr;
-        memcpy(&map, data, sizeof(void*));
-        int32_t cap   = map ? map->capacity : 0;
-        int32_t count = map ? map->size     : 0;
+        // data points directly to the inline SerMap struct
+        const SerMap* map = (const SerMap*)data;
+        int32_t cap   = map->capacity;
+        int32_t count = map->size;
         w_i32(buf, cap);
         w_i32(buf, count);
         if (count > 0 && map->occupied) {
@@ -179,10 +179,9 @@ static void enc(std::vector<uint8_t>& buf,
     }
 
     case AIML_TD_BUFFER: {
-        // data points to an i8* field holding a heap SerBuffer*
-        SerBuffer* b = nullptr;
-        memcpy(&b, data, sizeof(void*));
-        int32_t sz = (b && b->size > 0) ? b->size : 0;
+        // data points directly to the inline SerBuffer struct
+        const SerBuffer* b = (const SerBuffer*)data;
+        int32_t sz = (b->size > 0) ? b->size : 0;
         w_i32(buf, sz);
         if (sz > 0 && b->data) {
             int esz = n.elem_size > 0 ? n.elem_size : 1;
@@ -249,7 +248,8 @@ static void dec(const uint8_t* blob, int& pos, int end,
 
     case AIML_TD_LIST: {
         int32_t count = r_i32(blob, pos, end);
-        SerList* list = (SerList*)malloc(sizeof(SerList));
+        // out points directly to the inline SerList struct
+        SerList* list = (SerList*)out;
         list->size     = count;
         list->capacity = count > 0 ? count : 4;
         int esz = n.elem_size;
@@ -259,8 +259,6 @@ static void dec(const uint8_t* blob, int& pos, int end,
         uint8_t* base = (uint8_t*)list->data;
         for (int i = 0; i < count; i++)
             dec(blob, pos, end, n.param1, ns, nn, base + i * esz);
-        void* lp = list;
-        memcpy(out, &lp, sizeof(void*));
         break;
     }
 
@@ -268,14 +266,17 @@ static void dec(const uint8_t* blob, int& pos, int end,
         int32_t cap   = r_i32(blob, pos, end);
         int32_t count = r_i32(blob, pos, end);
         if (cap <= 0) cap = 4;
-        SerMap* map   = (SerMap*)malloc(sizeof(SerMap));
+        // out points directly to the inline SerMap struct
+        SerMap* map   = (SerMap*)out;
         map->size     = count;
         map->capacity = cap;
         map->occupied = (int8_t*)calloc((size_t)cap, 1);
         map->keys     = calloc((size_t)cap, sizeof(char*));
         int vsz       = n.elem_size;
-        map->values   = calloc((size_t)cap, (size_t)vsz);
-        for (int i = 0; i < cap; i++) {
+        map->values   = calloc((size_t)cap, (size_t)vsz > 0 ? (size_t)vsz : 1);
+        // Only read slot data if count > 0 (encoder skips slot data when count == 0)
+        int readCap = (count > 0) ? cap : 0;
+        for (int i = 0; i < readCap; i++) {
             if (pos >= end) break;
             uint8_t occ = blob[pos++];
             map->occupied[i] = (int8_t)occ;
@@ -297,14 +298,14 @@ static void dec(const uint8_t* blob, int& pos, int end,
                 dec(blob, pos, end, n.param2, ns, nn, vout);
             }
         }
-        void* mp = map;
-        memcpy(out, &mp, sizeof(void*));
         break;
     }
 
     case AIML_TD_BUFFER: {
         int32_t sz = r_i32(blob, pos, end);
-        SerBuffer* b = (SerBuffer*)calloc(1, sizeof(SerBuffer));
+        // out points directly to the inline SerBuffer struct
+        SerBuffer* b = (SerBuffer*)out;
+        memset(b, 0, sizeof(SerBuffer));
         b->size       = sz;
         b->capacity   = sz > 0 ? sz : 4;
         int esz = n.elem_size > 0 ? n.elem_size : 1;
@@ -318,8 +319,6 @@ static void dec(const uint8_t* blob, int& pos, int end,
                 pos += (int)bytes;
             }
         }
-        void* bp = b;
-        memcpy(out, &bp, sizeof(void*));
         break;
     }
 
@@ -357,9 +356,8 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
     }
 
     case AIML_TD_LIST: {
-        SerList* list = nullptr;
-        memcpy(&list, data, sizeof(void*));
-        if (!list) break;
+        // data points directly to the inline SerList struct
+        SerList* list = (SerList*)data;
         if (list->data && list->size > 0) {
             int esz = n.elem_size;
             uint8_t* base = (uint8_t*)list->data;
@@ -369,14 +367,13 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         } else if (list->data) {
             free(list->data);
         }
-        free(list);
+        // do NOT free list itself — it is inline in the parent struct
         break;
     }
 
     case AIML_TD_MAP: {
-        SerMap* map = nullptr;
-        memcpy(&map, data, sizeof(void*));
-        if (!map) break;
+        // data points directly to the inline SerMap struct
+        SerMap* map = (SerMap*)data;
         if (map->occupied) {
             int vsz = n.elem_size;
             for (int i = 0; i < map->capacity; i++) {
@@ -392,14 +389,13 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         }
         if (map->keys)   free(map->keys);
         if (map->values) free(map->values);
-        free(map);
+        // do NOT free map itself — it is inline in the parent struct
         break;
     }
 
     case AIML_TD_BUFFER: {
-        SerBuffer* b = nullptr;
-        memcpy(&b, data, sizeof(void*));
-        if (!b) break;
+        // data points directly to the inline SerBuffer struct
+        SerBuffer* b = (SerBuffer*)data;
         if (b->data && b->size > 0) {
             int esz = n.elem_size > 0 ? n.elem_size : 1;
             uint8_t* base = (uint8_t*)b->data;
@@ -409,7 +405,7 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         } else if (b->data) {
             free(b->data);
         }
-        free(b);
+        // do NOT free b itself — it is inline in the parent struct
         break;
     }
 

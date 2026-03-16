@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 // Persistence (WAL + mmap)
 #include <fcntl.h>
 #include <unistd.h>
@@ -66,6 +67,7 @@ struct AimlStore {
 };
 
 struct AimlKv {
+    std::mutex  mtx;  // per-KV lock for thread-safe access
     int64_t val_size;
     std::unordered_map<std::string, std::vector<uint8_t>> map;  // raw bytes OR blob (typed)
     // Typed Kv: descriptor for recursive serialization of heap fields
@@ -101,6 +103,7 @@ struct AimlListRaw {
 };
 
 struct AimlTimeSeries {
+    std::mutex           mtx;  // per-handle lock for thread-safe access
     int64_t              elem_size = 0;
     std::vector<uint8_t> data;        // elem_size * count bytes (flat)
     std::vector<int64_t> timestamps;  // parallel to data
@@ -208,13 +211,16 @@ static bool store_wal_replay(AimlStore* s) {
     return true;
 }
 
-// Global registry for db.checkpoint_all
+// Global registry for db.checkpoint_all — protected by g_db_mutex
+static std::mutex                      g_db_mutex;
 static std::vector<AimlStore*>         g_persistent_stores;
 static std::vector<AimlKv*>            g_persistent_kvs;
 static std::vector<AimlTimeSeries*>    g_persistent_ts;
 
-// Global name-based registry: base_path+name → open handle (for reuse across calls)
-static std::unordered_map<std::string, AimlStore*> g_persistent_stores_by_name;
+// Global name-based registries: base_path+name → open handle (singleton reuse)
+static std::unordered_map<std::string, AimlStore*>      g_persistent_stores_by_name;
+static std::unordered_map<std::string, AimlKv*>         g_persistent_kvs_by_name;
+static std::unordered_map<std::string, AimlTimeSeries*> g_persistent_ts_by_name;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Column Layout helpers
@@ -271,6 +277,7 @@ extern "C" void* aiml_db_store_open_persist(const char* name, const char* type_n
 
     // Return existing handle if already open (same process, same name+path)
     std::string registry_key = bp + nm;
+    std::lock_guard<std::mutex> lock(g_db_mutex);
     auto it = g_persistent_stores_by_name.find(registry_key);
     if (it != g_persistent_stores_by_name.end()) return it->second;
 
@@ -508,6 +515,7 @@ extern "C" int32_t aiml_db_kv_checkpoint(void* kv_ptr);
 extern "C" int32_t aiml_db_ts_checkpoint(void* ts_ptr);
 
 extern "C" int32_t aiml_db_checkpoint_all(void) {
+    std::lock_guard<std::mutex> lock(g_db_mutex);
     int32_t result = 0;
     for (AimlStore*      s  : g_persistent_stores) if (aiml_db_store_checkpoint(s)  != 0) result = -1;
     for (AimlKv*         kv : g_persistent_kvs)    if (aiml_db_kv_checkpoint(kv)    != 0) result = -1;
@@ -610,17 +618,25 @@ static void kv_wal_replay(AimlKv* kv) {
 extern "C" void* aiml_db_kv_open_persist(const char* name, int64_t val_size,
                                            const char* base_path) {
     std::string dir = base_path ? base_path : "./aiondb/";
+    std::string nm  = name ? name : "kv";
+    std::string registry_key = dir + nm;
+
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    auto it = g_persistent_kvs_by_name.find(registry_key);
+    if (it != g_persistent_kvs_by_name.end()) return it->second;
+
     mkdir(dir.c_str(), 0755);
     AimlKv* kv    = new AimlKv();
     kv->val_size   = val_size;
     kv->persistent = true;
-    kv->wal_path   = dir + std::string(name) + ".kvwal";
+    kv->wal_path   = dir + nm + ".kvwal";
     int fd = open(kv->wal_path.c_str(), O_RDWR | O_CREAT, 0644);
     if (fd >= 0) {
         kv->wal_fd = fd;
         kv_wal_replay(kv);
         lseek(fd, 0, SEEK_END); // append mode
     }
+    g_persistent_kvs_by_name[registry_key] = kv;
     g_persistent_kvs.push_back(kv);
     return kv;
 }
@@ -628,6 +644,7 @@ extern "C" void* aiml_db_kv_open_persist(const char* name, int64_t val_size,
 extern "C" int32_t aiml_db_kv_checkpoint(void* kv_ptr) {
     if (!kv_ptr) return -1;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
+    std::lock_guard<std::mutex> lock(kv->mtx);
     if (!kv->persistent || kv->wal_fd < 0) return 0;
     // Compact: truncate + rewrite all current entries
     ftruncate(kv->wal_fd, 0);
@@ -662,19 +679,27 @@ extern "C" void* aiml_db_kv_open_typed_persist(const char* name, int64_t val_siz
                                                  const char* base_path,
                                                  const AimlTypeNode* nodes, int32_t n_nodes) {
     std::string dir = base_path ? base_path : "./aiondb/";
+    std::string nm  = name ? name : "kv";
+    std::string registry_key = dir + nm;
+
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    auto it = g_persistent_kvs_by_name.find(registry_key);
+    if (it != g_persistent_kvs_by_name.end()) return it->second;
+
     mkdir(dir.c_str(), 0755);
     AimlKv* kv    = new AimlKv();
     kv->val_size   = val_size;
     kv->ser_nodes  = nodes;
     kv->ser_n      = n_nodes;
     kv->persistent = true;
-    kv->wal_path   = dir + std::string(name) + ".kvwal";
+    kv->wal_path   = dir + nm + ".kvwal";
     int fd = open(kv->wal_path.c_str(), O_RDWR | O_CREAT, 0644);
     if (fd >= 0) {
         kv->wal_fd = fd;
         kv_wal_replay(kv);
         lseek(fd, 0, SEEK_END);
     }
+    g_persistent_kvs_by_name[registry_key] = kv;
     g_persistent_kvs.push_back(kv);
     return kv;
 }
@@ -682,6 +707,7 @@ extern "C" void* aiml_db_kv_open_typed_persist(const char* name, int64_t val_siz
 extern "C" void aiml_db_kv_set(void* kv_ptr, const char* key, const void* val, int64_t val_size) {
     if (!kv_ptr || !key) return;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
+    std::lock_guard<std::mutex> lock(kv->mtx);
     if (kv->ser_nodes && val) {
         // Typed: encode struct → blob, invalidate decoded cache
         kv_decoded_evict(kv, key);
@@ -716,6 +742,7 @@ extern "C" void aiml_db_kv_set(void* kv_ptr, const char* key, const void* val, i
 extern "C" void* aiml_db_kv_get(void* kv_ptr, const char* key) {
     if (!kv_ptr || !key) return nullptr;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
+    std::lock_guard<std::mutex> lock(kv->mtx);
     auto it = kv->map.find(key);
     if (it == kv->map.end()) return nullptr;
     if (kv->ser_nodes) {
@@ -739,17 +766,22 @@ extern "C" void* aiml_db_kv_get(void* kv_ptr, const char* key) {
 
 extern "C" int32_t aiml_db_kv_has(void* kv_ptr, const char* key) {
     if (!kv_ptr || !key) return 0;
-    return static_cast<AimlKv*>(kv_ptr)->map.count(key) ? 1 : 0;
+    AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
+    std::lock_guard<std::mutex> lock(kv->mtx);
+    return kv->map.count(key) ? 1 : 0;
 }
 
 extern "C" int32_t aiml_db_kv_len(void* kv_ptr) {
     if (!kv_ptr) return 0;
-    return (int32_t)static_cast<AimlKv*>(kv_ptr)->map.size();
+    AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
+    std::lock_guard<std::mutex> lock(kv->mtx);
+    return (int32_t)kv->map.size();
 }
 
 extern "C" void aiml_db_kv_delete(void* kv_ptr, const char* key) {
     if (!kv_ptr || !key) return;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
+    std::lock_guard<std::mutex> lock(kv->mtx);
     auto it = kv->map.find(key);
     if (it == kv->map.end()) return;
     if (kv->persistent && kv->wal_fd >= 0)
@@ -767,6 +799,7 @@ extern "C" void aiml_db_kv_delete(void* kv_ptr, const char* key) {
 extern "C" void aiml_db_kv_clear(void* kv_ptr) {
     if (!kv_ptr) return;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
+    std::lock_guard<std::mutex> lock(kv->mtx);
     if (kv->persistent && kv->wal_fd >= 0) {
         // Truncate WAL — clear is atomic
         ftruncate(kv->wal_fd, 0);
@@ -868,11 +901,18 @@ extern "C" void* aiml_db_ts_open_persist(const char* name, int64_t elem_size,
                                            const char* base_path) {
     if (elem_size <= 0) return nullptr;
     std::string dir = base_path ? base_path : "./aiondb/";
+    std::string nm  = name ? name : "ts";
+    std::string registry_key = dir + nm;
+
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    auto it = g_persistent_ts_by_name.find(registry_key);
+    if (it != g_persistent_ts_by_name.end()) return it->second;
+
     mkdir(dir.c_str(), 0755);
     AimlTimeSeries* ts = new AimlTimeSeries();
     ts->elem_size   = elem_size;
     ts->persistent  = true;
-    ts->log_path    = dir + std::string(name) + ".tslog";
+    ts->log_path    = dir + nm + ".tslog";
     int fd = open(ts->log_path.c_str(), O_RDWR | O_CREAT, 0644);
     if (fd >= 0) {
         ts->log_fd = fd;
@@ -889,6 +929,7 @@ extern "C" void* aiml_db_ts_open_persist(const char* name, int64_t elem_size,
         }
         lseek(fd, 0, SEEK_END); // append mode
     }
+    g_persistent_ts_by_name[registry_key] = ts;
     g_persistent_ts.push_back(ts);
     return ts;
 }
@@ -896,6 +937,7 @@ extern "C" void* aiml_db_ts_open_persist(const char* name, int64_t elem_size,
 extern "C" int32_t aiml_db_ts_checkpoint(void* ts_ptr) {
     if (!ts_ptr) return -1;
     AimlTimeSeries* ts = static_cast<AimlTimeSeries*>(ts_ptr);
+    std::lock_guard<std::mutex> lock(ts->mtx);
     if (!ts->persistent || ts->log_fd < 0) return 0;
     fsync(ts->log_fd);
     return 0;
@@ -905,6 +947,7 @@ extern "C" void aiml_db_ts_append(void* ts_ptr, const void* elem,
                                    int64_t elem_size, int64_t timestamp) {
     if (!ts_ptr || !elem) return;
     AimlTimeSeries* ts = static_cast<AimlTimeSeries*>(ts_ptr);
+    std::lock_guard<std::mutex> lock(ts->mtx);
     if (ts->persistent && ts->log_fd >= 0) {
         write(ts->log_fd, &timestamp, sizeof(int64_t));
         write(ts->log_fd, elem, (size_t)ts->elem_size);
@@ -918,6 +961,7 @@ extern "C" void aiml_db_ts_append(void* ts_ptr, const void* elem,
 extern "C" void* aiml_db_ts_at(void* ts_ptr, int64_t timestamp) {
     if (!ts_ptr) return nullptr;
     AimlTimeSeries* ts = static_cast<AimlTimeSeries*>(ts_ptr);
+    std::lock_guard<std::mutex> lock(ts->mtx);
     if (ts->count == 0) return nullptr;
     // Last entry with timestamp <= t
     auto it = std::upper_bound(ts->timestamps.begin(), ts->timestamps.end(), timestamp);
@@ -930,6 +974,7 @@ extern "C" void* aiml_db_ts_at(void* ts_ptr, int64_t timestamp) {
 extern "C" void aiml_db_ts_range(void* ts_ptr, int64_t from, int64_t to, void* result_list) {
     if (!ts_ptr || !result_list) return;
     AimlTimeSeries* ts   = static_cast<AimlTimeSeries*>(ts_ptr);
+    std::lock_guard<std::mutex> lock(ts->mtx);
     AimlListRaw*    list = static_cast<AimlListRaw*>(result_list);
 
     if (ts->count == 0) return;
@@ -951,7 +996,9 @@ extern "C" void aiml_db_ts_range(void* ts_ptr, int64_t from, int64_t to, void* r
 
 extern "C" int32_t aiml_db_ts_len(void* ts_ptr) {
     if (!ts_ptr) return 0;
-    return static_cast<AimlTimeSeries*>(ts_ptr)->count;
+    AimlTimeSeries* ts = static_cast<AimlTimeSeries*>(ts_ptr);
+    std::lock_guard<std::mutex> lock(ts->mtx);
+    return ts->count;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

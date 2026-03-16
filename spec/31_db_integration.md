@@ -740,7 +740,25 @@ Erkennt es eine höhere Version mit neuen Feldern, wendet es die **In-Place-Migr
 
 ---
 
-## 10. Offene Designfragen (Future Work)
+## 10. Thread-Safety
+
+Alle `db`-Operationen sind **implizit thread-safe** (Kategorie 1, siehe Kapitel 47).
+Die Runtime garantiert:
+
+- **Singleton-Handles:** `db.open_kv("name", {persist: true})` gibt bei gleichem
+  Name+Pfad immer denselben Handle zurück — kein doppelter WAL, kein Memory-Leak.
+- **Atomare Einzeloperationen:** `kv.set`, `kv.get`, `kv.has`, `kv.delete`, `store.insert`,
+  `store.get` sind jeweils atomar. Gleichzeitige Aufrufe aus verschiedenen Threads
+  auf denselben Handle sind sicher.
+- **Checkpoint-Safety:** `db.checkpoint` ist serialisiert — kein Race zwischen
+  Checkpoint und Set/Delete.
+
+**Nicht atomar** sind Sequenzen aus mehreren Aufrufen (z.B. `has` + `set`).
+Für atomare Read-Modify-Write muss der AIML-Autor einen expliziten `lock` verwenden.
+
+---
+
+## 11. Offene Designfragen (Future Work)
 
 - **Indizes**: Automatische B-Tree-Indizes für `where`-Felder — bisher noch keine Compiler-Integration.
 - **Joins**: `join`-Syntax ist spezifiziert, aber noch nicht implementiert.

@@ -4,21 +4,19 @@
 namespace ListImpl {
 
     llvm::StructType* getListStructType(CompilerContext& ctx) {
-        // Return generic { i32, i32, ptr }
-        // We can reuse this for all lists if we don't strictly use named types for GEP.
-        // But `listPtr` passed in points to a specific named struct "list_i32" etc.
-        // Opaque pointers: The pointer is just `ptr`.
-        // The GEP instruction needs a Source Element Type.
-        // If we use a generic `{i32, i32, ptr}` struct type, GEP will work fine as long as offsets match.
-        static llvm::StructType* genericListTy = nullptr;
-        if (!genericListTy) {
-             genericListTy = llvm::StructType::create(ctx.context, {
-                 ctx.builder.getInt32Ty(), // size
-                 ctx.builder.getInt32Ty(), // capacity
-                 llvm::PointerType::get(ctx.context, 0) // data (opaque ptr)
-             }, "GenericList"); // Anon or named
+        // Look up or create "GenericList" in THIS context.
+        // NOTE: Do NOT use a static variable here — each LLVMContext is independent
+        // (separate sub-compiler instances each have their own context), so a static
+        // pointer from a previous context would be a dangling reference.
+        llvm::StructType* t = llvm::StructType::getTypeByName(ctx.context, "GenericList");
+        if (!t) {
+            t = llvm::StructType::create(ctx.context, {
+                ctx.builder.getInt32Ty(), // size
+                ctx.builder.getInt32Ty(), // capacity
+                llvm::PointerType::get(ctx.context, 0) // data (opaque ptr)
+            }, "GenericList");
         }
-        return genericListTy;
+        return t;
     }
 
     void initList(CompilerContext& ctx, llvm::Value* listPtr, llvm::Type* elemType, int initialCapacity) {

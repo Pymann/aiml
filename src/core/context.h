@@ -230,6 +230,15 @@ namespace AIML {
     
     bool jitMode = false;
     bool headerOnlyMode = false;
+    bool libraryMode = false;  // skip __aiml_init/fptable/schemas for import-only objects
+
+    // Lib init function names from imported files — called at start of __aiml_init
+    std::vector<std::string> libInitFuncNames;
+    // Set by library-mode compile — the init function name for this module
+    std::string libInitFuncName;
+
+    // Source location tracking for log.* calls (Spec 46)
+    std::string currentSourceFile;   // Relative path of file being compiled
 
     // Hot-Reload: next free fptable slot index (incremented in visitFunction)
     int fptable_next_index = 0;
@@ -531,6 +540,7 @@ namespace AIML {
         if (typeName == "socket_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlSocket*
         if (typeName == "tls_socket_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlTlsSocket*
         if (typeName == "ws_handle") return llvm::Type::getInt8Ty(context)->getPointerTo();          // AimlWs*
+        if (typeName == "prefab_instance") return llvm::Type::getInt8Ty(context)->getPointerTo();  // AimlPrefabInstance*
         if (typeName == "any") return llvm::Type::getInt8Ty(context)->getPointerTo();         // void*
 
         // gltf handle types — all opaque i8* pointers

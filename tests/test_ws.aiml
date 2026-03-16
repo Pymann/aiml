@@ -3,12 +3,12 @@
 
 # ── Phase A: Lifecycle (no WS traffic) ───────────────────────────────────────
 
-- decl: [srv, ws_handle]
-- set: [srv, { call: [ws.server, "127.0.0.1", 19890] }]
+- decl: [srv0, ws_handle]
+- set: [srv0, { call: [ws.server, "127.0.0.1", 19890] }]
 - decl: [fd, i32]
-- set: [fd, { call: [ws.fd, srv] }]
+- set: [fd, { call: [ws.fd, srv0] }]
 - print: ["ws server fd (should be > 0): ${fd}"]
-- call: [ws.close, srv]
+- call: [ws.close, srv0]
 - print: ["lifecycle done"]
 
 # ── Phase B: ws:// loopback (echo, text frames) ───────────────────────────────

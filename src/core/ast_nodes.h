@@ -266,6 +266,7 @@ public:
 class ModelDecl : public Node {
 public:
     std::string name;
+    std::string parentName;   // for "inherits"
     uint64_t version = 1;
     std::string primaryKey;   // field name used as entity ID; empty = slot-index (i32)
     std::vector<StructMember> fields;
@@ -289,6 +290,27 @@ public:
     std::vector<std::pair<std::string, int>> values; // enum name, integer value
 
     std::string toString() const override { return "EnumDecl(" + name + ")"; }
+};
+
+struct PrefabChildInfo {
+    std::string name;
+    std::string type;      // "sprite", "label", "rect"
+    float x = 0, y = 0, width = 0, height = 0;
+    float font_size = 12;
+    uint32_t color = 0xFFFFFF;
+    std::string texture;
+    std::string anchor;    // "left", "center", "right"
+};
+
+class PrefabDecl : public Node {
+public:
+    std::string name;
+    float width = 0, height = 0;
+    std::string texture;
+    bool draggable = false;
+    std::vector<PrefabChildInfo> children;
+
+    std::string toString() const override { return "PrefabDecl(" + name + ")"; }
 };
 
 // --- Modular Declarations ---

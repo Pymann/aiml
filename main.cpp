@@ -1,4 +1,5 @@
 #include <iostream>
+#include <fstream>
 #include <string>
 #include <vector>
 #include "compiler.h"
@@ -134,9 +135,14 @@ int main(int argc, char** argv) {
     } else {
         // Compile to Object (Intermediate or Final)
         std::string objFile = isExe ? outputFile + ".o" : outputFile;
-        
+
         LOG_DEBUG("Compiling to Object: " + objFile);
-        
+
+        // Disable internal import cache — the build tool handles caching.
+        compiler.noCache = true;
+        // Store import .o files next to the main .o file.
+        compiler.outputDir = std::filesystem::path(objFile).parent_path().string();
+
         // 1. Compile Module
         compiler.compile(inputFile, "/dev/null"); 
         
@@ -176,11 +182,17 @@ int main(int argc, char** argv) {
             }
             
         } else {
-             // Just object file
+             // Just object file — write sidecar .deps file for build systems (e.g. exodus)
+             std::string depsPath = objFile + ".deps";
              if (!compiler.linkedObjects.empty()) {
+                 std::ofstream depsFout(depsPath);
+                 for (const auto& dep : compiler.linkedObjects) depsFout << dep << "\n";
                  std::string linkMsg = "Compiled " + outputFile + ". Link with: ";
                  for (const auto& dep : compiler.linkedObjects) linkMsg += dep + " ";
                  LOG_INFO(linkMsg);
+             } else {
+                 // Remove stale deps file if no extra objects
+                 std::filesystem::remove(depsPath);
              }
         }
     }

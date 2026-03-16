@@ -1,14 +1,28 @@
 #!/bin/bash
 
+SKIP_BUILD=0
+for arg in "$@"; do
+    if [ "$arg" = "--no-build" ] || [ "$arg" = "--test-only" ]; then
+        SKIP_BUILD=1
+    fi
+done
+
 source ../../exvenv/bin/activate
-exodus build
-if [ $? -ne 0 ]; then
-    echo "Error: Compilation failed. Aborting tests."
-    exit 1
+if [ $SKIP_BUILD -eq 0 ]; then
+    exodus build
+    if [ $? -ne 0 ]; then
+        echo "Error: Compilation failed. Aborting tests."
+        exit 1
+    fi
+else
+    echo "Skipping build step (--no-build/--test-only)."
 fi
 
 # Define the AIML executable path
-AIML_BIN="./out/aiml"
+AIML_BIN="./out/aiml/aiml"
+if [ ! -f "$AIML_BIN" ]; then
+    AIML_BIN="./out/aiml"
+fi
 if [ ! -f "$AIML_BIN" ]; then
     AIML_BIN="./build/aiml"
 fi
@@ -65,6 +79,14 @@ for TEST in $TEST_FILES; do
             ((TOTAL++))
             continue
         fi
+    fi
+
+    # Libraries are not standalone tests — skip them.
+    if grep -q "# Requires: library" "$TEST"; then
+        echo "[ SKIP ] $TEST (library — imported by other tests)" | tee -a "$OUTPUT_FILE"
+        ((SKIPPED++))
+        ((TOTAL++))
+        continue
     fi
 
     echo "--------------------------------------------------------" | tee -a "$OUTPUT_FILE"

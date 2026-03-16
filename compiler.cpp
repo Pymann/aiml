@@ -21,6 +21,7 @@
 #include "src/sys/gltf_runtime.h"
 #include "src/sys/gl_runtime.h"
 #include "src/sys/engine_runtime.h"
+#include "src/sys/prefab_runtime.h"
 #include "src/sys/input_runtime.h"
 #include "src/sys/audio_runtime.h"
 #include "src/sys/mirror_runtime.h"
@@ -44,6 +45,7 @@
 #include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Object/ObjectFile.h>
+#include <llvm/IR/Verifier.h>
 #include <optional>
 
 // Core compiler headers (pulled up so CompilerContext is available in
@@ -119,6 +121,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     CompilerContext& ctx = *static_cast<CompilerContext*>(compiler_ctx_);
 
     ctx.compilerPath = compilerPath;
+    ctx.libraryMode = libraryMode;
     ctx.ir_gen = AIML::createLLVMGenerator(ctx);
     
     // 3. Setup Globals: __argc, __argv for sys commands
@@ -129,19 +132,31 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     // Shared via shared_ptr so the lambda can capture by value.
     auto headerDone = std::make_shared<std::unordered_set<std::string>>();
 
-    ctx.resolveImportCallback = [this, &ctx, headerDone](const std::string& path) {
+    // Deferred import compilation: record paths during registerTypes, compile
+    // to .o AFTER all types from all imports are known.  This prevents errors
+    // when file A references types defined in sibling import file B.
+    auto deferredImports = std::make_shared<std::vector<std::string>>();
+
+    ctx.resolveImportCallback = [this, &ctx, headerDone, deferredImports](const std::string& path) {
         // Global guard: compile each imported file to .o at most once across ALL instances.
         static std::unordered_set<std::string> compiledObjects;
         if (!compiledObjects.count(path)) {
             compiledObjects.insert(path);
-            this->resolveImport(path);
+            // Defer the actual .o compilation until all types are registered.
+            deferredImports->push_back(path);
         }
 
-        // Important: also copy over the linked objects discovered!
-        for (const auto& obj : this->linkedObjects) {
-             if (std::find(ctx.objectFilesToLink.begin(), ctx.objectFilesToLink.end(), obj) == ctx.objectFilesToLink.end()) {
-                 ctx.objectFilesToLink.push_back(obj);
-             }
+        // Register the lib init function name (deterministic, based on path).
+        // Must match the name generated in ast_compiler.cpp library mode.
+        {
+            std::string sanitized;
+            for (char c : path)
+                sanitized += (std::isalnum(c) ? c : '_');
+            std::string libInitName = "__aiml_lib_init_" + sanitized;
+            if (std::find(ctx.libInitFuncNames.begin(), ctx.libInitFuncNames.end(), libInitName)
+                == ctx.libInitFuncNames.end()) {
+                ctx.libInitFuncNames.push_back(libInitName);
+            }
         }
 
         // Per-instance guard: header-propagate into THIS context at most once per file.
@@ -167,6 +182,12 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                     for (const auto& decl : subProg->declarations) {
                         if (auto func = dynamic_cast<AIML::AST::FunctionDecl*>(decl.get())) {
                             subCompiler.visitFunction(func);
+                        } else if (auto cls = dynamic_cast<AIML::AST::ClassDecl*>(decl.get())) {
+                            // Register class method signatures (header-only
+                            // mode will skip bodies in visitFunction).
+                            subCompiler.visitTopLevel(cls);
+                        } else if (auto mod = dynamic_cast<AIML::AST::ModelDecl*>(decl.get())) {
+                            subCompiler.visitTopLevel(mod);
                         }
                     }
                 }
@@ -177,7 +198,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
         ctx.currentNamespace = prevNs;
         ctx.headerOnlyMode = prevHeaderOnly;
     };
-    
+
     // 4. Parse YAML to AST & Compile (Two-Pass)
     AIML::AST::Builder astBuilder;
     try {
@@ -202,10 +223,97 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                 }
             } catch (...) {}
 
+            // Track current source file for log.* location injection (Spec 46)
+            ctx.currentSourceFile = filename;
+
             AIML::AST::Compiler astCompiler(ctx);
 
-            // Pass 1: Global Type and Signature Registration
-            astCompiler.registerTypes(programAST.get());
+            // Sibling import injection (sub-compiler only):
+            // Two-phase: first register types from ALL siblings + self,
+            // then register function signatures + class methods.
+            if (!siblingImports.empty()) {
+                bool prevHeaderOnly = ctx.headerOnlyMode;
+                ctx.headerOnlyMode = true;
+
+                // Collect parsed programs (reused in both phases)
+                struct SibProg { std::string path; std::unique_ptr<AIML::AST::Program> prog; };
+                std::vector<SibProg> sibProgs;
+                for (const auto& sibPath : siblingImports) {
+                    AIML::AST::Builder sb;
+                    std::ifstream sf(sibPath);
+                    if (!sf.is_open()) continue;
+                    try {
+                        YAML::Parser sp(sf);
+                        sp.HandleNextDocument(sb);
+                        auto p = sb.takeProgram();
+                        if (p) sibProgs.push_back({sibPath, std::move(p)});
+                    } catch (...) {}
+                }
+
+                // Phase A: register type definitions (class/model/enum) from
+                // self + all siblings.  No function forward-declarations yet.
+                {
+                    // Self types first
+                    for (const auto& decl : programAST->declarations) {
+                        if (dynamic_cast<AIML::AST::ClassDecl*>(decl.get()) ||
+                            dynamic_cast<AIML::AST::ModelDecl*>(decl.get()) ||
+                            dynamic_cast<AIML::AST::EnumDecl*>(decl.get()) ||
+                            dynamic_cast<AIML::AST::ImportDecl*>(decl.get()))
+                            astCompiler.registerTypeDecl(decl.get());
+                    }
+                    // Sibling types
+                    for (auto& sp : sibProgs) {
+                        AIML::AST::Compiler sc(ctx);
+                        for (const auto& decl : sp.prog->declarations) {
+                            if (dynamic_cast<AIML::AST::ClassDecl*>(decl.get()) ||
+                                dynamic_cast<AIML::AST::ModelDecl*>(decl.get()) ||
+                                dynamic_cast<AIML::AST::EnumDecl*>(decl.get()) ||
+                                dynamic_cast<AIML::AST::ImportDecl*>(decl.get()))
+                                sc.registerTypeDecl(decl.get());
+                        }
+                    }
+                }
+
+                // Phase B: full registerTypes on self (now knows all types
+                // from siblings, so function forward-declarations resolve).
+                astCompiler.registerTypes(programAST.get());
+
+                // Phase C: register function signatures + class methods from siblings
+                for (auto& sp : sibProgs) {
+                    AIML::AST::Compiler sc(ctx);
+                    for (const auto& decl : sp.prog->declarations) {
+                        if (auto func = dynamic_cast<AIML::AST::FunctionDecl*>(decl.get()))
+                            sc.visitFunction(func);
+                        else if (auto cls = dynamic_cast<AIML::AST::ClassDecl*>(decl.get()))
+                            sc.visitTopLevel(cls);
+                        else if (auto mod = dynamic_cast<AIML::AST::ModelDecl*>(decl.get()))
+                            sc.visitTopLevel(mod);
+                    }
+                }
+
+                ctx.headerOnlyMode = prevHeaderOnly;
+            } else {
+                // Normal (non-sub-compiler) path: just register types
+                astCompiler.registerTypes(programAST.get());
+            }
+
+            // Pass 1.5: Compile deferred imports to .o files.
+            // Now all types from ALL imports are registered in ctx, so
+            // sub-compilers can resolve cross-import type references.
+            this->siblingImports = *deferredImports;
+            for (const auto& importPath : *deferredImports) {
+                int savedErrors = Logger::instance().errorCount();
+                Logger::instance().setSuppressed(true);
+                this->resolveImport(importPath);
+                Logger::instance().setSuppressed(false);
+                Logger::instance().setErrorCount(savedErrors);
+            }
+            // Propagate linked objects accumulated during deferred compilation.
+            for (const auto& obj : this->linkedObjects) {
+                if (std::find(ctx.objectFilesToLink.begin(), ctx.objectFilesToLink.end(), obj)
+                    == ctx.objectFilesToLink.end())
+                    ctx.objectFilesToLink.push_back(obj);
+            }
 
             // Pass 2: Full Code Generation
             astCompiler.compile(programAST.get());
@@ -499,6 +607,33 @@ void AIMLCompiler::compileToObject(const std::string& /*filename*/, const std::s
     if (targetMachine->addPassesToEmitFile(pass, dest, nullptr, fileType)) {
         LOG_ERROR("TargetMachine can't emit a file of this type");
         return;
+    }
+
+    // Verify module before running passes to catch null-type GEPs early.
+    {
+        bool anyFail = false;
+        // Per-function verification to identify the failing function.
+        for (auto& F : *module_) {
+            std::string errMsg;
+            llvm::raw_string_ostream errStream(errMsg);
+            if (llvm::verifyFunction(F, &errStream)) {
+                LOG_ERROR("Function '" + F.getName().str() + "' verification FAILED: " + errMsg);
+                anyFail = true;
+            }
+        }
+        std::string errMsg;
+        llvm::raw_string_ostream errStream(errMsg);
+        if (llvm::verifyModule(*module_, &errStream)) {
+            LOG_ERROR("Module verification FAILED before compileToObject: " + errMsg);
+            anyFail = true;
+        }
+        if (anyFail) {
+            // Dump IR to a temp file for inspection.
+            std::error_code ec;
+            llvm::raw_fd_ostream irDump("/tmp/aiml_bad_module.ll", ec, llvm::sys::fs::OF_None);
+            if (!ec) module_->print(irDump, nullptr);
+            LOG_ERROR("IR dumped to /tmp/aiml_bad_module.ll");
+        }
     }
 
     pass.run(*module_);
@@ -1074,6 +1209,37 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_is_web",                     (void*)(intptr_t)aiml_engine_is_web);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_glfw_window",                (void*)(intptr_t)aiml_engine_glfw_window);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_register_input_update",      (void*)(intptr_t)aiml_engine_register_input_update);
+    // prefab namespace
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_scene_init",                 (void*)(intptr_t)aiml_prefab_scene_init);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_register",                   (void*)(intptr_t)aiml_prefab_register);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_instantiate",                (void*)(intptr_t)aiml_prefab_instantiate);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_destroy",                    (void*)(intptr_t)aiml_prefab_destroy);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_pos",                    (void*)(intptr_t)aiml_prefab_set_pos);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_x",                      (void*)(intptr_t)aiml_prefab_get_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_y",                      (void*)(intptr_t)aiml_prefab_get_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_scale",                  (void*)(intptr_t)aiml_prefab_set_scale);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_scale",                  (void*)(intptr_t)aiml_prefab_get_scale);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_rotation",               (void*)(intptr_t)aiml_prefab_set_rotation);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_rotation",               (void*)(intptr_t)aiml_prefab_get_rotation);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_z",                      (void*)(intptr_t)aiml_prefab_set_z);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_z",                      (void*)(intptr_t)aiml_prefab_get_z);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_visible",                (void*)(intptr_t)aiml_prefab_set_visible);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_visible",                (void*)(intptr_t)aiml_prefab_get_visible);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_alpha",                  (void*)(intptr_t)aiml_prefab_set_alpha);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_alpha",                  (void*)(intptr_t)aiml_prefab_get_alpha);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_draggable",              (void*)(intptr_t)aiml_prefab_set_draggable);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_width",                  (void*)(intptr_t)aiml_prefab_get_width);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_height",                 (void*)(intptr_t)aiml_prefab_get_height);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_text",                   (void*)(intptr_t)aiml_prefab_set_text);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_texture",                (void*)(intptr_t)aiml_prefab_set_texture);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_color",                  (void*)(intptr_t)aiml_prefab_set_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_child_visible",          (void*)(intptr_t)aiml_prefab_set_child_visible);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_child",                      (void*)(intptr_t)aiml_prefab_child);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_draw_scene",                 (void*)(intptr_t)aiml_prefab_draw_scene);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_hit_test",                   (void*)(intptr_t)aiml_prefab_hit_test);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_update_drag",                (void*)(intptr_t)aiml_prefab_update_drag);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_dragged",                (void*)(intptr_t)aiml_prefab_get_dragged);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_font",                   (void*)(intptr_t)aiml_prefab_set_font);
     // input namespace
     llvm::sys::DynamicLibrary::AddSymbol("aiml_input_event_type",                  (void*)(intptr_t)aiml_input_event_type);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_input_event_key",                   (void*)(intptr_t)aiml_input_event_key);
@@ -1197,6 +1363,7 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_begin_cell",                     (void*)(intptr_t)aiml_ui_begin_cell);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_end_cell",                       (void*)(intptr_t)aiml_ui_end_cell);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_set_align",                      (void*)(intptr_t)aiml_ui_set_align);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_set_scroll",                     (void*)(intptr_t)aiml_ui_set_scroll);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_label",                          (void*)(intptr_t)aiml_ui_label);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_label_colored",                  (void*)(intptr_t)aiml_ui_label_colored);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_text_input",                     (void*)(intptr_t)aiml_ui_text_input);
@@ -1204,6 +1371,7 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button",                         (void*)(intptr_t)aiml_ui_button);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_button_icon",                    (void*)(intptr_t)aiml_ui_button_icon);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_checkbox",                       (void*)(intptr_t)aiml_ui_checkbox);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_spinbox",                        (void*)(intptr_t)aiml_ui_spinbox);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_toggle",                         (void*)(intptr_t)aiml_ui_toggle);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_radio",                          (void*)(intptr_t)aiml_ui_radio);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_slider",                         (void*)(intptr_t)aiml_ui_slider);
@@ -1219,6 +1387,10 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_spacer",                         (void*)(intptr_t)aiml_ui_spacer);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_same_line",                      (void*)(intptr_t)aiml_ui_same_line);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_newline",                        (void*)(intptr_t)aiml_ui_newline);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_begin_notebook",                (void*)(intptr_t)aiml_ui_begin_notebook);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_notebook_tab",                  (void*)(intptr_t)aiml_ui_notebook_tab);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_end_notebook",                  (void*)(intptr_t)aiml_ui_end_notebook);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_notebook_remove_clicked",       (void*)(intptr_t)aiml_ui_notebook_remove_clicked);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_push_style",                     (void*)(intptr_t)aiml_ui_push_style);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_pop_style",                      (void*)(intptr_t)aiml_ui_pop_style);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_set_default_style",              (void*)(intptr_t)aiml_ui_set_default_style);
@@ -1475,8 +1647,11 @@ bool AIMLCompiler::checkCache(const std::string& sourcePath, std::string& outHas
     }
     
     if (manifest[sourcePath] && manifest[sourcePath].as<std::string>() == outHash) {
-        // Cache hit. Ensure object file exists
-        std::string objPath = cacheDir + "/" + fs::path(sourcePath).filename().string() + ".o";
+        // Cache hit. Ensure object file exists (use sanitized full path, matching resolveImport)
+        std::string sanitized;
+        for (char c : sourcePath)
+            sanitized += (std::isalnum(c) ? c : '_');
+        std::string objPath = cacheDir + "/" + sanitized + ".o";
         if (fs::exists(objPath)) return true;
     }
     
@@ -1484,34 +1659,69 @@ bool AIMLCompiler::checkCache(const std::string& sourcePath, std::string& outHas
 }
 
 void AIMLCompiler::resolveImport(const std::string& path) {
-    std::string outHash;
-    if (checkCache(path, outHash)) {
-        LOG_INFO("Cache HIT for import: " + path);
-        std::string objPath = getCacheDir() + "/" + fs::path(path).filename().string() + ".o";
-        linkedObjects.push_back(objPath);
-        return;
+    // In object mode (noCache=true), the build tool handles caching.
+    // In JIT mode (noCache=false), use the internal SHA-based cache.
+    if (!noCache) {
+        std::string outHash;
+        if (checkCache(path, outHash)) {
+            LOG_INFO("Cache HIT for import: " + path);
+            std::string sanitizedPath;
+            for (char c : path)
+                sanitizedPath += (std::isalnum(c) ? c : '_');
+            std::string objPath = getCacheDir() + "/" + sanitizedPath + ".o";
+            linkedObjects.push_back(objPath);
+            return;
+        }
+        LOG_INFO("Cache MISS for import: " + path + ". Compiling...");
+    } else {
+        LOG_INFO("Compiling import (no-cache): " + path);
     }
-    
-    LOG_INFO("Cache MISS for import: " + path + ". Compiling...");
-    
-    // Create isolated compiler instance for the imported file
+
+    // Output dir: use outputDir (build dir) when noCache, else __aiml_cache
+    std::string outDir = (noCache && !outputDir.empty()) ? outputDir : getCacheDir();
+    if (!fs::exists(outDir)) fs::create_directories(outDir);
+
+    // Use full sanitized path as object name to avoid collisions
+    std::string sanitized;
+    for (char c : path)
+        sanitized += (std::isalnum(c) ? c : '_');
+    std::string objPath = outDir + "/" + sanitized + ".o";
+
+    // Create isolated compiler instance for the imported file.
+    // Pass sibling imports so the sub-compiler can resolve types from other
+    // import files (e.g. GameState defined in models.aiml, used in effects.aiml).
     AIMLCompiler subCompiler;
     subCompiler.compilerPath = this->compilerPath;
-    
-    std::string objPath = getCacheDir() + "/" + fs::path(path).filename().string() + ".o";
+    subCompiler.libraryMode = true;
+    subCompiler.noCache = this->noCache;
+    subCompiler.outputDir = this->outputDir;
+    // Give the sub-compiler all known sibling imports (excluding itself).
+    for (const auto& sib : this->siblingImports) {
+        if (sib != path)
+            subCompiler.siblingImports.push_back(sib);
+    }
+
     subCompiler.compile(path, "/dev/null");
     subCompiler.compileToObject(path, objPath);
-    
-    // Update manifest
-    std::string manifestPath = getCacheDir() + "/compilations.yaml";
-    YAML::Node manifest;
-    if (fs::exists(manifestPath)) {
-        try { manifest = YAML::LoadFile(manifestPath); } catch (...) {}
+
+    // Propagate transitive linked objects from sub-compiler
+    for (const auto& obj : subCompiler.linkedObjects) {
+        if (std::find(linkedObjects.begin(), linkedObjects.end(), obj) == linkedObjects.end())
+            linkedObjects.push_back(obj);
     }
-    manifest[path] = outHash;
-    
-    std::ofstream fout(manifestPath);
-    fout << manifest;
-    
+
+    // Update cache manifest (JIT mode only)
+    if (!noCache) {
+        std::string outHash = computeSHA512(path);
+        std::string manifestPath = getCacheDir() + "/compilations.yaml";
+        YAML::Node manifest;
+        if (fs::exists(manifestPath)) {
+            try { manifest = YAML::LoadFile(manifestPath); } catch (...) {}
+        }
+        manifest[path] = outHash;
+        std::ofstream fout(manifestPath);
+        fout << manifest;
+    }
+
     linkedObjects.push_back(objPath);
 }

@@ -40,9 +40,16 @@
     - call: [sl_style.set_track, track_tex]
 
 # Geteilter Zustand für den Loop
-- decl: [progress,   f32, 0.0]
+- decl: [progress,    f32, 0.0]
 - decl: [click_count, i32, 0]
 - decl: [slider_val,  f32, 0.5]
+- decl: [spinbox_val,  i32, 0]
+- decl: [cb_val,       i32, 0]
+- decl: [color_opts,   list<string>]
+- call: [color_opts.push, "Red"]
+- call: [color_opts.push, "Green"]
+- call: [color_opts.push, "Blue"]
+- call: [color_opts.push, "Yellow"]
 - decl: [cols, buffer<f32>, [0.4, 0.6]]
 - decl: [rows, buffer<f32>, [1.0]]
 
@@ -86,6 +93,9 @@
       - call: [ui.label, "Widgets:"]
       - call: [ui.separator]
       - call: [ui.spacer, 4.0]
+      - set:  [cb_val, { call: [ui.checkbox, "Enable feature", cb_val] }]
+      - set:  [spinbox_val, { call: [ui.spinbox, "color_pick", color_opts, spinbox_val] }]
+      - call: [ui.spacer, 4.0]
       - decl: [clicked, i32, { call: [ui.button, "Click me!"] }]
       - if: [{ "!=": [clicked, 0] }, true]
         then:
@@ -117,5 +127,15 @@
     - print: ["FAIL: slider_val > 1: ${slider_val}"]
     - call: [sys.exit, 1]
 
+- if: [{ lt: [spinbox_val, 0] }, true]
+  then:
+    - print: ["FAIL: spinbox_val < 0: ${spinbox_val}"]
+    - call: [sys.exit, 1]
+
+- if: [{ gt: [spinbox_val, 3] }, true]
+  then:
+    - print: ["FAIL: spinbox_val > 3: ${spinbox_val}"]
+    - call: [sys.exit, 1]
+
 - call: [engine.destroy_window, win]
-- print: ["All ui tests passed (clicks=${click_count} slider=${slider_val})"]
+- print: ["All ui tests passed (clicks=${click_count} slider=${slider_val} spinbox=${spinbox_val} cb=${cb_val})"]

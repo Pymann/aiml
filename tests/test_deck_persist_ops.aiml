@@ -1,0 +1,71 @@
+# Regression test: typed persistent Deck Kv delete/clear operations
+# Expected exit code: 0
+
+- model:
+    name: Deck
+    fields:
+      - [name, string]
+      - [deck_type, string]
+      - [description, string]
+      - [card_ids, list<string>]
+      - [total_mkp, i32]
+      - [created_at, i64]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [kv, Kv<string:Deck>]
+      - set: [kv, { call: [db.open_kv, "deck_persist_ops", {persist: true, path: "/tmp/aiml_test_deck_persist_ops/"}] }]
+
+      - decl: [j1, string, '{"__type":"Deck","name":"Deck One","deck_type":"mana_deck","description":"one","card_ids":["a","b"],"total_mkp":3,"created_at":0}']
+      - decl: [j2, string, '{"__type":"Deck","name":"Deck Two","deck_type":"spell_deck","description":"two","card_ids":["x","y","z"],"total_mkp":9,"created_at":1}']
+      - decl: [d1, Deck]
+      - decl: [d2, Deck]
+      - set: [d1, { call: [sys.deserialize, j1, "Deck"] }]
+      - set: [d2, { call: [sys.deserialize, j2, "Deck"] }]
+
+      - call: [kv.set, "d1", d1]
+      - call: [kv.set, "d2", d2]
+
+      - decl: [klen, i32]
+      - set: [klen, { call: [kv.len] }]
+      - if:
+          condition: { "!=": [klen, 2] }
+          then:
+            - print: ["FAIL len_after_set=${klen}"]
+            - call: [sys.exit, 1]
+
+      - call: [kv.delete, "d1"]
+      - decl: [has1, i32]
+      - set: [has1, { call: [kv.has, "d1"] }]
+      - if:
+          condition: { "!=": [has1, 0] }
+          then:
+            - print: ["FAIL has_d1=${has1}"]
+            - call: [sys.exit, 1]
+
+      - decl: [got2, ptr<Deck>]
+      - set: [got2, { call: [kv.get, "d2"] }]
+      - if:
+          condition: { "==": [{ eq: [got2.name, "Deck Two"] }, 0] }
+          then:
+            - print: ["FAIL got2.name=${got2.name}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { "!=": [got2.card_ids.len, 3] }
+          then:
+            - print: ["FAIL got2.card_ids.len=${got2.card_ids.len}"]
+            - call: [sys.exit, 1]
+
+      - call: [kv.clear]
+      - set: [klen, { call: [kv.len] }]
+      - if:
+          condition: { "!=": [klen, 0] }
+          then:
+            - print: ["FAIL len_after_clear=${klen}"]
+            - call: [sys.exit, 1]
+
+      - call: [db.checkpoint]
+      - print: ["Deck persist ops PASS"]
+      - return: 0

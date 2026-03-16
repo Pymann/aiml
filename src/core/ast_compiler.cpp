@@ -6,6 +6,7 @@
 #include "list_impl.h"
 #include "map_impl.h"
 #include "buffer_impl.h"
+#include "chan_impl.h"
 #include "string_utils.h"
 #include "expression.h"
 #include <iostream>
@@ -21,29 +22,149 @@ void Compiler::compile(Program* prog) {
 
     registerBuiltins(ctx);
 
-    // Create __aiml_init function to hold top-level statements
-    IRType* voidTy = ctx.ir_gen->resolveType("void");
-    std::vector<IRType*> noArgs;
-    IRValue* initFunc = ctx.ir_gen->createFunction("__aiml_init", voidTy, noArgs);
-    
-    // Create entry block for __aiml_init
-    llvm::Function* llvmInitFunc = static_cast<llvm::Function*>(ctx.ir_gen->unwrap(initFunc));
-    llvm::BasicBlock* initEntryBB = llvm::BasicBlock::Create(ctx.context, "entry", llvmInitFunc);
-    ctx.ir_gen->setInsertPoint(ctx.ir_gen->wrapBlock(initEntryBB));
-    
-    for (const auto& decl : prog->declarations) {
-        visitTopLevel(decl.get());
-    }
-    
-    // Finish __aiml_init
-    IRBlock* currentBlock = ctx.ir_gen->getInsertBlock();
-    if (!static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(currentBlock))->getTerminator()) {
-        ctx.ir_gen->createRet(nullptr);
-    }
+    if (ctx.libraryMode) {
+        // Library mode: top-level DeclStmts become LLVM GlobalVariables (not stack
+        // allocas) so that functions in this compilation unit can reference them
+        // without cross-function dominance issues.  A small internal init function
+        // is lazily created for any top-level code that needs an insert point
+        // (initializers, set:/call: statements).
 
-    // Emit hot-reload support tables (after all functions and types are registered)
-    emitFptable(ctx);
-    emitSchemaRegistry(ctx);
+        // Deterministic init function name from source file path.
+        std::string sanitized;
+        for (char c : ctx.currentSourceFile)
+            sanitized += (std::isalnum(c) ? c : '_');
+        std::string initName = "__aiml_lib_init_" + sanitized;
+
+        // Always create the lib init function (even if empty) so the linker
+        // can resolve the call from the main module's __aiml_init.
+        auto* voidTy_ = llvm::Type::getVoidTy(ctx.context);
+        auto* ft_ = llvm::FunctionType::get(voidTy_, false);
+        llvm::Function* libInitFunc = llvm::Function::Create(
+            ft_, llvm::Function::ExternalLinkage, initName, ctx.module);
+        auto* libInitEntryBB = llvm::BasicBlock::Create(ctx.context, "entry", libInitFunc);
+        ctx.ir_gen->setInsertPoint(ctx.ir_gen->wrapBlock(libInitEntryBB));
+
+        // Restore insert point to the lib init function's last block.
+        // After function compilation changes the insert point, we need to get back.
+        auto ensureLibInit = [&]() {
+            auto* lastBB = &libInitFunc->back();
+            ctx.ir_gen->setInsertPoint(ctx.ir_gen->wrapBlock(lastBB));
+        };
+
+        // Pass 1: promote top-level DeclStmt to module-level GlobalVariables.
+        for (const auto& d : prog->declarations) {
+            auto* decl = dynamic_cast<DeclStmt*>(d.get());
+            if (!decl) continue;
+            IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
+            if (!ty) continue;
+            llvm::Type* llvmTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ty));
+            auto* gv = new llvm::GlobalVariable(
+                ctx.module, llvmTy, /*isConstant=*/false,
+                llvm::GlobalValue::InternalLinkage,
+                llvm::Constant::getNullValue(llvmTy),
+                std::string("__lib_") + decl->varName);
+
+            Symbol sym;
+            sym.ir_alloca_inst = ctx.ir_gen->wrap(static_cast<llvm::Value*>(gv));
+            sym.ir_type        = ctx.ir_gen->getPointerTy();
+            sym.ir_element_type = ty;
+            sym.typeName       = decl->typeName;
+            sym.is_const       = decl->is_const;
+            sym.is_volatile    = decl->is_volatile;
+            ctx.symbol_table[decl->varName] = sym;
+
+            // Emit type-specific initialization in the lib-init function
+            // (mirrors what visitDeclStmt does for stack-allocated variables).
+            std::string tName = decl->typeName;
+            if (tName.find("list<") == 0 && tName.back() == '>') {
+                ensureLibInit();
+                std::string elemName = tName.substr(5, tName.length() - 6);
+                llvm::Type* elemTy = static_cast<llvm::Type*>(
+                    ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
+                if (elemTy) ListImpl::initList(ctx, gv, elemTy, 4);
+            } else if (tName.find("map<") == 0 && tName.back() == '>') {
+                ensureLibInit();
+                std::string inner = tName.substr(4, tName.length() - 5);
+                size_t colon = inner.find(':');
+                if (colon != std::string::npos) {
+                    std::string kName = inner.substr(0, colon);
+                    std::string vName = inner.substr(colon + 1);
+                    llvm::Type* kTy = static_cast<llvm::Type*>(
+                        ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(kName)));
+                    llvm::Type* vTy = static_cast<llvm::Type*>(
+                        ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
+                    if (kTy && vTy) MapImpl::initMap(ctx, gv, kTy, vTy, 4);
+                }
+            } else if (tName.find("chan<") == 0 && tName.back() == '>') {
+                ensureLibInit();
+                ChanImpl::init(ctx, gv, ctx.builder.getInt64(0));
+            } else if (tName.rfind("buffer<", 0) == 0 && tName.back() == '>') {
+                if (!decl->initialValue) {
+                    ensureLibInit();
+                    BufferImpl::alloc(ctx, gv, ctx.builder.getInt32(4096));
+                }
+            }
+
+            // If there is an initializer, emit it in the lib-init function.
+            if (decl->initialValue) {
+                ensureLibInit();
+                IRValue* initVal = visitExpression(decl->initialValue.get());
+                if (initVal)
+                    ctx.ir_gen->createStore(initVal, sym.ir_alloca_inst);
+            }
+        }
+
+        // Pass 2: visit everything else (functions, classes, non-decl stmts).
+        for (const auto& d : prog->declarations) {
+            if (dynamic_cast<DeclStmt*>(d.get())) continue; // already handled
+            if (dynamic_cast<Stmt*>(d.get())) {
+                // Non-decl statement (set, call, etc.) — needs an insert point.
+                ensureLibInit();
+            }
+            visitTopLevel(d.get());
+        }
+
+        // Terminate the library init function.
+        {
+            auto* curBB = static_cast<llvm::BasicBlock*>(
+                ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
+            if (curBB && !curBB->getTerminator())
+                ctx.builder.CreateRetVoid();
+            ctx.libInitFuncName = initName;
+        }
+    } else {
+        // Create __aiml_init function to hold top-level statements
+        IRType* voidTy = ctx.ir_gen->resolveType("void");
+        std::vector<IRType*> noArgs;
+        IRValue* initFunc = ctx.ir_gen->createFunction("__aiml_init", voidTy, noArgs);
+
+        // Create entry block for __aiml_init
+        llvm::Function* llvmInitFunc = static_cast<llvm::Function*>(ctx.ir_gen->unwrap(initFunc));
+        llvm::BasicBlock* initEntryBB = llvm::BasicBlock::Create(ctx.context, "entry", llvmInitFunc);
+        ctx.ir_gen->setInsertPoint(ctx.ir_gen->wrapBlock(initEntryBB));
+
+        // Call all imported lib init functions BEFORE user top-level code.
+        for (const auto& libInitName : ctx.libInitFuncNames) {
+            auto* vd = llvm::Type::getVoidTy(ctx.context);
+            auto* ft = llvm::FunctionType::get(vd, false);
+            llvm::FunctionCallee fc = ctx.module.getOrInsertFunction(libInitName, ft);
+            ctx.builder.CreateCall(fc);
+        }
+
+        for (const auto& decl : prog->declarations) {
+            visitTopLevel(decl.get());
+        }
+
+        // Finish __aiml_init
+        IRBlock* currentBlock = ctx.ir_gen->getInsertBlock();
+        if (!static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(currentBlock))->getTerminator()) {
+            ctx.ir_gen->createRet(nullptr);
+        }
+
+        // Emit hot-reload support tables (after all functions and types are registered)
+        emitFptable(ctx);
+        emitSchemaRegistry(ctx);
+    }
 }
 void Compiler::registerTypes(Program* prog) {
     if (!prog) return;
@@ -162,7 +283,16 @@ static std::vector<AimlTypeNode> serBuildSubtree(
     if (typeName.size()>5 && typeName.substr(0,5)=="list<") {
         std::string inner = typeName.substr(5, typeName.size()-6);
         llvm::Type* iT = ctx.getLLVMType(inner);
-        int32_t esz = iT ? (int32_t)dl.getTypeAllocSize(iT) : 4;
+        int32_t esz;
+        if (iT) {
+            esz = (int32_t)dl.getTypeAllocSize(iT);
+        } else if (inner.size()>5 && inner.substr(0,5)=="list<") {
+            esz = 16;  // sizeof(SerList) = {i32 size, i32 cap, void* data}
+        } else if (inner.size()>7 && inner.substr(0,7)=="buffer<") {
+            esz = 24;  // sizeof(SerBuffer) = {i64 size, i64 cap, void* data}
+        } else {
+            esz = 4;
+        }
         res.push_back({AIML_TD_LIST, 1, 0, offset, esz, 0});
         for (auto& n : serBuildSubtree(inner, 0, ctx, dl)) res.push_back(snShift(n, 1));
         return res;
@@ -423,25 +553,45 @@ void Compiler::registerTypeDecl(Node* node) {
 
         std::vector<llvm::Type*> fieldTypes;
         int index = 0;
-        
+
+        // Inherited parent model fields first
+        if (!mod->parentName.empty()) {
+            std::string parentQual = ctx.qualify(mod->parentName);
+            if (ctx.classes.count(parentQual)) {
+                const auto& parentInfo = ctx.classes[parentQual];
+                std::vector<std::pair<std::string, CompilerContext::StructMember>> pFields;
+                for (auto& [n, m] : parentInfo.members) pFields.push_back({n, m});
+                std::sort(pFields.begin(), pFields.end(),
+                          [](auto& a, auto& b){ return a.second.index < b.second.index; });
+                for (auto& [n, m] : pFields) {
+                    fieldTypes.push_back(m.type);
+                    CompilerContext::StructMember member = m;
+                    member.index = index++;
+                    classInfo.members[n] = member;
+                }
+            } else {
+                LOG_ERROR("Unknown parent model '" + mod->parentName + "' in model '" + modelName + "'");
+            }
+        }
+
         for (const auto& astMember : mod->fields) {
             std::string fieldName = astMember.name;
             std::string typeName = astMember.type;
-            
+
             llvm::Type* fieldType = ctx.getLLVMType(typeName);
             if (!fieldType) {
                  LOG_ERROR("Unknown type '" + typeName + "' for field '" + fieldName + "' in model '" + modelName + "'");
-                 continue; 
+                 continue;
             }
 
             fieldTypes.push_back(fieldType);
-            
+
             CompilerContext::StructMember member;
             member.index = index++;
             member.type = fieldType;
             member.typeName = typeName;
             member.access = AccessLevel::Public; // Models are DTOs
-            
+
             classInfo.members[fieldName] = member;
         }
 
@@ -499,6 +649,28 @@ void Compiler::registerTypeDecl(Node* node) {
         std::string ifaceName = ctx.qualify(iface->name);
         ctx.interfaceSources[ifaceName] = YAML::Dump(iface->sourceNode);
         LOG_DEBUG("AST Registered Interface: " + ifaceName);
+    } else if (auto func = dynamic_cast<FunctionDecl*>(node)) {
+        // Forward-declare function signature so forward references resolve.
+        std::string mangledName = ctx.qualify(func->name);
+        if (ctx.module.getFunction(mangledName)) return; // already declared
+
+        auto* i8p = llvm::PointerType::get(ctx.context, 0);
+        std::vector<llvm::Type*> paramTys;
+        for (const auto& arg : func->args) {
+            IRType* irt = ctx.ir_gen->resolveType(arg.second);
+            llvm::Type* t = irt ? static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(irt)) : i8p;
+            paramTys.push_back(t ? t : i8p);
+        }
+        llvm::Type* retTy = nullptr;
+        if (func->returnType.empty() || func->returnType == "void")
+            retTy = llvm::Type::getVoidTy(ctx.context);
+        else {
+            IRType* irt = ctx.ir_gen->resolveType(func->returnType);
+            retTy = irt ? static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(irt)) : i8p;
+        }
+        llvm::FunctionType* ft = llvm::FunctionType::get(retTy, paramTys, false);
+        llvm::Function::Create(ft, llvm::Function::ExternalLinkage, mangledName, ctx.module);
+        LOG_DEBUG("registerTypeDecl: forward-declared " + mangledName);
     }
 }
 void Compiler::visitExternBlock(ExternBlock* ext) {
@@ -561,19 +733,23 @@ void Compiler::visitTopLevel(Node* node) {
         // BUT: if a newer version is declared (higher `version:` value), update
         // sourceYaml + version in the symbol table so sys.bundle picks up the
         // new YAML for hot-reload bundles at runtime.
+        // NOTE: If the function was only header-only registered (forward-decl,
+        // no body), we still need to compile it.  Check func->empty() on the
+        // LLVM function to distinguish.
         std::string mangledName = func->name;
         if (ctx.functions.find(mangledName) != ctx.functions.end()) {
             auto& fi = ctx.functions[mangledName];
             if (func->version > fi.version) {
                 fi.version    = func->version;
                 fi.sourceYaml = YAML::Dump(func->sourceNode);
-                // Propagate to unqualified name too (may be same key)
                 if (ctx.functions.count(func->name))
                     ctx.functions[func->name] = fi;
                 LOG_INFO("visitTopLevel: updated sourceYaml for " + mangledName +
                          " to v" + std::to_string(func->version));
             }
-            return;
+            // Skip only if function already has a body (not just forward-declared).
+            if (fi.func && !fi.func->empty())
+                return;
         }
         visitFunction(func);
     } else if (auto stmt = dynamic_cast<Stmt*>(node)) {
@@ -595,7 +771,7 @@ void Compiler::visitTopLevel(Node* node) {
             std::string oldName = method->name;
             method->name = cls->name + "_" + method->name;
             auto it = method->args.insert(method->args.begin(), {"this", "ref<" + cls->name + ">"});
-            
+
             std::string oldClassName = ctx.currentClassName;
             ctx.currentClassName = cls->name;
             
@@ -606,6 +782,43 @@ void Compiler::visitTopLevel(Node* node) {
             method->args.erase(it);
             method->name = oldName;
         }
+    } else if (auto prefab = dynamic_cast<PrefabDecl*>(node)) {
+        // Emit a call to aiml_prefab_register() that runs at top-level (program init)
+        auto* vd  = ctx.builder.getVoidTy();
+        auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        auto* f32 = ctx.builder.getFloatTy();
+        auto* i32 = ctx.builder.getInt32Ty();
+
+        // Serialize children to JSON string
+        std::string childrenJson = "[";
+        for (size_t i = 0; i < prefab->children.size(); i++) {
+            auto& c = prefab->children[i];
+            if (i > 0) childrenJson += ",";
+            childrenJson += "{\"name\":\"" + c.name + "\","
+                "\"type\":\"" + c.type + "\","
+                "\"x\":" + std::to_string(c.x) + ","
+                "\"y\":" + std::to_string(c.y) + ","
+                "\"width\":" + std::to_string(c.width) + ","
+                "\"height\":" + std::to_string(c.height) + ","
+                "\"font_size\":" + std::to_string(c.font_size) + ","
+                "\"color\":" + std::to_string(c.color) + ","
+                "\"texture\":\"" + c.texture + "\","
+                "\"anchor\":\"" + c.anchor + "\"}";
+        }
+        childrenJson += "]";
+
+        llvm::Value* nameStr = ctx.builder.CreateGlobalStringPtr(prefab->name, "prefab_name");
+        llvm::Value* texStr  = ctx.builder.CreateGlobalStringPtr(prefab->texture, "prefab_tex");
+        llvm::Value* childStr = ctx.builder.CreateGlobalStringPtr(childrenJson, "prefab_children");
+        llvm::Value* w = llvm::ConstantFP::get(f32, prefab->width);
+        llvm::Value* h = llvm::ConstantFP::get(f32, prefab->height);
+        llvm::Value* drag = ctx.builder.getInt32(prefab->draggable ? 1 : 0);
+
+        ctx.builder.CreateCall(
+            ctx.getFunction("aiml_prefab_register", vd, {i8p, f32, f32, i8p, i32, i8p}),
+            {nameStr, w, h, texStr, drag, childStr});
+
+        LOG_INFO("visitTopLevel: emitted prefab register for '" + prefab->name + "'");
     }
 }
 void Compiler::visitFunction(FunctionDecl* func) {
@@ -627,10 +840,18 @@ void Compiler::visitFunction(FunctionDecl* func) {
     if (!func->returnType.empty()) retTy = ctx.ir_gen->resolveType(func->returnType);
     if (!retTy) retTy = ctx.ir_gen->resolveType("void");
     
-    IRValue* funcVal = ctx.ir_gen->createFunction(mangledName, retTy, argTypes);
-    
-    // Set Personality Function for exception handling
-    if (ctx.ir_gen->getPersonalityFunction()) {
+    // Reuse forward-declared function if it exists (from registerTypeDecl), else create new
+    IRValue* funcVal = nullptr;
+    llvm::Function* existingFunc = ctx.module.getFunction(mangledName);
+    if (existingFunc && existingFunc->empty()) {
+        // Forward declaration exists — reuse it
+        funcVal = ctx.ir_gen->wrap(static_cast<llvm::Value*>(existingFunc));
+    } else {
+        funcVal = ctx.ir_gen->createFunction(mangledName, retTy, argTypes);
+    }
+
+    // Set Personality Function for exception handling — only on definitions, not declarations
+    if (!ctx.headerOnlyMode && ctx.ir_gen->getPersonalityFunction()) {
         ctx.ir_gen->setPersonalityFunction(funcVal, ctx.ir_gen->getPersonalityFunction());
     }
 
@@ -663,25 +884,23 @@ void Compiler::visitFunction(FunctionDecl* func) {
         return; 
     }
 
-    // Create Entry Block
-    IRBlock* entryBB = ctx.ir_gen->createBasicBlock("entry");
-    
-    // In LLVM, BasicBlock::Create without a parent doesn't attach. 
-    // Wait, createBasicBlock attaches to GetInsertBlock()->getParent().
-    // We need a way to insert into the NEW function.
-    // Let's add appendBasicBlock to IRGenerator or just use unwrap for now.
+    // Create Entry Block directly attached to the function (no dependency on current insert point)
     llvm::Function* llvmFunc = funcInfo.func;
-    llvm::BasicBlock* llvmEntryBB = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(entryBB));
-    // If it was already attached to old parent, we must move it or create it cleanly.
-    // Let's create it directly via LLVM for the transition phase to ensure it attaches to funcVal.
-    llvmEntryBB = llvm::BasicBlock::Create(ctx.context, "entry", llvmFunc);
+    llvm::BasicBlock* llvmEntryBB = llvm::BasicBlock::Create(ctx.context, "entry", llvmFunc);
     
-    // Save previous block and set to new entry
+    // Save previous block and symbol table, set to new entry
     IRBlock* oldBlock = ctx.ir_gen->getInsertBlock();
+    auto savedSymbols = ctx.symbol_table;
     ctx.ir_gen->setInsertPoint(ctx.ir_gen->wrapBlock(llvmEntryBB));
 
-    // Setup Arguments in Symbol Table
+    // Setup Arguments in Symbol Table — reject shadowing of module-level vars
+    bool shadowError = false;
     for (size_t i = 0; i < argNames.size(); ++i) {
+        if (ctx.symbol_table.count(argNames[i])) {
+            LOG_ERROR("Variable shadowing is not allowed: function argument '" + argNames[i]
+                      + "' in '" + func->name + "' shadows an existing variable");
+            shadowError = true;
+        }
         IRValue* argAlloca = ctx.ir_gen->createAlloca(argTypes[i], argNames[i]);
         IRValue* argVal = ctx.ir_gen->getFunctionArg(funcVal, i);
         ctx.ir_gen->createStore(argVal, argAlloca);
@@ -692,6 +911,11 @@ void Compiler::visitFunction(FunctionDecl* func) {
         sym.ir_element_type = argTypes[i];
         sym.typeName = func->args[i].second;
         ctx.symbol_table[argNames[i]] = sym;
+    }
+    if (shadowError) {
+        ctx.symbol_table = savedSymbols;
+        ctx.ir_gen->setInsertPoint(oldBlock);
+        return;
     }
 
     // Compile Body (track referenced user types for sys.bundle)
@@ -718,7 +942,8 @@ void Compiler::visitFunction(FunctionDecl* func) {
         }
     }
 
-    // Restore insertion point
+    // Restore insertion point and symbol table (function-local vars don't leak)
+    ctx.symbol_table = savedSymbols;
     ctx.ir_gen->setInsertPoint(oldBlock);
 }
 Symbol* Compiler::resolveVariable(const std::string& name) {
@@ -796,6 +1021,68 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
     else if (ctx.classes.count(className)) classInfo = &ctx.classes[className];
     
     if (classInfo) {
+        // Handle chained property access: "field.rest" or "field-idx"
+        {
+            size_t dotP  = propName.find('.');
+            size_t dashP = propName.find('-');
+            if (dotP != std::string::npos || dashP != std::string::npos) {
+                bool dashFirst = (dashP != std::string::npos) &&
+                                 (dotP == std::string::npos || dashP < dotP);
+                size_t sepP       = dashFirst ? dashP : dotP;
+                std::string fieldName = propName.substr(0, sepP);
+                std::string rest      = propName.substr(sepP + 1);
+
+                if (classInfo->members.count(fieldName)) {
+                    auto& member = classInfo->members[fieldName];
+                    IRType* structTy = ctx.ir_gen->wrapType(classInfo->type);
+                    IRValue* structPtr = baseAlloca;
+                    if (baseElemTy->isPointer())
+                        structPtr = ctx.ir_gen->createLoad(baseElemTy, baseAlloca, "chain_base");
+                    IRValue* fieldGep   = ctx.ir_gen->createStructGEP(structTy, structPtr, member.index, "chain_gep");
+                    IRType*  fieldElemTy = ctx.ir_gen->wrapType(member.type);
+
+                    if (dashFirst) {
+                        // List index: field-idx
+                        if (member.typeName.rfind("list<", 0) != 0 || member.typeName.back() != '>') {
+                            LOG_ERROR("Dash-index on non-list field: " + fieldName + " (type: " + member.typeName + ")");
+                            return nullptr;
+                        }
+                        std::string elemName = member.typeName.substr(5, member.typeName.length() - 6);
+                        llvm::Type* elemType = ctx.getLLVMType(elemName);
+                        llvm::Value* listAllocaVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldGep));
+
+                        llvm::Value* idxVal = nullptr;
+                        try {
+                            idxVal = ctx.builder.getInt32(std::stoi(rest));
+                        } catch (...) {
+                            Symbol* idxSym = resolveVariable(rest);
+                            if (idxSym) {
+                                IRValue* idxA  = idxSym->ir_alloca_inst ? idxSym->ir_alloca_inst : ctx.ir_gen->wrap(idxSym->alloca_inst);
+                                IRType*  idxET = idxSym->ir_element_type ? idxSym->ir_element_type : ctx.ir_gen->wrapType(idxSym->element_type);
+                                idxVal = ctx.builder.CreateLoad(
+                                    static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(idxET)),
+                                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(idxA)));
+                                if (idxVal->getType()->isIntegerTy(64))
+                                    idxVal = ctx.builder.CreateTrunc(idxVal, ctx.builder.getInt32Ty());
+                            } else {
+                                LOG_ERROR("Invalid list index: " + rest);
+                                return ctx.ir_gen->getInt32(0);
+                            }
+                        }
+                        llvm::Value* elemPtr = ListImpl::getElementPtr(ctx, listAllocaVal, idxVal, elemType);
+                        return ctx.ir_gen->wrap(ctx.builder.CreateLoad(elemType, elemPtr, "chain_elem"));
+                    } else {
+                        // Dot chain: field.rest — recurse
+                        Symbol tmpSym;
+                        tmpSym.typeName         = member.typeName;
+                        tmpSym.ir_alloca_inst   = fieldGep;
+                        tmpSym.ir_element_type  = fieldElemTy;
+                        return resolveProperty(&tmpSym, rest);
+                    }
+                }
+            }
+        }
+
         if (classInfo->members.count(propName)) {
             auto& member = classInfo->members[propName];
             IRType* structTy = ctx.ir_gen->wrapType(classInfo->type);

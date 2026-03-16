@@ -38,6 +38,12 @@ void aiml_ui_begin(void* win);
 /* Compute layout, run hit-tests, flush geometry to OpenGL. */
 void aiml_ui_end  (void);
 
+/* ── Scroll ───────────────────────────────────────────────────────────────── */
+
+/* Set scroll axes for the NEXT begin_cell call.
+ * axis = "x", "y", or "xy" — enables scrollbar(s) on that cell. */
+void aiml_ui_set_scroll(const char* axis);
+
 /* ── Grid ─────────────────────────────────────────────────────────────────── */
 
 /* cols_buf / rows_buf = AimlGLRawBuf* pointing at buffer<f32> data.
@@ -74,6 +80,8 @@ int32_t aiml_ui_checkbox    (const char* id, int32_t value, void* preset);
 int32_t aiml_ui_toggle      (const char* id, int32_t value, void* preset);
 /* Returns selected option index. */
 int32_t aiml_ui_radio       (const char* id, int32_t option, int32_t current, void* preset);
+/* Dropdown / spinbox — opts_list = pointer to list<string> struct {i32 size, i32 cap, char** data}. */
+int32_t aiml_ui_spinbox     (const char* id, void* opts_list, int32_t current, void* preset);
 
 /* ── Value widgets ────────────────────────────────────────────────────────── */
 
@@ -98,6 +106,18 @@ void aiml_ui_rect_rounded        (int32_t color, float radius, void* preset);
 void aiml_ui_separator           (void);
 /* Vertical empty space in logical pixels. */
 void aiml_ui_spacer              (float size);
+
+/* ── Notebook / Tab widget ────────────────────────────────────────────────── */
+
+/* begin_notebook renders a tab bar (from previous frame's tabs) with a built-in
+ * "−" remove button, and returns the active tab index (0-based). */
+int32_t aiml_ui_begin_notebook         (const char* id);
+/* Register a tab in the current notebook.  Returns 1 if this tab is active. */
+int32_t aiml_ui_notebook_tab           (const char* label);
+/* End the notebook. */
+void    aiml_ui_end_notebook           (void);
+/* Returns 1 if the "−" button in the tab bar was clicked this frame. */
+int32_t aiml_ui_notebook_remove_clicked(const char* id);
 
 /* ── Intra-cell layout ────────────────────────────────────────────────────── */
 

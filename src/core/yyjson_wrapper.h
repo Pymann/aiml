@@ -39,6 +39,12 @@ void   aiml_jw_arr_end  (void* w);
 void   aiml_jw_obj_begin(void* w, const char* key);
 void   aiml_jw_obj_end  (void* w);
 
+// Anonymous nested containers within arrays (no key)
+void   aiml_jw_arr_obj_begin(void* w);  // open object in array
+void   aiml_jw_arr_obj_end  (void* w);  // close object in array
+void   aiml_jw_arr_arr_begin(void* w);  // open sub-array in array
+void   aiml_jw_arr_arr_end  (void* w);  // close sub-array in array
+
 // Map entries within an open object — key-value pairs, each key is a string
 // (open with obj_begin / close with obj_end)
 void   aiml_jw_map_i32  (void* w, const char* key, int32_t  val);
@@ -82,6 +88,7 @@ float    aiml_jr_arr_f32 (void* r, const char* key, int idx);
 double   aiml_jr_arr_f64 (void* r, const char* key, int idx);
 int      aiml_jr_arr_bool(void* r, const char* key, int idx);
 char*    aiml_jr_arr_str (void* r, const char* key, int idx);  // heap copy
+void*    aiml_jr_arr_sub (void* r, const char* key, int idx);  // sub-reader for obj/arr element
 
 // Maps (string keys, homogeneous values)
 int      aiml_jr_map_count  (void* r, const char* key);
@@ -92,6 +99,17 @@ float    aiml_jr_map_val_f32(void* r, const char* key, int idx);
 double   aiml_jr_map_val_f64(void* r, const char* key, int idx);
 int      aiml_jr_map_val_bool(void* r, const char* key, int idx);
 char*    aiml_jr_map_val_str(void* r, const char* key, int idx);  // heap copy
+
+// Value-level array access (keyless) — for readers obtained via arr_sub
+// where r->val IS the array/object itself
+int      aiml_jr_val_len     (void* r);                   // array length of r->val
+int32_t  aiml_jr_val_i32     (void* r, int idx);
+int64_t  aiml_jr_val_i64     (void* r, int idx);
+float    aiml_jr_val_f32     (void* r, int idx);
+double   aiml_jr_val_f64     (void* r, int idx);
+int      aiml_jr_val_bool    (void* r, int idx);
+char*    aiml_jr_val_str     (void* r, int idx);           // heap copy
+void*    aiml_jr_val_sub     (void* r, int idx);           // sub-reader for element
 
 #ifdef __cplusplus
 }

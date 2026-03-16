@@ -1,0 +1,32 @@
+# Requires: library
+# Library with top-level global declarations + functions that reference them.
+# Tests that imported files can have module-level state (decl:) without crashing.
+
+- namespace: testlib
+
+- decl: [counter, i32]
+- decl: [prefix, string, "hello"]
+
+- def:
+    name: get_counter
+    return: i32
+    body:
+      - return: counter
+
+- def:
+    name: inc_counter
+    body:
+      - set: [counter, { +: [counter, 1] }]
+
+- def:
+    name: get_greeting
+    args: [[name, string]]
+    return: string
+    body:
+      - return: "${prefix} ${name}"
+
+- def:
+    name: set_prefix
+    args: [[p, string]]
+    body:
+      - set: [prefix, p]

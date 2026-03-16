@@ -1,0 +1,71 @@
+# Regression test: DeckSet heap serialization in typed persistent Kv
+# Expected exit code: 0
+
+- model:
+    name: DeckSet
+    fields:
+      - [name, string]
+      - [mana_deck_id, string]
+      - [spell_deck_id, string]
+      - [creature_deck_id, string]
+      - [item_deck_id, string]
+      - [primordial_id, string]
+      - [created_at, i64]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [json1, string, '{"__type":"DeckSet","name":"Starter","mana_deck_id":"m1","spell_deck_id":"s1","creature_deck_id":"c1","item_deck_id":"i1","primordial_id":"p1","created_at":0}']
+      - decl: [ds1, DeckSet]
+      - set: [ds1, { call: [sys.deserialize, json1, "DeckSet"] }]
+
+      - if:
+          condition: { "==": [{ eq: [ds1.name, "Starter"] }, 0] }
+          then:
+            - print: ["FAIL ds1.name=${ds1.name}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { "==": [{ eq: [ds1.primordial_id, "p1"] }, 0] }
+          then:
+            - print: ["FAIL ds1.primordial_id=${ds1.primordial_id}"]
+            - call: [sys.exit, 1]
+
+      - decl: [kv, Kv<string:DeckSet>]
+      - set: [kv, { call: [db.open_kv, "deckset_heap_ser", {persist: true, path: "/tmp/aiml_test_deckset_heap_ser/"}] }]
+      - call: [kv.set, "ds_a", ds1]
+
+      - decl: [got1, ptr<DeckSet>]
+      - set: [got1, { call: [kv.get, "ds_a"] }]
+      - if:
+          condition: { "==": [{ eq: [got1.name, "Starter"] }, 0] }
+          then:
+            - print: ["FAIL got1.name=${got1.name}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { "==": [{ eq: [got1.item_deck_id, "i1"] }, 0] }
+          then:
+            - print: ["FAIL got1.item_deck_id=${got1.item_deck_id}"]
+            - call: [sys.exit, 1]
+
+      - decl: [json2, string, '{"__type":"DeckSet","name":"Starter B","mana_deck_id":"m2","spell_deck_id":"s2","creature_deck_id":"c2","item_deck_id":"i2","primordial_id":"p2","created_at":1}']
+      - decl: [ds2, DeckSet]
+      - set: [ds2, { call: [sys.deserialize, json2, "DeckSet"] }]
+      - call: [kv.set, "ds_a", ds2]
+
+      - decl: [got2, ptr<DeckSet>]
+      - set: [got2, { call: [kv.get, "ds_a"] }]
+      - if:
+          condition: { "==": [{ eq: [got2.name, "Starter B"] }, 0] }
+          then:
+            - print: ["FAIL got2.name=${got2.name}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { "==": [{ eq: [got2.mana_deck_id, "m2"] }, 0] }
+          then:
+            - print: ["FAIL got2.mana_deck_id=${got2.mana_deck_id}"]
+            - call: [sys.exit, 1]
+
+      - call: [db.checkpoint]
+      - print: ["DeckSet heap serialization PASS"]
+      - return: 0
