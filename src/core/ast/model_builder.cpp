@@ -27,6 +27,7 @@ bool ModelBuilder::OnScalar(const std::string& value, const std::string& tag) {
     }
     
     if (currentKey == "name") modelNode->name = value;
+    else if (currentKey == "inherits") modelNode->parentName = value;
     else if (currentKey == "version") {
         if (!value.empty()) {
             try { modelNode->version = std::stoull(value); } catch (...) {}

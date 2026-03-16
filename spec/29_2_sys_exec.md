@@ -329,11 +329,16 @@ Bereits im Haupt-Modul kompilierte Funktionen sind über `getFunctionAddress(nam
 direkt aufrufbar — kein erneutes Kompilieren nötig. Das ist der typische Fall,
 wenn ein Bundle derselben Datei ausgeführt wird.
 
-### AOT-Modus (`aiml file.aiml` → Binary)
+### AOT-Modus (`exodus build` → Binary)
 
-Das AIML-Programm wird zu nativem Maschinencode kompiliert und als Binary
-gelinkt. Es gibt weder eine `jitRun()`-Phase noch eine `ExecutionEngine` zur
-Laufzeit. `aiml_set_active_context` wird nie aufgerufen:
+Das AIML-Programm wird über das exodus Build-System zu nativem Maschinencode
+kompiliert: `aiml source.aiml -o source.o` erzeugt Object-Files, exodus linkt
+sie mit `libaiml.so` und allen Libraries aus `exodus.json`.
+**Standalone `aiml file.aiml` (ohne `-r` oder `-o`) erzeugt lediglich LLVM IR
+(`.ll`) — kein Binary.** AOT-Binaries erfordern `exodus build`.
+
+Zur Laufzeit gibt es weder eine `jitRun()`-Phase noch eine `ExecutionEngine`.
+`aiml_set_active_context` wird nie aufgerufen:
 
 ```
 g_active_context = nullptr

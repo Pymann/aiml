@@ -1,5 +1,9 @@
 # Concurrency: Parallel Execution
 
+> **Thread-Safety der Runtime-Primitives:** Welche Namespaces implizit thread-safe
+> sind und welche Handles der AIML-Autor selbst absichern muss, ist in
+> **Kapitel 47 (Thread-Safety-Modell)** definiert.
+
 ```yaml
 # AIML v1 uses Native OS Threads (1:1 mapping to pthreads/Windows Threads).
 # They are heavyweight (stack per thread) but offer true parallelism on multi-core CPUs.

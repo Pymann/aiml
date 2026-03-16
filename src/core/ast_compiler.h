@@ -12,14 +12,12 @@ public:
     
     void compile(Program* prog);
     void registerTypes(Program* prog);
+    void registerTypeDecl(Node* node);
     void visitFunction(FunctionDecl* func);
-    
+    void visitTopLevel(Node* node);
+
 private:
     CompilerContext& ctx;
-    
-    // Visit methods
-    void registerTypeDecl(Node* node);
-    void visitTopLevel(Node* node);
     void visitExternBlock(ExternBlock* ext);
     
     void visitStatement(Stmt* stmt);

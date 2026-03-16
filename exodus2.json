@@ -1,5 +1,6 @@
 {
-    "name": "aiml",
+    "$schema": "exodus.project.config-1.0",
+    "name": "libaiml",
     "version": "0.1.0",
     "license": [],
     "dependencies": [],

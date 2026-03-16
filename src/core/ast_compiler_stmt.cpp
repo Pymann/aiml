@@ -25,7 +25,14 @@ void Compiler::visitStatement(Stmt* stmt) {
 void Compiler::visitDeclStmt(DeclStmt* decl) {
     IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
     if (!ty) return;
-    
+
+    // Reject shadowing: decl must not shadow an existing symbol
+    if (ctx.symbol_table.count(decl->varName)) {
+        LOG_ERROR("Variable shadowing is not allowed: '" + decl->varName
+                  + "' is already declared in an outer scope");
+        return;
+    }
+
     IRValue* alloca = ctx.ir_gen->createAlloca(ty, decl->varName);
     
     // Zero-initialize the allocated memory
@@ -358,29 +365,33 @@ void Compiler::visitExprStmt(ExprStmt* exprStmt) {
 void Compiler::visitRetStmt(RetStmt* retStmt) {
     llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
     llvm::Type* retTy = currentFunc->getReturnType();
-    
+
+    // Void function: always emit ret void, evaluate expression only for side effects
+    if (retTy->isVoidTy()) {
+        if (retStmt->value) visitExpression(retStmt->value.get());
+        ctx.ir_gen->createRet(nullptr);
+        return;
+    }
+
     if (retStmt->value) {
         IRValue* val = visitExpression(retStmt->value.get());
         if (val) {
             ctx.ir_gen->createRet(val);
         } else {
              LOG_ERROR("Failed to evaluate return expression");
-             if (!retTy->isVoidTy()) ctx.ir_gen->createRet(ctx.ir_gen->wrap(llvm::Constant::getNullValue(retTy)));
-             else ctx.ir_gen->createRet(nullptr);
+             ctx.ir_gen->createRet(ctx.ir_gen->wrap(llvm::Constant::getNullValue(retTy)));
         }
     } else {
-        if (!retTy->isVoidTy()) {
-             LOG_ERROR("Empty return statement in non-void function!");
-             ctx.ir_gen->createRet(ctx.ir_gen->wrap(llvm::Constant::getNullValue(retTy)));
-        } else {
-             ctx.ir_gen->createRet(nullptr);
-        }
+        LOG_ERROR("Empty return statement in non-void function!");
+        ctx.ir_gen->createRet(ctx.ir_gen->wrap(llvm::Constant::getNullValue(retTy)));
     }
 }
 void Compiler::visitBlockStmt(BlockStmt* block) {
+    auto savedSymbols = ctx.symbol_table;
     for (const auto& stmt : block->statements) {
         visitStatement(stmt.get());
     }
+    ctx.symbol_table = savedSymbols;
 }
 void Compiler::visitIfStmt(IfStmt* ifStmt) {
     if (!ifStmt->condition) return;
@@ -411,15 +422,19 @@ void Compiler::visitIfStmt(IfStmt* ifStmt) {
     if (ifStmt->thenBranch) {
         visitBlockStmt(ifStmt->thenBranch.get());
     }
-    ctx.ir_gen->createBr(mergeBB);
-    
+    {
+        auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
+        if (!bb->getTerminator()) ctx.ir_gen->createBr(mergeBB);
+    }
+
     // ELSE branch
     if (ifStmt->elseBranch) {
         ctx.ir_gen->setInsertPoint(elseBB);
         visitBlockStmt(ifStmt->elseBranch.get());
-        ctx.ir_gen->createBr(mergeBB);
+        auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
+        if (!bb->getTerminator()) ctx.ir_gen->createBr(mergeBB);
     }
-    
+
     // MERGE block
     ctx.ir_gen->setInsertPoint(mergeBB);
 }
@@ -450,7 +465,10 @@ void Compiler::visitWhileStmt(WhileStmt* whileStmt) {
     if (whileStmt->body) {
         visitBlockStmt(whileStmt->body.get());
     }
-    ctx.ir_gen->createBr(loopBB);
+    {
+        auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
+        if (!bb->getTerminator()) ctx.ir_gen->createBr(loopBB);
+    }
     
     // End Block
     ctx.ir_gen->setInsertPoint(endBB);

@@ -159,6 +159,23 @@ void aiml_jw_obj_end(void* wv) {
     jw_pop(w);
 }
 
+// Anonymous nested containers within arrays (no key)
+void aiml_jw_arr_obj_begin(void* wv) {
+    auto* w = (aiml_jw_t*)wv;
+    yyjson_mut_val* obj = yyjson_mut_obj(w->doc);
+    jw_arr_append(w, obj);
+    jw_push(w, obj);
+}
+void aiml_jw_arr_obj_end(void* wv) { jw_pop((aiml_jw_t*)wv); }
+
+void aiml_jw_arr_arr_begin(void* wv) {
+    auto* w = (aiml_jw_t*)wv;
+    yyjson_mut_val* arr = yyjson_mut_arr(w->doc);
+    jw_arr_append(w, arr);
+    jw_push(w, arr);
+}
+void aiml_jw_arr_arr_end(void* wv) { jw_pop((aiml_jw_t*)wv); }
+
 // Map entries (same as object entries — convenience aliases)
 void aiml_jw_map_i32 (void* wv, const char* key, int32_t val) { aiml_jw_set_i32(wv, key, val); }
 void aiml_jw_map_i64 (void* wv, const char* key, int64_t val) { aiml_jw_set_i64(wv, key, val); }
@@ -301,6 +318,17 @@ char* aiml_jr_arr_str(void* rv, const char* key, int idx) {
     return s ? strdup(s) : strdup("");
 }
 
+void* aiml_jr_arr_sub(void* rv, const char* key, int idx) {
+    auto* r = (aiml_jr_t*)rv;
+    yyjson_val* v = yyjson_arr_get(jr_arr(r, key), (size_t)idx);
+    if (!v) return nullptr;
+    auto* s = (aiml_jr_t*)malloc(sizeof(aiml_jr_t));
+    s->owns_doc = false;
+    s->doc = nullptr;
+    s->val = v;
+    return s;
+}
+
 // ── Map reads ─────────────────────────────────────────────────────────────────
 // Maps are stored as JSON objects under a key.
 // We iterate by index using yyjson_obj_iter.
@@ -376,6 +404,70 @@ char* aiml_jr_map_val_str(void* rv, const char* key, int idx) {
     yyjson_val* v = jr_map_nth_val(jr_map_obj(r, key), idx);
     const char* s = v ? yyjson_get_str(v) : nullptr;
     return s ? strdup(s) : strdup("");
+}
+
+// ── Value-level (keyless) array access ────────────────────────────────────────
+// For sub-readers obtained via arr_sub / val_sub where r->val IS the array.
+
+int aiml_jr_val_len(void* rv) {
+    auto* r = (aiml_jr_t*)rv;
+    if (!r || !r->val || !yyjson_is_arr(r->val)) return 0;
+    return (int)yyjson_arr_size(r->val);
+}
+
+int32_t aiml_jr_val_i32(void* rv, int idx) {
+    auto* r = (aiml_jr_t*)rv;
+    if (!r || !r->val) return 0;
+    yyjson_val* v = yyjson_arr_get(r->val, (size_t)idx);
+    return v ? (int32_t)yyjson_get_int(v) : 0;
+}
+
+int64_t aiml_jr_val_i64(void* rv, int idx) {
+    auto* r = (aiml_jr_t*)rv;
+    if (!r || !r->val) return 0;
+    yyjson_val* v = yyjson_arr_get(r->val, (size_t)idx);
+    return v ? (int64_t)yyjson_get_int(v) : 0;
+}
+
+float aiml_jr_val_f32(void* rv, int idx) {
+    auto* r = (aiml_jr_t*)rv;
+    if (!r || !r->val) return 0.0f;
+    yyjson_val* v = yyjson_arr_get(r->val, (size_t)idx);
+    return v ? (float)yyjson_get_real(v) : 0.0f;
+}
+
+double aiml_jr_val_f64(void* rv, int idx) {
+    auto* r = (aiml_jr_t*)rv;
+    if (!r || !r->val) return 0.0;
+    yyjson_val* v = yyjson_arr_get(r->val, (size_t)idx);
+    return v ? yyjson_get_real(v) : 0.0;
+}
+
+int aiml_jr_val_bool(void* rv, int idx) {
+    auto* r = (aiml_jr_t*)rv;
+    if (!r || !r->val) return 0;
+    yyjson_val* v = yyjson_arr_get(r->val, (size_t)idx);
+    return (v && yyjson_get_bool(v)) ? 1 : 0;
+}
+
+char* aiml_jr_val_str(void* rv, int idx) {
+    auto* r = (aiml_jr_t*)rv;
+    if (!r || !r->val) return strdup("");
+    yyjson_val* v = yyjson_arr_get(r->val, (size_t)idx);
+    const char* s = v ? yyjson_get_str(v) : nullptr;
+    return s ? strdup(s) : strdup("");
+}
+
+void* aiml_jr_val_sub(void* rv, int idx) {
+    auto* r = (aiml_jr_t*)rv;
+    if (!r || !r->val) return nullptr;
+    yyjson_val* v = yyjson_arr_get(r->val, (size_t)idx);
+    if (!v) return nullptr;
+    auto* s = (aiml_jr_t*)malloc(sizeof(aiml_jr_t));
+    s->owns_doc = false;
+    s->doc = nullptr;
+    s->val = v;
+    return s;
 }
 
 } // extern "C"

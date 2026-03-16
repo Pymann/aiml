@@ -33,9 +33,20 @@ public:
         errorCount_ = 0;
     }
 
+    int errorCount() const { return errorCount_; }
+    void setErrorCount(int n) { errorCount_ = n; }
+
+    // Suppress all output (errors still counted but not printed)
+    void setSuppressed(bool s) { suppressed_ = s; }
+    bool isSuppressed() const { return suppressed_; }
+
     template<typename T>
     void log(LogLevel level, const T& msg, const char* file = nullptr, int line = 0) {
         if (level < level_) return;
+        if (suppressed_) {
+            if (level == LogLevel::ERROR) errorCount_++;
+            return;
+        }
 
         std::lock_guard<std::mutex> lock(mutex_);
         
@@ -74,9 +85,10 @@ public:
     }
 
 private:
-    Logger() : level_(LogLevel::INFO), errorCount_(0) {} // Default level
+    Logger() : level_(LogLevel::INFO), errorCount_(0), suppressed_(false) {}
     LogLevel level_;
     int errorCount_;
+    bool suppressed_;
     std::mutex mutex_;
 };
 

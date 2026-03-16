@@ -1,0 +1,98 @@
+# Expected exit code: 0
+
+- def:
+    name: handle_user
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - decl: [p, map<string:string>]
+      - set: [p, req.params]
+      - decl: [uid, string]
+      - set: [uid, { call: [p.get, "id"] }]
+      - set: [resp.status, 200]
+      - set: [resp.body, "user:${uid}"]
+      - call: [resp.send]
+
+- def:
+    name: handle_echo
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - decl: [body, string]
+      - set: [body, req.body]
+      - set: [resp.status, 201]
+      - set: [resp.body, "echo:${body}"]
+      - call: [resp.send]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pass, i32, 0]
+      - decl: [fail, i32, 0]
+
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server, "127.0.0.1", 23181] }]
+      - call: [srv.route, "GET", "/users/:id", handle_user]
+      - call: [srv.route, "POST", "/echo", handle_echo]
+
+      - decl: [srv_thread, thread_handle]
+      - set: [srv_thread, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 200]
+
+      - decl: [get_url, url]
+      - set: [get_url, { call: [http.parse_url, "http://127.0.0.1:23181/users/42"] }]
+      - decl: [get_resp, http_response_handle]
+      - set: [get_resp, { call: [http.get, get_url] }]
+      - decl: [get_status, i32]
+      - set: [get_status, { call: [get_resp.status] }]
+      - decl: [get_body, string]
+      - set: [get_body, { call: [get_resp.body] }]
+      - call: [get_resp.free]
+
+      - if:
+          condition: { "==": [get_status, 200] }
+          then:
+            - set: [pass, { +: [pass, 1] }]
+          else:
+            - print: ["[FAIL] GET /users/:id status expected 200 got ${get_status}"]
+            - set: [fail, { +: [fail, 1] }]
+
+      - if:
+          condition: { "==": [get_body, "user:42"] }
+          then:
+            - set: [pass, { +: [pass, 1] }]
+          else:
+            - print: ["[FAIL] GET /users/:id body expected user:42 got ${get_body}"]
+            - set: [fail, { +: [fail, 1] }]
+
+      - decl: [post_url, url]
+      - set: [post_url, { call: [http.parse_url, "http://127.0.0.1:23181/echo"] }]
+      - decl: [post_resp, http_response_handle]
+      - set: [post_resp, { call: [http.post, post_url, "deck-body"] }]
+      - decl: [post_status, i32]
+      - set: [post_status, { call: [post_resp.status] }]
+      - decl: [post_body, string]
+      - set: [post_body, { call: [post_resp.body] }]
+      - call: [post_resp.free]
+
+      - if:
+          condition: { "==": [post_status, 201] }
+          then:
+            - set: [pass, { +: [pass, 1] }]
+          else:
+            - print: ["[FAIL] POST /echo status expected 201 got ${post_status}"]
+            - set: [fail, { +: [fail, 1] }]
+
+      - if:
+          condition: { "==": [post_body, "echo:deck-body"] }
+          then:
+            - set: [pass, { +: [pass, 1] }]
+          else:
+            - print: ["[FAIL] POST /echo body expected echo:deck-body got ${post_body}"]
+            - set: [fail, { +: [fail, 1] }]
+
+      - call: [srv.stop]
+      - call: [srv_thread.join]
+
+      - print: "Passed: ${pass} / ${ { +: [pass, fail] } }"
+      - print: "Failed: ${fail}"
+      - return: fail

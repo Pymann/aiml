@@ -145,6 +145,12 @@ struct UiGridState {
     float gap_h, gap_v;
 };
 
+struct ScrollState {
+    float offset_x  = 0, offset_y  = 0;   /* current scroll position (pixels) */
+    float content_w = 0, content_h = 0;   /* measured content size from previous frame */
+    bool  axis_x    = false, axis_y = false;
+};
+
 struct UiCellState {
     float x, y, w, h;
     float cursor_y;
@@ -152,6 +158,14 @@ struct UiCellState {
     bool  same_line;
     char  align_h[16];
     char  align_v[16];
+    /* Scroll support */
+    uint32_t scroll_id   = 0;    /* non-zero if scrollable */
+    bool     scroll_x    = false;
+    bool     scroll_y    = false;
+    float    orig_y      = 0;    /* unscrolled cell y (for scissor rect) */
+    float    orig_x      = 0;
+    float    orig_w      = 0;    /* unscrolled cell w (before scrollbar) */
+    float    orig_h      = 0;
 };
 
 struct WidgetState {
@@ -204,10 +218,40 @@ struct AimlUIState {
     /* Text input buffers */
     std::unordered_map<uint32_t, std::string> text_bufs;
 
+    /* Scroll state — persistent across frames, keyed by cell hash */
+    std::unordered_map<uint32_t, ScrollState> scroll_states;
+    /* Pending scroll axis for next begin_cell ("", "x", "y", "xy") */
+    char pending_scroll[4] = {0};
+
+    /* Deferred spinbox popup — drawn last in ui_end() so it overlays all widgets */
+    struct PendingPopup {
+        bool   active  = false;
+        float  bx, by, bw, row_h;
+        int    n_opts, current;
+        std::vector<std::string> opts;
+        AimlUIStyle style;
+        AimlUIFont* font;
+        float  scroll_offset = 0;   /* popup scroll offset (pixels) */
+        int    max_visible   = 12;  /* max visible rows before scrolling */
+    } pending_popup;
+
     bool initialized;
+
+    /* Notebook / tab widget state — persistent across frames */
+    struct NotebookState {
+        int                      active_tab = 0;
+        int                      tab_count  = 0;   /* tabs registered THIS frame */
+        std::vector<std::string> labels;            /* labels from PREVIOUS frame */
+        std::vector<std::string> cur_labels;        /* labels being collected this frame */
+        bool                     remove_clicked = false; /* "−" button clicked this frame */
+    };
+    std::unordered_map<uint32_t, NotebookState> notebook_states;
+    uint32_t cur_notebook_id = 0;  /* ID of currently open notebook (0 = none) */
 };
 
 static AimlUIState* g_ui = nullptr;
+
+static constexpr float SCROLLBAR_W = 10.0f;  /* scrollbar width in logical px */
 
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
 
@@ -668,6 +712,14 @@ void aiml_ui_init(void) {
     g_ui->initialized  = true;
 }
 
+/* Forward declarations needed by aiml_ui_end overlay rendering */
+static void draw_filled_rect(float x, float y, float w, float h, int32_t color);
+static void draw_widget_rect(float x, float y, float w, float h,
+                              int32_t fill, int32_t border_col,
+                              float border_w, float radius);
+static void draw_label_in_rect(const char* text, float x, float y, float w, float h,
+                                int32_t color);
+
 void aiml_ui_begin(void* win) {
     if (!g_ui) aiml_ui_init();
 
@@ -689,8 +741,10 @@ void aiml_ui_begin(void* win) {
     g_ui->grid_stack.clear();
     g_ui->cell_stack.clear();
 
-    /* Reset hot (re-evaluated each frame) */
+    /* Reset hot and deferred popup */
     g_ui->hot = 0;
+    g_ui->pending_popup.active = false;
+    g_ui->pending_popup.opts.clear();
 
     /* Consume text events for focused widget */
     if (g_ui->focused != 0) {
@@ -715,6 +769,82 @@ void aiml_ui_begin(void* win) {
 
 void aiml_ui_end(void) {
     if (!g_ui || !g_ui->initialized) return;
+
+    /* Draw deferred spinbox popup overlay — appended last so it renders on top */
+    if (g_ui->pending_popup.active) {
+        auto& pp = g_ui->pending_popup;
+        g_ui->style_stack.push_back(pp.style);
+        int   vis_count = (pp.n_opts > pp.max_visible) ? pp.max_visible : pp.n_opts;
+        float popup_h   = pp.row_h * vis_count;
+        /* Flip upward if popup would exceed window bottom */
+        float popup_y   = pp.by + pp.row_h;
+        if (popup_y + popup_h > (float)g_ui->win_h) {
+            popup_y = pp.by - popup_h;
+            if (popup_y < 0) popup_y = 0;
+        }
+        bool  needs_sb  = (pp.n_opts > pp.max_visible);
+        float sb_w      = needs_sb ? lp(SCROLLBAR_W) : 0.0f;
+        float content_w = pp.bw - sb_w;
+
+        /* Background — no corner radius so all rows sit on the bg */
+        draw_widget_rect(pp.bx, popup_y, pp.bw, popup_h,
+                         pp.style.bg_color, pp.style.border_color,
+                         lp(pp.style.border_width), 0.0f);
+
+        /* Enable scissor to clip rows */
+        int win_h = g_ui->win_h;
+        int sc[4];
+        sc[0] = (int)(pp.bx);
+        sc[1] = win_h - (int)(popup_y + popup_h);
+        sc[2] = (int)(content_w + 0.5f);
+        sc[3] = (int)(popup_h + 0.5f);
+        push_scissor_cmd(sc);
+
+        /* Draw exactly vis_count rows, offset by scroll */
+        int first_vis = (int)(pp.scroll_offset / pp.row_h);
+        float row_offset = pp.scroll_offset - first_vis * pp.row_h;
+        for (int vi = 0; vi < vis_count; vi++) {
+            int i = first_vis + vi;
+            if (i >= pp.n_opts) break;
+            float ry = popup_y + vi * pp.row_h - row_offset;
+            bool  row_hot = point_in_rect(g_ui->mouse_x, g_ui->mouse_y,
+                                          pp.bx, ry, content_w, pp.row_h);
+            int32_t row_bg = (i == pp.current && !row_hot) ? pp.style.active_color
+                           : row_hot                       ? pp.style.hover_color
+                                                           : (int32_t)0x00000000;
+            if (row_bg) draw_filled_rect(pp.bx, ry, content_w, pp.row_h, row_bg);
+            draw_label_in_rect(pp.opts[i].c_str(),
+                               pp.bx + lp(4.0f), ry, content_w - lp(8.0f), pp.row_h,
+                               pp.style.color);
+        }
+
+        /* Disable scissor */
+        int no_sc[4] = {0, 0, 0, 0};
+        push_scissor_cmd(no_sc);
+
+        /* Draw scrollbar for popup */
+        if (needs_sb) {
+            float total_content_h = pp.row_h * pp.n_opts;
+            float max_scroll = fmaxf(0.0f, total_content_h - popup_h);
+            float sb_x = pp.bx + pp.bw - sb_w;
+
+            draw_filled_rect(sb_x, popup_y, sb_w, popup_h, (int32_t)0x1A1A2EFF);
+
+            float visible_frac = fminf(1.0f, popup_h / total_content_h);
+            float thumb_h = fmaxf(lp(20.0f), popup_h * visible_frac);
+            float scroll_frac = (max_scroll > 0.0f) ? pp.scroll_offset / max_scroll : 0.0f;
+            float thumb_y = popup_y + scroll_frac * (popup_h - thumb_h);
+
+            bool sb_hot = point_in_rect(g_ui->mouse_x, g_ui->mouse_y,
+                                        sb_x, popup_y, sb_w, popup_h);
+            int32_t thumb_color = sb_hot ? (int32_t)0x5555AAFF : (int32_t)0x444488FF;
+            draw_widget_rect(sb_x + lp(2.0f), thumb_y, sb_w - lp(4.0f), thumb_h,
+                             thumb_color, 0, 0.0f, lp(4.0f));
+        }
+
+        g_ui->style_stack.pop_back();
+    }
+
     if (g_ui->verts.empty()) return;
 
     /* Upload vertices */
@@ -780,6 +910,18 @@ static void draw_widget_rect(float x, float y, float w, float h,
                               int32_t fill, int32_t border_col,
                               float border_w, float radius);
 
+/* ── Scroll ───────────────────────────────────────────────────────────────── */
+
+void aiml_ui_set_scroll(const char* axis) {
+    if (!g_ui) aiml_ui_init();
+    if (axis) {
+        strncpy(g_ui->pending_scroll, axis, 3);
+        g_ui->pending_scroll[3] = '\0';
+    } else {
+        g_ui->pending_scroll[0] = '\0';
+    }
+}
+
 /* ── Grid ─────────────────────────────────────────────────────────────────── */
 
 void aiml_ui_begin_grid(void* cols_buf, void* rows_buf) {
@@ -842,20 +984,171 @@ void aiml_ui_begin_cell(int32_t col, int32_t row, int32_t colspan, int32_t rowsp
     strncpy(cs.align_h, g_ui->next_align_h, 15);
     strncpy(cs.align_v, g_ui->next_align_v, 15);
 
+    /* Scroll setup — consume pending_scroll */
+    cs.scroll_id = 0;
+    cs.scroll_x = cs.scroll_y = false;
+    cs.orig_x = x; cs.orig_y = y;
+    cs.orig_w = w; cs.orig_h = h;
+
+    if (g_ui->pending_scroll[0] != '\0') {
+        /* Generate a stable ID from grid depth + col/row */
+        uint32_t sid = (uint32_t)(g_ui->grid_stack.size() * 1000 + row * 64 + col);
+        sid = sid * 2654435761u;  /* Knuth multiplicative hash */
+        cs.scroll_id = sid;
+        cs.scroll_x = (strchr(g_ui->pending_scroll, 'x') != nullptr);
+        cs.scroll_y = (strchr(g_ui->pending_scroll, 'y') != nullptr);
+        g_ui->pending_scroll[0] = '\0';
+
+        /* Lookup or create scroll state */
+        ScrollState& ss = g_ui->scroll_states[sid];
+        ss.axis_x = cs.scroll_x;
+        ss.axis_y = cs.scroll_y;
+
+        /* Reserve space for scrollbar */
+        if (cs.scroll_y) cs.w -= lp(SCROLLBAR_W);
+        if (cs.scroll_x) cs.h -= lp(SCROLLBAR_W);
+
+        /* Apply scroll offset — shift content */
+        cs.y -= ss.offset_y;
+        cs.x -= ss.offset_x;
+    }
+
     /* Reset alignment for next cell */
     strcpy(g_ui->next_align_h, "left");
     strcpy(g_ui->next_align_v, "top");
 
     g_ui->cell_stack.push_back(cs);
 
-    /* Cell background + border as SDF rounded rect */
-    draw_widget_rect(cs.x, cs.y, cs.w, cs.h,
+    /* Cell background + border (drawn at original position, not scrolled) */
+    draw_widget_rect(cs.orig_x, cs.orig_y, cs.orig_w, cs.orig_h,
                      (int32_t)0x12121EFF, (int32_t)0x33334AFF, lp(1.0f), 0.0f);
+
+    /* If scrollable, enable scissor to clip content to cell bounds */
+    if (cs.scroll_id != 0) {
+        int win_h = g_ui->win_h;
+        float sx = cs.orig_x;
+        float sy = cs.orig_y;
+        float sw = cs.scroll_y ? cs.w : cs.orig_w;   /* exclude scrollbar track area */
+        float sh = cs.scroll_x ? cs.h : cs.orig_h;
+        int sc[4];
+        sc[0] = (int)(sx);
+        sc[1] = win_h - (int)(sy + sh);   /* flip Y for GL */
+        sc[2] = (int)(sw + 0.5f);
+        sc[3] = (int)(sh + 0.5f);
+        push_scissor_cmd(sc);
+    }
 }
 
 void aiml_ui_end_cell(void) {
-    if (g_ui && !g_ui->cell_stack.empty())
-        g_ui->cell_stack.pop_back();
+    if (!g_ui || g_ui->cell_stack.empty()) return;
+    UiCellState& cs = g_ui->cell_stack.back();
+
+    if (cs.scroll_id != 0) {
+        ScrollState& ss = g_ui->scroll_states[cs.scroll_id];
+
+        /* Measure content size from this frame */
+        /* cursor_y is relative to cs.y (which is scrolled), so actual content height = cursor_y */
+        float content_h = cs.cursor_y;
+        float viewport_h = cs.orig_h - (cs.scroll_x ? lp(SCROLLBAR_W) : 0.0f);
+        float content_w = cs.w;  /* TODO: track max x for horizontal scroll */
+        float viewport_w = cs.orig_w - (cs.scroll_y ? lp(SCROLLBAR_W) : 0.0f);
+
+        ss.content_h = content_h;
+        ss.content_w = content_w;
+
+        /* Clamp scroll offset */
+        float max_scroll_y = fmaxf(0.0f, content_h - viewport_h);
+        float max_scroll_x = fmaxf(0.0f, content_w - viewport_w);
+        if (ss.offset_y > max_scroll_y) ss.offset_y = max_scroll_y;
+        if (ss.offset_y < 0) ss.offset_y = 0;
+        if (ss.offset_x > max_scroll_x) ss.offset_x = max_scroll_x;
+        if (ss.offset_x < 0) ss.offset_x = 0;
+
+        /* Mouse wheel — if cursor inside original cell bounds */
+        bool mouse_in = point_in_rect(g_ui->mouse_x, g_ui->mouse_y,
+                                       cs.orig_x, cs.orig_y, cs.orig_w, cs.orig_h);
+        if (mouse_in) {
+            float scroll_delta_y = aiml_input_mouse_scroll_y();
+            if (scroll_delta_y != 0.0f && cs.scroll_y) {
+                ss.offset_y -= scroll_delta_y * lp(40.0f);   /* 40 logical px per tick */
+                ss.offset_y = fmaxf(0.0f, fminf(ss.offset_y, max_scroll_y));
+            }
+            float scroll_delta_x = aiml_input_mouse_scroll_x();
+            if (scroll_delta_x != 0.0f && cs.scroll_x) {
+                ss.offset_x -= scroll_delta_x * lp(40.0f);
+                ss.offset_x = fmaxf(0.0f, fminf(ss.offset_x, max_scroll_x));
+            }
+        }
+
+        /* Disable scissor before drawing scrollbar */
+        int no_scissor[4] = {0, 0, 0, 0};
+        push_scissor_cmd(no_scissor);
+
+        /* Draw vertical scrollbar */
+        if (cs.scroll_y && max_scroll_y > 0.0f) {
+            float sb_w = lp(SCROLLBAR_W);
+            float sb_x = cs.orig_x + cs.orig_w - sb_w;
+            float sb_y = cs.orig_y;
+            float sb_h = viewport_h;
+
+            /* Track */
+            draw_filled_rect(sb_x, sb_y, sb_w, sb_h, (int32_t)0x1A1A2EFF);
+
+            /* Thumb */
+            float visible_frac = fminf(1.0f, viewport_h / content_h);
+            float thumb_h = fmaxf(lp(20.0f), sb_h * visible_frac);
+            float scroll_frac = (max_scroll_y > 0.0f) ? ss.offset_y / max_scroll_y : 0.0f;
+            float thumb_y = sb_y + scroll_frac * (sb_h - thumb_h);
+
+            /* Scrollbar drag */
+            uint32_t sb_id = cs.scroll_id + 1;
+            bool sb_hot = point_in_rect(g_ui->mouse_x, g_ui->mouse_y, sb_x, sb_y, sb_w, sb_h);
+            if (sb_hot && g_ui->mouse_pressed) g_ui->active_w = sb_id;
+            if (g_ui->active_w == sb_id && g_ui->mouse_down) {
+                float rel = (g_ui->mouse_y - sb_y - thumb_h * 0.5f) / (sb_h - thumb_h);
+                rel = fmaxf(0.0f, fminf(1.0f, rel));
+                ss.offset_y = rel * max_scroll_y;
+            }
+
+            int32_t thumb_color = (g_ui->active_w == sb_id) ? (int32_t)0x7777CCFF
+                                : sb_hot                     ? (int32_t)0x5555AAFF
+                                                              : (int32_t)0x444488FF;
+            draw_widget_rect(sb_x + lp(2.0f), thumb_y, sb_w - lp(4.0f), thumb_h,
+                             thumb_color, 0, 0.0f, lp(4.0f));
+        }
+
+        /* Draw horizontal scrollbar */
+        if (cs.scroll_x && max_scroll_x > 0.0f) {
+            float sb_h = lp(SCROLLBAR_W);
+            float sb_x = cs.orig_x;
+            float sb_y = cs.orig_y + cs.orig_h - sb_h;
+            float sb_w = viewport_w;
+
+            draw_filled_rect(sb_x, sb_y, sb_w, sb_h, (int32_t)0x1A1A2EFF);
+
+            float visible_frac = fminf(1.0f, viewport_w / content_w);
+            float thumb_w = fmaxf(lp(20.0f), sb_w * visible_frac);
+            float scroll_frac = (max_scroll_x > 0.0f) ? ss.offset_x / max_scroll_x : 0.0f;
+            float thumb_x = sb_x + scroll_frac * (sb_w - thumb_w);
+
+            uint32_t sb_id_h = cs.scroll_id + 2;
+            bool sb_hot = point_in_rect(g_ui->mouse_x, g_ui->mouse_y, sb_x, sb_y, sb_w, sb_h);
+            if (sb_hot && g_ui->mouse_pressed) g_ui->active_w = sb_id_h;
+            if (g_ui->active_w == sb_id_h && g_ui->mouse_down) {
+                float rel = (g_ui->mouse_x - sb_x - thumb_w * 0.5f) / (sb_w - thumb_w);
+                rel = fmaxf(0.0f, fminf(1.0f, rel));
+                ss.offset_x = rel * max_scroll_x;
+            }
+
+            int32_t thumb_color = (g_ui->active_w == sb_id_h) ? (int32_t)0x7777CCFF
+                                : sb_hot                       ? (int32_t)0x5555AAFF
+                                                                : (int32_t)0x444488FF;
+            draw_widget_rect(thumb_x, sb_y + lp(2.0f), thumb_w, sb_h - lp(4.0f),
+                             thumb_color, 0, 0.0f, lp(4.0f));
+        }
+    }
+
+    g_ui->cell_stack.pop_back();
 }
 
 void aiml_ui_set_align(const char* h, const char* v) {
@@ -1004,18 +1297,26 @@ const char* aiml_ui_text_input(const char* id, const char* buf, void* preset) {
         it = g_ui->text_bufs.find(wid);
     }
     UiCellState& cell = cur_cell();
-    float h = lp(cur_style().font_size + cur_style().padding_v * 2);
-    float x = cell.x, y = cell.y + cell.cursor_y, w = cell.w;
-    cell_advance(w, h, nullptr, nullptr);
+    float auto_h = lp(cur_style().font_size + cur_style().padding_v * 2);
+
+    int scissor[4];
+    WidgetRect wr = apply_widget_layout(cell.x, cell.y + cell.cursor_y,
+                                         cell.w, 0, auto_h, scissor);
+    float x = wr.x, y = wr.y, w = wr.w, h = wr.h;
+    cell_advance(cell.w, h, nullptr, nullptr);
 
     bool hot = widget_hot(wid, x, y, w, h);
     if (hot) g_ui->hot = wid;
     if (hot && g_ui->mouse_pressed) g_ui->focused = wid;
 
+    if (scissor[2] > 0) push_scissor_cmd(scissor);
+
     int32_t bg = (g_ui->focused == wid) ? cur_style().active_color : cur_style().bg_color;
     draw_filled_rect(x, y, w, h, bg);
     draw_border(x, y, w, h, cur_style().border_color, lp(cur_style().border_width));
     draw_label_in_rect(it->second.c_str(), x, y, w, h, cur_style().color);
+
+    if (scissor[2] > 0) { int clear[4]={0,0,0,0}; push_scissor_cmd(clear); }
 
     if (st) g_ui->style_stack.pop_back();
     return it->second.c_str();
@@ -1028,11 +1329,25 @@ const char* aiml_ui_text_area(const char* id, const char* buf, void* preset) {
 
 /* ── Interactive widgets ──────────────────────────────────────────────────── */
 
+/* Strip "##id_suffix" from label for display (like Dear ImGui convention).
+ * Returns pointer into a static buffer — valid until next call. */
+static const char* display_label(const char* label) {
+    static char buf[256];
+    const char* sep = strstr(label, "##");
+    if (!sep) return label;
+    int n = (int)(sep - label);
+    if (n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
+    memcpy(buf, label, n);
+    buf[n] = '\0';
+    return buf;
+}
+
 int32_t aiml_ui_button(const char* label, void* preset) {
     if (!label || g_ui->cell_stack.empty()) return 0;
     AimlUIButtonStyle* st = (AimlUIButtonStyle*)preset;
     if (st) g_ui->style_stack.push_back(st->base);
-    uint32_t wid = fnv1a(label);
+    uint32_t wid = fnv1a(label);       /* hash uses FULL label (with ##id) */
+    const char* disp = display_label(label); /* display strips ##id */
     AimlUIFont* f = active_font();
     float fh = f ? f->line_height : lp(cur_style().font_size);
     float ph = lp(cur_style().padding_v);
@@ -1081,7 +1396,7 @@ int32_t aiml_ui_button(const char* label, void* preset) {
         draw_widget_rect(ix, iy, bw, bh, bg, cur_style().border_color,
                          lp(cur_style().border_width), lp(cur_style().corner_radius));
     }
-    draw_label_in_rect(label, ix, iy, bw, bh, cur_style().color);
+    draw_label_in_rect(disp, ix, iy, bw, bh, cur_style().color);
 
     if (scissor[2] > 0) {
         int clear[4] = {0,0,0,0};
@@ -1170,6 +1485,152 @@ int32_t aiml_ui_radio(const char* id, int32_t option, int32_t current, void* pre
     AimlUIFont* f = active_font();
     uint32_t rgba = style_rgba(cur_style().color, cur_style().opacity);
     push_text(f, id, ix + sz + lp(4.0f), iy, cur_cell().w, rgba);
+    if (st) g_ui->style_stack.pop_back();
+    return current;
+}
+
+int32_t aiml_ui_spinbox(const char* id, void* opts_list, int32_t current, void* preset) {
+    if (!id || g_ui->cell_stack.empty()) return current;
+    AimlUIButtonStyle* st = (AimlUIButtonStyle*)preset;
+    if (st) g_ui->style_stack.push_back(st->base);
+
+    uint32_t wid = fnv1a(id);
+
+    /* Read from list<string> — layout: {i32 size, i32 capacity, char** data} */
+    struct StrListRaw { int32_t size; int32_t capacity; char** data; };
+    StrListRaw* sl = (StrListRaw*)opts_list;
+    std::vector<std::string> opts;
+    if (sl && sl->data) {
+        for (int i = 0; i < sl->size; i++)
+            opts.emplace_back(sl->data[i] ? sl->data[i] : "");
+    }
+    int n_opts = (int)opts.size();
+    if (current < 0) current = 0;
+    if (n_opts > 0 && current >= n_opts) current = n_opts - 1;
+    const char* cur_label = n_opts > 0 ? opts[current].c_str() : "";
+
+    /* Layout — same height as button */
+    UiCellState& cell = cur_cell();
+    AimlUIFont* f  = active_font();
+    float fh  = f ? f->line_height : lp(cur_style().font_size);
+    float ph  = lp(cur_style().padding_v);
+    float auto_h = fh + ph * 2;
+    int scissor[4];
+    WidgetRect wr = apply_widget_layout(cell.x, cell.y + cell.cursor_y,
+                                         cell.w, 0, auto_h, scissor);
+    float bx = wr.x, by = wr.y, bw = wr.w, bh = wr.h;
+    cell_advance(cell.w, bh, nullptr, nullptr);
+
+    bool open = (g_ui->focused == wid);
+    bool hot  = widget_hot(wid, bx, by, bw, bh);
+    if (hot) g_ui->hot = wid;
+
+    /* Toggle open/closed on header click */
+    if (hot && g_ui->mouse_released) {
+        g_ui->focused = open ? 0 : wid;
+        open = !open;
+    }
+
+    /* Draw header */
+    if (scissor[2] > 0) push_scissor_cmd(scissor);
+    int32_t bg = hot ? cur_style().hover_color
+                     : (open ? cur_style().active_color : cur_style().bg_color);
+    draw_widget_rect(bx, by, bw, bh, bg, cur_style().border_color,
+                     lp(cur_style().border_width), lp(cur_style().corner_radius));
+    draw_label_in_rect(cur_label, bx + lp(4.0f), by, bw - lp(24.0f), bh, cur_style().color);
+    /* Arrow "v" at right edge */
+    uint32_t fg_rgba = style_rgba(cur_style().color, cur_style().opacity);
+    if (f) push_text(f, "v", bx + bw - lp(16.0f),
+                     by + (bh - f->line_height) * 0.5f, lp(20.0f), fg_rgba);
+    if (scissor[2] > 0) { int cl[4]={0,0,0,0}; push_scissor_cmd(cl); }
+
+    /* Handle popup hit-testing + defer drawing to ui_end() (renders on top of all widgets) */
+    if (open && n_opts > 0) {
+        float row_h     = bh;
+        /* Limit visible rows so popup fits in window */
+        int   max_vis   = 12;
+        int   win_rows  = (int)((float)g_ui->win_h / row_h) - 1;
+        if (win_rows < 3) win_rows = 3;
+        if (max_vis > win_rows) max_vis = win_rows;
+        int   vis_count = (n_opts > max_vis) ? max_vis : n_opts;
+        float popup_h   = row_h * vis_count;
+        /* Flip upward if popup would exceed window bottom */
+        float popup_y   = by + bh;
+        if (popup_y + popup_h > (float)g_ui->win_h) {
+            popup_y = by - popup_h;
+            if (popup_y < 0) popup_y = 0;
+        }
+        bool  needs_sb  = (n_opts > max_vis);
+        float sb_w      = needs_sb ? lp(SCROLLBAR_W) : 0.0f;
+
+        /* Get or init scroll offset for this popup */
+        float& pp_scroll = g_ui->scroll_states[wid + 0x80000000u].offset_y;
+
+        /* Clamp scroll */
+        float max_scroll = fmaxf(0.0f, row_h * n_opts - popup_h);
+        if (pp_scroll > max_scroll) pp_scroll = max_scroll;
+        if (pp_scroll < 0) pp_scroll = 0;
+
+        /* Mouse wheel on popup */
+        bool over_popup = point_in_rect(g_ui->mouse_x, g_ui->mouse_y, bx, popup_y, bw, popup_h);
+        if (over_popup) {
+            float sd = aiml_input_mouse_scroll_y();
+            if (sd != 0.0f) {
+                pp_scroll -= sd * row_h;
+                pp_scroll = fmaxf(0.0f, fminf(pp_scroll, max_scroll));
+            }
+        }
+
+        /* Hit-testing: only against visible rows */
+        bool over_hdr = point_in_rect(g_ui->mouse_x, g_ui->mouse_y, bx, by, bw, bh);
+        if (g_ui->mouse_pressed && !over_hdr && !over_popup) {
+            g_ui->focused = 0;
+            open = false;
+        }
+        /* Determine which rows are visible */
+        int first_vis = (int)(pp_scroll / row_h);
+        float row_offset = pp_scroll - first_vis * row_h;
+        for (int vi = 0; vi < vis_count && open; vi++) {
+            int i = first_vis + vi;
+            if (i >= n_opts) break;
+            float ry = popup_y + vi * row_h - row_offset;
+            bool row_hot = point_in_rect(g_ui->mouse_x, g_ui->mouse_y, bx, ry, bw - sb_w, row_h);
+            if (row_hot && g_ui->mouse_released) {
+                current = i;
+                g_ui->focused = 0;
+                open = false;
+            }
+        }
+
+        /* Scrollbar drag on popup */
+        if (needs_sb && open) {
+            uint32_t sb_id = wid + 0x80000001u;
+            float sb_x = bx + bw - sb_w;
+            bool sb_hot = point_in_rect(g_ui->mouse_x, g_ui->mouse_y, sb_x, popup_y, sb_w, popup_h);
+            if (sb_hot && g_ui->mouse_pressed) g_ui->active_w = sb_id;
+            if (g_ui->active_w == sb_id && g_ui->mouse_down) {
+                float visible_frac = fminf(1.0f, (float)vis_count / n_opts);
+                float thumb_h = fmaxf(lp(20.0f), popup_h * visible_frac);
+                float rel = (g_ui->mouse_y - popup_y - thumb_h * 0.5f) / (popup_h - thumb_h);
+                rel = fmaxf(0.0f, fminf(1.0f, rel));
+                pp_scroll = rel * max_scroll;
+            }
+        }
+
+        /* Store for deferred rendering in ui_end() */
+        if (open) {
+            auto& pp    = g_ui->pending_popup;
+            pp.active   = true;
+            pp.bx       = bx; pp.by = by; pp.bw = bw; pp.row_h = row_h;
+            pp.n_opts   = n_opts; pp.current = current;
+            pp.opts     = opts;
+            pp.style    = cur_style();
+            pp.font     = active_font();
+            pp.scroll_offset = pp_scroll;
+            pp.max_visible   = max_vis;
+        }
+    }
+
     if (st) g_ui->style_stack.pop_back();
     return current;
 }
@@ -1599,6 +2060,109 @@ void aiml_ui_set_default_font(void* font) {
     g_ui->default_font = (AimlUIFont*)font;
     /* Also update style stack default */
     if (!g_ui->style_stack.empty()) g_ui->style_stack[0].font = font;
+}
+
+/* ── Notebook / Tab widget ────────────────────────────────────────────────── */
+
+int32_t aiml_ui_begin_notebook(const char* id) {
+    if (!id || !g_ui || g_ui->cell_stack.empty()) return 0;
+
+    uint32_t nid = fnv1a(id);
+    auto& nb = g_ui->notebook_states[nid];
+    g_ui->cur_notebook_id = nid;
+    nb.tab_count  = 0;
+    nb.cur_labels.clear();
+    nb.remove_clicked = false;
+
+    /* Render tab bar from PREVIOUS frame's labels */
+    if (!nb.labels.empty()) {
+        AimlUIFont* f = active_font();
+        float fh = f ? f->line_height : lp(cur_style().font_size);
+        float ph = lp(cur_style().padding_v);
+        float tab_h = fh + ph * 2;
+        float px = lp(cur_style().padding_h);
+        UiCellState& cell = cur_cell();
+        float cx = cell.x;
+        float cy = cell.y + cell.cursor_y;
+
+        for (int i = 0; i < (int)nb.labels.size(); i++) {
+            float tw = f ? text_width(f, nb.labels[i].c_str()) : 60.0f;
+            float tab_w = tw + px * 2;
+            bool is_active = (i == nb.active_tab);
+            uint32_t tid = fnv1a(nb.labels[i].c_str()) ^ nid;
+            bool hot = widget_hot(tid, cx, cy, tab_w, tab_h);
+            if (hot && g_ui->mouse_released) nb.active_tab = i;
+
+            int32_t bg;
+            if (is_active)  bg = cur_style().active_color;
+            else if (hot)   bg = cur_style().hover_color;
+            else            bg = cur_style().bg_color;
+            draw_widget_rect(cx, cy, tab_w, tab_h, bg,
+                             cur_style().border_color,
+                             lp(cur_style().border_width),
+                             lp(cur_style().corner_radius));
+            draw_label_in_rect(nb.labels[i].c_str(), cx, cy, tab_w, tab_h,
+                               cur_style().color);
+            cx += tab_w + lp(2.0f);
+        }
+
+        /* "−" remove button at the end of the tab bar (same height as tabs) */
+        {
+            float minus_w = tab_h;  /* square button */
+            uint32_t rm_wid = nid ^ 0xDEAD;
+            bool rm_hot = widget_hot(rm_wid, cx, cy, minus_w, tab_h);
+            if (rm_hot) g_ui->hot = rm_wid;
+            if (rm_hot && g_ui->mouse_pressed) g_ui->active_w = rm_wid;
+            bool rm_active = (g_ui->active_w == rm_wid && rm_hot);
+            bool rm_hover  = rm_hot && !rm_active;
+            int32_t rm_bg;
+            if (rm_active)     rm_bg = (int32_t)0xCC3333FF;
+            else if (rm_hover) rm_bg = (int32_t)0x993333FF;
+            else               rm_bg = cur_style().bg_color;
+            draw_widget_rect(cx, cy, minus_w, tab_h, rm_bg,
+                             cur_style().border_color,
+                             lp(cur_style().border_width),
+                             lp(cur_style().corner_radius));
+            draw_label_in_rect("-", cx, cy, minus_w, tab_h, cur_style().color);
+            if (rm_hot && g_ui->mouse_released) nb.remove_clicked = true;
+        }
+
+        cell.cursor_y += tab_h + lp(2.0f);
+    }
+
+    /* Clamp active tab to valid range */
+    if (nb.active_tab >= (int)nb.labels.size() && !nb.labels.empty())
+        nb.active_tab = (int)nb.labels.size() - 1;
+    if (nb.active_tab < 0) nb.active_tab = 0;
+
+    return nb.active_tab;
+}
+
+int32_t aiml_ui_notebook_tab(const char* label) {
+    if (!label || !g_ui || g_ui->cur_notebook_id == 0) return 0;
+    auto it = g_ui->notebook_states.find(g_ui->cur_notebook_id);
+    if (it == g_ui->notebook_states.end()) return 0;
+    auto& nb = it->second;
+    int idx = nb.tab_count++;
+    nb.cur_labels.push_back(label);
+    return (idx == nb.active_tab) ? 1 : 0;
+}
+
+void aiml_ui_end_notebook(void) {
+    if (!g_ui || g_ui->cur_notebook_id == 0) return;
+    auto it = g_ui->notebook_states.find(g_ui->cur_notebook_id);
+    if (it != g_ui->notebook_states.end()) {
+        it->second.labels = std::move(it->second.cur_labels);
+    }
+    g_ui->cur_notebook_id = 0;
+}
+
+int32_t aiml_ui_notebook_remove_clicked(const char* id) {
+    if (!id || !g_ui) return 0;
+    uint32_t nid = fnv1a(id);
+    auto it = g_ui->notebook_states.find(nid);
+    if (it == g_ui->notebook_states.end()) return 0;
+    return it->second.remove_clicked ? 1 : 0;
 }
 
 } /* extern "C" */

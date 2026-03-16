@@ -62,6 +62,7 @@ std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node) {
                 // Should not happen as function name
             }
             auto callExpr = std::make_unique<CallExpr>(funcName);
+            callExpr->sourceNode = node; // preserve YAML Mark for source location
             for(size_t i=1; i<argsNode.size(); ++i) {
                 callExpr->args.push_back(nodeToExpr(argsNode[i]));
             }

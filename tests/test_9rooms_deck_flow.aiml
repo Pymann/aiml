@@ -1,0 +1,168 @@
+# Regression test: approximate 9rooms deck create flow
+# Expected exit code: 0
+
+- enum:
+    name: CardType
+    values:
+      - any: 0
+      - creature: 1
+      - spell: 2
+      - mana_card: 3
+      - item: 4
+      - fate: 5
+      - primordial: 6
+      - trap: 7
+
+- enum:
+    name: SpellType
+    values:
+      - sorcery: 2
+      - ceremony: 3
+      - enchantment: 4
+      - incantation: 5
+
+- enum:
+    name: ManaColor
+    values:
+      - fire: 1
+      - light: 2
+      - shadow: 3
+      - forest: 4
+      - earth: 5
+      - frost: 6
+      - air: 7
+      - stars: 8
+      - water: 9
+      - amorphous: 10
+
+- enum:
+    name: PassiveAbility
+    values:
+      - flying: 1
+      - armored: 18
+
+- model:
+    name: ActiveAbility
+    fields:
+      - [cost_text, string]
+      - [activation_cost, list<i32>]
+      - [trigger, list<list<i32>>]
+      - [effects, list<list<i32>>]
+
+- model:
+    name: BaseCard
+    fields:
+      - [name, string]
+      - [card_type, CardType]
+      - [mkp, i32]
+      - [mana_cost, map<ManaColor:i32>]
+      - [description, string]
+      - [passive_abilities, list<PassiveAbility>]
+      - [active_abilities, list<ActiveAbility>]
+
+- model:
+    name: Card
+    inherits: BaseCard
+    fields:
+      - [lp, i32]
+      - [attack, i32]
+      - [defense, i32]
+      - [initiative, i32]
+      - [moral, i32]
+      - [movement, i32]
+      - [spell_type, SpellType]
+      - [equip_cost, i32]
+      - [created_at, i64]
+
+- model:
+    name: Deck
+    fields:
+      - [name, string]
+      - [deck_type, string]
+      - [description, string]
+      - [card_ids, list<string>]
+      - [total_mkp, i32]
+      - [created_at, i64]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [cards_kv, Kv<string:Card>]
+      - set: [cards_kv, { call: [db.open_kv, "9r_cards_test", {persist: true, path: "/tmp/aiml_test_9rooms_deck_flow/"}] }]
+
+      - decl: [cjson1, string, '{"__type":"Card","name":"Spark","card_type":3,"mkp":2,"mana_cost":{},"description":"mana source","passive_abilities":[],"active_abilities":[],"lp":0,"attack":0,"defense":0,"initiative":0,"moral":0,"movement":0,"spell_type":2,"equip_cost":0,"created_at":0}']
+      - decl: [cjson2, string, '{"__type":"Card","name":"Blaze","card_type":3,"mkp":5,"mana_cost":{"1":1},"description":"bigger mana","passive_abilities":[18],"active_abilities":[],"lp":0,"attack":0,"defense":0,"initiative":0,"moral":0,"movement":0,"spell_type":2,"equip_cost":0,"created_at":0}']
+
+      - decl: [c1, Card]
+      - decl: [c2, Card]
+      - set: [c1, { call: [sys.deserialize, cjson1, "Card"] }]
+      - set: [c2, { call: [sys.deserialize, cjson2, "Card"] }]
+      - call: [cards_kv.set, "c1", c1]
+      - call: [cards_kv.set, "c2", c2]
+
+      - decl: [djson, string, '{"__type":"Deck","name":"Mana Starter","deck_type":"mana_deck","description":"starter","card_ids":["c1","c2"],"total_mkp":0,"created_at":0}']
+      - decl: [d, Deck]
+      - set: [d, { call: [sys.deserialize, djson, "Deck"] }]
+
+      - decl: [mkp_sum, i32, 0]
+      - decl: [mk_i, i32, 0]
+      - decl: [mk_n, i32, d.card_ids.len]
+      - decl: [mk_cid, string]
+      - decl: [mk_has, i32]
+      - decl: [mk_cp, ptr<Card>]
+      - while:
+          condition: { lt: [mk_i, mk_n] }
+          body:
+            - set: [mk_cid, d.card_ids-mk_i]
+            - set: [mk_has, { call: [cards_kv.has, mk_cid] }]
+            - if:
+                condition: { "==": [mk_has, 1] }
+                then:
+                  - set: [mk_cp, { call: [cards_kv.get, mk_cid] }]
+                  - set: [mkp_sum, { +: [mkp_sum, mk_cp.mkp] }]
+            - set: [mk_i, { +: [mk_i, 1] }]
+
+      - if:
+          condition: { "!=": [mkp_sum, 7] }
+          then:
+            - print: ["FAIL mkp_sum=${mkp_sum}"]
+            - call: [sys.exit, 1]
+
+      - set: [d.total_mkp, mkp_sum]
+
+      - decl: [decks_kv, Kv<string:Deck>]
+      - set: [decks_kv, { call: [db.open_kv, "9r_decks_test", {persist: true, path: "/tmp/aiml_test_9rooms_deck_flow/"}] }]
+      - call: [decks_kv.set, "deck_a", d]
+
+      - decl: [got, ptr<Deck>]
+      - set: [got, { call: [decks_kv.get, "deck_a"] }]
+      - if:
+          condition: { "==": [{ eq: [got.name, "Mana Starter"] }, 0] }
+          then:
+            - print: ["FAIL got.name=${got.name}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { "!=": [got.total_mkp, 7] }
+          then:
+            - print: ["FAIL got.total_mkp=${got.total_mkp}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { "!=": [got.card_ids.len, 2] }
+          then:
+            - print: ["FAIL got.card_ids.len=${got.card_ids.len}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { "==": [{ eq: [got.card_ids-0, "c1"] }, 0] }
+          then:
+            - print: ["FAIL got.card_ids-0=${got.card_ids-0}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { "==": [{ eq: [got.card_ids-1, "c2"] }, 0] }
+          then:
+            - print: ["FAIL got.card_ids-1=${got.card_ids-1}"]
+            - call: [sys.exit, 1]
+
+      - call: [db.checkpoint]
+      - print: ["9rooms deck flow PASS"]
+      - return: 0

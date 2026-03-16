@@ -53,26 +53,108 @@ The `import` command loads another AIML file.
     4. Imported object files are loaded into the JIT execution engine.
 - **Result**: Hybrid execution — dependencies pre-compiled, main script JIT-compiled.
 
-### 4.2 Binary Compilation (`aiml main.aiml -o output.o`)
-- **Behavior**: Separate Compilation.
+### 4.2 Object Compilation (`aiml main.aiml -o output.o`)
+- **Behavior**: Separate Compilation (used by `exodus build`).
 - **Imports**:
     1. Checks if imported file needs recompilation (missing or older `.o`).
     2. Compiles imported file to a native object file if needed.
     3. Main file compiled to `.o`.
-- **Linking**: All object files linked by the system linker (gcc/clang).
+- **Linking**: Handled by the build system (exodus). The compiler writes a `.deps` sidecar
+  file listing all transitive import object files. exodus reads this and links all objects
+  with `g++`/`clang` plus libraries from `exodus.json` (e.g. `libaiml.so`, `libssl`, etc.).
+- **Note**: Standalone `aiml file.aiml` (without `-r` or `-o`) only generates `.ll` (LLVM IR).
+  Full AOT binaries require `exodus build` with an `exodus.json` config.
 
 ## 5. Paths and Caching
 
 - **Import Paths**: Relative to the directory of the importing file.
     - `import: "src/utils/math.aiml"` → resolved from the importing file's directory.
-- **Cache Directory**: `__aiml_cache/` in the CWD (or `$AIML_CACHE` if set).
-    - Directory structure mirrored to avoid collisions.
-    - Source: `src/utils/math.aiml` → Object: `__aiml_cache/src/utils/math.o`
-- **Dependency Tracking**: Recompiles if source is newer than cached object.
+- **JIT Cache Directory** (`-r` mode only): `__aiml_cache/` in the CWD (or `$AIML_CACHE` if set).
+    - File names are sanitized (non-alphanumeric chars replaced with `_`) to avoid path issues.
+    - Source: `src/utils/math.aiml` → Object: `__aiml_cache/src_utils_math_aiml.o`
+    - SHA-512 hash-based manifest: `__aiml_cache/compilations.yaml`
+- **AOT Cache** (`-o` mode): No `__aiml_cache` used. Import objects are stored in the build
+  directory (same as the main `.o` file). The build system (exodus) handles incremental
+  compilation via file timestamps.
+- **Dependency Tracking**: JIT mode uses SHA-512 hashes; AOT mode relies on exodus timestamps.
 
-## 6. Integrity and Consistency
+## 6. Scopes and Module-Level State
+
+### 6.1 Scope Hierarchy
+
+AIML has three scope levels:
+
+| Scope | Lifetime | Visible to |
+|-------|----------|------------|
+| **Module-level** (top-level `decl:`) | Program lifetime | All functions in the same file |
+| **Function-level** (inside `def:`) | Function call | That function only |
+| **Block-level** (inside `if:/while:/for:`) | Block execution | That block only |
+
+Inner scopes can shadow outer names. Shadowed variables resume their original value after the block exits.
+
+### 6.2 Module-Level Declarations in Imported Files
+
+When a file is imported, it is compiled as a **library** (separate `.o`).
+Top-level `decl:` statements in the imported file become **module-level globals**:
+
+```yaml
+# utils/state.aiml
+- namespace: state
+
+- decl: [counter, i32]        # zero-initialized global
+
+- def:
+    name: inc
+    body:
+      - set: [counter, { +: [counter, 1] }]
+
+- def:
+    name: get
+    return: i32
+    body:
+      - return: counter
+```
+
+```yaml
+# main.aiml
+- import: "utils/state.aiml"
+
+- def:
+    name: main
+    body:
+      - call: [state.inc]
+      - call: [state.inc]
+      - print: "${ { call: [state.get] } }"   # prints 2
+```
+
+**Rules:**
+
+1. Module-level globals in libraries are **zero-initialized** at program start
+   (integers = 0, pointers/strings = null).
+2. Static initializers (`decl: [x, string, "value"]`) in imported files are
+   **not guaranteed to execute** before the importer's `main`. Use explicit
+   setter functions to configure library state.
+3. Module-level globals have **internal linkage** — they are private to their
+   compilation unit and do not collide with globals of the same name in other files.
+4. Functions within the same file can freely read and write module-level globals.
+
+### 6.3 Variable Shadowing
+
+```yaml
+- decl: [x, i32, 10]
+
+- def:
+    name: example
+    body:
+      - print: "${x}"       # 10 (module-level)
+      - decl: [x, i32, 20]
+      - print: "${x}"       # 20 (function-level shadow)
+```
+
+## 7. Integrity and Consistency
 
 - **Manifest File**: `__aiml_cache/compilations.yaml`
+
 - **Content**: Mapping of source file names to SHA512 hashes.
 - **Process**:
     1. Before compiling, SHA512 of source file is computed.

@@ -1,0 +1,179 @@
+# Tests for log namespace (Spec 46 — leveled logging)
+# Expected exit code: 0
+
+# ── Phase A: All log levels ──────────────────────────────────────────────────
+
+- call: [log.set_level, "verbose"]
+
+- call: [log.verbose,    "phase A: verbose message"]
+- call: [log.debug,      "phase A: debug message"]
+- call: [log.info,       "phase A: info message"]
+- call: [log.warn,       "phase A: warn message"]
+- call: [log.error,      "phase A: error message"]
+- call: [log.deprecated, "phase A: deprecated feature used"]
+- call: [log.system,     "phase A: system diagnostic"]
+
+- print: ["phase A done"]
+
+# ── Phase B: Level filtering ─────────────────────────────────────────────────
+
+- call: [log.set_level, "warn"]
+
+- call: [log.verbose,    "phase B: should NOT appear"]
+- call: [log.debug,      "phase B: should NOT appear"]
+- call: [log.info,       "phase B: should NOT appear"]
+- call: [log.warn,       "phase B: warn SHOULD appear"]
+- call: [log.error,      "phase B: error SHOULD appear"]
+- call: [log.deprecated, "phase B: deprecated ALWAYS appears"]
+- call: [log.system,     "phase B: system ALWAYS appears"]
+
+- print: ["phase B done"]
+
+# ── Phase C: String interpolation in log ─────────────────────────────────────
+
+- decl: [port, i32, 8080]
+- decl: [host, string, "127.0.0.1"]
+
+- call: [log.set_level, "info"]
+- call: [log.info, "server listening on ${host}:${port}"]
+
+- print: ["phase C done"]
+
+# ── Phase D: File output ─────────────────────────────────────────────────────
+
+- call: [log.set_file, "/tmp/aiml_test_log.txt"]
+- call: [log.info, "phase D: this goes to file AND stderr"]
+- call: [log.set_file, ""]
+
+- print: ["phase D done"]
+
+# ── Phase E: Reset level to default ──────────────────────────────────────────
+
+- call: [log.set_level, "info"]
+- call: [log.debug, "phase E: should NOT appear (below info)"]
+- call: [log.info,  "phase E: should appear (at info)"]
+
+# ── Phase F: log inside function body ────────────────────────────────────────
+
+- call: [log.set_level, "verbose"]
+
+- def:
+    name: fn_log_basic
+    args: [[tag, string]]
+    body:
+      - call: [log.info, "fn_log_basic: ${tag}"]
+
+- call: [fn_log_basic, "hello"]
+- print: ["phase F done"]
+
+# ── Phase G: log inside if-then (regression: was segfault) ──────────────────
+
+- def:
+    name: fn_log_if
+    args: [[x, i32]]
+    body:
+      - if:
+          condition: { "==": [x, 0] }
+          then:
+            - call: [log.debug, "x is zero"]
+          else:
+            - call: [log.debug, "x is not zero"]
+      - call: [log.info, "fn_log_if done"]
+
+- call: [fn_log_if, 0]
+- call: [fn_log_if, 1]
+- print: ["phase G done"]
+
+# ── Phase H: log inside if-then with return (regression) ────────────────────
+
+- def:
+    name: fn_log_if_ret
+    args: [[x, i32]]
+    return: string
+    body:
+      - if:
+          condition: { "==": [x, 0] }
+          then:
+            - call: [log.warn, "returning early"]
+            - return: "early"
+      - call: [log.info, "returning normal"]
+      - return: "normal"
+
+- decl: [r1, string]
+- set:  [r1, { call: [fn_log_if_ret, 0] }]
+- print: ["fn_log_if_ret(0) = ${r1}"]
+- decl: [r2, string]
+- set:  [r2, { call: [fn_log_if_ret, 1] }]
+- print: ["fn_log_if_ret(1) = ${r2}"]
+- print: ["phase H done"]
+
+# ── Phase I: log inside while loop ──────────────────────────────────────────
+
+- def:
+    name: fn_log_while
+    args: [[n, i32]]
+    body:
+      - decl: [i, i32]
+      - set:  [i, 0]
+      - while:
+          condition: { "<": [i, n] }
+          body:
+            - call: [log.debug, "loop i=${i}"]
+            - set: [i, { "+": [i, 1] }]
+      - call: [log.info, "loop finished after ${n} iterations"]
+
+- call: [fn_log_while, 3]
+- print: ["phase I done"]
+
+# ── Phase J: nested if with log ─────────────────────────────────────────────
+
+- def:
+    name: fn_nested_if_log
+    args: [[a, i32], [b, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { ">": [a, 0] }
+          then:
+            - call: [log.debug, "a > 0"]
+            - if:
+                condition: { ">": [b, 0] }
+                then:
+                  - call: [log.debug, "b > 0 too"]
+                  - return: 1
+                else:
+                  - call: [log.warn, "b <= 0"]
+                  - return: 0
+          else:
+            - call: [log.warn, "a <= 0"]
+            - return: -1
+
+- decl: [v1, i32]
+- set:  [v1, { call: [fn_nested_if_log, 1, 1] }]
+- print: ["nested(1,1) = ${v1}"]
+- decl: [v2, i32]
+- set:  [v2, { call: [fn_nested_if_log, 1, 0] }]
+- print: ["nested(1,0) = ${v2}"]
+- decl: [v3, i32]
+- set:  [v3, { call: [fn_nested_if_log, 0, 5] }]
+- print: ["nested(0,5) = ${v3}"]
+- print: ["phase J done"]
+
+# ── Phase K: all log levels inside function ─────────────────────────────────
+
+- def:
+    name: fn_all_levels
+    args: []
+    body:
+      - call: [log.verbose,    "v"]
+      - call: [log.debug,      "d"]
+      - call: [log.info,       "i"]
+      - call: [log.warn,       "w"]
+      - call: [log.error,      "e"]
+      - call: [log.deprecated, "dep"]
+      - call: [log.system,     "sys"]
+
+- call: [fn_all_levels]
+- print: ["phase K done"]
+
+- print: ["all log tests done"]

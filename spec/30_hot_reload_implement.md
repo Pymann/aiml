@@ -25,7 +25,7 @@
 | **context=false** | Shared-Context-Modus: Hot-Reload aktiv, fptable wird aktualisiert, Host-Symbole erreichbar |
 | **context=true** | Isolierter Modus: frische Engine, kein fptable-Update, vollständiges Sandboxing |
 | **JIT-Modus** | `aiml -r file.aiml` — Programm läuft in MCJIT, `g_active_ee` valide |
-| **AOT-Modus** | `aiml file.aiml` → kompiliertes Binary — kein LLVM zur Laufzeit, `g_active_ee = nullptr` |
+| **AOT-Modus** | `exodus build` → kompiliertes Binary (`aiml src.aiml -o src.o` + Linking). Standalone `aiml file.aiml` ohne Flags erzeugt nur `.ll`. Kein LLVM zur Laufzeit, `g_active_ee = nullptr` |
 | **compileYamlChunk** | Laufzeit-Funktion: kompiliert einen YAML-String zu Maschinencode und gibt die Funktionsadresse zurück |
 | **Schema-Registry** | Laufzeit-Tabelle aller Klassen/Model-Layouts (`AimlClassSchema`) — ausschließlich für `padded_size` (Allokierung via `calloc`) und Append-Only-Validierung; **keine Feld-Offset-Tabelle** (GEP-Indices sind compile-time-stabil) |
 | **Append-Only** | Constraint: neue Felder nur am Ende einer Klasse/Model — bestehende GEP-Indices bleiben unverändert, baked-in Code bleibt korrekt |
@@ -711,7 +711,7 @@ Phase 5 — Hot-Reload in exec_impl.cpp
 
 ### 11.1 Übersichtstabelle: context × Ausführungsart
 
-| | **JIT** (`aiml -r file.aiml`) | **AOT** (kompiliertes Binary) |
+| | **JIT** (`aiml -r file.aiml`) | **AOT** (`exodus build` → Binary) |
 |---|---|---|
 | `g_active_ee` | ✓ valide | ✗ `nullptr` |
 | **context=false** | Shared LLVM-Engine: `addModule` zu laufender Engine; fptable via `getGlobalValueAddress` | Kein shared LLVM-State möglich; fptable via `dlsym`; neuer Code in frischer Engine |

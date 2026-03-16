@@ -1,0 +1,17 @@
+# AOT smoke test — with import
+# Requires: library
+# (Not run in JIT test suite — used by run_aot_tests.sh)
+
+- import: "tests/lib_globals.aiml"
+
+- call: [inc_counter]
+- call: [inc_counter]
+- call: [inc_counter]
+- decl: [c, i32, { call: [get_counter] }]
+- if:
+    condition: { "==": [c, 3] }
+    then:
+      - print: ["AOT_IMPORT_PASS"]
+    else:
+      - print: ["AOT_IMPORT_FAIL got ${c}"]
+      - call: [sys.exit, 1]

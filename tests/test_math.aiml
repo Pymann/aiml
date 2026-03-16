@@ -219,8 +219,8 @@
 
 # mat4_scale
 - decl: [svec, vec3, { call: [math.vec3, 2.0, 2.0, 2.0] }]
-- decl: [s, mat4, { call: [math.mat4_scale, svec] }]
-- decl: [s00, f32, { call: [s.get, 0, 0] }]
+- decl: [s_mat, mat4, { call: [math.mat4_scale, svec] }]
+- decl: [s00, f32, { call: [s_mat.get, 0, 0] }]
 - print: ["mat4_scale m00=${s00}"]
 
 # mat4_rotate_y
@@ -229,7 +229,7 @@
 - print: ["mat4_rotate_y m00=${ry00}"]
 
 # mat4 * mat4
-- decl: [ts, mat4, { "*": [t, s] }]
+- decl: [ts, mat4, { "*": [t, s_mat] }]
 - decl: [ts00, f32, { call: [ts.get, 0, 0] }]
 - print: ["mat4*mat4 m00=${ts00}"]
 
@@ -349,8 +349,8 @@
 
 # iadd
 - decl: [sum2, ivec2, { call: [math.iadd, half, { call: [math.ivec2, 10, 10] }] }]
-- decl: [sumx, i32, sum2.x]
-- print: ["iadd x=${sumx}"]
+- decl: [sumx2, i32, sum2.x]
+- print: ["iadd x=${sumx2}"]
 
 # conversions
 - decl: [fv, vec2, { call: [math.ivec2_to_vec2, screen] }]

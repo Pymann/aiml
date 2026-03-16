@@ -61,6 +61,15 @@ public:
     std::vector<std::string> linkedObjects;
     std::string compilerPath;
     std::string entryPointName = "main";
+    // Library mode: skip __aiml_init, fptable, schema globals (for import-only objects).
+    bool libraryMode = false;
+    // When true, skip the internal import cache (build tool handles caching).
+    bool noCache = false;
+    // Output directory for import .o files (used when noCache=true).
+    std::string outputDir;
+    // Sibling import files for cross-import type resolution.
+    // Set by the parent compiler so sub-compilers can header-only parse them.
+    std::vector<std::string> siblingImports;
 
 private:
     void generateIR(const YAML::Node& node);
