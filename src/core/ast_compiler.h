@@ -52,6 +52,9 @@ private:
     Symbol* resolveVariable(const std::string& name);
     IRValue* resolveEnum(const std::string& baseName, const std::string& propName);
     IRValue* resolveProperty(Symbol* baseSym, const std::string& propName);
+    // Like resolveProperty but returns the GEP pointer (for writes) instead of loading.
+    // Sets outTypeName to the final member's type name for caller-side coercions.
+    IRValue* resolvePropertyWritePtr(Symbol* baseSym, const std::string& propName, std::string& outTypeName);
     CompilerContext::FunctionInfo* resolveFunction(const std::string& name);
 };
 

@@ -33,6 +33,47 @@
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL substr(8,3)"] }]
 
+- decl: [tail_empty, string]
+- set:  [tail_empty, { call: [s.substr, 13] }]
+- print: ["substr(13): ${tail_empty}"]
+- if:
+    condition: { eq: [tail_empty, ""] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL substr(13)"] }]
+
+- decl: [full_copy, string]
+- set:  [full_copy, { call: [s.substr, 0, 13] }]
+- print: ["substr(0,13): ${full_copy}"]
+- if:
+    condition: { eq: [full_copy, "Bearer abc123"] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL substr(0,13)"] }]
+
+- decl: [zero_len, string]
+- set:  [zero_len, { call: [s.substr, 4, 0] }]
+- print: ["substr(4,0): ${zero_len}"]
+- if:
+    condition: { eq: [zero_len, ""] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL substr(4,0)"] }]
+
+- decl: [single_char, string]
+- set:  [single_char, { call: [s.substr, 12, 1] }]
+- print: ["substr(12,1): ${single_char}"]
+- if:
+    condition: { eq: [single_char, "3"] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL substr(12,1)"] }]
+
+- decl: [empty_s, string, ""]
+- decl: [empty_sub, string]
+- set:  [empty_sub, { call: [empty_s.substr, 0] }]
+- print: ["empty substr(0): ${empty_sub}"]
+- if:
+    condition: { eq: [empty_sub, ""] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL empty substr(0)"] }]
+
 # ── starts_with ──────────────────────────────────────────────────────────────
 
 - decl: [sw1, i32]
@@ -51,6 +92,46 @@
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL starts_with false"] }]
 
+- decl: [sw3, i32]
+- set:  [sw3, { call: [s.starts_with, ""] }]
+- print: ["starts_with empty: ${sw3}"]
+- if:
+    condition: { "==": [sw3, 1] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL starts_with empty"] }]
+
+- decl: [sw4, i32]
+- set:  [sw4, { call: [s.starts_with, "Bearer abc123"] }]
+- print: ["starts_with full string: ${sw4}"]
+- if:
+    condition: { "==": [sw4, 1] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL starts_with full"] }]
+
+- decl: [sw5, i32]
+- set:  [sw5, { call: [s.starts_with, "Bearer abc1234"] }]
+- print: ["starts_with longer string: ${sw5}"]
+- if:
+    condition: { "==": [sw5, 0] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL starts_with longer"] }]
+
+- decl: [sw6, i32]
+- set:  [sw6, { call: [empty_s.starts_with, ""] }]
+- print: ["empty starts_with empty: ${sw6}"]
+- if:
+    condition: { "==": [sw6, 1] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL empty starts_with empty"] }]
+
+- decl: [sw7, i32]
+- set:  [sw7, { call: [empty_s.starts_with, "x"] }]
+- print: ["empty starts_with x: ${sw7}"]
+- if:
+    condition: { "==": [sw7, 0] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL empty starts_with x"] }]
+
 # ── index_of ─────────────────────────────────────────────────────────────────
 
 - decl: [idx1, i32]
@@ -68,6 +149,62 @@
     condition: { "==": [idx2, -1] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL index_of not found"] }]
+
+- decl: [idx3, i32]
+- set:  [idx3, { call: [s.index_of, "Bearer"] }]
+- print: ["index_of Bearer: ${idx3}"]
+- if:
+    condition: { "==": [idx3, 0] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL index_of prefix"] }]
+
+- decl: [idx4, i32]
+- set:  [idx4, { call: [s.index_of, "123"] }]
+- print: ["index_of 123: ${idx4}"]
+- if:
+    condition: { "==": [idx4, 10] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL index_of suffix"] }]
+
+- decl: [idx5, i32]
+- set:  [idx5, { call: [s.index_of, " "] }]
+- print: ["index_of space: ${idx5}"]
+- if:
+    condition: { "==": [idx5, 6] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL index_of space"] }]
+
+- decl: [idx6, i32]
+- set:  [idx6, { call: [s.index_of, "a"] }]
+- print: ["index_of a: ${idx6}"]
+- if:
+    condition: { "==": [idx6, 2] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL index_of single char"] }]
+
+- decl: [idx7, i32]
+- set:  [idx7, { call: [s.index_of, ""] }]
+- print: ["index_of empty: ${idx7}"]
+- if:
+    condition: { "==": [idx7, 0] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL index_of empty"] }]
+
+- decl: [idx8, i32]
+- set:  [idx8, { call: [empty_s.index_of, ""] }]
+- print: ["empty index_of empty: ${idx8}"]
+- if:
+    condition: { "==": [idx8, 0] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL empty index_of empty"] }]
+
+- decl: [idx9, i32]
+- set:  [idx9, { call: [empty_s.index_of, "x"] }]
+- print: ["empty index_of x: ${idx9}"]
+- if:
+    condition: { "==": [idx9, -1] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL empty index_of x"] }]
 
 # ── Result ───────────────────────────────────────────────────────────────────
 

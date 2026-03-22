@@ -1,0 +1,193 @@
+# Probe: same as test_mirror_ws_list_mutation, but give the WS client time to drain
+# multiple queued frames before asserting on the mutated replica state.
+# Expected exit code: 0
+
+- model:
+    name: CounterState
+    sync: [name, value]
+    fields:
+      - [name, string]
+      - [value, i32, 0]
+
+- model:
+    name: StatusFlagState
+    sync: [name, enabled]
+    fields:
+      - [name, string]
+      - [enabled, i32, 0]
+
+- model:
+    name: MatchState
+    sync: [match_id, round, last_event, waiting_for_command]
+    fields:
+      - [match_id, string]
+      - [round, i32, 0]
+      - [last_event, string]
+      - [waiting_for_command, i32, 0]
+
+- model:
+    name: ParticipantState
+    sync: [slot, display_name, is_active, hp, counters, flags]
+    fields:
+      - [slot, i32, -1]
+      - [display_name, string]
+      - [is_active, i32, 0]
+      - [hp, i32, 100]
+      - [counters, list<CounterState>]
+      - [flags, list<StatusFlagState>]
+
+- model:
+    name: VisibleCardRef
+    sync: [instance_id, owner_slot, zone_id, order_idx]
+    fields:
+      - [instance_id, string]
+      - [owner_slot, i32, -1]
+      - [zone_id, string]
+      - [order_idx, i32, -1]
+
+- model:
+    name: ZoneState
+    sync: [zone_id, zone_label, owner_slot, card_count, cards]
+    fields:
+      - [zone_id, string]
+      - [zone_label, string]
+      - [owner_slot, i32, -1]
+      - [card_count, i32, 0]
+      - [cards, list<VisibleCardRef>]
+
+- model:
+    name: CardInstanceState
+    sync: [instance_id, display_name, owner_slot, zone_id, position_idx, current_hp, attack]
+    fields:
+      - [instance_id, string]
+      - [display_name, string]
+      - [owner_slot, i32, -1]
+      - [zone_id, string]
+      - [position_idx, i32, -1]
+      - [current_hp, i32, 0]
+      - [attack, i32, 0]
+
+- model:
+    name: GameStateRootMut
+    sync: [match, participants, zones, card_instances]
+    rpc: [select_card]
+    fields:
+      - [match, MatchState]
+      - [participants, list<ParticipantState>]
+      - [zones, list<ZoneState>]
+      - [card_instances, list<CardInstanceState>]
+
+- def:
+    name: mirror_ws_mut_host
+    args: []
+    body:
+      - decl: [sess, mirror_session]
+      - set: [sess, { call: [mirror.listen, "ws://127.0.0.1:19895"] }]
+      - decl: [root_json, string, '{"__type":"GameStateRootMut","match":{"match_id":"mut-1","round":1,"last_event":"boot","waiting_for_command":1},"participants":[{"slot":0,"display_name":"Alice","is_active":1,"hp":30,"counters":[{"name":"mana","value":3}],"flags":[{"name":"shield","enabled":1}]},{"slot":1,"display_name":"Bob","is_active":0,"hp":28,"counters":[{"name":"mana","value":4}],"flags":[{"name":"stun","enabled":0}]},{"slot":2,"display_name":"Cora","is_active":0,"hp":25,"counters":[{"name":"mana","value":2}],"flags":[{"name":"burn","enabled":1}]}],"zones":[{"zone_id":"field_0","zone_label":"Field 0","owner_slot":0,"card_count":2,"cards":[{"instance_id":"ci-1","owner_slot":0,"zone_id":"field_0","order_idx":0},{"instance_id":"ci-2","owner_slot":0,"zone_id":"field_0","order_idx":1}]},{"zone_id":"field_1","zone_label":"Field 1","owner_slot":1,"card_count":1,"cards":[{"instance_id":"ci-3","owner_slot":1,"zone_id":"field_1","order_idx":0}]}],"card_instances":[{"instance_id":"ci-1","display_name":"Knight","owner_slot":0,"zone_id":"field_0","position_idx":0,"current_hp":5,"attack":3},{"instance_id":"ci-2","display_name":"Archer","owner_slot":0,"zone_id":"field_0","position_idx":1,"current_hp":2,"attack":4},{"instance_id":"ci-3","display_name":"Slime","owner_slot":1,"zone_id":"field_1","position_idx":0,"current_hp":6,"attack":1}]}' ]
+      - decl: [root, GameStateRootMut]
+      - set: [root, { call: [sys.deserialize, root_json, "GameStateRootMut"] }]
+      - decl: [nid, i32]
+      - set: [nid, { call: [sess.register, root] }]
+
+      - decl: [i, i32, 0]
+      - while:
+          condition: { lt: [i, 30] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+
+      - decl: [p1, ptr<ParticipantState>]
+      - set: [p1, { call: [root.participants.get, 1] }]
+      - set: [p1.hp, 17]
+      - set: [p1.is_active, 1]
+
+      - decl: [z0, ptr<ZoneState>]
+      - set: [z0, { call: [root.zones.get, 0] }]
+      - call: [z0.cards.remove, 0]
+      - decl: [new_ref, VisibleCardRef]
+      - set: [new_ref.instance_id, "ci-4"]
+      - set: [new_ref.owner_slot, 0]
+      - set: [new_ref.zone_id, "field_0"]
+      - set: [new_ref.order_idx, 1]
+      - call: [z0.cards.push, new_ref]
+      - set: [z0.card_count, { call: [z0.cards.len] }]
+
+      - decl: [ci4, CardInstanceState]
+      - set: [ci4.instance_id, "ci-4"]
+      - set: [ci4.display_name, "Dragon"]
+      - set: [ci4.owner_slot, 0]
+      - set: [ci4.zone_id, "field_0"]
+      - set: [ci4.position_idx, 1]
+      - set: [ci4.current_hp, 9]
+      - set: [ci4.attack, 7]
+      - call: [root.card_instances.push, ci4]
+
+      - decl: [match_delta_json, string, '{"__type":"MatchState","match_id":"mut-1","round":2,"last_event":"list_mutation_applied","waiting_for_command":1}' ]
+      - decl: [match_delta, MatchState]
+      - set: [match_delta, { call: [sys.deserialize, match_delta_json, "MatchState"] }]
+      - set: [root.match, match_delta]
+
+      - set: [i, 0]
+      - while:
+          condition: { lt: [i, 35] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+
+      - call: [sess.close]
+
+- decl: [host_th, thread_handle]
+- set: [host_th, { spawn: [mirror_ws_mut_host] }]
+- call: [time.sleep_ms, 80]
+
+- decl: [client, mirror_session]
+- set: [client, { call: [mirror.connect_timeout, "ws://127.0.0.1:19895", 4000] }]
+- call: [time.sleep_ms, 120]
+- call: [client.update]
+
+- decl: [ev, mirror_event]
+- set: [ev, { call: [client.next_event] }]
+- decl: [replica, GameStateRootMut]
+- call: [client.register_id, replica, ev.net_id]
+
+- decl: [poll_i, i32, 0]
+- while:
+    condition: { lt: [poll_i, 30] }
+    body:
+      - call: [time.sleep_ms, 20]
+      - call: [client.update]
+      - set: [poll_i, { +: [poll_i, 1] }]
+
+- decl: [pz1, ParticipantState, replica.participants-1]
+- decl: [zz0, ZoneState, replica.zones-0]
+- print: ["poll-mut: p1 hp=${pz1.hp} active=${pz1.is_active} zone0=${zz0.card_count} cards=${replica.card_instances.len}"]
+
+- if:
+    condition: { "!=": [pz1.hp, 17] }
+    then:
+      - print: ["FAIL poll-mut: p1.hp=${pz1.hp}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { "!=": [pz1.is_active, 1] }
+    then:
+      - print: ["FAIL poll-mut: p1.is_active=${pz1.is_active}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { "!=": [zz0.card_count, 2] }
+    then:
+      - print: ["FAIL poll-mut: zz0.card_count=${zz0.card_count}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { "!=": [replica.card_instances.len, 4] }
+    then:
+      - print: ["FAIL poll-mut: card_instances.len=${replica.card_instances.len}"]
+      - call: [sys.exit, 1]
+
+- call: [client.close]
+- call: [host_th.join]
+- print: ["WS list mutation poll PASS"]

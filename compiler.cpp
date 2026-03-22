@@ -188,6 +188,38 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                             subCompiler.visitTopLevel(cls);
                         } else if (auto mod = dynamic_cast<AIML::AST::ModelDecl*>(decl.get())) {
                             subCompiler.visitTopLevel(mod);
+                        } else if (auto d = dynamic_cast<AIML::AST::DeclStmt*>(decl.get())) {
+                            // Extern decl matching ast_compiler.cpp Pass 1 naming:
+                            // {extern: true} → plain __lib_<varName>
+                            // otherwise      → file-qualified __lib_<sanitized_path>_<varName>
+                            if (ctx.symbol_table.count(d->varName)) continue;
+                            AIML::IRType* ty = ctx.ir_gen->resolveType(d->typeName);
+                            if (!ty) continue;
+                            llvm::Type* llvmTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ty));
+                            std::string symName;
+                            if (d->is_extern) {
+                                symName = "__lib_" + d->varName;
+                            } else {
+                                std::string importSuffix;
+                                for (char c : path) importSuffix += (std::isalnum(c) ? c : '_');
+                                symName = "__lib_" + importSuffix + "_" + d->varName;
+                            }
+                            llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(symName);
+                            if (!gv) {
+                                gv = new llvm::GlobalVariable(
+                                    ctx.module, llvmTy, false,
+                                    llvm::GlobalValue::ExternalLinkage,
+                                    nullptr,
+                                    symName);
+                            }
+                            Symbol sym;
+                            sym.ir_alloca_inst = ctx.ir_gen->wrap(static_cast<llvm::Value*>(gv));
+                            sym.ir_type        = ctx.ir_gen->getPointerTy();
+                            sym.ir_element_type = ty;
+                            sym.typeName       = d->typeName;
+                            sym.is_const       = d->is_const;
+                            sym.is_volatile    = d->is_volatile;
+                            ctx.symbol_table[d->varName] = sym;
                         }
                     }
                 }
@@ -278,16 +310,63 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                 // from siblings, so function forward-declarations resolve).
                 astCompiler.registerTypes(programAST.get());
 
-                // Phase C: register function signatures + class methods from siblings
+                // Phase C: register function signatures + class methods from siblings.
+                // Also register top-level DeclStmts as ExternalLinkage globals so
+                // cross-file references (e.g. g_selected_deckset_id declared in
+                // deckset_picker.aiml but used in board_screen.aiml) resolve correctly.
+                //
+                // Pre-scan: collect this file's own decl names so we skip same-name
+                // globals from siblings (own definition takes precedence, avoids
+                // linker conflicts for private variables with identical names).
+                std::unordered_set<std::string> ownDeclVars;
+                for (const auto& decl : programAST->declarations) {
+                    if (auto d = dynamic_cast<AIML::AST::DeclStmt*>(decl.get()))
+                        ownDeclVars.insert(d->varName);
+                }
+
                 for (auto& sp : sibProgs) {
                     AIML::AST::Compiler sc(ctx);
-                    for (const auto& decl : sp.prog->declarations) {
-                        if (auto func = dynamic_cast<AIML::AST::FunctionDecl*>(decl.get()))
+                    for (const auto& decl_node : sp.prog->declarations) {
+                        if (auto func = dynamic_cast<AIML::AST::FunctionDecl*>(decl_node.get()))
                             sc.visitFunction(func);
-                        else if (auto cls = dynamic_cast<AIML::AST::ClassDecl*>(decl.get()))
+                        else if (auto cls = dynamic_cast<AIML::AST::ClassDecl*>(decl_node.get()))
                             sc.visitTopLevel(cls);
-                        else if (auto mod = dynamic_cast<AIML::AST::ModelDecl*>(decl.get()))
+                        else if (auto mod = dynamic_cast<AIML::AST::ModelDecl*>(decl_node.get()))
                             sc.visitTopLevel(mod);
+                        else if (auto d = dynamic_cast<AIML::AST::DeclStmt*>(decl_node.get())) {
+                            // Skip: current file owns this name (its Pass-1 def takes precedence).
+                            if (ownDeclVars.count(d->varName)) continue;
+                            // Skip: already registered from an earlier sibling.
+                            if (ctx.symbol_table.count(d->varName)) continue;
+                            AIML::IRType* ty = ctx.ir_gen->resolveType(d->typeName);
+                            if (!ty) continue;
+                            llvm::Type* llvmTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ty));
+                            // Match the name used in the sibling's Pass-1 definition.
+                            std::string symName;
+                            if (d->is_extern) {
+                                symName = "__lib_" + d->varName;
+                            } else {
+                                std::string sibSuffix;
+                                for (char c : sp.path) sibSuffix += (std::isalnum(c) ? c : '_');
+                                symName = "__lib_" + sibSuffix + "_" + d->varName;
+                            }
+                            llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(symName);
+                            if (!gv) {
+                                gv = new llvm::GlobalVariable(
+                                    ctx.module, llvmTy, false,
+                                    llvm::GlobalValue::ExternalLinkage,
+                                    nullptr,
+                                    symName);
+                            }
+                            Symbol sym;
+                            sym.ir_alloca_inst = ctx.ir_gen->wrap(static_cast<llvm::Value*>(gv));
+                            sym.ir_type        = ctx.ir_gen->getPointerTy();
+                            sym.ir_element_type = ty;
+                            sym.typeName       = d->typeName;
+                            sym.is_const       = d->is_const;
+                            sym.is_volatile    = d->is_volatile;
+                            ctx.symbol_table[d->varName] = sym;
+                        }
                     }
                 }
 
@@ -302,11 +381,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
             // sub-compilers can resolve cross-import type references.
             this->siblingImports = *deferredImports;
             for (const auto& importPath : *deferredImports) {
-                int savedErrors = Logger::instance().errorCount();
-                Logger::instance().setSuppressed(true);
                 this->resolveImport(importPath);
-                Logger::instance().setSuppressed(false);
-                Logger::instance().setErrorCount(savedErrors);
             }
             // Propagate linked objects accumulated during deferred compilation.
             for (const auto& obj : this->linkedObjects) {
@@ -805,7 +880,9 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_recv",         (void*)(intptr_t)aiml_ws_recv);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_ping",         (void*)(intptr_t)aiml_ws_ping);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_close",        (void*)(intptr_t)aiml_ws_close);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_fd",           (void*)(intptr_t)aiml_ws_fd);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_fd",              (void*)(intptr_t)aiml_ws_fd);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_poll",            (void*)(intptr_t)aiml_ws_poll);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_poll_listener",   (void*)(intptr_t)aiml_ws_poll_listener);
 
     // db namespace (AionDB)
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_open",          (void*)(intptr_t)aiml_db_store_open);
@@ -824,6 +901,7 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_open_typed",        (void*)(intptr_t)aiml_db_kv_open_typed);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_open_typed_persist",(void*)(intptr_t)aiml_db_kv_open_typed_persist);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_checkpoint",       (void*)(intptr_t)aiml_db_kv_checkpoint);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_reload",           (void*)(intptr_t)aiml_db_kv_reload);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_set",              (void*)(intptr_t)aiml_db_kv_set);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_get",              (void*)(intptr_t)aiml_db_kv_get);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_has",              (void*)(intptr_t)aiml_db_kv_has);
@@ -1215,6 +1293,7 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_instantiate",                (void*)(intptr_t)aiml_prefab_instantiate);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_destroy",                    (void*)(intptr_t)aiml_prefab_destroy);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_pos",                    (void*)(intptr_t)aiml_prefab_set_pos);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_pos_rel",                (void*)(intptr_t)aiml_prefab_set_pos_rel);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_x",                      (void*)(intptr_t)aiml_prefab_get_x);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_y",                      (void*)(intptr_t)aiml_prefab_get_y);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_scale",                  (void*)(intptr_t)aiml_prefab_set_scale);
@@ -1235,10 +1314,18 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_color",                  (void*)(intptr_t)aiml_prefab_set_color);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_child_visible",          (void*)(intptr_t)aiml_prefab_set_child_visible);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_child",                      (void*)(intptr_t)aiml_prefab_child);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_dock_x",                     (void*)(intptr_t)aiml_prefab_dock_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_dock_y",                     (void*)(intptr_t)aiml_prefab_dock_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_grid_cell_rect",                 (void*)(intptr_t)aiml_ui_grid_cell_rect);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_draw_scene",                 (void*)(intptr_t)aiml_prefab_draw_scene);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_hit_test",                   (void*)(intptr_t)aiml_prefab_hit_test);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_update_hover",               (void*)(intptr_t)aiml_prefab_update_hover);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_hovered",                (void*)(intptr_t)aiml_prefab_get_hovered);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_is_hovered",                 (void*)(intptr_t)aiml_prefab_is_hovered);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_was_clicked",                (void*)(intptr_t)aiml_prefab_was_clicked);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_update_drag",                (void*)(intptr_t)aiml_prefab_update_drag);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_dragged",                (void*)(intptr_t)aiml_prefab_get_dragged);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_cancel_drag",                (void*)(intptr_t)aiml_prefab_cancel_drag);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_font",                   (void*)(intptr_t)aiml_prefab_set_font);
     // input namespace
     llvm::sys::DynamicLibrary::AddSymbol("aiml_input_event_type",                  (void*)(intptr_t)aiml_input_event_type);
@@ -1353,6 +1440,8 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_send_rpc",           (void*)(intptr_t)aiml_mirror_session_send_rpc);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_has_rpc",            (void*)(intptr_t)aiml_mirror_session_has_rpc);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_next_rpc",           (void*)(intptr_t)aiml_mirror_session_next_rpc);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_poll_event",         (void*)(intptr_t)aiml_mirror_session_poll_event);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_poll_rpc",           (void*)(intptr_t)aiml_mirror_session_poll_rpc);
     // ui namespace
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_init",                           (void*)(intptr_t)aiml_ui_init);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ui_begin",                          (void*)(intptr_t)aiml_ui_begin);
@@ -1659,6 +1748,10 @@ bool AIMLCompiler::checkCache(const std::string& sourcePath, std::string& outHas
 }
 
 void AIMLCompiler::resolveImport(const std::string& path) {
+    // Track imported source file for .d dependency output
+    if (std::find(importedSourceFiles.begin(), importedSourceFiles.end(), path) == importedSourceFiles.end())
+        importedSourceFiles.push_back(path);
+
     // In object mode (noCache=true), the build tool handles caching.
     // In JIT mode (noCache=false), use the internal SHA-based cache.
     if (!noCache) {
@@ -1708,6 +1801,12 @@ void AIMLCompiler::resolveImport(const std::string& path) {
     for (const auto& obj : subCompiler.linkedObjects) {
         if (std::find(linkedObjects.begin(), linkedObjects.end(), obj) == linkedObjects.end())
             linkedObjects.push_back(obj);
+    }
+
+    // Propagate transitive imported source files from sub-compiler
+    for (const auto& src : subCompiler.importedSourceFiles) {
+        if (std::find(importedSourceFiles.begin(), importedSourceFiles.end(), src) == importedSourceFiles.end())
+            importedSourceFiles.push_back(src);
     }
 
     // Update cache manifest (JIT mode only)

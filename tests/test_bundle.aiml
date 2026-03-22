@@ -10,7 +10,7 @@
     name: worker_task
     args: [[p, Payload]]
     body:
-      - print: ["worker_task: id=${p.id}"]
+      - print: ["worker_task: id=${g_p.id}"]
 
 # --- Function bundle ---
 - decl: [pkg, Code]
@@ -33,11 +33,11 @@
 - print: ["contains xyz_not_there: ${has_xyz}"]
 
 # --- Instance bundle ---
-- decl: [p, Payload]
-- set: [p.id, 99]
+- decl: [g_p, Payload]
+- set: [g_p.id, 99]
 
 - decl: [inst_pkg, Code]
-- set: [inst_pkg, { call: [sys.bundle, p] }]
+- set: [inst_pkg, { call: [sys.bundle, g_p] }]
 
 - decl: [inst_src, string]
 - set: [inst_src, { call: [inst_pkg.toString] }]

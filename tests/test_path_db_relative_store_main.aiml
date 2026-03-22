@@ -1,0 +1,43 @@
+# Minimal repro for relative path + def main Store<T> persist.
+# Expected exit code: 0
+
+- class:
+    name: RelativeMainPlayer
+    members: [[score, i32], [level, i32]]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_dir, path, "./aiondb_rel_main/"]
+      - call: [io.remove_all, db_dir]
+
+      - decl: [players, Store<RelativeMainPlayer>]
+      - set: [players, { call: [db.open, "players_rel_main", {persist: true, path: db_dir}] }]
+
+      - decl: [p, RelativeMainPlayer]
+      - set: [p.score, 271]
+      - set: [p.level, 82]
+
+      - decl: [id, i32]
+      - set: [id, { call: [players.insert, p] }]
+      - print: ["rel_main_id=${id}"]
+
+      - decl: [n, i32]
+      - set: [n, { call: [players.len] }]
+      - print: ["rel_main_len=${n}"]
+
+      - decl: [got, ptr<RelativeMainPlayer>]
+      - set: [got, { call: [players.get, id] }]
+      - if:
+          condition: { "==": [got, null] }
+          then:
+            - print: ["FAIL rel_main_get=null"]
+            - call: [sys.exit, 1]
+
+      - print: ["rel_main_score=${got.score} level=${got.level}"]
+
+      - decl: [cp, i32]
+      - set: [cp, { call: [db.checkpoint] }]
+      - print: ["rel_main_checkpoint=${cp}"]
+      - return: 0

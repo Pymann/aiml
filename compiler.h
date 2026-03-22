@@ -59,6 +59,7 @@ public:
     bool checkCache(const std::string& sourcePath, std::string& outHash);
     
     std::vector<std::string> linkedObjects;
+    std::vector<std::string> importedSourceFiles;  // source paths of all imports (for .d file)
     std::string compilerPath;
     std::string entryPointName = "main";
     // Library mode: skip __aiml_init, fptable, schema globals (for import-only objects).

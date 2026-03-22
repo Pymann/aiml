@@ -8,6 +8,8 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <sys/select.h>
 #include <strings.h>    // strncasecmp
 
 #include <cstring>
@@ -17,6 +19,7 @@
 #include <ctime>
 #include <mutex>
 #include <signal.h>
+#include <poll.h>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // SHA-1  (FIPS 180-4 / RFC 3174)  — no external dependency
@@ -372,7 +375,9 @@ static char* ws_recv_frame_raw(AimlWs* ws, uint8_t* out_opcode, size_t* out_len)
 // TCP + OpenSSL helpers
 // ══════════════════════════════════════════════════════════════════════════════
 
-static int tcp_connect(const char* host, int32_t port) {
+/* Non-blocking TCP connect with millisecond timeout.
+ * Returns connected fd (blocking mode restored) or -1 on failure. */
+static int tcp_connect(const char* host, int32_t port, int32_t timeout_ms = 5000) {
     char ps[16];
     snprintf(ps, sizeof(ps), "%d", port);
     struct addrinfo hints{}, *res = nullptr;
@@ -381,9 +386,36 @@ static int tcp_connect(const char* host, int32_t port) {
     if (getaddrinfo(host, ps, &hints, &res) != 0 || !res) return -1;
     int fd = ::socket(res->ai_family, SOCK_STREAM, 0);
     if (fd < 0) { freeaddrinfo(res); return -1; }
+
+    /* Switch to non-blocking so connect() returns immediately */
+    int fl = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+
     int rc = ::connect(fd, res->ai_addr, res->ai_addrlen);
     freeaddrinfo(res);
-    if (rc != 0) { ::close(fd); return -1; }
+
+    if (rc == 0) {
+        /* Immediate success (unlikely but possible for loopback) */
+    } else if (errno != EINPROGRESS) {
+        ::close(fd); return -1;
+    } else {
+        /* Wait for writable (connection complete) up to timeout_ms */
+        fd_set wfds, efds;
+        FD_ZERO(&wfds); FD_SET(fd, &wfds);
+        FD_ZERO(&efds); FD_SET(fd, &efds);
+        struct timeval tv;
+        tv.tv_sec  = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
+        if (select(fd + 1, nullptr, &wfds, &efds, &tv) <= 0) {
+            ::close(fd); return -1;
+        }
+        int err = 0; socklen_t elen = sizeof(err);
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &elen);
+        if (err != 0) { ::close(fd); return -1; }
+    }
+
+    /* Restore blocking mode for WS handshake read/write */
+    fcntl(fd, F_SETFL, fl & ~O_NONBLOCK);
     return fd;
 }
 
@@ -544,6 +576,42 @@ extern "C" char* aiml_ws_recv(void* p) {
     }
 }
 
+// ── Raw binary I/O (for mirror transport) ────────────────────────────────────
+
+extern "C" int aiml_ws_send_raw(void* p, const void* data, int32_t len) {
+    if (!p || !data || len <= 0) return -1;
+    AimlWs* ws = to_ws(p);
+    return ws_send_frame(ws, 0x2, (const char*)data, (size_t)len, ws->is_client_side);
+}
+
+extern "C" void* aiml_ws_recv_raw(void* p, int32_t* out_len) {
+    if (!p) return nullptr;
+    if (out_len) *out_len = 0;
+    AimlWs* ws = to_ws(p);
+    while (true) {
+        uint8_t opcode; size_t len;
+        char* payload = ws_recv_frame_raw(ws, &opcode, &len);
+        if (!payload) return nullptr;
+        switch (opcode) {
+            case 0x0:  // continuation
+            case 0x1:  // text
+            case 0x2:  // binary
+                if (out_len) *out_len = (int32_t)len;
+                return payload;
+            case 0x8:  // close
+                ws_send_frame(ws, 0x8, "", 0, ws->is_client_side);
+                free(payload); return nullptr;
+            case 0x9:  // ping → auto-pong
+                ws_send_frame(ws, 0xA, payload, len, ws->is_client_side);
+                free(payload); continue;
+            case 0xA:  // pong — discard
+                free(payload); continue;
+            default:
+                free(payload); return nullptr;
+        }
+    }
+}
+
 extern "C" int aiml_ws_ping(void* p) {
     if (!p) return -1;
     AimlWs* ws = to_ws(p);
@@ -564,4 +632,25 @@ extern "C" int aiml_ws_close(void* p) {
 
 extern "C" int32_t aiml_ws_fd(void* p) {
     return p ? to_ws(p)->fd : -1;
+}
+
+extern "C" int aiml_ws_poll(void* p, int32_t timeout_ms) {
+    if (!p) return -1;
+    AimlWs* ws = to_ws(p);
+    // Check TLS internal buffer first (data already decrypted but not yet read)
+    if (ws->ssl && SSL_pending(ws->ssl) > 0) return 1;
+    struct pollfd pfd = { ws->fd, POLLIN, 0 };
+    int r = ::poll(&pfd, 1, timeout_ms);
+    return r > 0 ? 1 : (r == 0 ? 0 : -1);
+}
+
+/* Poll a WS listener socket for a pending accept()-able connection.
+ * Returns 1 if a client is waiting, 0 if timeout, -1 on error. */
+extern "C" int aiml_ws_poll_listener(void* srv_ptr, int32_t timeout_ms) {
+    if (!srv_ptr) return -1;
+    AimlWs* ws = to_ws(srv_ptr);
+    if (!ws->is_listener) return -1;
+    struct pollfd pfd = { ws->fd, POLLIN, 0 };
+    int r = ::poll(&pfd, 1, timeout_ms);
+    return r > 0 ? 1 : (r == 0 ? 0 : -1);
 }

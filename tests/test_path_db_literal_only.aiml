@@ -1,0 +1,41 @@
+# Control case: literal persistent db path.
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_dir, path, "/tmp/aiml_test_path_db_literal_only/"]
+      - call: [io.remove_all, db_dir]
+
+      - decl: [cfg, Kv<string:string>]
+      - set: [cfg, { call: [db.open_kv, "path_db_literal_only", {persist: true, path: "/tmp/aiml_test_path_db_literal_only/"}] }]
+      - call: [cfg.clear]
+      - call: [cfg.set, "mode", "literal-only"]
+
+      - decl: [cp, i32]
+      - set: [cp, { call: [db.checkpoint] }]
+      - if:
+          condition: { "!=": [cp, 0] }
+          then:
+            - print: ["FAIL literal_only_checkpoint=${cp}"]
+            - call: [sys.exit, 1]
+
+      - decl: [dir_ok, i32]
+      - set: [dir_ok, { call: [io.is_dir, db_dir] }]
+      - if:
+          condition: { "!=": [dir_ok, 1] }
+          then:
+            - print: ["FAIL literal_only_dir=${dir_ok} dir=${db_dir}"]
+            - call: [sys.exit, 1]
+
+      - decl: [got, string]
+      - set: [got, { call: [cfg.get, "mode"] }]
+      - if:
+          condition: { "==": [{ eq: [got, "literal-only"] }, 0] }
+          then:
+            - print: ["FAIL literal_only_get=${got}"]
+            - call: [sys.exit, 1]
+
+      - print: ["path db literal only PASS"]
+      - return: 0

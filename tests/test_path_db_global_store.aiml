@@ -1,0 +1,39 @@
+# Compare top-level/global path variable usage in db.open Store<T>.
+# Expected exit code: 0
+
+- class:
+    name: GlobalStorePlayer
+    members: [[score, i32], [level, i32]]
+
+- decl: [db_dir, path]
+- set: [db_dir, "/tmp/aiml_test_path_db_global_store/"]
+- call: [io.remove_all, db_dir]
+
+- decl: [players, Store<GlobalStorePlayer>]
+- set: [players, { call: [db.open, "path_db_global_store", {persist: true, path: db_dir}] }]
+
+- decl: [p, GlobalStorePlayer]
+- set: [p.score, 101]
+- set: [p.level, 7]
+
+- decl: [id, i32]
+- set: [id, { call: [players.insert, p] }]
+- print: ["global_store_id=${id}"]
+
+- decl: [n, i32]
+- set: [n, { call: [players.len] }]
+- print: ["global_store_len=${n}"]
+
+- decl: [got, ptr<GlobalStorePlayer>]
+- set: [got, { call: [players.get, id] }]
+- if:
+    condition: { "==": [got, null] }
+    then:
+      - print: ["FAIL global_store_get=null"]
+      - call: [sys.exit, 1]
+
+- print: ["global_store_score=${got.score} level=${got.level}"]
+
+- decl: [cp, i32]
+- set: [cp, { call: [db.checkpoint] }]
+- print: ["global_store_checkpoint=${cp}"]

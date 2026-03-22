@@ -1,0 +1,15 @@
+# Pointer return repro
+# Current behavior: crashes during JIT/codegen
+
+- decl: [g_i32, i32, 77]
+
+- def:
+    name: ret_ptr_i32
+    args: []
+    return: ptr<i32>
+    body:
+      - return: [{ '&': [g_i32] }]
+
+- decl: [pi, ptr<i32>, { call: [ret_ptr_i32] }]
+- print: ["ptr return value: ${ { '?': [pi] } }"]
+- call: [sys.exit, 0]

@@ -19,7 +19,7 @@ precedence level (for mental model and documentation purposes).
 | 6 | Bitwise AND | `band` | 2 | Left |
 | 7 | Bitwise XOR | `bxor` | 2 | Left |
 | 8 | Bitwise OR | `bor` | 2 | Left |
-| 9 | Comparison | `eq`, `ne`, `lt`, `gt`, `lte`, `gte` | 2 | None |
+| 9 | Comparison | `eq`, `neq`, `lt`, `gt`, `le`, `ge` | 2 | None |
 | 10 | Logical AND | `and` | 2+ | Left |
 | 11 | Logical OR | `or` | 2+ | Left |
 | 12 | Conditional | `select` | 3 | Right |
@@ -96,14 +96,14 @@ All comparison operators return `bool`.
 | Operator | Meaning | Example |
 |----------|---------|---------|
 | `eq` | Equal (`==`) | `{ eq: [a, b] }` |
-| `ne` | Not equal (`!=`) | `{ ne: [a, b] }` |
+| `neq` | Not equal (`!=`) | `{ neq: [a, b] }` |
 | `lt` | Less than (`<`) | `{ lt: [a, b] }` |
 | `gt` | Greater than (`>`) | `{ gt: [a, b] }` |
-| `lte` | Less than or equal (`<=`) | `{ lte: [a, b] }` |
-| `gte` | Greater than or equal (`>=`) | `{ gte: [a, b] }` |
+| `le` | Less than or equal (`<=`) | `{ le: [a, b] }` |
+| `ge` | Greater than or equal (`>=`) | `{ ge: [a, b] }` |
 
 ```yaml
-- set: [ok, { and: [ { lt: [x, 100] }, { gte: [x, 0] } ] }]
+- set: [ok, { and: [ { lt: [x, 100] }, { ge: [x, 0] } ] }]
 ```
 
 - Operands: `i32 | i64 | f32 | f64 | string | bool`
@@ -225,7 +225,7 @@ Unsupported conversions (compile error): `string` → `i32`, `i32` → `string` 
 - Only the selected branch is evaluated (short-circuit)
 
 ```yaml
-- set: [abs_x, { select: [{ gte: [x, 0] }, x, { neg: [x] }] }]
+- set: [abs_x, { select: [{ ge: [x, 0] }, x, { neg: [x] }] }]
 ```
 
 ---

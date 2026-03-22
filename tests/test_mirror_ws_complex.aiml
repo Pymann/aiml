@@ -1,0 +1,325 @@
+# Regression test: WebSocket mirror with complex 9rooms-style nested models
+# Expected exit code: 0
+
+- model:
+    name: MatchPhaseState
+    sync: [phase_id, phase_label, step]
+    fields:
+      - [phase_id, string]
+      - [phase_label, string]
+      - [step, i32, 0]
+
+- model:
+    name: CounterState
+    sync: [name, value]
+    fields:
+      - [name, string]
+      - [value, i32, 0]
+
+- model:
+    name: StatusFlagState
+    sync: [name, enabled]
+    fields:
+      - [name, string]
+      - [enabled, i32, 0]
+
+- model:
+    name: VisibleCardRef
+    sync: [instance_id, owner_slot, zone_id, order_idx]
+    fields:
+      - [instance_id, string]
+      - [owner_slot, i32, -1]
+      - [zone_id, string]
+      - [order_idx, i32, -1]
+
+- model:
+    name: MatchState
+    sync: [match_id, mode, status, round, turn, active_slot, priority_slot, winner_slot, phase, waiting_for_command, prompt_kind, prompt_source_id, prompt_target_zone, combat_attacker_id, combat_defender_id, last_event, flags]
+    fields:
+      - [match_id, string]
+      - [mode, string]
+      - [status, string]
+      - [round, i32, 0]
+      - [turn, i32, 0]
+      - [active_slot, i32, -1]
+      - [priority_slot, i32, -1]
+      - [winner_slot, i32, -1]
+      - [phase, MatchPhaseState]
+      - [waiting_for_command, i32, 0]
+      - [prompt_kind, string]
+      - [prompt_source_id, string]
+      - [prompt_target_zone, string]
+      - [combat_attacker_id, string]
+      - [combat_defender_id, string]
+      - [last_event, string]
+      - [flags, list<StatusFlagState>]
+
+- model:
+    name: ParticipantState
+    sync: [slot, participant_id, display_name, is_bot, is_connected, is_ready, is_active, hp, max_hp, hand_count, field_count, graveyard_count, mana_zone_count, spell_zone_count, trap_zone_count, item_zone_count, mana_played_this_round, counters, flags]
+    fields:
+      - [slot, i32, -1]
+      - [participant_id, string]
+      - [display_name, string]
+      - [is_bot, i32, 0]
+      - [is_connected, i32, 0]
+      - [is_ready, i32, 0]
+      - [is_active, i32, 0]
+      - [hp, i32, 100]
+      - [max_hp, i32, 100]
+      - [hand_count, i32, 0]
+      - [field_count, i32, 0]
+      - [graveyard_count, i32, 0]
+      - [mana_zone_count, i32, 0]
+      - [spell_zone_count, i32, 0]
+      - [trap_zone_count, i32, 0]
+      - [item_zone_count, i32, 0]
+      - [mana_played_this_round, i32, 0]
+      - [counters, list<CounterState>]
+      - [flags, list<StatusFlagState>]
+
+- model:
+    name: ZoneState
+    sync: [zone_id, zone_label, owner_slot, zone_kind, visibility_mode, capacity, card_count, cards]
+    fields:
+      - [zone_id, string]
+      - [zone_label, string]
+      - [owner_slot, i32, -1]
+      - [zone_kind, string]
+      - [visibility_mode, string]
+      - [capacity, i32, -1]
+      - [card_count, i32, 0]
+      - [cards, list<VisibleCardRef>]
+
+- model:
+    name: DeckState
+    sync: [deck_id, owner_slot, deck_type, display_name, remaining_cards, total_cards, top_known_card_id]
+    fields:
+      - [deck_id, string]
+      - [owner_slot, i32, -1]
+      - [deck_type, string]
+      - [display_name, string]
+      - [remaining_cards, i32, 0]
+      - [total_cards, i32, 0]
+      - [top_known_card_id, string]
+
+- model:
+    name: DeckSetSelectionState
+    sync: [deckset_id, owner_slot, display_name, mana_deck_id, spell_deck_id, creature_deck_id, item_deck_id, primordial_deck_id]
+    fields:
+      - [deckset_id, string]
+      - [owner_slot, i32, -1]
+      - [display_name, string]
+      - [mana_deck_id, string]
+      - [spell_deck_id, string]
+      - [creature_deck_id, string]
+      - [item_deck_id, string]
+      - [primordial_deck_id, string]
+
+- model:
+    name: CardInstanceState
+    sync: [instance_id, base_card_id, display_name, owner_slot, controller_slot, zone_id, position_idx, card_type, is_face_up, is_tapped, round_played, current_hp, base_hp, attack, defense, initiative, moral, movement, counters, flags]
+    fields:
+      - [instance_id, string]
+      - [base_card_id, string]
+      - [display_name, string]
+      - [owner_slot, i32, -1]
+      - [controller_slot, i32, -1]
+      - [zone_id, string]
+      - [position_idx, i32, -1]
+      - [card_type, string]
+      - [is_face_up, i32, 0]
+      - [is_tapped, i32, 0]
+      - [round_played, i32, 0]
+      - [current_hp, i32, 0]
+      - [base_hp, i32, 0]
+      - [attack, i32, 0]
+      - [defense, i32, 0]
+      - [initiative, i32, 0]
+      - [moral, i32, 0]
+      - [movement, i32, 0]
+      - [counters, list<CounterState>]
+      - [flags, list<StatusFlagState>]
+
+- model:
+    name: GameStateRoot
+    sync: [match, participants, selected_decksets, decks, zones, card_instances]
+    fields:
+      - [match, MatchState]
+      - [participants, list<ParticipantState>]
+      - [selected_decksets, list<DeckSetSelectionState>]
+      - [decks, list<DeckState>]
+      - [zones, list<ZoneState>]
+      - [card_instances, list<CardInstanceState>]
+
+- def:
+    name: mirror_ws_complex_host
+    args: []
+    body:
+      - decl: [sess, mirror_session]
+      - set: [sess, { call: [mirror.listen, "ws://127.0.0.1:19893"] }]
+      - decl: [root_json, string, '{"__type":"GameStateRoot","match":{"match_id":"match-9r","mode":"pvb","status":"running","round":7,"turn":3,"active_slot":0,"priority_slot":0,"winner_slot":-1,"phase":{"phase_id":"main","phase_label":"Main Phase","step":2},"waiting_for_command":1,"prompt_kind":"play_card","prompt_source_id":"card-77","prompt_target_zone":"field_0","combat_attacker_id":"att-1","combat_defender_id":"def-1","last_event":"initial_sync","flags":[{"name":"combat","enabled":1},{"name":"priority","enabled":1}]},"participants":[{"slot":0,"participant_id":"p1","display_name":"Alice","is_bot":0,"is_connected":1,"is_ready":1,"is_active":1,"hp":26,"max_hp":30,"hand_count":5,"field_count":2,"graveyard_count":1,"mana_zone_count":3,"spell_zone_count":1,"trap_zone_count":0,"item_zone_count":1,"mana_played_this_round":1,"counters":[{"name":"mana","value":3},{"name":"rage","value":1}],"flags":[{"name":"shield","enabled":1}]},{"slot":1,"participant_id":"p2","display_name":"Bot Bob","is_bot":1,"is_connected":1,"is_ready":1,"is_active":0,"hp":22,"max_hp":30,"hand_count":4,"field_count":1,"graveyard_count":2,"mana_zone_count":4,"spell_zone_count":0,"trap_zone_count":1,"item_zone_count":0,"mana_played_this_round":0,"counters":[{"name":"mana","value":4}],"flags":[{"name":"stunned","enabled":0}]}],"selected_decksets":[{"deckset_id":"ds-1","owner_slot":0,"display_name":"Starter Alpha","mana_deck_id":"m-1","spell_deck_id":"s-1","creature_deck_id":"c-1","item_deck_id":"i-1","primordial_deck_id":"p-1"}],"decks":[{"deck_id":"deck-1","owner_slot":0,"deck_type":"mana","display_name":"Mana Core","remaining_cards":27,"total_cards":30,"top_known_card_id":"mana-3"}],"zones":[{"zone_id":"field_0","zone_label":"Field 0","owner_slot":0,"zone_kind":"field","visibility_mode":"public","capacity":5,"card_count":1,"cards":[{"instance_id":"ci-1","owner_slot":0,"zone_id":"field_0","order_idx":0}]},{"zone_id":"hand_0","zone_label":"Hand 0","owner_slot":0,"zone_kind":"hand","visibility_mode":"owner","capacity":10,"card_count":2,"cards":[{"instance_id":"ci-2","owner_slot":0,"zone_id":"hand_0","order_idx":0},{"instance_id":"ci-3","owner_slot":0,"zone_id":"hand_0","order_idx":1}]}],"card_instances":[{"instance_id":"ci-1","base_card_id":"base-1","display_name":"Fire Adept","owner_slot":0,"controller_slot":0,"zone_id":"field_0","position_idx":0,"card_type":"creature","is_face_up":1,"is_tapped":0,"round_played":3,"current_hp":5,"base_hp":5,"attack":4,"defense":2,"initiative":3,"moral":1,"movement":2,"counters":[{"name":"burn","value":2}],"flags":[{"name":"flying","enabled":1}]}]}' ]
+      - decl: [root, GameStateRoot]
+      - set: [root, { call: [sys.deserialize, root_json, "GameStateRoot"] }]
+      - decl: [nid, i32]
+      - set: [nid, { call: [sess.register, root] }]
+      - print: ["host: complex root registered net_id=${nid}"]
+
+      - decl: [i, i32, 0]
+      - while:
+          condition: { lt: [i, 35] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+
+      - decl: [match_delta_json, string, '{"__type":"MatchState","match_id":"match-9r","mode":"pvb","status":"running","round":8,"turn":3,"active_slot":0,"priority_slot":0,"winner_slot":-1,"phase":{"phase_id":"main","phase_label":"Main Phase","step":2},"waiting_for_command":0,"prompt_kind":"play_card","prompt_source_id":"card-77","prompt_target_zone":"field_0","combat_attacker_id":"att-1","combat_defender_id":"def-1","last_event":"delta_round_8","flags":[{"name":"combat","enabled":1},{"name":"priority","enabled":1}]}' ]
+      - decl: [match_delta, MatchState]
+      - set: [match_delta, { call: [sys.deserialize, match_delta_json, "MatchState"] }]
+      - set: [root.match, match_delta]
+      - print: ["host: nested match delta applied"]
+
+      - set: [i, 0]
+      - while:
+          condition: { lt: [i, 25] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+
+      - call: [sess.close]
+      - print: ["host: complex ws mirror done"]
+
+- decl: [host_th, thread_handle]
+- set: [host_th, { spawn: [mirror_ws_complex_host] }]
+- call: [time.sleep_ms, 80]
+
+- decl: [client, mirror_session]
+- set: [client, { call: [mirror.connect_timeout, "ws://127.0.0.1:19893", 4000] }]
+- print: ["client: ws connect ok"]
+
+- call: [time.sleep_ms, 120]
+- call: [client.update]
+
+- decl: [has_ev, i32]
+- set: [has_ev, { call: [client.has_event] }]
+- print: ["client: has_event=${has_ev}"]
+- if:
+    condition: { "==": [has_ev, 0] }
+    then:
+      - print: ["FAIL no mirror event received over ws"]
+      - call: [sys.exit, 1]
+
+- decl: [ev, mirror_event]
+- set: [ev, { call: [client.next_event] }]
+- print: ["client: event type=${ev.type} net_id=${ev.net_id}"]
+
+- decl: [replica, GameStateRoot]
+- call: [client.register_id, replica, ev.net_id]
+- print: ["client: replica registered"]
+
+- call: [time.sleep_ms, 150]
+- call: [client.update]
+
+- decl: [m, MatchState, replica.match]
+- decl: [ph, MatchPhaseState, m.phase]
+- decl: [p0, ParticipantState, replica.participants-0]
+- decl: [p0c0, CounterState, p0.counters-0]
+- decl: [z0, ZoneState, replica.zones-0]
+- decl: [zc0, VisibleCardRef, z0.cards-0]
+- decl: [ci0, CardInstanceState, replica.card_instances-0]
+- decl: [mf0, StatusFlagState, m.flags-0]
+
+- print: ["client: match_id=${m.match_id} round=${m.round} phase=${ph.phase_id}/${ph.step} last_event=${m.last_event}"]
+- print: ["client: participants.len=${replica.participants.len} zones.len=${replica.zones.len} cards.len=${replica.card_instances.len}"]
+- print: ["client: p0=${p0.display_name} hp=${p0.hp} mana=${p0c0.value}"]
+- print: ["client: zone0=${z0.zone_id} card_count=${z0.card_count} card0=${zc0.instance_id}"]
+- print: ["client: card0=${ci0.display_name} atk=${ci0.attack} hp=${ci0.current_hp}"]
+- print: ["client: match_flag0=${mf0.name}/${mf0.enabled}"]
+
+- if:
+    condition: { "==": [{ eq: [m.match_id, "match-9r"] }, 0] }
+    then:
+      - print: ["FAIL match_id=${m.match_id}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { "!=": [replica.participants.len, 2] }
+    then:
+      - print: ["FAIL participants.len=${replica.participants.len}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { "!=": [replica.zones.len, 2] }
+    then:
+      - print: ["FAIL zones.len=${replica.zones.len}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { "!=": [replica.card_instances.len, 1] }
+    then:
+      - print: ["FAIL card_instances.len=${replica.card_instances.len}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { "==": [{ eq: [p0.display_name, "Alice"] }, 0] }
+    then:
+      - print: ["FAIL p0.display_name=${p0.display_name}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { "!=": [p0.hp, 26] }
+    then:
+      - print: ["FAIL p0.hp=${p0.hp}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { "!=": [p0c0.value, 3] }
+    then:
+      - print: ["FAIL p0 counter value=${p0c0.value}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { "==": [{ eq: [z0.zone_id, "field_0"] }, 0] }
+    then:
+      - print: ["FAIL z0.zone_id=${z0.zone_id}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { "==": [{ eq: [zc0.instance_id, "ci-1"] }, 0] }
+    then:
+      - print: ["FAIL zc0.instance_id=${zc0.instance_id}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { "==": [{ eq: [ci0.display_name, "Fire Adept"] }, 0] }
+    then:
+      - print: ["FAIL ci0.display_name=${ci0.display_name}"]
+      - call: [sys.exit, 1]
+
+- call: [time.sleep_ms, 220]
+- call: [client.update]
+- decl: [m2, MatchState, replica.match]
+- print: ["client: delta round=${m2.round} last_event=${m2.last_event} waiting=${m2.waiting_for_command}"]
+
+- if:
+    condition: { "!=": [m2.round, 8] }
+    then:
+      - print: ["FAIL delta round=${m2.round}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { "==": [{ eq: [m2.last_event, "delta_round_8"] }, 0] }
+    then:
+      - print: ["FAIL delta last_event=${m2.last_event}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { "!=": [m2.waiting_for_command, 0] }
+    then:
+      - print: ["FAIL delta waiting_for_command=${m2.waiting_for_command}"]
+      - call: [sys.exit, 1]
+
+- call: [client.close]
+- call: [host_th.join]
+- print: ["WS complex mirror PASS"]

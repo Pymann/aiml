@@ -55,6 +55,9 @@ void aiml_ui_set_gap   (float h, float v);
 /* Enter a cell; colspan/rowspan ≥ 1. */
 void aiml_ui_begin_cell(int32_t col, int32_t row, int32_t colspan, int32_t rowspan);
 void aiml_ui_end_cell  (void);
+/* Query current grid cell rect in pixels. Returns 0 on success, -1 if no grid. */
+int32_t aiml_ui_grid_cell_rect(int32_t col, int32_t row, int32_t colspan, int32_t rowspan,
+                                float* out_x, float* out_y, float* out_w, float* out_h);
 /* Horizontal: "left"/"center"/"right"; Vertical: "top"/"middle"/"bottom".
  * Must be called before begin_cell. */
 void aiml_ui_set_align (const char* h, const char* v);

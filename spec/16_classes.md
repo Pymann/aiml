@@ -44,6 +44,60 @@ Dot notation is used for both stack instances and pointers (syntactic sugar).
 - set: [p2.y, 20] # Equivalent to (*p2).y
 ```
 
+#### Tiefe Member-Ketten
+
+Beliebig tiefe Pfade sind für Reads und Writes unterstützt:
+
+```yaml
+- class:
+    name: Inner
+    members: [[value, i32]]
+
+- class:
+    name: Middle
+    members: [[inner, Inner], [count, i32]]
+
+- class:
+    name: Outer
+    members: [[mid, Middle], [tag, i32]]
+
+- decl: [o, Outer]
+
+# Tiefer Write (drei Ebenen):
+- set: [o.mid.inner.value, 42]
+
+# Tiefer Read:
+- decl: [v, i32, o.mid.inner.value]
+
+# ptr<T> — automatische Dereferenz an jeder Ebene:
+- decl: [p, ptr<Outer>, { new: Outer }]
+- set: [p.mid.inner.value, 99]
+- decl: [r, i32, p.mid.inner.value]
+```
+
+Das Segment-Modell wird intern iterativ aufgelöst (kein syntaktischer Sonderfall).
+Jedes Segment darf entweder ein struct-Member oder ein list-Index (`field-0`) sein:
+
+```yaml
+# Gemischte Kette: list-Element, dann Member
+- class:
+    name: Container
+    members: [[items, list<Inner>]]
+
+- decl: [c, Container]
+- decl: [elem, Inner]
+- set: [elem.value, 7]
+- call: [c.items.push, elem]
+
+# Read: items-0.value
+- decl: [hp, i32, c.items-0.value]
+
+# Write: items-0.value
+- set: [c.items-0.value, 13]
+```
+
+**Zugriffskontrolle** wird an jedem Segment der Kette geprüft — nicht nur am letzten.
+
 ### Method Call
 ```yaml
 - call: [p1.move, 10, 20]

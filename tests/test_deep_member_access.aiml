@@ -1,0 +1,51 @@
+# Tests for deep member access: a.b.c reads and writes
+# Expected output:
+# deep read: 99
+# deep write: 7
+# two level count: 10
+# three level: 42
+# three level after write: 55
+
+- class:
+    name: Inner
+    members: [[value, i32]]
+
+- class:
+    name: Middle
+    members: [[inner, Inner], [count, i32]]
+
+- class:
+    name: Outer
+    members: [[mid, Middle], [tag, i32]]
+
+# ── 1. Deep read: o.mid.inner.value ──────────────────────────────────────────
+
+- decl: [o, Outer]
+- set: [o.mid.inner.value, 99]
+- decl: [r, i32, o.mid.inner.value]
+- print: ["deep read: ${r}"]
+
+# ── 2. Deep write: set: [o.mid.inner.value, val] ─────────────────────────────
+
+- set: [o.mid.inner.value, 7]
+- decl: [w, i32, o.mid.inner.value]
+- print: ["deep write: ${w}"]
+
+# ── 3. Two-level: o.mid.count ────────────────────────────────────────────────
+
+- set: [o.mid.count, 10]
+- decl: [mc, i32, o.mid.count]
+- print: ["two level count: ${mc}"]
+
+# ── 4. Fresh struct — three level read ───────────────────────────────────────
+
+- decl: [o2, Outer]
+- set: [o2.mid.inner.value, 42]
+- decl: [pr, i32, o2.mid.inner.value]
+- print: ["three level: ${pr}"]
+
+# ── 5. Three level write + re-read ────────────────────────────────────────────
+
+- set: [o2.mid.inner.value, 55]
+- decl: [pw, i32, o2.mid.inner.value]
+- print: ["three level after write: ${pw}"]

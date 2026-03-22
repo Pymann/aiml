@@ -1,0 +1,98 @@
+# Tests path values used inside db option bags. This is aimed at the current
+# persistence/path regression where literal paths behave differently from path
+# variables passed as {path: ...}.
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [literal_dir, path, "/tmp/aiml_test_path_db_literal/"]
+      - decl: [var_dir, path, "/tmp/aiml_test_path_db_variable/"]
+      - decl: [tmp_base, path]
+      - set: [tmp_base, { call: [path.temp_dir] }]
+      - decl: [joined_dir, path]
+      - set: [joined_dir, { call: [tmp_base.join, "aiml_test_path_db_joined"] }]
+
+      - call: [io.remove_all, literal_dir]
+      - call: [io.remove_all, var_dir]
+      - call: [io.remove_all, joined_dir]
+
+      - decl: [cfg_lit, Kv<string:string>]
+      - set: [cfg_lit, { call: [db.open_kv, "path_db_literal", {persist: true, path: "/tmp/aiml_test_path_db_literal/"}] }]
+      - call: [cfg_lit.clear]
+      - call: [cfg_lit.set, "mode", "literal"]
+      - decl: [cp0, i32]
+      - set: [cp0, { call: [db.checkpoint] }]
+      - if:
+          condition: { "!=": [cp0, 0] }
+          then:
+            - print: ["FAIL checkpoint_literal=${cp0}"]
+            - call: [sys.exit, 1]
+
+      - decl: [lit_dir_ok, i32]
+      - set: [lit_dir_ok, { call: [io.is_dir, literal_dir] }]
+      - if:
+          condition: { "!=": [lit_dir_ok, 1] }
+          then:
+            - print: ["FAIL literal_dir_missing=${lit_dir_ok} dir=${literal_dir}"]
+            - call: [sys.exit, 1]
+
+      - decl: [cfg_var, Kv<string:string>]
+      - set: [cfg_var, { call: [db.open_kv, "path_db_var", {persist: true, path: var_dir}] }]
+      - call: [cfg_var.clear]
+      - call: [cfg_var.set, "mode", "variable"]
+      - decl: [cp1, i32]
+      - set: [cp1, { call: [db.checkpoint] }]
+      - if:
+          condition: { "!=": [cp1, 0] }
+          then:
+            - print: ["FAIL checkpoint_var=${cp1}"]
+            - call: [sys.exit, 1]
+
+      - decl: [var_get, string]
+      - set: [var_get, { call: [cfg_var.get, "mode"] }]
+      - if:
+          condition: { "==": [{ eq: [var_get, "variable"] }, 0] }
+          then:
+            - print: ["FAIL var_get=${var_get}"]
+            - call: [sys.exit, 1]
+
+      - decl: [var_dir_ok, i32]
+      - set: [var_dir_ok, { call: [io.is_dir, var_dir] }]
+      - if:
+          condition: { "!=": [var_dir_ok, 1] }
+          then:
+            - print: ["FAIL var_dir_missing=${var_dir_ok} dir=${var_dir}"]
+            - call: [sys.exit, 1]
+
+      - decl: [cfg_joined, Kv<string:string>]
+      - set: [cfg_joined, { call: [db.open_kv, "path_db_joined", {persist: true, path: joined_dir}] }]
+      - call: [cfg_joined.clear]
+      - call: [cfg_joined.set, "mode", "joined"]
+      - decl: [cp2, i32]
+      - set: [cp2, { call: [db.checkpoint] }]
+      - if:
+          condition: { "!=": [cp2, 0] }
+          then:
+            - print: ["FAIL checkpoint_joined=${cp2}"]
+            - call: [sys.exit, 1]
+
+      - decl: [joined_get, string]
+      - set: [joined_get, { call: [cfg_joined.get, "mode"] }]
+      - if:
+          condition: { "==": [{ eq: [joined_get, "joined"] }, 0] }
+          then:
+            - print: ["FAIL joined_get=${joined_get}"]
+            - call: [sys.exit, 1]
+
+      - decl: [joined_dir_ok, i32]
+      - set: [joined_dir_ok, { call: [io.is_dir, joined_dir] }]
+      - if:
+          condition: { "!=": [joined_dir_ok, 1] }
+          then:
+            - print: ["FAIL joined_dir_missing=${joined_dir_ok} dir=${joined_dir}"]
+            - call: [sys.exit, 1]
+
+      - print: ["path db options PASS"]
+      - return: 0

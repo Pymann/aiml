@@ -1,0 +1,35 @@
+# Return type coverage test
+# Expected exit code: 0
+
+- decl: [g_i32, i32, 77]
+
+- def:
+    name: ret_i32
+    args: []
+    return: i32
+    body:
+      - return: [123]
+
+- def:
+    name: ret_string
+    args: []
+    return: string
+    body:
+      - return: ["hello-return"]
+
+- decl: [n32, i32, { call: [ret_i32] }]
+- if: [{ "!=": [n32, 123] }, true]
+  then:
+    - print: ["FAIL i32: expected 123 got ${n32}"]
+    - call: [sys.exit, 1]
+- print: ["OK i32"]
+
+- decl: [s, string, { call: [ret_string] }]
+- if: [{ neq: [s, "hello-return"] }, true]
+  then:
+    - print: ["FAIL string: expected hello-return got ${s}"]
+    - call: [sys.exit, 1]
+- print: ["OK string"]
+
+- print: ["return type matrix PASS"]
+- call: [sys.exit, 0]

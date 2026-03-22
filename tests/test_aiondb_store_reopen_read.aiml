@@ -1,0 +1,45 @@
+# Regression check: reopen the persistent Store<T> from a separate run.
+# Run after test_aiondb_store_reopen_write.aiml.
+# Expected exit code: 0
+
+- class:
+    name: ReopenPlayer
+    members: [[score, i32], [level, i32]]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_path, path, "/tmp/aiml_test_aiondb_store_reopen_20260319/"]
+      - if:
+          condition: { "==": [{ call: [db_path.exists] }, 0] }
+          then:
+            - print: ["SKIP store_reopen_read (run test_aiondb_store_reopen_write.aiml first)"]
+            - return: 0
+
+      - decl: [players, Store<ReopenPlayer>]
+      - set: [players, { call: [db.open, "reopen_players_20260319", {persist: true, path: db_path}] }]
+
+      - decl: [n, i32]
+      - set: [n, { call: [players.len] }]
+      - if:
+          condition: { "!=": [n, 1] }
+          then:
+            - print: ["FAIL store_reopen_read_len=${n}"]
+            - call: [sys.exit, 1]
+
+      - decl: [p, ptr<ReopenPlayer>]
+      - set: [p, { call: [players.get, 1] }]
+      - if:
+          condition: { "!=": [p.score, 456] }
+          then:
+            - print: ["FAIL store_reopen_read_score=${p.score}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { "!=": [p.level, 9] }
+          then:
+            - print: ["FAIL store_reopen_read_level=${p.level}"]
+            - call: [sys.exit, 1]
+
+      - print: ["AionDB store reopen read PASS"]
+      - return: 0

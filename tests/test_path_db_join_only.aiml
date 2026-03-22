@@ -1,0 +1,44 @@
+# Repro case: derived path value passed into persistent db option bag.
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [tmpdir, path]
+      - set: [tmpdir, { call: [path.temp_dir] }]
+      - decl: [db_dir, path]
+      - set: [db_dir, { call: [tmpdir.join, "aiml_test_path_db_join_only"] }]
+      - call: [io.remove_all, db_dir]
+
+      - decl: [cfg, Kv<string:string>]
+      - set: [cfg, { call: [db.open_kv, "path_db_join_only", {persist: true, path: db_dir}] }]
+      - call: [cfg.clear]
+      - call: [cfg.set, "mode", "join-only"]
+
+      - decl: [cp, i32]
+      - set: [cp, { call: [db.checkpoint] }]
+      - if:
+          condition: { "!=": [cp, 0] }
+          then:
+            - print: ["FAIL join_only_checkpoint=${cp}"]
+            - call: [sys.exit, 1]
+
+      - decl: [dir_ok, i32]
+      - set: [dir_ok, { call: [io.is_dir, db_dir] }]
+      - if:
+          condition: { "!=": [dir_ok, 1] }
+          then:
+            - print: ["FAIL join_only_dir=${dir_ok} dir=${db_dir}"]
+            - call: [sys.exit, 1]
+
+      - decl: [got, string]
+      - set: [got, { call: [cfg.get, "mode"] }]
+      - if:
+          condition: { "==": [{ eq: [got, "join-only"] }, 0] }
+          then:
+            - print: ["FAIL join_only_get=${got}"]
+            - call: [sys.exit, 1]
+
+      - print: ["path db join only PASS"]
+      - return: 0

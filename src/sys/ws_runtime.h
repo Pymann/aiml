@@ -25,9 +25,15 @@ int     aiml_ws_send_binary(void* ws, void* buf_ptr);    // binary frame from bu
 char*   aiml_ws_recv(void* ws);                          // recv next text/binary payload (malloc'd)
 int     aiml_ws_ping(void* ws);                          // send ping frame
 
+// ── Raw binary I/O (used by mirror transport) ────────────────────────────────
+int     aiml_ws_send_raw(void* ws, const void* data, int32_t len); // binary frame from raw ptr+len
+void*   aiml_ws_recv_raw(void* ws, int32_t* out_len);              // recv next frame, sets length (caller frees)
+
 // ── Common ────────────────────────────────────────────────────────────────────
 int     aiml_ws_close(void* ws);   // send close frame, shutdown, free
 int32_t aiml_ws_fd(void* ws);      // raw TCP fd
+int     aiml_ws_poll(void* ws, int32_t timeout_ms);          // 1=data ready, 0=timeout, -1=error
+int     aiml_ws_poll_listener(void* srv, int32_t timeout_ms); // 1=accept-ready, 0=timeout, -1=error
 
 #ifdef __cplusplus
 }

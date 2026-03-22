@@ -1,28 +1,83 @@
-# Test: db.open with persist:true and configurable path
+# Hermetic persist test for Store<T>.
+# Expected exit code: 0
 
 - class:
     name: Player
     members: [[score, i32], [level, i32]]
 
-- decl: [mydb, path]
-- set: [mydb, "./aiondb/"]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_dir, path, "/tmp/aiml_test_persist_store/"]
+      - call: [io.remove_all, db_dir]
 
-- decl: [players, Store<Player>]
-- set: [players, { call: [db.open, "players", {persist: true, path: mydb}] }]
+      - decl: [players, Store<Player>]
+      - set: [players, { call: [db.open, "players", {persist: true, path: db_dir}] }]
 
-- decl: [p1, Player]
-- set: [p1.score, 999]
-- set: [p1.level, 42]
-- call: [players.insert, p1]
+      - decl: [n0, i32]
+      - set: [n0, { call: [players.len] }]
+      - if:
+          condition: { "!=": [n0, 0] }
+          then:
+            - print: ["FAIL persist_initial_len=${n0}"]
+            - call: [sys.exit, 1]
 
-- decl: [n, i32]
-- set: [n, { call: [players.len] }]
-- print: ["players: ${n}"]
+      - decl: [p1, Player]
+      - set: [p1.score, 999]
+      - set: [p1.level, 42]
 
-- decl: [got, ptr<Player>]
-- set: [got, { call: [players.get, 1] }]
-- print: ["score: ${got.score}, level: ${got.level}"]
+      - decl: [id1, i32]
+      - set: [id1, { call: [players.insert, p1] }]
+      - if:
+          condition: { "!=": [id1, 1] }
+          then:
+            - print: ["FAIL persist_insert_id=${id1}"]
+            - call: [sys.exit, 1]
 
-- decl: [rc, i32]
-- set: [rc, { call: [db.checkpoint] }]
-- print: ["checkpoint rc: ${rc}"]
+      - decl: [n1, i32]
+      - set: [n1, { call: [players.len] }]
+      - if:
+          condition: { "!=": [n1, 1] }
+          then:
+            - print: ["FAIL persist_len=${n1}"]
+            - call: [sys.exit, 1]
+
+      - decl: [got, ptr<Player>]
+      - set: [got, { call: [players.get, 1] }]
+      - if:
+          condition: { "==": [got, null] }
+          then:
+            - print: ["FAIL persist_get=null"]
+            - call: [sys.exit, 1]
+
+      - if:
+          condition: { "!=": [got.score, 999] }
+          then:
+            - print: ["FAIL persist_score=${got.score}"]
+            - call: [sys.exit, 1]
+
+      - if:
+          condition: { "!=": [got.level, 42] }
+          then:
+            - print: ["FAIL persist_level=${got.level}"]
+            - call: [sys.exit, 1]
+
+      - decl: [dir_ok, i32]
+      - set: [dir_ok, { call: [io.is_dir, db_dir] }]
+      - if:
+          condition: { "!=": [dir_ok, 1] }
+          then:
+            - print: ["FAIL persist_dir=${dir_ok} dir=${db_dir}"]
+            - call: [sys.exit, 1]
+
+      - decl: [rc, i32]
+      - set: [rc, { call: [db.checkpoint] }]
+      - if:
+          condition: { "!=": [rc, 0] }
+          then:
+            - print: ["FAIL persist_checkpoint=${rc}"]
+            - call: [sys.exit, 1]
+
+      - print: ["persist store PASS"]
+      - return: 0

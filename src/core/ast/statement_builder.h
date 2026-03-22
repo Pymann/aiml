@@ -18,6 +18,7 @@ class StatementBuilder : public StateHandler {
     bool expectingValue = false;
     bool is_const = false;
     bool is_volatile = false;
+    bool is_extern = false;
     int seqDepth = 0;       // nesting depth of sequences seen
     int innerSeqStart = -1; // args[] index where inner sequence elements begin
 public:

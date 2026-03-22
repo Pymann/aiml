@@ -90,7 +90,8 @@ AIML has three scope levels:
 | **Function-level** (inside `def:`) | Function call | That function only |
 | **Block-level** (inside `if:/while:/for:`) | Block execution | That block only |
 
-Inner scopes can shadow outer names. Shadowed variables resume their original value after the block exits.
+Inner scopes may not shadow outer names. Redeclaring a visible name in an inner
+scope is a `CompilationError`.
 
 ### 6.2 Module-Level Declarations in Imported Files
 
@@ -147,8 +148,8 @@ Top-level `decl:` statements in the imported file become **module-level globals*
     name: example
     body:
       - print: "${x}"       # 10 (module-level)
-      - decl: [x, i32, 20]
-      - print: "${x}"       # 20 (function-level shadow)
+      # - decl: [x, i32, 20]
+      # -> CompilationError: shadowing is not allowed
 ```
 
 ## 7. Integrity and Consistency

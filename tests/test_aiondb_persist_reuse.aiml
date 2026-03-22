@@ -1,0 +1,61 @@
+# Regression test: persistent AionDB Store<T> handles should reuse the same
+# in-process state for the same name/path.
+# Expected exit code: 0
+
+- class:
+    name: PersistEntity
+    members: [[score, i32], [level, i32]]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_path, path, "/tmp/aiml_test_aiondb_persist_reuse/"]
+
+      # Store<T>: second open with same name/path should see the same inserted row.
+      - decl: [players_a, Store<PersistEntity>]
+      - decl: [players_b, Store<PersistEntity>]
+      - set: [players_a, { call: [db.open, "persist_reuse_players", {persist: true, path: db_path}] }]
+      - set: [players_b, { call: [db.open, "persist_reuse_players", {persist: true, path: db_path}] }]
+
+      - decl: [base_count, i32]
+      - set: [base_count, { call: [players_a.len] }]
+
+      - decl: [ent, PersistEntity]
+      - set: [ent.score, 777]
+      - set: [ent.level, 12]
+
+      - decl: [eid, i32]
+      - set: [eid, { call: [players_a.insert, ent] }]
+
+      - decl: [count_b, i32]
+      - set: [count_b, { call: [players_b.len] }]
+      - if:
+          condition: { "!=": [count_b, { "+": [base_count, 1] }] }
+          then:
+            - print: ["FAIL store_reuse_len base=${base_count} got=${count_b}"]
+            - call: [sys.exit, 1]
+
+      - decl: [ent_b, ptr<PersistEntity>]
+      - set: [ent_b, { call: [players_b.get, eid] }]
+      - if:
+          condition: { "!=": [ent_b.score, 777] }
+          then:
+            - print: ["FAIL store_reuse_score=${ent_b.score}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { "!=": [ent_b.level, 12] }
+          then:
+            - print: ["FAIL store_reuse_level=${ent_b.level}"]
+            - call: [sys.exit, 1]
+
+      - decl: [rc, i32]
+      - set: [rc, { call: [db.checkpoint] }]
+      - if:
+          condition: { "!=": [rc, 0] }
+          then:
+            - print: ["FAIL checkpoint_rc=${rc}"]
+            - call: [sys.exit, 1]
+
+      - print: ["AionDB store persist reuse PASS"]
+      - return: 0

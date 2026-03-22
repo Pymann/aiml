@@ -49,13 +49,13 @@
 - print: ["Main: done"]
 
 # Channel test: producer sends 42 and 99, main receives both
-- decl: [ch, chan<i32>]
+- decl: [g_ch, chan<i32>]
 - decl: [tp, thread_handle]
-- set: [tp, { spawn: [producer, ch] }]
+- set: [tp, { spawn: [producer, g_ch] }]
 - decl: [v1, i32]
 - decl: [v2, i32]
-- set: [v1, { call: [ch.recv] }]
-- set: [v2, { call: [ch.recv] }]
+- set: [v1, { call: [g_ch.recv] }]
+- set: [v2, { call: [g_ch.recv] }]
 - call: [tp.join]
 - print: ["Received: ${v1}"]
 - print: ["Received: ${v2}"]

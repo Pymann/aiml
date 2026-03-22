@@ -1,0 +1,16 @@
+# Requires: library
+- import: "tests/ws9_shared.aiml"
+
+- decl: [g_ws9_server_client_info, ClientInfoWs9]
+- decl: [g_ws9_server_seen_client_info, i32, 0]
+
+- def:
+    name: ws9server.mark_client_info_seen
+    body:
+      - set: [g_ws9_server_seen_client_info, 1]
+
+- def:
+    name: ws9server.client_info_seen
+    return: i32
+    body:
+      - return: [g_ws9_server_seen_client_info]

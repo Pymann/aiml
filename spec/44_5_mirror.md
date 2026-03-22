@@ -67,6 +67,75 @@ Der Compiler generiert pro `sync:`-Modell:
 
 ---
 
+## 2.1 Heap-Felder in sync:-Modellen
+
+Felder der Typen `string`, `list<T>`, `map<K:V>` und `Kv<string:T>` dürfen in
+`sync:` stehen. Der Compiler erkennt automatisch, dass Heap-Serialization
+(Kapitel 45) nötig ist, und emittiert `@__aiml_sernodes_<Model>`.
+
+```aiml
+- model:
+    name: GameView
+    sync: [hand_count, cards]
+    fields:
+      - [hand_count, i32]
+      - [cards,      Kv<string:CardData>]   # ← Heap-Feld in sync:
+      - [phase,      i32]
+```
+
+### Initialisierung von Kv-Feldern
+
+Ein `Kv<string:T>`-Feld wird **nicht** automatisch allokiert.
+Das Modell-Feld enthält zunächst einen Null-Pointer.
+Der Besitzer muss das Feld einmalig explizit initialisieren — typischerweise
+im Setup-Code, *bevor* das Objekt registriert wird:
+
+```aiml
+- decl: [g_view, GameView]
+- set:  [g_view.cards, { call: [db.open_kv, "cards"] }]   # allokiert Kv
+- decl: [nid, i32, { call: [sess.register, g_view] }]
+```
+
+Nach `session.register` sendet Mirror das Initialpaket mit dem vollständig
+serialisierten Kv-Inhalt an alle Peers.
+
+Ein `map<K:V>`-Feld verhält sich analog — es muss mit `{ call: [map.new] }`
+initialisiert werden (sofern `map.new` vorhanden), oder ebenfalls per `db.open_kv`
+falls persistenter Speicher gewünscht ist.
+
+### Dirty-Detection für Kv / map (v1-Einschränkung)
+
+Die automatische Dirty-Detection in `session.update()` basiert auf `memcmp` des
+gesamten Struct-Speichers. Für primitive und String-Felder funktioniert das
+(Pointer-Adressen ändern sich bei jeder Neuzuweisung). Für `Kv<string:T>` und
+`map<K:V>` ändert sich der Pointer **nie** — nur der interne Inhalt. `memcmp`
+sieht daher keine Änderung.
+
+**Konsequenz:** Nach jedem mutierenden Kv-Zugriff (`kv.set` / `kv.delete`) muss
+der Besitzer explizit synchronisieren:
+
+```aiml
+- call: [g_view.cards.set, cid, card_data]   # mutiert Kv — Pointer unverändert
+- call: [sess.sync_now, g_view]              # erzwingt sofortigen Delta
+```
+
+Alternativ das Objekt in den manuellen Sync-Modus setzen und nach jeder
+Änderung aufrufen:
+
+```aiml
+# Einmalig nach register:
+- call: [sess.set_sync_mode, g_view, "manual"]
+
+# Nach jeder Kv-Mutation:
+- call: [g_view.cards.set, cid, card_data]
+- call: [sess.sync_now, g_view]
+```
+
+> **v2:** Dirty-Detection wird auf Blob-Vergleich umgestellt — dann erkennt
+> `session.update()` Kv-Änderungen automatisch ohne explizites `sync_now`.
+
+---
+
 ## 3. Session-Erstellung
 
 ### 3.1 Transport-URL
@@ -176,7 +245,53 @@ Intern serialisiert der Compiler-generierte Stub die Argumente und sendet sie.
 - **`"owner"`**: RPC wird zum Besitzer des Objekts weitergeleitet (häufigster Fall: Client → Server)
 - **`"all"`**: RPC wird an alle Peers gesendet inkl. lokalem Ausführen
 - **`"others"`**: RPC wird an alle anderen Peers gesendet, lokal nicht ausgeführt
-- **`"server"`**: immer an den Host (auch wenn Aufrufer selbst Host ist → lokal)
+- **`"server"`**: immer an den Host (auch wenn Aufrufer selbst Hook ist → lokal)
+
+### RPC-Queue (Host-seitig, low-level)
+
+Eingehende RPCs können alternativ manuell aus der Queue gelesen werden,
+wenn die Ziel-Methode nicht automatisch auf dem lokalen Objekt ausgeführt werden soll
+(z. B. bei Spielphasen-Koordination auf einem Game-Server):
+
+```aiml
+model:
+  name: rpc_event
+  fields:
+    - [method, string]   # Name der aufgerufenen Methode; "" wenn Queue leer (poll_rpc-Sentinel)
+    - [net_id, i32]      # net_id des Zielobjekts
+    - [arg,    i32]      # einziges Argument (v1-Einschränkung: genau ein i32)
+```
+
+| Aufruf | Rückgabe | Beschreibung |
+|--------|----------|--------------|
+| `session.has_rpc()` | `i32` | Anzahl ausstehender RPCs in der Queue |
+| `session.next_rpc()` | `rpc_event` | Nächstes RPC konsumieren (Queue muss nicht leer sein — UB wenn leer) |
+| `session.poll_rpc()` | `rpc_event` | Nächstes RPC konsumieren, oder leeren Sentinel (`method == ""`) wenn Queue leer |
+
+`poll_rpc()` ist der empfohlene Weg für Spiel-Server-Loops, weil kein explizites
+`has_rpc`-Prädikat nötig ist:
+
+```aiml
+# Empfohlenes Muster (poll_rpc):
+- call: [sess.update]
+- decl: [rpc, rpc_event, { call: [sess.poll_rpc] }]
+- decl: [rm, string, rpc.method]
+- if:
+    condition: { eq: [rm, "pass_turn"] }
+    then:
+      - set: [done, 1]
+- if:
+    condition: { eq: [rm, "draw"] }
+    then:
+      - call: [handle_draw, rpc.arg]
+- if:
+    condition: { "==": [done, 0] }
+    then:
+      - call: [time.sleep_ms, 16]
+
+# Wenn rm == "" (leere Queue): alle eq-Checks schlagen fehl → sleep → nächste Iteration.
+# Kein separates has_rpc-Prädikat nötig.
+```
 
 ---
 
@@ -184,15 +299,62 @@ Intern serialisiert der Compiler-generierte Stub die Argumente und sendet sie.
 
 | Aufruf | Rückgabe | Beschreibung |
 |--------|----------|--------------|
-| `session.has_event()` | `bool` | Peer-Event-Queue nicht leer |
-| `session.next_event()` | `mirror_event` | Nächstes Event konsumieren |
+| `session.has_event()` | `i32` | Event-Queue nicht leer (>0) |
+| `session.next_event()` | `mirror_event` | Nächstes Event konsumieren (Queue muss nicht leer sein — UB wenn leer) |
+| `session.poll_event()` | `mirror_event` | Nächstes Event konsumieren, oder leeren Sentinel (`type == ""`) wenn Queue leer |
 
 ```aiml
-model: mirror_event
-fields:
-  - [type,    string]        # "peer_connected" | "peer_disconnected" | "object_registered" | "object_unregistered"
-  - [peer,    mirror_peer]   # betroffener Peer
-  - [net_id,  i32]           # betroffene Objekt-ID (bei object_*)
+model:
+  name: mirror_event
+  fields:
+    - [type,    string]      # "peer_connected" | "peer_disconnected" | "object_registered" | "object_unregistered"
+                             # "" wenn Queue leer (poll_event-Sentinel)
+    - [peer,    mirror_peer] # betroffener Peer (null bei object_*-Events)
+    - [net_id,  i32]         # betroffene Objekt-ID (bei object_*); 0 bei peer_*-Events
+```
+
+`poll_event()` vereinfacht Event-Loops, wenn nur eine bestimmte Event-Art erwartet wird:
+
+```aiml
+# has_event + next_event (klassisch):
+- if:
+    condition: { call: [sess.has_event] }
+    then:
+      - decl: [ev, mirror_event, { call: [sess.next_event] }]
+      - if:
+          condition: { eq: [ev.type, "peer_connected"] }
+          then:
+            - call: [on_connected]
+
+# poll_event (kompakter):
+- decl: [ev, mirror_event, { call: [sess.poll_event] }]
+- if:
+    condition: { eq: [ev.type, "peer_connected"] }
+    then:
+      - call: [on_connected]
+# Wenn ev.type == "": Queue war leer, kein Aufruf nötig.
+```
+
+### Auf bestimmtes Event warten
+
+Wenn der Code bis zu einem bestimmten Event blockieren soll (z. B. Handshake),
+bietet sich ein einfacher Poll-Loop an:
+
+```aiml
+# Warte auf "object_registered", bis zu 300 Ticks × 16 ms:
+- decl: [found_nid, i32, -1]
+- decl: [ticks, i32, 0]
+- while:
+    condition: { "&&": [{ "==": [found_nid, -1] }, { "<": [ticks, 300] }] }
+    body:
+      - call: [sess.update]
+      - decl: [ev, mirror_event, { call: [sess.poll_event] }]
+      - if:
+          condition: { eq: [ev.type, "object_registered"] }
+          then:
+            - set: [found_nid, ev.net_id]
+      - call: [time.sleep_ms, 16]
+      - set: [ticks, { +: [ticks, 1] }]
 ```
 
 ---

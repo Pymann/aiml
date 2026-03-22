@@ -1,0 +1,39 @@
+# Minimal repro for relative path + top-level Store<T> persist.
+# Expected exit code: 0
+
+- class:
+    name: RelativeStorePlayer
+    members: [[score, i32], [level, i32]]
+
+- decl: [db_dir, path]
+- set: [db_dir, "./aiondb_rel_global/"]
+- call: [io.remove_all, db_dir]
+
+- decl: [players, Store<RelativeStorePlayer>]
+- set: [players, { call: [db.open, "players_rel_global", {persist: true, path: db_dir}] }]
+
+- decl: [p, RelativeStorePlayer]
+- set: [p.score, 314]
+- set: [p.level, 15]
+
+- decl: [id, i32]
+- set: [id, { call: [players.insert, p] }]
+- print: ["rel_global_id=${id}"]
+
+- decl: [n, i32]
+- set: [n, { call: [players.len] }]
+- print: ["rel_global_len=${n}"]
+
+- decl: [got, ptr<RelativeStorePlayer>]
+- set: [got, { call: [players.get, id] }]
+- if:
+    condition: { "==": [got, null] }
+    then:
+      - print: ["FAIL rel_global_get=null"]
+      - call: [sys.exit, 1]
+
+- print: ["rel_global_score=${got.score} level=${got.level}"]
+
+- decl: [cp, i32]
+- set: [cp, { call: [db.checkpoint] }]
+- print: ["rel_global_checkpoint=${cp}"]

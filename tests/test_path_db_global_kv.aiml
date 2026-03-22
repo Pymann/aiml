@@ -1,0 +1,23 @@
+# Compare top-level/global path variable usage in db.open_kv.
+# Expected exit code: 0
+
+- decl: [db_dir, path]
+- set: [db_dir, "/tmp/aiml_test_path_db_global_kv/"]
+- call: [io.remove_all, db_dir]
+
+- decl: [cfg, Kv<string:string>]
+- set: [cfg, { call: [db.open_kv, "path_db_global_kv", {persist: true, path: db_dir}] }]
+- call: [cfg.clear]
+- call: [cfg.set, "mode", "global-kv"]
+
+- decl: [n, i32]
+- set: [n, { call: [cfg.len] }]
+- print: ["global_kv_len=${n}"]
+
+- decl: [got, string]
+- set: [got, { call: [cfg.get, "mode"] }]
+- print: ["global_kv_mode=${got}"]
+
+- decl: [cp, i32]
+- set: [cp, { call: [db.checkpoint] }]
+- print: ["global_kv_checkpoint=${cp}"]
