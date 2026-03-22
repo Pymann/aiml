@@ -45,6 +45,11 @@ rm -rf "$AIML_CACHE"
 # Clear AionDB persistent store (created by test_persist.aiml and similar tests)
 rm -rf aiondb/
 
+# Clear reopen test directories in /tmp (write+read test pairs need a clean slate)
+rm -rf /tmp/aiml_test_aiondb_kv_reopen_20260319/
+rm -rf /tmp/aiml_test_aiondb_ts_reopen_20260319/
+rm -rf /tmp/aiml_test_aiondb_store_reopen_20260319/
+
 echo "Running AIML Tests..." | tee -a "$OUTPUT_FILE"
 echo "======================" | tee -a "$OUTPUT_FILE"
 

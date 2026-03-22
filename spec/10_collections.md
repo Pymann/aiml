@@ -37,14 +37,14 @@
 
 - call: [users.put, "alice", 1]
 - set: [val, { call: [users.get, "alice"] }]   # returns i32 or null pointer if missing
-- set: [exists, { call: [users.has, "alice"] }]
 - call: [users.remove, "alice"]                # raises MissingKeyError if key not found
 - call: [users.clear]
 - set: [len, users.len]
 
-# Null check after get:
+# Existence check via get() + null comparison:
+- set: [maybe_alice, { call: [users.get, "alice"] }]
 - if:
-    condition: { eq: [val, null] }
+    condition: { eq: [maybe_alice, null] }
     then:
       - print: ["Key not found"]
 

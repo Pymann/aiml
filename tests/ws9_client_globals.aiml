@@ -1,0 +1,26 @@
+# Requires: library
+- import: "tests/ws9_shared.aiml"
+
+- decl: [g_ws9_view, GameViewWs9]
+- decl: [g_ws9_view_nid, i32, 0]
+- decl: [g_ws9_client_info, ClientInfoWs9]
+- decl: [g_ws9_selected_deckset_id, string, ""]
+- decl: [g_ws9_connected, i32, 0]
+
+- def:
+    name: ws9client.set_selected_deckset
+    args: [[deckset_id, string]]
+    body:
+      - set: [g_ws9_selected_deckset_id, deckset_id]
+
+- def:
+    name: ws9client.get_selected_deckset
+    return: string
+    body:
+      - return: [g_ws9_selected_deckset_id]
+
+- def:
+    name: ws9client.get_connected
+    return: i32
+    body:
+      - return: [g_ws9_connected]

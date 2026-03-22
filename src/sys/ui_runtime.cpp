@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include "../../logger.h"
 #include <algorithm>
 
 #include "ui_runtime.h"
@@ -1151,6 +1152,21 @@ void aiml_ui_end_cell(void) {
     g_ui->cell_stack.pop_back();
 }
 
+int32_t aiml_ui_grid_cell_rect(int32_t col, int32_t row, int32_t colspan, int32_t rowspan,
+                                float* out_x, float* out_y, float* out_w, float* out_h) {
+    if (!g_ui || g_ui->grid_stack.empty()) return -1;
+    UiGridState& gs = g_ui->grid_stack.back();
+    int c0 = col, c1 = col + colspan - 1;
+    int r0 = row, r1 = row + rowspan - 1;
+    if (c1 >= gs.num_cols) c1 = gs.num_cols - 1;
+    if (r1 >= gs.num_rows) r1 = gs.num_rows - 1;
+    if (out_x) *out_x = gs.col_offsets[c0];
+    if (out_y) *out_y = gs.row_offsets[r0];
+    if (out_w) *out_w = gs.col_offsets[c1] + gs.col_sizes[c1] - gs.col_offsets[c0];
+    if (out_h) *out_h = gs.row_offsets[r1] + gs.row_sizes[r1] - gs.row_offsets[r0];
+    return 0;
+}
+
 void aiml_ui_set_align(const char* h, const char* v) {
     if (!g_ui) aiml_ui_init();
     if (h) strncpy(g_ui->next_align_h, h, 15);
@@ -1527,6 +1543,7 @@ int32_t aiml_ui_spinbox(const char* id, void* opts_list, int32_t current, void* 
 
     /* Toggle open/closed on header click */
     if (hot && g_ui->mouse_released) {
+        LOG_DEBUG(std::string("[SPINBOX] id=") + id + " hot+released -> toggle open=" + std::to_string(open) + "->" + std::to_string(!open));
         g_ui->focused = open ? 0 : wid;
         open = !open;
     }
@@ -1596,6 +1613,7 @@ int32_t aiml_ui_spinbox(const char* id, void* opts_list, int32_t current, void* 
             float ry = popup_y + vi * row_h - row_offset;
             bool row_hot = point_in_rect(g_ui->mouse_x, g_ui->mouse_y, bx, ry, bw - sb_w, row_h);
             if (row_hot && g_ui->mouse_released) {
+                LOG_DEBUG(std::string("[SPINBOX] id=") + id + " selected item " + std::to_string(i) + " (" + opts[i] + ")");
                 current = i;
                 g_ui->focused = 0;
                 open = false;

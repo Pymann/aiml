@@ -47,6 +47,8 @@ void  aiml_prefab_destroy    (void* inst);
 /* ── Transform (instance) ─────────────────────────────────────────────── */
 
 void  aiml_prefab_set_pos     (void* inst, float x, float y);
+/* Set position as ratio of screen (0.0-1.0). Automatically scales on resize. */
+void  aiml_prefab_set_pos_rel (void* inst, float rx, float ry);
 float aiml_prefab_get_x       (void* inst);
 float aiml_prefab_get_y       (void* inst);
 void  aiml_prefab_set_scale   (void* inst, float s);
@@ -88,6 +90,18 @@ void aiml_prefab_draw_scene(void);
  * Iterates in reverse z_order (top-to-bottom). */
 void* aiml_prefab_hit_test(float mx, float my);
 
+/* ── Hover tracking ──────────────────────────────────────────────────── */
+
+/* Update hover state. Call once per frame with mouse position.
+ * Performs hit_test and sets hovered flag on the topmost instance. */
+void  aiml_prefab_update_hover(float mx, float my);
+/* Returns currently hovered instance, or NULL. */
+void* aiml_prefab_get_hovered(void);
+/* Returns 1 if this instance is currently hovered, 0 otherwise. */
+int32_t aiml_prefab_is_hovered(void* inst);
+/* Returns 1 if this instance was clicked this frame (hovered + btn pressed). */
+int32_t aiml_prefab_was_clicked(void* inst, int32_t btn);
+
 /* ── Drag-and-drop ────────────────────────────────────────────────────── */
 
 /* Update drag state. Call once per frame with mouse state.
@@ -95,8 +109,17 @@ void* aiml_prefab_hit_test(float mx, float my);
 void  aiml_prefab_update_drag(float mx, float my, int32_t btn_down, int32_t btn_released);
 /* Returns currently dragged instance, or NULL. */
 void* aiml_prefab_get_dragged(void);
+/* Cancel active drag: restore position to drag_origin and clear dragged state. */
+void  aiml_prefab_cancel_drag(void* inst);
 
 /* ── Utility ──────────────────────────────────────────────────────────── */
+
+/* Dock prefab to a UI grid cell axis.
+ * dock_x: sets inst.x = cell_x, scale_x = cell_w / def.width
+ * dock_y: sets inst.y = cell_y, scale_y = cell_h / def.height
+ * Must be called while a ui.begin_grid is active. */
+void aiml_prefab_dock_x(void* inst, int32_t col, int32_t colspan);
+void aiml_prefab_dock_y(void* inst, int32_t row, int32_t rowspan);
 
 /* Set the font used for label children. font = AimlUIFont* from ui.load_font(). */
 void aiml_prefab_set_font(void* font);

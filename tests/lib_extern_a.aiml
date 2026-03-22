@@ -1,0 +1,35 @@
+# Requires: library
+
+- namespace: exta
+
+- decl: [shared_counter, i32, 0, { extern: true }]
+- decl: [shared_label, string, "", { extern: true }]
+
+- def:
+    name: set_counter
+    args: [[v, i32]]
+    body:
+      - set: [shared_counter, v]
+
+- def:
+    name: inc_counter
+    body:
+      - set: [shared_counter, { +: [shared_counter, 1] }]
+
+- def:
+    name: get_counter
+    return: i32
+    body:
+      - return: [shared_counter]
+
+- def:
+    name: set_label
+    args: [[s, string]]
+    body:
+      - set: [shared_label, s]
+
+- def:
+    name: get_label
+    return: string
+    body:
+      - return: [shared_label]

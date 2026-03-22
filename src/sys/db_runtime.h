@@ -65,6 +65,7 @@ void*   aiml_db_kv_open_typed_persist(const char* name, int64_t val_size,
                                        const char* base_path,
                                        const AimlTypeNode* nodes, int32_t n_nodes);
 int32_t aiml_db_kv_checkpoint(void* kv);  // compact WAL to current state
+void    aiml_db_kv_reload(void* kv);      // re-read WAL from disk (cross-process sync)
 void    aiml_db_kv_set(void* kv, const char* key, const void* val, int64_t val_size);
 void*   aiml_db_kv_get(void* kv, const char* key);
 int32_t aiml_db_kv_has(void* kv, const char* key);

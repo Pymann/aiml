@@ -52,17 +52,34 @@ void Compiler::compile(Program* prog) {
         };
 
         // Pass 1: promote top-level DeclStmt to module-level GlobalVariables.
+        // - {extern: true} → plain __lib_<varName> (ExternalLinkage, cross-file by intent)
+        // - otherwise      → __lib_<sanitized_file>_<varName> (no linker conflicts for privates)
+        std::string filePrefix;
+        if (!ctx.currentSourceFile.empty()) {
+            for (char c : ctx.currentSourceFile)
+                filePrefix += (std::isalnum(c) ? c : '_');
+            filePrefix += "_";
+        }
         for (const auto& d : prog->declarations) {
             auto* decl = dynamic_cast<DeclStmt*>(d.get());
             if (!decl) continue;
             IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
             if (!ty) continue;
             llvm::Type* llvmTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ty));
+            std::string symName = decl->is_extern
+                ? "__lib_" + decl->varName
+                : "__lib_" + filePrefix + decl->varName;
+            // {extern: true} → WeakAnyLinkage: multiple definitions allowed,
+            // linker picks one → all references share the same storage.
+            // Private globals → ExternalLinkage (file-qualified, unique per file).
+            auto linkage = decl->is_extern
+                ? llvm::GlobalValue::WeakAnyLinkage
+                : llvm::GlobalValue::ExternalLinkage;
             auto* gv = new llvm::GlobalVariable(
                 ctx.module, llvmTy, /*isConstant=*/false,
-                llvm::GlobalValue::InternalLinkage,
+                linkage,
                 llvm::Constant::getNullValue(llvmTy),
-                std::string("__lib_") + decl->varName);
+                symName);
 
             Symbol sym;
             sym.ir_alloca_inst = ctx.ir_gen->wrap(static_cast<llvm::Value*>(gv));
@@ -151,9 +168,43 @@ void Compiler::compile(Program* prog) {
             ctx.builder.CreateCall(fc);
         }
 
+        // Pre-pass: promote top-level DeclStmts to GlobalVariables so that
+        // functions can reference them without cross-function alloca issues
+        // (cross-function alloca references produce invalid LLVM IR).
+        // Only the storage is created here; initializers are emitted in-order
+        // below via visitDeclStmt, which detects is_global and skips alloca.
+        for (const auto& d : prog->declarations) {
+            auto* decl = dynamic_cast<DeclStmt*>(d.get());
+            if (!decl) continue;
+            IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
+            if (!ty) continue;
+            llvm::Type* llvmTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ty));
+            std::string symName = "__global_" + decl->varName;
+            auto* gv = new llvm::GlobalVariable(
+                ctx.module, llvmTy, /*isConstant=*/false,
+                llvm::GlobalValue::ExternalLinkage,
+                llvm::Constant::getNullValue(llvmTy),
+                symName);
+
+            Symbol sym;
+            sym.ir_alloca_inst  = ctx.ir_gen->wrap(static_cast<llvm::Value*>(gv));
+            sym.ir_type         = ctx.ir_gen->getPointerTy();
+            sym.ir_element_type = ty;
+            sym.typeName        = decl->typeName;
+            sym.is_const        = decl->is_const;
+            sym.is_volatile     = decl->is_volatile;
+            sym.is_global       = true;
+            ctx.symbol_table[decl->varName] = sym;
+        }
+
+        // Visit all declarations in file order (preserving execution order).
+        // visitDeclStmt will detect is_global=true and skip alloca creation,
+        // only emitting the initializer at the correct point in the sequence.
+        ctx.inTopLevelInit = true;
         for (const auto& decl : prog->declarations) {
             visitTopLevel(decl.get());
         }
+        ctx.inTopLevelInit = false;
 
         // Finish __aiml_init
         IRBlock* currentBlock = ctx.ir_gen->getInsertBlock();
@@ -1093,6 +1144,12 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
             }
 
             IRValue* gep = ctx.ir_gen->createStructGEP(structTy, structPtr, member.index, "prop_ptr");
+            // For list<T>/buffer<T> fields, return the GEP pointer directly.
+            // visitDeclStmt/visitSetStmt expect a pointer to memcpy from, not a loaded struct value.
+            // Loading a 16-byte list struct and passing it as memcpy src would use the size field (e.g. 5) as a pointer.
+            if (member.typeName.rfind("list<", 0) == 0 || member.typeName.rfind("buffer<", 0) == 0) {
+                return gep;
+            }
             IRType* propTy = ctx.ir_gen->wrapType(member.type);
             return ctx.ir_gen->createLoad(propTy, gep, propName + "_val");
         }
@@ -1110,6 +1167,134 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
     }
 
     LOG_ERROR("Undefined property: " + propName + " on type " + className);
+    return nullptr;
+}
+
+IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& propName, std::string& outTypeName) {
+    std::string className = baseSym->typeName;
+    if ((className.rfind("ptr<", 0) == 0 || className.rfind("ref<", 0) == 0) && className.back() == '>') {
+        className = className.substr(4, className.length() - 5);
+    }
+
+    IRValue* baseAlloca = baseSym->ir_alloca_inst ? baseSym->ir_alloca_inst : ctx.ir_gen->wrap(baseSym->alloca_inst);
+    IRType* baseElemTy  = baseSym->ir_element_type ? baseSym->ir_element_type : ctx.ir_gen->wrapType(baseSym->element_type);
+
+    CompilerContext::ClassInfo* classInfo = nullptr;
+    if (ctx.currentNs && ctx.currentNs->classes.count(className)) classInfo = &ctx.currentNs->classes[className];
+    else if (ctx.classes.count(className)) classInfo = &ctx.classes[className];
+
+    if (!classInfo) return nullptr;
+
+    // Handle chained access: "field.rest" or "field-idx[.rest]"
+    {
+        size_t dotP  = propName.find('.');
+        size_t dashP = propName.find('-');
+        if (dotP != std::string::npos || dashP != std::string::npos) {
+            bool dashFirst = (dashP != std::string::npos) &&
+                             (dotP == std::string::npos || dashP < dotP);
+            size_t sepP       = dashFirst ? dashP : dotP;
+            std::string fieldName = propName.substr(0, sepP);
+            std::string rest      = propName.substr(sepP + 1);
+
+            if (classInfo->members.count(fieldName)) {
+                auto& member = classInfo->members[fieldName];
+
+                if (member.access == AccessLevel::Private && ctx.currentClassName != className) {
+                    LOG_ERROR("Cannot access private member " + fieldName);
+                    return nullptr;
+                } else if (member.access == AccessLevel::Protected && ctx.currentClassName != className) {
+                    LOG_ERROR("Cannot access protected member " + fieldName);
+                    return nullptr;
+                }
+
+                IRType* structTy   = ctx.ir_gen->wrapType(classInfo->type);
+                IRValue* structPtr = baseAlloca;
+                if (baseElemTy->isPointer())
+                    structPtr = ctx.ir_gen->createLoad(baseElemTy, baseAlloca, "chain_base_w");
+                IRValue* fieldGep    = ctx.ir_gen->createStructGEP(structTy, structPtr, member.index, "chain_gep_w");
+                IRType*  fieldElemTy = ctx.ir_gen->wrapType(member.type);
+
+                if (dashFirst) {
+                    // List element: field-idx[.further]
+                    if (member.typeName.rfind("list<", 0) != 0 || member.typeName.back() != '>') {
+                        LOG_ERROR("Dash-index on non-list field: " + fieldName);
+                        return nullptr;
+                    }
+                    std::string elemName = member.typeName.substr(5, member.typeName.length() - 6);
+                    llvm::Type* elemType = ctx.getLLVMType(elemName);
+                    llvm::Value* listAllocaVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldGep));
+
+                    // rest may be "idx" or "idx.further"
+                    size_t dotInRest = rest.find('.');
+                    std::string idxStr   = (dotInRest != std::string::npos) ? rest.substr(0, dotInRest) : rest;
+                    std::string afterIdx = (dotInRest != std::string::npos) ? rest.substr(dotInRest + 1) : "";
+
+                    llvm::Value* idxVal = nullptr;
+                    try {
+                        idxVal = ctx.builder.getInt32(std::stoi(idxStr));
+                    } catch (...) {
+                        Symbol* idxSym = resolveVariable(idxStr);
+                        if (idxSym) {
+                            IRValue* idxA  = idxSym->ir_alloca_inst ? idxSym->ir_alloca_inst : ctx.ir_gen->wrap(idxSym->alloca_inst);
+                            IRType*  idxET = idxSym->ir_element_type ? idxSym->ir_element_type : ctx.ir_gen->wrapType(idxSym->element_type);
+                            idxVal = ctx.builder.CreateLoad(
+                                static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(idxET)),
+                                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(idxA)));
+                            if (idxVal->getType()->isIntegerTy(64))
+                                idxVal = ctx.builder.CreateTrunc(idxVal, ctx.builder.getInt32Ty());
+                        } else {
+                            LOG_ERROR("Invalid list index: " + idxStr);
+                            return nullptr;
+                        }
+                    }
+                    llvm::Value* elemPtr = ListImpl::getElementPtr(ctx, listAllocaVal, idxVal, elemType);
+
+                    if (afterIdx.empty()) {
+                        outTypeName = elemName;
+                        return ctx.ir_gen->wrap(elemPtr);
+                    } else {
+                        Symbol tmpSym;
+                        tmpSym.typeName        = elemName;
+                        tmpSym.ir_alloca_inst  = ctx.ir_gen->wrap(elemPtr);
+                        tmpSym.ir_element_type = ctx.ir_gen->wrapType(elemType);
+                        return resolvePropertyWritePtr(&tmpSym, afterIdx, outTypeName);
+                    }
+                } else {
+                    // Dot chain: recurse into next field
+                    Symbol tmpSym;
+                    tmpSym.typeName        = member.typeName;
+                    tmpSym.ir_alloca_inst  = fieldGep;
+                    tmpSym.ir_element_type = fieldElemTy;
+                    return resolvePropertyWritePtr(&tmpSym, rest, outTypeName);
+                }
+            }
+        }
+    }
+
+    // Direct (leaf) member
+    if (classInfo->members.count(propName)) {
+        auto& member = classInfo->members[propName];
+        if (member.access == AccessLevel::Private && ctx.currentClassName != className) {
+            LOG_ERROR("Cannot access private member " + propName);
+            return nullptr;
+        } else if (member.access == AccessLevel::Protected && ctx.currentClassName != className) {
+            LOG_ERROR("Cannot access protected member " + propName);
+            return nullptr;
+        }
+        if (member.is_const) {
+            LOG_ERROR("Cannot assign to const member " + propName);
+            return nullptr;
+        }
+
+        IRType* structTy   = ctx.ir_gen->wrapType(classInfo->type);
+        IRValue* structPtr = baseAlloca;
+        if (baseElemTy->isPointer())
+            structPtr = ctx.ir_gen->createLoad(baseElemTy, baseAlloca, "prop_ptr_base_w");
+
+        outTypeName = member.typeName;
+        return ctx.ir_gen->createStructGEP(structTy, structPtr, member.index, "set_prop_ptr_w");
+    }
+
     return nullptr;
 }
 

@@ -519,6 +519,29 @@ klein und macht zukünftige Wiederherstellungen schneller:
 - call: [db.auto_checkpoint, 1000]  # Automatisch alle 1000 Writes
 ```
 
+### 6.4 Cross-Process Sync — db.reload_kv
+
+AionDB lädt das WAL-File genau **einmal** beim ersten `open_kv`-Aufruf (Singleton pro Name).
+Schreibt ein anderer Prozess (z. B. das Backend) nach dem Start neue Einträge, sieht der
+aktuelle Prozess diese **nicht automatisch**.
+
+`db.reload_kv(handle)` löst dieses Problem: Es schließt und öffnet den WAL-FD neu,
+leert den In-Memory-Cache und replayed das WAL von vorne. Danach sind alle
+zwischenzeitlich von anderen Prozessen geschriebenen Einträge sichtbar.
+
+```aiml
+- decl: [kv, Kv<string:DeckSet>, g.db_decksets]
+- call: [db.reload_kv, kv]          # WAL von Disk neu lesen
+- decl: [has, i32, { call: [kv.has, some_id] }]
+```
+
+**Wann verwenden:** Immer dann, wenn ein Prozess ein persistentes KV öffnet und
+anschließend von einem anderen Prozess beschriebene Daten lesen muss — insbesondere
+bei Frontend/Backend-Trennung mit gemeinsamem `./aiondb/`-Verzeichnis.
+
+**Wann nicht nötig:** Innerhalb eines einzelnen Prozesses, der selbst schreibt und liest
+(der schreibende `kv.set`-Call aktualisiert bereits den In-Memory-Cache).
+
 ---
 
 ## 7. Schema Evolution — Integration mit Hot-Reload

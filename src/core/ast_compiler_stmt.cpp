@@ -26,19 +26,35 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
     IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
     if (!ty) return;
 
-    // Reject shadowing: decl must not shadow an existing symbol
+    // Check if this variable was pre-promoted to a GlobalVariable (non-library
+    // top-level path). If so, skip alloca creation and only emit the initializer.
+    bool isPrePromotedGlobal = false;
+    IRValue* alloca = nullptr;
+    llvm::Value* unwrappedAlloca = nullptr;
+
     if (ctx.symbol_table.count(decl->varName)) {
-        LOG_ERROR("Variable shadowing is not allowed: '" + decl->varName
-                  + "' is already declared in an outer scope");
-        return;
+        auto& existing = ctx.symbol_table[decl->varName];
+        if (existing.is_global && ctx.inTopLevelInit) {
+            // Pre-promoted GlobalVariable — reuse storage, emit initializer in-order.
+            isPrePromotedGlobal = true;
+            alloca = existing.ir_alloca_inst;
+            unwrappedAlloca = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
+        } else {
+            LOG_ERROR("Variable shadowing is not allowed: '" + decl->varName
+                      + "' is already declared in an outer scope");
+            return;
+        }
     }
 
-    IRValue* alloca = ctx.ir_gen->createAlloca(ty, decl->varName);
-    
-    // Zero-initialize the allocated memory
+    if (!isPrePromotedGlobal) {
+        alloca = ctx.ir_gen->createAlloca(ty, decl->varName);
+        // Zero-initialize the allocated memory
+        unwrappedAlloca = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
+    }
+
     llvm::Type* unwrappedTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ty));
-    llvm::Value* unwrappedAlloca = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
-    ctx.builder.CreateStore(llvm::Constant::getNullValue(unwrappedTy), unwrappedAlloca);
+    if (!isPrePromotedGlobal)
+        ctx.builder.CreateStore(llvm::Constant::getNullValue(unwrappedTy), unwrappedAlloca);
     
     std::string tName = decl->typeName;
     if (tName.find("list<") == 0 && tName.back() == '>') {
@@ -74,14 +90,16 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             {unwrappedAlloca});
     }
     
-    Symbol sym;
-    sym.ir_alloca_inst = alloca;
-    sym.ir_type = ctx.ir_gen->getPointerTy();
-    sym.ir_element_type = ty;
-    sym.typeName = decl->typeName;
-    sym.is_const = decl->is_const;
-    sym.is_volatile = decl->is_volatile;
-    ctx.symbol_table[decl->varName] = sym;
+    if (!isPrePromotedGlobal) {
+        Symbol sym;
+        sym.ir_alloca_inst = alloca;
+        sym.ir_type = ctx.ir_gen->getPointerTy();
+        sym.ir_element_type = ty;
+        sym.typeName = decl->typeName;
+        sym.is_const = decl->is_const;
+        sym.is_volatile = decl->is_volatile;
+        ctx.symbol_table[decl->varName] = sym;
+    }
     
     LOG_DEBUG("Compiled AST Decl: " + decl->varName + " of " + decl->typeName);
     
@@ -106,7 +124,9 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             return; // done — skip normal expression init
         }
 
+        ctx.deserializeTargetType = decl->typeName;
         IRValue* initVal = visitExpression(decl->initialValue.get());
+        ctx.deserializeTargetType.clear();
         if (initVal) {
             // path: auto-intern so pointer identity == path equality
             if (decl->typeName == "path") {
@@ -141,18 +161,75 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     ctx.builder.getInt64(sz)
                 });
             } else if (decl->typeName.find("list<") == 0) {
-                // list: handler returns a fresh alloca → memcpy struct into target alloca
-                llvm::StructType* listStructTy = ListImpl::getListStructType(ctx);
-                uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(listStructTy);
-                llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
-                llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
-                ctx.builder.CreateCall(mcf, {
-                    unwrappedAlloca,
-                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal)),
-                    ctx.builder.getInt64(sz)
-                });
+                llvm::Value* rawInitVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal));
+                if (rawInitVal->getType()->isPointerTy()) {
+                    // Builtin handler returns alloca ptr → memcpy struct contents
+                    llvm::StructType* listStructTy = ListImpl::getListStructType(ctx);
+                    uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(listStructTy);
+                    llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                    llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
+                    ctx.builder.CreateCall(mcf, {
+                        unwrappedAlloca,
+                        rawInitVal,
+                        ctx.builder.getInt64(sz)
+                    });
+                } else {
+                    // User function returns list struct value → store directly
+                    ctx.builder.CreateStore(rawInitVal, unwrappedAlloca);
+                }
             } else {
-                ctx.ir_gen->createStore(initVal, alloca);
+                // For user-defined struct types (isBuiltin=false, real LLVM struct),
+                // builtin handlers like next_event/next_rpc return an alloca pointer
+                // to a temporary struct → memcpy into target alloca instead of store.
+                // Only do this when: (1) target LLVM type is a struct, AND
+                // (2) the initVal is a pointer type (i.e. an alloca ptr, not a struct value).
+                llvm::Type* declTy = ctx.getLLVMType(decl->typeName);
+                llvm::Value* initRaw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal));
+                if (declTy && declTy->isStructTy() && initRaw && initRaw->getType()->isPointerTy()) {
+                    uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(declTy);
+                    llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                    llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
+                    ctx.builder.CreateCall(mcf, {
+                        unwrappedAlloca,
+                        initRaw,
+                        ctx.builder.getInt64(sz)
+                    });
+                } else {
+                    // ptr<T>/ref<T> = struct_var: store the address of the struct, not the
+                    // struct value itself (which would overflow the 8-byte pointer alloca).
+                    llvm::Value* storeVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal));
+                    bool isPtrTarget = (decl->typeName.rfind("ptr<", 0) == 0 ||
+                                        decl->typeName.rfind("ref<", 0) == 0)
+                                       && decl->typeName.back() == '>';
+                    if (isPtrTarget && storeVal && storeVal->getType()->isStructTy()) {
+                        // initVal is a loaded struct — we need the alloca (address) instead
+                        if (auto* varExpr = dynamic_cast<VariableExpr*>(decl->initialValue.get())) {
+                            Symbol* srcSym = resolveVariable(varExpr->name);
+                            if (srcSym) {
+                                llvm::Value* addrVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+                                    srcSym->ir_alloca_inst ? srcSym->ir_alloca_inst
+                                                           : ctx.ir_gen->wrap(srcSym->alloca_inst)));
+                                initVal = ctx.ir_gen->wrap(addrVal);
+                            }
+                        }
+                    }
+                    // Integer narrowing/widening coercion (e.g. decl:[x, i32, y] where y is i64)
+                    llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal));
+                    if (sv && sv->getType()->isIntegerTy()) {
+                        llvm::Type* targetTy = ctx.getLLVMType(decl->typeName);
+                        if (targetTy && targetTy->isIntegerTy() && targetTy != sv->getType()) {
+                            unsigned dstBits = targetTy->getIntegerBitWidth();
+                            unsigned srcBits = sv->getType()->getIntegerBitWidth();
+                            if (dstBits < srcBits)
+                                initVal = ctx.ir_gen->wrap(ctx.builder.CreateTrunc(sv, targetTy, "trunc_narrow"));
+                            else if (srcBits == 1)
+                                initVal = ctx.ir_gen->wrap(ctx.builder.CreateZExt(sv, targetTy, "zext_bool"));
+                            else
+                                initVal = ctx.ir_gen->wrap(ctx.builder.CreateSExt(sv, targetTy, "sext_widen"));
+                        }
+                    }
+                    ctx.ir_gen->createStore(initVal, alloca);
+                }
             }
         }
     }
@@ -277,6 +354,23 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 }
             }
         }
+        // Integer narrowing/widening coercion (e.g. set: [x_i32, y_i64])
+        {
+            llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+            if (sv && sv->getType()->isIntegerTy()) {
+                llvm::Type* targetTy = ctx.getLLVMType(sym->typeName);
+                if (targetTy && targetTy->isIntegerTy() && targetTy != sv->getType()) {
+                    unsigned dstBits = targetTy->getIntegerBitWidth();
+                    unsigned srcBits = sv->getType()->getIntegerBitWidth();
+                    if (dstBits < srcBits)
+                        val = ctx.ir_gen->wrap(ctx.builder.CreateTrunc(sv, targetTy, "trunc_narrow"));
+                    else if (srcBits == 1)
+                        val = ctx.ir_gen->wrap(ctx.builder.CreateZExt(sv, targetTy, "zext_bool"));
+                    else
+                        val = ctx.ir_gen->wrap(ctx.builder.CreateSExt(sv, targetTy, "sext_widen"));
+                }
+            }
+        }
         ctx.ir_gen->createStore(val, baseAlloca);
     } else {
         std::string className = sym->typeName;
@@ -318,36 +412,40 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             return;
         }
         
-        if (!className.empty() && ctx.classes.count(className)) {
-            auto& classInfo = ctx.classes[className];
-            if (classInfo.members.count(propName)) {
-                auto& member = classInfo.members[propName];
-
-                if (member.access == AccessLevel::Private && ctx.currentClassName != className) {
-                     LOG_ERROR("Cannot access private member " + propName);
-                     return;
-                } else if (member.access == AccessLevel::Protected && ctx.currentClassName != className) {
-                     LOG_ERROR("Cannot access protected member " + propName);
-                     return;
+        // Try resolvePropertyWritePtr first — handles both shallow (a.b) and deep (a.b.c) chains.
+        {
+            Symbol tmpBaseSym;
+            tmpBaseSym.typeName        = sym->typeName;
+            tmpBaseSym.ir_alloca_inst  = baseAlloca;
+            tmpBaseSym.ir_element_type = baseElemTy;
+            std::string finalTypeName;
+            IRValue* targetGep = resolvePropertyWritePtr(&tmpBaseSym, propName, finalTypeName);
+            if (targetGep) {
+                // Apply integer narrowing/widening for final member type
+                if (!finalTypeName.empty()) {
+                    llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                    if (sv && sv->getType()->isIntegerTy()) {
+                        llvm::Type* targetTy = ctx.getLLVMType(finalTypeName);
+                        if (targetTy && targetTy->isIntegerTy() && targetTy != sv->getType()) {
+                            unsigned dstBits = targetTy->getIntegerBitWidth();
+                            unsigned srcBits = sv->getType()->getIntegerBitWidth();
+                            if (dstBits < srcBits)
+                                val = ctx.ir_gen->wrap(ctx.builder.CreateTrunc(sv, targetTy, "trunc_member"));
+                            else if (srcBits == 1)
+                                val = ctx.ir_gen->wrap(ctx.builder.CreateZExt(sv, targetTy, "zext_member"));
+                            else
+                                val = ctx.ir_gen->wrap(ctx.builder.CreateSExt(sv, targetTy, "sext_member"));
+                        }
+                    }
                 }
-                if (member.is_const) {
-                     LOG_ERROR("Cannot assign to const member " + propName);
-                     return;
-                }
-
-                IRType* structTy = ctx.ir_gen->wrapType(classInfo.type);
-                IRValue* structPtr = baseAlloca;
-
-                if (baseElemTy->isPointer()) {
-                     structPtr = ctx.ir_gen->createLoad(baseElemTy, baseAlloca, baseName + "_ptr");
-                }
-
-                IRValue* gep = ctx.ir_gen->createStructGEP(structTy, structPtr, member.index, "set_prop_ptr");
-                ctx.ir_gen->createStore(val, gep);
+                ctx.ir_gen->createStore(val, targetGep);
                 return;
             }
+        }
 
-            // Builtin property setter for handle types (e.g. resp.status, resp.body)
+        // Builtin property setter for handle types (e.g. resp.status, resp.body)
+        if (!className.empty() && ctx.classes.count(className)) {
+            auto& classInfo = ctx.classes[className];
             if (classInfo.isBuiltin && classInfo.builtinSetters.count(propName)) {
                 llvm::Value* baseVal = ctx.builder.CreateLoad(
                     ctx.builder.getInt8Ty()->getPointerTo(),

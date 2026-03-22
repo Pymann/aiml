@@ -182,18 +182,25 @@ int main(int argc, char** argv) {
             }
             
         } else {
-             // Just object file — write sidecar .deps file for build systems (e.g. exodus)
-             std::string depsPath = objFile + ".deps";
+             // Write standard .d dependency file (Makefile format) for build systems
+             std::string depPath = objFile.substr(0, objFile.size() - 2) + ".d";
+             {
+                 std::ofstream depOut(depPath);
+                 depOut << objFile << ": " << inputFile;
+                 for (const auto& src : compiler.importedSourceFiles) {
+                     depOut << " \\\n  " << src;
+                 }
+                 depOut << "\n";
+             }
+
              if (!compiler.linkedObjects.empty()) {
-                 std::ofstream depsFout(depsPath);
-                 for (const auto& dep : compiler.linkedObjects) depsFout << dep << "\n";
                  std::string linkMsg = "Compiled " + outputFile + ". Link with: ";
                  for (const auto& dep : compiler.linkedObjects) linkMsg += dep + " ";
                  LOG_INFO(linkMsg);
-             } else {
-                 // Remove stale deps file if no extra objects
-                 std::filesystem::remove(depsPath);
              }
+
+             // Remove stale .deps sidecar (legacy format)
+             std::filesystem::remove(objFile + ".deps");
         }
     }
     

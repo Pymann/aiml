@@ -139,6 +139,7 @@ public:
     std::unique_ptr<Expr> initialValue;
     bool is_const = false;
     bool is_volatile = false;
+    bool is_extern = false;   // {extern: true} → cross-file ExternalLinkage (plain __lib_<name>)
 
     DeclStmt(std::string n, std::string t) : varName(n), typeName(t) {}
     std::string toString() const override { return "Decl(" + typeName + " " + varName + ")"; }

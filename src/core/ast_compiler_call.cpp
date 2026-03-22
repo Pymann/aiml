@@ -123,10 +123,20 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                 if (auto* d = dynamic_cast<AIML::AST::DictLiteralExpr*>(call->args[i].get())) {
                     // nodeToExpr path: unrecognized map → DictLiteralExpr
                     for (auto& [k, v] : d->entries) {
-                        if (k == "path")
-                            ctx.dbOpenBasePathVal = ctx.builder.CreateGlobalStringPtr(v);
-                        else
+                        if (k == "path") {
+                            // v may be a variable name (e.g. path: db_path) or a literal string
+                            Symbol* sym = resolveVariable(v);
+                            if (sym) {
+                                // Evaluate v as a variable expression to get the runtime i8* value
+                                VariableExpr tmp(v);
+                                IRValue* pv = visitExpression(&tmp);
+                                if (pv) ctx.dbOpenBasePathVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(pv));
+                            } else {
+                                ctx.dbOpenBasePathVal = ctx.builder.CreateGlobalStringPtr(v);
+                            }
+                        } else {
                             applyDbOpt(k, v);
+                        }
                     }
                 } else if (auto* u = dynamic_cast<AIML::AST::UnaryExpr*>(call->args[i].get())) {
                     // ExpressionBuilder path: {key: val} → UnaryExpr(key, LiteralExpr/VariableExpr)
@@ -704,6 +714,8 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          } else if (methodName == "len") {
              return ctx.ir_gen->wrap(ListImpl::getSize(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca))));
          }
+         LOG_ERROR("Unknown list method: " + methodName + " on " + className);
+         return ctx.ir_gen->getInt32(0);
     }
     // Map Methods
     else if (className.find("map<") == 0) {
@@ -751,6 +763,8 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          } else if (methodName == "len") {
              return ctx.ir_gen->wrap(MapImpl::getSize(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), mapStructTy));
          }
+         LOG_ERROR("Unknown map method: " + methodName + " on " + className);
+         return ctx.ir_gen->getInt32(0);
     }
     // Channel Methods: chan<T>.send / chan<T>.recv / chan<T>.init
     else if (className.rfind("chan<", 0) == 0 && className.back() == '>') {

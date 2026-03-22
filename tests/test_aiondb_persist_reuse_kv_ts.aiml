@@ -1,0 +1,80 @@
+# Regression test: persistent AionDB Kv and TimeSeries handles should reuse the
+# same in-process state for the same name/path, and db.checkpoint should flush
+# both handle types together.
+# Expected exit code: 0
+
+- class:
+    name: PersistReading
+    members: [[val, i32]]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_path, path, "/tmp/aiml_test_aiondb_persist_reuse_kv_ts/"]
+
+      # Kv<string:string>: second open should observe the same live map.
+      - decl: [cfg_a, Kv<string:string>]
+      - decl: [cfg_b, Kv<string:string>]
+      - set: [cfg_a, { call: [db.open_kv, "persist_reuse_cfg", {persist: true, path: db_path}] }]
+      - set: [cfg_b, { call: [db.open_kv, "persist_reuse_cfg", {persist: true, path: db_path}] }]
+      - call: [cfg_a.clear]
+      - call: [cfg_a.set, "mode", "mirror"]
+      - call: [cfg_a.set, "phase", "draw"]
+
+      - decl: [mode_b, string]
+      - set: [mode_b, { call: [cfg_b.get, "mode"] }]
+      - if:
+          condition: { "==": [{ eq: [mode_b, "mirror"] }, 0] }
+          then:
+            - print: ["FAIL kv_reuse_get=${mode_b}"]
+            - call: [sys.exit, 1]
+
+      - call: [cfg_b.delete, "phase"]
+      - decl: [has_phase, i32]
+      - set: [has_phase, { call: [cfg_a.has, "phase"] }]
+      - if:
+          condition: { "!=": [has_phase, 0] }
+          then:
+            - print: ["FAIL kv_reuse_delete=${has_phase}"]
+            - call: [sys.exit, 1]
+
+      # TimeSeries<T>: second open should observe appended samples immediately.
+      - decl: [ts_a, TimeSeries<PersistReading>]
+      - decl: [ts_b, TimeSeries<PersistReading>]
+      - set: [ts_a, { call: [db.open_timeseries, "persist_reuse_ts", {persist: true, path: db_path}] }]
+      - set: [ts_b, { call: [db.open_timeseries, "persist_reuse_ts", {persist: true, path: db_path}] }]
+
+      - decl: [ts_base, i32]
+      - set: [ts_base, { call: [ts_a.len] }]
+
+      - decl: [reading, PersistReading]
+      - set: [reading.val, 321]
+      - call: [ts_a.append, reading, 987654321]
+
+      - decl: [ts_len_b, i32]
+      - set: [ts_len_b, { call: [ts_b.len] }]
+      - if:
+          condition: { "!=": [ts_len_b, { "+": [ts_base, 1] }] }
+          then:
+            - print: ["FAIL ts_reuse_len base=${ts_base} got=${ts_len_b}"]
+            - call: [sys.exit, 1]
+
+      - decl: [sample_b, ptr<PersistReading>]
+      - set: [sample_b, { call: [ts_b.at, 987654321] }]
+      - if:
+          condition: { "!=": [sample_b.val, 321] }
+          then:
+            - print: ["FAIL ts_reuse_at=${sample_b.val}"]
+            - call: [sys.exit, 1]
+
+      - decl: [rc, i32]
+      - set: [rc, { call: [db.checkpoint] }]
+      - if:
+          condition: { "!=": [rc, 0] }
+          then:
+            - print: ["FAIL checkpoint_rc=${rc}"]
+            - call: [sys.exit, 1]
+
+      - print: ["AionDB kv/ts persist reuse PASS"]
+      - return: 0

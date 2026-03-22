@@ -57,6 +57,8 @@ void    aiml_mirror_session_register_id_typed(void* session, void* obj, int64_t 
 int32_t aiml_mirror_session_has_event  (void* session);
 /* Returns AimlMirrorEvent* — valid until next call to next_event */
 void*   aiml_mirror_session_next_event (void* session);
+/* Combines has_event + next_event. Returns AimlMirrorEvent* with type=="" if queue empty. Never null. */
+void*   aiml_mirror_session_poll_event (void* session);
 
 /* ── Sync control ─────────────────────────────────────────────────────────── */
 
@@ -75,6 +77,8 @@ void    aiml_mirror_session_send_rpc(void* session, int32_t net_id, const char* 
 int32_t aiml_mirror_session_has_rpc (void* session);
 /* Returns AimlRpcEvent* — caller owns the pointer, must not be freed (freed on session close) */
 void*   aiml_mirror_session_next_rpc(void* session);
+/* Combines has_rpc + next_rpc. Returns AimlRpcEvent* with method=="" if queue empty. Never null. */
+void*   aiml_mirror_session_poll_rpc(void* session);
 
 /* ── mirror_event field accessors ─────────────────────────────────────────── */
 

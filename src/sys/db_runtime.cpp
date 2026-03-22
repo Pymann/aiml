@@ -618,6 +618,7 @@ static void kv_wal_replay(AimlKv* kv) {
 extern "C" void* aiml_db_kv_open_persist(const char* name, int64_t val_size,
                                            const char* base_path) {
     std::string dir = base_path ? base_path : "./aiondb/";
+    if (!dir.empty() && dir.back() != '/') dir += '/';
     std::string nm  = name ? name : "kv";
     std::string registry_key = dir + nm;
 
@@ -666,6 +667,35 @@ extern "C" int32_t aiml_db_kv_checkpoint(void* kv_ptr) {
     return 0;
 }
 
+// Reload: re-read WAL from the beginning so cross-process writes become visible.
+extern "C" void aiml_db_kv_reload(void* kv_ptr) {
+    if (!kv_ptr) return;
+    AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
+    std::lock_guard<std::mutex> lock(kv->mtx);
+    if (!kv->persistent || kv->wal_path.empty()) return;
+    // Close existing fd and reopen fresh so we see any bytes written by other processes
+    if (kv->wal_fd >= 0) close(kv->wal_fd);
+    kv->wal_fd = open(kv->wal_path.c_str(), O_RDWR | O_CREAT, 0644);
+    if (kv->wal_fd < 0) return;
+    // Clear current in-memory state
+    if (!kv->ser_nodes) {
+        for (auto& [k, v] : kv->map) {
+            if (kv->val_size == 0) {
+                char* ptr = nullptr;
+                memcpy(&ptr, v.data(), sizeof(char*));
+                free(ptr);
+            }
+        }
+    } else {
+        for (auto& [k, v] : kv->map) kv_decoded_evict(kv, k);
+    }
+    kv->map.clear();
+    kv->decoded_cache.clear();
+    // Replay WAL from start
+    kv_wal_replay(kv);
+    lseek(kv->wal_fd, 0, SEEK_END);
+}
+
 extern "C" void* aiml_db_kv_open_typed(const char* name, int64_t val_size,
                                          const AimlTypeNode* nodes, int32_t n_nodes) {
     AimlKv* kv    = new AimlKv();
@@ -679,6 +709,7 @@ extern "C" void* aiml_db_kv_open_typed_persist(const char* name, int64_t val_siz
                                                  const char* base_path,
                                                  const AimlTypeNode* nodes, int32_t n_nodes) {
     std::string dir = base_path ? base_path : "./aiondb/";
+    if (!dir.empty() && dir.back() != '/') dir += '/';
     std::string nm  = name ? name : "kv";
     std::string registry_key = dir + nm;
 
@@ -901,6 +932,7 @@ extern "C" void* aiml_db_ts_open_persist(const char* name, int64_t elem_size,
                                            const char* base_path) {
     if (elem_size <= 0) return nullptr;
     std::string dir = base_path ? base_path : "./aiondb/";
+    if (!dir.empty() && dir.back() != '/') dir += '/';
     std::string nm  = name ? name : "ts";
     std::string registry_key = dir + nm;
 

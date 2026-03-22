@@ -52,6 +52,7 @@ namespace LogicEvaluator {
         if (op == "and") return ctx.builder.CreateAnd(lhs, rhs, "and_tmp");
         if (op == "or") return ctx.builder.CreateOr(lhs, rhs, "or_tmp");
 
+        LOG_ERROR("Unknown binary operator: " + op);
         return ctx.builder.getInt32(0);
     }
 }
@@ -118,9 +119,29 @@ llvm::Value* handleCast(CompilerContext& ctx, const YAML::Node& args) {
          llvm::Value* val = evaluate(ctx, args[0]);
          llvm::Type* targetType = ctx.getLLVMType(args[1].as<std::string>());
          if (val && targetType) {
-              if (val->getType()->isPointerTy() && targetType->isPointerTy()) return ctx.builder.CreateBitCast(val, targetType, "cast_ptr");
-              else if (val->getType()->isIntegerTy() && targetType->isIntegerTy()) return ctx.builder.CreateIntCast(val, targetType, true, "cast_int");
-              else return ctx.builder.CreateBitCast(val, targetType, "cast_fallback");
+              llvm::Type* srcType = val->getType();
+              // ptr -> ptr
+              if (srcType->isPointerTy() && targetType->isPointerTy())
+                  return ctx.builder.CreateBitCast(val, targetType, "cast_ptr");
+              // int -> int (includes bool/u8/i32/i64)
+              if (srcType->isIntegerTy() && targetType->isIntegerTy())
+                  return ctx.builder.CreateIntCast(val, targetType, true, "cast_int");
+              // float -> float (f32 <-> f64)
+              if (srcType->isFloatingPointTy() && targetType->isFloatingPointTy())
+                  return ctx.builder.CreateFPCast(val, targetType, "cast_fp");
+              // int -> float
+              if (srcType->isIntegerTy() && targetType->isFloatingPointTy())
+                  return ctx.builder.CreateSIToFP(val, targetType, "cast_itof");
+              // float -> int
+              if (srcType->isFloatingPointTy() && targetType->isIntegerTy())
+                  return ctx.builder.CreateFPToSI(val, targetType, "cast_ftoi");
+              // ptr -> int (e.g. any -> i32: dereference the pointer)
+              if (srcType->isPointerTy() && targetType->isIntegerTy())
+                  return ctx.builder.CreateLoad(targetType, val, "cast_deref");
+              // int -> ptr
+              if (srcType->isIntegerTy() && targetType->isPointerTy())
+                  return ctx.builder.CreateIntToPtr(val, targetType, "cast_itp");
+              LOG_ERROR("Unsupported cast: cannot convert between these types");
          }
      }
      return ctx.builder.getInt32(0);

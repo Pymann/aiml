@@ -1577,6 +1577,17 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p}));
         };
 
+        wsInfo.builtinMethods["poll"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* p = ctx.builder.CreateLoad(i8p, baseAlloca);
+            llvm::Function* f = ctx.getFunction("aiml_ws_poll", i32, {i8p, i32});
+            if (call->args.empty()) return ctx.ir_gen->getInt32(-1);
+            llvm::Value* timeout = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {p, timeout}));
+        };
+
         ctx.classes["ws_handle"] = std::move(wsInfo);
     }
 
@@ -1687,6 +1698,18 @@ void registerBuiltins(CompilerContext& ctx) {
             if (args.empty()) return ctx.ir_gen->getInt32(-1);
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
                 static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+            }));
+        };
+
+        // ws.poll(ws, timeout_ms) → i32  (1=data ready, 0=timeout, -1=error)
+        ws.builtinFuncs["poll"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_ws_poll", i32, {i8p, i32});
+            if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
             }));
         };
 
@@ -1949,6 +1972,18 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Type* i32 = ctx.builder.getInt32Ty();
             llvm::Function* f = ctx.getFunction("aiml_db_checkpoint_all", i32, {});
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {}));
+        };
+
+        // db.reload_kv(kv_handle) → void
+        // Re-reads the WAL from disk so cross-process writes become visible.
+        db.builtinFuncs["reload_kv"] = [](CompilerContext& ctx,
+                const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.empty()) return ctx.ir_gen->getInt32(0);
+            llvm::Type* i8p = llvm::PointerType::getUnqual(ctx.context);
+            llvm::Function* f = ctx.getFunction("aiml_db_kv_reload", llvm::Type::getVoidTy(ctx.context), {i8p});
+            llvm::Value* kv_ptr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            ctx.builder.CreateCall(f, {kv_ptr});
+            return ctx.ir_gen->getInt32(0);
         };
 
         // db.query(store, {where: fn}, {order_by: "field"}, {limit: N}, {offset: N})
@@ -4970,6 +5005,25 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                 ctx.getFunction("aiml_prefab_get_dragged", i8p, {}), {}));
         };
+        // engine.update_hover(mx, my)
+        eng.builtinFuncs["update_hover"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* f32 = ctx.builder.getFloatTy();
+            llvm::Value* mx = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* my = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            if (mx->getType() != f32) mx = ctx.builder.CreateSIToFP(mx, f32);
+            if (my->getType() != f32) my = ctx.builder.CreateSIToFP(my, f32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_update_hover",
+                ctx.builder.getVoidTy(), {f32, f32}), {mx, my});
+            return nullptr;
+        };
+        // engine.get_hovered() → prefab_instance
+        eng.builtinFuncs["get_hovered"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_get_hovered", i8p, {}), {}));
+        };
         // engine.update_drag(mx, my, btn_down, btn_released)
         eng.builtinFuncs["update_drag"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
@@ -5016,6 +5070,7 @@ void registerBuiltins(CompilerContext& ctx) {
     {
         CompilerContext::ClassInfo ci;
         ci.name = "prefab_instance"; ci.isBuiltin = true;
+        ci.preLoadBase = true;
 
         auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
         auto* f32 = ctx.builder.getFloatTy();
@@ -5032,6 +5087,20 @@ void registerBuiltins(CompilerContext& ctx) {
             if (x->getType() != f32) x = ctx.builder.CreateSIToFP(x, f32);
             if (y->getType() != f32) y = ctx.builder.CreateSIToFP(y, f32);
             ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_set_pos",
+                ctx.builder.getVoidTy(), {i8p, f32, f32}), {base, x, y});
+            return nullptr;
+        };
+
+        // set_pos_rel(rx, ry) — relative position (0.0-1.0 of screen)
+        ci.builtinMethods["set_pos_rel"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* f32 = ctx.builder.getFloatTy();
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* x = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* y = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            if (x->getType() != f32) x = ctx.builder.CreateSIToFP(x, f32);
+            if (y->getType() != f32) y = ctx.builder.CreateSIToFP(y, f32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_set_pos_rel",
                 ctx.builder.getVoidTy(), {i8p, f32, f32}), {base, x, y});
             return nullptr;
         };
@@ -5089,11 +5158,57 @@ void registerBuiltins(CompilerContext& ctx) {
         PI_I32_SETTER("set_z", "aiml_prefab_set_z")
         PI_I32_SETTER("set_visible", "aiml_prefab_set_visible")
         PI_I32_SETTER("set_draggable", "aiml_prefab_set_draggable")
+        PI_I32_GETTER("is_hovered", "aiml_prefab_is_hovered")
+
+        // cancel_drag() — restore position to before drag started, clear dragged state
+        ci.builtinMethods["cancel_drag"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr*, auto) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_cancel_drag", ctx.builder.getVoidTy(), {i8p}), {base});
+            return nullptr;
+        };
+
+        // was_clicked(btn) → i32
+        ci.builtinMethods["was_clicked"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* btn = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            if (btn->getType() != i32) btn = ctx.builder.CreateZExtOrTrunc(btn, i32);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_was_clicked", i32, {i8p, i32}), {base, btn}));
+        };
 
 #undef PI_F32_GETTER
 #undef PI_I32_GETTER
 #undef PI_F32_SETTER
 #undef PI_I32_SETTER
+
+        // dock_x(col, colspan) / dock_y(row, rowspan)
+        ci.builtinMethods["dock_x"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* col = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* cs  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            if (col->getType() != i32) col = ctx.builder.CreateZExtOrTrunc(col, i32);
+            if (cs->getType()  != i32) cs  = ctx.builder.CreateZExtOrTrunc(cs, i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_dock_x",
+                ctx.builder.getVoidTy(), {i8p, i32, i32}), {base, col, cs});
+            return nullptr;
+        };
+        ci.builtinMethods["dock_y"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* row = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* rs  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            if (row->getType() != i32) row = ctx.builder.CreateZExtOrTrunc(row, i32);
+            if (rs->getType()  != i32) rs  = ctx.builder.CreateZExtOrTrunc(rs, i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_dock_y",
+                ctx.builder.getVoidTy(), {i8p, i32, i32}), {base, row, rs});
+            return nullptr;
+        };
 
         // set_text(child_name, text)
         ci.builtinMethods["set_text"] = [](CompilerContext& ctx, llvm::Value* base,
@@ -6905,6 +7020,40 @@ void registerBuiltins(CompilerContext& ctx) {
                 // visitSetStmt (isBuiltin=false, ptr val) will memcpy into target alloca.
                 llvm::StructType* evTy = static_cast<llvm::StructType*>(ctx.getLLVMType("mirror_event"));
                 llvm::AllocaInst* evAlloca = ctx.builder.CreateAlloca(evTy, nullptr, "ev_tmp");
+                llvm::DataLayout dl(&ctx.module);
+                uint64_t sz = dl.getTypeAllocSize(evTy);
+                llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                ctx.builder.CreateCall(
+                    ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()}),
+                    {evAlloca, evPtr, ctx.builder.getInt64(sz)});
+                return ctx.ir_gen->wrap(evAlloca);
+            };
+
+            // ── poll_event() → mirror_event (empty sentinel type=="" if queue empty) ──
+            ci.builtinMethods["poll_event"] = [i8p](CompilerContext& ctx,
+                llvm::Value* base, AIML::AST::CallExpr*, EvalFn) -> IRValue* {
+                llvm::Value* s = ctx.builder.CreateLoad(i8p, base, "sess_ptr");
+                llvm::Value* evPtr = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_mirror_session_poll_event", i8p, {i8p}), {s}, "poll_ev_ptr");
+                llvm::StructType* evTy = static_cast<llvm::StructType*>(ctx.getLLVMType("mirror_event"));
+                llvm::AllocaInst* evAlloca = ctx.builder.CreateAlloca(evTy, nullptr, "poll_ev_tmp");
+                llvm::DataLayout dl(&ctx.module);
+                uint64_t sz = dl.getTypeAllocSize(evTy);
+                llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                ctx.builder.CreateCall(
+                    ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()}),
+                    {evAlloca, evPtr, ctx.builder.getInt64(sz)});
+                return ctx.ir_gen->wrap(evAlloca);
+            };
+
+            // ── poll_rpc() → rpc_event (empty sentinel method=="" if queue empty) ──
+            ci.builtinMethods["poll_rpc"] = [i8p](CompilerContext& ctx,
+                llvm::Value* base, AIML::AST::CallExpr*, EvalFn) -> IRValue* {
+                llvm::Value* s = ctx.builder.CreateLoad(i8p, base, "sess_ptr");
+                llvm::Value* evPtr = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_mirror_session_poll_rpc", i8p, {i8p}), {s}, "poll_rpc_ptr");
+                llvm::StructType* evTy = static_cast<llvm::StructType*>(ctx.getLLVMType("rpc_event"));
+                llvm::AllocaInst* evAlloca = ctx.builder.CreateAlloca(evTy, nullptr, "poll_rpc_tmp");
                 llvm::DataLayout dl(&ctx.module);
                 uint64_t sz = dl.getTypeAllocSize(evTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);

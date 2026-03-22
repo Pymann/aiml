@@ -1,0 +1,30 @@
+# Requires: library
+
+- namespace: extb
+
+- decl: [shared_counter, i32, 0, { extern: true }]
+- decl: [shared_label, string, "", { extern: true }]
+
+- def:
+    name: add_counter
+    args: [[delta, i32]]
+    body:
+      - set: [shared_counter, { +: [shared_counter, delta] }]
+
+- def:
+    name: get_counter
+    return: i32
+    body:
+      - return: [shared_counter]
+
+- def:
+    name: append_mark
+    args: [[suffix, string]]
+    body:
+      - set: [shared_label, "${shared_label}${suffix}"]
+
+- def:
+    name: get_label
+    return: string
+    body:
+      - return: [shared_label]

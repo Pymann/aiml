@@ -28,7 +28,11 @@
 #include <stb/stb_truetype.h>  /* header-only, no IMPLEMENTATION (ui_runtime owns it) */
 
 #include "prefab_runtime.h"
+#include "ui_runtime.h"
 #include "gl_runtime.h"
+
+/* ── Forward declarations from other runtimes ────────────────────────────── */
+extern "C" int32_t aiml_input_mouse_pressed(int32_t btn);
 
 /* ── External struct layouts (from gl_runtime / ui_runtime) ──────────────── */
 
@@ -86,7 +90,7 @@ struct PrefabChild {
 struct AimlPrefabInstance {
     PrefabDef* def;
     float x, y;
-    float scale;
+    float scale_x, scale_y;
     float rotation;
     int32_t z_order;
     float alpha;
@@ -99,6 +103,13 @@ struct AimlPrefabInstance {
     /* drag state */
     bool is_dragging;
     float drag_offset_x, drag_offset_y;
+    float drag_origin_x, drag_origin_y;  /* position at drag start — for cancel_drag */
+
+    /* relative positioning: x,y stored as 0.0-1.0 ratios of screen */
+    bool is_relative;
+
+    /* hover state (set by update_hover each frame) */
+    bool hovered;
 };
 
 /* ── Scene state ─────────────────────────────────────────────────────────── */
@@ -106,6 +117,7 @@ struct AimlPrefabInstance {
 struct PrefabScene {
     std::vector<AimlPrefabInstance*> instances;
     AimlPrefabInstance* dragged;
+    AimlPrefabInstance* hovered;
 
     /* shared rendering resources */
     GLuint quad_vao, quad_vbo;
@@ -113,6 +125,7 @@ struct PrefabScene {
     GLuint white_tex;          /* 1×1 white pixel for rects */
     float  proj[16];           /* orthographic projection matrix */
     int32_t screen_w, screen_h;
+    int32_t design_w, design_h;   /* original design resolution (from scene_init) */
 
     AimlUIFont* font;          /* default font for labels */
 
@@ -121,6 +134,29 @@ struct PrefabScene {
 };
 
 static PrefabScene* g_scene = nullptr;
+
+/* Helper: get actual pixel position from (possibly relative) coords */
+static inline void get_actual_pos(AimlPrefabInstance* inst,
+                                   float& ax, float& ay) {
+    if (inst->is_relative && g_scene) {
+        ax = inst->x * g_scene->screen_w;
+        ay = inst->y * g_scene->screen_h;
+    } else {
+        ax = inst->x;
+        ay = inst->y;
+    }
+}
+
+/* Helper: get scale factor for relative instances (screen / design resolution) */
+static inline void get_rel_scale(float& rsx, float& rsy) {
+    if (g_scene && g_scene->design_w > 0 && g_scene->design_h > 0) {
+        rsx = (float)g_scene->screen_w / (float)g_scene->design_w;
+        rsy = (float)g_scene->screen_h / (float)g_scene->design_h;
+    } else {
+        rsx = 1.0f;
+        rsy = 1.0f;
+    }
+}
 
 /* ── Orthographic projection (column-major, matches GL convention) ───────── */
 
@@ -483,9 +519,17 @@ static void render_instance(AimlPrefabInstance* inst) {
     if (!inst || !inst->visible) return;
     PrefabScene* s = g_scene;
 
-    float ox = inst->x;
-    float oy = inst->y;
-    float sc = inst->scale;
+    float ox, oy;
+    get_actual_pos(inst, ox, oy);
+    float sx = inst->scale_x;
+    float sy = inst->scale_y;
+    /* For relative-mode instances, also scale size by screen/design ratio */
+    if (inst->is_relative) {
+        float rsx, rsy;
+        get_rel_scale(rsx, rsy);
+        sx *= rsx;
+        sy *= rsy;
+    }
     float alpha = inst->alpha;
 
     /* 1) Base texture (card frame etc.) */
@@ -495,8 +539,8 @@ static void render_instance(AimlPrefabInstance* inst) {
         batch.mode = 1; /* rgba texture */
         uint32_t col = color_with_alpha(0xFFFFFF, alpha);
         push_quad(batch, ox, oy,
-                  inst->def->width * sc, inst->def->height * sc,
-                  0, 0, 1, 1, col);
+                  inst->def->width * sx, inst->def->height * sy,
+                  0, 1, 1, 0, col);
         flush_batch(batch);
     }
 
@@ -504,20 +548,28 @@ static void render_instance(AimlPrefabInstance* inst) {
     for (auto& ch : inst->children) {
         if (!ch.visible) continue;
 
-        float cx = ox + ch.x * sc;
-        float cy = oy + ch.y * sc;
-        float cw = ch.width * sc;
-        float ch_h = ch.height * sc;
+        float cx = ox + ch.x * sx;
+        float cy = oy + ch.y * sy;
+        float cw = ch.width * sx;
+        float ch_h = ch.height * sy;
 
         switch (ch.type) {
         case CHILD_SPRITE: {
             if (ch.texture == 0) break;
+            static int sprite_log_count = 0;
             DrawBatch batch;
             batch.tex = ch.texture;
             batch.mode = 1;
             uint32_t col = color_with_alpha(0xFFFFFF, alpha);
-            push_quad(batch, cx, cy, cw, ch_h, 0, 0, 1, 1, col);
+            push_quad(batch, cx, cy, cw, ch_h, 0, 1, 1, 0, col);
             flush_batch(batch);
+            if (sprite_log_count < 3) {
+                GLenum err = glGetError();
+                GLboolean is_tex = glIsTexture(ch.texture);
+                fprintf(stderr, "[prefab] RENDER sprite '%s' tex=%u pos=(%.0f,%.0f) sz=(%.0f,%.0f) col=0x%08X glErr=%u isTex=%d\n",
+                        ch.name.c_str(), ch.texture, cx, cy, cw, ch_h, col, (unsigned)err, (int)is_tex);
+                sprite_log_count++;
+            }
             break;
         }
         case CHILD_RECT: {
@@ -546,7 +598,7 @@ static void render_instance(AimlPrefabInstance* inst) {
                 }
             }
             push_text_batch(batch, s->font, ch.text.c_str(),
-                           cx, cy, inst->def->width * sc, col, anchor);
+                           cx, cy, inst->def->width * sx, col, anchor);
             flush_batch(batch);
             break;
         }
@@ -555,6 +607,19 @@ static void render_instance(AimlPrefabInstance* inst) {
 }
 
 /* ── Public API ──────────────────────────────────────────────────────────── */
+
+struct PendingPrefab {
+    std::string name;
+    float width, height;
+    std::string texture_path;
+    int32_t draggable;
+    std::string children_json;
+};
+static std::vector<PendingPrefab> g_pending_prefabs;
+
+static void register_prefab_def(const char* name, float width, float height,
+                                const char* texture_path, int32_t draggable,
+                                const char* children_json);
 
 void aiml_prefab_scene_init(int32_t screen_w, int32_t screen_h) {
     if (g_scene) {
@@ -568,6 +633,8 @@ void aiml_prefab_scene_init(int32_t screen_w, int32_t screen_h) {
     g_scene = new PrefabScene();
     g_scene->screen_w = screen_w;
     g_scene->screen_h = screen_h;
+    g_scene->design_w = screen_w;
+    g_scene->design_h = screen_h;
     g_scene->dragged = nullptr;
     g_scene->font = nullptr;
 
@@ -577,17 +644,20 @@ void aiml_prefab_scene_init(int32_t screen_w, int32_t screen_h) {
     g_scene->white_tex = create_white_texture();
 
     fprintf(stderr, "[prefab] scene init %dx%d\n", screen_w, screen_h);
+
+    // Flush any prefabs that were registered before scene_init
+    for (auto& p : g_pending_prefabs) {
+        register_prefab_def(p.name.c_str(), p.width, p.height,
+                            p.texture_path.c_str(), p.draggable,
+                            p.children_json.c_str());
+    }
+    g_pending_prefabs.clear();
 }
 
-void aiml_prefab_register(const char* name, float width, float height,
-                          const char* texture_path, int32_t draggable,
-                          const char* children_json)
+static void register_prefab_def(const char* name, float width, float height,
+                                const char* texture_path, int32_t draggable,
+                                const char* children_json)
 {
-    if (!g_scene) {
-        fprintf(stderr, "[prefab] ERROR: scene not initialized, call scene_init first\n");
-        return;
-    }
-
     PrefabDef* def = new PrefabDef();
     def->name = name ? name : "";
     def->width = width;
@@ -599,6 +669,22 @@ void aiml_prefab_register(const char* name, float width, float height,
     g_scene->defs[def->name] = def;
     fprintf(stderr, "[prefab] registered '%s' (%gx%g, %zu children)\n",
             def->name.c_str(), width, height, def->children.size());
+}
+
+void aiml_prefab_register(const char* name, float width, float height,
+                          const char* texture_path, int32_t draggable,
+                          const char* children_json)
+{
+    if (!g_scene) {
+        g_pending_prefabs.push_back({
+            name ? name : "", width, height,
+            texture_path ? texture_path : "", draggable,
+            children_json ? children_json : ""
+        });
+        return;
+    }
+
+    register_prefab_def(name, width, height, texture_path, draggable, children_json);
 }
 
 void* aiml_prefab_instantiate(const char* prefab_name) {
@@ -615,7 +701,8 @@ void* aiml_prefab_instantiate(const char* prefab_name) {
     inst->def = def;
     inst->x = 0;
     inst->y = 0;
-    inst->scale = 1.0f;
+    inst->scale_x = 1.0f;
+    inst->scale_y = 1.0f;
     inst->rotation = 0;
     inst->z_order = 0;
     inst->alpha = 1.0f;
@@ -624,6 +711,7 @@ void* aiml_prefab_instantiate(const char* prefab_name) {
     inst->is_dragging = false;
     inst->drag_offset_x = 0;
     inst->drag_offset_y = 0;
+    inst->is_relative = false;
 
     /* Load base texture */
     inst->base_texture = 0;
@@ -674,6 +762,12 @@ void aiml_prefab_destroy(void* p) {
 void aiml_prefab_set_pos(void* p, float x, float y) {
     auto* inst = (AimlPrefabInstance*)p; if (!inst) return;
     inst->x = x; inst->y = y;
+    inst->is_relative = false;
+}
+void aiml_prefab_set_pos_rel(void* p, float rx, float ry) {
+    auto* inst = (AimlPrefabInstance*)p; if (!inst) return;
+    inst->x = rx; inst->y = ry;
+    inst->is_relative = true;
 }
 float aiml_prefab_get_x(void* p) {
     auto* inst = (AimlPrefabInstance*)p; return inst ? inst->x : 0;
@@ -682,10 +776,10 @@ float aiml_prefab_get_y(void* p) {
     auto* inst = (AimlPrefabInstance*)p; return inst ? inst->y : 0;
 }
 void aiml_prefab_set_scale(void* p, float s) {
-    auto* inst = (AimlPrefabInstance*)p; if (inst) inst->scale = s;
+    auto* inst = (AimlPrefabInstance*)p; if (inst) { inst->scale_x = s; inst->scale_y = s; }
 }
 float aiml_prefab_get_scale(void* p) {
-    auto* inst = (AimlPrefabInstance*)p; return inst ? inst->scale : 1;
+    auto* inst = (AimlPrefabInstance*)p; return inst ? inst->scale_x : 1;
 }
 void aiml_prefab_set_rotation(void* p, float r) {
     auto* inst = (AimlPrefabInstance*)p; if (inst) inst->rotation = r;
@@ -716,11 +810,11 @@ void aiml_prefab_set_draggable(void* p, int32_t d) {
 }
 float aiml_prefab_get_width(void* p) {
     auto* inst = (AimlPrefabInstance*)p;
-    return inst ? inst->def->width * inst->scale : 0;
+    return inst ? inst->def->width * inst->scale_x : 0;
 }
 float aiml_prefab_get_height(void* p) {
     auto* inst = (AimlPrefabInstance*)p;
-    return inst ? inst->def->height * inst->scale : 0;
+    return inst ? inst->def->height * inst->scale_y : 0;
 }
 
 /* ── Child property access ───────────────────────────────────────────────── */
@@ -739,8 +833,13 @@ void aiml_prefab_set_text(void* inst, const char* child_name, const char* text) 
 }
 
 void aiml_prefab_set_texture(void* inst, const char* child_name, void* tex) {
+    fprintf(stderr, "[prefab] set_texture('%s', tex=%p)\n", child_name ? child_name : "null", tex);
     PrefabChild* ch = find_child(inst, child_name);
-    if (ch && tex) ch->texture = ((AimlGLTexture*)tex)->id;
+    if (!ch) { fprintf(stderr, "[prefab]   child NOT found!\n"); return; }
+    if (!tex) { fprintf(stderr, "[prefab]   tex is NULL!\n"); return; }
+    GLuint id = ((AimlGLTexture*)tex)->id;
+    fprintf(stderr, "[prefab]   child found, type=%d, setting GL tex id=%u\n", ch->type, id);
+    ch->texture = id;
 }
 
 void aiml_prefab_set_color(void* inst, const char* child_name, int32_t color) {
@@ -771,8 +870,17 @@ void* aiml_prefab_child(void* p, const char* child_name) {
 void aiml_prefab_draw_scene(void) {
     if (!g_scene) return;
 
+    /* Update projection to match current GL viewport (handles window resize) */
+    GLint vp[4];
+    glGetIntegerv(GL_VIEWPORT, vp);
+    if (vp[2] != g_scene->screen_w || vp[3] != g_scene->screen_h) {
+        g_scene->screen_w = vp[2];
+        g_scene->screen_h = vp[3];
+        ortho(g_scene->proj, 0, (float)vp[2], (float)vp[3], 0);
+    }
+
     /* Sort instances by z_order (lower z = drawn first = behind) */
-    std::sort(g_scene->instances.begin(), g_scene->instances.end(),
+    std::stable_sort(g_scene->instances.begin(), g_scene->instances.end(),
               [](AimlPrefabInstance* a, AimlPrefabInstance* b) {
                   return a->z_order < b->z_order;
               });
@@ -797,14 +905,59 @@ void* aiml_prefab_hit_test(float mx, float my) {
         auto* inst = g_scene->instances[i];
         if (!inst->visible) continue;
 
-        float w = inst->def->width * inst->scale;
-        float h = inst->def->height * inst->scale;
-        if (mx >= inst->x && mx <= inst->x + w &&
-            my >= inst->y && my <= inst->y + h) {
+        float ax, ay;
+        get_actual_pos(inst, ax, ay);
+        float sx = inst->scale_x, sy = inst->scale_y;
+        if (inst->is_relative) { float rsx, rsy; get_rel_scale(rsx, rsy); sx *= rsx; sy *= rsy; }
+        float w = inst->def->width * sx;
+        float h = inst->def->height * sy;
+        if (mx >= ax && mx <= ax + w &&
+            my >= ay && my <= ay + h) {
             return inst;
         }
     }
     return nullptr;
+}
+
+/* ── Hover tracking ──────────────────────────────────────────────────────── */
+
+static int32_t s_mouse_btn_pressed[3] = {0, 0, 0};
+
+void aiml_prefab_update_hover(float mx, float my) {
+    if (!g_scene) return;
+
+    auto* hit = (AimlPrefabInstance*)aiml_prefab_hit_test(mx, my);
+
+    /* Clear previous hover */
+    if (g_scene->hovered && g_scene->hovered != hit) {
+        g_scene->hovered->hovered = false;
+    }
+
+    /* Set new hover */
+    if (hit) {
+        hit->hovered = true;
+    }
+    g_scene->hovered = hit;
+
+    /* Snapshot mouse button pressed state (rising edge) for was_clicked */
+    for (int i = 0; i < 3; i++) {
+        s_mouse_btn_pressed[i] = aiml_input_mouse_pressed(i);
+    }
+}
+
+void* aiml_prefab_get_hovered(void) {
+    return g_scene ? g_scene->hovered : nullptr;
+}
+
+int32_t aiml_prefab_is_hovered(void* inst) {
+    auto* p = (AimlPrefabInstance*)inst;
+    return (p && p->hovered) ? 1 : 0;
+}
+
+int32_t aiml_prefab_was_clicked(void* inst, int32_t btn) {
+    auto* p = (AimlPrefabInstance*)inst;
+    if (!p || !p->hovered || btn < 0 || btn > 2) return 0;
+    return s_mouse_btn_pressed[btn];
 }
 
 /* ── Drag-and-drop ───────────────────────────────────────────────────────── */
@@ -818,13 +971,19 @@ void aiml_prefab_update_drag(float mx, float my, int32_t btn_down, int32_t btn_r
             auto* inst = g_scene->instances[i];
             if (!inst->visible || !inst->draggable) continue;
 
-            float w = inst->def->width * inst->scale;
-            float h = inst->def->height * inst->scale;
-            if (mx >= inst->x && mx <= inst->x + w &&
-                my >= inst->y && my <= inst->y + h) {
+            float ax, ay;
+            get_actual_pos(inst, ax, ay);
+            float isx = inst->scale_x, isy = inst->scale_y;
+            if (inst->is_relative) { float rsx, rsy; get_rel_scale(rsx, rsy); isx *= rsx; isy *= rsy; }
+            float w = inst->def->width * isx;
+            float h = inst->def->height * isy;
+            if (mx >= ax && mx <= ax + w &&
+                my >= ay && my <= ay + h) {
                 inst->is_dragging = true;
-                inst->drag_offset_x = mx - inst->x;
-                inst->drag_offset_y = my - inst->y;
+                inst->drag_offset_x = mx - ax;
+                inst->drag_offset_y = my - ay;
+                inst->drag_origin_x = inst->x;
+                inst->drag_origin_y = inst->y;
                 g_scene->dragged = inst;
                 break;
             }
@@ -832,9 +991,15 @@ void aiml_prefab_update_drag(float mx, float my, int32_t btn_down, int32_t btn_r
     }
 
     if (g_scene->dragged && g_scene->dragged->is_dragging) {
-        /* Update position */
-        g_scene->dragged->x = mx - g_scene->dragged->drag_offset_x;
-        g_scene->dragged->y = my - g_scene->dragged->drag_offset_y;
+        /* Update position — convert back to relative if needed */
+        auto* d = g_scene->dragged;
+        if (d->is_relative && g_scene->screen_w > 0 && g_scene->screen_h > 0) {
+            d->x = (mx - d->drag_offset_x) / g_scene->screen_w;
+            d->y = (my - d->drag_offset_y) / g_scene->screen_h;
+        } else {
+            d->x = mx - d->drag_offset_x;
+            d->y = my - d->drag_offset_y;
+        }
     }
 
     if (btn_released && g_scene->dragged) {
@@ -846,6 +1011,38 @@ void aiml_prefab_update_drag(float mx, float my, int32_t btn_down, int32_t btn_r
 
 void* aiml_prefab_get_dragged(void) {
     return g_scene ? g_scene->dragged : nullptr;
+}
+
+void aiml_prefab_cancel_drag(void* p) {
+    auto* inst = (AimlPrefabInstance*)p;
+    if (!inst) return;
+    inst->x = inst->drag_origin_x;
+    inst->y = inst->drag_origin_y;
+    inst->is_dragging = false;
+    if (g_scene && g_scene->dragged == inst)
+        g_scene->dragged = nullptr;
+}
+
+/* ── Dock to UI grid cell ────────────────────────────────────────────────── */
+
+void aiml_prefab_dock_x(void* p, int32_t col, int32_t colspan) {
+    auto* inst = (AimlPrefabInstance*)p;
+    if (!inst || inst->is_dragging) return;
+    float cx, cy, cw, ch;
+    if (aiml_ui_grid_cell_rect(col, 0, colspan, 1, &cx, &cy, &cw, &ch) != 0) return;
+    inst->x = cx;
+    if (inst->def->width > 0)
+        inst->scale_x = cw / inst->def->width;
+}
+
+void aiml_prefab_dock_y(void* p, int32_t row, int32_t rowspan) {
+    auto* inst = (AimlPrefabInstance*)p;
+    if (!inst || inst->is_dragging) return;
+    float cx, cy, cw, ch;
+    if (aiml_ui_grid_cell_rect(0, row, 1, rowspan, &cx, &cy, &cw, &ch) != 0) return;
+    inst->y = cy;
+    if (inst->def->height > 0)
+        inst->scale_y = ch / inst->def->height;
 }
 
 /* ── Font ────────────────────────────────────────────────────────────────── */

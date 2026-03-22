@@ -392,11 +392,15 @@ struct AimlMirrorRegistered {
 - Pure-value Structs als Felder (`vec2`, `vec3`, `vec4`, `mat4`) → RAWBYTES
 - User-defined Structs als Felder (eingebettete STRUCT-Knoten)
 - Beliebige Verschachtelungstiefe (`list<list<list<string>>>` usw.)
+- `Kv<string:T>` als Feld in einem `sync:`-Modell (Kv-Inhalt wird vollständig
+  serialisiert / deserialisiert; Besitzer muss nach Kv-Mutation `sess.sync_now`
+  aufrufen — automatische Dirty-Detection für Kv-Pointer erst in v2, siehe unten)
 
 ### Nicht in scope (v2)
-- `Store<T>` Persistenz (nutzt mmap, andere Mechanismus)
+- `Store<T>` Persistenz (nutzt mmap, anderer Mechanismus)
 - `chan<T>` Thread-Übergabe
-- Mirror Dirty-Detection als Blob-Vergleich
+- Mirror Dirty-Detection als Blob-Vergleich (behebt automatisches Erkennen von
+  Kv / map / list-in-place-Mutationen ohne explizites `sync_now`)
 - Zirkuläre Referenzen (explizit verboten — Compiler-Fehler)
 - `ptr<T>` / `ref<T>` als Struct-Felder (pointer auf andere Objekte — nicht serialisierbar)
 

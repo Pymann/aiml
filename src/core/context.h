@@ -42,6 +42,7 @@ namespace AIML {
         std::string className;    // Name of the class if this is an object or pointer to object
         bool is_const = false;
         bool is_volatile = false;
+        bool is_global = false;   // True for module-level GlobalVariable (not a local alloca)
         AccessLevel access = AccessLevel::Public; // Default for vars
     };
 
@@ -231,6 +232,7 @@ namespace AIML {
     bool jitMode = false;
     bool headerOnlyMode = false;
     bool libraryMode = false;  // skip __aiml_init/fptable/schemas for import-only objects
+    bool inTopLevelInit = false;  // true while emitting __aiml_init body (top-level stmts)
 
     // Lib init function names from imported files — called at start of __aiml_init
     std::vector<std::string> libInitFuncNames;

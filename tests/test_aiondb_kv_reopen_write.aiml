@@ -1,0 +1,32 @@
+# Regression setup: write persistent Kv contents for a later reopen/read test.
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_path, path, "/tmp/aiml_test_aiondb_kv_reopen_20260319/"]
+      - decl: [cfg, Kv<string:string>]
+      - set: [cfg, { call: [db.open_kv, "reopen_cfg_20260319", {persist: true, path: db_path}] }]
+
+      - call: [cfg.set, "mode", "battle"]
+      - call: [cfg.set, "player", "nikolai"]
+
+      - decl: [mode, string]
+      - set: [mode, { call: [cfg.get, "mode"] }]
+      - if:
+          condition: { "==": [{ eq: [mode, "battle"] }, 0] }
+          then:
+            - print: ["FAIL kv_reopen_write_mode=${mode}"]
+            - call: [sys.exit, 1]
+
+      - decl: [rc, i32]
+      - set: [rc, { call: [db.checkpoint] }]
+      - if:
+          condition: { "!=": [rc, 0] }
+          then:
+            - print: ["FAIL kv_reopen_write_checkpoint=${rc}"]
+            - call: [sys.exit, 1]
+
+      - print: ["AionDB kv reopen write PASS"]
+      - return: 0

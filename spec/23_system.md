@@ -22,7 +22,11 @@
 # Writing
 - decl: [f, file_handle]
 - set: [f, { call: [io.open, "test.txt", "w"] }]
-# Check if open failed? (f == null)
+- if:
+    condition: { eq: [f, null] }
+    then:
+      - call: [io.write, io.stderr, "open failed\n"]
+      - call: [sys.exit, 2]
 
 - call: [io.write, f, "Hello World\n"]
 - call: [io.close, f]
@@ -71,7 +75,7 @@
     name: sys.model.ProcessOptions
     fields:
       - [cwd, string, ""]             # Working directory
-      - [env, map, {}]                # Environment variables (empty = inherit)
+      - [env, map<string:string>, {}] # Environment variables (empty = inherit)
       - [shell, bool, false]          # Run via shell
       - [timeout, i32, -1]            # Timeout in ms (-1 = infinite)
       - [capture_output, bool, false] # Capture stdout/stderr in buffer
@@ -89,7 +93,7 @@
 #   cwd: string             - Working directory
 #   env: map<string, string>- Environment variables
 #   pid: i64                - Process ID
-#   returncode: i32         - Exit status (null if running)
+#   returncode: i32?        - Exit status; null while still running
 #   stdout_buffer: string   - Captured standard output
 #   stderr_buffer: string   - Captured standard error
 #   shell: bool             - Whether shell execution was used (default false)
@@ -127,3 +131,17 @@
 # Option 3: Default Options (Empty Map)
 - set: [proc, { call: [sys.exe, args, {}] }]
 ```
+
+## File I/O Failure Semantics
+
+- `io.open(...)` returns `null` on failure.
+- Callers are expected to check the returned handle before `io.read`, `io.write`
+  or `io.close`.
+
+## Process State Semantics
+
+- `process.returncode` is nullable (`i32?`).
+- While the process is still running, `returncode == null`.
+- If process creation itself fails in an uncaught way, normal exception
+  propagation rules apply and an unhandled failure exits the program with
+  `sys.exit(2)`.
