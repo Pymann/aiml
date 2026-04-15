@@ -15,12 +15,13 @@ class StateHandler;
 
 class TryBuilder : public StateHandler {
     std::unique_ptr<TryStmt> tryStmt;
+    int capturedLine = -1;
     std::string currentKey;
     bool expectingKey = true;
     int depth = 0;
     
 public:
-    TryBuilder(Builder* b) : StateHandler(b), tryStmt(std::make_unique<TryStmt>()) {}
+    TryBuilder(Builder* b) : StateHandler(b), tryStmt(std::make_unique<TryStmt>()), capturedLine(b->currentLine) {}
 
     bool OnMapStart() override {
         depth++;
@@ -93,6 +94,7 @@ public:
     }
 
     std::unique_ptr<Node> finish() override {
+        tryStmt->sourceLine = capturedLine;
         return std::move(tryStmt);
     }
 };

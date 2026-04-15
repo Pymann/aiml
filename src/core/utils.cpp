@@ -10,7 +10,7 @@ static llvm::Value* resolveLValueMemberAccess(CompilerContext& ctx, const std::s
     
     Symbol& sym = ctx.symbol_table[objName];
     if (sym.type->isStructTy() && sym.is_const && forWrite) {
-         LOG_ERROR("Cannot assign to member " + memberName + " of const variable " + objName);
+         LOG_ERROR(ctx.fmtLoc() + "Cannot assign to member " + memberName + " of const variable " + objName);
          return nullptr;
     }
 
@@ -38,15 +38,15 @@ static llvm::Value* resolveLValueMemberAccess(CompilerContext& ctx, const std::s
              int index = member.index;
              
              if (member.access == AccessLevel::Private && ctx.currentClassName != className) {
-                 LOG_ERROR("Cannot access private member " + memberName);
+                 LOG_ERROR(ctx.fmtLoc() + "Cannot access private member " + memberName);
                  return nullptr;
              } else if (member.access == AccessLevel::Protected && ctx.currentClassName != className) {
-                 LOG_ERROR("Cannot access protected member " + memberName);
+                 LOG_ERROR(ctx.fmtLoc() + "Cannot access protected member " + memberName);
                  return nullptr;
              }
 
              if (forWrite && member.is_const) {
-                  LOG_ERROR("Cannot assign to const member " + memberName);
+                  LOG_ERROR(ctx.fmtLoc() + "Cannot assign to const member " + memberName);
                   return nullptr; 
              }
              
@@ -61,10 +61,10 @@ static llvm::Value* resolveLValueMemberAccess(CompilerContext& ctx, const std::s
              }
              return ctx.builder.CreateStructGEP(classInfo.type, structPtr, index, "member_addr");
         }
-        LOG_ERROR("Member '" + memberName + "' not found in class '" + className + "' (total members: " + std::to_string(classInfo.members.size()) + ")");
+        LOG_ERROR(ctx.fmtLoc() + "Member '" + memberName + "' not found in class '" + className + "' (total members: " + std::to_string(classInfo.members.size()) + ")");
         return nullptr;
     }
-    LOG_ERROR("Cannot access member '" + memberName + "' on '" + objName + "' (sym.className='" + sym.className + "', resolved className='" + className + "')");
+    LOG_ERROR(ctx.fmtLoc() + "Cannot access member '" + memberName + "' on '" + objName + "' (sym.className='" + sym.className + "', resolved className='" + className + "')");
     return nullptr;
 }
 
@@ -73,13 +73,13 @@ static llvm::Value* resolveLValueArrayAccess(CompilerContext& ctx, const std::st
     Symbol& sym = ctx.symbol_table[varName];
     
     if (forWrite && sym.is_const) {
-         LOG_ERROR("Cannot modify element of const array/list");
+         LOG_ERROR(ctx.fmtLoc() + "Cannot modify element of const array/list");
          return nullptr;
     }
     
     size_t colonPos = indexStr.find(':');
     if (colonPos != std::string::npos) {
-        if (forWrite) { LOG_ERROR("Slice assignment is not yet supported."); return nullptr; }
+        if (forWrite) { LOG_ERROR(ctx.fmtLoc() + "Slice assignment is not yet supported."); return nullptr; }
         
         std::string startStr = indexStr.substr(0, colonPos);
         std::string endStr = indexStr.substr(colonPos + 1);
@@ -95,7 +95,7 @@ static llvm::Value* resolveLValueArrayAccess(CompilerContext& ctx, const std::st
         }
         
         if (sym.type->isArrayTy()) {
-             LOG_ERROR("Slicing not supported for fixed arrays yet.");
+             LOG_ERROR(ctx.fmtLoc() + "Slicing not supported for fixed arrays yet.");
              return nullptr;
         } else if (sym.type->isStructTy() && sym.type->getStructName().startswith("list_")) {
              return ListImpl::slice(ctx, sym.alloca_inst, startVal, endVal, sym.element_type);
@@ -131,7 +131,7 @@ llvm::Value* resolveLValue(CompilerContext& ctx, const std::string& argStr, Comp
     if (ctx.symbol_table.count(argStr)) {
         Symbol& sym = ctx.symbol_table[argStr];
         if (forWrite && sym.is_const) {
-             LOG_ERROR("Cannot assign to const variable '" + argStr + "'");
+             LOG_ERROR(ctx.fmtLoc() + "Cannot assign to const variable '" + argStr + "'");
              return nullptr;
         }
         return sym.alloca_inst;
@@ -143,7 +143,7 @@ static llvm::Value* resolvePropertyOrEnum(CompilerContext& ctx, const std::strin
      if (ctx.enums.count(objName)) {
          auto& enumValues = ctx.enums[objName];
          if (enumValues.count(propName)) return ctx.builder.getInt32(enumValues[propName]);
-         LOG_ERROR("Enum '" + objName + "' has no value '" + propName + "'");
+         LOG_ERROR(ctx.fmtLoc() + "Enum '" + objName + "' has no value '" + propName + "'");
          return ctx.builder.getInt32(0);
      }
 
@@ -223,7 +223,7 @@ static llvm::Value* resolveLValueLoad(CompilerContext& ctx, const std::string& a
 llvm::Value* resolveValue(CompilerContext& ctx, const YAML::Node& argNode, CompilerContext::Evaluator evaluator) {
     if (argNode.IsMap()) {
          if (evaluator) return evaluator(ctx, argNode);
-         LOG_ERROR("Cannot evaluate map without evaluator");
+         LOG_ERROR(ctx.fmtLoc() + "Cannot evaluate map without evaluator");
          return ctx.builder.getInt32(0);
     }
 
@@ -254,7 +254,7 @@ llvm::Value* resolveValue(CompilerContext& ctx, const YAML::Node& argNode, Compi
     else {
         llvm::Value* loaded = resolveLValueLoad(ctx, argStr, lvalue);
         if (loaded) return loaded;
-        LOG_ERROR("Could not determine type for load: " + argStr);
+        LOG_ERROR(ctx.fmtLoc() + "Could not determine type for load: " + argStr);
         return ctx.builder.getInt32(0);
     }
     

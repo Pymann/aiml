@@ -20,7 +20,7 @@
       - decl: [got_peer, i32, 0]
       - decl: [peer_wait, i32, 0]
       - while:
-          condition: { "&&": [{ "==": [got_peer, 0] }, { "<": [peer_wait, 200] }] }
+          condition: { "&&": [{ eq: [got_peer, 0] }, { "<": [peer_wait, 200] }] }
           body:
             - call: [sess.update]
             - if:
@@ -33,7 +33,7 @@
                       then:
                         - set: [got_peer, 1]
             - if:
-                condition: { "==": [got_peer, 0] }
+                condition: { eq: [got_peer, 0] }
                 then:
                   - call: [time.sleep_ms, 16]
                   - set: [peer_wait, { +: [peer_wait, 1] }]
@@ -41,7 +41,7 @@
       - decl: [got_ci, i32, 0]
       - decl: [ci_wait, i32, 0]
       - while:
-          condition: { "&&": [{ "==": [got_ci, 0] }, { "<": [ci_wait, 300] }] }
+          condition: { "&&": [{ eq: [got_ci, 0] }, { "<": [ci_wait, 300] }] }
           body:
             - call: [sess.update]
             - if:
@@ -50,7 +50,7 @@
                   - decl: [cev, mirror_event]
                   - set: [cev, { call: [sess.next_event] }]
                   - if:
-                      condition: { "&&": [{ eq: [cev.type, "object_registered"] }, { "!=": [cev.net_id, nid] }] }
+                      condition: { "&&": [{ eq: [cev.type, "object_registered"] }, { neq: [cev.net_id, nid] }] }
                       then:
                         - call: [sess.register_id, g_ws9_server_client_info, cev.net_id]
                         - call: [time.sleep_ms, 16]
@@ -60,7 +60,7 @@
                         - set: [got_ci, 1]
                         - print: ["ws9-host: client_info player='${g_ws9_server_client_info.player_name}' deckset='${g_ws9_server_client_info.deckset_id}'"]
             - if:
-                condition: { "==": [got_ci, 0] }
+                condition: { eq: [got_ci, 0] }
                 then:
                   - call: [time.sleep_ms, 16]
                   - set: [ci_wait, { +: [ci_wait, 1] }]
@@ -98,7 +98,7 @@
 - decl: [got_view, i32, 0]
 - decl: [wait, i32, 0]
 - while:
-    condition: { "&&": [{ "==": [got_view, 0] }, { "<": [wait, 300] }] }
+    condition: { "&&": [{ eq: [got_view, 0] }, { "<": [wait, 300] }] }
     body:
       - call: [client.update]
       - if:
@@ -113,7 +113,7 @@
                   - set: [got_view, 1]
                   - print: ["ws9-client: view object_registered net_id=${g_ws9_view_nid}"]
       - if:
-          condition: { "==": [got_view, 0] }
+          condition: { eq: [got_view, 0] }
           then:
             - call: [time.sleep_ms, 16]
             - set: [wait, { +: [wait, 1] }]
@@ -129,7 +129,7 @@
 
 - decl: [drain_wait, i32, 0]
 - while:
-    condition: { "&&": [{ "==": [{ call: [g_ws9_view.p1_name.len] }, 0] }, { "<": [drain_wait, 300] }] }
+    condition: { "&&": [{ eq: [{ call: [g_ws9_view.p1_name.len] }, 0] }, { "<": [drain_wait, 300] }] }
     body:
       - call: [client.update]
       - call: [time.sleep_ms, 16]
@@ -142,55 +142,55 @@
 - print: ["ws9-check: server_seen=${server_seen} selected='${g_ws9_selected_deckset_id}'"]
 
 - if:
-    condition: { "==": [got_view, 0] }
+    condition: { eq: [got_view, 0] }
     then:
       - print: ["FAIL ws9: no view event"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "==": [{ eq: [g_ws9_selected_deckset_id, "deckset-alpha"] }, 0] }
+    condition: { eq: [{ eq: [g_ws9_selected_deckset_id, "deckset-alpha"] }, 0] }
     then:
       - print: ["FAIL ws9: selected deckset lost='${g_ws9_selected_deckset_id}'"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "==": [{ eq: [g_ws9_client_info.deckset_id, "deckset-alpha"] }, 0] }
+    condition: { eq: [{ eq: [g_ws9_client_info.deckset_id, "deckset-alpha"] }, 0] }
     then:
       - print: ["FAIL ws9: client_info deckset='${g_ws9_client_info.deckset_id}'"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "==": [{ eq: [g_ws9_server_client_info.deckset_id, "deckset-alpha"] }, 0] }
+    condition: { eq: [{ eq: [g_ws9_server_client_info.deckset_id, "deckset-alpha"] }, 0] }
     then:
       - print: ["FAIL ws9: server client_info deckset='${g_ws9_server_client_info.deckset_id}'"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "==": [{ eq: [g_ws9_server_client_info.player_name, "Nikolai"] }, 0] }
+    condition: { eq: [{ eq: [g_ws9_server_client_info.player_name, "Nikolai"] }, 0] }
     then:
       - print: ["FAIL ws9: server client_info player='${g_ws9_server_client_info.player_name}'"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "==": [{ eq: [g_ws9_view.p1_name, "Nikolai"] }, 0] }
+    condition: { eq: [{ eq: [g_ws9_view.p1_name, "Nikolai"] }, 0] }
     then:
       - print: ["FAIL ws9: view p1_name='${g_ws9_view.p1_name}'"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [g_ws9_view.round, 7] }
+    condition: { neq: [g_ws9_view.round, 7] }
     then:
       - print: ["FAIL ws9: view round=${g_ws9_view.round}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [g_ws9_view.hand_count, 3] }
+    condition: { neq: [g_ws9_view.hand_count, 3] }
     then:
       - print: ["FAIL ws9: view hand_count=${g_ws9_view.hand_count}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [connected1, 1] }
+    condition: { neq: [connected1, 1] }
     then:
       - print: ["FAIL ws9: connected=${connected1}"]
       - call: [sys.exit, 1]

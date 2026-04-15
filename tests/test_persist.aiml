@@ -18,7 +18,7 @@
       - decl: [n0, i32]
       - set: [n0, { call: [players.len] }]
       - if:
-          condition: { "!=": [n0, 0] }
+          condition: { neq: [n0, 0] }
           then:
             - print: ["FAIL persist_initial_len=${n0}"]
             - call: [sys.exit, 1]
@@ -30,7 +30,7 @@
       - decl: [id1, i32]
       - set: [id1, { call: [players.insert, p1] }]
       - if:
-          condition: { "!=": [id1, 1] }
+          condition: { neq: [id1, 1] }
           then:
             - print: ["FAIL persist_insert_id=${id1}"]
             - call: [sys.exit, 1]
@@ -38,7 +38,7 @@
       - decl: [n1, i32]
       - set: [n1, { call: [players.len] }]
       - if:
-          condition: { "!=": [n1, 1] }
+          condition: { neq: [n1, 1] }
           then:
             - print: ["FAIL persist_len=${n1}"]
             - call: [sys.exit, 1]
@@ -46,19 +46,19 @@
       - decl: [got, ptr<Player>]
       - set: [got, { call: [players.get, 1] }]
       - if:
-          condition: { "==": [got, null] }
+          condition: { eq: [got, null] }
           then:
             - print: ["FAIL persist_get=null"]
             - call: [sys.exit, 1]
 
       - if:
-          condition: { "!=": [got.score, 999] }
+          condition: { neq: [got.score, 999] }
           then:
             - print: ["FAIL persist_score=${got.score}"]
             - call: [sys.exit, 1]
 
       - if:
-          condition: { "!=": [got.level, 42] }
+          condition: { neq: [got.level, 42] }
           then:
             - print: ["FAIL persist_level=${got.level}"]
             - call: [sys.exit, 1]
@@ -66,7 +66,7 @@
       - decl: [dir_ok, i32]
       - set: [dir_ok, { call: [io.is_dir, db_dir] }]
       - if:
-          condition: { "!=": [dir_ok, 1] }
+          condition: { neq: [dir_ok, 1] }
           then:
             - print: ["FAIL persist_dir=${dir_ok} dir=${db_dir}"]
             - call: [sys.exit, 1]
@@ -74,7 +74,7 @@
       - decl: [rc, i32]
       - set: [rc, { call: [db.checkpoint] }]
       - if:
-          condition: { "!=": [rc, 0] }
+          condition: { neq: [rc, 0] }
           then:
             - print: ["FAIL persist_checkpoint=${rc}"]
             - call: [sys.exit, 1]

@@ -1,6 +1,58 @@
 #include "../../../logger.h"
 #include "../ast_builder.h"
 #include "expression_builder.h"
+#include <algorithm>
+#include <unordered_map>
+#include <unordered_set>
+
+namespace {
+// Normalize symbol operators to their canonical word forms.
+// This is the single source of truth for operator spelling.
+static const std::unordered_map<std::string, std::string> kOpAlias = {
+    {"<",  "lt"}, {">",  "gt"},
+    {"<=", "lte"}, {">=", "gte"},
+};
+static const std::unordered_map<std::string, std::string> kDeprecatedOps = {
+    {"==", "eq"}, {"!=", "neq"}, {"<>", "neq"},
+};
+inline std::string normalizeOp(const std::string& op) {
+    auto it = kOpAlias.find(op);
+    return (it != kOpAlias.end()) ? it->second : op;
+}
+
+bool isKnownBinaryOperator(const std::string& op) {
+    static const std::unordered_set<std::string> kBinaryOps = {
+        "+", "-", "*", "/", "%", "add", "sub", "mul", "div",
+        "eq", "neq", "lt", "gt", "le", "lte", "ge", "gte", "peq", "pneq",
+        "and", "&&", "or", "||"
+    };
+    return kBinaryOps.count(op) > 0;
+}
+
+bool isVariadicFoldBinaryOperator(const std::string& op) {
+    return op == "+" || op == "*" || op == "add" || op == "mul";
+}
+
+bool isAllOf(const std::string& op, char c) {
+    return !op.empty() && std::all_of(op.begin(), op.end(), [c](char ch) { return ch == c; });
+}
+
+bool isStrictUnaryOnlyOperator(const std::string& op) {
+    if (op == "!" || op == "&") return true;
+    if (isAllOf(op, '?')) return true;
+    if (op.size() > 2 && isAllOf(op, '&')) return true;
+    return false;
+}
+
+std::unique_ptr<AIML::AST::Expr> foldBinaryExprList(
+    std::string op, std::vector<std::unique_ptr<AIML::AST::Expr>> args) {
+    auto acc = std::make_unique<AIML::AST::BinaryExpr>(op, std::move(args[0]), std::move(args[1]));
+    for (size_t i = 2; i < args.size(); ++i) {
+        acc = std::make_unique<AIML::AST::BinaryExpr>(op, std::move(acc), std::move(args[i]));
+    }
+    return acc;
+}
+} // anonymous namespace
 
 namespace AIML {
 namespace AST {
@@ -27,9 +79,18 @@ bool ExpressionBuilder::OnMapEnd() {
 
 bool ExpressionBuilder::OnScalar(const std::string& value, const std::string& tag) {
     if (expectingKey) {
+        // Reject deprecated symbol operators
+        auto dep = kDeprecatedOps.find(value);
+        if (dep != kDeprecatedOps.end()) {
+            if (builder->currentLine > 0)
+                LOG_ERROR("line " + std::to_string(builder->currentLine) + ": Operator '" + value + "' is not allowed. Use '" + dep->second + "' instead.");
+            else
+                LOG_ERROR("Operator '" + value + "' is not allowed. Use '" + dep->second + "' instead.");
+            return false;
+        }
         op = value;
         expectingKey = false;
-        
+
         // Single-argument operations might just have a scalar value, e.g. `!true`
         // But usually it's `op: [args]`
         return true;
@@ -86,6 +147,14 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
          }
          return call;
     }
+    // tolerance(a, b, eps) → ternary operator, emitted as CallExpr
+    if (op == "tolerance" && args.size() == 3) {
+         auto call = std::make_unique<CallExpr>("__builtin_tolerance");
+         call->args.push_back(std::move(args[0]));
+         call->args.push_back(std::move(args[1]));
+         call->args.push_back(std::move(args[2]));
+         return call;
+    }
     if (op == "spawn" && !args.empty()) {
          auto spawnName = dynamic_cast<VariableExpr*>(args[0].get());
          auto spawnLiteral = dynamic_cast<LiteralExpr*>(args[0].get());
@@ -97,6 +166,20 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
          for (size_t i = 1; i < args.size(); ++i)
              spawnExpr->args.push_back(std::move(args[i]));
          return spawnExpr;
+    }
+    if (op == "at" && !args.empty()) {
+         auto atExpr = std::make_unique<AtExpr>();
+         atExpr->container = std::move(args[0]);
+         for (size_t i = 1; i < args.size(); ++i)
+             atExpr->indices.push_back(std::move(args[i]));
+         return atExpr;
+    }
+    if (op == "slice" && args.size() >= 3) {
+         // { slice: [container, start, end] } → CallExpr("__builtin_slice", container, start, end)
+         auto call = std::make_unique<CallExpr>("__builtin_slice");
+         for (auto& a : args)
+             call->args.push_back(std::move(a));
+         return call;
     }
     if (op == "new" && !args.empty()) {
          auto newName = dynamic_cast<VariableExpr*>(args[0].get());
@@ -115,8 +198,32 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
          return newExpr;
     }
     if (hadSequence) {
+        std::string normalizedOp = normalizeOp(op);
+        if (args.size() > 1 && isStrictUnaryOnlyOperator(op)) {
+            if (builder->currentLine > 0) {
+                LOG_ERROR("line " + std::to_string(builder->currentLine) + ": Unary operator '" + op +
+                          "' expects exactly 1 operand, got " + std::to_string(args.size()) + ".");
+            } else {
+                LOG_ERROR("Unary operator '" + op + "' expects exactly 1 operand, got " +
+                          std::to_string(args.size()) + ".");
+            }
+            return nullptr;
+        }
+        if (args.size() > 2 && isKnownBinaryOperator(normalizedOp)) {
+            if (isVariadicFoldBinaryOperator(normalizedOp)) {
+                return foldBinaryExprList(normalizedOp, std::move(args));
+            }
+            if (builder->currentLine > 0) {
+                LOG_ERROR("line " + std::to_string(builder->currentLine) + ": Binary operator '" + normalizedOp +
+                          "' expects exactly 2 operands, got " + std::to_string(args.size()) + ".");
+            } else {
+                LOG_ERROR("Binary operator '" + normalizedOp + "' expects exactly 2 operands, got " +
+                          std::to_string(args.size()) + ".");
+            }
+            return nullptr;
+        }
         if (args.size() == 2) {
-            return std::make_unique<BinaryExpr>(op, std::move(args[0]), std::move(args[1]));
+            return std::make_unique<BinaryExpr>(normalizedOp, std::move(args[0]), std::move(args[1]));
         }
         if (args.size() == 1) {
             return std::make_unique<UnaryExpr>(op, std::move(args[0]));
@@ -146,8 +253,22 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
     }
 
     // Unary/binary fallback for args that didn't come via sequence
+    std::string normalizedOp = normalizeOp(op);
+    if (args.size() > 2 && isKnownBinaryOperator(normalizedOp)) {
+        if (isVariadicFoldBinaryOperator(normalizedOp)) {
+            return foldBinaryExprList(normalizedOp, std::move(args));
+        }
+        if (builder->currentLine > 0) {
+            LOG_ERROR("line " + std::to_string(builder->currentLine) + ": Binary operator '" + normalizedOp +
+                      "' expects exactly 2 operands, got " + std::to_string(args.size()) + ".");
+        } else {
+            LOG_ERROR("Binary operator '" + normalizedOp + "' expects exactly 2 operands, got " +
+                      std::to_string(args.size()) + ".");
+        }
+        return nullptr;
+    }
     if (args.size() == 2) {
-         return std::make_unique<BinaryExpr>(op, std::move(args[0]), std::move(args[1]));
+         return std::make_unique<BinaryExpr>(normalizedOp, std::move(args[0]), std::move(args[1]));
     }
     if (args.size() == 1) {
         return std::make_unique<UnaryExpr>(op, std::move(args[0]));

@@ -20,27 +20,27 @@
       - set: [d1, { call: [sys.deserialize, json1, "Deck"] }]
 
       - if:
-          condition: { "==": [{ eq: [d1.name, "Mana Alpha"] }, 0] }
+          condition: { eq: [{ eq: [d1.name, "Mana Alpha"] }, 0] }
           then:
             - print: ["FAIL d1.name=${d1.name}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "==": [{ eq: [d1.deck_type, "mana_deck"] }, 0] }
+          condition: { eq: [{ eq: [d1.deck_type, "mana_deck"] }, 0] }
           then:
             - print: ["FAIL d1.deck_type=${d1.deck_type}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "!=": [d1.card_ids.len, 3] }
+          condition: { neq: [d1.card_ids.len, 3] }
           then:
             - print: ["FAIL d1.card_ids.len=${d1.card_ids.len}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "==": [{ eq: [d1.card_ids-0, "c1"] }, 0] }
+          condition: { eq: [{ eq: [d1.card_ids-0, "c1"] }, 0] }
           then:
             - print: ["FAIL d1.card_ids-0=${d1.card_ids-0}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "==": [{ eq: [d1.card_ids-2, "c3"] }, 0] }
+          condition: { eq: [{ eq: [d1.card_ids-2, "c3"] }, 0] }
           then:
             - print: ["FAIL d1.card_ids-2=${d1.card_ids-2}"]
             - call: [sys.exit, 1]
@@ -52,17 +52,17 @@
       - decl: [got1, ptr<Deck>]
       - set: [got1, { call: [kv.get, "deck_a"] }]
       - if:
-          condition: { "==": [{ eq: [got1.name, "Mana Alpha"] }, 0] }
+          condition: { eq: [{ eq: [got1.name, "Mana Alpha"] }, 0] }
           then:
             - print: ["FAIL got1.name=${got1.name}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "!=": [got1.card_ids.len, 3] }
+          condition: { neq: [got1.card_ids.len, 3] }
           then:
             - print: ["FAIL got1.card_ids.len=${got1.card_ids.len}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "==": [{ eq: [got1.card_ids-1, "c2"] }, 0] }
+          condition: { eq: [{ eq: [got1.card_ids-1, "c2"] }, 0] }
           then:
             - print: ["FAIL got1.card_ids-1=${got1.card_ids-1}"]
             - call: [sys.exit, 1]
@@ -75,22 +75,22 @@
       - decl: [got2, ptr<Deck>]
       - set: [got2, { call: [kv.get, "deck_a"] }]
       - if:
-          condition: { "==": [{ eq: [got2.name, "Mana Beta"] }, 0] }
+          condition: { eq: [{ eq: [got2.name, "Mana Beta"] }, 0] }
           then:
             - print: ["FAIL got2.name=${got2.name}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "!=": [got2.card_ids.len, 2] }
+          condition: { neq: [got2.card_ids.len, 2] }
           then:
             - print: ["FAIL got2.card_ids.len=${got2.card_ids.len}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "==": [{ eq: [got2.card_ids-0, "x1"] }, 0] }
+          condition: { eq: [{ eq: [got2.card_ids-0, "x1"] }, 0] }
           then:
             - print: ["FAIL got2.card_ids-0=${got2.card_ids-0}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "==": [{ eq: [got2.card_ids-1, "x2"] }, 0] }
+          condition: { eq: [{ eq: [got2.card_ids-1, "x2"] }, 0] }
           then:
             - print: ["FAIL got2.card_ids-1=${got2.card_ids-1}"]
             - call: [sys.exit, 1]

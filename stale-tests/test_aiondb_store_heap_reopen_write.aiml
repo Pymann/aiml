@@ -1,0 +1,63 @@
+# Regression setup: write persistent Store<T> contents for a later reopen/read test.
+# Covers heap fields in Store<T> via typed persistent WAL.
+# Expected exit code: 0
+
+- model:
+    name: ReopenSnippet
+    fields:
+      - [intent, string]
+      - [dependencies, list<string>]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_path, path, "/tmp/aiml_test_aiondb_store_heap_reopen_20260410/"]
+      - decl: [snips, Store<ReopenSnippet>]
+      - set: [snips, { call: [db.open, "reopen_heap_snippets_20260410", {persist: true, path: db_path}] }]
+
+      - decl: [n, i32, { call: [snips.len] }]
+      - if:
+          condition: { neq: [n, 0] }
+          then:
+            - print: ["FAIL store_heap_reopen_write_nonempty len=${n}"]
+            - call: [sys.exit, 1]
+
+      - decl: [s, ReopenSnippet]
+      - set: [s.intent, "loop"]
+      - call: [s.dependencies.push, "stdio"]
+      - call: [s.dependencies.push, "math"]
+
+      - decl: [id, i32, { call: [snips.insert, s] }]
+      - if:
+          condition: { neq: [id, 1] }
+          then:
+            - print: ["FAIL store_heap_reopen_write_id=${id}"]
+            - call: [sys.exit, 1]
+
+      - decl: [got, ptr<ReopenSnippet>, { call: [snips.get, 1] }]
+      - if:
+          condition: { eq: [got, null] }
+          then:
+            - print: ["FAIL store_heap_reopen_write_get=null"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { eq: [{ eq: [got.intent, "loop"] }, 0] }
+          then:
+            - print: ["FAIL store_heap_reopen_write_intent=${got.intent}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { neq: [got.dependencies.len, 2] }
+          then:
+            - print: ["FAIL store_heap_reopen_write_deps_len=${got.dependencies.len}"]
+            - call: [sys.exit, 1]
+
+      - decl: [rc, i32, { call: [db.checkpoint] }]
+      - if:
+          condition: { neq: [rc, 0] }
+          then:
+            - print: ["FAIL store_heap_reopen_write_checkpoint=${rc}"]
+            - call: [sys.exit, 1]
+
+      - print: ["AionDB store heap reopen write PASS"]
+      - return: 0

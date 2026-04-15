@@ -6,7 +6,7 @@
 - decl: [bad, gltf_scene, { call: [gltf.load, "/nonexistent_file.glb"] }]
 - decl: [bad_ok, i32, { call: [bad.valid] }]
 - print: ["Phase A: bad.valid=${bad_ok}"]
-- if: [{ ==: [bad_ok, 1] }, true]
+- if: [{ eq: [bad_ok, 1] }, true]
   then:
     - print: ["FAIL: expected valid=0 for nonexistent file"]
     - call: [sys.exit, 1]
@@ -23,7 +23,7 @@
 - decl: [scene, gltf_scene, { call: [gltf.load, p] }]
 - decl: [ok, i32, { call: [scene.valid] }]
 - print: ["Phase B: scene.valid=${ok}"]
-- if: [{ ==: [ok, 0] }, true]
+- if: [{ eq: [ok, 0] }, true]
   then:
     - decl: [err, string, { call: [scene.error] }]
     - print: ["FAIL: load error: ${err}"]
@@ -100,11 +100,11 @@
 - decl: [vc, i32, { call: [prim.vertex_count] }]
 - decl: [ic, i32, { call: [prim.index_count] }]
 - print: ["Phase E: vertex_count=${vc}, index_count=${ic}"]
-- if: [{ ==: [vc, 0] }, true]
+- if: [{ eq: [vc, 0] }, true]
   then:
     - print: ["FAIL: expected > 0 vertices"]
     - call: [sys.exit, 1]
-- if: [{ ==: [ic, 0] }, true]
+- if: [{ eq: [ic, 0] }, true]
   then:
     - print: ["FAIL: expected > 0 indices"]
     - call: [sys.exit, 1]

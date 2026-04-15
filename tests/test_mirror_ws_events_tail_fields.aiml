@@ -1,0 +1,203 @@
+# Regression probe: typed websocket mirror with list<model> followed by more synced fields.
+# Reproduces the 9rooms suspicion around GameView.events and fields after it.
+# Expected exit code: 0
+
+- model:
+    name: EventLiteWs
+    sync: [seq, kind, text]
+    fields:
+      - [seq, i32, 0]
+      - [kind, string]
+      - [text, string]
+
+- model:
+    name: TriggerLiteWs
+    sync: [seq, code, text]
+    fields:
+      - [seq, i32, 0]
+      - [code, i32, 0]
+      - [text, string]
+
+- model:
+    name: ReactionLiteWs
+    sync: [open, kind, mask, prompt]
+    fields:
+      - [open, i32, 0]
+      - [kind, string]
+      - [mask, i32, 0]
+      - [prompt, string]
+
+- model:
+    name: EventRootWs
+    sync: [event_seq, event_count, events, trigger_seq, active_trigger_count, active_triggers, reaction_state]
+    fields:
+      - [event_seq, i32, 0]
+      - [event_count, i32, 0]
+      - [events, list<EventLiteWs>]
+      - [trigger_seq, i32, 0]
+      - [active_trigger_count, i32, 0]
+      - [active_triggers, list<TriggerLiteWs>]
+      - [reaction_state, ReactionLiteWs]
+
+- def:
+    name: mirror_ws_events_tail_host
+    args: []
+    body:
+      - decl: [sess, mirror_session]
+      - set: [sess, { call: [mirror.listen, "ws://127.0.0.1:19911"] }]
+      - decl: [root, EventRootWs]
+      - decl: [events, list<EventLiteWs>]
+      - decl: [triggers, list<TriggerLiteWs>]
+      - set: [root.events, events]
+      - set: [root.active_triggers, triggers]
+
+      - decl: [ev0, EventLiteWs]
+      - set: [ev0.seq, 0]
+      - set: [ev0.kind, "phase_start"]
+      - set: [ev0.text, "Round start"]
+      - call: [root.events.push, ev0]
+      - set: [root.event_seq, 1]
+      - set: [root.event_count, 1]
+
+      - decl: [tr0, TriggerLiteWs]
+      - set: [tr0.seq, 0]
+      - set: [tr0.code, 77]
+      - set: [tr0.text, "On draw"]
+      - call: [root.active_triggers.push, tr0]
+      - set: [root.trigger_seq, 1]
+      - set: [root.active_trigger_count, 1]
+
+      - set: [root.reaction_state.open, 1]
+      - set: [root.reaction_state.kind, "trap"]
+      - set: [root.reaction_state.mask, 5]
+      - set: [root.reaction_state.prompt, "React now"]
+
+      - decl: [nid, i32]
+      - set: [nid, { call: [sess.register, root] }]
+
+      - decl: [i, i32, 0]
+      - while:
+          condition: { lt: [i, 30] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+
+      - decl: [ev1, EventLiteWs]
+      - set: [ev1.seq, 1]
+      - set: [ev1.kind, "phase_draw"]
+      - set: [ev1.text, "Draw step"]
+      - call: [root.events.push, ev1]
+      - set: [root.event_seq, 2]
+      - set: [root.event_count, 2]
+
+      - decl: [tr1, TriggerLiteWs]
+      - set: [tr1.seq, 1]
+      - set: [tr1.code, 88]
+      - set: [tr1.text, "On react"]
+      - call: [root.active_triggers.push, tr1]
+      - set: [root.trigger_seq, 2]
+      - set: [root.active_trigger_count, 2]
+
+      - set: [root.reaction_state.open, 0]
+      - set: [root.reaction_state.kind, ""]
+      - set: [root.reaction_state.mask, 9]
+      - set: [root.reaction_state.prompt, "Closed"]
+
+      - set: [i, 0]
+      - while:
+          condition: { lt: [i, 40] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+
+      - call: [sess.close]
+
+- decl: [host_th, thread_handle]
+- set: [host_th, { spawn: [mirror_ws_events_tail_host] }]
+- call: [time.sleep_ms, 80]
+
+- decl: [client, mirror_session]
+- set: [client, { call: [mirror.connect_timeout, "ws://127.0.0.1:19911", 4000] }]
+- call: [time.sleep_ms, 120]
+- call: [client.update]
+
+- decl: [ev, mirror_event]
+- set: [ev, { call: [client.next_event] }]
+- decl: [replica, EventRootWs]
+- call: [client.register_id, replica, ev.net_id]
+
+- decl: [poll_i, i32, 0]
+- while:
+    condition: { lt: [poll_i, 35] }
+    body:
+      - call: [time.sleep_ms, 20]
+      - call: [client.update]
+      - set: [poll_i, { +: [poll_i, 1] }]
+
+- print: ["events-tail: event_seq=${replica.event_seq} event_count=${replica.event_count} events.len=${replica.events.len} trigger_seq=${replica.trigger_seq} active=${replica.active_trigger_count} triggers.len=${replica.active_triggers.len} reaction='${replica.reaction_state.kind}' open=${replica.reaction_state.open} mask=${replica.reaction_state.mask} prompt='${replica.reaction_state.prompt}'"]
+
+- if:
+    condition: { neq: [replica.event_seq, 2] }
+    then:
+      - print: ["FAIL events-tail: event_seq=${replica.event_seq}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.event_count, 2] }
+    then:
+      - print: ["FAIL events-tail: event_count=${replica.event_count}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.events.len, 2] }
+    then:
+      - print: ["FAIL events-tail: events.len=${replica.events.len}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.events-1.kind, "phase_draw"] }
+    then:
+      - print: ["FAIL events-tail: last kind='${replica.events-1.kind}'"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.trigger_seq, 2] }
+    then:
+      - print: ["FAIL events-tail: trigger_seq=${replica.trigger_seq}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.active_trigger_count, 2] }
+    then:
+      - print: ["FAIL events-tail: active_trigger_count=${replica.active_trigger_count}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.active_triggers.len, 2] }
+    then:
+      - print: ["FAIL events-tail: active_triggers.len=${replica.active_triggers.len}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.reaction_state.open, 0] }
+    then:
+      - print: ["FAIL events-tail: reaction.open=${replica.reaction_state.open}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.reaction_state.mask, 9] }
+    then:
+      - print: ["FAIL events-tail: reaction.mask=${replica.reaction_state.mask}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.reaction_state.prompt, "Closed"] }
+    then:
+      - print: ["FAIL events-tail: reaction.prompt='${replica.reaction_state.prompt}'"]
+      - call: [sys.exit, 1]
+
+- call: [client.close]
+- call: [host_th.join]
+- print: ["WS events tail fields PASS"]

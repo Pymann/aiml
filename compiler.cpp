@@ -3,13 +3,16 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <filesystem>
 #include <yaml-cpp/yaml.h>
 #include <sys/time.h>
 #include <unistd.h>
 #include <dlfcn.h>
 #include "src/sys/time_runtime.h"
 #include "src/sys/process_runtime.h"
+#include "src/sys/mem_runtime.h"
 #include "src/core/path_runtime.h"
+#include "src/sys/string_runtime.h"
 #include "src/sys/net_runtime.h"
 #include "src/sys/tls_runtime.h"
 #include "src/sys/ws_runtime.h"
@@ -25,7 +28,10 @@
 #include "src/sys/input_runtime.h"
 #include "src/sys/audio_runtime.h"
 #include "src/sys/mirror_runtime.h"
+#include "src/sys/ai_runtime.h"
 #include "src/sys/ui_runtime.h"
+#include "src/sys/trace_runtime.h"
+#include "src/sys/tensor_runtime.h"
 
 // LLVM includes
 #include <llvm/IR/LLVMContext.h>
@@ -55,6 +61,93 @@
 #include "src/core/ast_builder.h"
 #include "src/core/ast_compiler.h"
 #include <unordered_set>
+
+namespace {
+
+constexpr int kAimlFileWarningLines = 1000;
+constexpr int kAimlFileErrorLines = 1500;
+constexpr int kAimlFunctionErrorLines = 301;
+
+int countFileLines(const std::string& path) {
+    std::ifstream in(path);
+    if (!in.is_open()) return -1;
+    int lines = 0;
+    std::string line;
+    while (std::getline(in, line)) lines++;
+    return lines;
+}
+
+std::string canonicalizeDiagPath(const std::string& path) {
+    try {
+        return std::filesystem::weakly_canonical(path).string();
+    } catch (...) {
+        return path;
+    }
+}
+
+void logAimlFileSizeDiagnostic(const std::string& path,
+                               std::unordered_set<std::string>* = nullptr) {
+    static std::mutex s_mu;
+    static std::unordered_set<std::string> s_seen;
+    {
+        std::lock_guard<std::mutex> lk(s_mu);
+        if (!s_seen.insert(canonicalizeDiagPath(path)).second) return;
+    }
+    int lines = countFileLines(path);
+    if (lines < 0) return;
+    if (lines >= kAimlFileErrorLines) {
+        LOG_ERROR(path + ": AIML file too large (" + std::to_string(lines) +
+                  " lines). Maximum is 1499 lines; 1500+ is a hard error.");
+    } else if (lines >= kAimlFileWarningLines) {
+        LOG_WARNING(path + ": AIML file large (" + std::to_string(lines) +
+                    " lines). 1000+ lines should be split.");
+    }
+}
+
+int maxStmtSourceLine(const AIML::AST::Stmt* stmt);
+
+int maxBlockSourceLine(const AIML::AST::BlockStmt* block) {
+    if (!block) return -1;
+    int maxLine = block->sourceLine;
+    for (const auto& stmt : block->statements) {
+        maxLine = std::max(maxLine, maxStmtSourceLine(stmt.get()));
+    }
+    return maxLine;
+}
+
+int maxStmtSourceLine(const AIML::AST::Stmt* stmt) {
+    if (!stmt) return -1;
+    int maxLine = stmt->sourceLine;
+    if (auto ifStmt = dynamic_cast<const AIML::AST::IfStmt*>(stmt)) {
+        maxLine = std::max(maxLine, maxBlockSourceLine(ifStmt->thenBranch.get()));
+        maxLine = std::max(maxLine, maxBlockSourceLine(ifStmt->elseBranch.get()));
+    } else if (auto whileStmt = dynamic_cast<const AIML::AST::WhileStmt*>(stmt)) {
+        maxLine = std::max(maxLine, maxBlockSourceLine(whileStmt->body.get()));
+    } else if (auto tryStmt = dynamic_cast<const AIML::AST::TryStmt*>(stmt)) {
+        maxLine = std::max(maxLine, maxBlockSourceLine(tryStmt->tryBlock.get()));
+        maxLine = std::max(maxLine, maxBlockSourceLine(tryStmt->catchBlock.get()));
+    }
+    return maxLine;
+}
+
+void logAimlFunctionSizeDiagnostic(const std::string& path, const AIML::AST::FunctionDecl* func) {
+    if (!func || func->sourceLine <= 0 || !func->body) return;
+    // Respect static_off: ["lines"] — skip line-count check for this function
+    for (const auto& opt : func->staticOff) {
+        if (opt == "lines") return;
+    }
+    int endLine = maxBlockSourceLine(func->body.get());
+    if (endLine < func->sourceLine) endLine = func->sourceLine;
+    int lines = endLine - func->sourceLine + 1;
+    if (lines >= kAimlFunctionErrorLines) {
+        LOG_ERROR(path + ":" + std::to_string(func->sourceLine) +
+                  ": AIML function '" + func->name + "' too large (" +
+                  std::to_string(lines) +
+                  " lines). Maximum is 300 lines; 301+ is a hard error.");
+    }
+}
+
+}
 
 AIMLCompiler::AIMLCompiler() {
     context_ = std::make_unique<llvm::LLVMContext>();
@@ -104,6 +197,8 @@ const llvm::Module& AIMLCompiler::getModule() const {
 void AIMLCompiler::compile(const std::string& filename, const std::string& outputFilename) {
     LOG_DEBUG("Compiling " + filename);
     YAML::Node config = YAML::LoadFile(filename);
+    auto seenFileSizeDiagnostics = std::make_shared<std::unordered_set<std::string>>();
+    logAimlFileSizeDiagnostic(filename, seenFileSizeDiagnostics.get());
 
     // 1. (Legacy __aiml_init creation removed. AST::Compiler now handles it)
 
@@ -137,12 +232,43 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     // when file A references types defined in sibling import file B.
     auto deferredImports = std::make_shared<std::vector<std::string>>();
 
-    ctx.resolveImportCallback = [this, &ctx, headerDone, deferredImports](const std::string& path) {
-        // Global guard: compile each imported file to .o at most once across ALL instances.
-        static std::unordered_set<std::string> compiledObjects;
-        if (!compiledObjects.count(path)) {
-            compiledObjects.insert(path);
-            // Defer the actual .o compilation until all types are registered.
+    // Per-run guard for the *parser* phase (not the .o cache; that uses
+    // compiledKeys).  Shared via a member shared_ptr so sub-compilers within
+    // the same top-level run reuse the dedup set (prevents exponential
+    // re-parsing of diamond imports — the prior code used a process-wide
+    // static set; this is the same idea but scoped to one compile root).
+    auto parsedPaths = this->parsedPathsShared;
+    ctx.resolveImportCallback = [this, &ctx, headerDone, deferredImports, parsedPaths, seenFileSizeDiagnostics](const std::string& rawPath) {
+        // Resolve relative imports: try cwd first (legacy behaviour),
+        // then walk up from the importing file's directory looking for a
+        // base where <base>/<rawPath> exists.  This makes "models/enums.aiml"
+        // work whether the build is run from project root or from elsewhere.
+        std::string path = rawPath;
+        if (!std::filesystem::exists(path) && !ctx.currentSourceFile.empty()) {
+            try {
+                std::filesystem::path cur =
+                    std::filesystem::path(ctx.currentSourceFile).parent_path();
+                while (true) {
+                    std::filesystem::path candidate = cur / rawPath;
+                    if (std::filesystem::exists(candidate)) {
+                        path = candidate.string();
+                        break;
+                    }
+                    if (cur.empty() || cur == cur.root_path()) break;
+                    cur = cur.parent_path();
+                }
+            } catch (...) {}
+        }
+
+        // Normalize ONLY for dedup. Keep the original (resolved-but-not-canonical)
+        // path string when pushing to deferredImports / using as the import path,
+        // because exodus's directory scan derives the .o filename from the
+        // sanitized form of this string and expects the relative-style spelling
+        // (e.g. "client/board_layout.aiml" → "client_board_layout_aiml.o").
+        std::string normPath;
+        try { normPath = std::filesystem::weakly_canonical(path).string(); }
+        catch (...) { normPath = path; }
+        if (parsedPaths->insert(normPath).second) {
             deferredImports->push_back(path);
         }
 
@@ -168,11 +294,17 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
         std::string prevNs = ctx.currentNamespace;
         bool prevHeaderOnly = ctx.headerOnlyMode;
         ctx.headerOnlyMode = true;
+        // Track the importing file for nested-import path resolution: while
+        // we recursively process this import's own import directives, the
+        // callback needs to walk up from THIS file, not the top-level entry.
+        std::string prevSrcFile = ctx.currentSourceFile;
+        ctx.currentSourceFile = path;
 
         AIML::AST::Builder subBuilder;
         std::ifstream fin(path);
         if (fin.is_open()) {
             try {
+                logAimlFileSizeDiagnostic(path, seenFileSizeDiagnostics.get());
                 YAML::Parser parser(fin);
                 parser.HandleNextDocument(subBuilder);
                 auto subProg = subBuilder.takeProgram();
@@ -181,6 +313,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                     subCompiler.registerTypes(subProg.get());
                     for (const auto& decl : subProg->declarations) {
                         if (auto func = dynamic_cast<AIML::AST::FunctionDecl*>(decl.get())) {
+                            logAimlFunctionSizeDiagnostic(path, func);
                             subCompiler.visitFunction(func);
                         } else if (auto cls = dynamic_cast<AIML::AST::ClassDecl*>(decl.get())) {
                             // Register class method signatures (header-only
@@ -224,11 +357,12 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                     }
                 }
             } catch (...) {
-                LOG_ERROR("Failed to parse import signatures: " + path);
+                LOG_ERROR(path + ": Failed to parse import signatures");
             }
         }
         ctx.currentNamespace = prevNs;
         ctx.headerOnlyMode = prevHeaderOnly;
+        ctx.currentSourceFile = prevSrcFile;
     };
 
     // 4. Parse YAML to AST & Compile (Two-Pass)
@@ -236,7 +370,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     try {
         std::ifstream fin(filename);
         if (!fin.is_open()) {
-             LOG_ERROR("Could not open file: " + filename);
+             LOG_ERROR(filename + ": Could not open file");
              return;
         }
         YAML::Parser parser(fin);
@@ -275,6 +409,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                     std::ifstream sf(sibPath);
                     if (!sf.is_open()) continue;
                     try {
+                        logAimlFileSizeDiagnostic(sibPath, seenFileSizeDiagnostics.get());
                         YAML::Parser sp(sf);
                         sp.HandleNextDocument(sb);
                         auto p = sb.takeProgram();
@@ -284,25 +419,34 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
 
                 // Phase A: register type definitions (class/model/enum) from
                 // self + all siblings.  No function forward-declarations yet.
+                // Uses fixed-point iteration: repeat until no new types are
+                // registered in a full pass.  This handles cross-file model
+                // inheritance (e.g. "model HandCardView inherits Card" where
+                // Card lives in a sibling file).
                 {
-                    // Self types first
-                    for (const auto& decl : programAST->declarations) {
-                        if (dynamic_cast<AIML::AST::ClassDecl*>(decl.get()) ||
-                            dynamic_cast<AIML::AST::ModelDecl*>(decl.get()) ||
-                            dynamic_cast<AIML::AST::EnumDecl*>(decl.get()) ||
-                            dynamic_cast<AIML::AST::ImportDecl*>(decl.get()))
-                            astCompiler.registerTypeDecl(decl.get());
-                    }
-                    // Sibling types
-                    for (auto& sp : sibProgs) {
-                        AIML::AST::Compiler sc(ctx);
-                        for (const auto& decl : sp.prog->declarations) {
+                    bool progress = true;
+                    while (progress) {
+                        size_t before = ctx.classes.size();
+                        // Sibling types
+                        for (auto& sp : sibProgs) {
+                            AIML::AST::Compiler sc(ctx);
+                            for (const auto& decl : sp.prog->declarations) {
+                                if (dynamic_cast<AIML::AST::ClassDecl*>(decl.get()) ||
+                                    dynamic_cast<AIML::AST::ModelDecl*>(decl.get()) ||
+                                    dynamic_cast<AIML::AST::EnumDecl*>(decl.get()) ||
+                                    dynamic_cast<AIML::AST::ImportDecl*>(decl.get()))
+                                    sc.registerTypeDecl(decl.get());
+                            }
+                        }
+                        // Self types
+                        for (const auto& decl : programAST->declarations) {
                             if (dynamic_cast<AIML::AST::ClassDecl*>(decl.get()) ||
                                 dynamic_cast<AIML::AST::ModelDecl*>(decl.get()) ||
                                 dynamic_cast<AIML::AST::EnumDecl*>(decl.get()) ||
                                 dynamic_cast<AIML::AST::ImportDecl*>(decl.get()))
-                                sc.registerTypeDecl(decl.get());
+                                astCompiler.registerTypeDecl(decl.get());
                         }
+                        progress = (ctx.classes.size() > before);
                     }
                 }
 
@@ -327,9 +471,10 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                 for (auto& sp : sibProgs) {
                     AIML::AST::Compiler sc(ctx);
                     for (const auto& decl_node : sp.prog->declarations) {
-                        if (auto func = dynamic_cast<AIML::AST::FunctionDecl*>(decl_node.get()))
+                        if (auto func = dynamic_cast<AIML::AST::FunctionDecl*>(decl_node.get())) {
+                            logAimlFunctionSizeDiagnostic(sp.path, func);
                             sc.visitFunction(func);
-                        else if (auto cls = dynamic_cast<AIML::AST::ClassDecl*>(decl_node.get()))
+                        } else if (auto cls = dynamic_cast<AIML::AST::ClassDecl*>(decl_node.get()))
                             sc.visitTopLevel(cls);
                         else if (auto mod = dynamic_cast<AIML::AST::ModelDecl*>(decl_node.get()))
                             sc.visitTopLevel(mod);
@@ -376,6 +521,16 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                 astCompiler.registerTypes(programAST.get());
             }
 
+            for (const auto& decl : programAST->declarations) {
+                if (auto func = dynamic_cast<AIML::AST::FunctionDecl*>(decl.get())) {
+                    logAimlFunctionSizeDiagnostic(filename, func);
+                } else if (auto cls = dynamic_cast<AIML::AST::ClassDecl*>(decl.get())) {
+                    for (const auto& method : cls->methods) {
+                        logAimlFunctionSizeDiagnostic(filename, method.get());
+                    }
+                }
+            }
+
             // Pass 1.5: Compile deferred imports to .o files.
             // Now all types from ALL imports are registered in ctx, so
             // sub-compilers can resolve cross-import type references.
@@ -393,10 +548,10 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
             // Pass 2: Full Code Generation
             astCompiler.compile(programAST.get());
         } else {
-            LOG_ERROR("AST Builder failed to produce a valid program.");
+            LOG_ERROR(filename + ": AST Builder failed to produce a valid program.");
         }
     } catch (const YAML::Exception& e) {
-        LOG_ERROR("YAML Parsing Error during AST Build: " + std::string(e.what()));
+        LOG_ERROR(filename + ": YAML Parsing Error during AST Build: " + std::string(e.what()));
     }
     
     // Propagate linked objects from pass 1
@@ -410,7 +565,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     std::error_code EC;
     llvm::raw_fd_ostream dest(outputFilename, EC, llvm::sys::fs::OF_None);
     if (EC) {
-        LOG_ERROR("Could not open file: " + EC.message());
+        LOG_ERROR(filename + ": Could not open file: " + EC.message());
         return;
     }
     module_->print(dest, nullptr);
@@ -440,6 +595,7 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source) {
 
     ctx.compilerPath = compilerPath;
     ctx.ir_gen = AIML::createLLVMGenerator(ctx);
+    ctx.currentSourceFile = "<memory>";
 
     module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
     module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
@@ -466,10 +622,10 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source) {
             astCompiler.registerTypes(programAST.get());
             astCompiler.compile(programAST.get());
         } else {
-            LOG_ERROR("compileFromString: AST builder produced no program");
+            LOG_ERROR("<memory>: compileFromString: AST builder produced no program");
         }
     } catch (const YAML::Exception& e) {
-        LOG_ERROR("compileFromString: YAML parse error: " + std::string(e.what()));
+        LOG_ERROR("<memory>: compileFromString: YAML parse error: " + std::string(e.what()));
     }
 
     linkedObjects = ctx.objectFilesToLink;
@@ -590,6 +746,26 @@ void AIMLCompiler::generateEntryPoint() {
         });
     }
 
+    // 3.9. Initialize AIML_TRACE.
+    // If AIML_TRACE was set in the build environment (e.g. via exodus.json env section),
+    // bake the value into the binary so the AOT binary traces without needing the env var at runtime.
+    // Otherwise fall back to reading the env var at runtime (JIT default).
+    {
+        const char* baked_trace = getenv("AIML_TRACE");
+        if (baked_trace && *baked_trace) {
+            // Bake the compile-time AIML_TRACE value as a string literal into the binary.
+            llvm::Value* bakedStr = builder.CreateGlobalStringPtr(baked_trace, "__aiml_trace_baked");
+            std::vector<llvm::Type*> traceInitBakedArgs = {builder.getPtrTy()};
+            llvm::FunctionType* ft = llvm::FunctionType::get(builder.getVoidTy(), traceInitBakedArgs, false);
+            llvm::FunctionCallee traceInitFn = module_->getOrInsertFunction("aiml_trace_init_baked", ft);
+            builder.CreateCall(traceInitFn, {bakedStr});
+        } else {
+            llvm::FunctionType* ft = llvm::FunctionType::get(builder.getVoidTy(), {}, false);
+            llvm::FunctionCallee traceInitFn = module_->getOrInsertFunction("aiml_trace_init", ft);
+            builder.CreateCall(traceInitFn);
+        }
+    }
+
     // 4. Call __aiml_init()
     llvm::Function* initFunc = module_->getFunction("__aiml_init");
     if (initFunc) {
@@ -708,6 +884,7 @@ void AIMLCompiler::compileToObject(const std::string& /*filename*/, const std::s
             llvm::raw_fd_ostream irDump("/tmp/aiml_bad_module.ll", ec, llvm::sys::fs::OF_None);
             if (!ec) module_->print(irDump, nullptr);
             LOG_ERROR("IR dumped to /tmp/aiml_bad_module.ll");
+            return; // Do not run passes on invalid IR — they would crash or corrupt output.
         }
     }
 
@@ -792,12 +969,23 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("strcat", (void*)(intptr_t)strcat);
     llvm::sys::DynamicLibrary::AddSymbol("sprintf", (void*)(intptr_t)sprintf);
     llvm::sys::DynamicLibrary::AddSymbol("strcmp", (void*)(intptr_t)strcmp);
+    llvm::sys::DynamicLibrary::AddSymbol("atoi",   (void*)(intptr_t)atoi);
     llvm::sys::DynamicLibrary::AddSymbol("fdopen", (void*)(intptr_t)fdopen);
     
+    // Trace runtime symbols (AIML_TRACE)
+    aiml_trace_init();  // read AIML_TRACE env var now, before any JIT code runs
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_trace_init_baked", (void*)(intptr_t)aiml_trace_init_baked);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_trace_active",     (void*)(intptr_t)aiml_trace_active);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_trace",            (void*)(intptr_t)aiml_trace);
+
     // Runtime Library Symbols
     llvm::sys::DynamicLibrary::AddSymbol("time_now_ms", (void*)(intptr_t)time_now_ms);
     llvm::sys::DynamicLibrary::AddSymbol("time_sleep_ms", (void*)(intptr_t)time_sleep_ms);
     llvm::sys::DynamicLibrary::AddSymbol("sys_exe_runtime", (void*)(intptr_t)sys_exe_runtime);
+
+    // Memory limit / usage
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_sys_mem_limit", (void*)(intptr_t)aiml_sys_mem_limit);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_sys_mem_usage", (void*)(intptr_t)aiml_sys_mem_usage);
 
     // Path runtime symbols
     llvm::sys::DynamicLibrary::AddSymbol("aiml_path_intern",      (void*)(intptr_t)aiml_path_intern);
@@ -832,6 +1020,15 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_read_file",      (void*)(intptr_t)aiml_io_read_file);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_write_file",     (void*)(intptr_t)aiml_io_write_file);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_list_dir_fill",  (void*)(intptr_t)aiml_io_list_dir_fill);
+
+    // String builtins (lower, trim, replace, split)
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_str_lower",         (void*)(intptr_t)aiml_str_lower);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_str_trim",          (void*)(intptr_t)aiml_str_trim);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_str_replace",       (void*)(intptr_t)aiml_str_replace);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_str_split_fill",    (void*)(intptr_t)aiml_str_split_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_str_parse_i32",    (void*)(intptr_t)aiml_str_parse_i32);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_str_parse_f32",    (void*)(intptr_t)aiml_str_parse_f32);
+
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_can_read",       (void*)(intptr_t)aiml_io_can_read);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_can_write",      (void*)(intptr_t)aiml_io_can_write);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_can_exec",       (void*)(intptr_t)aiml_io_can_exec);
@@ -893,6 +1090,7 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_delete",        (void*)(intptr_t)aiml_db_store_delete);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_len",           (void*)(intptr_t)aiml_db_store_len);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_open_persist",  (void*)(intptr_t)aiml_db_store_open_persist);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_open_typed_persist",(void*)(intptr_t)aiml_db_store_open_typed_persist);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_checkpoint",    (void*)(intptr_t)aiml_db_store_checkpoint);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_checkpoint_all",      (void*)(intptr_t)aiml_db_checkpoint_all);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_open_col",      (void*)(intptr_t)aiml_db_store_open_col);
@@ -908,9 +1106,13 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_len",              (void*)(intptr_t)aiml_db_kv_len);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_delete",           (void*)(intptr_t)aiml_db_kv_delete);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_clear",            (void*)(intptr_t)aiml_db_kv_clear);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_set_blob",        (void*)(intptr_t)aiml_db_kv_set_blob);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_get_blob",        (void*)(intptr_t)aiml_db_kv_get_blob);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_open",            (void*)(intptr_t)aiml_db_vec_open);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_open_persist",   (void*)(intptr_t)aiml_db_vec_open_persist);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_insert",          (void*)(intptr_t)aiml_db_vec_insert);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_search",          (void*)(intptr_t)aiml_db_vec_search);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_checkpoint",     (void*)(intptr_t)aiml_db_vec_checkpoint);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_len",             (void*)(intptr_t)aiml_db_vec_len);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_ts_open",             (void*)(intptr_t)aiml_db_ts_open);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_ts_open_persist",     (void*)(intptr_t)aiml_db_ts_open_persist);
@@ -996,6 +1198,58 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_fs_options_set_cache_max_age",(void*)(intptr_t)aiml_fs_options_set_cache_max_age);
 
     // llvm::sys::DynamicLibrary::AddSymbol("stderr", (void*)(intptr_t)stderr); // Removed to avoid macro issues for now
+
+    // ── tensor namespace (tensor_runtime.h) ─────────────────────────────
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_zeros",            (void*)(intptr_t)aiml_tensor_zeros);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_ones",             (void*)(intptr_t)aiml_tensor_ones);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_randn",            (void*)(intptr_t)aiml_tensor_randn);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_from_data",        (void*)(intptr_t)aiml_tensor_from_data);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_clone",            (void*)(intptr_t)aiml_tensor_clone);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_free",             (void*)(intptr_t)aiml_tensor_free);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_get_flat",         (void*)(intptr_t)aiml_tensor_get_flat);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_set_flat",         (void*)(intptr_t)aiml_tensor_set_flat);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_item",             (void*)(intptr_t)aiml_tensor_item);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_shape",            (void*)(intptr_t)aiml_tensor_shape);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_ndim",             (void*)(intptr_t)aiml_tensor_ndim);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_size",             (void*)(intptr_t)aiml_tensor_size);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_data_ptr",         (void*)(intptr_t)aiml_tensor_data_ptr);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_reshape",          (void*)(intptr_t)aiml_tensor_reshape);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_transpose",        (void*)(intptr_t)aiml_tensor_transpose);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_slice",            (void*)(intptr_t)aiml_tensor_slice);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_add",              (void*)(intptr_t)aiml_tensor_add);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_sub",              (void*)(intptr_t)aiml_tensor_sub);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_mul",              (void*)(intptr_t)aiml_tensor_mul);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_mul_scalar",       (void*)(intptr_t)aiml_tensor_mul_scalar);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_neg",              (void*)(intptr_t)aiml_tensor_neg);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_matmul",           (void*)(intptr_t)aiml_tensor_matmul);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_sum",              (void*)(intptr_t)aiml_tensor_sum);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_mean",             (void*)(intptr_t)aiml_tensor_mean);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_exp",              (void*)(intptr_t)aiml_tensor_exp);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_log_op",           (void*)(intptr_t)aiml_tensor_log_op);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_tanh_op",          (void*)(intptr_t)aiml_tensor_tanh_op);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_relu",             (void*)(intptr_t)aiml_tensor_relu);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_gelu",             (void*)(intptr_t)aiml_tensor_gelu);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_softmax",          (void*)(intptr_t)aiml_tensor_softmax);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_layer_norm",       (void*)(intptr_t)aiml_tensor_layer_norm);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_embedding_lookup", (void*)(intptr_t)aiml_tensor_embedding_lookup);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_cross_entropy",    (void*)(intptr_t)aiml_tensor_cross_entropy);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_argmax_scalar",    (void*)(intptr_t)aiml_tensor_argmax_scalar);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_argmax",           (void*)(intptr_t)aiml_tensor_argmax);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_set_requires_grad",(void*)(intptr_t)aiml_tensor_set_requires_grad);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_requires_grad",    (void*)(intptr_t)aiml_tensor_requires_grad);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_grad",             (void*)(intptr_t)aiml_tensor_grad);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_zero_grad",        (void*)(intptr_t)aiml_tensor_zero_grad);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_begin_graph",      (void*)(intptr_t)aiml_tensor_begin_graph);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_backward",         (void*)(intptr_t)aiml_tensor_backward);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_no_grad_begin",    (void*)(intptr_t)aiml_tensor_no_grad_begin);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_no_grad_end",      (void*)(intptr_t)aiml_tensor_no_grad_end);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_adam_step",        (void*)(intptr_t)aiml_tensor_adam_step);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_print",            (void*)(intptr_t)aiml_tensor_print);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_fill",             (void*)(intptr_t)aiml_tensor_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_concat",           (void*)(intptr_t)aiml_tensor_concat);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_causal_mask",      (void*)(intptr_t)aiml_tensor_causal_mask);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_save",              (void*)(intptr_t)aiml_tensor_save);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_load",              (void*)(intptr_t)aiml_tensor_load);
 
     // ── math namespace C runtime ─────────────────────────────────────────
     llvm::sys::DynamicLibrary::AddSymbol("aiml_math_vec2_add",       (void*)(intptr_t)aiml_math_vec2_add);
@@ -1116,6 +1370,17 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_unzip",                (void*)(intptr_t)aiml_compress_unzip);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_zip_entries_fill",     (void*)(intptr_t)aiml_compress_zip_entries_fill);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_compress_tar_entries_fill",     (void*)(intptr_t)aiml_compress_tar_entries_fill);
+    // ai (Spec 51 — native ML acceleration)
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ai_embedding_lookup",       (void*)(intptr_t)aiml_ai_embedding_lookup);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ai_embedding_update",       (void*)(intptr_t)aiml_ai_embedding_update);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ai_dot",                    (void*)(intptr_t)aiml_ai_dot);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_bpe_train_merges",          (void*)(intptr_t)aiml_bpe_train_merges);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_bpe_merge_result_free",     (void*)(intptr_t)aiml_bpe_merge_result_free);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ai_encode_dense",           (void*)(intptr_t)aiml_ai_encode_dense);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ai_encode_dense_weighted",  (void*)(intptr_t)aiml_ai_encode_dense_weighted);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ai_triplet_loss",           (void*)(intptr_t)aiml_ai_triplet_loss);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ai_triplet_grad",           (void*)(intptr_t)aiml_ai_triplet_grad);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ai_sample_logits",          (void*)(intptr_t)aiml_ai_sample_logits);
     // gltf
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_load",                         (void*)(intptr_t)aiml_gltf_load);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_scene_valid",                  (void*)(intptr_t)aiml_gltf_scene_valid);
@@ -1438,6 +1703,8 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_event_peer",                 (void*)(intptr_t)aiml_mirror_event_peer);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_event_net_id",               (void*)(intptr_t)aiml_mirror_event_net_id);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_send_rpc",           (void*)(intptr_t)aiml_mirror_session_send_rpc);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_send_rpc_model",     (void*)(intptr_t)aiml_mirror_session_send_rpc_model);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_rpc_event_decode_into",             (void*)(intptr_t)aiml_rpc_event_decode_into);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_has_rpc",            (void*)(intptr_t)aiml_mirror_session_has_rpc);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_next_rpc",           (void*)(intptr_t)aiml_mirror_session_next_rpc);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_poll_event",         (void*)(intptr_t)aiml_mirror_session_poll_event);
@@ -1589,6 +1856,32 @@ int AIMLCompiler::jitRun() {
         return 1;
     }
 
+    // Verify IR before JIT execution — invalid IR causes hard crashes inside LLVM.
+    {
+        bool anyFail = false;
+        for (auto& F : *module_) {
+            std::string msg;
+            llvm::raw_string_ostream s(msg);
+            if (llvm::verifyFunction(F, &s)) {
+                LOG_ERROR("Function '" + F.getName().str() + "' verification FAILED: " + msg);
+                anyFail = true;
+            }
+        }
+        std::string msg;
+        llvm::raw_string_ostream s(msg);
+        if (llvm::verifyModule(*module_, &s)) {
+            LOG_ERROR("Module verification FAILED before JIT: " + msg);
+            anyFail = true;
+        }
+        if (anyFail) {
+            std::error_code ec;
+            llvm::raw_fd_ostream irDump("/tmp/aiml_bad_module.ll", ec, llvm::sys::fs::OF_None);
+            if (!ec) module_->print(irDump, nullptr);
+            LOG_ERROR("IR dumped to /tmp/aiml_bad_module.ll");
+            return 1;
+        }
+    }
+
     // Set Target Triple
     module_->setTargetTriple(llvm::sys::getDefaultTargetTriple());
 
@@ -1610,10 +1903,6 @@ int AIMLCompiler::jitRun() {
         return 1;
     }
 
-    // Load External Object Files (Imports) into Engine
-    for (const auto& objPath : linkedObjects) {
-        auto bufferOrErr = llvm::MemoryBuffer::getFile(objPath);
-    }
     // Load External Object Files (Imports) into Engine
     std::vector<std::unique_ptr<llvm::MemoryBuffer>> keptBuffers;
     for (const auto& objPath : linkedObjects) {
@@ -1673,7 +1962,9 @@ llvm::Function* AIMLCompiler::getPrintfPrototype(llvm::Module& module, llvm::IRB
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <set>
 #include <filesystem>
+#include <unistd.h>
 #include <yaml-cpp/yaml.h>
 #include "compiler.h"
 
@@ -1688,6 +1979,27 @@ static std::string getCacheDir() {
 }
 
 static std::string computeSHA512(const std::string& path) {
+    // Memoize by (path, size, mtime). Without this, computeImportCacheKey
+    // re-fork+execs sha512sum on every transitive file for every cache check,
+    // which on large projects (9rooms) blows up to multi-GB RSS and minutes
+    // of CPU before main.aiml even finishes parsing.
+    struct Entry { uintmax_t sz; long long mt; std::string hash; };
+    static std::unordered_map<std::string, Entry> cache;
+
+    uintmax_t sz = 0;
+    long long mt = 0;
+    try {
+        if (fs::exists(path)) {
+            sz = fs::file_size(path);
+            mt = fs::last_write_time(path).time_since_epoch().count();
+        }
+    } catch (...) {}
+
+    auto it = cache.find(path);
+    if (it != cache.end() && it->second.sz == sz && it->second.mt == mt) {
+        return it->second.hash;
+    }
+
     std::string command = "sha512sum \"" + path + "\" 2>/dev/null";
     char buffer[128];
     std::string result = "";
@@ -1697,53 +2009,182 @@ static std::string computeSHA512(const std::string& path) {
         result += buffer;
     }
     pclose(pipe);
-    // sha512sum outputs: "<hash>  <filename>"
     size_t spacePos = result.find(' ');
-    if (spacePos != std::string::npos) {
-        return result.substr(0, spacePos);
-    }
-    return result;
+    std::string hash = (spacePos != std::string::npos) ? result.substr(0, spacePos) : result;
+    cache[path] = Entry{sz, mt, hash};
+    return hash;
 }
 
-bool AIMLCompiler::checkCache(const std::string& sourcePath, std::string& outHash) {
+// ── Import Cache (semantic key) ──────────────────────────────────────────────
+//
+// The cache key for an imported file must reflect EVERYTHING the compiler reads
+// to produce its .o, not just the file's own bytes. The previous (path-only)
+// key produced false hits whenever a sibling or transitive import changed.
+//
+// Key components:
+//   1. source_hash         — sha512 of the file itself
+//   2. transitive_hash     — sha512 over sorted [path|sha512] of all transitive imports
+//   3. sibling_hash        — sha512 over sorted [path|sha512] of all siblingImports
+//   4. library_mode        — bool flag (header-only / lib vs entrypoint)
+//   5. compiler_rev        — mtime+size of the aiml binary itself; rebuilding
+//                            the compiler invalidates all caches
+//
+// The keyed object file lives at <cache>/<sanitized>__<key12>.o so different
+// semantic contexts of the same source path never collide.
+
+static std::string normalizePath(const std::string& p) {
+    try {
+        // weakly_canonical handles non-existing tail, absolute-izes the rest
+        return fs::weakly_canonical(fs::path(p)).string();
+    } catch (...) {
+        return p;
+    }
+}
+
+static std::string sha512OfString(const std::string& data) {
+    // Pipe through sha512sum.  Avoids pulling in OpenSSL just for this path.
+    std::string cmd = "sha512sum 2>/dev/null";
+    FILE* pipe = popen(cmd.c_str(), "w");
+    if (!pipe) return "";
+    // popen with "w" only — we need bidi.  Fall back to a temp file.
+    pclose(pipe);
+
+    char tmpl[] = "/tmp/aiml_keyXXXXXX";
+    int fd = mkstemp(tmpl);
+    if (fd < 0) return "";
+    ssize_t wrote = write(fd, data.data(), data.size());
+    (void)wrote;
+    close(fd);
+    std::string out = computeSHA512(tmpl);
+    unlink(tmpl);
+    return out;
+}
+
+static std::string compilerBinaryRev(const std::string& compilerPath) {
+    if (compilerPath.empty() || !fs::exists(compilerPath)) return "unknown";
+    try {
+        auto sz = fs::file_size(compilerPath);
+        auto mt = fs::last_write_time(compilerPath).time_since_epoch().count();
+        std::stringstream ss;
+        ss << sz << "_" << mt;
+        return ss.str();
+    } catch (...) {
+        return "unknown";
+    }
+}
+
+void AIMLCompiler::collectTransitiveImports(const std::string& path,
+                                            std::set<std::string>& visited) const {
+    std::string norm = normalizePath(path);
+    if (visited.count(norm)) return;       // cycle / dup guard
+    visited.insert(norm);
+
+    if (!fs::exists(norm)) return;
+    try {
+        YAML::Node root = YAML::LoadFile(norm);
+        if (!root.IsSequence()) return;
+        // Resolve relative imports against the importing file's directory.
+        fs::path baseDir = fs::path(norm).parent_path();
+        for (const auto& entry : root) {
+            if (!entry.IsMap()) continue;
+            if (entry["import"]) {
+                std::string ip = entry["import"].as<std::string>();
+                fs::path resolved = ip;
+                if (!fs::exists(resolved)) {
+                    // Walk up from importing file's directory.
+                    fs::path cur = baseDir;
+                    while (true) {
+                        fs::path cand = cur / ip;
+                        if (fs::exists(cand)) { resolved = cand; break; }
+                        if (cur.empty() || cur == cur.root_path()) break;
+                        cur = cur.parent_path();
+                    }
+                }
+                collectTransitiveImports(resolved.string(), visited);
+            }
+        }
+    } catch (...) {
+        // Bad YAML in a transitive file: leave it in `visited` so its presence
+        // (or absence) still affects the key, but don't recurse further.
+    }
+}
+
+std::string AIMLCompiler::computeImportCacheKey(const std::string& sourcePath,
+                                                const std::vector<std::string>& siblings,
+                                                bool libMode) const {
+    std::stringstream keyText;
+    keyText << "source=" << normalizePath(sourcePath) << "\n";
+    keyText << "source_hash=" << computeSHA512(sourcePath) << "\n";
+
+    // Transitive imports (sorted, normalized, hashed individually)
+    std::set<std::string> transitive;
+    collectTransitiveImports(sourcePath, transitive);
+    transitive.erase(normalizePath(sourcePath));   // exclude self
+    keyText << "transitive_count=" << transitive.size() << "\n";
+    for (const auto& tp : transitive) {
+        keyText << "  " << tp << "|" << computeSHA512(tp) << "\n";
+    }
+
+    // Sibling imports (sorted, normalized)
+    std::set<std::string> sibSet;
+    for (const auto& s : siblings) sibSet.insert(normalizePath(s));
+    sibSet.erase(normalizePath(sourcePath));
+    keyText << "sibling_count=" << sibSet.size() << "\n";
+    for (const auto& sp : sibSet) {
+        keyText << "  " << sp << "|" << computeSHA512(sp) << "\n";
+    }
+
+    keyText << "library_mode=" << (libMode ? 1 : 0) << "\n";
+    keyText << "compiler_rev=" << compilerBinaryRev(compilerPath) << "\n";
+
+    return sha512OfString(keyText.str());
+}
+
+static std::string keyedObjectPath(const std::string& cacheDir,
+                                   const std::string& sourcePath,
+                                   const std::string& cacheKey) {
+    std::string sanitized;
+    for (char c : sourcePath)
+        sanitized += (std::isalnum(c) ? c : '_');
+    std::string keyShort = cacheKey.substr(0, 12);
+    return cacheDir + "/" + sanitized + "__" + keyShort + ".o";
+}
+
+bool AIMLCompiler::checkCache(const std::string& sourcePath,
+                              const std::vector<std::string>& siblings,
+                              bool libMode,
+                              std::string& outCacheKey,
+                              std::string& outObjPath) {
     if (!fs::exists(sourcePath)) {
-        LOG_ERROR("Import source not found: " + sourcePath);
+        LOG_ERROR(sourcePath + ": Import source not found");
         return false;
     }
-    
-    outHash = computeSHA512(sourcePath);
-    if (outHash.empty()) {
-        LOG_WARNING("Failed to compute SHA512 for " + sourcePath + ". Falling back to modification time.");
-        auto ftime = fs::last_write_time(sourcePath);
-        auto fsize = fs::file_size(sourcePath);
-        std::stringstream ss;
-        ss << ftime.time_since_epoch().count() << "_" << fsize;
-        std::hash<std::string> hasher;
-        outHash = std::to_string(hasher(ss.str()));
-    }
-    
+
+    outCacheKey = computeImportCacheKey(sourcePath, siblings, libMode);
+    if (outCacheKey.empty()) return false;
+
     std::string cacheDir = getCacheDir();
-    if (!fs::exists(cacheDir)) {
-        fs::create_directory(cacheDir);
-    }
-    
+    if (!fs::exists(cacheDir)) fs::create_directories(cacheDir);
+
+    outObjPath = keyedObjectPath(cacheDir, sourcePath, outCacheKey);
+
     std::string manifestPath = cacheDir + "/compilations.yaml";
     YAML::Node manifest;
     if (fs::exists(manifestPath)) {
+        try { manifest = YAML::LoadFile(manifestPath); } catch (...) {}
+    }
+
+    // New manifest schema: per-source map with cache_key + object_path.
+    // Old scalar schema is implicitly invalidated (.as<map>() throws → miss).
+    YAML::Node entry = manifest[sourcePath];
+    if (entry && entry.IsMap() && entry["cache_key"]) {
         try {
-            manifest = YAML::LoadFile(manifestPath);
+            std::string storedKey = entry["cache_key"].as<std::string>();
+            if (storedKey == outCacheKey && fs::exists(outObjPath)) {
+                return true;
+            }
         } catch (...) {}
     }
-    
-    if (manifest[sourcePath] && manifest[sourcePath].as<std::string>() == outHash) {
-        // Cache hit. Ensure object file exists (use sanitized full path, matching resolveImport)
-        std::string sanitized;
-        for (char c : sourcePath)
-            sanitized += (std::isalnum(c) ? c : '_');
-        std::string objPath = cacheDir + "/" + sanitized + ".o";
-        if (fs::exists(objPath)) return true;
-    }
-    
     return false;
 }
 
@@ -1752,20 +2193,21 @@ void AIMLCompiler::resolveImport(const std::string& path) {
     if (std::find(importedSourceFiles.begin(), importedSourceFiles.end(), path) == importedSourceFiles.end())
         importedSourceFiles.push_back(path);
 
-    // In object mode (noCache=true), the build tool handles caching.
-    // In JIT mode (noCache=false), use the internal SHA-based cache.
+    // In object mode (noCache=true), the build tool (exodus) handles caching.
+    // In JIT mode (noCache=false), use the internal semantic cache.
+    std::string cacheKey;
+    std::string objPath;
+
     if (!noCache) {
-        std::string outHash;
-        if (checkCache(path, outHash)) {
-            LOG_INFO("Cache HIT for import: " + path);
-            std::string sanitizedPath;
-            for (char c : path)
-                sanitizedPath += (std::isalnum(c) ? c : '_');
-            std::string objPath = getCacheDir() + "/" + sanitizedPath + ".o";
-            linkedObjects.push_back(objPath);
+        if (checkCache(path, this->siblingImports, /*libMode=*/true, cacheKey, objPath)) {
+            LOG_INFO("Cache HIT for import: " + path + " [" + cacheKey.substr(0,12) + "]");
+            // Per-instance compiledKeys guard: avoid duplicate add to linkedObjects
+            if (compiledKeys->insert(cacheKey).second) {
+                linkedObjects.push_back(objPath);
+            }
             return;
         }
-        LOG_INFO("Cache MISS for import: " + path + ". Compiling...");
+        LOG_INFO("Cache MISS for import: " + path + " [" + cacheKey.substr(0,12) + "]. Compiling...");
     } else {
         LOG_INFO("Compiling import (no-cache): " + path);
     }
@@ -1774,11 +2216,23 @@ void AIMLCompiler::resolveImport(const std::string& path) {
     std::string outDir = (noCache && !outputDir.empty()) ? outputDir : getCacheDir();
     if (!fs::exists(outDir)) fs::create_directories(outDir);
 
-    // Use full sanitized path as object name to avoid collisions
-    std::string sanitized;
-    for (char c : path)
-        sanitized += (std::isalnum(c) ? c : '_');
-    std::string objPath = outDir + "/" + sanitized + ".o";
+    // Object filename: keyed in JIT mode (collision-safe across contexts),
+    // sanitized-only in noCache mode (exodus owns the namespace there).
+    if (noCache) {
+        std::string sanitized;
+        for (char c : path)
+            sanitized += (std::isalnum(c) ? c : '_');
+        objPath = outDir + "/" + sanitized + ".o";
+    } else {
+        objPath = keyedObjectPath(outDir, path, cacheKey);
+    }
+
+    // Per-instance guard: skip if this exact key was already compiled in
+    // this run (e.g. diamond imports A→B, A→C, B→D, C→D).
+    if (!noCache && !compiledKeys->insert(cacheKey).second) {
+        linkedObjects.push_back(objPath);
+        return;
+    }
 
     // Create isolated compiler instance for the imported file.
     // Pass sibling imports so the sub-compiler can resolve types from other
@@ -1788,6 +2242,8 @@ void AIMLCompiler::resolveImport(const std::string& path) {
     subCompiler.libraryMode = true;
     subCompiler.noCache = this->noCache;
     subCompiler.outputDir = this->outputDir;
+    subCompiler.compiledKeys = this->compiledKeys;   // share guard within run
+    subCompiler.parsedPathsShared = this->parsedPathsShared;   // share parser dedup within run
     // Give the sub-compiler all known sibling imports (excluding itself).
     for (const auto& sib : this->siblingImports) {
         if (sib != path)
@@ -1809,15 +2265,20 @@ void AIMLCompiler::resolveImport(const std::string& path) {
             importedSourceFiles.push_back(src);
     }
 
-    // Update cache manifest (JIT mode only)
+    // Update cache manifest (JIT mode only) — new structured schema.
     if (!noCache) {
-        std::string outHash = computeSHA512(path);
         std::string manifestPath = getCacheDir() + "/compilations.yaml";
         YAML::Node manifest;
         if (fs::exists(manifestPath)) {
             try { manifest = YAML::LoadFile(manifestPath); } catch (...) {}
         }
-        manifest[path] = outHash;
+        // If existing entry is the old scalar form, drop it implicitly by reassigning.
+        YAML::Node entry;
+        entry["cache_key"]   = cacheKey;
+        entry["source_hash"] = computeSHA512(path);
+        entry["object_path"] = objPath;
+        entry["library_mode"] = 1;
+        manifest[path] = entry;
         std::ofstream fout(manifestPath);
         fout << manifest;
     }

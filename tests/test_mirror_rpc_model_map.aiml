@@ -1,0 +1,130 @@
+# Regression test: mirror RPC carries a typed model containing a map<string:i32>
+# Expected exit code: 0
+#
+# Verifies that decode_rpc populates the heap-allocated map field correctly
+# inside the decoded model — the trickiest member type for the ser_runtime path.
+
+- model:
+    name: NetPlayer
+    sync: [score]
+    rpc: [pay]
+    fields:
+      - [score, i32]
+
+- model:
+    name: PaymentReq
+    fields:
+      - [label, string]
+      - [total, i32]
+      - [parts, map<string:i32>]
+
+- def:
+    name: mirror_rpc_map_host
+    args: []
+    body:
+      - decl: [sess, mirror_session]
+      - set: [sess, { call: [mirror.listen, "ws://127.0.0.1:19903"] }]
+      - decl: [player, NetPlayer]
+      - set: [player.score, 0]
+      - decl: [nid, i32]
+      - set: [nid, { call: [sess.register, player] }]
+      - print: ["host-map: registered net_id=${nid}"]
+
+      - decl: [i, i32, 0]
+      - while:
+          condition: { lt: [i, 60] }
+          body:
+            - call: [sess.update]
+            - if:
+                condition: { gt: [{ call: [sess.has_rpc] }, 0] }
+                then:
+                  - decl: [rpc_ev, rpc_event]
+                  - set: [rpc_ev, { call: [sess.next_rpc] }]
+                  - decl: [req, PaymentReq]
+                  - decl: [rc, i32, -1]
+                  - if:
+                      condition: { neq: [rpc_ev.arg_kind, 1] }
+                      then:
+                        - set: [player.score, 901]
+                      else:
+                        - set: [rc, { call: [sess.decode_rpc, rpc_ev, req] }]
+                        - if:
+                            condition: { neq: [rc, 0] }
+                            then:
+                              - set: [player.score, 902]
+                            else:
+                              - if:
+                                  condition: { neq: [req.label, "amorph"] }
+                                  then:
+                                    - set: [player.score, 903]
+                                  else:
+                                    - if:
+                                        condition: { neq: [req.total, 5] }
+                                        then:
+                                          - set: [player.score, 904]
+                                        else:
+                                          - decl: [a, i32]
+                                          - decl: [b, i32]
+                                          - decl: [c, i32]
+                                          - set: [a, { call: [req.parts.get, "feuer"] }]
+                                          - set: [b, { call: [req.parts.get, "wasser"] }]
+                                          - set: [c, { call: [req.parts.get, "erde"] }]
+                                          - if:
+                                              condition: { neq: [a, 2] }
+                                              then:
+                                                - set: [player.score, 905]
+                                              else:
+                                                - if:
+                                                    condition: { neq: [b, 1] }
+                                                    then:
+                                                      - set: [player.score, 906]
+                                                    else:
+                                                      - if:
+                                                          condition: { neq: [c, 2] }
+                                                          then:
+                                                            - set: [player.score, 907]
+                                                          else:
+                                                            - set: [player.score, 999]
+                  - call: [sess.sync_now, player]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+
+      - call: [sess.close]
+
+- decl: [host_th, thread_handle]
+- set: [host_th, { spawn: [mirror_rpc_map_host] }]
+- call: [time.sleep_ms, 80]
+
+- decl: [client, mirror_session]
+- set: [client, { call: [mirror.connect_timeout, "ws://127.0.0.1:19903", 4000] }]
+- call: [time.sleep_ms, 120]
+- call: [client.update]
+
+- decl: [ev, mirror_event]
+- set: [ev, { call: [client.next_event] }]
+- decl: [replica, NetPlayer]
+- call: [client.register_id, replica, ev.net_id]
+
+- decl: [req, PaymentReq]
+- set: [req.label, "amorph"]
+- set: [req.total, 5]
+- call: [req.parts.put, "feuer", 2]
+- call: [req.parts.put, "wasser", 1]
+- call: [req.parts.put, "erde", 2]
+
+- call: [client.send_rpc, ev.net_id, "pay", 0, req]
+- print: ["client-map: sent pay payload"]
+
+- call: [time.sleep_ms, 300]
+- call: [client.update]
+- print: ["client-map: final score=${replica.score}"]
+
+- if:
+    condition: { neq: [replica.score, 999] }
+    then:
+      - print: ["FAIL map-rpc score=${replica.score}"]
+      - call: [sys.exit, 1]
+
+- call: [client.close]
+- call: [host_th.join]
+- print: ["mirror rpc map model PASS"]

@@ -1,0 +1,88 @@
+# Requires: library
+# Client-side entrypoint compiled with import set B.
+
+- import: "tests/ws_context_client_top.aiml"
+
+- decl: [client, mirror_session]
+- set: [client, { call: [mirror.connect_timeout, "ws://127.0.0.1:19921", 4000] }]
+
+- decl: [got_view, i32, 0]
+- decl: [view_nid, i32, -1]
+- decl: [wait, i32, 0]
+- while:
+    condition: { "&&": [{ eq: [got_view, 0] }, { lt: [wait, 250] }] }
+    body:
+      - call: [client.update]
+      - if:
+          condition: { call: [client.has_event] }
+          then:
+            - decl: [ev, mirror_event]
+            - set: [ev, { call: [client.next_event] }]
+            - if:
+                condition: { eq: [ev.type, "object_registered"] }
+                then:
+                  - set: [view_nid, ev.net_id]
+                  - set: [got_view, 1]
+      - if:
+          condition: { eq: [got_view, 0] }
+          then:
+            - call: [time.sleep_ms, 16]
+            - set: [wait, { +: [wait, 1] }]
+
+- if:
+    condition: { eq: [got_view, 0] }
+    then:
+      - print: ["FAIL ctx-client: no object_registered event"]
+      - call: [sys.exit, 1]
+
+- decl: [replica, SharedViewWsCtx]
+- call: [client.register_id, replica, view_nid]
+
+- decl: [poll_i, i32, 0]
+- while:
+    condition: { lt: [poll_i, 120] }
+    body:
+      - call: [client.update]
+      - call: [time.sleep_ms, 10]
+      - set: [poll_i, { +: [poll_i, 1] }]
+
+- print: ["ctx-client: round=${replica.round} title='${replica.title}' card_count=${replica.card_count} cards.len=${replica.cards.len} card0='${replica.cards-0.name}' cost0=${replica.cards-0.cost}"]
+
+- if:
+    condition: { neq: [replica.round, 9] }
+    then:
+      - print: ["FAIL ctx-client: round=${replica.round}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.title, "ctx-check"] }
+    then:
+      - print: ["FAIL ctx-client: title='${replica.title}'"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.card_count, 1] }
+    then:
+      - print: ["FAIL ctx-client: card_count=${replica.card_count}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.cards.len, 1] }
+    then:
+      - print: ["FAIL ctx-client: cards.len=${replica.cards.len}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.cards-0.name, "Canopy Viper"] }
+    then:
+      - print: ["FAIL ctx-client: card0.name='${replica.cards-0.name}'"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.cards-0.cost, 3] }
+    then:
+      - print: ["FAIL ctx-client: card0.cost=${replica.cards-0.cost}"]
+      - call: [sys.exit, 1]
+
+- call: [client.close]
+- print: ["ctx-client: PASS"]

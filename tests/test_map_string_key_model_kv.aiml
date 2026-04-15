@@ -1,0 +1,80 @@
+# Regression test: typed persistent Kv with model field map<string:i32>.
+# Expected exit code: 0
+
+- model:
+    name: CardLike
+    fields:
+      - [name, string]
+      - [provides, map<string:i32>]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_dir, path, "/tmp/aiml_test_map_string_key_model_kv/"]
+      - call: [io.remove_all, db_dir]
+
+      - decl: [json1, string, '{"__type":"CardLike","name":"Fire Mana","provides":{"1":1}}']
+      - decl: [c1, CardLike]
+      - set: [c1, { call: [sys.deserialize, json1, "CardLike"] }]
+
+      - if:
+          condition: { eq: [{ eq: [c1.name, "Fire Mana"] }, 0] }
+          then:
+            - print: ["FAIL pre_name=${c1.name}"]
+            - call: [sys.exit, 1]
+
+      - if:
+          condition: { neq: [c1.provides.len, 1] }
+          then:
+            - print: ["FAIL pre_len=${c1.provides.len}"]
+            - call: [sys.exit, 1]
+
+      - decl: [pre_amt, i32, { call: [c1.provides.get, "1"] }]
+      - if:
+          condition: { neq: [pre_amt, 1] }
+          then:
+            - print: ["FAIL pre_amt=${pre_amt}"]
+            - call: [sys.exit, 1]
+
+      - decl: [kv, Kv<string:CardLike>]
+      - set: [kv, { call: [db.open_kv, "map_string_key_model_kv", {persist: true, path: db_dir}] }]
+      - call: [kv.set, "mana", c1]
+
+      - decl: [got, ptr<CardLike>]
+      - set: [got, { call: [kv.get, "mana"] }]
+      - if:
+          condition: { eq: [got, null] }
+          then:
+            - print: ["FAIL got=null"]
+            - call: [sys.exit, 1]
+
+      - if:
+          condition: { eq: [{ eq: [got.name, "Fire Mana"] }, 0] }
+          then:
+            - print: ["FAIL got.name=${got.name}"]
+            - call: [sys.exit, 1]
+
+      - if:
+          condition: { neq: [got.provides.len, 1] }
+          then:
+            - print: ["FAIL got_len=${got.provides.len}"]
+            - call: [sys.exit, 1]
+
+      - decl: [got_amt, i32, { call: [got.provides.get, "1"] }]
+      - if:
+          condition: { neq: [got_amt, 1] }
+          then:
+            - print: ["FAIL got_amt=${got_amt}"]
+            - call: [sys.exit, 1]
+
+      - decl: [miss_amt, i32, { call: [got.provides.get, "5"] }]
+      - if:
+          condition: { neq: [miss_amt, 0] }
+          then:
+            - print: ["FAIL miss_amt=${miss_amt}"]
+            - call: [sys.exit, 1]
+
+      - call: [db.checkpoint]
+      - print: ["map string key model kv PASS"]
+      - return: 0

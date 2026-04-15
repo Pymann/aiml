@@ -27,7 +27,7 @@
 - decl: [got, ptr<RelativeStorePlayer>]
 - set: [got, { call: [players.get, id] }]
 - if:
-    condition: { "==": [got, null] }
+    condition: { eq: [got, null] }
     then:
       - print: ["FAIL rel_global_get=null"]
       - call: [sys.exit, 1]

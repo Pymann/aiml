@@ -215,7 +215,7 @@ namespace BufferImpl {
         }
         
         auto& classInfo = ctx.classes[className];
-        llvm::Value* alloca = ctx.builder.CreateAlloca(type, nullptr, "read_obj");
+        llvm::Value* alloca = ctx.createEntryAlloca(type, "read_obj");
         
         // Initialize with Defaults
         for(auto& [memName, member] : classInfo.members) {

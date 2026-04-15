@@ -1,0 +1,9 @@
+# Requires: library
+
+- model:
+    name: SharedCard
+    fields:
+      - [name, string]
+      - [cost, i32, 0]
+      - [rarity, i32, 0]
+

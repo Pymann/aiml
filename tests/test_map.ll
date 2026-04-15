@@ -5,389 +5,396 @@ target triple = "x86_64-pc-linux-gnu"
 
 %map_string_i32 = type { i32, i32, ptr, ptr, ptr }
 
-@__argc = internal global i32 0
-@__argv = internal global ptr null
+@__argc = external global i32
+@__argv = external global ptr
+@__global_scores = global %map_string_i32 zeroinitializer
 @0 = private unnamed_addr constant [16 x i8] c"Testing Maps...\00", align 1
-@1 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
-@2 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
-@3 = private unnamed_addr constant [6 x i8] c"Alice\00", align 1
-@4 = private unnamed_addr constant [4 x i8] c"Bob\00", align 1
-@5 = private unnamed_addr constant [14 x i8] c"Alice Score: \00", align 1
-@6 = private unnamed_addr constant [35 x i8] c"${ { call: [scores.get, \22Alice\22] }\00", align 1
-@7 = private unnamed_addr constant [3 x i8] c" }\00", align 1
-@8 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
+@print_null_str = private unnamed_addr constant [7 x i8] c"(null)\00", align 1
+@1 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
+@2 = private unnamed_addr constant [6 x i8] c"Alice\00", align 1
+@3 = private unnamed_addr constant [4 x i8] c"Bob\00", align 1
+@4 = private unnamed_addr constant [14 x i8] c"Alice Score: \00", align 1
+@5 = private unnamed_addr constant [6 x i8] c"Alice\00", align 1
+@fmt_d = private unnamed_addr constant [3 x i8] c"%d\00", align 1
+@empty = private unnamed_addr constant [1 x i8] zeroinitializer, align 1
+@print_null_str.1 = private unnamed_addr constant [7 x i8] c"(null)\00", align 1
+@6 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
+@7 = private unnamed_addr constant [12 x i8] c"Bob Score: \00", align 1
+@8 = private unnamed_addr constant [4 x i8] c"Bob\00", align 1
+@print_null_str.2 = private unnamed_addr constant [7 x i8] c"(null)\00", align 1
 @9 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
-@10 = private unnamed_addr constant [12 x i8] c"Bob Score: \00", align 1
-@11 = private unnamed_addr constant [33 x i8] c"${ { call: [scores.get, \22Bob\22] }\00", align 1
-@12 = private unnamed_addr constant [3 x i8] c" }\00", align 1
-@13 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
+@10 = private unnamed_addr constant [21 x i8] c"Size before remove: \00", align 1
+@print_null_str.3 = private unnamed_addr constant [7 x i8] c"(null)\00", align 1
+@11 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
+@12 = private unnamed_addr constant [6 x i8] c"Alice\00", align 1
+@13 = private unnamed_addr constant [20 x i8] c"Size after remove: \00", align 1
+@print_null_str.4 = private unnamed_addr constant [7 x i8] c"(null)\00", align 1
 @14 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
-@15 = private unnamed_addr constant [21 x i8] c"Size before remove: \00", align 1
-@16 = private unnamed_addr constant [3 x i8] c"%d\00", align 1
-@17 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
-@18 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
-@19 = private unnamed_addr constant [6 x i8] c"Alice\00", align 1
-@20 = private unnamed_addr constant [20 x i8] c"Size after remove: \00", align 1
-@21 = private unnamed_addr constant [3 x i8] c"%d\00", align 1
-@22 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
-@23 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
-@24 = private unnamed_addr constant [12 x i8] c"Has Alice? \00", align 1
-@25 = private unnamed_addr constant [40 x i8] c"${ { call: [scores.contains, \22Alice\22] }\00", align 1
-@26 = private unnamed_addr constant [3 x i8] c" }\00", align 1
-@27 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
-@28 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
-@29 = private unnamed_addr constant [10 x i8] c"Has Bob? \00", align 1
-@30 = private unnamed_addr constant [38 x i8] c"${ { call: [scores.contains, \22Bob\22] }\00", align 1
-@31 = private unnamed_addr constant [3 x i8] c" }\00", align 1
-@32 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
-@33 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
-@34 = private unnamed_addr constant [22 x i8] c"Math Test: 10 + 20 = \00", align 1
-@35 = private unnamed_addr constant [19 x i8] c"${ { +: [10, 20] }\00", align 1
-@36 = private unnamed_addr constant [3 x i8] c" }\00", align 1
-@37 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
-@38 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
-@39 = private unnamed_addr constant [16 x i8] c"Testing Maps...\00", align 1
-@40 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
-@41 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
-@42 = private unnamed_addr constant [6 x i8] c"Alice\00", align 1
-@43 = private unnamed_addr constant [4 x i8] c"Bob\00", align 1
-@44 = private unnamed_addr constant [14 x i8] c"Alice Score: \00", align 1
-@45 = private unnamed_addr constant [35 x i8] c"${ { call: [scores.get, \22Alice\22] }\00", align 1
-@46 = private unnamed_addr constant [3 x i8] c" }\00", align 1
-@47 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
-@48 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
-@49 = private unnamed_addr constant [12 x i8] c"Bob Score: \00", align 1
-@50 = private unnamed_addr constant [33 x i8] c"${ { call: [scores.get, \22Bob\22] }\00", align 1
-@51 = private unnamed_addr constant [3 x i8] c" }\00", align 1
-@52 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
-@53 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
-@54 = private unnamed_addr constant [21 x i8] c"Size before remove: \00", align 1
-@55 = private unnamed_addr constant [3 x i8] c"%d\00", align 1
-@56 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
-@57 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
-@58 = private unnamed_addr constant [6 x i8] c"Alice\00", align 1
-@59 = private unnamed_addr constant [20 x i8] c"Size after remove: \00", align 1
-@60 = private unnamed_addr constant [3 x i8] c"%d\00", align 1
-@61 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
-@62 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
-@63 = private unnamed_addr constant [12 x i8] c"Has Alice? \00", align 1
-@64 = private unnamed_addr constant [40 x i8] c"${ { call: [scores.contains, \22Alice\22] }\00", align 1
-@65 = private unnamed_addr constant [3 x i8] c" }\00", align 1
-@66 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
-@67 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
-@68 = private unnamed_addr constant [10 x i8] c"Has Bob? \00", align 1
-@69 = private unnamed_addr constant [38 x i8] c"${ { call: [scores.contains, \22Bob\22] }\00", align 1
-@70 = private unnamed_addr constant [3 x i8] c" }\00", align 1
-@71 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
-@72 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
-@73 = private unnamed_addr constant [22 x i8] c"Math Test: 10 + 20 = \00", align 1
-@74 = private unnamed_addr constant [19 x i8] c"${ { +: [10, 20] }\00", align 1
-@75 = private unnamed_addr constant [3 x i8] c" }\00", align 1
-@76 = private unnamed_addr constant [4 x i8] c"%d\0A\00", align 1
-@77 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
+@15 = private unnamed_addr constant [12 x i8] c"Has Alice? \00", align 1
+@16 = private unnamed_addr constant [6 x i8] c"Alice\00", align 1
+@17 = private unnamed_addr constant [5 x i8] c"true\00", align 1
+@18 = private unnamed_addr constant [6 x i8] c"false\00", align 1
+@print_null_str.5 = private unnamed_addr constant [7 x i8] c"(null)\00", align 1
+@19 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
+@20 = private unnamed_addr constant [10 x i8] c"Has Bob? \00", align 1
+@21 = private unnamed_addr constant [4 x i8] c"Bob\00", align 1
+@22 = private unnamed_addr constant [5 x i8] c"true\00", align 1
+@23 = private unnamed_addr constant [6 x i8] c"false\00", align 1
+@print_null_str.6 = private unnamed_addr constant [7 x i8] c"(null)\00", align 1
+@24 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
+@25 = private unnamed_addr constant [22 x i8] c"Math Test: 10 + 20 = \00", align 1
+@print_null_str.7 = private unnamed_addr constant [7 x i8] c"(null)\00", align 1
+@26 = private unnamed_addr constant [4 x i8] c"%s\0A\00", align 1
+@__aiml_schema_count = constant i32 0
 
 define void @__aiml_init() {
 entry:
-  %scores = alloca %map_string_i32, align 8
-  store %map_string_i32 zeroinitializer, ptr %scores, align 8
-  %sizePtr = getelementptr inbounds { i32, i32, ptr, ptr, ptr }, ptr %scores, i32 0, i32 0
-  store i32 0, ptr %sizePtr, align 4
-  %capPtr = getelementptr inbounds { i32, i32, ptr, ptr, ptr }, ptr %scores, i32 0, i32 1
-  store i32 4, ptr %capPtr, align 4
+  store i32 0, ptr @__global_scores, align 4
+  store i32 4, ptr getelementptr inbounds ({ i32, i32, ptr, ptr, ptr }, ptr @__global_scores, i32 0, i32 1), align 4
   %0 = call ptr @calloc(i64 4, i64 1)
-  %occPtr = getelementptr inbounds { i32, i32, ptr, ptr, ptr }, ptr %scores, i32 0, i32 2
-  store ptr %0, ptr %occPtr, align 8
+  store ptr %0, ptr getelementptr inbounds ({ i32, i32, ptr, ptr, ptr }, ptr @__global_scores, i32 0, i32 2), align 8
   %1 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), i64 4))
-  %keysPtr = getelementptr inbounds { i32, i32, ptr, ptr, ptr }, ptr %scores, i32 0, i32 3
-  store ptr %1, ptr %keysPtr, align 8
+  store ptr %1, ptr getelementptr inbounds ({ i32, i32, ptr, ptr, ptr }, ptr @__global_scores, i32 0, i32 3), align 8
   %2 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (i32, ptr null, i32 1) to i64), i64 4))
-  %valsPtr = getelementptr inbounds { i32, i32, ptr, ptr, ptr }, ptr %scores, i32 0, i32 4
-  store ptr %2, ptr %valsPtr, align 8
-  %print_call = call i32 (ptr, ...) @printf(ptr @2, ptr @0)
-  %sizePtr1 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 0
-  %capPtr2 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 1
-  %size = load i32, ptr %sizePtr1, align 4
-  %capacity = load i32, ptr %capPtr2, align 4
-  %3 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 3
-  %keysBase = load ptr, ptr %3, align 8
-  %4 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 4
-  %valsBase = load ptr, ptr %4, align 8
+  store ptr %2, ptr getelementptr inbounds ({ i32, i32, ptr, ptr, ptr }, ptr @__global_scores, i32 0, i32 4), align 8
+  %print_call = call i32 (ptr, ...) @printf(ptr @1, ptr @0)
+  %size = load i32, ptr @__global_scores, align 4
+  %capacity = load i32, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 1), align 4
+  %keysBase = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 3), align 8
+  %valsBase = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 4), align 8
   %i_put = alloca i32, align 4
   store i32 0, ptr %i_put, align 4
   br label %put_loop
 
 put_loop:                                         ; preds = %put_next, %entry
-  %5 = load i32, ptr %i_put, align 4
-  %6 = icmp slt i32 %5, %size
-  br i1 %6, label %put_check, label %put_not_found
+  %3 = load i32, ptr %i_put, align 4
+  %4 = icmp slt i32 %3, %size
+  br i1 %4, label %put_check, label %put_not_found
 
 put_check:                                        ; preds = %put_loop
-  %7 = getelementptr inbounds ptr, ptr %keysBase, i32 %5
-  %8 = load ptr, ptr %7, align 8
-  %9 = call i32 @strcmp(ptr @3, ptr %8)
-  %str_eq = icmp eq i32 %9, 0
+  %5 = getelementptr inbounds ptr, ptr %keysBase, i32 %3
+  %6 = load ptr, ptr %5, align 8
+  %7 = call i32 @strcmp(ptr @2, ptr %6)
+  %str_eq = icmp eq i32 %7, 0
   br i1 %str_eq, label %put_found, label %put_next
 
 put_found:                                        ; preds = %put_check
-  %10 = getelementptr inbounds i32, ptr %valsBase, i32 %5
-  store i32 100, ptr %10, align 4
+  %8 = getelementptr inbounds i32, ptr %valsBase, i32 %3
+  store i32 100, ptr %8, align 4
   br label %put_end
 
 put_next:                                         ; preds = %put_check
-  %11 = add i32 %5, 1
-  store i32 %11, ptr %i_put, align 4
+  %9 = add i32 %3, 1
+  store i32 %9, ptr %i_put, align 4
   br label %put_loop
 
 put_not_found:                                    ; preds = %put_loop
-  %12 = icmp eq i32 %size, %capacity
-  br i1 %12, label %put_grow, label %put_append
+  %10 = icmp eq i32 %size, %capacity
+  br i1 %10, label %put_grow, label %put_append
 
 put_end:                                          ; preds = %put_append, %put_found
-  %sizePtr3 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 0
-  %capPtr4 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 1
-  %size5 = load i32, ptr %sizePtr3, align 4
-  %capacity6 = load i32, ptr %capPtr4, align 4
-  %13 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 3
-  %keysBase7 = load ptr, ptr %13, align 8
-  %14 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 4
-  %valsBase8 = load ptr, ptr %14, align 8
-  %i_put15 = alloca i32, align 4
-  store i32 0, ptr %i_put15, align 4
-  br label %put_loop9
+  %size1 = load i32, ptr @__global_scores, align 4
+  %capacity2 = load i32, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 1), align 4
+  %keysBase3 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 3), align 8
+  %valsBase4 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 4), align 8
+  %i_put11 = alloca i32, align 4
+  store i32 0, ptr %i_put11, align 4
+  br label %put_loop5
 
 put_grow:                                         ; preds = %put_not_found
-  %15 = mul i32 %capacity, 2
-  store i32 %15, ptr %capPtr2, align 4
-  %16 = zext i32 %15 to i64
-  %17 = mul i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), %16
-  %18 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 3
-  %19 = load ptr, ptr %18, align 8
-  %20 = call ptr @realloc(ptr %19, i64 %17)
-  store ptr %20, ptr %18, align 8
-  %21 = zext i32 %15 to i64
-  %22 = mul i64 ptrtoint (ptr getelementptr inbounds (i32, ptr null, i32 1) to i64), %21
-  %23 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 4
-  %24 = load ptr, ptr %23, align 8
-  %25 = call ptr @realloc(ptr %24, i64 %22)
-  store ptr %25, ptr %23, align 8
+  %11 = mul i32 %capacity, 2
+  %12 = icmp sgt i32 %11, 3
+  %growCap = select i1 %12, i32 %11, i32 4
+  store i32 %growCap, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 1), align 4
+  %13 = zext i32 %growCap to i64
+  %14 = mul i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), %13
+  %15 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 3), align 8
+  %16 = call ptr @realloc(ptr %15, i64 %14)
+  store ptr %16, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 3), align 8
+  %17 = zext i32 %growCap to i64
+  %18 = mul i64 ptrtoint (ptr getelementptr inbounds (i32, ptr null, i32 1) to i64), %17
+  %19 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 4), align 8
+  %20 = call ptr @realloc(ptr %19, i64 %18)
+  store ptr %20, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 4), align 8
   br label %put_append
 
 put_append:                                       ; preds = %put_grow, %put_not_found
-  %26 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 3
-  %27 = load ptr, ptr %26, align 8
-  %28 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 4
-  %29 = load ptr, ptr %28, align 8
-  %30 = getelementptr inbounds ptr, ptr %27, i32 %size
-  store ptr @3, ptr %30, align 8
-  %31 = getelementptr inbounds i32, ptr %29, i32 %size
-  store i32 100, ptr %31, align 4
-  %32 = add i32 %size, 1
-  store i32 %32, ptr %sizePtr1, align 4
+  %21 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 3), align 8
+  %22 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 4), align 8
+  %23 = getelementptr inbounds ptr, ptr %21, i32 %size
+  store ptr @2, ptr %23, align 8
+  %24 = getelementptr inbounds i32, ptr %22, i32 %size
+  store i32 100, ptr %24, align 4
+  %25 = add i32 %size, 1
+  store i32 %25, ptr @__global_scores, align 4
   br label %put_end
 
-put_loop9:                                        ; preds = %put_next12, %put_end
-  %33 = load i32, ptr %i_put15, align 4
-  %34 = icmp slt i32 %33, %size5
-  br i1 %34, label %put_check10, label %put_not_found13
+put_loop5:                                        ; preds = %put_next8, %put_end
+  %26 = load i32, ptr %i_put11, align 4
+  %27 = icmp slt i32 %26, %size1
+  br i1 %27, label %put_check6, label %put_not_found9
 
-put_check10:                                      ; preds = %put_loop9
-  %35 = getelementptr inbounds ptr, ptr %keysBase7, i32 %33
-  %36 = load ptr, ptr %35, align 8
-  %37 = call i32 @strcmp(ptr @4, ptr %36)
-  %str_eq16 = icmp eq i32 %37, 0
-  br i1 %str_eq16, label %put_found11, label %put_next12
+put_check6:                                       ; preds = %put_loop5
+  %28 = getelementptr inbounds ptr, ptr %keysBase3, i32 %26
+  %29 = load ptr, ptr %28, align 8
+  %30 = call i32 @strcmp(ptr @3, ptr %29)
+  %str_eq12 = icmp eq i32 %30, 0
+  br i1 %str_eq12, label %put_found7, label %put_next8
 
-put_found11:                                      ; preds = %put_check10
-  %38 = getelementptr inbounds i32, ptr %valsBase8, i32 %33
-  store i32 200, ptr %38, align 4
-  br label %put_end14
+put_found7:                                       ; preds = %put_check6
+  %31 = getelementptr inbounds i32, ptr %valsBase4, i32 %26
+  store i32 200, ptr %31, align 4
+  br label %put_end10
 
-put_next12:                                       ; preds = %put_check10
-  %39 = add i32 %33, 1
-  store i32 %39, ptr %i_put15, align 4
-  br label %put_loop9
+put_next8:                                        ; preds = %put_check6
+  %32 = add i32 %26, 1
+  store i32 %32, ptr %i_put11, align 4
+  br label %put_loop5
 
-put_not_found13:                                  ; preds = %put_loop9
-  %40 = icmp eq i32 %size5, %capacity6
-  br i1 %40, label %put_grow17, label %put_append18
+put_not_found9:                                   ; preds = %put_loop5
+  %33 = icmp eq i32 %size1, %capacity2
+  br i1 %33, label %put_grow13, label %put_append14
 
-put_end14:                                        ; preds = %put_append18, %put_found11
-  %41 = call i64 @strlen(ptr @5)
-  %42 = call i64 @strlen(ptr @6)
-  %43 = add i64 %41, %42
-  %44 = add i64 %43, 1
-  %45 = call ptr @malloc(i64 %44)
-  %46 = call ptr @strcpy(ptr %45, ptr @5)
-  %47 = call ptr @strcat(ptr %45, ptr @6)
-  %48 = call i64 @strlen(ptr %45)
-  %49 = call i64 @strlen(ptr @7)
-  %50 = add i64 %48, %49
-  %51 = add i64 %50, 1
-  %52 = call ptr @malloc(i64 %51)
-  %53 = call ptr @strcpy(ptr %52, ptr %45)
-  %54 = call ptr @strcat(ptr %52, ptr @7)
-  %print_call19 = call i32 (ptr, ...) @printf(ptr @9, ptr %52)
-  %55 = call i64 @strlen(ptr @10)
-  %56 = call i64 @strlen(ptr @11)
-  %57 = add i64 %55, %56
-  %58 = add i64 %57, 1
-  %59 = call ptr @malloc(i64 %58)
-  %60 = call ptr @strcpy(ptr %59, ptr @10)
-  %61 = call ptr @strcat(ptr %59, ptr @11)
-  %62 = call i64 @strlen(ptr %59)
-  %63 = call i64 @strlen(ptr @12)
-  %64 = add i64 %62, %63
-  %65 = add i64 %64, 1
-  %66 = call ptr @malloc(i64 %65)
-  %67 = call ptr @strcpy(ptr %66, ptr %59)
-  %68 = call ptr @strcat(ptr %66, ptr @12)
-  %print_call20 = call i32 (ptr, ...) @printf(ptr @14, ptr %66)
-  %sizePtr21 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 0
-  %size_val = load i32, ptr %sizePtr21, align 4
-  %69 = call ptr @malloc(i64 12)
-  %70 = call i32 (ptr, ptr, ...) @sprintf(ptr %69, ptr @16, i32 %size_val)
-  %71 = call i64 @strlen(ptr @15)
-  %72 = call i64 @strlen(ptr %69)
-  %73 = add i64 %71, %72
-  %74 = add i64 %73, 1
-  %75 = call ptr @malloc(i64 %74)
-  %76 = call ptr @strcpy(ptr %75, ptr @15)
-  %77 = call ptr @strcat(ptr %75, ptr %69)
-  %print_call22 = call i32 (ptr, ...) @printf(ptr @18, ptr %75)
-  %sizePtr23 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 0
-  %78 = load i32, ptr %sizePtr23, align 4
-  %79 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 3
-  %80 = load ptr, ptr %79, align 8
-  %81 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 4
-  %82 = load ptr, ptr %81, align 8
+put_end10:                                        ; preds = %put_append14, %put_found7
+  %34 = load i32, ptr @__global_scores, align 4
+  %35 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 3), align 8
+  %36 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 4), align 8
+  %i_get = alloca i32, align 4
+  store i32 0, ptr %i_get, align 4
+  %res_get = alloca i32, align 4
+  store i32 0, ptr %res_get, align 4
+  br label %get_loop
+
+put_grow13:                                       ; preds = %put_not_found9
+  %37 = mul i32 %capacity2, 2
+  %38 = icmp sgt i32 %37, 3
+  %growCap15 = select i1 %38, i32 %37, i32 4
+  store i32 %growCap15, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 1), align 4
+  %39 = zext i32 %growCap15 to i64
+  %40 = mul i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), %39
+  %41 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 3), align 8
+  %42 = call ptr @realloc(ptr %41, i64 %40)
+  store ptr %42, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 3), align 8
+  %43 = zext i32 %growCap15 to i64
+  %44 = mul i64 ptrtoint (ptr getelementptr inbounds (i32, ptr null, i32 1) to i64), %43
+  %45 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 4), align 8
+  %46 = call ptr @realloc(ptr %45, i64 %44)
+  store ptr %46, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 4), align 8
+  br label %put_append14
+
+put_append14:                                     ; preds = %put_grow13, %put_not_found9
+  %47 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 3), align 8
+  %48 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 4), align 8
+  %49 = getelementptr inbounds ptr, ptr %47, i32 %size1
+  store ptr @3, ptr %49, align 8
+  %50 = getelementptr inbounds i32, ptr %48, i32 %size1
+  store i32 200, ptr %50, align 4
+  %51 = add i32 %size1, 1
+  store i32 %51, ptr @__global_scores, align 4
+  br label %put_end10
+
+get_loop:                                         ; preds = %get_next, %put_end10
+  %52 = load i32, ptr %i_get, align 4
+  %53 = icmp slt i32 %52, %34
+  br i1 %53, label %get_check, label %get_end
+
+get_check:                                        ; preds = %get_loop
+  %54 = getelementptr inbounds ptr, ptr %35, i32 %52
+  %55 = load ptr, ptr %54, align 8
+  %56 = call i32 @strcmp(ptr @5, ptr %55)
+  %str_eq16 = icmp eq i32 %56, 0
+  br i1 %str_eq16, label %get_found, label %get_next
+
+get_found:                                        ; preds = %get_check
+  %57 = getelementptr inbounds i32, ptr %36, i32 %52
+  %58 = load i32, ptr %57, align 4
+  store i32 %58, ptr %res_get, align 4
+  br label %get_end
+
+get_end:                                          ; preds = %get_found, %get_loop
+  %get_res = load i32, ptr %res_get, align 4
+  %59 = call ptr @__aiml_int_to_string(i32 %get_res)
+  %60 = call ptr @__aiml_str_concat(ptr @4, ptr %59)
+  %print_null_check = icmp eq ptr %60, null
+  %print_safe_str = select i1 %print_null_check, ptr @print_null_str.1, ptr %60
+  %print_call17 = call i32 (ptr, ...) @printf(ptr @6, ptr %print_safe_str)
+  %61 = load i32, ptr @__global_scores, align 4
+  %62 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 3), align 8
+  %63 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 4), align 8
+  %i_get22 = alloca i32, align 4
+  store i32 0, ptr %i_get22, align 4
+  %res_get23 = alloca i32, align 4
+  store i32 0, ptr %res_get23, align 4
+  br label %get_loop18
+
+get_next:                                         ; preds = %get_check
+  %64 = add i32 %52, 1
+  store i32 %64, ptr %i_get, align 4
+  br label %get_loop
+
+get_loop18:                                       ; preds = %get_next25, %get_end
+  %65 = load i32, ptr %i_get22, align 4
+  %66 = icmp slt i32 %65, %61
+  br i1 %66, label %get_check19, label %get_end21
+
+get_check19:                                      ; preds = %get_loop18
+  %67 = getelementptr inbounds ptr, ptr %62, i32 %65
+  %68 = load ptr, ptr %67, align 8
+  %69 = call i32 @strcmp(ptr @8, ptr %68)
+  %str_eq24 = icmp eq i32 %69, 0
+  br i1 %str_eq24, label %get_found20, label %get_next25
+
+get_found20:                                      ; preds = %get_check19
+  %70 = getelementptr inbounds i32, ptr %63, i32 %65
+  %71 = load i32, ptr %70, align 4
+  store i32 %71, ptr %res_get23, align 4
+  br label %get_end21
+
+get_end21:                                        ; preds = %get_found20, %get_loop18
+  %get_res26 = load i32, ptr %res_get23, align 4
+  %72 = call ptr @__aiml_int_to_string(i32 %get_res26)
+  %73 = call ptr @__aiml_str_concat(ptr @7, ptr %72)
+  %print_null_check27 = icmp eq ptr %73, null
+  %print_safe_str28 = select i1 %print_null_check27, ptr @print_null_str.2, ptr %73
+  %print_call29 = call i32 (ptr, ...) @printf(ptr @9, ptr %print_safe_str28)
+  %size_val = load i32, ptr @__global_scores, align 4
+  %74 = call ptr @__aiml_int_to_string(i32 %size_val)
+  %75 = call ptr @__aiml_str_concat(ptr @10, ptr %74)
+  %print_null_check30 = icmp eq ptr %75, null
+  %print_safe_str31 = select i1 %print_null_check30, ptr @print_null_str.3, ptr %75
+  %print_call32 = call i32 (ptr, ...) @printf(ptr @11, ptr %print_safe_str31)
+  %76 = load i32, ptr @__global_scores, align 4
+  %77 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 3), align 8
+  %78 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 4), align 8
   %i_rm = alloca i32, align 4
   store i32 0, ptr %i_rm, align 4
   br label %rm_loop
 
-put_grow17:                                       ; preds = %put_not_found13
-  %83 = mul i32 %capacity6, 2
-  store i32 %83, ptr %capPtr4, align 4
-  %84 = zext i32 %83 to i64
-  %85 = mul i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), %84
-  %86 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 3
-  %87 = load ptr, ptr %86, align 8
-  %88 = call ptr @realloc(ptr %87, i64 %85)
-  store ptr %88, ptr %86, align 8
-  %89 = zext i32 %83 to i64
-  %90 = mul i64 ptrtoint (ptr getelementptr inbounds (i32, ptr null, i32 1) to i64), %89
-  %91 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 4
-  %92 = load ptr, ptr %91, align 8
-  %93 = call ptr @realloc(ptr %92, i64 %90)
-  store ptr %93, ptr %91, align 8
-  br label %put_append18
+get_next25:                                       ; preds = %get_check19
+  %79 = add i32 %65, 1
+  store i32 %79, ptr %i_get22, align 4
+  br label %get_loop18
 
-put_append18:                                     ; preds = %put_grow17, %put_not_found13
-  %94 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 3
-  %95 = load ptr, ptr %94, align 8
-  %96 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 4
-  %97 = load ptr, ptr %96, align 8
-  %98 = getelementptr inbounds ptr, ptr %95, i32 %size5
-  store ptr @4, ptr %98, align 8
-  %99 = getelementptr inbounds i32, ptr %97, i32 %size5
-  store i32 200, ptr %99, align 4
-  %100 = add i32 %size5, 1
-  store i32 %100, ptr %sizePtr3, align 4
-  br label %put_end14
-
-rm_loop:                                          ; preds = %rm_next, %put_end14
-  %101 = load i32, ptr %i_rm, align 4
-  %102 = icmp slt i32 %101, %78
-  br i1 %102, label %rm_check, label %rm_end
+rm_loop:                                          ; preds = %rm_next, %get_end21
+  %80 = load i32, ptr %i_rm, align 4
+  %81 = icmp slt i32 %80, %76
+  br i1 %81, label %rm_check, label %rm_end
 
 rm_check:                                         ; preds = %rm_loop
-  %103 = getelementptr inbounds ptr, ptr %80, i32 %101
-  %104 = load ptr, ptr %103, align 8
-  %105 = call i32 @strcmp(ptr @19, ptr %104)
-  %str_eq24 = icmp eq i32 %105, 0
-  br i1 %str_eq24, label %rm_found, label %rm_next
+  %82 = getelementptr inbounds ptr, ptr %77, i32 %80
+  %83 = load ptr, ptr %82, align 8
+  %84 = call i32 @strcmp(ptr @12, ptr %83)
+  %str_eq33 = icmp eq i32 %84, 0
+  br i1 %str_eq33, label %rm_found, label %rm_next
 
 rm_found:                                         ; preds = %rm_check
-  %106 = add i32 %101, 1
-  %107 = sub i32 %78, %106
-  %108 = getelementptr inbounds ptr, ptr %80, i32 %101
-  %109 = getelementptr inbounds ptr, ptr %80, i32 %106
-  %110 = zext i32 %107 to i64
-  %111 = mul i64 %110, ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64)
-  %112 = call ptr @memmove(ptr %108, ptr %109, i64 %111)
-  %113 = getelementptr inbounds %map_string_i32, ptr %82, i32 %101
-  %114 = getelementptr inbounds %map_string_i32, ptr %82, i32 %106
-  %115 = zext i32 %107 to i64
-  %116 = mul i64 %115, ptrtoint (ptr getelementptr inbounds (%map_string_i32, ptr null, i32 1) to i64)
-  %117 = call ptr @memmove(ptr %113, ptr %114, i64 %116)
-  %118 = sub i32 %78, 1
-  store i32 %118, ptr %sizePtr23, align 4
+  %85 = add i32 %80, 1
+  %86 = sub i32 %76, %85
+  %87 = getelementptr inbounds ptr, ptr %77, i32 %80
+  %88 = getelementptr inbounds ptr, ptr %77, i32 %85
+  %89 = zext i32 %86 to i64
+  %90 = mul i64 %89, ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64)
+  %91 = call ptr @memmove(ptr %87, ptr %88, i64 %90)
+  %92 = getelementptr inbounds i32, ptr %78, i32 %80
+  %93 = getelementptr inbounds i32, ptr %78, i32 %85
+  %94 = zext i32 %86 to i64
+  %95 = mul i64 %94, ptrtoint (ptr getelementptr inbounds (i32, ptr null, i32 1) to i64)
+  %96 = call ptr @memmove(ptr %92, ptr %93, i64 %95)
+  %97 = sub i32 %76, 1
+  store i32 %97, ptr @__global_scores, align 4
   br label %rm_end
 
 rm_end:                                           ; preds = %rm_found, %rm_loop
-  %sizePtr25 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 0
-  %size_val26 = load i32, ptr %sizePtr25, align 4
-  %119 = call ptr @malloc(i64 12)
-  %120 = call i32 (ptr, ptr, ...) @sprintf(ptr %119, ptr @21, i32 %size_val26)
-  %121 = call i64 @strlen(ptr @20)
-  %122 = call i64 @strlen(ptr %119)
-  %123 = add i64 %121, %122
-  %124 = add i64 %123, 1
-  %125 = call ptr @malloc(i64 %124)
-  %126 = call ptr @strcpy(ptr %125, ptr @20)
-  %127 = call ptr @strcat(ptr %125, ptr %119)
-  %print_call27 = call i32 (ptr, ...) @printf(ptr @23, ptr %125)
-  %128 = call i64 @strlen(ptr @24)
-  %129 = call i64 @strlen(ptr @25)
-  %130 = add i64 %128, %129
-  %131 = add i64 %130, 1
-  %132 = call ptr @malloc(i64 %131)
-  %133 = call ptr @strcpy(ptr %132, ptr @24)
-  %134 = call ptr @strcat(ptr %132, ptr @25)
-  %135 = call i64 @strlen(ptr %132)
-  %136 = call i64 @strlen(ptr @26)
-  %137 = add i64 %135, %136
-  %138 = add i64 %137, 1
-  %139 = call ptr @malloc(i64 %138)
-  %140 = call ptr @strcpy(ptr %139, ptr %132)
-  %141 = call ptr @strcat(ptr %139, ptr @26)
-  %print_call28 = call i32 (ptr, ...) @printf(ptr @28, ptr %139)
-  %142 = call i64 @strlen(ptr @29)
-  %143 = call i64 @strlen(ptr @30)
-  %144 = add i64 %142, %143
-  %145 = add i64 %144, 1
-  %146 = call ptr @malloc(i64 %145)
-  %147 = call ptr @strcpy(ptr %146, ptr @29)
-  %148 = call ptr @strcat(ptr %146, ptr @30)
-  %149 = call i64 @strlen(ptr %146)
-  %150 = call i64 @strlen(ptr @31)
-  %151 = add i64 %149, %150
-  %152 = add i64 %151, 1
-  %153 = call ptr @malloc(i64 %152)
-  %154 = call ptr @strcpy(ptr %153, ptr %146)
-  %155 = call ptr @strcat(ptr %153, ptr @31)
-  %print_call29 = call i32 (ptr, ...) @printf(ptr @33, ptr %153)
-  %156 = call i64 @strlen(ptr @34)
-  %157 = call i64 @strlen(ptr @35)
-  %158 = add i64 %156, %157
-  %159 = add i64 %158, 1
-  %160 = call ptr @malloc(i64 %159)
-  %161 = call ptr @strcpy(ptr %160, ptr @34)
-  %162 = call ptr @strcat(ptr %160, ptr @35)
-  %163 = call i64 @strlen(ptr %160)
-  %164 = call i64 @strlen(ptr @36)
-  %165 = add i64 %163, %164
-  %166 = add i64 %165, 1
-  %167 = call ptr @malloc(i64 %166)
-  %168 = call ptr @strcpy(ptr %167, ptr %160)
-  %169 = call ptr @strcat(ptr %167, ptr @36)
-  %print_call30 = call i32 (ptr, ...) @printf(ptr @38, ptr %167)
+  %size_val34 = load i32, ptr @__global_scores, align 4
+  %98 = call ptr @__aiml_int_to_string(i32 %size_val34)
+  %99 = call ptr @__aiml_str_concat(ptr @13, ptr %98)
+  %print_null_check35 = icmp eq ptr %99, null
+  %print_safe_str36 = select i1 %print_null_check35, ptr @print_null_str.4, ptr %99
+  %print_call37 = call i32 (ptr, ...) @printf(ptr @14, ptr %print_safe_str36)
+  %100 = load i32, ptr @__global_scores, align 4
+  %101 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 3), align 8
+  %i_cont = alloca i32, align 4
+  store i32 0, ptr %i_cont, align 4
+  %res_cont = alloca i1, align 1
+  store i1 false, ptr %res_cont, align 1
+  br label %cont_loop
+
+rm_next:                                          ; preds = %rm_check
+  %102 = add i32 %80, 1
+  store i32 %102, ptr %i_rm, align 4
+  br label %rm_loop
+
+cont_loop:                                        ; preds = %cont_next, %rm_end
+  %103 = load i32, ptr %i_cont, align 4
+  %104 = icmp slt i32 %103, %100
+  br i1 %104, label %cont_check, label %cont_end
+
+cont_check:                                       ; preds = %cont_loop
+  %105 = getelementptr inbounds ptr, ptr %101, i32 %103
+  %106 = load ptr, ptr %105, align 8
+  %107 = call i32 @strcmp(ptr @16, ptr %106)
+  %str_eq38 = icmp eq i32 %107, 0
+  br i1 %str_eq38, label %cont_found, label %cont_next
+
+cont_found:                                       ; preds = %cont_check
+  store i1 true, ptr %res_cont, align 1
+  br label %cont_end
+
+cont_end:                                         ; preds = %cont_found, %cont_loop
+  %108 = load i1, ptr %res_cont, align 1
+  %109 = select i1 %108, ptr @17, ptr @18
+  %110 = call ptr @__aiml_str_concat(ptr @15, ptr %109)
+  %print_null_check39 = icmp eq ptr %110, null
+  %print_safe_str40 = select i1 %print_null_check39, ptr @print_null_str.5, ptr %110
+  %print_call41 = call i32 (ptr, ...) @printf(ptr @19, ptr %print_safe_str40)
+  %111 = load i32, ptr @__global_scores, align 4
+  %112 = load ptr, ptr getelementptr inbounds (%map_string_i32, ptr @__global_scores, i32 0, i32 3), align 8
+  %i_cont46 = alloca i32, align 4
+  store i32 0, ptr %i_cont46, align 4
+  %res_cont47 = alloca i1, align 1
+  store i1 false, ptr %res_cont47, align 1
+  br label %cont_loop42
+
+cont_next:                                        ; preds = %cont_check
+  %113 = add i32 %103, 1
+  store i32 %113, ptr %i_cont, align 4
+  br label %cont_loop
+
+cont_loop42:                                      ; preds = %cont_next49, %cont_end
+  %114 = load i32, ptr %i_cont46, align 4
+  %115 = icmp slt i32 %114, %111
+  br i1 %115, label %cont_check43, label %cont_end45
+
+cont_check43:                                     ; preds = %cont_loop42
+  %116 = getelementptr inbounds ptr, ptr %112, i32 %114
+  %117 = load ptr, ptr %116, align 8
+  %118 = call i32 @strcmp(ptr @21, ptr %117)
+  %str_eq48 = icmp eq i32 %118, 0
+  br i1 %str_eq48, label %cont_found44, label %cont_next49
+
+cont_found44:                                     ; preds = %cont_check43
+  store i1 true, ptr %res_cont47, align 1
+  br label %cont_end45
+
+cont_end45:                                       ; preds = %cont_found44, %cont_loop42
+  %119 = load i1, ptr %res_cont47, align 1
+  %120 = select i1 %119, ptr @22, ptr @23
+  %121 = call ptr @__aiml_str_concat(ptr @20, ptr %120)
+  %print_null_check50 = icmp eq ptr %121, null
+  %print_safe_str51 = select i1 %print_null_check50, ptr @print_null_str.6, ptr %121
+  %print_call52 = call i32 (ptr, ...) @printf(ptr @24, ptr %print_safe_str51)
+  %122 = call ptr @__aiml_int_to_string(i32 30)
+  %123 = call ptr @__aiml_str_concat(ptr @25, ptr %122)
+  %print_null_check53 = icmp eq ptr %123, null
+  %print_safe_str54 = select i1 %print_null_check53, ptr @print_null_str.7, ptr %123
+  %print_call55 = call i32 (ptr, ...) @printf(ptr @26, ptr %print_safe_str54)
   call void @exit(i32 0)
   ret void
 
-rm_next:                                          ; preds = %rm_check
-  %170 = add i32 %101, 1
-  store i32 %170, ptr %i_rm, align 4
-  br label %rm_loop
+cont_next49:                                      ; preds = %cont_check43
+  %124 = add i32 %114, 1
+  store i32 %124, ptr %i_cont46, align 4
+  br label %cont_loop42
 }
 
 declare ptr @calloc(i64, i64)
@@ -400,326 +407,41 @@ declare i32 @strcmp(ptr, ptr)
 
 declare ptr @realloc(ptr, i64)
 
+declare i32 @sprintf(ptr, ptr, ...)
+
+; Function Attrs: noinline
+define internal ptr @__aiml_int_to_string(i32 %0) #0 {
+entry:
+  %1 = call ptr @malloc(i64 12)
+  %2 = call i32 (ptr, ptr, ...) @sprintf(ptr %1, ptr @fmt_d, i32 %0)
+  ret ptr %1
+}
+
 declare i64 @strlen(ptr)
 
 declare ptr @strcpy(ptr, ptr)
 
 declare ptr @strcat(ptr, ptr)
 
-declare i32 @sprintf(ptr, ptr, ...)
+; Function Attrs: noinline
+define internal ptr @__aiml_str_concat(ptr %0, ptr %1) #0 {
+entry:
+  %2 = icmp eq ptr %0, null
+  %3 = select i1 %2, ptr @empty, ptr %0
+  %4 = icmp eq ptr %1, null
+  %5 = select i1 %4, ptr @empty, ptr %1
+  %6 = call i64 @strlen(ptr %3)
+  %7 = call i64 @strlen(ptr %5)
+  %8 = add i64 %6, %7
+  %9 = add i64 %8, 1
+  %10 = call ptr @malloc(i64 %9)
+  %11 = call ptr @strcpy(ptr %10, ptr %3)
+  %12 = call ptr @strcat(ptr %10, ptr %5)
+  ret ptr %10
+}
 
 declare ptr @memmove(ptr, ptr, i64)
 
 declare void @exit(i32)
 
-define i32 @main(i32 %argc, ptr %argv) {
-entry:
-  store i32 %argc, ptr @__argc, align 4
-  store ptr %argv, ptr @__argv, align 8
-  call void @__aiml_init()
-  ret i32 0
-}
-
-define void @__aiml_init.1() {
-entry:
-  %scores = alloca %map_string_i32, align 8
-  store %map_string_i32 zeroinitializer, ptr %scores, align 8
-  %sizePtr = getelementptr inbounds { i32, i32, ptr, ptr, ptr }, ptr %scores, i32 0, i32 0
-  store i32 0, ptr %sizePtr, align 4
-  %capPtr = getelementptr inbounds { i32, i32, ptr, ptr, ptr }, ptr %scores, i32 0, i32 1
-  store i32 4, ptr %capPtr, align 4
-  %0 = call ptr @calloc(i64 4, i64 1)
-  %occPtr = getelementptr inbounds { i32, i32, ptr, ptr, ptr }, ptr %scores, i32 0, i32 2
-  store ptr %0, ptr %occPtr, align 8
-  %1 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), i64 4))
-  %keysPtr = getelementptr inbounds { i32, i32, ptr, ptr, ptr }, ptr %scores, i32 0, i32 3
-  store ptr %1, ptr %keysPtr, align 8
-  %2 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (i32, ptr null, i32 1) to i64), i64 4))
-  %valsPtr = getelementptr inbounds { i32, i32, ptr, ptr, ptr }, ptr %scores, i32 0, i32 4
-  store ptr %2, ptr %valsPtr, align 8
-  %print_call = call i32 (ptr, ...) @printf(ptr @41, ptr @39)
-  %sizePtr1 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 0
-  %capPtr2 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 1
-  %size = load i32, ptr %sizePtr1, align 4
-  %capacity = load i32, ptr %capPtr2, align 4
-  %3 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 3
-  %keysBase = load ptr, ptr %3, align 8
-  %4 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 4
-  %valsBase = load ptr, ptr %4, align 8
-  %i_put = alloca i32, align 4
-  store i32 0, ptr %i_put, align 4
-  br label %put_loop
-
-put_loop:                                         ; preds = %put_next, %entry
-  %5 = load i32, ptr %i_put, align 4
-  %6 = icmp slt i32 %5, %size
-  br i1 %6, label %put_check, label %put_not_found
-
-put_check:                                        ; preds = %put_loop
-  %7 = getelementptr inbounds ptr, ptr %keysBase, i32 %5
-  %8 = load ptr, ptr %7, align 8
-  %9 = call i32 @strcmp(ptr @42, ptr %8)
-  %str_eq = icmp eq i32 %9, 0
-  br i1 %str_eq, label %put_found, label %put_next
-
-put_found:                                        ; preds = %put_check
-  %10 = getelementptr inbounds i32, ptr %valsBase, i32 %5
-  store i32 100, ptr %10, align 4
-  br label %put_end
-
-put_next:                                         ; preds = %put_check
-  %11 = add i32 %5, 1
-  store i32 %11, ptr %i_put, align 4
-  br label %put_loop
-
-put_not_found:                                    ; preds = %put_loop
-  %12 = icmp eq i32 %size, %capacity
-  br i1 %12, label %put_grow, label %put_append
-
-put_end:                                          ; preds = %put_append, %put_found
-  %sizePtr3 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 0
-  %capPtr4 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 1
-  %size5 = load i32, ptr %sizePtr3, align 4
-  %capacity6 = load i32, ptr %capPtr4, align 4
-  %13 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 3
-  %keysBase7 = load ptr, ptr %13, align 8
-  %14 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 4
-  %valsBase8 = load ptr, ptr %14, align 8
-  %i_put15 = alloca i32, align 4
-  store i32 0, ptr %i_put15, align 4
-  br label %put_loop9
-
-put_grow:                                         ; preds = %put_not_found
-  %15 = mul i32 %capacity, 2
-  store i32 %15, ptr %capPtr2, align 4
-  %16 = zext i32 %15 to i64
-  %17 = mul i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), %16
-  %18 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 3
-  %19 = load ptr, ptr %18, align 8
-  %20 = call ptr @realloc(ptr %19, i64 %17)
-  store ptr %20, ptr %18, align 8
-  %21 = zext i32 %15 to i64
-  %22 = mul i64 ptrtoint (ptr getelementptr inbounds (i32, ptr null, i32 1) to i64), %21
-  %23 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 4
-  %24 = load ptr, ptr %23, align 8
-  %25 = call ptr @realloc(ptr %24, i64 %22)
-  store ptr %25, ptr %23, align 8
-  br label %put_append
-
-put_append:                                       ; preds = %put_grow, %put_not_found
-  %26 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 3
-  %27 = load ptr, ptr %26, align 8
-  %28 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 4
-  %29 = load ptr, ptr %28, align 8
-  %30 = getelementptr inbounds ptr, ptr %27, i32 %size
-  store ptr @42, ptr %30, align 8
-  %31 = getelementptr inbounds i32, ptr %29, i32 %size
-  store i32 100, ptr %31, align 4
-  %32 = add i32 %size, 1
-  store i32 %32, ptr %sizePtr1, align 4
-  br label %put_end
-
-put_loop9:                                        ; preds = %put_next12, %put_end
-  %33 = load i32, ptr %i_put15, align 4
-  %34 = icmp slt i32 %33, %size5
-  br i1 %34, label %put_check10, label %put_not_found13
-
-put_check10:                                      ; preds = %put_loop9
-  %35 = getelementptr inbounds ptr, ptr %keysBase7, i32 %33
-  %36 = load ptr, ptr %35, align 8
-  %37 = call i32 @strcmp(ptr @43, ptr %36)
-  %str_eq16 = icmp eq i32 %37, 0
-  br i1 %str_eq16, label %put_found11, label %put_next12
-
-put_found11:                                      ; preds = %put_check10
-  %38 = getelementptr inbounds i32, ptr %valsBase8, i32 %33
-  store i32 200, ptr %38, align 4
-  br label %put_end14
-
-put_next12:                                       ; preds = %put_check10
-  %39 = add i32 %33, 1
-  store i32 %39, ptr %i_put15, align 4
-  br label %put_loop9
-
-put_not_found13:                                  ; preds = %put_loop9
-  %40 = icmp eq i32 %size5, %capacity6
-  br i1 %40, label %put_grow17, label %put_append18
-
-put_end14:                                        ; preds = %put_append18, %put_found11
-  %41 = call i64 @strlen(ptr @44)
-  %42 = call i64 @strlen(ptr @45)
-  %43 = add i64 %41, %42
-  %44 = add i64 %43, 1
-  %45 = call ptr @malloc(i64 %44)
-  %46 = call ptr @strcpy(ptr %45, ptr @44)
-  %47 = call ptr @strcat(ptr %45, ptr @45)
-  %48 = call i64 @strlen(ptr %45)
-  %49 = call i64 @strlen(ptr @46)
-  %50 = add i64 %48, %49
-  %51 = add i64 %50, 1
-  %52 = call ptr @malloc(i64 %51)
-  %53 = call ptr @strcpy(ptr %52, ptr %45)
-  %54 = call ptr @strcat(ptr %52, ptr @46)
-  %print_call19 = call i32 (ptr, ...) @printf(ptr @48, ptr %52)
-  %55 = call i64 @strlen(ptr @49)
-  %56 = call i64 @strlen(ptr @50)
-  %57 = add i64 %55, %56
-  %58 = add i64 %57, 1
-  %59 = call ptr @malloc(i64 %58)
-  %60 = call ptr @strcpy(ptr %59, ptr @49)
-  %61 = call ptr @strcat(ptr %59, ptr @50)
-  %62 = call i64 @strlen(ptr %59)
-  %63 = call i64 @strlen(ptr @51)
-  %64 = add i64 %62, %63
-  %65 = add i64 %64, 1
-  %66 = call ptr @malloc(i64 %65)
-  %67 = call ptr @strcpy(ptr %66, ptr %59)
-  %68 = call ptr @strcat(ptr %66, ptr @51)
-  %print_call20 = call i32 (ptr, ...) @printf(ptr @53, ptr %66)
-  %sizePtr21 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 0
-  %size_val = load i32, ptr %sizePtr21, align 4
-  %69 = call ptr @malloc(i64 12)
-  %70 = call i32 (ptr, ptr, ...) @sprintf(ptr %69, ptr @55, i32 %size_val)
-  %71 = call i64 @strlen(ptr @54)
-  %72 = call i64 @strlen(ptr %69)
-  %73 = add i64 %71, %72
-  %74 = add i64 %73, 1
-  %75 = call ptr @malloc(i64 %74)
-  %76 = call ptr @strcpy(ptr %75, ptr @54)
-  %77 = call ptr @strcat(ptr %75, ptr %69)
-  %print_call22 = call i32 (ptr, ...) @printf(ptr @57, ptr %75)
-  %sizePtr23 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 0
-  %78 = load i32, ptr %sizePtr23, align 4
-  %79 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 3
-  %80 = load ptr, ptr %79, align 8
-  %81 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 4
-  %82 = load ptr, ptr %81, align 8
-  %i_rm = alloca i32, align 4
-  store i32 0, ptr %i_rm, align 4
-  br label %rm_loop
-
-put_grow17:                                       ; preds = %put_not_found13
-  %83 = mul i32 %capacity6, 2
-  store i32 %83, ptr %capPtr4, align 4
-  %84 = zext i32 %83 to i64
-  %85 = mul i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), %84
-  %86 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 3
-  %87 = load ptr, ptr %86, align 8
-  %88 = call ptr @realloc(ptr %87, i64 %85)
-  store ptr %88, ptr %86, align 8
-  %89 = zext i32 %83 to i64
-  %90 = mul i64 ptrtoint (ptr getelementptr inbounds (i32, ptr null, i32 1) to i64), %89
-  %91 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 4
-  %92 = load ptr, ptr %91, align 8
-  %93 = call ptr @realloc(ptr %92, i64 %90)
-  store ptr %93, ptr %91, align 8
-  br label %put_append18
-
-put_append18:                                     ; preds = %put_grow17, %put_not_found13
-  %94 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 3
-  %95 = load ptr, ptr %94, align 8
-  %96 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 4
-  %97 = load ptr, ptr %96, align 8
-  %98 = getelementptr inbounds ptr, ptr %95, i32 %size5
-  store ptr @43, ptr %98, align 8
-  %99 = getelementptr inbounds i32, ptr %97, i32 %size5
-  store i32 200, ptr %99, align 4
-  %100 = add i32 %size5, 1
-  store i32 %100, ptr %sizePtr3, align 4
-  br label %put_end14
-
-rm_loop:                                          ; preds = %rm_next, %put_end14
-  %101 = load i32, ptr %i_rm, align 4
-  %102 = icmp slt i32 %101, %78
-  br i1 %102, label %rm_check, label %rm_end
-
-rm_check:                                         ; preds = %rm_loop
-  %103 = getelementptr inbounds ptr, ptr %80, i32 %101
-  %104 = load ptr, ptr %103, align 8
-  %105 = call i32 @strcmp(ptr @58, ptr %104)
-  %str_eq24 = icmp eq i32 %105, 0
-  br i1 %str_eq24, label %rm_found, label %rm_next
-
-rm_found:                                         ; preds = %rm_check
-  %106 = add i32 %101, 1
-  %107 = sub i32 %78, %106
-  %108 = getelementptr inbounds ptr, ptr %80, i32 %101
-  %109 = getelementptr inbounds ptr, ptr %80, i32 %106
-  %110 = zext i32 %107 to i64
-  %111 = mul i64 %110, ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64)
-  %112 = call ptr @memmove(ptr %108, ptr %109, i64 %111)
-  %113 = getelementptr inbounds %map_string_i32, ptr %82, i32 %101
-  %114 = getelementptr inbounds %map_string_i32, ptr %82, i32 %106
-  %115 = zext i32 %107 to i64
-  %116 = mul i64 %115, ptrtoint (ptr getelementptr inbounds (%map_string_i32, ptr null, i32 1) to i64)
-  %117 = call ptr @memmove(ptr %113, ptr %114, i64 %116)
-  %118 = sub i32 %78, 1
-  store i32 %118, ptr %sizePtr23, align 4
-  br label %rm_end
-
-rm_end:                                           ; preds = %rm_found, %rm_loop
-  %sizePtr25 = getelementptr inbounds %map_string_i32, ptr %scores, i32 0, i32 0
-  %size_val26 = load i32, ptr %sizePtr25, align 4
-  %119 = call ptr @malloc(i64 12)
-  %120 = call i32 (ptr, ptr, ...) @sprintf(ptr %119, ptr @60, i32 %size_val26)
-  %121 = call i64 @strlen(ptr @59)
-  %122 = call i64 @strlen(ptr %119)
-  %123 = add i64 %121, %122
-  %124 = add i64 %123, 1
-  %125 = call ptr @malloc(i64 %124)
-  %126 = call ptr @strcpy(ptr %125, ptr @59)
-  %127 = call ptr @strcat(ptr %125, ptr %119)
-  %print_call27 = call i32 (ptr, ...) @printf(ptr @62, ptr %125)
-  %128 = call i64 @strlen(ptr @63)
-  %129 = call i64 @strlen(ptr @64)
-  %130 = add i64 %128, %129
-  %131 = add i64 %130, 1
-  %132 = call ptr @malloc(i64 %131)
-  %133 = call ptr @strcpy(ptr %132, ptr @63)
-  %134 = call ptr @strcat(ptr %132, ptr @64)
-  %135 = call i64 @strlen(ptr %132)
-  %136 = call i64 @strlen(ptr @65)
-  %137 = add i64 %135, %136
-  %138 = add i64 %137, 1
-  %139 = call ptr @malloc(i64 %138)
-  %140 = call ptr @strcpy(ptr %139, ptr %132)
-  %141 = call ptr @strcat(ptr %139, ptr @65)
-  %print_call28 = call i32 (ptr, ...) @printf(ptr @67, ptr %139)
-  %142 = call i64 @strlen(ptr @68)
-  %143 = call i64 @strlen(ptr @69)
-  %144 = add i64 %142, %143
-  %145 = add i64 %144, 1
-  %146 = call ptr @malloc(i64 %145)
-  %147 = call ptr @strcpy(ptr %146, ptr @68)
-  %148 = call ptr @strcat(ptr %146, ptr @69)
-  %149 = call i64 @strlen(ptr %146)
-  %150 = call i64 @strlen(ptr @70)
-  %151 = add i64 %149, %150
-  %152 = add i64 %151, 1
-  %153 = call ptr @malloc(i64 %152)
-  %154 = call ptr @strcpy(ptr %153, ptr %146)
-  %155 = call ptr @strcat(ptr %153, ptr @70)
-  %print_call29 = call i32 (ptr, ...) @printf(ptr @72, ptr %153)
-  %156 = call i64 @strlen(ptr @73)
-  %157 = call i64 @strlen(ptr @74)
-  %158 = add i64 %156, %157
-  %159 = add i64 %158, 1
-  %160 = call ptr @malloc(i64 %159)
-  %161 = call ptr @strcpy(ptr %160, ptr @73)
-  %162 = call ptr @strcat(ptr %160, ptr @74)
-  %163 = call i64 @strlen(ptr %160)
-  %164 = call i64 @strlen(ptr @75)
-  %165 = add i64 %163, %164
-  %166 = add i64 %165, 1
-  %167 = call ptr @malloc(i64 %166)
-  %168 = call ptr @strcpy(ptr %167, ptr %160)
-  %169 = call ptr @strcat(ptr %167, ptr @75)
-  %print_call30 = call i32 (ptr, ...) @printf(ptr @77, ptr %167)
-  call void @exit(i32 0)
-  ret void
-
-rm_next:                                          ; preds = %rm_check
-  %170 = add i32 %101, 1
-  store i32 %170, ptr %i_rm, align 4
-  br label %rm_loop
-}
+attributes #0 = { noinline }

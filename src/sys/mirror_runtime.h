@@ -73,6 +73,21 @@ void aiml_mirror_session_set_rpc_target (void* session, void* obj, const char* m
  * arg is a single i32 (v1 limitation). */
 void    aiml_mirror_session_send_rpc(void* session, int32_t net_id, const char* method, int32_t arg);
 
+/* Send an RPC whose payload is a typed model instance encoded via aiml_ser_encode.
+ * `obj`     — pointer to the model struct (caller-owned).
+ * `nodes/n` — model schema (e.g. __aiml_sernodes_<Type>). */
+void    aiml_mirror_session_send_rpc_model(void* session, int32_t net_id,
+                                           const char* method, int32_t arg_i32,
+                                           const void* obj,
+                                           const AimlTypeNode* nodes,
+                                           int32_t n_nodes);
+
+/* Decode a received typed-RPC payload into a caller-allocated, zero-initialised
+ * struct. Heap fields inside the decoded struct must be released with
+ * aiml_ser_free_decoded() when no longer needed. Returns 0 on success, -1 on error. */
+int32_t aiml_rpc_event_decode_into(void* ev, void* out,
+                                   const AimlTypeNode* nodes, int32_t n_nodes);
+
 /* Host: poll pending RPC calls (PKT_RPC received from peers) */
 int32_t aiml_mirror_session_has_rpc (void* session);
 /* Returns AimlRpcEvent* — caller owns the pointer, must not be freed (freed on session close) */

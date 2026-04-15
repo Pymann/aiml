@@ -1,0 +1,259 @@
+# 9rooms real-type mirror probe: import actual models + shared GameView,
+# then sync events/trigger/reaction fields over websocket mirror.
+# Extended to cover both in-place mutation of existing list elements and later push operations.
+# Expected exit code: 0
+
+- import: "/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/9rooms/models/models.aiml"
+- import: "/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/9rooms/shared/game_view.aiml"
+
+- def:
+    name: mirror_ws_9rooms_gameview_host
+    args: []
+    body:
+      - decl: [sess, mirror_session]
+      - set: [sess, { call: [mirror.listen, "ws://127.0.0.1:19912"] }]
+      - decl: [v, GameView]
+
+      - decl: [events, list<GameEventView>]
+      - decl: [triggers, list<TriggerEventView>]
+      - decl: [reactables, list<TriggerEventView>]
+      - set: [v.events, events]
+      - set: [v.active_triggers, triggers]
+      - set: [v.reactable_triggers, reactables]
+
+      - decl: [ge0, GameEventView]
+      - set: [ge0.seq, 0]
+      - set: [ge0.kind, "phase_start"]
+      - set: [ge0.text, "Round start"]
+      - set: [ge0.actor_slot, 0]
+      - set: [ge0.phase, 1]
+      - set: [ge0.round, 1]
+      - set: [ge0.source_iid, "src-1"]
+      - set: [ge0.target_iid, "tgt-1"]
+      - call: [v.events.push, ge0]
+      - set: [v.event_seq, 1]
+      - set: [v.event_count, 1]
+
+      - decl: [te0, TriggerEventView]
+      - set: [te0.seq, 0]
+      - set: [te0.trigger_code, 6]
+      - set: [te0.owner_slot, 0]
+      - set: [te0.source_iid, "src-1"]
+      - set: [te0.target_iid, "tgt-1"]
+      - set: [te0.phase, 1]
+      - set: [te0.round, 1]
+      - set: [te0.counterable, 1]
+      - set: [te0.resolved, 0]
+      - set: [te0.expired, 0]
+      - set: [te0.text, "On draw"]
+      - call: [v.active_triggers.push, te0]
+      - call: [v.reactable_triggers.push, te0]
+      - set: [v.trigger_seq_counter, 1]
+      - set: [v.active_trigger_count, 1]
+
+      - set: [v.reaction_state.window_open, 1]
+      - set: [v.reaction_state.react_player_mask, 3]
+      - set: [v.reaction_state.window_kind, "card_played"]
+      - set: [v.reaction_state.window_prompt, "Respond"]
+      - set: [v.reaction_state.window_ms, 900]
+      - set: [v.reaction_state.reactable_count, 1]
+      - set: [v.reaction_state.reactable_card_mask, "ci-1,ci-2"]
+
+      - decl: [nid, i32]
+      - set: [nid, { call: [sess.register, v] }]
+
+      - decl: [i, i32, 0]
+      - while:
+          condition: { lt: [i, 30] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+
+      - decl: [ge0_ptr, ptr<GameEventView>]
+      - set: [ge0_ptr, { call: [v.events.get, 0] }]
+      - set: [ge0_ptr.text, "Round start updated"]
+      - set: [ge0_ptr.target_iid, "tgt-1b"]
+
+      - decl: [at0_ptr, ptr<TriggerEventView>]
+      - set: [at0_ptr, { call: [v.active_triggers.get, 0] }]
+      - set: [at0_ptr.resolved, 1]
+      - set: [at0_ptr.text, "On draw resolved"]
+
+      - decl: [rt0_ptr, ptr<TriggerEventView>]
+      - set: [rt0_ptr, { call: [v.reactable_triggers.get, 0] }]
+      - set: [rt0_ptr.expired, 1]
+      - set: [rt0_ptr.text, "On draw expired"]
+
+      - set: [v.reaction_state.window_prompt, "Respond updated"]
+      - set: [v.reaction_state.reactable_card_mask, "ci-1"]
+
+      - set: [i, 0]
+      - while:
+          condition: { lt: [i, 25] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+
+      - decl: [ge1, GameEventView]
+      - set: [ge1.seq, 1]
+      - set: [ge1.kind, "card_played"]
+      - set: [ge1.text, "Card played"]
+      - set: [ge1.actor_slot, 1]
+      - set: [ge1.phase, 4]
+      - set: [ge1.round, 2]
+      - set: [ge1.source_iid, "src-2"]
+      - set: [ge1.target_iid, "tgt-2"]
+      - call: [v.events.push, ge1]
+      - set: [v.event_seq, 2]
+      - set: [v.event_count, 2]
+
+      - decl: [te1, TriggerEventView]
+      - set: [te1.seq, 1]
+      - set: [te1.trigger_code, 3]
+      - set: [te1.owner_slot, 1]
+      - set: [te1.source_iid, "src-2"]
+      - set: [te1.target_iid, "tgt-2"]
+      - set: [te1.phase, 4]
+      - set: [te1.round, 2]
+      - set: [te1.counterable, 1]
+      - set: [te1.resolved, 0]
+      - set: [te1.expired, 0]
+      - set: [te1.text, "On play"]
+      - call: [v.active_triggers.push, te1]
+      - call: [v.reactable_triggers.push, te1]
+      - set: [v.trigger_seq_counter, 2]
+      - set: [v.active_trigger_count, 2]
+
+      - set: [v.reaction_state.window_open, 0]
+      - set: [v.reaction_state.react_player_mask, 1]
+      - set: [v.reaction_state.window_kind, ""]
+      - set: [v.reaction_state.window_prompt, "Closed"]
+      - set: [v.reaction_state.window_ms, 0]
+      - set: [v.reaction_state.reactable_count, 2]
+      - set: [v.reaction_state.reactable_card_mask, "ci-3"]
+
+      - set: [i, 0]
+      - while:
+          condition: { lt: [i, 40] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+
+      - call: [sess.close]
+
+- decl: [host_th, thread_handle]
+- set: [host_th, { spawn: [mirror_ws_9rooms_gameview_host] }]
+- call: [time.sleep_ms, 80]
+
+- decl: [client, mirror_session]
+- set: [client, { call: [mirror.connect_timeout, "ws://127.0.0.1:19912", 4000] }]
+- call: [time.sleep_ms, 120]
+- call: [client.update]
+
+- decl: [ev, mirror_event]
+- set: [ev, { call: [client.next_event] }]
+- decl: [replica, GameView]
+- call: [client.register_id, replica, ev.net_id]
+
+- decl: [poll_i, i32, 0]
+- while:
+    condition: { lt: [poll_i, 50] }
+    body:
+      - call: [time.sleep_ms, 20]
+      - call: [client.update]
+      - set: [poll_i, { +: [poll_i, 1] }]
+
+- print: ["gv9: event_seq=${replica.event_seq} event_count=${replica.event_count} events.len=${replica.events.len} ev0='${replica.events-0.text}' trig_seq=${replica.trigger_seq_counter} active=${replica.active_trigger_count} active0_resolved=${replica.active_triggers-0.resolved} reactable0_expired=${replica.reactable_triggers-0.expired} react_prompt='${replica.reaction_state.window_prompt}' cards='${replica.reaction_state.reactable_card_mask}'"]
+
+- if:
+    condition: { neq: [replica.event_seq, 2] }
+    then:
+      - print: ["FAIL gv9: event_seq=${replica.event_seq}"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [replica.event_count, 2] }
+    then:
+      - print: ["FAIL gv9: event_count=${replica.event_count}"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [replica.events.len, 2] }
+    then:
+      - print: ["FAIL gv9: events.len=${replica.events.len}"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [replica.events-0.text, "Round start updated"] }
+    then:
+      - print: ["FAIL gv9: events-0.text='${replica.events-0.text}'"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [replica.events-0.target_iid, "tgt-1b"] }
+    then:
+      - print: ["FAIL gv9: events-0.target_iid='${replica.events-0.target_iid}'"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [replica.trigger_seq_counter, 2] }
+    then:
+      - print: ["FAIL gv9: trigger_seq_counter=${replica.trigger_seq_counter}"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [replica.active_trigger_count, 2] }
+    then:
+      - print: ["FAIL gv9: active_trigger_count=${replica.active_trigger_count}"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [replica.active_triggers.len, 2] }
+    then:
+      - print: ["FAIL gv9: active_triggers.len=${replica.active_triggers.len}"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [replica.active_triggers-0.resolved, 1] }
+    then:
+      - print: ["FAIL gv9: active_triggers-0.resolved=${replica.active_triggers-0.resolved}"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [replica.active_triggers-0.text, "On draw resolved"] }
+    then:
+      - print: ["FAIL gv9: active_triggers-0.text='${replica.active_triggers-0.text}'"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [replica.reactable_triggers.len, 2] }
+    then:
+      - print: ["FAIL gv9: reactable_triggers.len=${replica.reactable_triggers.len}"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [replica.reactable_triggers-0.expired, 1] }
+    then:
+      - print: ["FAIL gv9: reactable_triggers-0.expired=${replica.reactable_triggers-0.expired}"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [replica.reactable_triggers-0.text, "On draw expired"] }
+    then:
+      - print: ["FAIL gv9: reactable_triggers-0.text='${replica.reactable_triggers-0.text}'"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [replica.reaction_state.window_open, 0] }
+    then:
+      - print: ["FAIL gv9: reaction.window_open=${replica.reaction_state.window_open}"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [replica.reaction_state.react_player_mask, 1] }
+    then:
+      - print: ["FAIL gv9: reaction.react_player_mask=${replica.reaction_state.react_player_mask}"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [replica.reaction_state.window_prompt, "Closed"] }
+    then:
+      - print: ["FAIL gv9: reaction.window_prompt='${replica.reaction_state.window_prompt}'"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [replica.reaction_state.reactable_card_mask, "ci-3"] }
+    then:
+      - print: ["FAIL gv9: reaction.reactable_card_mask='${replica.reaction_state.reactable_card_mask}'"]
+      - call: [sys.exit, 1]
+
+- call: [client.close]
+- call: [host_th.join]
+- print: ["WS 9rooms GameView events PASS"]

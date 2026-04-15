@@ -193,7 +193,7 @@
 - print: ["vec4 lerp r: ${midr}"]
 
 # == operator (returns i8/bool)
-- decl: [eq, i8, { ==: [col, col] }]
+- decl: [eq, i8, { eq: [col, col] }]
 - print: ["vec4 eq self: ${eq}"]
 
 - print: ["Phase E: vec4 OK"]

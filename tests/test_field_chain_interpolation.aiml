@@ -1,0 +1,78 @@
+# Regression target: field/index chains inside string interpolation should work.
+# Expected exit code: 0
+
+- model:
+    name: ClientInfo
+    fields:
+      - [player_name, string]
+      - [deckset_id, string]
+
+- model:
+    name: HandCard
+    fields:
+      - [iid, string]
+      - [name, string]
+
+- model:
+    name: SessionState
+    fields:
+      - [client_info, ClientInfo]
+      - [hand, list<HandCard>]
+
+- def:
+    name: assert_line
+    args: [[label, string], [got, string], [want, string]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [got, want] }
+          else:
+            - print: ["FAIL ${label} got=${got} want=${want}"]
+            - call: [sys.exit, 1]
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [json, string, '{"__type":"SessionState","client_info":{"player_name":"Niko","deckset_id":"ds-fire"},"hand":[{"iid":"h-1","name":"Fire Bolt"},{"iid":"h-2","name":"Fire Trap"}]}' ]
+      - decl: [state, SessionState]
+      - set: [state, { call: [sys.deserialize, json, "SessionState"] }]
+
+      - decl: [player_line, string]
+      - set: [player_line, "player=${state.client_info.player_name}"]
+      - if:
+          condition: { eq: [player_line, "player=Niko"] }
+          else:
+            - print: ["FAIL player_line=${player_line}"]
+            - call: [sys.exit, 1]
+
+      - decl: [deck_line, string]
+      - set: [deck_line, "deck=${state.client_info.deckset_id}"]
+      - if:
+          condition: { eq: [deck_line, "deck=ds-fire"] }
+          else:
+            - print: ["FAIL deck_line=${deck_line}"]
+            - call: [sys.exit, 1]
+
+      - decl: [hand_line, string]
+      - set: [hand_line, "first=${state.hand-0.iid}:${state.hand-0.name}"]
+      - if:
+          condition: { eq: [hand_line, "first=h-1:Fire Bolt"] }
+          else:
+            - print: ["FAIL hand_line=${hand_line}"]
+            - call: [sys.exit, 1]
+
+      - decl: [count_line, string]
+      - set: [count_line, "count=${state.hand.len}"]
+      - if:
+          condition: { eq: [count_line, "count=2"] }
+          else:
+            - print: ["FAIL count_line=${count_line}"]
+            - call: [sys.exit, 1]
+
+      - call: [assert_line, "call_arg_player", "arg=${state.client_info.player_name}", "arg=Niko"]
+      - call: [assert_line, "call_arg_hand", "arg=${state.hand-1.iid}:${state.hand-1.name}", "arg=h-2:Fire Trap"]
+
+      - print: ["field chain interpolation PASS"]
+      - return: 0

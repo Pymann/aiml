@@ -30,8 +30,10 @@ private:
     void visitWhileStmt(WhileStmt* whileStmt);
     void visitTry(TryStmt* tryStmt);
     void visitThrow(ThrowStmt* throwStmt);
-    
+    void visitIdxStmt(IdxStmt* idx);
+
     IRValue* visitExpression(Expr* expr);
+    IRValue* visitAtExpr(AtExpr* at);
     IRValue* visitLiteral(LiteralExpr* lit);
     IRValue* visitVariable(VariableExpr* var);
     IRValue* visitCall(CallExpr* call);

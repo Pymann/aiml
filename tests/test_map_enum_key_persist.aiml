@@ -1,0 +1,74 @@
+# Regression test: typed persistent Kv with map<Enum:i32> keys.
+# Expected exit code: 0
+
+- enum:
+    name: ManaColor
+    values:
+      - fire: 1
+      - earth: 5
+
+- model:
+    name: ManaBag
+    fields:
+      - [name, string]
+      - [mana_cost, map<ManaColor:i32>]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [kv, Kv<string:ManaBag>]
+      - set: [kv, { call: [db.open_kv, "map_enum_key_persist", {persist: true, path: "/tmp/aiml_test_map_enum_key_persist/"}] }]
+
+      - decl: [bag, ManaBag]
+      - set: [bag.name, "enum-map"]
+      - call: [bag.mana_cost.put, ManaColor.fire, 2]
+      - call: [bag.mana_cost.put, ManaColor.earth, 7]
+
+      - decl: [pre_fire, i32, { call: [bag.mana_cost.get, ManaColor.fire] }]
+      - decl: [pre_earth, i32, { call: [bag.mana_cost.get, ManaColor.earth] }]
+      - if:
+          condition: { neq: [pre_fire, 2] }
+          then:
+            - print: ["FAIL pre_fire=${pre_fire}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { neq: [pre_earth, 7] }
+          then:
+            - print: ["FAIL pre_earth=${pre_earth}"]
+            - call: [sys.exit, 1]
+
+      - call: [kv.set, "bag", bag]
+
+      - decl: [got, ptr<ManaBag>]
+      - set: [got, { call: [kv.get, "bag"] }]
+      - if:
+          condition: { eq: [got, null] }
+          then:
+            - print: ["FAIL got=null"]
+            - call: [sys.exit, 1]
+
+      - if:
+          condition: { eq: [{ eq: [got.name, "enum-map"] }, 0] }
+          then:
+            - print: ["FAIL got.name=${got.name}"]
+            - call: [sys.exit, 1]
+
+      - decl: [fire_amt, i32, { call: [got.mana_cost.get, ManaColor.fire] }]
+      - decl: [earth_amt, i32, { call: [got.mana_cost.get, ManaColor.earth] }]
+
+      - if:
+          condition: { neq: [fire_amt, 2] }
+          then:
+            - print: ["FAIL fire_amt=${fire_amt}"]
+            - call: [sys.exit, 1]
+
+      - if:
+          condition: { neq: [earth_amt, 7] }
+          then:
+            - print: ["FAIL earth_amt=${earth_amt}"]
+            - call: [sys.exit, 1]
+
+      - call: [db.checkpoint]
+      - print: ["map enum key persist PASS"]
+      - return: 0

@@ -47,6 +47,10 @@ public:
     void pushState(std::unique_ptr<StateHandler> state);
     void popState();
 
+    // Current 1-based line in the AIML source (updated on every YAML event).
+    // State handlers can read this to record source locations on AST nodes.
+    int currentLine = 0;
+
     // YAML::EventHandler Overrides
     void OnDocumentStart(const YAML::Mark& mark) override {}
     void OnDocumentEnd() override {}

@@ -1,0 +1,167 @@
+# Regression test: mirror RPC can carry a typed model payload over WebSocket
+# Expected exit code: 0
+
+- model:
+    name: NetPlayer
+    sync: [health, score]
+    rpc: [cast]
+    fields:
+      - [health, i32]
+      - [score, i32]
+
+- model:
+    name: RpcCast
+    fields:
+      - [name, string]
+      - [amount, i32]
+      - [tags, list<string>]
+
+- def:
+    name: mirror_rpc_model_host
+    args: []
+    body:
+      - decl: [sess, mirror_session]
+      - set: [sess, { call: [mirror.listen, "ws://127.0.0.1:19902"] }]
+      - decl: [player, NetPlayer]
+      - set: [player.health, 40]
+      - set: [player.score, 0]
+      - decl: [nid, i32]
+      - set: [nid, { call: [sess.register, player] }]
+      - print: ["host-model: registered net_id=${nid}"]
+
+      - decl: [i, i32, 0]
+      - while:
+          condition: { lt: [i, 35] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+
+      - decl: [empty_rpc, rpc_event]
+      - set: [empty_rpc, { call: [sess.poll_rpc] }]
+      - if:
+          condition: { neq: [empty_rpc.method, ""] }
+          then:
+            - set: [player.score, 800]
+            - call: [sess.sync_now, player]
+
+      - set: [i, 0]
+      - while:
+          condition: { lt: [i, 50] }
+          body:
+            - call: [sess.update]
+            - if:
+                condition: { gt: [{ call: [sess.has_rpc] }, 0] }
+                then:
+                  - decl: [rpc_ev, rpc_event]
+                  - set: [rpc_ev, { call: [sess.next_rpc] }]
+                  - decl: [cast, RpcCast]
+                  - decl: [rc, i32, -1]
+                  - if:
+                      condition: { neq: [rpc_ev.arg_kind, 1] }
+                      then:
+                        - set: [player.score, 801]
+                      else:
+                        - if:
+                            condition: { neq: [rpc_ev.arg, 99] }
+                            then:
+                              - set: [player.score, 802]
+                            else:
+                              - if:
+                                  condition: { lt: [rpc_ev.arg_blob_len, 8] }
+                                  then:
+                                    - set: [player.score, 803]
+                                  else:
+                                    - set: [rc, { call: [sess.decode_rpc, rpc_ev, cast] }]
+                                    - if:
+                                        condition: { neq: [rc, 0] }
+                                        then:
+                                          - set: [player.score, 804]
+                                        else:
+                                          - if:
+                                              condition: { neq: [cast.name, "ember"] }
+                                              then:
+                                                - set: [player.score, 805]
+                                              else:
+                                                - if:
+                                                    condition: { neq: [cast.amount, 12] }
+                                                    then:
+                                                      - set: [player.score, 806]
+                                                    else:
+                                                      - if:
+                                                          condition: { neq: [cast.tags.len, 2] }
+                                                          then:
+                                                            - set: [player.score, 807]
+                                                          else:
+                                                            - if:
+                                                                condition: { neq: [cast.tags-0, "spell"] }
+                                                                then:
+                                                                  - set: [player.score, 808]
+                                                                else:
+                                                                  - if:
+                                                                      condition: { neq: [cast.tags-1, "fire"] }
+                                                                      then:
+                                                                        - set: [player.score, 809]
+                                                                      else:
+                                                                        - set: [player.health, { +: [player.health, cast.amount] }]
+                                                                        - set: [player.score, 888]
+                  - call: [sess.sync_now, player]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+
+      - call: [sess.close]
+
+- decl: [host_th, thread_handle]
+- set: [host_th, { spawn: [mirror_rpc_model_host] }]
+- call: [time.sleep_ms, 80]
+
+- decl: [client, mirror_session]
+- set: [client, { call: [mirror.connect_timeout, "ws://127.0.0.1:19902", 4000] }]
+- call: [time.sleep_ms, 120]
+- call: [client.update]
+
+- decl: [has_ev, i32]
+- set: [has_ev, { call: [client.has_event] }]
+- if:
+    condition: { eq: [has_ev, 0] }
+    then:
+      - print: ["FAIL model-rpc no object_registered event"]
+      - call: [sys.exit, 1]
+
+- decl: [ev, mirror_event]
+- set: [ev, { call: [client.next_event] }]
+- decl: [replica, NetPlayer]
+- call: [client.register_id, replica, ev.net_id]
+
+- decl: [cast, RpcCast]
+- set: [cast.name, "ember"]
+- set: [cast.amount, 12]
+- call: [cast.tags.push, "spell"]
+- call: [cast.tags.push, "fire"]
+
+- call: [time.sleep_ms, 150]
+- call: [client.update]
+- print: ["client-model: initial health=${replica.health} score=${replica.score}"]
+
+- call: [client.send_rpc, ev.net_id, "cast", 99, cast]
+- print: ["client-model: sent cast payload"]
+
+- call: [time.sleep_ms, 240]
+- call: [client.update]
+- print: ["client-model: final health=${replica.health} score=${replica.score}"]
+
+- if:
+    condition: { neq: [replica.health, 52] }
+    then:
+      - print: ["FAIL model-rpc health=${replica.health}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.score, 888] }
+    then:
+      - print: ["FAIL model-rpc score=${replica.score}"]
+      - call: [sys.exit, 1]
+
+- call: [client.close]
+- call: [host_th.join]
+- print: ["mirror rpc model ws PASS"]

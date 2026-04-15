@@ -1,0 +1,77 @@
+- model:
+    name: EventLite
+    fields:
+      - [seq, i32, 0]
+      - [text, string, ""]
+
+- class:
+    name: Holder
+    members:
+      - [events, list<EventLite>]
+      - [event_seq, i32]
+      - [event_count, i32]
+    methods:
+      - def:
+          name: push_like
+          args: [[text, string]]
+          return: i32
+          body:
+            - print: ["push_like start count=${<.event_count} seq=${<.event_seq}"]
+            - decl: [ev, EventLite]
+            - set: [ev.seq, <.event_seq]
+            - set: [ev.text, text]
+            - print: ["ev ready seq=${ev.seq} text=${ev.text}"]
+            - decl: [lst, list<EventLite>, <.events]
+            - print: ["local list acquired len=${lst.len}"]
+            - call: [lst.push, ev]
+            - print: ["after push len=${lst.len}"]
+            - set: [<.events, lst]
+            - print: ["after set events"]
+            - set: [<.event_count, {+: [<.event_count, 1]}]
+            - print: ["after set event_count=${<.event_count}"]
+            - set: [<.event_seq, {+: [<.event_seq, 1]}]
+            - print: ["after set event_seq=${<.event_seq}"]
+            - return: [<.event_count]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - print: ["test_class_list_struct_scalar_writeback START"]
+      - decl: [h, ptr<Holder>, {new: Holder}]
+      - set: [h.event_seq, 0]
+      - set: [h.event_count, 0]
+      - decl: [empty, list<EventLite>]
+      - set: [h.events, empty]
+      - print: ["holder initialized"]
+      - decl: [rc1, i32, {call: [h.push_like, "first"]}]
+      - print: ["rc1=${rc1}"]
+      - decl: [rc2, i32, {call: [h.push_like, "second"]}]
+      - print: ["rc2=${rc2}"]
+      - if:
+          condition: { neq: [h.event_count, 2]}
+          then:
+            - print: ["FAIL event_count=${h.event_count}"]
+            - return: [1]
+      - if:
+          condition: { neq: [h.event_seq, 2]}
+          then:
+            - print: ["FAIL event_seq=${h.event_seq}"]
+            - return: [1]
+      - if:
+          condition: { neq: [h.events.len, 2]}
+          then:
+            - print: ["FAIL events.len=${h.events.len}"]
+            - return: [1]
+      - if:
+          condition: { neq: [h.events-0.text, "first"]}
+          then:
+            - print: ["FAIL first=${h.events-0.text}"]
+            - return: [1]
+      - if:
+          condition: { neq: [h.events-1.text, "second"]}
+          then:
+            - print: ["FAIL second=${h.events-1.text}"]
+            - return: [1]
+      - print: ["test_class_list_struct_scalar_writeback PASS"]
+      - return: [0]

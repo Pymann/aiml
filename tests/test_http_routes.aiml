@@ -49,7 +49,7 @@
       - call: [get_resp.free]
 
       - if:
-          condition: { "==": [get_status, 200] }
+          condition: { eq: [get_status, 200] }
           then:
             - set: [pass, { +: [pass, 1] }]
           else:
@@ -57,7 +57,7 @@
             - set: [fail, { +: [fail, 1] }]
 
       - if:
-          condition: { "==": [get_body, "user:42"] }
+          condition: { eq: [get_body, "user:42"] }
           then:
             - set: [pass, { +: [pass, 1] }]
           else:
@@ -75,7 +75,7 @@
       - call: [post_resp.free]
 
       - if:
-          condition: { "==": [post_status, 201] }
+          condition: { eq: [post_status, 201] }
           then:
             - set: [pass, { +: [pass, 1] }]
           else:
@@ -83,7 +83,7 @@
             - set: [fail, { +: [fail, 1] }]
 
       - if:
-          condition: { "==": [post_body, "echo:deck-body"] }
+          condition: { eq: [post_body, "echo:deck-body"] }
           then:
             - set: [pass, { +: [pass, 1] }]
           else:

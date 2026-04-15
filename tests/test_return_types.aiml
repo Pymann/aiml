@@ -18,7 +18,7 @@
       - return: ["hello-return"]
 
 - decl: [n32, i32, { call: [ret_i32] }]
-- if: [{ "!=": [n32, 123] }, true]
+- if: [{ neq: [n32, 123] }, true]
   then:
     - print: ["FAIL i32: expected 123 got ${n32}"]
     - call: [sys.exit, 1]

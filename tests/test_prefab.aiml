@@ -81,7 +81,7 @@
       - set:  [card, { call: [engine.instantiate, "TestCard"] }]
 
       - if:
-          condition: { "==": [card, 0] }
+          condition: { eq: [card, 0] }
           then:
             - print: ["FAIL: instantiate returned null"]
             - return: ""
@@ -94,14 +94,14 @@
       - decl: [py, f32, { call: [card.get_y] }]
 
       - if:
-          condition: { "==": [px, 100.0] }
+          condition: { eq: [px, 100.0] }
           then:
             - print: ["PASS: get_x == 100"]
           else:
             - print: ["FAIL: get_x != 100"]
 
       - if:
-          condition: { "==": [py, 200.0] }
+          condition: { eq: [py, 200.0] }
           then:
             - print: ["PASS: get_y == 200"]
           else:
@@ -111,7 +111,7 @@
       - call: [card.set_scale, 1.5]
       - decl: [sc, f32, { call: [card.get_scale] }]
       - if:
-          condition: { "==": [sc, 1.5] }
+          condition: { eq: [sc, 1.5] }
           then:
             - print: ["PASS: get_scale == 1.5"]
           else:
@@ -121,7 +121,7 @@
       - call: [card.set_z, 10]
       - decl: [z, i32, { call: [card.get_z] }]
       - if:
-          condition: { "==": [z, 10] }
+          condition: { eq: [z, 10] }
           then:
             - print: ["PASS: get_z == 10"]
           else:
@@ -131,7 +131,7 @@
       - call: [card.set_visible, 0]
       - decl: [vis, i32, { call: [card.get_visible] }]
       - if:
-          condition: { "==": [vis, 0] }
+          condition: { eq: [vis, 0] }
           then:
             - print: ["PASS: get_visible == 0 after hide"]
           else:
@@ -143,7 +143,7 @@
       - call: [card.set_alpha, 0.5]
       - decl: [al, f32, { call: [card.get_alpha] }]
       - if:
-          condition: { "==": [al, 0.5] }
+          condition: { eq: [al, 0.5] }
           then:
             - print: ["PASS: get_alpha == 0.5"]
           else:
@@ -155,7 +155,7 @@
       - print: ["width=${w} height=${h}"]
       # width = 140 * 1.5 = 210, height = 196 * 1.5 = 294
       - if:
-          condition: { "==": [w, 210.0] }
+          condition: { eq: [w, 210.0] }
           then:
             - print: ["PASS: width == 210 (140*1.5)"]
           else:
@@ -177,7 +177,7 @@
       - decl: [zone, prefab_instance]
       - set:  [zone, { call: [engine.instantiate, "BoardZone"] }]
       - if:
-          condition: { "!=": [zone, 0] }
+          condition: { neq: [zone, 0] }
           then:
             - print: ["PASS: BoardZone instantiate"]
           else:
@@ -191,7 +191,7 @@
       - set:  [hit, { call: [engine.hit_test, 110.0, 210.0] }]
       # card is at (100, 200), size 210x294, so (110, 210) should hit it
       - if:
-          condition: { "!=": [hit, 0] }
+          condition: { neq: [hit, 0] }
           then:
             - print: ["PASS: hit_test found instance"]
           else:
@@ -200,7 +200,7 @@
       # Test hit_test miss
       - set:  [hit, { call: [engine.hit_test, 0.0, 0.0] }]
       - if:
-          condition: { "==": [hit, 0] }
+          condition: { eq: [hit, 0] }
           then:
             - print: ["PASS: hit_test miss returns null"]
           else:
@@ -219,7 +219,7 @@
       - decl: [drag, prefab_instance]
       - set:  [drag, { call: [engine.get_dragged] }]
       - if:
-          condition: { "==": [drag, 0] }
+          condition: { eq: [drag, 0] }
           then:
             - print: ["PASS: get_dragged == null"]
           else:

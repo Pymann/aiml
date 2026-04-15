@@ -9,7 +9,7 @@
 - call: [inc_counter]
 - decl: [c, i32, { call: [get_counter] }]
 - if:
-    condition: { "==": [c, 3] }
+    condition: { eq: [c, 3] }
     then:
       - print: ["AOT_IMPORT_PASS"]
     else:

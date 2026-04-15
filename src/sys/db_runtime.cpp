@@ -41,10 +41,14 @@ struct AimlStore {
     int64_t     elem_size = 0;
     int32_t     total     = 0;   // used slots
     int32_t     count     = 0;   // active slots
+    const AimlTypeNode* ser_nodes = nullptr;
+    int32_t             ser_n     = 0;
+    bool                typed_persistent = false;
 
     // ── In-Memory mode (default) ──────────────────────────────────────────────
     std::vector<uint8_t> mem_data;
     std::vector<uint8_t> mem_active;
+    std::vector<std::vector<uint8_t>> decoded_slots;
 
     // ── Persistent mode (WAL + mmap) ─────────────────────────────────────────
     bool     persistent = false;
@@ -85,6 +89,11 @@ struct AimlVecStore {
     int32_t dims;
     std::vector<std::string>        ids;
     std::vector<std::vector<float>> embeddings;
+    // Persist fields
+    bool        persistent = false;
+    int         wal_fd     = -1;
+    std::string wal_path;
+    std::mutex  mtx;
 };
 
 struct AimlVecResult {
@@ -166,10 +175,58 @@ static bool store_mmap_extend(AimlStore* s, int32_t new_capacity) {
 
 static void store_wal_write(AimlStore* s, uint8_t op, int32_t id, const void* data) {
     if (s->wal_fd < 0) return;
+    char* blob = nullptr;
+    uint32_t total_blob = 0;
+    if (op == WAL_INSERT && data && s->typed_persistent && s->ser_nodes) {
+        blob = aiml_ser_encode(data, s->ser_nodes, s->ser_n);
+        if (!blob) return;
+        int32_t blob_len = 0;
+        memcpy(&blob_len, blob, 4);
+        total_blob = (uint32_t)(4 + blob_len);
+    }
     write(s->wal_fd, &op, 1);
     write(s->wal_fd, &id, 4);
-    if (op == WAL_INSERT && data)
-        write(s->wal_fd, data, (size_t)s->elem_size);
+    if (op == WAL_INSERT && data) {
+        if (blob) {
+            write(s->wal_fd, &total_blob, 4);
+            write(s->wal_fd, blob, total_blob);
+            free(blob);
+        } else {
+            write(s->wal_fd, data, (size_t)s->elem_size);
+        }
+    }
+}
+
+static void store_typed_free_slot(AimlStore* s, int32_t idx) {
+    if (!s || !s->typed_persistent || !s->ser_nodes || idx < 0) return;
+    if (idx >= (int32_t)s->decoded_slots.size()) return;
+    auto& slot = s->decoded_slots[(size_t)idx];
+    if (slot.empty()) return;
+    aiml_ser_free_decoded(slot.data(), s->ser_nodes, s->ser_n);
+    slot.clear();
+}
+
+static bool store_typed_assign_blob(AimlStore* s, int32_t idx, const char* blob) {
+    if (!s || !s->typed_persistent || !s->ser_nodes || idx < 0 || !blob) return false;
+    if ((int32_t)s->decoded_slots.size() <= idx) s->decoded_slots.resize((size_t)idx + 1);
+    if ((int32_t)s->mem_active.size() <= idx) s->mem_active.resize((size_t)idx + 1, 0);
+    store_typed_free_slot(s, idx);
+    auto& slot = s->decoded_slots[(size_t)idx];
+    slot.assign((size_t)s->elem_size, 0);
+    if (aiml_ser_decode(blob, slot.data(), s->ser_nodes, s->ser_n) != 0) {
+        slot.clear();
+        return false;
+    }
+    return true;
+}
+
+static bool store_typed_assign_value(AimlStore* s, int32_t idx, const void* elem) {
+    if (!s || !elem) return false;
+    char* blob = aiml_ser_encode(elem, s->ser_nodes, s->ser_n);
+    if (!blob) return false;
+    bool ok = store_typed_assign_blob(s, idx, blob);
+    free(blob);
+    return ok;
 }
 
 static bool store_wal_replay(AimlStore* s) {
@@ -183,20 +240,37 @@ static bool store_wal_replay(AimlStore* s) {
         int32_t idx = id - 1;
 
         if (op == WAL_INSERT) {
-            std::vector<uint8_t> buf((size_t)s->elem_size);
-            if (read(s->wal_fd, buf.data(), (size_t)s->elem_size) != (ssize_t)s->elem_size) break;
+            if (s->typed_persistent && s->ser_nodes) {
+                uint32_t blob_bytes = 0;
+                if (read(s->wal_fd, &blob_bytes, 4) != 4) break;
+                std::vector<char> blob(blob_bytes);
+                if (blob_bytes > 0 &&
+                    (uint32_t)read(s->wal_fd, blob.data(), blob_bytes) != blob_bytes) break;
+                if (!store_typed_assign_blob(s, idx, blob.data())) return false;
+                if (!s->mem_active[(size_t)idx]) { s->mem_active[(size_t)idx] = 1; s->count++; }
+                if (id > s->total) s->total = id;
+            } else {
+                std::vector<uint8_t> buf((size_t)s->elem_size);
+                if (read(s->wal_fd, buf.data(), (size_t)s->elem_size) != (ssize_t)s->elem_size) break;
 
-            if (idx >= s->capacity) {
-                int32_t nc = std::max((int32_t)16, s->capacity > 0 ? s->capacity * 2 : 16);
-                while (nc <= idx) nc *= 2;
-                if (!store_mmap_extend(s, nc)) return false;
+                if (idx >= s->capacity) {
+                    int32_t nc = std::max((int32_t)16, s->capacity > 0 ? s->capacity * 2 : 16);
+                    while (nc <= idx) nc *= 2;
+                    if (!store_mmap_extend(s, nc)) return false;
+                }
+                memcpy(s->data_ptr + (size_t)idx * s->elem_size, buf.data(), (size_t)s->elem_size);
+                if (!s->active_ptr[idx]) { s->active_ptr[idx] = 1; s->count++; }
+                if (id > s->total) s->total = id;
             }
-            memcpy(s->data_ptr + (size_t)idx * s->elem_size, buf.data(), (size_t)s->elem_size);
-            if (!s->active_ptr[idx]) { s->active_ptr[idx] = 1; s->count++; }
-            if (id > s->total) s->total = id;
 
         } else if (op == WAL_DELETE) {
-            if (idx >= 0 && idx < s->capacity && s->active_ptr[idx]) {
+            if (s->typed_persistent && s->ser_nodes) {
+                if (idx >= 0 && idx < (int32_t)s->mem_active.size() && s->mem_active[(size_t)idx]) {
+                    store_typed_free_slot(s, idx);
+                    s->mem_active[(size_t)idx] = 0;
+                    s->count--;
+                }
+            } else if (idx >= 0 && idx < s->capacity && s->active_ptr[idx]) {
                 s->active_ptr[idx] = 0;
                 s->count--;
             }
@@ -216,11 +290,13 @@ static std::mutex                      g_db_mutex;
 static std::vector<AimlStore*>         g_persistent_stores;
 static std::vector<AimlKv*>            g_persistent_kvs;
 static std::vector<AimlTimeSeries*>    g_persistent_ts;
+static std::vector<AimlVecStore*>      g_persistent_vecs;
 
 // Global name-based registries: base_path+name → open handle (singleton reuse)
 static std::unordered_map<std::string, AimlStore*>      g_persistent_stores_by_name;
 static std::unordered_map<std::string, AimlKv*>         g_persistent_kvs_by_name;
 static std::unordered_map<std::string, AimlTimeSeries*> g_persistent_ts_by_name;
+static std::unordered_map<std::string, AimlVecStore*>   g_persistent_vecs_by_name;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Column Layout helpers
@@ -354,6 +430,45 @@ extern "C" void* aiml_db_store_open_persist(const char* name, const char* type_n
     return s;
 }
 
+extern "C" void* aiml_db_store_open_typed_persist(const char* name, const char* type_name,
+                                                    int64_t elem_size, const char* base_path,
+                                                    const AimlTypeNode* nodes, int32_t n_nodes) {
+    std::string dir = base_path ? base_path : "./aiondb/";
+    if (!dir.empty() && dir.back() != '/') dir += '/';
+    std::string nm = name ? name : "store";
+    std::string registry_key = dir + nm;
+
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    auto it = g_persistent_stores_by_name.find(registry_key);
+    if (it != g_persistent_stores_by_name.end()) return it->second;
+
+    mkdir(dir.c_str(), 0755);
+    AimlStore* s = new AimlStore();
+    s->type_name = type_name ? type_name : "";
+    s->elem_size = elem_size;
+    s->persistent = true;
+    s->typed_persistent = true;
+    s->ser_nodes = nodes;
+    s->ser_n = n_nodes;
+
+    std::string wal_path = dir + nm + ".wal";
+    s->wal_fd = open(wal_path.c_str(), O_RDWR | O_CREAT, 0644);
+    if (s->wal_fd >= 0) {
+        struct stat ws;
+        fstat(s->wal_fd, &ws);
+        if (ws.st_size > 0 && !store_wal_replay(s)) {
+            close(s->wal_fd);
+            delete s;
+            return nullptr;
+        }
+        lseek(s->wal_fd, 0, SEEK_END);
+    }
+
+    g_persistent_stores_by_name[registry_key] = s;
+    g_persistent_stores.push_back(s);
+    return s;
+}
+
 extern "C" void* aiml_db_store_open_col(const char* name, const char* type_name,
                                           int32_t n_fields, const int32_t* field_sizes,
                                           int64_t elem_size) {
@@ -383,6 +498,15 @@ extern "C" int32_t aiml_db_store_insert(void* store, const void* elem, int64_t e
     if (s->column_layout) return store_col_insert(s, elem);
 
     if (s->persistent) {
+        if (s->typed_persistent && s->ser_nodes) {
+            int32_t idx = s->total;
+            if (!store_typed_assign_value(s, idx, elem)) return -1;
+            store_wal_write(s, WAL_INSERT, s->total + 1, elem);
+            s->mem_active[(size_t)idx] = 1;
+            s->total++;
+            s->count++;
+            return s->total;
+        }
         if (s->total >= s->capacity) {
             int32_t nc = std::max((int32_t)16, s->capacity > 0 ? s->capacity * 2 : 16);
             if (!store_mmap_extend(s, nc)) return -1;
@@ -423,6 +547,12 @@ extern "C" int32_t aiml_db_store_update(void* store, int32_t id, const void* ele
     }
 
     if (s->persistent) {
+        if (s->typed_persistent && s->ser_nodes) {
+            if (idx >= s->total || idx >= (int32_t)s->mem_active.size() || !s->mem_active[(size_t)idx]) return -1;
+            if (!store_typed_assign_value(s, idx, elem)) return -1;
+            store_wal_write(s, WAL_INSERT, id, elem);
+            return 0;
+        }
         if (idx >= s->total || !s->active_ptr[idx]) return -1;
         store_wal_write(s, WAL_INSERT, id, elem);  // WAL_INSERT replay is idempotent for active slots
         memcpy(s->data_ptr + (size_t)idx * s->elem_size, elem, (size_t)s->elem_size);
@@ -442,6 +572,12 @@ extern "C" void* aiml_db_store_get(void* store, int32_t id) {
     if (s->column_layout) return store_col_get(s, idx);
 
     if (s->persistent) {
+        if (s->typed_persistent && s->ser_nodes) {
+            if (idx >= s->total || idx >= (int32_t)s->mem_active.size() || !s->mem_active[(size_t)idx]) return nullptr;
+            if (idx >= (int32_t)s->decoded_slots.size()) return nullptr;
+            auto& slot = s->decoded_slots[(size_t)idx];
+            return slot.empty() ? nullptr : slot.data();
+        }
         if (idx >= s->total || !s->active_ptr[idx]) return nullptr;
         return s->data_ptr + (size_t)idx * s->elem_size;
     }
@@ -480,6 +616,16 @@ extern "C" void aiml_db_store_delete(void* store, int32_t id) {
     if (s->column_layout) { store_col_delete(s, idx); return; }
 
     if (s->persistent) {
+        if (s->typed_persistent && s->ser_nodes) {
+            if (idx >= s->total || idx >= (int32_t)s->mem_active.size()) return;
+            if (s->mem_active[(size_t)idx]) {
+                store_wal_write(s, WAL_DELETE, id, nullptr);
+                store_typed_free_slot(s, idx);
+                s->mem_active[(size_t)idx] = 0;
+                s->count--;
+            }
+            return;
+        }
         if (idx >= s->total) return;
         if (s->active_ptr[idx]) {
             store_wal_write(s, WAL_DELETE, id, nullptr);
@@ -502,6 +648,21 @@ extern "C" int32_t aiml_db_store_len(void* store) {
 extern "C" int32_t aiml_db_store_checkpoint(void* store) {
     if (!store) return -1;
     AimlStore* s = static_cast<AimlStore*>(store);
+    if (s->typed_persistent && s->ser_nodes) {
+        if (!s->persistent || s->wal_fd < 0) return 0;
+        ftruncate(s->wal_fd, 0);
+        lseek(s->wal_fd, 0, SEEK_SET);
+        for (int32_t slot = 1; slot <= s->total; slot++) {
+            int32_t idx = slot - 1;
+            if (idx >= (int32_t)s->mem_active.size() || !s->mem_active[(size_t)idx]) continue;
+            if (idx >= (int32_t)s->decoded_slots.size()) continue;
+            auto& decoded = s->decoded_slots[(size_t)idx];
+            if (decoded.empty()) continue;
+            store_wal_write(s, WAL_INSERT, slot, decoded.data());
+        }
+        fsync(s->wal_fd);
+        return 0;
+    }
     if (!s->persistent || !s->mmap_ptr) return 0;
     AimlDbHeader* hdr = (AimlDbHeader*)s->mmap_ptr;
     hdr->total = s->total;
@@ -513,6 +674,7 @@ extern "C" int32_t aiml_db_store_checkpoint(void* store) {
 
 extern "C" int32_t aiml_db_kv_checkpoint(void* kv_ptr);
 extern "C" int32_t aiml_db_ts_checkpoint(void* ts_ptr);
+extern "C" int32_t aiml_db_vec_checkpoint(void* vs_ptr);
 
 extern "C" int32_t aiml_db_checkpoint_all(void) {
     std::lock_guard<std::mutex> lock(g_db_mutex);
@@ -520,6 +682,7 @@ extern "C" int32_t aiml_db_checkpoint_all(void) {
     for (AimlStore*      s  : g_persistent_stores) if (aiml_db_store_checkpoint(s)  != 0) result = -1;
     for (AimlKv*         kv : g_persistent_kvs)    if (aiml_db_kv_checkpoint(kv)    != 0) result = -1;
     for (AimlTimeSeries* ts : g_persistent_ts)     if (aiml_db_ts_checkpoint(ts)    != 0) result = -1;
+    for (AimlVecStore*  vs : g_persistent_vecs)   if (aiml_db_vec_checkpoint(vs)   != 0) result = -1;
     return result;
 }
 
@@ -535,13 +698,24 @@ extern "C" void* aiml_db_kv_open(const char* name, int64_t val_size) {
 
 // ── Kv WAL helpers ────────────────────────────────────────────────────────────
 
-static const uint8_t KV_WAL_SET    = 1;
-static const uint8_t KV_WAL_DELETE = 2;
+static const uint8_t KV_WAL_SET      = 1;
+static const uint8_t KV_WAL_DELETE   = 2;
+static const uint8_t KV_WAL_SET_BLOB = 3;  // raw binary, no strdup on replay
 
 // Write a SET record: op(1) + key_len(4) + key + val_bytes(4) + val
 static void kv_wal_write_set(AimlKv* kv, const char* key, const void* val, uint32_t val_bytes) {
     uint32_t key_len = (uint32_t)strlen(key);
     write(kv->wal_fd, &KV_WAL_SET, 1);
+    write(kv->wal_fd, &key_len,    4);
+    write(kv->wal_fd,  key,        key_len);
+    write(kv->wal_fd, &val_bytes,  4);
+    if (val_bytes > 0 && val) write(kv->wal_fd, val, val_bytes);
+}
+
+// Write a SET_BLOB record: same format as SET but op=3 (raw binary on replay)
+static void kv_wal_write_set_blob(AimlKv* kv, const char* key, const void* val, uint32_t val_bytes) {
+    uint32_t key_len = (uint32_t)strlen(key);
+    write(kv->wal_fd, &KV_WAL_SET_BLOB, 1);
     write(kv->wal_fd, &key_len,    4);
     write(kv->wal_fd,  key,        key_len);
     write(kv->wal_fd, &val_bytes,  4);
@@ -597,6 +771,13 @@ static void kv_wal_replay(AimlKv* kv) {
                 if ((uint32_t)read(kv->wal_fd, buf.data(), val_bytes) != val_bytes) break;
                 kv->map[key] = std::move(buf);
             }
+        } else if (op == KV_WAL_SET_BLOB) {
+            // Binary blob: store as raw vector<uint8_t> (no strdup!)
+            uint32_t val_bytes;
+            if (read(kv->wal_fd, &val_bytes, 4) != 4) break;
+            std::vector<uint8_t> buf(val_bytes);
+            if (val_bytes > 0 && (uint32_t)read(kv->wal_fd, buf.data(), val_bytes) != val_bytes) break;
+            kv->map[key] = std::move(buf);
         } else if (op == KV_WAL_DELETE) {
             auto it = kv->map.find(key);
             if (it != kv->map.end()) {
@@ -827,6 +1008,32 @@ extern "C" void aiml_db_kv_delete(void* kv_ptr, const char* key) {
     kv->map.erase(it);
 }
 
+// ── Blob operations for buffer persistence ──────────────────────────────────
+// set_blob: stores raw binary data as a single KV entry (uses WAL like normal set)
+extern "C" void aiml_db_kv_set_blob(void* kv_ptr, const char* key,
+                                      const void* data, int32_t size) {
+    if (!kv_ptr || !key || !data || size <= 0) return;
+    AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
+    std::lock_guard<std::mutex> lock(kv->mtx);
+    if (kv->persistent && kv->wal_fd >= 0)
+        kv_wal_write_set_blob(kv, key, data, (uint32_t)size);
+    std::vector<uint8_t> buf((size_t)size);
+    memcpy(buf.data(), data, (size_t)size);
+    kv->map[key] = std::move(buf);
+}
+
+// get_blob: returns pointer to raw data + writes size to out_size
+// Returns nullptr if key not found. Data valid until next set/delete on same key.
+extern "C" void* aiml_db_kv_get_blob(void* kv_ptr, const char* key, int32_t* out_size) {
+    if (!kv_ptr || !key) { if (out_size) *out_size = 0; return nullptr; }
+    AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
+    std::lock_guard<std::mutex> lock(kv->mtx);
+    auto it = kv->map.find(key);
+    if (it == kv->map.end()) { if (out_size) *out_size = 0; return nullptr; }
+    if (out_size) *out_size = (int32_t)it->second.size();
+    return it->second.data();
+}
+
 extern "C" void aiml_db_kv_clear(void* kv_ptr) {
     if (!kv_ptr) return;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
@@ -861,11 +1068,83 @@ extern "C" void* aiml_db_vec_open(const char* name, int32_t dims) {
     return vs;
 }
 
+// WAL format per record: [id_len:u32][id:N bytes][dims * sizeof(float) bytes]
+static void vec_wal_write_insert(AimlVecStore* vs, const char* id, const float* emb) {
+    if (vs->wal_fd < 0) return;
+    uint32_t id_len = (uint32_t)strlen(id);
+    write(vs->wal_fd, &id_len, 4);
+    write(vs->wal_fd, id, id_len);
+    write(vs->wal_fd, emb, (size_t)vs->dims * sizeof(float));
+}
+
+static void vec_wal_replay(AimlVecStore* vs) {
+    if (vs->wal_fd < 0) return;
+    lseek(vs->wal_fd, 0, SEEK_SET);
+    size_t emb_bytes = (size_t)vs->dims * sizeof(float);
+    std::vector<float> buf((size_t)vs->dims);
+    uint32_t id_len;
+    while (read(vs->wal_fd, &id_len, 4) == 4) {
+        if (id_len > 1024 * 1024) break; // sanity limit
+        std::string id(id_len, '\0');
+        if (id_len > 0 && (uint32_t)read(vs->wal_fd, id.data(), id_len) != id_len) break;
+        if (read(vs->wal_fd, buf.data(), emb_bytes) != (ssize_t)emb_bytes) break;
+        vs->ids.push_back(std::move(id));
+        vs->embeddings.emplace_back(buf.begin(), buf.end());
+    }
+}
+
+extern "C" void* aiml_db_vec_open_persist(const char* name, int32_t dims,
+                                            const char* base_path) {
+    if (dims <= 0) return nullptr;
+    std::string dir = base_path ? base_path : "./aiondb/";
+    if (!dir.empty() && dir.back() != '/') dir += '/';
+    std::string nm = name ? name : "vec";
+    std::string registry_key = dir + nm;
+
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    auto it = g_persistent_vecs_by_name.find(registry_key);
+    if (it != g_persistent_vecs_by_name.end()) return it->second;
+
+    mkdir(dir.c_str(), 0755);
+    AimlVecStore* vs = new AimlVecStore();
+    vs->dims       = dims;
+    vs->persistent = true;
+    vs->wal_path   = dir + nm + ".vecwal";
+    int fd = open(vs->wal_path.c_str(), O_RDWR | O_CREAT, 0644);
+    if (fd >= 0) {
+        vs->wal_fd = fd;
+        vec_wal_replay(vs);
+        lseek(fd, 0, SEEK_END); // append mode
+    }
+    g_persistent_vecs_by_name[registry_key] = vs;
+    g_persistent_vecs.push_back(vs);
+    return vs;
+}
+
+extern "C" int32_t aiml_db_vec_checkpoint(void* vs_ptr) {
+    if (!vs_ptr) return -1;
+    AimlVecStore* vs = static_cast<AimlVecStore*>(vs_ptr);
+    std::lock_guard<std::mutex> lock(vs->mtx);
+    if (!vs->persistent || vs->wal_fd < 0) return 0;
+    // Compact: truncate + rewrite all entries
+    ftruncate(vs->wal_fd, 0);
+    lseek(vs->wal_fd, 0, SEEK_SET);
+    for (size_t i = 0; i < vs->ids.size(); i++) {
+        uint32_t id_len = (uint32_t)vs->ids[i].size();
+        write(vs->wal_fd, &id_len, 4);
+        write(vs->wal_fd, vs->ids[i].data(), id_len);
+        write(vs->wal_fd, vs->embeddings[i].data(), (size_t)vs->dims * sizeof(float));
+    }
+    fsync(vs->wal_fd);
+    return 0;
+}
+
 extern "C" void aiml_db_vec_insert(void* vs_ptr, const char* id, const float* emb, int32_t dims) {
     if (!vs_ptr || !id || !emb) return;
     AimlVecStore* vs = static_cast<AimlVecStore*>(vs_ptr);
     vs->ids.push_back(id);
     vs->embeddings.emplace_back(emb, emb + dims);
+    if (vs->persistent) vec_wal_write_insert(vs, id, emb);
 }
 
 static float cosine_similarity(const float* a, const float* b, int32_t dims) {
@@ -1050,6 +1329,10 @@ extern "C" int32_t aiml_db_store_is_active(void* store_ptr, int32_t slot) {
         if (idx >= (int32_t)s->col_active.size()) return 0;
         return s->col_active[(size_t)idx] ? 1 : 0;
     } else if (s->persistent) {
+        if (s->typed_persistent && s->ser_nodes) {
+            if (idx >= (int32_t)s->mem_active.size()) return 0;
+            return s->mem_active[(size_t)idx] ? 1 : 0;
+        }
         if (idx >= s->total || !s->active_ptr) return 0;
         return s->active_ptr[(size_t)idx] ? 1 : 0;
     } else {

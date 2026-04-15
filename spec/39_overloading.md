@@ -1,5 +1,40 @@
 # Kapitel 39 — Operator Overloading
 
+## 0. Kanonische Operatornamen
+
+AIML verwendet **ausschließlich Wortnamen** für alle Vergleichs- und Gleichheitsoperatoren.
+Symbolschreibweisen (`==`, `!=`, `<`, usw.) werden beim Parsen automatisch normalisiert:
+
+| Symbol | Kanonischer Name | Bedeutung |
+|--------|-----------------|-----------|
+| `==`   | `eq`            | Gleichheit (Inhalt für Strings/Pointer, Wert für Integer) |
+| `!=`   | `neq`           | Ungleichheit |
+| `<`    | `lt`            | Kleiner |
+| `>`    | `gt`            | Größer |
+| `<=`   | `lte`           | Kleiner-gleich |
+| `>=`   | `gte`           | Größer-gleich |
+| `peq`  | `peq`           | Pointer-Identität (Adressvergleich) |
+| `pneq` | `pneq`          | Pointer-Nichtidentität |
+
+**`eq` / `neq` Semantik:**
+- Für `string`-Pointer: Byte-für-Byte Inhaltsvergleich (wie `strcmp`)
+- Für `i32`, `i64`, etc.: Integer-Gleichheit
+- Für Klassen/Modelle mit `__eq__`-Methode: Dispatch auf `__eq__`
+
+**`peq` / `pneq`:** Vergleicht immer die rohe Pointer-Adresse, nie den Inhalt.
+Nützlich für Null-Checks und Identitätsvergleiche.
+
+```aiml
+- decl: [a, string, "hello"]
+- decl: [b, string, "hello"]
+
+- decl: [same_content, i32, { eq:  [a, b] }]   # 1 (Inhalt gleich)
+- decl: [same_ptr,     i32, { peq: [a, b] }]   # 0 (verschiedene Allocations)
+- decl: [self_ptr,     i32, { peq: [a, a] }]   # 1 (selber Pointer)
+```
+
+---
+
 ## 1. Eingebaute Overloads (math-Typen)
 
 Für die eingebauten Typen `vec2`, `vec3`, `vec4`, `quat`, `mat4` überlastet
@@ -23,8 +58,8 @@ der Compiler die Standardoperatoren automatisch — kein zusätzlicher Syntax.
 - decl: [v,  vec4, { call: [math.vec4, 1.0, 0.0, 0.0, 1.0] }]
 - decl: [tv, vec4, { *: [m2, v] }]         # mat4 * vec4 (Transform)
 
-# Vergleich (ergibt i8 / bool)
-- decl: [eq, i8, { ==: [a, b] }]           # komponentenweise Gleichheit (alle müssen gleich sein)
+# Vergleich (ergibt i32 / bool)
+- decl: [vecs_eq, i32, { eq: [a, b] }]     # komponentenweise Gleichheit (alle müssen gleich sein)
 ```
 
 ### Dispatch-Tabelle für eingebaute Typen
@@ -41,129 +76,84 @@ der Compiler die Standardoperatoren automatisch — kein zusätzlicher Syntax.
 | `*` | `mat4` | `mat4` | `mat4` | Matrizenmultiplikation |
 | `*` | `mat4` | `vec4` | `vec4` | Matrix-Vektor-Transform |
 | `+` | `mat4` | `mat4` | `mat4` | Komponentenweise Addition |
-| `==` | `vec2/3/4` | gleich | `i8` | Exakte Gleichheit aller Komponenten |
-| `!=` | `vec2/3/4` | gleich | `i8` | Ungleichheit |
+| `eq` | `vec2/3/4` | gleich | `i32` | Exakte Gleichheit aller Komponenten |
 
 ---
 
-## 2. User-definiertes Operator Overloading
+## 2. User-definiertes Gleichheits-Overloading — `__eq__`
 
-### 2.1 In Klassen — `operators:`-Sektion
+Für eigene Klassen und Modelle kann `__eq__` als normale Methode definiert werden.
+Sie wird automatisch aufgerufen wenn `eq` / `neq` auf Instanzen des Typs angewendet wird.
 
 ```aiml
 - class:
-    name: Complex
+    name: Point
     members:
-      - [re, f32]
-      - [im, f32]
-    operators:
-      "+":
-        args: [[other, Complex]]
-        return: Complex
-        body:
-          - decl: [r, Complex]
-          - set: [r.re, { +: [<.re, other.re] }]
-          - set: [r.im, { +: [<.im, other.im] }]
-          - return: r
-      "-":
-        args: [[other, Complex]]
-        return: Complex
-        body:
-          - decl: [r, Complex]
-          - set: [r.re, { -: [<.re, other.re] }]
-          - set: [r.im, { -: [<.im, other.im] }]
-          - return: r
-      "*":
-        args: [[other, Complex]]
-        return: Complex
-        body:
-          # (a+bi)(c+di) = (ac−bd) + (ad+bc)i
-          - decl: [r, Complex]
-          - set: [r.re, { -: [{ *: [<.re, other.re] }, { *: [<.im, other.im] }] }]
-          - set: [r.im, { +: [{ *: [<.re, other.im] }, { *: [<.im, other.re] }] }]
-          - return: r
-      "==":
-        args: [[other, Complex]]
-        return: i8
-        body:
-          - return: { and: [{ ==: [<.re, other.re] }, { ==: [<.im, other.im] }] }
+      - [x, i32]
+      - [y, i32]
+    methods:
+      - def:
+          name: __eq__
+          args: [[other, ptr<Point>]]
+          return: i32
+          body:
+            - decl: [sx, i32, { eq: [x, other.x] }]
+            - decl: [sy, i32, { eq: [y, other.y] }]
+            - return: { and: [sx, sy] }
 
-# Verwendung — exakt gleiche Syntax wie für primitive Typen
-- decl: [a, Complex]
-- set: [a.re, 1.0]
-- set: [a.im, 2.0]
-- decl: [b, Complex]
-- set: [b.re, 3.0]
-- set: [b.im, 4.0]
+- decl: [p1, Point]
+- set: [p1.x, 3]
+- set: [p1.y, 4]
+- decl: [p2, Point]
+- set: [p2.x, 3]
+- set: [p2.y, 4]
 
-- decl: [c, Complex, { +: [a, b] }]        # → (4.0, 6.0i)
-- decl: [d, Complex, { *: [a, b] }]        # → (-5.0, 10.0i)
-- decl: [eq, i8,     { ==: [a, b] }]       # → 0
+- decl: [equal, i32, { eq:  [p1, p2] }]    # 1 — ruft p1.__eq__(p2)
+- decl: [diff,  i32, { neq: [p1, p2] }]    # 0
 ```
 
-### 2.2 Als Top-Level-Funktionen — `operator:`-Schlüssel in `def`
-
-Für Typen die man nicht selbst definiert hat (z.B. externe Structs via FFI),
-oder für Operatoren zwischen zwei verschiedenen Typen:
-
-```aiml
-- def:
-    name: vec3_add_ivec3
-    operator: "+"
-    args: [[a, vec3], [b, ivec3]]
-    return: vec3
-    body:
-      - decl: [r, vec3]
-      - set: [r.x, { +: [a.x, { f32: [b.x] }] }]
-      - set: [r.y, { +: [a.y, { f32: [b.y] }] }]
-      - set: [r.z, { +: [a.z, { f32: [b.z] }] }]
-      - return: r
-
-# Jetzt funktioniert:
-- decl: [v, vec3, { call: [math.vec3, 1.0, 2.0, 3.0] }]
-- decl: [iv, ivec3, { call: [math.ivec3, 1, 0, -1] }]
-- decl: [result, vec3, { +: [v, iv] }]
-```
+**Signatur:** `__eq__(other: ptr<ClassName>) → i32`
+- Gibt `1` zurück wenn gleich, `0` wenn ungleich
+- `neq` negiert automatisch das Ergebnis
+- Kein `__neq__` nötig
 
 ---
 
 ## 3. Unterstützte Operatoren
 
-| Symbol | Unär | Binär | Beschreibung |
-|--------|------|-------|--------------|
+| Operator | Unär | Binär | Beschreibung |
+|----------|------|-------|--------------|
 | `+` | — | ✓ | Addition |
 | `-` | ✓ | ✓ | Subtraktion / Negation |
 | `*` | — | ✓ | Multiplikation |
 | `/` | — | ✓ | Division |
 | `%` | — | ✓ | Modulo |
-| `==` | — | ✓ | Gleichheit (muss `i8` zurückgeben) |
-| `!=` | — | ✓ | Ungleichheit (muss `i8` zurückgeben) |
-| `<` | — | ✓ | Kleiner (muss `i8` zurückgeben) |
-| `<=` | — | ✓ | Kleiner-gleich |
-| `>` | — | ✓ | Größer |
-| `>=` | — | ✓ | Größer-gleich |
+| `eq` | — | ✓ | Gleichheit (Inhalt / `__eq__` dispatch) |
+| `neq` | — | ✓ | Ungleichheit |
+| `lt` | — | ✓ | Kleiner |
+| `lte` | — | ✓ | Kleiner-gleich |
+| `gt` | — | ✓ | Größer |
+| `gte` | — | ✓ | Größer-gleich |
+| `peq` | — | ✓ | Pointer-Identität (Adressvergleich) |
+| `pneq` | — | ✓ | Pointer-Nichtidentität |
 
 Nicht overloadbar: `and`, `or`, `not`, `cast`, alle Kontrollfluss-Operatoren.
+Kein overloading für `lt`/`gt`/`lte`/`gte` — nur `__eq__` ist definierbar.
 
 ---
 
-## 4. Auflösungsreihenfolge (Dispatch)
+## 4. Auflösungsreihenfolge für `eq` / `neq`
 
-Wenn `{ +: [a, b] }` kompiliert wird:
-
-1. Sind beide Operanden primitive Typen (`i32`, `f32`, ...)? → Primitive Addition
-2. Ist der linke Typ ein eingebauter math-Typ (`vec3`, `mat4`, ...)? → Eingebaute Overloads (§1)
-3. Hat der linke Typ einen `operators:"+"`-Eintrag? → Class-Operator-Methode
-4. Gibt es eine Top-Level-`def` mit `operator: "+"` und passenden Argumenttypen? → Free-Function-Operator
-5. Kein Match → Compilerfehler
-
-Bei mehreren passenden Top-Level-Operatoren gewinnt die spezifischste Typ-Signatur.
+1. Beide Operanden sind float-Typen (`f32`, `f64`) → Float-Vergleich
+2. Linker Typ ist ein eingebauter math-Struct (`vec3`, ...) → eingebauter `aiml_math_X_eq`
+3. Beide Operanden sind Pointer → prüfe ob LHS-Typ `__eq__`-Methode hat → Dispatch
+4. Beide Operanden sind Pointer ohne `__eq__` → String-Inhaltsvergleich (`strcmp`)
+5. Integer-Operanden → direkte ICmpEQ / ICmpNE
 
 ---
 
 ## 5. Einschränkungen
 
-- Operatoren können keine neuen Typen als Rückgabe haben, die noch nicht deklariert sind
-- Keine impliziten Konversionen — `{ +: [vec3, f32] }` ist nur gültig wenn explizit definiert
-- `==` und Vergleichsoperatoren **müssen** `i8` zurückgeben (damit `if` und `while` sie nutzen können)
-- Keine Kurzschluss-Auswertung für user-definierte `and`/`or` (nicht overloadbar)
+- `__eq__` muss `i32` zurückgeben
+- Nur der linke Operand wird für den `__eq__`-Dispatch untersucht (kein Rechts-Dispatch)
+- `peq`/`pneq` umgeht `__eq__` immer — reiner Adressvergleich

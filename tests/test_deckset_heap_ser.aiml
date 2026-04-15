@@ -21,12 +21,12 @@
       - set: [ds1, { call: [sys.deserialize, json1, "DeckSet"] }]
 
       - if:
-          condition: { "==": [{ eq: [ds1.name, "Starter"] }, 0] }
+          condition: { eq: [{ eq: [ds1.name, "Starter"] }, 0] }
           then:
             - print: ["FAIL ds1.name=${ds1.name}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "==": [{ eq: [ds1.primordial_id, "p1"] }, 0] }
+          condition: { eq: [{ eq: [ds1.primordial_id, "p1"] }, 0] }
           then:
             - print: ["FAIL ds1.primordial_id=${ds1.primordial_id}"]
             - call: [sys.exit, 1]
@@ -38,12 +38,12 @@
       - decl: [got1, ptr<DeckSet>]
       - set: [got1, { call: [kv.get, "ds_a"] }]
       - if:
-          condition: { "==": [{ eq: [got1.name, "Starter"] }, 0] }
+          condition: { eq: [{ eq: [got1.name, "Starter"] }, 0] }
           then:
             - print: ["FAIL got1.name=${got1.name}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "==": [{ eq: [got1.item_deck_id, "i1"] }, 0] }
+          condition: { eq: [{ eq: [got1.item_deck_id, "i1"] }, 0] }
           then:
             - print: ["FAIL got1.item_deck_id=${got1.item_deck_id}"]
             - call: [sys.exit, 1]
@@ -56,12 +56,12 @@
       - decl: [got2, ptr<DeckSet>]
       - set: [got2, { call: [kv.get, "ds_a"] }]
       - if:
-          condition: { "==": [{ eq: [got2.name, "Starter B"] }, 0] }
+          condition: { eq: [{ eq: [got2.name, "Starter B"] }, 0] }
           then:
             - print: ["FAIL got2.name=${got2.name}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "==": [{ eq: [got2.mana_deck_id, "m2"] }, 0] }
+          condition: { eq: [{ eq: [got2.mana_deck_id, "m2"] }, 0] }
           then:
             - print: ["FAIL got2.mana_deck_id=${got2.mana_deck_id}"]
             - call: [sys.exit, 1]

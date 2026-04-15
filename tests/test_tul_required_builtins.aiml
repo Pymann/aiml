@@ -1,0 +1,143 @@
+# Regression tests for the builtins required by tul GenAI planning:
+# string.lower, string.trim, string.replace, string.split
+
+- decl: [pass, i32, 0]
+- decl: [fail, i32, 0]
+
+# ── lower() ──────────────────────────────────────────────────────────────────
+
+- decl: [mixed, string, "  HeLLo WOrld  "]
+- decl: [lowered, string]
+- set: [lowered, { call: [mixed.lower] }]
+- print: ["lower='${lowered}'"]
+- if:
+    condition: { eq: [lowered, "  hello world  "] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL lower basic"] }]
+
+- decl: [empty_s, string, ""]
+- decl: [empty_lower, string]
+- set: [empty_lower, { call: [empty_s.lower] }]
+- if:
+    condition: { eq: [empty_lower, ""] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL lower empty"] }]
+
+# ── trim() ───────────────────────────────────────────────────────────────────
+
+- decl: [trimmed, string]
+- set: [trimmed, { call: [mixed.trim] }]
+- print: ["trim='${trimmed}'"]
+- if:
+    condition: { eq: [trimmed, "HeLLo WOrld"] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL trim basic"] }]
+
+- decl: [spaces, string, "   \t  "]
+- decl: [spaces_trimmed, string]
+- set: [spaces_trimmed, { call: [spaces.trim] }]
+- if:
+    condition: { eq: [spaces_trimmed, ""] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL trim whitespace-only"] }]
+
+# ── replace(old, new) ────────────────────────────────────────────────────────
+
+- decl: [csv, string, "alpha,beta,gamma,beta"]
+- decl: [replaced, string]
+- set: [replaced, { call: [csv.replace, "beta", "B"] }]
+- print: ["replace='${replaced}'"]
+- if:
+    condition: { eq: [replaced, "alpha,B,gamma,B"] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL replace all occurrences"] }]
+
+- decl: [unchanged, string]
+- set: [unchanged, { call: [csv.replace, "delta", "X"] }]
+- if:
+    condition: { eq: [unchanged, "alpha,beta,gamma,beta"] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL replace miss"] }]
+
+# ── split(delimiter) ─────────────────────────────────────────────────────────
+
+- decl: [words_src, string, "fire earth water"]
+- decl: [words, list<string>]
+- set: [words, { call: [words_src.split, " "] }]
+- if:
+    condition: { neq: [words.len, 3] }
+    then:
+      - set: [fail, { +: [fail, 1] }]
+      - print: ["FAIL split words len=${words.len}"]
+    else:
+      - set: [pass, { +: [pass, 1] }]
+
+- if:
+    condition: { eq: [{ eq: [words-0, "fire"] }, 0] }
+    then:
+      - set: [fail, { +: [fail, 1] }]
+      - print: ["FAIL split words-0=${words-0}"]
+    else:
+      - set: [pass, { +: [pass, 1] }]
+
+- if:
+    condition: { eq: [{ eq: [words-1, "earth"] }, 0] }
+    then:
+      - set: [fail, { +: [fail, 1] }]
+      - print: ["FAIL split words-1=${words-1}"]
+    else:
+      - set: [pass, { +: [pass, 1] }]
+
+- if:
+    condition: { eq: [{ eq: [words-2, "water"] }, 0] }
+    then:
+      - set: [fail, { +: [fail, 1] }]
+      - print: ["FAIL split words-2=${words-2}"]
+    else:
+      - set: [pass, { +: [pass, 1] }]
+
+- decl: [csv_parts, list<string>]
+- set: [csv_parts, { call: [csv.split, ","] }]
+- if:
+    condition: { neq: [csv_parts.len, 4] }
+    then:
+      - set: [fail, { +: [fail, 1] }]
+      - print: ["FAIL split csv len=${csv_parts.len}"]
+    else:
+      - set: [pass, { +: [pass, 1] }]
+
+- if:
+    condition: { eq: [{ eq: [csv_parts-3, "beta"] }, 0] }
+    then:
+      - set: [fail, { +: [fail, 1] }]
+      - print: ["FAIL split csv last=${csv_parts-3}"]
+    else:
+      - set: [pass, { +: [pass, 1] }]
+
+- decl: [single_part, list<string>]
+- set: [single_part, { call: [trimmed.split, ","] }]
+- if:
+    condition: { neq: [single_part.len, 1] }
+    then:
+      - set: [fail, { +: [fail, 1] }]
+      - print: ["FAIL split no-delim len=${single_part.len}"]
+    else:
+      - set: [pass, { +: [pass, 1] }]
+
+- if:
+    condition: { eq: [{ eq: [single_part-0, "HeLLo WOrld"] }, 0] }
+    then:
+      - set: [fail, { +: [fail, 1] }]
+      - print: ["FAIL split no-delim val=${single_part-0}"]
+    else:
+      - set: [pass, { +: [pass, 1] }]
+
+# ── Result ───────────────────────────────────────────────────────────────────
+
+- print: ["tul required builtins: ${pass} passed, ${fail} failed"]
+- if:
+    condition: { eq: [fail, 0] }
+    then:
+      - call: [sys.exit, 0]
+    else:
+      - call: [sys.exit, 1]

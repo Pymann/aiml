@@ -8,9 +8,9 @@
 #include "buffer_impl.h"
 #include "chan_impl.h"
 #include "string_utils.h"
-#include "expression.h"
 #include <iostream>
 #include "../sys/ser_runtime.h"  // AimlTypeNode, AimlTDKind (spec 45)
+#include "../sys/trace_runtime.h"
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 
@@ -75,11 +75,21 @@ void Compiler::compile(Program* prog) {
             auto linkage = decl->is_extern
                 ? llvm::GlobalValue::WeakAnyLinkage
                 : llvm::GlobalValue::ExternalLinkage;
-            auto* gv = new llvm::GlobalVariable(
-                ctx.module, llvmTy, /*isConstant=*/false,
-                linkage,
-                llvm::Constant::getNullValue(llvmTy),
-                symName);
+            // Reuse a forward-declared GV from sibling/import header pass if it
+            // exists, so we don't end up with `<name>.N` LLVM auto-rename and
+            // unresolved external references in importers.
+            llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(symName);
+            if (gv) {
+                if (!gv->hasInitializer())
+                    gv->setInitializer(llvm::Constant::getNullValue(llvmTy));
+                gv->setLinkage(linkage);
+            } else {
+                gv = new llvm::GlobalVariable(
+                    ctx.module, llvmTy, /*isConstant=*/false,
+                    linkage,
+                    llvm::Constant::getNullValue(llvmTy),
+                    symName);
+            }
 
             Symbol sym;
             sym.ir_alloca_inst = ctx.ir_gen->wrap(static_cast<llvm::Value*>(gv));
@@ -333,16 +343,25 @@ static std::vector<AimlTypeNode> serBuildSubtree(
     // ── list<T> ───────────────────────────────────────────────────────────────
     if (typeName.size()>5 && typeName.substr(0,5)=="list<") {
         std::string inner = typeName.substr(5, typeName.size()-6);
-        llvm::Type* iT = ctx.getLLVMType(inner);
         int32_t esz;
-        if (iT) {
-            esz = (int32_t)dl.getTypeAllocSize(iT);
+        // Determine element size without calling getLLVMType on unregistered types
+        // (which would log spurious errors during Phase-A sibling type registration).
+        if (ctx.classes.count(inner) && ctx.classes[inner].type) {
+            esz = (int32_t)dl.getTypeAllocSize(ctx.classes[inner].type);
+        } else if (ctx.enums.count(inner)) {
+            esz = 4;  // enum = i32
         } else if (inner.size()>5 && inner.substr(0,5)=="list<") {
             esz = 16;  // sizeof(SerList) = {i32 size, i32 cap, void* data}
         } else if (inner.size()>7 && inner.substr(0,7)=="buffer<") {
             esz = 24;  // sizeof(SerBuffer) = {i64 size, i64 cap, void* data}
+        } else if (!inner.empty() && std::isupper((unsigned char)inner[0])) {
+            // Unregistered user-defined type during Phase-A — use placeholder.
+            // The model depending on this list<T> should also have been deferred,
+            // so this branch is a last-resort safety net.
+            esz = 8;
         } else {
-            esz = 4;
+            llvm::Type* iT = ctx.getLLVMType(inner);
+            esz = iT ? (int32_t)dl.getTypeAllocSize(iT) : 8;
         }
         res.push_back({AIML_TD_LIST, 1, 0, offset, esz, 0});
         for (auto& n : serBuildSubtree(inner, 0, ctx, dl)) res.push_back(snShift(n, 1));
@@ -396,6 +415,15 @@ static std::vector<AimlTypeNode> serBuildSubtree(
     }
 
     // ── Fallback: opaque / value-only type → raw bytes ────────────────────────
+    // If the type name looks like a user-defined struct but is not yet registered
+    // (e.g. a sibling type not yet processed), use a placeholder size without
+    // triggering a spurious error in getLLVMType.
+    if (!typeName.empty() && std::isupper((unsigned char)typeName[0]) &&
+        !ctx.classes.count(typeName) && !ctx.enums.count(typeName)) {
+        // Unknown user type during type registration phase — treat as opaque.
+        res.push_back({AIML_TD_RAWBYTES, 8, 0, offset, 0, 0});
+        return res;
+    }
     llvm::Type* t = ctx.getLLVMType(typeName);
     int32_t sz = t ? (int32_t)dl.getTypeAllocSize(t) : 8;
     res.push_back({AIML_TD_RAWBYTES, sz, 0, offset, 0, 0});
@@ -431,7 +459,7 @@ static void serEmitGlobal(
         llvm::ConstantArray::get(arrTy, elems),
         "__aiml_sernodes_" + name);
     gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
-    classInfo.hasHeapFields = true;
+    // hasHeapFields is computed by the caller based on serHasHeap; do not force-set it.
     classInfo.serNodesVar   = gv;
     classInfo.serNodesCount = (int32_t)nodes.size();
 }
@@ -451,7 +479,7 @@ void Compiler::registerTypeDecl(Node* node) {
         if (ctx.resolveImportCallback) {
             ctx.resolveImportCallback(imp->path);
         } else {
-            LOG_ERROR("resolveImportCallback not bound! Cannot process import: " + imp->path);
+            LOG_ERROR(ctx.fmtLoc(imp->sourceNode) + "resolveImportCallback not bound! Cannot process import: " + imp->path);
         }
     } else if (auto cls = dynamic_cast<ClassDecl*>(node)) {
         std::string className = ctx.qualify(cls->name);
@@ -476,7 +504,7 @@ void Compiler::registerTypeDecl(Node* node) {
                  }
                  std::sort(orderedMembers.begin(), orderedMembers.end(), [](auto& a, auto& b){ return a.second.index < b.second.index; });
              } else {
-                 LOG_ERROR("Unknown parent class: " + classInfo.parentName);
+                 LOG_ERROR(ctx.fmtLoc(cls->sourceNode) + "Unknown parent class: " + classInfo.parentName);
              }
         }
         
@@ -490,7 +518,7 @@ void Compiler::registerTypeDecl(Node* node) {
                      orderedMembers.push_back({name, member});
                  }
              } else {
-                 LOG_ERROR("Unknown model: " + modelName);
+                 LOG_ERROR(ctx.fmtLoc(cls->sourceNode) + "Unknown model: " + modelName);
              }
         }
         
@@ -504,13 +532,13 @@ void Compiler::registerTypeDecl(Node* node) {
             bool duplicate = false;
             for(const auto& pair : orderedMembers) if(pair.first == memberName) duplicate = true;
             if(duplicate) {
-                LOG_ERROR("Duplicate member '" + memberName + "' in class '" + className + "'");
+                LOG_ERROR(ctx.fmtLoc(cls->sourceNode) + "Duplicate member '" + memberName + "' in class '" + className + "'");
                 continue;
             }
             
             llvm::Type* memberType = ctx.getLLVMType(typeName);
             if (!memberType) {
-                LOG_ERROR("Unknown type '" + typeName + "' for member '" + memberName + "'");
+                LOG_ERROR(ctx.fmtLoc(cls->sourceNode) + "Unknown type '" + typeName + "' for member '" + memberName + "'");
                 continue; 
             }
 
@@ -559,6 +587,7 @@ void Compiler::registerTypeDecl(Node* node) {
             bool anyHeap = false;
             for (auto& [mn, mem] : classInfo.members)
                 if (serHasHeap(mem.typeName, ctx)) { anyHeap = true; break; }
+            classInfo.hasHeapFields = anyHeap;
             if (anyHeap) {
                 const llvm::DataLayout& dl = ctx.module.getDataLayout();
                 const llvm::StructLayout* sl = dl.getStructLayout(structType);
@@ -621,7 +650,37 @@ void Compiler::registerTypeDecl(Node* node) {
                     classInfo.members[n] = member;
                 }
             } else {
-                LOG_ERROR("Unknown parent model '" + mod->parentName + "' in model '" + modelName + "'");
+                // Parent not yet registered — skip for now so that a later
+                // registration attempt (once siblings are processed) can succeed.
+                LOG_DEBUG("Deferring model '" + modelName + "': parent '" + mod->parentName + "' not yet registered");
+                return;
+            }
+        }
+
+        // Pre-check: ensure all field-type dependencies are registered.
+        // If a field is list<T>, map<K:V>, or a direct user type that isn't
+        // registered yet, defer to the next fixed-point iteration.
+        {
+            auto userTypeReady = [&](const std::string& tn) -> bool {
+                if (tn.empty() || !std::isupper((unsigned char)tn[0])) return true;
+                return ctx.classes.count(tn) > 0 || ctx.enums.count(tn) > 0;
+            };
+            for (const auto& astMember : mod->fields) {
+                const std::string& tn = astMember.type;
+                bool ok = true;
+                if (tn.size() > 5 && tn.substr(0,5) == "list<") {
+                    ok = userTypeReady(tn.substr(5, tn.size()-6));
+                } else if (tn.size() > 4 && tn.substr(0,4) == "map<") {
+                    size_t col = tn.find(':');
+                    if (col != std::string::npos)
+                        ok = userTypeReady(tn.substr(col+1, tn.size()-col-2));
+                } else {
+                    ok = userTypeReady(tn);
+                }
+                if (!ok) {
+                    LOG_DEBUG("Deferring model '" + modelName + "': field '" + astMember.name + "' type '" + tn + "' not ready");
+                    return;
+                }
             }
         }
 
@@ -631,7 +690,7 @@ void Compiler::registerTypeDecl(Node* node) {
 
             llvm::Type* fieldType = ctx.getLLVMType(typeName);
             if (!fieldType) {
-                 LOG_ERROR("Unknown type '" + typeName + "' for field '" + fieldName + "' in model '" + modelName + "'");
+                 LOG_ERROR(ctx.fmtLoc(mod->sourceNode) + "Unknown type '" + typeName + "' for field '" + fieldName + "' in model '" + modelName + "'");
                  continue;
             }
 
@@ -659,26 +718,26 @@ void Compiler::registerTypeDecl(Node* node) {
             classInfo.padded_size = padded;
         }
 
-        // Spec 45: emit @__aiml_sernodes_<Name> if the model has heap fields.
+        // Spec 45 / RPC payload v2: always emit @__aiml_sernodes_<Name> so any
+        // model can be used as a typed RPC payload, not just those with heap fields.
         {
             bool anyHeap = false;
             for (auto& [mn, mem] : classInfo.members)
                 if (serHasHeap(mem.typeName, ctx)) { anyHeap = true; break; }
-            if (anyHeap) {
-                const llvm::DataLayout& dl = ctx.module.getDataLayout();
-                const llvm::StructLayout* sl = dl.getStructLayout(structType);
-                int32_t sz = (int32_t)dl.getTypeAllocSize(structType);
-                std::vector<std::pair<std::string, CompilerContext::StructMember>> sm;
-                for (auto& [mn, mem] : classInfo.members) sm.push_back({mn, mem});
-                std::sort(sm.begin(), sm.end(),
-                          [](auto& a, auto& b){ return a.second.index < b.second.index; });
-                std::vector<std::vector<AimlTypeNode>> fsubs;
-                for (auto& [mn, mem] : sm)
-                    fsubs.push_back(serBuildSubtree(mem.typeName,
-                        (int32_t)sl->getElementOffset(mem.index), ctx, dl));
-                auto nodes = serBuildStructNodes(fsubs, 0, sz);
-                serEmitGlobal(modelName, nodes, ctx, classInfo);
-            }
+            classInfo.hasHeapFields = anyHeap;
+            const llvm::DataLayout& dl = ctx.module.getDataLayout();
+            const llvm::StructLayout* sl = dl.getStructLayout(structType);
+            int32_t sz = (int32_t)dl.getTypeAllocSize(structType);
+            std::vector<std::pair<std::string, CompilerContext::StructMember>> sm;
+            for (auto& [mn, mem] : classInfo.members) sm.push_back({mn, mem});
+            std::sort(sm.begin(), sm.end(),
+                      [](auto& a, auto& b){ return a.second.index < b.second.index; });
+            std::vector<std::vector<AimlTypeNode>> fsubs;
+            for (auto& [mn, mem] : sm)
+                fsubs.push_back(serBuildSubtree(mem.typeName,
+                    (int32_t)sl->getElementOffset(mem.index), ctx, dl));
+            auto nodes = serBuildStructNodes(fsubs, 0, sz);
+            serEmitGlobal(modelName, nodes, ctx, classInfo);
         }
 
         // Mirror: propagate sync/rpc annotations
@@ -875,6 +934,7 @@ void Compiler::visitTopLevel(Node* node) {
 void Compiler::visitFunction(FunctionDecl* func) {
     // Basic mapping using our old context structure for now
     std::string mangledName = ctx.qualify(func->name);
+    ctx.currentFunctionName = func->name;
     
     std::vector<IRType*> argTypes;
     std::vector<std::string> argNames;
@@ -969,6 +1029,74 @@ void Compiler::visitFunction(FunctionDecl* func) {
         return;
     }
 
+    // ── Trace prologue (AIML_TRACE env var) ──────────────────────────────────
+    // if (aiml_trace_active(fname)) { build args_str; aiml_trace(fname, "=>", args_str); }
+    // Hot path (trace inactive) = one conditional branch, never taken.
+    {
+        llvm::PointerType* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type*        i32t = ctx.builder.getInt32Ty();
+
+        llvm::FunctionCallee traceActiveFn = ctx.module.getOrInsertFunction(
+            "aiml_trace_active",
+            llvm::FunctionType::get(i32t, {i8p}, false));
+        llvm::FunctionCallee traceFn = ctx.module.getOrInsertFunction(
+            "aiml_trace",
+            llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p, i8p}, false));
+
+        llvm::Value* fnameStr = ctx.builder.CreateGlobalStringPtr(func->name, "tr_fname");
+        llvm::Value* trActive = ctx.builder.CreateCall(traceActiveFn, {fnameStr}, "tr_active");
+        llvm::Value* trCond   = ctx.builder.CreateICmpNE(
+            trActive, llvm::ConstantInt::get(i32t, 0), "tr_cond");
+
+        llvm::BasicBlock* traceBB = llvm::BasicBlock::Create(ctx.context, "tr_enter", llvmFunc);
+        llvm::BasicBlock* bodyBB  = llvm::BasicBlock::Create(ctx.context, "tr_body",  llvmFunc);
+        ctx.builder.CreateCondBr(trCond, traceBB, bodyBB);
+
+        // ── trace_bb: build "name=val, ..." string and call aiml_trace ────────
+        ctx.builder.SetInsertPoint(traceBB);
+
+        llvm::Value* argsStr = ctx.builder.CreateGlobalStringPtr("", "tr_args");
+        bool firstArg = true;
+        for (size_t i = 0; i < argNames.size(); ++i) {
+            const std::string& nm = argNames[i];
+            std::string prefix = (firstArg ? "" : ", ") + nm + "=";
+            firstArg = false;
+
+            Symbol& sym    = ctx.symbol_table[nm];
+            llvm::Value* allocaV = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym.ir_alloca_inst));
+            llvm::Type*  elemTy  = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(sym.ir_element_type));
+            llvm::Value* loaded  = ctx.builder.CreateLoad(elemTy, allocaV, nm + "_tr");
+
+            llvm::Value* valStr = nullptr;
+            if (elemTy->isIntegerTy(64)) {
+                valStr = StringUtils::int64ToString(ctx, loaded);
+            } else if (elemTy->isIntegerTy(32)) {
+                valStr = StringUtils::intToString(ctx, loaded);
+            } else if (elemTy->isIntegerTy(16) || elemTy->isIntegerTy(8) || elemTy->isIntegerTy(1)) {
+                valStr = StringUtils::intToString(ctx, ctx.builder.CreateZExt(loaded, i32t));
+            } else if (elemTy->isFloatTy()) {
+                valStr = StringUtils::floatToString(ctx, loaded);
+            } else if (elemTy->isDoubleTy()) {
+                valStr = StringUtils::doubleToString(ctx, loaded);
+            } else if (elemTy->isPointerTy()) {
+                valStr = loaded; // i8* string or opaque handle
+            } else {
+                valStr = ctx.builder.CreateGlobalStringPtr("<?>", "tr_unk");
+            }
+
+            llvm::Value* prefixV = ctx.builder.CreateGlobalStringPtr(prefix, "tr_pfx");
+            argsStr = StringUtils::concat(ctx, argsStr, prefixV);
+            argsStr = StringUtils::concat(ctx, argsStr, valStr);
+        }
+
+        llvm::Value* dirStr = ctx.builder.CreateGlobalStringPtr("=>", "tr_dir");
+        ctx.builder.CreateCall(traceFn, {fnameStr, dirStr, argsStr});
+        ctx.builder.CreateBr(bodyBB);
+
+        // ── body_bb: actual function body follows ─────────────────────────────
+        ctx.builder.SetInsertPoint(bodyBB);
+    }
+
     // Compile Body (track referenced user types for sys.bundle)
     ctx.bundleTrackingTarget = mangledName;
     if (func->body) {
@@ -996,6 +1124,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
     // Restore insertion point and symbol table (function-local vars don't leak)
     ctx.symbol_table = savedSymbols;
     ctx.ir_gen->setInsertPoint(oldBlock);
+    ctx.currentFunctionName = "";
 }
 Symbol* Compiler::resolveVariable(const std::string& name) {
     if (ctx.currentScope) {
@@ -1064,8 +1193,59 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
             IRValue* cmp = ctx.ir_gen->createICmpEQ(size, ctx.ir_gen->getInt32(0));
             return ctx.ir_gen->wrap(ctx.builder.CreateZExt(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(cmp)), ctx.builder.getInt32Ty(), "empty_zext"));
         }
+    } else if (className == "string") {
+        if (propName == "len") {
+            llvm::Function* strlenFunc = ctx.module.getFunction("strlen");
+            if (!strlenFunc)
+                strlenFunc = llvm::Function::Create(
+                    llvm::FunctionType::get(ctx.builder.getInt64Ty(),
+                        {ctx.builder.getInt8Ty()->getPointerTo()}, false),
+                    llvm::Function::ExternalLinkage, "strlen", ctx.module);
+            llvm::Value* strVal = ctx.builder.CreateLoad(
+                ctx.builder.getInt8Ty()->getPointerTo(),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
+            llvm::Value* len64 = ctx.builder.CreateCall(strlenFunc, {strVal});
+            return ctx.ir_gen->wrap(ctx.builder.CreateTrunc(len64, ctx.builder.getInt32Ty(), "str_len_i32"));
+        }
     }
-    
+
+    // ── array<T:N[:M[:...]]> properties: .len, .data_ptr, .dim0, .dim1, ... ──
+    if (className.rfind("array<", 0) == 0 && className.back() == '>') {
+        std::string inner = className.substr(6, className.size() - 7);
+        std::vector<std::string> parts;
+        size_t pos = 0;
+        while (pos < inner.size()) {
+            size_t sep = inner.find(':', pos);
+            if (sep == std::string::npos) { parts.push_back(inner.substr(pos)); break; }
+            parts.push_back(inner.substr(pos, sep - pos));
+            pos = sep + 1;
+        }
+        std::vector<uint64_t> dims;
+        for (size_t i = 1; i < parts.size(); ++i) dims.push_back(std::stoull(parts[i]));
+        uint64_t totalCount = 1;
+        for (auto d : dims) totalCount *= d;
+
+        if (propName == "len") {
+            return ctx.ir_gen->wrap(ctx.builder.getInt32((uint32_t)totalCount));
+        }
+        if (propName == "data_ptr") {
+            llvm::Type* elemTy = ctx.getLLVMType(parts[0]);
+            llvm::Type* arrTy = llvm::ArrayType::get(elemTy, totalCount);
+            llvm::Value* arrPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+            llvm::Value* gep = ctx.builder.CreateGEP(arrTy, arrPtr,
+                {ctx.builder.getInt32(0), ctx.builder.getInt32(0)}, "arr_data_ptr");
+            return ctx.ir_gen->wrap(ctx.builder.CreateBitCast(gep, ctx.builder.getInt8Ty()->getPointerTo()));
+        }
+        // .dim0, .dim1, ...
+        if (propName.rfind("dim", 0) == 0 && propName.size() > 3) {
+            size_t dimIdx = std::stoul(propName.substr(3));
+            if (dimIdx < dims.size())
+                return ctx.ir_gen->wrap(ctx.builder.getInt32((uint32_t)dims[dimIdx]));
+            LOG_ERROR(ctx.fmtLoc() + "array property " + propName + " out of range");
+            return ctx.ir_gen->getInt32(0);
+        }
+    }
+
     // Check classes (legacy + namespace)
     CompilerContext::ClassInfo* classInfo = nullptr;
     if (ctx.currentNs && ctx.currentNs->classes.count(className)) classInfo = &ctx.currentNs->classes[className];
@@ -1121,7 +1301,17 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
                             }
                         }
                         llvm::Value* elemPtr = ListImpl::getElementPtr(ctx, listAllocaVal, idxVal, elemType);
-                        return ctx.ir_gen->wrap(ctx.builder.CreateLoad(elemType, elemPtr, "chain_elem"));
+                        size_t dotInRest = rest.find('.');
+                        if (dotInRest == std::string::npos) {
+                            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(elemType, elemPtr, "chain_elem"));
+                        }
+
+                        std::string afterIdx = rest.substr(dotInRest + 1);
+                        Symbol tmpSym;
+                        tmpSym.typeName = elemName;
+                        tmpSym.ir_alloca_inst = ctx.ir_gen->wrap(elemPtr);
+                        tmpSym.ir_element_type = ctx.ir_gen->wrapType(elemType);
+                        return resolveProperty(&tmpSym, afterIdx);
                     } else {
                         // Dot chain: field.rest — recurse
                         Symbol tmpSym;
@@ -1183,7 +1373,8 @@ IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& p
     if (ctx.currentNs && ctx.currentNs->classes.count(className)) classInfo = &ctx.currentNs->classes[className];
     else if (ctx.classes.count(className)) classInfo = &ctx.classes[className];
 
-    if (!classInfo) return nullptr;
+    if (!classInfo) { LOG_DEBUG("resolvePropertyWritePtr: no classInfo for " + className); return nullptr; }
+    LOG_DEBUG("resolvePropertyWritePtr: class=" + className + " members=" + std::to_string(classInfo->members.size()) + " prop=" + propName);
 
     // Handle chained access: "field.rest" or "field-idx[.rest]"
     {

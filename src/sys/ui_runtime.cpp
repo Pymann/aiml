@@ -64,12 +64,14 @@ static_assert(offsetof(AimlUIStyle, font) == 48, "font must be at offset 48");
 struct AimlUIFont {
     stbtt_fontinfo info;
     unsigned char* ttf_data;   /* malloc'd copy */
+    int     ttf_size;          /* byte length of ttf_data */
     GLuint  atlas_tex;
     stbtt_bakedchar cdata[96]; /* ASCII 32..127 */
     float   line_height;
     float   ascent_px;  /* pixels from top-of-line-box to baseline */
     float   scale;
     int     atlas_w, atlas_h;
+    float   baked_size_px;     /* size passed to stbtt_BakeFontBitmap */
 };
 
 struct UiVertex {
@@ -614,7 +616,9 @@ static GLuint compile_shader(GLenum type, const char* src) {
 
 static AimlUIFont* bake_font(unsigned char* ttf_data, int ttf_size, float size_px) {
     AimlUIFont* f = new AimlUIFont();
-    f->ttf_data   = (unsigned char*)malloc(ttf_size);
+    f->ttf_data      = (unsigned char*)malloc(ttf_size);
+    f->ttf_size      = ttf_size;
+    f->baked_size_px = size_px;
     memcpy(f->ttf_data, ttf_data, ttf_size);
 
     /* Bake at requested size into atlas */
@@ -1738,6 +1742,14 @@ int32_t aiml_ui_slider_int(const char* id, int32_t value, int32_t mn, int32_t mx
     return (int32_t)aiml_ui_slider(id, (float)value, (float)mn, (float)mx, preset);
 }
 
+int32_t aiml_ui_cell_hovered(void) {
+    if (!g_ui || g_ui->cell_stack.empty()) return 0;
+    const UiCellState& cell = cur_cell();
+    const bool hot = g_ui->mouse_x >= cell.x && g_ui->mouse_x <= (cell.x + cell.w) &&
+                     g_ui->mouse_y >= cell.y && g_ui->mouse_y <= (cell.y + cell.h);
+    return hot ? 1 : 0;
+}
+
 float aiml_ui_drag_f32(const char* id, float value, float speed, void* preset) {
     if (!id || g_ui->cell_stack.empty()) return value;
     AimlUISliderStyle* st = (AimlUISliderStyle*)preset;
@@ -2071,6 +2083,23 @@ void* aiml_ui_load_font_default(float size) {
     }
     fprintf(stderr, "[ui] load_font_default: no system font found\n");
     return nullptr;
+}
+
+/* Bake a new font at a different size from an existing font's TTF data. */
+void* aiml_ui_bake_font_for_size(void* base_font, float size_px) {
+    if (!base_font || size_px <= 0.0f) return nullptr;
+    AimlUIFont* base = (AimlUIFont*)base_font;
+    if (!base->ttf_data || base->ttf_size <= 0) return nullptr;
+    return bake_font(base->ttf_data, base->ttf_size, size_px);
+}
+
+/* Free a font previously created by bake_font / aiml_ui_bake_font_for_size. */
+void aiml_ui_free_font(void* font) {
+    if (!font) return;
+    AimlUIFont* f = (AimlUIFont*)font;
+    if (f->ttf_data) { free(f->ttf_data); f->ttf_data = nullptr; }
+    if (f->atlas_tex) { glDeleteTextures(1, &f->atlas_tex); f->atlas_tex = 0; }
+    delete f;
 }
 
 void aiml_ui_set_default_font(void* font) {

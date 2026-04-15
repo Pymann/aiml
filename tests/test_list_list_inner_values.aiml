@@ -1,0 +1,126 @@
+# Test: list<list<i32>> inner values preserved through JSON deserialize and WAL kv
+# Expected exit code: 0
+
+- model:
+    name: Ability
+    fields:
+      - [cost_text, string]
+      - [activation_cost, list<list<i32>>]
+      - [trigger, list<list<i32>>]
+      - [effects, list<list<i32>>]
+
+- def:
+    name: main
+    return: i32
+    body:
+      # Phase A: JSON deserialize → check inner values immediately
+      - decl: [j1, string, '{"__type":"Ability","cost_text":"Tap","activation_cost":[[6]],"trigger":[],"effects":[[10,3]]}']
+      - decl: [ab, Ability]
+      - set: [ab, { call: [sys.deserialize, j1, "Ability"] }]
+
+      - if:
+          condition: { neq: [ab.activation_cost.len, 1] }
+          then:
+            - print: ["FAIL A1: activation_cost.len=${ab.activation_cost.len} expected 1"]
+            - call: [sys.exit, 1]
+
+      - decl: [cb, list<i32>]
+      - set: [cb, { call: [ab.activation_cost.get, 0] }]
+      - if:
+          condition: { neq: [cb.len, 1] }
+          then:
+            - print: ["FAIL A2: cb.len=${cb.len} expected 1"]
+            - call: [sys.exit, 1]
+
+      - decl: [v0, i32, { call: [cb.get, 0] }]
+      - if:
+          condition: { neq: [v0, 6] }
+          then:
+            - print: ["FAIL A3: cb[0]=${v0} expected 6"]
+            - call: [sys.exit, 1]
+
+      - if:
+          condition: { neq: [ab.effects.len, 1] }
+          then:
+            - print: ["FAIL A4: effects.len=${ab.effects.len} expected 1"]
+            - call: [sys.exit, 1]
+
+      - decl: [eff0, list<i32>]
+      - set: [eff0, { call: [ab.effects.get, 0] }]
+      - if:
+          condition: { neq: [eff0.len, 2] }
+          then:
+            - print: ["FAIL A5: eff0.len=${eff0.len} expected 2"]
+            - call: [sys.exit, 1]
+
+      - decl: [e0, i32, { call: [eff0.get, 0] }]
+      - if:
+          condition: { neq: [e0, 10] }
+          then:
+            - print: ["FAIL A6: eff0[0]=${e0} expected 10"]
+            - call: [sys.exit, 1]
+
+      - print: ["Phase A PASS"]
+
+      # Phase B: JSON deserialize → WAL kv.set → kv.get → check inner values
+      - decl: [db_dir, path, "/tmp/aiml_test_list_list_inner_values/"]
+      - call: [io.remove_all, db_dir]
+
+      - decl: [kv, Kv<string:Ability>]
+      - set: [kv, { call: [db.open_kv, "inner_values", {persist: true, path: db_dir}] }]
+      - call: [kv.set, "ab1", ab]
+
+      - decl: [got, ptr<Ability>]
+      - set: [got, { call: [kv.get, "ab1"] }]
+      - if:
+          condition: { eq: [got, null] }
+          then:
+            - print: ["FAIL B1: got=null"]
+            - call: [sys.exit, 1]
+
+      - if:
+          condition: { neq: [got.activation_cost.len, 1] }
+          then:
+            - print: ["FAIL B2: got.activation_cost.len=${got.activation_cost.len} expected 1"]
+            - call: [sys.exit, 1]
+
+      - decl: [gcb, list<i32>]
+      - set: [gcb, { call: [got.activation_cost.get, 0] }]
+      - if:
+          condition: { neq: [gcb.len, 1] }
+          then:
+            - print: ["FAIL B3: gcb.len=${gcb.len} expected 1 (inner list empty after WAL roundtrip)"]
+            - call: [sys.exit, 1]
+
+      - decl: [gv0, i32, { call: [gcb.get, 0] }]
+      - if:
+          condition: { neq: [gv0, 6] }
+          then:
+            - print: ["FAIL B4: gcb[0]=${gv0} expected 6"]
+            - call: [sys.exit, 1]
+
+      - if:
+          condition: { neq: [got.effects.len, 1] }
+          then:
+            - print: ["FAIL B5: got.effects.len=${got.effects.len} expected 1"]
+            - call: [sys.exit, 1]
+
+      - decl: [geff0, list<i32>]
+      - set: [geff0, { call: [got.effects.get, 0] }]
+      - if:
+          condition: { neq: [geff0.len, 2] }
+          then:
+            - print: ["FAIL B6: geff0.len=${geff0.len} expected 2"]
+            - call: [sys.exit, 1]
+
+      - decl: [ge0, i32, { call: [geff0.get, 0] }]
+      - if:
+          condition: { neq: [ge0, 10] }
+          then:
+            - print: ["FAIL B7: geff0[0]=${ge0} expected 10"]
+            - call: [sys.exit, 1]
+
+      - print: ["Phase B PASS"]
+      - call: [db.checkpoint]
+      - print: ["ALL PASS"]
+      - return: 0

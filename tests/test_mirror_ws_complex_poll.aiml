@@ -217,31 +217,31 @@
 - print: ["complex-poll: round=${m.round} p0=${p0.display_name}/${p0.hp} z0=${z0.zone_id}/${z0.card_count} ci0=${ci0.display_name}/${ci0.current_hp}"]
 
 - if:
-    condition: { "==": [{ eq: [m.match_id, "match-9r"] }, 0] }
+    condition: { eq: [{ eq: [m.match_id, "match-9r"] }, 0] }
     then:
       - print: ["FAIL complex-poll: match_id=${m.match_id}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [replica.participants.len, 2] }
+    condition: { neq: [replica.participants.len, 2] }
     then:
       - print: ["FAIL complex-poll: participants.len=${replica.participants.len}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [replica.zones.len, 2] }
+    condition: { neq: [replica.zones.len, 2] }
     then:
       - print: ["FAIL complex-poll: zones.len=${replica.zones.len}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [replica.card_instances.len, 1] }
+    condition: { neq: [replica.card_instances.len, 1] }
     then:
       - print: ["FAIL complex-poll: card_instances.len=${replica.card_instances.len}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [m.round, 8] }
+    condition: { neq: [m.round, 8] }
     then:
       - print: ["FAIL complex-poll: round=${m.round}"]
       - call: [sys.exit, 1]

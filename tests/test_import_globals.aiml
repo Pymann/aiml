@@ -38,7 +38,7 @@
       - decl: [fail, i32, 0]
 
       - if:
-          condition: { "==": [c0, 0] }
+          condition: { eq: [c0, 0] }
           then:
             - print: "[PASS] A counter_init"
             - set: [pass, { +: [pass, 1] }]
@@ -47,7 +47,7 @@
             - set: [fail, { +: [fail, 1] }]
 
       - if:
-          condition: { "==": [c3, 3] }
+          condition: { eq: [c3, 3] }
           then:
             - print: "[PASS] B counter_after_3inc"
             - set: [pass, { +: [pass, 1] }]

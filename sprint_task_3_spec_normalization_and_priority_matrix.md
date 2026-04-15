@@ -2,25 +2,31 @@
 
 ## Titel
 
-Spec normalisieren und Prioritaetsmatrix fuer Implementierungsluecken anlegen
+Spec-Status normalisieren und als lebende Prioritaetsmatrix pflegen
+
+## Status
+
+Teilweise vorbereitet durch vorhandene Review-Dokumente, aber noch nicht als belastbare Arbeitsmatrix verdichtet.
 
 ## Ziel
 
-Die AIML-Spec soll als belastbare Referenz brauchbar werden. Vor weiteren grossen Implementierungen muessen Widersprueche, Mehrdeutigkeiten und nicht entschiedene Stellen in eine priorisierte Matrix ueberfuehrt werden.
+Die AIML-Spec soll nicht nur gesammelt, sondern in einen aktuellen, umsetzbaren Status ueberfuehrt werden: verbindlich, offen, widerspruechlich oder bereits ueberholt.
 
-## Hintergrund
+## Aktueller Stand
 
-Die bestehende Spec ist breiter als die Implementierung und gleichzeitig intern noch nicht sauber normiert. [SPEC_REVIEW.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/SPEC_REVIEW.md) dokumentiert bereits 71 Issues. Solange diese Punkte nicht in "gilt", "gilt nicht", "spaeter" aufgeloest sind, bleibt jede Implementierungsarbeit an mehreren Stellen unscharf.
+- [SPEC_REVIEW.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/SPEC_REVIEW.md) und [spec_impl_completeness.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec_impl_completeness.md) existieren bereits.
+- Es gibt damit schon Vorarbeit; der Engpass ist heute eher Pflege, Priorisierung und Entschlackung als reine Erstaufnahme.
 
-## Scope
+## Was an der alten Fassung veraltet war
 
-- bestehende Spec-Issues sichten und in umsetzbare Kategorien ueberfuehren
-- fuer jedes Kapitel klar markieren:
-  - implementiert
-  - teilweise implementiert
-  - nur spezifiziert
-  - widerspruechlich oder noch offen
-- eine Reihenfolge fuer sprachliche Kernfeatures festlegen
+- Die Formulierung klang nach kompletter Erstinventur.
+- Die Zahl alter Issues ist als Steuerungsmodell zu grob.
+
+## Fokus
+
+1. Bestehende Review-Arbeit auf „normativ / offen / ueberholt / ersetzt“ verdichten.
+2. Pro Sprachkapitel nur noch wenige konkrete Blocker benennen.
+3. Daraus eine Reihenfolge fuer Compiler-, Runtime- und Testarbeit machen.
 
 ## Betroffene Stellen
 
@@ -28,31 +34,8 @@ Die bestehende Spec ist breiter als die Implementierung und gleichzeitig intern 
 - [SPEC_REVIEW.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/SPEC_REVIEW.md)
 - [spec_impl_completeness.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec_impl_completeness.md)
 
-## Umsetzungsrichtung
-
-1. Bestehende Review-Punkte nach Sprachkern, Runtime, Syntax und Tooling clustern.
-
-2. Pro Spec-Datei eine knappe Statuszeile einfuehren:
-
-- Status
-- groesste Luecken
-- offene Entscheidungen
-
-3. Daraus eine Prioritaetsmatrix erstellen:
-
-- Sprint-tauglich
-- blockiert durch Spec-Entscheidung
-- nur Dokumentationsarbeit
-
-4. Die Matrix so formulieren, dass daraus direkt Compiler- und Testarbeit abgeleitet werden kann.
-
 ## Akzeptanzkriterien
 
-- Es gibt eine belastbare Uebersicht, welche Spec-Teile wirklich normativ sind.
-- Widersprueche und offene Entscheidungen sind explizit markiert.
-- Die wichtigsten Implementierungsluecken sind priorisiert.
-- Nachfolgende Sprint-Tasks muessen nicht mehr gleichzeitig Spec und Code raten.
-
-## Ergebnis
-
-Nach Abschluss ist klar, welche Teile der AIML-Spec als verbindlicher Zielzustand gelten und welche Stellen zuerst angefasst werden muessen.
+- Pro wichtigem Sprachkapitel ist sichtbar, ob es normativ, offen oder ueberholt ist.
+- Nachfolgende Sprint-Tasks muessen keine Spec-Inventur mehr mittransportieren.
+- Widersprueche und Altlasten sind klar von echter Folgearbeit getrennt.

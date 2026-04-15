@@ -1,0 +1,41 @@
+# Regression target: deep field read/write chains should work.
+# Expected exit code: 0
+
+- model:
+    name: Inner
+    fields:
+      - [value, i32]
+      - [label, string]
+
+- model:
+    name: Mid
+    fields:
+      - [inner, Inner]
+
+- model:
+    name: Root
+    fields:
+      - [mid, Mid]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [root, Root]
+
+      - set: [root.mid.inner.value, 5]
+      - if:
+          condition: { neq: [root.mid.inner.value, 5] }
+          then:
+            - print: ["FAIL nested_read_value=${root.mid.inner.value}"]
+            - call: [sys.exit, 1]
+
+      - set: [root.mid.inner.label, "ok-chain"]
+      - if:
+          condition: { eq: [{ eq: [root.mid.inner.label, "ok-chain"] }, 0] }
+          then:
+            - print: ["FAIL nested_read_label=${root.mid.inner.label}"]
+            - call: [sys.exit, 1]
+
+      - print: ["field chain read/write PASS"]
+      - return: 0

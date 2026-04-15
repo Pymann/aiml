@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cassert>
+#include <string>
 
 // ── Internal types ────────────────────────────────────────────────────────────
 
@@ -52,6 +53,81 @@ static void jw_add_kv(aiml_jw_t* w, const char* key, yyjson_mut_val* val) {
 // Append a value to the current array on the stack
 static void jw_arr_append(aiml_jw_t* w, yyjson_mut_val* val) {
     yyjson_mut_arr_append(jw_cur(w), val);
+}
+
+
+static char* aiml_strdup_cpp(const std::string& s) {
+    char* out = (char*)malloc(s.size() + 1);
+    if (!out) return nullptr;
+    memcpy(out, s.c_str(), s.size() + 1);
+    return out;
+}
+
+static std::string aiml_pretty_json_cpp(const char* json, const char* indent, const char* newline_str) {
+    std::string src = json ? json : "";
+    std::string indentUnit = (indent && *indent) ? indent : "  ";
+    std::string newline = (newline_str && *newline_str) ? newline_str : "\n";
+    std::string out;
+    out.reserve(src.size() + src.size() / 2);
+    int depth = 0;
+    bool inString = false;
+    bool escaped = false;
+
+    auto append_indent = [&]() {
+        for (int i = 0; i < depth; ++i) out += indentUnit;
+    };
+
+    for (size_t i = 0; i < src.size(); ++i) {
+        char c = src[i];
+        if (inString) {
+            out += c;
+            if (escaped) escaped = false;
+            else if (c == '\\') escaped = true;
+            else if (c == '"') inString = false;
+            continue;
+        }
+        switch (c) {
+            case '"':
+                inString = true;
+                out += c;
+                break;
+            case '{':
+            case '[':
+                out += c;
+                if (i + 1 < src.size() && !((c == '{' && src[i + 1] == '}') || (c == '[' && src[i + 1] == ']'))) {
+                    out += newline;
+                    ++depth;
+                    append_indent();
+                }
+                break;
+            case '}':
+            case ']':
+                if (!out.empty() && out.size() >= newline.size() && out.compare(out.size() - newline.size(), newline.size(), newline) != 0) {
+                    out += newline;
+                }
+                depth = depth > 0 ? depth - 1 : 0;
+                append_indent();
+                out += c;
+                break;
+            case ',':
+                out += c;
+                out += newline;
+                append_indent();
+                break;
+            case ':':
+                out += ": ";
+                break;
+            case ' ':
+            case '\n':
+            case '\r':
+            case '\t':
+                break;
+            default:
+                out += c;
+                break;
+        }
+    }
+    return out;
 }
 
 // ── Write API ─────────────────────────────────────────────────────────────────
@@ -192,6 +268,12 @@ char* aiml_jw_done(void* wv) {
     yyjson_mut_doc_free(w->doc);
     free(w);
     return json;  // caller must free()
+}
+
+char* aiml_json_style_format(const char* json, int pretty, const char* indent, const char* newline_str) {
+    if (!json) return aiml_strdup_cpp("");
+    if (!pretty) return aiml_strdup_cpp(json);
+    return aiml_strdup_cpp(aiml_pretty_json_cpp(json, indent, newline_str));
 }
 
 // ── Read API ──────────────────────────────────────────────────────────────────

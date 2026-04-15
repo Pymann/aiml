@@ -1,0 +1,33 @@
+# Host-side entrypoint compiled with import set A.
+
+- import: "tests/ws_context_host_top.aiml"
+
+- decl: [sess, mirror_session]
+- set: [sess, { call: [mirror.listen, "ws://127.0.0.1:19921"] }]
+
+- decl: [v, SharedViewWsCtx]
+- decl: [cards, list<SharedCard>]
+- set: [v.cards, cards]
+- set: [v.round, 9]
+- set: [v.title, "ctx-check"]
+
+- decl: [c0, SharedCard]
+- set: [c0.name, "Canopy Viper"]
+- set: [c0.cost, 3]
+- call: [v.cards.push, c0]
+- set: [v.card_count, 1]
+
+- decl: [nid, i32]
+- set: [nid, { call: [sess.register, v] }]
+- print: ["ctx-host: registered net_id=${nid}"]
+
+- decl: [i, i32, 0]
+- while:
+    condition: { lt: [i, 180] }
+    body:
+      - call: [sess.update]
+      - call: [time.sleep_ms, 10]
+      - set: [i, { +: [i, 1] }]
+
+- call: [sess.close]
+- print: ["ctx-host: done"]

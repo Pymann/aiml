@@ -1,0 +1,49 @@
+# Regression target: mixed field/index chains should work.
+# Expected exit code: 0
+
+- model:
+    name: Item
+    fields:
+      - [hp, i32]
+      - [name, string]
+
+- model:
+    name: Bag
+    fields:
+      - [items, list<Item>]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [json, string, '{"__type":"Bag","items":[{"hp":3,"name":"alpha"},{"hp":7,"name":"beta"}] }']
+      - decl: [bag, Bag]
+      - set: [bag, { call: [sys.deserialize, json, "Bag"] }]
+
+      - if:
+          condition: { neq: [bag.items.len, 2] }
+          then:
+            - print: ["FAIL items_len=${bag.items.len}"]
+            - call: [sys.exit, 1]
+
+      - if:
+          condition: { neq: [bag.items-0.hp, 3] }
+          then:
+            - print: ["FAIL item0_hp=${bag.items-0.hp}"]
+            - call: [sys.exit, 1]
+
+      - if:
+          condition: { neq: [bag.items-1.name, "beta"] }
+          then:
+            - print: ["FAIL item1_name=${bag.items-1.name}"]
+            - call: [sys.exit, 1]
+
+      - set: [bag.items-1.hp, 9]
+      - if:
+          condition: { neq: [bag.items-1.hp, 9] }
+          then:
+            - print: ["FAIL item1_hp_after_set=${bag.items-1.hp}"]
+            - call: [sys.exit, 1]
+
+      - print: ["field chain index access PASS"]
+      - return: 0

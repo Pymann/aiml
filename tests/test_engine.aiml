@@ -22,13 +22,13 @@
     - call: [sys.exit, 1]
 
 - decl: [mob, i32, { call: [engine.is_mobile] }]
-- if: [{ "!=": [mob, 0] }, true]
+- if: [{ neq: [mob, 0] }, true]
   then:
     - print: ["FAIL Phase A: is_mobile should be 0, got: ", mob]
     - call: [sys.exit, 1]
 
 - decl: [web, i32, { call: [engine.is_web] }]
-- if: [{ "!=": [web, 0] }, true]
+- if: [{ neq: [web, 0] }, true]
   then:
     - print: ["FAIL Phase A: is_web should be 0, got: ", web]
     - call: [sys.exit, 1]
@@ -41,13 +41,13 @@
 # + glewInit vollständig. GL 3.3 Core Profile + Depth-Test sind danach aktiv.
 
 - decl: [win, window_handle, { call: [engine.create_window, 800, 600, "AIML Engine Test"] }]
-- if: [{ ==: [win, null] }, true]
+- if: [{ eq: [win, null] }, true]
   then:
     - print: ["FAIL Phase B: engine.create_window returned null"]
     - call: [sys.exit, 1]
 
 - decl: [running, i32, { call: [engine.running, win] }]
-- if: [{ ==: [running, 0] }, true]
+- if: [{ eq: [running, 0] }, true]
   then:
     - print: ["FAIL Phase B: engine.running should be 1 after create_window"]
     - call: [sys.exit, 1]
@@ -71,31 +71,31 @@
 # Keine Taste gedrückt → alle Polling-Werte müssen 0/0.0 sein
 
 - decl: [ax_fwd, f32, { call: [input.axis, "forward"] }]
-- if: [{ "!=": [ax_fwd, 0] }, true]
+- if: [{ neq: [ax_fwd, 0] }, true]
   then:
     - print: ["FAIL Phase C: axis('forward') should be 0.0, got: ", ax_fwd]
     - call: [sys.exit, 1]
 
 - decl: [fire_down, i32, { call: [input.action_down, "fire"] }]
-- if: [{ "!=": [fire_down, 0] }, true]
+- if: [{ neq: [fire_down, 0] }, true]
   then:
     - print: ["FAIL Phase C: action_down('fire') should be 0, got: ", fire_down]
     - call: [sys.exit, 1]
 
 - decl: [has_ev, i32, { call: [input.has_event] }]
-- if: [{ "!=": [has_ev, 0] }, true]
+- if: [{ neq: [has_ev, 0] }, true]
   then:
     - print: ["FAIL Phase C: has_event should be 0, got: ", has_ev]
     - call: [sys.exit, 1]
 
 - decl: [w_down, i32, { call: [input.key_down, "W"] }]
-- if: [{ "!=": [w_down, 0] }, true]
+- if: [{ neq: [w_down, 0] }, true]
   then:
     - print: ["FAIL Phase C: key_down('W') should be 0, got: ", w_down]
     - call: [sys.exit, 1]
 
 - decl: [mb0, i32, { call: [input.mouse_button, 0] }]
-- if: [{ "!=": [mb0, 0] }, true]
+- if: [{ neq: [mb0, 0] }, true]
   then:
     - print: ["FAIL Phase C: mouse_button(0) should be 0, got: ", mb0]
     - call: [sys.exit, 1]
@@ -117,13 +117,13 @@
 - decl: [tri_idx, buffer<u32>, [0, 1, 2]]
 
 - decl: [tri_mesh, gl_mesh, { call: [gl.create_mesh, tri_pos, null, null, tri_idx] }]
-- if: [{ ==: [tri_mesh, null] }, true]
+- if: [{ eq: [tri_mesh, null] }, true]
   then:
     - print: ["FAIL Phase D: gl.create_mesh returned null"]
     - call: [sys.exit, 1]
 
 - decl: [icnt, i32, { call: [tri_mesh.index_count] }]
-- if: [{ "!=": [icnt, 3] }, true]
+- if: [{ neq: [icnt, 3] }, true]
   then:
     - print: ["FAIL Phase D: index_count should be 3, got: ", icnt]
     - call: [sys.exit, 1]
@@ -139,7 +139,7 @@
 - decl: [gp, path, "tests/test.glb"]
 - decl: [scene, gltf_scene, { call: [gltf.load, gp] }]
 - decl: [sv, i32, { call: [scene.valid] }]
-- if: [{ ==: [sv, 0] }, true]
+- if: [{ eq: [sv, 0] }, true]
   then:
     - print: ["FAIL Phase E: gltf.load failed"]
     - call: [sys.exit, 1]
@@ -156,7 +156,7 @@
 - decl: [prim, gltf_primitive, { call: [gmesh.primitive, 0] }]
 
 - decl: [gltf_mesh_obj, gl_mesh, { call: [prim.to_gl_mesh] }]
-- if: [{ ==: [gltf_mesh_obj, null] }, true]
+- if: [{ eq: [gltf_mesh_obj, null] }, true]
   then:
     - print: ["FAIL Phase E: prim.to_gl_mesh returned null"]
     - call: [sys.exit, 1]

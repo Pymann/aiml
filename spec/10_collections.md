@@ -87,6 +87,48 @@
 `.len` is available on `list`, `map`, and `string`.
 `.size` is an intrinsic method available on all types.
 
+## Struct/Model Elements in Lists
+
+`list<T>` supports any element type `T` — primitives, strings, pointers, and user-defined
+models/classes (structs). The storage semantics depend on `T`:
+
+| Element type | Storage | push semantics | get semantics |
+|-------------|---------|----------------|---------------|
+| `i32`, `f32`, ... | value in array | value copy | value copy |
+| `string` (`i8*`) | pointer in array | pointer copy | pointer copy |
+| `ptr<MyModel>` | pointer in array | pointer copy (shared heap object) | pointer copy |
+| `MyModel` (struct) | full struct in array | full struct copy (value semantics) | full struct copy |
+
+**Implementation**: `list.push(val)` does `CreateStore(val, &data[size])` — the LLVM value
+is stored directly into the data array. For structs this is a full byte-for-byte copy
+(`sizeof(MyModel)` bytes per element). For pointers it is an 8-byte pointer copy.
+
+**Consequence**: `list<MyModel>` and `list<ptr<MyModel>>` are both valid but have
+fundamentally different semantics:
+
+```yaml
+# Value semantics — each element is an independent copy.
+# Modifying the original after push does NOT affect the list element.
+- decl: [items, list<MyModel>]
+- decl: [m, MyModel]
+- set: [m.name, "alpha"]
+- call: [items.push, m]
+- set: [m.name, "beta"]      # items-0.name is still "alpha"
+
+# Pointer semantics — elements share the heap object.
+# Modifying via the pointer affects ALL references.
+- decl: [items, list<ptr<MyModel>>]
+- decl: [m, "ptr<MyModel>"]
+- set: [m, { new: MyModel }]
+- set: [m.name, "alpha"]
+- call: [items.push, m]
+- set: [m.name, "beta"]      # items-0.name is now "beta" (same heap object)
+```
+
+**When to use which**:
+- `list<MyModel>` — lightweight data records, no shared mutation needed
+- `list<ptr<MyModel>>` — shared objects, objects returned from runtime APIs (VecResult, zip_entry)
+
 ## Built-in Generic Types
 
 The generic type parameters (`list<T>`, `map<K:V>`, `ptr<T>`, `chan<T>`) are **built-in only**.

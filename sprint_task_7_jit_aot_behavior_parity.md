@@ -2,63 +2,43 @@
 
 ## Titel
 
-JIT- und AOT-Verhalten angleichen
+Semantische JIT-/AOT-Paritaet herstellen
+
+## Status
+
+Weiterhin offen und klar von Task 12 zu unterscheiden.
 
 ## Ziel
 
-Der Compiler soll fuer denselben AIML-Inhalt moeglichst dieselbe Semantik liefern, egal ob ueber Datei-/AOT-Pfad oder String-/Chunk-/JIT-Pfad kompiliert wird.
+Derselbe AIML-Inhalt soll in JIT und AOT dieselbe sichtbare Semantik haben.
 
-## Hintergrund
+## Aktueller Stand
 
-Die Analyse in [jit_vs_aot.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/jit_vs_aot.md) zeigt mehrere echte Unterschiede:
+- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp) zeigt weiterhin getrennte Entry-Points fuer `compile`, `compileFromString`, `jitRun` und `compileChunkAndGetAddress`.
+- Modulverifikation existiert bereits in beiden Hauptpfaden; das Problem ist heute also weniger „Verifier fehlt“ als „Semantik und Init-Verhalten driften“. 
 
-- anderer Compilerkontext
-- andere Import- und Header-Propagation
-- andere Objektdatei- und Linkbehandlung
-- andere Initialisierung und Symbolregistrierung
+## Was an der alten Fassung veraltet war
 
-Das ist nicht nur Tooling-Unterschied, sondern kann Sprachverhalten veraendern.
+- Der Task vermischte semantische Paritaet mit Pipeline-Architektur.
+- Verifikation als Kernluecke ist heute nicht mehr der richtige Schwerpunkt.
 
-## Scope
+## Fokus
 
-- Compilerkontext zwischen `compile()` und `compileFromString()` angleichen
-- Import- und Linksemantik vereinheitlichen
-- Objektartefakte und `objectFilesToLink` konsistent behandeln
-- Initialisierungspfade und aktive Kontexte fuer JIT-Lauf pflegen
+1. Import- und Symbolsichtbarkeit.
+2. Init-Verhalten inklusive `__aiml_init`.
+3. Kontext- und Seiteneffekte zwischen Datei- und Stringpfad.
+4. kleine Repros, die beide Pfade gegeneinander halten.
 
 ## Betroffene Stellen
 
 - [jit_vs_aot.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/jit_vs_aot.md)
 - [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp)
 - [ast_compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp)
-- [fptable.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/fptable.cpp)
 - [exec_impl.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/exec_impl.cpp)
-
-## Umsetzungsrichtung
-
-1. Die derzeitigen Unterschiede nach Auswirkung sortieren:
-
-- semantisch kritisch
-- toolseitig stoerend
-- nur intern technisch
-
-2. Zuerst alle semantisch kritischen Punkte angleichen:
-
-- Importauflosung
-- `libraryMode`
-- `currentSourceFile`
-- `objectFilesToLink`
-
-3. Danach die Initialisierungs- und Runtimekontext-Unterschiede zwischen `jitRun()` und Chunk-Pfaden bereinigen.
-
-4. Abschliessend kleine Repros anlegen, die identische Quellen in beiden Pfaden pruefen.
+- [fptable.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/fptable.cpp)
 
 ## Akzeptanzkriterien
 
-- Derselbe Quellinhalt verhaelt sich in JIT und AOT fuer Kernfaelle gleich.
-- Importierte Typen und Symbole sind nicht mehr pfadabhaengig sichtbar oder unsichtbar.
-- Abweichungen sind entweder beseitigt oder bewusst dokumentiert.
-
-## Ergebnis
-
-Nach Abschluss ist JIT gegen AOT kein eigener Sprachdialekt mehr, sondern im Wesentlichen nur noch ein anderer Ausfuehrungspfad.
+- Kernfaelle verhalten sich in JIT und AOT gleich.
+- Import- und Init-Regeln sind nicht mehr pfadabhaengig ueberraschend.
+- Verbleibende Unterschiede sind klein und bewusst dokumentiert.

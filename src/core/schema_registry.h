@@ -3,7 +3,7 @@
 #include <cstdint>
 
 // Maximum number of fields tracked per class/model.
-static constexpr int AIML_MAX_FIELDS = 32;
+static constexpr int AIML_MAX_FIELDS = 256;
 
 // Per-field metadata stored in the Schema-Registry.
 // NOTE: Field offsets are NOT stored here — they are baked as GEP indices

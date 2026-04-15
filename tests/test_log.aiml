@@ -73,7 +73,7 @@
     args: [[x, i32]]
     body:
       - if:
-          condition: { "==": [x, 0] }
+          condition: { eq: [x, 0] }
           then:
             - call: [log.debug, "x is zero"]
           else:
@@ -92,7 +92,7 @@
     return: string
     body:
       - if:
-          condition: { "==": [x, 0] }
+          condition: { eq: [x, 0] }
           then:
             - call: [log.warn, "returning early"]
             - return: "early"

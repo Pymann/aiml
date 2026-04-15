@@ -39,7 +39,7 @@
 - decl: [scene, gltf_scene, { call: [gltf.load, p] }]
 # scene.valid() gibt 0 zurück wenn cgltf_parse oder cgltf_load_buffers fehlschlug
 - decl: [ok, i32, { call: [scene.valid] }]
-- if: [{ ==: [ok, 0] }, true]
+- if: [{ eq: [ok, 0] }, true]
   then:
     - print: ["FAIL: gltf.load failed"]
     - call: [sys.exit, 1]
@@ -71,21 +71,21 @@
 # PBR-Textur-Pipeline: material → base_color_texture → image → Pixel-Daten.
 # Jeder Schritt kann null zurückgeben (fehlende Textur ist valides glTF).
 - decl: [mat, gltf_material, { call: [prim.material] }]
-- if: [{ ==: [mat, null] }, true]
+- if: [{ eq: [mat, null] }, true]
   then:
     - print: ["FAIL: no material on primitive"]
     - call: [sys.exit, 1]
 
 # base_color_texture entspricht dem 'baseColorTexture' im PBR-MetallicRoughness-Block
 - decl: [tex, gltf_texture, { call: [mat.base_color_texture] }]
-- if: [{ ==: [tex, null] }, true]
+- if: [{ eq: [tex, null] }, true]
   then:
     - print: ["FAIL: no base_color_texture on material"]
     - call: [sys.exit, 1]
 
 # tex.image() gibt das erste gltf_image zurück, das dieser Textur zugeordnet ist
 - decl: [img, gltf_image, { call: [tex.image] }]
-- if: [{ ==: [img, null] }, true]
+- if: [{ eq: [img, null] }, true]
   then:
     - print: ["FAIL: gltf_texture.image() returned null"]
     - call: [sys.exit, 1]
@@ -102,7 +102,7 @@
 # markiert und wird von run_all_tests.sh übersprungen.
 
 - decl: [ok2, i32, { call: [glfwInit] }]
-- if: [{ ==: [ok2, 0] }, true]
+- if: [{ eq: [ok2, 0] }, true]
   then:
     - print: ["FAIL: glfwInit failed"]
     - call: [sys.exit, 1]
@@ -119,7 +119,7 @@
 
 # null, null = kein Fullscreen-Monitor, kein geteilter GL-Kontext
 - decl: [win, ptr, { call: [glfwCreateWindow, 800, 600, "AIML — texturierter Würfel", null, null] }]
-- if: [{ ==: [win, null] }, true]
+- if: [{ eq: [win, null] }, true]
   then:
     - print: ["FAIL: glfwCreateWindow failed"]
     - call: [glfwTerminate]

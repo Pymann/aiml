@@ -1,0 +1,29 @@
+# Test: class method returning list<string>
+# Expected exit code: 0
+
+- class:
+    name: Splitter
+    methods:
+      - def:
+          name: do_split
+          access: public
+          args: [[text, string]]
+          return: list<string>
+          body:
+            - decl: [result, list<string>]
+            - set: [result, { call: [text.split, " "] }]
+            - return: [result]
+
+- decl: [sp, Splitter]
+- decl: [parts, list<string>]
+- set: [parts, { call: [sp.do_split, "hello world foo"] }]
+- decl: [n, i32, parts.len]
+- print: ["count=${n}"]
+- if:
+    condition: { eq: [n, 3] }
+    then:
+      - print: ["PASS"]
+      - call: [sys.exit, 0]
+    else:
+      - print: ["FAIL n=${n}"]
+      - call: [sys.exit, 1]

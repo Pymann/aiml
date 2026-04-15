@@ -41,8 +41,13 @@ int main(int argc, char** argv) {
     }
 
     if (inputFile.empty()) {
-        std::cerr << "Usage: aiml <input.aiml> [--log-level DEBUG|INFO|WARN|ERROR] [-v] [-r|--run] [-o output.ll]" << std::endl;
+        std::cerr << "Usage: aiml <input.aiml> [-o output.o|output.ll] [--log-level DEBUG|INFO|WARN|ERROR] [-r]" << std::endl;
         return 1;
+    }
+
+    // Default: no -o means JIT run (like python)
+    if (outputFile.empty() && !runMode) {
+        runMode = true;
     }
 
     if (outputFile.empty()) {

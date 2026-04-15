@@ -1,0 +1,4 @@
+# Requires: library
+- import: "tests/ws_context_card_a.aiml"
+- import: "tests/ws_context_shared_view.aiml"
+

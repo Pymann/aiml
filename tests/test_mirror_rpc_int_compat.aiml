@@ -1,0 +1,113 @@
+# Regression test: legacy mirror RPC keeps working with rpc_event v2 fields present
+# Expected exit code: 0
+
+- model:
+    name: NetPlayer
+    sync: [health, score]
+    rpc: [take_damage]
+    fields:
+      - [health, i32]
+      - [score, i32]
+
+- def:
+    name: mirror_rpc_int_host
+    args: []
+    body:
+      - decl: [sess, mirror_session]
+      - set: [sess, { call: [mirror.listen, "ws://127.0.0.1:19901"] }]
+      - decl: [player, NetPlayer]
+      - set: [player.health, 50]
+      - set: [player.score, 0]
+      - decl: [nid, i32]
+      - set: [nid, { call: [sess.register, player] }]
+      - print: ["host-int: registered net_id=${nid}"]
+
+      - decl: [i, i32, 0]
+      - while:
+          condition: { lt: [i, 25] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+
+      - decl: [empty_rpc, rpc_event]
+      - set: [empty_rpc, { call: [sess.poll_rpc] }]
+      - if:
+          condition: { neq: [empty_rpc.method, ""] }
+          then:
+            - set: [player.score, 700]
+            - call: [sess.sync_now, player]
+
+      - set: [i, 0]
+      - while:
+          condition: { lt: [i, 40] }
+          body:
+            - call: [sess.update]
+            - if:
+                condition: { gt: [{ call: [sess.has_rpc] }, 0] }
+                then:
+                  - decl: [rpc_ev, rpc_event]
+                  - set: [rpc_ev, { call: [sess.next_rpc] }]
+                  - if:
+                      condition: { neq: [rpc_ev.arg_kind, 0] }
+                      then:
+                        - set: [player.score, 701]
+                      else:
+                        - if:
+                            condition: { neq: [rpc_ev.arg, 7] }
+                            then:
+                              - set: [player.score, 702]
+                            else:
+                              - if:
+                                  condition: { neq: [rpc_ev.arg_blob_len, 0] }
+                                  then:
+                                    - set: [player.score, 703]
+                                  else:
+                                    - set: [player.health, { -: [player.health, rpc_ev.arg] }]
+                                    - set: [player.score, 777]
+                  - call: [sess.sync_now, player]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+
+      - call: [sess.close]
+
+- decl: [host_th, thread_handle]
+- set: [host_th, { spawn: [mirror_rpc_int_host] }]
+- call: [time.sleep_ms, 80]
+
+- decl: [client, mirror_session]
+- set: [client, { call: [mirror.connect_timeout, "ws://127.0.0.1:19901", 2000] }]
+- call: [time.sleep_ms, 120]
+- call: [client.update]
+
+- decl: [ev, mirror_event]
+- set: [ev, { call: [client.next_event] }]
+- decl: [replica, NetPlayer]
+- call: [client.register_id, replica, ev.net_id]
+
+- call: [time.sleep_ms, 100]
+- call: [client.update]
+- print: ["client-int: initial health=${replica.health} score=${replica.score}"]
+
+- call: [client.send_rpc, ev.net_id, "take_damage", 7]
+- print: ["client-int: sent take_damage(7)"]
+
+- call: [time.sleep_ms, 240]
+- call: [client.update]
+- print: ["client-int: final health=${replica.health} score=${replica.score}"]
+
+- if:
+    condition: { neq: [replica.health, 43] }
+    then:
+      - print: ["FAIL int-rpc health=${replica.health}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.score, 777] }
+    then:
+      - print: ["FAIL int-rpc score=${replica.score}"]
+      - call: [sys.exit, 1]
+
+- call: [client.close]
+- call: [host_th.join]
+- print: ["mirror rpc int compat PASS"]

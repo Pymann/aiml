@@ -669,10 +669,32 @@
             "arch": "amd64",
             "required": true,
             "digest": null
+        },
+        {
+            "name": "libopenblas-serial-dev",
+            "version": "0.3.26+ds-1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e530f91d688d0603efe5a402fc5c76f0ae7323487617eaa0eecfe655f2d693b8"
+        },
+        {
+            "name": "libopenblas0-serial",
+            "version": "0.3.26+ds-1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "18bc35bb2cb8a20db1774400386e49f257ba46b4935b8ab233c42055e349b16a"
+        },
+        {
+            "name": "libgfortran5",
+            "version": "14.2.0-4ubuntu2~24.04.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "2b05896c477275ad3473bb63a5ac5a5b8a7e4a6ad6ed7cb23c442ccd1abc28f5"
         }
     ],
     "conan_packages": [],
     "output_type": "executable",
+    "artifact_in_cwd": false,
     "optimization": "0",
     "debug": true,
     "warnings": [],
@@ -718,8 +740,13 @@
             ]
         }
     },
-    "clang_library_file": null,
+    "clang_library_file": "/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/exodus/__exodus_cache/apt/libclang1-20/amd64/1:20.1.2-0ubuntu1~24.04.2/payload/usr/lib/x86_64-linux-gnu/libclang-20.so.20",
     "clang_node_limit": 50000,
+    "clang_worker_timeout_sec": 120,
+    "clang_worker_parallelism": 4,
+    "clang_parse_only_on_timeout": true,
+    "clang_parse_only_on_crash": true,
+    "project_headers_only": true,
     "source_root": ".",
     "build_root": "out",
     "search_paths": [
@@ -742,7 +769,9 @@
         "__exodus_cache/apt/libstb-dev/amd64/0.0~git20230129.5736b15+ds-1.2/payload/usr/include",
         "__exodus_cache/apt/libglew-dev/amd64/2.2.0-4build1/payload/usr/include",
         "__exodus_cache/apt/libglu1-mesa-dev/amd64/9.0.2-1.1build1/payload/usr/include",
-        "__exodus_cache/apt/rpcsvc-proto/amd64/1.4.2-0ubuntu7/payload/usr/include"
+        "__exodus_cache/apt/rpcsvc-proto/amd64/1.4.2-0ubuntu7/payload/usr/include",
+        "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/include",
+        "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/include/x86_64-linux-gnu/openblas-serial"
     ],
     "sources": [
         "*.c",
@@ -750,7 +779,13 @@
         "*.cc",
         "src/**/*.cpp"
     ],
+    "src_pattern_for_headers": [
+        "*.h",
+        "src/core/**/*.h",
+        "src/sys/**/*.h"
+    ],
     "defines": {},
+    "env": {},
     "pre_compilation": "hook_example.py",
     "pre_linkage": null,
     "architecture": {
@@ -785,7 +820,8 @@
             "-Wl,-rpath,__exodus_cache/apt/libassimp5/amd64/5.3.1+ds-2build1/payload/usr/lib/x86_64-linux-gnu",
             "-Wl,-rpath,__exodus_cache/apt/libglfw3/amd64/3.3.10-1build1/payload/usr/lib/x86_64-linux-gnu",
             "-Wl,-rpath,__exodus_cache/apt/libpng16-16t64/amd64/1.6.43-5ubuntu0.5/payload/usr/lib/x86_64-linux-gnu",
-            "-Wl,-rpath,__exodus_cache/apt/libglew2.2/amd64/2.2.0-4build1/payload/usr/lib/x86_64-linux-gnu"
+            "-Wl,-rpath,__exodus_cache/apt/libglew2.2/amd64/2.2.0-4build1/payload/usr/lib/x86_64-linux-gnu",
+            "-Wl,-rpath,__exodus_cache/apt/libopenblas0-serial/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu/openblas-serial"
         ],
         "libraries": [
             "yaml-cpp",
@@ -806,7 +842,8 @@
             "png",
             "GLEW",
             "m",
-            "dl"
+            "dl",
+            "openblas"
         ],
         "library_paths": [
             "__exodus_cache/apt/libyaml-cpp-dev/amd64/0.8.0+dfsg-6build1/payload/usr/lib/x86_64-linux-gnu",
@@ -883,7 +920,12 @@
             "__exodus_cache/apt/libx11-6/amd64/2:1.8.7-1build1/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libglvnd0/amd64/1.7.0-1build1/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libopengl0/amd64/1.7.0-1build1/payload/usr/lib/x86_64-linux-gnu",
-            "__exodus_cache/apt/libglx0/amd64/1.7.0-1build1/payload/usr/lib/x86_64-linux-gnu"
+            "__exodus_cache/apt/libglx0/amd64/1.7.0-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libgfortran5/amd64/14.2.0-4ubuntu2~24.04.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libopenblas0-serial/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu/openblas-serial",
+            "__exodus_cache/apt/libopenblas0-serial/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu/openblas-serial"
         ],
         "rpath": true
     }

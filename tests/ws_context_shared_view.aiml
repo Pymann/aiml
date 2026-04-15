@@ -1,0 +1,10 @@
+# Requires: library
+
+- model:
+    name: SharedViewWsCtx
+    sync: [round, title, card_count, cards]
+    fields:
+      - [round, i32, 0]
+      - [title, string, ""]
+      - [card_count, i32, 0]
+      - [cards, list<SharedCard>]

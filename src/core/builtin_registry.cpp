@@ -16,6 +16,7 @@
 #include "../../src/sys/engine_runtime.h"
 #include "../../src/sys/input_runtime.h"
 #include "../../src/sys/ui_runtime.h"
+#include "../../src/sys/tensor_runtime.h"
 #include <llvm/IR/IRBuilder.h>
 
 using IRValue = AIML::IRValue;
@@ -115,6 +116,28 @@ void registerBuiltins(CompilerContext& ctx) {
     }
 
     // -----------------------------------------------------------------------
+    // JsonStyle builtin class for sys.serialize formatting
+    // Layout: { i32 pretty, ptr indent, ptr newline }
+    // -----------------------------------------------------------------------
+    {
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        llvm::Type* p   = llvm::PointerType::get(ctx.context, 0);
+        llvm::StructType* jsTy = llvm::StructType::getTypeByName(ctx.context, "JsonStyle");
+        if (!jsTy) {
+            jsTy = llvm::StructType::create(ctx.context, {i32, p, p}, "JsonStyle");
+        }
+        CompilerContext::ClassInfo jsInfo;
+        jsInfo.name = "JsonStyle"; jsInfo.type = jsTy; jsInfo.isBuiltin = false;
+        auto mk = [](llvm::Type* t, int idx, const std::string& tn) {
+            CompilerContext::StructMember m; m.type = t; m.index = idx; m.typeName = tn; return m;
+        };
+        jsInfo.members["pretty"]  = mk(i32, 0, "i32");
+        jsInfo.members["indent"]  = mk(p,   1, "string");
+        jsInfo.members["newline"] = mk(p,   2, "string");
+        ctx.classes["JsonStyle"] = std::move(jsInfo);
+    }
+
+    // -----------------------------------------------------------------------
     // zip_entry — archive entry struct for compress.zip_entries
     // Layout: { ptr name, i64 size, i64 compressed_size, i32 is_dir, i32 crc32, i32 method, i32 _pad }
     // -----------------------------------------------------------------------
@@ -182,6 +205,27 @@ void registerBuiltins(CompilerContext& ctx) {
         return ctx.ir_gen->getInt32(0);
     };
 
+    // sys.mem_limit(bytes_i64) — set process virtual memory limit (RLIMIT_AS).
+    // Process is terminated when exceeded instead of freezing the machine.
+    sys.builtinFuncs["mem_limit"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+        llvm::Function* f = ctx.getFunction("aiml_sys_mem_limit",
+            ctx.builder.getVoidTy(), {ctx.builder.getInt64Ty()});
+        llvm::Value* bytes = args.empty() ? ctx.builder.getInt64(0)
+                                          : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+        // Widen i32 to i64 if needed
+        if (bytes->getType()->isIntegerTy(32))
+            bytes = ctx.builder.CreateSExt(bytes, ctx.builder.getInt64Ty());
+        ctx.builder.CreateCall(f, {bytes});
+        return ctx.ir_gen->getInt32(0);
+    };
+
+    // sys.mem_usage() → i64 — current RSS (resident set size) in bytes.
+    sys.builtinFuncs["mem_usage"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+        llvm::Function* f = ctx.getFunction("aiml_sys_mem_usage",
+            ctx.builder.getInt64Ty(), {});
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f));
+    };
+
     sys.builtinFuncs["env"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
         llvm::Type* strTy = ctx.builder.getInt8Ty()->getPointerTo();
         llvm::StructType* mapTy = llvm::StructType::get(ctx.context, {
@@ -213,7 +257,7 @@ void registerBuiltins(CompilerContext& ctx) {
         if (args.empty()) return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)));
         llvm::Value* argvList = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
         if (argvList->getType()->isStructTy()) {
-            llvm::AllocaInst* tmp = ctx.builder.CreateAlloca(argvList->getType());
+            llvm::AllocaInst* tmp = ctx.createEntryAlloca(argvList->getType());
             ctx.builder.CreateStore(argvList, tmp);
             argvList = ctx.builder.CreateBitCast(tmp, i8p);
         } else if (argvList->getType()->isPointerTy()) {
@@ -505,6 +549,29 @@ void registerBuiltins(CompilerContext& ctx) {
         AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
         auto* sizePtr = ctx.builder.CreateStructGEP(ctx.getLLVMType("buffer"), baseAlloca, 0, "buf_len_ptr");
         return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), sizePtr, "buf_len"));
+    };
+
+    // buffer.zero() — memset(data, 0, capacity), then size = capacity, writeIndex = capacity
+    bufInfo.builtinMethods["zero"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+        auto* bufType = ctx.getLLVMType("buffer");
+        // Get capacity and data pointer
+        auto* capPtr = ctx.builder.CreateStructGEP(bufType, baseAlloca, 1, "buf_cap_ptr");
+        auto* cap = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), capPtr, "buf_cap");
+        auto* dataPtr = ctx.builder.CreateStructGEP(bufType, baseAlloca, 4, "buf_data_ptr");
+        auto* data = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), dataPtr, "buf_data");
+        // memset(data, 0, capacity)
+        auto* memsetFn = ctx.getFunction("memset",
+            ctx.builder.getInt8Ty()->getPointerTo(),
+            {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty()});
+        auto* cap64 = ctx.builder.CreateZExt(cap, ctx.builder.getInt64Ty());
+        ctx.builder.CreateCall(memsetFn, {data, ctx.builder.getInt32(0), cap64});
+        // size = capacity, writeIndex = capacity
+        auto* sizePtr = ctx.builder.CreateStructGEP(bufType, baseAlloca, 0);
+        ctx.builder.CreateStore(cap, sizePtr);
+        auto* writePtr = ctx.builder.CreateStructGEP(bufType, baseAlloca, 3);
+        ctx.builder.CreateStore(cap, writePtr);
+        return ctx.ir_gen->getInt32(0);
     };
 
     bufInfo.builtinMethods["read_versioned"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
@@ -980,7 +1047,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
 
             llvm::StructType* listTy = ListImpl::getListStructType(ctx);
-            llvm::Value* listAlloca  = ctx.builder.CreateAlloca(listTy, nullptr, "listdir_alloca");
+            llvm::Value* listAlloca  = ctx.createEntryAlloca(listTy, "listdir_alloca");
             ListImpl::initList(ctx, listAlloca, i8p, 8);
 
             llvm::Function* fillFn = ctx.getFunction("aiml_io_list_dir_fill", i32ty, {i8p, ptrTy});
@@ -1825,11 +1892,24 @@ void registerBuiltins(CompilerContext& ctx) {
                      ctx.builder.getInt64(elemSize)}));
             }
 
-            // ── Persistent (WAL + mmap) ───────────────────────────────────────
+            bool hasHeap = elemName != "string"
+                && ctx.classes.count(elemName) && ctx.classes[elemName].hasHeapFields
+                && ctx.classes[elemName].serNodesVar;
+
+            // ── Persistent (WAL + mmap / typed WAL) ──────────────────────────
             if (ctx.dbOpenPersist) {
                 llvm::Value* pathVal = ctx.dbOpenBasePathVal
                     ? ctx.dbOpenBasePathVal
                     : ctx.builder.CreateGlobalStringPtr("./aiondb/");
+                if (hasHeap) {
+                    auto& ci = ctx.classes[elemName];
+                    llvm::Value* nodesPtr = ci.serNodesVar;
+                    llvm::Value* nNodes   = ctx.builder.getInt32((uint32_t)ci.serNodesCount);
+                    llvm::Function* f = ctx.getFunction("aiml_db_store_open_typed_persist",
+                        i8p, {i8p, i8p, i64, i8p, i8p, i32});
+                    return ctx.ir_gen->wrap(ctx.builder.CreateCall(f,
+                        {nameVal, tnVal, ctx.builder.getInt64(elemSize), pathVal, nodesPtr, nNodes}));
+                }
                 llvm::Function* f = ctx.getFunction("aiml_db_store_open_persist",
                     i8p, {i8p, i8p, i64, i8p});
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(f,
@@ -1910,13 +1990,20 @@ void registerBuiltins(CompilerContext& ctx) {
         db.builtinFuncs["open_vec"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Type* i32 = ctx.builder.getInt32Ty();
-            llvm::Function* f = ctx.getFunction("aiml_db_vec_open", i8p, {i8p, i32});
             llvm::Value* nameVal = args.empty()
                 ? ctx.builder.CreateGlobalStringPtr("")
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             llvm::Value* dimsVal = args.size() >= 2
                 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
                 : ctx.builder.getInt32(0);
+            if (ctx.dbOpenPersist) {
+                llvm::Value* pathVal = ctx.dbOpenBasePathVal
+                    ? ctx.dbOpenBasePathVal
+                    : ctx.builder.CreateGlobalStringPtr("./aiondb/");
+                llvm::Function* f = ctx.getFunction("aiml_db_vec_open_persist", i8p, {i8p, i32, i8p});
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {nameVal, dimsVal, pathVal}));
+            }
+            llvm::Function* f = ctx.getFunction("aiml_db_vec_open", i8p, {i8p, i32});
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {nameVal, dimsVal}));
         };
 
@@ -2007,7 +2094,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 if (predFn) {
                     predPtr = ctx.builder.CreateBitCast(predFn, i8p, "pred_ptr");
                 } else {
-                    LOG_ERROR("db.query: predicate function '" + ctx.dbQueryWhere + "' not found");
+                    LOG_ERROR(ctx.fmtLoc() + "db.query: predicate function '" + ctx.dbQueryWhere + "' not found");
                 }
             }
 
@@ -2034,7 +2121,7 @@ void registerBuiltins(CompilerContext& ctx) {
 
             // Allocate result list
             llvm::StructType* listTy = ListImpl::getListStructType(ctx);
-            llvm::Value* listAlloca  = ctx.builder.CreateAlloca(listTy, nullptr, "query_list");
+            llvm::Value* listAlloca  = ctx.createEntryAlloca(listTy, "query_list");
             ListImpl::initList(ctx, listAlloca, ptrTy, 8);
 
             // Call C runtime
@@ -2598,7 +2685,7 @@ void registerBuiltins(CompilerContext& ctx) {
 
         // Store a loaded struct value to a temp alloca and return the alloca ptr
         auto storeToTmp = [](CompilerContext& ctx, llvm::Value* val, llvm::Type* ty) -> llvm::Value* {
-            llvm::AllocaInst* a = ctx.builder.CreateAlloca(ty, nullptr, "mtmp");
+            llvm::AllocaInst* a = ctx.createEntryAlloca(ty, "mtmp");
             ctx.builder.CreateStore(val, a);
             return a;
         };
@@ -2804,7 +2891,7 @@ void registerBuiltins(CompilerContext& ctx) {
             if (!fn) fn = llvm::Function::Create(
                 llvm::FunctionType::get(ctx.builder.getVoidTy(), {llvm::PointerType::get(ctx.context,0)}, false),
                 llvm::Function::ExternalLinkage, "aiml_math_quat_identity", ctx.module);
-            llvm::AllocaInst* out = ctx.builder.CreateAlloca(quatTy, nullptr, "qi");
+            llvm::AllocaInst* out = ctx.createEntryAlloca(quatTy, "qi");
             ctx.builder.CreateCall(fn, {out});
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(quatTy, out, "qi_val"));
         };
@@ -2813,7 +2900,7 @@ void registerBuiltins(CompilerContext& ctx) {
             if (!fn) fn = llvm::Function::Create(
                 llvm::FunctionType::get(ctx.builder.getVoidTy(), {llvm::PointerType::get(ctx.context,0)}, false),
                 llvm::Function::ExternalLinkage, "aiml_math_mat4_identity", ctx.module);
-            llvm::AllocaInst* out = ctx.builder.CreateAlloca(mat4Ty, nullptr, "mi");
+            llvm::AllocaInst* out = ctx.createEntryAlloca(mat4Ty, "mi");
             ctx.builder.CreateCall(fn, {out});
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(mat4Ty, out, "mi_val"));
         };
@@ -3062,7 +3149,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Function::ExternalLinkage, fnName, ctx.module);
             llvm::Value* pa = storeToTmp(ctx,a,structTy);
             llvm::Value* pb = storeToTmp(ctx,b,structTy);
-            llvm::AllocaInst* out = ctx.builder.CreateAlloca(structTy);
+            llvm::AllocaInst* out = ctx.createEntryAlloca(structTy);
             ctx.builder.CreateCall(fn,{pa,pb,t,out});
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(structTy,out));
         };
@@ -3097,7 +3184,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Function::ExternalLinkage, "aiml_math_vec3_cross", ctx.module);
             llvm::Value* a=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             llvm::Value* b=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(vec3Ty);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(vec3Ty);
             ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,vec3Ty),storeToTmp(ctx,b,vec3Ty),out});
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(vec3Ty,out));
         };
@@ -3123,7 +3210,7 @@ void registerBuiltins(CompilerContext& ctx) {
                         fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),pts,false),
                             llvm::Function::ExternalLinkage,nm,ctx.module);
                     }
-                    llvm::AllocaInst* out=ctx.builder.CreateAlloca(st);
+                    llvm::AllocaInst* out=ctx.createEntryAlloca(st);
                     if (isScalar2arg && args.size()>=2) {
                         llvm::Value* t2=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
                         if (!t2->getType()->isFloatTy()) t2=ctx.builder.CreateSIToFP(t2,ctx.builder.getFloatTy());
@@ -3175,7 +3262,7 @@ void registerBuiltins(CompilerContext& ctx) {
             if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op},false),
                 llvm::Function::ExternalLinkage,"aiml_math_vec2_perp",ctx.module);
             llvm::Value* a=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(vec2Ty);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(vec2Ty);
             ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,vec2Ty),out});
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(vec2Ty,out));
         };
@@ -3190,7 +3277,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Function::ExternalLinkage,"aiml_math_vec3_reflect",ctx.module);
             llvm::Value* a=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             llvm::Value* b=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(vec3Ty);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(vec3Ty);
             ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,vec3Ty),storeToTmp(ctx,b,vec3Ty),out});
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(vec3Ty,out));
         };
@@ -3204,7 +3291,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Value* a=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             llvm::Value* b=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
             llvm::Value* ior=toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2])));
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(vec3Ty);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(vec3Ty);
             ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,vec3Ty),storeToTmp(ctx,b,vec3Ty),ior,out});
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(vec3Ty,out));
         };
@@ -3217,7 +3304,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Function* fn=ctx.module.getFunction(cNm);
                 if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op},false),
                     llvm::Function::ExternalLinkage,cNm,ctx.module);
-                llvm::AllocaInst* out=ctx.builder.CreateAlloca(mat4Ty);
+                llvm::AllocaInst* out=ctx.createEntryAlloca(mat4Ty);
                 if (!args.empty()) {
                     llvm::Value* v=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
                     ctx.builder.CreateCall(fn,{storeToTmp(ctx,v,vec3Ty),out});
@@ -3235,7 +3322,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Function* fn=ctx.module.getFunction(cNm);
                 if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{ctx.builder.getFloatTy(),op},false),
                     llvm::Function::ExternalLinkage,cNm,ctx.module);
-                llvm::AllocaInst* out=ctx.builder.CreateAlloca(mat4Ty);
+                llvm::AllocaInst* out=ctx.createEntryAlloca(mat4Ty);
                 llvm::Value* a=args.empty()?llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0):toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])));
                 ctx.builder.CreateCall(fn,{a,out});
                 return ctx.ir_gen->wrap(ctx.builder.CreateLoad(mat4Ty,out));
@@ -3252,7 +3339,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Function* fn=ctx.module.getFunction("aiml_math_mat4_rotate");
             if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,ctx.builder.getFloatTy(),op},false),
                 llvm::Function::ExternalLinkage,"aiml_math_mat4_rotate",ctx.module);
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(mat4Ty);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(mat4Ty);
             llvm::Value* axis=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(vec3Ty);
             llvm::Value* ang =args.size()>1?toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))):llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0);
             ctx.builder.CreateCall(fn,{storeToTmp(ctx,axis,vec3Ty),ang,out});
@@ -3268,7 +3355,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 {ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),op},false),
                 llvm::Function::ExternalLinkage,"aiml_math_mat4_perspective",ctx.module);
             auto g=[&](int i){return args.size()>(size_t)i?toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))):llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0);};
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(mat4Ty);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(mat4Ty);
             ctx.builder.CreateCall(fn,{g(0),g(1),g(2),g(3),out});
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(mat4Ty,out));
         };
@@ -3282,7 +3369,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 {ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),op},false),
                 llvm::Function::ExternalLinkage,"aiml_math_mat4_ortho",ctx.module);
             auto g=[&](int i){return args.size()>(size_t)i?toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))):llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0);};
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(mat4Ty);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(mat4Ty);
             ctx.builder.CreateCall(fn,{g(0),g(1),g(2),g(3),g(4),g(5),out});
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(mat4Ty,out));
         };
@@ -3295,7 +3382,7 @@ void registerBuiltins(CompilerContext& ctx) {
             if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op,op,op},false),
                 llvm::Function::ExternalLinkage,"aiml_math_mat4_lookat",ctx.module);
             auto gv=[&](int i)->llvm::Value*{return args.size()>(size_t)i?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])):llvm::UndefValue::get(vec3Ty);};
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(mat4Ty);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(mat4Ty);
             ctx.builder.CreateCall(fn,{storeToTmp(ctx,gv(0),vec3Ty),storeToTmp(ctx,gv(1),vec3Ty),storeToTmp(ctx,gv(2),vec3Ty),out});
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(mat4Ty,out));
         };
@@ -3308,7 +3395,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Function* fn=ctx.module.getFunction(cNm);
                 if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op},false),
                     llvm::Function::ExternalLinkage,cNm,ctx.module);
-                llvm::AllocaInst* out=ctx.builder.CreateAlloca(mat4Ty);
+                llvm::AllocaInst* out=ctx.createEntryAlloca(mat4Ty);
                 if (!args.empty()) {
                     llvm::Value* m=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
                     ctx.builder.CreateCall(fn,{storeToTmp(ctx,m,mat4Ty),out});
@@ -3338,7 +3425,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Function* fn=ctx.module.getFunction("aiml_math_mat4_to_quat");
             if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op},false),
                 llvm::Function::ExternalLinkage,"aiml_math_mat4_to_quat",ctx.module);
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(quatTy);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(quatTy);
             if (!args.empty()) {
                 llvm::Value* m=static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
                 ctx.builder.CreateCall(fn,{storeToTmp(ctx,m,mat4Ty),out});
@@ -3354,7 +3441,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Function* fn=ctx.module.getFunction("aiml_math_quat_axis_angle");
             if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,ctx.builder.getFloatTy(),op},false),
                 llvm::Function::ExternalLinkage,"aiml_math_quat_axis_angle",ctx.module);
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(quatTy);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(quatTy);
             llvm::Value* axis=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(vec3Ty);
             llvm::Value* ang =args.size()>1?toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))):llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0);
             ctx.builder.CreateCall(fn,{storeToTmp(ctx,axis,vec3Ty),ang,out});
@@ -3370,7 +3457,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 {ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),ctx.builder.getFloatTy(),op},false),
                 llvm::Function::ExternalLinkage,"aiml_math_quat_euler",ctx.module);
             auto g=[&](int i){return args.size()>(size_t)i?toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]))):llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.0);};
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(quatTy);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(quatTy);
             ctx.builder.CreateCall(fn,{g(0),g(1),g(2),out});
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(quatTy,out));
         };
@@ -3383,7 +3470,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Function* fn=ctx.module.getFunction(cn);
                 if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op,op},false),
                     llvm::Function::ExternalLinkage,cn,ctx.module);
-                llvm::AllocaInst* out=ctx.builder.CreateAlloca(quatTy);
+                llvm::AllocaInst* out=ctx.createEntryAlloca(quatTy);
                 llvm::Value* a=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(quatTy);
                 llvm::Value* b=args.size()>1?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])):a;
                 ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,quatTy),storeToTmp(ctx,b,quatTy),out});
@@ -3397,7 +3484,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Function* fn=ctx.module.getFunction(cn);
                 if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op},false),
                     llvm::Function::ExternalLinkage,cn,ctx.module);
-                llvm::AllocaInst* out=ctx.builder.CreateAlloca(quatTy);
+                llvm::AllocaInst* out=ctx.createEntryAlloca(quatTy);
                 llvm::Value* a=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(quatTy);
                 ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,quatTy),out});
                 return ctx.ir_gen->wrap(ctx.builder.CreateLoad(quatTy,out));
@@ -3414,7 +3501,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Function* fn=ctx.module.getFunction("aiml_math_quat_rotate_vec3");
             if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op,op},false),
                 llvm::Function::ExternalLinkage,"aiml_math_quat_rotate_vec3",ctx.module);
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(vec3Ty);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(vec3Ty);
             llvm::Value* q=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(quatTy);
             llvm::Value* v=args.size()>1?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])):llvm::UndefValue::get(vec3Ty);
             ctx.builder.CreateCall(fn,{storeToTmp(ctx,q,quatTy),storeToTmp(ctx,v,vec3Ty),out});
@@ -3428,7 +3515,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Function* fn=ctx.module.getFunction("aiml_math_quat_to_mat4");
             if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op},false),
                 llvm::Function::ExternalLinkage,"aiml_math_quat_to_mat4",ctx.module);
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(mat4Ty);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(mat4Ty);
             llvm::Value* q=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(quatTy);
             ctx.builder.CreateCall(fn,{storeToTmp(ctx,q,quatTy),out});
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(mat4Ty,out));
@@ -3441,7 +3528,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Function* fn=ctx.module.getFunction("aiml_math_quat_slerp");
             if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op,ctx.builder.getFloatTy(),op},false),
                 llvm::Function::ExternalLinkage,"aiml_math_quat_slerp",ctx.module);
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(quatTy);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(quatTy);
             llvm::Value* a=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(quatTy);
             llvm::Value* b=args.size()>1?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])):a;
             llvm::Value* t=args.size()>2?toF32(ctx,static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))):llvm::ConstantFP::get(ctx.builder.getFloatTy(),0.5);
@@ -3456,7 +3543,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Function* fn=ctx.module.getFunction("aiml_math_ivec2_div");
             if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,ctx.builder.getInt32Ty(),op},false),
                 llvm::Function::ExternalLinkage,"aiml_math_ivec2_div",ctx.module);
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(ivec2Ty);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(ivec2Ty);
             llvm::Value* a=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(ivec2Ty);
             llvm::Value* s=args.size()>1?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])):ctx.builder.getInt32(1);
             if (s->getType()->isFloatTy()||s->getType()->isDoubleTy()) s=ctx.builder.CreateFPToSI(s,ctx.builder.getInt32Ty());
@@ -3469,7 +3556,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Function* fn=ctx.module.getFunction("aiml_math_ivec2_add");
             if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op,op},false),
                 llvm::Function::ExternalLinkage,"aiml_math_ivec2_add",ctx.module);
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(ivec2Ty);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(ivec2Ty);
             llvm::Value* a=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(ivec2Ty);
             llvm::Value* b=args.size()>1?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])):a;
             ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,ivec2Ty),storeToTmp(ctx,b,ivec2Ty),out});
@@ -3481,7 +3568,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Function* fn=ctx.module.getFunction("aiml_math_ivec2_to_vec2");
             if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op},false),
                 llvm::Function::ExternalLinkage,"aiml_math_ivec2_to_vec2",ctx.module);
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(vec2Ty);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(vec2Ty);
             llvm::Value* a=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(ivec2Ty);
             ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,ivec2Ty),out});
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(vec2Ty,out));
@@ -3492,7 +3579,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Function* fn=ctx.module.getFunction("aiml_math_vec2_to_ivec2");
             if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op,op},false),
                 llvm::Function::ExternalLinkage,"aiml_math_vec2_to_ivec2",ctx.module);
-            llvm::AllocaInst* out=ctx.builder.CreateAlloca(ivec2Ty);
+            llvm::AllocaInst* out=ctx.createEntryAlloca(ivec2Ty);
             llvm::Value* a=args.size()>0?static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])):llvm::UndefValue::get(vec2Ty);
             ctx.builder.CreateCall(fn,{storeToTmp(ctx,a,vec2Ty),out});
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ivec2Ty,out));
@@ -3596,7 +3683,7 @@ void registerBuiltins(CompilerContext& ctx) {
             auto* _p   = llvm::PointerType::get(ctx.context, 0); \
             auto* _i64 = ctx.builder.getInt64Ty(); \
             auto* _bt  = ctx.getLLVMType("buffer"); \
-            auto* _out = ctx.builder.CreateAlloca(_bt, nullptr, "comp_alloca"); \
+            auto* _out = ctx.createEntryAlloca(_bt, "comp_alloca"); \
             uint64_t _sz = ctx.module.getDataLayout().getTypeAllocSize(_bt); \
             llvm::Function* _mcf = ctx.getFunction("memcpy", _p, {_p, _p, _i64}); \
             ctx.builder.CreateCall(_mcf, {_out, (heapPtr), ctx.builder.getInt64(_sz)}); \
@@ -3607,7 +3694,7 @@ void registerBuiltins(CompilerContext& ctx) {
 #define COMP_IN_ALLOCA(argVal) \
         ([&]() -> llvm::Value* { \
             auto* _bt  = ctx.getLLVMType("buffer"); \
-            auto* _tmp = ctx.builder.CreateAlloca(_bt, nullptr, "decomp_in"); \
+            auto* _tmp = ctx.createEntryAlloca(_bt, "decomp_in"); \
             ctx.builder.CreateStore((argVal), _tmp); \
             return _tmp; \
         }())
@@ -3718,7 +3805,7 @@ void registerBuiltins(CompilerContext& ctx) {
         compress.builtinFuncs["zip_entries"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             auto* p   = llvm::PointerType::get(ctx.context, 0);
             llvm::StructType* listTy = ListImpl::getListStructType(ctx);
-            llvm::Value* listAlloca  = ctx.builder.CreateAlloca(listTy, nullptr, "zip_entries_list");
+            llvm::Value* listAlloca  = ctx.createEntryAlloca(listTy, "zip_entries_list");
             ListImpl::initList(ctx, listAlloca, p, 8);
             llvm::Value* pathStr = args.empty() ? llvm::Constant::getNullValue(p)
                                                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
@@ -3732,7 +3819,7 @@ void registerBuiltins(CompilerContext& ctx) {
         compress.builtinFuncs["tar_entries"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             auto* p   = llvm::PointerType::get(ctx.context, 0);
             llvm::StructType* listTy = ListImpl::getListStructType(ctx);
-            llvm::Value* listAlloca  = ctx.builder.CreateAlloca(listTy, nullptr, "tar_entries_list");
+            llvm::Value* listAlloca  = ctx.createEntryAlloca(listTy, "tar_entries_list");
             ListImpl::initList(ctx, listAlloca, p, 8);
             llvm::Value* pathStr = args.empty() ? llvm::Constant::getNullValue(p)
                                                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
@@ -3751,6 +3838,352 @@ void registerBuiltins(CompilerContext& ctx) {
     } // end compress namespace
 
     // =======================================================================
+    // ai — native ML acceleration (Spec 51)
+    // =======================================================================
+    {
+        auto& ai = ctx.namespaces["ai"];
+
+        // Helpers: extract struct fields from either a loaded struct (extractvalue)
+        // or a pointer to a struct (GEP + load). Args can arrive as either depending
+        // on whether they come from local variables (struct) or model/class fields (ptr).
+        auto getBufferData = [](CompilerContext& ctx, llvm::Value* val) -> llvm::Value* {
+            if (val->getType()->isAggregateType()) {
+                return ctx.builder.CreateExtractValue(val, {4}, "buf_data");
+            }
+            // Pointer to buffer struct — GEP field 4 + load
+            auto* bufTy = static_cast<llvm::StructType*>(ctx.getLLVMType("buffer"));
+            auto* gep = ctx.builder.CreateStructGEP(bufTy, val, 4, "buf_data_gep");
+            return ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), gep, "buf_data");
+        };
+        auto getListField = [](CompilerContext& ctx, llvm::Value* val, unsigned idx,
+                               const char* name) -> llvm::Value* {
+            if (val->getType()->isAggregateType()) {
+                return ctx.builder.CreateExtractValue(val, {idx}, name);
+            }
+            // Pointer to list struct — GEP + load
+            auto* listTy = ListImpl::getListStructType(ctx);
+            auto* gep = ctx.builder.CreateStructGEP(listTy, val, idx, (std::string(name) + "_gep").c_str());
+            llvm::Type* fieldTy = listTy->getElementType(idx);
+            return ctx.builder.CreateLoad(fieldTy, gep, name);
+        };
+
+        // ai.embedding_lookup(buffer_var, token_id, dim) → list<f32>
+        ai.builtinFuncs["embedding_lookup"] = [getBufferData](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.size() < 3) return nullptr;
+            llvm::Type* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32ty = ctx.builder.getInt32Ty();
+            llvm::Type* i64ty = ctx.builder.getInt64Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+
+            llvm::Value* bufVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* flatPtr = getBufferData(ctx, bufVal);
+
+            llvm::Value* tokenId = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            llvm::Value* dim     = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]));
+
+            // Allocate result list<f32>: {size=dim, capacity=dim, data=malloc(dim*4)}
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            llvm::Value* listAlloca = ctx.createEntryAlloca(listTy, "emb_lookup_list");
+            ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 0));
+            ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 1));
+            llvm::Value* totalBytes = ctx.builder.CreateMul(
+                ctx.builder.CreateZExt(dim, i64ty), ctx.builder.getInt64(4));
+            llvm::Value* dataPtr = ctx.builder.CreateCall(
+                ctx.getFunction("malloc", ptrTy, {i64ty}), {totalBytes}, "emb_data");
+            ctx.builder.CreateStore(dataPtr, ctx.builder.CreateStructGEP(listTy, listAlloca, 2));
+
+            llvm::Function* lookupFn = ctx.getFunction("aiml_ai_embedding_lookup",
+                ctx.builder.getVoidTy(), {i8p, i32ty, i32ty, ptrTy});
+            ctx.builder.CreateCall(lookupFn, {flatPtr, tokenId, dim, dataPtr});
+
+            llvm::Value* listVal = ctx.builder.CreateLoad(listTy, listAlloca, "emb_lookup_result");
+            return ctx.ir_gen->wrap(listVal);
+        };
+
+        // ai.embedding_update(buffer_var, token_id, gradient_list, lr, dim)
+        ai.builtinFuncs["embedding_update"] = [getBufferData, getListField](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.size() < 5) return nullptr;
+            llvm::Type* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32ty = ctx.builder.getInt32Ty();
+            llvm::Type* f32ty = ctx.builder.getFloatTy();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+
+            llvm::Value* bufVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* flatPtr = getBufferData(ctx, bufVal);
+
+            llvm::Value* tokenId = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+
+            llvm::Value* gradVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]));
+            llvm::Value* gradPtr = getListField(ctx, gradVal, 2, "grad_data");
+
+            llvm::Value* lr  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[3]));
+            llvm::Value* dim = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[4]));
+
+            if (lr->getType()->isDoubleTy())
+                lr = ctx.builder.CreateFPTrunc(lr, f32ty);
+            else if (lr->getType()->isIntegerTy())
+                lr = ctx.builder.CreateSIToFP(lr, f32ty);
+
+            llvm::Function* updateFn = ctx.getFunction("aiml_ai_embedding_update",
+                ctx.builder.getVoidTy(), {i8p, i32ty, ptrTy, f32ty, i32ty});
+            ctx.builder.CreateCall(updateFn, {flatPtr, tokenId, gradPtr, lr, dim});
+            return nullptr;
+        };
+
+        // ai.dot(list_a, list_b, dim) → f32
+        ai.builtinFuncs["dot"] = [getListField](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.size() < 3) return nullptr;
+            llvm::Type* f32ty = ctx.builder.getFloatTy();
+            llvm::Type* i32ty = ctx.builder.getInt32Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+
+            llvm::Value* aVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* aPtr = getListField(ctx, aVal, 2, "dot_a");
+
+            llvm::Value* bVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            llvm::Value* bPtr = getListField(ctx, bVal, 2, "dot_b");
+
+            llvm::Value* dim = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]));
+
+            llvm::Function* dotFn = ctx.getFunction("aiml_ai_dot", f32ty, {ptrTy, ptrTy, i32ty});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(dotFn, {aPtr, bPtr, dim}, "dot_result"));
+        };
+
+        // ai.train_bpe_merges(texts_list, max_merges) → opaque ptr (AimlBpeMergeResult*)
+        ai.builtinFuncs["train_bpe_merges"] = [getListField](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.size() < 2) return nullptr;
+            llvm::Type* i32ty = ctx.builder.getInt32Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+
+            llvm::Value* listVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* nTexts  = getListField(ctx, listVal, 0, "n_texts");
+            llvm::Value* textsPtr = getListField(ctx, listVal, 2, "texts_ptr");
+
+            llvm::Value* maxMerges = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+
+            llvm::Function* trainFn = ctx.getFunction("aiml_bpe_train_merges",
+                ptrTy, {ptrTy, i32ty, i32ty});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(trainFn, {textsPtr, nTexts, maxMerges}, "bpe_result"));
+        };
+
+        // ai.bpe_merge_count(result_ptr) → i32
+        ai.builtinFuncs["bpe_merge_count"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.empty()) return nullptr;
+            llvm::Type* i32ty = ctx.builder.getInt32Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* ptr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::StructType* resTy = llvm::StructType::get(ctx.context, {ptrTy, ptrTy, i32ty});
+            llvm::Value* countGep = ctx.builder.CreateStructGEP(resTy, ptr, 2, "merge_count");
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(i32ty, countGep));
+        };
+
+        // ai.bpe_merge_left(result_ptr, index) → string
+        ai.builtinFuncs["bpe_merge_left"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.size() < 2) return nullptr;
+            llvm::Type* i32ty = ctx.builder.getInt32Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* ptr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* idx = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            llvm::StructType* resTy = llvm::StructType::get(ctx.context, {ptrTy, ptrTy, i32ty});
+            llvm::Value* leftArrGep = ctx.builder.CreateStructGEP(resTy, ptr, 0);
+            llvm::Value* leftArr = ctx.builder.CreateLoad(ptrTy, leftArrGep);
+            llvm::Value* elemGep = ctx.builder.CreateGEP(ptrTy, leftArr, {idx}, "left_elem");
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ptrTy, elemGep, "left_str"));
+        };
+
+        // ai.bpe_merge_right(result_ptr, index) → string
+        ai.builtinFuncs["bpe_merge_right"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.size() < 2) return nullptr;
+            llvm::Type* i32ty = ctx.builder.getInt32Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* ptr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* idx = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            llvm::StructType* resTy = llvm::StructType::get(ctx.context, {ptrTy, ptrTy, i32ty});
+            llvm::Value* rightArrGep = ctx.builder.CreateStructGEP(resTy, ptr, 1);
+            llvm::Value* rightArr = ctx.builder.CreateLoad(ptrTy, rightArrGep);
+            llvm::Value* elemGep = ctx.builder.CreateGEP(ptrTy, rightArr, {idx}, "right_elem");
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ptrTy, elemGep, "right_str"));
+        };
+
+        // ai.bpe_merge_free(result_ptr)
+        ai.builtinFuncs["bpe_merge_free"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.empty()) return nullptr;
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* ptr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Function* freeFn = ctx.getFunction("aiml_bpe_merge_result_free",
+                ctx.builder.getVoidTy(), {ptrTy});
+            ctx.builder.CreateCall(freeFn, {ptr});
+            return nullptr;
+        };
+
+        // ai.encode_dense(token_ids_list, buffer_var, dim) → list<f32>
+        ai.builtinFuncs["encode_dense"] = [getBufferData, getListField](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.size() < 3) return nullptr;
+            llvm::Type* i32ty = ctx.builder.getInt32Ty();
+            llvm::Type* i64ty = ctx.builder.getInt64Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Type* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+
+            llvm::Value* idsVal  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* nTokens = getListField(ctx, idsVal, 0, "enc_n");
+            llvm::Value* idsPtr  = getListField(ctx, idsVal, 2, "enc_ids");
+
+            llvm::Value* bufVal  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            llvm::Value* flatPtr = getBufferData(ctx, bufVal);
+
+            llvm::Value* dim = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]));
+
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            llvm::Value* listAlloca = ctx.createEntryAlloca(listTy, "enc_dense_list");
+            ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 0));
+            ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 1));
+            llvm::Value* totalBytes = ctx.builder.CreateMul(
+                ctx.builder.CreateZExt(dim, i64ty), ctx.builder.getInt64(4));
+            llvm::Value* dataPtr = ctx.builder.CreateCall(
+                ctx.getFunction("malloc", ptrTy, {i64ty}), {totalBytes}, "enc_data");
+            ctx.builder.CreateStore(dataPtr, ctx.builder.CreateStructGEP(listTy, listAlloca, 2));
+
+            llvm::Function* fn = ctx.getFunction("aiml_ai_encode_dense",
+                ctx.builder.getVoidTy(), {ptrTy, i32ty, i8p, i32ty, ptrTy});
+            ctx.builder.CreateCall(fn, {idsPtr, nTokens, flatPtr, dim, dataPtr});
+
+            llvm::Value* listVal = ctx.builder.CreateLoad(listTy, listAlloca, "enc_dense_result");
+            return ctx.ir_gen->wrap(listVal);
+        };
+
+        // ai.encode_dense_weighted(token_ids_list, buffer_var, dim) → list<f32>
+        ai.builtinFuncs["encode_dense_weighted"] = [getBufferData, getListField](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.size() < 3) return nullptr;
+            llvm::Type* i32ty = ctx.builder.getInt32Ty();
+            llvm::Type* i64ty = ctx.builder.getInt64Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Type* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+
+            llvm::Value* idsVal  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* nTokens = getListField(ctx, idsVal, 0, "encw_n");
+            llvm::Value* idsPtr  = getListField(ctx, idsVal, 2, "encw_ids");
+
+            llvm::Value* bufVal  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            llvm::Value* flatPtr = getBufferData(ctx, bufVal);
+
+            llvm::Value* dim = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]));
+
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            llvm::Value* listAlloca = ctx.createEntryAlloca(listTy, "encw_list");
+            ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 0));
+            ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 1));
+            llvm::Value* totalBytes = ctx.builder.CreateMul(
+                ctx.builder.CreateZExt(dim, i64ty), ctx.builder.getInt64(4));
+            llvm::Value* dataPtr = ctx.builder.CreateCall(
+                ctx.getFunction("malloc", ptrTy, {i64ty}), {totalBytes}, "encw_data");
+            ctx.builder.CreateStore(dataPtr, ctx.builder.CreateStructGEP(listTy, listAlloca, 2));
+
+            llvm::Function* fn = ctx.getFunction("aiml_ai_encode_dense_weighted",
+                ctx.builder.getVoidTy(), {ptrTy, i32ty, i8p, i32ty, ptrTy});
+            ctx.builder.CreateCall(fn, {idsPtr, nTokens, flatPtr, dim, dataPtr});
+
+            llvm::Value* listVal = ctx.builder.CreateLoad(listTy, listAlloca, "encw_result");
+            return ctx.ir_gen->wrap(listVal);
+        };
+
+        // ai.triplet_loss(q_list, pos_list, neg_list, margin, dim) → f32
+        ai.builtinFuncs["triplet_loss"] = [getListField](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.size() < 5) return nullptr;
+            llvm::Type* f32ty = ctx.builder.getFloatTy();
+            llvm::Type* i32ty = ctx.builder.getInt32Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+
+            llvm::Value* qVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* qPtr = getListField(ctx, qVal, 2, "tl_q");
+
+            llvm::Value* posVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            llvm::Value* posPtr = getListField(ctx, posVal, 2, "tl_pos");
+
+            llvm::Value* negVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]));
+            llvm::Value* negPtr = getListField(ctx, negVal, 2, "tl_neg");
+
+            llvm::Value* margin = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[3]));
+            if (margin->getType()->isDoubleTy())
+                margin = ctx.builder.CreateFPTrunc(margin, f32ty);
+            else if (margin->getType()->isIntegerTy())
+                margin = ctx.builder.CreateSIToFP(margin, f32ty);
+
+            llvm::Value* dim = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[4]));
+
+            llvm::Function* fn = ctx.getFunction("aiml_ai_triplet_loss",
+                f32ty, {ptrTy, ptrTy, ptrTy, f32ty, i32ty});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {qPtr, posPtr, negPtr, margin, dim}, "triplet_loss"));
+        };
+
+        // ai.triplet_grad(q_list, pos_list, neg_list, margin, dim) → list<f32>
+        ai.builtinFuncs["triplet_grad"] = [getListField](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.size() < 5) return nullptr;
+            llvm::Type* f32ty = ctx.builder.getFloatTy();
+            llvm::Type* i32ty = ctx.builder.getInt32Ty();
+            llvm::Type* i64ty = ctx.builder.getInt64Ty();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+
+            llvm::Value* qVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* qPtr = getListField(ctx, qVal, 2, "tg_q");
+            llvm::Value* qDim = getListField(ctx, qVal, 0, "tg_dim");
+
+            llvm::Value* posVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            llvm::Value* posPtr = getListField(ctx, posVal, 2, "tg_pos");
+
+            llvm::Value* negVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]));
+            llvm::Value* negPtr = getListField(ctx, negVal, 2, "tg_neg");
+
+            llvm::Value* margin = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[3]));
+            if (margin->getType()->isDoubleTy())
+                margin = ctx.builder.CreateFPTrunc(margin, f32ty);
+            else if (margin->getType()->isIntegerTy())
+                margin = ctx.builder.CreateSIToFP(margin, f32ty);
+
+            llvm::Value* dim = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[4]));
+
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            llvm::Value* listAlloca = ctx.createEntryAlloca(listTy, "tg_list");
+            ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 0));
+            ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 1));
+            llvm::Value* totalBytes = ctx.builder.CreateMul(
+                ctx.builder.CreateZExt(dim, i64ty), ctx.builder.getInt64(4));
+            llvm::Value* dataPtr = ctx.builder.CreateCall(
+                ctx.getFunction("malloc", ptrTy, {i64ty}), {totalBytes}, "tg_data");
+            ctx.builder.CreateStore(dataPtr, ctx.builder.CreateStructGEP(listTy, listAlloca, 2));
+
+            llvm::Function* fn = ctx.getFunction("aiml_ai_triplet_grad",
+                ctx.builder.getVoidTy(), {ptrTy, ptrTy, ptrTy, f32ty, i32ty, ptrTy});
+            ctx.builder.CreateCall(fn, {qPtr, posPtr, negPtr, margin, dim, dataPtr});
+
+            llvm::Value* listVal = ctx.builder.CreateLoad(listTy, listAlloca, "tg_result");
+            return ctx.ir_gen->wrap(listVal);
+        };
+
+        // ai.sample_logits(tensor, temperature, top_k) → i32
+        ai.builtinFuncs["sample_logits"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.size() < 3) return nullptr;
+            llvm::Type* i32ty = ctx.builder.getInt32Ty();
+            llvm::Type* f32ty = ctx.builder.getFloatTy();
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+
+            llvm::Value* tensorPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+
+            llvm::Value* temperature = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            if (temperature->getType()->isDoubleTy())
+                temperature = ctx.builder.CreateFPTrunc(temperature, f32ty);
+            else if (temperature->getType()->isIntegerTy())
+                temperature = ctx.builder.CreateSIToFP(temperature, f32ty);
+
+            llvm::Value* topK = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]));
+
+            llvm::Function* fn = ctx.getFunction("aiml_ai_sample_logits",
+                i32ty, {ptrTy, f32ty, i32ty});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {tensorPtr, temperature, topK}, "sampled_id"));
+        };
+
+    } // end ai namespace
+
+    // =======================================================================
     // gltf — 3D asset loader (cgltf + stb_image backend)
     // All handle types are opaque i8* pointers with preLoadBase = true.
     // =======================================================================
@@ -3761,7 +4194,7 @@ void registerBuiltins(CompilerContext& ctx) {
             auto* _p  = llvm::PointerType::get(ctx.context, 0); \
             auto* _i64= ctx.builder.getInt64Ty(); \
             auto* _bt = ctx.getLLVMType("buffer"); \
-            auto* _out= ctx.builder.CreateAlloca(_bt, nullptr, "gltf_buf"); \
+            auto* _out= ctx.createEntryAlloca(_bt, "gltf_buf"); \
             uint64_t _sz = ctx.module.getDataLayout().getTypeAllocSize(_bt); \
             ctx.builder.CreateCall(ctx.getFunction("memcpy", _p, {_p, _p, _i64}), \
                 {_out, (heapPtr), ctx.builder.getInt64(_sz)}); \
@@ -3821,7 +4254,7 @@ void registerBuiltins(CompilerContext& ctx) {
             auto* p  = llvm::PointerType::get(ctx.context, 0); \
             auto* vt = ctx.builder.getVoidTy(); \
             llvm::StructType* lt = ListImpl::getListStructType(ctx); \
-            llvm::Value* la = ctx.builder.CreateAlloca(lt, nullptr, "gltf_list"); \
+            llvm::Value* la = ctx.createEntryAlloca(lt, "gltf_list"); \
             ListImpl::initList(ctx, la, p, 8); \
             ctx.builder.CreateCall(ctx.getFunction(cName, vt, {p, p}), {base, la}); \
             return ctx.ir_gen->wrap(la); \
@@ -4097,7 +4530,7 @@ void registerBuiltins(CompilerContext& ctx) {
         // ── Helper: store a loaded struct value to a temp alloca ──────────
 #define GL_STORE_TMP(val, ty) \
         ([&]() -> llvm::Value* { \
-            llvm::AllocaInst* _a = ctx.builder.CreateAlloca((ty), nullptr, "gl_tmp"); \
+            llvm::AllocaInst* _a = ctx.createEntryAlloca((ty), "gl_tmp"); \
             ctx.builder.CreateStore((val), _a); \
             return _a; \
         }())
@@ -4506,7 +4939,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])); \
                     arg = v->getType()->isPointerTy() ? v : \
                           ([&]() -> llvm::Value* { \
-                              auto* _a = ctx.builder.CreateAlloca(bt, nullptr, "gl_buf_in"); \
+                              auto* _a = ctx.createEntryAlloca(bt, "gl_buf_in"); \
                               ctx.builder.CreateStore(v, _a); return _a; }()); \
                 } \
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
@@ -4574,7 +5007,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]));
                     pxArg = v->getType()->isPointerTy() ? v :
                             ([&]() -> llvm::Value* {
-                                auto* _a = ctx.builder.CreateAlloca(bt, nullptr, "gl_px_in");
+                                auto* _a = ctx.createEntryAlloca(bt, "gl_px_in");
                                 ctx.builder.CreateStore(v, _a); return _a; }());
                 }
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(
@@ -4720,7 +5153,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
                     if (v->getType()->isPointerTy()) return v;
                     /* buffer<T> struct — store to alloca and pass as pointer */
-                    auto* tmp = ctx.builder.CreateAlloca(v->getType(), nullptr, "mesh_buf");
+                    auto* tmp = ctx.createEntryAlloca(v->getType(), "mesh_buf");
                     ctx.builder.CreateStore(v, tmp); return tmp;
                 };
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(
@@ -4883,6 +5316,35 @@ void registerBuiltins(CompilerContext& ctx) {
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                 ctx.getFunction("aiml_engine_running", ctx.builder.getInt32Ty(), {p}), {w}));
+        };
+
+        // engine.is_iconified/is_focused/is_visible(win) → i32
+        eng.builtinFuncs["is_iconified"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* w = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_engine_is_iconified", ctx.builder.getInt32Ty(), {p}), {w}));
+        };
+        eng.builtinFuncs["is_focused"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* w = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_engine_is_focused", ctx.builder.getInt32Ty(), {p}), {w}));
+        };
+        eng.builtinFuncs["is_visible"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* w = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_engine_is_visible", ctx.builder.getInt32Ty(), {p}), {w}));
         };
 
         // engine.swap(win), engine.quit(win)
@@ -5782,7 +6244,7 @@ void registerBuiltins(CompilerContext& ctx) {
             if ((int)args.size() <= (argIdx)) return null; \
             llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[argIdx])); \
             if (v->getType()->isPointerTy()) return v; \
-            auto* tmp = ctx.builder.CreateAlloca(v->getType(), nullptr, "ui_style_arg"); \
+            auto* tmp = ctx.createEntryAlloca(v->getType(), "ui_style_arg"); \
             ctx.builder.CreateStore(v, tmp); return tmp; \
         }())
 
@@ -5792,7 +6254,7 @@ void registerBuiltins(CompilerContext& ctx) {
             if ((int)args.size() <= (argIdx)) return null; \
             llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[argIdx])); \
             if (v->getType()->isPointerTy()) return v; \
-            auto* tmp = ctx.builder.CreateAlloca(v->getType(), nullptr, "ui_buf_arg"); \
+            auto* tmp = ctx.createEntryAlloca(v->getType(), "ui_buf_arg"); \
             ctx.builder.CreateStore(v, tmp); return tmp; \
         }())
 
@@ -5845,7 +6307,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 if ((int)args.size() <= i) return null;
                 llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
                 if (v->getType()->isPointerTy()) return v;
-                auto* tmp = ctx.builder.CreateAlloca(v->getType(), nullptr, "ui_gbuf");
+                auto* tmp = ctx.createEntryAlloca(v->getType(), "ui_gbuf");
                 ctx.builder.CreateStore(v, tmp); return tmp;
             };
             ctx.builder.CreateCall(ctx.getFunction("aiml_ui_begin_grid",
@@ -5990,13 +6452,14 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Value* id = args.empty() ? null : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             // Store the loaded list<string> struct into a temp alloca; pass pointer to C
             llvm::Type* listTy = ctx.getLLVMType("list<string>");
-            llvm::AllocaInst* listAlloca = ctx.builder.CreateAlloca(listTy, nullptr, "sbox_opts");
+            llvm::AllocaInst* listAlloca = ctx.createEntryAlloca(listTy, "sbox_opts");
             if (args.size() >= 2) {
                 ctx.builder.CreateStore(
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])), listAlloca);
             } else {
                 ctx.builder.CreateStore(llvm::ConstantAggregateZero::get(listTy), listAlloca);
             }
+
             llvm::Value* cur = args.size() < 3 ? ctx.builder.getInt32(0)
                 : ctx.builder.CreateZExtOrTrunc(
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2])), i32);
@@ -6005,6 +6468,12 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                 ctx.getFunction("aiml_ui_spinbox", i32, {p, p, i32, p}),
                 {id, listAlloca, cur, preset})); };
+
+        // ui.cell_hovered() → bool (i32)
+        ui.builtinFuncs["cell_hovered"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_ui_cell_hovered", ctx.builder.getInt32Ty(), {}), {})); };
 
         // ui.toggle(id, value: bool, preset: ui_button_style = null) → bool
         ui.builtinFuncs["toggle"] = [](CompilerContext& ctx,
@@ -6270,7 +6739,7 @@ void registerBuiltins(CompilerContext& ctx) {
             if (!args.empty()) {
                 llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
                 if (v->getType()->isPointerTy()) sp = v;
-                else { auto* tmp = ctx.builder.CreateAlloca(v->getType(), nullptr, "ui_ps");
+                else { auto* tmp = ctx.createEntryAlloca(v->getType(), "ui_ps");
                        ctx.builder.CreateStore(v, tmp); sp = tmp; }
             }
             ctx.builder.CreateCall(ctx.getFunction("aiml_ui_push_style",
@@ -6292,7 +6761,7 @@ void registerBuiltins(CompilerContext& ctx) {
             if (!args.empty()) {
                 llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
                 if (v->getType()->isPointerTy()) sp = v;
-                else { auto* tmp = ctx.builder.CreateAlloca(v->getType(), nullptr, "ui_ds");
+                else { auto* tmp = ctx.createEntryAlloca(v->getType(), "ui_ds");
                        ctx.builder.CreateStore(v, tmp); sp = tmp; }
             }
             ctx.builder.CreateCall(ctx.getFunction("aiml_ui_set_default_style",
@@ -6569,7 +7038,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     // already i8*
                 } else if (!g->getType()->isPointerTy()) {
                     // loaded value — store to alloca and load as pointer
-                    llvm::AllocaInst* tmp = ctx.builder.CreateAlloca(g->getType());
+                    llvm::AllocaInst* tmp = ctx.createEntryAlloca(g->getType());
                     ctx.builder.CreateStore(g, tmp);
                     g = ctx.builder.CreateLoad(i8p, tmp);
                 }
@@ -6818,19 +7287,78 @@ void registerBuiltins(CompilerContext& ctx) {
             ctx.classes["mirror_event"] = std::move(ci);
         }
 
-        // ── rpc_event (isBuiltin=false — real struct: {i8*(method), i32(net_id), i32(arg)}) ──
+        // ── rpc_event (isBuiltin=false — real struct, layout MUST mirror AimlRpcEvent in mirror_runtime.cpp)
+        //   { i8* method, i32 net_id, i32 arg, i32 arg_kind, i8* arg_blob, i32 arg_blob_len }
+        // Natural alignment inserts 4-byte padding between arg_kind (idx 3) and
+        // arg_blob (idx 4) — matches the C struct on x86-64 / aarch64.
         {
             llvm::StructType* evTy = llvm::StructType::getTypeByName(ctx.context, "rpc_event");
             if (!evTy)
-                evTy = llvm::StructType::create(ctx.context, {i8p, i32, i32}, "rpc_event");
+                evTy = llvm::StructType::create(ctx.context, {i8p, i32, i32, i32, i8p, i32}, "rpc_event");
 
             CI ci; ci.name = "rpc_event"; ci.type = evTy; ci.isBuiltin = false;
             auto mk = [](llvm::Type* t, int idx, const std::string& tn) {
                 CompilerContext::StructMember m; m.type = t; m.index = idx; m.typeName = tn; return m;
             };
-            ci.members["method"] = mk(i8p, 0, "string");
-            ci.members["net_id"] = mk(i32,  1, "i32");
-            ci.members["arg"]    = mk(i32,  2, "i32");
+            ci.members["method"]       = mk(i8p, 0, "string");
+            ci.members["net_id"]       = mk(i32, 1, "i32");
+            ci.members["arg"]          = mk(i32, 2, "i32");
+            ci.members["arg_kind"]     = mk(i32, 3, "i32");
+            ci.members["arg_blob"]     = mk(i8p, 4, "ptr");
+            ci.members["arg_blob_len"] = mk(i32, 5, "i32");
+
+            // (decode is exposed as mirror_session.decode_rpc(ev, target) — see below.)
+#if 0
+            // ── decode_into(out_var) — decode the typed-RPC blob into a model alloca.
+            // The target type is taken from the VariableExpr passed as the first arg
+            // via ctx.deserializeTargetType (set in ast_compiler_call.cpp before dispatch).
+            // Returns 0 on success, -1 on error (e.g. arg_kind != 1, schema mismatch).
+            ci.builtinMethods["decode_into"] = [i8p, i32, vd](CompilerContext& ctx,
+                llvm::Value* base, AIML::AST::CallExpr* call, EvalFn evalExpr) -> IRValue* {
+                if (call->args.size() < 1) return ctx.ir_gen->getInt32(-1);
+                // Resolve the target variable's alloca + its type name.
+                llvm::Value* outPtr = nullptr;
+                std::string  outTn;
+                if (auto* vx = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get())) {
+                    Symbol* sym = nullptr;
+                    CompilerContext::Scope* sc = ctx.currentScope;
+                    while (sc) {
+                        if (sc->variables.count(vx->name)) { sym = &sc->variables[vx->name]; break; }
+                        sc = sc->parent;
+                    }
+                    if (!sym && ctx.symbol_table.count(vx->name)) sym = &ctx.symbol_table[vx->name];
+                    if (!sym) return ctx.ir_gen->getInt32(-1);
+                    llvm::Value* av = sym->alloca_inst
+                        ? static_cast<llvm::Value*>(sym->alloca_inst)
+                        : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
+                    outPtr = ctx.builder.CreateBitCast(av, i8p);
+                    outTn  = sym->typeName;
+                }
+                if (!outPtr || outTn.empty()) return ctx.ir_gen->getInt32(-1);
+                if (!ctx.classes.count(outTn) || !ctx.classes[outTn].serNodesVar)
+                    return ctx.ir_gen->getInt32(-1);
+
+                auto& ci2 = ctx.classes[outTn];
+                // Zero-initialise the target so heap-field pointers start null
+                // (aiml_ser_decode docs: caller must zero-init `out`).
+                llvm::DataLayout dl(&ctx.module);
+                uint64_t outSz = dl.getTypeAllocSize(ci2.type);
+                ctx.builder.CreateMemSet(
+                    outPtr, ctx.builder.getInt8(0),
+                    ctx.builder.getInt64(outSz),
+                    llvm::MaybeAlign(1));
+
+                // ev pointer: `base` points to a local rpc_event alloca; we need its address as i8*.
+                llvm::Value* evPtr = ctx.builder.CreateBitCast(base, i8p);
+                llvm::Value* nodesPtr = ci2.serNodesVar;
+                llvm::Value* nNodes   = ctx.builder.getInt32((uint32_t)ci2.serNodesCount);
+                llvm::Value* r = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_rpc_event_decode_into",
+                        i32, {i8p, i8p, i8p, i32}),
+                    {evPtr, outPtr, nodesPtr, nNodes});
+                return ctx.ir_gen->wrap(r);
+            };
+#endif
             ctx.classes["rpc_event"] = std::move(ci);
         }
 
@@ -6865,7 +7393,7 @@ void registerBuiltins(CompilerContext& ctx) {
             if (!_av2) return nullptr; \
             llvm::Value* _v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(_av2)); \
             if (_v->getType()->isPointerTy()) return ctx.builder.CreateBitCast(_v, i8p); \
-            llvm::AllocaInst* _tmp = ctx.builder.CreateAlloca(_v->getType(), nullptr, "reg_tmp"); \
+            llvm::AllocaInst* _tmp = ctx.createEntryAlloca(_v->getType(), "reg_tmp"); \
             ctx.builder.CreateStore(_v, _tmp); \
             return ctx.builder.CreateBitCast(_tmp, i8p); \
         }())
@@ -6986,7 +7514,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* evPtr = ctx.builder.CreateCall(
                     ctx.getFunction("aiml_mirror_session_next_rpc", i8p, {i8p}), {s}, "rpc_ptr");
                 llvm::StructType* evTy = static_cast<llvm::StructType*>(ctx.getLLVMType("rpc_event"));
-                llvm::AllocaInst* evAlloca = ctx.builder.CreateAlloca(evTy, nullptr, "rpc_tmp");
+                llvm::AllocaInst* evAlloca = ctx.createEntryAlloca(evTy, "rpc_tmp");
                 llvm::DataLayout dl(&ctx.module);
                 uint64_t sz = dl.getTypeAllocSize(evTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
@@ -6996,18 +7524,138 @@ void registerBuiltins(CompilerContext& ctx) {
                 return ctx.ir_gen->wrap(evAlloca);
             };
 
-            // ── send_rpc(net_id: i32, method: string, arg: i32) → void ────────
-            ci.builtinMethods["send_rpc"] = [i8p, i32, vd](CompilerContext& ctx,
+            // ── send_rpc(net_id: i32, method: string, arg: i32 [, model_obj]) → void
+            // If a 4th argument is supplied AND it is a VariableExpr referring to a
+            // user model, the typed payload path is taken: the model is encoded via
+            // aiml_ser_encode and shipped alongside the i32 discriminator.
+            ci.builtinMethods["send_rpc"] = [i8p, i32, i64, vd](CompilerContext& ctx,
                 llvm::Value* base, AIML::AST::CallExpr* call, EvalFn evalExpr) -> IRValue* {
                 llvm::Value* s = ctx.builder.CreateLoad(i8p, base, "sess_ptr");
                 if (call->args.size() < 3) return ctx.ir_gen->getInt32(0);
                 llvm::Value* nid    = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
                 llvm::Value* method = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
                 llvm::Value* arg    = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[2].get())));
+
+                // Optional typed-payload path: 4th arg = model variable
+                if (call->args.size() >= 4) {
+                    if (auto* vx = dynamic_cast<AIML::AST::VariableExpr*>(call->args[3].get())) {
+                        Symbol* sym = nullptr;
+                        CompilerContext::Scope* sc = ctx.currentScope;
+                        while (sc) {
+                            if (sc->variables.count(vx->name)) { sym = &sc->variables[vx->name]; break; }
+                            sc = sc->parent;
+                        }
+                        if (!sym && ctx.symbol_table.count(vx->name)) sym = &ctx.symbol_table[vx->name];
+                        if (sym) {
+                            // Strip ptr<X> → X so that pointer-typed model args also work
+                            std::string tn = sym->typeName;
+                            bool isPtr = (tn.size() > 4 && tn.substr(0,4) == "ptr<" && tn.back() == '>');
+                            if (isPtr) tn = tn.substr(4, tn.size()-5);
+                            if (ctx.classes.count(tn) && ctx.classes[tn].serNodesVar) {
+                                auto& ci2 = ctx.classes[tn];
+                            llvm::Value* objAv = sym->alloca_inst
+                                ? static_cast<llvm::Value*>(sym->alloca_inst)
+                                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
+                            // If ptr<X>: alloca holds a pointer to the struct — load it
+                            llvm::Value* objPtr;
+                            if (isPtr) {
+                                objPtr = ctx.builder.CreateLoad(i8p, objAv, "pay_ptr");
+                            } else {
+                                objPtr = ctx.builder.CreateBitCast(objAv, i8p);
+                            }
+                            llvm::Value* nodesPtr = ci2.serNodesVar;
+                            llvm::Value* nNodes   = ctx.builder.getInt32((uint32_t)ci2.serNodesCount);
+                            ctx.builder.CreateCall(
+                                ctx.getFunction("aiml_mirror_session_send_rpc_model",
+                                    vd, {i8p, i32, i8p, i32, i8p, i8p, i32}),
+                                {s, nid, method, arg, objPtr, nodesPtr, nNodes});
+                                return ctx.ir_gen->getInt32(0);
+                            } else {
+                                // 4th arg present but type is not a serializable model → compiler error
+                                LOG_ERROR(ctx.fmtLoc() + "send_rpc: 4th argument '" + vx->name +
+                                    "' (type '" + sym->typeName + "') is not a serializable model type");
+                            }
+                        } // if sym
+                    }
+                }
+
                 ctx.builder.CreateCall(
                     ctx.getFunction("aiml_mirror_session_send_rpc", vd, {i8p, i32, i8p, i32}),
                     {s, nid, method, arg});
                 return ctx.ir_gen->getInt32(0);
+            };
+
+            // ── decode_rpc(ev: rpc_event, target: <Model>) → i32
+            // Decode the typed-RPC blob carried by `ev` into the caller-supplied
+            // model variable. Returns 0 on success, -1 if ev.arg_kind != 1 or
+            // schema mismatch. Heap fields inside `target` (strings/lists/maps)
+            // are newly allocated by aiml_ser_decode and must be released by
+            // the caller via the model lifetime (currently leaked — see Stufe 1).
+            ci.builtinMethods["decode_rpc"] = [i8p, i32, vd](CompilerContext& ctx,
+                llvm::Value* /*base*/, AIML::AST::CallExpr* call, EvalFn evalExpr) -> IRValue* {
+                if (call->args.size() < 2) return ctx.ir_gen->getInt32(-1);
+
+                // Arg 0: rpc_event variable — get its alloca address as i8*.
+                llvm::Value* evPtr = nullptr;
+                if (auto* vx = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get())) {
+                    Symbol* sym = nullptr;
+                    CompilerContext::Scope* sc = ctx.currentScope;
+                    while (sc) {
+                        if (sc->variables.count(vx->name)) { sym = &sc->variables[vx->name]; break; }
+                        sc = sc->parent;
+                    }
+                    if (!sym && ctx.symbol_table.count(vx->name)) sym = &ctx.symbol_table[vx->name];
+                    if (sym) {
+                        llvm::Value* av = sym->alloca_inst
+                            ? static_cast<llvm::Value*>(sym->alloca_inst)
+                            : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
+                        evPtr = ctx.builder.CreateBitCast(av, i8p);
+                    }
+                }
+                if (!evPtr) return ctx.ir_gen->getInt32(-1);
+
+                // Arg 1: target model variable — alloca + type name.
+                llvm::Value* outPtr = nullptr;
+                std::string  outTn;
+                if (auto* vx = dynamic_cast<AIML::AST::VariableExpr*>(call->args[1].get())) {
+                    Symbol* sym = nullptr;
+                    CompilerContext::Scope* sc = ctx.currentScope;
+                    while (sc) {
+                        if (sc->variables.count(vx->name)) { sym = &sc->variables[vx->name]; break; }
+                        sc = sc->parent;
+                    }
+                    if (!sym && ctx.symbol_table.count(vx->name)) sym = &ctx.symbol_table[vx->name];
+                    if (sym) {
+                        llvm::Value* av = sym->alloca_inst
+                            ? static_cast<llvm::Value*>(sym->alloca_inst)
+                            : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
+                        outPtr = ctx.builder.CreateBitCast(av, i8p);
+                        outTn  = sym->typeName;
+                    }
+                }
+                if (!outPtr || outTn.empty()
+                    || !ctx.classes.count(outTn)
+                    || !ctx.classes[outTn].serNodesVar)
+                    return ctx.ir_gen->getInt32(-1);
+
+                auto& ci2 = ctx.classes[outTn];
+                // Zero-init: aiml_ser_decode requires `out` to be zero-initialised.
+                // Critical for models with list/map/string members so the heap-field
+                // pointers start null and the decode pass can populate them safely.
+                llvm::DataLayout dl(&ctx.module);
+                uint64_t outSz = dl.getTypeAllocSize(ci2.type);
+                ctx.builder.CreateMemSet(
+                    outPtr, ctx.builder.getInt8(0),
+                    ctx.builder.getInt64(outSz),
+                    llvm::MaybeAlign(1));
+
+                llvm::Value* nodesPtr = ci2.serNodesVar;
+                llvm::Value* nNodes   = ctx.builder.getInt32((uint32_t)ci2.serNodesCount);
+                llvm::Value* r = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_rpc_event_decode_into",
+                        i32, {i8p, i8p, i8p, i32}),
+                    {evPtr, outPtr, nodesPtr, nNodes});
+                return ctx.ir_gen->wrap(r);
             };
 
             // ── next_event() → mirror_event (struct loaded from heap ptr) ─────
@@ -7019,7 +7667,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 // Allocate local, memcpy struct from heap pointer.
                 // visitSetStmt (isBuiltin=false, ptr val) will memcpy into target alloca.
                 llvm::StructType* evTy = static_cast<llvm::StructType*>(ctx.getLLVMType("mirror_event"));
-                llvm::AllocaInst* evAlloca = ctx.builder.CreateAlloca(evTy, nullptr, "ev_tmp");
+                llvm::AllocaInst* evAlloca = ctx.createEntryAlloca(evTy, "ev_tmp");
                 llvm::DataLayout dl(&ctx.module);
                 uint64_t sz = dl.getTypeAllocSize(evTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
@@ -7036,7 +7684,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* evPtr = ctx.builder.CreateCall(
                     ctx.getFunction("aiml_mirror_session_poll_event", i8p, {i8p}), {s}, "poll_ev_ptr");
                 llvm::StructType* evTy = static_cast<llvm::StructType*>(ctx.getLLVMType("mirror_event"));
-                llvm::AllocaInst* evAlloca = ctx.builder.CreateAlloca(evTy, nullptr, "poll_ev_tmp");
+                llvm::AllocaInst* evAlloca = ctx.createEntryAlloca(evTy, "poll_ev_tmp");
                 llvm::DataLayout dl(&ctx.module);
                 uint64_t sz = dl.getTypeAllocSize(evTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
@@ -7053,7 +7701,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* evPtr = ctx.builder.CreateCall(
                     ctx.getFunction("aiml_mirror_session_poll_rpc", i8p, {i8p}), {s}, "poll_rpc_ptr");
                 llvm::StructType* evTy = static_cast<llvm::StructType*>(ctx.getLLVMType("rpc_event"));
-                llvm::AllocaInst* evAlloca = ctx.builder.CreateAlloca(evTy, nullptr, "poll_rpc_tmp");
+                llvm::AllocaInst* evAlloca = ctx.createEntryAlloca(evTy, "poll_rpc_tmp");
                 llvm::DataLayout dl(&ctx.module);
                 uint64_t sz = dl.getTypeAllocSize(evTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
@@ -7247,4 +7895,617 @@ void registerBuiltins(CompilerContext& ctx) {
             return nullptr;
         };
     } // end log namespace
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // tensor builtin class (instance methods on tensor = i8*)
+    // preLoadBase=true → baseAlloca is already the loaded i8* tensor handle
+    // ═══════════════════════════════════════════════════════════════════════
+    {
+        using CI = CompilerContext::ClassInfo;
+        CI ci;
+        ci.name      = "tensor";
+        ci.isBuiltin = true;
+        ci.preLoadBase = true;
+
+        // t.free()
+        ci.builtinMethods["free"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_free", ctx.builder.getVoidTy(), {i8p});
+            ctx.builder.CreateCall(f, {tPtr});
+            return nullptr;
+        };
+
+        // t.shape(dim) → i32
+        ci.builtinMethods["shape"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_shape", i32, {i8p, i32});
+            llvm::Value* dim = call->args.empty() ? ctx.builder.getInt32(0)
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tPtr, dim}));
+        };
+
+        // t.ndim() → i32
+        ci.builtinMethods["ndim"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_ndim", ctx.builder.getInt32Ty(), {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tPtr}));
+        };
+
+        // t.size() → i32
+        ci.builtinMethods["size"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_size", ctx.builder.getInt32Ty(), {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tPtr}));
+        };
+
+        // t.item() → f32
+        ci.builtinMethods["item"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_item", ctx.builder.getFloatTy(), {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tPtr}));
+        };
+
+        // t.get(idx) → f32
+        ci.builtinMethods["get"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_get_flat", ctx.builder.getFloatTy(), {i8p, i32});
+            llvm::Value* idx = call->args.empty() ? ctx.builder.getInt32(0)
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tPtr, idx}));
+        };
+
+        // t.set(idx, val)
+        ci.builtinMethods["set"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto* f32 = ctx.builder.getFloatTy();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_set_flat", ctx.builder.getVoidTy(), {i8p, i32, f32});
+            if (call->args.size() < 2) return nullptr;
+            llvm::Value* idx = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* val = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            ctx.builder.CreateCall(f, {tPtr, idx, val});
+            return nullptr;
+        };
+
+        // t.fill(val)
+        ci.builtinMethods["fill"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_fill", ctx.builder.getVoidTy(), {i8p, f32});
+            if (call->args.empty()) return nullptr;
+            llvm::Value* val = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            ctx.builder.CreateCall(f, {tPtr, val});
+            return nullptr;
+        };
+
+        // t.grad() → tensor (i8*)
+        ci.builtinMethods["grad"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_grad", i8p, {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tPtr}));
+        };
+
+        // t.zero_grad()
+        ci.builtinMethods["zero_grad"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_zero_grad", ctx.builder.getVoidTy(), {i8p});
+            ctx.builder.CreateCall(f, {tPtr});
+            return nullptr;
+        };
+
+        // t.set_requires_grad(flag)
+        ci.builtinMethods["set_requires_grad"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_set_requires_grad", ctx.builder.getVoidTy(), {i8p, i32});
+            llvm::Value* flag = call->args.empty() ? ctx.builder.getInt32(1)
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            ctx.builder.CreateCall(f, {tPtr, flag});
+            return nullptr;
+        };
+
+        // t.requires_grad() → i32
+        ci.builtinMethods["requires_grad"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_requires_grad", ctx.builder.getInt32Ty(), {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tPtr}));
+        };
+
+        // t.print(label)
+        ci.builtinMethods["print"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+            AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_print", ctx.builder.getVoidTy(), {i8p, i8p});
+            llvm::Value* label = call->args.empty()
+                ? ctx.builder.CreateGlobalStringPtr("")
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            ctx.builder.CreateCall(f, {tPtr, label});
+            return nullptr;
+        };
+
+        // t.clone() → tensor
+        ci.builtinMethods["clone"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_clone", i8p, {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tPtr}));
+        };
+
+        // t.data_ptr() → ptr (float*)
+        ci.builtinMethods["data_ptr"] = [](CompilerContext& ctx, llvm::Value* tPtr,
+            AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_data_ptr", i8p, {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tPtr}));
+        };
+
+        ctx.classes["tensor"] = std::move(ci);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // tensor namespace (static / factory functions)
+    // ═══════════════════════════════════════════════════════════════════════
+    {
+        auto& tn = ctx.namespaces["tensor"];
+
+        // ── Helper: build a stack [N x i32] from variadic i32 args ────────
+        // Used by zeros, ones, randn, reshape — returns {ptr, ndim}.
+        // `startIdx` = first arg index that is a shape dimension.
+        auto buildShapeArray = [](CompilerContext& ctx, const std::vector<IRValue*>& args, size_t startIdx)
+                -> std::pair<llvm::Value*, llvm::Value*> {
+            auto* i32 = ctx.builder.getInt32Ty();
+            int ndim = (int)args.size() - (int)startIdx;
+            if (ndim <= 0) {
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                return {llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)),
+                        ctx.builder.getInt32(0)};
+            }
+            llvm::ArrayType* arrTy = llvm::ArrayType::get(i32, ndim);
+            llvm::Value* arrAlloca = ctx.createEntryAlloca(arrTy, "shape_arr");
+            for (int i = 0; i < ndim; ++i) {
+                llvm::Value* gep = ctx.builder.CreateConstInBoundsGEP2_32(arrTy, arrAlloca, 0, i);
+                llvm::Value* val = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[startIdx + i]));
+                ctx.builder.CreateStore(val, gep);
+            }
+            llvm::Value* ptr = ctx.builder.CreateConstInBoundsGEP2_32(arrTy, arrAlloca, 0, 0, "shape_ptr");
+            return {ptr, ctx.builder.getInt32(ndim)};
+        };
+
+        // tensor.zeros(d0, d1, ...) → tensor
+        tn.builtinFuncs["zeros"] = [buildShapeArray](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto [shapePtr, ndim] = buildShapeArray(ctx, args, 0);
+            llvm::Function* f = ctx.getFunction("aiml_tensor_zeros", i8p, {i8p, i32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {shapePtr, ndim}));
+        };
+
+        // tensor.ones(d0, d1, ...) → tensor
+        tn.builtinFuncs["ones"] = [buildShapeArray](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto [shapePtr, ndim] = buildShapeArray(ctx, args, 0);
+            llvm::Function* f = ctx.getFunction("aiml_tensor_ones", i8p, {i8p, i32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {shapePtr, ndim}));
+        };
+
+        // tensor.randn(d0, d1, ...) → tensor  (mean=0, stddev=1)
+        // tensor.randn(mean, stddev, d0, d1, ...) — if first two args are f32
+        // For simplicity: always mean=0 stddev=1, all args are shape dims
+        tn.builtinFuncs["randn"] = [buildShapeArray](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto* f32 = ctx.builder.getFloatTy();
+            auto [shapePtr, ndim] = buildShapeArray(ctx, args, 0);
+            llvm::Function* f = ctx.getFunction("aiml_tensor_randn", i8p, {i8p, i32, f32, f32});
+            llvm::Value* mean   = llvm::ConstantFP::get(f32, 0.0);
+            llvm::Value* stddev = llvm::ConstantFP::get(f32, 1.0);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {shapePtr, ndim, mean, stddev}));
+        };
+
+        // tensor.randn_ex(mean, stddev, d0, d1, ...) → tensor
+        tn.builtinFuncs["randn_ex"] = [buildShapeArray](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto* f32 = ctx.builder.getFloatTy();
+            if (args.size() < 3) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            llvm::Value* mean   = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* stddev = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            auto [shapePtr, ndim] = buildShapeArray(ctx, args, 2);
+            llvm::Function* f = ctx.getFunction("aiml_tensor_randn", i8p, {i8p, i32, f32, f32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {shapePtr, ndim, mean, stddev}));
+        };
+
+        // tensor.clone(t) → tensor
+        tn.builtinFuncs["clone"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            llvm::Function* f = ctx.getFunction("aiml_tensor_clone", i8p, {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))}));
+        };
+
+        // tensor.free(t)
+        tn.builtinFuncs["free"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            if (args.empty()) return nullptr;
+            llvm::Function* f = ctx.getFunction("aiml_tensor_free", ctx.builder.getVoidTy(), {i8p});
+            ctx.builder.CreateCall(f, {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))});
+            return nullptr;
+        };
+
+        // ── Elementwise: (tensor, tensor) → tensor ───────────────────────
+        #define REG_TT_TO_T(name, cname) \
+        tn.builtinFuncs[name] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* { \
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo(); \
+            if (args.size() < 2) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p)); \
+            llvm::Function* f = ctx.getFunction(cname, i8p, {i8p, i8p}); \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, { \
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])), \
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))})); \
+        }
+        REG_TT_TO_T("add",    "aiml_tensor_add");
+        REG_TT_TO_T("sub",    "aiml_tensor_sub");
+        REG_TT_TO_T("mul",    "aiml_tensor_mul");
+        REG_TT_TO_T("matmul", "aiml_tensor_matmul");
+        #undef REG_TT_TO_T
+
+        // ── Unary: (tensor) → tensor ─────────────────────────────────────
+        #define REG_T_TO_T(name, cname) \
+        tn.builtinFuncs[name] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* { \
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo(); \
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p)); \
+            llvm::Function* f = ctx.getFunction(cname, i8p, {i8p}); \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, { \
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))})); \
+        }
+        REG_T_TO_T("neg",  "aiml_tensor_neg");
+        REG_T_TO_T("exp",  "aiml_tensor_exp");
+        REG_T_TO_T("log",  "aiml_tensor_log_op");
+        REG_T_TO_T("tanh", "aiml_tensor_tanh_op");
+        REG_T_TO_T("relu", "aiml_tensor_relu");
+        REG_T_TO_T("gelu", "aiml_tensor_gelu");
+        #undef REG_T_TO_T
+
+        // tensor.mul_scalar(t, s) → tensor
+        tn.builtinFuncs["mul_scalar"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            if (args.size() < 2) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            llvm::Function* f = ctx.getFunction("aiml_tensor_mul_scalar", i8p, {i8p, f32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))}));
+        };
+
+        // ── Reduction: (tensor, dim) → tensor ────────────────────────────
+        #define REG_REDUCE(name, cname) \
+        tn.builtinFuncs[name] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* { \
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo(); \
+            auto* i32 = ctx.builder.getInt32Ty(); \
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p)); \
+            llvm::Function* f = ctx.getFunction(cname, i8p, {i8p, i32}); \
+            llvm::Value* dim = args.size() >= 2 \
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])) \
+                : ctx.builder.getInt32(-1); \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, { \
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])), dim})); \
+        }
+        REG_REDUCE("sum",  "aiml_tensor_sum");
+        REG_REDUCE("mean", "aiml_tensor_mean");
+        #undef REG_REDUCE
+
+        // tensor.softmax(t, dim) → tensor
+        tn.builtinFuncs["softmax"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            llvm::Function* f = ctx.getFunction("aiml_tensor_softmax", i8p, {i8p, i32});
+            llvm::Value* dim = args.size() >= 2
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+                : ctx.builder.getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])), dim}));
+        };
+
+        // tensor.layer_norm(t, gamma, beta, eps) → tensor
+        tn.builtinFuncs["layer_norm"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            if (args.size() < 3) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            llvm::Function* f = ctx.getFunction("aiml_tensor_layer_norm", i8p, {i8p, i8p, i8p, f32});
+            llvm::Value* eps = args.size() >= 4
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[3]))
+                : llvm::ConstantFP::get(f32, 1e-5);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2])),
+                eps}));
+        };
+
+        // tensor.reshape(t, d0, d1, ...) → tensor
+        tn.builtinFuncs["reshape"] = [buildShapeArray](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            llvm::Value* tPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            auto [shapePtr, ndim] = buildShapeArray(ctx, args, 1);
+            llvm::Function* f = ctx.getFunction("aiml_tensor_reshape", i8p, {i8p, i8p, i32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {tPtr, shapePtr, ndim}));
+        };
+
+        // tensor.transpose(t, d0, d1) → tensor
+        tn.builtinFuncs["transpose"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (args.size() < 3) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            llvm::Function* f = ctx.getFunction("aiml_tensor_transpose", i8p, {i8p, i32, i32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))}));
+        };
+
+        // tensor.slice(t, dim, start, end) → tensor
+        tn.builtinFuncs["slice"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (args.size() < 4) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            llvm::Function* f = ctx.getFunction("aiml_tensor_slice", i8p, {i8p, i32, i32, i32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[3]))}));
+        };
+
+        // tensor.argmax_scalar(t) → i32
+        tn.builtinFuncs["argmax_scalar"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (args.empty()) return ctx.ir_gen->getInt32(0);
+            llvm::Function* f = ctx.getFunction("aiml_tensor_argmax_scalar", i32, {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))}));
+        };
+
+        // tensor.argmax(t, dim) → tensor
+        tn.builtinFuncs["argmax"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            llvm::Function* f = ctx.getFunction("aiml_tensor_argmax", i8p, {i8p, i32});
+            llvm::Value* dim = args.size() >= 2
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+                : ctx.builder.getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])), dim}));
+        };
+
+        // tensor.embedding_lookup(W, id_tensor, seq_len) → tensor
+        // id_tensor = 1D float tensor with float-encoded token IDs
+        tn.builtinFuncs["embedding_lookup"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (args.size() < 3) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            llvm::Function* f = ctx.getFunction("aiml_tensor_embedding_lookup", i8p, {i8p, i8p, i32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))}));
+        };
+
+        // tensor.cross_entropy(logits, target_tensor, batch_size) → tensor
+        tn.builtinFuncs["cross_entropy"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (args.size() < 3) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            llvm::Function* f = ctx.getFunction("aiml_tensor_cross_entropy", i8p, {i8p, i8p, i32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))}));
+        };
+
+        // tensor.from_data(data_ptr, d0, d1, ...) → tensor
+        // data_ptr = i8* (pointer to float array)
+        tn.builtinFuncs["from_data"] = [buildShapeArray](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            llvm::Value* dataPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            auto [shapePtr, ndim] = buildShapeArray(ctx, args, 1);
+            llvm::Function* f = ctx.getFunction("aiml_tensor_from_data", i8p, {i8p, i8p, i32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {dataPtr, shapePtr, ndim}));
+        };
+
+        // tensor.from_int_list(list<i32>, count) → tensor
+        // Bulk-converts int list to float tensor (replaces element-by-element loop)
+        tn.builtinFuncs["from_int_list"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto* i32p = i32->getPointerTo();
+            if (args.size() < 2) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            // args[0] = list<i32> struct VALUE (loaded), args[1] = count
+            llvm::Value* listVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* count = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            // list struct layout: {i32 size, i32 cap, i32* data}
+            // ExtractValue index 2 = data pointer (i32*)
+            auto* dataPtr = ctx.builder.CreateExtractValue(listVal, {2});
+            llvm::Function* f = ctx.getFunction("aiml_tensor_from_int_list", i8p, {i32p, i32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {dataPtr, count}));
+        };
+
+        // ── Arena ────────────────────────────────────────────────────────
+        tn.builtinFuncs["arena_init"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.empty()) return nullptr;
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_tensor_arena_init", ctx.builder.getVoidTy(), {i32});
+            ctx.builder.CreateCall(f, {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))});
+            return nullptr;
+        };
+
+        // ── Autograd control ─────────────────────────────────────────────
+        tn.builtinFuncs["begin_graph"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+            llvm::Function* f = ctx.getFunction("aiml_tensor_begin_graph", ctx.builder.getVoidTy(), {});
+            ctx.builder.CreateCall(f, {});
+            return nullptr;
+        };
+
+        tn.builtinFuncs["backward"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            if (args.empty()) return nullptr;
+            llvm::Function* f = ctx.getFunction("aiml_tensor_backward", ctx.builder.getVoidTy(), {i8p});
+            ctx.builder.CreateCall(f, {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))});
+            return nullptr;
+        };
+
+        tn.builtinFuncs["no_grad_begin"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+            llvm::Function* f = ctx.getFunction("aiml_tensor_no_grad_begin", ctx.builder.getVoidTy(), {});
+            ctx.builder.CreateCall(f, {});
+            return nullptr;
+        };
+
+        tn.builtinFuncs["no_grad_end"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+            llvm::Function* f = ctx.getFunction("aiml_tensor_no_grad_end", ctx.builder.getVoidTy(), {});
+            ctx.builder.CreateCall(f, {});
+            return nullptr;
+        };
+
+        // ── Adam optimizer ───────────────────────────────────────────────
+        // tensor.adam_step(param, m, v, lr, beta1, beta2, eps, step)
+        tn.builtinFuncs["adam_step"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (args.size() < 8) return nullptr;
+            llvm::Function* f = ctx.getFunction("aiml_tensor_adam_step",
+                ctx.builder.getVoidTy(), {i8p, i8p, i8p, f32, f32, f32, f32, i32});
+            ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[3])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[4])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[5])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[6])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[7]))
+            });
+            return nullptr;
+        };
+
+        // tensor.print(t, label)
+        tn.builtinFuncs["print"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            if (args.empty()) return nullptr;
+            llvm::Function* f = ctx.getFunction("aiml_tensor_print", ctx.builder.getVoidTy(), {i8p, i8p});
+            llvm::Value* label = args.size() >= 2
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+                : ctx.builder.CreateGlobalStringPtr("");
+            ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])), label});
+            return nullptr;
+        };
+
+        // tensor.fill(t, val)
+        tn.builtinFuncs["fill"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            if (args.size() < 2) return nullptr;
+            llvm::Function* f = ctx.getFunction("aiml_tensor_fill", ctx.builder.getVoidTy(), {i8p, f32});
+            ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))});
+            return nullptr;
+        };
+        // tensor.save(tensor, store_name, key) — persist tensor to AionDB Kv blob
+        tn.builtinFuncs["save"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            if (args.size() < 3) return nullptr;
+            llvm::Function* f = ctx.getFunction("aiml_tensor_save", ctx.builder.getVoidTy(), {i8p, i8p, i8p});
+            ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))});
+            return nullptr;
+        };
+
+        // tensor.load(store_name, key) → tensor (or null if not found)
+        tn.builtinFuncs["load"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            if (args.size() < 2) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            llvm::Function* f = ctx.getFunction("aiml_tensor_load", i8p, {i8p, i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))}));
+        };
+
+        // tensor.bind(store_name, key, d0, d1, ...) → tensor (zero-copy DB binding)
+        tn.builtinFuncs["bind"] = [buildShapeArray](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (args.size() < 3) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            auto store_v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            auto key_v   = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            // Shape args start at index 2
+            std::vector<IRValue*> shape_args(args.begin() + 2, args.end());
+            auto [shapePtr, ndim] = buildShapeArray(ctx, shape_args, 0);
+            llvm::Function* f = ctx.getFunction("aiml_tensor_bind", i8p, {i8p, i8p, i8p, i32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {store_v, key_v, shapePtr, ndim}));
+        };
+
+        // tensor.concat(a, b, dim) → tensor
+        tn.builtinFuncs["concat"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (args.size() < 2) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            llvm::Function* f = ctx.getFunction("aiml_tensor_concat", i8p, {i8p, i8p, i32});
+            llvm::Value* dim = args.size() >= 3
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))
+                : ctx.builder.getInt32(0);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])), dim}));
+        };
+        // tensor.causal_mask(seq_len) → tensor [seq, seq]
+        tn.builtinFuncs["causal_mask"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            llvm::Function* f = ctx.getFunction("aiml_tensor_causal_mask", i8p, {i32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))}));
+        };
+        // tensor.fused_mha(x, wq, wk, wv, wo, n_heads, embed_dim) → tensor
+        tn.builtinFuncs["fused_mha"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (args.size() < 7) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            llvm::Function* f = ctx.getFunction("aiml_tensor_fused_mha", i8p,
+                {i8p, i8p, i8p, i8p, i8p, i32, i32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[3])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[4])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[5])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[6]))}));
+        };
+    } // end tensor namespace
 }

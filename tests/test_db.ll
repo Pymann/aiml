@@ -3,20 +3,47 @@ source_filename = "AIML_Module"
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-linux-gnu"
 
-%AimlClassSchema = type { ptr, i32, i32, i32, i32, [32 x %AimlFieldInfo] }
-%AimlFieldInfo = type { ptr }
-%Health = type { i32 }
 %Entity = type { i32, i32 }
 %list_f32 = type { i32, i32, ptr }
-%GenericList = type { i32, i32, ptr }
 %"list_ptr<VecResult>" = type { i32, i32, ptr }
-%VecResult = type { ptr, float }
 %GameState = type { i32, i32 }
+%Health = type { i32 }
 %Pos = type { i32 }
 %"list_ptr<Health>" = type { i32, i32, ptr }
+%AimlClassSchema = type { ptr, i32, i32, i32, i32, [256 x %AimlFieldInfo] }
+%AimlFieldInfo = type { ptr }
+%GenericList = type { i32, i32, ptr }
+%VecResult = type { ptr, float }
 
 @__argc = external global i32
 @__argv = external global ptr
+@__global_entities = global ptr null
+@__global_e = global %Entity zeroinitializer
+@__global_eid = global i32 0
+@__global_p = global ptr null
+@__global_n = global i32 0
+@__global_cfg = global ptr null
+@__global_v = global ptr null
+@__global_has = global i32 0
+@__global_klen = global i32 0
+@__global_vs = global ptr null
+@__global_v1 = global %list_f32 zeroinitializer
+@__global_v2 = global %list_f32 zeroinitializer
+@__global_vlen = global i32 0
+@__global_q = global %list_f32 zeroinitializer
+@__global_results = global %"list_ptr<VecResult>" zeroinitializer
+@__global_r = global ptr null
+@__global_history = global ptr null
+@__global_gs = global %GameState zeroinitializer
+@__global_tlen = global i32 0
+@__global_tp = global ptr null
+@__global_hp_store = global ptr null
+@__global_pos_store = global ptr null
+@__global_h1 = global %Health zeroinitializer
+@__global_p1 = global %Pos zeroinitializer
+@__global_h2 = global %Health zeroinitializer
+@__global_high_hp = global %"list_ptr<Health>" zeroinitializer
+@__global_qlen = global i32 0
 @0 = private unnamed_addr constant [9 x i8] c"entities\00", align 1
 @1 = private unnamed_addr constant [7 x i8] c"Entity\00", align 1
 @2 = private unnamed_addr constant [14 x i8] c"inserted id: \00", align 1
@@ -105,7 +132,7 @@ target triple = "x86_64-pc-linux-gnu"
 @__aiml_sfield_Health_hp = private constant [3 x i8] c"hp\00"
 @__aiml_sname_Pos = private constant [4 x i8] c"Pos\00"
 @__aiml_sfield_Pos_x = private constant [2 x i8] c"x\00"
-@__aiml_schemas = global [4 x %AimlClassSchema] [%AimlClassSchema { ptr @__aiml_sname_Entity, i32 1, i32 2, i32 8, i32 8, [32 x %AimlFieldInfo] [%AimlFieldInfo { ptr @__aiml_sfield_Entity_id }, %AimlFieldInfo { ptr @__aiml_sfield_Entity_hp }, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer] }, %AimlClassSchema { ptr @__aiml_sname_GameState, i32 1, i32 2, i32 8, i32 8, [32 x %AimlFieldInfo] [%AimlFieldInfo { ptr @__aiml_sfield_GameState_score }, %AimlFieldInfo { ptr @__aiml_sfield_GameState_hp }, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer] }, %AimlClassSchema { ptr @__aiml_sname_Health, i32 1, i32 1, i32 4, i32 4, [32 x %AimlFieldInfo] [%AimlFieldInfo { ptr @__aiml_sfield_Health_hp }, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer] }, %AimlClassSchema { ptr @__aiml_sname_Pos, i32 1, i32 1, i32 4, i32 4, [32 x %AimlFieldInfo] [%AimlFieldInfo { ptr @__aiml_sfield_Pos_x }, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer] }]
+@__aiml_schemas = global [4 x %AimlClassSchema] [%AimlClassSchema { ptr @__aiml_sname_Entity, i32 1, i32 2, i32 8, i32 8, [256 x %AimlFieldInfo] [%AimlFieldInfo { ptr @__aiml_sfield_Entity_id }, %AimlFieldInfo { ptr @__aiml_sfield_Entity_hp }, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer] }, %AimlClassSchema { ptr @__aiml_sname_GameState, i32 1, i32 2, i32 8, i32 8, [256 x %AimlFieldInfo] [%AimlFieldInfo { ptr @__aiml_sfield_GameState_score }, %AimlFieldInfo { ptr @__aiml_sfield_GameState_hp }, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer] }, %AimlClassSchema { ptr @__aiml_sname_Health, i32 1, i32 1, i32 4, i32 4, [256 x %AimlFieldInfo] [%AimlFieldInfo { ptr @__aiml_sfield_Health_hp }, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer] }, %AimlClassSchema { ptr @__aiml_sname_Pos, i32 1, i32 1, i32 4, i32 4, [256 x %AimlFieldInfo] [%AimlFieldInfo { ptr @__aiml_sfield_Pos_x }, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer, %AimlFieldInfo zeroinitializer] }]
 @__aiml_schema_count = constant i32 4
 
 define void @tick_hp(ptr %0) personality ptr @__gxx_personality_v0 {
@@ -139,614 +166,514 @@ if_then:                                          ; preds = %entry
 if_else:                                          ; preds = %entry
   ret i32 0
 
-if_merge:                                         ; No predecessors!
+if_merge:                                         ; preds = %ret_dead1, %ret_dead
   ret i32 0
+
+ret_dead:                                         ; No predecessors!
+  br label %if_merge
+
+ret_dead1:                                        ; No predecessors!
+  br label %if_merge
 }
 
 define void @__aiml_init() {
 entry:
-  %entities = alloca ptr, align 8
-  store ptr null, ptr %entities, align 8
   %0 = call ptr @aiml_db_store_open(ptr @0, ptr @1, i64 8)
-  store ptr %0, ptr %entities, align 8
-  %e = alloca %Entity, align 8
-  store %Entity zeroinitializer, ptr %e, align 4
-  %set_prop_ptr_w = getelementptr inbounds %Entity, ptr %e, i32 0, i32 0
-  store i32 42, ptr %set_prop_ptr_w, align 4
-  %set_prop_ptr_w1 = getelementptr inbounds %Entity, ptr %e, i32 0, i32 1
-  store i32 100, ptr %set_prop_ptr_w1, align 4
-  %eid = alloca i32, align 4
-  store i32 0, ptr %eid, align 4
-  %e_val = load %Entity, ptr %e, align 4
-  %store_ptr = load ptr, ptr %entities, align 8
-  %1 = call i32 @aiml_db_store_insert(ptr %store_ptr, ptr %e, i64 8)
-  store i32 %1, ptr %eid, align 4
-  %eid_val = load i32, ptr %eid, align 4
+  store ptr %0, ptr @__global_entities, align 8
+  store i32 42, ptr @__global_e, align 4
+  store i32 100, ptr getelementptr inbounds (%Entity, ptr @__global_e, i32 0, i32 1), align 4
+  %e_val = load %Entity, ptr @__global_e, align 4
+  %store_ptr = load ptr, ptr @__global_entities, align 8
+  %1 = call i32 @aiml_db_store_insert(ptr %store_ptr, ptr @__global_e, i64 8)
+  store i32 %1, ptr @__global_eid, align 4
+  %eid_val = load i32, ptr @__global_eid, align 4
   %2 = call ptr @__aiml_int_to_string(i32 %eid_val)
   %3 = call ptr @__aiml_str_concat(ptr @2, ptr %2)
   %print_null_check = icmp eq ptr %3, null
   %print_safe_str = select i1 %print_null_check, ptr @print_null_str, ptr %3
   %print_call = call i32 (ptr, ...) @printf(ptr @3, ptr %print_safe_str)
-  %p = alloca ptr, align 8
-  store ptr null, ptr %p, align 8
-  %store_ptr2 = load ptr, ptr %entities, align 8
-  %4 = call ptr @aiml_db_store_get(ptr %store_ptr2, i32 1)
-  store ptr %4, ptr %p, align 8
-  %prop_ptr_base = load ptr, ptr %p, align 8
+  %store_ptr1 = load ptr, ptr @__global_entities, align 8
+  %4 = call ptr @aiml_db_store_get(ptr %store_ptr1, i32 1)
+  store ptr %4, ptr @__global_p, align 8
+  %prop_ptr_base = load ptr, ptr @__global_p, align 8
   %prop_ptr = getelementptr inbounds %Entity, ptr %prop_ptr_base, i32 0, i32 1
   %hp_val = load i32, ptr %prop_ptr, align 4
   %5 = call ptr @__aiml_int_to_string(i32 %hp_val)
   %6 = call ptr @__aiml_str_concat(ptr @4, ptr %5)
-  %print_null_check3 = icmp eq ptr %6, null
-  %print_safe_str4 = select i1 %print_null_check3, ptr @print_null_str.1, ptr %6
-  %print_call5 = call i32 (ptr, ...) @printf(ptr @5, ptr %print_safe_str4)
-  %n = alloca i32, align 4
-  store i32 0, ptr %n, align 4
-  %store_ptr6 = load ptr, ptr %entities, align 8
-  %7 = call i32 @aiml_db_store_len(ptr %store_ptr6)
-  store i32 %7, ptr %n, align 4
-  %n_val = load i32, ptr %n, align 4
+  %print_null_check2 = icmp eq ptr %6, null
+  %print_safe_str3 = select i1 %print_null_check2, ptr @print_null_str.1, ptr %6
+  %print_call4 = call i32 (ptr, ...) @printf(ptr @5, ptr %print_safe_str3)
+  %store_ptr5 = load ptr, ptr @__global_entities, align 8
+  %7 = call i32 @aiml_db_store_len(ptr %store_ptr5)
+  store i32 %7, ptr @__global_n, align 4
+  %n_val = load i32, ptr @__global_n, align 4
   %8 = call ptr @__aiml_int_to_string(i32 %n_val)
   %9 = call ptr @__aiml_str_concat(ptr @6, ptr %8)
-  %print_null_check7 = icmp eq ptr %9, null
-  %print_safe_str8 = select i1 %print_null_check7, ptr @print_null_str.2, ptr %9
-  %print_call9 = call i32 (ptr, ...) @printf(ptr @7, ptr %print_safe_str8)
-  %set_prop_ptr_w10 = getelementptr inbounds %Entity, ptr %e, i32 0, i32 1
-  store i32 200, ptr %set_prop_ptr_w10, align 4
-  %e_val11 = load %Entity, ptr %e, align 4
-  %store_ptr12 = load ptr, ptr %entities, align 8
-  %10 = call i32 @aiml_db_store_update(ptr %store_ptr12, i32 1, ptr %e, i64 8)
-  %store_ptr13 = load ptr, ptr %entities, align 8
-  %11 = call ptr @aiml_db_store_get(ptr %store_ptr13, i32 1)
-  store ptr %11, ptr %p, align 8
-  %prop_ptr_base14 = load ptr, ptr %p, align 8
-  %prop_ptr15 = getelementptr inbounds %Entity, ptr %prop_ptr_base14, i32 0, i32 1
-  %hp_val16 = load i32, ptr %prop_ptr15, align 4
-  %12 = call ptr @__aiml_int_to_string(i32 %hp_val16)
+  %print_null_check6 = icmp eq ptr %9, null
+  %print_safe_str7 = select i1 %print_null_check6, ptr @print_null_str.2, ptr %9
+  %print_call8 = call i32 (ptr, ...) @printf(ptr @7, ptr %print_safe_str7)
+  store i32 200, ptr getelementptr inbounds (%Entity, ptr @__global_e, i32 0, i32 1), align 4
+  %e_val9 = load %Entity, ptr @__global_e, align 4
+  %store_ptr10 = load ptr, ptr @__global_entities, align 8
+  %10 = call i32 @aiml_db_store_update(ptr %store_ptr10, i32 1, ptr @__global_e, i64 8)
+  %store_ptr11 = load ptr, ptr @__global_entities, align 8
+  %11 = call ptr @aiml_db_store_get(ptr %store_ptr11, i32 1)
+  store ptr %11, ptr @__global_p, align 8
+  %prop_ptr_base12 = load ptr, ptr @__global_p, align 8
+  %prop_ptr13 = getelementptr inbounds %Entity, ptr %prop_ptr_base12, i32 0, i32 1
+  %hp_val14 = load i32, ptr %prop_ptr13, align 4
+  %12 = call ptr @__aiml_int_to_string(i32 %hp_val14)
   %13 = call ptr @__aiml_str_concat(ptr @8, ptr %12)
-  %print_null_check17 = icmp eq ptr %13, null
-  %print_safe_str18 = select i1 %print_null_check17, ptr @print_null_str.3, ptr %13
-  %print_call19 = call i32 (ptr, ...) @printf(ptr @9, ptr %print_safe_str18)
-  %cfg = alloca ptr, align 8
-  store ptr null, ptr %cfg, align 8
+  %print_null_check15 = icmp eq ptr %13, null
+  %print_safe_str16 = select i1 %print_null_check15, ptr @print_null_str.3, ptr %13
+  %print_call17 = call i32 (ptr, ...) @printf(ptr @9, ptr %print_safe_str16)
   %14 = call ptr @aiml_db_kv_open(ptr @10, i64 0)
-  store ptr %14, ptr %cfg, align 8
-  %kv_ptr = load ptr, ptr %cfg, align 8
+  store ptr %14, ptr @__global_cfg, align 8
+  %kv_ptr = load ptr, ptr @__global_cfg, align 8
   call void @aiml_db_kv_set(ptr %kv_ptr, ptr @11, ptr @12, i64 0)
-  %v = alloca ptr, align 8
-  store ptr null, ptr %v, align 8
-  %kv_ptr20 = load ptr, ptr %cfg, align 8
-  %15 = call ptr @aiml_db_kv_get(ptr %kv_ptr20, ptr @13)
-  store ptr %15, ptr %v, align 8
-  %v_val = load ptr, ptr %v, align 8
+  %kv_ptr18 = load ptr, ptr @__global_cfg, align 8
+  %15 = call ptr @aiml_db_kv_get(ptr %kv_ptr18, ptr @13)
+  store ptr %15, ptr @__global_v, align 8
+  %v_val = load ptr, ptr @__global_v, align 8
   %16 = call ptr @__aiml_str_concat(ptr @14, ptr %v_val)
-  %print_null_check21 = icmp eq ptr %16, null
-  %print_safe_str22 = select i1 %print_null_check21, ptr @print_null_str.4, ptr %16
-  %print_call23 = call i32 (ptr, ...) @printf(ptr @15, ptr %print_safe_str22)
-  %has = alloca i32, align 4
-  store i32 0, ptr %has, align 4
-  %kv_ptr24 = load ptr, ptr %cfg, align 8
-  %17 = call i32 @aiml_db_kv_has(ptr %kv_ptr24, ptr @16)
-  store i32 %17, ptr %has, align 4
-  %has_val = load i32, ptr %has, align 4
+  %print_null_check19 = icmp eq ptr %16, null
+  %print_safe_str20 = select i1 %print_null_check19, ptr @print_null_str.4, ptr %16
+  %print_call21 = call i32 (ptr, ...) @printf(ptr @15, ptr %print_safe_str20)
+  %kv_ptr22 = load ptr, ptr @__global_cfg, align 8
+  %17 = call i32 @aiml_db_kv_has(ptr %kv_ptr22, ptr @16)
+  store i32 %17, ptr @__global_has, align 4
+  %has_val = load i32, ptr @__global_has, align 4
   %18 = call ptr @__aiml_int_to_string(i32 %has_val)
   %19 = call ptr @__aiml_str_concat(ptr @17, ptr %18)
-  %print_null_check25 = icmp eq ptr %19, null
-  %print_safe_str26 = select i1 %print_null_check25, ptr @print_null_str.5, ptr %19
-  %print_call27 = call i32 (ptr, ...) @printf(ptr @18, ptr %print_safe_str26)
-  %klen = alloca i32, align 4
-  store i32 0, ptr %klen, align 4
-  %kv_ptr28 = load ptr, ptr %cfg, align 8
-  %20 = call i32 @aiml_db_kv_len(ptr %kv_ptr28)
-  store i32 %20, ptr %klen, align 4
-  %klen_val = load i32, ptr %klen, align 4
+  %print_null_check23 = icmp eq ptr %19, null
+  %print_safe_str24 = select i1 %print_null_check23, ptr @print_null_str.5, ptr %19
+  %print_call25 = call i32 (ptr, ...) @printf(ptr @18, ptr %print_safe_str24)
+  %kv_ptr26 = load ptr, ptr @__global_cfg, align 8
+  %20 = call i32 @aiml_db_kv_len(ptr %kv_ptr26)
+  store i32 %20, ptr @__global_klen, align 4
+  %klen_val = load i32, ptr @__global_klen, align 4
   %21 = call ptr @__aiml_int_to_string(i32 %klen_val)
   %22 = call ptr @__aiml_str_concat(ptr @19, ptr %21)
-  %print_null_check29 = icmp eq ptr %22, null
-  %print_safe_str30 = select i1 %print_null_check29, ptr @print_null_str.6, ptr %22
-  %print_call31 = call i32 (ptr, ...) @printf(ptr @20, ptr %print_safe_str30)
-  %kv_ptr32 = load ptr, ptr %cfg, align 8
-  call void @aiml_db_kv_delete(ptr %kv_ptr32, ptr @21)
-  %kv_ptr33 = load ptr, ptr %cfg, align 8
-  %23 = call i32 @aiml_db_kv_has(ptr %kv_ptr33, ptr @22)
-  store i32 %23, ptr %has, align 4
-  %has_val34 = load i32, ptr %has, align 4
-  %24 = call ptr @__aiml_int_to_string(i32 %has_val34)
+  %print_null_check27 = icmp eq ptr %22, null
+  %print_safe_str28 = select i1 %print_null_check27, ptr @print_null_str.6, ptr %22
+  %print_call29 = call i32 (ptr, ...) @printf(ptr @20, ptr %print_safe_str28)
+  %kv_ptr30 = load ptr, ptr @__global_cfg, align 8
+  call void @aiml_db_kv_delete(ptr %kv_ptr30, ptr @21)
+  %kv_ptr31 = load ptr, ptr @__global_cfg, align 8
+  %23 = call i32 @aiml_db_kv_has(ptr %kv_ptr31, ptr @22)
+  store i32 %23, ptr @__global_has, align 4
+  %has_val32 = load i32, ptr @__global_has, align 4
+  %24 = call ptr @__aiml_int_to_string(i32 %has_val32)
   %25 = call ptr @__aiml_str_concat(ptr @23, ptr %24)
-  %print_null_check35 = icmp eq ptr %25, null
-  %print_safe_str36 = select i1 %print_null_check35, ptr @print_null_str.7, ptr %25
-  %print_call37 = call i32 (ptr, ...) @printf(ptr @24, ptr %print_safe_str36)
-  %kv_ptr38 = load ptr, ptr %cfg, align 8
-  call void @aiml_db_kv_set(ptr %kv_ptr38, ptr @25, ptr @26, i64 0)
-  %kv_ptr39 = load ptr, ptr %cfg, align 8
-  call void @aiml_db_kv_set(ptr %kv_ptr39, ptr @27, ptr @28, i64 0)
-  %kv_ptr40 = load ptr, ptr %cfg, align 8
-  %26 = call i32 @aiml_db_kv_len(ptr %kv_ptr40)
-  store i32 %26, ptr %klen, align 4
-  %klen_val41 = load i32, ptr %klen, align 4
-  %27 = call ptr @__aiml_int_to_string(i32 %klen_val41)
+  %print_null_check33 = icmp eq ptr %25, null
+  %print_safe_str34 = select i1 %print_null_check33, ptr @print_null_str.7, ptr %25
+  %print_call35 = call i32 (ptr, ...) @printf(ptr @24, ptr %print_safe_str34)
+  %kv_ptr36 = load ptr, ptr @__global_cfg, align 8
+  call void @aiml_db_kv_set(ptr %kv_ptr36, ptr @25, ptr @26, i64 0)
+  %kv_ptr37 = load ptr, ptr @__global_cfg, align 8
+  call void @aiml_db_kv_set(ptr %kv_ptr37, ptr @27, ptr @28, i64 0)
+  %kv_ptr38 = load ptr, ptr @__global_cfg, align 8
+  %26 = call i32 @aiml_db_kv_len(ptr %kv_ptr38)
+  store i32 %26, ptr @__global_klen, align 4
+  %klen_val39 = load i32, ptr @__global_klen, align 4
+  %27 = call ptr @__aiml_int_to_string(i32 %klen_val39)
   %28 = call ptr @__aiml_str_concat(ptr @29, ptr %27)
-  %print_null_check42 = icmp eq ptr %28, null
-  %print_safe_str43 = select i1 %print_null_check42, ptr @print_null_str.8, ptr %28
-  %print_call44 = call i32 (ptr, ...) @printf(ptr @30, ptr %print_safe_str43)
-  %kv_ptr45 = load ptr, ptr %cfg, align 8
-  call void @aiml_db_kv_clear(ptr %kv_ptr45)
-  %kv_ptr46 = load ptr, ptr %cfg, align 8
-  %29 = call i32 @aiml_db_kv_len(ptr %kv_ptr46)
-  store i32 %29, ptr %klen, align 4
-  %klen_val47 = load i32, ptr %klen, align 4
-  %30 = call ptr @__aiml_int_to_string(i32 %klen_val47)
+  %print_null_check40 = icmp eq ptr %28, null
+  %print_safe_str41 = select i1 %print_null_check40, ptr @print_null_str.8, ptr %28
+  %print_call42 = call i32 (ptr, ...) @printf(ptr @30, ptr %print_safe_str41)
+  %kv_ptr43 = load ptr, ptr @__global_cfg, align 8
+  call void @aiml_db_kv_clear(ptr %kv_ptr43)
+  %kv_ptr44 = load ptr, ptr @__global_cfg, align 8
+  %29 = call i32 @aiml_db_kv_len(ptr %kv_ptr44)
+  store i32 %29, ptr @__global_klen, align 4
+  %klen_val45 = load i32, ptr @__global_klen, align 4
+  %30 = call ptr @__aiml_int_to_string(i32 %klen_val45)
   %31 = call ptr @__aiml_str_concat(ptr @31, ptr %30)
-  %print_null_check48 = icmp eq ptr %31, null
-  %print_safe_str49 = select i1 %print_null_check48, ptr @print_null_str.9, ptr %31
-  %print_call50 = call i32 (ptr, ...) @printf(ptr @32, ptr %print_safe_str49)
-  %vs = alloca ptr, align 8
-  store ptr null, ptr %vs, align 8
+  %print_null_check46 = icmp eq ptr %31, null
+  %print_safe_str47 = select i1 %print_null_check46, ptr @print_null_str.9, ptr %31
+  %print_call48 = call i32 (ptr, ...) @printf(ptr @32, ptr %print_safe_str47)
   %32 = call ptr @aiml_db_vec_open(ptr @33, i32 3)
-  store ptr %32, ptr %vs, align 8
-  %v1 = alloca %list_f32, align 8
-  store %list_f32 zeroinitializer, ptr %v1, align 8
-  %sizePtr = getelementptr inbounds %GenericList, ptr %v1, i32 0, i32 0
-  store i32 0, ptr %sizePtr, align 4
-  %capPtr = getelementptr inbounds %GenericList, ptr %v1, i32 0, i32 1
-  store i32 4, ptr %capPtr, align 4
+  store ptr %32, ptr @__global_vs, align 8
+  store i32 0, ptr @__global_v1, align 4
+  store i32 4, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 1), align 4
   %33 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), i64 4))
-  %dataPtr = getelementptr inbounds %GenericList, ptr %v1, i32 0, i32 2
-  store ptr %33, ptr %dataPtr, align 8
-  %sizePtr51 = getelementptr inbounds %GenericList, ptr %v1, i32 0, i32 0
-  %capPtr52 = getelementptr inbounds %GenericList, ptr %v1, i32 0, i32 1
-  %size = load i32, ptr %sizePtr51, align 4
-  %capacity = load i32, ptr %capPtr52, align 4
+  store ptr %33, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 2), align 8
+  %size = load i32, ptr @__global_v1, align 4
+  %capacity = load i32, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 1), align 4
   %34 = icmp eq i32 %size, %capacity
   br i1 %34, label %grow, label %cont
 
 grow:                                             ; preds = %entry
   %35 = mul i32 %capacity, 2
-  store i32 %35, ptr %capPtr52, align 4
-  %dataPtr53 = getelementptr inbounds %GenericList, ptr %v1, i32 0, i32 2
-  %36 = load ptr, ptr %dataPtr53, align 8
-  %37 = zext i32 %35 to i64
-  %38 = mul i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), %37
-  %39 = call ptr @realloc(ptr %36, i64 %38)
-  store ptr %39, ptr %dataPtr53, align 8
+  %36 = icmp sgt i32 %35, 0
+  %37 = select i1 %36, i32 %35, i32 4
+  store i32 %37, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 1), align 4
+  %38 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 2), align 8
+  %39 = zext i32 %37 to i64
+  %40 = mul i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), %39
+  %41 = call ptr @realloc(ptr %38, i64 %40)
+  store ptr %41, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 2), align 8
   br label %cont
 
 cont:                                             ; preds = %grow, %entry
-  %dataPtr54 = getelementptr inbounds %GenericList, ptr %v1, i32 0, i32 2
-  %dataBase = load ptr, ptr %dataPtr54, align 8
-  %40 = getelementptr inbounds float, ptr %dataBase, i32 %size
-  store float 1.000000e+00, ptr %40, align 4
-  %41 = add i32 %size, 1
-  store i32 %41, ptr %sizePtr51, align 4
-  %sizePtr55 = getelementptr inbounds %GenericList, ptr %v1, i32 0, i32 0
-  %capPtr56 = getelementptr inbounds %GenericList, ptr %v1, i32 0, i32 1
-  %size57 = load i32, ptr %sizePtr55, align 4
-  %capacity58 = load i32, ptr %capPtr56, align 4
-  %42 = icmp eq i32 %size57, %capacity58
-  br i1 %42, label %grow59, label %cont60
+  %dataBase = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 2), align 8
+  %42 = getelementptr inbounds float, ptr %dataBase, i32 %size
+  store float 1.000000e+00, ptr %42, align 4
+  %43 = add i32 %size, 1
+  store i32 %43, ptr @__global_v1, align 4
+  %size49 = load i32, ptr @__global_v1, align 4
+  %capacity50 = load i32, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 1), align 4
+  %44 = icmp eq i32 %size49, %capacity50
+  br i1 %44, label %grow51, label %cont52
 
-grow59:                                           ; preds = %cont
-  %43 = mul i32 %capacity58, 2
-  store i32 %43, ptr %capPtr56, align 4
-  %dataPtr61 = getelementptr inbounds %GenericList, ptr %v1, i32 0, i32 2
-  %44 = load ptr, ptr %dataPtr61, align 8
-  %45 = zext i32 %43 to i64
-  %46 = mul i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), %45
-  %47 = call ptr @realloc(ptr %44, i64 %46)
-  store ptr %47, ptr %dataPtr61, align 8
-  br label %cont60
+grow51:                                           ; preds = %cont
+  %45 = mul i32 %capacity50, 2
+  %46 = icmp sgt i32 %45, 0
+  %47 = select i1 %46, i32 %45, i32 4
+  store i32 %47, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 1), align 4
+  %48 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 2), align 8
+  %49 = zext i32 %47 to i64
+  %50 = mul i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), %49
+  %51 = call ptr @realloc(ptr %48, i64 %50)
+  store ptr %51, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 2), align 8
+  br label %cont52
 
-cont60:                                           ; preds = %grow59, %cont
-  %dataPtr62 = getelementptr inbounds %GenericList, ptr %v1, i32 0, i32 2
-  %dataBase63 = load ptr, ptr %dataPtr62, align 8
-  %48 = getelementptr inbounds float, ptr %dataBase63, i32 %size57
-  store float 0.000000e+00, ptr %48, align 4
-  %49 = add i32 %size57, 1
-  store i32 %49, ptr %sizePtr55, align 4
-  %sizePtr64 = getelementptr inbounds %GenericList, ptr %v1, i32 0, i32 0
-  %capPtr65 = getelementptr inbounds %GenericList, ptr %v1, i32 0, i32 1
-  %size66 = load i32, ptr %sizePtr64, align 4
-  %capacity67 = load i32, ptr %capPtr65, align 4
-  %50 = icmp eq i32 %size66, %capacity67
-  br i1 %50, label %grow68, label %cont69
+cont52:                                           ; preds = %grow51, %cont
+  %dataBase53 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 2), align 8
+  %52 = getelementptr inbounds float, ptr %dataBase53, i32 %size49
+  store float 0.000000e+00, ptr %52, align 4
+  %53 = add i32 %size49, 1
+  store i32 %53, ptr @__global_v1, align 4
+  %size54 = load i32, ptr @__global_v1, align 4
+  %capacity55 = load i32, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 1), align 4
+  %54 = icmp eq i32 %size54, %capacity55
+  br i1 %54, label %grow56, label %cont57
 
-grow68:                                           ; preds = %cont60
-  %51 = mul i32 %capacity67, 2
-  store i32 %51, ptr %capPtr65, align 4
-  %dataPtr70 = getelementptr inbounds %GenericList, ptr %v1, i32 0, i32 2
-  %52 = load ptr, ptr %dataPtr70, align 8
-  %53 = zext i32 %51 to i64
-  %54 = mul i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), %53
-  %55 = call ptr @realloc(ptr %52, i64 %54)
-  store ptr %55, ptr %dataPtr70, align 8
-  br label %cont69
+grow56:                                           ; preds = %cont52
+  %55 = mul i32 %capacity55, 2
+  %56 = icmp sgt i32 %55, 0
+  %57 = select i1 %56, i32 %55, i32 4
+  store i32 %57, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 1), align 4
+  %58 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 2), align 8
+  %59 = zext i32 %57 to i64
+  %60 = mul i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), %59
+  %61 = call ptr @realloc(ptr %58, i64 %60)
+  store ptr %61, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 2), align 8
+  br label %cont57
 
-cont69:                                           ; preds = %grow68, %cont60
-  %dataPtr71 = getelementptr inbounds %GenericList, ptr %v1, i32 0, i32 2
-  %dataBase72 = load ptr, ptr %dataPtr71, align 8
-  %56 = getelementptr inbounds float, ptr %dataBase72, i32 %size66
-  store float 0.000000e+00, ptr %56, align 4
-  %57 = add i32 %size66, 1
-  store i32 %57, ptr %sizePtr64, align 4
-  %v1_val = load %list_f32, ptr %v1, align 8
-  %vs_ptr = load ptr, ptr %vs, align 8
-  %vsz_fld = getelementptr inbounds %GenericList, ptr %v1, i32 0, i32 0
-  %list_sz = load i32, ptr %vsz_fld, align 4
-  %vdata_fld = getelementptr inbounds %GenericList, ptr %v1, i32 0, i32 2
-  %data_ptr = load ptr, ptr %vdata_fld, align 8
+cont57:                                           ; preds = %grow56, %cont52
+  %dataBase58 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 2), align 8
+  %62 = getelementptr inbounds float, ptr %dataBase58, i32 %size54
+  store float 0.000000e+00, ptr %62, align 4
+  %63 = add i32 %size54, 1
+  store i32 %63, ptr @__global_v1, align 4
+  %v1_val = load %list_f32, ptr @__global_v1, align 8
+  %vs_ptr = load ptr, ptr @__global_vs, align 8
+  %list_sz = load i32, ptr @__global_v1, align 4
+  %data_ptr = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_v1, i32 0, i32 2), align 8
   call void @aiml_db_vec_insert(ptr %vs_ptr, ptr @34, ptr %data_ptr, i32 %list_sz)
-  %v2 = alloca %list_f32, align 8
-  store %list_f32 zeroinitializer, ptr %v2, align 8
-  %sizePtr73 = getelementptr inbounds %GenericList, ptr %v2, i32 0, i32 0
-  store i32 0, ptr %sizePtr73, align 4
-  %capPtr74 = getelementptr inbounds %GenericList, ptr %v2, i32 0, i32 1
-  store i32 4, ptr %capPtr74, align 4
-  %58 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), i64 4))
-  %dataPtr75 = getelementptr inbounds %GenericList, ptr %v2, i32 0, i32 2
-  store ptr %58, ptr %dataPtr75, align 8
-  %sizePtr76 = getelementptr inbounds %GenericList, ptr %v2, i32 0, i32 0
-  %capPtr77 = getelementptr inbounds %GenericList, ptr %v2, i32 0, i32 1
-  %size78 = load i32, ptr %sizePtr76, align 4
-  %capacity79 = load i32, ptr %capPtr77, align 4
-  %59 = icmp eq i32 %size78, %capacity79
-  br i1 %59, label %grow80, label %cont81
+  store i32 0, ptr @__global_v2, align 4
+  store i32 4, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 1), align 4
+  %64 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), i64 4))
+  store ptr %64, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 2), align 8
+  %size59 = load i32, ptr @__global_v2, align 4
+  %capacity60 = load i32, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 1), align 4
+  %65 = icmp eq i32 %size59, %capacity60
+  br i1 %65, label %grow61, label %cont62
 
-grow80:                                           ; preds = %cont69
-  %60 = mul i32 %capacity79, 2
-  store i32 %60, ptr %capPtr77, align 4
-  %dataPtr82 = getelementptr inbounds %GenericList, ptr %v2, i32 0, i32 2
-  %61 = load ptr, ptr %dataPtr82, align 8
-  %62 = zext i32 %60 to i64
-  %63 = mul i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), %62
-  %64 = call ptr @realloc(ptr %61, i64 %63)
-  store ptr %64, ptr %dataPtr82, align 8
-  br label %cont81
-
-cont81:                                           ; preds = %grow80, %cont69
-  %dataPtr83 = getelementptr inbounds %GenericList, ptr %v2, i32 0, i32 2
-  %dataBase84 = load ptr, ptr %dataPtr83, align 8
-  %65 = getelementptr inbounds float, ptr %dataBase84, i32 %size78
-  store float 0.000000e+00, ptr %65, align 4
-  %66 = add i32 %size78, 1
-  store i32 %66, ptr %sizePtr76, align 4
-  %sizePtr85 = getelementptr inbounds %GenericList, ptr %v2, i32 0, i32 0
-  %capPtr86 = getelementptr inbounds %GenericList, ptr %v2, i32 0, i32 1
-  %size87 = load i32, ptr %sizePtr85, align 4
-  %capacity88 = load i32, ptr %capPtr86, align 4
-  %67 = icmp eq i32 %size87, %capacity88
-  br i1 %67, label %grow89, label %cont90
-
-grow89:                                           ; preds = %cont81
-  %68 = mul i32 %capacity88, 2
-  store i32 %68, ptr %capPtr86, align 4
-  %dataPtr91 = getelementptr inbounds %GenericList, ptr %v2, i32 0, i32 2
-  %69 = load ptr, ptr %dataPtr91, align 8
+grow61:                                           ; preds = %cont57
+  %66 = mul i32 %capacity60, 2
+  %67 = icmp sgt i32 %66, 0
+  %68 = select i1 %67, i32 %66, i32 4
+  store i32 %68, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 1), align 4
+  %69 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 2), align 8
   %70 = zext i32 %68 to i64
   %71 = mul i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), %70
   %72 = call ptr @realloc(ptr %69, i64 %71)
-  store ptr %72, ptr %dataPtr91, align 8
-  br label %cont90
+  store ptr %72, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 2), align 8
+  br label %cont62
 
-cont90:                                           ; preds = %grow89, %cont81
-  %dataPtr92 = getelementptr inbounds %GenericList, ptr %v2, i32 0, i32 2
-  %dataBase93 = load ptr, ptr %dataPtr92, align 8
-  %73 = getelementptr inbounds float, ptr %dataBase93, i32 %size87
-  store float 1.000000e+00, ptr %73, align 4
-  %74 = add i32 %size87, 1
-  store i32 %74, ptr %sizePtr85, align 4
-  %sizePtr94 = getelementptr inbounds %GenericList, ptr %v2, i32 0, i32 0
-  %capPtr95 = getelementptr inbounds %GenericList, ptr %v2, i32 0, i32 1
-  %size96 = load i32, ptr %sizePtr94, align 4
-  %capacity97 = load i32, ptr %capPtr95, align 4
-  %75 = icmp eq i32 %size96, %capacity97
-  br i1 %75, label %grow98, label %cont99
+cont62:                                           ; preds = %grow61, %cont57
+  %dataBase63 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 2), align 8
+  %73 = getelementptr inbounds float, ptr %dataBase63, i32 %size59
+  store float 0.000000e+00, ptr %73, align 4
+  %74 = add i32 %size59, 1
+  store i32 %74, ptr @__global_v2, align 4
+  %size64 = load i32, ptr @__global_v2, align 4
+  %capacity65 = load i32, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 1), align 4
+  %75 = icmp eq i32 %size64, %capacity65
+  br i1 %75, label %grow66, label %cont67
 
-grow98:                                           ; preds = %cont90
-  %76 = mul i32 %capacity97, 2
-  store i32 %76, ptr %capPtr95, align 4
-  %dataPtr100 = getelementptr inbounds %GenericList, ptr %v2, i32 0, i32 2
-  %77 = load ptr, ptr %dataPtr100, align 8
-  %78 = zext i32 %76 to i64
-  %79 = mul i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), %78
-  %80 = call ptr @realloc(ptr %77, i64 %79)
-  store ptr %80, ptr %dataPtr100, align 8
-  br label %cont99
+grow66:                                           ; preds = %cont62
+  %76 = mul i32 %capacity65, 2
+  %77 = icmp sgt i32 %76, 0
+  %78 = select i1 %77, i32 %76, i32 4
+  store i32 %78, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 1), align 4
+  %79 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 2), align 8
+  %80 = zext i32 %78 to i64
+  %81 = mul i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), %80
+  %82 = call ptr @realloc(ptr %79, i64 %81)
+  store ptr %82, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 2), align 8
+  br label %cont67
 
-cont99:                                           ; preds = %grow98, %cont90
-  %dataPtr101 = getelementptr inbounds %GenericList, ptr %v2, i32 0, i32 2
-  %dataBase102 = load ptr, ptr %dataPtr101, align 8
-  %81 = getelementptr inbounds float, ptr %dataBase102, i32 %size96
-  store float 0.000000e+00, ptr %81, align 4
-  %82 = add i32 %size96, 1
-  store i32 %82, ptr %sizePtr94, align 4
-  %v2_val = load %list_f32, ptr %v2, align 8
-  %vs_ptr103 = load ptr, ptr %vs, align 8
-  %vsz_fld104 = getelementptr inbounds %GenericList, ptr %v2, i32 0, i32 0
-  %list_sz105 = load i32, ptr %vsz_fld104, align 4
-  %vdata_fld106 = getelementptr inbounds %GenericList, ptr %v2, i32 0, i32 2
-  %data_ptr107 = load ptr, ptr %vdata_fld106, align 8
-  call void @aiml_db_vec_insert(ptr %vs_ptr103, ptr @35, ptr %data_ptr107, i32 %list_sz105)
-  %vlen = alloca i32, align 4
-  store i32 0, ptr %vlen, align 4
-  %vs_ptr108 = load ptr, ptr %vs, align 8
-  %83 = call i32 @aiml_db_vec_len(ptr %vs_ptr108)
-  store i32 %83, ptr %vlen, align 4
-  %vlen_val = load i32, ptr %vlen, align 4
-  %84 = call ptr @__aiml_int_to_string(i32 %vlen_val)
-  %85 = call ptr @__aiml_str_concat(ptr @36, ptr %84)
-  %print_null_check109 = icmp eq ptr %85, null
-  %print_safe_str110 = select i1 %print_null_check109, ptr @print_null_str.10, ptr %85
-  %print_call111 = call i32 (ptr, ...) @printf(ptr @37, ptr %print_safe_str110)
-  %q = alloca %list_f32, align 8
-  store %list_f32 zeroinitializer, ptr %q, align 8
-  %sizePtr112 = getelementptr inbounds %GenericList, ptr %q, i32 0, i32 0
-  store i32 0, ptr %sizePtr112, align 4
-  %capPtr113 = getelementptr inbounds %GenericList, ptr %q, i32 0, i32 1
-  store i32 4, ptr %capPtr113, align 4
-  %86 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), i64 4))
-  %dataPtr114 = getelementptr inbounds %GenericList, ptr %q, i32 0, i32 2
-  store ptr %86, ptr %dataPtr114, align 8
-  %sizePtr115 = getelementptr inbounds %GenericList, ptr %q, i32 0, i32 0
-  %capPtr116 = getelementptr inbounds %GenericList, ptr %q, i32 0, i32 1
-  %size117 = load i32, ptr %sizePtr115, align 4
-  %capacity118 = load i32, ptr %capPtr116, align 4
-  %87 = icmp eq i32 %size117, %capacity118
-  br i1 %87, label %grow119, label %cont120
+cont67:                                           ; preds = %grow66, %cont62
+  %dataBase68 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 2), align 8
+  %83 = getelementptr inbounds float, ptr %dataBase68, i32 %size64
+  store float 1.000000e+00, ptr %83, align 4
+  %84 = add i32 %size64, 1
+  store i32 %84, ptr @__global_v2, align 4
+  %size69 = load i32, ptr @__global_v2, align 4
+  %capacity70 = load i32, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 1), align 4
+  %85 = icmp eq i32 %size69, %capacity70
+  br i1 %85, label %grow71, label %cont72
 
-grow119:                                          ; preds = %cont99
-  %88 = mul i32 %capacity118, 2
-  store i32 %88, ptr %capPtr116, align 4
-  %dataPtr121 = getelementptr inbounds %GenericList, ptr %q, i32 0, i32 2
-  %89 = load ptr, ptr %dataPtr121, align 8
+grow71:                                           ; preds = %cont67
+  %86 = mul i32 %capacity70, 2
+  %87 = icmp sgt i32 %86, 0
+  %88 = select i1 %87, i32 %86, i32 4
+  store i32 %88, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 1), align 4
+  %89 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 2), align 8
   %90 = zext i32 %88 to i64
   %91 = mul i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), %90
   %92 = call ptr @realloc(ptr %89, i64 %91)
-  store ptr %92, ptr %dataPtr121, align 8
-  br label %cont120
+  store ptr %92, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 2), align 8
+  br label %cont72
 
-cont120:                                          ; preds = %grow119, %cont99
-  %dataPtr122 = getelementptr inbounds %GenericList, ptr %q, i32 0, i32 2
-  %dataBase123 = load ptr, ptr %dataPtr122, align 8
-  %93 = getelementptr inbounds float, ptr %dataBase123, i32 %size117
-  store float 1.000000e+00, ptr %93, align 4
-  %94 = add i32 %size117, 1
-  store i32 %94, ptr %sizePtr115, align 4
-  %sizePtr124 = getelementptr inbounds %GenericList, ptr %q, i32 0, i32 0
-  %capPtr125 = getelementptr inbounds %GenericList, ptr %q, i32 0, i32 1
-  %size126 = load i32, ptr %sizePtr124, align 4
-  %capacity127 = load i32, ptr %capPtr125, align 4
-  %95 = icmp eq i32 %size126, %capacity127
-  br i1 %95, label %grow128, label %cont129
+cont72:                                           ; preds = %grow71, %cont67
+  %dataBase73 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 2), align 8
+  %93 = getelementptr inbounds float, ptr %dataBase73, i32 %size69
+  store float 0.000000e+00, ptr %93, align 4
+  %94 = add i32 %size69, 1
+  store i32 %94, ptr @__global_v2, align 4
+  %v2_val = load %list_f32, ptr @__global_v2, align 8
+  %vs_ptr74 = load ptr, ptr @__global_vs, align 8
+  %list_sz75 = load i32, ptr @__global_v2, align 4
+  %data_ptr76 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_v2, i32 0, i32 2), align 8
+  call void @aiml_db_vec_insert(ptr %vs_ptr74, ptr @35, ptr %data_ptr76, i32 %list_sz75)
+  %vs_ptr77 = load ptr, ptr @__global_vs, align 8
+  %95 = call i32 @aiml_db_vec_len(ptr %vs_ptr77)
+  store i32 %95, ptr @__global_vlen, align 4
+  %vlen_val = load i32, ptr @__global_vlen, align 4
+  %96 = call ptr @__aiml_int_to_string(i32 %vlen_val)
+  %97 = call ptr @__aiml_str_concat(ptr @36, ptr %96)
+  %print_null_check78 = icmp eq ptr %97, null
+  %print_safe_str79 = select i1 %print_null_check78, ptr @print_null_str.10, ptr %97
+  %print_call80 = call i32 (ptr, ...) @printf(ptr @37, ptr %print_safe_str79)
+  store i32 0, ptr @__global_q, align 4
+  store i32 4, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 1), align 4
+  %98 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), i64 4))
+  store ptr %98, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 2), align 8
+  %size81 = load i32, ptr @__global_q, align 4
+  %capacity82 = load i32, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 1), align 4
+  %99 = icmp eq i32 %size81, %capacity82
+  br i1 %99, label %grow83, label %cont84
 
-grow128:                                          ; preds = %cont120
-  %96 = mul i32 %capacity127, 2
-  store i32 %96, ptr %capPtr125, align 4
-  %dataPtr130 = getelementptr inbounds %GenericList, ptr %q, i32 0, i32 2
-  %97 = load ptr, ptr %dataPtr130, align 8
-  %98 = zext i32 %96 to i64
-  %99 = mul i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), %98
-  %100 = call ptr @realloc(ptr %97, i64 %99)
-  store ptr %100, ptr %dataPtr130, align 8
-  br label %cont129
+grow83:                                           ; preds = %cont72
+  %100 = mul i32 %capacity82, 2
+  %101 = icmp sgt i32 %100, 0
+  %102 = select i1 %101, i32 %100, i32 4
+  store i32 %102, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 1), align 4
+  %103 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 2), align 8
+  %104 = zext i32 %102 to i64
+  %105 = mul i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), %104
+  %106 = call ptr @realloc(ptr %103, i64 %105)
+  store ptr %106, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 2), align 8
+  br label %cont84
 
-cont129:                                          ; preds = %grow128, %cont120
-  %dataPtr131 = getelementptr inbounds %GenericList, ptr %q, i32 0, i32 2
-  %dataBase132 = load ptr, ptr %dataPtr131, align 8
-  %101 = getelementptr inbounds float, ptr %dataBase132, i32 %size126
-  store float 0.000000e+00, ptr %101, align 4
-  %102 = add i32 %size126, 1
-  store i32 %102, ptr %sizePtr124, align 4
-  %sizePtr133 = getelementptr inbounds %GenericList, ptr %q, i32 0, i32 0
-  %capPtr134 = getelementptr inbounds %GenericList, ptr %q, i32 0, i32 1
-  %size135 = load i32, ptr %sizePtr133, align 4
-  %capacity136 = load i32, ptr %capPtr134, align 4
-  %103 = icmp eq i32 %size135, %capacity136
-  br i1 %103, label %grow137, label %cont138
+cont84:                                           ; preds = %grow83, %cont72
+  %dataBase85 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 2), align 8
+  %107 = getelementptr inbounds float, ptr %dataBase85, i32 %size81
+  store float 1.000000e+00, ptr %107, align 4
+  %108 = add i32 %size81, 1
+  store i32 %108, ptr @__global_q, align 4
+  %size86 = load i32, ptr @__global_q, align 4
+  %capacity87 = load i32, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 1), align 4
+  %109 = icmp eq i32 %size86, %capacity87
+  br i1 %109, label %grow88, label %cont89
 
-grow137:                                          ; preds = %cont129
-  %104 = mul i32 %capacity136, 2
-  store i32 %104, ptr %capPtr134, align 4
-  %dataPtr139 = getelementptr inbounds %GenericList, ptr %q, i32 0, i32 2
-  %105 = load ptr, ptr %dataPtr139, align 8
-  %106 = zext i32 %104 to i64
-  %107 = mul i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), %106
-  %108 = call ptr @realloc(ptr %105, i64 %107)
-  store ptr %108, ptr %dataPtr139, align 8
-  br label %cont138
+grow88:                                           ; preds = %cont84
+  %110 = mul i32 %capacity87, 2
+  %111 = icmp sgt i32 %110, 0
+  %112 = select i1 %111, i32 %110, i32 4
+  store i32 %112, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 1), align 4
+  %113 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 2), align 8
+  %114 = zext i32 %112 to i64
+  %115 = mul i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), %114
+  %116 = call ptr @realloc(ptr %113, i64 %115)
+  store ptr %116, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 2), align 8
+  br label %cont89
 
-cont138:                                          ; preds = %grow137, %cont129
-  %dataPtr140 = getelementptr inbounds %GenericList, ptr %q, i32 0, i32 2
-  %dataBase141 = load ptr, ptr %dataPtr140, align 8
-  %109 = getelementptr inbounds float, ptr %dataBase141, i32 %size135
-  store float 0.000000e+00, ptr %109, align 4
-  %110 = add i32 %size135, 1
-  store i32 %110, ptr %sizePtr133, align 4
-  %results = alloca %"list_ptr<VecResult>", align 8
-  store %"list_ptr<VecResult>" zeroinitializer, ptr %results, align 8
-  %sizePtr142 = getelementptr inbounds %GenericList, ptr %results, i32 0, i32 0
-  store i32 0, ptr %sizePtr142, align 4
-  %capPtr143 = getelementptr inbounds %GenericList, ptr %results, i32 0, i32 1
-  store i32 4, ptr %capPtr143, align 4
-  %111 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), i64 4))
-  %dataPtr144 = getelementptr inbounds %GenericList, ptr %results, i32 0, i32 2
-  store ptr %111, ptr %dataPtr144, align 8
-  %q_val = load %list_f32, ptr %q, align 8
-  %vs_ptr145 = load ptr, ptr %vs, align 8
-  %vsz_fld146 = getelementptr inbounds %GenericList, ptr %q, i32 0, i32 0
-  %list_sz147 = load i32, ptr %vsz_fld146, align 4
-  %vdata_fld148 = getelementptr inbounds %GenericList, ptr %q, i32 0, i32 2
-  %data_ptr149 = load ptr, ptr %vdata_fld148, align 8
+cont89:                                           ; preds = %grow88, %cont84
+  %dataBase90 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 2), align 8
+  %117 = getelementptr inbounds float, ptr %dataBase90, i32 %size86
+  store float 0.000000e+00, ptr %117, align 4
+  %118 = add i32 %size86, 1
+  store i32 %118, ptr @__global_q, align 4
+  %size91 = load i32, ptr @__global_q, align 4
+  %capacity92 = load i32, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 1), align 4
+  %119 = icmp eq i32 %size91, %capacity92
+  br i1 %119, label %grow93, label %cont94
+
+grow93:                                           ; preds = %cont89
+  %120 = mul i32 %capacity92, 2
+  %121 = icmp sgt i32 %120, 0
+  %122 = select i1 %121, i32 %120, i32 4
+  store i32 %122, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 1), align 4
+  %123 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 2), align 8
+  %124 = zext i32 %122 to i64
+  %125 = mul i64 ptrtoint (ptr getelementptr inbounds (float, ptr null, i32 1) to i64), %124
+  %126 = call ptr @realloc(ptr %123, i64 %125)
+  store ptr %126, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 2), align 8
+  br label %cont94
+
+cont94:                                           ; preds = %grow93, %cont89
+  %dataBase95 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 2), align 8
+  %127 = getelementptr inbounds float, ptr %dataBase95, i32 %size91
+  store float 0.000000e+00, ptr %127, align 4
+  %128 = add i32 %size91, 1
+  store i32 %128, ptr @__global_q, align 4
+  store i32 0, ptr @__global_results, align 4
+  store i32 4, ptr getelementptr inbounds (%GenericList, ptr @__global_results, i32 0, i32 1), align 4
+  %129 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), i64 4))
+  store ptr %129, ptr getelementptr inbounds (%GenericList, ptr @__global_results, i32 0, i32 2), align 8
+  %q_val = load %list_f32, ptr @__global_q, align 8
+  %vs_ptr96 = load ptr, ptr @__global_vs, align 8
+  %list_sz97 = load i32, ptr @__global_q, align 4
+  %data_ptr98 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_q, i32 0, i32 2), align 8
   %vecres_alloca = alloca %GenericList, align 8
-  %sizePtr150 = getelementptr inbounds %GenericList, ptr %vecres_alloca, i32 0, i32 0
-  store i32 0, ptr %sizePtr150, align 4
-  %capPtr151 = getelementptr inbounds %GenericList, ptr %vecres_alloca, i32 0, i32 1
-  store i32 8, ptr %capPtr151, align 4
-  %112 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), i64 8))
-  %dataPtr152 = getelementptr inbounds %GenericList, ptr %vecres_alloca, i32 0, i32 2
-  store ptr %112, ptr %dataPtr152, align 8
-  call void @aiml_db_vec_search(ptr %vs_ptr145, ptr %data_ptr149, i32 2, ptr %vecres_alloca)
-  %113 = call ptr @memcpy(ptr %results, ptr %vecres_alloca, i64 16)
-  %r = alloca ptr, align 8
-  store ptr null, ptr %r, align 8
-  %dataPtr153 = getelementptr inbounds %GenericList, ptr %results, i32 0, i32 2
-  %dataBase154 = load ptr, ptr %dataPtr153, align 8
-  %114 = getelementptr inbounds ptr, ptr %dataBase154, i32 0
-  %getVal = load ptr, ptr %114, align 8
-  store ptr %getVal, ptr %r, align 8
-  %prop_ptr_base155 = load ptr, ptr %r, align 8
-  %prop_ptr156 = getelementptr inbounds %VecResult, ptr %prop_ptr_base155, i32 0, i32 0
-  %id_val = load ptr, ptr %prop_ptr156, align 8
-  %115 = call ptr @__aiml_str_concat(ptr @38, ptr %id_val)
-  %print_null_check157 = icmp eq ptr %115, null
-  %print_safe_str158 = select i1 %print_null_check157, ptr @print_null_str.11, ptr %115
-  %print_call159 = call i32 (ptr, ...) @printf(ptr @39, ptr %print_safe_str158)
-  %history = alloca ptr, align 8
-  store ptr null, ptr %history, align 8
-  %116 = call ptr @aiml_db_ts_open(ptr @40, i64 8)
-  store ptr %116, ptr %history, align 8
-  %gs = alloca %GameState, align 8
-  store %GameState zeroinitializer, ptr %gs, align 4
-  %set_prop_ptr_w160 = getelementptr inbounds %GameState, ptr %gs, i32 0, i32 0
-  store i32 100, ptr %set_prop_ptr_w160, align 4
-  %set_prop_ptr_w161 = getelementptr inbounds %GameState, ptr %gs, i32 0, i32 1
-  store i32 75, ptr %set_prop_ptr_w161, align 4
-  %gs_val = load %GameState, ptr %gs, align 4
-  %ts_ptr = load ptr, ptr %history, align 8
-  call void @aiml_db_ts_append(ptr %ts_ptr, ptr %gs, i64 8, i64 1000)
-  %set_prop_ptr_w162 = getelementptr inbounds %GameState, ptr %gs, i32 0, i32 0
-  store i32 200, ptr %set_prop_ptr_w162, align 4
-  %set_prop_ptr_w163 = getelementptr inbounds %GameState, ptr %gs, i32 0, i32 1
-  store i32 50, ptr %set_prop_ptr_w163, align 4
-  %gs_val164 = load %GameState, ptr %gs, align 4
-  %ts_ptr165 = load ptr, ptr %history, align 8
-  call void @aiml_db_ts_append(ptr %ts_ptr165, ptr %gs, i64 8, i64 2000)
-  %tlen = alloca i32, align 4
-  store i32 0, ptr %tlen, align 4
-  %ts_ptr166 = load ptr, ptr %history, align 8
-  %117 = call i32 @aiml_db_ts_len(ptr %ts_ptr166)
-  store i32 %117, ptr %tlen, align 4
-  %tlen_val = load i32, ptr %tlen, align 4
-  %118 = call ptr @__aiml_int_to_string(i32 %tlen_val)
-  %119 = call ptr @__aiml_str_concat(ptr @41, ptr %118)
-  %print_null_check167 = icmp eq ptr %119, null
-  %print_safe_str168 = select i1 %print_null_check167, ptr @print_null_str.12, ptr %119
-  %print_call169 = call i32 (ptr, ...) @printf(ptr @42, ptr %print_safe_str168)
-  %tp = alloca ptr, align 8
-  store ptr null, ptr %tp, align 8
-  %ts_ptr170 = load ptr, ptr %history, align 8
-  %120 = call ptr @aiml_db_ts_at(ptr %ts_ptr170, i64 1500)
-  store ptr %120, ptr %tp, align 8
-  %prop_ptr_base171 = load ptr, ptr %tp, align 8
-  %prop_ptr172 = getelementptr inbounds %GameState, ptr %prop_ptr_base171, i32 0, i32 0
-  %score_val = load i32, ptr %prop_ptr172, align 4
-  %121 = call ptr @__aiml_int_to_string(i32 %score_val)
-  %122 = call ptr @__aiml_str_concat(ptr @43, ptr %121)
-  %print_null_check173 = icmp eq ptr %122, null
-  %print_safe_str174 = select i1 %print_null_check173, ptr @print_null_str.13, ptr %122
-  %print_call175 = call i32 (ptr, ...) @printf(ptr @44, ptr %print_safe_str174)
-  %hp_store = alloca ptr, align 8
-  store ptr null, ptr %hp_store, align 8
-  %123 = call ptr @aiml_db_store_open(ptr @45, ptr @46, i64 4)
-  store ptr %123, ptr %hp_store, align 8
-  %pos_store = alloca ptr, align 8
-  store ptr null, ptr %pos_store, align 8
-  %124 = call ptr @aiml_db_store_open(ptr @47, ptr @48, i64 4)
-  store ptr %124, ptr %pos_store, align 8
-  %h1 = alloca %Health, align 8
-  store %Health zeroinitializer, ptr %h1, align 4
-  %set_prop_ptr_w176 = getelementptr inbounds %Health, ptr %h1, i32 0, i32 0
-  store i32 80, ptr %set_prop_ptr_w176, align 4
-  %h1_val = load %Health, ptr %h1, align 4
-  %store_ptr177 = load ptr, ptr %hp_store, align 8
-  %125 = call i32 @aiml_db_store_insert(ptr %store_ptr177, ptr %h1, i64 4)
-  %p1 = alloca %Pos, align 8
-  store %Pos zeroinitializer, ptr %p1, align 4
-  %set_prop_ptr_w178 = getelementptr inbounds %Pos, ptr %p1, i32 0, i32 0
-  store i32 10, ptr %set_prop_ptr_w178, align 4
-  %p1_val = load %Pos, ptr %p1, align 4
-  %store_ptr179 = load ptr, ptr %pos_store, align 8
-  %126 = call i32 @aiml_db_store_insert(ptr %store_ptr179, ptr %p1, i64 4)
-  %h2 = alloca %Health, align 8
-  store %Health zeroinitializer, ptr %h2, align 4
-  %set_prop_ptr_w180 = getelementptr inbounds %Health, ptr %h2, i32 0, i32 0
-  store i32 30, ptr %set_prop_ptr_w180, align 4
-  %h2_val = load %Health, ptr %h2, align 4
-  %store_ptr181 = load ptr, ptr %hp_store, align 8
-  %127 = call i32 @aiml_db_store_insert(ptr %store_ptr181, ptr %h2, i64 4)
-  %hp_store_sptr = load ptr, ptr %hp_store, align 8
-  %pos_store_sptr = load ptr, ptr %pos_store, align 8
+  %sizePtr = getelementptr inbounds %GenericList, ptr %vecres_alloca, i32 0, i32 0
+  store i32 0, ptr %sizePtr, align 4
+  %capPtr = getelementptr inbounds %GenericList, ptr %vecres_alloca, i32 0, i32 1
+  store i32 8, ptr %capPtr, align 4
+  %130 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), i64 8))
+  %dataPtr = getelementptr inbounds %GenericList, ptr %vecres_alloca, i32 0, i32 2
+  store ptr %130, ptr %dataPtr, align 8
+  call void @aiml_db_vec_search(ptr %vs_ptr96, ptr %data_ptr98, i32 2, ptr %vecres_alloca)
+  %131 = call ptr @memcpy(ptr @__global_results, ptr %vecres_alloca, i64 16)
+  %dataBase99 = load ptr, ptr getelementptr inbounds (%GenericList, ptr @__global_results, i32 0, i32 2), align 8
+  %132 = getelementptr inbounds ptr, ptr %dataBase99, i32 0
+  %getVal = load ptr, ptr %132, align 8
+  store ptr %getVal, ptr @__global_r, align 8
+  %prop_ptr_base100 = load ptr, ptr @__global_r, align 8
+  %prop_ptr101 = getelementptr inbounds %VecResult, ptr %prop_ptr_base100, i32 0, i32 0
+  %id_val = load ptr, ptr %prop_ptr101, align 8
+  %133 = call ptr @__aiml_str_concat(ptr @38, ptr %id_val)
+  %print_null_check102 = icmp eq ptr %133, null
+  %print_safe_str103 = select i1 %print_null_check102, ptr @print_null_str.11, ptr %133
+  %print_call104 = call i32 (ptr, ...) @printf(ptr @39, ptr %print_safe_str103)
+  %134 = call ptr @aiml_db_ts_open(ptr @40, i64 8)
+  store ptr %134, ptr @__global_history, align 8
+  store i32 100, ptr @__global_gs, align 4
+  store i32 75, ptr getelementptr inbounds (%GameState, ptr @__global_gs, i32 0, i32 1), align 4
+  %gs_val = load %GameState, ptr @__global_gs, align 4
+  %ts_ptr = load ptr, ptr @__global_history, align 8
+  call void @aiml_db_ts_append(ptr %ts_ptr, ptr @__global_gs, i64 8, i64 1000)
+  store i32 200, ptr @__global_gs, align 4
+  store i32 50, ptr getelementptr inbounds (%GameState, ptr @__global_gs, i32 0, i32 1), align 4
+  %gs_val105 = load %GameState, ptr @__global_gs, align 4
+  %ts_ptr106 = load ptr, ptr @__global_history, align 8
+  call void @aiml_db_ts_append(ptr %ts_ptr106, ptr @__global_gs, i64 8, i64 2000)
+  %ts_ptr107 = load ptr, ptr @__global_history, align 8
+  %135 = call i32 @aiml_db_ts_len(ptr %ts_ptr107)
+  store i32 %135, ptr @__global_tlen, align 4
+  %tlen_val = load i32, ptr @__global_tlen, align 4
+  %136 = call ptr @__aiml_int_to_string(i32 %tlen_val)
+  %137 = call ptr @__aiml_str_concat(ptr @41, ptr %136)
+  %print_null_check108 = icmp eq ptr %137, null
+  %print_safe_str109 = select i1 %print_null_check108, ptr @print_null_str.12, ptr %137
+  %print_call110 = call i32 (ptr, ...) @printf(ptr @42, ptr %print_safe_str109)
+  %ts_ptr111 = load ptr, ptr @__global_history, align 8
+  %138 = call ptr @aiml_db_ts_at(ptr %ts_ptr111, i64 1500)
+  store ptr %138, ptr @__global_tp, align 8
+  %prop_ptr_base112 = load ptr, ptr @__global_tp, align 8
+  %prop_ptr113 = getelementptr inbounds %GameState, ptr %prop_ptr_base112, i32 0, i32 0
+  %score_val = load i32, ptr %prop_ptr113, align 4
+  %139 = call ptr @__aiml_int_to_string(i32 %score_val)
+  %140 = call ptr @__aiml_str_concat(ptr @43, ptr %139)
+  %print_null_check114 = icmp eq ptr %140, null
+  %print_safe_str115 = select i1 %print_null_check114, ptr @print_null_str.13, ptr %140
+  %print_call116 = call i32 (ptr, ...) @printf(ptr @44, ptr %print_safe_str115)
+  %141 = call ptr @aiml_db_store_open(ptr @45, ptr @46, i64 4)
+  store ptr %141, ptr @__global_hp_store, align 8
+  %142 = call ptr @aiml_db_store_open(ptr @47, ptr @48, i64 4)
+  store ptr %142, ptr @__global_pos_store, align 8
+  store i32 80, ptr @__global_h1, align 4
+  %h1_val = load %Health, ptr @__global_h1, align 4
+  %store_ptr117 = load ptr, ptr @__global_hp_store, align 8
+  %143 = call i32 @aiml_db_store_insert(ptr %store_ptr117, ptr @__global_h1, i64 4)
+  store i32 10, ptr @__global_p1, align 4
+  %p1_val = load %Pos, ptr @__global_p1, align 4
+  %store_ptr118 = load ptr, ptr @__global_pos_store, align 8
+  %144 = call i32 @aiml_db_store_insert(ptr %store_ptr118, ptr @__global_p1, i64 4)
+  store i32 30, ptr @__global_h2, align 4
+  %h2_val = load %Health, ptr @__global_h2, align 4
+  %store_ptr119 = load ptr, ptr @__global_hp_store, align 8
+  %145 = call i32 @aiml_db_store_insert(ptr %store_ptr119, ptr @__global_h2, i64 4)
+  %hp_store_sptr = load ptr, ptr @__global_hp_store, align 8
+  %pos_store_sptr = load ptr, ptr @__global_pos_store, align 8
   %st_total = call i32 @aiml_db_store_total(ptr %hp_store_sptr)
   %is_bigger = icmp sgt i32 %st_total, 0
   %max_total = select i1 %is_bigger, i32 %st_total, i32 0
-  %st_total182 = call i32 @aiml_db_store_total(ptr %pos_store_sptr)
-  %is_bigger183 = icmp sgt i32 %st_total182, %max_total
-  %max_total184 = select i1 %is_bigger183, i32 %st_total182, i32 %max_total
+  %st_total120 = call i32 @aiml_db_store_total(ptr %pos_store_sptr)
+  %is_bigger121 = icmp sgt i32 %st_total120, %max_total
+  %max_total122 = select i1 %is_bigger121, i32 %st_total120, i32 %max_total
   %rs_eid = alloca i32, align 4
   store i32 1, ptr %rs_eid, align 4
   %rs_max = alloca i32, align 4
-  store i32 %max_total184, ptr %rs_max, align 4
+  store i32 %max_total122, ptr %rs_max, align 4
   br label %rs_hdr
 
-rs_hdr:                                           ; preds = %rs_next, %cont138
-  %eid185 = load i32, ptr %rs_eid, align 4
+rs_hdr:                                           ; preds = %rs_next, %cont94
+  %eid = load i32, ptr %rs_eid, align 4
   %mx = load i32, ptr %rs_max, align 4
-  %in_range = icmp sle i32 %eid185, %mx
+  %in_range = icmp sle i32 %eid, %mx
   br i1 %in_range, label %rs_chk, label %rs_exit
 
 rs_chk:                                           ; preds = %rs_hdr
-  %eid186 = load i32, ptr %rs_eid, align 4
-  %active = call i32 @aiml_db_store_is_active(ptr %hp_store_sptr, i32 %eid186)
+  %eid123 = load i32, ptr %rs_eid, align 4
+  %active = call i32 @aiml_db_store_is_active(ptr %hp_store_sptr, i32 %eid123)
   %all_ok = and i32 1, %active
-  %active187 = call i32 @aiml_db_store_is_active(ptr %pos_store_sptr, i32 %eid186)
-  %all_ok188 = and i32 %all_ok, %active187
-  %all_bool = icmp ne i32 %all_ok188, 0
+  %active124 = call i32 @aiml_db_store_is_active(ptr %pos_store_sptr, i32 %eid123)
+  %all_ok125 = and i32 %all_ok, %active124
+  %all_bool = icmp ne i32 %all_ok125, 0
   br i1 %all_bool, label %rs_call, label %rs_next
 
 rs_call:                                          ; preds = %rs_chk
-  %eid189 = load i32, ptr %rs_eid, align 4
-  %comp_ptr = call ptr @aiml_db_store_get_ptr(ptr %hp_store_sptr, i32 %eid189)
-  %comp_ptr190 = call ptr @aiml_db_store_get_ptr(ptr %pos_store_sptr, i32 %eid189)
-  call void @tick_hp(ptr %comp_ptr, ptr %comp_ptr190)
+  %eid126 = load i32, ptr %rs_eid, align 4
+  %comp_ptr = call ptr @aiml_db_store_get_ptr(ptr %hp_store_sptr, i32 %eid126)
+  call void @tick_hp(ptr %comp_ptr)
   br label %rs_next
 
 rs_next:                                          ; preds = %rs_call, %rs_chk
-  %eid191 = load i32, ptr %rs_eid, align 4
-  %eid_next = add i32 %eid191, 1
+  %eid127 = load i32, ptr %rs_eid, align 4
+  %eid_next = add i32 %eid127, 1
   store i32 %eid_next, ptr %rs_eid, align 4
   br label %rs_hdr
 
 rs_exit:                                          ; preds = %rs_hdr
-  %high_hp = alloca %"list_ptr<Health>", align 8
-  store %"list_ptr<Health>" zeroinitializer, ptr %high_hp, align 8
-  %sizePtr192 = getelementptr inbounds %GenericList, ptr %high_hp, i32 0, i32 0
-  store i32 0, ptr %sizePtr192, align 4
-  %capPtr193 = getelementptr inbounds %GenericList, ptr %high_hp, i32 0, i32 1
-  store i32 4, ptr %capPtr193, align 4
-  %128 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), i64 4))
-  %dataPtr194 = getelementptr inbounds %GenericList, ptr %high_hp, i32 0, i32 2
-  store ptr %128, ptr %dataPtr194, align 8
-  %hp_store_val = load ptr, ptr %hp_store, align 8
+  store i32 0, ptr @__global_high_hp, align 4
+  store i32 4, ptr getelementptr inbounds (%GenericList, ptr @__global_high_hp, i32 0, i32 1), align 4
+  %146 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), i64 4))
+  store ptr %146, ptr getelementptr inbounds (%GenericList, ptr @__global_high_hp, i32 0, i32 2), align 8
+  %hp_store_val = load ptr, ptr @__global_hp_store, align 8
   %query_list = alloca %GenericList, align 8
-  %sizePtr195 = getelementptr inbounds %GenericList, ptr %query_list, i32 0, i32 0
-  store i32 0, ptr %sizePtr195, align 4
-  %capPtr196 = getelementptr inbounds %GenericList, ptr %query_list, i32 0, i32 1
-  store i32 8, ptr %capPtr196, align 4
-  %129 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), i64 8))
-  %dataPtr197 = getelementptr inbounds %GenericList, ptr %query_list, i32 0, i32 2
-  store ptr %129, ptr %dataPtr197, align 8
+  %sizePtr128 = getelementptr inbounds %GenericList, ptr %query_list, i32 0, i32 0
+  store i32 0, ptr %sizePtr128, align 4
+  %capPtr129 = getelementptr inbounds %GenericList, ptr %query_list, i32 0, i32 1
+  store i32 8, ptr %capPtr129, align 4
+  %147 = call ptr @malloc(i64 mul (i64 ptrtoint (ptr getelementptr inbounds (ptr, ptr null, i32 1) to i64), i64 8))
+  %dataPtr130 = getelementptr inbounds %GenericList, ptr %query_list, i32 0, i32 2
+  store ptr %147, ptr %dataPtr130, align 8
   call void @aiml_db_store_query(ptr %hp_store_val, ptr @is_high_hp, i32 -1, i32 0, i32 0, i32 -1, i32 0, ptr %query_list)
-  %130 = call ptr @memcpy(ptr %high_hp, ptr %query_list, i64 16)
-  %qlen = alloca i32, align 4
-  store i32 0, ptr %qlen, align 4
-  %sizePtr198 = getelementptr inbounds %GenericList, ptr %high_hp, i32 0, i32 0
-  %sizeVal = load i32, ptr %sizePtr198, align 4
-  store i32 %sizeVal, ptr %qlen, align 4
-  %qlen_val = load i32, ptr %qlen, align 4
-  %131 = call ptr @__aiml_int_to_string(i32 %qlen_val)
-  %132 = call ptr @__aiml_str_concat(ptr @51, ptr %131)
-  %print_null_check199 = icmp eq ptr %132, null
-  %print_safe_str200 = select i1 %print_null_check199, ptr @print_null_str.15, ptr %132
-  %print_call201 = call i32 (ptr, ...) @printf(ptr @52, ptr %print_safe_str200)
+  %148 = call ptr @memcpy(ptr @__global_high_hp, ptr %query_list, i64 16)
+  %sizeVal = load i32, ptr @__global_high_hp, align 4
+  store i32 %sizeVal, ptr @__global_qlen, align 4
+  %qlen_val = load i32, ptr @__global_qlen, align 4
+  %149 = call ptr @__aiml_int_to_string(i32 %qlen_val)
+  %150 = call ptr @__aiml_str_concat(ptr @51, ptr %149)
+  %print_null_check131 = icmp eq ptr %150, null
+  %print_safe_str132 = select i1 %print_null_check131, ptr @print_null_str.15, ptr %150
+  %print_call133 = call i32 (ptr, ...) @printf(ptr @52, ptr %print_safe_str132)
   ret void
 }
 

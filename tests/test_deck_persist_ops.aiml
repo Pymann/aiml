@@ -31,7 +31,7 @@
       - decl: [klen, i32]
       - set: [klen, { call: [kv.len] }]
       - if:
-          condition: { "!=": [klen, 2] }
+          condition: { neq: [klen, 2] }
           then:
             - print: ["FAIL len_after_set=${klen}"]
             - call: [sys.exit, 1]
@@ -40,7 +40,7 @@
       - decl: [has1, i32]
       - set: [has1, { call: [kv.has, "d1"] }]
       - if:
-          condition: { "!=": [has1, 0] }
+          condition: { neq: [has1, 0] }
           then:
             - print: ["FAIL has_d1=${has1}"]
             - call: [sys.exit, 1]
@@ -48,12 +48,12 @@
       - decl: [got2, ptr<Deck>]
       - set: [got2, { call: [kv.get, "d2"] }]
       - if:
-          condition: { "==": [{ eq: [got2.name, "Deck Two"] }, 0] }
+          condition: { eq: [{ eq: [got2.name, "Deck Two"] }, 0] }
           then:
             - print: ["FAIL got2.name=${got2.name}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "!=": [got2.card_ids.len, 3] }
+          condition: { neq: [got2.card_ids.len, 3] }
           then:
             - print: ["FAIL got2.card_ids.len=${got2.card_ids.len}"]
             - call: [sys.exit, 1]
@@ -61,7 +61,7 @@
       - call: [kv.clear]
       - set: [klen, { call: [kv.len] }]
       - if:
-          condition: { "!=": [klen, 0] }
+          condition: { neq: [klen, 0] }
           then:
             - print: ["FAIL len_after_clear=${klen}"]
             - call: [sys.exit, 1]
