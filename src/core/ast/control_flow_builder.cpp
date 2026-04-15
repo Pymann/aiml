@@ -102,15 +102,18 @@ std::unique_ptr<Node> ControlFlowBuilder::finish() {
         ifStmt->condition = std::move(condition);
         ifStmt->thenBranch = std::move(thenBranch);
         ifStmt->elseBranch = std::move(elseBranch);
+        ifStmt->sourceLine = capturedLine;
         return ifStmt;
     } else if (type == "while") {
         auto whileStmt = std::make_unique<WhileStmt>();
         whileStmt->condition = std::move(condition);
         whileStmt->body = std::move(body);
+        whileStmt->sourceLine = capturedLine;
         return whileStmt;
     } else if (type == "ret") {
         auto retStmt = std::make_unique<RetStmt>();
         retStmt->value = std::move(condition);
+        retStmt->sourceLine = capturedLine;
         return retStmt;
     }
     return nullptr;

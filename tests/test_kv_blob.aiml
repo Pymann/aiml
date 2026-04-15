@@ -1,0 +1,160 @@
+# test_kv_blob.aiml — Tests for kv.set_blob / kv.get_blob
+# Stores buffer contents as single binary blob in KV, reads back into another buffer
+
+- decl: [pass, i32, 0]
+- decl: [fail, i32, 0]
+- decl: [eps, f32, 0.001]
+
+# ── Phase A: Basic set_blob / get_blob roundtrip ────────────────────────────
+- decl: [kv, "Kv<string:string>"]
+- set: [kv, { call: [db.open_kv, "test_kv_blob"] }]
+
+# Write 4 f32 values into a buffer
+- decl: [src, buffer]
+- call: [src.alloc, 64]
+- call: [src.write, 1.5, f32]
+- call: [src.write, 2.5, f32]
+- call: [src.write, -3.7, f32]
+- call: [src.write, 0.001, f32]
+
+# Store entire buffer as single blob
+- call: [kv.set_blob, "test_vec", src]
+
+# Read back into a different buffer
+- decl: [dst, buffer]
+- call: [dst.alloc, 64]
+- call: [kv.get_blob, "test_vec", dst]
+
+# Verify size
+- decl: [dlen, i32, dst.len]
+- if:
+    condition: { eq: [dlen, 16] }
+    then:
+      - print: ["PASS: A1 blob size=16 (4 * f32)"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: A1 blob size=${dlen} expected 16"]
+      - set: [fail, { +: [fail, 1] }]
+
+# Verify values via seek+read
+- call: [dst.seek, 0]
+- decl: [v0, f32, { call: [dst.read, f32] }]
+- decl: [v1, f32, { call: [dst.read, f32] }]
+- decl: [v2, f32, { call: [dst.read, f32] }]
+- decl: [v3, f32, { call: [dst.read, f32] }]
+
+- if:
+    condition: { "&&": [{ tolerance: [v0, 1.5, eps] }, { tolerance: [v1, 2.5, eps] }] }
+    then:
+      - print: ["PASS: A2 v0=${v0} v1=${v1}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: A2 v0=${v0} v1=${v1}"]
+      - set: [fail, { +: [fail, 1] }]
+
+- if:
+    condition: { "&&": [{ tolerance: [v2, -3.7, eps] }, { tolerance: [v3, 0.001, eps] }] }
+    then:
+      - print: ["PASS: A3 v2=${v2} v3=${v3}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: A3 v2=${v2} v3=${v3}"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── Phase B: Larger blob (simulating embedding: 32 floats) ──────────────────
+- decl: [emb, buffer]
+- call: [emb.alloc, 128]
+- decl: [i, i32, 0]
+- while:
+    condition: { "<": [i, 32] }
+    body:
+      - decl: [fi, f32, i]
+      - decl: [fval, f32, { "/": [fi, 100.0] }]
+      - call: [emb.write, fval, f32]
+      - set: [i, { +: [i, 1] }]
+
+- call: [kv.set_blob, "emb_42", emb]
+
+- decl: [emb2, buffer]
+- call: [emb2.alloc, 128]
+- call: [kv.get_blob, "emb_42", emb2]
+
+- decl: [elen, i32, emb2.len]
+- if:
+    condition: { eq: [elen, 128] }
+    then:
+      - print: ["PASS: B1 emb blob size=128 (32 * f32)"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: B1 emb blob size=${elen} expected 128"]
+      - set: [fail, { +: [fail, 1] }]
+
+# Spot-check: index 0 = 0.0, index 15 = 0.15, index 31 = 0.31
+- call: [emb2.seek, 0]
+- decl: [e0, f32, { call: [emb2.read, f32] }]
+- if:
+    condition: { tolerance: [e0, 0.0, eps] }
+    then:
+      - print: ["PASS: B2 emb[0]=${e0}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: B2 emb[0]=${e0} expected 0.0"]
+      - set: [fail, { +: [fail, 1] }]
+
+- call: [emb2.seek, 60]
+- decl: [e15, f32, { call: [emb2.read, f32] }]
+- if:
+    condition: { tolerance: [e15, 0.15, eps] }
+    then:
+      - print: ["PASS: B3 emb[15]=${e15}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: B3 emb[15]=${e15} expected 0.15"]
+      - set: [fail, { +: [fail, 1] }]
+
+- call: [emb2.seek, 124]
+- decl: [e31, f32, { call: [emb2.read, f32] }]
+- if:
+    condition: { tolerance: [e31, 0.31, eps] }
+    then:
+      - print: ["PASS: B4 emb[31]=${e31}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: B4 emb[31]=${e31} expected 0.31"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── Phase C: Overwrite blob ─────────────────────────────────────────────────
+- decl: [ov, buffer]
+- call: [ov.alloc, 8]
+- call: [ov.write, 99.9, f32]
+- call: [ov.write, -99.9, f32]
+- call: [kv.set_blob, "test_vec", ov]
+
+- decl: [ov2, buffer]
+- call: [ov2.alloc, 64]
+- call: [kv.get_blob, "test_vec", ov2]
+
+- decl: [olen, i32, ov2.len]
+- if:
+    condition: { eq: [olen, 8] }
+    then:
+      - print: ["PASS: C1 overwritten blob size=8"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: C1 overwritten blob size=${olen} expected 8"]
+      - set: [fail, { +: [fail, 1] }]
+
+- call: [ov2.seek, 0]
+- decl: [ov0, f32, { call: [ov2.read, f32] }]
+- if:
+    condition: { tolerance: [ov0, 99.9, eps] }
+    then:
+      - print: ["PASS: C2 overwritten v0=${ov0}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: C2 overwritten v0=${ov0} expected 99.9"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── Summary ──────────────────────────────────────────────────────────────────
+- print: [""]
+- print: ["=== kv.set_blob / kv.get_blob Tests: ${pass} passed, ${fail} failed ==="]

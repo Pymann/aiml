@@ -58,6 +58,58 @@
 - print: [["Read Header ID: ", h2.id]]
 ```
 
+## Methods
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `alloc` | `buffer.alloc(size: i32)` | Allocates `size` bytes (malloc). Must be called before any read/write. |
+| `write` | `buffer.write(value, type)` | Writes `sizeof(type)` bytes at writeIndex, advances writeIndex. |
+| `read` | `buffer.read(type) → T` | Reads `sizeof(type)` bytes at readIndex, advances readIndex. |
+| `seek` | `buffer.seek(pos: i32)` | Sets both readIndex and writeIndex to `pos` (byte offset). |
+| `zero` | `buffer.zero()` | `memset(data, 0, capacity)` + sets size and writeIndex to capacity. |
+| `len` | `buffer.len → i32` | Returns current size (number of bytes written). Property access, no `call:` needed. |
+
+## zero — Bulk-Initialisierung
+
+`buffer.zero()` nullt den gesamten allokierten Bereich in einem einzigen `memset`-Call
+und markiert den Buffer als vollständig beschrieben (size = capacity).
+
+Typischer Einsatz: Pre-allokierte numerische Arrays (Embedding-Tables, Gewichtsmatrizen),
+bei denen 100k+ Einzelwerte sonst per `write`-Schleife initialisiert werden müssten.
+
+```yaml
+# Statt 131072 einzelner write-Calls:
+- decl: [emb, buffer]
+- call: [emb.alloc, 524288]    # 4096 tokens * 32 dim * 4 bytes
+- call: [emb.zero]              # ein memset — ~0ms statt Sekunden
+
+# Danach: random access via seek + write/read
+- call: [emb.seek, 640]         # byte offset = (token_id * dim + d) * 4
+- call: [emb.write, 1.5, f32]
+- call: [emb.seek, 640]
+- decl: [val, f32, { call: [emb.read, f32] }]
+```
+
+## Buffer als typisiertes Array (f32/i32)
+
+Buffer eignen sich als performante flat arrays für numerische Daten.
+Der Zugriff erfolgt über berechnete Byte-Offsets:
+
+```yaml
+# byte_offset = (index) * sizeof(type)
+# Für f32: byte_offset = index * 4
+# Für i32: byte_offset = index * 4
+
+# 2D-Array Pattern (z.B. Embedding-Table):
+# byte_offset = (row * cols + col) * 4
+- decl: [token_id, i32, 5]
+- decl: [dim, i32, 32]
+- decl: [d, i32, 3]
+- decl: [off, i32, { "*": [{ "+": [{ "*": [token_id, dim] }, d] }, 4] }]
+- call: [emb.seek, off]
+- decl: [val, f32, { call: [emb.read, f32] }]
+```
+
 ## Exception Behaviour
 
 | Condition | Exception |

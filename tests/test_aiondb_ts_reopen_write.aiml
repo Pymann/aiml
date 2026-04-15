@@ -22,7 +22,7 @@
       - decl: [rc, i32]
       - set: [rc, { call: [db.checkpoint] }]
       - if:
-          condition: { "!=": [rc, 0] }
+          condition: { neq: [rc, 0] }
           then:
             - print: ["FAIL ts_reopen_write_checkpoint=${rc}"]
             - call: [sys.exit, 1]

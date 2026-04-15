@@ -31,7 +31,9 @@
         "__exodus_cache/apt/libstb-dev/amd64/0.0~git20230129.5736b15+ds-1.2/payload/usr/include",
         "__exodus_cache/apt/libglew-dev/amd64/2.2.0-4build1/payload/usr/include",
         "__exodus_cache/apt/libglu1-mesa-dev/amd64/9.0.2-1.1build1/payload/usr/include",
-        "__exodus_cache/apt/rpcsvc-proto/amd64/1.4.2-0ubuntu7/payload/usr/include"
+        "__exodus_cache/apt/rpcsvc-proto/amd64/1.4.2-0ubuntu7/payload/usr/include",
+        "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/include/x86_64-linux-gnu",
+        "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/include/x86_64-linux-gnu/openblas-serial"
     ],
     "sources": [
         "compiler.cpp",
@@ -64,7 +66,9 @@
         "path": null,
         "script": null,
         "map_file": null,
-        "flags": [],
+        "flags": [
+            "-Wl,-rpath,__exodus_cache/apt/libopenblas0-serial/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu/openblas-serial"
+        ],
         "libraries": [
             "yaml-cpp",
             "LLVM-18",
@@ -84,7 +88,8 @@
             "png",
             "GLEW",
             "m",
-            "dl"
+            "dl",
+            "openblas"
         ],
         "library_paths": [
             "__exodus_cache/apt/libyaml-cpp-dev/amd64/0.8.0+dfsg-6build1/payload/usr/lib/x86_64-linux-gnu",
@@ -108,7 +113,11 @@
             "__exodus_cache/apt/libpng-dev/amd64/1.6.43-5ubuntu0.5/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libpng16-16t64/amd64/1.6.43-5ubuntu0.5/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libglew-dev/amd64/2.2.0-4build1/payload/usr/lib/x86_64-linux-gnu",
-            "__exodus_cache/apt/libglew2.2/amd64/2.2.0-4build1/payload/usr/lib/x86_64-linux-gnu"
+            "__exodus_cache/apt/libglew2.2/amd64/2.2.0-4build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libopenblas0-serial/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu/openblas-serial",
+            "__exodus_cache/apt/libopenblas0-serial/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu/openblas-serial"
         ]
     }
 }

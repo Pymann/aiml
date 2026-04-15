@@ -74,7 +74,10 @@ char*   aiml_ser_encode(const void*          obj,
 // Use aiml_ser_free_decoded() to release these allocations before
 // discarding *out*.  Does NOT free *out* itself.
 
-void    aiml_ser_decode(const char*          blob,
+// Returns 0 on success, -1 if a structural decode error was encountered
+// (e.g. absurd list count, schema mismatch).  On error the caller MUST NOT
+// use *out and MUST NOT call shadow-copy / memcpy from it.
+int     aiml_ser_decode(const char*          blob,
                         void*                out,
                         const AimlTypeNode*  nodes,
                         int32_t              n_nodes);

@@ -117,7 +117,7 @@
 - set: [rs, replica.score]
 - print: ["Phase E: replica.health=${rh} replica.score=${rs}"]
 - if:
-    condition: { "==": [rh, 77] }
+    condition: { eq: [rh, 77] }
     then:
       - print: ["Phase E PASS: health synced correctly"]
     else:
@@ -133,7 +133,7 @@
 - set: [rh2, replica.health]
 - print: ["Phase H: replica.health=${rh2}"]
 - if:
-    condition: { "==": [rh2, 67] }
+    condition: { eq: [rh2, 67] }
     then:
       - print: ["Phase H PASS: health after RPC = 67"]
     else:

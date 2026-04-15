@@ -40,6 +40,9 @@ void    aiml_engine_run    (void* win, void* update_fn, void* render_fn);
 int32_t aiml_engine_running(void* win);
 void    aiml_engine_swap   (void* win);
 void    aiml_engine_quit   (void* win);
+int32_t aiml_engine_is_iconified(void* win);
+int32_t aiml_engine_is_focused  (void* win);
+int32_t aiml_engine_is_visible  (void* win);
 
 /* ── Frame timing (read global active window) ────────────────────────────── */
 

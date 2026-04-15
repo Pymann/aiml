@@ -79,7 +79,14 @@ namespace AIML {
         IRValue* createOr(IRValue* lhs, IRValue* rhs, const std::string& name) override { return wrapLocal(ctx.builder.CreateOr(unwrapLocal(lhs), unwrapLocal(rhs), name)); }
         IRValue* createNot(IRValue* val, const std::string& name) override { return wrapLocal(ctx.builder.CreateNot(unwrapLocal(val), name)); }
 
-        IRValue* createAlloca(IRType* type, const std::string& name) override { return wrapLocal(ctx.builder.CreateAlloca(unwrapLocal(type), nullptr, name)); }
+        IRValue* createAlloca(IRType* type, const std::string& name) override {
+            // Hoist alloca to function entry block to prevent stack growth in loops
+            llvm::Function* fn = ctx.builder.GetInsertBlock()->getParent();
+            llvm::BasicBlock& entry = fn->getEntryBlock();
+            llvm::IRBuilder<> entryBuilder(&entry, entry.getFirstInsertionPt());
+            llvm::AllocaInst* alloca = entryBuilder.CreateAlloca(unwrapLocal(type), nullptr, name);
+            return wrapLocal(alloca);
+        }
         IRValue* createLoad(IRType* type, IRValue* ptr, const std::string& name) override { return wrapLocal(ctx.builder.CreateLoad(unwrapLocal(type), unwrapLocal(ptr), name)); }
         IRValue* createStore(IRValue* val, IRValue* ptr) override { return wrapLocal(ctx.builder.CreateStore(unwrapLocal(val), unwrapLocal(ptr))); }
         
@@ -117,7 +124,9 @@ namespace AIML {
             if (!func) return nullptr;
             std::vector<llvm::Value*> rawArgs;
             for (auto* a : args) rawArgs.push_back(unwrapLocal(a));
-            return wrapLocal(ctx.builder.CreateCall(func, rawArgs, name));
+            // Void-returning calls must not have a result name — LLVM verifier rejects it.
+            const std::string& callName = func->getReturnType()->isVoidTy() ? "" : name;
+            return wrapLocal(ctx.builder.CreateCall(func, rawArgs, callName));
         }
 
         IRValue* createCall(IRValue* func, const std::vector<IRValue*>& args, const std::string& name) override {

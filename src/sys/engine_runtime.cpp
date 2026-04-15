@@ -334,6 +334,18 @@ void aiml_engine_swap(void* win_ptr) {
 #if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
     glfwSwapBuffers(win->glfw);
     glfwPollEvents();
+
+    /* Frame limiter (same as engine.run) */
+    if (win->target_frame_ms > 0.0f) {
+        double elapsed_ms = (now_sec() - win->last_time) * 1000.0;
+        double sleep_ms   = (double)win->target_frame_ms - elapsed_ms;
+        if (sleep_ms > 0.5) {
+            struct timespec ts;
+            ts.tv_sec  = 0;
+            ts.tv_nsec = (long)(sleep_ms * 1e6);
+            nanosleep(&ts, nullptr);
+        }
+    }
 #endif
 }
 
@@ -343,6 +355,36 @@ void aiml_engine_quit(void* win_ptr) {
     win->quit_requested = 1;
 #if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
     glfwSetWindowShouldClose(win->glfw, GLFW_TRUE);
+#endif
+}
+
+int32_t aiml_engine_is_iconified(void* win_ptr) {
+    if (!win_ptr) return 0;
+    AimlWindow* win = (AimlWindow*)win_ptr;
+#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
+    (void)win; return 0;
+#else
+    return glfwGetWindowAttrib(win->glfw, GLFW_ICONIFIED) ? 1 : 0;
+#endif
+}
+
+int32_t aiml_engine_is_focused(void* win_ptr) {
+    if (!win_ptr) return 0;
+    AimlWindow* win = (AimlWindow*)win_ptr;
+#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
+    (void)win; return 1;
+#else
+    return glfwGetWindowAttrib(win->glfw, GLFW_FOCUSED) ? 1 : 0;
+#endif
+}
+
+int32_t aiml_engine_is_visible(void* win_ptr) {
+    if (!win_ptr) return 0;
+    AimlWindow* win = (AimlWindow*)win_ptr;
+#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
+    (void)win; return 1;
+#else
+    return glfwGetWindowAttrib(win->glfw, GLFW_VISIBLE) ? 1 : 0;
 #endif
 }
 

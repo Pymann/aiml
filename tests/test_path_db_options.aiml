@@ -25,7 +25,7 @@
       - decl: [cp0, i32]
       - set: [cp0, { call: [db.checkpoint] }]
       - if:
-          condition: { "!=": [cp0, 0] }
+          condition: { neq: [cp0, 0] }
           then:
             - print: ["FAIL checkpoint_literal=${cp0}"]
             - call: [sys.exit, 1]
@@ -33,7 +33,7 @@
       - decl: [lit_dir_ok, i32]
       - set: [lit_dir_ok, { call: [io.is_dir, literal_dir] }]
       - if:
-          condition: { "!=": [lit_dir_ok, 1] }
+          condition: { neq: [lit_dir_ok, 1] }
           then:
             - print: ["FAIL literal_dir_missing=${lit_dir_ok} dir=${literal_dir}"]
             - call: [sys.exit, 1]
@@ -45,7 +45,7 @@
       - decl: [cp1, i32]
       - set: [cp1, { call: [db.checkpoint] }]
       - if:
-          condition: { "!=": [cp1, 0] }
+          condition: { neq: [cp1, 0] }
           then:
             - print: ["FAIL checkpoint_var=${cp1}"]
             - call: [sys.exit, 1]
@@ -53,7 +53,7 @@
       - decl: [var_get, string]
       - set: [var_get, { call: [cfg_var.get, "mode"] }]
       - if:
-          condition: { "==": [{ eq: [var_get, "variable"] }, 0] }
+          condition: { eq: [{ eq: [var_get, "variable"] }, 0] }
           then:
             - print: ["FAIL var_get=${var_get}"]
             - call: [sys.exit, 1]
@@ -61,7 +61,7 @@
       - decl: [var_dir_ok, i32]
       - set: [var_dir_ok, { call: [io.is_dir, var_dir] }]
       - if:
-          condition: { "!=": [var_dir_ok, 1] }
+          condition: { neq: [var_dir_ok, 1] }
           then:
             - print: ["FAIL var_dir_missing=${var_dir_ok} dir=${var_dir}"]
             - call: [sys.exit, 1]
@@ -73,7 +73,7 @@
       - decl: [cp2, i32]
       - set: [cp2, { call: [db.checkpoint] }]
       - if:
-          condition: { "!=": [cp2, 0] }
+          condition: { neq: [cp2, 0] }
           then:
             - print: ["FAIL checkpoint_joined=${cp2}"]
             - call: [sys.exit, 1]
@@ -81,7 +81,7 @@
       - decl: [joined_get, string]
       - set: [joined_get, { call: [cfg_joined.get, "mode"] }]
       - if:
-          condition: { "==": [{ eq: [joined_get, "joined"] }, 0] }
+          condition: { eq: [{ eq: [joined_get, "joined"] }, 0] }
           then:
             - print: ["FAIL joined_get=${joined_get}"]
             - call: [sys.exit, 1]
@@ -89,7 +89,7 @@
       - decl: [joined_dir_ok, i32]
       - set: [joined_dir_ok, { call: [io.is_dir, joined_dir] }]
       - if:
-          condition: { "!=": [joined_dir_ok, 1] }
+          condition: { neq: [joined_dir_ok, 1] }
           then:
             - print: ["FAIL joined_dir_missing=${joined_dir_ok} dir=${joined_dir}"]
             - call: [sys.exit, 1]

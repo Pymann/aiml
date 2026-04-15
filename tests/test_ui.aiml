@@ -13,7 +13,7 @@
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
 - decl: [win, window_handle, { call: [engine.create_window, 800, 600, "AIML UI Test"] }]
-- if: [{ ==: [win, null] }, true]
+- if: [{ eq: [win, null] }, true]
   then:
     - print: ["FAIL: engine.create_window returned null"]
     - call: [sys.exit, 1]
@@ -23,19 +23,19 @@
 - call: [engine.target_fps, 60]
 
 - decl: [font, ui_font, { call: [ui.load_font_default, 16.0] }]
-- if: [{ "!=": [font, null] }, true]
+- if: [{ neq: [font, null] }, true]
   then:
     - call: [ui.set_default_font, font]
 
 # Slider-Style Preset
 - decl: [sl_style, ui_slider_style, { call: [ui.slider_style_new] }]
 - decl: [thumb_tex, gl_texture, { call: [gl.load_texture, "tests/png/slider.png"] }]
-- if: [{ "!=": [thumb_tex, null] }, true]
+- if: [{ neq: [thumb_tex, null] }, true]
   then:
     - call: [sl_style.set_thumb, thumb_tex]
 
 - decl: [track_tex, gl_texture, { call: [gl.load_texture, "tests/png/slider_track.png"] }]
-- if: [{ "!=": [track_tex, null] }, true]
+- if: [{ neq: [track_tex, null] }, true]
   then:
     - call: [sl_style.set_track, track_tex]
 
@@ -97,7 +97,7 @@
       - set:  [spinbox_val, { call: [ui.spinbox, "color_pick", color_opts, spinbox_val] }]
       - call: [ui.spacer, 4.0]
       - decl: [clicked, i32, { call: [ui.button, "Click me!"] }]
-      - if: [{ "!=": [clicked, 0] }, true]
+      - if: [{ neq: [clicked, 0] }, true]
         then:
           - set: [click_count, { +: [click_count, 1] }]
       - call: [ui.label, "Slider:"]

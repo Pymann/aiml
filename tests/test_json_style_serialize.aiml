@@ -1,0 +1,15 @@
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [style, JsonStyle]
+      - set: [style.pretty, 1]
+      - set: [style.indent, "  "]
+      - set: [style.newline, "\n"]
+      - decl: [nums, list<i32>]
+      - call: [nums.push, 1]
+      - call: [nums.push, 2]
+      - decl: [json, string]
+      - set: [json, {call: [sys.serialize, nums, "list<i32>", style]}]
+      - print: [json]
+      - return: 0

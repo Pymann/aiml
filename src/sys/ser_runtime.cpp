@@ -6,6 +6,16 @@
 #include <cstdio>
 #include <unistd.h>
 
+// Thread-local decode-error flag — set when a structural error (absurd count etc.) is detected.
+// Reset at the start of aiml_ser_decode; checked at the end to return an error code.
+static thread_local bool g_dec_error = false;
+
+/* ── Debug logging (AIML_DEBUG=1 env var) ─────────────────────────────────── */
+static int g_aiml_ser_debug = (getenv("AIML_DEBUG") != nullptr) ? 1 : 0;
+#define SER_DBG(fmt, ...) do { if (g_aiml_ser_debug) fprintf(stderr, "[ser-DBG] " fmt "\n", ##__VA_ARGS__); } while(0)
+// Depth-limited: only log STRUCT field traces up to depth 3 to avoid noise.
+static thread_local int g_ser_depth = 0;
+
 // ── Internal struct mirrors ────────────────────────────────────────────────────
 // These MUST match the LLVM-generated layouts exactly.
 // Verified from list_impl.cpp, map_impl.cpp, compress_runtime.h, code_runtime.cpp.
@@ -77,6 +87,20 @@ static int32_t r_i32(const uint8_t* blob, int& pos, int end) {
               | ((uint32_t)blob[pos+3] << 24);
     pos += 4;
     int32_t v; memcpy(&v, &u, 4); return v;
+}
+
+// ── Key stride helper ─────────────────────────────────────────────────────────
+// Returns the byte stride per entry in map->keys for a given key type node.
+static int key_stride(int key_idx, const AimlTypeNode* ns, int nn) {
+    if (key_idx < 0 || key_idx >= nn) return (int)sizeof(char*);
+    switch ((AimlTDKind)ns[key_idx].kind) {
+    case AIML_TD_I8:       return 1;
+    case AIML_TD_I16:      return 2;
+    case AIML_TD_I32:      return 4;
+    case AIML_TD_I64:      return 8;
+    case AIML_TD_RAWBYTES: return ns[key_idx].param1;  // enum/opaque types (e.g. i32 enum = 4)
+    default:               return (int)sizeof(char*);
+    }
 }
 
 // ── Forward declarations ──────────────────────────────────────────────────────
@@ -152,27 +176,17 @@ static void enc(std::vector<uint8_t>& buf,
 
     case AIML_TD_MAP: {
         // data points directly to the inline SerMap struct
+        // Dense format: write count, then for each entry 0..count-1: key then value.
+        // map->keys is a dense array (no holes), indexed 0..size-1.
         const SerMap* map = (const SerMap*)data;
-        int32_t cap   = map->capacity;
-        int32_t count = map->size;
-        w_i32(buf, cap);
+        int32_t count = (map->size > 0) ? map->size : 0;
         w_i32(buf, count);
-        if (count > 0 && map->occupied) {
-            int vsz = n.elem_size;  // value element stride
-            for (int i = 0; i < cap; i++) {
-                uint8_t occ = (uint8_t)map->occupied[i];
-                w_u8(buf, occ);
-                if (occ) {
-                    // key: always char* (map<string:X> only in v1)
-                    const char* key = nullptr;
-                    memcpy(&key, (uint8_t*)map->keys + i * sizeof(char*), sizeof(char*));
-                    int32_t klen = key ? (int32_t)strlen(key) : 0;
-                    w_i32(buf, klen);
-                    if (klen > 0) w_raw(buf, key, (size_t)klen);
-                    // value
-                    uint8_t* vp = (uint8_t*)map->values + i * vsz;
-                    enc(buf, n.param2, ns, nn, vp);
-                }
+        if (count > 0 && map->keys && map->values) {
+            int ksz = key_stride(n.param1, ns, nn);
+            int vsz = n.elem_size;
+            for (int i = 0; i < count; i++) {
+                enc(buf, n.param1, ns, nn, (const uint8_t*)map->keys  + i * ksz);
+                enc(buf, n.param2, ns, nn, (const uint8_t*)map->values + i * vsz);
             }
         }
         break;
@@ -239,20 +253,35 @@ static void dec(const uint8_t* blob, int& pos, int end,
 
     case AIML_TD_STRUCT: {
         int nf = n.param1, fi = n.param2;
+        SER_DBG("STRUCT idx=%d nf=%d off=%d sz=%d pos=%d depth=%d",
+                idx, nf, n.offset, n.elem_size, pos, g_ser_depth);
+        g_ser_depth++;
         for (int i = 0; i < nf; i++) {
             const AimlTypeNode& f = ns[fi + i];
+            int pos_before = pos;
             dec(blob, pos, end, fi + i, ns, nn, out + f.offset);
+            if (g_aiml_ser_debug && g_ser_depth <= 3)
+                fprintf(stderr, "[ser-DBG]   field[%d] kind=%d off=%d esz=%d pos=%d->%d bytes=%d\n",
+                        i, f.kind, f.offset, f.elem_size, pos_before, pos, pos - pos_before);
         }
+        g_ser_depth--;
         break;
     }
 
     case AIML_TD_LIST: {
         int32_t count = r_i32(blob, pos, end);
+        int esz = n.elem_size;
+        if (count < 0 || count > 65536) {
+            fprintf(stderr, "[ser-ERROR] absurd LIST count=%d idx=%d off=%d esz=%d pos=%d end=%d — aborting decode\n",
+                    count, idx, n.offset, esz, pos - 4, end);
+            g_dec_error = true;
+            pos = end;  // skip remaining blob data; subsequent fields all read as 0
+            count = 0;
+        }
         // out points directly to the inline SerList struct
         SerList* list = (SerList*)out;
         list->size     = count;
         list->capacity = count > 0 ? count : 4;
-        int esz = n.elem_size;
         size_t alloc = (size_t)(list->capacity) * esz;
         list->data = malloc(alloc > 0 ? alloc : 1);
         memset(list->data, 0, alloc > 0 ? alloc : 1);
@@ -263,40 +292,30 @@ static void dec(const uint8_t* blob, int& pos, int end,
     }
 
     case AIML_TD_MAP: {
-        int32_t cap   = r_i32(blob, pos, end);
+        // Dense format: read count, then decode each key+value into slots 0..count-1.
         int32_t count = r_i32(blob, pos, end);
-        if (cap <= 0) cap = 4;
+        if (count < 0 || count > 65536) {
+            fprintf(stderr, "[ser-ERROR] absurd MAP count=%d idx=%d off=%d pos=%d end=%d — aborting decode\n",
+                    count, idx, n.offset, pos - 4, end);
+            g_dec_error = true;
+            pos = end;
+            count = 0;
+        }
         // out points directly to the inline SerMap struct
         SerMap* map   = (SerMap*)out;
+        int cap       = count > 0 ? count : 4;
+        int ksz       = key_stride(n.param1, ns, nn);
+        int vsz       = n.elem_size;
         map->size     = count;
         map->capacity = cap;
         map->occupied = (int8_t*)calloc((size_t)cap, 1);
-        map->keys     = calloc((size_t)cap, sizeof(char*));
-        int vsz       = n.elem_size;
+        map->keys     = calloc((size_t)cap, (size_t)ksz > 0 ? (size_t)ksz : 1);
         map->values   = calloc((size_t)cap, (size_t)vsz > 0 ? (size_t)vsz : 1);
-        // Only read slot data if count > 0 (encoder skips slot data when count == 0)
-        int readCap = (count > 0) ? cap : 0;
-        for (int i = 0; i < readCap; i++) {
+        for (int i = 0; i < count; i++) {
             if (pos >= end) break;
-            uint8_t occ = blob[pos++];
-            map->occupied[i] = (int8_t)occ;
-            if (occ) {
-                // key (char*)
-                int32_t klen = r_i32(blob, pos, end);
-                char* key;
-                if (klen > 0 && pos + klen <= end) {
-                    key = (char*)malloc((size_t)klen + 1);
-                    memcpy(key, blob + pos, (size_t)klen);
-                    key[klen] = '\0';
-                    pos += klen;
-                } else {
-                    key = strdup("");
-                }
-                memcpy((uint8_t*)map->keys + i * sizeof(char*), &key, sizeof(char*));
-                // value
-                uint8_t* vout = (uint8_t*)map->values + i * vsz;
-                dec(blob, pos, end, n.param2, ns, nn, vout);
-            }
+            map->occupied[i] = 1;
+            dec(blob, pos, end, n.param1, ns, nn, (uint8_t*)map->keys  + i * ksz);
+            dec(blob, pos, end, n.param2, ns, nn, (uint8_t*)map->values + i * vsz);
         }
         break;
     }
@@ -342,7 +361,7 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
     case AIML_TD_STRING: {
         char* str = nullptr;
         memcpy(&str, data, sizeof(char*));
-        if (str) free(str);
+        if (str) { free(str); str = nullptr; memcpy(data, &str, sizeof(char*)); }
         break;
     }
 
@@ -364,8 +383,10 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
             for (int i = 0; i < list->size; i++)
                 fre(n.param1, ns, nn, base + i * esz);
             free(list->data);
+            list->data = nullptr;
         } else if (list->data) {
             free(list->data);
+            list->data = nullptr;
         }
         // do NOT free list itself — it is inline in the parent struct
         break;
@@ -373,22 +394,20 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
 
     case AIML_TD_MAP: {
         // data points directly to the inline SerMap struct
+        // Dense: free heap allocations for entries 0..size-1, then free arrays.
         SerMap* map = (SerMap*)data;
-        if (map->occupied) {
+        if (map->size > 0 && map->keys && map->values) {
+            int ksz = key_stride(n.param1, ns, nn);
             int vsz = n.elem_size;
-            for (int i = 0; i < map->capacity; i++) {
-                if (!map->occupied[i]) continue;
-                // key
-                char* key = nullptr;
-                memcpy(&key, (uint8_t*)map->keys + i * sizeof(char*), sizeof(char*));
-                if (key) free(key);
-                // value
+            for (int i = 0; i < map->size; i++) {
+                fre(n.param1, ns, nn, (uint8_t*)map->keys  + i * ksz);
                 fre(n.param2, ns, nn, (uint8_t*)map->values + i * vsz);
             }
-            free(map->occupied);
         }
-        if (map->keys)   free(map->keys);
-        if (map->values) free(map->values);
+        if (map->occupied) { free(map->occupied); map->occupied = nullptr; }
+        if (map->keys)     { free(map->keys);     map->keys     = nullptr; }
+        if (map->values)   { free(map->values);   map->values   = nullptr; }
+        map->size = 0; map->capacity = 0;
         // do NOT free map itself — it is inline in the parent struct
         break;
     }
@@ -448,20 +467,22 @@ extern "C" char* aiml_ser_encode(const void*         obj,
     return blob;
 }
 
-extern "C" void aiml_ser_decode(const char*         blob,
-                                 void*               out,
-                                 const AimlTypeNode* nodes,
-                                 int32_t             n_nodes) {
-    if (!blob || !out || !nodes || n_nodes <= 0) return;
+extern "C" int aiml_ser_decode(const char*         blob,
+                                void*               out,
+                                const AimlTypeNode* nodes,
+                                int32_t             n_nodes) {
+    if (!blob || !out || !nodes || n_nodes <= 0) return -1;
+    g_dec_error = false;
     // read 4-byte length prefix
     const uint8_t* b = (const uint8_t*)blob;
     int32_t data_len = (int32_t)((uint32_t)b[0]
                                | ((uint32_t)b[1] <<  8)
                                | ((uint32_t)b[2] << 16)
                                | ((uint32_t)b[3] << 24));
-    if (data_len <= 0) return;
+    if (data_len <= 0) return -1;
     int pos = 0;
     dec(b + 4, pos, data_len, 0, nodes, n_nodes, (uint8_t*)out);
+    return g_dec_error ? -1 : 0;
 }
 
 extern "C" void aiml_ser_free_decoded(void*               obj,

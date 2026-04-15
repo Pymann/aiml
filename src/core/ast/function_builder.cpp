@@ -57,15 +57,47 @@ public:
 };
 
 bool FunctionBuilder::OnMapStart() {
-    // def is a map: { name: foo, return: i32, args: [...], body: [...] }
+    mapDepth++;
+    if (mapDepth > 1) {
+        // Nested map inside function definition — most likely args: { name: type }
+        // which is the wrong syntax. Emit a helpful error and discard the submap.
+        if (currentKey == "args") {
+            LOG_ERROR("Invalid 'args' syntax in function '" + func->name + "': "
+                      "use a list of pairs [[name, type], ...], not a map {name: type}. "
+                      "Example: args: [[x, i32], [y, i32]]");
+        }
+        return true;  // stay in FunctionBuilder but depth tracks the submap
+    }
+    // Outer function map: normal setup
     expectingKey = true;
     return true;
 }
 
 bool FunctionBuilder::OnMapEnd() {
+    mapDepth--;
+    if (mapDepth > 0) return true;  // closing a nested submap, keep going
     builder->popState();
     return true;
 }
+
+// Simple builder that collects scalar values into a string vector.
+class StringListBuilder : public StateHandler {
+    std::vector<std::string>* out_;
+    int depth = 1;
+public:
+    StringListBuilder(Builder* b, std::vector<std::string>* out)
+        : StateHandler(b), out_(out) {}
+    bool OnSequenceStart() override { depth++; return true; }
+    bool OnSequenceEnd() override {
+        depth--;
+        if (depth == 0) builder->popState();
+        return true;
+    }
+    bool OnScalar(const std::string& value, const std::string&) override {
+        out_->push_back(value);
+        return true;
+    }
+};
 
 bool FunctionBuilder::OnSequenceStart() {
     if (currentKey == "body") {
@@ -75,6 +107,11 @@ bool FunctionBuilder::OnSequenceStart() {
         return true;
     } else if (currentKey == "args") {
         builder->pushState(std::make_unique<ArgsBuilder>(builder, &func->args));
+        expectingKey = true;
+        expectingValue = false;
+        return true;
+    } else if (currentKey == "static_off") {
+        builder->pushState(std::make_unique<StringListBuilder>(builder, &func->staticOff));
         expectingKey = true;
         expectingValue = false;
         return true;
@@ -114,6 +151,7 @@ void FunctionBuilder::receiveChildNode(std::unique_ptr<Node> node) {
 }
 
 std::unique_ptr<Node> FunctionBuilder::finish() {
+    func->sourceLine = capturedLine;
     return std::move(func);
 }
 

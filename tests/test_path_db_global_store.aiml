@@ -27,7 +27,7 @@
 - decl: [got, ptr<GlobalStorePlayer>]
 - set: [got, { call: [players.get, id] }]
 - if:
-    condition: { "==": [got, null] }
+    condition: { eq: [got, null] }
     then:
       - print: ["FAIL global_store_get=null"]
       - call: [sys.exit, 1]

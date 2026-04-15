@@ -41,13 +41,15 @@ struct AimlGLTexture { GLuint id; };
 /* Must match ui_runtime.cpp AimlUIFont exactly */
 struct AimlUIFont {
     stbtt_fontinfo info;
-    unsigned char* ttf_data;
+    unsigned char* ttf_data;   /* malloc'd copy */
+    int     ttf_size;          /* byte length of ttf_data */
     GLuint  atlas_tex;
     stbtt_bakedchar cdata[96]; /* ASCII 32..127 */
     float   line_height;
     float   ascent_px;
     float   scale;
     int     atlas_w, atlas_h;
+    float   baked_size_px;     /* size passed to stbtt_BakeFontBitmap */
 };
 
 /* ── Child types ─────────────────────────────────────────────────────────── */
@@ -127,7 +129,8 @@ struct PrefabScene {
     int32_t screen_w, screen_h;
     int32_t design_w, design_h;   /* original design resolution (from scene_init) */
 
-    AimlUIFont* font;          /* default font for labels */
+    AimlUIFont* font;          /* base font (set via prefab_set_font) */
+    std::unordered_map<int, AimlUIFont*> font_cache; /* key = round(font_size*10) */
 
     /* prefab registry */
     std::unordered_map<std::string, PrefabDef*> defs;
@@ -351,10 +354,58 @@ static float text_width_font(AimlUIFont* font, const char* text) {
     float w = 0;
     while (*text) {
         unsigned char c = (unsigned char)*text++;
+        if (c == '\n') break;
         if (c < 32 || c >= 128) continue;
         w += font->cdata[c - 32].xadvance;
     }
     return w;
+}
+
+static std::vector<std::string> wrap_text_lines(AimlUIFont* font, const char* text, float max_w) {
+    std::vector<std::string> lines;
+    if (!font || !text || !*text) return lines;
+
+    std::string current_line;
+    std::string current_word;
+
+    auto flush_line = [&]() {
+        lines.push_back(current_line);
+        current_line.clear();
+    };
+    auto append_word = [&]() {
+        if (current_word.empty()) return;
+        std::string candidate = current_line.empty() ? current_word : current_line + " " + current_word;
+        if (max_w > 0.0f && !current_line.empty() && text_width_font(font, candidate.c_str()) > max_w) {
+            flush_line();
+            current_line = current_word;
+        } else {
+            current_line = candidate;
+        }
+        current_word.clear();
+    };
+
+    const char* p = text;
+    while (*p) {
+        char c = *p++;
+        if (c == '\n' || c == '|') {
+            append_word();
+            flush_line();
+            continue;
+        }
+        if (c == ' ') {
+            append_word();
+            continue;
+        }
+        current_word += c;
+        if (max_w > 0.0f && current_line.empty() && text_width_font(font, current_word.c_str()) > max_w) {
+            lines.push_back(current_word);
+            current_word.clear();
+        }
+    }
+    append_word();
+    if (!current_line.empty()) lines.push_back(current_line);
+    if (lines.empty()) lines.push_back("");
+    return lines;
 }
 
 static void push_text_batch(DrawBatch& batch, AimlUIFont* font,
@@ -363,37 +414,41 @@ static void push_text_batch(DrawBatch& batch, AimlUIFont* font,
 {
     if (!font || !text || !*text) return;
 
-    /* Measure for alignment */
-    float tw = text_width_font(font, text);
+    std::vector<std::string> lines = wrap_text_lines(font, text, max_w);
+    float line_height = font->line_height;
+    float base_y = cy + font->ascent_px;
 
-    float x;
-    if (anchor && strcmp(anchor, "center") == 0) {
-        x = cx - tw * 0.5f;
-    } else if (anchor && strcmp(anchor, "right") == 0) {
-        x = cx - tw;
-    } else {
-        x = cx; /* left */
-    }
-    float y = cy + font->ascent_px;
-    float limit = x + max_w;
+    for (size_t li = 0; li < lines.size(); ++li) {
+        const std::string& line = lines[li];
+        float tw = text_width_font(font, line.c_str());
+        float x;
+        if (anchor && strcmp(anchor, "center") == 0) {
+            x = cx - tw * 0.5f;
+        } else if (anchor && strcmp(anchor, "right") == 0) {
+            x = cx - tw;
+        } else {
+            x = cx;
+        }
+        float y = base_y + (float)li * line_height;
+        float limit = x + max_w;
 
-    const char* p = text;
-    while (*p) {
-        unsigned char c = (unsigned char)*p++;
-        if (c < 32 || c >= 128) continue;
-        stbtt_bakedchar* bc = &font->cdata[c - 32];
-        float x0 = x + bc->xoff;
-        float y0 = y + bc->yoff;
-        float gw = (float)(bc->x1 - bc->x0);
-        float gh = (float)(bc->y1 - bc->y0);
-        float x1 = x0 + gw;
-        if (max_w > 0 && x1 > limit) break;
-        float u0 = (float)bc->x0 / font->atlas_w;
-        float v0 = (float)bc->y0 / font->atlas_h;
-        float u1 = (float)bc->x1 / font->atlas_w;
-        float v1 = (float)bc->y1 / font->atlas_h;
-        push_quad(batch, x0, y0, gw, gh, u0, v0, u1, v1, rgba);
-        x += bc->xadvance;
+        for (char raw_c : line) {
+            unsigned char c = (unsigned char)raw_c;
+            if (c < 32 || c >= 128) continue;
+            stbtt_bakedchar* bc = &font->cdata[c - 32];
+            float x0 = x + bc->xoff;
+            float y0 = y + bc->yoff;
+            float gw = (float)(bc->x1 - bc->x0);
+            float gh = (float)(bc->y1 - bc->y0);
+            float x1 = x0 + gw;
+            if (max_w > 0 && x1 > limit) break;
+            float u0 = (float)bc->x0 / font->atlas_w;
+            float v0 = (float)bc->y0 / font->atlas_h;
+            float u1 = (float)bc->x1 / font->atlas_w;
+            float v1 = (float)bc->y1 / font->atlas_h;
+            push_quad(batch, x0, y0, gw, gh, u0, v0, u1, v1, rgba);
+            x += bc->xadvance;
+        }
     }
 }
 
@@ -513,7 +568,26 @@ static std::vector<PrefabChildDef> parse_children_json(const char* json) {
     return result;
 }
 
+/* ── Rotation helper ─────────────────────────────────────────────────────── */
+
+static void rotate_batch_verts(DrawBatch& batch, size_t start_idx,
+                               float cx, float cy, float angle_deg)
+{
+    if (angle_deg == 0.0f) return;
+    float rad = angle_deg * (float)(M_PI / 180.0);
+    float cs = cosf(rad);
+    float sn = sinf(rad);
+    for (size_t i = start_idx; i < batch.verts.size(); i++) {
+        float dx = batch.verts[i].x - cx;
+        float dy = batch.verts[i].y - cy;
+        batch.verts[i].x = cx + dx * cs - dy * sn;
+        batch.verts[i].y = cy + dx * sn + dy * cs;
+    }
+}
+
 /* ── Render one instance ─────────────────────────────────────────────────── */
+
+static AimlUIFont* font_for_size(PrefabScene* s, float font_size);
 
 static void render_instance(AimlPrefabInstance* inst) {
     if (!inst || !inst->visible) return;
@@ -531,6 +605,10 @@ static void render_instance(AimlPrefabInstance* inst) {
         sy *= rsy;
     }
     float alpha = inst->alpha;
+    float rot = inst->rotation;
+    /* Rotation center = center of the instance bounding box */
+    float rot_cx = ox + inst->def->width  * sx * 0.5f;
+    float rot_cy = oy + inst->def->height * sy * 0.5f;
 
     /* 1) Base texture (card frame etc.) */
     if (inst->base_texture) {
@@ -541,6 +619,7 @@ static void render_instance(AimlPrefabInstance* inst) {
         push_quad(batch, ox, oy,
                   inst->def->width * sx, inst->def->height * sy,
                   0, 1, 1, 0, col);
+        rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
         flush_batch(batch);
     }
 
@@ -562,14 +641,9 @@ static void render_instance(AimlPrefabInstance* inst) {
             batch.mode = 1;
             uint32_t col = color_with_alpha(0xFFFFFF, alpha);
             push_quad(batch, cx, cy, cw, ch_h, 0, 1, 1, 0, col);
+            rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
             flush_batch(batch);
-            if (sprite_log_count < 3) {
-                GLenum err = glGetError();
-                GLboolean is_tex = glIsTexture(ch.texture);
-                fprintf(stderr, "[prefab] RENDER sprite '%s' tex=%u pos=(%.0f,%.0f) sz=(%.0f,%.0f) col=0x%08X glErr=%u isTex=%d\n",
-                        ch.name.c_str(), ch.texture, cx, cy, cw, ch_h, col, (unsigned)err, (int)is_tex);
-                sprite_log_count++;
-            }
+            (void)0;
             break;
         }
         case CHILD_RECT: {
@@ -578,18 +652,24 @@ static void render_instance(AimlPrefabInstance* inst) {
             batch.mode = 0;
             uint32_t col = color_with_alpha(ch.color, alpha);
             push_quad(batch, cx, cy, cw, ch_h, 0, 0, 1, 1, col);
+            rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
             flush_batch(batch);
             break;
         }
         case CHILD_LABEL: {
             if (ch.text.empty() || !s->font) break;
+            /* Select font for this label's font_size (cached per size). */
+            float target_size = ch.font_size > 0.0f ? ch.font_size * sx : 0.0f;
+            AimlUIFont* lf = (target_size > 0.0f)
+                             ? font_for_size(s, target_size)
+                             : s->font;
+            if (!lf) break;
             DrawBatch batch;
-            batch.tex = s->font->atlas_tex;
+            batch.tex = lf->atlas_tex;
             batch.mode = 2; /* font atlas */
             uint32_t col = color_with_alpha(ch.color, alpha);
             /* anchor handling: cx is the x reference point */
             const char* anchor = "left";
-            /* Find the child def for anchor info */
             auto it = inst->child_index.find(ch.name);
             if (it != inst->child_index.end() && inst->def) {
                 int idx = it->second;
@@ -597,8 +677,9 @@ static void render_instance(AimlPrefabInstance* inst) {
                     anchor = inst->def->children[idx].anchor.c_str();
                 }
             }
-            push_text_batch(batch, s->font, ch.text.c_str(),
-                           cx, cy, inst->def->width * sx, col, anchor);
+            push_text_batch(batch, lf, ch.text.c_str(),
+                           cx, cy, ch.width > 0.0f ? ch.width * sx : inst->def->width * sx, col, anchor);
+            rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
             flush_batch(batch);
             break;
         }
@@ -833,12 +914,9 @@ void aiml_prefab_set_text(void* inst, const char* child_name, const char* text) 
 }
 
 void aiml_prefab_set_texture(void* inst, const char* child_name, void* tex) {
-    fprintf(stderr, "[prefab] set_texture('%s', tex=%p)\n", child_name ? child_name : "null", tex);
     PrefabChild* ch = find_child(inst, child_name);
-    if (!ch) { fprintf(stderr, "[prefab]   child NOT found!\n"); return; }
-    if (!tex) { fprintf(stderr, "[prefab]   tex is NULL!\n"); return; }
+    if (!ch || !tex) return;
     GLuint id = ((AimlGLTexture*)tex)->id;
-    fprintf(stderr, "[prefab]   child found, type=%d, setting GL tex id=%u\n", ch->type, id);
     ch->texture = id;
 }
 
@@ -1047,7 +1125,24 @@ void aiml_prefab_dock_y(void* p, int32_t row, int32_t rowspan) {
 
 /* ── Font ────────────────────────────────────────────────────────────────── */
 
+static void clear_font_cache(PrefabScene* s) {
+    for (auto& kv : s->font_cache) aiml_ui_free_font(kv.second);
+    s->font_cache.clear();
+}
+
+/* Return a font baked at the requested size, using the cache. */
+static AimlUIFont* font_for_size(PrefabScene* s, float font_size) {
+    if (!s->font) return nullptr;
+    int key = (int)roundf(font_size * 10.0f);
+    auto it = s->font_cache.find(key);
+    if (it != s->font_cache.end()) return it->second;
+    AimlUIFont* f = (AimlUIFont*)aiml_ui_bake_font_for_size(s->font, font_size);
+    if (f) s->font_cache[key] = f;
+    return f;
+}
+
 void aiml_prefab_set_font(void* font) {
     if (!g_scene) return;
+    clear_font_cache(g_scene);
     g_scene->font = (AimlUIFont*)font;
 }

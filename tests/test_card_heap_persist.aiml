@@ -78,28 +78,28 @@
       - decl: [got, ptr<Card>]
       - set: [got, { call: [kv.get, "c1"] }]
       - if:
-          condition: { "==": [{ eq: [got.name, "Red Pyromancer IV"] }, 0] }
+          condition: { eq: [{ eq: [got.name, "Red Pyromancer IV"] }, 0] }
           then:
             - print: ["FAIL got.name=${got.name}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "!=": [got.passive_abilities.len, 3] }
+          condition: { neq: [got.passive_abilities.len, 3] }
           then:
             - print: ["FAIL got.passive_abilities.len=${got.passive_abilities.len}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "!=": [got.active_abilities.len, 1] }
+          condition: { neq: [got.active_abilities.len, 1] }
           then:
             - print: ["FAIL got.active_abilities.len=${got.active_abilities.len}"]
             - call: [sys.exit, 1]
       - decl: [ab, ActiveAbility, got.active_abilities-0]
       - if:
-          condition: { "==": [{ eq: [ab.cost_text, "2 Fire"] }, 0] }
+          condition: { eq: [{ eq: [ab.cost_text, "2 Fire"] }, 0] }
           then:
             - print: ["FAIL ab.cost_text=${ab.cost_text}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "!=": [ab.effects.len, 2] }
+          condition: { neq: [ab.effects.len, 2] }
           then:
             - print: ["FAIL ab.effects.len=${ab.effects.len}"]
             - call: [sys.exit, 1]
@@ -108,7 +108,7 @@
       - decl: [has, i32]
       - set: [has, { call: [kv.has, "c1"] }]
       - if:
-          condition: { "!=": [has, 0] }
+          condition: { neq: [has, 0] }
           then:
             - print: ["FAIL has_after_delete=${has}"]
             - call: [sys.exit, 1]

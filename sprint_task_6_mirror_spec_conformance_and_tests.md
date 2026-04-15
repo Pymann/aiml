@@ -2,64 +2,44 @@
 
 ## Titel
 
-Mirror-Spec-Konformitaet und Testabdeckung ausbauen
+Mirror-Semantik gegen aktuelle Runtime und Repros absichern
+
+## Status
+
+Weiterhin relevant, aber die Fragestellung ist heute konkreter als in der Erstfassung.
 
 ## Ziel
 
-Die Mirror-Implementierung soll gegen [44_5_mirror.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/44_5_mirror.md) systematisch abgeglichen und durch gezielte Tests abgesichert werden.
+Die Mirror-Implementierung soll fuer die realen Problemzonen stabilisiert werden: Typed Registration, Delta-Sync, Event-/RPC-Queues, WS/TCP-Verhalten und reale App-Repros wie `9rooms`.
 
-## Hintergrund
+## Aktueller Stand
 
-Mirror funktioniert im Kern, aber die letzten Repros haben gezeigt:
+- Mirror ist produktiv nutzbar und im Compiler bereits breit exponiert.
+- `poll_event` und `poll_rpc` sind heute vorhanden; die alte Formulierung als reine API-Luecke ist deshalb zu schwach.
+- Reale Fehlerbilder leben bereits in [mirror_ws_crash_report.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/mirror_ws_crash_report.md) und WS-Tests.
 
-- WS-spezifische Semantik ist empfindlich
-- `session.update()` fuehlt sich hoeherwertig an als es derzeit runtime-seitig wirklich ist
-- reale Nutzung fuehrt zu viel Poll-/Wait-Boilerplate
-- mehrere Bugs lagen nicht in der Spec-Idee, sondern in C++-Details und unklarer Queue-Semantik
+## Was an der alten Fassung veraltet war
 
-## Scope
+- Poll-/Wait-Ergonomie als hypothetische Folgearbeit ist zu allgemein.
+- Der wichtigste Wert der Task liegt heute in Regressionen fuer reale Mirror-Semantik, nicht in einem abstrakten Spec-Abgleich allein.
 
-- Spec-Funktionen gegen echte Runtime- und Compiler-Pfade abgleichen
-- Unterschiede zwischen TCP- und WS-Pfad explizit pruefen
-- Objektregistrierung, Typed-Deltas, Queue-Verhalten und RPC-Abwicklung stabilisieren
-- Poll-/Wait-Ergonomie als API-Luecke sichtbar machen
+## Fokus
+
+1. Typed Register/Unregister und Delta-Sync.
+2. Event-/RPC-Queue-Semantik.
+3. WS- und TCP-Paritaet in den kritischen Faellen.
+4. App-nahe Repros, besonders `9rooms`.
 
 ## Betroffene Stellen
 
-- [44_5_mirror.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/44_5_mirror.md)
+- [spec/44_5_mirror.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/44_5_mirror.md)
 - [mirror_ws_crash_report.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/mirror_ws_crash_report.md)
-- [builtin_registry.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.cpp)
-- [mirror_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/mirror_runtime.cpp)
+- [compiler.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/compiler.cpp)
+- [src/sys/mirror_runtime.cpp](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/sys/mirror_runtime.cpp)
 - [tests](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/tests)
-
-## Umsetzungsrichtung
-
-1. Mirror-Spec in Feature-Bloecke aufteilen:
-
-- Session-Lifecycle
-- Register/Unregister
-- Sync/Deltas
-- Events
-- RPCs
-
-2. Fuer jeden Block markieren:
-
-- implementiert
-- teilweise implementiert
-- nur dokumentiert
-- fehleranfaellig oder transportabhaengig
-
-3. Daraus gezielte Repros und Regressionstests ableiten.
-
-4. Optional API-Luecken fuer ergonomische Builtins wie `poll_event`/`poll_rpc`/`wait_*` als Folgearbeit festhalten.
 
 ## Akzeptanzkriterien
 
-- Die reale Mirror-Semantik ist gegen die Spec transparent kartiert.
-- WS- und TCP-Pfade sind in den wichtigsten Faellen testbar abgesichert.
-- Fruehere reale Fehlerfaelle sind als Regressionstests erhalten.
-- Offene API-Luecken sind klar von echten Bugs getrennt.
-
-## Ergebnis
-
-Nach Abschluss ist sichtbar, was Mirror laut Spec wirklich kann, was die Runtime aktuell kann und welche Luecken zuerst geschlossen werden muessen.
+- Die reale Mirror-Semantik ist fuer die wichtigsten Faelle testbar abgesichert.
+- WS- und TCP-Pfade divergieren nicht still in Kernfaellen.
+- Reale Repros bleiben als Regressionstests erhalten.

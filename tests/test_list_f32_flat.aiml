@@ -1,0 +1,175 @@
+# test_list_f32_flat.aiml — Proof that list<f32> works as flat embedding storage
+# Tests all operations needed for EmbeddingTable: push, index read, index write, arithmetic
+
+- decl: [pass, i32, 0]
+- decl: [fail, i32, 0]
+
+# ── 1. Basic list<f32> create + push + len ──────────────────────────────────
+
+- decl: [data, list<f32>]
+- call: [data.push, 1.0]
+- call: [data.push, 2.5]
+- call: [data.push, -0.3]
+
+- print: ["len after 3 pushes: ${data.len}"]
+- if:
+    condition: { eq: [data.len, 3] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL len"] }]
+
+# ── 2. Index read (data-i syntax) ──────────────────────────────────────────
+
+- decl: [v0, f32, data-0]
+- print: ["data-0: ${v0}"]
+- if:
+    condition: { "&&": [{ ">": [v0, 0.99] }, { "<": [v0, 1.01] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL read index 0"] }]
+
+- decl: [v1, f32, data-1]
+- print: ["data-1: ${v1}"]
+- if:
+    condition: { "&&": [{ ">": [v1, 2.49] }, { "<": [v1, 2.51] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL read index 1"] }]
+
+# ── 3. Dynamic index read (data-i with variable) ──────────────────────────
+
+- decl: [idx, i32, 2]
+- decl: [v2, f32, data-idx]
+- print: ["data-${idx}: ${v2}"]
+- if:
+    condition: { "&&": [{ ">": [v2, -0.31] }, { "<": [v2, -0.29] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL dynamic index read"] }]
+
+# ── 4. Index write (set: [data-i, val]) ────────────────────────────────────
+
+- set: [data-0, 9.99]
+- decl: [w0, f32, data-0]
+- print: ["after set data-0: ${w0}"]
+- if:
+    condition: { "&&": [{ ">": [w0, 9.98] }, { "<": [w0, 10.0] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL index write literal"] }]
+
+# ── 5. Dynamic index write ─────────────────────────────────────────────────
+
+- decl: [wi, i32, 1]
+- set: [data-wi, 7.77]
+- decl: [w1, f32, data-1]
+- print: ["after set data-${wi}: ${w1}"]
+- if:
+    condition: { "&&": [{ ">": [w1, 7.76] }, { "<": [w1, 7.78] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL dynamic index write"] }]
+
+# ── 6. Flat array pattern: dim=4, 3 tokens ────────────────────────────────
+# Simulates: flat_data[token_id * dim + d]
+
+- decl: [dim, i32, 4]
+- decl: [n_tokens, i32, 3]
+- decl: [flat, list<f32>]
+
+# Initialize: 3 tokens * 4 dims = 12 entries, all zero
+- decl: [total, i32, { "*": [n_tokens, dim] }]
+- decl: [fi, i32, 0]
+- while:
+    condition: { "<": [fi, total] }
+    body:
+      - call: [flat.push, 0.0]
+      - set: [fi, { +: [fi, 1] }]
+
+- print: ["flat len (3*4=12): ${flat.len}"]
+- if:
+    condition: { eq: [flat.len, 12] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL flat init len"] }]
+
+# Write token 0: [0.1, 0.2, 0.3, 0.4]
+- decl: [t0_base, i32, 0]
+- set: [flat-t0_base, 0.1]
+- decl: [t0_1, i32, { +: [t0_base, 1] }]
+- set: [flat-t0_1, 0.2]
+- decl: [t0_2, i32, { +: [t0_base, 2] }]
+- set: [flat-t0_2, 0.3]
+- decl: [t0_3, i32, { +: [t0_base, 3] }]
+- set: [flat-t0_3, 0.4]
+
+# Write token 2: [1.0, 2.0, 3.0, 4.0] at offset 2*4=8
+- decl: [t2_base, i32, { "*": [2, dim] }]
+- set: [flat-t2_base, 1.0]
+- decl: [t2_1, i32, { +: [t2_base, 1] }]
+- set: [flat-t2_1, 2.0]
+- decl: [t2_2, i32, { +: [t2_base, 2] }]
+- set: [flat-t2_2, 3.0]
+- decl: [t2_3, i32, { +: [t2_base, 3] }]
+- set: [flat-t2_3, 4.0]
+
+# Read back token 0
+- decl: [r0, f32, flat-0]
+- decl: [r1, f32, flat-1]
+- print: ["token0: [${r0}, ${r1}, ...]"]
+- if:
+    condition: { "&&": [{ ">": [r0, 0.09] }, { "<": [r0, 0.11] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL flat token0[0]"] }]
+
+# Read back token 2 via computed index
+- decl: [t2_read_base, i32, { "*": [2, dim] }]
+- decl: [t2r0, f32, flat-t2_read_base]
+- decl: [t2r1_idx, i32, { +: [t2_read_base, 1] }]
+- decl: [t2r1, f32, flat-t2r1_idx]
+- print: ["token2: [${t2r0}, ${t2r1}, ...]"]
+- if:
+    condition: { "&&": [{ ">": [t2r0, 0.99] }, { "<": [t2r0, 1.01] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL flat token2[0]"] }]
+- if:
+    condition: { "&&": [{ ">": [t2r1, 1.99] }, { "<": [t2r1, 2.01] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL flat token2[1]"] }]
+
+# Token 1 should still be all zeros (untouched)
+- decl: [t1_base, i32, { "*": [1, dim] }]
+- decl: [t1r0, f32, flat-t1_base]
+- print: ["token1[0] (should be 0): ${t1r0}"]
+- if:
+    condition: { "&&": [{ ">=": [t1r0, -0.01] }, { "<=": [t1r0, 0.01] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL flat token1 zero"] }]
+
+# ── 7. In-place SGD update: flat[i] = flat[i] - lr * grad ─────────────────
+# Simulate: token0[0] = 0.1 - 0.01 * 2.0 = 0.08
+
+- decl: [lr, f32, 0.01]
+- decl: [grad0, f32, 2.0]
+- decl: [cur, f32, flat-0]
+- decl: [updated, f32, { "-": [cur, { "*": [lr, grad0] }] }]
+- set: [flat-0, updated]
+- decl: [after_sgd, f32, flat-0]
+- print: ["after SGD: 0.1 - 0.01*2.0 = ${after_sgd}"]
+- if:
+    condition: { "&&": [{ ">": [after_sgd, 0.079] }, { "<": [after_sgd, 0.081] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL SGD update"] }]
+
+# ── 8. list.get() for f32 ─────────────────────────────────────────────────
+
+- decl: [g1, f32, { call: [flat.get, 1] }]
+- print: ["flat.get(1): ${g1}"]
+- if:
+    condition: { "&&": [{ ">": [g1, 0.19] }, { "<": [g1, 0.21] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL list.get f32"] }]
+
+# ── Result ───────────────────────────────────────────────────────────────────
+
+- print: [""]
+- print: ["list<f32> flat storage: ${pass} passed, ${fail} failed"]
+- if:
+    condition: { eq: [fail, 0] }
+    then:
+      - call: [sys.exit, 0]
+    else:
+      - call: [sys.exit, 1]

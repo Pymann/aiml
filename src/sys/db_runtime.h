@@ -22,6 +22,9 @@ int32_t aiml_db_store_len(void* store);
 // base_path: directory for .db/.wal files (e.g. "./aiondb/")
 void*   aiml_db_store_open_persist(const char* name, const char* type_name,
                                     int64_t elem_size, const char* base_path);
+void*   aiml_db_store_open_typed_persist(const char* name, const char* type_name,
+                                          int64_t elem_size, const char* base_path,
+                                          const AimlTypeNode* nodes, int32_t n_nodes);
 // checkpoint: msync pages + truncate WAL
 int32_t aiml_db_store_checkpoint(void* store);
 // checkpoint_all: checkpoint every persistent store opened in this session
@@ -72,9 +75,13 @@ int32_t aiml_db_kv_has(void* kv, const char* key);
 int32_t aiml_db_kv_len(void* kv);
 void    aiml_db_kv_delete(void* kv, const char* key);
 void    aiml_db_kv_clear(void* kv);
+void    aiml_db_kv_set_blob(void* kv, const char* key, const void* data, int32_t size);
+void*   aiml_db_kv_get_blob(void* kv, const char* key, int32_t* out_size);
 
 // ── VecStore ──────────────────────────────────────────────────────────────────
 void*   aiml_db_vec_open(const char* name, int32_t dims);
+void*   aiml_db_vec_open_persist(const char* name, int32_t dims, const char* base_path);
+int32_t aiml_db_vec_checkpoint(void* vs);
 void    aiml_db_vec_insert(void* vs, const char* id, const float* emb, int32_t dims);
 void    aiml_db_vec_search(void* vs, const float* query, int32_t k, void* result_list);
 int32_t aiml_db_vec_len(void* vs);

@@ -1,0 +1,103 @@
+# Test: list<list<Struct>> serialize and deserialize via JSON
+# Expected exit code: 0
+
+- model:
+    name: Point
+    fields:
+      - [x, i32]
+      - [y, i32]
+
+- model:
+    name: Shape
+    fields:
+      - [name, string]
+      - [segments, list<list<Point>>]
+
+- def:
+    name: main
+    return: i32
+    body:
+      # Build Shape with two segments: [[{1,2},{3,4}], [{5,6}]]
+      - decl: [sh, Shape]
+      - set: [sh.name, "poly"]
+
+      - decl: [seg0, list<Point>]
+      - decl: [p0, Point]
+      - set: [p0.x, 1]
+      - set: [p0.y, 2]
+      - call: [seg0.push, p0]
+      - decl: [p1, Point]
+      - set: [p1.x, 3]
+      - set: [p1.y, 4]
+      - call: [seg0.push, p1]
+      - call: [sh.segments.push, seg0]
+
+      - decl: [seg1, list<Point>]
+      - decl: [p2, Point]
+      - set: [p2.x, 5]
+      - set: [p2.y, 6]
+      - call: [seg1.push, p2]
+      - call: [sh.segments.push, seg1]
+
+      # Serialize → JSON
+      - decl: [json, string, { call: [sys.serialize, sh, "Shape"] }]
+      - print: ["serialized=${json}"]
+
+      # Deserialize back
+      - decl: [sh2, Shape]
+      - set: [sh2, { call: [sys.deserialize, json, "Shape"] }]
+
+      - if:
+          condition: { neq: [sh2.name, "poly"] }
+          then:
+            - print: ["FAIL name=${sh2.name}"]
+            - call: [sys.exit, 1]
+
+      - if:
+          condition: { neq: [sh2.segments.len, 2] }
+          then:
+            - print: ["FAIL segments.len=${sh2.segments.len}"]
+            - call: [sys.exit, 1]
+
+      - decl: [gs0, list<Point>, { call: [sh2.segments.get, 0] }]
+      - if:
+          condition: { neq: [gs0.len, 2] }
+          then:
+            - print: ["FAIL gs0.len=${gs0.len}"]
+            - call: [sys.exit, 1]
+
+      - decl: [gp0, ptr<Point>, { call: [gs0.get, 0] }]
+      - if:
+          condition: { neq: [gp0.x, 1] }
+          then:
+            - print: ["FAIL gp0.x=${gp0.x}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { neq: [gp0.y, 2] }
+          then:
+            - print: ["FAIL gp0.y=${gp0.y}"]
+            - call: [sys.exit, 1]
+
+      - decl: [gp1, ptr<Point>, { call: [gs0.get, 1] }]
+      - if:
+          condition: { neq: [gp1.x, 3] }
+          then:
+            - print: ["FAIL gp1.x=${gp1.x}"]
+            - call: [sys.exit, 1]
+
+      - decl: [gs1, list<Point>, { call: [sh2.segments.get, 1] }]
+      - if:
+          condition: { neq: [gs1.len, 1] }
+          then:
+            - print: ["FAIL gs1.len=${gs1.len}"]
+            - call: [sys.exit, 1]
+
+      - decl: [gp2, ptr<Point>, { call: [gs1.get, 0] }]
+      - if:
+          condition: { neq: [gp2.x, 5] }
+          then:
+            - print: ["FAIL gp2.x=${gp2.x}"]
+            - call: [sys.exit, 1]
+
+      - print: ["list<list<Struct>> PASS"]
+      - return: 0

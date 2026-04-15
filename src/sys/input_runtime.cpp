@@ -134,76 +134,85 @@ static AimlInputState* g_input = nullptr;
 
 static int key_name_to_glfw(const char* name) {
     if (!name || !*name) return -1;
-    /* Single letters A-Z */
-    if (name[1] == '\0' && name[0] >= 'A' && name[0] <= 'Z')
-        return GLFW_KEY_A + (name[0] - 'A');
-    /* Digits 0-9 */
-    if (name[1] == '\0' && name[0] >= '0' && name[0] <= '9')
-        return GLFW_KEY_0 + (name[0] - '0');
+    /* Single letters a-z / A-Z */
+    if (name[1] == '\0') {
+        char c = name[0];
+        if (c >= 'A' && c <= 'Z') return GLFW_KEY_A + (c - 'A');
+        if (c >= 'a' && c <= 'z') return GLFW_KEY_A + (c - 'a');
+        if (c >= '0' && c <= '9') return GLFW_KEY_0 + (c - '0');
+    }
 
-    /* Named keys */
+    /* Named keys (case-insensitive lookup) */
     struct KV { const char* n; int k; };
     static const KV table[] = {
-        {"Space",       GLFW_KEY_SPACE},
-        {"Escape",      GLFW_KEY_ESCAPE},
-        {"Enter",       GLFW_KEY_ENTER},
-        {"Tab",         GLFW_KEY_TAB},
-        {"Backspace",   GLFW_KEY_BACKSPACE},
-        {"Delete",      GLFW_KEY_DELETE},
-        {"Insert",      GLFW_KEY_INSERT},
-        {"LShift",      GLFW_KEY_LEFT_SHIFT},
-        {"RShift",      GLFW_KEY_RIGHT_SHIFT},
-        {"Shift",       GLFW_KEY_LEFT_SHIFT},   /* alias */
-        {"LCtrl",       GLFW_KEY_LEFT_CONTROL},
-        {"RCtrl",       GLFW_KEY_RIGHT_CONTROL},
-        {"Ctrl",        GLFW_KEY_LEFT_CONTROL},
-        {"LAlt",        GLFW_KEY_LEFT_ALT},
-        {"RAlt",        GLFW_KEY_RIGHT_ALT},
-        {"Alt",         GLFW_KEY_LEFT_ALT},
-        {"Up",          GLFW_KEY_UP},
-        {"Down",        GLFW_KEY_DOWN},
-        {"Left",        GLFW_KEY_LEFT},
-        {"Right",       GLFW_KEY_RIGHT},
-        {"Home",        GLFW_KEY_HOME},
-        {"End",         GLFW_KEY_END},
-        {"PageUp",      GLFW_KEY_PAGE_UP},
-        {"PageDown",    GLFW_KEY_PAGE_DOWN},
-        {"F1",          GLFW_KEY_F1},
-        {"F2",          GLFW_KEY_F2},
-        {"F3",          GLFW_KEY_F3},
-        {"F4",          GLFW_KEY_F4},
-        {"F5",          GLFW_KEY_F5},
-        {"F6",          GLFW_KEY_F6},
-        {"F7",          GLFW_KEY_F7},
-        {"F8",          GLFW_KEY_F8},
-        {"F9",          GLFW_KEY_F9},
-        {"F10",         GLFW_KEY_F10},
-        {"F11",         GLFW_KEY_F11},
-        {"F12",         GLFW_KEY_F12},
-        {"Num0",        GLFW_KEY_KP_0},
-        {"Num1",        GLFW_KEY_KP_1},
-        {"Num2",        GLFW_KEY_KP_2},
-        {"Num3",        GLFW_KEY_KP_3},
-        {"Num4",        GLFW_KEY_KP_4},
-        {"Num5",        GLFW_KEY_KP_5},
-        {"Num6",        GLFW_KEY_KP_6},
-        {"Num7",        GLFW_KEY_KP_7},
-        {"Num8",        GLFW_KEY_KP_8},
-        {"Num9",        GLFW_KEY_KP_9},
-        {"NumAdd",      GLFW_KEY_KP_ADD},
-        {"NumSub",      GLFW_KEY_KP_SUBTRACT},
-        {"NumMul",      GLFW_KEY_KP_MULTIPLY},
-        {"NumDiv",      GLFW_KEY_KP_DIVIDE},
-        {"NumEnter",    GLFW_KEY_KP_ENTER},
-        {"NumDecimal",  GLFW_KEY_KP_DECIMAL},
-        {"CapsLock",    GLFW_KEY_CAPS_LOCK},
-        {"PrintScreen", GLFW_KEY_PRINT_SCREEN},
-        {"Pause",       GLFW_KEY_PAUSE},
-        {"Menu",        GLFW_KEY_MENU},
+        {"space",       GLFW_KEY_SPACE},
+        {"escape",      GLFW_KEY_ESCAPE},
+        {"enter",       GLFW_KEY_ENTER},
+        {"return",      GLFW_KEY_ENTER},        /* alias */
+        {"tab",         GLFW_KEY_TAB},
+        {"backspace",   GLFW_KEY_BACKSPACE},
+        {"delete",      GLFW_KEY_DELETE},
+        {"insert",      GLFW_KEY_INSERT},
+        {"lshift",      GLFW_KEY_LEFT_SHIFT},
+        {"rshift",      GLFW_KEY_RIGHT_SHIFT},
+        {"shift",       GLFW_KEY_LEFT_SHIFT},
+        {"lctrl",       GLFW_KEY_LEFT_CONTROL},
+        {"rctrl",       GLFW_KEY_RIGHT_CONTROL},
+        {"ctrl",        GLFW_KEY_LEFT_CONTROL},
+        {"lalt",        GLFW_KEY_LEFT_ALT},
+        {"ralt",        GLFW_KEY_RIGHT_ALT},
+        {"alt",         GLFW_KEY_LEFT_ALT},
+        {"up",          GLFW_KEY_UP},
+        {"down",        GLFW_KEY_DOWN},
+        {"left",        GLFW_KEY_LEFT},
+        {"right",       GLFW_KEY_RIGHT},
+        {"home",        GLFW_KEY_HOME},
+        {"end",         GLFW_KEY_END},
+        {"pageup",      GLFW_KEY_PAGE_UP},
+        {"pagedown",    GLFW_KEY_PAGE_DOWN},
+        {"f1",          GLFW_KEY_F1},
+        {"f2",          GLFW_KEY_F2},
+        {"f3",          GLFW_KEY_F3},
+        {"f4",          GLFW_KEY_F4},
+        {"f5",          GLFW_KEY_F5},
+        {"f6",          GLFW_KEY_F6},
+        {"f7",          GLFW_KEY_F7},
+        {"f8",          GLFW_KEY_F8},
+        {"f9",          GLFW_KEY_F9},
+        {"f10",         GLFW_KEY_F10},
+        {"f11",         GLFW_KEY_F11},
+        {"f12",         GLFW_KEY_F12},
+        {"num0",        GLFW_KEY_KP_0},
+        {"num1",        GLFW_KEY_KP_1},
+        {"num2",        GLFW_KEY_KP_2},
+        {"num3",        GLFW_KEY_KP_3},
+        {"num4",        GLFW_KEY_KP_4},
+        {"num5",        GLFW_KEY_KP_5},
+        {"num6",        GLFW_KEY_KP_6},
+        {"num7",        GLFW_KEY_KP_7},
+        {"num8",        GLFW_KEY_KP_8},
+        {"num9",        GLFW_KEY_KP_9},
+        {"numadd",      GLFW_KEY_KP_ADD},
+        {"numsub",      GLFW_KEY_KP_SUBTRACT},
+        {"nummul",      GLFW_KEY_KP_MULTIPLY},
+        {"numdiv",      GLFW_KEY_KP_DIVIDE},
+        {"numenter",    GLFW_KEY_KP_ENTER},
+        {"numdecimal",  GLFW_KEY_KP_DECIMAL},
+        {"capslock",    GLFW_KEY_CAPS_LOCK},
+        {"printscreen", GLFW_KEY_PRINT_SCREEN},
+        {"pause",       GLFW_KEY_PAUSE},
+        {"menu",        GLFW_KEY_MENU},
         {nullptr, -1}
     };
+    /* lowercase the input for comparison */
+    char lower[32];
+    int len = 0;
+    for (; name[len] && len < 31; len++)
+        lower[len] = (name[len] >= 'A' && name[len] <= 'Z')
+                   ? (char)(name[len] + 32) : name[len];
+    lower[len] = '\0';
     for (int i = 0; table[i].n; i++)
-        if (strcmp(name, table[i].n) == 0) return table[i].k;
+        if (strcmp(lower, table[i].n) == 0) return table[i].k;
     return -1;
 }
 

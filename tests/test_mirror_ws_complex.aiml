@@ -205,7 +205,7 @@
 - set: [has_ev, { call: [client.has_event] }]
 - print: ["client: has_event=${has_ev}"]
 - if:
-    condition: { "==": [has_ev, 0] }
+    condition: { eq: [has_ev, 0] }
     then:
       - print: ["FAIL no mirror event received over ws"]
       - call: [sys.exit, 1]
@@ -238,61 +238,61 @@
 - print: ["client: match_flag0=${mf0.name}/${mf0.enabled}"]
 
 - if:
-    condition: { "==": [{ eq: [m.match_id, "match-9r"] }, 0] }
+    condition: { eq: [{ eq: [m.match_id, "match-9r"] }, 0] }
     then:
       - print: ["FAIL match_id=${m.match_id}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [replica.participants.len, 2] }
+    condition: { neq: [replica.participants.len, 2] }
     then:
       - print: ["FAIL participants.len=${replica.participants.len}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [replica.zones.len, 2] }
+    condition: { neq: [replica.zones.len, 2] }
     then:
       - print: ["FAIL zones.len=${replica.zones.len}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [replica.card_instances.len, 1] }
+    condition: { neq: [replica.card_instances.len, 1] }
     then:
       - print: ["FAIL card_instances.len=${replica.card_instances.len}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "==": [{ eq: [p0.display_name, "Alice"] }, 0] }
+    condition: { eq: [{ eq: [p0.display_name, "Alice"] }, 0] }
     then:
       - print: ["FAIL p0.display_name=${p0.display_name}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [p0.hp, 26] }
+    condition: { neq: [p0.hp, 26] }
     then:
       - print: ["FAIL p0.hp=${p0.hp}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [p0c0.value, 3] }
+    condition: { neq: [p0c0.value, 3] }
     then:
       - print: ["FAIL p0 counter value=${p0c0.value}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "==": [{ eq: [z0.zone_id, "field_0"] }, 0] }
+    condition: { eq: [{ eq: [z0.zone_id, "field_0"] }, 0] }
     then:
       - print: ["FAIL z0.zone_id=${z0.zone_id}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "==": [{ eq: [zc0.instance_id, "ci-1"] }, 0] }
+    condition: { eq: [{ eq: [zc0.instance_id, "ci-1"] }, 0] }
     then:
       - print: ["FAIL zc0.instance_id=${zc0.instance_id}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "==": [{ eq: [ci0.display_name, "Fire Adept"] }, 0] }
+    condition: { eq: [{ eq: [ci0.display_name, "Fire Adept"] }, 0] }
     then:
       - print: ["FAIL ci0.display_name=${ci0.display_name}"]
       - call: [sys.exit, 1]
@@ -303,19 +303,19 @@
 - print: ["client: delta round=${m2.round} last_event=${m2.last_event} waiting=${m2.waiting_for_command}"]
 
 - if:
-    condition: { "!=": [m2.round, 8] }
+    condition: { neq: [m2.round, 8] }
     then:
       - print: ["FAIL delta round=${m2.round}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "==": [{ eq: [m2.last_event, "delta_round_8"] }, 0] }
+    condition: { eq: [{ eq: [m2.last_event, "delta_round_8"] }, 0] }
     then:
       - print: ["FAIL delta last_event=${m2.last_event}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [m2.waiting_for_command, 0] }
+    condition: { neq: [m2.waiting_for_command, 0] }
     then:
       - print: ["FAIL delta waiting_for_command=${m2.waiting_for_command}"]
       - call: [sys.exit, 1]

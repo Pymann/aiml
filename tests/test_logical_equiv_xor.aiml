@@ -1,0 +1,57 @@
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [t, bool, true]
+      - decl: [f, bool, false]
+
+      # equiv truth table
+      - decl: [e_tt, bool, { equiv: [t, t] }]
+      - decl: [e_tf, bool, { equiv: [t, f] }]
+      - decl: [e_ft, bool, { equiv: [f, t] }]
+      - decl: [e_ff, bool, { equiv: [f, f] }]
+      - if: [{ neq: [e_tt, 1] }, true]
+        then: [{ return: 1 }]
+      - if: [{ neq: [e_tf, 0] }, true]
+        then: [{ return: 2 }]
+      - if: [{ neq: [e_ft, 0] }, true]
+        then: [{ return: 3 }]
+      - if: [{ neq: [e_ff, 1] }, true]
+        then: [{ return: 4 }]
+
+      # xor truth table
+      - decl: [x_tt, bool, { xor: [t, t] }]
+      - decl: [x_tf, bool, { xor: [t, f] }]
+      - decl: [x_ft, bool, { xor: [f, t] }]
+      - decl: [x_ff, bool, { xor: [f, f] }]
+      - if: [{ neq: [x_tt, 0] }, true]
+        then: [{ return: 5 }]
+      - if: [{ neq: [x_tf, 1] }, true]
+        then: [{ return: 6 }]
+      - if: [{ neq: [x_ft, 1] }, true]
+        then: [{ return: 7 }]
+      - if: [{ neq: [x_ff, 0] }, true]
+        then: [{ return: 8 }]
+
+      # not alias
+      - decl: [nt, bool, { not: [t] }]
+      - decl: [nf, bool, { not: [f] }]
+      - if: [{ neq: [nt, 0] }, true]
+        then: [{ return: 9 }]
+      - if: [{ neq: [nf, 1] }, true]
+        then: [{ return: 10 }]
+
+      # equiv/xor with i32 coercion
+      - decl: [a, i32, 5]
+      - decl: [b, i32, 0]
+      - decl: [ec1, bool, { equiv: [a, a] }]
+      - decl: [ec2, bool, { equiv: [a, b] }]
+      - decl: [xc1, bool, { xor: [a, b] }]
+      - if: [{ neq: [ec1, 1] }, true]
+        then: [{ return: 11 }]
+      - if: [{ neq: [ec2, 0] }, true]
+        then: [{ return: 12 }]
+      - if: [{ neq: [xc1, 1] }, true]
+        then: [{ return: 13 }]
+
+      - return: 0

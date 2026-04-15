@@ -165,7 +165,7 @@
 - decl: [has_ev, i32]
 - set: [has_ev, { call: [client.has_event] }]
 - if:
-    condition: { "==": [has_ev, 0] }
+    condition: { eq: [has_ev, 0] }
     then:
       - print: ["FAIL mut: no object_registered event"]
       - call: [sys.exit, 1]
@@ -187,25 +187,25 @@
 - print: ["client-mut: zone0 count=${zz0.card_count} card_instances.len=${replica.card_instances.len}"]
 
 - if:
-    condition: { "!=": [pz1.hp, 17] }
+    condition: { neq: [pz1.hp, 17] }
     then:
       - print: ["FAIL mut: p1.hp=${pz1.hp}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [pz1.is_active, 1] }
+    condition: { neq: [pz1.is_active, 1] }
     then:
       - print: ["FAIL mut: p1.is_active=${pz1.is_active}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [zz0.card_count, 2] }
+    condition: { neq: [zz0.card_count, 2] }
     then:
       - print: ["FAIL mut: zz0.card_count=${zz0.card_count}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [replica.card_instances.len, 4] }
+    condition: { neq: [replica.card_instances.len, 4] }
     then:
       - print: ["FAIL mut: card_instances.len=${replica.card_instances.len}"]
       - call: [sys.exit, 1]
@@ -221,13 +221,13 @@
 - print: ["client-mut: card3=${last_card_name}/${last_card_attack}"]
 
 - if:
-    condition: { "==": [{ eq: [last_ref_ptr.instance_id, "ci-4"] }, 0] }
+    condition: { eq: [{ eq: [last_ref_ptr.instance_id, "ci-4"] }, 0] }
     then:
       - print: ["FAIL mut: last_ref_ptr.instance_id mismatch"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "==": [{ eq: [cc_last_ptr.display_name, "Dragon"] }, 0] }
+    condition: { eq: [{ eq: [cc_last_ptr.display_name, "Dragon"] }, 0] }
     then:
       - print: ["FAIL mut: cc_last_ptr.display_name mismatch"]
       - call: [sys.exit, 1]
@@ -241,13 +241,13 @@
 - print: ["client-mut: post-rpc round=${m1.round} last_event=${m1.last_event} waiting=${m1.waiting_for_command}"]
 
 - if:
-    condition: { "==": [{ eq: [m1.last_event, "rpc_select_42"] }, 0] }
+    condition: { eq: [{ eq: [m1.last_event, "rpc_select_42"] }, 0] }
     then:
       - print: ["FAIL mut: post-rpc last_event=${m1.last_event}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [m1.waiting_for_command, 0] }
+    condition: { neq: [m1.waiting_for_command, 0] }
     then:
       - print: ["FAIL mut: waiting_for_command=${m1.waiting_for_command}"]
       - call: [sys.exit, 1]

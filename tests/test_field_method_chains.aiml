@@ -1,0 +1,62 @@
+# Regression target: chained field-method calls should work.
+# Expected exit code: 0
+
+- model:
+    name: Stats
+    fields:
+      - [cost, map<string:i32>]
+
+- model:
+    name: Node
+    fields:
+      - [stats, Stats]
+
+- model:
+    name: Root
+    fields:
+      - [nodes, list<Node>]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [json, string, '{"__type":"Root","nodes":[{"stats":{"cost":{"1":2,"3":1}}}] }']
+      - decl: [root, Root]
+      - set: [root, { call: [sys.deserialize, json, "Root"] }]
+
+      - if:
+          condition: { neq: [root.nodes.len, 1] }
+          then:
+            - print: ["FAIL nodes_len_prop=${root.nodes.len}"]
+            - call: [sys.exit, 1]
+
+      - decl: [nodes_len_m, i32, { call: [root.nodes.len] }]
+      - if:
+          condition: { neq: [nodes_len_m, 1] }
+          then:
+            - print: ["FAIL nodes_len_method=${nodes_len_m}"]
+            - call: [sys.exit, 1]
+
+      - decl: [cost_len, i32, { call: [root.nodes-0.stats.cost.len] }]
+      - if:
+          condition: { neq: [cost_len, 2] }
+          then:
+            - print: ["FAIL cost_len=${cost_len}"]
+            - call: [sys.exit, 1]
+
+      - decl: [fire_amt, i32, { call: [root.nodes-0.stats.cost.get, "1"] }]
+      - if:
+          condition: { neq: [fire_amt, 2] }
+          then:
+            - print: ["FAIL fire_amt=${fire_amt}"]
+            - call: [sys.exit, 1]
+
+      - decl: [shadow_amt, i32, { call: [root.nodes-0.stats.cost.get, "3"] }]
+      - if:
+          condition: { neq: [shadow_amt, 1] }
+          then:
+            - print: ["FAIL shadow_amt=${shadow_amt}"]
+            - call: [sys.exit, 1]
+
+      - print: ["field method chains PASS"]
+      - return: 0

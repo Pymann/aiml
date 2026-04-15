@@ -12,7 +12,7 @@
     body:
       - decl: [db_path, path, "/tmp/aiml_test_aiondb_store_reopen_20260319/"]
       - if:
-          condition: { "==": [{ call: [db_path.exists] }, 0] }
+          condition: { eq: [{ call: [db_path.exists] }, 0] }
           then:
             - print: ["SKIP store_reopen_read (run test_aiondb_store_reopen_write.aiml first)"]
             - return: 0
@@ -23,7 +23,7 @@
       - decl: [n, i32]
       - set: [n, { call: [players.len] }]
       - if:
-          condition: { "!=": [n, 1] }
+          condition: { neq: [n, 1] }
           then:
             - print: ["FAIL store_reopen_read_len=${n}"]
             - call: [sys.exit, 1]
@@ -31,12 +31,12 @@
       - decl: [p, ptr<ReopenPlayer>]
       - set: [p, { call: [players.get, 1] }]
       - if:
-          condition: { "!=": [p.score, 456] }
+          condition: { neq: [p.score, 456] }
           then:
             - print: ["FAIL store_reopen_read_score=${p.score}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "!=": [p.level, 9] }
+          condition: { neq: [p.level, 9] }
           then:
             - print: ["FAIL store_reopen_read_level=${p.level}"]
             - call: [sys.exit, 1]

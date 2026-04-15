@@ -132,6 +132,36 @@
 - set: [proc, { call: [sys.exe, args, {}] }]
 ```
 
+## 6. Memory Management
+
+```yaml
+# sys.mem_limit(bytes: i64)
+# Sets a virtual memory limit (RLIMIT_AS) for the entire process.
+# When the limit is exceeded, malloc fails and the process is terminated
+# with a diagnostic instead of freezing the machine (OOM/swap thrashing).
+# Pass 0 to remove the limit.
+- decl: [limit, i64, 4096]
+- set: [limit, { "*": [limit, 1048576] }]   # 4 GB
+- call: [sys.mem_limit, limit]
+
+# sys.mem_usage() -> i64
+# Returns the current RSS (Resident Set Size) in bytes.
+# Useful for monitoring memory consumption at runtime.
+- decl: [rss, i64, { call: [sys.mem_usage] }]
+- decl: [rss_mb, i64, { /: [rss, 1048576] }]
+- print: ["Current memory: ${rss_mb} MB"]
+
+# Remove limit
+- call: [sys.mem_limit, 0]
+```
+
+### Platform Notes
+
+- `sys.mem_limit` uses `setrlimit(RLIMIT_AS)` on Linux. Sets the soft limit
+  only; hard limit is preserved so the limit can be removed later.
+- `sys.mem_usage` reads `/proc/self/statm` on Linux (RSS in pages × page size).
+- On unsupported platforms, `mem_limit` prints a warning and `mem_usage` returns 0.
+
 ## File I/O Failure Semantics
 
 - `io.open(...)` returns `null` on failure.

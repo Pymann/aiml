@@ -165,25 +165,25 @@
 - print: ["poll-mut: p1 hp=${pz1.hp} active=${pz1.is_active} zone0=${zz0.card_count} cards=${replica.card_instances.len}"]
 
 - if:
-    condition: { "!=": [pz1.hp, 17] }
+    condition: { neq: [pz1.hp, 17] }
     then:
       - print: ["FAIL poll-mut: p1.hp=${pz1.hp}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [pz1.is_active, 1] }
+    condition: { neq: [pz1.is_active, 1] }
     then:
       - print: ["FAIL poll-mut: p1.is_active=${pz1.is_active}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [zz0.card_count, 2] }
+    condition: { neq: [zz0.card_count, 2] }
     then:
       - print: ["FAIL poll-mut: zz0.card_count=${zz0.card_count}"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { "!=": [replica.card_instances.len, 4] }
+    condition: { neq: [replica.card_instances.len, 4] }
     then:
       - print: ["FAIL poll-mut: card_instances.len=${replica.card_instances.len}"]
       - call: [sys.exit, 1]

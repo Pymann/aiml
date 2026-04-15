@@ -19,7 +19,7 @@
 # ── Phase A: GLFW initialisieren und Fenster öffnen ───────────────────────────
 
 - decl: [ok, i32, { call: [glfwInit] }]
-- if: [{ ==: [ok, 0] }, true]
+- if: [{ eq: [ok, 0] }, true]
   then:
     - print: ["FAIL: glfwInit failed"]
     - call: [sys.exit, 1]
@@ -31,7 +31,7 @@
 
 - decl: [win, ptr, { call: [glfwCreateWindow, 800, 600, "AIML — weißer Würfel", null, null] }]
 
-- if: [{ ==: [win, null] }, true]
+- if: [{ eq: [win, null] }, true]
   then:
     - print: ["FAIL: glfwCreateWindow failed"]
     - call: [glfwTerminate]

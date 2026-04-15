@@ -1,0 +1,161 @@
+# Tests for operator rework: eq/neq/lt/gt/lte/gte/peq/pneq + __eq__ overload
+# Expected exit code: 0
+
+# ── Phase A: eq / neq (integer) ───────────────────────────────────────────────
+
+- decl: [a, i32, 5]
+- decl: [b, i32, 5]
+- decl: [c, i32, 7]
+
+- if:
+    condition: { neq: [a, b] }
+    then:
+      - print: ["FAIL A1: eq integer"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { eq: [a, c] }
+    then:
+      - print: ["FAIL A2: neq integer"]
+      - call: [sys.exit, 1]
+
+- print: ["A ok: eq/neq integer"]
+
+# ── Phase B: eq / neq (string content) ────────────────────────────────────────
+
+- decl: [s1, string, "hello"]
+- decl: [s2, string, "hello"]
+- decl: [s3, string, "world"]
+
+- if:
+    condition: { neq: [s1, s2] }
+    then:
+      - print: ["FAIL B1: eq string content"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { eq: [s1, s3] }
+    then:
+      - print: ["FAIL B2: neq string content"]
+      - call: [sys.exit, 1]
+
+- print: ["B ok: eq/neq string"]
+
+# ── Phase C: lt / gt / lte / gte ─────────────────────────────────────────────
+
+- decl: [x, i32, 3]
+- decl: [y, i32, 7]
+
+- if:
+    condition: { gt: [x, y] }
+    then:
+      - print: ["FAIL C1: lt"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { lt: [y, x] }
+    then:
+      - print: ["FAIL C2: gt"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { gte: [x, y] }
+    then:
+      - print: ["FAIL C3: lte"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { lte: [y, x] }
+    then:
+      - print: ["FAIL C4: gte"]
+      - call: [sys.exit, 1]
+
+# boundary: x lte x (should be true — if x > x that is false, so no fail)
+- if:
+    condition: { gt: [x, x] }
+    then:
+      - print: ["FAIL C5: lte equal"]
+      - call: [sys.exit, 1]
+
+# boundary: x gte x (should be true — if x < x that is false, so no fail)
+- if:
+    condition: { lt: [x, x] }
+    then:
+      - print: ["FAIL C6: gte equal"]
+      - call: [sys.exit, 1]
+
+- print: ["C ok: lt/gt/lte/gte"]
+
+# ── Phase D: peq / pneq (pointer identity) ────────────────────────────────────
+
+- decl: [p1, string, "same"]
+- decl: [p2, string, "same"]
+- decl: [p3, string, "other"]
+
+# p1 eq p2 => true (content)  but peq may differ (different alloca/ptrs)
+# peq p1 p1 must be true (same pointer)
+- if:
+    condition: { pneq: [p1, p1] }
+    then:
+      - print: ["FAIL D1: peq self"]
+      - call: [sys.exit, 1]
+
+# pneq p1 p3 should be true (different allocations)
+- if:
+    condition: { peq: [p1, p3] }
+    then:
+      - print: ["FAIL D2: pneq different"]
+      - call: [sys.exit, 1]
+
+- print: ["D ok: peq/pneq"]
+
+# ── Phase E: __eq__ overload on class ─────────────────────────────────────────
+
+- class:
+    name: Point
+    members:
+      - [px, i32]
+      - [py, i32]
+    methods:
+      - def:
+          name: __eq__
+          args: [[other, ptr<Point>]]
+          return: i32
+          body:
+            - if:
+                condition: { neq: [<.px, other.px] }
+                then:
+                  - return: [0]
+            - if:
+                condition: { neq: [<.py, other.py] }
+                then:
+                  - return: [0]
+            - return: [1]
+
+- decl: [pt1, Point]
+- set: [pt1.px, 3]
+- set: [pt1.py, 4]
+
+- decl: [pt2, Point]
+- set: [pt2.px, 3]
+- set: [pt2.py, 4]
+
+- decl: [pt3, Point]
+- set: [pt3.px, 1]
+- set: [pt3.py, 2]
+
+- if:
+    condition: { neq: [pt1, pt2] }
+    then:
+      - print: ["FAIL E1: __eq__ same values"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { eq: [pt1, pt3] }
+    then:
+      - print: ["FAIL E2: __eq__ different values"]
+      - call: [sys.exit, 1]
+
+- print: ["E ok: __eq__ overload"]
+
+- print: ["All operator tests passed."]

@@ -17,6 +17,35 @@
 #include "../../logger.h"
 #include <iostream>
 #include <yaml-cpp/yaml.h>
+#include <algorithm>
+#include <unordered_set>
+
+namespace {
+bool isAllOf(const std::string& op, char c) {
+    return !op.empty() && std::all_of(op.begin(), op.end(), [c](char ch) { return ch == c; });
+}
+
+bool isStrictUnaryOnlyOperator(const std::string& op) {
+    if (op == "!" || op == "not" || op == "&") return true;
+    if (isAllOf(op, '?')) return true;
+    // && is ambiguous because it is also the binary logical-and spelling.
+    if (op.size() > 2 && isAllOf(op, '&')) return true;
+    return false;
+}
+
+bool isKnownBinaryOperator(const std::string& op) {
+    static const std::unordered_set<std::string> kBinaryOps = {
+        "+", "-", "*", "/", "%", "add", "sub", "mul", "div",
+        "eq", "neq", "lt", "gt", "le", "lte", "ge", "gte", "peq", "pneq",
+        "and", "&&", "or", "||", "equiv", "xor"
+    };
+    return kBinaryOps.count(op) > 0;
+}
+
+bool isVariadicFoldBinaryOperator(const std::string& op) {
+    return op == "+" || op == "*" || op == "add" || op == "mul";
+}
+}
 
 namespace AIML {
 namespace AST {
@@ -82,9 +111,29 @@ std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node) {
             return std::make_unique<UnaryExpr>(op, nodeToExpr(argsNode[0]));
         }
 
+        if (argsNode.IsSequence() && argsNode.size() > 1 && isStrictUnaryOnlyOperator(op)) {
+            size_t line = node.Mark().line + 1;
+            LOG_ERROR("line " + std::to_string(line) + ": Unary operator '" + op +
+                      "' expects exactly 1 operand, got " + std::to_string(argsNode.size()) + ".");
+            return nullptr;
+        }
+
         // Binary operators
         if (argsNode.IsSequence() && argsNode.size() == 2) {
              return std::make_unique<BinaryExpr>(op, nodeToExpr(argsNode[0]), nodeToExpr(argsNode[1]));
+        }
+        if (argsNode.IsSequence() && argsNode.size() > 2 && isKnownBinaryOperator(op)) {
+            size_t line = node.Mark().line + 1;
+            if (isVariadicFoldBinaryOperator(op)) {
+                auto acc = std::make_unique<BinaryExpr>(op, nodeToExpr(argsNode[0]), nodeToExpr(argsNode[1]));
+                for (size_t i = 2; i < argsNode.size(); ++i) {
+                    acc = std::make_unique<BinaryExpr>(op, std::move(acc), nodeToExpr(argsNode[i]));
+                }
+                return acc;
+            }
+            LOG_ERROR("line " + std::to_string(line) + ": Binary operator '" + op +
+                      "' expects exactly 2 operands, got " + std::to_string(argsNode.size()) + ".");
+            return nullptr;
         }
 
         // Unrecognised map (e.g. option bags like {context: true}) → DictLiteralExpr.
@@ -216,12 +265,14 @@ void Builder::OnNull(const YAML::Mark&, YAML::anchor_t) {
     stateStack.top()->OnScalar("null", "null");
 }
 
-void Builder::OnScalar(const YAML::Mark&, const std::string& tag, YAML::anchor_t, const std::string& value) {
+void Builder::OnScalar(const YAML::Mark& mark, const std::string& tag, YAML::anchor_t, const std::string& value) {
+    currentLine = mark.line + 1; // YAML marks are 0-based; store 1-based
     LOG_DEBUG("Router OnScalar: " + value);
     stateStack.top()->OnScalar(value, tag);
 }
 
-void Builder::OnSequenceStart(const YAML::Mark&, const std::string&, YAML::anchor_t, YAML::EmitterStyle::value) {
+void Builder::OnSequenceStart(const YAML::Mark& mark, const std::string&, YAML::anchor_t, YAML::EmitterStyle::value) {
+    currentLine = mark.line + 1;
     LOG_DEBUG("Router OnSequenceStart");
     stateStack.top()->OnSequenceStart();
 }
@@ -231,7 +282,8 @@ void Builder::OnSequenceEnd() {
     stateStack.top()->OnSequenceEnd();
 }
 
-void Builder::OnMapStart(const YAML::Mark&, const std::string&, YAML::anchor_t, YAML::EmitterStyle::value) {
+void Builder::OnMapStart(const YAML::Mark& mark, const std::string&, YAML::anchor_t, YAML::EmitterStyle::value) {
+    currentLine = mark.line + 1;
     LOG_DEBUG("Router OnMapStart");
     stateStack.top()->OnMapStart();
 }

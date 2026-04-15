@@ -100,7 +100,7 @@ for TEST in $TEST_FILES; do
 
     # Run the test, capture stdout and stderr, and append to the output file
     # Allow the script to continue even if the command fails
-    $AIML_BIN -r "$TEST" >> "$OUTPUT_FILE" 2>&1
+    $AIML_BIN "$TEST" >> "$OUTPUT_FILE" 2>&1
     
     # Capture the exit code
     EXIT_CODE=$?

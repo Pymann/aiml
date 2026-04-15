@@ -1,0 +1,84 @@
+# Test: VecStore persistence (WAL write + checkpoint + search)
+# Expected exit code: 0
+# NOTE: run with clean dir: rm -rf /tmp/test_vec_persist_db && ./out/aiml/aiml -r tests/test_vec_persist.aiml
+
+- decl: [pass, i32, 0]
+- decl: [fail, i32, 0]
+
+# ── Phase A: Insert + Checkpoint ─────────────────────────────────────────────
+
+- decl: [vs, VecStore]
+- set: [vs, { call: [db.open_vec, "tvec", 3, {persist: true, path: "/tmp/test_vec_persist_db/"}] }]
+
+# Insert doc1 = [1, 0, 0]
+- decl: [v1, list<f32>]
+- call: [v1.push, 1.0]
+- call: [v1.push, 0.0]
+- call: [v1.push, 0.0]
+- call: [vs.insert, "doc1", v1]
+
+# Insert doc2 = [0, 1, 0]
+- decl: [v2, list<f32>]
+- call: [v2.push, 0.0]
+- call: [v2.push, 1.0]
+- call: [v2.push, 0.0]
+- call: [vs.insert, "doc2", v2]
+
+# Insert doc3 = [0, 0, 1]
+- decl: [v3, list<f32>]
+- call: [v3.push, 0.0]
+- call: [v3.push, 0.0]
+- call: [v3.push, 1.0]
+- call: [vs.insert, "doc3", v3]
+
+# len == 3
+- decl: [n, i32]
+- set: [n, { call: [vs.len] }]
+- if:
+    condition: { eq: [n, 3] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL len=${n} expected 3"] }]
+
+# checkpoint
+- decl: [rc, i32]
+- set: [rc, { call: [db.checkpoint] }]
+- if:
+    condition: { eq: [rc, 0] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL checkpoint rc=${rc}"] }]
+
+# ── Phase B: Search (data in memory + WAL written) ──────────────────────────
+
+- decl: [q, list<f32>]
+- call: [q.push, 1.0]
+- call: [q.push, 0.0]
+- call: [q.push, 0.0]
+
+- decl: [results, list<ptr<VecResult>>]
+- set: [results, { call: [vs.search, q, 2] }]
+
+- decl: [r, ptr<VecResult>]
+- set: [r, { call: [results.get, 0] }]
+- if:
+    condition: { eq: [r.id, "doc1"] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL top result=${r.id} expected doc1"] }]
+
+# ── Phase C: Verify WAL file exists ─────────────────────────────────────────
+
+- decl: [wal_exists, i32]
+- decl: [wal_path, path]
+- set: [wal_path, { call: [path.from_string, "/tmp/test_vec_persist_db/tvec.vecwal"] }]
+- set: [wal_exists, { call: [wal_path.exists] }]
+- if:
+    condition: { eq: [wal_exists, 1] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL vecwal file not found"] }]
+
+# ── Result ───────────────────────────────────────────────────────────────────
+
+- print: ["vec_persist: ${pass} passed, ${fail} failed"]
+- if:
+    condition: { eq: [fail, 0] }
+    then: [{ call: [sys.exit, 0] }]
+    else: [{ call: [sys.exit, 1] }]

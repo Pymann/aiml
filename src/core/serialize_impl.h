@@ -36,7 +36,8 @@ bool isSerializable(CompilerContext& ctx, const std::string& typeName);
 /// Always returns llvm::Value* of type i8*.
 llvm::Value* serialize(CompilerContext& ctx,
                        llvm::Value*        val,
-                       const std::string&  typeName);
+                       const std::string&  typeName,
+                       llvm::Value*        stylePtr = nullptr);
 
 /// Deserialise a JSON/plain string to a value of typeName.
 ///

@@ -15,14 +15,16 @@ class StatementBuilder : public StateHandler {
     std::string type;
     std::vector<std::pair<std::string, std::string>> args;
     std::unique_ptr<Expr> exprArg;
+    std::vector<std::unique_ptr<Expr>> exprArgs; // for call: multiple nested expr args
     bool expectingValue = false;
     bool is_const = false;
     bool is_volatile = false;
     bool is_extern = false;
     int seqDepth = 0;       // nesting depth of sequences seen
     int innerSeqStart = -1; // args[] index where inner sequence elements begin
+    int capturedLine = -1;  // 1-based line of this statement in the AIML source
 public:
-    StatementBuilder(Builder* b, std::string t) : StateHandler(b), type(t) {}
+    StatementBuilder(Builder* b, std::string t) : StateHandler(b), type(t), capturedLine(b->currentLine) {}
     bool OnSequenceStart() override;
     bool OnSequenceEnd() override;
     bool OnScalar(const std::string& value, const std::string& tag) override;

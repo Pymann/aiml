@@ -80,7 +80,7 @@
 - set:  [sw1, { call: [s.starts_with, "Bearer "] }]
 - print: ["starts_with Bearer: ${sw1}"]
 - if:
-    condition: { "==": [sw1, 1] }
+    condition: { eq: [sw1, 1] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL starts_with true"] }]
 
@@ -88,7 +88,7 @@
 - set:  [sw2, { call: [s.starts_with, "Token "] }]
 - print: ["starts_with Token: ${sw2}"]
 - if:
-    condition: { "==": [sw2, 0] }
+    condition: { eq: [sw2, 0] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL starts_with false"] }]
 
@@ -96,7 +96,7 @@
 - set:  [sw3, { call: [s.starts_with, ""] }]
 - print: ["starts_with empty: ${sw3}"]
 - if:
-    condition: { "==": [sw3, 1] }
+    condition: { eq: [sw3, 1] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL starts_with empty"] }]
 
@@ -104,7 +104,7 @@
 - set:  [sw4, { call: [s.starts_with, "Bearer abc123"] }]
 - print: ["starts_with full string: ${sw4}"]
 - if:
-    condition: { "==": [sw4, 1] }
+    condition: { eq: [sw4, 1] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL starts_with full"] }]
 
@@ -112,7 +112,7 @@
 - set:  [sw5, { call: [s.starts_with, "Bearer abc1234"] }]
 - print: ["starts_with longer string: ${sw5}"]
 - if:
-    condition: { "==": [sw5, 0] }
+    condition: { eq: [sw5, 0] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL starts_with longer"] }]
 
@@ -120,7 +120,7 @@
 - set:  [sw6, { call: [empty_s.starts_with, ""] }]
 - print: ["empty starts_with empty: ${sw6}"]
 - if:
-    condition: { "==": [sw6, 1] }
+    condition: { eq: [sw6, 1] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL empty starts_with empty"] }]
 
@@ -128,7 +128,7 @@
 - set:  [sw7, { call: [empty_s.starts_with, "x"] }]
 - print: ["empty starts_with x: ${sw7}"]
 - if:
-    condition: { "==": [sw7, 0] }
+    condition: { eq: [sw7, 0] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL empty starts_with x"] }]
 
@@ -138,7 +138,7 @@
 - set:  [idx1, { call: [s.index_of, "abc"] }]
 - print: ["index_of abc: ${idx1}"]
 - if:
-    condition: { "==": [idx1, 7] }
+    condition: { eq: [idx1, 7] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL index_of found"] }]
 
@@ -146,7 +146,7 @@
 - set:  [idx2, { call: [s.index_of, "xyz"] }]
 - print: ["index_of xyz: ${idx2}"]
 - if:
-    condition: { "==": [idx2, -1] }
+    condition: { eq: [idx2, -1] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL index_of not found"] }]
 
@@ -154,7 +154,7 @@
 - set:  [idx3, { call: [s.index_of, "Bearer"] }]
 - print: ["index_of Bearer: ${idx3}"]
 - if:
-    condition: { "==": [idx3, 0] }
+    condition: { eq: [idx3, 0] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL index_of prefix"] }]
 
@@ -162,7 +162,7 @@
 - set:  [idx4, { call: [s.index_of, "123"] }]
 - print: ["index_of 123: ${idx4}"]
 - if:
-    condition: { "==": [idx4, 10] }
+    condition: { eq: [idx4, 10] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL index_of suffix"] }]
 
@@ -170,7 +170,7 @@
 - set:  [idx5, { call: [s.index_of, " "] }]
 - print: ["index_of space: ${idx5}"]
 - if:
-    condition: { "==": [idx5, 6] }
+    condition: { eq: [idx5, 6] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL index_of space"] }]
 
@@ -178,7 +178,7 @@
 - set:  [idx6, { call: [s.index_of, "a"] }]
 - print: ["index_of a: ${idx6}"]
 - if:
-    condition: { "==": [idx6, 2] }
+    condition: { eq: [idx6, 2] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL index_of single char"] }]
 
@@ -186,7 +186,7 @@
 - set:  [idx7, { call: [s.index_of, ""] }]
 - print: ["index_of empty: ${idx7}"]
 - if:
-    condition: { "==": [idx7, 0] }
+    condition: { eq: [idx7, 0] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL index_of empty"] }]
 
@@ -194,7 +194,7 @@
 - set:  [idx8, { call: [empty_s.index_of, ""] }]
 - print: ["empty index_of empty: ${idx8}"]
 - if:
-    condition: { "==": [idx8, 0] }
+    condition: { eq: [idx8, 0] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL empty index_of empty"] }]
 
@@ -202,15 +202,124 @@
 - set:  [idx9, { call: [empty_s.index_of, "x"] }]
 - print: ["empty index_of x: ${idx9}"]
 - if:
-    condition: { "==": [idx9, -1] }
+    condition: { eq: [idx9, -1] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL empty index_of x"] }]
+
+# ── parse_i32 ──────────────────────────────────────────────────────────────
+
+- decl: [pi1, string, "42"]
+- decl: [pi1_val, i32, { call: [pi1.parse_i32] }]
+- print: ["parse_i32 '42': ${pi1_val}"]
+- if:
+    condition: { eq: [pi1_val, 42] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL parse_i32 42"] }]
+
+- decl: [pi2, string, "-7"]
+- decl: [pi2_val, i32, { call: [pi2.parse_i32] }]
+- print: ["parse_i32 '-7': ${pi2_val}"]
+- if:
+    condition: { eq: [pi2_val, -7] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL parse_i32 -7"] }]
+
+- decl: [pi3, string, "0"]
+- decl: [pi3_val, i32, { call: [pi3.parse_i32] }]
+- print: ["parse_i32 '0': ${pi3_val}"]
+- if:
+    condition: { eq: [pi3_val, 0] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL parse_i32 0"] }]
+
+- decl: [pi4, string, "hello"]
+- decl: [pi4_val, i32, { call: [pi4.parse_i32] }]
+- print: ["parse_i32 'hello': ${pi4_val}"]
+- if:
+    condition: { eq: [pi4_val, 0] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL parse_i32 non-numeric"] }]
+
+- decl: [pi5, string, "  123  "]
+- decl: [pi5_val, i32, { call: [pi5.parse_i32] }]
+- print: ["parse_i32 '  123  ': ${pi5_val}"]
+- if:
+    condition: { eq: [pi5_val, 123] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL parse_i32 whitespace"] }]
+
+- decl: [pi6, string, ""]
+- decl: [pi6_val, i32, { call: [pi6.parse_i32] }]
+- print: ["parse_i32 '': ${pi6_val}"]
+- if:
+    condition: { eq: [pi6_val, 0] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL parse_i32 empty"] }]
+
+# ── parse_f32 ──────────────────────────────────────────────────────────────
+
+- decl: [pf1, string, "3.14"]
+- decl: [pf1_val, f32, { call: [pf1.parse_f32] }]
+- print: ["parse_f32 '3.14': ${pf1_val}"]
+# Check: 3.13 < pf1_val < 3.15 (float precision)
+- if:
+    condition: { "&&": [{ ">": [pf1_val, 3.13] }, { "<": [pf1_val, 3.15] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL parse_f32 3.14"] }]
+
+- decl: [pf2, string, "-0.5"]
+- decl: [pf2_val, f32, { call: [pf2.parse_f32] }]
+- print: ["parse_f32 '-0.5': ${pf2_val}"]
+- if:
+    condition: { "&&": [{ ">": [pf2_val, -0.51] }, { "<": [pf2_val, -0.49] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL parse_f32 -0.5"] }]
+
+- decl: [pf3, string, "0.0"]
+- decl: [pf3_val, f32, { call: [pf3.parse_f32] }]
+- print: ["parse_f32 '0.0': ${pf3_val}"]
+- if:
+    condition: { "&&": [{ ">=": [pf3_val, -0.01] }, { "<=": [pf3_val, 0.01] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL parse_f32 0.0"] }]
+
+- decl: [pf4, string, "abc"]
+- decl: [pf4_val, f32, { call: [pf4.parse_f32] }]
+- print: ["parse_f32 'abc': ${pf4_val}"]
+- if:
+    condition: { "&&": [{ ">=": [pf4_val, -0.01] }, { "<=": [pf4_val, 0.01] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL parse_f32 non-numeric"] }]
+
+- decl: [pf5, string, ""]
+- decl: [pf5_val, f32, { call: [pf5.parse_f32] }]
+- print: ["parse_f32 '': ${pf5_val}"]
+- if:
+    condition: { "&&": [{ ">=": [pf5_val, -0.01] }, { "<=": [pf5_val, 0.01] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL parse_f32 empty"] }]
+
+- decl: [pf6, string, "1.5e2"]
+- decl: [pf6_val, f32, { call: [pf6.parse_f32] }]
+- print: ["parse_f32 '1.5e2': ${pf6_val}"]
+- if:
+    condition: { "&&": [{ ">": [pf6_val, 149.0] }, { "<": [pf6_val, 151.0] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL parse_f32 scientific"] }]
+
+- decl: [pf7, string, "100"]
+- decl: [pf7_val, f32, { call: [pf7.parse_f32] }]
+- print: ["parse_f32 '100': ${pf7_val}"]
+- if:
+    condition: { "&&": [{ ">": [pf7_val, 99.0] }, { "<": [pf7_val, 101.0] }] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL parse_f32 integer string"] }]
 
 # ── Result ───────────────────────────────────────────────────────────────────
 
 - print: ["string methods: ${pass} passed, ${fail} failed"]
 - if:
-    condition: { "==": [fail, 0] }
+    condition: { eq: [fail, 0] }
     then:
       - call: [sys.exit, 0]
     else:

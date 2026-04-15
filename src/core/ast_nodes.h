@@ -17,7 +17,9 @@ public:
     virtual std::string toString() const = 0;
     
     // Original YAML node for exact line numbers/error reporting
-    YAML::Node sourceNode; 
+    YAML::Node sourceNode;
+    // 1-based line number in the AIML source file (-1 = unknown)
+    int sourceLine = -1;
 };
 
 // --- Expressions (Evaluate to a value) ---
@@ -100,6 +102,17 @@ public:
     std::string toString() const override { return "Spawn(" + functionName + ")"; }
 };
 
+// Index expression: { at: [container, idx1, idx2, ...] }
+// Works for array<T:N> (GEP), list<T> (bounds-checked get), tensor (tensor_get).
+class AtExpr : public Expr {
+public:
+    std::unique_ptr<Expr> container;
+    std::vector<std::unique_ptr<Expr>> indices;
+
+    AtExpr() {}
+    std::string toString() const override { return "At(...)"; }
+};
+
 // Sequence literal used as buffer<T> initializer: decl: [buf, buffer<f32>, [v1, v2, ...]]
 // Compiler expands each element into a BufferImpl::write call.
 class BufferLiteralExpr : public Expr {
@@ -152,6 +165,18 @@ public:
 
     SetStmt(std::string t, std::unique_ptr<Expr> v) : target(t), value(std::move(v)) {}
     std::string toString() const override { return "Set(" + target + " = ...)"; }
+};
+
+// idx: [container, idx1, ..., idxN, value]  — indexed write
+// Last arg is the value, first is container, rest are indices.
+class IdxStmt : public Stmt {
+public:
+    std::string container;
+    std::vector<std::unique_ptr<Expr>> indices;
+    std::unique_ptr<Expr> value;
+
+    IdxStmt(std::string c) : container(c) {}
+    std::string toString() const override { return "Idx(" + container + "[...] = ...)"; }
 };
 
 class ExprStmt : public Stmt {
@@ -229,6 +254,7 @@ public:
     uint64_t    version = 1;  // Hot-Reload version (default 1)
     std::vector<std::pair<std::string, std::string>> args; // name, type
     std::unique_ptr<BlockStmt> body;
+    std::vector<std::string> staticOff; // disabled static checks, e.g. "lines"
 
     std::string toString() const override { return "FunctionDecl(" + name + ")"; }
 };

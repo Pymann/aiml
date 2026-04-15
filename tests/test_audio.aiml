@@ -27,7 +27,7 @@
 
 # B1: create_group returns non-null
 - decl: [music_grp, audio_group, { call: [audio.create_group] }]
-- if:   [{ "!=": [music_grp, 0] }, true]
+- if:   [{ neq: [music_grp, 0] }, true]
   then:
     - print: ["B1 ok"]
   else:
@@ -35,7 +35,7 @@
     - call:  [sys.exit, 1]
 
 - decl: [sfx_grp, audio_group, { call: [audio.create_group] }]
-- if:   [{ "!=": [sfx_grp, 0] }, true]
+- if:   [{ neq: [sfx_grp, 0] }, true]
   then:
     - print: ["B2 ok"]
   else:
@@ -51,7 +51,7 @@
 
 # C1: load -> returns non-null (file exists)
 - decl: [snd, audio_sound, { call: [audio.load, "tests/test_beep.wav"] }]
-- if:   [{ "!=": [snd, 0] }, true]
+- if:   [{ neq: [snd, 0] }, true]
   then:
     - print: ["C1 ok"]
   else:
@@ -60,7 +60,7 @@
 
 # C2: load missing file -> returns null (graceful failure)
 - decl: [snd_missing, audio_sound, { call: [audio.load, "tests/__nonexistent__.wav"] }]
-- if:   [{ "==": [snd_missing, 0] }, true]
+- if:   [{ eq: [snd_missing, 0] }, true]
   then:
     - print: ["C2 ok"]
   else:
@@ -78,7 +78,7 @@
 
 # D2: is_playing before play -> 0
 - decl: [playing_before, i32, { call: [snd.is_playing] }]
-- if:   [{ "==": [playing_before, 0] }, true]
+- if:   [{ eq: [playing_before, 0] }, true]
   then:
     - print: ["D2 ok"]
   else:
@@ -131,7 +131,7 @@
 
 # E1: load_stream -> returns non-null
 - decl: [snd2, audio_sound, { call: [audio.load_stream, "tests/test_beep.wav"] }]
-- if:   [{ "!=": [snd2, 0] }, true]
+- if:   [{ neq: [snd2, 0] }, true]
   then:
     - print: ["E1 ok"]
     - call: [snd2.free]

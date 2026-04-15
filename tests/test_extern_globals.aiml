@@ -23,43 +23,43 @@
 - decl: [fail, i32, 0]
 
 - if:
-    condition: { "!=": [c0, 10] }
+    condition: { neq: [c0, 10] }
     then:
       - print: ["FAIL extern c0=${c0}"]
       - set: [fail, 1]
 
 - if:
-    condition: { "!=": [c1, 16] }
+    condition: { neq: [c1, 16] }
     then:
       - print: ["FAIL extern c1=${c1}"]
       - set: [fail, 1]
 
 - if:
-    condition: { "!=": [c2, 16] }
+    condition: { neq: [c2, 16] }
     then:
       - print: ["FAIL extern c2=${c2}"]
       - set: [fail, 1]
 
 - if:
-    condition: { "==": [{ eq: [s0, "alpha"] }, 0] }
+    condition: { eq: [{ eq: [s0, "alpha"] }, 0] }
     then:
       - print: ["FAIL extern s0=${s0}"]
       - set: [fail, 1]
 
 - if:
-    condition: { "==": [{ eq: [s1, "alpha-beta"] }, 0] }
+    condition: { eq: [{ eq: [s1, "alpha-beta"] }, 0] }
     then:
       - print: ["FAIL extern s1=${s1}"]
       - set: [fail, 1]
 
 - if:
-    condition: { "==": [{ eq: [s2, "alpha-beta"] }, 0] }
+    condition: { eq: [{ eq: [s2, "alpha-beta"] }, 0] }
     then:
       - print: ["FAIL extern s2=${s2}"]
       - set: [fail, 1]
 
 - if:
-    condition: { "==": [fail, 0] }
+    condition: { eq: [fail, 0] }
     then:
       - print: ["EXTERN_GLOBALS_PASS"]
     else:

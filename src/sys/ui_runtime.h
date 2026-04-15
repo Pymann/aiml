@@ -85,6 +85,8 @@ int32_t aiml_ui_toggle      (const char* id, int32_t value, void* preset);
 int32_t aiml_ui_radio       (const char* id, int32_t option, int32_t current, void* preset);
 /* Dropdown / spinbox — opts_list = pointer to list<string> struct {i32 size, i32 cap, char** data}. */
 int32_t aiml_ui_spinbox     (const char* id, void* opts_list, int32_t current, void* preset);
+/* Returns 1 if the current ui.begin_cell(...) contains the mouse cursor. */
+int32_t aiml_ui_cell_hovered (void);
 
 /* ── Value widgets ────────────────────────────────────────────────────────── */
 
@@ -145,6 +147,10 @@ void aiml_ui_copy_current_style(void* out);
 void* aiml_ui_load_font        (void* path_ptr, float size);
 /* Load built-in default font (tries common system TTF paths). */
 void* aiml_ui_load_font_default(float size);
+/* Bake a new atlas at a different size using the same TTF data as base_font. */
+void* aiml_ui_bake_font_for_size(void* base_font, float size_px);
+/* Free a font created by load_font / bake_font_for_size. */
+void  aiml_ui_free_font        (void* font);
 /* Set default font for all subsequent ui_style declarations. */
 void  aiml_ui_set_default_font (void* font);
 

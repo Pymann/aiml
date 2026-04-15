@@ -117,14 +117,14 @@
             - set: [mk_cid, d.card_ids-mk_i]
             - set: [mk_has, { call: [cards_kv.has, mk_cid] }]
             - if:
-                condition: { "==": [mk_has, 1] }
+                condition: { eq: [mk_has, 1] }
                 then:
                   - set: [mk_cp, { call: [cards_kv.get, mk_cid] }]
                   - set: [mkp_sum, { +: [mkp_sum, mk_cp.mkp] }]
             - set: [mk_i, { +: [mk_i, 1] }]
 
       - if:
-          condition: { "!=": [mkp_sum, 7] }
+          condition: { neq: [mkp_sum, 7] }
           then:
             - print: ["FAIL mkp_sum=${mkp_sum}"]
             - call: [sys.exit, 1]
@@ -138,27 +138,27 @@
       - decl: [got, ptr<Deck>]
       - set: [got, { call: [decks_kv.get, "deck_a"] }]
       - if:
-          condition: { "==": [{ eq: [got.name, "Mana Starter"] }, 0] }
+          condition: { eq: [{ eq: [got.name, "Mana Starter"] }, 0] }
           then:
             - print: ["FAIL got.name=${got.name}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "!=": [got.total_mkp, 7] }
+          condition: { neq: [got.total_mkp, 7] }
           then:
             - print: ["FAIL got.total_mkp=${got.total_mkp}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "!=": [got.card_ids.len, 2] }
+          condition: { neq: [got.card_ids.len, 2] }
           then:
             - print: ["FAIL got.card_ids.len=${got.card_ids.len}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "==": [{ eq: [got.card_ids-0, "c1"] }, 0] }
+          condition: { eq: [{ eq: [got.card_ids-0, "c1"] }, 0] }
           then:
             - print: ["FAIL got.card_ids-0=${got.card_ids-0}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "==": [{ eq: [got.card_ids-1, "c2"] }, 0] }
+          condition: { eq: [{ eq: [got.card_ids-1, "c2"] }, 0] }
           then:
             - print: ["FAIL got.card_ids-1=${got.card_ids-1}"]
             - call: [sys.exit, 1]

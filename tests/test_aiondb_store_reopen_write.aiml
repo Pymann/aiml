@@ -16,7 +16,7 @@
       - decl: [n, i32]
       - set: [n, { call: [players.len] }]
       - if:
-          condition: { "!=": [n, 0] }
+          condition: { neq: [n, 0] }
           then:
             - print: ["FAIL store_reopen_write_nonempty len=${n}"]
             - call: [sys.exit, 1]
@@ -28,7 +28,7 @@
       - decl: [id, i32]
       - set: [id, { call: [players.insert, p] }]
       - if:
-          condition: { "!=": [id, 1] }
+          condition: { neq: [id, 1] }
           then:
             - print: ["FAIL store_reopen_write_id=${id}"]
             - call: [sys.exit, 1]
@@ -36,7 +36,7 @@
       - decl: [rc, i32]
       - set: [rc, { call: [db.checkpoint] }]
       - if:
-          condition: { "!=": [rc, 0] }
+          condition: { neq: [rc, 0] }
           then:
             - print: ["FAIL store_reopen_write_checkpoint=${rc}"]
             - call: [sys.exit, 1]

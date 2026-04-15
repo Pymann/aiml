@@ -249,27 +249,54 @@ Intern serialisiert der Compiler-generierte Stub die Argumente und sendet sie.
 
 ### RPC-Queue (Host-seitig, low-level)
 
-Eingehende RPCs können alternativ manuell aus der Queue gelesen werden,
-wenn die Ziel-Methode nicht automatisch auf dem lokalen Objekt ausgeführt werden soll
+Eingehende RPCs koennen alternativ manuell aus der Queue gelesen werden,
+wenn die Ziel-Methode nicht automatisch auf dem lokalen Objekt ausgefuehrt werden soll
 (z. B. bei Spielphasen-Koordination auf einem Game-Server):
 
 ```aiml
 model:
   name: rpc_event
   fields:
-    - [method, string]   # Name der aufgerufenen Methode; "" wenn Queue leer (poll_rpc-Sentinel)
-    - [net_id, i32]      # net_id des Zielobjekts
-    - [arg,    i32]      # einziges Argument (v1-Einschränkung: genau ein i32)
+    - [method, string]       # Name der aufgerufenen Methode; "" wenn Queue leer (poll_rpc-Sentinel)
+    - [net_id, i32]          # net_id des Zielobjekts
+    - [arg, i32]             # Legacy-i32-Argument / schneller Diskriminator
+    - [arg_kind, i32]        # 0 = nur i32, 1 = typisierter Modell-Payload
+    - [arg_blob, ptr]        # interner Blob-Pointer; AIML-Code nutzt stattdessen decode_rpc
+    - [arg_blob_len, i32]    # Laenge des Payload-Blobs in Bytes
 ```
 
-| Aufruf | Rückgabe | Beschreibung |
+| Aufruf | Rueckgabe | Beschreibung |
 |--------|----------|--------------|
 | `session.has_rpc()` | `i32` | Anzahl ausstehender RPCs in der Queue |
-| `session.next_rpc()` | `rpc_event` | Nächstes RPC konsumieren (Queue muss nicht leer sein — UB wenn leer) |
-| `session.poll_rpc()` | `rpc_event` | Nächstes RPC konsumieren, oder leeren Sentinel (`method == ""`) wenn Queue leer |
+| `session.next_rpc()` | `rpc_event` | Naechstes RPC konsumieren (Queue muss nicht leer sein - UB wenn leer) |
+| `session.poll_rpc()` | `rpc_event` | Naechstes RPC konsumieren, oder leeren Sentinel (`method == ""`) wenn Queue leer |
+| `session.send_rpc(net_id, method, arg)` | - | Legacy-RPC mit reinem `i32`-Argument senden |
+| `session.send_rpc(net_id, method, arg, model)` | - | RPC mit `i32` plus typisiertem Modell-Payload senden |
+| `session.decode_rpc(ev, target_model)` | `i32` | Modell-Payload aus `ev` nach `target_model` dekodieren; `0` = ok, `-1` = falscher Typ / Decode-Fehler |
 
-`poll_rpc()` ist der empfohlene Weg für Spiel-Server-Loops, weil kein explizites
-`has_rpc`-Prädikat nötig ist:
+### RPC-Payload v2
+
+Mirror-RPCs tragen genau ein logisches Argument in zwei moeglichen Formen:
+
+- **Legacy / trivial:** nur `arg: i32`
+- **Typisiert:** `arg: i32` plus serialisierter Modell-Payload
+
+Der `i32` bleibt auch beim typisierten Pfad erhalten. Er kann als schneller
+Diskriminator, Slot-Index oder Kompatibilitaetsfeld benutzt werden.
+Komplexe Daten sollen im Modell stehen, nicht in manuell gepackten Integern.
+
+Der Wire-Payload fuer `PKT_RPC` ist:
+
+```text
+[method_len:u8][method:N][arg_kind:u8][arg_i32:i32le][blob_len:u32le][blob:M]
+```
+
+- `arg_kind = 0`: nur `arg_i32`, `blob_len` muss `0` sein
+- `arg_kind = 1`: `arg_i32` plus serialisiertes Modell (`blob`)
+- `blob` ist der komplette Heap-Serialization-Blob inklusive 4-Byte-Laengenprefix aus Kapitel 45
+
+`poll_rpc()` ist der empfohlene Weg fuer Spiel-Server-Loops, weil kein explizites
+`has_rpc`-Praedikat noetig ist:
 
 ```aiml
 # Empfohlenes Muster (poll_rpc):
@@ -289,9 +316,34 @@ model:
     then:
       - call: [time.sleep_ms, 16]
 
-# Wenn rm == "" (leere Queue): alle eq-Checks schlagen fehl → sleep → nächste Iteration.
-# Kein separates has_rpc-Prädikat nötig.
+# Wenn rm == "" (leere Queue): alle eq-Checks schlagen fehl -> sleep -> naechste Iteration.
+# Kein separates has_rpc-Praedikat noetig.
 ```
+
+### Typisierten Payload dekodieren
+
+```aiml
+- decl: [rpc, rpc_event, { call: [sess.poll_rpc] }]
+- if:
+    condition: { eq: [rpc.method, "cast"] }
+    then:
+      - if:
+          condition: { eq: [rpc.arg_kind, 1] }
+          then:
+            - decl: [req, CastRequest]
+            - decl: [rc, i32, { call: [sess.decode_rpc, rpc, req] }]
+            - if:
+                condition: { eq: [rc, 0] }
+                then:
+                  - call: [handle_cast, rpc.arg, req]
+```
+
+Hinweise:
+
+- `decode_rpc(...)` erwartet ein callerseitig allokiertes Modell als Zielvariable.
+- Das Zielmodell wird vor dem Decode intern null-initialisiert.
+- Modelle mit `string`, `list<T>` oder `map<K:V>` sind erlaubt; die Dekodierung nutzt die Heap-Serialization aus Kapitel 45.
+- Wenn `rpc.arg_kind != 1`, der Modelltyp nicht passt oder der Blob korrupt ist, liefert `decode_rpc(...)` `-1`.
 
 ---
 

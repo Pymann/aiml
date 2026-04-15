@@ -37,6 +37,41 @@
 #include <fcntl.h>
 #include <sys/select.h>
 #include <cerrno>
+#include <execinfo.h>
+#include <signal.h>
+
+/* ── Debug logging (AIML_DEBUG=1 env var) ─────────────────────────────────── */
+
+static int g_aiml_debug = (getenv("AIML_DEBUG") != nullptr) ? 1 : 0;
+#define AIML_DBG(fmt, ...) do { if (g_aiml_debug) fprintf(stderr, "[mirror] " fmt "\n", ##__VA_ARGS__); } while(0)
+
+/* ── Crash handler (auto-installed via constructor) ──────────────────────── */
+
+static void aiml_crash_handler(int sig, siginfo_t*, void*) {
+    char msg[128];
+    int n = snprintf(msg, sizeof(msg), "\n=== AIML CRASH (signal %d) ===\n", sig);
+    (void)write(STDERR_FILENO, msg, (size_t)n);
+    void* bt[64];
+    int cnt = backtrace(bt, 64);
+    backtrace_symbols_fd(bt, cnt, STDERR_FILENO);
+    /* Flush stderr before re-raising */
+    fsync(STDERR_FILENO);
+    struct sigaction sa = {};
+    sa.sa_handler = SIG_DFL;
+    sigaction(sig, &sa, nullptr);
+    raise(sig);
+}
+
+__attribute__((constructor))
+static void aiml_install_crash_handler() {
+    struct sigaction sa = {};
+    sa.sa_sigaction = aiml_crash_handler;
+    sa.sa_flags = SA_SIGINFO | SA_RESETHAND;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, nullptr);
+    sigaction(SIGABRT, &sa, nullptr);
+    sigaction(SIGBUS,  &sa, nullptr);
+}
 
 /* ── Internal structs ─────────────────────────────────────────────────────── */
 
@@ -68,6 +103,9 @@ struct AimlMirrorRegistered {
     /* Typed delta received before register_id_typed: stash raw blob here */
     uint8_t*            pending_blob     = nullptr;
     int32_t             pending_blob_len = 0;
+    /* Typed dirty tracking: last serialized blob (detects deep heap mutations) */
+    uint8_t*            shadow_blob      = nullptr;
+    int32_t             shadow_blob_len  = 0;
 };
 
 struct AimlMirrorEvent {
@@ -76,10 +114,16 @@ struct AimlMirrorEvent {
     int32_t         net_id = 0;
 };
 
+/* Layout MUST match the LLVM `rpc_event` struct in builtin_registry.cpp:
+   { i8*, i32, i32, i32, i8*, i32 } — natural alignment.
+   Fields after `arg` are additive (RPC payload v2). */
 struct AimlRpcEvent {
-    const char* method = nullptr;  /* heap-allocated, freed on session close */
-    int32_t     net_id = 0;
-    int32_t     arg    = 0;
+    const char*    method        = nullptr;  /* heap-allocated, freed on session close */
+    int32_t        net_id        = 0;
+    int32_t        arg           = 0;        /* legacy i32 arg (also valid for arg_kind=0) */
+    int32_t        arg_kind      = 0;        /* 0=i32 only, 1=model blob */
+    const uint8_t* arg_blob      = nullptr;  /* heap-allocated payload (typed ser blob WITH 4B prefix) */
+    int32_t        arg_blob_len  = 0;        /* length of arg_blob in bytes */
 };
 
 struct AimlMirrorSession {
@@ -181,9 +225,7 @@ static void mirror_send(AimlMirrorPeer* peer, const void* buf, size_t len) {
     if (peer->transport.type == MT_TCP) {
         tcp_send_all(peer->transport.tcp_fd, buf, len);
     } else if (peer->transport.ws_ptr) {
-        int r = aiml_ws_send_raw(peer->transport.ws_ptr, buf, (int32_t)len);
-        fprintf(stderr, "[mirror-dbg] mirror_send WS fd=%d len=%d ret=%d\n",
-                aiml_ws_fd(peer->transport.ws_ptr), (int)len, r);
+        aiml_ws_send_raw(peer->transport.ws_ptr, buf, (int32_t)len);
     }
 }
 
@@ -244,21 +286,6 @@ static void send_delta_to_peer(AimlMirrorPeer* peer, AimlMirrorRegistered* reg) 
         if (!blob) return;
         int32_t data_len;
         memcpy(&data_len, blob, 4);
-        /* Debug: print typed fields before send */
-        { fprintf(stderr, "[mirror-dbg] send_delta net_id=%d obj=%p data_len=%d\n",
-                  reg->net_id, reg->obj_ptr, data_len);
-          for (int _i = 1; _i < reg->ser_n && _i <= 10; _i++) {
-              int32_t off  = reg->ser_nodes[_i].offset;
-              int32_t kind = reg->ser_nodes[_i].kind;
-              if (kind == 4 /* AIML_TD_STRING */) {
-                  const char* fv = nullptr;
-                  memcpy(&fv, (uint8_t*)reg->obj_ptr + off, sizeof(char*));
-                  fprintf(stderr, "  [%d] kind=STRING off=%d '%s'\n", _i-1, off, fv ? fv : "(null)");
-              } else {
-                  fprintf(stderr, "  [%d] kind=%d off=%d\n", _i-1, kind, off);
-              }
-          }
-        }
         uint32_t total_blob = 4 + (uint32_t)data_len;
         std::vector<uint8_t> pkt(6 + total_blob);
         write_u32_le(pkt.data(), (uint32_t)reg->net_id);
@@ -288,8 +315,11 @@ static void send_delta_pkt(AimlMirrorSession* s, AimlMirrorRegistered* reg, Aiml
         write_u32_le(pkt.data(), (uint32_t)reg->net_id);
         pkt[4] = PKT_DELTA; pkt[5] = 1;
         memcpy(pkt.data() + 6, blob, total_blob);
-        free(blob);
         broadcast_pkt(s, pkt.data(), pkt.size(), exclude);
+        /* update shadow_blob for typed dirty tracking */
+        free(reg->shadow_blob);
+        reg->shadow_blob = (uint8_t*)blob;
+        reg->shadow_blob_len = (int32_t)total_blob;
     } else {
         size_t total = 6 + (size_t)reg->obj_size;
         std::vector<uint8_t> pkt(total);
@@ -318,24 +348,16 @@ static void process_packet(AimlMirrorSession* s, AimlMirrorPeer* from_peer,
             if (!reg->is_owner && reg->obj_ptr) {
                 if (reg->ser_nodes && reserved == 1) {
                     /* Typed: decode blob (data+6 = blob with 4-byte length prefix) */
-                    if (reg->has_decoded)
+                    if (reg->has_decoded) {
                         aiml_ser_free_decoded(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
-                    aiml_ser_decode((const char*)(data + 6), reg->obj_ptr,
-                                    reg->ser_nodes, reg->ser_n);
-                    reg->has_decoded = true;
-                    /* Debug: print first field after decode (kind-aware) */
-                    if (reg->ser_n > 1) {
-                        int32_t k0 = reg->ser_nodes[1].kind;
-                        int32_t o0 = reg->ser_nodes[1].offset;
-                        if (k0 == 4 /* AIML_TD_STRING */) {
-                            const char* f0 = nullptr;
-                            memcpy(&f0, (uint8_t*)reg->obj_ptr + o0, sizeof(char*));
-                            fprintf(stderr, "[mirror-dbg] typed-decode net_id=%d field0='%s'\n",
-                                    net_id, f0 ? f0 : "(null)");
-                        } else {
-                            fprintf(stderr, "[mirror-dbg] typed-decode net_id=%d field0=kind%d\n",
-                                    net_id, k0);
-                        }
+                    }
+                    int dec_rc = aiml_ser_decode((const char*)(data + 6), reg->obj_ptr,
+                                                 reg->ser_nodes, reg->ser_n);
+                    if (dec_rc == 0) {
+                        reg->has_decoded = true;
+                        AIML_DBG("recv_delta net_id=%d typed=1 len=%d ok", net_id, data_len - 6);
+                    } else {
+                        fprintf(stderr, "[mirror-ERROR] ser_decode failed (schema mismatch?) — discarding packet\n");
                     }
                 } else {
                     /* Untyped: raw memcpy */
@@ -344,13 +366,17 @@ static void process_packet(AimlMirrorSession* s, AimlMirrorPeer* from_peer,
                         ? (payload_len < (int)reg->obj_size ? payload_len : (int)reg->obj_size)
                         : 0;
                     if (copy_len > 0) memcpy(reg->obj_ptr, data + 6, (size_t)copy_len);
+                    AIML_DBG("recv_delta net_id=%d typed=0 len=%d", net_id, copy_len);
                 }
-                if (reg->shadow) memcpy(reg->shadow, reg->obj_ptr, (size_t)reg->obj_size);
+                if (reg->shadow && (reserved != 1 || reg->has_decoded)) {
+                    memcpy(reg->shadow, reg->obj_ptr, (size_t)reg->obj_size);
+                }
             } else if (!reg->is_owner && !reg->obj_ptr && reg->shadow) {
                 /* register_id not yet called */
                 if (reserved == 1) {
                     /* Typed delta: stash raw blob for decode once register_id_typed sets ser_nodes */
                     int blob_len = data_len - 6;
+                    AIML_DBG("recv_delta net_id=%d typed=1 len=%d — PENDING (register_id not yet called)", net_id, blob_len);
                     if (blob_len > 0) {
                         free(reg->pending_blob);
                         reg->pending_blob = (uint8_t*)malloc((size_t)blob_len);
@@ -404,6 +430,7 @@ static void process_packet(AimlMirrorSession* s, AimlMirrorPeer* from_peer,
                 if (reg->ser_nodes && reg->has_decoded && reg->obj_ptr)
                     aiml_ser_free_decoded(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
                 free(reg->shadow);
+                free(reg->shadow_blob);
                 free(reg->pending_blob);
                 delete reg;
                 s->by_net_id.erase(it);
@@ -417,21 +444,40 @@ static void process_packet(AimlMirrorSession* s, AimlMirrorPeer* from_peer,
         if (s->is_host) broadcast_pkt(s, data, (size_t)data_len, from_peer);
     }
     else if (type == PKT_RPC) {
-        /* payload: [method_len:u8][method:N][arg:i32le] */
-        if (data_len < 8) return;  /* 6 hdr + 1 len + 0 method + 4 arg minimum (empty method) */
+        /* RPC payload v2:
+         *   [method_len:u8][method:N][arg_kind:u8][arg_i32:i32le][blob_len:u32le][blob:M]
+         * arg_kind: 0 = legacy i32 only (blob_len must be 0)
+         *           1 = typed model blob (full ser blob WITH 4-byte length prefix) */
+        if (data_len < 6 + 1 + 0 + 1 + 4 + 4) return;
         uint8_t method_len = data[6];
-        if (data_len < 7 + (int)method_len + 4) return;
+        int hdr_off = 7 + (int)method_len;
+        if (data_len < hdr_off + 1 + 4 + 4) return;
+        uint8_t  arg_kind = data[hdr_off];
+        int32_t  arg_i32  = read_i32_le(data + hdr_off + 1);
+        uint32_t blob_len = read_u32_le(data + hdr_off + 1 + 4);
+        if (data_len < hdr_off + 1 + 4 + 4 + (int)blob_len) return;
+
         char* method = (char*)malloc((size_t)method_len + 1);
         if (!method) return;
         memcpy(method, data + 7, method_len);
         method[method_len] = '\0';
-        int32_t arg = read_i32_le(data + 7 + method_len);
+
+        uint8_t* blob = nullptr;
+        if (blob_len > 0) {
+            blob = (uint8_t*)malloc(blob_len);
+            if (!blob) { free(method); return; }
+            memcpy(blob, data + hdr_off + 1 + 4 + 4, blob_len);
+        }
+
         auto* ev = new AimlRpcEvent();
-        ev->method = method;
-        ev->net_id = net_id;
-        ev->arg    = arg;
+        ev->method       = method;
+        ev->net_id       = net_id;
+        ev->arg          = arg_i32;
+        ev->arg_kind     = (int32_t)arg_kind;
+        ev->arg_blob     = blob;
+        ev->arg_blob_len = (int32_t)blob_len;
         s->rpc_queue.push(ev);
-        /* Host: forward to other peers (multi-host relay, unlikely in v1) */
+        /* Host: forward to other peers (multi-host relay, byte-level passthrough) */
         if (s->is_host) broadcast_pkt(s, data, (size_t)data_len, from_peer);
     }
 }
@@ -473,12 +519,8 @@ static void mirror_try_accept(AimlMirrorSession* s) {
     } else if (s->listener.ws_ptr) {
         /* WS/WSS accept — poll listener via WS layer (avoids raw fd leak) */
         int poll_r = aiml_ws_poll_listener(s->listener.ws_ptr, 0);
-        fprintf(stderr, "[mirror-dbg] ws_poll_listener=%d fd=%d\n",
-                poll_r, (int)aiml_ws_fd(s->listener.ws_ptr));
         if (poll_r != 1) return;
-        fprintf(stderr, "[mirror-dbg] calling ws_accept...\n");
         void* ws_client = aiml_ws_accept(s->listener.ws_ptr);
-        fprintf(stderr, "[mirror-dbg] ws_accept=%s\n", ws_client ? "ok" : "null");
         if (!ws_client) return;
 
         auto* peer = new AimlMirrorPeer();
@@ -500,7 +542,6 @@ static void mirror_try_accept(AimlMirrorSession* s) {
         ev->peer   = peer;
         ev->net_id = 0;
         s->event_queue.push(ev);
-        fprintf(stderr, "[mirror-dbg] peer_connected pushed, queue_size=%d\n", (int)s->event_queue.size());
     }
 }
 
@@ -748,6 +789,7 @@ void aiml_mirror_session_close(void* session) {
         if (!reg->is_owner && reg->ser_nodes && reg->has_decoded && reg->obj_ptr)
             aiml_ser_free_decoded(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
         free(reg->shadow);
+        free(reg->shadow_blob);
         delete reg;
     }
     /* Drain event queue */
@@ -769,6 +811,11 @@ void aiml_mirror_session_update(void* session) {
     auto* s = (AimlMirrorSession*)session;
     if (!s) return;
 
+    if (!s->event_queue.empty() || !s->rpc_queue.empty())
+        AIML_DBG("update peers=%d registered=%d events=%d rpcs=%d",
+                 (int)s->peers.size(), (int)s->by_net_id.size(),
+                 (int)s->event_queue.size(), (int)s->rpc_queue.size());
+
     /* 1. Accept new TCP peers (host only) */
     mirror_try_accept(s);
 
@@ -779,8 +826,35 @@ void aiml_mirror_session_update(void* session) {
     for (auto& [id, reg] : s->by_net_id) {
         if (!reg->is_owner || reg->obj_ptr == nullptr || reg->obj_size == 0) continue;
         if (reg->manual_sync) continue;
-        if (memcmp(reg->obj_ptr, reg->shadow, (size_t)reg->obj_size) != 0) {
-            send_delta_pkt(s, reg, nullptr);
+        if (reg->ser_nodes) {
+            /* Typed: compare serialized blobs — detects deep heap mutations
+             * (e.g. list element field changes where the list pointer is stable) */
+            char* blob = aiml_ser_encode(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
+            if (!blob) continue;
+            int32_t dl; memcpy(&dl, blob, 4);
+            int32_t total = 4 + dl;
+            bool dirty = (total != reg->shadow_blob_len) ||
+                         memcmp(blob, reg->shadow_blob, (size_t)total) != 0;
+            if (dirty) {
+                AIML_DBG("  dirty net_id=%d typed=1 blob=%d — sending delta", id, total);
+                std::vector<uint8_t> pkt(6 + (size_t)total);
+                write_u32_le(pkt.data(), (uint32_t)id);
+                pkt[4] = PKT_DELTA; pkt[5] = 1;
+                memcpy(pkt.data() + 6, blob, (size_t)total);
+                broadcast_pkt(s, pkt.data(), pkt.size(), nullptr);
+                free(reg->shadow_blob);
+                reg->shadow_blob = (uint8_t*)blob; blob = nullptr;
+                reg->shadow_blob_len = total;
+                memcpy(reg->shadow, reg->obj_ptr, (size_t)reg->obj_size);
+            }
+            if (blob) free(blob);
+        } else {
+            /* Untyped: shallow memcmp on inline struct bytes */
+            if (memcmp(reg->obj_ptr, reg->shadow, (size_t)reg->obj_size) != 0) {
+                AIML_DBG("  dirty net_id=%d size=%d typed=0 — sending delta",
+                         id, (int)reg->obj_size);
+                send_delta_pkt(s, reg, nullptr);
+            }
         }
     }
 }
@@ -813,8 +887,6 @@ void aiml_mirror_session_register_id(void* session, void* obj, int64_t obj_size,
     if (!s || !obj || obj_size <= 0) return;
     /* Ensure next_net_id stays ahead of any explicitly assigned id */
     if (id >= s->next_net_id) s->next_net_id = id + 1;
-    fprintf(stderr, "[mirror-dbg] register_id: id=%d peers=%d next_net_id=%d\n",
-            id, (int)s->peers.size(), s->next_net_id);
 
     /* If a placeholder entry was created by PKT_REGISTER (obj_ptr==null, is_owner=false),
      * update it with the local object pointer rather than replacing it. */
@@ -848,6 +920,8 @@ void aiml_mirror_session_register_id(void* session, void* obj, int64_t obj_size,
     s->by_net_id[id]  = reg;
     s->by_ptr[obj]    = reg;
 
+    AIML_DBG("register_id net_id=%d obj_size=%d owner=%d", id, (int)obj_size, (int)reg->is_owner);
+
     /* Notify all peers of new object */
     for (auto* peer : s->peers) {
         send_register_pkt(peer, id, (int32_t)obj_size);
@@ -874,6 +948,7 @@ void aiml_mirror_session_unregister(void* session, void* obj) {
     s->by_ptr.erase(pit);
     /* Owners never have has_decoded set (they're only encoded) */
     free(reg->shadow);
+    free(reg->shadow_blob);
     delete reg;
 }
 
@@ -905,8 +980,11 @@ void aiml_mirror_session_register_id_typed(void* session, void* obj, int64_t obj
             existing->obj_size  = obj_size;
             existing->ser_nodes = nodes;
             existing->ser_n     = n_nodes;
-            if (!existing->shadow)
-                existing->shadow = (uint8_t*)calloc(1, (size_t)obj_size);
+            /* Always reallocate shadow with client's obj_size.
+             * PKT_REGISTER used server's sizeof — may differ from client's sizeof.
+             * memcpy(shadow, obj, obj_size) would overflow a too-small shadow. */
+            if (existing->shadow) free(existing->shadow);
+            existing->shadow = (uint8_t*)calloc(1, (size_t)obj_size);
             /* Decode any typed delta that arrived before register_id_typed was called */
             if (existing->pending_blob && existing->pending_blob_len > 0) {
                 aiml_ser_decode((const char*)existing->pending_blob, obj, nodes, n_nodes);
@@ -930,9 +1008,21 @@ void aiml_mirror_session_register_id_typed(void* session, void* obj, int64_t obj
     reg->ser_n     = n_nodes;
     reg->shadow = (uint8_t*)malloc((size_t)obj_size);
     memcpy(reg->shadow, obj, (size_t)obj_size);
+    /* Initialize shadow_blob for typed dirty tracking (owner side only) */
+    if (reg->is_owner && nodes && n_nodes > 0) {
+        char* blob = aiml_ser_encode(obj, nodes, n_nodes);
+        if (blob) {
+            int32_t dl; memcpy(&dl, blob, 4);
+            reg->shadow_blob_len = 4 + dl;
+            reg->shadow_blob = (uint8_t*)blob;
+        }
+    }
 
     s->by_net_id[id] = reg;
     s->by_ptr[obj]   = reg;
+
+    AIML_DBG("register_id_typed net_id=%d obj_size=%d owner=%d nodes=%d",
+             id, (int)obj_size, (int)reg->is_owner, n_nodes);
 
     /* Notify all peers of new object, send initial typed delta */
     for (auto* peer : s->peers) {
@@ -950,13 +1040,14 @@ void aiml_mirror_session_register_id_typed(void* session, void* obj, int64_t obj
  * The caller never receives a null pointer, so no null-check needed on AIML side.
  */
 static AimlMirrorEvent s_empty_mirror_event = { "", nullptr, 0 };
-static AimlRpcEvent    s_empty_rpc_event    = { "", 0, 0 };
+static AimlRpcEvent    s_empty_rpc_event    = { "", 0, 0, 0, nullptr, 0 };
 
 void* aiml_mirror_session_poll_event(void* session) {
     auto* s = (AimlMirrorSession*)session;
     if (!s || s->event_queue.empty()) return &s_empty_mirror_event;
     AimlMirrorEvent* ev = s->event_queue.front();
     s->event_queue.pop();
+    AIML_DBG("poll_event type=%s net_id=%d", ev->type ? ev->type : "", ev->net_id);
     return ev;
 }
 
@@ -965,6 +1056,8 @@ void* aiml_mirror_session_poll_rpc(void* session) {
     if (!s || s->rpc_queue.empty()) return &s_empty_rpc_event;
     AimlRpcEvent* ev = s->rpc_queue.front();
     s->rpc_queue.pop();
+    AIML_DBG("poll_rpc method=%s net_id=%d arg=%d arg_kind=%d",
+             ev->method ? ev->method : "", ev->net_id, ev->arg, ev->arg_kind);
     return ev;
 }
 
@@ -972,7 +1065,6 @@ int32_t aiml_mirror_session_has_event(void* session) {
     auto* s = (AimlMirrorSession*)session;
     if (!s) return 0;
     int32_t r = s->event_queue.empty() ? 0 : 1;
-    if (r) fprintf(stderr, "[mirror-dbg] has_event=1 queue_size=%d\n", (int)s->event_queue.size());
     return r;
 }
 
@@ -981,7 +1073,6 @@ void* aiml_mirror_session_next_event(void* session) {
     if (!s || s->event_queue.empty()) return nullptr;
     AimlMirrorEvent* ev = s->event_queue.front();
     s->event_queue.pop();
-    fprintf(stderr, "[mirror-dbg] next_event type='%s' net_id=%d\n", ev->type ? ev->type : "(null)", ev->net_id);
     return ev;
 }
 
@@ -1033,20 +1124,72 @@ int32_t aiml_mirror_event_net_id(void* ev) {
 
 /* ── RPC ──────────────────────────────────────────────────────────────────── */
 
-void aiml_mirror_session_send_rpc(void* session, int32_t net_id,
-                                  const char* method, int32_t arg) {
-    auto* s = (AimlMirrorSession*)session;
+/* Internal: build + send a v2 PKT_RPC packet. */
+static void mirror_send_rpc_v2(AimlMirrorSession* s, int32_t net_id,
+                               const char* method, uint8_t arg_kind,
+                               int32_t arg_i32,
+                               const uint8_t* blob, uint32_t blob_len)
+{
     if (!s || !method) return;
     uint8_t method_len = (uint8_t)(strlen(method) & 0xFF);
-    size_t pkt_size = 6 + 1 + (size_t)method_len + 4;
+    size_t pkt_size = 6 + 1 + (size_t)method_len + 1 + 4 + 4 + (size_t)blob_len;
     std::vector<uint8_t> pkt(pkt_size);
     write_u32_le(pkt.data(), (uint32_t)net_id);
     pkt[4] = PKT_RPC; pkt[5] = 0;
     pkt[6] = method_len;
     memcpy(pkt.data() + 7, method, method_len);
-    write_i32_le(pkt.data() + 7 + method_len, arg);
+    int o = 7 + (int)method_len;
+    pkt[o] = arg_kind;
+    write_i32_le(pkt.data() + o + 1, arg_i32);
+    write_u32_le(pkt.data() + o + 1 + 4, blob_len);
+    if (blob_len && blob) memcpy(pkt.data() + o + 1 + 4 + 4, blob, blob_len);
     for (auto* peer : s->peers)
         mirror_send(peer, pkt.data(), pkt_size);
+}
+
+void aiml_mirror_session_send_rpc(void* session, int32_t net_id,
+                                  const char* method, int32_t arg) {
+    AIML_DBG("send_rpc net_id=%d method=%s arg=%d", net_id, method ? method : "", arg);
+    mirror_send_rpc_v2((AimlMirrorSession*)session, net_id, method,
+                       /*arg_kind=*/0, arg, nullptr, 0);
+}
+
+/* Send an RPC whose payload is a typed model instance.
+ * `obj`     — pointer to the model struct (caller-owned).
+ * `nodes/n` — model schema (pass __aiml_sernodes_<Type> + count).
+ * The arg_i32 is sent alongside the blob for backwards compatibility / quick discriminator.
+ */
+void aiml_mirror_session_send_rpc_model(void* session, int32_t net_id,
+                                        const char* method, int32_t arg_i32,
+                                        const void* obj,
+                                        const AimlTypeNode* nodes,
+                                        int32_t n_nodes)
+{
+    auto* s = (AimlMirrorSession*)session;
+    if (!s || !method || !obj || !nodes || n_nodes <= 0) return;
+    AIML_DBG("send_rpc_model net_id=%d method=%s arg_i32=%d nodes=%d", net_id, method, arg_i32, n_nodes);
+    char* blob = aiml_ser_encode(obj, nodes, n_nodes);
+    if (!blob) return;
+    /* aiml_ser_encode prefixes the blob with a 4-byte little-endian length
+       (NOT including the prefix itself); we ship the entire blob (prefix + payload). */
+    int32_t payload_len = read_i32_le((const uint8_t*)blob);
+    uint32_t total_len  = (uint32_t)(payload_len + 4);
+    mirror_send_rpc_v2(s, net_id, method, /*arg_kind=*/1, arg_i32,
+                       (const uint8_t*)blob, total_len);
+    free(blob);
+}
+
+/* Decode a received typed-RPC payload into a caller-allocated, zero-initialised
+ * struct. Returns 0 on success, -1 on error / wrong arg_kind. The decoded struct
+ * may contain heap allocations (strings, lists, maps, buffers); the caller must
+ * release them with `aiml_ser_free_decoded()` when done. */
+int32_t aiml_rpc_event_decode_into(void* ev_ptr, void* out,
+                                   const AimlTypeNode* nodes, int32_t n_nodes)
+{
+    auto* ev = (AimlRpcEvent*)ev_ptr;
+    if (!ev || !out || !nodes || n_nodes <= 0) return -1;
+    if (ev->arg_kind != 1 || !ev->arg_blob || ev->arg_blob_len <= 0) return -1;
+    return aiml_ser_decode((const char*)ev->arg_blob, out, nodes, n_nodes);
 }
 
 int32_t aiml_mirror_session_has_rpc(void* session) {

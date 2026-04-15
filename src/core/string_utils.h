@@ -235,7 +235,7 @@ namespace StringUtils {
                         YAML::Node node = YAML::Load(content);
                         val = evaluator(ctx, node);
                     } catch (const std::exception& e) {
-                        LOG_ERROR("YAML Parse Error in String Expansion: " + content + " -> " + e.what());
+                        LOG_ERROR(ctx.fmtLoc() + "YAML Parse Error in String Expansion: " + content + " -> " + e.what());
                         val = ctx.builder.CreateGlobalStringPtr("ERROR"); 
                     }
                 } else {
@@ -243,7 +243,7 @@ namespace StringUtils {
                      // Does this happen in SysGetArg? Only if arg is "${...}"
                      // Just return the raw string or empty?
                      // Let's return the content as is, wrapped in braces? or just "<???>"
-                     LOG_ERROR("String Expansion requires evaluator: " + content);
+                     LOG_ERROR(ctx.fmtLoc() + "String Expansion requires evaluator: " + content);
                      val = ctx.builder.CreateGlobalStringPtr("<???>");
                 }
                 
@@ -277,7 +277,7 @@ namespace StringUtils {
                 pos = scan + 1;
             } else {
                 // No closing brace found, treat as literal
-                LOG_ERROR("Unmatched brace in expression: " + input);
+                LOG_ERROR(ctx.fmtLoc() + "Unmatched brace in expression: " + input);
                 std::string literal = input.substr(start);
                 currentStr = concat(ctx, currentStr, ctx.builder.CreateGlobalStringPtr(literal));
                 break;

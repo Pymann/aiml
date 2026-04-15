@@ -1,0 +1,264 @@
+# test_buffer_f32.aiml — Buffer als f32-Array fuer Embedding-Tables
+# Testet alle Funktionalitaeten die fuer EmbeddingTable noetig sind:
+# alloc, sequentielles write, seek+read (random access), seek+write (random update), len
+# Nutzt den neuen tolerance(a, b, eps) Operator fuer f32-Vergleiche
+
+- decl: [pass, i32, 0]
+- decl: [fail, i32, 0]
+- decl: [eps, f32, 0.001]
+
+# ── Phase A: Alloc + sequentielles write/read ──────────────────────────────
+- decl: [buf, buffer]
+- call: [buf.alloc, 4096]
+
+# 4 floats schreiben (dim=4, 1 Token)
+- call: [buf.write, 0.1, f32]
+- call: [buf.write, 0.2, f32]
+- call: [buf.write, 0.3, f32]
+- call: [buf.write, 0.4, f32]
+
+# len = 16 bytes (4 * sizeof(f32))
+- decl: [blen, i32, buf.len]
+- if:
+    condition: { eq: [blen, 16] }
+    then:
+      - print: ["PASS: A1 len=16 after 4 f32 writes"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: A1 len=${blen} expected 16"]
+      - set: [fail, { +: [fail, 1] }]
+
+# seek(0) + sequentiell zuruecklesen
+- call: [buf.seek, 0]
+- decl: [v0, f32, { call: [buf.read, f32] }]
+- decl: [v1, f32, { call: [buf.read, f32] }]
+- decl: [v2, f32, { call: [buf.read, f32] }]
+- decl: [v3, f32, { call: [buf.read, f32] }]
+
+- if:
+    condition: { "&&": [{ tolerance: [v0, 0.1, eps] }, { tolerance: [v1, 0.2, eps] }] }
+    then:
+      - print: ["PASS: A2 read v0=${v0} v1=${v1}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: A2 v0=${v0} v1=${v1}"]
+      - set: [fail, { +: [fail, 1] }]
+
+- if:
+    condition: { "&&": [{ tolerance: [v2, 0.3, eps] }, { tolerance: [v3, 0.4, eps] }] }
+    then:
+      - print: ["PASS: A3 read v2=${v2} v3=${v3}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: A3 v2=${v2} v3=${v3}"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── Phase B: Random access read via seek ───────────────────────────────────
+# Index 2 (3. Float) = byte offset 8
+- call: [buf.seek, 8]
+- decl: [r2, f32, { call: [buf.read, f32] }]
+- if:
+    condition: { tolerance: [r2, 0.3, eps] }
+    then:
+      - print: ["PASS: B1 random read idx=2 -> ${r2}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: B1 random read idx=2 -> ${r2} expected 0.3"]
+      - set: [fail, { +: [fail, 1] }]
+
+# Index 0 (1. Float) = byte offset 0
+- call: [buf.seek, 0]
+- decl: [r0, f32, { call: [buf.read, f32] }]
+- if:
+    condition: { tolerance: [r0, 0.1, eps] }
+    then:
+      - print: ["PASS: B2 random read idx=0 -> ${r0}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: B2 random read idx=0 -> ${r0} expected 0.1"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── Phase C: Random access write (in-place update) ────────────────────────
+# Ueberschreibe Index 1 (byte offset 4) mit 9.99
+- call: [buf.seek, 4]
+- call: [buf.write, 9.99, f32]
+
+# Verifiziere: seek back + read
+- call: [buf.seek, 4]
+- decl: [u1, f32, { call: [buf.read, f32] }]
+- if:
+    condition: { tolerance: [u1, 9.99, eps] }
+    then:
+      - print: ["PASS: C1 in-place update idx=1 -> ${u1}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: C1 in-place update idx=1 -> ${u1} expected 9.99"]
+      - set: [fail, { +: [fail, 1] }]
+
+# Andere Werte unberuehrt?
+- call: [buf.seek, 0]
+- decl: [c0, f32, { call: [buf.read, f32] }]
+- if:
+    condition: { tolerance: [c0, 0.1, eps] }
+    then:
+      - print: ["PASS: C2 idx=0 unberuehrt -> ${c0}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: C2 idx=0 -> ${c0} expected 0.1"]
+      - set: [fail, { +: [fail, 1] }]
+
+- call: [buf.seek, 8]
+- decl: [c2, f32, { call: [buf.read, f32] }]
+- if:
+    condition: { tolerance: [c2, 0.3, eps] }
+    then:
+      - print: ["PASS: C3 idx=2 unberuehrt -> ${c2}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: C3 idx=2 -> ${c2} expected 0.3"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── Phase D: Realistische EmbeddingTable-Belastung ────────────────────────
+# 4096 tokens * 32 dim = 131072 floats = 524288 bytes (exakt wie tul_ask)
+- decl: [emb, buffer]
+- call: [emb.alloc, 524288]
+
+# Schreibe 131072 Nullen sequentiell
+- decl: [i, i32, 0]
+- while:
+    condition: { "<": [i, 131072] }
+    body:
+      - call: [emb.write, 0.0, f32]
+      - set: [i, { +: [i, 1] }]
+
+- decl: [elen, i32, emb.len]
+- if:
+    condition: { eq: [elen, 524288] }
+    then:
+      - print: ["PASS: D1 bulk write 131072 floats (4096x32) -> len=${elen}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: D1 bulk write len=${elen} expected 524288"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── Phase E: Embedding lookup pattern ─────────────────────────────────────
+# Token 5, dim=32 -> base = 5*32*4 = 640 bytes
+- call: [emb.seek, 640]
+- call: [emb.write, 1.5, f32]
+- call: [emb.seek, 644]
+- call: [emb.write, 2.5, f32]
+
+# Lesen: Token 5, Dim 0
+- call: [emb.seek, 640]
+- decl: [e50, f32, { call: [emb.read, f32] }]
+- if:
+    condition: { tolerance: [e50, 1.5, eps] }
+    then:
+      - print: ["PASS: E1 emb[5][0] = ${e50}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: E1 emb[5][0] = ${e50} expected 1.5"]
+      - set: [fail, { +: [fail, 1] }]
+
+# Lesen: Token 5, Dim 1
+- call: [emb.seek, 644]
+- decl: [e51, f32, { call: [emb.read, f32] }]
+- if:
+    condition: { tolerance: [e51, 2.5, eps] }
+    then:
+      - print: ["PASS: E2 emb[5][1] = ${e51}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: E2 emb[5][1] = ${e51} expected 2.5"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── Phase F: SGD-Update pattern ───────────────────────────────────────────
+# emb[5][0] = emb[5][0] - lr * grad
+# cur=1.5, lr=0.01, grad=10.0 -> new = 1.5 - 0.1 = 1.4
+- call: [emb.seek, 640]
+- decl: [cur, f32, { call: [emb.read, f32] }]
+- decl: [lr, f32, 0.01]
+- decl: [grad, f32, 10.0]
+- decl: [updated, f32, { "-": [cur, { "*": [lr, grad] }] }]
+- call: [emb.seek, 640]
+- call: [emb.write, updated, f32]
+
+# Verify
+- call: [emb.seek, 640]
+- decl: [after, f32, { call: [emb.read, f32] }]
+- if:
+    condition: { tolerance: [after, 1.4, eps] }
+    then:
+      - print: ["PASS: F1 SGD update -> ${after}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: F1 SGD update -> ${after} expected 1.4"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── Phase G: Dynamischer seek mit berechneter Adresse ─────────────────────
+- decl: [token_id, i32, 10]
+- decl: [dim, i32, 32]
+- decl: [d, i32, 3]
+- decl: [byte_offset, i32, { "*": [{ "+": [{ "*": [token_id, dim] }, d] }, 4] }]
+# byte_offset = (10*32 + 3) * 4 = 323 * 4 = 1292
+
+- call: [emb.seek, byte_offset]
+- call: [emb.write, 7.77, f32]
+
+- call: [emb.seek, byte_offset]
+- decl: [dyn_val, f32, { call: [emb.read, f32] }]
+- if:
+    condition: { tolerance: [dyn_val, 7.77, eps] }
+    then:
+      - print: ["PASS: G1 dynamic seek offset=${byte_offset} -> ${dyn_val}"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: G1 dynamic seek -> ${dyn_val} expected 7.77"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── Phase H: tolerance Operator selbst testen ─────────────────────────────
+- decl: [ta, f32, 1.0]
+- decl: [tb, f32, 1.0005]
+- if:
+    condition: { tolerance: [ta, tb, 0.001] }
+    then:
+      - print: ["PASS: H1 tolerance(1.0, 1.0005, 0.001) = true"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: H1 tolerance should be true"]
+      - set: [fail, { +: [fail, 1] }]
+
+- if:
+    condition: { tolerance: [ta, tb, 0.0001] }
+    then:
+      - print: ["FAIL: H2 tolerance(1.0, 1.0005, 0.0001) should be false"]
+      - set: [fail, { +: [fail, 1] }]
+    else:
+      - print: ["PASS: H2 tolerance(1.0, 1.0005, 0.0001) = false"]
+      - set: [pass, { +: [pass, 1] }]
+
+# Negative Werte
+- decl: [tc, f32, -3.5]
+- decl: [td, f32, -3.501]
+- if:
+    condition: { tolerance: [tc, td, 0.01] }
+    then:
+      - print: ["PASS: H3 tolerance(-3.5, -3.501, 0.01) = true"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: H3 tolerance with negatives"]
+      - set: [fail, { +: [fail, 1] }]
+
+# Exakte Gleichheit
+- if:
+    condition: { tolerance: [5.0, 5.0, 0.0] }
+    then:
+      - print: ["PASS: H4 tolerance(5.0, 5.0, 0.0) = true"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: H4 exact equality with eps=0"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── Summary ────────────────────────────────────────────────────────────────
+- print: [""]
+- print: ["=== buffer<f32> + tolerance Tests: ${pass} passed, ${fail} failed ==="]

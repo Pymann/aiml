@@ -57,7 +57,7 @@ bool RootState::OnScalar(const std::string& value, const std::string& tag) {
              builder->pushState(std::make_unique<FunctionBuilder>(builder));
              return true;
         }
-        else if (currentKey == "decl" || currentKey == "set" || currentKey == "call" || currentKey == "print") {
+        else if (currentKey == "decl" || currentKey == "set" || currentKey == "call" || currentKey == "print" || currentKey == "idx") {
              builder->pushState(std::make_unique<StatementBuilder>(builder, currentKey));
              return true;
         }

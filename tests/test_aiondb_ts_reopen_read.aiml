@@ -12,7 +12,7 @@
     body:
       - decl: [db_path, path, "/tmp/aiml_test_aiondb_ts_reopen_20260319/"]
       - if:
-          condition: { "==": [{ call: [db_path.exists] }, 0] }
+          condition: { eq: [{ call: [db_path.exists] }, 0] }
           then:
             - print: ["SKIP ts_reopen_read (run test_aiondb_ts_reopen_write.aiml first)"]
             - return: 0
@@ -23,7 +23,7 @@
       - decl: [n, i32]
       - set: [n, { call: [ts.len] }]
       - if:
-          condition: { "!=": [n, 2] }
+          condition: { neq: [n, 2] }
           then:
             - print: ["FAIL ts_reopen_read_len=${n}"]
             - call: [sys.exit, 1]
@@ -31,7 +31,7 @@
       - decl: [r1, ptr<ReopenReading>]
       - set: [r1, { call: [ts.at, 150] }]
       - if:
-          condition: { "!=": [r1.val, 11] }
+          condition: { neq: [r1.val, 11] }
           then:
             - print: ["FAIL ts_reopen_read_150=${r1.val}"]
             - call: [sys.exit, 1]
@@ -39,7 +39,7 @@
       - decl: [r2, ptr<ReopenReading>]
       - set: [r2, { call: [ts.at, 250] }]
       - if:
-          condition: { "!=": [r2.val, 22] }
+          condition: { neq: [r2.val, 22] }
           then:
             - print: ["FAIL ts_reopen_read_250=${r2.val}"]
             - call: [sys.exit, 1]

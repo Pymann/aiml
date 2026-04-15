@@ -1,0 +1,27 @@
+# Test sys.mem_limit and sys.mem_usage
+- def:
+    name: main
+    args: []
+    return: i32
+    body:
+      # Check current memory usage
+      - decl: [rss, i64, { call: [sys.mem_usage] }]
+      - decl: [rss_mb, i64, { /: [rss, 1048576] }]
+      - print: ["A1 RSS: ${rss_mb} MB"]
+
+      # Set a 2GB limit (2048 * 1024 * 1024)
+      - decl: [limit, i64, 2048]
+      - set: [limit, { "*": [limit, 1048576] }]
+      - call: [sys.mem_limit, limit]
+
+      # Check usage again (should still work)
+      - decl: [rss2, i64, { call: [sys.mem_usage] }]
+      - decl: [rss2_mb, i64, { /: [rss2, 1048576] }]
+      - print: ["A2 RSS after limit: ${rss2_mb} MB"]
+
+      # Remove limit
+      - call: [sys.mem_limit, 0]
+      - print: ["A3 limit removed"]
+
+      - print: ["ALL TESTS PASSED"]
+      - return: [0]

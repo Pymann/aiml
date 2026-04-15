@@ -73,6 +73,20 @@ Returns `1` if the string begins with `prefix`, `0` otherwise. Implemented via `
 
 ---
 
+### `string.ends_with(suffix)` → `i32`
+
+Returns `1` if the string ends with `suffix`, `0` otherwise. Returns `0` if the suffix is longer than the string. Empty suffix always matches.
+
+```yaml
+- decl: [path, string, "data/train.json"]
+- decl: [is_json, i32, { call: [path.ends_with, ".json"] }]
+# is_json == 1
+- decl: [is_md, i32, { call: [path.ends_with, ".md"] }]
+# is_md == 0
+```
+
+---
+
 ### `string.index_of(needle)` → `i32`
 
 Returns the byte offset of the **first** occurrence of `needle`, or `-1` if not found.
@@ -86,6 +100,110 @@ Implemented via `strstr`.
 - decl: [miss, i32]
 - set:  [miss, { call: [s.index_of, "xyz"] }]
 # miss == -1
+```
+
+---
+
+### `string.lower()` → `string`
+
+Returns a new string where all ASCII uppercase letters `A-Z` are converted to lowercase.
+Characters outside ASCII uppercase remain unchanged.
+
+```yaml
+- decl: [s, string, "HeLLo AIML"]
+- decl: [lowered, string]
+- set:  [lowered, { call: [s.lower] }]
+# lowered == "hello aiml"
+```
+
+---
+
+### `string.trim()` → `string`
+
+Returns a new string with leading and trailing ASCII whitespace removed.
+
+```yaml
+- decl: [raw, string, "   hello world \t"]
+- decl: [clean, string]
+- set:  [clean, { call: [raw.trim] }]
+# clean == "hello world"
+```
+
+---
+
+### `string.replace(old, new)` → `string`
+
+Returns a new string where all occurrences of `old` are replaced by `new`.
+If `old` is not found, the original content is returned as a new string.
+
+```yaml
+- decl: [csv, string, "a,b,b,c"]
+- decl: [out, string]
+- set:  [out, { call: [csv.replace, "b", "X"] }]
+# out == "a,X,X,c"
+```
+
+---
+
+### `string.split(delimiter)` → `list<string>`
+
+Splits the string at each occurrence of `delimiter` and returns a `list<string>`.
+If the delimiter does not occur, the result contains exactly one element: the original string.
+
+```yaml
+- decl: [line, string, "fire earth water"]
+- decl: [parts, list<string>]
+- set:  [parts, { call: [line.split, " "] }]
+# parts.len == 3
+# parts-0 == "fire"
+# parts-1 == "earth"
+# parts-2 == "water"
+```
+
+---
+
+### `string.parse_i32()` → `i32`
+
+Parses the string as a base-10 integer using `strtol`. Returns `0` for null, empty, or
+non-numeric strings. Handles leading whitespace and optional sign (`+`/`-`).
+
+```yaml
+- decl: [s, string, "42"]
+- decl: [n, i32, { call: [s.parse_i32] }]
+# n == 42
+
+- decl: [neg, string, "-7"]
+- decl: [m, i32, { call: [neg.parse_i32] }]
+# m == -7
+
+- decl: [bad, string, "hello"]
+- decl: [z, i32, { call: [bad.parse_i32] }]
+# z == 0
+```
+
+> **Difference to `to_int`:** `parse_i32` uses `strtol` (stricter, handles edge cases),
+> `to_int` uses `atoi` (simpler, equivalent for well-formed decimal input).
+> Both return `0` for null/empty strings.
+
+---
+
+### `string.parse_f32()` → `f32`
+
+Parses the string as a floating-point number using `strtof`. Returns `0.0` for null, empty,
+or non-numeric strings. Handles decimal points, scientific notation (`1.5e3`), and signs.
+
+```yaml
+- decl: [s, string, "3.14"]
+- decl: [f, f32, { call: [s.parse_f32] }]
+# f ≈ 3.14
+
+- decl: [sci, string, "1.5e2"]
+- decl: [g, f32, { call: [sci.parse_f32] }]
+# g == 150.0
+
+- decl: [bad, string, "abc"]
+- decl: [h, f32, { call: [bad.parse_f32] }]
+# h == 0.0
 ```
 
 ---

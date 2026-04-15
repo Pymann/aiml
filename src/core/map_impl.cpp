@@ -125,7 +125,7 @@ namespace MapImpl {
         llvm::BasicBlock* notFoundBB = llvm::BasicBlock::Create(ctx.context, "put_not_found", parentFunc);
         llvm::BasicBlock* endBB = llvm::BasicBlock::Create(ctx.context, "put_end", parentFunc);
         
-        llvm::Value* iVar = ctx.builder.CreateAlloca(ctx.builder.getInt32Ty(), nullptr, "i_put");
+        llvm::Value* iVar = ctx.createEntryAlloca(ctx.builder.getInt32Ty(), "i_put");
         ctx.builder.CreateStore(ctx.builder.getInt32(0), iVar);
 
         ctx.builder.CreateBr(loopBB);
@@ -167,7 +167,11 @@ namespace MapImpl {
         
         ctx.builder.SetInsertPoint(growBB);
         // Simple grow: Realloc keys and values
-        llvm::Value* newCap = ctx.builder.CreateMul(capVal, ctx.builder.getInt32(2));
+        // Ensure minimum capacity of 4 to handle zero-initialized maps (capacity=0)
+        llvm::Value* doubled = ctx.builder.CreateMul(capVal, ctx.builder.getInt32(2));
+        llvm::Value* newCap = ctx.builder.CreateSelect(
+            ctx.builder.CreateICmpSGT(doubled, ctx.builder.getInt32(3)),
+            doubled, ctx.builder.getInt32(4), "growCap");
         ctx.builder.CreateStore(newCap, capPtr);
         
         llvm::Function* reallocFunc = ctx.getFunction("realloc", llvm::PointerType::get(ctx.context, 0), 
@@ -208,7 +212,7 @@ namespace MapImpl {
         
         llvm::Value* valDest = ctx.builder.CreateInBoundsGEP(valType, valsBase, sizeVal);
         ctx.builder.CreateStore(valVal, valDest);
-        
+
         llvm::Value* newSize = ctx.builder.CreateAdd(sizeVal, ctx.builder.getInt32(1));
         ctx.builder.CreateStore(newSize, sizePtr);
         
@@ -231,11 +235,11 @@ namespace MapImpl {
         llvm::BasicBlock* foundBB = llvm::BasicBlock::Create(ctx.context, "get_found", parentFunc);
         llvm::BasicBlock* endBB = llvm::BasicBlock::Create(ctx.context, "get_end", parentFunc);
         
-        llvm::Value* iVar = ctx.builder.CreateAlloca(ctx.builder.getInt32Ty(), nullptr, "i_get");
+        llvm::Value* iVar = ctx.createEntryAlloca(ctx.builder.getInt32Ty(), "i_get");
         ctx.builder.CreateStore(ctx.builder.getInt32(0), iVar);
         
         // Result var
-        llvm::Value* resVar = ctx.builder.CreateAlloca(valType, nullptr, "res_get");
+        llvm::Value* resVar = ctx.createEntryAlloca(valType, "res_get");
         // Default value: 0 or empty string?
         // use generic null
         ctx.builder.CreateStore(llvm::Constant::getNullValue(valType), resVar);
@@ -283,11 +287,11 @@ namespace MapImpl {
         llvm::BasicBlock* foundBB = llvm::BasicBlock::Create(ctx.context, "cont_found", parentFunc);
         llvm::BasicBlock* endBB = llvm::BasicBlock::Create(ctx.context, "cont_end", parentFunc);
         
-        llvm::Value* iVar = ctx.builder.CreateAlloca(ctx.builder.getInt32Ty(), nullptr, "i_cont");
+        llvm::Value* iVar = ctx.createEntryAlloca(ctx.builder.getInt32Ty(), "i_cont");
         ctx.builder.CreateStore(ctx.builder.getInt32(0), iVar);
         
         // Result i1
-        llvm::Value* resVar = ctx.builder.CreateAlloca(ctx.builder.getInt1Ty(), nullptr, "res_cont");
+        llvm::Value* resVar = ctx.createEntryAlloca(ctx.builder.getInt1Ty(), "res_cont");
         ctx.builder.CreateStore(ctx.builder.getInt1(false), resVar);
         
         ctx.builder.CreateBr(loopBB);
@@ -333,7 +337,7 @@ namespace MapImpl {
         llvm::BasicBlock* foundBB = llvm::BasicBlock::Create(ctx.context, "rm_found", parentFunc);
         llvm::BasicBlock* endBB = llvm::BasicBlock::Create(ctx.context, "rm_end", parentFunc);
         
-        llvm::Value* iVar = ctx.builder.CreateAlloca(ctx.builder.getInt32Ty(), nullptr, "i_rm");
+        llvm::Value* iVar = ctx.createEntryAlloca(ctx.builder.getInt32Ty(), "i_rm");
         ctx.builder.CreateStore(ctx.builder.getInt32(0), iVar);
 
         ctx.builder.CreateBr(loopBB);

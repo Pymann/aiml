@@ -19,7 +19,7 @@
       - decl: [cp, i32]
       - set: [cp, { call: [db.checkpoint] }]
       - if:
-          condition: { "!=": [cp, 0] }
+          condition: { neq: [cp, 0] }
           then:
             - print: ["FAIL join_only_checkpoint=${cp}"]
             - call: [sys.exit, 1]
@@ -27,7 +27,7 @@
       - decl: [dir_ok, i32]
       - set: [dir_ok, { call: [io.is_dir, db_dir] }]
       - if:
-          condition: { "!=": [dir_ok, 1] }
+          condition: { neq: [dir_ok, 1] }
           then:
             - print: ["FAIL join_only_dir=${dir_ok} dir=${db_dir}"]
             - call: [sys.exit, 1]
@@ -35,7 +35,7 @@
       - decl: [got, string]
       - set: [got, { call: [cfg.get, "mode"] }]
       - if:
-          condition: { "==": [{ eq: [got, "join-only"] }, 0] }
+          condition: { eq: [{ eq: [got, "join-only"] }, 0] }
           then:
             - print: ["FAIL join_only_get=${got}"]
             - call: [sys.exit, 1]

@@ -8,7 +8,7 @@
     body:
       - decl: [db_path, path, "/tmp/aiml_test_aiondb_kv_reopen_20260319/"]
       - if:
-          condition: { "==": [{ call: [db_path.exists] }, 0] }
+          condition: { eq: [{ call: [db_path.exists] }, 0] }
           then:
             - print: ["SKIP kv_reopen_read (run test_aiondb_kv_reopen_write.aiml first)"]
             - return: 0
@@ -19,7 +19,7 @@
       - decl: [mode, string]
       - set: [mode, { call: [cfg.get, "mode"] }]
       - if:
-          condition: { "==": [{ eq: [mode, "battle"] }, 0] }
+          condition: { eq: [{ eq: [mode, "battle"] }, 0] }
           then:
             - print: ["FAIL kv_reopen_read_mode=${mode}"]
             - call: [sys.exit, 1]
@@ -27,7 +27,7 @@
       - decl: [player, string]
       - set: [player, { call: [cfg.get, "player"] }]
       - if:
-          condition: { "==": [{ eq: [player, "nikolai"] }, 0] }
+          condition: { eq: [{ eq: [player, "nikolai"] }, 0] }
           then:
             - print: ["FAIL kv_reopen_read_player=${player}"]
             - call: [sys.exit, 1]

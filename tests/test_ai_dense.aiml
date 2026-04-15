@@ -1,0 +1,112 @@
+# test_ai_dense.aiml — Test ai.encode_dense, triplet_loss, triplet_grad
+- decl: [pass, i32, 0]
+- decl: [fail, i32, 0]
+
+# Setup: 4-token embedding table, dim=2
+# Token 0: [1.0, 0.0], Token 1: [0.0, 1.0], Token 2: [-1.0, 0.0], Token 3: [0.0, -1.0]
+- decl: [flat, buffer, 0]
+- call: [flat.alloc, 64]
+- call: [flat.zero]
+# Token 0
+- call: [flat.seek, 0]
+- call: [flat.write, 1.0, f32]
+- call: [flat.write, 0.0, f32]
+# Token 1
+- call: [flat.write, 0.0, f32]
+- call: [flat.write, 1.0, f32]
+# Token 2
+- call: [flat.write, -1.0, f32]
+- call: [flat.write, 0.0, f32]
+# Token 3
+- call: [flat.write, 0.0, f32]
+- call: [flat.write, -1.0, f32]
+
+# T1: encode_dense — mean of tokens [0,1] = [0.5, 0.5]
+- decl: [ids, list<i32>]
+- call: [ids.push, 0]
+- call: [ids.push, 1]
+- decl: [enc, list<f32>, { call: [ai.encode_dense, ids, flat, 2] }]
+- print: ["T1: enc.len=${enc.len}"]
+- decl: [e0, f32, enc-0]
+- decl: [e1, f32, enc-1]
+- print: ["T1: enc=[${e0}, ${e1}]"]
+- if:
+    condition: { "&&": [{ ">": [e0, 0.49] }, { "<": [e0, 0.51] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL T1a: expected 0.5, got ${e0}"]
+- if:
+    condition: { "&&": [{ ">": [e1, 0.49] }, { "<": [e1, 0.51] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL T1b: expected 0.5, got ${e1}"]
+
+# T2: triplet_loss — q=[1,0], pos=[0,1], neg=[-1,0]
+# dist_pos = 1+1 = 2, dist_neg = 4+0 = 4, loss = 2-4+1.0 = -1 → clamped to 0
+- decl: [q, list<f32>]
+- call: [q.push, 1.0]
+- call: [q.push, 0.0]
+- decl: [pos, list<f32>]
+- call: [pos.push, 0.0]
+- call: [pos.push, 1.0]
+- decl: [neg, list<f32>]
+- call: [neg.push, -1.0]
+- call: [neg.push, 0.0]
+- decl: [loss, f32, { call: [ai.triplet_loss, q, pos, neg, 1.0, 2] }]
+- print: ["T2: loss=${loss} (expected 0)"]
+- if:
+    condition: { "<": [loss, 0.01] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL T2: expected 0, got ${loss}"]
+
+# T3: triplet_loss with positive loss — q=[1,0], pos=[-1,0], neg=[0,1]
+# dist_pos = 4, dist_neg = 2, loss = 4-2+1 = 3
+- decl: [neg2, list<f32>]
+- call: [neg2.push, 0.0]
+- call: [neg2.push, 1.0]
+- decl: [pos2, list<f32>]
+- call: [pos2.push, -1.0]
+- call: [pos2.push, 0.0]
+- decl: [loss2, f32, { call: [ai.triplet_loss, q, pos2, neg2, 1.0, 2] }]
+- print: ["T3: loss=${loss2} (expected 3)"]
+- if:
+    condition: { "&&": [{ ">": [loss2, 2.99] }, { "<": [loss2, 3.01] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL T3: expected 3.0, got ${loss2}"]
+
+# T4: triplet_grad — should be 2*(neg-pos) = 2*([0,1]-[-1,0]) = [2,2]
+- decl: [grad, list<f32>, { call: [ai.triplet_grad, q, pos2, neg2, 1.0, 2] }]
+- decl: [g0, f32, grad-0]
+- decl: [g1, f32, grad-1]
+- print: ["T4: grad=[${g0}, ${g1}] (expected [2,2])"]
+- if:
+    condition: { "&&": [{ ">": [g0, 1.99] }, { "<": [g0, 2.01] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL T4a: expected 2.0, got ${g0}"]
+- if:
+    condition: { "&&": [{ ">": [g1, 1.99] }, { "<": [g1, 2.01] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL T4b: expected 2.0, got ${g1}"]
+
+- print: [""]
+- print: ["test_ai_dense: ${pass} passed, ${fail} failed"]
+- if:
+    condition: { ">": [fail, 0] }
+    then:
+      - call: [sys.exit, 1]

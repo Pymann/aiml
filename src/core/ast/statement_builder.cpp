@@ -99,7 +99,11 @@ bool StatementBuilder::OnMapStart() {
 
 void StatementBuilder::receiveChildNode(std::unique_ptr<Node> node) {
     if (auto e = dynamic_cast<Expr*>(node.release())) {
-        exprArg = std::unique_ptr<Expr>(e);
+        if (type == "call") {
+            exprArgs.push_back(std::unique_ptr<Expr>(e));
+        } else {
+            exprArg = std::unique_ptr<Expr>(e);
+        }
     }
 }
 
@@ -139,6 +143,7 @@ std::unique_ptr<Node> StatementBuilder::finish() {
          decl->is_const    = is_const;
          decl->is_volatile = is_volatile;
          decl->is_extern   = is_extern;
+         decl->sourceLine  = capturedLine;
          return decl;
     }
     if (type == "set" && args.size() >= 1) {
@@ -148,7 +153,27 @@ std::unique_ptr<Node> StatementBuilder::finish() {
              exprArg = parseScalarExpr(val, tag);
          }
          auto set = std::make_unique<SetStmt>(args[0].first, std::move(exprArg));
+         set->sourceLine = capturedLine;
          return set;
+    }
+    // idx: [container, idx1, ..., idxN, value]
+    if (type == "idx" && args.size() >= 3) {
+         auto idx = std::make_unique<IdxStmt>(args[0].first);
+         // Middle args are indices (as expressions), last arg OR exprArg is the value
+         size_t lastScalar = args.size() - 1;
+         if (exprArg) {
+             // Value was an expression map: idx: [arr, i, { "+": [a, b] }]
+             for (size_t i = 1; i < args.size(); ++i)
+                 idx->indices.push_back(parseScalarExpr(args[i].first, args[i].second));
+             idx->value = std::move(exprArg);
+         } else {
+             // Value is last scalar: idx: [arr, i, 42.0]
+             for (size_t i = 1; i < lastScalar; ++i)
+                 idx->indices.push_back(parseScalarExpr(args[i].first, args[i].second));
+             idx->value = parseScalarExpr(args[lastScalar].first, args[lastScalar].second);
+         }
+         idx->sourceLine = capturedLine;
+         return idx;
     }
     if (type == "call" && args.size() >= 1) {
          auto call = std::make_unique<CallExpr>(args[0].first);
@@ -157,9 +182,11 @@ std::unique_ptr<Node> StatementBuilder::finish() {
              const std::string& tag = args[i].second;
              call->args.push_back(parseScalarExpr(val, tag));
          }
-         if (exprArg) call->args.push_back(std::move(exprArg));
-         
-         return std::make_unique<ExprStmt>(std::move(call));
+         for (auto& ea : exprArgs) call->args.push_back(std::move(ea));
+         call->sourceLine = capturedLine;
+         auto exprStmt = std::make_unique<ExprStmt>(std::move(call));
+         exprStmt->sourceLine = capturedLine;
+         return exprStmt;
     }
     if (type == "print" && args.size() >= 1) {
          auto call = std::make_unique<CallExpr>("print");
@@ -168,16 +195,23 @@ std::unique_ptr<Node> StatementBuilder::finish() {
              const std::string& tag = args[i].second;
              call->args.push_back(parseScalarExpr(val, tag));
          }
-         return std::make_unique<ExprStmt>(std::move(call));
+         call->sourceLine = capturedLine;
+         auto exprStmt = std::make_unique<ExprStmt>(std::move(call));
+         exprStmt->sourceLine = capturedLine;
+         return exprStmt;
     }
     if (type == "return") {
          auto ret = std::make_unique<RetStmt>();
          if (exprArg) ret->value = std::move(exprArg);
+         ret->sourceLine = capturedLine;
          return ret;
     }
     if (type == "throw") {
-         if (exprArg) return std::make_unique<ThrowStmt>(std::move(exprArg));
-         else {
+         if (exprArg) {
+             auto t = std::make_unique<ThrowStmt>(std::move(exprArg));
+             t->sourceLine = capturedLine;
+             return t;
+         } else {
              LOG_ERROR("throw statement must have a value");
              return nullptr;
          }

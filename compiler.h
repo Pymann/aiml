@@ -2,8 +2,10 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <set>
 #include <map>
 #include <memory>
+#include <unordered_set>
 #include "logger.h"
 
 // Forward declarations
@@ -56,7 +58,20 @@ public:
     
     // Dependency & Caching Methods
     void resolveImport(const std::string& path);
-    bool checkCache(const std::string& sourcePath, std::string& outHash);
+    // Compute the full semantic cache key for an import: source hash +
+    // transitive imports + sibling imports + library mode + compiler binary id.
+    // outObjPath is set to the keyed object path (always; whether hit or miss).
+    bool checkCache(const std::string& sourcePath,
+                    const std::vector<std::string>& siblings,
+                    bool libMode,
+                    std::string& outCacheKey,
+                    std::string& outObjPath);
+    // Helpers
+    std::string computeImportCacheKey(const std::string& sourcePath,
+                                      const std::vector<std::string>& siblings,
+                                      bool libMode) const;
+    void collectTransitiveImports(const std::string& path,
+                                  std::set<std::string>& visited) const;
     
     std::vector<std::string> linkedObjects;
     std::vector<std::string> importedSourceFiles;  // source paths of all imports (for .d file)
@@ -71,6 +86,18 @@ public:
     // Sibling import files for cross-import type resolution.
     // Set by the parent compiler so sub-compilers can header-only parse them.
     std::vector<std::string> siblingImports;
+    // Per-instance guard: each compile root has its own "already-compiled-this-run"
+    // set, keyed by full cache_key (not just path). Prevents stale cross-run reuse
+    // and avoids the prior process-wide static that ignored semantic context.
+    std::shared_ptr<std::unordered_set<std::string>> compiledKeys
+        = std::make_shared<std::unordered_set<std::string>>();
+
+    // Per-run guard keyed by normalized source path. Shared across sub-compilers
+    // within a single top-level compile so that the lambda's deferredImports
+    // push_back is deduped across the entire import graph (replaces the prior
+    // process-wide static compiledObjects set, but scoped to one compile root).
+    std::shared_ptr<std::unordered_set<std::string>> parsedPathsShared
+        = std::make_shared<std::unordered_set<std::string>>();
 
 private:
     void generateIR(const YAML::Node& node);

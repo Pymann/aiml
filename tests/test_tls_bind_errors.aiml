@@ -21,7 +21,7 @@
       - set: [brc2, { call: [tls.bind, s2, "127.0.0.1", 23192] }]
 
       - if:
-          condition: { "==": [brc1, 0] }
+          condition: { eq: [brc1, 0] }
           then:
             - set: [pass, { +: [pass, 1] }]
           else:
@@ -29,7 +29,7 @@
             - set: [fail, { +: [fail, 1] }]
 
       - if:
-          condition: { "!=": [brc2, 0] }
+          condition: { neq: [brc2, 0] }
           then:
             - set: [pass, { +: [pass, 1] }]
           else:

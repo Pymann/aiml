@@ -182,6 +182,21 @@ namespace AIML {
     CompilerContext(llvm::LLVMContext& ctx, llvm::Module& mod, llvm::IRBuilder<>& b)
         : context(ctx), module(mod), builder(b) {
         // initialized lazily or explicitly later to avoid circular dependency here
+        llvm::Type* i32 = llvm::Type::getInt32Ty(context);
+        llvm::Type* p = llvm::PointerType::get(context, 0);
+        llvm::StructType* jsTy = llvm::StructType::getTypeByName(context, "JsonStyle");
+        if (!jsTy) jsTy = llvm::StructType::create(context, {i32, p, p}, "JsonStyle");
+        ClassInfo jsInfo;
+        jsInfo.name = "JsonStyle";
+        jsInfo.type = jsTy;
+        jsInfo.isBuiltin = false;
+        StructMember prettyMember; prettyMember.index = 0; prettyMember.type = i32; prettyMember.typeName = "i32";
+        StructMember indentMember; indentMember.index = 1; indentMember.type = p; indentMember.typeName = "string";
+        StructMember newlineMember; newlineMember.index = 2; newlineMember.type = p; newlineMember.typeName = "string";
+        jsInfo.members["pretty"] = prettyMember;
+        jsInfo.members["indent"] = indentMember;
+        jsInfo.members["newline"] = newlineMember;
+        classes["JsonStyle"] = std::move(jsInfo);
     }
 
     // Original constructor was:
@@ -196,6 +211,14 @@ namespace AIML {
     llvm::Module& module;
     llvm::IRBuilder<>& builder;
     std::unique_ptr<AIML::IRGenerator> ir_gen;
+
+    // Helper: alloca in function entry block (prevents stack growth in loops)
+    llvm::AllocaInst* createEntryAlloca(llvm::Type* ty, const std::string& name = "") {
+        llvm::Function* fn = builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock& entry = fn->getEntryBlock();
+        llvm::IRBuilder<> eb(&entry, entry.getFirstInsertionPt());
+        return eb.CreateAlloca(ty, nullptr, name);
+    }
 
     // Exception Handling State
     llvm::BasicBlock* catchBlock = nullptr;
@@ -241,6 +264,42 @@ namespace AIML {
 
     // Source location tracking for log.* calls (Spec 46)
     std::string currentSourceFile;   // Relative path of file being compiled
+    std::string currentFunctionName; // Name of the function/method currently being compiled
+    int         currentLine = -1;    // 1-based line of the statement being compiled (-1 = unknown)
+
+    // Returns an AIML-source location prefix for diagnostic messages.
+    // Format: "file:line: " or "file (in func): " or "file: " or "".
+    // Prepend to LOG_ERROR messages; C++ file:line is appended by the macro.
+    std::string fmtLoc() const {
+        if (currentSourceFile.empty()) return "";
+        std::string loc = currentSourceFile;
+        if (currentLine > 0) {
+            loc += ":" + std::to_string(currentLine);
+        } else if (!currentFunctionName.empty()) {
+            loc += " (in " + currentFunctionName + ")";
+        }
+        return loc + ": ";
+    }
+
+    std::string fmtLoc(const YAML::Node& node) const {
+        if (currentSourceFile.empty()) return "";
+        std::string loc = currentSourceFile;
+        if (node.IsDefined()) {
+            int ln = node.Mark().line;
+            if (ln >= 0) {
+                loc += ":" + std::to_string(ln + 1);
+                return loc + ": ";
+            }
+        }
+        // Fall back to currentLine from visitStatement
+        if (currentLine > 0) {
+            loc += ":" + std::to_string(currentLine);
+            return loc + ": ";
+        }
+        if (!currentFunctionName.empty())
+            loc += " (in " + currentFunctionName + ")";
+        return loc + ": ";
+    }
 
     // Hot-Reload: next free fptable slot index (incremented in visitFunction)
     int fptable_next_index = 0;
@@ -306,7 +365,7 @@ namespace AIML {
     // Helper: Get LLVM Type from string
     llvm::Type* getLLVMType(const std::string& typeName) {
         if (typeName == "" || typeName == "<.balance" || typeName == "${ { +: [a, b] } }") {
-             LOG_ERROR("CRITICAL ERROR: getLLVMType called with invalid typeName: '" + typeName + "'");
+             LOG_ERROR(fmtLoc() + "CRITICAL ERROR: getLLVMType called with invalid typeName: '" + typeName + "'");
              throw std::runtime_error("INVALID TYPE NAME FOUND: " + typeName);
         }
         LOG_DEBUG("getLLVMType: '" + typeName + "'");
@@ -319,20 +378,20 @@ namespace AIML {
         // Check for List type: "list<T>"
         if (typeName.rfind("list<", 0) == 0 && typeName.back() == '>') {
             std::string innerType = typeName.substr(5, typeName.length() - 6);
-            llvm::Type* elemType = getLLVMType(innerType);
-            
-            if (!elemType) return nullptr;
-
-            std::string structName = "list_" + innerType; // Simple naming for now
+            // Note: the list struct layout is always { i32, i32, i8* } regardless of T.
+            // The inner type is resolved lazily at element access time.  Do NOT call
+            // getLLVMType(innerType) here — it would spuriously error on forward-declared
+            // types during Phase-A sibling type registration.
+            std::string structName = "list_" + innerType;
             llvm::StructType* listType = llvm::StructType::getTypeByName(context, structName);
-            
+
             if (!listType) {
                 // Define struct { i32 size, i32 capacity, T* data }
                 std::vector<llvm::Type*> members;
                 members.push_back(llvm::Type::getInt32Ty(context)); // size
                 members.push_back(llvm::Type::getInt32Ty(context)); // capacity
                 members.push_back(llvm::PointerType::get(context, 0)); // Opaque pointer to data array
-                
+
                 listType = llvm::StructType::create(context, members, structName);
             }
             return listType;
@@ -393,7 +452,7 @@ namespace AIML {
                  }
                  
                  if (!keyType || !valType) { 
-                     LOG_ERROR("Failed to resolve key/val types for map");
+                     LOG_ERROR(fmtLoc() + "Failed to resolve key/val types for map");
                      return nullptr; 
                  }
                  
@@ -413,12 +472,33 @@ namespace AIML {
                   }
                   return mapType;
              } else {
-                 LOG_ERROR("Separator ':' not found in map type content: " + content);
+                 LOG_ERROR(fmtLoc() + "Separator ':' not found in map type content: " + content);
              }
         }
 
+        // Check for fixed-size array type: "array<T:N>" or "array<T:N:M>" etc.
+        if (typeName.rfind("array<", 0) == 0 && typeName.back() == '>') {
+            std::string inner = typeName.substr(6, typeName.size() - 7); // strip "array<" and ">"
+            // Split on ':'  →  e.g. "f32:64" or "f32:4:4" or "i32:3:4:5"
+            std::vector<std::string> parts;
+            size_t pos = 0;
+            while (pos < inner.size()) {
+                size_t sep = inner.find(':', pos);
+                if (sep == std::string::npos) { parts.push_back(inner.substr(pos)); break; }
+                parts.push_back(inner.substr(pos, sep - pos));
+                pos = sep + 1;
+            }
+            if (parts.size() >= 2) {
+                llvm::Type* elemType = getLLVMType(parts[0]);
+                uint64_t totalCount = 1;
+                for (size_t i = 1; i < parts.size(); ++i)
+                    totalCount *= std::stoull(parts[i]);
+                return llvm::ArrayType::get(elemType, totalCount);
+            }
+        }
+
         // Check for array type: "type-size"
-        size_t hyphenPos = typeName.rfind('-'); 
+        size_t hyphenPos = typeName.rfind('-');
         
         if (hyphenPos != std::string::npos) {
             std::string baseTypeStr = typeName.substr(0, hyphenPos);
@@ -543,6 +623,7 @@ namespace AIML {
         if (typeName == "tls_socket_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlTlsSocket*
         if (typeName == "ws_handle") return llvm::Type::getInt8Ty(context)->getPointerTo();          // AimlWs*
         if (typeName == "prefab_instance") return llvm::Type::getInt8Ty(context)->getPointerTo();  // AimlPrefabInstance*
+        if (typeName == "tensor") return llvm::Type::getInt8Ty(context)->getPointerTo();       // AimlTensor*
         if (typeName == "any") return llvm::Type::getInt8Ty(context)->getPointerTo();         // void*
 
         // gltf handle types — all opaque i8* pointers
@@ -655,11 +736,17 @@ namespace AIML {
         if (typeName == "VecStore")
             return llvm::Type::getInt8Ty(context)->getPointerTo();
 
+        if (typeName == "JsonStyle") {
+            llvm::StructType* t = llvm::StructType::getTypeByName(context, "JsonStyle");
+            if (!t) t = llvm::StructType::create(context, {llvm::Type::getInt32Ty(context), llvm::PointerType::get(context, 0), llvm::PointerType::get(context, 0)}, "JsonStyle");
+            return t;
+        }
+
         // Code: pointer to heap-allocated __aiml_code_t (opaque i8*)
         if (typeName == "Code")
             return llvm::Type::getInt8Ty(context)->getPointerTo();
 
-        LOG_ERROR("Unknown Type: '" + typeName + "' -> defaulting to i32");
+        LOG_ERROR(fmtLoc() + "Unknown Type: '" + typeName + "' -> defaulting to i32");
         return llvm::Type::getInt32Ty(context); // Default
     }
 

@@ -1,0 +1,147 @@
+# Regression test: websocket mirror must propagate in-place mutations of existing list<model> elements.
+# Expected exit code: 0
+
+- model:
+    name: EffectLiteDeep
+    sync: [code, amount, remaining_turns, key]
+    fields:
+      - [code, i32, 0]
+      - [amount, i32, 0]
+      - [remaining_turns, i32, 0]
+      - [key, string]
+
+- model:
+    name: EffectRootDeep
+    sync: [effects]
+    fields:
+      - [effects, list<EffectLiteDeep>]
+
+- def:
+    name: mirror_ws_deep_effect_host
+    args: []
+    body:
+      - decl: [sess, mirror_session]
+      - set: [sess, { call: [mirror.listen, "ws://127.0.0.1:19913"] }]
+      - decl: [root, EffectRootDeep]
+      - decl: [effects, list<EffectLiteDeep>]
+      - set: [root.effects, effects]
+
+      - decl: [fx0, EffectLiteDeep]
+      - set: [fx0.code, 46]
+      - set: [fx0.amount, 3]
+      - set: [fx0.remaining_turns, 2]
+      - set: [fx0.key, "paralyze"]
+      - call: [root.effects.push, fx0]
+
+      - decl: [fx1, EffectLiteDeep]
+      - set: [fx1.code, 12]
+      - set: [fx1.amount, 5]
+      - set: [fx1.remaining_turns, 1]
+      - set: [fx1.key, "atk_up"]
+      - call: [root.effects.push, fx1]
+
+      - decl: [nid, i32]
+      - set: [nid, { call: [sess.register, root] }]
+      - print: ["deep-host: registered net_id=${nid}"]
+
+      - decl: [i, i32, 0]
+      - while:
+          condition: { lt: [i, 35] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+
+      - decl: [fx0_ptr, ptr<EffectLiteDeep>]
+      - set: [fx0_ptr, { call: [root.effects.get, 0] }]
+      - set: [fx0_ptr.amount, 9]
+      - set: [fx0_ptr.remaining_turns, 0]
+      - set: [fx0_ptr.key, "paralyze_done"]
+
+      - decl: [fx1_ptr, ptr<EffectLiteDeep>]
+      - set: [fx1_ptr, { call: [root.effects.get, 1] }]
+      - set: [fx1_ptr.amount, 8]
+      - set: [fx1_ptr.remaining_turns, 4]
+      - set: [fx1_ptr.key, "atk_up_big"]
+      - print: ["deep-host: mutated existing effect elements in place"]
+
+      - set: [i, 0]
+      - while:
+          condition: { lt: [i, 45] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [i, { +: [i, 1] }]
+
+      - call: [sess.close]
+
+- decl: [host_th, thread_handle]
+- set: [host_th, { spawn: [mirror_ws_deep_effect_host] }]
+- call: [time.sleep_ms, 80]
+
+- decl: [client, mirror_session]
+- set: [client, { call: [mirror.connect_timeout, "ws://127.0.0.1:19913", 4000] }]
+- call: [time.sleep_ms, 120]
+- call: [client.update]
+
+- decl: [ev, mirror_event]
+- set: [ev, { call: [client.next_event] }]
+- decl: [replica, EffectRootDeep]
+- call: [client.register_id, replica, ev.net_id]
+- print: ["deep-client: replica registered net_id=${ev.net_id}"]
+
+- decl: [poll_i, i32, 0]
+- while:
+    condition: { lt: [poll_i, 50] }
+    body:
+      - call: [time.sleep_ms, 20]
+      - call: [client.update]
+      - set: [poll_i, { +: [poll_i, 1] }]
+
+- print: ["deep-client: effects.len=${replica.effects.len} fx0=${replica.effects-0.amount}/${replica.effects-0.remaining_turns}/${replica.effects-0.key} fx1=${replica.effects-1.amount}/${replica.effects-1.remaining_turns}/${replica.effects-1.key}"]
+
+- if:
+    condition: { neq: [replica.effects.len, 2] }
+    then:
+      - print: ["FAIL deep: effects.len=${replica.effects.len}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.effects-0.amount, 9] }
+    then:
+      - print: ["FAIL deep: fx0.amount=${replica.effects-0.amount}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.effects-0.remaining_turns, 0] }
+    then:
+      - print: ["FAIL deep: fx0.remaining_turns=${replica.effects-0.remaining_turns}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.effects-0.key, "paralyze_done"] }
+    then:
+      - print: ["FAIL deep: fx0.key='${replica.effects-0.key}'"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.effects-1.amount, 8] }
+    then:
+      - print: ["FAIL deep: fx1.amount=${replica.effects-1.amount}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.effects-1.remaining_turns, 4] }
+    then:
+      - print: ["FAIL deep: fx1.remaining_turns=${replica.effects-1.remaining_turns}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [replica.effects-1.key, "atk_up_big"] }
+    then:
+      - print: ["FAIL deep: fx1.key='${replica.effects-1.key}'"]
+      - call: [sys.exit, 1]
+
+- call: [client.close]
+- call: [host_th.join]
+- print: ["WS deep element mutation PASS"]

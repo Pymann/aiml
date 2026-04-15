@@ -117,6 +117,9 @@ Auf Desktop und Android äquivalent zu `engine.run`. **Nicht empfohlen für Brow
 | `engine.running(win: window_handle)` | `bool` | `false` wenn Fenster geschlossen oder `engine.quit` aufgerufen |
 | `engine.swap(win: window_handle)` | — | SwapBuffers + PollEvents + Frame-Limiter |
 | `engine.quit(win: window_handle)` | — | Loop-Ende signalisieren (setzt `running` auf `false`) |
+| `engine.is_iconified(win: window_handle)` | `i32` | `1` wenn Fenster minimiert (GLFW_ICONIFIED), sonst `0`. Nutzbar für Idle-/Reduced-Work-Pfade in der Mainloop. Stub auf Emscripten/Android: immer `0`. |
+| `engine.is_focused(win: window_handle)` | `i32` | `1` wenn Fenster Input-Fokus hat (GLFW_FOCUSED), sonst `0`. Stub auf Emscripten/Android: immer `1`. |
+| `engine.is_visible(win: window_handle)` | `i32` | `1` wenn Fenster sichtbar (GLFW_VISIBLE), sonst `0`. Stub auf Emscripten/Android: immer `1`. |
 
 ### 4.3 Frame-Timing
 

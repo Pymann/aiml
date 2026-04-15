@@ -1,0 +1,144 @@
+# test_ai_support.aiml — Tests for ai namespace (Spec 51)
+- decl: [pass, i32, 0]
+- decl: [fail, i32, 0]
+
+# === Phase A: ai.embedding_lookup ===
+
+# A1: Write floats into buffer, lookup via native function
+- decl: [buf, "buffer<u8>"]
+- call: [buf.alloc, 128]
+- call: [buf.zero]
+# Write 4 floats at offset 0 (token_id=0, dim=4): 1.0, 2.0, 3.0, 4.0
+- call: [buf.seek, 0]
+- call: [buf.write, 1.0, f32]
+- call: [buf.write, 2.0, f32]
+- call: [buf.write, 3.0, f32]
+- call: [buf.write, 4.0, f32]
+# Write 4 floats at offset 16 (token_id=1, dim=4): 5.0, 6.0, 7.0, 8.0
+- call: [buf.write, 5.0, f32]
+- call: [buf.write, 6.0, f32]
+- call: [buf.write, 7.0, f32]
+- call: [buf.write, 8.0, f32]
+
+# Lookup token 0
+- decl: [v0, list<f32>]
+- set: [v0, { call: [ai.embedding_lookup, buf, 0, 4] }]
+- decl: [v0_0, f32, v0-0]
+- decl: [v0_3, f32, v0-3]
+- if:
+    condition: { "&&": [{ ">": [v0_0, 0.99] }, { "<": [v0_0, 1.01] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL A1a: v0[0] expected 1.0, got ${v0_0}"]
+- if:
+    condition: { "&&": [{ ">": [v0_3, 3.99] }, { "<": [v0_3, 4.01] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL A1b: v0[3] expected 4.0, got ${v0_3}"]
+
+# Lookup token 1
+- decl: [v1, list<f32>]
+- set: [v1, { call: [ai.embedding_lookup, buf, 1, 4] }]
+- decl: [v1_0, f32, v1-0]
+- if:
+    condition: { "&&": [{ ">": [v1_0, 4.99] }, { "<": [v1_0, 5.01] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL A2: v1[0] expected 5.0, got ${v1_0}"]
+
+# A3: Check list size
+- if:
+    condition: { eq: [v0.len, 4] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL A3: v0.len expected 4, got ${v0.len}"]
+
+# === Phase B: ai.embedding_update ===
+
+# B1: Update token 0 with gradient [0.1, 0.2, 0.3, 0.4], lr=1.0
+# After: flat[0..3] = [1.0-0.1, 2.0-0.2, 3.0-0.3, 4.0-0.4] = [0.9, 1.8, 2.7, 3.6]
+- decl: [grad, list<f32>]
+- call: [grad.push, 0.1]
+- call: [grad.push, 0.2]
+- call: [grad.push, 0.3]
+- call: [grad.push, 0.4]
+- call: [ai.embedding_update, buf, 0, grad, 1.0, 4]
+
+# Read back
+- decl: [v0b, list<f32>]
+- set: [v0b, { call: [ai.embedding_lookup, buf, 0, 4] }]
+- decl: [v0b_0, f32, v0b-0]
+- decl: [v0b_3, f32, v0b-3]
+- if:
+    condition: { "&&": [{ ">": [v0b_0, 0.89] }, { "<": [v0b_0, 0.91] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL B1a: expected 0.9, got ${v0b_0}"]
+- if:
+    condition: { "&&": [{ ">": [v0b_3, 3.59] }, { "<": [v0b_3, 3.61] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL B1b: expected 3.6, got ${v0b_3}"]
+
+# === Phase C: ai.dot ===
+
+# C1: dot([1,2,3,4], [5,6,7,8]) = 5+12+21+32 = 70
+- decl: [a, list<f32>]
+- call: [a.push, 1.0]
+- call: [a.push, 2.0]
+- call: [a.push, 3.0]
+- call: [a.push, 4.0]
+- decl: [b, list<f32>]
+- call: [b.push, 5.0]
+- call: [b.push, 6.0]
+- call: [b.push, 7.0]
+- call: [b.push, 8.0]
+- decl: [d, f32, { call: [ai.dot, a, b, 4] }]
+- if:
+    condition: { "&&": [{ ">": [d, 69.9] }, { "<": [d, 70.1] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL C1: expected 70.0, got ${d}"]
+
+# === Phase D: ai.train_bpe_merges ===
+
+# D1: Train on simple corpus
+- decl: [texts, list<string>]
+- call: [texts.push, "hello world"]
+- call: [texts.push, "hello there"]
+- call: [texts.push, "world hello"]
+- decl: [result, any, { call: [ai.train_bpe_merges, texts, 10] }]
+- decl: [n_merges, i32, { call: [ai.bpe_merge_count, result] }]
+- if:
+    condition: { ">": [n_merges, 0] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+      - decl: [left0, string, { call: [ai.bpe_merge_left, result, 0] }]
+      - decl: [right0, string, { call: [ai.bpe_merge_right, result, 0] }]
+      - print: ["  BPE merge 0: '${left0}' + '${right0}' (${n_merges} total)"]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL D1: expected >0 merges, got ${n_merges}"]
+- call: [ai.bpe_merge_free, result]
+
+# === Summary ===
+- print: [""]
+- print: ["test_ai_support: ${pass} passed, ${fail} failed"]
+- if:
+    condition: { ">": [fail, 0] }
+    then:
+      - call: [sys.exit, 1]

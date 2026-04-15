@@ -4,7 +4,6 @@
 #include "map_impl.h"
 #include "buffer_impl.h"
 #include "string_utils.h"
-#include "expression.h"
 #include <iostream>
 #include <cmath>
 
@@ -20,6 +19,7 @@ IRValue* Compiler::visitExpression(Expr* expr) {
     if (auto bin = dynamic_cast<BinaryExpr*>(expr)) return visitBinary(bin);
     if (auto unary = dynamic_cast<UnaryExpr*>(expr)) return visitUnary(unary);
     if (auto spawn = dynamic_cast<SpawnExpr*>(expr)) return visitSpawn(spawn);
+    if (auto at = dynamic_cast<AtExpr*>(expr)) return visitAtExpr(at);
     return nullptr;
 }
 IRValue* Compiler::visitStringInterpolation(StringInterpolationExpr* expr) {
@@ -110,17 +110,17 @@ IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
                           llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(classInfo.type, rawPtrCast, member.index, name + "_gep");
                           ctx.builder.CreateStore(initVal, fieldPtr);
                       } else {
-                          LOG_ERROR("Null LLVM value evaluated for initialization of member: " + name);
+                          LOG_ERROR(ctx.fmtLoc(newExpr->sourceNode) + "Null LLVM value evaluated for initialization of member: " + name);
                       }
                   } else {
-                      LOG_ERROR("Failed to compile AST expression for initialization of member: " + name);
+                      LOG_ERROR(ctx.fmtLoc(newExpr->sourceNode) + "Failed to compile AST expression for initialization of member: " + name);
                   }
              }
         }
         return rawPtr;
     }
     
-    LOG_ERROR("Unknown class for new: " + className);
+    LOG_ERROR(ctx.fmtLoc(newExpr->sourceNode) + "Unknown class for new: " + className);
     return ctx.ir_gen->getInt32(0);
 }
 IRValue* Compiler::visitLiteral(LiteralExpr* lit) {
@@ -166,7 +166,7 @@ IRValue* Compiler::visitLiteral(LiteralExpr* lit) {
             int num = std::stoi(sv, &pos, 0);
             return ctx.ir_gen->getInt32(num);
         } catch (...) {
-            LOG_ERROR("Invalid unknown literal (expected bool or number): " + sv);
+            LOG_ERROR(ctx.fmtLoc(lit->sourceNode) + "Invalid unknown literal (expected bool or number): " + sv);
             return ctx.ir_gen->getInt32(0);
         }
     }
@@ -266,7 +266,7 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
         if (ctx.getLLVMType(varName) || varName == "string" || varName == "i32" || varName == "i64" || varName == "u8" || varName == "f32" || varName == "f64")
             return ctx.ir_gen->getInt32(0);
 
-        LOG_ERROR("Undefined variable: " + baseName);
+        LOG_ERROR(ctx.fmtLoc(var->sourceNode) + "Undefined variable: " + baseName);
         return nullptr;
     }
     
@@ -294,7 +294,7 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
                 if (dashInProp != std::string::npos) {
                     // Slicing: varname-start-end (e.g. lst-1-4, lst-2-, lst--2)
                     if (!isDynamicList) {
-                        LOG_ERROR("Array Slicing not supported on raw arrays yet.");
+                        LOG_ERROR(ctx.fmtLoc(var->sourceNode) + "Array Slicing not supported on raw arrays yet.");
                         return nullptr;
                     }
 
@@ -320,7 +320,7 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
                             idxVal = ctx.builder.CreateLoad(static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(idxElemTy)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(idxAlloca)));
                             if (idxVal->getType()->isIntegerTy(64)) idxVal = ctx.builder.CreateTrunc(idxVal, ctx.builder.getInt32Ty());
                         } else {
-                            LOG_ERROR("Invalid list index: " + propName);
+                            LOG_ERROR(ctx.fmtLoc(var->sourceNode) + "Invalid list index: " + propName);
                             return ctx.ir_gen->getInt32(0);
                         }
                     }
@@ -368,6 +368,19 @@ IRValue* Compiler::visitStringCompare(bool negate, llvm::Value* rawLhs, llvm::Va
     phi->addIncoming(strResult, doStrcmpBB);
     return ctx.ir_gen->wrap(phi);
 }
+
+// coerceToBool — normalize any scalar/pointer to i1
+static llvm::Value* coerceToBool(CompilerContext& ctx, llvm::Value* v) {
+    llvm::Type* ty = v->getType();
+    if (ty->isIntegerTy(1)) return v;
+    if (ty->isIntegerTy())  return ctx.builder.CreateICmpNE(v, llvm::ConstantInt::get(ty, 0), "tobool");
+    if (ty->isFloatTy() || ty->isDoubleTy())
+        return ctx.builder.CreateFCmpONE(v, llvm::ConstantFP::get(ty, 0.0), "tobool");
+    if (ty->isPointerTy())
+        return ctx.builder.CreateICmpNE(v, llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(ty)), "tobool");
+    return nullptr;
+}
+
 IRValue* Compiler::visitBinary(BinaryExpr* bin) {
     IRValue* lhs = visitExpression(bin->lhs.get());
     IRValue* rhs = visitExpression(bin->rhs.get());
@@ -392,6 +405,11 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
         } else if (lTy->isPointerTy() && rTy->isPointerTy()) {
             rhs = ctx.ir_gen->wrap(ctx.builder.CreateBitCast(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs)), lTy));
         }
+        // The operation dispatch below must see the coerced LLVM types, not the
+        // original pre-cast pair, otherwise CreateICmp* can still observe
+        // mismatched operands even though lhs/rhs were already normalized.
+        lTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(lhs->getType()));
+        rTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(rhs->getType()));
     }
     
     // ── Math struct operator overloading ──────────────────────────────────
@@ -403,12 +421,12 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
 
         // Store helper
         auto store = [&](llvm::Value* val, llvm::Type* ty) -> llvm::Value* {
-            llvm::AllocaInst* a = ctx.builder.CreateAlloca(ty); ctx.builder.CreateStore(val,a); return a;
+            llvm::AllocaInst* a = ctx.createEntryAlloca(ty); ctx.builder.CreateStore(val,a); return a;
         };
         auto callVoidFn = [&](const char* nm, std::vector<llvm::Type*> pts, std::vector<llvm::Value*> xs, llvm::Type* outTy) -> llvm::Value* {
             llvm::Function* fn = ctx.module.getFunction(nm);
             if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),pts,false),llvm::Function::ExternalLinkage,nm,ctx.module);
-            llvm::AllocaInst* out = ctx.builder.CreateAlloca(outTy);
+            llvm::AllocaInst* out = ctx.createEntryAlloca(outTy);
             xs.push_back(out);
             ctx.builder.CreateCall(fn,xs);
             return ctx.builder.CreateLoad(outTy,out);
@@ -430,7 +448,7 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
             if (bin->op == "*" && !rhsIsScalar) return ctx.ir_gen->wrap(callVoidFn((pre+"mul").c_str(),{op,op,op},{store(lv,structTy),store(rv,structTy)},structTy));
             if (bin->op == "*" &&  rhsIsScalar) return ctx.ir_gen->wrap(callVoidFn((pre+"scale").c_str(),{op,ctx.builder.getFloatTy(),op},{store(lv,structTy),rv},structTy));
             if (bin->op == "/" &&  rhsIsScalar) return ctx.ir_gen->wrap(callVoidFn((pre+"div").c_str(),{op,ctx.builder.getFloatTy(),op},{store(lv,structTy),rv},structTy));
-            if (bin->op == "==") {
+            if (bin->op == "eq") {
                 llvm::Function* fn=ctx.module.getFunction((pre+"eq").c_str());
                 if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(),{op,op},false),llvm::Function::ExternalLinkage,(pre+"eq").c_str(),ctx.module);
                 llvm::Value* res=ctx.builder.CreateCall(fn,{store(lv,structTy),store(rv,structTy)});
@@ -459,12 +477,14 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
         if (bin->op == "-" || bin->op == "sub") return ctx.ir_gen->wrap(ctx.builder.CreateFSub(lv, rv));
         if (bin->op == "*" || bin->op == "mul") return ctx.ir_gen->wrap(ctx.builder.CreateFMul(lv, rv));
         if (bin->op == "/" || bin->op == "div") return ctx.ir_gen->wrap(ctx.builder.CreateFDiv(lv, rv));
-        if (bin->op == "==" || bin->op == "eq")  return ctx.ir_gen->wrap(ctx.builder.CreateFCmpOEQ(lv, rv));
-        if (bin->op == "!=" || bin->op == "neq") return ctx.ir_gen->wrap(ctx.builder.CreateFCmpONE(lv, rv));
-        if (bin->op == "<"  || bin->op == "lt")  return ctx.ir_gen->wrap(ctx.builder.CreateFCmpOLT(lv, rv));
-        if (bin->op == ">"  || bin->op == "gt")  return ctx.ir_gen->wrap(ctx.builder.CreateFCmpOGT(lv, rv));
-        if (bin->op == "<=" || bin->op == "le")  return ctx.ir_gen->wrap(ctx.builder.CreateFCmpOLE(lv, rv));
-        if (bin->op == ">=" || bin->op == "ge")  return ctx.ir_gen->wrap(ctx.builder.CreateFCmpOGE(lv, rv));
+        if (bin->op == "eq")                         return ctx.ir_gen->wrap(ctx.builder.CreateFCmpOEQ(lv, rv));
+        if (bin->op == "neq")                        return ctx.ir_gen->wrap(ctx.builder.CreateFCmpONE(lv, rv));
+        if (bin->op == "lt")                         return ctx.ir_gen->wrap(ctx.builder.CreateFCmpOLT(lv, rv));
+        if (bin->op == "gt")                         return ctx.ir_gen->wrap(ctx.builder.CreateFCmpOGT(lv, rv));
+        if (bin->op == "le"  || bin->op == "lte")    return ctx.ir_gen->wrap(ctx.builder.CreateFCmpOLE(lv, rv));
+        if (bin->op == "ge"  || bin->op == "gte")    return ctx.ir_gen->wrap(ctx.builder.CreateFCmpOGE(lv, rv));
+        if (bin->op == "peq")                        return ctx.ir_gen->wrap(ctx.builder.CreateFCmpOEQ(lv, rv));
+        if (bin->op == "pneq")                       return ctx.ir_gen->wrap(ctx.builder.CreateFCmpONE(lv, rv));
     }
 
     if (bin->op == "+") return ctx.ir_gen->createAdd(lhs, rhs);
@@ -473,42 +493,122 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
     if (bin->op == "/") return ctx.ir_gen->createSDiv(lhs, rhs);
     if (bin->op == "%") return ctx.ir_gen->createSRem(lhs, rhs);
 
-    // `==` / `!=` — identity comparison (integer or pointer address equality).
-    // Distinct from `eq`/`neq` which do string comparison for ptr types.
-    if (bin->op == "==" || bin->op == "!=") {
-        bool isEq = (bin->op == "==");
+    // `peq` / `pneq` — raw pointer/integer identity comparison (address equality).
+    // Use these when you explicitly want to compare pointer addresses, not content.
+    if (bin->op == "peq" || bin->op == "pneq") {
+        bool isEq = (bin->op == "peq");
         llvm::Value* lv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs));
         llvm::Value* rv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs));
+        llvm::Type* rawLTy = lv->getType();
+        llvm::Type* rawRTy = rv->getType();
+
+        if (rawLTy != rawRTy) {
+            if (rawLTy->isIntegerTy() && rawRTy->isIntegerTy()) {
+                unsigned lBits = rawLTy->getIntegerBitWidth();
+                unsigned rBits = rawRTy->getIntegerBitWidth();
+                if (lBits < rBits) lv = ctx.builder.CreateSExt(lv, rawRTy);
+                else rv = ctx.builder.CreateSExt(rv, rawLTy);
+            } else if (rawLTy->isPointerTy() && rawRTy->isIntegerTy()) {
+                rv = ctx.builder.CreateIntToPtr(rv, rawLTy);
+            } else if (rawRTy->isPointerTy() && rawLTy->isIntegerTy()) {
+                lv = ctx.builder.CreateIntToPtr(lv, rawRTy);
+            } else if (rawLTy->isPointerTy() && rawRTy->isPointerTy()) {
+                rv = ctx.builder.CreateBitCast(rv, rawLTy);
+            }
+        }
         llvm::Value* cmp = isEq ? ctx.builder.CreateICmpEQ(lv, rv)
                                 : ctx.builder.CreateICmpNE(lv, rv);
         return ctx.ir_gen->wrap(cmp);
     }
 
-    if (bin->op == "eq") {
-        if (lTy->isPointerTy() && rTy->isPointerTy()) {
-            return visitStringCompare(false,
-                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs)),
-                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs)));
-        }
-                return ctx.ir_gen->createICmpEQ(lhs, rhs);
-    }
-    if (bin->op == "neq") {
-        if (lTy->isPointerTy() && rTy->isPointerTy()) {
-            return visitStringCompare(true,
-                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs)),
-                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs)));
-        }
-                return ctx.ir_gen->createICmpNE(lhs, rhs);
-    }
-    if (bin->op == "lt" || bin->op == "<")  return ctx.ir_gen->createICmpSLT(lhs, rhs);
-    if (bin->op == "gt" || bin->op == ">")  return ctx.ir_gen->createICmpSGT(lhs, rhs);
-    if (bin->op == "le" || bin->op == "<=") return ctx.ir_gen->createICmpSLE(lhs, rhs);
-    if (bin->op == "ge" || bin->op == ">=") return ctx.ir_gen->createICmpSGE(lhs, rhs);
+    if (bin->op == "eq" || bin->op == "neq") {
+        bool isNeq = (bin->op == "neq");
 
-    if (bin->op == "and" || bin->op == "&&") return ctx.ir_gen->createAnd(lhs, rhs);
-    if (bin->op == "or"  || bin->op == "||") return ctx.ir_gen->createOr(lhs, rhs);
+        // Helper: try to dispatch __eq__ via alloca pointers.
+        // Returns nullptr if no __eq__ found for the given typeName.
+        auto tryEqDispatch = [&](const std::string& typeName,
+                                 llvm::Value* thisRaw, llvm::Value* otherRaw) -> IRValue* {
+            if (typeName.empty()) return nullptr;
+            std::string eqFnName = typeName + "___eq__";
+            llvm::Function* eqFn = ctx.module.getFunction(eqFnName);
+            if (!eqFn || eqFn->arg_size() != 2) return nullptr;
+            if (thisRaw->getType() != eqFn->getFunctionType()->getParamType(0))
+                thisRaw = ctx.builder.CreateBitCast(thisRaw, eqFn->getFunctionType()->getParamType(0));
+            if (otherRaw->getType() != eqFn->getFunctionType()->getParamType(1))
+                otherRaw = ctx.builder.CreateBitCast(otherRaw, eqFn->getFunctionType()->getParamType(1));
+            llvm::Value* result = ctx.builder.CreateCall(eqFn, {thisRaw, otherRaw});
+            llvm::Value* cmp = isNeq
+                ? ctx.builder.CreateICmpEQ(result, ctx.builder.getInt32(0))
+                : ctx.builder.CreateICmpNE(result, ctx.builder.getInt32(0));
+            return ctx.ir_gen->wrap(cmp);
+        };
 
-    LOG_ERROR("Unknown binary operator: " + bin->op);
+        // Struct type: class instances stored directly on stack (not behind a pointer).
+        // Use alloca pointers as 'this' and 'other' for __eq__ dispatch.
+        if (lTy->isStructTy()) {
+            auto* varLhs = dynamic_cast<VariableExpr*>(bin->lhs.get());
+            auto* varRhs = dynamic_cast<VariableExpr*>(bin->rhs.get());
+            if (varLhs && varRhs) {
+                Symbol* sLhs = resolveVariable(varLhs->name);
+                Symbol* sRhs = resolveVariable(varRhs->name);
+                if (sLhs && sRhs) {
+                    llvm::Value* allocaL = sLhs->alloca_inst;
+                    llvm::Value* allocaR = sRhs->alloca_inst;
+                    if (!allocaL && sLhs->ir_alloca_inst)
+                        allocaL = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sLhs->ir_alloca_inst));
+                    if (!allocaR && sRhs->ir_alloca_inst)
+                        allocaR = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sRhs->ir_alloca_inst));
+                    if (allocaL && allocaR) {
+                        if (auto* res = tryEqDispatch(sLhs->typeName, allocaL, allocaR))
+                            return res;
+                    }
+                }
+            }
+            LOG_ERROR(ctx.fmtLoc(bin->sourceNode) + "Cannot apply eq/neq to struct type without __eq__: " +
+                      lTy->getStructName().str());
+            return ctx.ir_gen->getInt32(0);
+        }
+
+        // Pointer type: try __eq__ dispatch first, then fall back to string compare.
+        if (lTy->isPointerTy() && rTy->isPointerTy()) {
+            std::string lhsTypeName;
+            if (auto* varEx = dynamic_cast<VariableExpr*>(bin->lhs.get())) {
+                Symbol* s = resolveVariable(varEx->name);
+                if (s) lhsTypeName = s->typeName;
+            }
+            llvm::Value* lv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs));
+            llvm::Value* rv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs));
+            if (auto* res = tryEqDispatch(lhsTypeName, lv, rv))
+                return res;
+            return visitStringCompare(isNeq, lv, rv);
+        }
+
+        return isNeq ? ctx.ir_gen->createICmpNE(lhs, rhs)
+                     : ctx.ir_gen->createICmpEQ(lhs, rhs);
+    }
+    if (bin->op == "lt")                       return ctx.ir_gen->createICmpSLT(lhs, rhs);
+    if (bin->op == "gt")                       return ctx.ir_gen->createICmpSGT(lhs, rhs);
+    if (bin->op == "le" || bin->op == "lte")   return ctx.ir_gen->createICmpSLE(lhs, rhs);
+    if (bin->op == "ge" || bin->op == "gte")   return ctx.ir_gen->createICmpSGE(lhs, rhs);
+
+    if (bin->op == "equiv" || bin->op == "xor" ||
+        bin->op == "and" || bin->op == "&&" ||
+        bin->op == "or"  || bin->op == "||") {
+        llvm::Value* lv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs));
+        llvm::Value* rv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs));
+        llvm::Value* lb = coerceToBool(ctx, lv);
+        llvm::Value* rb = coerceToBool(ctx, rv);
+        if (!lb || !rb) {
+            LOG_ERROR(ctx.fmtLoc(bin->sourceNode) + "Cannot apply logical operator '" + bin->op + "' to non-scalar type");
+            return nullptr;
+        }
+        if (bin->op == "equiv") return ctx.ir_gen->wrap(ctx.builder.CreateICmpEQ(lb, rb, "equiv"));
+        if (bin->op == "xor")   return ctx.ir_gen->wrap(ctx.builder.CreateXor(lb, rb, "xor"));
+        if (bin->op == "and" || bin->op == "&&") return ctx.ir_gen->wrap(ctx.builder.CreateAnd(lb, rb, "and"));
+        if (bin->op == "or"  || bin->op == "||") return ctx.ir_gen->wrap(ctx.builder.CreateOr(lb, rb, "or"));
+    }
+
+    LOG_ERROR(ctx.fmtLoc(bin->sourceNode) + "Unknown binary operator: " + bin->op);
     return nullptr;
 }
 // Helper: strip one level of ptr<...> or ref<...> wrapper, returns inner type string
@@ -522,16 +622,16 @@ IRValue* Compiler::visitUnary(UnaryExpr* unary) {
     // '&'  / '&&'  — address-of (N levels): return the alloca pointer of the variable
     if (unary->op.find_first_not_of('&') == std::string::npos) {
         auto* varExpr = dynamic_cast<VariableExpr*>(unary->operand.get());
-        if (!varExpr) { LOG_ERROR("Unary '&': operand must be a variable"); return nullptr; }
+        if (!varExpr) { LOG_ERROR(ctx.fmtLoc(unary->sourceNode) + "Unary '&': operand must be a variable"); return nullptr; }
         Symbol* sym = resolveVariable(varExpr->name);
-        if (!sym) { LOG_ERROR("Unary '&': undefined variable: " + varExpr->name); return nullptr; }
+        if (!sym) { LOG_ERROR(ctx.fmtLoc(unary->sourceNode) + "Unary '&': undefined variable: " + varExpr->name); return nullptr; }
         IRValue* alloca = sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst);
         if (unary->op == "&") {
             return alloca; // pointer to x
         }
         // '&&x' → alloca of a pointer-to-x (temp)
         llvm::Value* rawAlloca = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
-        llvm::AllocaInst* ptrToPtr = ctx.builder.CreateAlloca(rawAlloca->getType(), nullptr, "addr_of_addr");
+        llvm::AllocaInst* ptrToPtr = ctx.createEntryAlloca(rawAlloca->getType(), "addr_of_addr");
         ctx.builder.CreateStore(rawAlloca, ptrToPtr);
         return ctx.ir_gen->wrap(ptrToPtr);
     }
@@ -581,9 +681,9 @@ IRValue* Compiler::visitUnary(UnaryExpr* unary) {
             llvm::Function* fn = ctx.module.getFunction(nm.c_str());
             if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op2,op2},false),
                 llvm::Function::ExternalLinkage,nm.c_str(),ctx.module);
-            llvm::AllocaInst* src = ctx.builder.CreateAlloca(structTy);
+            llvm::AllocaInst* src = ctx.createEntryAlloca(structTy);
             ctx.builder.CreateStore(v, src);
-            llvm::AllocaInst* out = ctx.builder.CreateAlloca(structTy);
+            llvm::AllocaInst* out = ctx.createEntryAlloca(structTy);
             ctx.builder.CreateCall(fn,{src,out});
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(structTy,out));
         }
@@ -592,22 +692,27 @@ IRValue* Compiler::visitUnary(UnaryExpr* unary) {
         return ctx.ir_gen->wrap(ctx.builder.CreateNeg(v, "neg"));
     }
 
-    // '!' — logical not
-    if (unary->op == "!") {
+    // '!' / 'not' — logical not
+    if (unary->op == "!" || unary->op == "not") {
         IRValue* val = visitExpression(unary->operand.get());
         if (!val) return nullptr;
         llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
-        return ctx.ir_gen->wrap(ctx.builder.CreateNot(v, "not"));
+        llvm::Value* bv = coerceToBool(ctx, v);
+        if (!bv) {
+            LOG_ERROR(ctx.fmtLoc(unary->sourceNode) + "Cannot apply 'not' to non-scalar type");
+            return nullptr;
+        }
+        return ctx.ir_gen->wrap(ctx.builder.CreateNot(bv, "not"));
     }
 
-    LOG_ERROR("Unknown unary operator: " + unary->op);
+    LOG_ERROR(ctx.fmtLoc(unary->sourceNode) + "Unknown unary operator: " + unary->op);
     return nullptr;
 }
 IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
     // 1. Resolve the target function
     CompilerContext::FunctionInfo* fi = resolveFunction(spawn->functionName);
     if (!fi || !fi->func) {
-        LOG_ERROR("spawn: unknown function: " + spawn->functionName);
+        LOG_ERROR(ctx.fmtLoc(spawn->sourceNode) + "spawn: unknown function: " + spawn->functionName);
         return nullptr;
     }
     llvm::Function* targetFn = fi->func;
@@ -683,7 +788,7 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
     // 5. Malloc the thread_handle struct { i64 tid, i8 joined, i8 detached }
     llvm::StructType* handleTy = llvm::StructType::getTypeByName(ctx.context, "thread_handle");
     if (!handleTy) {
-        LOG_ERROR("spawn: thread_handle type not found");
+        LOG_ERROR(ctx.fmtLoc(spawn->sourceNode) + "spawn: thread_handle type not found");
         return nullptr;
     }
     llvm::DataLayout dl(&ctx.module);
@@ -712,6 +817,108 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
 
     // 7. Return the handle pointer (stored into the thread_handle* alloca by visitSetStmt)
     return ctx.ir_gen->wrap(handlePtr);
+}
+
+IRValue* Compiler::visitAtExpr(AtExpr* at) {
+    // Evaluate container — must be a variable
+    auto* varExpr = dynamic_cast<VariableExpr*>(at->container.get());
+    if (!varExpr) {
+        LOG_ERROR(ctx.fmtLoc() + "at: container must be a variable");
+        return nullptr;
+    }
+    Symbol* sym = resolveVariable(varExpr->name);
+    if (!sym) {
+        LOG_ERROR(ctx.fmtLoc() + "at: unknown variable '" + varExpr->name + "'");
+        return nullptr;
+    }
+
+    // Evaluate all index expressions
+    std::vector<llvm::Value*> indexVals;
+    for (auto& idx : at->indices) {
+        IRValue* v = visitExpression(idx.get());
+        if (!v) return nullptr;
+        llvm::Value* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v));
+        // Truncate i64 → i32 for GEP
+        if (raw->getType()->isIntegerTy(64))
+            raw = ctx.builder.CreateTrunc(raw, ctx.builder.getInt32Ty());
+        indexVals.push_back(raw);
+    }
+
+    const std::string& tName = sym->typeName;
+
+    // ── array<T:N[:M[:...]]> ──
+    if (tName.rfind("array<", 0) == 0 && tName.back() == '>') {
+        std::string inner = tName.substr(6, tName.size() - 7);
+        // Parse "T:D0:D1:..."
+        std::vector<std::string> parts;
+        size_t pos = 0;
+        while (pos < inner.size()) {
+            size_t sep = inner.find(':', pos);
+            if (sep == std::string::npos) { parts.push_back(inner.substr(pos)); break; }
+            parts.push_back(inner.substr(pos, sep - pos));
+            pos = sep + 1;
+        }
+        llvm::Type* elemTy = ctx.getLLVMType(parts[0]);
+        // Collect dimension sizes (parts[1..])
+        std::vector<uint64_t> dims;
+        for (size_t i = 1; i < parts.size(); ++i)
+            dims.push_back(std::stoull(parts[i]));
+
+        // Compute flat index from multi-dim indices (row-major)
+        llvm::Value* flatIdx = nullptr;
+        if (indexVals.size() == 1) {
+            flatIdx = indexVals[0];
+        } else {
+            // flat = i0 * (d1*d2*...) + i1 * (d2*d3*...) + ... + i_last
+            flatIdx = indexVals[0];
+            for (size_t i = 1; i < indexVals.size(); ++i) {
+                uint64_t stride = 1;
+                for (size_t j = i; j < dims.size(); ++j) stride *= dims[j];
+                flatIdx = ctx.builder.CreateMul(flatIdx, ctx.builder.getInt32((uint32_t)stride));
+                flatIdx = ctx.builder.CreateAdd(flatIdx, indexVals[i]);
+            }
+        }
+
+        // GEP into the alloca [N x T]
+        uint64_t totalCount = 1;
+        for (auto d : dims) totalCount *= d;
+        llvm::Type* arrTy = llvm::ArrayType::get(elemTy, totalCount);
+        llvm::Value* arrPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+            sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst)));
+        llvm::Value* elemPtr = ctx.builder.CreateGEP(arrTy, arrPtr,
+            {ctx.builder.getInt32(0), flatIdx}, "arr_gep");
+        llvm::Value* val = ctx.builder.CreateLoad(elemTy, elemPtr, "arr_at");
+        return ctx.ir_gen->wrap(val);
+    }
+
+    // ── list<T> ──
+    if (tName.rfind("list<", 0) == 0 && tName.back() == '>') {
+        std::string elemName = tName.substr(5, tName.size() - 6);
+        llvm::Type* elemTy = ctx.getLLVMType(elemName);
+        llvm::Value* listPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+            sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst)));
+        if (indexVals.empty()) { LOG_ERROR("at: list requires at least one index"); return nullptr; }
+        llvm::Value* elemPtr = ListImpl::getElementPtr(ctx, listPtr, indexVals[0], elemTy);
+        llvm::Value* val = ctx.builder.CreateLoad(elemTy, elemPtr, "list_at");
+        return ctx.ir_gen->wrap(val);
+    }
+
+    // ── tensor ──
+    if (tName == "tensor") {
+        // Call aiml_tensor_get(tensor*, i32 index) → f32
+        llvm::Value* tPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+            sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst)));
+        llvm::Value* tensorVal = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), tPtr, "tensor_ptr");
+        llvm::Type* f32 = ctx.builder.getFloatTy();
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        llvm::Function* getFn = ctx.getFunction("aiml_tensor_get", f32, {i8p, i32});
+        llvm::Value* val = ctx.builder.CreateCall(getFn, {tensorVal, indexVals[0]}, "tensor_at");
+        return ctx.ir_gen->wrap(val);
+    }
+
+    LOG_ERROR(ctx.fmtLoc() + "at: unsupported container type '" + tName + "'");
+    return nullptr;
 }
 
 } // namespace AST

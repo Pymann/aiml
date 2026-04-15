@@ -68,7 +68,10 @@ namespace ListImpl {
         // Grow Block
         ctx.builder.SetInsertPoint(growBB);
         {
-            llvm::Value* newCap = ctx.builder.CreateMul(capVal, ctx.builder.getInt32(2));
+            llvm::Value* doubled = ctx.builder.CreateMul(capVal, ctx.builder.getInt32(2));
+            llvm::Value* minCap = ctx.builder.getInt32(4);
+            llvm::Value* newCap = ctx.builder.CreateSelect(
+                ctx.builder.CreateICmpSGT(doubled, ctx.builder.getInt32(0)), doubled, minCap);
             ctx.builder.CreateStore(newCap, capPtr);
             
             llvm::Value* dataPtrMember = ctx.builder.CreateStructGEP(structType, listPtr, 2, "dataPtr");
@@ -141,7 +144,7 @@ namespace ListImpl {
         llvm::StructType* structType = getListStructType(ctx);
         
         // Allocate struct on stack
-        llvm::AllocaInst* newList = ctx.builder.CreateAlloca(structType, nullptr, "slice_list");
+        llvm::AllocaInst* newList = ctx.createEntryAlloca(structType, "slice_list");
         
         // Init
         initList(ctx, newList, elemType, 4); 
@@ -151,7 +154,7 @@ namespace ListImpl {
         llvm::BasicBlock* bodyBB = llvm::BasicBlock::Create(ctx.context, "slice_loop_body", parentFunc);
         llvm::BasicBlock* exitBB = llvm::BasicBlock::Create(ctx.context, "slice_loop_exit", parentFunc);
         
-        llvm::Value* iVar = ctx.builder.CreateAlloca(ctx.builder.getInt32Ty(), nullptr, "i_slice");
+        llvm::Value* iVar = ctx.createEntryAlloca(ctx.builder.getInt32Ty(), "i_slice");
         ctx.builder.CreateStore(startVal, iVar);
         
         ctx.builder.CreateBr(headerBB);

@@ -11,7 +11,7 @@
       - decl: [child_s, string]
       - set: [child_s, { call: [child.to_string] }]
       - if:
-          condition: { "==": [{ eq: [child_s, "/tmp/aiml_path_suite/base/cards.json"] }, 0] }
+          condition: { eq: [{ eq: [child_s, "/tmp/aiml_path_suite/base/cards.json"] }, 0] }
           then:
             - print: ["FAIL join_to_string=${child_s}"]
             - call: [sys.exit, 1]
@@ -19,7 +19,7 @@
       - decl: [parent, path]
       - set: [parent, { call: [child.parent] }]
       - if:
-          condition: { "==": [{ eq: [parent, "/tmp/aiml_path_suite/base"] }, 0] }
+          condition: { eq: [{ eq: [parent, "/tmp/aiml_path_suite/base"] }, 0] }
           then:
             - print: ["FAIL parent=${parent}"]
             - call: [sys.exit, 1]
@@ -27,7 +27,7 @@
       - decl: [rel, path]
       - set: [rel, { call: [child.relative_to, base] }]
       - if:
-          condition: { "==": [{ eq: [rel, "cards.json"] }, 0] }
+          condition: { eq: [{ eq: [rel, "cards.json"] }, 0] }
           then:
             - print: ["FAIL relative_to=${rel}"]
             - call: [sys.exit, 1]
@@ -35,7 +35,7 @@
       - decl: [joined_ok, path]
       - set: [joined_ok, { call: [base.safe_join, "nested/../deck.txt"] }]
       - if:
-          condition: { "==": [{ eq: [joined_ok, "/tmp/aiml_path_suite/base/deck.txt"] }, 0] }
+          condition: { eq: [{ eq: [joined_ok, "/tmp/aiml_path_suite/base/deck.txt"] }, 0] }
           then:
             - print: ["FAIL safe_join_ok=${joined_ok}"]
             - call: [sys.exit, 1]
@@ -45,7 +45,7 @@
       - decl: [cfg_name, string]
       - set: [cfg_name, { call: [cfg_dir.name] }]
       - if:
-          condition: { "==": [{ eq: [cfg_name, "aiml_path_suite"] }, 0] }
+          condition: { eq: [{ eq: [cfg_name, "aiml_path_suite"] }, 0] }
           then:
             - print: ["FAIL config_dir_name=${cfg_name}"]
             - call: [sys.exit, 1]
@@ -53,7 +53,7 @@
       - decl: [cfg_abs, i32]
       - set: [cfg_abs, { call: [cfg_dir.is_absolute] }]
       - if:
-          condition: { "!=": [cfg_abs, 1] }
+          condition: { neq: [cfg_abs, 1] }
           then:
             - print: ["FAIL config_dir_abs=${cfg_abs}"]
             - call: [sys.exit, 1]
@@ -63,7 +63,7 @@
       - decl: [tmp_abs, i32]
       - set: [tmp_abs, { call: [tmpdir.is_absolute] }]
       - if:
-          condition: { "!=": [tmp_abs, 1] }
+          condition: { neq: [tmp_abs, 1] }
           then:
             - print: ["FAIL temp_dir_abs=${tmp_abs}"]
             - call: [sys.exit, 1]
@@ -73,7 +73,7 @@
       - decl: [exe_is_file, i32]
       - set: [exe_is_file, { call: [io.is_file, exe] }]
       - if:
-          condition: { "!=": [exe_is_file, 1] }
+          condition: { neq: [exe_is_file, 1] }
           then:
             - print: ["FAIL current_exe_is_file=${exe_is_file} exe=${exe}"]
             - call: [sys.exit, 1]
@@ -84,7 +84,7 @@
       - decl: [mk_rc, i32]
       - set: [mk_rc, { call: [io.mkdir_all, suite_dir] }]
       - if:
-          condition: { "!=": [mk_rc, 0] }
+          condition: { neq: [mk_rc, 0] }
           then:
             - print: ["FAIL mkdir_all=${mk_rc}"]
             - call: [sys.exit, 1]
@@ -94,7 +94,7 @@
       - decl: [wrc, i32]
       - set: [wrc, { call: [io.write_file, out_file, "path-suite"] }]
       - if:
-          condition: { "!=": [wrc, 0] }
+          condition: { neq: [wrc, 0] }
           then:
             - print: ["FAIL write_file=${wrc}"]
             - call: [sys.exit, 1]
@@ -106,17 +106,17 @@
       - decl: [is_dir, i32]
       - set: [is_dir, { call: [io.is_dir, suite_dir] }]
       - if:
-          condition: { "!=": [exists_file, 1] }
+          condition: { neq: [exists_file, 1] }
           then:
             - print: ["FAIL exists_file=${exists_file}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "!=": [is_file, 1] }
+          condition: { neq: [is_file, 1] }
           then:
             - print: ["FAIL is_file=${is_file}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { "!=": [is_dir, 1] }
+          condition: { neq: [is_dir, 1] }
           then:
             - print: ["FAIL is_dir=${is_dir}"]
             - call: [sys.exit, 1]
@@ -124,7 +124,7 @@
       - decl: [content, string]
       - set: [content, { call: [io.read_file, out_file] }]
       - if:
-          condition: { "==": [{ eq: [content, "path-suite"] }, 0] }
+          condition: { eq: [{ eq: [content, "path-suite"] }, 0] }
           then:
             - print: ["FAIL read_file=${content}"]
             - call: [sys.exit, 1]
