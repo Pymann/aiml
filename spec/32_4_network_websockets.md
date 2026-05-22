@@ -1,37 +1,37 @@
-# Kapitel 32.4 — WebSockets
+# Chapter 32.4 — WebSockets
 
-> **Leitgedanke:** WebSockets werden in AIML **ohne externe Bibliothek** implementiert —
-> direkt auf Basis von `net.*` (WS) und `tls.*` (WSS). Das reduziert Abhängigkeiten und
-> gibt vollständige Kontrolle über das Frame-Protokoll (RFC 6455). Der `ws_handle` ist
-> ein opaker Pointer, der intern den TCP-Socket, den Frame-Parser-Zustand und einen
-> Sende-Mutex (Thread-Safety) kapselt.
-
----
-
-## 1. Typen
-
-| Typ               | LLVM  | Beschreibung |
-|-------------------|-------|--------------|
-| `ws_handle`       | `i8*` | Client- oder Server-seitige WebSocket-Verbindung |
-| `ws_server_handle`| `i8*` | WebSocket-Server (bindet Port, verwaltet Verbindungen) |
+> **Design principle:** WebSockets are implemented in AIML **without an external library** —
+> directly on top of `net.*` (WS) and `tls.*` (WSS). This reduces dependencies and
+> gives full control over the frame protocol (RFC 6455). The `ws_handle` is
+> an opaque pointer that internally encapsulates the TCP socket, the frame parser state,
+> and a send mutex (thread safety).
 
 ---
 
-## 2. WebSocket-Client
+## 1. Types
 
-### 2.1 Verbinden und Nachrichten senden
+| Type               | LLVM  | Description |
+|--------------------|-------|-------------|
+| `ws_handle`        | `i8*` | Client- or server-side WebSocket connection |
+| `ws_server_handle` | `i8*` | WebSocket server (binds port, manages connections) |
+
+---
+
+## 2. WebSocket Client
+
+### 2.1 Connecting and Sending Messages
 
 ```aiml
-# WS-Client (unverschlüsselt)
+# WS client (unencrypted)
 - decl: [ws_url, url]
 - set: [ws_url, "ws://echo.websocket.org/"]
 - decl: [ws, ws_handle]
 - set: [ws, { call: [ws.connect, ws_url] }]
 
-# Text senden
+# Send text
 - call: [ws.send, "Hello WebSocket!"]
 
-# Text empfangen (blockiert bis eine vollständige Nachricht ankommt)
+# Receive text (blocks until a complete message arrives)
 - decl: [msg, string]
 - set: [msg, { call: [ws.recv] }]
 - print: ["Echo: ${msg}"]
@@ -39,10 +39,10 @@
 - call: [ws.close]
 ```
 
-### 2.2 WSS (verschlüsselt via TLS)
+### 2.2 WSS (Encrypted via TLS)
 
 ```aiml
-# URL-Schema "wss://" → TLS-Transport automatisch
+# URL scheme "wss://" → TLS transport automatically
 - decl: [stream_url, url]
 - set: [stream_url, "wss://stream.example.com/live"]
 - decl: [ws, ws_handle]
@@ -57,10 +57,10 @@
 - call: [ws.close]
 ```
 
-`ws.connect` erkennt `ws://` vs. `wss://` anhand des URL-Schemas und wählt
-`net.*` bzw. `tls.*` als Transport.
+`ws.connect` detects `ws://` vs. `wss://` from the URL scheme and selects
+`net.*` or `tls.*` as transport accordingly.
 
-### 2.3 Binäre Nachrichten
+### 2.3 Binary Messages
 
 ```aiml
 - decl: [bin_url, url]
@@ -68,13 +68,13 @@
 - decl: [ws, ws_handle]
 - set: [ws, { call: [ws.connect, bin_url] }]
 
-# Binär senden (buffer)
+# Send binary (buffer)
 - decl: [buf, buffer]
 - call: [buf.alloc, 256]
 - call: [buf.write_string, "\x00\x01\x02"]
 - call: [ws.send_bytes, buf]
 
-# Binär empfangen
+# Receive binary
 - decl: [data, buffer]
 - set: [data, { call: [ws.recv_bytes] }]
 - decl: [sz, i32]
@@ -87,34 +87,34 @@
 ### 2.4 Ping / Pong
 
 ```aiml
-- call: [ws.ping, "heartbeat"]   # Sendet Ping-Frame; Pong-Antwort verarbeitet ws.recv intern
+- call: [ws.ping, "heartbeat"]   # Sends ping frame; pong response handled transparently by ws.recv
 - decl: [alive, bool]
 - set: [alive, { call: [ws.is_open] }]
 - print: ["Connected: ${alive}"]
 ```
 
-`ws.recv` verarbeitet Pong-Frames transparent (nicht an Caller zurückgegeben).
-Ping-Frames vom Peer werden automatisch mit Pong beantwortet.
+`ws.recv` processes pong frames transparently (not returned to caller).
+Ping frames from the peer are automatically answered with pong.
 
-### 2.5 `ws_handle`-Methoden
+### 2.5 `ws_handle` Methods
 
-| Methode       | Argumente       | Rückgabe | Beschreibung |
-|---------------|-----------------|----------|--------------|
-| `send`        | `msg: string`   | `i32`    | Text-Frame senden (Opcode 0x1) |
-| `send_bytes`  | `buf: buffer`   | `i32`    | Binary-Frame senden (Opcode 0x2) |
-| `recv`        | —               | `string` | Nächste vollständige Text-Nachricht empfangen |
-| `recv_bytes`  | —               | `buffer` | Nächste vollständige Binary-Nachricht empfangen |
-| `ping`        | —               | `i32`    | Ping-Frame senden |
-| `close`       | —               | `i32`    | Close-Frame senden + Connection schließen |
-| `is_open`     | —               | `bool`   | `false` nach Close-Frame oder TCP-Fehler |
-| `set_timeout` | `ms: i32`       | —        | Recv/Send-Timeout |
-| `fd`          | —               | `i32`    | Raw TCP-File-Descriptor |
+| Method        | Arguments       | Return   | Description |
+|---------------|-----------------|----------|-------------|
+| `send`        | `msg: string`   | `i32`    | Send text frame (opcode 0x1) |
+| `send_bytes`  | `buf: buffer`   | `i32`    | Send binary frame (opcode 0x2) |
+| `recv`        | —               | `string` | Receive next complete text message |
+| `recv_bytes`  | —               | `buffer` | Receive next complete binary message |
+| `ping`        | —               | `i32`    | Send ping frame |
+| `close`       | —               | `i32`    | Send close frame + close connection |
+| `is_open`     | —               | `bool`   | `false` after close frame or TCP error |
+| `set_timeout` | `ms: i32`       | —        | Recv/send timeout |
+| `fd`          | —               | `i32`    | Raw TCP file descriptor |
 
 ---
 
-## 3. WebSocket-Server
+## 3. WebSocket Server
 
-### 3.1 Einfacher Echo-Server
+### 3.1 Simple Echo Server
 
 ```aiml
 - def:
@@ -128,7 +128,7 @@ Ping-Frames vom Peer werden automatisch mit Pong beantwortet.
     args: [[conn, ws_handle], [msg, string]]
     body:
       - print: ["Got: ${msg}"]
-      - call: [conn.send, msg]   # Echo zurück
+      - call: [conn.send, msg]   # Echo back
 
 - def:
     name: on_close
@@ -144,10 +144,10 @@ Ping-Frames vom Peer werden automatisch mit Pong beantwortet.
 - call: [srv.on_close, on_close]
 
 - print: ["WS Server listening on :9001"]
-- call: [srv.start]   # Blockiert
+- call: [srv.start]   # Blocks
 ```
 
-### 3.2 Broadcast-Server (alle Clients)
+### 3.2 Broadcast Server (All Clients)
 
 ```aiml
 - decl: [clients, list<ws_handle>]
@@ -165,7 +165,7 @@ Ping-Frames vom Peer werden automatisch mit Pong beantwortet.
     name: ws_on_message
     args: [[conn, ws_handle], [msg, string]]
     body:
-      # Broadcast: an alle verbundenen Clients senden
+      # Broadcast: send to all connected clients
       - decl: [c, ws_handle]
       - for: [c, clients]
         body:
@@ -175,7 +175,7 @@ Ping-Frames vom Peer werden automatisch mit Pong beantwortet.
     name: ws_on_close
     args: [[conn, ws_handle], [code, i32]]
     body:
-      # TODO: conn aus clients-Liste entfernen (remove by value — Future Work)
+      # TODO: remove conn from clients list (remove by value — future work)
       - print: ["Client left"]
 
 - decl: [srv, ws_server_handle]
@@ -186,7 +186,7 @@ Ping-Frames vom Peer werden automatisch mit Pong beantwortet.
 - call: [srv.start]
 ```
 
-### 3.3 WSS-Server (TLS)
+### 3.3 WSS Server (TLS)
 
 ```aiml
 - decl: [cert, path]
@@ -201,25 +201,25 @@ Ping-Frames vom Peer werden automatisch mit Pong beantwortet.
 - call: [srv.start]
 ```
 
-### 3.4 `ws_server_handle`-Methoden
+### 3.4 `ws_server_handle` Methods
 
-| Methode             | Argumente              | Rückgabe        | Beschreibung |
-|---------------------|------------------------|-----------------|--------------|
-| `on_connect`        | `handler: fn`          | —               | Callback bei neuer Verbindung; `fn(conn: ws_handle)` |
-| `on_message`        | `handler: fn`          | —               | Callback bei Text-Nachricht; `fn(conn: ws_handle, msg: string)` |
-| `on_binary`         | `handler: fn`          | —               | Callback bei Binary-Nachricht; `fn(conn: ws_handle, buf: buffer)` |
-| `on_close`          | `handler: fn`          | —               | Callback bei Close; `fn(conn: ws_handle, code: i32)` |
-| `on_error`          | `handler: fn`          | —               | Callback bei Fehler; `fn(conn: ws_handle, err: string)` |
-| `start`             | —                      | —               | Blockierender Accept-Loop |
-| `start_async`       | —                      | `thread_handle` | Nicht-blockierend |
-| `stop`              | —                      | —               | Stoppt Accept-Loop |
-| `set_max_frame_size`| `bytes: i32`           | —               | Max. Frame-Größe (Default: 1 MB) |
+| Method              | Arguments              | Return          | Description |
+|---------------------|------------------------|-----------------|-------------|
+| `on_connect`        | `handler: fn`          | —               | Callback on new connection; `fn(conn: ws_handle)` |
+| `on_message`        | `handler: fn`          | —               | Callback on text message; `fn(conn: ws_handle, msg: string)` |
+| `on_binary`         | `handler: fn`          | —               | Callback on binary message; `fn(conn: ws_handle, buf: buffer)` |
+| `on_close`          | `handler: fn`          | —               | Callback on close; `fn(conn: ws_handle, code: i32)` |
+| `on_error`          | `handler: fn`          | —               | Callback on error; `fn(conn: ws_handle, err: string)` |
+| `start`             | —                      | —               | Blocking accept loop |
+| `start_async`       | —                      | `thread_handle` | Non-blocking |
+| `stop`              | —                      | —               | Stop accept loop |
+| `set_max_frame_size`| `bytes: i32`           | —               | Max frame size (default: 1 MB) |
 
 ---
 
-## 4. WebSocket-Upgrade aus HTTP-Server
+## 4. WebSocket Upgrade from HTTP Server
 
-Ein laufender HTTP-Server kann einzelne Verbindungen auf WebSocket upgraden:
+A running HTTP server can upgrade individual connections to WebSocket:
 
 ```aiml
 - def:
@@ -235,35 +235,35 @@ Ein laufender HTTP-Server kann einzelne Verbindungen auf WebSocket upgraden:
     name: upgrade_endpoint
     args: [[req, http_request_handle], [resp, http_response_handle]]
     body:
-      # Prüft Upgrade-Headers, führt Handshake durch, ruft ws_handler auf
+      # Checks upgrade headers, performs handshake, calls ws_handler
       - call: [resp.upgrade_ws, ws_handler]
 
 - decl: [srv, http_server_handle]
 - set: [srv, { call: [http.server, "0.0.0.0", 8080] }]
 - call: [srv.route, "GET",  "/",   serve_html]
-- call: [srv.route, "GET",  "/ws", upgrade_endpoint]   # WS-Upgrade auf /ws
+- call: [srv.route, "GET",  "/ws", upgrade_endpoint]   # WS upgrade on /ws
 - call: [srv.start]
 ```
 
-`ctx.upgrade_ws(handler_fn)` prüft, ob der Request ein gültiger WebSocket-Upgrade-Request ist
-(`Upgrade: websocket`, `Connection: Upgrade`, `Sec-WebSocket-Key`), antwortet mit
-`101 Switching Protocols` und übergibt dann einen `ws_handle` an den Handler.
+`ctx.upgrade_ws(handler_fn)` checks whether the request is a valid WebSocket upgrade request
+(`Upgrade: websocket`, `Connection: Upgrade`, `Sec-WebSocket-Key`), responds with
+`101 Switching Protocols`, and then passes a `ws_handle` to the handler.
 
 ---
 
-## 5. Vollständige `ws`-Namespace-Referenz
+## 5. Complete `ws` Namespace Reference
 
-| Aufruf | Rückgabe | Beschreibung |
-|--------|----------|--------------|
-| `{ call: [ws.connect, u] }` | `ws_handle` | Verbindet mit WS/WSS-URL (`u: url`); Schema bestimmt Transport |
-| `{ call: [ws.server, host, port] }` | `ws_server_handle` | Plain-WS-Server |
-| `{ call: [ws.server_tls, host, port, cert, key] }` | `ws_server_handle` | WSS-Server (`cert, key: path`) |
+| Call | Return | Description |
+|------|--------|-------------|
+| `{ call: [ws.connect, u] }` | `ws_handle` | Connect to WS/WSS URL (`u: url`); scheme determines transport |
+| `{ call: [ws.server, host, port] }` | `ws_server_handle` | Plain WS server |
+| `{ call: [ws.server_tls, host, port, cert, key] }` | `ws_server_handle` | WSS server (`cert, key: path`) |
 
 ---
 
-## 6. RFC 6455 — Frame-Format (Implementierungsreferenz)
+## 6. RFC 6455 — Frame Format (Implementation Reference)
 
-WebSocket-Frames haben folgendes Wire-Format:
+WebSocket frames have the following wire format:
 
 ```
  0                   1                   2                   3
@@ -278,28 +278,28 @@ WebSocket-Frames haben folgendes Wire-Format:
 +---------------------------------------------------------------+
 |                  Masking-key (if MASK set)                    |
 +---------------------------------------------------------------+
-|              Payload Data (XOR mit Masking-key)               |
+|              Payload Data (XOR with masking key)              |
 +---------------------------------------------------------------+
 ```
 
-| Opcode | Wert | Bedeutung |
-|--------|------|-----------|
-| Continuation | 0x0 | Fortsetzung eines fragmentierten Frames |
-| Text | 0x1 | UTF-8 Text-Payload |
-| Binary | 0x2 | Binär-Payload |
-| Close | 0x8 | Verbindung schließen (optional 2-Byte Status-Code) |
-| Ping | 0x9 | Keepalive-Request |
-| Pong | 0xA | Antwort auf Ping |
+| Opcode | Value | Meaning |
+|--------|-------|---------|
+| Continuation | 0x0 | Continuation of a fragmented frame |
+| Text | 0x1 | UTF-8 text payload |
+| Binary | 0x2 | Binary payload |
+| Close | 0x8 | Close connection (optional 2-byte status code) |
+| Ping | 0x9 | Keepalive request |
+| Pong | 0xA | Response to ping |
 
 **Masking:**
-- Client → Server: **Immer maskiert** (MASK=1, 4-Byte Masking-Key via CSPRNG)
-- Server → Client: **Nie maskiert** (MASK=0)
+- Client → Server: **Always masked** (MASK=1, 4-byte masking key via CSPRNG)
+- Server → Client: **Never masked** (MASK=0)
 - Masking: `payload[i] ^= masking_key[i % 4]`
 
-**Payload-Länge:**
-- 0–125: direkt im 7-Bit-Feld
-- 126: nächste 2 Bytes als Big-Endian `uint16`
-- 127: nächste 8 Bytes als Big-Endian `uint64`
+**Payload length:**
+- 0–125: directly in the 7-bit field
+- 126: next 2 bytes as big-endian `uint16`
+- 127: next 8 bytes as big-endian `uint64`
 
 ### 6.1 Handshake (Client → Server)
 
@@ -313,7 +313,7 @@ Sec-WebSocket-Version: 13\r\n
 \r\n
 ```
 
-Server antwortet:
+Server responds:
 ```
 HTTP/1.1 101 Switching Protocols\r\n
 Upgrade: websocket\r\n
@@ -323,52 +323,52 @@ Sec-WebSocket-Accept: <SHA1(key + "258EAFA5-...")  Base64>\r\n
 ```
 
 `Sec-WebSocket-Accept` = `Base64(SHA1(Sec-WebSocket-Key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))`.
-Diese Berechnung erfolgt in `ws_runtime.cpp` mit OpenSSL's `SHA1()` + `EVP_EncodeBlock()`.
+This computation is done in `ws_runtime.cpp` using OpenSSL's `SHA1()` + `EVP_EncodeBlock()`.
 
-### 6.2 Fragmentierung
+### 6.2 Fragmentation
 
-Lange Nachrichten können über mehrere Frames fragmentiert werden:
-- Frame 1: `FIN=0, opcode=0x1` (Text, nicht final)
-- Frame 2..N-1: `FIN=0, opcode=0x0` (Continuation)
-- Frame N: `FIN=1, opcode=0x0` (Continuation, final)
+Long messages can be fragmented across multiple frames:
+- Frame 1: `FIN=0, opcode=0x1` (text, not final)
+- Frame 2..N-1: `FIN=0, opcode=0x0` (continuation)
+- Frame N: `FIN=1, opcode=0x0` (continuation, final)
 
-`ws.recv()` reassembliert Fragmente intern — Caller bekommt immer eine vollständige Nachricht.
+`ws.recv()` reassembles fragments internally — the caller always receives a complete message.
 
 ---
 
-## 7. Interne Struktur (`ws_runtime.h/cpp`)
+## 7. Internal Structure (`ws_runtime.h/cpp`)
 
 ```cpp
 struct AimlWsConn {
-    // Transport (eines von beiden ist gesetzt):
-    AimlSocket*    plain_sock;   // nullptr wenn TLS
-    AimlTlsSocket* tls_sock;    // nullptr wenn plain
+    // Transport (one of the two is set):
+    AimlSocket*    plain_sock;   // nullptr if TLS
+    AimlTlsSocket* tls_sock;    // nullptr if plain
 
-    // Frame-Zustand
-    bool     is_client;         // Client: Masking erforderlich
+    // Frame state
+    bool     is_client;         // Client: masking required
     bool     closed;
-    uint8_t  mask_key[4];       // Masking-Key für nächsten Send
+    uint8_t  mask_key[4];       // Masking key for next send
     int      max_frame_size;    // Default: 1 MB
 
-    // Recv-Buffer (für Fragment-Reassemblierung)
+    // Recv buffer (for fragment reassembly)
     uint8_t* frag_buf;
     int32_t  frag_len;
     int32_t  frag_cap;
-    uint8_t  frag_opcode;       // Opcode des ersten Fragments
+    uint8_t  frag_opcode;       // Opcode of the first fragment
 };
 ```
 
 ---
 
-## 8. Offene Designfragen
+## 8. Open Design Questions
 
-- **Per-Message Compression** (`permessage-deflate`): Komprimierung via `zlib` auf Frame-Ebene —
-  reduziert Bandbreite bei repetitiven JSON-Payloads erheblich.
-- **Subprotokolle**: `ws.connect(url, {protocol: "mqtt"})` → `Sec-WebSocket-Protocol`-Header.
-- **Event-Loop-Integration**: Der aktuelle blockierende `ws.recv()` blockiert den Thread.
-  Für viele parallele Verbindungen wäre ein `epoll`-basierter Event-Loop effizienter —
-  Erweiterung für ein späteres `async`-Modell.
-- **Binary-Callback im Server**: `srv.on_binary(fn)` — getrennte Callbacks für Text und Binary
-  oder ein gemeinsamer Callback mit Typ-Flag?
-- **Close-Code-Enum**: Status-Codes (1000=Normal, 1001=Going Away, 1008=Policy Violation, …)
-  könnten als AIML-Enum definiert werden.
+- **Per-message compression** (`permessage-deflate`): compression via `zlib` at frame level —
+  significantly reduces bandwidth for repetitive JSON payloads.
+- **Subprotocols**: `ws.connect(url, {protocol: "mqtt"})` → `Sec-WebSocket-Protocol` header.
+- **Event loop integration**: the current blocking `ws.recv()` blocks the thread.
+  For many parallel connections an `epoll`-based event loop would be more efficient —
+  extension for a future `async` model.
+- **Binary callback in server**: `srv.on_binary(fn)` — separate callbacks for text and binary
+  or a shared callback with a type flag?
+- **Close code enum**: status codes (1000=Normal, 1001=Going Away, 1008=Policy Violation, …)
+  could be defined as an AIML enum.

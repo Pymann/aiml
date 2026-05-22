@@ -2,6 +2,7 @@
 #include "ast_compiler.h"
 #include "list_impl.h"
 #include "map_impl.h"
+#include "chan_impl.h"
 #include "buffer_impl.h"
 #include "string_utils.h"
 #include <iostream>
@@ -15,6 +16,7 @@ IRValue* Compiler::visitExpression(Expr* expr) {
     if (auto var = dynamic_cast<VariableExpr*>(expr)) return visitVariable(var);
     if (auto call = dynamic_cast<CallExpr*>(expr)) return visitCall(call);
     if (auto newExpr = dynamic_cast<NewExpr*>(expr)) return visitNewExpr(newExpr);
+    if (auto na = dynamic_cast<NewArrayExpr*>(expr)) return visitNewArrayExpr(na);
     if (auto interp = dynamic_cast<StringInterpolationExpr*>(expr)) return visitStringInterpolation(interp);
     if (auto bin = dynamic_cast<BinaryExpr*>(expr)) return visitBinary(bin);
     if (auto unary = dynamic_cast<UnaryExpr*>(expr)) return visitUnary(unary);
@@ -67,6 +69,27 @@ IRValue* Compiler::visitStringInterpolation(StringInterpolationExpr* expr) {
     
     return ctx.ir_gen->wrap(currentStr);
 }
+IRValue* Compiler::visitNewArrayExpr(NewArrayExpr* na) {
+    llvm::Type* elemTy   = ctx.getLLVMType(na->elemTypeName);
+    uint64_t    elemSize = ctx.module.getDataLayout().getTypeAllocSize(elemTy);
+
+    IRValue* countIR = visitExpression(na->countExpr.get());
+    if (!countIR) { LOG_ERROR("new_array: could not evaluate count"); return ctx.ir_gen->getInt32(0); }
+    llvm::Value* count = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(countIR));
+    if (count->getType()->isIntegerTy(32))
+        count = ctx.builder.CreateZExt(count, ctx.builder.getInt64Ty(), "darr_count64");
+
+    llvm::Function* mallocFn = ctx.module.getFunction("malloc");
+    if (!mallocFn) {
+        llvm::FunctionType* ft = llvm::FunctionType::get(
+            ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt64Ty()}, false);
+        mallocFn = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "malloc", ctx.module);
+    }
+    llvm::Value* bytes = ctx.builder.CreateMul(count, ctx.builder.getInt64(elemSize), "darr_bytes");
+    llvm::Value* ptr   = ctx.builder.CreateCall(mallocFn, {bytes}, "darr_ptr");
+    return ctx.ir_gen->wrap(ptr);
+}
+
 IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
     std::string className = newExpr->typeName;
     if (!className.empty() && ctx.classes.count(className)) {
@@ -92,7 +115,8 @@ IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
         
         IRValue* rawPtr = ctx.ir_gen->createCall("calloc", callArgs, "calloc_call");
 
-        // Auto-initialize defined members
+        // Auto-initialize members. This mirrors the special-case initialization
+        // that stack `decl` already does for builtin handle/container fields.
         for (auto& [name, member] : classInfo.members) {
              Expr* initExpr = nullptr;
              if (newExpr->initValues.count(name)) {
@@ -115,6 +139,15 @@ IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
                   } else {
                       LOG_ERROR(ctx.fmtLoc(newExpr->sourceNode) + "Failed to compile AST expression for initialization of member: " + name);
                   }
+             } else if (member.typeName.find("chan<") == 0 && member.typeName.back() == '>') {
+                  llvm::Value* rawPtrCast = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rawPtr));
+                  llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(classInfo.type, rawPtrCast, member.index, name + "_gep");
+                  ChanImpl::init(ctx, fieldPtr, ctx.builder.getInt64(0));
+             } else if (member.typeName == "buffer" ||
+                        (member.typeName.rfind("buffer<", 0) == 0 && member.typeName.back() == '>')) {
+                  llvm::Value* rawPtrCast = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rawPtr));
+                  llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(classInfo.type, rawPtrCast, member.index, name + "_gep");
+                  BufferImpl::alloc(ctx, fieldPtr, ctx.builder.getInt32(4096));
              }
         }
         return rawPtr;
@@ -569,18 +602,39 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
             return ctx.ir_gen->getInt32(0);
         }
 
-        // Pointer type: try __eq__ dispatch first, then fall back to string compare.
+        // Pointer type: try __eq__ dispatch first. For `string` fall back
+        // to byte-wise string compare; for any other opaque-handle pointer
+        // type (prefab_instance, gl_texture, mirror_session, window_handle,
+        // socket_handle, …) compare by pointer identity. Without this
+        // distinction the old code unconditionally ran strcmp on the raw
+        // bytes of the pointee — so two distinct prefab handles whose
+        // structs began with the same byte pattern (often a leading NUL)
+        // compared as equal, breaking e.g. drag-and-drop "which tile is
+        // this?" lookups.
         if (lTy->isPointerTy() && rTy->isPointerTy()) {
-            std::string lhsTypeName;
-            if (auto* varEx = dynamic_cast<VariableExpr*>(bin->lhs.get())) {
-                Symbol* s = resolveVariable(varEx->name);
-                if (s) lhsTypeName = s->typeName;
-            }
+            auto resolveTypeName = [&](Expr* expr) {
+                std::string name;
+                if (auto* varEx = dynamic_cast<VariableExpr*>(expr)) {
+                    if (Symbol* s = resolveVariable(varEx->name)) name = s->typeName;
+                } else if (auto* lit = dynamic_cast<LiteralExpr*>(expr)) {
+                    name = lit->type;
+                }
+                return name;
+            };
+            std::string lhsTypeName = resolveTypeName(bin->lhs.get());
+            std::string rhsTypeName = resolveTypeName(bin->rhs.get());
             llvm::Value* lv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs));
             llvm::Value* rv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs));
             if (auto* res = tryEqDispatch(lhsTypeName, lv, rv))
                 return res;
-            return visitStringCompare(isNeq, lv, rv);
+            if (lhsTypeName == "string" || rhsTypeName == "string") {
+                return visitStringCompare(isNeq, lv, rv);
+            }
+            // Default: pointer-identity comparison.
+            llvm::Value* cmp = isNeq
+                ? ctx.builder.CreateICmpNE(lv, rv)
+                : ctx.builder.CreateICmpEQ(lv, rv);
+            return ctx.ir_gen->wrap(cmp);
         }
 
         return isNeq ? ctx.ir_gen->createICmpNE(lhs, rhs)
@@ -740,9 +794,20 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
             llvm::Function::InternalLinkage, trampolineName, ctx.module);
 
         llvm::IRBuilder<>::InsertPoint savedIP = ctx.builder.saveIP();
-        llvm::BasicBlock* tBB = llvm::BasicBlock::Create(ctx.context, "entry", trampoline);
-        ctx.builder.SetInsertPoint(tBB);
+        llvm::BasicBlock* tBB     = llvm::BasicBlock::Create(ctx.context, "entry",  trampoline);
+        llvm::BasicBlock* normalBB = llvm::BasicBlock::Create(ctx.context, "normal", trampoline);
+        llvm::BasicBlock* catchBB  = llvm::BasicBlock::Create(ctx.context, "catch",  trampoline);
 
+        // Give trampoline a personality so it can have a landingpad
+        llvm::Function* persPtr = ctx.module.getFunction("__gxx_personality_v0");
+        if (!persPtr) {
+            llvm::FunctionType* persTy = llvm::FunctionType::get(ctx.builder.getInt32Ty(), true);
+            persPtr = llvm::Function::Create(persTy, llvm::Function::ExternalLinkage,
+                                             "__gxx_personality_v0", ctx.module);
+        }
+        trampoline->setPersonalityFn(persPtr);
+
+        ctx.builder.SetInsertPoint(tBB);
         llvm::Value* rawArgPtr = trampoline->arg_begin();
         std::vector<llvm::Value*> callArgs;
         if (argStructTy) {
@@ -752,14 +817,36 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
                 llvm::Value* gep = ctx.builder.CreateStructGEP(argStructTy, argStructPtr, (unsigned)i);
                 callArgs.push_back(ctx.builder.CreateLoad(argTypes[i], gep));
             }
+            ctx.builder.CreateInvoke(targetFn, normalBB, catchBB, callArgs);
+
+            ctx.builder.SetInsertPoint(normalBB);
             llvm::Function* freeFn = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
-            ctx.builder.CreateCall(targetFn, callArgs);
             ctx.builder.CreateCall(freeFn, {rawArgPtr});
+            ctx.builder.CreateRet(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)));
         } else {
-            ctx.builder.CreateCall(targetFn, callArgs);
+            ctx.builder.CreateInvoke(targetFn, normalBB, catchBB, callArgs);
+
+            ctx.builder.SetInsertPoint(normalBB);
+            ctx.builder.CreateRet(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)));
         }
-        ctx.builder.CreateRet(llvm::ConstantPointerNull::get(
-            static_cast<llvm::PointerType*>(i8p)));
+
+        // catch-all: swallow any exception so it never escapes the pthread boundary
+        ctx.builder.SetInsertPoint(catchBB);
+        llvm::Type* lpTy = llvm::StructType::get(ctx.context,
+            {i8p, ctx.builder.getInt32Ty()});
+        llvm::LandingPadInst* lp = ctx.builder.CreateLandingPad(lpTy, 1, "lp");
+        lp->addClause(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)));
+        llvm::Value* excPtr = ctx.builder.CreateExtractValue(lp, {0u});
+        llvm::Function* beginCatch = ctx.getFunction("__cxa_begin_catch", i8p, {i8p});
+        ctx.builder.CreateCall(beginCatch, {excPtr});
+        llvm::Function* endCatch = ctx.getFunction("__cxa_end_catch", ctx.builder.getVoidTy(), {});
+        ctx.builder.CreateCall(endCatch, {});
+        if (argStructTy) {
+            llvm::Function* freeFn2 = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
+            ctx.builder.CreateCall(freeFn2, {rawArgPtr});
+        }
+        ctx.builder.CreateRet(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)));
+
         ctx.builder.restoreIP(savedIP);
     }
 
@@ -888,6 +975,21 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
         llvm::Value* elemPtr = ctx.builder.CreateGEP(arrTy, arrPtr,
             {ctx.builder.getInt32(0), flatIdx}, "arr_gep");
         llvm::Value* val = ctx.builder.CreateLoad(elemTy, elemPtr, "arr_at");
+        return ctx.ir_gen->wrap(val);
+    }
+
+    // ── dyn_array<T> ──
+    if (tName.rfind("dyn_array<", 0) == 0 && tName.back() == '>') {
+        std::string elemName = tName.substr(10, tName.size() - 11);
+        llvm::Type* elemTy   = ctx.getLLVMType(elemName);
+        llvm::Type* i8p      = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Value* ptrAlloca = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+            sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst)));
+        llvm::Value* rawPtr  = ctx.builder.CreateLoad(i8p, ptrAlloca, "darr_base");
+        llvm::Value* typedPtr = ctx.builder.CreatePointerCast(rawPtr, elemTy->getPointerTo(), "darr_typed");
+        if (indexVals.empty()) { LOG_ERROR("at: dyn_array requires index"); return nullptr; }
+        llvm::Value* elemPtr = ctx.builder.CreateGEP(elemTy, typedPtr, indexVals[0], "darr_gep");
+        llvm::Value* val     = ctx.builder.CreateLoad(elemTy, elemPtr, "darr_at");
         return ctx.ir_gen->wrap(val);
     }
 

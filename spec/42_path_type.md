@@ -2,178 +2,176 @@
 
 See also: [42_1_globber.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/42_1_globber.md)
 
-## Motivation: Das String-Pfad-Problem
+## Motivation: The String-Path Problem
 
-In den meisten Sprachen ist ein Dateipfad ein `string`. Das führt zu einer Reihe von
-strukturellen Problemen:
+In most languages a file path is a `string`. This leads to a series of structural
+problems:
 
-**1. Keine Typ-Sicherheit.** Eine Funktion, die einen Pfad erwartet, bekommt einen String —
-aber welchen? Einen absoluten? Einen relativen? Eine URL? Einen Dateinamen ohne Verzeichnis?
-Der Compiler weiß es nicht, und der Programmierer vergisst es.
+**1. No type safety.** A function that expects a path receives a string — but which
+kind? An absolute one? A relative one? A URL? A filename without a directory? The
+compiler does not know, and the programmer forgets.
 
-**2. Unnötiges Kopieren.** Jede String-Operation erzeugt eine neue Heap-Allokation.
-`path + "/" + filename` allokiert drei Mal: erst `path + "/"`, dann das Ergebnis +
-`filename`. Für etwas so Häufiges wie Pfad-Konkatenation ist das Verschwendung.
+**2. Unnecessary copying.** Every string operation creates a new heap allocation.
+`path + "/" + filename` allocates three times: first `path + "/"`, then the result +
+`filename`. For something as common as path concatenation this is wasteful.
 
-**3. Redundante Repräsentationen.** Der Pfad liegt als `std::string` in einer Map. Dann
-wird er als `char*` an `open()` übergeben. Dann als `std::filesystem::path` für Operationen.
-Dann zurück als `std::string` für Logging. Jede Konvertierung ist eine Kopie.
+**3. Redundant representations.** The path lives as a `std::string` in a map. Then
+it is passed as `char*` to `open()`. Then as `std::filesystem::path` for operations.
+Then back as `std::string` for logging. Every conversion is a copy.
 
-**4. Keine Normalisierung.** `"/usr/local/../local/bin"` und `"/usr/local/bin"` sind
-als Strings unterschiedlich, als Pfade identisch. Ohne explizite Normalisierung landet
-derselbe Pfad in unterschiedlichen Repräsentationen im System.
+**4. No normalization.** `"/usr/local/../local/bin"` and `"/usr/local/bin"` are
+different as strings but identical as paths. Without explicit normalization the same
+path ends up in different representations throughout the system.
 
-**5. Keine Compile-Time-Auflösung.** Statische Pfade (Konfig-Dateien, Templates,
-bekannte System-Pfade) sind zur Compile-Zeit bekannt — aber werden trotzdem zur Laufzeit
-immer wieder neu geparst und allokiert.
+**5. No compile-time resolution.** Static paths (config files, templates, known system
+paths) are known at compile time — but are still re-parsed and re-allocated at runtime
+every time.
 
-AIML löst das mit einem **ersten Klasse Pfad-Typen**: `path` ist ein Primitiv wie `i32`
-oder `bool` — kein Wrapper-Struct, kein String-Alias, sondern ein eigener Typ mit
-eigenen Garantien.
+AIML solves this with a **first-class path type**: `path` is a primitive like `i32`
+or `bool` — not a wrapper struct, not a string alias, but its own type with its own
+guarantees.
 
 ---
 
-## Kernprinzipien
+## Core Principles
 
-### 1. Interning — Ein Pfad, eine Speicheradresse
+### 1. Interning — One path, one memory address
 
-AIML interniert alle Pfade in einer globalen **Path-Intern-Table**: Zwei Pfade mit
-demselben normierten Inhalt teilen *exakt denselben Speicher*. Ein `path`-Wert ist
-intern nur ein 64-Bit-Zeiger in diese Tabelle — kein Heap-Buffer, keine Länge, kein
-Capacity-Feld.
+AIML interns all paths in a global **path intern table**: two paths with the same
+normalized content share *exactly the same memory*. A `path` value is internally
+just a 64-bit pointer into this table — no heap buffer, no length, no capacity field.
 
 ```
 path p1 = "/usr/local/bin"   →  intern_table[42]  →  "/usr/local/bin\0"
-path p2 = "/usr/local/bin"   →  intern_table[42]  (selber Pointer!)
-path p3 = "/usr/local/../local/bin"  →  normiert → intern_table[42]  (selber!)
+path p2 = "/usr/local/bin"   →  intern_table[42]  (same pointer!)
+path p3 = "/usr/local/../local/bin"  →  normalized → intern_table[42]  (same!)
 ```
 
-**Konsequenz:** Pfad-Vergleich ist ein **Pointer-Vergleich** (O(1), keine Zeichen-
-schleife). Pfad-Kopie ist eine **Integer-Kopie** (8 Byte, kein malloc). Eine Pfad-Map
-`map<path:T>` verwendet Pointer als Key — kein String-Hashing.
+**Consequence:** Path comparison is a **pointer comparison** (O(1), no character
+loop). Path copy is an **integer copy** (8 bytes, no malloc). A path map
+`map<path:T>` uses pointers as keys — no string hashing.
 
-### 2. Immutabilität
+### 2. Immutability
 
-Ein `path`-Wert ist unveränderlich. `path.join(...)` erzeugt einen *neuen* internierten
-Pfad — ohne den alten zu modifizieren und ohne unnötige Zwischenpuffer (die Konkatenation
-passiert einmalig, das Ergebnis wird sofort interniert).
+A `path` value is immutable. `path.join(...)` produces a *new* interned path — without
+modifying the old one and without unnecessary intermediate buffers (the concatenation
+happens once, the result is immediately interned).
 
-### 3. Keine implizite String-Konvertierung
+### 3. No implicit string conversion
 
-`path` kann nicht stillschweigend als `string` verwendet werden. Eine Funktion, die
-`string` erwartet, bekommt keinen `path` — und umgekehrt. Explizite Konvertierung ist
-immer sichtbar: `p.to_string()`.
+`path` cannot be used silently as `string`. A function that expects `string` does not
+accept a `path` — and vice versa. Explicit conversion is always visible: `p.to_string()`.
 
-### 4. Compile-Time-Interning für statische Pfade
+### 4. Compile-time interning for static paths
 
-Pfad-Literale, die zur Compile-Zeit bekannt sind, werden bereits beim Start des Programms
-in die Intern-Table eingetragen — keine Laufzeit-Allokation, kein Parsing zur Laufzeit.
+Path literals that are known at compile time are entered into the intern table at program
+startup — no runtime allocation, no parsing at runtime.
 
 ```yaml
-# Diese beiden Pfade werden beim Programmstart EINMALIG interniert,
-# danach ist set nur noch ein Integer-Store:
+# These two paths are interned ONCE at program startup,
+# after which set is just an integer store:
 - decl: [cfg, path]
 - set: [cfg, "/etc/myapp/config.toml"]   # compile-time interned literal
 ```
 
 ---
 
-## Typ-Deklaration & Literale
+## Type Declaration & Literals
 
 ```yaml
-# path ist ein Primitiv — wird wie i32/bool deklariert
+# path is a primitive — declared like i32/bool
 - decl: [p, path]
 
-# Pfad-Literal: normaler String-Syntax, aber Zieltyp ist path → kein String allokiert
+# Path literal: normal string syntax, but target type is path → no string allocated
 - set: [p, "/usr/local/bin"]
 
-# Relatives Pfad-Literal
+# Relative path literal
 - decl: [rel, path]
 - set: [rel, "config/app.toml"]
 
-# Leerer Pfad (Null-Äquivalent)
+# Empty path (null equivalent)
 - decl: [empty, path]    # default: path.empty (= intern_table[0])
 ```
 
-### Pfad-Typ-Varianten
+### Path Type Variants
 
 ```yaml
-# path       — allgemeiner Pfad (absolut oder relativ)
-# abspath    — Subtyp: garantiert absolut (Compiler-Fehler wenn relativ)
-# relpath    — Subtyp: garantiert relativ
-# dirpath    — Subtyp: endet nicht mit einer Dateikomponente (nur Verzeichnis)
-# filepath   — Subtyp: hat eine Dateikomponente (Blatt-Knoten)
+# path       — general path (absolute or relative)
+# abspath    — subtype: guaranteed absolute (compiler error if relative)
+# relpath    — subtype: guaranteed relative
+# dirpath    — subtype: does not end with a file component (directory only)
+# filepath   — subtype: has a file component (leaf node)
 
 - decl: [abs, abspath]
 - set: [abs, "/usr/local/bin"]     # OK
 - set: [abs, "relative/path"]      # COMPILE ERROR: abspath requires absolute path
 
 - decl: [dir, dirpath]
-- set: [dir, "/usr/local/bin/"]    # OK (trailing slash oder explizit als dir)
-- set: [dir, { call: [p.parent] }] # OK: parent() gibt immer dirpath zurück
+- set: [dir, "/usr/local/bin/"]    # OK (trailing slash or explicitly as dir)
+- set: [dir, { call: [p.parent] }] # OK: parent() always returns dirpath
 ```
 
 ---
 
-## Operationen
+## Operations
 
-### Komposition
+### Composition
 
 ```yaml
-# path.join — verbindet Pfade, normiert das Ergebnis, interniert einmalig
+# path.join — joins paths, normalizes the result, interns it once
 - decl: [base, path]
 - set: [base, "/usr/local"]
 
 - decl: [full, path]
 - set: [full, { call: [base.join, "bin", "aiml"] }]
-# Ergebnis: "/usr/local/bin/aiml" — KEIN Zwischenpuffer für "/usr/local/bin"
+# Result: "/usr/local/bin/aiml" — NO intermediate buffer for "/usr/local/bin"
 
-# Operator / als Syntaxzucker für join (Compile-Time-Desugaring)
-- set: [full, { path: [base, "bin", "aiml"] }]   # äquivalent zu join
+# Operator / as syntactic sugar for join (compile-time desugaring)
+- set: [full, { path: [base, "bin", "aiml"] }]   # equivalent to join
 
-# join mit path-Variablen (nicht nur Strings)
+# join with path variables (not just strings)
 - decl: [suffix, path]
 - set: [suffix, "bin/aiml"]
 - set: [full, { call: [base.join, suffix] }]
-# Wenn suffix absolut wäre, würde base verworfen (POSIX-Semantik)
+# If suffix were absolute, base would be discarded (POSIX semantics)
 ```
 
-### Zerlegung
+### Decomposition
 
 ```yaml
 - decl: [p, path]
 - set: [p, "/usr/local/bin/aiml.elf"]
 
-# Verzeichnis-Komponente (parent)
+# Directory component (parent)
 - decl: [dir, path]
 - set: [dir, { call: [p.parent] }]          # "/usr/local/bin"
 
-# Dateiname (letzte Komponente)
+# Filename (last component)
 - decl: [name, string]
 - set: [name, { call: [p.name] }]           # "aiml.elf"
 
-# Dateiname ohne Extension
+# Filename without extension
 - decl: [stem, string]
 - set: [stem, { call: [p.stem] }]           # "aiml"
 
-# Extension (mit Punkt)
+# Extension (with dot)
 - decl: [ext, string]
 - set: [ext, { call: [p.extension] }]       # ".elf"
 
-# Alle Komponenten als Liste
+# All components as a list
 - decl: [parts, list<string>]
 - set: [parts, { call: [p.parts] }]         # ["usr", "local", "bin", "aiml.elf"]
 
-# Anzahl Komponenten
+# Number of components
 - decl: [depth, i32]
 - set: [depth, { call: [p.depth] }]         # 4
 
-# Root-Komponente
+# Root component
 - decl: [root, path]
-- set: [root, { call: [p.root] }]           # "/"  (oder "C:\" auf Windows)
+- set: [root, { call: [p.root] }]           # "/"  (or "C:\" on Windows)
 ```
 
-### Eigenschaften
+### Properties
 
 ```yaml
 - decl: [p, path]
@@ -188,76 +186,76 @@ in die Intern-Table eingetragen — keine Laufzeit-Allokation, kein Parsing zur 
 - decl: [is_empty, bool]
 - set: [is_empty, { call: [p.is_empty] }]   # false
 
-# Normierter Pfad (.. und . aufgelöst, doppelte Slashes entfernt)
-# Passiert automatisch beim Internieren — aber explizit aufrufbar:
+# Normalized path (.. and . resolved, double slashes removed)
+# Happens automatically during interning — but can be called explicitly:
 - decl: [norm, path]
-- set: [norm, { call: [p.normalize] }]      # identisch zu p (schon normiert)
+- set: [norm, { call: [p.normalize] }]      # identical to p (already normalized)
 
 - decl: [messy, path]
 - set: [messy, "/usr//local/../local/./bin"]
 - set: [norm, { call: [messy.normalize] }]  # "/usr/local/bin"
-# (normalize beim set bereits automatisch — norm == intern("/usr/local/bin"))
+# (normalize already happens automatically on set — norm == intern("/usr/local/bin"))
 
-# Relativen Pfad von base zu p berechnen
+# Compute relative path from base to p
 - decl: [base, path]
 - set: [base, "/usr/local"]
 - decl: [rel, path]
 - set: [rel, { call: [p.relative_to, base] }]   # "bin/aiml"
 ```
 
-### Vergleich
+### Comparison
 
 ```yaml
-# Vergleich ist O(1) Pointer-Vergleich
+# Comparison is O(1) pointer comparison
 - decl: [a, path]
 - decl: [b, path]
 - set: [a, "/usr/local/bin"]
-- set: [b, "/usr/local/../local/bin"]   # normiert → selber Pointer wie a
+- set: [b, "/usr/local/../local/bin"]   # normalized → same pointer as a
 
 - decl: [eq, bool]
-- set: [eq, { binary: [a, ==, b] }]    # true — kein String-Vergleich, nur ==ptr
+- set: [eq, { binary: [a, ==, b] }]    # true — no string comparison, just ==ptr
 
-# Lexikografische Ordnung (für Sortierung in Listen)
+# Lexicographic ordering (for sorting in lists)
 - decl: [lt, bool]
 - set: [lt, { binary: [a, <, b] }]
 ```
 
-### Konvertierung
+### Conversion
 
 ```yaml
-# Explizit zu string (einzige erlaubte String-Konvertierung)
+# Explicit conversion to string (the only permitted string conversion)
 - decl: [s, string]
-- set: [s, { call: [p.to_string] }]         # allokiert nur wenn nötig (lazy)
+- set: [s, { call: [p.to_string] }]         # allocates only when necessary (lazy)
 
-# String → path (parst und normiert)
+# string → path (parses and normalizes)
 - decl: [from_str, path]
 - set: [from_str, { call: [path.from_string, s] }]
 
-# Zu OS-nativer Darstellung (auf Windows: Backslashes)
+# To OS-native representation (backslashes on Windows)
 - decl: [os_str, string]
 - set: [os_str, { call: [p.to_os_string] }]
 ```
 
 ---
 
-## Filesystem-Integration
+## Filesystem Integration
 
-Der `io`-Namespace akzeptiert ausschließlich `path`, niemals `string`:
+The `io` namespace accepts only `path`, never `string`:
 
 ```yaml
-# KORREKT:
+# CORRECT:
 - decl: [p, path]
 - set: [p, "/etc/hosts"]
 - decl: [content, string]
 - set: [content, { call: [io.read_file, p] }]
 
-# COMPILE ERROR — string ist kein path:
+# COMPILE ERROR — string is not path:
 - set: [content, { call: [io.read_file, "/etc/hosts"] }]
 #                                        ^^^^^^^^^^^^ Type mismatch: string != path
-# Ausnahme: path-Kontext-Inferenz — Literale im path-Kontext werden als path geparst:
-# (wenn io.read_file path erwartet, ist "/etc/hosts" ein path-Literal, kein string-Literal)
+# Exception: path context inference — literals in a path context are parsed as path:
+# (if io.read_file expects path, "/etc/hosts" is a path literal, not a string literal)
 
-# Filesystem-Operationen
+# Filesystem operations
 - decl: [exists, bool]
 - set: [exists, { call: [io.exists, p] }]
 
@@ -270,38 +268,38 @@ Der `io`-Namespace akzeptiert ausschließlich `path`, niemals `string`:
 - decl: [size, i64]
 - set: [size, { call: [io.file_size, p] }]
 
-# Verzeichnis-Inhalt (gibt list<path> zurück — keine Strings!)
+# Directory contents (returns list<path> — no strings!)
 - decl: [entries, list<path>]
 - set: [entries, { call: [io.list_dir, p] }]
 - for_each:
     var: entry
     in: entries
     body:
-      - print: ["${entry}"]     # path hat eine implizite Display-Darstellung in Interpolation
+      - print: ["${entry}"]     # path has an implicit display representation in interpolation
 
-# Verzeichnis erstellen
+# Create directory
 - call: [io.mkdir, p]
 - call: [io.mkdir_all, p]    # mkdir -p
 
-# Umbenennen / Verschieben (atomic auf POSIX)
+# Rename / move (atomic on POSIX)
 - decl: [dest, path]
 - set: [dest, "/etc/hosts.bak"]
 - call: [io.rename, p, dest]
 
-# Löschen
+# Delete
 - call: [io.remove, p]
-- call: [io.remove_all, p]   # rm -rf (Verzeichnisbaum)
+- call: [io.remove_all, p]   # rm -rf (directory tree)
 ```
 
-### File-Descriptor-Caching (`file_ref`)
+### File Descriptor Caching (`file_ref`)
 
-Ein `file_ref` kombiniert einen `path` mit einem offenen File-Descriptor. So muss
-der Pfad nicht für jeden I/O-Aufruf neu aufgelöst werden (kein wiederholtes `open()`):
+A `file_ref` combines a `path` with an open file descriptor. This way the path does not
+need to be resolved for every I/O call (no repeated `open()`):
 
 ```yaml
-# file_ref — path + offener fd, kein erneutes Lookup beim Lesen/Schreiben
+# file_ref — path + open fd, no repeated lookup on read/write
 - decl: [f, file_ref]
-- set: [f, { call: [io.open, p, "r"] }]   # öffnet einmal, hält fd offen
+- set: [f, { call: [io.open, p, "r"] }]   # opens once, keeps fd open
 
 - decl: [line, string]
 - set: [line, { call: [f.read_line] }]
@@ -309,7 +307,7 @@ der Pfad nicht für jeden I/O-Aufruf neu aufgelöst werden (kein wiederholtes `o
 - call: [f.seek, 0]
 - call: [f.write, "new content"]
 
-# path aus file_ref zurückbekommen (zero-cost, ist gespeichert)
+# Retrieve the path from a file_ref (zero-cost, stored internally)
 - decl: [orig_path, path]
 - set: [orig_path, { call: [f.path] }]
 
@@ -318,32 +316,32 @@ der Pfad nicht für jeden I/O-Aufruf neu aufgelöst werden (kein wiederholtes `o
 
 ---
 
-## Pfad-Sicherheit
+## Path Security
 
-### Traversal-Schutz
+### Traversal Protection
 
 ```yaml
-# path.safe_join — lehnt Komponenten ab, die außerhalb des base-Verzeichnisses führen
-# Schützt vor Path-Traversal-Angriffen (../../etc/passwd)
+# path.safe_join — rejects components that lead outside the base directory
+# Protects against path traversal attacks (../../etc/passwd)
 
 - decl: [base, path]
 - set: [base, "/var/www/uploads"]
 
 - decl: [user_input, string]
-- set: [user_input, "../../etc/passwd"]    # Angreifer-Eingabe
+- set: [user_input, "../../etc/passwd"]    # attacker input
 
 - decl: [safe, path]
 - set: [safe, { call: [base.safe_join, user_input] }]
 # RUNTIME ERROR: "../../etc/passwd" escapes base "/var/www/uploads"
 
-# Explizites Erlauben von relativen ../-Komponenten (opt-in):
-- set: [safe, { call: [base.join_unchecked, user_input] }]  # opt-in: kein Schutz
+# Explicitly allowing relative ../ components (opt-in):
+- set: [safe, { call: [base.join_unchecked, user_input] }]  # opt-in: no protection
 ```
 
-### Berechtigungs-Checks
+### Permission Checks
 
 ```yaml
-# Prüfe ob der aktuelle Prozess Zugriff hat (nutzt access(2))
+# Check whether the current process has access (uses access(2))
 - decl: [can_read, bool]
 - set: [can_read, { call: [io.can_read, p] }]
 
@@ -356,23 +354,24 @@ der Pfad nicht für jeden I/O-Aufruf neu aufgelöst werden (kein wiederholtes `o
 
 ---
 
-## Pfade in Datenstrukturen
+## Paths in Data Structures
 
-Da `path` intern ein 8-Byte-Pointer ist, sind Pfade in Collections extrem effizient:
+Since `path` is internally an 8-byte pointer, paths in collections are extremely
+efficient:
 
 ```yaml
-# map<path:T> — Lookup ist O(1) Pointer-Vergleich, kein String-Hashing
+# map<path:T> — lookup is O(1) pointer comparison, no string hashing
 - decl: [cache, map<path:string>]
 - call: [cache.set, p, "cached content"]
 - decl: [hit, string]
-- set: [hit, { call: [cache.get, p] }]   # O(1), kein String-Compare
+- set: [hit, { call: [cache.get, p] }]   # O(1), no string comparison
 
-# list<path> — 8 Byte pro Eintrag (kein char*, kein length, kein capacity)
+# list<path> — 8 bytes per entry (no char*, no length, no capacity)
 - decl: [paths, list<path>]
 - call: [paths.push, "/usr/local/bin/aiml"]
 - call: [paths.push, "/usr/local/lib/libaiml.so"]
 
-# set<path> — deduplizierung per Pointer (intern garantiert eindeutig)
+# set<path> — deduplication by pointer (intern guarantees uniqueness)
 - decl: [visited, set<path>]
 - call: [visited.add, p]
 - decl: [seen, bool]
@@ -381,60 +380,60 @@ Da `path` intern ein 8-Byte-Pointer ist, sind Pfade in Collections extrem effizi
 
 ---
 
-## Plattform-Abstraktion
+## Platform Abstraction
 
-`path` ist intern platform-agnostisch: `/` als Separator auf allen Plattformen,
-`to_os_string()` konvertiert für Plattform-APIs:
+`path` is internally platform-agnostic: `/` as separator on all platforms,
+`to_os_string()` converts for platform APIs:
 
 ```yaml
-# Plattform-spezifische bekannte Pfade
+# Platform-specific well-known paths
 - decl: [home, path]
-- set: [home, { call: [path.home] }]         # ~/  (expandiert aus $HOME / USERPROFILE)
+- set: [home, { call: [path.home] }]         # ~/  (expanded from $HOME / USERPROFILE)
 
 - decl: [tmp, path]
-- set: [tmp, { call: [path.temp_dir] }]      # /tmp  oder  C:\Users\X\AppData\Local\Temp
+- set: [tmp, { call: [path.temp_dir] }]      # /tmp  or  C:\Users\X\AppData\Local\Temp
 
 - decl: [cfg, path]
 - set: [cfg, { call: [path.config_dir, "myapp"] }]
 # Linux: ~/.config/myapp  |  macOS: ~/Library/Application Support/myapp  |  Win: AppData\Roaming\myapp
 
 - decl: [exe, path]
-- set: [exe, { call: [path.current_exe] }]   # Pfad des laufenden Programms (readlink /proc/self/exe)
+- set: [exe, { call: [path.current_exe] }]   # path of the running program (readlink /proc/self/exe)
 
 - decl: [cwd, path]
-- set: [cwd, { call: [path.cwd] }]           # Aktuelles Arbeitsverzeichnis
+- set: [cwd, { call: [path.cwd] }]           # current working directory
 ```
 
 ---
 
-## Interner Aufbau (Implementation)
+## Internal Structure (Implementation)
 
 ```
-path-Wert (Laufzeit):
+path value (runtime):
   ┌─────────────────────────────┐
-  │  u64: pointer → intern_entry │   8 Byte — das ist alles
+  │  u64: pointer → intern_entry │   8 bytes — that is all
   └─────────────────────────────┘
 
-intern_entry (Intern-Table):
+intern_entry (intern table):
   ┌──────────┬─────────┬─────────────────────────────┐
   │  u32 len │ u32 hash│  char[] normalized_utf8\0   │
   └──────────┴─────────┴─────────────────────────────┘
 
-Intern-Table:
-  - Hash-Map: FNV-1a(normalized_str) → intern_entry*
-  - Lock-freies Insert (CAS auf Bucket-Pointer)
-  - Einträge niemals gelöscht (Pfade sind Programmlebensdauer-Daten)
-  - Compile-Time-Pfade werden in Read-Only-Sektion eingebettet (kein Laufzeit-malloc)
+Intern table:
+  - Hash map: FNV-1a(normalized_str) → intern_entry*
+  - Lock-free insert (CAS on bucket pointer)
+  - Entries never deleted (paths are program-lifetime data)
+  - Compile-time paths embedded in read-only section (no runtime malloc)
 ```
 
-**Vergleich mit string:**
+**Comparison with string:**
 
 | Operation          | `string`          | `path`                  |
 |--------------------|-------------------|-------------------------|
-| Kopie              | malloc + memcpy   | 8-Byte Integer-Copy     |
-| Vergleich          | O(n) memcmp       | O(1) Pointer-Vergleich  |
-| Hash               | O(n) berechnen    | Bereits im Entry gespeichert |
-| Join               | 2+ Allokationen   | 1 Allokation (Ergebnis) |
-| Als Map-Key        | String-Hash + cmp | Pointer-Hash + ==       |
-| Normalisierung     | Manuell / nie     | Automatisch beim Intern |
-| Typ-Sicherheit     | Keine             | Compile-Time            |
+| Copy               | malloc + memcpy   | 8-byte integer copy     |
+| Comparison         | O(n) memcmp       | O(1) pointer comparison |
+| Hash               | O(n) computed     | Already stored in entry |
+| Join               | 2+ allocations    | 1 allocation (result)   |
+| As map key         | string hash + cmp | pointer hash + ==       |
+| Normalization      | Manual / never    | Automatic on intern     |
+| Type safety        | None              | Compile-time            |

@@ -1,93 +1,93 @@
-# Kapitel 47 — Thread-Safety-Modell
+# Chapter 47 — Thread Safety Model
 
-> **Leitgedanke:** AIML hat native OS-Threads (Kapitel 26), aber kein Ownership-/Borrow-System.
-> Stattdessen definiert die Sprache **drei Sicherheitskategorien** für alle Runtime-Primitives.
-> Der AIML-Autor muss nur für Kategorie 3 (shared user state) selbst synchronisieren.
+> **Guiding principle:** AIML has native OS threads (Chapter 26), but no ownership/borrow system.
+> Instead, the language defines **three safety categories** for all runtime primitives.
+> The AIML author only needs to synchronize manually for Category 3 (shared user state).
 
 ---
 
-## 1. Die drei Kategorien
+## 1. The Three Categories
 
-### Kategorie 1 — Implizit thread-safe (Runtime garantiert Locking)
+### Category 1 — Implicitly thread-safe (runtime guarantees locking)
 
-Runtime-Primitives, die **globalen oder geteilten Zustand** verwalten, sind intern
-durch Mutexe geschützt. Der AIML-Code sieht davon nichts — analog zu `sqlite3`,
-`sync.Map` (Go), oder `ConcurrentHashMap` (Java).
+Runtime primitives that manage **global or shared state** are internally protected
+by mutexes. AIML code sees nothing of this — analogous to `sqlite3`,
+`sync.Map` (Go), or `ConcurrentHashMap` (Java).
 
-| Namespace / Typ | Operationen | Garantie |
-|-----------------|-------------|----------|
-| `db` (Store, Kv, VecStore, TimeSeries) | open, get, set, has, delete, clear, checkpoint, query, run_system | Alle Operationen atomar pro Handle. Singleton-Pattern: gleicher Name+Pfad → gleicher Handle |
-| `log` | set_level, debug, info, warn, error | Ausgaben sind serialisiert, keine verschränkten Zeilen |
-| `path` (Intern-Tabelle) | from_string, Vergleich (`==`) | Die globale Intern-Map ist mutex-geschützt |
+| Namespace / Type | Operations | Guarantee |
+|------------------|------------|-----------|
+| `db` (Store, Kv, VecStore, TimeSeries) | open, get, set, has, delete, clear, checkpoint, query, run_system | All operations atomic per handle. Singleton pattern: same name+path → same handle |
+| `log` | set_level, debug, info, warn, error | Outputs are serialized, no interleaved lines |
+| `path` (intern table) | from_string, comparison (`==`) | The global intern map is mutex-protected |
 
-**Begründung:** Diese Primitives sind Infrastruktur, kein User-Code. Kein Python-Entwickler
-schreibt einen Mutex um `logging.info()`, kein Go-Entwickler lockt `sql.DB.Query()`.
+**Rationale:** These primitives are infrastructure, not user code. No Python developer
+writes a mutex around `logging.info()`, no Go developer locks `sql.DB.Query()`.
 
-**Konsequenz für den AIML-Autor:**
+**Consequence for the AIML author:**
 ```yaml
-# Das ist sicher — auch aus zwei spawn-Threads gleichzeitig:
+# This is safe — even from two spawn-threads simultaneously:
 - call: [cards_kv.set, id_a, card_a]   # Thread 1
 - call: [cards_kv.set, id_b, card_b]   # Thread 2
 
-# db.open_kv gibt bei gleichem Namen denselben Handle zurück (Singleton):
+# db.open_kv returns the same handle for the same name (singleton):
 - set: [kv1, { call: [db.open_kv, "store_x", {persist: true}] }]  # Thread 1
 - set: [kv2, { call: [db.open_kv, "store_x", {persist: true}] }]  # Thread 2
-# kv1 und kv2 sind derselbe Handle → kein doppelter WAL, kein Race
+# kv1 and kv2 are the same handle → no duplicate WAL, no race
 ```
 
-**Einschränkung:** Einzelne Operationen sind atomar, aber **Sequenzen** sind es nicht:
+**Limitation:** Individual operations are atomic, but **sequences** are not:
 ```yaml
-# NICHT atomar — zwischen has und set kann ein anderer Thread den Key löschen:
+# NOT atomic — between has and set, another thread could delete the key:
 - set: [exists, { call: [kv.has, key] }]
 - if:
     condition: { "==": [exists, 0] }
     then:
       - call: [kv.set, key, val]
 
-# Für atomare Read-Modify-Write: expliziter Lock (Kapitel 26) nötig
+# For atomic read-modify-write: explicit lock (Chapter 26) required
 ```
 
 ---
 
-### Kategorie 2 — Stateless / Pure (inhärent sicher)
+### Category 2 — Stateless / Pure (inherently safe)
 
-Funktionen ohne internen Zustand. Mehrere Threads können sie gleichzeitig aufrufen,
-ohne dass irgendetwas koordiniert werden muss.
+Functions without internal state. Multiple threads can call them simultaneously
+without any coordination needed.
 
-| Namespace | Operationen |
-|-----------|-------------|
-| `math` | sin, cos, sqrt, random, vec2/vec3/vec4/mat4-Operationen, … |
+| Namespace | Operations |
+|-----------|------------|
+| `math` | sin, cos, sqrt, random, vec2/vec3/vec4/mat4 operations, … |
 | `hash` | sha256, hmac_sha256, md5, … |
 | `compress` | gzip, deflate, brotli, zstd, lz4, zip_entries, tar_entries, … |
 | `time` | now, sleep, format, … |
 | `sys` | args, exit, env, getenv, … |
-| `io` (reine Funktionen) | read_file, write_file, list_dir, exists, … |
+| `io` (pure functions) | read_file, write_file, list_dir, exists, … |
 
-**Hinweis:** `io.write_file` ist auf OS-Ebene nicht atomar — wenn zwei Threads dieselbe
-Datei schreiben, ist das Ergebnis undefiniert. Das ist kein AIML-Problem, sondern ein
-POSIX-Problem. Für koordiniertes Schreiben: expliziter Lock.
+**Note:** `io.write_file` is not atomic at the OS level — if two threads write to the
+same file, the result is undefined. This is not an AIML problem, but a POSIX problem.
+For coordinated writing: explicit lock.
 
 ---
 
-### Kategorie 3 — Per-Handle / User-managed (Nutzer synchronisiert selbst)
+### Category 3 — Per-Handle / User-managed (user synchronizes manually)
 
-Handles, die **einer Connection oder Ressource** gehören. Sie werden typischerweise
-nicht zwischen Threads geteilt. Wenn doch, muss der Nutzer einen `lock` verwenden.
+Handles that **belong to a connection or resource**. They are typically not shared
+between threads. If they are, the user must use a `lock`.
 
-| Typ | Beispiel | Typischer Gebrauch |
-|-----|----------|-------------------|
-| `socket_handle` | net.connect → send/recv | Ein Thread pro Connection |
-| `ws_handle` | ws.connect → send/recv | Ein Thread pro WebSocket |
-| `tls_socket_handle` | tls.connect → send/recv | Ein Thread pro TLS-Verbindung |
-| `http_request_handle` | Innerhalb eines Route-Handlers | Wird vom HTTP-Server pro Request erzeugt, nicht geteilt |
-| `http_response_handle` | Innerhalb eines Route-Handlers | Ditto |
-| `thread_handle` | spawn → join/detach | Controller-Thread hält den Handle |
-| `mirror_session` | mirror.listen / connect | Per-Session, nicht thread-safe |
+| Type | Example | Typical Usage |
+|------|---------|---------------|
+| `socket_handle` | net.connect → send/recv | One thread per connection |
+| `ws_handle` | ws.connect → send/recv | One thread per WebSocket |
+| `tls_socket_handle` | tls.connect → send/recv | One thread per TLS connection |
+| `http_request_handle` | Inside a route handler | Created by the HTTP server per request, not shared |
+| `http_response_handle` | Inside a route handler | Same |
+| `thread_handle` | spawn → join/detach | Controller thread holds the handle |
+| `mirror_session` | mirror.listen / connect | Per session, not thread-safe |
 
-**Begründung:** Connection-Handles sind per Definition kurzlebig und gehören einem Thread.
-Implizites Locking wäre hier nur Overhead ohne Nutzen.
+**Rationale:** Connection handles are by definition short-lived and belong to one thread.
+Implicit locking would only be overhead with no benefit here.
 
-**Wenn man doch teilen muss:**
+**If you do need to share:**
 ```yaml
 - decl: [shared_ws, ws_handle]
 - set:  [shared_ws, { call: [ws.connect, "ws://..."] }]
@@ -105,30 +105,30 @@ Implizites Locking wäre hier nur Overhead ohne Nutzen.
 
 ---
 
-### Sonderfall: `http_server_handle`
+### Special Case: `http_server_handle`
 
-Der HTTP-Server ist ein Hybrid:
+The HTTP server is a hybrid:
 
-- **srv.route, srv.start, srv.stop** → Kategorie 1 (intern synchronisiert)
-- **req/resp innerhalb eines Handlers** → Kategorie 3 (pro Request-Thread, nicht geteilt)
-- **Globaler State aus dem Handler** (z.B. db.open_kv) → Kategorie 1
+- **srv.route, srv.start, srv.stop** → Category 1 (internally synchronized)
+- **req/resp inside a handler** → Category 3 (per request thread, not shared)
+- **Global state from within the handler** (e.g. db.open_kv) → Category 1
 
-Der HTTP-Server erzeugt pro eingehender Connection einen eigenen Thread (detached pthread).
-Route-Handler werden in diesem Thread ausgeführt. Der Handler darf:
-- `db.*`-Operationen aufrufen (Kategorie 1, sicher)
-- `log.*`-Operationen aufrufen (Kategorie 1, sicher)
-- `req`/`resp` lesen/schreiben (Kategorie 3, aber pro-Request, also sicher)
-- **Nicht:** globale AIML-Variablen ohne Lock modifizieren (Kategorie 3)
+The HTTP server creates its own thread per incoming connection (detached pthread).
+Route handlers are executed in this thread. The handler may:
+- Call `db.*` operations (Category 1, safe)
+- Call `log.*` operations (Category 1, safe)
+- Read/write `req`/`resp` (Category 3, but per-request, so safe)
+- **Not:** modify global AIML variables without a lock (Category 3)
 
 ---
 
-## 2. Shared User State — die einzige Gefahr
+## 2. Shared User State — The Only Danger
 
-Alles in Kategorien 1 und 2 ist sicher. Die **einzige Quelle für Data Races** in AIML-Code
-ist geteilter veränderbarer Zustand:
+Everything in Categories 1 and 2 is safe. The **only source of data races** in AIML code
+is shared mutable state:
 
 ```yaml
-# GEFÄHRLICH — globale Variable ohne Lock:
+# DANGEROUS — global variable without lock:
 - decl: [counter, i32]
 - set:  [counter, 0]
 
@@ -136,16 +136,16 @@ ist geteilter veränderbarer Zustand:
     name: increment
     args: []
     body:
-      - set: [counter, { +: [counter, 1] }]   # Race Condition!
+      - set: [counter, { +: [counter, 1] }]   # Race condition!
 
 - set: [t1, { spawn: [increment] }]
 - set: [t2, { spawn: [increment] }]
 - call: [t1.join]
 - call: [t2.join]
-# counter kann 1 oder 2 sein — undefiniert
+# counter can be 1 or 2 — undefined
 ```
 
-**Lösung:**
+**Solution:**
 ```yaml
 - decl: [counter, i32, 0]
 - decl: [mtx, lock]
@@ -160,49 +160,49 @@ ist geteilter veränderbarer Zustand:
       - call: [mtx.release]
 ```
 
-**Oder besser — Channels (Kapitel 27):**
+**Or better — Channels (Chapter 27):**
 ```yaml
 - decl: [ch, chan<i32>]
-# Jeder Thread sendet seine Deltas; ein Consumer aggregiert
+# Each thread sends its deltas; one consumer aggregates
 ```
 
 ---
 
-## 3. Implementierungsregeln für Runtime-Entwickler
+## 3. Implementation Rules for Runtime Developers
 
-Diese Regeln gelten für alle C/C++-Dateien unter `src/sys/` und `src/core/`:
+These rules apply to all C/C++ files under `src/sys/` and `src/core/`:
 
-1. **Globale Registries** (z.B. `g_persistent_kvs`, `g_persistent_stores`) müssen
-   durch einen globalen Mutex geschützt sein. `push_back` auf `std::vector` ist
-   **nicht thread-safe**.
+1. **Global registries** (e.g. `g_persistent_kvs`, `g_persistent_stores`) must
+   be protected by a global mutex. `push_back` on `std::vector` is
+   **not thread-safe**.
 
-2. **Singleton-Pattern** für benannte Ressourcen: `db.open_kv("name", {persist: true})`
-   muss bei gleichem Name+Pfad denselben Handle zurückgeben.
-   - Verhindert WAL-Korruption (mehrere fd's auf dieselbe Datei)
-   - Verhindert Memory-Leaks (unbegrenztes Wachstum der Registry)
-   - Lookup + Insert muss unter demselben Lock passieren (TOCTOU)
+2. **Singleton pattern** for named resources: `db.open_kv("name", {persist: true})`
+   must return the same handle for the same name+path.
+   - Prevents WAL corruption (multiple fds on the same file)
+   - Prevents memory leaks (unbounded growth of the registry)
+   - Lookup + insert must happen under the same lock (TOCTOU)
 
-3. **Per-Handle-Mutex** für Kategorie-1-Handles: Jeder `AimlKv`, `AimlStore`,
-   `AimlVecStore`, `AimlTimeSeries` hat einen eigenen `std::mutex`.
-   - Schützt interne Maps, WAL-Writes, Decoded-Cache
-   - Globaler Mutex reicht nicht — er würde alle Stores serialisieren
+3. **Per-handle mutex** for Category 1 handles: every `AimlKv`, `AimlStore`,
+   `AimlVecStore`, `AimlTimeSeries` has its own `std::mutex`.
+   - Protects internal maps, WAL writes, decoded cache
+   - A global mutex is not sufficient — it would serialize all stores
 
-4. **Keine Locks in Kategorie 2/3**: Stateless-Funktionen und per-Connection-Handles
-   bekommen kein Locking. Das wäre reiner Overhead.
+4. **No locks in Category 2/3**: Stateless functions and per-connection handles
+   get no locking. That would be pure overhead.
 
-5. **WAL-Writes sind serialisiert** durch den Per-Handle-Mutex. Kein zusätzlicher
-   File-Lock nötig, solange Regel 2 (Singleton) eingehalten wird.
+5. **WAL writes are serialized** by the per-handle mutex. No additional file lock
+   needed, as long as Rule 2 (singleton) is followed.
 
 ---
 
-## 4. Zusammenfassung
+## 4. Summary
 
-| Was | Wer synchronisiert | Wie |
-|-----|-------------------|-----|
-| db.*, log.*, path-Intern | Runtime | Mutex (implizit) |
-| math.*, hash.*, compress.*, time.* | Niemand (stateless) | — |
-| socket/ws/tls/http-Handles | AIML-Autor (falls geteilt) | `lock` (Kapitel 26) |
-| Globale AIML-Variablen | AIML-Autor | `lock` oder `chan<T>` |
+| What | Who synchronizes | How |
+|------|-----------------|-----|
+| db.*, log.*, path intern | Runtime | Mutex (implicit) |
+| math.*, hash.*, compress.*, time.* | Nobody (stateless) | — |
+| socket/ws/tls/http handles | AIML author (if shared) | `lock` (Chapter 26) |
+| Global AIML variables | AIML author | `lock` or `chan<T>` |
 
-**Faustregel:** Wenn es ein `db.`- oder `log.`-Aufruf ist, ist es sicher.
-Wenn du eine eigene Variable aus zwei Threads schreibst, brauchst du einen Lock.
+**Rule of thumb:** If it's a `db.` or `log.` call, it's safe.
+If you write to your own variable from two threads, you need a lock.

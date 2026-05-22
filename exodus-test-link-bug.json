@@ -1,0 +1,53 @@
+{
+    "$schema": "exodus.project.config-1.0",
+    "name": "test_link_bug",
+    "version": "0.1.0",
+    "license": [],
+    "dependencies": [],
+    "output_type": "executable",
+    "optimization": "0",
+    "debug": true,
+    "warnings": ["all", "extra"],
+    "env": {},
+    "werror": false,
+    "source_root": ".",
+    "build_root": "out/test_link_bug",
+    "search_paths": [],
+    "sources": [
+        "tests/repro_link_unnamed.aiml"
+    ],
+    "defines": {},
+    "pre_compilation": null,
+    "pre_linkage": null,
+    "architecture": {
+        "arch": "x86_64",
+        "cpu": null,
+        "fpu": null,
+        "float_abi": null
+    },
+    "compiler": {
+        "name": "/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/aiml/aiml",
+        "lang_standard": "17",
+        "flags": []
+    },
+    "linker": {
+        "name": "g++",
+        "path": null,
+        "script": null,
+        "map_file": null,
+        "flags": [
+            "-Wl,-rpath,/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/libaiml"
+        ],
+        "libraries": [
+            "aiml",
+            "pthread",
+            "ssl",
+            "crypto",
+            "dl"
+        ],
+        "library_paths": [
+            "/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/libaiml"
+        ]
+    },
+    "artifact_in_cwd": true
+}

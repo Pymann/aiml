@@ -2,6 +2,7 @@
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
+#include <random>
 
 /* ── Helpers ──────────────────────────────────────────────────────────── */
 static inline float v3len(float x, float y, float z) { return sqrtf(x*x + y*y + z*z); }
@@ -399,4 +400,22 @@ float aiml_math_fmax_list(const float* d, int32_t n) {
     float r = d[0];
     for (int32_t i = 1; i < n; i++) if (d[i] > r) r = d[i];
     return r;
+}
+
+/* ── random ───────────────────────────────────────────────────────────── */
+static std::mt19937& aiml_rng() {
+    static thread_local std::mt19937 rng(std::random_device{}());
+    return rng;
+}
+
+extern "C" float aiml_math_random_f32(float lo, float hi) {
+    if (hi <= lo) return lo;
+    std::uniform_real_distribution<float> dist(lo, hi);
+    return dist(aiml_rng());
+}
+
+extern "C" int32_t aiml_math_random_int(int32_t lo, int32_t hi) {
+    if (hi <= lo) return lo;
+    std::uniform_int_distribution<int32_t> dist(lo, hi - 1);
+    return dist(aiml_rng());
 }

@@ -16,8 +16,9 @@ class InterfaceBuilder : public StateHandler {
     std::string currentKey;
     bool expectingKey = false;
     bool insideMethods = false;
-    
+
     bool insideMethodDef = false;
+    int  methodDepth = 0;          // 1 = inside [name, ret, args]; 2 = inside the args sub-sequence
     MethodSignature currentMethod;
 public:
     InterfaceBuilder(Builder* b) : StateHandler(b) { interfaceNode = std::make_unique<InterfaceDecl>(); }

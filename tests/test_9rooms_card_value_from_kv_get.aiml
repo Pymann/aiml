@@ -96,7 +96,7 @@
             - print: ["FAIL ptr_amt=${ptr_amt}"]
             - call: [sys.exit, 1]
 
-      - decl: [gotv, Card, { call: [kv.get, "mana"] }]
+      - decl: [gotv, Card, { call: [kv.get_copy, "mana"] }]
       - if:
           condition: { eq: [{ eq: [gotv.name, "Fire Mana"] }, 0] }
           then:

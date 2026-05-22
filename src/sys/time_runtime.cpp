@@ -3,6 +3,10 @@
 #include <unistd.h>
 #include <iostream>
 
+#ifdef __EMSCRIPTEN__
+#  include <emscripten/emscripten.h>
+#endif
+
 extern "C" int64_t time_now_ms() {
     struct timeval tv;
     gettimeofday(&tv, NULL);
@@ -10,5 +14,10 @@ extern "C" int64_t time_now_ms() {
 }
 
 extern "C" void time_sleep_ms(int32_t ms) {
+#ifdef __EMSCRIPTEN__
+    // Yields control to the JS event loop. Requires -sASYNCIFY at link time.
+    emscripten_sleep((unsigned int)ms);
+#else
     usleep(ms * 1000);
+#endif
 }

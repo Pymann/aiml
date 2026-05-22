@@ -1,0 +1,127 @@
+# tests/test_embedded_model.aiml — Repro-Test: Embedded Model Struct (by-value field in Model)
+#
+# Testet:
+#   1. model mit eingebettetem model-by-value Feld (kein ptr<T>)
+#   2. { new: OuterModel } mit embedded inner struct
+#   3. set: [outer.inner_field, inner_val] (struct-zu-embedded-struct Copy)
+#   4. outer.inner_field.x Chain-Zugriff (read)
+#   5. Embedded field als by-value Funktionsargument
+#   6. Isolation zweier Heap-Instanzen
+
+# ─── Test-Modelle ──────────────────────────────────────────────────────────────
+- model:
+    name: EPoint
+    fields:
+      - [x, i32, 0]
+      - [y, i32, 0]
+
+- model:
+    name: ERect
+    fields:
+      - [origin, EPoint, 0]    # embedded EPoint by-value
+      - [w,      i32,    0]
+      - [h,      i32,    0]
+
+# ─── Hilfsfunktion ────────────────────────────────────────────────────────────
+- def:
+    name: epoint_sum
+    args: [[p, EPoint]]
+    return: i32
+    body:
+      - return: [{ +: [p.x, p.y] }]
+
+# ─── Haupttest ────────────────────────────────────────────────────────────────
+- def:
+    name: main
+    args: []
+    return: i32
+    body:
+      # T1: embedded field nach { new: ERect } = 0 (default)
+      - decl: [r, "ptr<ERect>", { new: ERect }]
+      - if:
+          condition: { neq: [r.origin.x, 0] }
+          then:
+            - print: ["FAIL T1a: new ERect origin.x should be 0, got ${r.origin.x}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { neq: [r.origin.y, 0] }
+          then:
+            - print: ["FAIL T1b: new ERect origin.y should be 0, got ${r.origin.y}"]
+            - call: [sys.exit, 1]
+      - print: ["T1 PASS: new ERect embedded field defaults"]
+
+      # T2: embedded struct via lokale Variable setzen
+      - decl: [p, EPoint]
+      - set: [p.x, 42]
+      - set: [p.y, 99]
+      - set: [r.origin, p]
+      - if:
+          condition: { neq: [r.origin.x, 42] }
+          then:
+            - print: ["FAIL T2a: r.origin.x should be 42, got ${r.origin.x}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { neq: [r.origin.y, 99] }
+          then:
+            - print: ["FAIL T2b: r.origin.y should be 99, got ${r.origin.y}"]
+            - call: [sys.exit, 1]
+      - print: ["T2 PASS: set embedded field via local var"]
+
+      # T3: andere Felder unberührt
+      - set: [r.w, 200]
+      - set: [r.h, 100]
+      - if:
+          condition: { neq: [r.w, 200] }
+          then:
+            - print: ["FAIL T3a: r.w should be 200, got ${r.w}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { neq: [r.h, 100] }
+          then:
+            - print: ["FAIL T3b: r.h should be 100, got ${r.h}"]
+            - call: [sys.exit, 1]
+      - print: ["T3 PASS: other fields unaffected"]
+
+      # T4: embedded field als by-value Funktionsargument
+      - decl: [s, i32, { call: [epoint_sum, r.origin] }]
+      - if:
+          condition: { neq: [s, 141] }
+          then:
+            - print: ["FAIL T4: epoint_sum(r.origin) should be 141, got ${s}"]
+            - call: [sys.exit, 1]
+      - print: ["T4 PASS: embedded field as by-value function arg"]
+
+      # T5: sub-field direkt setzen (r.origin.x = 7)
+      - set: [r.origin.x, 7]
+      - if:
+          condition: { neq: [r.origin.x, 7] }
+          then:
+            - print: ["FAIL T5a: r.origin.x should be 7, got ${r.origin.x}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { neq: [r.origin.y, 99] }
+          then:
+            - print: ["FAIL T5b: r.origin.y should still be 99, got ${r.origin.y}"]
+            - call: [sys.exit, 1]
+      - print: ["T5 PASS: sub-field direct set"]
+
+      # T6: Isolation — zweite Instanz beeinflusst nicht die erste
+      - decl: [r2, "ptr<ERect>", { new: ERect }]
+      - decl: [p2, EPoint]
+      - set: [p2.x, 1]
+      - set: [p2.y, 2]
+      - set: [r2.origin, p2]
+      - if:
+          condition: { neq: [r.origin.x, 7] }
+          then:
+            - print: ["FAIL T6a: r1 should still have x=7 after r2 set, got ${r.origin.x}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { neq: [r2.origin.x, 1] }
+          then:
+            - print: ["FAIL T6b: r2.origin.x should be 1, got ${r2.origin.x}"]
+            - call: [sys.exit, 1]
+      - print: ["T6 PASS: two instances isolated"]
+
+      - print: ["test_embedded_model PASS"]
+      - return: [0]

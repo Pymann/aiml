@@ -35,6 +35,7 @@ static llvm::Function* emitNewFn(CompilerContext& ctx) {
     llvm::Type*       i8p    = llvm::Type::getInt8Ty(ctx.context)->getPointerTo();
     llvm::Type*       i8     = llvm::Type::getInt8Ty(ctx.context);
     llvm::Type*       i64    = llvm::Type::getInt64Ty(ctx.context);
+    llvm::Type*       sz     = ctx.getSizeType();  // size_t for target libc
     llvm::StructType* codeTy = getStructType(ctx);
 
     auto savedIP = ctx.builder.saveIP();
@@ -49,9 +50,9 @@ static llvm::Function* emitNewFn(CompilerContext& ctx) {
 
     llvm::DataLayout dl(&ctx.module);
     uint64_t structBytes = dl.getTypeAllocSize(codeTy);
-    llvm::Function* mallocFn = ctx.getFunction("malloc", i8p, {i64});
+    llvm::Function* mallocFn = ctx.getFunction("malloc", i8p, {sz});
     llvm::Value* raw     = ctx.builder.CreateCall(mallocFn,
-                               {ctx.builder.getInt64(structBytes)}, "code_raw");
+                               {ctx.getSizeConst(structBytes)}, "code_raw");
     llvm::Value* codePtr = ctx.builder.CreateBitCast(raw, codeTy->getPointerTo(), "code_ptr");
 
     ctx.builder.CreateStore(fn->getArg(0),
@@ -165,6 +166,7 @@ static llvm::Function* emitSizeFn(CompilerContext& ctx) {
 
     llvm::Type* i8p = llvm::Type::getInt8Ty(ctx.context)->getPointerTo();
     llvm::Type* i64 = llvm::Type::getInt64Ty(ctx.context);
+    llvm::Type* sz  = ctx.getSizeType();  // target-correct strlen return width
 
     auto savedIP = ctx.builder.saveIP();
 
@@ -177,8 +179,11 @@ static llvm::Function* emitSizeFn(CompilerContext& ctx) {
     ctx.builder.SetInsertPoint(entry);
 
     llvm::Value* str        = ctx.builder.CreateCall(toStringFn, {fn->getArg(0)}, "str");
-    llvm::Function* strlenFn = ctx.getFunction("strlen", i64, {i8p});
-    llvm::Value* len        = ctx.builder.CreateCall(strlenFn, {str}, "len");
+    llvm::Function* strlenFn = ctx.getFunction("strlen", sz, {i8p});
+    llvm::Value* lenRaw     = ctx.builder.CreateCall(strlenFn, {str}, "len_raw");
+    // strlen returns target's size_t (i32 on wasm32); widen to the function's
+    // i64 return contract.
+    llvm::Value* len        = ctx.builder.CreateZExtOrTrunc(lenRaw, i64, "len");
     ctx.builder.CreateRet(len);
 
     ctx.builder.restoreIP(savedIP);

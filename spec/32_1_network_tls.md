@@ -1,51 +1,51 @@
-# Kapitel 32.1 — TLS: Verschlüsselte Sockets
+# Chapter 32.1 — TLS: Encrypted Sockets
 
-> **Leitgedanke:** `tls_socket_handle` ist der direkte Nachfolger von `socket_handle`,
-> aber mit transparenter TLS-Verschlüsselung. Die API ist absichtlich so gestaltet, dass
-> Code, der `net.*` verwendet, mit minimalem Aufwand auf `tls.*` migriert werden kann.
-> Intern verwendet AIML OpenSSL (`libssl`, `libcrypto`) — keine eigene Krypto-Implementierung.
-
----
-
-## 1. Typen
-
-| Typ                  | LLVM  | Beschreibung |
-|----------------------|-------|--------------|
-| `tls_socket_handle`  | `i8*` | Opaker Heap-Pointer auf `AimlTlsSocket { SSL* ssl; int fd; int timeout_ms; }` |
-
-`tls_socket_handle` ersetzt `socket_handle` vollständig für verschlüsselte Verbindungen.
-Ein unverschlüsselter `socket_handle` kann **nicht** nachträglich auf TLS upgegraded werden
-(neuen `tls_socket_handle` erstellen).
+> **Core idea:** `tls_socket_handle` is the direct successor of `socket_handle`,
+> but with transparent TLS encryption. The API is intentionally designed so that
+> code using `net.*` can be migrated to `tls.*` with minimal effort.
+> Internally AIML uses OpenSSL (`libssl`, `libcrypto`) — no custom crypto implementation.
 
 ---
 
-## 2. `tls`-Namespace (Lifecycle)
+## 1. Types
 
-### 2.1 Socket erstellen
+| Type                 | LLVM  | Description |
+|----------------------|-------|-------------|
+| `tls_socket_handle`  | `i8*` | Opaque heap pointer to `AimlTlsSocket { SSL* ssl; int fd; int timeout_ms; }` |
+
+`tls_socket_handle` fully replaces `socket_handle` for encrypted connections.
+An unencrypted `socket_handle` **cannot** be upgraded to TLS after the fact
+(create a new `tls_socket_handle` instead).
+
+---
+
+## 2. `tls` Namespace (Lifecycle)
+
+### 2.1 Creating a Socket
 
 ```aiml
 - decl: [sock, tls_socket_handle]
 - set: [sock, { call: [tls.socket] }]
 ```
 
-`tls.socket()` — kein `proto`-Argument (TLS = immer TCP).
-Gibt `nullptr` zurück, wenn OpenSSL nicht initialisiert werden kann.
+`tls.socket()` — no `proto` argument (TLS = always TCP).
+Returns `nullptr` if OpenSSL cannot be initialized.
 
-### 2.2 Client: Verbinden (mit SNI + Zertifikats-Verifikation)
+### 2.2 Client: Connecting (with SNI + Certificate Verification)
 
 ```aiml
 - decl: [sock, tls_socket_handle]
 - set: [sock, { call: [tls.socket] }]
 
-# Standard-Verbindung: TLS 1.2 oder 1.3, SNI=host, CA aus System-Store
+# Standard connection: TLS 1.2 or 1.3, SNI=host, CA from system store
 - decl: [rc, i32]
 - set: [rc, { call: [tls.connect, sock, "api.example.com", 443] }]
-- print: ["connect rc: ${rc}"]   # 0 = Erfolg
+- print: ["connect rc: ${rc}"]   # 0 = success
 
-# Daten senden
+# Send data
 - call: [tls.send_string, sock, "GET / HTTP/1.1\r\nHost: api.example.com\r\n\r\n"]
 
-# Daten empfangen
+# Receive data
 - decl: [resp, string]
 - set: [resp, { call: [tls.recv_string, sock, 8192] }]
 - print: ["${resp}"]
@@ -53,21 +53,21 @@ Gibt `nullptr` zurück, wenn OpenSSL nicht initialisiert werden kann.
 - call: [tls.close, sock]
 ```
 
-`tls.connect` setzt automatisch **SNI** (Server Name Indication) auf `host` — notwendig
-für Virtual-Hosting auf HTTPS-Servern.
+`tls.connect` automatically sets **SNI** (Server Name Indication) to `host` — required
+for virtual hosting on HTTPS servers.
 
-### 2.3 Zertifikats-Konfiguration (vor connect/bind)
+### 2.3 Certificate Configuration (before connect/bind)
 
 ```aiml
-# Eigenes CA-Bundle (z.B. für interne PKI):
+# Custom CA bundle (e.g. for internal PKI):
 - call: [tls.set_ca, sock, "/etc/myapp/ca.pem"]
 
-# Client-Zertifikat (Mutual TLS):
+# Client certificate (Mutual TLS):
 - call: [tls.set_cert, sock, "/etc/myapp/client.crt", "/etc/myapp/client.key"]
 
-# Verifikation deaktivieren (nur für Tests!):
+# Disable verification (for tests only!):
 - call: [tls.set_verify, sock, "none"]     # Default: "peer"
-# Modi: "peer" (verify server), "require" (require+verify client cert), "none"
+# Modes: "peer" (verify server), "require" (require+verify client cert), "none"
 
 - call: [tls.connect, sock, "internal.corp", 8443]
 ```
@@ -78,17 +78,17 @@ für Virtual-Hosting auf HTTPS-Servern.
 - decl: [srv, tls_socket_handle]
 - set: [srv, { call: [tls.socket] }]
 
-# Server-Zertifikat laden (muss vor bind/listen)
+# Load server certificate (must be done before bind/listen)
 - call: [tls.set_cert, srv, "/etc/myapp/server.crt", "/etc/myapp/server.key"]
 
-# Optional: Client-Zertifikate verlangen (mTLS)
+# Optional: require client certificates (mTLS)
 - call: [tls.set_verify, srv, "require"]
 - call: [tls.set_ca, srv, "/etc/myapp/ca.pem"]
 
 - call: [tls.bind, srv, "0.0.0.0", 8443]
 - call: [tls.listen, srv, 128]
 
-# Accept: Blockiert bis Client kommt, führt TLS-Handshake durch
+# Accept: blocks until a client connects, performs TLS handshake
 - decl: [client, tls_socket_handle]
 - set: [client, { call: [tls.accept, srv] }]
 
@@ -101,64 +101,64 @@ für Virtual-Hosting auf HTTPS-Servern.
 
 ---
 
-## 3. Vollständige `tls`-Namespace-Referenz
+## 3. Complete `tls` Namespace Reference
 
-| Funktion | Signatur | Beschreibung |
-|----------|----------|--------------|
-| `tls.socket` | `() → tls_socket_handle` | Erstellt neuen TLS-Socket (TCP) |
-| `tls.connect` | `(sock, host: string, port: i32) → i32` | TCP+TLS-Handshake; SNI=host |
-| `tls.bind` | `(sock, host: string, port: i32) → i32` | Bindet Socket |
-| `tls.listen` | `(sock, backlog: i32) → i32` | Setzt Listen-Queue |
-| `tls.accept` | `(sock) → tls_socket_handle` | Blockiert; führt TLS-Handshake durch |
-| `tls.send` | `(sock, buf: buffer) → i32` | Sendet buffer.writeIndex Bytes |
-| `tls.recv` | `(sock, buf: buffer) → i32` | Empfängt bis buf.capacity Bytes |
-| `tls.send_string` | `(sock, s: string) → i32` | Sendet String |
-| `tls.recv_string` | `(sock, max: i32) → string` | Empfängt String (malloc, Caller frees) |
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `tls.socket` | `() → tls_socket_handle` | Creates a new TLS socket (TCP) |
+| `tls.connect` | `(sock, host: string, port: i32) → i32` | TCP+TLS handshake; SNI=host |
+| `tls.bind` | `(sock, host: string, port: i32) → i32` | Binds the socket |
+| `tls.listen` | `(sock, backlog: i32) → i32` | Sets listen queue |
+| `tls.accept` | `(sock) → tls_socket_handle` | Blocks; performs TLS handshake |
+| `tls.send` | `(sock, buf: buffer) → i32` | Sends buffer.writeIndex bytes |
+| `tls.recv` | `(sock, buf: buffer) → i32` | Receives up to buf.capacity bytes |
+| `tls.send_string` | `(sock, s: string) → i32` | Sends a string |
+| `tls.recv_string` | `(sock, max: i32) → string` | Receives a string (malloc, caller frees) |
 | `tls.close` | `(sock) → i32` | TLS shutdown + TCP close + free |
-| `tls.fd` | `(sock) → i32` | Roher File-Descriptor |
-| `tls.set_timeout` | `(sock, ms: i32) → i32` | 0=blocking; >0=Timeout für connect/recv/send |
-| `tls.set_cert` | `(sock, cert: path, key: path) → i32` | Lädt Zertifikat + Private Key (PEM) |
-| `tls.set_ca` | `(sock, ca: path) → i32` | Setzt CA-Bundle (PEM) statt System-Store |
+| `tls.fd` | `(sock) → i32` | Raw file descriptor |
+| `tls.set_timeout` | `(sock, ms: i32) → i32` | 0=blocking; >0=timeout for connect/recv/send |
+| `tls.set_cert` | `(sock, cert: path, key: path) → i32` | Loads certificate + private key (PEM) |
+| `tls.set_ca` | `(sock, ca: path) → i32` | Sets CA bundle (PEM) instead of system store |
 | `tls.set_verify` | `(sock, mode: string) → i32` | "peer" / "require" / "none" |
 
 ---
 
-## 4. `tls_socket_handle`-Instanzmethoden
+## 4. `tls_socket_handle` Instance Methods
 
 ```aiml
 - decl: [sock, tls_socket_handle]
 - set: [sock, { call: [tls.socket] }]
 - call: [tls.connect, sock, "example.com", 443]
 
-# Methoden direkt auf dem Handle:
+# Methods directly on the handle:
 - call: [sock.send_string, "hello"]
 - decl: [r, string]
 - set: [r, { call: [sock.recv_string, 1024] }]
 - call: [sock.close]
 
-# Peer-Zertifikat prüfen (nach erfolgreichem connect/accept):
+# Inspect peer certificate (after successful connect/accept):
 - decl: [cn, string]
 - set: [cn, { call: [sock.peer_cert_cn] }]      # Common Name
 - decl: [valid, bool]
-- set: [valid, { call: [sock.peer_cert_valid] }] # Kette + Ablaufdatum OK?
+- set: [valid, { call: [sock.peer_cert_valid] }] # Chain + expiry OK?
 - print: ["Peer: ${cn}, valid: ${valid}"]
 ```
 
-| Methode | Signatur | Beschreibung |
-|---------|----------|--------------|
+| Method | Signature | Description |
+|--------|-----------|-------------|
 | `close` | `() → i32` | TLS shutdown + TCP close |
 | `send` | `(buf: buffer) → i32` | — |
 | `recv` | `(buf: buffer) → i32` | — |
 | `send_string` | `(s: string) → i32` | — |
 | `recv_string` | `(max: i32) → string` | — |
 | `set_timeout` | `(ms: i32) → i32` | — |
-| `fd` | `() → i32` | Roher FD |
-| `peer_cert_cn` | `() → string` | Common Name des Peer-Zertifikats |
-| `peer_cert_valid` | `() → bool` | Prüft Kette + Ablauf |
+| `fd` | `() → i32` | Raw FD |
+| `peer_cert_cn` | `() → string` | Common Name of the peer certificate |
+| `peer_cert_valid` | `() → bool` | Checks chain + expiry |
 
 ---
 
-## 5. Beispiel: Mutual TLS (mTLS)
+## 5. Example: Mutual TLS (mTLS)
 
 ```aiml
 # --- Server ---
@@ -170,7 +170,7 @@ für Virtual-Hosting auf HTTPS-Servern.
       - set: [s, { call: [tls.socket] }]
       - call: [tls.set_cert, s, "/pki/server.crt", "/pki/server.key"]
       - call: [tls.set_ca, s, "/pki/ca.crt"]
-      - call: [tls.set_verify, s, "require"]   # mTLS: Client muss Zertifikat vorlegen
+      - call: [tls.set_verify, s, "require"]   # mTLS: client must present certificate
       - call: [tls.bind, s, "127.0.0.1", 9443]
       - call: [tls.listen, s, 5]
       - decl: [c, tls_socket_handle]
@@ -202,54 +202,54 @@ für Virtual-Hosting auf HTTPS-Servern.
 
 ---
 
-## 6. Implementierungshinweise
+## 6. Implementation Notes
 
-### 6.1 Interne Struktur (`tls_runtime.h/cpp`)
+### 6.1 Internal Structure (`tls_runtime.h/cpp`)
 
 ```cpp
 struct AimlTlsSocket {
-    SSL_CTX* ctx;       // OpenSSL-Kontext (Zertifikate, Verify-Mode)
-    SSL*     ssl;       // TLS-Session (nullptr vor connect/accept)
-    int      fd;        // TCP-Socket-FD
+    SSL_CTX* ctx;       // OpenSSL context (certificates, verify mode)
+    SSL*     ssl;       // TLS session (nullptr before connect/accept)
+    int      fd;        // TCP socket FD
     int      timeout_ms;
 };
 ```
 
-`ctx` und `ssl` werden getrennt gehalten, damit `set_cert`/`set_ca`/`set_verify` vor
-`connect`/`accept` aufgerufen werden können.
+`ctx` and `ssl` are kept separate so that `set_cert`/`set_ca`/`set_verify` can be called
+before `connect`/`accept`.
 
-### 6.2 OpenSSL-Initialisierung
+### 6.2 OpenSSL Initialization
 
 ```cpp
-// Einmalig beim ersten tls.socket()-Aufruf (thread-safe mit std::once_flag):
+// Once on the first tls.socket() call (thread-safe with std::once_flag):
 OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS | OPENSSL_INIT_LOAD_CRYPTO_STRINGS, nullptr);
 ```
 
-System-CA-Store wird via `SSL_CTX_set_default_verify_paths(ctx)` geladen (liest
-`/etc/ssl/certs/` auf Linux automatisch).
+The system CA store is loaded via `SSL_CTX_set_default_verify_paths(ctx)` (reads
+`/etc/ssl/certs/` on Linux automatically).
 
-### 6.3 Link-Flags
+### 6.3 Link Flags
 
 ```
 -lssl -lcrypto
 ```
 
-In `CMakeLists.txt` / `exodus build` als zusätzliche Abhängigkeit eintragen.
+Add as an additional dependency in `CMakeLists.txt` / `exodus build`.
 
-### 6.4 Connect-Timeout
+### 6.4 Connect Timeout
 
-Identisches Verfahren wie `net.set_timeout` + `net.connect`:
-`fcntl(O_NONBLOCK)` → TCP-Connect via `poll(POLLOUT, timeout_ms)` →
-`SSL_connect()` blockiert danach (kurz, da TCP bereits verbunden).
+Identical approach to `net.set_timeout` + `net.connect`:
+`fcntl(O_NONBLOCK)` → TCP connect via `poll(POLLOUT, timeout_ms)` →
+`SSL_connect()` blocks afterwards (briefly, since TCP is already connected).
 
 ---
 
-## 7. Offene Designfragen
+## 7. Open Design Questions
 
-- **ALPN** (Application-Layer Protocol Negotiation): Für HTTP/2 notwendig —
-  `tls.set_alpn(sock, ["h2", "http/1.1"])` — noch nicht spezifiziert.
-- **Session-Tickets**: TLS-Session-Resumption für schnellere Reconnects.
-- **PKCS#11**: Für HSM-gebundene Private Keys via `libp11`/`pkcs11-provider` —
-  spätere Erweiterung von `tls.set_cert`.
-- **Certificate Pinning**: `sock.pin_cert(fingerprint_sha256)` — erzwingt
-  genauen Zertifikat-Fingerabdruck statt CA-Kette.
+- **ALPN** (Application-Layer Protocol Negotiation): Required for HTTP/2 —
+  `tls.set_alpn(sock, ["h2", "http/1.1"])` — not yet specified.
+- **Session Tickets**: TLS session resumption for faster reconnects.
+- **PKCS#11**: For HSM-bound private keys via `libp11`/`pkcs11-provider` —
+  later extension of `tls.set_cert`.
+- **Certificate Pinning**: `sock.pin_cert(fingerprint_sha256)` — enforces
+  an exact certificate fingerprint instead of CA chain.

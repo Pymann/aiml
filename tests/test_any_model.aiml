@@ -4,8 +4,8 @@
 - class:
     name: TestModel
     members:
-      - [id, i32, {access: public}]
-      - [name, string, {access: public}]
+      - [id, i32, 0, {access: public}]
+      - [name, string, "", {access: public}]
 
 # 2. Function taking 'any' (void*)
 - def:

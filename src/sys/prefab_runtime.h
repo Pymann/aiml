@@ -124,6 +124,47 @@ void aiml_prefab_dock_y(void* inst, int32_t row, int32_t rowspan);
 /* Set the font used for label children. font = AimlUIFont* from ui.load_font(). */
 void aiml_prefab_set_font(void* font);
 
+/* ── UI-widget callbacks ─────────────────────────────────────────────── */
+
+/* Register a callback function pointer by name. The AIML compiler emits one
+ * call per (prefab, child, event)-tuple at program init. Subsequent button
+ * clicks / text-input changes look up the function via this table and call
+ * it with the prefab_instance as the single argument. */
+void aiml_prefab_register_callback(const char* fn_name, void* fn_ptr);
+
+/* ── Material registration ─────────────────────────────────────────────
+ * Materials bundle a fragment shader with a list of uniform values. The
+ * AIML compiler emits one `aiml_material_register` call per `- material:`
+ * declaration. The shader is lazily compiled on first use.
+ *
+ * `uniforms_json` is a compact JSON object whose keys are uniform names and
+ * whose values describe the uniform's type and value:
+ *
+ *   {"u_intensity": {"k":"f", "v":0.6},
+ *    "u_tint":      {"k":"v4","v":[0.4,0.7,1.0,1.0]},
+ *    "u_facet":     {"k":"v2","v":[28.0,22.0]},
+ *    "u_count":     {"k":"i", "v":42},
+ *    "u_noise":     {"k":"t", "v":"resources/noise.png"}}
+ *
+ * "k" type tags: "f"=float, "v2"/"v3"/"v4"=vecN, "i"=int, "t"=sampler2D.
+ */
+void aiml_material_register(const char* name, const char* shader_path,
+                            const char* uniforms_json);
+
+/* ── UI-widget property accessors ────────────────────────────────────── */
+
+/* Returns the current text contents of a text_input child. Lifetime: valid
+ * until the next aiml_prefab_set_text or destroy on this child. */
+const char* aiml_prefab_text_value(void* inst, const char* child_name);
+/* Returns 1 if a button child has been clicked this frame, 0 otherwise. */
+int32_t     aiml_prefab_child_clicked(void* inst, const char* child_name);
+/* Returns 1 if a child has keyboard focus (text_input). */
+int32_t     aiml_prefab_child_focused(void* inst, const char* child_name);
+/* Returns the toggle state of a checkbox child (1 = checked). */
+int32_t     aiml_prefab_child_checked(void* inst, const char* child_name);
+/* Set the toggle state of a checkbox child (0/1). Does not fire callbacks. */
+void        aiml_prefab_set_checked(void* inst, const char* child_name, int32_t checked);
+
 #ifdef __cplusplus
 }
 #endif

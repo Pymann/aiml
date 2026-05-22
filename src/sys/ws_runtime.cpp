@@ -1,5 +1,212 @@
 #include "ws_runtime.h"
 
+#ifdef __EMSCRIPTEN__
+// ══════════════════════════════════════════════════════════════════════════════
+// Browser implementation via Emscripten WebSocket API
+// Same external ABI as native — server functions return null with errno=ENOTSUP.
+// recv/poll block via emscripten_sleep (requires -sASYNCIFY at link time).
+// ══════════════════════════════════════════════════════════════════════════════
+
+#include <emscripten/emscripten.h>
+#include <emscripten/websocket.h>
+#include <cstring>
+#include <cstdlib>
+#include <cstdio>
+#include <cerrno>
+#include <cstdint>
+
+// Singly-linked rx queue node. Plain C — no STL containers (libc++-noexcept
+// makes std::vector/deque trap on alloc failure during Asyncify rewind).
+struct WsRxNode {
+    uint8_t*  data;
+    int32_t   len;
+    WsRxNode* next;
+};
+
+struct AimlWs {
+    EMSCRIPTEN_WEBSOCKET_T sock;
+    bool                   is_open;
+    bool                   is_closed;
+    WsRxNode*              rx_head;
+    WsRxNode*              rx_tail;
+};
+
+static void rx_push(AimlWs* ws, const void* data, int32_t len) {
+    auto* n = (WsRxNode*)malloc(sizeof(WsRxNode));
+    if (!n) return;
+    n->data = (uint8_t*)malloc((size_t)len);
+    if (!n->data) { free(n); return; }
+    memcpy(n->data, data, (size_t)len);
+    n->len  = len;
+    n->next = nullptr;
+    if (!ws->rx_head) ws->rx_head = n;
+    else              ws->rx_tail->next = n;
+    ws->rx_tail = n;
+}
+
+// Caller owns n->data; must free both.
+static WsRxNode* rx_pop(AimlWs* ws) {
+    if (!ws->rx_head) return nullptr;
+    WsRxNode* n = ws->rx_head;
+    ws->rx_head = n->next;
+    if (!ws->rx_head) ws->rx_tail = nullptr;
+    return n;
+}
+
+static EM_BOOL ws_on_open(int, const EmscriptenWebSocketOpenEvent*, void* ud) {
+    static_cast<AimlWs*>(ud)->is_open = true;
+    return EM_TRUE;
+}
+static EM_BOOL ws_on_message(int, const EmscriptenWebSocketMessageEvent* e, void* ud) {
+    rx_push(static_cast<AimlWs*>(ud), e->data, (int32_t)e->numBytes);
+    return EM_TRUE;
+}
+static EM_BOOL ws_on_close(int, const EmscriptenWebSocketCloseEvent*, void* ud) {
+    static_cast<AimlWs*>(ud)->is_closed = true;
+    return EM_TRUE;
+}
+static EM_BOOL ws_on_error(int, const EmscriptenWebSocketErrorEvent*, void* ud) {
+    static_cast<AimlWs*>(ud)->is_closed = true;
+    return EM_TRUE;
+}
+
+static AimlWs* ws_connect_url(const char* url) {
+    if (!emscripten_websocket_is_supported()) {
+        fprintf(stderr, "[ws] WebSocket API not supported in this environment\n");
+        return nullptr;
+    }
+    EmscriptenWebSocketCreateAttributes attrs = {url, nullptr, EM_TRUE};
+    EMSCRIPTEN_WEBSOCKET_T s = emscripten_websocket_new(&attrs);
+    if (s <= 0) {
+        fprintf(stderr, "[ws] emscripten_websocket_new(%s) failed: %d\n", url, (int)s);
+        return nullptr;
+    }
+    auto* ws = (AimlWs*)calloc(1, sizeof(AimlWs));
+    ws->sock = s;
+    emscripten_websocket_set_onopen_callback(s, ws, ws_on_open);
+    emscripten_websocket_set_onmessage_callback(s, ws, ws_on_message);
+    emscripten_websocket_set_onclose_callback(s, ws, ws_on_close);
+    emscripten_websocket_set_onerror_callback(s, ws, ws_on_error);
+    while (!ws->is_open && !ws->is_closed) emscripten_sleep(5);
+    if (ws->is_closed) {
+        emscripten_websocket_close(s, 1000, "open-failed");
+        emscripten_websocket_delete(s);
+        free(ws);
+        return nullptr;
+    }
+    return ws;
+}
+
+extern "C" {
+
+void* aiml_ws_connect(const char* host, int32_t port, const char* path) {
+    char url[512];
+    snprintf(url, sizeof(url), "ws://%s:%d%s",
+             host ? host : "localhost", port, path ? path : "/");
+    return ws_connect_url(url);
+}
+void* aiml_wss_connect(const char* host, int32_t port, const char* path) {
+    char url[512];
+    snprintf(url, sizeof(url), "wss://%s:%d%s",
+             host ? host : "localhost", port, path ? path : "/");
+    return ws_connect_url(url);
+}
+
+void* aiml_ws_server(const char*, int32_t)                                  { errno = ENOTSUP; return nullptr; }
+void* aiml_wss_server(const char*, int32_t, const char*, const char*)       { errno = ENOTSUP; return nullptr; }
+void* aiml_ws_accept(void*)                                                 { errno = ENOTSUP; return nullptr; }
+
+int aiml_ws_send(void* h, const char* text) {
+    if (!h || !text) return -1;
+    auto* ws = static_cast<AimlWs*>(h);
+    EMSCRIPTEN_RESULT r = emscripten_websocket_send_utf8_text(ws->sock, text);
+    return (r == EMSCRIPTEN_RESULT_SUCCESS) ? (int)strlen(text) : -1;
+}
+
+int aiml_ws_send_raw(void* h, const void* data, int32_t len) {
+    if (!h || !data) return -1;
+    auto* ws = static_cast<AimlWs*>(h);
+    EMSCRIPTEN_RESULT r = emscripten_websocket_send_binary(
+        ws->sock, const_cast<void*>(data), static_cast<uint32_t>(len));
+    return (r == EMSCRIPTEN_RESULT_SUCCESS) ? len : -1;
+}
+
+int aiml_ws_send_binary(void* h, void* buf_ptr) {
+    // Native uses AimlBuffer { i32 size, i32 capacity, void* data, ... };
+    // Same layout in WASM since this file owns the struct.
+    if (!h || !buf_ptr) return -1;
+    struct Buf { int32_t size; int32_t capacity; void* data; };
+    Buf* b = static_cast<Buf*>(buf_ptr);
+    return aiml_ws_send_raw(h, b->data, b->size);
+}
+
+char* aiml_ws_recv(void* h) {
+    if (!h) return nullptr;
+    auto* ws = static_cast<AimlWs*>(h);
+    while (!ws->rx_head && !ws->is_closed) emscripten_sleep(5);
+    WsRxNode* n = rx_pop(ws);
+    if (!n) return nullptr;
+    char* out = (char*)malloc((size_t)n->len + 1);
+    memcpy(out, n->data, (size_t)n->len);
+    out[n->len] = '\0';
+    free(n->data);
+    free(n);
+    return out;
+}
+
+void* aiml_ws_recv_raw(void* h, int32_t* out_len) {
+    if (!h) { if (out_len) *out_len = 0; return nullptr; }
+    auto* ws = static_cast<AimlWs*>(h);
+    while (!ws->rx_head && !ws->is_closed) emscripten_sleep(5);
+    WsRxNode* n = rx_pop(ws);
+    if (!n) { if (out_len) *out_len = 0; return nullptr; }
+    void* p = malloc((size_t)n->len);
+    memcpy(p, n->data, (size_t)n->len);
+    if (out_len) *out_len = n->len;
+    free(n->data);
+    free(n);
+    return p;
+}
+
+int aiml_ws_ping(void*) {
+    // Browser WebSocket API does not expose client-initiated ping; runtime handles keepalive.
+    return 0;
+}
+
+int aiml_ws_close(void* h) {
+    if (!h) return -1;
+    auto* ws = static_cast<AimlWs*>(h);
+    emscripten_websocket_close(ws->sock, 1000, "client-close");
+    emscripten_websocket_delete(ws->sock);
+    while (WsRxNode* n = rx_pop(ws)) { free(n->data); free(n); }
+    free(ws);
+    return 0;
+}
+
+int32_t aiml_ws_fd(void* h) {
+    return h ? static_cast<int32_t>(static_cast<AimlWs*>(h)->sock) : -1;
+}
+
+int aiml_ws_poll(void* h, int32_t timeout_ms) {
+    if (!h) return -1;
+    auto* ws = static_cast<AimlWs*>(h);
+    int waited = 0;
+    while (!ws->rx_head && !ws->is_closed) {
+        if (timeout_ms == 0) return 0;
+        if (timeout_ms > 0 && waited >= timeout_ms) return 0;
+        emscripten_sleep(5);
+        waited += 5;
+    }
+    if (ws->rx_head) return 1;
+    return -1;
+}
+
+int aiml_ws_poll_listener(void*, int32_t) { errno = ENOTSUP; return -1; }
+
+} // extern "C"
+
+#else // ─── native (POSIX + OpenSSL) ───────────────────────────────────────────
+
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
@@ -654,3 +861,5 @@ extern "C" int aiml_ws_poll_listener(void* srv_ptr, int32_t timeout_ms) {
     int r = ::poll(&pfd, 1, timeout_ms);
     return r > 0 ? 1 : (r == 0 ? 0 : -1);
 }
+
+#endif // __EMSCRIPTEN__

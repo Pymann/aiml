@@ -1,0 +1,117 @@
+# tests/test_kv_nonpersist_singleton.aiml — Repro: db.open_kv non-persistent singleton-by-name
+#
+# Testet: db.open_kv("name", {persist: false}) gibt bei gleichem Namen dieselbe
+# Instanz zurück (singleton), auch wenn sie aus unterschiedlichen Funktionen geöffnet wird.
+#
+# Vor dem Fix: aiml_db_kv_open ignorierte den name-Parameter und gab jedes Mal
+# eine neue leere KV zurück → kv.get in Funktion B fand den Key nicht → null-deref → SIGSEGV.
+
+# ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
+
+- def:
+    name: kv_writer
+    args: [[kv_name, string], [key, string], [val, i32]]
+    return: void
+    body:
+      - decl: [kv, "Kv<string:i32>", { call: [db.open_kv, kv_name, {persist: false}] }]
+      - call: [kv.set, key, val]
+
+- def:
+    name: kv_reader
+    args: [[kv_name, string], [key, string]]
+    return: i32
+    body:
+      - decl: [kv, "Kv<string:i32>", { call: [db.open_kv, kv_name, {persist: false}] }]
+      - return: [{ call: [kv.get, key] }]
+
+- def:
+    name: kv_writer_str
+    args: [[kv_name, string], [key, string], [val, string]]
+    return: void
+    body:
+      - decl: [kv, "Kv<string:string>", { call: [db.open_kv, kv_name, {persist: false}] }]
+      - call: [kv.set, key, val]
+
+- def:
+    name: kv_reader_str
+    args: [[kv_name, string], [key, string]]
+    return: string
+    body:
+      - decl: [kv, "Kv<string:string>", { call: [db.open_kv, kv_name, {persist: false}] }]
+      - return: [{ call: [kv.get, key] }]
+
+# ─── Haupt-Test ───────────────────────────────────────────────────────────────
+
+- def:
+    name: main
+    args: []
+    return: i32
+    body:
+      # T1: Kv<string:i32> — Writer in Funktion A, Reader in Funktion B
+      - call: [kv_writer, "test_kv_i32", "answer", 42]
+      - decl: [v, i32, { call: [kv_reader, "test_kv_i32", "answer"] }]
+      - if:
+          condition: { neq: [v, 42] }
+          then:
+            - print: ["FAIL T1: expected 42, got ${v}"]
+            - call: [sys.exit, 1]
+      - print: ["T1 PASS: Kv<string:i32> singleton-by-name (cross-function)"]
+
+      # T2: Kv<string:string> — gleicher Name, unterschiedliche Funktionen
+      - call: [kv_writer_str, "test_kv_str", "greeting", "hello"]
+      - decl: [s, string, { call: [kv_reader_str, "test_kv_str", "greeting"] }]
+      - if:
+          condition: { neq: [s, "hello"] }
+          then:
+            - print: ["FAIL T2: expected hello, got ${s}"]
+            - call: [sys.exit, 1]
+      - print: ["T2 PASS: Kv<string:string> singleton-by-name (cross-function)"]
+
+      # T3: Mehrere Keys in derselben KV (schreibe in Funktion, lese direkt)
+      - call: [kv_writer, "test_kv_multi", "n", 10]
+      - call: [kv_writer, "test_kv_multi", "x", 99]
+      - decl: [n, i32, { call: [kv_reader, "test_kv_multi", "n"] }]
+      - decl: [x, i32, { call: [kv_reader, "test_kv_multi", "x"] }]
+      - if:
+          condition: { neq: [n, 10] }
+          then:
+            - print: ["FAIL T3a: n=${n}, expected 10"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { neq: [x, 99] }
+          then:
+            - print: ["FAIL T3b: x=${x}, expected 99"]
+            - call: [sys.exit, 1]
+      - print: ["T3 PASS: Kv<string:i32> multiple keys singleton"]
+
+      # T4: Zwei verschiedene KV-Namen sind isoliert voneinander
+      - call: [kv_writer, "kv_alpha", "val", 1]
+      - call: [kv_writer, "kv_beta",  "val", 2]
+      - decl: [a, i32, { call: [kv_reader, "kv_alpha", "val"] }]
+      - decl: [b, i32, { call: [kv_reader, "kv_beta",  "val"] }]
+      - if:
+          condition: { neq: [a, 1] }
+          then:
+            - print: ["FAIL T4a: kv_alpha.val=${a}, expected 1"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { neq: [b, 2] }
+          then:
+            - print: ["FAIL T4b: kv_beta.val=${b}, expected 2"]
+            - call: [sys.exit, 1]
+      - print: ["T4 PASS: two different KV names are isolated"]
+
+      # T5: Spawn — Worker schreibt, Main liest aus derselben non-persist KV
+      - decl: [tw, thread_handle,
+               { spawn: [kv_writer, "test_kv_thread", "from_worker", 777] }]
+      - call: [tw.join]
+      - decl: [tv, i32, { call: [kv_reader, "test_kv_thread", "from_worker"] }]
+      - if:
+          condition: { neq: [tv, 777] }
+          then:
+            - print: ["FAIL T5: thread-written value=${tv}, expected 777"]
+            - call: [sys.exit, 1]
+      - print: ["T5 PASS: non-persist KV singleton visible across threads"]
+
+      - print: ["test_kv_nonpersist_singleton PASS"]
+      - return: [0]

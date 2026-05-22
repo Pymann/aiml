@@ -53,6 +53,38 @@ When `AIML_TRACE` is **not** set, the only overhead per function call is one
 `aiml_trace_active()` lookup (O(1) hash) and one conditional branch.  The
 trace side-block is never entered.
 
+## Usage with exodus
+
+When a program is built via `exodus build`, the `env` field in the
+`exodus*.json` config is merged into the environment of every compiler and
+linker subprocess.  Set `AIML_TRACE` there so that all invocations inherit it
+automatically — including JIT execution triggered inside the `aiml` compiler
+subprocess.
+
+```json
+{
+    "env": {
+        "AIML_TRACE": "*"
+    }
+}
+```
+
+To enable tracing for specific functions, set the value to a comma-separated
+function list or `"*"` for all.  An empty string `""` disables tracing.
+Override from the command line if needed:
+
+```bash
+AIML_TRACE="pf_worker_loop,pf_dispatch_jobs" exodus build -c exodus-train.json
+```
+
+Note: the `env` field in the JSON is the canonical way to persist the setting.
+A command-line override takes precedence over the JSON value (shell env wins
+because exodus merges `{**os.environ, **config.env}`).
+
+> **Important:** JSON does not allow duplicate keys.  A file with two `"env"`
+> entries will silently use only the second one.  Always merge all environment
+> variables into a single `"env"` object.
+
 ## Implementation Notes
 
 - `src/sys/trace_runtime.h/cpp` — `TraceRuntime` class + 2 extern C symbols:

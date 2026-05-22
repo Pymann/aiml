@@ -1,0 +1,19 @@
+# Probe: can a class use `models: [SameName]` to compose with a same-name model?
+
+- model:
+    name: Foo
+    fields:
+      - [a, i32, 7]
+      - [b, string]
+
+- class:
+    name: FooT
+    models: [Foo]
+    methods:
+      - def: { name: hello, return: string, args: [], body: [{ return: "${<.a}:${<.b}" }] }
+
+- decl: [f, FooT]
+- set: [f.a, 42]
+- set: [f.b, "x"]
+- decl: [s, string, { call: [f.hello] }]
+- print: ["got='${s}' a=${f.a}"]

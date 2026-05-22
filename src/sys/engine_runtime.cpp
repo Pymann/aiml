@@ -80,11 +80,46 @@ static double now_sec() {
 
 void* aiml_engine_create_window(int32_t w, int32_t h, const char* title) {
 #if defined(__EMSCRIPTEN__)
+    (void)title;
     AimlWindow* win = new AimlWindow();
     memset(win, 0, sizeof(*win));
     snprintf(win->canvas_id, sizeof(win->canvas_id), "#canvas");
-    win->width  = w;
-    win->height = h;
+
+    /* Honor the actual canvas backing store size — shell.html sizes the canvas
+     * to fill the viewport, and JS sets its width/height to clientWidth × dpr.
+     * Reading those back here keeps the AIML window dimensions, WebGL viewport
+     * and ui_runtime layout in sync with what the page actually displays. The
+     * `w, h` requested by the AIML caller are treated as a minimum / fallback
+     * if the page hasn't sized the canvas yet. */
+    int can_w = 0, can_h = 0;
+    emscripten_get_canvas_element_size(win->canvas_id, &can_w, &can_h);
+    if (can_w <= 0) can_w = w;
+    if (can_h <= 0) can_h = h;
+    /* Persist this size on the canvas so subsequent JS sees it. */
+    emscripten_set_canvas_element_size(win->canvas_id, can_w, can_h);
+
+    /* Explicitly request a WebGL2 context and make it current — emcc does NOT
+     * auto-bind a context, so the first glXxx call would crash with
+     * "GLctx is undefined". */
+    EmscriptenWebGLContextAttributes attrs;
+    emscripten_webgl_init_context_attributes(&attrs);
+    attrs.alpha            = EM_FALSE;
+    attrs.depth            = EM_TRUE;
+    attrs.stencil          = EM_FALSE;
+    attrs.antialias        = EM_TRUE;
+    attrs.majorVersion     = 2;  /* WebGL2 */
+    attrs.minorVersion     = 0;
+    EMSCRIPTEN_WEBGL_CONTEXT_HANDLE gl =
+        emscripten_webgl_create_context(win->canvas_id, &attrs);
+    if (gl <= 0) {
+        fprintf(stderr, "[engine] emscripten_webgl_create_context failed: %d\n", (int)gl);
+        delete win;
+        return nullptr;
+    }
+    emscripten_webgl_make_context_current(gl);
+
+    win->width  = can_w;
+    win->height = can_h;
     win->start_time = now_sec();
     win->last_time  = win->start_time;
     g_win = win;
@@ -261,10 +296,59 @@ static void engine_tick(AimlWindow* win, void (*update)(float), void (*render)(v
         win->fps_cached = (sum > 0) ? (60.0f / sum) : 0.0f;
     }
 
-    if (g_input_update) g_input_update();
+    /* user-update first; THEN input_update saves prev=curr so that the next
+     * frame's user-update sees a clean rising/falling edge after new events
+     * arrive between frames. Calling input_update before user_update collapses
+     * prev=curr and makes mouse_pressed/released always return 0. */
     update(win->dt);
     render();
+    if (g_input_update) g_input_update();
 }
+
+#if defined(__EMSCRIPTEN__)
+/* Web frame-loop bridge — registered once via emscripten_set_main_loop_arg.
+ * The arg pointer must remain valid for the lifetime of the loop, so we keep
+ * it in a file-scope static (single window per process is the existing
+ * assumption: g_win is also a singleton). */
+struct WebLoopCtx {
+    AimlWindow* win;
+    void (*update)(float);
+    void (*render)(void);
+};
+static WebLoopCtx g_web_loop;
+
+static void web_loop_tick(void* user) {
+    auto* c = (WebLoopCtx*)user;
+    if (!c || !c->win) return;
+    if (c->win->quit_requested) {
+        emscripten_cancel_main_loop();
+        return;
+    }
+    /* timing + input + update + render (same shape as engine_tick desktop) */
+    double now = now_sec();
+    float  raw = (float)(now - c->win->last_time);
+    c->win->dt = (raw < 0.1f) ? raw : 0.1f;
+    c->win->last_time = now;
+    c->win->frame_count++;
+
+    /* FPS rolling avg */
+    c->win->fps_samples[c->win->fps_idx % 60] = c->win->dt;
+    c->win->fps_idx++;
+    if (c->win->fps_idx >= 60) {
+        float sum = 0.0f;
+        for (int i = 0; i < 60; i++) sum += c->win->fps_samples[i];
+        c->win->fps_cached = (sum > 0) ? (60.0f / sum) : 0.0f;
+    }
+
+    /* See note in engine_tick: user_update must run BEFORE input_update so
+     * that mouse_pressed sees the rising edge of events that fired between
+     * frames. */
+    c->update(c->win->dt);
+    c->render();
+    if (g_input_update) g_input_update();
+    /* WebGL implicitly swaps at end of callback — no explicit swap. */
+}
+#endif
 
 void aiml_engine_run(void* win_ptr, void* update_fn, void* render_fn) {
     if (!win_ptr || !update_fn || !render_fn) return;
@@ -278,8 +362,17 @@ void aiml_engine_run(void* win_ptr, void* update_fn, void* render_fn) {
     g_win = win;
 
 #if defined(__EMSCRIPTEN__)
-    /* TODO: emscripten_set_main_loop_arg with Asyncify */
-    (void)update; (void)render;
+    /* Hand the loop to the browser. fps=0 → use requestAnimationFrame (vsync).
+     * simulate_infinite_loop=0: main returns normally; emcc keeps the wasm
+     * runtime alive while the registered main loop is active. This plays well
+     * with Asyncify (the alternative throws an unwind exception that conflicts
+     * with Asyncify's own stack switching). */
+    g_web_loop.win    = win;
+    g_web_loop.update = update;
+    g_web_loop.render = render;
+    win->last_time    = now_sec();
+    emscripten_set_main_loop_arg(web_loop_tick, &g_web_loop, /*fps=*/0,
+                                  /*simulate_infinite_loop=*/0);
 
 #elif defined(__ANDROID__)
     /* TODO: Android NDK event loop */
@@ -310,7 +403,7 @@ int32_t aiml_engine_running(void* win_ptr) {
     if (!win_ptr) return 0;
     AimlWindow* win = (AimlWindow*)win_ptr;
 #if defined(__EMSCRIPTEN__)
-    return 1; /* Emscripten controls the loop */
+    return win->quit_requested ? 0 : 1;
 #elif defined(__ANDROID__)
     return 1; /* stub */
 #else

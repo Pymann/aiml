@@ -27,7 +27,11 @@ struct SerList {
     int32_t capacity;
     void*   data;
 };
+#if INTPTR_MAX == INT64_MAX
 static_assert(sizeof(SerList) == 16, "SerList size mismatch — check list_impl.cpp");
+#else
+static_assert(sizeof(SerList) == 12, "SerList size mismatch (32-bit) — check list_impl.cpp");
+#endif
 
 // GenericMap: { i32 size, i32 capacity, i8* occupied, void* keys, void* values }
 // x86-64: offsets 0, 4, 8, 16, 24 — sizeof = 32
@@ -38,7 +42,11 @@ struct SerMap {
     void*    keys;
     void*    values;
 };
+#if INTPTR_MAX == INT64_MAX
 static_assert(sizeof(SerMap) == 32, "SerMap size mismatch — check map_impl.cpp");
+#else
+static_assert(sizeof(SerMap) == 20, "SerMap size mismatch (32-bit) — check map_impl.cpp");
+#endif
 
 // AimlBuffer: { i32 size, i32 cap, i32 read_idx, i32 write_idx, void* data }
 // x86-64: offsets 0, 4, 8, 12, 16 (pointer 8-aligned at 16) — sizeof = 24
@@ -49,7 +57,11 @@ struct SerBuffer {
     int32_t  write_idx;
     void*    data;
 };
+#if INTPTR_MAX == INT64_MAX
 static_assert(sizeof(SerBuffer) == 24, "SerBuffer size mismatch — check compress_runtime.h");
+#else
+static_assert(sizeof(SerBuffer) == 20, "SerBuffer size mismatch (32-bit) — check compress_runtime.h");
+#endif
 
 // ── Write helpers (little-endian) ─────────────────────────────────────────────
 
@@ -465,6 +477,23 @@ extern "C" char* aiml_ser_encode(const void*         obj,
     blob[3] = (char)((data_len >> 24) & 0xFF);
     if (data_len > 0) memcpy(blob + 4, payload.data(), (size_t)data_len);
     return blob;
+}
+
+extern "C" void aiml_ser_deep_copy(void*               dst,
+                                    const void*         src,
+                                    const AimlTypeNode* nodes,
+                                    int32_t             n_nodes) {
+    if (!dst || !src || !nodes || n_nodes <= 0) return;
+    // Encode src → blob → decode into dst. The decode allocates fresh heap
+    // for every string/list/map/buffer field, so dst becomes fully
+    // independent of src's heap allocations.
+    //
+    // Precondition: dst must be zero-initialised (all heap pointer fields
+    // NULL) — see header comment.
+    char* blob = aiml_ser_encode(src, nodes, n_nodes);
+    if (!blob) return;
+    aiml_ser_decode(blob, dst, nodes, n_nodes);
+    free(blob);
 }
 
 extern "C" int aiml_ser_decode(const char*         blob,

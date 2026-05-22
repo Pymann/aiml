@@ -1,15 +1,31 @@
 /*
  * gl_runtime.cpp — AIML gl-Namespace Implementierung
- * Backend: GLEW (OpenGL Extension Wrangler) + GLFW
+ * Backend (Desktop): GLEW + Desktop GL 3.3 Core
+ * Backend (Web):     Emscripten WebGL2 via <GLES3/gl3.h> (no extension loader)
+ *
  * stb_image wird von gltf_runtime.cpp bereitgestellt (kein STB_IMAGE_IMPLEMENTATION hier)
  */
 
 #include "gl_runtime.h"
 
+#ifdef __EMSCRIPTEN__
+/* WebGL2 ≈ OpenGL ES 3.0. Emscripten provides the GLES3 headers; symbols are
+ * resolved at link time from the emscripten GL library — no glewInit needed. */
+#  include <GLES3/gl3.h>
+#  include <GLES2/gl2ext.h>
+#else
 /* GLEW muss VOR allen anderen GL-Headern eingebunden werden */
-#include <GL/glew.h>
+#  include <GL/glew.h>
+#endif
 
-/* stb_image — nur Deklarationen (Implementierung in gltf_runtime.cpp) */
+/* stb_image
+ *   Native build:  declarations only — implementation lives in gltf_runtime.cpp.
+ *   Web build:     gltf_runtime is not part of libaiml_wasm.a (assimp/cgltf
+ *                  deps don't compile under emcc), so we own the implementation
+ *                  here. */
+#ifdef __EMSCRIPTEN__
+#  define STB_IMAGE_IMPLEMENTATION
+#endif
 #include <stb/stb_image.h>
 
 #include <cstdlib>
@@ -139,6 +155,9 @@ static GLuint compile_stage(GLenum type, const char* src) {
 /* ── Initialisierung ────────────────────────────────────────────────────── */
 
 void aiml_gl_init(void) {
+#ifdef __EMSCRIPTEN__
+    /* WebGL2: context already created by engine.create_window; no loader needed. */
+#else
     glewExperimental = GL_TRUE;
     GLenum err = glewInit();
     if (err != GLEW_OK) {
@@ -146,6 +165,7 @@ void aiml_gl_init(void) {
     }
     /* Consume spurious GL_INVALID_ENUM that GLEW generates on some drivers */
     glGetError();
+#endif
 }
 
 /* ── Render-State ───────────────────────────────────────────────────────── */
@@ -182,7 +202,13 @@ void aiml_gl_cull_back(void)   { glCullFace(GL_BACK); }
 void aiml_gl_cull_front(void)  { glCullFace(GL_FRONT); }
 
 void aiml_gl_wireframe(int8_t on) {
+#ifdef __EMSCRIPTEN__
+    /* glPolygonMode is desktop-only; WebGL has no wireframe fill mode.
+     * Callers can emulate via GL_LINES topology on the index buffer. */
+    (void)on;
+#else
     glPolygonMode(GL_FRONT_AND_BACK, on ? GL_LINE : GL_FILL);
+#endif
 }
 void aiml_gl_polygon_offset(float factor, float units) { glPolygonOffset(factor, units); }
 void aiml_gl_enable_polygon_offset_fill(void)  { glEnable(GL_POLYGON_OFFSET_FILL); }

@@ -16,6 +16,7 @@ class StatementBuilder : public StateHandler {
     std::vector<std::pair<std::string, std::string>> args;
     std::unique_ptr<Expr> exprArg;
     std::vector<std::unique_ptr<Expr>> exprArgs; // for call: multiple nested expr args
+    std::vector<std::unique_ptr<Expr>> orderedCallArgs; // call args in source order (scalars + exprs interleaved)
     bool expectingValue = false;
     bool is_const = false;
     bool is_volatile = false;

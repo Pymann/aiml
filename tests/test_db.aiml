@@ -66,6 +66,35 @@
 - set: [klen, { call: [cfg.len] }]
 - print: ["klen after clear: ${klen}"]
 
+# ── Phase B2: iterator<string> over Kv keys ──────────────────────────────────
+
+- decl: [ikv, Kv<string:string>]
+- set: [ikv, { call: [db.open_kv, "iter_test"] }]
+- call: [ikv.set, "alpha", "1"]
+- call: [ikv.set, "beta", "2"]
+- call: [ikv.set, "gamma", "3"]
+
+- decl: [it, "iterator<string>", { call: [ikv.iter] }]
+- decl: [iter_count, i32, 0]
+- while:
+    condition: { call: [it.has_next] }
+    body:
+      - decl: [k, string, { call: [it.next] }]
+      - print: ["iter key: ${k}"]
+      - set: [iter_count, { +: [iter_count, 1] }]
+- print: ["iter_count: ${iter_count}"]
+
+# reset and iterate again
+- call: [it.reset]
+- decl: [iter_count2, i32, 0]
+- while:
+    condition: { call: [it.has_next] }
+    body:
+      - decl: [k2, string, { call: [it.next] }]
+      - set: [iter_count2, { +: [iter_count2, 1] }]
+- print: ["iter_count after reset: ${iter_count2}"]
+- call: [free, it]
+
 # ── Phase C: VecStore + VecResult ─────────────────────────────────────────────
 
 - decl: [vs, VecStore]

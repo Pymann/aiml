@@ -152,6 +152,17 @@ void FunctionBuilder::receiveChildNode(std::unique_ptr<Node> node) {
 
 std::unique_ptr<Node> FunctionBuilder::finish() {
     func->sourceLine = capturedLine;
+    // Sanity-Check: ein `- def:` ohne `name:`-Feld erzeugt sonst eine
+    // namenlose FunctionDecl, die als leerer Slot in __aiml_fptable landet
+    // und beim Linken zu cross-module `__unnamed_<N>`-Bugs fuehrt
+    // (siehe analysis Geschichte 2026-05-06). Lieber laut scheitern als
+    // still kaputt linken.
+    if (func->name.empty()) {
+        LOG_ERROR("FunctionDecl ohne 'name'-Feld at line " +
+                  std::to_string(capturedLine) +
+                  ": ein '- def:'-Mapping muss mindestens 'name: <funktionsname>' enthalten. "
+                  "Vermutlich ist hier ein verwaistes '- def:' uebrig (z.B. nach Refactor).");
+    }
     return std::move(func);
 }
 

@@ -1,47 +1,47 @@
-# Kapitel 33.1 — `hash`-Namespace
+# Chapter 33.1 — `hash` Namespace
 
-> **Leitgedanke:** Kryptografische und nicht-kryptografische Hashfunktionen als First-Class-Namespace.
-> Alle Funktionen liefern standardmäßig einen hex-codierten `string`.
-> Für Chaining (z.B. Bitcoin HASH160) gibt es `_raw`-Varianten die `buffer<u8>` zurückgeben.
-> Implementierung: OpenSSL (`libcrypto`, bereits via `tls` gelinkt) + handrolled Keccak-256.
-
----
-
-## 1. Übersicht
-
-| Algorithmus     | Funktion            | Output-Länge (hex) | Verwendung |
-|-----------------|---------------------|--------------------|------------|
-| SHA-256         | `hash.sha256`       | 64 Zeichen         | Allgemein, Bitcoin PoW |
-| SHA-512         | `hash.sha512`       | 128 Zeichen        | Allgemein, Passwort-Stretching |
-| SHA-3-256       | `hash.sha3_256`     | 64 Zeichen         | NIST-Standard (≠ Keccak!) |
-| Keccak-256      | `hash.keccak256`    | 64 Zeichen         | Ethereum — **nicht** Standard-SHA-3 |
-| RIPEMD-160      | `hash.ripemd160`    | 40 Zeichen         | Bitcoin-Adressen (HASH160) |
-| BLAKE2b-256     | `hash.blake2b`      | 64 Zeichen         | Zcash, schnelle sichere Hashes |
-| BLAKE2s-256     | `hash.blake2s`      | 64 Zeichen         | Zcash (32-bit-Plattformen) |
-| MD5             | `hash.md5`          | 32 Zeichen         | Checksums, Content-Hashing (nicht sicher!) |
-| CRC32           | `hash.crc32`        | `i32`              | Checksums, Protokoll-Frames |
-| HMAC-SHA256     | `hash.hmac_sha256`  | 64 Zeichen         | API-Signaturen (AWS, Webhooks) |
-| HMAC-SHA512     | `hash.hmac_sha512`  | 128 Zeichen        | Token-Signing |
+> **Core idea:** Cryptographic and non-cryptographic hash functions as a first-class namespace.
+> All functions return a hex-encoded `string` by default.
+> For chaining (e.g. Bitcoin HASH160) there are `_raw` variants that return `buffer<u8>`.
+> Implementation: OpenSSL (`libcrypto`, already linked via `tls`) + handrolled Keccak-256.
 
 ---
 
-## 2. Signaturen
+## 1. Overview
 
-Alle Hash-Funktionen akzeptieren `string` **oder** `buffer<u8>` als Eingabe.
+| Algorithm       | Function            | Output length (hex) | Use case |
+|-----------------|---------------------|---------------------|----------|
+| SHA-256         | `hash.sha256`       | 64 characters       | General, Bitcoin PoW |
+| SHA-512         | `hash.sha512`       | 128 characters      | General, password stretching |
+| SHA-3-256       | `hash.sha3_256`     | 64 characters       | NIST standard (≠ Keccak!) |
+| Keccak-256      | `hash.keccak256`    | 64 characters       | Ethereum — **not** standard SHA-3 |
+| RIPEMD-160      | `hash.ripemd160`    | 40 characters       | Bitcoin addresses (HASH160) |
+| BLAKE2b-256     | `hash.blake2b`      | 64 characters       | Zcash, fast secure hashes |
+| BLAKE2s-256     | `hash.blake2s`      | 64 characters       | Zcash (32-bit platforms) |
+| MD5             | `hash.md5`          | 32 characters       | Checksums, content hashing (not secure!) |
+| CRC32           | `hash.crc32`        | `i32`               | Checksums, protocol frames |
+| HMAC-SHA256     | `hash.hmac_sha256`  | 64 characters       | API signatures (AWS, webhooks) |
+| HMAC-SHA512     | `hash.hmac_sha512`  | 128 characters      | Token signing |
+
+---
+
+## 2. Signatures
+
+All hash functions accept `string` **or** `buffer<u8>` as input.
 
 ```
-hash.<algo>(data)              → string     hex-codierter Digest
-hash.<algo>_raw(data)          → buffer<u8> roher Digest-Bytes (für Chaining)
-hash.hmac_<algo>(key, msg)     → string     hex-codierter MAC
-hash.hmac_<algo>_raw(key, msg) → buffer<u8> roher MAC
-hash.crc32(data)               → i32        Checksumme als vorzeichenloser 32-Bit-Wert
+hash.<algo>(data)              → string     hex-encoded digest
+hash.<algo>_raw(data)          → buffer<u8> raw digest bytes (for chaining)
+hash.hmac_<algo>(key, msg)     → string     hex-encoded MAC
+hash.hmac_<algo>_raw(key, msg) → buffer<u8> raw MAC
+hash.crc32(data)               → i32        checksum as unsigned 32-bit value
 ```
 
 ---
 
-## 3. Beispiele
+## 3. Examples
 
-### 3.1 Einfache Hashes
+### 3.1 Simple Hashes
 
 ```aiml
 - decl: [h, string, { call: [hash.sha256, "hello world"] }]
@@ -58,7 +58,7 @@ hash.crc32(data)               → i32        Checksumme als vorzeichenloser 32-
 - print: ["CRC32: ${crc}"]
 ```
 
-### 3.2 Binary-Input (buffer\<u8\>)
+### 3.2 Binary Input (buffer\<u8\>)
 
 ```aiml
 - decl: [buf, buffer<u8>]
@@ -71,17 +71,17 @@ hash.crc32(data)               → i32        Checksumme als vorzeichenloser 32-
 - print: ["SHA-256(bytes): ${h}"]
 ```
 
-### 3.3 HMAC (API-Signatur)
+### 3.3 HMAC (API Signature)
 
 ```aiml
-# Webhook-Verifizierung (z.B. GitHub, Stripe)
+# Webhook verification (e.g. GitHub, Stripe)
 - decl: [secret, string, "mysecret"]
 - decl: [body, string, "{\"event\": \"push\"}"]
 
 - decl: [sig, string, { call: [hash.hmac_sha256, secret, body] }]
 - print: ["HMAC-SHA256: ${sig}"]
 
-# AWS-Signatur (HMAC-SHA256 mit binary key)
+# AWS signature (HMAC-SHA256 with binary key)
 - decl: [key_bytes, buffer<u8>]
 # ... fill key_bytes ...
 - decl: [mac, buffer<u8>, { call: [hash.hmac_sha256_raw, key_bytes, "AWS4-HMAC-SHA256"] }]
@@ -89,7 +89,7 @@ hash.crc32(data)               → i32        Checksumme als vorzeichenloser 32-
 
 ### 3.4 Chaining — Bitcoin HASH160
 
-Bitcoin-Adressen verwenden `RIPEMD-160(SHA-256(pubkey))`:
+Bitcoin addresses use `RIPEMD-160(SHA-256(pubkey))`:
 
 ```aiml
 - def:
@@ -97,13 +97,13 @@ Bitcoin-Adressen verwenden `RIPEMD-160(SHA-256(pubkey))`:
     args: [[data, buffer<u8>]]
     return: buffer<u8>
     body:
-      # Schritt 1: SHA-256 → rohe Bytes
+      # Step 1: SHA-256 → raw bytes
       - decl: [sha_raw, buffer<u8>, { call: [hash.sha256_raw, data] }]
-      # Schritt 2: RIPEMD-160 der SHA-256-Ausgabe
+      # Step 2: RIPEMD-160 of the SHA-256 output
       - decl: [result, buffer<u8>, { call: [hash.ripemd160_raw, sha_raw] }]
       - return: result
 
-# Verwendung
+# Usage
 - decl: [pubkey, buffer<u8>]
 # ... fill pubkey ...
 - decl: [addr, buffer<u8>, { call: [hash160, pubkey] }]
@@ -113,18 +113,18 @@ Bitcoin-Adressen verwenden `RIPEMD-160(SHA-256(pubkey))`:
 
 ### 3.5 Ethereum — Keccak-256
 
-> **Wichtig:** Ethereum verwendet **Keccak-256**, nicht Standard-SHA-3.
-> Die beiden unterscheiden sich im Padding (Keccak: `0x01`, SHA-3: `0x06`).
-> `hash.keccak256` liefert Ethereum-kompatible Ergebnisse.
+> **Important:** Ethereum uses **Keccak-256**, not standard SHA-3.
+> The two differ in padding (Keccak: `0x01`, SHA-3: `0x06`).
+> `hash.keccak256` returns Ethereum-compatible results.
 
 ```aiml
-# Ethereum-Adresse aus öffentlichem Schlüssel
-# (letzten 20 Bytes des Keccak-256-Hashs des uncompressed pubkeys)
+# Ethereum address from public key
+# (last 20 bytes of the Keccak-256 hash of the uncompressed pubkey)
 - decl: [pubkey_bytes, buffer<u8>]
 # ... fill pubkey_bytes ...
 
 - decl: [keccak, buffer<u8>, { call: [hash.keccak256_raw, pubkey_bytes] }]
-# Ethereum-Adresse = letzte 20 Bytes → "0x" + letzten 40 Zeichen des Hex-Strings
+# Ethereum address = last 20 bytes → "0x" + last 40 characters of the hex string
 - decl: [keccak_hex, string, { call: [hash.keccak256, pubkey_bytes] }]
 - print: ["Keccak-256: ${keccak_hex}"]
 ```
@@ -153,10 +153,10 @@ Bitcoin-Adressen verwenden `RIPEMD-160(SHA-256(pubkey))`:
 
 ---
 
-## 4. Namespace-Referenz
+## 4. Namespace Reference
 
-| Aufruf | Eingabe | Rückgabe | Beschreibung |
-|--------|---------|----------|--------------|
+| Call | Input | Return | Description |
+|------|-------|--------|-------------|
 | `{ call: [hash.sha256, data] }` | `string\|buffer<u8>` | `string` | SHA-256 hex |
 | `{ call: [hash.sha256_raw, data] }` | `string\|buffer<u8>` | `buffer<u8>` | SHA-256 raw bytes |
 | `{ call: [hash.sha512, data] }` | `string\|buffer<u8>` | `string` | SHA-512 hex |
@@ -170,31 +170,31 @@ Bitcoin-Adressen verwenden `RIPEMD-160(SHA-256(pubkey))`:
 | `{ call: [hash.blake2b_raw, data] }` | `string\|buffer<u8>` | `buffer<u8>` | BLAKE2b-256 raw bytes |
 | `{ call: [hash.blake2s, data] }` | `string\|buffer<u8>` | `string` | BLAKE2s-256 hex |
 | `{ call: [hash.md5, data] }` | `string\|buffer<u8>` | `string` | MD5 hex (legacy) |
-| `{ call: [hash.crc32, data] }` | `string\|buffer<u8>` | `i32` | CRC32-Checksumme |
+| `{ call: [hash.crc32, data] }` | `string\|buffer<u8>` | `i32` | CRC32 checksum |
 | `{ call: [hash.hmac_sha256, key, msg] }` | `string, string` | `string` | HMAC-SHA256 hex |
 | `{ call: [hash.hmac_sha256_raw, key, msg] }` | `string\|buf, string\|buf` | `buffer<u8>` | HMAC-SHA256 raw bytes |
 | `{ call: [hash.hmac_sha512, key, msg] }` | `string, string` | `string` | HMAC-SHA512 hex |
 
 ---
 
-## 5. Implementierungshinweise
+## 5. Implementation Notes
 
 ### 5.1 Backend
 
-| Algorithmus | Backend |
-|-------------|---------|
+| Algorithm | Backend |
+|-----------|---------|
 | SHA-256, SHA-512, SHA-3-256 | OpenSSL `EVP_DigestX` (`libcrypto`) |
 | RIPEMD-160 | OpenSSL `EVP_ripemd160()` |
 | BLAKE2b, BLAKE2s | OpenSSL `EVP_blake2bX()` |
 | HMAC | OpenSSL `HMAC()` |
 | MD5 | OpenSSL `EVP_md5()` |
-| CRC32 | zlib `crc32()` (oder handrolled — kein externer Dep) |
-| Keccak-256 | **Handrolled** — OpenSSL implementiert SHA-3 (≠ Keccak), Ethereum-kompatible Variante |
+| CRC32 | zlib `crc32()` (or handrolled — no external dep) |
+| Keccak-256 | **Handrolled** — OpenSSL implements SHA-3 (≠ Keccak), Ethereum-compatible variant |
 
-### 5.2 String vs. Buffer\<u8\>-Dispatch
+### 5.2 String vs. Buffer\<u8\> Dispatch
 
-Runtime-Dispatch via Tag-Byte am Anfang des `i8*`-Pointers — oder einfacher:
-zwei C-Funktionen pro Algorithmus:
+Runtime dispatch via tag byte at the start of the `i8*` pointer — or simpler:
+two C functions per algorithm:
 
 ```c
 char* aiml_hash_sha256_str(const char* s);              // string input → hex string
@@ -203,24 +203,24 @@ AimlBuffer* aiml_hash_sha256_raw_str(const char* s);    // string input → raw 
 AimlBuffer* aiml_hash_sha256_raw_buf(AimlBuffer* buf);  // buffer input → raw bytes
 ```
 
-Der AIML-Compiler dispatcht anhand des Argument-Typs im `visitCall`.
+The AIML compiler dispatches based on the argument type in `visitCall`.
 
-### 5.3 hex-Encoding
+### 5.3 Hex Encoding
 
-Alle `string`-Rückgaben sind lowercase hex ohne Prefix (`"b94d27..."`, nicht `"0xB94D..."`).
-Für Ethereum-Adressen wird das `0x`-Prefix typischerweise manuell per Stringinterpolation ergänzt:
+All `string` return values are lowercase hex without prefix (`"b94d27..."`, not `"0xB94D..."`).
+For Ethereum addresses the `0x` prefix is typically added manually via string interpolation:
 
 ```aiml
 - decl: [addr, string, "0x${keccak_hex}"]
 ```
 
-### 5.4 HMAC mit Buffer-Key (AWS-Signatur)
+### 5.4 HMAC with Buffer Key (AWS Signature)
 
-AWS Signature V4 verwendet HMAC-SHA256 mit binary keys (vorherige HMAC-Ausgaben als nächsten Key).
-`hash.hmac_sha256_raw(buffer<u8> key, string msg)` ermöglicht das direkt:
+AWS Signature V4 uses HMAC-SHA256 with binary keys (previous HMAC outputs as the next key).
+`hash.hmac_sha256_raw(buffer<u8> key, string msg)` enables this directly:
 
 ```aiml
-# AWS SigV4 Key-Derivation
+# AWS SigV4 key derivation
 - decl: [k1, buffer<u8>, { call: [hash.hmac_sha256_raw, "AWS4secret", "20240101"] }]
 - decl: [k2, buffer<u8>, { call: [hash.hmac_sha256_raw, k1, "us-east-1"] }]
 - decl: [k3, buffer<u8>, { call: [hash.hmac_sha256_raw, k2, "s3"] }]

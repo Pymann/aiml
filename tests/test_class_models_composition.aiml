@@ -1,0 +1,20 @@
+# Probe: model + class via `models:` composition.  Class hat anderen Namen
+# als Modell, referenziert das Modell explizit und fügt Methoden hinzu.
+
+- model:
+    name: Bar
+    fields:
+      - [n, i32, 7]
+      - [s, string]
+
+- class:
+    name: BarBehavior
+    models: [Bar]
+    methods:
+      - def: { name: greet, return: string, args: [], body: [{ return: "n=${<.n} s=${<.s}" }] }
+
+- decl: [b, BarBehavior]
+- set: [b.n, 99]
+- set: [b.s, "yo"]
+- decl: [out, string, { call: [b.greet] }]
+- print: ["got='${out}'"]

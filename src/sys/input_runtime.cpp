@@ -54,11 +54,12 @@ float aiml_input_event_delta_y(void* ev) { return ev ? ((AimlInputEvent*)ev)->sc
 /* DESKTOP IMPLEMENTATION                                                     */
 /* ══════════════════════════════════════════════════════════════════════════ */
 
-#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
-
-static constexpr int AIML_MAX_KEYS    = 400;    /* GLFW_KEY_LAST + ~50 spare */
-static constexpr int AIML_MAX_MOUSE   = 8;
+/* Shared limits — referenced by both desktop and emscripten branches. */
+static constexpr int AIML_MAX_KEYS     = 400;    /* GLFW_KEY_LAST + ~50 spare */
+static constexpr int AIML_MAX_MOUSE    = 8;
 static constexpr int AIML_MAX_GAMEPADS = 4;
+
+#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
 
 /* ── Global input state ─────────────────────────────────────────────────── */
 
@@ -810,7 +811,317 @@ void aiml_input_drag_set_threshold(float px) {
 /* STUB IMPLEMENTATIONS (Emscripten + Android)                               */
 /* ══════════════════════════════════════════════════════════════════════════ */
 
-#else /* __EMSCRIPTEN__ || __ANDROID__ */
+#elif defined(__EMSCRIPTEN__)
+/* ─── Browser implementation via emscripten HTML5 callbacks ──────────────── */
+#include <emscripten/html5.h>
+#include <math.h>
+#include <deque>
+#include <string>
+
+struct BrowserDrag {
+    bool  held;
+    bool  active;
+    bool  started_this_frame;
+    bool  ended_this_frame;
+    float origin_x;
+    float origin_y;
+    float acc_x;
+    float acc_y;
+};
+
+struct BrowserInputState {
+    /* mouse */
+    double curr_pos_x, curr_pos_y;
+    double prev_pos_x, prev_pos_y;
+    float  delta_x, delta_y;
+    uint8_t curr_mouse[AIML_MAX_MOUSE];
+    uint8_t prev_mouse[AIML_MAX_MOUSE];
+    float   scroll_accum_x, scroll_accum_y;
+    float   scroll_this_x, scroll_this_y;
+    BrowserDrag drag[AIML_MAX_MOUSE];
+    float   drag_threshold;
+    void*   drag_payload;
+    /* keyboard */
+    uint8_t curr_keys[AIML_MAX_KEYS];  // indexed by emscripten DOM_PK_* keyCode mod-256
+    uint8_t prev_keys[AIML_MAX_KEYS];
+    /* event queue for "text" + "key_down" — consumed by ui_runtime */
+    std::deque<AimlInputEvent> events;
+    /* small backing store so the char* fields returned in event accessors stay
+     * alive after pop. We reuse g_current_event.char_buf / type slots. */
+    std::deque<std::string> key_strings;
+};
+
+static BrowserInputState* g_b = nullptr;
+
+static EM_BOOL bin_mousemove(int /*type*/, const EmscriptenMouseEvent* e, void* /*ud*/) {
+    if (!g_b) return EM_FALSE;
+    g_b->curr_pos_x = e->targetX;
+    g_b->curr_pos_y = e->targetY;
+    /* drag accumulator update */
+    for (int b = 0; b < AIML_MAX_MOUSE; b++) {
+        auto& ds = g_b->drag[b];
+        if (!ds.held) continue;
+        ds.acc_x = (float)e->targetX - ds.origin_x;
+        ds.acc_y = (float)e->targetY - ds.origin_y;
+        float dist = sqrtf(ds.acc_x * ds.acc_x + ds.acc_y * ds.acc_y);
+        if (!ds.active && dist >= g_b->drag_threshold) {
+            ds.active             = true;
+            ds.started_this_frame = true;
+        }
+    }
+    return EM_TRUE;
+}
+static EM_BOOL bin_mousedown(int /*type*/, const EmscriptenMouseEvent* e, void* /*ud*/) {
+    if (!g_b) return EM_FALSE;
+    int b = e->button; /* 0=left 1=middle 2=right */
+    if (b < 0 || b >= AIML_MAX_MOUSE) return EM_TRUE;
+    g_b->curr_mouse[b] = 1;
+    auto& ds = g_b->drag[b];
+    ds.held = true; ds.active = false;
+    ds.started_this_frame = ds.ended_this_frame = false;
+    ds.origin_x = (float)e->targetX; ds.origin_y = (float)e->targetY;
+    ds.acc_x = ds.acc_y = 0.f;
+    return EM_TRUE;
+}
+static EM_BOOL bin_mouseup(int /*type*/, const EmscriptenMouseEvent* e, void* /*ud*/) {
+    if (!g_b) return EM_FALSE;
+    int b = e->button;
+    if (b < 0 || b >= AIML_MAX_MOUSE) return EM_TRUE;
+    g_b->curr_mouse[b] = 0;
+    auto& ds = g_b->drag[b];
+    if (ds.active) ds.ended_this_frame = true;
+    ds.held = false; ds.active = false;
+    return EM_TRUE;
+}
+static EM_BOOL bin_wheel(int /*type*/, const EmscriptenWheelEvent* e, void* /*ud*/) {
+    if (!g_b) return EM_FALSE;
+    g_b->scroll_accum_x += (float)e->deltaX;
+    g_b->scroll_accum_y += (float)e->deltaY;
+    return EM_TRUE;
+}
+
+/* Stash a string in the persistent backing store and return a stable ptr. */
+static const char* bin_keep_string(const char* s) {
+    if (!g_b || !s) return "";
+    g_b->key_strings.emplace_back(s);
+    return g_b->key_strings.back().c_str();
+}
+
+static EM_BOOL bin_keydown(int /*type*/, const EmscriptenKeyboardEvent* e, void* /*ud*/) {
+    if (!g_b) return EM_FALSE;
+    /* Push a "key_down" event with the key name (e->key — e.g. "a", "Backspace") */
+    AimlInputEvent ev = {};
+    ev.type = "key_down";
+    ev.key  = bin_keep_string(e->key);
+    g_b->events.push_back(ev);
+    /* Update curr_keys for raw polling (use keyCode mod 256 as a rough slot). */
+    uint32_t slot = (uint32_t)e->keyCode % AIML_MAX_KEYS;
+    g_b->curr_keys[slot] = 1;
+    /* Swallow Backspace/Tab so the browser doesn't navigate or change focus
+     * while the user types. Other keys pass through. */
+    if (strcmp(e->key, "Backspace") == 0 || strcmp(e->key, "Tab") == 0)
+        return EM_TRUE;
+    return EM_FALSE;
+}
+
+static EM_BOOL bin_keyup(int /*type*/, const EmscriptenKeyboardEvent* e, void* /*ud*/) {
+    if (!g_b) return EM_FALSE;
+    AimlInputEvent ev = {};
+    ev.type = "key_up";
+    ev.key  = bin_keep_string(e->key);
+    g_b->events.push_back(ev);
+    uint32_t slot = (uint32_t)e->keyCode % AIML_MAX_KEYS;
+    g_b->curr_keys[slot] = 0;
+    return EM_FALSE;
+}
+
+static EM_BOOL bin_keypress(int /*type*/, const EmscriptenKeyboardEvent* e, void* /*ud*/) {
+    if (!g_b) return EM_FALSE;
+    /* keypress fires for printable chars. e->key is the typed character (UTF-8
+     * sequence in e->key as a string). Use it as the text payload. */
+    if (e->key[0] == '\0') return EM_FALSE;
+    /* Filter: only forward keys that look like a single visible character.
+     * Skips names like "Enter", "Shift", "Control" which arrive on some
+     * platforms. */
+    int klen = 0; while (e->key[klen] && klen < 32) ++klen;
+    if (klen > 4) return EM_FALSE;  /* > UTF-8 max for one codepoint */
+    AimlInputEvent ev = {};
+    ev.type = "text";
+    /* Copy into char_buf — accessor reads from there */
+    strncpy(ev.char_buf, e->key, sizeof(ev.char_buf) - 1);
+    ev.char_buf[sizeof(ev.char_buf) - 1] = '\0';
+    g_b->events.push_back(ev);
+    return EM_TRUE;
+}
+
+void aiml_input_init(void* /*win*/) {
+    if (g_b) { delete g_b; g_b = nullptr; }
+    g_b = new BrowserInputState();
+    memset(g_b, 0, sizeof(*g_b));
+    g_b->drag_threshold = 5.0f;
+    /* Bind to the window so releases outside the canvas still end the drag.
+     * Earlier we double-bound mouseup (canvas + window), which made the
+     * handler fire twice per release — harmless for curr_mouse[] but messed
+     * with drag-ended_this_frame logic. Window-only is sufficient because
+     * the event still propagates through. */
+    emscripten_set_mousemove_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_mousemove);
+    emscripten_set_mousedown_callback("#canvas", nullptr, EM_TRUE, bin_mousedown);
+    emscripten_set_mouseup_callback  (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_mouseup);
+    emscripten_set_wheel_callback    ("#canvas", nullptr, EM_TRUE, bin_wheel);
+    /* Keyboard goes on the window target — canvas elements need explicit
+     * tabindex to receive key events, but window always works. */
+    emscripten_set_keydown_callback (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_keydown);
+    emscripten_set_keyup_callback   (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_keyup);
+    emscripten_set_keypress_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_keypress);
+    /* Register per-frame update with the engine — same hook as desktop. */
+    aiml_engine_register_input_update(aiml_input_update);
+}
+
+void aiml_input_update(void) {
+    if (!g_b) return;
+    memcpy(g_b->prev_mouse, g_b->curr_mouse, AIML_MAX_MOUSE);
+    memcpy(g_b->prev_keys,  g_b->curr_keys,  AIML_MAX_KEYS);
+    g_b->delta_x = (float)(g_b->curr_pos_x - g_b->prev_pos_x);
+    g_b->delta_y = (float)(g_b->curr_pos_y - g_b->prev_pos_y);
+    g_b->prev_pos_x = g_b->curr_pos_x;
+    g_b->prev_pos_y = g_b->curr_pos_y;
+    g_b->scroll_this_x  = g_b->scroll_accum_x;
+    g_b->scroll_this_y  = g_b->scroll_accum_y;
+    g_b->scroll_accum_x = 0.f;
+    g_b->scroll_accum_y = 0.f;
+    for (int b = 0; b < AIML_MAX_MOUSE; b++) {
+        g_b->drag[b].started_this_frame = false;
+        g_b->drag[b].ended_this_frame   = false;
+    }
+    /* Trim event queue if it grew unbounded (e.g. event consumer never ran). */
+    while (g_b->events.size() > 256) g_b->events.pop_front();
+    while (g_b->key_strings.size() > 1024) g_b->key_strings.pop_front();
+}
+
+void aiml_input_set_capture(int32_t /*on*/) { /* PointerLock not wired yet */ }
+
+/* Map a key name (from emscripten e->key) to a curr_keys[] slot. We don't have
+ * a 1:1 keyCode → name table, so we hash a tiny set of common ones. Used by
+ * key_down / key_pressed / key_released raw polling. */
+static int32_t name_to_slot(const char* k) {
+    if (!k || !k[0]) return -1;
+    /* Single ASCII character → use its uppercase code */
+    if (k[1] == '\0') {
+        char c = k[0];
+        if (c >= 'a' && c <= 'z') c -= 32;
+        return ((int32_t)(uint8_t)c) % AIML_MAX_KEYS;
+    }
+    /* Hash the multi-char name */
+    uint32_t h = 0;
+    for (const char* p = k; *p; ++p) h = h * 131u + (uint8_t)*p;
+    return (int32_t)(h % AIML_MAX_KEYS);
+}
+int32_t aiml_input_key_down    (const char* k) {
+    if (!g_b) return 0;
+    int slot = name_to_slot(k);
+    if (slot < 0) return 0;
+    return g_b->curr_keys[slot] ? 1 : 0;
+}
+int32_t aiml_input_key_pressed (const char* k) {
+    if (!g_b) return 0;
+    int slot = name_to_slot(k);
+    if (slot < 0) return 0;
+    return (g_b->curr_keys[slot] && !g_b->prev_keys[slot]) ? 1 : 0;
+}
+int32_t aiml_input_key_released(const char* k) {
+    if (!g_b) return 0;
+    int slot = name_to_slot(k);
+    if (slot < 0) return 0;
+    return (!g_b->curr_keys[slot] && g_b->prev_keys[slot]) ? 1 : 0;
+}
+
+float   aiml_input_mouse_pos_x   (void) { return g_b ? (float)g_b->curr_pos_x : 0.f; }
+float   aiml_input_mouse_pos_y   (void) { return g_b ? (float)g_b->curr_pos_y : 0.f; }
+float   aiml_input_mouse_delta_x (void) { return g_b ? g_b->delta_x : 0.f; }
+float   aiml_input_mouse_delta_y (void) { return g_b ? g_b->delta_y : 0.f; }
+int32_t aiml_input_mouse_button  (int32_t b) {
+    if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0;
+    return g_b->curr_mouse[b] ? 1 : 0;
+}
+int32_t aiml_input_mouse_pressed (int32_t b) {
+    if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0;
+    return (g_b->curr_mouse[b] && !g_b->prev_mouse[b]) ? 1 : 0;
+}
+int32_t aiml_input_mouse_released(int32_t b) {
+    if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0;
+    return (!g_b->curr_mouse[b] && g_b->prev_mouse[b]) ? 1 : 0;
+}
+float   aiml_input_mouse_scroll_x(void) { return g_b ? g_b->scroll_this_x : 0.f; }
+float   aiml_input_mouse_scroll_y(void) { return g_b ? g_b->scroll_this_y : 0.f; }
+
+int32_t aiml_input_gamepad_connected(int32_t) { return 0; }
+float   aiml_input_gamepad_axis     (int32_t, int32_t) { return 0.f; }
+int32_t aiml_input_gamepad_button   (int32_t, int32_t) { return 0; }
+int32_t aiml_input_gamepad_pressed  (int32_t, int32_t) { return 0; }
+
+int32_t aiml_input_has_event(void) {
+    return (g_b && !g_b->events.empty()) ? 1 : 0;
+}
+void*   aiml_input_next_event(void) {
+    if (!g_b || g_b->events.empty()) {
+        memset(&g_current_event, 0, sizeof(g_current_event));
+        g_current_event.type = ""; g_current_event.key = "";
+        return &g_current_event;
+    }
+    g_current_event = g_b->events.front();
+    g_b->events.pop_front();
+    if (!g_current_event.type) g_current_event.type = "";
+    if (!g_current_event.key)  g_current_event.key  = "";
+    return &g_current_event;
+}
+void    aiml_input_clear_events(void) { if (g_b) g_b->events.clear(); }
+
+void aiml_input_map_axis        (const char*, const char*, float) {}
+void aiml_input_map_axis_mouse  (const char*, const char*, float) {}
+void aiml_input_map_axis_gamepad(const char*, int32_t, int32_t, float) {}
+void aiml_input_map_action        (const char*, const char*) {}
+void aiml_input_map_action_mouse  (const char*, int32_t) {}
+void aiml_input_map_action_gamepad(const char*, int32_t, int32_t) {}
+void aiml_input_unmap        (const char*) {}
+void aiml_input_clear_mappings(void) {}
+float   aiml_input_axis           (const char*) { return 0.f; }
+int32_t aiml_input_action_down    (const char*) { return 0; }
+int32_t aiml_input_action_pressed (const char*) { return 0; }
+int32_t aiml_input_action_released(const char*) { return 0; }
+
+int32_t aiml_input_drag_active (int32_t b) {
+    if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0;
+    return g_b->drag[b].active ? 1 : 0;
+}
+int32_t aiml_input_drag_started(int32_t b) {
+    if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0;
+    return g_b->drag[b].started_this_frame ? 1 : 0;
+}
+int32_t aiml_input_drag_ended  (int32_t b) {
+    if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0;
+    return g_b->drag[b].ended_this_frame ? 1 : 0;
+}
+float   aiml_input_drag_origin_x(int32_t b) {
+    if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0.f;
+    return g_b->drag[b].origin_x;
+}
+float   aiml_input_drag_origin_y(int32_t b) {
+    if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0.f;
+    return g_b->drag[b].origin_y;
+}
+float   aiml_input_drag_delta_x (int32_t b) {
+    if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0.f;
+    return g_b->drag[b].acc_x;
+}
+float   aiml_input_drag_delta_y (int32_t b) {
+    if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0.f;
+    return g_b->drag[b].acc_y;
+}
+void    aiml_input_drag_set_payload  (void* p) { if (g_b) g_b->drag_payload = p; }
+void*   aiml_input_drag_get_payload  (void)    { return g_b ? g_b->drag_payload : nullptr; }
+void    aiml_input_drag_set_threshold(float t) { if (g_b) g_b->drag_threshold = t; }
+
+#else /* __ANDROID__ */
 
 void    aiml_input_init       (void* /*win*/)   { /* TODO: platform */ }
 void    aiml_input_update     (void)            { /* TODO: platform */ }

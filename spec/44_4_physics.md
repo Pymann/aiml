@@ -1,209 +1,209 @@
-# Kapitel 44.4 — Physics
+# Chapter 44.4 — Physics
 
-> **Leitgedanke:** Ein schlanker nativer `physics`-Namespace — kein Bullet, kein Box2D,
-> keine externen Deps. Fokus auf die häufigsten Game-Engine-Anforderungen:
-> Kollisionserkennung (AABB, Sphere, Capsule, Ray), einfache Rigid-Body-Dynamik
-> (Euler-Integration, Gravitation, Impuls) und eine Broadphase für viele Objekte.
-> Läuft unverändert auf Desktop, Android und Browser.
+> **Core idea:** A lean native `physics` namespace — no Bullet, no Box2D,
+> no external dependencies. Focus on the most common game engine requirements:
+> collision detection (AABB, Sphere, Capsule, Ray), simple rigid body dynamics
+> (Euler integration, gravity, impulse) and a broadphase for many objects.
+> Runs unchanged on desktop, Android, and browser.
 
 ---
 
-## Architektur
+## Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  AIML Spielcode     physics.raycast / body.apply_force       │
+│  AIML game code     physics.raycast / body.apply_force       │
 ├──────────────────────────────────────────────────────────────┤
-│  physics Namespace  Collision Detection + Rigid Body         │
+│  physics namespace  Collision Detection + Rigid Body         │
 │                     AABB / Sphere / Capsule / Ray            │
 ├──────────────────────────────────────────────────────────────┤
-│  Broadphase         Uniform Grid (für viele Objekte)         │
+│  Broadphase         Uniform Grid (for many objects)          │
 ├──────────────────────────────────────────────────────────────┤
-│  physics_runtime.h/cpp  C-Implementierung                    │
+│  physics_runtime.h/cpp  C implementation                     │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 1. Typen
+## 1. Types
 
-| Typ | LLVM | Beschreibung |
-|-----|------|--------------|
-| `physics_world` | `i8*` | Physik-Welt; hält alle Bodies und Broadphase-Struktur |
-| `physics_body` | `i8*` | Rigid Body mit Position, Velocity, Masse, Shape |
-| `physics_shape` | `i8*` | Kollisionsform (AABB / Sphere / Capsule) |
-| `physics_hit` | struct | Ergebnis eines Raycasts oder Overlap-Tests |
+| Type | LLVM | Description |
+|------|------|-------------|
+| `physics_world` | `i8*` | Physics world; holds all bodies and broadphase structure |
+| `physics_body` | `i8*` | Rigid body with position, velocity, mass, shape |
+| `physics_shape` | `i8*` | Collision shape (AABB / Sphere / Capsule) |
+| `physics_hit` | struct | Result of a raycast or overlap test |
 
-### `physics_hit` — Felder
+### `physics_hit` — Fields
 
 ```aiml
 model: physics_hit
 fields:
-  - [hit,      bool]   # true wenn Treffer
-  - [point,    vec3]   # Auftreffpunkt in Weltkoordinaten
-  - [normal,   vec3]   # Oberflächennormale am Auftreffpunkt
-  - [distance, f32]    # Distanz vom Strahl-Ursprung zum Auftreffpunkt
-  - [body,     physics_body]   # getroffener Body; null wenn kein Body
+  - [hit,      bool]   # true if there was a hit
+  - [point,    vec3]   # hit point in world coordinates
+  - [normal,   vec3]   # surface normal at the hit point
+  - [distance, f32]    # distance from ray origin to hit point
+  - [body,     physics_body]   # hit body; null if no body
 ```
 
 ---
 
-## 2. Welt
+## 2. World
 
-| Aufruf | Rückgabe | Beschreibung |
-|--------|----------|--------------|
-| `physics.create_world()` | `physics_world` | Neue Physik-Welt erstellen |
-| `physics.destroy_world(w: physics_world)` | — | Welt und alle Bodies freigeben |
-| `physics.set_gravity(w: physics_world, g: vec3)` | — | Gravitation setzen; Default `{0, -9.81, 0}` |
-| `physics.step(w: physics_world, dt: f32)` | — | Physik-Simulation einen Schritt vorwärts; einmal pro Frame aufrufen |
-| `physics.set_iterations(w: physics_world, n: i32)` | — | Collision-Response-Iterationen pro Step; Default `4` |
+| Call | Return | Description |
+|------|--------|-------------|
+| `physics.create_world()` | `physics_world` | Create a new physics world |
+| `physics.destroy_world(w: physics_world)` | — | Destroy world and free all bodies |
+| `physics.set_gravity(w: physics_world, g: vec3)` | — | Set gravity; default `{0, -9.81, 0}` |
+| `physics.step(w: physics_world, dt: f32)` | — | Advance the physics simulation one step; call once per frame |
+| `physics.set_iterations(w: physics_world, n: i32)` | — | Collision response iterations per step; default `4` |
 
 ---
 
-## 3. Formen (Shapes)
+## 3. Shapes
 
-| Aufruf | Rückgabe | Beschreibung |
-|--------|----------|--------------|
-| `physics.box_shape(half_extents: vec3)` | `physics_shape` | AABB-Form; `half_extents` = halbe Seitenlängen |
-| `physics.sphere_shape(radius: f32)` | `physics_shape` | Kugelform |
-| `physics.capsule_shape(radius: f32, height: f32)` | `physics_shape` | Kapselform; `height` = Zylinderanteil (ohne Halbkugeln) |
-| `physics.free_shape(s: physics_shape)` | — | Form freigeben |
+| Call | Return | Description |
+|------|--------|-------------|
+| `physics.box_shape(half_extents: vec3)` | `physics_shape` | AABB shape; `half_extents` = half side lengths |
+| `physics.sphere_shape(radius: f32)` | `physics_shape` | Sphere shape |
+| `physics.capsule_shape(radius: f32, height: f32)` | `physics_shape` | Capsule shape; `height` = cylinder portion (excluding hemispheres) |
+| `physics.free_shape(s: physics_shape)` | — | Free a shape |
 
 ---
 
 ## 4. Rigid Bodies
 
-### 4.1 Erstellen und Entfernen
+### 4.1 Creating and Removing
 
-| Aufruf | Rückgabe | Beschreibung |
-|--------|----------|--------------|
-| `physics.add_body(w: physics_world, shape: physics_shape, mass: f32)` | `physics_body` | Body zur Welt hinzufügen; `mass=0` = statisch (unbeweglich) |
-| `physics.remove_body(w: physics_world, b: physics_body)` | — | Body aus Welt entfernen und freigeben |
+| Call | Return | Description |
+|------|--------|-------------|
+| `physics.add_body(w: physics_world, shape: physics_shape, mass: f32)` | `physics_body` | Add body to world; `mass=0` = static (immovable) |
+| `physics.remove_body(w: physics_world, b: physics_body)` | — | Remove body from world and free it |
 
 ### 4.2 Transform
 
-| Methode | Argumente | Rückgabe | Beschreibung |
-|---------|-----------|----------|--------------|
-| `get_position` | — | `vec3` | Position in Weltkoordinaten |
-| `set_position` | `pos: vec3` | — | Position direkt setzen (teleportiert) |
-| `get_rotation` | — | `quat` | Orientierung als Quaternion |
-| `set_rotation` | `q: quat` | — | Orientierung direkt setzen |
-| `get_transform` | — | `mat4` | Position + Rotation als mat4 (direkt für Render nutzbar) |
+| Method | Arguments | Return | Description |
+|--------|-----------|--------|-------------|
+| `get_position` | — | `vec3` | Position in world coordinates |
+| `set_position` | `pos: vec3` | — | Set position directly (teleports) |
+| `get_rotation` | — | `quat` | Orientation as quaternion |
+| `set_rotation` | `q: quat` | — | Set orientation directly |
+| `get_transform` | — | `mat4` | Position + rotation as mat4 (directly usable for rendering) |
 
-### 4.3 Dynamik
+### 4.3 Dynamics
 
-| Methode | Argumente | Rückgabe | Beschreibung |
-|---------|-----------|----------|--------------|
-| `get_velocity` | — | `vec3` | Lineare Geschwindigkeit |
-| `set_velocity` | `v: vec3` | — | Lineare Geschwindigkeit setzen |
-| `get_angular_velocity` | — | `vec3` | Winkelgeschwindigkeit (rad/s) |
-| `set_angular_velocity` | `v: vec3` | — | Winkelgeschwindigkeit setzen |
-| `apply_force` | `f: vec3` | — | Kraft anwenden (akkumuliert bis nächstem Step) |
-| `apply_force_at` | `f: vec3, point: vec3` | — | Kraft an Weltpunkt anwenden (erzeugt auch Drehmoment) |
-| `apply_impulse` | `imp: vec3` | — | Impuls anwenden (sofortige Geschwindigkeitsänderung) |
-| `apply_torque` | `t: vec3` | — | Drehmoment anwenden |
-| `set_damping` | `linear: f32, angular: f32` | — | Dämpfung (0.0 = keine, 1.0 = sofort gestoppt) |
-| `set_friction` | `f: f32` | — | Reibungskoeffizient (0.0–1.0) |
-| `set_restitution` | `r: f32` | — | Elastizität / Rückprall (0.0 = perfekt inelastisch, 1.0 = perfekt elastisch) |
-| `set_kinematic` | `on: bool` | — | Kinematischer Body: von Physik unbeeinflusst, aber kollidiert |
-| `set_active` | `on: bool` | — | Body aktivieren/deaktivieren (deaktiviert = ignoriert von Simulation) |
+| Method | Arguments | Return | Description |
+|--------|-----------|--------|-------------|
+| `get_velocity` | — | `vec3` | Linear velocity |
+| `set_velocity` | `v: vec3` | — | Set linear velocity |
+| `get_angular_velocity` | — | `vec3` | Angular velocity (rad/s) |
+| `set_angular_velocity` | `v: vec3` | — | Set angular velocity |
+| `apply_force` | `f: vec3` | — | Apply force (accumulated until next step) |
+| `apply_force_at` | `f: vec3, point: vec3` | — | Apply force at a world point (also generates torque) |
+| `apply_impulse` | `imp: vec3` | — | Apply impulse (immediate velocity change) |
+| `apply_torque` | `t: vec3` | — | Apply torque |
+| `set_damping` | `linear: f32, angular: f32` | — | Damping (0.0 = none, 1.0 = immediately stopped) |
+| `set_friction` | `f: f32` | — | Friction coefficient (0.0–1.0) |
+| `set_restitution` | `r: f32` | — | Elasticity / bounce (0.0 = perfectly inelastic, 1.0 = perfectly elastic) |
+| `set_kinematic` | `on: bool` | — | Kinematic body: unaffected by physics forces, but still collides |
+| `set_active` | `on: bool` | — | Activate/deactivate body (deactivated = ignored by simulation) |
 
 ---
 
-## 5. Kollisionserkennung
+## 5. Collision Detection
 
 ### 5.1 Raycast
 
-| Aufruf | Rückgabe | Beschreibung |
-|--------|----------|--------------|
-| `physics.raycast(w: physics_world, origin: vec3, dir: vec3, max_dist: f32)` | `physics_hit` | Strahl gegen alle Bodies der Welt testen; gibt nächsten Treffer zurück |
-| `physics.raycast_all(w: physics_world, origin: vec3, dir: vec3, max_dist: f32)` | `list<physics_hit>` | Alle Treffer entlang des Strahls (sortiert nach Distanz) |
+| Call | Return | Description |
+|------|--------|-------------|
+| `physics.raycast(w: physics_world, origin: vec3, dir: vec3, max_dist: f32)` | `physics_hit` | Test ray against all bodies in the world; returns nearest hit |
+| `physics.raycast_all(w: physics_world, origin: vec3, dir: vec3, max_dist: f32)` | `list<physics_hit>` | All hits along the ray (sorted by distance) |
 
-### 5.2 Overlap-Tests
+### 5.2 Overlap Tests
 
-| Aufruf | Rückgabe | Beschreibung |
-|--------|----------|--------------|
-| `physics.overlap_sphere(w: physics_world, center: vec3, radius: f32)` | `list<physics_body>` | Alle Bodies die eine Kugel schneiden |
-| `physics.overlap_box(w: physics_world, center: vec3, half_extents: vec3)` | `list<physics_body>` | Alle Bodies die eine Box schneiden |
+| Call | Return | Description |
+|------|--------|-------------|
+| `physics.overlap_sphere(w: physics_world, center: vec3, radius: f32)` | `list<physics_body>` | All bodies intersecting a sphere |
+| `physics.overlap_box(w: physics_world, center: vec3, half_extents: vec3)` | `list<physics_body>` | All bodies intersecting a box |
 
-### 5.3 Direkte Shape-Tests (ohne Welt)
+### 5.3 Direct Shape Tests (without world)
 
-| Aufruf | Rückgabe | Beschreibung |
-|--------|----------|--------------|
-| `physics.aabb_aabb(a_min: vec3, a_max: vec3, b_min: vec3, b_max: vec3)` | `bool` | AABB–AABB Überschneidung |
-| `physics.sphere_sphere(a: vec3, ra: f32, b: vec3, rb: f32)` | `bool` | Kugel–Kugel Überschneidung |
-| `physics.aabb_sphere(box_min: vec3, box_max: vec3, center: vec3, r: f32)` | `bool` | AABB–Kugel Überschneidung |
-| `physics.ray_aabb(origin: vec3, dir: vec3, box_min: vec3, box_max: vec3)` | `physics_hit` | Strahl–AABB Test |
-| `physics.ray_sphere(origin: vec3, dir: vec3, center: vec3, r: f32)` | `physics_hit` | Strahl–Kugel Test |
-| `physics.ray_plane(origin: vec3, dir: vec3, normal: vec3, d: f32)` | `physics_hit` | Strahl–Ebene Test |
+| Call | Return | Description |
+|------|--------|-------------|
+| `physics.aabb_aabb(a_min: vec3, a_max: vec3, b_min: vec3, b_max: vec3)` | `bool` | AABB–AABB intersection |
+| `physics.sphere_sphere(a: vec3, ra: f32, b: vec3, rb: f32)` | `bool` | Sphere–sphere intersection |
+| `physics.aabb_sphere(box_min: vec3, box_max: vec3, center: vec3, r: f32)` | `bool` | AABB–sphere intersection |
+| `physics.ray_aabb(origin: vec3, dir: vec3, box_min: vec3, box_max: vec3)` | `physics_hit` | Ray–AABB test |
+| `physics.ray_sphere(origin: vec3, dir: vec3, center: vec3, r: f32)` | `physics_hit` | Ray–sphere test |
+| `physics.ray_plane(origin: vec3, dir: vec3, normal: vec3, d: f32)` | `physics_hit` | Ray–plane test |
 
 ---
 
-## 6. Kollisions-Callbacks
+## 6. Collision Callbacks
 
-Kollisionsereignisse werden als Events in eine Queue eingetragen, die nach
-`physics.step` abgefragt werden kann:
+Collision events are enqueued and can be queried after
+`physics.step`:
 
-| Aufruf | Rückgabe | Beschreibung |
-|--------|----------|--------------|
-| `physics.has_collision(w: physics_world)` | `bool` | Queue nicht leer |
-| `physics.next_collision(w: physics_world)` | `physics_collision` | Nächstes Kollisionsereignis |
+| Call | Return | Description |
+|------|--------|-------------|
+| `physics.has_collision(w: physics_world)` | `bool` | Queue is not empty |
+| `physics.next_collision(w: physics_world)` | `physics_collision` | Next collision event |
 
 ```aiml
 model: physics_collision
 fields:
   - [body_a,   physics_body]
   - [body_b,   physics_body]
-  - [point,    vec3]           # Kollisionspunkt in Weltkoordinaten
-  - [normal,   vec3]           # Normale von body_a → body_b
-  - [depth,    f32]            # Eindringtiefe
+  - [point,    vec3]           # collision point in world coordinates
+  - [normal,   vec3]           # normal from body_a to body_b
+  - [depth,    f32]            # penetration depth
   - [type,     string]         # "enter" | "stay" | "exit"
 ```
 
 ---
 
-## 7. Vollständiges Beispiel
+## 7. Complete Example
 
 ```aiml
-# ── Welt erstellen ────────────────────────────────────────────────────────────
+# ── Create world ───────────────────────────────────────────────────────────────
 - decl: [world, physics_world, { call: [physics.create_world] }]
 - call: [physics.set_gravity, world, { call: [math.vec3, 0.0, -9.81, 0.0] }]
 
-# ── Statischer Boden (mass=0 → unbeweglich) ───────────────────────────────────
+# ── Static floor (mass=0 → immovable) ─────────────────────────────────────────
 - decl: [floor_shape, physics_shape, { call: [physics.box_shape, { call: [math.vec3, 50.0, 0.5, 50.0] }] }]
 - decl: [floor,       physics_body,  { call: [physics.add_body, world, floor_shape, 0.0] }]
 - call: [floor.set_position, { call: [math.vec3, 0.0, -0.5, 0.0] }]
 - call: [floor.set_friction, 0.8]
 
-# ── Dynamischer Spieler-Body (Kapsel) ─────────────────────────────────────────
+# ── Dynamic player body (capsule) ──────────────────────────────────────────────
 - decl: [player_shape, physics_shape, { call: [physics.capsule_shape, 0.4, 1.0] }]
 - decl: [player_body,  physics_body,  { call: [physics.add_body, world, player_shape, 70.0] }]
 - call: [player_body.set_position,    { call: [math.vec3, 0.0, 2.0, 0.0] }]
 - call: [player_body.set_damping, 0.1, 0.9]
 - call: [player_body.set_friction, 0.5]
 
-# ── Update-Funktion ───────────────────────────────────────────────────────────
+# ── Update function ────────────────────────────────────────────────────────────
 - def:
     name: update
     args: [[dt, f32]]
     body:
-      # Bewegungs-Input → Kraft auf Player-Body
+      # Movement input → force on player body
       - decl: [fwd,  f32, { call: [input.axis, "forward"] }]
       - decl: [side, f32, { call: [input.axis, "strafe"]  }]
       - decl: [force, vec3, { call: [math.vec3, side, 0.0, { "-": [0.0, fwd] }] }]
       - set: [force, { "*": [force, 400.0] }]
       - call: [player_body.apply_force, force]
 
-      # Springen
+      # Jump
       - decl: [jumped, bool, { call: [input.action_pressed, "jump"] }]
       - if: [{ ==: [jumped, true] }, true]
         then:
           - call: [player_body.apply_impulse, { call: [math.vec3, 0.0, 500.0, 0.0] }]
 
-      # Physik-Simulation vorwärts
+      # Advance physics simulation
       - call: [physics.step, world, dt]
 
-      # Kollisions-Events verarbeiten
+      # Process collision events
       - while:
           condition: { call: [physics.has_collision, world] }
           body:
@@ -212,11 +212,11 @@ fields:
               then:
                 - call: [on_collision, col]
 
-      # Transform für Render holen
+      # Get transform for rendering
       - decl: [tfm, mat4, { call: [player_body.get_transform] }]
       - call: [render_player, tfm]
 
-# ── Raycast-Beispiel: Maus-Klick auf Welt-Objekt ──────────────────────────────
+# ── Raycast example: mouse click on world object ───────────────────────────────
 - def:
     name: pick_object
     args: [[ray_origin, vec3], [ray_dir, vec3]]
@@ -230,47 +230,47 @@ fields:
 
 ---
 
-## 8. Implementierungshinweise
+## 8. Implementation Notes
 
 ### 8.1 Integration
 
-Semi-implizite Euler-Integration pro Step:
+Semi-implicit Euler integration per step:
 
 ```
 velocity += (forces / mass + gravity) * dt
 position += velocity * dt
-forces    = {0, 0, 0}   (zurücksetzen nach jedem Step)
+forces    = {0, 0, 0}   (reset after each step)
 ```
 
-Für `dt` aus `engine.dt()` mit Sub-Stepping bei großen Frames:
-`physics.step` unterteilt `dt > 0.02` automatisch in mehrere Teil-Steps
-(max. 5 × 0.02s) — verhindert "Tunneling" bei hoher Geschwindigkeit.
+For `dt` from `engine.dt()` with sub-stepping for large frames:
+`physics.step` automatically subdivides `dt > 0.02` into multiple sub-steps
+(max. 5 × 0.02s) — prevents tunneling at high velocities.
 
 ### 8.2 Broadphase
 
-Uniform Grid: Welt in Zellen aufgeteilt (Zellgröße = größte Shape-Ausdehnung).
-Jeder Body trägt sich in die überlappenden Zellen ein. Nur Bodies in derselben
-Zelle werden auf Narrowphase-Kollision getestet. O(1) Insert/Remove, O(n) Step
-für gleichmäßig verteilte Objekte.
+Uniform grid: world divided into cells (cell size = largest shape extent).
+Each body registers itself in the overlapping cells. Only bodies in the same
+cell are tested for narrowphase collision. O(1) insert/remove, O(n) step
+for uniformly distributed objects.
 
 ### 8.3 Narrowphase
 
-| Paar | Algorithmus |
-|------|-------------|
-| Sphere–Sphere | Distanz der Mittelpunkte vs. Summe der Radien |
-| AABB–AABB | SAT auf 3 Achsen |
-| Sphere–AABB | Nächster Punkt auf AABB zu Kugelmittelpunkt |
-| Capsule–Sphere | Nächster Punkt auf Kapsel-Segment zu Kugelmittelpunkt |
-| Capsule–AABB | GJK (vereinfacht) |
-| Capsule–Capsule | Segment–Segment Distanz |
+| Pair | Algorithm |
+|------|-----------|
+| Sphere–Sphere | Distance between centers vs. sum of radii |
+| AABB–AABB | SAT on 3 axes |
+| Sphere–AABB | Closest point on AABB to sphere center |
+| Capsule–Sphere | Closest point on capsule segment to sphere center |
+| Capsule–AABB | GJK (simplified) |
+| Capsule–Capsule | Segment–segment distance |
 
 ### 8.4 Constraint Solver
 
-Sequentieller Impulse-Solver (iterativ, `set_iterations` steuert Qualität).
-Kontaktpunkte werden pro Step frisch berechnet — kein Warm-Starting in v1.
+Sequential impulse solver (iterative; `set_iterations` controls quality).
+Contact points are recomputed fresh each step — no warm-starting in v1.
 
-### 8.5 Kinematische Bodies
+### 8.5 Kinematic Bodies
 
-`set_kinematic(true)`: Position/Rotation werden direkt vom Spielcode gesetzt
-(z.B. animierte Plattform). Der Body kollidiert mit dynamischen Bodies und schiebt
-sie weg, wird selbst aber nicht von Kräften beeinflusst.
+`set_kinematic(true)`: position/rotation are set directly by game code
+(e.g. animated platform). The body collides with dynamic bodies and pushes
+them away, but is itself not affected by forces.

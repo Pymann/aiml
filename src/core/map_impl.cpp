@@ -36,9 +36,7 @@ namespace MapImpl {
              // Use structType for GEP.
         }
 
-        llvm::Type* i32 = ctx.builder.getInt32Ty();
-        llvm::Type* i64 = ctx.builder.getInt64Ty();
-        llvm::Type* i8 = ctx.builder.getInt8Ty();
+        llvm::Type* sz  = ctx.getSizeType();
         llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
 
         // 1. Set Size = 0
@@ -48,36 +46,43 @@ namespace MapImpl {
         // 2. Set Capacity
         llvm::Value* capPtr = ctx.builder.CreateStructGEP(structType, mapPtr, 1, "capPtr");
         ctx.builder.CreateStore(ctx.builder.getInt32(initialCapacity), capPtr);
-        
-        llvm::Value* capVal = ctx.builder.getInt32(initialCapacity);
-        llvm::Value* capVal64 = ctx.builder.CreateZExt(capVal, i64);
+
+        // All size arithmetic uses size_t (i64 on x86_64, i32 on wasm32) so
+        // the malloc/calloc call signatures match. Hardcoded i64 silently
+        // produced an `unreachable` stub on wasm32. Same class of bug as the
+        // list_impl initList fix.
+        llvm::Value* capVal   = ctx.builder.getInt32(initialCapacity);
+        llvm::Value* capValSz = ctx.builder.CreateZExtOrTrunc(capVal, sz);
 
         // 3. Alloc Occupied (i8 array)
-        llvm::Function* callocFunc = ctx.getFunction("calloc", ptrTy, {i64, i64});
-        llvm::Value* occupiedPtr = ctx.builder.CreateCall(callocFunc, {capVal64, ctx.builder.getInt64(1)}); 
-        
+        llvm::Function* callocFunc = ctx.getFunction("calloc", ptrTy, {sz, sz});
+        llvm::Value* occupiedPtr = ctx.builder.CreateCall(
+            callocFunc,
+            {capValSz, llvm::ConstantInt::get(sz, 1)});
+
         llvm::Value* occMember = ctx.builder.CreateStructGEP(structType, mapPtr, 2, "occPtr");
         ctx.builder.CreateStore(occupiedPtr, occMember);
 
         // 4. Alloc Keys
-        llvm::Value* keyOne = ctx.builder.CreateConstInBoundsGEP1_32(keyType, llvm::Constant::getNullValue(keyType->getPointerTo()), 1);
-        llvm::Value* keySize = ctx.builder.CreatePtrToInt(keyOne, i64);
-        llvm::Function* mallocFunc = ctx.getFunction("malloc", ptrTy, {i64});
-        
-        llvm::Value* keysSizeTotal = ctx.builder.CreateMul(keySize, capVal64);
-        llvm::Value* keysPtrRaw = ctx.builder.CreateCall(mallocFunc, {keysSizeTotal});
-        // BitCast not strictly needed for opaque pointers but good for clarity/compat
-        llvm::Value* keysPtr = keysPtrRaw; 
-        
+        llvm::Value* keyOne = ctx.builder.CreateConstInBoundsGEP1_32(
+            keyType, llvm::Constant::getNullValue(keyType->getPointerTo()), 1);
+        llvm::Value* keySize = ctx.builder.CreatePtrToInt(keyOne, sz);
+        llvm::Function* mallocFunc = ctx.getFunction("malloc", ptrTy, {sz});
+
+        llvm::Value* keysSizeTotal = ctx.builder.CreateMul(keySize, capValSz);
+        llvm::Value* keysPtrRaw    = ctx.builder.CreateCall(mallocFunc, {keysSizeTotal});
+        llvm::Value* keysPtr       = keysPtrRaw;
+
         llvm::Value* keysMember = ctx.builder.CreateStructGEP(structType, mapPtr, 3, "keysPtr");
         ctx.builder.CreateStore(keysPtr, keysMember);
 
         // 5. Alloc Values
-        llvm::Value* valOne = ctx.builder.CreateConstInBoundsGEP1_32(valType, llvm::Constant::getNullValue(valType->getPointerTo()), 1);
-        llvm::Value* valSize = ctx.builder.CreatePtrToInt(valOne, i64);
-        
-        llvm::Value* valsSizeTotal = ctx.builder.CreateMul(valSize, capVal64);
-        llvm::Value* valsPtr = ctx.builder.CreateCall(mallocFunc, {valsSizeTotal});
+        llvm::Value* valOne = ctx.builder.CreateConstInBoundsGEP1_32(
+            valType, llvm::Constant::getNullValue(valType->getPointerTo()), 1);
+        llvm::Value* valSize = ctx.builder.CreatePtrToInt(valOne, sz);
+
+        llvm::Value* valsSizeTotal = ctx.builder.CreateMul(valSize, capValSz);
+        llvm::Value* valsPtr       = ctx.builder.CreateCall(mallocFunc, {valsSizeTotal});
         
         llvm::Value* dataPtrMember = ctx.builder.CreateStructGEP(structType, mapPtr, 4, "valsPtr");
         ctx.builder.CreateStore(valsPtr, dataPtrMember);
@@ -174,23 +179,25 @@ namespace MapImpl {
             doubled, ctx.builder.getInt32(4), "growCap");
         ctx.builder.CreateStore(newCap, capPtr);
         
-        llvm::Function* reallocFunc = ctx.getFunction("realloc", llvm::PointerType::get(ctx.context, 0), 
-                {llvm::PointerType::get(ctx.context, 0), ctx.builder.getInt64Ty()});
-                
+        // Use target's size_t for realloc/ptrToInt arithmetic.
+        llvm::Type* sz = ctx.getSizeType();
+        llvm::Function* reallocFunc = ctx.getFunction("realloc", llvm::PointerType::get(ctx.context, 0),
+                {llvm::PointerType::get(ctx.context, 0), sz});
+
         // Keys realloc
         llvm::Value* keyOne = ctx.builder.CreateConstInBoundsGEP1_32(keyType, llvm::Constant::getNullValue(keyType->getPointerTo()), 1);
-        llvm::Value* keySize = ctx.builder.CreatePtrToInt(keyOne, ctx.builder.getInt64Ty());
-        llvm::Value* newKeysSize = ctx.builder.CreateMul(keySize, ctx.builder.CreateZExt(newCap, ctx.builder.getInt64Ty()));
-        
+        llvm::Value* keySize = ctx.builder.CreatePtrToInt(keyOne, sz);
+        llvm::Value* newKeysSize = ctx.builder.CreateMul(keySize, ctx.builder.CreateZExtOrTrunc(newCap, sz));
+
         llvm::Value* keysMember = ctx.builder.CreateStructGEP(mapType, mapPtr, 3);
         llvm::Value* oldKeys = ctx.builder.CreateLoad(llvm::PointerType::get(ctx.context, 0), keysMember);
         llvm::Value* newKeys = ctx.builder.CreateCall(reallocFunc, {oldKeys, newKeysSize});
         ctx.builder.CreateStore(newKeys, keysMember);
-        
+
         // Values realloc
         llvm::Value* valOne = ctx.builder.CreateConstInBoundsGEP1_32(valType, llvm::Constant::getNullValue(valType->getPointerTo()), 1);
-        llvm::Value* valSize = ctx.builder.CreatePtrToInt(valOne, ctx.builder.getInt64Ty());
-        llvm::Value* newValsSize = ctx.builder.CreateMul(valSize, ctx.builder.CreateZExt(newCap, ctx.builder.getInt64Ty()));
+        llvm::Value* valSize = ctx.builder.CreatePtrToInt(valOne, sz);
+        llvm::Value* newValsSize = ctx.builder.CreateMul(valSize, ctx.builder.CreateZExtOrTrunc(newCap, sz));
         
         llvm::Value* valsMember = ctx.builder.CreateStructGEP(mapType, mapPtr, 4);
         llvm::Value* oldVals = ctx.builder.CreateLoad(llvm::PointerType::get(ctx.context, 0), valsMember);
@@ -365,22 +372,23 @@ namespace MapImpl {
         llvm::Value* keyDest = ctx.builder.CreateInBoundsGEP(keyType, keysPtr, iVal);
         llvm::Value* keySrc = ctx.builder.CreateInBoundsGEP(keyType, keysPtr, nextIdx);
         
+        llvm::Type* sz = ctx.getSizeType();
         llvm::Value* keyOne = ctx.builder.CreateConstInBoundsGEP1_32(keyType, llvm::Constant::getNullValue(keyType->getPointerTo()), 1);
-        llvm::Value* keySize = ctx.builder.CreatePtrToInt(keyOne, ctx.builder.getInt64Ty());
-        llvm::Value* keyBytes = ctx.builder.CreateMul(ctx.builder.CreateZExt(count, ctx.builder.getInt64Ty()), keySize);
-        
-        llvm::Function* memmoveFunc = ctx.getFunction("memmove", llvm::PointerType::get(ctx.context, 0), 
-             {llvm::PointerType::get(ctx.context, 0), llvm::PointerType::get(ctx.context, 0), ctx.builder.getInt64Ty()});
-             
+        llvm::Value* keySize = ctx.builder.CreatePtrToInt(keyOne, sz);
+        llvm::Value* keyBytes = ctx.builder.CreateMul(ctx.builder.CreateZExtOrTrunc(count, sz), keySize);
+
+        llvm::Function* memmoveFunc = ctx.getFunction("memmove", llvm::PointerType::get(ctx.context, 0),
+             {llvm::PointerType::get(ctx.context, 0), llvm::PointerType::get(ctx.context, 0), sz});
+
         ctx.builder.CreateCall(memmoveFunc, {keyDest, keySrc, keyBytes});
-        
+
         // Move Values
         llvm::Value* valDest = ctx.builder.CreateInBoundsGEP(valType, valsPtr, iVal);
         llvm::Value* valSrc = ctx.builder.CreateInBoundsGEP(valType, valsPtr, nextIdx);
-        
+
         llvm::Value* valOne = ctx.builder.CreateConstInBoundsGEP1_32(valType, llvm::Constant::getNullValue(valType->getPointerTo()), 1);
-        llvm::Value* elemsSize = ctx.builder.CreatePtrToInt(valOne, ctx.builder.getInt64Ty());
-        llvm::Value* valBytes = ctx.builder.CreateMul(ctx.builder.CreateZExt(count, ctx.builder.getInt64Ty()), elemsSize);
+        llvm::Value* elemsSize = ctx.builder.CreatePtrToInt(valOne, sz);
+        llvm::Value* valBytes = ctx.builder.CreateMul(ctx.builder.CreateZExtOrTrunc(count, sz), elemsSize);
         
         ctx.builder.CreateCall(memmoveFunc, {valDest, valSrc, valBytes});
         

@@ -37,7 +37,10 @@
 #include <fcntl.h>
 #include <sys/select.h>
 #include <cerrno>
-#include <execinfo.h>
+#ifndef __EMSCRIPTEN__
+#  include <execinfo.h>
+#  include <sys/syscall.h>
+#endif
 #include <signal.h>
 
 /* ── Debug logging (AIML_DEBUG=1 env var) ─────────────────────────────────── */
@@ -47,14 +50,21 @@ static int g_aiml_debug = (getenv("AIML_DEBUG") != nullptr) ? 1 : 0;
 
 /* ── Crash handler (auto-installed via constructor) ──────────────────────── */
 
-static void aiml_crash_handler(int sig, siginfo_t*, void*) {
-    char msg[128];
-    int n = snprintf(msg, sizeof(msg), "\n=== AIML CRASH (signal %d) ===\n", sig);
+#ifndef __EMSCRIPTEN__
+static void aiml_crash_handler(int sig, siginfo_t* info, void*) {
+    char msg[256];
+    int n = snprintf(msg, sizeof(msg),
+        "\n=== AIML CRASH (signal %d at addr=%p tid=%ld) ===\n",
+        sig, info ? info->si_addr : nullptr, (long)syscall(SYS_gettid));
     (void)write(STDERR_FILENO, msg, (size_t)n);
     void* bt[64];
     int cnt = backtrace(bt, 64);
+    n = snprintf(msg, sizeof(msg), "backtrace: %d frames\n", cnt);
+    (void)write(STDERR_FILENO, msg, (size_t)n);
+    /* Flush stderr BEFORE backtrace_symbols_fd, so we get at least frame count
+     * even if symbol resolution itself faults. */
+    fsync(STDERR_FILENO);
     backtrace_symbols_fd(bt, cnt, STDERR_FILENO);
-    /* Flush stderr before re-raising */
     fsync(STDERR_FILENO);
     struct sigaction sa = {};
     sa.sa_handler = SIG_DFL;
@@ -72,6 +82,7 @@ static void aiml_install_crash_handler() {
     sigaction(SIGABRT, &sa, nullptr);
     sigaction(SIGBUS,  &sa, nullptr);
 }
+#endif // !__EMSCRIPTEN__
 
 /* ── Internal structs ─────────────────────────────────────────────────────── */
 
@@ -612,9 +623,13 @@ static void mirror_recv_from_peers(AimlMirrorSession* s) {
                 }
                 process_packet(s, peer, full.data(), (int)full.size());
             } else {
-                /* WS: drain all available frames (same as TCP path) */
-                int ws_fd = peer->transport.ws_ptr ? aiml_ws_fd(peer->transport.ws_ptr) : -1;
-                if (ws_fd < 0 || !tcp_readable(ws_fd)) break;
+                /* WS: drain all available frames. Use aiml_ws_poll instead of
+                 * tcp_readable(aiml_ws_fd) — the "fd" is target-specific
+                 * (real socket on native, opaque handle on wasm/emscripten). */
+                if (!peer->transport.ws_ptr) break;
+                int pr = aiml_ws_poll(peer->transport.ws_ptr, 0);
+                if (pr == 0) break;                       /* no data ready */
+                if (pr < 0) { disconnected.push_back(peer); break; }
                 int32_t msg_len = 0;
                 void* msg = aiml_ws_recv_raw(peer->transport.ws_ptr, &msg_len);
                 if (!msg || msg_len <= 0) { disconnected.push_back(peer); break; }

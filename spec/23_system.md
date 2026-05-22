@@ -168,6 +168,62 @@
 - Callers are expected to check the returned handle before `io.read`, `io.write`
   or `io.close`.
 
+## Proposed Binary File I/O Extensions (Not Implemented Yet)
+
+For large binary model imports, the current text-oriented `io.open/io.read/io.read_all`
+API is not sufficient. The following additions are proposed.
+
+Status: **proposed, not implemented**
+
+```yaml
+# Binary open
+- decl: [f, file_handle]
+- set: [f, { call: [io.open_binary, "model.bin"] }]
+
+# Sequential byte reads
+- decl: [hdr, buffer<u8>, { call: [io.read_bytes, f, 64] }]
+
+# Position control
+- decl: [pos, i64, { call: [io.tell, f] }]
+- call: [io.seek, f, 1024]
+- call: [io.skip, f, 256]
+
+# Parallel-friendly range reads
+- decl: [block, buffer<u8>, { call: [io.read_at, f, 1048576, 65536] }]
+
+# Typed helpers for small scalar reads
+- decl: [flag, i32, { call: [io.read_bool, f] }]
+- decl: [magic, i32, { call: [io.read_i32_le, f] }]
+- decl: [count, i64, { call: [io.read_i64_le, f] }]
+- decl: [v, f32, { call: [io.read_f32_le, f] }]
+- decl: [t, f64, { call: [io.read_f64_le, f] }]
+```
+
+### Proposed Functions
+
+| Function | Signature | Status | Description |
+|----------|-----------|--------|-------------|
+| `io.open_binary` | `io.open_binary(path: string\|path) -> file_handle` | not implemented | Opens a file in binary read mode. |
+| `io.read_bytes` | `io.read_bytes(f: file_handle, n: i32) -> buffer<u8>` | not implemented | Reads exactly `n` bytes or fewer at EOF into a byte buffer. |
+| `io.tell` | `io.tell(f: file_handle) -> i64` | not implemented | Returns current file position in bytes. |
+| `io.seek` | `io.seek(f: file_handle, pos: i64) -> void` | not implemented | Moves the file position to `pos`. |
+| `io.skip` | `io.skip(f: file_handle, delta: i64) -> void` | not implemented | Moves the file position forward by `delta`. |
+| `io.read_at` | `io.read_at(f: file_handle, offset: i64, n: i32) -> buffer<u8>` | not implemented | Reads a byte range without relying on the shared sequential cursor. |
+| `io.read_bool` | `io.read_bool(f: file_handle) -> i32` | not implemented | Reads one boolean byte and advances the cursor. |
+| `io.read_i32_le` | `io.read_i32_le(f: file_handle) -> i32` | not implemented | Reads one little-endian `i32` and advances the cursor. |
+| `io.read_u32_le` | `io.read_u32_le(f: file_handle) -> i64` | not implemented | Reads one little-endian unsigned `u32`. |
+| `io.read_i64_le` | `io.read_i64_le(f: file_handle) -> i64` | not implemented | Reads one little-endian `i64`. |
+| `io.read_u64_le` | `io.read_u64_le(f: file_handle) -> i64` | not implemented | Reads one little-endian unsigned `u64`. |
+| `io.read_f32_le` | `io.read_f32_le(f: file_handle) -> f32` | not implemented | Reads one IEEE754 `f32`. |
+| `io.read_f64_le` | `io.read_f64_le(f: file_handle) -> f64` | not implemented | Reads one IEEE754 `f64`. |
+
+### Design Notes
+
+- `io` owns file and stream access.
+- `buffer` owns in-memory interpretation of bytes.
+- `io.read_at` is especially important for parallel import of very large files
+  (for example, multiple workers reading distinct matrix ranges from the same file).
+
 ## Process State Semantics
 
 - `process.returncode` is nullable (`i32?`).

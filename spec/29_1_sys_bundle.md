@@ -1,181 +1,181 @@
-Was fehlt für sys.bundle / sys.exec
-1. Aktuelle Implementierung (Ist-Zustand)
-Code-Typ — vollständig implementiert in code_impl.cpp:
+What is missing for sys.bundle / sys.exec
+1. Current Implementation (Actual State)
+Code type — fully implemented in code_impl.cpp:
 
 
 Struct: { i8* id, i8* source, i64 src_len, i8* entry }
-Methoden: contains(), size(), toString(), merge() — alle funktionieren.
+Methods: contains(), size(), toString(), merge() — all working.
 
-sys.bundle — nicht implementiert (kein Handler in builtin_registry.cpp, kein Intercept in ast_compiler_call.cpp)
+sys.bundle — not implemented (no handler in builtin_registry.cpp, no intercept in ast_compiler_call.cpp)
 
-sys.load_bundle — nicht implementiert
+sys.load_bundle — not implemented
 
-sys.exec — nicht implementiert
+sys.exec — not implemented
 
-Infrastruktur existiert bereits in context.h:
+Infrastructure already exists in context.h:
 
-FunctionInfo::sourceYaml — YAML-Dump des Funktions-AST
-FunctionInfo::referencedTypes — transitive Typ-Abhängigkeiten
-ClassInfo::sourceYaml / ClassInfo::referencedTypes — dasselbe für Klassen
-ctx.bundleTrackingTarget — wird gesetzt während Kompilierung, tracked Typ-Abhängigkeiten
-2. Spec-Probleme (29_serialize.md)
-Inkonsistenz: Code-Struct-Definition stimmt nicht mit Implementierung überein:
+FunctionInfo::sourceYaml — YAML dump of the function AST
+FunctionInfo::referencedTypes — transitive type dependencies
+ClassInfo::sourceYaml / ClassInfo::referencedTypes — same for classes
+ctx.bundleTrackingTarget — set during compilation, tracks type dependencies
+2. Spec Issues (29_serialize.md)
+Inconsistency: Code struct definition does not match the implementation:
 
-Spec sagt	Impl hat
-id: string (SHA-256)	id: i8* — immer leer ""
-start_call: map (AST-Node)	entry: i8* — einfacher Funktionsname als String
-chunks: list<string>	source: i8* + src_len: i64 — kein Chunks-Array
-Unklare Semantik:
+Spec says	Impl has
+id: string (SHA-256)	id: i8* — always empty ""
+start_call: map (AST node)	entry: i8* — simple function name as string
+chunks: list<string>	source: i8* + src_len: i64 — no chunks array
+Unclear semantics:
 
-Was passiert bei sys.bundle im AOT-Modus (nicht JIT)? Macht Ausführen zur Laufzeit keinen Sinn.
-sys.load_bundle — "lädt Definitionen in aktuelle Umgebung" — das bedeutet dynamische Rekompilierung des YAML zur Laufzeit: extrem komplex, vermutlich nur in JIT-Modus sinnvoll.
-Enum-Definitionen haben kein sourceYaml → können sie überhaupt gebundelt werden?
-Was passiert bei sys.bundle auf eine Funktion die externe C-Bibliotheken nutzt?
-3. Was fehlt konkret (Implementierung)
-sys.bundle (Compile-Time-Operation):
+What happens with sys.bundle in AOT mode (not JIT)? Executing at runtime makes no sense there.
+sys.load_bundle — "loads definitions into the current environment" — this means dynamic recompilation of YAML at runtime: extremely complex, probably only useful in JIT mode.
+Enum definitions have no sourceYaml → can they be bundled at all?
+What happens with sys.bundle on a function that uses external C libraries?
+3. What Is Concretely Missing (Implementation)
+sys.bundle (compile-time operation):
 
-Handler in builtin_registry.cpp als FuncHandler
-Selector-Argument: string-Literal zur Kompilierzeit
-Dependency-Closure-Algorithmus: Ziel + referencedTypes rekursiv → alle sourceYaml zusammensammeln
-Code-Objekt mit zusammengesetztem YAML als source + entry = selector erstellen
+Handler in builtin_registry.cpp as FuncHandler
+Selector argument: string literal at compile time
+Dependency closure algorithm: target + referencedTypes recursively → collect all sourceYaml
+Create code object with assembled YAML as source + entry = selector
 sys.exec (JIT-only):
 
 Handler in builtin_registry.cpp
-Code.source YAML parsen + in neuem AIML-Compiler-Kontext ausführen (via params.compileCallback)
-Rückgabewert? Fehlerbehandlung?
-sys.load_bundle — unklar ob wirklich nötig. Alternativ: nur sys.exec implementieren.
+Parse Code.source YAML + execute in a new AIML compiler context (via params.compileCallback)
+Return value? Error handling?
+sys.load_bundle — unclear whether really needed. Alternative: implement only sys.exec.
 
-4. Realistischer Plan
-Bevor wir implementieren, sollte die Spec folgende Fragen beantworten:
+4. Realistic Plan
+Before implementing, the spec should answer the following questions:
 
-Soll sys.exec / sys.load_bundle nur im JIT-Modus funktionieren oder auch AOT?
-Soll sys.bundle Enums einschließen?
-Was ist der Rückgabewert von sys.exec?
-Brauchen wir sys.load_bundle überhaupt, oder reicht sys.exec allein?
-Soll der Code-Typ die Spec-Definition (mit start_call: map, chunks) bekommen — oder die einfachere Implementierung (source: string, entry: string) in der Spec dokumentieren?
-Soll ich die Spec zuerst präzisieren und dann implementieren?
+Should sys.exec / sys.load_bundle work only in JIT mode or also in AOT?
+Should sys.bundle include enums?
+What is the return value of sys.exec?
+Do we need sys.load_bundle at all, or is sys.exec alone sufficient?
+Should the Code type get the spec definition (with start_call: map, chunks) — or should the simpler implementation (source: string, entry: string) be documented in the spec?
+Should I clarify the spec first and then implement?
 
-Genau, warum du das Code Object anders implementiert hast als spezifiziert habe ich nicht verstanden, die idee war, dass man aiml-pieces auf chunks pushen kann. Natürlich muss man auch einen start_call angeben können, damit man den entrypoint mit parametern kennen kann. Natürlich ist eine Liste von Strings nicht unbedingt nötig, aber es representiert im prinzip ein aiml file, dass auch eine liste von instruktionen ist. Im chunks sind diese dann aber serialisiert, bzw der ursprüngliche yaml string. Wir haben nun, dass problem, dass wenn ein Code-Objekt z.b. Klasse y benutzt, dann müssen eventuell gesetzte werte natürlich mit im Code-Objekt ablegen. weshalb wir eigentlich 2 chunks brauchen, einmal code_chunk und einmal data_chunk. Oder man tut alles in code_chunk mit direkten serialise befehlen? natürlich soll das auch im AOT gehen, dann müssen wir die libaiml.so mitlinken, die wir bereits gebaut haben. Wieso haben enum-defintionen kein source-yaml? Das kann und muss dann wohl gesetzt werden. DIe finale Idee ist, dass z.b. ein Agent direkt über Netzwerk ein Code-Object gestreamt bekommt und ausführen kann. Wie z.b. ein jenkins-agent, bloß groovy und cps trafos sind abartig. Bei nutzung externe C-Libs müssen sie bei der Ausführung eben auch wieder vorhanden sein, wir schicken ja direkt aiml code im Code-Object hin und her, wieso ist das ein problem? Dann analysiere mal weiter mit meiner Eingabe!
-Sehr klärend. Lass mich das jetzt systematisch analysieren:
+Exactly, I did not understand why you implemented the Code Object differently than specified — the idea was that you can push aiml-pieces onto chunks. Of course you also need to be able to specify a start_call, so you know the entrypoint with parameters. A list of strings is not strictly necessary, but it essentially represents an aiml file that is also a list of instructions. In chunks they are then serialized, i.e. the original yaml string. We now have the problem that if a Code object e.g. uses class y, then any set values must of course also be stored in the Code object. Which is why we actually need 2 chunks, one code_chunk and one data_chunk. Or do you put everything in code_chunk with direct serialize commands? Of course this should also work in AOT mode, then we need to link against libaiml.so, which we have already built. Why do enum definitions have no source yaml? That can and must then be set. The final idea is that e.g. an agent receives a Code object directly streamed over the network and can execute it. Like e.g. a jenkins agent, except groovy and cps transformations are bizarre. When using external C libs they simply need to be present again at execution time, we are sending aiml code directly in the Code object back and forth, why is that a problem? Then analyze further with my input!
+Very clarifying. Let me now analyze this systematically:
 
-Architektur-Analyse: Code-Objekt & sys.bundle/exec
-1. Code-Struct: Was die Spec meinte vs. Impl
-Die Implementierung hat das Konzept falsch vereinfacht. Korrekt:
+Architecture Analysis: Code Object & sys.bundle/exec
+1. Code Struct: What the Spec Meant vs. Impl
+The implementation incorrectly oversimplified the concept. Correct:
 
 
 __aiml_code_t:
-  id:          string   → SHA-256 von code_chunk (Fingerprint)
-  start_call:  string   → serialisierter YAML-Call-Node: '{"call":["worker_task",...]}'
-  code_chunk:  string   → AIML-Definitionen (enum, class, def — statisch)
-  data_chunk:  string   → AIML-Set-Statements (laufzeitstatus, via sys.deserialize)
-Warum zwei Chunks? Genau richtig erkannt:
+  id:          string   → SHA-256 of code_chunk (fingerprint)
+  start_call:  string   → serialized YAML call node: '{"call":["worker_task",...]}'
+  code_chunk:  string   → AIML definitions (enum, class, def — static)
+  data_chunk:  string   → AIML set statements (runtime state, via sys.deserialize)
+Why two chunks? Correctly identified:
 
 
-# code_chunk enthält:
+# code_chunk contains:
 - class: { name: Payload, members: [[id, i32]] }
 - def: { name: worker_task, args: [[p, Payload]], body: [...] }
 
-# data_chunk enthält (serialisierter Zustand):
+# data_chunk contains (serialized state):
 - decl: [p, Payload]
 - set: [p, { call: [sys.deserialize, '{"__type":"Payload","id":42}', "Payload"] }]
 
 # start_call:
 '{"call": ["worker_task", "p"]}'
-Wenn ein Agent das erhält: code_chunk compilieren → data_chunk ausführen → start_call aufrufen. ✓
+When an agent receives this: compile code_chunk → execute data_chunk → call start_call. ✓
 
-2. Was in der Impl fehlt/falsch ist
-code_impl.cpp — aktueller Struct:
+2. What Is Missing/Wrong in the Impl
+code_impl.cpp — current struct:
 
 
-// IST (falsch):
+// ACTUAL (wrong):
 { i8* id, i8* source, i64 src_len, i8* entry }
 
-// SOLL:
+// SHOULD BE:
 { i8* id, i8* start_call, i8* code_chunk, i8* data_chunk }
-Methoden die noch fehlen:
+Methods still missing:
 
-push(chunk: string) → hängt an code_chunk an (für manuelles Aufbauen)
-push_data(chunk: string) → hängt an data_chunk an
-set_entry(call_yaml: string) → setzt start_call
-Enum-sourceYaml fehlt komplett:
+push(chunk: string) → appends to code_chunk (for manual assembly)
+push_data(chunk: string) → appends to data_chunk
+set_entry(call_yaml: string) → sets start_call
+Enum sourceYaml is completely missing:
 
 
-// context.h hat für Enums nur:
+// context.h has for enums only:
 std::map<std::string, std::map<std::string, int>> enums;
-// Kein Platz für die YAML-Quelle!
+// No place for the YAML source!
 
-// Brauchen wir:
-std::map<std::string, std::string> enumSources;  // name → YAML-String
-In ast_compiler.cpp muss beim Verarbeiten eines enum:-Nodes ctx.enumSources[name] = yamlDump gesetzt werden.
+// We need:
+std::map<std::string, std::string> enumSources;  // name → YAML string
+In ast_compiler.cpp, when processing an enum: node, ctx.enumSources[name] = yamlDump must be set.
 
-3. sys.bundle — Was das tun muss
+3. sys.bundle — What It Must Do
 
-# Syntax-Optionen:
+# Syntax options:
 - set: [pkg, { call: [sys.bundle, "worker_task"] }]
-# oder mit explizitem Aufruf:
+# or with explicit call:
 - set: [pkg, { call: [sys.bundle, "worker_task", "p", some_payload] }]
-# oder auf Instanz (für Daten-Bundle):
+# or on instance (for data bundle):
 - set: [pkg, { call: [sys.bundle, p] }]
-Compile-Time-Operation (Intercept wie sys.serialize):
+Compile-time operation (intercept like sys.serialize):
 
 
-1. Selector auflösen → ctx.functions["worker_task"] oder ctx.classes["Payload"]
-2. sourceYaml holen
-3. Transitive referencedTypes sammeln:
-   - für jeden referenced type: sourceYaml + rekursiv deren deps
+1. Resolve selector → ctx.functions["worker_task"] or ctx.classes["Payload"]
+2. Get sourceYaml
+3. Collect transitive referencedTypes:
+   - for each referenced type: sourceYaml + recursively their deps
    - enums: ctx.enumSources[name]
-4. code_chunk = join(alle sourcYamls)
-5. data_chunk = "" (initial leer; bei Instanz-Bundle: sys.serialize der Felder)
-6. id = SHA-256 von code_chunk (oder simpler Hash für jetzt)
-7. start_call = serialisierter YAML-Call
-8. Code-Objekt erstellen
-Instanz-Bundle (sys.bundle(p) wobei p: Payload):
+4. code_chunk = join(all sourceYamls)
+5. data_chunk = "" (initially empty; for instance bundle: sys.serialize of fields)
+6. id = SHA-256 of code_chunk (or simpler hash for now)
+7. start_call = serialized YAML call
+8. Create code object
+Instance bundle (sys.bundle(p) where p: Payload):
 
 
 code_chunk = Payload.sourceYaml + transitive deps
-data_chunk = generierter AIML-Code:
+data_chunk = generated AIML code:
   "- decl: [p, Payload]\n- set: [p, {call: [sys.deserialize, '<json>', 'Payload']}]\n"
-start_call = "" (kein automatischer Einstiegspunkt)
+start_call = "" (no automatic entry point)
 4. sys.exec — AOT via libaiml.so
-Der Schlüssel ist richtig: wir schicken AIML-Quellcode, kein IR. Der Empfänger braucht nur:
+The key insight is correct: we send AIML source code, not IR. The receiver only needs:
 
-libaiml.so (AIML-Compiler+Runtime als Shared Library)
-Dieselben C-Bibliotheken (yaml-cpp, LLVM-18) wie der Sender
-libaiml.so API (was wir bauen müssen):
+libaiml.so (AIML compiler+runtime as shared library)
+The same C libraries (yaml-cpp, LLVM-18) as the sender
+libaiml.so API (what we need to build):
 
 
-// Öffentliche C-API für AOT sys.exec:
+// Public C API for AOT sys.exec:
 int aiml_exec(const char* code_chunk, const char* data_chunk, const char* start_call);
-int aiml_load(const char* code_chunk);   // für sys.load_bundle
-sys.exec Ablauf:
+int aiml_load(const char* code_chunk);   // for sys.load_bundle
+sys.exec flow:
 
 
-JIT-Modus:  ctx.params.compileCallback(code_chunk + "\n" + data_chunk + "\n" + start_call_as_instr)
-AOT-Modus:  dlopen("libaiml.so") → aiml_exec(code, data, call) → dlclose()
-5. Spec muss diese Punkte präzisieren
-Die aktuelle spec/29_serialize.md muss folgendes klären:
+JIT mode:  ctx.params.compileCallback(code_chunk + "\n" + data_chunk + "\n" + start_call_as_instr)
+AOT mode:  dlopen("libaiml.so") → aiml_exec(code, data, call) → dlclose()
+5. Spec Must Clarify These Points
+The current spec/29_serialize.md must clarify the following:
 
-Code-Struct (die reflektierte Definition stimmt nicht mit der Impl überein):
+Code struct (the reflected definition does not match the impl):
 
 - class:
     name: Code
     members:
-      - [id,         string]   # SHA-256 von code_chunk
-      - [start_call, string]   # YAML-serialisierter Call-Node
-      - [code_chunk, List<string>]   # AIML-Defs (enum/class/def)
-      - [data_chunk, List<string>]   # AIML-State-Inits (decl/set via deserialize)
+      - [id,         string]   # SHA-256 of code_chunk
+      - [start_call, string]   # YAML-serialized call node
+      - [code_chunk, List<string>]   # AIML defs (enum/class/def)
+      - [data_chunk, List<string>]   # AIML state inits (decl/set via deserialize)
     methods:
-      - set_entry(call_yaml: string) → void   # setzt start_call
+      - set_entry(call_yaml: string) → void   # sets start_call
       - contains(name: string)       → bool
       - toString()                   → string # = code_chunk + data_chunk
       - merge(other: Code)           → Code
 sys.bundle:
 
-Enums werden mit ihrer Definition eingeschlossen
-Externe C-Libs: nicht im Bundle — Empfänger braucht dieselbe Laufzeitumgebung
-AOT-Modus: funktioniert via libaiml.so
+Enums are included with their definition
+External C libs: not in the bundle — receiver needs the same runtime environment
+AOT mode: works via libaiml.so
 sys.exec:
 
-JIT: direkt im selben Prozess
-AOT: via libaiml_exec() aus libaiml.so
-Rückgabewert: i32 (Exit-Code)
+JIT: directly in the same process
+AOT: via libaiml_exec() from libaiml.so
+Return value: i32 (exit code)

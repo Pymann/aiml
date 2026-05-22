@@ -1,141 +1,141 @@
-# Kapitel 32.5 — Proxy-Unterstützung
+# Chapter 32.5 — Proxy Support
 
-> **Motivation:** In Unternehmensnetzen kommt man ohne Proxy-Unterstützung nicht ins Internet.
-> AIML unterstützt alle gängigen Proxy-Protokolle und Authentifizierungsmethoden mit
-> sauberer Trennung zwischen Proxy-Auth, Proxy-Zertifikat und Ziel-TLS-Konfiguration —
-> genau die Schichtung, die in Go, Python und curl regelmäßig bricht.
+> **Motivation:** In corporate networks, internet access requires proxy support.
+> AIML supports all common proxy protocols and authentication methods with
+> clean separation between proxy auth, proxy certificate, and target TLS configuration —
+> exactly the layering that regularly breaks in Go, Python, and curl.
 
 ---
 
-## 1. Das Problem: Geschichtete Komplexität
+## 1. The Problem: Layered Complexity
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│ AIML-Client                                                           │
+│ AIML client                                                           │
 │                                                                        │
-│  TCP → [Proxy-Auth] → Proxy-Server:Port                               │
+│  TCP → [Proxy auth] → Proxy server:port                               │
 │                │                                                       │
-│                ├── HTTP CONNECT  ─── Tunnel → Zielserver:Port         │
-│                ├── SOCKS4/4a    ─── Tunnel → Zielserver:Port         │
-│                └── SOCKS5       ─── Tunnel → Zielserver:Port         │
+│                ├── HTTP CONNECT  ─── Tunnel → Target server:port      │
+│                ├── SOCKS4/4a    ─── Tunnel → Target server:port      │
+│                └── SOCKS5       ─── Tunnel → Target server:port      │
 │                                        │                              │
 │                          ┌─────────────▼──────────────────────┐      │
-│                          │ Szenario A: SSL-Inspection (MITM)   │      │
-│                          │  Proxy terminiert TLS, re-signiert  │      │
-│                          │  Ziel-Cert mit Corp-Inspection-CA   │      │
+│                          │ Scenario A: SSL inspection (MITM)   │      │
+│                          │  Proxy terminates TLS, re-signs     │      │
+│                          │  target cert with corp inspection CA │      │
 │                          └─────────────────────────────────────┘      │
 │                          ┌─────────────────────────────────────┐      │
-│                          │ Szenario B: Transparenter Tunnel     │      │
-│                          │  TLS direkt mit Ziel (mTLS möglich) │      │
+│                          │ Scenario B: Transparent tunnel       │      │
+│                          │  TLS directly with target (mTLS ok) │      │
 │                          └─────────────────────────────────────┘      │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-**Warum Libraries versagen:**
-- NTLM: Libraries reconnecten nach `407` → NTLM-Kontext verloren (Verbindung muss offen bleiben)
-- Kerberos: Erfordert GSSAPI-Integration, die die meisten HTTP-Stacks nicht einbauen
-- SSL-Inspection + eigene Ziel-CA: Zwei separate Trust-Kontexte, die meistens gekoppelt sind
-- SOCKS5 + GSSAPI-Auth: Selten vollständig implementiert
+**Why libraries fail:**
+- NTLM: libraries reconnect after `407` → NTLM context lost (connection must stay open)
+- Kerberos: requires GSSAPI integration, which most HTTP stacks do not include
+- SSL inspection + custom target CA: two separate trust contexts that are usually coupled
+- SOCKS5 + GSSAPI auth: rarely fully implemented
 
 ---
 
-## 2. Typen
+## 2. Types
 
-| Typ                   | LLVM  | Beschreibung |
+| Type                   | LLVM  | Description |
 |-----------------------|-------|--------------|
-| `proxy_config_handle` | `i8*` | Konfigurationsobjekt — beschreibt Protokoll, Adresse und Auth |
+| `proxy_config_handle` | `i8*` | Configuration object — describes protocol, address, and auth |
 
-`proxy_config_handle` ist **kein Socket**. Es wird einmalig erstellt, konfiguriert,
-und dann auf beliebig viele Sockets angewendet (vor `connect`).
+`proxy_config_handle` is **not a socket**. It is created once, configured,
+and then applied to any number of sockets (before `connect`).
 
 ---
 
-## 3. Proxy-Protokolle
+## 3. Proxy Protocols
 
 ### 3.1 HTTP CONNECT (RFC 7231)
 
-Standardprotokoll für Web-Proxies. Der Proxy öffnet einen TCP-Tunnel zum Ziel.
+Standard protocol for web proxies. The proxy opens a TCP tunnel to the target.
 
 ```aiml
 - decl: [px, proxy_config_handle]
 - set: [px, { call: [proxy.new, "proxy.example.com", 8080] }]
-# Typ ist standardmäßig HTTP CONNECT
+# Type is HTTP CONNECT by default
 ```
 
-Ablauf:
+Flow:
 ```
 Client → Proxy:  CONNECT targethost:443 HTTP/1.1\r\nHost: targethost:443\r\n\r\n
 Proxy  → Client: HTTP/1.1 200 Connection Established\r\n\r\n
-Client → Proxy:  [rohe TLS-Bytes, die Proxy weiterleitet]
+Client → Proxy:  [raw TLS bytes that the proxy forwards]
 ```
 
 ### 3.2 SOCKS4
 
-Einfachstes Proxy-Protokoll. TCP only, kein Auth, kein IPv6, kein DNS-at-Proxy.
+Simplest proxy protocol. TCP only, no auth, no IPv6, no DNS-at-proxy.
 
 ```aiml
 - decl: [px, proxy_config_handle]
 - set: [px, { call: [proxy.new_socks4, "socks4proxy.example.com", 1080] }]
 ```
 
-Ablauf (binäres Protokoll):
+Flow (binary protocol):
 ```
 Client → Proxy:  VER=4, CMD=1(CONNECT), DSTPORT, DSTIP, USERID\0
 Proxy  → Client: VER=0, REP=90(granted) / 91(rejected), PORT, IP
-Client → Proxy:  [rohe Verbindungsbytes]
+Client → Proxy:  [raw connection bytes]
 ```
 
-Einschränkungen: Nur IPv4-Adressen; Hostname muss Client-seitig aufgelöst werden.
+Limitations: IPv4 addresses only; hostname must be resolved client-side.
 
 ### 3.3 SOCKS4a
 
-Erweiterung von SOCKS4 mit DNS-Auflösung am Proxy (wichtig für interne Hostnamen).
+Extension of SOCKS4 with DNS resolution at the proxy (important for internal hostnames).
 
 ```aiml
 - decl: [px, proxy_config_handle]
 - set: [px, { call: [proxy.new_socks4a, "socks4aproxy.example.com", 1080] }]
 ```
 
-Wenn DSTIP = `0.0.0.x` (x ≠ 0) und nach USERID ein Hostname folgt, löst der Proxy
-den Namen auf. AIML wählt SOCKS4a automatisch wenn der Ziel-Host kein IPv4-Literal ist.
+When DSTIP = `0.0.0.x` (x ≠ 0) and a hostname follows after USERID, the proxy
+resolves the name. AIML automatically selects SOCKS4a when the target host is not an IPv4 literal.
 
 ### 3.4 SOCKS5 (RFC 1928)
 
-Vollständigstes Protokoll: IPv4/IPv6/Hostname, Auth, TCP + UDP.
+Most complete protocol: IPv4/IPv6/hostname, auth, TCP + UDP.
 
 ```aiml
 - decl: [px, proxy_config_handle]
 - set: [px, { call: [proxy.new_socks5, "tor.local", 9050] }]
-# Kein Auth → Tor / anonyme SOCKS5-Proxies
+# No auth → Tor / anonymous SOCKS5 proxies
 
 - decl: [px2, proxy_config_handle]
 - set: [px2, { call: [proxy.new_socks5, "socks5.corp.com", 1080] }]
 - call: [px2.set_auth_basic, "user", "pass"]
-# SOCKS5 Username/Password-Auth (RFC 1929)
+# SOCKS5 username/password auth (RFC 1929)
 ```
 
-Ablauf:
+Flow:
 ```
-(1) Auth-Negotiation:
+(1) Auth negotiation:
     Client → Proxy:  VER=5, NMETHODS, [METHODS...]
-                     Methods: 0x00=Kein Auth, 0x02=User/Pass, 0x01=GSSAPI
-    Proxy  → Client: VER=5, METHOD (gewählt)
+                     Methods: 0x00=No auth, 0x02=User/Pass, 0x01=GSSAPI
+    Proxy  → Client: VER=5, METHOD (chosen)
 
-(2) Auth (falls METHOD=0x02):
+(2) Auth (if METHOD=0x02):
     Client → Proxy:  VER=1, ULEN, USERNAME, PLEN, PASSWORD
-    Proxy  → Client: VER=1, STATUS (0x00=Erfolg)
+    Proxy  → Client: VER=1, STATUS (0x00=success)
 
-(3) CONNECT-Request:
+(3) CONNECT request:
     Client → Proxy:  VER=5, CMD=1, RSV=0, ATYP, DST.ADDR, DST.PORT
                      ATYP: 0x01=IPv4, 0x03=Hostname, 0x04=IPv6
-    Proxy  → Client: VER=5, REP=0(Erfolg), RSV, BNDATYP, BND.ADDR, BND.PORT
+    Proxy  → Client: VER=5, REP=0(success), RSV, BNDATYP, BND.ADDR, BND.PORT
 
-(4) Client → Proxy:  [rohe Verbindungsbytes]
+(4) Client → Proxy:  [raw connection bytes]
 ```
 
-### 3.5 HTTPS-Proxy (HTTP CONNECT über TLS)
+### 3.5 HTTPS Proxy (HTTP CONNECT over TLS)
 
-Seltenerer Fall: Das Proxy-Kontrollprotokoll selbst ist TLS-verschlüsselt.
+Less common case: the proxy control protocol itself is TLS-encrypted.
 
 ```aiml
 - decl: [px, proxy_config_handle]
@@ -149,50 +149,50 @@ Seltenerer Fall: Das Proxy-Kontrollprotokoll selbst ist TLS-verschlüsselt.
 
 ---
 
-## 4. Authentifizierungs-Methoden
+## 4. Authentication Methods
 
-### 4.1 Kein Auth (Default)
+### 4.1 No Auth (Default)
 
 ```aiml
 - decl: [px, proxy_config_handle]
 - set: [px, { call: [proxy.new_socks5, "tor.local", 9050] }]
-# kein set_auth_* → kein Auth
+# no set_auth_* → no auth
 ```
 
 ### 4.2 HTTP Basic
 
 ```aiml
 - call: [px.set_auth_basic, "username", "p@ssw0rd"]
-# Sendet: Proxy-Authorization: Basic <Base64(user:pass)>
-# Für SOCKS5: Username/Password-Auth (RFC 1929)
+# Sends: Proxy-Authorization: Basic <Base64(user:pass)>
+# For SOCKS5: username/password auth (RFC 1929)
 ```
 
 ### 4.3 HTTP Digest
 
 ```aiml
 - call: [px.set_auth_digest, "username", "p@ssw0rd"]
-# MD5-Challenge-Response (RFC 7616)
-# Proxy sendet 407 mit Proxy-Authenticate: Digest realm=... nonce=...
-# Client berechnet: MD5(MD5(user:realm:pass):nonce:MD5(method:uri))
+# MD5 challenge-response (RFC 7616)
+# Proxy sends 407 with Proxy-Authenticate: Digest realm=... nonce=...
+# Client computes: MD5(MD5(user:realm:pass):nonce:MD5(method:uri))
 ```
 
 ### 4.4 NTLM (NTLMv2)
 
 ```aiml
 - call: [px.set_auth_ntlm, "username", "p@ssw0rd"]
-# Domain aus Proxy-Hostname abgeleitet
+# Domain derived from proxy hostname
 
 - call: [px.set_auth_ntlm, "CORP\\username", "p@ssw0rd"]
-# Domain-Prefix-Syntax
+# Domain prefix syntax
 
 - call: [px.set_auth_ntlm, "username", "p@ssw0rd", "CORP"]
-# Explizite Domain als drittes Argument
+# Explicit domain as third argument
 ```
 
-3-Phasen-Handshake auf **persistenter Verbindung** (kein Reconnect nach 407):
+3-phase handshake on a **persistent connection** (no reconnect after 407):
 ```
-Client → NEGOTIATE (Flags: NTLMv2, Unicode)
-Proxy  → 407 + CHALLENGE (ServerChallenge 8 Bytes)
+Client → NEGOTIATE (flags: NTLMv2, Unicode)
+Proxy  → 407 + CHALLENGE (ServerChallenge 8 bytes)
 Client → AUTHENTICATE (NTProofStr = HMAC-MD5(NTHash, Challenge))
 Proxy  → 200 Connection Established
 ```
@@ -201,15 +201,15 @@ Proxy  → 200 Connection Established
 
 ```aiml
 - call: [px.set_auth_kerberos, "HTTP/proxy.corp.com@CORP.LOCAL"]
-# Proxy-Authorization: Negotiate <Base64(Kerberos-Token)>
-# Benötigt: güliges Kerberos-Ticket (kinit oder Keytab)
+# Proxy-Authorization: Negotiate <Base64(Kerberos token)>
+# Requires: valid Kerberos ticket (kinit or keytab)
 
 - call: [px.set_auth_kerberos_keytab, "HTTP/proxy.corp.com@CORP.LOCAL",
                                        "/etc/myapp/service.keytab"]
-# Mit Keytab (für Dienste ohne interaktives kinit)
+# With keytab (for services without interactive kinit)
 ```
 
-Ablauf:
+Flow:
 ```
 Client → gss_init_sec_context(service_name) → Token
 Client → Proxy: Proxy-Authorization: Negotiate <Base64(Token)>
@@ -219,87 +219,87 @@ Client → Proxy: Proxy-Authorization: Negotiate <Base64(Token2)>
 Proxy  → Client: 200 Connection Established
 ```
 
-Implementiert via `libgssapi_krb5` (`-lgssapi_krb5`).
+Implemented via `libgssapi_krb5` (`-lgssapi_krb5`).
 
-### 4.6 Bearer / OAuth2 (Cloud-Proxies wie Zscaler)
+### 4.6 Bearer / OAuth2 (Cloud proxies like Zscaler)
 
 ```aiml
 - call: [px.set_auth_bearer, "eyJhbGci..."]
 # Proxy-Authorization: Bearer <token>
-# Für Cloud-Proxies (Zscaler ZPA, Netskope, etc.)
+# For cloud proxies (Zscaler ZPA, Netskope, etc.)
 ```
 
 ---
 
-## 5. Vollständige `proxy_config_handle`-Methoden
+## 5. Complete `proxy_config_handle` Methods
 
-| Methode                    | Argumente                              | Rückgabe | Beschreibung |
+| Method                    | Arguments                              | Return | Description |
 |----------------------------|----------------------------------------|----------|--------------|
-| `set_auth_none`            | —                                      | —        | Kein Auth (Default) |
-| `set_auth_basic`           | `user: string, pass: string`           | —        | HTTP Basic / SOCKS5 User-Pass |
+| `set_auth_none`            | —                                      | —        | No auth (default) |
+| `set_auth_basic`           | `user: string, pass: string`           | —        | HTTP Basic / SOCKS5 user-pass |
 | `set_auth_digest`          | `user: string, pass: string`           | —        | HTTP Digest (MD5) |
 | `set_auth_ntlm`            | `user: string, pass: string`           | —        | NTLMv2 |
-| `set_auth_ntlm`            | `user: string, pass: string, domain: string` | — | NTLMv2 + explizite Domain |
-| `set_auth_kerberos`        | `spn: string`                          | —        | Kerberos via GSSAPI (bestehendes Ticket) |
-| `set_auth_kerberos_keytab` | `spn: string, keytab: path`            | —        | Kerberos mit Keytab |
-| `set_auth_bearer`          | `token: string`                        | —        | Bearer Token (OAuth2) |
-| `set_ca`                   | `ca: path`                             | —        | CA für Proxy-Zertifikat (SSL-Inspection oder HTTPS-Proxy) |
-| `set_proxy_tls`            | `enabled: bool`                        | —        | Proxy-Kontrollkanal selbst via TLS (Default: false) |
-| `set_timeout`              | `ms: i32`                              | —        | Timeout für Proxy-Verbindung + Auth-Handshake |
-| `set_no_proxy`             | `hosts: string`                        | —        | Komma-sep. Hostnamen, die direkt verbunden werden |
-| `set_resolve_via_proxy`    | `enabled: bool`                        | —        | DNS-Auflösung am Proxy (SOCKS4a/SOCKS5, Default: true) |
+| `set_auth_ntlm`            | `user: string, pass: string, domain: string` | — | NTLMv2 + explicit domain |
+| `set_auth_kerberos`        | `spn: string`                          | —        | Kerberos via GSSAPI (existing ticket) |
+| `set_auth_kerberos_keytab` | `spn: string, keytab: path`            | —        | Kerberos with keytab |
+| `set_auth_bearer`          | `token: string`                        | —        | Bearer token (OAuth2) |
+| `set_ca`                   | `ca: path`                             | —        | CA for proxy certificate (SSL inspection or HTTPS proxy) |
+| `set_proxy_tls`            | `enabled: bool`                        | —        | Proxy control channel itself via TLS (default: false) |
+| `set_timeout`              | `ms: i32`                              | —        | Timeout for proxy connection + auth handshake |
+| `set_no_proxy`             | `hosts: string`                        | —        | Comma-separated hostnames to connect directly |
+| `set_resolve_via_proxy`    | `enabled: bool`                        | —        | DNS resolution at proxy (SOCKS4a/SOCKS5, default: true) |
 
 ---
 
-## 6. `proxy`-Namespace-Referenz
+## 6. `proxy` Namespace Reference
 
-| Aufruf | Rückgabe | Beschreibung |
+| Call | Return | Description |
 |--------|----------|--------------|
-| `{ call: [proxy.new, host, port] }` | `proxy_config_handle` | HTTP CONNECT Proxy |
+| `{ call: [proxy.new, host, port] }` | `proxy_config_handle` | HTTP CONNECT proxy |
 | `{ call: [proxy.new_socks4, host, port] }` | `proxy_config_handle` | SOCKS4 |
-| `{ call: [proxy.new_socks4a, host, port] }` | `proxy_config_handle` | SOCKS4a (DNS at Proxy) |
+| `{ call: [proxy.new_socks4a, host, port] }` | `proxy_config_handle` | SOCKS4a (DNS at proxy) |
 | `{ call: [proxy.new_socks5, host, port] }` | `proxy_config_handle` | SOCKS5 |
-| `{ call: [proxy.from_env] }` | `proxy_config_handle` | Liest `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` |
-| `{ call: [proxy.from_pac, pac_url] }` | `proxy_config_handle` | PAC-Datei via URL (`pac_url: url`) |
-| `{ call: [proxy.from_pac_file, pac_path] }` | `proxy_config_handle` | Lokale PAC-Datei (`pac_path: path`) |
-| `{ call: [proxy.none] }` | `proxy_config_handle` | Explizit kein Proxy (überschreibt Umgebung) |
+| `{ call: [proxy.from_env] }` | `proxy_config_handle` | Reads `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` |
+| `{ call: [proxy.from_pac, pac_url] }` | `proxy_config_handle` | PAC file via URL (`pac_url: url`) |
+| `{ call: [proxy.from_pac_file, pac_path] }` | `proxy_config_handle` | Local PAC file (`pac_path: path`) |
+| `{ call: [proxy.none] }` | `proxy_config_handle` | Explicitly no proxy (overrides environment) |
 
-### 6.1 Umgebungsvariablen (`proxy.from_env`)
+### 6.1 Environment Variables (`proxy.from_env`)
 
 ```aiml
 - decl: [px, proxy_config_handle]
 - set: [px, { call: [proxy.from_env] }]
-# Liest (in Priorität):
-#   HTTPS_PROXY, https_proxy  → für HTTPS-Verbindungen
-#   HTTP_PROXY, http_proxy    → für HTTP-Verbindungen
-#   ALL_PROXY, all_proxy      → Fallback für beide
-#   NO_PROXY, no_proxy        → Ausnahmen (Komma-sep., Wildcards: *.corp.com)
-# Gibt nullptr zurück wenn keine Proxy-Variable gesetzt
+# Reads (in priority order):
+#   HTTPS_PROXY, https_proxy  → for HTTPS connections
+#   HTTP_PROXY, http_proxy    → for HTTP connections
+#   ALL_PROXY, all_proxy      → fallback for both
+#   NO_PROXY, no_proxy        → exceptions (comma-separated, wildcards: *.corp.com)
+# Returns nullptr if no proxy variable is set
 
 - decl: [sock, tls_socket_handle]
 - set: [sock, { call: [tls.socket] }]
-- call: [sock.set_proxy, px]   # nullptr → kein Proxy, kein Fehler
+- call: [sock.set_proxy, px]   # nullptr → no proxy, no error
 - call: [tls.connect, sock, "api.example.com", 443]
 ```
 
-### 6.2 PAC-Dateien (Proxy Auto-Config)
+### 6.2 PAC Files (Proxy Auto-Config)
 
-PAC-Dateien sind JavaScript-Dateien, die per URL und Host entscheiden, welcher Proxy
-verwendet werden soll (`FindProxyForURL`-Funktion). Weit verbreitet in Unternehmen.
+PAC files are JavaScript files that decide, based on URL and host, which proxy
+to use (`FindProxyForURL` function). Widely used in enterprises.
 
 ```aiml
-# PAC von URL laden (typischer Unternehmensfall: WPAD)
+# Load PAC from URL (typical enterprise case: WPAD)
 - decl: [wpad_url, url]
 - set: [wpad_url, "http://wpad.corp.com/wpad.dat"]
 - decl: [px, proxy_config_handle]
 - set: [px, { call: [proxy.from_pac, wpad_url] }]
 
-# Oder lokale PAC-Datei
+# Or local PAC file
 - decl: [pac_file, path]
 - set: [pac_file, "/etc/myapp/proxy.pac"]
 - set: [px, { call: [proxy.from_pac_file, pac_file] }]
 
-# set_auth gilt dann für alle Proxies die das PAC zurückgibt
+# set_auth applies to all proxies returned by the PAC
 - call: [px.set_auth_ntlm, "CORP\\user", "pass"]
 - decl: [insp_ca, path]
 - set: [insp_ca, "/etc/corp/inspection_ca.crt"]
@@ -309,63 +309,63 @@ verwendet werden soll (`FindProxyForURL`-Funktion). Weit verbreitet in Unternehm
 - set: [sock, { call: [tls.socket] }]
 - call: [sock.set_proxy, px]
 - call: [tls.connect, sock, "github.com", 443]
-# PAC entscheidet intern: DIRECT oder PROXY proxy1.corp.com:8080
+# PAC decides internally: DIRECT or PROXY proxy1.corp.com:8080
 ```
 
-PAC-Implementierung: minimaler JavaScript-Interpreter (nur `FindProxyForURL` +
-Standard-Hilfsfunktionen wie `isInNet`, `dnsDomainIs`, `shExpMatch`).
+PAC implementation: minimal JavaScript interpreter (only `FindProxyForURL` +
+standard helper functions like `isInNet`, `dnsDomainIs`, `shExpMatch`).
 
 ---
 
-## 7. Erweiterungen an Socket-Typen
+## 7. Extensions to Socket Types
 
-Beide Handle-Typen bekommen:
+Both handle types gain:
 
-| Methode | Signatur | Beschreibung |
+| Method | Signature | Description |
 |---------|----------|--------------|
-| `set_proxy` | `(proxy: proxy_config_handle) → void` | Proxy-Konfiguration anwenden |
-| `add_ca` | `(ca_path: path) → void` | Zusätzliche CA hinzufügen (kumulativ) |
+| `set_proxy` | `(proxy: proxy_config_handle) → void` | Apply proxy configuration |
+| `add_ca` | `(ca_path: path) → void` | Add additional CA (cumulative) |
 
-`add_ca` (im Gegensatz zu `set_ca`, das den System-Store ersetzt) **fügt hinzu** —
-nötig wenn Proxy-CA und Ziel-CA gleichzeitig vertraut werden sollen:
+`add_ca` (as opposed to `set_ca`, which replaces the system store) **adds** —
+needed when proxy CA and target CA should both be trusted simultaneously:
 
 ```aiml
-- call: [tls.set_ca, sock, "/etc/corp/inspection_ca.crt"]   # ersetzt System-Store
-- call: [sock.add_ca, "/etc/myapp/target_ca.crt"]           # zusätzlich
+- call: [tls.set_ca, sock, "/etc/corp/inspection_ca.crt"]   # replaces system store
+- call: [sock.add_ca, "/etc/myapp/target_ca.crt"]           # in addition
 ```
 
 ---
 
-## 8. Gängige Proxy-Produkte: Kompatibilitätstabelle
+## 8. Common Proxy Products: Compatibility Table
 
-| Produkt | Protokoll | Auth-Methoden | SSL-Inspection | Anmerkung |
+| Product | Protocol | Auth Methods | SSL Inspection | Notes |
 |---------|-----------|---------------|----------------|-----------|
-| **Squid** | HTTP CONNECT | Basic, Digest, NTLM, Kerberos | Optional (mit ssl-bump) | Häufigster Open-Source-Proxy |
-| **BlueCoat / Symantec ProxySG** | HTTP CONNECT | NTLM, Kerberos, RADIUS | Ja (Standard) | Corporate Appliance |
-| **Zscaler ZIA** | HTTP CONNECT | Bearer/OAuth2, SAML, Kerberos | Ja | Cloud-Proxy; braucht Bearer-Token |
-| **Netskope** | HTTP CONNECT | Bearer/OAuth2, SAML | Ja | Cloud-Proxy |
+| **Squid** | HTTP CONNECT | Basic, Digest, NTLM, Kerberos | Optional (with ssl-bump) | Most common open-source proxy |
+| **BlueCoat / Symantec ProxySG** | HTTP CONNECT | NTLM, Kerberos, RADIUS | Yes (standard) | Corporate appliance |
+| **Zscaler ZIA** | HTTP CONNECT | Bearer/OAuth2, SAML, Kerberos | Yes | Cloud proxy; requires bearer token |
+| **Netskope** | HTTP CONNECT | Bearer/OAuth2, SAML | Yes | Cloud proxy |
 | **Cisco WSA** | HTTP CONNECT | NTLM, Kerberos, LDAP, Basic | Optional | Web Security Appliance |
-| **F5 BIG-IP** | HTTP CONNECT | NTLM, Kerberos, Basic | Optional | Forward Proxy Modul |
-| **Microsoft ISA / TMG** | HTTP CONNECT | NTLM, Kerberos, Basic | Nein | Veraltet, noch in Betrieb |
-| **Privoxy** | HTTP CONNECT | Kein Auth | Nein | Privacy-Proxy; häufig hinter Tor |
-| **Tor** | SOCKS5 | Kein Auth | Nein | Anonymität; DNS am Proxy (wichtig!) |
-| **SSH -D** | SOCKS5 | Kein Auth (SSH-Auth davor) | Nein | `ssh -D 1080 user@bastion` |
-| **Dante** | SOCKS4/5 | Basic, GSSAPI | Nein | Open-Source SOCKS-Server |
-| **Shadowsocks** | SOCKS5 | Kein Auth (eigene Verschlüsselung) | Nein | Obfuskierter Proxy |
-| **HAProxy** | SOCKS5, HTTP | Basic | Nein | Load-Balancer mit Proxy-Modus |
-| **Charles / Burp Suite** | HTTP CONNECT | Basic | Ja (Dev/Testing) | Entwicklungs-Proxies |
-| **nginx** | HTTP CONNECT | Basic | Optional | Mit `ngx_stream_proxy_module` |
+| **F5 BIG-IP** | HTTP CONNECT | NTLM, Kerberos, Basic | Optional | Forward proxy module |
+| **Microsoft ISA / TMG** | HTTP CONNECT | NTLM, Kerberos, Basic | No | Outdated, still in use |
+| **Privoxy** | HTTP CONNECT | No auth | No | Privacy proxy; often behind Tor |
+| **Tor** | SOCKS5 | No auth | No | Anonymity; DNS at proxy (important!) |
+| **SSH -D** | SOCKS5 | No auth (SSH auth before) | No | `ssh -D 1080 user@bastion` |
+| **Dante** | SOCKS4/5 | Basic, GSSAPI | No | Open-source SOCKS server |
+| **Shadowsocks** | SOCKS5 | No auth (own encryption) | No | Obfuscated proxy |
+| **HAProxy** | SOCKS5, HTTP | Basic | No | Load balancer with proxy mode |
+| **Charles / Burp Suite** | HTTP CONNECT | Basic | Yes (dev/testing) | Development proxies |
+| **nginx** | HTTP CONNECT | Basic | Optional | With `ngx_stream_proxy_module` |
 
-### 8.1 Konfigurationsbeispiele für typische Produkte
+### 8.1 Configuration Examples for Common Products
 
-**Squid mit NTLM:**
+**Squid with NTLM:**
 ```aiml
 - decl: [px, proxy_config_handle]
 - set: [px, { call: [proxy.new, "squid.corp.local", 3128] }]
 - call: [px.set_auth_ntlm, "CORP\\user", "pass"]
 ```
 
-**BlueCoat / Symantec ProxySG (SSL-Inspection + Kerberos):**
+**BlueCoat / Symantec ProxySG (SSL inspection + Kerberos):**
 ```aiml
 - decl: [px, proxy_config_handle]
 - set: [px, { call: [proxy.new, "bluecoat.corp.com", 8080] }]
@@ -373,21 +373,21 @@ nötig wenn Proxy-CA und Ziel-CA gleichzeitig vertraut werden sollen:
 - call: [px.set_ca, "/etc/corp/bluecoat_inspection_ca.crt"]
 ```
 
-**Zscaler ZIA (Cloud-Proxy, Bearer-Token):**
+**Zscaler ZIA (cloud proxy, bearer token):**
 ```aiml
 - decl: [px, proxy_config_handle]
 - set: [px, { call: [proxy.new, "gateway.corp.zscaler.net", 80] }]
 - call: [px.set_auth_bearer, "eyJhbGci...zscaler-token"]
 - call: [px.set_ca, "/etc/corp/zscaler_root_ca.crt"]
-# Zscaler signiert re-inspizierte Certs mit eigenem Root-CA
+# Zscaler signs re-inspected certs with its own root CA
 ```
 
-**Tor (SOCKS5, kein Auth, DNS am Proxy):**
+**Tor (SOCKS5, no auth, DNS at proxy):**
 ```aiml
 - decl: [px, proxy_config_handle]
 - set: [px, { call: [proxy.new_socks5, "127.0.0.1", 9050] }]
-# DNS-Auflösung passiert am Tor-Exit-Node (nicht lokal) → privacy!
-# set_resolve_via_proxy ist für SOCKS5 standardmäßig true
+# DNS resolution happens at the Tor exit node (not locally) → privacy!
+# set_resolve_via_proxy is true by default for SOCKS5
 
 - decl: [sock, tls_socket_handle]
 - set: [sock, { call: [tls.socket] }]
@@ -395,9 +395,9 @@ nötig wenn Proxy-CA und Ziel-CA gleichzeitig vertraut werden sollen:
 - call: [tls.connect, sock, "duckduckgo.com", 443]
 ```
 
-**SSH SOCKS5-Tunnel:**
+**SSH SOCKS5 tunnel:**
 ```aiml
-# Vorher: ssh -D 1080 -N user@bastion.corp.com
+# Before: ssh -D 1080 -N user@bastion.corp.com
 - decl: [px, proxy_config_handle]
 - set: [px, { call: [proxy.new_socks5, "127.0.0.1", 1080] }]
 
@@ -405,54 +405,54 @@ nötig wenn Proxy-CA und Ziel-CA gleichzeitig vertraut werden sollen:
 - set: [sock, { call: [tls.socket] }]
 - call: [sock.set_proxy, px]
 - call: [tls.connect, sock, "internal-api.corp.com", 443]
-# Verbindung geht: lokal → SSH-Tunnel → bastion → internal-api
+# Connection goes: local → SSH tunnel → bastion → internal-api
 ```
 
-**WPAD (automatische Proxy-Erkennung im Unternehmen):**
+**WPAD (automatic proxy detection in enterprise):**
 ```aiml
 - decl: [px, proxy_config_handle]
 - set: [px, { call: [proxy.from_pac, "http://wpad/wpad.dat"] }]
 - call: [px.set_auth_ntlm, "CORP\\user", "pass"]
-# PAC-Datei entscheidet pro Ziel-URL: DIRECT / PROXY host:port
+# PAC file decides per target URL: DIRECT / PROXY host:port
 ```
 
 ---
 
-## 9. NTLM-Implementierungsdetail
+## 9. NTLM Implementation Detail
 
-### 9.1 Warum keine externe Library
+### 9.1 Why No External Library
 
-- `libntlm`: veraltet, nur NTLMv1
-- `gss-ntlmssp`: Kerberos-Abhängigkeit, komplex zu linken
-- OpenSSL bietet alle nötigen Primitive: `MD4`, `HMAC-MD5`, `RAND_bytes`, `EVP_EncodeBlock`
-- Eigenimplementierung NTLMv2: ca. 400 Zeilen C++ in `src/sys/ntlm.cpp`
+- `libntlm`: outdated, NTLMv1 only
+- `gss-ntlmssp`: Kerberos dependency, complex to link
+- OpenSSL provides all needed primitives: `MD4`, `HMAC-MD5`, `RAND_bytes`, `EVP_EncodeBlock`
+- Custom NTLMv2 implementation: ~400 lines of C++ in `src/sys/ntlm.cpp`
 
-### 9.2 NTLMv2-Hash
+### 9.2 NTLMv2 Hash
 
 ```
 NTHash    = MD4(UTF-16LE(password))
-NTHashV2  = HMAC-MD5(NTHash, uppercase(user+domain) als UTF-16LE)
+NTHashV2  = HMAC-MD5(NTHash, uppercase(user+domain) as UTF-16LE)
 NTProofStr= HMAC-MD5(NTHashV2,
               ServerChallenge‖ClientChallenge‖Timestamp‖TargetInfo)
 NTResponse= NTProofStr ‖ Blob(ClientChallenge, Timestamp, TargetInfo)
 ```
 
-### 9.3 Kritisch: Persistente Verbindung
+### 9.3 Critical: Persistent Connection
 
 ```
-Schritt 1: TCP CONNECT zu Proxy
-Schritt 2: CONNECT target HTTP/1.1 + Proxy-Authorization: NTLM <NEGOTIATE>
-Schritt 3: 407 + Proxy-Authenticate: NTLM <CHALLENGE>  ← Verbindung OFFEN LASSEN
-Schritt 4: CONNECT target HTTP/1.1 + Proxy-Authorization: NTLM <AUTHENTICATE>
-Schritt 5: 200 Connection Established
+Step 1: TCP CONNECT to proxy
+Step 2: CONNECT target HTTP/1.1 + Proxy-Authorization: NTLM <NEGOTIATE>
+Step 3: 407 + Proxy-Authenticate: NTLM <CHALLENGE>  ← keep connection OPEN
+Step 4: CONNECT target HTTP/1.1 + Proxy-Authorization: NTLM <AUTHENTICATE>
+Step 5: 200 Connection Established
 ```
 
-Libraries die nach Schritt 3 reconnecten → NTLM bricht. AIML führt alle 5 Schritte
-auf demselben File-Descriptor durch.
+Libraries that reconnect after step 3 → NTLM breaks. AIML performs all 5 steps
+on the same file descriptor.
 
 ---
 
-## 10. Interne Struktur (`proxy_runtime.h/cpp`)
+## 10. Internal Structure (`proxy_runtime.h/cpp`)
 
 ```cpp
 enum class ProxyProtocol { HttpConnect, Socks4, Socks4a, Socks5 };
@@ -462,43 +462,43 @@ struct AimlProxy {
     ProxyProtocol protocol;
     char*         host;
     int           port;
-    bool          proxy_tls;    // Kontrollkanal selbst via TLS
-    char*         ca_path;      // CA für Proxy (Inspection oder HTTPS)
+    bool          proxy_tls;    // control channel itself via TLS
+    char*         ca_path;      // CA for proxy (inspection or HTTPS)
     ProxyAuth     auth;
     char*         username;
     char*         password;
     char*         domain;       // NTLM
     char*         spn;          // Kerberos Service Principal Name
-    char*         keytab_path;  // Kerberos Keytab
+    char*         keytab_path;  // Kerberos keytab
     char*         bearer_token; // OAuth2
     int           timeout_ms;
-    char*         no_proxy;     // Komma-sep.
-    bool          resolve_via_proxy; // DNS am Proxy (SOCKS4a/5)
+    char*         no_proxy;     // comma-separated
+    bool          resolve_via_proxy; // DNS at proxy (SOCKS4a/5)
     // PAC
     char*         pac_url;
-    char*         pac_js;       // gecachter PAC-Inhalt
+    char*         pac_js;       // cached PAC content
 };
 
-// Hauptfunktion: baut Tunnel auf fd auf (TCP zu Proxy schon verbunden)
+// Main function: builds tunnel on fd (TCP to proxy already connected)
 int aiml_proxy_tunnel(AimlProxy* proxy, int fd,
                       const char* target_host, int target_port);
 ```
 
-`aiml_proxy_tunnel` dispatcht intern auf:
-- `proxy_http_connect_tunnel()` — HTTP CONNECT + Auth (Basic/Digest/NTLM/Kerberos/Bearer)
-- `proxy_socks4_tunnel()` — SOCKS4 binäres Protokoll
-- `proxy_socks4a_tunnel()` — SOCKS4a mit Hostname
-- `proxy_socks5_tunnel()` — SOCKS5 Auth-Negotiation + CONNECT
+`aiml_proxy_tunnel` dispatches internally to:
+- `proxy_http_connect_tunnel()` — HTTP CONNECT + auth (Basic/Digest/NTLM/Kerberos/Bearer)
+- `proxy_socks4_tunnel()` — SOCKS4 binary protocol
+- `proxy_socks4a_tunnel()` — SOCKS4a with hostname
+- `proxy_socks5_tunnel()` — SOCKS5 auth negotiation + CONNECT
 
 ---
 
-## 11. Vollständiges Enterprise-Beispiel
+## 11. Complete Enterprise Example
 
 ```aiml
 # Situation:
-# - Windows-Firmennetz, WPAD-basierte Proxy-Erkennung
-# - Proxy: BlueCoat ProxySG, NTLM-Auth, SSL-Inspection
-# - Ziel: Vault-API-Server intern, Bearer-Token-Auth
+# - Windows corporate network, WPAD-based proxy detection
+# - Proxy: BlueCoat ProxySG, NTLM auth, SSL inspection
+# - Target: Vault API server internal, bearer token auth
 
 - def:
     name: vault_get_secret
@@ -539,39 +539,39 @@ int aiml_proxy_tunnel(AimlProxy* proxy, int fd,
 
 ---
 
-## 12. Kombinationsmatrix
+## 12. Combination Matrix
 
-| Proxy-Protokoll | Auth | Proxy-CA | Ziel-Cert | Unterstützt? |
+| Proxy Protocol | Auth | Proxy CA | Target Cert | Supported? |
 |----------------|------|----------|-----------|-------------|
-| HTTP CONNECT | Kein | — | System-Store | ✓ |
-| HTTP CONNECT | Basic | — | System-Store | ✓ |
-| HTTP CONNECT | Digest | — | System-Store | ✓ |
-| HTTP CONNECT | NTLM | — | System-Store | ✓ |
-| HTTP CONNECT | NTLM | Corp-Inspection-CA | (Proxy re-signiert) | ✓ |
-| HTTP CONNECT | Kerberos | Corp-Inspection-CA | (Proxy re-signiert) | ✓ |
-| HTTP CONNECT | Bearer | Corp-Inspection-CA | (Cloud-Proxy) | ✓ |
-| HTTP CONNECT | NTLM | — | Private Ziel-CA + add_ca | ✓ |
-| HTTP CONNECT | NTLM | — | mTLS (Client-Cert) | ✓ Transparent |
-| SOCKS4 | Kein | — | System-Store | ✓ |
-| SOCKS4a | Kein | — | System-Store | ✓ |
-| SOCKS5 | Kein | — | System-Store | ✓ (Tor etc.) |
-| SOCKS5 | Basic | — | System-Store | ✓ |
-| SOCKS5 | GSSAPI | — | System-Store | ✓ |
-| PAC-Datei | (je nach PAC) | — | — | ✓ |
-| mTLS + SSL-Inspection | NTLM | Corp-CA | Client-Cert | ⚠ Nur wenn Proxy mTLS-Pass-Through |
+| HTTP CONNECT | None | — | System store | ✓ |
+| HTTP CONNECT | Basic | — | System store | ✓ |
+| HTTP CONNECT | Digest | — | System store | ✓ |
+| HTTP CONNECT | NTLM | — | System store | ✓ |
+| HTTP CONNECT | NTLM | Corp inspection CA | (proxy re-signs) | ✓ |
+| HTTP CONNECT | Kerberos | Corp inspection CA | (proxy re-signs) | ✓ |
+| HTTP CONNECT | Bearer | Corp inspection CA | (cloud proxy) | ✓ |
+| HTTP CONNECT | NTLM | — | Private target CA + add_ca | ✓ |
+| HTTP CONNECT | NTLM | — | mTLS (client cert) | ✓ Transparent |
+| SOCKS4 | None | — | System store | ✓ |
+| SOCKS4a | None | — | System store | ✓ |
+| SOCKS5 | None | — | System store | ✓ (Tor etc.) |
+| SOCKS5 | Basic | — | System store | ✓ |
+| SOCKS5 | GSSAPI | — | System store | ✓ |
+| PAC file | (per PAC) | — | — | ✓ |
+| mTLS + SSL inspection | NTLM | Corp CA | Client cert | ⚠ Only if proxy supports mTLS pass-through |
 
 ---
 
-## 13. Offene Designfragen
+## 13. Open Design Questions
 
-- **SOCKS5-UDP**: `UDP ASSOCIATE`-Kommando für UDP-fähige Proxies — nötig für QUIC/DNS.
-- **Proxy-Chaining**: Mehrere Proxies hintereinander (`proxy.chain(px1, px2)`).
-- **NTLM SSO auf Windows**: Aktuelle Windows-Credentials des Prozesses via SSPI —
-  ohne Passwort im Code. Auf Linux: via Kerberos-Ticket-Cache (`KRB5CCNAME`).
-- **PAC-JavaScript-Interpreter**: Minimaler Subset von ECMAScript (nur `FindProxyForURL`
-  + Standard-Helper-Funktionen). Optionen: `duktape` (3 Dateien, MIT-Lizenz) oder
-  eigene Minimal-Implementierung.
-- **Transparent Proxy Detection**: Automatisch erkennen ob Proxy TLS-Inspection macht
-  (via `sock.peer_cert_cn()` — wenn CN dem Ziel-Hostnamen entspricht → transparent;
-  wenn CN der Corp-CA-CN ist → Inspection).
-- **Proxy-Fehlerdiagnose**: `proxy.test(target_url) → proxy_diag_handle` — Schritt-für-Schritt-Diagnose welche Phase fehlschlägt (TCP, Auth, CONNECT, TLS).
+- **SOCKS5 UDP**: `UDP ASSOCIATE` command for UDP-capable proxies — needed for QUIC/DNS.
+- **Proxy chaining**: Multiple proxies in sequence (`proxy.chain(px1, px2)`).
+- **NTLM SSO on Windows**: Current process Windows credentials via SSPI —
+  no password in code. On Linux: via Kerberos ticket cache (`KRB5CCNAME`).
+- **PAC JavaScript interpreter**: Minimal subset of ECMAScript (only `FindProxyForURL`
+  + standard helper functions). Options: `duktape` (3 files, MIT license) or
+  custom minimal implementation.
+- **Transparent proxy detection**: Automatically detect whether proxy performs TLS inspection
+  (via `sock.peer_cert_cn()` — if CN matches target hostname → transparent;
+  if CN is corp CA CN → inspection).
+- **Proxy error diagnosis**: `proxy.test(target_url) → proxy_diag_handle` — step-by-step diagnosis of which phase fails (TCP, auth, CONNECT, TLS).

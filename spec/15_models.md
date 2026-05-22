@@ -8,9 +8,17 @@
 | **Methods** | Not allowed — CompilationError if methods defined | Supported |
 | **Instantiation** | `decl: [x, MyModel]` or assignment from map | `decl: [x, MyClass]` or `{ new: MyClass }` |
 | **Map assignment** | Supported — runtime validates map against schema | Not supported |
-| **Serialization** | Automatic via `sys.serialize` / `sys.deserialize` | Manual implementation required |
+| **Serialization** | Automatic via `sys.serialize` / `sys.deserialize` | Automatic via `sys.serialize` / `sys.deserialize` — same machinery as models |
 
-Use `model` for data, `class` for behaviour.
+Use `model` for data, `class` for data + behaviour.
+
+> **Note on serialization (since 2026-05-22):** Classes are now auto-serializable
+> just like models — the compiler emits an `__aiml_sernodes_<Name>` type-tree
+> for every class registration, identical to the model path. `sys.serialize`,
+> `sys.deserialize`, and `Kv<K:T>` (with `T` either a class or a model) work
+> uniformly.  The only remaining structural difference is that classes carry
+> methods + access modifiers; the wire format ignores both and serialises only
+> the member layout.
 
 ```yaml
 # Models define the structure of dynamic data (like maps or JSON).
@@ -121,24 +129,24 @@ Constraints:
 - Only single inheritance (one `inherits:` parent).
 - Duplicate field names between parent and child are a CompilationError.
 
-## Heap-Allokation und ptr<Model>
+## Heap Allocation and ptr<Model>
 
-Models können auch auf dem Heap alloziert werden. Punkt-Notation dereferenziert
-`ptr<Model>` automatisch — identisch zu Klassen:
+Models can also be allocated on the heap. Dot notation automatically dereferences
+`ptr<Model>` — identical to classes:
 
 ```yaml
 - decl: [conf, ptr<ServerConfig>, { new: ServerConfig }]
 
-# Schreiben — (*conf).host = "0.0.0.0"
+# Write — (*conf).host = "0.0.0.0"
 - set: [conf.host, "0.0.0.0"]
 
-# Lesen
+# Read
 - decl: [h, string]
 - set: [h, conf.host]
 
 - free: [conf]
 ```
 
-Type-Aliases (z.B. `ServerConfig` als Name für `ptr<ServerConfig>`) können für
-häufig verwendete Handle-Typen definiert werden, damit `ptr<...>` nicht
-überall ausgeschrieben werden muss.
+Type aliases (e.g. `ServerConfig` as a name for `ptr<ServerConfig>`) can be defined for
+frequently used handle types so that `ptr<...>` does not have to be written out
+everywhere.

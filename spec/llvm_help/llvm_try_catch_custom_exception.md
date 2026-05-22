@@ -1,30 +1,30 @@
-Jetzt wird’s interessant 🔥
-Wir bauen einen echten LLVM-IR Try-Catch Block mit:
+Now it gets interesting 🔥
+We're building a real LLVM IR try-catch block with:
 
 invoke
 
 landingpad
 
-eigener Exception-Type
+custom exception type
 
-optionalem resume
+optional resume
 
-Und zwar sauber im modernen Itanium-ABI-Stil, wie Clang es unter Linux macht.
+And cleanly in the modern Itanium ABI style, as Clang does it on Linux.
 
-Wichtig vorweg:
+Important upfront:
 
-LLVM implementiert Exceptions nicht selbst.
-Es nutzt das Plattform-ABI. Unter Linux ist das das Itanium C++ ABI mit:
+LLVM does not implement exceptions itself.
+It uses the platform ABI. On Linux that is the Itanium C++ ABI with:
 
 __cxa_allocate_exception
 
 __cxa_throw
 
-Personality Function: __gxx_personality_v0
+Personality function: __gxx_personality_v0
 
-Wir bauen also ein kleines Mini-C++-Exception-System direkt in IR.
+So we're building a small mini C++ exception system directly in IR.
 
-🧠 Architektur
+🧠 Architecture
 throw →
     __cxa_allocate_exception
     __cxa_throw
@@ -33,15 +33,15 @@ invoke →
     landingpad →
         catch clause →
             handler
-🎯 Beispiel: Eigene Exception-Type
+🎯 Example: Custom exception type
 
-Angenommen wir wollen eine eigene Exception:
+Suppose we want a custom exception:
 
 struct MyException {
     int code;
 };
 
-Im LLVM-Kontext brauchen wir:
+In LLVM context we need:
 
 struct type
 
@@ -49,11 +49,11 @@ typeinfo symbol
 
 personality function
 
-landingpad mit catch clause
+landingpad with catch clause
 
-🏗️ Schritt 1: Personality setzen
+🏗️ Step 1: Set personality
 
-Jede Funktion mit Exceptions braucht:
+Every function with exceptions needs:
 
 Function* F = ...
 F->setPersonalityFn(
@@ -64,15 +64,15 @@ F->setPersonalityFn(
     ).getCallee()
 );
 
-Ohne Personality → kein EH.
+Without personality → no EH.
 
-🏗️ Schritt 2: Eigene Exception werfen
-Exception-Type definieren
+🏗️ Step 2: Throw a custom exception
+Define the exception type
 StructType* MyExType =
     StructType::create(context, "MyException");
 
 MyExType->setBody(builder.getInt32Ty());
-Speicher für Exception holen
+Get memory for the exception
 FunctionCallee allocEx =
     M->getOrInsertFunction(
         "__cxa_allocate_exception",
@@ -90,7 +90,7 @@ Value* exSize =
 
 Value* exMem =
     builder.CreateCall(allocEx, exSize);
-Exception initialisieren
+Initialize the exception
 Value* casted =
     builder.CreateBitCast(exMem,
                           MyExType->getPointerTo());
@@ -103,7 +103,7 @@ builder.CreateStore(
     builder.getInt32(42),
     codePtr
 );
-Throw aufrufen
+Call throw
 FunctionCallee throwFn =
     M->getOrInsertFunction(
         "__cxa_throw",
@@ -133,16 +133,16 @@ builder.CreateCall(throwFn,
 
 builder.CreateUnreachable();
 
-Jetzt haben wir geworfen.
+Now we have thrown.
 
-🛑 Schritt 3: Try-Catch Block
-invoke statt call
+🛑 Step 3: Try-catch block
+invoke instead of call
 builder.CreateInvoke(
     mayThrowFunc,
     normalBB,
     catchBB
 );
-landingpad erzeugen
+Generate landingpad
 builder.SetInsertPoint(catchBB);
 
 LandingPadInst* lp =
@@ -155,16 +155,16 @@ LandingPadInst* lp =
     );
 
 lp->setCleanup(false);
-Catch-Clause hinzufügen
+Add catch clause
 lp->addClause(typeInfo);
 
-Damit wird nur MyException gefangen.
+This catches only MyException.
 
-Exception behandeln
+Handle the exception
 Value* exObj =
     builder.CreateExtractValue(lp, 0);
 
-// cast zurück
+// cast back
 Value* myEx =
     builder.CreateBitCast(
         exObj,
@@ -178,19 +178,19 @@ Value* code =
                                 myEx, 0)
     );
 
-Jetzt hast du code.
+Now you have code.
 
-🧹 Nicht behandelt?
+🧹 Not handled?
 
-Wenn du nicht catchen willst:
+If you don't want to catch:
 
 builder.CreateResume(lp);
 
-Das entspricht throw;.
+This corresponds to throw;.
 
-📦 Minimaler Ablauf
+📦 Minimal flow
 
-Funktion mit:
+Function with:
 
 entry:
     invoke @may_throw
@@ -201,38 +201,38 @@ catch:
     %lp = landingpad {i8*, i32}
            catch typeinfo
     handler
-🧠 Wichtige Hinweise
+🧠 Important notes
 
-Du brauchst -fexceptions Support
+You need -fexceptions support
 
-Du brauchst die richtige Personality
+You need the correct personality
 
-Du musst gegen libstdc++ linken
+You must link against libstdc++
 
-TypeInfo-Symbole müssen existieren
+TypeInfo symbols must exist
 
-In der Praxis lässt man Clang einmal eine Dummy-Exception kompilieren und schaut sich die IR an.
+In practice you let Clang compile a dummy exception once and inspect the IR.
 
-🧩 Alternative: Eigene VM-Exceptions
+🧩 Alternative: Custom VM exceptions
 
-Wenn du keine echte C++-ABI willst, kannst du auch:
+If you don't want the real C++ ABI, you can also:
 
-Exceptions als Error-Codes modellieren
+Model exceptions as error codes
 
-setjmp/longjmp verwenden
+Use setjmp/longjmp
 
-eigene Stack-Unwinder bauen
+Build your own stack unwinder
 
-Echte C++-Exceptions sind heavy machinery.
+Real C++ exceptions are heavy machinery.
 
-🚀 Wenn du willst
+🚀 If you want
 
-Ich kann dir:
+I can build you:
 
-ein vollständig lauffähiges LLVM C++ Beispiel bauen
+a fully runnable LLVM C++ example
 
-eine minimalistische Custom-Exception ohne C++ ABI
+a minimalist custom exception without C++ ABI
 
-oder erklären, wie ORC JIT mit EH umgeht
+or explain how ORC JIT handles EH
 
-Was willst du vertiefen?
+What do you want to go deeper on?

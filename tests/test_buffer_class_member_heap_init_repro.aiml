@@ -1,0 +1,21 @@
+# Repro candidate: heap-allocated class instances may fail to auto-initialize buffer members.
+# Expected exit code after the future fix: 0
+
+- class:
+    name: BufferBox
+    members:
+      - [buf, buffer]
+
+- decl: [box, ref<BufferBox>, { new: BufferBox }]
+
+- call: [box.buf.write, 0x12345678, i32]
+- decl: [got, i32, { call: [box.buf.read, i32] }]
+
+- if:
+    condition: { neq: [got, 0x12345678] }
+    then:
+      - print: ["FAIL buffer class-member readback: expected 305419896, got ${got}"]
+      - exit: [1]
+
+- free: [box]
+- print: ["PASS test_buffer_class_member_heap_init_repro"]

@@ -1,0 +1,173 @@
+# Test: inherited defaults survive model inheritance and class model composition
+# Expected exit code: 0
+
+- model:
+    name: BaseConfig
+    fields:
+      - [host, string, "localhost"]
+      - [port, i32, 8080]
+
+- model:
+    name: RuntimeConfig
+    inherits: BaseConfig
+    fields:
+      - [ssl, bool, true]
+      - [retries, i32, 3]
+
+- decl: [cfg, RuntimeConfig]
+
+- if:
+    condition: { neq: [cfg.host, "localhost"] }
+    then:
+      - print: ["FAIL inherited model default host: ${cfg.host}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [cfg.port, 8080] }
+    then:
+      - print: ["FAIL inherited model default port: ${cfg.port}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [cfg.ssl, true] }
+    then:
+      - print: ["FAIL child model default ssl"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [cfg.retries, 3] }
+    then:
+      - print: ["FAIL child model default retries: ${cfg.retries}"]
+      - exit: [1]
+
+- decl: [heap_cfg, ptr<RuntimeConfig>, { new: RuntimeConfig }]
+
+- if:
+    condition: { neq: [heap_cfg.host, "localhost"] }
+    then:
+      - print: ["FAIL inherited heap model default host: ${heap_cfg.host}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [heap_cfg.port, 8080] }
+    then:
+      - print: ["FAIL inherited heap model default port: ${heap_cfg.port}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [heap_cfg.ssl, true] }
+    then:
+      - print: ["FAIL inherited heap model default ssl"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [heap_cfg.retries, 3] }
+    then:
+      - print: ["FAIL inherited heap model default retries: ${heap_cfg.retries}"]
+      - exit: [1]
+
+- model:
+    name: EntityModel
+    inherits: RuntimeConfig
+    fields:
+      - [entity_id, i32, 77]
+
+- class:
+    name: Worker
+    models: [EntityModel]
+    members:
+      - [hp, i32, 15, { access: public }]
+      - [alive, bool, true, { access: public }]
+
+- decl: [w, Worker]
+
+- if:
+    condition: { neq: [w.host, "localhost"] }
+    then:
+      - print: ["FAIL class-model default host: ${w.host}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [w.port, 8080] }
+    then:
+      - print: ["FAIL class-model default port: ${w.port}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [w.ssl, true] }
+    then:
+      - print: ["FAIL class-model default ssl"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [w.retries, 3] }
+    then:
+      - print: ["FAIL class-model default retries: ${w.retries}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [w.entity_id, 77] }
+    then:
+      - print: ["FAIL class-model default entity_id: ${w.entity_id}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [w.hp, 15] }
+    then:
+      - print: ["FAIL class member default hp: ${w.hp}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [w.alive, true] }
+    then:
+      - print: ["FAIL class member default alive"]
+      - exit: [1]
+
+- decl: [heap_w, ptr<Worker>, { new: Worker }]
+
+- if:
+    condition: { neq: [heap_w.host, "localhost"] }
+    then:
+      - print: ["FAIL heap class-model default host: ${heap_w.host}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [heap_w.port, 8080] }
+    then:
+      - print: ["FAIL heap class-model default port: ${heap_w.port}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [heap_w.ssl, true] }
+    then:
+      - print: ["FAIL heap class-model default ssl"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [heap_w.retries, 3] }
+    then:
+      - print: ["FAIL heap class-model default retries: ${heap_w.retries}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [heap_w.entity_id, 77] }
+    then:
+      - print: ["FAIL heap class-model default entity_id: ${heap_w.entity_id}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [heap_w.hp, 15] }
+    then:
+      - print: ["FAIL heap class member default hp: ${heap_w.hp}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [heap_w.alive, true] }
+    then:
+      - print: ["FAIL heap class member default alive"]
+      - exit: [1]
+
+- free: [heap_cfg]
+- free: [heap_w]
+
+- print: ["PASS test_inherited_defaults"]

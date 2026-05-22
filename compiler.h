@@ -35,12 +35,21 @@ public:
     void compile(const std::string& filename, const std::string& outputFilename);
     const llvm::Module& getModule() const; // Helper for JIT
 
+    // Override the target before compile(). Used for cross-compilation, e.g.
+    // --target wasm32 for emcc consumers. Defaults to the native triple.
+    void setTargetTriple(const std::string& triple);
+
     // Generates the standard C main() entry point wrapper.
     // Call this ONLY when building an executable or running JIT.
     void generateEntryPoint();
 
     void compileToObject(const std::string& filename, const std::string& outputFilename);
-    int jitRun(); // JIT execution method
+    // Write the current module as text-format LLVM IR (.ll) to outputFilename.
+    // Used by --emit-main mode to re-emit IR after generateEntryPoint() so a
+    // single .ll file is self-contained for external toolchains (emcc, …).
+    void saveModule(const std::string& outputFilename);
+    int jitRun();                       // JIT execution (dummy argv)
+    int jitRun(int argc, char** argv);  // JIT execution with real argv passed to AIML program
 
     // Compile a complete AIML program from an in-memory YAML string (no file I/O).
     // Used by aiml_isolated_exec to run Code objects in a fresh LLVM context.
@@ -77,6 +86,15 @@ public:
     std::vector<std::string> importedSourceFiles;  // source paths of all imports (for .d file)
     std::string compilerPath;
     std::string entryPointName = "main";
+    // Stored target triple (set via setTargetTriple). Empty = use native default.
+    // Propagated to sub-compilers spawned for imports so they emit IR for the
+    // same target.
+    std::string targetTripleStr;
+    // When true, resolveImport emits each import as text-format LLVM IR (.ll)
+    // instead of a native object (.o). Set automatically by main.cpp when the
+    // top-level output is .ll (typically a WASM build via emcc). Native builds
+    // keep .o as before so other projects (9rooms etc.) are unaffected.
+    bool emitImportsAsLL = false;
     // Library mode: skip __aiml_init, fptable, schema globals (for import-only objects).
     bool libraryMode = false;
     // When true, skip the internal import cache (build tool handles caching).

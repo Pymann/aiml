@@ -1,24 +1,24 @@
-# Kapitel 32.2 — HTTP/S: Client und Server
+# Chapter 32.2 — HTTP/S: Client and Server
 
-> **Leitgedanke:** HTTP/1.1 wird in AIML **ohne externe Bibliotheken** auf Basis von
-> `net.*` (HTTP) und `tls.*` (HTTPS) implementiert. Der Transport wird automatisch
-> anhand des URL-Schemas gewählt. Der HTTP-Server ist single-threaded per Default,
-> aber für jeden eingehenden Client kann mit `spawn` ein eigener Thread erzeugt werden.
+> **Core idea:** HTTP/1.1 is implemented in AIML **without external libraries** on top of
+> `net.*` (HTTP) and `tls.*` (HTTPS). The transport is selected automatically
+> based on the URL scheme. The HTTP server is single-threaded by default,
+> but a dedicated thread can be spawned for each incoming client using `spawn`.
 
 ---
 
-## 1. Typen
+## 1. Types
 
-| Typ                    | LLVM  | Beschreibung |
-|------------------------|-------|--------------|
-| `url`                  | `i8*` | Geparste, validierte URL (Scheme, Host, Port, Path, Query, Fragment) |
-| `http_session_handle`  | `i8*` | Persistente Client-Session (Cookie-Jar, Keep-Alive, gemeinsame Headers/Auth) |
-| `http_client_handle`   | `i8*` | Builder für einen einzelnen ausgehenden Request (Methode, URL, Header, Body) |
-| `http_request_handle`  | `i8*` | Eingehender Server-Request (URL, Methode, Header, Body, Cookies, Pfad-Params) |
-| `http_response_handle` | `i8*` | Server-Response-Writer **und** empfangene Client-Antwort |
-| `http_server_handle`   | `i8*` | Gebundener HTTP-Server (Routes, Middleware, Handler) |
+| Type                   | LLVM  | Description |
+|------------------------|-------|-------------|
+| `url`                  | `i8*` | Parsed, validated URL (scheme, host, port, path, query, fragment) |
+| `http_session_handle`  | `i8*` | Persistent client session (cookie jar, keep-alive, shared headers/auth) |
+| `http_client_handle`   | `i8*` | Builder for a single outgoing request (method, URL, headers, body) |
+| `http_request_handle`  | `i8*` | Incoming server request (URL, method, headers, body, cookies, path params) |
+| `http_response_handle` | `i8*` | Server response writer **and** received client response |
+| `http_server_handle`   | `i8*` | Bound HTTP server (routes, middleware, handlers) |
 
-Handler-Signatur: immer zwei Parameter — Request und Response:
+Handler signature: always two parameters — request and response:
 
 ```aiml
 - def:
@@ -32,64 +32,63 @@ Handler-Signatur: immer zwei Parameter — Request und Response:
 
 ---
 
-## 1.1 Der `url`-Typ
+## 1.1 The `url` Type
 
-`url` ist ein eigenständiger Typ — inspiriert von Pydantic's `HttpUrl` — der eine
-vollständig geparste und validierte URL repräsentiert. Er wird automatisch beim
-Empfang eines HTTP-Requests als Member von `http_request_handle` gesetzt und kann
-auch eigenständig aus einem String erzeugt werden.
+`url` is a standalone type — inspired by Pydantic's `HttpUrl` — that represents a
+fully parsed and validated URL. It is set automatically as a member of `http_request_handle`
+when an HTTP request is received, and can also be created independently from a string.
 
-### Erzeugung
+### Creation
 
 ```aiml
-# Aus String parsen
+# Parse from string
 - decl: [u, url]
 - set: [u, { call: [url.parse, "https://api.example.com:8443/v1/users?page=2&limit=10#top"] }]
 
-# Direkte Zuweisung (auto-parse, wie der path-Typ)
+# Direct assignment (auto-parse, like the path type)
 - decl: [u, url]
 - set: [u, "https://api.example.com/v1/users"]
 ```
 
-### Member und Methoden des `url`-Typs
+### Members and Methods of the `url` Type
 
-**Member** (direkt lesbar):
+**Members** (directly readable):
 
-| Member       | Typ                  | Beschreibung |
-|--------------|----------------------|--------------|
-| `protocol`   | `string`             | Protokoll, z.B. `"https"`, `"ftp"`, `"ws"` — null wenn nicht gesetzt |
-| `host`       | `string`             | Hostname, z.B. `"api.example.com"` — null wenn fehlt |
-| `path`       | `string`             | Pfad-Anteil, z.B. `"/v1/users"` — null wenn fehlt |
-| `fragment`   | `string`             | Fragment nach `#` — null wenn keiner |
-| `port`       | `i32`                | Port; `0` = Protokoll-Default |
-| `get_param`  | `map<string:string>` | Alle Query-Parameter; null wenn keine vorhanden |
-| `credential` | `url_credential`     | Eingebettete Credentials (`user:pass@host`); null wenn keine |
+| Member       | Type                 | Description |
+|--------------|----------------------|-------------|
+| `protocol`   | `string`             | Protocol, e.g. `"https"`, `"ftp"`, `"ws"` — null if not set |
+| `host`       | `string`             | Hostname, e.g. `"api.example.com"` — null if missing |
+| `path`       | `string`             | Path component, e.g. `"/v1/users"` — null if missing |
+| `fragment`   | `string`             | Fragment after `#` — null if none |
+| `port`       | `i32`                | Port; `0` = protocol default |
+| `get_param`  | `map<string:string>` | All query parameters; null if none present |
+| `credential` | `url_credential`     | Embedded credentials (`user:pass@host`); null if none |
 
-`url_credential` hat zwei Member:
+`url_credential` has two members:
 
-| Member | Typ      | Beschreibung |
-|--------|----------|--------------|
-| `user` | `string` | Benutzername; null wenn fehlt |
-| `pass` | `string` | Passwort; null wenn fehlt |
+| Member | Type     | Description |
+|--------|----------|-------------|
+| `user` | `string` | Username; null if missing |
+| `pass` | `string` | Password; null if missing |
 
-**Methoden**:
+**Methods**:
 
-| Methode     | Argumente | Rückgabe | Beschreibung |
-|-------------|-----------|----------|--------------|
-| `to_string` | —         | `string` | Vollständige URL als String |
-| `is_https`  | —         | `bool`   | `true` wenn Protokoll `https` |
+| Method      | Arguments | Return   | Description |
+|-------------|-----------|----------|-------------|
+| `to_string` | —         | `string` | Full URL as string |
+| `is_https`  | —         | `bool`   | `true` if protocol is `https` |
 
-### Beispiel
+### Example
 
 ```aiml
 - decl: [u, url]
 - set: [u, "https://api.example.com/v1/users?page=2&limit=10"]
 
-# Member direkt lesen
+# Read members directly
 - print: ["host: ${u.host}"]
 - print: ["path: ${u.path}"]
 
-# Query-Parameter: get_param ist eine map<string:string>
+# Query parameters: get_param is a map<string:string>
 - decl: [pg, string]
 - set: [pg, { call: [u.get_param.get, "page"] }]
 - print: ["page: ${pg}"]
@@ -98,17 +97,17 @@ auch eigenständig aus einem String erzeugt werden.
 - set: [limit, { call: [u.get_param.get, "limit"] }]
 - print: ["limit: ${limit}"]
 
-# Null-Check für optionale Felder
+# Null check for optional fields
 - if: [{ ==: [u.fragment, null] }, true]
   then:
-    - print: ["kein Fragment"]
+    - print: ["no fragment"]
 ```
 
 ---
 
-## 2. HTTP-Client
+## 2. HTTP Client
 
-### 2.1 Convenience-Funktionen
+### 2.1 Convenience Functions
 
 ```aiml
 # GET
@@ -120,22 +119,22 @@ auch eigenständig aus einem String erzeugt werden.
 - print: ["Status: ${resp.status}"]
 - print: ["Body: ${resp.body}"]
 
-# POST mit JSON-Body
+# POST with JSON body
 - decl: [items_url, url]
 - set: [items_url, "https://api.example.com/items"]
 - decl: [resp2, http_response_handle]
 - set: [resp2, { call: [http.post, items_url, "{\"name\": \"test\"}"] }]
 
-# weitere Methoden
+# additional methods
 - decl: [item1_url, url]
 - set: [item1_url, "https://api.example.com/items/1"]
-- set: [resp, { call: [http.put,    item1_url, "{\"name\": \"neu\"}"] }]
+- set: [resp, { call: [http.put,    item1_url, "{\"name\": \"new\"}"] }]
 - set: [resp, { call: [http.delete, item1_url] }]
 - set: [resp, { call: [http.patch,  item1_url, "{\"x\": 1}"] }]
 - set: [resp, { call: [http.head,   status_url] }]
 ```
 
-### 2.2 Request-Builder (mit Headern, Timeout, etc.)
+### 2.2 Request Builder (with headers, timeout, etc.)
 
 ```aiml
 - decl: [chat_url, url]
@@ -159,50 +158,50 @@ auch eigenständig aus einem String erzeugt werden.
 - print: ["ok: ${resp.ok}"]
 ```
 
-### 2.3 `http_client_handle` — Member und Methoden
+### 2.3 `http_client_handle` — Members and Methods
 
-**Member** (direkt setzbar via `set`):
+**Members** (directly settable via `set`):
 
-| Member       | Typ                  | Beschreibung |
-|--------------|----------------------|--------------|
-| `headers`    | `map<string:string>` | Request-Headers; bringt `put`, `get`, `remove` etc. mit |
-| `body`       | `string`             | Request-Body (Text) |
-| `body_bytes` | `buffer<u8>`             | Request-Body (binär) |
-| `timeout`    | `i32`                | Timeout in ms (0 = kein Timeout) |
-| `stream`     | `bool`               | Streaming-Modus: Response wird nicht gepuffert; `pipe`/`save_to` verwenden |
+| Member       | Type                 | Description |
+|--------------|----------------------|-------------|
+| `headers`    | `map<string:string>` | Request headers; provides `put`, `get`, `remove` etc. |
+| `body`       | `string`             | Request body (text) |
+| `body_bytes` | `buffer<u8>`         | Request body (binary) |
+| `timeout`    | `i32`                | Timeout in ms (0 = no timeout) |
+| `stream`     | `bool`               | Streaming mode: response is not buffered; use `pipe`/`save_to` |
 
-**Methode**:
+**Method**:
 
-| Methode | Argumente | Rückgabe               | Beschreibung |
-|---------|-----------|------------------------|--------------|
-| `send`  | —         | `http_response_handle` | Sendet Request, gibt Antwort zurück |
+| Method | Arguments | Return                 | Description |
+|--------|-----------|------------------------|-------------|
+| `send` | —         | `http_response_handle` | Sends request, returns response |
 
-### 2.4 `http_response_handle` — Member und Methoden (Client — Lesen)
+### 2.4 `http_response_handle` — Members and Methods (Client — Reading)
 
-**Member** (direkt lesbar nach dem Request):
+**Members** (directly readable after the request):
 
-| Member       | Typ                  | Beschreibung |
-|--------------|----------------------|--------------|
-| `status`     | `i32`                | HTTP-Status-Code (200, 404, …) |
-| `ok`         | `bool`               | `true` wenn Status 2xx |
-| `headers`    | `map<string:string>` | Response-Headers; immer initialisiert (nie null) |
-| `body`       | `string`             | Response-Body vollständig gepuffert; null bei Streaming |
-| `body_bytes` | `buffer<u8>`             | Response-Body als Buffer; null bei Streaming |
+| Member       | Type                 | Description |
+|--------------|----------------------|-------------|
+| `status`     | `i32`                | HTTP status code (200, 404, …) |
+| `ok`         | `bool`               | `true` if status is 2xx |
+| `headers`    | `map<string:string>` | Response headers; always initialized (never null) |
+| `body`       | `string`             | Response body fully buffered; null when streaming |
+| `body_bytes` | `buffer<u8>`         | Response body as buffer; null when streaming |
 
-**Methoden** (Streaming — kein In-Memory-Puffer):
+**Methods** (streaming — no in-memory buffer):
 
-| Methode   | Argumente  | Beschreibung |
-|-----------|------------|--------------|
-| `save_to` | `p: path`  | Streamt Body direkt in Datei — kein Heap-Puffer (`splice`/write-loop) |
-| `pipe`    | `fn`       | Ruft `fn(chunk: buffer<u8>)` für jeden empfangenen Chunk auf |
+| Method    | Arguments  | Description |
+|-----------|------------|-------------|
+| `save_to` | `p: path`  | Streams body directly to file — no heap buffer (`splice`/write-loop) |
+| `pipe`    | `fn`       | Calls `fn(chunk: buffer<u8>)` for each received chunk |
 
 ```aiml
-# Datei ohne Zwischenspeicher empfangen
+# Receive file without intermediate buffering
 - decl: [out, path]
 - set: [out, "/var/data/video.mp4"]
 - call: [resp.save_to, out]
 
-# Custom: Chunk-by-Chunk in DB schreiben
+# Custom: write chunk-by-chunk to DB
 - def:
     name: on_chunk
     args: [[chunk, buffer<u8>]]
@@ -212,24 +211,24 @@ auch eigenständig aus einem String erzeugt werden.
 - call: [resp.pipe, on_chunk]
 ```
 
-> `body` / `body_bytes` und `save_to` / `pipe` schließen sich gegenseitig aus —
-> bei Streaming-Requests (`set: [client.stream, true]`) sind `body` und `body_bytes` null.
+> `body` / `body_bytes` and `save_to` / `pipe` are mutually exclusive —
+> for streaming requests (`set: [client.stream, true]`), `body` and `body_bytes` are null.
 
 ---
 
 ## 2.5 Session — `http_session_handle`
 
-Analog zu `requests.Session` in Python: persistente Headers, Cookie-Jar und
-TCP-Verbindungswiederverwendung (Keep-Alive) über mehrere Requests hinweg.
+Analogous to `requests.Session` in Python: persistent headers, cookie jar, and
+TCP connection reuse (keep-alive) across multiple requests.
 
-### Erzeugung
+### Creation
 
 ```aiml
 - decl: [s, http_session_handle]
 - set: [s, { call: [http.session] }]
 ```
 
-### Typisches Beispiel: Login + geschützte API
+### Typical Example: Login + Protected API
 
 ```aiml
 - decl: [s, http_session_handle]
@@ -238,13 +237,13 @@ TCP-Verbindungswiederverwendung (Keep-Alive) über mehrere Requests hinweg.
 - call: [s.headers.put, "Accept", "application/json"]
 - set: [s.timeout, 30000]
 
-# Login — Set-Cookie vom Server wird automatisch im Cookie-Jar gespeichert
+# Login — Set-Cookie from server is automatically stored in cookie jar
 - decl: [login_url, url]
 - set: [login_url, "https://app.example.com/login"]
 - decl: [resp, http_response_handle]
 - set: [resp, { call: [s.post, login_url, "{\"user\":\"alice\",\"pass\":\"secret\"}"] }]
 
-# Folgerequest — Session-Cookie wird automatisch mitgeschickt
+# Follow-up request — session cookie is automatically sent
 - decl: [data_url, url]
 - set: [data_url, "https://app.example.com/api/data"]
 - set: [resp, { call: [s.get, data_url] }]
@@ -254,55 +253,55 @@ TCP-Verbindungswiederverwendung (Keep-Alive) über mehrere Requests hinweg.
 - call: [s.close]
 ```
 
-### `http_session_handle` — Member und Methoden
+### `http_session_handle` — Members and Methods
 
-**Member** (direkt setzbar via `set`):
+**Members** (directly settable via `set`):
 
-| Member    | Typ                  | Beschreibung |
-|-----------|----------------------|--------------|
-| `headers` | `map<string:string>` | Persistente Headers für alle Requests der Session |
-| `timeout` | `i32`                | Default-Timeout in ms (0 = kein Timeout) |
-| `cookies` | `map<string:string>` | Cookie-Jar — manuell les- und schreibbar |
+| Member    | Type                 | Description |
+|-----------|----------------------|-------------|
+| `headers` | `map<string:string>` | Persistent headers for all requests in the session |
+| `timeout` | `i32`                | Default timeout in ms (0 = no timeout) |
+| `cookies` | `map<string:string>` | Cookie jar — manually readable and writable |
 
-**Methoden**:
+**Methods**:
 
-| Methode       | Argumente                      | Rückgabe               | Beschreibung |
-|---------------|--------------------------------|------------------------|--------------|
-| `set_auth_bearer` | `token: string`            | —                      | Setzt `Authorization: Bearer <token>` für alle Requests |
-| `set_auth_basic`  | `user: string, pass: string` | —                    | Setzt `Authorization: Basic <b64>` für alle Requests |
-| `clear_cookies`   | —                          | —                      | Cookie-Jar leeren |
-| `get`         | `u: url`                       | `http_response_handle` | GET mit Session-Kontext |
-| `post`        | `u: url, body: string`         | `http_response_handle` | POST mit Session-Kontext |
-| `put`         | `u: url, body: string`         | `http_response_handle` | PUT mit Session-Kontext |
-| `delete`      | `u: url`                       | `http_response_handle` | DELETE mit Session-Kontext |
-| `patch`       | `u: url, body: string`         | `http_response_handle` | PATCH mit Session-Kontext |
-| `head`        | `u: url`                       | `http_response_handle` | HEAD mit Session-Kontext |
-| `request`     | `method: string, u: url`       | `http_client_handle`   | Builder für komplexe Requests mit Session-Kontext |
-| `close`       | —                              | —                      | Pooled Connections schließen, Session freigeben |
+| Method            | Arguments                      | Return                 | Description |
+|-------------------|--------------------------------|------------------------|-------------|
+| `set_auth_bearer` | `token: string`                | —                      | Sets `Authorization: Bearer <token>` for all requests |
+| `set_auth_basic`  | `user: string, pass: string`   | —                      | Sets `Authorization: Basic <b64>` for all requests |
+| `clear_cookies`   | —                              | —                      | Clear cookie jar |
+| `get`             | `u: url`                       | `http_response_handle` | GET with session context |
+| `post`            | `u: url, body: string`         | `http_response_handle` | POST with session context |
+| `put`             | `u: url, body: string`         | `http_response_handle` | PUT with session context |
+| `delete`          | `u: url`                       | `http_response_handle` | DELETE with session context |
+| `patch`           | `u: url, body: string`         | `http_response_handle` | PATCH with session context |
+| `head`            | `u: url`                       | `http_response_handle` | HEAD with session context |
+| `request`         | `method: string, u: url`       | `http_client_handle`   | Builder for complex requests with session context |
+| `close`           | —                              | —                      | Close pooled connections, release session |
 
-### Cookie-Jar-Verhalten
+### Cookie Jar Behavior
 
-- Empfängt ein Response einen `Set-Cookie`-Header, wird der Cookie automatisch in `cookies` gespeichert
-- Folgende Requests an dieselbe Domain senden alle passenden Cookies automatisch mit
-- Domain-Matching, Path-Matching und Expiry werden berücksichtigt (HTTP Cookie-Spec)
-- `cookies.put(name, val)` ermöglicht das manuelle Vorbelegen des Jars (z.B. nach Token-Refresh)
+- When a response contains a `Set-Cookie` header, the cookie is automatically stored in `cookies`
+- Subsequent requests to the same domain automatically send all matching cookies
+- Domain matching, path matching, and expiry are respected (HTTP cookie spec)
+- `cookies.put(name, val)` allows manually pre-populating the jar (e.g. after token refresh)
 
-### Verhältnis zu `rest_client_handle`
+### Relationship to `rest_client_handle`
 
-`rest_client_handle` (Kapitel 32.3) baut intern auf `http_session_handle` auf und
-ergänzt: Base-URL, automatisches `Content-Type: application/json` und relative Pfade.
+`rest_client_handle` (Chapter 32.3) is built internally on top of `http_session_handle` and
+adds: base URL, automatic `Content-Type: application/json`, and relative paths.
 
 ```
-http_session_handle   ← Cookie-Jar, Keep-Alive, persistente Headers
+http_session_handle   ← cookie jar, keep-alive, persistent headers
         ↑
-rest_client_handle    ← + Base-URL + auto JSON-Headers + relative Pfade
+rest_client_handle    ← + base URL + auto JSON headers + relative paths
 ```
 
 ---
 
-## 3. HTTP-Server
+## 3. HTTP Server
 
-### 3.1 Minimales Beispiel
+### 3.1 Minimal Example
 
 ```aiml
 - def:
@@ -334,7 +333,7 @@ rest_client_handle    ← + Base-URL + auto JSON-Headers + relative Pfade
 - call: [srv.start]
 ```
 
-### 3.2 Nicht-blockierender Server mit `start_async`
+### 3.2 Non-blocking Server with `start_async`
 
 ```aiml
 - decl: [srv, http_server_handle]
@@ -349,7 +348,7 @@ rest_client_handle    ← + Base-URL + auto JSON-Headers + relative Pfade
 - call: [srv_thread.join]
 ```
 
-### 3.3 Server mit einem Thread pro Client
+### 3.3 Server with One Thread per Client
 
 ```aiml
 - def:
@@ -376,88 +375,88 @@ rest_client_handle    ← + Base-URL + auto JSON-Headers + relative Pfade
 - call: [srv.start]
 ```
 
-### 3.4 `http_server_handle`-Methoden
+### 3.4 `http_server_handle` Methods
 
-| Methode       | Argumente                                              | Rückgabe            | Beschreibung |
-|---------------|--------------------------------------------------------|---------------------|--------------|
-| `route`       | `method: string, path: string, handler: fn`            | —                   | Route registrieren |
-| `use`         | `middleware: fn`                                       | —                   | Globale Middleware (vor jedem Handler) |
-| `group`       | `prefix: string, middleware: fn`                       | `http_route_handle` | Gruppe mit Prefix + Guard |
-| `filesystem`  | `prefix: string, dirs: list<path>, opts: fs_options`   | —                   | Statische Dateien unter `prefix` ausliefern |
-| `start`       | —                                                      | —                   | Blockierender Accept-Loop |
-| `start_async` | —                                                      | `thread_handle`     | Nicht-blockierend (startet Thread) |
-| `stop`        | —                                                      | —                   | Signalisiert Accept-Loop zu stoppen |
-| `set_header`  | `name: string, val: string`                            | —                   | Globaler Default-Header für alle Antworten |
+| Method        | Arguments                                              | Return              | Description |
+|---------------|--------------------------------------------------------|---------------------|-------------|
+| `route`       | `method: string, path: string, handler: fn`            | —                   | Register route |
+| `use`         | `middleware: fn`                                       | —                   | Global middleware (before every handler) |
+| `group`       | `prefix: string, middleware: fn`                       | `http_route_handle` | Group with prefix + guard |
+| `filesystem`  | `prefix: string, dirs: list<path>, opts: fs_options`   | —                   | Serve static files under `prefix` |
+| `start`       | —                                                      | —                   | Blocking accept loop |
+| `start_async` | —                                                      | `thread_handle`     | Non-blocking (starts thread) |
+| `stop`        | —                                                      | —                   | Signals accept loop to stop |
+| `set_header`  | `name: string, val: string`                            | —                   | Global default header for all responses |
 
-**Routing-Regeln:**
-- Exakte Pfade: `"/api/v1/users"` — matcht nur genau diesen Pfad
-- Benannte Segmente: `"/users/:id"` — matcht ein Segment, Name abrufbar via `req.params`
-- Wildcard-Suffix: `"/static/*"` — matcht alle Pfade mit diesem Prefix
-- Methode `"*"` matcht alle HTTP-Methoden auf dem Pfad
-- Vorrang: exakt > benannt > Wildcard; bei gleichem Typ: längeres Muster zuerst
+**Routing rules:**
+- Exact paths: `"/api/v1/users"` — matches only this exact path
+- Named segments: `"/users/:id"` — matches one segment, name accessible via `req.params`
+- Wildcard suffix: `"/static/*"` — matches all paths with this prefix
+- Method `"*"` matches all HTTP methods on the path
+- Priority: exact > named > wildcard; for the same type: longer pattern first
 
-### 3.4a `http_route_handle`-Methoden
+### 3.4a `http_route_handle` Methods
 
-`http_route_handle` wird von `srv.group` zurückgegeben. Er hält intern eine Referenz auf den
-Root-`http_server_handle` und kombiniert alle Pfade automatisch mit dem Prefix.
-Kein eigener Listener — `start`/`stop`/`start_async` sind nicht vorhanden.
+`http_route_handle` is returned by `srv.group`. It holds an internal reference to the
+root `http_server_handle` and automatically combines all paths with the prefix.
+No own listener — `start`/`stop`/`start_async` are not present.
 
-| Methode      | Argumente                                            | Rückgabe            | Beschreibung |
-|--------------|------------------------------------------------------|---------------------|--------------|
-| `route`      | `method: string, path: string, handler: fn`          | —                   | Route unter Prefix registrieren |
-| `use`        | `middleware: fn`                                     | —                   | Middleware für diese Gruppe |
-| `group`      | `prefix: string, middleware: fn`                     | `http_route_handle` | Verschachtelte Untergruppe |
-| `filesystem` | `prefix: string, dirs: list<path>, opts: fs_options` | —                   | Statische Dateien unter Prefix |
+| Method       | Arguments                                            | Return              | Description |
+|--------------|------------------------------------------------------|---------------------|-------------|
+| `route`      | `method: string, path: string, handler: fn`          | —                   | Register route under prefix |
+| `use`        | `middleware: fn`                                     | —                   | Middleware for this group |
+| `group`      | `prefix: string, middleware: fn`                     | `http_route_handle` | Nested subgroup |
+| `filesystem` | `prefix: string, dirs: list<path>, opts: fs_options` | —                   | Static files under prefix |
 
-### 3.5 `http_request_handle` — Member und Methoden (Server — Lesen)
+### 3.5 `http_request_handle` — Members and Methods (Server — Reading)
 
-**Member** (direkt lesbar):
+**Members** (directly readable):
 
-| Member       | Typ                  | Beschreibung |
-|--------------|----------------------|--------------|
-| `url`        | `url`                | Vollständig geparste Request-URL |
-| `params`     | `map<string:string>` | Benannte Pfadsegmente der gematchten Route |
+| Member       | Type                 | Description |
+|--------------|----------------------|-------------|
+| `url`        | `url`                | Fully parsed request URL |
+| `params`     | `map<string:string>` | Named path segments of the matched route |
 | `method`     | `string`             | `"GET"`, `"POST"`, … |
-| `path`       | `string`             | Pfad-Anteil der URL, z.B. `"/api/users"` |
-| `body`       | `string`             | Request-Body als String |
-| `body_bytes` | `buffer<u8>`             | Request-Body als Buffer |
+| `path`       | `string`             | Path component of the URL, e.g. `"/api/users"` |
+| `body`       | `string`             | Request body as string |
+| `body_bytes` | `buffer<u8>`         | Request body as buffer |
 
-**Methoden** (mit Argument):
+**Methods** (with argument):
 
-| Methode  | Argumente      | Rückgabe | Beschreibung |
-|----------|----------------|----------|--------------|
-| `header` | `name: string` | `string` | Request-Header-Wert; null wenn fehlt |
-| `cookie` | `name: string` | `string` | Request-Cookie lesen; null wenn nicht vorhanden |
+| Method   | Arguments      | Return   | Description |
+|----------|----------------|----------|-------------|
+| `header` | `name: string` | `string` | Request header value; null if missing |
+| `cookie` | `name: string` | `string` | Read request cookie; null if not present |
 
-### 3.6 `http_response_handle` — Member und Methoden (Server — Schreiben)
+### 3.6 `http_response_handle` — Members and Methods (Server — Writing)
 
-**Member** (direkt setzbar via `set`):
+**Members** (directly settable via `set`):
 
-| Member       | Typ                  | Beschreibung |
-|--------------|----------------------|--------------|
-| `status`     | `i32`                | HTTP-Status-Code (default: 200) |
-| `headers`    | `map<string:string>` | Response-Headers; bringt `put`, `get`, `remove` etc. mit |
-| `body`       | `string`             | Response-Body als Text |
-| `body_bytes` | `buffer<u8>`             | Response-Body als Bytes |
-| `body_file`  | `path`               | Datei als Body — wird bei `send` gestreamt (Range-Request-aware) |
+| Member       | Type                 | Description |
+|--------------|----------------------|-------------|
+| `status`     | `i32`                | HTTP status code (default: 200) |
+| `headers`    | `map<string:string>` | Response headers; provides `put`, `get`, `remove` etc. |
+| `body`       | `string`             | Response body as text |
+| `body_bytes` | `buffer<u8>`         | Response body as bytes |
+| `body_file`  | `path`               | File as body — streamed during `send` (range-request-aware) |
 
-**Methoden** (5):
+**Methods** (5):
 
-| Methode       | Argumente       | Beschreibung |
-|---------------|-----------------|--------------|
-| `send`        | —               | Sendet vollständige Response (Status + Headers + Body); setzt `resp_sent` |
-| `write`       | `chunk: string` | Erster Aufruf: flusht Headers, startet Chunked-Transfer; folgende: schreibt Chunk |
-| `write_bytes` | `data: buffer<u8>`  | Wie `write`, aber ohne Userspace-Copy — übergibt `buf.ptr` direkt an `send()` |
-| `flush`       | —               | Flusht Puffer (SSE keepalive) |
-| `close`       | —               | Terminal-Chunk, beendet Chunked-Transfer; setzt `resp_sent` |
+| Method        | Arguments          | Description |
+|---------------|--------------------|-------------|
+| `send`        | —                  | Sends complete response (status + headers + body); sets `resp_sent` |
+| `write`       | `chunk: string`    | First call: flushes headers, starts chunked transfer; subsequent calls: write chunk |
+| `write_bytes` | `data: buffer<u8>` | Like `write`, but without userspace copy — passes `buf.ptr` directly to `send()` |
+| `flush`       | —                  | Flushes buffer (SSE keepalive) |
+| `close`       | —                  | Terminal chunk, ends chunked transfer; sets `resp_sent` |
 
-> **Hinweis:** `resp_sent` wird durch `send`, den ersten `write`-Aufruf und `close` gesetzt.
-> Middleware kann damit den Handler überspringen, ohne einen Rückgabewert zu benötigen.
+> **Note:** `resp_sent` is set by `send`, the first `write` call, and `close`.
+> Middleware can use this to skip the handler without needing a return value.
 
-**Cookies und Redirects** werden über `headers` gesetzt:
+**Cookies and redirects** are set via `headers`:
 
 ```aiml
-# Cookie setzen
+# Set cookie
 - call: [resp.headers.put, "Set-Cookie", "session=abc123; Path=/; HttpOnly; Max-Age=3600"]
 
 # Redirect
@@ -468,9 +467,9 @@ Kein eigener Listener — `start`/`stop`/`start_async` sind nicht vorhanden.
 - call: [resp.send]
 ```
 
-### 3.7 Benannte Pfadsegmente
+### 3.7 Named Path Segments
 
-Segmente mit `:name` im Route-Pattern werden beim Match in `req.params` eingetragen.
+Segments with `:name` in the route pattern are stored in `req.params` on match.
 
 ```aiml
 - call: [srv.route, "GET",  "/users/:id",                  handle_user]
@@ -479,14 +478,14 @@ Segmente mit `:name` im Route-Pattern werden beim Match in `req.params` eingetra
 - call: [srv.route, "GET",  "/static/*",                   handle_static]
 ```
 
-Im Handler:
+In the handler:
 
 ```aiml
 - def:
     name: handle_order
     args: [[req, http_request_handle], [resp, http_response_handle]]
     body:
-      # Benannte Pfadsegmente
+      # Named path segments
       - decl: [p, map<string:string>]
       - set: [p, req.params]
 
@@ -496,7 +495,7 @@ Im Handler:
       - decl: [oid, string]
       - set: [oid, { call: [p.get, "order_id"] }]
 
-      # Query-Parameter über req.url
+      # Query parameters via req.url
       - decl: [u, url]
       - set: [u, req.url]
 
@@ -509,24 +508,24 @@ Im Handler:
       - call: [resp.send]
 ```
 
-**Matching-Tabelle:**
+**Matching table:**
 
-| Route-Pattern                      | Eingehender Pfad          | `params`-Inhalt                         |
+| Route pattern                      | Incoming path             | `params` content                        |
 |------------------------------------|---------------------------|-----------------------------------------|
 | `/users/:id`                       | `/users/42`               | `id` → `"42"`                           |
 | `/users/:id/orders/:order_id`      | `/users/7/orders/99`      | `id` → `"7"`, `order_id` → `"99"`      |
 | `/orgs/:org/repos`                 | `/orgs/acme/repos`        | `org` → `"acme"`                        |
-| `/static/*`                        | `/static/css/main.css`    | *(leer, kein benanntes Segment)*        |
+| `/static/*`                        | `/static/css/main.css`    | *(empty, no named segment)*             |
 
-### 3.8 Middleware und Absicherung
+### 3.8 Middleware and Authorization
 
-Middleware-Funktionen haben dieselbe Signatur wie Handler:
+Middleware functions have the same signature as handlers:
 `args: [[req, http_request_handle], [resp, http_response_handle]]`.
 
-Sobald eine Middleware `resp.send()`, den ersten `resp.write()` oder `resp.close()` aufruft,
-wird intern `resp_sent = true` gesetzt — der eigentliche Handler wird übersprungen.
+Once middleware calls `resp.send()`, the first `resp.write()`, or `resp.close()`,
+`resp_sent = true` is set internally — the actual handler is skipped.
 
-#### `srv.use(fn)` — Globale Middleware
+#### `srv.use(fn)` — Global Middleware
 
 ```aiml
 - def:
@@ -544,7 +543,7 @@ wird intern `resp_sent = true` gesetzt — der eigentliche Handler wird überspr
 - call: [srv.use, log_middleware]
 ```
 
-#### `srv.group(prefix, middleware_fn)` — Geschützte Route-Gruppe
+#### `srv.group(prefix, middleware_fn)` — Protected Route Group
 
 ```aiml
 - def:
@@ -571,7 +570,7 @@ wird intern `resp_sent = true` gesetzt — der eigentliche Handler wird überspr
 - call: [api.route, "GET",  "/users/:id", handle_get_user]
 ```
 
-Öffentliche Routen direkt am `srv` (kein Guard):
+Public routes directly on `srv` (no guard):
 
 ```aiml
 - call: [srv.route, "GET",  "/health",         handle_health]
@@ -579,10 +578,10 @@ wird intern `resp_sent = true` gesetzt — der eigentliche Handler wird überspr
 - call: [srv.route, "GET",  "/auth/callback",   handle_callback]
 ```
 
-#### Beispiel: Google OAuth 2.0
+#### Example: Google OAuth 2.0
 
 ```aiml
-# Schritt 1 — Weiterleitung zu Google
+# Step 1 — Redirect to Google
 - def:
     name: handle_login
     args: [[req, http_request_handle], [resp, http_response_handle]]
@@ -595,7 +594,7 @@ wird intern `resp_sent = true` gesetzt — der eigentliche Handler wird überspr
       - set: [resp.status, 302]
       - call: [resp.send]
 
-# Schritt 2 — Callback: Code gegen Token tauschen
+# Step 2 — Callback: exchange code for token
 - def:
     name: handle_callback
     args: [[req, http_request_handle], [resp, http_response_handle]]
@@ -617,7 +616,7 @@ wird intern `resp_sent = true` gesetzt — der eigentliche Handler wird überspr
       - decl: [token_json, string]
       - set: [token_json, token_resp.body]
 
-      # Session-Cookie setzen, zurück zur App
+      # Set session cookie, redirect back to app
       - call: [resp.headers.put, "Set-Cookie", "session_token=${token_json}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=3600"]
       - decl: [home, url]
       - set: [home, "/dashboard"]
@@ -628,22 +627,22 @@ wird intern `resp_sent = true` gesetzt — der eigentliche Handler wird überspr
       - call: [resp.send]
 ```
 
-### 3.9 Statische Dateien — `srv.filesystem`
+### 3.9 Static Files — `srv.filesystem`
 
-`srv.filesystem` liefert Dateien aus einem oder mehreren Verzeichnissen aus.
-Die Verzeichnisse werden in Reihenfolge durchsucht — erstes Match gewinnt.
-Die Datei-Auflösung (`<dir> + request_path`) erfolgt dynamisch pro Request;
-die `list<path>` wird einmalig beim Start übergeben.
+`srv.filesystem` serves files from one or more directories.
+The directories are searched in order — first match wins.
+File resolution (`<dir> + request_path`) happens dynamically per request;
+the `list<path>` is passed once at startup.
 
-#### `fs_options` — Member
+#### `fs_options` — Members
 
-| Member          | Typ      | Default         | Beschreibung |
-|-----------------|----------|-----------------|--------------|
-| `index`         | `path`   | `"index.html"`  | Datei, die bei Directory-Requests ausgeliefert wird |
-| `spa`           | `bool`   | `false`         | Alle unbekannten Pfade → `index`-Datei (Single-Page-App) |
-| `cache_max_age` | `i32`    | `0`             | `Cache-Control: max-age=N` in Sekunden; 0 = kein Cache-Header |
+| Member          | Type     | Default         | Description |
+|-----------------|----------|-----------------|-------------|
+| `index`         | `path`   | `"index.html"`  | File served for directory requests |
+| `spa`           | `bool`   | `false`         | All unknown paths → `index` file (single-page app) |
+| `cache_max_age` | `i32`    | `0`             | `Cache-Control: max-age=N` in seconds; 0 = no cache header |
 
-#### Beispiel: SPA + Assets
+#### Example: SPA + Assets
 
 ```aiml
 - decl: [dirs, list<path>]
@@ -657,19 +656,19 @@ die `list<path>` wird einmalig beim Start übergeben.
 - call: [srv.start]
 ```
 
-#### Beispiel: Mehrere Verzeichnisse (Fallback-Chain)
+#### Example: Multiple Directories (Fallback Chain)
 
 ```aiml
 - decl: [dirs, list<path>]
-- call: [dirs.push, "/var/www/theme"]     # zuerst Theme-Overrides
-- call: [dirs.push, "/var/www/default"]   # dann Defaults
+- call: [dirs.push, "/var/www/theme"]     # theme overrides first
+- call: [dirs.push, "/var/www/default"]   # then defaults
 
 - decl: [opts, fs_options]
 
 - call: [srv.filesystem, "/static", dirs, opts]
 ```
 
-#### Beispiel: Geschützte Downloads via `srv.group`
+#### Example: Protected Downloads via `srv.group`
 
 ```aiml
 - decl: [secure_dirs, list<path>]
@@ -682,12 +681,12 @@ die `list<path>` wird einmalig beim Start übergeben.
 - call: [secure.filesystem, "/", secure_dirs, opts]
 ```
 
-> **Hinweis:** `filesystem` kombiniert sich mit `srv.group` für Middleware-Absicherung.
-> Range-Requests (`Content-Range`) und `ETag`/`Last-Modified` werden automatisch behandelt.
+> **Note:** `filesystem` combines with `srv.group` for middleware authorization.
+> Range requests (`Content-Range`) and `ETag`/`Last-Modified` are handled automatically.
 
 ---
 
-## 4. HTTPS-Server
+## 4. HTTPS Server
 
 ```aiml
 - decl: [cert, path]
@@ -702,101 +701,101 @@ die `list<path>` wird einmalig beim Start übergeben.
 - call: [srv.start]
 ```
 
-`http.server_tls` kombiniert intern `tls.*` für den Transport mit dem gleichen
-HTTP/1.1-Parser wie `http.server`.
+`http.server_tls` combines `tls.*` internally for the transport with the same
+HTTP/1.1 parser as `http.server`.
 
 ---
 
-## 5. Namespace-Referenz
+## 5. Namespace Reference
 
-### `url`-Namespace
+### `url` Namespace
 
-| Aufruf | Rückgabe | Beschreibung |
-|--------|----------|--------------|
-| `{ call: [url.parse, s] }` | `url` | Parst und validiert URL-String |
+| Call | Return | Description |
+|------|--------|-------------|
+| `{ call: [url.parse, s] }` | `url` | Parses and validates URL string |
 
-### `http`-Namespace
+### `http` Namespace
 
-| Aufruf | Rückgabe | Beschreibung |
-|--------|----------|--------------|
-| `{ call: [http.session] }` | `http_session_handle` | Neue persistente Session (Cookie-Jar, Keep-Alive) |
-| `{ call: [http.get, u] }` | `http_response_handle` | Einzel-GET ohne Session (`u: url`) |
-| `{ call: [http.post, u, body] }` | `http_response_handle` | Einzel-POST ohne Session (`u: url`) |
-| `{ call: [http.put, u, body] }` | `http_response_handle` | Einzel-PUT ohne Session (`u: url`) |
-| `{ call: [http.delete, u] }` | `http_response_handle` | Einzel-DELETE ohne Session (`u: url`) |
-| `{ call: [http.patch, u, body] }` | `http_response_handle` | Einzel-PATCH ohne Session (`u: url`) |
-| `{ call: [http.head, u] }` | `http_response_handle` | Einzel-HEAD ohne Session (`u: url`) |
-| `{ call: [http.new_request, method, u] }` | `http_client_handle` | Client-Request-Builder (`u: url`) |
-| `{ call: [http.server, host, port] }` | `http_server_handle` | Plain-HTTP-Server |
-| `{ call: [http.server_tls, host, port, cert, key] }` | `http_server_handle` | HTTPS-Server (`cert, key: path`) |
+| Call | Return | Description |
+|------|--------|-------------|
+| `{ call: [http.session] }` | `http_session_handle` | New persistent session (cookie jar, keep-alive) |
+| `{ call: [http.get, u] }` | `http_response_handle` | Single GET without session (`u: url`) |
+| `{ call: [http.post, u, body] }` | `http_response_handle` | Single POST without session (`u: url`) |
+| `{ call: [http.put, u, body] }` | `http_response_handle` | Single PUT without session (`u: url`) |
+| `{ call: [http.delete, u] }` | `http_response_handle` | Single DELETE without session (`u: url`) |
+| `{ call: [http.patch, u, body] }` | `http_response_handle` | Single PATCH without session (`u: url`) |
+| `{ call: [http.head, u] }` | `http_response_handle` | Single HEAD without session (`u: url`) |
+| `{ call: [http.new_request, method, u] }` | `http_client_handle` | Client request builder (`u: url`) |
+| `{ call: [http.server, host, port] }` | `http_server_handle` | Plain HTTP server |
+| `{ call: [http.server_tls, host, port, cert, key] }` | `http_server_handle` | HTTPS server (`cert, key: path`) |
 
 ---
 
-## 6. Implementierungshinweise
+## 6. Implementation Notes
 
-### 6.1 URL-Parsing
+### 6.1 URL Parsing
 
-Interne C-Struktur (`AimlUrl`):
+Internal C structure (`AimlUrl`):
 
 ```cpp
 struct AimlUrl {
-    char* protocol;  // z.B. "https", "ws", "ftp" — NULL wenn nicht gesetzt
-    char* host;      // NULL wenn fehlt
-    int   port;      // 0 = Protokoll-Default
-    char* path;      // NULL wenn fehlt
-    char* fragment;  // NULL wenn keiner
-    AimlMap* get_param; // Query-Parameter als Map — NULL wenn keine vorhanden
-                        // lazy geparst beim ersten Zugriff auf get_param
+    char* protocol;  // e.g. "https", "ws", "ftp" — NULL if not set
+    char* host;      // NULL if missing
+    int   port;      // 0 = protocol default
+    char* path;      // NULL if missing
+    char* fragment;  // NULL if none
+    AimlMap* get_param; // query parameters as map — NULL if none present
+                        // lazily parsed on first access to get_param
 };
 ```
 
-Jeder eingehende HTTP-Request wird automatisch in ein `AimlUrl` geparst und über
-`req.url` bereitgestellt.
+Every incoming HTTP request is automatically parsed into an `AimlUrl` and made
+available via `req.url`.
 
-### 6.2 HTTP/1.1-Parser (`http_runtime.cpp`)
+### 6.2 HTTP/1.1 Parser (`http_runtime.cpp`)
 
-- Request-Line: `GET /path?query HTTP/1.1\r\n`
-- Header: `Name: Value\r\n` bis `\r\n\r\n`
-- Body: `Content-Length`-basiert (kein Chunked-Transfer-Encoding in v1)
+- Request line: `GET /path?query HTTP/1.1\r\n`
+- Headers: `Name: Value\r\n` until `\r\n\r\n`
+- Body: `Content-Length`-based (no chunked transfer encoding in v1)
 
-### 6.3 Keine externen Abhängigkeiten
+### 6.3 No External Dependencies
 
-Alle HTTP-Operationen laufen über `net.*` / `tls.*` — kein libcurl, kein libuv.
+All HTTP operations run through `net.*` / `tls.*` — no libcurl, no libuv.
 
-### 6.5 Zero-Copy-Pfade
+### 6.5 Zero-Copy Paths
 
-| Fall | Mechanismus | Userspace-Copy |
-|------|-------------|----------------|
-| `resp.body_file` + `send` | `sendfile(out_fd, in_fd, ...)` — Kernel Page Cache → Socket | keine |
-| `resp.body_bytes` + `send` | `send(fd, buf.ptr, buf.len, 0)` | keine |
-| `resp.write_bytes(buf)` | `send(fd, buf.ptr, buf.len, MSG_MORE)` | keine |
-| `resp.write(chunk)` | `send(fd, chunk.ptr, chunk.len, MSG_MORE)` | keine (string ist bereits `char*`) |
-| `resp.body` + `send` | `send(fd, body.ptr, body.len, 0)` | keine |
-| `{ call: [store.raw_bytes] }` + `write_bytes` | View in Store-Speicher → `send(fd, ptr, ...)` | keine (nur value-type Structs) |
+| Case | Mechanism | Userspace copy |
+|------|-----------|----------------|
+| `resp.body_file` + `send` | `sendfile(out_fd, in_fd, ...)` — kernel page cache → socket | none |
+| `resp.body_bytes` + `send` | `send(fd, buf.ptr, buf.len, 0)` | none |
+| `resp.write_bytes(buf)` | `send(fd, buf.ptr, buf.len, MSG_MORE)` | none |
+| `resp.write(chunk)` | `send(fd, chunk.ptr, chunk.len, MSG_MORE)` | none (string is already `char*`) |
+| `resp.body` + `send` | `send(fd, body.ptr, body.len, 0)` | none |
+| `{ call: [store.raw_bytes] }` + `write_bytes` | View into store memory → `send(fd, ptr, ...)` | none (value-type structs only) |
 
-HTTPS-Pfad (`tls.*`): `SSL_write` kopiert intern in den TLS-Record-Puffer — ein Userspace-Copy ist bei verschlüsselten Verbindungen unvermeidlich.
+HTTPS path (`tls.*`): `SSL_write` copies internally into the TLS record buffer — one userspace copy is unavoidable for encrypted connections.
 
 ### 6.4 Keep-Alive
 
-HTTP/1.1 Keep-Alive ist in v1 nicht aktiv — jeder Request öffnet und schließt
-eine neue TCP-Verbindung.
+HTTP/1.1 keep-alive is not active in v1 — each request opens and closes
+a new TCP connection.
 
 ---
 
-## 7. Offene Designfragen
+## 7. Open Design Questions
 
-- **HTTP/2**: ALPN + binary framing — langfristige Erweiterung.
+- **HTTP/2**: ALPN + binary framing — long-term extension.
 - **Compression**: `Accept-Encoding: gzip` via `zlib`.
-- **Static File Serving**: `srv.serve_static("/", "/var/www")`.
-- **WebSocket-Upgrade**: `resp.upgrade_ws(...)` — definiert in Kapitel 32.4.
-- **Multipart-Cookies**: `resp.headers` ist `map<string:string>` (ein Wert pro Key).
-  Für mehrere `Set-Cookie`-Header in einer Response: ggf. `map<string:list<string>>` oder
-  dediziertes `cookies`-Member prüfen (v1-Einschränkung).
-- **DB-Streaming**: Ob Zero-Copy möglich ist, hängt vom Struct-Inhalt ab:
-  - **Nur Primitive** (`i32`, `f32`, …): Die gespeicherten Bytes sind direkt streambar.
-    `{ call: [store.raw_bytes] }` gibt einen `buffer<u8>` zurück, der direkt in den internen
-    Store-Speicher zeigt (kein Copy); anschließend `write_bytes` → `send`. Fehlend in v1:
-    `raw_bytes`-Methode und Umgang mit inactive Slots (Bitmap mitschicken oder kompaktieren).
+- **Static file serving**: `srv.serve_static("/", "/var/www")`.
+- **WebSocket upgrade**: `resp.upgrade_ws(...)` — defined in Chapter 32.4.
+- **Multipart cookies**: `resp.headers` is `map<string:string>` (one value per key).
+  For multiple `Set-Cookie` headers in one response: consider `map<string:list<string>>` or
+  a dedicated `cookies` member (v1 limitation).
+- **DB streaming**: Whether zero-copy is possible depends on struct contents:
+  - **Primitives only** (`i32`, `f32`, …): The stored bytes are directly streamable.
+    `{ call: [store.raw_bytes] }` returns a `buffer<u8>` that points directly into the internal
+    store memory (no copy); then `write_bytes` → `send`. Missing in v1:
+    `raw_bytes` method and handling of inactive slots (send bitmap alongside or compact).
 
     ```aiml
     - decl: [raw, buffer<u8>]
@@ -805,5 +804,5 @@ eine neue TCP-Verbindung.
     - call: [resp.close]
     ```
 
-  - **Pointer-Felder** (`string`, Handles): Rohdaten enthalten prozesslokale Adressen —
-    nicht netzwerkfähig, Serialisierung bleibt nötig.
+  - **Pointer fields** (`string`, handles): Raw data contains process-local addresses —
+    not network-transferable, serialization remains necessary.

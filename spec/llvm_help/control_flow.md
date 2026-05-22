@@ -1,16 +1,16 @@
-if und while sind in LLVM nur Control-Flow mit Basic Blocks + br + phi.
+if and while in LLVM are just control flow with basic blocks + br + phi.
 
-Ich zeige dir erst das saubere Grundmuster in LLVM-IR und danach typische Fehlerquellen.
+Here is the clean basic pattern in LLVM IR first, followed by typical error sources.
 
-✅ 1️⃣ IF in LLVM (Grundmuster)
-Beispiel in C:
+✅ 1️⃣ IF in LLVM (basic pattern)
+Example in C:
 if (a < b) {
     x = 1;
 } else {
     x = 2;
 }
 
-Korrektes LLVM-IR:
+Correct LLVM IR:
 entry:
   %cond = icmp slt i32 %a, %b
   br i1 %cond, label %then, label %else
@@ -23,19 +23,19 @@ else:
 
 merge:
   %x = phi i32 [ 1, %then ], [ 2, %else ]
-  ; hier kannst du %x verwenden
+  ; you can use %x here
 
-🔥 Wichtig
+🔥 Important
 
-Jeder Block endet mit br oder ret
+Every block ends with br or ret
 
-Der merge-Block braucht eine phi
+The merge block needs a phi
 
-Jede phi muss für alle Vorgänger-Blöcke einen Wert haben
+Every phi must have a value for all predecessor blocks
 
-🧠 Alternative (einfacher!)
+🧠 Alternative (simpler!)
 
-Wenn du KEINEN Wert zurückgeben musst:
+If you don't need to return a value:
 
 entry:
   %cond = icmp slt i32 %a, %b
@@ -49,15 +49,15 @@ merge:
   ret void
 
 
-Keine phi nötig, wenn kein Wert gemerged wird.
+No phi needed if no value is merged.
 
-✅ 2️⃣ WHILE in LLVM (wichtig!)
-C-Code:
+✅ 2️⃣ WHILE in LLVM (important!)
+C code:
 while (i < 10) {
     i = i + 1;
 }
 
-Korrektes LLVM-IR Muster:
+Correct LLVM IR pattern:
 entry:
   br label %loop
 
@@ -74,55 +74,56 @@ body:
 end:
   ret void
 
-🔥 WICHTIGSTE REGEL BEI WHILE
+🔥 MOST IMPORTANT RULE FOR WHILE
 
-Der Loop-Index muss eine phi sein.
+The loop index must be a phi.
 
-Ohne phi bekommst du:
+Without phi you get:
 
-„Instruction does not dominate all uses“
+"Instruction does not dominate all uses"
 
-oder kaputten SSA-Graph
+or a broken SSA graph
 
-🧨 Häufige Fehler
-❌ 1. Kein Branch am Block-Ende
+🧨 Common errors
+❌ 1. No branch at block end
 
-Falsch:
+Wrong:
 
 then:
   %x = add i32 %a, 1
 
 
-Jeder Block braucht:
+Every block needs:
 
 br ...
 
 
-oder
+or
 
 ret ...
 
-❌ 2. Phi fehlt ein Eingang
 
-Falsch:
+❌ 2. Phi is missing an incoming edge
+
+Wrong:
 
 %x = phi i32 [ 1, %then ]
 
 
-Wenn merge 2 Vorgänger hat → braucht 2 Einträge.
+If merge has 2 predecessors → needs 2 entries.
 
-❌ 3. Definition im Body, Nutzung im End-Block
+❌ 3. Definition in body, use in end block
 body:
   %x = add i32 %i, 1
   br label %end
 
 end:
-  store i32 %x, ptr %p   ; ❌ Dominance-Fehler
+  store i32 %x, ptr %p   ; ❌ dominance error
 
 
-→ Lösung: PHI oder Definition verschieben.
+→ Solution: PHI or move the definition.
 
-🏗 Wenn du mit IRBuilder arbeitest (C++)
+🏗 When working with IRBuilder (C++)
 IF:
 Value *cond = builder.CreateICmpSLT(a, b);
 
@@ -146,17 +147,17 @@ PHINode *phi = builder.CreatePHI(Type::getInt32Ty(ctx), 2);
 phi->addIncoming(valThen, thenBB);
 phi->addIncoming(valElse, elseBB);
 
-🧩 Debug-Tipp
+🧩 Debug tip
 
-Wenn wieder sowas kommt wie:
+When you get something like:
 
 Instruction does not dominate all uses
 
 
-→ 90% der Fälle:
+→ 90% of cases:
 
-phi fehlt
+phi is missing
 
-falscher Block
+wrong block
 
-value in falschem Scope erzeugt
+value created in wrong scope

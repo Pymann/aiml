@@ -1,32 +1,32 @@
-LLVM kennt nur:
+LLVM only knows:
 
-Speicher reservieren
+Allocate memory
 
-Speicher freigeben
+Free memory
 
-Und das Schicksal dazwischen
+And the fate in between
 
-Also bauen wir uns free wie ein erwachsener Compiler.
+So we build free like a grown-up compiler.
 
-🧱 Grundidee
+🧱 Basic Idea
 
-C-Code:
+C code:
 
 free(ptr);
 
 
-LLVM-IR:
+LLVM IR:
 
 declare void @free(ptr)
 
 call void @free(ptr %something)
 
 
-Mehr ist es nicht. Wirklich nicht. Kein Ritual, kein schwarzer Zauber.
+That's all there is to it. Really. No ritual, no black magic.
 
-🛠 Schritt 1: free deklarieren (falls noch nicht vorhanden)
+🛠 Step 1: Declare free (if not already present)
 
-In LLVM 18 mit opaque pointers:
+In LLVM 18 with opaque pointers:
 
 LLVMContext Context;
 Module M("MyModule", Context);
@@ -50,23 +50,23 @@ if (!FreeFunc) {
     );
 }
 
-🧨 Schritt 2: free aufrufen
+🧨 Step 2: Call free
 
-Angenommen du hast einen Pointer Value *ObjPtr.
+Assuming you have a pointer Value *ObjPtr.
 
-Dann:
+Then:
 
 Builder.CreateCall(FreeFunc, {ObjPtr});
 
 
-Fertig.
+Done.
 
-LLVM erzeugt:
+LLVM emits:
 
 call void @free(ptr %obj)
 
-🧠 Beispiel: Mini-Konstruktor + free
-Speicher mit malloc holen
+🧠 Example: Mini-Constructor + free
+Allocate memory with malloc
 // declare malloc
 FunctionType *MallocTy =
     FunctionType::get(
@@ -92,161 +92,161 @@ Value *RawMem =
     Builder.CreateCall(MallocFunc, {SizeVal});
 
 
-Jetzt kannst du das casten:
+Now you can cast it:
 
 Value *PointPtr =
     Builder.CreateBitCast(RawMem,
                           PointerType::getUnqual(Context));
 
 
-Und später:
+And later:
 
 Builder.CreateCall(FreeFunc, {PointPtr});
 
 
-Boom. Speicher wieder im Kosmos verteilt 🌌
+Boom. Memory returned to the cosmos 🌌
 
-⚠ Wichtig in LLVM 18
+⚠ Important in LLVM 18
 
-Opaque pointer → immer ptr
+Opaque pointer → always ptr
 
-Typ beim CreateLoad explizit angeben
+Specify type explicitly in CreateLoad
 
-DataLayout nutzen für sizeof
+Use DataLayout for sizeof
 
-Nicht delete simulieren, außer du baust C++ ABI nach
+Do not simulate delete unless you are implementing the C++ ABI
 
-💀 Optional: C++-delete nachbauen
+💀 Optional: Emulating C++ delete
 
-Wenn du echtes operator delete willst, brauchst du:
+If you want a real operator delete, you need:
 
-Destruktor aufrufen
+Call the destructor
 
-Danach free
+Then call free
 
-Das wäre:
+That would be:
 
 Builder.CreateCall(DestructorFunc, {ObjPtr});
 Builder.CreateCall(FreeFunc, {ObjPtr});
 
 
-LLVM selbst erzwingt keine Reihenfolge. Das ist Frontend-Logik.
+LLVM itself does not enforce any order. That is frontend logic.
 
-🎯 Fazit
+🎯 Summary
 
-free ist in LLVM:
+free in LLVM is:
 
-Eine normale Funktion
+A normal function
 
-Mit einem Pointer
+With a pointer
 
-Und null Magie
+And zero magic
 
-Der Speicher stirbt nicht dramatisch.
-Er verschwindet nur wieder in den Heap-Nebel 🌫️
+Memory does not die dramatically.
+It just vanishes back into the heap mist 🌫️
 
-Hier ist die Debug-Checkliste, die in 90 Prozent der Fälle hilft.
+Here is the debug checklist that helps in 90 percent of cases.
 
-🔥 1️⃣ Falscher Pointer wird gefree’t
+🔥 1️⃣ Wrong pointer is freed
 
-Der Klassiker.
+The classic mistake.
 
-Du darfst nur exakt den Pointer freigeben, den malloc geliefert hat.
+You may only free exactly the pointer that malloc returned.
 
-❌ Falsch:
+❌ Wrong:
 
 Value *FieldPtr = Builder.CreateStructGEP(PointTy, ObjPtr, 0);
 Builder.CreateCall(FreeFunc, {FieldPtr});
 
 
-Das crasht.
-FieldPtr zeigt ins Objekt hinein, nicht auf den Anfang.
+This crashes.
+FieldPtr points into the object, not to the start.
 
-✅ Richtig:
+✅ Correct:
 
 Builder.CreateCall(FreeFunc, {ObjPtr});
 
 
-Wenn du dir unsicher bist:
-Was kommt direkt aus malloc? Nur das darf sterben.
+When in doubt:
+What came directly from malloc? Only that may be freed.
 
-💣 2️⃣ Stack-Speicher freigeben
+💣 2️⃣ Freeing stack memory
 
-Wenn du CreateAlloca benutzt hast:
+If you used CreateAlloca:
 
 Value *StackObj = Builder.CreateAlloca(PointTy);
 
 
-Dann liegt das auf dem Stack.
+Then it lives on the stack.
 
-Das darfst du NIEMALS free’n.
+You must NEVER free it.
 
-alloca wird automatisch beim Verlassen der Funktion aufgeräumt.
+alloca is automatically cleaned up when the function exits.
 
-free(alloca_ptr) → garantiertes Chaos.
+free(alloca_ptr) → guaranteed chaos.
 
-🧬 3️⃣ Falsche Typ-Casts bei opaque pointers
+🧬 3️⃣ Wrong type casts with opaque pointers
 
-LLVM 18 ist streng.
+LLVM 18 is strict.
 
-Wenn du sowas machst:
+If you do something like:
 
 Builder.CreateBitCast(RawMem, PointerType::getUnqual(Context));
 
 
-Das ist okay.
+That is fine.
 
-Aber wenn du mit alten element-typed Pointern rumspielst oder inkonsistente Casts baust, kann es passieren, dass dein Code später falsche GEPs erzeugt.
+But if you play around with old element-typed pointers or build inconsistent casts, you may end up with incorrect GEPs later.
 
-Mein Tipp:
+Advice:
 
-Immer DataLayout für sizeof
+Always use DataLayout for sizeof
 
-Immer CreateStructGEP(PointTy, Ptr, index)
+Always use CreateStructGEP(PointTy, Ptr, index)
 
-Keine selbstgebauten GEP-Offsets
+No hand-crafted GEP offsets
 
 🧨 4️⃣ Double Free
 
-Passiert schneller als man denkt.
+Happens faster than you think.
 
-Beispiel:
+Example:
 
 Builder.CreateCall(FreeFunc, {ObjPtr});
 Builder.CreateCall(FreeFunc, {ObjPtr});
 
 
-Oder:
+Or:
 
-Objekt in mehreren Control-Flow-Pfaden freigeben
+Freeing an object in multiple control flow paths
 
-Und beide können ausgeführt werden
+And both paths can be executed
 
-Valgrind oder ASan entlarven das sofort.
+Valgrind or ASan will catch this immediately.
 
 🧪 5️⃣ Use After Free
 
-Du free’st korrekt, benutzt den Pointer aber danach weiter.
+You free correctly, but then continue to use the pointer.
 
-LLVM IR verhindert das nicht.
+LLVM IR does not prevent this.
 
-Beispiel:
+Example:
 
 Builder.CreateCall(FreeFunc, {ObjPtr});
 Builder.CreateLoad(Int32Ty, ObjPtr);  // 💀
 
 
-Das funktioniert vielleicht manchmal.
-Und dann explodiert es später spektakulär.
+This may work sometimes.
+And then it explodes spectacularly later.
 
-🧱 6️⃣ Falsche malloc-Signatur
+🧱 6️⃣ Wrong malloc signature
 
-In LLVM 18 sollte malloc so deklariert sein:
+In LLVM 18 malloc should be declared as:
 
 i8* malloc(i64)
 
 
-Also:
+So:
 
 FunctionType::get(
     PointerType::getUnqual(Context),
@@ -254,17 +254,17 @@ FunctionType::get(
     false);
 
 
-Wenn du stattdessen i32 für die Größe benutzt, kann das auf 64-bit-Systemen schiefgehen.
+If you use i32 for the size instead, this can go wrong on 64-bit systems.
 
-🧠 7️⃣ DataLayout fehlt
+🧠 7️⃣ Missing DataLayout
 
-Wenn dein Module kein DataLayout gesetzt hat:
+If your Module has no DataLayout set:
 
 M.setDataLayout(TargetMachine->createDataLayout());
 
 
-Dann kann getTypeAllocSize falsche Werte liefern.
+Then getTypeAllocSize may return wrong values.
 
-Und dann allokierst du zu wenig Speicher.
+And then you allocate too little memory.
 
-Das ist ein ganz leiser, fieser Bug.
+That is a very quiet, nasty bug.

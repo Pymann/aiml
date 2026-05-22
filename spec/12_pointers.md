@@ -39,27 +39,27 @@
 - print: [["Modified X via PP deep store: ${x}"]]
 ```
 
-## Auto-Dereferenzierung bei Member-Zugriff
+## Auto-Dereferencing on Member Access
 
-Für `ptr<T>` wo `T` eine Klasse oder ein Model ist, wird der Pointer bei Punkt-Notation
-automatisch dereferenziert — explizites `{ ?: [...] }` ist nicht nötig:
+For `ptr<T>` where `T` is a class or model, the pointer is automatically dereferenced
+on dot-notation access — explicit `{ ?: [...] }` is not required:
 
 ```yaml
 - decl: [p, ptr<Point>, { new: Point }]
 
-# Schreiben — automatisch (*p).x = 10
+# Write — automatically (*p).x = 10
 - set: [p.x, 10]
 
-# Lesen — automatisch x = (*p).y
+# Read — automatically x = (*p).y
 - decl: [y, i32]
 - set: [y, p.y]
 
-# Methoden — automatisch (*p).move(dx, dy)
+# Methods — automatically (*p).move(dx, dy)
 - call: [p.move, 5, 3]
 ```
 
-Gilt für beliebige Tiefe: `p.nested.field` dereferenziert `p` und greift dann auf das
-Feld `nested` des resultierenden Structs zu.
+Applies at arbitrary depth: `p.nested.field` dereferences `p` and then accesses the
+field `nested` of the resulting struct.
 
-Für primitive Typen (`ptr<i32>` etc.) ist weiterhin `{ ?: [p] }` zum Lesen und
-`store: [p, val]` zum Schreiben erforderlich.
+For primitive types (`ptr<i32>` etc.) `{ ?: [p] }` is still required for reading and
+`store: [p, val]` for writing.

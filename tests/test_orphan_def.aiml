@@ -1,0 +1,16 @@
+# Test: ein verwaistes `- def:` (ohne `name:`-Feld) muss zu einem klaren
+# Compile-Fehler fuehren, NICHT still durchgehen.
+#
+# Hintergrund: ein leeres `- def:` erzeugte vorher eine namenlose
+# FunctionDecl, die als leerer Slot in `__aiml_fptable` landet und beim
+# Linken cross-module zu `undefined reference to __unnamed_<N>` fuehrt.
+# Sehr schwer zu diagnostizieren. Daher: lieber laut scheitern.
+#
+# Erwartetes Verhalten: aiml meldet "FunctionDecl ohne 'name'-Feld".
+
+- def:
+- def:
+    name: real_function
+    return: i32
+    body:
+      - return: 0

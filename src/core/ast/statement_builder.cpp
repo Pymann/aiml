@@ -36,7 +36,15 @@ bool StatementBuilder::OnScalar(const std::string& value, const std::string& tag
     
     // Collecting arguments inside the sequence `[x, i32, 5]`
     args.push_back({value, tag});
-    
+
+    // For call statements: redirect args after the function name to the ordered list
+    // so that scalar args and nested-expr args are interleaved in YAML source order.
+    if (type == "call" && args.size() > 1) {
+        orderedCallArgs.push_back(parseScalarExpr(value, tag));
+        args.pop_back(); // keep only function name in args
+        return true;
+    }
+
     if (type == "set" && args.size() == 1) {
         // After reading `x`, the next thing might be an expression map instead of a scalar
         expectingValue = true; 
@@ -100,7 +108,7 @@ bool StatementBuilder::OnMapStart() {
 void StatementBuilder::receiveChildNode(std::unique_ptr<Node> node) {
     if (auto e = dynamic_cast<Expr*>(node.release())) {
         if (type == "call") {
-            exprArgs.push_back(std::unique_ptr<Expr>(e));
+            orderedCallArgs.push_back(std::unique_ptr<Expr>(e));
         } else {
             exprArg = std::unique_ptr<Expr>(e);
         }
@@ -126,6 +134,24 @@ std::unique_ptr<Node> StatementBuilder::finish() {
 
          auto decl = std::make_unique<DeclStmt>(args[0].first, typeName);
          if (exprArg) {
+             if (initStart == 2) {
+                 if (auto* dict = dynamic_cast<DictLiteralExpr*>(exprArg.get())) {
+                     bool modifierOnly = !dict->entries.empty();
+                     for (const auto& [k, v] : dict->entries) {
+                         if (k != "const" && k != "volatile" && k != "extern") {
+                             modifierOnly = false;
+                             break;
+                         }
+                     }
+                     if (modifierOnly) {
+                         if (capturedLine > 0)
+                             LOG_ERROR("line " + std::to_string(capturedLine) + ": decl modifiers must be the 4th list element: [name, type, value, { const: true }]. A modifier map in 3rd position is invalid.");
+                         else
+                             LOG_ERROR("decl modifiers must be the 4th list element: [name, type, value, { const: true }]. A modifier map in 3rd position is invalid.");
+                         return nullptr;
+                     }
+                 }
+             }
              decl->initialValue = std::move(exprArg);
          } else if (innerSeqStart >= 0
                     && typeName.rfind("buffer<", 0) == 0
@@ -177,12 +203,8 @@ std::unique_ptr<Node> StatementBuilder::finish() {
     }
     if (type == "call" && args.size() >= 1) {
          auto call = std::make_unique<CallExpr>(args[0].first);
-         for (size_t i = 1; i < args.size(); ++i) {
-             const std::string& val = args[i].first;
-             const std::string& tag = args[i].second;
-             call->args.push_back(parseScalarExpr(val, tag));
-         }
-         for (auto& ea : exprArgs) call->args.push_back(std::move(ea));
+         // orderedCallArgs preserves YAML source order (scalars and exprs interleaved)
+         for (auto& ea : orderedCallArgs) call->args.push_back(std::move(ea));
          call->sourceLine = capturedLine;
          auto exprStmt = std::make_unique<ExprStmt>(std::move(call));
          exprStmt->sourceLine = capturedLine;

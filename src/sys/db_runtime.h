@@ -6,6 +6,30 @@
 extern "C" {
 #endif
 
+// ── Globale Pfad-Konfiguration ───────────────────────────────────────────────
+// Setzt den globalen AionDB-Root. Nachfolgende open-Calls mit relativem
+// `base_path` haengen ihren Sub-Pfad an diesen Root an.
+//
+// Resolution-Reihenfolge:
+//   1. AIONDB_PATH env var (dominiert immer, bei jedem open neu gelesen)
+//   2. via aiml_db_set_path() gesetzter Wert
+//   3. Fallback "./aiondb/"
+//
+// Sub-Pfad-Argument der open-Funktionen:
+//   - nullptr/empty   → Root direkt nutzen
+//   - absolut (/...)  → as-is (backward-compat fuer Tests mit /tmp/aiml_test_*)
+//   - relativ          → root + sub
+void    aiml_db_set_path(const char* path);
+
+// Liefert den aktuell aufgeloesten AionDB-Root mit Trailing-Slash.
+// Resolution-Reihenfolge wie bei jedem open-Call:
+//   1. AIONDB_PATH env (live re-read)
+//   2. zuletzt via aiml_db_set_path() gesetzter Wert
+//   3. Fallback "./aiondb/"
+// Rueckgabe: heap-allocated char* (Caller-owned; AIML-Runtime managed Lifetime
+// implizit, Funktion wird selten gerufen, kein Pool-Zwang).
+const char* aiml_db_get_path(void);
+
 // ── Store<T> ──────────────────────────────────────────────────────────────────
 void*   aiml_db_store_open(const char* name, const char* type_name, int64_t elem_size);
 int32_t aiml_db_store_insert(void* store, const void* elem, int64_t elem_size);
@@ -71,12 +95,25 @@ int32_t aiml_db_kv_checkpoint(void* kv);  // compact WAL to current state
 void    aiml_db_kv_reload(void* kv);      // re-read WAL from disk (cross-process sync)
 void    aiml_db_kv_set(void* kv, const char* key, const void* val, int64_t val_size);
 void*   aiml_db_kv_get(void* kv, const char* key);
+// Deep-copy variant: returned struct has independent heap allocations.
+// Safe for mutate-and-set-same-key. See doc/issue/kv_get_mutate_set_same_key_crash.md
+void*   aiml_db_kv_get_copy(void* kv, const char* key);
 int32_t aiml_db_kv_has(void* kv, const char* key);
 int32_t aiml_db_kv_len(void* kv);
 void    aiml_db_kv_delete(void* kv, const char* key);
 void    aiml_db_kv_clear(void* kv);
+void    aiml_db_kv_evict(void* kv);    // free in-memory map, keep WAL on disk
 void    aiml_db_kv_set_blob(void* kv, const char* key, const void* data, int32_t size);
 void*   aiml_db_kv_get_blob(void* kv, const char* key, int32_t* out_size);
+
+// ── Iterator ─────────────────────────────────────────────────────────────────
+// Generic iterator handle.  Currently supports KV key iteration (type=0).
+// Future: list (type=1), store (type=2), map (type=3), …
+void*   aiml_iter_create_kv(void* kv);          // snapshot KV keys → iterator
+const char* aiml_iter_next(void* iter);         // next key (or "" when done)
+int32_t aiml_iter_has_next(void* iter);         // 1 if more elements, 0 otherwise
+void    aiml_iter_reset(void* iter);            // rewind to beginning
+void    aiml_iter_free(void* iter);             // release snapshot memory
 
 // ── VecStore ──────────────────────────────────────────────────────────────────
 void*   aiml_db_vec_open(const char* name, int32_t dims);

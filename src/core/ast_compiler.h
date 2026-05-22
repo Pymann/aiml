@@ -42,9 +42,11 @@ private:
     IRValue* visitSysSerializeCall(const std::string& method, CallExpr* call);
     IRValue* visitSysBundleCall(CallExpr* call);
     IRValue* visitSysExecCall(CallExpr* call);
+    IRValue* visitSysArgDumpCall(CallExpr* call);
     IRValue* visitDbRunSystem(CallExpr* call);
     IRValue* visitStringCompare(bool negate, llvm::Value* lhs, llvm::Value* rhs);
     IRValue* visitNewExpr(NewExpr* newExpr);
+    IRValue* visitNewArrayExpr(NewArrayExpr* na);
     IRValue* visitStringInterpolation(StringInterpolationExpr* expr);
     IRValue* visitBinary(BinaryExpr* bin);
     IRValue* visitUnary(UnaryExpr* unary);
