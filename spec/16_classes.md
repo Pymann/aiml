@@ -10,9 +10,9 @@ Classes in AIML map directly to LLVM Struct Types. They provide encapsulation (f
 - class:
     name: Point
     members:
-      - [x, i32, { access: public }]
-      - [y, i32, { access: public }]
-      - [id, i32, { access: private }]
+      - [x, i32, 0, { access: public }]
+      - [y, i32, 0, { access: public }]
+      - [id, i32, 0, { access: private }]
     methods:
       - def:
           name: move
@@ -44,9 +44,9 @@ Dot notation is used for both stack instances and pointers (syntactic sugar).
 - set: [p2.y, 20] # Equivalent to (*p2).y
 ```
 
-#### Tiefe Member-Ketten
+#### Deep Member Chains
 
-Beliebig tiefe Pfade sind für Reads und Writes unterstützt:
+Arbitrarily deep paths are supported for both reads and writes:
 
 ```yaml
 - class:
@@ -63,23 +63,23 @@ Beliebig tiefe Pfade sind für Reads und Writes unterstützt:
 
 - decl: [o, Outer]
 
-# Tiefer Write (drei Ebenen):
+# Deep write (three levels):
 - set: [o.mid.inner.value, 42]
 
-# Tiefer Read:
+# Deep read:
 - decl: [v, i32, o.mid.inner.value]
 
-# ptr<T> — automatische Dereferenz an jeder Ebene:
+# ptr<T> — automatic dereference at every level:
 - decl: [p, ptr<Outer>, { new: Outer }]
 - set: [p.mid.inner.value, 99]
 - decl: [r, i32, p.mid.inner.value]
 ```
 
-Das Segment-Modell wird intern iterativ aufgelöst (kein syntaktischer Sonderfall).
-Jedes Segment darf entweder ein struct-Member oder ein list-Index (`field-0`) sein:
+The segment model is resolved iteratively internally (no special syntactic case).
+Each segment may be either a struct member or a list index (`field-0`):
 
 ```yaml
-# Gemischte Kette: list-Element, dann Member
+# Mixed chain: list element, then member
 - class:
     name: Container
     members: [[items, list<Inner>]]
@@ -96,7 +96,7 @@ Jedes Segment darf entweder ein struct-Member oder ein list-Index (`field-0`) se
 - set: [c.items-0.value, 13]
 ```
 
-**Zugriffskontrolle** wird an jedem Segment der Kette geprüft — nicht nur am letzten.
+**Access control** is enforced at every segment of the chain — not just the last one.
 
 ### Method Call
 ```yaml

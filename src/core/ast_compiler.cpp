@@ -8,6 +8,7 @@
 #include "buffer_impl.h"
 #include "chan_impl.h"
 #include "string_utils.h"
+#include <algorithm>
 #include <iostream>
 #include "../sys/ser_runtime.h"  // AimlTypeNode, AimlTDKind (spec 45)
 #include "../sys/trace_runtime.h"
@@ -483,7 +484,20 @@ void Compiler::registerTypeDecl(Node* node) {
         }
     } else if (auto cls = dynamic_cast<ClassDecl*>(node)) {
         std::string className = ctx.qualify(cls->name);
-        if (ctx.classes.count(className)) return; // Already registered
+        if (ctx.classes.count(className)) {
+            // Hard-error if a model with the same name already exists.
+            // Models hold data; classes hold behavior — sharing a name conflates
+            // two concepts and creates ambiguity in the type system.  Use
+            // `class: FooBehavior models: [Foo]` instead.
+            if (ctx.classes[className].isModel) {
+                LOG_ERROR(ctx.fmtLoc(cls->sourceNode) +
+                    "class '" + className + "' conflicts with model '" + className + "': "
+                    "same-name model and class is forbidden. "
+                    "Rename the class (e.g. '" + className + "Behavior') and reference "
+                    "the model via 'models: [" + className + "]'.");
+            }
+            return; // Already registered
+        }
 
         CompilerContext::ClassInfo classInfo;
         classInfo.name = className;
@@ -582,23 +596,24 @@ void Compiler::registerTypeDecl(Node* node) {
             classInfo.padded_size = padded;
         }
 
-        // Spec 45: emit @__aiml_sernodes_<Name> if the struct has heap fields.
+        // Always emit @__aiml_sernodes_<Name> so any class can be used as a
+        // typed RPC payload / sys.serialize target — matching the same
+        // behaviour models have.  hasHeapFields is still tracked for the
+        // kv.get/kv.get_copy diagnostic (see ast_compiler_stmt.cpp).
         {
             bool anyHeap = false;
             for (auto& [mn, mem] : classInfo.members)
                 if (serHasHeap(mem.typeName, ctx)) { anyHeap = true; break; }
             classInfo.hasHeapFields = anyHeap;
-            if (anyHeap) {
-                const llvm::DataLayout& dl = ctx.module.getDataLayout();
-                const llvm::StructLayout* sl = dl.getStructLayout(structType);
-                int32_t sz = (int32_t)dl.getTypeAllocSize(structType);
-                std::vector<std::vector<AimlTypeNode>> fsubs;
-                for (auto& [mn, mem] : orderedMembers)
-                    fsubs.push_back(serBuildSubtree(mem.typeName,
-                        (int32_t)sl->getElementOffset(mem.index), ctx, dl));
-                auto nodes = serBuildStructNodes(fsubs, 0, sz);
-                serEmitGlobal(className, nodes, ctx, classInfo);
-            }
+            const llvm::DataLayout& dl = ctx.module.getDataLayout();
+            const llvm::StructLayout* sl = dl.getStructLayout(structType);
+            int32_t sz = (int32_t)dl.getTypeAllocSize(structType);
+            std::vector<std::vector<AimlTypeNode>> fsubs;
+            for (auto& [mn, mem] : orderedMembers)
+                fsubs.push_back(serBuildSubtree(mem.typeName,
+                    (int32_t)sl->getElementOffset(mem.index), ctx, dl));
+            auto nodes = serBuildStructNodes(fsubs, 0, sz);
+            serEmitGlobal(className, nodes, ctx, classInfo);
         }
 
         // Track user-defined types for sys.bundle dependency closure.
@@ -623,7 +638,18 @@ void Compiler::registerTypeDecl(Node* node) {
         LOG_DEBUG("AST Registered Class: " + className);
     } else if (auto mod = dynamic_cast<ModelDecl*>(node)) {
         std::string modelName = ctx.qualify(mod->name);
-        if (ctx.classes.count(modelName)) return; // Already registered
+        if (ctx.classes.count(modelName)) {
+            // Mirror check: if a class registered first under the same name,
+            // hard-error.  (See ClassDecl branch above for full rationale.)
+            if (!ctx.classes[modelName].isModel) {
+                LOG_ERROR(ctx.fmtLoc(mod->sourceNode) +
+                    "model '" + modelName + "' conflicts with class '" + modelName + "': "
+                    "same-name model and class is forbidden. "
+                    "Rename the class and reference this model via "
+                    "'models: [" + modelName + "]'.");
+            }
+            return; // Already registered
+        }
 
         CompilerContext::ClassInfo classInfo;
         classInfo.name = modelName;
@@ -684,7 +710,7 @@ void Compiler::registerTypeDecl(Node* node) {
             }
         }
 
-        for (const auto& astMember : mod->fields) {
+        for (auto& astMember : mod->fields) {
             std::string fieldName = astMember.name;
             std::string typeName = astMember.type;
 
@@ -701,6 +727,12 @@ void Compiler::registerTypeDecl(Node* node) {
             member.type = fieldType;
             member.typeName = typeName;
             member.access = AccessLevel::Public; // Models are DTOs
+            member.version = astMember.version;
+            member.is_const = astMember.is_const;
+            member.is_volatile = astMember.is_volatile;
+            if (astMember.initialValue) {
+                member.initValue = std::shared_ptr<Expr>(const_cast<Expr*>(astMember.initialValue.release()));
+            }
 
             classInfo.members[fieldName] = member;
         }
@@ -758,7 +790,22 @@ void Compiler::registerTypeDecl(Node* node) {
     } else if (auto iface = dynamic_cast<InterfaceDecl*>(node)) {
         std::string ifaceName = ctx.qualify(iface->name);
         ctx.interfaceSources[ifaceName] = YAML::Dump(iface->sourceNode);
-        LOG_DEBUG("AST Registered Interface: " + ifaceName);
+        // Register the interface in ctx.interfaces so ptr<Interface> can be
+        // resolved as a fat pointer type and method calls can find the
+        // corresponding vtable slot.
+        if (!ctx.interfaces.count(ifaceName)) {
+            CompilerContext::InterfaceInfo info;
+            info.name = ifaceName;
+            for (const auto& sig : iface->methods) {
+                CompilerContext::InterfaceMethod m;
+                m.name = sig.name;
+                m.returnType = sig.returnType;
+                m.args = sig.args;
+                info.methods.push_back(std::move(m));
+            }
+            ctx.interfaces[ifaceName] = std::move(info);
+        }
+        LOG_DEBUG("AST Registered Interface: " + ifaceName + " (" + std::to_string(ctx.interfaces[ifaceName].methods.size()) + " methods)");
     } else if (auto func = dynamic_cast<FunctionDecl*>(node)) {
         // Forward-declare function signature so forward references resolve.
         std::string mangledName = ctx.qualify(func->name);
@@ -884,13 +931,50 @@ void Compiler::visitTopLevel(Node* node) {
 
             std::string oldClassName = ctx.currentClassName;
             ctx.currentClassName = cls->name;
-            
+
             visitFunction(method.get());
-            
+
             ctx.currentClassName = oldClassName;
-            
+
             method->args.erase(it);
             method->name = oldName;
+        }
+
+        // VTable emission for each implemented interface.  At this point all
+        // class methods are LLVM-defined (visitFunction above).  For each
+        // interface I in `implements:`, build __vtable_<Class>_<Iface> as a
+        // constant array of function pointers in I's declaration order.  Class
+        // must provide every method of I; otherwise emit an error.
+        for (const auto& ifaceName : cls->interfaces) {
+            auto ifaceIt = ctx.interfaces.find(ifaceName);
+            if (ifaceIt == ctx.interfaces.end()) {
+                LOG_ERROR(ctx.fmtLoc(cls->sourceNode) +
+                    "class '" + cls->name + "' implements unknown interface '" + ifaceName + "'");
+                continue;
+            }
+            const auto& iface = ifaceIt->second;
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            std::vector<llvm::Constant*> slots;
+            for (const auto& m : iface.methods) {
+                std::string mangled = cls->name + "_" + m.name;
+                llvm::Function* fn = ctx.module.getFunction(mangled);
+                if (!fn) {
+                    LOG_ERROR(ctx.fmtLoc(cls->sourceNode) +
+                        "class '" + cls->name + "' is missing method '" +
+                        m.name + "' required by interface '" + ifaceName + "'");
+                    slots.push_back(llvm::ConstantPointerNull::get(i8p));
+                    continue;
+                }
+                slots.push_back(llvm::ConstantExpr::getBitCast(fn, i8p));
+            }
+            auto* arrTy = llvm::ArrayType::get(i8p, slots.size());
+            auto* init = llvm::ConstantArray::get(arrTy, slots);
+            std::string vtableName = "__vtable_" + cls->name + "_" + ifaceName;
+            if (!ctx.module.getNamedGlobal(vtableName)) {
+                new llvm::GlobalVariable(ctx.module, arrTy, /*isConstant=*/true,
+                    llvm::GlobalValue::PrivateLinkage, init, vtableName);
+                LOG_DEBUG("visitTopLevel: emitted " + vtableName + " (" + std::to_string(slots.size()) + " slots)");
+            }
         }
     } else if (auto prefab = dynamic_cast<PrefabDecl*>(node)) {
         // Emit a call to aiml_prefab_register() that runs at top-level (program init)
@@ -900,20 +984,43 @@ void Compiler::visitTopLevel(Node* node) {
         auto* i32 = ctx.builder.getInt32Ty();
 
         // Serialize children to JSON string
+        auto escape_json = [](const std::string& s) {
+            std::string out;
+            out.reserve(s.size());
+            for (char c : s) {
+                if (c == '"' || c == '\\') { out += '\\'; out += c; }
+                else if (c == '\n') out += "\\n";
+                else if (c == '\r') out += "\\r";
+                else if (c == '\t') out += "\\t";
+                else out += c;
+            }
+            return out;
+        };
         std::string childrenJson = "[";
         for (size_t i = 0; i < prefab->children.size(); i++) {
             auto& c = prefab->children[i];
             if (i > 0) childrenJson += ",";
-            childrenJson += "{\"name\":\"" + c.name + "\","
-                "\"type\":\"" + c.type + "\","
+            childrenJson += "{\"name\":\"" + escape_json(c.name) + "\","
+                "\"type\":\"" + escape_json(c.type) + "\","
                 "\"x\":" + std::to_string(c.x) + ","
                 "\"y\":" + std::to_string(c.y) + ","
                 "\"width\":" + std::to_string(c.width) + ","
                 "\"height\":" + std::to_string(c.height) + ","
                 "\"font_size\":" + std::to_string(c.font_size) + ","
                 "\"color\":" + std::to_string(c.color) + ","
-                "\"texture\":\"" + c.texture + "\","
-                "\"anchor\":\"" + c.anchor + "\"}";
+                "\"texture\":\"" + escape_json(c.texture) + "\","
+                "\"anchor\":\"" + escape_json(c.anchor) + "\","
+                "\"bg_color\":" + std::to_string(c.bg_color) + ","
+                "\"border_color\":" + std::to_string(c.border_color) + ","
+                "\"border_width\":" + std::to_string(c.border_width) + ","
+                "\"corner_radius\":" + std::to_string(c.corner_radius) + ","
+                "\"hover_color\":" + std::to_string(c.hover_color) + ","
+                "\"active_color\":" + std::to_string(c.active_color) + ","
+                "\"label\":\"" + escape_json(c.label) + "\","
+                "\"secret\":" + std::string(c.is_secret ? "1" : "0") + ","
+                "\"on_click\":\"" + escape_json(c.on_click) + "\","
+                "\"on_change\":\"" + escape_json(c.on_change) + "\","
+                "\"material\":\"" + escape_json(c.material) + "\"}";
         }
         childrenJson += "]";
 
@@ -928,7 +1035,100 @@ void Compiler::visitTopLevel(Node* node) {
             ctx.getFunction("aiml_prefab_register", vd, {i8p, f32, f32, i8p, i32, i8p}),
             {nameStr, w, h, texStr, drag, childStr});
 
-        LOG_INFO("visitTopLevel: emitted prefab register for '" + prefab->name + "'");
+        /* Emit register_callback(name, fn_i8p) for each unique callback referenced
+         * by this prefab's children. Forward-declares the function with signature
+         * void(i8*) — when visitFunction(handle_submit) runs later, LLVM resolves
+         * the existing declaration to the actual definition. */
+        std::vector<std::string> callback_names;
+        for (auto& c : prefab->children) {
+            if (!c.on_click.empty())  callback_names.push_back(c.on_click);
+            if (!c.on_change.empty()) callback_names.push_back(c.on_change);
+        }
+        std::sort(callback_names.begin(), callback_names.end());
+        callback_names.erase(std::unique(callback_names.begin(), callback_names.end()),
+                             callback_names.end());
+        for (const std::string& cb : callback_names) {
+            llvm::Function* cb_fn = ctx.module.getFunction(cb);
+            if (!cb_fn) {
+                /* Forward-declare void(i8*) — definition supplied later by visitFunction. */
+                auto* cb_ty = llvm::FunctionType::get(vd, {i8p}, false);
+                cb_fn = llvm::Function::Create(cb_ty, llvm::Function::ExternalLinkage,
+                                               cb, &ctx.module);
+            }
+            llvm::Value* cb_name_str = ctx.builder.CreateGlobalStringPtr(cb, "prefab_cb_name");
+            llvm::Value* cb_ptr = ctx.builder.CreateBitCast(cb_fn, i8p);
+            ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_register_callback", vd, {i8p, i8p}),
+                {cb_name_str, cb_ptr});
+        }
+
+        LOG_INFO("visitTopLevel: emitted prefab register for '" + prefab->name + "'"
+                 + " (" + std::to_string(callback_names.size()) + " callbacks)");
+    } else if (auto mat = dynamic_cast<MaterialDecl*>(node)) {
+        /* Emit aiml_material_register(name, shader, uniforms_json) at program
+         * init. uniforms_json uses a compact tagged format the runtime parser
+         * understands; see prefab_runtime.h. */
+        auto* vd  = ctx.builder.getVoidTy();
+        auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+
+        auto escape_json = [](const std::string& s) {
+            std::string out; out.reserve(s.size());
+            for (char c : s) {
+                if (c == '"' || c == '\\') { out += '\\'; out += c; }
+                else if (c == '\n') out += "\\n";
+                else if (c == '\r') out += "\\r";
+                else if (c == '\t') out += "\\t";
+                else out += c;
+            }
+            return out;
+        };
+
+        std::string uniformsJson = "{";
+        for (size_t i = 0; i < mat->uniforms.size(); i++) {
+            const auto& kv = mat->uniforms[i];
+            const std::string& uname = kv.first;
+            const auto& u = kv.second;
+            if (i > 0) uniformsJson += ",";
+            uniformsJson += "\"" + escape_json(uname) + "\":{";
+            switch (u.kind) {
+                case MaterialUniformInfo::K_FLOAT:
+                    uniformsJson += "\"k\":\"f\",\"v\":" + std::to_string(u.scalar);
+                    break;
+                case MaterialUniformInfo::K_INT:
+                    uniformsJson += "\"k\":\"i\",\"v\":" + std::to_string(u.integer);
+                    break;
+                case MaterialUniformInfo::K_TEX:
+                    uniformsJson += "\"k\":\"t\",\"v\":\"" + escape_json(u.tex_path) + "\"";
+                    break;
+                case MaterialUniformInfo::K_VEC2:
+                case MaterialUniformInfo::K_VEC3:
+                case MaterialUniformInfo::K_VEC4: {
+                    const char* tag = u.kind == MaterialUniformInfo::K_VEC2 ? "v2"
+                                    : u.kind == MaterialUniformInfo::K_VEC3 ? "v3" : "v4";
+                    uniformsJson += "\"k\":\""; uniformsJson += tag;
+                    uniformsJson += "\",\"v\":[";
+                    for (size_t j = 0; j < u.vec.size(); j++) {
+                        if (j > 0) uniformsJson += ",";
+                        uniformsJson += std::to_string(u.vec[j]);
+                    }
+                    uniformsJson += "]";
+                    break;
+                }
+            }
+            uniformsJson += "}";
+        }
+        uniformsJson += "}";
+
+        llvm::Value* nameStr   = ctx.builder.CreateGlobalStringPtr(mat->name,    "mat_name");
+        llvm::Value* shaderStr = ctx.builder.CreateGlobalStringPtr(mat->shader,  "mat_shader");
+        llvm::Value* uJsonStr  = ctx.builder.CreateGlobalStringPtr(uniformsJson, "mat_uniforms");
+
+        ctx.builder.CreateCall(
+            ctx.getFunction("aiml_material_register", vd, {i8p, i8p, i8p}),
+            {nameStr, shaderStr, uJsonStr});
+
+        LOG_INFO("visitTopLevel: emitted material register for '" + mat->name + "'"
+                 + " (" + std::to_string(mat->uniforms.size()) + " uniforms)");
     }
 }
 void Compiler::visitFunction(FunctionDecl* func) {

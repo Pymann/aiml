@@ -196,7 +196,7 @@ void ClassBuilder::receiveChildNode(std::unique_ptr<Node> node) {
                   currentInitValue = std::unique_ptr<Expr>(e);
              }
              memberAttrIndex++;
-             return; 
+             return;
         }
     }
     if (auto f = dynamic_cast<FunctionDecl*>(node.get())) {

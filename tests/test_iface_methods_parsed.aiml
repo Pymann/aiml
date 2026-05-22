@@ -1,0 +1,9 @@
+# Debug-Probe: stelle sicher dass InterfaceDecl.methods im parser befüllt wird.
+
+- interface:
+    name: Sayable
+    methods:
+      - [say, string, []]
+      - [name, string, []]
+
+- print: ["if-decl present"]

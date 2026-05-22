@@ -49,7 +49,7 @@ A `Code` object represents a serialized code bundle.
 - class:
     name: Code
     members:
-      - [id, string, { access: public }]       # SHA-256 hash of content
+      - [id, string, "", { access: public }]       # SHA-256 hash of content
       - [start_call, map]                      # AST Node to execute (e.g. { call: [func, args] })
       - [chunks, list<string>] # List of code segments (StringBuilder pattern)
     methods:
@@ -186,16 +186,16 @@ Executes the code object's entry point in an isolated scope.
 ```
 ```
 
-Plan: yyjson-basierte Serialisierung für AIML
+Plan: yyjson-based serialization for AIML
 Context
-Die bestehende Serialisierung verwendet ein selbst gebautes YAML-ähnliches Format mit ~1000 Zeilen IR-Emission (StringBuilder, __aiml_get_field Scanner). Das Rad wurde neu erfunden. Wir ersetzen es vollständig durch yyjson — eine performante, einfache C-Bibliothek — mit einer klaren C-Wrapper-Schicht, die aus LLVM IR via ctx.getFunction() aufgerufen wird.
+The existing serialization uses a hand-built YAML-like format with ~1000 lines of IR emission (StringBuilder, __aiml_get_field scanner). The wheel was reinvented. We replace it entirely with yyjson — a fast, simple C library — with a clean C wrapper layer called from LLVM IR via ctx.getFunction().
 
-Wichtige Design-Entscheidungen
-Serialisierungsformat
-Primitiven (i8–u64, f32/f64, bool, string): unverändertes plain-String-Format ("42", "true", "hello")
-Enums: plain Integer-String ("0" für Color.Red — identisch zu Primitiven, backward-kompatibel)
-Compound-Typen (struct/class/model, list<T>, mapstring:T): JSON mit __type-Feld
-Nested complex fields in Structs vollständig supported (rekursiv)
+Key Design Decisions
+Serialization format
+Primitives (i8–u64, f32/f64, bool, string): unchanged plain-string format ("42", "true", "hello")
+Enums: plain integer string ("0" for Color.Red — identical to primitives, backward-compatible)
+Compound types (struct/class/model, list<T>, map<string:T>): JSON with __type field
+Nested complex fields in structs fully supported (recursive)
 
 // struct/class:
 {"__type":"Vec2","x":10,"y":20}
@@ -211,37 +211,37 @@ Nested complex fields in Structs vollständig supported (rekursiv)
 
 // Nested list field in struct:
 {"__type":"Wrapper","items":{"__type":"list<i32>","values":[1,2]}}
-// → Oder direkt im Array: "items":[1,2] (wenn Typ bekannt ist)
-Serialisierungsregeln
-Typ	serialize	deserialize
-any (irgendwo)	Compiler-Fehler	Compiler-Fehler
-chan<T>, lock, thread_handle	Compiler-Fehler	Compiler-Fehler
-ptr<T>	Auto-Deref → serialize als T	deserialize T → heap-malloc → ptr<T>
-Primitiven/Enums	plain string	aus string parsen
-struct/class/model	JSON object	JSON parsen → struct-alloca
-list<T>	JSON object	JSON parsen → list-struct
-map<string:T>	JSON object	JSON parsen → map-struct
+// → Or directly in array: "items":[1,2] (when type is known)
+Serialization rules
+Type	serialize	deserialize
+any (anywhere)	Compiler error	Compiler error
+chan<T>, lock, thread_handle	Compiler error	Compiler error
+ptr<T>	Auto-deref → serialize as T	deserialize T → heap-malloc → ptr<T>
+Primitives/Enums	plain string	parse from string
+struct/class/model	JSON object	parse JSON → struct alloca
+list<T>	JSON object	parse JSON → list struct
+map<string:T>	JSON object	parse JSON → map struct
 Nested types in structs
-Struct-Felder vom Typ class/model: als JSON sub-object (obj_begin/obj_end)
-Struct-Felder vom Typ list<T>: als JSON array inline (arr_begin/arr_end)
-Struct-Felder vom Typ mapstring:T: als JSON map inline (map_begin/map_end)
-Rekursiv bis any (→ Fehler)
-Architektur
+Struct fields of type class/model: as JSON sub-object (obj_begin/obj_end)
+Struct fields of type list<T>: as JSON array inline (arr_begin/arr_end)
+Struct fields of type map<string:T>: as JSON map inline (map_begin/map_end)
+Recursive until any (→ error)
+Architecture
 
 AIML Code
   → visitSysSerializeCall (ast_compiler_call.cpp)
       → SerializeImpl::serialize/deserialize (serialize_impl.cpp)
           → ctx.getFunction("aiml_jw_*") / ctx.getFunction("aiml_jr_*")
-              → aiml_jw/jr C-Wrapper (yyjson_wrapper.cpp, compiled into aiml binary)
+              → aiml_jw/jr C wrapper (yyjson_wrapper.cpp, compiled into aiml binary)
                   → yyjson (yyjson.cpp, vendored)
-Da -rdynamic im Linker aktiv ist, sind alle Symbole des aiml-Binary für JIT verfügbar.
+Since -rdynamic is active in the linker, all symbols of the aiml binary are available for JIT.
 
-Neue/geänderte Dateien
-1. src/core/yyjson.h + src/core/yyjson.cpp (NEU — vendored)
-Download von github.com/ibireme/yyjson Release 0.10.0
-yyjson.c → yyjson.cpp (kompiliert unter C++ mit -w, da diese Flag bereits gesetzt ist)
-Wird automatisch via src/**/*.cpp glob in exodus.json eingebunden
-2. src/core/yyjson_wrapper.h (NEU)
+New/changed files
+1. src/core/yyjson.h + src/core/yyjson.cpp (NEW — vendored)
+Download from github.com/ibireme/yyjson Release 0.10.0
+yyjson.c → yyjson.cpp (compiled under C++ with -w, since this flag is already set)
+Automatically included via src/**/*.cpp glob in exodus.json
+2. src/core/yyjson_wrapper.h (NEW)
 
 // Write API
 void*  aiml_jw_new();
@@ -258,7 +258,7 @@ void   aiml_jw_arr_f64(void* w, double v);
 void   aiml_jw_arr_bool(void* w, int v);
 void   aiml_jw_arr_str(void* w, const char* v);
 void   aiml_jw_arr_end(void* w);
-void   aiml_jw_obj_begin(void* w, const char* k);   // für nested structs
+void   aiml_jw_obj_begin(void* w, const char* k);   // for nested structs
 void   aiml_jw_obj_end(void* w);
 char*  aiml_jw_done(void* w);                        // heap JSON string, caller frees
 
@@ -283,24 +283,24 @@ int32_t     aiml_jr_map_val_i32(void* ctx, const char* key, int idx);
 int64_t     aiml_jr_map_val_i64(void* ctx, const char* key, int idx);
 double      aiml_jr_map_val_f64(void* ctx, const char* key, int idx);
 char*       aiml_jr_map_val_str(void* ctx, const char* key, int idx);  // heap copy
-3. src/core/yyjson_wrapper.cpp (NEU)
-Implementierung des Wrappers:
+3. src/core/yyjson_wrapper.cpp (NEW)
+Implementation of the wrapper:
 
-aiml_jw_t struct: enthält yyjson_mut_doc*, Root-Node, Stack (max 32 Ebenen) für obj_begin/arr_begin
-aiml_jr_t struct: enthält yyjson_doc* (nullable), yyjson_val* (current node)
-aiml_jr_sub() gibt allokierten aiml_jr_t* mit doc=NULL zurück → aiml_jr_free darauf gibt nur die Struct frei, nicht das Doc
-4. src/core/serialize_impl.cpp (KOMPLETT NEU — ~400 Zeilen, war ~1000)
-Struktur:
+aiml_jw_t struct: contains yyjson_mut_doc*, root node, stack (max 32 levels) for obj_begin/arr_begin
+aiml_jr_t struct: contains yyjson_doc* (nullable), yyjson_val* (current node)
+aiml_jr_sub() returns allocated aiml_jr_t* with doc=NULL → aiml_jr_free on it only frees the struct, not the doc
+4. src/core/serialize_impl.cpp (COMPLETELY NEW — ~400 lines, was ~1000)
+Structure:
 
 
-// ── Hilfsmakros: Wrapper-Funktionen via ctx.getFunction() deklarieren ──────
+// ── Helper macros: declare wrapper functions via ctx.getFunction() ──────────
 static llvm::Function* getJwNew(CompilerContext& ctx);
 static llvm::Function* getJwSetType(CompilerContext& ctx);
-// ... je eine Getter-Funktion pro Wrapper-API-Funktion (lazy declaration)
+// ... one getter function per wrapper API function (lazy declaration)
 
-// ── Serialize-Emitter ───────────────────────────────────────────────────────
+// ── Serialize emitters ──────────────────────────────────────────────────────
 static llvm::Function* emitSerializeStruct(ctx, typeName);
-// IR: jw_new → jw_set_type → für jeden Feld: load + jw_set_* / arr_*/obj_* → jw_done
+// IR: jw_new → jw_set_type → for each field: load + jw_set_* / arr_*/obj_* → jw_done
 
 static llvm::Function* emitSerializeList(ctx, elemTypeName);
 // IR: jw_new → jw_set_type → jw_arr_begin → loop: load+jw_arr_* → jw_arr_end → jw_done
@@ -308,9 +308,9 @@ static llvm::Function* emitSerializeList(ctx, elemTypeName);
 static llvm::Function* emitSerializeMap(ctx, valTypeName);
 // IR: jw_new → jw_set_type → loop: load key/val + jw_map_set_* → jw_done
 
-// ── Deserialize-Emitter ─────────────────────────────────────────────────────
+// ── Deserialize emitters ────────────────────────────────────────────────────
 static llvm::Function* emitDeserializeStruct(ctx, typeName);
-// IR: jr_parse → für jeden Feld: jr_* → store → jr_free → return heap-ptr
+// IR: jr_parse → for each field: jr_* → store → jr_free → return heap-ptr
 
 static llvm::Function* emitDeserializeList(ctx, elemTypeName);
 // IR: jr_parse → jr_arr_len → malloc list → loop: jr_arr_* → store → jr_free → return
@@ -318,23 +318,23 @@ static llvm::Function* emitDeserializeList(ctx, elemTypeName);
 static llvm::Function* emitDeserializeMap(ctx, valTypeName);
 // IR: jr_parse → jr_map_count → malloc map → loop: jr_map_key + jr_map_val_* → put → jr_free
 
-// ── Öffentliche API ─────────────────────────────────────────────────────────
-bool isSerializable(ctx, typeName);   // prüft rekursiv, any/chan/lock → false
+// ── Public API ──────────────────────────────────────────────────────────────
+bool isSerializable(ctx, typeName);   // checks recursively, any/chan/lock → false
 llvm::Value* serialize(ctx, val, typeName);
 llvm::Value* deserialize(ctx, yamlStr, typeName);
-Key: alle emitSerialize/emitDeserialize nutzen saveIP/restoreIP und werden nur einmal emittiert (guard via ctx.module.getFunction(fnName)).**
+Key: all emitSerialize/emitDeserialize use saveIP/restoreIP and are emitted only once (guard via ctx.module.getFunction(fnName)).**
 
 Nested field dispatch in emitSerializeStruct:
 
 
 for (auto& [fname, fmember] : sortedFields) {
     if (isClass(fmember.typeName)) {
-        // GEP zum sub-struct, cast to i8*
+        // GEP to sub-struct, cast to i8*
         // jw_obj_begin(writer, fname)
         // emitSerializeStructFields(ctx, writer, subPtr, fmember.typeName)
         // jw_obj_end(writer)
     } else if (isList(fmember.typeName)) {
-        // GEP zum list-field
+        // GEP to list field
         // jw_arr_begin(writer, fname)
         // emit loop over list elements
         // jw_arr_end(writer)
@@ -342,10 +342,10 @@ for (auto& [fname, fmember] : sortedFields) {
         // load scalar → jw_set_*(writer, fname, val)
     }
 }
-→ Dafür brauchen wir eine interne emitSerializeStructFields(ctx, writer, structPtr, typeName) Helper-Funktion (kein IR-Funktion, nur C++-Helper der IR emittiert).
+→ For this we need an internal emitSerializeStructFields(ctx, writer, structPtr, typeName) helper function (not an IR function, just a C++ helper that emits IR).
 
 5. src/core/serialize_impl.h (UPDATE)
-Kommentare aktualisieren: JSON-Format, ptr<T>-Semantik, any=Compiler-Fehler.
+Update comments: JSON format, ptr<T> semantics, any=compiler error.
 
 6. src/core/ast_compiler_call.cpp — visitSysSerializeCall (UPDATE)
 serialize:
@@ -353,39 +353,39 @@ serialize:
 
 1. Resolve argSym + argType
 2. any → LOG_ERROR
-3. ptr<T>: strip ptr<>, lade Pointer aus alloca, serialize als T
+3. ptr<T>: strip ptr<>, load pointer from alloca, serialize as T
 4. !isSerializable → LOG_ERROR
-5. struct/list/map: hole alloca, SerializeImpl::serialize(ctx, rawAlloca, argType)
-6. enum/primitiv: evaluate expression, SerializeImpl::serialize(ctx, val, argType)
+5. struct/list/map: get alloca, SerializeImpl::serialize(ctx, rawAlloca, argType)
+6. enum/primitive: evaluate expression, SerializeImpl::serialize(ctx, val, argType)
 deserialize:
 
 
-1. Parse optional type hint (2. Arg)
-2. Kein Hint / "Code" → existierendes CodeImpl-Verhalten
-3. ptr<T> im Hint: deserialize als T (gibt i8* heap zurück), direkt zurückgeben
+1. Parse optional type hint (2nd arg)
+2. No hint / "Code" → existing CodeImpl behavior
+3. ptr<T> in hint: deserialize as T (returns i8* heap), return directly
 4. any → LOG_ERROR
 5. !isSerializable → LOG_ERROR
 6. SerializeImpl::deserialize(ctx, src, typeName)
 7. spec/29_serialize.md (UPDATE)
-Neuen Abschnitt "5. sys.serialize / sys.deserialize" einfügen:
+Insert new section "5. sys.serialize / sys.deserialize":
 
-JSON-Format für compound types dokumentieren
-ptr<T> Semantik
-any → Compiler-Fehler
-Vollständige Typ-Tabelle (supported/unsupported)
+Document JSON format for compound types
+ptr<T> semantics
+any → compiler error
+Complete type table (supported/unsupported)
 8. tests/test_serialize_ext.aiml (UPDATE)
-Erwartete Outputs anpassen (JSON statt YAML-like)
-Tests für ptr<T> hinzufügen
-Tests für nested struct hinzufügen
-Implementierungsreihenfolge
-yyjson vendoren — yyjson.h + yyjson.cpp in src/core/ ablegen
-yyjson_wrapper.h + yyjson_wrapper.cpp implementieren und testen (mit kurzem unit-test in C++)
-serialize_impl.cpp komplett neu schreiben (Primitiven, Enums, Structs, Listen, Maps, nested fields)
-visitSysSerializeCall updaten für ptr<T>, any-Check
-Spec updaten
-Tests updaten + build + bash run_all_tests.sh → 30/30 ✓
-Verifikation
-bash run_all_tests.sh → alle 30 Tests bestehen
-Manuell: ./out/aiml -r tests/test_serialize_ext.aiml — Ausgabe zeigt JSON-Format
-Manuell: ./out/aiml -r /tmp/test_ptr.aiml — ptr<T> round-trip
-Manuell: ./out/aiml -r /tmp/test_nested.aiml — nested struct round-trip
+Update expected outputs (JSON instead of YAML-like)
+Add tests for ptr<T>
+Add tests for nested struct
+Implementation order
+Vendor yyjson — place yyjson.h + yyjson.cpp in src/core/
+Implement and test yyjson_wrapper.h + yyjson_wrapper.cpp (with short unit test in C++)
+Completely rewrite serialize_impl.cpp (primitives, enums, structs, lists, maps, nested fields)
+Update visitSysSerializeCall for ptr<T>, any check
+Update spec
+Update tests + build + bash run_all_tests.sh → 30/30 ✓
+Verification
+bash run_all_tests.sh → all 30 tests pass
+Manual: ./out/aiml -r tests/test_serialize_ext.aiml — output shows JSON format
+Manual: ./out/aiml -r /tmp/test_ptr.aiml — ptr<T> round-trip
+Manual: ./out/aiml -r /tmp/test_nested.aiml — nested struct round-trip

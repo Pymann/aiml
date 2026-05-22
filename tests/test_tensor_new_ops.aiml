@@ -1,0 +1,250 @@
+# Tests for tensor.abs, tensor.sign, tensor.step, tensor.weighted_cross_entropy
+# Expected exit code: 0
+
+- decl: [pass_count, i32, 0]
+- decl: [fail_count, i32, 0]
+
+# ── Phase A: tensor.abs ─────────────────────────────────────────────────────
+
+- print: ["=== Phase A: tensor.abs ==="]
+
+# A1: abs of positive values → unchanged
+- decl: [a1, tensor, { call: [tensor.ones, 3] }]
+- call: [a1.fill, 2.5]
+- decl: [a1r, tensor, { call: [tensor.abs, a1] }]
+- decl: [a1v, f32, { call: [a1r.get, 0] }]
+- if:
+    condition: { eq: [a1v, 2.5] }
+    then:
+      - print: ["A1 PASS: abs(2.5) = ${a1v}"]
+      - set: [pass_count, { "+": [pass_count, 1] }]
+    else:
+      - print: ["A1 FAIL: abs(2.5) = ${a1v}, expected 2.5"]
+      - set: [fail_count, { "+": [fail_count, 1] }]
+
+# A2: abs of negative values → positive
+- decl: [a2, tensor, { call: [tensor.ones, 3] }]
+- call: [a2.fill, -3.0]
+- decl: [a2r, tensor, { call: [tensor.abs, a2] }]
+- decl: [a2v, f32, { call: [a2r.get, 0] }]
+- if:
+    condition: { eq: [a2v, 3.0] }
+    then:
+      - print: ["A2 PASS: abs(-3.0) = ${a2v}"]
+      - set: [pass_count, { "+": [pass_count, 1] }]
+    else:
+      - print: ["A2 FAIL: abs(-3.0) = ${a2v}, expected 3.0"]
+      - set: [fail_count, { "+": [fail_count, 1] }]
+
+# A3: abs of zero → zero
+- decl: [a3, tensor, { call: [tensor.zeros, 2] }]
+- decl: [a3r, tensor, { call: [tensor.abs, a3] }]
+- decl: [a3v, f32, { call: [a3r.get, 0] }]
+- if:
+    condition: { eq: [a3v, 0.0] }
+    then:
+      - print: ["A3 PASS: abs(0) = ${a3v}"]
+      - set: [pass_count, { "+": [pass_count, 1] }]
+    else:
+      - print: ["A3 FAIL: abs(0) = ${a3v}, expected 0.0"]
+      - set: [fail_count, { "+": [fail_count, 1] }]
+
+# A4: abs autograd — grad of abs(x) = sign(x)
+- call: [tensor.begin_graph]
+- decl: [a4p, tensor, { call: [tensor.ones, 3] }]
+- call: [a4p.set_requires_grad, 1]
+- call: [a4p.set, 0, -2.0]
+- call: [a4p.set, 1, 3.0]
+- call: [a4p.set, 2, -1.0]
+- decl: [a4r, tensor, { call: [tensor.abs, a4p] }]
+- decl: [a4loss, tensor, { call: [tensor.sum, a4r, -1] }]
+- call: [tensor.backward, a4loss]
+- decl: [a4g, tensor, { call: [a4p.grad] }]
+- decl: [a4g0, f32, { call: [a4g.get, 0] }]
+- decl: [a4g1, f32, { call: [a4g.get, 1] }]
+- decl: [a4g2, f32, { call: [a4g.get, 2] }]
+# grad[0] = -1 (negative input), grad[1] = 1 (positive), grad[2] = -1 (negative)
+- if:
+    condition: { "&&": [{ eq: [a4g0, -1.0] }, { "&&": [{ eq: [a4g1, 1.0] }, { eq: [a4g2, -1.0] }] }] }
+    then:
+      - print: ["A4 PASS: abs grad = ${a4g0} ${a4g1} ${a4g2}"]
+      - set: [pass_count, { "+": [pass_count, 1] }]
+    else:
+      - print: ["A4 FAIL: abs grad = ${a4g0} ${a4g1} ${a4g2}, expected -1 1 -1"]
+      - set: [fail_count, { "+": [fail_count, 1] }]
+
+# ── Phase B: tensor.sign ────────────────────────────────────────────────────
+
+- print: ["=== Phase B: tensor.sign ==="]
+
+- decl: [b1, tensor, { call: [tensor.ones, 4] }]
+- call: [b1.set, 0, 5.0]
+- call: [b1.set, 1, -3.0]
+- call: [b1.set, 2, 0.0]
+- call: [b1.set, 3, -0.001]
+- decl: [b1r, tensor, { call: [tensor.sign, b1] }]
+- decl: [b1v0, f32, { call: [b1r.get, 0] }]
+- decl: [b1v1, f32, { call: [b1r.get, 1] }]
+- decl: [b1v2, f32, { call: [b1r.get, 2] }]
+- decl: [b1v3, f32, { call: [b1r.get, 3] }]
+- if:
+    condition: { "&&": [{ eq: [b1v0, 1.0] }, { "&&": [{ eq: [b1v1, -1.0] }, { "&&": [{ eq: [b1v2, 0.0] }, { eq: [b1v3, -1.0] }] }] }] }
+    then:
+      - print: ["B1 PASS: sign = ${b1v0} ${b1v1} ${b1v2} ${b1v3}"]
+      - set: [pass_count, { "+": [pass_count, 1] }]
+    else:
+      - print: ["B1 FAIL: sign = ${b1v0} ${b1v1} ${b1v2} ${b1v3}"]
+      - set: [fail_count, { "+": [fail_count, 1] }]
+
+# ── Phase C: tensor.step ────────────────────────────────────────────────────
+
+- print: ["=== Phase C: tensor.step ==="]
+
+- decl: [c1, tensor, { call: [tensor.ones, 4] }]
+- call: [c1.set, 0, 5.0]
+- call: [c1.set, 1, -3.0]
+- call: [c1.set, 2, 0.0]
+- call: [c1.set, 3, 0.001]
+- decl: [c1r, tensor, { call: [tensor.step, c1] }]
+- decl: [c1v0, f32, { call: [c1r.get, 0] }]
+- decl: [c1v1, f32, { call: [c1r.get, 1] }]
+- decl: [c1v2, f32, { call: [c1r.get, 2] }]
+- decl: [c1v3, f32, { call: [c1r.get, 3] }]
+- if:
+    condition: { "&&": [{ eq: [c1v0, 1.0] }, { "&&": [{ eq: [c1v1, 0.0] }, { "&&": [{ eq: [c1v2, 0.5] }, { eq: [c1v3, 1.0] }] }] }] }
+    then:
+      - print: ["C1 PASS: step = ${c1v0} ${c1v1} ${c1v2} ${c1v3}"]
+      - set: [pass_count, { "+": [pass_count, 1] }]
+    else:
+      - print: ["C1 FAIL: step = ${c1v0} ${c1v1} ${c1v2} ${c1v3}"]
+      - set: [fail_count, { "+": [fail_count, 1] }]
+
+# ── Phase D: tensor.weighted_cross_entropy ──────────────────────────────────
+
+- print: ["=== Phase D: tensor.weighted_cross_entropy ==="]
+
+# D1: Uniform weights (1.0, 1.0) should equal cross_entropy
+# logits: [2, 3], targets: [1, 2] (float-encoded), weights: [1.0, 1.0]
+- decl: [d1_logits, tensor, { call: [tensor.zeros, 2, 3] }]
+- call: [d1_logits.set, 0, 1.0]
+- call: [d1_logits.set, 1, 2.0]
+- call: [d1_logits.set, 2, 0.5]
+- call: [d1_logits.set, 3, 0.3]
+- call: [d1_logits.set, 4, 0.1]
+- call: [d1_logits.set, 5, 1.5]
+
+- decl: [d1_targets, tensor, { call: [tensor.zeros, 2] }]
+- call: [d1_targets.set, 0, 1.0]
+- call: [d1_targets.set, 1, 2.0]
+
+- decl: [d1_weights, tensor, { call: [tensor.ones, 2] }]
+
+- decl: [d1_ce, tensor, { call: [tensor.cross_entropy, d1_logits, d1_targets, 2] }]
+- decl: [d1_wce, tensor, { call: [tensor.weighted_cross_entropy, d1_logits, d1_targets, d1_weights, 2] }]
+- decl: [d1_cev, f32, { call: [d1_ce.item] }]
+- decl: [d1_wcev, f32, { call: [d1_wce.item] }]
+- decl: [d1_diff, f32, { "-": [d1_cev, d1_wcev] }]
+- if:
+    condition: { "<": [d1_diff, 0.0] }
+    then:
+      - set: [d1_diff, { "*": [d1_diff, -1.0] }]
+- if:
+    condition: { "<": [d1_diff, 0.001] }
+    then:
+      - print: ["D1 PASS: uniform wce=${d1_wcev} ce=${d1_cev} diff=${d1_diff}"]
+      - set: [pass_count, { "+": [pass_count, 1] }]
+    else:
+      - print: ["D1 FAIL: uniform wce=${d1_wcev} ce=${d1_cev} diff=${d1_diff}"]
+      - set: [fail_count, { "+": [fail_count, 1] }]
+
+# D2: Weight [1.0, 0.0] — only first position contributes
+- decl: [d2_w, tensor, { call: [tensor.zeros, 2] }]
+- call: [d2_w.set, 0, 1.0]
+# Single-element CE for position 0: logits row [1.0, 2.0, 0.5], target=1
+- decl: [d2_logits1, tensor, { call: [tensor.zeros, 1, 3] }]
+- call: [d2_logits1.set, 0, 1.0]
+- call: [d2_logits1.set, 1, 2.0]
+- call: [d2_logits1.set, 2, 0.5]
+- decl: [d2_tgt1, tensor, { call: [tensor.zeros, 1] }]
+- call: [d2_tgt1.set, 0, 1.0]
+- decl: [d2_ref, tensor, { call: [tensor.cross_entropy, d2_logits1, d2_tgt1, 1] }]
+- decl: [d2_wce, tensor, { call: [tensor.weighted_cross_entropy, d1_logits, d1_targets, d2_w, 2] }]
+- decl: [d2_refv, f32, { call: [d2_ref.item] }]
+- decl: [d2_wcev, f32, { call: [d2_wce.item] }]
+- decl: [d2_diff, f32, { "-": [d2_refv, d2_wcev] }]
+- if:
+    condition: { "<": [d2_diff, 0.0] }
+    then:
+      - set: [d2_diff, { "*": [d2_diff, -1.0] }]
+- if:
+    condition: { "<": [d2_diff, 0.001] }
+    then:
+      - print: ["D2 PASS: w=[1,0] wce=${d2_wcev} ref=${d2_refv}"]
+      - set: [pass_count, { "+": [pass_count, 1] }]
+    else:
+      - print: ["D2 FAIL: w=[1,0] wce=${d2_wcev} ref=${d2_refv} diff=${d2_diff}"]
+      - set: [fail_count, { "+": [fail_count, 1] }]
+
+# D3: Masked position (target < 0) is skipped regardless of weight
+- decl: [d3_tgt, tensor, { call: [tensor.zeros, 2] }]
+- call: [d3_tgt.set, 0, 1.0]
+- call: [d3_tgt.set, 1, -1.0]
+- decl: [d3_w, tensor, { call: [tensor.ones, 2] }]
+- call: [d3_w.set, 0, 1.0]
+- call: [d3_w.set, 1, 5.0]
+# Should equal single-position CE because target[1]=-1 is masked
+- decl: [d3_wce, tensor, { call: [tensor.weighted_cross_entropy, d1_logits, d3_tgt, d3_w, 2] }]
+- decl: [d3_wcev, f32, { call: [d3_wce.item] }]
+- decl: [d3_diff, f32, { "-": [d2_refv, d3_wcev] }]
+- if:
+    condition: { "<": [d3_diff, 0.0] }
+    then:
+      - set: [d3_diff, { "*": [d3_diff, -1.0] }]
+- if:
+    condition: { "<": [d3_diff, 0.001] }
+    then:
+      - print: ["D3 PASS: masked target wce=${d3_wcev} ref=${d2_refv}"]
+      - set: [pass_count, { "+": [pass_count, 1] }]
+    else:
+      - print: ["D3 FAIL: masked target wce=${d3_wcev} ref=${d2_refv} diff=${d3_diff}"]
+      - set: [fail_count, { "+": [fail_count, 1] }]
+
+# D4: Autograd — weighted_cross_entropy backward produces nonzero gradients
+- call: [tensor.begin_graph]
+- decl: [d4_logits, tensor, { call: [tensor.zeros, 2, 3] }]
+- call: [d4_logits.set_requires_grad, 1]
+- call: [d4_logits.set, 0, 1.0]
+- call: [d4_logits.set, 1, 2.0]
+- call: [d4_logits.set, 2, 0.5]
+- call: [d4_logits.set, 3, 0.3]
+- call: [d4_logits.set, 4, 0.1]
+- call: [d4_logits.set, 5, 1.5]
+- decl: [d4_tgt, tensor, { call: [tensor.zeros, 2] }]
+- call: [d4_tgt.set, 0, 1.0]
+- call: [d4_tgt.set, 1, 2.0]
+- decl: [d4_w, tensor, { call: [tensor.ones, 2] }]
+- call: [d4_w.set, 0, 2.0]
+- call: [d4_w.set, 1, 0.5]
+- decl: [d4_loss, tensor, { call: [tensor.weighted_cross_entropy, d4_logits, d4_tgt, d4_w, 2] }]
+- call: [tensor.backward, d4_loss]
+- decl: [d4_grad, tensor, { call: [d4_logits.grad] }]
+- decl: [d4_gsz, i32, { call: [d4_grad.size] }]
+- decl: [d4_g0, f32, { call: [d4_grad.get, 0] }]
+# Grad should exist (size=6) and be nonzero
+- if:
+    condition: { "&&": [{ eq: [d4_gsz, 6] }, { neq: [d4_g0, 0.0] }] }
+    then:
+      - print: ["D4 PASS: wce grad size=${d4_gsz} g[0]=${d4_g0}"]
+      - set: [pass_count, { "+": [pass_count, 1] }]
+    else:
+      - print: ["D4 FAIL: wce grad size=${d4_gsz} g[0]=${d4_g0}"]
+      - set: [fail_count, { "+": [fail_count, 1] }]
+
+# ── Summary ─────────────────────────────────────────────────────────────────
+
+- print: [""]
+- print: ["=== Results: passed=${pass_count} failed=${fail_count} ==="]
+- if:
+    condition: { ">": [fail_count, 0] }
+    then:
+      - call: [sys.exit, 1]

@@ -5,10 +5,68 @@
 #include "buffer_impl.h"
 #include "chan_impl.h"
 #include "string_utils.h"
+#include <algorithm>
 #include <iostream>
 
 namespace AIML {
 namespace AST {
+
+namespace {
+void coerceOrStoreFieldDefault(CompilerContext& ctx,
+                               llvm::Value* targetPtr,
+                               const CompilerContext::StructMember& member,
+                               llvm::Value* initVal) {
+    if (!targetPtr || !initVal) return;
+
+    llvm::Type* targetTy = member.type;
+    llvm::Value* storeVal = initVal;
+
+    if (member.typeName == "path" && storeVal->getType()->isPointerTy()) {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Function* internFn = ctx.getFunction("aiml_path_intern", i8p, {i8p});
+        storeVal = ctx.builder.CreateCall(internFn, {storeVal}, "path_default_init");
+    }
+
+    bool copyByMemcpy =
+        (member.typeName.find("buffer<") == 0) ||
+        (member.typeName.find("list<") == 0) ||
+        (member.typeName.find("map<") == 0) ||
+        (targetTy && targetTy->isStructTy() && storeVal->getType()->isPointerTy());
+
+    if (copyByMemcpy) {
+        uint64_t structSize = ctx.module.getDataLayout().getTypeAllocSize(targetTy);
+        llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+        llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
+        ctx.builder.CreateCall(memcpyFunc, {
+            targetPtr,
+            storeVal,
+            ctx.getSizeConst(structSize)
+        });
+        return;
+    }
+
+    if (targetTy && targetTy != storeVal->getType()) {
+        if (targetTy->isIntegerTy() && storeVal->getType()->isIntegerTy()) {
+            unsigned dstBits = targetTy->getIntegerBitWidth();
+            unsigned srcBits = storeVal->getType()->getIntegerBitWidth();
+            if (dstBits < srcBits)
+                storeVal = ctx.builder.CreateTrunc(storeVal, targetTy, "default_trunc");
+            else if (srcBits == 1)
+                storeVal = ctx.builder.CreateZExt(storeVal, targetTy, "default_zext_bool");
+            else
+                storeVal = ctx.builder.CreateSExt(storeVal, targetTy, "default_sext");
+        } else if (targetTy->isFloatingPointTy() && storeVal->getType()->isIntegerTy()) {
+            storeVal = ctx.builder.CreateSIToFP(storeVal, targetTy, "default_int_to_fp");
+        } else if (targetTy->isIntegerTy() && storeVal->getType()->isFloatingPointTy()) {
+            storeVal = ctx.builder.CreateFPToSI(storeVal, targetTy, "default_fp_to_int");
+        } else if (targetTy->isFloatingPointTy() && storeVal->getType()->isFloatingPointTy()) {
+            storeVal = ctx.builder.CreateFPCast(storeVal, targetTy, "default_fp_cast");
+        }
+    }
+
+    ctx.builder.CreateStore(storeVal, targetPtr);
+}
+}
 
 void Compiler::visitStatement(Stmt* stmt) {
     if (stmt->sourceLine > 0) ctx.currentLine = stmt->sourceLine;
@@ -26,6 +84,14 @@ void Compiler::visitStatement(Stmt* stmt) {
 void Compiler::visitDeclStmt(DeclStmt* decl) {
     IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
     if (!ty) return;
+
+    // Reset Kv.get/get_copy tracking flags at statement entry — they leak from
+    // earlier statements (e.g. a `set: [x, kv.get(k)]` that doesn't consume them).
+    // If this decl's initial value evaluation contains a kv.get/get_copy call,
+    // the flags will be set fresh by visitObjectMethodCall before we check them below.
+    ctx.kvGetCalled = false;
+    ctx.kvGetCopy = false;
+    ctx.kvGetValueType.clear();
 
     // Check if this variable was pre-promoted to a GlobalVariable (non-library
     // top-level path). If so, skip alloca creation and only emit the initializer.
@@ -103,6 +169,39 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
     }
     
     LOG_DEBUG("Compiled AST Decl: " + decl->varName + " of " + decl->typeName);
+
+    if (!decl->initialValue) {
+        auto classIt = ctx.classes.find(decl->typeName);
+        if (classIt != ctx.classes.end() && !classIt->second.isBuiltin && classIt->second.type) {
+            std::vector<std::pair<std::string, CompilerContext::StructMember>> orderedMembers;
+            orderedMembers.reserve(classIt->second.members.size());
+            for (const auto& [memberName, member] : classIt->second.members)
+                orderedMembers.push_back({memberName, member});
+            std::sort(orderedMembers.begin(), orderedMembers.end(),
+                      [](const auto& a, const auto& b) { return a.second.index < b.second.index; });
+
+            for (const auto& [memberName, member] : orderedMembers) {
+                if (!member.initValue) continue;
+                IRValue* fieldInitV = visitExpression(member.initValue.get());
+                if (!fieldInitV) {
+                    LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "Failed to evaluate default value for member '" +
+                              memberName + "' of type '" + decl->typeName + "'");
+                    continue;
+                }
+                llvm::Value* initVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldInitV));
+                if (!initVal) {
+                    LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "Null LLVM value for default member '" +
+                              memberName + "' of type '" + decl->typeName + "'");
+                    continue;
+                }
+                llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(classIt->second.type,
+                                                                    unwrappedAlloca,
+                                                                    member.index,
+                                                                    memberName + "_default_gep");
+                coerceOrStoreFieldDefault(ctx, fieldPtr, member, initVal);
+            }
+        }
+    }
     
     if (decl->initialValue) {
         // Buffer literal: decl: [name, buffer<T>, [v1, v2, ...]]
@@ -171,11 +270,11 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 llvm::Type* bufTy = ctx.getLLVMType("buffer");
                 uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(bufTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
-                llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
+                llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
                 ctx.builder.CreateCall(mcf, {
                     unwrappedAlloca,
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal)),
-                    ctx.builder.getInt64(sz)
+                    ctx.getSizeConst(sz)
                 });
             } else if (decl->typeName.find("list<") == 0) {
                 llvm::Value* rawInitVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal));
@@ -184,11 +283,11 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     llvm::StructType* listStructTy = ListImpl::getListStructType(ctx);
                     uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(listStructTy);
                     llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
-                    llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
+                    llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
                     ctx.builder.CreateCall(mcf, {
                         unwrappedAlloca,
                         rawInitVal,
-                        ctx.builder.getInt64(sz)
+                        ctx.getSizeConst(sz)
                     });
                 } else {
                     // User function returns list struct value → store directly
@@ -202,15 +301,137 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 // (2) the initVal is a pointer type (i.e. an alloca ptr, not a struct value).
                 llvm::Type* declTy = ctx.getLLVMType(decl->typeName);
                 llvm::Value* initRaw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal));
+
+                // Enforce kv.get / kv.get_copy ↔ decl-type pairing for class
+                // value types with heap fields.  See doc/issue/kv_get_mutate_set_same_key_crash.md.
+                //
+                //   decl: [p, T,      kv.get_copy(k)]  → OK (deep-copy below)
+                //   decl: [p, ptr<T>, kv.get(k)]       → OK (zero-copy view)
+                //   decl: [p, T,      kv.get(k)]       → ERROR
+                //   decl: [p, ptr<T>, kv.get_copy(k)]  → ERROR
+                //
+                // ptr<T> / primitive-only structs are excluded from the check
+                // because their lifetime model is unaffected.
+                if (ctx.kvGetCalled) {
+                    bool isPtrTarget = (decl->typeName.rfind("ptr<", 0) == 0 ||
+                                        decl->typeName.rfind("ref<", 0) == 0)
+                                       && decl->typeName.back() == '>';
+                    std::string innerName = isPtrTarget
+                        ? decl->typeName.substr(4, decl->typeName.size() - 5)
+                        : decl->typeName;
+                    auto ciIt2 = ctx.classes.find(innerName);
+                    bool isHeapClass = ciIt2 != ctx.classes.end() && ciIt2->second.hasHeapFields;
+                    if (isHeapClass) {
+                        if (ctx.kvGetCopy && isPtrTarget) {
+                            LOG_ERROR(ctx.fmtLoc(decl->sourceNode) +
+                                "kv.get_copy must be assigned to a value-type, not ptr<" + innerName + ">. "
+                                "Deep-copy is wasted on a pointer view. "
+                                "Use 'decl: [" + decl->varName + ", " + innerName + ", kv.get_copy(k)]' "
+                                "or use 'kv.get' (without _copy) for a zero-copy view.");
+                        } else if (!ctx.kvGetCopy && !isPtrTarget) {
+                            LOG_ERROR(ctx.fmtLoc(decl->sourceNode) +
+                                "kv.get of struct '" + innerName + "' must be assigned to ptr<" + innerName + "> (zero-copy view), "
+                                "not to a value-type. A shallow memcpy into a value-type shares heap "
+                                "pointers with the kv decoded_cache and crashes on mutate-and-set-same-key. "
+                                "Use 'decl: [" + decl->varName + ", ptr<" + innerName + ">, kv.get(k)]' "
+                                "for a view, or 'decl: [" + decl->varName + ", " + innerName + ", kv.get_copy(k)]' "
+                                "for an independent deep-copy.");
+                        }
+                    }
+                    ctx.kvGetCalled = false;
+                    ctx.kvGetValueType.clear();
+                }
+
+                // Interface upcast: decl: [s, ptr<Iface>, c] where c is a class
+                // instance / ref<Class>.  The target is a fat pointer struct
+                // {i8* obj, i8* vtbl}.  We need the SOURCE class name to look up
+                // the __vtable_<Class>_<Iface> global.
+                if (decl->typeName.rfind("ptr<", 0) == 0 && decl->typeName.back() == '>') {
+                    std::string ifaceName = decl->typeName.substr(4, decl->typeName.size() - 5);
+                    auto ifaceIt = ctx.interfaces.find(ifaceName);
+                    if (ifaceIt != ctx.interfaces.end()) {
+                        // Find source class from the init expression's symbol.
+                        std::string srcClass;
+                        if (auto* varExpr = dynamic_cast<VariableExpr*>(decl->initialValue.get())) {
+                            if (Symbol* srcSym = resolveVariable(varExpr->name)) {
+                                std::string srcType = srcSym->typeName;
+                                if (srcType.rfind("ref<", 0) == 0 && srcType.back() == '>')
+                                    srcClass = srcType.substr(4, srcType.size() - 5);
+                                else if (srcType.rfind("ptr<", 0) == 0 && srcType.back() == '>')
+                                    srcClass = srcType.substr(4, srcType.size() - 5);
+                                else if (ctx.classes.count(srcType))
+                                    srcClass = srcType;
+                            }
+                        }
+                        if (!srcClass.empty() && ctx.classes.count(srcClass)) {
+                            // initRaw should be the object pointer (i8*).  For
+                            // ref<Class>/ptr<Class> srcs visitExpression returns
+                            // the loaded pointer; that's already correct.  For a
+                            // by-value class instance variable, take its alloca.
+                            llvm::Value* objPtr = initRaw;
+                            if (objPtr && !objPtr->getType()->isPointerTy()) {
+                                if (auto* varExpr = dynamic_cast<VariableExpr*>(decl->initialValue.get())) {
+                                    if (Symbol* srcSym = resolveVariable(varExpr->name)) {
+                                        objPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+                                            srcSym->ir_alloca_inst ? srcSym->ir_alloca_inst
+                                                                   : ctx.ir_gen->wrap(srcSym->alloca_inst)));
+                                    }
+                                }
+                            }
+                            std::string vtableName = "__vtable_" + srcClass + "_" + ifaceName;
+                            llvm::GlobalVariable* vtbl = ctx.module.getNamedGlobal(vtableName);
+                            if (vtbl) {
+                                auto* fpTy = llvm::cast<llvm::StructType>(declTy);
+                                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                                llvm::Value* objField = ctx.builder.CreateStructGEP(fpTy, unwrappedAlloca, 0, "fp_obj");
+                                llvm::Value* vtblField = ctx.builder.CreateStructGEP(fpTy, unwrappedAlloca, 1, "fp_vtbl");
+                                ctx.builder.CreateStore(ctx.builder.CreateBitCast(objPtr, i8p), objField);
+                                ctx.builder.CreateStore(ctx.builder.CreateBitCast(vtbl, i8p), vtblField);
+                                LOG_DEBUG("interface upcast: " + decl->varName + " = " + srcClass + " as ptr<" + ifaceName + ">");
+                                return;
+                            } else {
+                                LOG_ERROR(ctx.fmtLoc(decl->sourceNode) +
+                                    "class '" + srcClass + "' does not implement interface '" + ifaceName + "' (no " + vtableName + " global)");
+                            }
+                        }
+                    }
+                }
+
                 if (declTy && declTy->isStructTy() && initRaw && initRaw->getType()->isPointerTy()) {
-                    uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(declTy);
+                    // ctx.kvGetCopy is set when the initialValue was `kv.get(k, {copy: true})`.
+                    // In that case, do a deep-copy (encode-then-decode roundtrip) instead of
+                    // a flat memcpy so the destination's heap allocations (strings, list
+                    // buffers, etc.) are INDEPENDENT of the kv decoded_cache.  Otherwise
+                    // mutate-and-set-same-key crashes — see doc/issue/kv_get_mutate_set_same_key_crash.md.
+                    auto ciIt = ctx.classes.find(decl->typeName);
+                    bool needsDeepCopy = ctx.kvGetCopy
+                                         && ciIt != ctx.classes.end()
+                                         && ciIt->second.hasHeapFields
+                                         && ciIt->second.serNodesVar;
                     llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
-                    llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
-                    ctx.builder.CreateCall(mcf, {
-                        unwrappedAlloca,
-                        initRaw,
-                        ctx.builder.getInt64(sz)
-                    });
+                    if (needsDeepCopy) {
+                        // Destination alloca is already zero-initialised (line 116).
+                        // aiml_ser_deep_copy encodes src to a temp blob then decodes into dst,
+                        // which malloc's fresh heap for every string/list/map/buffer field.
+                        llvm::Function* fn = ctx.getFunction("aiml_ser_deep_copy",
+                            ctx.builder.getVoidTy(),
+                            {ptrTy, ptrTy, ptrTy, ctx.builder.getInt32Ty()});
+                        ctx.builder.CreateCall(fn, {
+                            unwrappedAlloca,
+                            initRaw,
+                            ciIt->second.serNodesVar,
+                            ctx.builder.getInt32(ciIt->second.serNodesCount)
+                        });
+                    } else {
+                        uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(declTy);
+                        llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
+                        ctx.builder.CreateCall(mcf, {
+                            unwrappedAlloca,
+                            initRaw,
+                            ctx.getSizeConst(sz)
+                        });
+                    }
+                    ctx.kvGetCopy = false;  // reset; only applies to this decl
                 } else {
                     // ptr<T>/ref<T> = struct_var: store the address of the struct, not the
                     // struct value itself (which would overflow the 8-byte pointer alloca).
@@ -260,6 +481,15 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
     }
 }
 void Compiler::visitSetStmt(SetStmt* setStmt) {
+    // Reset Kv.get/get_copy flags so they don't leak into the next decl.
+    // visitSetStmt does not currently use them — the kv.get pattern paired with
+    // a `set:` (instead of decl-with-init) doesn't trigger the diagnostic, on
+    // the principle that the set target already has a declared type and the
+    // user has had an explicit decl: line earlier to declare it.
+    ctx.kvGetCalled = false;
+    ctx.kvGetCopy = false;
+    ctx.kvGetValueType.clear();
+
     std::string targetStr = setStmt->target;
     if (targetStr.find("<.") == 0) {
         targetStr = "this." + targetStr.substr(2);
@@ -323,11 +553,11 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 llvm::StructType* listStructTy = ListImpl::getListStructType(ctx);
                 uint64_t structSize = ctx.module.getDataLayout().getTypeAllocSize(listStructTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
-                llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
+                llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
                 ctx.builder.CreateCall(memcpyFunc, {
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
                     rawVal,
-                    ctx.builder.getInt64(structSize)
+                    ctx.getSizeConst(structSize)
                 });
             } else {
                 // User function returns list struct value → store directly
@@ -340,11 +570,11 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             if (bufTy) {
                 uint64_t structSize = ctx.module.getDataLayout().getTypeAllocSize(bufTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
-                llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
+                llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
                 ctx.builder.CreateCall(memcpyFunc, {
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)),
-                    ctx.builder.getInt64(structSize)
+                    ctx.getSizeConst(structSize)
                 });
                 return;
             }
@@ -354,11 +584,11 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             if (mapTy) {
                 uint64_t structSize = ctx.module.getDataLayout().getTypeAllocSize(mapTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
-                llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
+                llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
                 ctx.builder.CreateCall(memcpyFunc, {
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)),
-                    ctx.builder.getInt64(structSize)
+                    ctx.getSizeConst(structSize)
                 });
                 return;
             }
@@ -369,14 +599,14 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             llvm::StructType* structTy = classIt->second.type;
             uint64_t structSize = ctx.module.getDataLayout().getTypeAllocSize(structTy);
             llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
-            llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
+            llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
             llvm::Value* rawVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
             // Only memcpy if the value is a pointer (i8* from deserializer), not a struct value
             if (rawVal->getType()->isPointerTy()) {
                 ctx.builder.CreateCall(memcpyFunc, {
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
                     rawVal,
-                    ctx.builder.getInt64(structSize)
+                    ctx.getSizeConst(structSize)
                 });
                 return;
             }
@@ -889,18 +1119,61 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
         llvm::Value* elemPtr = ctx.builder.CreateGEP(arrTy, arrPtr,
             {ctx.builder.getInt32(0), flatIdx}, "arr_idx_gep");
 
-        // Type coercion for store value
+        // Type coercion for store value.
+        // Arrays now support C-like pointer/value semantics:
+        // - ptr<T> elements store raw addresses
+        // - struct elements store the full struct value inline
         if (storeVal->getType() != elemTy) {
-            if (elemTy->isFloatingPointTy() && storeVal->getType()->isIntegerTy())
+            if (elemTy->isPointerTy() && storeVal->getType()->isPointerTy()) {
+                storeVal = ctx.builder.CreatePointerCast(storeVal, elemTy, "idx_pcast");
+            } else if (elemTy->isStructTy() && storeVal->getType()->isPointerTy()) {
+                uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(elemTy);
+                llvm::Value* tmp = ctx.createEntryAlloca(elemTy);
+                llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
+                ctx.builder.CreateCall(memcpyFunc, {
+                    tmp,
+                    storeVal,
+                    ctx.getSizeConst(sz)
+                });
+                storeVal = ctx.builder.CreateLoad(elemTy, tmp, "idx_struct_from_ptr");
+            } else if (elemTy->isFloatingPointTy() && storeVal->getType()->isIntegerTy()) {
                 storeVal = ctx.builder.CreateSIToFP(storeVal, elemTy, "idx_i2f");
-            else if (elemTy->isFloatingPointTy() && storeVal->getType()->isFloatingPointTy())
+            } else if (elemTy->isFloatingPointTy() && storeVal->getType()->isFloatingPointTy()) {
                 storeVal = ctx.builder.CreateFPCast(storeVal, elemTy, "idx_fcast");
-            else if (elemTy->isIntegerTy() && storeVal->getType()->isIntegerTy())
+            } else if (elemTy->isIntegerTy() && storeVal->getType()->isIntegerTy()) {
                 storeVal = ctx.builder.CreateZExtOrTrunc(storeVal, elemTy, "idx_icast");
-            else if (elemTy->isIntegerTy() && storeVal->getType()->isFloatingPointTy())
+            } else if (elemTy->isIntegerTy() && storeVal->getType()->isFloatingPointTy()) {
                 storeVal = ctx.builder.CreateFPToSI(storeVal, elemTy, "idx_f2i");
+            } else {
+                LOG_ERROR(ctx.fmtLoc() + "idx: incompatible value for array element store");
+                return;
+            }
         }
 
+        ctx.builder.CreateStore(storeVal, elemPtr);
+        return;
+    }
+
+    // ── dyn_array<T> ──
+    if (tName.rfind("dyn_array<", 0) == 0 && tName.back() == '>') {
+        std::string elemName = tName.substr(10, tName.size() - 11);
+        llvm::Type* elemTy   = ctx.getLLVMType(elemName);
+        llvm::Type* i8p      = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Value* ptrAlloca = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+            sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst)));
+        llvm::Value* rawPtr  = ctx.builder.CreateLoad(i8p, ptrAlloca, "darr_base");
+        llvm::Value* typedPtr = ctx.builder.CreatePointerCast(rawPtr, elemTy->getPointerTo(), "darr_typed");
+        if (indexVals.empty()) { LOG_ERROR("idx: dyn_array requires index"); return; }
+        llvm::Value* elemPtr = ctx.builder.CreateGEP(elemTy, typedPtr, indexVals[0], "darr_idx_gep");
+        if (storeVal->getType() != elemTy) {
+            if (elemTy->isFloatingPointTy() && storeVal->getType()->isIntegerTy())
+                storeVal = ctx.builder.CreateSIToFP(storeVal, elemTy, "darr_i2f");
+            else if (elemTy->isFloatingPointTy() && storeVal->getType()->isFloatingPointTy())
+                storeVal = ctx.builder.CreateFPCast(storeVal, elemTy, "darr_fcast");
+            else if (elemTy->isIntegerTy() && storeVal->getType()->isIntegerTy())
+                storeVal = ctx.builder.CreateZExtOrTrunc(storeVal, elemTy, "darr_icast");
+        }
         ctx.builder.CreateStore(storeVal, elemPtr);
         return;
     }

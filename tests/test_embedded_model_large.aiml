@@ -1,0 +1,139 @@
+# tests/test_embedded_model_large.aiml — Repro: Grosse embedded struct + multi-level ptr-chain
+#
+# Mimt die PfJobQueue / TulTrainCfg Situation:
+#   - Large inner struct mit ~20 Feldern (i32, f32, string)
+#   - Heap-allokierter outer struct (ptr<PfJobQueue>)
+#   - worker struct mit ptr auf outer (ptr<PfWorkerHandle>)
+#   - set: [outer.inner, inner_val]       (struct-zu-embedded-struct)
+#   - wh.queue.inner.field  (3-level chain durch eingebettete struct)
+#   - Spawn + Channel + embedded struct Zugriff im Thread
+
+# ─── Modelle ──────────────────────────────────────────────────────────────────
+- model:
+    name: BigCfg
+    fields:
+      - [a0, i32, 0]
+      - [a1, i32, 0]
+      - [a2, i32, 0]
+      - [a3, i32, 0]
+      - [a4, i32, 0]
+      - [a5, f32, 0.0]
+      - [a6, f32, 0.0]
+      - [a7, f32, 0.0]
+      - [a8, string, ""]
+      - [a9, string, ""]
+      - [b0, i32, 0]
+      - [b1, i32, 0]
+      - [b2, i32, 0]
+      - [b3, f32, 0.0]
+      - [b4, f32, 0.0]
+      - [b5, string, ""]
+      - [b6, i32, 0]
+      - [b7, i32, 0]
+      - [b8, i32, 0]
+      - [b9, i32, 0]
+
+- model:
+    name: BigQueue
+    fields:
+      - [ch,  "chan<i32>", 0]
+      - [cfg, BigCfg,     0]
+
+- model:
+    name: BigWorker
+    fields:
+      - [queue,  "ptr<BigQueue>", 0]
+      - [thread, thread_handle,   0]
+
+# ─── Hilfsfunktion die BigCfg by-value empfängt ───────────────────────────────
+- def:
+    name: process_cfg
+    args:
+      - [fi, i32]
+      - [cfg, BigCfg]
+    return: i32
+    body:
+      - set: [cfg.a0, { +: [cfg.a0, fi] }]
+      - print: ["    [process_cfg] fi=${fi} a0=${cfg.a0} b6=${cfg.b6}"]
+      - return: [cfg.a0]
+
+# ─── Worker-Loop ──────────────────────────────────────────────────────────────
+- def:
+    name: big_worker_loop
+    args:
+      - [wh, "ptr<BigWorker>"]
+    return: void
+    body:
+      # Lese n_workers aus embedded struct via 3-level chain
+      - decl: [n, i32, wh.queue.cfg.b6]
+      - print: ["  [worker] b6=${n}"]
+      # Empfange Job-Index, bis Sentinel
+      - decl: [fi, i32, { call: [wh.queue.ch.recv] }]
+      - while:
+          condition: { ">=": [fi, 0] }
+          body:
+            # KERN: embedded BigCfg by-value an Funktion übergeben
+            - decl: [r, i32, { call: [process_cfg, fi, wh.queue.cfg] }]
+            - print: ["  [worker] job ${fi} done, result=${r}"]
+            - set: [fi, { call: [wh.queue.ch.recv] }]
+      - print: ["  [worker] sentinel received, exiting"]
+      - call: [tensor.thread_cleanup]
+
+# ─── Test ─────────────────────────────────────────────────────────────────────
+- def:
+    name: main
+    args: []
+    return: i32
+    body:
+      # T1: BigCfg fields nach new
+      - decl: [q, "ptr<BigQueue>", { new: BigQueue }]
+      - if:
+          condition: { neq: [q.cfg.a0, 0] }
+          then:
+            - print: ["FAIL T1: q.cfg.a0 should be 0"]
+            - call: [sys.exit, 1]
+      - print: ["T1 PASS: new BigQueue embedded fields default 0"]
+
+      # T2: BigCfg struct kopieren
+      - decl: [c, BigCfg]
+      - set: [c.a0, 100]
+      - set: [c.a1, 200]
+      - set: [c.b6, 42]
+      - set: [c.a8, "hello"]
+      - set: [c.a9, "world"]
+      - set: [q.cfg, c]
+      - if:
+          condition: { neq: [q.cfg.a0, 100] }
+          then:
+            - print: ["FAIL T2a: q.cfg.a0 should be 100, got ${q.cfg.a0}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { neq: [q.cfg.a1, 200] }
+          then:
+            - print: ["FAIL T2b: q.cfg.a1 should be 200"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { neq: [q.cfg.b6, 42] }
+          then:
+            - print: ["FAIL T2c: q.cfg.b6 should be 42, got ${q.cfg.b6}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { neq: [q.cfg.a8, "hello"] }
+          then:
+            - print: ["FAIL T2d: q.cfg.a8 should be hello"]
+            - call: [sys.exit, 1]
+      - print: ["T2 PASS: BigCfg struct copy into embedded field"]
+
+      # T3: Channel setzen + Worker spawnen + 3-level chain im Thread
+      - decl: [qch, "chan<i32>"]
+      - set: [q.ch, qch]
+      - decl: [wh, "ptr<BigWorker>", { new: BigWorker }]
+      - set: [wh.queue, q]
+      - decl: [tw, thread_handle, { spawn: [big_worker_loop, wh] }]
+      - call: [q.ch.send, 99]
+      - call: [q.ch.send, -1]
+      - call: [tw.join]
+      - print: ["T3 PASS: worker accesses embedded struct via 3-level chain"]
+
+      - print: ["test_embedded_model_large PASS"]
+      - return: [0]

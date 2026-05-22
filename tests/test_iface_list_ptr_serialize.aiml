@@ -1,0 +1,51 @@
+# Symmetry probe: list<ptr<T>> roundtrip — analog to ref<T>, since the compiler
+# treats ref and ptr as equivalent opaque pointers.
+
+- interface:
+    name: Tagged
+    methods:
+      - [tag, string, []]
+
+- model:
+    name: Item
+    fields:
+      - [name, string]
+      - [n,    i32, 0]
+
+- class:
+    name: ItemBehavior
+    models: [Item]
+    implements: [Tagged]
+    methods:
+      - def: { name: tag, return: string, args: [], body: [{ return: "${<.name}#${<.n}" }] }
+
+- model:
+    name: Bag
+    fields:
+      - [items, list<ptr<ItemBehavior>>]
+
+- decl: [a, ptr<ItemBehavior>, { new: ItemBehavior }]
+- set: [a.name, "alpha"]
+- set: [a.n,    1]
+- decl: [b, ptr<ItemBehavior>, { new: ItemBehavior }]
+- set: [b.name, "beta"]
+- set: [b.n,    2]
+
+- decl: [bag, Bag]
+- call: [bag.items.push, a]
+- call: [bag.items.push, b]
+
+- decl: [s, string, { call: [sys.serialize, bag] }]
+- print: ["serialized = ${s}"]
+- decl: [bag2, Bag, { call: [sys.deserialize, s] }]
+- print: ["bag2.items.len = ${bag2.items.len}"]
+
+- decl: [items2, list<ptr<ItemBehavior>>, bag2.items]
+- decl: [i, i32, 0]
+- while:
+    condition: { lt: [i, items2.len] }
+    body:
+      - decl: [it, ptr<ItemBehavior>, { at: [items2, i] }]
+      - decl: [v,  ptr<Tagged>,       it]
+      - print: ["bag2[${i}] poly: tag=${call: [v.tag]}"]
+      - set: [i, { +: [i, 1] }]

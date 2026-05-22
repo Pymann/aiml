@@ -1,24 +1,24 @@
-Der Fehler
+The error
 
 Instruction does not dominate all uses!
 %153 = add i32 %148, 1
 store i32 %153, ptr %i_rm, align 4
 
 
-bedeutet nicht Speicherfehler – sondern ein SSA-Form Fehler im Control-Flow.
+does not mean a memory error — it is an SSA form error in the control flow.
 
-LLVM verlangt:
+LLVM requires:
 
-Eine Definition muss alle ihre Verwendungen dominieren.
+A definition must dominate all of its uses.
 
-Das heißt:
-Die Variable %153 wird in einem Basic Block benutzt, der nicht garantiert nach der Definition ausgeführt wird.
+That means:
+The variable %153 is used in a basic block that is not guaranteed to execute after the definition.
 
-🔎 Was heißt „dominieren“?
+🔎 What does "dominate" mean?
 
-Block A dominiert Block B, wenn jeder Weg zum Block B durch A führt.
+Block A dominates block B if every path to block B passes through A.
 
-Typischer Fehler:
+Typical error:
 
 br i1 %cond, label %then, label %else
 
@@ -30,22 +30,22 @@ else:
   br label %merge
 
 merge:
-  store i32 %x, ptr %ptr   ; ❌ FEHLER
+  store i32 %x, ptr %ptr   ; ❌ ERROR
 
 
 Problem:
-%x existiert nur im then-Block,
-aber wird im merge-Block benutzt.
+%x only exists in the then block,
+but is used in the merge block.
 
-Wenn else ausgeführt wird → %x existiert nicht.
+If else executes → %x does not exist.
 
-LLVM sagt dann:
+LLVM then says:
 
 Instruction does not dominate all uses!
 
-💥 Lösung: PHI-Node benutzen
+💥 Solution: Use a PHI node
 
-Richtig wäre:
+The correct version:
 
 br i1 %cond, label %then, label %else
 
@@ -61,9 +61,9 @@ merge:
   %x = phi i32 [ %x_then, %then ], [ %x_else, %else ]
   store i32 %x, ptr %ptr
 
-🎯 Was bei dir sehr wahrscheinlich passiert
+🎯 What most likely happens in your case
 
-Du hast vermutlich sowas wie:
+You probably have something like:
 
 loop:
   br i1 %cond, label %body, label %end
@@ -76,23 +76,23 @@ end:
   store i32 %153, ptr %i_rm   ; ❌
 
 
-Wenn die Schleife nie betreten wird,
-existiert %153 nicht → Dominance-Fehler.
+If the loop is never entered,
+%153 does not exist → dominance error.
 
-🛠 Konkrete Fix-Strategien
-✅ Fall 1: Wert nur im selben Block benutzen
+🛠 Concrete fix strategies
+✅ Case 1: Value used only in the same block
 
-Dann store im gleichen Block lassen.
+Then leave the store in the same block.
 
-✅ Fall 2: Wert nach einem if verwenden
+✅ Case 2: Value used after an if
 
-→ PHI-Node einfügen.
+→ Insert a PHI node.
 
-✅ Fall 3: Schleifen-Zähler
+✅ Case 3: Loop counter
 
-Bei Loops brauchst du IMMER PHI:
+For loops you ALWAYS need PHI:
 
-Richtiges Loop-Muster:
+Correct loop pattern:
 
 entry:
   br label %loop
@@ -106,41 +106,41 @@ loop:
 end:
   ret void
 
-🧠 Warum tritt das oft bei selbstgebauten Maps auf?
+🧠 Why does this happen often with hand-built maps?
 
-Weil man:
+Because you:
 
-Zähler in einem if berechnet
+Compute a counter inside an if
 
-ihn aber außerhalb speichert
+But store it outside
 
-oder in einer Schleife inkrementiert
+Or increment it inside a loop
 
-aber nach dem Loop weiterverwendet
+But use it after the loop
 
-LLVM ist extrem strikt bei SSA.
+LLVM is extremely strict about SSA.
 
-🔍 Wie findest du die Stelle?
+🔍 How to find the location?
 
-Gib dir den IR mit Blocknamen aus:
+Print the IR with block names:
 
 opt -verify test_map.ll
 
 
-oder
+or
 
 llvm-as test_map.ll
 
 
-Das zeigt oft die exakte Stelle.
+This often shows the exact location.
 
-🚨 WICHTIG
+🚨 IMPORTANT
 
-Das ist KEIN Laufzeitfehler.
-Das Modul ist invalid IR.
-Deshalb sagt lli:
+This is NOT a runtime error.
+The module is invalid IR.
+That is why lli says:
 
 Bad module
 
 
-LLVM führt es gar nicht erst aus.
+LLVM does not even attempt to execute it.

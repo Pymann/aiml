@@ -1,5 +1,6 @@
 #include "http_runtime.h"
 #include <sys/socket.h>
+#include <sys/sendfile.h>
 #include <sys/stat.h>
 #include <netdb.h>
 #include <arpa/inet.h>
@@ -536,9 +537,16 @@ extern "C" void aiml_http_resp_free(void* resp) {
 struct RouteEntry {
     std::string method;     // "GET", "*", etc.
     std::string pattern;    // "/users/:id", "/static/*"
-    void*       handler;    // AimlHandlerFn
+    void*       handler;    // AimlHandlerFn (ignored if is_fs)
     void*       group_mw;   // group-level middleware fn (or nullptr)
     std::string prefix;     // group prefix (empty for root routes)
+    // Filesystem mode (registered via srv.filesystem / route.filesystem):
+    bool                     is_fs = false;
+    std::vector<std::string> fs_dirs;
+    std::string              fs_index = "index.html";
+    bool                     fs_spa   = false;
+    int32_t                  fs_cache_max_age = 0;
+    std::string              fs_url_prefix; // url prefix to strip from path
 };
 
 struct AimlHttpServer {
@@ -828,6 +836,244 @@ extern "C" char* aiml_http_req_cookie(void* req_ptr, const char* name) {
 }
 
 /* ────────────────────────────────────────────────────────────────
+ * Static file serving (srv.filesystem / route.filesystem)
+ * ──────────────────────────────────────────────────────────────── */
+
+// Minimal MIME type table. Default is application/octet-stream.
+static const char* mime_for_ext(const std::string& path) {
+    const char* dot = strrchr(path.c_str(), '.');
+    if (!dot) return "application/octet-stream";
+    std::string ext = str_tolower(dot);
+    if (ext == ".html" || ext == ".htm") return "text/html; charset=utf-8";
+    if (ext == ".js"   || ext == ".mjs") return "application/javascript";
+    if (ext == ".wasm")                  return "application/wasm";
+    if (ext == ".css")                   return "text/css; charset=utf-8";
+    if (ext == ".json")                  return "application/json";
+    if (ext == ".svg")                   return "image/svg+xml";
+    if (ext == ".png")                   return "image/png";
+    if (ext == ".jpg" || ext == ".jpeg") return "image/jpeg";
+    if (ext == ".gif")                   return "image/gif";
+    if (ext == ".ico")                   return "image/x-icon";
+    if (ext == ".webp")                  return "image/webp";
+    if (ext == ".txt" || ext == ".md")   return "text/plain; charset=utf-8";
+    if (ext == ".xml")                   return "application/xml";
+    if (ext == ".pdf")                   return "application/pdf";
+    if (ext == ".data")                  return "application/octet-stream";
+    if (ext == ".woff")                  return "font/woff";
+    if (ext == ".woff2")                 return "font/woff2";
+    return "application/octet-stream";
+}
+
+// Reject path segments that would escape the served root.
+static bool path_is_safe(const std::string& rel) {
+    if (rel.find("..") != std::string::npos) return false;
+    if (!rel.empty() && rel[0] == '/') return false;
+    return true;
+}
+
+// Strip the route's URL prefix from the request path; returns relative path.
+// Empty prefix or "/" → return request path without leading slash.
+static std::string strip_url_prefix(const std::string& url_prefix,
+                                     const std::string& req_path) {
+    std::string rel = req_path;
+    if (!url_prefix.empty() && url_prefix != "/") {
+        if (rel.rfind(url_prefix, 0) == 0) {
+            rel = rel.substr(url_prefix.size());
+        }
+    }
+    while (!rel.empty() && rel[0] == '/') rel.erase(0, 1);
+    return rel;
+}
+
+// Read whole file into a buffer. Returns true on success.
+static bool read_file_bytes(const std::string& path, std::vector<char>& out) {
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return false;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    rewind(f);
+    if (sz < 0) { fclose(f); return false; }
+    out.resize(static_cast<size_t>(sz));
+    if (sz > 0) {
+        if (fread(out.data(), 1, static_cast<size_t>(sz), f) != static_cast<size_t>(sz)) {
+            fclose(f);
+            return false;
+        }
+    }
+    fclose(f);
+    return true;
+}
+
+static bool is_directory(const std::string& path) {
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) return false;
+    return S_ISDIR(st.st_mode);
+}
+
+static bool is_regular_file(const std::string& path) {
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) return false;
+    return S_ISREG(st.st_mode);
+}
+
+// Try to resolve a candidate file under one root directory.
+// Returns absolute path on success, empty string otherwise.
+static std::string resolve_under(const std::string& root,
+                                  const std::string& rel_path,
+                                  const std::string& index_file) {
+    std::string candidate = root;
+    if (!candidate.empty() && candidate.back() != '/') candidate += '/';
+    candidate += rel_path;
+    // Directory request → append index file
+    if (rel_path.empty() || (rel_path.back() == '/') || is_directory(candidate)) {
+        if (!candidate.empty() && candidate.back() != '/') candidate += '/';
+        candidate += index_file;
+    }
+    if (is_regular_file(candidate)) return candidate;
+    return std::string();
+}
+
+// Serve a single file: status 200 + content-type + cache-control + body.
+static void serve_file(AimlHttpResponse* resp,
+                        const std::string& file_path,
+                        const RouteEntry& route) {
+    // Open + stat the file. We stream via sendfile() rather than reading
+    // into a userspace buffer — this avoids per-request 10–100 MB heap
+    // allocations and lets the kernel handle TCP back-pressure cleanly,
+    // which matters when browsers (Firefox/Chrome fetch streams) drain
+    // slowly. The previous read-all-then-send-all path worked for curl
+    // but reliably broke browser fetch on bundles > ~30 MB.
+    int ffd = ::open(file_path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (ffd < 0) {
+        resp->status = 500;
+        resp->body   = xstrdup("file open failed");
+        send_response(resp);
+        return;
+    }
+    struct stat st;
+    if (::fstat(ffd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        ::close(ffd);
+        resp->status = 500;
+        resp->body   = xstrdup("file stat failed");
+        send_response(resp);
+        return;
+    }
+    size_t total = static_cast<size_t>(st.st_size);
+
+    aiml_http_map_put(resp->headers, "content-type", mime_for_ext(file_path));
+    // We don't support keep-alive yet — tell HTTP/1.1 clients explicitly
+    // so they don't try to reuse the connection.
+    aiml_http_map_put(resp->headers, "connection", "close");
+    if (route.fs_cache_max_age > 0) {
+        char cache_val[64];
+        snprintf(cache_val, sizeof(cache_val),
+                 "max-age=%d", route.fs_cache_max_age);
+        aiml_http_map_put(resp->headers, "cache-control", cache_val);
+    }
+    resp->status = 200;
+
+    char cl_buf[32];
+    snprintf(cl_buf, sizeof(cl_buf), "%zu", total);
+    aiml_http_map_put(resp->headers, "content-length", cl_buf);
+
+    resp->resp_sent = 1;
+    int fd = resp->conn_fd;
+    void* ssl = resp->ssl;
+
+    // Build + send headers via the existing user-space path.
+    std::string head = "HTTP/1.1 200 \r\n";
+    for (int i = 0; i < resp->headers->capacity; ++i) {
+        if (!resp->headers->occupied[i]) continue;
+        head += resp->headers->keys[i];
+        head += ": ";
+        head += resp->headers->values[i];
+        head += "\r\n";
+    }
+    head += "\r\n";
+    send_all_fd(fd, ssl, head.c_str(), static_cast<int>(head.size()));
+
+    // Stream the body. sendfile() needs a non-SSL fd. For TLS routes
+    // we fall back to a read+SSL_write loop with a small reusable
+    // stack buffer.
+    if (total > 0) {
+        if (ssl) {
+            char buf[64 * 1024];
+            size_t remaining = total;
+            while (remaining > 0) {
+                ssize_t r = ::read(ffd, buf,
+                    remaining < sizeof(buf) ? remaining : sizeof(buf));
+                if (r <= 0) { if (r < 0 && errno == EINTR) continue; break; }
+                if (send_all_fd(fd, ssl, buf, static_cast<int>(r)) < 0) break;
+                remaining -= static_cast<size_t>(r);
+            }
+        } else {
+            off_t off = 0;
+            size_t remaining = total;
+            while (remaining > 0) {
+                ssize_t n = ::sendfile(fd, ffd, &off, remaining);
+                if (n < 0) {
+                    if (errno == EINTR || errno == EAGAIN) continue;
+                    // EPIPE / ECONNRESET / etc. — peer closed mid-stream.
+                    // Log so we can see who's giving up. file_path + how
+                    // many bytes made it before the break is the useful
+                    // diagnostic.
+                    fprintf(stderr,
+                        "[http] serve_file: sendfile aborted at %zu/%zu "
+                        "errno=%d (%s) path=%s\n",
+                        total - remaining, total, errno, strerror(errno),
+                        file_path.c_str());
+                    break;
+                }
+                if (n == 0) {
+                    fprintf(stderr,
+                        "[http] serve_file: sendfile returned 0 at %zu/%zu "
+                        "path=%s\n", total - remaining, total,
+                        file_path.c_str());
+                    break;
+                }
+                remaining -= static_cast<size_t>(n);
+            }
+        }
+    }
+    ::close(ffd);
+}
+
+static void fs_handle(AimlHttpRequest* req, AimlHttpResponse* resp,
+                       const RouteEntry& route) {
+    std::string req_path = req->path ? req->path : "/";
+    std::string rel = strip_url_prefix(route.fs_url_prefix, req_path);
+    if (!path_is_safe(rel)) {
+        resp->status = 400;
+        resp->body   = xstrdup("Bad Request");
+        send_response(resp);
+        return;
+    }
+
+    // Try each directory in order, first hit wins.
+    for (const auto& dir : route.fs_dirs) {
+        std::string found = resolve_under(dir, rel, route.fs_index);
+        if (!found.empty()) {
+            serve_file(resp, found, route);
+            return;
+        }
+    }
+
+    // SPA fallback: serve the index from the first directory.
+    if (route.fs_spa && !route.fs_dirs.empty()) {
+        std::string found =
+            resolve_under(route.fs_dirs.front(), "", route.fs_index);
+        if (!found.empty()) {
+            serve_file(resp, found, route);
+            return;
+        }
+    }
+
+    resp->status = 404;
+    resp->body   = xstrdup("Not Found");
+    send_response(resp);
+}
+
+/* ────────────────────────────────────────────────────────────────
  * Per-connection handler thread
  * ──────────────────────────────────────────────────────────────── */
 
@@ -888,9 +1134,14 @@ static void* handle_connection(void* arg) {
             if (!resp->resp_sent)
                 ((AimlHandlerFn)matched->group_mw)(req, resp);
         }
-        // Run handler
-        if (!resp->resp_sent)
-            ((AimlHandlerFn)matched->handler)(req, resp);
+        // Run handler — filesystem route or regular function pointer.
+        if (!resp->resp_sent) {
+            if (matched->is_fs) {
+                fs_handle(req, resp, *matched);
+            } else if (matched->handler) {
+                ((AimlHandlerFn)matched->handler)(req, resp);
+            }
+        }
     }
 
     // Auto-send 404 or 500 if nothing sent
@@ -901,8 +1152,25 @@ static void* handle_connection(void* arg) {
         send_response(resp);
     }
 
-    // Close connection
-    if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
+    // Close connection — graceful half-close pattern. Without this,
+    // ::close(fd) on a socket where the kernel receive queue still
+    // contains any unread bytes (e.g. trailing newlines / pipelined
+    // bytes from HTTP/1.1 clients) triggers a TCP RST instead of FIN.
+    // RST mid-stream aborts the peer's fetch body reader — visible in
+    // browsers as "Unexpected error while handling …" when downloading
+    // large response bodies. curl is tolerant of this and works
+    // anyway; Firefox/Chrome fetch streams are not.
+    if (ssl) {
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+    }
+    ::shutdown(fd, SHUT_WR);
+    {
+        struct timeval tv = {1, 0};
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        char drain[256];
+        while (::recv(fd, drain, sizeof(drain), 0) > 0) { /* discard */ }
+    }
     ::close(fd);
 
     free_request(req);
@@ -1041,10 +1309,53 @@ extern "C" void aiml_http_server_stop(void* srv_ptr) {
     s->listen_fd = -1;
 }
 
+// Build a RouteEntry for filesystem serving from prefix/dirs/opts.
+// dirs_list is an AimlList of `path` (char* per entry).
+static RouteEntry build_fs_route(const char* prefix, void* dirs_list,
+                                  void* opts, const std::string& group_prefix,
+                                  void* group_mw) {
+    struct AimlList { int32_t size; int32_t capacity; void* data; };
+    RouteEntry re;
+    re.method   = "GET";
+    re.is_fs    = true;
+    re.handler  = nullptr;
+    re.group_mw = group_mw;
+    re.prefix   = group_prefix;
+    re.fs_url_prefix = group_prefix + (prefix ? prefix : "/");
+
+    // Route pattern: prefix + /* (catch-all under prefix)
+    std::string pat = prefix ? prefix : "/";
+    if (pat.empty()) pat = "/";
+    if (pat.back() == '/') pat += "*";
+    else pat += "/*";
+    re.pattern = pat;
+
+    // Copy directory list
+    if (dirs_list) {
+        AimlList* l = static_cast<AimlList*>(dirs_list);
+        char** items = static_cast<char**>(l->data);
+        for (int32_t i = 0; i < l->size; ++i) {
+            if (items && items[i]) re.fs_dirs.emplace_back(items[i]);
+        }
+    }
+
+    // Copy fs_options
+    if (opts) {
+        AimlFsOptions* o = static_cast<AimlFsOptions*>(opts);
+        if (o->index && *o->index) re.fs_index = o->index;
+        re.fs_spa = (o->spa != 0);
+        re.fs_cache_max_age = o->cache_max_age;
+    }
+    return re;
+}
+
 extern "C" void aiml_http_server_filesystem(void* srv_ptr, const char* prefix,
                                               void* dirs_list, void* opts) {
-    // TODO: static file serving — stub for now
-    (void)srv_ptr; (void)prefix; (void)dirs_list; (void)opts;
+    AimlHttpServer* s = static_cast<AimlHttpServer*>(srv_ptr);
+    if (!s) return;
+    RouteEntry re = build_fs_route(prefix, dirs_list, opts,
+                                     /*group_prefix=*/"", /*group_mw=*/nullptr);
+    s->routes.push_back(re);
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -1083,7 +1394,11 @@ extern "C" void* aiml_http_route_group(void* route_ptr, const char* prefix,
 
 extern "C" void aiml_http_route_filesystem(void* route_ptr, const char* prefix,
                                              void* dirs_list, void* opts) {
-    (void)route_ptr; (void)prefix; (void)dirs_list; (void)opts; // TODO
+    AimlHttpRoute* r = static_cast<AimlHttpRoute*>(route_ptr);
+    if (!r || !r->server) return;
+    RouteEntry re = build_fs_route(prefix, dirs_list, opts,
+                                     r->prefix, r->middleware);
+    r->server->routes.push_back(re);
 }
 
 /* ────────────────────────────────────────────────────────────────

@@ -1,64 +1,64 @@
-# Kapitel 33.2 — `compress`-Namespace
+# Chapter 33.2 — `compress` Namespace
 
-> **Leitgedanke:** Kompression und Dekompression als First-Class-Namespace.
-> Alle Algorithmen arbeiten auf `buffer<u8>`. Convenience-Überladungen akzeptieren auch `string`.
-> Archiv-Operationen (tar.gz, zip) arbeiten auf dem Dateisystem mit `path`.
+> **Guiding principle:** Compression and decompression as a first-class namespace.
+> All algorithms operate on `buffer<u8>`. Convenience overloads also accept `string`.
+> Archive operations (tar.gz, zip) work on the filesystem with `path`.
 
 ---
 
-## 1. Übersicht
+## 1. Overview
 
-| Format   | Kompression           | Dekompression             | Stärke | Geschwindigkeit | Externer Dep |
-|----------|-----------------------|---------------------------|--------|-----------------|--------------|
-| gzip     | `compress.gzip`       | `compress.gunzip`         | gut    | mittel          | zlib (Standard) |
-| deflate  | `compress.deflate`    | `compress.inflate`        | gut    | mittel          | zlib (Standard) |
-| zlib     | `compress.zlib`       | `compress.zlib_decompress`| gut    | mittel          | zlib (Standard) |
-| brotli   | `compress.brotli`     | `compress.brotli_decompress` | sehr gut | langsam    | libbrotli |
-| zstd     | `compress.zstd`       | `compress.zstd_decompress`| sehr gut | schnell       | libzstd |
-| lz4      | `compress.lz4`        | `compress.lz4_decompress` | mittel | extrem schnell  | liblz4 |
+| Format   | Compression           | Decompression             | Strength | Speed | External Dep |
+|----------|-----------------------|---------------------------|----------|-------|--------------|
+| gzip     | `compress.gzip`       | `compress.gunzip`         | good     | medium | zlib (standard) |
+| deflate  | `compress.deflate`    | `compress.inflate`        | good     | medium | zlib (standard) |
+| zlib     | `compress.zlib`       | `compress.zlib_decompress`| good     | medium | zlib (standard) |
+| brotli   | `compress.brotli`     | `compress.brotli_decompress` | very good | slow | libbrotli |
+| zstd     | `compress.zstd`       | `compress.zstd_decompress`| very good | fast  | libzstd |
+| lz4      | `compress.lz4`        | `compress.lz4_decompress` | medium   | extremely fast | liblz4 |
 
-Archive:
+Archives:
 
-| Format   | Erstellen                | Entpacken                 | Dep |
+| Format   | Create                   | Extract                   | Dep |
 |----------|--------------------------|---------------------------|-----|
 | tar.gz   | `compress.tar_gz`        | `compress.untar_gz`       | zlib + POSIX tar |
-| zip      | `compress.zip`           | `compress.unzip`          | libzip oder minizip |
+| zip      | `compress.zip`           | `compress.unzip`          | libzip or minizip |
 
 ---
 
-## 2. Signaturen
+## 2. Signatures
 
 ```
-compress.<algo>(data)                → buffer<u8>   Eingabe: string oder buffer<u8>
-compress.<algo>_decompress(data)     → buffer<u8>   Eingabe: buffer<u8>
-compress.<algo>_decompress_str(data) → string       Dekomprimiertes Ergebnis als UTF-8 String
-compress.<algo>(data, level)         → buffer<u8>   Optional: Kompressionslevel (1–22 je nach Algo)
+compress.<algo>(data)                → buffer<u8>   Input: string or buffer<u8>
+compress.<algo>_decompress(data)     → buffer<u8>   Input: buffer<u8>
+compress.<algo>_decompress_str(data) → string       Decompressed result as UTF-8 string
+compress.<algo>(data, level)         → buffer<u8>   Optional: compression level (1–22 depending on algo)
 
-# Archiv-Funktionen (Dateisystem)
-compress.tar_gz(src, dst)            → i32          0 = ok; src: path (Verzeichnis oder Datei), dst: path (.tar.gz)
-compress.untar_gz(src, dst_dir)      → i32          0 = ok; src: .tar.gz, dst_dir: Zielverzeichnis
+# Archive functions (filesystem)
+compress.tar_gz(src, dst)            → i32          0 = ok; src: path (directory or file), dst: path (.tar.gz)
+compress.untar_gz(src, dst_dir)      → i32          0 = ok; src: .tar.gz, dst_dir: target directory
 compress.zip(src, dst)               → i32          0 = ok; src: path, dst: .zip
 compress.unzip(src, dst_dir)         → i32          0 = ok
 ```
 
 ---
 
-## 3. Beispiele
+## 3. Examples
 
-### 3.1 In-Memory-Kompression
+### 3.1 In-Memory Compression
 
 ```aiml
-# String komprimieren → gzip-Buffer
+# Compress string → gzip buffer
 - decl: [data, string, "Hello World! This is a test string for compression."]
 - decl: [gz, buffer<u8>, { call: [compress.gzip, data] }]
 - print: ["compressed size: ${gz.len}"]
 
-# Wieder dekomprimieren
+# Decompress again
 - decl: [back, string, { call: [compress.gunzip_str, gz] }]
 - print: ["decompressed: ${back}"]
 ```
 
-### 3.2 Buffer-zu-Buffer (binäre Daten)
+### 3.2 Buffer-to-Buffer (Binary Data)
 
 ```aiml
 - decl: [raw, buffer<u8>]
@@ -67,23 +67,23 @@ compress.unzip(src, dst_dir)         → i32          0 = ok
 - decl: [decompressed, buffer<u8>, { call: [compress.zstd_decompress, compressed] }]
 ```
 
-### 3.3 Kompressionslevel
+### 3.3 Compression Level
 
 ```aiml
-# zstd: Level 1 (schnell) bis 22 (maximal)
+# zstd: level 1 (fast) to 22 (maximum)
 - decl: [c, buffer<u8>, { call: [compress.zstd, data, 3] }]   # default: 3
 
-# brotli: Level 0 (schnell) bis 11 (maximal)
+# brotli: level 0 (fast) to 11 (maximum)
 - decl: [c, buffer<u8>, { call: [compress.brotli, data, 6] }] # default: 6
 
-# gzip/zlib: Level 1–9
+# gzip/zlib: level 1–9
 - decl: [c, buffer<u8>, { call: [compress.gzip, data, 9] }]   # default: 6
 
-# lz4: kein Level (fixed algorithm)
+# lz4: no level (fixed algorithm)
 - decl: [c, buffer<u8>, { call: [compress.lz4, data] }]
 ```
 
-### 3.4 HTTP Content-Encoding (Server-Middleware)
+### 3.4 HTTP Content-Encoding (Server Middleware)
 
 ```aiml
 - def:
@@ -91,7 +91,7 @@ compress.unzip(src, dst_dir)         → i32          0 = ok
     args: [[req, http_request_handle], [resp, http_response_handle]]
     body:
       - decl: [accept, string, { call: [req.header, "Accept-Encoding"] }]
-      # Nur komprimieren wenn Client gzip unterstützt
+      # Only compress if client supports gzip
       - if: [{ contains: [accept, "gzip"] }, true]
         then:
           - decl: [body, string, { call: [resp.body] }]
@@ -101,10 +101,10 @@ compress.unzip(src, dst_dir)         → i32          0 = ok
           - call: [resp.headers.put, "Vary", "Accept-Encoding"]
 ```
 
-### 3.5 LZ4 für IPC / Datenbank-Blöcke
+### 3.5 LZ4 for IPC / Database Blocks
 
 ```aiml
-# Sehr schnelle Kompression für Daten zwischen Threads
+# Very fast compression for data between threads
 - def:
     name: serialize_and_compress
     args: [[data, buffer<u8>]]
@@ -120,10 +120,10 @@ compress.unzip(src, dst_dir)         → i32          0 = ok
       - return: { call: [compress.lz4_decompress, compressed] }
 ```
 
-### 3.6 zstd für Netzwerk-Protokolle
+### 3.6 zstd for Network Protocols
 
 ```aiml
-# Hochperformante Kompression für Websocket-Frames
+# High-performance compression for WebSocket frames
 - def:
     name: ws_send_compressed
     args: [[ws, ws_handle], [payload, string]]
@@ -132,16 +132,16 @@ compress.unzip(src, dst_dir)         → i32          0 = ok
       - call: [ws.send_binary, compressed]
 ```
 
-### 3.7 tar.gz erstellen und entpacken
+### 3.7 Creating and Extracting tar.gz
 
 ```aiml
-# Verzeichnis archivieren
+# Archive a directory
 - decl: [src, path, "/var/data/backup"]
 - decl: [dst, path, "/var/archives/backup_2024.tar.gz"]
 - decl: [rc, i32, { call: [compress.tar_gz, src, dst] }]
 - print: ["tar.gz rc: ${rc}"]
 
-# Archiv entpacken
+# Extract archive
 - decl: [out_dir, path, "/var/restore"]
 - decl: [rc2, i32, { call: [compress.untar_gz, dst, out_dir] }]
 - print: ["untar rc: ${rc2}"]
@@ -150,17 +150,17 @@ compress.unzip(src, dst_dir)         → i32          0 = ok
 ### 3.8 zip
 
 ```aiml
-# Zip-Archiv erstellen
+# Create zip archive
 - decl: [src, path, "/var/www/dist"]
 - decl: [dst, path, "/var/releases/app_v1.0.zip"]
 - decl: [rc, i32, { call: [compress.zip, src, dst] }]
 
-# Entpacken
+# Extract
 - decl: [target, path, "/var/deploy"]
 - decl: [rc2, i32, { call: [compress.unzip, dst, target] }]
 ```
 
-### 3.9 Kombination mit `hash` — Prüfsumme nach Kompression
+### 3.9 Combination with `hash` — Checksum After Compression
 
 ```aiml
 - decl: [data, string, "sensitive payload"]
@@ -171,66 +171,66 @@ compress.unzip(src, dst_dir)         → i32          0 = ok
 
 ---
 
-## 4. Namespace-Referenz
+## 4. Namespace Reference
 
-### In-Memory-Funktionen
+### In-Memory Functions
 
-| Aufruf | Eingabe | Rückgabe | Beschreibung |
-|--------|---------|----------|--------------|
-| `{ call: [compress.gzip, data] }` | `string\|buffer<u8>` | `buffer<u8>` | gzip komprimieren |
-| `{ call: [compress.gzip, data, level] }` | `string\|buffer<u8>, i32` | `buffer<u8>` | gzip mit Level 1–9 |
-| `{ call: [compress.gunzip, data] }` | `buffer<u8>` | `buffer<u8>` | gzip dekomprimieren |
-| `{ call: [compress.gunzip_str, data] }` | `buffer<u8>` | `string` | gzip → UTF-8 String |
+| Call | Input | Return | Description |
+|------|-------|--------|-------------|
+| `{ call: [compress.gzip, data] }` | `string\|buffer<u8>` | `buffer<u8>` | gzip compress |
+| `{ call: [compress.gzip, data, level] }` | `string\|buffer<u8>, i32` | `buffer<u8>` | gzip with level 1–9 |
+| `{ call: [compress.gunzip, data] }` | `buffer<u8>` | `buffer<u8>` | gzip decompress |
+| `{ call: [compress.gunzip_str, data] }` | `buffer<u8>` | `string` | gzip → UTF-8 string |
 | `{ call: [compress.deflate, data] }` | `string\|buffer<u8>` | `buffer<u8>` | raw deflate |
-| `{ call: [compress.inflate, data] }` | `buffer<u8>` | `buffer<u8>` | raw deflate dekomprimieren |
+| `{ call: [compress.inflate, data] }` | `buffer<u8>` | `buffer<u8>` | raw deflate decompress |
 | `{ call: [compress.zlib, data] }` | `string\|buffer<u8>` | `buffer<u8>` | zlib-wrapped deflate |
-| `{ call: [compress.zlib_decompress, data] }` | `buffer<u8>` | `buffer<u8>` | zlib dekomprimieren |
-| `{ call: [compress.brotli, data] }` | `string\|buffer<u8>` | `buffer<u8>` | brotli komprimieren |
-| `{ call: [compress.brotli, data, level] }` | `string\|buffer<u8>, i32` | `buffer<u8>` | brotli mit Level 0–11 |
-| `{ call: [compress.brotli_decompress, data] }` | `buffer<u8>` | `buffer<u8>` | brotli dekomprimieren |
-| `{ call: [compress.brotli_decompress_str, data] }` | `buffer<u8>` | `string` | brotli → UTF-8 String |
-| `{ call: [compress.zstd, data] }` | `string\|buffer<u8>` | `buffer<u8>` | zstd komprimieren |
-| `{ call: [compress.zstd, data, level] }` | `string\|buffer<u8>, i32` | `buffer<u8>` | zstd mit Level 1–22 |
-| `{ call: [compress.zstd_decompress, data] }` | `buffer<u8>` | `buffer<u8>` | zstd dekomprimieren |
-| `{ call: [compress.zstd_decompress_str, data] }` | `buffer<u8>` | `string` | zstd → UTF-8 String |
-| `{ call: [compress.lz4, data] }` | `string\|buffer<u8>` | `buffer<u8>` | lz4 komprimieren |
-| `{ call: [compress.lz4_decompress, data] }` | `buffer<u8>` | `buffer<u8>` | lz4 dekomprimieren |
-| `{ call: [compress.lz4_decompress_str, data] }` | `buffer<u8>` | `string` | lz4 → UTF-8 String |
+| `{ call: [compress.zlib_decompress, data] }` | `buffer<u8>` | `buffer<u8>` | zlib decompress |
+| `{ call: [compress.brotli, data] }` | `string\|buffer<u8>` | `buffer<u8>` | brotli compress |
+| `{ call: [compress.brotli, data, level] }` | `string\|buffer<u8>, i32` | `buffer<u8>` | brotli with level 0–11 |
+| `{ call: [compress.brotli_decompress, data] }` | `buffer<u8>` | `buffer<u8>` | brotli decompress |
+| `{ call: [compress.brotli_decompress_str, data] }` | `buffer<u8>` | `string` | brotli → UTF-8 string |
+| `{ call: [compress.zstd, data] }` | `string\|buffer<u8>` | `buffer<u8>` | zstd compress |
+| `{ call: [compress.zstd, data, level] }` | `string\|buffer<u8>, i32` | `buffer<u8>` | zstd with level 1–22 |
+| `{ call: [compress.zstd_decompress, data] }` | `buffer<u8>` | `buffer<u8>` | zstd decompress |
+| `{ call: [compress.zstd_decompress_str, data] }` | `buffer<u8>` | `string` | zstd → UTF-8 string |
+| `{ call: [compress.lz4, data] }` | `string\|buffer<u8>` | `buffer<u8>` | lz4 compress |
+| `{ call: [compress.lz4_decompress, data] }` | `buffer<u8>` | `buffer<u8>` | lz4 decompress |
+| `{ call: [compress.lz4_decompress_str, data] }` | `buffer<u8>` | `string` | lz4 → UTF-8 string |
 
-### Archiv-Funktionen
+### Archive Functions
 
-| Aufruf | Argumente | Rückgabe | Beschreibung |
-|--------|-----------|----------|--------------|
-| `{ call: [compress.tar_gz, src, dst] }` | `path, path` | `i32` | Erstellt tar.gz-Archiv aus Datei/Verzeichnis |
-| `{ call: [compress.untar_gz, src, dst_dir] }` | `path, path` | `i32` | Entpackt tar.gz in Zielverzeichnis |
-| `{ call: [compress.zip, src, dst] }` | `path, path` | `i32` | Erstellt zip-Archiv aus Datei/Verzeichnis |
-| `{ call: [compress.unzip, src, dst_dir] }` | `path, path` | `i32` | Entpackt zip in Zielverzeichnis |
+| Call | Arguments | Return | Description |
+|------|-----------|--------|-------------|
+| `{ call: [compress.tar_gz, src, dst] }` | `path, path` | `i32` | Creates tar.gz archive from file/directory |
+| `{ call: [compress.untar_gz, src, dst_dir] }` | `path, path` | `i32` | Extracts tar.gz to target directory |
+| `{ call: [compress.zip, src, dst] }` | `path, path` | `i32` | Creates zip archive from file/directory |
+| `{ call: [compress.unzip, src, dst_dir] }` | `path, path` | `i32` | Extracts zip to target directory |
 
-Rückgabe `i32`: `0` = ok, negativer Wert = Fehlercode.
+Return `i32`: `0` = ok, negative value = error code.
 
 ---
 
-## 5. Implementierungshinweise
+## 5. Implementation Notes
 
 ### 5.1 Dependencies
 
-| Format | Library | Paket (Debian/Ubuntu) |
-|--------|---------|----------------------|
-| gzip, deflate, zlib | zlib | `zlib1g-dev` (meist vorinstalliert) |
+| Format | Library | Package (Debian/Ubuntu) |
+|--------|---------|------------------------|
+| gzip, deflate, zlib | zlib | `zlib1g-dev` (usually pre-installed) |
 | brotli | libbrotli | `libbrotli-dev` |
 | zstd | libzstd | `libzstd-dev` |
 | lz4 | liblz4 | `liblz4-dev` |
-| tar.gz | zlib + POSIX `<archive.h>` oder handrolled POSIX tar | `libarchive-dev` (optional) |
-| zip | libzip oder minizip (zlib-mitgeliefert) | `libzip-dev` |
+| tar.gz | zlib + POSIX `<archive.h>` or handrolled POSIX tar | `libarchive-dev` (optional) |
+| zip | libzip or minizip (bundled with zlib) | `libzip-dev` |
 
-`exodus.json`-Erweiterung:
+`exodus.json` extension:
 ```json
 {
   "libraries": ["ssl", "crypto", "z", "brotlienc", "brotlidec", "zstd", "lz4", "zip"]
 }
 ```
 
-### 5.2 C-Interface
+### 5.2 C Interface
 
 ```c
 // In-Memory — src/sys/compress_runtime.h
@@ -247,21 +247,21 @@ AimlBuffer* aiml_compress_lz4_decompress(AimlBuffer* in);
 AimlBuffer* aiml_compress_brotli(const char* data, int32_t len, int level);
 AimlBuffer* aiml_compress_brotli_decompress(AimlBuffer* in);
 
-// Archive — Dateisystem-Operationen
+// Archive — filesystem operations
 int32_t aiml_compress_tar_gz(const char* src, const char* dst);
 int32_t aiml_compress_untar_gz(const char* src, const char* dst_dir);
 int32_t aiml_compress_zip(const char* src, const char* dst);
 int32_t aiml_compress_unzip(const char* src, const char* dst_dir);
 ```
 
-String-Input: `aiml_compress_gzip(str, strlen(str), level)` — Compiler dispatcht nach Argtyp.
-Buffer-Input: `aiml_compress_gzip(buf->data, buf->len, level)`.
+String input: `aiml_compress_gzip(str, strlen(str), level)` — compiler dispatches based on argument type.
+Buffer input: `aiml_compress_gzip(buf->data, buf->len, level)`.
 
-### 5.3 Fehlerbehandlung
+### 5.3 Error Handling
 
-In-Memory-Funktionen: Geben `null`-Buffer zurück bei Fehler (korrupte Eingabe, Out-of-Memory).
-Archiv-Funktionen: Geben `i32 < 0` zurück. Fehlercodes werden als AIML-Exception geworfen wenn
-das Programm eine Exception-Behandlung nutzt:
+In-memory functions: return a `null` buffer on error (corrupt input, out of memory).
+Archive functions: return `i32 < 0`. Error codes are thrown as AIML exceptions when
+the program uses exception handling:
 
 ```aiml
 - try:
@@ -275,19 +275,19 @@ das Programm eine Exception-Behandlung nutzt:
       - print: ["Error: ${e.message}"]
 ```
 
-### 5.4 Archive-Traversal (seit v1.1)
+### 5.4 Archive Traversal (since v1.1)
 
-Archiv-Einträge können inspiziert werden ohne den Inhalt zu extrahieren.
+Archive entries can be inspected without extracting their contents.
 
 ```aiml
-# ZIP-Einträge auflisten
+# List ZIP entries
 - decl: [entries, list<ptr<zip_entry>>]
 - set: [entries, { call: [compress.zip_entries, archive_path] }]
 - decl: [e, ptr<zip_entry>]
 - set: [e, entries-0]
 - print: ["name: ${e.name}, size: ${e.size}, method: ${e.method}"]
 
-# tar.gz-Einträge auflisten
+# List tar.gz entries
 - decl: [tents, list<ptr<tar_entry>>]
 - set: [tents, { call: [compress.tar_entries, tgz_path] }]
 - decl: [te, ptr<tar_entry>]
@@ -295,40 +295,40 @@ Archiv-Einträge können inspiziert werden ohne den Inhalt zu extrahieren.
 - print: ["name: ${te.name}, size: ${te.size}, is_dir: ${te.is_dir}"]
 ```
 
-**`zip_entry`-Felder:**
+**`zip_entry` fields:**
 
-| Feld               | Typ     | Beschreibung |
-|--------------------|---------|--------------|
-| `name`             | `string`| Eintragspfad im Archiv |
-| `size`             | `i64`   | Unkomprimierte Größe in Bytes |
-| `compressed_size`  | `i64`   | Komprimierte Größe in Bytes |
-| `is_dir`           | `i32`   | 1 wenn Verzeichnis, 0 wenn Datei |
-| `crc32`            | `i32`   | CRC-32-Prüfsumme |
-| `method`           | `i32`   | Kompressionsmethode (0=stored, 8=deflated) |
+| Field              | Type    | Description |
+|--------------------|---------|-------------|
+| `name`             | `string`| Entry path within the archive |
+| `size`             | `i64`   | Uncompressed size in bytes |
+| `compressed_size`  | `i64`   | Compressed size in bytes |
+| `is_dir`           | `i32`   | 1 if directory, 0 if file |
+| `crc32`            | `i32`   | CRC-32 checksum |
+| `method`           | `i32`   | Compression method (0=stored, 8=deflated) |
 
-**`tar_entry`-Felder:**
+**`tar_entry` fields:**
 
-| Feld      | Typ     | Beschreibung |
-|-----------|---------|--------------|
-| `name`    | `string`| Eintragspfad im Archiv |
-| `size`    | `i64`   | Dateigröße in Bytes |
-| `is_dir`  | `i32`   | 1 wenn Verzeichnis, 0 wenn Datei |
-| `mode`    | `i32`   | Unix-Dateimodus (Oktal) |
+| Field     | Type    | Description |
+|-----------|---------|-------------|
+| `name`    | `string`| Entry path within the archive |
+| `size`    | `i64`   | File size in bytes |
+| `is_dir`  | `i32`   | 1 if directory, 0 if file |
+| `mode`    | `i32`   | Unix file mode (octal) |
 
-**Neue Namespace-Funktionen:**
+**New namespace functions:**
 
-| Aufruf | Argumente | Rückgabe | Beschreibung |
-|--------|-----------|----------|--------------|
-| `{ call: [compress.zip_entries, path] }` | `path` | `list<ptr<zip_entry>>` | Alle Einträge eines ZIP-Archivs |
-| `{ call: [compress.tar_entries, path] }` | `path` | `list<ptr<tar_entry>>` | Alle Einträge eines tar.gz-Archivs |
+| Call | Arguments | Return | Description |
+|------|-----------|--------|-------------|
+| `{ call: [compress.zip_entries, path] }` | `path` | `list<ptr<zip_entry>>` | All entries of a ZIP archive |
+| `{ call: [compress.tar_entries, path] }` | `path` | `list<ptr<tar_entry>>` | All entries of a tar.gz archive |
 
-**Hinweis:** Die zurückgegebene Liste enthält `ptr<zip_entry>` / `ptr<tar_entry>` — Pointer auf heap-allozierte Entry-Structs (analog zu `ptr<VecResult>` bei AionDB).
+**Note:** The returned list contains `ptr<zip_entry>` / `ptr<tar_entry>` — pointers to heap-allocated entry structs (analogous to `ptr<VecResult>` in AionDB).
 
 ### 5.5 Streaming (v2)
 
-In v1: alle Operationen arbeiten vollständig in-memory (kein Streaming).
-Für sehr große Dateien: Archiv-Funktionen (`tar_gz`, `zip`) arbeiten blockweise intern —
-der Aufrufer braucht nicht die gesamte Datei im Heap zu haben.
+In v1: all operations work entirely in-memory (no streaming).
+For very large files: archive functions (`tar_gz`, `zip`) work in blocks internally —
+the caller does not need to hold the entire file in the heap.
 
-v2-Plan: `compress_stream_handle` für inkrementelle Kompression/Dekompression
-(analog zu `resp.write` im HTTP-Server).
+v2 plan: `compress_stream_handle` for incremental compression/decompression
+(analogous to `resp.write` in the HTTP server).

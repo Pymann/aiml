@@ -1,0 +1,95 @@
+{
+    "$schema": "exodus.project.config-1.0",
+    "name": "aiml_wasm",
+    "version": "0.1.0",
+    "license": [],
+    "dependencies": [],
+    "apt_packages": [],
+    "conan_packages": [],
+    "git_packages": [
+        {
+            "name": "emsdk",
+            "repo": "https://github.com/emscripten-core/emsdk.git",
+            "ref": "main",
+            "setup_commands": [
+                ["./emsdk", "install", "3.1.74"],
+                ["./emsdk", "activate", "3.1.74"]
+            ],
+            "digest": "d0797f10c9382986e1aefa7b72de8926bed5b04f"
+        }
+    ],
+    "output_type": "static_lib",
+    "artifact_in_cwd": false,
+    "optimization": "2",
+    "debug": false,
+    "warnings": [],
+    "werror": false,
+    "source_root": ".",
+    "build_root": "out/aiml_wasm",
+    "search_paths": [
+        "src",
+        "src/core",
+        "src/sys",
+        "__exodus_cache/apt/libstb-dev/amd64/0.0~git20230129.5736b15+ds-1.2/payload/usr/include"
+    ],
+    "sources": [
+        "src/core/path_runtime.cpp",
+        "src/core/yyjson.cpp",
+        "src/core/yyjson_wrapper.cpp",
+        "src/sys/ws_runtime.cpp",
+        "src/sys/ser_runtime.cpp",
+        "src/sys/mirror_runtime.cpp",
+        "src/sys/log_runtime.cpp",
+        "src/sys/time_runtime.cpp",
+        "src/sys/string_runtime.cpp",
+        "src/sys/mem_runtime.cpp",
+        "src/sys/binary_io_runtime.cpp",
+        "src/sys/trace_runtime.cpp",
+        "src/sys/arg_dump_runtime.cpp",
+        "src/sys/math_runtime.cpp",
+        "src/sys/engine_runtime.cpp",
+        "src/sys/gl_runtime.cpp",
+        "src/sys/input_runtime.cpp",
+        "src/sys/ui_runtime.cpp",
+        "src/sys/prefab_runtime.cpp",
+        "src/sys/storage_runtime.cpp"
+    ],
+    "src_pattern_for_headers": [
+        "src/core/**/*.h",
+        "src/sys/**/*.h"
+    ],
+    "defines": {},
+    "env": {
+        "EM_CONFIG": "__exodus_cache/git/emsdk/current/.emscripten"
+    },
+    "architecture": {
+        "arch": "wasm32",
+        "cpu": null,
+        "fpu": null,
+        "float_abi": null
+    },
+    "compiler": {
+        "name": "__exodus_cache/git/emsdk/current/upstream/emscripten/em++",
+        "path": null,
+        "lang_standard": null,
+        "flags": [
+            "-std=c++17",
+            "-D__STDC_CONSTANT_MACROS",
+            "-D__STDC_FORMAT_MACROS",
+            "-D__STDC_LIMIT_MACROS"
+        ],
+        "additional_compilers": [],
+        "common_interface_defined": true,
+        "integer_division_documented": false
+    },
+    "linker": {
+        "name": "__exodus_cache/git/emsdk/current/upstream/emscripten/emar",
+        "path": null,
+        "script": null,
+        "map_file": null,
+        "flags": [],
+        "rpath": false,
+        "library_paths": [],
+        "libraries": []
+    }
+}

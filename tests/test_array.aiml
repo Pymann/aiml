@@ -1,4 +1,15 @@
 # test_array.aiml — Tests for array<T:N> type, { at: [...] } read, idx: [...] write
+- model:
+    name: ArrayPoint
+    fields:
+      - [x, i32]
+      - [y, i32]
+
+- class:
+    name: ArrayNode
+    members:
+      - [value, i32]
+
 - decl: [pass, i32, 0]
 - decl: [fail, i32, 0]
 
@@ -143,6 +154,108 @@
     else:
       - set: [fail, { "+": [fail, 1] }]
       - print: ["FAIL E1: expected 99, got ${lst_val}"]
+
+# === Phase F: array<ptr<T>:N> ===
+
+# F1: zero-init to null
+- decl: [ptrs, "array<ptr<ArrayNode>:3>"]
+- decl: [p0, ptr<ArrayNode>, { at: [ptrs, 0] }]
+- if:
+    condition: { eq: [p0, null] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL F1: expected null pointer in ptrs[0]"]
+
+# F2: store/load raw pointer identity
+- decl: [n1, ptr<ArrayNode>, { new: ArrayNode }]
+- set: [n1.value, 123]
+- idx: [ptrs, 1, n1]
+- decl: [p1, ptr<ArrayNode>, { at: [ptrs, 1] }]
+- if:
+    condition: { "&&": [{ peq: [p1, n1] }, { eq: [p1.value, 123] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL F2: pointer identity/value mismatch"]
+
+# F3: overwrite with null
+- idx: [ptrs, 1, null]
+- decl: [p1_null, ptr<ArrayNode>, { at: [ptrs, 1] }]
+- if:
+    condition: { eq: [p1_null, null] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL F3: expected null after overwrite"]
+
+# F4: multidimensional pointer array
+- decl: [grid_ptr, "array<ptr<ArrayNode>:2:2>"]
+- idx: [grid_ptr, 1, 0, n1]
+- decl: [gp, ptr<ArrayNode>, { at: [grid_ptr, 1, 0] }]
+- if:
+    condition: { "&&": [{ peq: [gp, n1] }, { eq: [gp.value, 123] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL F4: 2D pointer array mismatch"]
+
+# === Phase G: array<Struct:N> ===
+
+# G1: zero-init struct element
+- decl: [pts, "array<ArrayPoint:3>"]
+- decl: [pt0, ArrayPoint, { at: [pts, 0] }]
+- if:
+    condition: { "&&": [{ eq: [pt0.x, 0] }, { eq: [pt0.y, 0] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL G1: expected zero-init struct, got (${pt0.x}, ${pt0.y})"]
+
+# G2: store/load user-defined struct value
+- decl: [p_in, ArrayPoint]
+- set: [p_in.x, 7]
+- set: [p_in.y, 9]
+- idx: [pts, 1, p_in]
+- decl: [pt1, ArrayPoint, { at: [pts, 1] }]
+- if:
+    condition: { "&&": [{ eq: [pt1.x, 7] }, { eq: [pt1.y, 9] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL G2: expected (7,9), got (${pt1.x}, ${pt1.y})"]
+
+# G3: store struct returned via pointer-backed source
+- decl: [pt_tmp, ArrayPoint]
+- set: [pt_tmp.x, 11]
+- set: [pt_tmp.y, 22]
+- idx: [pts, 2, pt_tmp]
+- decl: [pt2, ArrayPoint, { at: [pts, 2] }]
+- if:
+    condition: { "&&": [{ eq: [pt2.x, 11] }, { eq: [pt2.y, 22] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL G3: expected (11,22), got (${pt2.x}, ${pt2.y})"]
+
+# G4: multidimensional struct array
+- decl: [pt_grid, "array<ArrayPoint:2:2>"]
+- idx: [pt_grid, 1, 1, p_in]
+- decl: [pt_grid_11, ArrayPoint, { at: [pt_grid, 1, 1] }]
+- if:
+    condition: { "&&": [{ eq: [pt_grid_11.x, 7] }, { eq: [pt_grid_11.y, 9] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL G4: 2D struct array mismatch (${pt_grid_11.x}, ${pt_grid_11.y})"]
 
 # === Summary ===
 - print: [""]

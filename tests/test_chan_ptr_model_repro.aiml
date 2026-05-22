@@ -1,0 +1,61 @@
+# Repro: chan<ptr<Model>> must transport the pointer value, not inline model bytes.
+# Expected exit code: 0
+
+- model:
+    name: WorkerJob
+    fields:
+      - [job_id, i32, 0]
+      - [win_start, i32, 0]
+      - [seq_len, i32, 0]
+      - [stop, i32, 0]
+
+- def:
+    name: recv_job_worker
+    args:
+      - [worker_job_ch, "chan<ptr<WorkerJob>>"]
+      - [worker_result_ch, chan<i32>]
+    return: void
+    body:
+      - decl: [job, "ptr<WorkerJob>", { call: [worker_job_ch.recv] }]
+      - call: [worker_result_ch.send, job.stop]
+      - call: [worker_result_ch.send, job.win_start]
+      - call: [worker_result_ch.send, job.seq_len]
+
+- decl: [job_ch, "chan<ptr<WorkerJob>>"]
+- decl: [result_ch, chan<i32>]
+- decl: [th, thread_handle, { spawn: [recv_job_worker, job_ch, result_ch] }]
+
+- decl: [job, "ptr<WorkerJob>", { new: WorkerJob }]
+- set: [job.job_id, 17]
+- set: [job.win_start, 123]
+- set: [job.seq_len, 31]
+- set: [job.stop, 0]
+
+- call: [job_ch.send, job]
+
+- decl: [got_stop, i32, { call: [result_ch.recv] }]
+- decl: [got_win_start, i32, { call: [result_ch.recv] }]
+- decl: [got_seq_len, i32, { call: [result_ch.recv] }]
+
+- call: [th.join]
+- free: [job]
+
+- if:
+    condition: { neq: [got_stop, 0] }
+    then:
+      - print: ["FAIL ptr-channel stop mismatch: expected 0, got ${got_stop}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [got_win_start, 123] }
+    then:
+      - print: ["FAIL ptr-channel win_start mismatch: expected 123, got ${got_win_start}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [got_seq_len, 31] }
+    then:
+      - print: ["FAIL ptr-channel seq_len mismatch: expected 31, got ${got_seq_len}"]
+      - exit: [1]
+
+- print: ["PASS test_chan_ptr_model_repro"]

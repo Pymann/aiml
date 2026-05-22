@@ -1,0 +1,45 @@
+# Probe: list<ptr<Class>> iteration + upcast to ptr<Interface> per element.
+# Saubere Architektur: Modell hält Daten, Klasse mit anderem Namen referenziert
+# via `models:` das Modell und implementiert das Interface.
+#
+# Borrow-safe convention: heap-owning pointers use `ptr<T>`.  `ref<T>` is
+# reserved for borrowed parameters (e.g. the implicit method-`this`).  See
+# spec/18_refs_and_pointers.md.
+
+- interface:
+    name: Sayable
+    methods:
+      - [say, string, []]
+
+- model:
+    name: Cat
+    fields:
+      - [name, string]
+
+- class:
+    name: CatBehavior
+    models: [Cat]
+    implements: [Sayable]
+    methods:
+      - def: { name: say, return: string, args: [], body: [{ return: "Meow! I am ${<.name}" }] }
+
+- decl: [c1, ptr<CatBehavior>, { new: CatBehavior }]
+- set: [c1.name, "Whiskers"]
+- decl: [c2, ptr<CatBehavior>, { new: CatBehavior }]
+- set: [c2.name, "Mittens"]
+
+- decl: [cats, list<ptr<CatBehavior>>, []]
+- call: [cats.push, c1]
+- call: [cats.push, c2]
+
+- print: ["cats.len = ${cats.len}"]
+
+# Iterate: load ptr<CatBehavior> from list slot, then upcast each to ptr<Sayable>.
+- decl: [i, i32, 0]
+- while:
+    condition: { lt: [i, cats.len] }
+    body:
+      - decl: [it, ptr<CatBehavior>, { at: [cats, i] }]
+      - decl: [view, ptr<Sayable>, it]
+      - print: ["poly[${i}]: ${call: [view.say]}"]
+      - set: [i, { +: [i, 1] }]

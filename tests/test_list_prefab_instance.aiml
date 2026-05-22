@@ -1,0 +1,37 @@
+# test_list_prefab_instance.aiml — verifies that list<prefab_instance>
+# can be declared, pushed to, and read back. Discovered during datacreatures
+# DnD work that `decl: [x, list<prefab_instance>]` reliably traps in wasm
+# at module init ("unreachable executed"). This test isolates the question.
+
+- prefab:
+    name: Dummy
+    width: 10
+    height: 10
+    children:
+      - { name: r, type: rect, x: 0, y: 0, width: 10, height: 10,
+          bg_color: 0xFFFFFFFF }
+
+- print: ["[test] before list decl"]
+
+- decl: [tiles, list<prefab_instance>]
+
+- print: ["[test] list<prefab_instance> declared, len=${tiles.len}"]
+
+- decl: [a, prefab_instance, { call: [engine.instantiate, "Dummy"] }]
+- decl: [b, prefab_instance, { call: [engine.instantiate, "Dummy"] }]
+
+- print: ["[test] two instances spawned a=${a} b=${b}"]
+
+- call: [tiles.push, a]
+- call: [tiles.push, b]
+
+- print: ["[test] after pushes, len=${tiles.len}"]
+
+- decl: [t0, prefab_instance, { at: [tiles, 0] }]
+- decl: [t1, prefab_instance, { at: [tiles, 1] }]
+
+- print: ["[test] read back: t0==a? ${ { eq: [t0, a] } } t1==b? ${ { eq: [t1, b] } }"]
+- print: ["[test] cross-check: t0==b? ${ { eq: [t0, b] } } t1==a? ${ { eq: [t1, a] } } (must be false)"]
+- print: ["[test] direct: a==b? ${ { eq: [a, b] } } (must be false)"]
+- print: ["[test] direct neq: a!=b? ${ { neq: [a, b] } } (must be true)"]
+- print: ["[test] OK"]

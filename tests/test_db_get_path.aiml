@@ -1,0 +1,42 @@
+# db.get_path() — Single Source of Truth fuer den AionDB-Root.
+# Verifiziert die Resolution-Hierarchie: env > set_path > Default.
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      # 1. Default-Pfad (oder ggf. AIONDB_PATH env, wenn gesetzt).
+      - decl: [p0, string]
+      - set: [p0, { call: [db.get_path] }]
+      - print: ["initial: '${p0}'"]
+      - if:
+          condition: { eq: [p0.len, 0] }
+          then:
+            - print: ["FAIL get_path returned empty initial"]
+            - call: [sys.exit, 1]
+
+      # 2. set_path → get_path muss synchron sein.
+      - call: [db.set_path, "/tmp/aiml_test_dbpath_20260504/"]
+      - decl: [p1, string]
+      - set: [p1, { call: [db.get_path] }]
+      - print: ["after set_path: '${p1}'"]
+      - if:
+          condition: { eq: [{ eq: [p1, "/tmp/aiml_test_dbpath_20260504/"] }, 0] }
+          then:
+            - print: ["FAIL set_path/get_path mismatch: got '${p1}'"]
+            - call: [sys.exit, 1]
+
+      # 3. Trailing-Slash-Normalisierung: Root ohne Slash → mit Slash zurueck.
+      - call: [db.set_path, "/tmp/aiml_test_dbpath_no_slash"]
+      - decl: [p2, string]
+      - set: [p2, { call: [db.get_path] }]
+      - print: ["after set_path no-slash: '${p2}'"]
+      - if:
+          condition: { eq: [{ eq: [p2, "/tmp/aiml_test_dbpath_no_slash/"] }, 0] }
+          then:
+            - print: ["FAIL trailing-slash not normalized: got '${p2}'"]
+            - call: [sys.exit, 1]
+
+      - print: ["PASS db.get_path"]
+      - return: 0

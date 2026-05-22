@@ -1,4 +1,29 @@
+# JIT / build caches
 out/
+out-test/
 __aiml_cache/
 __exodus_cache/
+
+# Test runner output
 test_results.txt
+
+# AionDB persistence artifacts (produced by `db.*` calls in tests/runs)
+*.kvwal
+*.wal
+*.db
+*.db-journal
+*.tslog
+
+# Test-generated DB layouts (legacy and current)
+mydb/
+aiondb/
+aiondb_rel_*/
+
+# IR debug dumps (failed module verification writes /tmp/aiml_bad_module.ll;
+# only relevant if someone copies it into the repo)
+aiml_bad_module.ll
+
+# Exodus artifacts
+out/test_link_bug/
+test_link_bug
+out/aiml_wasm/

@@ -1,0 +1,115 @@
+# tests/test_dyn_array.aiml — dyn_array<T> feature tests
+# Expected exit code: 0
+
+- decl: [pass_count, i32, 0]
+- decl: [fail_count, i32, 0]
+
+# ── A: i32 basic read/write ───────────────────────────────────────────────────
+- decl: [n, i32, 8]
+- decl: [arr, "dyn_array<i32>", { new_array: [i32, n] }]
+- decl: [i, i32, 0]
+- while:
+    condition: { "<": [i, n] }
+    body:
+      - idx: [arr, i, i]
+      - set: [i, { +: [i, 1] }]
+- decl: [v0, i32, { at: [arr, 0] }]
+- decl: [v7, i32, { at: [arr, 7] }]
+- if:
+    condition: { eq: [v0, 0] }
+    then:
+      - print: ["PASS A1: dyn_i32[0]==0"]
+      - set: [pass_count, { +: [pass_count, 1] }]
+    else:
+      - print: ["FAIL A1: dyn_i32[0]==${v0} expected 0"]
+      - set: [fail_count, { +: [fail_count, 1] }]
+- if:
+    condition: { eq: [v7, 7] }
+    then:
+      - print: ["PASS A2: dyn_i32[7]==7"]
+      - set: [pass_count, { +: [pass_count, 1] }]
+    else:
+      - print: ["FAIL A2: dyn_i32[7]==${v7} expected 7"]
+      - set: [fail_count, { +: [fail_count, 1] }]
+- call: [arr.free]
+
+# ── B: f32 array ─────────────────────────────────────────────────────────────
+- decl: [farr, "dyn_array<f32>", { new_array: [f32, 4] }]
+- idx: [farr, 0, 1.5]
+- idx: [farr, 1, 2.5]
+- idx: [farr, 2, 3.5]
+- idx: [farr, 3, 4.5]
+- decl: [fv2, f32, { at: [farr, 2] }]
+- if:
+    condition: { eq: [fv2, 3.5] }
+    then:
+      - print: ["PASS B1: dyn_f32[2]==3.5"]
+      - set: [pass_count, { +: [pass_count, 1] }]
+    else:
+      - print: ["FAIL B1: dyn_f32[2]==${fv2} expected 3.5"]
+      - set: [fail_count, { +: [fail_count, 1] }]
+- call: [farr.free]
+
+# ── C: runtime size ───────────────────────────────────────────────────────────
+- decl: [rn, i32, 10]
+- decl: [rarr, "dyn_array<i32>", { new_array: [i32, rn] }]
+- decl: [ri, i32, 0]
+# Write fixed values to fixed indices (no loop)
+- idx: [rarr, 0, 100]
+- idx: [rarr, 1, 200]
+- idx: [rarr, 9, 999]
+- decl: [rc0, i32, { at: [rarr, 0] }]
+- decl: [rc1, i32, { at: [rarr, 1] }]
+- decl: [rc9, i32, { at: [rarr, 9] }]
+- print: ["  C dbg: rc0=${rc0} rc1=${rc1} rc9=${rc9}"]
+- call: [rarr.free]
+- if:
+    condition: { "&&": [{ eq: [rc0, 100] }, { "&&": [{ eq: [rc1, 200] }, { eq: [rc9, 999] }] }] }
+    then:
+      - print: ["PASS C1: fixed-idx read/write ok"]
+      - set: [pass_count, { +: [pass_count, 1] }]
+    else:
+      - print: ["FAIL C1: rc0=${rc0} rc1=${rc1} rc9=${rc9}"]
+      - set: [fail_count, { +: [fail_count, 1] }]
+
+# ── D: large array (beyond typical stack limit) ───────────────────────────────
+- decl: [big, i32, 100000]
+- decl: [larr, "dyn_array<i32>", { new_array: [i32, big] }]
+- idx: [larr, 0, 42]
+- idx: [larr, 99999, 777]
+- decl: [lv0, i32, { at: [larr, 0] }]
+- decl: [lvn, i32, { at: [larr, 99999] }]
+- call: [larr.free]
+- if:
+    condition: { "&&": [{ eq: [lv0, 42] }, { eq: [lvn, 777] }] }
+    then:
+      - print: ["PASS D1: large dyn_array[0]=42 [99999]=777"]
+      - set: [pass_count, { +: [pass_count, 1] }]
+    else:
+      - print: ["FAIL D1: [0]=${lv0} [99999]=${lvn}"]
+      - set: [fail_count, { +: [fail_count, 1] }]
+
+# ── E: two independent arrays ─────────────────────────────────────────────────
+- decl: [aa, "dyn_array<i32>", { new_array: [i32, 4] }]
+- decl: [bb, "dyn_array<i32>", { new_array: [i32, 4] }]
+- idx: [aa, 0, 10]
+- idx: [bb, 0, 20]
+- decl: [va, i32, { at: [aa, 0] }]
+- decl: [vb, i32, { at: [bb, 0] }]
+- call: [aa.free]
+- call: [bb.free]
+- if:
+    condition: { "&&": [{ eq: [va, 10] }, { eq: [vb, 20] }] }
+    then:
+      - print: ["PASS E1: two independent dyn_arrays"]
+      - set: [pass_count, { +: [pass_count, 1] }]
+    else:
+      - print: ["FAIL E1: aa[0]=${va} bb[0]=${vb}"]
+      - set: [fail_count, { +: [fail_count, 1] }]
+
+# ── summary ───────────────────────────────────────────────────────────────────
+- print: ["=== dyn_array: ${pass_count} passed, ${fail_count} failed ==="]
+- if:
+    condition: { ">": [fail_count, 0] }
+    then:
+      - call: [sys.exit, 1]

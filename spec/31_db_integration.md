@@ -1,64 +1,63 @@
-# Kapitel 31 — AionDB: Die eingebaute Datenbank
+# Chapter 31 — AionDB: The Built-In Database
 
-> **Leitgedanke:** Eine Datenbank ist in AIML kein externes Tool, das man über Treiber anbindet.
-> Sie ist ein reservierter Namespace (`db`), der tief in die Sprache integriert ist —
-> genau wie `sys`, `io` oder `time`. Der Compiler kennt die Typen, der Speicher-Manager
-> ist derselbe wie für normale Variablen, und Schema-Versionen sind dasselbe Konzept
-> wie class-Versionen aus Kapitel 30 (Hot-Reload).
-
----
-
-## 1. Warum eine eingebaute Datenbank?
-
-Externe Datenbanken (SQLite, PostgreSQL, Redis, …) haben einen fundamentalen Nachteil:
-Sie sprechen eine andere Sprache als das Programm. Man serialisiert Daten in Text (SQL),
-schickt sie über eine Abstraktionsschicht, und deserialisiert das Ergebnis zurück.
-Jeder Schritt kostet Zeit und Speicher.
-
-AionDB eliminiert diese Grenze vollständig:
-
-- **Zero-Copy-Reads**: Ein Datenbankzeiger `ptr<Entity>` ist ein echter Maschinenzeiger
-  auf den Speicherbereich der Datenbank. Es wird nichts kopiert, nichts deserialisiert.
-- **Typsicherheit ohne Mapping**: Weil der Compiler die AIML-Klasse `Entity` kennt,
-  muss man kein ORM schreiben. Die Klasse *ist* das Schema.
-- **Schema-Evolution gratis**: Wenn eine Klasse von `version: 1` auf `version: 2`
-  aktualisiert wird (neues Feld anhängen), erkennt AionDB das automatisch und
-  migriert bestehende Seiten — ohne Downtime, ohne Migrationsskript.
-- **Versioning eingebaut**: Jede Zeile kann optional einen Zeitstempel tragen,
-  der "Time-Travel"-Abfragen ermöglicht: "Wie sah die Datenbank vor 500 Frames aus?"
+> **Core idea:** A database in AIML is not an external tool connected via drivers.
+> It is a reserved namespace (`db`) deeply integrated into the language —
+> just like `sys`, `io`, or `time`. The compiler knows the types, the memory manager
+> is the same as for regular variables, and schema versions are the same concept
+> as class versions from Chapter 30 (Hot-Reload).
 
 ---
 
-## 2. Der `db`-Namespace
+## 1. Why a Built-In Database?
 
-`db` ist ein **reservierter Namespace** in AIML. Man kann keine eigenen Klassen,
-Funktionen oder Variablen unter diesem Namen definieren. Er verhält sich analog zu `sys`:
+External databases (SQLite, PostgreSQL, Redis, …) have a fundamental drawback:
+they speak a different language than the program. You serialize data into text (SQL),
+send it through an abstraction layer, and deserialize the result back.
+Every step costs time and memory.
+
+AionDB eliminates this boundary entirely:
+
+- **Zero-Copy Reads**: A database pointer `ptr<Entity>` is a real machine pointer
+  into the database's memory region. Nothing is copied, nothing is deserialized.
+- **Type safety without mapping**: Because the compiler knows the AIML class `Entity`,
+  you don't need to write an ORM. The class *is* the schema.
+- **Schema evolution for free**: When a class is updated from `version: 1` to `version: 2`
+  (appending a new field), AionDB detects this automatically and
+  migrates existing pages — no downtime, no migration script.
+- **Versioning built in**: Each row can optionally carry a timestamp,
+  which enables "time-travel" queries: "What did the database look like 500 frames ago?"
+
+---
+
+## 2. The `db` Namespace
+
+`db` is a **reserved namespace** in AIML. You cannot define your own classes,
+functions, or variables under this name. It behaves analogously to `sys`:
 
 ```aiml
-# Falsch — Compilerfehler:
+# Wrong — compiler error:
 - def:
-    name: db.connect   # "db" ist reserviert
+    name: db.connect   # "db" is reserved
 
-# Richtig:
+# Correct:
 - decl: [store, Store<Entity>]
 - set:  [store, { call: [db.open, "entities"] }]
 ```
 
-Alle `db`-Operationen sind **Compile-Time-bekannt**: Der Compiler emittiert direkte
-Aufrufe in die AionDB-Runtime, ohne dynamisches Dispatch. Das ist schneller als
-jeder Treiber-basierte Ansatz.
+All `db` operations are **known at compile time**: the compiler emits direct
+calls into the AionDB runtime, without dynamic dispatch. This is faster than
+any driver-based approach.
 
 ---
 
-## 3. Grundkonzepte (ausführlich erklärt)
+## 3. Core Concepts (explained in detail)
 
-### 3.1 Was ist ein `Store<T>`?
+### 3.1 What is a `Store<T>`?
 
-Ein `Store<T>` ist eine **typisierte Tabelle**, die Zeilen vom Typ `T` speichert.
-`T` muss eine AIML-`class` oder ein `model` sein. Der Store verhält sich wie eine
-sehr schnelle, persistente Version von `list<T>` — mit dem Unterschied, dass Daten
-nicht im Heap verstreut liegen, sondern in **Pages** (zusammenhängende Speicherblöcke)
-organisiert sind.
+A `Store<T>` is a **typed table** that stores rows of type `T`.
+`T` must be an AIML `class` or `model`. The store behaves like a
+very fast, persistent version of `list<T>` — with the difference that data
+is not scattered on the heap, but organized in **pages** (contiguous memory blocks).
 
 ```aiml
 - class:
@@ -70,29 +69,29 @@ organisiert sind.
       - [hp,       i32]
       - [ai_state, i32]
 
-# Einen Store für Entity-Objekte öffnen (oder anlegen, falls nicht vorhanden):
+# Open (or create if not present) a store for Entity objects:
 - decl: [entities, Store<Entity>]
 - set:  [entities, { call: [db.open, "entities"] }]
 
-# Einfügen:
+# Insert:
 - decl: [e, Entity]
 - set: [e.id, 1]
 - set: [e.pos_x, 100.0]
 - set: [e.hp, 100]
 - call: [entities.insert, e]
 
-# Lesen per ID (Zero-Copy — gibt einen Zeiger auf den Store-Speicher zurück):
+# Read by ID (zero-copy — returns a pointer into store memory):
 - decl: [p, ptr<Entity>]
 - set:  [p, { call: [entities.get, 1] }]
 - print: ["Entity hp: ${p.hp}"]
 ```
 
-Ein `Store<T>` kann in zwei **Layouts** betrieben werden (Kapitel 3.3 erklärt warum):
+A `Store<T>` can be operated in two **layouts** (Chapter 3.3 explains why):
 
-| Layout | Beschreibung | Gut für |
-|--------|-------------|---------|
-| `row`  | Alle Felder einer Zeile zusammen im Speicher | Einzelne Objekte lesen/schreiben |
-| `column` | Alle Werte eines Feldes zusammen im Speicher | Massenoperationen, SIMD, AI |
+| Layout   | Description | Good for |
+|----------|-------------|---------|
+| `row`    | All fields of a row together in memory | Reading/writing individual objects |
+| `column` | All values of a field together in memory | Bulk operations, SIMD, AI |
 
 ```aiml
 - decl: [entities, Store<Entity>]
@@ -101,15 +100,15 @@ Ein `Store<T>` kann in zwei **Layouts** betrieben werden (Kapitel 3.3 erklärt w
 
 ---
 
-### 3.2 Was ist ECS — Entity Component System?
+### 3.2 What is ECS — Entity Component System?
 
-ECS ist ein **Architekturmuster**, das in Spielen und zunehmend in KI-Systemen
-verwendet wird. Es löst ein fundamentales Problem der objektorientierten Programmierung:
-**Vererbungs-Explosion**.
+ECS is an **architectural pattern** used in games and increasingly in AI systems.
+It solves a fundamental problem of object-oriented programming:
+**inheritance explosion**.
 
-#### Das Problem ohne ECS (klassisches OOP)
+#### The Problem Without ECS (classic OOP)
 
-Stellen wir uns ein Spiel vor mit Spieler, Gegner, Projektile und Partikel:
+Imagine a game with players, enemies, projectiles, and particles:
 
 ```
 Player    → Position, Velocity, Health, Sprite, InputHandler
@@ -118,35 +117,35 @@ Bullet    → Position, Velocity, Sprite, Damage
 Particle  → Position, Velocity, Sprite, Lifetime
 ```
 
-Alle vier haben `Position`, `Velocity` und `Sprite`. In OOP würde man eine Basis-Klasse
-`MovableSprite` bauen. Aber `Enemy` und `Player` haben `Health`, `Bullet` hat `Damage`…
-Sofort entsteht ein komplizierter Vererbungsbaum, der schwer zu erweitern ist.
+All four have `Position`, `Velocity`, and `Sprite`. In OOP you would build a base class
+`MovableSprite`. But `Enemy` and `Player` have `Health`, `Bullet` has `Damage`…
+An immediately complicated inheritance tree emerges, which is hard to extend.
 
-Außerdem: Wenn der Rendering-Code alle Objekte mit `Sprite` zeichnen will, springt
-er durch den Speicher — `Player`-Objekte hier, `Enemy`-Objekte dort, `Bullet`-Objekte
-woanders. Das ist **cache-feindlich** und damit langsam.
+Also: when the rendering code wants to draw all objects with `Sprite`, it jumps
+through memory — `Player` objects here, `Enemy` objects there, `Bullet` objects
+elsewhere. This is **cache-hostile** and therefore slow.
 
-#### Die ECS-Lösung
+#### The ECS Solution
 
-ECS trennt **Identität**, **Daten** und **Logik** vollständig:
+ECS separates **identity**, **data**, and **logic** completely:
 
-- **Entity**: Eine eindeutige ID. Eine Entity *ist* nichts — sie *hat* Komponenten.
-- **Component**: Reine Datenstruct, keine Methoden. `Position`, `Velocity`, `Health` sind Components.
-- **System**: Eine Funktion, die alle Entities mit bestimmten Components abarbeitet.
+- **Entity**: A unique ID. An entity *is* nothing — it *has* components.
+- **Component**: Pure data struct, no methods. `Position`, `Velocity`, `Health` are components.
+- **System**: A function that processes all entities with certain components.
 
-#### `model` vs `class` für ECS-Komponenten
+#### `model` vs `class` for ECS Components
 
-In AIML verwendet ECS **`model`-Typen** statt `class`. Der Unterschied:
+In AIML, ECS uses **`model` types** instead of `class`. The difference:
 
 | | `class` | `model` |
 |--|---------|---------|
-| Methoden | ja | **nein** (pure data) |
-| Vererbung | ja | nein |
-| ECS / `db.run_system` | nein | **ja** |
-| Column-Layout default | nein | ja |
+| Methods | yes | **no** (pure data) |
+| Inheritance | yes | no |
+| ECS / `db.run_system` | no | **yes** |
+| Column layout default | no | yes |
 
 ```aiml
-# ECS-Komponenten als model (pure data, keine Methoden):
+# ECS components as model (pure data, no methods):
 - model:
     name: Position
     members: [[x, f32], [y, f32]]
@@ -164,34 +163,34 @@ In AIML verwendet ECS **`model`-Typen** statt `class`. Der Unterschied:
     members: [[texture_id, i32], [scale, f32]]
 ```
 
-#### `primary_key` — natürliche Entity-Identität
+#### `primary_key` — natural entity identity
 
-Standardmäßig ist die Entity-ID der **Slot-Index** im Store (ein `i32`). Das ist der
-schnellste Pfad (O(1) Pointer-Arithmetik). Wenn Entities einen natürlichen Schlüssel
-haben (UUID, Username, IP-Adresse…), kann man `primary_key` im Model angeben:
+By default, the entity ID is the **slot index** in the store (an `i32`). This is the
+fastest path (O(1) pointer arithmetic). If entities have a natural key
+(UUID, username, IP address…), you can specify `primary_key` in the model:
 
 ```aiml
-# Kein primary_key → Entity-ID = Slot-Index (i32), schnellster Pfad
+# No primary_key → entity ID = slot index (i32), fastest path
 - model:
     name: Particle
     members: [[x, f32], [y, f32], [vx, f32], [vy, f32]]
 
-# Mit primary_key → Entity-ID = uuid (string), intern HashMap<string, slot>
+# With primary_key → entity ID = uuid (string), internally HashMap<string, slot>
 - model:
     name: Player
     primary_key: uuid
     members: [[uuid, string], [score, i32], [hp, i32]]
 ```
 
-Der Typ von `eid` in System-Funktionen wird automatisch aus `primary_key` abgeleitet:
-- Kein `primary_key` → `eid: i32` (Slot-Index)
+The type of `eid` in system functions is automatically derived from `primary_key`:
+- No `primary_key` → `eid: i32` (slot index)
 - `primary_key: uuid` (string) → `eid: string`
 
-#### `db.run_system` — der ECS-Loop
+#### `db.run_system` — the ECS loop
 
-Der Compiler liest die Signatur der System-Funktion und leitet daraus ab, welche
-Stores gejoint werden müssen. Die Schleife wird direkt zu LLVM IR kompiliert —
-kein Runtime-Dispatch, kein String-Parsing:
+The compiler reads the system function's signature and derives from it which
+stores must be joined. The loop is compiled directly to LLVM IR —
+no runtime dispatch, no string parsing:
 
 ```aiml
 - decl: [positions,  Store<Position>]
@@ -201,7 +200,7 @@ kein Runtime-Dispatch, kein String-Parsing:
 - set:  [velocities, { call: [db.open, "velocities"] }]
 - set:  [health,     { call: [db.open, "health"] }]
 
-# Movement-System: kein eid nötig — reine Datentransformation
+# Movement system: no eid needed — pure data transformation
 - fn:
     name: move_system
     args: [[pos, ptr<Position>], [vel, ptr<Velocity>]]
@@ -209,7 +208,7 @@ kein Runtime-Dispatch, kein String-Parsing:
       - set: [pos.x, { call: [pos.x + vel.dx] }]
       - set: [pos.y, { call: [pos.y + vel.dy] }]
 
-# Damage-System: eid nötig — löscht Entity aus mehreren Stores
+# Damage system: eid needed — deletes entity from multiple stores
 - fn:
     name: damage_system
     args: [[eid, i32], [h, ptr<Health>]]
@@ -221,60 +220,59 @@ kein Runtime-Dispatch, kein String-Parsing:
             - call: [positions.delete, eid]
             - call: [velocities.delete, eid]
 
-# Compiler sieht ptr<Position> + ptr<Velocity> → iteriert über positions ∩ velocities
+# Compiler sees ptr<Position> + ptr<Velocity> → iterates over positions ∩ velocities
 - call: [db.run_system, move_system, positions, velocities]
 
-# Compiler sieht nur ptr<Health> → iteriert über health allein
+# Compiler sees only ptr<Health> → iterates over health alone
 - call: [db.run_system, damage_system, health]
 ```
 
-`db.run_system` iteriert über alle Entity-IDs, die in **allen** übergebenen Stores
-vorhanden sind (Intersection). Für jeden Treffer wird die System-Funktion mit den
-entsprechenden Component-Zeigern aufgerufen — zero-copy, keine Allokation.
+`db.run_system` iterates over all entity IDs present in **all** passed stores
+(intersection). For each match, the system function is called with the corresponding
+component pointers — zero-copy, no allocation.
 
-Eine `Entity` ist jetzt nur noch eine ID. Die Kombination ihrer Components beschreibt,
-was sie ist:
+An `Entity` is now only an ID. The combination of its components describes what it is:
 
-| Entity-ID | Position | Velocity | Health | Sprite | Damage |
-|-----------|----------|----------|--------|--------|--------|
-| 1 (Player)| ✓        | ✓        | ✓      | ✓      |        |
-| 2 (Enemy) | ✓        | ✓        | ✓      | ✓      |        |
-| 3 (Bullet)| ✓        | ✓        |        | ✓      | ✓      |
-| 4 (Particle)| ✓      | ✓        |        | ✓      |        |
+| Entity ID   | Position | Velocity | Health | Sprite | Damage |
+|-------------|----------|----------|--------|--------|--------|
+| 1 (Player)  | ✓        | ✓        | ✓      | ✓      |        |
+| 2 (Enemy)   | ✓        | ✓        | ✓      | ✓      |        |
+| 3 (Bullet)  | ✓        | ✓        |        | ✓      | ✓      |
+| 4 (Particle)| ✓        | ✓        |        | ✓      |        |
 
-#### Warum ist ECS schnell?
+#### Why is ECS fast?
 
-Der entscheidende Trick ist der **Column-Store**: Alle `Position`-Komponenten liegen
-hintereinander im Speicher. Das Movement-System liest sie sequenziell — keine
-Cache-Misses, keine Pointer-Verfolgung. Außerdem kann der Compiler **SIMD-Instruktionen**
-verwenden: Mit AVX2 kann man 8 `f32`-Werte gleichzeitig addieren.
+The decisive trick is the **column store**: all `Position` components lie
+sequentially in memory. The movement system reads them sequentially — no
+cache misses, no pointer chasing. Additionally, the compiler can use **SIMD instructions**:
+with AVX2, 8 `f32` values can be added simultaneously.
 
 ```
-Speicher ohne ECS (Row-Layout, OOP):
-[Player: pos_x, pos_y, hp, texture_id, dx, dy, ...]  ← 64 Bytes
-[Enemy:  pos_x, pos_y, hp, texture_id, dx, dy, ...]  ← 64 Bytes, weit entfernt
-→ Cache-Miss bei jedem Objekt
+Memory without ECS (row layout, OOP):
+[Player: pos_x, pos_y, hp, texture_id, dx, dy, ...]  ← 64 bytes
+[Enemy:  pos_x, pos_y, hp, texture_id, dx, dy, ...]  ← 64 bytes, far away
+→ Cache miss for every object
 
-Speicher mit ECS (Column-Layout):
-[pos_x: 10.0, 25.0, 50.0, 99.0, ...]  ← alle 4 Entities, 16 Bytes hintereinander
-[pos_y: 5.0,  12.0, 3.0,  80.0, ...]  ← 16 Bytes hintereinander
-→ SIMD kann 4 pos_x-Werte auf einmal verarbeiten (128-bit Register)
+Memory with ECS (column layout):
+[pos_x: 10.0, 25.0, 50.0, 99.0, ...]  ← all 4 entities, 16 bytes sequentially
+[pos_y: 5.0,  12.0, 3.0,  80.0, ...]  ← 16 bytes sequentially
+→ SIMD can process 4 pos_x values at once (128-bit register)
 ```
 
-`model`-Typen aktivieren Column-Layout automatisch. Bei `class`-basierten Stores
-muss es explizit via `{layout: "column"}` angegeben werden.
+`model` types activate column layout automatically. For `class`-based stores
+it must be specified explicitly via `{layout: "column"}`.
 
 ---
 
-### 3.3 Was ist ein `Kv<K,V>`?
+### 3.3 What is a `Kv<K,V>`?
 
-Ein **Key-Value-Store** ist die einfachste Datenbankform: Jeder Wert hat einen eindeutigen
-Schlüssel, unter dem er gespeichert und abgerufen wird. Man kennt es von `map<K,V>` in AIML —
-mit dem Unterschied, dass `Kv<K,V>` **persistent** ist (überlebt Programmneustart) und
-für sehr große Datenmengen optimiert ist.
+A **key-value store** is the simplest database form: each value has a unique
+key under which it is stored and retrieved. You know it from `map<K,V>` in AIML —
+with the difference that `Kv<K,V>` is **persistent** (survives program restart) and
+is optimized for very large data sets.
 
 ```aiml
-# Spieler-Konfigurationen speichern:
+# Store player configurations:
 - decl: [config_db, Kv<string, PlayerConfig>]
 - set:  [config_db, { call: [db.open_kv, "player_configs"] }]
 
@@ -286,21 +284,21 @@ für sehr große Datenmengen optimiert ist.
 - set:  [loaded, { call: [config_db.get, "player_1"] }]
 ```
 
-Intern verwendet `Kv<K,V>` eine **Hash-Tabelle** mit offener Adressierung —
-O(1) für `get` und `set`.
+Internally `Kv<K,V>` uses a **hash table** with open addressing —
+O(1) for `get` and `set`.
 
 ---
 
-### 3.4 Was ist `TimeSeries<T>` und Time-Travel?
+### 3.4 What is `TimeSeries<T>` and Time-Travel?
 
-Ein `TimeSeries<T>` ist ein **append-only Log**: Daten werden nie überschrieben,
-sondern immer mit einem Zeitstempel angehängt. Das ermöglicht **Time-Travel-Abfragen**:
-"Wie sah der Zustand zu Zeitpunkt X aus?"
+A `TimeSeries<T>` is an **append-only log**: data is never overwritten,
+but always appended with a timestamp. This enables **time-travel queries**:
+"What was the state at time X?"
 
-Das ist besonders wertvoll für:
-- **Spiele**: Replay-System, Debug ("Warum ist Entity 5 bei Frame 1337 gestorben?")
-- **AI-Training**: Man kann vergangene Zustände als Trainingsdaten verwenden
-- **Audit Logs**: Jede Änderung ist nachvollziehbar
+This is particularly valuable for:
+- **Games**: Replay system, debugging ("Why did entity 5 die at frame 1337?")
+- **AI training**: Past states can be used as training data
+- **Audit logs**: Every change is traceable
 
 ```aiml
 - class:
@@ -313,88 +311,88 @@ Das ist besonders wertvoll für:
 - decl: [history, TimeSeries<GameState>]
 - set:  [history, { call: [db.open_timeseries, "game_history"] }]
 
-# Jeden Frame speichern:
+# Save every frame:
 - decl: [state, GameState]
 - set: [state.score, 1500]
 - set: [state.player_hp, 75]
 - call: [history.append, state, { call: [time.now] }]
 
-# Time-Travel: Zustand bei Tick 1000 abfragen:
+# Time-travel: query state at tick 1000:
 - decl: [past, GameState]
 - set:  [past, { call: [history.at, 1000] }]
 - print: ["Score at tick 1000: ${past.score}"]
 
-# Bereich abfragen (für ML-Training):
+# Query range (for ML training):
 - decl: [replay, list<GameState>]
 - set:  [replay, { call: [history.range, 0, 5000] }]
 ```
 
 ---
 
-### 3.5 Was ist `VecStore` — Vektorsuche für KI?
+### 3.5 What is `VecStore` — Vector Search for AI?
 
-Ein **VecStore** ist eine spezialisierte Datenbank für **Vektoren** (Arrays von `f32`-Zahlen).
-Er beantwortet die Frage: "Welche gespeicherten Vektoren sind diesem Abfragevektor am ähnlichsten?"
+A **VecStore** is a specialized database for **vectors** (arrays of `f32` numbers).
+It answers the question: "Which stored vectors are most similar to this query vector?"
 
-#### Wozu braucht man das?
+#### What is it used for?
 
-Moderne KI-Modelle (Sprachmodelle, Bildmodelle, Empfehlungssysteme) konvertieren Objekte
-in hochdimensionale Zahlenvektoren, sogenannte **Embeddings**. Ähnliche Objekte haben
-ähnliche Vektoren. Ein Embedding-Vektor für "Katze" liegt im Vektorraum nah bei "Hund",
-weit weg von "Raumschiff".
+Modern AI models (language models, image models, recommendation systems) convert objects
+into high-dimensional numeric vectors, called **embeddings**. Similar objects have
+similar vectors. An embedding vector for "cat" lies close to "dog" in vector space,
+far away from "spaceship".
 
-Konkrete Anwendungsfälle:
+Concrete use cases:
 
-- **RAG (Retrieval-Augmented Generation)**: Man speichert Dokumenten-Embeddings.
-  Wenn der Nutzer eine Frage stellt, sucht man die k ähnlichsten Dokumente und
-  gibt sie als Kontext an ein Sprachmodell.
-- **Spiel-KI**: Gegner-Verhalten wird als Vektor gespeichert. Man findet
-  schnell ähnliche Situationen aus vergangenen Partien.
-- **Empfehlungssystem**: Item-Embeddings speichern, ähnliche Items vorschlagen.
+- **RAG (Retrieval-Augmented Generation)**: Document embeddings are stored.
+  When a user asks a question, the k most similar documents are found and
+  provided as context to a language model.
+- **Game AI**: Enemy behavior is stored as a vector. Similar situations from
+  past games are found quickly.
+- **Recommendation system**: Store item embeddings, suggest similar items.
 
 ```aiml
-# 128-dimensionale Embeddings speichern:
+# Store 128-dimensional embeddings:
 - decl: [knowledge, VecStore]
 - set:  [knowledge, { call: [db.open_vec, "knowledge_base", {dims: 128}] }]
 
-# Ein Embedding (z.B. von einem ML-Modell) einfügen:
-- decl: [embed, list<f32>]   # 128 Floats
-# ... Embedding befüllen ...
+# Insert an embedding (e.g. from an ML model):
+- decl: [embed, list<f32>]   # 128 floats
+# ... fill embedding ...
 - call: [knowledge.insert, "doc_42", embed]
 
-# k-Nearest-Neighbor-Suche (k=5 ähnlichste):
+# k-nearest-neighbor search (k=5 most similar):
 - decl: [query_vec, list<f32>]
-# ... Query-Embedding befüllen ...
+# ... fill query embedding ...
 - decl: [results, list<VecResult>]
 - set:  [results, { call: [knowledge.search, query_vec, 5] }]
 
-# VecResult enthält: id (string), score (f32, Ähnlichkeit 0.0–1.0)
+# VecResult contains: id (string), score (f32, similarity 0.0–1.0)
 - decl: [r, VecResult]
 - set:  [r, { call: [results.get, 0] }]
-- print: ["Ähnlichstes Dokument: ${r.id}, Score: ${r.score}"]
+- print: ["Most similar document: ${r.id}, Score: ${r.score}"]
 ```
 
-Intern verwendet `VecStore` **HNSW** (Hierarchical Navigable Small World) —
-ein Graph-basierter Algorithmus für approximate nearest-neighbor-Suche.
-Er ist schneller als brute-force (O(log N) statt O(N)) und skaliert auf Millionen Vektoren.
+Internally `VecStore` uses **HNSW** (Hierarchical Navigable Small World) —
+a graph-based algorithm for approximate nearest-neighbor search.
+It is faster than brute-force (O(log N) vs O(N)) and scales to millions of vectors.
 
 ---
 
-## 4. Abfragen
+## 4. Queries
 
-AionDB vermeidet Runtime-Parsing vollständig. Es gibt zwei Abfragemodi:
+AionDB avoids runtime parsing entirely. There are two query modes:
 
-- **`db.query`** — für einzelne Stores mit optionalem Filter und Sortierung
-- **`db.run_system`** — für ECS-Queries über mehrere Stores (siehe §3.2)
+- **`db.query`** — for single stores with optional filter and sorting
+- **`db.run_system`** — for ECS queries across multiple stores (see §3.2)
 
-### 4.1 `db.query` — Einzel-Store-Abfragen
+### 4.1 `db.query` — Single-Store Queries
 
-Das `{where: ...}`-Argument nimmt eine **Funktion** entgegen, keinen String.
-Die Funktion wird zu einem Funktionszeiger compiliert und per Element aufgerufen —
-kein Parser, direktes IR:
+The `{where: ...}` argument takes a **function**, not a string.
+The function is compiled to a function pointer and called per element —
+no parser, direct IR:
 
 ```aiml
-# Predicate-Funktion — vom Compiler zu LLVM IR compiliert:
+# Predicate function — compiled to LLVM IR by the compiler:
 - def:
     name: is_alive
     args: [[e, ptr<Entity>]]
@@ -413,7 +411,7 @@ kein Parser, direktes IR:
       - set: [enemy, { ==: [e.ai_state, 2] }]
       - return: { and: [alive, enemy] }
 
-# Alle lebenden Entities, sortiert nach pos_x, maximal 100:
+# All living entities, sorted by pos_x, at most 100:
 - decl: [alive, list<ptr<Entity>>]
 - set:  [alive, { call: [db.query, entities,
     {where: is_alive},
@@ -422,37 +420,37 @@ kein Parser, direktes IR:
   ]}]
 ```
 
-### 4.2 Verfügbare Operatoren
+### 4.2 Available Operators
 
-| Operator | Beschreibung | Beispiel |
-|----------|-------------|---------|
-| `where`  | Filterfunktion `(ptr<T>) → i32` | `{where: is_alive}` |
-| `order_by` | Feldname (Compile-Zeit validiert) | `{order_by: "pos_x", dir: "asc"}` |
-| `limit` | Maximale Ergebnisse | `{limit: 100}` |
-| `offset` | Ergebnisse überspringen | `{offset: 50}` |
-| `at`     | Time-Travel-Snapshot (mit TimeSeries) | `{at: 1000}` |
+| Operator   | Description | Example |
+|------------|-------------|---------|
+| `where`    | Filter function `(ptr<T>) → i32` | `{where: is_alive}` |
+| `order_by` | Field name (compile-time validated) | `{order_by: "pos_x", dir: "asc"}` |
+| `limit`    | Maximum results | `{limit: 100}` |
+| `offset`   | Skip results | `{offset: 50}` |
+| `at`       | Time-travel snapshot (with TimeSeries) | `{at: 1000}` |
 
-**Hinweis:** `order_by` und `select` verwenden Feldnamen als Strings — diese werden
-jedoch **zur Compile-Zeit** gegen das Schema von `T` validiert. Ein unbekanntes Feld
-ist ein Compilerfehler, kein Runtime-Fehler.
+**Note:** `order_by` and `select` use field names as strings — however these are
+validated **at compile time** against the schema of `T`. An unknown field
+is a compiler error, not a runtime error.
 
-### 4.3 ECS-Query: `db.run_system`
+### 4.3 ECS Query: `db.run_system`
 
-Für Queries über mehrere Stores (ECS-Archetype-Intersection) verwendet man
-`db.run_system`. Siehe §3.2 für die vollständige Erklärung mit Beispielen.
+For queries across multiple stores (ECS archetype intersection), use
+`db.run_system`. See §3.2 for the full explanation with examples.
 
 ```aiml
-# Compiler sieht ptr<Position> + ptr<Velocity> → iteriert über Intersection
+# Compiler sees ptr<Position> + ptr<Velocity> → iterates over intersection
 - call: [db.run_system, move_system, positions, velocities]
 ```
 
 ---
 
-## 5. Transaktionen
+## 5. Transactions
 
-AionDB bietet zwei Transaktionsmodi:
+AionDB offers two transaction modes:
 
-### 5.1 Standard-Transaktion (ACID)
+### 5.1 Standard Transaction (ACID)
 
 ```aiml
 - call: [db.begin]
@@ -460,101 +458,381 @@ AionDB bietet zwei Transaktionsmodi:
 - call: [entities.insert, new_entity]
 - call: [inventory.delete, old_item_id]
 
-# Alle Änderungen atomar committen:
+# Commit all changes atomically:
 - call: [db.commit]
 
-# Oder alles rückgängig machen:
+# Or roll everything back:
 # - call: [db.rollback]
 ```
 
-Bis `db.commit` aufgerufen wird, sind Änderungen **nur für die aktuelle Session sichtbar**.
-Andere Threads/Agenten sehen die alten Daten.
+Until `db.commit` is called, changes are **only visible to the current session**.
+Other threads/agents see the old data.
 
-### 5.2 Frame-Transaktion (für Spiele)
+### 5.2 Frame Transaction (for Games)
 
-Im Spiel-Modus fasst `db.begin_frame` alle Änderungen eines Frames unter einem
-einzigen Zeitstempel zusammen. Das ist effizienter als viele einzelne Commits:
+In game mode, `db.begin_frame` groups all changes of a frame under a
+single timestamp. This is more efficient than many individual commits:
 
 ```aiml
-- call: [db.begin_frame, { call: [time.now] }]   # Startet Frame N
+- call: [db.begin_frame, { call: [time.now] }]   # Starts frame N
 
-# Alle game-loop-Operationen dieses Frames:
+# All game-loop operations of this frame:
 - call: [entities.insert, spawned_enemy]
 - call: [entities.update, 5, {hp: 80}]
 - call: [history.append, current_state]
 
-- call: [db.end_frame]   # Alle Änderungen bekommen denselben Timestamp
+- call: [db.end_frame]   # All changes get the same timestamp
 ```
 
 ---
 
-## 6. Persistenz — WAL und Memory-Mapped Files
+## 6. Persistence — WAL and Memory-Mapped Files
 
-AionDB schreibt Daten in zwei Schichten:
+AionDB writes data in two layers:
 
 ### 6.1 WAL (Write-Ahead Log)
 
-Bevor eine Änderung auf die eigentliche Page angewendet wird, schreibt AionDB
-sie in ein **sequenzielles Log** (WAL). Das ist schnell (sequenzielles Schreiben
-ist auf SSDs sehr effizient) und crash-sicher: Wenn das Programm abstürzt, kann
-AionDB beim nächsten Start das WAL durchlesen und den Zustand wiederherstellen.
+Before a change is applied to the actual page, AionDB writes it to a
+**sequential log** (WAL). This is fast (sequential writes are very efficient
+on SSDs) and crash-safe: if the program crashes, AionDB can read through the WAL
+on next start and restore the state.
 
 ### 6.2 Pages (mmap)
 
-Die eigentlichen Daten liegen in **Pages** (standardmäßig 4 KB) auf der Festplatte,
-die via **mmap** in den Prozessspeicher eingeblendet werden. Das Betriebssystem
-verwaltet, welche Pages im RAM sind und welche auf die Platte ausgelagert werden —
-automatisch, ohne dass AionDB selbst Paging implementieren muss.
+Both `Store<T>` and `Kv<K,V>` are **mmap-backed**:
 
-Ein `ptr<Entity>` aus einem `Store<Entity>` zeigt direkt auf diesen gemappten Speicher.
-Wenn man über den Zeiger liest, liest man *direkt aus der Datenbank* ohne Kopie.
+- **`Store<T>`** stores rows in **pages** (default 4 KB) on disk, mapped
+  into process memory via mmap. A `ptr<Entity>` points directly into
+  the mapped page.
+- **`Kv<K,V>`** maps the WAL file itself (sparse-extended to an initial
+  reserve of 16 MB; `mremap`'d to grow). All values live exclusively in
+  the WAL, the in-process index holds only `(offset, length)` per key.
+  `kv.get` returns a pointer into the mmap'd region for blob/string/fixed
+  modes — true zero-copy.
+
+The operating system manages which pages are RAM-resident and which are
+on disk. AionDB does not implement paging itself.
+
+> **Apparent vs. real file size:** `kv.kvwal` files appear as 16 MB
+> (or larger after `mremap`-grow) in `ls -la`. The actual disk usage
+> (`du -h`) reflects only the touched pages. Backup tools must be
+> sparse-aware (see §6.8).
 
 ### 6.3 Checkpoint
 
-Periodisch verdichtet AionDB das WAL in die Pages (Checkpoint). Das hält das WAL
-klein und macht zukünftige Wiederherstellungen schneller:
+`db.checkpoint` compacts each persistent KV's WAL by removing
+overwrite/delete tombstones, leaving only the live records. The
+operation is **crash-safe via temp-file + atomic rename**:
+
+1. Write all live records to `${name}.kvwal.compact` (new file)
+2. `fsync` the temp
+3. `munmap` the old file, `close` the old fd
+4. `rename(temp, real)` — POSIX atomic on the same filesystem
+5. mmap the new file
+
+If the process crashes between steps 1 and 4, the old file is intact;
+on next open, the orphan `.compact` is automatically cleaned up at the
+start of the next checkpoint.
 
 ```aiml
-- call: [db.checkpoint]        # Manuell
-- call: [db.auto_checkpoint, 1000]  # Automatisch alle 1000 Writes
+- call: [db.checkpoint]        # Manual: compact all persistent KVs/Stores/TS
+- call: [db.auto_checkpoint, 1000]  # Automatic every 1000 writes
 ```
 
-### 6.4 Cross-Process Sync — db.reload_kv
+> **Pointer invalidation:** `kv.get` pointers from before `db.checkpoint`
+> are **invalid** afterwards (the underlying mmap is replaced). Re-fetch
+> them via `kv.get` after the checkpoint.
 
-AionDB lädt das WAL-File genau **einmal** beim ersten `open_kv`-Aufruf (Singleton pro Name).
-Schreibt ein anderer Prozess (z. B. das Backend) nach dem Start neue Einträge, sieht der
-aktuelle Prozess diese **nicht automatisch**.
+### 6.4 Storage Root — `db.set_path` und `AIONDB_PATH`
 
-`db.reload_kv(handle)` löst dieses Problem: Es schließt und öffnet den WAL-FD neu,
-leert den In-Memory-Cache und replayed das WAL von vorne. Danach sind alle
-zwischenzeitlich von anderen Prozessen geschriebenen Einträge sichtbar.
+Bis 2026-04-30 nutzte AionDB einen festen Default `./aiondb/` relativ zum
+Working-Directory. Das fuehrt zu zwei Problemen:
+
+1. **IDE-Watcher** scannen das Projekt-Verzeichnis und ersticken an den
+   sparse-extended `.kvwal`-Dateien (apparent size MB-GB pro File).
+2. **Mehrere Tools** im selben Repo schreiben in dasselbe `aiondb/`,
+   was zu Verwechslungen fuehrt.
+
+`db.set_path` setzt einen globalen Speicher-Root, der von allen
+nachfolgenden `db.open*`-Aufrufen genutzt wird:
+
+```aiml
+- call: [db.set_path, "/home/user/.cache/myproject/aiondb"]
+- decl: [kv, Kv<string:string>, { call: [db.open_kv, "config", {persist: true}] }]
+# → /home/user/.cache/myproject/aiondb/config.kvwal
+
+- decl: [traj, ..., { call: [db.open_kv, "trajectory", {persist: true, path: "runs/"}] }]
+# → /home/user/.cache/myproject/aiondb/runs/trajectory.kvwal
+```
+
+#### Resolution-Reihenfolge
+
+Wird **bei jedem** `open_*` Aufruf neu evaluiert:
+
+1. **`AIONDB_PATH` env var** (dominiert immer)
+2. via `db.set_path()` gesetzter Wert
+3. Fallback `./aiondb/`
+
+Anschliessend wird das `path:` Argument der `open`-Funktion angehangen:
+
+| `path:` Argument | Verhalten |
+|---|---|
+| nicht gesetzt / leer | nur Root nutzen |
+| relativer Pfad (`"sub/dir/"`) | Root + Sub-Pfad anhaengen |
+| absoluter Pfad (`"/tmp/..."`) | as-is, Root wird ignoriert (backward-compat fuer Tests) |
+
+#### Beispiele
+
+```bash
+# Tul-Programm setzt Default im AIML-Code:
+# - call: [db.set_path, "/home/user/.cache/tul"]
+
+# Programm-Default verwenden:
+./tul_train ...
+# → /home/user/.cache/tul/...
+
+# Ueberschreiben via env var:
+AIONDB_PATH=/data/aiml/run42 ./tul_train ...
+# → /data/aiml/run42/...
+```
+
+#### Designziele
+
+- **Programmatischer Default** im AIML-Code via `db.set_path` — Apps wie
+  `tul_train` koennen einen sinnvollen Default-Pfad einprogrammieren
+  (z.B. unter `~/.cache/`), ohne dass jedes CLI-Aufruf einen Pfad
+  mitgeben muss.
+- **Operative Override** via env var ohne Source-Aenderung —
+  fuer Container, CI, Multi-Run-Setups.
+- **Test-Kompatibilitaet** durch absolute-Path-Pass-Through —
+  bestehende Tests die `/tmp/aiml_test_xyz/` nutzen funktionieren
+  unveraendert.
+- **IDE-Friendly Default-Layout** — wenn der Root ausserhalb des
+  Workspace liegt, sieht kein File-Watcher die Sparse-Files.
+
+> **Hinweis:** `db.set_path` aendert nur den Default fuer **zukuenftige**
+> open-Aufrufe. Bereits geoeffnete Stores behalten ihren urspruenglich
+> gewaehlten Pfad.
+
+### 6.5 Cross-Process Sync — db.reload_kv
+
+AionDB loads the WAL file exactly **once** on the first `open_kv` call (singleton per name).
+If another process (e.g. the backend) writes new entries after startup, the
+current process does **not see them automatically**.
+
+`db.reload_kv(handle)` solves this problem: it closes and reopens the WAL file descriptor,
+clears the in-memory cache, and replays the WAL from the beginning. Afterwards, all
+entries written by other processes in the meantime are visible.
 
 ```aiml
 - decl: [kv, Kv<string:DeckSet>, g.db_decksets]
-- call: [db.reload_kv, kv]          # WAL von Disk neu lesen
+- call: [db.reload_kv, kv]          # Re-read WAL from disk
 - decl: [has, i32, { call: [kv.has, some_id] }]
 ```
 
-**Wann verwenden:** Immer dann, wenn ein Prozess ein persistentes KV öffnet und
-anschließend von einem anderen Prozess beschriebene Daten lesen muss — insbesondere
-bei Frontend/Backend-Trennung mit gemeinsamem `./aiondb/`-Verzeichnis.
+**When to use:** Whenever a process opens a persistent KV and then needs to read data
+written by another process — especially with frontend/backend separation sharing a
+common `./aiondb/` directory.
 
-**Wann nicht nötig:** Innerhalb eines einzelnen Prozesses, der selbst schreibt und liest
-(der schreibende `kv.set`-Call aktualisiert bereits den In-Memory-Cache).
+**When not needed:** Within a single process that both writes and reads itself
+(the writing `kv.set` call already updates the in-memory cache).
+
+### 6.6 Memory Eviction — db.kv_evict
+
+Long-running processes (e.g. per-file training) may accumulate large
+mmap-resident page pages that are no longer needed in the current phase.
+
+`db.kv_evict(handle)` releases those pages back to the OS via
+`madvise(MADV_DONTNEED)`. The **index stays intact**, the file stays
+open, and subsequent reads transparently re-fault the pages from disk.
+
+```aiml
+- call: [db.kv_evict, kv]      # release mmap pages, keep index + handle
+- decl: [v, string, { call: [kv.get, "k"] }]   # works — page faults in
+```
+
+**Semantics**
+
+| Operation | Effect |
+|---|---|
+| `kv.get / has / len / iter / get_blob` | Index lookup unchanged; mmap re-faults on touch |
+| `kv.set` | Appends to mmap (pages re-fault into RAM) |
+| `kv.delete` | Index entry removed; tombstone written to WAL |
+| `db.reload_kv` | Reopens fd, rebuilds index from WAL |
+
+**Typed mode (`Kv<string:Foo>`):** the `decoded_cache` (LRU-bounded to
+1024 entries) is fully cleared on `evict`. Subsequent reads decode from
+the mmap'd serialized blob.
+
+**Non-persistent KVs (`{persist: false}`):** there is no mmap; `evict`
+clears the in-memory map (data is lost — same semantic as before).
+
+**Tensor stores** (opened internally via `tensor.save`/`tensor.load`)
+expose `tensor.kv_evict(store_name)` which resolves the singleton
+handle automatically:
+
+```aiml
+- call: [tensor.kv_evict, "${cfg.db_tag}_pf${fi}_tul_trajectory"]
+```
+
+> **When to use:** After writing data that won't be re-read soon. The
+> page-faulting cost on next read is paid only for actually-touched
+> pages; cold data stays on disk.
+
+### 6.7 Pointer Lifetime Contract for `Kv<K,V>`
+
+`kv.get(key)` returns a pointer that depends on the value mode and
+storage class:
+
+| Mode | Source | Invalidated by |
+|---|---|---|
+| **Blob / Fixed (persistent)** | mmap'd WAL | `kv.checkpoint` / `kv.clear` / `kv.set` *only if it triggers `mremap`-grow* |
+| **String (persistent)** | mmap'd WAL (with `\0` terminator) | same as above |
+| **Typed (persistent)** | `decoded_cache[key]` | `kv.set(key,_) / kv.delete(key) / kv.evict / kv.clear / kv.checkpoint`, **plus LRU eviction** when cache > 1024 entries |
+| **Any mode (non-persistent)** | `kv->map[key]` | `kv.set(key,_) / kv.delete(key) / kv.clear / kv.evict` |
+
+**Important changes from earlier versions:**
+
+- **Blob/Fixed/String pointers are no longer invalidated by `kv.set` on
+  a different key.** Old WAL records stay in the file; the index just
+  points to the latest. Pointers from earlier `kv.get` calls remain
+  valid until the entire mmap is replaced (`checkpoint` / `clear`) or
+  the file grows (`mremap-grow`, only when total writes exceed the
+  initial 16 MB reserve).
+- **Typed pointers can be invalidated by `kv.get` on other keys**
+  (LRU eviction when more than 1024 distinct typed entries are read).
+  For typical workloads this is harmless; for >1024 simultaneously held
+  typed pointers, set `MAX_DECODED_LRU` higher or rebuild your access
+  pattern.
+- **`kv.evict` is now safe across pointer holders for blob/fixed/string**
+  — it only releases pages, not the mapping. Pointers remain valid.
+
+> **Recommendation:** Treat `kv.get` pointers as **borrowed, short-lived
+> references**. Don't store them across `checkpoint`/`clear`/`mremap-
+> grow` boundaries. For long-lived references in typed mode, copy the
+> struct fields you need.
+
+### 6.7.1 Typed Kv Access Patterns (`kv.get`, `kv.get_copy`, `ptr<T>`)
+
+Typed `Kv<K:T>` where `T` is a struct with heap fields (strings, lists,
+maps, buffers) requires **explicit choice** between three access patterns,
+enforced at compile time:
+
+| Pattern | Declaration | Semantics | When to use |
+|---|---|---|---|
+| **Zero-copy view** | `decl: [p, ptr<T>, kv.get(k)]` | `p` aliases the decoded_cache slot. Mutations land directly in the cache. `kv.set(k, p)` encodes the cache and writes WAL; eviction is skipped because the cache IS the canonical state. | Read-only fast access, or in-place updates that persist back to the same key. |
+| **Deep-copy value** | `decl: [p, T, kv.get_copy(k)]` | `p` has its own malloc'd heap allocations (encode-then-decode roundtrip at decl site). Mutations to `p` do NOT touch the cache. `kv.set(k, p)` encodes `p`, then evicts the cache. | Local mutations that might or might not be persisted; or when you want isolation from cache state. |
+| **— ERROR —** | `decl: [p, T, kv.get(k)]` | Would do shallow memcpy → `p` shares heap pointers with cache → use-after-free on mutate-and-set-same-key (see `doc/issue/kv_get_mutate_set_same_key_crash.md`). | **Compiler rejects** with diagnostic suggesting `ptr<T> + kv.get` or `T + kv.get_copy`. |
+| **— ERROR —** | `decl: [p, ptr<T>, kv.get_copy(k)]` | Semantically contradictory: deep-copy wasted on a pointer view. | **Compiler rejects** with diagnostic suggesting `T + kv.get_copy` or `ptr<T> + kv.get`. |
+
+```aiml
+- model:
+    name: Player
+    fields:
+      - [player_id, string]
+      - [creature_ids, list<string>]
+
+# (1) Zero-copy view — cheapest path, mutations propagate to cache.
+- decl: [p, ptr<Player>, { call: [players.get, "n@g.de"] }]
+- call: [p.creature_ids.push, "c-1"]
+- call: [players.set, "n@g.de", p]      # safe — cache is canonical
+
+# (2) Deep-copy — independent struct, costs one encode+decode pass.
+- decl: [p, Player, { call: [players.get_copy, "n@g.de"] }]
+- call: [p.creature_ids.push, "c-1"]
+- call: [players.set, "n@g.de", p]      # safe — encode reads p, then evict cache
+```
+
+The compiler implements the diagnostic in `src/core/ast_compiler_stmt.cpp::
+visitDeclStmt` by reading `ctx.kvGetCalled` / `ctx.kvGetCopy` flags set by
+the Kv method dispatch in `ast_compiler_call.cpp`. Primitive types
+(`string`, `i32`, …) and structs without heap fields (`hasHeapFields == false`)
+are exempt — there's nothing to share/free.
+
+For struct types `T` registered without heap fields (only primitive members),
+both `ptr<T>+get` and `T+get` are safe; the compiler does not emit a
+diagnostic.
+
+`kv.set` is uniform — it inspects the value's type at compile time:
+- value-type `T` arg → spill to temp alloca, encode struct bytes
+- `ptr<T>` arg → pass pointer through directly (no temp alloca; encode reads
+  through the pointer)
+
+At runtime, `aiml_db_kv_set` additionally checks if `val` aliases the
+current decoded_cache slot for `key`; if so, eviction is replaced with a
+plain bookkeeping drop (no `free_decoded`) — the cache and user struct
+share the same heap pointers (some of which may be user-pushed literals
+or non-decoded data), and double-freeing them is undefined.
+
+### 6.8 Migration Notes — Format Versions
+
+Each `.kvwal` file starts with a 32-byte header containing magic
+`AIMLKVWL`, format version, mode flags, and `wal_used` cursor.
+
+| Version | Format | Note |
+|---|---|---|
+| (pre) | no header, raw records | rejected on open with FATAL |
+| 1 | header + records, strings without `\0` | rejected on open with FATAL |
+| **2** | header + records, **strings include `\0` terminator** for zero-copy reads | current |
+
+**Upgrading to a new build:** delete all stale `.kvwal` files
+(`rm -rf aiondb/`) and re-create the data. The runtime aborts with a
+clear FATAL message if it encounters a file from an older version.
+
+**Sparse-file operational notes** (apparent size 16 MB+ per KV):
+
+- `cp --sparse=always` to copy without inflating
+- `rsync -S` (or `--sparse`)
+- `tar --sparse` (or `-S`)
+- `ls -la` shows apparent size; `du -h` shows real disk usage
+- Disk quotas count real blocks, not apparent
+
+> **9rooms migration step:** before the first run with the
+> mmap-refactored libaiml, remove the `aiondb/` directory (or at least
+> all `*.kvwal` files). The game re-populates them on next launch. No
+> AIML source changes required — the C-API and AIML method signatures
+> are stable.
+
+### 6.9 Shared W₀ — pf_ensure_base_weights
+
+Per-file training uses the merge formula `W_new = W_0 + μ_post`, which requires
+all sub-runs to share the **same** starting weights W₀.
+
+Without explicit initialization, each worker would independently random-init
+(via `train_transformer_on_texts` with `resuming=0`), producing divergent W₀
+values and invalidating the merge.
+
+`pf_ensure_base_weights(lm_bpe, cfg)` runs on the **main thread** before worker
+start:
+
+1. Builds `base_store = build_store_name(cfg.pf_db_tag, "tul_transformer")`
+2. Checks `tensor.load(base_store, "tok_embed")` — if non-null, returns (already
+   initialized, e.g. from a prior training run)
+3. If null: random-inits global weights + calls `init_layer_lists(base_store, 0, cfg)`
+   + calls `save_transformer_weights(...)` to persist to WAL
+4. All workers then find weights in the base store and start with `resuming=2`
+
+```aiml
+# In train_per_file, after pf_precollect, before worker start:
+- call: [pf_ensure_base_weights, lm_bpe, cfg]
+```
+
+The merge's `mp.base_store` points to `build_store_name(cfg.pf_db_tag, "tul_transformer")`
+which is guaranteed to have weights after this call.
 
 ---
 
-## 7. Schema Evolution — Integration mit Hot-Reload
+## 7. Schema Evolution — Integration with Hot-Reload
 
-Das mächtigste Feature von AionDB ist die nahtlose Integration mit dem
-**Klassen-Versionierungssystem** aus Kapitel 30.
+The most powerful feature of AionDB is the seamless integration with the
+**class versioning system** from Chapter 30.
 
-Wenn eine Klasse von `version: 1` auf `version: 2` aktualisiert wird
-(neues Feld hinzugefügt — immer **nur anhängen**, nie Felder entfernen oder umordnen),
-erkennt AionDB das automatisch beim nächsten Öffnen des Stores:
+When a class is updated from `version: 1` to `version: 2`
+(new field added — always **append only**, never remove or reorder fields),
+AionDB detects this automatically on the next store open:
 
 ```aiml
-# Programm v1 — Entity hat 3 Felder:
+# Program v1 — Entity has 3 fields:
 - class:
     name: Entity
     version: 1
@@ -563,7 +841,7 @@ erkennt AionDB das automatisch beim nächsten Öffnen des Stores:
       - [pos_x, f32]
       - [hp,    i32]
 
-# Programm v2 — Entity bekommt ein neues Feld (nur anhängen!):
+# Program v2 — Entity gets a new field (append only!):
 - class:
     name: Entity
     version: 2
@@ -571,24 +849,24 @@ erkennt AionDB das automatisch beim nächsten Öffnen des Stores:
       - [id,       i32]
       - [pos_x,    f32]
       - [hp,       i32]
-      - [mana,     i32]   # NEU — wird an bestehende Zeilen mit Defaultwert 0 gepatcht
+      - [mana,     i32]   # NEW — patched into existing rows with default value 0
 ```
 
-AionDB vergleicht die Schema-Registry (Kapitel 30.1) mit dem gespeicherten Schema der Page.
-Erkennt es eine höhere Version mit neuen Feldern, wendet es die **In-Place-Migration** an:
+AionDB compares the schema registry (Chapter 30.1) with the stored schema of the page.
+If it detects a higher version with new fields, it applies **in-place migration**:
 
-1. Alle bestehenden Zeilen haben durch das `padded_size`-System bereits Platz für neue Felder reserviert.
-2. AionDB schreibt den Defaultwert des neuen Feldes in den Padding-Bereich.
-3. Ab sofort liest `p.mana` den korrekten Wert — keine Migrationsskripte, kein Downtime.
+1. All existing rows already have space reserved for new fields via the `padded_size` system.
+2. AionDB writes the default value of the new field into the padding area.
+3. From that point on, `p.mana` reads the correct value — no migration scripts, no downtime.
 
 ---
 
-## 8. Vollständige Verwendungsbeispiele
+## 8. Complete Usage Examples
 
-### 8.1 Game Loop mit ECS
+### 8.1 Game Loop with ECS
 
 ```aiml
-# --- ECS-Komponenten als model (pure data, Column-Layout automatisch) ---
+# --- ECS components as model (pure data, column layout automatic) ---
 - model:
     name: Position
     members: [[x, f32], [y, f32]]
@@ -601,7 +879,7 @@ Erkennt es eine höhere Version mit neuen Feldern, wendet es die **In-Place-Migr
     name: Health
     members: [[hp, i32]]
 
-# --- Stores öffnen ---
+# --- Open stores ---
 - decl: [positions,  Store<Position>]
 - decl: [velocities, Store<Velocity>]
 - decl: [health,     Store<Health>]
@@ -612,10 +890,10 @@ Erkennt es eine höhere Version mit neuen Feldern, wendet es die **In-Place-Migr
 - decl: [history, TimeSeries<Health>]
 - set:  [history, { call: [db.open_timeseries, "health_history"] }]
 
-# --- Systeme definieren ---
+# --- Define systems ---
 
-# Movement-System: kein eid nötig — reine Datentransformation
-# Column-Layout → SIMD verarbeitet 8 pos_x-Werte gleichzeitig
+# Movement system: no eid needed — pure data transformation
+# Column layout → SIMD processes 8 pos_x values simultaneously
 - def:
     name: move_system
     args: [[pos, ptr<Position>], [vel, ptr<Velocity>]]
@@ -623,7 +901,7 @@ Erkennt es eine höhere Version mit neuen Feldern, wendet es die **In-Place-Migr
       - set: [pos.x, { +: [pos.x, vel.dx] }]
       - set: [pos.y, { +: [pos.y, vel.dy] }]
 
-# Damage-System: eid nötig — löscht Entity aus mehreren Stores
+# Damage system: eid needed — deletes entity from multiple stores
 - def:
     name: damage_system
     args: [[eid, i32], [h, ptr<Health>]]
@@ -634,7 +912,7 @@ Erkennt es eine höhere Version mit neuen Feldern, wendet es die **In-Place-Migr
           - call: [positions.delete, eid]
           - call: [velocities.delete, eid]
 
-# --- Initialisierung: 1000 Enemies spawnen ---
+# --- Initialization: spawn 1000 enemies ---
 - decl: [i, i32]
 - set: [i, 0]
 - while: [{ <: [i, 1000] }]
@@ -650,26 +928,26 @@ Erkennt es eine höhere Version mit neuen Feldern, wendet es die **In-Place-Migr
     - call: [health.insert,     hp]
     - set: [i, { +: [i, 1] }]
 
-# --- Game Loop ---
+# --- Game loop ---
 - def:
     name: game_loop
     return: void
     body:
       - call: [db.begin_frame, { call: [time.now] }]
 
-      # Compiler generiert Intersection-Loop: positions ∩ velocities
+      # Compiler generates intersection loop: positions ∩ velocities
       - call: [db.run_system, move_system, positions, velocities]
 
-      # Compiler generiert Loop über health allein
+      # Compiler generates loop over health alone
       - call: [db.run_system, damage_system, health]
 
       - call: [db.end_frame]
 ```
 
-### 8.2 KI-Anwendung: Feature Store für ML-Training
+### 8.2 AI Application: Feature Store for ML Training
 
 ```aiml
-# Trainingsdaten für einen Reinforcement-Learning-Agenten sammeln:
+# Collect training data for a reinforcement learning agent:
 
 - class:
     name: Observation
@@ -691,7 +969,7 @@ Erkennt es eine höhere Version mit neuen Feldern, wendet es die **In-Place-Migr
     body:
       - call: [replay_buffer.insert, obs]
 
-# Mini-Batch für Training (zufällige 64 Samples):
+# Mini-batch for training (random 64 samples):
 - def:
     name: sample_batch
     return: list<ptr<Observation>>
@@ -699,10 +977,10 @@ Erkennt es eine höhere Version mit neuen Feldern, wendet es die **In-Place-Migr
       - return: { call: [replay_buffer.sample_random, 64] }
 ```
 
-### 8.3 KI-Anwendung: RAG mit Vektorsuche
+### 8.3 AI Application: RAG with Vector Search
 
 ```aiml
-# Retrieval-Augmented Generation: Dokumente speichern und ähnliche finden
+# Retrieval-Augmented Generation: store documents and find similar ones
 
 - class:
     name: Document
@@ -716,7 +994,7 @@ Erkennt es eine höhere Version mit neuen Feldern, wendet es die **In-Place-Migr
 - set:  [docs,     { call: [db.open,     "documents"] }]
 - set:  [doc_vecs, { call: [db.open_vec, "doc_embeddings", {dims: 768}] }]
 
-# Dokument einfügen + Embedding speichern:
+# Insert document + store embedding:
 - def:
     name: index_document
     args: [[doc, Document], [embedding, list<f32>]]
@@ -725,7 +1003,7 @@ Erkennt es eine höhere Version mit neuen Feldern, wendet es die **In-Place-Migr
       - call: [docs.insert, doc]
       - call: [doc_vecs.insert, doc.doc_id, embedding]
 
-# Ähnliche Dokumente zu einer Anfrage finden (k=3):
+# Find similar documents for a query (k=3):
 - def:
     name: retrieve
     args: [[query_embedding, list<f32>]]
@@ -746,46 +1024,229 @@ Erkennt es eine höhere Version mit neuen Feldern, wendet es die **In-Place-Migr
 
 ---
 
-## 9. Performance-Eigenschaften
+## 9. Performance Characteristics
 
-| Operation | Komplexität | Notiz |
+| Operation | Complexity | Note |
 |-----------|------------|-------|
-| `store.get(id)` | O(1) | Slot-Index (kein primary_key) oder HashMap-Lookup |
-| `store.insert(v)` | O(1) amortisiert | Append auf aktive Page |
-| `db.query(store, ...)` | O(N) | Kann mit Index O(log N) werden |
-| `db.run_system(fn, s1, s2)` | O(min(|s1|,|s2|)) | Intersection via Slot-Bitmap |
-| `kv.get(key)` | O(1) | Hash-Tabelle |
-| `kv.set(key, val)` | O(1) amortisiert | — |
-| `timeseries.at(t)` | O(log N) | Binärsuche auf Timestamps |
-| `timeseries.range(a,b)` | O(K) | K = Anzahl Ergebnisse |
-| `vecstore.search(v, k)` | O(log N) | HNSW-Index |
-| Column-Read (SIMD) | O(N/8) | 8× schneller als skalares Loop |
+| `store.get(id)` | O(1) | Slot index (no primary_key) or HashMap lookup |
+| `store.insert(v)` | O(1) amortized | Append to active page |
+| `db.query(store, ...)` | O(N) | Can become O(log N) with index |
+| `db.run_system(fn, s1, s2)` | O(min(|s1|,|s2|)) | Intersection via slot bitmap |
+| `kv.get(key)` | O(1) | Hash table |
+| `kv.set(key, val)` | O(1) amortized | — |
+| `timeseries.at(t)` | O(log N) | Binary search on timestamps |
+| `timeseries.range(a,b)` | O(K) | K = number of results |
+| `vecstore.search(v, k)` | O(log N) | HNSW index |
+| Column read (SIMD) | O(N/8) | 8× faster than scalar loop |
 
 ---
 
-## 10. Thread-Safety
+## 10. Thread Safety
 
-Alle `db`-Operationen sind **implizit thread-safe** (Kategorie 1, siehe Kapitel 47).
-Die Runtime garantiert:
+All `db` operations are **implicitly thread-safe** (category 1, see Chapter 47).
+The runtime guarantees:
 
-- **Singleton-Handles:** `db.open_kv("name", {persist: true})` gibt bei gleichem
-  Name+Pfad immer denselben Handle zurück — kein doppelter WAL, kein Memory-Leak.
-- **Atomare Einzeloperationen:** `kv.set`, `kv.get`, `kv.has`, `kv.delete`, `store.insert`,
-  `store.get` sind jeweils atomar. Gleichzeitige Aufrufe aus verschiedenen Threads
-  auf denselben Handle sind sicher.
-- **Checkpoint-Safety:** `db.checkpoint` ist serialisiert — kein Race zwischen
-  Checkpoint und Set/Delete.
+- **Singleton handles:** `db.open_kv("name", {persist: true})` always returns the same
+  handle for the same name+path — no duplicate WAL, no memory leak.
+- **Atomic single operations:** `kv.set`, `kv.get`, `kv.has`, `kv.delete`, `store.insert`,
+  `store.get` are each atomic. Concurrent calls from different threads
+  on the same handle are safe.
+- **Checkpoint safety:** `db.checkpoint` is serialized — no race between
+  checkpoint and set/delete.
 
-**Nicht atomar** sind Sequenzen aus mehreren Aufrufen (z.B. `has` + `set`).
-Für atomare Read-Modify-Write muss der AIML-Autor einen expliziten `lock` verwenden.
+**Not atomic** are sequences of multiple calls (e.g. `has` + `set`).
+For atomic read-modify-write the AIML author must use an explicit `lock`.
 
 ---
 
-## 11. Offene Designfragen (Future Work)
+## 11. AionDB2 — Next-Generation Storage Engine
 
-- **Indizes**: Automatische B-Tree-Indizes für `where`-Felder — bisher noch keine Compiler-Integration.
-- **Joins**: `join`-Syntax ist spezifiziert, aber noch nicht implementiert.
-- **Verteilte Stores**: `db.open_remote("host:port", "store_name")` — Erweiterung für Kapitel 32 (Network).
-- **Encryption**: Transparente AES-Verschlüsselung auf Page-Ebene.
-- **Compression**: LZ4 oder Zstandard für wenig genutzte Pages (Cold Storage).
-- **Reactive Queries**: `db.subscribe(query, callback)` — wird aufgerufen, wenn sich Ergebnismenge ändert.
+The existing AionDB design in this chapter remains the **stable compatibility path**.
+Its `Store<T>` mmap/page model, WAL behavior, singleton handles, and current KV
+semantics must continue to work unchanged so that existing AIML projects do not break.
+
+For larger persistent datasets and more traditional on-disk database structures,
+we introduce a separate engine line: **`aiondb2`**.
+
+The key architectural rule is:
+
+- **No refactor-in-place of AionDB v1 semantics**
+- **No silent behavior changes for `db.open`, `db.open_kv`, `db.open_timeseries`**
+- **New storage engine lives beside the old one, with explicit opt-in**
+
+### 11.1 Why `aiondb2` instead of refactoring `aiondb`
+
+The current AionDB design is strongly optimized around:
+
+- zero-copy pointers into mapped pages
+- ECS-style direct component access
+- simple WAL replay semantics
+- language/runtime integration that assumes stable pointer behavior
+
+An industrial on-disk engine with B-tree or LSM-tree internals introduces a
+different world:
+
+- custom block/page formats
+- explicit pager or compaction layers
+- separate read/write paths
+- on-disk indexes and recovery metadata
+- different pointer lifetime and caching rules
+
+Trying to retrofit these properties into the original engine would risk breaking:
+
+- zero-copy assumptions in `Store<T>`
+- KV reload/evict semantics
+- current performance expectations
+- old databases and deployed programs
+
+Therefore `aiondb2` is specified as a **new backend family**, not as a hidden rewrite.
+
+### 11.2 Positioning
+
+`aiondb2` is intended for cases where the original mmap/WAL-first design becomes
+awkward or too memory-coupled:
+
+- very large KV datasets
+- range scans over sorted keys
+- secondary indexes
+- remote or partially local storage
+- workloads where direct `ptr<T>` into mapped pages is not the dominant advantage
+
+`aiondb` remains the natural choice for:
+
+- ECS component stores
+- local zero-copy object access
+- page-mapped entity data
+- tightly integrated single-process runtime access
+
+### 11.3 Planned engine styles
+
+`aiondb2` may expose more than one internal engine strategy, but all under a
+new explicit namespace/API surface.
+
+Candidate implementations:
+
+- **B-tree / B+tree engine**: best fit for sorted key lookup, range scans,
+  page-oriented persistence, and LMDB-style designs.
+- **LSM-tree engine**: best fit for write-heavy append workloads, blob stores,
+  and large KV datasets where compaction is acceptable.
+
+The final choice may be:
+
+- one default engine only, or
+- multiple backends selectable by option
+
+This chapter does **not** require that `aiondb2` preserves the same internal
+pointer model as `aiondb`.
+
+### 11.4 API separation
+
+To avoid ambiguity, `aiondb2` must be opened explicitly. The old API keeps its
+current meaning.
+
+Illustrative direction:
+
+```aiml
+# Existing engine, unchanged semantics:
+- decl: [entities, Store<Entity>]
+- set:  [entities, { call: [db.open, "entities"] }]
+
+# New engine family, explicit opt-in:
+- decl: [cfg2, Db2Kv<string:PlayerConfig>]
+- set:  [cfg2, { call: [db2.open_kv, "player_configs"] }]
+```
+
+Possible naming options:
+
+- reserved namespace `db2`
+- explicit backend option, e.g. `{engine: "aiondb2"}`
+- distinct handle types such as `Db2Store<T>`, `Db2Kv<K:V>`
+
+Preferred rule: **new namespace plus new handle types**, because this prevents
+accidental mixing at compile time.
+
+### 11.5 Pointer and loading semantics
+
+Unlike `aiondb`, `aiondb2` must not promise universal raw zero-copy pointers for
+all store types.
+
+Allowed models for `aiondb2`:
+
+- page-pinned pointer valid for the current transaction/snapshot
+- decoded object view backed by an internal cache
+- iterator/cursor API instead of raw `ptr<T>`
+- streaming reads from block storage
+
+This means `aiondb2` is free to read data:
+
+- from mmapd blocks,
+- from pager-managed file pages,
+- or via direct file-handle / block reads
+
+depending on engine design.
+
+In other words: **direct file-handle reads are valid in `aiondb2`**, but they are
+an implementation choice of the new engine, not a semantic change to `aiondb`.
+
+### 11.6 Compatibility contract
+
+The compatibility contract between both generations is:
+
+- `aiondb` databases continue to open with `db.*`
+- `aiondb2` databases open only with the new API
+- no automatic in-place upgrade on first open
+- migration is explicit and tool-driven
+
+Suggested migration path:
+
+```aiml
+- call: [db2.import_from_db, old_store, new_store]
+- call: [db2.export_to_db, new_store, old_store]   # optional tooling
+```
+
+If file formats differ, the runtime must reject mismatched opens clearly rather
+than attempting heuristic fallback.
+
+### 11.7 Initial scope recommendation
+
+To keep the project tractable, `aiondb2` should start with a narrower target than
+full parity with all v1 database forms.
+
+Recommended first scope:
+
+1. `Db2Kv<K:V>` for persistent sorted key/value access
+2. range iteration and prefix/range scan support
+3. explicit transactions / snapshots
+4. blob-friendly persistence for AIML tensors and large values
+
+Later scope:
+
+- `Db2Store<T>` with indexed object storage
+- secondary indexes
+- remote page/block backends
+- replication and distributed operation
+
+### 11.8 Relationship to future work
+
+Several open topics from this chapter may move more naturally into `aiondb2`
+than into the original engine:
+
+- B-tree indexes
+- remote/distributed stores
+- compression tiers
+- encrypted pages/blocks
+- advanced query planners
+
+This is intentional. `aiondb` should stay lean and stable; `aiondb2` is the place
+for more ambitious storage-engine work.
+
+---
+
+## 12. Open Design Questions (Future Work)
+
+- **Indexes**: Automatic B-tree indexes for `where` fields — no compiler integration yet.
+- **Joins**: `join` syntax is specified but not yet implemented.
+- **Distributed stores**: `db.open_remote("host:port", "store_name")` — extension for Chapter 32 (Network).
+- **Encryption**: Transparent AES encryption at the page level.
+- **Compression**: LZ4 or Zstandard for rarely used pages (cold storage).
+- **Reactive queries**: `db.subscribe(query, callback)` — called when the result set changes.

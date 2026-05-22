@@ -1,0 +1,178 @@
+# Repro-Helper: BaseCfg + TulConfig-aequivalent + viele Hilfsfunktionen
+# mit print-/log-Strings (analog train_transformer.aiml als grosses File mit
+# vielen anonymen rodata-Strings).
+
+- model:
+    name: ReproBaseCfg
+    fields:
+      - [config, string, ""]
+      - [save_config, string, ""]
+      - [init_config, i32, 0]
+
+# Mid-Tier wie TulConfig (BaseCfg + Architektur-Felder)
+- model:
+    name: ReproMidCfg
+    inherits: ReproBaseCfg
+    fields:
+      - [embed_dim, i32, 768]
+      - [n_layers, i32, 8]
+      - [n_heads, i32, 12]
+      - [max_seq_len, i32, 512]
+      - [bpe_merges, i32, 4000]
+      - [max_tokens, i32, 12288]
+      - [arena_mb, i32, 512]
+      - [db_tag, string, ""]
+      - [bpe_tag, string, ""]
+      - [trajectory_epoch_stride, i32, 0]
+
+# Top-Tier wie TulTrainCfg (alle Training-spezifischen Felder)
+- model:
+    name: ReproToolCfg
+    inherits: ReproMidCfg
+    fields:
+      - [ff_dim, i32, 3072]
+      - [train_epochs, i32, 25]
+      - [learning_rate, f32, 0.0002]
+      - [triplet_margin, f32, 0.5]
+      - [adam_beta1, f32, 0.9]
+      - [adam_beta2, f32, 0.999]
+      - [adam_eps, f32, 0.00000001]
+      - [n_workers, i32, 1]
+      - [train_stride, i32, 0]
+      - [clip_grad_norm, f32, 0.0]
+      - [log_level, string, "info"]
+      - [reset, i32, 0]
+      - [objective, string, "all"]
+      - [input, string, ""]
+      - [per_file, i32, 0]
+      - [pf_gamma, f32, 1.0]
+      - [pf_eps, f32, 0.00000001]
+      - [pf_var_floor, f32, 0.00000001]
+      - [pf_trust_min, f32, 0.0]
+      - [pf_beta_q, f32, 1.0]
+      - [pf_lambda_prior, f32, 0.0]
+      - [pf_consensus_weight, f32, 0.0]
+      - [lambda_pos, f32, 0.0]
+      - [gamma_conflict, f32, 1.0]
+      - [lambda_time, f32, 0.0]
+      - [pf_lambda_mad, f32, 0.0]
+      - [pf_db_tag, string, ""]
+      - [bpe_hash, string, ""]
+      - [struct_tokens, i32, 0]
+      - [vis_enabled, i32, 0]
+      - [vis_stride, i32, 50]
+
+# Viele Helper-Funktionen mit vielen print-Statements — simuliert
+# train_transformer.aiml's grosse Anzahl anonymer rodata-Strings.
+
+- def:
+    name: helper_a
+    args: [[x, i32]]
+    return: i32
+    body:
+      - print: ["helper_a x=${x} step1"]
+      - print: ["helper_a x=${x} step2"]
+      - print: ["helper_a x=${x} step3"]
+      - print: ["helper_a x=${x} done"]
+      - return: [{ +: [x, 1] }]
+
+- def:
+    name: helper_b
+    args: [[x, i32]]
+    return: i32
+    body:
+      - print: ["helper_b init"]
+      - print: ["helper_b loop_start ${x}"]
+      - print: ["helper_b loop_body ${x}"]
+      - print: ["helper_b loop_end ${x}"]
+      - return: [{ "*": [x, 2] }]
+
+- def:
+    name: helper_c
+    args: [[x, i32]]
+    return: i32
+    body:
+      - print: ["helper_c a=${x}"]
+      - print: ["helper_c b=${x}"]
+      - print: ["helper_c c=${x}"]
+      - print: ["helper_c d=${x}"]
+      - print: ["helper_c e=${x}"]
+      - return: [x]
+
+- def:
+    name: helper_d
+    args: [[x, i32]]
+    return: i32
+    body:
+      - print: ["helper_d alpha=${x}"]
+      - print: ["helper_d beta=${x}"]
+      - print: ["helper_d gamma=${x}"]
+      - print: ["helper_d delta=${x}"]
+      - return: [x]
+
+- def:
+    name: helper_e
+    args: [[x, i32]]
+    return: i32
+    body:
+      - print: ["helper_e red=${x}"]
+      - print: ["helper_e green=${x}"]
+      - print: ["helper_e blue=${x}"]
+      - return: [x]
+
+- def:
+    name: helper_f
+    args: [[x, i32]]
+    return: i32
+    body:
+      - print: ["helper_f n_layers=${x}"]
+      - print: ["helper_f n_heads=${x}"]
+      - print: ["helper_f embed_dim=${x}"]
+      - print: ["helper_f ff_dim=${x}"]
+      - return: [x]
+
+- def:
+    name: helper_g
+    args: [[x, i32]]
+    return: i32
+    body:
+      - print: ["helper_g loss_min=${x}"]
+      - print: ["helper_g loss_mean=${x}"]
+      - print: ["helper_g loss_max=${x}"]
+      - print: ["helper_g g_rms=${x}"]
+      - print: ["helper_g p_rms=${x}"]
+      - print: ["helper_g upd_rms=${x}"]
+      - return: [x]
+
+- def:
+    name: helper_h
+    args: [[x, i32]]
+    return: i32
+    body:
+      - print: ["helper_h epoch ${x} start"]
+      - print: ["helper_h epoch ${x} step"]
+      - print: ["helper_h epoch ${x} end"]
+      - return: [x]
+
+- def:
+    name: helper_i
+    args: [[x, i32]]
+    return: i32
+    body:
+      - print: ["helper_i tok_embed=${x}"]
+      - print: ["helper_i pos_embed=${x}"]
+      - print: ["helper_i ln_f_g=${x}"]
+      - print: ["helper_i ln_f_b=${x}"]
+      - print: ["helper_i w_out=${x}"]
+      - return: [x]
+
+- def:
+    name: helper_j
+    args: [[x, i32]]
+    return: i32
+    body:
+      - print: ["helper_j w_q=${x}"]
+      - print: ["helper_j w_k=${x}"]
+      - print: ["helper_j w_v=${x}"]
+      - print: ["helper_j w_o=${x}"]
+      - return: [x]

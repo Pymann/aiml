@@ -50,6 +50,21 @@ rm -rf /tmp/aiml_test_aiondb_kv_reopen_20260319/
 rm -rf /tmp/aiml_test_aiondb_ts_reopen_20260319/
 rm -rf /tmp/aiml_test_aiondb_store_reopen_20260319/
 
+# Create binary test file for test_binary_io.aiml
+python3 -c "
+import struct, os
+with open('/tmp/aiml_binary_io_test.bin','wb') as f:
+    f.write(struct.pack('<B', 0xAB))
+    f.write(struct.pack('<B', 1))
+    f.write(struct.pack('<i', -1234567))
+    f.write(struct.pack('<I', 3000000000))
+    f.write(struct.pack('<q', 9000000000))
+    f.write(struct.pack('<f', 3.14))
+    f.write(struct.pack('<d', 2.718281828))
+    f.write(b'hello\x00')
+    f.write(bytes([0xCA, 0xFE]))
+"
+
 echo "Running AIML Tests..." | tee -a "$OUTPUT_FILE"
 echo "======================" | tee -a "$OUTPUT_FILE"
 
@@ -116,6 +131,16 @@ for TEST in $TEST_FILES; do
     elif [[ "$TEST" == *"test_modifiers_const.aiml" ]]; then
         EXPECTED_CODE=1
     elif [[ "$TEST" == *"test_modifiers_private.aiml" ]]; then
+        EXPECTED_CODE=1
+    elif [[ "$TEST" == *"test_modifiers_too_many_args.aiml" ]]; then
+        EXPECTED_CODE=1
+    elif [[ "$TEST" == *"test_method_too_many_args.aiml" ]]; then
+        EXPECTED_CODE=1
+    elif [[ "$TEST" == *"test_decl_modifier_third_position_invalid.aiml" ]]; then
+        EXPECTED_CODE=1
+    elif [[ "$TEST" == *"test_orphan_def.aiml" ]]; then
+        # Negative test: a `- def:` without `name:` must fail with a clear
+        # diagnostic — see header comment in the test for the rationale.
         EXPECTED_CODE=1
     fi
 

@@ -69,38 +69,38 @@
 | `zero` | `buffer.zero()` | `memset(data, 0, capacity)` + sets size and writeIndex to capacity. |
 | `len` | `buffer.len → i32` | Returns current size (number of bytes written). Property access, no `call:` needed. |
 
-## zero — Bulk-Initialisierung
+## zero — Bulk Initialization
 
-`buffer.zero()` nullt den gesamten allokierten Bereich in einem einzigen `memset`-Call
-und markiert den Buffer als vollständig beschrieben (size = capacity).
+`buffer.zero()` zeroes the entire allocated region in a single `memset` call
+and marks the buffer as fully written (size = capacity).
 
-Typischer Einsatz: Pre-allokierte numerische Arrays (Embedding-Tables, Gewichtsmatrizen),
-bei denen 100k+ Einzelwerte sonst per `write`-Schleife initialisiert werden müssten.
+Typical use case: pre-allocated numeric arrays (embedding tables, weight matrices)
+where 100k+ individual values would otherwise need to be initialized via a `write` loop.
 
 ```yaml
-# Statt 131072 einzelner write-Calls:
+# Instead of 131072 individual write calls:
 - decl: [emb, buffer]
 - call: [emb.alloc, 524288]    # 4096 tokens * 32 dim * 4 bytes
-- call: [emb.zero]              # ein memset — ~0ms statt Sekunden
+- call: [emb.zero]              # one memset — ~0ms instead of seconds
 
-# Danach: random access via seek + write/read
+# Afterwards: random access via seek + write/read
 - call: [emb.seek, 640]         # byte offset = (token_id * dim + d) * 4
 - call: [emb.write, 1.5, f32]
 - call: [emb.seek, 640]
 - decl: [val, f32, { call: [emb.read, f32] }]
 ```
 
-## Buffer als typisiertes Array (f32/i32)
+## Buffer as a Typed Array (f32/i32)
 
-Buffer eignen sich als performante flat arrays für numerische Daten.
-Der Zugriff erfolgt über berechnete Byte-Offsets:
+Buffers are suitable as high-performance flat arrays for numeric data.
+Access is done via computed byte offsets:
 
 ```yaml
 # byte_offset = (index) * sizeof(type)
-# Für f32: byte_offset = index * 4
-# Für i32: byte_offset = index * 4
+# For f32: byte_offset = index * 4
+# For i32: byte_offset = index * 4
 
-# 2D-Array Pattern (z.B. Embedding-Table):
+# 2D-Array Pattern (e.g. embedding table):
 # byte_offset = (row * cols + col) * 4
 - decl: [token_id, i32, 5]
 - decl: [dim, i32, 32]
@@ -116,3 +116,57 @@ Der Zugriff erfolgt über berechnete Byte-Offsets:
 |-----------|-----------|
 | `write()` when `size + sizeof(value) > capacity` | `BufferOverflowException` |
 | `read()` when read position > written data size | `BufferUnderflowException` |
+
+## Proposed Binary View Extensions (Not Implemented Yet)
+
+The existing `buffer.read(type)` / `buffer.write(value, type)` API is useful for
+sequential binary IO. For large model and embedding imports, additional random-access
+binary view helpers are proposed.
+
+Status: **proposed, not implemented**
+
+```yaml
+# Random-access little-endian reads from an existing byte buffer
+- decl: [buf, buffer<u8>]
+
+- decl: [b0, i32, { call: [buf.read_u8, 0] }]
+- decl: [magic, i32, { call: [buf.read_i32_le, 0] }]
+- decl: [rows, i64, { call: [buf.read_i64_le, 128] }]
+- decl: [val, f32, { call: [buf.read_f32_le, 256] }]
+- decl: [d, f64, { call: [buf.read_f64_le, 512] }]
+- decl: [flag, i32, { call: [buf.read_bool, 1024] }]
+
+# Slice without copying semantics are preferred, but not yet specified.
+- decl: [hdr, buffer<u8>, { call: [buf.slice, 0, 64] }]
+
+# Null-terminated string read from buffer contents
+- decl: [word, string, { call: [buf.read_cstring, 2048] }]
+```
+
+### Proposed Methods
+
+| Method | Signature | Status | Description |
+|--------|-----------|--------|-------------|
+| `read_u8` | `buffer.read_u8(offset: i32) -> i32` | not implemented | Reads one unsigned byte at `offset`. |
+| `read_bool` | `buffer.read_bool(offset: i32) -> i32` | not implemented | Reads one stored boolean byte at `offset` and returns `0/1`. |
+| `read_i32_le` | `buffer.read_i32_le(offset: i32) -> i32` | not implemented | Reads a 32-bit little-endian signed integer from `offset`. |
+| `read_u32_le` | `buffer.read_u32_le(offset: i32) -> i64` | not implemented | Reads a 32-bit little-endian unsigned integer from `offset`. |
+| `read_i64_le` | `buffer.read_i64_le(offset: i32) -> i64` | not implemented | Reads a 64-bit little-endian signed integer from `offset`. |
+| `read_u64_le` | `buffer.read_u64_le(offset: i32) -> i64` | not implemented | Reads a 64-bit little-endian unsigned integer from `offset`. |
+| `read_f32_le` | `buffer.read_f32_le(offset: i32) -> f32` | not implemented | Reads one IEEE754 `f32` from `offset`. |
+| `read_f64_le` | `buffer.read_f64_le(offset: i32) -> f64` | not implemented | Reads one IEEE754 `f64` from `offset`. |
+| `read_cstring` | `buffer.read_cstring(offset: i32) -> string` | not implemented | Reads bytes until `0x00` and decodes as string. |
+| `slice` | `buffer.slice(offset: i32, len: i32) -> buffer<u8>` | not implemented | Returns a sub-view or copy of the byte range. |
+
+### Motivation
+
+These methods are intended for:
+
+- model importers (fastText, GGUF, future custom formats)
+- efficient binary header parsing
+- section-based parsing where bytes are loaded once and then interpreted many times
+
+The design goal is:
+
+- `io` is responsible for obtaining bytes from files or streams
+- `buffer` is responsible for interpreting bytes already in memory

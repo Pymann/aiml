@@ -13,11 +13,23 @@ int main(int argc, char** argv) {
     LogLevel logLevel = LogLevel::WARNING;
 
     bool runMode = false;
+    bool emitMain = false;
+    std::string targetTriple;
+
+    // Program args: everything after '--' is forwarded to the AIML program
+    int programArgc = 0;
+    char** programArgv = nullptr;
 
     // Simple arg parsing
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
-        if (arg == "--log-level" && i + 1 < argc) {
+        if (arg == "--") {
+            // Everything after '--' becomes the AIML program's argv[1..]
+            // We'll prepend argv[0] (inputFile) later
+            programArgc = argc - i;  // includes slot for argv[0]
+            programArgv = argv + i;  // points at '--'; we'll fix up below
+            break;
+        } else if (arg == "--log-level" && i + 1 < argc) {
             std::string levelStr = argv[++i];
             if (levelStr == "DEBUG") logLevel = LogLevel::DEBUG;
             else if (levelStr == "INFO") logLevel = LogLevel::INFO;
@@ -26,6 +38,11 @@ int main(int argc, char** argv) {
             else if (levelStr == "VERBOSE") logLevel = LogLevel::VERBOSE;
         } else if (arg == "-r" || arg == "--run") {
             runMode = true;
+        } else if (arg == "--emit-main") {
+            emitMain = true;
+        } else if (arg == "--target" && i + 1 < argc) {
+            targetTriple = argv[++i];
+            if (targetTriple == "wasm32") targetTriple = "wasm32-unknown-emscripten";
         } else if (arg == "-o" && i + 1 < argc) {
             outputFile = argv[++i];
         } else if (arg[0] == '-') {
@@ -60,8 +77,9 @@ int main(int argc, char** argv) {
     }
 
     Logger::instance().setLevel(logLevel);
-    
+
     AIMLCompiler compiler;
+    if (!targetTriple.empty()) compiler.setTargetTriple(targetTriple);
     
     // Resolve compiler path (argv[0]) to absolute path for recursive calls
     try {
@@ -103,6 +121,15 @@ int main(int argc, char** argv) {
         }
 
         compiler.generateEntryPoint();            // Add main wrapper
+        if (programArgc > 0) {
+            // Build proper argv: inputFile as argv[0], then post-'--' args
+            std::vector<char*> progArgvVec;
+            progArgvVec.push_back(const_cast<char*>(inputFile.c_str()));
+            for (int i = 1; i < programArgc; i++)
+                progArgvVec.push_back(programArgv[i]);  // programArgv[0] was '--'
+            progArgvVec.push_back(nullptr);
+            return compiler.jitRun((int)progArgvVec.size() - 1, progArgvVec.data());
+        }
         return compiler.jitRun();
     } 
     
@@ -113,15 +140,42 @@ int main(int argc, char** argv) {
 
     if (isLL) {
         LOG_DEBUG("Standard IR Compilation Mode");
+        // When emitting text IR for an external toolchain, also have the
+        // import resolver emit .ll side files (instead of .o) — exodus picks
+        // them up automatically. Native object builds keep .o behavior.
+        compiler.emitImportsAsLL = true;
+        // Disable internal import cache — the build tool (exodus) handles
+        // caching and expects side files next to the main output.
+        compiler.noCache = true;
+        compiler.outputDir = std::filesystem::path(outputFile).parent_path().string();
         // Compile and generate entry point for LL debugging
         compiler.compile(inputFile, outputFile); // Parse and populate module
-        
+
         if (Logger::instance().hasErrors()) {
             LOG_ERROR("Compilation failed with errors.");
             return 1;
         }
-        
-        // This writes file WITHOUT entry point wrapper.
+
+        // --emit-main: add main entry point and re-emit IR text.
+        // Required when the .ll is consumed standalone by another toolchain
+        // (e.g. emcc → WASM) since emcc needs a main() to produce a runnable.
+        if (emitMain) {
+            compiler.generateEntryPoint();
+            compiler.saveModule(outputFile);
+        }
+        // This writes file WITHOUT entry point wrapper (unless --emit-main).
+
+        // Write .d depfile (same shape as the .o path uses) so exodus can
+        // resolve the expected import side-files (.ll) for the link step.
+        {
+            std::string depPath = outputFile.substr(0, outputFile.size() - 3) + ".d";
+            std::ofstream depOut(depPath);
+            depOut << outputFile << ": " << inputFile;
+            for (const auto& src : compiler.importedSourceFiles) {
+                depOut << " \\\n  " << src;
+            }
+            depOut << "\n";
+        }
         
         // We can't easily print module from here without LLVM headers.
         // HACK: call compile again with empty file? No.

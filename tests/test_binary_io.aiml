@@ -1,0 +1,227 @@
+# Test Binary IO builtins
+# Binary test file at /tmp/aiml_binary_io_test.bin must be pre-created
+# by run_all_tests.sh (or manually via python3).
+#
+# Layout (little-endian, 38 bytes):
+#   [0]     u8      = 0xAB (171)
+#   [1]     bool    = 1
+#   [2..5]  i32le   = -1234567
+#   [6..9]  u32le   = 3000000000  (too large for i32 literal — verified via tell)
+#   [10..17] i64le  = 9000000000  (too large for i32 literal — verified via tell)
+#   [18..21] f32le  = 3.14        (f32 — verified via tell + interpolation)
+#   [22..29] f64le  = 2.718281828 (f64 — verified via tell + interpolation)
+#   [30..35] cstring = "hello\0"
+#   [36..37] 0xCA 0xFE
+
+- decl: [f, file_handle]
+- set: [f, {call: [io.open_binary, "/tmp/aiml_binary_io_test.bin"]}]
+
+# ---- eof = 0 at start ----
+- decl: [e0, i32]
+- set: [e0, {call: [io.eof, f]}]
+- if:
+    condition: {neq: [e0, 0]}
+    then:
+      - print: ["FAIL: eof should be 0 at start, got ${e0}"]
+      - call: [sys.exit, 1]
+- print: ["PASS: eof=0 at start"]
+
+# ---- read_u8 = 171 (0xAB) ----
+- decl: [v_u8, i32]
+- set: [v_u8, {call: [io.read_u8, f]}]
+- if:
+    condition: {neq: [v_u8, 171]}
+    then:
+      - print: ["FAIL: read_u8 expected 171, got ${v_u8}"]
+      - call: [sys.exit, 1]
+- print: ["PASS: read_u8 = 171"]
+
+# ---- read_bool = 1 ----
+- decl: [v_bool, i32]
+- set: [v_bool, {call: [io.read_bool, f]}]
+- if:
+    condition: {neq: [v_bool, 1]}
+    then:
+      - print: ["FAIL: read_bool expected 1, got ${v_bool}"]
+      - call: [sys.exit, 1]
+- print: ["PASS: read_bool = 1"]
+
+# ---- tell = 2 ----
+- decl: [p, i64]
+- set: [p, {call: [io.tell, f]}]
+- if:
+    condition: {neq: [p, 2]}
+    then:
+      - print: ["FAIL: tell expected 2, got ${p}"]
+      - call: [sys.exit, 1]
+- print: ["PASS: tell = 2"]
+
+# ---- read_i32_le = -1234567 ----
+- decl: [v_i32, i32]
+- set: [v_i32, {call: [io.read_i32_le, f]}]
+- if:
+    condition: {neq: [v_i32, -1234567]}
+    then:
+      - print: ["FAIL: read_i32_le expected -1234567, got ${v_i32}"]
+      - call: [sys.exit, 1]
+- print: ["PASS: read_i32_le = -1234567"]
+
+# ---- read_u32_le: consumes 4 bytes, verify via tell ----
+- decl: [v_u32, i64]
+- set: [v_u32, {call: [io.read_u32_le, f]}]
+- set: [p, {call: [io.tell, f]}]
+- if:
+    condition: {neq: [p, 10]}
+    then:
+      - print: ["FAIL: tell after read_u32_le expected 10, got ${p}"]
+      - call: [sys.exit, 1]
+- print: ["PASS: read_u32_le consumed 4 bytes (tell=10)"]
+
+# ---- read_i64_le: consumes 8 bytes, verify via tell ----
+- decl: [v_i64, i64]
+- set: [v_i64, {call: [io.read_i64_le, f]}]
+- set: [p, {call: [io.tell, f]}]
+- if:
+    condition: {neq: [p, 18]}
+    then:
+      - print: ["FAIL: tell after read_i64_le expected 18, got ${p}"]
+      - call: [sys.exit, 1]
+- print: ["PASS: read_i64_le consumed 8 bytes (tell=18)"]
+
+# ---- read_f32_le: consumes 4 bytes, verify via tell + interpolation ----
+- decl: [v_f32, f32]
+- set: [v_f32, {call: [io.read_f32_le, f]}]
+- set: [p, {call: [io.tell, f]}]
+- if:
+    condition: {neq: [p, 22]}
+    then:
+      - print: ["FAIL: tell after read_f32_le expected 22, got ${p}"]
+      - call: [sys.exit, 1]
+- print: ["PASS: read_f32_le consumed 4 bytes (tell=22), value=${v_f32}"]
+
+# ---- read_f64_le: consumes 8 bytes, verify via tell + interpolation ----
+- decl: [v_f64, f64]
+- set: [v_f64, {call: [io.read_f64_le, f]}]
+- set: [p, {call: [io.tell, f]}]
+- if:
+    condition: {neq: [p, 30]}
+    then:
+      - print: ["FAIL: tell after read_f64_le expected 30, got ${p}"]
+      - call: [sys.exit, 1]
+- print: ["PASS: read_f64_le consumed 8 bytes (tell=30), value=${v_f64}"]
+
+# ---- read_cstring = "hello" ----
+- decl: [v_str, string]
+- set: [v_str, {call: [io.read_cstring, f]}]
+- if:
+    condition: {eq: [{ eq: [v_str, "hello"] }, 0]}
+    then:
+      - print: ["FAIL: read_cstring expected 'hello', got '${v_str}'"]
+      - call: [sys.exit, 1]
+- print: ["PASS: read_cstring = 'hello'"]
+
+# cursor = 36 (30 + 5 chars + 1 null)
+- set: [p, {call: [io.tell, f]}]
+- if:
+    condition: {neq: [p, 36]}
+    then:
+      - print: ["FAIL: tell after cstring expected 36, got ${p}"]
+      - call: [sys.exit, 1]
+- print: ["PASS: tell = 36 after cstring"]
+
+# ---- seek to 0, verify tell ----
+- call: [io.seek, f, 0]
+- set: [p, {call: [io.tell, f]}]
+- if:
+    condition: {neq: [p, 0]}
+    then:
+      - print: ["FAIL: tell after seek(0) expected 0, got ${p}"]
+      - call: [sys.exit, 1]
+- print: ["PASS: seek(0) works"]
+
+# ---- skip 36 bytes, verify tell ----
+- call: [io.skip, f, 36]
+- set: [p, {call: [io.tell, f]}]
+- if:
+    condition: {neq: [p, 36]}
+    then:
+      - print: ["FAIL: tell after skip(36) expected 36, got ${p}"]
+      - call: [sys.exit, 1]
+- print: ["PASS: skip(36) works"]
+
+# ---- read_bytes: 2 bytes at pos 36 → 0xCA(202), 0xFE(254) ----
+- decl: [buf, buffer<u8>]
+- set: [buf, {call: [io.read_bytes, f, 2]}]
+- set: [p, {call: [io.tell, f]}]
+- if:
+    condition: {neq: [p, 38]}
+    then:
+      - print: ["FAIL: tell after read_bytes expected 38, got ${p}"]
+      - call: [sys.exit, 1]
+- print: ["PASS: read_bytes consumed 2 bytes (tell=38)"]
+
+- decl: [b0, i32]
+- decl: [b1, i32]
+- set: [b0, {call: [buf.read, u8]}]
+- set: [b1, {call: [buf.read, u8]}]
+# buf.read(u8) returns sign-extended i8: 0xCA=202 → -54, 0xFE=254 → -2
+- if:
+    condition: {neq: [b0, -54]}
+    then:
+      - print: ["FAIL: read_bytes[0] expected -54 (0xCA), got ${b0}"]
+      - call: [sys.exit, 1]
+- print: ["PASS: read_bytes[0] = 0xCA (-54)"]
+- if:
+    condition: {neq: [b1, -2]}
+    then:
+      - print: ["FAIL: read_bytes[1] expected -2 (0xFE), got ${b1}"]
+      - call: [sys.exit, 1]
+- print: ["PASS: read_bytes[1] = 0xFE (-2)"]
+
+# ---- read_at: 4 bytes at offset 2 (= i32 -1234567), cursor must stay at 38 ----
+- decl: [buf2, buffer<u8>]
+- set: [buf2, {call: [io.read_at, f, 2, 4]}]
+- set: [p, {call: [io.tell, f]}]
+- if:
+    condition: {neq: [p, 38]}
+    then:
+      - print: ["FAIL: read_at moved cursor to ${p}, expected 38"]
+      - call: [sys.exit, 1]
+- print: ["PASS: read_at did not move main cursor"]
+
+# -1234567 = 0xFFED2979 → bytes LE: 0x79(121) 0x29(41) 0xED(-19 signed) 0xFF(-1 signed)
+# buf.read(u8) returns sign-extended i8
+- decl: [rb0, i32]
+- decl: [rb1, i32]
+- decl: [rb2, i32]
+- decl: [rb3, i32]
+- set: [rb0, {call: [buf2.read, u8]}]
+- set: [rb1, {call: [buf2.read, u8]}]
+- set: [rb2, {call: [buf2.read, u8]}]
+- set: [rb3, {call: [buf2.read, u8]}]
+- if:
+    condition: {neq: [rb0, 121]}
+    then:
+      - print: ["FAIL: read_at byte[0] expected 121(0x79), got ${rb0}"]
+      - call: [sys.exit, 1]
+- if:
+    condition: {neq: [rb1, 41]}
+    then:
+      - print: ["FAIL: read_at byte[1] expected 41(0x29), got ${rb1}"]
+      - call: [sys.exit, 1]
+- if:
+    condition: {neq: [rb2, -19]}
+    then:
+      - print: ["FAIL: read_at byte[2] expected -19(0xED), got ${rb2}"]
+      - call: [sys.exit, 1]
+- if:
+    condition: {neq: [rb3, -1]}
+    then:
+      - print: ["FAIL: read_at byte[3] expected -1(0xFF), got ${rb3}"]
+      - call: [sys.exit, 1]
+- print: ["PASS: read_at bytes correct (0x79 0x29 0xED 0xFF)"]
+
+# ---- close ----
+- call: [io.close, f]
+- print: ["PASS: close OK"]
+- print: ["ALL BINARY IO TESTS PASSED"]

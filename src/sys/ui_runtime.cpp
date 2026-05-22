@@ -11,8 +11,13 @@
  *   engine_runtime — window size + DPI
  */
 
-#include <GL/glew.h>
-#include <GL/gl.h>
+#ifdef __EMSCRIPTEN__
+#  include <GLES3/gl3.h>
+#  include <GLES2/gl2ext.h>
+#else
+#  include <GL/glew.h>
+#  include <GL/gl.h>
+#endif
 
 #define STB_TRUETYPE_IMPLEMENTATION
 #include <stb/stb_truetype.h>
@@ -56,7 +61,11 @@ struct AimlUIStyle {
     float   size_h;         /* 15 — absolute widget height in logical px; -1.0 = auto */
     float   _pad2;          /* 16 — alignment reserve                 */
 };
-static_assert(sizeof(AimlUIStyle) == 72, "AimlUIStyle must be 72 bytes");
+#if INTPTR_MAX == INT64_MAX
+static_assert(sizeof(AimlUIStyle) == 72, "AimlUIStyle must be 72 bytes (x86_64)");
+#else
+static_assert(sizeof(AimlUIStyle) == 68, "AimlUIStyle must be 68 bytes (wasm32: ptr = 4)");
+#endif
 static_assert(offsetof(AimlUIStyle, font) == 48, "font must be at offset 48");
 
 /* ── Internal structs ────────────────────────────────────────────────────── */
@@ -524,8 +533,14 @@ static void compute_sizes(AimlGLRawBuf* buf, float total, float gap,
 
 /* ── Shader ──────────────────────────────────────────────────────────────── */
 
-static const char* VERT_SRC = R"(
-#version 330 core
+/* GLSL version directive differs on WebGL2 (= GLSL ES 3.00). */
+#ifdef __EMSCRIPTEN__
+#  define AIML_GLSL_VERSION "#version 300 es\nprecision highp float;\n"
+#else
+#  define AIML_GLSL_VERSION "#version 330 core\n"
+#endif
+
+static const char* VERT_SRC = AIML_GLSL_VERSION R"(
 layout(location=0) in vec2 a_pos;
 layout(location=1) in vec2 a_uv;
 layout(location=2) in vec2 a_quad;    /* qw, qh */
@@ -548,8 +563,7 @@ void main(){
 }
 )";
 
-static const char* FRAG_SRC = R"(
-#version 330 core
+static const char* FRAG_SRC = AIML_GLSL_VERSION R"(
 in vec2 v_uv;
 in vec2 v_quad;    /* qw, qh; 0 = skip SDF (text mode) */
 in vec2 v_style;   /* radius, border_w */
@@ -636,7 +650,9 @@ static AimlUIFont* bake_font(unsigned char* ttf_data, int ttf_size, float size_p
 
     glGenTextures(1, &f->atlas_tex);
     glBindTexture(GL_TEXTURE_2D, f->atlas_tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, f->atlas_w, f->atlas_h,
+    /* WebGL2 requires a sized internalformat (GL_R8) here; desktop GL accepts
+     * either GL_RED or GL_R8 — GL_R8 is the safe choice for both. */
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, f->atlas_w, f->atlas_h,
                  0, GL_RED, GL_UNSIGNED_BYTE, bitmap);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -1024,9 +1040,20 @@ void aiml_ui_begin_cell(int32_t col, int32_t row, int32_t colspan, int32_t rowsp
 
     g_ui->cell_stack.push_back(cs);
 
-    /* Cell background + border (drawn at original position, not scrolled) */
-    draw_widget_rect(cs.orig_x, cs.orig_y, cs.orig_w, cs.orig_h,
-                     (int32_t)0x12121EFF, (int32_t)0x33334AFF, lp(1.0f), 0.0f);
+    /* Cell background + border — read from the current style so callers can
+     * push a transparent style to opt out. Skip rendering entirely when both
+     * bg and border have alpha 0 (avoids painting a default dark rect over a
+     * decorative panel texture). */
+    {
+        int32_t bg    = cur_style().bg_color;
+        int32_t bord  = cur_style().border_color;
+        uint32_t a_bg = (uint32_t)bg   & 0xFFu;
+        uint32_t a_br = (uint32_t)bord & 0xFFu;
+        if (a_bg || a_br) {
+            draw_widget_rect(cs.orig_x, cs.orig_y, cs.orig_w, cs.orig_h,
+                             bg, bord, lp(cur_style().border_width), 0.0f);
+        }
+    }
 
     /* If scrollable, enable scissor to clip content to cell bounds */
     if (cs.scroll_id != 0) {
@@ -1226,12 +1253,19 @@ static void style_set_tex(GLuint* tex, int* w, int* h, void* gl_tex) {
     if (!gl_tex) { *tex = 0; *w = *h = 0; return; }
     GLuint id = ((AimlGLTexture*)gl_tex)->id;
     *tex = id;
+#ifdef __EMSCRIPTEN__
+    /* WebGL2 has no glGetTexLevelParameter — texture size queries aren't
+     * supported. AimlGLTexture stores the size at upload time; future work
+     * is to plumb (w, h) through this setter. For now, leave 0 sentinels. */
+    *w = 0; *h = 0;
+#else
     GLint tw = 1, th = 1;
     glBindTexture(GL_TEXTURE_2D, id);
     glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH,  &tw);
     glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
     glBindTexture(GL_TEXTURE_2D, 0);
     *w = (int)tw; *h = (int)th;
+#endif
 }
 
 static void draw_label_in_rect(const char* text, float x, float y, float w, float h,

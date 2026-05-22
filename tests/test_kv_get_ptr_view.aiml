@@ -1,0 +1,90 @@
+# Regression: kv.get returning ptr<T> as a sync view.
+#
+# When the user declares `decl: [p, ptr<T>, kv.get(k)]`, p points directly at
+# the kv decoded_cache slot. Mutations via p.list.push or p.field = … go
+# through the pointer and write straight into the cache — so the cache stays
+# internally consistent. kv.set(same_key, p) then encodes the (already
+# canonical) cache and writes WAL.
+#
+# This is the cleanest pattern for "read, mutate, persist" because there is
+# only ONE instance of the data; no shallow-copy/sharing problems possible.
+#
+# Before the kv.set fix in ast_compiler_call.cpp, this pattern compiled but
+# wrote 8 bytes (the pointer value) instead of the struct because the
+# code path for non-string typed values always spilled valVal into a temp
+# alloca regardless of whether valVal was already a struct pointer.
+
+- model:
+    name: Bag
+    fields:
+      - [name,   string]
+      - [items,  list<string>]
+      - [counts, list<i32>]
+
+- decl: [kv, Kv<string:Bag>, { call: [db.open_kv, "bag_ptr_view", {persist: true, path: "/tmp/aiml_test_kv_ptr_view/"}] }]
+
+- decl: [pass, i32, 0]
+- decl: [fail, i32, 0]
+
+# ── Seed ────────────────────────────────────────────────────────────────────
+- decl: [b1, Bag]
+- set: [b1.name, "first"]
+- call: [b1.items.push, "alpha"]
+- call: [kv.set, "k", b1]
+
+# ── Case A: ptr<Bag> read + write back ──────────────────────────────────────
+- decl: [pa, ptr<Bag>, { call: [kv.get, "k"] }]
+- call: [pa.items.push, "beta"]
+- call: [pa.items.push, "gamma"]
+- set:  [pa.name, "second"]
+- call: [kv.set, "k", pa]
+
+- decl: [a2, Bag, { call: [kv.get_copy, "k"] }]
+- if:
+    condition: { "&&": [{ eq: [a2.items.len, 3] }, { eq: [a2.name, "second"] }] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+      - print: ["PASS A: ptr<Bag> mutate + set, items.len=3 name='${a2.name}'"]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL A: items.len=${a2.items.len} name='${a2.name}'"]
+
+# ── Case B: ptr<Bag> with i32 list push (different element type) ────────────
+- decl: [pb, ptr<Bag>, { call: [kv.get, "k"] }]
+- call: [pb.counts.push, 42]
+- call: [pb.counts.push, 99]
+- call: [kv.set, "k", pb]
+
+- decl: [b2, Bag, { call: [kv.get_copy, "k"] }]
+- if:
+    condition: { eq: [b2.counts.len, 2] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+      - print: ["PASS B: ptr<Bag> i32 push + set, counts.len=2"]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL B: counts.len=${b2.counts.len}"]
+
+# ── Case C: many pushes forcing realloc through ptr<Bag> ──────────────────
+- decl: [pc, ptr<Bag>, { call: [kv.get, "k"] }]
+- call: [pc.items.push, "delta"]
+- call: [pc.items.push, "epsilon"]
+- call: [pc.items.push, "zeta"]
+- call: [pc.items.push, "eta"]
+- call: [pc.items.push, "theta"]
+- call: [kv.set, "k", pc]
+
+- decl: [c2, Bag, { call: [kv.get_copy, "k"] }]
+- if:
+    condition: { eq: [c2.items.len, 8] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+      - print: ["PASS C: ptr<Bag> 5 pushes (realloc) + set, items.len=8"]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL C: items.len=${c2.items.len}"]
+
+- print: ["test_kv_get_ptr_view: ${pass} passed, ${fail} failed"]
+- if:
+    condition: { neq: [fail, 0] }
+    then: [{ call: [sys.exit, 1] }]

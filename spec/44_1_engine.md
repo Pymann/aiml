@@ -1,105 +1,105 @@
-# Kapitel 44.1 — Engine (Cross-Platform)
+# Chapter 44.1 — Engine (Cross-Platform)
 
-> **Leitgedanke:** Der `engine`-Namespace abstrahiert alle Plattform-spezifischen
-> Mechanismen — Fenster-Erstellung, GL-Kontext, Game-Loop und Frame-Timing.
-> Derselbe AIML-Code läuft unverändert auf Desktop (Linux/macOS/Windows),
-> Browser (WebAssembly via Emscripten) und Android (NDK + GameActivity).
+> **Design principle:** The `engine` namespace abstracts all platform-specific
+> mechanisms — window creation, GL context, game loop, and frame timing.
+> The same AIML code runs unchanged on desktop (Linux/macOS/Windows),
+> browser (WebAssembly via Emscripten), and Android (NDK + GameActivity).
 >
-> Plattform-spezifische Details (GLFW-Callbacks, `emscripten_set_main_loop`,
-> `ANativeWindow`) sind vollständig im C-Runtime versteckt.
-> AIML-Usercode hat **keinen** `extern: "C"` GLFW-Block mehr für Fenster-Management.
+> Platform-specific details (GLFW callbacks, `emscripten_set_main_loop`,
+> `ANativeWindow`) are fully hidden in the C runtime.
+> AIML user code no longer has an `extern: "C"` GLFW block for window management.
 
 ---
 
-## Plattform-Mapping
+## Platform Mapping
 
 | AIML | Desktop | Browser (WASM) | Android |
 |------|---------|----------------|---------|
 | `engine.create_window` | `glfwCreateWindow` | Emscripten Canvas | GameActivity Window |
 | `engine.run` | `while (!glfwWindowShouldClose)` | `emscripten_set_main_loop` + Asyncify | Android main loop |
 | `engine.swap` | `glfwSwapBuffers` + `glfwPollEvents` | `emscripten_flush_main_loop` | `ANativeWindow_unlockAndPost` |
-| `engine.running` | `!glfwWindowShouldClose` | Asyncify-Zustand | `app->destroyRequested == 0` |
-| `engine.dt` | `glfwGetTime()` Delta | `performance.now()` Delta | `clock_gettime` Delta |
-| GL-Kontext | GLFW + GLEW | Emscripten WebGL2 | EGL + OpenGL ES 3 |
+| `engine.running` | `!glfwWindowShouldClose` | Asyncify state | `app->destroyRequested == 0` |
+| `engine.dt` | `glfwGetTime()` delta | `performance.now()` delta | `clock_gettime` delta |
+| GL context | GLFW + GLEW | Emscripten WebGL2 | EGL + OpenGL ES 3 |
 
 ---
 
-## 1. Typen
+## 1. Types
 
 ### `window_handle`
 
-Opaker Handle auf das plattformspezifische Fenster-Objekt.
-Intern: `GLFWwindow*` (Desktop), Emscripten Canvas-Referenz (Web), `ANativeWindow*` (Android).
+Opaque handle to the platform-specific window object.
+Internally: `GLFWwindow*` (desktop), Emscripten canvas reference (web), `ANativeWindow*` (Android).
 
 ```
-window_handle   i8*   Plattform-Fenster (ersetzte rohen GLFW-ptr in Usercode)
+window_handle   i8*   Platform window (replaces raw GLFW ptr in user code)
 ```
 
 ---
 
-## 2. Fenster-Erstellung
+## 2. Window Creation
 
-| Aufruf | Rückgabe | Beschreibung |
-|--------|----------|--------------|
-| `engine.create_window(w: i32, h: i32, title: string)` | `window_handle` | Fenster + GL-Kontext erstellen; OpenGL 3.3 Core / OpenGL ES 3.0 |
-| `engine.create_window_fullscreen(title: string)` | `window_handle` | Vollbild in nativer Auflösung |
-| `engine.destroy_window(win: window_handle)` | — | Fenster und GL-Kontext freigeben |
-| `engine.window_size(win: window_handle)` | `ivec2` | Aktuelle Fenstergröße in Pixel |
-| `engine.set_title(win: window_handle, title: string)` | — | Fenstertitel ändern |
+| Call | Return | Description |
+|------|--------|-------------|
+| `engine.create_window(w: i32, h: i32, title: string)` | `window_handle` | Create window + GL context; OpenGL 3.3 Core / OpenGL ES 3.0 |
+| `engine.create_window_fullscreen(title: string)` | `window_handle` | Fullscreen at native resolution |
+| `engine.destroy_window(win: window_handle)` | — | Release window and GL context |
+| `engine.window_size(win: window_handle)` | `ivec2` | Current window size in pixels |
+| `engine.set_title(win: window_handle, title: string)` | — | Change window title |
 
-`engine.create_window` übernimmt intern:
-1. GLFW/EGL/Canvas initialisieren
-2. OpenGL-Version anfordern (3.3 Core auf Desktop, ES 3.0 auf Mobile/Web)
-3. GL-Context aktuell machen (`glfwMakeContextCurrent` / `eglMakeCurrent`)
-4. GLEW initialisieren (nur Desktop)
-5. Depth-Test aktivieren
-6. Viewport auf Fenstergröße setzen
+`engine.create_window` handles internally:
+1. Initialize GLFW/EGL/Canvas
+2. Request OpenGL version (3.3 Core on desktop, ES 3.0 on mobile/web)
+3. Make GL context current (`glfwMakeContextCurrent` / `eglMakeCurrent`)
+4. Initialize GLEW (desktop only)
+5. Enable depth test
+6. Set viewport to window size
 
-**Kein `extern: "C"` GLFW-Block mehr nötig** für Fenster-Management.
-
----
-
-## 3. GL-Kontext
-
-| Aufruf | Beschreibung |
-|--------|--------------|
-| `engine.make_current(win: window_handle)` | GL-Context auf aktuellen Thread binden (Multi-Window / Multi-Thread) |
-| `engine.set_vsync(on: bool)` | VSync ein-/ausschalten (`glfwSwapInterval`) |
+**No `extern: "C"` GLFW block needed** for window management.
 
 ---
 
-## 4. Game-Loop
+## 3. GL Context
 
-### 4.1 `engine.run` — empfohlener Cross-Platform-Einstiegspunkt
+| Call | Description |
+|------|-------------|
+| `engine.make_current(win: window_handle)` | Bind GL context to current thread (multi-window / multi-thread) |
+| `engine.set_vsync(on: bool)` | Enable/disable VSync (`glfwSwapInterval`) |
+
+---
+
+## 4. Game Loop
+
+### 4.1 `engine.run` — Recommended Cross-Platform Entry Point
 
 ```aiml
 - call: [engine.run, win, update, render]
 ```
 
-| Parameter | Typ | Beschreibung |
-|-----------|-----|--------------|
-| `win` | `window_handle` | Ziel-Fenster |
-| `update` | `fn<f32:void>` | Update-Callback; erhält Delta-Time in Sekunden |
-| `render` | `fn<void:void>` | Render-Callback; wird nach update aufgerufen |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `win` | `window_handle` | Target window |
+| `update` | `fn<f32:void>` | Update callback; receives delta time in seconds |
+| `render` | `fn<void:void>` | Render callback; called after update |
 
-Intern pro Frame:
-1. `dt` berechnen
-2. `input.update()` aufrufen
-3. `update(dt)` aufrufen
-4. `render()` aufrufen
-5. Buffer swappen + Events pollen
-6. Frame-Limiter anwenden
+Per frame internally:
+1. Compute `dt`
+2. Call `input.update()`
+3. Call `update(dt)`
+4. Call `render()`
+5. Swap buffers + poll events
+6. Apply frame limiter
 
-Plattform-Verhalten:
-- **Desktop**: blockierende `while`-Schleife bis `glfwWindowShouldClose`
-- **Browser**: `emscripten_set_main_loop_arg` — gibt Kontrolle ans Browser-Event-Loop zurück; Asyncify ermöglicht identische AIML-Quelle
-- **Android**: NDK-Event-Loop bis `destroyRequested`
+Platform behavior:
+- **Desktop**: blocking `while` loop until `glfwWindowShouldClose`
+- **Browser**: `emscripten_set_main_loop_arg` — returns control to the browser event loop; Asyncify enables identical AIML source
+- **Android**: NDK event loop until `destroyRequested`
 
-### 4.2 Manueller Loop-Stil (Desktop + Android)
+### 4.2 Manual Loop Style (Desktop + Android)
 
-Alternativ zu `engine.run` kann der Loop direkt in AIML geschrieben werden.
-Auf Desktop und Android äquivalent zu `engine.run`. **Nicht empfohlen für Browser**
-(ohne Asyncify-Transformation schlägt das Rendering fehl).
+Alternative to `engine.run`, the loop can be written directly in AIML.
+Equivalent to `engine.run` on desktop and Android. **Not recommended for browser**
+(rendering will fail without Asyncify transformation).
 
 ```aiml
 - while:
@@ -112,48 +112,48 @@ Auf Desktop und Android äquivalent zu `engine.run`. **Nicht empfohlen für Brow
       - call: [engine.swap, win]
 ```
 
-| Aufruf | Rückgabe | Beschreibung |
-|--------|----------|--------------|
-| `engine.running(win: window_handle)` | `bool` | `false` wenn Fenster geschlossen oder `engine.quit` aufgerufen |
-| `engine.swap(win: window_handle)` | — | SwapBuffers + PollEvents + Frame-Limiter |
-| `engine.quit(win: window_handle)` | — | Loop-Ende signalisieren (setzt `running` auf `false`) |
-| `engine.is_iconified(win: window_handle)` | `i32` | `1` wenn Fenster minimiert (GLFW_ICONIFIED), sonst `0`. Nutzbar für Idle-/Reduced-Work-Pfade in der Mainloop. Stub auf Emscripten/Android: immer `0`. |
-| `engine.is_focused(win: window_handle)` | `i32` | `1` wenn Fenster Input-Fokus hat (GLFW_FOCUSED), sonst `0`. Stub auf Emscripten/Android: immer `1`. |
-| `engine.is_visible(win: window_handle)` | `i32` | `1` wenn Fenster sichtbar (GLFW_VISIBLE), sonst `0`. Stub auf Emscripten/Android: immer `1`. |
+| Call | Return | Description |
+|------|--------|-------------|
+| `engine.running(win: window_handle)` | `bool` | `false` when window is closed or `engine.quit` was called |
+| `engine.swap(win: window_handle)` | — | SwapBuffers + PollEvents + frame limiter |
+| `engine.quit(win: window_handle)` | — | Signal loop end (sets `running` to `false`) |
+| `engine.is_iconified(win: window_handle)` | `i32` | `1` if window is minimized (GLFW_ICONIFIED), else `0`. Usable for idle/reduced-work paths in the main loop. Stub on Emscripten/Android: always `0`. |
+| `engine.is_focused(win: window_handle)` | `i32` | `1` if window has input focus (GLFW_FOCUSED), else `0`. Stub on Emscripten/Android: always `1`. |
+| `engine.is_visible(win: window_handle)` | `i32` | `1` if window is visible (GLFW_VISIBLE), else `0`. Stub on Emscripten/Android: always `1`. |
 
-### 4.3 Frame-Timing
+### 4.3 Frame Timing
 
-| Aufruf | Rückgabe | Beschreibung |
-|--------|----------|--------------|
-| `engine.dt()` | `f32` | Delta-Time in Sekunden seit letztem Frame; beim ersten Frame `0.016` |
-| `engine.time()` | `f64` | Verstrichene Zeit in Sekunden seit Programmstart |
-| `engine.fps()` | `f32` | Durchschnittliche FPS der letzten 60 Frames |
-| `engine.frame()` | `i64` | Gesamt-Frame-Zähler seit Start (beginnt bei 0) |
-| `engine.target_fps(fps: i32)` | — | Frame-Rate-Limit setzen; `0` = unbegrenzt |
+| Call | Return | Description |
+|------|--------|-------------|
+| `engine.dt()` | `f32` | Delta time in seconds since last frame; `0.016` on first frame |
+| `engine.time()` | `f64` | Elapsed time in seconds since program start |
+| `engine.fps()` | `f32` | Average FPS over the last 60 frames |
+| `engine.frame()` | `i64` | Total frame counter since start (begins at 0) |
+| `engine.target_fps(fps: i32)` | — | Set frame rate limit; `0` = unlimited |
 
-`engine.dt()` ist geclampt auf maximal `0.1` Sekunden — verhindert Sprünge nach
-Lags oder Debugger-Pausen.
+`engine.dt()` is clamped to a maximum of `0.1` seconds — prevents jumps after
+lags or debugger pauses.
 
 ---
 
-## 5. Plattform-Informationen
+## 5. Platform Information
 
-| Aufruf | Rückgabe | Beschreibung |
-|--------|----------|--------------|
+| Call | Return | Description |
+|------|--------|-------------|
 | `engine.platform()` | `string` | `"desktop"`, `"web"`, `"android"` |
-| `engine.screen_size()` | `ivec2` | Physische Bildschirmauflösung in Pixel |
-| `engine.dpi()` | `f32` | Display-Skalierungsfaktor (1.0 = normal, 2.0 = HiDPI/Retina) |
-| `engine.is_mobile()` | `bool` | `true` auf Android; Shorthand für Touch-Optimierungen |
-| `engine.is_web()` | `bool` | `true` im Browser |
+| `engine.screen_size()` | `ivec2` | Physical screen resolution in pixels |
+| `engine.dpi()` | `f32` | Display scaling factor (1.0 = normal, 2.0 = HiDPI/Retina) |
+| `engine.is_mobile()` | `bool` | `true` on Android; shorthand for touch optimizations |
+| `engine.is_web()` | `bool` | `true` in browser |
 
 ---
 
-## 6. Vollständiges Beispiel
+## 6. Complete Example
 
-Dieser Code läuft **unverändert** auf Desktop, Browser und Android:
+This code runs **unchanged** on desktop, browser, and Android:
 
 ```aiml
-# ── Funktionen definieren ─────────────────────────────────────────────────────
+# ── Define functions ──────────────────────────────────────────────────────────
 
 - def:
     name: update
@@ -176,10 +176,10 @@ Dieser Code läuft **unverändert** auf Desktop, Browser und Android:
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
-# engine.create_window ersetzt den GLFW extern-Block vollständig
+# engine.create_window fully replaces the GLFW extern block
 - decl: [win, window_handle, { call: [engine.create_window, 1280, 720, "My Game"] }]
 
-# input.init nimmt jetzt window_handle statt rohem ptr
+# input.init now takes window_handle instead of raw ptr
 - call: [input.init, win]
 - call: [input.map_axis,   "forward", "W",  1.0]
 - call: [input.map_axis,   "forward", "S", -1.0]
@@ -190,48 +190,48 @@ Dieser Code läuft **unverändert** auf Desktop, Browser und Android:
 
 - call: [engine.target_fps, 60]
 
-# engine.run ist der Cross-Platform-Einstiegspunkt für den Game-Loop
+# engine.run is the cross-platform entry point for the game loop
 - call: [engine.run, win, update, render]
 
-# Wird nach engine.run erreicht wenn Fenster geschlossen wird
+# Reached after engine.run when window is closed
 - call: [engine.destroy_window, win]
 ```
 
 ---
 
-## 7. Plattform-spezifisches Verhalten
+## 7. Platform-Specific Behavior
 
 ### 7.1 Browser (WebAssembly)
 
-- `engine.run` nutzt intern `emscripten_set_main_loop_arg` — der Browser-Event-Loop
-  läuft weiter, Animationen und JS-Events bleiben funktional
-- **Asyncify**: der WASM-Output wird mit Asyncify-Transformation kompiliert, sodass
-  der manuelle `while:`-Stil ebenfalls im Browser funktioniert (transparente
-  Coroutinen-Transformation durch den Emscripten-Linker)
-- Fenstergröße = Canvas-Größe; `engine.screen_size()` = `window.innerWidth/Height`
-- VSync via `requestAnimationFrame` (immer aktiv, `engine.target_fps` ignoriert)
-- Dateisystem: virtuelles FS (Emscripten), Assets müssen vorher gepackt werden
+- `engine.run` internally uses `emscripten_set_main_loop_arg` — the browser event loop
+  keeps running, animations and JS events remain functional
+- **Asyncify**: the WASM output is compiled with Asyncify transformation, so the
+  manual `while:` style also works in the browser (transparent coroutine
+  transformation by the Emscripten linker)
+- Window size = canvas size; `engine.screen_size()` = `window.innerWidth/Height`
+- VSync via `requestAnimationFrame` (always active, `engine.target_fps` ignored)
+- Filesystem: virtual FS (Emscripten), assets must be packed beforehand
 
 ### 7.2 Android
 
-- `engine.create_window` wartet intern auf `APP_CMD_INIT_WINDOW` vom NDK
-- Orientation-Changes: `engine.window_size` gibt die jeweils aktuelle Größe zurück;
-  Viewport-Resize wird automatisch durch `engine.swap` behandelt
-- Back-Button → `engine.quit`-Event (fangbar über `input.has_event` / `"app_quit"`)
-- Touch-Input wird auf `input.mouse_*` gemappt (erster Touch = linke Maustaste);
-  Multi-Touch über separaten `touch`-Namespace (zukünftig)
+- `engine.create_window` internally waits for `APP_CMD_INIT_WINDOW` from NDK
+- Orientation changes: `engine.window_size` returns the current size at any time;
+  viewport resize is handled automatically by `engine.swap`
+- Back button → `engine.quit` event (catchable via `input.has_event` / `"app_quit"`)
+- Touch input is mapped to `input.mouse_*` (first touch = left mouse button);
+  multi-touch via separate `touch` namespace (future)
 
 ### 7.3 Desktop
 
-- GLFW 3.x; unterstützt Linux (X11 + Wayland), macOS, Windows
-- `engine.create_window` setzt OpenGL 3.3 Core Profile
+- GLFW 3.x; supports Linux (X11 + Wayland), macOS, Windows
+- `engine.create_window` sets OpenGL 3.3 Core Profile
 - `engine.set_vsync(true)` → `glfwSwapInterval(1)`
 
 ---
 
-## 8. Migration von raw GLFW
+## 8. Migration from Raw GLFW
 
-**Vorher** (plattform-spezifisch, nur Desktop):
+**Before** (platform-specific, desktop only):
 
 ```aiml
 - extern: "C"
@@ -244,12 +244,12 @@ Dieser Code läuft **unverändert** auf Desktop, Browser und Android:
     - def: { name: glfwTerminate,          args: [],                                                          return: void }
 
 - decl: [ok,  i32, { call: [glfwInit] }]
-- decl: [win, ptr, { call: [glfwCreateWindow, 800, 600, "Titel", null, null] }]
+- decl: [win, ptr, { call: [glfwCreateWindow, 800, 600, "Title", null, null] }]
 - call: [glfwMakeContextCurrent, win]
 - call: [gl.init]
 
 - while:
-    condition: { call: [engine.running, win] }   # win war ptr
+    condition: { call: [engine.running, win] }   # win was ptr
     body:
       - call: [render]
       - call: [glfwSwapBuffers, win]
@@ -258,24 +258,24 @@ Dieser Code läuft **unverändert** auf Desktop, Browser und Android:
 - call: [glfwTerminate]
 ```
 
-**Nachher** (cross-platform):
+**After** (cross-platform):
 
 ```aiml
-- decl: [win, window_handle, { call: [engine.create_window, 800, 600, "Titel"] }]
+- decl: [win, window_handle, { call: [engine.create_window, 800, 600, "Title"] }]
 - call: [engine.run, win, update, render]
 - call: [engine.destroy_window, win]
 ```
 
 ---
 
-## 9. Implementierungshinweise
+## 9. Implementation Notes
 
-### 9.1 `window_handle` intern
+### 9.1 `window_handle` Internals
 
 ```cpp
 struct AimlWindow {
 #if defined(__EMSCRIPTEN__)
-    // Canvas-Selektor als String, z.B. "#canvas"
+    // Canvas selector as string, e.g. "#canvas"
     char canvas_id[64];
 #elif defined(__ANDROID__)
     struct android_app* app;
@@ -293,25 +293,25 @@ struct AimlWindow {
 };
 ```
 
-### 9.2 Delta-Time-Berechnung
+### 9.2 Delta Time Calculation
 
 ```cpp
 double now = /* glfwGetTime() / emscripten_get_now() / clock_gettime() */;
 double raw_dt = now - win->last_time;
-win->dt = (float)fmin(raw_dt, 0.1);  // clamp bei 100ms
+win->dt = (float)fmin(raw_dt, 0.1);  // clamp at 100ms
 win->last_time = now;
 ```
 
-### 9.3 Frame-Limiter
+### 9.3 Frame Limiter
 
-Desktop: nach `render()` und `swap()` Restzeit via `time.sleep_ms` schlafen.
-Browser: `requestAnimationFrame` limitiert ohnehin auf Display-Refresh-Rate.
-Android: `ALooper_pollAll` mit Timeout.
+Desktop: after `render()` and `swap()`, sleep remaining time via `time.sleep_ms`.
+Browser: `requestAnimationFrame` already limits to display refresh rate.
+Android: `ALooper_pollAll` with timeout.
 
 ### 9.4 Asyncify (Browser)
 
-Der AIML-AOT-Compiler ruft beim Browser-Target den Emscripten-Linker mit
-`-s ASYNCIFY -s ASYNCIFY_IMPORTS=[engine_swap_internal]` auf.
-Dadurch kann `engine.swap` (das intern `emscripten_sleep(0)` aufruft) den
-WASM-Stack "einfrieren" und dem Browser-Event-Loop Rechenzeit geben —
-ohne Änderung am AIML-`while:`-Quellcode.
+The AIML AOT compiler invokes the Emscripten linker with
+`-s ASYNCIFY -s ASYNCIFY_IMPORTS=[engine_swap_internal]` for browser targets.
+This allows `engine.swap` (which internally calls `emscripten_sleep(0)`) to
+"freeze" the WASM stack and yield to the browser event loop —
+without any changes to the AIML `while:` source code.

@@ -1,49 +1,49 @@
-Du:
-wie kann man mit llvm einen map/dict typ implementieren?! Ich bekomme immer Speicherzugriffsfehler
+You:
+How can I implement a map/dict type with LLVM?! I keep getting memory access errors
 
 ChatGPT:
 
-Wenn du mit LLVM einen map/dict-Typ implementieren willst und Speicherzugriffsfehler bekommst, liegt das fast immer an einem dieser Punkte:
+If you want to implement a map/dict type with LLVM and are getting memory access errors, the cause is almost always one of these:
 
-    falsche Typen bei getelementptr
+    wrong types in getelementptr
 
-    Speicher nicht allokiert (nur Typ erzeugt, aber kein alloca/malloc)
+    memory not allocated (only the type created, but no alloca/malloc)
 
-    falsche Pointer-Level (i8* vs i8**)
+    wrong pointer level (i8* vs i8**)
 
-    Struct-Layout stimmt nicht mit Zugriffen überein
+    struct layout doesn't match the accesses
 
-    Lifetime-Problem (Stack-Objekt außerhalb seines Scopes benutzt)
+    lifetime problem (stack object used outside its scope)
 
-Grundsätzlich: LLVM hat keinen eingebauten map-Typ
+Fundamentally: LLVM has no built-in map type
 
-LLVM IR kennt nur:
+LLVM IR only knows:
 
-    primitive Typen (i32, i8, double, …)
+    primitive types (i32, i8, double, …)
 
-    Arrays
+    arrays
 
-    Structs
+    structs
 
-    Pointer
+    pointers
 
-Ein dict musst du also selbst als Datenstruktur modellieren, z. B.:
-Option 1: Hashmap mit Buckets
+You have to model a dict yourself as a data structure, e.g.:
+Option 1: Hashmap with buckets
 
-Beispiel-Struct in LLVM IR:
+Example struct in LLVM IR:
 
 %Entry = type { i8*, i32 }        ; key (string), value (int)
 %Bucket = type { %Entry*, i32 }   ; array of entries + count
 %Dict = type { %Bucket*, i32 }    ; buckets + bucket_count
 
-🔥 Häufigste Ursache für Segfaults
-❌ Fehler 1: Struct-Typ erzeugt, aber kein Speicher reserviert
+🔥 Most common cause of segfaults
+❌ Error 1: Struct type created, but no memory allocated
 
-Nur das hier reicht NICHT:
+Just this is NOT enough:
 
 StructType *dictType = StructType::create(context, "Dict");
 
-Du brauchst Speicher:
+You need memory:
 Stack:
 
 Value *dict = builder.CreateAlloca(dictType);
@@ -52,127 +52,122 @@ Heap:
 
 Value *dict = builder.CreateCall(mallocFunc, size);
 
-❌ Fehler 2: getelementptr falsch benutzt
+❌ Error 2: getelementptr used incorrectly
 
-Typischer Crash:
+Typical crash:
 
 builder.CreateStructGEP(dictType, dict, 1);
 
-Wenn dict kein Pointer auf dictType ist → Segfault.
+If dict is not a pointer to dictType → segfault.
 
-Richtig:
+Correct:
 
 Value *bucketPtr = builder.CreateStructGEP(dictType, dict, 0);
 
-Wichtig:
+Important:
 
-    Der erste Parameter muss exakt der Struct-Typ sein
+    The first parameter must be exactly the struct type
 
-    dict muss dictType* sein
+    dict must be dictType*
 
-❌ Fehler 3: Pointer-Level stimmt nicht
+❌ Error 3: Pointer level mismatch
 
-Wenn du z. B.:
+If you have e.g.:
 
 %Entry = type { i8*, i32 }
 
-Dann ist:
+Then:
 
-    %Entry* → Pointer auf Entry
+    %Entry* → pointer to Entry
 
-    %Entry** → Pointer auf Pointer auf Entry
+    %Entry** → pointer to pointer to Entry
 
-Viele Segfaults kommen von einem fehlenden load.
+Many segfaults come from a missing load.
 
-Falsch:
+Wrong:
 
-Value *entry = bucketPtr;   // bucketPtr ist Entry**
+Value *entry = bucketPtr;   // bucketPtr is Entry**
 builder.CreateStructGEP(entryType, entry, 1);  // CRASH
 
-Richtig:
+Correct:
 
 Value *entry = builder.CreateLoad(entryType->getPointerTo(), bucketPtr);
 
-Minimal funktionierende Map-Variante (einfach!)
+Minimal working map variant (simple!)
 
-Wenn du nur string -> int willst, mach erstmal etwas sehr Einfaches:
-Vereinfachte Struktur
+If you only want string -> int, start with something very simple:
+Simplified structure
 
 %Pair = type { i8*, i32 }
 %Dict = type { %Pair*, i32 }   ; array + size
 
-Ablauf:
+Process:
 
-    Dict allokieren
+    Allocate Dict
 
-    Array allokieren (malloc)
+    Allocate array (malloc)
 
-    Pointer ins Struct speichern
+    Store pointer in struct
 
-    Bei Insert: Index berechnen → GEP auf Array → Store
+    On insert: calculate index → GEP on array → Store
 
-Wichtiger Punkt: malloc richtig deklarieren
+Important point: declare malloc correctly
 
 declare i8* @malloc(i64)
 
-Und dann:
+And then:
 
 Value *size = ConstantInt::get(Type::getInt64Ty(context), 100);
 Value *mem = builder.CreateCall(mallocFunc, size);
 Value *typedMem = builder.CreateBitCast(mem, pairType->getPointerTo());
 
-Wenn du bitcast vergisst → Segfault.
-🔍 Debugging-Tipps
-1️⃣ LLVM IR ausgeben!
+If you forget the bitcast → segfault.
+🔍 Debugging tips
+1️⃣ Print the LLVM IR!
 
 module->print(llvm::errs(), nullptr);
 
-Dann prüfen:
+Then check:
 
-    Stimmen Pointer-Level?
+    Do pointer levels match?
 
-    Wird vor Zugriff wirklich alloca/malloc gemacht?
+    Is alloca/malloc really called before access?
 
-2️⃣ Mit AddressSanitizer kompilieren
+2️⃣ Compile with AddressSanitizer
 
-Wenn du JIT nutzt:
+If you use JIT:
 
-    mit -fsanitize=address
+    with -fsanitize=address
 
-3️⃣ Mit lli testen
+3️⃣ Test with lli
 
 lli test.ll
 
-🧠 Empfehlung
+🧠 Recommendation
 
-Wenn du nur eine funktionierende Map willst:
+If you just want a working map:
 
-👉 Implementiere die Map in C++
-👉 Kompiliere sie
-👉 Rufe sie aus LLVM auf
+👉 Implement the map in C++
+👉 Compile it
+👉 Call it from LLVM
 
-Beispiel:
+Example:
 
 extern "C" int dict_get(Dict*, const char*);
 
-Das spart dir massiv Debugging.
-Wenn du willst
+This saves you massive amounts of debugging.
+If you want
 
-Zeig mir:
+Show me:
 
-    deine Struct-Definition
+    your struct definition
 
-    deinen Insert-Code
+    your insert code
 
-    die LLVM IR
+    the LLVM IR
 
-    die exakte Fehlermeldung
+    the exact error message
 
-Dann sage ich dir genau, wo der Speicherfehler entsteht.
+Then I can tell you exactly where the memory error occurs.
 
-LLVM-Speicherfehler sind fast immer ein Pointer-Level-Problem.
-
-
-Wir verwenden Cookies
-
-Wir verwenden Cookies, um die ordnungsgemäße Funktion dieser Website sicherzustellen, die Nutzung unseres Dienstes nachzuvollziehen und unsere Marketingmaßnahmen zu unterstützen. Unter Cookies verwalten kannst du deine Einstellungen jederzeit ändern. Weitere Informationen findest du in unserer Cookie-Richtlinie.
+LLVM memory errors are almost always a pointer level problem.

@@ -9,10 +9,16 @@
 #include <unordered_set>
 #include <queue>
 #include <algorithm>
+#include <random>
+#include <climits>
 
 // ── embedding_lookup: 1 memcpy replaces dim × seek/read/push ──
 extern "C" void aiml_ai_embedding_lookup(const uint8_t* flat_data, int32_t token_id,
                                           int32_t dim, float* result) {
+    if (token_id < 0 || !flat_data || dim <= 0) {
+        std::memset(result, 0, (size_t)dim * sizeof(float));
+        return;
+    }
     const float* src = reinterpret_cast<const float*>(flat_data + (int64_t)token_id * dim * 4);
     std::memcpy(result, src, dim * sizeof(float));
 }
@@ -20,6 +26,7 @@ extern "C" void aiml_ai_embedding_lookup(const uint8_t* flat_data, int32_t token
 // ── embedding_update: pointer arithmetic replaces dim × seek/read/write ──
 extern "C" void aiml_ai_embedding_update(uint8_t* flat_data, int32_t token_id,
                                           const float* grad_data, float lr, int32_t dim) {
+    if (token_id < 0 || !flat_data || dim <= 0) return;
     float* base = reinterpret_cast<float*>(flat_data + (int64_t)token_id * dim * 4);
     for (int32_t d = 0; d < dim; d++)
         base[d] -= lr * grad_data[d];
@@ -110,10 +117,12 @@ extern "C" void aiml_ai_triplet_grad(const float* q, const float* pos, const flo
 struct AimlTensorView { float* data; int* shape; int ndim; int size; };
 
 extern "C" int32_t aiml_ai_sample_logits(void* tensor_ptr, float temperature, int32_t top_k) {
-    static bool seeded = false;
-    if (!seeded) { std::srand(static_cast<unsigned>(std::time(nullptr))); seeded = true; }
+    // Thread-local RNG — reproducible per-thread, no shared state
+    static thread_local std::mt19937 rng(std::random_device{}());
+    static thread_local std::uniform_real_distribution<float> dist(0.0f, 1.0f);
 
     auto* t = static_cast<AimlTensorView*>(tensor_ptr);
+    if (!t || !t->data) return 0;
     const float* logits = t->data;
     int32_t vocab_size = t->size;
     if (vocab_size <= 0) return 0;
@@ -125,6 +134,9 @@ extern "C" int32_t aiml_ai_sample_logits(void* tensor_ptr, float temperature, in
     std::partial_sort(indices.begin(), indices.begin() + top_k, indices.end(),
         [&](int32_t a, int32_t b) { return logits[a] > logits[b]; });
 
+    // Clamp temperature — must be positive; ≤0 collapses to argmax
+    if (temperature <= 0.0f) return indices[0];
+
     // Temperature-scaled softmax over top-k
     float max_val = logits[indices[0]];
     std::vector<float> probs(top_k);
@@ -133,10 +145,15 @@ extern "C" int32_t aiml_ai_sample_logits(void* tensor_ptr, float temperature, in
         probs[i] = std::exp((logits[indices[i]] - max_val) / temperature);
         sum += probs[i];
     }
-    for (int32_t i = 0; i < top_k; i++) probs[i] /= sum;
+    // Guard: NaN/Inf sum → argmax fallback
+    if (!std::isfinite(sum) || sum <= 0.0f) return indices[0];
+    for (int32_t i = 0; i < top_k; i++) {
+        probs[i] /= sum;
+        if (!std::isfinite(probs[i])) return indices[0];
+    }
 
-    // Weighted random sample
-    float r = (float)rand() / (float)RAND_MAX;
+    // Weighted random sample via thread-local mt19937
+    float r = dist(rng);
     float cumulative = 0.0f;
     for (int32_t i = 0; i < top_k; i++) {
         cumulative += probs[i];

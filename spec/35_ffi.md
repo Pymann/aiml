@@ -1,14 +1,14 @@
-# Kapitel 35 — FFI (Foreign Function Interface)
+# Chapter 35 — FFI (Foreign Function Interface)
 
-> **Leitgedanke:** AIML spricht C-ABI nativ. External C-Funktionen werden direkt
-> im `.aiml`-Code deklariert. Library-Abhängigkeiten gehören in `exodus.json` —
-> nicht in `.aiml`-Dateien.
+> **Core idea:** AIML speaks the C ABI natively. External C functions are declared directly
+> in `.aiml` code. Library dependencies belong in `exodus.json` —
+> not in `.aiml` files.
 
 ---
 
-## 1. Library-Abhängigkeiten — `exodus.json`
+## 1. Library Dependencies — `exodus.json`
 
-Externe Bibliotheken werden ausschließlich im Build-System konfiguriert:
+External libraries are configured exclusively in the build system:
 
 ```json
 {
@@ -19,11 +19,11 @@ Externe Bibliotheken werden ausschließlich im Build-System konfiguriert:
 }
 ```
 
-Es gibt **kein** `- config: link:` in `.aiml`-Dateien.
+There is **no** `- config: link:` in `.aiml` files.
 
 ---
 
-## 2. Externe Funktionen deklarieren — `extern: "C"`
+## 2. Declaring External Functions — `extern: "C"`
 
 ```aiml
 - extern: "C"
@@ -49,18 +49,18 @@ Es gibt **kein** `- config: link:` in `.aiml`-Dateien.
         return: void
 ```
 
-`extern: "C"` Blöcke können überall im Toplevel stehen, auch mehrfach.
-Im JIT-Modus werden die Symbole via `dlopen`/`dlsym` aufgelöst;
-im AOT-Modus übernimmt der Linker die Auflösung.
+`extern: "C"` blocks can appear anywhere at the top level, including multiple times.
+In JIT mode, symbols are resolved via `dlopen`/`dlsym`;
+in AOT mode, the linker handles resolution.
 
 ---
 
-## 3. Pointer-Typen
+## 3. Pointer Types
 
-| Typ | Beschreibung |
-|-----|--------------|
-| `ptr` | `void*` — opaker Pointer, keine Typ-Information |
-| `ptr<T>` | Typisierter Pointer auf AIML-Typ `T` (z.B. `ptr<i32>`, `ptr<vec3>`) |
+| Type | Description |
+|------|-------------|
+| `ptr` | `void*` — opaque pointer, no type information |
+| `ptr<T>` | Typed pointer to AIML type `T` (e.g. `ptr<i32>`, `ptr<vec3>`) |
 
 ```aiml
 - extern: "C"
@@ -80,12 +80,12 @@ im AOT-Modus übernimmt der Linker die Auflösung.
         args: [[dst, ptr], [src, ptr], [n, i64]]
         return: ptr
 
-# Verwendung
+# Usage
 - decl: [buf, ptr, { call: [malloc, 1024] }]
 - call: [free, buf]
 ```
 
-Typisierter Pointer — für C-Funktionen die auf konkrete Typen zeigen:
+Typed pointer — for C functions that point to concrete types:
 
 ```aiml
 - extern: "C"
@@ -96,32 +96,32 @@ Typisierter Pointer — für C-Funktionen die auf konkrete Typen zeigen:
         return: void
 
 - decl: [val, f32]
-- call: [glGetFloatv, 0x0BA6, &val]   # & = Adresse von val
+- call: [glGetFloatv, 0x0BA6, &val]   # & = address of val
 ```
 
 ---
 
-## 4. Structs — Opak vs. Layout-bekannt
+## 4. Structs — Opaque vs. Layout-Known
 
-### 4.1 Opake Handles (häufigster Fall)
+### 4.1 Opaque Handles (most common case)
 
-Viele C-Bibliotheken liefern opake Pointer (SDL_Window*, GLFWwindow*, ...).
-Diese werden als `ptr` behandelt:
+Many C libraries return opaque pointers (SDL_Window*, GLFWwindow*, ...).
+These are treated as `ptr`:
 
 ```aiml
-# SDL_Window* ist einfach ptr — kein struct-Layout nötig
+# SDL_Window* is simply ptr — no struct layout needed
 - decl: [win, ptr, { call: [SDL_CreateWindow, "Title", 0, 0, 800, 600, 4] }]
 - call: [SDL_DestroyWindow, win]
 ```
 
-### 4.2 Structs mit bekanntem Layout
+### 4.2 Structs with Known Layout
 
-Für Structs deren Felder man lesen/schreiben muss, wird ein AIML-`model` mit
-identischem Memory-Layout deklariert. Der `packed:`-Modifier stellt sicher,
-dass kein Padding eingefügt wird:
+For structs whose fields need to be read/written, an AIML `model` with
+identical memory layout is declared. The `packed:` modifier ensures
+that no padding is inserted:
 
 ```aiml
-# C-Seite:
+# C side:
 # typedef struct { float x, y, z; } Vertex;
 
 - model:
@@ -145,9 +145,9 @@ dass kein Padding eingefügt wird:
 
 ---
 
-## 5. Callback-Funktionen (Function Pointer)
+## 5. Callback Functions (Function Pointer)
 
-C-Bibliotheken die Callbacks erwarten, erhalten AIML-Funktionen als `fn`:
+C libraries that expect callbacks receive AIML functions as `fn`:
 
 ```aiml
 - extern: "C"
@@ -170,7 +170,7 @@ C-Bibliotheken die Callbacks erwarten, erhalten AIML-Funktionen als `fn`:
 
 ---
 
-## 6. Vollständiges Beispiel: SDL2 + OpenGL Fenster
+## 6. Complete Example: SDL2 + OpenGL Window
 
 **`exodus.json`:**
 ```json
@@ -214,18 +214,18 @@ C-Bibliotheken die Callbacks erwarten, erhalten AIML-Funktionen als `fn`:
 
 ## 7. JIT vs. AOT
 
-| Modus | Symbol-Auflösung |
-|-------|-----------------|
-| JIT | `dlopen(nullptr)` + `dlsym` für vorgelinkte Libs; `dlopen(path)` für dynamische |
-| AOT | Linker löst auf — `exodus.json` `linker.libraries` |
+| Mode | Symbol resolution |
+|------|-------------------|
+| JIT | `dlopen(nullptr)` + `dlsym` for pre-linked libs; `dlopen(path)` for dynamic |
+| AOT | Linker resolves — `exodus.json` `linker.libraries` |
 
-Für dynamisch geladene Bibliotheken zur Laufzeit (Plugin-System):
+For dynamically loaded libraries at runtime (plugin system):
 
 ```aiml
-# Laufzeit-Loading (JIT + AOT)
+# Runtime loading (JIT + AOT)
 - decl: [lib, ptr, { call: [sys.load_lib, "/usr/lib/libSDL2.so"] }]
 - decl: [fn_ptr, ptr, { call: [sys.load_sym, lib, "SDL_Init"] }]
 ```
 
-`sys.load_lib` / `sys.load_sym` sind Wrapper um `dlopen`/`dlsym` —
-definiert in Kapitel 23 (sys-Namespace).
+`sys.load_lib` / `sys.load_sym` are wrappers around `dlopen`/`dlsym` —
+defined in Chapter 23 (sys namespace).

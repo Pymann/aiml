@@ -57,6 +57,18 @@ bool PrefabBuilder::OnScalar(const std::string& value, const std::string& tag) {
             else if (childKey == "height")    currentChild.height = strtof(value.c_str(), nullptr);
             else if (childKey == "font_size") currentChild.font_size = strtof(value.c_str(), nullptr);
             else if (childKey == "color")     currentChild.color = parse_color(value);
+            /* UI-widget style fields */
+            else if (childKey == "bg_color")      currentChild.bg_color = parse_color(value);
+            else if (childKey == "border_color")  currentChild.border_color = parse_color(value);
+            else if (childKey == "border_width")  currentChild.border_width = strtof(value.c_str(), nullptr);
+            else if (childKey == "corner_radius") currentChild.corner_radius = strtof(value.c_str(), nullptr);
+            else if (childKey == "hover_color")   currentChild.hover_color = parse_color(value);
+            else if (childKey == "active_color")  currentChild.active_color = parse_color(value);
+            else if (childKey == "label")         currentChild.label = value;
+            else if (childKey == "secret")        currentChild.is_secret = (value == "true" || value == "1");
+            else if (childKey == "on_click")      currentChild.on_click = value;
+            else if (childKey == "on_change")     currentChild.on_change = value;
+            else if (childKey == "material")      currentChild.material = value;
             childExpectingKey = true;
         }
         return true;

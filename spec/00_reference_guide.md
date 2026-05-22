@@ -101,6 +101,7 @@ This file is the entry point for the `aiml/spec` directory.
 - [43_1_gltf.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/43_1_gltf.md)
 - [43_2_graphics.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/43_2_graphics.md)
 - [43_3_vulkan_opengl_explained.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/43_3_vulkan_opengl_explained.md)
+- [43_4_scientific_visualization.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/43_4_scientific_visualization.md)
 - [44_0_input.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/44_0_input.md)
 - [44_1_engine.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/44_1_engine.md)
 - [44_2_audio.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/44_2_audio.md)

@@ -212,6 +212,12 @@ namespace AIML {
     llvm::IRBuilder<>& builder;
     std::unique_ptr<AIML::IRGenerator> ir_gen;
 
+    // Helper: target's size_t-equivalent int type. i64 on x86_64, i32 on wasm32.
+    // Use for libc-call args/returns (strlen, malloc, memcpy size, …) so the
+    // call signature matches the target's libc.
+    llvm::Type*  getSizeType()              { return builder.getIntNTy(module.getDataLayout().getPointerSizeInBits()); }
+    llvm::Value* getSizeConst(uint64_t v)   { return llvm::ConstantInt::get(getSizeType(), v); }
+
     // Helper: alloca in function entry block (prevents stack growth in loops)
     llvm::AllocaInst* createEntryAlloca(llvm::Type* ty, const std::string& name = "") {
         llvm::Function* fn = builder.GetInsertBlock()->getParent();
@@ -240,6 +246,22 @@ namespace AIML {
     std::map<std::string, std::map<std::string, int>> enums; // Enum Registry
     std::map<std::string, std::string> enumSources;          // enum name → YAML source (for sys.bundle)
     std::map<std::string, std::string> interfaceSources;     // interface name → YAML source (for sys.bundle)
+
+    // Interface Registry — name → ordered method signatures.  Used for:
+    //   1. resolving ptr<Interface> as a fat-pointer type (obj_ptr + vtbl_ptr)
+    //   2. vtable slot lookup at method-call sites
+    //   3. vtable generation for classes that implement interfaces
+    struct InterfaceMethod {
+        std::string name;
+        std::string returnType;
+        std::vector<std::pair<std::string, std::string>> args; // [argName, argType]
+    };
+    struct InterfaceInfo {
+        std::string name;
+        std::vector<InterfaceMethod> methods;        // ordered, slot = index
+        llvm::StructType* fatPtrType = nullptr;      // {i8* obj, i8* vtbl}, cached
+    };
+    std::map<std::string, InterfaceInfo> interfaces;
 
     // Namespace & Import State
     std::string currentNamespace;
@@ -317,6 +339,17 @@ namespace AIML {
     bool        dbOpenPersist      = false;
     bool        dbOpenColumnLayout = false;
     llvm::Value* dbOpenBasePathVal = nullptr;  // null = default "./aiondb/"
+
+    // Tracking for Kv.get / Kv.get_copy dispatch so visitDeclStmt can enforce
+    // the correct decl-type ↔ method pairing:
+    //   decl: [p, T,      kv.get_copy(k)]  → deep-copy at decl site
+    //   decl: [p, ptr<T>, kv.get(k)]       → zero-copy view
+    //   decl: [p, T,      kv.get(k)]       → ERROR (shallow memcpy with heap-shared pointers)
+    //   decl: [p, ptr<T>, kv.get_copy(k)]  → ERROR (deep-copy wasted on a view)
+    // See doc/issue/kv_get_mutate_set_same_key_crash.md.
+    bool        kvGetCopy           = false;   // last dispatched Kv method was get_copy
+    bool        kvGetCalled         = false;   // last dispatched Kv method was get or get_copy
+    std::string kvGetValueType;                // V from Kv<K:V> for diagnostic messages
 
     // Set by visitCall for db.query option bags:
     // {where: fn_name}, {order_by: "field"}, {dir: "asc"/"desc"}, {limit: N}, {offset: N}
@@ -405,8 +438,9 @@ namespace AIML {
             return classes[typeName].type;
         }
         // Try resolving with current namespace (e.g. "Point" -> "my.lib.Point")
+        // Skip builtins here too — they have explicit type definitions below.
         std::string qualified = qualify(typeName);
-        if (classes.count(qualified) && classes[qualified].type != nullptr) {
+        if (classes.count(qualified) && classes[qualified].type != nullptr && !classes[qualified].isBuiltin) {
             if (!bundleTrackingTarget.empty() && functions.count(bundleTrackingTarget))
                 functions[bundleTrackingTarget].referencedTypes.insert(qualified);
             return classes[qualified].type;
@@ -417,7 +451,20 @@ namespace AIML {
             std::string innerType;
             if (typeName.rfind("ptr<", 0) == 0) innerType = typeName.substr(4, typeName.length() - 5);
             else innerType = typeName.substr(4, typeName.length() - 5); // ref< is also 4 chars
-            
+
+            // ptr<Interface> = fat pointer { i8* obj, i8* vtbl }.  Resolved via
+            // ctx.interfaces — the interface must be registered.  ref<Interface>
+            // is NOT supported (use ptr<Interface> for polymorphism).
+            auto ifaceIt = interfaces.find(innerType);
+            if (ifaceIt != interfaces.end() && typeName.rfind("ptr<", 0) == 0) {
+                if (!ifaceIt->second.fatPtrType) {
+                    auto* i8p = llvm::PointerType::get(context, 0);
+                    ifaceIt->second.fatPtrType = llvm::StructType::create(
+                        context, {i8p, i8p}, "AimlFatPtr_" + innerType);
+                }
+                return ifaceIt->second.fatPtrType;
+            }
+
             llvm::Type* elemType = getLLVMType(innerType);
             if (!elemType) return nullptr;
             return llvm::PointerType::get(context, 0); // Opaque pointer
@@ -474,6 +521,11 @@ namespace AIML {
              } else {
                  LOG_ERROR(fmtLoc() + "Separator ':' not found in map type content: " + content);
              }
+        }
+
+        // Check for dyn_array<T> — heap-allocated, runtime-sized → stored as i8*
+        if (typeName.rfind("dyn_array<", 0) == 0 && typeName.back() == '>') {
+            return llvm::Type::getInt8Ty(context)->getPointerTo();
         }
 
         // Check for fixed-size array type: "array<T:N>" or "array<T:N:M>" etc.
@@ -595,6 +647,10 @@ namespace AIML {
         
         // fn<params:ret> — function pointer stored as opaque i8*
         if (typeName.rfind("fn<", 0) == 0 && typeName.back() == '>')
+            return llvm::Type::getInt8Ty(context)->getPointerTo();
+
+        // iterator<T> — opaque heap pointer to AimlIterator
+        if (typeName.rfind("iterator<", 0) == 0 && typeName.back() == '>')
             return llvm::Type::getInt8Ty(context)->getPointerTo();
 
         // buffer<T> — template param is ignored, all buffers share the same struct layout

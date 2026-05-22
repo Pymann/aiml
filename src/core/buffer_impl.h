@@ -16,11 +16,14 @@ namespace BufferImpl {
         ctx.builder.CreateStore(zero, ctx.builder.CreateStructGEP(ctx.getLLVMType("buffer"), bufPtr, 2)); // read
         ctx.builder.CreateStore(zero, ctx.builder.CreateStructGEP(ctx.getLLVMType("buffer"), bufPtr, 3)); // write
         
-        // Malloc data
-        llvm::Function* mallocFunc = ctx.getFunction("malloc", ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt64Ty()});
-        llvm::Value* size64 = ctx.builder.CreateZExt(sizeVal, ctx.builder.getInt64Ty());
-        llvm::Value* dataPtr = ctx.builder.CreateCall(mallocFunc, {size64});
-        
+        // Malloc data — use target's size_t (i64 on x86_64, i32 on wasm32) so
+        // the call signature matches the target libc. ZExtOrTrunc handles both
+        // widths from sizeVal (i32).
+        llvm::Type* sz = ctx.getSizeType();
+        llvm::Function* mallocFunc = ctx.getFunction("malloc", ctx.builder.getInt8Ty()->getPointerTo(), {sz});
+        llvm::Value* sizeArg = ctx.builder.CreateZExtOrTrunc(sizeVal, sz);
+        llvm::Value* dataPtr = ctx.builder.CreateCall(mallocFunc, {sizeArg});
+
         ctx.builder.CreateStore(dataPtr, ctx.builder.CreateStructGEP(ctx.getLLVMType("buffer"), bufPtr, 4));
     }
 

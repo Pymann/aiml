@@ -1,43 +1,43 @@
-# Trampoline-Patching — In-Place Hot-Reload ohne Call-Site-Änderung
+# Trampoline Patching — In-Place Hot-Reload Without Call-Site Changes
 
-## 1. Übersicht
+## 1. Overview
 
-Trampoline-Patching überschreibt die ersten Bytes einer bestehenden Funktion mit
-einem Sprung (`jmp`) zu neu kompiliertem Code. Alle `call old_func`-Instruktionen
-bleiben unverändert — sie landen beim nächsten Aufruf im neuen Code, weil der
-Eintrittspunkt umgeleitet wird.
+Trampoline patching overwrites the first bytes of an existing function with
+a jump (`jmp`) to newly compiled code. All `call old_func` instructions
+remain unchanged — on the next call they land in the new code, because the
+entry point has been redirected.
 
 ```
-Vor dem Patch:                        Nach dem Patch:
-0x401000  push rbp      ← Eintritt    0x401000  jmp 0x7f3c110000  ← 5 Bytes
-0x401001  mov rbp, rsp               0x401005  (überschrieben)
-0x401003  ...                        0x401007  ...   (wird nie erreicht)
+Before patch:                         After patch:
+0x401000  push rbp      <- entry      0x401000  jmp 0x7f3c110000  <- 5 bytes
+0x401001  mov rbp, rsp               0x401005  (overwritten)
+0x401003  ...                        0x401007  ...   (never reached)
 0x40102F  ret                        0x40102F  ret
 
-                                      0x7f3c110000:  ← neue Funktion im JIT-Buffer
+                                      0x7f3c110000:  <- new function in JIT buffer
                                         push rbp
                                         mov rbp, rsp
                                         ...
                                         ret
 ```
 
-**Kein Compiler-Umbau nötig** — direkte Call-Instruktionen bleiben direkt.
-Der Overhead im ungepatchten Zustand ist null.
+**No compiler rework needed** — direct call instructions remain direct.
+Overhead in the unpatched state is zero.
 
 ---
 
-## 2. Sprung-Stubs
+## 2. Jump Stubs
 
-### 2.1 Relativer 5-Byte-Sprung (Standard)
+### 2.1 Relative 5-Byte Jump (Standard)
 
 ```
 E9 <rel32>
 ```
 
-`rel32 = new_addr - (old_func + 5)` — Offset relativ zum Ende des Sprungbefehls.
+`rel32 = new_addr - (old_func + 5)` — offset relative to the end of the jump instruction.
 
-Reichweite: ±2 GB vom Sprungbefehl. Ausreichend, wenn der JIT-Buffer in der Nähe
-des Binaries allokiert wird (Abschnitt 4).
+Range: ±2 GB from the jump instruction. Sufficient when the JIT buffer is allocated
+near the binary (Section 4).
 
 ```c
 int32_t rel32 = (int32_t)((intptr_t)new_addr - ((intptr_t)old_func + 5));
@@ -50,14 +50,14 @@ uint8_t stub[5] = {
 };
 ```
 
-### 2.2 Absoluter 14-Byte-Sprung (Fallback)
+### 2.2 Absolute 14-Byte Jump (Fallback)
 
-Wenn `|new_addr - old_func| > 2 GB` (z.B. bei sehr großen Binaries oder weit
-entfernten mmap-Regionen):
+When `|new_addr - old_func| > 2 GB` (e.g. for very large binaries or
+distant mmap regions):
 
 ```
-FF 25 00 00 00 00   ; jmp [rip+0]  — liest 8 Bytes direkt nach dem Befehl
-<8 Bytes absoluter Zieladresse, little-endian>
+FF 25 00 00 00 00   ; jmp [rip+0]  — reads 8 bytes directly after the instruction
+<8 bytes absolute target address, little-endian>
 ```
 
 ```c
@@ -75,56 +75,56 @@ uint8_t stub[14] = {
 };
 ```
 
-Voraussetzung: die alte Funktion hat mindestens 14 Bytes. Praktisch immer gegeben
-(Funktions-Prologue + erster Befehl = mind. 3–7 Bytes; mit NOP-Padding ≥ 14).
+Prerequisite: the old function has at least 14 bytes. In practice always true
+(function prologue + first instruction = at least 3–7 bytes; with NOP padding >= 14).
 
 ---
 
-## 3. Code-Seiten beschreibbar machen (mprotect)
+## 3. Making Code Pages Writable (mprotect)
 
-Maschinencode liegt in `.text`-Seiten mit `r-x` (Read + Execute, kein Write).
-Vor dem Patchen muss die betroffene Seite temporär schreibbar gemacht werden:
+Machine code resides in `.text` pages with `r-x` (Read + Execute, no Write).
+Before patching, the affected page must be temporarily made writable:
 
 ```c
 #include <sys/mman.h>
 #include <unistd.h>
 
 void patch_function(void* old_func, const uint8_t* stub, size_t stub_len) {
-    long   page_size = sysconf(_SC_PAGESIZE);              // typisch 4096
+    long   page_size = sysconf(_SC_PAGESIZE);              // typically 4096
     void*  page      = (void*)((uintptr_t)old_func & ~(page_size - 1));
 
-    // 1. Schreibbar machen
+    // 1. Make writable
     mprotect(page, page_size, PROT_READ | PROT_WRITE | PROT_EXEC);
 
-    // 2. Stub schreiben
+    // 2. Write stub
     memcpy(old_func, stub, stub_len);
 
-    // 3. Schutz wiederherstellen
+    // 3. Restore protection
     mprotect(page, page_size, PROT_READ | PROT_EXEC);
 
-    // 4. Instruction-Cache invalidieren (x86-64: Speicher-Barrier genügt)
+    // 4. Invalidate instruction cache (x86-64: memory barrier is sufficient)
     __builtin___clear_cache(old_func, (char*)old_func + stub_len);
 }
 ```
 
-**PROT_WRITE + PROT_EXEC gleichzeitig** ist auf modernen Systemen mit W^X-Policy
-(z.B. SELinux, OpenBSD) möglicherweise verboten. Sichere Alternative:
-Write → `mprotect(PROT_READ|PROT_WRITE)`, dann `mprotect(PROT_READ|PROT_EXEC)`.
-Die kurze Zwischenphase ohne Execute ist auf Single-Thread unkritisch.
+**PROT_WRITE + PROT_EXEC simultaneously** may be forbidden on modern systems
+with a W^X policy (e.g. SELinux, OpenBSD). Safe alternative:
+Write -> `mprotect(PROT_READ|PROT_WRITE)`, then `mprotect(PROT_READ|PROT_EXEC)`.
+The brief intermediate phase without Execute is non-critical on a single thread.
 
 ---
 
-## 4. JIT-Buffer-Allokation
+## 4. JIT Buffer Allocation
 
-Neuer Code muss in einem ausführbaren Speicherbereich liegen. Für den ±2-GB-Bereich
-(5-Byte-Sprung) sollte der Buffer **nah am Binary** allokiert werden:
+New code must reside in an executable memory region. For the ±2 GB range
+(5-byte jump), the buffer should be allocated **near the binary**:
 
 ```c
-// mmap mit Adress-Hint nah am Binary:
+// mmap with address hint near the binary:
 void* alloc_near(void* hint, size_t size) {
-    // Adresse des Binaries als Hint → Kernel versucht, nahe zu allokieren
+    // Binary address as hint -> kernel tries to allocate nearby
     void* buf = mmap(
-        (void*)((uintptr_t)hint & ~0xFFFFF),  // 1 MB unterhalb als Hint
+        (void*)((uintptr_t)hint & ~0xFFFFF),  // 1 MB below as hint
         size,
         PROT_READ | PROT_WRITE | PROT_EXEC,
         MAP_PRIVATE | MAP_ANONYMOUS,
@@ -135,16 +135,16 @@ void* alloc_near(void* hint, size_t size) {
 }
 ```
 
-Für AIML: ein statischer JIT-Buffer (z.B. 4 MB) beim ersten Hot-Reload-Aufruf
-allokiert, danach sequentiell befüllt (Bump-Allocator). Alte Versionen bleiben
-im Buffer (kein Free — bis `sys.free_version` aufgerufen wird, Abschnitt 7).
+For AIML: a static JIT buffer (e.g. 4 MB) allocated on the first hot-reload call,
+then filled sequentially (bump allocator). Old versions remain in the buffer
+(no free — until `sys.free_version` is called, Section 7).
 
 ---
 
-## 5. Variante: Pre-Padded Buffers
+## 5. Variant: Pre-Padded Buffers
 
-Wie in `38_hot_reload.md` beschrieben: der AOT-Compiler emittiert jede Funktion
-mit NOP-Padding bis zu einer Mindestgröße (z.B. 64 oder 256 Bytes):
+As described in `38_hot_reload.md`: the AOT compiler emits each function
+with NOP padding up to a minimum size (e.g. 64 or 256 bytes):
 
 ```asm
 worker_task:
@@ -152,178 +152,178 @@ worker_task:
     mov rbp, rsp
     ...
     ret
-    nop; nop; nop; ...    ← Padding bis 64 Bytes
+    nop; nop; nop; ...    <- padding to 64 bytes
 .Lworker_task_end:
 ```
 
-**Vorteil**: Neuer Code ≤ Padding-Größe → direktes In-Place-Überschreiben, kein
-JIT-Buffer, kein externer Zeiger nötig.
+**Advantage**: New code <= padding size -> direct in-place overwrite, no
+JIT buffer, no external pointer needed.
 
-**Nachteil**:
-- Padding-Größe ist willkürlich; Funktionen wachsen und brauchen trotzdem Trampoline
-- Binary wird größer (jede Funktion mindestens N Bytes)
-- Kein echter Gewinn gegenüber reinem Trampoline, der immer funktioniert
+**Disadvantage**:
+- Padding size is arbitrary; functions grow and still need trampolines
+- Binary becomes larger (every function at least N bytes)
+- No real gain over pure trampolines, which always work
 
-**Empfehlung**: Padding nur für die ersten 14 Bytes (genug für den absoluten Sprung),
-nicht für den gesamten Funktionskörper. Damit ist der Trampoline-Stub immer
-einschreibbar, ohne die Funktion selbst zu zerstören.
-
----
-
-## 6. Backup des alten Codes
-
-Damit laufende Threads den alten Code sicher beenden können:
-
-```
-Vor dem Patch:
-  1. Neuen Code in JIT-Buffer kompilieren (Zieladresse bekannt)
-  2. Alten Code (erste N Bytes) in separaten Puffer kopieren (Backup)
-     → laufende Threads, die gerade im Prologue sind, lesen aus dem Original;
-        nach dem Patch springen sie zum neuen Code
-  3. Stub schreiben (5 oder 14 Bytes)
-```
-
-Das Backup wird für `sys.free_version` benötigt: erst wenn sichergestellt ist,
-dass kein Thread mehr im alten Code ist, darf der Backup-Buffer freigegeben werden.
-
-Für Single-Thread-AIML-Programme ist kein Backup nötig.
+**Recommendation**: Padding only for the first 14 bytes (enough for the absolute jump),
+not for the entire function body. This ensures the trampoline stub is always
+writable without destroying the function itself.
 
 ---
 
-## 7. Speicher-Rückgewinnung (`sys.free_version`)
+## 6. Backup of Old Code
+
+So that running threads can safely finish executing the old code:
+
+```
+Before patching:
+  1. Compile new code into JIT buffer (target address known)
+  2. Copy old code (first N bytes) to a separate buffer (backup)
+     -> running threads currently in the prologue read from the original;
+        after the patch they jump to the new code
+  3. Write stub (5 or 14 bytes)
+```
+
+The backup is needed for `sys.free_version`: only once it is guaranteed
+that no thread is still executing the old code may the backup buffer be freed.
+
+For single-threaded AIML programs no backup is needed.
+
+---
+
+## 7. Memory Reclamation (`sys.free_version`)
 
 ```aiml
-# Alte Version von worker_task freigeben (Version 1):
+# Free old version of worker_task (version 1):
 - call: [sys.free_version, "worker_task", 1]
 ```
 
 In `exec_impl.cpp` / Runtime:
-- JIT-Buffer-Bereich der alten Version als frei markieren
-- Backup-Puffer freigeben
-- `ctx.functions["worker_task"].old_versions` bereinigen
+- Mark JIT buffer region of the old version as free
+- Release backup buffer
+- Clean up `ctx.functions["worker_task"].old_versions`
 
-**Sicherheit**: Nur aufrufen, wenn garantiert kein Thread mehr die alte Version
-ausführt (Quiescence-Point, z.B. nach Barrier oder Join).
+**Safety**: Only call when it is guaranteed that no thread is still executing
+the old version (quiescence point, e.g. after barrier or join).
 
 ---
 
-## 8. Atomizität
+## 8. Atomicity
 
-### Das Problem
+### The Problem
 
-Ein 5-Byte-Write ist **nicht atomar**:
-
-```
-Thread A: liest Byte 0–3 der Instruktion (altes push rbp)
-Thread B: schreibt Bytes 0–4 (E9 xx xx xx xx)
-Thread A: liest Byte 4 — liest bereits neues Byte → ungültige Instruktion
-```
-
-### Lösung 1: Single-Thread (einfachste Lösung)
-
-Für AIML-Programme ohne Parallelität: kein Problem. `sys.exec` wird zwischen
-Threads koordiniert (Channel-Sync), nicht während einer Funktion aufgerufen.
-
-### Lösung 2: 2-Byte-Patch mit vorbereiteter Funktion
-
-Microsoft Windows Hot-Patching nutzt einen 2-Byte-Sprung (`EB <rel8>`, Reichweite
-±127 Bytes) als atomischen ersten Schritt zu einem Trampoline im NOP-Padding:
+A 5-byte write is **not atomic**:
 
 ```
-AOT-emittierte Funktion (vorbereitetes Layout):
-  0x401000: EB 09            ; jmp +9 (zur 14-Byte-Stub-Region)  ← 2 Bytes atomar patchbar
-  0x401002: nop nop nop nop  ; 4 Bytes Padding
-  0x401006: nop nop nop nop  ; 4 Bytes Padding (14-Byte-Stub passt ab hier)
-  0x40100E: push rbp          ; eigentlicher Funktionskörper
+Thread A: reads bytes 0-3 of the instruction (old push rbp)
+Thread B: writes bytes 0-4 (E9 xx xx xx xx)
+Thread A: reads byte 4 — reads already new byte -> invalid instruction
+```
+
+### Solution 1: Single-Thread (simplest solution)
+
+For AIML programs without parallelism: no problem. `sys.exec` is coordinated
+between threads (channel sync), not called during a function.
+
+### Solution 2: 2-Byte Patch with Prepared Function
+
+Microsoft Windows hot-patching uses a 2-byte jump (`EB <rel8>`, range
+±127 bytes) as an atomic first step to a trampoline in the NOP padding:
+
+```
+AOT-emitted function (prepared layout):
+  0x401000: EB 09            ; jmp +9 (to the 14-byte stub region)  <- 2 bytes atomically patchable
+  0x401002: nop nop nop nop  ; 4 bytes padding
+  0x401006: nop nop nop nop  ; 4 bytes padding (14-byte stub fits from here)
+  0x40100E: push rbp          ; actual function body
   ...
 
-Patch-Prozess:
-  1. Absoluten 14-Byte-Stub in 0x401002–0x40100F schreiben (harmlos — nie erreicht)
-  2. 2-Byte `EB 09` atomar auf `EB 00` (oder entsprechendes Offset) umschreiben
-     → jetzt springt Funktion zum Stub
+Patch process:
+  1. Write absolute 14-byte stub into 0x401002-0x40100F (harmless — never reached)
+  2. Atomically rewrite 2-byte `EB 09` to `EB 00` (or corresponding offset)
+     -> now the function jumps to the stub
 ```
 
-Ein 16-Bit-Write (`mov word ptr [addr], val`) ist auf x86-64 atomar wenn 2-Byte-aligned.
+A 16-bit write (`mov word ptr [addr], val`) is atomic on x86-64 when 2-byte aligned.
 
-### Lösung 3: Thread-Suspend (maximale Sicherheit)
+### Solution 3: Thread Suspend (maximum safety)
 
 ```c
-// Alle Threads kurz suspendieren (plattformspezifisch):
-// Linux: SIGSTOP aller Threads, patch, SIGCONT
-// Oder: pthread_barrier_wait an definierten Checkpoint-Punkten
+// Briefly suspend all threads (platform-specific):
+// Linux: SIGSTOP all threads, patch, SIGCONT
+// Or: pthread_barrier_wait at defined checkpoint locations
 ```
 
-Aufwändig, aber korrekt für Multi-Thread + beliebige Funktionen.
+Complex, but correct for multi-thread + arbitrary functions.
 
 ---
 
-## 9. Instruction-Cache auf x86-64
+## 9. Instruction Cache on x86-64
 
-x86-64 hat **cache-kohärente** I-Caches (MESI-Protokoll): ein `mov [addr], val`
-macht den I-Cache-Line automatisch ungültig auf allen Cores. Expliziter Cache-Flush
-(`CLFLUSH`) oder `__builtin___clear_cache` sind technisch nicht nötig, aber
-als Portable-Code-Praxis empfohlen (ARM benötigt es z.B. zwingend).
+x86-64 has **cache-coherent** I-caches (MESI protocol): a `mov [addr], val`
+automatically invalidates the I-cache line on all cores. Explicit cache flush
+(`CLFLUSH`) or `__builtin___clear_cache` are technically not needed, but
+recommended as portable code practice (ARM requires it, for example).
 
 ---
 
-## 10. Vergleich mit fptable
+## 10. Comparison with fptable
 
-Siehe `38_1_fptable.md` §8 für die vollständige Tabelle. Kurzfassung:
+See `38_1_fptable.md` §8 for the full table. Summary:
 
 | | fptable | Trampoline |
 |---|---|---|
-| Compile-Zeit | indirekte Calls emittieren | keine Änderung |
-| Runtime-Overhead (ungepatcht) | +1 Load pro Call | **null** |
-| Runtime-Overhead (gepatcht) | +1 Load pro Call | +1 jmp |
-| Atomizität | trivial (8-Byte-Store) | komplex |
-| mprotect | nein | ja |
+| Compile time | emit indirect calls | no change |
+| Runtime overhead (unpatched) | +1 load per call | **zero** |
+| Runtime overhead (patched) | +1 load per call | +1 jmp |
+| Atomicity | trivial (8-byte store) | complex |
+| mprotect | no | yes |
 
-**Empfehlung**: Für AIML im Single-Thread-JIT-Modus → Trampoline (null Overhead,
-einfache Atomizität). Für Multi-Thread AOT mit häufigem Hot-Reload → fptable.
+**Recommendation**: For AIML in single-thread JIT mode -> Trampoline (zero overhead,
+simple atomicity). For multi-thread AOT with frequent hot-reload -> fptable.
 
 ---
 
-## 11. Implementierungsplan
+## 11. Implementation Plan
 
-### Phase 1 — JIT-Buffer
+### Phase 1 — JIT Buffer
 
 **`exec_impl.cpp`:**
-- `static void* g_jit_buffer = nullptr` — beim ersten Aufruf via `alloc_near` allokiert
-- `static size_t g_jit_offset = 0` — Bump-Allocator
-- `void* jit_alloc(size_t n)` — gibt Zeiger zurück, erhöht Offset
+- `static void* g_jit_buffer = nullptr` — allocated via `alloc_near` on first call
+- `static size_t g_jit_offset = 0` — bump allocator
+- `void* jit_alloc(size_t n)` — returns pointer, increments offset
 
-### Phase 2 — Patch-Funktion
+### Phase 2 — Patch Function
 
 **`exec_impl.cpp`:**
 - `bool write_trampoline(void* target, void* dest)`:
-  - Reichweite prüfen (±2 GB → 5-Byte, sonst → 14-Byte)
-  - `mprotect` → `memcpy` → `mprotect` → `__builtin___clear_cache`
-  - Gibt `true` bei Erfolg zurück
+  - Check range (±2 GB -> 5-byte, else -> 14-byte)
+  - `mprotect` -> `memcpy` -> `mprotect` -> `__builtin___clear_cache`
+  - Returns `true` on success
 
-### Phase 3 — Integration in `aiml_exec_code`
+### Phase 3 — Integration into `aiml_exec_code`
 
-Bei Hot-Reload (bundle_version > current_version):
+On hot-reload (bundle_version > current_version):
 ```
-1. Neuen Code in JIT-Buffer kompilieren → new_addr
-2. Backup von old_func (erste 14 Bytes) speichern
+1. Compile new code into JIT buffer -> new_addr
+2. Save backup of old_func (first 14 bytes)
 3. write_trampoline(old_func, new_addr)
-4. ctx.functions[name].version aktualisieren
-5. ctx.functions[name].func = neue llvm::Function* (für Metadaten)
+4. Update ctx.functions[name].version
+5. ctx.functions[name].func = new llvm::Function* (for metadata)
 ```
 
 ### Phase 4 — `sys.free_version`
 
 **`ast_compiler_call.cpp`:**
-- Intercept `sys.free_version` → `aiml_free_version(const char* name, int version)` aufrufen
-- In Runtime: JIT-Buffer-Bereich als wiederverwendbar markieren
+- Intercept `sys.free_version` -> call `aiml_free_version(const char* name, int version)`
+- In runtime: mark JIT buffer region as reusable
 
 ---
 
-## 12. Bekannte Einschränkungen
+## 12. Known Limitations
 
-- Multi-Thread-Atomizität: initiale Implementierung nur für Single-Thread korrekt
-- Funktionen < 5 Bytes: theoretisch möglich (z.B. nackte `ret`-Wrapper) → brauchen Pre-Padding
-- W^X-Systeme (OpenBSD, hardened Linux): `PROT_WRITE|PROT_EXEC` verboten → alternativer mprotect-Ablauf nötig
-- ARM: expliziter I-Cache-Flush via `__builtin___clear_cache` zwingend
-- Inlined Funktionen: kein Patch möglich (Code ist in Aufrufer eingebettet)
-- Struct-Layout-Änderungen: bleiben Breaking Change (Abschnitt 38_3)
+- Multi-thread atomicity: initial implementation only correct for single-thread
+- Functions < 5 bytes: theoretically possible (e.g. naked `ret` wrappers) -> need pre-padding
+- W^X systems (OpenBSD, hardened Linux): `PROT_WRITE|PROT_EXEC` forbidden -> alternative mprotect flow needed
+- ARM: explicit I-cache flush via `__builtin___clear_cache` mandatory
+- Inlined functions: no patching possible (code is embedded in the caller)
+- Struct layout changes: remain a breaking change (Section 38_3)

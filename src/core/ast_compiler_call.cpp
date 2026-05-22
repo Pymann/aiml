@@ -154,6 +154,9 @@ IRValue* Compiler::visitCall(CallExpr* call) {
         if (baseName == "sys" && methodName == "exec") {
             return visitSysExecCall(call);
         }
+        if (baseName == "sys" && methodName == "arg_dump") {
+            return visitSysArgDumpCall(call);
+        }
 
         // db.run_system — ECS system loop, intercept before eager arg eval
         if (baseName == "db" && methodName == "run_system") {
@@ -493,6 +496,22 @@ IRValue* Compiler::visitCall(CallExpr* call) {
     return callRes;
 }
 IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std::string& methodName, Symbol* sym, CallExpr* call) {
+    // ── dyn_array<T>.free ─────────────────────────────────────────────────────
+    if (sym->typeName.rfind("dyn_array<", 0) == 0 && sym->typeName.back() == '>' && methodName == "free") {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Value* ptrAlloca = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+            sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst)));
+        llvm::Value* rawPtr = ctx.builder.CreateLoad(i8p, ptrAlloca, "darr_free_ptr");
+        llvm::Function* freeFn = ctx.module.getFunction("free");
+        if (!freeFn) {
+            llvm::FunctionType* ft = llvm::FunctionType::get(
+                ctx.builder.getVoidTy(), {i8p}, false);
+            freeFn = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "free", ctx.module);
+        }
+        ctx.builder.CreateCall(freeFn, {rawPtr});
+        return ctx.ir_gen->getInt32(0);
+    }
+
     std::string className = sym->typeName;
     if ((className.rfind("ptr<", 0) == 0 || className.rfind("ref<", 0) == 0) && className.back() == '>') {
          className = className.substr(4, className.length() - 5);
@@ -500,6 +519,73 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
 
     IRValue* baseAlloca = sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst);
     IRType* baseElemTy = sym->ir_element_type ? sym->ir_element_type : ctx.ir_gen->wrapType(sym->element_type);
+
+    // Interface virtual dispatch: if sym is ptr<Iface>, lookup method slot,
+    // load vtbl from fat pointer, indirect call with obj as `this`.
+    {
+        auto ifaceIt = ctx.interfaces.find(className);
+        if (ifaceIt != ctx.interfaces.end() && sym->typeName.rfind("ptr<", 0) == 0) {
+            const auto& iface = ifaceIt->second;
+            int slot = -1;
+            for (size_t i = 0; i < iface.methods.size(); ++i) {
+                if (iface.methods[i].name == methodName) { slot = (int)i; break; }
+            }
+            if (slot < 0) {
+                LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
+                    "interface '" + className + "' has no method '" + methodName + "'");
+                return ctx.ir_gen->getInt32(0);
+            }
+            const auto& m = iface.methods[slot];
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* fpTy = iface.fatPtrType;
+            if (!fpTy) {
+                LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
+                    "interface '" + className + "' fat-pointer type not materialised");
+                return ctx.ir_gen->getInt32(0);
+            }
+            llvm::Value* fpPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+            llvm::Value* objField  = ctx.builder.CreateStructGEP(fpTy, fpPtr, 0, "fp_obj_p");
+            llvm::Value* vtblField = ctx.builder.CreateStructGEP(fpTy, fpPtr, 1, "fp_vtbl_p");
+            llvm::Value* objPtr  = ctx.builder.CreateLoad(i8p, objField,  "fp_obj");
+            llvm::Value* vtblPtr = ctx.builder.CreateLoad(i8p, vtblField, "fp_vtbl");
+
+            // Build function type from interface signature.
+            llvm::Type* retTy = nullptr;
+            if (m.returnType.empty() || m.returnType == "void")
+                retTy = llvm::Type::getVoidTy(ctx.context);
+            else {
+                IRType* irt = ctx.ir_gen->resolveType(m.returnType);
+                retTy = irt ? static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(irt)) : i8p;
+            }
+            std::vector<llvm::Type*> paramTys;
+            paramTys.push_back(i8p); // this
+            for (const auto& a : m.args) {
+                IRType* irt = ctx.ir_gen->resolveType(a.second);
+                paramTys.push_back(irt ? static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(irt)) : i8p);
+            }
+            auto* fnTy = llvm::FunctionType::get(retTy, paramTys, false);
+
+            // Load slot from vtbl.  Vtbl layout: [i8* method0, i8* method1, ...].
+            // GEP slot then load function pointer.
+            auto* slotsTy = llvm::ArrayType::get(i8p, iface.methods.size());
+            llvm::Value* slotsBase = ctx.builder.CreateBitCast(vtblPtr,
+                slotsTy->getPointerTo(), "vtbl_slots");
+            llvm::Value* slotPtr = ctx.builder.CreateInBoundsGEP(slotsTy, slotsBase,
+                {ctx.builder.getInt32(0), ctx.builder.getInt32(slot)}, "vtbl_slot");
+            llvm::Value* fnPtr = ctx.builder.CreateLoad(i8p, slotPtr, "vtbl_fn");
+
+            // Eagerly eval call args.
+            std::vector<llvm::Value*> callArgs;
+            callArgs.push_back(objPtr);
+            for (auto& arg : call->args) {
+                IRValue* av = visitExpression(arg.get());
+                if (av) callArgs.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(av)));
+            }
+            llvm::Value* res = ctx.builder.CreateCall(fnTy, fnPtr, callArgs, "iface_call");
+            if (retTy->isVoidTy()) return nullptr;
+            return ctx.ir_gen->wrap(res);
+        }
+    }
 
     // mirror_session.register/register_id/unregister: capture object type for builtin handler
     if (className == "mirror_session" &&
@@ -647,9 +733,9 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Value* wIdx      = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), wIdxPtr, "w_idx");
             llvm::Value* dataFld   = ctx.builder.CreateStructGEP(bufTy, buf, 4, "data_fld");
             llvm::Value* dataPtr   = ctx.builder.CreateLoad(ptrTy, dataFld, "data_ptr");
-            llvm::Value* dstPtr    = ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty(), dataPtr, ctx.builder.CreateZExt(wIdx, ctx.builder.getInt64Ty()), "dst_ptr");
-            llvm::Function* mcf    = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.builder.getInt64Ty()});
-            ctx.builder.CreateCall(mcf, {dstPtr, srcData, ctx.builder.CreateZExt(srcSz, ctx.builder.getInt64Ty())});
+            llvm::Value* dstPtr    = ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty(), dataPtr, ctx.builder.CreateZExtOrTrunc(wIdx, ctx.getSizeType()), "dst_ptr");
+            llvm::Function* mcf    = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
+            ctx.builder.CreateCall(mcf, {dstPtr, srcData, ctx.builder.CreateZExtOrTrunc(srcSz, ctx.getSizeType())});
             // Update write index and size
             llvm::Value* newW = ctx.builder.CreateAdd(wIdx, srcSz, "new_w");
             ctx.builder.CreateStore(newW, wIdxPtr);
@@ -781,7 +867,13 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         return ctx.ir_gen->wrap(phi);
     }
 
-    // Eagerly evaluate arguments for collection and class methods
+    // Reset Kv-dispatch tracking flags. They're set inside the get/get_copy
+    // branch below so visitDeclStmt can validate the decl-type pairing.
+    ctx.kvGetCopy = false;
+    ctx.kvGetCalled = false;
+    ctx.kvGetValueType.clear();
+
+    // Eagerly evaluate arguments for collection and class methods.
     std::vector<IRValue*> argVals;
     for (auto& arg : call->args) {
         IRValue* val = visitExpression(arg.get());
@@ -932,6 +1024,19 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          } else if (methodName == "clear") {
              ListImpl::clear(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
              return nullptr;
+         } else if (methodName == "free") {
+             // Free the data array and reset the list to empty/null state
+             llvm::Value* listPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+             llvm::StructType* lstTy = ListImpl::getListStructType(ctx);
+             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+             llvm::Value* dataPtr = ctx.builder.CreateStructGEP(lstTy, listPtr, 2, "dataPtr");
+             llvm::Value* dataVal = ctx.builder.CreateLoad(i8p, dataPtr, "dataVal");
+             llvm::Function* freeFn = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
+             ctx.builder.CreateCall(freeFn, {dataVal});
+             ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), dataPtr);
+             ctx.builder.CreateStore(ctx.builder.getInt32(0), ctx.builder.CreateStructGEP(lstTy, listPtr, 0));
+             ctx.builder.CreateStore(ctx.builder.getInt32(0), ctx.builder.CreateStructGEP(lstTy, listPtr, 1));
+             return nullptr;
          } else if (methodName == "len") {
              return ctx.ir_gen->wrap(ListImpl::getSize(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca))));
          }
@@ -1026,6 +1131,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
         llvm::Type* i32 = ctx.builder.getInt32Ty();
         llvm::Type* i64 = ctx.builder.getInt64Ty();
+        llvm::Type* sz  = ctx.getSizeType();
         llvm::Value* storePtr = ctx.builder.CreateLoad(i8p,
             static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), "store_ptr");
 
@@ -1175,6 +1281,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
         llvm::Type* i32 = ctx.builder.getInt32Ty();
         llvm::Type* i64 = ctx.builder.getInt64Ty();
+        llvm::Type* sz  = ctx.getSizeType();
         llvm::Value* kvPtr = ctx.builder.CreateLoad(i8p,
             static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), "kv_ptr");
 
@@ -1184,7 +1291,17 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Value* valPtr = nullptr;
             if (valSize == 0) {
                 valPtr = valVal; // string: pass char* directly
+            } else if (valVal->getType()->isPointerTy()) {
+                // ptr<T> arg (e.g. p = kv.get(k) declared as ptr<Player>): valVal
+                // is already a pointer to the struct. Pass it through — no temp
+                // alloca needed. This enables the "view/sync" pattern where the
+                // user mutates a kv entry in place and writes it back under the
+                // same key (cache stays canonical because mutations went directly
+                // through the pointer; encode reads up-to-date state).
+                valPtr = ctx.builder.CreateBitCast(valVal, i8p);
             } else {
+                // Value-type arg (loaded struct): spill into a temp alloca so
+                // we can pass a pointer.
                 llvm::AllocaInst* tmp = ctx.createEntryAlloca(valVal->getType(), "kv_val_tmp");
                 ctx.builder.CreateStore(valVal, tmp);
                 valPtr = ctx.builder.CreateBitCast(tmp, i8p);
@@ -1194,8 +1311,15 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             ctx.builder.CreateCall(f, {kvPtr, keyVal, valPtr, ctx.builder.getInt64(valSize)});
             return nullptr;
 
-        } else if (methodName == "get" && !argVals.empty()) {
+        } else if ((methodName == "get" || methodName == "get_copy") && !argVals.empty()) {
             llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            // Both methods compile to the same runtime call (aiml_db_kv_get returns
+            // the cache pointer). The distinction is enforced at the consumer
+            // (visitDeclStmt): get_copy must pair with value-type T, plain get
+            // must pair with ptr<T>.
+            ctx.kvGetCalled = true;
+            if (methodName == "get_copy") ctx.kvGetCopy = true;
+            ctx.kvGetValueType = vName;
             llvm::Function* f = ctx.getFunction("aiml_db_kv_get", i8p, {i8p, i8p});
             llvm::Value* retPtr = ctx.builder.CreateCall(f, {kvPtr, keyVal});
             if (valSize == 0) {
@@ -1342,9 +1466,8 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::StructType* bufType = llvm::cast<llvm::StructType>(ctx.getLLVMType("buffer"));
             llvm::Value* dataPtrPtr = ctx.builder.CreateStructGEP(bufType, bufAlloca, 4);
             llvm::Value* dataPtr = ctx.builder.CreateLoad(i8p, dataPtrPtr, "buf_data");
-            llvm::Function* memcpyFn = ctx.getFunction("memcpy", i8p,
-                {i8p, i8p, ctx.builder.getInt64Ty()});
-            llvm::Value* sz64 = ctx.builder.CreateZExt(blobSize, ctx.builder.getInt64Ty());
+            llvm::Function* memcpyFn = ctx.getFunction("memcpy", i8p, {i8p, i8p, ctx.getSizeType()});
+            llvm::Value* sz64 = ctx.builder.CreateZExtOrTrunc(blobSize, ctx.getSizeType());
             ctx.builder.CreateCall(memcpyFn, {dataPtr, blobPtr, sz64});
             // Update buffer size + writeIndex to blob size
             llvm::Value* sizePtr = ctx.builder.CreateStructGEP(bufType, bufAlloca, 0);
@@ -1357,8 +1480,38 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             // Return blob size (0 = not found)
             return ctx.ir_gen->wrap(blobSize);
 
+        } else if (methodName == "iter") {
+            // kv.iter() → iterator<string> (opaque i8* handle)
+            llvm::Function* f = ctx.getFunction("aiml_iter_create_kv", i8p, {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {kvPtr}));
+
         }
         LOG_ERROR("Unknown Kv method: " + methodName);
+        return ctx.ir_gen->getInt32(0);
+    }
+    // ── iterator<T> methods ──────────────────────────────────────────────────
+    else if (className.rfind("iterator<", 0) == 0 && className.back() == '>') {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        llvm::Value* iterPtr = ctx.builder.CreateLoad(i8p,
+            static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), "iter_ptr");
+
+        if (methodName == "next") {
+            llvm::Function* f = ctx.getFunction("aiml_iter_next", i8p, {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {iterPtr}));
+
+        } else if (methodName == "has_next") {
+            llvm::Function* f = ctx.getFunction("aiml_iter_has_next", i32, {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {iterPtr}));
+
+        } else if (methodName == "reset") {
+            llvm::Function* f = ctx.getFunction("aiml_iter_reset",
+                ctx.builder.getVoidTy(), {i8p});
+            ctx.builder.CreateCall(f, {iterPtr});
+            return nullptr;
+
+        }
+        LOG_ERROR("Unknown iterator method: " + methodName);
         return ctx.ir_gen->getInt32(0);
     }
     // ── VecStore methods ──────────────────────────────────────────────────────
@@ -1851,12 +2004,13 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
 
     llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
     llvm::Type* i64 = ctx.builder.getInt64Ty();
+        llvm::Type* sz  = ctx.getSizeType();
 
     // Helper: malloc a new empty GenericList, init it, return raw i8*
     llvm::StructType* listTy  = ListImpl::getListStructType(ctx);
     llvm::DataLayout  dl(&ctx.module);
     uint64_t          listBytes = dl.getTypeAllocSize(listTy);
-    llvm::Function*   mallocFn  = ctx.getFunction("malloc", i8p, {i64});
+    llvm::Function*   mallocFn  = ctx.getFunction("malloc", i8p, {sz});
 
     auto makeEmptyList = [&]() -> llvm::Value* {
         llvm::Value* mem = ctx.builder.CreateCall(mallocFn,
@@ -1997,6 +2151,144 @@ IRValue* Compiler::visitSysExecCall(CallExpr* call) {
     // Emit call to __aiml_code_exec(i8*) → i32 via CodeImpl::exec
     llvm::Value* codePtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(codeVal));
     return ctx.ir_gen->wrap(CodeImpl::exec(ctx, codePtr));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// sys.arg_dump(struct_var) — parse argv into struct fields
+//
+// Syntax:  - call: [sys.arg_dump, cfg]
+//   where cfg is a variable of a user-defined model/class type.
+//
+// Flag-to-field mapping:
+//   --field-name  or  --field_name  →  field "field_name"
+//   -flag         →  field "flag"
+//   i32 fields without a value (or next arg is another flag) → set to 1 (boolean)
+//   Unknown flags → print error + exit(1)
+// ─────────────────────────────────────────────────────────────────────────────
+IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
+    using namespace llvm;
+
+    if (call->args.empty()) {
+        LOG_ERROR("sys.arg_dump: requires exactly 1 argument (struct variable)");
+        return ctx.ir_gen->getInt32(0);
+    }
+
+    // arg[0] must be a variable of a struct type
+    auto* varExpr = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get());
+    if (!varExpr) {
+        LOG_ERROR("sys.arg_dump: argument must be a struct variable");
+        return ctx.ir_gen->getInt32(0);
+    }
+
+    Symbol* sym = resolveVariable(varExpr->name);
+    if (!sym) {
+        LOG_ERROR("sys.arg_dump: variable '" + varExpr->name + "' not found");
+        return ctx.ir_gen->getInt32(0);
+    }
+
+    const std::string& typeName = sym->typeName;
+    if (!ctx.classes.count(typeName) || !ctx.classes[typeName].type) {
+        LOG_ERROR("sys.arg_dump: '" + typeName + "' is not a known struct type");
+        return ctx.ir_gen->getInt32(0);
+    }
+
+    auto& ci = ctx.classes[typeName];
+    // Collect fields sorted by index
+    std::vector<std::pair<std::string, CompilerContext::StructMember>> sortedFields;
+    for (auto& [fname, fmem] : ci.members) {
+        sortedFields.push_back({fname, fmem});
+    }
+    std::sort(sortedFields.begin(), sortedFields.end(),
+              [](auto& a, auto& b){ return a.second.index < b.second.index; });
+
+    int numFields = (int)sortedFields.size();
+    if (numFields == 0) return ctx.ir_gen->getInt32(0);
+
+    // Compute byte offsets via DataLayout
+    const auto& dl = ctx.module.getDataLayout();
+    const auto* sl = dl.getStructLayout(ci.type);
+
+    // Determine type codes: 0=i32, 1=f32, 2=string(i8*), 3=i64
+    auto typeCode = [](const std::string& tn) -> int {
+        if (tn == "i32" || tn == "u32" || tn == "i8" || tn == "u8" || tn == "i16" || tn == "u16") return 0;
+        if (tn == "f32") return 1;
+        if (tn == "string") return 2;
+        if (tn == "i64" || tn == "u64") return 3;
+        if (tn == "f64") return 1;  // downcast to f32 parse
+        return 0;  // default: treat as i32
+    };
+
+    Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+    Type* i8pp = i8p->getPointerTo();
+    Type* i32Ty = ctx.builder.getInt32Ty();
+    Type* i64Ty = ctx.builder.getInt64Ty();
+
+    // Build parallel arrays on the stack:
+    //   names[N]   = i8** (array of string pointers)
+    //   types[N]   = i32* (array of type codes)
+    //   offsets[N] = i32* (array of byte offsets)
+    ArrayType* ptrArrTy = ArrayType::get(i8p, numFields);
+    ArrayType* i32ArrTy = ArrayType::get(i32Ty, numFields);
+
+    AllocaInst* namesArr   = ctx.createEntryAlloca(ptrArrTy, "argdump_names");
+    AllocaInst* typesArr   = ctx.createEntryAlloca(i32ArrTy, "argdump_types");
+    AllocaInst* offsetsArr = ctx.createEntryAlloca(i32ArrTy, "argdump_offsets");
+
+    for (int fi = 0; fi < numFields; fi++) {
+        auto& [fname, fmem] = sortedFields[fi];
+        uint64_t byteOffset = sl->getElementOffset(fmem.index);
+        int tc = typeCode(fmem.typeName);
+
+        Value* namePtr   = ctx.builder.CreateConstGEP2_32(ptrArrTy, namesArr,   0, fi);
+        Value* typePtr   = ctx.builder.CreateConstGEP2_32(i32ArrTy, typesArr,   0, fi);
+        Value* offsetPtr = ctx.builder.CreateConstGEP2_32(i32ArrTy, offsetsArr, 0, fi);
+
+        ctx.builder.CreateStore(ctx.builder.CreateGlobalStringPtr(fname), namePtr);
+        ctx.builder.CreateStore(ctx.builder.getInt32(tc), typePtr);
+        ctx.builder.CreateStore(ctx.builder.getInt32((int)byteOffset), offsetPtr);
+    }
+
+    // Get struct alloca (the variable's storage)
+    Value* structAlloca = static_cast<Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
+
+    // Load __argc and __argv globals
+    GlobalVariable* argcVar = ctx.module.getGlobalVariable("__argc", true);
+    GlobalVariable* argvVar = ctx.module.getGlobalVariable("__argv", true);
+    if (!argcVar || !argvVar) {
+        LOG_ERROR("sys.arg_dump: __argc/__argv globals not found (is this a JIT context?)");
+        return ctx.ir_gen->getInt32(0);
+    }
+    Value* argcVal = ctx.builder.CreateLoad(i32Ty, argcVar, "argc");
+    Value* argvVal = ctx.builder.CreateLoad(i8pp,  argvVar, "argv");
+
+    // Get element pointers (decay arrays to pointers)
+    Value* namesPtr   = ctx.builder.CreateConstGEP2_32(ptrArrTy, namesArr,   0, 0);
+    Value* typesPtr   = ctx.builder.CreateConstGEP2_32(i32ArrTy, typesArr,   0, 0);
+    Value* offsetsPtr = ctx.builder.CreateConstGEP2_32(i32ArrTy, offsetsArr, 0, 0);
+    Value* structName = ctx.builder.CreateGlobalStringPtr(typeName);
+
+    // Declare aiml_arg_dump_impl if not yet in module
+    Function* implFn = ctx.module.getFunction("aiml_arg_dump_impl");
+    if (!implFn) {
+        FunctionType* ft = FunctionType::get(
+            ctx.builder.getVoidTy(),
+            {i8p, i8pp, i32Ty->getPointerTo(), i32Ty->getPointerTo(),
+             i32Ty, i8p, i32Ty, i8pp},
+            false);
+        implFn = Function::Create(ft, Function::ExternalLinkage, "aiml_arg_dump_impl", ctx.module);
+    }
+
+    // Cast struct alloca to i8*
+    Value* structPtr = ctx.builder.CreateBitCast(structAlloca, i8p);
+
+    ctx.builder.CreateCall(implFn, {
+        structPtr, namesPtr, typesPtr, offsetsPtr,
+        ctx.builder.getInt32(numFields),
+        structName,
+        argcVal, argvVal
+    });
+
+    return ctx.ir_gen->getInt32(0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

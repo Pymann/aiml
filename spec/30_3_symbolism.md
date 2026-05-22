@@ -1,67 +1,67 @@
-# Symbol-Semantik beim Hot-Reload
+# Symbol Semantics in Hot-Reload
 
-## 1. Das Kernproblem: Drei Schichten einer Symbol-Bedeutung
+## 1. The Core Problem: Three Layers of Symbol Meaning
 
-Ein Symbol (Funktion, Klasse, Enum, Interface, Model) hat in AIML drei unabhängige
-Schichten, die beim Hot-Reload verschieden behandelt werden müssen:
+A symbol (function, class, enum, interface, model) has three independent
+layers in AIML that must be treated differently during hot-reload:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ 1. Symbolschicht (Compile-Time)                         │
+│ 1. Symbol Layer (Compile-Time)                          │
 │    ctx.functions["f"] / ctx.classes["C"] / ctx.enums["E"]│
-│    → immer sofort aktualisierbar                        │
+│    -> always immediately updatable                      │
 ├─────────────────────────────────────────────────────────┤
-│ 2. Code-Schicht (Maschinencode)                         │
-│    Offsets, Sprungadressen, Immediates — baked in       │
-│    → nur via fptable oder Trampoline austauschbar       │
+│ 2. Code Layer (Machine Code)                            │
+│    Offsets, jump addresses, immediates — baked in       │
+│    -> only replaceable via fptable or trampoline        │
 ├─────────────────────────────────────────────────────────┤
-│ 3. Datenschicht (Heap)                                  │
-│    Live-Instanzen mit aktuellem Byte-Layout             │
-│    → niemals retroaktiv patchbar ohne Migration         │
+│ 3. Data Layer (Heap)                                    │
+│    Live instances with current byte layout              │
+│    -> never retroactively patchable without migration   │
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Die zentrale Frage**: "Kriegen die Symbole einfach eine neue Bedeutung?"
+**The central question**: "Do symbols simply get a new meaning?"
 
-Antwort: **Schicht 1 ja, immer.** Schicht 2 und 3 je nach Symbol-Typ und Art
-der Änderung — das ist der Kern dieser Spezifikation.
+Answer: **Layer 1 yes, always.** Layers 2 and 3 depend on the symbol type
+and nature of the change — that is the core of this specification.
 
 ---
 
-## 2. Funktionen — vollständig austauschbar
+## 2. Functions — Fully Replaceable
 
-Funktionen haben **kein persistentes Datum** (keinen Heap-Zustand). Ihr Symbol
-ist rein Code.
+Functions have **no persistent data** (no heap state). Their symbol
+is purely code.
 
 ```
-Änderung:                          Kompatibel?
+Change:                            Compatible?
 ─────────────────────────────────────────────
-Implementierung (Body)             ✓ immer
-Rückgabewert-Typ                   ✗ Breaking (Call-Sites erwarten anderen Typ)
-Signatur (Argumente)               ✗ Breaking (Call-Sites werden ungültig)
-Name                               ✗ Breaking (alle Aufrufer müssen angepasst werden)
+Implementation (body)              ✓ always
+Return value type                  ✗ Breaking (call sites expect different type)
+Signature (arguments)              ✗ Breaking (call sites become invalid)
+Name                               ✗ Breaking (all callers must be updated)
 ```
 
-**Neue Bedeutung** (Schicht 1 + 2): Symbol-Eintrag wird aktualisiert, Maschinencode
-via fptable/Trampoline ersetzt. Alle zukünftigen Aufrufe rufen die neue Implementierung.
-Laufende Aufrufe beenden sich sauber mit der alten (Backup, Abschnitt 38_2 §6).
+**New meaning** (Layer 1 + 2): Symbol entry is updated, machine code
+replaced via fptable/trampoline. All future calls invoke the new implementation.
+Running calls finish cleanly with the old one (backup, Section 38_2 §6).
 
-**Versionierung**: `version`-Feld im `def`-Block steuert, ob Hot-Reload stattfindet:
+**Versioning**: the `version` field in the `def` block controls whether hot-reload occurs:
 ```aiml
 - def:
     name: worker_task
-    version: 2          # version 1 war im Hauptprogramm
+    version: 2          # version 1 was in the main program
     body: ...
 ```
-→ `bundle_version (2) > ctx.version (1)` → Reload. Gleiche oder ältere Version → SKIP.
+-> `bundle_version (2) > ctx.version (1)` -> Reload. Same or older version -> SKIP.
 
 ---
 
-## 3. Enums — baked-in Immediates vs. Lookup-Tabelle
+## 3. Enums — Baked-in Immediates vs. Lookup Table
 
-### 3.1 Aktueller Status: Compile-Time-Konstanten
+### 3.1 Current Status: Compile-Time Constants
 
-Enum-Werte werden zur Compile-Zeit als LLVM-Immediates eingebettet:
+Enum values are embedded as LLVM immediates at compile time:
 
 ```aiml
 - enum:
@@ -71,56 +71,56 @@ Enum-Werte werden zur Compile-Zeit als LLVM-Immediates eingebettet:
 ```
 
 ```llvm
-; Generierter IR-Vergleich:
-%cmp = icmp eq i32 %s, 1   ; "1" ist baked in — Error=1 zur Compile-Zeit fixiert
+; Generated IR comparison:
+%cmp = icmp eq i32 %s, 1   ; "1" is baked in — Error=1 fixed at compile time
 ```
 
-**Konsequenz**: Enum-Werte können nicht hot-reloaded werden. Änderungen an
-Enum-Werten sind **immer Breaking** — alter Code vergleicht mit falschen Immediates.
+**Consequence**: Enum values cannot be hot-reloaded. Changes to
+enum values are **always breaking** — old code compares against wrong immediates.
 
-### 3.2 Sichere Änderungen
+### 3.2 Safe Changes
 
 ```
-Änderung:                          Kompatibel?
+Change:                            Compatible?
 ─────────────────────────────────────────────
-Neues Member am Ende hinzufügen    ✓ bestehender Code kennt es nicht, ignoriert es
-Bestehende Werte verändern         ✗ Breaking (alle icmp-Immediate-Vergleiche falsch)
-Member entfernen                   ✗ Breaking (Code referenziert ungültigen Wert)
-Member umbenennen                  ✗ Breaking (Compile-Fehler in Abhängigkeiten)
-Reihenfolge ändern                 ✗ Breaking (implizite Werte verschieben sich)
+Add new member at the end          ✓ existing code doesn't know it, ignores it
+Change existing values             ✗ Breaking (all icmp immediate comparisons wrong)
+Remove member                      ✗ Breaking (code references invalid value)
+Rename member                      ✗ Breaking (compile error in dependencies)
+Change order                       ✗ Breaking (implicit values shift)
 ```
 
-### 3.3 Zukünftig: Enum-Lookup-Tabelle
+### 3.3 Future: Enum Lookup Table
 
-Analog zu `__aiml_fptable` könnte eine globale Enum-Wertetabelle emittiert werden:
+Analogous to `__aiml_fptable`, a global enum value table could be emitted:
 
 ```llvm
 @__aiml_enum_Status = global [3 x i32] [i32 0, i32 1, i32 2]
 
-; Vergleich über Tabelle:
+; Comparison via table:
 %slot = getelementptr [3 x i32], [3 x i32]* @__aiml_enum_Status, i32 0, i32 1
 %val  = load i32, i32* %slot
 %cmp  = icmp eq i32 %s, %val
 ```
 
-Dann wäre ein Hot-Reload der Werte (nicht der Reihenfolge!) möglich. Performance-Kosten:
-+1 Load pro Vergleich. Für die initiale Implementierung zurückgestellt.
+Then hot-reloading values (not the order!) would be possible. Performance cost:
++1 load per comparison. Deferred for the initial implementation.
 
 ---
 
-## 4. Klassen — das Code/Layout-Trennungsprinzip
+## 4. Classes — The Code/Layout Separation Principle
 
-Klassen haben zwei völlig unterschiedliche Aspekte beim Hot-Reload:
+Classes have two completely different aspects in hot-reload:
 
-### 4.1 Methoden (Code)
+### 4.1 Methods (Code)
 
-Methoden sind Funktionen — vollständig austauschbar wie in Abschnitt 2 beschrieben.
-Eine Klassen-Methode `Foo.doThing` ist IR-seitig `@Foo__doThing(i8* self, ...)`.
-fptable oder Trampoline ersetzen den Code; `self`-Zeiger bleibt gültig.
+Methods are functions — fully replaceable as described in Section 2.
+A class method `Foo.doThing` is `@Foo__doThing(i8* self, ...)` at the IR level.
+fptable or trampoline replaces the code; the `self` pointer remains valid.
 
-### 4.2 Felder (Layout)
+### 4.2 Fields (Layout)
 
-Feld-Offsets werden zur Compile-Zeit als GEP-Konstanten eingebettet:
+Field offsets are embedded as GEP constants at compile time:
 
 ```aiml
 - class:
@@ -131,131 +131,131 @@ Feld-Offsets werden zur Compile-Zeit als GEP-Konstanten eingebettet:
 ```
 
 ```llvm
-; Zugriff auf p.value:
+; Access to p.value:
 %p_value = getelementptr %Payload, %Payload* %p, i32 0, i32 1   ; Index 1 = Offset 4
 %v = load i32, i32* %p_value
 ```
 
-Wenn nun `version 2` ein neues Feld **vor** `value` einfügt:
+If `version 2` now inserts a new field **before** `value`:
 ```aiml
 - class:
     name: Payload
     version: 2
     members:
       - [id,       i32]   # Offset 0
-      - [priority, i32]   # Offset 4  ← neu (verschiebt value!)
-      - [value,    i32]   # Offset 8  ← war 4, jetzt 8
+      - [priority, i32]   # Offset 4  <- new (shifts value!)
+      - [value,    i32]   # Offset 8  <- was 4, now 8
 ```
 
-Alter Code liest `Index 1` → liest `priority` statt `value` → **stille Datenverfälschung**.
-Keine Fehlermeldung, kein Crash (zumindest auf x86-64) — nur falsche Ergebnisse.
+Old code reads `Index 1` -> reads `priority` instead of `value` -> **silent data corruption**.
+No error message, no crash (at least on x86-64) — just wrong results.
 
-### 4.3 Kompatibilitätsmatrix für Klassen
+### 4.3 Compatibility Matrix for Classes
 
 ```
-Änderung:                              Methoden  Layout   Kompatibel?
+Change:                                Methods   Layout    Compatible?
 ─────────────────────────────────────────────────────────────────────
-Methoden-Implementierung ändern        neu       gleich   ✓ immer
-Neues Feld am ENDE hinzufügen          gleich    erweiter ✓ alte Offsets bleiben
-Neues Feld in der MITTE einfügen       gleich    bricht   ✗ Breaking
-Feld entfernen                         gleich    bricht   ✗ Breaking
-Feld-Typ ändern (gleiche Größe)        gleich    ggf. ok  △ gefährlich
-Feld-Typ ändern (andere Größe)         gleich    bricht   ✗ Breaking
-Klasse umbenennen                      —         —        ✗ Breaking
+Change method implementation           new       same      ✓ always
+Add new field at the END               same      extended  ✓ old offsets remain
+Insert new field in the MIDDLE         same      breaks    ✗ Breaking
+Remove field                           same      breaks    ✗ Breaking
+Change field type (same size)          same      possibly  △ dangerous
+Change field type (different size)     same      breaks    ✗ Breaking
+Rename class                           —         —         ✗ Breaking
 ```
 
-**Goldene Regel**: Neue Felder nur am Ende. Methoden beliebig.
+**Golden rule**: New fields only at the end. Methods can be changed freely.
 
 ---
 
-## 5. Models — pure Datenschemata
+## 5. Models — Pure Data Schemas
 
-Models (siehe `15_models.md`) sind Klassen ohne Methoden — nur Felder und Validierung.
-Das Layout-Problem aus Abschnitt 4.2 gilt identisch.
+Models (see `15_models.md`) are classes without methods — only fields and validation.
+The layout problem from Section 4.2 applies identically.
 
-**Zusätzliche Dimension**: Models werden serialisiert/deserialisiert. Ein hot-reloaded
-Model mit geändertem Schema kann beim Deserialisieren alter JSON/YAML-Blobs scheitern.
+**Additional dimension**: Models are serialized/deserialized. A hot-reloaded
+model with a changed schema may fail when deserializing old JSON/YAML blobs.
 
 ```
-Änderung:                          Kompatibel?   Serialisierung
+Change:                            Compatible?   Serialization
 ───────────────────────────────────────────────────────────────
-Neues optionales Feld (mit Default) ✓ Layout ok   ✓ altes JSON enthält es nicht → Default
-Neues Pflichtfeld                   ✗ Layout bricht ✗ altes JSON fehlt das Feld
-Feld entfernen                      ✗ Layout bricht △ altes JSON hat Extra-Feld → ignoriert
-Feld-Typ ändern                     ✗ Layout bricht ✗ Parse-Fehler möglich
+New optional field (with default)  ✓ Layout ok   ✓ old JSON lacks it -> default
+New required field                 ✗ Layout breaks ✗ old JSON missing field
+Remove field                       ✗ Layout breaks △ old JSON has extra field -> ignored
+Change field type                  ✗ Layout breaks ✗ parse error possible
 ```
 
-**Empfehlung**: Model-Versionierung explizit mit `version`-Feld nutzen und
-Migrations-Funktionen bereitstellen (Abschnitt 6.3).
+**Recommendation**: Use model versioning explicitly with the `version` field and
+provide migration functions (Section 6.3).
 
 ---
 
-## 6. Live-Instanzen — das Migrations-Problem
+## 6. Live Instances — The Migration Problem
 
-### 6.1 Das Problem
+### 6.1 The Problem
 
-Wenn Klasse/Model `Payload` hot-reloaded wird (Layout-Änderung), existieren im
-Heap möglicherweise `Payload`-Instanzen, die mit dem alten Layout allokiert wurden:
+When class/model `Payload` is hot-reloaded (layout change), there may be
+`Payload` instances on the heap that were allocated with the old layout:
 
 ```
-Heap vor Hot-Reload:          Heap nach Hot-Reload:
-  p1: [id=1][value=42]          p1: [id=1][value=42]   ← unverändert im Heap
-  p2: [id=2][value=7]           p2: [id=2][value=7]    ← unverändert im Heap
+Heap before hot-reload:       Heap after hot-reload:
+  p1: [id=1][value=42]          p1: [id=1][value=42]   <- unchanged on heap
+  p2: [id=2][value=7]           p2: [id=2][value=7]    <- unchanged on heap
 
-Neues Layout erwartet: [id][priority][value]
-Alter Code liest p1.value bei Offset 4 → 42 ✓
-Neuer Code liest p1.value bei Offset 8 → liest p2.id (=2) ✗ ← Datenverfälschung
+New layout expects: [id][priority][value]
+Old code reads p1.value at offset 4 -> 42 ✓
+New code reads p1.value at offset 8 -> reads p2.id (=2) ✗ <- data corruption
 ```
 
-### 6.2 Strategie 1: Invalidierung (einfachste Lösung)
+### 6.2 Strategy 1: Invalidation (simplest solution)
 
-Alle Live-Instanzen nach einer Layout-Änderung als ungültig markieren.
-Zugriff darauf → Runtime-Fehler (Exception oder Assertion).
+Mark all live instances as invalid after a layout change.
+Accessing them -> runtime error (exception or assertion).
 
-Voraussetzung: GC oder explizites Tracking aller Heap-Allokationen nach Typ.
-Für AIML aktuell nicht implementiert (kein GC).
+Prerequisite: GC or explicit tracking of all heap allocations by type.
+Not currently implemented in AIML (no GC).
 
-### 6.3 Strategie 2: Migration (korrekteste Lösung)
+### 6.3 Strategy 2: Migration (most correct solution)
 
-Eine Migrations-Funktion wird beim Hot-Reload aufgerufen:
+A migration function is called during hot-reload:
 
 ```aiml
-# Migrations-Callback (optional, vom Nutzer definiert):
+# Migration callback (optional, defined by the user):
 - def:
     name: migrate_Payload_v1_to_v2
     args: [[old, Payload], [new, Payload]]   # old: Layout v1, new: Layout v2
     body:
       - set: [new.id,       old.id]
-      - set: [new.priority, 0]         # Default für neues Feld
+      - set: [new.priority, 0]         # default for new field
       - set: [new.value,    old.value]
 ```
 
-Das erfordert ein Instanz-Register (alle `Payload*`-Zeiger bekannt) und ist
-für die initiale Implementierung zu komplex.
+This requires an instance registry (all `Payload*` pointers known) and is
+too complex for the initial implementation.
 
-### 6.4 Strategie 3: Append-Only (pragmatischste Lösung, empfohlen)
+### 6.4 Strategy 3: Append-Only (most pragmatic solution, recommended)
 
-Nur Erweiterungen am Ende erlauben. Alter Code liest alte Felder korrekt.
-Neuer Code kann neue Felder lesen. Keine Migration nötig.
+Only allow extensions at the end. Old code reads old fields correctly.
+New code can read new fields. No migration needed.
 
 ```
-Payload v1: [id: 0..3][value: 4..7]          ← 8 Bytes
-Payload v2: [id: 0..3][value: 4..7][prio: 8..11] ← 12 Bytes, v1-Felder unverändert
+Payload v1: [id: 0..3][value: 4..7]          <- 8 bytes
+Payload v2: [id: 0..3][value: 4..7][prio: 8..11] <- 12 bytes, v1 fields unchanged
 ```
 
-Neuer Code allokiert 12 Bytes. Alter Code greift nur auf Bytes 0..7 zu — korrekt.
-Neue Felder in alten Instanzen sind undefiniert (0-initialisiert bei malloc).
+New code allocates 12 bytes. Old code only accesses bytes 0..7 — correct.
+New fields in old instances are undefined (zero-initialized at malloc).
 
-**Einschränkung**: Alter Code, der `sizeof(Payload)` kennt, allokiert zu wenig.
-In AIML: Allokation immer über `CodeImpl::new(ctx, typename)` → nutzt aktuelles
-`sizeof` → kein Problem, solange alter Code keine Payload selbst allokiert.
+**Limitation**: Old code that knows `sizeof(Payload)` allocates too little.
+In AIML: allocation always via `CodeImpl::new(ctx, typename)` -> uses current
+`sizeof` -> no problem, as long as old code does not allocate Payload itself.
 
 ---
 
-## 7. Interfaces — strukturelle Verträge
+## 7. Interfaces — Structural Contracts
 
-AIML-Interfaces sind Compile-Time-Konstrukte (kein Vtable-Objekt im Heap).
-Eine Klasse "implementiert" ein Interface durch strukturelle Übereinstimmung.
+AIML interfaces are compile-time constructs (no vtable object on the heap).
+A class "implements" an interface through structural conformance.
 
 ```aiml
 - interface:
@@ -271,53 +271,53 @@ Eine Klasse "implementiert" ein Interface durch strukturelle Übereinstimmung.
           body: ...
 ```
 
-**Was passiert beim Hot-Reload eines Interfaces?**
+**What happens when an interface is hot-reloaded?**
 
-Das Interface selbst hat kein Heap-Objekt — es ist nur eine Typannotation. Ein
-Hot-Reload bedeutet, das Interface-Constraint ändert sich in der Symboltabelle.
+The interface itself has no heap object — it is only a type annotation. A
+hot-reload means the interface constraint changes in the symbol table.
 
 ```
-Änderung am Interface:                  Konsequenz
+Change to interface:                    Consequence
 ────────────────────────────────────────────────────────────────────
-Neue Methode hinzufügen                 Alle implementierenden Klassen werden
-                                        "unvollständig" → Compile-Fehler bei
-                                        neuem Code, der Interface nutzt
-Methode entfernen                       Implementierende Klassen haben Extra-Methode
-                                        → harmlos (strukturell kompatibel)
-Methoden-Signatur ändern               Alle Implementierungen werden inkompatibel
-Interface umbenennen                    Alle Referenzen müssen aktualisiert werden
+Add new method                          All implementing classes become
+                                        "incomplete" -> compile error in
+                                        new code that uses the interface
+Remove method                           Implementing classes have extra method
+                                        -> harmless (structurally compatible)
+Change method signature                 All implementations become incompatible
+Rename interface                        All references must be updated
 ```
 
-**Neue Bedeutung?**: Ja, für neu kompilierten Code sofort. Alter kompilierter Code,
-der das Interface-Constraint bereits geprüft hat, ist nicht betroffen (Constraint
-wurde zur Compile-Zeit validiert, kein Runtime-Check).
+**New meaning?**: Yes, for newly compiled code immediately. Old compiled code
+that already checked the interface constraint is unaffected (constraint
+was validated at compile time, no runtime check).
 
-**Hot-Reload eines Interfaces** bedeutet praktisch immer, auch alle implementierenden
-Klassen zu hot-reloaden. Diese werden im Bundle-Dependency-Graph erfasst
-(sys.bundle schließt Abhängigkeiten transitiv ein).
+**Hot-reloading an interface** practically always means hot-reloading all
+implementing classes as well. These are captured in the bundle dependency graph
+(sys.bundle includes dependencies transitively).
 
 ---
 
-## 8. Kompatibilitäts-Übersicht
+## 8. Compatibility Overview
 
-| Symbol-Typ | Code-Änderung | Layout-Änderung | Wert-Änderung |
+| Symbol Type | Code Change | Layout Change | Value Change |
 |------------|--------------|-----------------|---------------|
-| Funktion | ✓ (Trampoline/fptable) | — | — |
+| Function | ✓ (Trampoline/fptable) | — | — |
 | Enum | — | — | ✗ (Immediates baked) |
-| Enum (zukünftig, Lookup-Tabelle) | — | — | ✓ (wenn kein Reorder) |
-| Klasse — Methode | ✓ | — | — |
-| Klasse — Felder | — | △ nur Append-Only | — |
-| Model — Felder | — | △ nur Append-Only | — |
-| Interface | △ (nur Entfernen) | — | — |
+| Enum (future, lookup table) | — | — | ✓ (if no reorder) |
+| Class — Method | ✓ | — | — |
+| Class — Fields | — | △ append-only only | — |
+| Model — Fields | — | △ append-only only | — |
+| Interface | △ (remove only) | — | — |
 
-Legende: ✓ kompatibel, △ eingeschränkt, ✗ Breaking Change
+Legend: ✓ compatible, △ restricted, ✗ breaking change
 
 ---
 
-## 9. Versionierungs-Strategie (Empfehlung)
+## 9. Versioning Strategy (Recommendation)
 
 ```aiml
-# Regel: version immer explizit setzen bei Hot-Reload-fähigen Definitionen.
+# Rule: always set version explicitly for hot-reload-capable definitions.
 
 - class:
     name: Payload
@@ -326,27 +326,27 @@ Legende: ✓ kompatibel, △ eingeschränkt, ✗ Breaking Change
       - [id,    i32]
       - [value, i32]
 
-# Kompatibles Update (Append-Only → version erhöhen):
+# Compatible update (append-only -> increment version):
 - class:
     name: Payload
     version: 2
     members:
       - [id,       i32]
       - [value,    i32]
-      - [priority, i32]   # NEU — am Ende
+      - [priority, i32]   # NEW — at the end
 
-# Inkompatibles Update → neuen Namen wählen statt Hot-Reload:
+# Incompatible update -> choose a new name instead of hot-reload:
 - class:
-    name: PayloadV3           # ← neuer Name, kein Breaking Hot-Reload
+    name: PayloadV3           # <- new name, no breaking hot-reload
     version: 1
     members:
-      - [priority, i32]       # Reihenfolge geändert
+      - [priority, i32]       # order changed
       - [id,       i32]
       - [value,    i32]
 ```
 
-**Faustregel**:
-- Code (Funktionen, Methoden): Hot-Reload immer möglich → `version` erhöhen
-- Daten (Klassen, Models): Hot-Reload nur Append-Only → `version` erhöhen
-- Enum-Werte: kein Hot-Reload → Lookup-Tabelle abwarten
-- Inkompatible Schema-Änderungen: neuen Typnamen vergeben, Migration explizit schreiben
+**Rule of thumb**:
+- Code (functions, methods): hot-reload always possible -> increment `version`
+- Data (classes, models): hot-reload only append-only -> increment `version`
+- Enum values: no hot-reload -> wait for lookup table
+- Incompatible schema changes: assign a new type name, write migration explicitly

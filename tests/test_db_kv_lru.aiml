@@ -1,0 +1,72 @@
+# Tests for bounded LRU on decoded_cache (Schritt 7).
+# Writes more typed entries than MAX_DECODED_LRU (1024), reads them back —
+# correctness must hold despite cache eviction. Re-reads of evicted keys
+# trigger fresh decode from mmap.
+# Expected exit code: 0
+
+- model:
+    name: Counter
+    fields:
+      - [n, i32]
+      - [label, string]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [kv, Kv<string:Counter>]
+      - set: [kv, { call: [db.open_kv, "lru_test", {persist: true, path: "/tmp/aiml_lru_test/"}] }]
+
+      # ── Phase A: write 1500 entries (> MAX_DECODED_LRU=1024) ─────────────────
+      - decl: [i, i32, 0]
+      - while:
+          condition: { "<": [i, 1500] }
+          body:
+            - decl: [c, Counter]
+            - set: [c.n, i]
+            - set: [c.label, "label_${i}"]
+            - call: [kv.set, "k${i}", c]
+            - set: [i, { +: [i, 1] }]
+
+      - decl: [n_after_fill, i32, { call: [kv.len] }]
+      - if:
+          condition: { neq: [n_after_fill, 1500] }
+          then:
+            - print: ["FAIL: expected len=1500, got ${n_after_fill}"]
+            - call: [sys.exit, 1]
+
+      # ── Phase B: read all 1500 sequentially → cache will roll through ────────
+      - set: [i, 0]
+      - decl: [errors, i32, 0]
+      - while:
+          condition: { "<": [i, 1500] }
+          body:
+            - decl: [got, ptr<Counter>, { call: [kv.get, "k${i}"] }]
+            - if:
+                condition: { neq: [got.n, i] }
+                then:
+                  - print: ["FAIL k${i}: got.n=${got.n}"]
+                  - set: [errors, { +: [errors, 1] }]
+            - set: [i, { +: [i, 1] }]
+
+      - if:
+          condition: { neq: [errors, 0] }
+          then:
+            - print: ["FAIL: ${errors} read mismatches"]
+            - call: [sys.exit, 1]
+
+      # ── Phase C: re-read first 100 (these were evicted in Phase B) ───────────
+      - set: [i, 0]
+      - while:
+          condition: { "<": [i, 100] }
+          body:
+            - decl: [got2, ptr<Counter>, { call: [kv.get, "k${i}"] }]
+            - if:
+                condition: { neq: [got2.n, i] }
+                then:
+                  - print: ["FAIL re-read k${i}: got.n=${got2.n}"]
+                  - call: [sys.exit, 1]
+            - set: [i, { +: [i, 1] }]
+
+      - print: ["LRU bounded cache OK"]
+      - return: 0

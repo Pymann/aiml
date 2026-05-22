@@ -1,23 +1,23 @@
 # Function Pointers
 
-Funktionszeiger sind erstklassige Werte in AIML. Der Typ wird mit `fn<>` notiert.
+Function pointers are first-class values in AIML. The type is written using `fn<>`.
 
 ## Syntax
 
 ```
-fn<>                          # keine Parameter, kein Rückgabewert
-fn<i32>                       # ein Parameter, kein Rückgabewert
-fn<i32, string>               # zwei Parameter, kein Rückgabewert
-fn<:i32>                      # keine Parameter, gibt i32 zurück
-fn<i32:string>                # ein Parameter, gibt string zurück
-fn<i32, string:bool>          # zwei Parameter, gibt bool zurück
+fn<>                          # no parameters, no return value
+fn<i32>                       # one parameter, no return value
+fn<i32, string>               # two parameters, no return value
+fn<:i32>                      # no parameters, returns i32
+fn<i32:string>                # one parameter, returns string
+fn<i32, string:bool>          # two parameters, returns bool
 ```
 
-Parameter sind positional und nur durch ihren Typ beschrieben.
-Der Rückgabetyp wird mit `:` nach dem letzten Parameter angegeben.
-Ohne `:` ist der Rückgabewert `void`.
+Parameters are positional and described only by their type.
+The return type is specified with `:` after the last parameter.
+Without `:` the return value is `void`.
 
-## Deklaration und Zuweisung
+## Declaration and Assignment
 
 ```aiml
 - def:
@@ -35,16 +35,16 @@ Ohne `:` ist der Rückgabewert `void`.
 # result == 7
 ```
 
-## Aufruf
+## Calling
 
-Ein Funktionszeiger wird mit `call` aufgerufen — identisch zu direkten Funktionsaufrufen:
+A function pointer is called with `call` — identical to direct function calls:
 
 ```aiml
 - call: [fp, arg1, arg2]
 - set: [x, { call: [fp, arg1] }]
 ```
 
-## Als Parameter
+## As Parameters
 
 ```aiml
 - def:
@@ -78,14 +78,14 @@ Ein Funktionszeiger wird mit `call` aufgerufen — identisch zu direkten Funktio
 - call: [h, req, resp]
 ```
 
-## Null-Prüfung
+## Null Check
 
-Ein nicht initialisierter Funktionszeiger ist `null`.
-Der Aufruf eines `null`-Zeigers löst eine `NullPointerException` aus.
+An uninitialized function pointer is `null`.
+Calling a `null` pointer raises a `NullPointerException`.
 
 ```aiml
 - decl: [cb, fn<>]
-# cb ist null
+# cb is null
 
 - if: [{ !=: [cb, null] }, true]
   then:
@@ -94,18 +94,18 @@ Der Aufruf eines `null`-Zeigers löst eine `NullPointerException` aus.
 
 ## Nested Generics
 
-Typen mit eigenen Typparametern funktionieren als Parameter und Rückgabewert:
+Types with their own type parameters work as parameters and return values:
 
 ```aiml
-fn<list<i32>:i32>             # nimmt list<i32>, gibt i32 zurück
-fn<buffer<u8>>                # nimmt buffer<u8>, kein Rückgabewert
-fn<map<string:string>:bool>   # nimmt map, gibt bool — : nach > eindeutig
+fn<list<i32>:i32>             # takes list<i32>, returns i32
+fn<buffer<u8>>                # takes buffer<u8>, no return value
+fn<map<string:string>:bool>   # takes map, returns bool — : after > is unambiguous
 ```
 
-## Typübereinstimmung
+## Type Matching
 
-Zwei Funktionszeiger-Typen sind identisch, wenn Parameteranzahl, Parametertypen (in Reihenfolge)
-und Rückgabetyp übereinstimmen. Keinerlei implizite Konvertierung.
+Two function pointer types are identical if the parameter count, parameter types (in order),
+and return type match. No implicit conversion of any kind.
 
 ```aiml
 - def:
@@ -119,5 +119,5 @@ und Rückgabetyp übereinstimmen. Keinerlei implizite Konvertierung.
 - set: [f, greet]  # OK
 
 - decl: [g, fn<i32:string>]
-- set: [g, greet]  # Fehler: Parametertyp stimmt nicht überein
+- set: [g, greet]  # Error: parameter type does not match
 ```

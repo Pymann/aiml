@@ -1,0 +1,53 @@
+# Tests for tensor.div (elementwise division)
+# Expected exit code: 0
+
+- decl: [a, tensor, { call: [tensor.zeros, 2, 2] }]
+- call: [a.set, 0, 4.0]
+- call: [a.set, 1, 9.0]
+- call: [a.set, 2, 16.0]
+- call: [a.set, 3, 25.0]
+
+- decl: [b, tensor, { call: [tensor.zeros, 2, 2] }]
+- call: [b.set, 0, 2.0]
+- call: [b.set, 1, 3.0]
+- call: [b.set, 2, 4.0]
+- call: [b.set, 3, 5.0]
+
+- decl: [c, tensor, { call: [tensor.div, a, b] }]
+
+# c should be [2.0, 3.0, 4.0, 5.0]
+- decl: [c0, f32, { call: [c.get, 0] }]
+- decl: [c1, f32, { call: [c.get, 1] }]
+- decl: [c2, f32, { call: [c.get, 2] }]
+- decl: [c3, f32, { call: [c.get, 3] }]
+
+- print: ["tensor.div result: ${c0} ${c1} ${c2} ${c3}"]
+
+- if:
+    condition: { neq: [c0, 2.0] }
+    then:
+      - print: ["FAIL: c[0] expected 2.0 got ${c0}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [c1, 3.0] }
+    then:
+      - print: ["FAIL: c[1] expected 3.0 got ${c1}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [c2, 4.0] }
+    then:
+      - print: ["FAIL: c[2] expected 4.0 got ${c2}"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [c3, 5.0] }
+    then:
+      - print: ["FAIL: c[3] expected 5.0 got ${c3}"]
+      - call: [sys.exit, 1]
+
+- call: [a.free]
+- call: [b.free]
+- call: [c.free]
+- print: ["tensor.div ok"]

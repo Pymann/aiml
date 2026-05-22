@@ -1,0 +1,117 @@
+# Regression: kv.get(k) → mutate → kv.set(k, …) on the SAME key.
+#
+# Before the fix in src/sys/db_runtime.cpp::aiml_db_kv_set (encode-before-evict)
+# this segfaulted in libc.strlen because:
+#   1. kv.get returns a pointer into the typed decoded_cache.
+#   2. decl: [p, T, kv.get] memcpy's the struct bytes only — string/list/map
+#      heap pointers stay shared with the cache.
+#   3. push on the shared list reallocs the underlying buffer.
+#   4. kv.set(same_key) first evicted the cache (freeing the shared buffers)
+#      and then encoded `p` → dangling pointer read → SIGSEGV.
+#
+# Fix: encode first, evict afterwards. See doc/issue/kv_get_mutate_set_same_key_crash.md
+
+- model:
+    name: Bag
+    fields:
+      - [name,    string]
+      - [tag,     string]
+      - [items,   list<string>]
+      - [counts,  list<i32>]
+
+- decl: [kv, Kv<string:Bag>, { call: [db.open_kv, "kv_mutate_set_repro", {persist: true, path: "/tmp/aiml_test_kv_mutate/"}] }]
+
+- decl: [pass, i32, 0]
+- decl: [fail, i32, 0]
+
+# ── Seed ────────────────────────────────────────────────────────────────────
+- decl: [b1, Bag]
+- set: [b1.name, "first"]
+- set: [b1.tag,  "alpha"]
+- call: [b1.items.push, "alpha"]
+- call: [b1.counts.push, 1]
+- call: [kv.set, "k", b1]
+
+# ── Case A: get → push string → set SAME key ────────────────────────────────
+- decl: [bA, Bag, { call: [kv.get_copy, "k"] }]
+- call: [bA.items.push, "beta"]
+- call: [kv.set, "k", bA]   # must not crash
+
+- decl: [bA2, Bag, { call: [kv.get_copy, "k"] }]
+- if:
+    condition: { eq: [bA2.items.len, 2] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+      - print: ["PASS A: get→push string→set, len=2"]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL A: expected items.len=2, got ${bA2.items.len}"]
+
+# ── Case B: get → push i32 → set SAME key ──────────────────────────────────
+- decl: [bB, Bag, { call: [kv.get_copy, "k"] }]
+- call: [bB.counts.push, 42]
+- call: [kv.set, "k", bB]
+
+- decl: [bB2, Bag, { call: [kv.get_copy, "k"] }]
+- if:
+    condition: { eq: [bB2.counts.len, 2] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+      - print: ["PASS B: get→push i32→set, len=2"]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL B: expected counts.len=2, got ${bB2.counts.len}"]
+
+# ── Case C: get → set string field → set SAME key (no list mutation) ───────
+- decl: [bC, Bag, { call: [kv.get_copy, "k"] }]
+- set: [bC.tag, "gamma"]
+- call: [kv.set, "k", bC]
+
+- decl: [bC2, Bag, { call: [kv.get_copy, "k"] }]
+- if:
+    condition: { eq: [bC2.tag, "gamma"] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+      - print: ["PASS C: get→set string→set, tag='${bC2.tag}'"]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL C: expected tag=gamma, got '${bC2.tag}'"]
+
+# ── Case D: get → multiple pushes that force realloc → set SAME key ────────
+# Decoded list has cap=size (here size=3 after case A/B), so next push grows.
+- decl: [bD, Bag, { call: [kv.get_copy, "k"] }]
+- call: [bD.items.push, "gamma"]
+- call: [bD.items.push, "delta"]
+- call: [bD.items.push, "epsilon"]
+- call: [bD.items.push, "zeta"]
+- call: [bD.items.push, "eta"]
+- call: [kv.set, "k", bD]
+
+- decl: [bD2, Bag, { call: [kv.get_copy, "k"] }]
+- if:
+    condition: { eq: [bD2.items.len, 7] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+      - print: ["PASS D: get→5 pushes (realloc)→set, len=7"]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL D: expected items.len=7, got ${bD2.items.len}"]
+
+# ── Case E: read-only round-trip (no mutation) ─────────────────────────────
+- decl: [bE, Bag, { call: [kv.get_copy, "k"] }]
+- call: [kv.set, "k", bE]
+
+- decl: [bE2, Bag, { call: [kv.get_copy, "k"] }]
+- if:
+    condition: { eq: [bE2.items.len, 7] }
+    then:
+      - set: [pass, { "+": [pass, 1] }]
+      - print: ["PASS E: read-only round-trip preserved len=7"]
+    else:
+      - set: [fail, { "+": [fail, 1] }]
+      - print: ["FAIL E: expected items.len=7, got ${bE2.items.len}"]
+
+- print: ["test_kv_get_mutate_set_same_key: ${pass} passed, ${fail} failed"]
+- if:
+    condition: { neq: [fail, 0] }
+    then: [{ call: [sys.exit, 1] }]

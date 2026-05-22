@@ -1,22 +1,22 @@
-Kurzfassung:
-LLVM selbst kann nicht schlafen und kennt keine Uhr.
-LLVM erzeugt nur Code. Die eigentliche Zeitmagie passiert durch:
+Summary:
+LLVM itself cannot sleep and has no clock.
+LLVM only generates code. The actual time magic happens through:
 
-Aufruf von externen Funktionen
+Calling external functions
 
-oder durch eigene Runtime-Wrapper
+or through custom runtime wrappers
 
-Die elegante Lösung ist fast immer: Wrapper-Funktionen deklarieren und per call oder invoke benutzen.
+The elegant solution is almost always: declare wrapper functions and use them via call or invoke.
 
-🛌 Sleep verwenden
-Option 1: Direkt libc sleep aufrufen
+🛌 Using Sleep
+Option 1: Call libc sleep directly
 
-Unter Unix gibt es:
+On Unix there is:
 
 unsigned int sleep(unsigned int seconds);
 
 
-In LLVM IR deklarierst du einfach:
+In LLVM IR you simply declare:
 
 FunctionType* sleepTy =
     FunctionType::get(builder.getInt32Ty(),
@@ -30,23 +30,23 @@ Function* sleepFn =
                      module);
 
 
-Und dann:
+And then:
 
 builder.CreateCall(sleepFn, builder.getInt32(2));
 
 
-Das war’s. Beim Linken wird libc das auflösen.
+That's it. The linker will resolve it via libc.
 
-Wenn du Exceptions unterstützen willst, kannst du auch CreateInvoke benutzen.
+If you want to support exceptions, you can also use CreateInvoke.
 
-⏱ Unix Timestamp holen
+⏱ Getting a Unix Timestamp
 
-libc hat:
+libc has:
 
 time_t time(time_t* tloc);
 
 
-Meist ist time_t ein long.
+Usually time_t is a long.
 
 Declaration in LLVM:
 
@@ -62,7 +62,7 @@ Function* timeFn =
                      module);
 
 
-Aufruf mit nullptr:
+Call with nullptr:
 
 Value* nullPtr =
     ConstantPointerNull::get(
@@ -71,11 +71,11 @@ Value* nullPtr =
 Value* ts = builder.CreateCall(timeFn, nullPtr);
 
 
-ts enthält jetzt den Unix-Timestamp.
+ts now contains the Unix timestamp.
 
-🎩 Eleganter: Eigene Runtime-Wrappers
+🎩 More Elegant: Custom Runtime Wrappers
 
-Ich empfehle meist eine kleine Runtime-Datei:
+I usually recommend a small runtime file:
 
 extern "C" long my_timestamp() {
     return std::time(nullptr);
@@ -86,43 +86,43 @@ extern "C" void my_sleep(int sec) {
 }
 
 
-Warum?
+Why?
 
-Du kapselst Plattformdetails
+You encapsulate platform details
 
-Du kontrollierst Typen
+You control types
 
-Du kannst später Verhalten ändern
+You can change behavior later
 
-Dein IR bleibt sauber
+Your IR stays clean
 
-Dann deklarierst du nur:
+Then you only declare:
 
 declare i64 @my_timestamp()
 declare void @my_sleep(i32)
 
 
-Das ist deutlich stabiler.
+This is significantly more stable.
 
-🧠 Warum Wrapper oft besser sind
+🧠 Why Wrappers Are Often Better
 
-Direkt libc aufzurufen ist simpel, aber:
+Calling libc directly is simple, but:
 
-time_t kann 32 oder 64 Bit sein
+time_t can be 32 or 64 bits
 
-sleep kann von Signalen unterbrochen werden
+sleep can be interrupted by signals
 
-Manche Systeme nutzen nanosleep
+Some systems use nanosleep
 
-Plattformunterschiede schleichen sich ein
+Platform differences creep in
 
-Wrapper isolieren das.
+Wrappers isolate that.
 
-Dein LLVM-Code bleibt neutral und minimalistisch.
+Your LLVM code stays neutral and minimalist.
 
-🚀 Wenn du JIT benutzt
+🚀 When You Use JIT
 
-Wenn du ORC JIT verwendest, musst du:
+When you use ORC JIT, you must:
 
 jit->getMainJITDylib().addGenerator(
     cantFail(DynamicLibrarySearchGenerator::GetForCurrentProcess(
@@ -131,18 +131,18 @@ jit->getMainJITDylib().addGenerator(
 );
 
 
-Damit findet der JIT sleep oder time im aktuellen Prozess.
+This allows the JIT to find sleep or time in the current process.
 
-🧩 Architektur-Empfehlung
+🧩 Architecture Recommendation
 
-Für eine eigene Sprache oder VM:
+For a custom language or VM:
 
-[Dein IR]
+[Your IR]
      ↓
 [Runtime API Layer]
      ↓
 [libc / syscalls]
 
 
-LLVM bleibt Codegenerator.
-Die Runtime ist dein Betriebssystem-Flüster
+LLVM remains the code generator.
+The runtime is your operating system whisperer.

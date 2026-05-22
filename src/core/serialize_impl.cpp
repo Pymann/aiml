@@ -21,6 +21,7 @@ namespace SerializeImpl {
 static bool isListType(const std::string& t){ return t.rfind("list<",0)==0 && t.back()=='>'; }
 static bool isMapType (const std::string& t){ return t.rfind("map<",0)==0  && t.back()=='>'; }
 static bool isPtrType (const std::string& t){ return t.rfind("ptr<",0)==0  && t.back()=='>'; }
+static bool isRefType (const std::string& t){ return t.rfind("ref<",0)==0  && t.back()=='>'; }
 
 static std::string listElem(const std::string& t){ return t.substr(5, t.size()-6); }
 static std::string mapValTn(const std::string& t){
@@ -34,6 +35,7 @@ static std::string mapKeyTn(const std::string& t){
     return sep==std::string::npos ? "" : inner.substr(0, sep);
 }
 static std::string ptrInner(const std::string& t){ return t.substr(4, t.size()-5); }
+static std::string refInner(const std::string& t){ return t.substr(4, t.size()-5); }
 
 static bool isPrimitive(const std::string& t){
     static const std::set<std::string> P{
@@ -52,6 +54,8 @@ static llvm::Type* voidT(CompilerContext& c){ return llvm::Type::getVoidTy(c.con
 static llvm::Type* i8T  (CompilerContext& c){ return llvm::Type::getInt8Ty(c.context); }
 static llvm::Type* i32T (CompilerContext& c){ return llvm::Type::getInt32Ty(c.context); }
 static llvm::Type* i64T (CompilerContext& c){ return llvm::Type::getInt64Ty(c.context); }
+// Target-aware size_t: i64 on x86_64, i32 on wasm32. Use for libc-call args.
+static llvm::Type* szT  (CompilerContext& c){ return c.getSizeType(); }
 static llvm::Type* f32T (CompilerContext& c){ return llvm::Type::getFloatTy(c.context); }
 static llvm::Type* f64T (CompilerContext& c){ return llvm::Type::getDoubleTy(c.context); }
 static llvm::Type* ptrT (CompilerContext& c){ return llvm::PointerType::get(c.context,0); }
@@ -177,6 +181,30 @@ static void emitWriteListElementsIntoWriter(CompilerContext& ctx, llvm::Value* w
         ctx.builder.CreateCall(gJwArrObjBgn(ctx), {writer});
         emitWriteStructFields(ctx, writer, ep, elemTn);
         ctx.builder.CreateCall(gJwArrObjEnd(ctx), {writer});
+    } else if(isRefType(elemTn) || isPtrType(elemTn)) {
+        // list<ref<T>> / list<ptr<T>>: slot holds a pointer to a heap-allocated T.
+        // Load the pointer, null-check, then inline-serialize T's fields.
+        // Null elements become {} (empty object) — picked up as zero-struct on read.
+        std::string innerTn = isRefType(elemTn) ? refInner(elemTn) : ptrInner(elemTn);
+        if(ctx.classes.count(innerTn) && ctx.classes[innerTn].type){
+            llvm::Value* rp = ctx.builder.CreateLoad(ptrT(ctx), ep, lbl+"_rp");
+            auto* okBB = llvm::BasicBlock::Create(ctx.context, lbl+"_rok", parentFn);
+            auto* dnBB = llvm::BasicBlock::Create(ctx.context, lbl+"_rdn", parentFn);
+            auto* emBB = llvm::BasicBlock::Create(ctx.context, lbl+"_rem", parentFn);
+            ctx.builder.CreateCondBr(
+                ctx.builder.CreateICmpNE(rp, llvm::Constant::getNullValue(ptrT(ctx))),
+                okBB, emBB);
+            ctx.builder.SetInsertPoint(okBB);
+            ctx.builder.CreateCall(gJwArrObjBgn(ctx), {writer});
+            emitWriteStructFields(ctx, writer, rp, innerTn);
+            ctx.builder.CreateCall(gJwArrObjEnd(ctx), {writer});
+            ctx.builder.CreateBr(dnBB);
+            ctx.builder.SetInsertPoint(emBB);
+            ctx.builder.CreateCall(gJwArrObjBgn(ctx), {writer});
+            ctx.builder.CreateCall(gJwArrObjEnd(ctx), {writer});
+            ctx.builder.CreateBr(dnBB);
+            ctx.builder.SetInsertPoint(dnBB);
+        }
     } else if(isListType(elemTn)) {
         llvm::Type* innerListTy = ctx.getLLVMType(elemTn);
         std::string innerElemTn = listElem(elemTn);
@@ -596,6 +624,42 @@ static void emitReadValListElements(CompilerContext& ctx, llvm::Value* subReader
         ctx.builder.CreateCall(gJrFree(ctx), {sr});
         ctx.builder.CreateBr(srDone);
         ctx.builder.SetInsertPoint(srDone);
+    } else if(isRefType(elemTn) || isPtrType(elemTn)){
+        // list<ref<T>> / list<ptr<T>>: deserialize each JSON object into a
+        // fresh heap struct, then push the pointer into the list.
+        std::string innerTn = isRefType(elemTn) ? refInner(elemTn) : ptrInner(elemTn);
+        if(ctx.classes.count(innerTn) && ctx.classes[innerTn].type){
+            llvm::StructType* subSt = ctx.classes[innerTn].type;
+            uint64_t subSz = ctx.module.getDataLayout().getTypeAllocSize(subSt);
+            llvm::Value* sr = ctx.builder.CreateCall(gJrValSub(ctx), {subReader, idx}, "sr");
+            auto* srOk   = llvm::BasicBlock::Create(ctx.context, lbl+"_rsrok",   parentFn);
+            auto* srNull = llvm::BasicBlock::Create(ctx.context, lbl+"_rsrnull", parentFn);
+            auto* srDone = llvm::BasicBlock::Create(ctx.context, lbl+"_rsrdone", parentFn);
+            ctx.builder.CreateCondBr(
+                ctx.builder.CreateICmpNE(sr, llvm::Constant::getNullValue(ptrT(ctx))),
+                srOk, srNull);
+            // calloc(1, subSz) — heap-allocate inner struct, zero-init
+            ctx.builder.SetInsertPoint(srOk);
+            llvm::Function* callocFn = ctx.module.getFunction("calloc");
+            if(!callocFn){
+                llvm::FunctionType* ct = llvm::FunctionType::get(
+                    ptrT(ctx), {ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty()}, false);
+                callocFn = llvm::Function::Create(ct, llvm::Function::ExternalLinkage,
+                    "calloc", ctx.module);
+            }
+            llvm::Value* heap = ctx.builder.CreateCall(callocFn,
+                {ctx.builder.getInt64(1), ctx.builder.getInt64(subSz)}, "rheap");
+            emitDeserStructFields(ctx, sr, heap, innerTn, parentFn);
+            ListImpl::push(ctx, listAlloca, heap);
+            ctx.builder.CreateCall(gJrFree(ctx), {sr});
+            ctx.builder.CreateBr(srDone);
+            // Null sub-reader → push null pointer.
+            ctx.builder.SetInsertPoint(srNull);
+            ListImpl::push(ctx, listAlloca,
+                llvm::Constant::getNullValue(ptrT(ctx)));
+            ctx.builder.CreateBr(srDone);
+            ctx.builder.SetInsertPoint(srDone);
+        }
     } else if(isListType(elemTn)){
         llvm::Type* innerListTy = ctx.getLLVMType(elemTn);
         std::string innerElemTn = listElem(elemTn);
@@ -678,6 +742,39 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
                 ctx.builder.CreateCall(gJrFree(ctx),{sr});
                 ctx.builder.CreateBr(srDone);
                 ctx.builder.SetInsertPoint(srDone);
+            } else if(isRefType(elemTn) || isPtrType(elemTn)){
+                // list<ref<T>> / list<ptr<T>>: per element, calloc a heap T,
+                // deserialize into it, push the pointer into the list.  Null
+                // sub-reader → push null pointer (preserves index alignment).
+                std::string innerTn = isRefType(elemTn) ? refInner(elemTn) : ptrInner(elemTn);
+                if(ctx.classes.count(innerTn) && ctx.classes[innerTn].type){
+                    llvm::StructType* subSt = ctx.classes[innerTn].type;
+                    uint64_t subSz = ctx.module.getDataLayout().getTypeAllocSize(subSt);
+                    llvm::Value* sr = ctx.builder.CreateCall(gJrArrSub(ctx),{reader,fkey,idx},"rsr");
+                    llvm::BasicBlock* srOk   = llvm::BasicBlock::Create(ctx.context,fname+"_rsrok",parentFn);
+                    llvm::BasicBlock* srNull = llvm::BasicBlock::Create(ctx.context,fname+"_rsrnull",parentFn);
+                    llvm::BasicBlock* srDone = llvm::BasicBlock::Create(ctx.context,fname+"_rsrdone",parentFn);
+                    ctx.builder.CreateCondBr(
+                        ctx.builder.CreateICmpNE(sr,llvm::Constant::getNullValue(ptrT(ctx))),srOk,srNull);
+                    ctx.builder.SetInsertPoint(srOk);
+                    llvm::Function* callocFn = ctx.module.getFunction("calloc");
+                    if(!callocFn){
+                        llvm::FunctionType* ct = llvm::FunctionType::get(
+                            ptrT(ctx), {ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty()}, false);
+                        callocFn = llvm::Function::Create(ct, llvm::Function::ExternalLinkage,
+                            "calloc", ctx.module);
+                    }
+                    llvm::Value* heap = ctx.builder.CreateCall(callocFn,
+                        {ctx.builder.getInt64(1), ctx.builder.getInt64(subSz)}, "rheap");
+                    emitDeserStructFields(ctx,sr,heap,innerTn,parentFn);
+                    ListImpl::push(ctx,fieldPtr,heap);
+                    ctx.builder.CreateCall(gJrFree(ctx),{sr});
+                    ctx.builder.CreateBr(srDone);
+                    ctx.builder.SetInsertPoint(srNull);
+                    ListImpl::push(ctx,fieldPtr,llvm::Constant::getNullValue(ptrT(ctx)));
+                    ctx.builder.CreateBr(srDone);
+                    ctx.builder.SetInsertPoint(srDone);
+                }
             } else if(isListType(elemTn)){
                 // list<list<T>> (any depth/struct): sub-reader per inner array, recurse
                 llvm::Type* innerListTy = ctx.getLLVMType(elemTn);
@@ -784,9 +881,9 @@ static llvm::Function* emitDeserializeStruct(CompilerContext& ctx,
     ctx.builder.SetInsertPoint(entry);
 
     llvm::Value* reader = ctx.builder.CreateCall(gJrParse(ctx),{fn->getArg(0)},"r");
-    llvm::Function* mallocFn = ctx.getFunction("malloc",ptrT(ctx),{i64T(ctx)});
+    llvm::Function* mallocFn = ctx.getFunction("malloc",ptrT(ctx),{szT(ctx)});
     uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(st);
-    llvm::Value* heap = ctx.builder.CreateCall(mallocFn,{ctx.builder.getInt64(sz)},"hp");
+    llvm::Value* heap = ctx.builder.CreateCall(mallocFn,{llvm::ConstantInt::get(szT(ctx), sz)},"hp");
     // zero-init entire struct — prevents null pointers for string/list/map fields
     ctx.builder.CreateMemSet(heap,ctx.builder.getInt8(0),sz,llvm::MaybeAlign(8));
 
@@ -966,6 +1063,7 @@ bool isSerializable(CompilerContext& ctx, const std::string& typeName){
     if(typeName.rfind("chan<",0)==0) return false;
     if(typeName=="file_handle"||typeName=="process") return false;
     if(isPtrType(typeName)) return isSerializable(ctx,ptrInner(typeName));
+    if(isRefType(typeName)) return isSerializable(ctx,refInner(typeName));
     if(isListType(typeName)){
         // Fully recursive: list<list<Struct>>, list<list<list<T>>>, etc. all supported.
         return isSerializable(ctx, listElem(typeName));

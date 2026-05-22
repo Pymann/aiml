@@ -119,6 +119,14 @@ void aiml_math_ivec3_add          (const AimlIVec3* a, const AimlIVec3* b, AimlI
 float aiml_math_fmin_list(const float* data, int32_t len);
 float aiml_math_fmax_list(const float* data, int32_t len);
 
+/* ── random ───────────────────────────────────────────────────────────── */
+/* math.random(lo, hi) -> f32 — uniform in [lo, hi).
+ * math.random_int(lo, hi) -> i32 — uniform integer in [lo, hi).
+ * Thread-safe (thread_local mt19937, seeded from random_device on first use).
+ */
+float   aiml_math_random_f32(float lo, float hi);
+int32_t aiml_math_random_int(int32_t lo, int32_t hi);
+
 #ifdef __cplusplus
 }
 #endif

@@ -2,7 +2,7 @@
 
 ## while
 
-### Kanonische Form
+### Canonical Form
 
 ```yaml
 - set: [counter, 0]
@@ -17,7 +17,7 @@
 - print: [counter]  # 5
 ```
 
-### Kurzform
+### Short Form
 
 ```yaml
 - while: [{ lt: [counter, limit] }]
@@ -26,4 +26,4 @@
     - set: [counter, { +: [counter, 1] }]
 ```
 
-Das erste (und einzige) Listenelement ist die Condition. Beide Formen sind äquivalent.
+The first (and only) list element is the condition. Both forms are equivalent.

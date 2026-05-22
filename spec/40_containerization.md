@@ -1,116 +1,116 @@
-# Kapitel 40 — Containerisierung
+# Chapter 40 — Containerization
 
-> **Leitgedanke:** In AIML ist ein Container keine externe Infrastruktur (kein Docker-Daemon,
-> kein Kubernetes). Ein Container ist die konsequente Weiterentwicklung von `sys.exec`:
-> Statt Code im selben Prozess auszuführen, führt man ihn in einer **isolierten Umgebung**
-> aus — mit eigenem Dateisystem, eigenem Netzwerk-Stack und eigenen Ressourcen-Limits.
-> Das Code-Objekt (`Code`) aus Kapitel 29 *ist* das Container-Image.
-
----
-
-## 1. Was ist ein Container — und warum kein Docker?
-
-### Das Problem mit externen Container-Runtimes
-
-Docker, Podman, containerd — all diese Tools lösen dasselbe Problem auf unterschiedliche
-Weise: Sie isolieren Prozesse voneinander, damit ein fehlerhafter oder bösartiger Prozess
-nicht den Rest des Systems beeinträchtigen kann. Aber sie fügen dabei eine massive
-Abstraktionsschicht ein:
-
-```
-Anwendung → Docker SDK → Docker Daemon → containerd → runc → Linux Kernel
-```
-
-Jede Schicht hat ihren eigenen Protokoll-Overhead, ihre eigene Konfigurationssprache
-(Dockerfile, docker-compose.yml, Kubernetes YAML), ihre eigene Fehlerquelle.
-
-### AIML's Ansatz: Container als Sprachkonzept
-
-In AIML ist die Isolierung keine externe Schicht, sondern ein Parameter von `sys.exec`.
-Das `new_context`-Feld im `Code`-Struct (bereits in Kapitel 29 definiert) war von
-Anfang an für genau diesen Zweck reserviert:
-
-```
-sys.exec(pkg)                    → shared context (aktueller Prozess, selber Speicher)
-sys.exec(pkg, {isolate: true})   → isolated context (Linux-Namespace, neuer Prozess)
-container.run(pkg, options)      → volles Container-Lifecycle-Management
-```
-
-Das bedeutet: Jedes `Code`-Objekt ist **bereits ein portables Container-Image**.
-Es enthält alle Abhängigkeiten (via `sys.bundle`), einen definierten Einstiegspunkt
-(`start_call`) und optional initiale Daten (`data_chunks`). Es muss nirgendwo
-registriert, getaggt oder gepusht werden — es ist eine normale AIML-Variable.
+> **Guiding principle:** In AIML a container is not external infrastructure (no Docker daemon,
+> no Kubernetes). A container is the logical evolution of `sys.exec`:
+> instead of executing code in the same process, it runs in an **isolated environment**
+> — with its own filesystem, its own network stack, and its own resource limits.
+> The code object (`Code`) from Chapter 29 *is* the container image.
 
 ---
 
-## 2. Der `container`-Namespace
+## 1. What Is a Container — and Why Not Docker?
 
-`container` ist ein **reservierter Namespace** in AIML, analog zu `db`, `sys`, `io`.
-Er kapselt alle Container-Operationen und kommuniziert direkt mit den Linux-Kernel-APIs,
-ohne einen Daemon-Prozess dazwischen.
+### The Problem with External Container Runtimes
+
+Docker, Podman, containerd — all these tools solve the same problem in different
+ways: they isolate processes from each other so that a faulty or malicious process
+cannot affect the rest of the system. But in doing so they introduce a massive
+abstraction layer:
+
+```
+Application → Docker SDK → Docker Daemon → containerd → runc → Linux Kernel
+```
+
+Every layer has its own protocol overhead, its own configuration language
+(Dockerfile, docker-compose.yml, Kubernetes YAML), its own source of errors.
+
+### AIML's Approach: Container as a Language Concept
+
+In AIML, isolation is not an external layer but a parameter of `sys.exec`.
+The `new_context` field in the `Code` struct (already defined in Chapter 29) was
+reserved from the start for exactly this purpose:
+
+```
+sys.exec(pkg)                    → shared context (current process, same memory)
+sys.exec(pkg, {isolate: true})   → isolated context (Linux namespace, new process)
+container.run(pkg, options)      → full container lifecycle management
+```
+
+This means: every `Code` object is **already a portable container image**.
+It contains all dependencies (via `sys.bundle`), a defined entry point
+(`start_call`), and optionally initial data (`data_chunks`). It does not need to be
+registered, tagged, or pushed anywhere — it is a normal AIML variable.
+
+---
+
+## 2. The `container` Namespace
+
+`container` is a **reserved namespace** in AIML, analogous to `db`, `sys`, `io`.
+It encapsulates all container operations and communicates directly with the Linux kernel APIs,
+without a daemon process in between.
 
 ```aiml
-# Falsch — Compilerfehler:
+# Wrong — compiler error:
 - def:
-    name: container.run   # "container" ist reserviert
+    name: container.run   # "container" is reserved
 
-# Richtig:
+# Correct:
 - decl: [c, Container]
 - set:  [c, { call: [container.run, my_pkg, { memory: "256mb" }] }]
 ```
 
 ---
 
-## 3. Wie Container-Isolierung unter Linux funktioniert
+## 3. How Container Isolation Works on Linux
 
-Um den AIML-Ansatz zu verstehen, ist es hilfreich zu wissen, was der Linux-Kernel
-tatsächlich für Containerisierung bereitstellt. Es gibt **drei unabhängige Mechanismen**,
-die zusammen einen "Container" ergeben:
+To understand the AIML approach, it helps to know what the Linux kernel
+actually provides for containerization. There are **three independent mechanisms**
+that together make up a "container":
 
-### 3.1 Namespaces — Isolierung der Sicht auf das System
+### 3.1 Namespaces — Isolating the View of the System
 
-Ein **Namespace** ist eine Kernel-Abstraktion, die einem Prozess eine eigene,
-isolierte Sicht auf einen Systembereich gibt. Es gibt sechs Namespace-Typen:
+A **namespace** is a kernel abstraction that gives a process its own,
+isolated view of a system area. There are six namespace types:
 
-| Namespace | Was wird isoliert | Beispiel |
+| Namespace | What is isolated | Example |
 |-----------|------------------|---------|
-| `PID`     | Prozess-IDs | Der Container-Prozess hat PID 1 aus seiner eigenen Sicht |
-| `NET`     | Netzwerk-Interfaces, Routing, Firewall | Eigene `eth0`, eigene IP-Adresse |
-| `MNT`     | Dateisystem-Hierarchie | Container sieht nur sein eigenes Root-Filesystem |
-| `UTS`     | Hostname, Domain | Container kann eigenen Hostnamen haben |
-| `IPC`     | Shared Memory, Message Queues | Prozesse im Container können nicht auf IPC des Hosts zugreifen |
-| `USER`    | Benutzer- und Gruppen-IDs | Root im Container ≠ Root auf dem Host |
+| `PID`     | Process IDs | The container process has PID 1 from its own perspective |
+| `NET`     | Network interfaces, routing, firewall | Own `eth0`, own IP address |
+| `MNT`     | Filesystem hierarchy | Container only sees its own root filesystem |
+| `UTS`     | Hostname, domain | Container can have its own hostname |
+| `IPC`     | Shared memory, message queues | Processes in the container cannot access host IPC |
+| `USER`    | User and group IDs | Root in container ≠ root on the host |
 
-AIML erstellt diese Namespaces via `clone(2)` mit den entsprechenden Flags — kein
-Docker-Daemon, kein OCI-Runtime, nur direkte Syscalls.
+AIML creates these namespaces via `clone(2)` with the corresponding flags — no
+Docker daemon, no OCI runtime, only direct syscalls.
 
-### 3.2 cgroups — Ressourcen-Limits
+### 3.2 cgroups — Resource Limits
 
-**Control Groups (cgroups)** begrenzen, wie viele Systemressourcen ein Prozess
-(oder eine Gruppe von Prozessen) verbrauchen darf. Ohne cgroups könnte ein Container
-beliebig viel RAM belegen und den Host zum Absturz bringen.
+**Control Groups (cgroups)** limit how many system resources a process
+(or group of processes) may consume. Without cgroups a container could
+occupy arbitrary amounts of RAM and crash the host.
 
-AIML schreibt cgroup-Limits in `/sys/fs/cgroup/` — das ist eine normale Dateisystem-API.
+AIML writes cgroup limits to `/sys/fs/cgroup/` — this is a normal filesystem API.
 
-### 3.3 Overlay-Filesystem — Schichtenmodell
+### 3.3 Overlay Filesystem — Layer Model
 
-Ein **Overlay-Filesystem** kombiniert mehrere Verzeichnisse (Layer) zu einem einzigen
-sichtbaren Dateisystem. Der untere Layer ist **read-only** (das "Image"), der obere
-Layer ist **writable** (Container-spezifische Änderungen). Wenn der Container gelöscht
-wird, wird nur der obere Layer entfernt — das Image bleibt unberührt.
+An **overlay filesystem** combines multiple directories (layers) into a single
+visible filesystem. The lower layer is **read-only** (the "image"), the upper
+layer is **writable** (container-specific changes). When the container is deleted,
+only the upper layer is removed — the image remains untouched.
 
-In AIML wird das Overlay automatisch aufgebaut, wenn ein Container gestartet wird.
-Das AIML-Image-Format ist kein tar-Ball wie bei Docker — es ist ein Verzeichnis
-mit AIML-Binaries und einem `manifest.aiml`, das den Einstiegspunkt definiert.
+In AIML the overlay is built automatically when a container starts.
+The AIML image format is not a tar ball like Docker — it is a directory
+with AIML binaries and a `manifest.aiml` that defines the entry point.
 
 ---
 
-## 4. Container-Lebenszyklus
+## 4. Container Lifecycle
 
-### 4.1 Container starten
+### 4.1 Starting a Container
 
 ```aiml
-# Schritt 1: Ein Code-Objekt (das "Image") erzeugen:
+# Step 1: Create a code object (the "image"):
 - class:
     name: WebRequest
     members: [[path, string], [method, string]]
@@ -125,28 +125,28 @@ mit AIML-Binaries und einem `manifest.aiml`, das den Einstiegspunkt definiert.
 - decl: [image, Code]
 - set:  [image, { call: [sys.bundle, "handle_request"] }]
 
-# Schritt 2: Container starten:
+# Step 2: Start container:
 - decl: [c, Container]
 - set: [c, {
     call: [
       container.run, image,
       {
-        # Ressourcen-Limits:
+        # Resource limits:
         memory:    "256mb",
-        cpu:       "0.5",          # 50% eines CPU-Kerns
-        pids:      100,            # max. 100 Prozesse/Threads
+        cpu:       "0.5",          # 50% of one CPU core
+        pids:      100,            # max. 100 processes/threads
 
-        # Netzwerk:
-        net:       "bridge",       # Eigenes virtuelles Netzwerk-Interface
+        # Network:
+        net:       "bridge",       # Own virtual network interface
 
-        # Dateisystem:
+        # Filesystem:
         mounts:    [
           "/host/data:/container/data:ro",   # read-only mount
           "/tmp/logs:/container/logs:rw"     # read-write mount
         ],
-        tmpfs:     ["/tmp"],        # In-Memory-Filesystem für /tmp
+        tmpfs:     ["/tmp"],        # In-memory filesystem for /tmp
 
-        # Metadaten:
+        # Metadata:
         name:      "request-handler-1",
         env:       { LOG_LEVEL: "INFO", PORT: "8080" }
       }
@@ -154,14 +154,14 @@ mit AIML-Binaries und einem `manifest.aiml`, das den Einstiegspunkt definiert.
   }]
 ```
 
-### 4.2 Mit dem Container kommunizieren
+### 4.2 Communicating with the Container
 
-Container kommunizieren über **Channels** (Kapitel 27) oder über **Netzwerk** (Kapitel 32).
-Channels sind dabei der bevorzugte Weg innerhalb desselben Hosts — sie sind schneller
-als Netzwerk-Sockets und type-safe.
+Containers communicate via **channels** (Chapter 27) or over the **network** (Chapter 32).
+Channels are the preferred way within the same host — they are faster
+than network sockets and type-safe.
 
 ```aiml
-# Container erhält Input über einen Channel:
+# Container receives input via a channel:
 - decl: [input_chan,  chan<WebRequest>]
 - decl: [output_chan, chan<string>]
 
@@ -178,54 +178,54 @@ als Netzwerk-Sockets und type-safe.
     ]
   }]
 
-# Host schickt Anfragen in den Container:
+# Host sends requests into the container:
 - decl: [req, WebRequest]
 - set: [req.path, "/api/users"]
 - set: [req.method, "GET"]
 - call: [input_chan.send, req]
 
-# Host liest Antwort:
+# Host reads response:
 - decl: [response, string]
 - set: [response, { call: [output_chan.recv] }]
 - print: ["Response: ${response}"]
 ```
 
-### 4.3 Container überwachen
+### 4.3 Monitoring the Container
 
 ```aiml
-# Warten bis Container beendet:
+# Wait until container finishes:
 - decl: [exit_code, i32]
 - set: [exit_code, { call: [c.wait] }]
 - print: ["Container exited with code: ${exit_code}"]
 
-# Nicht-blockierendes Polling:
+# Non-blocking polling:
 - decl: [running, bool]
 - set:  [running, { call: [c.is_running] }]
 
-# Ressourcen-Nutzung abfragen:
+# Query resource usage:
 - decl: [stats, ContainerStats]
 - set:  [stats, { call: [c.stats] }]
 - print: ["Memory: ${stats.memory_mb}MB, CPU: ${stats.cpu_percent}%"]
 
-# Logs lesen:
+# Read logs:
 - decl: [logs, string]
 - set:  [logs, { call: [c.logs, {lines: 50}] }]
 
-# Container stoppen:
-- call: [c.stop, {timeout: 10}]   # Wartet 10s, dann SIGKILL
-- call: [c.kill]                   # Sofortiger SIGKILL
+# Stop container:
+- call: [c.stop, {timeout: 10}]   # Waits 10s, then SIGKILL
+- call: [c.kill]                   # Immediate SIGKILL
 ```
 
 ---
 
-## 5. Netzwerk-Modi
+## 5. Network Modes
 
-### 5.1 Bridge (Standard)
+### 5.1 Bridge (Default)
 
-Jeder Container erhält ein virtuelles Netzwerk-Interface (`veth`-Paar), das an
-eine virtuelle Bridge auf dem Host angeschlossen ist. Container können miteinander
-und mit dem Host kommunizieren, aber nicht direkt mit dem externen Netzwerk —
-es sei denn, man konfiguriert Port-Forwarding.
+Each container receives a virtual network interface (`veth` pair) attached to
+a virtual bridge on the host. Containers can communicate with each other
+and with the host, but not directly with the external network —
+unless port forwarding is configured.
 
 ```aiml
 - set: [c, {
@@ -238,8 +238,8 @@ es sei denn, man konfiguriert Port-Forwarding.
 
 ### 5.2 Host
 
-Der Container teilt den Netzwerk-Namespace des Hosts. Kein Overhead durch
-virtuelle Interfaces — maximale Netzwerk-Performance, aber keine Isolierung.
+The container shares the host's network namespace. No overhead from
+virtual interfaces — maximum network performance, but no isolation.
 
 ```aiml
 - set: [c, { call: [container.run, image, { net: "host" }] }]
@@ -247,17 +247,17 @@ virtuelle Interfaces — maximale Netzwerk-Performance, aber keine Isolierung.
 
 ### 5.3 None
 
-Kein Netzwerk. Nur für offline-Verarbeitung (Batch-Jobs, Crypto-Operationen).
+No network. Only for offline processing (batch jobs, crypto operations).
 
 ```aiml
 - set: [c, { call: [container.run, image, { net: "none" }] }]
 ```
 
-### 5.4 Container-zu-Container (Service Discovery)
+### 5.4 Container-to-Container (Service Discovery)
 
-Mehrere Container können in einem **Pod** zusammengefasst werden. Container
-im selben Pod teilen einen Netzwerk-Namespace und können über `localhost`
-miteinander kommunizieren — ohne Port-Forwarding, ohne DNS.
+Multiple containers can be grouped into a **pod**. Containers
+in the same pod share a network namespace and can communicate via `localhost`
+— without port forwarding, without DNS.
 
 ```aiml
 - decl: [pod, Pod]
@@ -269,49 +269,49 @@ miteinander kommunizieren — ohne Port-Forwarding, ohne DNS.
 
 - call: [pod.start]
 
-# Frontend-Container kann "api:8080" und "db:5432" direkt ansprechen
+# Frontend container can address "api:8080" and "db:5432" directly
 ```
 
 ---
 
-## 6. Image-Management
+## 6. Image Management
 
-### 6.1 AIML-Images vs. OCI-Images
+### 6.1 AIML Images vs. OCI Images
 
-Ein AIML-Container-Image ist ein **`Code`-Objekt**. Es hat kein Dockerfile,
-kein Registry-Pull, keinen Layer-Cache auf der Festplatte. Es lebt als Variable
-im laufenden Programm oder wird via `sys.serialize` persistiert.
+An AIML container image is a **`Code` object**. It has no Dockerfile,
+no registry pull, no layer cache on disk. It lives as a variable
+in the running program or is persisted via `sys.serialize`.
 
-Optional kann man AIML-Images in das **OCI-Format** (kompatibel mit Docker, Podman)
-exportieren — für Interoperabilität mit bestehender Infrastruktur:
+Optionally AIML images can be exported to the **OCI format** (compatible with Docker, Podman)
+— for interoperability with existing infrastructure:
 
 ```aiml
-# Export als OCI-Image:
+# Export as OCI image:
 - call: [container.export_oci, my_image, {
     tag:    "my-app:v1.2",
     output: "/tmp/my-app.tar"
   }]
 
-# Import eines OCI-Images (z.B. von Docker Hub):
+# Import an OCI image (e.g. from Docker Hub):
 - decl: [nginx_image, Code]
 - set:  [nginx_image, { call: [container.import_oci, "nginx:alpine"] }]
 ```
 
-### 6.2 Image-Composition
+### 6.2 Image Composition
 
-Da Images normale `Code`-Objekte sind, können sie mit `Code.merge` zusammengesetzt
-werden — das ist das AIML-Äquivalent zu Multi-Stage-Builds:
+Since images are normal `Code` objects, they can be composed with `Code.merge`
+— this is the AIML equivalent of multi-stage builds:
 
 ```aiml
-# Base-Image (z.B. Standard-Library-Funktionen):
+# Base image (e.g. standard library functions):
 - decl: [base, Code]
 - set:  [base, { call: [sys.bundle, "stdlib_core"] }]
 
-# Anwendungs-Image:
+# Application image:
 - decl: [app, Code]
 - set:  [app, { call: [sys.bundle, "my_service"] }]
 
-# Zusammenführen — wie ein Dockerfile "FROM base":
+# Merge — like a Dockerfile "FROM base":
 - decl: [final_image, Code]
 - set:  [final_image, { call: [base.merge, app] }]
 
@@ -321,10 +321,10 @@ werden — das ist das AIML-Äquivalent zu Multi-Stage-Builds:
 
 ---
 
-## 7. Vollständiges Beispiel: Horizontale Skalierung
+## 7. Full Example: Horizontal Scaling
 
 ```aiml
-# Web-Service der unter Last horizontal skaliert wird:
+# Web service that scales horizontally under load:
 
 - class:
     name: HttpRequest
@@ -359,7 +359,7 @@ werden — das ist das AIML-Äquivalent zu Multi-Stage-Builds:
             - set: [resp.body, "OK: ${req.path}"]
             - call: [resp_chan.send, resp]
 
-# Load-Balancer + Auto-Scaling:
+# Load balancer + auto-scaling:
 - decl: [worker_image, Code]
 - set:  [worker_image, { call: [sys.bundle, "worker"] }]
 
@@ -368,7 +368,7 @@ werden — das ist das AIML-Äquivalent zu Multi-Stage-Builds:
 
 - decl: [workers, list<Container>]
 - decl: [scale,   i32]
-- set:  [scale, 4]   # Starte 4 Worker-Container
+- set:  [scale, 4]   # Start 4 worker containers
 
 - decl: [i, i32]
 - set:  [i, 0]
@@ -389,7 +389,7 @@ werden — das ist das AIML-Äquivalent zu Multi-Stage-Builds:
       - call: [workers.push, c]
       - set: [i, { call: [i + 1] }]
 
-# Anfragen senden — automatisch auf die Worker verteilt (Channel-Semantik):
+# Send requests — automatically distributed across workers (channel semantics):
 - decl: [req, HttpRequest]
 - set: [req.method, "GET"]
 - set: [req.path,   "/api/data"]
@@ -402,81 +402,81 @@ werden — das ist das AIML-Äquivalent zu Multi-Stage-Builds:
 
 ---
 
-## 8. Sicherheit
+## 8. Security
 
-### 8.1 User-Namespace-Mapping
+### 8.1 User Namespace Mapping
 
-Standardmäßig läuft AIML-Code im Container als **nicht-privilegierter Benutzer**,
-selbst wenn das Code-Objekt als root kompiliert wurde. Der User-Namespace mappt
-UIDs im Container auf nicht-privilegierte UIDs auf dem Host:
+By default AIML code runs in the container as an **unprivileged user**,
+even if the code object was compiled as root. The user namespace maps
+UIDs inside the container to unprivileged UIDs on the host:
 
 ```aiml
 - set: [c, {
     call: [container.run, image, {
-      user:        "nobody",           # Als welcher User im Container
-      user_map:    "1000:100000:65536" # Container-UID → Host-UID-Bereich
+      user:        "nobody",           # Which user inside the container
+      user_map:    "1000:100000:65536" # container-UID → host-UID range
     }]
   }]
 ```
 
-### 8.2 Capability-Dropping
+### 8.2 Capability Dropping
 
-Linux-Prozesse haben "Capabilities" — granulare Superuser-Rechte. AIML
-entfernt standardmäßig alle nicht benötigten Capabilities:
+Linux processes have "capabilities" — granular superuser privileges. AIML
+drops all unnecessary capabilities by default:
 
 ```aiml
 - set: [c, {
     call: [container.run, image, {
       capabilities: {
-        drop: ["ALL"],               # Alle Capabilities entfernen
-        add:  ["NET_BIND_SERVICE"]   # Nur Port < 1024 binden erlaubt
+        drop: ["ALL"],               # Remove all capabilities
+        add:  ["NET_BIND_SERVICE"]   # Only allow binding port < 1024
       }
     }]
   }]
 ```
 
-### 8.3 Seccomp-Filter
+### 8.3 Seccomp Filter
 
-Ein **Seccomp-Filter** (Secure Computing Mode) schränkt ein, welche Syscalls
-ein Prozess überhaupt aufrufen darf. AIML kennt die Syscalls, die ein
-`Code`-Objekt benötigt, und kann automatisch ein minimales Profil generieren:
+A **seccomp filter** (Secure Computing Mode) restricts which syscalls
+a process may invoke at all. AIML knows the syscalls that a
+`Code` object needs and can automatically generate a minimal profile:
 
 ```aiml
 - set: [c, {
     call: [container.run, image, {
-      seccomp: "auto"   # Compiler analysiert benötigte Syscalls automatisch
-      # oder:
-      seccomp: "strict" # Nur read, write, exit, sigreturn
+      seccomp: "auto"   # Compiler automatically analyzes required syscalls
+      # or:
+      seccomp: "strict" # Only read, write, exit, sigreturn
     }]
   }]
 ```
 
 ---
 
-## 9. Integration mit anderen AIML-Features
+## 9. Integration with Other AIML Features
 
-### 9.1 Hot-Reload über Container-Grenzen
+### 9.1 Hot-Reload Across Container Boundaries
 
-Ein laufender Container kann via `sys.exec` ein neues `Code`-Objekt mit einer
-höheren Funktionsversion erhalten. Das Hot-Reload-System (Kapitel 30) funktioniert
-auch dann, wenn das Update-Bundle über das Netzwerk (Kapitel 32) übertragen wird:
+A running container can receive a new `Code` object with a higher function version
+via `sys.exec`. The hot-reload system (Chapter 30) works even when the update
+bundle is transmitted over the network (Chapter 32):
 
 ```aiml
-# Host sendet Update an laufenden Container:
+# Host sends update to running container:
 - decl: [update_pkg, Code]
 - set:  [update_pkg, { call: [sys.bundle, "handle_request"] }]  # v2
 
-# Container empfängt und führt Hot-Reload durch:
+# Container receives and performs hot-reload:
 - call: [update_chan.send, update_pkg]
-# Im Container: sys.exec(update_pkg) → hot-reload handle_request v1 → v2
+# Inside container: sys.exec(update_pkg) → hot-reload handle_request v1 → v2
 ```
 
-### 9.2 AionDB über Container-Grenzen
+### 9.2 AionDB Across Container Boundaries
 
-Ein `Store<T>` kann als **shared volume** zwischen Containern gemountet werden.
-Da AionDB Zero-Copy-Reads über mmap verwendet, funktioniert das auch über
-Prozessgrenzen hinweg — solange beide Prozesse das Segment lesen (nicht schreiben,
-ohne explizite Synchronisation):
+A `Store<T>` can be mounted as a **shared volume** between containers.
+Since AionDB uses zero-copy reads via mmap, this works across
+process boundaries — as long as both processes read the segment (not write
+without explicit synchronization):
 
 ```aiml
 - decl: [shared_db, Store<GameState>]
@@ -493,12 +493,12 @@ ohne explizite Synchronisation):
 
 ---
 
-## 10. Offene Designfragen (Future Work)
+## 10. Open Design Questions (Future Work)
 
-- **Rootless Containers**: Containerisierung ohne Root-Rechte (User-Namespace-only).
-- **Checkpoint/Restore**: Laufenden Container pausieren, Zustand auf Disk schreiben,
-  auf anderem Host fortsetzen (CRIU-Integration).
-- **WASM-Target**: `sys.bundle` → WebAssembly statt Linux-Container. Gleiche
-  Isolierungs-Semantik, browser- und edge-kompatibel.
-- **Quota auf AionDB**: DB-Zugriffe pro Container messen und limitieren.
-- **Netzwerk-Policies**: Feinkörnige Regeln, welche Container miteinander kommunizieren dürfen.
+- **Rootless Containers**: Containerization without root privileges (user-namespace-only).
+- **Checkpoint/Restore**: Pause a running container, write state to disk,
+  resume on another host (CRIU integration).
+- **WASM Target**: `sys.bundle` → WebAssembly instead of Linux container. Same
+  isolation semantics, browser- and edge-compatible.
+- **Quota on AionDB**: Measure and limit DB accesses per container.
+- **Network Policies**: Fine-grained rules for which containers may communicate with each other.

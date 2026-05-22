@@ -20,30 +20,35 @@ namespace ListImpl {
     }
 
     void initList(CompilerContext& ctx, llvm::Value* listPtr, llvm::Type* elemType, int initialCapacity) {
-        llvm::Type* i32 = ctx.builder.getInt32Ty();
-        llvm::Type* i64 = ctx.builder.getInt64Ty();
-        llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0); 
-        
+        llvm::Type* sz  = ctx.getSizeType();
+        llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+
         llvm::StructType* structType = getListStructType(ctx);
 
         // 1. Set Size = 0
         llvm::Value* sizePtr = ctx.builder.CreateStructGEP(structType, listPtr, 0, "sizePtr");
         ctx.builder.CreateStore(ctx.builder.getInt32(0), sizePtr);
-        
+
         // 2. Set Capacity = initialCapacity
         llvm::Value* capPtr = ctx.builder.CreateStructGEP(structType, listPtr, 1, "capPtr");
         ctx.builder.CreateStore(ctx.builder.getInt32(initialCapacity), capPtr);
-        
-        // 3. Malloc Data
-        llvm::Value* onePtr = ctx.builder.CreateConstInBoundsGEP1_32(elemType, llvm::Constant::getNullValue(elemType->getPointerTo()), 1);
-        llvm::Value* elemSize = ctx.builder.CreatePtrToInt(onePtr, i64);
-        
+
+        // 3. Malloc Data. All size arithmetic uses size_t (i64 on x86_64,
+        // i32 on wasm32) so the malloc call signature matches. The
+        // earlier hardcoded i64 silently produced an `unreachable` stub
+        // on wasm32 because the malloc arg type didn't match the
+        // declaration. Same class of bug as the 2026-05-15 memcpy fix.
+        llvm::Value* onePtr = ctx.builder.CreateConstInBoundsGEP1_32(
+            elemType, llvm::Constant::getNullValue(elemType->getPointerTo()), 1);
+        llvm::Value* elemSize = ctx.builder.CreatePtrToInt(onePtr, sz);
+
         llvm::Value* sizeVal = ctx.builder.getInt32(initialCapacity);
-        llvm::Value* totalSize = ctx.builder.CreateMul(elemSize, ctx.builder.CreateZExt(sizeVal, i64));
-        
-        llvm::Function* mallocFunc = ctx.getFunction("malloc", ptrTy, {i64});
+        llvm::Value* totalSize = ctx.builder.CreateMul(
+            elemSize, ctx.builder.CreateZExtOrTrunc(sizeVal, sz));
+
+        llvm::Function* mallocFunc = ctx.getFunction("malloc", ptrTy, {sz});
         llvm::Value* dataVoidPtr = ctx.builder.CreateCall(mallocFunc, {totalSize});
-        
+
         llvm::Value* dataPtrMember = ctx.builder.CreateStructGEP(structType, listPtr, 2, "dataPtr");
         ctx.builder.CreateStore(dataVoidPtr, dataPtrMember);
     }
@@ -77,14 +82,15 @@ namespace ListImpl {
             llvm::Value* dataPtrMember = ctx.builder.CreateStructGEP(structType, listPtr, 2, "dataPtr");
             llvm::Value* oldData = ctx.builder.CreateLoad(llvm::PointerType::get(ctx.context, 0), dataPtrMember);
             
+            llvm::Type* sz = ctx.getSizeType();
             llvm::Type* elemType = val->getType();
             llvm::Value* onePtr = ctx.builder.CreateConstInBoundsGEP1_32(elemType, llvm::Constant::getNullValue(elemType->getPointerTo()), 1);
-            llvm::Value* elemSize = ctx.builder.CreatePtrToInt(onePtr, ctx.builder.getInt64Ty());
-            llvm::Value* totalNewSize = ctx.builder.CreateMul(elemSize, ctx.builder.CreateZExt(newCap, ctx.builder.getInt64Ty()));
-            
-            llvm::Function* reallocFunc = ctx.getFunction("realloc", llvm::PointerType::get(ctx.context, 0), 
-                {llvm::PointerType::get(ctx.context, 0), ctx.builder.getInt64Ty()});
-                
+            llvm::Value* elemSize = ctx.builder.CreatePtrToInt(onePtr, sz);
+            llvm::Value* totalNewSize = ctx.builder.CreateMul(elemSize, ctx.builder.CreateZExtOrTrunc(newCap, sz));
+
+            llvm::Function* reallocFunc = ctx.getFunction("realloc", llvm::PointerType::get(ctx.context, 0),
+                {llvm::PointerType::get(ctx.context, 0), sz});
+
             llvm::Value* newData = ctx.builder.CreateCall(reallocFunc, {oldData, totalNewSize});
             ctx.builder.CreateStore(newData, dataPtrMember);
             
@@ -221,13 +227,14 @@ namespace ListImpl {
              llvm::Value* dataPtrMember = ctx.builder.CreateStructGEP(structType, listPtr, 2, "dataPtr");
              llvm::Value* oldData = ctx.builder.CreateLoad(llvm::PointerType::get(ctx.context, 0), dataPtrMember);
              
+             llvm::Type* sz = ctx.getSizeType();
              llvm::Type* elemType = val->getType();
              llvm::Value* onePtr = ctx.builder.CreateConstInBoundsGEP1_32(elemType, llvm::Constant::getNullValue(elemType->getPointerTo()), 1);
-             llvm::Value* elemSize = ctx.builder.CreatePtrToInt(onePtr, ctx.builder.getInt64Ty());
-             llvm::Value* totalNewSize = ctx.builder.CreateMul(elemSize, ctx.builder.CreateZExt(newCap, ctx.builder.getInt64Ty()));
-             
-             llvm::Function* reallocFunc = ctx.getFunction("realloc", llvm::PointerType::get(ctx.context, 0), 
-                {llvm::PointerType::get(ctx.context, 0), ctx.builder.getInt64Ty()});
+             llvm::Value* elemSize = ctx.builder.CreatePtrToInt(onePtr, sz);
+             llvm::Value* totalNewSize = ctx.builder.CreateMul(elemSize, ctx.builder.CreateZExtOrTrunc(newCap, sz));
+
+             llvm::Function* reallocFunc = ctx.getFunction("realloc", llvm::PointerType::get(ctx.context, 0),
+                {llvm::PointerType::get(ctx.context, 0), sz});
                 
              llvm::Value* newData = ctx.builder.CreateCall(reallocFunc, {oldData, totalNewSize});
              ctx.builder.CreateStore(newData, dataPtrMember);
@@ -249,16 +256,17 @@ namespace ListImpl {
         llvm::Value* numToMove = ctx.builder.CreateSub(sizeVal, indexVal);
         
         // Count in bytes
+        llvm::Type* sz = ctx.getSizeType();
         llvm::Value* onePtr = ctx.builder.CreateConstInBoundsGEP1_32(elemType, llvm::Constant::getNullValue(elemType->getPointerTo()), 1);
-        llvm::Value* elemSize = ctx.builder.CreatePtrToInt(onePtr, ctx.builder.getInt64Ty());
-        llvm::Value* bytesToMove = ctx.builder.CreateMul(ctx.builder.CreateZExt(numToMove, ctx.builder.getInt64Ty()), elemSize);
-        
-        llvm::Function* memmoveFunc = ctx.getFunction("memmove", llvm::PointerType::get(ctx.context, 0), 
-             {llvm::PointerType::get(ctx.context, 0), llvm::PointerType::get(ctx.context, 0), ctx.builder.getInt64Ty()});
-        
+        llvm::Value* elemSize = ctx.builder.CreatePtrToInt(onePtr, sz);
+        llvm::Value* bytesToMove = ctx.builder.CreateMul(ctx.builder.CreateZExtOrTrunc(numToMove, sz), elemSize);
+
+        llvm::Function* memmoveFunc = ctx.getFunction("memmove", llvm::PointerType::get(ctx.context, 0),
+             {llvm::PointerType::get(ctx.context, 0), llvm::PointerType::get(ctx.context, 0), sz});
+
         // Only move if numToMove > 0
         llvm::Value* shouldMove = ctx.builder.CreateICmpSGT(numToMove, ctx.builder.getInt32(0));
-        
+
         llvm::BasicBlock* doMoveBB = llvm::BasicBlock::Create(ctx.context, "do_move", parentFunc);
         llvm::BasicBlock* storeBB = llvm::BasicBlock::Create(ctx.context, "insert_store", parentFunc);
         
@@ -290,16 +298,17 @@ namespace ListImpl {
         llvm::Value* newSize = ctx.builder.CreateSub(sizeVal, ctx.builder.getInt32(1));
         llvm::Value* numToMove = ctx.builder.CreateSub(newSize, indexVal);
         
+        llvm::Type* sz2 = ctx.getSizeType();
         llvm::Value* onePtr = ctx.builder.CreateConstInBoundsGEP1_32(elemType, llvm::Constant::getNullValue(elemType->getPointerTo()), 1);
-        llvm::Value* elemSize = ctx.builder.CreatePtrToInt(onePtr, ctx.builder.getInt64Ty());
-        llvm::Value* bytesToMove = ctx.builder.CreateMul(ctx.builder.CreateZExt(numToMove, ctx.builder.getInt64Ty()), elemSize);
-        
-        llvm::Function* memmoveFunc = ctx.getFunction("memmove", llvm::PointerType::get(ctx.context, 0), 
-             {llvm::PointerType::get(ctx.context, 0), llvm::PointerType::get(ctx.context, 0), ctx.builder.getInt64Ty()});
+        llvm::Value* elemSize = ctx.builder.CreatePtrToInt(onePtr, sz2);
+        llvm::Value* bytesToMove = ctx.builder.CreateMul(ctx.builder.CreateZExtOrTrunc(numToMove, sz2), elemSize);
+
+        llvm::Function* memmoveFunc = ctx.getFunction("memmove", llvm::PointerType::get(ctx.context, 0),
+             {llvm::PointerType::get(ctx.context, 0), llvm::PointerType::get(ctx.context, 0), sz2});
 
         // Only move if numToMove > 0
         llvm::Value* shouldMove = ctx.builder.CreateICmpSGT(numToMove, ctx.builder.getInt32(0));
-        
+
         llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
         llvm::BasicBlock* doMoveBB = llvm::BasicBlock::Create(ctx.context, "rm_do_move", parentFunc);
         llvm::BasicBlock* finishBB = llvm::BasicBlock::Create(ctx.context, "rm_finish", parentFunc);

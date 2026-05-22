@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <list>
 #include <algorithm>
 #include <cmath>
 #include <mutex>
@@ -33,10 +34,48 @@ static const uint8_t WAL_INSERT = 1;
 static const uint8_t WAL_DELETE = 2;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// .kvwal file header (32 bytes, packed)
+// ─────────────────────────────────────────────────────────────────────────────
+// All Kv WAL files start with this header. Older format files (pre-mmap
+// refactor) had no header → invalid magic → fatal error on open.
+struct AimlKvWalHeader {
+    char     magic[8];       // "AIMLKVWL"
+    uint32_t version;        // KV_WAL_VERSION
+    uint32_t flags;          // bit 0: typed (ser_nodes != nullptr at create)
+    int64_t  val_size;       // 0 for string/typed, > 0 for fixed-size
+    uint64_t wal_used;       // last-known end-of-data offset (best-effort)
+};
+static_assert(sizeof(AimlKvWalHeader) == 32, "AimlKvWalHeader must be 32 bytes");
+
+static const char     KV_WAL_MAGIC[8] = {'A','I','M','L','K','V','W','L'};
+// Version 2 (Schritt 4): Strings im WAL haben jetzt Null-Terminator
+// (val_bytes = strlen+1). Macht zero-copy Reads moeglich.
+static const uint32_t KV_WAL_VERSION  = 2;
+static const uint32_t KV_WAL_FLAG_TYPED = 1u << 0;
+
+// Initial sparse-reserve fuer jede Kv-WAL-Datei. Der Kernel allokiert nur
+// tatsaechlich beschriebene Pages, aber das `apparent size` der Datei
+// (was `ls -la`, File-Watcher, Indexer und nicht-sparse-aware Tools sehen)
+// = die hier gewaehlte Reserve.
+//
+// 16 MB ist klein genug, dass Test-`/tmp` keinen IDE-File-Watcher kippt
+// (~22 Tests × 16 MB = 352 MB apparent), und gross genug, dass kleine
+// Stores ohne mremap-Wachstum auskommen. Bei Append-Overflow verdoppelt
+// `kv_mmap_grow` die Reserve via `ftruncate` + `mremap(MREMAP_MAYMOVE)`.
+static constexpr size_t KV_MMAP_RESERVE_INITIAL = (size_t)16 * 1024 * 1024;
+
+// Maximale Anzahl gleichzeitig dekodierter typed-Eintraege im Cache.
+// Bounded LRU (Schritt 7) verhindert unbegrenztes Wachstum von
+// `decoded_cache`. Pointer aus `kv.get` werden invalid, wenn ihr Eintrag
+// aus dem Cache faellt — dokumentiert in spec/migration/aiondb_kv_mmap_refactor.md.
+static constexpr size_t MAX_DECODED_LRU = 1024;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Internal C++ structs
 // ─────────────────────────────────────────────────────────────────────────────
 
 struct AimlStore {
+    std::mutex  mtx;             // per-store lock for concurrent insert/get/update/delete
     std::string type_name;
     int64_t     elem_size = 0;
     int32_t     total     = 0;   // used slots
@@ -60,6 +99,10 @@ struct AimlStore {
     uint8_t* active_ptr = nullptr;   // data_ptr + capacity * elem_size
     int32_t  capacity   = 0;
 
+    // ── String-key index: field_offset → (string_value → slot_id) ────────────
+    // Populated lazily on first get_by_key call for a given offset.
+    std::unordered_map<int32_t, std::unordered_map<std::string, int32_t>> key_index;
+
     // ── Column Layout mode ────────────────────────────────────────────────────
     bool     column_layout = false;
     int32_t  n_fields = 0;
@@ -70,25 +113,47 @@ struct AimlStore {
     std::vector<uint8_t>           view_buf;      // scratch for assembled get
 };
 
+// Position+Length im mmap'd WAL — point-into-mmap statt copy.
+struct AimlKvValueLoc {
+    uint64_t offset;   // Byte-Offset im mmap (zeigt direkt auf val-Bytes)
+    uint32_t length;   // val_bytes
+};
+
 struct AimlKv {
     std::mutex  mtx;  // per-KV lock for thread-safe access
     int64_t val_size;
-    std::unordered_map<std::string, std::vector<uint8_t>> map;  // raw bytes OR blob (typed)
+    bool    blob_only = false;  // true when only kv_set_blob was used (no strdup entries)
+    // ── Index (Schritt 3): source-of-truth fuer PERSISTENTE KVs ──────────────
+    // key → {offset, length} im mmap. Reads geben Pointer in mmap zurueck.
+    std::unordered_map<std::string, AimlKvValueLoc> index;
+    // ── Storage fuer NON-PERSISTENTE KVs (legacy heap-map) ──────────────────
+    // Wird in einer spaeteren Phase auf einen anonymen mmap-Buffer migriert.
+    std::unordered_map<std::string, std::vector<uint8_t>> map;
     // Typed Kv: descriptor for recursive serialization of heap fields
     const AimlTypeNode* ser_nodes = nullptr;
     int32_t             ser_n     = 0;
-    // Decoded cache: key → decoded struct (live heap pointers, freed on eviction)
+    // Decoded cache: key → decoded struct (live heap pointers, freed on eviction).
+    // Bounded LRU (Schritt 7): `decoded_lru` traegt Keys in MRU-Reihenfolge
+    // (front = MRU, back = oldest). `decoded_lru_pos` mapped Key → Listen-iterator
+    // fuer O(1) splice. Eviction beim Cache-Insert wenn size > MAX_DECODED_LRU.
     std::unordered_map<std::string, std::vector<uint8_t>> decoded_cache;
+    std::list<std::string>                                decoded_lru;
+    std::unordered_map<std::string, std::list<std::string>::iterator> decoded_lru_pos;
     // Persistence (WAL)
     bool        persistent = false;
     int         wal_fd     = -1;
     std::string wal_path;
+    // ── mmap-backing (Schritt 2) ──────────────────────────────────────────────
+    void*       wal_mmap      = nullptr;   // base pointer (initial KV_MMAP_RESERVE_INITIAL)
+    size_t      wal_mmap_size = 0;         // grow via kv_mmap_grow
+    uint64_t    wal_used      = 0;         // naechster freier Offset im WAL
 };
 
 struct AimlVecStore {
     int32_t dims;
-    std::vector<std::string>        ids;
-    std::vector<std::vector<float>> embeddings;
+    std::vector<std::string> ids;
+    std::vector<float>       embeddings;  // flat: ids.size() * dims floats (cache-friendly)
+    std::vector<float>       norms;       // precomputed L2 norm per embedding
     // Persist fields
     bool        persistent = false;
     int         wal_fd     = -1;
@@ -285,6 +350,81 @@ static bool store_wal_replay(AimlStore* s) {
     return true;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// AionDB Pfad-Konfiguration (db.set_path / AIONDB_PATH env var)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Resolution-Reihenfolge fuer den Speicher-Root:
+//   1. AIONDB_PATH env var (dominiert immer, bei jedem Open neu gelesen)
+//   2. g_aiondb_root (gesetzt durch aiml_db_set_path)
+//   3. Fallback "./aiondb/"
+//
+// Sub-Pfad-Argument (`base_path` der open-Funktionen):
+//   - nullptr/empty   → reine Root nutzen
+//   - absolut (/...)  → as-is (backward-compat fuer Tests mit /tmp/aiml_test_*)
+//   - relativ          → root + sub_path
+static std::mutex   g_aiondb_path_mutex;
+static std::string  g_aiondb_root;  // empty == not set via aiml_db_set_path
+
+// Helper: stellt sicher dass der Pfad mit '/' endet.
+static void path_ensure_trailing_slash(std::string& s) {
+    if (!s.empty() && s.back() != '/') s += '/';
+}
+
+// Resolve AionDB-Verzeichnis fuer einen open-Call.
+// Caller bekommt einen Pfad mit Trailing-Slash.
+static std::string resolve_aiondb_dir(const char* sub_path) {
+    // 1. Root bestimmen
+    std::string root;
+    const char* env = std::getenv("AIONDB_PATH");
+    if (env && *env) {
+        root = env;
+    } else {
+        std::lock_guard<std::mutex> lock(g_aiondb_path_mutex);
+        root = g_aiondb_root.empty() ? std::string("./aiondb/") : g_aiondb_root;
+    }
+    path_ensure_trailing_slash(root);
+
+    // 2. Sub-Pfad anwenden
+    if (!sub_path || !*sub_path) return root;
+    if (sub_path[0] == '/') {
+        // Absolute Pfade haben Vorrang (backward compat).
+        std::string abs = sub_path;
+        path_ensure_trailing_slash(abs);
+        return abs;
+    }
+    std::string combined = root + sub_path;
+    path_ensure_trailing_slash(combined);
+    return combined;
+}
+
+// Setzt den globalen AionDB-Root. Wird von db.set_path("/path") gerufen.
+// Wert wird ignoriert wenn AIONDB_PATH env var gesetzt ist (env dominiert).
+extern "C" void aiml_db_set_path(const char* path) {
+    std::lock_guard<std::mutex> lock(g_aiondb_path_mutex);
+    if (!path || !*path) {
+        g_aiondb_root.clear();
+        return;
+    }
+    g_aiondb_root = path;
+}
+
+// Gibt den aktuell aufgeloesten Root zurueck (mit Trailing-Slash).
+// Single Source of Truth fuer AIML-Code, das den Pfad braucht
+// (z. B. StoreOrganisator zum gezielten Loeschen).
+extern "C" const char* aiml_db_get_path(void) {
+    std::string root;
+    const char* env = std::getenv("AIONDB_PATH");
+    if (env && *env) {
+        root = env;
+    } else {
+        std::lock_guard<std::mutex> lock(g_aiondb_path_mutex);
+        root = g_aiondb_root.empty() ? std::string("./aiondb/") : g_aiondb_root;
+    }
+    path_ensure_trailing_slash(root);
+    return strdup(root.c_str());
+}
+
 // Global registry for db.checkpoint_all — protected by g_db_mutex
 static std::mutex                      g_db_mutex;
 static std::vector<AimlStore*>         g_persistent_stores;
@@ -297,6 +437,9 @@ static std::unordered_map<std::string, AimlStore*>      g_persistent_stores_by_n
 static std::unordered_map<std::string, AimlKv*>         g_persistent_kvs_by_name;
 static std::unordered_map<std::string, AimlTimeSeries*> g_persistent_ts_by_name;
 static std::unordered_map<std::string, AimlVecStore*>   g_persistent_vecs_by_name;
+// In-memory (non-persistent) KV registry: name → singleton handle, shared across calls.
+// Ensures db.open_kv("name", {persist: false}) returns the same instance on every call.
+static std::unordered_map<std::string, AimlKv*>         g_non_persist_kvs_by_name;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Column Layout helpers
@@ -347,8 +490,7 @@ extern "C" void* aiml_db_store_open_persist(const char* name, const char* type_n
                                               int64_t elem_size, const char* base_path) {
     if (elem_size <= 0) return nullptr;
 
-    std::string bp = base_path ? base_path : "./aiondb/";
-    if (!bp.empty() && bp.back() != '/') bp += '/';
+    std::string bp = resolve_aiondb_dir(base_path);
     std::string nm = name ? name : "store";
 
     // Return existing handle if already open (same process, same name+path)
@@ -433,8 +575,7 @@ extern "C" void* aiml_db_store_open_persist(const char* name, const char* type_n
 extern "C" void* aiml_db_store_open_typed_persist(const char* name, const char* type_name,
                                                     int64_t elem_size, const char* base_path,
                                                     const AimlTypeNode* nodes, int32_t n_nodes) {
-    std::string dir = base_path ? base_path : "./aiondb/";
-    if (!dir.empty() && dir.back() != '/') dir += '/';
+    std::string dir = resolve_aiondb_dir(base_path);
     std::string nm = name ? name : "store";
     std::string registry_key = dir + nm;
 
@@ -493,6 +634,8 @@ extern "C" void* aiml_db_store_open_col(const char* name, const char* type_name,
 extern "C" int32_t aiml_db_store_insert(void* store, const void* elem, int64_t elem_size) {
     if (!store || !elem) return -1;
     AimlStore* s = static_cast<AimlStore*>(store);
+    std::lock_guard<std::mutex> lock(s->mtx);
+    s->key_index.clear();  // invalidate string-key index on write
     if (elem_size != s->elem_size) return -1;
 
     if (s->column_layout) return store_col_insert(s, elem);
@@ -535,6 +678,8 @@ extern "C" int32_t aiml_db_store_insert(void* store, const void* elem, int64_t e
 extern "C" int32_t aiml_db_store_update(void* store, int32_t id, const void* elem, int64_t elem_size) {
     if (!store || !elem || id < 1) return -1;
     AimlStore* s = static_cast<AimlStore*>(store);
+    std::lock_guard<std::mutex> lock(s->mtx);
+    s->key_index.clear();  // invalidate string-key index on write
     int32_t idx = id - 1;
 
     if (s->column_layout) {
@@ -564,13 +709,11 @@ extern "C" int32_t aiml_db_store_update(void* store, int32_t id, const void* ele
     return 0;
 }
 
-extern "C" void* aiml_db_store_get(void* store, int32_t id) {
-    if (!store || id < 1) return nullptr;
-    AimlStore* s = static_cast<AimlStore*>(store);
+// Unlocked internal get — caller must hold s->mtx
+static void* store_get_unlocked(AimlStore* s, int32_t id) {
+    if (id < 1) return nullptr;
     int32_t idx = id - 1;
-
     if (s->column_layout) return store_col_get(s, idx);
-
     if (s->persistent) {
         if (s->typed_persistent && s->ser_nodes) {
             if (idx >= s->total || idx >= (int32_t)s->mem_active.size() || !s->mem_active[(size_t)idx]) return nullptr;
@@ -581,9 +724,15 @@ extern "C" void* aiml_db_store_get(void* store, int32_t id) {
         if (idx >= s->total || !s->active_ptr[idx]) return nullptr;
         return s->data_ptr + (size_t)idx * s->elem_size;
     }
-
     if (idx >= s->total || !s->mem_active[idx]) return nullptr;
     return s->mem_data.data() + (size_t)idx * s->elem_size;
+}
+
+extern "C" void* aiml_db_store_get(void* store, int32_t id) {
+    if (!store || id < 1) return nullptr;
+    AimlStore* s = static_cast<AimlStore*>(store);
+    std::lock_guard<std::mutex> lock(s->mtx);
+    return store_get_unlocked(s, id);
 }
 
 extern "C" void* aiml_db_store_get_by_key(void* store_ptr, const void* key_ptr,
@@ -591,19 +740,32 @@ extern "C" void* aiml_db_store_get_by_key(void* store_ptr, const void* key_ptr,
                                             int32_t is_string) {
     if (!store_ptr || !key_ptr) return nullptr;
     AimlStore* s = static_cast<AimlStore*>(store_ptr);
-    for (int32_t slot = 1; slot <= s->total; slot++) {
-        void* elem = aiml_db_store_get(store_ptr, slot);
-        if (!elem) continue;
-        const uint8_t* field = static_cast<const uint8_t*>(elem) + key_offset;
-        if (is_string) {
-            const char* stored = nullptr;
-            memcpy(&stored, field, sizeof(char*));
-            if (stored && strcmp(stored, static_cast<const char*>(key_ptr)) == 0)
-                return elem;
-        } else {
-            if (memcmp(field, key_ptr, (size_t)key_size) == 0)
-                return elem;
+    std::lock_guard<std::mutex> lock(s->mtx);
+
+    if (is_string) {
+        // Use hash index: build lazily for this key_offset if not present
+        auto& idx = s->key_index[key_offset];
+        if (idx.empty()) {
+            for (int32_t slot = 1; slot <= s->total; slot++) {
+                void* elem = store_get_unlocked(s, slot);
+                if (!elem) continue;
+                const char* stored = nullptr;
+                memcpy(&stored, static_cast<const uint8_t*>(elem) + key_offset, sizeof(char*));
+                if (stored) idx[stored] = slot;
+            }
         }
+        const char* needle = static_cast<const char*>(key_ptr);
+        auto it = idx.find(needle);
+        if (it == idx.end()) return nullptr;
+        return store_get_unlocked(s, it->second);
+    }
+
+    // Non-string: linear scan (rare path)
+    for (int32_t slot = 1; slot <= s->total; slot++) {
+        void* elem = store_get_unlocked(s, slot);
+        if (!elem) continue;
+        if (memcmp(static_cast<const uint8_t*>(elem) + key_offset, key_ptr, (size_t)key_size) == 0)
+            return elem;
     }
     return nullptr;
 }
@@ -611,6 +773,8 @@ extern "C" void* aiml_db_store_get_by_key(void* store_ptr, const void* key_ptr,
 extern "C" void aiml_db_store_delete(void* store, int32_t id) {
     if (!store || id < 1) return;
     AimlStore* s = static_cast<AimlStore*>(store);
+    std::lock_guard<std::mutex> lock(s->mtx);
+    s->key_index.clear();  // invalidate string-key index on write
     int32_t idx = id - 1;
 
     if (s->column_layout) { store_col_delete(s, idx); return; }
@@ -642,12 +806,15 @@ extern "C" void aiml_db_store_delete(void* store, int32_t id) {
 
 extern "C" int32_t aiml_db_store_len(void* store) {
     if (!store) return 0;
-    return static_cast<AimlStore*>(store)->count;
+    AimlStore* s = static_cast<AimlStore*>(store);
+    std::lock_guard<std::mutex> lock(s->mtx);
+    return s->count;
 }
 
 extern "C" int32_t aiml_db_store_checkpoint(void* store) {
     if (!store) return -1;
     AimlStore* s = static_cast<AimlStore*>(store);
+    std::lock_guard<std::mutex> lock(s->mtx);
     if (s->typed_persistent && s->ser_nodes) {
         if (!s->persistent || s->wal_fd < 0) return 0;
         ftruncate(s->wal_fd, 0);
@@ -691,8 +858,13 @@ extern "C" int32_t aiml_db_checkpoint_all(void) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 extern "C" void* aiml_db_kv_open(const char* name, int64_t val_size) {
+    std::string nm = name ? name : "kv";
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    auto it = g_non_persist_kvs_by_name.find(nm);
+    if (it != g_non_persist_kvs_by_name.end()) return it->second;
     AimlKv* kv = new AimlKv();
     kv->val_size = val_size;
+    g_non_persist_kvs_by_name[nm] = kv;
     return kv;
 }
 
@@ -702,46 +874,348 @@ static const uint8_t KV_WAL_SET      = 1;
 static const uint8_t KV_WAL_DELETE   = 2;
 static const uint8_t KV_WAL_SET_BLOB = 3;  // raw binary, no strdup on replay
 
+// ── mmap-Backing (Schritt 2) ────────────────────────────────────────────────
+// Bietet zero-copy Append in eine sparse-extended WAL-Datei. Alle Schreiber
+// halten die kv->mtx, daher ist `wal_used` race-frei.
+
+// Setzt das mmap-Backing fuer einen frisch geoeffneten kv->wal_fd auf.
+// File wird auf eine geeignete Reserve sparse-extended, dann gemappt.
+// Wenn fstat() schon eine groessere Datei zeigt (bestehender, gewachsener
+// Store) wird die existierende Groesse beibehalten — sonst INITIAL.
+// `wal_used` wird aus dem Header uebernommen (Crash-Recovery: best-effort).
+// Returns true on success.
+static bool kv_mmap_attach(AimlKv* kv) {
+    if (kv->wal_fd < 0) return false;
+    struct stat st;
+    if (fstat(kv->wal_fd, &st) != 0) {
+        fprintf(stderr,
+            "[AionDB] FATAL: fstat failed for '%s' (errno=%d)\n",
+            kv->wal_path.c_str(), errno);
+        return false;
+    }
+    // Wunsch-Reserve: bestehende Dateigroesse behalten (gewachsener Store) oder
+    // INITIAL bei frischem Store. Bei ENOMEM fallen wir in mehreren Stufen
+    // zurueck, damit wir auch unter virt-Druck noch oeffnen koennen.
+    size_t target = (size_t)st.st_size > KV_MMAP_RESERVE_INITIAL
+                    ? (size_t)st.st_size
+                    : KV_MMAP_RESERVE_INITIAL;
+    long page = sysconf(_SC_PAGESIZE);
+    if (page <= 0) page = 4096;
+    size_t hdr_aligned = ((size_t)sizeof(AimlKvWalHeader) + (size_t)page - 1)
+                         & ~((size_t)page - 1);
+    size_t candidates[] = {
+        target,
+        (size_t)4 * 1024 * 1024,
+        (size_t)1 * 1024 * 1024,
+        (size_t)256 * 1024,
+        hdr_aligned,
+    };
+    for (size_t reserve : candidates) {
+        // Zu klein gegenueber existierendem File-Inhalt: nicht versuchen,
+        // sonst gibt's SIGBUS auf Seiten ueber dem mmap-Ende.
+        if (reserve < (size_t)st.st_size) continue;
+        if ((size_t)st.st_size < reserve) {
+            if (ftruncate(kv->wal_fd, (off_t)reserve) != 0) {
+                continue;  // try next, smaller candidate
+            }
+        }
+        void* p = mmap(nullptr, reserve,
+                       PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_NORESERVE,
+                       kv->wal_fd, 0);
+        if (p != MAP_FAILED) {
+            kv->wal_mmap      = p;
+            kv->wal_mmap_size = reserve;
+            AimlKvWalHeader hdr;
+            memcpy(&hdr, p, sizeof(hdr));
+            kv->wal_used = (hdr.wal_used >= sizeof(hdr)) ? hdr.wal_used : sizeof(hdr);
+            return true;
+        }
+        // mmap-fail: Datei-Groesse zuruecksetzen und naechsten Kandidaten probieren
+        if ((size_t)st.st_size < reserve) {
+            ftruncate(kv->wal_fd, st.st_size);
+        }
+    }
+    fprintf(stderr,
+        "[AionDB] FATAL: mmap failed for '%s' at all candidate sizes "
+        "(target=%zu bytes; min=%zu bytes; errno=%d) — likely RLIMIT_AS or "
+        "virt-fragmentation. Aborting to avoid silent data loss.\n",
+        kv->wal_path.c_str(), target, hdr_aligned, errno);
+    _exit(1);  // strikt: kein silent skip — Caller wuerde sonst nullptr ignorieren
+    return false;  // unreachable
+}
+
+// Wachsen via ftruncate + mremap(MREMAP_MAYMOVE).
+// Versucht zuerst Verdopplung; bei ENOMEM (typisch durch
+// virt-Address-Space-Fragmentation, RLIMIT_AS oder vm.max_map_count)
+// degradiert in mehreren Stufen: 2x → +50% → +25% → +64 MB → +16 MB.
+// Mapping-Pointer kann sich aendern → Schreib-Helper lesen `kv->wal_mmap`
+// nach jedem Append neu, Index-Offsets sind file-relativ.
+static bool kv_mmap_grow(AimlKv* kv, size_t need_size) {
+    if (!kv->wal_mmap) return false;
+    size_t cur = kv->wal_mmap_size;
+    if (need_size <= cur) return true;
+
+    // Kandidaten-Groessen, vom optimistischsten zum konservativsten Schritt.
+    size_t candidates[] = {
+        cur * 2,
+        cur + cur / 2,
+        cur + cur / 4,
+        cur + (size_t)64 * 1024 * 1024,
+        cur + (size_t)16 * 1024 * 1024,
+        cur + (size_t)4  * 1024 * 1024,
+    };
+    for (size_t cand : candidates) {
+        if (cand < need_size) continue;  // muss mindestens das Ziel decken
+        if (cand <= cur) continue;       // muss strikt wachsen
+        if (ftruncate(kv->wal_fd, (off_t)cand) != 0) continue;
+        void* p = mremap(kv->wal_mmap, kv->wal_mmap_size, cand, MREMAP_MAYMOVE);
+        if (p == MAP_FAILED) {
+            // Datei-Groesse zuruecksetzen, naechsten kleineren Kandidaten probieren
+            ftruncate(kv->wal_fd, (off_t)cur);
+            continue;
+        }
+        kv->wal_mmap      = p;
+        kv->wal_mmap_size = cand;
+        return true;
+    }
+    // Letzter Fallback: explizit munmap → ftruncate → mmap.
+    // mremap(MREMAP_MAYMOVE) braucht kurzzeitig DOPPELTEN virt-Speicher
+    // (alter + neuer Bereich gleichzeitig). Bei extremer Fragmentation
+    // schlaegt das fehl. Ein expliziter unmap-then-mmap-Zyklus hat keinen
+    // Dual-Allokations-Moment — der Kernel kann den neuen Bereich frei plazieren.
+    // Daten bleiben durch das File-Backing erhalten.
+    for (size_t cand : candidates) {
+        if (cand < need_size) continue;
+        if (cand <= cur) continue;
+        size_t old_size = kv->wal_mmap_size;
+        munmap(kv->wal_mmap, old_size);
+        kv->wal_mmap = nullptr;
+        if (ftruncate(kv->wal_fd, (off_t)cand) != 0) {
+            // Versuche, den alten Mapping wiederherzustellen
+            kv->wal_mmap = mmap(nullptr, old_size, PROT_READ | PROT_WRITE,
+                                MAP_SHARED | MAP_NORESERVE, kv->wal_fd, 0);
+            if (kv->wal_mmap == MAP_FAILED) kv->wal_mmap = nullptr;
+            kv->wal_mmap_size = (kv->wal_mmap ? old_size : 0);
+            continue;
+        }
+        void* p = mmap(nullptr, cand, PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_NORESERVE, kv->wal_fd, 0);
+        if (p == MAP_FAILED) {
+            ftruncate(kv->wal_fd, (off_t)old_size);
+            kv->wal_mmap = mmap(nullptr, old_size, PROT_READ | PROT_WRITE,
+                                MAP_SHARED | MAP_NORESERVE, kv->wal_fd, 0);
+            if (kv->wal_mmap == MAP_FAILED) kv->wal_mmap = nullptr;
+            kv->wal_mmap_size = (kv->wal_mmap ? old_size : 0);
+            continue;
+        }
+        kv->wal_mmap      = p;
+        kv->wal_mmap_size = cand;
+        return true;
+    }
+    fprintf(stderr,
+        "[AionDB] FATAL: kv_mmap_grow exhausted all strategies for '%s' "
+        "(cur=%zu, need=%zu) — virt-fragmentation or RLIMIT_AS reached. "
+        "Workaround: reduce n_workers or increase the AS limit.\n",
+        kv->wal_path.c_str(), cur, need_size);
+    return false;
+}
+
+// Schreibt aktuellen wal_used Wert in den Header und syncs nur die erste Page.
+static void kv_mmap_persist_used(AimlKv* kv) {
+    if (!kv->wal_mmap) return;
+    AimlKvWalHeader* hdr = (AimlKvWalHeader*)kv->wal_mmap;
+    hdr->wal_used = kv->wal_used;
+    long page = sysconf(_SC_PAGESIZE);
+    if (page <= 0) page = 4096;
+    msync(kv->wal_mmap, (size_t)page, MS_ASYNC);
+}
+
+// Loest mmap auf (z.B. vor Compaction-Rewrite oder bei kv_clear).
+static void kv_mmap_detach(AimlKv* kv) {
+    if (kv->wal_mmap) {
+        munmap(kv->wal_mmap, kv->wal_mmap_size);
+        kv->wal_mmap      = nullptr;
+        kv->wal_mmap_size = 0;
+    }
+}
+
+// Reserviert n Bytes im mmap und kopiert src hinein. Caller haelt kv->mtx.
+// Bei Reserve-Ueberlauf: kv_mmap_grow() verdoppelt via ftruncate+mremap.
+static bool kv_mmap_append(AimlKv* kv, const void* src, size_t n) {
+    if (!kv->wal_mmap) return false;
+    if (kv->wal_used + n > kv->wal_mmap_size) {
+        if (!kv_mmap_grow(kv, kv->wal_used + n)) {
+            // kv_mmap_grow hat bereits FATAL geloggt — abbrechen
+            _exit(1);
+        }
+    }
+    memcpy((char*)kv->wal_mmap + kv->wal_used, src, n);
+    kv->wal_used += n;
+    return true;
+}
+
 // Write a SET record: op(1) + key_len(4) + key + val_bytes(4) + val
 static void kv_wal_write_set(AimlKv* kv, const char* key, const void* val, uint32_t val_bytes) {
     uint32_t key_len = (uint32_t)strlen(key);
-    write(kv->wal_fd, &KV_WAL_SET, 1);
-    write(kv->wal_fd, &key_len,    4);
-    write(kv->wal_fd,  key,        key_len);
-    write(kv->wal_fd, &val_bytes,  4);
-    if (val_bytes > 0 && val) write(kv->wal_fd, val, val_bytes);
+    kv_mmap_append(kv, &KV_WAL_SET, 1);
+    kv_mmap_append(kv, &key_len,    4);
+    kv_mmap_append(kv,  key,        key_len);
+    kv_mmap_append(kv, &val_bytes,  4);
+    if (val_bytes > 0 && val) kv_mmap_append(kv, val, val_bytes);
 }
 
 // Write a SET_BLOB record: same format as SET but op=3 (raw binary on replay)
 static void kv_wal_write_set_blob(AimlKv* kv, const char* key, const void* val, uint32_t val_bytes) {
     uint32_t key_len = (uint32_t)strlen(key);
-    write(kv->wal_fd, &KV_WAL_SET_BLOB, 1);
-    write(kv->wal_fd, &key_len,    4);
-    write(kv->wal_fd,  key,        key_len);
-    write(kv->wal_fd, &val_bytes,  4);
-    if (val_bytes > 0 && val) write(kv->wal_fd, val, val_bytes);
+    kv_mmap_append(kv, &KV_WAL_SET_BLOB, 1);
+    kv_mmap_append(kv, &key_len,    4);
+    kv_mmap_append(kv,  key,        key_len);
+    kv_mmap_append(kv, &val_bytes,  4);
+    if (val_bytes > 0 && val) kv_mmap_append(kv, val, val_bytes);
 }
 
 // Write a DELETE record: op(1) + key_len(4) + key
 static void kv_wal_write_delete(AimlKv* kv, const char* key) {
     uint32_t key_len = (uint32_t)strlen(key);
-    write(kv->wal_fd, &KV_WAL_DELETE, 1);
-    write(kv->wal_fd, &key_len,       4);
-    write(kv->wal_fd,  key,           key_len);
+    kv_mmap_append(kv, &KV_WAL_DELETE, 1);
+    kv_mmap_append(kv, &key_len,       4);
+    kv_mmap_append(kv,  key,           key_len);
 }
 
-// Helper: free decoded_cache entry and remove it
+// Helper: free decoded_cache entry and remove it from cache + LRU.
 static void kv_decoded_evict(AimlKv* kv, const std::string& key) {
     auto dc = kv->decoded_cache.find(key);
     if (dc != kv->decoded_cache.end()) {
         aiml_ser_free_decoded(dc->second.data(), kv->ser_nodes, kv->ser_n);
         kv->decoded_cache.erase(dc);
     }
+    auto pos = kv->decoded_lru_pos.find(key);
+    if (pos != kv->decoded_lru_pos.end()) {
+        kv->decoded_lru.erase(pos->second);
+        kv->decoded_lru_pos.erase(pos);
+    }
 }
 
-// Replay WAL from current fd position (file must be seeked to start)
+// Mark key as most-recently-used. Caller has already inserted into decoded_cache.
+// Splices existing list entry to front, or push_front if new.
+// Returns nothing — caller must update decoded_lru_pos[key].
+static void kv_decoded_touch(AimlKv* kv, const std::string& key) {
+    auto pos = kv->decoded_lru_pos.find(key);
+    if (pos != kv->decoded_lru_pos.end()) {
+        // Existing → splice to front
+        kv->decoded_lru.splice(kv->decoded_lru.begin(), kv->decoded_lru, pos->second);
+    } else {
+        // New → push_front, record iterator
+        kv->decoded_lru.push_front(key);
+        kv->decoded_lru_pos[key] = kv->decoded_lru.begin();
+    }
+}
+
+// Free all decoded entries and clear LRU bookkeeping. Used by evict/clear/reload.
+static void kv_decoded_clear_all(AimlKv* kv) {
+    if (kv->ser_nodes) {
+        for (auto& [k, v] : kv->decoded_cache)
+            aiml_ser_free_decoded(v.data(), kv->ser_nodes, kv->ser_n);
+    }
+    kv->decoded_cache.clear();
+    kv->decoded_lru.clear();
+    kv->decoded_lru_pos.clear();
+}
+
+// After inserting a fresh decoded entry, evict the oldest entries until
+// the cache is within MAX_DECODED_LRU. Frees decoded heap data.
+static void kv_decoded_lru_trim(AimlKv* kv) {
+    while (kv->decoded_cache.size() > MAX_DECODED_LRU
+           && !kv->decoded_lru.empty()) {
+        const std::string old_key = kv->decoded_lru.back();
+        auto dc = kv->decoded_cache.find(old_key);
+        if (dc != kv->decoded_cache.end()) {
+            aiml_ser_free_decoded(dc->second.data(), kv->ser_nodes, kv->ser_n);
+            kv->decoded_cache.erase(dc);
+        }
+        kv->decoded_lru_pos.erase(old_key);
+        kv->decoded_lru.pop_back();
+    }
+}
+
+static void kv_wal_replay(AimlKv* kv);  // forward decl
+
+// Write a fresh header to an empty WAL file. fd is left positioned right
+// after the header. Returns true on success.
+static bool kv_wal_init_header(int fd, bool typed, int64_t val_size) {
+    AimlKvWalHeader hdr = {};
+    memcpy(hdr.magic, KV_WAL_MAGIC, 8);
+    hdr.version  = KV_WAL_VERSION;
+    hdr.flags    = typed ? KV_WAL_FLAG_TYPED : 0u;
+    hdr.val_size = val_size;
+    hdr.wal_used = sizeof(hdr);
+    if (lseek(fd, 0, SEEK_SET) < 0) return false;
+    ssize_t n = write(fd, &hdr, sizeof(hdr));
+    if (n != (ssize_t)sizeof(hdr)) return false;
+    fsync(fd);
+    return true;
+}
+
+// Validate the header of an existing WAL file. On magic/version mismatch,
+// prints a fatal message and exits — old-format files are unrecoverable.
+// Returns true if the header is well-formed.
+static bool kv_wal_check_header(int fd, const std::string& path) {
+    AimlKvWalHeader hdr;
+    if (lseek(fd, 0, SEEK_SET) < 0) return false;
+    ssize_t n = read(fd, &hdr, sizeof(hdr));
+    if (n != (ssize_t)sizeof(hdr)) {
+        fprintf(stderr,
+            "[AionDB] FATAL: KV file '%s' too short for header (got %zd bytes).\n"
+            "[AionDB] FATAL: Likely an old-format file. Delete it and re-create:\n"
+            "[AionDB] FATAL:   rm '%s'\n",
+            path.c_str(), n, path.c_str());
+        _exit(1);
+    }
+    if (memcmp(hdr.magic, KV_WAL_MAGIC, 8) != 0) {
+        fprintf(stderr,
+            "[AionDB] FATAL: KV file '%s' has invalid magic (expected 'AIMLKVWL').\n"
+            "[AionDB] FATAL: This is an old-format file. Delete it and re-create:\n"
+            "[AionDB] FATAL:   rm '%s'\n",
+            path.c_str(), path.c_str());
+        _exit(1);
+    }
+    if (hdr.version != KV_WAL_VERSION) {
+        fprintf(stderr,
+            "[AionDB] FATAL: KV file '%s' has unsupported version %u (this build supports %u).\n"
+            "[AionDB] FATAL:   rm '%s'\n",
+            path.c_str(), hdr.version, KV_WAL_VERSION, path.c_str());
+        _exit(1);
+    }
+    return true;
+}
+
+// Open a KV WAL file and either initialize a fresh header (empty file) or
+// validate an existing one. Returns fd on success, -1 if open() itself
+// failed. On header-mismatch this function does not return — it _exit()s.
+static int kv_wal_open_with_header(const std::string& path, bool typed,
+                                    int64_t val_size) {
+    int fd = open(path.c_str(), O_RDWR | O_CREAT, 0644);
+    if (fd < 0) return -1;
+    struct stat st;
+    if (fstat(fd, &st) != 0) { close(fd); return -1; }
+    if (st.st_size == 0) {
+        if (!kv_wal_init_header(fd, typed, val_size)) { close(fd); return -1; }
+    } else {
+        kv_wal_check_header(fd, path);  // does not return on mismatch
+    }
+    return fd;
+}
+
+// (kv_lazy_reload removed in Schritt 5: evict no longer clears the index, so
+//  reads find offsets directly and the kernel re-faults pages on access.)
+
+// Replay WAL records, starting right after the file header.
+// Populiert kv->index (offset+length) ohne Werte zu kopieren — alle Reads
+// gehen ueber mmap. Bei Typed: decoded_cache wird invalidiert pro key.
 static void kv_wal_replay(AimlKv* kv) {
-    lseek(kv->wal_fd, 0, SEEK_SET);
+    lseek(kv->wal_fd, (off_t)sizeof(AimlKvWalHeader), SEEK_SET);
+    off_t last_good_pos = (off_t)sizeof(AimlKvWalHeader);
     while (true) {
         uint8_t op;
         if (read(kv->wal_fd, &op, 1) != 1) break;
@@ -749,57 +1223,32 @@ static void kv_wal_replay(AimlKv* kv) {
         if (read(kv->wal_fd, &key_len, 4) != 4) break;
         std::string key(key_len, '\0');
         if ((uint32_t)read(kv->wal_fd, key.data(), key_len) != key_len) break;
-        if (op == KV_WAL_SET) {
+        if (op == KV_WAL_SET || op == KV_WAL_SET_BLOB) {
             uint32_t val_bytes;
             if (read(kv->wal_fd, &val_bytes, 4) != 4) break;
-            if (kv->ser_nodes) {
-                // Typed: stored as serialized blob
-                std::vector<uint8_t> blob(val_bytes);
-                if ((uint32_t)read(kv->wal_fd, blob.data(), val_bytes) != val_bytes) break;
-                kv_decoded_evict(kv, key);
-                kv->map[key] = std::move(blob);
-            } else if (kv->val_size == 0) {
-                // String value stored as raw chars (no null terminator in WAL)
-                std::string sval(val_bytes, '\0');
-                if ((uint32_t)read(kv->wal_fd, sval.data(), val_bytes) != val_bytes) break;
-                char* copy = strdup(sval.c_str());
-                std::vector<uint8_t> buf(sizeof(char*));
-                memcpy(buf.data(), &copy, sizeof(char*));
-                kv->map[key] = std::move(buf);
-            } else {
-                std::vector<uint8_t> buf(val_bytes);
-                if ((uint32_t)read(kv->wal_fd, buf.data(), val_bytes) != val_bytes) break;
-                kv->map[key] = std::move(buf);
-            }
-        } else if (op == KV_WAL_SET_BLOB) {
-            // Binary blob: store as raw vector<uint8_t> (no strdup!)
-            uint32_t val_bytes;
-            if (read(kv->wal_fd, &val_bytes, 4) != 4) break;
-            std::vector<uint8_t> buf(val_bytes);
-            if (val_bytes > 0 && (uint32_t)read(kv->wal_fd, buf.data(), val_bytes) != val_bytes) break;
-            kv->map[key] = std::move(buf);
+            off_t value_offset = lseek(kv->wal_fd, 0, SEEK_CUR);
+            if (op == KV_WAL_SET_BLOB) kv->blob_only = true;
+            if (kv->ser_nodes) kv_decoded_evict(kv, key);
+            // Werte ueberspringen — Index reicht; Reads pointen direkt in mmap
+            if (lseek(kv->wal_fd, val_bytes, SEEK_CUR) < 0) break;
+            kv->index[key] = AimlKvValueLoc{ (uint64_t)value_offset, val_bytes };
         } else if (op == KV_WAL_DELETE) {
-            auto it = kv->map.find(key);
-            if (it != kv->map.end()) {
-                if (kv->ser_nodes) {
-                    kv_decoded_evict(kv, key);
-                } else if (kv->val_size == 0) {
-                    char* ptr = nullptr;
-                    memcpy(&ptr, it->second.data(), sizeof(char*));
-                    free(ptr);
-                }
-                kv->map.erase(it);
+            auto it = kv->index.find(key);
+            if (it != kv->index.end()) {
+                if (kv->ser_nodes) kv_decoded_evict(kv, key);
+                kv->index.erase(it);
             }
         } else {
             break; // unknown op
         }
+        last_good_pos = lseek(kv->wal_fd, 0, SEEK_CUR);
     }
+    kv->wal_used = (uint64_t)last_good_pos;
 }
 
 extern "C" void* aiml_db_kv_open_persist(const char* name, int64_t val_size,
                                            const char* base_path) {
-    std::string dir = base_path ? base_path : "./aiondb/";
-    if (!dir.empty() && dir.back() != '/') dir += '/';
+    std::string dir = resolve_aiondb_dir(base_path);
     std::string nm  = name ? name : "kv";
     std::string registry_key = dir + nm;
 
@@ -812,11 +1261,16 @@ extern "C" void* aiml_db_kv_open_persist(const char* name, int64_t val_size,
     kv->val_size   = val_size;
     kv->persistent = true;
     kv->wal_path   = dir + nm + ".kvwal";
-    int fd = open(kv->wal_path.c_str(), O_RDWR | O_CREAT, 0644);
+    int fd = kv_wal_open_with_header(kv->wal_path, /*typed=*/false, val_size);
     if (fd >= 0) {
         kv->wal_fd = fd;
+        if (!kv_mmap_attach(kv)) {
+            close(fd);
+            kv->wal_fd = -1;
+            delete kv;
+            return nullptr;
+        }
         kv_wal_replay(kv);
-        lseek(fd, 0, SEEK_END); // append mode
     }
     g_persistent_kvs_by_name[registry_key] = kv;
     g_persistent_kvs.push_back(kv);
@@ -828,23 +1282,89 @@ extern "C" int32_t aiml_db_kv_checkpoint(void* kv_ptr) {
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
     std::lock_guard<std::mutex> lock(kv->mtx);
     if (!kv->persistent || kv->wal_fd < 0) return 0;
-    // Compact: truncate + rewrite all current entries
-    ftruncate(kv->wal_fd, 0);
-    lseek(kv->wal_fd, 0, SEEK_SET);
-    for (auto& [k, v] : kv->map) {
-        if (kv->ser_nodes) {
-            // Blob already stored in v (includes the 4-byte length prefix)
-            kv_wal_write_set(kv, k.c_str(), v.data(), (uint32_t)v.size());
-        } else if (kv->val_size == 0) {
-            char* ptr = nullptr;
-            memcpy(&ptr, v.data(), sizeof(char*));
-            const char* str = ptr ? ptr : "";
-            kv_wal_write_set(kv, k.c_str(), str, (uint32_t)strlen(str));
-        } else {
-            kv_wal_write_set(kv, k.c_str(), v.data(), (uint32_t)kv->val_size);
-        }
+
+    // Crash-safe Compaction via Temp-File + atomic rename.
+    // Old file stays intact until rename succeeds.
+    bool typed = (kv->ser_nodes != nullptr);
+    bool blob_only_save = kv->blob_only;
+    std::string temp_path = kv->wal_path + ".compact";
+
+    // 1. Cleanup any orphan from a previously interrupted checkpoint
+    unlink(temp_path.c_str());
+
+    // 2. Open temp file, write header, ftruncate to initial reserve, mmap
+    int temp_fd = open(temp_path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (temp_fd < 0) {
+        fprintf(stderr,
+            "[AionDB] FATAL: kv_checkpoint: cannot create temp '%s' (errno=%d)\n",
+            temp_path.c_str(), errno);
+        _exit(1);
     }
-    fsync(kv->wal_fd);
+    if (!kv_wal_init_header(temp_fd, typed, kv->val_size)) {
+        close(temp_fd); unlink(temp_path.c_str());
+        fprintf(stderr,
+            "[AionDB] FATAL: kv_checkpoint: header write failed for '%s'\n",
+            temp_path.c_str());
+        _exit(1);
+    }
+    if (ftruncate(temp_fd, (off_t)KV_MMAP_RESERVE_INITIAL) != 0) {
+        close(temp_fd); unlink(temp_path.c_str());
+        fprintf(stderr,
+            "[AionDB] FATAL: kv_checkpoint: ftruncate(temp) failed (errno=%d)\n", errno);
+        _exit(1);
+    }
+    void* temp_mmap = mmap(nullptr, KV_MMAP_RESERVE_INITIAL,
+                           PROT_READ | PROT_WRITE,
+                           MAP_SHARED | MAP_NORESERVE,
+                           temp_fd, 0);
+    if (temp_mmap == MAP_FAILED) {
+        close(temp_fd); unlink(temp_path.c_str());
+        fprintf(stderr,
+            "[AionDB] FATAL: kv_checkpoint: mmap(temp) failed (errno=%d)\n", errno);
+        _exit(1);
+    }
+
+    // 3. Save old state, point kv at temp for the rewrite loop
+    void*  old_mmap      = kv->wal_mmap;
+    size_t old_mmap_size = kv->wal_mmap_size;
+    int    old_fd        = kv->wal_fd;
+    auto   old_index     = std::move(kv->index);
+
+    kv->wal_mmap      = temp_mmap;
+    kv->wal_mmap_size = KV_MMAP_RESERVE_INITIAL;
+    kv->wal_used      = sizeof(AimlKvWalHeader);
+    kv->wal_fd        = temp_fd;
+    kv->index.clear();
+    kv->blob_only = blob_only_save;  // preserve mode through rewrite
+
+    // 4. Copy each record from old mmap → temp via kv_wal_write_* (uses memcpy
+    //    into temp_mmap; kv_mmap_grow handles overflow within temp).
+    for (auto& [k, old_loc] : old_index) {
+        const void* old_val = (const char*)old_mmap + old_loc.offset;
+        if (blob_only_save) {
+            kv_wal_write_set_blob(kv, k.c_str(), old_val, old_loc.length);
+        } else {
+            kv_wal_write_set(kv, k.c_str(), old_val, old_loc.length);
+        }
+        uint64_t new_offset = kv->wal_used - old_loc.length;
+        kv->index[k] = AimlKvValueLoc{new_offset, old_loc.length};
+    }
+
+    // 5. Persist + sync temp
+    kv_mmap_persist_used(kv);
+    fsync(temp_fd);
+
+    // 6. Detach old mmap + close old fd (data fully captured in temp now)
+    if (old_mmap) munmap(old_mmap, old_mmap_size);
+    if (old_fd >= 0) close(old_fd);
+
+    // 7. Atomic rename temp → real path
+    if (rename(temp_path.c_str(), kv->wal_path.c_str()) != 0) {
+        fprintf(stderr,
+            "[AionDB] FATAL: kv_checkpoint: rename '%s' → '%s' failed (errno=%d)\n",
+            temp_path.c_str(), kv->wal_path.c_str(), errno);
+        _exit(1);
+    }
     return 0;
 }
 
@@ -855,42 +1375,48 @@ extern "C" void aiml_db_kv_reload(void* kv_ptr) {
     std::lock_guard<std::mutex> lock(kv->mtx);
     if (!kv->persistent || kv->wal_path.empty()) return;
     // Close existing fd and reopen fresh so we see any bytes written by other processes
+    kv_mmap_detach(kv);
     if (kv->wal_fd >= 0) close(kv->wal_fd);
-    kv->wal_fd = open(kv->wal_path.c_str(), O_RDWR | O_CREAT, 0644);
-    if (kv->wal_fd < 0) return;
-    // Clear current in-memory state
-    if (!kv->ser_nodes) {
-        for (auto& [k, v] : kv->map) {
-            if (kv->val_size == 0) {
-                char* ptr = nullptr;
-                memcpy(&ptr, v.data(), sizeof(char*));
-                free(ptr);
-            }
-        }
-    } else {
-        for (auto& [k, v] : kv->map) kv_decoded_evict(kv, k);
+    bool typed = (kv->ser_nodes != nullptr);
+    kv->wal_fd = kv_wal_open_with_header(kv->wal_path, typed, kv->val_size);
+    if (kv->wal_fd < 0) {
+        fprintf(stderr,
+            "[AionDB] FATAL: kv_reload: cannot reopen '%s'\n",
+            kv->wal_path.c_str());
+        _exit(1);
     }
-    kv->map.clear();
-    kv->decoded_cache.clear();
-    // Replay WAL from start
+    if (!kv_mmap_attach(kv)) {
+        // kv_mmap_attach already printed a FATAL message; refuse to leave
+        // the store with an open fd but no mmap (silent write-loss zone).
+        _exit(1);
+    }
+    // Clear current in-memory state (persistent path)
+    kv_decoded_clear_all(kv);
+    kv->index.clear();
+    kv->blob_only = false;  // reset — WAL replay will set it again if needed
+    // Replay WAL from start. Append-position is tracked in kv->wal_used,
+    // do NOT SEEK_END the fd — after ftruncate(RESERVE) it points to 16 GB.
     kv_wal_replay(kv);
-    lseek(kv->wal_fd, 0, SEEK_END);
 }
 
 extern "C" void* aiml_db_kv_open_typed(const char* name, int64_t val_size,
                                          const AimlTypeNode* nodes, int32_t n_nodes) {
+    std::string nm = name ? name : "kv";
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    auto it = g_non_persist_kvs_by_name.find(nm);
+    if (it != g_non_persist_kvs_by_name.end()) return it->second;
     AimlKv* kv    = new AimlKv();
     kv->val_size  = val_size;
     kv->ser_nodes = nodes;
     kv->ser_n     = n_nodes;
+    g_non_persist_kvs_by_name[nm] = kv;
     return kv;
 }
 
 extern "C" void* aiml_db_kv_open_typed_persist(const char* name, int64_t val_size,
                                                  const char* base_path,
                                                  const AimlTypeNode* nodes, int32_t n_nodes) {
-    std::string dir = base_path ? base_path : "./aiondb/";
-    if (!dir.empty() && dir.back() != '/') dir += '/';
+    std::string dir = resolve_aiondb_dir(base_path);
     std::string nm  = name ? name : "kv";
     std::string registry_key = dir + nm;
 
@@ -905,11 +1431,16 @@ extern "C" void* aiml_db_kv_open_typed_persist(const char* name, int64_t val_siz
     kv->ser_n      = n_nodes;
     kv->persistent = true;
     kv->wal_path   = dir + nm + ".kvwal";
-    int fd = open(kv->wal_path.c_str(), O_RDWR | O_CREAT, 0644);
+    int fd = kv_wal_open_with_header(kv->wal_path, /*typed=*/true, val_size);
     if (fd >= 0) {
         kv->wal_fd = fd;
+        if (!kv_mmap_attach(kv)) {
+            close(fd);
+            kv->wal_fd = -1;
+            delete kv;
+            return nullptr;
+        }
         kv_wal_replay(kv);
-        lseek(fd, 0, SEEK_END);
     }
     g_persistent_kvs_by_name[registry_key] = kv;
     g_persistent_kvs.push_back(kv);
@@ -921,33 +1452,82 @@ extern "C" void aiml_db_kv_set(void* kv_ptr, const char* key, const void* val, i
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
     std::lock_guard<std::mutex> lock(kv->mtx);
     if (kv->ser_nodes && val) {
-        // Typed: encode struct → blob, invalidate decoded cache
-        kv_decoded_evict(kv, key);
+        // Typed: encode struct → blob, then invalidate decoded cache.
+        //
+        // Order is critical: encode MUST run before evict because `val` can
+        // alias into the decoded_cache (decl: [p, ptr<T>, kv.get] = direct
+        // pointer; decl: [p, T, kv.get] = shallow memcpy → shared heap
+        // pointers). If evict ran first it would free buffers the encoder
+        // still needs to read → use-after-free SIGSEGV in strlen.
+        // See doc/issue/kv_get_mutate_set_same_key_crash.md
         char* blob = aiml_ser_encode(val, kv->ser_nodes, kv->ser_n);
         if (!blob) return;
+        // Detect "val is the cache slot for this key" — the ptr<T> sync
+        // pattern. In that case the cache is already canonical (all
+        // mutations went through the pointer), and freeing it would also
+        // free user-pushed string literals or other non-decoded data the
+        // user wrote into it. Just drop the cache entry without freeing
+        // its heap allocs — they're effectively owned by the user now;
+        // next kv.get will re-decode fresh from WAL.
+        auto dc = kv->decoded_cache.find(key);
+        bool val_is_cache = (dc != kv->decoded_cache.end() && dc->second.data() == val);
+        if (val_is_cache) {
+            kv->decoded_cache.erase(dc);
+            auto pos = kv->decoded_lru_pos.find(key);
+            if (pos != kv->decoded_lru_pos.end()) {
+                kv->decoded_lru.erase(pos->second);
+                kv->decoded_lru_pos.erase(pos);
+            }
+        } else {
+            kv_decoded_evict(kv, key);
+        }
         int32_t data_len;
         memcpy(&data_len, blob, 4);
         uint32_t total_blob = (uint32_t)(4 + data_len);
-        if (kv->persistent && kv->wal_fd >= 0)
+        if (kv->persistent && kv->wal_fd >= 0) {
             kv_wal_write_set(kv, key, blob, total_blob);
-        std::vector<uint8_t> buf(total_blob);
-        memcpy(buf.data(), blob, total_blob);
+            uint64_t value_offset = kv->wal_used - total_blob;
+            kv->index[key] = AimlKvValueLoc{value_offset, total_blob};
+        } else {
+            // Non-persistent typed: blob in kv->map (legacy path)
+            std::vector<uint8_t> buf(total_blob);
+            memcpy(buf.data(), blob, total_blob);
+            kv->map[key] = std::move(buf);
+        }
         free(blob);
-        kv->map[key] = std::move(buf);
     } else if (val_size == 0) {
         const char* str = val ? static_cast<const char*>(val) : "";
-        if (kv->persistent && kv->wal_fd >= 0)
-            kv_wal_write_set(kv, key, str, (uint32_t)strlen(str));
-        char* copy = strdup(str);
-        std::vector<uint8_t> buf(sizeof(char*));
-        memcpy(buf.data(), &copy, sizeof(char*));
-        kv->map[key] = std::move(buf);
+        uint32_t slen_with_nul = (uint32_t)strlen(str) + 1;  // include \0
+        if (kv->persistent && kv->wal_fd >= 0) {
+            // String-Mode persistent: WAL haelt strlen+1 Bytes inkl. \0,
+            // damit kv_get einen direkten mmap-Pointer als C-String liefert.
+            kv_wal_write_set(kv, key, str, slen_with_nul);
+            uint64_t value_offset = kv->wal_used - slen_with_nul;
+            kv->index[key] = AimlKvValueLoc{value_offset, slen_with_nul};
+        } else {
+            // Non-persistent string: kv->map mit strdup'd char* (legacy)
+            auto old_it = kv->map.find(key);
+            if (old_it != kv->map.end()) {
+                char* old_ptr = nullptr;
+                memcpy(&old_ptr, old_it->second.data(), sizeof(char*));
+                free(old_ptr);
+            }
+            char* copy = strdup(str);
+            std::vector<uint8_t> buf(sizeof(char*));
+            memcpy(buf.data(), &copy, sizeof(char*));
+            kv->map[key] = std::move(buf);
+        }
     } else {
-        if (kv->persistent && kv->wal_fd >= 0)
+        // Fixed-size mode
+        if (kv->persistent && kv->wal_fd >= 0) {
             kv_wal_write_set(kv, key, val, val ? (uint32_t)val_size : 0);
-        std::vector<uint8_t> buf((size_t)val_size);
-        if (val) memcpy(buf.data(), val, (size_t)val_size);
-        kv->map[key] = std::move(buf);
+            uint64_t value_offset = kv->wal_used - (uint32_t)val_size;
+            kv->index[key] = AimlKvValueLoc{value_offset, (uint32_t)val_size};
+        } else {
+            std::vector<uint8_t> buf((size_t)val_size);
+            if (val) memcpy(buf.data(), val, (size_t)val_size);
+            kv->map[key] = std::move(buf);
+        }
     }
 }
 
@@ -955,18 +1535,99 @@ extern "C" void* aiml_db_kv_get(void* kv_ptr, const char* key) {
     if (!kv_ptr || !key) return nullptr;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
     std::lock_guard<std::mutex> lock(kv->mtx);
+    if (kv->persistent) {
+        // Index-Pfad (Schritt 3)
+        auto it = kv->index.find(key);
+        if (it == kv->index.end()) return nullptr;
+        const AimlKvValueLoc& loc = it->second;
+        const char* val_ptr = (const char*)kv->wal_mmap + loc.offset;
+        if (kv->ser_nodes) {
+            // Typed: decode in cache (bounded LRU)
+            auto dc = kv->decoded_cache.find(key);
+            if (dc != kv->decoded_cache.end()) {
+                kv_decoded_touch(kv, key);
+                return dc->second.data();
+            }
+            std::vector<uint8_t> decoded((size_t)kv->val_size, 0);
+            aiml_ser_decode(val_ptr, decoded.data(), kv->ser_nodes, kv->ser_n);
+            auto& cached = kv->decoded_cache[key];
+            cached = std::move(decoded);
+            kv_decoded_touch(kv, key);
+            kv_decoded_lru_trim(kv);
+            return cached.data();
+        }
+        // String / Blob / Fixed: Pointer direkt in mmap (zero-copy).
+        // String hat \0-Terminator innerhalb der length Bytes (Schritt 4).
+        return (void*)val_ptr;
+    }
+    // Non-persistent: legacy map-Pfad
     auto it = kv->map.find(key);
     if (it == kv->map.end()) return nullptr;
     if (kv->ser_nodes) {
-        // Typed: return from decoded cache (populate on miss)
         auto dc = kv->decoded_cache.find(key);
-        if (dc != kv->decoded_cache.end()) return dc->second.data();
+        if (dc != kv->decoded_cache.end()) {
+            kv_decoded_touch(kv, key);
+            return dc->second.data();
+        }
         std::vector<uint8_t> decoded((size_t)kv->val_size, 0);
         aiml_ser_decode(reinterpret_cast<const char*>(it->second.data()),
                         decoded.data(), kv->ser_nodes, kv->ser_n);
         auto& cached = kv->decoded_cache[key];
         cached = std::move(decoded);
+        kv_decoded_touch(kv, key);
+        kv_decoded_lru_trim(kv);
         return cached.data();
+    }
+    if (kv->val_size == 0) {
+        char* ptr = nullptr;
+        memcpy(&ptr, it->second.data(), sizeof(char*));
+        return ptr;
+    }
+    return it->second.data();
+}
+
+// Like aiml_db_kv_get but returns a freshly deep-copied struct (typed only).
+// Caller (typically `kv.get(k, {copy: true})`) gets an instance whose
+// strings/lists/maps/buffers are independent of the kv's decoded_cache —
+// safe for mutate-and-set-same-key. See doc/issue/kv_get_mutate_set_same_key_crash.md.
+//
+// Lifetime contract: the returned pointer is valid until the next
+// get_copy / set / delete on the same key. Subsequent get_copy on the same
+// key frees the previous copy's heap allocations.
+extern "C" void* aiml_db_kv_get_copy(void* kv_ptr, const char* key) {
+    if (!kv_ptr || !key) return nullptr;
+    AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
+    std::lock_guard<std::mutex> lock(kv->mtx);
+    if (kv->persistent) {
+        auto it = kv->index.find(key);
+        if (it == kv->index.end()) return nullptr;
+        const AimlKvValueLoc& loc = it->second;
+        const char* val_ptr = (const char*)kv->wal_mmap + loc.offset;
+        if (kv->ser_nodes) {
+            // Always decode fresh from WAL. Previous slot heap allocations
+            // (if any from a prior get/get_copy) are freed first.
+            kv_decoded_evict(kv, key);
+            auto& slot = kv->decoded_cache[key];
+            slot.assign((size_t)kv->val_size, 0);
+            aiml_ser_decode(val_ptr, slot.data(), kv->ser_nodes, kv->ser_n);
+            kv_decoded_touch(kv, key);
+            kv_decoded_lru_trim(kv);
+            return slot.data();
+        }
+        return (void*)val_ptr;  // non-typed: same as get (zero-copy from mmap)
+    }
+    // Non-persistent legacy path
+    auto it = kv->map.find(key);
+    if (it == kv->map.end()) return nullptr;
+    if (kv->ser_nodes) {
+        kv_decoded_evict(kv, key);
+        auto& slot = kv->decoded_cache[key];
+        slot.assign((size_t)kv->val_size, 0);
+        aiml_ser_decode(reinterpret_cast<const char*>(it->second.data()),
+                        slot.data(), kv->ser_nodes, kv->ser_n);
+        kv_decoded_touch(kv, key);
+        kv_decoded_lru_trim(kv);
+        return slot.data();
     }
     if (kv->val_size == 0) {
         char* ptr = nullptr;
@@ -980,6 +1641,7 @@ extern "C" int32_t aiml_db_kv_has(void* kv_ptr, const char* key) {
     if (!kv_ptr || !key) return 0;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
     std::lock_guard<std::mutex> lock(kv->mtx);
+    if (kv->persistent) return kv->index.count(key) ? 1 : 0;
     return kv->map.count(key) ? 1 : 0;
 }
 
@@ -987,6 +1649,7 @@ extern "C" int32_t aiml_db_kv_len(void* kv_ptr) {
     if (!kv_ptr) return 0;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
     std::lock_guard<std::mutex> lock(kv->mtx);
+    if (kv->persistent) return (int32_t)kv->index.size();
     return (int32_t)kv->map.size();
 }
 
@@ -994,13 +1657,20 @@ extern "C" void aiml_db_kv_delete(void* kv_ptr, const char* key) {
     if (!kv_ptr || !key) return;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
     std::lock_guard<std::mutex> lock(kv->mtx);
+    if (kv->persistent) {
+        auto it = kv->index.find(key);
+        if (it == kv->index.end()) return;
+        kv_wal_write_delete(kv, key);
+        if (kv->ser_nodes) kv_decoded_evict(kv, key);
+        kv->index.erase(it);
+        return;
+    }
+    // Non-persistent
     auto it = kv->map.find(key);
     if (it == kv->map.end()) return;
-    if (kv->persistent && kv->wal_fd >= 0)
-        kv_wal_write_delete(kv, key);
     if (kv->ser_nodes) {
         kv_decoded_evict(kv, key);
-    } else if (kv->val_size == 0) {
+    } else if (kv->val_size == 0 && !kv->blob_only) {
         char* ptr = nullptr;
         memcpy(&ptr, it->second.data(), sizeof(char*));
         free(ptr);
@@ -1015,11 +1685,16 @@ extern "C" void aiml_db_kv_set_blob(void* kv_ptr, const char* key,
     if (!kv_ptr || !key || !data || size <= 0) return;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
     std::lock_guard<std::mutex> lock(kv->mtx);
-    if (kv->persistent && kv->wal_fd >= 0)
+    kv->blob_only = true;  // mark as blob-mode (no strdup entries to free)
+    if (kv->persistent && kv->wal_fd >= 0) {
         kv_wal_write_set_blob(kv, key, data, (uint32_t)size);
-    std::vector<uint8_t> buf((size_t)size);
-    memcpy(buf.data(), data, (size_t)size);
-    kv->map[key] = std::move(buf);
+        uint64_t value_offset = kv->wal_used - (uint32_t)size;
+        kv->index[key] = AimlKvValueLoc{value_offset, (uint32_t)size};
+    } else {
+        std::vector<uint8_t> buf((size_t)size);
+        memcpy(buf.data(), data, (size_t)size);
+        kv->map[key] = std::move(buf);
+    }
 }
 
 // get_blob: returns pointer to raw data + writes size to out_size
@@ -1028,6 +1703,13 @@ extern "C" void* aiml_db_kv_get_blob(void* kv_ptr, const char* key, int32_t* out
     if (!kv_ptr || !key) { if (out_size) *out_size = 0; return nullptr; }
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
     std::lock_guard<std::mutex> lock(kv->mtx);
+    if (kv->persistent) {
+        auto it = kv->index.find(key);
+        if (it == kv->index.end()) { if (out_size) *out_size = 0; return nullptr; }
+        if (out_size) *out_size = (int32_t)it->second.length;
+        return (void*)((const char*)kv->wal_mmap + it->second.offset);
+    }
+    // Non-persistent: legacy map-Pfad
     auto it = kv->map.find(key);
     if (it == kv->map.end()) { if (out_size) *out_size = 0; return nullptr; }
     if (out_size) *out_size = (int32_t)it->second.size();
@@ -1039,22 +1721,163 @@ extern "C" void aiml_db_kv_clear(void* kv_ptr) {
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
     std::lock_guard<std::mutex> lock(kv->mtx);
     if (kv->persistent && kv->wal_fd >= 0) {
-        // Truncate WAL — clear is atomic
+        // Truncate WAL — clear is atomic. Detach mmap first (truncate would
+        // invalidate the mapping), re-init header, re-attach mmap.
+        kv_mmap_detach(kv);
         ftruncate(kv->wal_fd, 0);
-        lseek(kv->wal_fd, 0, SEEK_SET);
+        bool typed = (kv->ser_nodes != nullptr);
+        if (!kv_wal_init_header(kv->wal_fd, typed, kv->val_size)) {
+            fprintf(stderr,
+                "[AionDB] FATAL: kv_clear: cannot rewrite header for '%s'\n",
+                kv->wal_path.c_str());
+            _exit(1);
+        }
+        if (!kv_mmap_attach(kv)) {
+            // kv_mmap_attach already printed a FATAL message; refuse to leave
+            // the store in a zombie state where writes silently fail.
+            _exit(1);
+        }
+        // wal_used wurde von kv_mmap_attach aus dem Header gelesen
     }
-    if (kv->ser_nodes) {
-        for (auto& [k, v] : kv->decoded_cache)
-            aiml_ser_free_decoded(v.data(), kv->ser_nodes, kv->ser_n);
-        kv->decoded_cache.clear();
-    } else if (kv->val_size == 0) {
+    // Decoded-Cache leeren (typed)
+    kv_decoded_clear_all(kv);
+    // Non-persistent: kv->map mit strdup'd Strings leeren
+    if (!kv->persistent && kv->val_size == 0 && !kv->blob_only) {
         for (auto& [k, v] : kv->map) {
             char* ptr = nullptr;
             memcpy(&ptr, v.data(), sizeof(char*));
             free(ptr);
         }
     }
+    kv->index.clear();
     kv->map.clear();
+    kv->blob_only = false;
+}
+
+// Evict: drop in-memory data while keeping the index intact.
+// Persistent: madvise(MADV_DONTNEED) returns mmap'd pages to the OS;
+// kernel re-faults them transparently on the next read via the index.
+// Non-persistent: kv->map is cleared (no WAL → data is lost).
+// Decoded-cache (typed) is always cleared.
+extern "C" void aiml_db_kv_evict(void* kv_ptr) {
+    if (!kv_ptr) return;
+    AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
+    std::lock_guard<std::mutex> lock(kv->mtx);
+    // Decoded-cache (typed) freigeben
+    kv_decoded_clear_all(kv);
+    if (kv->persistent) {
+        // 1) Mapping auf das tatsaechliche WAL-Ende schrumpfen → virt
+        //    address space wird zurueckgegeben, apparent file size sinkt.
+        // 2) Auf der verbleibenden Region madvise(MADV_DONTNEED) → RSS faellt.
+        // Index bleibt intakt; Reads paginate die Daten on-demand zurueck.
+        long page = sysconf(_SC_PAGESIZE);
+        if (page <= 0) page = 4096;
+        if (kv->wal_mmap && kv->wal_used > 0) {
+            size_t aligned_used = ((size_t)kv->wal_used + (size_t)page - 1)
+                                  & ~((size_t)page - 1);
+            // Mindestens header-grosse Page beibehalten
+            if (aligned_used < (size_t)page) aligned_used = (size_t)page;
+            if (aligned_used < kv->wal_mmap_size) {
+                void* p = mremap(kv->wal_mmap, kv->wal_mmap_size,
+                                 aligned_used, 0);
+                if (p != MAP_FAILED) {
+                    kv->wal_mmap      = p;
+                    kv->wal_mmap_size = aligned_used;
+                    // ftruncate gibt apparent file size zurueck — Antigravity-friendly
+                    ftruncate(kv->wal_fd, (off_t)aligned_used);
+                }
+                // mremap-shrink Fehler ignorieren — Daten bleiben gueltig,
+                // nur der Footprint bleibt im current state
+            }
+            (void)madvise(kv->wal_mmap, kv->wal_mmap_size, MADV_DONTNEED);
+        }
+    } else {
+        // Non-persistent: strdup'd Strings im map freigeben + map leeren
+        if (kv->val_size == 0 && !kv->blob_only) {
+            for (auto& [k, v] : kv->map) {
+                char* ptr = nullptr;
+                memcpy(&ptr, v.data(), sizeof(char*));
+                free(ptr);
+            }
+        }
+        kv->index.clear();
+        kv->map.clear();
+    }
+    // NOTE: WAL fd, mmap, Datei und (fuer persistent) der Index bleiben intakt
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Iterator implementation
+// ─────────────────────────────────────────────────────────────────────────────
+
+struct AimlIterator {
+    int type;               // 0 = kv_keys (future: 1=list, 2=store, 3=map)
+    // KV live iterator — no copy, points directly into either index (persistent)
+    // or map (non-persistent). Caller must NOT modify the KV during iteration.
+    AimlKv* kv;
+    bool persistent_path;   // true → use idx_cur; false → use map_cur
+    std::unordered_map<std::string, AimlKvValueLoc>::iterator idx_cur;
+    std::unordered_map<std::string, AimlKvValueLoc>::iterator idx_end;
+    std::unordered_map<std::string, std::vector<uint8_t>>::iterator map_cur;
+    std::unordered_map<std::string, std::vector<uint8_t>>::iterator map_end;
+};
+
+extern "C" void* aiml_iter_create_kv(void* kv_ptr) {
+    if (!kv_ptr) return nullptr;
+    AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
+    std::lock_guard<std::mutex> lock(kv->mtx);
+    auto* it = new AimlIterator();
+    it->type = 0;
+    it->kv   = kv;
+    it->persistent_path = kv->persistent;
+    if (it->persistent_path) {
+        it->idx_cur = kv->index.begin();
+        it->idx_end = kv->index.end();
+    } else {
+        it->map_cur = kv->map.begin();
+        it->map_end = kv->map.end();
+    }
+    return it;
+}
+
+extern "C" const char* aiml_iter_next(void* iter_ptr) {
+    if (!iter_ptr) return "";
+    AimlIterator* it = static_cast<AimlIterator*>(iter_ptr);
+    if (it->persistent_path) {
+        if (it->idx_cur == it->idx_end) return "";
+        const char* key = it->idx_cur->first.c_str();
+        ++it->idx_cur;
+        return key;
+    }
+    if (it->map_cur == it->map_end) return "";
+    const char* key = it->map_cur->first.c_str();
+    ++it->map_cur;
+    return key;
+}
+
+extern "C" int32_t aiml_iter_has_next(void* iter_ptr) {
+    if (!iter_ptr) return 0;
+    AimlIterator* it = static_cast<AimlIterator*>(iter_ptr);
+    if (it->persistent_path) return (it->idx_cur != it->idx_end) ? 1 : 0;
+    return (it->map_cur != it->map_end) ? 1 : 0;
+}
+
+extern "C" void aiml_iter_reset(void* iter_ptr) {
+    if (!iter_ptr) return;
+    AimlIterator* it = static_cast<AimlIterator*>(iter_ptr);
+    if (it->persistent_path) {
+        it->idx_cur = it->kv->index.begin();
+        it->idx_end = it->kv->index.end();
+    } else {
+        it->map_cur = it->kv->map.begin();
+        it->map_end = it->kv->map.end();
+    }
+}
+
+extern "C" void aiml_iter_free(void* iter_ptr) {
+    if (!iter_ptr) return;
+    delete static_cast<AimlIterator*>(iter_ptr);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1089,15 +1912,17 @@ static void vec_wal_replay(AimlVecStore* vs) {
         if (id_len > 0 && (uint32_t)read(vs->wal_fd, id.data(), id_len) != id_len) break;
         if (read(vs->wal_fd, buf.data(), emb_bytes) != (ssize_t)emb_bytes) break;
         vs->ids.push_back(std::move(id));
-        vs->embeddings.emplace_back(buf.begin(), buf.end());
+        vs->embeddings.insert(vs->embeddings.end(), buf.begin(), buf.end());
+        float norm = 0.0f;
+        for (int32_t d = 0; d < vs->dims; d++) norm += buf[d] * buf[d];
+        vs->norms.push_back(sqrtf(norm));
     }
 }
 
 extern "C" void* aiml_db_vec_open_persist(const char* name, int32_t dims,
                                             const char* base_path) {
     if (dims <= 0) return nullptr;
-    std::string dir = base_path ? base_path : "./aiondb/";
-    if (!dir.empty() && dir.back() != '/') dir += '/';
+    std::string dir = resolve_aiondb_dir(base_path);
     std::string nm = name ? name : "vec";
     std::string registry_key = dir + nm;
 
@@ -1133,7 +1958,7 @@ extern "C" int32_t aiml_db_vec_checkpoint(void* vs_ptr) {
         uint32_t id_len = (uint32_t)vs->ids[i].size();
         write(vs->wal_fd, &id_len, 4);
         write(vs->wal_fd, vs->ids[i].data(), id_len);
-        write(vs->wal_fd, vs->embeddings[i].data(), (size_t)vs->dims * sizeof(float));
+        write(vs->wal_fd, vs->embeddings.data() + (size_t)i * vs->dims, (size_t)vs->dims * sizeof(float));
     }
     fsync(vs->wal_fd);
     return 0;
@@ -1142,19 +1967,22 @@ extern "C" int32_t aiml_db_vec_checkpoint(void* vs_ptr) {
 extern "C" void aiml_db_vec_insert(void* vs_ptr, const char* id, const float* emb, int32_t dims) {
     if (!vs_ptr || !id || !emb) return;
     AimlVecStore* vs = static_cast<AimlVecStore*>(vs_ptr);
+    std::lock_guard<std::mutex> lock(vs->mtx);
     vs->ids.push_back(id);
-    vs->embeddings.emplace_back(emb, emb + dims);
+    vs->embeddings.insert(vs->embeddings.end(), emb, emb + dims);
+    float norm = 0.0f;
+    for (int32_t d = 0; d < dims; d++) norm += emb[d] * emb[d];
+    vs->norms.push_back(sqrtf(norm));
     if (vs->persistent) vec_wal_write_insert(vs, id, emb);
 }
 
-static float cosine_similarity(const float* a, const float* b, int32_t dims) {
-    float dot = 0.0f, na = 0.0f, nb = 0.0f;
-    for (int32_t i = 0; i < dims; i++) {
-        dot += a[i] * b[i];
-        na  += a[i] * a[i];
-        nb  += b[i] * b[i];
-    }
-    float denom = sqrtf(na) * sqrtf(nb);
+// dot-only similarity helper — norms are precomputed
+static float cosine_sim_prenorm(const float* a, float norm_a,
+                                const float* b, float norm_b,
+                                int32_t dims) {
+    float dot = 0.0f;
+    for (int32_t i = 0; i < dims; i++) dot += a[i] * b[i];
+    float denom = norm_a * norm_b;
     return (denom < 1e-10f) ? 0.0f : dot / denom;
 }
 
@@ -1163,12 +1991,21 @@ extern "C" void aiml_db_vec_search(void* vs_ptr, const float* query, int32_t k, 
     AimlVecStore* vs   = static_cast<AimlVecStore*>(vs_ptr);
     AimlListRaw*  list = static_cast<AimlListRaw*>(result_list);
 
+    std::lock_guard<std::mutex> lock(vs->mtx);
+
     int32_t n = (int32_t)vs->ids.size();
     if (n == 0 || k <= 0) return;
 
+    // Compute query norm once
+    float qnorm = 0.0f;
+    for (int32_t d = 0; d < vs->dims; d++) qnorm += query[d] * query[d];
+    qnorm = sqrtf(qnorm);
+
     std::vector<std::pair<float, int32_t>> scores(n);
-    for (int32_t i = 0; i < n; i++)
-        scores[i] = { cosine_similarity(query, vs->embeddings[i].data(), vs->dims), i };
+    for (int32_t i = 0; i < n; i++) {
+        const float* emb = vs->embeddings.data() + (size_t)i * vs->dims;
+        scores[i] = { cosine_sim_prenorm(query, qnorm, emb, vs->norms[i], vs->dims), i };
+    }
 
     int32_t actual_k = k < n ? k : n;
     std::partial_sort(scores.begin(), scores.begin() + actual_k, scores.end(),
@@ -1183,7 +2020,8 @@ extern "C" void aiml_db_vec_search(void* vs_ptr, const float* query, int32_t k, 
     }
     for (int32_t i = 0; i < actual_k; i++) {
         AimlVecResult* r = (AimlVecResult*)malloc(sizeof(AimlVecResult));
-        r->id    = vs->ids[scores[i].second].c_str();
+        // strdup instead of c_str() — result must not dangle if the VecStore reallocs
+        r->id    = strdup(vs->ids[scores[i].second].c_str());
         r->score = scores[i].first;
         memset(r->_pad, 0, 4);
         list->data[i] = r;
@@ -1210,8 +2048,7 @@ extern "C" void* aiml_db_ts_open(const char* name, int64_t elem_size) {
 extern "C" void* aiml_db_ts_open_persist(const char* name, int64_t elem_size,
                                            const char* base_path) {
     if (elem_size <= 0) return nullptr;
-    std::string dir = base_path ? base_path : "./aiondb/";
-    if (!dir.empty() && dir.back() != '/') dir += '/';
+    std::string dir = resolve_aiondb_dir(base_path);
     std::string nm  = name ? name : "ts";
     std::string registry_key = dir + nm;
 

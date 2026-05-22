@@ -114,7 +114,7 @@ extern "C" int aiml_path_depth(const char* p) {
     if (!p || p[0] == '\0') return 0;
     try {
         int n = 0;
-        for (auto& comp : fs::path(p)) {
+        for (const auto& comp : fs::path(p)) {
             std::string s = comp.string();
             if (s != "/" && s != "\\" && !s.empty()) ++n;
         }

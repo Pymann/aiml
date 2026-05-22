@@ -1,17 +1,17 @@
-Eine „Klasse“ in LLVM gibt es offiziell nicht. LLVM kennt nur Strukturen und Funktionen.
-Aber wir können uns eine Klasse bauen wie ein kleines Theaterstück aus:
+There is no official "class" in LLVM. LLVM only knows structures and functions.
+But we can build ourselves a class like a small theatrical play from:
 
-Ein struct → repräsentiert die Daten
+A struct → represents the data
 
-Funktionen → sind die Methoden
+Functions → are the methods
 
-Das erste Argument ist immer this
+The first argument is always this
 
-Also: Willkommen in Objektorientierung à la IR 🎭
+So: Welcome to object-oriented programming à la IR 🎭
 
-🎯 Beispiel: Eine Klasse Point mit Methode sum()
+🎯 Example: A class Point with method sum()
 
-C++-Vorbild:
+C++ reference:
 
 class Point {
   int x;
@@ -22,7 +22,7 @@ class Point {
   }
 };
 
-🧱 Schritt 1: Struct anlegen (die "Klasse")
+🧱 Step 1: Create the struct (the "class")
 LLVMContext Context;
 Module M("MyModule", Context);
 IRBuilder<> Builder(Context);
@@ -34,16 +34,16 @@ StructType *PointTy = StructType::create(Context, "Point");
 PointTy->setBody({Int32Ty, Int32Ty});
 
 
-Fertig ist unsere „Klasse“.
-Intern ist das einfach:
+Our "class" is ready.
+Internally this is simply:
 
 %Point = type { i32, i32 }
 
-🔧 Schritt 2: Methode definieren
+🔧 Step 2: Define a method
 
-Eine Methode ist einfach eine Funktion mit Point* this.
+A method is simply a function with Point* this.
 
-In LLVM 18 mit opaque pointers:
+In LLVM 18 with opaque pointers:
 
 PointerType *PointPtrTy = PointerType::getUnqual(Context);
 
@@ -57,16 +57,16 @@ Function *SumFunc =
                      "Point_sum",
                      M);
 
-🧠 Schritt 3: Methoden-Body bauen
+🧠 Step 3: Build the method body
 BasicBlock *Entry =
     BasicBlock::Create(Context, "entry", SumFunc);
 Builder.SetInsertPoint(Entry);
 
-// this pointer holen
+// get this pointer
 Value *This = SumFunc->getArg(0);
 This->setName("this");
 
-// x und y laden
+// load x and y
 Value *XPtr = Builder.CreateStructGEP(PointTy, This, 0);
 Value *YPtr = Builder.CreateStructGEP(PointTy, This, 1);
 
@@ -80,9 +80,9 @@ Builder.CreateRet(Sum);
 
 verifyFunction(*SumFunc);
 
-🧾 Ergebnis-IR
+🧾 Resulting IR
 
-Das sieht dann ungefähr so aus:
+It looks roughly like this:
 
 %Point = type { i32, i32 }
 
@@ -97,31 +97,31 @@ entry:
 }
 
 
-Und voilà.
-Du hast eine Klasse. Also… eine strukturelle Illusion davon 😌
+And voilà.
+You have a class. Or rather… a structural illusion of one 😌
 
-🪄 Optional: "Konstruktor" bauen
+🪄 Optional: Build a "constructor"
 
-Ein Konstruktor ist einfach eine Funktion:
+A constructor is simply a function:
 
 Point* Point_create(int x, int y)
 
 
-Die:
+That:
 
-Speicher allokiert (CreateAlloca oder malloc)
+Allocates memory (CreateAlloca or malloc)
 
-Felder setzt (CreateStore)
+Sets fields (CreateStore)
 
-Pointer zurückgibt
+Returns the pointer
 
-LLVM interessiert sich nicht für Klassenhierarchien.
-Nur für Speicher und Funktionen. Alles andere ist Zucker, den der Frontend-Compiler streut 🍬
+LLVM doesn't care about class hierarchies.
+Only about memory and functions. Everything else is sugar sprinkled by the frontend compiler 🍬
 
-🎯 Wichtig in LLVM 18
+🎯 Important in LLVM 18
 
-Opaque pointer beachten (ptr)
+Note opaque pointers (ptr)
 
-CreateStructGEP(Type*, Value*, index) verwenden
+Use CreateStructGEP(Type*, Value*, index)
 
-Immer Typ beim CreateLoad angeben
+Always specify the type in CreateLoad

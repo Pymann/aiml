@@ -19,27 +19,43 @@ bool InterfaceBuilder::OnScalar(const std::string& value, const std::string& tag
         expectingKey = false;
         return true;
     }
-    if (currentKey == "name") interfaceNode->name = value;
-    else if (insideMethodDef) {
-        if (currentMethod.name.empty()) currentMethod.name = value;
-        else if (currentMethod.returnType.empty()) currentMethod.returnType = value;
-        // arguments would be in next sequence
+    if (insideMethodDef) {
+        if (methodDepth == 1) {
+            // Outer [name, ret, args] — first two scalars.
+            if (currentMethod.name.empty()) currentMethod.name = value;
+            else if (currentMethod.returnType.empty()) currentMethod.returnType = value;
+        }
+        // methodDepth == 2 → args sub-sequence (skipped for now)
+    } else if (currentKey == "name") {
+        interfaceNode->name = value;
     }
     if (!insideMethods) expectingKey = true;
     return true;
 }
 bool InterfaceBuilder::OnSequenceStart() {
-    if (currentKey == "methods") insideMethods = true;
-    else if (insideMethods) { insideMethodDef = true; currentMethod.name = ""; currentMethod.returnType = ""; }
+    if (!insideMethods && currentKey == "methods") {
+        // Outer "methods: -" array begins
+        insideMethods = true;
+    } else if (insideMethods) {
+        methodDepth++;
+        if (methodDepth == 1) {
+            insideMethodDef = true;
+            currentMethod = MethodSignature{};
+        }
+        // depth >= 2: inner sub-sequence (the args [])
+    }
     return true;
 }
 bool InterfaceBuilder::OnSequenceEnd() {
-    if (insideMethodDef) {
-        if (!currentMethod.name.empty()) {
-            interfaceNode->methods.push_back(currentMethod);
+    if (insideMethods && methodDepth > 0) {
+        methodDepth--;
+        if (methodDepth == 0 && insideMethodDef) {
+            if (!currentMethod.name.empty())
+                interfaceNode->methods.push_back(currentMethod);
+            insideMethodDef = false;
         }
-        insideMethodDef = false;
     } else if (insideMethods) {
+        // End of outer methods array
         insideMethods = false;
         expectingKey = true;
     }

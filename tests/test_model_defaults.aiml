@@ -1,0 +1,93 @@
+# Test: model field defaults are applied on decl instancing and { new: Model }
+# Expected exit code: 0
+
+- model:
+    name: ServerConfig
+    fields:
+      - [host, string, "localhost"]
+      - [port, i32, 8080]
+      - [ssl, bool, false]
+
+- decl: [conf, ServerConfig]
+
+- if:
+    condition: { neq: [conf.host, "localhost"] }
+    then:
+      - print: ["FAIL decl default host: ${conf.host}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [conf.port, 8080] }
+    then:
+      - print: ["FAIL decl default port: ${conf.port}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [conf.ssl, false] }
+    then:
+      - print: ["FAIL decl default ssl"]
+      - exit: [1]
+
+- decl: [heap_conf, ptr<ServerConfig>, { new: ServerConfig }]
+
+- if:
+    condition: { neq: [heap_conf.host, "localhost"] }
+    then:
+      - print: ["FAIL new default host: ${heap_conf.host}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [heap_conf.port, 8080] }
+    then:
+      - print: ["FAIL new default port: ${heap_conf.port}"]
+      - exit: [1]
+
+- if:
+    condition: { neq: [heap_conf.ssl, false] }
+    then:
+      - print: ["FAIL new default ssl"]
+      - exit: [1]
+
+- set: [conf.port, 9001]
+- if:
+    condition: { neq: [conf.port, 9001] }
+    then:
+      - print: ["FAIL write after default port: ${conf.port}"]
+      - exit: [1]
+
+- free: [heap_conf]
+
+# f32 defaults — stack
+- model:
+    name: Rates
+    fields:
+      - [lr, f32, 0.001]
+      - [margin, f32, 0.5]
+
+- decl: [r, Rates]
+- if:
+    condition: { "||": [{ "<": [r.lr, 0.0009] }, { ">": [r.lr, 0.0011] }] }
+    then:
+      - print: ["FAIL decl default lr: ${r.lr}"]
+      - exit: [1]
+- if:
+    condition: { "||": [{ "<": [r.margin, 0.49] }, { ">": [r.margin, 0.51] }] }
+    then:
+      - print: ["FAIL decl default margin: ${r.margin}"]
+      - exit: [1]
+
+# f32 defaults — heap
+- decl: [hr, ptr<Rates>, { new: Rates }]
+- if:
+    condition: { "||": [{ "<": [hr.lr, 0.0009] }, { ">": [hr.lr, 0.0011] }] }
+    then:
+      - print: ["FAIL new default lr: ${hr.lr}"]
+      - exit: [1]
+- if:
+    condition: { "||": [{ "<": [hr.margin, 0.49] }, { ">": [hr.margin, 0.51] }] }
+    then:
+      - print: ["FAIL new default margin: ${hr.margin}"]
+      - exit: [1]
+- free: [hr]
+
+- print: ["PASS test_model_defaults"]

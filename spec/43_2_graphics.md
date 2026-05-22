@@ -1,37 +1,36 @@
-# Kapitel 43.2 — `gl`-Namespace (OpenGL 3.3+ Core Profile)
+# Chapter 43.2 — `gl` Namespace (OpenGL 3.3+ Core Profile)
 
-> **Leitgedanke:** AIML liefert mit dem `gl`-Namespace einen nativen,
-> typisierten Wrapper um OpenGL 3.3 Core. Window-Erstellung und Context-Verwaltung
-> übernimmt SDL2 oder GLFW via FFI (Kapitel 35). Shader, Buffers, Texturen und
-> Draw-Calls sind vollständig in AIML ausdrückbar. Vulkan-Support ist im
-> abschließenden Abschnitt als Ausblick beschrieben.
+> **Core idea:** AIML provides a native, typed wrapper around OpenGL 3.3 Core via the `gl`
+> namespace. Window creation and context management are handled by SDL2 or GLFW via FFI
+> (Chapter 35). Shaders, buffers, textures, and draw calls are fully expressible in AIML.
+> Vulkan support is described in the final section as an outlook.
 
 ---
 
-## 1. Typen
+## 1. Types
 
-| Typ              | Intern  | Beschreibung |
+| Type             | Internal | Description |
 |------------------|---------|--------------|
-| `gl_buffer`      | `i8*`   | VBO / IBO — Vertex- oder Index-Buffer auf der GPU |
-| `gl_vao`         | `i8*`   | Vertex Array Object — merkt sich das Vertex-Layout |
-| `gl_shader`      | `i8*`   | Kompiliertes Shader-Programm (Vert + Frag) |
-| `gl_texture`     | `i8*`   | 2D-Textur auf der GPU |
-| `gl_framebuffer` | `i8*`   | Offscreen Render-Target (FBO) |
-| `gl_renderbuffer`| `i8*`   | Depth/Stencil-Attachment eines FBO |
-| `gl_mesh`        | `i8*`   | Gebündeltes Draw-Objekt: VAO + VBOs + IBO + index_count |
+| `gl_buffer`      | `i8*`   | VBO / IBO — vertex or index buffer on the GPU |
+| `gl_vao`         | `i8*`   | Vertex Array Object — stores the vertex layout |
+| `gl_shader`      | `i8*`   | Compiled shader program (vert + frag) |
+| `gl_texture`     | `i8*`   | 2D texture on the GPU |
+| `gl_framebuffer` | `i8*`   | Offscreen render target (FBO) |
+| `gl_renderbuffer`| `i8*`   | Depth/stencil attachment of an FBO |
+| `gl_mesh`        | `i8*`   | Bundled draw object: VAO + VBOs + IBO + index_count |
 
-Alle Handles sind opak — sie wrappen intern einen `GLuint` auf dem Heap,
-damit NULL-Semantik und Lebensdauer-Tracking möglich sind.
+All handles are opaque — they internally wrap a `GLuint` on the heap,
+enabling NULL semantics and lifetime tracking.
 
 ---
 
-## 2. Initialisierung
+## 2. Initialization
 
-Der OpenGL-Context wird über SDL2 oder GLFW erzeugt (FFI, Kapitel 35).
-Danach muss `gl.init()` einmalig aufgerufen werden, um GLAD/GLEW zu laden:
+The OpenGL context is created via SDL2 or GLFW (FFI, Chapter 35).
+Afterwards, `gl.init()` must be called once to load GLAD/GLEW:
 
 ```aiml
-# SDL2-Window + OpenGL-Context (via FFI, verkürzt)
+# SDL2 window + OpenGL context (via FFI, abbreviated)
 - extern: "C"
   defs:
     - def: { name: SDL_Init,             args: [[f, i32]],                                               return: i32 }
@@ -43,41 +42,41 @@ Danach muss `gl.init()` einmalig aufgerufen werden, um GLAD/GLEW zu laden:
 - decl: [win, ptr, { call: [SDL_CreateWindow, "AIML Game", 100, 100, 800, 600, 0x00000002] }]
 - decl: [ctx, ptr, { call: [SDL_GL_CreateContext, win] }]
 
-# AIML-seitig: GLAD initialisieren + Basisstatus setzen
+# AIML side: initialize GLAD + set base state
 - call: [gl.init]
 - call: [gl.viewport, 0, 0, 800, 600]
 - call: [gl.enable_depth_test]
 ```
 
-`gl.init` ruft intern `gladLoadGLLoader(SDL_GL_GetProcAddress)` auf.
-Bei Fehler (z.B. OpenGL < 3.3) → Exception `gl.InitError`.
+`gl.init` internally calls `gladLoadGLLoader(SDL_GL_GetProcAddress)`.
+On error (e.g. OpenGL < 3.3) → exception `gl.InitError`.
 
 ---
 
-## 3. Buffer-Management
+## 3. Buffer Management
 
 ### 3.1 Vertex Buffer Object (VBO)
 
 ```aiml
-# Vertex-Daten (xyz pro Vertex)
+# Vertex data (xyz per vertex)
 - decl: [verts, buffer<f32>]
 - call: [verts.push, 0.0]  - call: [verts.push, 0.5]  - call: [verts.push, 0.0]
 - call: [verts.push, -0.5] - call: [verts.push, -0.5] - call: [verts.push, 0.0]
 - call: [verts.push, 0.5]  - call: [verts.push, -0.5] - call: [verts.push, 0.0]
 
-# VBO erstellen und hochladen
+# Create VBO and upload
 - decl: [vbo, gl_buffer, { call: [gl.create_buffer, verts] }]
 ```
 
-Kurzform mit `gl.create_buffer(data)` erzeugt den Buffer und lädt `data`
-in einem Schritt hoch (`GL_STATIC_DRAW`).
+The shorthand `gl.create_buffer(data)` creates the buffer and uploads `data`
+in one step (`GL_STATIC_DRAW`).
 
-Für dynamische Daten (jedes Frame neu):
+For dynamic data (updated every frame):
 
 ```aiml
 - decl: [vbo, gl_buffer, { call: [gl.create_buffer_dynamic, verts] }]  # GL_DYNAMIC_DRAW
 
-# Später: Daten aktualisieren (kein neuer Buffer nötig)
+# Later: update data (no new buffer needed)
 - call: [vbo.update, new_verts]
 ```
 
@@ -90,15 +89,15 @@ Für dynamische Daten (jedes Frame neu):
 - decl: [ibo, gl_buffer, { call: [gl.create_index_buffer, idx] }]
 ```
 
-### 3.3 Vertex Array Object (VAO) + Attribut-Layout
+### 3.3 Vertex Array Object (VAO) + Attribute Layout
 
 ```aiml
-# VAO mit VBO binden und Attribute definieren
+# Bind VAO with VBO and define attributes
 - decl: [vao, gl_vao, { call: [gl.create_vao] }]
 
-# Attribut 0: position (3 f32, Stride = 32 Byte, Offset = 0)
-# Attribut 1: normal   (3 f32, Stride = 32 Byte, Offset = 12)
-# Attribut 2: uv       (2 f32, Stride = 32 Byte, Offset = 24)
+# Attribute 0: position (3 f32, stride = 32 bytes, offset = 0)
+# Attribute 1: normal   (3 f32, stride = 32 bytes, offset = 12)
+# Attribute 2: uv       (2 f32, stride = 32 bytes, offset = 24)
 - call: [vao.bind_vbo, vbo]
 - call: [vao.attrib, 0, 3, 32, 0]    # index, components, stride_bytes, offset_bytes
 - call: [vao.attrib, 1, 3, 32, 12]
@@ -106,57 +105,57 @@ Für dynamische Daten (jedes Frame neu):
 - call: [vao.bind_ibo, ibo]
 ```
 
-### 3.4 `gl_mesh` — gebündeltes Mesh-Objekt
+### 3.4 `gl_mesh` — Bundled Mesh Object
 
-`gl_mesh` fasst VAO, VBOs, IBO und den Index-Count in einem Handle zusammen.
-Erstellt mit `gl.create_mesh` (allgemein) oder `prim.to_gl_mesh()` (direkt aus glTF).
+`gl_mesh` combines VAO, VBOs, IBO, and index count into a single handle.
+Created with `gl.create_mesh` (general) or `prim.to_gl_mesh()` (directly from glTF).
 
-**Allgemeine Erstellung:**
+**General creation:**
 
 ```aiml
 # positions = buffer<f32>  (3 floats/vertex: xyz)
-# uvs       = buffer<f32>  (2 floats/vertex: uv)    — optional, null erlaubt
-# normals   = buffer<f32>  (3 floats/vertex: xyz)   — optional, null erlaubt
+# uvs       = buffer<f32>  (2 floats/vertex: uv)    — optional, null allowed
+# normals   = buffer<f32>  (3 floats/vertex: xyz)   — optional, null allowed
 # indices   = buffer<u32>
 
 - decl: [mesh, gl_mesh, { call: [gl.create_mesh, positions, uvs, normals, indices] }]
 ```
 
-Intern generiert `gl.create_mesh` separate VBOs je Accessor und konfiguriert
-das VAO mit festem Attrib-Layout:
+Internally, `gl.create_mesh` generates separate VBOs per accessor and configures
+the VAO with a fixed attribute layout:
 
-| Attrib-Index | Inhalt    | Komponenten | Stride |
+| Attrib Index | Content   | Components  | Stride |
 |-------------|-----------|-------------|--------|
 | 0           | position  | 3 × f32     | 12 B   |
 | 1           | uv        | 2 × f32     | 8 B    |
 | 2           | normal    | 3 × f32     | 12 B   |
 
-**Aus glTF-Primitive (Kurzform):**
+**From glTF primitive (shorthand):**
 
 ```aiml
-# prim.to_gl_mesh() erkennt automatisch vorhandene Accessoren
-# (POSITION, TEXCOORD_0, NORMAL) und ruft intern gl.create_mesh auf.
+# prim.to_gl_mesh() automatically detects available accessors
+# (POSITION, TEXCOORD_0, NORMAL) and calls gl.create_mesh internally.
 - decl: [mesh, gl_mesh, { call: [prim.to_gl_mesh] }]
 ```
 
-**Draw-Call:**
+**Draw call:**
 
 ```aiml
-- call: [mesh.draw]                  # gl.draw_elements mit gespeichertem index_count
-- call: [mesh.draw_count, 36]        # override: nur n Indizes zeichnen
+- call: [mesh.draw]                  # gl.draw_elements with stored index_count
+- call: [mesh.draw_count, 36]        # override: draw only n indices
 ```
 
 **Cleanup:**
 
 ```aiml
-- call: [mesh.delete]   # gibt VAO + alle VBOs + IBO frei
+- call: [mesh.delete]   # frees VAO + all VBOs + IBO
 ```
 
 ---
 
-## 4. Shader
+## 4. Shaders
 
-### 4.1 Kompilierung
+### 4.1 Compilation
 
 ```aiml
 - decl: [vert_src, string, "
@@ -182,65 +181,65 @@ void main() {
 - decl: [sh, gl_shader, { call: [gl.compile_shader, vert_src, frag_src] }]
 ```
 
-Bei Compile-/Link-Fehler → Exception `gl.ShaderError` mit dem GLSL-Info-Log als Message.
+On compile/link error → exception `gl.ShaderError` with the GLSL info log as the message.
 
-### 4.2 Aus Datei laden
+### 4.2 Load from File
 
 ```aiml
 - decl: [sh, gl_shader, { call: [gl.load_shader, "/shaders/mesh.vert", "/shaders/mesh.frag"] }]
 ```
 
-### 4.3 Uniforms setzen
+### 4.3 Setting Uniforms
 
 ```aiml
 - call: [sh.use]
 
-# Skalare und Vektoren
+# Scalars and vectors
 - call: [sh.uniform_f32, "uTime", 1.23]
-- call: [sh.uniform_i32, "uTex",  0]           # Texture Unit 0
+- call: [sh.uniform_i32, "uTex",  0]           # Texture unit 0
 - call: [sh.uniform_vec3, "uColor", { call: [math.vec3, 1.0, 0.5, 0.2] }]
 - call: [sh.uniform_vec4, "uFog",   { call: [math.vec4, 0.6, 0.7, 0.8, 1.0] }]
 
-# Matrizen (column-major, transponiert=false)
+# Matrices (column-major, transpose=false)
 - decl: [mvp, mat4, { *: [proj, { *: [view, model] }] }]
 - call: [sh.uniform_mat4, "uMVP", mvp]
 ```
 
-`sh.uniform_mat4` ruft intern `glUniformMatrix4fv(..., GL_FALSE, mat4_ptr)` — kein
-manuelles `mat4_to_buffer` nötig.
+`sh.uniform_mat4` internally calls `glUniformMatrix4fv(..., GL_FALSE, mat4_ptr)` — no
+manual `mat4_to_buffer` required.
 
 ---
 
-## 5. Texturen
+## 5. Textures
 
-### 5.1 Aus Datei laden
+### 5.1 Load from File
 
 ```aiml
 - decl: [tex, gl_texture, { call: [gl.load_texture, "/textures/albedo.png"] }]
 ```
 
-Intern: stb_image → RGBA → `glTexImage2D` → Mipmaps (`glGenerateMipmap`).
-Default-Filterung: `GL_LINEAR_MIPMAP_LINEAR` (min) / `GL_LINEAR` (mag).
+Internally: stb_image → RGBA → `glTexImage2D` → mipmaps (`glGenerateMipmap`).
+Default filtering: `GL_LINEAR_MIPMAP_LINEAR` (min) / `GL_LINEAR` (mag).
 
-### 5.2 Aus Pixel-Daten (z.B. aus glTF)
+### 5.2 From Pixel Data (e.g. from glTF)
 
 ```aiml
-# pixels = buffer<u8> (RGBA, width*height*4 Bytes)
+# pixels = buffer<u8> (RGBA, width*height*4 bytes)
 - decl: [tex, gl_texture, { call: [gl.create_texture, w, h, pixels] }]
 ```
 
-### 5.3 Direkt aus glTF-Image (Kurzform)
+### 5.3 Directly from glTF Image (shorthand)
 
 ```aiml
-# Decode (stb_image) + GPU-Upload in einem Schritt — kein buffer<u8> nötig
+# Decode (stb_image) + GPU upload in one step — no buffer<u8> needed
 - decl: [tex, gl_texture, { call: [img.to_gl_texture] }]
 - call: [tex.gen_mipmaps]
 ```
 
-`img` ist ein `gltf_image`-Handle (aus `tex.image()` oder `scene.images().get(i)`).
-Intern: stb_image dekodiert direkt → `glTexImage2D`, kein AIML-seitiger Pixel-Buffer.
+`img` is a `gltf_image` handle (from `tex.image()` or `scene.images().get(i)`).
+Internally: stb_image decodes directly → `glTexImage2D`, no AIML-side pixel buffer.
 
-### 5.3 Sampler-Parameter setzen
+### 5.3 Setting Sampler Parameters
 
 ```aiml
 - call: [tex.set_wrap, gl.REPEAT, gl.REPEAT]           # s, t
@@ -248,62 +247,62 @@ Intern: stb_image dekodiert direkt → `glTexImage2D`, kein AIML-seitiger Pixel-
 - call: [tex.gen_mipmaps]
 ```
 
-### 5.4 Binden
+### 5.4 Binding
 
 ```aiml
-- call: [gl.bind_texture, tex, 0]   # Slot 0 → uniform uTex=0
-- call: [gl.bind_texture, normal_tex, 1]  # Slot 1 → uniform uNormal=1
+- call: [gl.bind_texture, tex, 0]   # slot 0 → uniform uTex=0
+- call: [gl.bind_texture, normal_tex, 1]  # slot 1 → uniform uNormal=1
 ```
 
 ---
 
-## 6. Draw-Calls
+## 6. Draw Calls
 
 ```aiml
 - call: [sh.use]
 - call: [sh.uniform_mat4, "uMVP", mvp]
 - call: [gl.bind_texture, tex, 0]
 
-# Indexed Draw (VAO hat IBO gebunden)
+# Indexed draw (VAO has IBO bound)
 - call: [gl.draw_elements, vao, index_count]    # GL_TRIANGLES, GL_UNSIGNED_INT
 
-# Non-indexed Draw
+# Non-indexed draw
 - call: [gl.draw_arrays, vao, vertex_count]     # GL_TRIANGLES
 
-# Mit explizitem Primitiv-Typ
+# With explicit primitive type
 - call: [gl.draw_arrays_mode, vao, gl.LINES, vertex_count]
 - call: [gl.draw_arrays_mode, vao, gl.POINTS, vertex_count]
 ```
 
 ---
 
-## 7. Render-State
+## 7. Render State
 
 ```aiml
 # Viewport
 - call: [gl.viewport, 0, 0, 1920, 1080]
 
-# Depth-Test
+# Depth test
 - call: [gl.enable_depth_test]
 - call: [gl.disable_depth_test]
 
-# Alpha-Blending (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+# Alpha blending (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 - call: [gl.enable_blend]
 - call: [gl.disable_blend]
 
-# Face Culling
+# Face culling
 - call: [gl.enable_cull_face]
 - call: [gl.cull_front]     # GL_FRONT
-- call: [gl.cull_back]      # GL_BACK (Standard)
+- call: [gl.cull_back]      # GL_BACK (default)
 
 # Wireframe
-- call: [gl.wireframe, 1]   # an
-- call: [gl.wireframe, 0]   # aus
+- call: [gl.wireframe, 1]   # on
+- call: [gl.wireframe, 0]   # off
 
-# Framebuffer löschen
-- call: [gl.clear, 0.1, 0.1, 0.15, 1.0]     # Farbe (r,g,b,a)
-- call: [gl.clear_depth]                      # Depth-Buffer
-- call: [gl.clear_all, 0.1, 0.1, 0.15, 1.0] # Farbe + Tiefe in einem
+# Clear framebuffer
+- call: [gl.clear, 0.1, 0.1, 0.15, 1.0]     # color (r,g,b,a)
+- call: [gl.clear_depth]                      # depth buffer
+- call: [gl.clear_all, 0.1, 0.1, 0.15, 1.0] # color + depth in one call
 ```
 
 ---
@@ -311,27 +310,27 @@ Intern: stb_image dekodiert direkt → `glTexImage2D`, kein AIML-seitiger Pixel-
 ## 8. Framebuffer (Offscreen Rendering)
 
 ```aiml
-# FBO mit Color-Texture + Depth-RBO
+# FBO with color texture + depth RBO
 - decl: [fbo, gl_framebuffer, { call: [gl.create_framebuffer, 1920, 1080] }]
 
-# Rendern in FBO
+# Render into FBO
 - call: [gl.bind_framebuffer, fbo]
 - call: [gl.clear_all, 0.0, 0.0, 0.0, 1.0]
 # ... draw calls ...
 
-# Zurück zum Default-Framebuffer (Screen)
+# Back to default framebuffer (screen)
 - call: [gl.bind_default_framebuffer]
 - call: [gl.viewport, 0, 0, 1920, 1080]
 
-# FBO-Farbtextur als normale Textur verwenden (Post-Processing)
+# Use FBO color texture as a regular texture (post-processing)
 - decl: [color_tex, gl_texture, { call: [fbo.color_texture] }]
 - call: [gl.bind_texture, color_tex, 0]
-- call: [gl.draw_elements, screen_vao, 6]   # Fullscreen-Quad
+- call: [gl.draw_elements, screen_vao, 6]   # fullscreen quad
 ```
 
 ---
 
-## 9. Konstanten
+## 9. Constants
 
 ```aiml
 gl.TRIANGLES     # GL_TRIANGLES   = 0x0004
@@ -349,7 +348,7 @@ gl.LINEAR_MIPMAP_LINEAR  # GL_LINEAR_MIPMAP_LINEAR  = 0x2703
 gl.NEAREST_MIPMAP_LINEAR # GL_NEAREST_MIPMAP_LINEAR = 0x2702
 ```
 
-Verwendung:
+Usage:
 ```aiml
 - call: [tex.set_wrap, gl.CLAMP_TO_EDGE, gl.CLAMP_TO_EDGE]
 - call: [gl.draw_arrays_mode, vao, gl.LINES, edge_count]
@@ -357,7 +356,7 @@ Verwendung:
 
 ---
 
-## 10. Vollständiges Beispiel — Texturiertes Dreieck
+## 10. Complete Example — Textured Triangle
 
 **`exodus.json`:**
 ```json
@@ -380,7 +379,7 @@ Verwendung:
     - def: { name: SDL_DestroyWindow,     args: [[win, ptr]],                                                     return: void }
     - def: { name: SDL_Quit,              args: [],                                                                return: void }
 
-# --- Fenster + Context ---
+# --- Window + context ---
 - call: [SDL_Init, 0x00000020]
 - decl: [win, ptr, { call: [SDL_CreateWindow, "Hello AIML GL", 100, 100, 800, 600, 0x00000002] }]
 - decl: [glctx, ptr, { call: [SDL_GL_CreateContext, win] }]
@@ -388,7 +387,7 @@ Verwendung:
 - call: [gl.enable_depth_test]
 - call: [gl.viewport, 0, 0, 800, 600]
 
-# --- Geometrie ---
+# --- Geometry ---
 - decl: [verts, buffer<f32>]
 # pos (xyz), uv (xy)
 - call: [verts.push,  0.0] - call: [verts.push,  0.5] - call: [verts.push, 0.0]
@@ -407,7 +406,7 @@ Verwendung:
 # --- Shader ---
 - decl: [sh, gl_shader, { call: [gl.load_shader, "/shaders/basic.vert", "/shaders/basic.frag"] }]
 
-# --- Textur ---
+# --- Texture ---
 - decl: [tex, gl_texture, { call: [gl.load_texture, "/textures/grid.png"] }]
 
 # --- Projection ---
@@ -418,17 +417,17 @@ Verwendung:
     { call: [math.vec3, 0.0, 0.0, 0.0] },
     { call: [math.vec3, 0.0, 1.0, 0.0] }] }]
 
-# --- Game Loop ---
+# --- Game loop ---
 - decl: [running, i8, 1]
 - decl: [angle, f32, 0.0]
 
 - while: [{ ==: [running, 1] }]
   body:
-    # Events (SDL_PollEvent gibt 0 zurück wenn Queue leer)
-    - decl: [ev_buf, ptr]   # SDL_Event (52 Bytes, opak)
+    # Events (SDL_PollEvent returns 0 when queue is empty)
+    - decl: [ev_buf, ptr]   # SDL_Event (52 bytes, opaque)
     - while: [{ call: [SDL_PollEvent, ev_buf] }]
       body:
-        - set: [running, 0]   # jedes Event beendet (Demo — echtes Quit prüft ev.type)
+        - set: [running, 0]   # any event exits (demo — real quit checks ev.type)
 
     # Update
     - set: [angle, { +: [angle, 0.016] }]
@@ -455,12 +454,12 @@ Verwendung:
 
 ---
 
-## 11. glTF-Mesh zu OpenGL
+## 11. glTF Mesh to OpenGL
 
-Mit `prim.to_gl_mesh()` und `img.to_gl_texture()` lassen sich glTF-Assets
-in wenigen Zeilen rendern. Die manuelle VBO/VAO-Einrichtung entfällt vollständig.
+With `prim.to_gl_mesh()` and `img.to_gl_texture()`, glTF assets can be rendered
+in just a few lines. Manual VBO/VAO setup is entirely unnecessary.
 
-**Kurzform (empfohlen):**
+**Shorthand (recommended):**
 
 ```aiml
 - decl: [scene, gltf_scene,     { call: [gltf.load, "/assets/character.glb"] }]
@@ -468,7 +467,7 @@ in wenigen Zeilen rendern. Die manuelle VBO/VAO-Einrichtung entfällt vollständ
 - set:  [meshes, { call: [scene.meshes] }]
 - decl: [prim,  gltf_primitive, { call: [{ call: [meshes.get, 0] }.primitive, 0] }]
 
-# Geometrie + Textur auf GPU laden — je eine Zeile
+# Upload geometry + texture to GPU — one line each
 - decl: [mesh, gl_mesh,    { call: [prim.to_gl_mesh] }]
 - decl: [mat,  gltf_material, { call: [prim.material] }]
 - decl: [img,  gltf_image, { call: [{ call: [mat.base_color_texture] }.image] }]
@@ -487,7 +486,7 @@ in wenigen Zeilen rendern. Die manuelle VBO/VAO-Einrichtung entfällt vollständ
 - call: [scene.free]
 ```
 
-**Ausführliche Form** (wenn Zugriff auf einzelne Buffer nötig, z.B. für Physik-Mesh):
+**Verbose form** (when access to individual buffers is needed, e.g. for a physics mesh):
 
 ```aiml
 - decl: [positions, buffer<f32>, { call: [prim.positions] }]
@@ -507,63 +506,63 @@ in wenigen Zeilen rendern. Die manuelle VBO/VAO-Einrichtung entfällt vollständ
 
 ---
 
-## 12. Namespace-Referenz
+## 12. Namespace Reference
 
-### `gl`-Funktionen (statisch)
+### `gl` Functions (static)
 
-| Aufruf | Argumente | Rückgabe | Beschreibung |
+| Call | Arguments | Return | Description |
 |--------|-----------|----------|--------------|
-| `gl.init` | — | — | GLAD laden, OpenGL-State initialisieren |
+| `gl.init` | — | — | Load GLAD, initialize OpenGL state |
 | `gl.viewport` | `x, y, w, h: i32` | — | glViewport |
-| `gl.clear` | `r, g, b, a: f32` | — | Farb-Buffer löschen |
-| `gl.clear_depth` | — | — | Depth-Buffer löschen |
-| `gl.clear_all` | `r, g, b, a: f32` | — | Farbe + Depth in einem Aufruf |
-| `gl.enable_depth_test` | — | — | GL_DEPTH_TEST ein |
-| `gl.disable_depth_test` | — | — | GL_DEPTH_TEST aus |
-| `gl.enable_blend` | — | — | Alpha-Blending (SRC_ALPHA, ONE_MINUS_SRC_ALPHA) |
+| `gl.clear` | `r, g, b, a: f32` | — | Clear color buffer |
+| `gl.clear_depth` | — | — | Clear depth buffer |
+| `gl.clear_all` | `r, g, b, a: f32` | — | Color + depth in one call |
+| `gl.enable_depth_test` | — | — | GL_DEPTH_TEST on |
+| `gl.disable_depth_test` | — | — | GL_DEPTH_TEST off |
+| `gl.enable_blend` | — | — | Alpha blending (SRC_ALPHA, ONE_MINUS_SRC_ALPHA) |
 | `gl.disable_blend` | — | — | |
-| `gl.enable_cull_face` | — | — | Face-Culling ein |
-| `gl.cull_back` | — | — | GL_BACK (Standard) |
+| `gl.enable_cull_face` | — | — | Face culling on |
+| `gl.cull_back` | — | — | GL_BACK (default) |
 | `gl.cull_front` | — | — | GL_FRONT |
-| `gl.wireframe` | `on: i8` | — | Polygon-Mode LINE / FILL |
+| `gl.wireframe` | `on: i8` | — | Polygon mode LINE / FILL |
 | `gl.create_buffer` | `data: buffer<f32>` | `gl_buffer` | VBO, GL_STATIC_DRAW |
 | `gl.create_buffer_dynamic` | `data: buffer<f32>` | `gl_buffer` | VBO, GL_DYNAMIC_DRAW |
 | `gl.create_index_buffer` | `data: buffer<u32>` | `gl_buffer` | IBO, GL_STATIC_DRAW |
-| `gl.create_vao` | — | `gl_vao` | Leeres VAO |
-| `gl.compile_shader` | `vert: string, frag: string` | `gl_shader` | GLSL kompilieren + linken |
-| `gl.load_shader` | `vert: path, frag: path` | `gl_shader` | Shader aus Dateien |
+| `gl.create_vao` | — | `gl_vao` | Empty VAO |
+| `gl.compile_shader` | `vert: string, frag: string` | `gl_shader` | Compile + link GLSL |
+| `gl.load_shader` | `vert: path, frag: path` | `gl_shader` | Shader from files |
 | `gl.load_texture` | `p: path` | `gl_texture` | PNG/JPG → GPU (stb_image) |
-| `gl.create_texture` | `w, h: i32, px: buffer<u8>` | `gl_texture` | RGBA-Daten → GPU |
-| `gl.create_mesh` | `pos, uvs, normals: buffer<f32>, idx: buffer<u32>` | `gl_mesh` | VAO+VBOs+IBO bündeln; `uvs`/`normals` dürfen null sein |
-| `gl.bind_texture` | `tex: gl_texture, slot: i32` | — | Texture Unit binden |
+| `gl.create_texture` | `w, h: i32, px: buffer<u8>` | `gl_texture` | RGBA data → GPU |
+| `gl.create_mesh` | `pos, uvs, normals: buffer<f32>, idx: buffer<u32>` | `gl_mesh` | Bundle VAO+VBOs+IBO; `uvs`/`normals` may be null |
+| `gl.bind_texture` | `tex: gl_texture, slot: i32` | — | Bind texture unit |
 | `gl.draw_arrays` | `vao: gl_vao, count: i32` | — | GL_TRIANGLES |
 | `gl.draw_elements` | `vao: gl_vao, count: i32` | — | GL_TRIANGLES, GL_UNSIGNED_INT |
-| `gl.draw_arrays_mode` | `vao, mode: i32, count: i32` | — | Expliziter Primitiv-Typ |
-| `gl.create_framebuffer` | `w, h: i32` | `gl_framebuffer` | Color-Tex + Depth-RBO |
+| `gl.draw_arrays_mode` | `vao, mode: i32, count: i32` | — | Explicit primitive type |
+| `gl.create_framebuffer` | `w, h: i32` | `gl_framebuffer` | Color tex + depth RBO |
 | `gl.bind_framebuffer` | `fb: gl_framebuffer` | — | |
-| `gl.bind_default_framebuffer` | — | — | Zurück zum Screen |
+| `gl.bind_default_framebuffer` | — | — | Back to screen |
 
-### `gl_vao`-Methoden
+### `gl_vao` Methods
 
-| Methode | Argumente | Beschreibung |
+| Method | Arguments | Description |
 |---------|-----------|--------------|
-| `bind_vbo` | `vbo: gl_buffer` | VBO an VAO binden |
-| `bind_ibo` | `ibo: gl_buffer` | IBO an VAO binden |
+| `bind_vbo` | `vbo: gl_buffer` | Bind VBO to VAO |
+| `bind_ibo` | `ibo: gl_buffer` | Bind IBO to VAO |
 | `attrib` | `index, components, stride, offset: i32` | `glVertexAttribPointer` (f32) |
 | `attrib_i` | `index, components, stride, offset: i32` | `glVertexAttribIPointer` (i32) |
 | `delete` | — | `glDeleteVertexArrays` |
 
-### `gl_buffer`-Methoden
+### `gl_buffer` Methods
 
-| Methode | Argumente | Beschreibung |
+| Method | Arguments | Description |
 |---------|-----------|--------------|
-| `update` | `data: buffer<f32>` | `glBufferSubData` (gleiche Größe) |
-| `update_range` | `data, offset, size: i32` | Teilbereich aktualisieren |
+| `update` | `data: buffer<f32>` | `glBufferSubData` (same size) |
+| `update_range` | `data, offset, size: i32` | Update a sub-range |
 | `delete` | — | `glDeleteBuffers` |
 
-### `gl_shader`-Methoden
+### `gl_shader` Methods
 
-| Methode | Argumente | Beschreibung |
+| Method | Arguments | Description |
 |---------|-----------|--------------|
 | `use` | — | `glUseProgram` |
 | `uniform_f32` | `name: string, v: f32` | |
@@ -571,60 +570,60 @@ in wenigen Zeilen rendern. Die manuelle VBO/VAO-Einrichtung entfällt vollständ
 | `uniform_vec2` | `name: string, v: vec2` | |
 | `uniform_vec3` | `name: string, v: vec3` | |
 | `uniform_vec4` | `name: string, v: vec4` | |
-| `uniform_mat4` | `name: string, m: mat4` | Kein Transponieren (column-major) |
-| `uniform_mat4_array` | `name: string, buf: buffer<f32>, count: i32` | Für Skinning |
+| `uniform_mat4` | `name: string, m: mat4` | No transpose (column-major) |
+| `uniform_mat4_array` | `name: string, buf: buffer<f32>, count: i32` | For skinning |
 | `delete` | — | `glDeleteProgram` |
 
-### `gl_texture`-Methoden
+### `gl_texture` Methods
 
-| Methode | Argumente | Beschreibung |
+| Method | Arguments | Description |
 |---------|-----------|--------------|
 | `set_wrap` | `s, t: i32` | `GL_REPEAT` / `GL_CLAMP_TO_EDGE` / ... |
-| `set_filter` | `min, mag: i32` | Filter-Modi |
+| `set_filter` | `min, mag: i32` | Filter modes |
 | `gen_mipmaps` | — | `glGenerateMipmap` |
 | `delete` | — | `glDeleteTextures` |
 
-### `gl_mesh`-Methoden
+### `gl_mesh` Methods
 
-| Methode | Argumente | Rückgabe | Beschreibung |
+| Method | Arguments | Return | Description |
 |---------|-----------|----------|--------------|
-| `draw` | — | — | `gl.draw_elements` mit gespeichertem index_count |
-| `draw_count` | `n: i32` | — | Draw mit override index_count |
-| `index_count` | — | `i32` | Anzahl Indizes |
-| `delete` | — | — | VAO + alle VBOs + IBO freigeben |
+| `draw` | — | — | `gl.draw_elements` with stored index_count |
+| `draw_count` | `n: i32` | — | Draw with override index_count |
+| `index_count` | — | `i32` | Number of indices |
+| `delete` | — | — | Free VAO + all VBOs + IBO |
 
-### `gl_framebuffer`-Methoden
+### `gl_framebuffer` Methods
 
-| Methode | Rückgabe | Beschreibung |
+| Method | Return | Description |
 |---------|----------|--------------|
-| `color_texture` | `gl_texture` | Die Color-Attachment-Textur (für Post-Processing) |
-| `resize` | `w, h: i32` | FBO + Texturen neu allokieren |
-| `delete` | — | FBO + Attachments freigeben |
+| `color_texture` | `gl_texture` | The color attachment texture (for post-processing) |
+| `resize` | `w, h: i32` | Reallocate FBO + textures |
+| `delete` | — | Free FBO + attachments |
 
 ---
 
-## 13. Implementierungshinweise
+## 13. Implementation Notes
 
 ### 13.1 Backend: GLAD
 
-GLAD (OpenGL Loader, MIT-Lizenz) wird als Single-Header ins Repo kopiert.
-`gl.init` ruft `gladLoadGLLoader` auf. Keine externe Abhängigkeit außer dem
-System-OpenGL (`libGL.so` / `opengl32.lib`).
+GLAD (OpenGL Loader, MIT license) is copied into the repo as a single header.
+`gl.init` calls `gladLoadGLLoader`. No external dependency other than the
+system OpenGL (`libGL.so` / `opengl32.lib`).
 
-### 13.2 Uniform-Caching
+### 13.2 Uniform Caching
 
-`sh.uniform_*` cacht Uniform-Locations in einer `std::unordered_map<string, GLint>`
-pro Shader-Instanz — `glGetUniformLocation` wird nur beim ersten Aufruf aufgerufen.
+`sh.uniform_*` caches uniform locations in a `std::unordered_map<string, GLint>`
+per shader instance — `glGetUniformLocation` is only called on the first access.
 
-### 13.3 Skinning — Bone-Matrices
+### 13.3 Skinning — Bone Matrices
 
-Für Skeletal Animation wird `sh.uniform_mat4_array` genutzt:
+For skeletal animation, `sh.uniform_mat4_array` is used:
 
 ```aiml
-# Pose aus glTF-Animation samplen
+# Sample pose from glTF animation
 - decl: [pose, list<buffer<f32>>, { call: [anim.sample_pose, time] }]
 
-# Alle Bone-Matrizen als flachen f32-Buffer
+# All bone matrices as a flat f32 buffer
 - decl: [bones, buffer<f32>]
 - decl: [j, i32, 0]
 - while: [{ <: [j, { call: [pose.len] }] }]
@@ -638,11 +637,11 @@ Für Skeletal Animation wird `sh.uniform_mat4_array` genutzt:
 
 ---
 
-## 14. Ausblick: Vulkan
+## 14. Outlook: Vulkan
 
-Vulkan erfordert deutlich mehr Boilerplate als OpenGL (Device, Swapchain,
-RenderPass, Pipeline, CommandBuffer, Synchronisation, ...). In AIML ist Vulkan
-via FFI (Kapitel 35) vollständig nutzbar:
+Vulkan requires significantly more boilerplate than OpenGL (device, swapchain,
+render pass, pipeline, command buffer, synchronization, ...). In AIML, Vulkan is
+fully usable via FFI (Chapter 35):
 
 ```json
 {
@@ -657,9 +656,8 @@ via FFI (Kapitel 35) vollständig nutzbar:
   defs:
     - def: { name: vkCreateInstance,   args: [[info, ptr], [alloc, ptr], [out, ptr]], return: i32 }
     - def: { name: vkDestroyInstance,  args: [[inst, ptr], [alloc, ptr]],             return: void }
-    # ... alle weiteren Vulkan-Funktionen
+    # ... all further Vulkan functions
 ```
 
-Ein nativer `vk`-Namespace (analog zu `gl`) ist für eine spätere
-Spezifikationsversion geplant. Priorität: zunächst vollständige
-OpenGL-Implementierung.
+A native `vk` namespace (analogous to `gl`) is planned for a future
+specification version. Priority: complete OpenGL implementation first.

@@ -1,64 +1,64 @@
-# Vulkan vs. OpenGL — Erklärung
+# Vulkan vs. OpenGL — Explanation
 
 ## OpenGL (1992)
 
-OpenGL ist eine **High-Level-Abstraktion** über die GPU. Der Treiber (von NVIDIA, AMD, Intel) erledigt intern sehr viel Arbeit automatisch:
+OpenGL is a **high-level abstraction** over the GPU. The driver (from NVIDIA, AMD, Intel) handles a lot of work internally and automatically:
 
-- **State Machine**: `glEnable(GL_DEPTH_TEST)` setzt globalen Zustand, der Treiber merkt sich alles
-- **Implizite Synchronisation**: Der Treiber entscheidet, wann Draw-Calls wirklich ausgeführt werden
-- **Shader-Kompilierung zur Laufzeit**: GLSL wird erst im Treiber zu GPU-Code übersetzt — Timing und Caching sind Treibergeheimnis
-- **Ein Thread**: OpenGL-Context ist per Design single-threaded
+- **State Machine**: `glEnable(GL_DEPTH_TEST)` sets global state; the driver remembers everything
+- **Implicit Synchronisation**: The driver decides when draw calls are actually executed
+- **Runtime Shader Compilation**: GLSL is only translated to GPU code inside the driver — timing and caching are driver secrets
+- **Single Thread**: OpenGL context is single-threaded by design
 
-Das Problem: Der Treiber muss viele Entscheidungen raten, was zu **unvorhersehbaren Stutter-Frames** und Overhead führt. Außerdem verhält sich jeder Hersteller-Treiber leicht anders.
+The problem: the driver has to guess many decisions, which leads to **unpredictable stutter frames** and overhead. In addition, every vendor driver behaves slightly differently.
 
 ---
 
-## Vulkan (2016, Nachfolger von OpenGL)
+## Vulkan (2016, successor to OpenGL)
 
-Vulkan ist eine **Low-Level-Schnittstelle** — der Treiber tut fast gar nichts automatisch. Du kontrollierst alles explizit:
+Vulkan is a **low-level interface** — the driver does almost nothing automatically. You control everything explicitly:
 
-| Thema | OpenGL | Vulkan |
+| Topic | OpenGL | Vulkan |
 |-------|--------|--------|
-| Speicher | Treiber allokiert | Du allokierst manuell (`VkDeviceMemory`) |
-| Synchronisation | Implizit | Explizit via Semaphores, Fences, Barriers |
-| Render-Reihenfolge | Treiber entscheidet | Du baust `CommandBuffer`s |
-| Shader-Kompilierung | GLSL im Treiber | SPIR-V (Binär, vorab kompiliert) |
-| Threading | Single-threaded | `CommandBuffer`s können parallel aufgebaut werden |
-| Validierung | Treiber-spezifisch | Separater Validation Layer (an/ausschaltbar) |
+| Memory | Driver allocates | You allocate manually (`VkDeviceMemory`) |
+| Synchronisation | Implicit | Explicit via Semaphores, Fences, Barriers |
+| Render order | Driver decides | You build `CommandBuffer`s |
+| Shader compilation | GLSL in driver | SPIR-V (binary, pre-compiled) |
+| Threading | Single-threaded | `CommandBuffer`s can be built in parallel |
+| Validation | Driver-specific | Separate Validation Layer (toggleable) |
 
-**Vorteile von Vulkan:**
-- Kein Stutter durch überraschende Treiber-Arbeit
-- Multi-Core-CPU-Auslastung (Spiele bauen CommandBuffers parallel)
-- Identisches Verhalten auf allen Plattformen (kein Treiber-Wildwuchs)
-- Funktioniert auf Android, Linux, Windows — und via **MoltenVK** auch auf macOS/iOS (Metal-Wrapper)
+**Advantages of Vulkan:**
+- No stutter from unexpected driver work
+- Multi-core CPU utilisation (games build CommandBuffers in parallel)
+- Identical behaviour across all platforms (no driver fragmentation)
+- Works on Android, Linux, Windows — and via **MoltenVK** also on macOS/iOS (Metal wrapper)
 
-**Nachteil:**
-- Boilerplate: Ein Dreieck zeichnen braucht ~800 Zeilen C-Code (Device, Swapchain, RenderPass, Pipeline, CommandPool, CommandBuffer, Semaphores, Framebuffer, ...)
-
----
-
-## Wie hängen sie zusammen?
-
-```
-GPU-Hardware
-    │
-    ├── Vulkan (direkt, explizit)       ← Khronos Group (selbe Organisation wie OpenGL)
-    │
-    └── OpenGL (Treiber-Abstraktion)    ← intern: viele Treiber implementieren OpenGL
-                                           heute z.T. selbst über Vulkan (Mesa/RADV)
-```
-
-- Beide kommen von der **Khronos Group** (Industriekonsortium)
-- OpenGL ist **nicht** deprecated — läuft überall, wird weiter gewartet (letztes Release: 4.6, 2017)
-- Vulkan ersetzt OpenGL nicht für alle Anwendungsfälle — für ein Indie-Spiel ist OpenGL 3.3 vollkommen ausreichend
-- **DirectX 12** (Microsoft) und **Metal** (Apple) sind Vulkans Äquivalente auf ihren Plattformen — vergleichbares Abstraktionsniveau
+**Disadvantage:**
+- Boilerplate: drawing a triangle requires ~800 lines of C code (Device, Swapchain, RenderPass, Pipeline, CommandPool, CommandBuffer, Semaphores, Framebuffer, ...)
 
 ---
 
-## Für AIML
+## How are they related?
 
-Die Entscheidung im Spec (`43_2`): **OpenGL zuerst**, Vulkan später.
+```
+GPU Hardware
+    │
+    ├── Vulkan (direct, explicit)       ← Khronos Group (same organisation as OpenGL)
+    │
+    └── OpenGL (driver abstraction)     ← internally: many drivers implement OpenGL
+                                           today partly via Vulkan themselves (Mesa/RADV)
+```
 
-- OpenGL passt zur AIML-Philosophie: ein nativer `gl`-Namespace mit ~30 Funktionen deckt 95% der Spielprogrammier-Anforderungen ab
-- Vulkan bräuchte einen `vk`-Namespace mit ~200+ Funktionen plus komplexe Lebenszeit-Verwaltung (`VkPipeline`, `VkRenderPass`, `VkSwapchain`, ...) — das ist ein eigenes Kapitel in Buchgröße
-- Wer Vulkan braucht: kann es heute schon vollständig via FFI (`extern: "C"`) nutzen, da Vulkan eine C-API ist
+- Both come from the **Khronos Group** (industry consortium)
+- OpenGL is **not** deprecated — runs everywhere, still maintained (last release: 4.6, 2017)
+- Vulkan does not replace OpenGL for all use cases — for an indie game, OpenGL 3.3 is perfectly sufficient
+- **DirectX 12** (Microsoft) and **Metal** (Apple) are Vulkan's equivalents on their platforms — comparable level of abstraction
+
+---
+
+## For AIML
+
+The decision in the spec (`43_2`): **OpenGL first**, Vulkan later.
+
+- OpenGL fits the AIML philosophy: a native `gl` namespace with ~30 functions covers 95% of game programming requirements
+- Vulkan would need a `vk` namespace with ~200+ functions plus complex lifetime management (`VkPipeline`, `VkRenderPass`, `VkSwapchain`, ...) — that is a book-sized chapter on its own
+- Anyone who needs Vulkan can already use it fully today via FFI (`extern: "C"`), since Vulkan is a C API

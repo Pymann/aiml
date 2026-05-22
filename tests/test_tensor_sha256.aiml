@@ -1,0 +1,60 @@
+# Tests for tensor.sha256
+# Expected exit code: 0
+
+- decl: [a, tensor, { call: [tensor.zeros, 2, 2] }]
+- call: [a.set, 0, 1.0]
+- call: [a.set, 1, 2.0]
+- call: [a.set, 2, 3.0]
+- call: [a.set, 3, 4.0]
+
+- decl: [b, tensor, { call: [a.clone] }]
+
+- decl: [h1, string, { call: [tensor.sha256, a] }]
+- decl: [h2, string, { call: [tensor.sha256, b] }]
+- decl: [h1_len, i32, { call: [h1.len] }]
+
+- print: ["tensor sha256: ${h1}"]
+
+- if:
+    condition: { neq: [h1_len, 64] }
+    then:
+      - print: ["FAIL: tensor sha256 length must be 64 hex chars"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [h1, h2] }
+    then:
+      - print: ["FAIL: cloned tensors must hash identically"]
+      - call: [sys.exit, 1]
+
+- call: [b.set, 3, 5.0]
+- decl: [h3, string, { call: [tensor.sha256, b] }]
+
+- if:
+    condition: { eq: [h1, h3] }
+    then:
+      - print: ["FAIL: changed tensor data must change hash"]
+      - call: [sys.exit, 1]
+
+- decl: [c, tensor, { call: [tensor.reshape, a, 4] }]
+- decl: [h4, string, { call: [tensor.sha256, c] }]
+
+- if:
+    condition: { eq: [h1, h4] }
+    then:
+      - print: ["FAIL: changed tensor shape must change hash"]
+      - call: [sys.exit, 1]
+
+- call: [a.set_requires_grad, 1]
+- decl: [h5, string, { call: [tensor.sha256, a] }]
+
+- if:
+    condition: { neq: [h1, h5] }
+    then:
+      - print: ["FAIL: autograd metadata must not affect tensor hash"]
+      - call: [sys.exit, 1]
+
+- call: [a.free]
+- call: [b.free]
+- call: [c.free]
+- print: ["tensor sha256 ok"]

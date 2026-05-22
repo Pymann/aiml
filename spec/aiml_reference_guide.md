@@ -68,9 +68,14 @@ This document serves as a comprehensive reference for AIML's built-in data types
 - `func`: Function pointer / callable reference type. Used for callbacks and indirect invocation.
 
 ### 1.4 Fixed-Size Arrays
-Stack-allocated, bounded arrays.
-- **Declaration:** `type-size` (e.g., `i32-4` for an array of 4 integers).
-- **Access:** `name-index` (e.g., `arr-0`), `name-start-end` for slices (e.g., `arr-0-2`).
+Stack-allocated, bounded arrays. See `spec/52_arrays.md` for the full reference.
+- **Declaration:** `array<T:N>` (e.g., `"array<f32:64>"`, `"array<ptr<Node>:8>"`, `"array<Point:4>"`)
+- **Element types:** primitive scalars (`i32`, `f32`, ...), `ptr<T>`, model/struct value types. Not: `string`, `list<T>`, `map`, `buffer`.
+- **Read:** `{ at: [arr, i] }` — GEP + load, zero overhead.
+- **Write:** `- idx: [arr, i, value]` statement.
+- **Pointer slots** are null-initialized; **struct slots** are zero-initialized.
+- **Multi-dimensional:** `"array<f32:4:4>"` — row-major flat layout.
+- **Properties:** `.len` (total count), `.dim0`/`.dim1` (per-dimension size), `.data_ptr` (i8* for C interop).
 
 ### 1.5 Collections
 Heap-allocated, dynamic collections.
@@ -352,6 +357,8 @@ AIML utilizes YAML for Abstract Syntax Tree representations. All statements are 
   # Heap-allocation using `new` (auto-dereferenced)
   - decl: [obj, ptr<Point>, { new: Point }]
   ```
+- Modifiers like `const`, `volatile`, `extern` belong only in the **4th** `decl` slot: `decl: [x, i32, 0, { const: true }]`.
+  A map in the 3rd slot is the initializer, not the modifier bag.
 - **`set`**: Assigns/mutates an existing variable or member path. Type inference applies to literals natively.
   ```yaml
   - set: [count, 10]
@@ -431,7 +438,7 @@ Control structures execute block lists dynamically based on strictly boolean con
       extends: Entity         # Single Inheritance
       implements: [Drawable]  # Interface Enforcement
       members:
-        - [health, i32, { access: public }]
+        - [health, i32, 0, { access: public }]
       methods:
         - def:
             name: take_damage

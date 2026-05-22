@@ -14,6 +14,9 @@
 #include <algorithm>
 #include <unordered_set>
 #include <unordered_map>
+#include <openssl/evp.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Internal struct
@@ -41,6 +44,9 @@ enum OpType {
     OP_RELU, OP_GELU, OP_TANH, OP_SOFTMAX, OP_EXP, OP_LOG,
     OP_LAYER_NORM, OP_EMBEDDING_LOOKUP, OP_CROSS_ENTROPY,
     OP_SUM, OP_MEAN, OP_NEG, OP_CONCAT, OP_FUSED_MHA,
+    OP_SLICE,
+    OP_WEIGHTED_CROSS_ENTROPY,
+    OP_ABS,
     OP_COUNT  // sentinel — must be last
 };
 
@@ -54,45 +60,69 @@ struct GradNode {
     int*         int_data;     // embedding: ids copy; cross_entropy: targets copy
 };
 
-static std::vector<GradNode> g_graph;
-static bool g_no_grad = false;
+// Each thread gets its own autograd graph, no-grad flag, and tensor registry.
+// This enables parallel training: workers run forward+backward on separate threads
+// without corrupting each other's graphs or leaking intermediates across threads.
+static thread_local std::vector<GradNode> g_graph;
+static thread_local bool g_no_grad = false;
 
-// ── Global tensor lifecycle tracking ────────────────────────────────────
-// All live tensors are tracked so begin_graph can free non-param intermediates.
-// Tensors created BEFORE the first begin_graph call are auto-marked is_param=1
-// (weights, adam states, etc.). Tensors created AFTER begin_graph (intermediates,
-// slice outputs, causal masks) have is_param=0 and are freed at the next begin_graph.
-static std::unordered_set<AimlTensor*> g_all_tensors;
-static std::vector<AimlTensor*> g_pending_free;  // delayed-free from previous iteration
-static int g_graph_epoch = 0;  // incremented each begin_graph
+// ── Per-thread tensor lifecycle tracking ─────────────────────────────────
+static thread_local std::unordered_set<AimlTensor*> g_all_tensors;
+static thread_local std::vector<AimlTensor*> g_pending_free;
+static thread_local int g_graph_epoch = 0;
+
+// ── MHA scratch buffers (forward-declared here so thread_cleanup can free them)
+// Defined/used in the Fused MHA section below.
+static thread_local float* g_mha_Q       = nullptr;
+static thread_local float* g_mha_K       = nullptr;
+static thread_local float* g_mha_V       = nullptr;
+static thread_local float* g_mha_scores  = nullptr;
+static thread_local float* g_mha_attn    = nullptr;
+static thread_local float* g_mha_cat     = nullptr;
+static thread_local int    g_mha_max_seq   = 0;
+static thread_local int    g_mha_max_embed = 0;
 
 // ── Arena allocator for ephemeral tensor data ────────────────────────────
 // One big malloc at init. Bump-pointer allocation, instant reset per window.
 // Only used for intermediate tensor .data (is_param=0, owns_data=1).
 // Param tensors (weights, adam states) still use malloc for stable lifetime.
 struct TensorArena {
-    float*  base;       // one big allocation
-    size_t  capacity;   // total floats
-    size_t  offset;     // next free float index (bump pointer)
-    size_t  peak;       // high-water mark for diagnostics
-    bool    active;     // false until first init
+    float*  base;        // one big allocation (mmap'd anonymous region)
+    size_t  capacity;    // total usable floats
+    size_t  offset;      // next free float index (bump pointer)
+    size_t  peak;        // high-water mark for diagnostics
+    size_t  mmap_bytes;  // exact byte count passed to mmap (page-aligned), needed for munmap
+    bool    active;      // false until first init
 };
-static TensorArena g_arena = {nullptr, 0, 0, 0, false};
+static thread_local TensorArena g_arena = {nullptr, 0, 0, 0, 0, false};
 
 static void arena_init(size_t megabytes) {
-    if (g_arena.base) free(g_arena.base);
+    if (g_arena.base) {
+        munmap(g_arena.base, g_arena.mmap_bytes);
+        g_arena.base = nullptr;
+        g_arena.mmap_bytes = 0;
+    }
     size_t n_floats = (megabytes * 1024 * 1024) / sizeof(float);
-    g_arena.base = (float*)malloc(n_floats * sizeof(float));
-    if (!g_arena.base) {
-        fprintf(stderr, "[ARENA] FATAL: failed to allocate %zuMB arena\n", megabytes);
+    size_t n_bytes  = n_floats * sizeof(float);
+    long   page     = sysconf(_SC_PAGESIZE);
+    if (page <= 0) page = 4096;
+    size_t mmap_bytes = (n_bytes + (size_t)page - 1) & ~((size_t)page - 1);
+    void* p = mmap(nullptr, mmap_bytes, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        fprintf(stderr, "[ARENA] FATAL: mmap failed for %zuMB arena\n", megabytes);
+        g_arena.base = nullptr;
         g_arena.active = false;
         return;
     }
+    g_arena.base = (float*)p;
     g_arena.capacity = n_floats;
     g_arena.offset = 0;
     g_arena.peak = 0;
+    g_arena.mmap_bytes = mmap_bytes;
     g_arena.active = true;
-    fprintf(stderr, "[ARENA] initialized: %zuMB (%zu floats)\n", megabytes, n_floats);
+    fprintf(stderr, "[ARENA] initialized: %zuMB (%zu floats, mmap=%zu bytes)\n",
+            megabytes, n_floats, mmap_bytes);
 }
 
 // Bump-allocate from arena. Returns nullptr if arena not active or no space.
@@ -113,6 +143,21 @@ static void arena_reset() {
     g_arena.offset = 0;
 }
 
+// Free arena — release memory back to OS (call at worker thread end).
+// Uses munmap so pages are returned to the kernel immediately, bypassing
+// glibc's malloc heap retention.
+void aiml_tensor_arena_free() {
+    if (g_arena.base) {
+        munmap(g_arena.base, g_arena.mmap_bytes);
+        g_arena.base = nullptr;
+        g_arena.capacity = 0;
+        g_arena.offset = 0;
+        g_arena.peak = 0;
+        g_arena.mmap_bytes = 0;
+        g_arena.active = false;
+    }
+}
+
 // Check if pointer is inside arena
 static bool arena_owns(const float* ptr) {
     if (!g_arena.active || !ptr) return false;
@@ -121,7 +166,10 @@ static bool arena_owns(const float* ptr) {
 
 // ── Struct pool for AimlTensor headers ───────────────────────────────────
 // Avoids malloc/free for the small (80-byte) AimlTensor structs.
-static std::vector<AimlTensor*> g_struct_pool;
+// MUST be thread_local: concurrent worker threads call struct_alloc/struct_free
+// simultaneously; a shared pool causes two threads to pop the same pointer → two
+// AimlTensor objects aliasing the same struct → heap corruption → SIGABRT.
+static thread_local std::vector<AimlTensor*> g_struct_pool;
 static constexpr int STRUCT_POOL_MAX = 256;
 
 static AimlTensor* struct_alloc() {
@@ -153,9 +201,13 @@ static void struct_free(AimlTensor* t) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 static int compute_size(const int* shape, int ndim) {
-    int s = 1;
-    for (int i = 0; i < ndim; i++) s *= shape[i];
-    return s;
+    int64_t s = 1;
+    for (int i = 0; i < ndim; i++) {
+        if (shape[i] <= 0) return 0;
+        s *= (int64_t)shape[i];
+        if (s > (int64_t)INT32_MAX) return -1;  // overflow
+    }
+    return (int)s;
 }
 
 // is_param_hint: 0 = ephemeral (try arena), 1 = persistent (always malloc)
@@ -170,8 +222,11 @@ static AimlTensor* alloc_tensor(const int* shape, int ndim, bool zero = true, in
         fprintf(stderr, "[AIML] FATAL: alloc_tensor: invalid size %d (shape=[", t->size);
         for (int i = 0; i < ndim; i++) fprintf(stderr, "%s%d", i?",":"", shape[i]);
         fprintf(stderr, "])\n");
+        free(t->shape);
+        struct_free(t);
+        return nullptr;
     }
-    int n = t->size > 0 ? t->size : 1;
+    int n = t->size;
     // Ephemeral tensors: try arena first, fallback to malloc
     t->data = nullptr;
     if (!is_param_hint) {
@@ -189,6 +244,9 @@ static AimlTensor* alloc_tensor(const int* shape, int ndim, bool zero = true, in
         if (!t->data) {
             fprintf(stderr, "[AIML] FATAL: alloc_tensor: malloc failed for %d floats (%zu bytes)\n",
                     t->size, (size_t)t->size * sizeof(float));
+            free(t->shape);
+            struct_free(t);
+            return nullptr;
         }
     }
     t->requires_grad = 0;
@@ -283,6 +341,49 @@ void* aiml_tensor_clone(void* tv) {
     memcpy(c->data, t->data, t->size * sizeof(float));
     c->requires_grad = t->requires_grad;
     return c;
+}
+
+// In-place: target[i] += src[i] * scale  (no allocation)
+void aiml_tensor_fma_inplace(void* tv, void* sv, float scale) {
+    auto* t = (AimlTensor*)tv;
+    auto* s = (AimlTensor*)sv;
+    int n = std::min(t->size, s->size);
+    for (int i = 0; i < n; i++) t->data[i] += s->data[i] * scale;
+}
+
+// In-place: target[i] += src[i]^2 * scale  (no allocation)
+void aiml_tensor_fma_sq_inplace(void* tv, void* sv, float scale) {
+    auto* t = (AimlTensor*)tv;
+    auto* s = (AimlTensor*)sv;
+    int n = std::min(t->size, s->size);
+    for (int i = 0; i < n; i++) t->data[i] += s->data[i] * s->data[i] * scale;
+}
+
+// In-place: target[i] += |src[i]| * scale  (no allocation)
+void aiml_tensor_fma_abs_inplace(void* tv, void* sv, float scale) {
+    auto* t = (AimlTensor*)tv;
+    auto* s = (AimlTensor*)sv;
+    int n = std::min(t->size, s->size);
+    for (int i = 0; i < n; i++) t->data[i] += fabsf(s->data[i]) * scale;
+}
+
+extern "C" void* aiml_tensor_grad_view(void* tv) {
+    auto* t = (AimlTensor*)tv;
+    auto* v = struct_alloc();
+    memset(v, 0, sizeof(AimlTensor));
+    v->data          = t->data;                              // shared, kein memcpy
+    v->ndim          = t->ndim;
+    v->size          = t->size;
+    v->shape         = (int*)malloc(t->ndim * sizeof(int)); // eigene Shape-Kopie
+    memcpy(v->shape, t->shape, t->ndim * sizeof(int));
+    v->owns_data     = 0;                                    // data NICHT freigeben
+    v->requires_grad = 1;
+    v->is_param      = 1;                                    // überlebt begin_graph
+    v->grad          = (float*)calloc(t->size, sizeof(float));
+    v->grad_node_id  = -1;
+    v->alloc_epoch   = g_graph_epoch;
+    g_all_tensors.insert(v);
+    return v;
 }
 
 void aiml_tensor_free(void* tv) {
@@ -443,6 +544,11 @@ void* aiml_tensor_slice(void* tv, int32_t dim, int32_t start, int32_t end) {
                    inner * sizeof(float));
         }
     }
+    if (needs_grad(src)) {
+        out->requires_grad = 1;
+        // int_arg = dim, scalar_arg = start (to recover offset in backward)
+        record_node(OP_SLICE, out, src, nullptr, (float)start, dim);
+    }
     return out;
 }
 
@@ -490,6 +596,17 @@ void* aiml_tensor_mul(void* av, void* bv) {
         out->requires_grad = 1;
         record_node(OP_MUL, out, a, b);
     }
+    return out;
+}
+
+void* aiml_tensor_div(void* av, void* bv) {
+    TENSOR_NULL_CHECK(av, "tensor.div", "a", nullptr);
+    TENSOR_NULL_CHECK(bv, "tensor.div", "b", nullptr);
+    auto* a = (AimlTensor*)av;
+    auto* b = (AimlTensor*)bv;
+    auto* out = alloc_tensor(a->shape, a->ndim, false);
+    for (int i = 0; i < out->size; i++) out->data[i] = a->data[i % a->size] / b->data[i % b->size];
+    // No autograd backward for div (merge-only op, no training use)
     return out;
 }
 
@@ -590,6 +707,32 @@ void* aiml_tensor_matmul(void* av, void* bv) {
                         M, N, K, 1.0f,
                         a->data + bi * M * K, K,
                         b->data + bi * K * N, N,
+                        0.0f,
+                        out->data + bi * M * N, N);
+        }
+        if (needs_grad(a, b)) {
+            out->requires_grad = 1;
+            record_node(OP_MATMUL, out, a, b);
+        }
+        return out;
+    }
+
+    // 3D x 2D broadcast: [B x M x K] @ [K x N] -> [B x M x N]
+    if (a->ndim == 3 && b->ndim == 2) {
+        int B = a->shape[0], M = a->shape[1], K = a->shape[2], N = b->shape[1];
+        if (K != b->shape[0]) {
+            fprintf(stderr, "tensor.matmul: shape mismatch [%d,%d,%d] @ [%d,%d]\n",
+                    B, M, K, b->shape[0], N);
+            return nullptr;
+        }
+        int out_shape[3] = {B, M, N};
+        auto* out = alloc_tensor(out_shape, 3, false);
+        if (!out || !out->data) return nullptr;
+        for (int bi = 0; bi < B; bi++) {
+            cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                        M, N, K, 1.0f,
+                        a->data + bi * M * K, K,
+                        b->data, N,
                         0.0f,
                         out->data + bi * M * N, N);
         }
@@ -865,26 +1008,47 @@ void* aiml_tensor_embedding_lookup(void* wv, void* id_tensor, int32_t seq_len) {
     TENSOR_NULL_CHECK(id_tensor, "tensor.embedding_lookup", "ids", nullptr);
     auto* w = (AimlTensor*)wv;
     auto* ids_t = (AimlTensor*)id_tensor;
-    // w: [vocab_size x embed_dim], ids_t: 1D float tensor with float-encoded IDs
     if (w->ndim != 2) {
         fprintf(stderr, "tensor.embedding_lookup: weight must be 2D\n");
         return wv;
     }
     int dim = w->shape[1];
+
+    // Batched case: ids_t is [B, S] → output [B, S, E]
+    if (ids_t->ndim == 2) {
+        int B = ids_t->shape[0], S = ids_t->shape[1];
+        int out_shape[3] = {B, S, dim};
+        auto* out = alloc_tensor(out_shape, 3, false);
+        int total = B * S;
+        int* int_ids = (int*)malloc(total * sizeof(int));
+        for (int i = 0; i < total; i++) int_ids[i] = (int)ids_t->data[i];
+        for (int i = 0; i < total; i++) {
+            int idx = int_ids[i];
+            if (idx >= 0 && idx < w->shape[0])
+                memcpy(out->data + i * dim, w->data + idx * dim, dim * sizeof(float));
+            else
+                memset(out->data + i * dim, 0, dim * sizeof(float));
+        }
+        if (needs_grad(w)) {
+            out->requires_grad = 1;
+            record_node(OP_EMBEDDING_LOOKUP, out, w, nullptr, 0.0f, total, int_ids);
+        } else {
+            free(int_ids);
+        }
+        return out;
+    }
+
+    // 1D case: ids_t is [S] → output [S, E]
     int out_shape[2] = {seq_len, dim};
     auto* out = alloc_tensor(out_shape, 2, false);
-    // Build int IDs from float tensor data
     int* int_ids = (int*)malloc(seq_len * sizeof(int));
-    for (int s = 0; s < seq_len; s++) {
-        int_ids[s] = (int)ids_t->data[s];
-    }
+    for (int s = 0; s < seq_len; s++) int_ids[s] = (int)ids_t->data[s];
     for (int s = 0; s < seq_len; s++) {
         int idx = int_ids[s];
-        if (idx >= 0 && idx < w->shape[0]) {
+        if (idx >= 0 && idx < w->shape[0])
             memcpy(out->data + s * dim, w->data + idx * dim, dim * sizeof(float));
-        } else {
+        else
             memset(out->data + s * dim, 0, dim * sizeof(float));
-        }
     }
     if (needs_grad(w)) {
         out->requires_grad = 1;
@@ -917,7 +1081,11 @@ void* aiml_tensor_cross_entropy(void* lv, void* target_tensor, int32_t batch_siz
     }
 
     float total_loss = 0;
+    int valid_count = 0;
     for (int b = 0; b < batch_size; b++) {
+        int target = int_targets[b];
+        if (target < 0 || target >= classes) continue; // ignore_index: skip masked positions
+        valid_count++;
         float* row = logits->data + b * classes;
         // Stable log-softmax
         float mx = row[0];
@@ -925,17 +1093,96 @@ void* aiml_tensor_cross_entropy(void* lv, void* target_tensor, int32_t batch_siz
         float log_sum_exp = 0;
         for (int c = 0; c < classes; c++) log_sum_exp += expf(row[c] - mx);
         log_sum_exp = mx + logf(log_sum_exp);
-        int target = int_targets[b];
-        if (target >= 0 && target < classes)
-            total_loss += -(row[target] - log_sum_exp);
+        total_loss += -(row[target] - log_sum_exp);
     }
-    out->data[0] = total_loss / (float)batch_size;
+    out->data[0] = (valid_count > 0) ? total_loss / (float)valid_count : 0.0f;
 
     if (needs_grad(logits)) {
         out->requires_grad = 1;
         record_node(OP_CROSS_ENTROPY, out, logits, nullptr, 0.0f, batch_size, int_targets);
     } else {
         free(int_targets);
+    }
+    return out;
+}
+
+void* aiml_tensor_weighted_cross_entropy(void* lv, void* target_tensor, void* weight_tensor, int32_t batch_size) {
+    TENSOR_NULL_CHECK(lv, "tensor.weighted_cross_entropy", "logits", nullptr);
+    TENSOR_NULL_CHECK(target_tensor, "tensor.weighted_cross_entropy", "targets", nullptr);
+    TENSOR_NULL_CHECK(weight_tensor, "tensor.weighted_cross_entropy", "weights", nullptr);
+    auto* logits = (AimlTensor*)lv;
+    auto* tgt_t = (AimlTensor*)target_tensor;
+    auto* wt = (AimlTensor*)weight_tensor;
+    if (logits->ndim != 2) {
+        fprintf(stderr, "tensor.weighted_cross_entropy: logits must be 2D\n");
+        int s[1] = {1};
+        return aiml_tensor_zeros(s, 1);
+    }
+    int classes = logits->shape[1];
+    int out_shape[1] = {1};
+    auto* out = alloc_tensor(out_shape, 1, false);
+
+    int* int_targets = (int*)malloc(batch_size * sizeof(int));
+    for (int b = 0; b < batch_size; b++) {
+        int_targets[b] = (int)tgt_t->data[b];
+    }
+
+    float total_loss = 0;
+    float Z = 0;
+    for (int b = 0; b < batch_size; b++) {
+        int target = int_targets[b];
+        if (target < 0 || target >= classes) continue;
+        float w = wt->data[b];
+        Z += w;
+        float* row = logits->data + b * classes;
+        float mx = row[0];
+        for (int c = 1; c < classes; c++) if (row[c] > mx) mx = row[c];
+        float log_sum_exp = 0;
+        for (int c = 0; c < classes; c++) log_sum_exp += expf(row[c] - mx);
+        log_sum_exp = mx + logf(log_sum_exp);
+        total_loss += w * (-(row[target] - log_sum_exp));
+    }
+    out->data[0] = (Z > 0) ? total_loss / Z : 0.0f;
+
+    if (needs_grad(logits)) {
+        out->requires_grad = 1;
+        record_node(OP_WEIGHTED_CROSS_ENTROPY, out, logits, wt, 0.0f, batch_size, int_targets);
+    } else {
+        free(int_targets);
+    }
+    return out;
+}
+
+void* aiml_tensor_abs(void* tv) {
+    TENSOR_NULL_CHECK(tv, "tensor.abs", "input", nullptr);
+    auto* t = (AimlTensor*)tv;
+    auto* out = alloc_tensor(t->shape, t->ndim);
+    for (int i = 0; i < t->size; i++) out->data[i] = fabsf(t->data[i]);
+    if (needs_grad(t)) {
+        out->requires_grad = 1;
+        record_node(OP_ABS, out, t);
+    }
+    return out;
+}
+
+void* aiml_tensor_sign(void* tv) {
+    TENSOR_NULL_CHECK(tv, "tensor.sign", "input", nullptr);
+    auto* t = (AimlTensor*)tv;
+    auto* out = alloc_tensor(t->shape, t->ndim);
+    for (int i = 0; i < t->size; i++) {
+        float x = t->data[i];
+        out->data[i] = (x > 0) ? 1.0f : (x < 0) ? -1.0f : 0.0f;
+    }
+    return out;
+}
+
+void* aiml_tensor_step(void* tv) {
+    TENSOR_NULL_CHECK(tv, "tensor.step", "input", nullptr);
+    auto* t = (AimlTensor*)tv;
+    auto* out = alloc_tensor(t->shape, t->ndim);
+    for (int i = 0; i < t->size; i++) {
+        float x = t->data[i];
+        out->data[i] = (x > 0) ? 1.0f : (x < 0) ? 0.0f : 0.5f;
     }
     return out;
 }
@@ -1061,9 +1308,9 @@ void aiml_tensor_begin_graph(void) {
     }
 
     // Diagnostic
-    static int bg_call = 0;
+    static thread_local int bg_call = 0;
     bg_call++;
-    if (bg_call <= 3 || bg_call % 200 == 0) {
+    if (false) {
         size_t arena_kb = g_arena.active ? (g_arena.peak * sizeof(float)) / 1024 : 0;
         fprintf(stderr, "[GC] #%d freed=%d(%.1fMB) collected=%d(stale=%d) live=%zu params=%zu arena_peak=%zuKB\n",
                 bg_call, freed_count, freed_bytes / (1024.0*1024.0), collected, stale,
@@ -1080,6 +1327,50 @@ void aiml_tensor_begin_graph(void) {
         if (n.int_data) { free(n.int_data); n.int_data = nullptr; }
     }
     g_graph.clear();
+}
+
+// Free ALL thread-local tensors and reset graph state.
+// Must be called by worker threads before exit, after PS has consumed all grad pointers.
+// Fixes the leak: is_param=1 clones survive begin_graph and are never freed otherwise.
+void aiml_tensor_thread_cleanup(void) {
+    // Free g_graph int_data
+    for (auto& n : g_graph) {
+        if (n.int_data) { free(n.int_data); n.int_data = nullptr; }
+    }
+    g_graph.clear();
+    g_pending_free.clear();
+
+    // Free every tensor tracked on this thread (both is_param=0 and is_param=1)
+    std::vector<AimlTensor*> all(g_all_tensors.begin(), g_all_tensors.end());
+    g_all_tensors.clear();
+    for (auto* t : all) {
+        if (t->owns_data && t->data && !arena_owns(t->data)) free(t->data);
+        if (t->shape)                                          free(t->shape);
+        if (t->grad  && !arena_owns(t->grad))                  free(t->grad);
+        struct_free(t);
+    }
+
+    // Reset arena
+    arena_reset();
+    g_graph_epoch = 0;
+
+    // Drain the thread-local struct pool: since pool entries are raw AimlTensor*
+    // allocated with malloc, they must be freed explicitly — the vector destructor
+    // only destroys the vector, not the pointed-to objects.
+    for (auto* t : g_struct_pool) free(t);
+    g_struct_pool.clear();
+
+    // Free MHA scratch buffers. These are plain float* (no destructor) so they
+    // would otherwise be leaked on thread-reuse (glibc re-initialises TLS to nullptr,
+    // losing the pointer without freeing the malloc'd block).
+    if (g_mha_Q)      { free(g_mha_Q);      g_mha_Q      = nullptr; }
+    if (g_mha_K)      { free(g_mha_K);      g_mha_K      = nullptr; }
+    if (g_mha_V)      { free(g_mha_V);      g_mha_V      = nullptr; }
+    if (g_mha_scores) { free(g_mha_scores); g_mha_scores = nullptr; }
+    if (g_mha_attn)   { free(g_mha_attn);   g_mha_attn   = nullptr; }
+    if (g_mha_cat)    { free(g_mha_cat);    g_mha_cat    = nullptr; }
+    g_mha_max_seq   = 0;
+    g_mha_max_embed = 0;
 }
 
 // ── Backward implementations ────────────────────────────────────────────
@@ -1232,6 +1523,29 @@ static void backward_matmul(GradNode& n) {
                             a->data + bi * M * K, K,
                             og + bi * M * N, N,
                             1.0f, b->grad + bi * K * N, N);
+            }
+        }
+    } else if (a->ndim == 3 && b->ndim == 2) {
+        // [B, M, K] @ [K, N] → [B, M, N]
+        // ∂a[bi] = og[bi] @ b^T   [M,N] @ [N,K] = [M,K]
+        // ∂b    = sum_bi a[bi]^T @ og[bi]   [K,M] @ [M,N] = [K,N]
+        int B = a->shape[0], M = a->shape[1], K = a->shape[2], N = b->shape[1];
+        for (int bi = 0; bi < B; bi++) {
+            if (a->requires_grad) {
+                ensure_grad(a);
+                cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                            M, K, N, 1.0f,
+                            og + bi * M * N, N,
+                            b->data, N,
+                            1.0f, a->grad + bi * M * K, K);
+            }
+            if (b->requires_grad) {
+                ensure_grad(b);
+                cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                            K, N, M, 1.0f,
+                            a->data + bi * M * K, K,
+                            og + bi * M * N, N,
+                            1.0f, b->grad, N);
             }
         }
     }
@@ -1452,10 +1766,19 @@ static void backward_cross_entropy(GradNode& n) {
     int classes = logits->shape[1];
     int* targets = n.int_data;
     float* og = n.output->grad;
-    float scale = og[0] / (float)batch;
 
-    // ∂logits = (softmax(logits) - one_hot(target)) / batch
+    // Count valid (non-masked) positions for correct gradient scaling
+    int valid_count = 0;
+    for (int b = 0; b < batch; b++)
+        if (targets[b] >= 0 && targets[b] < classes) valid_count++;
+    if (valid_count == 0) return;
+    float scale = og[0] / (float)valid_count;
+
+    // ∂logits = (softmax(logits) - one_hot(target)) / valid_count
+    // Masked positions (target < 0) are skipped — no gradient contribution
     for (int b = 0; b < batch; b++) {
+        int t = targets[b];
+        if (t < 0 || t >= classes) continue;
         float* row = logits->data + b * classes;
         float* grow = logits->grad + b * classes;
         // Compute softmax
@@ -1465,13 +1788,79 @@ static void backward_cross_entropy(GradNode& n) {
         for (int c = 0; c < classes; c++) sum += expf(row[c] - mx);
         for (int c = 0; c < classes; c++) {
             float sm = expf(row[c] - mx) / sum;
-            float target_val = (c == targets[b]) ? 1.0f : 0.0f;
+            float target_val = (c == t) ? 1.0f : 0.0f;
             grow[c] += (sm - target_val) * scale;
         }
     }
 }
 
 static void backward_fused_mha(GradNode& node);  // forward decl
+
+static void backward_slice(GradNode& n) {
+    auto* src = n.inputs[0];
+    if (!src->requires_grad) return;
+    ensure_grad(src);
+    int dim   = n.int_arg;
+    int start = (int)n.scalar_arg;
+    auto* out = n.output;
+    float* og = out->grad;
+    int outer = 1, inner = 1;
+    for (int i = 0; i < dim; i++) outer *= src->shape[i];
+    for (int i = dim + 1; i < src->ndim; i++) inner *= src->shape[i];
+    int slice_len = out->shape[dim];
+    for (int o = 0; o < outer; o++)
+        for (int s = 0; s < slice_len; s++) {
+            float* dst = src->grad + (o * src->shape[dim] + start + s) * inner;
+            float* src_og = og + (o * slice_len + s) * inner;
+            for (int k = 0; k < inner; k++) dst[k] += src_og[k];
+        }
+}
+
+static void backward_weighted_cross_entropy(GradNode& n) {
+    auto* logits = n.inputs[0];
+    if (!logits->requires_grad) return;
+    ensure_grad(logits);
+    auto* wt = (AimlTensor*)n.inputs[1];
+    int batch = n.int_arg;
+    int classes = logits->shape[1];
+    int* targets = n.int_data;
+    float* og = n.output->grad;
+    float* w = wt->data;
+
+    float Z = 0;
+    for (int b = 0; b < batch; b++)
+        if (targets[b] >= 0 && targets[b] < classes) Z += w[b];
+    if (Z <= 0) return;
+
+    for (int b = 0; b < batch; b++) {
+        int t = targets[b];
+        if (t < 0 || t >= classes) continue;
+        float* row = logits->data + b * classes;
+        float* grow = logits->grad + b * classes;
+        float scale = og[0] * w[b] / Z;
+        float mx = row[0];
+        for (int c = 1; c < classes; c++) if (row[c] > mx) mx = row[c];
+        float sum = 0;
+        for (int c = 0; c < classes; c++) sum += expf(row[c] - mx);
+        for (int c = 0; c < classes; c++) {
+            float sm = expf(row[c] - mx) / sum;
+            float target_val = (c == t) ? 1.0f : 0.0f;
+            grow[c] += (sm - target_val) * scale;
+        }
+    }
+}
+
+static void backward_abs(GradNode& n) {
+    auto* inp = n.inputs[0];
+    if (!inp->requires_grad) return;
+    ensure_grad(inp);
+    float* og = n.output->grad;
+    for (int i = 0; i < inp->size; i++) {
+        float x = inp->data[i];
+        float s = (x > 0) ? 1.0f : (x < 0) ? -1.0f : 0.0f;
+        inp->grad[i] += og[i] * s;
+    }
+}
 
 void aiml_tensor_backward(void* lv) {
     if (!lv) { fprintf(stderr, "[AIML] FATAL: tensor.backward: loss is NULL\n"); return; }
@@ -1501,7 +1890,10 @@ void aiml_tensor_backward(void* lv) {
         backward_mean,             // OP_MEAN
         backward_neg,              // OP_NEG
         backward_concat,           // OP_CONCAT
-        backward_fused_mha,        // OP_FUSED_MHA
+        backward_fused_mha,                // OP_FUSED_MHA
+        backward_slice,                    // OP_SLICE
+        backward_weighted_cross_entropy,   // OP_WEIGHTED_CROSS_ENTROPY
+        backward_abs,                      // OP_ABS
     };
 
     // Traverse graph in reverse order
@@ -1536,6 +1928,33 @@ void aiml_tensor_adam_step(void* pv, void* mv, void* vv,
         float g = p->grad[i];
         m->data[i] = beta1 * m->data[i] + (1.0f - beta1) * g;
         v->data[i] = beta2 * v->data[i] + (1.0f - beta2) * g * g;
+        float m_hat = m->data[i] / bc1;
+        float v_hat = v->data[i] / bc2;
+        p->data[i] -= lr * m_hat / (sqrtf(v_hat) + eps);
+    }
+}
+
+// PS variant: applies Adam using an EXPLICIT grad tensor instead of param->grad.
+// Used by the Parameter Server thread which receives averaged gradient tensors
+// from worker threads and applies them to the master parameters.
+void aiml_tensor_adam_step_with_grad(void* pv, void* mv, void* vv, void* gv,
+                                      float lr, float beta1, float beta2,
+                                      float eps, int32_t step) {
+    auto* p = (AimlTensor*)pv;
+    auto* m = (AimlTensor*)mv;
+    auto* v = (AimlTensor*)vv;
+    auto* g = (AimlTensor*)gv;
+    if (!p || !m || !v || !g) return;
+    m->is_param = 1;  m->alloc_epoch = g_graph_epoch;
+    v->is_param = 1;  v->alloc_epoch = g_graph_epoch;
+
+    float bc1 = 1.0f - powf(beta1, (float)step);
+    float bc2 = 1.0f - powf(beta2, (float)step);
+
+    for (int i = 0; i < p->size; i++) {
+        float gi = g->data[i];
+        m->data[i] = beta1 * m->data[i] + (1.0f - beta1) * gi;
+        v->data[i] = beta2 * v->data[i] + (1.0f - beta2) * gi * gi;
         float m_hat = m->data[i] / bc1;
         float v_hat = v->data[i] / bc2;
         p->data[i] -= lr * m_hat / (sqrtf(v_hat) + eps);
@@ -1623,7 +2042,9 @@ void* aiml_tensor_concat(void* av, void* bv, int32_t dim) {
 // Returns [seq_len, seq_len] tensor: 0 on lower triangle + diagonal, -1e9 above
 // Cached causal mask — same seq_len always produces identical mask.
 // Stored as is_param=1 so it survives begin_graph forever.
-static std::unordered_map<int, AimlTensor*> g_causal_mask_cache;
+// MUST be thread_local: multiple worker threads call this concurrently;
+// a non-thread_local map causes a data race → heap corruption → SIGABRT.
+static thread_local std::unordered_map<int, AimlTensor*> g_causal_mask_cache;
 
 void* aiml_tensor_causal_mask(int32_t seq_len) {
     auto it = g_causal_mask_cache.find(seq_len);
@@ -1646,6 +2067,14 @@ void* aiml_tensor_from_int_list(const int32_t* ids, int32_t count) {
     return t;
 }
 
+// Bulk convert flat int array to 2D [batch x seq] float tensor for batched embedding lookup
+void* aiml_tensor_from_int_list_batch(const int32_t* ids, int32_t batch, int32_t seq) {
+    int shape[2] = {batch, seq};
+    auto* t = alloc_tensor(shape, 2, false);
+    for (int i = 0; i < batch * seq; i++) t->data[i] = (float)ids[i];
+    return t;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Fused Multi-Head Attention (Forward + Backward)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1654,15 +2083,7 @@ void* aiml_tensor_from_int_list(const int32_t* ids, int32_t count) {
 // Per head: slice to [S, D], scaled dot-product attention, concat back
 // Output: concat @ W_O [E, E] → [S, E]
 
-// Scratch buffers (allocated once on first call, reused)
-static float* g_mha_Q = nullptr;     // [S, E]
-static float* g_mha_K = nullptr;     // [S, E]
-static float* g_mha_V = nullptr;     // [S, E]
-static float* g_mha_scores = nullptr; // [S, S] per head (reused)
-static float* g_mha_attn = nullptr;   // [S, S] per head (softmax output)
-static float* g_mha_cat = nullptr;   // [S, E] concatenated heads
-static int g_mha_max_seq = 0;
-static int g_mha_max_embed = 0;
+// Scratch buffers — thread_local, forward-declared at top of file.
 
 static void mha_ensure_scratch(int seq, int embed) {
     if (seq <= g_mha_max_seq && embed <= g_mha_max_embed) return;
@@ -1678,61 +2099,34 @@ static void mha_ensure_scratch(int seq, int embed) {
     g_mha_max_embed = E;
 }
 
-void* aiml_tensor_fused_mha(void* xv, void* wqv, void* wkv, void* wvv, void* wov,
-                              int32_t n_heads, int32_t embed_dim) {
-    auto* x  = (AimlTensor*)xv;
-    auto* wq = (AimlTensor*)wqv;
-    auto* wk = (AimlTensor*)wkv;
-    auto* wv = (AimlTensor*)wvv;
-    auto* wo = (AimlTensor*)wov;
-    if (!x || !wq || !wk || !wv || !wo) return nullptr;
-
-    int S = x->shape[0];    // seq_len
-    int E = embed_dim;
-    int D = E / n_heads;     // head_dim
+// Single-sequence MHA forward: x_row[S,E] → out_row[S,E] (writes to out->data + b*S*E)
+static void mha_forward_single(const float* x_row, float* out_row,
+                                const float* wq_data, const float* wk_data,
+                                const float* wv_data, const float* wo_data,
+                                int S, int E, int n_heads) {
+    int D = E / n_heads;
     float scale = 1.0f / sqrtf((float)D);
-
-    mha_ensure_scratch(S, E);
-
-    // 1. Q = x @ W_Q, K = x @ W_K, V = x @ W_V  (all [S, E])
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                S, E, E, 1.0f, x->data, E, wq->data, E, 0.0f, g_mha_Q, E);
+                S, E, E, 1.0f, x_row, E, wq_data, E, 0.0f, g_mha_Q, E);
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                S, E, E, 1.0f, x->data, E, wk->data, E, 0.0f, g_mha_K, E);
+                S, E, E, 1.0f, x_row, E, wk_data, E, 0.0f, g_mha_K, E);
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                S, E, E, 1.0f, x->data, E, wv->data, E, 0.0f, g_mha_V, E);
-
-    // 2. Per-head attention (stride-based, no slice/concat overhead)
-    // Q/K/V layout: [S, E] where E = n_heads * D
-    // Head h uses columns [h*D .. (h+1)*D] = stride view
-    // We need contiguous [S, D] per head for matmul → copy strided to contiguous
-    // Output written directly into g_mha_cat[S, E] at correct head offset
-
-    // Temporary per-head buffers (reuse scores/attn, plus small stack allocs)
+                S, E, E, 1.0f, x_row, E, wv_data, E, 0.0f, g_mha_V, E);
     float* qh = (float*)alloca(S * D * sizeof(float));
     float* kh = (float*)alloca(S * D * sizeof(float));
     float* vh = (float*)alloca(S * D * sizeof(float));
     float* oh = (float*)alloca(S * D * sizeof(float));
-
     for (int h = 0; h < n_heads; h++) {
         int off = h * D;
-        // Extract head columns (strided → contiguous)
         for (int s = 0; s < S; s++) {
             memcpy(qh + s * D, g_mha_Q + s * E + off, D * sizeof(float));
             memcpy(kh + s * D, g_mha_K + s * E + off, D * sizeof(float));
             memcpy(vh + s * D, g_mha_V + s * E + off, D * sizeof(float));
         }
-
-        // scores = Q_h @ K_h^T → [S, S], scaled
         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
                     S, S, D, scale, qh, D, kh, D, 0.0f, g_mha_scores, S);
-
-        // Causal mask + softmax (in-place on scores → attn)
         for (int i = 0; i < S; i++) {
-            // Apply mask: set future positions to -1e9
-            for (int j = i + 1; j < S; j++)
-                g_mha_scores[i * S + j] = -1e9f;
-            // Softmax per row
+            for (int j = i + 1; j < S; j++) g_mha_scores[i * S + j] = -1e9f;
             float max_val = g_mha_scores[i * S];
             for (int j = 1; j < S; j++)
                 if (g_mha_scores[i * S + j] > max_val) max_val = g_mha_scores[i * S + j];
@@ -1742,40 +2136,70 @@ void* aiml_tensor_fused_mha(void* xv, void* wqv, void* wkv, void* wvv, void* wov
                 sum += g_mha_attn[i * S + j];
             }
             float inv_sum = 1.0f / (sum + 1e-10f);
-            for (int j = 0; j < S; j++)
-                g_mha_attn[i * S + j] *= inv_sum;
+            for (int j = 0; j < S; j++) g_mha_attn[i * S + j] *= inv_sum;
         }
-
-        // oh = attn @ V_h → [S, D]
         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
                     S, D, S, 1.0f, g_mha_attn, S, vh, D, 0.0f, oh, D);
-
-        // Write head output into concat buffer at correct column offset
         for (int s = 0; s < S; s++)
             memcpy(g_mha_cat + s * E + off, oh + s * D, D * sizeof(float));
     }
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                S, E, E, 1.0f, g_mha_cat, E, wo_data, E, 0.0f, out_row, E);
+}
 
-    // 3. Output projection: out = cat @ W_O → [S, E]
+void* aiml_tensor_fused_mha(void* xv, void* wqv, void* wkv, void* wvv, void* wov,
+                              int32_t n_heads, int32_t embed_dim) {
+    auto* x  = (AimlTensor*)xv;
+    auto* wq = (AimlTensor*)wqv;
+    auto* wk = (AimlTensor*)wkv;
+    auto* wv = (AimlTensor*)wvv;
+    auto* wo = (AimlTensor*)wov;
+    if (!x || !wq || !wk || !wv || !wo) return nullptr;
+
+    int E = embed_dim;
+
+    // Batched: x is [B, S, E]
+    if (x->ndim == 3) {
+        int B = x->shape[0], S = x->shape[1];
+        mha_ensure_scratch(S, E);
+        int out_shape[3] = {B, S, E};
+        auto* out = alloc_tensor(out_shape, 3, false);
+        if (!out) return nullptr;
+        for (int bi = 0; bi < B; bi++) {
+            mha_forward_single(x->data + bi * S * E, out->data + bi * S * E,
+                               wq->data, wk->data, wv->data, wo->data, S, E, n_heads);
+        }
+        if (needs_grad(x) || needs_grad(wq) || needs_grad(wk) || needs_grad(wv) || needs_grad(wo)) {
+            out->requires_grad = 1;
+            GradNode node;
+            node.op = OP_FUSED_MHA;
+            node.inputs[0] = x; node.inputs[1] = wq; node.inputs[2] = wk;
+            node.inputs[3] = wv; node.inputs[4] = wo;
+            node.n_inputs = 5; node.output = out;
+            node.scalar_arg = 0.0f; node.int_arg = n_heads; node.int_data = nullptr;
+            out->grad_node_id = (int)g_graph.size();
+            out->is_param = 0;
+            g_graph.push_back(node);
+        }
+        return out;
+    }
+
+    // Single sequence: x is [S, E]
+    int S = x->shape[0];
+    mha_ensure_scratch(S, E);
     int out_shape[2] = {S, E};
     auto* out = alloc_tensor(out_shape, 2, false);
-    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                S, E, E, 1.0f, g_mha_cat, E, wo->data, E, 0.0f, out->data, E);
+    if (!out) return nullptr;
+    mha_forward_single(x->data, out->data, wq->data, wk->data, wv->data, wo->data, S, E, n_heads);
 
-    // Record in autograd graph
     if (needs_grad(x) || needs_grad(wq) || needs_grad(wk) || needs_grad(wv) || needs_grad(wo)) {
         out->requires_grad = 1;
         GradNode node;
         node.op = OP_FUSED_MHA;
-        node.inputs[0] = x;
-        node.inputs[1] = wq;
-        node.inputs[2] = wk;
-        node.inputs[3] = wv;
-        node.inputs[4] = wo;
-        node.n_inputs = 5;
-        node.output = out;
-        node.scalar_arg = 0.0f;
-        node.int_arg = n_heads;
-        node.int_data = nullptr;
+        node.inputs[0] = x; node.inputs[1] = wq; node.inputs[2] = wk;
+        node.inputs[3] = wv; node.inputs[4] = wo;
+        node.n_inputs = 5; node.output = out;
+        node.scalar_arg = 0.0f; node.int_arg = n_heads; node.int_data = nullptr;
         out->grad_node_id = (int)g_graph.size();
         out->is_param = 0;
         g_graph.push_back(node);
@@ -1787,47 +2211,31 @@ void* aiml_tensor_fused_mha(void* xv, void* wqv, void* wkv, void* wvv, void* wov
 // Recomputes forward intermediates (Q, K, V, attn weights) for gradient calc.
 // Gradients: d_x, d_wq, d_wk, d_wv, d_wo
 
-static void backward_fused_mha(GradNode& node) {
-    auto* x  = node.inputs[0];
-    auto* wq = node.inputs[1];
-    auto* wk = node.inputs[2];
-    auto* wv = node.inputs[3];
-    auto* wo = node.inputs[4];
-    auto* out = node.output;
-    int n_heads = node.int_arg;
-
-    int S = x->shape[0];
-    int E = x->shape[1];
+// Single-sequence MHA backward — accumulates into d_x/d_wq/d_wk/d_wv/d_wo
+static void mha_backward_single(
+        const float* x_row, const float* dout_row,
+        float* d_x_row,  // may be nullptr if not needed
+        AimlTensor* wq, AimlTensor* wk, AimlTensor* wv, AimlTensor* wo,
+        int S, int E, int n_heads,
+        bool need_dx, bool need_dwq, bool need_dwk, bool need_dwv, bool need_dwo) {
     int D = E / n_heads;
     float scale = 1.0f / sqrtf((float)D);
 
-    float* dout = out->grad;  // [S, E]
-
-    mha_ensure_scratch(S, E);
-
-    // Recompute Q, K, V
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                S, E, E, 1.0f, x->data, E, wq->data, E, 0.0f, g_mha_Q, E);
+                S, E, E, 1.0f, x_row, E, wq->data, E, 0.0f, g_mha_Q, E);
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                S, E, E, 1.0f, x->data, E, wk->data, E, 0.0f, g_mha_K, E);
+                S, E, E, 1.0f, x_row, E, wk->data, E, 0.0f, g_mha_K, E);
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
-                S, E, E, 1.0f, x->data, E, wv->data, E, 0.0f, g_mha_V, E);
+                S, E, E, 1.0f, x_row, E, wv->data, E, 0.0f, g_mha_V, E);
 
-    // d_cat = dout @ W_O^T → [S, E]
     float* d_cat = (float*)calloc(S * E, sizeof(float));
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                S, E, E, 1.0f, dout, E, wo->data, E, 0.0f, d_cat, E);
+                S, E, E, 1.0f, dout_row, E, wo->data, E, 0.0f, d_cat, E);
 
-    // d_wo = cat^T @ dout → [E, E]
-    // Need cat — recompute it (already done in forward, but we don't store it)
-    // We rebuild cat in g_mha_cat during per-head backward
-
-    // Accumulators for gradients
     float* d_Q = (float*)calloc(S * E, sizeof(float));
     float* d_K = (float*)calloc(S * E, sizeof(float));
     float* d_V = (float*)calloc(S * E, sizeof(float));
 
-    // Per-head stack buffers
     float* qh = (float*)alloca(S * D * sizeof(float));
     float* kh = (float*)alloca(S * D * sizeof(float));
     float* vh = (float*)alloca(S * D * sizeof(float));
@@ -1840,15 +2248,12 @@ static void backward_fused_mha(GradNode& node) {
 
     for (int h = 0; h < n_heads; h++) {
         int off = h * D;
-        // Extract head columns
         for (int s = 0; s < S; s++) {
             memcpy(qh + s * D, g_mha_Q + s * E + off, D * sizeof(float));
             memcpy(kh + s * D, g_mha_K + s * E + off, D * sizeof(float));
             memcpy(vh + s * D, g_mha_V + s * E + off, D * sizeof(float));
             memcpy(d_oh + s * D, d_cat + s * E + off, D * sizeof(float));
         }
-
-        // Recompute attention weights for this head
         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
                     S, S, D, scale, qh, D, kh, D, 0.0f, g_mha_scores, S);
         for (int i = 0; i < S; i++) {
@@ -1860,41 +2265,25 @@ static void backward_fused_mha(GradNode& node) {
             float inv = 1.0f / (sum + 1e-10f);
             for (int j = 0; j < S; j++) g_mha_attn[i * S + j] *= inv;
         }
-
-        // Also write head output into g_mha_cat for d_wo computation
         float* oh_tmp = (float*)alloca(S * D * sizeof(float));
         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
                     S, D, S, 1.0f, g_mha_attn, S, vh, D, 0.0f, oh_tmp, D);
         for (int s = 0; s < S; s++)
             memcpy(g_mha_cat + s * E + off, oh_tmp + s * D, D * sizeof(float));
-
-        // Backward through oh = attn @ V_h
-        // d_attn = d_oh @ V_h^T → [S, S]
         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
                     S, S, D, 1.0f, d_oh, D, vh, D, 0.0f, d_attn, S);
-        // d_vh = attn^T @ d_oh → [S, D]
         cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
                     S, D, S, 1.0f, g_mha_attn, S, d_oh, D, 0.0f, d_vh, D);
-
-        // Backward through softmax: d_scores = attn * (d_attn - sum(d_attn * attn, dim=-1))
         for (int i = 0; i < S; i++) {
             float dot = 0.0f;
             for (int j = 0; j < S; j++) dot += d_attn[i * S + j] * g_mha_attn[i * S + j];
             for (int j = 0; j < S; j++)
                 d_scores[i * S + j] = g_mha_attn[i * S + j] * (d_attn[i * S + j] - dot);
         }
-        // Scale factor applied in forward → apply to grad too
-        // d_scores already has the grad through scaled scores
-
-        // Backward through scores = scale * Q_h @ K_h^T
-        // d_qh = scale * d_scores @ K_h → [S, D]
         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
                     S, D, S, scale, d_scores, S, kh, D, 0.0f, d_qh, D);
-        // d_kh = scale * d_scores^T @ Q_h → [S, D]
         cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
                     S, D, S, scale, d_scores, S, qh, D, 0.0f, d_kh, D);
-
-        // Scatter head grads back to full [S, E] gradient arrays
         for (int s = 0; s < S; s++) {
             for (int d = 0; d < D; d++) {
                 d_Q[s * E + off + d] += d_qh[s * D + d];
@@ -1903,45 +2292,69 @@ static void backward_fused_mha(GradNode& node) {
             }
         }
     }
+    if (need_dwq) cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                               E, E, S, 1.0f, x_row, E, d_Q, E, 1.0f, wq->grad, E);
+    if (need_dwk) cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                               E, E, S, 1.0f, x_row, E, d_K, E, 1.0f, wk->grad, E);
+    if (need_dwv) cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                               E, E, S, 1.0f, x_row, E, d_V, E, 1.0f, wv->grad, E);
+    if (need_dwo) cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                               E, E, S, 1.0f, g_mha_cat, E, dout_row, E, 1.0f, wo->grad, E);
+    if (need_dx && d_x_row) {
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                    S, E, E, 1.0f, d_Q, E, wq->data, E, 1.0f, d_x_row, E);
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                    S, E, E, 1.0f, d_K, E, wk->data, E, 1.0f, d_x_row, E);
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                    S, E, E, 1.0f, d_V, E, wv->data, E, 1.0f, d_x_row, E);
+    }
+    free(d_cat); free(d_Q); free(d_K); free(d_V);
+}
 
-    // Backward through projections: Q = x @ W_Q, etc.
-    // d_wq = x^T @ d_Q → [E, E]
-    if (wq->requires_grad) {
-        ensure_grad(wq);
-        cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
-                    E, E, S, 1.0f, x->data, E, d_Q, E, 1.0f, wq->grad, E);
-    }
-    if (wk->requires_grad) {
-        ensure_grad(wk);
-        cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
-                    E, E, S, 1.0f, x->data, E, d_K, E, 1.0f, wk->grad, E);
-    }
-    if (wv->requires_grad) {
-        ensure_grad(wv);
-        cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
-                    E, E, S, 1.0f, x->data, E, d_V, E, 1.0f, wv->grad, E);
-    }
-    // d_wo = cat^T @ dout → [E, E]
-    if (wo->requires_grad) {
-        ensure_grad(wo);
-        cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
-                    E, E, S, 1.0f, g_mha_cat, E, dout, E, 1.0f, wo->grad, E);
-    }
-    // d_x = d_Q @ W_Q^T + d_K @ W_K^T + d_V @ W_V^T + (from output proj: handled by chain rule)
-    if (x->requires_grad) {
-        ensure_grad(x);
-        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                    S, E, E, 1.0f, d_Q, E, wq->data, E, 1.0f, x->grad, E);
-        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                    S, E, E, 1.0f, d_K, E, wk->data, E, 1.0f, x->grad, E);
-        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
-                    S, E, E, 1.0f, d_V, E, wv->data, E, 1.0f, x->grad, E);
+static void backward_fused_mha(GradNode& node) {
+    auto* x  = node.inputs[0];
+    auto* wq = node.inputs[1];
+    auto* wk = node.inputs[2];
+    auto* wv = node.inputs[3];
+    auto* wo = node.inputs[4];
+    auto* out = node.output;
+    int n_heads = node.int_arg;
+
+    int E = (x->ndim == 3) ? x->shape[2] : x->shape[1];
+    mha_ensure_scratch((x->ndim == 3) ? x->shape[1] : x->shape[0], E);
+
+    bool need_dx  = x->requires_grad;
+    bool need_dwq = wq->requires_grad;
+    bool need_dwk = wk->requires_grad;
+    bool need_dwv = wv->requires_grad;
+    bool need_dwo = wo->requires_grad;
+    if (need_dwq) ensure_grad(wq);
+    if (need_dwk) ensure_grad(wk);
+    if (need_dwv) ensure_grad(wv);
+    if (need_dwo) ensure_grad(wo);
+    if (need_dx)  ensure_grad(x);
+
+    float* dout = out->grad;
+
+    // Batched: x [B, S, E]
+    if (x->ndim == 3) {
+        int B = x->shape[0], S = x->shape[1];
+        for (int bi = 0; bi < B; bi++) {
+            mha_backward_single(x->data + bi * S * E, dout + bi * S * E,
+                                need_dx ? x->grad + bi * S * E : nullptr,
+                                wq, wk, wv, wo, S, E, n_heads,
+                                need_dx, need_dwq, need_dwk, need_dwv, need_dwo);
+        }
+        return;
     }
 
-    free(d_cat);
-    free(d_Q);
-    free(d_K);
-    free(d_V);
+    // Single sequence: x [S, E]
+    int S = x->shape[0];
+    mha_ensure_scratch(S, E);
+    mha_backward_single(x->data, dout,
+                        need_dx ? x->grad : nullptr,
+                        wq, wk, wv, wo, S, E, n_heads,
+                        need_dx, need_dwq, need_dwk, need_dwv, need_dwo);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1967,7 +2380,88 @@ void aiml_tensor_print(void* tv, const char* label) {
 
 void aiml_tensor_fill(void* tv, float val) {
     auto* t = (AimlTensor*)tv;
+    if (!t) return;
     for (int i = 0; i < t->size; i++) t->data[i] = val;
+}
+
+static char* aiml_tensor_digest_to_hex(const unsigned char* bytes, unsigned int len) {
+    char* s = (char*)malloc((size_t)len * 2 + 1);
+    if (!s) return nullptr;
+    static const char hex[] = "0123456789abcdef";
+    for (unsigned int i = 0; i < len; ++i) {
+        s[i * 2] = hex[bytes[i] >> 4];
+        s[i * 2 + 1] = hex[bytes[i] & 0x0F];
+    }
+    s[(size_t)len * 2] = '\0';
+    return s;
+}
+
+static void aiml_tensor_digest_i32(EVP_MD_CTX* ctx, int32_t v) {
+    unsigned char b[4];
+    b[0] = (unsigned char)(v & 0xFF);
+    b[1] = (unsigned char)((v >> 8) & 0xFF);
+    b[2] = (unsigned char)((v >> 16) & 0xFF);
+    b[3] = (unsigned char)((v >> 24) & 0xFF);
+    EVP_DigestUpdate(ctx, b, sizeof(b));
+}
+
+char* aiml_tensor_sha256(void* tv) {
+    auto* t = (AimlTensor*)tv;
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    if (!ctx) return nullptr;
+
+    EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr);
+
+    const char magic[] = "AIML_TENSOR_SHA256_V1";
+    EVP_DigestUpdate(ctx, magic, sizeof(magic) - 1);
+
+    if (!t) {
+        aiml_tensor_digest_i32(ctx, -1);
+    } else {
+        aiml_tensor_digest_i32(ctx, (int32_t)t->ndim);
+        aiml_tensor_digest_i32(ctx, (int32_t)t->size);
+        for (int i = 0; i < t->ndim; ++i) {
+            aiml_tensor_digest_i32(ctx, (int32_t)t->shape[i]);
+        }
+        if (t->data && t->size > 0) {
+            EVP_DigestUpdate(ctx, t->data, (size_t)t->size * sizeof(float));
+        }
+    }
+
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int dlen = 0;
+    EVP_DigestFinal_ex(ctx, digest, &dlen);
+    EVP_MD_CTX_free(ctx);
+    return aiml_tensor_digest_to_hex(digest, dlen);
+}
+
+extern "C" void aiml_tensor_add_inplace(void* dstv, void* srcv) {
+    auto* dst = (AimlTensor*)dstv;
+    auto* src = (AimlTensor*)srcv;
+    int n = dst->size < src->size ? dst->size : src->size;
+    for (int i = 0; i < n; i++) dst->data[i] += src->data[i];
+}
+
+extern "C" void aiml_tensor_scale_inplace(void* tv, float s) {
+    auto* t = (AimlTensor*)tv;
+    for (int i = 0; i < t->size; i++) t->data[i] *= s;
+}
+
+extern "C" float aiml_tensor_l2_norm_sq(void* tv) {
+    auto* t = (AimlTensor*)tv;
+    if (!t) return 0.0f;
+    float sum = 0.0f;
+    for (int i = 0; i < t->size; i++) sum += t->data[i] * t->data[i];
+    return sum;
+}
+
+// Returns scale factor for global gradient norm clipping.
+// clip_norm <= 0 or norm_sq == 0: returns 1.0 (no clipping).
+// Otherwise: returns min(1.0, clip_norm / sqrt(norm_sq)).
+extern "C" float aiml_compute_clip_scale(float norm_sq, float clip_norm) {
+    if (clip_norm <= 0.0f || norm_sq <= 0.0f) return 1.0f;
+    float norm = sqrtf(norm_sq);
+    return norm > clip_norm ? clip_norm / norm : 1.0f;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2031,6 +2525,15 @@ void* aiml_tensor_load(const char* store_name, const char* key) {
         memcpy(t->data, p, data_bytes);
     }
     return t;
+}
+
+// ── tensor.kv_evict: free in-memory map for a tensor store, keep WAL ──
+extern "C" void aiml_db_kv_evict(void* kv);
+
+void aiml_tensor_kv_evict(const char* store_name) {
+    if (!store_name) return;
+    void* kv = tensor_get_kv(store_name);
+    if (kv) aiml_db_kv_evict(kv);
 }
 
 // ── tensor.bind: zero-copy binding to DB KV blob ──────────────────────

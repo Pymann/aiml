@@ -1,0 +1,86 @@
+# Tests for db.kv_evict — free in-memory map, lazy-reload from WAL on next read
+# Expected exit code: 0
+
+# ── Setup: persistent KV with test data ──────────────────────────────────────
+
+- call: [io.write_file, "/tmp/aiml_evict_test/.keep", ""]
+
+- decl: [kv, Kv<string:string>]
+- set: [kv, { call: [db.open_kv, "evict_test", {persist: true, path: "/tmp/aiml_evict_test/"}] }]
+
+# Fill with known data
+- call: [kv.set, "key_a", "alpha"]
+- call: [kv.set, "key_b", "beta"]
+- call: [kv.set, "key_c", "gamma"]
+
+- decl: [n, i32]
+- set: [n, { call: [kv.len] }]
+- print: ["len before evict: ${n}"]
+# CHECK: len before evict: 3
+
+# ── Phase A: evict + lazy-reload on read ─────────────────────────────────────
+# After evict, the next read triggers automatic WAL replay (lazy-reload).
+# From the caller's perspective, data is always available — evict only frees RAM
+# temporarily until the next read.
+
+- call: [db.kv_evict, kv]
+
+# len triggers lazy-reload → data back
+- set: [n, { call: [kv.len] }]
+- print: ["len after evict (lazy-reload): ${n}"]
+# CHECK: len after evict (lazy-reload): 3
+
+- decl: [has, i32]
+- set: [has, { call: [kv.has, "key_a"] }]
+- print: ["has key_a after evict: ${has}"]
+# CHECK: has key_a after evict: 1
+
+- decl: [v, string]
+- set: [v, { call: [kv.get, "key_a"] }]
+- print: ["val key_a: ${v}"]
+# CHECK: val key_a: alpha
+
+# ── Phase B: evict + set + read ──────────────────────────────────────────────
+# Writing after evict appends to WAL AND triggers lazy-reload first,
+# so both old and new entries are visible.
+
+- call: [db.kv_evict, kv]
+
+# set triggers lazy-reload → old entries restored, then new entry added
+- call: [kv.set, "key_d", "delta"]
+
+- set: [n, { call: [kv.len] }]
+- print: ["len after evict+set: ${n}"]
+# CHECK: len after evict+set: 4
+
+- set: [v, { call: [kv.get, "key_d"] }]
+- print: ["val key_d: ${v}"]
+# CHECK: val key_d: delta
+
+- set: [v, { call: [kv.get, "key_b"] }]
+- print: ["val key_b: ${v}"]
+# CHECK: val key_b: beta
+
+# ── Phase C: double evict is safe ────────────────────────────────────────────
+
+- call: [db.kv_evict, kv]
+- call: [db.kv_evict, kv]
+
+- set: [n, { call: [kv.len] }]
+- print: ["len after double evict: ${n}"]
+# CHECK: len after double evict: 4
+
+# ── Phase D: explicit reload_kv also works after evict ───────────────────────
+
+- call: [db.kv_evict, kv]
+- call: [db.reload_kv, kv]
+
+- set: [n, { call: [kv.len] }]
+- print: ["len after explicit reload: ${n}"]
+# CHECK: len after explicit reload: 4
+
+- set: [v, { call: [kv.get, "key_c"] }]
+- print: ["val key_c: ${v}"]
+# CHECK: val key_c: gamma
+
+- print: ["ALL PASSED"]

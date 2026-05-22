@@ -23,6 +23,9 @@ class ModelBuilder : public StateHandler {
     // State for parsing member sequence entry
     std::string currentField;
     std::string currentType;
+    int memberAttrIndex = 0; // [name, type, default]
+    std::unique_ptr<Expr> currentInitValue;
+    std::string currentAccess = "public";
 public:
     ModelBuilder(Builder* b) : StateHandler(b) { modelNode = std::make_unique<ModelDecl>(); }
     bool OnMapStart() override;

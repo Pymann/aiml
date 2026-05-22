@@ -80,7 +80,7 @@ context, so the produced IR depends on them.
 ```
 
 The legacy scalar schema (`path: hash`) is silently dropped on load — the cache is
-wegwerfbar by design, no migration logic.
+disposable by design, no migration logic.
 
 ### Keyed Object Paths
 

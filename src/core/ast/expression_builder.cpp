@@ -181,6 +181,16 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
              call->args.push_back(std::move(a));
          return call;
     }
+    if (op == "new_array" && args.size() == 2) {
+        auto typeArg  = dynamic_cast<VariableExpr*>(args[0].get());
+        auto typeLit  = dynamic_cast<LiteralExpr*>(args[0].get());
+        std::string elemType = "i32";
+        if (typeArg)  elemType = typeArg->name;
+        else if (typeLit) elemType = typeLit->value;
+        auto na = std::make_unique<NewArrayExpr>(elemType);
+        na->countExpr = std::move(args[1]);
+        return na;
+    }
     if (op == "new" && !args.empty()) {
          auto newName = dynamic_cast<VariableExpr*>(args[0].get());
          auto newLiteral = dynamic_cast<LiteralExpr*>(args[0].get());

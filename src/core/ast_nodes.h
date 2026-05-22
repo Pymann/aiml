@@ -93,6 +93,15 @@ public:
     std::string toString() const override { return "New(" + typeName + ")"; }
 };
 
+// dyn_array<T> heap allocation: { new_array: [ElemType, count] }
+class NewArrayExpr : public Expr {
+public:
+    std::string elemTypeName;
+    std::unique_ptr<Expr> countExpr;
+    NewArrayExpr(std::string t) : elemTypeName(t) {}
+    std::string toString() const override { return "NewArray(" + elemTypeName + ")"; }
+};
+
 class SpawnExpr : public Expr {
 public:
     std::string functionName;
@@ -321,12 +330,46 @@ public:
 
 struct PrefabChildInfo {
     std::string name;
-    std::string type;      // "sprite", "label", "rect"
+    std::string type;      // "sprite", "label", "rect", "button", "text_input"
     float x = 0, y = 0, width = 0, height = 0;
     float font_size = 12;
     uint32_t color = 0xFFFFFF;
     std::string texture;
     std::string anchor;    // "left", "center", "right"
+
+    // UI-widget style (button, text_input, rect)
+    uint32_t bg_color      = 0;
+    uint32_t border_color  = 0;
+    float    border_width  = 0.0f;
+    float    corner_radius = 0.0f;
+    uint32_t hover_color   = 0;
+    uint32_t active_color  = 0;
+    std::string label;        // button label / static label text
+    bool     is_secret     = false; // text_input password mode
+
+    // Callbacks (function names, resolved at runtime via fptable)
+    std::string on_click;
+    std::string on_change;
+
+    // Material reference (looked up by name at instantiate time)
+    std::string material;
+};
+
+struct MaterialUniformInfo {
+    enum Kind { K_FLOAT, K_VEC2, K_VEC3, K_VEC4, K_INT, K_TEX } kind = K_FLOAT;
+    float       scalar  = 0.0f;
+    int32_t     integer = 0;
+    std::vector<float> vec;   // 2..4 elements for vecN
+    std::string tex_path;     // sampler2D
+};
+
+class MaterialDecl : public Node {
+public:
+    std::string name;
+    std::string shader;       // path to fragment shader file
+    std::vector<std::pair<std::string, MaterialUniformInfo>> uniforms;
+
+    std::string toString() const override { return "MaterialDecl(" + name + ")"; }
 };
 
 class PrefabDecl : public Node {

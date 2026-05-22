@@ -2,7 +2,7 @@
 
 ## if
 
-### Kanonische Form
+### Canonical Form
 
 ```yaml
 - if:
@@ -15,9 +15,9 @@
       - set: [result, 0]
 ```
 
-### Kurzform
+### Short Form
 
-Die Kurzform ist gleichwertig zur kanonischen Form und offizieller Teil der Sprache:
+The short form is equivalent to the canonical form and is an official part of the language:
 
 ```yaml
 - if: [{ lt: [x, y] }, true]
@@ -27,16 +27,16 @@ Die Kurzform ist gleichwertig zur kanonischen Form und offizieller Teil der Spra
     - print: [z]
 ```
 
-Das erste Element der Liste ist die Condition (beliebiger Ausdruck, der einen Wahrheitswert liefert).
-Das zweite Element (`true`) ist ein Pflicht-Platzhalter ohne semantische Bedeutung.
+The first element of the list is the condition (any expression that yields a truth value).
+The second element (`true`) is a mandatory placeholder with no semantic meaning.
 
-`else` ist in beiden Formen optional.
+`else` is optional in both forms.
 
-Beide Formen sind äquivalent und können gemischt verwendet werden.
+Both forms are equivalent and may be mixed freely.
 
 ## while
 
-### Kanonische Form
+### Canonical Form
 
 ```yaml
 - while:
@@ -45,7 +45,7 @@ Beide Formen sind äquivalent und können gemischt verwendet werden.
       - set: [counter, { +: [counter, 1] }]
 ```
 
-### Kurzform
+### Short Form
 
 ```yaml
 - while: [{ lt: [counter, limit] }]
@@ -53,37 +53,37 @@ Beide Formen sind äquivalent und können gemischt verwendet werden.
     - set: [counter, { +: [counter, 1] }]
 ```
 
-Das erste (und einzige) Element der Liste ist die Condition.
+The first (and only) element of the list is the condition.
 
 ## Operator Arity
 
-Logische und Vergleichsoperatoren haben feste Stelligkeit.
+Logical and comparison operators have fixed arity.
 
-- Unäre Operatoren: `!`, `?`, `&` — genau 1 Operand
-- Binäre Logikoperatoren: `and`, `&&`, `or`, `||` — genau 2 Operanden
-- Vergleichsoperatoren: `eq`, `neq`, `lt`, `gt`, `le`, `lte`, `ge`, `gte`, `peq`, `pneq` — genau 2 Operanden
+- Unary operators: `!`, `?`, `&` — exactly 1 operand
+- Binary logical operators: `and`, `&&`, `or`, `||` — exactly 2 operands
+- Comparison operators: `eq`, `neq`, `lt`, `gt`, `le`, `lte`, `ge`, `gte`, `peq`, `pneq` — exactly 2 operands
 
 ```yaml
-# gültig
+# valid
 - if:
     condition: { or: [{ eq: [a, b] }, { gt: [a, c] }] }
     then:
       - print: ["ok"]
 
-# Compilerfehler: 'eq' ist binär
+# Compiler error: 'eq' is binary
 - if:
     condition: { eq: [a, b, c] }
     then:
-      - print: ["nie kompiliert"]
+      - print: ["never compiles"]
 
-# Compilerfehler: '||' ist binär
+# Compiler error: '||' is binary
 - if:
     condition: { "||": [{ eq: [a, b] }, { eq: [b, c] }, { eq: [c, d] }] }
     then:
-      - print: ["nie kompiliert"]
+      - print: ["never compiles"]
 ```
 
-Längere logische Ausdrücke müssen explizit verschachtelt werden:
+Longer logical expressions must be nested explicitly:
 
 ```yaml
 - if:
@@ -92,9 +92,9 @@ Längere logische Ausdrücke müssen explizit verschachtelt werden:
       - print: ["ok"]
 ```
 
-## tolerance — Float-Vergleich mit Epsilon
+## tolerance — Float Comparison with Epsilon
 
-`tolerance` ist ein ternärer Operator für approximative Gleichheit von Fließkommazahlen.
+`tolerance` is a ternary operator for approximate equality of floating-point numbers.
 
 **Syntax:**
 
@@ -102,42 +102,42 @@ Längere logische Ausdrücke müssen explizit verschachtelt werden:
 { tolerance: [val1, val2, epsilon] }
 ```
 
-**Semantik:** Gibt `1` (true) zurück wenn `|val1 - val2| <= epsilon`, sonst `0` (false).
+**Semantics:** Returns `1` (true) if `|val1 - val2| <= epsilon`, otherwise `0` (false).
 
-Alle drei Argumente werden automatisch zu `f32` konvertiert (i32 → SIToFP, f64 → FPTrunc).
+All three arguments are automatically converted to `f32` (i32 → SIToFP, f64 → FPTrunc).
 
-**Implementierung:** Reines LLVM IR inline (kein Funktionsaufruf): `fsub → fneg → select(abs) → fcmple`.
+**Implementation:** Pure LLVM IR inline (no function call): `fsub → fneg → select(abs) → fcmple`.
 
 ```yaml
 - decl: [a, f32, 1.0]
 - decl: [b, f32, 1.0005]
 
-# Innerhalb Toleranz
+# Within tolerance
 - if:
     condition: { tolerance: [a, b, 0.001] }
     then:
-      - print: ["gleich (Differenz < 0.001)"]
+      - print: ["equal (difference < 0.001)"]
 
-# Außerhalb Toleranz
+# Outside tolerance
 - if:
     condition: { tolerance: [a, b, 0.0001] }
     then:
-      - print: ["nie erreicht"]
+      - print: ["never reached"]
     else:
-      - print: ["ungleich (Differenz > 0.0001)"]
+      - print: ["not equal (difference > 0.0001)"]
 
-# Exakte Gleichheit (eps = 0)
+# Exact equality (eps = 0)
 - if:
     condition: { tolerance: [5.0, 5.0, 0.0] }
     then:
-      - print: ["exakt gleich"]
+      - print: ["exactly equal"]
 
-# Negative Werte funktionieren korrekt
+# Negative values work correctly
 - if:
     condition: { tolerance: [-3.5, -3.501, 0.01] }
     then:
-      - print: ["nah genug"]
+      - print: ["close enough"]
 ```
 
-> **Hinweis:** Für exakte Integer/Pointer-Gleichheit `eq` verwenden. `tolerance` ist
-> ausschließlich für f32-Vergleiche gedacht, bei denen Rundungsfehler erwartet werden.
+> **Note:** For exact integer/pointer equality use `eq`. `tolerance` is
+> intended exclusively for f32 comparisons where rounding errors are expected.

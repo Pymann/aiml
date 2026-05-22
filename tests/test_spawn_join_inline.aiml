@@ -1,0 +1,17 @@
+- def:
+    name: noop
+    args: []
+    return: void
+    body:
+      - print: ["noop called"]
+
+# Test A: separate decl + set (known-working)
+- decl: [t_sep, thread_handle]
+- set: [t_sep, { spawn: [noop] }]
+- call: [t_sep.join]
+- print: ["PASS: separate decl+set join"]
+
+# Test B: inline decl+init (the pattern used in tul_train)
+- decl: [t_inline, thread_handle, { spawn: [noop] }]
+- call: [t_inline.join]
+- print: ["PASS: inline decl+spawn join"]

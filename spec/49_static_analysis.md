@@ -1,150 +1,152 @@
-# Kapitel 49 — Static Analysis
+# Chapter 49 — Static Analysis
 
-> **Leitgedanke:** AIML enthaelt bewusst harte statische Strukturregeln, damit
-> Code fuer Menschen und KI klein, lesbar und bearbeitbar bleibt.
-> Diese Regeln wirken beim Kompilieren, nicht zur Laufzeit.
-
----
-
-## 1. Ziel
-
-Die Static-Analysis-Regeln in AIML sollen vor allem drei Dinge sichern:
-
-- kleine, bearbeitbare Dateien
-- kleine, bearbeitbare Funktionen
-- lokale, explizite Ausnahmen statt globaler Abschaltungen
-
-Der aktuelle Compiler-Stand enthaelt in diesem Kapitel genau die derzeit
-implementierten Strukturregeln und den dazugehoerigen Escape-Hatch.
+> **Core idea:** AIML deliberately contains hard static structural rules so that
+> code remains small, readable, and editable for both humans and AI.
+> These rules are enforced at compile time, not at runtime.
 
 ---
 
-## 2. Aktuell implementierte Regeln
+## 1. Goal
 
-Der Compiler unterstuetzt derzeit diese statischen Strukturpruefungen:
+The static analysis rules in AIML are intended to ensure primarily three things:
 
-| Regel | Schwelle | Ergebnis |
-|------|----------|----------|
-| Dateigroesse | `1000+` Zeilen | Warning |
-| Dateigroesse | `1500+` Zeilen | Compiler-Error |
-| Funktionsgroesse | `301+` Zeilen | Compiler-Error |
+- small, editable files
+- small, editable functions
+- local, explicit exceptions instead of global opt-outs
 
-Es gibt derzeit keine weitere `static_off`-gesteuerte Strukturregel ausser
-der Funktionsgroessenpruefung.
+The current compiler state in this chapter contains exactly the currently
+implemented structural rules and the associated escape hatch.
 
 ---
 
-## 3. Dateigroesse
+## 2. Currently Implemented Rules
 
-### 3.1 Warning ab 1000 Zeilen
+The compiler currently supports these static structural checks:
 
-Eine AIML-Datei mit `1000` oder mehr Zeilen erzeugt eine Compiler-Warnung.
+| Rule | Threshold | Result |
+|------|-----------|--------|
+| File size | `1000+` lines | Warning |
+| File size | `1500+` lines | Compiler error |
+| Function size | `301+` lines | Compiler error |
+| Function arguments | `6+` arguments | Compiler error |
 
-Beispielmeldung:
+The current `static_off`-controlled structural rules are:
+
+- function size
+- function argument count
+
+---
+
+## 3. File Size
+
+### 3.1 Warning at 1000 Lines
+
+An AIML file with `1000` or more lines produces a compiler warning.
+
+Example message:
 
 ```text
 ...: AIML file large (1000 lines). 1000+ lines should be split.
 ```
 
-### 3.2 Hard Error ab 1500 Zeilen
+### 3.2 Hard Error at 1500 Lines
 
-Eine AIML-Datei mit `1500` oder mehr Zeilen erzeugt einen Compiler-Fehler.
+An AIML file with `1500` or more lines produces a compiler error.
 
-Beispielmeldung:
+Example message:
 
 ```text
 ...: AIML file too large (1500 lines). Maximum is 1499 lines; 1500+ is a hard error.
 ```
 
-### 3.3 Messmethode
+### 3.3 Measurement Method
 
-Die Dateigroesse wird als einfache physische Zeilenanzahl der Quelldatei
-gezaehlt.
+File size is counted as the simple physical line count of the source file.
 
-Der Compiler liest dafuer die Datei direkt ein und zaehlt jede durch
-`getline(...)` gelesene Zeile.
+The compiler reads the file directly and counts each line read by
+`getline(...)`.
 
-### 3.4 Geltungsbereich
+### 3.4 Scope
 
-Die Dateiregel gilt nicht nur fuer die Entry-Datei, sondern auch fuer:
+The file rule applies not only to the entry file, but also to:
 
-- direkt importierte AIML-Dateien
-- im Compile-Kontext geladene Sibling-Dateien
+- directly imported AIML files
+- sibling files loaded in the compile context
 
-Damit werden auch grosse importierte Module sichtbar und nicht nur das
-Top-Level-Entrypoint-File.
+This makes large imported modules visible, not just the
+top-level entry point file.
 
 ---
 
-## 4. Funktionsgroesse
+## 4. Function Size
 
-### 4.1 Hard Error ab 301 Zeilen
+### 4.1 Hard Error at 301 Lines
 
-Eine Funktion oder Methode mit `301` oder mehr Zeilen erzeugt einen
-Compiler-Fehler.
+A function or method with `301` or more lines produces a
+compiler error.
 
-Beispielmeldung:
+Example message:
 
 ```text
 ...:12: AIML function 'render_board_screen' too large (301 lines). Maximum is 300 lines; 301+ is a hard error.
 ```
 
-Es gibt aktuell keine Warning-Stufe fuer Funktionsgroessen.
+There is currently no warning level for function sizes.
 
-### 4.2 Geltungsbereich
+### 4.2 Scope
 
-Die Funktionsregel gilt fuer:
+The function rule applies to:
 
-- freie Funktionen (`def`)
-- Methoden innerhalb von Klassen
+- free functions (`def`)
+- methods within classes
 
-### 4.3 Messmethode
+### 4.3 Measurement Method
 
-Die Funktionsgroesse wird als Quellspanne berechnet:
+Function size is computed as a source span:
 
-- Start: `sourceLine` der Funktion
-- Ende: letzte erkannte Quellzeile innerhalb des Body
+- Start: `sourceLine` of the function
+- End: last recognized source line within the body
 
-Die Spanne ist also:
+The span is therefore:
 
 ```text
 endLine - sourceLine + 1
 ```
 
-### 4.4 Verschachtelte Bloecke
+### 4.4 Nested Blocks
 
-Bei der Ermittlung des Funktionsendes werden derzeit rekursiv diese
-verschachtelten Statement-Typen einbezogen:
+When determining the end of a function, these nested statement types are
+currently included recursively:
 
 - `if`
 - `while`
 - `try/catch`
 
-Damit zaehlt nicht nur die letzte Top-Level-Anweisung im Body, sondern auch
-die tiefste bekannte Quellzeile in verschachtelten Kontrollflussbloecken.
+This means not only the last top-level statement in the body counts, but also
+the deepest known source line in nested control flow blocks.
 
-### 4.5 Nicht-Ziel der Messung
+### 4.5 Non-Goal of the Measurement
 
-Die aktuelle Regel ist eine pragmatische AST-basierte Groessenpruefung.
-Sie ist keine vollstaendige Source-Span-API mit exakter Endmarke fuer jeden
-AST-Knoten.
+The current rule is a pragmatic AST-based size check.
+It is not a complete source-span API with an exact end marker for every
+AST node.
 
-Das bedeutet:
+This means:
 
-- die Regel ist bewusst praktisch statt perfekt
-- sie dient als strukturierende Hartgrenze
-- sie ist nicht als formatierungsgenaue Pretty-Print-Metrik gedacht
+- the rule is intentionally practical rather than perfect
+- it serves as a structural hard boundary
+- it is not intended as a formatting-precise pretty-print metric
 
 ---
 
 ## 5. `static_off`
 
-`static_off` ist der aktuelle Escape-Hatch fuer einzelne statische Regeln auf
-Funktions- oder Methodenebene.
+`static_off` is the current escape hatch for individual static rules at the
+function or method level.
 
 ### 5.1 Syntax
 
-`static_off` ist ein optionales Feld innerhalb von `def`.
+`static_off` is an optional field within `def`.
 
 ```aiml
 - def:
@@ -155,7 +157,7 @@ Funktions- oder Methodenebene.
       - call: [print, "legacy"]
 ```
 
-Dasselbe gilt fuer Methoden:
+The same applies to methods:
 
 ```aiml
 - class:
@@ -169,139 +171,182 @@ Dasselbe gilt fuer Methoden:
             - call: [print, "ok"]
 ```
 
-### 5.2 Typ
+### 5.2 Type
 
-`static_off` ist eine `list<string>`.
+`static_off` is a `list<string>`.
 
-Jeder String bezeichnet genau eine statische Compiler-Regel, die fuer diese
-eine Funktion deaktiviert werden soll.
+Each string designates exactly one static compiler rule to be disabled for
+that single function.
 
-### 5.3 Aktuell definierte Option
+### 5.3 Currently Defined Option
 
-Derzeit ist genau eine Option implementiert:
+Currently these options are implemented:
 
 - `"lines"`
+- `"args"`
 
-`"lines"` deaktiviert die Funktionsgroessenpruefung fuer die betreffende
-Funktion oder Methode.
+`"lines"` disables the function size check for the affected
+function or method.
 
-### 5.4 Semantik
+`"args"` disables the function argument-count check for the affected
+function or method.
 
-- `static_off` wirkt nur lokal auf die einzelne `def`
-- `static_off` wirkt nicht dateiweit
-- `static_off` wirkt nicht projektweit
-- `static_off` veraendert keine Runtime-Semantik
-- `static_off` veraendert keinen IR- oder Codegen-Pfad
-- `static_off` beeinflusst nur statische Compiler-Diagnostics
+### 5.4 Semantics
 
-### 5.5 Unbekannte Eintraege
+- `static_off` acts only locally on the individual `def`
+- `static_off` does not act file-wide
+- `static_off` does not act project-wide
+- `static_off` does not change any runtime semantics
+- `static_off` does not change any IR or codegen path
+- `static_off` only affects static compiler diagnostics
 
-Unbekannte `static_off`-Eintraege sind aktuell erlaubt, haben aber keine
-Wirkung.
+### 5.5 Unknown Entries
 
-Beispiel:
+Unknown `static_off` entries are currently permitted but have no effect.
+
+Example:
 
 ```aiml
 static_off: ["unknown_rule"]
 ```
 
-Das kompiliert weiterhin, deaktiviert aber derzeit keine bekannte Regel.
+This still compiles, but currently disables no known rule.
 
-Damit bleibt der Mechanismus vorwaertskompatibel fuer spaetere statische
-Checks.
+This keeps the mechanism forward-compatible for future static checks.
 
 ---
 
-## 6. Beispiele
+## 6. Examples
 
-### 6.1 Datei im Warning-Bereich
+### 6.1 File in Warning Range
 
-Eine Datei mit `1200` Zeilen:
+A file with `1200` lines:
 
-- kompiliert weiter
-- erzeugt aber eine Warning
+- continues to compile
+- but produces a warning
 
-### 6.2 Datei im Error-Bereich
+### 6.2 File in Error Range
 
-Eine Datei mit `1500` Zeilen:
+A file with `1500` lines:
 
-- kompiliert nicht mehr
-- erzeugt einen Hard Error
+- no longer compiles
+- produces a hard error
 
-### 6.3 Funktion ohne Ausnahme
+### 6.3 Function Without Exception
 
-Eine Funktion mit `301` Zeilen:
+A function with `301` lines:
 
-- kompiliert nicht mehr
-- erzeugt einen Hard Error
+- no longer compiles
+- produces a hard error
 
-### 6.4 Funktion mit `static_off: ["lines"]`
+### 6.4 Function with `static_off: ["lines"]`
 
-Eine Funktion mit `301+` Zeilen und
+A function with `301+` lines and
 
 ```aiml
 static_off: ["lines"]
 ```
 
-wird trotz ihrer Groesse nicht durch die Funktionslinienregel blockiert.
+is not blocked by the function lines rule despite its size.
 
-Die Dateigroessenregeln bleiben davon unberuehrt.
+The file size rules remain unaffected.
 
----
+### 6.5 Function Argument Count
 
-## 7. Prioritaet der Regeln
+A function or method with `6` or more arguments produces a
+compiler error.
 
-Die Regeln sind unabhaengig voneinander:
+Example message:
 
-- `static_off: ["lines"]` deaktiviert nur die Funktionsgroessenpruefung
-- die Dateigroessenregeln bleiben weiterhin aktiv
+```text
+...:1: AIML function 'too_many' has too many arguments (6). Maximum is 5. Use class/model-based programming to group related state and behavior.
+```
 
-Beispiel:
+This rule applies to:
 
-- Datei hat `1600` Zeilen
-- Funktion darin hat `static_off: ["lines"]`
+- free functions (`def`)
+- methods within classes
 
-Ergebnis:
+It does not apply to:
 
-- die Funktion wird von der Funktionsregel verschont
-- die Datei scheitert trotzdem an der Dateigroessenregel
+- external ABI declarations inside `extern`
 
----
+The intent is to push AIML code toward:
 
-## 8. Empfehlungen
+- class-based programming
+- model-based programming
+- grouping related state and behavior instead of long flat signatures
 
-- grosse Dateien aufsplitten statt Ausnahmen zu setzen
-- grosse Funktionen aufbrechen statt `static_off` routinemaessig zu verwenden
-- `static_off: ["lines"]` nur fuer bewusst akzeptierte Legacy- oder
-  Migrationsfaelle nutzen
-- neue Funktionen sollten die 300-Zeilen-Grenze grundsaetzlich einhalten
+### 6.6 Function with `static_off: ["args"]`
 
----
+A function with `6+` arguments and
 
-## 9. Nicht-Ziele
+```aiml
+static_off: ["args"]
+```
 
-Dieses Kapitel beschreibt keine allgemeinen Typ-, Parser- oder
-Semantikfehler wie:
+is not blocked by the argument-count rule.
 
-- unbekannte Typen
-- falsche Operator-Arity
-- undefinierte Variablen
-- ungueltige Member-Zugriffe
-
-Solche Compilerfehler existieren ebenfalls, gehoeren aber nicht zu den hier
-gemeinten Struktur- und Static-Analysis-Regeln.
+The file size and function size rules remain unaffected.
 
 ---
 
-## 10. Implementierungsstand
+## 7. Rule Priority
 
-Der aktuelle Compiler-Stand implementiert:
+The rules are independent of each other:
 
-- Datei-Warning ab `1000` Zeilen
-- Datei-Hard-Error ab `1500` Zeilen
-- Funktions-Hard-Error ab `301` Zeilen
-- `static_off` als `list<string>` auf `FunctionDecl`
-- die konkrete `static_off`-Option `"lines"`
+- `static_off: ["lines"]` only disables the function size check
+- `static_off: ["args"]` only disables the function argument-count check
+- the file size rules remain active
 
-Weitere statische Regeln koennen spaeter ueber zusaetzliche
-`static_off`-Keys oder weitere feste Compiler-Checks ergaenzt werden.
+Example:
+
+- File has `1600` lines
+- A function in it has `static_off: ["lines"]`
+
+Result:
+
+- the function is spared from the function rule
+- the file still fails the file size rule
+
+---
+
+## 8. Recommendations
+
+- split large files instead of setting exceptions
+- break up large functions instead of routinely using `static_off`
+- use `static_off: ["lines"]` only for deliberately accepted legacy or
+  migration cases
+- new functions should generally respect the 300-line limit
+
+---
+
+## 9. Non-Goals
+
+This chapter does not describe general type, parser, or
+semantic errors such as:
+
+- unknown types
+- wrong operator arity
+- undefined variables
+- invalid member accesses
+
+Such compiler errors also exist, but do not belong to the structural
+and static analysis rules described here.
+
+---
+
+## 10. Implementation Status
+
+The current compiler state implements:
+
+- file warning at `1000` lines
+- file hard error at `1500` lines
+- function hard error at `301` lines
+- function hard error at `6` arguments
+- `static_off` as `list<string>` on `FunctionDecl`
+- the concrete `static_off` option `"lines"`
+- the concrete `static_off` option `"args"`
+
+Additional static rules can later be added via further
+`static_off` keys or additional fixed compiler checks.

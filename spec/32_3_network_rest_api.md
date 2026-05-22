@@ -1,19 +1,19 @@
-# Kapitel 32.3 — REST API: Client und Server
+# Chapter 32.3 — REST API: Client and Server
 
-> **Leitgedanke:** `rest.*` ist eine dünne Komfort-Schicht über `http.*`.
-> Ein `rest_client_handle` kapselt Base-URL, gemeinsame Header (Auth-Token, Accept, etc.)
-> und Connection-Pooling — so dass API-Clients ohne Boilerplate geschrieben werden können.
-> Der REST-Server ist vollständig identisch mit dem HTTP-Server aus Kapitel 32.2 —
-> `rest.*` fügt lediglich Convenience-Funktionen für häufige REST-Muster hinzu.
+> **Design principle:** `rest.*` is a thin convenience layer over `http.*`.
+> A `rest_client_handle` encapsulates base URL, shared headers (auth token, Accept, etc.)
+> and connection pooling — so API clients can be written without boilerplate.
+> The REST server is fully identical to the HTTP server from Chapter 32.2 —
+> `rest.*` merely adds convenience functions for common REST patterns.
 
 ---
 
-## 1. REST-Client
+## 1. REST Client
 
-### 1.1 Schnellstart — direkte Requests
+### 1.1 Quick Start — Direct Requests
 
 ```aiml
-# Ohne Client-Handle: direkte Convenience-Funktionen (url-Typ erforderlich)
+# Without client handle: direct convenience functions (url type required)
 - decl: [users_url, url]
 - set: [users_url, "https://api.example.com/users/42"]
 
@@ -31,13 +31,13 @@
 - set: [resp, { call: [rest.patch,  u42, "{\"active\":false}"] }]
 ```
 
-`rest.get/post/...` setzt automatisch `Content-Type: application/json` und
-`Accept: application/json` sofern ein Body vorhanden.
+`rest.get/post/...` automatically sets `Content-Type: application/json` and
+`Accept: application/json` when a body is present.
 
-### 1.2 `rest_client_handle` — wiederverwendbarer Client
+### 1.2 `rest_client_handle` — Reusable Client
 
 ```aiml
-# Client einmalig konfigurieren
+# Configure client once
 - decl: [base, url]
 - set: [base, "https://api.example.com/v1"]
 - decl: [api, rest_client_handle]
@@ -47,7 +47,7 @@
 - call: [api.set_auth_bearer, "sk-abc123"]
 - call: [api.set_timeout, 15000]
 
-# Requests: Pfad relativ zur Base-URL (string)
+# Requests: path relative to base URL (string)
 - decl: [resp, http_response_handle]
 - set: [resp, { call: [api.get, "/users"] }]
 
@@ -65,41 +65,41 @@
 - set: [resp, { call: [api.patch,  "/users/42", "{\"active\":false}"] }]
 ```
 
-### 1.3 `rest_client_handle`-Methoden
+### 1.3 `rest_client_handle` Methods
 
-| Methode           | Argumente                          | Rückgabe               | Beschreibung |
-|-------------------|------------------------------------|------------------------|--------------|
-| `set_header`      | `name: string, val: string`        | —                      | Persistenter Header für alle Requests |
-| `set_auth_bearer` | `token: string`                    | —                      | Setzt `Authorization: Bearer <token>` |
-| `set_auth_basic`  | `user: string, pass: string`       | —                      | Setzt `Authorization: Basic <b64>` |
-| `set_auth_apikey` | `header: string, key: string`      | —                      | Beliebiger API-Key-Header |
-| `set_timeout`     | `ms: i32`                          | —                      | Timeout für alle Requests |
-| `set_base_url`    | `u: url`                           | —                      | Base-URL nachträglich ändern |
+| Method            | Arguments                          | Return                 | Description |
+|-------------------|------------------------------------|------------------------|-------------|
+| `set_header`      | `name: string, val: string`        | —                      | Persistent header for all requests |
+| `set_auth_bearer` | `token: string`                    | —                      | Sets `Authorization: Bearer <token>` |
+| `set_auth_basic`  | `user: string, pass: string`       | —                      | Sets `Authorization: Basic <b64>` |
+| `set_auth_apikey` | `header: string, key: string`      | —                      | Arbitrary API key header |
+| `set_timeout`     | `ms: i32`                          | —                      | Timeout for all requests |
+| `set_base_url`    | `u: url`                           | —                      | Change base URL after creation |
 | `get`             | `path: string`                     | `http_response_handle` | GET |
 | `post`            | `path: string, body: string`       | `http_response_handle` | POST |
 | `put`             | `path: string, body: string`       | `http_response_handle` | PUT |
 | `delete`          | `path: string`                     | `http_response_handle` | DELETE |
 | `patch`           | `path: string, body: string`       | `http_response_handle` | PATCH |
 | `head`            | `path: string`                     | `http_response_handle` | HEAD |
-| `request`         | `method: string, path: string`     | `http_client_handle`   | Builder für komplexe Requests |
+| `request`         | `method: string, path: string`     | `http_client_handle`   | Builder for complex requests |
 
-### 1.4 Authentifizierungs-Modi
+### 1.4 Authentication Modes
 
 ```aiml
-# Bearer Token (OAuth 2.0, JWT)
+# Bearer token (OAuth 2.0, JWT)
 - call: [api.set_auth_bearer, "eyJhbGci..."]
 
 # HTTP Basic Auth
 - call: [api.set_auth_basic, "admin", "s3cr3t"]
 
-# Beliebiger API-Key-Header (z.B. GitHub, Stripe)
+# Arbitrary API key header (e.g. GitHub, Stripe)
 - call: [api.set_auth_apikey, "X-API-Key", "my-secret-key"]
 
-# Kein Auth (Default)
-# (keine zusätzliche Konfiguration nötig)
+# No auth (default)
+# (no additional configuration needed)
 ```
 
-### 1.5 Vollständiges Beispiel: GitHub API
+### 1.5 Complete Example: GitHub API
 
 ```aiml
 - decl: [gh_base, url]
@@ -110,7 +110,7 @@
 - call: [gh.set_header, "User-Agent", "aiml-client/1.0"]
 - call: [gh.set_auth_bearer, "ghp_yourtoken"]
 
-# Repos eines Users abrufen
+# Fetch repos of a user
 - decl: [resp, http_response_handle]
 - set: [resp, { call: [gh.get, "/users/octocat/repos"] }]
 
@@ -122,7 +122,7 @@
 - set: [body, { call: [resp.body] }]
 - print: ["${body}"]
 
-# Neues Issue erstellen
+# Create new issue
 - set: [resp, { call: [gh.post, "/repos/octocat/hello-world/issues",
     "{\"title\":\"Found a bug\",\"body\":\"Reproducible in AIML!\"}"] }]
 
@@ -133,12 +133,12 @@
 
 ---
 
-## 2. REST-Server
+## 2. REST Server
 
-Handler-Signatur: immer `req: http_request_handle` und `resp: http_response_handle`
-(identisch mit Kapitel 32.2).
+Handler signature: always `req: http_request_handle` and `resp: http_response_handle`
+(identical to Chapter 32.2).
 
-### 2.1 Pfad-Parameter mit `:name`-Syntax
+### 2.1 Path Parameters with `:name` Syntax
 
 ```aiml
 - def:
@@ -177,7 +177,7 @@ Handler-Signatur: immer `req: http_request_handle` und `resp: http_response_hand
 - call: [api.start]
 ```
 
-### 2.2 Query-Parameter und Headers
+### 2.2 Query Parameters and Headers
 
 ```aiml
 - def:
@@ -204,10 +204,10 @@ Handler-Signatur: immer `req: http_request_handle` und `resp: http_response_hand
       - call: [resp.send]
 ```
 
-### 2.3 Middleware (Absicherung)
+### 2.3 Middleware (Security)
 
-Middleware hat dieselbe Signatur wie Handler. Ruft die Middleware `resp.send()` auf,
-wird der eigentliche Handler übersprungen.
+Middleware has the same signature as handlers. If middleware calls `resp.send()`,
+the actual handler is skipped.
 
 ```aiml
 - def:
@@ -230,27 +230,27 @@ wird der eigentliche Handler übersprungen.
 - call: [api.start]
 ```
 
-Für Middleware, die nur auf bestimmte Pfade zutrifft, `srv.group` verwenden
-(siehe Kapitel 32.2 §3.8).
+For middleware that applies only to specific paths, use `srv.group`
+(see Chapter 32.2 §3.8).
 
 ---
 
-## 3. Namespace-Referenz
+## 3. Namespace Reference
 
-### `rest`-Namespace
+### `rest` Namespace
 
-| Aufruf | Rückgabe | Beschreibung |
-|--------|----------|--------------|
-| `{ call: [rest.new, base_url] }` | `rest_client_handle` | Client mit Base-URL (`base_url: url`) |
-| `{ call: [rest.get, u] }` | `http_response_handle` | Direkt-GET (`u: url`) |
-| `{ call: [rest.post, u, body] }` | `http_response_handle` | Direkt-POST (`u: url`) |
-| `{ call: [rest.put, u, body] }` | `http_response_handle` | Direkt-PUT (`u: url`) |
-| `{ call: [rest.delete, u] }` | `http_response_handle` | Direkt-DELETE (`u: url`) |
-| `{ call: [rest.patch, u, body] }` | `http_response_handle` | Direkt-PATCH (`u: url`) |
+| Call | Return | Description |
+|------|--------|-------------|
+| `{ call: [rest.new, base_url] }` | `rest_client_handle` | Client with base URL (`base_url: url`) |
+| `{ call: [rest.get, u] }` | `http_response_handle` | Direct GET (`u: url`) |
+| `{ call: [rest.post, u, body] }` | `http_response_handle` | Direct POST (`u: url`) |
+| `{ call: [rest.put, u, body] }` | `http_response_handle` | Direct PUT (`u: url`) |
+| `{ call: [rest.delete, u] }` | `http_response_handle` | Direct DELETE (`u: url`) |
+| `{ call: [rest.patch, u, body] }` | `http_response_handle` | Direct PATCH (`u: url`) |
 
 ---
 
-## 4. Fehlerbehandlung
+## 4. Error Handling
 
 ```aiml
 - decl: [resp, http_response_handle]
@@ -276,48 +276,48 @@ Für Middleware, die nur auf bestimmte Pfade zutrifft, `srv.group` verwenden
     - print: ["${body}"]
 ```
 
-Netzwerkfehler (Timeout, Connection refused) geben einen `http_response_handle`
-mit `status() == 0` zurück — kein Panic.
+Network errors (timeout, connection refused) return an `http_response_handle`
+with `status() == 0` — no panic.
 
 ---
 
-## 5. Implementierungshinweise
+## 5. Implementation Notes
 
-### 5.1 Beziehung zu `http.*` und `http_session_handle`
+### 5.1 Relationship to `http.*` and `http_session_handle`
 
-`rest_client_handle` baut intern auf `http_session_handle` auf:
+`rest_client_handle` is built internally on top of `http_session_handle`:
 
 ```
-http_session_handle        ← Cookie-Jar, Keep-Alive, persistente Headers/Auth
+http_session_handle        ← cookie jar, keep-alive, persistent headers/auth
         ↑
-rest_client_handle         ← + Base-URL + auto JSON-Headers + relative Pfade
+rest_client_handle         ← + base URL + auto JSON headers + relative paths
 ```
 
-Pro Aufruf von `api.get(path)`:
-1. Konkateniert Base-URL + path → neues `url`-Objekt.
-2. Delegiert an die interne `http_session_handle` mit Session-Kontext.
-3. Cookie-Jar und Keep-Alive werden transparent von der Session verwaltet.
+Per call to `api.get(path)`:
+1. Concatenates base URL + path → new `url` object.
+2. Delegates to the internal `http_session_handle` with session context.
+3. Cookie jar and keep-alive are transparently managed by the session.
 
-Wer kein REST-Interface braucht (z.B. Web-Scraping, OAuth-Flows), nutzt
-`http_session_handle` direkt (Kapitel 32.2 §2.5).
+Those who don't need a REST interface (e.g. web scraping, OAuth flows) use
+`http_session_handle` directly (Chapter 32.2 §2.5).
 
-### 5.2 Pfad-Parameter-Matching
+### 5.2 Path Parameter Matching
 
-Route `"/users/:id/posts/:post_id"` matcht Segmente zwischen `/`. Parameternamen werden
-in `req.params` (`map<string:string>`) eingetragen — identisch mit Kapitel 32.2 §3.7.
+Route `"/users/:id/posts/:post_id"` matches segments between `/`. Parameter names are
+stored in `req.params` (`map<string:string>`) — identical to Chapter 32.2 §3.7.
 
-### 5.3 Connection-Pooling
+### 5.3 Connection Pooling
 
-`rest_client_handle` nutzt über `http_session_handle` automatisch Keep-Alive:
-`Connection: keep-alive` wird gesetzt, TCP-Verbindungen werden pro Domain wiederverwendet.
-In v1 ist der Pool auf eine Verbindung pro Domain begrenzt.
+`rest_client_handle` automatically uses keep-alive via `http_session_handle`:
+`Connection: keep-alive` is set, TCP connections are reused per domain.
+In v1 the pool is limited to one connection per domain.
 
 ---
 
-## 6. Offene Designfragen
+## 6. Open Design Questions
 
-- **JSON-Parsing**: `resp.body` gibt einen String zurück — AIML hat noch keinen
-  eingebauten JSON-Parser. Kurzfristig: manuelles String-Parsen oder FFI zu `cjson`.
-  Langfristig: `json.*`-Namespace mit `json.parse(str) → map<string:any>`.
-- **Pagination**: `rest_client_handle` hat keine eingebaute Cursor/Pagination-Logik.
-  Muss manuell mit `api.get("/users?page=2")` implementiert werden.
+- **JSON parsing**: `resp.body` returns a string — AIML does not yet have a built-in
+  JSON parser. Short term: manual string parsing or FFI to `cjson`.
+  Long term: `json.*` namespace with `json.parse(str) → map<string:any>`.
+- **Pagination**: `rest_client_handle` has no built-in cursor/pagination logic.
+  Must be implemented manually with `api.get("/users?page=2")`.

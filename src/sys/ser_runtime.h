@@ -91,6 +91,28 @@ void    aiml_ser_free_decoded(void*                obj,
                               const AimlTypeNode*  nodes,
                               int32_t              n_nodes);
 
+// ── Deep copy ────────────────────────────────────────────────────────────────
+//
+// Produces a deep copy of *src* into *dst*.  After this call, *dst* owns its
+// own heap allocations (strings/lists/maps/buffers) — independent of *src*.
+//
+// **Precondition:** *dst* must be zero-initialised (all heap pointer fields
+// NULL).  *dst* must be at least the same byte-size as the struct described
+// by *nodes*.
+//
+// Used by the AIML compiler at `decl: [p, T, kv.get(...)]` sites to avoid
+// shared heap ownership between the user's struct and the kv decoded cache —
+// see doc/issue/kv_get_mutate_set_same_key_crash.md.
+//
+// Implemented as encode-then-decode roundtrip; cost is one extra
+// serialise+deserialise pass.  Strings/list-buffers/etc. become fresh malloc'd
+// allocations owned by *dst*.
+
+void    aiml_ser_deep_copy(void*                dst,
+                           const void*          src,
+                           const AimlTypeNode*  nodes,
+                           int32_t              n_nodes);
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // Returns the byte length of the payload (the value stored in the 4-byte prefix),

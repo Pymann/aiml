@@ -1,0 +1,76 @@
+# test_ptr_field_split.aiml — Repro: string.split on ptr<Model> field
+# Bug: ev.answer.split(" ") may return empty list when called on ptr field
+
+- model:
+    name: TextHolder
+    fields:
+      - [text, string, "alpha beta gamma delta"]
+
+- def:
+    name: main
+    args: []
+    return: i32
+    body:
+      - decl: [pass_count, i32, 0]
+      - decl: [fail_count, i32, 0]
+
+      - decl: [holder, "ptr<TextHolder>", { new: TextHolder }]
+      - set: [holder.text, "alpha beta gamma delta"]
+
+      # Test 1: split via local copy (known workaround)
+      - decl: [local_text, string, holder.text]
+      - decl: [words_local, list<string>]
+      - set: [words_local, { call: [local_text.split, " "] }]
+      - if:
+          condition: { eq: [words_local.len, 4] }
+          then:
+            - print: ["PASS split-via-local len=4"]
+            - set: [pass_count, { +: [pass_count, 1] }]
+          else:
+            - print: ["FAIL split-via-local len=${words_local.len} expected 4"]
+            - set: [fail_count, { +: [fail_count, 1] }]
+
+      # Test 2: split directly on ptr field
+      - decl: [words_direct, list<string>]
+      - set: [words_direct, { call: [holder.text.split, " "] }]
+      - if:
+          condition: { eq: [words_direct.len, 4] }
+          then:
+            - print: ["PASS split-on-ptr-field len=4"]
+            - set: [pass_count, { +: [pass_count, 1] }]
+          else:
+            - print: ["FAIL split-on-ptr-field len=${words_direct.len} expected 4"]
+            - set: [fail_count, { +: [fail_count, 1] }]
+
+      # Test 3: verify content from direct split
+      - if:
+          condition: { ">": [words_direct.len, 0] }
+          then:
+            - decl: [w0, string, { call: [words_direct.get, 0] }]
+            - if:
+                condition: { eq: [w0, "alpha"] }
+                then:
+                  - print: ["PASS split-on-ptr-field[0]=alpha"]
+                  - set: [pass_count, { +: [pass_count, 1] }]
+                else:
+                  - print: ["FAIL split-on-ptr-field[0]=${w0} expected alpha"]
+                  - set: [fail_count, { +: [fail_count, 1] }]
+          else:
+            - print: ["SKIP split-on-ptr-field[0] (list empty)"]
+
+      # Test 4: split on ptr field with CSV
+      - set: [holder.text, "one,two,three"]
+      - decl: [csv_direct, list<string>]
+      - set: [csv_direct, { call: [holder.text.split, ","] }]
+      - if:
+          condition: { eq: [csv_direct.len, 3] }
+          then:
+            - print: ["PASS csv-split-on-ptr-field len=3"]
+            - set: [pass_count, { +: [pass_count, 1] }]
+          else:
+            - print: ["FAIL csv-split-on-ptr-field len=${csv_direct.len} expected 3"]
+            - set: [fail_count, { +: [fail_count, 1] }]
+
+      - print: [""]
+      - print: ["${pass_count} passed, ${fail_count} failed"]
+      - return: [fail_count]

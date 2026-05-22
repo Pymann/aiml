@@ -9,8 +9,8 @@
 - class:
     name: PacketHeader
     members:
-      - [id, i32, { access: public }]
-      - [type, TypeId, { access: public }]
+      - [id, i32, 0, { access: public }]
+      - [type, TypeId, 0, { access: public }]
 
 - decl: [buf, buffer]
 - call: [buf.alloc, 1024]

@@ -1,0 +1,46 @@
+# Probe: model + class via `models:` + `implements:` für Interface-Polymorphismus.
+# Saubere Architektur: Modell hält Daten, Klasse referenziert via `models:` das
+# Modell und implementiert das Interface.
+
+- interface:
+    name: Sayable
+    methods:
+      - [say, string, []]
+
+- model:
+    name: Cat
+    fields:
+      - [name, string]
+
+- class:
+    name: CatBehavior
+    models: [Cat]
+    implements: [Sayable]
+    methods:
+      - def: { name: say, return: string, args: [], body: [{ return: "Meow! I am ${<.name}" }] }
+
+- model:
+    name: Dog
+    fields:
+      - [name, string]
+
+- class:
+    name: DogBehavior
+    models: [Dog]
+    implements: [Sayable]
+    methods:
+      - def: { name: say, return: string, args: [], body: [{ return: "Woof! I am ${<.name}" }] }
+
+- decl: [c, ptr<CatBehavior>, { new: CatBehavior }]
+- set: [c.name, "Whiskers"]
+- decl: [d, ptr<DogBehavior>, { new: DogBehavior }]
+- set: [d.name, "Rex"]
+
+- print: ["cat direct: ${call: [c.say]}"]
+- print: ["dog direct: ${call: [d.say]}"]
+
+# Polymorphismus über ptr<Sayable>
+- decl: [s1, ptr<Sayable>, c]
+- decl: [s2, ptr<Sayable>, d]
+- print: ["cat poly:   ${call: [s1.say]}"]
+- print: ["dog poly:   ${call: [s2.say]}"]

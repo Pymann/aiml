@@ -20,6 +20,7 @@
 #include "src/sys/http_runtime.h"
 #include "src/sys/math_runtime.h"
 #include "src/sys/hash_runtime.h"
+#include "src/sys/storage_runtime.h"
 #include "src/sys/compress_runtime.h"
 #include "src/sys/gltf_runtime.h"
 #include "src/sys/gl_runtime.h"
@@ -32,6 +33,8 @@
 #include "src/sys/ui_runtime.h"
 #include "src/sys/trace_runtime.h"
 #include "src/sys/tensor_runtime.h"
+#include "src/sys/arg_dump_runtime.h"
+#include "src/sys/binary_io_runtime.h"
 
 // LLVM includes
 #include <llvm/IR/LLVMContext.h>
@@ -67,6 +70,7 @@ namespace {
 constexpr int kAimlFileWarningLines = 1000;
 constexpr int kAimlFileErrorLines = 1500;
 constexpr int kAimlFunctionErrorLines = 301;
+constexpr int kAimlFunctionMaxArgs = 5;
 
 int countFileLines(const std::string& path) {
     std::ifstream in(path);
@@ -83,6 +87,13 @@ std::string canonicalizeDiagPath(const std::string& path) {
     } catch (...) {
         return path;
     }
+}
+
+bool emitAimlDiagOnce(const std::string& key) {
+    static std::mutex s_mu;
+    static std::unordered_set<std::string> s_seen;
+    std::lock_guard<std::mutex> lk(s_mu);
+    return s_seen.insert(key).second;
 }
 
 void logAimlFileSizeDiagnostic(const std::string& path,
@@ -140,10 +151,31 @@ void logAimlFunctionSizeDiagnostic(const std::string& path, const AIML::AST::Fun
     if (endLine < func->sourceLine) endLine = func->sourceLine;
     int lines = endLine - func->sourceLine + 1;
     if (lines >= kAimlFunctionErrorLines) {
+        std::string key = "fn_lines|" + canonicalizeDiagPath(path) + "|" +
+                          std::to_string(func->sourceLine) + "|" + func->name;
+        if (!emitAimlDiagOnce(key)) return;
         LOG_ERROR(path + ":" + std::to_string(func->sourceLine) +
                   ": AIML function '" + func->name + "' too large (" +
                   std::to_string(lines) +
                   " lines). Maximum is 300 lines; 301+ is a hard error.");
+    }
+}
+
+void logAimlFunctionArgCountDiagnostic(const std::string& path, const AIML::AST::FunctionDecl* func) {
+    if (!func || func->sourceLine <= 0) return;
+    for (const auto& opt : func->staticOff) {
+        if (opt == "args") return;
+    }
+    int argc = static_cast<int>(func->args.size());
+    if (argc > kAimlFunctionMaxArgs) {
+        std::string key = "fn_args|" + canonicalizeDiagPath(path) + "|" +
+                          std::to_string(func->sourceLine) + "|" + func->name;
+        if (!emitAimlDiagOnce(key)) return;
+        LOG_ERROR(path + ":" + std::to_string(func->sourceLine) +
+                  ": AIML function '" + func->name + "' has too many arguments (" +
+                  std::to_string(argc) + "). Maximum is " +
+                  std::to_string(kAimlFunctionMaxArgs) +
+                  ". Use class/model-based programming to group related state and behavior.");
     }
 }
 
@@ -314,6 +346,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                     for (const auto& decl : subProg->declarations) {
                         if (auto func = dynamic_cast<AIML::AST::FunctionDecl*>(decl.get())) {
                             logAimlFunctionSizeDiagnostic(path, func);
+                            logAimlFunctionArgCountDiagnostic(path, func);
                             subCompiler.visitFunction(func);
                         } else if (auto cls = dynamic_cast<AIML::AST::ClassDecl*>(decl.get())) {
                             // Register class method signatures (header-only
@@ -473,6 +506,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                     for (const auto& decl_node : sp.prog->declarations) {
                         if (auto func = dynamic_cast<AIML::AST::FunctionDecl*>(decl_node.get())) {
                             logAimlFunctionSizeDiagnostic(sp.path, func);
+                            logAimlFunctionArgCountDiagnostic(sp.path, func);
                             sc.visitFunction(func);
                         } else if (auto cls = dynamic_cast<AIML::AST::ClassDecl*>(decl_node.get()))
                             sc.visitTopLevel(cls);
@@ -524,9 +558,11 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
             for (const auto& decl : programAST->declarations) {
                 if (auto func = dynamic_cast<AIML::AST::FunctionDecl*>(decl.get())) {
                     logAimlFunctionSizeDiagnostic(filename, func);
+                    logAimlFunctionArgCountDiagnostic(filename, func);
                 } else if (auto cls = dynamic_cast<AIML::AST::ClassDecl*>(decl.get())) {
                     for (const auto& method : cls->methods) {
                         logAimlFunctionSizeDiagnostic(filename, method.get());
+                        logAimlFunctionArgCountDiagnostic(filename, method.get());
                     }
                 }
             }
@@ -702,14 +738,16 @@ void AIMLCompiler::generateEntryPoint() {
     builder.SetInsertPoint(entry);
     
     // 3. Setup Globals: __argc, __argv
+    // ExternalLinkage damit andere Compilation-Units (z.B. core/cfg_loader.aiml,
+    // die sys.get_arg aufrufen) auf dasselbe Symbol referenzieren koennen.
     module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
     llvm::GlobalVariable* argcGlobal = module_->getNamedGlobal("__argc");
-    argcGlobal->setLinkage(llvm::GlobalValue::InternalLinkage);
+    argcGlobal->setLinkage(llvm::GlobalValue::ExternalLinkage);
     argcGlobal->setInitializer(builder.getInt32(0));
-    
+
     module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
     llvm::GlobalVariable* argvGlobal = module_->getNamedGlobal("__argv");
-    argvGlobal->setLinkage(llvm::GlobalValue::InternalLinkage);
+    argvGlobal->setLinkage(llvm::GlobalValue::ExternalLinkage);
     argvGlobal->setInitializer(llvm::ConstantPointerNull::get(builder.getInt8Ty()->getPointerTo()->getPointerTo()));
 
     // Store Arguments
@@ -733,16 +771,19 @@ void AIMLCompiler::generateEntryPoint() {
                 nullptr, "stdout");
         }
         llvm::Value* stdoutVal = builder.CreateLoad(i8p, stdoutGV, "stdout_ptr");
+        // size_t width follows the target's pointer width (i64 on x86_64, i32 on wasm32).
+        llvm::Type* sizeTy = builder.getIntNTy(
+            module_->getDataLayout().getPointerSizeInBits());
         llvm::FunctionType* setvbufTy = llvm::FunctionType::get(
             builder.getInt32Ty(),
-            {i8p, i8p, builder.getInt32Ty(), builder.getInt64Ty()},
+            {i8p, i8p, builder.getInt32Ty(), sizeTy},
             false);
         llvm::FunctionCallee setvbufFn = module_->getOrInsertFunction("setvbuf", setvbufTy);
         builder.CreateCall(setvbufFn, {
             stdoutVal,
             llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)),
-            builder.getInt32(2),   // _IONBF
-            builder.getInt64(0)    // size (ignored for _IONBF)
+            builder.getInt32(2),               // _IONBF
+            llvm::ConstantInt::get(sizeTy, 0)  // size (ignored for _IONBF)
         });
     }
 
@@ -809,6 +850,40 @@ void AIMLCompiler::generateEntryPoint() {
     }
     
     LOG_DEBUG("Entry Point generated.");
+}
+
+void AIMLCompiler::setTargetTriple(const std::string& triple) {
+    // Re-register all targets so non-native triples (e.g. wasm32) are available.
+    llvm::InitializeAllTargetInfos();
+    llvm::InitializeAllTargets();
+    llvm::InitializeAllTargetMCs();
+    llvm::InitializeAllAsmParsers();
+    llvm::InitializeAllAsmPrinters();
+
+    std::string err;
+    auto* target = llvm::TargetRegistry::lookupTarget(triple, err);
+    if (!target) {
+        LOG_ERROR("setTargetTriple: " + err);
+        return;
+    }
+    llvm::TargetOptions opt;
+    auto rm = std::optional<llvm::Reloc::Model>(llvm::Reloc::PIC_);
+    auto* tm = target->createTargetMachine(triple, "generic", "", opt, rm);
+    module_->setDataLayout(tm->createDataLayout());
+    module_->setTargetTriple(triple);
+    targetTripleStr = triple;
+    LOG_DEBUG("compiler target set to " + triple);
+}
+
+void AIMLCompiler::saveModule(const std::string& outputFilename) {
+    std::error_code EC;
+    llvm::raw_fd_ostream dest(outputFilename, EC, llvm::sys::fs::OF_None);
+    if (EC) {
+        LOG_ERROR("saveModule: could not open " + outputFilename + ": " + EC.message());
+        return;
+    }
+    module_->print(dest, nullptr);
+    LOG_DEBUG("Saved module IR to " + outputFilename);
 }
 
 void AIMLCompiler::compileToObject(const std::string& /*filename*/, const std::string& outputFilename) {
@@ -978,6 +1053,29 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_trace_active",     (void*)(intptr_t)aiml_trace_active);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_trace",            (void*)(intptr_t)aiml_trace);
 
+    // sys.arg_dump runtime
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_arg_dump_impl", (void*)(intptr_t)aiml_arg_dump_impl);
+
+    // binary io runtime
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_open_binary", (void*)(intptr_t)aiml_io_open_binary);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_close",       (void*)(intptr_t)aiml_io_close);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_tell",        (void*)(intptr_t)aiml_io_tell);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_seek",        (void*)(intptr_t)aiml_io_seek);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_skip",        (void*)(intptr_t)aiml_io_skip);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_eof",         (void*)(intptr_t)aiml_io_eof);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_read_u8",     (void*)(intptr_t)aiml_io_read_u8);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_read_bool",   (void*)(intptr_t)aiml_io_read_bool);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_read_i32_le", (void*)(intptr_t)aiml_io_read_i32_le);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_read_u32_le", (void*)(intptr_t)aiml_io_read_u32_le);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_read_i64_le", (void*)(intptr_t)aiml_io_read_i64_le);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_read_f32_le", (void*)(intptr_t)aiml_io_read_f32_le);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_read_f64_le", (void*)(intptr_t)aiml_io_read_f64_le);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_read_cstring",(void*)(intptr_t)aiml_io_read_cstring);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_read_bytes",          (void*)(intptr_t)aiml_io_read_bytes);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_read_at",             (void*)(intptr_t)aiml_io_read_at);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_buf_free",            (void*)(intptr_t)aiml_io_buf_free);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_io_read_f32_array_fill", (void*)(intptr_t)aiml_io_read_f32_array_fill);
+
     // Runtime Library Symbols
     llvm::sys::DynamicLibrary::AddSymbol("time_now_ms", (void*)(intptr_t)time_now_ms);
     llvm::sys::DynamicLibrary::AddSymbol("time_sleep_ms", (void*)(intptr_t)time_sleep_ms);
@@ -1102,12 +1200,23 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_reload",           (void*)(intptr_t)aiml_db_kv_reload);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_set",              (void*)(intptr_t)aiml_db_kv_set);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_get",              (void*)(intptr_t)aiml_db_kv_get);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_get_copy",         (void*)(intptr_t)aiml_db_kv_get_copy);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ser_deep_copy",          (void*)(intptr_t)aiml_ser_deep_copy);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_has",              (void*)(intptr_t)aiml_db_kv_has);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_len",              (void*)(intptr_t)aiml_db_kv_len);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_delete",           (void*)(intptr_t)aiml_db_kv_delete);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_clear",            (void*)(intptr_t)aiml_db_kv_clear);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_evict",           (void*)(intptr_t)aiml_db_kv_evict);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_set_path",           (void*)(intptr_t)aiml_db_set_path);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_get_path",           (void*)(intptr_t)aiml_db_get_path);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_set_blob",        (void*)(intptr_t)aiml_db_kv_set_blob);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_get_blob",        (void*)(intptr_t)aiml_db_kv_get_blob);
+    // Iterator
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_iter_create_kv",        (void*)(intptr_t)aiml_iter_create_kv);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_iter_next",             (void*)(intptr_t)aiml_iter_next);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_iter_has_next",         (void*)(intptr_t)aiml_iter_has_next);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_iter_reset",            (void*)(intptr_t)aiml_iter_reset);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_iter_free",             (void*)(intptr_t)aiml_iter_free);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_open",            (void*)(intptr_t)aiml_db_vec_open);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_open_persist",   (void*)(intptr_t)aiml_db_vec_open_persist);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_vec_insert",          (void*)(intptr_t)aiml_db_vec_insert);
@@ -1200,6 +1309,9 @@ int AIMLCompiler::jitRun() {
     // llvm::sys::DynamicLibrary::AddSymbol("stderr", (void*)(intptr_t)stderr); // Removed to avoid macro issues for now
 
     // ── tensor namespace (tensor_runtime.h) ─────────────────────────────
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_arena_init",       (void*)(intptr_t)aiml_tensor_arena_init);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_arena_free",       (void*)(intptr_t)aiml_tensor_arena_free);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_kv_evict",        (void*)(intptr_t)aiml_tensor_kv_evict);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_zeros",            (void*)(intptr_t)aiml_tensor_zeros);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_ones",             (void*)(intptr_t)aiml_tensor_ones);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_randn",            (void*)(intptr_t)aiml_tensor_randn);
@@ -1233,6 +1345,13 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_layer_norm",       (void*)(intptr_t)aiml_tensor_layer_norm);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_embedding_lookup", (void*)(intptr_t)aiml_tensor_embedding_lookup);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_cross_entropy",    (void*)(intptr_t)aiml_tensor_cross_entropy);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_weighted_cross_entropy", (void*)(intptr_t)aiml_tensor_weighted_cross_entropy);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_fma_inplace",      (void*)(intptr_t)aiml_tensor_fma_inplace);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_fma_sq_inplace",  (void*)(intptr_t)aiml_tensor_fma_sq_inplace);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_fma_abs_inplace", (void*)(intptr_t)aiml_tensor_fma_abs_inplace);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_abs",             (void*)(intptr_t)aiml_tensor_abs);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_sign",            (void*)(intptr_t)aiml_tensor_sign);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_step",            (void*)(intptr_t)aiml_tensor_step);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_argmax_scalar",    (void*)(intptr_t)aiml_tensor_argmax_scalar);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_argmax",           (void*)(intptr_t)aiml_tensor_argmax);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_set_requires_grad",(void*)(intptr_t)aiml_tensor_set_requires_grad);
@@ -1241,11 +1360,13 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_zero_grad",        (void*)(intptr_t)aiml_tensor_zero_grad);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_begin_graph",      (void*)(intptr_t)aiml_tensor_begin_graph);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_backward",         (void*)(intptr_t)aiml_tensor_backward);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_thread_cleanup",   (void*)(intptr_t)aiml_tensor_thread_cleanup);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_no_grad_begin",    (void*)(intptr_t)aiml_tensor_no_grad_begin);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_no_grad_end",      (void*)(intptr_t)aiml_tensor_no_grad_end);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_adam_step",        (void*)(intptr_t)aiml_tensor_adam_step);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_print",            (void*)(intptr_t)aiml_tensor_print);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_fill",             (void*)(intptr_t)aiml_tensor_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_sha256",           (void*)(intptr_t)aiml_tensor_sha256);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_concat",           (void*)(intptr_t)aiml_tensor_concat);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_causal_mask",      (void*)(intptr_t)aiml_tensor_causal_mask);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_tensor_save",              (void*)(intptr_t)aiml_tensor_save);
@@ -1326,6 +1447,8 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_math_ivec3_add",         (void*)(intptr_t)aiml_math_ivec3_add);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_math_fmin_list",         (void*)(intptr_t)aiml_math_fmin_list);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_math_fmax_list",         (void*)(intptr_t)aiml_math_fmax_list);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_random_f32",        (void*)(intptr_t)aiml_math_random_f32);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_math_random_int",        (void*)(intptr_t)aiml_math_random_int);
     // hash namespace
     llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_sha256",         (void*)(intptr_t)aiml_hash_sha256);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_hash_sha512",         (void*)(intptr_t)aiml_hash_sha512);
@@ -1592,6 +1715,21 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_dragged",                (void*)(intptr_t)aiml_prefab_get_dragged);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_cancel_drag",                (void*)(intptr_t)aiml_prefab_cancel_drag);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_font",                   (void*)(intptr_t)aiml_prefab_set_font);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_register_callback",          (void*)(intptr_t)aiml_prefab_register_callback);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_material_register",                 (void*)(intptr_t)aiml_material_register);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_material_register",                 (void*)(intptr_t)aiml_material_register);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_text_value",                 (void*)(intptr_t)aiml_prefab_text_value);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_child_clicked",              (void*)(intptr_t)aiml_prefab_child_clicked);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_child_focused",              (void*)(intptr_t)aiml_prefab_child_focused);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_child_checked",              (void*)(intptr_t)aiml_prefab_child_checked);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_checked",                (void*)(intptr_t)aiml_prefab_set_checked);
+    // storage namespace
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_storage_get",                       (void*)(intptr_t)aiml_storage_get);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_storage_set",                       (void*)(intptr_t)aiml_storage_set);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_storage_remove",                    (void*)(intptr_t)aiml_storage_remove);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_storage_has",                       (void*)(intptr_t)aiml_storage_has);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_storage_clear",                     (void*)(intptr_t)aiml_storage_clear);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_storage_host",                      (void*)(intptr_t)aiml_storage_host);
     // input namespace
     llvm::sys::DynamicLibrary::AddSymbol("aiml_input_event_type",                  (void*)(intptr_t)aiml_input_event_type);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_input_event_key",                   (void*)(intptr_t)aiml_input_event_key);
@@ -1931,14 +2069,14 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("printf", (void*)(intptr_t)printf);
 
     LOG_DEBUG("Running main with fixed argv...");
-    
+
     // Create dummy argv for JIT safety
     // We need to keep the memory alive during execution
     static char* dummyArgv[] = { (char*)"aiml_jit", nullptr };
-    
+
     std::vector<llvm::GenericValue> args;
     args.push_back(llvm::GenericValue()); // argc
-    args[0].IntVal = llvm::APInt(32, 1); 
+    args[0].IntVal = llvm::APInt(32, 1);
     args.push_back(llvm::GenericValue()); // argv
     args[1].PointerVal = dummyArgv;
 
@@ -1948,6 +2086,39 @@ int AIMLCompiler::jitRun() {
     aiml_set_active_context(nullptr, nullptr);
 
     LOG_DEBUG("Main finished. Result: " + std::to_string(result.IntVal.getSExtValue()));
+
+    return result.IntVal.getSExtValue();
+}
+
+int AIMLCompiler::jitRun(int argc, char** argv) {
+    // Same as jitRun() but passes real argc/argv to the AIML program's main().
+    // argc/argv must remain valid for the entire duration of execution.
+    llvm::Function* mainFunc = module_->getFunction("main");
+    if (!mainFunc) {
+        LOG_ERROR("No main function found in module.");
+        return -1;
+    }
+    std::string errStr;
+    llvm::EngineBuilder builder(std::move(module_));
+    builder.setErrorStr(&errStr);
+    builder.setEngineKind(llvm::EngineKind::JIT);
+    llvm::ExecutionEngine* engine = builder.create();
+    if (!engine) {
+        LOG_ERROR("Failed to create ExecutionEngine: " + errStr);
+        return -1;
+    }
+    llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
+    llvm::sys::DynamicLibrary::AddSymbol("printf", (void*)(intptr_t)printf);
+
+    std::vector<llvm::GenericValue> gvArgs;
+    gvArgs.push_back(llvm::GenericValue());
+    gvArgs[0].IntVal = llvm::APInt(32, argc);
+    gvArgs.push_back(llvm::GenericValue());
+    gvArgs[1].PointerVal = argv;
+
+    aiml_set_active_context(compiler_ctx_, engine);
+    llvm::GenericValue result = engine->runFunction(mainFunc, gvArgs);
+    aiml_set_active_context(nullptr, nullptr);
 
     return result.IntVal.getSExtValue();
 }
@@ -2218,11 +2389,15 @@ void AIMLCompiler::resolveImport(const std::string& path) {
 
     // Object filename: keyed in JIT mode (collision-safe across contexts),
     // sanitized-only in noCache mode (exodus owns the namespace there).
+    // Suffix: `.ll` when emitting text IR for an external toolchain (emcc),
+    // `.o` otherwise. The exodus build picks up the matching extension via
+    // its expected-side-file logic.
+    const char* importExt = emitImportsAsLL ? ".ll" : ".o";
     if (noCache) {
         std::string sanitized;
         for (char c : path)
             sanitized += (std::isalnum(c) ? c : '_');
-        objPath = outDir + "/" + sanitized + ".o";
+        objPath = outDir + "/" + sanitized + importExt;
     } else {
         objPath = keyedObjectPath(outDir, path, cacheKey);
     }
@@ -2244,6 +2419,9 @@ void AIMLCompiler::resolveImport(const std::string& path) {
     subCompiler.outputDir = this->outputDir;
     subCompiler.compiledKeys = this->compiledKeys;   // share guard within run
     subCompiler.parsedPathsShared = this->parsedPathsShared;   // share parser dedup within run
+    subCompiler.emitImportsAsLL = this->emitImportsAsLL;
+    if (!this->targetTripleStr.empty())
+        subCompiler.setTargetTriple(this->targetTripleStr);
     // Give the sub-compiler all known sibling imports (excluding itself).
     for (const auto& sib : this->siblingImports) {
         if (sib != path)
@@ -2251,7 +2429,13 @@ void AIMLCompiler::resolveImport(const std::string& path) {
     }
 
     subCompiler.compile(path, "/dev/null");
-    subCompiler.compileToObject(path, objPath);
+    if (emitImportsAsLL) {
+        // Text IR for external toolchains (emcc). Library imports don't need
+        // a main() entry point so we skip generateEntryPoint here.
+        subCompiler.saveModule(objPath);
+    } else {
+        subCompiler.compileToObject(path, objPath);
+    }
 
     // Propagate transitive linked objects from sub-compiler
     for (const auto& obj : subCompiler.linkedObjects) {

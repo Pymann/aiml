@@ -15,6 +15,7 @@
 #include "extern_builder.h"
 #include "text_builder.h"
 #include "prefab_builder.h"
+#include "material_builder.h"
 
 namespace AIML {
 namespace AST {
@@ -87,6 +88,10 @@ bool RootState::OnScalar(const std::string& value, const std::string& tag) {
         }
         else if (currentKey == "prefab") {
              builder->pushState(std::make_unique<PrefabBuilder>(builder));
+             return true;
+        }
+        else if (currentKey == "material") {
+             builder->pushState(std::make_unique<MaterialBuilder>(builder));
              return true;
         }
         else if (currentKey == "namespace") {

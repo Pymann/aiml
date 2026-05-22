@@ -1,0 +1,29 @@
+# Repro candidate: heap-allocated class instances may fail to auto-initialize map<K:V> members.
+# Expected exit code after the future fix: 0
+
+- class:
+    name: MapBox
+    members:
+      - [scores, "map<string:i32>"]
+
+- decl: [box, ref<MapBox>, { new: MapBox }]
+
+- call: [box.scores.put, "alice", 7]
+- call: [box.scores.put, "bob", 9]
+
+- decl: [n, i32, box.scores.len]
+- if:
+    condition: { neq: [n, 2] }
+    then:
+      - print: ["FAIL map class-member len: expected 2, got ${n}"]
+      - exit: [1]
+
+- decl: [alice, i32, { call: [box.scores.get, "alice"] }]
+- if:
+    condition: { neq: [alice, 7] }
+    then:
+      - print: ["FAIL map class-member get: expected 7, got ${alice}"]
+      - exit: [1]
+
+- free: [box]
+- print: ["PASS test_map_class_member_heap_init_repro"]
