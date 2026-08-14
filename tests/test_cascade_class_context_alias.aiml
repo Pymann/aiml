@@ -1,0 +1,109 @@
+# De-risk Phase C mechanics: (1) a rule matching an ALIAS stage (on: CNT), and
+# (2) CONTEXT rules (before: […]) that disambiguate the SAME alias stage by the
+# preceding opcode — the αAβ power needed for compositional cost/effect text.
+#
+#   Cst.mana_cost = [mana_cost, ManaCol, CNT]   → count is "xN"
+#   Cst.lp_cost   = [lp_cost, CNT]              → count is "N LP"   (same CNT type!)
+# Render:  [1,1,3] → "Pay fire x3"   ;  [2,5] → "Pay 5 LP"
+
+- enum: { name: CostCode, values: [ {mana_cost: 1}, {lp_cost: 2} ] }
+- enum: { name: ManaCol,  values: [ {fire: 1}, {water: 2} ] }
+- alias: { name: CNT, type: i32, label: "Count", min: 0, default: 1 }
+
+- cascade:
+    name: Cst
+    opcode: CostCode
+    nodes:
+      - [mana_cost, ManaCol, CNT]
+      - [lp_cost, CNT]
+
+- class:
+    name: CstSkel
+    renders: Cst
+    rules:
+      - before: []
+        on: [mana_cost, lp_cost]
+        def: { name: c_pay, args: [[carry, list<string>]], return: list<string>, body: [ { call: [carry.push, "Pay"] }, { return: carry } ] }
+      - before: ["*"]
+        on: ManaCol
+        after: ["*"]
+        def:
+          name: c_col
+          args: [[carry, list<string>]]
+          return: list<string>
+          body:
+            - call: [carry.push, { call: [enums.name, "ManaCol", { call: [<.field] }] }]
+            - return: carry
+      # context: CNT after mana_cost's ManaCol → "xN"
+      - before: [mana_cost, ManaCol]
+        on: CNT
+        def:
+          name: c_cmana
+          args: [[carry, list<string>]]
+          return: list<string>
+          body:
+            - decl: [num, i32, { call: [<.field] }]
+            - call: [carry.push, "x${num}"]
+            - return: carry
+      # context: CNT right after lp_cost → "N LP"
+      - before: [lp_cost]
+        on: CNT
+        def:
+          name: c_clp
+          args: [[carry, list<string>]]
+          return: list<string>
+          body:
+            - decl: [num, i32, { call: [<.field] }]
+            - call: [carry.push, "${num} LP"]
+            - return: carry
+
+- cascade_class:
+    name: CstText
+    binds_cascade: Cst
+    carrier: list<string>
+    taker:   list<string>
+    members: [CstSkel]
+
+- def:
+    name: joinsp
+    args: [[parts, list<string>]]
+    return: string
+    body:
+      - decl: [out, string, ""]
+      - decl: [jix, i32, 0]
+      - while:
+          condition: { lt: [jix, parts.len] }
+          body:
+            - decl: [prt, string, { at: [parts, jix] }]
+            - if: { condition: { eq: [jix, 0] }, then: [{ set: [out, prt] }], else: [{ set: [out, "${out} ${prt}"] }] }
+            - set: [jix, { +: [jix, 1] }]
+      - return: out
+
+- def:
+    name: expect
+    args: [[got, string], [want, string]]
+    body:
+      - if: { condition: { neq: [got, want] }, then: [{ print: ["FAIL got='${got}' want='${want}'"] }, { call: [sys.exit, 1] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pool, ptr<CstText>, { new: CstText }]
+      # mana_cost, fire, 3
+      - decl: [row1, list<i32>]
+      - call: [row1.push, 1]
+      - call: [row1.push, 1]
+      - call: [row1.push, 3]
+      - decl: [car1, list<string>]
+      - decl: [prt1, list<string>, { call: [pool.render, car1, row1] }]
+      - call: [expect, { call: [joinsp, prt1] }, "Pay fire x3"]
+      # lp_cost, 5
+      - decl: [row2, list<i32>]
+      - call: [row2.push, 2]
+      - call: [row2.push, 5]
+      - decl: [car2, list<string>]
+      - decl: [prt2, list<string>, { call: [pool.render, car2, row2] }]
+      - call: [expect, { call: [joinsp, prt2] }, "Pay 5 LP"]
+      - print: ["PASS context_alias: mana='Pay fire x3' lp='Pay 5 LP'"]
+      - return: 0

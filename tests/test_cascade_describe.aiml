@@ -1,0 +1,57 @@
+# cascade.describe / cascade.type_range — Schema-Introspektion (spec/44_7).
+#   type_range(type) → list<i32>  : mögliche Werte (enum-Member / cascade-Node-IDs)
+#   describe(cascade, opcodes?) → list<string> : Element0 = Opcode-Enum-Name,
+#     danach je Opcode "[id]node [range]Type …" (opcodes leer → alle).
+
+- enum: { name: ECode,  values: [ {aa: 1}, {bb: 2} ] }
+- enum: { name: Colr, values: [ {xx: 1}, {yy: 2}, {zz: 3} ] }
+- cascade:
+    name: Casc
+    opcode: ECode
+    nodes:
+      - [aa, Colr]
+      - [bb]
+
+- def:
+    name: joinlist
+    args: [[parts, list<string>]]
+    return: string
+    body:
+      - decl: [out, string, ""]
+      - decl: [jix, i32, 0]
+      - while:
+          condition: { lt: [jix, parts.len] }
+          body:
+            - decl: [prt, string, { at: [parts, jix] }]
+            - if: { condition: { eq: [jix, 0] }, then: [{ set: [out, prt] }], else: [{ set: [out, "${out} | ${prt}"] }] }
+            - set: [jix, { +: [jix, 1] }]
+      - return: out
+
+- def:
+    name: expect
+    args: [[got, string], [want, string]]
+    body:
+      - if: { condition: { neq: [got, want] }, then: [{ print: ["FAIL got='${got}' want='${want}'"] }, { call: [sys.exit, 1] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      # type_range: enum-Member
+      - decl: [trc, list<i32>, { call: [cascade.type_range, "Colr"] }]
+      - expect: [ "${trc.len}", "3" ]
+      - expect: [ "${{ call: [trc.get, 0] }}", "1" ]
+      - expect: [ "${{ call: [trc.get, 2] }}", "3" ]
+      # type_range: cascade-Node-IDs
+      - decl: [trn, list<i32>, { call: [cascade.type_range, "Casc"] }]
+      - expect: [ "${trn.len}", "2" ]
+      # describe alle Opcodes
+      - decl: [dall, list<string>, { call: [cascade.describe, "Casc"] }]
+      - expect: [ { call: [joinlist, dall] }, "ECode | [1]aa [1,2,3]Colr | [2]bb" ]
+      # describe gefiltert auf Opcode 2
+      - decl: [ops, list<i32>]
+      - call: [ops.push, 2]
+      - decl: [dflt, list<string>, { call: [cascade.describe, "Casc", ops] }]
+      - expect: [ { call: [joinlist, dflt] }, "ECode | [2]bb" ]
+      - print: ["PASS cascade_describe: type_range + describe (Element0=ECode, ranges, opcode-filter)"]
+      - return: 0

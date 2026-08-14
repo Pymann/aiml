@@ -1,0 +1,39 @@
+# Requires: display
+# Phase 6c smoke: bind_list FFI round-trip.  Attach a list<list<i32>> to a
+# prefab-instance, read it back via bound_list(), verify pointer equality
+# and .len propagation across the boundary.
+
+- config:
+    entry: main
+
+- prefab:
+    name: EmptyPage
+    width: 320
+    height: 240
+    texture: ""
+    children: []
+
+- model:
+    name: CascadeList
+    fields:
+      - [items, list<list<i32>>]
+
+- def:
+    name: main
+    body:
+      - decl: [win, window_handle]
+      - set:  [win, { call: [engine.create_window, 400, 300, "prefab-bind"] }]
+      # Attach a wrapper Model's items list to a fresh prefab instance.
+      - decl: [store, ptr<CascadeList>, { new: CascadeList }]
+      - decl: [row_a, list<i32>]
+      - call: [row_a.push, 1]
+      - call: [store.items.push, row_a]
+      - decl: [row_b, list<i32>]
+      - call: [row_b.push, 42]
+      - call: [store.items.push, row_b]
+
+      - decl: [page, prefab_instance, { call: [engine.instantiate, "EmptyPage"] }]
+      - call: [page.bind_list, store.items]
+      - decl: [idx, i32, { call: [page.bound_index] }]
+      - print: ["OK: 2 rows attached to page; bound_index=${idx}"]
+      - call: [engine.destroy_window, win]

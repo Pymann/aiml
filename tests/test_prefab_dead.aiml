@@ -1,0 +1,52 @@
+# Positive test (Tier 3, dead-prefab): ein deklariertes Prefab, das NIRGENDS
+# instanziiert wird, erzeugt eine Compiler-WARNUNG (kein Fehler) — die
+# Kompilierung läuft normal durch.  Ein genutztes Prefab wird NICHT gemeldet.
+# Siehe spec/44_8 (Tier 3).
+#
+# Expected exit code: 0
+#
+# Diagnostic-Form (Warning), nur für "Dead":
+#   prefab 'DeadBox' is declared but never instantiated in this build — no
+#   engine.instantiate("Dead") anywhere. ...
+#
+# "UsedBox" wird hinter einer zur Laufzeit falschen Bedingung instanziiert; der
+# statische Walk sieht das Literal unabhängig von Erreichbarkeit → keine
+# Dead-Warnung für "UsedBox" (headless-tauglich, GL wird nie angefasst).
+
+- prefab:
+    name: UsedBox
+    width: 100
+    height: 40
+    children:
+      # `spawn: ListRow` instantiiert das Row-Prefab deklarativ pro Listen-Element —
+      # ein Use, obwohl es NIE via engine.instantiate("Row") aufgerufen wird.
+      - { name: list_box, type: container, x: 0, y: 20, width: 100, height: 20,
+          spawn: ListRow, layout: vflow, gap: 2 }
+      - { name: title, type: label, x: 0, y: 0, width: 100, height: 20 }
+
+# Nur über spawn: referenziert → darf NICHT als tot gemeldet werden.
+- prefab:
+    name: ListRow
+    width: 100
+    height: 18
+    children:
+      - { name: text_lbl, type: label, x: 0, y: 0, width: 100, height: 18 }
+
+- prefab:
+    name: DeadBox
+    width: 50
+    height: 50
+    children:
+      - { name: icon_img, type: sprite, x: 0, y: 0, width: 50, height: 50 }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [flag, i32, 0]
+      - if:
+          condition: { eq: [flag, 1] }
+          then:
+            - decl: [inst, prefab_instance, { call: [engine.instantiate, "UsedBox"] }]
+      - print: ["PASS prefab_dead: 'UsedBox' (instantiate) + 'ListRow' (spawn) genutzt → keine Warnung; nur 'DeadBox' → Warnung"]
+      - return: 0

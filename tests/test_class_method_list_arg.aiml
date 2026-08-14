@@ -1,0 +1,40 @@
+# Repro: class method that accepts list<T> as argument crashes when the
+# caller passes a local variable (alloca → loaded value).
+#
+# Symptom: LLVM verifier "Call parameter type does not match function
+# signature" — method signature has `ptr %1` for the list arg, but the
+# call-site passes the loaded struct value `%list_string %toks_val`.
+#
+# Related to the earlier `test_class_member_as_func_arg.aiml` bug
+# (member-access as func arg), but here the source is a plain local var,
+# the callee is a class METHOD (not free function), and the arg type is
+# `list<T>` (not `map<K:V>`).
+#
+# Expected: prints "got 3 items"
+# Actual (bug): SIGSEGV/abort during compile-step verification.
+
+- class:
+    name: Worker
+    members:
+      - [tag, string, "w"]
+    methods:
+      - def:
+          name: count_items
+          args: [[items, list<string>]]
+          return: i32
+          body:
+            - return: items.len
+
+- def:
+    name: main
+    args: []
+    return: i32
+    body:
+      - decl: [worker, Worker]
+      - decl: [items, list<string>]
+      - call: [items.push, "alpha"]
+      - call: [items.push, "beta"]
+      - call: [items.push, "gamma"]
+      - decl: [n_count, i32, { call: [worker.count_items, items] }]
+      - call: [log.info, "got ${n_count} items"]
+      - return: 0

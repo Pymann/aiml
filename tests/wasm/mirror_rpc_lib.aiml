@@ -1,0 +1,100 @@
+# Requires: library
+# Shared interface + class + models for the multi-file WASM mirror test.
+# Mirrors DataCreatures' Item model layout: multiple string fields, an
+# `i32`, a `list<NestedStruct>`, and `list<string>` near the end of the
+# struct.  Goal: catch any deserializer offset/struct-size bug that only
+# triggers when fields with non-trivial padding precede the list<string>.
+
+# Multi-method interface — matches DataCreatures' Tileable (icon_path, name,
+# subtitle, description, tags, materials).  Catches any vtable-slot-index
+# specific bug (tile_tags is at slot 4).
+- interface:
+    name: Tagged
+    methods:
+      - [tile_icon_path,   string, []]
+      - [tile_name,        string, []]
+      - [tile_subtitle,    string, []]
+      - [tile_description, string, []]
+      - [tags,             list<string>, []]
+      - [tile_materials,   list<CountedItem>, []]
+
+- model:
+    name: CountedItem
+    fields:
+      - [item_id, string]
+      - [count,   i32]
+
+- model:
+    name: Item
+    sync: [name, tags]
+    rpc:  [cast]
+    fields:
+      - [item_id,     string]
+      - [name,        string]
+      - [description, string]
+      - [icon_path,   string]
+      - [itemlevel,   i32, 0]
+      - [item_type,   i32, 0]
+      - [rarity,      string]
+      - [materials,   list<CountedItem>]
+      - [tags,        list<string>]
+      - [guaranteed_tag, string, ""]
+
+- class:
+    name: ItemImpl
+    models: [Item]
+    implements: [Tagged]
+    methods:
+      - def: { name: tile_icon_path,   return: string, args: [], body: [{ return: <.icon_path }] }
+      - def: { name: tile_name,        return: string, args: [], body: [{ return: <.name }] }
+      - def: { name: tile_subtitle,    return: string, args: [], body: [{ return: "Level ${<.itemlevel}  ·  ${<.rarity}" }] }
+      - def: { name: tile_description, return: string, args: [], body: [{ return: <.description }] }
+      - def:
+          name: tags
+          return: list<string>
+          args: []
+          body:
+            - decl: [var_r, list<string>, <.tags]
+            - return: var_r
+      - def:
+          name: tile_materials
+          return: list<CountedItem>
+          args: []
+          body:
+            - decl: [var_r, list<CountedItem>, <.materials]
+            - return: var_r
+
+- model:
+    name: RpcCast
+    fields:
+      - [name, string]
+      - [amount, i32]
+      - [tags, list<string>]
+
+- model:
+    name: Detail
+    rpc: [request_detail, deliver_detail]
+    fields:
+      - [creature_id, string]
+      - [items,       list<ptr<ItemImpl>>]
+
+# Helper defined in the library — caller (main file) passes a list<string>
+# obtained from a vtable indirect call.  Matches DataCreatures' join_strings.
+- def:
+    name: lib_join
+    args: [[lst, list<string>], [sep, string]]
+    return: string
+    body:
+      - decl: [var_n, i32, lst.len]
+      - decl: [out, string, ""]
+      - decl: [var_i, i32, 0]
+      - while:
+          condition: { lt: [var_i, var_n] }
+          body:
+            - decl: [var_v, string, { at: [lst, var_i] }]
+            - if:
+                condition: { eq: [var_i, 0] }
+                then: [{ set: [out, var_v] }]
+                else: [{ set: [out, "${out}${sep}${var_v}"] }]
+            - set: [var_i, { "+": [var_i, 1] }]
+      - return: out

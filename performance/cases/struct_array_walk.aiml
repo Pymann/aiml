@@ -1,0 +1,30 @@
+- class:
+    name: Point
+    members:
+      - [x, i32]
+      - [y, i32]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [n, i32, 100000]
+      - decl: [i, i32, 0]
+      - decl: [acc, i32, 0]
+      - decl: [pts, list<Point>]
+      - while:
+          cond: { <: [i, n] }
+          body:
+            - decl: [p, Point]
+            - set: [p.x, i]
+            - set: [p.y, { "*": [i, 2] }]
+            - call: [pts.push, p]
+            - set: [i, { +: [i, 1] }]
+      - set: [i, 0]
+      - while:
+          cond: { <: [i, pts.len] }
+          body:
+            - decl: [p2, Point, { at: [pts, i] }]
+            - set: [acc, { +: [acc, { +: [p2.x, p2.y] }] }]
+            - set: [i, { +: [i, 1] }]
+      - return: acc

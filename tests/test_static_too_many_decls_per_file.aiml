@@ -1,0 +1,33 @@
+# Negative test: a single AIML file declares 4 top-level types
+# (model/class/interface combined).  The current limit is 3, so this
+# must produce a compile-time hard error.
+#
+# Expected exit code: 1
+#
+# Diagnostic-Form (siehe spec/49 §6):
+#   <path>: file declares 4 top-level types (3 model, 1 class, 0 interface).
+#   Maximum is 3; split this file into smaller modules.
+
+- model:
+    name: Foo
+    fields:
+      - [value, i32]
+
+- model:
+    name: Bar
+    fields:
+      - [value, i32]
+
+- model:
+    name: Baz
+    fields:
+      - [value, i32]
+
+- class:
+    name: QuxRunner
+    members:
+      - [count, i32, 0]
+    methods:
+      - def:
+          name: tick
+          body: [{ set: [<.count, { +: [<.count, 1] }] }]

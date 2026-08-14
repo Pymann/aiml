@@ -1,0 +1,12 @@
+# Negative: audio.music mit string-literalem unbekanntem Stem → Compile-Hard-Error.
+#
+# AssetRoots: tests/_asset_fixtures/basic/resources/audio
+# Expected exit code: 1
+# ExpectedStderr: audio.music: stem 'missing_music' not in audio store
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [bgm, audio_sound, { call: [audio.music, "missing_music"] }]
+      - return: 0

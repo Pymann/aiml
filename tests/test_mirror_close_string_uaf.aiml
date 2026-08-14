@@ -1,0 +1,88 @@
+# Use-After-Free repro: mirror_session.close() frees string buffers that
+# AIML user variables still hold pointers to.  The strings live inside the
+# session's deserialization arena (or similar) and are tied to the session
+# lifetime — closing the session reclaims that memory, invalidating user
+# pointers.
+#
+# Native only.  This test should FAIL (exit 1) until the runtime is fixed
+# to either deep-copy strings on user assignment OR keep session arenas
+# alive past close.
+# Expected exit code: 0 (after fix).
+
+- model:
+    name: NetItem
+    sync: [name, tags]
+    fields:
+      - [name, string]
+      - [tags, list<string>]
+
+- def:
+    name: host_fn
+    args: []
+    body:
+      - decl: [sess, mirror_session]
+      - set: [sess, { call: [mirror.listen, "tcp://127.0.0.1:19951"] }]
+      - decl: [obj, NetItem]
+      - set: [obj.name, "Hammer"]
+      - call: [obj.tags.push, "tool"]
+      - call: [obj.tags.push, "metal"]
+      - call: [obj.tags.push, "starter"]
+      - decl: [nid, i32, { call: [sess.register, obj] }]
+      - print: ["host: registered nid=${nid}"]
+      - decl: [var_i, i32, 0]
+      - while:
+          condition: { lt: [var_i, 30] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [var_i, { "+": [var_i, 1] }]
+      - call: [sess.close]
+
+- decl: [host_th, thread_handle]
+- set: [host_th, { spawn: [host_fn] }]
+- call: [time.sleep_ms, 100]
+
+- decl: [client, mirror_session]
+- set: [client, { call: [mirror.connect_timeout, "tcp://127.0.0.1:19951", 2000] }]
+- call: [time.sleep_ms, 100]
+- call: [client.update]
+
+- decl: [var_ev, mirror_event, { call: [client.next_event] }]
+- decl: [obj_nid, i32, var_ev.net_id]
+- decl: [replica, NetItem]
+- call: [client.register_id, replica, obj_nid]
+
+# Pump until tags arrive.
+- decl: [tries, i32, 0]
+- while:
+    condition: { "&&": [{ lt: [replica.tags.len, 3] }, { lt: [tries, 100] }] }
+    body:
+      - call: [client.update]
+      - call: [time.sleep_ms, 10]
+      - set: [tries, { "+": [tries, 1] }]
+
+# Take a strong reference to the first tag string.
+- decl: [first, string, { at: [replica.tags, 0] }]
+
+# Verify it's correct BEFORE close.
+- if:
+    condition: { neq: [first, "tool"] }
+    then:
+      - print: ["FAIL pre-close: first='${first}'"]
+      - call: [sys.exit, 1]
+- print: ["pre-close OK: first='${first}'"]
+
+# THE BUG: close the session.  `first` should still be valid string — the
+# language doesn't promise per-session lifetimes; once you've assigned a
+# string to a local, it ought to be owned by that local.
+- call: [client.close]
+- call: [host_th.join]
+
+- if:
+    condition: { eq: [first, "tool"] }
+    then:
+      - print: ["PASS: first survived close"]
+      - call: [sys.exit, 0]
+    else:
+      - print: ["FAIL post-close: first='${first}' (UAF — buffer freed by close)"]
+      - call: [sys.exit, 1]

@@ -1,0 +1,72 @@
+# static-check: off
+# Repro-Kandidat (9rooms_v2 Card-Refactor): SIGSEGV wenn ein Struct mit
+# einem `list<Model>`-Feld (Model mit eigenem verschachtelten `list<list<i32>>`)
+# via kv.get_copy gelesen und dann in eine Liste eines ptr-Params gepusht wird.
+#
+# Analog zu CardHeader.active_abilities: list<ActiveAbility> (ActiveAbility
+# trägt list<list<i32>>).  repro3 (list<i32>) crasht NICHT — Verdacht: der
+# Trigger ist das list<Model>-mit-Nested-List-Feld im gepushten Struct.
+#
+# Erwartung nach Fix: exit 0.
+
+- model: { name: Ability, fields: [[trigger, list<list<i32>>], [effects, list<list<i32>>]] }
+- model: { name: Hdr, fields: [[uid, string], [owner, string], [abils, list<Ability>]] }
+- model: { name: ItemD, inherits: Hdr, fields: [[val, i32]] }
+- model: { name: Resp, fields: [[items, list<ItemD>], [spells, list<ItemD>]] }
+
+- class:
+    name: Svc
+    members:
+      - [idx,   Kv<string:i32>]
+      - [store, Kv<string:ItemD>]
+    methods:
+      - def:
+          name: init
+          args: [[dir, path]]
+          body:
+            - set: [<.idx,   { call: [db.open_kv, "idx", {persist: true, path: dir}] }]
+            - set: [<.store, { call: [db.open_kv, "st",  {persist: true, path: dir}] }]
+      - def:
+          name: seed
+          args: [[key, string]]
+          body:
+            - decl: [itm, ItemD]
+            - set: [itm.uid, key]
+            - set: [itm.owner, "a@x"]
+            - set: [itm.val, 99]
+            - call: [<.store.set, key, itm]
+            - call: [<.idx.set, key, 0]
+      - def:
+          name: collect
+          args: [[out, ptr<Resp>], [type_i, i32], [key, string], [req, string]]
+          return: i32
+          body:
+            - if: { condition: { eq: [type_i, 0] }, then: [{ decl: [dat, ItemD, { call: [<.store.get_copy, key] }] }, { if: { condition: { eq: [dat.owner, req] }, then: [{ call: [out.items.push, dat] }, { return: 1 }] } }] }
+            - return: 0
+      - def:
+          name: fetch
+          args: [[out, ptr<Resp>], [key, string], [req, string]]
+          return: i32
+          body:
+            - decl: [tix, i32, { call: [<.idx.get_copy, key] }]
+            - decl: [got, i32, { call: [<.collect, out, tix, key, req] }]
+            - return: got
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [dir, path, "/tmp/repro_getcopy_lom/"]
+      - call: [io.remove_all, dir]
+      - decl: [svc, ptr<Svc>, { new: Svc }]
+      - call: [svc.init, dir]
+      - call: [svc.seed, "k1"]
+      - print: ["seeded"]
+      - decl: [res, Resp]
+      - decl: [okv, i32, { call: [svc.fetch, res, "k1", "a@x"] }]
+      - print: ["fetch okv=${okv} items.len=${res.items.len}"]
+      - if:
+          condition: { neq: [res.items.len, 1] }
+          then: [{ print: ["FAIL items.len=${res.items.len}"] }, { return: 1 }]
+      - print: ["PASS repro_getcopy_list_of_model"]
+      - return: 0

@@ -1,0 +1,29 @@
+# static-check: off
+# Der Assignment-Guard darf VERWANDTE Modelle (Inheritance) NICHT blocken:
+# ein abgeleitetes Model in ein Basis-Feld zu schreiben kopiert den geteilten
+# Prefix und ist legitim.  (Gegenstück zum negativen wrongmodel-Fall.)
+#
+# Erwartung: kompiliert + läuft, base-Prefix-Felder korrekt kopiert.
+
+- model: { name: Base, fields: [[uid, string], [num, i32]] }
+- model: { name: Derived, inherits: Base, fields: [[extra, i32]] }
+- model: { name: Holder, fields: [[slot, Base]] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [der, Derived]
+      - set: [der.uid, "abc"]
+      - set: [der.num, 7]
+      - set: [der.extra, 99]
+      - decl: [hold, Holder]
+      - set: [hold.slot, der]          # derived → base field: muss erlaubt sein
+      - decl: [fails, i32, 0]
+      - if: { condition: { neq: [hold.slot.uid, "abc"] }, then: [{ print: ["FAIL uid='${hold.slot.uid}'"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [hold.slot.num, 7] }, then: [{ print: ["FAIL num=${hold.slot.num}"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if:
+          condition: { eq: [fails, 0] }
+          then: [{ print: ["PASS assign_inherited_model_ok"] }]
+          else: [{ print: ["FAIL assign_inherited_model_ok: ${fails}"] }]
+      - return: fails

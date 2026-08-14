@@ -1,0 +1,15 @@
+# Negative: zwei verschiedene abs_paths mit demselben Stem im selben Kind-Store
+# → Scanner Hard-Error bevor IR überhaupt emittiert wird.
+# Fixture hat resources/items/sword.png + resources/icons/sword.png unter
+# zwei separaten Roots → echter Konflikt (≠ overlap-Test wo's derselbe File ist).
+#
+# AssetRoots: tests/_asset_fixtures/dup_stem/resources/items,tests/_asset_fixtures/dup_stem/resources/icons
+# Expected exit code: 1
+# ExpectedStderr: duplicate stem 'sword' in texture store
+
+- def:
+    name: main
+    return: i32
+    body:
+      # Body egal — Scanner bricht ab bevor diese Funktion compiled wird.
+      - return: 0

@@ -1,0 +1,57 @@
+# Repro: same as test_iface_list_return.aiml but list<string> lives as a
+# model field (inherited via models:) instead of a class member.  Matches
+# DataCreatures' Item.tags pattern (tile_behaviors.aiml line 39:
+#   `decl: [var_r, list<string>, <.tags]`
+# where `tags` is in the Item model, not in ItemBehavior class).
+# Expected exit code: 0.
+
+- interface:
+    name: Tagged
+    methods:
+      - [tags, list<string>, []]
+
+- model:
+    name: Item
+    fields:
+      - [name, string]
+      - [tags, list<string>]
+
+- class:
+    name: ItemImpl
+    models: [Item]
+    implements: [Tagged]
+    methods:
+      - def:
+          name: tags
+          return: list<string>
+          args: []
+          body:
+            - decl: [var_r, list<string>, <.tags]
+            - return: var_r
+
+- decl: [var_it, ptr<ItemImpl>, { new: ItemImpl }]
+- set: [var_it.name, "Hammer"]
+- call: [var_it.tags.push, "tool"]
+- call: [var_it.tags.push, "metal"]
+- call: [var_it.tags.push, "starter"]
+
+- decl: [view, ptr<Tagged>, var_it]
+- decl: [got, list<string>, { call: [view.tags] }]
+
+- print: ["len=${got.len}"]
+- if:
+    condition: { neq: [got.len, 3] }
+    then:
+      - print: ["FAIL len=${got.len}"]
+      - call: [sys.exit, 1]
+
+- decl: [first, string, { at: [got, 0] }]
+- print: ["first='${first}'"]
+- if:
+    condition: { eq: [first, "tool"] }
+    then:
+      - print: ["PASS"]
+      - call: [sys.exit, 0]
+    else:
+      - print: ["FAIL first='${first}'"]
+      - call: [sys.exit, 1]

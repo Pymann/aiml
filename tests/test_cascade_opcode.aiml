@@ -1,0 +1,78 @@
+# cascade `opcode:` — element 0 (node id) is typed by an enum.  The node head is
+# the enum member; the compiler resolves the id from the enum AND verifies
+# id == enum-value / name == member.  Three node spellings are accepted:
+#   list form      `- [member, T1, T2]`        (id resolved from member)
+#   compact-name   `- member: [T1, T2]`         (id resolved from member)
+#   compact-both   `- member: [id, T1, T2]`     (id + member both given → verified)
+# All three must resolve to the SAME wire-id so cascade.validate agrees.
+
+- enum: { name: OwnerType, values: [none, player, opponent, ally] }   # player=1, opponent=2
+- enum: { name: DeckType,  values: [none, main, fate] }               # main=1, fate=2
+- enum:
+    name: EffectCode
+    values:
+      - draw_card:    1
+      - deal_damage:  10
+      - counter_trap: 48
+
+# List-of-lists form — no integer ids anywhere; every head is an EffectCode member.
+- cascade:
+    name: EffList
+    opcode: EffectCode
+    nodes:
+      - [draw_card, DeckType]
+      - [deal_damage, OwnerType]
+      - [counter_trap]
+
+# Compact form under the same opcode — mix of name-only (id resolved from the
+# map key) and name+id (verified).  In compact form a non-numeric leading
+# element is field 0, NOT the head (the head is the map key).
+- cascade:
+    name: EffCompact
+    opcode: EffectCode
+    nodes:
+      - draw_card:    [DeckType]     # name only → id 1, field0 = DeckType
+      - deal_damage:  [OwnerType]    # name only → id 10, field0 = OwnerType
+      - counter_trap: [48]           # name + explicit id → verified 48
+
+- def:
+    name: chk
+    args: [[got, i32], [want, i32], [label, string]]
+    body:
+      - if: { condition: { neq: [got, want] }, then: [{ print: ["FAIL ${label}: got=${got} want=${want}"] }, { call: [sys.exit, 1] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      # deal_damage resolved to id 10 in the LIST-form cascade: [10, player(1)] valid.
+      - decl: [row_a, list<i32>]
+      - call: [row_a.push, 10]
+      - call: [row_a.push, 1]
+      - call: [chk, { call: [cascade.validate, "EffList", row_a] }, -1, "EffList deal_damage id resolved"]
+
+      # counter_trap resolved to 48 (no payload): [48] valid.
+      - decl: [row_b, list<i32>]
+      - call: [row_b.push, 48]
+      - call: [chk, { call: [cascade.validate, "EffList", row_b] }, -1, "EffList counter_trap id 48"]
+
+      # Same ids hold in the COMPACT-form cascade — proves both spellings resolve
+      # against the opcode enum identically.
+      - decl: [row_c, list<i32>]
+      - call: [row_c.push, 10]
+      - call: [row_c.push, 2]
+      - call: [chk, { call: [cascade.validate, "EffCompact", row_c] }, -1, "EffCompact deal_damage id resolved"]
+
+      # draw_card resolved to 1, wants a DeckType payload: [1, fate(2)] valid.
+      - decl: [row_d, list<i32>]
+      - call: [row_d.push, 1]
+      - call: [row_d.push, 2]
+      - call: [chk, { call: [cascade.validate, "EffCompact", row_d] }, -1, "EffCompact draw_card id 1"]
+
+      # Wrong id for a resolved node → bad-index 0 (unknown node id 5).
+      - decl: [row_bad, list<i32>]
+      - call: [row_bad.push, 5]
+      - call: [chk, { call: [cascade.validate, "EffList", row_bad] }, 0, "unknown node id → idx 0"]
+
+      - print: ["PASS cascade_opcode: list-form, compact-name, compact-both all resolve via enum"]
+      - return: 0

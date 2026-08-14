@@ -1,0 +1,50 @@
+# AionDB db_indexed: phase 2 — re-open the persistent Kv from a separate run
+# and verify findings_by_name() still resolves to the IDs written before.
+# Run AFTER test_db_indexed_reopen_1_write.aiml.
+# Expected exit code: 0
+
+- model:
+    name: Item
+    fields:
+      - [item_id, string]
+      - [name,    string, "", { db_indexed: true }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_path, path, "/tmp/aiml_test_db_indexed_reopen_20260607/"]
+      - if:
+          condition: { eq: [{ call: [db_path.exists] }, 0] }
+          then:
+            - print: ["SKIP reopen_read (run test_db_indexed_reopen_1_write.aiml first)"]
+            - return: 0
+
+      - decl: [items, Kv<string:Item>]
+      - set:  [items, { call: [db.open_kv, "items_idx_reopen", {persist: true, path: db_path}] }]
+
+      # Index must resolve without re-issuing any sets.
+      - decl: [hammers, list<string>, { call: [items.findings_by, "name", "Hammer"] }]
+      - if:
+          condition: { neq: [hammers.len, 2] }
+          then:
+            - print: ["FAIL reopen_read_hammers=${hammers.len} (want 2)"]
+            - call:  [sys.exit, 1]
+
+      - decl: [saws, list<string>, { call: [items.findings_by, "name", "Saw"] }]
+      - if:
+          condition: { neq: [saws.len, 1] }
+          then:
+            - print: ["FAIL reopen_read_saws=${saws.len} (want 1)"]
+            - call:  [sys.exit, 1]
+
+      # Records themselves are also intact.
+      - decl: [var_c, Item, { call: [items.get_copy, "var_c"] }]
+      - if:
+          condition: { eq: [{ eq: [var_c.name, "Saw"] }, 0] }
+          then:
+            - print: ["FAIL reopen_read_record=${var_c.name} (want 'Saw')"]
+            - call:  [sys.exit, 1]
+
+      - print: ["AionDB db_indexed reopen-read PASS"]
+      - return: 0

@@ -1,0 +1,59 @@
+# Widget↔model binding (spec 44.6 §5d): a prefab with `binds: T` and children
+# carrying `bind: field` syncs to/from a bound model via sync_from/to_model.
+# Phase 1: i32 / f32 / enum fields (sliders + enum dropdown).
+
+- enum:
+    name: BindKind
+    values:
+      - alpha: 1
+      - beta:  2
+      - gamma: 3
+
+- model:
+    name: BindDraft
+    fields:
+      - [atk,    i32]
+      - [weight, f32]
+      - [kind,   BindKind]
+
+- prefab:
+    name: BindTestForm
+    binds: BindDraft
+    width: 300
+    height: 200
+    children:
+      - { name: atk_sl,  type: slider, x: 0, y: 0,  width: 200, height: 16, max: 50.0, bind: atk }
+      - { name: wt_sl,   type: slider, x: 0, y: 20, width: 200, height: 16, max: 10.0, bind: weight }
+      - { name: kind_dd, type: dropdown, enum: BindKind, x: 0, y: 40, width: 200, height: 24, bind: kind }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 320, 240, "bind-test"] }]
+      - call: [engine.prefab_scene_init, 320, 240]
+      - decl: [form, prefab_instance, { call: [engine.instantiate, "BindTestForm"] }]
+      - decl: [fails, i32, 0]
+      # model → widgets
+      - decl: [draft, ptr<BindDraft>, { new: BindDraft }]
+      - set: [draft.atk,    7]
+      - set: [draft.weight, 2.5]
+      - set: [draft.kind,   BindKind.gamma]
+      - call: [form.bind_model, draft]
+      - call: [form.sync_from_model]
+      - decl: [atk_v,  f32, { call: [form.get_slider_value, "atk_sl"] }]
+      - decl: [wt_v,   f32, { call: [form.get_slider_value, "wt_sl"] }]
+      - decl: [kind_v, i32, { call: [form.dropdown_enum, "kind_dd"] }]
+      - if: { condition: { neq: [atk_v,  7.0] }, then: [{ print: ["FAIL sync_from atk: ${atk_v}"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [wt_v,   2.5] }, then: [{ print: ["FAIL sync_from weight: ${wt_v}"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [kind_v, 3]   }, then: [{ print: ["FAIL sync_from kind: ${kind_v}"] }, { set: [fails, { +: [fails, 1] }] }] }
+      # widgets → model
+      - call: [form.set_slider_value, "atk_sl", 12.0]
+      - call: [form.set_slider_value, "wt_sl", 4.0]
+      - call: [form.set_dropdown_index, "kind_dd", 1]
+      - call: [form.sync_to_model]
+      - if: { condition: { neq: [draft.atk,    12]  }, then: [{ print: ["FAIL sync_to atk: ${draft.atk}"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [draft.weight, 4.0] }, then: [{ print: ["FAIL sync_to weight: ${draft.weight}"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [draft.kind,   2]   }, then: [{ print: ["FAIL sync_to kind: ${draft.kind}"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { eq: [fails, 0] }, then: [{ print: ["PASS widget_model_bind"] }], else: [{ print: ["FAILED: ${fails}"] }] }
+      - return: fails

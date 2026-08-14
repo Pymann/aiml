@@ -1,0 +1,91 @@
+# Multi-file variant: imports the shared lib (mirrors DataCreatures').
+# Same behaviour as test_mirror_rpc_server.aiml but classes live in a
+# separately-compiled library file.  Bug suspect: per-file private sret
+# stubs vs the shared external real method.
+
+- import: "tests/wasm/mirror_rpc_lib.aiml"
+
+- decl: [sess, mirror_session]
+- set: [sess, { call: [mirror.listen, "ws://0.0.0.0:18888"] }]
+- print: ["server: listening on ws://0.0.0.0:18888"]
+
+- decl: [obj, ItemImpl]
+- set: [obj.name, "Hammer"]
+- call: [obj.tags.push, "tool"]
+- call: [obj.tags.push, "metal"]
+- call: [obj.tags.push, "starter"]
+- decl: [nid, i32, { call: [sess.register, obj] }]
+- print: ["server: registered ItemImpl nid=${nid} tags.len=${obj.tags.len}"]
+
+- decl: [detail_handler, Detail]
+- decl: [detail_nid, i32, { call: [sess.register, detail_handler] }]
+- print: ["server: registered Detail nid=${detail_nid}"]
+
+- decl: [var_i, i32, 0]
+- decl: [rpc_count, i32, 0]
+- while:
+    condition: { lt: [var_i, 800] }
+    body:
+      - call: [sess.update]
+      - if:
+          condition: { gt: [{ call: [sess.has_rpc] }, 0] }
+          then:
+            - decl: [rpc_ev, rpc_event, { call: [sess.next_rpc] }]
+            - if:
+                condition: { eq: [rpc_ev.method, "cast"] }
+                then:
+                  - decl: [incoming, RpcCast]
+                  - decl: [var_rc, i32, { call: [sess.decode_rpc, rpc_ev, incoming] }]
+                  - if:
+                      condition: { eq: [var_rc, 0] }
+                      then:
+                        - print: ["server: RPC cast — tags.len=${incoming.tags.len}"]
+                        - set: [rpc_count, { "+": [rpc_count, 1] }]
+                else:
+                  - if:
+                      condition: { eq: [rpc_ev.method, "request_detail"] }
+                      then:
+                        - decl: [req, Detail]
+                        - decl: [rc2, i32, { call: [sess.decode_rpc, rpc_ev, req] }]
+                        - print: ["server: RPC request_detail — creature_id='${req.creature_id}'"]
+                        - decl: [reply, Detail]
+                        - set: [reply.creature_id, "creature-42"]
+                        - decl: [it1, ptr<ItemImpl>, { new: ItemImpl }]
+                        - set: [it1.item_id, "hammer"]
+                        - set: [it1.name, "Hammer"]
+                        - set: [it1.description, "A solid hammer"]
+                        - set: [it1.icon_path, "items/hammer.png"]
+                        - set: [it1.itemlevel, 1]
+                        - set: [it1.item_type, 7]
+                        - set: [it1.rarity, "common"]
+                        # Push a couple of materials so the list<CountedItem>
+                        # before tags is non-empty — exercises the
+                        # nested-struct-in-list deser path.
+                        - decl: [var_m1, CountedItem]
+                        - set: [var_m1.item_id, "iron"]
+                        - set: [var_m1.count, 2]
+                        - call: [it1.materials.push, var_m1]
+                        - call: [it1.tags.push, "tool"]
+                        - call: [it1.tags.push, "metal"]
+                        - call: [reply.items.push, it1]
+                        - decl: [it2, ptr<ItemImpl>, { new: ItemImpl }]
+                        - set: [it2.item_id, "crystal"]
+                        - set: [it2.name, "Crystal"]
+                        - set: [it2.description, "A shiny crystal"]
+                        - set: [it2.icon_path, "items/crystal.png"]
+                        - set: [it2.itemlevel, 2]
+                        - set: [it2.item_type, 1]
+                        - set: [it2.rarity, "rare"]
+                        - call: [it2.tags.push, "gem"]
+                        - call: [it2.tags.push, "shiny"]
+                        - call: [it2.tags.push, "rare"]
+                        - call: [reply.items.push, it2]
+                        - print: ["server: sending deliver_detail (items=${reply.items.len})"]
+                        - call: [sess.send_rpc, rpc_ev.net_id, "deliver_detail", 0, reply]
+                        - set: [rpc_count, { "+": [rpc_count, 1] }]
+      - call: [time.sleep_ms, 10]
+      - set: [var_i, { "+": [var_i, 1] }]
+
+- call: [sess.close]
+- print: ["server: shutdown rpc_count=${rpc_count}"]
+- call: [sys.exit, 0]

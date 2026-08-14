@@ -1,0 +1,24 @@
+# static-check: off
+# BUG #2 (Diagnostik-Test — muss NACH Fix eine suppressible WARNING geben):
+# `ptr<list<T>>` / `ptr<map<K:V>>` als Param-Typ ist Doppel-Indirektion
+# (Listen/Maps sind schon by-ref) → SIGSEGV zur Laufzeit.  Bisher kompiliert
+# es klaglos und crasht erst beim .push.
+#
+# Erwartung NACH Fix: WARNING beim Kompilieren ("ptr<list>/ptr<map> param —
+# lists/maps are already by-ref; double indirection"), abschaltbar.
+# Das Programm läuft trotzdem (Warning ist nicht-fatal) — hier rufen wir die
+# Funktion NICHT auf, um den Crash zu vermeiden; wir prüfen nur die Meldung.
+# Manuell verifizieren (Warning in der Compiler-Ausgabe).
+
+- def:
+    name: drain_bad
+    args: [[out, ptr<list<string>>]]     # <-- soll WARNING auslösen
+    body:
+      - call: [out.push, "x"]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - call: [log.info, "compiled (warning expected above)"]
+      - return: 0

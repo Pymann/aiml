@@ -1,0 +1,70 @@
+# Test the session.send_and_await(...) builtin — one-shot RPC roundtrip.
+#
+# Spawns a host thread that accepts an "echo" RPC and replies with
+# "set_result" carrying an EchoResp; client uses send_and_await and
+# checks success + the bounced-back message.
+#
+# Expected exit code: 0
+
+- model:
+    name: EchoReq
+    fields: [[message, string]]
+
+- model:
+    name: EchoResp
+    fields: [[success, i32], [echoed, string]]
+
+- def:
+    name: server_thread
+    body:
+      - decl: [sess, mirror_session, { call: [mirror.listen, "ws://127.0.0.1:19982"] }]
+      - decl: [running, i32, 1]
+      - decl: [tries,   i32, 0]
+      - while:
+          condition: { eq: [running, 1] }
+          body:
+            - call: [sess.update]
+            - if:
+                condition: { gt: [{ call: [sess.has_rpc] }, 0] }
+                then:
+                  - decl: [rpc, rpc_event, { call: [sess.next_rpc] }]
+                  - if:
+                      condition: { eq: [rpc.method, "echo"] }
+                      then:
+                        - decl: [req, EchoReq]
+                        - decl: [rc_val, i32, { call: [sess.decode_rpc, rpc, req] }]
+                        - if:
+                            condition: { eq: [rc_val,0] }
+                            then:
+                              - decl: [resp, EchoResp]
+                              - set: [resp.success, 1]
+                              - set: [resp.echoed, "got: ${req.message}"]
+                              - call: [sess.send_rpc, rpc.peer_id, "set_result", 0, resp]
+                              - set: [running, 0]
+            - call: [time.sleep_ms, 20]
+            - set: [tries, { +: [tries, 1] }]
+            - if: { condition: { gt: [tries, 200] }, then: [{ set: [running, 0] }] }
+
+- def:
+    name: main
+    body:
+      - decl: [host_th, thread_handle, { spawn: [server_thread] }]
+      - call: [time.sleep_ms, 150]
+
+      - decl: [client, mirror_session, { call: [mirror.connect_timeout, "ws://127.0.0.1:19982", 3000] }]
+      - call: [time.sleep_ms, 80]
+      - call: [client.update]
+
+      # Hier kommt der neue Builtin zum Einsatz: eine Zeile statt 25-Zeilen-Loop.
+      - decl: [req, EchoReq]
+      - set: [req.message, "hello-mirror"]
+      - decl: [resp, ptr<EchoResp>, { new: EchoResp }]
+      - decl: [got_resp,i32, { call: [client.send_and_await, 0, "echo", req, resp, 4000] }]
+
+      - if: { condition: { eq: [got_resp,0] }, then: [{ print: ["FAIL send_and_await timed out"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [resp.success, 1] }, then: [{ print: ["FAIL resp.success=${resp.success}"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [resp.echoed, "got: hello-mirror"] }, then: [{ print: ["FAIL echoed='${resp.echoed}'"] }, { call: [sys.exit, 1] }] }
+
+      - call: [host_th.join]
+      - call: [client.close]
+      - print: ["mirror send_and_await PASS"]

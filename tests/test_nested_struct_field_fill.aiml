@@ -1,0 +1,51 @@
+# static-check: off
+# Charakterisiert, wie man ein VERSCHACHTELTES Struct-Feld (resp.card: Card)
+# korrekt befüllt.  9rooms_v2 Card-Refactor: CardResp.card blieb leer.
+#
+# Drei Muster:
+#   A: plain-var via ptr-Param fill                → Baseline
+#   B: nested-assign  set: [resp.card, <var>]      → ?
+#   C: fill nested field via {'&': [resp.card]}    → ?
+#
+# Erwartung: alle drei sollten ID42/5 liefern.  Was NICHT klappt, ist ein
+# Compiler-Issue (Backlog-Kandidat).
+
+- model: { name: Card2, fields: [[card_id, string], [attack, i32]] }
+- model: { name: Resp2, fields: [[success, i32], [card, Card2]] }
+
+- def:
+    name: fill_card
+    args: [[dst, ptr<Card2>]]
+    body:
+      - set: [dst.card_id, "ID42"]
+      - set: [dst.attack, 5]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      # A: plain var via ptr
+      - decl: [fat, Card2]
+      - call: [fill_card, fat]
+      - call: [log.info, "A fat.card_id='${fat.card_id}' attack=${fat.attack} (want ID42/5)"]
+      - if: { condition: { neq: [fat.card_id, "ID42"] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
+
+      # B: nested assign var -> resp.card
+      - decl: [res, Resp2]
+      - set: [res.card, fat]
+      - call: [log.info, "B res.card.card_id='${res.card.card_id}' attack=${res.card.attack} (want ID42/5)"]
+      - if: { condition: { neq: [res.card.card_id, "ID42"] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
+
+      # C: fill nested field via {'&': [res2.card]} (BUG #3 — muss kompilieren)
+      - decl: [res2, Resp2]
+      - call: [fill_card, { '&': [res2.card] }]
+      - call: [log.info, "C res2.card.card_id='${res2.card.card_id}' attack=${res2.card.attack} (want ID42/5)"]
+      - if: { condition: { neq: [res2.card.card_id, "ID42"] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
+
+      - if:
+          condition: { eq: [fails, 0] }
+          then: [{ print: ["PASS nested_struct_field_fill"] }]
+          else: [{ print: ["FAIL nested_struct_field_fill: ${fails}/3 patterns broken"] }]
+      - return: fails

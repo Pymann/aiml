@@ -1,0 +1,46 @@
+# Regression setup: write persistent Store<T> with heap-allocated fields
+# (string + list<string>) for a later reopen/read test.
+# Expected exit code: 0
+
+- model:
+    name: ReopenSnippet
+    fields:
+      - [intent, string]
+      - [dependencies, list<string>]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_path, path, "/tmp/aiml_test_aiondb_store_heap_reopen_20260410/"]
+      - decl: [snips, Store<ReopenSnippet>]
+      - set: [snips, { call: [db.open, "reopen_heap_snippets_20260410", {persist: true, path: db_path}] }]
+
+      - decl: [var_n, i32, { call: [snips.len] }]
+      - if:
+          condition: { neq: [var_n, 0] }
+          then:
+            - print: ["FAIL store_heap_reopen_write_nonempty len=${var_n}"]
+            - call:  [sys.exit, 1]
+
+      - decl: [var_s, ReopenSnippet]
+      - set:  [var_s.intent, "loop"]
+      - call: [var_s.dependencies.push, "stdio"]
+      - call: [var_s.dependencies.push, "math"]
+
+      - decl: [var_id, i32, { call: [snips.insert, var_s] }]
+      - if:
+          condition: { neq: [var_id, 1] }
+          then:
+            - print: ["FAIL store_heap_reopen_write_id=${var_id}"]
+            - call:  [sys.exit, 1]
+
+      - decl: [var_rc, i32, { call: [db.checkpoint] }]
+      - if:
+          condition: { neq: [var_rc, 0] }
+          then:
+            - print: ["FAIL store_heap_reopen_write_checkpoint=${var_rc}"]
+            - call:  [sys.exit, 1]
+
+      - print: ["AionDB store heap reopen write PASS"]
+      - return: 0

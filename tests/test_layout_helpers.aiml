@@ -1,0 +1,50 @@
+# engine.layout_hflow / layout_vflow / layout_stack — Spec 44_6 §Layout.
+# Requires: display
+#
+# Verifiziert dass die Helpers x/y/z_order korrekt setzen.
+
+- prefab:
+    name: TestTile
+    width: 50
+    height: 30
+    children:
+      - { name: bg_layer, type: rect, x: 0, y: 0, width: 50, height: 30, color: 0x336699 }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [items, list<prefab_instance>]
+      - decl: [tile_a, prefab_instance, { call: [engine.instantiate, "TestTile"] }]
+      - decl: [tile_b, prefab_instance, { call: [engine.instantiate, "TestTile"] }]
+      - decl: [tile_c, prefab_instance, { call: [engine.instantiate, "TestTile"] }]
+      - call: [items.push, tile_a]
+      - call: [items.push, tile_b]
+      - call: [items.push, tile_c]
+
+      # HFlow: x=10, y=20, gap=4 → 10, 64 (=10+50+4), 118 (=64+50+4)
+      - call: [engine.layout_hflow, items, 10.0, 20.0, 4.0]
+      - if: { condition: { neq: [{ call: [tile_a.get_x] },  10.0] }, then: [{ print: ["FAIL tile_a.x=${ { call: [tile_a.get_x] } } exp 10"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [{ call: [tile_b.get_x] },  64.0] }, then: [{ print: ["FAIL tile_b.x=${ { call: [tile_b.get_x] } } exp 64"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [{ call: [tile_c.get_x] }, 118.0] }, then: [{ print: ["FAIL tile_c.x=${ { call: [tile_c.get_x] } } exp 118"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [{ call: [tile_a.get_y] },  20.0] }, then: [{ print: ["FAIL tile_a.y"] }, { call: [sys.exit, 1] }] }
+
+      # VFlow: x=100, y=200, gap=6 → ys: 200, 236 (=200+30+6), 272
+      - call: [engine.layout_vflow, items, 100.0, 200.0, 6.0]
+      - if: { condition: { neq: [{ call: [tile_a.get_y] }, 200.0] }, then: [{ print: ["FAIL tile_a.y vflow=${ { call: [tile_a.get_y] } } exp 200"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [{ call: [tile_b.get_y] }, 236.0] }, then: [{ print: ["FAIL tile_b.y vflow=${ { call: [tile_b.get_y] } } exp 236"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [{ call: [tile_c.get_y] }, 272.0] }, then: [{ print: ["FAIL tile_c.y vflow=${ { call: [tile_c.get_y] } } exp 272"] }, { call: [sys.exit, 1] }] }
+
+      # Stack: x=500, y=400, dx=3, dy=2, z_step=1 → cards offset 0/3/6, 0/2/4
+      - call: [tile_a.set_z, 5]
+      - call: [tile_b.set_z, 5]
+      - call: [tile_c.set_z, 5]
+      - call: [engine.layout_stack, items, 500.0, 400.0, 3.0, 2.0, 1]
+      - if: { condition: { neq: [{ call: [tile_a.get_x] }, 500.0] }, then: [{ print: ["FAIL stack tile_a.x"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [{ call: [tile_b.get_x] }, 503.0] }, then: [{ print: ["FAIL stack tile_b.x=${ { call: [tile_b.get_x] } } exp 503"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [{ call: [tile_c.get_x] }, 506.0] }, then: [{ print: ["FAIL stack tile_c.x"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [{ call: [tile_b.get_y] }, 402.0] }, then: [{ print: ["FAIL stack tile_b.y=${ { call: [tile_b.get_y] } } exp 402"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [{ call: [tile_c.get_z] }, 7]     }, then: [{ print: ["FAIL stack tile_c.z=${ { call: [tile_c.get_z] } } exp 7"] }, { call: [sys.exit, 1] }] }
+
+      - print: ["PASS engine.layout_{hflow,vflow,stack}"]
+      - return: 0

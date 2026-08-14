@@ -1,0 +1,28 @@
+# Asset Registry: derselbe Stem in unterschiedlichen Kind-Stores (Texture +
+# Audio) koexistiert ohne Kollision.
+#
+# AssetRoots: tests/_asset_fixtures/multikind/resources/textures,tests/_asset_fixtures/multikind/resources/audio
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      # "golem.png" → texture-store
+      - decl: [tex, gl_texture, { call: [gl.tex, "golem"] }]
+      - if:
+          condition: { eq: [tex, null] }
+          then:
+            - print: ["FAIL kinds_tex_null"]
+            - call:  [sys.exit, 1]
+
+      # "golem.wav" → audio-store, gleicher Stem, separat
+      - decl: [sfx, audio_handle, { call: [audio.sfx, "golem"] }]
+      - if:
+          condition: { eq: [sfx, null] }
+          then:
+            - print: ["FAIL kinds_sfx_null"]
+            - call:  [sys.exit, 1]
+
+      - print: ["Asset Registry kinds PASS"]
+      - return: 0

@@ -1,0 +1,34 @@
+# Unused-enumerator analysis (spec/49): Enum-Mitglieder, die deklariert aber nie
+# als `Enum.Member` referenziert werden, erzeugen eine nicht-blockierende
+# Compiler-WARNUNG.  Der Build läuft weiter (Exit 0).
+#
+# Color: 3 Member, nur `red` referenziert  → 2 Warnings (green, blue).
+# Dir:   2 Member, beide referenziert       → 0 Warnings.
+#
+# Verifikation (Warnungstext auf stdout) via run_all_tests-Wrapper nicht möglich
+# (das Harness prüft nur Exit-Codes) → separat gegrept.  Expected exit code: 0
+
+- enum:
+    name: Color
+    values:
+      - red:   1
+      - green: 2       # nie referenziert → Warning erwartet
+      - blue:  3       # nie referenziert → Warning erwartet
+
+- enum:
+    name: Dir
+    values:
+      - north: 1
+      - south: 2
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [col_val, i32, Color.red]
+      - decl: [dir_n,   i32, Dir.north]
+      - decl: [dir_s,   i32, Dir.south]
+      - if: { condition: { neq: [col_val, 1] }, then: [{ print: ["FAIL Color.red"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [{ +: [dir_n, dir_s] }, 3] }, then: [{ print: ["FAIL Dir sum"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS unused_enum_member: build ran; Color.green/blue expected as warnings"]
+      - return: 0

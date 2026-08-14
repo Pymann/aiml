@@ -1,0 +1,113 @@
+# Regression test for gradient lifecycle semantics.
+#
+# Documents and enforces the AIML convention:
+#   After a parameter participates in backward → adam_step, its `grad` must
+#   be explicitly cleared via `zero_grad` before the NEXT iteration.
+#
+# Background: the runtime accumulates parameter gradients with += in backward
+# (see src/sys/tensor_runtime.cpp backward_*).  begin_graph clears arena and
+# graph metadata, but it does NOT zero parameter grad buffers.  Training code
+# that omits zero_grad will silently accumulate gradients across iterations,
+# which causes Adam updates to explode in multi-head BCE settings.
+#
+# See doc/issues/2026-06-04_autodiff_bce_multihead_gradient_accumulation.md
+#
+# This test fails if the runtime starts zeroing parameter grads implicitly
+# (begin_graph or adam_step doing it for us) — which would also be fine, but
+# would invalidate this regression-test's premise: please update accordingly.
+
+- decl: [pass_count, i32, 0]
+- decl: [fail_count, i32, 0]
+
+# ── Test 1: grad persists across begin_graph until adam_step+zero_grad ──────
+- call: [log.info, "=== Test 1: grad persists across begin_graph ==="]
+
+# Tiny model: var_W [4, 1] with target = [1.0].  L = (var_W·x - tgt)²  →  dL/dW = 2·(var_W·x - tgt)·x
+- decl: [var_W, tensor, { call: [tensor.randn_ex, 0.0, 0.05, 4, 1] }]
+- call: [var_W.set_requires_grad, 1]
+
+- call: [tensor.begin_graph]
+- decl: [var_x1, tensor, { call: [tensor.zeros, 1, 4] }]
+- call: [var_x1.set, 0, 1.0]
+- decl: [var_y1, tensor, { call: [tensor.matmul, var_x1, var_W] }]
+- decl: [tgt1, tensor, { call: [tensor.zeros, 1, 1] }]
+- call: [tgt1.set, 0, 1.0]
+- decl: [var_d1, tensor, { call: [tensor.sub, var_y1, tgt1] }]
+- decl: [sq1, tensor, { call: [tensor.mul, var_d1, var_d1] }]
+- decl: [loss1, tensor, { call: [tensor.sum, sq1, -1] }]
+- call: [tensor.backward, loss1]
+- decl: [gW1, tensor, { call: [var_W.grad] }]
+- decl: [g_after_first, f32, { call: [gW1.get, 0] }]
+- call: [log.info, "after first backward, var_W.grad[0] = ${g_after_first}"]
+
+# Wichtig: KEIN adam_step + KEIN zero_grad.  Wir starten direkt eine zweite
+# Iteration — nur begin_graph dazwischen.  Wenn die Runtime grad zwischen
+# Iterationen NICHT auto-clear'd, sehen wir eine Akkumulation.
+- call: [tensor.begin_graph]
+- decl: [var_x2, tensor, { call: [tensor.zeros, 1, 4] }]
+- call: [var_x2.set, 0, 1.0]
+- decl: [var_y2, tensor, { call: [tensor.matmul, var_x2, var_W] }]
+- decl: [tgt2, tensor, { call: [tensor.zeros, 1, 1] }]
+- call: [tgt2.set, 0, 1.0]
+- decl: [var_d2, tensor, { call: [tensor.sub, var_y2, tgt2] }]
+- decl: [sq2, tensor, { call: [tensor.mul, var_d2, var_d2] }]
+- decl: [loss2, tensor, { call: [tensor.sum, sq2, -1] }]
+- call: [tensor.backward, loss2]
+- decl: [gW2, tensor, { call: [var_W.grad] }]
+- decl: [g_after_second, f32, { call: [gW2.get, 0] }]
+- call: [log.info, "after second backward (no zero_grad), var_W.grad[0] = ${g_after_second}"]
+
+# Erwartung beim aktuellen Runtime-Verhalten: g_after_second ≈ 2 × g_after_first
+# (= akkumuliert).  Wenn das stimmt, ist die Konvention "user muss zero_grad
+# rufen" am Leben.
+- decl: [ratio, f32, { "/": [g_after_second, g_after_first] }]
+- call: [log.info, "ratio second/first = ${ratio}  (expect ~2.0 = accumulator)"]
+- if:
+    condition: { "&&": [{ gt: [ratio, 1.7] }, { lt: [ratio, 2.3] }] }
+    then:
+      - call: [log.info, "PASS: accumulator detected (ratio ≈ 2.0)"]
+      - set: [pass_count, { "+": [pass_count, 1] }]
+    else:
+      - call: [log.warn, "FAIL: ratio outside [1.7, 2.3] — runtime may have started auto-clearing grads.  Update training convention docs."]
+      - set: [fail_count, { "+": [fail_count, 1] }]
+
+# ── Test 2: zero_grad fully resets accumulator ─────────────────────────────
+- call: [log.info, ""]
+- call: [log.info, "=== Test 2: zero_grad resets accumulator ==="]
+
+- call: [var_W.zero_grad]
+- call: [tensor.begin_graph]
+- decl: [var_x3, tensor, { call: [tensor.zeros, 1, 4] }]
+- call: [var_x3.set, 0, 1.0]
+- decl: [var_y3, tensor, { call: [tensor.matmul, var_x3, var_W] }]
+- decl: [tgt3, tensor, { call: [tensor.zeros, 1, 1] }]
+- call: [tgt3.set, 0, 1.0]
+- decl: [var_d3, tensor, { call: [tensor.sub, var_y3, tgt3] }]
+- decl: [sq3, tensor, { call: [tensor.mul, var_d3, var_d3] }]
+- decl: [loss3, tensor, { call: [tensor.sum, sq3, -1] }]
+- call: [tensor.backward, loss3]
+- decl: [gW3, tensor, { call: [var_W.grad] }]
+- decl: [g_after_zero, f32, { call: [gW3.get, 0] }]
+- call: [log.info, "after zero_grad + new backward, var_W.grad[0] = ${g_after_zero}"]
+
+# g_after_zero sollte ≈ g_after_first (eine frische backward-pass-Magnitude).
+- decl: [delta, f32, { "-": [g_after_zero, g_after_first] }]
+- decl: [abs_delta, f32, { call: [math.abs, delta] }]
+- decl: [rel, f32, { "/": [abs_delta, { call: [math.abs, g_after_first] }] }]
+- call: [log.info, "rel error after zero_grad vs first = ${rel}"]
+- if:
+    condition: { lt: [rel, 0.01] }
+    then:
+      - call: [log.info, "PASS: zero_grad correctly reset accumulator"]
+      - set: [pass_count, { "+": [pass_count, 1] }]
+    else:
+      - call: [log.warn, "FAIL: zero_grad did not reset accumulator cleanly"]
+      - set: [fail_count, { "+": [fail_count, 1] }]
+
+# ── Summary ────────────────────────────────────────────────────────────────
+- call: [log.info, ""]
+- call: [log.info, "grad lifecycle: ${pass_count} passed, ${fail_count} failed"]
+- if:
+    condition: { eq: [fail_count, 0] }
+    then: [{ call: [sys.exit, 0] }]
+    else: [{ call: [sys.exit, 1] }]

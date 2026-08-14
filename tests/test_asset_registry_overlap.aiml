@@ -1,0 +1,39 @@
+# Asset Registry: überlappende Roots (parent + child) → derselbe abs_path
+# wird genau EINMAL registriert; keine spurious Duplicate-Stem-Errors.
+# Spiegelt das DataCreatures-Setup (exodus-client.json hat sowohl
+# resources/ui als auch resources/ui/action_bar als asset_directories).
+#
+# AssetRoots: tests/_asset_fixtures/overlap/resources/ui,tests/_asset_fixtures/overlap/resources/ui/action_bar
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      # "btn.png" lebt direkt unter resources/ui — wird vom Parent-Root erfasst.
+      - decl: [btn, gl_texture, { call: [gl.tex, "btn"] }]
+      - if:
+          condition: { eq: [btn, null] }
+          then:
+            - print: ["FAIL overlap_btn_null"]
+            - call:  [sys.exit, 1]
+
+      # "atk.png" liegt unter resources/ui/action_bar — von beiden Roots
+      # erreichbar.  Scanner dedup'd via abs_path; nur ein Eintrag im Store.
+      - decl: [atk, gl_texture, { call: [gl.tex, "atk"] }]
+      - if:
+          condition: { eq: [atk, null] }
+          then:
+            - print: ["FAIL overlap_atk_null"]
+            - call:  [sys.exit, 1]
+
+      # Erneuter Lookup → identisches Cache-Pointer (kein "zweites" Tex).
+      - decl: [atk2, gl_texture, { call: [gl.tex, "atk"] }]
+      - if:
+          condition: { neq: [atk, atk2] }
+          then:
+            - print: ["FAIL overlap_dup_register"]
+            - call:  [sys.exit, 1]
+
+      - print: ["Asset Registry overlap PASS"]
+      - return: 0

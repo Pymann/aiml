@@ -1,0 +1,48 @@
+# Repro Erweiterung 3: String kommt aus einer INTERPOLATION (nicht Literal).
+# Hypothese: interpolated strings sind temporär und werden nicht deep-copiert
+# ins Model.
+
+- model:
+    name: FakeDeck
+    fields:
+      - [name, string]
+      - [tag,  i32]
+
+- class:
+    name: Holder
+    members:
+      - [decks, list<FakeDeck>]
+    methods:
+      - def:
+          name: add
+          args: [[nam, string]]
+          body:
+            - decl: [fdk, FakeDeck]
+            # Statt direct assign: nutze interpolation um eine "new" string zu produzieren.
+            - decl: [nam_i, string, "${nam}"]
+            - set: [fdk.name, nam_i]
+            - set: [fdk.tag,  1]
+            - call: [<.decks.push, fdk]
+
+      - def:
+          name: read_name
+          args: [[idx, i32]]
+          return: string
+          body:
+            - decl: [fdk, FakeDeck, { call: [<.decks.get, idx] }]
+            - return: fdk.name
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [hld, ptr<Holder>, { new: Holder }]
+      # String kommt aus lokaler decl (nicht direktem Literal)
+      - decl: [local, string, "hhh"]
+      - call: [hld.add, local]
+      - decl: [nam, string, { call: [hld.read_name, 0] }]
+      - print: ["decks[0].name='${nam}'"]
+      - if:
+          condition: { eq: [nam, "hhh"] }
+          then: [{ print: ["PASS"] }, { return: 0 }]
+          else: [{ print: ["FAIL got='${nam}'"] }, { return: 1 }]

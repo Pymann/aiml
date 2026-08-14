@@ -1,0 +1,35 @@
+# Phase 1 sanity test: cascade parses + registers with type validation.
+
+# Enums referenced by the cascades below must be declared first.
+- enum: { name: DeckType,      values: [main, fate, discard, graveyard] }
+- enum: { name: GamePhase,     values: [start, draw, mana, spell, combat, end] }
+- enum: { name: OwnerType,     values: [player, opponent, ally, all_allies] }
+- enum: { name: AttributeType, values: [lp, atk, def, ini, mov, mor] }
+
+# Cascade with rekursiver Referenz auf sich selbst (ist erlaubt),
+# nested cascade auf ValueType und primitive i32 (VALUE/COUNT/SIDES kommen
+# als alias in Phase 4).
+- cascade:
+    name: ValueType
+    nodes:
+      - fixed:                  [1, i32]
+      - equal_to_mana_cost:     [2]
+      - equal_to_attribute:     [3, AttributeType]
+      - equal_to_cards_on_deck: [4, DeckType, OwnerType]
+      - equal_to_dice_roll:     [8, i32, i32]
+
+- cascade:
+    name: EffectCode
+    labels:
+      draw_card:    "Draw Card"
+      counter_trap: "Counter Trap"
+    nodes:
+      - draw_card:    [1, DeckType, ValueType]
+      - counter_trap: [48]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - print: ["cascade parse OK"]
+      - return: 0

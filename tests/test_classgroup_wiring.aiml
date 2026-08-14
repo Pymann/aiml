@@ -1,0 +1,76 @@
+# M1 — classgroup desugars each instance to a subclass of its base, injects the
+# `sees` targets as members, and adds `functions` as methods.  A coordination
+# function uses BOTH an inherited base method (<.raw) AND a wired sibling (<.log).
+# Constructing the group ({new: <group>}) allocates every instance, zero-inits
+# them, and back-patches the sees pointers; instances are reachable as members
+# of the group container (rt.resolver / rt.log).
+#
+# Spec: spec/58_classgroups.md (M1: parse + desugar + wiring + coordination).
+
+- class:
+    name: CombatLog
+    members:
+      - [count, i32]
+    methods:
+      - def:
+          name: note
+          args: [[num, i32]]
+          body:
+            - set: [<.count, { +: [<.count, num] }]
+      - def:
+          name: total
+          return: i32
+          body:
+            - return: <.count
+
+- class:
+    name: DamageResolver
+    members:
+      - [base_dmg, i32]
+    methods:
+      - def:
+          name: set_base
+          args: [[dval, i32]]
+          body:
+            - set: [<.base_dmg, dval]
+      - def:
+          name: raw
+          return: i32
+          body:
+            - return: <.base_dmg
+
+- classgroup:
+    name: CombatRuntime
+    instances:
+      - class: CombatLog
+        instance: log
+
+      - class: DamageResolver
+        instance: resolver
+        sees: [log]
+        functions:
+          - def:
+              name: apply
+              args: [[amount, i32]]
+              return: i32
+              body:
+                # inherited base method (<.raw) + wired sibling (<.log)
+                - decl: [dmg, i32, { +: [{ call: [<.raw] }, amount] }]
+                - call: [<.log.note, dmg]
+                - return: dmg
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [grp, ptr<CombatRuntime>, { new: CombatRuntime }]
+      # base method on the synthesized subclass instance
+      - call: [grp.resolver.set_base, 5]
+      # coordination function: raw()=5, +3 = 8, notes 8 into the wired log
+      - decl: [got, i32, { call: [grp.resolver.apply, 3] }]
+      - if: { condition: { neq: [got, 8] }, then: [{ print: ["FAIL apply=${got} exp 8"] }, { call: [sys.exit, 1] }] }
+      # sees wiring proven: resolver.log IS the container's log instance
+      - decl: [tot, i32, { call: [grp.log.total] }]
+      - if: { condition: { neq: [tot, 8] }, then: [{ print: ["FAIL log total=${tot} exp 8 — sees not wired to the same instance"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS classgroup_wiring: subclass base-method + sees-member wiring + coordination fn"]
+      - return: 0

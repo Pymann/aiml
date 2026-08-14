@@ -1,0 +1,10 @@
+# Requires: library
+# Lib that defines the class so the extern decl in the main test matches
+# the DataCreatures setup: every file imports the lib AND declares the
+# global with `{extern: true}`.
+- class:
+    name: AppState
+    members:
+      - [counter, i32, 42]
+      - [flag,    i32, -1]
+      - [stage,   i32, 7]

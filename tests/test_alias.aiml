@@ -1,0 +1,31 @@
+# Phase 4: alias top-level.  Aliases carry UI-metadata (label / min / default)
+# but resolve to a plain primitive for compilation.
+
+- alias: { name: VALUE, type: i32, label: "Value", min: 0 }
+- alias: { name: COUNT, type: i32, label: "Count", min: 0 }
+- alias: { name: SIDES, type: i32, label: "Sides", min: 2, default: 6 }
+
+# Cascade referencing aliases as field types.
+- cascade:
+    name: ValueType
+    nodes:
+      - fixed:              [1, VALUE]
+      - equal_to_dice_roll: [8, COUNT, SIDES]
+
+- def:
+    name: main
+    return: i32
+    body:
+      # Alias resolves to underlying type — VALUE / COUNT / SIDES = i32
+      - decl: [amount, VALUE, 42]
+      - decl: [rolls,  COUNT, 3]
+      - decl: [sides,  SIDES, 6]
+      - print: ["amount=${amount} rolls=${rolls} sides=${sides}"]
+
+      # Cascade payload using aliased fields.
+      - decl: [dice, cascade<ValueType>]
+      - call: [dice.push, 8]     # equal_to_dice_roll
+      - call: [dice.push, 3]     # COUNT=3
+      - call: [dice.push, 20]    # SIDES=20 (d20)
+      - print: ["dice bytecode: [${call: [dice.get, 0]}, ${call: [dice.get, 1]}, ${call: [dice.get, 2]}]"]
+      - return: 0

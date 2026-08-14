@@ -1,0 +1,38 @@
+# static-check: off
+# BUG-Repro: eine BODYLESS Interface-Methode mit STRUCT-Return-Typ (hier
+# map<string:i32>) synthetisiert als Default `UndefValue` statt eines
+# zero-initialisierten Structs.  Eine undef-Map hat undef data/size/cap →
+# der Caller (contains/get) liest Garbage → SIGSEGV.
+#
+# Erwartung nach Fix: die bodyless Methode gibt eine LEERE Map zurück
+# (contains → 0), kein Crash.
+
+- interface:
+    name: Produce
+    methods:
+      - [give, map<string:i32>, []]
+
+- model: { name: EmptyData, fields: [[tag, i32]] }
+
+- class:
+    name: Empty
+    models: [EmptyData]
+    implements: [Produce]
+    methods:
+      # bodyless → Default-Return.  Muss eine leere Map sein, kein undef.
+      - def: { name: give, return: map<string:i32> }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [obj, ptr<Empty>, { new: Empty }]
+      - decl: [got, map<string:i32>, { call: [obj.give] }]
+      # Mutieren: undef data/size/cap → put realloct über Garbage → SIGSEGV.
+      - call: [got.put, "9", 9]
+      - decl: [has, i32, { call: [got.contains, "1"] }]
+      - if:
+          condition: { eq: [has, 0] }
+          then: [{ print: ["PASS bodyless_struct_return: empty map, no crash"] }]
+          else: [{ print: ["FAIL bodyless_struct_return: has=${has}"] }]
+      - return: has

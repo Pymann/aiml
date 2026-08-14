@@ -1,0 +1,44 @@
+# BUG-Repro + regression: `set target = <.method(container)` where a sibling class
+# method takes a container (list/map) arg AND returns a container, and the result is
+# reassigned to a variable, CRASHED (SIGSEGV in JIT).
+#
+# Direct call from a non-method (`pool.method(x)`) worked; only the in-method
+# `set x = <.sibling(x)` reassignment corrupted/crashed.  Surfaced building the
+# function-cascade `render` synthesis (spec/57 M3).
+#
+# Expected after fix: no crash; the returned list carries the pushed element.
+
+- class:
+    name: Box
+    methods:
+      - def:
+          name: add_one
+          args: [[items, list<string>]]
+          return: list<string>
+          body:
+            - call: [items.push, "x"]
+            - return: items
+
+      # The crashing pattern: reassign a variable with a sibling-method call that
+      # returns a container.
+      - def:
+          name: build
+          args: [[items, list<string>]]
+          return: list<string>
+          body:
+            - set: [items, { call: [<.add_one, items] }]
+            - set: [items, { call: [<.add_one, items] }]
+            - return: items
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [box, ptr<Box>, { new: Box }]
+      - decl: [seed, list<string>]
+      - decl: [out, list<string>, { call: [box.build, seed] }]
+      - if: { condition: { neq: [out.len, 2] }, then: [{ print: ["FAIL len=${out.len} (want 2)"] }, { call: [sys.exit, 1] }] }
+      - decl: [first, string, { at: [out, 0] }]
+      - if: { condition: { neq: [first, "x"] }, then: [{ print: ["FAIL [0]='${first}' (want x)"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS sibling_return_container: set x = <.method(container) works"]
+      - return: 0

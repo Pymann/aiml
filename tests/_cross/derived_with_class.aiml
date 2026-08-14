@@ -1,0 +1,17 @@
+# static-check: off
+- model:
+    name: Derived
+    inherits: Base
+    fields:
+      - [var_b, i32, 0]
+
+- class:
+    name: DerivedBehavior
+    models: [Derived]
+    methods:
+      - def:
+          name: sum
+          return: i32
+          args: []
+          body:
+            - return: { +: [<.var_a, <.var_b] }

@@ -1,0 +1,85 @@
+# test_cascade_enumerate — cascade.count / cascade.row_at (spec 44_7).
+# Full enumeration of a cascade's rows: opcodes × enum-members × nested
+# sub-opcodes; value/alias fields = 1 representative.  Deterministic corpus:
+#
+#   TgT = {a:1, b:2, c:3}  (3 members)   ValT = {fixed:1}
+#   Val (opcode ValT): [fixed, i32]                      -> domain 1
+#   Eff (opcode EffC): [d1, TgT, Val] | [d2, TgT] | [d3]
+#     count = d1(3×1) + d2(3) + d3(1) = 7
+#   rows (mixed-radix, field[0] least-significant; i32/value repr = 1):
+#     0 -> [1,1,1,1]  1 -> [1,2,1,1]  2 -> [1,3,1,1]
+#     3 -> [2,1]      4 -> [2,2]      5 -> [2,3]      6 -> [3]
+#   range filters: count(Eff,2,3)=4 ; count(Eff,1,1)=3
+
+- enum: { name: EffC,  values: [ {d1: 1}, {d2: 2}, {d3: 3} ] }
+- enum: { name: TgT, values: [ {a: 1}, {b: 2}, {c: 3} ] }
+- enum: { name: ValT,  values: [ {fixed: 1} ] }
+
+- cascade:
+    name: Val
+    opcode: ValT
+    nodes:
+      - [fixed, i32]
+
+- cascade:
+    name: Eff
+    opcode: EffC
+    nodes:
+      - [d1, TgT, Val]
+      - [d2, TgT]
+      - [d3]
+
+# Join a row into "e0,e1,..," for exact string comparison.
+- def:
+    name: join_row
+    args: [[row, list<i32>]]
+    return: string
+    body:
+      - decl: [out, string, ""]
+      - decl: [pos, i32, 0]
+      - while:
+          condition: { lt: [pos, row.len] }
+          body:
+            - decl: [elv, i32, { at: [row, pos] }]
+            - set: [out, "${out}${elv},"]
+            - set: [pos, { +: [pos, 1] }]
+      - return: out
+
+- def:
+    name: expect_count
+    args: [[olo, i32], [ohi, i32], [want, i64]]
+    body:
+      - decl: [got, i64, { call: [cascade.count, "Eff", olo, ohi] }]
+      - if: { condition: { neq: [got, want] }, then: [{ print: ["FAIL count(${olo}..${ohi})=${got} want=${want}"] }, { call: [sys.exit, 1] }] }
+
+- def:
+    name: expect_row
+    args: [[kix, i64], [want, string]]
+    body:
+      - decl: [row, list<i32>, { call: [cascade.row_at, "Eff", kix, -2147483648, 2147483647] }]
+      - decl: [got, string, { call: [join_row, row] }]
+      - if: { condition: { neq: [got, want] }, then: [{ print: ["FAIL row_at(${kix})='${got}' want='${want}'"] }, { call: [sys.exit, 1] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      # counts
+      - call: [expect_count, -2147483648, 2147483647, 7]
+      - call: [expect_count, 2, 3, 4]
+      - call: [expect_count, 1, 1, 3]
+      # rows across all three opcodes
+      - call: [expect_row, 0, "1,1,1,1,"]
+      - call: [expect_row, 1, "1,2,1,1,"]
+      - call: [expect_row, 2, "1,3,1,1,"]
+      - call: [expect_row, 3, "2,1,"]
+      - call: [expect_row, 5, "2,3,"]
+      - call: [expect_row, 6, "3,"]
+      # out-of-range row → empty list
+      - decl: [oob, list<i32>, { call: [cascade.row_at, "Eff", 7, -2147483648, 2147483647] }]
+      - if: { condition: { neq: [oob.len, 0] }, then: [{ print: ["FAIL oob row not empty (len=${oob.len})"] }, { call: [sys.exit, 1] }] }
+      # unknown cascade → count 0
+      - decl: [unk, i64, { call: [cascade.count, "NoSuch", -2147483648, 2147483647] }]
+      - if: { condition: { neq: [unk, 0] }, then: [{ print: ["FAIL unknown-cascade count=${unk} want 0"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS cascade_enumerate: count + row_at + range-filter + edge cases"]
+      - return: 0

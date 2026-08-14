@@ -1,0 +1,175 @@
+# static-check: off
+# Reproduziert datacreatures CreatureDetail JSON-roundtrip (proxy for the
+# binary roundtrip — same sernode generator).  Uses heap-allocated
+# behavior objects with models: composition.
+
+- interface:
+    name: Tileable
+    methods:
+      - [tile_icon_path,   string,            []]
+      - [tile_name,        string,            []]
+      - [tile_subtitle,    string,            []]
+      - [tile_description, string,            []]
+      - [tile_tags,        list<string>,      []]
+      - [tile_materials,   list<CountedItem>, []]
+
+- model:
+    name: CountedItem
+    fields:
+      - [item_id, string]
+      - [count, i32, 1]
+
+- model:
+    name: CharAttrs
+    fields:
+      - [var_a, i32, 0]
+
+- model:
+    name: Item
+    fields:
+      - [item_id, string]
+      - [name, string]
+      - [description, string]
+      - [icon_path, string]
+      - [itemlevel, i32, 0]
+      - [item_type, i32, 0]
+      - [rarity, string]
+      - [tags, list<string>]
+
+- class:
+    name: ItemBehavior
+    models: [Item]
+    implements: [Tileable]
+    methods:
+      - def: { name: tile_icon_path,   return: string,            args: [], body: [{ return: <.icon_path }] }
+      - def: { name: tile_name,        return: string,            args: [], body: [{ return: <.name }] }
+      - def: { name: tile_subtitle,    return: string,            args: [], body: [{ return: "Lvl ${<.itemlevel}" }] }
+      - def: { name: tile_description, return: string,            args: [], body: [{ return: <.description }] }
+      - def:
+          name: tile_tags
+          return: list<string>
+          args: []
+          body:
+            - decl: [var_r, list<string>, <.tags]
+            - return: var_r
+      - def:
+          name: tile_materials
+          return: list<CountedItem>
+          args: []
+          body:
+            - decl: [empty, list<CountedItem>, []]
+            - return: empty
+
+- model:
+    name: Skill
+    fields:
+      - [skill_id, string]
+      - [name, string]
+      - [family, string]
+      - [icon_path, string]
+      - [description, string]
+      - [skill_kind, i32, 0]
+
+- model:
+    name: ActiveSkill
+    inherits: Skill
+    fields:
+      - [cooldown_ms, i32, 0]
+      - [target_kinds, list<string>]
+      - [outcome_tags, list<string>]
+      - [effect_value, f64, 0.0]
+
+- class:
+    name: ActiveSkillBehavior
+    models: [ActiveSkill]
+    implements: [Tileable]
+    methods:
+      - def: { name: tile_icon_path,   return: string,            args: [], body: [{ return: <.icon_path }] }
+      - def: { name: tile_name,        return: string,            args: [], body: [{ return: <.name }] }
+      - def: { name: tile_subtitle,    return: string,            args: [], body: [{ return: "F:${<.family}" }] }
+      - def: { name: tile_description, return: string,            args: [], body: [{ return: <.description }] }
+      - def:
+          name: tile_tags
+          return: list<string>
+          args: []
+          body:
+            - decl: [var_r, list<string>, <.outcome_tags]
+            - return: var_r
+      - def:
+          name: tile_materials
+          return: list<CountedItem>
+          args: []
+          body:
+            - decl: [empty, list<CountedItem>, []]
+            - return: empty
+
+- model:
+    name: BaseSkill
+    inherits: Skill
+    fields:
+      - [duration_ticks, i32, 0]
+      - [gain_per_tick, CharAttrs]
+
+- class:
+    name: BaseSkillBehavior
+    models: [BaseSkill]
+    implements: [Tileable]
+    methods:
+      - def: { name: tile_icon_path,   return: string,            args: [], body: [{ return: <.icon_path }] }
+      - def: { name: tile_name,        return: string,            args: [], body: [{ return: <.name }] }
+      - def: { name: tile_subtitle,    return: string,            args: [], body: [{ return: "F:${<.family}" }] }
+      - def: { name: tile_description, return: string,            args: [], body: [{ return: <.description }] }
+      - def:
+          name: tile_tags
+          return: list<string>
+          args: []
+          body:
+            - decl: [var_r, list<string>, []]
+            - return: var_r
+      - def:
+          name: tile_materials
+          return: list<CountedItem>
+          args: []
+          body:
+            - decl: [empty, list<CountedItem>, []]
+            - return: empty
+
+- model:
+    name: CreatureDetail
+    fields:
+      - [creature_id,    string]
+      - [items,          list<ptr<ItemBehavior>>]
+      - [active_skills,  list<ptr<ActiveSkillBehavior>>]
+      - [base_skills,    list<ptr<BaseSkillBehavior>>]
+
+# Build
+- decl: [var_cd, CreatureDetail]
+- set: [var_cd.creature_id, "creature-id-xxxx"]
+- decl: [var_it, ptr<ItemBehavior>, { new: ItemBehavior }]
+- set: [var_it.item_id, "iid-1"]
+- set: [var_it.name, "Hammer"]
+- set: [var_it.description, "A hammer"]
+- set: [var_it.icon_path, "hammer"]
+- set: [var_it.itemlevel, 1]
+- set: [var_it.item_type, 3]
+- set: [var_it.rarity, "common"]
+- call: [var_it.tags.push, "iron"]
+- call: [var_cd.items.push, var_it]
+
+- decl: [var_bs, ptr<BaseSkillBehavior>, { new: BaseSkillBehavior }]
+- set: [var_bs.skill_id, "var_bs-1"]
+- set: [var_bs.name, "meditieren"]
+- set: [var_bs.family, "self"]
+- call: [var_cd.base_skills.push, var_bs]
+
+- print: ["pre: items=${var_cd.items.len} active=${var_cd.active_skills.len} base=${var_cd.base_skills.len}"]
+
+- decl: [var_s, string, { call: [sys.serialize, var_cd] }]
+- print: ["wire-len=${var_s.len}"]
+
+- decl: [cd2, CreatureDetail, { call: [sys.deserialize, var_s] }]
+- print: ["post: items=${cd2.items.len} active=${cd2.active_skills.len} base=${cd2.base_skills.len}"]
+
+- decl: [items2, list<ptr<ItemBehavior>>, cd2.items]
+- decl: [first, ptr<ItemBehavior>, { at: [items2, 0] }]
+- print: ["first item name='${first.name}' icon='${first.icon_path}'"]

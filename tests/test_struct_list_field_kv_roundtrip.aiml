@@ -1,0 +1,74 @@
+# Repro: full path that fails in DataCreatures:
+#   1. Function takes `ptr<Req>` where Req has var_a list<string> field.
+#   2. Build an Action struct, set Action.list_field = req.list_field.
+#   3. Store via Kv<string:Action>.set (mmap-backed).
+#   4. Retrieve via Kv.get_copy.
+#   5. Read .list_field.len — should equal what we stored.
+#
+# Symptom in DataCreatures: get_copy returns Action with list_field.len = 0
+# (or absurd LIST count when serializing).  This indicates shallow-copy of
+# the list data-ptr at one of the steps — the inner data goes dangling.
+
+- model:
+    name: Req
+    fields:
+      - [name,    string]
+      - [members, list<string>]
+
+- model:
+    name: Action
+    fields:
+      - [var_id,      string]
+      - [members, list<string>]
+
+- def:
+    name: make_action
+    args: [[a_req, ptr<Req>]]
+    return: Action
+    body:
+      - decl: [var_a, Action]
+      - set: [var_a.var_id,      "act1"]
+      - set: [var_a.members, a_req.members]
+      - return: var_a
+
+- decl: [g_actions, Kv<string:Action>, { call: [db.open_kv, "test_actions_repro.kvwal"] }]
+
+- decl: [g_req, Req]
+- set: [g_req.name, "demo"]
+- call: [g_req.members.push, "alpha"]
+- call: [g_req.members.push, "beta"]
+- call: [g_req.members.push, "gamma"]
+
+# Step 1+2: build action with list field from ptr<Req>
+- decl: [g_act, Action, { call: [make_action, g_req] }]
+
+# Direct read — should still work right after build (data on stack).
+- decl: [direct, list<string>, g_act.members]
+- decl: [direct_n, i32, direct.len]
+- if:
+    condition: { neq: [direct_n, 3] }
+    then:
+      - print: ["FAIL direct.len: expected 3, got ${direct_n}"]
+      - exit: [1]
+
+# Step 3: persist to mmap kv
+- call: [g_actions.set, g_act.var_id, g_act]
+
+# Step 4: get_copy back
+- decl: [round, Action, { call: [g_actions.get_copy, "act1"] }]
+- decl: [round_lst, list<string>, round.members]
+- decl: [round_n, i32, round_lst.len]
+- if:
+    condition: { neq: [round_n, 3] }
+    then:
+      - print: ["FAIL roundtrip.len: expected 3, got ${round_n}"]
+      - exit: [1]
+
+- decl: [var_r0, string, { at: [round_lst, 0] }]
+- if:
+    condition: { neq: [var_r0, "alpha"] }
+    then:
+      - print: ["FAIL roundtrip[0]: expected 'alpha', got '${var_r0}'"]
+      - exit: [1]
+
+- print: ["PASS test_struct_list_field_kv_roundtrip"]

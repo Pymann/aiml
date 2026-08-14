@@ -1,0 +1,103 @@
+# AionDB db_indexed: list<string> field — each element indexed separately.
+# Validates: findings_by_tags returns all items where tags contains tag, and
+# updates correctly diff add/remove on the index.
+# Reference: aiml/doc/backlog/2026-06-06_aiondb_indexed_fields.md
+# Expected exit code: 0
+
+- model:
+    name: Item
+    fields:
+      - [item_id, string]
+      # Note: list-field default `[]` at position 2 breaks the field parser
+      # (pre-existing quirk).  Use empty-string placeholder; runtime zero-inits.
+      - [tags,    list<string>, "",  { db_indexed: true }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [items, Kv<string:Item>]
+      - set:  [items, { call: [db.open_kv, "items_idx_list"] }]
+
+      # "var_a": tags = [raw, rare]
+      - decl: [a_tags, list<string>]
+      - call: [a_tags.push, "raw"]
+      - call: [a_tags.push, "rare"]
+      - decl: [var_a, Item]
+      - set:  [var_a.item_id, "var_a"]
+      - set:  [var_a.tags,    a_tags]
+      - call: [items.set, "var_a", var_a]
+
+      # "var_b": tags = [raw]
+      - decl: [b_tags, list<string>]
+      - call: [b_tags.push, "raw"]
+      - decl: [var_b, Item]
+      - set:  [var_b.item_id, "var_b"]
+      - set:  [var_b.tags,    b_tags]
+      - call: [items.set, "var_b", var_b]
+
+      # "var_c": tags = [rare, magical]
+      - decl: [c_tags, list<string>]
+      - call: [c_tags.push, "rare"]
+      - call: [c_tags.push, "magical"]
+      - decl: [var_c, Item]
+      - set:  [var_c.item_id, "var_c"]
+      - set:  [var_c.tags,    c_tags]
+      - call: [items.set, "var_c", var_c]
+
+      # tag "raw" → var_a, var_b (len 2)
+      - decl: [raws, list<string>, { call: [items.findings_by, "tags", "raw"] }]
+      - if:
+          condition: { neq: [raws.len, 2] }
+          then:
+            - print: ["FAIL list_raws=${raws.len} (want 2)"]
+            - call:  [sys.exit, 1]
+
+      # tag "rare" → var_a, var_c (len 2)
+      - decl: [rares, list<string>, { call: [items.findings_by, "tags", "rare"] }]
+      - if:
+          condition: { neq: [rares.len, 2] }
+          then:
+            - print: ["FAIL list_rares=${rares.len} (want 2)"]
+            - call:  [sys.exit, 1]
+
+      # tag "magical" → var_c (len 1)
+      - decl: [mag, list<string>, { call: [items.findings_by, "tags", "magical"] }]
+      - if:
+          condition: { neq: [mag.len, 1] }
+          then:
+            - print: ["FAIL list_mag=${mag.len} (want 1)"]
+            - call:  [sys.exit, 1]
+
+      # Unknown tag → empty
+      - decl: [none, list<string>, { call: [items.findings_by, "tags", "epic"] }]
+      - if:
+          condition: { neq: [none.len, 0] }
+          then:
+            - print: ["FAIL list_none=${none.len} (want 0)"]
+            - call:  [sys.exit, 1]
+
+      # Update "var_a" to drop "rare" — rares should shrink to 1 (only var_c).
+      - set: [var_a, { call: [items.get_copy, "var_a"] }]
+      - decl: [a_tags2, list<string>]
+      - call: [a_tags2.push, "raw"]
+      - set:  [var_a.tags, a_tags2]
+      - call: [items.set, "var_a", var_a]
+
+      - decl: [rares2, list<string>, { call: [items.findings_by, "tags", "rare"] }]
+      - if:
+          condition: { neq: [rares2.len, 1] }
+          then:
+            - print: ["FAIL list_rares_after_update=${rares2.len} (want 1)"]
+            - call:  [sys.exit, 1]
+
+      # "raw" should still have var_a + var_b.
+      - decl: [raws2, list<string>, { call: [items.findings_by, "tags", "raw"] }]
+      - if:
+          condition: { neq: [raws2.len, 2] }
+          then:
+            - print: ["FAIL list_raws_after_update=${raws2.len} (want 2)"]
+            - call:  [sys.exit, 1]
+
+      - print: ["AionDB db_indexed list-field PASS"]
+      - return: 0

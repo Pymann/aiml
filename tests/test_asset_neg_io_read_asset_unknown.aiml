@@ -1,0 +1,12 @@
+# Negative: io.read_asset mit string-literalem unbekanntem Stem → Compile-Hard-Error.
+#
+# AssetRoots: tests/_asset_fixtures/basic/resources/data
+# Expected exit code: 1
+# ExpectedStderr: io.read_asset: stem 'missing_data' not in data store
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [content, string, { call: [io.read_asset, "missing_data"] }]
+      - return: 0

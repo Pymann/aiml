@@ -1,0 +1,17 @@
+# Negative: Datei mit Großbuchstaben (Sword.png) wird vom Scanner gewarnt+skipped.
+# Lookup auf den (skipped) Stem → Compile-Hard-Error wie bei unknown_stem.
+# "hammer.png" (lowercase) ist im selben Root und wird normal registriert.
+#
+# AssetRoots: tests/_asset_fixtures/uppercase/resources/textures
+# Expected exit code: 1
+# ExpectedStderr: gl.tex: stem 'Sword' not in texture store
+
+- def:
+    name: main
+    return: i32
+    body:
+      # "hammer" als Sanity (sollte gehen wenn Scanner sonst-OK funktioniert).
+      - decl: [hammer, gl_texture, { call: [gl.tex, "hammer"] }]
+      # "Sword" wurde wegen Großbuchstabe nicht registriert → hard error here.
+      - decl: [sword, gl_texture, { call: [gl.tex, "Sword"] }]
+      - return: 0

@@ -1,0 +1,24 @@
+# Test: when one file owns the class instance global (no extern) and other
+# files import + extern-decl it, the defaults from the class declaration
+# ARE applied by the owner's Phase-2 init.
+#
+# This is the "right" DataCreatures pattern: client_main owns g_app, panels
+# extern-reference it.  The previous all-extern setup wiped the class
+# member defaults because no file owned + ran init.
+
+- import: "tests/wasm/mirror_class_default_lib.aiml"
+
+# Owner — no extern.
+- decl: [g_app, AppState]
+
+- print: ["counter=${g_app.counter}"]
+- print: ["flag=${g_app.flag}"]
+- print: ["stage=${g_app.stage}"]
+
+- if:
+    condition: { neq: [g_app.flag, -1] }
+    then:
+      - print: ["FAIL: flag=${g_app.flag} expected -1"]
+      - call: [sys.exit, 1]
+- print: ["PASS"]
+- call: [sys.exit, 0]

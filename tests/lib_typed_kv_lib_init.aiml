@@ -1,0 +1,20 @@
+# Repro-Lib: library file that opens a typed Kv via lib_init.
+# Used by test_typed_kv_lib_init_target_type.aiml.
+- model:
+    name: TKVHeavy
+    fields:
+      - [var_k,    string]
+      - [tags, list<string>]
+      - [var_n,    i32, 0]
+
+- decl: [tkv_lib, Kv<string:TKVHeavy>, { call: [db.open_kv, "tkv_repro.kvwal", {persist: true, path: "/tmp/aiml_tkv_repro/"}] }]
+
+- def:
+    name: lib_put
+    args: [[var_id, string], [var_t, string]]
+    body:
+      - decl: [var_o, TKVHeavy]
+      - set: [var_o.var_k, var_id]
+      - call: [var_o.tags.push, var_t]
+      - set: [var_o.var_n, 42]
+      - call: [tkv_lib.set, var_id, var_o]

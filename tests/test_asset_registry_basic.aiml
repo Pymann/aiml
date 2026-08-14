@@ -1,0 +1,41 @@
+# Asset Registry: basic stem-lookup + cache-hit.
+# Reference: aiml/doc/backlog/2026-06-07_asset_registry_by_filename.md
+#
+# AssetRoots: tests/_asset_fixtures/basic/resources/textures
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      # First lookup: stem "hammer" → texture (PNG in fixture).
+      - decl: [var_t1, gl_texture, { call: [gl.tex, "hammer"] }]
+      - if:
+          condition: { eq: [var_t1, null] }
+          then:
+            - print: ["FAIL basic_hammer_null"]
+            - call:  [sys.exit, 1]
+
+      # Second lookup of same stem → cache-hit, identical pointer.
+      - decl: [var_t2, gl_texture, { call: [gl.tex, "hammer"] }]
+      - if:
+          condition: { neq: [var_t1, var_t2] }
+          then:
+            - print: ["FAIL basic_cache_miss"]
+            - call:  [sys.exit, 1]
+
+      # Different stem in same store → different texture (different ptr).
+      - decl: [var_t3, gl_texture, { call: [gl.tex, "golem"] }]
+      - if:
+          condition: { eq: [var_t3, null] }
+          then:
+            - print: ["FAIL basic_golem_null"]
+            - call:  [sys.exit, 1]
+      - if:
+          condition: { eq: [var_t1, var_t3] }
+          then:
+            - print: ["FAIL basic_distinct_ptrs"]
+            - call:  [sys.exit, 1]
+
+      - print: ["Asset Registry basic PASS"]
+      - return: 0

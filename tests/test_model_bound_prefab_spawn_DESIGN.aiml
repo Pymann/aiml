@@ -1,0 +1,452 @@
+# Requires: library
+# ═══════════════════════════════════════════════════════════════════════════
+#  DESIGN-DRAFT — Model-bound + Cascade-Prefabs.  Läuft nicht bis Runtime das kann.
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Problem
+# ───────
+# Der Card-Editor hat Kaskaden.  "Effect = Modify Stat" öffnet 4 weitere
+# Felder [OwnerType, AttributeType, ValueType, DurationType].  Jedes davon
+# ist selbst wieder eine Enum.  ValueType hat "Fixed" → 1 numeric.  Wählt
+# man stattdessen "Equal to Dice Roll" → 2 numeric (COUNT, SIDES).  Wählt
+# man "Equal to Attribute" → weiterer Dropdown (AttributeType).  Wählt man
+# "Equal to Cards on Deck" → [DeckType, OwnerType].  DurationType ist
+# genau so tief geschachtelt: "Turns" → ValueType (rekursiv!), "Next Turn
+# Phase" → GamePhase.
+#
+# Ein flaches Model mit `trigger_p0, trigger_p1, effect_p0..p3` reicht nicht,
+# weil die Bedeutung der Slots je nach Eltern-Node wechselt.  Wir brauchen
+# ein Konzept für "diese Enum hat je nach Node andere Payloads".  Das
+# sind ALGEBRAISCHE DATENTYPEN / TAGGED UNIONS / SUM TYPES — hier "Kaskade"
+# genannt, weil die UI genau so heißt: eine Wahl an einer Ebene öffnet die
+# nächste Ebene.
+#
+# ─── 1) CASCADE: ENUM MIT PAYLOAD PRO NODE ──────────────────────────────────
+#
+# Neues Top-Level-Konstrukt.  Jeder Node trägt: Bytecode-ID + eine Liste
+# getypter Felder.  Ein Feld kann ein primitiver Typ, eine andere Cascade,
+# ein Enum oder ein "plain" model sein.
+#
+# KOMPAKTE SIGNATUR-NOTATION
+# ──────────────────────────
+# Statt jeden Node mit `bytecode:` + `fields:` auszuschreiben (was die
+# Kaskaden-Matrix effektiv doppelt macht — einmal als Bytecode-Kommentar,
+# einmal als AIML-Struktur), unterstützt cascade eine kompakte Zeilen-
+# Form die 1:1 dem Bytecode-Kommentar in sources/models/bytecode_enums.aiml
+# entspricht:
+#
+#     - <node_name>: [<bytecode_id>, <field1_type>, <field2_type>, ...]
+#
+# Wenn field-Typ ein bekannter Type ist (enum, cascade, model, primitiv)
+# → wird verwendet.  Wenn field-Typ ein "Rollen-Alias" ist (VALUE, COUNT,
+# SIDES) → wird als i32 mit passendem Label ("Value"/"Count"/"Sides") behandelt.
+#
+# Feldnamen werden bei kompakter Form automatisch generiert:
+#   • aus dem Typnamen: DeckType → "deck", GamePhase → "phase", ValueType → "value"
+#   • bei Kollision suffix _0/_1/…: [GameZone, GameZone] → zone_0, zone_1
+#   • bei Rollen-Alias: VALUE → "value", COUNT → "count", SIDES → "sides"
+#
+# Wer benannte Felder oder Default-Werte will kann pro Node auch die
+# ausführliche `{bytecode: N, fields: [...]}`-Form nutzen.
+
+- cascade:
+    name: ValueType
+    nodes:
+      - fixed:                  [1, VALUE]                    # [1, i32→"value"]
+      - equal_to_mana_cost:     [2]
+      - equal_to_attribute:     [3, AttributeType]
+      - equal_to_cards_on_deck: [4, DeckType, OwnerType]
+      - equal_to_cards_in_zone: [5, GameZone, OwnerType]
+      - equal_to_cards_in_hand: [6, OwnerType]
+      - equal_to_dice_roll:     [8, COUNT, SIDES]             # [8, i32, i32]
+      - equal_to_manapool:      [9, ManaColor]
+      - x_cost_spent:           [10, ManaColor]
+
+- cascade:
+    name: DurationType
+    nodes:
+      - permanent:               [1]
+      - turns:                   [2, ValueType]                # rekursiv!
+      - next_turn_phase:         [3, GamePhase]
+      - end_of_phase:            [4, GamePhase]
+      - as_long_as_equipped:     [5]
+      - as_long_as_card_in_play: [6]
+
+- cascade:
+    name: TriggerCode
+    nodes:
+      - on_phase_start:    [1,  GamePhase]
+      - on_phase_end:      [2,  GamePhase]
+      - on_effect_code:    [3,  EffectCode]
+      - on_card_move:      [4,  GameZone, GameZone]
+      - on_attack:         [5,  OwnerType]
+      - on_defend:         [6,  OwnerType]
+      - on_draw:           [7,  OwnerType, DeckType]
+      - on_destroy:        [8,  OwnerType, CardType]
+      - on_card_played:    [9,  OwnerType, CardType]
+      - on_hit:            [10, OwnerType]
+      - on_kill:           [11, OwnerType]
+      - on_soulmage_hit:   [12, OwnerType]
+      - on_soulmage_attack:[13, OwnerType]
+      - on_equip:          [14, OwnerType]
+      - on_unequip:        [15, OwnerType]
+      - on_drop:           [16, OwnerType, CardType]
+      - on_reveal:         [17, OwnerType]
+      - on_hide:           [18, OwnerType]
+
+- cascade:
+    name: EffectCode
+    nodes:
+      - draw_card:               [1,  DeckType, ValueType]
+      - discard_card:            [2,  OwnerType, CardType, ValueType]
+      - move_card:               [3,  GameZone, GameZone]
+      - destroy_card:            [4,  OwnerType, CardType]
+      - deal_damage:             [10, OwnerType, TargetType, ValueType]
+      - heal_damage:             [11, OwnerType, TargetType, ValueType]
+      - modify_stat:             [12, OwnerType, AttributeType, ValueType, DurationType]
+      - add_passive_ability:     [20, PassiveAbility, OwnerType, DurationType]
+      - remove_passive_ability:  [21, PassiveAbility, OwnerType, DurationType]
+      - reveal_card:             [30, OwnerType, ValueType]
+      - peek_hand:               [31, OwnerType, ValueType]
+      - peek_deck:               [32, OwnerType, ValueType]
+      - counter_spell:           [40, SpellType]
+      - summon_token:            [41, CardType]
+      - transform:               [42, CardType, DurationType]
+      - drain_mana:              [43, ManaColor, ValueType]
+      - destroy_mana:            [44, ManaColor, ValueType]
+      - heal_soulmage:           [45, OwnerType, ValueType]
+      - paralyze:                [46, OwnerType, DurationType]
+      - revive:                  [47, OwnerType, OwnerType, GameZone, CardType]
+      - counter_trap:            [48]
+      - cant_be_attacked:        [49, OwnerType, DurationType]
+      - soulmage_cant_be_attacked: [50, OwnerType, DurationType]
+      - produce_mana:            [51, ManaColor, ValueType]
+
+- cascade:
+    name: ActivationCost
+    nodes:
+      - mana_cost:                [1, ManaColor, COUNT]
+      - lp_cost:                  [2, COUNT]
+      - drop_handcard:            [3, COUNT]
+      - sacrifice:                [4, CardType, COUNT]
+      - x_mana_cost:              [5, ManaColor]
+      - tap_activating_creature:  [6]
+      - tap_friendly_creature:    [7]
+      - movement_cost:            [8, COUNT]
+
+# ─── 1b) ROLLEN-ALIASE ──────────────────────────────────────────────────────
+#
+# Die Kürzel aus den Bytecode-Kommentaren werden als typed Aliase für
+# primitive Typen deklariert.  Der Compiler behandelt sie als den unter-
+# liegenden Typ, aber der Widget-Runtime setzt das Label und ggf. Constraints.
+
+- alias: { name: VALUE, type: i32, label: "Value",  min: 0 }
+- alias: { name: COUNT, type: i32, label: "Count",  min: 0 }
+- alias: { name: SIDES, type: i32, label: "Sides",  min: 2, default: 6 }
+
+# ─── 1c) BIDIREKTIONALE ID↔NAME↔LABEL MAP ──────────────────────────────────
+#
+# JEDER Wert (enum-value ODER cascade-node) hat drei Facetten:
+#   • id     — i32 (Bytecode / Serialize / Wire-Format)
+#   • name   — Identifier (Code-Referenzen wie `OwnerType.player`)
+#   • label  — string (UI-Anzeige im Dropdown, ggf. lokalisiert)
+#
+# Der Compiler baut daraus eine bidirektionale Map (id→name, name→id,
+# id→label, label→id).  Runtime nutzt id für Serialisierung, name für
+# Code-Refs, label für Widget-Rendering.
+#
+# Notation je nach Bedarf:
+#
+#   Kompakt (label wird aus name auto-generiert: "draw_card" → "Draw Card"):
+#       - enum: { name: GamePhase, values: [start, draw, mana, spell, combat, end] }
+#
+#   Explizite Labels als Map (für Titles/Lokalisation):
+#       - enum:
+#           name: GamePhase
+#           labels: {1: "Phase Start", 2: "Draw Phase", 3: "Mana Phase", 4: "Spell Phase", 5: "Combat Phase", 6: "End Phase"}
+#
+#   Volle Kontrolle (id + name + label):
+#       - enum:
+#           name: OwnerType
+#           values:
+#             - {id: 1, name: player,     label: "Player"}
+#             - {id: 2, name: opponent,   label: "Opponent"}
+#             - {id: 4, name: all_allies, label: "All Allies"}
+#
+# Gleiches Prinzip für cascade — der Node-Name ist bereits Identifier,
+# das Label ist optional:
+#
+#     - cascade:
+#         name: EffectCode
+#         labels:
+#           draw_card:   "Draw Card"
+#           deal_damage: "Deal Damage"
+#           counter_trap: "Counter Trap"
+#         nodes:
+#           - draw_card:   [1, DeckType, ValueType]
+#           - deal_damage: [10, OwnerType, TargetType, ValueType]
+
+# Plain-Enums (keine Payloads) — die Blätter der Kaskade.
+# Kompakte Form: Names in lowercase_snake, labels werden auto-generiert
+# ("start" → "Start", "all_allies" → "All Allies").  IDs starten bei 1 und
+# zählen fortlaufend hoch, wenn nicht anders angegeben.
+- enum: { name: GamePhase,     values: [start, draw, mana, spell, combat, end] }
+- enum: { name: OwnerType,     values: [player, opponent, ally, all_allies, all_players, all_opponents, equipped_card, triggering_card] }
+- enum: { name: TargetType,    values: [card, soulmage, all_in_zone] }
+- enum: { name: CardType,      values: [creature, item, trap, sorcery, ceremony, incantation, fate, mana, primordial, token] }
+- enum: { name: DeckType,      values: [main, fate, discard, graveyard] }
+- enum: { name: GameZone,      values: [hand, deck, field, mana_zone, graveyard, trap_zone, spell_stack] }
+- enum: { name: AttributeType, values: [lp, atk, def, ini, mov, mor], labels: {1: "LP", 2: "ATK", 3: "DEF", 4: "INI", 5: "MOV", 6: "MOR"} }
+- enum: { name: ManaColor,     values: [fire, light, shadow, forest, earth, frost, air, stars, water, amorph] }
+
+# ─── 2) MODEL — Baum aus cascade-Werten ─────────────────────────────────────
+#
+# Eine Ability hat 1 Trigger, N Effects, N Costs.  Die einzelnen Codes sind
+# `cascade<X>` — der Runtime weiss dass er "welche Node gewählt" +
+# "deren Felder rekursiv" persistieren muss.
+
+- model:
+    name: ActiveAbility
+    fields:
+      - [trigger, cascade<TriggerCode>]       # 1 Trigger
+      - [effects, list<cascade<EffectCode>>]  # N Effects
+      - [costs,   list<cascade<ActivationCost>>]
+
+- model:
+    name: Card
+    fields:
+      - [name,      string]
+      - [abilities, list<ActiveAbility>]
+
+# ─── 3) PREFAB — CASCADE-WIDGET FÜR VARIANT-FELDER ──────────────────────────
+#
+# Der Runtime kennt den Typ `cascade<X>` und liefert dafür ein Standard-
+# Widget: einen Root-Dropdown (Node-Wahl) + einen dynamisch gefüllten
+# Kinder-Container mit einem Widget pro Node-Feld.  Nested cascades
+# entstehen automatisch rekursiv.
+#
+# Konvention:
+#   • `bind: <field>` bindet child an Model-Feld.  Wenn Feld-Typ cascade<X>
+#     ist, spawnt der Runtime ein `cascade`-Widget für das child.
+#   • `bind_list: <list-field>` spawnt eine Instanz von `spawn:` pro Element.
+#     Für list<cascade<X>> reicht das — jedes Kind rendert sich als Cascade.
+
+- prefab:
+    name: AbilityRowPrefab
+    binds: ActiveAbility
+    width: 900
+    height: auto                # ← neu: layout entscheidet Höhe
+    children:
+      # Trigger — 1 cascade
+      - { name: trg_lbl, type: label, x: 0, y: 0, label: "Trigger" }
+      - { name: trigger, type: cascade, x: 80, y: 0, bind: trigger }
+
+      # Effects — beliebig viele.  Container mit + / − Buttons.
+      # on_click akzeptiert ANY instance implementing OnClick (siehe §5.4).
+      # Für Standard-List-Ops liefert die stdlib direkt bindbare Klassen:
+      # `ListPush<T>` und `ListPop<T>` (§5.5).  Für User-Logik kann
+      # `on_click: <.my_handler` eine Methode der umgebenden Class binden.
+      - { name: eff_lbl,   type: label,  x: 0,  y: 30, label: "Effects" }
+      - { name: eff_plus,  type: button, x: 80, y: 30, label: "+",
+          on_click: { new: ListPush<EffectCode>, target: <.effects } }
+      - { name: eff_minus, type: button, x: 110, y: 30, label: "−",
+          on_click: { new: ListPop<EffectCode>, target: <.effects } }
+      - { name: effects,   type: container, x: 0, y: 60,
+          bind_list: effects,
+          spawn:     CascadeRowPrefab,
+          layout:    vflow, gap: 4 }
+
+      # Costs — beliebig viele.
+      - { name: cost_lbl,   type: label,  x: 0,  y: 200, label: "Costs" }
+      - { name: cost_plus,  type: button, x: 80, y: 200, label: "+",
+          on_click: { new: ListPush<ActivationCost>, target: <.costs } }
+      - { name: cost_minus, type: button, x: 110, y: 200, label: "−",
+          on_click: { new: ListPop<ActivationCost>, target: <.costs } }
+      - { name: costs,      type: container, x: 0, y: 230,
+          bind_list: costs,
+          spawn:     CascadeRowPrefab,
+          layout:    vflow, gap: 4 }
+
+# Ein "Universal-Cascade" Wrapper — das Element in list<cascade<X>>.
+# Es ist einfach ein cascade-Widget, das das Element bindet.
+- prefab:
+    name: CascadeRowPrefab
+    binds: cascade<any>       # any = wird an konkreten cascade<X> gebunden
+    width: 900
+    height: auto
+    children:
+      - { name: cascade, type: cascade, x: 0, y: 0, bind: . }
+      # . = das gebundene Element selbst (das Prefab bindet an ein Listen-Item)
+
+# ─── 4) SCREEN-CLASS ────────────────────────────────────────────────────────
+#
+# Kein save/load.  Kein Cascade-Reset.  Der Runtime hält alles synchron.
+
+- class:
+    name: CardEditorScreen
+    members:
+      - [initialized, i32]
+      - [scene,       prefab_instance]
+      - [card,        Card]                   # Das komplette Editor-State-Modell
+    methods:
+      - def:
+          name: init
+          body:
+            - if: { condition: { eq: [<.initialized, 1] }, then: [{ return }] }
+            - set: [<.scene, { call: [engine.instantiate, "CardEditorScene"] }]
+            # Eine leere Ability zum Start.  Container spawnt das Row-Prefab
+            # weil `bind_list: abilities` gekoppelt ist.
+            - decl: [ab0, ActiveAbility, { new: ActiveAbility }]
+            - call: [<.card.abilities.push, ab0]
+            - set: [<.initialized, 1]
+
+# ─── 5) VARIANT_CASCADE WIDGET — WAS DER RUNTIME RENDERT ────────────────────
+#
+# Der Runtime muss den Widget-Typ `cascade` implementieren.  Für
+# ein Feld mit Typ cascade<X>:
+#
+#   Header-Zeile:
+#     [ Node-Dropdown ] ← options aus X.nodes[*].name
+#
+#   Payload-Zeilen: ein Widget pro Feld der GEWÄHLTEN Node.  Feld-Typ
+#   → Widget-Typ:
+#     • i32           → text_input (numeric)
+#     • i64/f32/f64   → text_input (numeric)
+#     • string        → text_input (text)
+#     • enum          → dropdown mit enum.values als options
+#     • cascade<Y>    → REKURSIV: neues cascade-Widget eingerückt
+#     • list<T>       → container mit +/− (analog zu §3)
+#     • ModelType     → gruppierter Sub-Container mit einem Widget pro Feld
+#
+#   Persistenz:
+#     Beim Node-Change wird das Model-Feld auf den neuen Node gesetzt,
+#     mit Default-Werten aus fields[*][2] (falls definiert).  Die Widget-
+#     Instanzen für die alten Payload-Felder werden zerstört, neue gespawnt.
+#     Kein manueller Reset nötig.
+#
+# ─── 5.4) INTERFACE OnClick — EIGENE BUTTON-LOGIK ──────────────────────────
+#
+# on_click akzeptiert JEDEN Wert vom Typ `OnClick` (Interface).  Damit ist
+# der Runtime nicht auf hardgecodete Aktionen angewiesen und User können
+# beliebige Logik hängen ohne den Prefab-Parser zu erweitern.
+
+- interface:
+    name: OnClick
+    methods:
+      - def: { name: fire, args: [[ctx, ClickCtx]] }
+
+# ClickCtx trägt die Klick-Umgebung: das Widget das gefeuert hat, das
+# Prefab-Instance, ggf. den Mausbutton.  Der Runtime übergibt sie automatisch.
+- model:
+    name: ClickCtx
+    fields:
+      - [source_widget, string]                 # child name
+      - [scene,         prefab_instance]
+      - [button,        i32]                    # 0=left, 1=right, 2=middle
+
+# ─── 5.5) STDLIB — LISTPUSH / LISTPOP / INVOKE ─────────────────────────────
+#
+# Für die häufigen Fälle liefert die Standardbibliothek fertige OnClick-
+# Implementierungen.  User binden sie einfach mit `{new: ...}`.
+
+- class:
+    name: ListPush<T>
+    implements: OnClick
+    members:
+      - [target, ref<list<T>>]                  # Die zu modifizierende Liste
+    methods:
+      - def:
+          name: fire
+          args: [[ctx, ClickCtx]]
+          body:
+            - decl: [item, T, { new: T }]       # Neues Element mit Defaults
+            - call: [<.target.push, item]
+
+- class:
+    name: ListPop<T>
+    implements: OnClick
+    members:
+      - [target, ref<list<T>>]
+    methods:
+      - def:
+          name: fire
+          args: [[ctx, ClickCtx]]
+          body:
+            - if: { condition: { gt: [<.target.len, 0] }, then: [{ call: [<.target.pop] }] }
+
+# Invoke — bindet an eine Methode.  Für 1-Zeiler-Logik ohne eigene Klasse.
+# Der Prefab-Parser akzeptiert Methoden-Refs (<.method_name) und wickelt sie
+# automatisch in Invoke, damit die Prefab-Autoren nicht `{new: Invoke, ...}`
+# schreiben müssen.
+- class:
+    name: Invoke
+    implements: OnClick
+    members:
+      - [handler, fn(ClickCtx)]                 # Methoden-Referenz
+    methods:
+      - def:
+          name: fire
+          args: [[ctx, ClickCtx]]
+          body:
+            - call: [<.handler, ctx]
+
+# ─── 5.6) BEISPIEL — EIGENE HANDLER-METHODE ────────────────────────────────
+#
+# In der umgebenden Class (z.B. CardEditorScreen) definiert der User eine
+# Methode mit Signatur `(ctx: ClickCtx)` und übergibt sie als Method-Ref.
+# Der Runtime wraps sie automatisch in `Invoke`.
+#
+#     - class:
+#         name: MyEditor
+#         methods:
+#           - def:
+#               name: on_save_clicked
+#               args: [[ctx, ClickCtx]]
+#               body:
+#                 - call: [<.serialize_and_send]
+#                 - call: [<.scene.set_text, "status_lbl", "saved"]
+#
+#     - prefab:
+#         children:
+#           - { name: save_btn, type: button, on_click: <.on_save_clicked }
+
+# ─── 6) WAS DER COMPILER NEU BRAUCHT ────────────────────────────────────────
+#
+# 6.1 `cascade` als Top-Level.  Compiler emittiert:
+#       • einen Enum-Wrapper (u8 tag) für die Node-Wahl
+#       • pro Node ein Model mit den Feldern
+#       • einen "any-union"-Speicher (getaggt) oder einen ptr<> pro Node
+#     Für Serialize/Deserialize: bytecode-Layout `[tag, field0, field1, ...]`
+#     ist trivial ableitbar aus der Struktur.
+#
+# 6.2 `cascade<X>` als Feldtyp.  Speicher = { u8 tag, union<field-payloads> }
+#     oder { u8 tag, ptr<CascadeData> } als opaque handle.
+#
+# 6.3 Prefab-Runtime versteht `type: cascade`, `type: container`,
+#     `bind:`, `bind_list:`, `spawn:`, `on_click: <OnClick-Instanz oder Method-Ref>`.
+#     Method-Refs werden auto-wrapped in `Invoke`.
+#
+# 6.4 Introspection: Prefab-Runtime kann zur Laufzeit die cascade-
+#     Definition aus dem Compiler abfragen (`nodes[*].name`, `.fields`).
+#     Damit weiß es was für Widgets welche Payload erzeugen und wie sie
+#     gebunden werden.
+#
+# 6.5 Stdlib expose `OnClick`, `ClickCtx`, `ListPush<T>`, `ListPop<T>`,
+#     `Invoke` — die Prefab-Runtime findet sie ohne User-Import.
+#
+# ─── 7) VORTEILE ────────────────────────────────────────────────────────────
+#
+# • Kaskade ist rekursiv datenmodelliert.  Nicht "aa_p0..p3 mit Zweitverwendung
+#   je nach Trigger", sondern "das Feld hat den Typ cascade<TriggerCode>".
+# • Kein save/load.  Model IST der State.
+# • Kein Cascade-Reset.  Beim Node-Change wischt der Runtime alte Payload-
+#   Widgets weg und spawnt neue.
+# • Kein flaches Widget-Namensschema.  Widgets sind pro-Ability-Instanz
+#   getrennt (jede AbilityRow-Instanz hat ihre eigene Widget-Instanz-ID).
+# • Bytecode-Serialisierung fällt praktisch von selbst raus, weil die Struktur
+#   die Signatur direkt abbildet.
+# • Beliebig viele Abilities pro Card, beliebig viele Effects/Costs pro
+#   Ability, beliebig tiefe Value/Duration-Kaskaden — alles nur durch
+#   `list<...>` und `cascade<...>` beschrieben.
+#
+# ═══════════════════════════════════════════════════════════════════════════

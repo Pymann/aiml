@@ -1,0 +1,35 @@
+# Phase 3: cascade<X> as field type.  Wire-layout is list<i32>.
+# Manual push shows we can construct a cascade value using the bytecode form.
+
+- enum: { name: DeckType, values: [main, fate, discard, graveyard] }
+
+- cascade:
+    name: EffectCode
+    nodes:
+      - draw_card:    [1, DeckType, i32]     # [id, deck, value]
+      - counter_trap: [48]
+
+- def:
+    name: main
+    return: i32
+    body:
+      # Manual construction of a cascade value at bytecode-level.  Layout:
+      # [tag, field0, field1, ...].  draw_card = [1, deck_id, value].
+      - decl: [effect, cascade<EffectCode>]
+      - call: [effect.push, 1]      # tag = draw_card
+      - call: [effect.push, 1]      # deck = main
+      - call: [effect.push, 5]      # value = 5
+
+      # Read back as bytecode
+      - decl: [tag,   i32, { call: [effect.get, 0] }]
+      - decl: [deck,  i32, { call: [effect.get, 1] }]
+      - decl: [value, i32, { call: [effect.get, 2] }]
+      - print: ["effect: tag=${tag} deck=${deck} value=${value} len=${effect.len}"]
+
+      # A list of cascades — the aa_data pattern.
+      - decl: [effects, list<cascade<EffectCode>>]
+      - decl: [ab_ct, cascade<EffectCode>]
+      - call: [ab_ct.push, 48]      # counter_trap (no payload)
+      - call: [effects.push, ab_ct]
+      - print: ["effects.len=${effects.len}"]
+      - return: 0

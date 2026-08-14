@@ -1,0 +1,290 @@
+# Requires: library
+# 9Rooms — Enums (ported from ccg_gemini/card_api/schemas.py)
+
+- enum:
+    name: ManaColor
+    values:
+      - fire: 1
+      - light: 2
+      - shadow: 3
+      - forest: 4
+      - earth: 5
+      - frost: 6
+      - air: 7
+      - stars: 8
+      - water: 9
+      - amorphous: 10
+
+- enum:
+    name: CardType
+    values:
+      - any: 0
+      - creature: 1
+      - spell: 2
+      - mana_card: 3
+      - item: 4
+      - fate: 5
+      - primordial: 6
+      - trap: 7
+
+- enum:
+    name: RoomEffect
+    values:
+      - none: 0
+      - flooded: 1
+      - inflamed: 2
+      - plague: 3
+      - thunderstorm: 4
+      - iced: 5
+      - drought: 6
+
+- enum:
+    name: SpellType
+    values:
+      - sorcery: 2
+      - ceremony: 3
+      - enchantment: 4
+      - incantation: 5
+
+- enum:
+    name: GamePhase
+    values:
+      - start_phase: 1
+      - draw_phase: 2
+      - mana_phase: 3
+      - spell_phase: 4
+      - combat_phase: 5
+      - end_phase: 6
+
+- enum:
+    name: GameZone
+    values:
+      - hand: 1
+      - graveyard: 2
+      - deck_mana: 10
+      - deck_spell: 11
+      - deck_creature: 12
+      - deck_item: 13
+      - deck_fate: 14
+      - deck_primordial: 15
+      - mana_zone: 20
+      - magic_zone: 21
+      - trap_zone: 22
+      - fate_zone: 23
+      - dream_zone: 24
+      - room_soulmage: 30
+      - combat_zone_1: 31
+      - combat_zone_2: 32
+      - combat_zone_3: 33
+      - combat_zone_4: 34
+      - combat_zone_5: 35
+      - any_combat_zone: 36
+      - limbo: 99
+      - out_of_game: 100
+
+- enum:
+    name: PassiveAbility
+    values:
+      - flying: 1
+      - swimming: 2
+      - diving: 3
+      - subterranean: 4
+      - mirror_walk: 5
+      - double_strike: 10
+      - veteran: 11
+      - reach: 12
+      - sacrifice: 13
+      - dodge_30: 14
+      - inspired_morale: 15
+      - agile: 16
+      - pierce: 17
+      - armored: 18
+      - attack_bonus: 19
+      - defense_bonus: 20
+      - watchful: 21
+      - gigantic: 22
+      - puny: 23
+      - burning: 30
+      - shadowy: 31
+      - glowing: 32
+      - undead: 33
+      - holy: 34
+      - ethereal: 35
+      - smoky: 36
+      - vampiric: 37
+      - iceshock: 38
+      - poisonous: 39
+      - regenerates: 40
+      - infected: 41
+      - astral: 42
+      - reviving: 43
+      - sticky: 50
+      - thieving: 51
+      - tired: 52
+      - sluggish: 53
+      - annoying: 54
+      - porous: 55
+      - ugly: 56
+      - effective_against_fire: 60
+      - effective_against_forest: 61
+      - effective_against_ice: 62
+      - effective_against_light: 63
+      - effective_against_shadow: 64
+      - effective_against_earth: 65
+      - effective_against_frost: 66
+      - effective_against_air: 67
+      - effective_against_stars: 68
+      - effective_against_water: 69
+      - protection_from_fire: 70
+      - protection_from_forest: 71
+      - protection_from_ice: 72
+      - protection_from_light: 73
+      - protection_from_shadow: 74
+      - protection_from_earth: 75
+      - protection_from_frost: 76
+      - protection_from_air: 77
+      - protection_from_stars: 78
+      - protection_from_water: 79
+      - lifelink: 80
+      - teleport: 81
+      - trample: 82
+      - thorns_10: 83
+      - thorns_20: 84
+      - thorns_30: 85
+      - thorns_40: 86
+      - thorns_50: 87
+      - sniper: 88
+      - guardian: 89
+      - rooted: 90
+      - shrouded: 91
+      - voracious: 92
+      - evolve_a: 93
+      - evolve_v: 94
+      - evolve_i: 95
+
+- enum:
+    name: EffectCode
+    values:
+      - draw_card: 1 # [1, DeckType, ValueType]
+      - discard_card: 2 # [2, OwnerType, CardType, ValueType]
+      - move_card: 3 # [3, GameZone, GameZone]
+      - destroy_card: 4 # [4, OwnerType, CardType]
+      - deal_damage: 10 # [10, OwnerType, TargetType, ValueType]
+      - heal_damage: 11 # [11, OwnerType, TargetType, ValueType]
+      - modify_stat: 12 # [12, OwnerType, AttributeType, ValueType, DurationType]
+      - add_passive_ability: 20 # [20, PassiveAbility, OwnerType, DurationType]
+      - remove_passive_ability: 21 # [21, PassiveAbility, OwnerType, DurationType]
+      - reveal_card: 30 # [30, OwnerType, ValueType]
+      - peek_hand: 31 # [31, OwnerType, ValueType]
+      - peek_deck: 32 # [32, OwnerType, ValueType]
+      - counter_spell: 40 # [40, SpellType]
+      - summon_token: 41 # [41, CardType] Unfinished
+      - transform: 42 # [42, CardType, DurationType] Unfinished
+      - drain_mana: 43 # [43, ManaColor, ValueType]
+      - destroy_mana: 44 # [44, ManaColor, ValueType]
+      - heal_soulmage: 45 # [45, OwnerType, ValueType]
+      - paralyze: 46 # [46, OwnerType, DurationType]
+      - revive: 47 # [47, OwnerType, OwnerType, GameZone, CardType]
+      - counter_trap: 48 # [48]
+      - cant_be_attacked: 49 # [49, OwnerType, DurationType]
+      - soulmage_cant_be_attacked: 50 # [50, OwnerType, DurationType]
+      - produce_mana: 51 # [51, ManaColor, ValueType]
+
+- enum:
+    name: TargetType
+    values:
+      - any: 1
+      - creature: 2
+      - spell: 3
+      - mana_card: 4
+      - item: 5
+      - fate: 6
+      - primordial: 7
+      - trap: 8
+      - creature_or_primordial: 9
+      - soulmage: 10
+      - creature_or_primordial_or_soulmage: 11
+
+- enum:
+    name: OwnerType
+    values:
+      - player: 1 # [1]
+      - opponent: 2 # [2]
+      - ally: 3 # [3]
+      - all_allies: 4 # [4]
+      - all_players: 5 # [5]
+      - all_opponents: 6 # [6]
+      - equipped_card: 7 # [7]
+      - triggering_card: 8 # [8]
+      - all_in_zone: 9 # [9, GameZone]
+      - all_in_same_zone: 10 # [10]
+      - all_allied_in_same_zone: 11 # [11]
+      - all_enemy_in_same_zone: 12 # [12]
+
+- enum:
+    name: AttributeType
+    values:
+      - var_lp: 1 # [1]
+      - a: 2 # [2]
+      - var_v: 3 # [3]
+      - i: 4 # [4]
+      - var_m: 5 # [5]
+      - b: 6 # [6]
+
+- enum:
+    name: TriggerType
+    values:
+      - on_phase_start: 1 # [1, GamePhase]
+      - on_phase_end: 2 # [2, GamePhase]
+      - on_effect_code: 3 # [3, EffectCode]
+      - on_card_move: 4 # [4, GameZone, GameZone]
+      - on_attack: 5 # [5, OwnerType]
+      - on_defend: 6 # [6, OwnerType]
+      - on_draw: 7 # [7, OwnerType, DeckType]
+      - on_destroy: 8 # [8, OwnerType, CardType]
+      - on_card_played: 9 # [9, OwnerType, CardType]
+      - on_hit: 10 # [10, OwnerType]
+      - on_kill: 11 # [11, OwnerType]
+      - on_soulmage_hit: 12 # [12, OwnerType]
+      - on_soulmage_attack: 13 # [13, OwnerType]
+      - on_equip: 14 # [14, OwnerType]
+      - on_unequip: 15 # [15, OwnerType]
+      - on_drop: 16 # [16, OwnerType, CardType]
+      - on_reveal: 17 # [17, OwnerType]
+      - on_hide: 18 # [18, OwnerType]
+
+- enum:
+    name: ValueType
+    values:
+      - fixed: 1 # [1, VALUE]
+      - equal_to_mana_cost: 2 # [2]
+      - equal_to_attribute: 3 # [3, AttributeType]
+      - equal_to_cards_on_deck: 4 # [4, DeckType, OwnerType]
+      - equal_to_cards_in_zone: 5 # [5, GameZone, OwnerType]
+      - equal_to_cards_in_hand: 6 # [6, OwnerType]
+      - equal_to_cards_in_graveyard: 7 # [7, OwnerType]
+      - equal_to_dice_roll: 8 # [8, COUNT, SIDES]
+      - equal_to_manapool: 9 # [9, ManaColor]
+      - x_cost_spent: 10 # [10, ManaColor]
+
+- enum:
+    name: ActivationCostType
+    values:
+      - mana_cost: 1 # [1, ManaColor, COUNT]
+      - lp_cost: 2 # [2, COUNT]
+      - drop_handcard: 3 # [3, COUNT]
+      - sacrifice: 4 # [4, CARDTYPE, COUNT]
+      - x_mana_cost: 5 # [5, ManaColor]
+      - tap_activating_creature: 6 # [6], code cannot work if this is cost of non-creature-card
+      - tap_friendly_creature: 7 # [7]
+      - movement_cost: 8 # [8, COUNT]
+
+- enum:
+    name: DurationType
+    values:
+      - permanent: 1 # [1]
+      - turns: 2 # [2, ValueType]
+      - next_turn_phase: 3 # [3, GamePhase]
+      - end_of_phase: 4 # [4, GamePhase]
+      - as_long_as_equipped: 5 # [5]
+      - as_long_as_card_in_play: 6 # [6]

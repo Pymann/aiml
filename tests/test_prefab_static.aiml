@@ -1,0 +1,32 @@
+# Positive test: statischer Prefab-Check (spec/44_8) darf bei KORREKTER
+# Verwendung nicht anschlagen —
+#   Tier 1: engine.instantiate("<Name>") mit deklariertem Prefab-Namen,
+#   Tier 2: v.set_text("<child>", …) mit einem in `children:` deklarierten Namen.
+#
+# Expected exit code: 0
+#
+# Der instantiate-/Child-Pfad ist hinter einer zur Laufzeit falschen Bedingung
+# geparkt: die statischen Checks scannen die AST unabhängig von der
+# Erreichbarkeit (sehen Literal "Panel" bzw. Child "title"), zur Laufzeit wird
+# aber kein Grafik-/GL-Pfad angefasst → headless-tauglich.
+
+- prefab:
+    name: Panel
+    width: 100
+    height: 40
+    children:
+      - { name: title, type: label, x: 0, y: 0, width: 100, height: 20 }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [flag, i32, 0]
+      - if:
+          condition: { eq: [flag, 1] }
+          then:
+            - decl: [inst, prefab_instance, { call: [engine.instantiate, "Panel"] }]
+            # Tier 2 positiv: "title" IST ein deklariertes Child von Panel.
+            - call: [inst.set_text, "title", "hello"]
+      - print: ["PASS prefab_static: bekannter Prefab 'Panel' + Child 'title' akzeptiert"]
+      - return: 0

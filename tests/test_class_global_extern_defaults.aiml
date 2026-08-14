@@ -1,0 +1,31 @@
+# Test: class member defaults when the global is declared `{extern: true}`
+# AND given an explicit `null` init.  This is the DataCreatures pattern
+# that broke (auth_nid stayed at 0 instead of -1).
+#
+# Expected exit code: 0 (defaults from the class declaration should still
+# be applied even when the decl has `null, {extern: true}`).
+
+- import: "tests/wasm/mirror_class_default_lib.aiml"
+
+# This is the exact shape used in DataCreatures' client_main.aiml:
+#   decl: [g_app, ClientApp, null, { extern: true }]
+- decl: [g_app, AppState, null, { extern: true }]
+
+- print: ["counter=${g_app.counter}"]
+- print: ["flag=${g_app.flag}"]
+- print: ["stage=${g_app.stage}"]
+
+- if:
+    condition: { neq: [g_app.flag, -1] }
+    then:
+      - print: ["FAIL: flag=${g_app.flag} expected -1 (defaults ignored when extern+null)"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [g_app.counter, 42] }
+    then:
+      - print: ["FAIL: counter=${g_app.counter} expected 42"]
+      - call: [sys.exit, 1]
+
+- print: ["PASS"]
+- call: [sys.exit, 0]

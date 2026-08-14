@@ -1,0 +1,45 @@
+# static-check: off
+# BUG-Repro: peq/pneq auf einem INTERFACE-Pointer (Fat-Pointer
+# AimlFatPtr_<Iface> = {obj, vtable}) gegen null lässt den Compiler mit einer
+# LLVM-Assertion crashen ("Both operands to ICmp instruction are not of the
+# same type") — peq baut ICmpEQ(struct, ptr).  peq/pneq müssten den obj-Teil
+# des Fat-Pointers extrahieren und gegen null vergleichen.
+#
+# Motivation: CardService.get_base(...) → ptr<CardBase>, null bei not-found;
+# der Caller braucht `peq [base, null]`.
+#
+# Erwartung nach Fix: kompiliert; ein frisch-allozierter iface-ptr ist
+# NICHT null, ein `return: null`-iface-ptr IST null.
+
+- interface: { name: Speak, methods: [[word, i32, []]] }
+- model: { name: SpkData, fields: [[num, i32]] }
+- class:
+    name: Spk
+    models: [SpkData]
+    implements: [Speak]
+    methods:
+      - def: { name: word, return: i32, body: [{ return: <.num }] }
+
+- def:
+    name: maybe
+    args: [[give, i32]]
+    return: ptr<Speak>
+    body:
+      - if: { condition: { eq: [give, 0] }, then: [{ return: null }] }
+      - decl: [obj, ptr<Spk>, { new: Spk }]
+      - return: obj
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [some, ptr<Speak>, { call: [maybe, 1] }]
+      - decl: [none, ptr<Speak>, { call: [maybe, 0] }]
+      - if: { condition: { peq: [some, null] }, then: [{ print: ["FAIL some is null"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { pneq: [none, null] }, then: [{ print: ["FAIL none is not null"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if:
+          condition: { eq: [fails, 0] }
+          then: [{ print: ["PASS peq_iface_ptr_null: fat-pointer null comparison works"] }]
+          else: [{ print: ["FAIL peq_iface_ptr_null: ${fails}"] }]
+      - return: fails

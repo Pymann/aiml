@@ -1,0 +1,80 @@
+# Repro: vtable indirect call returning list<string> (struct >8 bytes) corrupts
+# the data pointer.  WASM/Itanium ABI demotes struct returns >8 bytes to a
+# hidden sret out-pointer.  For DIRECT calls LLVM handles both ends.  For
+# INDIRECT calls (interface vtable) the call site must emit `sret` itself —
+# otherwise size+cap survive in the first 8 bytes (returned as i64) but the
+# data ptr is garbage → out-of-bounds on the first `at:` access.
+#
+# Bug-Symptom in DataCreatures (2026-06-05): hovering inventory tiles with
+# action modal open → "Uncaught RuntimeError: index out of bounds" inside
+# join_strings.  list<string>.len reads 3 correctly (size field intact),
+# `at: [lst, 0]` crashes (data ptr corrupted).
+#
+# Expected exit code: 0.
+
+- interface:
+    name: Tagged
+    methods:
+      - [tags, list<string>, []]
+
+- model:
+    name: Item
+    fields:
+      - [name, string]
+
+- class:
+    name: ItemImpl
+    models: [Item]
+    implements: [Tagged]
+    members:
+      - [_tags, list<string>]
+    methods:
+      - def:
+          name: tags
+          return: list<string>
+          args: []
+          body:
+            - decl: [var_r, list<string>, <._tags]
+            - return: var_r
+
+# Build an instance with 3 tags.
+- decl: [var_it, ptr<ItemImpl>, { new: ItemImpl }]
+- set: [var_it.name, "Hammer"]
+- call: [var_it._tags.push, "tool"]
+- call: [var_it._tags.push, "metal"]
+- call: [var_it._tags.push, "starter"]
+
+# Polymorphic upcast → vtable dispatch.  This is the path that crashed.
+- decl: [view, ptr<Tagged>, var_it]
+- decl: [got, list<string>, { call: [view.tags] }]
+
+- print: ["len=${got.len}"]
+- if:
+    condition: { neq: [got.len, 3] }
+    then:
+      - print: ["FAIL len=${got.len} expected=3"]
+      - call: [sys.exit, 1]
+
+# CRITICAL: iterate via `at:` — this is what crashed in the wild.
+# If data ptr is corrupt, the first `at:` traps with OOB.
+- decl: [var_i, i32, 0]
+- decl: [joined, string, ""]
+- while:
+    condition: { lt: [var_i, got.len] }
+    body:
+      - decl: [var_v, string, { at: [got, var_i] }]
+      - if:
+          condition: { eq: [var_i, 0] }
+          then: [{ set: [joined, var_v] }]
+          else: [{ set: [joined, "${joined},${var_v}"] }]
+      - set: [var_i, { "+": [var_i, 1] }]
+
+- print: ["joined='${joined}'"]
+- if:
+    condition: { eq: [joined, "tool,metal,starter"] }
+    then:
+      - print: ["PASS"]
+      - call: [sys.exit, 0]
+    else:
+      - print: ["FAIL joined='${joined}'"]
+      - call: [sys.exit, 1]

@@ -1,0 +1,72 @@
+# static-check: off
+# Repro: model with multiple list<ptr<T>> fields where EACH field has a
+# DIFFERENT element type — matches datacreatures' CreatureDetail pattern.
+
+- interface:
+    name: Tagged
+    methods:
+      - [tag, string, []]
+
+- model:
+    name: var_A
+    fields:
+      - [var_an, i32, 0]
+
+- class:
+    name: var_AB
+    models: [var_A]
+    implements: [Tagged]
+    methods:
+      - def: { name: tag, return: string, args: [], body: [{ return: "var_A:${<.var_an}" }] }
+
+- model:
+    name: var_B
+    fields:
+      - [var_bn, i32, 0]
+
+- class:
+    name: var_BB
+    models: [var_B]
+    implements: [Tagged]
+    methods:
+      - def: { name: tag, return: string, args: [], body: [{ return: "var_B:${<.var_bn}" }] }
+
+- model:
+    name: var_C
+    fields:
+      - [var_cn, i32, 0]
+
+- class:
+    name: var_CB
+    models: [var_C]
+    implements: [Tagged]
+    methods:
+      - def: { name: tag, return: string, args: [], body: [{ return: "var_C:${<.var_cn}" }] }
+
+- model:
+    name: Bundle
+    fields:
+      - [name,    string]
+      - [var_as,      list<ptr<var_AB>>]
+      - [var_bs,      list<ptr<var_BB>>]
+      - [var_cs,      list<ptr<var_CB>>]
+
+- decl: [var_a1, ptr<var_AB>, { new: var_AB }]
+- set: [var_a1.var_an, 1]
+- decl: [var_a2, ptr<var_AB>, { new: var_AB }]
+- set: [var_a2.var_an, 2]
+- decl: [var_a3, ptr<var_AB>, { new: var_AB }]
+- set: [var_a3.var_an, 3]
+
+- decl: [bun, Bundle]
+- set: [bun.name, "test"]
+- call: [bun.var_as.push, var_a1]
+- call: [bun.var_as.push, var_a2]
+- call: [bun.var_as.push, var_a3]
+# var_bs und var_cs bleiben leer
+
+- print: ["pre-ser: var_as=${bun.var_as.len} var_bs=${bun.var_bs.len} var_cs=${bun.var_cs.len}"]
+- decl: [var_s, string, { call: [sys.serialize, bun] }]
+- print: ["wire: ${var_s}"]
+- decl: [bun2, Bundle, { call: [sys.deserialize, var_s] }]
+- print: ["post-deser: var_as=${bun2.var_as.len} var_bs=${bun2.var_bs.len} var_cs=${bun2.var_cs.len}"]

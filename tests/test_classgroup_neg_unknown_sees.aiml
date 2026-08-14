@@ -1,0 +1,37 @@
+# M1 negative — a `sees` target that names no instance in the group MUST be a
+# hard compile error (spec/58 §7).  Here `resolver` sees `logg`, but the only
+# log instance is named `log`.  The compiler must reject this (exit 1); it must
+# NOT silently ignore the dangling edge.
+#
+# Runner expects exit code 1 (test_classgroup_neg_ pattern in run_all_tests.sh).
+
+- class:
+    name: CombatLog
+    members: [[count, i32]]
+    methods:
+      - def: { name: note, args: [[n, i32]], body: [{ set: [<.count, { +: [<.count, n] }] }] }
+
+- class:
+    name: DamageResolver
+    members: [[base_dmg, i32]]
+    methods:
+      - def: { name: raw, return: i32, body: [{ return: <.base_dmg }] }
+
+- classgroup:
+    name: CombatRuntime
+    instances:
+      - class: CombatLog
+        instance: log
+
+      - class: DamageResolver
+        instance: resolver
+        sees: [logg]          # typo: no instance named `logg` → must hard-fail
+        functions:
+          - def: { name: apply, return: i32, body: [{ return: { call: [<.raw] } }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [grp, ptr<CombatRuntime>, { new: CombatRuntime }]
+      - return: 0

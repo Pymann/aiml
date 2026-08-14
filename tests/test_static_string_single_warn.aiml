@@ -1,0 +1,26 @@
+# Positive test (Warnung, kein Fehler): eine Variable wird GENAU EINMAL gegen
+# ein String-Literal verglichen.  Das ist erlaubt, produziert aber eine
+# Compiler-WARNUNG mit Hinweis auf reguläre Ausdrücke (siehe spec/49 §16).
+# Die Kompilierung läuft normal durch (exit 0).
+#
+# Expected exit code: 0
+#
+# Diagnostic-Form (Warning):
+#   ...: variable 'kind' is compared against a string literal — consider a
+#   regular expression for string matching.
+
+- def:
+    name: is_fire
+    args: [[kind, string]]
+    return: i32
+    body:
+      - if: { condition: { eq: [kind, "fire"] }, then: [{ return: 1 }] }
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [res, i32, { call: [is_fire, "fire"] }]
+      - if: { condition: { neq: [res, 1] }, then: [{ call: [sys.exit, 5] }] }
+      - return: 0

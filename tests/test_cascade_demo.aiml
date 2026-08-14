@@ -1,0 +1,258 @@
+# Requires: display
+# End-to-end demo: cascade type + nested cascade payload + list<cascade<X>>
+# + prefab container that spawns one row per effect + on-the-fly grow/shrink.
+#
+# Modelled on the 9rooms card editor:
+#   • Effect = cascade<EffectCode>  (top-level effect + params)
+#   • ValueType = cascade<ValueType> that can be embedded in an effect's params
+#     — recursive: "modify_stat" carries a nested ValueType payload
+#   • Ability holds list<cascade<EffectCode>> — variable-length list of effects
+#   • The prefab has a `container` that spawns one RowChip per effect
+
+- config:
+    entry: main
+
+# ── 1) enums + aliases ──────────────────────────────────────────────────────
+- enum: { name: OwnerType,     values: [player, opponent, ally, all_allies, all_players] }
+- enum: { name: AttributeType, values: [lp, atk, def, ini, mov, mor],
+           labels: {1: "LP", 2: "ATK", 3: "DEF", 4: "INI", 5: "MOV", 6: "MOR"} }
+- enum: { name: DeckType,      values: [main, fate, discard, graveyard] }
+- enum: { name: GameZone,      values: [hand, deck, field, mana_zone, graveyard] }
+- enum: { name: TargetType,    values: [card, soulmage, all_in_zone] }
+
+# Alias — carries UI-metadata for widgets rendering the numeric slots.
+- alias: { name: VALUE, type: i32, label: "Value", min: 0 }
+- alias: { name: COUNT, type: i32, label: "Count", min: 0 }
+- alias: { name: SIDES, type: i32, label: "Sides", min: 2, default: 6 }
+
+# ── 2) cascades ────────────────────────────────────────────────────────────
+# ValueType — the nested cascade.  "fixed" is 1 numeric input, "equal_to_dice_roll"
+# is 2 numerics, "equal_to_attribute" is a sub-dropdown.
+- cascade:
+    name: ValueType
+    nodes:
+      - fixed:              [1, VALUE]
+      - equal_to_dice_roll: [8, COUNT, SIDES]
+      - equal_to_attribute: [3, AttributeType]
+
+# EffectCode — top-level cascade.  "modify_stat" recursively embeds ValueType.
+- cascade:
+    name: EffectCode
+    labels:
+      draw_card:    "Draw Card"
+      modify_stat:  "Modify Stat"
+      counter_trap: "Counter Trap"
+    nodes:
+      - draw_card:    [1, DeckType, ValueType]
+      - deal_damage:  [10, OwnerType, TargetType, ValueType]
+      - modify_stat:  [12, OwnerType, AttributeType, ValueType]
+      - counter_trap: [48]
+
+# ── 3) prefab: an ability page with a container of effect rows ─────────────
+# Payload rendered per cascade field.  The runtime mutates the child based
+# on the field's type: enum → dropdown, cascade → dropdown, else → label.
+- prefab:
+    name: FieldChip
+    width: 130
+    height: 22
+    texture: ""
+    children:
+      - name: control
+        type: label
+        x: 0
+        y: 0
+        width: 130
+        height: 22
+        font_size: 10
+        color: 0xFFCC44FF
+        bg_color: 0x223040FF
+        hover_color: 0x304050FF
+        border_color: 0x88AACCFF
+        border_width: 1.0
+        corner_radius: 3.0
+        options: "---"
+        label: "?"
+
+- prefab:
+    name: EffectChip
+    width: 820
+    height: 26
+    texture: ""
+    children:
+      - name: effect
+        type: dropdown
+        x: 4
+        y: 2
+        width: 220
+        height: 22
+        cascade_type: EffectCode
+        payload_spawn: FieldChip
+        bg_color: 0x223040FF
+        hover_color: 0x304050FF
+        border_color: 0x88AACCFF
+        border_width: 1.0
+        corner_radius: 4.0
+        color: 0xFFFFFFFF
+        font_size: 11
+
+- prefab:
+    name: AbilityPage
+    width: 900
+    height: 260
+    texture: ""
+    children:
+      - name: title
+        type: label
+        x: 8
+        y: 4
+        label: "Ability — Effects"
+      - name: effects
+        type: container
+        x: 8
+        y: 28
+        width: 300
+        height: 220
+        bind_list: effects
+        spawn: EffectChip
+        layout: vflow
+        gap: 4
+
+# ── 4) The wrapper model that owns the effect list ─────────────────────────
+- model:
+    name: Ability
+    fields:
+      # Each element is a cascade<EffectCode> — at wire level list<i32>.
+      # Which is what list<cascade<EffectCode>> compiles to internally.
+      - [effects, list<list<i32>>]
+
+# ── 5) Helper: describe a cascade row in human form for the log ────────────
+- def:
+    name: describe_effect
+    args: [[eff, list<i32>]]
+    return: string
+    body:
+      - decl: [tag, i32, { call: [eff.get, 0] }]
+      - if: { condition: { eq: [tag, 1] },  then: [{ return: "Draw Card    (deck=?  value=?)"  }] }
+      - if: { condition: { eq: [tag, 10] }, then: [{ return: "Deal Damage  (owner target ValueType)" }] }
+      - if: { condition: { eq: [tag, 12] }, then: [{ return: "Modify Stat  (owner attr ValueType)"   }] }
+      - if: { condition: { eq: [tag, 48] }, then: [{ return: "Counter Trap (no payload)"             }] }
+      - return: "Unknown effect"
+
+- def:
+    name: main
+    body:
+      - decl: [win, window_handle]
+      - set:  [win, { call: [engine.create_window, 1000, 400, "cascade-demo"] }]
+
+      # GL + input + UI + prefab-scene + font setup.
+      - call: [gl.init]
+      - call: [input.init, win]
+      - call: [ui.init]
+      - call: [engine.prefab_scene_init, 1000, 400]
+      - decl: [font, ui_font, { call: [ui.load_font_default, 14.0] }]
+      - call: [ui.set_default_font, font]
+      - call: [engine.prefab_set_font, font]
+
+      - decl: [ability, ptr<Ability>, { new: Ability }]
+
+      # ── Effect 1: Draw Card, deck=main, value=fixed(3) ──────────────────
+      # Wire: [1, 1, 1, 3]  = [EffectCode=1 draw_card, DeckType=1 main,
+      #                        ValueType=1 fixed, VALUE=3]
+      - decl: [eff_draw, list<i32>]
+      - call: [eff_draw.push, 1]
+      - call: [eff_draw.push, 1]
+      - call: [eff_draw.push, 1]
+      - call: [eff_draw.push, 3]
+      - call: [ability.effects.push, eff_draw]
+
+      # ── Effect 2: Modify Stat, owner=player, attr=atk, value=fixed(2) ───
+      # Wire: [12, 1, 2, 1, 2]
+      - decl: [eff_modif, list<i32>]
+      - call: [eff_modif.push, 12]
+      - call: [eff_modif.push, 1]
+      - call: [eff_modif.push, 2]
+      - call: [eff_modif.push, 1]
+      - call: [eff_modif.push, 2]
+      - call: [ability.effects.push, eff_modif]
+
+      # ── Effect 3: Modify Stat with NESTED dice-roll value: ValueType=8
+      # (equal_to_dice_roll), COUNT=2, SIDES=6 → 2d6 damage buff.
+      # Wire: [12, 1, 2, 8, 2, 6]
+      - decl: [eff_dice, list<i32>]
+      - call: [eff_dice.push, 12]
+      - call: [eff_dice.push, 1]
+      - call: [eff_dice.push, 2]
+      - call: [eff_dice.push, 8]
+      - call: [eff_dice.push, 2]
+      - call: [eff_dice.push, 6]
+      - call: [ability.effects.push, eff_dice]
+
+      # ── Effect 4: Counter Trap — no payload ─────────────────────────────
+      - decl: [eff_ct, list<i32>]
+      - call: [eff_ct.push, 48]
+      - call: [ability.effects.push, eff_ct]
+
+      # Instantiate the page + bind the model list to its container.
+      - decl: [page, prefab_instance, { call: [engine.instantiate, "AbilityPage"] }]
+      - call: [page.set_pos, 40.0, 40.0]
+      - call: [page.set_visible, 1]
+      - call: [page.set_z, 0]
+      - call: [page.bind_list, ability.effects]
+
+      # One draw frame → container_sync spawns 4 EffectChip instances.
+      - call: [gl.clear_all, 0.05, 0.05, 0.08, 1.0]
+      - call: [engine.draw_scene]
+
+      - print: ["── Ability state after initial push, before user edits ──"]
+      - print: ["N=${ability.effects.len} effects on the ability"]
+
+      # Read back each effect's wire and describe it.
+      - decl: [idx0, i32, 0]
+      - decl: [row0, list<i32>, { call: [ability.effects.get, idx0] }]
+      - decl: [txt0, string, { call: [describe_effect, row0] }]
+      - print: ["  [0] ${txt0}   wire[0]=${call: [row0.get, 0]}"]
+
+      - decl: [idx1, i32, 1]
+      - decl: [row1, list<i32>, { call: [ability.effects.get, idx1] }]
+      - decl: [txt1, string, { call: [describe_effect, row1] }]
+      - print: ["  [1] ${txt1}   wire[0]=${call: [row1.get, 0]}"]
+
+      - decl: [idx2, i32, 2]
+      - decl: [row2, list<i32>, { call: [ability.effects.get, idx2] }]
+      - decl: [txt2, string, { call: [describe_effect, row2] }]
+      - print: ["  [2] ${txt2}   nested-ValueType-tag=${call: [row2.get, 3]}"]
+
+      - decl: [idx3, i32, 3]
+      - decl: [row3, list<i32>, { call: [ability.effects.get, idx3] }]
+      - decl: [txt3, string, { call: [describe_effect, row3] }]
+      - print: ["  [3] ${txt3}"]
+
+      # Now simulate a user pop (remove last effect) — one more draw pass.
+      - call: [ability.effects.pop]
+      - call: [engine.draw_scene]
+      - print: ["── after pop: N=${ability.effects.len} effects ──"]
+
+      # Simulate a user push (add a Draw-2 draw_card).
+      - decl: [eff_new, list<i32>]
+      - call: [eff_new.push, 1]
+      - call: [eff_new.push, 1]
+      - call: [eff_new.push, 1]
+      - call: [eff_new.push, 2]
+      - call: [ability.effects.push, eff_new]
+      - call: [engine.draw_scene]
+      - print: ["── after push: N=${ability.effects.len} effects ──"]
+
+      # Interactive loop — needs mouse polling + update_hover so the widget
+      # hit-test / click-toggle machinery runs each frame.  Without them the
+      # dropdown never receives its click events.
+      - while:
+          condition: { call: [engine.running, win] }
+          body:
+            - call: [gl.clear_all, 0.05, 0.05, 0.08, 1.0]
+            - decl: [mouse_x, f32, { call: [input.mouse_pos_x] }]
+            - decl: [mouse_y, f32, { call: [input.mouse_pos_y] }]
+            - call: [engine.update_hover, mouse_x, mouse_y]
+            - call: [engine.draw_scene]
+            - call: [engine.swap, win]
+            - call: [time.sleep_ms, 16]
+      - call: [engine.destroy_window, win]

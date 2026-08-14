@@ -1,0 +1,50 @@
+# Repro Erweiterung: Model mit list<string>-Feld — verliert das Model
+# seine string-Felder beim push in list<Model>?
+#
+# Hypothese: die list<string>-Membervariable stört die Struct-Copy.
+
+- model:
+    name: Bag
+    fields:
+      - [name,  string]
+      - [tags,  list<string>]
+      - [count, i32]
+
+- class:
+    name: BagHolder
+    members:
+      - [bags, list<Bag>]
+    methods:
+      - def:
+          name: add
+          args: [[nam, string]]
+          body:
+            - decl: [bag, Bag]
+            - set: [bag.name,  nam]
+            - set: [bag.count, 7]
+            - call: [<.bags.push, bag]
+
+      - def:
+          name: read_name
+          args: [[idx, i32]]
+          return: string
+          body:
+            - decl: [bag, Bag, { call: [<.bags.get, idx] }]
+            - return: bag.name
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [hld, ptr<BagHolder>, { new: BagHolder }]
+      - call: [hld.add, "banana"]
+      - decl: [nam, string, { call: [hld.read_name, 0] }]
+      - print: ["bags[0].name='${nam}'"]
+      - if:
+          condition: { eq: [nam, "banana"] }
+          then:
+            - print: ["PASS"]
+            - return: 0
+          else:
+            - print: ["FAIL got='${nam}' want='banana'"]
+            - return: 1

@@ -1,0 +1,23 @@
+# Negative test: a prefab child name shorter than 5 characters.  Prefab and
+# child names are the UI's cross-file wiring vocabulary (spawn:/set_text/
+# child_clicked address them by name), so they must be >=5 chars — stricter
+# than the 3-char identifier floor.  See spec/44_8_prefab_static.md.
+#
+# Expected exit code: 1
+#
+# Diagnostic-Form:
+#   ...: prefab child name 'bg' is shorter than 5 characters — prefab and child
+#   names are referenced by name across files; pick a descriptive name (>=5 chars)
+
+- prefab:
+    name: PanelBox
+    width: 100
+    height: 40
+    children:
+      - { name: bg, type: rect, x: 0, y: 0, width: 100, height: 40 }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - return: 0

@@ -1,0 +1,1 @@
+aot_obj real=0.04 user=0.01 sys=0.02 maxrss=72308 exit=0

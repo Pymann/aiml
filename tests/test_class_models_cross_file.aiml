@@ -1,0 +1,23 @@
+# static-check: off
+# REPRO: cross-file class composition fails.
+#
+# Same-file: a `class: X models: [Y]` where Y is `inherits: Parent` works
+# (see test_class_models_inherits_chain.aiml — passes).
+#
+# Cross-file: when the model and its class live in different imported
+# files, registerTypes processes declarations in an order where the
+# ClassDecl is visited BEFORE the ModelDecl, and the class fails with
+# "Unknown model: <Y>".
+#
+# This file pulls the same pattern via two imports.  It SHOULD print
+# "sum = 7", but currently errors before reaching main.
+#
+# Status: known bug as of 2026-05-23.  See doc/issue/cross_file_class_models.md.
+
+- import: "tests/_cross/base_model.aiml"
+- import: "tests/_cross/derived_with_class.aiml"
+
+- decl: [var_d, DerivedBehavior]
+- set: [var_d.var_a, 3]
+- set: [var_d.var_b, 4]
+- print: ["sum = ${call: [var_d.sum]}"]

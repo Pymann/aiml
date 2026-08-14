@@ -1,0 +1,38 @@
+# Verifies the compiler emits a trampoline for `on_click: obj.method` so
+# prefab UI buttons can target class methods on a global instance.
+# Expected exit code: 0
+#
+# This test does NOT actually open a window — it only exercises the
+# compile-time emission path (vtable + trampoline + register_callback).
+# A runtime invocation is exercised by the DataCreatures client.
+
+- class:
+    name: Counter
+    members:
+      - [var_n, i32, 0]
+    methods:
+      - def:
+          name: bump
+          args: [[var_p, prefab_instance]]
+          body:
+            - set: [<.var_n, { "+": [<.var_n, 1] }]
+
+- decl: [g_counter, Counter]
+
+# Prefab that references the method via dotted name — compiler must emit
+# a trampoline `__cb_g_counter__bump(var_p)` and register it under the dotted
+# name with the prefab callback table.
+- prefab:
+    name: TestPanel
+    width: 64
+    height: 64
+    children:
+      - { kind: button, name: btn, x: 0, y: 0, width: 64, height: 64,
+          label: "Bump", on_click: g_counter.bump }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - print: ["prefab obj.method trampoline PASS"]
+      - return: 0

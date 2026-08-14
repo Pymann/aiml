@@ -1,0 +1,46 @@
+# M2b — a classgroup may embed another as a named `subgroups:` child.  The parent
+# container owns the child (constructs it in phase 0 via the same {new:} → __ctor
+# hook), so `app.engine.counter` reaches the child's instance and its state
+# persists.  The parent's own instances are independent.  `export:` declares the
+# child's public surface (enforced at the sees boundary in a later step).
+#
+# Spec: spec/58_classgroups.md §6 (subgroups — composition & encapsulation).
+
+- class:
+    name: Counter
+    members:
+      - [num, i32]
+    methods:
+      - def: { name: bump,  body: [{ set: [<.num, { +: [<.num, 1] }] }] }
+      - def: { name: value, return: i32, body: [{ return: <.num }] }
+
+- classgroup:
+    name: Engine
+    instances:
+      - class: Counter
+        instance: counter
+    export: [counter]
+
+- classgroup:
+    name: App
+    subgroups: [[engine, Engine]]
+    instances:
+      - class: Counter
+        instance: local_ctr
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [app, ptr<App>, { new: App }]
+      # child owned + constructed: bump the exported subgroup instance twice
+      - call: [app.engine.counter.bump]
+      - call: [app.engine.counter.bump]
+      - decl: [eng_v, i32, { call: [app.engine.counter.value] }]
+      - if: { condition: { neq: [eng_v, 2] }, then: [{ print: ["FAIL engine.counter=${eng_v} exp 2 — subgroup not owned/constructed"] }, { call: [sys.exit, 1] }] }
+      # parent's own instance is a separate object
+      - call: [app.local_ctr.bump]
+      - decl: [loc_v, i32, { call: [app.local_ctr.value] }]
+      - if: { condition: { neq: [loc_v, 1] }, then: [{ print: ["FAIL local_ctr=${loc_v} exp 1"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS classgroup_subgroup: nested ownership + external access to exported subgroup instance"]
+      - return: 0

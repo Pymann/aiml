@@ -1,0 +1,4 @@
+sh: 1: clang: not found
+[ERROR] [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/main.cpp:234] Linking failed.
+Command exited with non-zero status 1
+aot_compile real=0.03 user=0.01 sys=0.01 maxrss=72208 exit=1

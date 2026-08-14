@@ -1,0 +1,338 @@
+# Requires: library
+# ═══════════════════════════════════════════════════════════════════════════
+#  DESIGN-DRAFT — Codex-Vorschlag für ein konsistentes `cascade<T>`
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Wichtiger Hinweis
+# ─────────────────
+# Diese Datei ist AUSDRUECKLICH nicht als bestehende AIML-Spezifikation zu
+# lesen. Sie beschreibt meine Vorstellung eines konsistenten `cascade<T>`-
+# Konzepts, wenn wir verschachtelte Kaskaden als echten Sprachtyp modellieren
+# wollen.
+#
+# Ziel ist nicht, den aktuellen Card-Editor 1:1 abzubilden, sondern die
+# Kernidee sauber zu schneiden:
+#
+#   `cascade<T>` ist ein getaggter Variantenwert mit node-spezifischer Payload.
+#
+# Alles weitere — Prefab-Bindings, Widgets, Listen-Buttons, Bytecode-Encoder,
+# Inspector-Tools — sollte erst DANACH auf diese Invariante aufsetzen.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# 1) Kernidee
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Viele Gameplay-Strukturen sind keine flachen Enums und auch keine flachen
+# Models. Sie sind: "Wahl eines Knotens" + "Felder, die nur fuer diesen
+# Knoten existieren".
+#
+# Beispiele:
+#   - ValueType.fixed(value)
+#   - ValueType.equal_to_attribute(attribute)
+#   - DurationType.turns(value_type)
+#   - EffectCode.modify_stat(owner, attribute, value, duration)
+#
+# Das ist konzeptionell ein Algebraic Data Type / Tagged Union / Sum Type.
+# In AIML nenne ich das hier `cascade<T>`.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# 2) Semantische Invarianten
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Ein Wert vom Typ `cascade<X>` hat immer genau diese Struktur:
+#
+#   - einen aktiven Node-Tag
+#   - genau die Payload-Felder dieses aktiven Nodes
+#   - keine Payload anderer Nodes
+#
+# Daraus folgen die wichtigsten Invarianten:
+#
+#   I1. `cascade<X>` ist niemals "mehrere Nodes gleichzeitig".
+#   I2. Ein Node-Wechsel verwirft die alte Node-Payload vollständig.
+#   I3. Die Payload ist typisiert; ein Feld kennt seinen echten Typ.
+#   I4. Rekursion ist erlaubt, aber nur als endlicher Baumwert.
+#   I5. Serialisierung verwendet Node-ID + Payload in deklarierter Reihenfolge.
+#
+# Offene Frage, die eine echte Spezifikation explizit entscheiden MUSS:
+#
+#   Gibt es einen leeren Zustand?
+#
+# Mein Vorschlag fuer Konsistenz:
+#   Nein, nicht implizit.
+#
+# Wenn "noch nicht gesetzt" gebraucht wird, dann explizit ueber:
+#   - `optional<cascade<X>>`, oder
+#   - einen echten Node wie `unset` / `none`
+#
+# Damit bleibt `cascade<X>` selbst total und eindeutig.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# 3) Sprachform
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# `cascade` ist ein Top-Level-Type-Builder, analog zu `model` oder `enum`.
+# Jeder Node hat:
+#   - eine stabile ID
+#   - einen Namen
+#   - optional ein Label
+#   - null oder mehr typisierte Felder
+#
+# Beispielsyntax:
+
+- cascade:
+    name: ValueType
+    nodes:
+      - fixed:
+          id: 1
+          label: "Fixed"
+          fields:
+            - [value, i32]
+      - equal_to_mana_cost:
+          id: 2
+          label: "Equal to Mana Cost"
+      - equal_to_attribute:
+          id: 3
+          label: "Equal to Attribute"
+          fields:
+            - [attribute, AttributeType]
+      - equal_to_cards_on_deck:
+          id: 4
+          label: "Equal to Cards on Deck"
+          fields:
+            - [deck, DeckType]
+            - [owner, OwnerType]
+      - equal_to_cards_in_zone:
+          id: 5
+          label: "Equal to Cards in Zone"
+          fields:
+            - [zone, GameZone]
+            - [owner, OwnerType]
+      - equal_to_cards_in_hand:
+          id: 6
+          label: "Equal to Cards in Hand"
+          fields:
+            - [owner, OwnerType]
+      - equal_to_dice_roll:
+          id: 8
+          label: "Equal to Dice Roll"
+          fields:
+            - [count, i32]
+            - [sides, i32]
+      - equal_to_manapool:
+          id: 9
+          label: "Equal to Manapool"
+          fields:
+            - [color, ManaColor]
+      - x_cost_spent:
+          id: 10
+          label: "X Cost Spent"
+          fields:
+            - [color, ManaColor]
+
+- cascade:
+    name: DurationType
+    nodes:
+      - permanent: { id: 1, label: "Permanent" }
+      - turns:
+          id: 2
+          label: "Turns"
+          fields:
+            - [value, ValueType]
+      - next_turn_phase:
+          id: 3
+          label: "Next Turn Phase"
+          fields:
+            - [phase, GamePhase]
+      - end_of_phase:
+          id: 4
+          label: "End of Phase"
+          fields:
+            - [phase, GamePhase]
+      - as_long_as_equipped:     { id: 5, label: "As Long as Equipped" }
+      - as_long_as_card_in_play: { id: 6, label: "As Long as Card in Play" }
+
+# Kompaktformen waeren spaeter moeglich, aber nur als Syntaxzucker ueber dieser
+# expliziten Form. Die explizite Form ist die semantische Wahrheit.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# 4) Wertebene
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Ein `cascade<X>`-Wert ist KEIN loses Map-Objekt, sondern ein echter Wert.
+# Denkmodell:
+#
+#   ValueType.fixed(value=3)
+#   DurationType.turns(value=ValueType.fixed(value=2))
+#
+# Beispiel-Modelle:
+
+- model:
+    name: ActiveAbility
+    fields:
+      - [trigger, TriggerCode]
+      - [effects, list<EffectCode>]
+      - [costs,   list<ActivationCost>]
+
+- model:
+    name: Card
+    fields:
+      - [name, string]
+      - [abilities, list<ActiveAbility>]
+
+# Wichtiger Punkt meines Vorschlags:
+#
+# Ein `cascade` wird wie ein eigener Typ benutzt.
+# Also `TriggerCode`, `EffectCode`, `ActivationCost`, `ValueType`,
+# `DurationType` sind hier NICHT Enums plus Seitentabellen, sondern direkt die
+# Variantentypen selbst.
+#
+# `cascade<X>` als Schreibweise ist damit nur dann noetig, wenn man ueber den
+# Metatyp spricht. Im Feld reicht der konkrete Cascadetypname.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# 5) Defaulting
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Der kritischste Punkt fuer Konsistenz ist Default-Erzeugung.
+#
+# Mein Vorschlag:
+#
+#   D1. `new SomeCascadeType` ist nur erlaubt, wenn der Typ einen Default-Node
+#       deklariert ODER alle Aufrufer einen Konstruktor mit Node angeben.
+#
+#   D2. Ohne Default-Node gibt es kein stilles "erstes Element gewinnt".
+#
+#   D3. Wenn ein Default-Node existiert, muessen auch dessen Felder defaultbar
+#       sein.
+#
+# Beispiel:
+
+- cascade:
+    name: TriggerCode
+    default: on_phase_start
+    nodes:
+      - on_phase_start:
+          id: 1
+          fields:
+            - [phase, GamePhase, start]
+      - on_phase_end:
+          id: 2
+          fields:
+            - [phase, GamePhase, end]
+      - on_effect_code:
+          id: 3
+          fields:
+            - [effect, EffectCode]
+
+# So ist `new TriggerCode` wohldefiniert.
+# Ohne `default:` waere nur so etwas zulaessig:
+#   - decl: [trg, TriggerCode, { new: [TriggerCode.on_phase_start] }]
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# 6) Node-Wechsel
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Node-Wechsel ist keine partielle Mutation alter Felder, sondern ein Ersatz
+# des kompletten Variantenzustands.
+#
+# Beispiel:
+#   Vorher: ValueType.equal_to_attribute(attribute=atk)
+#   Wechsel zu: ValueType.fixed(value=1)
+#
+# Danach existiert `attribute` nicht mehr. Es gibt nur noch `value`.
+#
+# Das verhindert stale Payloads und macht UI, Validierung und Serialisierung
+# vorhersagbar.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# 7) Serialisierung
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# `cascade` muss ein stabiles Datenformat besitzen.
+# Mein Vorschlag:
+#
+#   serialize(cascade<X>) = [node_id, payload_field_0, payload_field_1, ...]
+#
+# Dabei gilt:
+#   - node_id kommt aus der Deklaration, nie aus auto-generated Positionsindizes
+#   - Feldreihenfolge ist exakt die deklarierte `fields:`-Reihenfolge
+#   - rekursive Cascades serialisieren sich nach demselben Prinzip weiter
+#
+# Das ist absichtlich einfach. Die Sprachstruktur und das Wire-Format fallen
+# zusammen, solange IDs explizit und stabil sind.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# 8) Prefab-Bindung als Folge, nicht als Kern
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Erst wenn `cascade` als Typ konsistent ist, darf die Prefab-Runtime davon
+# profitieren.
+#
+# Minimaler Runtime-Vertrag fuer ein Widget `type: cascade`:
+#   - Root-Dropdown fuer Node-Auswahl
+#   - pro aktivem Payload-Feld genau ein Kind-Widget
+#   - rekursiv fuer verschachtelte Cascades
+#   - Widget-State ist nur eine Ansicht auf das Model, nicht zweite Wahrheit
+#
+# Beispiel:
+
+- prefab:
+    name: AbilityRowPrefab
+    binds: ActiveAbility
+    width: 900
+    height: auto
+    children:
+      - { name: trigger_lbl, type: label, x: 0,  y: 0,  label: "Trigger" }
+      - { name: trigger,     type: cascade, x: 90, y: 0, bind: trigger }
+      - { name: effects_lbl, type: label,   x: 0,  y: 40, label: "Effects" }
+      - { name: effects,     type: list,    x: 90, y: 40, bind: effects, spawn: CascadeRowPrefab }
+      - { name: costs_lbl,   type: label,   x: 0,  y: 220, label: "Costs" }
+      - { name: costs,       type: list,    x: 90, y: 220, bind: costs, spawn: CascadeRowPrefab }
+
+- prefab:
+    name: CascadeRowPrefab
+    binds: any
+    width: 900
+    height: auto
+    children:
+      - { name: value, type: cascade, x: 0, y: 0, bind: . }
+
+# Wichtige konzeptionelle Grenze:
+# Diese Datei definiert NICHT, wie ListPush, ListPop, OnClick, Reflection oder
+# Editor-Actions im Detail implementiert werden. Das sind Folgefeatures.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# 9) Was ich bewusst NICHT in den Kern nehme
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Folgende Dinge gehoeren fuer mich nicht in die Grunddefinition von
+# `cascade<T>`:
+#
+#   - generische Button-Handler
+#   - stdlib-ListPush/ListPop
+#   - automatische Method-Ref-Wrapping-Regeln
+#   - Lokalisierungsdetails
+#   - komplexe Runtime-Reflection-APIs
+#   - abgeleitete Label-Heuristiken als semantische Pflicht
+#
+# Alles davon kann sinnvoll sein. Aber wenn der Cascade-Kern davon abhaengt,
+# wird das Feature unnötig breit und schwer konsistent zu halten.
+#
+# ═══════════════════════════════════════════════════════════════════════════
+# 10) Kurzfassung meiner Position
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Mein konsistenter Vorschlag ist:
+#
+#   1. `cascade` ist ein echter Variantentyp.
+#   2. Ein Cascade-Wert hat genau einen aktiven Node.
+#   3. Payload anderer Nodes existiert nicht gleichzeitig weiter.
+#   4. "Leer" ist nicht implizit; Optionalitaet muss explizit modelliert sein.
+#   5. IDs muessen fuer wire-relevante Typen explizit und stabil sein.
+#   6. Prefab- und Editor-Verhalten ist eine direkte Projektion dieses Typs.
+#
+# Wenn wir diese sechs Punkte halten, wird `cascade<T>` fuer den Card-Editor,
+# fuer Serialisierung und fuer modellgebundene Prefabs deutlich konsistenter
+# als flache Slot-Modelle wie `p0..p3`.
+#
+# ═══════════════════════════════════════════════════════════════════════════

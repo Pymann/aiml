@@ -1,0 +1,75 @@
+# Headless unit tests for the cascade row-persistence helper.  Exercises
+# the same code path the widget-runtime hits every frame, without needing
+# a real window / GL context / user clicks.
+#
+# Wire format:
+#     row[0]      = cascade node id
+#     row[1..N]   = payload values (one per field)
+
+- def:
+    name: dump_row
+    args: [[label, string], [row, list<i32>]]
+    body:
+      - decl: [dump_i, i32, 0]
+      - decl: [dump_s, string, ""]
+      - while:
+          condition: { lt: [dump_i, row.len] }
+          body:
+            - decl: [dump_v, i32, { call: [row.get, dump_i] }]
+            - set: [dump_s, "${dump_s}${dump_v} "]
+            - set: [dump_i, { +: [dump_i, 1] }]
+      - print: ["  ${label} = [ ${dump_s}]  (len=${row.len})"]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - print: ["=== cascade persist unit tests ==="]
+
+      # ── Test 1: single row, tag only (empty payload) ───────────────────
+      - decl: [outer, list<list<i32>>]
+      - decl: [row_0, list<i32>]
+      - call: [row_0.push, 0]
+      - call: [outer.push, row_0]
+
+      - decl: [empty_vals, list<i32>]
+      - call: [cascade.persist_row, outer, 0, 48, empty_vals]
+
+      - decl: [readback_0, list<i32>, { call: [outer.get, 0] }]
+      - call: [dump_row, "T1 counter_trap [48]      ", readback_0]
+
+      # ── Test 2: tag + 2 payload slots ──────────────────────────────────
+      - decl: [vals_2, list<i32>]
+      - call: [vals_2.push, 1]
+      - call: [vals_2.push, 3]
+      - call: [cascade.persist_row, outer, 0, 1, vals_2]
+
+      - decl: [readback_1, list<i32>, { call: [outer.get, 0] }]
+      - call: [dump_row, "T2 draw_card [1, 1, 3]   ", readback_1]
+
+      # ── Test 3: tag + 4 slots (modify_stat) ────────────────────────────
+      - decl: [row_1, list<i32>]
+      - call: [row_1.push, 0]
+      - call: [outer.push, row_1]
+
+      - decl: [mods, list<i32>]
+      - call: [mods.push, 1]
+      - call: [mods.push, 2]
+      - call: [mods.push, 8]
+      - call: [mods.push, 1]
+      - call: [cascade.persist_row, outer, 1, 12, mods]
+
+      - decl: [readback_2, list<i32>, { call: [outer.get, 1] }]
+      - call: [dump_row, "T3 modify_stat [12,1,2,8,1]", readback_2]
+
+      # ── Test 4: smaller payload than previously written — trailing
+      #           slot stays untouched (documents current behaviour) ──────
+      - decl: [small, list<i32>]
+      - call: [small.push, 5]
+      - call: [cascade.persist_row, outer, 0, 42, small]
+
+      - decl: [readback_3, list<i32>, { call: [outer.get, 0] }]
+      - call: [dump_row, "T4 [42, 5, <old 3>]      ", readback_3]
+
+      - print: ["=== done ==="]
+      - return: 0

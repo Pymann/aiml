@@ -1,0 +1,21 @@
+# static-check: off
+# BUG #5 (NEGATIV-Test — muss NACH Fix einen COMPILE-ERROR werfen):
+# Zuweisung eines String-Literals an ein Enum-Feld wird bisher still
+# akzeptiert (enum ist i32 → geht durch string→int-Coercion → atoi("x")=0),
+# statt einen Typfehler zu werfen.  Footgun bei der CardType-Migration.
+#
+# Erwartung NACH Fix: Compile-Error "cannot assign string to enum-typed ...".
+# Vor Fix: kompiliert, kind=0 (still falsch).  Manuell verifizieren
+# (kein PASS/FAIL-Suite-Test, da Compile-Error erwünscht ist).
+
+- enum: { name: Kind, values: [[none, 0], [alpha, 1], [beta, 2]] }
+- model: { name: Thing, fields: [[kind, Kind]] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [thing, Thing]
+      - set: [thing.kind, "alpha"]          # <-- soll Compile-Error werfen
+      - call: [log.info, "thing.kind=${thing.kind}"]
+      - return: 0

@@ -1,0 +1,81 @@
+# M2 slice 2 — nested-cascade FLATTENING with a sub-field.
+#
+# OwnerRef.in_zone carries a ZoneType sub-field, so flattening EffPipe.deal_dmg
+# branches into three concrete paths:
+#   [deal_dmg, player]              (no sub-field)
+#   [deal_dmg, opponent]
+#   [deal_dmg, in_zone, ZoneType]   ← the extra ZoneType stage appears ONLY here
+#
+# Coverage must hold on every branch → the ZoneType handler is required, proving
+# the walk recurses into sub-fields.  Owner handler uses an explicit member
+# selection (exact sub-opcode matching); the carrier stays Draft across the
+# recursion boundary (transparent, Q5).
+
+- enum:
+    name: ZoneType
+    values: [ {room_a: 1}, {room_b: 2} ]
+
+- enum:
+    name: OwnerType
+    values: [ {player: 1}, {opponent: 2}, {in_zone: 3} ]
+
+- cascade:
+    name: OwnerRef
+    opcode: OwnerType
+    nodes:
+      - [player]
+      - [opponent]
+      - [in_zone, ZoneType]           # sub-opcode WITH a sub-field
+
+- enum:
+    name: EffCode
+    values: [ {deal_dmg: 1} ]
+
+- cascade:
+    name: EffPipe
+    opcode: EffCode
+    nodes:
+      - [deal_dmg, OwnerRef]
+
+# Carrier is `list<string>` directly (no wrapper model) to stay within the
+# ≤3-top-level-types-per-file limit (this file already has 3 classes).
+
+- class:
+    name: EffSkel
+    renders: EffPipe
+    rules:
+      - before: []
+        on: deal_dmg
+        def: { name: begin, args: [[carry, list<string>]], return: list<string>, body: [ { return: carry } ] }
+
+- class:
+    name: OwnerRefText
+    renders: OwnerRef
+    rules:
+      # explicit member selection — matches the flattened sub-opcode tokens exactly
+      - before: ["*"]
+        on: [player, opponent, in_zone]
+        def: { name: owner, args: [[carry, list<string>]], return: list<string>, body: [ { return: carry } ] }
+
+- class:
+    name: ZoneText
+    renders: ZoneType
+    rules:
+      # only reachable via the in_zone branch — proves sub-field flattening
+      - before: ["*"]
+        on: ZoneType
+        def: { name: zone, args: [[carry, list<string>]], return: list<string>, body: [ { return: carry } ] }
+
+- cascade_class:
+    name: EffText
+    binds_cascade: EffPipe
+    carrier: list<string>
+    taker:   list<string>
+    members: [EffSkel, OwnerRefText, ZoneText]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - print: ["PASS cascade_class_nested: nested flattening + sub-field stage covered"]
+      - return: 0

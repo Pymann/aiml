@@ -1,0 +1,60 @@
+# Requires: library
+# 9Rooms — Event- und Trigger-View-Modelle (synchronisierte Historie)
+# Shared zwischen Frontend (Host) und Client (Replica).
+# Wird von EventSystem (frontend/event_system.aiml) erzeugt und in GameView gespiegelt.
+#
+# Trigger-Codes (trigger_code):
+#   1 = ON_PHASE_START       2 = ON_MANA_PHASE_START   3 = ON_CARD_PLAYED
+#   4 = ON_ATTACK            5 = ON_DEFEND              6 = ON_DRAW
+#   7 = ON_DESTROY           8 = ON_EQUIP               9 = ON_MOVE
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GameEventView — ein Spielereignis in der synchronisierten Event-Historie
+# ══════════════════════════════════════════════════════════════════════════════
+
+- model:
+    name: GameEventView
+    fields:
+      - [seq,        i32,    0]   # Monoton steigender Sequenzzähler
+      - [kind,       string, ""]  # "phase_start"|"card_played"|"attack_declared"|...
+      - [text,       string, ""]  # Lesbarer Anzeigetext
+      - [actor_slot, i32,   -1]   # 0=Spieler 1, 1=Spieler 2, -1=System
+      - [phase,      i32,    0]
+      - [round,      i32,    0]
+      - [source_iid, string, ""]  # IID der auslösenden Karte (leer wenn nicht relevant)
+      - [target_iid, string, ""]  # IID des Ziels (leer wenn nicht relevant)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TriggerEventView — eine aktive Triggerinstanz mit vollem Kontext
+# ══════════════════════════════════════════════════════════════════════════════
+
+- model:
+    name: TriggerEventView
+    fields:
+      - [seq,          i32,    0]   # Monotone Sequenznummer (eindeutig pro Trigger)
+      - [trigger_code, i32,    0]   # Trigger-Typ (siehe Codes oben)
+      - [owner_slot,   i32,   -1]   # 0=Spieler 1, 1=Spieler 2, -1=System
+      - [source_iid,   string, ""]  # IID der auslösenden Karte
+      - [target_iid,   string, ""]  # IID des Ziels (leer wenn kein spezifisches Ziel)
+      - [phase,        i32,    0]   # Phase in der der Trigger entstand
+      - [round,        i32,    0]   # Runde in der der Trigger entstand
+      - [counterable,  i32,    0]   # 1 = kann gekonntert werden
+      - [resolved,     i32,    0]   # 1 = bereits abgearbeitet
+      - [expired,      i32,    0]   # 1 = Reaktionsfenster abgelaufen
+      - [text,         string, ""]  # Lesbarer Beschreibungstext
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ReactionStateView — aktuelles Reaktionsfenster (synchronisiert, sprint_task_3)
+# Enthält nur skalare Felder; reactable_triggers ist als eigenes GameView-Feld.
+# ══════════════════════════════════════════════════════════════════════════════
+
+- model:
+    name: ReactionStateView
+    fields:
+      - [window_open,       i32,    0]   # 1 = Reaktionsfenster gerade offen
+      - [react_player_mask, i32,    0]   # Bitmaske: welche Spieler reagieren dürfen (1=P1, 2=P2, 3=beide)
+      - [window_kind,       string, ""]  # "phase_start"|"card_played"|"attack"|...
+      - [window_prompt,     string, ""]  # Anzeigetext für Client
+      - [window_ms,         i32,    0]   # Verbleibende Zeit in ms (0 = kein Timeout)
+      - [reactable_count,   i32,    0]   # Anzahl counterbarer Trigger im Fenster (max. 3)
+      - [reactable_card_mask, string, ""]  # Komma-getrennte IIDs spielbarer Reaktionskarten

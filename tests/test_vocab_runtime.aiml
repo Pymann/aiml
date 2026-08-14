@@ -1,0 +1,223 @@
+# Test: vocab runtime — load, set_language, lookup, fallback, hot-reload.
+# Deckt Phase 1+2 der Vocab-Feature ab; Decorator kommt später separat.
+
+- decl: [var_ok, i32, 1]
+- decl: [rc_load, i32, 0]
+
+# ── A: Basic load + lookup in verschiedenen Sprachen ─────────────────────
+
+- decl: [langs, string, '{"0":"en","1":"de","2":"fr"}']
+- decl: [voc,   string, '{"Save Card":["Save Card","Karte speichern","Sauvegarder"],"Reset":["Reset","Zuruecksetzen","Reinit"]}']
+
+- set: [rc_load, { call: [vocab.load, langs, voc] }]
+- if:
+    condition: { neq: [rc_load, 0] }
+    then:
+      - print: ["FAIL A0: load returned ${rc_load}, expected 0"]
+      - set: [var_ok, 0]
+    else:
+      - print: ["OK A0: load returned 0"]
+
+# Source-Sprache (Index 0) → pass-through
+- call: [vocab.set_language, 0]
+- decl: [got_en, string, { call: [vocab.lookup, "Save Card"] }]
+- if:
+    condition: { eq: [got_en, "Save Card"] }
+    then: [{ print: ["OK A1: en → 'Save Card'"] }]
+    else:
+      - print: ["FAIL A1: en → '${got_en}'"]
+      - set: [var_ok, 0]
+
+# Deutsch → Übersetzung
+- call: [vocab.set_language, 1]
+- decl: [got_de, string, { call: [vocab.lookup, "Save Card"] }]
+- if:
+    condition: { eq: [got_de, "Karte speichern"] }
+    then: [{ print: ["OK A2: de → 'Karte speichern'"] }]
+    else:
+      - print: ["FAIL A2: de → '${got_de}'"]
+      - set: [var_ok, 0]
+
+# Französisch
+- call: [vocab.set_language, 2]
+- decl: [got_fr, string, { call: [vocab.lookup, "Save Card"] }]
+- if:
+    condition: { eq: [got_fr, "Sauvegarder"] }
+    then: [{ print: ["OK A3: fr → 'Sauvegarder'"] }]
+    else:
+      - print: ["FAIL A3: fr → '${got_fr}'"]
+      - set: [var_ok, 0]
+
+# ── B: Missing key → Fallback auf Source ─────────────────────────────────
+
+- decl: [got_miss, string, { call: [vocab.lookup, "UnknownLabel"] }]
+- if:
+    condition: { eq: [got_miss, "UnknownLabel"] }
+    then: [{ print: ["OK B1: missing key falls back to source"] }]
+    else:
+      - print: ["FAIL B1: got '${got_miss}'"]
+      - set: [var_ok, 0]
+
+# ── C: set_language clamps out-of-range ──────────────────────────────────
+
+- call: [vocab.set_language, 99]
+- decl: [cur1, i32, { call: [vocab.current_language] }]
+- if:
+    condition: { eq: [cur1, 0] }
+    then: [{ print: ["OK C1: OOR positive → clamped to 0"] }]
+    else:
+      - print: ["FAIL C1: got ${cur1}"]
+      - set: [var_ok, 0]
+
+- call: [vocab.set_language, -5]
+- decl: [cur2, i32, { call: [vocab.current_language] }]
+- if:
+    condition: { eq: [cur2, 0] }
+    then: [{ print: ["OK C2: OOR negative → clamped to 0"] }]
+    else:
+      - print: ["FAIL C2: got ${cur2}"]
+      - set: [var_ok, 0]
+
+- call: [vocab.set_language, 1]
+- decl: [cur3, i32, { call: [vocab.current_language] }]
+- if:
+    condition: { eq: [cur3, 1] }
+    then: [{ print: ["OK C3: valid idx sticks"] }]
+    else:
+      - print: ["FAIL C3: got ${cur3}"]
+      - set: [var_ok, 0]
+
+# ── D: language_count / language_code ────────────────────────────────────
+
+- decl: [n_langs, i32, { call: [vocab.language_count] }]
+- if:
+    condition: { eq: [n_langs, 3] }
+    then: [{ print: ["OK D1: language_count == 3"] }]
+    else:
+      - print: ["FAIL D1: got ${n_langs}"]
+      - set: [var_ok, 0]
+
+- decl: [code_0, string, { call: [vocab.language_code, 0] }]
+- decl: [code_1, string, { call: [vocab.language_code, 1] }]
+- decl: [code_2, string, { call: [vocab.language_code, 2] }]
+- if:
+    condition: { '&&': [{ eq: [code_0, "en"] }, { '&&': [{ eq: [code_1, "de"] }, { eq: [code_2, "fr"] }] }] }
+    then: [{ print: ["OK D2: language_code(0/1/2) = en/de/fr"] }]
+    else:
+      - print: ["FAIL D2: 0='${code_0}' 1='${code_1}' 2='${code_2}'"]
+      - set: [var_ok, 0]
+
+# ── E: Sortierung by index — unsortierte Keys im JSON ────────────────────
+
+- decl: [langs_unsorted, string, '{"2":"fr","0":"en","1":"de"}']
+- set: [rc_load, { call: [vocab.load, langs_unsorted, "{}"] }]
+- decl: [code_0b, string, { call: [vocab.language_code, 0] }]
+- decl: [code_1b, string, { call: [vocab.language_code, 1] }]
+- decl: [code_2b, string, { call: [vocab.language_code, 2] }]
+- if:
+    condition: { '&&': [{ eq: [code_0b, "en"] }, { '&&': [{ eq: [code_1b, "de"] }, { eq: [code_2b, "fr"] }] }] }
+    then: [{ print: ["OK E1: unsorted JSON keys → sorted by index"] }]
+    else:
+      - print: ["FAIL E1: 0='${code_0b}' 1='${code_1b}' 2='${code_2b}'"]
+      - set: [var_ok, 0]
+
+# ── F: Empty translation slot → Fallback ─────────────────────────────────
+
+- decl: [voc_empty, string, '{"Hello":["Hello",""]}']
+- set: [rc_load, { call: [vocab.load, '{"0":"en","1":"de"}', voc_empty] }]
+- call: [vocab.set_language, 1]
+- decl: [got_hello, string, { call: [vocab.lookup, "Hello"] }]
+- if:
+    condition: { eq: [got_hello, "Hello"] }
+    then: [{ print: ["OK F1: empty slot falls back to source"] }]
+    else:
+      - print: ["FAIL F1: got '${got_hello}'"]
+      - set: [var_ok, 0]
+
+# ── G: Short translation list → Fallback für fehlende Sprachen ───────────
+
+- decl: [voc_short, string, '{"OK":["OK","OK-de"]}']
+- set: [rc_load, { call: [vocab.load, '{"0":"en","1":"de","2":"fr"}', voc_short] }]
+- call: [vocab.set_language, 2]
+- decl: [got_fr2, string, { call: [vocab.lookup, "OK"] }]
+- if:
+    condition: { eq: [got_fr2, "OK"] }
+    then: [{ print: ["OK G1: short list → fr falls back to source"] }]
+    else:
+      - print: ["FAIL G1: got '${got_fr2}'"]
+      - set: [var_ok, 0]
+
+- call: [vocab.set_language, 1]
+- decl: [got_de2, string, { call: [vocab.lookup, "OK"] }]
+- if:
+    condition: { eq: [got_de2, "OK-de"] }
+    then: [{ print: ["OK G2: short list → de resolves normally"] }]
+    else:
+      - print: ["FAIL G2: got '${got_de2}'"]
+      - set: [var_ok, 0]
+
+# ── H: Hot-reload wipes old vocab ────────────────────────────────────────
+
+- set: [rc_load, { call: [vocab.load, '{"0":"en","1":"de"}', '{"Hello":["Hello","Hallo"]}'] }]
+- call: [vocab.set_language, 1]
+- decl: [before, string, { call: [vocab.lookup, "Hello"] }]
+
+- set: [rc_load, { call: [vocab.load, '{"0":"en","1":"de"}', '{"Bye":["Bye","Tschuess"]}'] }]
+# Language index bleibt (immer noch 1)
+- decl: [after_lang, i32, { call: [vocab.current_language] }]
+- decl: [after_hello, string, { call: [vocab.lookup, "Hello"] }]
+- decl: [after_bye,   string, { call: [vocab.lookup, "Bye"] }]
+
+- if:
+    condition: { '&&': [{ eq: [after_lang, 1] }, { '&&': [{ eq: [after_hello, "Hello"] }, { eq: [after_bye, "Tschuess"] }] }] }
+    then: [{ print: ["OK H1: hot-reload wipes old vocab, keeps language index"] }]
+    else:
+      - print: ["FAIL H1: lang=${after_lang} hello='${after_hello}' bye='${after_bye}' (before was '${before}')"]
+      - set: [var_ok, 0]
+
+# ── I: Malformed JSON → Fehlercodes ──────────────────────────────────────
+
+# Kein schließender "}" → -1
+- decl: [rc_bad_langs, i32, { call: [vocab.load, '{"0":"en"', "{}"] }]
+- if:
+    condition: { eq: [rc_bad_langs, -1] }
+    then: [{ print: ["OK I1: malformed languages → -1"] }]
+    else:
+      - print: ["FAIL I1: got ${rc_bad_langs}"]
+      - set: [var_ok, 0]
+
+# vocab-Value ist String statt Array → -2
+- decl: [rc_bad_vocab, i32, { call: [vocab.load, '{"0":"en","1":"de"}', '{"K":"not-an-array"}'] }]
+- if:
+    condition: { eq: [rc_bad_vocab, -2] }
+    then: [{ print: ["OK I2: malformed vocab → -2"] }]
+    else:
+      - print: ["FAIL I2: got ${rc_bad_vocab}"]
+      - set: [var_ok, 0]
+
+# ── J: Reload mit weniger Sprachen re-clamped current_language ───────────
+
+- set: [rc_load, { call: [vocab.load, '{"0":"en","1":"de","2":"fr"}', "{}"] }]
+- call: [vocab.set_language, 2]
+- decl: [pre_reclamp, i32, { call: [vocab.current_language] }]
+
+- set: [rc_load, { call: [vocab.load, '{"0":"en"}', "{}"] }]
+# Load re-clamped den internen index selbst — ohne extra set_language-Call.
+- decl: [post_reclamp, i32, { call: [vocab.current_language] }]
+- if:
+    condition: { '&&': [{ eq: [pre_reclamp, 2] }, { eq: [post_reclamp, 0] }] }
+    then: [{ print: ["OK J1: reload with fewer languages clamps current to 0"] }]
+    else:
+      - print: ["FAIL J1: pre=${pre_reclamp} post=${post_reclamp}"]
+      - set: [var_ok, 0]
+
+# ── Result ───────────────────────────────────────────────────────────────
+
+- if:
+    condition: { eq: [var_ok, 1] }
+    then:
+      - print: ["PASS vocab_runtime — all scenarios correct"]
+      - call: [sys.exit, 0]
+    else:
+      - print: ["FAIL vocab_runtime — see above"]
+      - call: [sys.exit, 1]

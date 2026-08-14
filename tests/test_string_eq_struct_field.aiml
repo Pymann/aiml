@@ -1,0 +1,44 @@
+# Regression test for spec/39 §0:
+#   "eq / neq semantics: For `string` pointers: byte-by-byte content
+#    comparison (like strcmp)"
+#
+# Vor 2026-06-08: resolveTypeName erkannte nur VariableExpr/LiteralExpr.
+# Member-Access auf string-Felder (z.B. `struct.field`) bekam leeren
+# typeName → eq:[a.field, b.field] fiel auf Pointer-Identity zurück
+# statt auf strcmp.  Datacreatures-Repro: terrain-Lookup in cockpit-Hover
+# (zone.terrain_id vs terrain.terrain_id, gleicher String aber verschiedene
+# Allocations) → match schlug fehl → location-tooltip leer.
+#
+# Fix: resolveTypeName splittet dotted-Namen + resolvePropertyWritePtr
+# liefert den propTypeName, so dass visitStringCompare angesprungen wird.
+#
+# Bei Regression: Pointer-Identity → a.str_field != b.str_field weil
+# unterschiedliche String-Allocations → exit 1 (FAIL).
+
+- model:
+    name: Holder
+    fields:
+      - [str_field, string]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [first,  Holder]
+      - decl: [second, Holder]
+      - set: [first.str_field, "regression_match"]
+      # Per Konstruktion eine separate Allocation mit gleichem Inhalt:
+      # String-Interpolation baut einen frischen Buffer (siehe StringUtils::
+      # concat).  Pointer-Identity-Vergleich würde hier scheitern.
+      - decl: [prefix, string, "regression_"]
+      - decl: [suffix, string, "match"]
+      - set: [second.str_field, "${prefix}${suffix}"]
+      - if:
+          condition: { eq: [first.str_field, second.str_field] }
+          then:
+            - print: ["PASS: struct.string_field eq performs content compare"]
+            - return: 0
+      - print: ["FAIL: struct.string_field eq fell back to pointer identity"]
+      - print: ["       first.str_field='${first.str_field}'"]
+      - print: ["       second.str_field='${second.str_field}'"]
+      - return: 1

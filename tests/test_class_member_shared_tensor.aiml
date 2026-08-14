@@ -1,0 +1,163 @@
+# static-check: off
+# Repro: precise prophecy InferenceDemo class layout — the Workspace class
+# holds an Inner + a Body (which itself holds the Inner) + multiple Head
+# instances (each implementing an interface).  After all three bodies +
+# their heads are init'd, calling Body.encode SEGVs at tensor.matmul
+# (inner.emb).
+#
+# This mirrors:
+#   Workspace ≈ InferenceDemo
+#   Inner     ≈ TagEmbedding
+#   Body      ≈ BagBackbone (holds `inner: Inner` + weight_1/bias_1)
+#   Head      ≈ SoftmaxOutputHead/BCEOutputHead (impls OutputHead iface)
+
+- interface:
+    name: HeadIface
+    methods:
+      - [head_id,   string, []]
+      - [n_outputs, i32,    []]
+
+- class:
+    name: Inner
+    members:
+      - [n_tokens, i32, 0]
+      - [d_dim,    i32, 0]
+      - [emb,      tensor]
+      - [dec,      tensor]
+      - [vocab,    list<string>]
+      - [vocab_index, map<string:i32>]
+    methods:
+      - def:
+          name: init
+          args: []
+          body:
+            - set: [<.n_tokens, 100]
+            - set: [<.d_dim, 8]
+            - decl: [tmp, tensor, { call: [tensor.randn_ex, 0.0, 1.0, 100, 8] }]
+            - call: [tensor.save, tmp, "tmp_inner_store", "emb"]
+            - decl: [tmp2, tensor, { call: [tensor.randn_ex, 0.0, 1.0, 100, 8] }]
+            - call: [tensor.save, tmp2, "tmp_inner_store", "dec"]
+            - set: [<.emb, { call: [tensor.load, "tmp_inner_store", "emb"] }]
+            - set: [<.dec, { call: [tensor.load, "tmp_inner_store", "dec"] }]
+            - call: [<.vocab.push, "tok_a"]
+            - call: [<.vocab_index.put, "tok_a", 0]
+            - call: [log.info, "Inner.init: n_tokens=${<.n_tokens}"]
+
+- class:
+    name: Body
+    members:
+      - [inner,        Inner]
+      - [hidden_dim,   i32, 16]
+      - [weight_1,     tensor]
+      - [bias_1,       tensor]
+    methods:
+      - def:
+          name: setup
+          args: [[an_inner, Inner], [store_name, string]]
+          body:
+            - set: [<.inner, an_inner]
+            - decl: [w_tmp, tensor, { call: [tensor.randn_ex, 0.0, 0.3, <.inner.d_dim, <.hidden_dim] }]
+            - call: [tensor.save, w_tmp, store_name, "weight_1"]
+            - set: [<.weight_1, { call: [tensor.load, store_name, "weight_1"] }]
+            - set: [<.bias_1, { call: [tensor.zeros, <.hidden_dim] }]
+            - call: [log.info, "Body.setup(${store_name})"]
+
+      - def:
+          name: encode_one
+          args: [[label, string]]
+          body:
+            - call: [log.info, "Body.encode_one(${label}): n_tokens=${<.inner.n_tokens}"]
+            - decl: [bag, tensor, { call: [tensor.zeros, 1, <.inner.n_tokens] }]
+            - call: [bag.set, 5, 1.0]
+            - decl: [mean_e, tensor, { call: [tensor.matmul, bag, <.inner.emb] }]
+            - decl: [h1_tn, tensor, { call: [tensor.matmul, mean_e, <.weight_1] }]
+            - decl: [out_val, f32, { call: [h1_tn.get, 0] }]
+            - call: [log.info, "Body.encode_one(${label}): out=${out_val}"]
+
+# Head implementing HeadIface — replicates SoftmaxOutputHead structure
+- class:
+    name: HeadA
+    implements: [HeadIface]
+    members:
+      - [head_id_str,   string]
+      - [n_outputs_val, i32]
+      - [weight,        tensor]
+      - [bias,          tensor]
+    methods:
+      - def: { name: head_id,   return: string, args: [], body: [{ return: <.head_id_str }] }
+      - def: { name: n_outputs, return: i32,    args: [], body: [{ return: <.n_outputs_val }] }
+      - def:
+          name: init_params
+          args: [[hidden_dim, i32], [store_name, string]]
+          body:
+            - decl: [w_tmp, tensor, { call: [tensor.randn_ex, 0.0, 0.3, hidden_dim, <.n_outputs_val] }]
+            - call: [tensor.save, w_tmp, store_name, "h_w"]
+            - set: [<.weight, { call: [tensor.load, store_name, "h_w"] }]
+            - set: [<.bias,   { call: [tensor.zeros, <.n_outputs_val] }]
+            - call: [log.info, "HeadA.init_params(${store_name}): hidden=${hidden_dim} out=${<.n_outputs_val}"]
+
+- class:
+    name: Workspace
+    members:
+      - [embedder,    Inner]
+      # First module: body + 1 head
+      - [item_body,   Body]
+      - [item_head,   HeadA]
+      - [item_vocab,  list<string>]
+      # Second module: body + 4 heads
+      - [we_body,     Body]
+      - [we_h1,       HeadA]
+      - [we_h2,       HeadA]
+      - [we_h3,       HeadA]
+      - [we_h4,       HeadA]
+      - [tag_vocab,   list<string>]
+      - [yld_vocab,   list<string>]
+      # Third module: body + 1 head
+      - [skill_body,  Body]
+      - [skill_head,  HeadA]
+      - [skill_vocab, list<string>]
+    methods:
+      - def:
+          name: run
+          args: []
+          body:
+            - call: [<.embedder.init]
+            # ── ITEM module ───────────────────────────────────────────
+            - call: [<.item_body.setup, <.embedder, "store_item_body"]
+            - set: [<.item_head.head_id_str, "recipe"]
+            - set: [<.item_head.n_outputs_val, 150]
+            - call: [<.item_head.init_params, <.item_body.hidden_dim, "store_item_outputs"]
+            # ── WORLD-ENTITY module ───────────────────────────────────
+            - call: [<.we_body.setup, <.embedder, "store_we_body"]
+            - set: [<.we_h1.head_id_str, "entity_type"]
+            - set: [<.we_h1.n_outputs_val, 7]
+            - call: [<.we_h1.init_params, <.we_body.hidden_dim, "store_we_outputs"]
+            - set: [<.we_h2.head_id_str, "tags"]
+            - set: [<.we_h2.n_outputs_val, 70]
+            - call: [<.we_h2.init_params, <.we_body.hidden_dim, "store_we_outputs"]
+            - set: [<.we_h3.head_id_str, "yields"]
+            - set: [<.we_h3.n_outputs_val, 126]
+            - call: [<.we_h3.init_params, <.we_body.hidden_dim, "store_we_outputs"]
+            - set: [<.we_h4.head_id_str, "names"]
+            - set: [<.we_h4.n_outputs_val, 186]
+            - call: [<.we_h4.init_params, <.we_body.hidden_dim, "store_we_outputs"]
+            # ── SKILL module ──────────────────────────────────────────
+            - call: [<.skill_body.setup, <.embedder, "store_skill_body"]
+            - set: [<.skill_head.head_id_str, "skill"]
+            - set: [<.skill_head.n_outputs_val, 8]
+            - call: [<.skill_head.init_params, <.skill_body.hidden_dim, "store_skill_outputs"]
+            # Now invoke encode on each — does inner.emb hold up?
+            - call: [log.info, "=== now calling encode on each body ==="]
+            - call: [<.item_body.encode_one, "item"]
+            - call: [<.we_body.encode_one, "we"]
+            - call: [<.skill_body.encode_one, "skill"]
+            - call: [log.info, "all done"]
+
+- def:
+    name: main
+    args: []
+    return: i32
+    body:
+      - decl: [wks, Workspace]
+      - call: [wks.run]
+      - return: 0

@@ -1,0 +1,80 @@
+# Type-scoped dispatch (spec/57): a flat enum whose members share NAMES + VALUES with
+# a cascade's nodes must NOT collide in rule dispatch.  This is the value-identical
+# subset-enum pattern (e.g. 9rooms PlayerRelation mirrors OwnerType/OwnerRef names for
+# DB safety).  Before the fix `on: PlRel` also claimed OwnRef's `owner_a`/`owner_b`
+# NODE tokens (enum-member name match) → (1) "ambiguous handlers" compile error, and
+# (2) op_set leaking onto the flat field → the OPCODE was misread as the 2nd element.
+#
+# OwnKind is OwnRef's opcode-enum; PlRel is a DIFFERENT enum reusing owner_a/owner_b.
+#   Eff.with_ref = [with_ref, OwnRef]   (nested cascade → node tokens owner_a/owner_b)
+#   Eff.with_rel = [with_rel, PlRel]    (flat enum field, value-identical names)
+# Rules `on: OwnRef` and `on: PlRel` must each bind ONLY their own field.
+
+- enum: { name: OwnKind, values: [ {owner_a: 1}, {owner_b: 2} ] }
+- enum: { name: PlRel,   values: [ {rel_any: 0}, {owner_a: 1}, {owner_b: 2} ] }
+- enum: { name: EffCode, values: [ {with_ref: 1}, {with_rel: 2} ] }
+
+- cascade: { name: OwnRef, opcode: OwnKind, nodes: [ [owner_a], [owner_b] ] }
+- cascade:
+    name: Eff
+    opcode: EffCode
+    nodes:
+      - [with_ref, OwnRef]
+      - [with_rel, PlRel]
+
+# Slot carrier: opc MUST end up = the opcode (element 0), NOT the owner field value.
+- model: { name: Draft, fields: [ [opc, i32], [own, i32] ] }
+
+- class:
+    name: Skel
+    renders: Eff
+    rules:
+      # opcode → opc slot (only the first element; fields have a non-empty prefix)
+      - before: []
+        on: "*"
+        def: { name: op_set, args: [[carry, Draft]], return: Draft, body: [ { set: [carry.opc, { call: [<.field] }] }, { return: carry } ] }
+      # OwnRef nested-cascade nodes (owner_a/owner_b) → own slot
+      - before: ["*"]
+        on: OwnRef
+        def: { name: ref_h, args: [[carry, Draft]], return: Draft, body: [ { set: [carry.own, { call: [<.field] }] }, { return: carry } ] }
+      # PlRel flat enum field → own slot (shares names with OwnRef but must not collide)
+      - before: ["*"]
+        on: PlRel
+        def: { name: rel_h, args: [[carry, Draft]], return: Draft, body: [ { set: [carry.own, { call: [<.field] }] }, { return: carry } ] }
+
+- cascade_class:
+    name: EffT
+    binds_cascade: Eff
+    carrier: Draft
+    taker:   Draft
+    members: [Skel]
+
+- def:
+    name: check
+    args: [[got, i32], [want, i32], [label, string]]
+    body:
+      - if: { condition: { neq: [got, want] }, then: [{ print: ["FAIL ${label}: got=${got} want=${want}"] }, { call: [sys.exit, 1] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pool, ptr<EffT>, { new: EffT }]
+      # with_ref(1) + OwnRef.owner_b(2) → opc=1, own=2
+      - decl: [row1, list<i32>]
+      - call: [row1.push, 1]
+      - call: [row1.push, 2]
+      - decl: [dft1, Draft]
+      - decl: [out1, Draft, { call: [pool.render, dft1, row1] }]
+      - call: [check, out1.opc, 1, "with_ref opcode"]
+      - call: [check, out1.own, 2, "with_ref owner (OwnRef node)"]
+      # with_rel(2) + PlRel.owner_a(1) → opc=2 (NOT misread as 1!), own=1
+      - decl: [row2, list<i32>]
+      - call: [row2.push, 2]
+      - call: [row2.push, 1]
+      - decl: [dft2, Draft]
+      - decl: [out2, Draft, { call: [pool.render, dft2, row2] }]
+      - call: [check, out2.opc, 2, "with_rel opcode (must not be the PlRel value)"]
+      - call: [check, out2.own, 1, "with_rel owner (PlRel member)"]
+      - print: ["PASS type_scoped: OwnRef vs value-identical PlRel dispatch cleanly; opcode read correctly"]
+      - return: 0

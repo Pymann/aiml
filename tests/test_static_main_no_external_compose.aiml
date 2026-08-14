@@ -1,0 +1,30 @@
+# Negative test: project spans 3 AIML files (this entry + 2 siblings),
+# the entry defines a `main` function but `main` does NOT instantiate
+# any class from the sibling files.  Static-check must fail.
+#
+# Expected exit code: 1
+#
+# Diagnostic-Form (siehe spec/49 §7):
+#   <path>: project spans 3 AIML files; `main` must instantiate at
+#   least one class declared in another file. Without external
+#   composition the extra files are dead weight ...
+
+- import: "tests/_static_no_external_compose/sibling_a.aiml"
+- import: "tests/_static_no_external_compose/sibling_b.aiml"
+
+# Local class — same file as main, would not satisfy the rule even if
+# instantiated.  The rule requires a class from ANOTHER file.
+- class:
+    name: LocalRunner
+    members:
+      - [count, i32, 0]
+    methods:
+      - def:
+          name: tick
+          body: [{ set: [<.count, { +: [<.count, 1] }] }]
+
+- def:
+    name: main
+    body:
+      - decl: [local, ptr<LocalRunner>, { new: LocalRunner }]
+      - call: [local.tick]

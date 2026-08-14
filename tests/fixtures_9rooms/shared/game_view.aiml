@@ -1,0 +1,288 @@
+# Requires: library
+# 9Rooms — GameView model (mirror sync)
+# Shared between server (host) and client (replica).
+# Server writes fields → mirror auto-syncs → client reads fields.
+
+- import: "tests/fixtures_9rooms/shared/event_view.aiml"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HandCardView — one card in the player's hand
+# Erbt alle Kartenfelder von Card (inkl. mana_cost, attack, defense, ...).
+# iid = Instanz-ID (eindeutig pro Karte in der Hand; cid = Karten-Definition-ID).
+# ══════════════════════════════════════════════════════════════════════════════
+
+- model:
+    name: HandCardView
+    inherits: Card
+    fields:
+      - [iid,          string]   # Instanz-ID — eindeutiger Bezeichner pro Handkarte
+      - [ability_text, string]   # Vorberechneter Text: passive + aktive Fähigkeiten
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RuntimeEffectView — ein aktiver Effekt-Slot einer Kreatur
+# ══════════════════════════════════════════════════════════════════════════════
+
+- model:
+    name: RuntimeEffectView
+    fields:
+      - [code,      i32,    0]   # Effect-Code (200=frozen, 201=shield, 40=regen, ...)
+      - [key,       string, ""]  # Lesbarer Name ("frozen", "shield", "regen", ...)
+      - [dur_type,  i32,    1]   # 1=PERMANENT, 2=TURNS, 3=NEXT_TURN_PHASE, 4=END_OF_PHASE
+      - [dur_val,   i32,    0]   # Restdauer (Runden, Phase-ID, ...)
+      - [src_iid,   string, ""]  # IID der Quelle ("" wenn keine)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CreatureView — Wesen/Urwesen auf dem Kampffeld (effektive Stats, Live-HP)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- model:
+    name: CreatureView
+    fields:
+      - [iid,    string]   # Instanz-ID (eindeutig, z.B. "ABC-123")
+      - [cid,    string]   # Card-Definition-ID (z.B. "fire-dragon")
+      - [name,   string]
+      - [room,   i32]     # Raum 1..5
+      - [var_hp,     i32]     # aktuelle HP
+      - [lp_max, i32]     # maximale LP (Base)
+      - [atk,    i32]     # effektiver Angriff
+      - [def,    i32]     # effektive Verteidigung
+      - [ini,    i32]     # effektive Initiative
+      - [mor,    i32]     # aktuelle Moral
+      - [mor_max, i32]    # maximale Moral (Basis)
+      - [mov,    i32]     # aktuelle Bewegungspunkte
+      - [mov_max, i32]    # maximale Bewegungspunkte (Basis)
+      - [tapped,         i32]     # 1 = getappt (Sprint 3)
+      - [equip_cid_0,    string]  # item CID equipped to slot 0
+      - [equip_cid_1,    string]  # item CID equipped to slot 1
+      - [equip_cid_2,    string]  # item CID equipped to slot 2
+      - [ability_text,   string]  # Vorberechneter Text: passive + aktive Fähigkeiten
+      - [mana_cost,      map<string:i32>]  # Original-Karten-Kosten (Hover-Preview)
+      - [provides,       map<string:i32>]  # meist leer (Preview-Uniformität)
+      - [card_type,      i32]     # CardType Enum (1=Kreatur, 6=Urwesen) — am Ende angehängt
+      - [spell_type,     i32]     # SpellType (0 für nicht-Zauber)
+      - [passives,       map<string:i32>]  # active status effects: "frozen"=1, "shield"=1, "swimming"=1, etc.
+      - [effect_count,   i32,    0]       # Anzahl aktiver fx-Slots (Dirty-Detection)
+      - [effects,        list<RuntimeEffectView>]  # Runtime-Effekte (für UI)
+
+# Bewegungszustand-Lookup: state-int as string ("1"-"4") → passives-map-key
+- decl: [g_mov_state_names, map<string:string>]
+- def:
+    name: init_mov_state_names
+    body:
+      - call: [g_mov_state_names.put, "1", "swimming"]
+      - call: [g_mov_state_names.put, "2", "flying"]
+      - call: [g_mov_state_names.put, "3", "diving"]
+      - call: [g_mov_state_names.put, "4", "subterranean"]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ZoneCardView — Karte in Nicht-Kampf-Zone (Mana, Falle, Zauber) oder Item in Kampfzone
+# face_down=1: Gegner sieht nur Kartenrücken (Fallen)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- model:
+    name: ZoneCardView
+    fields:
+      - [cid,       string]
+      - [name,      string]   # "" wenn face_down=1 und Gegner
+      - [card_type, i32]      # 3=Mana, 7=Falle, 2=Zauber, 4=Item, 5=Schicksal
+      - [zone,      string]   # "mana_zone"|"trap_zone"|"spell_zone"|"room_1".."room_5"
+      - [face_down, i32]      # 1 = verdeckt
+      - [ability_text, string] # Preview-Text (nur wenn nicht face_down)
+      - [mana_cost,   map<string:i32>]  # Hover-Preview
+      - [provides,    map<string:i32>]  # Mana-Karten: produziertes Mana
+      - [spell_type,  i32]      # SpellType (0 für nicht-Zauber) — am Ende angehängt
+      - [initiative,  i32]      # Initiative (Items mit equip_cost==0)
+      - [equip_cost,  i32]      # Equip-Kosten (Items)
+      - [mkp,         i32]      # Manaklassenpunkte
+      - [equipped_to_iid, string]  # IID der Kreatur die dieses Item trägt ("" = nicht equipped)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ManaPool — 10 Manafarben pro Spieler
+# FEUER=0, LICHT=1, SCHATTEN=2, WALD=3, ERDE=4,
+# FROST=5, LUFT=6, STERNE=7, WASSER=8, AMORPH=9
+# ══════════════════════════════════════════════════════════════════════════════
+
+- model:
+    name: ManaPool
+    fields:
+      - [feuer,    i32]
+      - [licht,    i32]
+      - [schatten, i32]
+      - [wald,     i32]
+      - [erde,     i32]
+      - [frost,    i32]
+      - [luft,     i32]
+      - [sterne,   i32]
+      - [wasser,   i32]
+      - [amorph,   i32]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DeckCountsView — eigene Deck-Restkarten
+# ══════════════════════════════════════════════════════════════════════════════
+
+- model:
+    name: DeckCountsView
+    fields:
+      - [creature, i32, 0]
+      - [spell,    i32, 0]
+      - [mana,     i32, 0]
+      - [item,     i32, 0]
+      - [trap,     i32, 0]
+      - [urwesen,  i32, 0]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PlayerView — gebündelte sichtbare Spielerdaten
+# ══════════════════════════════════════════════════════════════════════════════
+
+- model:
+    name: PlayerView
+    fields:
+      - [name,           string, ""]
+      - [var_hp,             i32, 100]
+      - [hand_count,     i32, 0]
+      - [hand_cards,     list<HandCardView>]
+      - [mana,           ManaPool]
+      - [decks,          DeckCountsView]
+      - [phase_confirm,  i32, 0]
+      - [creature_count, i32, 0]
+      - [creatures,      list<CreatureView>]
+      - [zone_count,     i32, 0]
+      - [zone_cards,     list<ZoneCardView>]
+      - [field_item_count, i32, 0]
+      - [field_items,      list<ZoneCardView>]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# GameView model — alle client-sichtbaren Zustände
+# ══════════════════════════════════════════════════════════════════════════════
+
+- model:
+    name: GameView
+    fields:
+      # Spiel-Meta
+      - [round,          i32, 0]
+      - [phase,          i32, 0]
+      - [active,         i32, 0]
+      - [over,           i32, 0]
+      - [winner,         i32, -1]
+      - [my_turn,        i32, 0]
+      - [combat_attacker, string, ""]
+      - [var_me,             PlayerView]
+      - [opp,            PlayerView]
+      # Fallen-Fenster (Sprint 5): 1 = Counter-Window offen, trap_window_ms = verbleibende Zeit
+      - [trap_window,    i32, 0]
+      - [trap_window_ms, i32, 0]
+      # Event-Historie — letzte Ereignisse (max. 5, ring-buffer, sprint_event_1)
+      - [event_seq,   i32, 0]
+      - [event_count, i32, 0]
+      - [events,      list<GameEventView>]
+      # Aktive Trigger — Triggerinstanzen mit vollem Kontext (sprint_task_2)
+      - [trigger_seq_counter,    i32, 0]
+      - [active_trigger_count,   i32, 0]
+      - [active_triggers,        list<TriggerEventView>]
+      # Reaktionsfenster — aktuell offenes Counter-Fenster (sprint_task_3)
+      - [reaction_state,         ReactionStateView]
+      - [reactable_triggers,     list<TriggerEventView>]   # letzte 3 conterable Trigger
+      # Interaction state — offen wenn eine Targeting-Aktion aktiv ist
+      # mode: ""|"attack_target"|"spell_target"|"trap_target"|"equip_target"|"move_target"
+      - [interaction_mode,        string, ""]
+      - [interaction_source_iid,  string, ""]   # IID/CID der Quell-Karte
+      - [interaction_source_zone, string, ""]   # Zone der Quelle
+      - [interaction_owner,       i32,    -1]   # 0=Spieler 1, 1=Spieler 2, -1=keiner
+      - [interaction_prompt,      string, ""]   # Anzeigetext für Client
+      - [interaction_target_mask, string, ""]   # erlaubte Ziele (kodierter String)
+      - [interaction_cancelable,  i32,    1]    # 1 = Abbruch erlaubt
+    sync: [round, phase, active, over, winner, my_turn, combat_attacker,
+           var_me, opp,
+           trap_window, trap_window_ms,
+           event_seq, event_count, events,
+           trigger_seq_counter, active_trigger_count, active_triggers,
+           reaction_state, reactable_triggers,
+           interaction_mode, interaction_source_iid, interaction_source_zone,
+           interaction_owner, interaction_prompt, interaction_target_mask,
+           interaction_cancelable]
+    rpc: [draw, play, play_mana, pass_turn, attack, move, trap, equip, unequip, unequip_slot,
+          begin_attack, commit_target, cancel_interaction, pass_reaction, react_spell,
+          use_ability]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Hand accessor — 1-basierter Slot-Index, gibt ptr<HandCardView> oder null
+# ══════════════════════════════════════════════════════════════════════════════
+
+- def:
+    name: view_get_hand_card
+    args: [[var_v, ptr<GameView>], [var_n, i32]]
+    return: ptr<HandCardView>
+    body:
+      - if:
+          condition: { "||": [{ "<": [var_n, 1] }, { ">": [var_n, var_v.var_me.hand_count] }] }
+          then:
+            - return: [null]
+      - return: [{ call: [var_v.var_me.hand_cards.get, { -: [var_n, 1] }] }]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Creature accessor — 0-basierter Index, side=0→p1, side=1→p2
+# Gibt ptr<CreatureView> oder null
+# ══════════════════════════════════════════════════════════════════════════════
+
+- def:
+    name: view_get_zone_card
+    args: [[var_v, ptr<GameView>], [var_n, i32]]
+    return: ptr<ZoneCardView>
+    body:
+      - if:
+          condition: { "||": [{ "<": [var_n, 0] }, { ">=": [var_n, var_v.var_me.zone_count] }] }
+          then:
+            - return: [null]
+      - return: [{ call: [var_v.var_me.zone_cards.get, var_n] }]
+
+- def:
+    name: view_get_creature
+    args: [[var_v, ptr<GameView>], [side, i32], [var_n, i32]]
+    return: ptr<CreatureView>
+    body:
+      - if:
+          condition: { eq: [side, 0] }
+          then:
+            - if:
+                condition: { "||": [{ "<": [var_n, 0] }, { ">=": [var_n, var_v.var_me.creature_count] }] }
+                then:
+                  - return: [null]
+            - return: [{ call: [var_v.var_me.creatures.get, var_n] }]
+          else:
+            - if:
+                condition: { "||": [{ "<": [var_n, 0] }, { ">=": [var_n, var_v.opp.creature_count] }] }
+                then:
+                  - return: [null]
+            - return: [{ call: [var_v.opp.creatures.get, var_n] }]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Interaction helpers — Host-Seite
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Setzt alle Interaction-Felder zurück (Targeting-Fenster geschlossen).
+- def:
+    name: view_reset_interaction
+    args: [[var_v, ptr<GameView>]]
+    body:
+      - set: [var_v.interaction_mode, ""]
+      - set: [var_v.interaction_source_iid, ""]
+      - set: [var_v.interaction_source_zone, ""]
+      - set: [var_v.interaction_owner, -1]
+      - set: [var_v.interaction_prompt, ""]
+      - set: [var_v.interaction_target_mask, ""]
+      - set: [var_v.interaction_cancelable, 1]
+
+# Öffnet ein Targeting-Fenster mit vollständigen Parametern.
+- def:
+    name: view_set_interaction
+    static_off: ["args"]
+    args: [[var_v, ptr<GameView>], [mode, string], [src_iid, string], [src_zone, string],
+           [owner, i32], [prompt, string], [mask, string], [cancelable, i32]]
+    body:
+      - set: [var_v.interaction_mode, mode]
+      - set: [var_v.interaction_source_iid, src_iid]
+      - set: [var_v.interaction_source_zone, src_zone]
+      - set: [var_v.interaction_owner, owner]
+      - set: [var_v.interaction_prompt, prompt]
+      - set: [var_v.interaction_target_mask, mask]
+      - set: [var_v.interaction_cancelable, cancelable]

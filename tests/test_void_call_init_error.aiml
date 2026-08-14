@@ -1,0 +1,19 @@
+# Regression: storing a void-returning call into a typed location is a hard
+# compile-error (previously triggered a stack-overflow inside LLVM's
+# DataLayout::getPrefTypeAlignment — see 2026-06-04 libraryMode debugging).
+#
+# Expected exit code: 1 (compile failure)
+
+- def:
+    name: do_side_effect
+    args: [[var_v, i32]]
+    body:
+      - print: ["side effect ${var_v}"]
+
+- def:
+    name: main
+    return: i32
+    body:
+      # This must be rejected at compile time, BEFORE any IR is emitted.
+      - decl: [var_a, i32, { call: [do_side_effect, 1] }]
+      - return: 0

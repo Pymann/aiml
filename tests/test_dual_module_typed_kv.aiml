@@ -1,0 +1,83 @@
+# Repro für DataCreatures-Crash: zwei Module öffnen dasselbe
+# `Kv<string:T>` mit T = tief verschachtelte Klasse (mehrere nested
+# Structs, viele list<>-Felder).
+#
+# Beobachtet im Server: `aiml_ser_encode` crashes mit signal 11 bei
+# `aiml_mirror_session_send_rpc_model` (DataCreature serialisieren).
+#
+# Hypothese: pro Compilation-Unit gibt es ein PrivateLinkage-Global
+# `__aiml_sernodes_<Type>`. Wenn zwei Module dasselbe Kv mit identischem
+# Type öffnen, registriert sich der ser_nodes-Pointer aus dem ERSTEN
+# Open im Singleton-Cache. Zweite Module-Codepfade nutzen aber ihren
+# eigenen lokalen ser_nodes-Pointer — wenn die Arrays inhaltlich
+# divergieren (z.B. weil ein Modul weniger transitive Imports sieht),
+# führt encode/decode zu falschen Offsets → segfault.
+#
+# Schreibe via Lib-Modul, lies via Main → encode mit lib's nodes,
+# decode mit main's nodes (oder umgekehrt) → wenn die Arrays nicht
+# byte-identisch sind, crashed das.
+
+- import: "tests/lib_typed_kv_repro.aiml"
+
+# Doppel-Deklaration im main-Modul: NEUE ser_nodes-Globale für ReproOuter
+# in dieser Compilation-Unit.
+- decl: [repro_kv, Kv<string:ReproOuter>, { call: [db.open_kv, "repro_things.kvwal", {persist: true}] }]
+
+- call: [lib_put_thing, "id-A"]
+
+# Lies via Main's get_copy → decode mit MAIN's ser_nodes (lib hat geschrieben).
+- decl: [var_t, ReproOuter, { call: [repro_kv.get_copy, "id-A"] }]
+
+- if:
+    condition: { neq: [var_t.outer_id, "id-A"] }
+    then:
+      - print: ["FAIL: outer_id='${var_t.outer_id}' expected 'id-A'"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [var_t.mid.mid_id, "mid-id-A"] }
+    then:
+      - print: ["FAIL: mid.mid_id='${var_t.mid.mid_id}' expected 'mid-id-A'"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [var_t.mid.inner.inner_id, "inner-id-A"] }
+    then:
+      - print: ["FAIL: inner_id='${var_t.mid.inner.inner_id}'"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [var_t.mid.inner.tags.len, 2] }
+    then:
+      - print: ["FAIL: inner.tags.len=${var_t.mid.inner.tags.len} expected 2"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { neq: [var_t.mid.inner.counts.len, 2] }
+    then:
+      - print: ["FAIL: inner.counts.len=${var_t.mid.inner.counts.len} expected 2"]
+      - call: [sys.exit, 1]
+- decl: [var_c0, i32, { at: [var_t.mid.inner.counts, 0] }]
+- decl: [var_c1, i32, { at: [var_t.mid.inner.counts, 1] }]
+- if:
+    condition: { neq: [var_c0, 7] }
+    then: [{ print: ["FAIL: counts[0]=${var_c0}"] }, { call: [sys.exit, 1] }]
+- if:
+    condition: { neq: [var_c1, 42] }
+    then: [{ print: ["FAIL: counts[1]=${var_c1}"] }, { call: [sys.exit, 1] }]
+- if:
+    condition: { neq: [var_t.extra.len, 1] }
+    then: [{ print: ["FAIL: extra.len=${var_t.extra.len}"] }, { call: [sys.exit, 1] }]
+- if:
+    condition: { neq: [var_t.flags.len, 3] }
+    then: [{ print: ["FAIL: flags.len=${var_t.flags.len}"] }, { call: [sys.exit, 1] }]
+
+# Umgekehrt: schreibe via Main, lies via Main — full round trip.
+- decl: [obj2, ReproOuter]
+- set: [obj2.outer_id, "id-B"]
+- set: [obj2.mid.mid_id, "mid-B"]
+- set: [obj2.mid.inner.inner_id, "inner-B"]
+- call: [obj2.mid.inner.tags.push, "main-tag"]
+- call: [repro_kv.set, "id-B", obj2]
+- decl: [var_t2, ReproOuter, { call: [repro_kv.get_copy, "id-B"] }]
+- if:
+    condition: { neq: [var_t2.mid.inner.tags.len, 1] }
+    then: [{ print: ["FAIL: round-trip inner.tags.len=${var_t2.mid.inner.tags.len}"] }, { call: [sys.exit, 1] }]
+
+- print: ["PASS test_dual_module_typed_kv"]

@@ -1,0 +1,37 @@
+# static-check: off
+# PROBE: serialisiert ein Model, das eine list<Klasse-mit-models> enthält,
+# über KV-Roundtrip?  (= die Frage ob ZoneEntry eine class sein darf, da es
+# in MatchSession.combat_zone: list<ZoneEntry> steckt + über KV/Wire geht.)
+
+- model: { name: FooData, fields: [[val, i32]] }
+- class:
+    name: Foo
+    models: [FooData]
+    methods:
+      - def: { name: get_val, return: i32, body: [{ return: <.val }] }
+      - def: { name: set_val, args: [[newv, i32]], body: [{ set: [<.val, newv] }] }
+
+- model: { name: Container, fields: [[items, list<Foo>]] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_dir, path, "/tmp/probe_class_ser/"]
+      - call: [io.remove_all, db_dir]
+      - decl: [store, Kv<string:Container>]
+      - set: [store, { call: [db.open_kv, "cont", {persist: true, path: db_dir}] }]
+      - decl: [orig, Container]
+      - decl: [foo, Foo]
+      - call: [foo.set_val, 42]
+      - call: [orig.items.push, foo]
+      - call: [store.set, "k", orig]
+      - decl: [loaded, Container, { call: [store.get_copy, "k"] }]
+      - if: { condition: { eq: [loaded.items.len, 0] }, then: [{ print: ["FAIL items empty after roundtrip"] }, { return: 1 }] }
+      - decl: [got, Foo, { at: [loaded.items, 0] }]
+      - decl: [gotv, i32, { call: [got.get_val] }]
+      - if:
+          condition: { eq: [gotv, 42] }
+          then: [{ print: ["PASS class-in-list serializes: val=42 survives KV roundtrip"] }]
+          else: [{ print: ["FAIL class-in-list roundtrip val=${gotv} (exp 42)"] }]
+      - return: { -: [gotv, 42] }

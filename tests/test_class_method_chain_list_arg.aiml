@@ -1,0 +1,73 @@
+# Repro: `list<T>` (and probably any container struct) gets CORRUPTED
+# when it is passed as a class-method arg, then RE-PASSED as a class-method
+# arg by the receiver to another class-method.
+#
+# Single pass-through: caller's local list → class-method param  → WORKS
+# Double pass-through: caller's local list → method A's param → method B's
+#                       param via `<.B(A's_ids)`  → CORRUPTED (.len = junk)
+#
+# Symptom: ids.len in the second-level callee returns a wildly wrong i32
+# (e.g. -60813120), and tensor.matmul / loops based on that produce zeros
+# or segfaults.
+#
+# Hit while building prophecy/sources/inference_demo.aiml — every
+# Body.encode_bag(ids) saw a junk n_ids because predict_item received
+# `ids` via re-pass, not directly.
+#
+# Workaround: avoid re-passing list args through chained class-method
+# calls.  Compute the list locally in the innermost class method that
+# needs it, or build it inline at the call site.
+
+- class:
+    name: Chain
+    members:
+      - [counter, i32, 0]
+    methods:
+      - def:
+          name: make_ids
+          args: []
+          return: list<i32>
+          body:
+            - decl: [out, list<i32>]
+            - call: [out.push, 5]
+            - call: [out.push, 10]
+            - call: [out.push, 42]
+            - return: out
+
+      # Second level — receives the same ids via re-pass.  EXPECT ids.len=3
+      # but observe junk in the buggy compiler.
+      - def:
+          name: level_b
+          args: [[ids, list<i32>]]
+          body:
+            - call: [log.info, "level_b: ids.len=${ids.len} (expect 3)"]
+            - decl: [n_use, i32, ids.len]
+            - if:
+                condition: { neq: [n_use, 3] }
+                then:
+                  - call: [log.error, "FAIL — level_b got ids.len=${n_use}, list arg corrupted by re-pass"]
+
+      # First level — receives ids, just forwards them
+      - def:
+          name: level_a
+          args: [[ids, list<i32>]]
+          body:
+            - call: [log.info, "level_a: ids.len=${ids.len} (expect 3)"]
+            - call: [<.level_b, ids]
+
+      - def:
+          name: run
+          args: []
+          body:
+            - decl: [ids, list<i32>, { call: [<.make_ids] }]
+            - call: [log.info, "run: ids.len=${ids.len}"]
+            - call: [<.level_a, ids]
+
+- def:
+    name: main
+    args: []
+    return: i32
+    body:
+      - decl: [c_obj, Chain]
+      - call: [c_obj.run]
+      - return: 0

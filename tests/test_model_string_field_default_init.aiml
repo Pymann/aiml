@@ -1,0 +1,51 @@
+# Regression: ungesetzte `string`-Felder eines Models müssen als LEERER String
+# ("") vorinitialisiert sein, nicht als null-Pointer.  Ein string-Feld ist ein
+# i8* und `.len` lowert zu strlen(ptr) — ein null-Feld segfaultet bei JEDEM
+# Zugriff.  Analog zu list/map-Feldern, die auf leere Container defaulten.
+#
+# Vorher-Bug: der DeckEditor crashte in build_card_text, weil eine frisch
+# gebaute MockCard das nie gesetzte `ability_text` als null hatte und
+# `card.ability_text.len` strlen(null) ausführte.
+#
+# Expected exit code: 0
+
+- model:
+    name: Widget
+    fields:
+      - [label, string]
+      - [descr, string]                 # nie gesetzt → muss "" sein, nicht null
+      - [tags,  list<string>]           # Gegenprobe: list default = leer
+
+- def:
+    name: read_len
+    args: [[wid, Widget]]
+    return: i32
+    body:
+      # by-value Übergabe: die Kopie muss ebenfalls gültige "" Felder haben.
+      - return: wid.descr.len
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [wid, Widget]
+      - set: [wid.label, "hello"]
+
+      # Gesetztes Feld korrekt.
+      - if: { condition: { neq: [wid.label.len, 5] }, then: [{ print: ["FAIL label.len=${wid.label.len}"] }, { set: [fails, { +: [fails, 1] }] }] }
+      # UNGESETZTES string-Feld: direkter .len-Zugriff darf nicht crashen, = 0.
+      - if: { condition: { neq: [wid.descr.len, 0] }, then: [{ print: ["FAIL descr.len=${wid.descr.len}"] }, { set: [fails, { +: [fails, 1] }] }] }
+      # Gegenprobe list-Feld.
+      - if: { condition: { neq: [wid.tags.len, 0] }, then: [{ print: ["FAIL tags.len=${wid.tags.len}"] }, { set: [fails, { +: [fails, 1] }] }] }
+      # Ungesetztes Feld in Interpolation (auch strlen-Pfad).
+      - decl: [joined, string, "d=[${wid.descr}]"]
+      - if: { condition: { neq: [joined, "d=[]"] }, then: [{ print: ["FAIL interp='${joined}'"] }, { set: [fails, { +: [fails, 1] }] }] }
+      # by-value an Funktion — Kopie muss auch gültig sein.
+      - if: { condition: { neq: [{ call: [read_len, wid] }, 0] }, then: [{ print: ["FAIL byval descr.len"] }, { set: [fails, { +: [fails, 1] }] }] }
+
+      - if:
+          condition: { eq: [fails, 0] }
+          then: [{ print: ["PASS model_string_field_default_init: unset string fields default to \"\" (len 0), no null-deref"] }]
+          else: [{ print: ["FAIL model_string_field_default_init: ${fails}"] }]
+      - return: fails

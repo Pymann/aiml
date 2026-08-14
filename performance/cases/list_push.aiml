@@ -1,0 +1,13 @@
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [n, i32, 200000]
+      - decl: [i, i32, 0]
+      - decl: [xs, list<i32>]
+      - while:
+          cond: { <: [i, n] }
+          body:
+            - call: [xs.push, i]
+            - set: [i, { +: [i, 1] }]
+      - return: xs.len

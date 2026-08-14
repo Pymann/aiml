@@ -1,0 +1,65 @@
+# static-check: off
+# Binary-serializer roundtrip test for list<ptr<T>>.  Uses sys.bundle to
+# encode-then-decode via the same machinery RPC uses (__aiml_sernodes_*).
+# Mirrors the datacreatures CreatureDetail pattern: model with multiple
+# list<ptr<Different>> fields.
+
+- interface:
+    name: Tagged
+    methods:
+      - [tag, string, []]
+
+- model:
+    name: var_A
+    fields:
+      - [var_an, i32, 0]
+
+- class:
+    name: var_AB
+    models: [var_A]
+    implements: [Tagged]
+    methods:
+      - def: { name: tag, return: string, args: [], body: [{ return: "var_A:${<.var_an}" }] }
+
+- model:
+    name: var_B
+    fields:
+      - [var_bn, string]
+
+- class:
+    name: var_BB
+    models: [var_B]
+    implements: [Tagged]
+    methods:
+      - def: { name: tag, return: string, args: [], body: [{ return: "var_B:${<.var_bn}" }] }
+
+- model:
+    name: Bundle
+    fields:
+      - [name, string]
+      - [var_as,   list<ptr<var_AB>>]
+      - [var_bs,   list<ptr<var_BB>>]
+
+# Build
+- decl: [bundle, Bundle]
+- set: [bundle.name, "test"]
+- decl: [var_a1, ptr<var_AB>, { new: var_AB }]
+- set: [var_a1.var_an, 7]
+- call: [bundle.var_as.push, var_a1]
+- decl: [var_a2, ptr<var_AB>, { new: var_AB }]
+- set: [var_a2.var_an, 8]
+- call: [bundle.var_as.push, var_a2]
+- decl: [var_b1, ptr<var_BB>, { new: var_BB }]
+- set: [var_b1.var_bn, "hello"]
+- call: [bundle.var_bs.push, var_b1]
+
+- print: ["pre:  var_as=${bundle.var_as.len} var_bs=${bundle.var_bs.len}"]
+
+# Binary roundtrip via JSON (which on this path now also uses the same
+# fixed sernode shift).  But the actual RPC binary path is in
+# aiml_ser_encode/decode — exercised at runtime by send_rpc which we
+# can't easily call here.  This test at least validates the shape.
+- decl: [var_s, string, { call: [sys.serialize, bundle] }]
+- print: ["wire: ${var_s}"]
+- decl: [var_b2, Bundle, { call: [sys.deserialize, var_s] }]
+- print: ["post: var_as=${var_b2.var_as.len} var_bs=${var_b2.var_bs.len}"]

@@ -1,0 +1,74 @@
+# AionDB db_indexed: basic string-field secondary index.
+# Validates: insert / set new key / find returns matching keys / delete removes
+# the id from the index.
+# Reference: aiml/doc/backlog/2026-06-06_aiondb_indexed_fields.md
+# Expected exit code: 0
+
+- model:
+    name: Item
+    fields:
+      - [item_id, string]
+      - [name,    string, "", { db_indexed: true }]
+      - [value,   i32,    0]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [items, Kv<string:Item>]
+      - set:  [items, { call: [db.open_kv, "items_idx_basic"] }]
+
+      # 3 inserts: two "Sword", one "Shield".
+      - decl: [var_a, Item]
+      - set:  [var_a.item_id, "var_a"]
+      - set:  [var_a.name,    "Sword"]
+      - set:  [var_a.value,   100]
+      - call: [items.set, "var_a", var_a]
+
+      - decl: [var_b, Item]
+      - set:  [var_b.item_id, "var_b"]
+      - set:  [var_b.name,    "Sword"]
+      - set:  [var_b.value,   150]
+      - call: [items.set, "var_b", var_b]
+
+      - decl: [var_c, Item]
+      - set:  [var_c.item_id, "var_c"]
+      - set:  [var_c.name,    "Shield"]
+      - set:  [var_c.value,   200]
+      - call: [items.set, "var_c", var_c]
+
+      # findings_by_name("Sword") → 2 ids
+      - decl: [swords, list<string>, { call: [items.findings_by, "name", "Sword"] }]
+      - if:
+          condition: { neq: [swords.len, 2] }
+          then:
+            - print: ["FAIL basic_swords_len=${swords.len} (want 2)"]
+            - call:  [sys.exit, 1]
+
+      # findings_by_name("Shield") → 1 id
+      - decl: [shields, list<string>, { call: [items.findings_by, "name", "Shield"] }]
+      - if:
+          condition: { neq: [shields.len, 1] }
+          then:
+            - print: ["FAIL basic_shields_len=${shields.len} (want 1)"]
+            - call:  [sys.exit, 1]
+
+      # findings_by_name("Bow") → empty (no match)
+      - decl: [bows, list<string>, { call: [items.findings_by, "name", "Bow"] }]
+      - if:
+          condition: { neq: [bows.len, 0] }
+          then:
+            - print: ["FAIL basic_bows_len=${bows.len} (want 0)"]
+            - call:  [sys.exit, 1]
+
+      # Delete "var_a", re-find: 1 Sword left.
+      - call: [items.delete, "var_a"]
+      - decl: [swords2, list<string>, { call: [items.findings_by, "name", "Sword"] }]
+      - if:
+          condition: { neq: [swords2.len, 1] }
+          then:
+            - print: ["FAIL basic_after_delete_len=${swords2.len} (want 1)"]
+            - call:  [sys.exit, 1]
+
+      - print: ["AionDB db_indexed basic PASS"]
+      - return: 0

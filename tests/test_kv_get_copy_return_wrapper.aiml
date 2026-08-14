@@ -1,0 +1,82 @@
+# Regression: a wrapper method `return kv.get_copy(k)` (NOT a direct decl-site).
+#
+# The 2026-05 fix deep-copies get_copy results only at the DECL site
+# (visitDeclStmt).  A wrapper that RETURNS get_copy bypassed it: the return did a
+# shallow struct load, so the returned struct's string/list heap pointers ALIASED
+# the kv decoded_cache slot.  A caller holding that result across a set/get_copy on
+# the SAME key hit a use-after-free — kv_decoded_evict (db_runtime.cpp) frees the
+# slot, dangling the caller's copy (garbage reads / SIGSEGV).
+#
+# Found via 9rooms_v2: MatchService.get_raw did `return matches.get_copy(mid)`;
+# drive_ai_plays held `amat = get_raw(mid)` across a nested play_card.set(mid) →
+# amat.players[].email dangled → find_player_idx "not participant".
+#
+# Fix: visitRetStmt now deep-copies (aiml_ser_deep_copy) when the returned value
+# is a get_copy result (ctx.kvGetCopy) with heap fields — mirrors the decl site.
+# See doc/issue/kv_get_mutate_set_same_key_crash.md.
+
+- model:
+    name: Rec
+    fields:
+      - [name,  string]
+      - [items, list<string>]
+
+- class:
+    name: Store
+    members:
+      - [store, Kv<string:Rec>]
+    methods:
+      - def:
+          name: setup
+          args: [[dir, string]]
+          body:
+            - set: [<.store, { call: [db.open_kv, "getcopy_ret_repro", {persist: true, path: dir}] }]
+      - def:
+          name: seed
+          args: [[key, string], [nmv, string]]
+          body:
+            - decl: [rec, Rec]
+            - set: [rec.name, nmv]
+            - call: [rec.items.push, "seed"]
+            - call: [<.store.set, key, rec]
+      # WRAPPER — returns get_copy through a `return` (the bug site).
+      - def:
+          name: fetch
+          args: [[key, string]]
+          return: Rec
+          body:
+            - return: { call: [<.store.get_copy, key] }
+      # Evicts the decoded_cache slot for `key` (get_copy + mutate + set same key).
+      - def:
+          name: bump
+          args: [[key, string]]
+          body:
+            - decl: [rec, Rec, { call: [<.store.get_copy, key] }]
+            - call: [rec.items.push, "x"]
+            - call: [<.store.set, key, rec]
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [svc, ptr<Store>, { new: Store }]
+      - call: [svc.setup, "/tmp/aiml_test_getcopy_ret/"]
+      - call: [svc.seed, "k", "hello"]
+      # Wrapper-returned copy — must be INDEPENDENT of the decoded_cache.
+      - decl: [held, Rec, { call: [svc.fetch, "k"] }]
+      # Evict the "k" slot repeatedly + churn other keys to reuse freed heap.
+      - call: [svc.bump, "k"]
+      - call: [svc.bump, "k"]
+      - call: [svc.seed, "other1", "aaaaaaaaaaaaaaaa"]
+      - call: [svc.seed, "other2", "bbbbbbbbbbbbbbbb"]
+      - decl: [churn1, Rec, { call: [svc.fetch, "other1"] }]
+      - decl: [churn2, Rec, { call: [svc.fetch, "other2"] }]
+      # held must still read "hello" and its list must be intact.
+      - decl: [okv, i32, 1]
+      - if: { condition: { neq: [held.name, "hello"] }, then: [{ set: [okv, 0] }] }
+      - if: { condition: { lt: [held.items.len, 1] }, then: [{ set: [okv, 0] }] }
+      - if:
+          condition: { eq: [okv, 1] }
+          then: [{ call: [log.info, "PASS: get_copy-return wrapper survives same-key eviction (held.name='${held.name}')"] }, { return: 0 }]
+          else: [{ call: [log.info, "FAIL: use-after-free — held.name='${held.name}' items=${held.items.len} (get_copy return not deep-copied)"] }, { return: 1 }]

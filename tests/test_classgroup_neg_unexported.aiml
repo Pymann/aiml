@@ -1,0 +1,37 @@
+# M2b-2 negative — a cross-group `sees` targeting a NON-exported subgroup
+# instance must hard-fail (spec/58 §6 encapsulation).  `hidden` exists in Engine
+# but is not in its `export:` list, so App may not see it.
+#
+# Runner expects exit code 1 (test_classgroup_neg_ pattern).
+
+- class:
+    name: Counter
+    members: [[num, i32]]
+    methods:
+      - def: { name: bump, body: [{ set: [<.num, { +: [<.num, 1] }] }] }
+
+- classgroup:
+    name: Engine
+    instances:
+      - class: Counter
+        instance: counter
+      - class: Counter
+        instance: hidden
+    export: [counter]
+
+- classgroup:
+    name: App
+    subgroups: [[engine, Engine]]
+    instances:
+      - class: Counter
+        instance: driver
+        sees: [engine.hidden]         # hidden is not exported → must fail
+        functions:
+          - def: { name: tick, body: [{ call: [<.hidden.bump] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [app, ptr<App>, { new: App }]
+      - return: 0

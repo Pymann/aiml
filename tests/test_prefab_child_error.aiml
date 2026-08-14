@@ -1,0 +1,25 @@
+# Negative test (Tier 2, child-known): v.set_text("<child>", …) mit einem
+# Child-Namen, der NICHT in der `children:`-Liste des Prefabs deklariert ist,
+# aus dem v instanziiert wurde.  Zur Laufzeit → find_child NULL → silent no-op;
+# muss daher ein HARTER Compiler-Fehler sein.  Siehe spec/44_8.
+#
+# Expected exit code: 1
+#
+# Diagnostic-Form:
+#   ...: 'inst'.set_text("does_not_exist") addresses an unknown child of prefab
+#   'Panel' — no child with that name is declared in its `children:` list. ...
+
+- prefab:
+    name: Panel
+    width: 100
+    height: 40
+    children:
+      - { name: title, type: label, x: 0, y: 0, width: 100, height: 20 }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [inst, prefab_instance, { call: [engine.instantiate, "Panel"] }]
+      - call: [inst.set_text, "does_not_exist", "hi"]
+      - return: 0

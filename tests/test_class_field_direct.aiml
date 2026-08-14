@@ -1,0 +1,20 @@
+# static-check: off
+# PROBE: externer DIREKTER Feldzugriff (read+write) auf eine class-mit-models?
+- model: { name: BarData, fields: [[num, i32]] }
+- class:
+    name: Bar
+    models: [BarData]
+    methods:
+      - def: { name: touch, body: [{ set: [<.num, 7] }] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [bar, Bar]
+      - set: [bar.num, 5]                 # externer direkter WRITE
+      - decl: [rdv, i32, bar.num]          # externer direkter READ
+      - if:
+          condition: { eq: [rdv, 5] }
+          then: [{ print: ["PASS direct field access on class works: rdv=5"] }]
+          else: [{ print: ["FAIL direct read got=${rdv}"] }]
+      - return: { -: [rdv, 5] }

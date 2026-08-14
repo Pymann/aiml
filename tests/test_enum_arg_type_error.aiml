@@ -1,0 +1,39 @@
+# Negative test: ein String-Literal wird an ein enum-typisiertes Methoden-
+# Argument übergeben.  Das ist ein HARTER Compiler-Fehler an der Call-Site —
+# mit Quell-Location und Hinweis, das Enum-Symbol (EnumType.<value>) zu nutzen.
+#
+# Ohne diesen Check rutscht der Mismatch (i8* → i32) am Frontend vorbei und
+# taucht erst als kryptischer LLVM-IR-Verifier-Fehler ohne Zeilennummer auf.
+# Siehe spec/14_enums.md §"Argument Type Checking".
+#
+# Expected exit code: 1
+#
+# Diagnostic-Form:
+#   ...: Call to 'Painter_paint': argument 1 ('col') type mismatch —
+#   passing a string/pointer where an integer- or enum-typed argument is
+#   expected; use EnumType.<value> or an int literal
+
+- enum:
+    name: Color
+    values: [red, green, blue]
+
+- class:
+    name: Painter
+    members:
+      - [tag, string]
+    methods:
+      - def:
+          name: paint
+          args: [[col, Color], [amount, i32]]
+          return: i32
+          body:
+            - return: amount
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pnt, ptr<Painter>, { new: Painter }]
+      # BUG: "green" ist ein String — col erwartet das Enum Color.
+      - decl: [res, i32, { call: [pnt.paint, "green", 5] }]
+      - return: res

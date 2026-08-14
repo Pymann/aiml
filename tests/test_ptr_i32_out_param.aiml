@@ -1,0 +1,33 @@
+# ptr<primitive> out-param-Pattern.
+#
+# AIML 2026-06-28: `store: [ptr_var, val]` schreibt *ptr = val (C-Semantik).
+# `set: [ptr_var, val]` bleibt rebind (C `p = v`).  Spec/12_pointers.md.
+# Damit funktioniert das natürliche out-param-Pattern:
+#
+# - def: write_out
+#     args: [[out, ptr<i32>]]
+#     body: [store: [out, 5]]
+#
+# - decl: [val, i32, 0]
+# - call: [write_out, {'&': [val]}]
+# # nach Call: val == 5
+
+- def:
+    name: write_out
+    args: [[zone_out, ptr<i32>], [pos_out, ptr<i32>]]
+    body:
+      - store: [zone_out, 1]
+      - store: [pos_out, 5]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [izone, i32, 0]
+      - decl: [ipos,  i32, -1]
+      - call: [write_out, {'&': [izone]}, {'&': [ipos]}]
+      - print: ["izone=${izone} ipos=${ipos}"]
+      - if: { condition: { neq: [izone, 1] }, then: [{ print: ["FAIL izone=${izone}"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [ipos, 5] }, then: [{ print: ["FAIL ipos=${ipos}"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS ptr<i32> out-param via store:"]
+      - return: 0

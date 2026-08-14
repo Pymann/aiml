@@ -1,0 +1,35 @@
+# Verifies that `mirror.RpcHandler` is a builtin interface — projects can
+# write `implements: [mirror.RpcHandler]` without redefining the interface.
+# Expected exit code: 0
+#
+# This test exercises only the COMPILATION path (vtable emission + signature
+# check + interface fat-pointer lookup).  No actual mirror session is opened,
+# so there is no network/RPC traffic at runtime.
+
+- model:
+    name: PingReq
+    fields:
+      - [count, i32]
+
+# Stand-alone receiver-stub: no mirror_session needed — we just verify the
+# vtable + ptr<mirror.RpcHandler> upcast compile cleanly.
+- class:
+    name: PingHandler
+    implements: [mirror.RpcHandler]
+    models: [PingReq]
+    methods:
+      - def:
+          name: run
+          args: [[rpc, rpc_event], [session, mirror_session]]
+          body:
+            - call: [log.info, "PingHandler.run: count=${<.count}"]
+
+- def:
+    name: main
+    return: i32
+    body:
+      # Implicit upcast to ptr<mirror.RpcHandler>.
+      - decl: [var_h, ptr<PingHandler>, { new: PingHandler }]
+      - decl: [ifh, ptr<mirror.RpcHandler>, var_h]
+      - print: ["builtin mirror.RpcHandler PASS"]
+      - return: 0

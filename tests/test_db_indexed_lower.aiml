@@ -1,0 +1,70 @@
+# AionDB db_indexed: "lower" — case-insensitive lookup.  Index stores the
+# lowercase key; original casing is preserved in the record.
+# Reference: aiml/doc/backlog/2026-06-06_aiondb_indexed_fields.md
+# Expected exit code: 0
+
+- model:
+    name: Tool
+    fields:
+      - [tool_id, string]
+      - [name,    string, "", { db_indexed: "lower" }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [tools, Kv<string:Tool>]
+      - set:  [tools, { call: [db.open_kv, "tools_idx_lower"] }]
+
+      # Insert with capitalized name.
+      - decl: [var_h, Tool]
+      - set:  [var_h.tool_id, "hammer1"]
+      - set:  [var_h.name,    "Hammer"]
+      - call: [tools.set, "hammer1", var_h]
+
+      # Insert with all-caps name.
+      - decl: [var_s, Tool]
+      - set:  [var_s.tool_id, "shovel1"]
+      - set:  [var_s.name,    "SHOVEL"]
+      - call: [tools.set, "shovel1", var_s]
+
+      # All three casings → match the same record.
+      - decl: [var_r1, list<string>, { call: [tools.findings_by, "name", "HAMMER"] }]
+      - if:
+          condition: { neq: [var_r1.len, 1] }
+          then:
+            - print: ["FAIL lower_HAMMER=${var_r1.len} (want 1)"]
+            - call:  [sys.exit, 1]
+
+      - decl: [var_r2, list<string>, { call: [tools.findings_by, "name", "hammer"] }]
+      - if:
+          condition: { neq: [var_r2.len, 1] }
+          then:
+            - print: ["FAIL lower_hammer=${var_r2.len} (want 1)"]
+            - call:  [sys.exit, 1]
+
+      - decl: [var_r3, list<string>, { call: [tools.findings_by, "name", "Hammer"] }]
+      - if:
+          condition: { neq: [var_r3.len, 1] }
+          then:
+            - print: ["FAIL lower_Hammer=${var_r3.len} (want 1)"]
+            - call:  [sys.exit, 1]
+
+      # SHOVEL via lowercase shovel.
+      - decl: [var_r4, list<string>, { call: [tools.findings_by, "name", "shovel"] }]
+      - if:
+          condition: { neq: [var_r4.len, 1] }
+          then:
+            - print: ["FAIL lower_shovel=${var_r4.len} (want 1)"]
+            - call:  [sys.exit, 1]
+
+      # Original casing is preserved when reading the record back.
+      - decl: [got, Tool, { call: [tools.get_copy, "hammer1"] }]
+      - if:
+          condition: { eq: [{ eq: [got.name, "Hammer"] }, 0] }
+          then:
+            - print: ["FAIL lower_record_name=${got.name} (want 'Hammer')"]
+            - call:  [sys.exit, 1]
+
+      - print: ["AionDB db_indexed lower PASS"]
+      - return: 0

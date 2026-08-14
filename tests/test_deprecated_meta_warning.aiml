@@ -1,0 +1,45 @@
+# static-check: off
+# FEATURE: `meta: [deprecated]` auf einer def/Methode → der Compiler gibt an
+# JEDER Nutzungsstelle eine WARNING mit Source-Location aus (kein Fehler; das
+# Programm kompiliert + läuft normal).  Erleichtert Refactorings: alte API als
+# deprecated markieren, dann zeigt der Compiler alle Call-Sites.
+#
+# Dieser Test kompiliert + läuft (exit 0).  Die eigentliche Prüfung ist die
+# Warning auf stderr — vom Test-Runner via grep verifiziert, nicht via exit.
+
+- def:
+    name: old_helper
+    meta: [deprecated]
+    return: i32
+    body:
+      - return: 7
+
+- def:
+    name: still_ok
+    return: i32
+    body:
+      - return: 3
+
+- model: { name: BoxData, fields: [[num, i32]] }
+
+- class:
+    name: Box
+    models: [BoxData]
+    methods:
+      # deprecated Klassenmethode → Warning an jeder Aufrufstelle.
+      - def: { name: old_read, meta: [deprecated], return: i32, body: [{ return: <.num }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      # Nutzung der deprecated Funktion → hier muss die Warning entstehen.
+      - decl: [val_a, i32, { call: [old_helper] }]
+      - decl: [val_b, i32, { call: [still_ok] }]
+      - decl: [box, ptr<Box>, { new: Box }]
+      - decl: [val_c, i32, { call: [box.old_read] }]
+      - if:
+          condition: { eq: [{ +: [val_a, val_b] }, 10] }
+          then: [{ print: ["PASS deprecated_meta_warning: compiles + runs; check stderr for deprecation"] }]
+          else: [{ print: ["FAIL deprecated_meta_warning"] }]
+      - return: 0

@@ -1,0 +1,51 @@
+# M2b-2 — a parent instance may `sees` a subgroup's EXPORTED instance via a
+# dotted target `subgroup.instance`.  The sees member is base-typed and wired to
+# the child's instance, so the parent's coordination function drives the child.
+#
+# Spec: spec/58_classgroups.md §6 (cross-group sees to exported instances).
+
+- class:
+    name: Counter
+    members:
+      - [num, i32]
+    methods:
+      - def: { name: bump,  body: [{ set: [<.num, { +: [<.num, 1] }] }] }
+      - def: { name: value, return: i32, body: [{ return: <.num }] }
+
+- classgroup:
+    name: Engine
+    instances:
+      - class: Counter
+        instance: counter
+      - class: Counter
+        instance: hidden      # internal — NOT exported
+    export: [counter]
+
+- classgroup:
+    name: App
+    subgroups: [[engine, Engine]]
+    instances:
+      - class: Counter
+        instance: driver
+        sees: [engine.counter]        # cross-group sees to an exported instance
+        functions:
+          - def:
+              name: tick
+              return: i32
+              body:
+                - call: [<.counter.bump]
+                - return: { call: [<.counter.value] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [app, ptr<App>, { new: App }]
+      - decl: [tk1, i32, { call: [app.driver.tick] }]   # bumps engine.counter → 1
+      - decl: [tk2, i32, { call: [app.driver.tick] }]   # → 2
+      - if: { condition: { neq: [tk2, 2] }, then: [{ print: ["FAIL tick2=${tk2} exp 2"] }, { call: [sys.exit, 1] }] }
+      # same instance seen from the outside via the subgroup
+      - decl: [eng_v, i32, { call: [app.engine.counter.value] }]
+      - if: { condition: { neq: [eng_v, 2] }, then: [{ print: ["FAIL engine.counter=${eng_v} exp 2 — cross-group sees not wired to same instance"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS classgroup_subgroup_sees: cross-group sees to exported instance drives the child"]
+      - return: 0

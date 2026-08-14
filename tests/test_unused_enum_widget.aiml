@@ -1,0 +1,23 @@
+# Unused-enum V2 (spec/49 §18.2): ein `enum: T`-Dropdown-Binding zählt als
+# reflektive Ganz-Enum-Nutzung → KEINE unused-Warnung für Flavor, obwohl kein
+# Flavor.Member im Code steht.  Kontrast: Unbound bleibt ungenutzt und würde warnen.
+
+- enum:
+    name: Flavor
+    values:
+      - sweet:  1
+      - sour:   2
+      - bitter: 3
+
+- prefab:
+    name: FlavorPicker
+    width: 200
+    height: 100
+    children:
+      - { name: flav_dd, type: dropdown, x: 0, y: 0, width: 120, height: 24, enum: Flavor }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - return: 0

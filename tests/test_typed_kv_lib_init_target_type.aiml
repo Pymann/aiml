@@ -1,0 +1,61 @@
+# Repro: top-level `decl: [kv, Kv<string:T>, db.open_kv]` in einem imported
+# library-file (libraryMode) lowered den db.open_kv-Aufruf auf den UNTYPED
+# Pfad (val_size=0, kein ser_nodes) statt auf den typed Pfad.
+#
+# Ursache: ast_compiler.cpp::Compiler::compile() im libraryMode-Branch ruft
+# `visitExpression(decl->initialValue)` ohne `ctx.deserializeTargetType` zu
+# setzen — der db.open_kv-Builtin liest das Feld um vName aus
+# "Kv<string:T>" zu extrahieren.  Ohne den Set landet vName = "string" und
+# die hasHeap-Logik fällt zurück auf den untyped open.
+#
+# Symptom in DataCreatures (2026-06-02): server_main öffnet
+# creatures.kvwal als typed (val_size=432, ser_nodes für DataCreature),
+# imported discovery.aiml öffnet dieselbe Kv als untyped (val_size=0).
+# Beide treffen denselben Singleton-Cache; erste-Open gewinnt.  Wenn
+# discovery's lib_init zuerst läuft, registriert der KV als untyped.
+# Spätere creatures.get aus server_main liefert raw bytes anstatt
+# deserialisierte Struct → strlen() auf einer als char* interpretierten
+# i32+i32-Liste-Header-Sequenz → SIGSEGV.
+#
+# Fix: in libraryMode auch `ctx.deserializeTargetType = decl->typeName`
+# vor `visitExpression(init)` setzen (mirror visitDeclStmt).
+
+- import: "tests/lib_typed_kv_lib_init.aiml"
+
+# Main öffnet dasselbe Kv — der Singleton-Cache muss mit beiden den
+# selben (typed!) Eintrag liefern.
+- decl: [tkv_main, Kv<string:TKVHeavy>, { call: [db.open_kv, "tkv_repro.kvwal", {persist: true, path: "/tmp/aiml_tkv_repro/"}] }]
+
+- call: [lib_put, "id-1", "alpha"]
+
+# Mit dem Bug lesen wir hier nicht den TKVHeavy struct sondern die rohen
+# Bytes vom untyped open → var_t.var_k wäre ein garbage-Pointer → crash beim
+# string-interpolate von ${var_t.var_k}.
+- decl: [var_t, TKVHeavy, { call: [tkv_main.get_copy, "id-1"] }]
+
+- if:
+    condition: { neq: [var_t.var_k, "id-1"] }
+    then:
+      - print: ["FAIL: var_t.var_k='${var_t.var_k}', expected 'id-1'"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [var_t.tags.len, 1] }
+    then:
+      - print: ["FAIL: var_t.tags.len=${var_t.tags.len}, expected 1"]
+      - call: [sys.exit, 1]
+
+- decl: [tag0, string, { at: [var_t.tags, 0] }]
+- if:
+    condition: { neq: [tag0, "alpha"] }
+    then:
+      - print: ["FAIL: tag0='${tag0}', expected 'alpha'"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [var_t.var_n, 42] }
+    then:
+      - print: ["FAIL: var_t.var_n=${var_t.var_n}, expected 42"]
+      - call: [sys.exit, 1]
+
+- print: ["PASS test_typed_kv_lib_init_target_type"]

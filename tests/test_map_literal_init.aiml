@@ -1,0 +1,17 @@
+# Test: Map-Literal-Initializer in decl.
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [scores, map<string:i32>, {a: 1, b: 2, c: 3}]
+      - call: [log.info, "size=${scores.len}"]
+      - decl: [val_a, i32, { call: [scores.get, "a"] }]
+      - decl: [val_b, i32, { call: [scores.get, "b"] }]
+      - decl: [val_c, i32, { call: [scores.get, "c"] }]
+      - call: [log.info, "a=${val_a} b=${val_b} c=${val_c}"]
+      - if:
+          condition: { '&&': [{ eq: [val_a, 1] }, { '&&': [{ eq: [val_b, 2] }, { eq: [val_c, 3] }] }] }
+          then: [{ call: [log.info, "OK"] }]
+          else: [{ call: [log.info, "FAIL"] }]
+      - return: 0
