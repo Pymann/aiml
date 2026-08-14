@@ -19,7 +19,7 @@
   defs:
     - def: { name: glfwInit,               args: [],                                                             return: i32 }
     - def: { name: glfwWindowHint,         args: [[hint, i32], [value, i32]],                                    return: void }
-    - def: { name: glfwCreateWindow,       args: [[w, i32], [h, i32], [title, string], [mon, ptr], [sh, ptr]],   return: ptr }
+    - def: { name: glfwCreateWindow,       args: [[var_w, i32], [var_h, i32], [title, string], [mon, ptr], [var_sh, ptr]],   return: ptr }
     - def: { name: glfwMakeContextCurrent, args: [[win, ptr]],                                                   return: void }
     - def: { name: glfwSwapBuffers,        args: [[win, ptr]],                                                   return: void }
     - def: { name: glfwPollEvents,         args: [],                                                             return: void }
@@ -35,11 +35,11 @@
 # Parallel dazu extrahieren wir die PBR-Basistextur:
 #   material → base_color_texture → gltf_image → RGBA-Pixel-Buffer
 
-- decl: [p, path, "tests/cube_textured.glb"]
-- decl: [scene, gltf_scene, { call: [gltf.load, p] }]
+- decl: [var_p, path, "tests/cube_textured.glb"]
+- decl: [scene, gltf_scene, { call: [gltf.load, var_p] }]
 # scene.valid() gibt 0 zurück wenn cgltf_parse oder cgltf_load_buffers fehlschlug
-- decl: [ok, i32, { call: [scene.valid] }]
-- if: [{ eq: [ok, 0] }, true]
+- decl: [var_ok, i32, { call: [scene.valid] }]
+- if: [{ eq: [var_ok, 0] }, true]
   then:
     - print: ["FAIL: gltf.load failed"]
     - call: [sys.exit, 1]
@@ -47,8 +47,8 @@
 # scene.meshes() befüllt eine list<gltf_mesh> über das interne GLTF_LIST-Makro
 - decl: [meshes, list<gltf_mesh>]
 - set:  [meshes, { call: [scene.meshes] }]
-- decl: [mc, i32, { call: [meshes.len] }]
-- if: [{ <: [mc, 1] }, true]
+- decl: [var_mc, i32, { call: [meshes.len] }]
+- if: [{ <: [var_mc, 1] }, true]
   then:
     - print: ["FAIL: no meshes in scene"]
     - call: [sys.exit, 1]
@@ -90,16 +90,16 @@
     - print: ["FAIL: gltf_texture.image() returned null"]
     - call: [sys.exit, 1]
 
-- decl: [tw, i32, { call: [img.width] }]
-- decl: [th, i32, { call: [img.height] }]
-- print: ["Phase A OK: texture ", tw, "x", th, ", indices=", icnt]
+- decl: [var_tw, i32, { call: [img.width] }]
+- decl: [var_th, i32, { call: [img.height] }]
+- print: ["Phase A OK: texture ", var_tw, "x", var_th, ", indices=", icnt]
 
 # ── Phase B: GLFW-Fenster + GL-Kontext ───────────────────────────────────────
 #
 # glfwInit initialisiert die Event-Loop und den Display-Zugriff.
 # Ohne aktives Display (z.B. in einer headless CI-Umgebung) schlägt dieser
 # Schritt mit 0 fehl — der Test ist entsprechend mit '# Requires: display'
-# markiert und wird von run_all_tests.sh übersprungen.
+# markiert und wird von run_all_tests.var_sh übersprungen.
 
 - decl: [ok2, i32, { call: [glfwInit] }]
 - if: [{ eq: [ok2, 0] }, true]
@@ -108,7 +108,7 @@
     - call: [sys.exit, 1]
 
 # OpenGL 3.3 Core Profile anfordern.
-# Die Integer-Konstanten sind definiert in <GLFW/glfw3.h>:
+# Die Integer-Konstanten sind definiert in <GLFW/glfw3.var_h>:
 #   GLFW_CONTEXT_VERSION_MAJOR = 0x00022002 = 139266
 #   GLFW_CONTEXT_VERSION_MINOR = 0x00022003 = 139267
 #   GLFW_OPENGL_PROFILE        = 0x00022008 = 139272
@@ -224,8 +224,8 @@
 - decl: [proj,   mat4, { call: [math.mat4_perspective, 0.785, 1.333, 0.1, 100.0] }]
 - decl: [eye,    vec3, { call: [math.vec3, 0.0, 0.0, 3.0] }]
 - decl: [center, vec3, { call: [math.vec3, 0.0, 0.0, 0.0] }]
-- decl: [up,     vec3, { call: [math.vec3, 0.0, 1.0, 0.0] }]
-- decl: [view,   mat4, { call: [math.mat4_lookat, eye, center, up] }]
+- decl: [var_up,     vec3, { call: [math.vec3, 0.0, 1.0, 0.0] }]
+- decl: [view,   mat4, { call: [math.mat4_lookat, eye, center, var_up] }]
 - decl: [model,  mat4]    # wird jeden Frame neu gesetzt
 - decl: [mvp,    mat4]    # kombinierte Transform-Matrix
 - decl: [angle,  f32, 0.0]

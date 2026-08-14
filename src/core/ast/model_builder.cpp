@@ -13,18 +13,52 @@ bool ModelBuilder::OnMapStart() {
         builder->pushState(std::move(exprBuilder));
         return true;
     }
+    if (insideFields && memberAttrIndex == 3) {
+        // 4th-position modifier dict: {db_indexed: true, unique: true, ...}.
+        // Parsed inline here (flat single-level dict).
+        insideModifier = true;
+        modifierExpectingKey = true;
+        return true;
+    }
     if (mapDepth++ > 0) return true;
     expectingKey = true;
     return true;
 }
 
 bool ModelBuilder::OnMapEnd() {
+    if (insideModifier) {
+        insideModifier = false;
+        memberAttrIndex++;
+        return true;
+    }
     if (insideFields) return true;
     builder->popState();
     return true;
 }
 
 bool ModelBuilder::OnScalar(const std::string& value, const std::string& tag) {
+    if (insideModifier) {
+        if (modifierExpectingKey) {
+            modifierKey = value;
+            modifierExpectingKey = false;
+            return true;
+        }
+        // Apply value to the modifier slot.  Only db_indexed-family keys are
+        // recognized today; unknown keys are silently ignored to allow forward
+        // compatibility (other modifier families can layer on later).
+        if (modifierKey == "db_indexed") {
+            if (value == "true")       { curDbIndexed = true; }
+            else if (value == "lower") { curDbIndexed = true; curDbIndexedMode = "lower"; }
+            // "false" leaves curDbIndexed = false (default).
+        } else if (modifierKey == "unique") {
+            curDbIndexedUnique = (value == "true");
+        } else if (modifierKey == "skip_empty") {
+            curDbIndexedSkipEmpty = (value == "true");
+        }
+        modifierExpectingKey = true;
+        return true;
+    }
+
     if (mapDepth > 1) return true;
 
     if (expectingKey) {
@@ -113,10 +147,17 @@ bool ModelBuilder::OnSequenceEnd() {
             StructMember m; m.name = currentField; m.type = currentType;
             m.initialValue = std::move(currentInitValue);
             m.access = currentAccess;
+            // AionDB db_indexed modifier captured from optional 4th-position dict.
+            m.db_indexed            = curDbIndexed;
+            m.db_indexed_mode       = curDbIndexedMode;
+            m.db_indexed_unique     = curDbIndexedUnique;
+            m.db_indexed_skip_empty = curDbIndexedSkipEmpty;
             modelNode->fields.push_back(std::move(m));
             currentField = ""; currentType = "";
             memberAttrIndex = 0;
             currentAccess = "public";
+            curDbIndexed = false; curDbIndexedMode.clear();
+            curDbIndexedUnique = false; curDbIndexedSkipEmpty = false;
             return true;
         } else {
             insideFields = false;

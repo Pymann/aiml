@@ -1,20 +1,21 @@
+# static-check: off
 # Smoke test: import real 9rooms ability text generator and ensure each current
 # effect bytecode produces some non-empty text.
 # Expected exit code: 0
 
-- import: "/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/9rooms/backend/ability_text.aiml"
+- import: "tests/fixtures_9rooms/backend/ability_text.aiml"
 
 - def:
     name: assert_non_empty_effect_text
     args: [[label, string], [ability_json, string]]
     return: i32
     body:
-      - decl: [ab, ActiveAbility]
-      - set: [ab, { call: [sys.deserialize, ability_json, "ActiveAbility"] }]
+      - decl: [var_ab, ActiveAbility]
+      - set: [var_ab, { call: [sys.deserialize, ability_json, "ActiveAbility"] }]
 
       # Get a stable ptr<ActiveAbility> via list.get(...) to avoid ptr/value ambiguity.
       - decl: [pool, list<ActiveAbility>]
-      - call: [pool.push, ab]
+      - call: [pool.push, var_ab]
       - decl: [abp, ptr<ActiveAbility>, { call: [pool.get, 0] }]
       - decl: [txt, string, { call: [generate_ability_text, abp] }]
 

@@ -7,30 +7,30 @@
   defs:
     - def:
         name: strlen
-        args: [[s, string]]
+        args: [[var_s, string]]
         return: i64
     - def:
         name: abs
-        args: [[n, i32]]
+        args: [[var_n, i32]]
         return: i32
     - def:
         name: puts
-        args: [[s, string]]
+        args: [[var_s, string]]
         return: i32
 
 - decl: [msg, string, "hello ffi"]
 - decl: [len, i64, { call: [strlen, msg] }]
 - print: ["strlen: ${len}"]
 
-- decl: [n, i32, { call: [abs, -99] }]
-- print: ["abs(-99): ${n}"]
+- decl: [var_n, i32, { call: [abs, -99] }]
+- print: ["abs(-99): ${var_n}"]
 
 # ── Phase B: Inline-Syntax ────────────────────────────────────────────────────
 
 - extern: "C"
   defs:
     - def: { name: malloc, args: [[size, i64]], return: ptr }
-    - def: { name: free,   args: [[p, ptr]],   return: void }
+    - def: { name: free,   args: [[var_p, ptr]],   return: void }
 
 - decl: [buf, ptr, { call: [malloc, 32] }]
 - print: ["malloc returned non-null"]
@@ -41,7 +41,7 @@
 
 - extern: "C"
   defs:
-    - def: { name: strlen, args: [[s, string]], return: i64 }
+    - def: { name: strlen, args: [[var_s, string]], return: i64 }
 
 - decl: [len2, i64, { call: [strlen, "duplicate extern block"] }]
 - print: ["duplicate extern block ok: ${len2}"]
@@ -50,7 +50,7 @@
 
 - extern: "C"
   defs:
-    - def: { name: memset, args: [[dst, ptr], [c, i32], [n, i64]], return: ptr }
+    - def: { name: memset, args: [[dst, ptr], [var_c, i32], [var_n, i64]], return: ptr }
 
 - decl: [buf2, ptr, { call: [malloc, 16] }]
 - call: [memset, buf2, 0, 16]

@@ -7,11 +7,11 @@
 - call: [inc_counter]
 - call: [inc_counter]
 - call: [inc_counter]
-- decl: [c, i32, { call: [get_counter] }]
+- decl: [var_c, i32, { call: [get_counter] }]
 - if:
-    condition: { eq: [c, 3] }
+    condition: { eq: [var_c, 3] }
     then:
       - print: ["AOT_IMPORT_PASS"]
     else:
-      - print: ["AOT_IMPORT_FAIL got ${c}"]
+      - print: ["AOT_IMPORT_FAIL got ${var_c}"]
       - call: [sys.exit, 1]

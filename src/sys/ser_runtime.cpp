@@ -1,4 +1,5 @@
 #include "ser_runtime.h"
+#include "string_runtime.h"
 #include <cstring>
 #include <cstdlib>
 #include <vector>
@@ -15,6 +16,75 @@ static int g_aiml_ser_debug = (getenv("AIML_DEBUG") != nullptr) ? 1 : 0;
 #define SER_DBG(fmt, ...) do { if (g_aiml_ser_debug) fprintf(stderr, "[ser-DBG] " fmt "\n", ##__VA_ARGS__); } while(0)
 // Depth-limited: only log STRUCT field traces up to depth 3 to avoid noise.
 static thread_local int g_ser_depth = 0;
+
+// ── Schema-Format-Guard ──────────────────────────────────────────────────────
+// Every non-empty encoded blob carries an 8-byte header AFTER the 4-byte length
+// prefix: [MAGIC(4)][schema_fp(4)].  On decode we verify both; a mismatch means
+// the blob was written by an incompatible struct layout (stale KV data that
+// predates a model change) — we then REFUSE to decode (leaving the caller's
+// zero-initialised destination untouched → null strings/empty lists, safe) and
+// log a clear, defined diagnostic instead of walking garbage → SIGSEGV.
+// The fingerprint hashes the flat AimlTypeNode array (kind/param1/param2/offset/
+// elem_size + count), so it changes whenever a field is added/reordered/resized.
+// Cost: 8 bytes/value + one compare per decode; fp is O(n_nodes), computed per
+// call but n_nodes is tiny (struct field count).  Set AIML_SER_NOGUARD=1 to
+// bypass the check (emergency read of legacy data).
+static const uint32_t AIML_SER_MAGIC = 0xA1F5C0DEu;
+static int g_ser_noguard = (getenv("AIML_SER_NOGUARD") != nullptr) ? 1 : 0;
+
+// The guard is OPT-IN per operation via this thread-local flag — enabled ONLY by
+// the persistent-KV layer (db_runtime), where stale on-disk data written by an
+// incompatible struct layout is the real hazard.  It is left OFF for other
+// serializer users (e.g. WS/mirror live messages), where two peers compiled with
+// different import sets legitimately produce different node arrays and must still
+// interoperate without a fingerprint check.
+static thread_local bool g_ser_guard = false;
+// Returns the PREVIOUS value so callers can save/restore (nesting-safe RAII).
+extern "C" int aiml_ser_set_guard(int on) {
+    int prev = g_ser_guard ? 1 : 0;
+    g_ser_guard = (on != 0);
+    return prev;
+}
+
+// STRUCTURAL hash: follow the child indices and hash the STRUCTURE reached
+// (kind/offset/elem_size/field-count), NOT the raw param1/param2 index VALUES —
+// those are positions in the flat node array and depend on the compilation
+// context (import set, type count), so hashing them would make the same logical
+// struct fingerprint differently across processes/builds → false mismatches.
+static void aiml_ser_fp_walk(const AimlTypeNode* nodes, int32_t n,
+                             int32_t idx, uint32_t& h, int depth) {
+    if (idx < 0 || idx >= n || depth > 64) { h = (h ^ 0xDEADBEEFu) * 16777619u; return; }
+    const AimlTypeNode& nd = nodes[idx];
+    h = (h ^ (uint32_t)nd.kind)      * 16777619u;
+    h = (h ^ (uint32_t)nd.offset)    * 16777619u;
+    h = (h ^ (uint32_t)nd.elem_size) * 16777619u;
+    switch (nd.kind) {
+        case AIML_TD_STRUCT: {
+            int nf = nd.param1, first = nd.param2;
+            h = (h ^ (uint32_t)nf) * 16777619u;
+            for (int i = 0; i < nf; i++) aiml_ser_fp_walk(nodes, n, first + i, h, depth + 1);
+            break;
+        }
+        case AIML_TD_LIST:
+        case AIML_TD_BUFFER:
+        case AIML_TD_PTR_STRUCT:
+            aiml_ser_fp_walk(nodes, n, nd.param1, h, depth + 1);
+            break;
+        case AIML_TD_MAP:
+            aiml_ser_fp_walk(nodes, n, nd.param1, h, depth + 1);
+            aiml_ser_fp_walk(nodes, n, nd.param2, h, depth + 1);
+            break;
+        case AIML_TD_RAWBYTES:
+            h = (h ^ (uint32_t)nd.param1) * 16777619u;   // byte count
+            break;
+        default: break;                                  // primitives: kind already mixed in
+    }
+}
+static uint32_t aiml_ser_schema_fp(const AimlTypeNode* nodes, int32_t n_nodes) {
+    uint32_t h = 2166136261u;               // FNV-1a offset basis
+    aiml_ser_fp_walk(nodes, n_nodes, 0, h, 0);   // root node is always index 0
+    return h;
+}
 
 // ── Internal struct mirrors ────────────────────────────────────────────────────
 // These MUST match the LLVM-generated layouts exactly.
@@ -219,6 +289,20 @@ static void enc(std::vector<uint8_t>& buf,
     case AIML_TD_RAWBYTES:
         w_raw(buf, data, (size_t)n.param1);
         break;
+
+    case AIML_TD_PTR_STRUCT: {
+        // `data` points at the pointer slot in the parent.  Follow it; if
+        // null, write a 0 marker; else write 1 + the inner struct bytes.
+        const void* obj = nullptr;
+        memcpy(&obj, data, sizeof(void*));
+        if (!obj) {
+            w_u8(buf, 0);
+        } else {
+            w_u8(buf, 1);
+            enc(buf, n.param1, ns, nn, (const uint8_t*)obj);
+        }
+        break;
+    }
     }
 }
 
@@ -252,12 +336,14 @@ static void dec(const uint8_t* blob, int& pos, int end,
         int32_t len = r_i32(blob, pos, end);
         char* str;
         if (len > 0 && pos + len <= end) {
-            str = (char*)malloc((size_t)len + 1);
+            // Refcounted alloc — when aiml_ser_free_decoded later releases
+            // this slot, it uses aiml_str_decref; if the user has aliased
+            // the pointer to a local variable (incref'd), the string survives.
+            str = aiml_str_alloc(len);
             memcpy(str, blob + pos, (size_t)len);
-            str[len] = '\0';
             pos += len;
         } else {
-            str = strdup("");
+            str = aiml_str_alloc(0);
         }
         memcpy(out, &str, sizeof(char*));
         break;
@@ -359,6 +445,23 @@ static void dec(const uint8_t* blob, int& pos, int end,
             pos += n.param1;
         }
         break;
+
+    case AIML_TD_PTR_STRUCT: {
+        // Read marker byte.  0 → store null pointer.  1 → calloc inner
+        // struct, decode subtree into it, store pointer in slot.
+        uint8_t marker = 0;
+        if (pos < end) { marker = blob[pos++]; }
+        void* obj = nullptr;
+        if (marker != 0) {
+            size_t inner_sz = (size_t)(n.elem_size > 0 ? n.elem_size : (int32_t)sizeof(void*));
+            obj = calloc(1, inner_sz);
+            if (obj) {
+                dec(blob, pos, end, n.param1, ns, nn, (uint8_t*)obj);
+            }
+        }
+        memcpy(out, &obj, sizeof(void*));
+        break;
+    }
     }
 }
 
@@ -373,7 +476,14 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
     case AIML_TD_STRING: {
         char* str = nullptr;
         memcpy(&str, data, sizeof(char*));
-        if (str) { free(str); str = nullptr; memcpy(data, &str, sizeof(char*)); }
+        if (str) {
+            // Refcount release — only actually frees when no aliased user var
+            // is still holding a reference.  Was `free(str)` until the UAF
+            // repro (tests/test_mirror_close_string_uaf.aiml).
+            aiml_str_decref(str);
+            str = nullptr;
+            memcpy(data, &str, sizeof(char*));
+        }
         break;
     }
 
@@ -440,6 +550,20 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         break;
     }
 
+    case AIML_TD_PTR_STRUCT: {
+        // Free the inner struct's heap allocations + the struct allocation
+        // itself.  data is the pointer slot.
+        void* obj = nullptr;
+        memcpy(&obj, data, sizeof(void*));
+        if (obj) {
+            fre(n.param1, ns, nn, (uint8_t*)obj);
+            free(obj);
+            obj = nullptr;
+            memcpy(data, &obj, sizeof(void*));
+        }
+        break;
+    }
+
     // I8/I16/I32/I64/RAWBYTES — no heap allocations
     default:
         break;
@@ -469,8 +593,24 @@ extern "C" char* aiml_ser_encode(const void*         obj,
     payload.reserve(256);
     enc(payload, 0, nodes, n_nodes, (const uint8_t*)obj);
     int32_t data_len = (int32_t)payload.size();
+    if (g_ser_guard && !g_ser_noguard) {
+        // Guarded (KV) blob: prepend [MAGIC(4)][schema_fp(4)] to the payload.  The
+        // outer [len(4)][payload] envelope is unchanged (len includes the 8-byte
+        // header) → storage/WAL layer unaffected; only guarded decode inspects it.
+        int32_t total = data_len + 8;
+        uint32_t fp = aiml_ser_schema_fp(nodes, n_nodes);
+        char* blob = (char*)malloc((size_t)total + 4);
+        blob[0] = (char)( total        & 0xFF);
+        blob[1] = (char)((total >>  8) & 0xFF);
+        blob[2] = (char)((total >> 16) & 0xFF);
+        blob[3] = (char)((total >> 24) & 0xFF);
+        memcpy(blob + 4, &AIML_SER_MAGIC, 4);   // [MAGIC]
+        memcpy(blob + 8, &fp,             4);   // [schema_fp]
+        if (data_len > 0) memcpy(blob + 12, payload.data(), (size_t)data_len);
+        return blob;
+    }
+    // Un-guarded (WS/other): original [len(4)][payload].
     char* blob = (char*)malloc((size_t)data_len + 4);
-    // write 4-byte little-endian length prefix
     blob[0] = (char)( data_len        & 0xFF);
     blob[1] = (char)((data_len >>  8) & 0xFF);
     blob[2] = (char)((data_len >> 16) & 0xFF);
@@ -510,6 +650,32 @@ extern "C" int aiml_ser_decode(const char*         blob,
                                | ((uint32_t)b[3] << 24));
     if (data_len <= 0) return -1;
     int pos = 0;
+    // Format guard: a GUARDED blob starts (after the len prefix) with
+    // [MAGIC(4)][schema_fp(4)].  Verify the fingerprint so stale data written by
+    // an incompatible struct layout is refused with a clear diagnostic instead of
+    // being walked as garbage (→ SIGSEGV).  BACKWARD-COMPATIBLE: blobs written
+    // before this feature don't start with MAGIC → decoded the legacy way, so
+    // existing KV data keeps working with no migration.  New writes are guarded.
+    if (g_ser_guard && !g_ser_noguard && data_len >= 8) {
+        uint32_t magic = (uint32_t)b[4] | ((uint32_t)b[5] << 8)
+                       | ((uint32_t)b[6] << 16) | ((uint32_t)b[7] << 24);
+        if (magic == AIML_SER_MAGIC) {
+            uint32_t stored_fp = (uint32_t)b[8]  | ((uint32_t)b[9]  << 8)
+                               | ((uint32_t)b[10] << 16) | ((uint32_t)b[11] << 24);
+            uint32_t exp_fp = aiml_ser_schema_fp(nodes, n_nodes);
+            if (stored_fp != exp_fp) {
+                fprintf(stderr, "[ser-FATAL] SerializationFormatException: incompatible KV "
+                        "blob (schema fp stored=0x%08x expected=0x%08x, n_nodes=%d) — data "
+                        "was written by a different struct layout (stale after a model "
+                        "change); wipe + reseed this KV.\n", stored_fp, exp_fp, n_nodes);
+                g_dec_error = true;
+                return -2;   // leave `out` zero-inited → null strings/empty lists (safe, no crash)
+            }
+            dec(b + 12, pos, data_len - 8, 0, nodes, n_nodes, (uint8_t*)out);
+            return g_dec_error ? -1 : 0;
+        }
+    }
+    // Legacy / un-guarded blob (pre-feature): decode the original way.
     dec(b + 4, pos, data_len, 0, nodes, n_nodes, (uint8_t*)out);
     return g_dec_error ? -1 : 0;
 }

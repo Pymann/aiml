@@ -1,4 +1,4 @@
-# Test: list<list<i32>> inner values preserved through JSON deserialize and WAL kv
+# Test: list<list<i32>> inner values preserved through JSON deserialize and WAL var_kv
 # Expected exit code: 0
 
 - model:
@@ -14,64 +14,64 @@
     return: i32
     body:
       # Phase A: JSON deserialize → check inner values immediately
-      - decl: [j1, string, '{"__type":"Ability","cost_text":"Tap","activation_cost":[[6]],"trigger":[],"effects":[[10,3]]}']
-      - decl: [ab, Ability]
-      - set: [ab, { call: [sys.deserialize, j1, "Ability"] }]
+      - decl: [var_j1, string, '{"__type":"Ability","cost_text":"Tap","activation_cost":[[6]],"trigger":[],"effects":[[10,3]]}']
+      - decl: [var_ab, Ability]
+      - set: [var_ab, { call: [sys.deserialize, var_j1, "Ability"] }]
 
       - if:
-          condition: { neq: [ab.activation_cost.len, 1] }
+          condition: { neq: [var_ab.activation_cost.len, 1] }
           then:
-            - print: ["FAIL A1: activation_cost.len=${ab.activation_cost.len} expected 1"]
+            - print: ["FAIL A1: activation_cost.len=${var_ab.activation_cost.len} expected 1"]
             - call: [sys.exit, 1]
 
-      - decl: [cb, list<i32>]
-      - set: [cb, { call: [ab.activation_cost.get, 0] }]
+      - decl: [var_cb, list<i32>]
+      - set: [var_cb, { call: [var_ab.activation_cost.get, 0] }]
       - if:
-          condition: { neq: [cb.len, 1] }
+          condition: { neq: [var_cb.len, 1] }
           then:
-            - print: ["FAIL A2: cb.len=${cb.len} expected 1"]
+            - print: ["FAIL A2: var_cb.len=${var_cb.len} expected 1"]
             - call: [sys.exit, 1]
 
-      - decl: [v0, i32, { call: [cb.get, 0] }]
+      - decl: [var_v0, i32, { call: [var_cb.get, 0] }]
       - if:
-          condition: { neq: [v0, 6] }
+          condition: { neq: [var_v0, 6] }
           then:
-            - print: ["FAIL A3: cb[0]=${v0} expected 6"]
+            - print: ["FAIL A3: var_cb[0]=${var_v0} expected 6"]
             - call: [sys.exit, 1]
 
       - if:
-          condition: { neq: [ab.effects.len, 1] }
+          condition: { neq: [var_ab.effects.len, 1] }
           then:
-            - print: ["FAIL A4: effects.len=${ab.effects.len} expected 1"]
+            - print: ["FAIL A4: effects.len=${var_ab.effects.len} expected 1"]
             - call: [sys.exit, 1]
 
       - decl: [eff0, list<i32>]
-      - set: [eff0, { call: [ab.effects.get, 0] }]
+      - set: [eff0, { call: [var_ab.effects.get, 0] }]
       - if:
           condition: { neq: [eff0.len, 2] }
           then:
             - print: ["FAIL A5: eff0.len=${eff0.len} expected 2"]
             - call: [sys.exit, 1]
 
-      - decl: [e0, i32, { call: [eff0.get, 0] }]
+      - decl: [var_e0, i32, { call: [eff0.get, 0] }]
       - if:
-          condition: { neq: [e0, 10] }
+          condition: { neq: [var_e0, 10] }
           then:
-            - print: ["FAIL A6: eff0[0]=${e0} expected 10"]
+            - print: ["FAIL A6: eff0[0]=${var_e0} expected 10"]
             - call: [sys.exit, 1]
 
       - print: ["Phase A PASS"]
 
-      # Phase B: JSON deserialize → WAL kv.set → kv.get → check inner values
+      # Phase B: JSON deserialize → WAL var_kv.set → var_kv.get → check inner values
       - decl: [db_dir, path, "/tmp/aiml_test_list_list_inner_values/"]
       - call: [io.remove_all, db_dir]
 
-      - decl: [kv, Kv<string:Ability>]
-      - set: [kv, { call: [db.open_kv, "inner_values", {persist: true, path: db_dir}] }]
-      - call: [kv.set, "ab1", ab]
+      - decl: [var_kv, Kv<string:Ability>]
+      - set: [var_kv, { call: [db.open_kv, "inner_values", {persist: true, path: db_dir}] }]
+      - call: [var_kv.set, "ab1", var_ab]
 
       - decl: [got, ptr<Ability>]
-      - set: [got, { call: [kv.get, "ab1"] }]
+      - set: [got, { call: [var_kv.get, "ab1"] }]
       - if:
           condition: { eq: [got, null] }
           then:

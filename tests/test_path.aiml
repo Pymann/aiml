@@ -2,55 +2,55 @@
 # Expected exit code: 0
 
 # --- Basic decl + set (auto-intern) ---
-- decl: [p, path]
-- set: [p, "/usr/local/bin"]
-- print: ["path: ${p}"]
+- decl: [var_p, path]
+- set: [var_p, "/usr/local/bin"]
+- print: ["path: ${var_p}"]
 # expected output: path: /usr/local/bin
 
 # --- path namespace: from_string ---
-- decl: [q, path]
-- set: [q, { call: [path.from_string, "/home/user/docs"] }]
-- print: ["from_string: ${q}"]
+- decl: [var_q, path]
+- set: [var_q, { call: [path.from_string, "/home/user/docs"] }]
+- print: ["from_string: ${var_q}"]
 
 # --- path.join ---
 - decl: [joined, path]
-- set: [joined, { call: [p.join, "tool"] }]
+- set: [joined, { call: [var_p.join, "tool"] }]
 - print: ["join: ${joined}"]
 # expected: join: /usr/local/bin/tool
 
 # --- path.parent ---
 - decl: [par, path]
-- set: [par, { call: [p.parent] }]
+- set: [par, { call: [var_p.parent] }]
 - print: ["parent: ${par}"]
 # expected: parent: /usr/local
 
 # --- path.name ---
-- decl: [nm, string]
-- set: [nm, { call: [p.name] }]
-- print: ["name: ${nm}"]
+- decl: [var_nm, string]
+- set: [var_nm, { call: [var_p.name] }]
+- print: ["name: ${var_nm}"]
 # expected: name: bin
 
 # --- path.stem and extension ---
-- decl: [fp, path]
-- set: [fp, "/etc/config.toml"]
-- decl: [st, string]
-- set: [st, { call: [fp.stem] }]
+- decl: [var_fp, path]
+- set: [var_fp, "/etc/config.toml"]
+- decl: [var_st, string]
+- set: [var_st, { call: [var_fp.stem] }]
 - decl: [ext, string]
-- set: [ext, { call: [fp.extension] }]
-- print: ["stem: ${st}"]
+- set: [ext, { call: [var_fp.extension] }]
+- print: ["stem: ${var_st}"]
 - print: ["ext: ${ext}"]
 # expected: stem: config
 # expected: ext: .toml
 
 # --- path.root ---
-- decl: [rt, string]
-- set: [rt, { call: [p.root] }]
-- print: ["root: ${rt}"]
+- decl: [var_rt, string]
+- set: [var_rt, { call: [var_p.root] }]
+- print: ["root: ${var_rt}"]
 # expected: root: /
 
 # --- path.is_absolute / is_relative ---
 - decl: [abs_flag, i32]
-- set: [abs_flag, { call: [p.is_absolute] }]
+- set: [abs_flag, { call: [var_p.is_absolute] }]
 - print: ["is_absolute: ${abs_flag}"]
 # expected: is_absolute: 1
 
@@ -71,7 +71,7 @@
 
 # --- path.depth ---
 - decl: [dep, i32]
-- set: [dep, { call: [p.depth] }]
+- set: [dep, { call: [var_p.depth] }]
 - print: ["depth: ${dep}"]
 # expected: depth: 3
 
@@ -119,7 +119,7 @@
 
 # --- String interpolation with path ---
 - decl: [msg, string]
-- set: [msg, "My path is: ${p}"]
+- set: [msg, "My path is: ${var_p}"]
 - print: ["${msg}"]
 # expected: My path is: /usr/local/bin
 

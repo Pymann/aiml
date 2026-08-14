@@ -5,31 +5,31 @@
 - decl: [fail_count, i32, 0]
 
 # ── A: i32 basic read/write ───────────────────────────────────────────────────
-- decl: [n, i32, 8]
-- decl: [arr, "dyn_array<i32>", { new_array: [i32, n] }]
-- decl: [i, i32, 0]
+- decl: [var_n, i32, 8]
+- decl: [arr, "dyn_array<i32>", { new_array: [i32, var_n] }]
+- decl: [var_i, i32, 0]
 - while:
-    condition: { "<": [i, n] }
+    condition: { "<": [var_i, var_n] }
     body:
-      - idx: [arr, i, i]
-      - set: [i, { +: [i, 1] }]
-- decl: [v0, i32, { at: [arr, 0] }]
-- decl: [v7, i32, { at: [arr, 7] }]
+      - idx: [arr, var_i, var_i]
+      - set: [var_i, { +: [var_i, 1] }]
+- decl: [var_v0, i32, { at: [arr, 0] }]
+- decl: [var_v7, i32, { at: [arr, 7] }]
 - if:
-    condition: { eq: [v0, 0] }
+    condition: { eq: [var_v0, 0] }
     then:
       - print: ["PASS A1: dyn_i32[0]==0"]
       - set: [pass_count, { +: [pass_count, 1] }]
     else:
-      - print: ["FAIL A1: dyn_i32[0]==${v0} expected 0"]
+      - print: ["FAIL A1: dyn_i32[0]==${var_v0} expected 0"]
       - set: [fail_count, { +: [fail_count, 1] }]
 - if:
-    condition: { eq: [v7, 7] }
+    condition: { eq: [var_v7, 7] }
     then:
       - print: ["PASS A2: dyn_i32[7]==7"]
       - set: [pass_count, { +: [pass_count, 1] }]
     else:
-      - print: ["FAIL A2: dyn_i32[7]==${v7} expected 7"]
+      - print: ["FAIL A2: dyn_i32[7]==${var_v7} expected 7"]
       - set: [fail_count, { +: [fail_count, 1] }]
 - call: [arr.free]
 
@@ -51,9 +51,9 @@
 - call: [farr.free]
 
 # ── C: runtime size ───────────────────────────────────────────────────────────
-- decl: [rn, i32, 10]
-- decl: [rarr, "dyn_array<i32>", { new_array: [i32, rn] }]
-- decl: [ri, i32, 0]
+- decl: [var_rn, i32, 10]
+- decl: [rarr, "dyn_array<i32>", { new_array: [i32, var_rn] }]
+- decl: [var_ri, i32, 0]
 # Write fixed values to fixed indices (no loop)
 - idx: [rarr, 0, 100]
 - idx: [rarr, 1, 200]
@@ -90,21 +90,21 @@
       - set: [fail_count, { +: [fail_count, 1] }]
 
 # ── E: two independent arrays ─────────────────────────────────────────────────
-- decl: [aa, "dyn_array<i32>", { new_array: [i32, 4] }]
-- decl: [bb, "dyn_array<i32>", { new_array: [i32, 4] }]
-- idx: [aa, 0, 10]
-- idx: [bb, 0, 20]
-- decl: [va, i32, { at: [aa, 0] }]
-- decl: [vb, i32, { at: [bb, 0] }]
-- call: [aa.free]
-- call: [bb.free]
+- decl: [var_aa, "dyn_array<i32>", { new_array: [i32, 4] }]
+- decl: [var_bb, "dyn_array<i32>", { new_array: [i32, 4] }]
+- idx: [var_aa, 0, 10]
+- idx: [var_bb, 0, 20]
+- decl: [var_va, i32, { at: [var_aa, 0] }]
+- decl: [var_vb, i32, { at: [var_bb, 0] }]
+- call: [var_aa.free]
+- call: [var_bb.free]
 - if:
-    condition: { "&&": [{ eq: [va, 10] }, { eq: [vb, 20] }] }
+    condition: { "&&": [{ eq: [var_va, 10] }, { eq: [var_vb, 20] }] }
     then:
       - print: ["PASS E1: two independent dyn_arrays"]
       - set: [pass_count, { +: [pass_count, 1] }]
     else:
-      - print: ["FAIL E1: aa[0]=${va} bb[0]=${vb}"]
+      - print: ["FAIL E1: var_aa[0]=${var_va} var_bb[0]=${var_vb}"]
       - set: [fail_count, { +: [fail_count, 1] }]
 
 # ── summary ───────────────────────────────────────────────────────────────────

@@ -115,6 +115,20 @@ bool FunctionBuilder::OnSequenceStart() {
         expectingKey = true;
         expectingValue = false;
         return true;
+    } else if (currentKey == "decorator" || currentKey == "decorators") {
+        /* Both keys accepted — plural is standard-python; singular is what
+         * the spec draft used.  Parsed identically into func->decorators. */
+        builder->pushState(std::make_unique<StringListBuilder>(builder, &func->decorators));
+        expectingKey = true;
+        expectingValue = false;
+        return true;
+    } else if (currentKey == "meta") {
+        /* meta: [deprecated, ...] — free-form tags.  "deprecated" triggers a
+         * compile-time warning at every call site. */
+        builder->pushState(std::make_unique<StringListBuilder>(builder, &func->meta));
+        expectingKey = true;
+        expectingValue = false;
+        return true;
     }
     return true;
 }

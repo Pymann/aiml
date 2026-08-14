@@ -86,7 +86,7 @@ public:
 bool StatementBuilder::OnMapStart() {
     if (type == "decl" && args.size() >= 2) {
         // If args size is 3, we already have Name, Type, Value. This map is Modifiers.
-        // If args size is 2, it could be Value (an expr) or Modifiers. 
+        // If args size is 2, it could be Value (an expr) or Modifiers.
         // We'll assume for simplicity that in AIML local var decl: [name, type, val, {modifiers}]
         // OR [name, type, {modifiers}]. Wait, we can look at `expectingValue`.
         // Actually, if we just push ModifierBuilder when args.size() >= 2, we might break default exprs.
@@ -173,6 +173,17 @@ std::unique_ptr<Node> StatementBuilder::finish() {
          return decl;
     }
     if (type == "set" && args.size() >= 1) {
+         // Häufiger Bug-Magnet: `set: [list, idx, value]` als Index-Schreibe.
+         // set: hat NUR target + value (2 Args).  Index-Mutation ist `idx:`.
+         // 3+ scalar args sind also IMMER falsch — der Wert würde silent
+         // verschluckt und der Index nie geschrieben → Runtime-Bug ohne
+         // Compile-Hinweis.  Wir bricht hier hart ab und schlägt `idx:` vor.
+         if (args.size() >= 3 && !exprArg) {
+             LOG_ERROR("line " + std::to_string(capturedLine)
+                       + ": set: nimmt nur [target, value] — fuer Index-Schreiben benutze idx: [container, idx, value]."
+                       + " Got " + std::to_string(args.size()) + " scalar args; das Erste ist target='"
+                       + args[0].first + "', der dritte Wert wuerde silent ignoriert.");
+         }
          if (!exprArg && args.size() >= 2) {
              const std::string& val = args[1].first;
              const std::string& tag = args[1].second;
@@ -182,8 +193,57 @@ std::unique_ptr<Node> StatementBuilder::finish() {
          set->sourceLine = capturedLine;
          return set;
     }
+    // store: [ptr_var, value, (optional)depth]
+    if (type == "store" && args.size() >= 1) {
+        if (args.size() < 2 && !exprArg) {
+            LOG_ERROR("line " + std::to_string(capturedLine)
+                      + ": store: braucht mindestens [ptr_var, value]");
+            return nullptr;
+        }
+        std::unique_ptr<Expr> val;
+        int depth = 1;
+        if (exprArg) {
+            // store: [p, { '+': [a, b] }]  — value ist eine Map (exprArg).
+            // Optionaler depth landet dann als 2. scalar in args.
+            val = std::move(exprArg);
+            if (args.size() >= 2) {
+                try { depth = std::stoi(args[1].first); }
+                catch (...) {
+                    LOG_ERROR("line " + std::to_string(capturedLine)
+                              + ": store: depth muss eine Integer-Konstante sein, got '"
+                              + args[1].first + "'");
+                    return nullptr;
+                }
+            }
+        } else {
+            // store: [p, value, (depth)]  — alles Scalars.
+            val = parseScalarExpr(args[1].first, args[1].second);
+            if (args.size() >= 3) {
+                try { depth = std::stoi(args[2].first); }
+                catch (...) {
+                    LOG_ERROR("line " + std::to_string(capturedLine)
+                              + ": store: depth muss eine Integer-Konstante sein, got '"
+                              + args[2].first + "'");
+                    return nullptr;
+                }
+            }
+        }
+        if (depth < 1) {
+            LOG_ERROR("line " + std::to_string(capturedLine)
+                      + ": store: depth >= 1 erforderlich, got " + std::to_string(depth));
+            return nullptr;
+        }
+        auto st = std::make_unique<StoreStmt>(args[0].first, std::move(val), depth);
+        st->sourceLine = capturedLine;
+        return st;
+    }
     // idx: [container, idx1, ..., idxN, value]
-    if (type == "idx" && args.size() >= 3) {
+    // Minimum: container + 1 index + value.  Value can be a scalar arg OR an
+    // expression map captured in exprArg — the latter means args.size() is 2
+    // (container + index).  Without this fallback the whole idx statement was
+    // silently dropped when the value was an inline expression like
+    // `idx: [list, i, { call: [...] }]`.
+    if (type == "idx" && (args.size() >= 3 || (args.size() >= 2 && exprArg))) {
          auto idx = std::make_unique<IdxStmt>(args[0].first);
          // Middle args are indices (as expressions), last arg OR exprArg is the value
          size_t lastScalar = args.size() - 1;
@@ -238,6 +298,10 @@ std::unique_ptr<Node> StatementBuilder::finish() {
              return nullptr;
          }
     }
+    // Fallthrough: some valid statements (e.g. builtin `exit:`) are handled on
+    // a later path and legitimately return nullptr here, so we do NOT hard-error
+    // on an unknown key — that produced false positives.  The bare-scalar case
+    // (the actual footgun) is caught earlier in BlockBuilder::OnScalar.
     return nullptr;
 }
 

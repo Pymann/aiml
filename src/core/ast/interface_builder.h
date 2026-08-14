@@ -18,8 +18,10 @@ class InterfaceBuilder : public StateHandler {
     bool insideMethods = false;
 
     bool insideMethodDef = false;
-    int  methodDepth = 0;          // 1 = inside [name, ret, args]; 2 = inside the args sub-sequence
+    int  methodDepth = 0;          // 1 = inside [name, ret, args]; 2 = inside the args sub-sequence; 3 = inside [name,type] arg pair
     MethodSignature currentMethod;
+    std::pair<std::string,std::string> currentArg;  // accumulates [name, type] while methodDepth==3
+    bool curArgGotName = false;
 public:
     InterfaceBuilder(Builder* b) : StateHandler(b) { interfaceNode = std::make_unique<InterfaceDecl>(); }
     bool OnMapStart() override;

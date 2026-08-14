@@ -3,8 +3,8 @@
 - class:
     name: Point
     members:
-      - [x, i32]
-      - [y, i32]
+      - [var_x, i32]
+      - [var_y, i32]
     methods:
       - def:
           name: print
@@ -12,17 +12,17 @@
           return: void
           body:
             - print: ["Inside Point.print"]
-            - print: ["Point(${<.x}, ${<.y})"]
+            - print: ["Point(${<.var_x}, ${<.var_y})"]
 
-- decl: [p1, Point] # Stack allocation
-- set: [p1.x, 10]
-- set: [p1.y, 20]
-- call: [p1.print]
+- decl: [var_p1, Point] # Stack allocation
+- set: [var_p1.var_x, 10]
+- set: [var_p1.var_y, 20]
+- call: [var_p1.print]
 
 - print: ["Done."]
 
-- decl: [p2, ptr<Point>, {new: Point}] # Heap allocation
-- set: [p2.x, 100]
-- set: [p2.y, 200]
-- call: [p2.print]
-- call: [free, p2]
+- decl: [var_p2, ptr<Point>, {new: Point}] # Heap allocation
+- set: [var_p2.var_x, 100]
+- set: [var_p2.var_y, 200]
+- call: [var_p2.print]
+- call: [free, var_p2]

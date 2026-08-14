@@ -10,6 +10,6 @@
     body:
       - return: [{ '&': [g_i32] }]
 
-- decl: [pi, ptr<i32>, { call: [ret_ptr_i32] }]
-- print: ["ptr return value: ${ { '?': [pi] } }"]
+- decl: [var_pi, ptr<i32>, { call: [ret_ptr_i32] }]
+- print: ["ptr return value: ${ { '?': [var_pi] } }"]
 - call: [sys.exit, 0]

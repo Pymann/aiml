@@ -75,7 +75,7 @@ struct AimlUIFont {
     unsigned char* ttf_data;   /* malloc'd copy */
     int     ttf_size;          /* byte length of ttf_data */
     GLuint  atlas_tex;
-    stbtt_bakedchar cdata[96]; /* ASCII 32..127 */
+    stbtt_bakedchar cdata[224]; /* codepoints 32..255 (ASCII + Latin-1 Supplement) */
     float   line_height;
     float   ascent_px;  /* pixels from top-of-line-box to baseline */
     float   scale;
@@ -344,6 +344,23 @@ static void push_quad(float x, float y, float w, float h,
     g_ui->cmds.back().count += 6;
 }
 
+/* Decode one UTF-8 codepoint (Latin-1 Supplement only — 2-byte sequences).
+ * Duplicated inline from prefab_runtime.cpp so ui_runtime stays independent;
+ * both callers loop over the SAME atlas layout (32..255 baked). */
+static uint32_t ui_decode_utf8_char(const char*& p) {
+    unsigned char b0 = (unsigned char)*p++;
+    if (b0 < 0x80) return b0;
+    if ((b0 & 0xE0) == 0xC0) {
+        unsigned char b1 = (unsigned char)*p;
+        if ((b1 & 0xC0) != 0x80) return 0;
+        ++p;
+        return ((uint32_t)(b0 & 0x1F) << 6) | (b1 & 0x3F);
+    }
+    if ((b0 & 0xF0) == 0xE0) { if (*p) ++p; if (*p) ++p; }
+    else if ((b0 & 0xF8) == 0xF0) { if (*p) ++p; if (*p) ++p; if (*p) ++p; }
+    return 0;
+}
+
 static void push_text(AimlUIFont* font, const char* text,
                       float cx, float cy, float max_w, uint32_t rgba)
 {
@@ -352,9 +369,9 @@ static void push_text(AimlUIFont* font, const char* text,
     float y = cy + font->ascent_px;  /* cy = top of line box; shift to baseline */
     float limit = cx + max_w;
     while (*text) {
-        unsigned char c = (unsigned char)*text++;
-        if (c < 32 || c >= 128) continue;
-        stbtt_bakedchar* bc = &font->cdata[c - 32];
+        uint32_t cp = ui_decode_utf8_char(text);
+        if (cp < 32 || cp >= 256) continue;
+        stbtt_bakedchar* bc = &font->cdata[cp - 32];
         float x0 = x + bc->xoff;
         float y0 = y + bc->yoff;
         float x1 = x0 + (bc->x1 - bc->x0);
@@ -374,9 +391,9 @@ static float text_width(AimlUIFont* font, const char* text) {
     if (!font || !text) return 0;
     float w = 0;
     while (*text) {
-        unsigned char c = (unsigned char)*text++;
-        if (c < 32 || c >= 128) continue;
-        w += font->cdata[c - 32].xadvance;
+        uint32_t cp = ui_decode_utf8_char(text);
+        if (cp < 32 || cp >= 256) continue;
+        w += font->cdata[cp - 32].xadvance;
     }
     return w;
 }
@@ -641,7 +658,7 @@ static AimlUIFont* bake_font(unsigned char* ttf_data, int ttf_size, float size_p
     while (true) {
         int r = stbtt_BakeFontBitmap(f->ttf_data, 0, size_px,
                                      bitmap, f->atlas_w, f->atlas_h,
-                                     32, 96, f->cdata);
+                                     32, 224, f->cdata);
         if (r > 0 || f->atlas_h >= 2048) break;
         f->atlas_h *= 2;
         bitmap = (unsigned char*)realloc(bitmap, f->atlas_w * f->atlas_h);

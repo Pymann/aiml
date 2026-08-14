@@ -9,85 +9,85 @@
       - decl: [fail, i32, 0]
 
       # Test 1: einfaches Suffix
-      - decl: [s1, string, "hello.json"]
-      - decl: [r1, i32, { call: [s1.ends_with, ".json"] }]
+      - decl: [var_s1, string, "hello.json"]
+      - decl: [var_r1, i32, { call: [var_s1.ends_with, ".json"] }]
       - if:
-          condition: { eq: [r1, 1] }
+          condition: { eq: [var_r1, 1] }
           then:
             - print: ["PASS: 'hello.json' ends_with '.json'"]
             - set: [pass, { +: [pass, 1] }]
           else:
-            - print: ["FAIL: 'hello.json' ends_with '.json' expected 1, got ${r1}"]
+            - print: ["FAIL: 'hello.json' ends_with '.json' expected 1, got ${var_r1}"]
             - set: [fail, { +: [fail, 1] }]
 
       # Test 2: kein Match
-      - decl: [r2, i32, { call: [s1.ends_with, ".md"] }]
+      - decl: [var_r2, i32, { call: [var_s1.ends_with, ".md"] }]
       - if:
-          condition: { eq: [r2, 0] }
+          condition: { eq: [var_r2, 0] }
           then:
             - print: ["PASS: 'hello.json' not ends_with '.md'"]
             - set: [pass, { +: [pass, 1] }]
           else:
-            - print: ["FAIL: 'hello.json' ends_with '.md' expected 0, got ${r2}"]
+            - print: ["FAIL: 'hello.json' ends_with '.md' expected 0, got ${var_r2}"]
             - set: [fail, { +: [fail, 1] }]
 
       # Test 3: Suffix laenger als String
-      - decl: [s3, string, "ab"]
-      - decl: [r3, i32, { call: [s3.ends_with, "abcdef"] }]
+      - decl: [var_s3, string, "ab"]
+      - decl: [var_r3, i32, { call: [var_s3.ends_with, "abcdef"] }]
       - if:
-          condition: { eq: [r3, 0] }
+          condition: { eq: [var_r3, 0] }
           then:
             - print: ["PASS: 'ab' not ends_with 'abcdef' (suffix too long)"]
             - set: [pass, { +: [pass, 1] }]
           else:
-            - print: ["FAIL: 'ab' ends_with 'abcdef' expected 0, got ${r3}"]
+            - print: ["FAIL: 'ab' ends_with 'abcdef' expected 0, got ${var_r3}"]
             - set: [fail, { +: [fail, 1] }]
 
       # Test 4: exakter Match (String == Suffix)
-      - decl: [s4, string, ".md"]
-      - decl: [r4, i32, { call: [s4.ends_with, ".md"] }]
+      - decl: [var_s4, string, ".md"]
+      - decl: [var_r4, i32, { call: [var_s4.ends_with, ".md"] }]
       - if:
-          condition: { eq: [r4, 1] }
+          condition: { eq: [var_r4, 1] }
           then:
             - print: ["PASS: '.md' ends_with '.md' (exact match)"]
             - set: [pass, { +: [pass, 1] }]
           else:
-            - print: ["FAIL: '.md' ends_with '.md' expected 1, got ${r4}"]
+            - print: ["FAIL: '.md' ends_with '.md' expected 1, got ${var_r4}"]
             - set: [fail, { +: [fail, 1] }]
 
       # Test 5: leeres Suffix
-      - decl: [r5, i32, { call: [s1.ends_with, ""] }]
+      - decl: [var_r5, i32, { call: [var_s1.ends_with, ""] }]
       - if:
-          condition: { eq: [r5, 1] }
+          condition: { eq: [var_r5, 1] }
           then:
             - print: ["PASS: 'hello.json' ends_with '' (empty suffix)"]
             - set: [pass, { +: [pass, 1] }]
           else:
-            - print: ["FAIL: 'hello.json' ends_with '' expected 1, got ${r5}"]
+            - print: ["FAIL: 'hello.json' ends_with '' expected 1, got ${var_r5}"]
             - set: [fail, { +: [fail, 1] }]
 
       # Test 6: Pfad mit Punkt im Verzeichnis
-      - decl: [s6, string, "docs/v1.2/readme.md"]
-      - decl: [r6, i32, { call: [s6.ends_with, ".md"] }]
+      - decl: [var_s6, string, "docs/v1.2/readme.md"]
+      - decl: [var_r6, i32, { call: [var_s6.ends_with, ".md"] }]
       - if:
-          condition: { eq: [r6, 1] }
+          condition: { eq: [var_r6, 1] }
           then:
             - print: ["PASS: 'docs/v1.2/readme.md' ends_with '.md'"]
             - set: [pass, { +: [pass, 1] }]
           else:
-            - print: ["FAIL: 'docs/v1.2/readme.md' ends_with '.md' expected 1, got ${r6}"]
+            - print: ["FAIL: 'docs/v1.2/readme.md' ends_with '.md' expected 1, got ${var_r6}"]
             - set: [fail, { +: [fail, 1] }]
 
       # Test 7: .txt Erkennung
-      - decl: [s7, string, "notes.txt"]
-      - decl: [r7, i32, { call: [s7.ends_with, ".txt"] }]
+      - decl: [var_s7, string, "notes.txt"]
+      - decl: [var_r7, i32, { call: [var_s7.ends_with, ".txt"] }]
       - if:
-          condition: { eq: [r7, 1] }
+          condition: { eq: [var_r7, 1] }
           then:
             - print: ["PASS: 'notes.txt' ends_with '.txt'"]
             - set: [pass, { +: [pass, 1] }]
           else:
-            - print: ["FAIL: 'notes.txt' ends_with '.txt' expected 1, got ${r7}"]
+            - print: ["FAIL: 'notes.txt' ends_with '.txt' expected 1, got ${var_r7}"]
             - set: [fail, { +: [fail, 1] }]
 
       - print: [""]

@@ -23,7 +23,7 @@
 
 - decl: [job_ch, "chan<ptr<WorkerJob>>"]
 - decl: [result_ch, chan<i32>]
-- decl: [th, thread_handle, { spawn: [recv_job_worker, job_ch, result_ch] }]
+- decl: [var_th, thread_handle, { spawn: [recv_job_worker, job_ch, result_ch] }]
 
 - decl: [job, "ptr<WorkerJob>", { new: WorkerJob }]
 - set: [job.job_id, 17]
@@ -37,7 +37,7 @@
 - decl: [got_win_start, i32, { call: [result_ch.recv] }]
 - decl: [got_seq_len, i32, { call: [result_ch.recv] }]
 
-- call: [th.join]
+- call: [var_th.join]
 - free: [job]
 
 - if:

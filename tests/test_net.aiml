@@ -3,12 +3,12 @@
 
 # ── Phase A: Lifecycle (no real network traffic) ──────────────────────────────
 
-# socket creation → fd must be positive
+# socket creation → var_fd must be positive
 - decl: [sock, socket_handle]
 - set: [sock, { call: [net.socket, "tcp"] }]
-- decl: [fd, i32]
-- set: [fd, { call: [net.fd, sock] }]
-- print: ["socket created (fd should be > 0): ${fd}"]
+- decl: [var_fd, i32]
+- set: [var_fd, { call: [net.fd, sock] }]
+- print: ["socket created (var_fd should be > 0): ${var_fd}"]
 - call: [net.close, sock]
 
 # bind to 127.0.0.1:0 (OS picks port) + listen
@@ -29,18 +29,18 @@
     name: net_server
     args: []
     body:
-      - decl: [s, socket_handle]
-      - set: [s, { call: [net.socket, "tcp"] }]
-      - call: [net.bind, s, "127.0.0.1", 19876]
-      - call: [net.listen, s, 5]
-      - decl: [c, socket_handle]
-      - set: [c, { call: [net.accept, s] }]
+      - decl: [var_s, socket_handle]
+      - set: [var_s, { call: [net.socket, "tcp"] }]
+      - call: [net.bind, var_s, "127.0.0.1", 19876]
+      - call: [net.listen, var_s, 5]
+      - decl: [var_c, socket_handle]
+      - set: [var_c, { call: [net.accept, var_s] }]
       - decl: [msg, string]
-      - set: [msg, { call: [net.recv_string, c, 64] }]
+      - set: [msg, { call: [net.recv_string, var_c, 64] }]
       - print: ["server got: ${msg}"]
-      - call: [net.send_string, c, "pong"]
-      - call: [net.close, c]
-      - call: [net.close, s]
+      - call: [net.send_string, var_c, "pong"]
+      - call: [net.close, var_c]
+      - call: [net.close, var_s]
 
 - decl: [srv_thread, thread_handle]
 - set: [srv_thread, { spawn: [net_server] }]

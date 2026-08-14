@@ -8,25 +8,25 @@
       - Blue: 10
       - Yellow
 
-- decl: [c, Color, Color.Red]
-- print: ["Color Red is: ${c}"]
+- decl: [var_c, Color, Color.Red]
+- print: ["Color Red is: ${var_c}"]
 
-- decl: [c2, Color, Color.Blue]
-- print: ["Color Blue is: ${c2}"]
+- decl: [var_c2, Color, Color.Blue]
+- print: ["Color Blue is: ${var_c2}"]
 
-- decl: [c3, Color, Color.Yellow]
-- print: ["Color Yellow (Blue+1) is: ${c3}"]
+- decl: [var_c3, Color, Color.Yellow]
+- print: ["Color Yellow (Blue+1) is: ${var_c3}"]
 
 
 - if:
-    condition: {eq: [c, Color.Red]}
+    condition: {eq: [var_c, Color.Red]}
     then:
-      - print: ["Confirmed: c is Red"]
+      - print: ["Confirmed: var_c is Red"]
 
 - if:
-    condition: {eq: [c, Color.Green]}
+    condition: {eq: [var_c, Color.Green]}
     else:
-      - print: ["Confirmed: c is NOT Green"]
+      - print: ["Confirmed: var_c is NOT Green"]
 
 # Test Map with Enum (should be map<i32, ...>)
 - decl: [colorMap, map<Color:string>]

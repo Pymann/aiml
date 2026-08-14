@@ -1,3 +1,4 @@
+# static-check: off
 # Regression probe: typed websocket mirror with list<model> followed by more synced fields.
 # Reproduces the 9rooms suspicion around GameView.events and fields after it.
 # Expected exit code: 0
@@ -75,13 +76,13 @@
       - decl: [nid, i32]
       - set: [nid, { call: [sess.register, root] }]
 
-      - decl: [i, i32, 0]
+      - decl: [var_i, i32, 0]
       - while:
-          condition: { lt: [i, 30] }
+          condition: { lt: [var_i, 30] }
           body:
             - call: [sess.update]
             - call: [time.sleep_ms, 10]
-            - set: [i, { +: [i, 1] }]
+            - set: [var_i, { +: [var_i, 1] }]
 
       - decl: [ev1, EventLiteWs]
       - set: [ev1.seq, 1]
@@ -104,13 +105,13 @@
       - set: [root.reaction_state.mask, 9]
       - set: [root.reaction_state.prompt, "Closed"]
 
-      - set: [i, 0]
+      - set: [var_i, 0]
       - while:
-          condition: { lt: [i, 40] }
+          condition: { lt: [var_i, 40] }
           body:
             - call: [sess.update]
             - call: [time.sleep_ms, 10]
-            - set: [i, { +: [i, 1] }]
+            - set: [var_i, { +: [var_i, 1] }]
 
       - call: [sess.close]
 
@@ -123,10 +124,10 @@
 - call: [time.sleep_ms, 120]
 - call: [client.update]
 
-- decl: [ev, mirror_event]
-- set: [ev, { call: [client.next_event] }]
+- decl: [var_ev, mirror_event]
+- set: [var_ev, { call: [client.next_event] }]
 - decl: [replica, EventRootWs]
-- call: [client.register_id, replica, ev.net_id]
+- call: [client.register_id, replica, var_ev.net_id]
 
 - decl: [poll_i, i32, 0]
 - while:

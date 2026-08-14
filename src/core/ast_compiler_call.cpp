@@ -16,6 +16,43 @@
 namespace AIML {
 namespace AST {
 
+// Reconstruct an expression back to single-line AIML flow-YAML.  Function
+// bodies are built by the event-based parser, which keeps only a source Mark
+// (no DOM) on each node — so YAML::Dump(sourceNode) is empty.  We render from
+// the AST instead.  Used by the deprecation warning so the full call node is
+// emitted greppable / parse-and-replaceable by downstream tooling.
+static std::string exprToAiml(const Expr* e) {
+    if (!e) return "null";
+    if (auto* lit = dynamic_cast<const LiteralExpr*>(e)) return lit->value;
+    if (auto* var = dynamic_cast<const VariableExpr*>(e)) return var->name;
+    if (auto* call = dynamic_cast<const CallExpr*>(e)) {
+        std::string s = "{ call: [" + call->functionName;
+        for (const auto& a : call->args) s += ", " + exprToAiml(a.get());
+        return s + "] }";
+    }
+    if (auto* nw = dynamic_cast<const NewExpr*>(e)) return "{ new: " + nw->typeName + " }";
+    if (auto* at = dynamic_cast<const AtExpr*>(e)) {
+        std::string s = "{ at: [" + exprToAiml(at->container.get());
+        for (const auto& idx : at->indices) s += ", " + exprToAiml(idx.get());
+        return s + "] }";
+    }
+    if (auto* bin = dynamic_cast<const BinaryExpr*>(e))
+        return "{ " + bin->op + ": [" + exprToAiml(bin->lhs.get()) + ", " +
+               exprToAiml(bin->rhs.get()) + "] }";
+    if (auto* un = dynamic_cast<const UnaryExpr*>(e))
+        return "{ " + un->op + ": [" + exprToAiml(un->operand.get()) + "] }";
+    if (auto* dl = dynamic_cast<const DictLiteralExpr*>(e)) {
+        std::string s = "{"; bool first = true;
+        for (const auto& kv : dl->entriesExpr) {
+            s += (first ? " " : ", ") + kv.first + ": " + exprToAiml(kv.second.get());
+            first = false;
+        }
+        return s + " }";
+    }
+    if (dynamic_cast<const StringInterpolationExpr*>(e)) return "\"...\"";
+    return e->toString();
+}
+
 // ── fn<params:ret> type parser ────────────────────────────────────────────────
 // Handles nested generics correctly, e.g. fn<map<string:string>:bool>
 struct FnTypeInfo {
@@ -148,6 +185,9 @@ IRValue* Compiler::visitCall(CallExpr* call) {
         if (baseName == "sys" && (methodName == "serialize" || methodName == "deserialize")) {
             return visitSysSerializeCall(methodName, call);
         }
+        if (baseName == "sys" && methodName == "clone") {
+            return visitSysCloneCall(call);
+        }
         if (baseName == "sys" && methodName == "bundle") {
             return visitSysBundleCall(call);
         }
@@ -258,7 +298,10 @@ IRValue* Compiler::visitCall(CallExpr* call) {
 
         // Dispatch any registered namespace (sys, io, time, path, and future ones)
         if (ctx.namespaces.count(baseName)) {
+            AIML::AST::CallExpr* prevCall = ctx.currentCall;
+            ctx.currentCall = call;
             IRValue* sysResult = visitSysNamespaceCall(baseName, methodName, argVals);
+            ctx.currentCall = prevCall;
             if (sysResult) return sysResult;
         }
         // For standard compilation, we just emit a call to their mangled C names.
@@ -332,9 +375,23 @@ IRValue* Compiler::visitCall(CallExpr* call) {
          }
          return ctx.ir_gen->createCall("printf", printArgs, "print_call");
     } else if (funcName == "free") {
+         if (argVals.empty()) return ctx.ir_gen->getInt32(0);
+         // iterator<T> handles are allocated with C++ `new` (aiml_iter_create_kv)
+         // → must be released via aiml_iter_free (delete), not libc free.  Mixing
+         // new/free is UB (see spec/54 §5).  Detect the arg's declared type.
+         if (auto* itVarE = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get())) {
+             Symbol* itSym = resolveVariable(itVarE->name);
+             if (itSym && itSym->typeName.rfind("iterator<", 0) == 0) {
+                 llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                 llvm::Function* itFree = ctx.getFunction("aiml_iter_free", ctx.builder.getVoidTy(), {i8p});
+                 llvm::Value* itPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+                 if (itPtr->getType() != i8p) itPtr = ctx.builder.CreateBitCast(itPtr, i8p);
+                 ctx.builder.CreateCall(itFree, {itPtr});
+                 return ctx.ir_gen->getInt32(0);
+             }
+         }
          llvm::Function* freeFunc = ctx.module.getFunction("free");
          if (!freeFunc) freeFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "free", ctx.module);
-         if (argVals.empty()) return ctx.ir_gen->getInt32(0);
          llvm::Value* ptrVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
          if (ptrVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
              ptrVal = ctx.builder.CreateBitCast(ptrVal, ctx.builder.getInt8Ty()->getPointerTo());
@@ -347,6 +404,13 @@ IRValue* Compiler::visitCall(CallExpr* call) {
     IRValue* callRes = nullptr;
     CompilerContext::FunctionInfo* funcInfo = resolveFunction(funcName);
     llvm::Function* f = funcInfo ? funcInfo->func : ctx.module.getFunction(funcName);
+
+    // meta: [deprecated] → warn at this call site (one per usage location).
+    // Emit the full call YAML node so callers can grep/parse+replace the output.
+    if (funcInfo && funcInfo->deprecated) {
+        LOG_WARNING(ctx.fmtLoc(call->sourceNode) + "'" + funcName +
+                    "' is deprecated — " + exprToAiml(call));
+    }
 
     // Coerce argument types (pointer/struct adjustments) — shared for both paths
     auto coerceArgs = [&]() {
@@ -363,15 +427,14 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             llvm::Type* actualTy = actualVal->getType();
 
             if (expectedTy->isPointerTy() && actualTy->isStructTy()) {
-                if (auto varExpr = dynamic_cast<VariableExpr*>(call->args[i].get())) {
-                    Symbol* sym = resolveVariable(varExpr->name);
-                    if (sym) {
-                        actualVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
-                            sym->ir_alloca_inst ? sym->ir_alloca_inst
-                                                : ctx.ir_gen->wrap(sym->alloca_inst)));
-                        argVals[i] = ctx.ir_gen->wrap(actualVal);
-                        actualTy   = actualVal->getType();
-                    }
+                // Take the address of the caller's lvalue — plain variable OR
+                // dotted member-access (out.inner).  emitLValueAddress handles
+                // by-ref sources (load stored ptr) and nested field GEPs.
+                std::string lvTy;
+                if (IRValue* addr = emitLValueAddress(call->args[i].get(), lvTy)) {
+                    actualVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(addr));
+                    argVals[i] = ctx.ir_gen->wrap(actualVal);
+                    actualTy   = actualVal->getType();
                 }
             }
             if (expectedTy->isPointerTy() && actualTy->isPointerTy() && expectedTy != actualTy)
@@ -386,6 +449,31 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             // Float promotion: f32 → f64
             if (expectedTy->isDoubleTy() && actualTy->isFloatTy())
                 argVals[i] = ctx.ir_gen->wrap(ctx.builder.CreateFPExt(actualVal, expectedTy, "arg_fpext"));
+
+            // Hard type-mismatch guard: after all coercions, a numeric parameter
+            // (i32/enum/bool/float) that receives a pointer value (e.g. a string
+            // literal) can NEVER be valid.  Catch it HERE with a source location
+            // instead of letting the LLVM IR verifier fail later with the
+            // unhelpful "'__aiml_user_main' verification FAILED".  Mirrors the
+            // enum-assignment check in visitSetStmt.
+            llvm::Type* finalTy =
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[i]))->getType();
+            if ((expectedTy->isIntegerTy() || expectedTy->isFloatingPointTy()) &&
+                finalTy->isPointerTy()) {
+                std::string pname = (funcInfo && i < funcInfo->argNames.size())
+                                        ? funcInfo->argNames[i]
+                                        : ("arg" + std::to_string(i));
+                std::string hint =
+                    expectedTy->isIntegerTy()
+                        ? " — passing a string/pointer where an integer- or "
+                          "enum-typed argument is expected; use EnumType.<value> "
+                          "or an int literal"
+                        : " — passing a string/pointer where a float-typed "
+                          "argument is expected";
+                LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "Call to '" + funcName +
+                          "': argument " + std::to_string(i + 1) + " ('" + pname +
+                          "') type mismatch" + hint);
+            }
         }
     };
 
@@ -517,8 +605,28 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          className = className.substr(4, className.length() - 5);
     }
 
+    // meta: [deprecated] on a class/interface method → warn at this call site.
+    {
+        auto dep = ctx.functions.find(className + "_" + methodName);
+        if (dep != ctx.functions.end() && dep->second.deprecated) {
+            LOG_WARNING(ctx.fmtLoc(call->sourceNode) +
+                        "'" + className + "." + methodName + "' is deprecated — " +
+                        exprToAiml(call));
+        }
+    }
+
     IRValue* baseAlloca = sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst);
     IRType* baseElemTy = sym->ir_element_type ? sym->ir_element_type : ctx.ir_gen->wrapType(sym->element_type);
+
+    // list/map by-ref args: alloca enthält einen pointer auf das echte struct,
+    // nicht das struct selbst.  Method-dispatch erwartet baseAlloca = ptr-to-struct,
+    // also einmal deref.  Spec/22_call_semantics.md.
+    if (sym->is_byref_arg) {
+        auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Value* allocaRaw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+        llvm::Value* loaded = ctx.builder.CreateLoad(i8p, allocaRaw, "byref_deref");
+        baseAlloca = ctx.ir_gen->wrap(loaded);
+    }
 
     // Interface virtual dispatch: if sym is ptr<Iface>, lookup method slot,
     // load vtbl from fat pointer, indirect call with obj as `this`.
@@ -577,11 +685,62 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             // Eagerly eval call args.
             std::vector<llvm::Value*> callArgs;
             callArgs.push_back(objPtr);
-            for (auto& arg : call->args) {
-                IRValue* av = visitExpression(arg.get());
-                if (av) callArgs.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(av)));
+            for (size_t ai = 0; ai < call->args.size(); ++ai) {
+                IRValue* av = visitExpression(call->args[ai].get());
+                if (!av) continue;
+                llvm::Value* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(av));
+                // "expected ptr, got struct" coercion for the vtable-dispatch
+                // path — mirrors coerceArgs()/the direct-method path.  A struct
+                // lvalue (plain variable OR member-access) passed where the
+                // interface method declares ptr<T> must be passed by ADDRESS,
+                // not loaded by value.  paramTys[0] = implicit this.
+                size_t paramIdx = ai + 1;
+                if (raw && raw->getType()->isStructTy() &&
+                    paramIdx < paramTys.size() && paramTys[paramIdx]->isPointerTy()) {
+                    std::string lvTy;
+                    if (IRValue* addr = emitLValueAddress(call->args[ai].get(), lvTy)) {
+                        llvm::Value* pv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(addr));
+                        if (pv->getType() != paramTys[paramIdx])
+                            pv = ctx.builder.CreateBitCast(pv, paramTys[paramIdx]);
+                        raw = pv;
+                    }
+                }
+                callArgs.push_back(raw);
             }
-            llvm::Value* res = ctx.builder.CreateCall(fnTy, fnPtr, callArgs, "iface_call");
+
+            // Struct return: vtable points to a sret-stub (see getOrCreateSretStub
+            // in ast_compiler.cpp).  Match the stub's signature here — allocate
+            // a temp at function entry, pass as sret out-param, load the result.
+            // Direct (non-vtable) calls go straight to the real fn; LLVM auto-
+            // ABI keeps caller + callee in sync for that path.
+            if (retTy->isStructTy()) {
+                std::vector<llvm::Type*> sretParamTys;
+                sretParamTys.push_back(i8p);                       // sret slot
+                for (auto* t : paramTys) sretParamTys.push_back(t);
+                auto* sretFnTy = llvm::FunctionType::get(
+                    llvm::Type::getVoidTy(ctx.context), sretParamTys, false);
+
+                llvm::Function* curF = ctx.builder.GetInsertBlock()->getParent();
+                auto savedIP = ctx.builder.saveIP();
+                ctx.builder.SetInsertPoint(&curF->getEntryBlock(),
+                                           curF->getEntryBlock().getFirstInsertionPt());
+                llvm::Value* sretSlot = ctx.builder.CreateAlloca(retTy, nullptr, "iface_sret");
+                ctx.builder.restoreIP(savedIP);
+
+                std::vector<llvm::Value*> sretCallArgs;
+                sretCallArgs.push_back(sretSlot);
+                for (auto* v : callArgs) sretCallArgs.push_back(v);
+
+                llvm::CallInst* ci = ctx.builder.CreateCall(sretFnTy, fnPtr, sretCallArgs);
+                ci->addParamAttr(0, llvm::Attribute::getWithStructRetType(ctx.context, retTy));
+
+                llvm::Value* loaded = ctx.builder.CreateLoad(retTy, sretSlot, "iface_call");
+                return ctx.ir_gen->wrap(loaded);
+            }
+
+            // LLVM verbietet Namens-Suffix auf void-Calls, daher Name nur bei non-void.
+            llvm::Value* res = ctx.builder.CreateCall(fnTy, fnPtr, callArgs,
+                retTy->isVoidTy() ? "" : "iface_call");
             if (retTy->isVoidTy()) return nullptr;
             return ctx.ir_gen->wrap(res);
         }
@@ -596,6 +755,24 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 if (objSym) ctx.deserializeTargetType = objSym->typeName;
             }
         }
+    }
+
+    // mirror_event.type_enum() → MirrorEventType (i32).  mirror_event is a
+    // real struct (isBuiltin=false) so the builtinMethods path below is not
+    // consulted — handle the typed-getter here by GEP'ing the type-string
+    // field (0) and mapping it via the runtime.
+    if (className == "mirror_event" && methodName == "type_enum") {
+        auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Value* rawBase = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+        auto* baseElemRaw = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(baseElemTy));
+        if (baseElemRaw->isPointerTy())
+            rawBase = ctx.builder.CreateLoad(baseElemRaw, rawBase, "deref_ev");
+        auto* evTy = static_cast<llvm::StructType*>(ctx.getLLVMType("mirror_event"));
+        llvm::Value* typePtr = ctx.builder.CreateStructGEP(evTy, rawBase, 0, "ev_type_ptr");
+        llvm::Value* typeStr = ctx.builder.CreateLoad(i8p, typePtr, "ev_type_str");
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+            ctx.getFunction("aiml_mirror_type_enum", ctx.builder.getInt32Ty(), {i8p}),
+            {typeStr}, "ev_type_enum"));
     }
 
     // Builtin class dispatch (buffer, process, http handles, ...)
@@ -844,8 +1021,10 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
 
     // String.len (lazy — needs only the alloca, no args)
     if (className == "string" && methodName == "len") {
+        // size_t = target pointer-width int (i32 on WASM, i64 on x86_64).
+        llvm::Type* sizeTy = ctx.module.getDataLayout().getIntPtrType(ctx.context);
         llvm::Function* strlenFunc = ctx.module.getFunction("strlen");
-        if (!strlenFunc) strlenFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "strlen", ctx.module);
+        if (!strlenFunc) strlenFunc = llvm::Function::Create(llvm::FunctionType::get(sizeTy, {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "strlen", ctx.module);
         llvm::Value* strPtr = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
         // Null-safe: if strPtr is null, return 0
         llvm::Value* isNull = ctx.builder.CreateIsNull(strPtr, "str_is_null");
@@ -857,8 +1036,8 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         ctx.builder.SetInsertPoint(nullBB);
         ctx.builder.CreateBr(mergeBB);
         ctx.builder.SetInsertPoint(okBB);
-        llvm::Value* len64 = ctx.builder.CreateCall(strlenFunc, {strPtr});
-        llvm::Value* len32 = ctx.builder.CreateTrunc(len64, ctx.builder.getInt32Ty());
+        llvm::Value* lenN  = ctx.builder.CreateCall(strlenFunc, {strPtr});
+        llvm::Value* len32 = ctx.builder.CreateSExtOrTrunc(lenN, ctx.builder.getInt32Ty());
         ctx.builder.CreateBr(mergeBB);
         ctx.builder.SetInsertPoint(mergeBB);
         llvm::PHINode* phi = ctx.builder.CreatePHI(ctx.builder.getInt32Ty(), 2, "str_len");
@@ -886,19 +1065,23 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         llvm::Value* strPtr = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(),
                                                      static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
         if (methodName == "substr") {
-            llvm::Value* start = ctx.builder.CreateSExt(
-                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), ctx.builder.getInt64Ty());
+            // size_t = platform pointer-width int (i32 on WASM, i64 on x86_64).
+            // Linking against libc strndup with hardcoded i64 trips wasm-ld's
+            // signature-mismatch check on the WASM target.
+            llvm::Type* sizeTy = ctx.module.getDataLayout().getIntPtrType(ctx.context);
+            llvm::Value* start = ctx.builder.CreateSExtOrTrunc(
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), sizeTy);
             llvm::Value* offsetPtr = ctx.builder.CreateGEP(ctx.builder.getInt8Ty(), strPtr, start);
             if (argVals.size() >= 2) {
                 // strndup(str + start, len)
                 llvm::Function* strndupFn = ctx.module.getFunction("strndup");
                 if (!strndupFn) strndupFn = llvm::Function::Create(
                     llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(),
-                        {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt64Ty()}, false),
+                        {ctx.builder.getInt8Ty()->getPointerTo(), sizeTy}, false),
                     llvm::Function::ExternalLinkage, "strndup", ctx.module);
-                llvm::Value* len64 = ctx.builder.CreateSExt(
-                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1])), ctx.builder.getInt64Ty());
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(strndupFn, {offsetPtr, len64}));
+                llvm::Value* lenN = ctx.builder.CreateSExtOrTrunc(
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1])), sizeTy);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(strndupFn, {offsetPtr, lenN}));
             } else {
                 // strdup(str + start)
                 llvm::Function* strdupFn = ctx.module.getFunction("strdup");
@@ -910,14 +1093,16 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             }
         } else if (methodName == "starts_with") {
             // starts_with(prefix) → i32 (1 or 0)
+            // size_t must match target ABI: i32 on WASM, i64 on x86_64.
+            llvm::Type* sizeTy = ctx.module.getDataLayout().getIntPtrType(ctx.context);
             llvm::Function* strncmpFn = ctx.module.getFunction("strncmp");
             if (!strncmpFn) strncmpFn = llvm::Function::Create(
                 llvm::FunctionType::get(ctx.builder.getInt32Ty(),
-                    {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt64Ty()}, false),
+                    {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo(), sizeTy}, false),
                 llvm::Function::ExternalLinkage, "strncmp", ctx.module);
             llvm::Function* strlenFn = ctx.module.getFunction("strlen");
             if (!strlenFn) strlenFn = llvm::Function::Create(
-                llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false),
+                llvm::FunctionType::get(sizeTy, {ctx.builder.getInt8Ty()->getPointerTo()}, false),
                 llvm::Function::ExternalLinkage, "strlen", ctx.module);
             llvm::Value* prefix = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
             llvm::Value* prefixLen = ctx.builder.CreateCall(strlenFn, {prefix});
@@ -926,14 +1111,15 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             return ctx.ir_gen->wrap(ctx.builder.CreateZExt(eq, ctx.builder.getInt32Ty()));
         } else if (methodName == "ends_with") {
             // ends_with(suffix) → i32 (1 or 0)
+            llvm::Type* sizeTy = ctx.module.getDataLayout().getIntPtrType(ctx.context);
             llvm::Function* strncmpFn = ctx.module.getFunction("strncmp");
             if (!strncmpFn) strncmpFn = llvm::Function::Create(
                 llvm::FunctionType::get(ctx.builder.getInt32Ty(),
-                    {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt64Ty()}, false),
+                    {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo(), sizeTy}, false),
                 llvm::Function::ExternalLinkage, "strncmp", ctx.module);
             llvm::Function* strlenFn = ctx.module.getFunction("strlen");
             if (!strlenFn) strlenFn = llvm::Function::Create(
-                llvm::FunctionType::get(ctx.builder.getInt64Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false),
+                llvm::FunctionType::get(sizeTy, {ctx.builder.getInt8Ty()->getPointerTo()}, false),
                 llvm::Function::ExternalLinkage, "strlen", ctx.module);
             llvm::Value* suffix = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
             llvm::Value* strLen = ctx.builder.CreateCall(strlenFn, {strPtr});
@@ -958,12 +1144,28 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Value* found = ctx.builder.CreateCall(strstrFn, {strPtr, needle});
             llvm::Value* isNull = ctx.builder.CreateICmpEQ(found, llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()));
             llvm::Value* offset = ctx.builder.CreatePtrDiff(ctx.builder.getInt8Ty(), found, strPtr);
-            llvm::Value* offset32 = ctx.builder.CreateTrunc(offset, ctx.builder.getInt32Ty());
+            // ptrdiff_t is platform-width — SExtOrTrunc handles both i32 (WASM) and i64 (x86_64).
+            llvm::Value* offset32 = ctx.builder.CreateSExtOrTrunc(offset, ctx.builder.getInt32Ty());
             llvm::Value* result = ctx.builder.CreateSelect(isNull, ctx.builder.getInt32(-1), offset32);
             return ctx.ir_gen->wrap(result);
         } else if (methodName == "lower") {
             // lower() -> string — aiml_str_lower(str)
             llvm::Function* fn = ctx.getFunction("aiml_str_lower",
+                ctx.builder.getInt8Ty()->getPointerTo(),
+                {ctx.builder.getInt8Ty()->getPointerTo()});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {strPtr}));
+        } else if (methodName == "upper") {
+            // upper() -> string — aiml_str_upper(str)
+            llvm::Function* fn = ctx.getFunction("aiml_str_upper",
+                ctx.builder.getInt8Ty()->getPointerTo(),
+                {ctx.builder.getInt8Ty()->getPointerTo()});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {strPtr}));
+        } else if (methodName == "title") {
+            // title() -> string — aiml_str_title(str)
+            // Capitalize first char of every word (separators: whitespace,
+            // `-`, `_`); lowercase the rest.  Useful for snake_case →
+            // display-label conversion.
+            llvm::Function* fn = ctx.getFunction("aiml_str_title",
                 ctx.builder.getInt8Ty()->getPointerTo(),
                 {ctx.builder.getInt8Ty()->getPointerTo()});
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {strPtr}));
@@ -1000,12 +1202,68 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         }
     }
 
+    // cascade<X> shares the list<i32> layout — normalize before dispatching
+    // list methods (push / pop / get / len / …).
+    if (className.rfind("cascade<", 0) == 0 && className.back() == '>') {
+        className = "list<i32>";
+    }
+
     // List Methods
     if (className.find("list<") == 0) {
          std::string listElemName = className.substr(5, className.length() - 6);
          llvm::Type* llvmListElemType = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(listElemName)));
          if (methodName == "push" && argVals.size() > 0) {
-             ListImpl::push(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])));
+             llvm::Value* pushVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+             // ── Static check: push(ptr<T>) into a VALUE list<T> ────────────
+             // Ein 8-byte Pointer würde in einen Value-Struct-Slot geschrieben
+             // (nur die ersten 8 bytes gesetzt, Rest garbage) → Heap-Korruption
+             // / SIGSEGV beim Serialisieren (aiml_ser_encode).  Compile-Fehler.
+             // Ausgenommen: list<ptr<T>> (element = ptr, ok) und Interface-
+             // FatPtr-Listen (eigenes Upcast-Handling direkt darunter).
+             {
+                 bool elemIsPtr = (listElemName.rfind("ptr<", 0) == 0);
+                 bool elemIsFatPtr = llvmListElemType && llvmListElemType->isStructTy() &&
+                     llvm::cast<llvm::StructType>(llvmListElemType)->hasName() &&
+                     llvm::cast<llvm::StructType>(llvmListElemType)->getName().startswith("AimlFatPtr_");
+                 if (!elemIsPtr && !elemIsFatPtr) {
+                     if (auto* pushVar = dynamic_cast<VariableExpr*>(call->args[0].get())) {
+                         if (Symbol* pushSym = resolveVariable(pushVar->name)) {
+                             if (pushSym->typeName == "ptr<" + listElemName + ">") {
+                                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
+                                     "list<" + listElemName + ">.push() got a ptr<" + listElemName +
+                                     "> ('" + pushVar->name + "'): an 8-byte pointer would be written into a " +
+                                     "value-struct slot (heap corruption / SIGSEGV on serialize). " +
+                                     "Dereference it — { '?': [" + pushVar->name +
+                                     "] } — or declare the list as list<ptr<" + listElemName + ">>.");
+                             }
+                         }
+                     }
+                 }
+             }
+             // Interface-Upcast für push(ptr<Concrete>) wenn list-elem = ptr<Interface>.
+             // Ohne diesen Schritt landet ein 8-byte class-ptr in einem 16-byte
+             // fat-pointer slot — die folgenden 8 bytes (vtable) sind garbage,
+             // beim späteren `at` + dispatch korrupt der Heap.
+             // Spiegelt das identische Pattern in map.put unten.
+             if (llvmListElemType && llvmListElemType->isStructTy() &&
+                 llvm::cast<llvm::StructType>(llvmListElemType)->hasName() &&
+                 llvm::cast<llvm::StructType>(llvmListElemType)->getName().startswith("AimlFatPtr_")) {
+                 if (auto* varExpr = dynamic_cast<VariableExpr*>(call->args[0].get())) {
+                     if (Symbol* srcSym = resolveVariable(varExpr->name)) {
+                         std::string srcTy = srcSym->typeName;
+                         if (pushVal && !pushVal->getType()->isPointerTy()) {
+                             pushVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+                                 srcSym->ir_alloca_inst ? srcSym->ir_alloca_inst
+                                                        : ctx.ir_gen->wrap(srcSym->alloca_inst)));
+                             srcTy = "ptr<" + srcTy + ">";
+                         }
+                         llvm::Value* fat = buildInterfaceUpcast(pushVal, srcTy,
+                                                                  llvm::cast<llvm::StructType>(llvmListElemType));
+                         if (fat) pushVal = fat;
+                     }
+                 }
+             }
+             ListImpl::push(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), pushVal);
              return nullptr;
          } else if (methodName == "pop") {
              return ctx.ir_gen->wrap(ListImpl::pop(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), llvmListElemType));
@@ -1047,16 +1305,29 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
     else if (className.find("map<") == 0) {
          llvm::StructType* mapStructTy = static_cast<llvm::StructType*>(ctx.ir_gen->unwrapType(baseElemTy));
          llvm::Type* vTy = nullptr;
+         std::string vName;
          std::string inner = className.substr(4, className.length() - 5);
          size_t colon = inner.find(':');
          if (colon != std::string::npos) {
-             std::string vName = inner.substr(colon + 1);
+             vName = inner.substr(colon + 1);
              vTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
          }
          if (!vTy) vTy = ctx.builder.getInt8Ty()->getPointerTo();
          if (methodName == "put" && argVals.size() > 1) {
              llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
              llvm::Value* valVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
+             // Interface-Upcast für put(key, ptr<Concrete>) wenn V = ptr<Interface>.
+             // Zentralisiert in Compiler::buildInterfaceUpcast.
+             if (vTy->isStructTy() && llvm::cast<llvm::StructType>(vTy)->hasName() &&
+                 llvm::cast<llvm::StructType>(vTy)->getName().startswith("AimlFatPtr_")) {
+                 if (auto* varExpr = dynamic_cast<VariableExpr*>(call->args[1].get())) {
+                     if (Symbol* srcSym = resolveVariable(varExpr->name)) {
+                         llvm::Value* fat = buildInterfaceUpcast(valVal, srcSym->typeName,
+                                                                  llvm::cast<llvm::StructType>(vTy));
+                         if (fat) valVal = fat;
+                     }
+                 }
+             }
              if (vTy->isPointerTy() && valVal->getType()->isStructTy()) {
                  if (auto varExpr = dynamic_cast<VariableExpr*>(call->args[1].get())) {
                      Symbol* s = resolveVariable(varExpr->name);
@@ -1306,9 +1577,117 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 ctx.builder.CreateStore(valVal, tmp);
                 valPtr = ctx.builder.CreateBitCast(tmp, i8p);
             }
+
+            // ── db_indexed set-hook ─────────────────────────────────────────
+            // Before the main set:
+            //   1) load old struct via aiml_db_kv_get (may be null if new key)
+            //   2) for each indexed field: remove old value from its index
+            // After the main set:
+            //   3) for each indexed field: add new value to its index
+            std::vector<std::pair<std::string, CompilerContext::StructMember>> indexedFields;
+            llvm::StructType* valStructTy = nullptr;
+            if (ctx.classes.count(vName) && ctx.classes[vName].type) {
+                valStructTy = ctx.classes[vName].type;
+                for (auto& [fname, mem] : ctx.classes[vName].members) {
+                    if (mem.db_indexed) indexedFields.push_back({fname, mem});
+                }
+            }
+
+            auto emitIndexOp = [&](const std::string& opSym,
+                                    const std::string& fname,
+                                    const CompilerContext::StructMember& mem,
+                                    llvm::Value* basePtr) {
+                // basePtr is i8*; bitcast to struct type ptr and GEP to field.
+                llvm::Value* typedBase = ctx.builder.CreateBitCast(
+                    basePtr, llvm::PointerType::get(ctx.context, 0));
+                llvm::Value* fldGep = ctx.builder.CreateStructGEP(
+                    valStructTy, typedBase, mem.index);
+
+                llvm::Value* fNameVal = ctx.builder.CreateGlobalStringPtr(fname);
+                llvm::Function* idxLookup = ctx.getFunction(
+                    "aiml_db_index_lookup", i8p, {i8p, i8p});
+                llvm::Value* idxHandle = ctx.builder.CreateCall(
+                    idxLookup, {kvPtr, fNameVal});
+                llvm::Function* opFn = ctx.getFunction(
+                    "aiml_db_index_" + opSym,
+                    ctx.builder.getVoidTy(), {i8p, i8p, i8p});
+
+                const std::string& fTy = mem.typeName;
+                if (fTy == "string") {
+                    llvm::Value* fVal = ctx.builder.CreateLoad(i8p, fldGep);
+                    ctx.builder.CreateCall(opFn, {idxHandle, fVal, keyVal});
+                } else if (fTy == "i32") {
+                    llvm::Value* fVal = ctx.builder.CreateLoad(i32, fldGep);
+                    llvm::Value* fStr = StringUtils::intToString(ctx, fVal);
+                    ctx.builder.CreateCall(opFn, {idxHandle, fStr, keyVal});
+                } else if (fTy == "i64") {
+                    llvm::Value* fVal = ctx.builder.CreateLoad(i64, fldGep);
+                    llvm::Value* fStr = StringUtils::int64ToString(ctx, fVal);
+                    ctx.builder.CreateCall(opFn, {idxHandle, fStr, keyVal});
+                } else if (fTy.rfind("list<", 0) == 0) {
+                    // list<T> indexed: walk each element, call op once per elem.
+                    // For list<string> the element is i8* (the indexed string).
+                    // For list<i32> we'd need intToString per elem — TODO.
+                    std::string inner = fTy.substr(5, fTy.size() - 6);
+                    if (inner != "string") return;  // V1: only list<string>
+                    llvm::StructType* lstTy = (llvm::StructType*)ctx.getLLVMType(fTy);
+                    llvm::Value* sizePtr = ctx.builder.CreateStructGEP(lstTy, fldGep, 0);
+                    llvm::Value* dataPtr = ctx.builder.CreateStructGEP(lstTy, fldGep, 2);
+                    llvm::Value* size    = ctx.builder.CreateLoad(i32, sizePtr);
+                    llvm::Value* data    = ctx.builder.CreateLoad(i8p, dataPtr);
+                    // Loop: for (i=0; i<size; ++i) op(idx, data[i], key)
+                    llvm::Function* parent = ctx.builder.GetInsertBlock()->getParent();
+                    llvm::BasicBlock* loopH = llvm::BasicBlock::Create(ctx.context, "lstidx_h", parent);
+                    llvm::BasicBlock* loopB = llvm::BasicBlock::Create(ctx.context, "lstidx_b", parent);
+                    llvm::BasicBlock* loopE = llvm::BasicBlock::Create(ctx.context, "lstidx_e", parent);
+                    llvm::AllocaInst* iAlloca = ctx.createEntryAlloca(i32, "lstidx_i");
+                    ctx.builder.CreateStore(ctx.builder.getInt32(0), iAlloca);
+                    ctx.builder.CreateBr(loopH);
+                    ctx.builder.SetInsertPoint(loopH);
+                    llvm::Value* iCur = ctx.builder.CreateLoad(i32, iAlloca);
+                    llvm::Value* cond = ctx.builder.CreateICmpSLT(iCur, size);
+                    ctx.builder.CreateCondBr(cond, loopB, loopE);
+                    ctx.builder.SetInsertPoint(loopB);
+                    llvm::Value* elemGep = ctx.builder.CreateGEP(i8p, data, iCur);
+                    llvm::Value* elem    = ctx.builder.CreateLoad(i8p, elemGep);
+                    ctx.builder.CreateCall(opFn, {idxHandle, elem, keyVal});
+                    llvm::Value* iNext = ctx.builder.CreateAdd(iCur, ctx.builder.getInt32(1));
+                    ctx.builder.CreateStore(iNext, iAlloca);
+                    ctx.builder.CreateBr(loopH);
+                    ctx.builder.SetInsertPoint(loopE);
+                }
+                // Other types: silently skipped (validated at findings_by site).
+            };
+
+            if (!indexedFields.empty() && valStructTy) {
+                // Step 1: load old, if not null emit removes for each indexed field.
+                llvm::Function* getF = ctx.getFunction("aiml_db_kv_get", i8p, {i8p, i8p});
+                llvm::Value* oldPtr = ctx.builder.CreateCall(getF, {kvPtr, keyVal});
+                llvm::Value* oldNull = ctx.builder.CreateICmpEQ(
+                    oldPtr, llvm::ConstantPointerNull::get(
+                        llvm::PointerType::get(ctx.context, 0)));
+                llvm::Function* parent = ctx.builder.GetInsertBlock()->getParent();
+                llvm::BasicBlock* rmBB   = llvm::BasicBlock::Create(ctx.context, "kvset_idxrm", parent);
+                llvm::BasicBlock* contBB = llvm::BasicBlock::Create(ctx.context, "kvset_idxcont", parent);
+                ctx.builder.CreateCondBr(oldNull, contBB, rmBB);
+                ctx.builder.SetInsertPoint(rmBB);
+                for (auto& [fname, mem] : indexedFields) {
+                    emitIndexOp("remove", fname, mem, oldPtr);
+                }
+                ctx.builder.CreateBr(contBB);
+                ctx.builder.SetInsertPoint(contBB);
+            }
+
             llvm::Function* f = ctx.getFunction("aiml_db_kv_set",
                 ctx.builder.getVoidTy(), {i8p, i8p, i8p, i64});
             ctx.builder.CreateCall(f, {kvPtr, keyVal, valPtr, ctx.builder.getInt64(valSize)});
+
+            // Step 3: add new field values to indexes.
+            if (!indexedFields.empty() && valStructTy) {
+                for (auto& [fname, mem] : indexedFields) {
+                    emitIndexOp("add", fname, mem, valPtr);
+                }
+            }
             return nullptr;
 
         } else if ((methodName == "get" || methodName == "get_copy") && !argVals.empty()) {
@@ -1346,6 +1725,87 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
 
         } else if (methodName == "delete" && !argVals.empty()) {
             llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+
+            // db_indexed delete-hook: load the row, remove from each index.
+            // Note: must happen BEFORE the main delete because aiml_db_kv_get
+            // returns an mmap-backed pointer that the delete invalidates.
+            if (ctx.classes.count(vName) && ctx.classes[vName].type) {
+                llvm::StructType* valStructTy = ctx.classes[vName].type;
+                std::vector<std::pair<std::string, CompilerContext::StructMember>> indexedFields;
+                for (auto& [fname, mem] : ctx.classes[vName].members) {
+                    if (mem.db_indexed) indexedFields.push_back({fname, mem});
+                }
+                if (!indexedFields.empty()) {
+                    llvm::Function* getF = ctx.getFunction("aiml_db_kv_get", i8p, {i8p, i8p});
+                    llvm::Value* oldPtr = ctx.builder.CreateCall(getF, {kvPtr, keyVal});
+                    llvm::Value* oldNull = ctx.builder.CreateICmpEQ(
+                        oldPtr, llvm::ConstantPointerNull::get(
+                            llvm::PointerType::get(ctx.context, 0)));
+                    llvm::Function* parent = ctx.builder.GetInsertBlock()->getParent();
+                    llvm::BasicBlock* rmBB   = llvm::BasicBlock::Create(ctx.context, "kvdel_idxrm", parent);
+                    llvm::BasicBlock* contBB = llvm::BasicBlock::Create(ctx.context, "kvdel_idxcont", parent);
+                    ctx.builder.CreateCondBr(oldNull, contBB, rmBB);
+                    ctx.builder.SetInsertPoint(rmBB);
+                    for (auto& [fname, mem] : indexedFields) {
+                        // Same emitIndexOp pattern as set-hook, but we're in a
+                        // separate scope so we duplicate the per-field walk here.
+                        llvm::Value* typedBase = ctx.builder.CreateBitCast(
+                            oldPtr, llvm::PointerType::get(ctx.context, 0));
+                        llvm::Value* fldGep = ctx.builder.CreateStructGEP(
+                            valStructTy, typedBase, mem.index);
+                        llvm::Value* fNameVal = ctx.builder.CreateGlobalStringPtr(fname);
+                        llvm::Function* idxLookup = ctx.getFunction(
+                            "aiml_db_index_lookup", i8p, {i8p, i8p});
+                        llvm::Value* idxHandle = ctx.builder.CreateCall(
+                            idxLookup, {kvPtr, fNameVal});
+                        llvm::Function* idxRm = ctx.getFunction(
+                            "aiml_db_index_remove",
+                            ctx.builder.getVoidTy(), {i8p, i8p, i8p});
+
+                        const std::string& fTy = mem.typeName;
+                        if (fTy == "string") {
+                            llvm::Value* fVal = ctx.builder.CreateLoad(i8p, fldGep);
+                            ctx.builder.CreateCall(idxRm, {idxHandle, fVal, keyVal});
+                        } else if (fTy == "i32") {
+                            llvm::Value* fVal = ctx.builder.CreateLoad(i32, fldGep);
+                            llvm::Value* fStr = StringUtils::intToString(ctx, fVal);
+                            ctx.builder.CreateCall(idxRm, {idxHandle, fStr, keyVal});
+                        } else if (fTy == "i64") {
+                            llvm::Value* fVal = ctx.builder.CreateLoad(i64, fldGep);
+                            llvm::Value* fStr = StringUtils::int64ToString(ctx, fVal);
+                            ctx.builder.CreateCall(idxRm, {idxHandle, fStr, keyVal});
+                        } else if (fTy.rfind("list<", 0) == 0 &&
+                                   fTy.substr(5, fTy.size() - 6) == "string") {
+                            llvm::StructType* lstTy = (llvm::StructType*)ctx.getLLVMType(fTy);
+                            llvm::Value* sizePtr = ctx.builder.CreateStructGEP(lstTy, fldGep, 0);
+                            llvm::Value* dataPtr = ctx.builder.CreateStructGEP(lstTy, fldGep, 2);
+                            llvm::Value* size    = ctx.builder.CreateLoad(i32, sizePtr);
+                            llvm::Value* data    = ctx.builder.CreateLoad(i8p, dataPtr);
+                            llvm::BasicBlock* lh = llvm::BasicBlock::Create(ctx.context, "delidx_lh", parent);
+                            llvm::BasicBlock* lb = llvm::BasicBlock::Create(ctx.context, "delidx_lb", parent);
+                            llvm::BasicBlock* le = llvm::BasicBlock::Create(ctx.context, "delidx_le", parent);
+                            llvm::AllocaInst* iAlloca = ctx.createEntryAlloca(i32, "delidx_i");
+                            ctx.builder.CreateStore(ctx.builder.getInt32(0), iAlloca);
+                            ctx.builder.CreateBr(lh);
+                            ctx.builder.SetInsertPoint(lh);
+                            llvm::Value* iCur = ctx.builder.CreateLoad(i32, iAlloca);
+                            llvm::Value* cond = ctx.builder.CreateICmpSLT(iCur, size);
+                            ctx.builder.CreateCondBr(cond, lb, le);
+                            ctx.builder.SetInsertPoint(lb);
+                            llvm::Value* elemGep = ctx.builder.CreateGEP(i8p, data, iCur);
+                            llvm::Value* elem    = ctx.builder.CreateLoad(i8p, elemGep);
+                            ctx.builder.CreateCall(idxRm, {idxHandle, elem, keyVal});
+                            llvm::Value* iNext = ctx.builder.CreateAdd(iCur, ctx.builder.getInt32(1));
+                            ctx.builder.CreateStore(iNext, iAlloca);
+                            ctx.builder.CreateBr(lh);
+                            ctx.builder.SetInsertPoint(le);
+                        }
+                    }
+                    ctx.builder.CreateBr(contBB);
+                    ctx.builder.SetInsertPoint(contBB);
+                }
+            }
+
             llvm::Function* f = ctx.getFunction("aiml_db_kv_delete",
                 ctx.builder.getVoidTy(), {i8p, i8p});
             ctx.builder.CreateCall(f, {kvPtr, keyVal});
@@ -1485,6 +1945,95 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Function* f = ctx.getFunction("aiml_iter_create_kv", i8p, {i8p});
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {kvPtr}));
 
+        } else if (methodName == "findings_by" || methodName == "finding_by") {
+            // db_indexed lookup methods.  Compile-time checks:
+            //   1. Arg-Count >= 2 (field_literal, search_value)
+            //   2. First arg is a string LiteralExpr (no runtime field names in V1)
+            //   3. Value-type has that field
+            //   4. Field has db_indexed:true
+            //   5. finding_by requires unique:true
+            if (call->args.size() < 2) {
+                LOG_ERROR(methodName + ": expected (field_name, value), got " +
+                          std::to_string(call->args.size()) + " args");
+                return ctx.ir_gen->getInt32(0);
+            }
+            auto* lit = dynamic_cast<AIML::AST::LiteralExpr*>(call->args[0].get());
+            if (!lit || lit->type != "string") {
+                LOG_ERROR(methodName + ": first arg must be a string literal "
+                          "(the field name).  Dynamic field names are not "
+                          "supported in V1.");
+                return ctx.ir_gen->getInt32(0);
+            }
+            std::string fieldName = lit->value;
+            if (!ctx.classes.count(vName)) {
+                LOG_ERROR(methodName + ": Kv value type '" + vName +
+                          "' is unknown (no model/class registered)");
+                return ctx.ir_gen->getInt32(0);
+            }
+            auto& vci = ctx.classes[vName];
+            auto memIt = vci.members.find(fieldName);
+            if (memIt == vci.members.end()) {
+                LOG_ERROR(methodName + ": field '" + fieldName + "' does not "
+                          "exist on model '" + vName + "'");
+                return ctx.ir_gen->getInt32(0);
+            }
+            auto& mem = memIt->second;
+            if (!mem.db_indexed) {
+                LOG_ERROR(methodName + ": field '" + fieldName + "' on model '" +
+                          vName + "' is not db_indexed.  Add "
+                          "`{ db_indexed: true }` to the field declaration.");
+                return ctx.ir_gen->getInt32(0);
+            }
+            if (methodName == "finding_by" && !mem.db_indexed_unique) {
+                LOG_ERROR("finding_by: field '" + fieldName + "' on model '" +
+                          vName + "' is not unique.  Use findings_by, or add "
+                          "`unique: true` to the modifier.");
+                return ctx.ir_gen->getInt32(0);
+            }
+
+            // Resolve index handle at runtime: aiml_db_index_lookup(kv, field_name).
+            llvm::Value* fNameVal = ctx.builder.CreateGlobalStringPtr(fieldName);
+            llvm::Function* idxLookup = ctx.getFunction(
+                "aiml_db_index_lookup", i8p, {i8p, i8p});
+            llvm::Value* idxHandle = ctx.builder.CreateCall(idxLookup, {kvPtr, fNameVal});
+
+            // Convert search value to char* depending on field type.
+            llvm::Value* searchVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
+            const std::string& fTy = mem.typeName;
+            if (fTy == "i32") {
+                searchVal = StringUtils::intToString(ctx, searchVal);
+            } else if (fTy == "i64") {
+                searchVal = StringUtils::int64ToString(ctx, searchVal);
+            }
+            // string and list<string> already pass string args; other types
+            // (f32/f64/bool) are caught here as we don't support them yet.
+            else if (fTy != "string" && fTy.rfind("list<", 0) != 0) {
+                LOG_ERROR(methodName + ": field '" + fieldName + "' has type '" +
+                          fTy + "' which is not supported by db_indexed in V1");
+                return ctx.ir_gen->getInt32(0);
+            }
+
+            if (methodName == "finding_by") {
+                // Returns const char* (or "" if no match).
+                llvm::Function* f = ctx.getFunction(
+                    "aiml_db_index_finding", i8p, {i8p, i8p});
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {idxHandle, searchVal}));
+            }
+            // findings_by: returns list<string> via out-param.
+            llvm::Type* listTy = ctx.getLLVMType("list<string>");
+            if (!listTy) {
+                LOG_ERROR(methodName + ": list<string> type unavailable");
+                return ctx.ir_gen->getInt32(0);
+            }
+            llvm::AllocaInst* outList = ctx.createEntryAlloca(listTy, "findings_buf");
+            // Initialize the list (size=0, capacity=0, data=null).
+            ctx.builder.CreateStore(llvm::Constant::getNullValue(listTy), outList);
+            llvm::Value* outPtr = ctx.builder.CreateBitCast(outList, i8p);
+            llvm::Function* f = ctx.getFunction(
+                "aiml_db_index_findings", ctx.builder.getVoidTy(), {i8p, i8p, i8p});
+            ctx.builder.CreateCall(f, {idxHandle, searchVal, outPtr});
+            // Return the list struct by value (loaded from alloca).
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(listTy, outList, "findings_val"));
         }
         LOG_ERROR("Unknown Kv method: " + methodName);
         return ctx.ir_gen->getInt32(0);
@@ -1758,7 +2307,78 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          }
          std::vector<IRValue*> methodArgs;
          methodArgs.push_back(thisPtr);
-         for (auto* a : argVals) methodArgs.push_back(a);
+         // Implicit ptr<Concrete> → ptr<Interface> upcast per arg, by checking
+         // expected LLVM param type vs source AIML type.
+         llvm::FunctionType* fnTy = func->getFunctionType();
+         for (size_t i = 0; i < argVals.size(); ++i) {
+             IRValue* a = argVals[i];
+             // Param index in fnTy: +1 for `this`.
+             size_t paramIdx = i + 1;
+             llvm::Type* expected = (paramIdx < fnTy->getNumParams())
+                 ? fnTy->getParamType(paramIdx) : nullptr;
+             if (expected && expected->isStructTy()) {
+                 auto* expectedSt = llvm::cast<llvm::StructType>(expected);
+                 if (expectedSt->hasName() &&
+                     expectedSt->getName().startswith("AimlFatPtr_") &&
+                     i < call->args.size()) {
+                     if (auto* ve = dynamic_cast<VariableExpr*>(call->args[i].get())) {
+                         Symbol* srcSym = resolveVariable(ve->name);
+                         if (srcSym) {
+                             llvm::Value* rawArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                             llvm::Value* fat = buildInterfaceUpcast(rawArg, srcSym->typeName, expectedSt);
+                             if (fat) {
+                                 a = ctx.ir_gen->wrap(fat);
+                             }
+                         }
+                     }
+                 }
+             }
+             // "expected ptr, got struct" coercion — mirrors coerceArgs() for
+             // free-function calls.  Common case: caller passes a local
+             // variable typed list<T>/map<K:V>; visitExpression returned the
+             // loaded struct value, but callee parameter is `ptr` (struct
+             // arg passed by reference).  Re-evaluate as lvalue (alloca-ptr).
+             //
+             // SUBTLETY: when the source symbol is itself a by-ref param
+             // (sym->is_byref_arg), its alloca holds a POINTER, not the
+             // struct.  Address-of-alloca would be ptr-to-ptr-to-struct
+             // (one indirection too many).  In that case we must LOAD the
+             // pointer from the alloca and pass *that* as ptr-to-struct.
+             // Repro: tests/test_class_method_chain_list_arg.aiml.
+             if (expected && expected->isPointerTy() && i < call->args.size()) {
+                 llvm::Value* rawArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                 if (rawArg && rawArg->getType()->isStructTy()) {
+                     // plain variable OR dotted member-access (out.card) → address.
+                     std::string lvTy;
+                     if (IRValue* addr = emitLValueAddress(call->args[i].get(), lvTy)) {
+                         llvm::Value* passVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(addr));
+                         if (passVal->getType() != expected)
+                             passVal = ctx.builder.CreateBitCast(passVal, expected);
+                         a = ctx.ir_gen->wrap(passVal);
+                     }
+                 }
+             }
+             // Hard type-mismatch guard (mirrors coerceArgs() for free functions):
+             // a numeric parameter (i32/enum/bool/float) receiving a pointer value
+             // (e.g. a string literal) is never valid — report it HERE with a
+             // source location instead of failing later in the LLVM IR verifier.
+             if (expected && (expected->isIntegerTy() || expected->isFloatingPointTy())) {
+                 llvm::Value* rawA = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                 if (rawA && rawA->getType()->isPointerTy()) {
+                     std::string hint =
+                         expected->isIntegerTy()
+                             ? " — passing a string/pointer where an integer- or "
+                               "enum-typed argument is expected; use EnumType.<value> "
+                               "or an int literal"
+                             : " — passing a string/pointer where a float-typed "
+                               "argument is expected";
+                     LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "Call to '" +
+                               func->getName().str() + "': argument " +
+                               std::to_string(i + 1) + " type mismatch" + hint);
+                 }
+             }
+             methodArgs.push_back(a);
+         }
          IRValue* callResult = ctx.ir_gen->createCall(func->getName().str(), methodArgs, "call_method");
          // If the method returns a struct (list<T>, model, etc.), store the value
          // into a temporary alloca and return the pointer.  This matches what

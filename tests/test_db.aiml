@@ -1,3 +1,4 @@
+# static-check: off
 # Tests for AionDB: Store<T>, Kv<K:V>, VecStore + VecResult
 # Expected exit code: 0
 
@@ -5,34 +6,34 @@
 
 - class:
     name: Entity
-    members: [[id, i32], [hp, i32]]
+    members: [[var_id, i32], [var_hp, i32]]
 
 - decl: [entities, Store<Entity>]
 - set: [entities, { call: [db.open, "entities"] }]
 
 # Insert an entity
-- decl: [e, Entity]
-- set: [e.id, 42]
-- set: [e.hp, 100]
+- decl: [var_e, Entity]
+- set: [var_e.var_id, 42]
+- set: [var_e.var_hp, 100]
 - decl: [eid, i32]
-- set: [eid, { call: [entities.insert, e] }]
-- print: ["inserted id: ${eid}"]
+- set: [eid, { call: [entities.insert, var_e] }]
+- print: ["inserted var_id: ${eid}"]
 
 # Get entity back via ptr
-- decl: [p, ptr<Entity>]
-- set: [p, { call: [entities.get, 1] }]
-- print: ["hp: ${p.hp}"]
+- decl: [var_p, ptr<Entity>]
+- set: [var_p, { call: [entities.get, 1] }]
+- print: ["var_hp: ${var_p.var_hp}"]
 
 # len
-- decl: [n, i32]
-- set: [n, { call: [entities.len] }]
-- print: ["len: ${n}"]
+- decl: [var_n, i32]
+- set: [var_n, { call: [entities.len] }]
+- print: ["len: ${var_n}"]
 
 # update
-- set: [e.hp, 200]
-- call: [entities.update, 1, e]
-- set: [p, { call: [entities.get, 1] }]
-- print: ["hp after update: ${p.hp}"]
+- set: [var_e.var_hp, 200]
+- call: [entities.update, 1, var_e]
+- set: [var_p, { call: [entities.get, 1] }]
+- print: ["var_hp after update: ${var_p.var_hp}"]
 
 # ── Phase B: Kv<string:string> ────────────────────────────────────────────────
 
@@ -41,9 +42,9 @@
 
 - call: [cfg.set, "theme", "dark"]
 
-- decl: [v, string]
-- set: [v, { call: [cfg.get, "theme"] }]
-- print: ["theme: ${v}"]
+- decl: [var_v, string]
+- set: [var_v, { call: [cfg.get, "theme"] }]
+- print: ["theme: ${var_v}"]
 
 - decl: [has, i32]
 - set: [has, { call: [cfg.has, "theme"] }]
@@ -74,101 +75,101 @@
 - call: [ikv.set, "beta", "2"]
 - call: [ikv.set, "gamma", "3"]
 
-- decl: [it, "iterator<string>", { call: [ikv.iter] }]
+- decl: [var_it, "iterator<string>", { call: [ikv.iter] }]
 - decl: [iter_count, i32, 0]
 - while:
-    condition: { call: [it.has_next] }
+    condition: { call: [var_it.has_next] }
     body:
-      - decl: [k, string, { call: [it.next] }]
-      - print: ["iter key: ${k}"]
+      - decl: [var_k, string, { call: [var_it.next] }]
+      - print: ["iter key: ${var_k}"]
       - set: [iter_count, { +: [iter_count, 1] }]
 - print: ["iter_count: ${iter_count}"]
 
 # reset and iterate again
-- call: [it.reset]
+- call: [var_it.reset]
 - decl: [iter_count2, i32, 0]
 - while:
-    condition: { call: [it.has_next] }
+    condition: { call: [var_it.has_next] }
     body:
-      - decl: [k2, string, { call: [it.next] }]
+      - decl: [var_k2, string, { call: [var_it.next] }]
       - set: [iter_count2, { +: [iter_count2, 1] }]
 - print: ["iter_count after reset: ${iter_count2}"]
-- call: [free, it]
+- call: [free, var_it]
 
 # ── Phase C: VecStore + VecResult ─────────────────────────────────────────────
 
-- decl: [vs, VecStore]
-- set: [vs, { call: [db.open_vec, "vecs", 3] }]
+- decl: [var_vs, VecStore]
+- set: [var_vs, { call: [db.open_vec, "vecs", 3] }]
 
 # Insert vector doc1 = [1, 0, 0]
-- decl: [v1, list<f32>]
-- call: [v1.push, 1.0]
-- call: [v1.push, 0.0]
-- call: [v1.push, 0.0]
-- call: [vs.insert, "doc1", v1]
+- decl: [var_v1, list<f32>]
+- call: [var_v1.push, 1.0]
+- call: [var_v1.push, 0.0]
+- call: [var_v1.push, 0.0]
+- call: [var_vs.insert, "doc1", var_v1]
 
 # Insert vector doc2 = [0, 1, 0]
-- decl: [v2, list<f32>]
-- call: [v2.push, 0.0]
-- call: [v2.push, 1.0]
-- call: [v2.push, 0.0]
-- call: [vs.insert, "doc2", v2]
+- decl: [var_v2, list<f32>]
+- call: [var_v2.push, 0.0]
+- call: [var_v2.push, 1.0]
+- call: [var_v2.push, 0.0]
+- call: [var_vs.insert, "doc2", var_v2]
 
 - decl: [vlen, i32]
-- set: [vlen, { call: [vs.len] }]
-- print: ["vs len: ${vlen}"]
+- set: [vlen, { call: [var_vs.len] }]
+- print: ["var_vs len: ${vlen}"]
 
 # Search with query = [1, 0, 0] — should match doc1 first
-- decl: [q, list<f32>]
-- call: [q.push, 1.0]
-- call: [q.push, 0.0]
-- call: [q.push, 0.0]
+- decl: [var_q, list<f32>]
+- call: [var_q.push, 1.0]
+- call: [var_q.push, 0.0]
+- call: [var_q.push, 0.0]
 
 - decl: [results, list<ptr<VecResult>>]
-- set: [results, { call: [vs.search, q, 2] }]
+- set: [results, { call: [var_vs.search, var_q, 2] }]
 
-- decl: [r, ptr<VecResult>]
-- set: [r, { call: [results.get, 0] }]
-- print: ["top id: ${r.id}"]
+- decl: [var_r, ptr<VecResult>]
+- set: [var_r, { call: [results.get, 0] }]
+- print: ["top var_id: ${var_r.id}"]
 
 # ── Phase D: TimeSeries<T> ────────────────────────────────────────────────
 
 - class:
     name: GameState
-    members: [[score, i32], [hp, i32]]
+    members: [[score, i32], [var_hp, i32]]
 
 - decl: [history, TimeSeries<GameState>]
 - set: [history, { call: [db.open_timeseries, "game_history"] }]
 
-- decl: [gs, GameState]
-- set: [gs.score, 100]
-- set: [gs.hp, 75]
-- call: [history.append, gs, 1000]
+- decl: [var_gs, GameState]
+- set: [var_gs.score, 100]
+- set: [var_gs.var_hp, 75]
+- call: [history.append, var_gs, 1000]
 
-- set: [gs.score, 200]
-- set: [gs.hp, 50]
-- call: [history.append, gs, 2000]
+- set: [var_gs.score, 200]
+- set: [var_gs.var_hp, 50]
+- call: [history.append, var_gs, 2000]
 
 - decl: [tlen, i32]
 - set: [tlen, { call: [history.len] }]
 - print: ["ts len: ${tlen}"]
 
-- decl: [tp, ptr<GameState>]
-- set: [tp, { call: [history.at, 1500] }]
-- print: ["score at 1500: ${tp.score}"]
+- decl: [var_tp, ptr<GameState>]
+- set: [var_tp, { call: [history.at, 1500] }]
+- print: ["score at 1500: ${var_tp.score}"]
 
 # ── Phase E: db.run_system (ECS loop) + db.query (function predicate) ─────────
 # Expected output:
-#   "sys hp: 80"      — run_system: slot 1 active in both stores
-#   "query count: 1"  — db.query: only hp=80 passes is_high_hp predicate
+#   "sys var_hp: 80"      — run_system: slot 1 active in both stores
+#   "query count: 1"  — db.query: only var_hp=80 passes is_high_hp predicate
 
 - class:
     name: Health
-    members: [[hp, i32]]
+    members: [[var_hp, i32]]
 
 - class:
     name: Pos
-    members: [[x, i32]]
+    members: [[var_x, i32]]
 
 # Open two stores
 - decl: [hp_store, Store<Health>]
@@ -177,36 +178,36 @@
 - decl: [pos_store, Store<Pos>]
 - set: [pos_store, { call: [db.open, "pos_data"] }]
 
-# Entity 1: has both Health (hp=80) and Pos
-- decl: [h1, Health]
-- set: [h1.hp, 80]
-- call: [hp_store.insert, h1]
+# Entity 1: has both Health (var_hp=80) and Pos
+- decl: [var_h1, Health]
+- set: [var_h1.var_hp, 80]
+- call: [hp_store.insert, var_h1]
 
-- decl: [p1, Pos]
-- set: [p1.x, 10]
-- call: [pos_store.insert, p1]
+- decl: [var_p1, Pos]
+- set: [var_p1.var_x, 10]
+- call: [pos_store.insert, var_p1]
 
-# Entity 2: only has Health (hp=30) — no Pos → excluded from run_system
-- decl: [h2, Health]
-- set: [h2.hp, 30]
-- call: [hp_store.insert, h2]
+# Entity 2: only has Health (var_hp=30) — no Pos → excluded from run_system
+- decl: [var_h2, Health]
+- set: [var_h2.var_hp, 30]
+- call: [hp_store.insert, var_h2]
 
-# System function: prints hp of entities with BOTH stores active
+# System function: prints var_hp of entities with BOTH stores active
 - def:
     name: tick_hp
-    args: [[h, ptr<Health>]]
+    args: [[var_h, ptr<Health>]]
     return: void
     body:
-      - print: ["sys hp: ${h.hp}"]
+      - print: ["sys var_hp: ${var_h.var_hp}"]
 
-# Predicate: returns 1 if hp > 50
+# Predicate: returns 1 if var_hp > 50
 - def:
     name: is_high_hp
-    args: [[h, ptr<Health>]]
+    args: [[var_h, ptr<Health>]]
     return: i32
     body:
       - if:
-          condition: { gt: [h.hp, 50] }
+          condition: { gt: [var_h.var_hp, 50] }
           then:
             - return: 1
           else:
@@ -215,7 +216,7 @@
 # ECS run_system — only slot 1 is active in both stores
 - call: [db.run_system, tick_hp, hp_store, pos_store]
 
-# db.query with function predicate — only hp=80 qualifies
+# db.query with function predicate — only var_hp=80 qualifies
 - decl: [high_hp, list<ptr<Health>>]
 - set: [high_hp, { call: [db.query, hp_store, {where: is_high_hp}] }]
 - decl: [qlen, i32]

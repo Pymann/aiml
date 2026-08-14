@@ -1,4 +1,5 @@
 #include "ws_runtime.h"
+#include "string_runtime.h"
 
 #ifdef __EMSCRIPTEN__
 // ══════════════════════════════════════════════════════════════════════════════
@@ -146,9 +147,8 @@ char* aiml_ws_recv(void* h) {
     while (!ws->rx_head && !ws->is_closed) emscripten_sleep(5);
     WsRxNode* n = rx_pop(ws);
     if (!n) return nullptr;
-    char* out = (char*)malloc((size_t)n->len + 1);
+    char* out = aiml_str_alloc((size_t)n->len);
     memcpy(out, n->data, (size_t)n->len);
-    out[n->len] = '\0';
     free(n->data);
     free(n);
     return out;
@@ -422,6 +422,7 @@ static char* hdr_get(const char* hdrs, const char* name) {
             if (!e) e = v + strlen(v);
             while (e > v && (e[-1] == ' ' || e[-1] == '\t')) e--;
             size_t vl = (size_t)(e - v);
+            // Internal helper — caller uses plain free(), so keep raw malloc.
             char* out = (char*)malloc(vl + 1);
             memcpy(out, v, vl);
             out[vl] = '\0';

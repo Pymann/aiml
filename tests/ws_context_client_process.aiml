@@ -16,12 +16,12 @@
       - if:
           condition: { call: [client.has_event] }
           then:
-            - decl: [ev, mirror_event]
-            - set: [ev, { call: [client.next_event] }]
+            - decl: [var_ev, mirror_event]
+            - set: [var_ev, { call: [client.next_event] }]
             - if:
-                condition: { eq: [ev.type, "object_registered"] }
+                condition: { eq: [var_ev.type, "object_registered"] }
                 then:
-                  - set: [view_nid, ev.net_id]
+                  - set: [view_nid, var_ev.net_id]
                   - set: [got_view, 1]
       - if:
           condition: { eq: [got_view, 0] }

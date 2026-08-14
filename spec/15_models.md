@@ -150,3 +150,23 @@ Models can also be allocated on the heap. Dot notation automatically dereference
 Type aliases (e.g. `ServerConfig` as a name for `ptr<ServerConfig>`) can be defined for
 frequently used handle types so that `ptr<...>` does not have to be written out
 everywhere.
+
+## Default Field Initialization
+
+When a model is declared without an initializer (`- decl: [x, MyModel]`), every
+field is initialized to a safe, immediately-usable default — you never observe an
+uninitialized/null field:
+
+- `list<T>` / `map<K:V>` → empty container (`.len == 0`, `.push` works at once).
+- **`string` → the empty string `""`** (`.len == 0`). A string field is an `i8*`
+  and `.len` lowers to `strlen(ptr)`; a null field would segfault on any access,
+  so unset string fields default to `""` — mirroring the empty-container rule.
+- numeric (`i32`/`f32`/…) / `bool` → `0`.
+- a field with an explicit default (`- [name, type, default]`) → that default.
+
+This holds for both stack decls and `{ new: Model }` heap allocations, and for
+fields of nested models. Both paths route through the same field-init routine
+(`initClassContainerMembers`), so `{ new: }` inits string/list/map/nested fields
+identically to a stack `decl` (with `{ new: T, field: val }` overrides applied on
+top). Regressions: `tests/test_model_string_field_default_init.aiml` (stack) and
+`tests/test_model_string_default_heap_new.aiml` (`{ new: }` heap).

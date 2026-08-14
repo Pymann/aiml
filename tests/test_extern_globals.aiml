@@ -1,61 +1,62 @@
+# static-check: off
 - import: "tests/lib_extern_a.aiml"
 - import: "tests/lib_extern_b.aiml"
 
 - call: [exta.set_counter, 10]
-- decl: [c0, i32, { call: [extb.get_counter] }]
-- print: ["extern A->B counter=${c0}"]
+- decl: [var_c0, i32, { call: [extb.get_counter] }]
+- print: ["extern A->B counter=${var_c0}"]
 
 - call: [extb.add_counter, 5]
 - call: [exta.inc_counter]
-- decl: [c1, i32, { call: [exta.get_counter] }]
-- decl: [c2, i32, { call: [extb.get_counter] }]
-- print: ["extern shared counter a=${c1} b=${c2}"]
+- decl: [var_c1, i32, { call: [exta.get_counter] }]
+- decl: [var_c2, i32, { call: [extb.get_counter] }]
+- print: ["extern shared counter a=${var_c1} b=${var_c2}"]
 
 - call: [exta.set_label, "alpha"]
-- decl: [s0, string, { call: [extb.get_label] }]
-- print: ["extern A->B label=${s0}"]
+- decl: [var_s0, string, { call: [extb.get_label] }]
+- print: ["extern A->B label=${var_s0}"]
 
 - call: [extb.append_mark, "-beta"]
-- decl: [s1, string, { call: [exta.get_label] }]
-- decl: [s2, string, { call: [extb.get_label] }]
-- print: ["extern shared label a=${s1} b=${s2}"]
+- decl: [var_s1, string, { call: [exta.get_label] }]
+- decl: [var_s2, string, { call: [extb.get_label] }]
+- print: ["extern shared label a=${var_s1} b=${var_s2}"]
 
 - decl: [fail, i32, 0]
 
 - if:
-    condition: { neq: [c0, 10] }
+    condition: { neq: [var_c0, 10] }
     then:
-      - print: ["FAIL extern c0=${c0}"]
+      - print: ["FAIL extern var_c0=${var_c0}"]
       - set: [fail, 1]
 
 - if:
-    condition: { neq: [c1, 16] }
+    condition: { neq: [var_c1, 16] }
     then:
-      - print: ["FAIL extern c1=${c1}"]
+      - print: ["FAIL extern var_c1=${var_c1}"]
       - set: [fail, 1]
 
 - if:
-    condition: { neq: [c2, 16] }
+    condition: { neq: [var_c2, 16] }
     then:
-      - print: ["FAIL extern c2=${c2}"]
+      - print: ["FAIL extern var_c2=${var_c2}"]
       - set: [fail, 1]
 
 - if:
-    condition: { eq: [{ eq: [s0, "alpha"] }, 0] }
+    condition: { eq: [{ eq: [var_s0, "alpha"] }, 0] }
     then:
-      - print: ["FAIL extern s0=${s0}"]
+      - print: ["FAIL extern var_s0=${var_s0}"]
       - set: [fail, 1]
 
 - if:
-    condition: { eq: [{ eq: [s1, "alpha-beta"] }, 0] }
+    condition: { eq: [{ eq: [var_s1, "alpha-beta"] }, 0] }
     then:
-      - print: ["FAIL extern s1=${s1}"]
+      - print: ["FAIL extern var_s1=${var_s1}"]
       - set: [fail, 1]
 
 - if:
-    condition: { eq: [{ eq: [s2, "alpha-beta"] }, 0] }
+    condition: { eq: [{ eq: [var_s2, "alpha-beta"] }, 0] }
     then:
-      - print: ["FAIL extern s2=${s2}"]
+      - print: ["FAIL extern var_s2=${var_s2}"]
       - set: [fail, 1]
 
 - if:

@@ -95,8 +95,27 @@ void*   aiml_mirror_session_next_rpc(void* session);
 /* Combines has_rpc + next_rpc. Returns AimlRpcEvent* with method=="" if queue empty. Never null. */
 void*   aiml_mirror_session_poll_rpc(void* session);
 
+/* Client convenience: send a typed-RPC request to `net_id`, then poll the
+ * incoming queue for up to `timeout_ms` (in 20ms ticks) waiting for an
+ * RPC whose method == `expect_method` (typically "set_result"). On match,
+ * decode the payload into `out` (which MUST be zero-initialised by the
+ * compiler glue) and return 1.  Return 0 on timeout.  Drops other RPCs
+ * silently — caller is responsible for ordering invariants.
+ *
+ * Used by the `session.send_and_await(...)` compiler-builtin so AIML
+ * code doesn't have to hand-roll the send + poll-loop + decode triple
+ * for every request type. */
+int32_t aiml_mirror_session_send_and_await(
+    void* session, int32_t net_id,
+    const char* method, int32_t arg_i32,
+    const void* req_obj, const AimlTypeNode* req_nodes, int32_t req_n_nodes,
+    const char* expect_method,
+    void* out_obj,       const AimlTypeNode* out_nodes, int32_t out_n_nodes,
+    int32_t timeout_ms);
+
 /* ── mirror_event field accessors ─────────────────────────────────────────── */
 
+int32_t     aiml_mirror_type_enum   (const char* type);  /* type-string → MirrorEventType enum (0=none) */
 const char* aiml_mirror_event_type  (void* ev);  /* "peer_connected" | "peer_disconnected" |
                                                      "object_registered" | "object_unregistered" */
 void*       aiml_mirror_event_peer  (void* ev);  /* AimlMirrorPeer* (null for object_* events) */

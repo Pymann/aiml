@@ -70,14 +70,14 @@
 
 - def:
     name: fn_log_if
-    args: [[x, i32]]
+    args: [[var_x, i32]]
     body:
       - if:
-          condition: { eq: [x, 0] }
+          condition: { eq: [var_x, 0] }
           then:
-            - call: [log.debug, "x is zero"]
+            - call: [log.debug, "var_x is zero"]
           else:
-            - call: [log.debug, "x is not zero"]
+            - call: [log.debug, "var_x is not zero"]
       - call: [log.info, "fn_log_if done"]
 
 - call: [fn_log_if, 0]
@@ -88,39 +88,39 @@
 
 - def:
     name: fn_log_if_ret
-    args: [[x, i32]]
+    args: [[var_x, i32]]
     return: string
     body:
       - if:
-          condition: { eq: [x, 0] }
+          condition: { eq: [var_x, 0] }
           then:
             - call: [log.warn, "returning early"]
             - return: "early"
       - call: [log.info, "returning normal"]
       - return: "normal"
 
-- decl: [r1, string]
-- set:  [r1, { call: [fn_log_if_ret, 0] }]
-- print: ["fn_log_if_ret(0) = ${r1}"]
-- decl: [r2, string]
-- set:  [r2, { call: [fn_log_if_ret, 1] }]
-- print: ["fn_log_if_ret(1) = ${r2}"]
+- decl: [var_r1, string]
+- set:  [var_r1, { call: [fn_log_if_ret, 0] }]
+- print: ["fn_log_if_ret(0) = ${var_r1}"]
+- decl: [var_r2, string]
+- set:  [var_r2, { call: [fn_log_if_ret, 1] }]
+- print: ["fn_log_if_ret(1) = ${var_r2}"]
 - print: ["phase H done"]
 
 # ── Phase I: log inside while loop ──────────────────────────────────────────
 
 - def:
     name: fn_log_while
-    args: [[n, i32]]
+    args: [[var_n, i32]]
     body:
-      - decl: [i, i32]
-      - set:  [i, 0]
+      - decl: [var_i, i32]
+      - set:  [var_i, 0]
       - while:
-          condition: { "<": [i, n] }
+          condition: { "<": [var_i, var_n] }
           body:
-            - call: [log.debug, "loop i=${i}"]
-            - set: [i, { "+": [i, 1] }]
-      - call: [log.info, "loop finished after ${n} iterations"]
+            - call: [log.debug, "loop var_i=${var_i}"]
+            - set: [var_i, { "+": [var_i, 1] }]
+      - call: [log.info, "loop finished after ${var_n} iterations"]
 
 - call: [fn_log_while, 3]
 - print: ["phase I done"]
@@ -129,34 +129,34 @@
 
 - def:
     name: fn_nested_if_log
-    args: [[a, i32], [b, i32]]
+    args: [[var_a, i32], [var_b, i32]]
     return: i32
     body:
       - if:
-          condition: { ">": [a, 0] }
+          condition: { ">": [var_a, 0] }
           then:
-            - call: [log.debug, "a > 0"]
+            - call: [log.debug, "var_a > 0"]
             - if:
-                condition: { ">": [b, 0] }
+                condition: { ">": [var_b, 0] }
                 then:
-                  - call: [log.debug, "b > 0 too"]
+                  - call: [log.debug, "var_b > 0 too"]
                   - return: 1
                 else:
-                  - call: [log.warn, "b <= 0"]
+                  - call: [log.warn, "var_b <= 0"]
                   - return: 0
           else:
-            - call: [log.warn, "a <= 0"]
+            - call: [log.warn, "var_a <= 0"]
             - return: -1
 
-- decl: [v1, i32]
-- set:  [v1, { call: [fn_nested_if_log, 1, 1] }]
-- print: ["nested(1,1) = ${v1}"]
-- decl: [v2, i32]
-- set:  [v2, { call: [fn_nested_if_log, 1, 0] }]
-- print: ["nested(1,0) = ${v2}"]
-- decl: [v3, i32]
-- set:  [v3, { call: [fn_nested_if_log, 0, 5] }]
-- print: ["nested(0,5) = ${v3}"]
+- decl: [var_v1, i32]
+- set:  [var_v1, { call: [fn_nested_if_log, 1, 1] }]
+- print: ["nested(1,1) = ${var_v1}"]
+- decl: [var_v2, i32]
+- set:  [var_v2, { call: [fn_nested_if_log, 1, 0] }]
+- print: ["nested(1,0) = ${var_v2}"]
+- decl: [var_v3, i32]
+- set:  [var_v3, { call: [fn_nested_if_log, 0, 5] }]
+- print: ["nested(0,5) = ${var_v3}"]
 - print: ["phase J done"]
 
 # ── Phase K: all log levels inside function ─────────────────────────────────
@@ -167,7 +167,7 @@
     body:
       - call: [log.verbose,    "v"]
       - call: [log.debug,      "d"]
-      - call: [log.info,       "i"]
+      - call: [log.info,       "var_i"]
       - call: [log.warn,       "w"]
       - call: [log.error,      "e"]
       - call: [log.deprecated, "dep"]

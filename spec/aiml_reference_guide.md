@@ -212,6 +212,7 @@ Paths are interned 64-bit pointers guaranteeing `O(1)` comparisons.
 ### 4.1 System & Environment (`sys`)
 - **`[sys.exit, code: i32]`**: Terminates the program cleanly.
 - **`[sys.get_arg, index: i32] -> string`**: Retrieves CLI string argument.
+- **`[sys.arg_dump, target: model|struct]`**: Parses `argv[1..]` into a named model/struct variable using normalized flag names such as `--foo-bar -> foo_bar`. Current implementation supports `i32`, `f32`, `string`, and `i64`; unknown flags terminate with exit code `1`.
 - **`[sys.size, type: AnyClass] -> u64`**: Returns exact memory footprint of a class.
 - **`[sys.type, object: any] -> Type`**: Returns the runtime class/model type object.
 - **`sys.env`** `(property)`: Returns environment variables as `map<string, string>`.

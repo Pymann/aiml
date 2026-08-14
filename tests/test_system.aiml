@@ -7,30 +7,30 @@
       
       # 1. File I/O
       - print: ["--- File I/O ---"]
-      - decl: [f, file_handle]
-      - set: [f, {call: [io.open, "test_io.txt", "w"]}]
-      - call: [io.write, f, "Hello AIML World\n"]
-      - call: [io.close, f]
+      - decl: [var_f, file_handle]
+      - set: [var_f, {call: [io.open, "test_io.txt", "w"]}]
+      - call: [io.write, var_f, "Hello AIML World\n"]
+      - call: [io.close, var_f]
       
-      - set: [f, {call: [io.open, "test_io.txt", "r"]}]
+      - set: [var_f, {call: [io.open, "test_io.txt", "r"]}]
       - decl: [content, string]
-      - set: [content, {call: [io.read_all, f]}]
-      - call: [io.close, f]
+      - set: [content, {call: [io.read_all, var_f]}]
+      - call: [io.close, var_f]
       - print: ["Read content: ${content}"]
       
       - call: [io.write, io.stdout, "Direct write to stdout\n"]
       
       # 2. Time
       - print: ["--- Time ---"]
-      - decl: [t1, i64]
-      - set: [t1, {call: [time.now]}]
-      - print: ["Start time: ${t1}"]
+      - decl: [var_t1, i64]
+      - set: [var_t1, {call: [time.now]}]
+      - print: ["Start time: ${var_t1}"]
       - call: [time.sleep_ms, 500]
-      - decl: [t2, i64]
-      - set: [t2, {call: [time.now]}]
-      - print: ["End time: ${t2}"]
+      - decl: [var_t2, i64]
+      - set: [var_t2, {call: [time.now]}]
+      - print: ["End time: ${var_t2}"]
       - decl: [diff, i64]
-      #- set: [diff, {-: [t2, t1]}] # Need sub operator or math call
+      #- set: [diff, {-: [var_t2, var_t1]}] # Need sub operator or math call
       #- print: ["Diff ~500ms? ${diff}"]
       
       # 3. System

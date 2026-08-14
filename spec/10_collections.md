@@ -35,6 +35,20 @@
 # Note: The ':' inside '<>' is the type separator, not YAML key syntax.
 - decl: [users, map<string:i32>]
 
+# Map-Literal-Init: {key: value, ...} als 3. Element des decl.  Compiler emittiert
+# einen .put-Call pro Eintrag.  Key-Typen: string, i32, i64, enum.  Values dürfen
+# beliebige Expressions sein (Literale, calls, ...).
+- decl: [scores, map<string:i32>, {alice: 1, bob: 2, charlie: 3}]
+
+# Enum-typed keys: das Literal nutzt die Enum-VALUE-Namen als Schlüssel; der
+# Compiler löst sie beim Emit direkt in die zugehörige i32-Konstante auf.
+# Vorteil ggü. `map<i32:i32>` mit reinen Zahl-Keys: (1) Review-freundlich —
+# man sieht sofort was gemeint ist, (2) Typo-Safety — unbekannter Enum-Wert
+# → Compile-Error statt still falscher Zahl.
+- enum: { name: Color, values: [red, green, blue] }
+- decl: [weight, map<Color:i32>, {red: 100, green: 200, blue: 300}]
+- set: [wg, { call: [weight.get, Color.green] }]   # → 200
+
 - call: [users.put, "alice", 1]
 - set: [val, { call: [users.get, "alice"] }]   # returns i32 or null pointer if missing
 - call: [users.remove, "alice"]                # raises MissingKeyError if key not found
@@ -133,3 +147,106 @@ fundamentally different semantics:
 
 The generic type parameters (`list<T>`, `map<K:V>`, `ptr<T>`, `chan<T>`) are **built-in only**.
 User-defined generic types or generic functions are not supported in AIML v1.
+
+## Pass-by-Reference for `list<T>` / `map<K:V>` Function Arguments
+
+When a `list<T>` or `map<K:V>` is declared as a function parameter, the
+compiler passes it **by reference** — analogous to Python and Java
+semantics.  The callee operates on the caller's struct directly; size
+changes, push/pop/put/remove, and any data-buffer growth all propagate
+back to the caller.
+
+```yaml
+- def:
+    name: push_to
+    args: [[xs, list<i32>]]
+    body:
+      - call: [xs.push, 99]
+      # xs.len here reflects the modified state.
+
+- def:
+    name: main
+    body:
+      - decl: [scores, list<i32>]
+      - call: [scores.push, 1]
+      - call: [scores.push, 2]
+      # scores.len == 2
+
+      - call: [push_to, scores]
+      # scores.len == 3  ← change propagated
+```
+
+The same applies to maps:
+
+```yaml
+- def:
+    name: register
+    args: [[users, map<string:i32>]]
+    body:
+      - call: [users.put, "bob", 7]
+
+- decl: [m, map<string:i32>]
+- call: [register, m]
+# m has {"bob": 7} after the call.
+```
+
+### Internal Representation
+
+At the LLVM level:
+
+- A by-value `list<T>` variable is a stack-allocated 3-field struct
+  `{ i32 size, i32 capacity, ptr data }`.
+- A `list<T>` **function argument** is lowered to an opaque pointer
+  (`ptr`) in the LLVM signature.  At the call-site the compiler passes
+  the *address* of the caller's struct (`alloca`).  Inside the callee
+  the parameter symbol carries `is_byref_arg = true` and the auto-deref
+  is inserted at every read/write site (`xs.len`, `xs.push`,
+  `xs.get(i)`, `${xs.len}`, …).
+- Other functions called with the same parameter as argument
+  (chained calls) receive the *same* pointer — the by-ref semantics
+  flow through the whole call chain without copy.
+
+### Need a copy instead?
+
+When a function genuinely wants a local working copy that must not leak
+mutations back, use [`sys.clone`](29_3_sys_clone.md) explicitly:
+
+```yaml
+- def:
+    name: sorted_copy
+    args: [[xs, list<i32>]]
+    return: list<i32>
+    body:
+      - decl: [out, list<i32>, { call: [sys.clone, xs] }]
+      - call: [out.sort]
+      - return: out
+```
+
+After this call, the caller's `xs` is unchanged and the returned `out`
+is the independently-sorted copy.
+
+### Comparison to Other Types
+
+| Argument type      | Passing semantics       |
+|--------------------|-------------------------|
+| `i32`, `f64`, …    | by value (primitive)    |
+| `string` (`i8*`)   | by reference (interned/shared)  |
+| `list<T>`          | **by reference (implicit)** |
+| `map<K:V>`         | **by reference (implicit)** |
+| `MyStruct` (model) | by value (struct copy)  |
+| `ptr<MyStruct>`    | by reference (explicit) |
+| `ref<MyStruct>`    | by reference (explicit, future borrow-checked) |
+
+Class methods follow class semantics: a class's own member methods
+implicitly receive `ref<ClassName>` as their `this` argument (see
+[16_classes.md](16_classes.md)).
+
+### Migration from Earlier AIML
+
+Earlier compiler versions passed `list<T>`/`map<K:V>` arguments **by
+value** — push/put inside a function silently did not propagate.  Code
+written under that model is unaffected if it relied solely on element-
+value mutation via the shared `data` pointer (which already worked).
+Code that pushed onto an arg and **returned the list** (the old
+work-around) still works — the return path is unaffected.  The new
+behaviour only *adds* propagation for size/capacity changes.

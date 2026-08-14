@@ -142,7 +142,12 @@ llvm::Value* resolveLValue(CompilerContext& ctx, const std::string& argStr, Comp
 static llvm::Value* resolvePropertyOrEnum(CompilerContext& ctx, const std::string& objName, const std::string& propName) {
      if (ctx.enums.count(objName)) {
          auto& enumValues = ctx.enums[objName];
-         if (enumValues.count(propName)) return ctx.builder.getInt32(enumValues[propName]);
+         if (enumValues.count(propName)) {
+             // Unused-enumerator analysis: ctx.enums is keyed by the qualified
+             // name, matching enumDeclMembers — record the use directly. (spec/49)
+             ctx.enumUsedMembers[objName].insert(propName);
+             return ctx.builder.getInt32(enumValues[propName]);
+         }
          LOG_ERROR(ctx.fmtLoc() + "Enum '" + objName + "' has no value '" + propName + "'");
          return ctx.builder.getInt32(0);
      }

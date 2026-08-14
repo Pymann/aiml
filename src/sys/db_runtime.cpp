@@ -238,7 +238,15 @@ static bool store_mmap_extend(AimlStore* s, int32_t new_capacity) {
     return true;
 }
 
+// RAII: enable the serializer schema-format guard for the duration of a KV
+// serialize/deserialize (persistent-storage path only), then restore the prior
+// value.  Save/restore makes it nesting-safe (e.g. kv_set → store_wal_write).
+// The guard makes stale on-disk blobs (written by an incompatible struct layout)
+// fail with a clear diagnostic instead of decoding as garbage → SIGSEGV.
+namespace { struct SerGuardOn { int prev; SerGuardOn() { prev = aiml_ser_set_guard(1); } ~SerGuardOn() { aiml_ser_set_guard(prev); } }; }
+
 static void store_wal_write(AimlStore* s, uint8_t op, int32_t id, const void* data) {
+    SerGuardOn _sg_;
     if (s->wal_fd < 0) return;
     char* blob = nullptr;
     uint32_t total_blob = 0;
@@ -272,6 +280,7 @@ static void store_typed_free_slot(AimlStore* s, int32_t idx) {
 }
 
 static bool store_typed_assign_blob(AimlStore* s, int32_t idx, const char* blob) {
+    SerGuardOn _sg_;
     if (!s || !s->typed_persistent || !s->ser_nodes || idx < 0 || !blob) return false;
     if ((int32_t)s->decoded_slots.size() <= idx) s->decoded_slots.resize((size_t)idx + 1);
     if ((int32_t)s->mem_active.size() <= idx) s->mem_active.resize((size_t)idx + 1, 0);
@@ -286,6 +295,7 @@ static bool store_typed_assign_blob(AimlStore* s, int32_t idx, const char* blob)
 }
 
 static bool store_typed_assign_value(AimlStore* s, int32_t idx, const void* elem) {
+    SerGuardOn _sg_;
     if (!s || !elem) return false;
     char* blob = aiml_ser_encode(elem, s->ser_nodes, s->ser_n);
     if (!blob) return false;
@@ -1448,6 +1458,7 @@ extern "C" void* aiml_db_kv_open_typed_persist(const char* name, int64_t val_siz
 }
 
 extern "C" void aiml_db_kv_set(void* kv_ptr, const char* key, const void* val, int64_t val_size) {
+    SerGuardOn _sg_;
     if (!kv_ptr || !key) return;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
     std::lock_guard<std::mutex> lock(kv->mtx);
@@ -1532,6 +1543,7 @@ extern "C" void aiml_db_kv_set(void* kv_ptr, const char* key, const void* val, i
 }
 
 extern "C" void* aiml_db_kv_get(void* kv_ptr, const char* key) {
+    SerGuardOn _sg_;
     if (!kv_ptr || !key) return nullptr;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
     std::lock_guard<std::mutex> lock(kv->mtx);
@@ -1595,6 +1607,7 @@ extern "C" void* aiml_db_kv_get(void* kv_ptr, const char* key) {
 // get_copy / set / delete on the same key. Subsequent get_copy on the same
 // key frees the previous copy's heap allocations.
 extern "C" void* aiml_db_kv_get_copy(void* kv_ptr, const char* key) {
+    SerGuardOn _sg_;
     if (!kv_ptr || !key) return nullptr;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
     std::lock_guard<std::mutex> lock(kv->mtx);
@@ -2239,4 +2252,234 @@ extern "C" void aiml_db_store_query(void* store_ptr, void* pred_fn,
     }
     for (int32_t i = 0; i < n; i++) list->data[i] = matches[(size_t)(start + i)];
     list->size = n;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Secondary Index (db_indexed modifier, spec/45_db_indexed_fields.md)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Indexes are pure in-memory state in V1.  Each (parent_kv, field_name) pair
+// owns one AimlIndex; the registry is global so that findings_by/finding_by
+// can resolve the handle from just the parent_kv variable and a field literal.
+//
+// For unique:true the index is a flat map<field_val, kv_key>; otherwise it's
+// a 1:N map<field_val, vector<kv_key>> with set semantics (idempotent add,
+// no duplicate kv_keys per field_val — see backlog Edge-Cases).
+
+struct AimlIndex {
+    std::mutex mtx;
+    bool unique = false;
+    std::string mode;  // "" | "lower"
+    std::unordered_map<std::string, std::vector<std::string>> map_1n;
+    std::unordered_map<std::string, std::string>              map_unique;
+};
+
+namespace {
+struct IndexKey {
+    void* parent_kv;
+    std::string field_name;
+    bool operator==(const IndexKey& o) const noexcept {
+        return parent_kv == o.parent_kv && field_name == o.field_name;
+    }
+};
+struct IndexKeyHash {
+    size_t operator()(const IndexKey& k) const noexcept {
+        return std::hash<void*>{}(k.parent_kv) ^
+               (std::hash<std::string>{}(k.field_name) << 1);
+    }
+};
+std::unordered_map<IndexKey, AimlIndex*, IndexKeyHash> g_index_registry;
+std::mutex g_index_registry_mtx;
+
+std::string idx_normalize(const std::string& v, const std::string& mode) {
+    if (mode != "lower") return v;
+    std::string r = v;
+    for (char& c : r) c = (char)std::tolower((unsigned char)c);
+    return r;
+}
+}  // namespace
+
+extern "C" void* aiml_db_index_open_for_kv(void* parent_kv, const char* field_name,
+                                            int32_t unique, const char* mode) {
+    if (!parent_kv || !field_name) return nullptr;
+    std::lock_guard<std::mutex> lk(g_index_registry_mtx);
+    IndexKey k{parent_kv, field_name};
+    auto it = g_index_registry.find(k);
+    if (it != g_index_registry.end()) return it->second;
+    auto* idx = new AimlIndex();
+    idx->unique = (unique != 0);
+    idx->mode   = mode ? mode : "";
+    g_index_registry[k] = idx;
+    return idx;
+}
+
+extern "C" void* aiml_db_index_lookup(void* parent_kv, const char* field_name) {
+    if (!parent_kv || !field_name) return nullptr;
+    std::lock_guard<std::mutex> lk(g_index_registry_mtx);
+    auto it = g_index_registry.find({parent_kv, field_name});
+    return it == g_index_registry.end() ? nullptr : (void*)it->second;
+}
+
+extern "C" void aiml_db_index_add(void* idx_ptr, const char* field_val, const char* kv_key) {
+    if (!idx_ptr || !field_val || !kv_key) return;
+    auto* idx = (AimlIndex*)idx_ptr;
+    std::lock_guard<std::mutex> lk(idx->mtx);
+    std::string k = idx_normalize(field_val, idx->mode);
+    if (idx->unique) {
+        idx->map_unique[k] = kv_key;
+    } else {
+        auto& lst = idx->map_1n[k];
+        if (std::find(lst.begin(), lst.end(), kv_key) == lst.end()) {
+            lst.emplace_back(kv_key);
+        }
+    }
+}
+
+extern "C" void aiml_db_index_remove(void* idx_ptr, const char* field_val, const char* kv_key) {
+    if (!idx_ptr || !field_val || !kv_key) return;
+    auto* idx = (AimlIndex*)idx_ptr;
+    std::lock_guard<std::mutex> lk(idx->mtx);
+    std::string k = idx_normalize(field_val, idx->mode);
+    if (idx->unique) {
+        auto it = idx->map_unique.find(k);
+        if (it != idx->map_unique.end() && it->second == kv_key) {
+            idx->map_unique.erase(it);
+        }
+    } else {
+        auto it = idx->map_1n.find(k);
+        if (it == idx->map_1n.end()) return;
+        auto& lst = it->second;
+        lst.erase(std::remove(lst.begin(), lst.end(), kv_key), lst.end());
+        if (lst.empty()) idx->map_1n.erase(it);
+    }
+}
+
+extern "C" void aiml_db_index_findings(void* idx_ptr, const char* field_val, void* out_list_v) {
+    auto* out = (AimlListRaw*)out_list_v;
+    if (!out) return;
+    out->size = 0;
+    if (!idx_ptr || !field_val) return;
+    auto* idx = (AimlIndex*)idx_ptr;
+    std::lock_guard<std::mutex> lk(idx->mtx);
+    std::string k = idx_normalize(field_val, idx->mode);
+
+    std::vector<std::string> hits;
+    if (idx->unique) {
+        auto it = idx->map_unique.find(k);
+        if (it != idx->map_unique.end()) hits.push_back(it->second);
+    } else {
+        auto it = idx->map_1n.find(k);
+        if (it != idx->map_1n.end()) hits = it->second;
+    }
+    int32_t n = (int32_t)hits.size();
+    if (n == 0) return;
+    if (!out->data || out->capacity < n) {
+        free(out->data);
+        out->data     = (void**)malloc((size_t)n * sizeof(void*));
+        out->capacity = n;
+    }
+    for (int32_t i = 0; i < n; i++) {
+        // strdup so the returned char* survives later index mutations.
+        out->data[i] = strdup(hits[(size_t)i].c_str());
+    }
+    out->size = n;
+}
+
+// Field-type tags used by aiml_db_index_backfill.
+// 0=string (char*), 1=i32, 2=i64, 3=list<string>.
+enum AimlIndexFieldTag : int32_t {
+    AIML_IDX_FT_STRING    = 0,
+    AIML_IDX_FT_I32       = 1,
+    AIML_IDX_FT_I64       = 2,
+    AIML_IDX_FT_LIST_STR  = 3,
+};
+
+// Walks the main Kv (`kv`), extracting `field_name` from each decoded record
+// at byte offset `field_offset` and populating the index.  Used at open time
+// when the index is empty but the Kv already has entries (cross-process reopen,
+// or first-time enabling of `db_indexed:` on an existing model).
+extern "C" void aiml_db_index_backfill(void* kv_ptr, void* idx_ptr,
+                                        int32_t field_offset, int32_t field_tag) {
+    SerGuardOn _sg_;
+    if (!kv_ptr || !idx_ptr) return;
+    AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
+    auto* idx  = (AimlIndex*)idx_ptr;
+
+    auto extract_and_add = [&](const std::string& key, const uint8_t* row) {
+        const uint8_t* field = row + field_offset;
+        switch (field_tag) {
+            case AIML_IDX_FT_STRING: {
+                const char* p = *(const char* const*)field;
+                if (!p) return;
+                aiml_db_index_add(idx, p, key.c_str());
+                break;
+            }
+            case AIML_IDX_FT_I32: {
+                int32_t v = *(const int32_t*)field;
+                char buf[16];
+                std::snprintf(buf, sizeof(buf), "%d", v);
+                aiml_db_index_add(idx, buf, key.c_str());
+                break;
+            }
+            case AIML_IDX_FT_I64: {
+                int64_t v = *(const int64_t*)field;
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "%lld", (long long)v);
+                aiml_db_index_add(idx, buf, key.c_str());
+                break;
+            }
+            case AIML_IDX_FT_LIST_STR: {
+                // List layout: { i32 size, i32 capacity, char** data }
+                int32_t size = *(const int32_t*)field;
+                char* const* data = *(char* const* const*)(field + 8);
+                if (!data || size <= 0) return;
+                for (int32_t i = 0; i < size; i++) {
+                    if (data[i]) aiml_db_index_add(idx, data[i], key.c_str());
+                }
+                break;
+            }
+        }
+    };
+
+    std::lock_guard<std::mutex> lock(kv->mtx);
+    if (kv->persistent) {
+        for (auto& [key, loc] : kv->index) {
+            const uint8_t* val_ptr = (const uint8_t*)kv->wal_mmap + loc.offset;
+            if (kv->ser_nodes) {
+                // Decoded form may live in cache; fall through to decode if missing.
+                auto dc = kv->decoded_cache.find(key);
+                if (dc == kv->decoded_cache.end()) {
+                    std::vector<uint8_t> decoded((size_t)kv->val_size, 0);
+                    aiml_ser_decode((const char*)val_ptr, decoded.data(),
+                                    kv->ser_nodes, kv->ser_n);
+                    auto& cached = kv->decoded_cache[key];
+                    cached = std::move(decoded);
+                    dc = kv->decoded_cache.find(key);
+                }
+                extract_and_add(key, dc->second.data());
+            } else {
+                extract_and_add(key, val_ptr);
+            }
+        }
+    } else {
+        for (auto& [key, bytes] : kv->map) {
+            extract_and_add(key, bytes.data());
+        }
+    }
+}
+
+extern "C" const char* aiml_db_index_finding(void* idx_ptr, const char* field_val) {
+    static const char* empty = "";
+    if (!idx_ptr || !field_val) return empty;
+    auto* idx = (AimlIndex*)idx_ptr;
+    std::lock_guard<std::mutex> lk(idx->mtx);
+    std::string k = idx_normalize(field_val, idx->mode);
+    if (idx->unique) {
+        auto it = idx->map_unique.find(k);
+        if (it != idx->map_unique.end()) return it->second.c_str();
+    } else {
+        auto it = idx->map_1n.find(k);
+        if (it != idx->map_1n.end() && !it->second.empty()) return it->second.front().c_str();
+    }
+    return empty;
 }

@@ -118,6 +118,49 @@ Characters outside ASCII uppercase remain unchanged.
 
 ---
 
+### `string.upper()` → `string`
+
+Returns a new string where all ASCII lowercase letters `a-z` are converted to uppercase.
+Characters outside ASCII lowercase remain unchanged.
+
+```yaml
+- decl: [s, string, "HeLLo AIML"]
+- decl: [upped, string]
+- set:  [upped, { call: [s.upper] }]
+# upped == "HELLO AIML"
+```
+
+---
+
+### `string.title()` → `string`
+
+Python-style title case. Uppercases the first character of every
+whitespace-separated word, lowercases the rest. Punctuation — including
+`_` and `-` — is **not** a word break; it stays in place and only ASCII
+character casing changes.
+
+For snake_case / kebab-case → display labels, chain with `replace`:
+
+```yaml
+- decl: [snake,   string, "smith_touch_master"]
+- decl: [spaced,  string, { call: [snake.replace, "_", " "] }]
+- decl: [pretty,  string, { call: [spaced.title] }]
+# pretty == "Smith Touch Master"
+```
+
+Single-step `.title()` examples:
+
+```yaml
+- decl: [a, string, { call: [{ literal: "hello world", type: string }.title] }]
+# a == "Hello World"
+- decl: [b, string, { call: [{ literal: "WORKOUT",     type: string }.title] }]
+# b == "Workout"
+- decl: [c, string, { call: [{ literal: "foo_bar",     type: string }.title] }]
+# c == "Foo_bar"   — separator NOT replaced; chain replace first
+```
+
+---
+
 ### `string.trim()` → `string`
 
 Returns a new string with leading and trailing ASCII whitespace removed.

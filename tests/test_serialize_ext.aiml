@@ -11,8 +11,8 @@
 - class:
     name: Vec2
     members:
-      - [x, i32]
-      - [y, i32]
+      - [var_x, i32]
+      - [var_y, i32]
 
 # --- Enum serialize ---
 - decl: [st1, Status, Status.Ok]
@@ -26,11 +26,11 @@
 - print: ["enum Error serialized: ${s_st2}"]
 
 # --- Struct serialize ---
-- decl: [v, Vec2]
-- set: [v.x, 10]
-- set: [v.y, 20]
+- decl: [var_v, Vec2]
+- set: [var_v.var_x, 10]
+- set: [var_v.var_y, 20]
 - decl: [s_v, string]
-- set: [s_v, { call: [sys.serialize, v] }]
+- set: [s_v, { call: [sys.serialize, var_v] }]
 - print: ["struct Vec2 serialized: ${s_v}"]
 
 # --- List serialize ---
@@ -44,8 +44,8 @@
 
 # --- Struct deserialize round-trip ---
 - decl: [json_v, string]
-- set: [json_v, "{\"__type\":\"Vec2\",\"x\":5,\"y\":7}"]
-- decl: [v2, Vec2]
-- set: [v2, { call: [sys.deserialize, json_v, "Vec2"] }]
-- print: ["deserialized Vec2.x: ${v2.x}"]
-- print: ["deserialized Vec2.y: ${v2.y}"]
+- set: [json_v, "{\"__type\":\"Vec2\",\"var_x\":5,\"var_y\":7}"]
+- decl: [var_v2, Vec2]
+- set: [var_v2, { call: [sys.deserialize, json_v, "Vec2"] }]
+- print: ["deserialized Vec2.var_x: ${var_v2.var_x}"]
+- print: ["deserialized Vec2.var_y: ${var_v2.var_y}"]

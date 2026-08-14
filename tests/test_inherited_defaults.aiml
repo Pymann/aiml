@@ -1,3 +1,4 @@
+# static-check: off
 # Test: inherited defaults survive model inheritance and class model composition
 # Expected exit code: 0
 
@@ -76,49 +77,49 @@
     name: Worker
     models: [EntityModel]
     members:
-      - [hp, i32, 15, { access: public }]
+      - [var_hp, i32, 15, { access: public }]
       - [alive, bool, true, { access: public }]
 
-- decl: [w, Worker]
+- decl: [var_w, Worker]
 
 - if:
-    condition: { neq: [w.host, "localhost"] }
+    condition: { neq: [var_w.host, "localhost"] }
     then:
-      - print: ["FAIL class-model default host: ${w.host}"]
+      - print: ["FAIL class-model default host: ${var_w.host}"]
       - exit: [1]
 
 - if:
-    condition: { neq: [w.port, 8080] }
+    condition: { neq: [var_w.port, 8080] }
     then:
-      - print: ["FAIL class-model default port: ${w.port}"]
+      - print: ["FAIL class-model default port: ${var_w.port}"]
       - exit: [1]
 
 - if:
-    condition: { neq: [w.ssl, true] }
+    condition: { neq: [var_w.ssl, true] }
     then:
       - print: ["FAIL class-model default ssl"]
       - exit: [1]
 
 - if:
-    condition: { neq: [w.retries, 3] }
+    condition: { neq: [var_w.retries, 3] }
     then:
-      - print: ["FAIL class-model default retries: ${w.retries}"]
+      - print: ["FAIL class-model default retries: ${var_w.retries}"]
       - exit: [1]
 
 - if:
-    condition: { neq: [w.entity_id, 77] }
+    condition: { neq: [var_w.entity_id, 77] }
     then:
-      - print: ["FAIL class-model default entity_id: ${w.entity_id}"]
+      - print: ["FAIL class-model default entity_id: ${var_w.entity_id}"]
       - exit: [1]
 
 - if:
-    condition: { neq: [w.hp, 15] }
+    condition: { neq: [var_w.var_hp, 15] }
     then:
-      - print: ["FAIL class member default hp: ${w.hp}"]
+      - print: ["FAIL class member default var_hp: ${var_w.var_hp}"]
       - exit: [1]
 
 - if:
-    condition: { neq: [w.alive, true] }
+    condition: { neq: [var_w.alive, true] }
     then:
       - print: ["FAIL class member default alive"]
       - exit: [1]
@@ -156,9 +157,9 @@
       - exit: [1]
 
 - if:
-    condition: { neq: [heap_w.hp, 15] }
+    condition: { neq: [heap_w.var_hp, 15] }
     then:
-      - print: ["FAIL heap class member default hp: ${heap_w.hp}"]
+      - print: ["FAIL heap class member default var_hp: ${heap_w.var_hp}"]
       - exit: [1]
 
 - if:

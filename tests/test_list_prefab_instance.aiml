@@ -8,7 +8,7 @@
     width: 10
     height: 10
     children:
-      - { name: r, type: rect, x: 0, y: 0, width: 10, height: 10,
+      - { name: r_rect, type: rect, x: 0, y: 0, width: 10, height: 10,
           bg_color: 0xFFFFFFFF }
 
 - print: ["[test] before list decl"]
@@ -17,21 +17,21 @@
 
 - print: ["[test] list<prefab_instance> declared, len=${tiles.len}"]
 
-- decl: [a, prefab_instance, { call: [engine.instantiate, "Dummy"] }]
-- decl: [b, prefab_instance, { call: [engine.instantiate, "Dummy"] }]
+- decl: [var_a, prefab_instance, { call: [engine.instantiate, "Dummy"] }]
+- decl: [var_b, prefab_instance, { call: [engine.instantiate, "Dummy"] }]
 
-- print: ["[test] two instances spawned a=${a} b=${b}"]
+- print: ["[test] two instances spawned var_a=${var_a} var_b=${var_b}"]
 
-- call: [tiles.push, a]
-- call: [tiles.push, b]
+- call: [tiles.push, var_a]
+- call: [tiles.push, var_b]
 
 - print: ["[test] after pushes, len=${tiles.len}"]
 
-- decl: [t0, prefab_instance, { at: [tiles, 0] }]
-- decl: [t1, prefab_instance, { at: [tiles, 1] }]
+- decl: [var_t0, prefab_instance, { at: [tiles, 0] }]
+- decl: [var_t1, prefab_instance, { at: [tiles, 1] }]
 
-- print: ["[test] read back: t0==a? ${ { eq: [t0, a] } } t1==b? ${ { eq: [t1, b] } }"]
-- print: ["[test] cross-check: t0==b? ${ { eq: [t0, b] } } t1==a? ${ { eq: [t1, a] } } (must be false)"]
-- print: ["[test] direct: a==b? ${ { eq: [a, b] } } (must be false)"]
-- print: ["[test] direct neq: a!=b? ${ { neq: [a, b] } } (must be true)"]
+- print: ["[test] read back: var_t0==var_a? ${ { eq: [var_t0, var_a] } } var_t1==var_b? ${ { eq: [var_t1, var_b] } }"]
+- print: ["[test] cross-check: var_t0==var_b? ${ { eq: [var_t0, var_b] } } var_t1==var_a? ${ { eq: [var_t1, var_a] } } (must be false)"]
+- print: ["[test] direct: var_a==var_b? ${ { eq: [var_a, var_b] } } (must be false)"]
+- print: ["[test] direct neq: var_a!=var_b? ${ { neq: [var_a, var_b] } } (must be true)"]
 - print: ["[test] OK"]

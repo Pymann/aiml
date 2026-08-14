@@ -23,6 +23,7 @@ void* aiml_engine_create_window           (int32_t w, int32_t h, const char* tit
 void* aiml_engine_create_window_fullscreen(const char* title);
 void  aiml_engine_destroy_window          (void* win);
 void  aiml_engine_set_title               (void* win, const char* title);
+void  aiml_engine_maximize_window         (void* win);
 int32_t aiml_engine_window_size_x         (void* win);
 int32_t aiml_engine_window_size_y         (void* win);
 

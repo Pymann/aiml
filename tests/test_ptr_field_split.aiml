@@ -46,14 +46,14 @@
       - if:
           condition: { ">": [words_direct.len, 0] }
           then:
-            - decl: [w0, string, { call: [words_direct.get, 0] }]
+            - decl: [var_w0, string, { call: [words_direct.get, 0] }]
             - if:
-                condition: { eq: [w0, "alpha"] }
+                condition: { eq: [var_w0, "alpha"] }
                 then:
                   - print: ["PASS split-on-ptr-field[0]=alpha"]
                   - set: [pass_count, { +: [pass_count, 1] }]
                 else:
-                  - print: ["FAIL split-on-ptr-field[0]=${w0} expected alpha"]
+                  - print: ["FAIL split-on-ptr-field[0]=${var_w0} expected alpha"]
                   - set: [fail_count, { +: [fail_count, 1] }]
           else:
             - print: ["SKIP split-on-ptr-field[0] (list empty)"]

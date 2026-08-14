@@ -34,24 +34,24 @@
       - set: [nid, { call: [sess.register, player] }]
       - print: ["host: registered net_id=${nid}"]
       # Phase C/D: loop, accept client and send initial delta (health=77)
-      - decl: [i, i32]
-      - set: [i, 0]
+      - decl: [var_i, i32]
+      - set: [var_i, 0]
       - while:
-          condition: { lt: [i, 20] }
+          condition: { lt: [var_i, 20] }
           body:
             - call: [sess.update]
             - call: [time.sleep_ms, 10]
-            - set: [i, { +: [i, 1] }]
+            - set: [var_i, { +: [var_i, 1] }]
       # Phase H: process incoming RPC calls for up to 200ms
-      - set: [i, 0]
+      - set: [var_i, 0]
       - while:
-          condition: { lt: [i, 20] }
+          condition: { lt: [var_i, 20] }
           body:
             - call: [sess.update]
-            - decl: [hr, i32]
-            - set: [hr, { call: [sess.has_rpc] }]
+            - decl: [var_hr, i32]
+            - set: [var_hr, { call: [sess.has_rpc] }]
             - if:
-                condition: { gt: [hr, 0] }
+                condition: { gt: [var_hr, 0] }
                 then:
                   - decl: [rpc_ev, rpc_event]
                   - set: [rpc_ev, { call: [sess.next_rpc] }]
@@ -60,7 +60,7 @@
                   - print: ["host: RPC take_damage(${rpc_arg})"]
                   - set: [player.health, { -: [player.health, rpc_arg] }]
             - call: [time.sleep_ms, 10]
-            - set: [i, { +: [i, 1] }]
+            - set: [var_i, { +: [var_i, 1] }]
       - call: [sess.close]
       - print: ["host: done"]
 
@@ -86,14 +86,14 @@
 - set: [hev, { call: [client.has_event] }]
 - print: ["Phase D: has_event=${hev}"]
 
-- decl: [ev, mirror_event]
+- decl: [var_ev, mirror_event]
 - decl: [ev_nid, i32]
 - set: [ev_nid, 0]
 - if:
     condition: { gt: [hev, 0] }
     then:
-      - set: [ev, { call: [client.next_event] }]
-      - set: [ev_nid, ev.net_id]
+      - set: [var_ev, { call: [client.next_event] }]
+      - set: [ev_nid, var_ev.net_id]
       - print: ["Phase D: event net_id=${ev_nid}"]
 
 # Phase E: register replica with the received net_id, wait for delta
@@ -104,24 +104,24 @@
 - print: ["Phase E: replica registered as net_id=${ev_nid}"]
 
 # Phase F: peer_count — check while host is still connected
-- decl: [pc, i32]
-- set: [pc, { call: [client.peer_count] }]
-- print: ["Phase F: client peer_count=${pc}"]
+- decl: [var_pc, i32]
+- set: [var_pc, { call: [client.peer_count] }]
+- print: ["Phase F: client peer_count=${var_pc}"]
 
 # Phase E: receive initial delta (health=77 was set before register)
 - call: [time.sleep_ms, 100]
 - call: [client.update]
-- decl: [rh, i32]
-- set: [rh, replica.health]
-- decl: [rs, i32]
-- set: [rs, replica.score]
-- print: ["Phase E: replica.health=${rh} replica.score=${rs}"]
+- decl: [var_rh, i32]
+- set: [var_rh, replica.health]
+- decl: [var_rs, i32]
+- set: [var_rs, replica.score]
+- print: ["Phase E: replica.health=${var_rh} replica.score=${var_rs}"]
 - if:
-    condition: { eq: [rh, 77] }
+    condition: { eq: [var_rh, 77] }
     then:
       - print: ["Phase E PASS: health synced correctly"]
     else:
-      - print: ["Phase E FAIL: expected 77 got ${rh}"]
+      - print: ["Phase E FAIL: expected 77 got ${var_rh}"]
 
 # Phase H: send RPC take_damage(10) → host subtracts 10 → health becomes 67
 - call: [client.send_rpc, ev_nid, "take_damage", 10]

@@ -1,37 +1,37 @@
 - def:
     name: worker
-    args: [[id, i32]]
+    args: [[var_id, i32]]
     return: void
     body:
-      - print: ["Worker ${id}: started"]
-      - print: ["Worker ${id}: done"]
+      - print: ["Worker ${var_id}: started"]
+      - print: ["Worker ${var_id}: done"]
 
 - def:
     name: producer
-    args: [[ch, chan<i32>]]
+    args: [[var_ch, chan<i32>]]
     return: void
     body:
-      - call: [ch.send, 42]
-      - call: [ch.send, 99]
+      - call: [var_ch.send, 42]
+      - call: [var_ch.send, 99]
 
 # Thread spawn and join
-- decl: [t1, thread_handle]
-- decl: [t2, thread_handle]
+- decl: [var_t1, thread_handle]
+- decl: [var_t2, thread_handle]
 
-- set: [t1, { spawn: [worker, 1] }]
-- set: [t2, { spawn: [worker, 2] }]
+- set: [var_t1, { spawn: [worker, 1] }]
+- set: [var_t2, { spawn: [worker, 2] }]
 
 - print: ["Main: threads spawned"]
 
-- call: [t1.join]
-- call: [t2.join]
+- call: [var_t1.join]
+- call: [var_t2.join]
 
 - print: ["Main: threads joined"]
 
 # InvalidThreadStateException: join on already-joined thread
 - try:
     body:
-      - call: [t1.join]
+      - call: [var_t1.join]
       - print: ["ERROR: should not reach here"]
     catch:
       - type: InvalidThreadStateException
@@ -50,12 +50,12 @@
 
 # Channel test: producer sends 42 and 99, main receives both
 - decl: [g_ch, chan<i32>]
-- decl: [tp, thread_handle]
-- set: [tp, { spawn: [producer, g_ch] }]
-- decl: [v1, i32]
-- decl: [v2, i32]
-- set: [v1, { call: [g_ch.recv] }]
-- set: [v2, { call: [g_ch.recv] }]
-- call: [tp.join]
-- print: ["Received: ${v1}"]
-- print: ["Received: ${v2}"]
+- decl: [var_tp, thread_handle]
+- set: [var_tp, { spawn: [producer, g_ch] }]
+- decl: [var_v1, i32]
+- decl: [var_v2, i32]
+- set: [var_v1, { call: [g_ch.recv] }]
+- set: [var_v2, { call: [g_ch.recv] }]
+- call: [var_tp.join]
+- print: ["Received: ${var_v1}"]
+- print: ["Received: ${var_v2}"]

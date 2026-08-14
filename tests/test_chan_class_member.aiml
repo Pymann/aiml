@@ -4,34 +4,34 @@
 - class:
     name: ChannelBox
     members:
-      - [ch, chan<i32>]
+      - [var_ch, chan<i32>]
 
 - def:
     name: channel_box_producer
     args: [[worker_box, ref<ChannelBox>]]
     return: void
     body:
-      - call: [worker_box.ch.send, 42]
-      - call: [worker_box.ch.send, 99]
+      - call: [worker_box.var_ch.send, 42]
+      - call: [worker_box.var_ch.send, 99]
 
 - decl: [box, ref<ChannelBox>, { new: ChannelBox }]
-- decl: [th, thread_handle, { spawn: [channel_box_producer, box] }]
+- decl: [var_th, thread_handle, { spawn: [channel_box_producer, box] }]
 
-- decl: [v1, i32, { call: [box.ch.recv] }]
-- decl: [v2, i32, { call: [box.ch.recv] }]
+- decl: [var_v1, i32, { call: [box.var_ch.recv] }]
+- decl: [var_v2, i32, { call: [box.var_ch.recv] }]
 
-- call: [th.join]
+- call: [var_th.join]
 
 - if:
-    condition: { neq: [v1, 42] }
+    condition: { neq: [var_v1, 42] }
     then:
-      - print: ["FAIL class-member chan first recv: expected 42, got ${v1}"]
+      - print: ["FAIL class-member chan first recv: expected 42, got ${var_v1}"]
       - exit: [1]
 
 - if:
-    condition: { neq: [v2, 99] }
+    condition: { neq: [var_v2, 99] }
     then:
-      - print: ["FAIL class-member chan second recv: expected 99, got ${v2}"]
+      - print: ["FAIL class-member chan second recv: expected 99, got ${var_v2}"]
       - exit: [1]
 
 - free: [box]

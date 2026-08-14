@@ -7,9 +7,9 @@
 
 - def:
     name: set_counter
-    args: [[v, i32]]
+    args: [[var_v, i32]]
     body:
-      - set: [shared_counter, v]
+      - set: [shared_counter, var_v]
 
 - def:
     name: inc_counter
@@ -24,9 +24,9 @@
 
 - def:
     name: set_label
-    args: [[s, string]]
+    args: [[var_s, string]]
     body:
-      - set: [shared_label, s]
+      - set: [shared_label, var_s]
 
 - def:
     name: get_label

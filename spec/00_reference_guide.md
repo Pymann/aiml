@@ -109,6 +109,7 @@ This file is the entry point for the `aiml/spec` directory.
 - [44_4_physics.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/44_4_physics.md)
 - [44_5_mirror.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/44_5_mirror.md)
 - [44_6_prefabs.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/44_6_prefabs.md)
+- [44_7_asset_registry.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/44_7_asset_registry.md)
 - [46_log.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/46_log.md)
 - [47_thread_safety.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/47_thread_safety.md)
 - [48_trace.md](/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/spec/48_trace.md)

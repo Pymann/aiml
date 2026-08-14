@@ -38,20 +38,20 @@
           body:
             - print: ["lookup: dim=${<.dim}, token_id=${token_id}"]
             - print: ["lookup: flat.len=${<.flat.len}"]
-            - decl: [v, Vec32]
-            - set: [v.size, <.dim]
+            - decl: [var_v, Vec32]
+            - set: [var_v.size, <.dim]
             - print: ["lookup: calling ai.embedding_lookup..."]
-            - set: [v.data, { call: [ai.embedding_lookup, <.flat, token_id, <.dim] }]
+            - set: [var_v.data, { call: [ai.embedding_lookup, <.flat, token_id, <.dim] }]
             - print: ["lookup: done"]
-            - return: [v]
+            - return: [var_v]
 
       - def:
           name: update
           access: public
-          args: [[token_id, i32], [grad, Vec32], [lr, f32]]
+          args: [[token_id, i32], [grad, Vec32], [var_lr, f32]]
           return: void
           body:
-            - call: [ai.embedding_update, <.flat, token_id, grad.data, lr, <.dim]
+            - call: [ai.embedding_update, <.flat, token_id, grad.data, var_lr, <.dim]
 
 # Test
 - decl: [table, "ptr<EmbTable>", { new: EmbTable }]
@@ -59,41 +59,41 @@
 
 # T1: Lookup via class method
 - print: ["T1: calling table.lookup(0)..."]
-- decl: [v, Vec32, { call: [table.lookup, 0] }]
-- print: ["T1: returned, v.size=${v.size}"]
-- print: ["T1: v.data.len=${v.data.len}"]
-- decl: [v0, f32, v.data-0]
-- print: ["T1: v0=${v0}"]
+- decl: [var_v, Vec32, { call: [table.lookup, 0] }]
+- print: ["T1: returned, var_v.size=${var_v.size}"]
+- print: ["T1: var_v.data.len=${var_v.data.len}"]
+- decl: [var_v0, f32, var_v.data-0]
+- print: ["T1: var_v0=${var_v0}"]
 - if:
-    condition: { "&&": [{ ">": [v0, 0.99] }, { "<": [v0, 1.01] }] }
+    condition: { "&&": [{ ">": [var_v0, 0.99] }, { "<": [var_v0, 1.01] }] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
       - set: [fail, { "+": [fail, 1] }]
-      - print: ["FAIL T1: expected 1.0, got ${v0}"]
+      - print: ["FAIL T1: expected 1.0, got ${var_v0}"]
 
 # T2: Dot product via model field access
-- decl: [d, f32, { call: [ai.dot, v.data, v.data, v.size] }]
+- decl: [var_d, f32, { call: [ai.dot, var_v.data, var_v.data, var_v.size] }]
 # 1^2 + 2^2 + 3^2 + 4^2 = 30
 - if:
-    condition: { "&&": [{ ">": [d, 29.9] }, { "<": [d, 30.1] }] }
+    condition: { "&&": [{ ">": [var_d, 29.9] }, { "<": [var_d, 30.1] }] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
       - set: [fail, { "+": [fail, 1] }]
-      - print: ["FAIL T2: expected 30.0, got ${d}"]
+      - print: ["FAIL T2: expected 30.0, got ${var_d}"]
 
 # T3: Update via class method with model arg
-- decl: [g, Vec32]
-- set: [g.size, 4]
-- call: [g.data.push, 0.1]
-- call: [g.data.push, 0.2]
-- call: [g.data.push, 0.3]
-- call: [g.data.push, 0.4]
-- call: [table.update, 0, g, 1.0]
+- decl: [var_g, Vec32]
+- set: [var_g.size, 4]
+- call: [var_g.data.push, 0.1]
+- call: [var_g.data.push, 0.2]
+- call: [var_g.data.push, 0.3]
+- call: [var_g.data.push, 0.4]
+- call: [table.update, 0, var_g, 1.0]
 # After: [0.9, 1.8, 2.7, 3.6]
-- decl: [v2, Vec32, { call: [table.lookup, 0] }]
-- decl: [v2_0, f32, v2.data-0]
+- decl: [var_v2, Vec32, { call: [table.lookup, 0] }]
+- decl: [v2_0, f32, var_v2.data-0]
 - if:
     condition: { "&&": [{ ">": [v2_0, 0.89] }, { "<": [v2_0, 0.91] }] }
     then:

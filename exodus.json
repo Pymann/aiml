@@ -693,7 +693,9 @@
         }
     ],
     "conan_packages": [],
+    "git_packages": [],
     "output_type": "executable",
+    "asset_directories": [],
     "artifact_in_cwd": false,
     "optimization": "0",
     "debug": true,

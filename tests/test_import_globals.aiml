@@ -13,46 +13,46 @@
     return: i32
     body:
       # ── Phase A: i32 global starts at 0 (zero-initialized) ──
-      - decl: [c0, i32, { call: [testlib.get_counter] }]
-      - print: "A counter_init=${c0}"
+      - decl: [var_c0, i32, { call: [testlib.get_counter] }]
+      - print: "A counter_init=${var_c0}"
 
       # ── Phase B: increment and read back ──
       - call: [testlib.inc_counter]
       - call: [testlib.inc_counter]
       - call: [testlib.inc_counter]
-      - decl: [c3, i32, { call: [testlib.get_counter] }]
-      - print: "B counter_after_3inc=${c3}"
+      - decl: [var_c3, i32, { call: [testlib.get_counter] }]
+      - print: "B counter_after_3inc=${var_c3}"
 
       # ── Phase C: mutate string global, then read ──
       - call: [testlib.set_prefix, "hey"]
-      - decl: [g1, string, { call: [testlib.get_greeting, "world"] }]
-      - print: "C greeting=${g1}"
+      - decl: [var_g1, string, { call: [testlib.get_greeting, "world"] }]
+      - print: "C greeting=${var_g1}"
 
       # ── Phase D: mutate again ──
       - call: [testlib.set_prefix, "hi"]
-      - decl: [g2, string, { call: [testlib.get_greeting, "there"] }]
-      - print: "D greeting2=${g2}"
+      - decl: [var_g2, string, { call: [testlib.get_greeting, "there"] }]
+      - print: "D greeting2=${var_g2}"
 
       # ── Results ──
       - decl: [pass, i32, 0]
       - decl: [fail, i32, 0]
 
       - if:
-          condition: { eq: [c0, 0] }
+          condition: { eq: [var_c0, 0] }
           then:
             - print: "[PASS] A counter_init"
             - set: [pass, { +: [pass, 1] }]
           else:
-            - print: "[FAIL] A counter_init expected 0 got ${c0}"
+            - print: "[FAIL] A counter_init expected 0 got ${var_c0}"
             - set: [fail, { +: [fail, 1] }]
 
       - if:
-          condition: { eq: [c3, 3] }
+          condition: { eq: [var_c3, 3] }
           then:
             - print: "[PASS] B counter_after_3inc"
             - set: [pass, { +: [pass, 1] }]
           else:
-            - print: "[FAIL] B counter_after_3inc expected 3 got ${c3}"
+            - print: "[FAIL] B counter_after_3inc expected 3 got ${var_c3}"
             - set: [fail, { +: [fail, 1] }]
 
       - print: "---"

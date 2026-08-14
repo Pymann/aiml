@@ -51,6 +51,7 @@ void aiml_input_set_capture(int32_t on);
 
 int32_t aiml_input_key_down    (const char* key);  /* currently held */
 int32_t aiml_input_key_pressed (const char* key);  /* went down this frame (rising edge) */
+int32_t aiml_input_key_pressed_once(const char* key); /* rising edge, consumed on first read per frame */
 int32_t aiml_input_key_released(const char* key);  /* came up this frame (falling edge) */
 
 /* ── Raw polling: mouse ───────────────────────────────────────────────────── */

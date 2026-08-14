@@ -21,45 +21,45 @@
 - call: [buf.write, 8.0, f32]
 
 # Lookup token 0
-- decl: [v0, list<f32>]
-- set: [v0, { call: [ai.embedding_lookup, buf, 0, 4] }]
-- decl: [v0_0, f32, v0-0]
-- decl: [v0_3, f32, v0-3]
+- decl: [var_v0, list<f32>]
+- set: [var_v0, { call: [ai.embedding_lookup, buf, 0, 4] }]
+- decl: [v0_0, f32, var_v0-0]
+- decl: [v0_3, f32, var_v0-3]
 - if:
     condition: { "&&": [{ ">": [v0_0, 0.99] }, { "<": [v0_0, 1.01] }] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
       - set: [fail, { "+": [fail, 1] }]
-      - print: ["FAIL A1a: v0[0] expected 1.0, got ${v0_0}"]
+      - print: ["FAIL A1a: var_v0[0] expected 1.0, got ${v0_0}"]
 - if:
     condition: { "&&": [{ ">": [v0_3, 3.99] }, { "<": [v0_3, 4.01] }] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
       - set: [fail, { "+": [fail, 1] }]
-      - print: ["FAIL A1b: v0[3] expected 4.0, got ${v0_3}"]
+      - print: ["FAIL A1b: var_v0[3] expected 4.0, got ${v0_3}"]
 
 # Lookup token 1
-- decl: [v1, list<f32>]
-- set: [v1, { call: [ai.embedding_lookup, buf, 1, 4] }]
-- decl: [v1_0, f32, v1-0]
+- decl: [var_v1, list<f32>]
+- set: [var_v1, { call: [ai.embedding_lookup, buf, 1, 4] }]
+- decl: [v1_0, f32, var_v1-0]
 - if:
     condition: { "&&": [{ ">": [v1_0, 4.99] }, { "<": [v1_0, 5.01] }] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
       - set: [fail, { "+": [fail, 1] }]
-      - print: ["FAIL A2: v1[0] expected 5.0, got ${v1_0}"]
+      - print: ["FAIL A2: var_v1[0] expected 5.0, got ${v1_0}"]
 
 # A3: Check list size
 - if:
-    condition: { eq: [v0.len, 4] }
+    condition: { eq: [var_v0.len, 4] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
       - set: [fail, { "+": [fail, 1] }]
-      - print: ["FAIL A3: v0.len expected 4, got ${v0.len}"]
+      - print: ["FAIL A3: var_v0.len expected 4, got ${var_v0.len}"]
 
 # === Phase B: ai.embedding_update ===
 
@@ -95,24 +95,24 @@
 # === Phase C: ai.dot ===
 
 # C1: dot([1,2,3,4], [5,6,7,8]) = 5+12+21+32 = 70
-- decl: [a, list<f32>]
-- call: [a.push, 1.0]
-- call: [a.push, 2.0]
-- call: [a.push, 3.0]
-- call: [a.push, 4.0]
-- decl: [b, list<f32>]
-- call: [b.push, 5.0]
-- call: [b.push, 6.0]
-- call: [b.push, 7.0]
-- call: [b.push, 8.0]
-- decl: [d, f32, { call: [ai.dot, a, b, 4] }]
+- decl: [var_a, list<f32>]
+- call: [var_a.push, 1.0]
+- call: [var_a.push, 2.0]
+- call: [var_a.push, 3.0]
+- call: [var_a.push, 4.0]
+- decl: [var_b, list<f32>]
+- call: [var_b.push, 5.0]
+- call: [var_b.push, 6.0]
+- call: [var_b.push, 7.0]
+- call: [var_b.push, 8.0]
+- decl: [var_d, f32, { call: [ai.dot, var_a, var_b, 4] }]
 - if:
-    condition: { "&&": [{ ">": [d, 69.9] }, { "<": [d, 70.1] }] }
+    condition: { "&&": [{ ">": [var_d, 69.9] }, { "<": [var_d, 70.1] }] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
       - set: [fail, { "+": [fail, 1] }]
-      - print: ["FAIL C1: expected 70.0, got ${d}"]
+      - print: ["FAIL C1: expected 70.0, got ${var_d}"]
 
 # === Phase D: ai.train_bpe_merges ===
 

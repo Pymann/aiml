@@ -1,4 +1,5 @@
 #include "tls_runtime.h"
+#include "string_runtime.h"
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -304,11 +305,11 @@ extern "C" char* aiml_tls_recv_string(void* sock, int32_t max_bytes) {
     if (!sock || max_bytes <= 0) return nullptr;
     AimlTlsSocket* s = to_tls(sock);
     if (!s->ssl) return nullptr;
-    char* buf = static_cast<char*>(std::malloc(static_cast<size_t>(max_bytes) + 1));
+    char* buf = aiml_str_alloc(static_cast<size_t>(max_bytes));
     if (!buf) return nullptr;
     int n = SSL_read(s->ssl, buf, max_bytes);
-    if (n < 0) { std::free(buf); return nullptr; }
-    buf[n] = '\0';
+    if (n < 0) { aiml_str_decref(buf); return nullptr; }
+    if (n < max_bytes) buf[n] = '\0';
     return buf;
 }
 
@@ -324,7 +325,7 @@ extern "C" char* aiml_tls_peer_cert_cn(void* sock) {
     char buf[256] = {};
     X509_NAME_get_text_by_NID(subj, NID_commonName, buf, sizeof(buf));
     X509_free(cert);
-    return strdup(buf);
+    return aiml_str_dup(buf);
 }
 
 extern "C" int32_t aiml_tls_peer_cert_valid(void* sock) {

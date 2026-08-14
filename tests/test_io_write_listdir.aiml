@@ -33,12 +33,12 @@
 - call: [io.mkdir, testdir]
 
 # write two files into it
-- decl: [fa, path]
-- set: [fa, { call: [testdir.join, "a.txt"] }]
-- decl: [fb, path]
-- set: [fb, { call: [testdir.join, "b.txt"] }]
-- call: [io.write_file, fa, "aaa"]
-- call: [io.write_file, fb, "bbb"]
+- decl: [var_fa, path]
+- set: [var_fa, { call: [testdir.join, "a.txt"] }]
+- decl: [var_fb, path]
+- set: [var_fb, { call: [testdir.join, "b.txt"] }]
+- call: [io.write_file, var_fa, "aaa"]
+- call: [io.write_file, var_fb, "bbb"]
 
 # list the dir
 - decl: [entries, list<path>]

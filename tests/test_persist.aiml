@@ -15,32 +15,32 @@
       - decl: [players, Store<Player>]
       - set: [players, { call: [db.open, "players", {persist: true, path: db_dir}] }]
 
-      - decl: [n0, i32]
-      - set: [n0, { call: [players.len] }]
+      - decl: [var_n0, i32]
+      - set: [var_n0, { call: [players.len] }]
       - if:
-          condition: { neq: [n0, 0] }
+          condition: { neq: [var_n0, 0] }
           then:
-            - print: ["FAIL persist_initial_len=${n0}"]
+            - print: ["FAIL persist_initial_len=${var_n0}"]
             - call: [sys.exit, 1]
 
-      - decl: [p1, Player]
-      - set: [p1.score, 999]
-      - set: [p1.level, 42]
+      - decl: [var_p1, Player]
+      - set: [var_p1.score, 999]
+      - set: [var_p1.level, 42]
 
       - decl: [id1, i32]
-      - set: [id1, { call: [players.insert, p1] }]
+      - set: [id1, { call: [players.insert, var_p1] }]
       - if:
           condition: { neq: [id1, 1] }
           then:
             - print: ["FAIL persist_insert_id=${id1}"]
             - call: [sys.exit, 1]
 
-      - decl: [n1, i32]
-      - set: [n1, { call: [players.len] }]
+      - decl: [var_n1, i32]
+      - set: [var_n1, { call: [players.len] }]
       - if:
-          condition: { neq: [n1, 1] }
+          condition: { neq: [var_n1, 1] }
           then:
-            - print: ["FAIL persist_len=${n1}"]
+            - print: ["FAIL persist_len=${var_n1}"]
             - call: [sys.exit, 1]
 
       - decl: [got, ptr<Player>]
@@ -71,12 +71,12 @@
             - print: ["FAIL persist_dir=${dir_ok} dir=${db_dir}"]
             - call: [sys.exit, 1]
 
-      - decl: [rc, i32]
-      - set: [rc, { call: [db.checkpoint] }]
+      - decl: [var_rc, i32]
+      - set: [var_rc, { call: [db.checkpoint] }]
       - if:
-          condition: { neq: [rc, 0] }
+          condition: { neq: [var_rc, 0] }
           then:
-            - print: ["FAIL persist_checkpoint=${rc}"]
+            - print: ["FAIL persist_checkpoint=${var_rc}"]
             - call: [sys.exit, 1]
 
       - print: ["persist store PASS"]

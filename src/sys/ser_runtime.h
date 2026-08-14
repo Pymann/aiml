@@ -24,6 +24,10 @@ typedef enum {
     AIML_TD_MAP      =  7,   // param1=key_child   param2=value_child
     AIML_TD_BUFFER   =  8,   // param1=child_index (element type node)
     AIML_TD_RAWBYTES =  9,   // param1=byte_count  (vec2/vec3/mat4/value-only structs)
+    AIML_TD_PTR_STRUCT = 10, // ptr<T>/ref<T> to a struct.
+                             //   param1=child_index (the inner struct subtree)
+                             //   elem_size=sizeof(inner struct) — used by decoder for calloc.
+                             // Wire format: 1-byte marker (0=null, 1=non-null) + struct bytes.
 } AimlTDKind;
 
 // Each node is 24 bytes.  The whole descriptor for a type is an array of these.
@@ -120,6 +124,13 @@ void    aiml_ser_deep_copy(void*                dst,
 int32_t aiml_ser_encoded_size(const void*          obj,
                               const AimlTypeNode*  nodes,
                               int32_t              n_nodes);
+
+// Schema-format guard toggle (thread-local).  Enabled ONLY by the persistent-KV
+// layer around its encode/decode so stale on-disk blobs (written by an
+// incompatible struct layout) are refused with a clear diagnostic instead of
+// decoded as garbage.  OFF everywhere else (e.g. WS live messages).  Returns the
+// previous value so callers can save/restore (nesting-safe).  See ser_runtime.cpp.
+int     aiml_ser_set_guard(int on);
 
 #ifdef __cplusplus
 }

@@ -23,6 +23,31 @@
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL lower empty"] }]
 
+# ── upper() ──────────────────────────────────────────────────────────────────
+
+- decl: [upped, string]
+- set: [upped, { call: [mixed.upper] }]
+- print: ["upper='${upped}'"]
+- if:
+    condition: { eq: [upped, "  HELLO WORLD  "] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL upper basic"] }]
+
+- decl: [empty_upper, string]
+- set: [empty_upper, { call: [empty_s.upper] }]
+- if:
+    condition: { eq: [empty_upper, ""] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL upper empty"] }]
+
+- decl: [digits_keep, string, "abc-123!"]
+- decl: [digits_up,   string]
+- set: [digits_up, { call: [digits_keep.upper] }]
+- if:
+    condition: { eq: [digits_up, "ABC-123!"] }
+    then: [{ set: [pass, { +: [pass, 1] }] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL upper preserves non-letters"] }]
+
 # ── trim() ───────────────────────────────────────────────────────────────────
 
 - decl: [trimmed, string]

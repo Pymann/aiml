@@ -1,3 +1,4 @@
+# static-check: off
 
 # 1. Define Interface
 - interface:
@@ -9,16 +10,16 @@
 - model:
     name: Point2D
     fields:
-      - [x, i32, 10]
-      - [y, i32, 20]
+      - [var_x, i32, 10]
+      - [var_y, i32, 20]
 
 # 3. Define Base Class
 - class:
     name: Shape
     members:
-      - [id, i32, 1]
+      - [var_id, i32, 1]
     methods:
-      - def: { name: getId, return: i32, args: [], body: [ { return: [<.id] } ] }
+      - def: { name: getId, return: i32, args: [], body: [ { return: [<.var_id] } ] }
 
 # 4. Define Child Class with Inheritance and Mixin
 - class:
@@ -34,21 +35,21 @@
           return: void
           args: []
           body:
-            - print: ["Circle ID: ${<.id}, Pos: (${<.x}, ${<.y}), Radius: ${<.radius}"]
+            - print: ["Circle ID: ${<.var_id}, Pos: (${<.var_x}, ${<.var_y}), Radius: ${<.radius}"]
 
 # 5. Test Instantiation and Methods
-- decl: [c, ref<Circle>]
-- set: [c, { new: Circle }]
+- decl: [var_c, ref<Circle>]
+- set: [var_c, { new: Circle }]
 
 - print: ["Testing OO Features..."]
-- call: [c.print]
+- call: [var_c.print]
 
 # Test inherited method
 - decl: [shapeId, i32]
-- set: [shapeId, { call: [c.getId] }]
+- set: [shapeId, { call: [var_c.getId] }]
 - print: ["Shape ID (Inherited): ${shapeId}"]
 
 # Test Mixin fields
-- print: ["Mixin Field X: ${c.x}"]
+- print: ["Mixin Field X: ${var_c.var_x}"]
 
-- free: [c]
+- free: [var_c]

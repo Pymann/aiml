@@ -51,7 +51,7 @@
     name: Card
     inherits: BaseCard
     fields:
-      - [lp, i32]
+      - [var_lp, i32]
       - [attack, i32]
       - [defense, i32]
       - [initiative, i32]
@@ -72,43 +72,43 @@
       - decl: [db_dir, path, "/tmp/aiml_test_9rooms_card_string_map_persist/"]
       - call: [io.remove_all, db_dir]
 
-      - decl: [j1, string, '{"__type":"Card","name":"Fire Mana","card_type":3,"mkp":2,"mana_cost":{},"description":"mana source","passive_abilities":[18],"active_abilities":[{"cost_text":"Tap","activation_cost":[1],"trigger":[[1,7]],"effects":[[10,3]]}],"lp":0,"attack":0,"defense":0,"initiative":0,"moral":0,"movement":0,"spell_type":0,"equip_cost":0,"provides":{"1":1},"skp_cost":0,"duration":0,"room_effect":0,"created_at":0}']
-      - decl: [c1, Card]
-      - set: [c1, { call: [sys.deserialize, j1, "Card"] }]
+      - decl: [var_j1, string, '{"__type":"Card","name":"Fire Mana","card_type":3,"mkp":2,"mana_cost":{},"description":"mana source","passive_abilities":[18],"active_abilities":[{"cost_text":"Tap","activation_cost":[1],"trigger":[[1,7]],"effects":[[10,3]]}],"var_lp":0,"attack":0,"defense":0,"initiative":0,"moral":0,"movement":0,"spell_type":0,"equip_cost":0,"provides":{"1":1},"skp_cost":0,"duration":0,"room_effect":0,"created_at":0}']
+      - decl: [var_c1, Card]
+      - set: [var_c1, { call: [sys.deserialize, var_j1, "Card"] }]
 
       - if:
-          condition: { eq: [{ eq: [c1.name, "Fire Mana"] }, 0] }
+          condition: { eq: [{ eq: [var_c1.name, "Fire Mana"] }, 0] }
           then:
-            - print: ["FAIL pre_name=${c1.name}"]
+            - print: ["FAIL pre_name=${var_c1.name}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { neq: [c1.provides.len, 1] }
+          condition: { neq: [var_c1.provides.len, 1] }
           then:
-            - print: ["FAIL pre_provides_len=${c1.provides.len}"]
+            - print: ["FAIL pre_provides_len=${var_c1.provides.len}"]
             - call: [sys.exit, 1]
-      - decl: [pre_amt, i32, { call: [c1.provides.get, "1"] }]
+      - decl: [pre_amt, i32, { call: [var_c1.provides.get, "1"] }]
       - if:
           condition: { neq: [pre_amt, 1] }
           then:
             - print: ["FAIL pre_amt=${pre_amt}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { neq: [c1.passive_abilities.len, 1] }
+          condition: { neq: [var_c1.passive_abilities.len, 1] }
           then:
-            - print: ["FAIL pre_pa_len=${c1.passive_abilities.len}"]
+            - print: ["FAIL pre_pa_len=${var_c1.passive_abilities.len}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { neq: [c1.active_abilities.len, 1] }
+          condition: { neq: [var_c1.active_abilities.len, 1] }
           then:
-            - print: ["FAIL pre_aa_len=${c1.active_abilities.len}"]
+            - print: ["FAIL pre_aa_len=${var_c1.active_abilities.len}"]
             - call: [sys.exit, 1]
 
-      - decl: [kv, Kv<string:Card>]
-      - set: [kv, { call: [db.open_kv, "card_string_map_persist", {persist: true, path: db_dir}] }]
-      - call: [kv.set, "mana", c1]
+      - decl: [var_kv, Kv<string:Card>]
+      - set: [var_kv, { call: [db.open_kv, "card_string_map_persist", {persist: true, path: db_dir}] }]
+      - call: [var_kv.set, "mana", var_c1]
 
       - decl: [got, ptr<Card>]
-      - set: [got, { call: [kv.get, "mana"] }]
+      - set: [got, { call: [var_kv.get, "mana"] }]
       - if:
           condition: { eq: [got, null] }
           then:

@@ -1,19 +1,19 @@
-# Probe: can a class use `models: [SameName]` to compose with a same-name model?
+# Probe: can var_a class use `models: [SameName]` to compose with var_a same-name model?
 
 - model:
     name: Foo
     fields:
-      - [a, i32, 7]
-      - [b, string]
+      - [var_a, i32, 7]
+      - [var_b, string]
 
 - class:
     name: FooT
     models: [Foo]
     methods:
-      - def: { name: hello, return: string, args: [], body: [{ return: "${<.a}:${<.b}" }] }
+      - def: { name: hello, return: string, args: [], body: [{ return: "${<.var_a}:${<.var_b}" }] }
 
-- decl: [f, FooT]
-- set: [f.a, 42]
-- set: [f.b, "x"]
-- decl: [s, string, { call: [f.hello] }]
-- print: ["got='${s}' a=${f.a}"]
+- decl: [var_f, FooT]
+- set: [var_f.var_a, 42]
+- set: [var_f.var_b, "x"]
+- decl: [var_s, string, { call: [var_f.hello] }]
+- print: ["got='${var_s}' var_a=${var_f.var_a}"]

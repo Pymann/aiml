@@ -133,9 +133,12 @@ public:
 
 // Inline option map: {key: value, ...} used as call argument (e.g. {context: true}).
 // Values are kept as strings; callers parse booleans/numbers as needed.
+// Für map<K:V>-Init in decl: die typed Expr-Values werden zusätzlich in
+// entriesExpr abgelegt (Reihenfolge-erhaltend); Compiler emittiert dann .put-Calls.
 class DictLiteralExpr : public Expr {
 public:
     std::map<std::string, std::string> entries;
+    std::vector<std::pair<std::string, std::unique_ptr<Expr>>> entriesExpr;
     explicit DictLiteralExpr(std::map<std::string, std::string> e) : entries(std::move(e)) {}
     std::string toString() const override { return "Dict(...)"; }
 };
@@ -174,6 +177,24 @@ public:
 
     SetStmt(std::string t, std::unique_ptr<Expr> v) : target(t), value(std::move(v)) {}
     std::string toString() const override { return "Set(" + target + " = ...)"; }
+};
+
+// store: [ptr_var, value, (optional)depth]  — deref-write through pointer.
+// depth 1 (default):  *ptr = value      (analog zu C `*p = v`)
+// depth N:            *(*...*ptr) = value
+// Komplement zu `set: [p, v]` (rebind / C `p = v`) und `{ '?': [p] }` (read).
+// Spec/12_pointers.md beschreibt die Semantik.
+class StoreStmt : public Stmt {
+public:
+    std::string target;             // pointer-variable name
+    std::unique_ptr<Expr> value;
+    int depth;                      // dereference count (>=1)
+
+    StoreStmt(std::string t, std::unique_ptr<Expr> v, int d = 1)
+        : target(t), value(std::move(v)), depth(d) {}
+    std::string toString() const override {
+        return "Store(" + std::string(depth, '*') + target + " = ...)";
+    }
 };
 
 // idx: [container, idx1, ..., idxN, value]  — indexed write
@@ -264,6 +285,14 @@ public:
     std::vector<std::pair<std::string, std::string>> args; // name, type
     std::unique_ptr<BlockStmt> body;
     std::vector<std::string> staticOff; // disabled static checks, e.g. "lines"
+    // Function decorators — right-to-left applied at compile time.  Built-in
+    // registry currently: "vocab" (wraps string returns with vocab.lookup).
+    // Empty list = no decoration.  See /spec/55_decorators.md.
+    std::vector<std::string> decorators;
+    // Free-form metadata tags.  Recognised today: "deprecated" — every call
+    // site of this function/method gets a compile-time warning.  Unknown tags
+    // are ignored (forward-compatible).  Parsed from `meta: [...]`.
+    std::vector<std::string> meta;
 
     std::string toString() const override { return "FunctionDecl(" + name + ")"; }
 };
@@ -276,12 +305,42 @@ struct StructMember {
     std::string access = "public";
     bool is_const = false;
     bool is_volatile = false;
+
+    // AionDB db_indexed modifier — see CompilerContext::StructMember mirror.
+    // Parsed from 4th-position dict in model field declaration.
+    bool db_indexed = false;
+    std::string db_indexed_mode;   // "" | "lower"
+    bool db_indexed_unique = false;
+    bool db_indexed_skip_empty = false;
 };
 
 struct MethodSignature {
     std::string name;
     std::string returnType;
     std::vector<std::pair<std::string, std::string>> args;
+};
+
+// Function-cascade rule context slot (spec/57).  One `Mask` per path stage:
+// a selection of allowed member/type tokens, or the wildcard.  Tokens are raw
+// strings at parse time; a later milestone resolves them to i32 member values
+// against the stage enum.
+struct Mask {
+    std::vector<std::string> options;   // raw tokens (member/type names)
+    bool is_wildcard = false;           // true = any element ("*")
+};
+
+// A single α A β rewrite rule inside a function-cascade member class.
+class RuleDecl : public Node {
+public:
+    std::vector<Mask> before;                 // preceding history (prefix TAIL)
+    Mask              on;                      // the handled element
+    std::vector<Mask> after;                  // following history (suffix HEAD)
+    bool              hasAfter = false;        // true even for `after: []` (terminal)
+    int               weight = 0;
+    bool              hasWeight = false;
+    std::unique_ptr<FunctionDecl> def;         // the handler method
+
+    std::string toString() const override { return "RuleDecl"; }
 };
 
 class ClassDecl : public Node {
@@ -295,6 +354,10 @@ public:
     std::vector<std::unique_ptr<FunctionDecl>> methods;
     std::vector<std::string> syncFields;   // mirror: sync: [...]
     std::vector<std::string> rpcMethods;   // mirror: rpc:  [...]
+    // Function-cascade member class (spec/57).  `renders` = the cascade|enum this
+    // class holds rules for; `rules` = its α A β rewrite rules.
+    std::string renders;
+    std::vector<std::unique_ptr<RuleDecl>> rules;
 
     std::string toString() const override { return "ClassDecl(" + name + ")"; }
 };
@@ -324,8 +387,113 @@ class EnumDecl : public Node {
 public:
     std::string name;
     std::vector<std::pair<std::string, int>> values; // enum name, integer value
+    // Optional map: id → display label.  If empty, labels are derived from
+    // value names (snake_case → Title Case) at consumer sites.
+    std::map<int, std::string> labels;
 
     std::string toString() const override { return "EnumDecl(" + name + ")"; }
+};
+
+/// A single field within a cascade node.  Field-type may reference another
+/// enum, cascade, model, primitive, or alias.
+struct CascadeField {
+    std::string name;      // auto-generated if empty (from type name)
+    std::string typeName;  // "DeckType", "ValueType", "i32", "VALUE" (alias), ...
+    std::string defaultValue; // literal, empty if none
+};
+
+/// A single node in a cascade.  Bytecode id + payload fields.  Layout maps
+/// directly to `list<i32>` at serialize time: [id, field0, field1, ...] where
+/// nested cascade-fields expand recursively in place.
+struct CascadeNode {
+    std::string name;                    // "draw_card"
+    int id = -1;                         // bytecode id (== list[0] at wire)
+    std::vector<CascadeField> fields;
+    std::string label;                   // optional display label
+};
+
+class CascadeDecl : public Node {
+public:
+    std::string name;                    // "EffectCode", "ValueType", ...
+    std::string opcode;                  // optional: enum typing element 0 (node id).
+                                         // When set, node ids/names are resolved and
+                                         // verified against this enum's members.
+    std::vector<CascadeNode> nodes;
+    // Overrides that apply after fields[]/nodes[] were parsed.  `labels`
+    // maps node-name → display label.  IDs and defaults live on the nodes.
+    std::map<std::string, std::string> labelOverrides;
+
+    std::string toString() const override { return "CascadeDecl(" + name + ")"; }
+};
+
+// Function-cascade method pool (spec/57).  Bundles the rule-holding member
+// classes that together render one cascade, and pins the pool's carrier
+// endpoints.  M1a: top-level declaration only (rules/Mask live on member
+// classes, wired in a later milestone).
+class CascadeClassDecl : public Node {
+public:
+    std::string name;
+    std::string bindsCascade;   // exactly one of bindsCascade / bindsEnum is set
+    std::string bindsEnum;
+    std::string carrier;        // carrier type at entry  (render's carry param)
+    std::string taker;          // carrier type at exit   (render's return)
+    std::vector<std::string> members;   // rule-holding class names
+
+    std::string toString() const override { return "CascadeClassDecl(" + name + ")"; }
+};
+
+// One instance in a classgroup (spec/58).  A base class specialized into a
+// synthesized subclass: the `sees` siblings become `ptr<>` members and the
+// `functions` become methods; an optional `constructor` names a base method run
+// in phase 0.  The instance name is the group-unique role identifier.
+struct ClassGroupInstance {
+    std::string className;      // base class to specialize
+    std::string instanceName;   // group-unique instance/role name
+    std::vector<std::string> sees;   // sibling instance names it may reference
+    // Interfaces this instance implements — satisfied by its base methods AND its
+    // group `functions`.  Lets an interface-typed sees edge call the instance's
+    // coordination functions across the edge (spec/58 §5.2, cross-edge coord).
+    std::vector<std::string> implements;
+    std::vector<std::unique_ptr<FunctionDecl>> functions;   // coordination methods
+    // Optional base-class method run in PHASE 0 (sees-blind).  [0] = method name,
+    // [1..] = args (each a group param name → <.param, else a literal token).
+    std::vector<std::string> constructor;
+};
+
+// Static component-wiring group (spec/58).  Each instance desugars to a subclass
+// of its base with sees→members + functions→methods; a synthesized container
+// class named after the group holds all instances and wires them (phase 0 alloc
+// + phase 1 sees back-patch) via a synthesized __ctor invoked on {new: <group>}.
+class ClassGroupDecl : public Node {
+public:
+    std::string name;
+    // External config the group needs (name, type) — becomes container members,
+    // set at {new: <group>, param: val}, and readable by constructors in phase 0.
+    std::vector<std::pair<std::string, std::string>> params;
+    // Embedded child groups (member name, group type) — owned + constructed by
+    // this group's container in phase 0.
+    std::vector<std::pair<std::string, std::string>> subgroups;
+    // Instance names visible outside this group (its public surface).  Empty =
+    // all instances exported (backwards-compatible with M1).
+    std::vector<std::string> exports;
+    std::vector<ClassGroupInstance> instances;
+
+    std::string toString() const override { return "ClassGroupDecl(" + name + ")"; }
+};
+
+/// Alias — a named alias for a primitive type with UI-metadata attached.
+/// Used for cascade payload "role" names like VALUE / COUNT / SIDES that
+/// share the same wire-type (i32) but carry different widget hints.
+class AliasDecl : public Node {
+public:
+    std::string name;         // "VALUE", "COUNT", ...
+    std::string typeName;     // Underlying type (usually "i32"/"f32"/"string")
+    std::string label;        // Widget label (auto-derived from name if empty)
+    std::string minValue;     // as literal ("0")
+    std::string maxValue;
+    std::string defaultValue;
+
+    std::string toString() const override { return "AliasDecl(" + name + ")"; }
 };
 
 struct PrefabChildInfo {
@@ -336,6 +504,7 @@ struct PrefabChildInfo {
     uint32_t color = 0xFFFFFF;
     std::string texture;
     std::string anchor;    // "left", "center", "right"
+    std::string valign;    // "top", "center" (default), "bottom"
 
     // UI-widget style (button, text_input, rect)
     uint32_t bg_color      = 0;
@@ -344,15 +513,95 @@ struct PrefabChildInfo {
     float    corner_radius = 0.0f;
     uint32_t hover_color   = 0;
     uint32_t active_color  = 0;
+    // Label outline — cheap 8-tap stroke around text glyphs.  Renders
+    // outline_color at ±outline_px offsets, main color on top.  Only
+    // applied when outline_px > 0 and outline_color has non-zero alpha.
+    uint32_t outline_color = 0;
+    float    outline_px    = 0.0f;
+    // Tileable background texture for `rect` — stem name resolved to a
+    // GL id at instantiate time.  `tile_size` gives the logical pixel
+    // period at which the pattern repeats (default 128 px).
+    std::string bg_texture;
+    float    tile_size     = 128.0f;
+    // Slider skin: `track_texture` replaces the SDF track/border with a
+    // stretched sprite; `handle_texture` replaces the knob.  Both are
+    // stem names resolved to GL ids at instantiate time.
+    // `handle_gem_texture` is an optional overlay sprite drawn on top of
+    // handle_texture, tinted with fill_color so the metal grip stays
+    // neutral while the inset gem takes the widget's mana color.
+    std::string track_texture;
+    std::string handle_texture;
+    std::string handle_gem_texture;
+    // Tileable border overlay: one small strip repeated along each edge of
+    // the button/rect.  `frame_border_size` is the on-screen edge thickness
+    // (also acts as tile pitch so the pattern stays uniform per pixel).
+    std::string frame_border_texture;
+    float       frame_border_size = 6.0f;
+    // Mirror this child's sprite horizontally at draw time.
+    bool flip_h = false;
+    // Slider snap step (0 = continuous).  When > 0 the slider quantizes
+    // its value to multiples of `snap` during drag — useful for discrete
+    // ranges like "mana amount 0..3".
+    float slider_snap = 0.0f;
     std::string label;        // button label / static label text
     bool     is_secret     = false; // text_input password mode
+
+    // Bar/gauge (type: "bar"): track uses bg_color/border/corner_radius;
+    // the filled portion uses fill_color, sized value/max of the width.
+    float    bar_value     = 0.0f;
+    float    bar_max       = 1.0f;
+    uint32_t fill_color    = 0;
 
     // Callbacks (function names, resolved at runtime via fptable)
     std::string on_click;
     std::string on_change;
+    std::string group;   // radio: exklusive Auswahl
+    std::string options; // dropdown: pipe-separierte Optionen
 
     // Material reference (looked up by name at instantiate time)
     std::string material;
+
+    // ── Model-binding / cascade-widget attributes (Phase 6) ────────────
+    // `bind: <field>` — this widget's value mirrors a scalar field of the
+    // Model that owns the enclosing prefab instance.  Two-way sync at
+    // runtime.  Empty when the widget carries no model binding.
+    std::string bind;
+
+    // `bind_list: <field>` — this widget (usually type=container) spawns
+    // one Prefab-instance per element of the named list<T> field.  The
+    // spawned prefab's `binds:` type must match T.
+    std::string bind_list;
+
+    // `spawn: <PrefabName>` — companion to bind_list.  Names the prefab
+    // to instantiate per element.
+    std::string spawn;
+
+    // `layout: <mode>` — layout mode for containers ("vflow", "hflow", ...).
+    std::string layout;
+
+    // `gap: <px>` — spacing between spawned children in the layout.
+    float gap = 0.0f;
+
+    // `compact: <bool>` — container only: hidden spawned rows take no layout
+    // space; visible rows re-pack contiguously from the origin each frame.
+    bool compact = false;
+
+    // `cascade_type: <CascadeName>` — for type=cascade / type=dropdown widgets:
+    // populate options from the registered cascade metadata and drive
+    // reactive payload sub-widgets when the selection changes.
+    std::string cascade_type;
+
+    // `payload_spawn: <PrefabName>` — companion to cascade_type.  When the
+    // dropdown's selection changes, the runtime destroys the previously-
+    // mounted payload instances and spawns one fresh instance of this
+    // prefab per field of the newly-selected cascade node.  Each spawned
+    // instance can bind to the corresponding row slot via bound_index.
+    std::string payload_spawn;
+
+    // `enum: <EnumName>` — for type=dropdown/radio widgets: populate options
+    // from the registered enum's labels and let `dropdown_enum` return the true
+    // member value (see prefab_runtime widget-build + aiml_prefab_enum_labels).
+    std::string enum_type;
 };
 
 struct MaterialUniformInfo {
@@ -378,6 +627,10 @@ public:
     float width = 0, height = 0;
     std::string texture;
     bool draggable = false;
+    /// `binds: <TypeName>` — declares which Model/cascade this prefab is a
+    /// visual representation of.  Runtime uses it to route field bindings
+    /// (`bind:` on children) to the correct Model-instance-per-Prefab-instance.
+    std::string binds;
     std::vector<PrefabChildInfo> children;
 
     std::string toString() const override { return "PrefabDecl(" + name + ")"; }

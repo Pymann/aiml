@@ -181,16 +181,60 @@ The tensor runtime includes a full automatic differentiation engine.
 
 All forward operations that produce tensors track their computation graph when `requires_grad=1`. Backward is supported for: `add`, `sub`, `mul`, `mul_scalar`, `matmul`, `relu`, `gelu`, `tanh`, `softmax`, `exp`, `log`, `layer_norm`, `embedding_lookup`, `cross_entropy`, `weighted_cross_entropy`, `abs`, `sum`, `mean`, `neg`, `concat`.
 
-### Training Pattern
+### Gradient lifecycle (read before writing a training loop)
+
+The runtime **accumulates** gradients into `t.grad` with `+=` on every backward
+pass.  `tensor.begin_graph` resets the **graph** (arena + node list) but
+**does not** zero parameter gradients.  Neither does `tensor.adam_step`.
+
+That means **every training loop is responsible for calling `zero_grad`** on
+each trainable parameter, otherwise gradients from previous iterations leak
+into the next step.  Symptoms range from slow/incorrect convergence to
+catastrophic loss explosion (often visible first as `inf`/`NaN` in larger
+multi-head models with BCE-style auxiliary heads).  Two real incidents:
+
+- `aiml/doc/issues/2026-06-04_autodiff_bce_multihead_gradient_accumulation.md`
+- regression test: `aiml/tests/test_grad_lifecycle.aiml` (verifies the
+  accumulator + zero_grad reset semantics)
+
+**Required ordering** for every parameter `p`:
+
+1. `tensor.begin_graph` once at the start of the iteration
+2. forward pass (uses `p`)
+3. `tensor.backward(loss)`
+4. `tensor.adam_step(p, m, v, …)`
+5. `p.zero_grad`   ← do not omit
+
+Steps 4 and 5 are paired: every `adam_step` must be followed by a `zero_grad`
+on the same tensor (or `zero_grad` must be called before the next
+`backward`).  The runtime does not enforce this; missing it is silent.
+
+If you intentionally want to accumulate gradients across multiple backward
+passes (e.g. micro-batching), simply skip `zero_grad` until you have
+accumulated all the desired contributions, then run `adam_step` + `zero_grad`
+once.
+
+### Training Pattern (multi-parameter)
 
 ```yaml
 - call: [tensor.begin_graph]
 - decl: [logits, tensor, { call: [model_forward, input, ...weights...] }]
 - decl: [loss, tensor, { call: [tensor.cross_entropy, logits, targets, batch_size] }]
 - call: [tensor.backward, loss]
-- call: [tensor.adam_step, param, m, v, lr, beta1, beta2, eps, step]
-- call: [param.zero_grad]
+
+# Adam step for every trainable parameter
+- call: [tensor.adam_step, w1, m_w1, v_w1, lr, beta1, beta2, eps, step]
+- call: [tensor.adam_step, b1, m_b1, v_b1, lr, beta1, beta2, eps, step]
+- call: [tensor.adam_step, w2, m_w2, v_w2, lr, beta1, beta2, eps, step]
+
+# MANDATORY: clear accumulated gradients before the next iteration
+- call: [w1.zero_grad]
+- call: [b1.zero_grad]
+- call: [w2.zero_grad]
 ```
+
+For larger models, factor the optimizer + zero_grad pair into a helper
+function (see `tul/train/train_transformer.aiml` for a reference layout).
 
 ## 15. Optimizer: Adam
 

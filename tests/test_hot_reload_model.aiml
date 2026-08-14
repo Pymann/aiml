@@ -1,10 +1,10 @@
 # Hot-Reload Test — model: version guard (primary_key model append-only re-definition)
 #
 # Expected output:
-#   v1 rc: 42      (lookup_score v1 called via fptable; Player v1 layout)
-#   v2 rc: 42      (Player v2 hot-reloaded: compiled_version bumped to 2;
+#   v1 var_rc: 42      (lookup_score v1 called via fptable; Player v1 layout)
+#   v2 var_rc: 42      (Player v2 hot-reloaded: compiled_version bumped to 2;
 #                   lookup_score still returns 42 — field offsets unchanged)
-#   v1 skip rc: 42 (Player v1 <= live v2 → version guard skips)
+#   v1 skip var_rc: 42 (Player v1 <= live v2 → version guard skips)
 
 # Define Player model v1
 - model:
@@ -21,16 +21,16 @@
     version: 1
     return: i32
     body:
-      - decl: [p, Player]
-      - set: [p.score, 42]
+      - decl: [var_p, Player]
+      - set: [var_p.score, 42]
       - return: 42
 
 # Bundle v1 and execute it
 - decl: [pkg1, Code]
 - set: [pkg1, {call: [sys.bundle, "lookup_score"]}]
-- decl: [rc, i32]
-- set: [rc, {call: [sys.exec, pkg1]}]
-- print: ["v1 rc: ${rc}"]
+- decl: [var_rc, i32]
+- set: [var_rc, {call: [sys.exec, pkg1]}]
+- print: ["v1 var_rc: ${var_rc}"]
 
 # Define Player model v2 — append-only: new field level
 - model:
@@ -45,9 +45,9 @@
 # Bundle v2 (captures Player v2 YAML) and exec — should hot-reload Player model
 - decl: [pkg2, Code]
 - set: [pkg2, {call: [sys.bundle, "lookup_score"]}]
-- set: [rc, {call: [sys.exec, pkg2]}]
-- print: ["v2 rc: ${rc}"]
+- set: [var_rc, {call: [sys.exec, pkg2]}]
+- print: ["v2 var_rc: ${var_rc}"]
 
 # Execute v1 bundle again — version guard should skip (1 <= live 2)
-- set: [rc, {call: [sys.exec, pkg1]}]
-- print: ["v1 skip rc: ${rc}"]
+- set: [var_rc, {call: [sys.exec, pkg1]}]
+- print: ["v1 skip var_rc: ${var_rc}"]

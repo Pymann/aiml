@@ -15,34 +15,34 @@
       - call: [io.remove_all, db_dir]
 
       - decl: [json1, string, '{"__type":"CardLike","name":"Fire Mana","provides":{"1":1}}']
-      - decl: [c1, CardLike]
-      - set: [c1, { call: [sys.deserialize, json1, "CardLike"] }]
+      - decl: [var_c1, CardLike]
+      - set: [var_c1, { call: [sys.deserialize, json1, "CardLike"] }]
 
       - if:
-          condition: { eq: [{ eq: [c1.name, "Fire Mana"] }, 0] }
+          condition: { eq: [{ eq: [var_c1.name, "Fire Mana"] }, 0] }
           then:
-            - print: ["FAIL pre_name=${c1.name}"]
+            - print: ["FAIL pre_name=${var_c1.name}"]
             - call: [sys.exit, 1]
 
       - if:
-          condition: { neq: [c1.provides.len, 1] }
+          condition: { neq: [var_c1.provides.len, 1] }
           then:
-            - print: ["FAIL pre_len=${c1.provides.len}"]
+            - print: ["FAIL pre_len=${var_c1.provides.len}"]
             - call: [sys.exit, 1]
 
-      - decl: [pre_amt, i32, { call: [c1.provides.get, "1"] }]
+      - decl: [pre_amt, i32, { call: [var_c1.provides.get, "1"] }]
       - if:
           condition: { neq: [pre_amt, 1] }
           then:
             - print: ["FAIL pre_amt=${pre_amt}"]
             - call: [sys.exit, 1]
 
-      - decl: [kv, Kv<string:CardLike>]
-      - set: [kv, { call: [db.open_kv, "map_string_key_model_kv", {persist: true, path: db_dir}] }]
-      - call: [kv.set, "mana", c1]
+      - decl: [var_kv, Kv<string:CardLike>]
+      - set: [var_kv, { call: [db.open_kv, "map_string_key_model_kv", {persist: true, path: db_dir}] }]
+      - call: [var_kv.set, "mana", var_c1]
 
       - decl: [got, ptr<CardLike>]
-      - set: [got, { call: [kv.get, "mana"] }]
+      - set: [got, { call: [var_kv.get, "mana"] }]
       - if:
           condition: { eq: [got, null] }
           then:
@@ -76,5 +76,5 @@
             - call: [sys.exit, 1]
 
       - call: [db.checkpoint]
-      - print: ["map string key model kv PASS"]
+      - print: ["map string key model var_kv PASS"]
       - return: 0

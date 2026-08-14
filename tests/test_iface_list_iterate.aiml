@@ -23,23 +23,23 @@
     methods:
       - def: { name: say, return: string, args: [], body: [{ return: "Meow! I am ${<.name}" }] }
 
-- decl: [c1, ptr<CatBehavior>, { new: CatBehavior }]
-- set: [c1.name, "Whiskers"]
-- decl: [c2, ptr<CatBehavior>, { new: CatBehavior }]
-- set: [c2.name, "Mittens"]
+- decl: [var_c1, ptr<CatBehavior>, { new: CatBehavior }]
+- set: [var_c1.name, "Whiskers"]
+- decl: [var_c2, ptr<CatBehavior>, { new: CatBehavior }]
+- set: [var_c2.name, "Mittens"]
 
 - decl: [cats, list<ptr<CatBehavior>>, []]
-- call: [cats.push, c1]
-- call: [cats.push, c2]
+- call: [cats.push, var_c1]
+- call: [cats.push, var_c2]
 
 - print: ["cats.len = ${cats.len}"]
 
 # Iterate: load ptr<CatBehavior> from list slot, then upcast each to ptr<Sayable>.
-- decl: [i, i32, 0]
+- decl: [var_i, i32, 0]
 - while:
-    condition: { lt: [i, cats.len] }
+    condition: { lt: [var_i, cats.len] }
     body:
-      - decl: [it, ptr<CatBehavior>, { at: [cats, i] }]
-      - decl: [view, ptr<Sayable>, it]
-      - print: ["poly[${i}]: ${call: [view.say]}"]
-      - set: [i, { +: [i, 1] }]
+      - decl: [var_it, ptr<CatBehavior>, { at: [cats, var_i] }]
+      - decl: [view, ptr<Sayable>, var_it]
+      - print: ["poly[${var_i}]: ${call: [view.say]}"]
+      - set: [var_i, { +: [var_i, 1] }]

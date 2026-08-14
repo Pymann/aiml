@@ -1,10 +1,10 @@
 # Tests for sys.serialize and sys.deserialize
 
 # --- Primitive serialization ---
-- decl: [n, i32]
-- set: [n, 42]
+- decl: [var_n, i32]
+- set: [var_n, 42]
 - decl: [s_int, string]
-- set: [s_int, { call: [sys.serialize, n] }]
+- set: [s_int, { call: [sys.serialize, var_n] }]
 - print: ["serialize i32: ${s_int}"]
 
 - decl: [big, i64]
@@ -26,9 +26,9 @@
 - print: ["serialize string: ${s_str}"]
 
 # --- bool interpolation in string (was crashing before fix) ---
-- decl: [b2, bool]
-- set: [b2, false]
-- print: ["bool false interpolation: ${b2}"]
-- set: [b2, true]
-- print: ["bool true interpolation: ${b2}"]
+- decl: [var_b2, bool]
+- set: [var_b2, false]
+- print: ["bool false interpolation: ${var_b2}"]
+- set: [var_b2, true]
+- print: ["bool true interpolation: ${var_b2}"]
 

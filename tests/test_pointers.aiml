@@ -1,37 +1,37 @@
-- decl: [x, i32, 10]
-- print: ["Original X: ${x}"]
+- decl: [var_x, i32, 10]
+- print: ["Original X: ${var_x}"]
 
 # Declare pointer
-- decl: [p, ptr<i32>, { '&': [x] }]
+- decl: [var_p, ptr<i32>, { '&': [var_x] }]
 
 # Dereference Read
-- print: ["Value via pointer: ${ { '?': [p] } }"]
+- print: ["Value via pointer: ${ { '?': [var_p] } }"]
 
-# Dereference Write (Store) is still store: [p, val] ?
+# Dereference Write (Store) is still store: [var_p, val] ?
 # User only asked about ref/deref operators.
 # store is a command.
-- store: [p, 20]
+- store: [var_p, 20]
 # Dereference Write (Store)
-- store: [p, 20]
-- print: ["Modified X via pointer: ${x}"]
+- store: [var_p, 20]
+- print: ["Modified X via pointer: ${var_x}"]
 
 # Pointer to Pointer
-- decl: [pp, ptr<ptr<i32>>, { '&': [p] }]
+- decl: [var_pp, ptr<ptr<i32>>, { '&': [var_p] }]
 # Double Dereference (Syntax: '??' or '???')
-- print: ["Value of X via PP (??): ${ { '??': [pp] } }"]
+- print: ["Value of X via PP (??): ${ { '??': [var_pp] } }"]
 
 # Address of Address Check (&&)
-# { '&&': [x] } creates a temporary pointer to pointer to x?
-# No, &&[x] -> &(&x). &x is a value (address). &(&x) is address of that temporary value.
+# { '&&': [var_x] } creates a temporary pointer to pointer to var_x?
+# No, &&[var_x] -> &(&var_x). &var_x is a value (address). &(&var_x) is address of that temporary value.
 # Let's verify we can take address of address.
-- decl: [pp_temp, ptr<ptr<i32>>, { '&&': [x] }]
-- print: ["Value via pp_temp (should be x): ${ { '??': [pp_temp] } }"]
+- decl: [pp_temp, ptr<ptr<i32>>, { '&&': [var_x] }]
+- print: ["Value via pp_temp (should be var_x): ${ { '??': [pp_temp] } }"]
 
 # Deep Store (Depth 2)
-# Writes to *(*pp) which is x
-# Depth 1 (default) is *pp. Depth 2 is **pp.
-- store: [pp, 99, 2]
-- print: ["Modified X via PP deep store: ${x}"]
+# Writes to *(*var_pp) which is var_x
+# Depth 1 (default) is *var_pp. Depth 2 is **var_pp.
+- store: [var_pp, 99, 2]
+- print: ["Modified X via PP deep store: ${var_x}"]
 
 # Pointer Arithmetic? (Maybe later)
-# - set: [p, { +: [p, 1] }] 
+# - set: [var_p, { +: [var_p, 1] }] 

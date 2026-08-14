@@ -10,4 +10,8 @@ extern "C" {
 
     // sys.mem_usage() → i64 — current RSS (resident set size) in bytes.
     int64_t aiml_sys_mem_usage(void);
+
+    // sys.env — returns a map<string:string> (AimlHttpMap*) of all process
+    // environment variables (KEY→VALUE).  Never NULL.
+    void* aiml_sys_env(void);
 }

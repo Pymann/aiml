@@ -44,13 +44,13 @@
       - set: [nid, { call: [sess.register, root] }]
       - print: ["deep-host: registered net_id=${nid}"]
 
-      - decl: [i, i32, 0]
+      - decl: [var_i, i32, 0]
       - while:
-          condition: { lt: [i, 35] }
+          condition: { lt: [var_i, 35] }
           body:
             - call: [sess.update]
             - call: [time.sleep_ms, 10]
-            - set: [i, { +: [i, 1] }]
+            - set: [var_i, { +: [var_i, 1] }]
 
       - decl: [fx0_ptr, ptr<EffectLiteDeep>]
       - set: [fx0_ptr, { call: [root.effects.get, 0] }]
@@ -65,13 +65,13 @@
       - set: [fx1_ptr.key, "atk_up_big"]
       - print: ["deep-host: mutated existing effect elements in place"]
 
-      - set: [i, 0]
+      - set: [var_i, 0]
       - while:
-          condition: { lt: [i, 45] }
+          condition: { lt: [var_i, 45] }
           body:
             - call: [sess.update]
             - call: [time.sleep_ms, 10]
-            - set: [i, { +: [i, 1] }]
+            - set: [var_i, { +: [var_i, 1] }]
 
       - call: [sess.close]
 
@@ -84,11 +84,11 @@
 - call: [time.sleep_ms, 120]
 - call: [client.update]
 
-- decl: [ev, mirror_event]
-- set: [ev, { call: [client.next_event] }]
+- decl: [var_ev, mirror_event]
+- set: [var_ev, { call: [client.next_event] }]
 - decl: [replica, EffectRootDeep]
-- call: [client.register_id, replica, ev.net_id]
-- print: ["deep-client: replica registered net_id=${ev.net_id}"]
+- call: [client.register_id, replica, var_ev.net_id]
+- print: ["deep-client: replica registered net_id=${var_ev.net_id}"]
 
 - decl: [poll_i, i32, 0]
 - while:

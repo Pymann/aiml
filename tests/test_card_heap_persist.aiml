@@ -53,7 +53,7 @@
     name: Card
     inherits: BaseCard
     fields:
-      - [lp, i32]
+      - [var_lp, i32]
       - [attack, i32]
       - [defense, i32]
       - [initiative, i32]
@@ -67,16 +67,16 @@
     name: main
     return: i32
     body:
-      - decl: [j1, string, '{"__type":"Card","name":"Red Pyromancer IV","card_type":1,"mkp":5,"mana_cost":{"1":2,"5":1},"description":"A red creature.","passive_abilities":[10,30,12],"active_abilities":[{"cost_text":"2 Fire","activation_cost":[1,2],"trigger":[[1,7]],"effects":[[10,3],[20,5,1]]}],"lp":4,"attack":5,"defense":1,"initiative":2,"moral":3,"movement":2,"spell_type":2,"equip_cost":0,"created_at":0}']
-      - decl: [c1, Card]
-      - set: [c1, {call: [sys.deserialize, j1, "Card"]}]
+      - decl: [var_j1, string, '{"__type":"Card","name":"Red Pyromancer IV","card_type":1,"mkp":5,"mana_cost":{"1":2,"5":1},"description":"A red creature.","passive_abilities":[10,30,12],"active_abilities":[{"cost_text":"2 Fire","activation_cost":[1,2],"trigger":[[1,7]],"effects":[[10,3],[20,5,1]]}],"var_lp":4,"attack":5,"defense":1,"initiative":2,"moral":3,"movement":2,"spell_type":2,"equip_cost":0,"created_at":0}']
+      - decl: [var_c1, Card]
+      - set: [var_c1, {call: [sys.deserialize, var_j1, "Card"]}]
 
-      - decl: [kv, Kv<string:Card>]
-      - set: [kv, { call: [db.open_kv, "card_heap_persist", {persist: true, path: "/tmp/aiml_test_card_heap_persist/"}] }]
-      - call: [kv.set, "c1", c1]
+      - decl: [var_kv, Kv<string:Card>]
+      - set: [var_kv, { call: [db.open_kv, "card_heap_persist", {persist: true, path: "/tmp/aiml_test_card_heap_persist/"}] }]
+      - call: [var_kv.set, "var_c1", var_c1]
 
       - decl: [got, ptr<Card>]
-      - set: [got, { call: [kv.get, "c1"] }]
+      - set: [got, { call: [var_kv.get, "var_c1"] }]
       - if:
           condition: { eq: [{ eq: [got.name, "Red Pyromancer IV"] }, 0] }
           then:
@@ -92,21 +92,21 @@
           then:
             - print: ["FAIL got.active_abilities.len=${got.active_abilities.len}"]
             - call: [sys.exit, 1]
-      - decl: [ab, ActiveAbility, got.active_abilities-0]
+      - decl: [var_ab, ActiveAbility, got.active_abilities-0]
       - if:
-          condition: { eq: [{ eq: [ab.cost_text, "2 Fire"] }, 0] }
+          condition: { eq: [{ eq: [var_ab.cost_text, "2 Fire"] }, 0] }
           then:
-            - print: ["FAIL ab.cost_text=${ab.cost_text}"]
+            - print: ["FAIL var_ab.cost_text=${var_ab.cost_text}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { neq: [ab.effects.len, 2] }
+          condition: { neq: [var_ab.effects.len, 2] }
           then:
-            - print: ["FAIL ab.effects.len=${ab.effects.len}"]
+            - print: ["FAIL var_ab.effects.len=${var_ab.effects.len}"]
             - call: [sys.exit, 1]
 
-      - call: [kv.delete, "c1"]
+      - call: [var_kv.delete, "var_c1"]
       - decl: [has, i32]
-      - set: [has, { call: [kv.has, "c1"] }]
+      - set: [has, { call: [var_kv.has, "var_c1"] }]
       - if:
           condition: { neq: [has, 0] }
           then:

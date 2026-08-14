@@ -16,12 +16,12 @@
       - call: [cfg.clear]
       - call: [cfg.set, "mode", "join-only"]
 
-      - decl: [cp, i32]
-      - set: [cp, { call: [db.checkpoint] }]
+      - decl: [var_cp, i32]
+      - set: [var_cp, { call: [db.checkpoint] }]
       - if:
-          condition: { neq: [cp, 0] }
+          condition: { neq: [var_cp, 0] }
           then:
-            - print: ["FAIL join_only_checkpoint=${cp}"]
+            - print: ["FAIL join_only_checkpoint=${var_cp}"]
             - call: [sys.exit, 1]
 
       - decl: [dir_ok, i32]

@@ -27,6 +27,6 @@
 
 - def:
     name: set_prefix
-    args: [[p, string]]
+    args: [[var_p, string]]
     body:
-      - set: [prefix, p]
+      - set: [prefix, var_p]

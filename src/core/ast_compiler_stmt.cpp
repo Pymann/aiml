@@ -12,6 +12,41 @@ namespace AIML {
 namespace AST {
 
 namespace {
+// Detects `decl: [name, T, { call: [fn, ...] }]` or `set: [target, { call: [fn, ...] }]`
+// where `fn` has a void return type.  Storing a void value into a typed location
+// produces malformed IR (LLVM's getPrefTypeAlignment recurses to stack overflow
+// on the resulting type ring — see crash on tests/test_import_toplevel_order
+// during the libraryMode source-order debugging session 2026-06-04).
+//
+// Returns true (and logs an error) when the call's target resolves to a void
+// function in this module.  Unresolved (non-LLVM) names and method/namespace
+// calls fall through silently — they have their own typing rules.
+bool rejectVoidCallInit(CompilerContext& ctx, Expr* initExpr,
+                        const std::string& targetDesc,
+                        const YAML::Node& srcNode) {
+    auto* call = dynamic_cast<CallExpr*>(initExpr);
+    if (!call) return false;
+    // Method/namespace calls are routed through different visit handlers;
+    // their typing is checked elsewhere.  Only catch the direct-call form.
+    if (call->functionName.find('.') != std::string::npos) return false;
+    llvm::Function* fn = ctx.module.getFunction(call->functionName);
+    if (!fn) {
+        // Try qualified name (current namespace).
+        fn = ctx.module.getFunction(ctx.qualify(call->functionName));
+    }
+    if (!fn) return false;
+    if (!fn->getReturnType()->isVoidTy()) return false;
+    LOG_ERROR(ctx.fmtLoc(srcNode) + targetDesc +
+        " from a void-returning call '" + call->functionName +
+        "()' — void values cannot be stored into a typed location. " +
+        "Add `return: <T>` + a `- return: ...` to '" + call->functionName +
+        "', or use an explicit `- call: [" + call->functionName +
+        ", ...]` statement (no init).");
+    return true;
+}
+}  // namespace
+
+namespace {
 void coerceOrStoreFieldDefault(CompilerContext& ctx,
                                llvm::Value* targetPtr,
                                const CompilerContext::StructMember& member,
@@ -80,8 +115,11 @@ void Compiler::visitStatement(Stmt* stmt) {
     else if (auto tryStmt = dynamic_cast<TryStmt*>(stmt)) visitTry(tryStmt);
     else if (auto throwStmt = dynamic_cast<ThrowStmt*>(stmt)) visitThrow(throwStmt);
     else if (auto idxStmt = dynamic_cast<IdxStmt*>(stmt)) visitIdxStmt(idxStmt);
+    else if (auto storeStmt = dynamic_cast<StoreStmt*>(stmt)) visitStoreStmt(storeStmt);
 }
 void Compiler::visitDeclStmt(DeclStmt* decl) {
+    ctx.validateIdentifier(decl->varName, "variable", decl->sourceNode);
+
     IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
     if (!ty) return;
 
@@ -124,9 +162,18 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         ctx.builder.CreateStore(llvm::Constant::getNullValue(unwrappedTy), unwrappedAlloca);
     
     std::string tName = decl->typeName;
-    if (tName.find("list<") == 0 && tName.back() == '>') {
+    // Pre-promoted globals: container init was already emitted in the lib_init
+    // prologue (Phase 2 of libraryMode in ast_compiler.cpp::compile).  Skip
+    // here to avoid double-init (which would leak the first data buffer).
+    if (isPrePromotedGlobal) {
+        // fall through — initializer eval still happens below
+    } else if (tName.find("list<") == 0 && tName.back() == '>') {
         std::string elemName = tName.substr(5, tName.length() - 6);
         llvm::Type* elemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
+        if (elemTy) ListImpl::initList(ctx, unwrappedAlloca, elemTy, 4);
+    } else if (tName.find("cascade<") == 0 && tName.back() == '>') {
+        // cascade<X> shares the list<i32> layout; init the same way.
+        llvm::Type* elemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType("i32")));
         if (elemTy) ListImpl::initList(ctx, unwrappedAlloca, elemTy, 4);
     } else if (tName.find("map<") == 0 && tName.back() == '>') {
         std::string inner = tName.substr(4, tName.length() - 5);
@@ -155,6 +202,12 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         ctx.builder.CreateCall(
             ctx.getFunction("aiml_ui_copy_current_style", voidTy, {p}),
             {unwrappedAlloca});
+    } else if (!decl->initialValue && ctx.classes.count(tName) &&
+               !ctx.classes[tName].isBuiltin && ctx.classes[tName].type) {
+        // Local class-instance decl without initializer (no { new: ... }):
+        // recursively initialise container-typed members so e.g. `.push` works
+        // immediately on a freshly-decl'd list<T>/map<K:V> field.
+        initClassContainerMembers(unwrappedAlloca, tName);
     }
     
     if (!isPrePromotedGlobal) {
@@ -204,6 +257,68 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
     }
     
     if (decl->initialValue) {
+        if (rejectVoidCallInit(ctx, decl->initialValue.get(),
+                "cannot initialize '" + decl->varName + "' of type '" + decl->typeName + "'",
+                decl->sourceNode)) {
+            return;
+        }
+        // Map literal: decl: [name, map<K:V>, {"k1": v1, "k2": v2, ...}]
+        // Map is already alloc'd above (initMap); emit one put per entry.
+        if (tName.rfind("map<", 0) == 0 && tName.back() == '>') {
+            if (auto* dictLit = dynamic_cast<DictLiteralExpr*>(decl->initialValue.get())) {
+                if (!dictLit->entriesExpr.empty()) {
+                    std::string inner = tName.substr(4, tName.length() - 5);
+                    size_t colon = inner.find(':');
+                    if (colon != std::string::npos) {
+                        std::string kName = inner.substr(0, colon);
+                        std::string vName = inner.substr(colon + 1);
+                        llvm::Type* kTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(kName)));
+                        llvm::Type* vTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
+                        if (kTy && vTy) {
+                            auto* mapStructTy = MapImpl::getMapStructType(ctx, kTy, vTy);
+                            for (auto& [keyStr, valExpr] : dictLit->entriesExpr) {
+                                llvm::Value* kVal = nullptr;
+                                if (kName == "string") {
+                                    kVal = ctx.builder.CreateGlobalStringPtr(keyStr, "mlit_k");
+                                } else if (kName == "i32") {
+                                    kVal = ctx.builder.getInt32((int32_t)std::stoll(keyStr));
+                                } else if (kName == "i64") {
+                                    kVal = ctx.builder.getInt64(std::stoll(keyStr));
+                                } else if (ctx.enums.count(kName) || ctx.enums.count(ctx.qualify(kName))) {
+                                    /* Enum-typed key — resolve the string
+                                     * (e.g. "flying") to its integer value
+                                     * via the enum's value map. */
+                                    const auto& enumVals = ctx.enums.count(kName)
+                                        ? ctx.enums[kName]
+                                        : ctx.enums[ctx.qualify(kName)];
+                                    auto it = enumVals.find(keyStr);
+                                    if (it == enumVals.end()) {
+                                        LOG_ERROR(ctx.fmtLoc(decl->sourceNode)
+                                            + "map literal: enum '" + kName
+                                            + "' has no value named '" + keyStr + "'");
+                                        continue;
+                                    }
+                                    kVal = ctx.builder.getInt32((int32_t)it->second);
+                                } else {
+                                    LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "map literal: key type '" + kName + "' not supported yet");
+                                    continue;
+                                }
+                                IRValue* vv = visitExpression(valExpr.get());
+                                if (!vv) continue;
+                                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(vv));
+                                if (vTy->isIntegerTy() && v->getType()->isIntegerTy() && v->getType() != vTy) {
+                                    v = ctx.builder.CreateZExtOrTrunc(v, vTy, "mlit_v");
+                                } else if (vTy->isFloatingPointTy() && v->getType()->isFloatingPointTy() && v->getType() != vTy) {
+                                    v = ctx.builder.CreateFPCast(v, vTy, "mlit_v");
+                                }
+                                MapImpl::put(ctx, unwrappedAlloca, kVal, v, mapStructTy);
+                            }
+                            return; // done — skip normal expression init
+                        }
+                    }
+                }
+            }
+        }
         // Buffer literal: decl: [name, buffer<T>, [v1, v2, ...]]
         // Buffer is already alloc'd above; emit one write per element.
         if (auto* bufLit = dynamic_cast<BufferLiteralExpr*>(decl->initialValue.get())) {
@@ -278,7 +393,13 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 });
             } else if (decl->typeName.find("list<") == 0) {
                 llvm::Value* rawInitVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal));
-                if (rawInitVal->getType()->isPointerTy()) {
+                // `null` literal on a container slot would memcpy 16 bytes from
+                // a null source — segfault at startup.  Global storage already
+                // starts zeroed; just skip the no-op.  Common pattern:
+                //   - decl: [xs, list<T>, null, { extern: true }]
+                if (llvm::isa<llvm::ConstantPointerNull>(rawInitVal)) {
+                    // skip — global is zero-initialised by linker
+                } else if (rawInitVal->getType()->isPointerTy()) {
                     // Builtin handler returns alloca ptr → memcpy struct contents
                     llvm::StructType* listStructTy = ListImpl::getListStructType(ctx);
                     uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(listStructTy);
@@ -348,56 +469,44 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 // the __vtable_<Class>_<Iface> global.
                 if (decl->typeName.rfind("ptr<", 0) == 0 && decl->typeName.back() == '>') {
                     std::string ifaceName = decl->typeName.substr(4, decl->typeName.size() - 5);
-                    auto ifaceIt = ctx.interfaces.find(ifaceName);
-                    if (ifaceIt != ctx.interfaces.end()) {
-                        // Find source class from the init expression's symbol.
-                        std::string srcClass;
+                    if (ctx.interfaces.count(ifaceName)) {
+                        // Resolve source class and raw object pointer.
+                        std::string srcType;
+                        llvm::Value* objPtr = initRaw;
                         if (auto* varExpr = dynamic_cast<VariableExpr*>(decl->initialValue.get())) {
                             if (Symbol* srcSym = resolveVariable(varExpr->name)) {
-                                std::string srcType = srcSym->typeName;
-                                if (srcType.rfind("ref<", 0) == 0 && srcType.back() == '>')
-                                    srcClass = srcType.substr(4, srcType.size() - 5);
-                                else if (srcType.rfind("ptr<", 0) == 0 && srcType.back() == '>')
-                                    srcClass = srcType.substr(4, srcType.size() - 5);
-                                else if (ctx.classes.count(srcType))
-                                    srcClass = srcType;
-                            }
-                        }
-                        if (!srcClass.empty() && ctx.classes.count(srcClass)) {
-                            // initRaw should be the object pointer (i8*).  For
-                            // ref<Class>/ptr<Class> srcs visitExpression returns
-                            // the loaded pointer; that's already correct.  For a
-                            // by-value class instance variable, take its alloca.
-                            llvm::Value* objPtr = initRaw;
-                            if (objPtr && !objPtr->getType()->isPointerTy()) {
-                                if (auto* varExpr = dynamic_cast<VariableExpr*>(decl->initialValue.get())) {
-                                    if (Symbol* srcSym = resolveVariable(varExpr->name)) {
-                                        objPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
-                                            srcSym->ir_alloca_inst ? srcSym->ir_alloca_inst
-                                                                   : ctx.ir_gen->wrap(srcSym->alloca_inst)));
-                                    }
+                                srcType = srcSym->typeName;
+                                if (objPtr && !objPtr->getType()->isPointerTy()) {
+                                    // By-value class instance: take its alloca address.
+                                    objPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+                                        srcSym->ir_alloca_inst ? srcSym->ir_alloca_inst
+                                                               : ctx.ir_gen->wrap(srcSym->alloca_inst)));
+                                    srcType = "ptr<" + srcType + ">";  // promote to ptr-form
                                 }
                             }
-                            std::string vtableName = "__vtable_" + srcClass + "_" + ifaceName;
-                            llvm::GlobalVariable* vtbl = ctx.module.getNamedGlobal(vtableName);
-                            if (vtbl) {
-                                auto* fpTy = llvm::cast<llvm::StructType>(declTy);
-                                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-                                llvm::Value* objField = ctx.builder.CreateStructGEP(fpTy, unwrappedAlloca, 0, "fp_obj");
-                                llvm::Value* vtblField = ctx.builder.CreateStructGEP(fpTy, unwrappedAlloca, 1, "fp_vtbl");
-                                ctx.builder.CreateStore(ctx.builder.CreateBitCast(objPtr, i8p), objField);
-                                ctx.builder.CreateStore(ctx.builder.CreateBitCast(vtbl, i8p), vtblField);
-                                LOG_DEBUG("interface upcast: " + decl->varName + " = " + srcClass + " as ptr<" + ifaceName + ">");
+                        }
+                        if (!srcType.empty() && objPtr) {
+                            auto* fpTy = llvm::cast<llvm::StructType>(declTy);
+                            llvm::Value* fat = buildInterfaceUpcast(objPtr, srcType, fpTy);
+                            if (fat) {
+                                ctx.builder.CreateStore(fat, unwrappedAlloca);
+                                LOG_DEBUG("interface upcast: " + decl->varName + " as ptr<" + ifaceName + ">");
                                 return;
-                            } else {
-                                LOG_ERROR(ctx.fmtLoc(decl->sourceNode) +
-                                    "class '" + srcClass + "' does not implement interface '" + ifaceName + "' (no " + vtableName + " global)");
                             }
+                            LOG_ERROR(ctx.fmtLoc(decl->sourceNode) +
+                                "class source '" + srcType + "' does not implement interface '" + ifaceName + "'");
                         }
                     }
                 }
 
                 if (declTy && declTy->isStructTy() && initRaw && initRaw->getType()->isPointerTy()) {
+                    // `null` literal on a struct slot would memcpy `sizeof(T)`
+                    // bytes from a null source — segfault at startup.  Global
+                    // storage already starts zeroed; just skip the no-op.
+                    // Common pattern: `- decl: [x, T, null, { extern: true }]`.
+                    if (llvm::isa<llvm::ConstantPointerNull>(initRaw)) {
+                        return;
+                    }
                     // ctx.kvGetCopy is set when the initialValue was `kv.get(k, {copy: true})`.
                     // In that case, do a deep-copy (encode-then-decode roundtrip) instead of
                     // a flat memcpy so the destination's heap allocations (strings, list
@@ -480,12 +589,59 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         }
     }
 }
+// Conservative assignment-compatibility guard.  Runs at the scalar
+// createStore fallback — AFTER all legitimate coercions (int↔int, int↔float,
+// string→int, enum←int, path-intern) and AFTER the container/model memcpy/
+// deep-copy branches.  Catches silent garbage: a pointer/struct stored into a
+// numeric/enum slot, or a number stored into a string.  ptr<>/ref<>/any/path/
+// container targets are handled by other branches and skipped here.  Returns a
+// human message on mismatch, "" when compatible.
+static std::string scalarStoreMismatch(CompilerContext& ctx,
+                                       const std::string& typeName,
+                                       llvm::Value* sv) {
+    if (!sv || typeName.empty() || typeName == "any" || typeName == "path") return "";
+    if (typeName.rfind("ptr<", 0) == 0 || typeName.rfind("ref<", 0) == 0) return "";
+    if (typeName.rfind("list<", 0) == 0 || typeName.rfind("map<", 0) == 0 ||
+        typeName.rfind("buffer<", 0) == 0) return "";
+    llvm::Type* tgt = ctx.getLLVMType(typeName);
+    if (!tgt) return "";
+    llvm::Type* vt = sv->getType();
+    bool valPtr = vt->isPointerTy();
+    bool valAgg = vt->isStructTy() || vt->isArrayTy();
+    bool valNum = vt->isIntegerTy() || vt->isFloatingPointTy();
+    if ((tgt->isIntegerTy() || tgt->isFloatingPointTy()) && (valPtr || valAgg))
+        return "target is numeric/enum (" + typeName + ") but the value is a pointer/string/struct";
+    if (typeName == "string" && (valNum || valAgg))
+        return "target is string but the value is numeric/struct";
+    return "";
+}
+
+// True if `derived` is `base` or transitively inherits from it (parentName chain).
+static bool modelIsAncestor(CompilerContext& ctx, std::string derived, const std::string& base) {
+    int guard = 0;
+    while (!derived.empty() && guard++ < 64) {
+        if (derived == base) return true;
+        auto it = ctx.classes.find(derived);
+        if (it == ctx.classes.end()) break;
+        derived = it->second.parentName;
+    }
+    return false;
+}
+// Two models are assignment-related if one inherits from the other (either
+// direction) — a derived value into a base slot copies the shared prefix.
+static bool modelsInheritanceRelated(CompilerContext& ctx, const std::string& a, const std::string& b) {
+    return modelIsAncestor(ctx, a, b) || modelIsAncestor(ctx, b, a);
+}
+
 void Compiler::visitSetStmt(SetStmt* setStmt) {
-    // Reset Kv.get/get_copy flags so they don't leak into the next decl.
-    // visitSetStmt does not currently use them — the kv.get pattern paired with
-    // a `set:` (instead of decl-with-init) doesn't trigger the diagnostic, on
-    // the principle that the set target already has a declared type and the
-    // user has had an explicit decl: line earlier to declare it.
+    // Reset any leaked kv-dispatch flags from prior statements before evaluating
+    // the rhs. visitCall on a `kv.get_copy(...)` inside the rhs will re-set
+    // ctx.kvGetCopy = true, which the struct-assignment branch below honors
+    // to emit aiml_ser_deep_copy instead of a shallow memcpy
+    // (see doc/issue/kv_get_mutate_set_same_key_crash.md — same logic as
+    // visitDeclStmt). Without this, `set: [exp, { call: [kv.get_copy, key] }]`
+    // would leave exp and the kv decoded_cache sharing heap pointers, and the
+    // first push+set-same-key after that crashes.
     ctx.kvGetCalled = false;
     ctx.kvGetCopy = false;
     ctx.kvGetValueType.clear();
@@ -534,6 +690,12 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             }
         }
     }
+    if (rejectVoidCallInit(ctx, setStmt->value.get(),
+            "cannot assign to '" + targetStr + "'",
+            setStmt->sourceNode)) {
+        ctx.deserializeTargetType.clear();
+        return;
+    }
     IRValue* val = visitExpression(setStmt->value.get());
     ctx.deserializeTargetType.clear();
     if (!val) {
@@ -546,6 +708,27 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
              LOG_ERROR(ctx.fmtLoc() + "Cannot assign to const variable " + targetStr);
              return;
         }
+        // Enum-typed target must not receive a string (enum is i32 under the
+        // hood — a string would silently coerce to garbage).  Require an
+        // enum-literal (EnumName.value) or an int.
+        if (ctx.enums.count(sym->typeName)) {
+            llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+            if (sv && sv->getType()->isPointerTy()) {
+                LOG_ERROR(ctx.fmtLoc() + "Cannot assign a string to enum-typed '" + targetStr +
+                          "' (" + sym->typeName + ") — use " + sym->typeName + ".<value> or an int");
+                return;
+            }
+        }
+        // For a BY-REF container param (list/map/buffer passed by reference), the alloca
+        // holds a POINTER to the struct — a struct-sized write must go THROUGH it, not
+        // into the 8-byte pointer slot (which would clobber the pointer and overflow into
+        // adjacent stack → corruption/crash).  Dereference once for such targets.  For a
+        // plain local (own struct alloca) this is a no-op.
+        llvm::Value* writeDest = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+        if (sym->is_byref_arg) {
+            llvm::Type* wptrTy = llvm::PointerType::get(ctx.context, 0);
+            writeDest = ctx.builder.CreateLoad(wptrTy, writeDest, "byref_set_deref");
+        }
         if (sym->typeName.find("list<") == 0) {
             llvm::Value* rawVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
             if (rawVal->getType()->isPointerTy()) {
@@ -555,13 +738,13 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                 llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
                 ctx.builder.CreateCall(memcpyFunc, {
-                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
+                    writeDest,
                     rawVal,
                     ctx.getSizeConst(structSize)
                 });
             } else {
                 // User function returns list struct value → store directly
-                ctx.builder.CreateStore(rawVal, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
+                ctx.builder.CreateStore(rawVal, writeDest);
             }
             return;
         }
@@ -572,7 +755,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                 llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
                 ctx.builder.CreateCall(memcpyFunc, {
-                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
+                    writeDest,
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)),
                     ctx.getSizeConst(structSize)
                 });
@@ -586,7 +769,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                 llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
                 ctx.builder.CreateCall(memcpyFunc, {
-                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
+                    writeDest,
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)),
                     ctx.getSizeConst(structSize)
                 });
@@ -594,15 +777,36 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             }
         }
         // User struct/class assigned from deserialized i8* heap pointer → memcpy
+        // OR deep-copy when ctx.kvGetCopy is set (kv.get_copy pattern, see
+        // doc/issue/kv_get_mutate_set_same_key_crash.md). visitDeclStmt has the
+        // same logic for decl-with-init; this branch handles `set: [exp, kv.get_copy(...)]`
+        // where exp was declared earlier without an initializer.
         auto classIt = ctx.classes.find(sym->typeName);
         if (classIt != ctx.classes.end() && !classIt->second.isBuiltin && classIt->second.type) {
             llvm::StructType* structTy = classIt->second.type;
             uint64_t structSize = ctx.module.getDataLayout().getTypeAllocSize(structTy);
             llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
-            llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
             llvm::Value* rawVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
-            // Only memcpy if the value is a pointer (i8* from deserializer), not a struct value
+            // Only act when the value is a pointer (i8* from deserializer), not a struct value
             if (rawVal->getType()->isPointerTy()) {
+                bool needsDeepCopy = ctx.kvGetCopy
+                                     && classIt->second.hasHeapFields
+                                     && classIt->second.serNodesVar;
+                if (needsDeepCopy) {
+                    // Encode + decode round-trip → fresh heap allocations independent of cache.
+                    llvm::Function* fn = ctx.getFunction("aiml_ser_deep_copy",
+                        ctx.builder.getVoidTy(),
+                        {ptrTy, ptrTy, ptrTy, ctx.builder.getInt32Ty()});
+                    ctx.builder.CreateCall(fn, {
+                        static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
+                        rawVal,
+                        classIt->second.serNodesVar,
+                        ctx.builder.getInt32(classIt->second.serNodesCount)
+                    });
+                    ctx.kvGetCopy = false;
+                    return;
+                }
+                llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
                 ctx.builder.CreateCall(memcpyFunc, {
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
                     rawVal,
@@ -674,6 +878,14 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 }
             }
         }
+        {
+            std::string mm = scalarStoreMismatch(ctx, sym->typeName,
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)));
+            if (!mm.empty()) {
+                LOG_ERROR(ctx.fmtLoc() + "Incompatible assignment to '" + targetStr + "': " + mm);
+                return;
+            }
+        }
         ctx.ir_gen->createStore(val, baseAlloca);
     } else {
         std::string className = sym->typeName;
@@ -732,6 +944,15 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             std::string finalTypeName;
             IRValue* targetGep = resolvePropertyWritePtr(&tmpBaseSym, propName, finalTypeName);
             if (targetGep) {
+                // Enum-typed member must not receive a string (see top-level path).
+                if (!finalTypeName.empty() && ctx.enums.count(finalTypeName)) {
+                    llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                    if (sv && sv->getType()->isPointerTy()) {
+                        LOG_ERROR(ctx.fmtLoc() + "Cannot assign a string to enum-typed '" + targetStr +
+                                  "' (" + finalTypeName + ") — use " + finalTypeName + ".<value> or an int");
+                        return;
+                    }
+                }
                 // Apply integer narrowing/widening for final member type
                 if (!finalTypeName.empty()) {
                     llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
@@ -747,6 +968,98 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                             else
                                 val = ctx.ir_gen->wrap(ctx.builder.CreateSExt(sv, targetTy, "sext_member"));
                         }
+                    }
+                }
+                // ── Struct-content copy for list<T>/buffer<T>/map<K:V> fields ────
+                // For these types, resolveProperty (used to evaluate the RHS) and
+                // the RHS-as-VariableExpr path return a POINTER to the inline
+                // struct, not a loaded value.  A plain `store ptr, targetGep`
+                // would overwrite only the first 8 bytes of the destination's
+                // inline struct — leaving size/capacity correct but data garbage
+                // (or vice versa).  Use memcpy for the full struct width.
+                //
+                // Note: this is a shallow copy.  The destination shares heap
+                // data with the source — same semantics as `decl: [s, T, src]`.
+                // For deep copy use kv.get_copy / aiml_ser_deep_copy paths.
+                bool isInlineHeapStruct =
+                    finalTypeName.rfind("list<",   0) == 0 ||
+                    finalTypeName.rfind("buffer<", 0) == 0 ||
+                    finalTypeName.rfind("map<",    0) == 0;
+                if (isInlineHeapStruct) {
+                    llvm::Type* fieldTy = ctx.getLLVMType(finalTypeName);
+                    llvm::Value* srcPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                    llvm::Value* dstPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(targetGep));
+                    if (fieldTy && srcPtr && srcPtr->getType()->isPointerTy()) {
+                        uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(fieldTy);
+                        llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                        llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy,
+                            {ptrTy, ptrTy, ctx.getSizeType()});
+                        ctx.builder.CreateCall(mcf, {dstPtr, srcPtr, ctx.getSizeConst(sz)});
+                        return;
+                    }
+                }
+                // ── User model/class field assigned from a HEAP POINTER
+                // (kv.get_copy / deserializer i8*).  A plain `store ptr` writes
+                // only the first 8 bytes (the pointer) into the destination
+                // struct → garbage.  Deep-copy when kv.get_copy was the source
+                // (independent heap, see kv_getcopy_nested_slot backlog),
+                // otherwise memcpy the full struct width.  When `val` is a
+                // struct VALUE (nested-assign of a loaded struct) we fall
+                // through to createStore, which is correct.
+                {
+                    auto cIt = ctx.classes.find(finalTypeName);
+                    if (cIt != ctx.classes.end() && !cIt->second.isBuiltin && cIt->second.type) {
+                        // Model target ← plain variable of a DIFFERENT model type
+                        // is almost always a bug (silent wrong-size memcpy).
+                        if (auto* rve = dynamic_cast<VariableExpr*>(setStmt->value.get())) {
+                            if (rve->name.find('.') == std::string::npos) {
+                                if (Symbol* rs = resolveVariable(rve->name)) {
+                                    if (rs->typeName != finalTypeName &&
+                                        ctx.classes.count(rs->typeName) &&
+                                        !ctx.classes[rs->typeName].isBuiltin &&
+                                        !modelsInheritanceRelated(ctx, rs->typeName, finalTypeName)) {
+                                        LOG_ERROR(ctx.fmtLoc() + "Incompatible assignment to '" + targetStr +
+                                            "': target is model '" + finalTypeName + "' but the value is unrelated model '" +
+                                            rs->typeName + "'");
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        llvm::Value* srcPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                        if (srcPtr && srcPtr->getType()->isPointerTy()) {
+                            llvm::StructType* structTy = cIt->second.type;
+                            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                            llvm::Value* dstPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(targetGep));
+                            bool needsDeepCopy = ctx.kvGetCopy
+                                                 && cIt->second.hasHeapFields
+                                                 && cIt->second.serNodesVar;
+                            if (needsDeepCopy) {
+                                llvm::Function* fn = ctx.getFunction("aiml_ser_deep_copy",
+                                    ctx.builder.getVoidTy(),
+                                    {ptrTy, ptrTy, ptrTy, ctx.builder.getInt32Ty()});
+                                ctx.builder.CreateCall(fn, {
+                                    dstPtr, srcPtr,
+                                    cIt->second.serNodesVar,
+                                    ctx.builder.getInt32(cIt->second.serNodesCount)
+                                });
+                                ctx.kvGetCopy = false;
+                                return;
+                            }
+                            uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(structTy);
+                            llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy,
+                                {ptrTy, ptrTy, ctx.getSizeType()});
+                            ctx.builder.CreateCall(mcf, {dstPtr, srcPtr, ctx.getSizeConst(sz)});
+                            return;
+                        }
+                    }
+                }
+                {
+                    std::string mm = scalarStoreMismatch(ctx, finalTypeName,
+                        static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)));
+                    if (!mm.empty()) {
+                        LOG_ERROR(ctx.fmtLoc() + "Incompatible assignment to '" + targetStr + "': " + mm);
+                        return;
                     }
                 }
                 ctx.ir_gen->createStore(val, targetGep);
@@ -775,6 +1088,34 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
     llvm::Type* retTy = currentFunc->getReturnType();
 
+    // Decorator wrapping — right-to-left, one hook per built-in.  Currently
+    // only `vocab` is recognised (wraps string returns with
+    // aiml_vocab_lookup).  Unknown decorator names are silently ignored so
+    // adding new ones later doesn't break older functions.
+    auto apply_decorators = [&](llvm::Value* raw) -> llvm::Value* {
+        if (!raw) return raw;
+        if (ctx.currentFunctionDecorators.empty()) return raw;
+        for (auto it  = ctx.currentFunctionDecorators.rbegin();
+             it != ctx.currentFunctionDecorators.rend(); ++it) {
+            const std::string& dname = *it;
+            if (dname == "vocab") {
+                // Only wrap when the value is a string (i8*) — non-string
+                // returns pass through unchanged so mixed-return functions
+                // don't hit a signature mismatch.
+                if (!raw->getType()->isPointerTy() ||
+                    ctx.currentFunctionReturnType != "string") continue;
+                auto* p8 = llvm::PointerType::get(ctx.context, 0);
+                llvm::Function* fn = ctx.module.getFunction("aiml_vocab_lookup");
+                if (!fn) fn = llvm::Function::Create(
+                    llvm::FunctionType::get(p8, {p8}, false),
+                    llvm::Function::ExternalLinkage, "aiml_vocab_lookup",
+                    ctx.module);
+                raw = ctx.builder.CreateCall(fn, {raw}, "vocab_wrapped");
+            }
+        }
+        return raw;
+    };
+
     // Void function: always emit ret void, evaluate expression only for side effects
     if (retTy->isVoidTy()) {
         if (retStmt->value) visitExpression(retStmt->value.get());
@@ -782,7 +1123,83 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     } else if (retStmt->value) {
         IRValue* val = visitExpression(retStmt->value.get());
         if (val) {
-            ctx.ir_gen->createRet(val);
+            // Struct-by-value return (list/buffer/map): visitExpression often
+            // yields an alloca-pointer to the struct (e.g. from `str.split` or
+            // any builtin that fills a stack-alloc'd list).  ret needs the
+            // loaded struct, not the pointer.
+            llvm::Value* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+            if (retTy->isStructTy() && raw && raw->getType()->isPointerTy()) {
+                // `return: null` for a struct / fat-pointer return type: do NOT
+                // load the struct from the null address (→ SIGSEGV).  A null
+                // struct return is a zero-initialized struct (e.g. a null
+                // interface fat pointer {obj=null, vtable=null}).
+                if (llvm::isa<llvm::ConstantPointerNull>(raw)) {
+                    ctx.ir_gen->createRet(ctx.ir_gen->wrap(
+                        llvm::ConstantAggregateZero::get(retTy)));
+                } else {
+                    // `return: kv.get_copy(k)` — the get_copy result is a pointer
+                    // into the kv decoded_cache (shallow view).  A plain struct
+                    // load would return a struct whose string/list/map heap
+                    // pointers ALIAS the cache slot; a later set/get_copy/evict on
+                    // the same key frees them → use-after-free in the CALLER
+                    // (e.g. get_raw → amat → nested play_card.set → dangling).
+                    // Deep-copy into an independent temp first, exactly like the
+                    // decl-site path.  See doc/issue/kv_get_mutate_set_same_key_crash.md.
+                    auto ciRet = ctx.classes.find(ctx.currentFunctionReturnType);
+                    bool retDeepCopy = ctx.kvGetCopy
+                                       && ciRet != ctx.classes.end()
+                                       && ciRet->second.hasHeapFields
+                                       && ciRet->second.serNodesVar;
+                    if (retDeepCopy) {
+                        auto* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                        llvm::Value* tmp = ctx.builder.CreateAlloca(retTy, nullptr, "retcopy");
+                        ctx.builder.CreateStore(llvm::ConstantAggregateZero::get(retTy), tmp);
+                        llvm::Function* fn = ctx.getFunction("aiml_ser_deep_copy",
+                            ctx.builder.getVoidTy(),
+                            {ptrTy, ptrTy, ptrTy, ctx.builder.getInt32Ty()});
+                        ctx.builder.CreateCall(fn, {
+                            tmp, raw, ciRet->second.serNodesVar,
+                            ctx.builder.getInt32(ciRet->second.serNodesCount)
+                        });
+                        llvm::Value* loaded = ctx.builder.CreateLoad(retTy, tmp, "ret_struct_load");
+                        ctx.ir_gen->createRet(ctx.ir_gen->wrap(loaded));
+                        ctx.kvGetCopy = false;
+                    } else {
+                    // Interface upcast on return: `return: obj` where obj is a
+                    // ptr<ConcreteClass> but the function returns ptr<Interface>
+                    // (fat pointer AimlFatPtr_<Iface>).  Loading a fat-pointer
+                    // struct from the object's own memory yields garbage — build
+                    // {obj, vtable} instead (same as the decl-site upcast).
+                    llvm::Value* fat = nullptr;
+                    auto* st = llvm::cast<llvm::StructType>(retTy);
+                    if (st->hasName() && st->getName().startswith("AimlFatPtr_")) {
+                        std::string srcType;
+                        if (auto* varExpr =
+                                dynamic_cast<VariableExpr*>(retStmt->value.get())) {
+                            if (Symbol* srcSym = resolveVariable(varExpr->name))
+                                srcType = srcSym->typeName;
+                        }
+                        // Upcast only from a concrete-class ptr; a source that is
+                        // already the interface fat pointer falls through to load.
+                        if (srcType.rfind("ptr<", 0) == 0 && srcType.back() == '>') {
+                            std::string inner =
+                                srcType.substr(4, srcType.size() - 5);
+                            if (ctx.classes.count(inner))
+                                fat = buildInterfaceUpcast(raw, srcType, st);
+                        }
+                    }
+                    if (fat) {
+                        ctx.ir_gen->createRet(ctx.ir_gen->wrap(fat));
+                    } else {
+                        llvm::Value* loaded = ctx.builder.CreateLoad(retTy, raw, "ret_struct_load");
+                        ctx.ir_gen->createRet(ctx.ir_gen->wrap(loaded));
+                    }
+                    }
+                }
+            } else {
+                raw = apply_decorators(raw);
+                ctx.ir_gen->createRet(ctx.ir_gen->wrap(raw));
+            }
         } else {
              LOG_ERROR(ctx.fmtLoc() + "Failed to evaluate return expression");
              ctx.ir_gen->createRet(ctx.ir_gen->wrap(llvm::Constant::getNullValue(retTy)));
@@ -1033,6 +1450,20 @@ void Compiler::visitThrow(ThrowStmt* throwStmt) {
     // With Opaque Pointers, excAlloc is `ptr`. `rawObj` is `ptr`.
     ctx.builder.CreateStore(rawObj, excAlloc);
 
+    // Record the exception's `message` (offset 0, an i8* — every exception
+    // extends Exception whose sole member `message` sits first) so the
+    // top-level uncaught handler in jitRun can print it (spec/22).  Harmless
+    // when the throw IS caught; the value is simply overwritten by the next throw.
+    {
+        llvm::Function* noteFunc = ctx.module.getFunction("aiml_note_thrown_message");
+        if (!noteFunc) {
+            llvm::FunctionType* nfty = llvm::FunctionType::get(ctx.builder.getVoidTy(), {ptrTy}, false);
+            noteFunc = llvm::Function::Create(nfty, llvm::Function::ExternalLinkage, "aiml_note_thrown_message", ctx.module);
+        }
+        llvm::Value* msgCharPtr = ctx.builder.CreateLoad(ptrTy, rawObj, "exc_msg_ptr");
+        ctx.builder.CreateCall(noteFunc, {msgCharPtr});
+    }
+
     llvm::Value* nullTypeInfo = llvm::ConstantPointerNull::get(ptrTy);
     llvm::Value* nullDtor = llvm::ConstantPointerNull::get(ptrTy);
 
@@ -1056,8 +1487,33 @@ void Compiler::visitThrow(ThrowStmt* throwStmt) {
 }
 
 void Compiler::visitIdxStmt(IdxStmt* idx) {
-    // Resolve the container variable
-    Symbol* sym = resolveVariable(idx->container);
+    // Resolve the container.  Supports plain variables ("g_foo"), the `<.`
+    // shortcut for `this.<field>` inside class methods, and full `this.<field>`
+    // / `obj.<field>` property paths via resolvePropertyWritePtr.
+    std::string container = idx->container;
+    if (container.rfind("<.", 0) == 0) container = "this." + container.substr(2);
+
+    Symbol* sym = nullptr;
+    Symbol propSym;  // backing storage when container is a property path
+    size_t dotPos = container.find('.');
+    if (dotPos != std::string::npos) {
+        std::string baseName = container.substr(0, dotPos);
+        std::string propPath = container.substr(dotPos + 1);
+        Symbol* baseSym = resolveVariable(baseName);
+        if (baseSym) {
+            std::string fieldTy;
+            IRValue* fieldPtr = resolvePropertyWritePtr(baseSym, propPath, fieldTy);
+            if (fieldPtr) {
+                propSym.typeName       = fieldTy;
+                propSym.ir_alloca_inst = fieldPtr;
+                propSym.ir_type        = ctx.ir_gen->getPointerTy();
+                if (llvm::Type* lt = ctx.getLLVMType(fieldTy))
+                    propSym.ir_element_type = ctx.ir_gen->wrapType(lt);
+                sym = &propSym;
+            }
+        }
+    }
+    if (!sym) sym = resolveVariable(container);
     if (!sym) {
         LOG_ERROR(ctx.fmtLoc() + "idx: unknown variable '" + idx->container + "'");
         return;
@@ -1184,8 +1640,34 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
         llvm::Type* elemTy = ctx.getLLVMType(elemName);
         llvm::Value* listPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
             sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst)));
+        // Byref-arg: alloca holds a pointer to the list-struct; dereference
+        // before GEP into element slots.  Without this, ListImpl::getElementPtr
+        // reads `dataPtr` at the wrong offset (treating the ptr-slot itself
+        // as a list-struct), corrupting nearby heap memory (often the next
+        // Kv handle, manifesting as "std::mutex: Invalid argument").
+        // visitVariable's read path handles this via implicit deref; the
+        // write path needs the same logic.
+        if (sym->is_byref_arg) {
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            listPtr = ctx.builder.CreateLoad(ptrTy, listPtr, "byref_list_deref");
+        }
         if (indexVals.empty()) { LOG_ERROR("idx: list requires at least one index"); return; }
         llvm::Value* elemPtr = ListImpl::getElementPtr(ctx, listPtr, indexVals[0], elemTy);
+
+        // struct elements + pointer-typed source: memcpy the whole struct.
+        // Without this, CreateStore would only write pointer-size bytes
+        // (typically 8) into a slot meant for the full struct (e.g. 24+
+        // bytes for a model with multiple fields), corrupting both the
+        // list element and adjacent heap memory.
+        if (elemTy->isStructTy() && storeVal->getType()->isPointerTy()) {
+            uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(elemTy);
+            llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::Function* memcpyFunc = ctx.getFunction("memcpy",
+                ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
+            ctx.builder.CreateCall(memcpyFunc,
+                {elemPtr, storeVal, ctx.getSizeConst(sz)});
+            return;
+        }
 
         if (storeVal->getType() != elemTy) {
             if (elemTy->isFloatingPointTy() && storeVal->getType()->isIntegerTy())
@@ -1219,6 +1701,68 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
     }
 
     LOG_ERROR(ctx.fmtLoc() + "idx: unsupported container type '" + tName + "'");
+}
+
+// store: [ptr_var, value, (optional)depth]  → deref-write through a pointer.
+// Loadet depth-mal vom ptr-Slot, schreibt dann value an die finale Adresse.
+//   depth=1:  v = load slot; store value -> v
+//   depth=2:  v1 = load slot; v2 = load v1; store value -> v2
+//   depth=N:  N loads then store.
+void Compiler::visitStoreStmt(StoreStmt* st) {
+    Symbol* sym = resolveVariable(st->target);
+    if (!sym) {
+        LOG_ERROR(ctx.fmtLoc() + "store: undefined pointer variable '" + st->target + "'");
+        return;
+    }
+    if (sym->typeName.rfind("ptr<", 0) != 0 || sym->typeName.back() != '>') {
+        LOG_ERROR(ctx.fmtLoc() + "store: target '" + st->target
+                  + "' is not a pointer (type=" + sym->typeName + ")");
+        return;
+    }
+    // Determine innermost pointed-to type by stripping `depth` `ptr<...>`-layers.
+    std::string remaining = sym->typeName;
+    for (int i = 0; i < st->depth; ++i) {
+        if (remaining.rfind("ptr<", 0) != 0 || remaining.back() != '>') {
+            LOG_ERROR(ctx.fmtLoc() + "store: depth=" + std::to_string(st->depth)
+                      + " exceeds pointer nesting of '" + sym->typeName + "'");
+            return;
+        }
+        remaining = remaining.substr(4, remaining.size() - 5);
+    }
+    llvm::Type* innerTy = ctx.getLLVMType(remaining);
+    if (!innerTy) {
+        LOG_ERROR(ctx.fmtLoc() + "store: cannot resolve inner type '" + remaining + "'");
+        return;
+    }
+
+    IRValue* val = visitExpression(st->value.get());
+    if (!val) {
+        LOG_ERROR(ctx.fmtLoc() + "store: failed to evaluate value expression");
+        return;
+    }
+    llvm::Value* storeVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+
+    // Coerce primitive width if needed.
+    if (storeVal->getType() != innerTy) {
+        if (innerTy->isIntegerTy() && storeVal->getType()->isIntegerTy()) {
+            storeVal = ctx.builder.CreateZExtOrTrunc(storeVal, innerTy, "store_coerce");
+        } else if (innerTy->isFloatingPointTy() && storeVal->getType()->isIntegerTy()) {
+            storeVal = ctx.builder.CreateSIToFP(storeVal, innerTy, "store_coerce_fp");
+        } else if (innerTy->isFloatingPointTy() && storeVal->getType()->isFloatingPointTy()) {
+            storeVal = ctx.builder.CreateFPCast(storeVal, innerTy, "store_coerce_fp");
+        }
+    }
+
+    // Walk pointer-chain: start at sym->alloca (slot), then `depth` loads of ptr-type
+    // give us the final write-address.
+    llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+    llvm::Value* cur = sym->ir_alloca_inst
+        ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst))
+        : sym->alloca_inst;
+    for (int i = 0; i < st->depth; ++i) {
+        cur = ctx.builder.CreateLoad(ptrTy, cur, "store_chain_" + std::to_string(i));
+    }
+    ctx.builder.CreateStore(storeVal, cur);
 }
 
 } // namespace AST

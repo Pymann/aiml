@@ -18,34 +18,34 @@
     name: Outer
     members: [[mid, Middle], [tag, i32]]
 
-# ── 1. Deep read: o.mid.inner.value ──────────────────────────────────────────
+# ── 1. Deep read: var_o.mid.inner.value ──────────────────────────────────────────
 
-- decl: [o, Outer]
-- set: [o.mid.inner.value, 99]
-- decl: [r, i32, o.mid.inner.value]
-- print: ["deep read: ${r}"]
+- decl: [var_o, Outer]
+- set: [var_o.mid.inner.value, 99]
+- decl: [var_r, i32, var_o.mid.inner.value]
+- print: ["deep read: ${var_r}"]
 
-# ── 2. Deep write: set: [o.mid.inner.value, val] ─────────────────────────────
+# ── 2. Deep write: set: [var_o.mid.inner.value, val] ─────────────────────────────
 
-- set: [o.mid.inner.value, 7]
-- decl: [w, i32, o.mid.inner.value]
-- print: ["deep write: ${w}"]
+- set: [var_o.mid.inner.value, 7]
+- decl: [var_w, i32, var_o.mid.inner.value]
+- print: ["deep write: ${var_w}"]
 
-# ── 3. Two-level: o.mid.count ────────────────────────────────────────────────
+# ── 3. Two-level: var_o.mid.count ────────────────────────────────────────────────
 
-- set: [o.mid.count, 10]
-- decl: [mc, i32, o.mid.count]
-- print: ["two level count: ${mc}"]
+- set: [var_o.mid.count, 10]
+- decl: [var_mc, i32, var_o.mid.count]
+- print: ["two level count: ${var_mc}"]
 
 # ── 4. Fresh struct — three level read ───────────────────────────────────────
 
-- decl: [o2, Outer]
-- set: [o2.mid.inner.value, 42]
-- decl: [pr, i32, o2.mid.inner.value]
-- print: ["three level: ${pr}"]
+- decl: [var_o2, Outer]
+- set: [var_o2.mid.inner.value, 42]
+- decl: [var_pr, i32, var_o2.mid.inner.value]
+- print: ["three level: ${var_pr}"]
 
 # ── 5. Three level write + re-read ────────────────────────────────────────────
 
-- set: [o2.mid.inner.value, 55]
-- decl: [pw, i32, o2.mid.inner.value]
-- print: ["three level after write: ${pw}"]
+- set: [var_o2.mid.inner.value, 55]
+- decl: [var_pw, i32, var_o2.mid.inner.value]
+- print: ["three level after write: ${var_pw}"]

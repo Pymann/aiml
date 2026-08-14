@@ -502,3 +502,23 @@ without explicit synchronization):
   isolation semantics, browser- and edge-compatible.
 - **Quota on AionDB**: Measure and limit DB accesses per container.
 - **Network Policies**: Fine-grained rules for which containers may communicate with each other.
+
+---
+
+## 11. What Is Still Missing for Productive Use
+
+For containerization to be truly productive in AIML, the following pieces are still open or must be made explicit:
+
+- **Runtime implementation of the `container` namespace**: `container.run`, `container.pod`, `container.import_oci`, `container.export_oci` and the `Container` lifecycle API must exist in the runtime, not only in the spec.
+- **Completion of the `sys.exec` foundation**: `data_chunks` execution, parameterized `start_call`, reliable isolated execution, and hot-reload semantics across process boundaries must be fully implemented first.
+- **Filesystem/runtime image model**: The exact on-disk image layout, overlay mount strategy, writable layer lifecycle, and manifest format must be fixed so that a `Code` object can become a reproducible root filesystem.
+- **Linux isolation backend**: PID, NET, MNT, IPC, UTS and USER namespaces, cgroups v2 handling, mount setup, UID/GID mapping, and cleanup behavior need a concrete implementation and test matrix.
+- **Network implementation**: Bridge/host/none modes, veth creation, port forwarding, service discovery, and pod-level networking need a precise runtime design.
+- **Security model**: Capability dropping, seccomp generation, rootless operation, allowed mount types, and trust boundaries for untrusted AIML bundles must be specified and tested.
+- **Observability and operations**: Logs, stats, exit reasons, health checks, restart policy, and deterministic error reporting are required for real orchestration.
+- **Persistence and volumes**: Shared volumes, writable mounts, quotas, and concurrent AionDB access semantics need explicit guarantees.
+- **Interop scope**: OCI import/export must define what maps cleanly between AIML `Code` images and OCI images, and what does not.
+- **Test coverage**: Productive containerization needs integration tests for lifecycle, isolation, limits, networking, and failure recovery on real Linux targets.
+
+Without these pieces, AIML containerization remains a strong architectural direction, but not yet a production-ready container runtime.
+

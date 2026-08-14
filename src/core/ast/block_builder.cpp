@@ -19,14 +19,29 @@ bool BlockBuilder::OnSequenceEnd() {
 }
 
 bool BlockBuilder::OnMapStart() {
+    inStatementMap = true;
     return true;
 }
 
 bool BlockBuilder::OnMapEnd() {
-    return true; 
+    inStatementMap = false;
+    return true;
 }
 
 bool BlockBuilder::OnScalar(const std::string& value, const std::string& tag) {
+    // A statement item must be a MAP (`- { call: [...] }`, `- return:`, ...).
+    // A BARE SCALAR item (`- return`, `- foo`) reaches OnScalar with no preceding
+    // OnMapStart.  Previously this silently spawned a dangling StatementBuilder
+    // that swallowed the following YAML events (dropping later statements AND
+    // even later top-level defs) with no diagnostic.  Reject it loudly instead.
+    if (!inStatementMap) {
+        LOG_ERROR("invalid statement: bare scalar '" + value +
+                  "' in a statement block — a statement must be a map, e.g. write "
+                  "`- { " + value + " }` or `- " + value + ":` (with a value) "
+                  "instead of `- " + value + "`.");
+        return true;  // swallow the scalar; do NOT spawn a builder that eats the rest
+    }
+    inStatementMap = false;  // consume: the map's key has been read
     if (value == "if" || value == "while" || value == "ret") {
         builder->pushState(std::make_unique<ControlFlowBuilder>(builder, value));
     } else if (value == "try") {

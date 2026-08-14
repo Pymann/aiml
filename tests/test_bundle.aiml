@@ -4,13 +4,13 @@
 - class:
     name: Payload
     members:
-      - [id, i32]
+      - [var_id, i32]
 
 - def:
     name: worker_task
-    args: [[p, Payload]]
+    args: [[var_p, Payload]]
     body:
-      - print: ["worker_task: id=${g_p.id}"]
+      - print: ["worker_task: var_id=${g_p.var_id}"]
 
 # --- Function bundle ---
 - decl: [pkg, Code]
@@ -34,7 +34,7 @@
 
 # --- Instance bundle ---
 - decl: [g_p, Payload]
-- set: [g_p.id, 99]
+- set: [g_p.var_id, 99]
 
 - decl: [inst_pkg, Code]
 - set: [inst_pkg, { call: [sys.bundle, g_p] }]

@@ -2,8 +2,8 @@
 - model:
     name: ArrayPoint
     fields:
-      - [x, i32]
-      - [y, i32]
+      - [var_x, i32]
+      - [var_y, i32]
 
 - class:
     name: ArrayNode
@@ -16,45 +16,45 @@
 # === Phase A: 1D array basics ===
 
 # A1: Declaration + zero-init
-- decl: [v, "array<i32:4>"]
-- decl: [a0, i32, { at: [v, 0] }]
+- decl: [var_v, "array<i32:4>"]
+- decl: [var_a0, i32, { at: [var_v, 0] }]
 - if:
-    condition: { eq: [a0, 0] }
+    condition: { eq: [var_a0, 0] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
       - set: [fail, { "+": [fail, 1] }]
-      - print: ["FAIL A1: expected 0, got ${a0}"]
+      - print: ["FAIL A1: expected 0, got ${var_a0}"]
 
 # A2: Write + read back
-- idx: [v, 0, 42]
-- idx: [v, 1, 99]
-- idx: [v, 3, -7]
-- decl: [r0, i32, { at: [v, 0] }]
-- decl: [r1, i32, { at: [v, 1] }]
-- decl: [r3, i32, { at: [v, 3] }]
+- idx: [var_v, 0, 42]
+- idx: [var_v, 1, 99]
+- idx: [var_v, 3, -7]
+- decl: [var_r0, i32, { at: [var_v, 0] }]
+- decl: [var_r1, i32, { at: [var_v, 1] }]
+- decl: [var_r3, i32, { at: [var_v, 3] }]
 - if:
-    condition: { "&&": [{ eq: [r0, 42] }, { "&&": [{ eq: [r1, 99] }, { eq: [r3, -7] }] }] }
+    condition: { "&&": [{ eq: [var_r0, 42] }, { "&&": [{ eq: [var_r1, 99] }, { eq: [var_r3, -7] }] }] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
       - set: [fail, { "+": [fail, 1] }]
-      - print: ["FAIL A2: v[0]=${r0} v[1]=${r1} v[3]=${r3}"]
+      - print: ["FAIL A2: var_v[0]=${var_r0} var_v[1]=${var_r1} var_v[3]=${var_r3}"]
 
 # A3: Dynamic index
-- decl: [i, i32, 2]
-- idx: [v, i, 55]
-- decl: [r2, i32, { at: [v, i] }]
+- decl: [var_i, i32, 2]
+- idx: [var_v, var_i, 55]
+- decl: [var_r2, i32, { at: [var_v, var_i] }]
 - if:
-    condition: { eq: [r2, 55] }
+    condition: { eq: [var_r2, 55] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
       - set: [fail, { "+": [fail, 1] }]
-      - print: ["FAIL A3: expected 55, got ${r2}"]
+      - print: ["FAIL A3: expected 55, got ${var_r2}"]
 
-# A4: Computed index { at: [v, { "+": [i, 1] }] }
-- decl: [r_comp, i32, { at: [v, { "+": [i, 1] }] }]
+# A4: Computed index { at: [var_v, { "+": [var_i, 1] }] }
+- decl: [r_comp, i32, { at: [var_v, { "+": [var_i, 1] }] }]
 - if:
     condition: { eq: [r_comp, -7] }
     then:
@@ -66,17 +66,17 @@
 # === Phase B: Float array ===
 
 # B1: f32 array
-- decl: [fv, "array<f32:3>"]
-- idx: [fv, 0, 1.5]
-- idx: [fv, 1, 2.5]
-- idx: [fv, 2, 3.5]
+- decl: [var_fv, "array<f32:3>"]
+- idx: [var_fv, 0, 1.5]
+- idx: [var_fv, 1, 2.5]
+- idx: [var_fv, 2, 3.5]
 - decl: [sum, f32, 0.0]
-- decl: [j, i32, 0]
+- decl: [var_j, i32, 0]
 - while:
-    condition: { "<": [j, 3] }
+    condition: { "<": [var_j, 3] }
     body:
-      - set: [sum, { "+": [sum, { at: [fv, j] }] }]
-      - set: [j, { "+": [j, 1] }]
+      - set: [sum, { "+": [sum, { at: [var_fv, var_j] }] }]
+      - set: [var_j, { "+": [var_j, 1] }]
 - if:
     condition: { "&&": [{ ">": [sum, 7.4] }, { "<": [sum, 7.6] }] }
     then:
@@ -106,8 +106,8 @@
 # === Phase D: Properties ===
 
 # D1: .len
-- decl: [v4, "array<f32:8>"]
-- decl: [len4, i32, v4.len]
+- decl: [var_v4, "array<f32:8>"]
+- decl: [len4, i32, var_v4.len]
 - if:
     condition: { eq: [len4, 8] }
     then:
@@ -128,15 +128,15 @@
       - print: ["FAIL D2: expected 12, got ${len_mat}"]
 
 # D3: .dim0, .dim1
-- decl: [d0, i32, mat2.dim0]
-- decl: [d1, i32, mat2.dim1]
+- decl: [var_d0, i32, mat2.dim0]
+- decl: [var_d1, i32, mat2.dim1]
 - if:
-    condition: { "&&": [{ eq: [d0, 3] }, { eq: [d1, 4] }] }
+    condition: { "&&": [{ eq: [var_d0, 3] }, { eq: [var_d1, 4] }] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
       - set: [fail, { "+": [fail, 1] }]
-      - print: ["FAIL D3: dim0=${d0} dim1=${d1}"]
+      - print: ["FAIL D3: dim0=${var_d0} dim1=${var_d1}"]
 
 # === Phase E: idx for lists (backward compat) ===
 
@@ -159,9 +159,9 @@
 
 # F1: zero-init to null
 - decl: [ptrs, "array<ptr<ArrayNode>:3>"]
-- decl: [p0, ptr<ArrayNode>, { at: [ptrs, 0] }]
+- decl: [var_p0, ptr<ArrayNode>, { at: [ptrs, 0] }]
 - if:
-    condition: { eq: [p0, null] }
+    condition: { eq: [var_p0, null] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
@@ -169,12 +169,12 @@
       - print: ["FAIL F1: expected null pointer in ptrs[0]"]
 
 # F2: store/load raw pointer identity
-- decl: [n1, ptr<ArrayNode>, { new: ArrayNode }]
-- set: [n1.value, 123]
-- idx: [ptrs, 1, n1]
-- decl: [p1, ptr<ArrayNode>, { at: [ptrs, 1] }]
+- decl: [var_n1, ptr<ArrayNode>, { new: ArrayNode }]
+- set: [var_n1.value, 123]
+- idx: [ptrs, 1, var_n1]
+- decl: [var_p1, ptr<ArrayNode>, { at: [ptrs, 1] }]
 - if:
-    condition: { "&&": [{ peq: [p1, n1] }, { eq: [p1.value, 123] }] }
+    condition: { "&&": [{ peq: [var_p1, var_n1] }, { eq: [var_p1.value, 123] }] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
@@ -194,10 +194,10 @@
 
 # F4: multidimensional pointer array
 - decl: [grid_ptr, "array<ptr<ArrayNode>:2:2>"]
-- idx: [grid_ptr, 1, 0, n1]
-- decl: [gp, ptr<ArrayNode>, { at: [grid_ptr, 1, 0] }]
+- idx: [grid_ptr, 1, 0, var_n1]
+- decl: [var_gp, ptr<ArrayNode>, { at: [grid_ptr, 1, 0] }]
 - if:
-    condition: { "&&": [{ peq: [gp, n1] }, { eq: [gp.value, 123] }] }
+    condition: { "&&": [{ peq: [var_gp, var_n1] }, { eq: [var_gp.value, 123] }] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
@@ -210,52 +210,52 @@
 - decl: [pts, "array<ArrayPoint:3>"]
 - decl: [pt0, ArrayPoint, { at: [pts, 0] }]
 - if:
-    condition: { "&&": [{ eq: [pt0.x, 0] }, { eq: [pt0.y, 0] }] }
+    condition: { "&&": [{ eq: [pt0.var_x, 0] }, { eq: [pt0.var_y, 0] }] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
       - set: [fail, { "+": [fail, 1] }]
-      - print: ["FAIL G1: expected zero-init struct, got (${pt0.x}, ${pt0.y})"]
+      - print: ["FAIL G1: expected zero-init struct, got (${pt0.var_x}, ${pt0.var_y})"]
 
 # G2: store/load user-defined struct value
 - decl: [p_in, ArrayPoint]
-- set: [p_in.x, 7]
-- set: [p_in.y, 9]
+- set: [p_in.var_x, 7]
+- set: [p_in.var_y, 9]
 - idx: [pts, 1, p_in]
 - decl: [pt1, ArrayPoint, { at: [pts, 1] }]
 - if:
-    condition: { "&&": [{ eq: [pt1.x, 7] }, { eq: [pt1.y, 9] }] }
+    condition: { "&&": [{ eq: [pt1.var_x, 7] }, { eq: [pt1.var_y, 9] }] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
       - set: [fail, { "+": [fail, 1] }]
-      - print: ["FAIL G2: expected (7,9), got (${pt1.x}, ${pt1.y})"]
+      - print: ["FAIL G2: expected (7,9), got (${pt1.var_x}, ${pt1.var_y})"]
 
 # G3: store struct returned via pointer-backed source
 - decl: [pt_tmp, ArrayPoint]
-- set: [pt_tmp.x, 11]
-- set: [pt_tmp.y, 22]
+- set: [pt_tmp.var_x, 11]
+- set: [pt_tmp.var_y, 22]
 - idx: [pts, 2, pt_tmp]
 - decl: [pt2, ArrayPoint, { at: [pts, 2] }]
 - if:
-    condition: { "&&": [{ eq: [pt2.x, 11] }, { eq: [pt2.y, 22] }] }
+    condition: { "&&": [{ eq: [pt2.var_x, 11] }, { eq: [pt2.var_y, 22] }] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
       - set: [fail, { "+": [fail, 1] }]
-      - print: ["FAIL G3: expected (11,22), got (${pt2.x}, ${pt2.y})"]
+      - print: ["FAIL G3: expected (11,22), got (${pt2.var_x}, ${pt2.var_y})"]
 
 # G4: multidimensional struct array
 - decl: [pt_grid, "array<ArrayPoint:2:2>"]
 - idx: [pt_grid, 1, 1, p_in]
 - decl: [pt_grid_11, ArrayPoint, { at: [pt_grid, 1, 1] }]
 - if:
-    condition: { "&&": [{ eq: [pt_grid_11.x, 7] }, { eq: [pt_grid_11.y, 9] }] }
+    condition: { "&&": [{ eq: [pt_grid_11.var_x, 7] }, { eq: [pt_grid_11.var_y, 9] }] }
     then:
       - set: [pass, { "+": [pass, 1] }]
     else:
       - set: [fail, { "+": [fail, 1] }]
-      - print: ["FAIL G4: 2D struct array mismatch (${pt_grid_11.x}, ${pt_grid_11.y})"]
+      - print: ["FAIL G4: 2D struct array mismatch (${pt_grid_11.var_x}, ${pt_grid_11.var_y})"]
 
 # === Summary ===
 - print: [""]

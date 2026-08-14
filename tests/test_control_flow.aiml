@@ -1,19 +1,19 @@
-- decl: [x, i32, 10]
-- decl: [y, i32, 20]
+- decl: [var_x, i32, 10]
+- decl: [var_y, i32, 20]
 
 - print: ["Testing Control Flow"]
 
-- print: ["X is ${x}, Y is ${y}"]
+- print: ["X is ${var_x}, Y is ${var_y}"]
 
 - if:
-    condition: { lt: [x, y] }
+    condition: { lt: [var_x, var_y] }
     then:
       - print: ["X is less than Y (Correct)"]
     else:
       - print: ["X is NOT less than Y (Wrong)"]
 
 - if:
-    condition: { gt: [x, y] }
+    condition: { gt: [var_x, var_y] }
     then:
       - print: ["X is greater than Y (Wrong)"]
     else:

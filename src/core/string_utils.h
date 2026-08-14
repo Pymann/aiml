@@ -17,10 +17,10 @@ namespace StringUtils {
 
         llvm::Function* impl = ctx.module.getFunction("__aiml_str_concat");
         if (!impl) {
-            llvm::Function* strlenFunc = ctx.getFunction("strlen", sz, {i8Ptr});
-            llvm::Function* mallocFunc = ctx.getFunction("malloc", i8Ptr, {sz});
-            llvm::Function* strcpyFunc = ctx.getFunction("strcpy", i8Ptr, {i8Ptr, i8Ptr});
-            llvm::Function* strcatFunc = ctx.getFunction("strcat", i8Ptr, {i8Ptr, i8Ptr});
+            llvm::Function* strlenFunc    = ctx.getFunction("strlen", sz, {i8Ptr});
+            llvm::Function* strAllocFunc  = ctx.getFunction("aiml_str_alloc", i8Ptr, {sz});
+            llvm::Function* strcpyFunc    = ctx.getFunction("strcpy", i8Ptr, {i8Ptr, i8Ptr});
+            llvm::Function* strcatFunc    = ctx.getFunction("strcat", i8Ptr, {i8Ptr, i8Ptr});
 
             llvm::IRBuilder<>::InsertPoint savedIP = ctx.builder.saveIP();
             llvm::FunctionType* ft = llvm::FunctionType::get(i8Ptr, {i8Ptr, i8Ptr}, false);
@@ -37,8 +37,9 @@ namespace StringUtils {
             llvm::Value* safeS2 = ctx.builder.CreateSelect(ctx.builder.CreateICmpEQ(a2, nullPtr), emptyStr, a2);
             llvm::Value* len1 = ctx.builder.CreateCall(strlenFunc, {safeS1});
             llvm::Value* len2 = ctx.builder.CreateCall(strlenFunc, {safeS2});
-            llvm::Value* size = ctx.builder.CreateAdd(ctx.builder.CreateAdd(len1, len2), ctx.getSizeConst(1));
-            llvm::Value* newStr = ctx.builder.CreateCall(mallocFunc, {size});
+            // aiml_str_alloc(len1+len2) — header + (len+1) bytes, refcount=1.
+            llvm::Value* totalLen = ctx.builder.CreateAdd(len1, len2);
+            llvm::Value* newStr = ctx.builder.CreateCall(strAllocFunc, {totalLen});
             ctx.builder.CreateCall(strcpyFunc, {newStr, safeS1});
             ctx.builder.CreateCall(strcatFunc, {newStr, safeS2});
             ctx.builder.CreateRet(newStr);
@@ -55,8 +56,8 @@ namespace StringUtils {
 
         llvm::Function* impl = ctx.module.getFunction("__aiml_int_to_string");
         if (!impl) {
-            llvm::Function* mallocFunc  = ctx.getFunction("malloc",  i8Ptr, {sz});
-            llvm::Function* sprintfFunc = ctx.getFunction("sprintf", ctx.builder.getInt32Ty(), {i8Ptr, i8Ptr}, true);
+            llvm::Function* strAllocFunc = ctx.getFunction("aiml_str_alloc", i8Ptr, {sz});
+            llvm::Function* sprintfFunc  = ctx.getFunction("sprintf", ctx.builder.getInt32Ty(), {i8Ptr, i8Ptr}, true);
 
             llvm::IRBuilder<>::InsertPoint savedIP = ctx.builder.saveIP();
             llvm::FunctionType* ft = llvm::FunctionType::get(i8Ptr, {ctx.builder.getInt32Ty()}, false);
@@ -64,7 +65,8 @@ namespace StringUtils {
             impl->addFnAttr(llvm::Attribute::NoInline);
             llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx.context, "entry", impl);
             ctx.builder.SetInsertPoint(entry);
-            llvm::Value* buf = ctx.builder.CreateCall(mallocFunc, {ctx.getSizeConst(12)});
+            // Worst case for i32 decimal: 11 chars + \0.  aiml_str_alloc(11) → 11 payload + \0.
+            llvm::Value* buf = ctx.builder.CreateCall(strAllocFunc, {ctx.getSizeConst(11)});
             llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("%d", "fmt_d");
             ctx.builder.CreateCall(sprintfFunc, {buf, fmt, impl->getArg(0)});
             ctx.builder.CreateRet(buf);
@@ -82,8 +84,8 @@ namespace StringUtils {
 
         llvm::Function* impl = ctx.module.getFunction("__aiml_int64_to_string");
         if (!impl) {
-            llvm::Function* mallocFunc  = ctx.getFunction("malloc",  i8Ptr, {sz});
-            llvm::Function* sprintfFunc = ctx.getFunction("sprintf", ctx.builder.getInt32Ty(), {i8Ptr, i8Ptr}, true);
+            llvm::Function* strAllocFunc = ctx.getFunction("aiml_str_alloc", i8Ptr, {sz});
+            llvm::Function* sprintfFunc  = ctx.getFunction("sprintf", ctx.builder.getInt32Ty(), {i8Ptr, i8Ptr}, true);
 
             llvm::IRBuilder<>::InsertPoint savedIP = ctx.builder.saveIP();
             llvm::FunctionType* ft = llvm::FunctionType::get(i8Ptr, {i64}, false);
@@ -91,7 +93,8 @@ namespace StringUtils {
             impl->addFnAttr(llvm::Attribute::NoInline);
             llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx.context, "entry", impl);
             ctx.builder.SetInsertPoint(entry);
-            llvm::Value* buf = ctx.builder.CreateCall(mallocFunc, {ctx.getSizeConst(24)});
+            // Worst case for i64 decimal: 20 chars + sign + \0.
+            llvm::Value* buf = ctx.builder.CreateCall(strAllocFunc, {ctx.getSizeConst(23)});
             llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("%ld", "fmt_ld");
             ctx.builder.CreateCall(sprintfFunc, {buf, fmt, impl->getArg(0)});
             ctx.builder.CreateRet(buf);
@@ -109,15 +112,15 @@ namespace StringUtils {
 
         llvm::Function* impl = ctx.module.getFunction("__aiml_f32_to_string");
         if (!impl) {
-            llvm::Function* mallocFn  = ctx.getFunction("malloc",  i8p, {sz});
-            llvm::Function* sprintfFn = ctx.getFunction("sprintf", ctx.builder.getInt32Ty(), {i8p, i8p}, true);
+            llvm::Function* strAllocFn = ctx.getFunction("aiml_str_alloc", i8p, {sz});
+            llvm::Function* sprintfFn  = ctx.getFunction("sprintf", ctx.builder.getInt32Ty(), {i8p, i8p}, true);
             llvm::IRBuilder<>::InsertPoint savedIP = ctx.builder.saveIP();
             llvm::FunctionType* ft = llvm::FunctionType::get(i8p, {f32}, false);
             impl = llvm::Function::Create(ft, llvm::Function::InternalLinkage, "__aiml_f32_to_string", ctx.module);
             impl->addFnAttr(llvm::Attribute::NoInline);
             llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx.context, "entry", impl);
             ctx.builder.SetInsertPoint(entry);
-            llvm::Value* buf = ctx.builder.CreateCall(mallocFn, {ctx.getSizeConst(32)});
+            llvm::Value* buf = ctx.builder.CreateCall(strAllocFn, {ctx.getSizeConst(31)});
             llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("%.6g", "fmt_f32");
             // widen f32 to f64 for vararg sprintf
             llvm::Value* ext = ctx.builder.CreateFPExt(impl->getArg(0), ctx.builder.getDoubleTy());
@@ -137,15 +140,15 @@ namespace StringUtils {
 
         llvm::Function* impl = ctx.module.getFunction("__aiml_f64_to_string");
         if (!impl) {
-            llvm::Function* mallocFn  = ctx.getFunction("malloc",  i8p, {sz});
-            llvm::Function* sprintfFn = ctx.getFunction("sprintf", ctx.builder.getInt32Ty(), {i8p, i8p}, true);
+            llvm::Function* strAllocFn = ctx.getFunction("aiml_str_alloc", i8p, {sz});
+            llvm::Function* sprintfFn  = ctx.getFunction("sprintf", ctx.builder.getInt32Ty(), {i8p, i8p}, true);
             llvm::IRBuilder<>::InsertPoint savedIP = ctx.builder.saveIP();
             llvm::FunctionType* ft = llvm::FunctionType::get(i8p, {f64}, false);
             impl = llvm::Function::Create(ft, llvm::Function::InternalLinkage, "__aiml_f64_to_string", ctx.module);
             impl->addFnAttr(llvm::Attribute::NoInline);
             llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx.context, "entry", impl);
             ctx.builder.SetInsertPoint(entry);
-            llvm::Value* buf = ctx.builder.CreateCall(mallocFn, {ctx.getSizeConst(32)});
+            llvm::Value* buf = ctx.builder.CreateCall(strAllocFn, {ctx.getSizeConst(31)});
             llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("%.15g", "fmt_f64");
             ctx.builder.CreateCall(sprintfFn, {buf, fmt, impl->getArg(0)});
             ctx.builder.CreateRet(buf);

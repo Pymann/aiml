@@ -1,4 +1,4 @@
-# Regression test: mirror RPC carries a typed model containing a map<string:i32>
+# Regression test: mirror RPC carries var_a typed model containing var_a map<string:i32>
 # Expected exit code: 0
 #
 # Verifies that decode_rpc populates the heap-allocated map field correctly
@@ -30,9 +30,9 @@
       - set: [nid, { call: [sess.register, player] }]
       - print: ["host-map: registered net_id=${nid}"]
 
-      - decl: [i, i32, 0]
+      - decl: [var_i, i32, 0]
       - while:
-          condition: { lt: [i, 60] }
+          condition: { lt: [var_i, 60] }
           body:
             - call: [sess.update]
             - if:
@@ -41,15 +41,15 @@
                   - decl: [rpc_ev, rpc_event]
                   - set: [rpc_ev, { call: [sess.next_rpc] }]
                   - decl: [req, PaymentReq]
-                  - decl: [rc, i32, -1]
+                  - decl: [var_rc, i32, -1]
                   - if:
                       condition: { neq: [rpc_ev.arg_kind, 1] }
                       then:
                         - set: [player.score, 901]
                       else:
-                        - set: [rc, { call: [sess.decode_rpc, rpc_ev, req] }]
+                        - set: [var_rc, { call: [sess.decode_rpc, rpc_ev, req] }]
                         - if:
-                            condition: { neq: [rc, 0] }
+                            condition: { neq: [var_rc, 0] }
                             then:
                               - set: [player.score, 902]
                             else:
@@ -63,31 +63,31 @@
                                         then:
                                           - set: [player.score, 904]
                                         else:
-                                          - decl: [a, i32]
-                                          - decl: [b, i32]
-                                          - decl: [c, i32]
-                                          - set: [a, { call: [req.parts.get, "feuer"] }]
-                                          - set: [b, { call: [req.parts.get, "wasser"] }]
-                                          - set: [c, { call: [req.parts.get, "erde"] }]
+                                          - decl: [var_a, i32]
+                                          - decl: [var_b, i32]
+                                          - decl: [var_c, i32]
+                                          - set: [var_a, { call: [req.parts.get, "feuer"] }]
+                                          - set: [var_b, { call: [req.parts.get, "wasser"] }]
+                                          - set: [var_c, { call: [req.parts.get, "erde"] }]
                                           - if:
-                                              condition: { neq: [a, 2] }
+                                              condition: { neq: [var_a, 2] }
                                               then:
                                                 - set: [player.score, 905]
                                               else:
                                                 - if:
-                                                    condition: { neq: [b, 1] }
+                                                    condition: { neq: [var_b, 1] }
                                                     then:
                                                       - set: [player.score, 906]
                                                     else:
                                                       - if:
-                                                          condition: { neq: [c, 2] }
+                                                          condition: { neq: [var_c, 2] }
                                                           then:
                                                             - set: [player.score, 907]
                                                           else:
                                                             - set: [player.score, 999]
                   - call: [sess.sync_now, player]
             - call: [time.sleep_ms, 10]
-            - set: [i, { +: [i, 1] }]
+            - set: [var_i, { +: [var_i, 1] }]
 
       - call: [sess.close]
 
@@ -100,10 +100,10 @@
 - call: [time.sleep_ms, 120]
 - call: [client.update]
 
-- decl: [ev, mirror_event]
-- set: [ev, { call: [client.next_event] }]
+- decl: [var_ev, mirror_event]
+- set: [var_ev, { call: [client.next_event] }]
 - decl: [replica, NetPlayer]
-- call: [client.register_id, replica, ev.net_id]
+- call: [client.register_id, replica, var_ev.net_id]
 
 - decl: [req, PaymentReq]
 - set: [req.label, "amorph"]
@@ -112,7 +112,7 @@
 - call: [req.parts.put, "wasser", 1]
 - call: [req.parts.put, "erde", 2]
 
-- call: [client.send_rpc, ev.net_id, "pay", 0, req]
+- call: [client.send_rpc, var_ev.net_id, "pay", 0, req]
 - print: ["client-map: sent pay payload"]
 
 - call: [time.sleep_ms, 300]

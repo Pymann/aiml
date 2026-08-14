@@ -61,33 +61,33 @@
 - model:
     name: Rates
     fields:
-      - [lr, f32, 0.001]
+      - [var_lr, f32, 0.001]
       - [margin, f32, 0.5]
 
-- decl: [r, Rates]
+- decl: [var_r, Rates]
 - if:
-    condition: { "||": [{ "<": [r.lr, 0.0009] }, { ">": [r.lr, 0.0011] }] }
+    condition: { "||": [{ "<": [var_r.var_lr, 0.0009] }, { ">": [var_r.var_lr, 0.0011] }] }
     then:
-      - print: ["FAIL decl default lr: ${r.lr}"]
+      - print: ["FAIL decl default var_lr: ${var_r.var_lr}"]
       - exit: [1]
 - if:
-    condition: { "||": [{ "<": [r.margin, 0.49] }, { ">": [r.margin, 0.51] }] }
+    condition: { "||": [{ "<": [var_r.margin, 0.49] }, { ">": [var_r.margin, 0.51] }] }
     then:
-      - print: ["FAIL decl default margin: ${r.margin}"]
+      - print: ["FAIL decl default margin: ${var_r.margin}"]
       - exit: [1]
 
 # f32 defaults — heap
-- decl: [hr, ptr<Rates>, { new: Rates }]
+- decl: [var_hr, ptr<Rates>, { new: Rates }]
 - if:
-    condition: { "||": [{ "<": [hr.lr, 0.0009] }, { ">": [hr.lr, 0.0011] }] }
+    condition: { "||": [{ "<": [var_hr.var_lr, 0.0009] }, { ">": [var_hr.var_lr, 0.0011] }] }
     then:
-      - print: ["FAIL new default lr: ${hr.lr}"]
+      - print: ["FAIL new default var_lr: ${var_hr.var_lr}"]
       - exit: [1]
 - if:
-    condition: { "||": [{ "<": [hr.margin, 0.49] }, { ">": [hr.margin, 0.51] }] }
+    condition: { "||": [{ "<": [var_hr.margin, 0.49] }, { ">": [var_hr.margin, 0.51] }] }
     then:
-      - print: ["FAIL new default margin: ${hr.margin}"]
+      - print: ["FAIL new default margin: ${var_hr.margin}"]
       - exit: [1]
-- free: [hr]
+- free: [var_hr]
 
 - print: ["PASS test_model_defaults"]

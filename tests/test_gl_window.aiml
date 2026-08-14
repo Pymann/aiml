@@ -9,7 +9,7 @@
   defs:
     - def: { name: glfwInit,              args: [],                                                                    return: i32 }
     - def: { name: glfwWindowHint,        args: [[hint, i32], [value, i32]],                                          return: void }
-    - def: { name: glfwCreateWindow,      args: [[w, i32], [h, i32], [title, string], [mon, ptr], [sh, ptr]],         return: ptr }
+    - def: { name: glfwCreateWindow,      args: [[var_w, i32], [var_h, i32], [title, string], [mon, ptr], [var_sh, ptr]],         return: ptr }
     - def: { name: glfwMakeContextCurrent, args: [[win, ptr]],                                                        return: void }
     - def: { name: glfwSwapBuffers,       args: [[win, ptr]],                                                         return: void }
     - def: { name: glfwPollEvents,        args: [],                                                                    return: void }
@@ -18,8 +18,8 @@
 
 # ── Phase A: GLFW initialisieren und Fenster öffnen ───────────────────────────
 
-- decl: [ok, i32, { call: [glfwInit] }]
-- if: [{ eq: [ok, 0] }, true]
+- decl: [var_ok, i32, { call: [glfwInit] }]
+- if: [{ eq: [var_ok, 0] }, true]
   then:
     - print: ["FAIL: glfwInit failed"]
     - call: [sys.exit, 1]
@@ -136,8 +136,8 @@
 - decl: [proj,   mat4, { call: [math.mat4_perspective, 0.785, 1.333, 0.1, 100.0] }]
 - decl: [eye,    vec3, { call: [math.vec3, 2.0, 1.5, 3.0] }]
 - decl: [center, vec3, { call: [math.vec3, 0.0, 0.0, 0.0] }]
-- decl: [up,     vec3, { call: [math.vec3, 0.0, 1.0, 0.0] }]
-- decl: [view,   mat4, { call: [math.mat4_lookat, eye, center, up] }]
+- decl: [var_up,     vec3, { call: [math.vec3, 0.0, 1.0, 0.0] }]
+- decl: [view,   mat4, { call: [math.mat4_lookat, eye, center, var_up] }]
 - decl: [model,  mat4]
 - decl: [mvp,    mat4]
 - decl: [angle,  f32, 0.0]

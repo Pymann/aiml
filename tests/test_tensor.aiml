@@ -3,164 +3,164 @@
 
 # ── Phase A: Lifecycle + Shape ───────────────────────────────────────────────
 
-- decl: [t1, tensor]
-- set: [t1, { call: [tensor.zeros, 2, 3] }]
+- decl: [var_t1, tensor]
+- set: [var_t1, { call: [tensor.zeros, 2, 3] }]
 - print: ["A1 ndim:"]
-- decl: [nd, i32]
-- set: [nd, { call: [t1.ndim] }]
-- print: ["${nd}"]
+- decl: [var_nd, i32]
+- set: [var_nd, { call: [var_t1.ndim] }]
+- print: ["${var_nd}"]
 
-- decl: [sz, i32]
-- set: [sz, { call: [t1.size] }]
-- print: ["A2 size: ${sz}"]
+- decl: [var_sz, i32]
+- set: [var_sz, { call: [var_t1.size] }]
+- print: ["A2 size: ${var_sz}"]
 
-- decl: [s0, i32]
-- set: [s0, { call: [t1.shape, 0] }]
-- decl: [s1, i32]
-- set: [s1, { call: [t1.shape, 1] }]
-- print: ["A3 shape: ${s0} ${s1}"]
+- decl: [var_s0, i32]
+- set: [var_s0, { call: [var_t1.shape, 0] }]
+- decl: [var_s1, i32]
+- set: [var_s1, { call: [var_t1.shape, 1] }]
+- print: ["A3 shape: ${var_s0} ${var_s1}"]
 
 # item access
-- call: [t1.set, 0, 1.5]
-- call: [t1.set, 3, 2.5]
-- decl: [v0, f32]
-- set: [v0, { call: [t1.get, 0] }]
-- decl: [v3, f32]
-- set: [v3, { call: [t1.get, 3] }]
-- print: ["A4 vals: ${v0} ${v3}"]
+- call: [var_t1.set, 0, 1.5]
+- call: [var_t1.set, 3, 2.5]
+- decl: [var_v0, f32]
+- set: [var_v0, { call: [var_t1.get, 0] }]
+- decl: [var_v3, f32]
+- set: [var_v3, { call: [var_t1.get, 3] }]
+- print: ["A4 vals: ${var_v0} ${var_v3}"]
 
 # ones
-- decl: [t2, tensor]
-- set: [t2, { call: [tensor.ones, 3] }]
+- decl: [var_t2, tensor]
+- set: [var_t2, { call: [tensor.ones, 3] }]
 - decl: [ones_item, f32]
-- set: [ones_item, { call: [t2.item] }]
+- set: [ones_item, { call: [var_t2.item] }]
 # item() should fail for non-scalar but let's test size
 - decl: [ones_sz, i32]
-- set: [ones_sz, { call: [t2.size] }]
+- set: [ones_sz, { call: [var_t2.size] }]
 - print: ["A5 ones size: ${ones_sz}"]
 
 # clone
-- decl: [t3, tensor]
-- set: [t3, { call: [t1.clone] }]
+- decl: [var_t3, tensor]
+- set: [var_t3, { call: [var_t1.clone] }]
 - decl: [clone_v, f32]
-- set: [clone_v, { call: [t3.get, 0] }]
+- set: [clone_v, { call: [var_t3.get, 0] }]
 - print: ["A6 clone[0]: ${clone_v}"]
 
 # fill
-- call: [t3.fill, 7.0]
+- call: [var_t3.fill, 7.0]
 - decl: [fill_v, f32]
-- set: [fill_v, { call: [t3.get, 0] }]
+- set: [fill_v, { call: [var_t3.get, 0] }]
 - print: ["A7 fill: ${fill_v}"]
 
 # free
-- call: [t3.free]
-- call: [t2.free]
+- call: [var_t3.free]
+- call: [var_t2.free]
 - print: ["A8 freed"]
 
 # ── Phase B: Numerical Ops ───────────────────────────────────────────────────
 
 # Create two 2x2 tensors and test add/sub/mul
-- decl: [a, tensor]
-- set: [a, { call: [tensor.ones, 2, 2] }]
-- call: [tensor.fill, a, 2.0]
+- decl: [var_a, tensor]
+- set: [var_a, { call: [tensor.ones, 2, 2] }]
+- call: [tensor.fill, var_a, 2.0]
 
-- decl: [b, tensor]
-- set: [b, { call: [tensor.ones, 2, 2] }]
-- call: [tensor.fill, b, 3.0]
+- decl: [var_b, tensor]
+- set: [var_b, { call: [tensor.ones, 2, 2] }]
+- call: [tensor.fill, var_b, 3.0]
 
 # add
-- decl: [c, tensor]
-- set: [c, { call: [tensor.add, a, b] }]
+- decl: [var_c, tensor]
+- set: [var_c, { call: [tensor.add, var_a, var_b] }]
 - decl: [add_v, f32]
-- set: [add_v, { call: [c.get, 0] }]
+- set: [add_v, { call: [var_c.get, 0] }]
 - print: ["B1 add: ${add_v}"]
-- call: [c.free]
+- call: [var_c.free]
 
 # sub
-- set: [c, { call: [tensor.sub, a, b] }]
+- set: [var_c, { call: [tensor.sub, var_a, var_b] }]
 - decl: [sub_v, f32]
-- set: [sub_v, { call: [c.get, 0] }]
+- set: [sub_v, { call: [var_c.get, 0] }]
 - print: ["B2 sub: ${sub_v}"]
-- call: [c.free]
+- call: [var_c.free]
 
 # mul (hadamard)
-- set: [c, { call: [tensor.mul, a, b] }]
+- set: [var_c, { call: [tensor.mul, var_a, var_b] }]
 - decl: [mul_v, f32]
-- set: [mul_v, { call: [c.get, 0] }]
+- set: [mul_v, { call: [var_c.get, 0] }]
 - print: ["B3 mul: ${mul_v}"]
-- call: [c.free]
+- call: [var_c.free]
 
 # mul_scalar
-- set: [c, { call: [tensor.mul_scalar, a, 0.5] }]
+- set: [var_c, { call: [tensor.mul_scalar, var_a, 0.5] }]
 - decl: [muls_v, f32]
-- set: [muls_v, { call: [c.get, 0] }]
+- set: [muls_v, { call: [var_c.get, 0] }]
 - print: ["B4 mul_scalar: ${muls_v}"]
-- call: [c.free]
+- call: [var_c.free]
 
 # neg
-- set: [c, { call: [tensor.neg, a] }]
+- set: [var_c, { call: [tensor.neg, var_a] }]
 - decl: [neg_v, f32]
-- set: [neg_v, { call: [c.get, 0] }]
+- set: [neg_v, { call: [var_c.get, 0] }]
 - print: ["B5 neg: ${neg_v}"]
-- call: [c.free]
+- call: [var_c.free]
 
 # matmul 2x2 @ 2x2
-- set: [c, { call: [tensor.matmul, a, b] }]
+- set: [var_c, { call: [tensor.matmul, var_a, var_b] }]
 - decl: [mm_v, f32]
-- set: [mm_v, { call: [c.get, 0] }]
+- set: [mm_v, { call: [var_c.get, 0] }]
 - print: ["B6 matmul: ${mm_v}"]
-- call: [c.free]
+- call: [var_c.free]
 
 # sum (all)
-- set: [c, { call: [tensor.sum, a, -1] }]
+- set: [var_c, { call: [tensor.sum, var_a, -1] }]
 - decl: [sum_v, f32]
-- set: [sum_v, { call: [c.item] }]
+- set: [sum_v, { call: [var_c.item] }]
 - print: ["B7 sum_all: ${sum_v}"]
-- call: [c.free]
+- call: [var_c.free]
 
 # mean (all)
-- set: [c, { call: [tensor.mean, a, -1] }]
+- set: [var_c, { call: [tensor.mean, var_a, -1] }]
 - decl: [mean_v, f32]
-- set: [mean_v, { call: [c.item] }]
+- set: [mean_v, { call: [var_c.item] }]
 - print: ["B8 mean_all: ${mean_v}"]
-- call: [c.free]
+- call: [var_c.free]
 
 # relu
-- call: [tensor.fill, a, -1.0]
-- call: [a.set, 0, 2.0]
-- set: [c, { call: [tensor.relu, a] }]
+- call: [tensor.fill, var_a, -1.0]
+- call: [var_a.set, 0, 2.0]
+- set: [var_c, { call: [tensor.relu, var_a] }]
 - decl: [relu0, f32]
-- set: [relu0, { call: [c.get, 0] }]
+- set: [relu0, { call: [var_c.get, 0] }]
 - decl: [relu1, f32]
-- set: [relu1, { call: [c.get, 1] }]
+- set: [relu1, { call: [var_c.get, 1] }]
 - print: ["B9 relu: ${relu0} ${relu1}"]
-- call: [c.free]
+- call: [var_c.free]
 
 # exp
-- call: [tensor.fill, a, 0.0]
-- set: [c, { call: [tensor.exp, a] }]
+- call: [tensor.fill, var_a, 0.0]
+- set: [var_c, { call: [tensor.exp, var_a] }]
 - decl: [exp_v, f32]
-- set: [exp_v, { call: [c.get, 0] }]
+- set: [exp_v, { call: [var_c.get, 0] }]
 - print: ["B10 exp(0): ${exp_v}"]
-- call: [c.free]
+- call: [var_c.free]
 
 # softmax (1D-like via 2x2, dim=-1)
-- call: [tensor.fill, a, 1.0]
-- set: [c, { call: [tensor.softmax, a, -1] }]
+- call: [tensor.fill, var_a, 1.0]
+- set: [var_c, { call: [tensor.softmax, var_a, -1] }]
 - decl: [sm_v, f32]
-- set: [sm_v, { call: [c.get, 0] }]
+- set: [sm_v, { call: [var_c.get, 0] }]
 - print: ["B11 softmax: ${sm_v}"]
-- call: [c.free]
+- call: [var_c.free]
 
 # argmax_scalar
-- call: [tensor.fill, a, 1.0]
-- call: [a.set, 2, 9.0]
-- decl: [am, i32]
-- set: [am, { call: [tensor.argmax_scalar, a] }]
-- print: ["B12 argmax: ${am}"]
+- call: [tensor.fill, var_a, 1.0]
+- call: [var_a.set, 2, 9.0]
+- decl: [var_am, i32]
+- set: [var_am, { call: [tensor.argmax_scalar, var_a] }]
+- print: ["B12 argmax: ${var_am}"]
 
-- call: [a.free]
-- call: [b.free]
+- call: [var_a.free]
+- call: [var_b.free]
 - print: ["B DONE"]
 
 # ── Phase C: Autograd ────────────────────────────────────────────────────────
@@ -168,109 +168,109 @@
 - call: [tensor.begin_graph]
 
 # Create parameters with grad
-- decl: [w, tensor]
-- set: [w, { call: [tensor.ones, 2, 2] }]
-- call: [w.set_requires_grad, 1]
+- decl: [var_w, tensor]
+- set: [var_w, { call: [tensor.ones, 2, 2] }]
+- call: [var_w.set_requires_grad, 1]
 
-# Forward: y = w * w  (element-wise)
-- decl: [y, tensor]
-- set: [y, { call: [tensor.mul, w, w] }]
+# Forward: var_y = var_w * var_w  (element-wise)
+- decl: [var_y, tensor]
+- set: [var_y, { call: [tensor.mul, var_w, var_w] }]
 
-# loss = sum(y)
+# loss = sum(var_y)
 - decl: [loss, tensor]
-- set: [loss, { call: [tensor.sum, y, -1] }]
+- set: [loss, { call: [tensor.sum, var_y, -1] }]
 
 # Backward
 - call: [tensor.backward, loss]
 
-# grad(w) should be 2*w = 2*1 = 2.0
-- decl: [g, tensor]
-- set: [g, { call: [w.grad] }]
-- decl: [gv, f32]
-- set: [gv, { call: [g.get, 0] }]
-- print: ["C1 grad: ${gv}"]
+# grad(var_w) should be 2*var_w = 2*1 = 2.0
+- decl: [var_g, tensor]
+- set: [var_g, { call: [var_w.grad] }]
+- decl: [var_gv, f32]
+- set: [var_gv, { call: [var_g.get, 0] }]
+- print: ["C1 grad: ${var_gv}"]
 
-# Another test: y = a + b, loss = sum(y)
+# Another test: var_y = var_a + var_b, loss = sum(var_y)
 - call: [tensor.begin_graph]
-- decl: [pa, tensor]
-- set: [pa, { call: [tensor.ones, 3] }]
-- call: [pa.set_requires_grad, 1]
-- call: [tensor.fill, pa, 3.0]
+- decl: [var_pa, tensor]
+- set: [var_pa, { call: [tensor.ones, 3] }]
+- call: [var_pa.set_requires_grad, 1]
+- call: [tensor.fill, var_pa, 3.0]
 
-- decl: [pb, tensor]
-- set: [pb, { call: [tensor.ones, 3] }]
-- call: [pb.set_requires_grad, 1]
-- call: [tensor.fill, pb, 5.0]
+- decl: [var_pb, tensor]
+- set: [var_pb, { call: [tensor.ones, 3] }]
+- call: [var_pb.set_requires_grad, 1]
+- call: [tensor.fill, var_pb, 5.0]
 
-- decl: [pc, tensor]
-- set: [pc, { call: [tensor.add, pa, pb] }]
+- decl: [var_pc, tensor]
+- set: [var_pc, { call: [tensor.add, var_pa, var_pb] }]
 - decl: [loss2, tensor]
-- set: [loss2, { call: [tensor.sum, pc, -1] }]
+- set: [loss2, { call: [tensor.sum, var_pc, -1] }]
 - call: [tensor.backward, loss2]
 
-# grad(pa) = 1, grad(pb) = 1 (add passes gradient through)
-- decl: [ga, tensor]
-- set: [ga, { call: [pa.grad] }]
+# grad(var_pa) = 1, grad(var_pb) = 1 (add passes gradient through)
+- decl: [var_ga, tensor]
+- set: [var_ga, { call: [var_pa.grad] }]
 - decl: [gva, f32]
-- set: [gva, { call: [ga.get, 0] }]
+- set: [gva, { call: [var_ga.get, 0] }]
 - print: ["C2 grad_add_a: ${gva}"]
 
-- decl: [gb, tensor]
-- set: [gb, { call: [pb.grad] }]
+- decl: [var_gb, tensor]
+- set: [var_gb, { call: [var_pb.grad] }]
 - decl: [gvb, f32]
-- set: [gvb, { call: [gb.get, 0] }]
+- set: [gvb, { call: [var_gb.get, 0] }]
 - print: ["C3 grad_add_b: ${gvb}"]
 
-# matmul gradient: y = a @ b, loss = sum(y)
+# matmul gradient: var_y = var_a @ var_b, loss = sum(var_y)
 - call: [tensor.begin_graph]
-- decl: [ma, tensor]
-- set: [ma, { call: [tensor.ones, 2, 3] }]
-- call: [ma.set_requires_grad, 1]
+- decl: [var_ma, tensor]
+- set: [var_ma, { call: [tensor.ones, 2, 3] }]
+- call: [var_ma.set_requires_grad, 1]
 
-- decl: [mb, tensor]
-- set: [mb, { call: [tensor.ones, 3, 2] }]
-- call: [mb.set_requires_grad, 1]
+- decl: [var_mb, tensor]
+- set: [var_mb, { call: [tensor.ones, 3, 2] }]
+- call: [var_mb.set_requires_grad, 1]
 
-- decl: [mc, tensor]
-- set: [mc, { call: [tensor.matmul, ma, mb] }]
+- decl: [var_mc, tensor]
+- set: [var_mc, { call: [tensor.matmul, var_ma, var_mb] }]
 - decl: [loss3, tensor]
-- set: [loss3, { call: [tensor.sum, mc, -1] }]
+- set: [loss3, { call: [tensor.sum, var_mc, -1] }]
 - call: [tensor.backward, loss3]
 
-# grad(ma) = dl/dmc @ mb^T = ones(2,2) @ ones(2,3) = 2*ones(2,3)
-# Actually: dl/dmc = ones(2,2), mb^T = ones(2,3), matmul = sum over k of 1*1 = 2 for each element
-# grad(ma) should be 2.0 everywhere (shape 2x3)
+# grad(var_ma) = dl/dmc @ var_mb^T = ones(2,2) @ ones(2,3) = 2*ones(2,3)
+# Actually: dl/dmc = ones(2,2), var_mb^T = ones(2,3), matmul = sum over k of 1*1 = 2 for each element
+# grad(var_ma) should be 2.0 everywhere (shape 2x3)
 - decl: [gma, tensor]
-- set: [gma, { call: [ma.grad] }]
+- set: [gma, { call: [var_ma.grad] }]
 - decl: [gma_v, f32]
 - set: [gma_v, { call: [gma.get, 0] }]
 - print: ["C4 grad_matmul_a: ${gma_v}"]
 
-# grad(mb) = ma^T @ dl/dmc = ones(3,2) @ ones(2,2) = 2*ones(3,2)
+# grad(var_mb) = var_ma^T @ dl/dmc = ones(3,2) @ ones(2,2) = 2*ones(3,2)
 - decl: [gmb, tensor]
-- set: [gmb, { call: [mb.grad] }]
+- set: [gmb, { call: [var_mb.grad] }]
 - decl: [gmb_v, f32]
 - set: [gmb_v, { call: [gmb.get, 0] }]
 - print: ["C5 grad_matmul_b: ${gmb_v}"]
 
 # relu gradient
 - call: [tensor.begin_graph]
-- decl: [rx, tensor]
-- set: [rx, { call: [tensor.ones, 4] }]
-- call: [rx.set_requires_grad, 1]
-- call: [rx.set, 0, -1.0]
-- call: [rx.set, 1, 2.0]
-- call: [rx.set, 2, -3.0]
-- call: [rx.set, 3, 4.0]
+- decl: [var_rx, tensor]
+- set: [var_rx, { call: [tensor.ones, 4] }]
+- call: [var_rx.set_requires_grad, 1]
+- call: [var_rx.set, 0, -1.0]
+- call: [var_rx.set, 1, 2.0]
+- call: [var_rx.set, 2, -3.0]
+- call: [var_rx.set, 3, 4.0]
 
-- decl: [ry, tensor]
-- set: [ry, { call: [tensor.relu, rx] }]
+- decl: [var_ry, tensor]
+- set: [var_ry, { call: [tensor.relu, var_rx] }]
 - decl: [rloss, tensor]
-- set: [rloss, { call: [tensor.sum, ry, -1] }]
+- set: [rloss, { call: [tensor.sum, var_ry, -1] }]
 - call: [tensor.backward, rloss]
 
 - decl: [grx, tensor]
-- set: [grx, { call: [rx.grad] }]
+- set: [grx, { call: [var_rx.grad] }]
 # grad should be: 0 1 0 1 (relu derivative: 0 where x<0, 1 where x>0)
 - decl: [gr0, f32]
 - set: [gr0, { call: [grx.get, 0] }]
@@ -300,10 +300,10 @@
 - set: [adam_v, { call: [tensor.zeros, 4] }]
 
 # Simple loss = sum(param^2) → grad = 2*param
-- decl: [p2, tensor]
-- set: [p2, { call: [tensor.mul, param, param] }]
+- decl: [var_p2, tensor]
+- set: [var_p2, { call: [tensor.mul, param, param] }]
 - decl: [adam_loss, tensor]
-- set: [adam_loss, { call: [tensor.sum, p2, -1] }]
+- set: [adam_loss, { call: [tensor.sum, var_p2, -1] }]
 - call: [tensor.backward, adam_loss]
 
 # Adam step
@@ -314,7 +314,7 @@
 - set: [p_after, { call: [param.get, 0] }]
 - print: ["D1 param after adam: ${p_after}"]
 
-# Do a few more steps to see convergence
+# Do var_a few more steps to see convergence
 - decl: [step, i32]
 - set: [step, 2]
 - while:
@@ -322,8 +322,8 @@
     body:
       - call: [param.zero_grad]
       - call: [tensor.begin_graph]
-      - set: [p2, { call: [tensor.mul, param, param] }]
-      - set: [adam_loss, { call: [tensor.sum, p2, -1] }]
+      - set: [var_p2, { call: [tensor.mul, param, param] }]
+      - set: [adam_loss, { call: [tensor.sum, var_p2, -1] }]
       - call: [tensor.backward, adam_loss]
       - call: [tensor.adam_step, param, adam_m, adam_v, 0.01, 0.9, 0.999, 0.00000001, step]
       - set: [step, { "+": [step, 1] }]

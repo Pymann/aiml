@@ -67,112 +67,122 @@
 
 - def:
     name: helper_a
-    args: [[x, i32]]
+    args: [[var_x, i32]]
+    static_off: ["same_arg"]
     return: i32
     body:
-      - print: ["helper_a x=${x} step1"]
-      - print: ["helper_a x=${x} step2"]
-      - print: ["helper_a x=${x} step3"]
-      - print: ["helper_a x=${x} done"]
-      - return: [{ +: [x, 1] }]
+      - print: ["helper_a var_x=${var_x} step1"]
+      - print: ["helper_a var_x=${var_x} step2"]
+      - print: ["helper_a var_x=${var_x} step3"]
+      - print: ["helper_a var_x=${var_x} done"]
+      - return: [{ +: [var_x, 1] }]
 
 - def:
     name: helper_b
-    args: [[x, i32]]
+    args: [[var_x, i32]]
+    static_off: ["same_arg"]
     return: i32
     body:
       - print: ["helper_b init"]
-      - print: ["helper_b loop_start ${x}"]
-      - print: ["helper_b loop_body ${x}"]
-      - print: ["helper_b loop_end ${x}"]
-      - return: [{ "*": [x, 2] }]
+      - print: ["helper_b loop_start ${var_x}"]
+      - print: ["helper_b loop_body ${var_x}"]
+      - print: ["helper_b loop_end ${var_x}"]
+      - return: [{ "*": [var_x, 2] }]
 
 - def:
     name: helper_c
-    args: [[x, i32]]
+    args: [[var_x, i32]]
+    static_off: ["same_arg"]
     return: i32
     body:
-      - print: ["helper_c a=${x}"]
-      - print: ["helper_c b=${x}"]
-      - print: ["helper_c c=${x}"]
-      - print: ["helper_c d=${x}"]
-      - print: ["helper_c e=${x}"]
-      - return: [x]
+      - print: ["helper_c a=${var_x}"]
+      - print: ["helper_c b=${var_x}"]
+      - print: ["helper_c c=${var_x}"]
+      - print: ["helper_c d=${var_x}"]
+      - print: ["helper_c e=${var_x}"]
+      - return: [var_x]
 
 - def:
     name: helper_d
-    args: [[x, i32]]
+    args: [[var_x, i32]]
+    static_off: ["same_arg"]
     return: i32
     body:
-      - print: ["helper_d alpha=${x}"]
-      - print: ["helper_d beta=${x}"]
-      - print: ["helper_d gamma=${x}"]
-      - print: ["helper_d delta=${x}"]
-      - return: [x]
+      - print: ["helper_d alpha=${var_x}"]
+      - print: ["helper_d beta=${var_x}"]
+      - print: ["helper_d gamma=${var_x}"]
+      - print: ["helper_d delta=${var_x}"]
+      - return: [var_x]
 
 - def:
     name: helper_e
-    args: [[x, i32]]
+    args: [[var_x, i32]]
+    static_off: ["same_arg"]
     return: i32
     body:
-      - print: ["helper_e red=${x}"]
-      - print: ["helper_e green=${x}"]
-      - print: ["helper_e blue=${x}"]
-      - return: [x]
+      - print: ["helper_e red=${var_x}"]
+      - print: ["helper_e green=${var_x}"]
+      - print: ["helper_e blue=${var_x}"]
+      - return: [var_x]
 
 - def:
     name: helper_f
-    args: [[x, i32]]
+    args: [[var_x, i32]]
+    static_off: ["same_arg"]
     return: i32
     body:
-      - print: ["helper_f n_layers=${x}"]
-      - print: ["helper_f n_heads=${x}"]
-      - print: ["helper_f embed_dim=${x}"]
-      - print: ["helper_f ff_dim=${x}"]
-      - return: [x]
+      - print: ["helper_f n_layers=${var_x}"]
+      - print: ["helper_f n_heads=${var_x}"]
+      - print: ["helper_f embed_dim=${var_x}"]
+      - print: ["helper_f ff_dim=${var_x}"]
+      - return: [var_x]
 
 - def:
     name: helper_g
-    args: [[x, i32]]
+    args: [[var_x, i32]]
+    static_off: ["same_arg"]
     return: i32
     body:
-      - print: ["helper_g loss_min=${x}"]
-      - print: ["helper_g loss_mean=${x}"]
-      - print: ["helper_g loss_max=${x}"]
-      - print: ["helper_g g_rms=${x}"]
-      - print: ["helper_g p_rms=${x}"]
-      - print: ["helper_g upd_rms=${x}"]
-      - return: [x]
+      - print: ["helper_g loss_min=${var_x}"]
+      - print: ["helper_g loss_mean=${var_x}"]
+      - print: ["helper_g loss_max=${var_x}"]
+      - print: ["helper_g g_rms=${var_x}"]
+      - print: ["helper_g p_rms=${var_x}"]
+      - print: ["helper_g upd_rms=${var_x}"]
+      - return: [var_x]
 
 - def:
     name: helper_h
-    args: [[x, i32]]
+    args: [[var_x, i32]]
+    static_off: ["same_arg"]
     return: i32
     body:
-      - print: ["helper_h epoch ${x} start"]
-      - print: ["helper_h epoch ${x} step"]
-      - print: ["helper_h epoch ${x} end"]
-      - return: [x]
+      - print: ["helper_h epoch ${var_x} start"]
+      - print: ["helper_h epoch ${var_x} step"]
+      - print: ["helper_h epoch ${var_x} end"]
+      - return: [var_x]
 
 - def:
     name: helper_i
-    args: [[x, i32]]
+    args: [[var_x, i32]]
+    static_off: ["same_arg"]
     return: i32
     body:
-      - print: ["helper_i tok_embed=${x}"]
-      - print: ["helper_i pos_embed=${x}"]
-      - print: ["helper_i ln_f_g=${x}"]
-      - print: ["helper_i ln_f_b=${x}"]
-      - print: ["helper_i w_out=${x}"]
-      - return: [x]
+      - print: ["helper_i tok_embed=${var_x}"]
+      - print: ["helper_i pos_embed=${var_x}"]
+      - print: ["helper_i ln_f_g=${var_x}"]
+      - print: ["helper_i ln_f_b=${var_x}"]
+      - print: ["helper_i w_out=${var_x}"]
+      - return: [var_x]
 
 - def:
     name: helper_j
-    args: [[x, i32]]
+    args: [[var_x, i32]]
+    static_off: ["same_arg"]
     return: i32
     body:
-      - print: ["helper_j w_q=${x}"]
-      - print: ["helper_j w_k=${x}"]
-      - print: ["helper_j w_v=${x}"]
-      - print: ["helper_j w_o=${x}"]
-      - return: [x]
+      - print: ["helper_j w_q=${var_x}"]
+      - print: ["helper_j w_k=${var_x}"]
+      - print: ["helper_j w_v=${var_x}"]
+      - print: ["helper_j w_o=${var_x}"]
+      - return: [var_x]

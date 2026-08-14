@@ -49,7 +49,7 @@
     name: Card
     inherits: BaseCard
     fields:
-      - [lp,         i32]
+      - [var_lp,         i32]
       - [attack,     i32]
       - [defense,    i32]
       - [initiative, i32]
@@ -65,12 +65,12 @@
     body:
       - print: ["TEST START"]
 
-      - decl: [j1, string, '{"name": "Red Pyromancer IV", "card_type": 1, "mkp": 5, "mana_cost": {"1": 2}, "description": "A red creature.", "passive_abilities": [10, 30, 12], "active_abilities": [], "lp": 4, "attack": 5, "defense": 1, "initiative": 2, "moral": 3, "movement": 2, "spell_type": 0, "equip_cost": 0, "created_at": 0}']
-      - decl: [c1, Card]
-      - set: [c1, {call: [sys.deserialize, j1, "Card"]}]
-      - print: ["c1.name=${c1.name} type=${c1.card_type} lp=${c1.lp}"]
-      - print: ["c1.passive_abilities.len=${c1.passive_abilities.len}"]
-      - print: ["c1.active_abilities.len=${c1.active_abilities.len}"]
+      - decl: [var_j1, string, '{"name": "Red Pyromancer IV", "card_type": 1, "mkp": 5, "mana_cost": {"1": 2}, "description": "A red creature.", "passive_abilities": [10, 30, 12], "active_abilities": [], "var_lp": 4, "attack": 5, "defense": 1, "initiative": 2, "moral": 3, "movement": 2, "spell_type": 0, "equip_cost": 0, "created_at": 0}']
+      - decl: [var_c1, Card]
+      - set: [var_c1, {call: [sys.deserialize, var_j1, "Card"]}]
+      - print: ["var_c1.name=${var_c1.name} type=${var_c1.card_type} var_lp=${var_c1.var_lp}"]
+      - print: ["var_c1.passive_abilities.len=${var_c1.passive_abilities.len}"]
+      - print: ["var_c1.active_abilities.len=${var_c1.active_abilities.len}"]
 
       - print: ["ALL PASS"]
       - return: 0

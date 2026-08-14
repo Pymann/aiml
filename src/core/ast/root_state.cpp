@@ -8,6 +8,10 @@
 #include "model_builder.h"
 #include "interface_builder.h"
 #include "enum_builder.h"
+#include "cascade_builder.h"
+#include "cascade_class_builder.h"
+#include "classgroup_builder.h"
+#include "alias_builder.h"
 #include "namespace_builder.h"
 #include "import_builder.h"
 #include "config_builder.h"
@@ -58,7 +62,7 @@ bool RootState::OnScalar(const std::string& value, const std::string& tag) {
              builder->pushState(std::make_unique<FunctionBuilder>(builder));
              return true;
         }
-        else if (currentKey == "decl" || currentKey == "set" || currentKey == "call" || currentKey == "print" || currentKey == "idx") {
+        else if (currentKey == "decl" || currentKey == "set" || currentKey == "call" || currentKey == "print" || currentKey == "idx" || currentKey == "store") {
              builder->pushState(std::make_unique<StatementBuilder>(builder, currentKey));
              return true;
         }
@@ -84,6 +88,22 @@ bool RootState::OnScalar(const std::string& value, const std::string& tag) {
         }
         else if (currentKey == "enum") {
              builder->pushState(std::make_unique<EnumBuilder>(builder));
+             return true;
+        }
+        else if (currentKey == "cascade") {
+             builder->pushState(std::make_unique<CascadeBuilder>(builder));
+             return true;
+        }
+        else if (currentKey == "cascade_class") {
+             builder->pushState(std::make_unique<CascadeClassBuilder>(builder));
+             return true;
+        }
+        else if (currentKey == "classgroup") {
+             builder->pushState(std::make_unique<ClassGroupBuilder>(builder));
+             return true;
+        }
+        else if (currentKey == "alias") {
+             builder->pushState(std::make_unique<AliasBuilder>(builder));
              return true;
         }
         else if (currentKey == "prefab") {

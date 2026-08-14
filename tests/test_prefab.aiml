@@ -40,7 +40,7 @@
     height: 140
     draggable: false
     children:
-      - name: bg
+      - name: bg_layer
         type: rect
         x: 0
         y: 0
@@ -90,18 +90,18 @@
 
       # Test set/get position
       - call: [card.set_pos, 100.0, 200.0]
-      - decl: [px, f32, { call: [card.get_x] }]
-      - decl: [py, f32, { call: [card.get_y] }]
+      - decl: [var_px, f32, { call: [card.get_x] }]
+      - decl: [var_py, f32, { call: [card.get_y] }]
 
       - if:
-          condition: { eq: [px, 100.0] }
+          condition: { eq: [var_px, 100.0] }
           then:
             - print: ["PASS: get_x == 100"]
           else:
             - print: ["FAIL: get_x != 100"]
 
       - if:
-          condition: { eq: [py, 200.0] }
+          condition: { eq: [var_py, 200.0] }
           then:
             - print: ["PASS: get_y == 200"]
           else:
@@ -109,19 +109,19 @@
 
       # Test set/get scale
       - call: [card.set_scale, 1.5]
-      - decl: [sc, f32, { call: [card.get_scale] }]
+      - decl: [var_sc, f32, { call: [card.get_scale] }]
       - if:
-          condition: { eq: [sc, 1.5] }
+          condition: { eq: [var_sc, 1.5] }
           then:
             - print: ["PASS: get_scale == 1.5"]
           else:
             - print: ["FAIL: get_scale != 1.5"]
 
-      # Test set/get z
+      # Test set/get var_z
       - call: [card.set_z, 10]
-      - decl: [z, i32, { call: [card.get_z] }]
+      - decl: [var_z, i32, { call: [card.get_z] }]
       - if:
-          condition: { eq: [z, 10] }
+          condition: { eq: [var_z, 10] }
           then:
             - print: ["PASS: get_z == 10"]
           else:
@@ -141,21 +141,21 @@
 
       # Test set/get alpha
       - call: [card.set_alpha, 0.5]
-      - decl: [al, f32, { call: [card.get_alpha] }]
+      - decl: [var_al, f32, { call: [card.get_alpha] }]
       - if:
-          condition: { eq: [al, 0.5] }
+          condition: { eq: [var_al, 0.5] }
           then:
             - print: ["PASS: get_alpha == 0.5"]
           else:
             - print: ["FAIL: get_alpha != 0.5"]
 
       # Test width/height with scale
-      - decl: [w, f32, { call: [card.get_width] }]
-      - decl: [h, f32, { call: [card.get_height] }]
-      - print: ["width=${w} height=${h}"]
+      - decl: [var_w, f32, { call: [card.get_width] }]
+      - decl: [var_h, f32, { call: [card.get_height] }]
+      - print: ["width=${var_w} height=${var_h}"]
       # width = 140 * 1.5 = 210, height = 196 * 1.5 = 294
       - if:
-          condition: { eq: [w, 210.0] }
+          condition: { eq: [var_w, 210.0] }
           then:
             - print: ["PASS: width == 210 (140*1.5)"]
           else:
