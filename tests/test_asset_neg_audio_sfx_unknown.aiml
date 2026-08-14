@@ -1,0 +1,12 @@
+# Negative: audio.sfx mit string-literalem unbekanntem Stem → Compile-Hard-Error.
+#
+# AssetRoots: tests/_asset_fixtures/basic/resources/audio
+# Expected exit code: 1
+# ExpectedStderr: audio.sfx: stem 'missing_sfx' not in audio store
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [snd, audio_sound, { call: [audio.sfx, "missing_sfx"] }]
+      - return: 0

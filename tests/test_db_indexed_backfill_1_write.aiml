@@ -1,0 +1,48 @@
+# AionDB db_indexed: phase 1 — write items into persistent Kv WITHOUT any
+# db_indexed modifier.  Phase 2 (test_db_indexed_backfill_read) re-opens with
+# the modifier added on `name` — the implementation must backfill the new
+# secondary index from existing main-Kv data.
+# Expected exit code: 0
+
+- model:
+    name: Item
+    fields:
+      - [item_id, string]
+      - [name,    string]
+      - [value,   i32]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_path, path, "/tmp/aiml_test_db_indexed_backfill_20260607/"]
+      - decl: [items, Kv<string:Item>]
+      - set:  [items, { call: [db.open_kv, "items_idx_backfill", {persist: true, path: db_path}] }]
+
+      - decl: [var_a, Item]
+      - set:  [var_a.item_id, "var_a"]
+      - set:  [var_a.name,    "Hammer"]
+      - set:  [var_a.value,   10]
+      - call: [items.set, "var_a", var_a]
+
+      - decl: [var_b, Item]
+      - set:  [var_b.item_id, "var_b"]
+      - set:  [var_b.name,    "Hammer"]
+      - set:  [var_b.value,   20]
+      - call: [items.set, "var_b", var_b]
+
+      - decl: [var_c, Item]
+      - set:  [var_c.item_id, "var_c"]
+      - set:  [var_c.name,    "Saw"]
+      - set:  [var_c.value,   30]
+      - call: [items.set, "var_c", var_c]
+
+      - decl: [var_rc, i32, { call: [db.checkpoint] }]
+      - if:
+          condition: { neq: [var_rc, 0] }
+          then:
+            - print: ["FAIL backfill_write_checkpoint=${var_rc}"]
+            - call:  [sys.exit, 1]
+
+      - print: ["AionDB db_indexed backfill-write PASS"]
+      - return: 0

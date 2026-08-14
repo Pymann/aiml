@@ -1,0 +1,693 @@
+# Requires: library
+# 9Rooms — Ability Text Lookup Helpers
+
+- def:
+    name: mana_color_name
+    args: [[var_id, i32]]
+    return: string
+    body:
+      - if: [{ eq: [var_id, 1] }, true]
+        then:
+          - return: "Fire"
+      - if: [{ eq: [var_id, 2] }, true]
+        then:
+          - return: "Light"
+      - if: [{ eq: [var_id, 3] }, true]
+        then:
+          - return: "Shadow"
+      - if: [{ eq: [var_id, 4] }, true]
+        then:
+          - return: "Forest"
+      - if: [{ eq: [var_id, 5] }, true]
+        then:
+          - return: "Earth"
+      - if: [{ eq: [var_id, 6] }, true]
+        then:
+          - return: "Frost"
+      - if: [{ eq: [var_id, 7] }, true]
+        then:
+          - return: "Air"
+      - if: [{ eq: [var_id, 8] }, true]
+        then:
+          - return: "Stars"
+      - if: [{ eq: [var_id, 9] }, true]
+        then:
+          - return: "Water"
+      - if: [{ eq: [var_id, 10] }, true]
+        then:
+          - return: "Mana"
+      - return: "Mana"
+
+- def:
+    name: card_type_name
+    args: [[var_id, i32]]
+    return: string
+    body:
+      - if: [{ eq: [var_id, 0] }, true]
+        then:
+          - return: "Card"
+      - if: [{ eq: [var_id, 1] }, true]
+        then:
+          - return: "Creature"
+      - if: [{ eq: [var_id, 2] }, true]
+        then:
+          - return: "Spell"
+      - if: [{ eq: [var_id, 3] }, true]
+        then:
+          - return: "Mana"
+      - if: [{ eq: [var_id, 4] }, true]
+        then:
+          - return: "Item"
+      - if: [{ eq: [var_id, 5] }, true]
+        then:
+          - return: "Fate"
+      - if: [{ eq: [var_id, 6] }, true]
+        then:
+          - return: "Primordial"
+      - if: [{ eq: [var_id, 7] }, true]
+        then:
+          - return: "Trap"
+      - return: "Card"
+
+- def:
+    name: deck_type_name
+    args: [[var_id, i32]]
+    return: string
+    body:
+      - if: [{ eq: [var_id, 1] }, true]
+        then:
+          - return: "Mana deck"
+      - if: [{ eq: [var_id, 2] }, true]
+        then:
+          - return: "Spell deck"
+      - if: [{ eq: [var_id, 3] }, true]
+        then:
+          - return: "Creature deck"
+      - if: [{ eq: [var_id, 4] }, true]
+        then:
+          - return: "Item deck"
+      - if: [{ eq: [var_id, 5] }, true]
+        then:
+          - return: "Primordial deck"
+      - return: "Deck ${var_id}"
+
+- def:
+    name: zone_name
+    args: [[var_id, i32]]
+    return: string
+    body:
+      - if: [{ eq: [var_id, 1] }, true]
+        then:
+          - return: "hand"
+      - if: [{ eq: [var_id, 2] }, true]
+        then:
+          - return: "graveyard"
+      - if: [{ eq: [var_id, 10] }, true]
+        then:
+          - return: "mana deck"
+      - if: [{ eq: [var_id, 11] }, true]
+        then:
+          - return: "spell deck"
+      - if: [{ eq: [var_id, 12] }, true]
+        then:
+          - return: "creature deck"
+      - if: [{ eq: [var_id, 13] }, true]
+        then:
+          - return: "item deck"
+      - if: [{ eq: [var_id, 14] }, true]
+        then:
+          - return: "fate deck"
+      - if: [{ eq: [var_id, 15] }, true]
+        then:
+          - return: "primordial deck"
+      - if: [{ eq: [var_id, 20] }, true]
+        then:
+          - return: "mana zone"
+      - if: [{ eq: [var_id, 21] }, true]
+        then:
+          - return: "magic zone"
+      - if: [{ eq: [var_id, 22] }, true]
+        then:
+          - return: "trap zone"
+      - if: [{ eq: [var_id, 23] }, true]
+        then:
+          - return: "fate zone"
+      - if: [{ eq: [var_id, 24] }, true]
+        then:
+          - return: "dream zone"
+      - if: [{ eq: [var_id, 30] }, true]
+        then:
+          - return: "soulmage room"
+      - if: [{ eq: [var_id, 31] }, true]
+        then:
+          - return: "combat zone 1"
+      - if: [{ eq: [var_id, 32] }, true]
+        then:
+          - return: "combat zone 2"
+      - if: [{ eq: [var_id, 33] }, true]
+        then:
+          - return: "combat zone 3"
+      - if: [{ eq: [var_id, 34] }, true]
+        then:
+          - return: "combat zone 4"
+      - if: [{ eq: [var_id, 35] }, true]
+        then:
+          - return: "combat zone 5"
+      - if: [{ eq: [var_id, 36] }, true]
+        then:
+          - return: "any combat zone"
+      - if: [{ eq: [var_id, 99] }, true]
+        then:
+          - return: "limbo"
+      - if: [{ eq: [var_id, 100] }, true]
+        then:
+          - return: "out of game"
+      - return: "zone ${var_id}"
+
+- def:
+    name: ability_effect_code_name
+    args: [[var_id, i32]]
+    return: string
+    body:
+      - if: [{ eq: [var_id, 1] }, true]
+        then:
+          - return: "draw"
+      - if: [{ eq: [var_id, 2] }, true]
+        then:
+          - return: "discard"
+      - if: [{ eq: [var_id, 3] }, true]
+        then:
+          - return: "move"
+      - if: [{ eq: [var_id, 4] }, true]
+        then:
+          - return: "destroy"
+      - if: [{ eq: [var_id, 10] }, true]
+        then:
+          - return: "damage"
+      - if: [{ eq: [var_id, 11] }, true]
+        then:
+          - return: "healing"
+      - if: [{ eq: [var_id, 12] }, true]
+        then:
+          - return: "stat modification"
+      - if: [{ eq: [var_id, 20] }, true]
+        then:
+          - return: "passive grant"
+      - if: [{ eq: [var_id, 21] }, true]
+        then:
+          - return: "passive removal"
+      - if: [{ eq: [var_id, 30] }, true]
+        then:
+          - return: "reveal"
+      - if: [{ eq: [var_id, 31] }, true]
+        then:
+          - return: "peek hand"
+      - if: [{ eq: [var_id, 32] }, true]
+        then:
+          - return: "peek deck"
+      - if: [{ eq: [var_id, 40] }, true]
+        then:
+          - return: "counter spell"
+      - if: [{ eq: [var_id, 41] }, true]
+        then:
+          - return: "summon token"
+      - if: [{ eq: [var_id, 42] }, true]
+        then:
+          - return: "equip"
+      - if: [{ eq: [var_id, 43] }, true]
+        then:
+          - return: "drain mana"
+      - if: [{ eq: [var_id, 44] }, true]
+        then:
+          - return: "shuffle"
+      - if: [{ eq: [var_id, 45] }, true]
+        then:
+          - return: "mill"
+      - if: [{ eq: [var_id, 46] }, true]
+        then:
+          - return: "paralyze"
+      - if: [{ eq: [var_id, 47] }, true]
+        then:
+          - return: "revive"
+      - if: [{ eq: [var_id, 48] }, true]
+        then:
+          - return: "lock zone"
+      - if: [{ eq: [var_id, 49] }, true]
+        then:
+          - return: "cant be attacked"
+      - if: [{ eq: [var_id, 50] }, true]
+        then:
+          - return: "soulmage cant be attacked"
+      - return: "effect"
+
+- def:
+    name: trigger_name
+    args: [[var_id, i32]]
+    return: string
+    body:
+      - if: [{ eq: [var_id, 1] }, true]
+        then:
+          - return: "On phase start"
+      - if: [{ eq: [var_id, 2] }, true]
+        then:
+          - return: "On phase end"
+      - if: [{ eq: [var_id, 3] }, true]
+        then:
+          - return: "On effect"
+      - if: [{ eq: [var_id, 4] }, true]
+        then:
+          - return: "On move"
+      - if: [{ eq: [var_id, 5] }, true]
+        then:
+          - return: "On attack"
+      - if: [{ eq: [var_id, 6] }, true]
+        then:
+          - return: "On defend"
+      - if: [{ eq: [var_id, 7] }, true]
+        then:
+          - return: "On draw"
+      - if: [{ eq: [var_id, 8] }, true]
+        then:
+          - return: "On destroy"
+      - if: [{ eq: [var_id, 9] }, true]
+        then:
+          - return: "On play"
+      - if: [{ eq: [var_id, 10] }, true]
+        then:
+          - return: "On hit"
+      - if: [{ eq: [var_id, 11] }, true]
+        then:
+          - return: "On kill"
+      - if: [{ eq: [var_id, 12] }, true]
+        then:
+          - return: "On soulmage hit"
+      - if: [{ eq: [var_id, 13] }, true]
+        then:
+          - return: "On soulmage attack"
+      - if: [{ eq: [var_id, 14] }, true]
+        then:
+          - return: "On equip"
+      - if: [{ eq: [var_id, 15] }, true]
+        then:
+          - return: "On unequip"
+      - if: [{ eq: [var_id, 16] }, true]
+        then:
+          - return: "On drop"
+      - if: [{ eq: [var_id, 17] }, true]
+        then:
+          - return: "On reveal"
+      - if: [{ eq: [var_id, 18] }, true]
+        then:
+          - return: "On hide"
+      - return: "Trigger"
+
+- def:
+    name: owner_trigger_name
+    args: [[var_id, i32]]
+    return: string
+    body:
+      - if: [{ eq: [var_id, 0] }, true]
+        then:
+          - return: "this"
+      - if: [{ eq: [var_id, 1] }, true]
+        then:
+          - return: "friendly"
+      - if: [{ eq: [var_id, 2] }, true]
+        then:
+          - return: "enemy"
+      - if: [{ eq: [var_id, 3] }, true]
+        then:
+          - return: "any"
+      - return: "owner"
+
+- def:
+    name: owner_name
+    args: [[var_id, i32]]
+    return: string
+    body:
+      - if: [{ eq: [var_id, 0] }, true]
+        then:
+          - return: "this"
+      - if: [{ eq: [var_id, 1] }, true]
+        then:
+          - return: "friendly"
+      - if: [{ eq: [var_id, 2] }, true]
+        then:
+          - return: "enemy"
+      - if: [{ eq: [var_id, 3] }, true]
+        then:
+          - return: "any"
+      - return: "owner"
+
+- def:
+    name: duration_name
+    args: [[var_id, i32]]
+    return: string
+    body:
+      - if: [{ eq: [var_id, 0] }, true]
+        then:
+          - return: "Permanent"
+      - if: [{ eq: [var_id, 1] }, true]
+        then:
+          - return: "Turns"
+      - if: [{ eq: [var_id, 2] }, true]
+        then:
+          - return: "Next turn phase"
+      - if: [{ eq: [var_id, 3] }, true]
+        then:
+          - return: "End of phase"
+      - if: [{ eq: [var_id, 4] }, true]
+        then:
+          - return: "As long as equipped"
+      - if: [{ eq: [var_id, 5] }, true]
+        then:
+          - return: "As long as in play"
+      - return: "Duration"
+
+- def:
+    name: value_type_name
+    args: [[var_id, i32]]
+    return: string
+    body:
+      - if: [{ eq: [var_id, 0] }, true]
+        then:
+          - return: "Const"
+      - if: [{ eq: [var_id, 1] }, true]
+        then:
+          - return: "Current LP"
+      - if: [{ eq: [var_id, 2] }, true]
+        then:
+          - return: "Current Attack"
+      - if: [{ eq: [var_id, 3] }, true]
+        then:
+          - return: "Current Defense"
+      - if: [{ eq: [var_id, 4] }, true]
+        then:
+          - return: "Current Initiative"
+      - if: [{ eq: [var_id, 5] }, true]
+        then:
+          - return: "Current Morale"
+      - if: [{ eq: [var_id, 6] }, true]
+        then:
+          - return: "Current Movement"
+      - if: [{ eq: [var_id, 7] }, true]
+        then:
+          - return: "Max LP"
+      - if: [{ eq: [var_id, 8] }, true]
+        then:
+          - return: "Max Attack"
+      - if: [{ eq: [var_id, 9] }, true]
+        then:
+          - return: "Max Defense"
+      - if: [{ eq: [var_id, 10] }, true]
+        then:
+          - return: "Max Initiative"
+      - if: [{ eq: [var_id, 11] }, true]
+        then:
+          - return: "Max Morale"
+      - if: [{ eq: [var_id, 12] }, true]
+        then:
+          - return: "Max Movement"
+      - if: [{ eq: [var_id, 13] }, true]
+        then:
+          - return: "Friendly creature count"
+      - if: [{ eq: [var_id, 14] }, true]
+        then:
+          - return: "Enemy creature count"
+      - return: "Value"
+
+- def:
+    name: attribute_name
+    args: [[var_id, i32]]
+    return: string
+    body:
+      - if: [{ eq: [var_id, 1] }, true]
+        then:
+          - return: "LP"
+      - if: [{ eq: [var_id, 2] }, true]
+        then:
+          - return: "Attack"
+      - if: [{ eq: [var_id, 3] }, true]
+        then:
+          - return: "Defense"
+      - if: [{ eq: [var_id, 4] }, true]
+        then:
+          - return: "Initiative"
+      - if: [{ eq: [var_id, 5] }, true]
+        then:
+          - return: "Morale"
+      - if: [{ eq: [var_id, 6] }, true]
+        then:
+          - return: "Movement"
+      - return: "Stat"
+
+- def:
+    name: phase_name
+    args: [[var_id, i32]]
+    return: string
+    body:
+      - if: [{ eq: [var_id, 1] }, true]
+        then:
+          - return: "Start Phase"
+      - if: [{ eq: [var_id, 2] }, true]
+        then:
+          - return: "Draw Phase"
+      - if: [{ eq: [var_id, 3] }, true]
+        then:
+          - return: "Mana Phase"
+      - if: [{ eq: [var_id, 4] }, true]
+        then:
+          - return: "Spell Phase"
+      - if: [{ eq: [var_id, 5] }, true]
+        then:
+          - return: "Combat Phase"
+      - if: [{ eq: [var_id, 6] }, true]
+        then:
+          - return: "End Phase"
+      - return: "Phase"
+
+- def:
+    name: passive_name
+    args: [[var_id, i32]]
+    return: string
+    body:
+      - if: [{ eq: [var_id, 1] }, true]
+        then:
+          - return: "Flying"
+      - if: [{ eq: [var_id, 2] }, true]
+        then:
+          - return: "Swimming"
+      - if: [{ eq: [var_id, 3] }, true]
+        then:
+          - return: "Diving"
+      - if: [{ eq: [var_id, 4] }, true]
+        then:
+          - return: "Subterranean"
+      - if: [{ eq: [var_id, 5] }, true]
+        then:
+          - return: "Mirror Walk"
+      - if: [{ eq: [var_id, 10] }, true]
+        then:
+          - return: "Double Strike"
+      - if: [{ eq: [var_id, 11] }, true]
+        then:
+          - return: "Veteran"
+      - if: [{ eq: [var_id, 12] }, true]
+        then:
+          - return: "Reach"
+      - if: [{ eq: [var_id, 13] }, true]
+        then:
+          - return: "Sacrifice"
+      - if: [{ eq: [var_id, 14] }, true]
+        then:
+          - return: "Dodge 30%"
+      - if: [{ eq: [var_id, 15] }, true]
+        then:
+          - return: "Inspired Morale"
+      - if: [{ eq: [var_id, 16] }, true]
+        then:
+          - return: "Agile"
+      - if: [{ eq: [var_id, 17] }, true]
+        then:
+          - return: "Pierce"
+      - if: [{ eq: [var_id, 18] }, true]
+        then:
+          - return: "Armored"
+      - if: [{ eq: [var_id, 19] }, true]
+        then:
+          - return: "Attack Bonus"
+      - if: [{ eq: [var_id, 20] }, true]
+        then:
+          - return: "Defense Bonus"
+      - if: [{ eq: [var_id, 21] }, true]
+        then:
+          - return: "Watchful"
+      - if: [{ eq: [var_id, 22] }, true]
+        then:
+          - return: "Gigantic"
+      - if: [{ eq: [var_id, 30] }, true]
+        then:
+          - return: "Burning"
+      - if: [{ eq: [var_id, 31] }, true]
+        then:
+          - return: "Shadowy"
+      - if: [{ eq: [var_id, 32] }, true]
+        then:
+          - return: "Glowing"
+      - if: [{ eq: [var_id, 33] }, true]
+        then:
+          - return: "Undead"
+      - if: [{ eq: [var_id, 34] }, true]
+        then:
+          - return: "Holy"
+      - if: [{ eq: [var_id, 35] }, true]
+        then:
+          - return: "Ethereal"
+      - if: [{ eq: [var_id, 37] }, true]
+        then:
+          - return: "Vampiric"
+      - if: [{ eq: [var_id, 38] }, true]
+        then:
+          - return: "Iceshock"
+      - if: [{ eq: [var_id, 39] }, true]
+        then:
+          - return: "Poisonous"
+      - if: [{ eq: [var_id, 40] }, true]
+        then:
+          - return: "Regenerates"
+      - if: [{ eq: [var_id, 42] }, true]
+        then:
+          - return: "Astral"
+      - if: [{ eq: [var_id, 43] }, true]
+        then:
+          - return: "Reviving"
+      - if: [{ eq: [var_id, 50] }, true]
+        then:
+          - return: "Sticky"
+      - if: [{ eq: [var_id, 51] }, true]
+        then:
+          - return: "Thieving"
+      - if: [{ eq: [var_id, 52] }, true]
+        then:
+          - return: "Tired"
+      - if: [{ eq: [var_id, 53] }, true]
+        then:
+          - return: "Sluggish"
+      - if: [{ eq: [var_id, 54] }, true]
+        then:
+          - return: "Annoying"
+      - if: [{ eq: [var_id, 55] }, true]
+        then:
+          - return: "Porous"
+      - if: [{ eq: [var_id, 56] }, true]
+        then:
+          - return: "Ugly"
+      - if: [{ eq: [var_id, 60] }, true]
+        then:
+          - return: "Effective Against Fire"
+      - if: [{ eq: [var_id, 61] }, true]
+        then:
+          - return: "Effective Against Forest"
+      - if: [{ eq: [var_id, 62] }, true]
+        then:
+          - return: "Effective Against Ice"
+      - if: [{ eq: [var_id, 63] }, true]
+        then:
+          - return: "Effective Against Light"
+      - if: [{ eq: [var_id, 64] }, true]
+        then:
+          - return: "Effective Against Shadow"
+      - if: [{ eq: [var_id, 65] }, true]
+        then:
+          - return: "Effective Against Earth"
+      - if: [{ eq: [var_id, 66] }, true]
+        then:
+          - return: "Effective Against Frost"
+      - if: [{ eq: [var_id, 67] }, true]
+        then:
+          - return: "Effective Against Air"
+      - if: [{ eq: [var_id, 68] }, true]
+        then:
+          - return: "Effective Against Stars"
+      - if: [{ eq: [var_id, 69] }, true]
+        then:
+          - return: "Effective Against Water"
+      - if: [{ eq: [var_id, 70] }, true]
+        then:
+          - return: "Protection From Fire"
+      - if: [{ eq: [var_id, 71] }, true]
+        then:
+          - return: "Protection From Forest"
+      - if: [{ eq: [var_id, 72] }, true]
+        then:
+          - return: "Protection From Ice"
+      - if: [{ eq: [var_id, 73] }, true]
+        then:
+          - return: "Protection From Light"
+      - if: [{ eq: [var_id, 74] }, true]
+        then:
+          - return: "Protection From Shadow"
+      - if: [{ eq: [var_id, 75] }, true]
+        then:
+          - return: "Protection From Earth"
+      - if: [{ eq: [var_id, 76] }, true]
+        then:
+          - return: "Protection From Frost"
+      - if: [{ eq: [var_id, 77] }, true]
+        then:
+          - return: "Protection From Air"
+      - if: [{ eq: [var_id, 78] }, true]
+        then:
+          - return: "Protection From Stars"
+      - if: [{ eq: [var_id, 79] }, true]
+        then:
+          - return: "Protection From Water"
+      - if: [{ eq: [var_id, 80] }, true]
+        then:
+          - return: "Lifelink"
+      - if: [{ eq: [var_id, 81] }, true]
+        then:
+          - return: "Teleport"
+      - if: [{ eq: [var_id, 82] }, true]
+        then:
+          - return: "Trample"
+      - if: [{ eq: [var_id, 83] }, true]
+        then:
+          - return: "Thorns 10%"
+      - if: [{ eq: [var_id, 84] }, true]
+        then:
+          - return: "Thorns 20%"
+      - if: [{ eq: [var_id, 85] }, true]
+        then:
+          - return: "Thorns 30%"
+      - if: [{ eq: [var_id, 86] }, true]
+        then:
+          - return: "Thorns 40%"
+      - if: [{ eq: [var_id, 87] }, true]
+        then:
+          - return: "Thorns 50%"
+      - if: [{ eq: [var_id, 88] }, true]
+        then:
+          - return: "Sniper"
+      - if: [{ eq: [var_id, 89] }, true]
+        then:
+          - return: "Guardian"
+      - if: [{ eq: [var_id, 90] }, true]
+        then:
+          - return: "Rooted"
+      - if: [{ eq: [var_id, 91] }, true]
+        then:
+          - return: "Shrouded"
+      - if: [{ eq: [var_id, 92] }, true]
+        then:
+          - return: "Voracious"
+      - if: [{ eq: [var_id, 93] }, true]
+        then:
+          - return: "Evolve A"
+      - if: [{ eq: [var_id, 94] }, true]
+        then:
+          - return: "Evolve V"
+      - if: [{ eq: [var_id, 95] }, true]
+        then:
+          - return: "Evolve I"
+      - return: "Passive"

@@ -1,0 +1,59 @@
+# AionDB db_indexed: phase 2 — same persistent path, but the model now declares
+# `name` as db_indexed.  Implementation must detect the missing/stale index
+# sidecar Kv and backfill it from the existing main-Kv records before the
+# first findings_by_name() call returns.
+# Run AFTER test_db_indexed_backfill_1_write.aiml.
+# Expected exit code: 0
+
+- model:
+    name: Item
+    fields:
+      - [item_id, string]
+      - [name,    string, "", { db_indexed: true }]
+      - [value,   i32]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_path, path, "/tmp/aiml_test_db_indexed_backfill_20260607/"]
+      - if:
+          condition: { eq: [{ call: [db_path.exists] }, 0] }
+          then:
+            - print: ["SKIP backfill_read (run test_db_indexed_backfill_1_write.aiml first)"]
+            - return: 0
+
+      - decl: [items, Kv<string:Item>]
+      - set:  [items, { call: [db.open_kv, "items_idx_backfill", {persist: true, path: db_path}] }]
+
+      # findings_by_name resolves against the freshly-backfilled index.
+      - decl: [hammers, list<string>, { call: [items.findings_by, "name", "Hammer"] }]
+      - if:
+          condition: { neq: [hammers.len, 2] }
+          then:
+            - print: ["FAIL backfill_read_hammers=${hammers.len} (want 2)"]
+            - call:  [sys.exit, 1]
+
+      - decl: [saws, list<string>, { call: [items.findings_by, "name", "Saw"] }]
+      - if:
+          condition: { neq: [saws.len, 1] }
+          then:
+            - print: ["FAIL backfill_read_saws=${saws.len} (want 1)"]
+            - call:  [sys.exit, 1]
+
+      # Subsequent set() through the indexed model must also write the index.
+      - decl: [var_d, Item]
+      - set:  [var_d.item_id, "var_d"]
+      - set:  [var_d.name,    "Hammer"]
+      - set:  [var_d.value,   40]
+      - call: [items.set, "var_d", var_d]
+
+      - decl: [hammers2, list<string>, { call: [items.findings_by, "name", "Hammer"] }]
+      - if:
+          condition: { neq: [hammers2.len, 3] }
+          then:
+            - print: ["FAIL backfill_post_set_hammers=${hammers2.len} (want 3)"]
+            - call:  [sys.exit, 1]
+
+      - print: ["AionDB db_indexed backfill-read PASS"]
+      - return: 0

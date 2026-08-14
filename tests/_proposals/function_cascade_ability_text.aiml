@@ -1,0 +1,207 @@
+# ============================================================================
+# DESIGN SKETCH (PROPOSAL) — "Function Cascades": a typed, context-sensitive
+# function pipeline over a cascade bytecode.  NOT compilable; lives under
+# tests/_*/ (run_all_tests.sh skips it).  Spec: spec/57_function_cascades.md
+#
+# Final design (after discussion):
+#  • A CascadeClass BUNDLES the rule-holding member classes into one method pool
+#    and pins the pool's carrier endpoints; it emits render(carrier, block) -> taker.
+#  • Dispatch via CONTEXT rule  α A β  typed by `Mask` (preceding history, current
+#    element, following history) — a context-sensitive grammar production.
+#  • `Mask { options: list<i32>, is_wildcard }`.  Surface sugar: a member/selection
+#    → options; a type name or omission → any value of the stage; "*" → is_wildcard.
+#    `before` matches the prefix TAIL (ordered, Lesart B), longest-fixed wins.
+#  • Validity invariant: before/after must be valid partial schema paths.
+#  • (b) TYPE-TRANSFORMING carrier chain: return(element i) == carry-param(i+1),
+#    STRICTLY nominal (i32 != i8 is an error).  carrier == first carryIn,
+#    taker == last carryOut.  NO finalization inside — the pipeline only does
+#    carrier -> carrier; the CALLER joins the Draft to a string.
+#  • The whole block is held as a ref in the pool (self.code); the index is
+#    advanced COMPILER-guaranteed (self.index); handlers read self.field (typed).
+#
+# YAML note: wildcards are the QUOTED string "*" (bare `*` is a YAML alias marker).
+# ============================================================================
+
+- import: "sources/models/bytecode_enums.aiml"
+
+# ─── Carrier of the pipeline (here uniform: Draft in, Draft out; the caller
+#     joins parts -> string).  (b) allows the type to change stage to stage; text
+#     doesn't need that. ────────────────────────────────────────────────────────
+- model: { name: Draft, fields: [[parts, list<string>]] }
+
+# `opcode: EffectCode` types element 0; `nodes` is a LIST OF LISTS whose leading
+# element is the opcode enum member (its int id is derived + verified against the enum).
+- cascade:
+    name: Effect
+    opcode: EffectCode
+    nodes:
+      - [deal_damage, OwnerRef, TargetType, Value]
+      - [heal_damage, OwnerRef, TargetType, Value]
+      - [revive,      OwnerRef, OwnerRef, GameZone, CardType]   # OwnerRef 2x!
+
+# ============================================================================
+# THE POOL.  Bundles the member classes, pins carrier/taker, emits render.
+# Compiler-provided (implicit) pool state:
+#   self.code : ref list<i32>        (whole block)
+#   self.index: i32                  (current element; compiler advances it)
+#   self.field: <schemaType @ index> (typed current value)
+# ============================================================================
+- cascade_class:
+    name: EffectText
+    binds_cascade: Effect
+    carrier: Draft
+    taker:   Draft            # == carrier; caller joins Draft -> string (no finalization here)
+    members: [EffectSkeleton, OwnerRefText, TargetTypeText, GameZoneText, ValueText, CardTypeText]
+
+# ── Skeleton member: renders the Effect opcode "sentence begins" + the few
+#    CONTEXT-SPECIFIC overrides (revive's two OwnerRefs).  These are Effect-bound;
+#    specificity makes them beat OwnerRefText's generic rule where they apply. ─────
+- class:
+    name: EffectSkeleton
+    renders: Effect
+    rules:
+      # Opcode element (index 0).  before:[] = start of path.  Several opcodes,
+      # same treatment → selection Mask in `on`.
+      - before: []
+        on: [deal_damage, heal_damage]
+        def:
+          name: begin_dmg
+          args: [[carry, Draft]]
+          return: Draft
+          body:
+            - if: { condition: { eq: [self.field, EffectCode.deal_damage] }, then: [{ call: [carry.parts.push, "Deal"] }] }
+            - if: { condition: { eq: [self.field, EffectCode.heal_damage] }, then: [{ call: [carry.parts.push, "Heal"] }] }
+            - return: carry
+
+      - before: []
+        on: [revive]
+        def:
+          name: begin_revive
+          args: [[carry, Draft]]
+          return: Draft
+          body:
+            - call: [carry.parts.push, "Revive"]
+            - return: carry
+
+      # Repetition disambiguated by preceding history (beats OwnerRefText's wildcard):
+      - before: [revive]                            # 1st OwnerRef → reviver
+        on: OwnerRef
+        after: [OwnerRef, GameZone, CardType]
+        def:
+          name: rev_who
+          args: [[carry, Draft]]
+          return: Draft
+          body:
+            - call: [carry.parts.push, "by ${ enums.label('OwnerRef', self.field) }"]
+            - return: carry
+
+      - before: [revive, OwnerRef]                  # 2nd OwnerRef → graveyard owner
+        on: OwnerRef
+        after: [GameZone, CardType]
+        def:
+          name: rev_grave
+          args: [[carry, Draft]]
+          return: Draft
+          body:
+            - call: [carry.parts.push, "from graveyard of ${ enums.label('OwnerRef', self.field) }"]
+            - return: carry
+
+# ── Reusable per-field-type members (context ["*"] = generic).  Each is bound to
+#    ITS type and shared by every pool with such a field. ──────────────────────────
+- class:
+    name: OwnerRefText
+    renders: OwnerRef
+    rules:
+      - before: ["*"]
+        on: OwnerRef
+        after: ["*"]
+        def:
+          name: owner_generic
+          args: [[carry, Draft]]
+          return: Draft
+          body:
+            - call: [carry.parts.push, { call: [enums.label, "OwnerRef", self.field] }]
+            - return: carry
+
+- class:
+    name: TargetTypeText
+    renders: TargetType
+    rules:
+      - before: ["*"]
+        on: TargetType
+        after: ["*"]
+        def:
+          name: tgt
+          args: [[carry, Draft]]
+          return: Draft
+          body:
+            - call: [carry.parts.push, { call: [enums.label, "TargetType", self.field] }]
+            - return: carry
+
+- class:
+    name: GameZoneText
+    renders: GameZone
+    rules:
+      - before: ["*"]
+        on: GameZone
+        after: ["*"]
+        def:
+          name: zone
+          args: [[carry, Draft]]
+          return: Draft
+          body:
+            - call: [carry.parts.push, { call: [enums.label, "GameZone", self.field] }]
+            - return: carry
+
+- class:
+    name: CardTypeText
+    renders: CardType
+    rules:
+      - before: ["*"]
+        on: CardType
+        after: ["*"]
+        def:
+          name: card
+          args: [[carry, Draft]]
+          return: Draft
+          body:
+            - call: [carry.parts.push, { call: [enums.label, "CardType", self.field] }]
+            - return: carry
+
+# ── Value is itself a CASCADE (opcode: ValueType) → nested: the walk RECURSES into
+#    ValueText with the same carrier (Draft).  `fixed` carries a raw VALUE (i32 alias,
+#    no enum) → read via self.field, is_wildcard stage. ───────────────────────────
+- class:
+    name: ValueText
+    renders: Value
+    rules:
+      - before: ["*"]
+        on: [fixed]                # ValueType.fixed, then a VALUE (i32 alias) follows
+        after: ["*"]
+        def:
+          name: v_fixed
+          args: [[carry, Draft]]
+          return: Draft
+          body:
+            - call: [carry.parts.push, "for ${self.field}"]   # self.field : VALUE (raw i32)
+            - return: carry
+
+# ============================================================================
+# USAGE (proposed) — the pool builds a Draft; the CALLER joins it:
+#   - decl: [pool, ptr<EffectText>, { new: EffectText }]
+#   - decl: [dr,   Draft]                                        # empty carrier
+#   - decl: [out,  Draft, { call: [pool.render, dr, block] }]    # block = list<i32>
+#   - decl: [txt,  string, { call: [str.join, out.parts, " "] }] # finalization: CALLER's job
+#
+# PHASE 1 (processing):
+#   block [10,2,2,<Value…>]     → Draft{ "Deal","opponent","creature","for N" }
+#   block [47,1,2,31,41]        → Draft{ "Revive","by player","from graveyard of opponent","combat_zone_1","<card>" }
+#   Compiler checks per path: the carrier chain is continuous (Draft throughout),
+#   the index covers the schema (incl. the ValueText recursion), and every path is
+#   covered by exactly one rule (specificity: revive overrides beat the wildcard).
+#
+# PHASE 2 (generation, goal):  same rules.  At each point the compiler yields the
+#   set of type-VALID next elements (rule matches AND carry-in fits).  A policy/AI
+#   chooses/samples among them (optionally via `weight:`) → guaranteed type-correct
+#   sequences.  Compiler = hard constraints, AI = free choice within them.
+# ============================================================================

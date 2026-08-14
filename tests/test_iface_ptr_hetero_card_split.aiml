@@ -1,0 +1,125 @@
+# static-check: off
+# Test B: interface + class Polymorphie mit heterogener list<ptr<CardBase>>.
+#
+# Muster analog test_iface_list_ptr_heterogen: pro Model-Slice eine Klasse,
+# alle implementieren dasselbe Interface.  Die Liste ist typisiert auf das
+# Interface, nimmt aber jeden Impl-ptr.
+#
+# Erwartung: PASS — virtual dispatch via VTable, wie Spec 19_inheritance
+# beschreibt.
+
+- interface:
+    name: CardBase
+    methods:
+      - [render_label, string, []]     # name für UI
+      - [get_type,     string, []]     # card_type discriminator
+
+- model:
+    name: BaseFields
+    fields:
+      - [nam,       string]
+      - [card_type, string]
+      - [mkp,       i32]
+
+- model:
+    name: CreatureData
+    inherits: BaseFields
+    fields:
+      - [attack,  i32]
+      - [defense, i32]
+
+- class:
+    name: CreatureCard
+    models: [CreatureData]
+    implements: [CardBase]
+    methods:
+      - def:
+          name: render_label
+          return: string
+          args: []
+          body: [{ return: "${<.nam} (ATK ${<.attack}/DEF ${<.defense})" }]
+      - def:
+          name: get_type
+          return: string
+          args: []
+          body: [{ return: <.card_type }]
+
+- model:
+    name: ManaData
+    inherits: BaseFields
+    fields:
+      - [provides_color,  i32]
+      - [provides_amount, i32]
+
+- class:
+    name: ManaCard
+    models: [ManaData]
+    implements: [CardBase]
+    methods:
+      - def:
+          name: render_label
+          return: string
+          args: []
+          body: [{ return: "${<.nam} (+${<.provides_amount} c${<.provides_color})" }]
+      - def:
+          name: get_type
+          return: string
+          args: []
+          body: [{ return: <.card_type }]
+
+- class:
+    name: Deck
+    members:
+      - [cards, list<ptr<CardBase>>]
+    methods:
+      - def:
+          name: run
+          return: i32
+          body:
+            - decl: [crt, ptr<CreatureCard>, { new: CreatureCard }]
+            - set: [crt.nam,       "Dragon"]
+            - set: [crt.card_type, "creature"]
+            - set: [crt.mkp,       5]
+            - set: [crt.attack,    4]
+            - set: [crt.defense,   3]
+            - call: [<.cards.push, crt]
+            - decl: [man, ptr<ManaCard>, { new: ManaCard }]
+            - set: [man.nam,             "FireMana"]
+            - set: [man.card_type,       "mana"]
+            - set: [man.mkp,             1]
+            - set: [man.provides_color,  0]
+            - set: [man.provides_amount, 2]
+            - call: [<.cards.push, man]
+            - decl: [car0, ptr<CardBase>, { at: [<.cards, 0] }]
+            - decl: [car1, ptr<CardBase>, { at: [<.cards, 1] }]
+            - decl: [lbl0, string, { call: [car0.render_label] }]
+            - decl: [lbl1, string, { call: [car1.render_label] }]
+            - decl: [typ0, string, { call: [car0.get_type] }]
+            - decl: [typ1, string, { call: [car1.get_type] }]
+            - print: ["B[0]: label='${lbl0}' type='${typ0}'"]
+            - print: ["B[1]: label='${lbl1}' type='${typ1}'"]
+            - decl: [fails, i32, 0]
+            - if:
+                condition: { neq: [typ0, "creature"] }
+                then: [{ set: [fails, { +: [fails, 1] }] }]
+            - if:
+                condition: { neq: [typ1, "mana"] }
+                then: [{ set: [fails, { +: [fails, 1] }] }]
+            - if:
+                condition: { neq: [lbl0, "Dragon (ATK 4/DEF 3)"] }
+                then: [{ set: [fails, { +: [fails, 1] }] }]
+            - if:
+                condition: { neq: [lbl1, "FireMana (+2 c0)"] }
+                then: [{ set: [fails, { +: [fails, 1] }] }]
+            - if:
+                condition: { eq: [fails, 0] }
+                then: [{ print: ["PASS: interface+class heterogen list works via VTable"] }]
+                else: [{ print: ["FAIL: ${fails} assertion(s)"] }]
+            - return: fails
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [dck, ptr<Deck>, { new: Deck }]
+      - return: { call: [dck.run] }

@@ -1,0 +1,45 @@
+# Regression setup: write persistent Store<T> contents for a later reopen/read test.
+# Expected exit code: 0
+
+- class:
+    name: ReopenPlayer
+    members: [[score, i32], [level, i32]]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_path, path, "/tmp/aiml_test_aiondb_store_reopen_20260319/"]
+      - decl: [players, Store<ReopenPlayer>]
+      - set: [players, { call: [db.open, "reopen_players_20260319", {persist: true, path: db_path}] }]
+
+      - decl: [var_n, i32]
+      - set: [var_n, { call: [players.len] }]
+      - if:
+          condition: { neq: [var_n, 0] }
+          then:
+            - print: ["FAIL store_reopen_write_nonempty len=${var_n}"]
+            - call: [sys.exit, 1]
+
+      - decl: [var_p, ReopenPlayer]
+      - set: [var_p.score, 456]
+      - set: [var_p.level, 9]
+
+      - decl: [var_id, i32]
+      - set: [var_id, { call: [players.insert, var_p] }]
+      - if:
+          condition: { neq: [var_id, 1] }
+          then:
+            - print: ["FAIL store_reopen_write_id=${var_id}"]
+            - call: [sys.exit, 1]
+
+      - decl: [var_rc, i32]
+      - set: [var_rc, { call: [db.checkpoint] }]
+      - if:
+          condition: { neq: [var_rc, 0] }
+          then:
+            - print: ["FAIL store_reopen_write_checkpoint=${var_rc}"]
+            - call: [sys.exit, 1]
+
+      - print: ["AionDB store reopen write PASS"]
+      - return: 0

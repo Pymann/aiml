@@ -1,0 +1,88 @@
+# Slot-carrier proof (Phase B for the ability_text port): a MODEL carrier with
+# NAMED slots (not an append-order list).  Field handlers fill their slot; the
+# CALLER assembles the sentence in an order DIFFERENT from block order — proving
+# the phrasing-order limitation is lifted by a value(model) carrier.
+#
+# Block:  deal_damage(10), creature(2), Val.fixed(1), 5
+# Slots filled: verb="Deal", target="creature", amount=5
+# Finalize REORDERED: "${amount} to ${target} via ${verb}" = "5 to creature via Deal"
+#
+# All rules live in ONE class (renders: Eff, with per-stage context masks) to stay
+# within the ≤3 top-level-types/file limit alongside the Draft model.
+
+- enum: { name: EffCode, values: [ {deal_damage: 10}, {heal_damage: 11} ] }
+- enum: { name: TgtType, values: [ {creature: 2}, {soulmage: 10} ] }
+- enum: { name: ValType, values: [ {fixed: 1} ] }
+
+- cascade: { name: Val, opcode: ValType, nodes: [ [fixed, i32] ] }
+- cascade:
+    name: Eff
+    opcode: EffCode
+    nodes:
+      - [deal_damage, TgtType, Val]
+      - [heal_damage, TgtType, Val]
+
+# The slot carrier — named fields instead of an ordered parts list.
+- model: { name: Draft, fields: [ [verb, string], [target, string], [amount, i32] ] }
+
+- class:
+    name: Skel
+    renders: Eff
+    rules:
+      - before: []
+        on: [deal_damage, heal_damage]
+        def:
+          name: begin
+          args: [[carry, Draft]]
+          return: Draft
+          body:
+            - if: { condition: { eq: [{ call: [<.field] }, EffCode.deal_damage] }, then: [{ set: [carry.verb, "Deal"] }] }
+            - if: { condition: { eq: [{ call: [<.field] }, EffCode.heal_damage] }, then: [{ set: [carry.verb, "Heal"] }] }
+            - return: carry
+      - before: ["*"]
+        on: TgtType
+        after: ["*"]
+        def:
+          name: tgt
+          args: [[carry, Draft]]
+          return: Draft
+          body:
+            - set: [carry.target, { call: [enums.name, "TgtType", { call: [<.field] }] }]
+            - return: carry
+      - before: ["*"]
+        on: [fixed]
+        after: ["*"]
+        def: { name: vfix, args: [[carry, Draft]], return: Draft, body: [ { return: carry } ] }
+      - before: ["*"]
+        on: i32
+        def:
+          name: vamt
+          args: [[carry, Draft]]
+          return: Draft
+          body:
+            - set: [carry.amount, { call: [<.field] }]
+            - return: carry
+
+- cascade_class:
+    name: EffT
+    binds_cascade: Eff
+    carrier: Draft
+    taker:   Draft
+    members: [Skel]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pool, ptr<EffT>, { new: EffT }]
+      - decl: [row, list<i32>]
+      - call: [row.push, 10]     # deal_damage
+      - call: [row.push, 2]      # creature
+      - call: [row.push, 1]      # ValType.fixed
+      - call: [row.push, 5]      # amount
+      - decl: [dft, Draft]
+      - decl: [out, Draft, { call: [pool.render, dft, row] }]
+      - decl: [txt, string, "${out.amount} to ${out.target} via ${out.verb}"]
+      - if: { condition: { neq: [txt, "5 to creature via Deal"] }, then: [{ print: ["FAIL slot_carrier: '${txt}'"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS slot_carrier: reordered finalize = '${txt}'"]
+      - return: 0

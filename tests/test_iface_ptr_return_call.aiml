@@ -1,0 +1,37 @@
+# Repro: function returns ptr<Interface> (fat pointer); caller assigns to
+# local and dispatches var_a method.  This is the pattern the datacreatures
+# client's grid_tile_at + refresh_grid pair uses.
+
+- interface:
+    name: Tagged
+    methods:
+      - [tag, string, []]
+
+- model:
+    name: Item
+    fields:
+      - [var_n, i32, 0]
+
+- class:
+    name: ItemBehavior
+    models: [Item]
+    implements: [Tagged]
+    methods:
+      - def: { name: tag, return: string, args: [], body: [{ return: "I:${<.var_n}" }] }
+
+- decl: [items, list<ptr<ItemBehavior>>]
+- decl: [var_a, ptr<ItemBehavior>, { new: ItemBehavior }]
+- set: [var_a.var_n, 42]
+- call: [items.push, var_a]
+
+- def:
+    name: tile_at
+    args: [[var_i, i32]]
+    return: ptr<Tagged>
+    body:
+      - decl: [var_it, ptr<ItemBehavior>, { at: [items, var_i] }]
+      - decl: [view, ptr<Tagged>, var_it]
+      - return: view
+
+- decl: [var_v, ptr<Tagged>, { call: [tile_at, 0] }]
+- print: ["got=${call: [var_v.tag]}"]

@@ -1,0 +1,123 @@
+# Repro: minimal training step that breaks in datacreatures' itemgen-Modell.
+#
+# Architecture:
+#   bag [1, var_V] · emb [var_V, var_D]   = mean [1, var_D]
+#   mean · var_w1 [var_D, var_H] + var_b1[var_H]  → relu → var_h1 [1, var_H]
+#   var_h1 · var_w2 [var_H, var_K] + var_b2[var_K]    → logits [1, var_K]
+#   loss = -log softmax(logits)[target]
+#
+# After 1 forward+backward+adam step, the second forward sees `emb` with
+# garbage shape — repro of the failure observed in test/itemgen.
+#
+# Expected after future fix: 5 training steps complete without crash.
+
+- decl: [var_V, i32, 8]    # vocab
+- decl: [var_D, i32, 4]    # embed dim
+- decl: [var_H, i32, 6]    # hidden
+- decl: [var_K, i32, 3]    # n_outputs
+
+# Parameters (heap, requires_grad=1).  is_param_hint=1 from the runtime side.
+- decl: [emb, tensor, { call: [tensor.randn_ex, 0.0, 0.1, var_V, var_D] }]
+- call: [emb.set_requires_grad, 1]
+- decl: [var_w1, tensor, { call: [tensor.randn_ex, 0.0, 0.3, var_D, var_H] }]
+- call: [var_w1.set_requires_grad, 1]
+- decl: [var_b1, tensor, { call: [tensor.zeros, var_H] }]
+- call: [var_b1.set_requires_grad, 1]
+- decl: [var_w2, tensor, { call: [tensor.randn_ex, 0.0, 0.3, var_H, var_K] }]
+- call: [var_w2.set_requires_grad, 1]
+- decl: [var_b2, tensor, { call: [tensor.zeros, var_K] }]
+- call: [var_b2.set_requires_grad, 1]
+
+# Adam state (heap, same shape, no grad).
+- decl: [m_emb, tensor, { call: [tensor.zeros, var_V, var_D] }]
+- decl: [v_emb, tensor, { call: [tensor.zeros, var_V, var_D] }]
+- decl: [m_w1,  tensor, { call: [tensor.zeros, var_D, var_H] }]
+- decl: [v_w1,  tensor, { call: [tensor.zeros, var_D, var_H] }]
+- decl: [m_b1,  tensor, { call: [tensor.zeros, var_H] }]
+- decl: [v_b1,  tensor, { call: [tensor.zeros, var_H] }]
+- decl: [m_w2,  tensor, { call: [tensor.zeros, var_H, var_K] }]
+- decl: [v_w2,  tensor, { call: [tensor.zeros, var_H, var_K] }]
+- decl: [m_b2,  tensor, { call: [tensor.zeros, var_K] }]
+- decl: [v_b2,  tensor, { call: [tensor.zeros, var_K] }]
+
+- decl: [var_lr,    f32, 0.05]
+- decl: [b1a,   f32, 0.9]
+- decl: [b2a,   f32, 0.999]
+- decl: [eps,   f32, 0.00000001]
+- decl: [step,  i32, 0]
+
+# Demo "tag indices" — manually picked tokens for 3 samples.
+- decl: [s_ids, list<list<i32>>]
+- decl: [tmp1, list<i32>]
+- call: [tmp1.push, 0]
+- call: [tmp1.push, 2]
+- call: [s_ids.push, tmp1]
+- decl: [tmp2, list<i32>]
+- call: [tmp2.push, 1]
+- call: [tmp2.push, 3]
+- call: [s_ids.push, tmp2]
+- decl: [tmp3, list<i32>]
+- call: [tmp3.push, 4]
+- call: [tmp3.push, 5]
+- call: [s_ids.push, tmp3]
+- decl: [s_tgts, list<i32>]
+- call: [s_tgts.push, 0]
+- call: [s_tgts.push, 1]
+- call: [s_tgts.push, 2]
+
+- decl: [n_samples, i32, s_ids.len]
+- decl: [epoch, i32, 0]
+- decl: [n_epochs, i32, 5]
+
+- while:
+    condition: { lt: [epoch, n_epochs] }
+    body:
+      - decl: [var_si, i32, 0]
+      - while:
+          condition: { lt: [var_si, n_samples] }
+          body:
+            - print: ["epoch=${epoch} sample=${var_si} step=${step}"]
+            - call: [tensor.begin_graph]
+
+            # Build bag [1, var_V]
+            - decl: [bag, tensor, { call: [tensor.zeros, 1, var_V] }]
+            - decl: [ids, list<i32>, { at: [s_ids, var_si] }]
+            - decl: [var_n,   i32, ids.len]
+            - decl: [n_f, f32, var_n]
+            - decl: [inv_n, f32, { "/": [1.0, n_f] }]
+            - decl: [var_i, i32, 0]
+            - while:
+                condition: { lt: [var_i, var_n] }
+                body:
+                  - decl: [tid, i32, { at: [ids, var_i] }]
+                  - decl: [cur, f32, { call: [bag.get, tid] }]
+                  - call: [bag.set, tid, { "+": [cur, inv_n] }]
+                  - set: [var_i, { "+": [var_i, 1] }]
+
+            - decl: [mean_e_2d, tensor, { call: [tensor.matmul, bag, emb] }]
+            - decl: [var_h1,        tensor, { call: [tensor.matmul, mean_e_2d, var_w1] }]
+            - decl: [h1b,       tensor, { call: [tensor.add, var_h1, var_b1] }]
+            - decl: [h1r,       tensor, { call: [tensor.relu, h1b] }]
+            - decl: [logits_2d, tensor, { call: [tensor.matmul, h1r, var_w2] }]
+            - decl: [logits,    tensor, { call: [tensor.add, logits_2d, var_b2] }]
+            - decl: [logits_flat, tensor, { call: [tensor.reshape, logits, var_K] }]
+
+            - decl: [probs,      tensor, { call: [tensor.softmax, logits_flat, 0] }]
+            - decl: [logp,       tensor, { call: [tensor.log, probs] }]
+            - decl: [target,     i32, { at: [s_tgts, var_si] }]
+            - decl: [picked,     tensor, { call: [tensor.slice, logp, 0, target, { "+": [target, 1] }] }]
+            - decl: [neg_picked, tensor, { call: [tensor.neg, picked] }]
+            - decl: [loss,       tensor, { call: [tensor.sum, neg_picked, -1] }]
+
+            - call: [tensor.backward, loss]
+            - set: [step, { "+": [step, 1] }]
+            - call: [tensor.adam_step, emb, m_emb, v_emb, var_lr, b1a, b2a, eps, step]
+            - call: [tensor.adam_step, var_w1,  m_w1,  v_w1,  var_lr, b1a, b2a, eps, step]
+            - call: [tensor.adam_step, var_b1,  m_b1,  v_b1,  var_lr, b1a, b2a, eps, step]
+            - call: [tensor.adam_step, var_w2,  m_w2,  v_w2,  var_lr, b1a, b2a, eps, step]
+            - call: [tensor.adam_step, var_b2,  m_b2,  v_b2,  var_lr, b1a, b2a, eps, step]
+
+            - set: [var_si, { "+": [var_si, 1] }]
+      - set: [epoch, { "+": [epoch, 1] }]
+
+- print: ["PASS test_train_emb_bag_mlp"]

@@ -1,0 +1,157 @@
+# static-check: off
+# Requires: peer
+# Multi-file WASM client — imports the shared lib (matches DataCreatures'
+# build: client_main.aiml imports tile_behaviors.aiml etc).
+# Tests whether the per-file private sret-stub vs shared external real-method
+# linkage actually works on wasm32.
+
+- import: "tests/wasm/mirror_rpc_lib.aiml"
+
+# Global state to mimic DataCreatures' g_detail_items pattern:
+# the RPC handler copies the deserialized list into a global, then a
+# *later* code path (the hover handler) accesses it via vtable.
+- decl: [g_items, list<ptr<ItemImpl>>]
+
+- decl: [client, mirror_session]
+- set: [client, { call: [mirror.connect_timeout, "ws://localhost:18888", 3000] }]
+- print: ["client: connected"]
+
+- decl: [tries, i32, 0]
+- decl: [events_seen, i32, 0]
+- decl: [item_nid, i32, -1]
+- decl: [detail_nid, i32, -1]
+- while:
+    condition: { "&&": [{ lt: [events_seen, 2] }, { lt: [tries, 300] }] }
+    body:
+      - call: [client.update]
+      - decl: [hev, i32, { call: [client.has_event] }]
+      - if:
+          condition: { gt: [hev, 0] }
+          then:
+            - decl: [var_ev, mirror_event, { call: [client.next_event] }]
+            - print: ["client: event nid=${var_ev.net_id}"]
+            - if:
+                condition: { "||": [{ lt: [item_nid, 0] }, { lt: [var_ev.net_id, item_nid] }] }
+                then:
+                  - if:
+                      condition: { gte: [item_nid, 0] }
+                      then: [{ set: [detail_nid, item_nid] }]
+                  - set: [item_nid, var_ev.net_id]
+                else:
+                  - set: [detail_nid, var_ev.net_id]
+            - set: [events_seen, { "+": [events_seen, 1] }]
+      - call: [time.sleep_ms, 10]
+      - set: [tries, { "+": [tries, 1] }]
+
+- if:
+    condition: { "||": [{ lt: [item_nid, 0] }, { lt: [detail_nid, 0] }] }
+    then:
+      - print: ["FAIL: missing nids"]
+      - call: [sys.exit, 1]
+- print: ["client: item_nid=${item_nid} detail_nid=${detail_nid}"]
+
+# Phase 1: sync.
+- decl: [replica, ItemImpl]
+- call: [client.register_id, replica, item_nid]
+- set: [tries, 0]
+- while:
+    condition: { "&&": [{ lt: [replica.tags.len, 3] }, { lt: [tries, 200] }] }
+    body:
+      - call: [client.update]
+      - call: [time.sleep_ms, 10]
+      - set: [tries, { "+": [tries, 1] }]
+
+- print: ["client: replica tags.len=${replica.tags.len}"]
+- decl: [view, ptr<Tagged>, replica]
+- decl: [got, list<string>, { call: [view.tags] }]
+- decl: [via_first, string, { at: [got, 0] }]
+- if:
+    condition: { neq: [via_first, "tool"] }
+    then:
+      - print: ["FAIL phase1: vtable got '${via_first}'"]
+      - call: [sys.exit, 1]
+- print: ["phase1 PASS (sync + vtable)"]
+
+# Phase 3: request detail, receive nested, access via vtable.
+- decl: [local_detail, Detail]
+- decl: [local_nid, i32, { call: [client.register, local_detail] }]
+- call: [time.sleep_ms, 50]
+- call: [client.update]
+
+- decl: [req, Detail]
+- set: [req.creature_id, "creature-42"]
+- call: [client.send_rpc, detail_nid, "request_detail", 0, req]
+
+- decl: [got_reply, i32, 0]
+- decl: [reply, Detail]
+- set: [tries, 0]
+- while:
+    condition: { "&&": [{ eq: [got_reply, 0] }, { lt: [tries, 200] }] }
+    body:
+      - call: [client.update]
+      - decl: [rpc, rpc_event, { call: [client.poll_rpc] }]
+      - if:
+          condition: { eq: [rpc.method, "deliver_detail"] }
+          then:
+            - decl: [drc, i32, { call: [client.decode_rpc, rpc, reply] }]
+            - if:
+                condition: { eq: [drc, 0] }
+                then: [{ set: [got_reply, 1] }]
+      - call: [time.sleep_ms, 10]
+      - set: [tries, { "+": [tries, 1] }]
+
+- if:
+    condition: { eq: [got_reply, 0] }
+    then:
+      - print: ["FAIL phase3: no reply"]
+      - call: [sys.exit, 1]
+
+- print: ["client: deliver_detail items.len=${reply.items.len}"]
+
+# DataCreatures pattern: copy reply.items into a GLOBAL, then access later.
+- set: [g_items, reply.items]
+- print: ["client: g_items.len=${g_items.len} after assignment from reply.items"]
+
+# Pump a few extra updates — gives any wire-buffer recycler a chance to
+# free the original wire buffer.  DataCreatures does this implicitly per
+# frame between when set_creature_detail is decoded and when the user
+# eventually hovers.
+- set: [tries, 0]
+- while:
+    condition: { lt: [tries, 20] }
+    body:
+      - call: [client.update]
+      - call: [time.sleep_ms, 10]
+      - set: [tries, { "+": [tries, 1] }]
+- print: ["client: pumped 20x — accessing g_items now"]
+
+- decl: [first_item, ptr<ItemImpl>, { at: [g_items, 0] }]
+- print: ["client: first_item.tags.len=${first_item.tags.len}"]
+
+# CRITICAL: via vtable, like DataCreatures' hover.
+- decl: [iview, ptr<Tagged>, first_item]
+- decl: [igot, list<string>, { call: [iview.tags] }]
+- print: ["client: vtable igot.len=${igot.len}"]
+- decl: [ift0, string, { at: [igot, 0] }]
+- print: ["client: vtable inline igot[0]='${ift0}'"]
+- if:
+    condition: { neq: [ift0, "tool"] }
+    then:
+      - print: ["FAIL phase3 vtable inline: got '${ift0}'"]
+      - call: [sys.exit, 1]
+
+# Phase 4: pass igot to a cross-file function (matches DataCreatures'
+# update_grid_hover → join_strings cross-file call that crashes).
+- print: ["client: about to call lib_join(igot, ', ')"]
+- decl: [joined, string, { call: [lib_join, igot, ", "] }]
+- print: ["client: lib_join result='${joined}'"]
+- if:
+    condition: { neq: [joined, "tool, metal"] }
+    then:
+      - print: ["FAIL phase4 lib_join: got '${joined}' expected 'tool, metal'"]
+      - call: [sys.exit, 1]
+- print: ["phase4 PASS (cross-file fn call with vtable list<string> result)"]
+
+- call: [client.close]
+- print: ["PASS"]
+- call: [sys.exit, 0]

@@ -1,0 +1,9 @@
+# Helfer-Modul (import-only, `_`-Präfix → vom Test-Runner übersprungen).
+# Definiert ein Enum, dessen Member NUR im Entry referenziert werden — testet
+# den Whole-Program-Merge (Decl im Import, Use im Entry).
+- enum:
+    name: Weekday
+    values:
+      - mon: 1       # im Entry genutzt → keine Warning
+      - tue: 2       # nirgends genutzt → Warning
+      - wed: 3       # nirgends genutzt → Warning

@@ -1,0 +1,20 @@
+# Asset Registry: ein einzelnes File als Root (kein Directory).
+# Spiegelt das DataCreatures-Setup (exodus-client.json enthält
+# resources/skills/skill_default.png direkt als asset_directory-Eintrag).
+#
+# AssetRoots: tests/_asset_fixtures/file_root/skill_default.png
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [tex, gl_texture, { call: [gl.tex, "skill_default"] }]
+      - if:
+          condition: { eq: [tex, null] }
+          then:
+            - print: ["FAIL file_root_null"]
+            - call:  [sys.exit, 1]
+
+      - print: ["Asset Registry file-root PASS"]
+      - return: 0

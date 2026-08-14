@@ -1,0 +1,55 @@
+# Regression test for the `set: [exp, var_kv.get_copy(...)]` deep-copy bug.
+#
+# Bug:
+#   - decl: [exp, T]                    # decl WITHOUT initializer
+#   - set:  [exp, var_kv.get_copy(k)]       # populated by SET (not decl-with-init)
+#   - call: [exp.list_field.push, x]    # mutates exp's list
+#   - call: [var_kv.set, k, exp]            # crash in aiml_ser_free_decoded
+#
+# visitDeclStmt does deep-copy when ctx.kvGetCopy is true (see fix from
+# 2026-05-21 in doc/issue/kv_get_mutate_set_same_key_crash.md), but
+# visitSetStmt's struct-assignment branch was missing the same path — so
+# the set produced a shallow memcpy and the next mutate+set-same-key
+# triggered use-after-free in the cache.
+#
+# Fix: ast_compiler_stmt.cpp::visitSetStmt mirrors visitDeclStmt's
+# deep-copy emit when ctx.kvGetCopy is set after rhs evaluation.
+
+- model:
+    name: ReproBag
+    fields:
+      - [name,  string]
+      - [items, list<string>]
+
+- decl: [var_kv, Kv<string:ReproBag>, { call: [db.open_kv, "rb.kvwal", {persist: true, path: "/tmp/aiml_kv_getcopy_set/"}] }]
+
+# Seed
+- decl: [var_b0, ReproBag]
+- set: [var_b0.name, "first"]
+- call: [var_b0.items.push, "alpha"]
+- call: [var_kv.set, "k", var_b0]
+
+# get_copy via SET (not decl-with-init)
+- decl: [var_b, ReproBag]
+- set: [var_b, { call: [var_kv.get_copy, "k"] }]
+- call: [var_b.items.push, "beta"]
+- call: [var_kv.set, "k", var_b]   # must NOT crash
+
+# Read back to confirm both items present.
+- decl: [var_b2, ReproBag, { call: [var_kv.get_copy, "k"] }]
+- if:
+    condition: { neq: [var_b2.items.len, 2] }
+    then:
+      - print: ["FAIL: expected items.len=2 after set-via-set, got ${var_b2.items.len}"]
+      - call: [sys.exit, 1]
+
+- decl: [item0, string, { at: [var_b2.items, 0] }]
+- decl: [item1, string, { at: [var_b2.items, 1] }]
+- if:
+    condition: { neq: [item0, "alpha"] }
+    then: [{ print: ["FAIL: items[0]='${item0}'"] }, { call: [sys.exit, 1] }]
+- if:
+    condition: { neq: [item1, "beta"] }
+    then: [{ print: ["FAIL: items[1]='${item1}'"] }, { call: [sys.exit, 1] }]
+
+- print: ["PASS test_kv_get_copy_via_set"]

@@ -1,0 +1,44 @@
+# M2a — per-instance `constructor:` (a base-class method) runs in PHASE 0, before
+# any sees wiring, and receives group `params:` as arguments.  The constructor is
+# sees-blind (the base class has no sees members).  Group params become container
+# members, set at {new: <group>, param: val}, then read by __ctor when it invokes
+# each constructor.
+#
+# Spec: spec/58_classgroups.md §3 (phase 0) + §4 (constructor).
+
+- class:
+    name: Widget
+    members:
+      - [cfg_val, i32]
+      - [ready, i32]
+    methods:
+      - def:
+          name: setup
+          args: [[cfg, i32]]
+          body:
+            - set: [<.cfg_val, cfg]
+            - set: [<.ready, 1]
+      - def: { name: is_ready, return: i32, body: [{ return: <.ready }] }
+      - def: { name: get_cfg,  return: i32, body: [{ return: <.cfg_val }] }
+
+- classgroup:
+    name: WidgetRuntime
+    params: [[start_cfg, i32]]
+    instances:
+      - class: Widget
+        instance: wid
+        constructor: [setup, start_cfg]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [grp, ptr<WidgetRuntime>, { new: WidgetRuntime, start_cfg: 42 }]
+      # constructor ran in phase 0 → ready flag set
+      - decl: [rdy, i32, { call: [grp.wid.is_ready] }]
+      - if: { condition: { neq: [rdy, 1] }, then: [{ print: ["FAIL not ready — constructor did not run"] }, { call: [sys.exit, 1] }] }
+      # param threaded into the constructor
+      - decl: [cfv, i32, { call: [grp.wid.get_cfg] }]
+      - if: { condition: { neq: [cfv, 42] }, then: [{ print: ["FAIL cfg=${cfv} exp 42 — group param not passed to constructor"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS classgroup_ctor: phase-0 constructor ran with group param"]
+      - return: 0

@@ -1,0 +1,163 @@
+# M4 — real-world proof: render ability text for a REAL-shaped Effect cascade (nested
+# Value cascade with an i32 payload, two opcodes sharing field renderers) via a Function
+# Cascade, and diff the output against a hand-written reference function over a block
+# corpus.  This is the machinery that replaces the 1174-line opcode-switch ability_text.
+#
+# NOTE on phrasing order: the synthesized walk appends per block element, so the text is
+# in block order.  The legacy generator freely reorders (e.g. value before target); exact
+# legacy phrasing needs a slot/struct carrier (a next step).  Here reference + cascade use
+# the same (block) order so the diff is an exact-string equality.
+
+- enum:
+    name: EffCode
+    values: [ {deal_damage: 10}, {heal_damage: 11} ]
+
+- enum:
+    name: TargetType
+    values: [ {creature: 2}, {soulmage: 10} ]
+
+- enum:
+    name: ValueType
+    values: [ {fixed: 1} ]
+
+# Value is a nested cascade: `fixed` carries a raw i32 amount.
+- cascade:
+    name: Value
+    opcode: ValueType
+    nodes:
+      - [fixed, i32]
+
+- cascade:
+    name: Effect
+    opcode: EffCode
+    nodes:
+      - [deal_damage, TargetType, Value]
+      - [heal_damage, TargetType, Value]
+
+# ── Function Cascade: 3 member classes (opcode skeleton + 2 reused field renderers) ──
+- class:
+    name: EffSkel
+    renders: Effect
+    rules:
+      - before: []
+        on: deal_damage
+        def: { name: bdeal, args: [[carry, list<string>]], return: list<string>, body: [ { call: [carry.push, "Deal"] }, { return: carry } ] }
+      - before: []
+        on: heal_damage
+        def: { name: bheal, args: [[carry, list<string>]], return: list<string>, body: [ { call: [carry.push, "Heal"] }, { return: carry } ] }
+
+- class:
+    name: TargetText
+    renders: TargetType
+    rules:
+      - before: ["*"]
+        on: TargetType
+        def:
+          name: tgt
+          args: [[carry, list<string>]]
+          return: list<string>
+          body:
+            - decl: [tnm, string, { call: [enums.name, "TargetType", { call: [<.field] }] }]
+            - call: [carry.push, "to the ${tnm}"]
+            - return: carry
+
+- class:
+    name: ValueText
+    renders: Value
+    rules:
+      - before: ["*"]
+        on: fixed
+        def: { name: vfix, args: [[carry, list<string>]], return: list<string>, body: [ { return: carry } ] }   # Value opcode stage → no word
+      - before: ["*"]
+        on: i32
+        def:
+          name: vamt
+          args: [[carry, list<string>]]
+          return: list<string>
+          body:
+            - decl: [amt, i32, { call: [<.field] }]
+            - call: [carry.push, "${amt} damage"]
+            - return: carry
+
+- cascade_class:
+    name: EffText
+    binds_cascade: Effect
+    carrier: list<string>
+    taker:   list<string>
+    members: [EffSkel, TargetText, ValueText]
+
+# ── Hand-written REFERENCE (the thing a Function Cascade replaces) ──
+- def:
+    name: ref_text
+    args: [[blk, list<i32>]]
+    return: string
+    body:
+      - decl: [code, i32, { at: [blk, 0] }]
+      - decl: [verb, string, "Deal"]
+      - if: { condition: { eq: [code, 11] }, then: [{ set: [verb, "Heal"] }] }
+      - decl: [tnm, string, { call: [enums.name, "TargetType", { at: [blk, 1] }] }]
+      - decl: [amt, i32, { at: [blk, 3] }]
+      - return: "${verb} to the ${tnm} ${amt} damage"
+
+# NOTE: `EffText` (the synthesized pool) is usable via `{new:}` + method calls in a
+# body, but NOT as a declared parameter/return type in another function's signature —
+# the pool class is synthesized at compile-start (after registerTypes), so signatures
+# that name it don't resolve.  Hence render is driven inline from main below.
+
+- def:
+    name: join_sp
+    args: [[parts, list<string>]]
+    return: string
+    body:
+      - decl: [out, string, ""]
+      - decl: [jix, i32, 0]
+      - while:
+          condition: { lt: [jix, parts.len] }
+          body:
+            - decl: [prt, string, { at: [parts, jix] }]
+            - if: { condition: { eq: [jix, 0] }, then: [{ set: [out, prt] }], else: [{ set: [out, "${out} ${prt}"] }] }
+            - set: [jix, { +: [jix, 1] }]
+      - return: out
+
+- def:
+    name: mk3
+    args: [[opc, i32], [tgt, i32], [amt, i32]]
+    return: list<i32>
+    body:
+      - decl: [row, list<i32>]
+      - call: [row.push, opc]
+      - call: [row.push, tgt]
+      - call: [row.push, 1]      # ValueType.fixed
+      - call: [row.push, amt]
+      - return: row
+
+- def:
+    name: cmp_row
+    args: [[got, string], [want, string]]
+    body:
+      - if: { condition: { neq: [got, want] }, then: [{ print: ["FAIL got='${got}' want='${want}'"] }, { call: [sys.exit, 1] }] }
+      - print: ["ok: ${got}"]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pool, ptr<EffText>, { new: EffText }]
+
+      - decl: [blk1, list<i32>, { call: [mk3, 10, 2, 5] }]      # deal_damage, creature, 5
+      - decl: [car1, list<string>]
+      - decl: [prt1, list<string>, { call: [pool.render, car1, blk1] }]
+      - call: [cmp_row, { call: [join_sp, prt1] }, { call: [ref_text, blk1] }]
+
+      - decl: [blk2, list<i32>, { call: [mk3, 11, 10, 3] }]     # heal_damage, soulmage, 3
+      - decl: [car2, list<string>]
+      - decl: [prt2, list<string>, { call: [pool.render, car2, blk2] }]
+      - call: [cmp_row, { call: [join_sp, prt2] }, { call: [ref_text, blk2] }]
+
+      - decl: [blk3, list<i32>, { call: [mk3, 10, 10, 7] }]     # deal_damage, soulmage, 7
+      - decl: [car3, list<string>]
+      - decl: [prt3, list<string>, { call: [pool.render, car3, blk3] }]
+      - call: [cmp_row, { call: [join_sp, prt3] }, { call: [ref_text, blk3] }]
+
+      - print: ["PASS cascade_class_ability_text: Function Cascade output == hand-written reference"]
+      - return: 0

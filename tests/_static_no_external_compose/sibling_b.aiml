@@ -1,0 +1,10 @@
+# Second import for the 3-file project — same shape as sibling_a.
+
+- class:
+    name: SiblingBRunner
+    members:
+      - [calls, i32, 0]
+    methods:
+      - def:
+          name: bump
+          body: [{ set: [<.calls, { +: [<.calls, 1] }] }]

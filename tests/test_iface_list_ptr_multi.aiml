@@ -1,0 +1,64 @@
+# static-check: off
+# Repro: model with MULTIPLE list<ptr<T>> fields side-by-side.
+# Bug: when var_a CreatureDetail-style model has three list<ptr<...>> fields,
+# the deserialized lengths come out as garbage for later fields.
+#
+# Expected output:
+#   bag.items.len=2, bag.left.len=1, bag.right.len=1
+#   roundtrip:  items.len=2, left.len=1, right.len=1
+#   items: alpha#1, beta#2
+#   left: gamma#10
+#   right: delta#20
+
+- interface:
+    name: Tagged
+    methods:
+      - [tag, string, []]
+
+- model:
+    name: Item
+    fields:
+      - [name, string]
+      - [var_n,    i32, 0]
+
+- class:
+    name: ItemBehavior
+    models: [Item]
+    implements: [Tagged]
+    methods:
+      - def: { name: tag, return: string, args: [], body: [{ return: "${<.name}#${<.var_n}" }] }
+
+- model:
+    name: Bag
+    fields:
+      - [items, list<ptr<ItemBehavior>>]
+      - [left,  list<ptr<ItemBehavior>>]
+      - [right, list<ptr<ItemBehavior>>]
+
+# Build
+- decl: [var_a, ptr<ItemBehavior>, { new: ItemBehavior }]
+- set: [var_a.name, "alpha"]
+- set: [var_a.var_n, 1]
+- decl: [var_b, ptr<ItemBehavior>, { new: ItemBehavior }]
+- set: [var_b.name, "beta"]
+- set: [var_b.var_n, 2]
+- decl: [var_c, ptr<ItemBehavior>, { new: ItemBehavior }]
+- set: [var_c.name, "gamma"]
+- set: [var_c.var_n, 10]
+- decl: [var_d, ptr<ItemBehavior>, { new: ItemBehavior }]
+- set: [var_d.name, "delta"]
+- set: [var_d.var_n, 20]
+
+- decl: [bag, Bag]
+- call: [bag.items.push, var_a]
+- call: [bag.items.push, var_b]
+- call: [bag.left.push, var_c]
+- call: [bag.right.push, var_d]
+
+- print: ["bag pre-ser: items=${bag.items.len} left=${bag.left.len} right=${bag.right.len}"]
+
+- decl: [var_s, string, { call: [sys.serialize, bag] }]
+- print: ["serialized: ${var_s}"]
+
+- decl: [bag2, Bag, { call: [sys.deserialize, var_s] }]
+- print: ["bag2 post-deser: items=${bag2.items.len} left=${bag2.left.len} right=${bag2.right.len}"]

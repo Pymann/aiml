@@ -1,0 +1,44 @@
+# M3 — a `sees` target whose name matches an EXISTING base-class member wires
+# that member instead of synthesizing a new one.  This lets ordinary BASE methods
+# use the collaborator via `<.dep` — the shape the real 9rooms MatchService needs
+# (base methods use `<.cards_ref` etc.), while the classgroup provides the wiring
+# declaratively instead of a constructor-injected pointer.
+#
+# Spec: spec/58_classgroups.md §5.1 (sees onto a base member).
+
+- class:
+    name: Dep
+    members:
+      - [val, i32]
+    methods:
+      - def: { name: set_v, args: [[nval, i32]], body: [{ set: [<.val, nval] }] }
+      - def: { name: get_v, return: i32, body: [{ return: <.val }] }
+
+- class:
+    name: Consumer
+    members:
+      - [dep, ptr<Dep>]          # base member; the classgroup wires it via `sees: [dep]`
+    methods:
+      # A BASE method that uses the collaborator through the base member <.dep.
+      - def: { name: read_dep, return: i32, body: [{ return: { call: [<.dep.get_v] } }] }
+
+- classgroup:
+    name: Rtg
+    instances:
+      - class: Dep
+        instance: dep
+      - class: Consumer
+        instance: usr
+        sees: [dep]              # wires the existing `dep` base member (no duplicate)
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [rtg, ptr<Rtg>, { new: Rtg }]
+      - call: [rtg.dep.set_v, 42]
+      # base method read_dep uses <.dep, which the classgroup wired to the dep instance
+      - decl: [got, i32, { call: [rtg.usr.read_dep] }]
+      - if: { condition: { neq: [got, 42] }, then: [{ print: ["FAIL read_dep=${got} exp 42 — base member not wired via sees"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS classgroup_sees_base_member: sees wires an existing base member; base method uses the collaborator"]
+      - return: 0

@@ -1,0 +1,40 @@
+# Regression (Heap-Variante): spec/15_models.md §"Default Field Initialization"
+# garantiert Default-Init "für BOTH stack decls AND { new: Model } heap
+# allocations".  Der bestehende test_model_string_field_default_init deckt nur
+# den Stack-Pfad (- decl: [x, Model]).  Dieser Test deckt den HEAP-Pfad
+# ({ new: Model } → ptr): ungesetzte string-Felder müssen "" sein, nicht null.
+#
+# Expected exit code: 0
+
+- model:
+    name: Gadget
+    fields:
+      - [label, string]
+      - [descr, string]                 # nie gesetzt → muss "" sein, nicht null
+      - [note,  string]                 # ebenfalls nie gesetzt
+      - [tags,  list<string>]           # Gegenprobe: list default = leer
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [gad, ptr<Gadget>, { new: Gadget }]
+      - set: [gad.label, "hello"]
+
+      # Gesetztes Feld korrekt.
+      - if: { condition: { neq: [gad.label.len, 5] }, then: [{ print: ["FAIL label.len=${gad.label.len}"] }, { set: [fails, { +: [fails, 1] }] }] }
+      # UNGESETZTE string-Felder (Heap): .len darf nicht crashen, = 0.
+      - if: { condition: { neq: [gad.descr.len, 0] }, then: [{ print: ["FAIL descr.len=${gad.descr.len}"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [gad.note.len, 0] }, then: [{ print: ["FAIL note.len=${gad.note.len}"] }, { set: [fails, { +: [fails, 1] }] }] }
+      # Gegenprobe list-Feld.
+      - if: { condition: { neq: [gad.tags.len, 0] }, then: [{ print: ["FAIL tags.len=${gad.tags.len}"] }, { set: [fails, { +: [fails, 1] }] }] }
+      # Interpolation (strlen-Pfad) auf ungesetztem Heap-Feld.
+      - decl: [joined, string, "d=[${gad.descr}]"]
+      - if: { condition: { neq: [joined, "d=[]"] }, then: [{ print: ["FAIL interp='${joined}'"] }, { set: [fails, { +: [fails, 1] }] }] }
+
+      - if:
+          condition: { eq: [fails, 0] }
+          then: [{ print: ["PASS model_string_default_heap_new: { new: Model } unset string fields default to \"\" (len 0)"] }]
+          else: [{ print: ["FAIL model_string_default_heap_new: ${fails}"] }]
+      - return: fails

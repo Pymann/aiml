@@ -1,0 +1,50 @@
+# Repro: assignment einer list<string>-Variable in ein list<string>-Struct-
+# Feld macht shallow copy → der data-Pointer ist dangling sobald die Quelle
+# out-of-scope geht.  Symptom in der realen App: beim Serialisieren der
+# struct kommt eine list-Header mit garbage count.
+
+- model:
+    name: Box
+    fields:
+      - [tag,  string]
+      - [lst,  list<string>]
+
+- def:
+    name: make_box
+    args: [[arg_xs, list<string>]]
+    return: Box
+    body:
+      - decl: [var_b, Box]
+      - set: [var_b.tag, "made"]
+      - set: [var_b.lst, arg_xs]
+      - return: var_b
+
+- decl: [g_src, list<string>]
+- call: [g_src.push, "alpha"]
+- call: [g_src.push, "beta"]
+- call: [g_src.push, "gamma"]
+
+- decl: [g_box, Box, { call: [make_box, g_src] }]
+
+# Lese-Pfad: lokal kopieren, len + Inhalt prüfen.
+- decl: [out_lst, list<string>, g_box.lst]
+- decl: [var_n, i32, out_lst.len]
+- if:
+    condition: { neq: [var_n, 3] }
+    then:
+      - print: ["FAIL g_box.lst.len: expected 3, got ${var_n}"]
+      - exit: [1]
+- decl: [var_v0, string, { at: [out_lst, 0] }]
+- if:
+    condition: { neq: [var_v0, "alpha"] }
+    then:
+      - print: ["FAIL g_box.lst[0]: expected 'alpha', got '${var_v0}'"]
+      - exit: [1]
+- decl: [var_v2, string, { at: [out_lst, 2] }]
+- if:
+    condition: { neq: [var_v2, "gamma"] }
+    then:
+      - print: ["FAIL g_box.lst[2]: expected 'gamma', got '${var_v2}'"]
+      - exit: [1]
+
+- print: ["PASS test_struct_list_field_assign"]

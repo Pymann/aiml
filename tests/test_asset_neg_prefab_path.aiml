@@ -1,0 +1,20 @@
+# Negative: Prefab-Spec mit Pfad-Literal in `texture:` → Compile-Hard-Error.
+# Stem-only ist strikt; Pfade in Prefab-Specs sind nicht erlaubt.
+#
+# AssetRoots: tests/_asset_fixtures/basic/resources/textures
+# Expected exit code: 1
+# ExpectedStderr: prefab texture must be a stem, not a path
+
+- prefab:
+    name: BadTile
+    width: 80
+    height: 80
+    children:
+      # Strikter Stem-Modus → kein '/' und keine Extension erlaubt.
+      - { name: icon_img, type: rect, x: 0, y: 0, width: 80, height: 80,
+          texture: "resources/textures/hammer.png" }
+
+- def:
+    name: main
+    return: i32
+    body: [{ return: 0 }]

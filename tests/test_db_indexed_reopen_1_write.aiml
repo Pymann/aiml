@@ -1,0 +1,51 @@
+# AionDB db_indexed: phase 1 — write items into persistent Kv, checkpoint.
+# Index sidecar Kv must be persistent too.  Phase 2 (test_db_indexed_reopen_read)
+# re-opens and verifies findings_by_name still resolves.
+# Expected exit code: 0
+
+- model:
+    name: Item
+    fields:
+      - [item_id, string]
+      - [name,    string, "", { db_indexed: true }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_path, path, "/tmp/aiml_test_db_indexed_reopen_20260607/"]
+      - decl: [items, Kv<string:Item>]
+      - set:  [items, { call: [db.open_kv, "items_idx_reopen", {persist: true, path: db_path}] }]
+
+      - decl: [var_a, Item]
+      - set:  [var_a.item_id, "var_a"]
+      - set:  [var_a.name,    "Hammer"]
+      - call: [items.set, "var_a", var_a]
+
+      - decl: [var_b, Item]
+      - set:  [var_b.item_id, "var_b"]
+      - set:  [var_b.name,    "Hammer"]
+      - call: [items.set, "var_b", var_b]
+
+      - decl: [var_c, Item]
+      - set:  [var_c.item_id, "var_c"]
+      - set:  [var_c.name,    "Saw"]
+      - call: [items.set, "var_c", var_c]
+
+      # Sanity-check within the write run: index already works.
+      - decl: [pre, list<string>, { call: [items.findings_by, "name", "Hammer"] }]
+      - if:
+          condition: { neq: [pre.len, 2] }
+          then:
+            - print: ["FAIL reopen_write_pre=${pre.len} (want 2)"]
+            - call:  [sys.exit, 1]
+
+      - decl: [var_rc, i32, { call: [db.checkpoint] }]
+      - if:
+          condition: { neq: [var_rc, 0] }
+          then:
+            - print: ["FAIL reopen_write_checkpoint=${var_rc}"]
+            - call:  [sys.exit, 1]
+
+      - print: ["AionDB db_indexed reopen-write PASS"]
+      - return: 0

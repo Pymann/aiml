@@ -1,0 +1,76 @@
+# static-check: relaxed
+# M2c — a sees edge may be typed as an INTERFACE via `inst:Iface`.  The edge
+# member becomes ptr<Iface> (fat pointer) and cross-edge calls dispatch through
+# the interface vtable.  The SAME coordination source works against any class
+# implementing the interface, so a mock is swapped in purely by group config:
+# ProdApp wires a RealLogger, TestApp a MockLogger — both implement Logger.
+#
+# (static-check: relaxed — this demo legitimately needs 4 top-level types.)
+# Spec: spec/58_classgroups.md §5.2 (interface-typed edges + mock substitution).
+
+- interface:
+    name: Logger
+    methods:
+      - [write, void, [[msg, i32]]]
+
+- class:
+    name: RealLogger
+    implements: [Logger]
+    members:
+      - [log_sum, i32]
+    methods:
+      - def: { name: write, args: [[msg, i32]], body: [{ set: [<.log_sum, { +: [<.log_sum, msg] }] }] }
+      - def: { name: total, return: i32, body: [{ return: <.log_sum }] }
+
+- class:
+    name: MockLogger
+    implements: [Logger]
+    members:
+      - [hits, i32]
+    methods:
+      - def: { name: write, args: [[msg, i32]], body: [{ set: [<.hits, { +: [<.hits, 1] }] }] }
+      - def: { name: hit_count, return: i32, body: [{ return: <.hits }] }
+
+- class:
+    name: Service
+    members:
+      - [dummy, i32]
+    methods:
+      - def: { name: noop, body: [{ set: [<.dummy, 1] }] }
+
+- classgroup:
+    name: ProdApp
+    instances:
+      - class: RealLogger
+        instance: logi
+      - class: Service
+        instance: svc
+        sees: [logi:Logger]
+        functions:
+          - def: { name: run, body: [{ call: [<.logi.write, 7] }, { call: [<.logi.write, 3] }] }
+
+- classgroup:
+    name: TestApp
+    instances:
+      - class: MockLogger
+        instance: logi
+      - class: Service
+        instance: svc
+        sees: [logi:Logger]
+        functions:
+          - def: { name: run, body: [{ call: [<.logi.write, 7] }, { call: [<.logi.write, 3] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [prod, ptr<ProdApp>, { new: ProdApp }]
+      - call: [prod.svc.run]
+      - decl: [rsum, i32, { call: [prod.logi.total] }]      # RealLogger summed 7+3
+      - if: { condition: { neq: [rsum, 10] }, then: [{ print: ["FAIL real sum=${rsum} exp 10 — interface edge did not reach RealLogger"] }, { call: [sys.exit, 1] }] }
+      - decl: [test, ptr<TestApp>, { new: TestApp }]
+      - call: [test.svc.run]
+      - decl: [hits, i32, { call: [test.logi.hit_count] }]  # MockLogger counted 2 calls
+      - if: { condition: { neq: [hits, 2] }, then: [{ print: ["FAIL mock hits=${hits} exp 2 — mock not substituted"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS classgroup_iface: interface-typed edge dispatches; real vs mock swapped via group config"]
+      - return: 0

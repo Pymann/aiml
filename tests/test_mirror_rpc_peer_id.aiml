@@ -1,0 +1,143 @@
+# Regression test: multi-client RPC sender identification via rpc_event.peer_id.
+# Expected exit code: 0
+#
+# Reproduces the multi-tab bug: two clients independently register objects with
+# the same client-side net_id (both start counters at 1).  The host's
+# `by_net_id` map keeps only the first, so all RPCs from BOTH clients arrive
+# with the same `rpc.net_id`.  Without `peer_id`, the host cannot distinguish
+# them; with `peer_id`, each client carries a unique host-assigned id.
+
+- model:
+    name: ClientHello
+    sync: [tag, value]
+    fields:
+      - [tag,   string]
+      - [value, i32]
+
+- model:
+    name: PingReq
+    fields:
+      - [from, string]
+
+# Globals shared between host thread and main thread.  Host appends each
+# received RPC's (peer_id, from) into parallel lists; main inspects them
+# after both clients have sent.
+- decl: [received_peer_ids,  list<i32>]
+- decl: [received_net_ids,   list<i32>]
+- decl: [received_from,      list<string>]
+
+- def:
+    name: peer_id_host
+    args: []
+    body:
+      - decl: [sess, mirror_session]
+      - set: [sess, { call: [mirror.listen, "ws://127.0.0.1:19923"] }]
+      - print: ["peer_id_host: listening"]
+      # Run for ~3s, drain RPCs, log (peer_id, net_id, from).
+      - decl: [iter, i32, 0]
+      - while:
+          condition: { lt: [iter, 300] }
+          body:
+            - call: [sess.update]
+            - decl: [n_rpc, i32, { call: [sess.has_rpc] }]
+            - if:
+                condition: { gt: [n_rpc, 0] }
+                then:
+                  - decl: [rpc_ev, rpc_event, { call: [sess.next_rpc] }]
+                  - if:
+                      condition: { eq: [rpc_ev.method, "ping"] }
+                      then:
+                        - decl: [req, PingReq]
+                        - decl: [drc, i32, { call: [sess.decode_rpc, rpc_ev, req] }]
+                        - decl: [from_val, string, ""]
+                        - if: { condition: { eq: [drc, 0] }, then: [{ set: [from_val, req.from] }] }
+                        - call: [received_peer_ids.push, rpc_ev.peer_id]
+                        - call: [received_net_ids.push,  rpc_ev.net_id]
+                        - call: [received_from.push,     from_val]
+                        - print: ["host: rpc peer_id=${rpc_ev.peer_id} net_id=${rpc_ev.net_id} from='${from_val}'"]
+            - call: [time.sleep_ms, 10]
+            - set: [iter, { +: [iter, 1] }]
+      - call: [sess.close]
+
+- def:
+    name: client_a
+    args: []
+    body:
+      - decl: [cli, mirror_session, { call: [mirror.connect_timeout, "ws://127.0.0.1:19923", 4000] }]
+      - decl: [hello, ClientHello]
+      - set: [hello.tag, "A"]
+      - set: [hello.value, 1]
+      - decl: [nid, i32, { call: [cli.register, hello] }]
+      - print: ["client_a: registered net_id=${nid}"]
+      - call: [time.sleep_ms, 150]
+      - call: [cli.update]
+      - decl: [req, PingReq]
+      - set: [req.from, "A"]
+      - call: [cli.send_rpc, nid, "ping", 0, req]
+      - print: ["client_a: sent ping nid=${nid}"]
+      - call: [time.sleep_ms, 400]
+      - call: [cli.update]
+      - call: [cli.close]
+
+- def:
+    name: client_b
+    args: []
+    body:
+      - decl: [cli, mirror_session, { call: [mirror.connect_timeout, "ws://127.0.0.1:19923", 4000] }]
+      - decl: [hello, ClientHello]
+      - set: [hello.tag, "B"]
+      - set: [hello.value, 2]
+      - decl: [nid, i32, { call: [cli.register, hello] }]
+      - print: ["client_b: registered net_id=${nid}"]
+      - call: [time.sleep_ms, 150]
+      - call: [cli.update]
+      - decl: [req, PingReq]
+      - set: [req.from, "B"]
+      - call: [cli.send_rpc, nid, "ping", 0, req]
+      - print: ["client_b: sent ping nid=${nid}"]
+      - call: [time.sleep_ms, 400]
+      - call: [cli.update]
+      - call: [cli.close]
+
+- def:
+    name: main
+    body:
+      - decl: [host_th, thread_handle, { spawn: [peer_id_host] }]
+      - call: [time.sleep_ms, 120]
+      - decl: [a_th, thread_handle, { spawn: [client_a] }]
+      - call: [time.sleep_ms, 80]
+      - decl: [b_th, thread_handle, { spawn: [client_b] }]
+      - call: [a_th.join]
+      - call: [b_th.join]
+      - call: [host_th.join]
+
+      # Both clients should have arrived.
+      - decl: [n_recv, i32, received_peer_ids.len]
+      - print: ["main: received ${n_recv} RPCs total"]
+      - if:
+          condition: { neq: [n_recv, 2] }
+          then:
+            - print: ["FAIL: expected 2 RPCs, got ${n_recv}"]
+            - call: [sys.exit, 1]
+
+      # Each client likely picked net_id=1 (deterministic in mirror_runtime).
+      # The crucial invariant: peer_ids MUST be distinct, non-zero.
+      - decl: [pid_a, i32, { at: [received_peer_ids, 0] }]
+      - decl: [pid_b, i32, { at: [received_peer_ids, 1] }]
+      - if:
+          condition: { eq: [pid_a, 0] }
+          then:
+            - print: ["FAIL: first peer_id is 0 (host did not assign)"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { eq: [pid_b, 0] }
+          then:
+            - print: ["FAIL: second peer_id is 0 (host did not assign)"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { eq: [pid_a, pid_b] }
+          then:
+            - print: ["FAIL: both peer_ids equal (${pid_a}) — host did not differentiate clients"]
+            - call: [sys.exit, 1]
+
+      - print: ["mirror multi-client peer_id PASS pid_a=${pid_a} pid_b=${pid_b}"]

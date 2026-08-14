@@ -1,0 +1,73 @@
+# M1b + M2 — a well-formed function-cascade pool: parses the full Mask syntax AND
+# passes the static pass (every stage covered by exactly one rule, carrier chain
+# type-continuous carrier→…→taker).
+#
+# Nested cascades (OwnerRef) are ONE opaque stage in this slice (handled by an
+# `on: OwnerRef` type-level rule); recursion into sub-opcodes is a later slice.
+
+- enum:
+    name: OwnerType
+    values: [ {player: 1}, {opponent: 2} ]
+
+- cascade:
+    name: OwnerRef
+    opcode: OwnerType
+    nodes:
+      - [player]
+      - [opponent]
+
+- enum:
+    name: EffCode
+    values: [ {deal_dmg: 1}, {heal_dmg: 2}, {revive: 3} ]
+
+- cascade:
+    name: EffPipe
+    opcode: EffCode
+    nodes:
+      - [deal_dmg, OwnerRef]
+      - [heal_dmg, OwnerRef]
+      - [revive,   OwnerRef, OwnerRef]      # OwnerRef 2x → repetition
+
+- model: { name: DraftBuf, fields: [[parts, list<string>]] }
+
+# Skeleton: one opcode "begin" per EffCode member.  `before: []` = start of path.
+# `on:` shows scalar and selection forms.
+- class:
+    name: EffSkel
+    renders: EffPipe
+    rules:
+      - before: []
+        on: [deal_dmg, heal_dmg]                 # selection Mask
+        def: { name: begin_dmg, args: [[carry, DraftBuf]], return: DraftBuf, body: [ { return: carry } ] }
+      - before: []
+        on: revive                               # scalar Mask
+        def: { name: begin_rev, args: [[carry, DraftBuf]], return: DraftBuf, body: [ { return: carry } ] }
+
+# OwnerRef stage handler: generic (wildcard context) + a more-specific override for
+# revive's SECOND OwnerRef (ordered before + terminal after) — specificity wins, no tie.
+- class:
+    name: OwnerRefText
+    renders: OwnerRef
+    rules:
+      - before: ["*"]                            # any non-start position
+        on: OwnerRef
+        def: { name: own_generic, args: [[carry, DraftBuf]], return: DraftBuf, body: [ { return: carry } ] }
+      - before: [revive, OwnerRef]               # ordered: 2nd OwnerRef in revive
+        on: OwnerRef
+        after: []                                # terminal
+        weight: 5
+        def: { name: own_grave, args: [[carry, DraftBuf]], return: DraftBuf, body: [ { return: carry } ] }
+
+- cascade_class:
+    name: EffText
+    binds_cascade: EffPipe
+    carrier: DraftBuf
+    taker:   DraftBuf
+    members: [EffSkel, OwnerRefText]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - print: ["PASS cascade_class_rules: parse + static pass (coverage + carrier chain)"]
+      - return: 0

@@ -1,0 +1,67 @@
+# string.title() — Python-style title case.
+# Word separator = whitespace ONLY.  `-`/`_` are NOT word breaks; they stay
+# as-is.  For snake_case → display labels, chain with `.replace`:
+#     s.replace("_", " ").title()
+
+- def:
+    name: assert_eq
+    args: [[got, string], [want, string], [label, string]]
+    body:
+      - if:
+          condition: { eq: [got, want] }
+          then: [{ call: [log.info, "ok  ${label}: '${got}'"] }]
+          else: [{ call: [log.error, "FAIL ${label}: got '${got}' want '${want}'"] }]
+
+- def:
+    name: main
+    args: []
+    return: i32
+    body:
+      # Pure whitespace word separation
+      - decl: [in_01, string, "hello world"]
+      - decl: [out_01, string, { call: [in_01.title] }]
+      - call: [assert_eq, out_01, "Hello World", "whitespace basic"]
+
+      # All caps gets normalized
+      - decl: [in_02, string, "WORKOUT"]
+      - decl: [out_02, string, { call: [in_02.title] }]
+      - call: [assert_eq, out_02, "Workout", "all caps"]
+
+      # Mixed case
+      - decl: [in_03, string, "fOoBaR"]
+      - decl: [out_03, string, { call: [in_03.title] }]
+      - call: [assert_eq, out_03, "Foobar", "mixed case"]
+
+      # Single char
+      - decl: [in_04, string, "x"]
+      - decl: [out_04, string, { call: [in_04.title] }]
+      - call: [assert_eq, out_04, "X", "single char"]
+
+      # Empty
+      - decl: [in_05, string, ""]
+      - decl: [out_05, string, { call: [in_05.title] }]
+      - call: [assert_eq, out_05, "", "empty"]
+
+      # Underscore stays as-is — NOT a word break
+      - decl: [in_06, string, "foo_bar"]
+      - decl: [out_06, string, { call: [in_06.title] }]
+      - call: [assert_eq, out_06, "Foo_bar", "underscore not a separator"]
+
+      # Hyphen stays as-is — NOT a word break
+      - decl: [in_07, string, "foo-bar"]
+      - decl: [out_07, string, { call: [in_07.title] }]
+      - call: [assert_eq, out_07, "Foo-bar", "hyphen not a separator"]
+
+      # Multiple words
+      - decl: [in_08, string, "one TWO three"]
+      - decl: [out_08, string, { call: [in_08.title] }]
+      - call: [assert_eq, out_08, "One Two Three", "three words"]
+
+      # Idiomatic chain: snake_case → display label
+      - decl: [snake, string, "smith_touch_master"]
+      - decl: [spaced, string, { call: [snake.replace, "_", " "] }]
+      - decl: [pretty, string, { call: [spaced.title] }]
+      - call: [assert_eq, pretty, "Smith Touch Master", "snake→display chain"]
+
+      - call: [log.info, "all done"]
+      - return: 0

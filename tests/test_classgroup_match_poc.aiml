@@ -1,0 +1,111 @@
+# static-check: relaxed
+# M3 — a faithful map of the 9rooms match-subsystem pattern onto classgroups,
+# proving the exact pain points dissolve:
+#
+#   * `match_svc` (a MatchService stand-in) resolves a combat step using BOTH its
+#     own base state (<.pop / <.add_dmg) AND a sees collaborator (<.cards) — just
+#     like the real attack/resolve using match state + <.cards_ref.
+#   * It implements `Resolver` via that group-function (instance `implements:`),
+#     so the coordinator can call it across an interface-typed edge.
+#   * `combat` (a CombatCoordinator stand-in) runs `resolve_all` — the real
+#     `resolve_if_all_passed` loop — with NO `svc` parameter (it reads
+#     <.match_svc), and there is NO import cycle: combat just `sees` match_svc.
+#
+# In the live game this is exactly what removes the threaded `svc` pointer, the
+# `combat_priority ↔ match_service` import cycle, and the free-function wrappers.
+#
+# Spec: spec/58_classgroups.md §5.2 (interface-typed cross-edge coordination).
+
+- interface:
+    name: Resolver
+    methods:
+      - [resolve_top, i32, []]
+
+- class:
+    name: CardService
+    members:
+      - [pwr, i32]
+    methods:
+      - def: { name: load,  args: [[val, i32]], body: [{ set: [<.pwr, val] }] }
+      - def: { name: power, return: i32, body: [{ return: <.pwr }] }
+
+- class:
+    name: MatchCore
+    members:
+      - [depth, i32]
+      - [dmg, i32]
+    methods:
+      - def: { name: push,      body: [{ set: [<.depth, { +: [<.depth, 1] }] }] }
+      - def: { name: pop,       body: [{ set: [<.depth, { -: [<.depth, 1] }] }] }
+      - def: { name: get_depth, return: i32, body: [{ return: <.depth }] }
+      - def: { name: get_dmg,   return: i32, body: [{ return: <.dmg }] }
+      - def: { name: add_dmg,   args: [[amt, i32]], body: [{ set: [<.dmg, { +: [<.dmg, amt] }] }] }
+
+- class:
+    name: CombatCore
+    members:
+      - [ticks, i32]
+    methods:
+      - def: { name: bump_ticks, body: [{ set: [<.ticks, { +: [<.ticks, 1] }] }] }
+      - def: { name: get_ticks,  return: i32, body: [{ return: <.ticks }] }
+
+- classgroup:
+    name: MatchRuntime
+    instances:
+      - class: CardService
+        instance: cards
+
+      - class: MatchCore
+        instance: match_svc
+        sees: [cards]
+        implements: [Resolver]
+        functions:
+          # Uses a BASE method (<.pop, <.add_dmg, <.get_depth) AND a sees
+          # collaborator (<.cards) — the shape a base method alone cannot express.
+          - def:
+              name: resolve_top
+              return: i32
+              body:
+                - if: { condition: { lte: [{ call: [<.get_depth] }, 0] }, then: [{ return: 0 }] }
+                - call: [<.pop]
+                - decl: [step_dmg, i32, { call: [<.cards.power] }]
+                - call: [<.add_dmg, step_dmg]
+                - return: step_dmg
+
+      - class: CombatCore
+        instance: combat
+        sees: [match_svc:Resolver]
+        functions:
+          # The real resolve_if_all_passed loop — NO svc param, calls across the
+          # interface edge until the stack drains.
+          - def:
+              name: resolve_all
+              return: i32
+              body:
+                - decl: [guard, i32, 0]
+                - while:
+                    condition: { lt: [guard, 20] }
+                    body:
+                      - set: [guard, { +: [guard, 1] }]
+                      - decl: [step_d, i32, { call: [<.match_svc.resolve_top] }]
+                      - call: [<.bump_ticks]
+                      - if: { condition: { eq: [step_d, 0] }, then: [{ return: guard }] }
+                - return: guard
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [mrt, ptr<MatchRuntime>, { new: MatchRuntime }]
+      - call: [mrt.cards.load, 5]        # each resolved step deals 5
+      - call: [mrt.match_svc.push]
+      - call: [mrt.match_svc.push]
+      - call: [mrt.match_svc.push]
+      # coordinator drives resolution across the interface edge — no svc passed
+      - decl: [rounds, i32, { call: [mrt.combat.resolve_all] }]
+      - decl: [tot_dmg, i32, { call: [mrt.match_svc.get_dmg] }]
+      - if: { condition: { neq: [tot_dmg, 15] }, then: [{ print: ["FAIL total dmg=${tot_dmg} exp 15 (3 steps x5) — collaborator+base coordination broke"] }, { call: [sys.exit, 1] }] }
+      - decl: [left, i32, { call: [mrt.match_svc.get_depth] }]
+      - if: { condition: { neq: [left, 0] }, then: [{ print: ["FAIL depth=${left} exp 0 — not fully resolved across edge"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS classgroup_match_poc: coordinator drives match_svc across an interface edge — no svc param, no import cycle, sees+base in one method"]
+      - return: 0

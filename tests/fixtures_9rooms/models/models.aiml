@@ -1,0 +1,99 @@
+# Requires: library
+# 9Rooms — Entity models + auth DTOs
+
+- import: "tests/fixtures_9rooms/models/enums.aiml"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Base models
+# ══════════════════════════════════════════════════════════════════════════════
+
+- model:
+    name: Credentials
+    fields:
+      - [username, string]
+      - [password, string]
+
+- model:
+    name: ActiveAbility
+    fields:
+      - [cost_text,       string]          # human-readable cost description
+      - [activation_cost, list<list<i32>>] # ActivationCostType Blöcke: [[CostType, params...], ...]
+      - [trigger,         list<list<i32>>] # TriggerType + params per trigger
+      - [effects,         list<list<i32>>] # EffectCode + params per effect
+
+- model:
+    name: BaseCard
+    fields:
+      - [name,        string]
+      - [card_type,   CardType]   # creature|spell|trap|item|mana_card|primordial
+      - [mkp,         i32]      # mana class points (deck building cost)
+      - [mana_cost,   map<string:i32>]
+      - [description, string]
+      - [passive_abilities,   list<PassiveAbility>]
+      - [active_abilities,   list<ActiveAbility>]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Entities
+# ══════════════════════════════════════════════════════════════════════════════
+
+- model:
+    name: User
+    fields:
+      - [username,      string]
+      - [email,         string]
+      - [password_hash, string]
+      - [created_at,    i64]
+
+- model:
+    name: Card
+    inherits: BaseCard
+    fields:
+      - [var_lp,         i32]      # life points
+      - [attack,     i32]      # A — attack dice (d10)
+      - [defense,    i32]      # V — defense dice (d10)
+      - [initiative, i32]      # I — turn order
+      - [moral,      i32]      # M — morale
+      - [movement,   i32]      # B — movement points
+      - [spell_type, SpellType]   # sorcery|ceremony|enchantment|incantation
+      - [equip_cost, i32]
+      - [provides,   map<string:i32>]  # mana produced per turn (mana cards)
+      - [skp_cost,   i32]                 # Schicksalspunkte cost (fate cards)
+      - [duration,   i32]                 # DurationType (fate/spell cards)
+      - [room_effect, i32]                # RoomEffect (fate cards)
+      - [created_at, i64]
+
+- model:
+    name: Deck
+    fields:
+      - [name,        string]
+      - [deck_type,   string]   # Uses CardType values: creature|spell|mana_card|item|primordial|trap
+      - [description, string]
+      - [card_ids,    list<string>]   # comma-separated Card UUIDs
+      - [total_mkp,   i32]      # sum of MKP of all cards
+      - [created_at,  i64]
+
+- model:
+    name: DeckSet
+    fields:
+      - [name,             string]
+      - [mana_deck_id,     string]
+      - [spell_deck_id,    string]
+      - [creature_deck_id, string]
+      - [item_deck_id,     string]
+      - [trap_deck_id,     string]
+      - [urwesen_deck_id,  string]
+      - [created_at,       i64]
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Auth DTOs
+# ══════════════════════════════════════════════════════════════════════════════
+
+- model:
+    name: LoginReq
+    inherits: Credentials
+
+- model:
+    name: RegisterReq
+    inherits: Credentials
+    fields:
+      - [email, string]

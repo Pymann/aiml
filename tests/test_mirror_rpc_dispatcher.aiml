@@ -1,0 +1,195 @@
+# static-check: off
+# Regression test: RPC-Dispatch via Klassen-Handler + Interface + Dispatcher-Map
+# Expected exit code: 0
+#
+# Aufbauend auf test_mirror_rpc_model_ws.aiml, aber das if-else-Manuell-Decoding
+# wird durch eine RpcDispatcher-Klasse ersetzt, deren handlers-map die Method-
+# Namen auf Handler-Klassen abbildet.  Jeder Handler:
+#   - implements: [RpcHandler]              (Interface mit run-Methode)
+#   - models: [SomeReqModel]                (Wire-Daten als Member)
+#   - run() ruft sess.decode_rpc(rpc, this) und macht seine Logik
+
+- model:
+    name: NetPlayer
+    sync: [health, score]
+    rpc: [cast]
+    fields:
+      - [health, i32]
+      - [score, i32]
+
+- model:
+    name: RpcCast
+    fields:
+      - [name,   string]
+      - [amount, i32]
+      - [tags,   list<string>]
+
+- interface:
+    name: RpcHandler
+    methods:
+      - [run, void, [[rpc, rpc_event], [sess, mirror_session], [player, ptr<NetPlayer>]]]
+
+# Handler-Klasse: implements RpcHandler + models RpcCast.
+# `<.name`, `<.amount`, `<.tags` sind durch das Model-Mixin verfügbar.
+- class:
+    name: CastHandler
+    implements: [RpcHandler]
+    models: [RpcCast]
+    methods:
+      - def:
+          name: run
+          args: [[rpc, rpc_event], [sess, mirror_session], [player, ptr<NetPlayer>]]
+          body:
+            - decl: [var_rc, i32, { call: [sess.decode_rpc, rpc, this] }]
+            - if:
+                condition: { neq: [var_rc, 0] }
+                then:
+                  - set: [player.score, 804]
+                  - return: []
+            - if:
+                condition: { neq: [<.name, "ember"] }
+                then: [{ set: [player.score, 805] }, { return: [] }]
+            - if:
+                condition: { neq: [<.amount, 12] }
+                then: [{ set: [player.score, 806] }, { return: [] }]
+            - if:
+                condition: { neq: [<.tags.len, 2] }
+                then: [{ set: [player.score, 807] }, { return: [] }]
+            - decl: [var_t0, string, { at: [<.tags, 0] }]
+            - if:
+                condition: { neq: [var_t0, "spell"] }
+                then: [{ set: [player.score, 808] }, { return: [] }]
+            - decl: [var_t1, string, { at: [<.tags, 1] }]
+            - if:
+                condition: { neq: [var_t1, "fire"] }
+                then: [{ set: [player.score, 809] }, { return: [] }]
+            - set: [player.health, { +: [player.health, <.amount] }]
+            - set: [player.score, 888]
+
+# Dispatcher: map<string:ptr<RpcHandler>> + dispatch(rpc, sess, player)
+- class:
+    name: RpcDispatcher
+    members:
+      - [handlers, map<string:ptr<RpcHandler>>]
+    methods:
+      - def:
+          name: register
+          args: [[name, string], [var_h, ptr<RpcHandler>]]
+          body: [{ call: [<.handlers.put, name, var_h] }]
+      - def:
+          name: dispatch
+          args: [[rpc, rpc_event], [sess, mirror_session], [player, ptr<NetPlayer>]]
+          body:
+            - if:
+                condition: { eq: [{ call: [<.handlers.contains, rpc.method] }, 0] }
+                then:
+                  - print: ["dispatcher: unknown rpc '${rpc.method}'"]
+                  - return: []
+            - decl: [var_h, ptr<RpcHandler>, { call: [<.handlers.get, rpc.method] }]
+            - call: [var_h.run, rpc, sess, player]
+
+- def:
+    name: mirror_rpc_disp_host
+    args: []
+    body:
+      - decl: [sess, mirror_session]
+      - set: [sess, { call: [mirror.listen, "ws://127.0.0.1:19911"] }]
+      - decl: [player, NetPlayer]
+      - set: [player.health, 40]
+      - set: [player.score, 0]
+      - decl: [nid, i32, { call: [sess.register, player] }]
+      - print: ["host-disp: registered net_id=${nid}"]
+
+      # Dispatcher + Handler aufbauen — impliziter Upcast macht den
+      # ptr<CastHandler> → ptr<RpcHandler>-Cast bei register() automatisch.
+      - decl: [dispatcher, RpcDispatcher]
+      - decl: [cast_handler, ptr<CastHandler>, { new: CastHandler }]
+      - call: [dispatcher.register, "cast", cast_handler]
+
+      # player als ptr für den dispatcher
+      - decl: [player_ptr, ptr<NetPlayer>, { '&': [player] }]
+
+      - decl: [var_i, i32, 0]
+      - while:
+          condition: { lt: [var_i, 35] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [var_i, { +: [var_i, 1] }]
+
+      - decl: [empty_rpc, rpc_event]
+      - set: [empty_rpc, { call: [sess.poll_rpc] }]
+      - if:
+          condition: { neq: [empty_rpc.method, ""] }
+          then:
+            - set: [player.score, 800]
+            - call: [sess.sync_now, player]
+
+      - set: [var_i, 0]
+      - while:
+          condition: { lt: [var_i, 50] }
+          body:
+            - call: [sess.update]
+            - if:
+                condition: { gt: [{ call: [sess.has_rpc] }, 0] }
+                then:
+                  - decl: [rpc_ev, rpc_event, { call: [sess.next_rpc] }]
+                  - call: [dispatcher.dispatch, rpc_ev, sess, player_ptr]
+                  - call: [sess.sync_now, player]
+            - call: [time.sleep_ms, 10]
+            - set: [var_i, { +: [var_i, 1] }]
+
+      - call: [sess.close]
+
+- def:
+    name: main
+    body:
+      - decl: [host_th, thread_handle, { spawn: [mirror_rpc_disp_host] }]
+      - call: [time.sleep_ms, 80]
+
+      - decl: [client, mirror_session, { call: [mirror.connect_timeout, "ws://127.0.0.1:19911", 4000] }]
+      - call: [time.sleep_ms, 120]
+      - call: [client.update]
+
+      - decl: [has_ev, i32, { call: [client.has_event] }]
+      - if:
+          condition: { eq: [has_ev, 0] }
+          then:
+            - print: ["FAIL disp-rpc no object_registered event"]
+            - call: [sys.exit, 1]
+
+      - decl: [var_ev, mirror_event, { call: [client.next_event] }]
+      - decl: [replica, NetPlayer]
+      - call: [client.register_id, replica, var_ev.net_id]
+
+      - decl: [cast, RpcCast]
+      - set: [cast.name, "ember"]
+      - set: [cast.amount, 12]
+      - call: [cast.tags.push, "spell"]
+      - call: [cast.tags.push, "fire"]
+
+      - call: [time.sleep_ms, 150]
+      - call: [client.update]
+      - print: ["client-disp: initial health=${replica.health} score=${replica.score}"]
+
+      - call: [client.send_rpc, var_ev.net_id, "cast", 99, cast]
+      - print: ["client-disp: sent cast payload"]
+
+      - call: [time.sleep_ms, 240]
+      - call: [client.update]
+      - print: ["client-disp: final health=${replica.health} score=${replica.score}"]
+
+      - if:
+          condition: { neq: [replica.health, 52] }
+          then:
+            - print: ["FAIL disp-rpc health=${replica.health}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { neq: [replica.score, 888] }
+          then:
+            - print: ["FAIL disp-rpc score=${replica.score}"]
+            - call: [sys.exit, 1]
+
+      - call: [client.close]
+      - call: [host_th.join]
+      - print: ["mirror rpc dispatcher PASS"]

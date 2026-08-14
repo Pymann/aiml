@@ -1,0 +1,34 @@
+# Requires: display
+# Smoke-test for the `bar` child type: track + fill, runtime value updates.
+
+- prefab:
+    name: StatBar
+    width: 200
+    height: 24
+    children:
+      - { name: hp_bar, type: bar, x: 0, y: 0, width: 200, height: 24,
+          bg_color: 0x222233FF, border_color: 0x66B0E0FF, border_width: 1.5,
+          corner_radius: 6.0, fill_color: 0x44CC66FF, value: 0.7, max: 1.0 }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 400, 200, "bar"] }]
+      - call: [ui.init]
+      - call: [engine.prefab_scene_init, 400, 200]
+
+      - decl: [var_s, prefab_instance, { call: [engine.instantiate, "StatBar"] }]
+      - call: [var_s.set_pos, 100.0, 80.0]
+
+      # Runtime updates
+      - call: [var_s.set_bar_value, "hp_bar", 0.35]
+      - call: [var_s.set_bar_max,   "hp_bar", 1.0]
+      - call: [var_s.set_bar_fill,  "hp_bar", 0xCC4444FF]
+
+      - call: [gl.clear_all, 0.05, 0.05, 0.1, 1.0]
+      - call: [engine.draw_scene]
+      - call: [engine.swap, win]
+
+      - call: [log.info, "bar smoke OK"]
+      - return: 0

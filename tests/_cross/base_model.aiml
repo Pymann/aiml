@@ -1,0 +1,4 @@
+- model:
+    name: Base
+    fields:
+      - [var_a, i32, 0]

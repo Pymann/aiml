@@ -1,0 +1,36 @@
+# Regression test: top-level statements in imported library files run in
+# SOURCE ORDER, not "all decls first then all imperative statements" (the
+# former libraryMode hoisting bug fixed in commit 2026-06-04).
+#
+# The imported file order_lib.aiml writes a series of marker integers to a
+# shared list via interleaved `- decl: [..., { call: [...] }]` and
+# `- call: [...]` statements.  Source order must produce 1, 2, 3, 4, 5.
+# A hoisting compiler would produce 1, 3, 5, 2, 4 instead.
+# Expected exit code: 0
+
+- import: "tests/order_lib.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [var_n, i32, { call: [order_lib_len] }]
+      - if:
+          condition: { neq: [var_n, 5] }
+          then:
+            - print: ["FAIL order_log.len: expected 5, got ${var_n}"]
+            - call: [sys.exit, 1]
+      - decl: [var_i, i32, 0]
+      - while:
+          condition: { lt: [var_i, 5] }
+          body:
+            - decl: [var_v, i32, { call: [order_lib_at, var_i] }]
+            - decl: [expected, i32, { +: [var_i, 1] }]
+            - if:
+                condition: { neq: [var_v, expected] }
+                then:
+                  - print: ["FAIL order_log[${var_i}]: expected ${expected}, got ${var_v}"]
+                  - call: [sys.exit, 1]
+            - set: [var_i, { +: [var_i, 1] }]
+      - print: ["import toplevel order PASS"]
+      - return: 0

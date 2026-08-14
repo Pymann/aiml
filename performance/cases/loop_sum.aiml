@@ -1,0 +1,13 @@
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [n, i32, 100000]
+      - decl: [i, i32, 0]
+      - decl: [acc, i32, 0]
+      - while:
+          cond: { <: [i, n] }
+          body:
+            - set: [acc, { +: [acc, i] }]
+            - set: [i, { +: [i, 1] }]
+      - return: acc

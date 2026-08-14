@@ -1,0 +1,27 @@
+# multi-line unquoted
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [map_x, map<string:string>, {
+          alpha: "one",
+          beta:  "two",
+          gamma: "three",
+        }]
+      - call: [log.info, "ml-unquoted size=${map_x.len}"]
+
+      # multi-line quoted
+      - decl: [map_y, map<string:string>, {
+          "alpha": "one",
+          "beta":  "two",
+        }]
+      - call: [log.info, "ml-quoted size=${map_y.len}"]
+
+      # inline quoted 2-entry
+      - decl: [map_z, map<string:string>, {"alpha": "one", "beta": "two"}]
+      - call: [log.info, "inline-quoted-2 size=${map_z.len}"]
+
+      # inline unquoted 2-entry
+      - decl: [map_w, map<string:string>, {alpha: "one", beta: "two"}]
+      - call: [log.info, "inline-unquoted-2 size=${map_w.len}"]
+      - return: 0

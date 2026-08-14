@@ -1,0 +1,15 @@
+# static-check: off
+# Negative test: push(ptr<T>) into a VALUE list<T> muss ein Compile-Fehler sein.
+# Ein 8-Byte-Pointer würde in einen Value-Struct-Slot geschrieben (Rest garbage)
+# → Heap-Korruption / SIGSEGV beim Serialisieren (aiml_ser_encode).  Fix:
+# dereferenzieren { '?': [x] } oder list<ptr<T>> deklarieren.
+# Expected exit code: 1 (Compilation failed).
+- model: { name: Foo, fields: [ [xval, i32] ] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [lst, list<Foo>]
+      - decl: [fpp, ptr<Foo>, { new: Foo }]
+      - call: [lst.push, fpp]
+      - return: 0

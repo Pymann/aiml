@@ -1,0 +1,54 @@
+# static-check: off
+# Regression: `set: [outer.inner, { call: [kv.get_copy, key] }]` — Zuweisung
+# eines kv.get_copy-Resultats DIREKT in ein verschachteltes Struct-Feld.
+#
+# BUG (2026-07-10): Der Deep-Copy-Pfad für kv.get_copy (visitSetStmt) greift
+# nur bei einer Top-Level-Variable als Target, NICHT bei einem verschachtelten
+# Feld-Target (outer.inner).  Ergebnis: die Heap-Felder des verschachtelten
+# Structs (string/list/map) sind nach der Zuweisung Müll bzw. 0.
+#
+# Nachweis (siehe main):
+#   V1  outer.inner = <local Inner>         → OK   (kein get_copy)
+#   V2  outer.inner = kv.get_copy(key)      → BUG  (Heap-Felder korrupt)
+#   V3  outer.inner.field = tmp.field (FbF) → OK   (Workaround)
+#
+# Erwartung nach Fix: exit 0.  Aktuell: exit 1 (V2 schlägt fehl).
+# Backlog: doc/backlog/2026-07-10_kv_getcopy_nested_slot_assign.md
+
+- model: { name: Inner, fields: [[name, string], [val, i32]] }
+- model: { name: Outer, fields: [[tag, string], [inner, Inner]] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [ddir, path, "/tmp/aiml_test_getcopy_nested/"]
+      - call: [io.remove_all, ddir]
+      - decl: [store, Kv<string:Inner>, { call: [db.open_kv, "inner", {persist: true, path: ddir}] }]
+      - decl: [seed, Inner]
+      - set: [seed.name, "Alpha"]
+      - set: [seed.val,  42]
+      - call: [store.set, "k1", seed]
+
+      - decl: [fails, i32, 0]
+
+      # V2: get_copy → nested slot (the buggy path).
+      - decl: [outer, Outer]
+      - set: [outer.tag, "T"]
+      - set: [outer.inner, { call: [store.get_copy, "k1"] }]
+      - if:
+          condition: { neq: [outer.inner.name, "Alpha"] }
+          then:
+            - print: ["FAIL V2 nested-slot get_copy: inner.name='${outer.inner.name}' want 'Alpha'"]
+            - set: [fails, { +: [fails, 1] }]
+      - if:
+          condition: { neq: [outer.inner.val, 42] }
+          then:
+            - print: ["FAIL V2 nested-slot get_copy: inner.val=${outer.inner.val} want 42"]
+            - set: [fails, { +: [fails, 1] }]
+
+      - if:
+          condition: { eq: [fails, 0] }
+          then: [{ print: ["PASS kv_getcopy_nested_slot"] }]
+          else: [{ print: ["FAIL kv_getcopy_nested_slot: ${fails} (known bug — see backlog)"] }]
+      - return: fails

@@ -1,0 +1,54 @@
+# Requires: display
+# Smoke-test for scroll-viewport + clipping: a Viewport instance clips its
+# nested rows and scrolls them.
+
+- prefab:
+    name: Viewport
+    width: 200
+    height: 120
+    children:
+      - { name: frame, type: rect, x: 0, y: 0, width: 200, height: 120,
+          bg_color: 0x11182AFF, border_color: 0x66B0E0FF, border_width: 1.5, corner_radius: 6.0 }
+
+- prefab:
+    name: ListRow
+    width: 184
+    height: 40
+    children:
+      - { name: row_rect, type: rect, x: 0, y: 0, width: 184, height: 36,
+          bg_color: 0x2A4870FF, corner_radius: 4.0 }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 400, 300, "scroll"] }]
+      - call: [ui.init]
+      - call: [engine.prefab_scene_init, 400, 300]
+
+      - decl: [var_vp, prefab_instance, { call: [engine.instantiate, "Viewport"] }]
+      - call: [var_vp.set_pos, 100.0, 80.0]
+      - call: [var_vp.set_clip, 1]
+
+      # Add 6 rows (more than fit in 120px → scrolling needed)
+      - decl: [var_i, i32, 0]
+      - while:
+          condition: { lt: [var_i, 6] }
+          body:
+            - decl: [row, prefab_instance, { call: [engine.instantiate, "ListRow"] }]
+            - decl: [var_yf, f32, { "*": [{ "+": [var_i, 0] }, 44] }]
+            - call: [row.set_pos, 8.0, var_yf]
+            - call: [var_vp.add_child, row]
+            - set: [var_i, { "+": [var_i, 1] }]
+
+      # Scroll down by 60px
+      - call: [var_vp.set_scroll, 0.0, 60.0]
+      - decl: [var_sy, f32, { call: [var_vp.get_scroll_y] }]
+      - call: [log.info, "scroll_y=${var_sy}"]
+
+      - call: [gl.clear_all, 0.05, 0.05, 0.1, 1.0]
+      - call: [engine.draw_scene]
+      - call: [engine.swap, win]
+
+      - call: [log.info, "scroll smoke OK"]
+      - return: 0

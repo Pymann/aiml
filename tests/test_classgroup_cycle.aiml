@@ -1,0 +1,61 @@
+# M1 — a `sees` CYCLE (ping sees pong, pong sees ping) wires cleanly, because
+# phase-1 wiring is address-only: both instances are allocated in phase 0, then
+# both sees pointers are back-patched.  No topological order exists, and none is
+# needed.  Each coordination fn reads the OTHER's base value across the edge.
+#
+# Spec: spec/58_classgroups.md §3 (cycles are a non-issue).
+
+- class:
+    name: Ping
+    members:
+      - [val, i32]
+    methods:
+      - def: { name: set_val, args: [[nval, i32]], body: [{ set: [<.val, nval] }] }
+      - def: { name: get_val, return: i32, body: [{ return: <.val }] }
+
+- class:
+    name: Pong
+    members:
+      - [val, i32]
+    methods:
+      - def: { name: set_val, args: [[nval, i32]], body: [{ set: [<.val, nval] }] }
+      - def: { name: get_val, return: i32, body: [{ return: <.val }] }
+
+- classgroup:
+    name: CycRuntime
+    instances:
+      - class: Ping
+        instance: ping
+        sees: [pong]
+        functions:
+          - def:
+              name: cross
+              return: i32
+              body:
+                - return: { +: [{ call: [<.pong.get_val] }, 1] }
+
+      - class: Pong
+        instance: pong
+        sees: [ping]
+        functions:
+          - def:
+              name: cross
+              return: i32
+              body:
+                - return: { +: [{ call: [<.ping.get_val] }, 10] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [grp, ptr<CycRuntime>, { new: CycRuntime }]
+      - call: [grp.ping.set_val, 100]
+      - call: [grp.pong.set_val, 200]
+      # ping.cross reads pong.val (200) + 1 = 201 → proves ping.pong is wired
+      - decl: [pcx, i32, { call: [grp.ping.cross] }]
+      - if: { condition: { neq: [pcx, 201] }, then: [{ print: ["FAIL ping.cross=${pcx} exp 201"] }, { call: [sys.exit, 1] }] }
+      # pong.cross reads ping.val (100) + 10 = 110 → proves pong.ping is wired
+      - decl: [qcx, i32, { call: [grp.pong.cross] }]
+      - if: { condition: { neq: [qcx, 110] }, then: [{ print: ["FAIL pong.cross=${qcx} exp 110"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS classgroup_cycle: mutual sees wired both directions (address-only back-patch)"]
+      - return: 0

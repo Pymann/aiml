@@ -1,0 +1,50 @@
+# Repro: passing a class-member of map<K:V> (or other complex collection
+# type) as argument to a free function triggers LLVM IR verification:
+#
+#   Function '__aiml_user_main' verification FAILED:
+#     Call parameter type does not match function signature!
+#
+# The function signature defines both params as `ptr` (i.e. `%0` and `%1`
+# of type ptr) but the call-site at __aiml_user_main passes the map
+# struct by value where a ptr is expected.
+#
+# Discovered while wiring prophecy/sources/pretrain.aiml — passing
+# `embedder.vocab_index` (a class-member map) into a free function
+# `bag_to_ids(bag_str, vocab_index)` reproduced the issue.
+#
+# Workaround: encapsulate the work in a class method that reads the
+# member via `<.member` instead of receiving it as a parameter.
+
+- class:
+    name: Holder
+    members:
+      - [vocab_index, map<string:i32>]
+    methods:
+      - def:
+          name: add
+          args: [[key, string], [idx, i32]]
+          body:
+            - call: [<.vocab_index.put, key, idx]
+
+- def:
+    name: lookup
+    args: [[key, string], [vocab_index, map<string:i32>]]
+    return: i32
+    body:
+      - if:
+          condition: { neq: [{ call: [vocab_index.contains, key] }, 0] }
+          then: [{ return: { call: [vocab_index.get, key] } }]
+      - return: -1
+
+- def:
+    name: main
+    args: []
+    return: i32
+    body:
+      - decl: [holder, Holder]
+      - call: [holder.add, "alpha", 1]
+      - call: [holder.add, "beta", 2]
+      # PASSING CLASS-MEMBER AS FUNC-ARG — this triggers the bug
+      - decl: [found, i32, { call: [lookup, "alpha", holder.vocab_index] }]
+      - call: [log.info, "found=${found}"]
+      - return: 0

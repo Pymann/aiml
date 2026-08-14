@@ -1,0 +1,26 @@
+# Negative test: dieselbe Variable ('kind') wird MEHRFACH gegen String-
+# Literale verglichen.  Das ist ein hand-gerolltes String-Switch und muss
+# ein HARTER Compiler-Fehler sein — mit Hinweis auf enum / polymorphe
+# Programmierung (siehe spec/49 §16).
+#
+# Expected exit code: 1
+#
+# Diagnostic-Form:
+#   ...: variable 'kind' is compared against string literals 2 times — this
+#   hand-rolled string switch should be an enum or polymorphic dispatch.
+
+- def:
+    name: classify
+    args: [[kind, string]]
+    return: i32
+    body:
+      - if: { condition: { eq: [kind, "fire"] },  then: [{ return: 1 }] }
+      - if: { condition: { eq: [kind, "water"] }, then: [{ return: 2 }] }
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [cval, i32, { call: [classify, "fire"] }]
+      - return: 0

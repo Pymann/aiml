@@ -1,0 +1,62 @@
+# Repro: list<ptr<Interface>> + iterate + dispatch corrupts heap.
+#
+# Symptom: `malloc(): corrupted top size` after a few dispatch calls.
+#
+# Expected: prints "id=a / id=b / id=c"
+# Actual (bug): SIGSEGV/SIGABRT mid-iteration with heap corruption.
+#
+# Single ptr<Interface> dispatch works fine — only the list storage path
+# corrupts memory. Suspect: push of struct-class-instance into
+# list<ptr<Interface>> stores by-value or via wrong indirection,
+# producing dangling/aliasing pointers that smash the heap.
+
+- interface:
+    name: Named
+    methods:
+      - [my_id, string, []]
+
+- class:
+    name: Alpha
+    implements: [Named]
+    members:
+      - [tag, string]
+    methods:
+      - def: { name: my_id, return: string, args: [], body: [{ return: "alpha-${<.tag}" }] }
+
+- class:
+    name: Beta
+    implements: [Named]
+    members:
+      - [tag, string]
+    methods:
+      - def: { name: my_id, return: string, args: [], body: [{ return: "beta-${<.tag}" }] }
+
+- def:
+    name: main
+    args: []
+    return: i32
+    body:
+      - decl: [alpha_instance, Alpha]
+      - set: [alpha_instance.tag, "a"]
+      - decl: [beta_instance,  Beta]
+      - set: [beta_instance.tag, "b"]
+
+      # Single-ptr dispatch — works
+      - decl: [single_ptr, ptr<Named>, alpha_instance]
+      - decl: [single_id,  string,     { call: [single_ptr.my_id] }]
+      - call: [log.info, "single dispatch: ${single_id}"]
+
+      # list<ptr<Interface>> dispatch — crashes
+      - decl: [things, list<ptr<Named>>]
+      - call: [things.push, alpha_instance]
+      - call: [things.push, beta_instance]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, things.len] }
+          body:
+            - decl: [t_ptr, ptr<Named>, { at: [things, idx] }]
+            - decl: [tid,   string,     { call: [t_ptr.my_id] }]
+            - call: [log.info, "list[${idx}] id=${tid}"]
+            - set: [idx, { "+": [idx, 1] }]
+
+      - return: 0

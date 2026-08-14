@@ -1,0 +1,14 @@
+# Negative: gl.load_texture mit string-literalem Pfad der im Asset-Bundle
+# liegt → Compile-Hard-Error.  Escape-Hatch bleibt nur für runtime-Variablen
+# (z.B. User-Uploads), nicht für statische Source-Strings.
+#
+# AssetRoots: tests/_asset_fixtures/basic/resources/textures
+# Expected exit code: 1
+# ExpectedStderr: gl.load_texture: literal path in asset bundle, use gl.tex("hammer")
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [tex, gl_texture, { call: [gl.load_texture, "tests/_asset_fixtures/basic/resources/textures/hammer.png"] }]
+      - return: 0

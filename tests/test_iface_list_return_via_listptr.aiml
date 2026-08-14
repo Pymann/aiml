@@ -1,0 +1,66 @@
+# Repro: same as test_iface_list_return.aiml but the class pointer comes from
+# a `list<ptr<T>>` (loaded via `at:` instead of held directly) and is upcast
+# from the loaded slot — mirrors how DataCreatures resolves a `ptr<Tileable>`:
+#   - g_detail_items: list<ptr<ItemBehavior>>
+#   - var_it = at(g_detail_items, i): ptr<ItemBehavior>
+#   - view = var_it: ptr<Tileable>
+#   - got = view.tile_tags(): list<string>
+# Expected exit code: 0.
+
+- interface:
+    name: Tagged
+    methods:
+      - [tags, list<string>, []]
+
+- model:
+    name: Item
+    fields:
+      - [name, string]
+
+- class:
+    name: ItemImpl
+    models: [Item]
+    implements: [Tagged]
+    members:
+      - [_tags, list<string>]
+    methods:
+      - def:
+          name: tags
+          return: list<string>
+          args: []
+          body:
+            - decl: [var_r, list<string>, <._tags]
+            - return: var_r
+
+- decl: [var_it, ptr<ItemImpl>, { new: ItemImpl }]
+- set: [var_it.name, "Hammer"]
+- call: [var_it._tags.push, "tool"]
+- call: [var_it._tags.push, "metal"]
+- call: [var_it._tags.push, "starter"]
+
+- decl: [items, list<ptr<ItemImpl>>, []]
+- call: [items.push, var_it]
+
+# Source the interface pointer through `at:` (matches DataCreatures pattern).
+- decl: [from_list, ptr<ItemImpl>, { at: [items, 0] }]
+- decl: [view, ptr<Tagged>, from_list]
+- decl: [got, list<string>, { call: [view.tags] }]
+
+- print: ["len=${got.len}"]
+- if:
+    condition: { neq: [got.len, 3] }
+    then:
+      - print: ["FAIL len=${got.len}"]
+      - call: [sys.exit, 1]
+
+# CRITICAL: at: [got, 0] — the operation that crashes in DataCreatures.
+- decl: [first, string, { at: [got, 0] }]
+- print: ["first='${first}'"]
+- if:
+    condition: { eq: [first, "tool"] }
+    then:
+      - print: ["PASS"]
+      - call: [sys.exit, 0]
+    else:
+      - print: ["FAIL first='${first}'"]
+      - call: [sys.exit, 1]

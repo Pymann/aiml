@@ -1,0 +1,52 @@
+# Repro Erweiterung 2: Model mit exakt der Deck-Struktur.
+
+- model:
+    name: FakeDeck
+    fields:
+      - [deck_id,     string]
+      - [owner_email, string]
+      - [name,        string]
+      - [subtype,     string]
+      - [description, string]
+      - [card_ids,    list<string>]
+      - [total_mkp,   i32]
+      - [created_at,  i64]
+
+- class:
+    name: Holder
+    members:
+      - [decks, list<FakeDeck>]
+    methods:
+      - def:
+          name: add
+          args: [[nam, string], [sub, string]]
+          body:
+            - decl: [fdk, FakeDeck]
+            - set: [fdk.name,    nam]
+            - set: [fdk.subtype, sub]
+            - call: [<.decks.push, fdk]
+
+      - def:
+          name: read_name
+          args: [[idx, i32]]
+          return: string
+          body:
+            - decl: [fdk, FakeDeck, { call: [<.decks.get, idx] }]
+            - return: fdk.name
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [hld, ptr<Holder>, { new: Holder }]
+      - call: [hld.add, "hhh", "creature"]
+      - decl: [nam, string, { call: [hld.read_name, 0] }]
+      - print: ["decks[0].name='${nam}'"]
+      - if:
+          condition: { eq: [nam, "hhh"] }
+          then:
+            - print: ["PASS"]
+            - return: 0
+          else:
+            - print: ["FAIL got='${nam}' want='hhh'"]
+            - return: 1

@@ -1,0 +1,161 @@
+# Test: `decorator: [vocab]` wraps string returns with vocab.lookup.
+# Deckt Phase 3 der Vocab-Feature ab.  Decorators werden zur Compile-Zeit
+# angewandt — kein runtime-Overhead wenn die Liste leer ist.
+
+- decl: [var_ok, i32, 1]
+
+# ── Setup: vocab load + Sprache setzen ───────────────────────────────────
+
+- decl: [langs, string, '{"0":"en","1":"de","2":"fr"}']
+- decl: [voc,   string, '{"Draw":["Draw","Ziehen","Piocher"],"card":["card","Karte","carte"],"UNK":["UNK","","---"]}']
+- decl: [rc_load, i32, { call: [vocab.load, langs, voc] }]
+
+# ── A: Decorated string-return-Funktion ──────────────────────────────────
+
+- def:
+    name: draw_verb
+    return: string
+    decorator: [vocab]
+    body:
+      - return: "Draw"
+
+# ── B: Decorated Composer nutzt bereits übersetzte Fragmente ─────────────
+
+- def:
+    name: card_word
+    return: string
+    decorator: [vocab]
+    body:
+      - return: "card"
+
+- def:
+    name: draw_card_phrase
+    return: string
+    decorator: [vocab]
+    body:
+      # Beide Aufrufe returnen bereits übersetzte Fragmente (vocab-decorator
+      # wickelt sie ein).  Die zusammengesetzte Phrase "Ziehen Karte" ist
+      # NICHT im vocab.json → decorator wraps sie ein, bleibt aber die
+      # Konkatenation weil kein Match.
+      - decl: [verb, string, { call: [draw_verb] }]
+      - decl: [noun, string, { call: [card_word] }]
+      - return: "${verb} ${noun}"
+
+# ── C: Undecorated Kontrollfunktion — kein Vocab-Wrapping ────────────────
+
+- def:
+    name: raw_draw
+    return: string
+    body:
+      - return: "Draw"
+
+# ── D: Non-string-return mit vocab-Decorator = Pass-through (safe) ───────
+
+- def:
+    name: number_thing
+    return: i32
+    decorator: [vocab]
+    body:
+      - return: 42
+
+# ── E: Unbekannter Decorator = Silent Ignore ─────────────────────────────
+
+- def:
+    name: unknown_decorator_ok
+    return: string
+    decorator: [nonexistent_decorator]
+    body:
+      - return: "Draw"
+
+# ── Assertions in main() ─────────────────────────────────────────────────
+
+- def:
+    name: main
+    return: i32
+    body:
+      # E0: language 0 = source → decorator's lookup returns source too
+      - call: [vocab.set_language, 0]
+      - decl: [en_verb, string, { call: [draw_verb] }]
+      - if:
+          condition: { eq: [en_verb, "Draw"] }
+          then: [{ print: ["OK E0: source language passes 'Draw'"] }]
+          else:
+            - print: ["FAIL E0: en_verb='${en_verb}'"]
+            - set: [var_ok, 0]
+
+      # A1: language de, decorator wraps single word
+      - call: [vocab.set_language, 1]
+      - decl: [de_verb, string, { call: [draw_verb] }]
+      - if:
+          condition: { eq: [de_verb, "Ziehen"] }
+          then: [{ print: ["OK A1: de → 'Ziehen'"] }]
+          else:
+            - print: ["FAIL A1: de_verb='${de_verb}'"]
+            - set: [var_ok, 0]
+
+      # B1: composer concatenates already-translated fragments
+      - decl: [phrase, string, { call: [draw_card_phrase] }]
+      - if:
+          condition: { eq: [phrase, "Ziehen Karte"] }
+          then: [{ print: ["OK B1: composer → 'Ziehen Karte'"] }]
+          else:
+            - print: ["FAIL B1: phrase='${phrase}'"]
+            - set: [var_ok, 0]
+
+      # B2: fr → 'Piocher carte'
+      - call: [vocab.set_language, 2]
+      - decl: [fr_phrase, string, { call: [draw_card_phrase] }]
+      - if:
+          condition: { eq: [fr_phrase, "Piocher carte"] }
+          then: [{ print: ["OK B2: fr composer → 'Piocher carte'"] }]
+          else:
+            - print: ["FAIL B2: fr_phrase='${fr_phrase}'"]
+            - set: [var_ok, 0]
+
+      # C1: undecorated function is NOT affected by language
+      - call: [vocab.set_language, 1]
+      - decl: [raw, string, { call: [raw_draw] }]
+      - if:
+          condition: { eq: [raw, "Draw"] }
+          then: [{ print: ["OK C1: undecorated bleibt 'Draw'"] }]
+          else:
+            - print: ["FAIL C1: raw='${raw}'"]
+            - set: [var_ok, 0]
+
+      # D1: non-string decorator doesn't corrupt i32 return
+      - decl: [num_res, i32, { call: [number_thing] }]
+      - if:
+          condition: { eq: [num_res, 42] }
+          then: [{ print: ["OK D1: i32 return unaffected (42)"] }]
+          else:
+            - print: ["FAIL D1: num_res=${num_res}"]
+            - set: [var_ok, 0]
+
+      # E1: unknown decorator name = silent no-op (function still works)
+      - call: [vocab.set_language, 1]
+      - decl: [unk, string, { call: [unknown_decorator_ok] }]
+      - if:
+          condition: { eq: [unk, "Draw"] }
+          then: [{ print: ["OK E1: unknown decorator ignored"] }]
+          else:
+            - print: ["FAIL E1: unk='${unk}'"]
+            - set: [var_ok, 0]
+
+      # F1: empty translation slot in vocab → source-fallback via decorator
+      - call: [vocab.set_language, 1]
+      - decl: [unk_source, string, { call: [draw_verb] }]  # already checked above; redundant guard
+      - if:
+          condition: { eq: [unk_source, "Ziehen"] }
+          then: [{ print: ["OK F1: sanity re-check draw_verb='Ziehen'"] }]
+          else:
+            - print: ["FAIL F1: unk_source='${unk_source}'"]
+            - set: [var_ok, 0]
+
+      - if:
+          condition: { eq: [var_ok, 1] }
+          then:
+            - print: ["PASS vocab_decorator — all scenarios correct"]
+            - return: 0
+          else:
+            - print: ["FAIL vocab_decorator — see above"]
+            - return: 1

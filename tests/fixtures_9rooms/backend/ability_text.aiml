@@ -1,0 +1,1175 @@
+# Requires: library
+# 9Rooms — Ability Text Generator
+# Converts ActiveAbility bytecodes into human-readable text.
+# Port of ccg_gemini TextDescriptionGenerator.cs
+
+- import: "tests/fixtures_9rooms/models/models.aiml"
+- import: "tests/fixtures_9rooms/backend/ability_text_lookups.aiml"
+
+- def:
+    name: owner_possessive_name
+    args: [[var_id, i32]]
+    return: string
+    body:
+      - if: [{ eq: [var_id, 1] }, true]
+        then:
+          - return: "your"
+      - if: [{ eq: [var_id, 2] }, true]
+        then:
+          - return: "var_an opponent's"
+      - if: [{ eq: [var_id, 3] }, true]
+        then:
+          - return: "var_an ally's"
+      - if: [{ eq: [var_id, 4] }, true]
+        then:
+          - return: "your or var_an ally's"
+      - if: [{ eq: [var_id, 5] }, true]
+        then:
+          - return: "a player's"
+      - if: [{ eq: [var_id, 6] }, true]
+        then:
+          - return: "var_an opponent's"
+      - if: [{ eq: [var_id, 7] }, true]
+        then:
+          - return: "the equipped card's"
+      - if: [{ eq: [var_id, 8] }, true]
+        then:
+          - return: "the triggering card's"
+      - return: "a card's"
+
+- def:
+    name: owner_object_phrase
+    args: [[owner_id, i32], [card_type_id, i32]]
+    return: string
+    body:
+      - decl: [var_ct, string, { call: [card_type_name_lower, card_type_id] }]
+      - if:
+          condition: { eq: [owner_id, 1] }
+          then:
+            - return: "target allied ${var_ct}"
+      - if:
+          condition: { eq: [owner_id, 2] }
+          then:
+            - return: "target enemy ${var_ct}"
+      - if:
+          condition: { eq: [owner_id, 3] }
+          then:
+            - return: "target allied ${var_ct}"
+      - if:
+          condition: { eq: [owner_id, 4] }
+          then:
+            - return: "all allied ${var_ct}s"
+      - if:
+          condition: { eq: [owner_id, 5] }
+          then:
+            - return: "all ${var_ct}s"
+      - if:
+          condition: { eq: [owner_id, 6] }
+          then:
+            - return: "all enemy ${var_ct}s"
+      - if:
+          condition: { eq: [owner_id, 7] }
+          then:
+            - return: "equipped ${var_ct}"
+      - if:
+          condition: { eq: [owner_id, 8] }
+          then:
+            - return: "triggering ${var_ct}"
+      - return: "target ${var_ct}"
+
+- def:
+    name: card_type_name_lower
+    args: [[var_id, i32]]
+    return: string
+    body:
+      - if: [{ eq: [var_id, 0] }, true]
+        then:
+          - return: "card"
+      - if: [{ eq: [var_id, 1] }, true]
+        then:
+          - return: "creature"
+      - if: [{ eq: [var_id, 2] }, true]
+        then:
+          - return: "spell"
+      - if: [{ eq: [var_id, 3] }, true]
+        then:
+          - return: "mana card"
+      - if: [{ eq: [var_id, 4] }, true]
+        then:
+          - return: "item"
+      - if: [{ eq: [var_id, 5] }, true]
+        then:
+          - return: "fate card"
+      - if: [{ eq: [var_id, 6] }, true]
+        then:
+          - return: "primordial"
+      - if: [{ eq: [var_id, 7] }, true]
+        then:
+          - return: "trap"
+      - return: "card"
+
+- def:
+    name: target_name
+    args: [[var_id, i32]]
+    return: string
+    body:
+      - if: [{ eq: [var_id, 1] }, true]
+        then:
+          - return: "Any target"
+      - if: [{ eq: [var_id, 2] }, true]
+        then:
+          - return: "Creature"
+      - if: [{ eq: [var_id, 3] }, true]
+        then:
+          - return: "Spell"
+      - if: [{ eq: [var_id, 4] }, true]
+        then:
+          - return: "Mana"
+      - if: [{ eq: [var_id, 5] }, true]
+        then:
+          - return: "Item"
+      - if: [{ eq: [var_id, 6] }, true]
+        then:
+          - return: "Fate"
+      - if: [{ eq: [var_id, 7] }, true]
+        then:
+          - return: "Primordial"
+      - if: [{ eq: [var_id, 8] }, true]
+        then:
+          - return: "Trap"
+      - if: [{ eq: [var_id, 9] }, true]
+        then:
+          - return: "Creature or Primordial"
+      - if: [{ eq: [var_id, 10] }, true]
+        then:
+          - return: "Soul Mage"
+      - if: [{ eq: [var_id, 11] }, true]
+        then:
+          - return: "Creature, Primordial or Soul Mage"
+      - return: "Unknown Target ${var_id}"
+
+- def:
+    name: target_name_lower
+    args: [[var_id, i32]]
+    return: string
+    body:
+      - if: [{ eq: [var_id, 1] }, true]
+        then:
+          - return: "target"
+      - if: [{ eq: [var_id, 2] }, true]
+        then:
+          - return: "creature"
+      - if: [{ eq: [var_id, 3] }, true]
+        then:
+          - return: "spell"
+      - if: [{ eq: [var_id, 4] }, true]
+        then:
+          - return: "mana card"
+      - if: [{ eq: [var_id, 5] }, true]
+        then:
+          - return: "item"
+      - if: [{ eq: [var_id, 6] }, true]
+        then:
+          - return: "fate card"
+      - if: [{ eq: [var_id, 7] }, true]
+        then:
+          - return: "primordial"
+      - if: [{ eq: [var_id, 8] }, true]
+        then:
+          - return: "trap"
+      - if: [{ eq: [var_id, 9] }, true]
+        then:
+          - return: "creature or primordial"
+      - if: [{ eq: [var_id, 10] }, true]
+        then:
+          - return: "soul mage"
+      - if: [{ eq: [var_id, 11] }, true]
+        then:
+          - return: "creature, primordial or soul mage"
+      - return: "target"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Value resolver: reads ValueType + params from a list<i32> at given offset
+# Returns (text, bytes_consumed)
+# Since AIML has no tuples, we use two separate functions.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# resolve_value_text(data, start_idx) → string
+- def:
+    name: resolve_value_text
+    args: [[data, list<i32>], [var_si, i32]]
+    return: string
+    body:
+      - decl: [dlen, i32, { call: [data.len] }]
+      - if:
+          condition: { ge: [var_si, dlen] }
+          then:
+            - return: "0"
+      - decl: [var_vt, i32, { call: [data.get, var_si] }]
+      - decl: [var_p1, i32, 0]
+      - decl: [var_p2, i32, 0]
+      - if:
+          condition: { lt: [{ +: [var_si, 1] }, dlen] }
+          then:
+            - set: [var_p1, { call: [data.get, { +: [var_si, 1] }] }]
+      - if:
+          condition: { lt: [{ +: [var_si, 2] }, dlen] }
+          then:
+            - set: [var_p2, { call: [data.get, { +: [var_si, 2] }] }]
+      # fixed value
+      - if: [{ eq: [var_vt, 1] }, true]
+        then:
+          - return: "${var_p1}"
+      # equal to mana cost
+      - if: [{ eq: [var_vt, 2] }, true]
+        then:
+          - return: "X (Mana Cost)"
+      # equal to attribute
+      - if: [{ eq: [var_vt, 3] }, true]
+        then:
+          - decl: [var_an, string, { call: [attribute_name, var_p1] }]
+          - return: "equal to ${var_an}"
+      # cards on deck [4, deck_type_id, owner_id]
+      - if: [{ eq: [var_vt, 4] }, true]
+        then:
+          - decl: [dn4, string, { call: [deck_type_name, var_p1] }]
+          - return: "cards in ${dn4}"
+      # cards in zone [5, zone_id, owner_id]
+      - if: [{ eq: [var_vt, 5] }, true]
+        then:
+          - decl: [zn5, string, { call: [zone_name, var_p1] }]
+          - return: "cards in the ${zn5}"
+      # cards in hand
+      - if: [{ eq: [var_vt, 6] }, true]
+        then:
+          - return: "Cards in Hand"
+      # cards in graveyard
+      - if: [{ eq: [var_vt, 7] }, true]
+        then:
+          - return: "Cards in Graveyard"
+      # dice roll
+      - if: [{ eq: [var_vt, 8] }, true]
+        then:
+          - return: "${var_p1}d${var_p2}"
+      # mana in pool
+      - if: [{ eq: [var_vt, 9] }, true]
+        then:
+          - return: "Mana in Pool"
+      # X cost spent
+      - if: [{ eq: [var_vt, 10] }, true]
+        then:
+          - return: "X"
+      - return: "?"
+
+# resolve_value_len(vtype) → i32 (how many ints this ValueType consumes)
+- def:
+    name: resolve_value_len
+    args: [[var_vt, i32]]
+    return: i32
+    body:
+      - if: [{ eq: [var_vt, 1] }, true]
+        then:
+          - return: 2
+      - if: [{ eq: [var_vt, 2] }, true]
+        then:
+          - return: 1
+      - if: [{ eq: [var_vt, 3] }, true]
+        then:
+          - return: 2
+      - if: [{ eq: [var_vt, 4] }, true]
+        then:
+          - return: 3
+      - if: [{ eq: [var_vt, 5] }, true]
+        then:
+          - return: 3
+      - if: [{ eq: [var_vt, 6] }, true]
+        then:
+          - return: 2
+      - if: [{ eq: [var_vt, 7] }, true]
+        then:
+          - return: 2
+      - if: [{ eq: [var_vt, 8] }, true]
+        then:
+          - return: 3
+      - if: [{ eq: [var_vt, 9] }, true]
+        then:
+          - return: 2
+      - if: [{ eq: [var_vt, 10] }, true]
+        then:
+          - return: 2
+      - return: 1
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Duration formatter
+# ══════════════════════════════════════════════════════════════════════════════
+
+- def:
+    name: format_duration
+    args: [[data, list<i32>], [var_si, i32]]
+    return: string
+    body:
+      - decl: [dlen, i32, { call: [data.len] }]
+      - if:
+          condition: { ge: [var_si, dlen] }
+          then:
+            - return: ""
+      - decl: [var_dt, i32, { call: [data.get, var_si] }]
+      - if: [{ eq: [var_dt, 1] }, true]
+        then:
+          - return: " permanently"
+      - if: [{ eq: [var_dt, 2] }, true]
+        then:
+          - decl: [var_vt, string, { call: [resolve_value_text, data, { +: [var_si, 1] }] }]
+          - if:
+              condition: { eq: [var_vt, "1"] }
+              then:
+                - return: " for 1 turn"
+          - return: " for ${var_vt} turns"
+      - if: [{ eq: [var_dt, 3] }, true]
+        then:
+          - decl: [var_ph, i32, 0]
+          - if:
+              condition: { lt: [{ +: [var_si, 1] }, dlen] }
+              then:
+                - set: [var_ph, { call: [data.get, { +: [var_si, 1] }] }]
+          - decl: [var_pn, string, { call: [phase_name, var_ph] }]
+          - return: " until the start of the next ${var_pn}"
+      - if: [{ eq: [var_dt, 4] }, true]
+        then:
+          - decl: [ph2, i32, 0]
+          - if:
+              condition: { lt: [{ +: [var_si, 1] }, dlen] }
+              then:
+                - set: [ph2, { call: [data.get, { +: [var_si, 1] }] }]
+          - decl: [pn2, string, { call: [phase_name, ph2] }]
+          - return: " until the end of ${pn2}"
+      - if: [{ eq: [var_dt, 5] }, true]
+        then:
+          - return: " while it remains equipped"
+      - if: [{ eq: [var_dt, 6] }, true]
+        then:
+          - return: " while it remains in play"
+      - return: ""
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Format a single effect bytecode list<i32>
+# ══════════════════════════════════════════════════════════════════════════════
+
+- def:
+    name: format_effect
+    args: [[var_e, list<i32>]]
+    return: string
+    body:
+      - decl: [elen, i32, { call: [var_e.len] }]
+      - if:
+          condition: { eq: [elen, 0] }
+          then:
+            - return: ""
+      - decl: [code, i32, { call: [var_e.get, 0] }]
+      - decl: [var_p1, i32, 0]
+      - decl: [var_p2, i32, 0]
+      - if:
+          condition: { gt: [elen, 1] }
+          then:
+            - set: [var_p1, { call: [var_e.get, 1] }]
+      - if:
+          condition: { gt: [elen, 2] }
+          then:
+            - set: [var_p2, { call: [var_e.get, 2] }]
+
+      # 1: DRAW_CARD [1, DeckType, ValueType, Value]
+      - if: [{ eq: [code, 1] }, true]
+        then:
+          - decl: [var_vd, string, { call: [resolve_value_text, var_e, 2] }]
+          - decl: [dn1, string, { call: [deck_type_name, var_p1] }]
+          - return: "Draw ${var_vd} card(s) from the ${dn1}."
+
+      # 2: DISCARD_CARD [2, Owner, CardType, ValueType, Value]
+      - if: [{ eq: [code, 2] }, true]
+        then:
+          - decl: [var_od, string, { call: [owner_name, var_p1] }]
+          - decl: [var_td, string, { call: [card_type_name, var_p2] }]
+          - decl: [vd2, string, { call: [resolve_value_text, var_e, 3] }]
+          - return: "${var_od} discards ${vd2} ${var_td}(s)."
+
+      # 3: MOVE_CARD [3, src_zone_id, dst_zone_id]
+      - if: [{ eq: [code, 3] }, true]
+        then:
+          - decl: [src3, string, { call: [zone_name, var_p1] }]
+          - decl: [dst3, string, { call: [zone_name, var_p2] }]
+          - return: "Move card from ${src3} to ${dst3}."
+
+      # 4: DESTROY_CARD [4, Owner, CardType]
+      - if: [{ eq: [code, 4] }, true]
+        then:
+          - decl: [od4, string, { call: [owner_name, var_p1] }]
+          - decl: [td4, string, { call: [card_type_name, var_p2] }]
+          - return: "Destroy ${od4} ${td4}."
+
+      # 10: DEAL_DAMAGE [10, Owner, Target, ValueType, Value]
+      - if: [{ eq: [code, 10] }, true]
+        then:
+          - decl: [tgt, string, { call: [target_name_lower, var_p2] }]
+          - decl: [vdmg, string, { call: [resolve_value_text, var_e, 3] }]
+          - return: "Deal ${vdmg} damage to target ${tgt}."
+
+      # 11: HEAL_DAMAGE [11, Owner, Target, ValueType, Value]
+      - if: [{ eq: [code, 11] }, true]
+        then:
+          - decl: [tgt11, string, { call: [target_name_lower, var_p2] }]
+          - decl: [vheal, string, { call: [resolve_value_text, var_e, 3] }]
+          - return: "Heal target ${tgt11} for ${vheal} damage."
+
+      # 12: MODIFY_STAT [12, Owner, Attr, ValueType, Value, Duration]
+      - if: [{ eq: [code, 12] }, true]
+        then:
+          - decl: [var_om, string, { call: [owner_name, var_p1] }]
+          - decl: [var_an, string, { call: [attribute_name, var_p2] }]
+          - decl: [var_vm, string, { call: [resolve_value_text, var_e, 3] }]
+          # duration after value bytes
+          - decl: [vt12, i32, 0]
+          - if:
+              condition: { gt: [elen, 3] }
+              then:
+                - set: [vt12, { call: [var_e.get, 3] }]
+          - decl: [vlen, i32, { call: [resolve_value_len, vt12] }]
+          - decl: [dur_idx, i32, { +: [3, vlen] }]
+          - decl: [dur, string, { call: [format_duration, var_e, dur_idx] }]
+          - return: "${var_om} gains ${var_vm} ${var_an}${dur}."
+
+      # 20: ADD_PASSIVE [20, PassiveID, OwnerType, [zone_id if owner_type 9/11], Duration]
+      - if: [{ eq: [code, 20] }, true]
+        then:
+          - decl: [pn20, string, { call: [passive_name, var_p1] }]
+          - decl: [op20, string, "target card"]
+          - decl: [dur_idx20, i32, 3]
+          - if:
+              condition: { gt: [elen, 2] }
+              then:
+                # owner types 9 (ALL_IN_ZONE) and 11 (ALL_ENEMY_IN_ZONE) carry var_an extra zone_id param
+                - if:
+                    condition: { "||": [{ eq: [var_p2, 9] }, { eq: [var_p2, 11] }] }
+                    then:
+                      - decl: [zp20, i32, 0]
+                      - if:
+                          condition: { gt: [elen, 3] }
+                          then:
+                            - set: [zp20, { call: [var_e.get, 3] }]
+                      - decl: [zn20, string, { call: [zone_name, zp20] }]
+                      - decl: [pfx20, string, "all"]
+                      - if:
+                          condition: { eq: [var_p2, 11] }
+                          then:
+                            - set: [pfx20, "all enemy"]
+                      - set: [op20, "${pfx20} cards in the ${zn20}"]
+                      - set: [dur_idx20, 4]
+                    else:
+                      - set: [op20, { call: [owner_object_phrase, var_p2, 1] }]
+          - decl: [dur20, string, { call: [format_duration, var_e, dur_idx20] }]
+          - return: "${op20} gains ${pn20}${dur20}."
+
+      # 21: REMOVE_PASSIVE [21, PassiveID, OwnerType, [zone_id if owner_type 9/11]]
+      - if: [{ eq: [code, 21] }, true]
+        then:
+          - decl: [pn21, string, { call: [passive_name, var_p1] }]
+          - decl: [op21, string, "target card"]
+          - if:
+              condition: { gt: [elen, 2] }
+              then:
+                - if:
+                    condition: { "||": [{ eq: [var_p2, 9] }, { eq: [var_p2, 11] }] }
+                    then:
+                      - decl: [zp21, i32, 0]
+                      - if:
+                          condition: { gt: [elen, 3] }
+                          then:
+                            - set: [zp21, { call: [var_e.get, 3] }]
+                      - decl: [zn21, string, { call: [zone_name, zp21] }]
+                      - decl: [pfx21, string, "all"]
+                      - if:
+                          condition: { eq: [var_p2, 11] }
+                          then:
+                            - set: [pfx21, "all enemy"]
+                      - set: [op21, "${pfx21} cards in the ${zn21}"]
+                    else:
+                      - set: [op21, { call: [owner_object_phrase, var_p2, 1] }]
+          - return: "Remove ${pn21} from ${op21}."
+
+      # 30: REVEAL_CARD
+      - if: [{ eq: [code, 30] }, true]
+        then:
+          - decl: [ow30, string, { call: [owner_possessive_name, var_p1] }]
+          - decl: [vd30, string, { call: [resolve_value_text, var_e, 2] }]
+          - return: "Reveal ${vd30} card(s) from ${ow30} hidden cards."
+
+      # 31: PEEK_HAND [31, Owner, ValueType, Value]
+      - if: [{ eq: [code, 31] }, true]
+        then:
+          - decl: [ow31, string, { call: [owner_possessive_name, var_p1] }]
+          - decl: [vd31, string, { call: [resolve_value_text, var_e, 2] }]
+          - return: "Look at ${vd31} card(s) in ${ow31} hand."
+
+      # 32: PEEK_DECK [32, Owner, ValueType, Value]
+      - if: [{ eq: [code, 32] }, true]
+        then:
+          - decl: [ow32, string, { call: [owner_possessive_name, var_p1] }]
+          - decl: [vd32, string, { call: [resolve_value_text, var_e, 2] }]
+          - return: "Look at ${vd32} card(s) from the top of ${ow32} deck."
+
+      # 40: COUNTER_SPELL
+      - if: [{ eq: [code, 40] }, true]
+        then:
+          - return: "Counter target spell."
+
+      # 41: SUMMON_TOKEN [41, Type, ValueType, Value]
+      - if: [{ eq: [code, 41] }, true]
+        then:
+          - decl: [vs41, string, "1"]
+          - if:
+              condition: { gt: [elen, 2] }
+              then:
+                - set: [vs41, { call: [resolve_value_text, var_e, 2] }]
+          - decl: [ct41, string, { call: [card_type_name_lower, var_p1] }]
+          - return: "Summon ${vs41} ${ct41} token(s)."
+
+      # 42: TRANSFORM [42, FromType, ToType]
+      - if: [{ eq: [code, 42] }, true]
+        then:
+          - decl: [from42, string, { call: [card_type_name_lower, var_p1] }]
+          - decl: [to42, string, { call: [card_type_name_lower, var_p2] }]
+          - return: "Transform target ${from42} into ${to42}."
+
+      # 43: DRAIN_MANA [43, Color, ValueType, Value]
+      - if: [{ eq: [code, 43] }, true]
+        then:
+          - decl: [mc43, string, { call: [mana_color_name, var_p1] }]
+          - decl: [vc43, string, { call: [resolve_value_text, var_e, 2] }]
+          - return: "Drain ${vc43} ${mc43}."
+
+      # 44: DESTROY_MANA [44, Color, ValueType, Value]
+      - if: [{ eq: [code, 44] }, true]
+        then:
+          - decl: [mc44, string, { call: [mana_color_name, var_p1] }]
+          - decl: [vc44, string, { call: [resolve_value_text, var_e, 2] }]
+          - return: "Destroy ${vc44} ${mc44}."
+
+      # 45: HEAL_SOULMAGE [45, Owner, ValueType, Value]
+      - if: [{ eq: [code, 45] }, true]
+        then:
+          - decl: [vh45, string, { call: [resolve_value_text, var_e, 2] }]
+          - return: "Heal Soul Mage for ${vh45} HP."
+
+      # 46: PARALYZE [46, Owner, Duration]
+      - if: [{ eq: [code, 46] }, true]
+        then:
+          - decl: [op46, string, { call: [owner_name, var_p1] }]
+          - decl: [dur46, string, { call: [format_duration, var_e, 2] }]
+          - return: "Paralyze ${op46}${dur46}."
+
+      # 47: REVIVE [47, Owner, Owner, Zone, CardType]
+      - if: [{ eq: [code, 47] }, true]
+        then:
+          - decl: [zone47, string, "combat zone"]
+          - if:
+              condition: { gt: [elen, 3] }
+              then:
+                - set: [zone47, { call: [zone_name, { call: [var_e.get, 3] }] }]
+          - decl: [ct47, string, "card"]
+          - if:
+              condition: { gt: [elen, 4] }
+              then:
+                - set: [ct47, { call: [card_type_name_lower, { call: [var_e.get, 4] }] }]
+          - decl: [ow47, string, { call: [owner_trigger_name, var_p2] }]
+          - return: "Revive ${ow47} ${ct47} from graveyard to ${zone47}."
+
+      # 48: COUNTER_TRAP
+      - if: [{ eq: [code, 48] }, true]
+        then:
+          - return: "Counter target trap."
+
+      # 49: CANT_BE_ATTACKED [49, Owner, Duration]
+      - if: [{ eq: [code, 49] }, true]
+        then:
+          - decl: [op49, string, { call: [owner_name, var_p1] }]
+          - decl: [dur49, string, { call: [format_duration, var_e, 2] }]
+          - return: "${op49} cannot be attacked${dur49}."
+
+      # 50: SOULMAGE_CANT_BE_ATTACKED [50, Owner, Duration]
+      - if: [{ eq: [code, 50] }, true]
+        then:
+          - decl: [op50, string, { call: [owner_possessive_name, var_p1] }]
+          - decl: [dur50, string, { call: [format_duration, var_e, 2] }]
+          - return: "${op50} Soul Mage cannot be attacked${dur50}."
+
+      # 51: PRODUCE_MANA [51, Color, ValueType, Value]
+      - if: [{ eq: [code, 51] }, true]
+        then:
+          - decl: [mc51, string, { call: [mana_color_name, var_p1] }]
+          - decl: [vc51, string, { call: [resolve_value_text, var_e, 2] }]
+          - return: "Produce ${vc51} ${mc51}."
+
+      - return: "[effect ${code}]"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Format a single trigger bytecode list<i32>
+# ══════════════════════════════════════════════════════════════════════════════
+
+- def:
+    name: format_trigger
+    args: [[var_t, list<i32>]]
+    return: string
+    body:
+      - decl: [tlen, i32, { call: [var_t.len] }]
+      - if:
+          condition: { eq: [tlen, 0] }
+          then:
+            - return: ""
+      - decl: [var_tt, i32, { call: [var_t.get, 0] }]
+      - decl: [var_p1, i32, 0]
+      - decl: [var_p2, i32, 0]
+      - if:
+          condition: { gt: [tlen, 1] }
+          then:
+            - set: [var_p1, { call: [var_t.get, 1] }]
+      - if:
+          condition: { gt: [tlen, 2] }
+          then:
+            - set: [var_p2, { call: [var_t.get, 2] }]
+      - decl: [var_ow, string, { call: [owner_name, var_p1] }]
+      - decl: [owt, string, { call: [owner_trigger_name, var_p1] }]
+
+      # 1: ON_PHASE_START
+      - if: [{ eq: [var_tt, 1] }, true]
+        then:
+          - decl: [pn1, string, { call: [phase_name, var_p1] }]
+          - return: "At start of ${pn1}"
+      # 2: ON_PHASE_END
+      - if: [{ eq: [var_tt, 2] }, true]
+        then:
+          - decl: [pn2, string, { call: [phase_name, var_p1] }]
+          - return: "At end of ${pn2}"
+      # 3: ON_EFFECT_CODE
+      - if: [{ eq: [var_tt, 3] }, true]
+        then:
+          - decl: [en3, string, { call: [ability_effect_code_name, var_p1] }]
+          - return: "When ${en3} occurs"
+      # 4: ON_CARD_MOVE
+      - if: [{ eq: [var_tt, 4] }, true]
+        then:
+          - decl: [z4a, string, { call: [zone_name, var_p1] }]
+          - decl: [z4b, string, { call: [zone_name, var_p2] }]
+          - return: "When a card moves from ${z4a} to ${z4b}"
+      # 5: ON_ATTACK
+      - if: [{ eq: [var_tt, 5] }, true]
+        then:
+          - return: "When ${owt} creature attacks"
+      # 6: ON_DEFEND
+      - if: [{ eq: [var_tt, 6] }, true]
+        then:
+          - return: "When ${owt} creature defends"
+      # 7: ON_DRAW
+      - if: [{ eq: [var_tt, 7] }, true]
+        then:
+          - decl: [dk7, string, { call: [deck_type_name, var_p2] }]
+          - return: "When ${owt} player draws from the ${dk7}"
+      # 8: ON_DESTROY
+      - if: [{ eq: [var_tt, 8] }, true]
+        then:
+          - decl: [ct8, string, { call: [card_type_name_lower, var_p2] }]
+          - return: "When ${owt} ${ct8} is destroyed"
+      # 9: ON_CARD_PLAYED
+      - if: [{ eq: [var_tt, 9] }, true]
+        then:
+          - decl: [ct9, string, { call: [card_type_name_lower, var_p2] }]
+          - return: "When ${owt} ${ct9} is played"
+      # 10: ON_HIT
+      - if: [{ eq: [var_tt, 10] }, true]
+        then:
+          - return: "When ${owt} creature hits"
+      # 11: ON_KILL
+      - if: [{ eq: [var_tt, 11] }, true]
+        then:
+          - return: "When ${owt} creature kills a creature"
+      # 12: ON_SOULMAGE_HIT
+      - if: [{ eq: [var_tt, 12] }, true]
+        then:
+          - return: "When ${owt} soulmage is hit"
+      # 13: ON_SOULMAGE_ATTACK
+      - if: [{ eq: [var_tt, 13] }, true]
+        then:
+          - return: "When ${owt} soulmage attacks"
+      # 14: ON_EQUIP
+      - if: [{ eq: [var_tt, 14] }, true]
+        then:
+          - return: "When ${owt} item is equipped"
+      # 15: ON_UNEQUIP
+      - if: [{ eq: [var_tt, 15] }, true]
+        then:
+          - return: "When ${owt} item is unequipped"
+      # 16: ON_DROP
+      - if: [{ eq: [var_tt, 16] }, true]
+        then:
+          - decl: [ct16, string, { call: [card_type_name_lower, var_p2] }]
+          - return: "When ${owt} ${ct16} is dropped"
+      # 17: ON_REVEAL
+      - if: [{ eq: [var_tt, 17] }, true]
+        then:
+          - return: "When ${owt} card is revealed"
+      # 18: ON_HIDE
+      - if: [{ eq: [var_tt, 18] }, true]
+        then:
+          - return: "When ${owt} card is hidden"
+      - return: "[trigger ${var_tt}]"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Format a single activation cost from the flat list<i32>
+# activation_cost is stored as flat: [type1, type2, ...]
+# But in CCG Gemini it's list<list<i32>> with params.
+# In 9rooms model it's list<i32> (just type IDs).
+# We format the cost types we have.
+# ══════════════════════════════════════════════════════════════════════════════
+
+- def:
+    name: format_cost_type
+    args: [[var_ct, i32]]
+    return: string
+    body:
+      # 1: MANA_COST
+      - if: [{ eq: [var_ct, 1] }, true]
+        then:
+          - return: "Mana"
+      # 2: LP_COST
+      - if: [{ eq: [var_ct, 2] }, true]
+        then:
+          - return: "Pay LP"
+      # 3: DROP_HANDCARD
+      - if: [{ eq: [var_ct, 3] }, true]
+        then:
+          - return: "Discard"
+      # 4: SACRIFICE
+      - if: [{ eq: [var_ct, 4] }, true]
+        then:
+          - return: "Sacrifice"
+      # 5: X_MANA_COST
+      - if: [{ eq: [var_ct, 5] }, true]
+        then:
+          - return: "Pay X Mana"
+      # 6: TAP_ACTIVATING_CREATURE
+      - if: [{ eq: [var_ct, 6] }, true]
+        then:
+          - return: "Tap"
+      # 7: TAP_FRIENDLY_CREATURE
+      - if: [{ eq: [var_ct, 7] }, true]
+        then:
+          - return: "Tap friendly creature"
+      # 8: MOVEMENT_COST
+      - if: [{ eq: [var_ct, 8] }, true]
+        then:
+          - return: "Pay Movement"
+      - return: "Cost"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Format one activation cost block list<i32>: [CostType, var_p1?, var_p2?]
+# ══════════════════════════════════════════════════════════════════════════════
+
+- def:
+    name: format_cost
+    args: [[var_e, list<i32>]]
+    return: string
+    body:
+      - decl: [elen, i32, { call: [var_e.len] }]
+      - if:
+          condition: { eq: [elen, 0] }
+          then:
+            - return: ""
+      - decl: [var_ct, i32, { call: [var_e.get, 0] }]
+      - decl: [var_p1, i32, 0]
+      - decl: [var_p2, i32, 0]
+      - if:
+          condition: { gt: [elen, 1] }
+          then:
+            - set: [var_p1, { call: [var_e.get, 1] }]
+      - if:
+          condition: { gt: [elen, 2] }
+          then:
+            - set: [var_p2, { call: [var_e.get, 2] }]
+      # 1: MANA_COST [1, ManaColor, Count]
+      - if:
+          condition: { eq: [var_ct, 1] }
+          then:
+            - decl: [var_mn, string, { call: [mana_color_name, var_p1] }]
+            - return: "Pay ${var_p2} ${var_mn}"
+      # 2: LP_COST [2, Count]
+      - if:
+          condition: { eq: [var_ct, 2] }
+          then:
+            - return: "Pay ${var_p1} LP"
+      # 3: DROP_HANDCARD [3, Count]
+      - if:
+          condition: { eq: [var_ct, 3] }
+          then:
+            - return: "Discard ${var_p1}"
+      # 4: SACRIFICE [4, CardType, Count]
+      - if:
+          condition: { eq: [var_ct, 4] }
+          then:
+            - decl: [var_tn, string, { call: [card_type_name, var_p1] }]
+            - return: "Sacrifice ${var_p2} ${var_tn}"
+      # 5: X_MANA_COST [5, ManaColor]
+      - if:
+          condition: { eq: [var_ct, 5] }
+          then:
+            - decl: [mn5, string, { call: [mana_color_name, var_p1] }]
+            - return: "Pay X ${mn5}"
+      # 6: TAP_ACTIVATING_CREATURE [6]
+      - if:
+          condition: { eq: [var_ct, 6] }
+          then:
+            - return: "Tap"
+      # 7: TAP_FRIENDLY_CREATURE [7]
+      - if:
+          condition: { eq: [var_ct, 7] }
+          then:
+            - return: "Tap friendly"
+      # 8: MOVEMENT_COST [8, Count]
+      - if:
+          condition: { eq: [var_ct, 8] }
+          then:
+            - return: "Pay ${var_p1} Movement"
+      - return: "Cost"
+
+- def:
+    name: cost_phrase
+    static_off: ["str_cmp"]
+    args: [[txt, string]]
+    return: string
+    body:
+      - decl: [rest, string, ""]
+      - if:
+          condition: { eq: [txt, "Tap"] }
+          then:
+            - return: "tap"
+      - if:
+          condition: { eq: [txt, "Tap friendly"] }
+          then:
+            - return: "tap a friendly creature"
+      - if:
+          condition: { eq: [txt, "Discard"] }
+          then:
+            - return: "discard"
+      - if:
+          condition: { eq: [txt, "Sacrifice"] }
+          then:
+            - return: "sacrifice"
+      - if:
+          condition: { eq: [{ call: [txt.index_of, "Pay "] }, 0] }
+          then:
+            - set: [rest, { call: [txt.substr, 4] }]
+            - return: "pay ${rest}"
+      - if:
+          condition: { eq: [{ call: [txt.index_of, "Discard "] }, 0] }
+          then:
+            - set: [rest, { call: [txt.substr, 8] }]
+            - return: "discard ${rest}"
+      - if:
+          condition: { eq: [{ call: [txt.index_of, "Sacrifice "] }, 0] }
+          then:
+            - set: [rest, { call: [txt.substr, 10] }]
+            - return: "sacrifice ${rest}"
+      - return: txt
+
+# ══════════════════════════════════════════════════════════════════════════════
+# generate_ability_text(ability) → string
+# Main entry point: generates full human-readable text for one ActiveAbility.
+# ══════════════════════════════════════════════════════════════════════════════
+
+- def:
+    name: generate_ability_text
+    args: [[var_ab, ptr<ActiveAbility>]]
+    return: string
+    body:
+      - decl: [trigger_text, string, ""]
+      - decl: [cost_text_generated, string, ""]
+      - decl: [effects_text, string, ""]
+      - decl: [clen, i32, { call: [var_ab.activation_cost.len] }]
+      - decl: [tlen, i32, { call: [var_ab.trigger.len] }]
+      - decl: [manual_text, string, var_ab.cost_text]
+
+      # Trigger text
+      - if:
+          condition: { gt: [tlen, 0] }
+          then:
+            - decl: [var_ti, i32, 0]
+            - while:
+                condition: { lt: [var_ti, tlen] }
+                body:
+                  - decl: [trig, list<i32>, { call: [var_ab.trigger.get, var_ti] }]
+                  - decl: [trig_str, string, { call: [format_trigger, trig] }]
+                  - if:
+                      condition: { gt: [{ call: [trig_str.len] }, 0] }
+                      then:
+                        - if:
+                            condition: { gt: [{ call: [trigger_text.len] }, 0] }
+                            then:
+                              - set: [trigger_text, "${trigger_text}, ${trig_str}"]
+                            else:
+                              - set: [trigger_text, trig_str]
+                  - set: [var_ti, { +: [var_ti, 1] }]
+
+      # Cost text
+      - if:
+          condition: { gt: [clen, 0] }
+          then:
+            - decl: [var_ci, i32, 0]
+            - while:
+                condition: { lt: [var_ci, clen] }
+                body:
+                  - decl: [var_cb, list<i32>, { call: [var_ab.activation_cost.get, var_ci] }]
+                  - decl: [ct_str_raw, string, { call: [format_cost, var_cb] }]
+                  - decl: [ct_str, string, { call: [cost_phrase, ct_str_raw] }]
+                  - if:
+                      condition: { gt: [{ call: [ct_str.len] }, 0] }
+                      then:
+                        - if:
+                            condition: { gt: [{ call: [cost_text_generated.len] }, 0] }
+                            then:
+                              - set: [cost_text_generated, "${cost_text_generated}, ${ct_str}"]
+                            else:
+                              - set: [cost_text_generated, ct_str]
+                  - set: [var_ci, { +: [var_ci, 1] }]
+
+      # Effects (always)
+      - decl: [elen, i32, { call: [var_ab.effects.len] }]
+      - if:
+          condition: { gt: [elen, 0] }
+          then:
+            - decl: [var_ei, i32, 0]
+            - while:
+                condition: { lt: [var_ei, elen] }
+                body:
+                  - decl: [eff, list<i32>, { call: [var_ab.effects.get, var_ei] }]
+                  - decl: [eff_str, string, { call: [format_effect, eff] }]
+                  - if:
+                      condition: { gt: [{ call: [eff_str.len] }, 0] }
+                      then:
+                        - if:
+                            condition: { gt: [{ call: [effects_text.len] }, 0] }
+                            then:
+                              - set: [effects_text, "${effects_text} ${eff_str}"]
+                            else:
+                              - set: [effects_text, eff_str]
+                  - set: [var_ei, { +: [var_ei, 1] }]
+
+      - if:
+          condition: { "&&": [{ gt: [{ call: [trigger_text.len] }, 0] }, { gt: [{ call: [cost_text_generated.len] }, 0] }] }
+          then:
+            - if:
+                condition: { gt: [{ call: [effects_text.len] }, 0] }
+                then:
+                  - return: "${trigger_text}, its controller can ${cost_text_generated} to ${effects_text}"
+                else:
+                  - return: "${trigger_text}, its controller can ${cost_text_generated}"
+      - if:
+          condition: { gt: [{ call: [trigger_text.len] }, 0] }
+          then:
+            - if:
+                condition: { gt: [{ call: [effects_text.len] }, 0] }
+                then:
+                  - return: "${trigger_text}: ${effects_text}"
+                else:
+                  - return: trigger_text
+      - if:
+          condition: { gt: [{ call: [cost_text_generated.len] }, 0] }
+          then:
+            - if:
+                condition: { gt: [{ call: [effects_text.len] }, 0] }
+                then:
+                  - return: "${cost_text_generated}: ${effects_text}"
+                else:
+                  - return: cost_text_generated
+      - if:
+          condition: { gt: [{ call: [effects_text.len] }, 0] }
+          then:
+            - return: effects_text
+      - return: manual_text
+
+# ══════════════════════════════════════════════════════════════════════════════
+# generate_card_text(card_ptr) → string
+# Generates full text for a card: passive abilities + all active abilities.
+# ══════════════════════════════════════════════════════════════════════════════
+
+- def:
+    name: generate_card_text
+    args: [[var_cp, ptr<Card>]]
+    return: string
+    body:
+      - decl: [result, string, ""]
+
+      # Passive abilities
+      - decl: [palen, i32, { call: [var_cp.passive_abilities.len] }]
+      - if:
+          condition: { gt: [palen, 0] }
+          then:
+            - decl: [var_pi, i32, 0]
+            - while:
+                condition: { lt: [var_pi, palen] }
+                body:
+                  - decl: [pa_id, i32, { call: [var_cp.passive_abilities.get, var_pi] }]
+                  - decl: [pa_str, string, { call: [passive_name, pa_id] }]
+                  - if:
+                      condition: { gt: [{ call: [result.len] }, 0] }
+                      then:
+                        - set: [result, "${result}, ${pa_str}"]
+                      else:
+                        - set: [result, pa_str]
+                  - set: [var_pi, { +: [var_pi, 1] }]
+
+      # Active abilities
+      - decl: [aalen, i32, { call: [var_cp.active_abilities.len] }]
+      - if:
+          condition: { gt: [aalen, 0] }
+          then:
+            - if:
+                condition: { gt: [{ call: [result.len] }, 0] }
+                then:
+                  - set: [result, "${result} | "]
+            - decl: [var_ai, i32, 0]
+            - while:
+                condition: { lt: [var_ai, aalen] }
+                body:
+                  - decl: [var_aa, ptr<ActiveAbility>, { call: [var_cp.active_abilities.get, var_ai] }]
+                  - decl: [aa_str, string, { call: [generate_ability_text, var_aa] }]
+                  - if:
+                      condition: { gt: [{ call: [aa_str.len] }, 0] }
+                      then:
+                        - if:
+                            condition: { gt: [var_ai, 0] }
+                            then:
+                              - set: [result, "${result}| ${aa_str}"]
+                            else:
+                              - set: [result, "${result}${aa_str}"]
+                  - set: [var_ai, { +: [var_ai, 1] }]
+      - return: result
+
+# ══════════════════════════════════════════════════════════════════════════════
+# JSON Serialization Helpers — Card → JSON fields
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ser_int_list_json — list<i32> → "[var_N,var_N,...]"
+- def:
+    name: ser_int_list_json
+    args: [[lst, list<i32>]]
+    return: string
+    body:
+      - decl: [var_n, i32, { call: [lst.len] }]
+      - decl: [result, string, "["]
+      - decl: [var_i, i32, 0]
+      - while:
+          condition: { "<": [var_i, var_n] }
+          body:
+            - decl: [var_v, i32, { call: [lst.get, var_i] }]
+            - if:
+                condition: { eq: [var_i, 0] }
+                then:
+                  - set: [result, "${result}${var_v}"]
+                else:
+                  - set: [result, "${result},${var_v}"]
+            - set: [var_i, { +: [var_i, 1] }]
+      - return: "${result}]"
+
+# ser_int_list_list_json — list<list<i32>> → "[[var_N,...],[var_N,...]]"
+- def:
+    name: ser_int_list_list_json
+    args: [[lst, list<list<i32>>]]
+    return: string
+    body:
+      - decl: [var_n, i32, { call: [lst.len] }]
+      - decl: [result, string, "["]
+      - decl: [var_i, i32, 0]
+      - while:
+          condition: { "<": [var_i, var_n] }
+          body:
+            - decl: [inner, list<i32>, { call: [lst.get, var_i] }]
+            - decl: [inner_json, string, { call: [ser_int_list_json, inner] }]
+            - if:
+                condition: { eq: [var_i, 0] }
+                then:
+                  - set: [result, "${result}${inner_json}"]
+                else:
+                  - set: [result, "${result},${inner_json}"]
+            - set: [var_i, { +: [var_i, 1] }]
+      - return: "${result}]"
+
+# ser_active_ability_json — ptr<ActiveAbility> → JSON object string
+- def:
+    name: ser_active_ability_json
+    args: [[var_ab, ptr<ActiveAbility>]]
+    return: string
+    body:
+      - decl: [cost_json, string, { call: [ser_int_list_list_json, var_ab.activation_cost] }]
+      - decl: [trig_json, string, { call: [ser_int_list_list_json, var_ab.trigger] }]
+      - decl: [eff_json,  string, { call: [ser_int_list_list_json, var_ab.effects] }]
+      - return: "{\"cost_text\":\"${var_ab.cost_text}\",\"activation_cost\":${cost_json},\"trigger\":${trig_json},\"effects\":${eff_json}}"
+
+# ser_pa_json — ptr<Card> → passive_abilities as "[var_N,var_N,...]"
+- def:
+    name: ser_pa_json
+    args: [[var_cp, ptr<Card>]]
+    return: string
+    body:
+      - decl: [var_n, i32, { call: [var_cp.passive_abilities.len] }]
+      - decl: [result, string, "["]
+      - decl: [var_i, i32, 0]
+      - while:
+          condition: { "<": [var_i, var_n] }
+          body:
+            - decl: [var_pa, i32, { call: [var_cp.passive_abilities.get, var_i] }]
+            - if:
+                condition: { eq: [var_i, 0] }
+                then:
+                  - set: [result, "${result}${var_pa}"]
+                else:
+                  - set: [result, "${result},${var_pa}"]
+            - set: [var_i, { +: [var_i, 1] }]
+      - return: "${result}]"
+
+# ser_aa_json — ptr<Card> → active_abilities as "[{...},...]"
+- def:
+    name: ser_aa_json
+    args: [[var_cp, ptr<Card>]]
+    return: string
+    body:
+      - decl: [var_n, i32, { call: [var_cp.active_abilities.len] }]
+      - decl: [result, string, "["]
+      - decl: [var_i, i32, 0]
+      - while:
+          condition: { "<": [var_i, var_n] }
+          body:
+            - decl: [var_ab, ptr<ActiveAbility>, { call: [var_cp.active_abilities.get, var_i] }]
+            - decl: [ab_json, string, { call: [ser_active_ability_json, var_ab] }]
+            - if:
+                condition: { eq: [var_i, 0] }
+                then:
+                  - set: [result, "${result}${ab_json}"]
+                else:
+                  - set: [result, "${result},${ab_json}"]
+            - set: [var_i, { +: [var_i, 1] }]
+      - return: "${result}]"
+
+# ser_mana_map_json — map<ManaColor:i32> → {"1":var_N,"2":var_N,...} (all 10 colors, string keys)
+- def:
+    name: ser_mana_map_json
+    args: [[var_m, map<string:i32>]]
+    return: string
+    body:
+      - decl: [var_v1,  i32, { call: [var_m.get, "1"] }]
+      - decl: [var_v2,  i32, { call: [var_m.get, "2"] }]
+      - decl: [var_v3,  i32, { call: [var_m.get, "3"] }]
+      - decl: [var_v4,  i32, { call: [var_m.get, "4"] }]
+      - decl: [var_v5,  i32, { call: [var_m.get, "5"] }]
+      - decl: [var_v6,  i32, { call: [var_m.get, "6"] }]
+      - decl: [var_v7,  i32, { call: [var_m.get, "7"] }]
+      - decl: [var_v8,  i32, { call: [var_m.get, "8"] }]
+      - decl: [var_v9,  i32, { call: [var_m.get, "9"] }]
+      - decl: [v10, i32, { call: [var_m.get, "10"] }]
+      - return: "{\"1\":${var_v1},\"2\":${var_v2},\"3\":${var_v3},\"4\":${var_v4},\"5\":${var_v5},\"6\":${var_v6},\"7\":${var_v7},\"8\":${var_v8},\"9\":${var_v9},\"10\":${v10}}"

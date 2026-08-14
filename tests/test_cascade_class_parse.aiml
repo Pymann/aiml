@@ -1,0 +1,47 @@
+# M1a — `- cascade_class:` parses, registers, and validates its wiring:
+#   • exactly one of binds_cascade / binds_enum
+#   • carrier + taker required
+#   • bound cascade|enum exists, members are declared classes (forward refs OK —
+#     the pool is declared BEFORE its member class here, on purpose).
+# No codegen yet (render() is a later milestone), so a valid pool just compiles.
+
+- enum:
+    name: EffCode
+    values:
+      - draw_card: 1
+      - heal_card: 2
+
+- cascade:
+    name: EffPipe
+    opcode: EffCode
+    nodes:
+      - [draw_card]
+      - [heal_card]
+
+- model: { name: DraftBuf, fields: [[parts, list<string>]] }
+
+# Pool declared FIRST — its member class SkelText is defined further down.
+- cascade_class:
+    name: EffText
+    binds_cascade: EffPipe
+    carrier: DraftBuf
+    taker:   DraftBuf
+    members: [SkelText]
+
+- class:
+    name: SkelText
+    methods:
+      - def:
+          name: noop
+          return: i32
+          body:
+            - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [skel, ptr<SkelText>, { new: SkelText }]
+      - if: { condition: { neq: [{ call: [skel.noop] }, 0] }, then: [{ call: [sys.exit, 1] }] }
+      - print: ["PASS cascade_class_parse: pool registered + wiring validated"]
+      - return: 0

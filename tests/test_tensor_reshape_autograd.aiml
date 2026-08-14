@@ -1,0 +1,56 @@
+# Repro: tensor.reshape ist nicht autograd-tracked.
+#
+# Beobachtung in DataCreatures/itemgen:
+#   logits_2d = matmul(...)               # shape [1, K], requires_grad
+#   logits_1d = tensor.reshape(logits_2d, K)
+#   loss = -log(softmax(logits_1d))[target]
+#   tensor.backward(loss)
+#
+# → Parameter-grads bleiben null, Modell lernt nicht.  Ursache: reshape
+# macht keinen record_node und unterbricht damit den compute-graph.
+#
+# Erwarteter Status nach Fix: param.grad != null und nicht-trivial nach
+# backward durch eine reshape-Kante.
+
+- call: [tensor.begin_graph]
+
+- decl: [var_w, tensor, { call: [tensor.ones, 2, 3] }]
+- call: [var_w.set_requires_grad, 1]
+- call: [tensor.fill, var_w, 0.5]
+
+# Forward: y = sum(reshape(var_w * 2, 6))
+- decl: [var_w2,      tensor, { call: [tensor.mul_scalar, var_w, 2.0] }]   # [2,3], grad-tracked
+- decl: [flat,    tensor, { call: [tensor.reshape, var_w2, 6] }]        # [6]    — reshape!
+- decl: [loss,    tensor, { call: [tensor.sum, flat, -1] }]         # scalar
+
+- call: [tensor.backward, loss]
+
+# Expected: jeder Eintrag in d(loss)/d(var_w) = 2.0 (weil var_w[i,j] → 2*var_w[i,j] → sum).
+- decl: [var_wg, tensor, { call: [var_w.grad] }]
+- if:
+    condition: { eq: [var_wg, null] }
+    then:
+      - print: ["FAIL: var_w.grad is null after backward — reshape breaks graph"]
+      - exit: [1]
+
+- decl: [var_g0, f32, { call: [var_wg.get, 0] }]
+- decl: [var_g3, f32, { call: [var_wg.get, 3] }]
+- decl: [var_g5, f32, { call: [var_wg.get, 5] }]
+
+- if:
+    condition: { neq: [var_g0, 2.0] }
+    then:
+      - print: ["FAIL: var_w.grad[0]=${var_g0}, expected 2.0"]
+      - exit: [1]
+- if:
+    condition: { neq: [var_g3, 2.0] }
+    then:
+      - print: ["FAIL: var_w.grad[3]=${var_g3}, expected 2.0"]
+      - exit: [1]
+- if:
+    condition: { neq: [var_g5, 2.0] }
+    then:
+      - print: ["FAIL: var_w.grad[5]=${var_g5}, expected 2.0"]
+      - exit: [1]
+
+- print: ["PASS test_tensor_reshape_autograd"]

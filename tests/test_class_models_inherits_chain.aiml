@@ -1,0 +1,31 @@
+# Probe: class with `models: [DerivedModel]` where DerivedModel inherits from
+# another model in the same file.  This exercises the single-pass registration
+# order: ParentModel → DerivedModel (deferred until parent ready) → Behavior class
+# (needs DerivedModel registered).
+
+- model:
+    name: Base
+    fields:
+      - [var_a, i32, 0]
+
+- model:
+    name: Derived
+    inherits: Base
+    fields:
+      - [var_b, i32, 0]
+
+- class:
+    name: DerivedBehavior
+    models: [Derived]
+    methods:
+      - def:
+          name: sum
+          return: i32
+          args: []
+          body:
+            - return: { +: [<.var_a, <.var_b] }
+
+- decl: [var_d, DerivedBehavior]
+- set: [var_d.var_a, 3]
+- set: [var_d.var_b, 4]
+- print: ["sum = ${call: [var_d.sum]}"]

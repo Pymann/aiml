@@ -1,0 +1,143 @@
+# static-check: off
+# Minimal-RPC-Test: Response mit MEHREREN `list<DerivedData>`, wobei
+# DerivedData via `inherits:` von einem gemeinsamen Header erbt — übertragen
+# über den ECHTEN binären Mirror-RPC-Pfad (send_and_await + set_result).
+#
+# Motivation (9rooms_v2 Card-Refactor Phase C): das Wire-Format trägt die
+# Karten als 7 homogene `list<XData>` (XData inherits CardHeader) statt als
+# `ptr<CardBase>` (nicht serialisierbar, spec/45 §8) oder fetten Envelope.
+# Dieser Test beweist ISOLIERT, dass genau dieses Muster den binären
+# RPC-Wire übersteht: geerbte Header-Felder + typ-eigene Felder, mehrere
+# heterogene typed Listen in einer Response.
+#
+# Expected exit code: 0
+
+# ── Gemeinsamer Header + zwei erbende Subtypen (analog CardHeader/CreatureData)
+- model:
+    name: HeaderData
+    fields:
+      - [uid,   string]
+      - [kind,  i32]
+      - [label, string]
+
+- model:
+    name: BeastData
+    inherits: HeaderData
+    fields:
+      - [atk, i32]
+      - [hpv, i32]
+
+- model:
+    name: FuelData
+    inherits: HeaderData
+    fields:
+      - [color, string]
+
+- model:
+    name: QueryReq
+    fields: [[who, string]]
+
+# Response mit ZWEI homogenen typed Listen (heterogene Subtypen getrennt).
+- model:
+    name: BundleResp
+    fields:
+      - [success, i32]
+      - [beasts,  list<BeastData>]
+      - [fuels,   list<FuelData>]
+
+- def:
+    name: server_thread
+    body:
+      - decl: [sess, mirror_session, { call: [mirror.listen, "ws://127.0.0.1:19973"] }]
+      - decl: [running, i32, 1]
+      - decl: [tries,   i32, 0]
+      - while:
+          condition: { eq: [running, 1] }
+          body:
+            - call: [sess.update]
+            - if:
+                condition: { gt: [{ call: [sess.has_rpc] }, 0] }
+                then:
+                  - decl: [rpc, rpc_event, { call: [sess.next_rpc] }]
+                  - if:
+                      condition: { eq: [rpc.method, "query"] }
+                      then:
+                        - decl: [req, QueryReq]
+                        - decl: [rc_val, i32, { call: [sess.decode_rpc, rpc, req] }]
+                        - if:
+                            condition: { eq: [rc_val, 0] }
+                            then:
+                              - decl: [resp, BundleResp]
+                              - set: [resp.success, 1]
+                              # zwei Beasts
+                              - decl: [beast0, BeastData]
+                              - set: [beast0.uid,   "b0"]
+                              - set: [beast0.kind,  1]
+                              - set: [beast0.label, "Dragon"]
+                              - set: [beast0.atk,   4]
+                              - set: [beast0.hpv,   7]
+                              - call: [resp.beasts.push, beast0]
+                              - decl: [beast1, BeastData]
+                              - set: [beast1.uid,   "b1"]
+                              - set: [beast1.kind,  1]
+                              - set: [beast1.label, "Wyrm"]
+                              - set: [beast1.atk,   9]
+                              - set: [beast1.hpv,   3]
+                              - call: [resp.beasts.push, beast1]
+                              # ein Fuel
+                              - decl: [fuel0, FuelData]
+                              - set: [fuel0.uid,   "f0"]
+                              - set: [fuel0.kind,  3]
+                              - set: [fuel0.label, "FireSource"]
+                              - set: [fuel0.color, "red"]
+                              - call: [resp.fuels.push, fuel0]
+                              - call: [sess.send_rpc, rpc.peer_id, "set_result", 0, resp]
+                              - set: [running, 0]
+            - call: [time.sleep_ms, 20]
+            - set: [tries, { +: [tries, 1] }]
+            - if: { condition: { gt: [tries, 200] }, then: [{ set: [running, 0] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [host_th, thread_handle, { spawn: [server_thread] }]
+      - call: [time.sleep_ms, 150]
+
+      - decl: [client, mirror_session, { call: [mirror.connect_timeout, "ws://127.0.0.1:19973", 3000] }]
+      - call: [time.sleep_ms, 80]
+      - call: [client.update]
+
+      - decl: [req, QueryReq]
+      - set: [req.who, "alice"]
+      - decl: [resp, ptr<BundleResp>, { new: BundleResp }]
+      - decl: [got, i32, { call: [client.send_and_await, 0, "query", req, resp, 4000] }]
+
+      - decl: [fails, i32, 0]
+      - if: { condition: { eq: [got, 0] }, then: [{ print: ["FAIL send_and_await timed out"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [resp.success, 1] }, then: [{ print: ["FAIL success=${resp.success}"] }, { set: [fails, { +: [fails, 1] }] }] }
+
+      # Beasts: Anzahl + geerbte (label) + typ-eigene (atk/hpv) Felder
+      - if: { condition: { neq: [resp.beasts.len, 2] }, then: [{ print: ["FAIL beasts.len=${resp.beasts.len} want 2"] }, { call: [sys.exit, 1] }] }
+      - decl: [bea0, BeastData, { at: [resp.beasts, 0] }]
+      - decl: [bea1, BeastData, { at: [resp.beasts, 1] }]
+      - if: { condition: { neq: [bea0.label, "Dragon"] }, then: [{ print: ["FAIL b0.label='${bea0.label}'"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [bea0.atk, 4] }, then: [{ print: ["FAIL b0.atk=${bea0.atk}"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [bea0.hpv, 7] }, then: [{ print: ["FAIL b0.hpv=${bea0.hpv}"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [bea1.label, "Wyrm"] }, then: [{ print: ["FAIL b1.label='${bea1.label}'"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [bea1.atk, 9] }, then: [{ print: ["FAIL b1.atk=${bea1.atk}"] }, { set: [fails, { +: [fails, 1] }] }] }
+
+      # Fuels: geerbte (label) + typ-eigene (color)
+      - if: { condition: { neq: [resp.fuels.len, 1] }, then: [{ print: ["FAIL fuels.len=${resp.fuels.len} want 1"] }, { call: [sys.exit, 1] }] }
+      - decl: [fue0, FuelData, { at: [resp.fuels, 0] }]
+      - if: { condition: { neq: [fue0.label, "FireSource"] }, then: [{ print: ["FAIL f0.label='${fue0.label}'"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [fue0.color, "red"] }, then: [{ print: ["FAIL f0.color='${fue0.color}'"] }, { set: [fails, { +: [fails, 1] }] }] }
+
+      - call: [host_th.join]
+      - call: [client.close]
+
+      - if:
+          condition: { eq: [fails, 0] }
+          then: [{ print: ["PASS rpc_typed_lists_inherited: inherited typed lists survive binary RPC wire"] }]
+          else: [{ print: ["FAIL rpc_typed_lists_inherited: ${fails} mismatch(es)"] }]
+      - return: fails

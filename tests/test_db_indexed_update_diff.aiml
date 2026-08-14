@@ -1,0 +1,91 @@
+# AionDB db_indexed: index diff on update.
+# Validates:
+#   - set() with new value: old index entry loses the id, new one gains it
+#   - set() with unchanged value: idempotent (no duplicate, no leak)
+#   - i32-typed indexed field works (parity with string-typed)
+#   - finding_by("field", ...) works after set() of an already-present key
+# Reference: aiml/doc/backlog/2026-06-06_aiondb_indexed_fields.md
+# Expected exit code: 0
+
+- model:
+    name: Item
+    fields:
+      - [item_id, string]
+      - [type,    i32, 0, { db_indexed: true }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [items, Kv<string:Item>]
+      - set:  [items, { call: [db.open_kv, "items_idx_diff"] }]
+
+      # 2 items with type=1.
+      - decl: [var_a, Item]
+      - set:  [var_a.item_id, "var_a"]
+      - set:  [var_a.type,    1]
+      - call: [items.set, "var_a", var_a]
+
+      - decl: [var_b, Item]
+      - set:  [var_b.item_id, "var_b"]
+      - set:  [var_b.type,    1]
+      - call: [items.set, "var_b", var_b]
+
+      - decl: [var_t1, list<string>, { call: [items.findings_by, "type", 1] }]
+      - if:
+          condition: { neq: [var_t1.len, 2] }
+          then:
+            - print: ["FAIL diff_t1=${var_t1.len} (want 2)"]
+            - call:  [sys.exit, 1]
+
+      # Update "var_a" to type=2 — old index entry loses "var_a", new gains "var_a".
+      - set:  [var_a, { call: [items.get_copy, "var_a"] }]
+      - set:  [var_a.type, 2]
+      - call: [items.set, "var_a", var_a]
+
+      - decl: [t1b, list<string>, { call: [items.findings_by, "type", 1] }]
+      - if:
+          condition: { neq: [t1b.len, 1] }
+          then:
+            - print: ["FAIL diff_t1_after=${t1b.len} (want 1, only 'var_b')"]
+            - call:  [sys.exit, 1]
+
+      - decl: [var_t2, list<string>, { call: [items.findings_by, "type", 2] }]
+      - if:
+          condition: { neq: [var_t2.len, 1] }
+          then:
+            - print: ["FAIL diff_t2=${var_t2.len} (want 1, only 'var_a')"]
+            - call:  [sys.exit, 1]
+
+      # Re-set "var_b" with same type=1 — idempotent, no duplicate id in index.
+      - set:  [var_b, { call: [items.get_copy, "var_b"] }]
+      - call: [items.set, "var_b", var_b]
+
+      - decl: [t1c, list<string>, { call: [items.findings_by, "type", 1] }]
+      - if:
+          condition: { neq: [t1c.len, 1] }
+          then:
+            - print: ["FAIL diff_t1_idempotent=${t1c.len} (want 1, NO duplicate)"]
+            - call:  [sys.exit, 1]
+
+      # Re-set "var_b" but back to type=2 — now var_t2 has both var_a, var_b.
+      - set:  [var_b, { call: [items.get_copy, "var_b"] }]
+      - set:  [var_b.type, 2]
+      - call: [items.set, "var_b", var_b]
+
+      - decl: [t2b, list<string>, { call: [items.findings_by, "type", 2] }]
+      - if:
+          condition: { neq: [t2b.len, 2] }
+          then:
+            - print: ["FAIL diff_t2_grown=${t2b.len} (want 2)"]
+            - call:  [sys.exit, 1]
+
+      - decl: [t1d, list<string>, { call: [items.findings_by, "type", 1] }]
+      - if:
+          condition: { neq: [t1d.len, 0] }
+          then:
+            - print: ["FAIL diff_t1_drained=${t1d.len} (want 0)"]
+            - call:  [sys.exit, 1]
+
+      - print: ["AionDB db_indexed update-diff PASS"]
+      - return: 0

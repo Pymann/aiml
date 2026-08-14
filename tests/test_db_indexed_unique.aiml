@@ -1,0 +1,82 @@
+# AionDB db_indexed with unique:true — finding_by("field", ...) returns var_a single string
+# instead of list<string>.  Verifies: lookup, no-match → "", update moves the
+# unique mapping.
+# Reference: aiml/doc/backlog/2026-06-06_aiondb_indexed_fields.md
+# Expected exit code: 0
+
+- model:
+    name: User
+    fields:
+      - [user_id, string]
+      - [email,   string, "", { db_indexed: true, unique: true }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [users, Kv<string:User>]
+      - set:  [users, { call: [db.open_kv, "users_idx_unique"] }]
+
+      - decl: [var_a, User]
+      - set:  [var_a.user_id, "var_a"]
+      - set:  [var_a.email,   "alice@example.com"]
+      - call: [users.set, "var_a", var_a]
+
+      - decl: [var_b, User]
+      - set:  [var_b.user_id, "var_b"]
+      - set:  [var_b.email,   "bob@example.com"]
+      - call: [users.set, "var_b", var_b]
+
+      # finding_by_email returns string (because unique:true).
+      - decl: [aid, string, { call: [users.finding_by, "email", "alice@example.com"] }]
+      - if:
+          condition: { eq: [{ eq: [aid, "var_a"] }, 0] }
+          then:
+            - print: ["FAIL unique_aid=${aid} (want 'var_a')"]
+            - call:  [sys.exit, 1]
+
+      - decl: [bid, string, { call: [users.finding_by, "email", "bob@example.com"] }]
+      - if:
+          condition: { eq: [{ eq: [bid, "var_b"] }, 0] }
+          then:
+            - print: ["FAIL unique_bid=${bid} (want 'var_b')"]
+            - call:  [sys.exit, 1]
+
+      # No match → empty string.
+      - decl: [none, string, { call: [users.finding_by, "email", "nobody@example.com"] }]
+      - if:
+          condition: { eq: [{ eq: [none, ""] }, 0] }
+          then:
+            - print: ["FAIL unique_none=${none} (want '')"]
+            - call:  [sys.exit, 1]
+
+      # Update Alice's email — old mapping must vanish, new one must point to var_a.
+      - set:  [var_a, { call: [users.get_copy, "var_a"] }]
+      - set:  [var_a.email, "alice2@example.com"]
+      - call: [users.set, "var_a", var_a]
+
+      - decl: [old, string, { call: [users.finding_by, "email", "alice@example.com"] }]
+      - if:
+          condition: { eq: [{ eq: [old, ""] }, 0] }
+          then:
+            - print: ["FAIL unique_old=${old} (want '' after rename)"]
+            - call:  [sys.exit, 1]
+
+      - decl: [aid2, string, { call: [users.finding_by, "email", "alice2@example.com"] }]
+      - if:
+          condition: { eq: [{ eq: [aid2, "var_a"] }, 0] }
+          then:
+            - print: ["FAIL unique_aid2=${aid2} (want 'var_a')"]
+            - call:  [sys.exit, 1]
+
+      # Delete var_b — bob@ should no longer resolve.
+      - call: [users.delete, "var_b"]
+      - decl: [old_b, string, { call: [users.finding_by, "email", "bob@example.com"] }]
+      - if:
+          condition: { eq: [{ eq: [old_b, ""] }, 0] }
+          then:
+            - print: ["FAIL unique_old_b=${old_b} (want '' after delete)"]
+            - call:  [sys.exit, 1]
+
+      - print: ["AionDB db_indexed unique PASS"]
+      - return: 0

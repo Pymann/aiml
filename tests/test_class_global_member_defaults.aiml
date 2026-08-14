@@ -1,0 +1,45 @@
+# Test: declared per-member default values on a class are applied when the
+# class is instantiated as a global variable.
+#
+# Repro from DataCreatures' ClientApp refactor (2026-06-06): the class
+# defined `[auth_nid, i32, -1]` as a member default, but
+#   `decl: [g_app, ClientApp, null, { extern: true }]`
+# zero-initialised the struct → `g_app.auth_nid == 0` instead of -1.
+# Logic that branched on `lt: [auth_nid, 0]` never fired, breaking the
+# whole login/session-bind code path.
+#
+# Expected exit code: 0 (i.e. the field is -1 — the default was respected).
+
+- class:
+    name: AppState
+    members:
+      - [counter, i32, 42]
+      - [flag,    i32, -1]
+      - [stage,   i32, 7]
+
+- decl: [g_app, AppState]
+
+- print: ["counter=${g_app.counter}"]
+- print: ["flag=${g_app.flag}"]
+- print: ["stage=${g_app.stage}"]
+
+- if:
+    condition: { neq: [g_app.counter, 42] }
+    then:
+      - print: ["FAIL: counter=${g_app.counter} expected 42"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [g_app.flag, -1] }
+    then:
+      - print: ["FAIL: flag=${g_app.flag} expected -1"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [g_app.stage, 7] }
+    then:
+      - print: ["FAIL: stage=${g_app.stage} expected 7"]
+      - call: [sys.exit, 1]
+
+- print: ["PASS"]
+- call: [sys.exit, 0]

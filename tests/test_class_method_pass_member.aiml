@@ -1,0 +1,54 @@
+# Repro: class method passes class-member (list/map) as arg to another class
+# method.  Causes runtime memory corruption / SIGSEGV.
+#
+# Expected output:
+#   added one, vocab.len=1
+#   added two, vocab.len=2
+#   added one, vocab.len=2 (idempotent)
+#
+# Actual (bug): segfault during the second vocab_add call, or earlier.
+
+- class:
+    name: VocabHolder
+    members:
+      - [vocab,       list<string>]
+      - [vocab_index, map<string:i32>]
+    methods:
+      # Free-ish helper called from another class method.  It takes the
+      # vocab list/map as arguments — caller passes `<.vocab` and
+      # `<.vocab_index` (class member access).
+      - def:
+          name: vocab_add_helper
+          args: [[v_list, list<string>], [v_idx, map<string:i32>], [tok, string]]
+          return: i32
+          body:
+            - if:
+                condition: { eq: [{ call: [v_idx.contains, tok] }, 1] }
+                then: [{ return: { call: [v_idx.get, tok] } }]
+            - decl: [new_idx, i32, v_list.len]
+            - call: [v_list.push, tok]
+            - call: [v_idx.put, tok, new_idx]
+            - return: new_idx
+
+      - def:
+          name: add
+          args: [[tok, string]]
+          return: i32
+          body:
+            # PASSING CLASS-MEMBER AS ARG to another class method — triggers the bug.
+            - decl: [idx, i32, { call: [<.vocab_add_helper, <.vocab, <.vocab_index, tok] }]
+            - return: idx
+
+- def:
+    name: main
+    args: []
+    return: i32
+    body:
+      - decl: [holder, VocabHolder]
+      - decl: [idx_one, i32, { call: [holder.add, "one"] }]
+      - call: [log.info, "added one, vocab.len=${holder.vocab.len}"]
+      - decl: [idx_two, i32, { call: [holder.add, "two"] }]
+      - call: [log.info, "added two, vocab.len=${holder.vocab.len}"]
+      - decl: [idx_again, i32, { call: [holder.add, "one"] }]
+      - call: [log.info, "added one again, vocab.len=${holder.vocab.len} (should still be 2)"]
+      - return: 0

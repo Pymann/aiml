@@ -1,0 +1,46 @@
+# Repro-Lib: dasselbe typed-Kv wie in main + Setter über lib-eigene
+# Compilation-Unit. Schema ist absichtlich tief (mehrere nested Klassen
+# mit list<>-Feldern), um das echte DataCreature-Layout besser zu spiegeln.
+
+- model:
+    name: ReproInner
+    fields:
+      - [inner_id, string]
+      - [tags,     list<string>]
+      - [counts,   list<i32>]
+
+- model:
+    name: ReproMid
+    fields:
+      - [mid_id,    string]
+      - [inner,     ReproInner]
+      - [name_list, list<string>]
+
+- model:
+    name: ReproOuter
+    fields:
+      - [outer_id, string]
+      - [mid,      ReproMid]
+      - [extra,    list<string>]
+      - [flags,    list<i32>]
+
+- decl: [repro_kv, Kv<string:ReproOuter>, { call: [db.open_kv, "repro_things.kvwal", {persist: true}] }]
+
+- def:
+    name: lib_put_thing
+    args: [[var_id, string]]
+    body:
+      - decl: [obj, ReproOuter]
+      - set: [obj.outer_id, var_id]
+      - set: [obj.mid.mid_id, "mid-${var_id}"]
+      - set: [obj.mid.inner.inner_id, "inner-${var_id}"]
+      - call: [obj.mid.inner.tags.push, "deep-tag-1"]
+      - call: [obj.mid.inner.tags.push, "deep-tag-2"]
+      - call: [obj.mid.inner.counts.push, 7]
+      - call: [obj.mid.inner.counts.push, 42]
+      - call: [obj.mid.name_list.push, "mid-name-a"]
+      - call: [obj.extra.push, "extra-x"]
+      - call: [obj.flags.push, 1]
+      - call: [obj.flags.push, 2]
+      - call: [obj.flags.push, 3]
+      - call: [repro_kv.set, var_id, obj]

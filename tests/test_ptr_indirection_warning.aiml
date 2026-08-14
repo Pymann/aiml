@@ -1,0 +1,51 @@
+# ExpectedStderr: over-indirected
+# FEATURE: pointer-indirection mismatch (spec/49 §17).  A call argument whose
+# SOURCE pointer-depth EXCEEDS the parameter's declared depth (e.g. `{'&': [p]}`
+# where p is already a ptr → depth 2 into a depth-1 param) is over-indirected —
+# the callee dereferences too few levels and reads/writes a bogus address.  The
+# compiler emits a WARNING (not an error; the program still compiles + runs).
+# Under-indirection (value → ptr param) is the legitimate implicit by-ref pass
+# and is NOT warned.  Per-function opt-out via `static_off: ["ptr_indirection"]`.
+#
+# This test compiles + runs (exit 0).  The real assertion is the stderr warning
+# for `trigger_it` and its ABSENCE for `suppressed_ok`.
+
+- model: { name: Thing, fields: [[val, i32]] }
+
+# Free function → resolvable callee, so the exact depth compare applies.
+- def:
+    name: sink
+    args: [[obj, ptr<Thing>]]
+    body: [{ return }]
+
+- class:
+    name: Caller
+    methods:
+      # `&pobj` where pobj is ptr<Thing> → depth 2 vs param depth 1 → WARNING.
+      - def:
+          name: trigger_it
+          args: [[pobj, ptr<Thing>]]
+          body: [{ call: [sink, {'&': [pobj]}] }]
+      # Same over-indirection, but suppressed → NO warning.
+      - def:
+          name: suppressed_ok
+          static_off: ["ptr_indirection"]
+          args: [[pobj, ptr<Thing>]]
+          body: [{ call: [sink, {'&': [pobj]}] }]
+      # Correct: pobj (ptr) passed directly → depth 1 == param 1 → NO warning.
+      - def:
+          name: correct_ok
+          args: [[pobj, ptr<Thing>]]
+          body: [{ call: [sink, pobj] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [clr, ptr<Caller>, { new: Caller }]
+      - decl: [thg, ptr<Thing>, { new: Thing }]
+      - call: [clr.trigger_it, thg]
+      - call: [clr.suppressed_ok, thg]
+      - call: [clr.correct_ok, thg]
+      - print: ["PASS ptr_indirection_warning: compiles + runs; over-indirection warned on stderr"]
+      - return: 0

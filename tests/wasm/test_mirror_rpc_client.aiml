@@ -1,0 +1,238 @@
+# static-check: off
+# Requires: peer
+# WASM side of the mirror RPC test.
+# Phase 1: connect, receive ItemImpl via sync, access tags via interface vtable.
+# Phase 2: send RPC `cast` with payload that contains list<string> tags.
+# Phase 2 round-trip exercises send_rpc (client→server) with nested list<string>
+# in the body — same code path as DataCreatures' send_rpc → server.
+
+- interface:
+    name: Tagged
+    methods:
+      - [tags, list<string>, []]
+
+- model:
+    name: Item
+    sync: [name, tags]
+    rpc:  [cast]
+    fields:
+      - [name, string]
+      - [tags, list<string>]
+
+- class:
+    name: ItemImpl
+    models: [Item]
+    implements: [Tagged]
+    methods:
+      - def:
+          name: tags
+          return: list<string>
+          args: []
+          body:
+            - decl: [var_r, list<string>, <.tags]
+            - return: var_r
+
+- model:
+    name: RpcCast
+    rpc: [cast]
+    fields:
+      - [name, string]
+      - [amount, i32]
+      - [tags, list<string>]
+
+# Same Detail model as the server.  DataCreatures' creature_detail has the
+# same shape: a list<ptr<X>> where each X has a list<string> field.
+- model:
+    name: Detail
+    rpc: [request_detail, deliver_detail]
+    fields:
+      - [creature_id, string]
+      - [items,       list<ptr<ItemImpl>>]
+
+- decl: [client, mirror_session]
+- set: [client, { call: [mirror.connect_timeout, "ws://localhost:18888", 3000] }]
+- print: ["client: connected"]
+
+# Server registers ItemImpl (first → nid=1) then Detail (second → nid=2).
+# Wait for both events; match by ORDER OF NID (lowest = ItemImpl).
+- decl: [tries, i32, 0]
+- decl: [events_seen, i32, 0]
+- decl: [item_nid, i32, -1]
+- decl: [detail_nid, i32, -1]
+- while:
+    condition: { "&&": [{ lt: [events_seen, 2] }, { lt: [tries, 300] }] }
+    body:
+      - call: [client.update]
+      - decl: [hev, i32, { call: [client.has_event] }]
+      - if:
+          condition: { gt: [hev, 0] }
+          then:
+            - decl: [var_ev, mirror_event, { call: [client.next_event] }]
+            - print: ["client: event nid=${var_ev.net_id}"]
+            - if:
+                condition: { "||": [{ lt: [item_nid, 0] }, { lt: [var_ev.net_id, item_nid] }] }
+                then:
+                  - if:
+                      condition: { gte: [item_nid, 0] }
+                      then: [{ set: [detail_nid, item_nid] }]
+                  - set: [item_nid, var_ev.net_id]
+                else:
+                  - set: [detail_nid, var_ev.net_id]
+            - set: [events_seen, { "+": [events_seen, 1] }]
+      - call: [time.sleep_ms, 10]
+      - set: [tries, { "+": [tries, 1] }]
+
+- if:
+    condition: { "||": [{ lt: [item_nid, 0] }, { lt: [detail_nid, 0] }] }
+    then:
+      - print: ["FAIL: missing nids (item=${item_nid} detail=${detail_nid})"]
+      - call: [sys.exit, 1]
+- print: ["client: item_nid=${item_nid} detail_nid=${detail_nid}"]
+
+# ── Phase 1: register replica of ItemImpl, wait for sync, access tags ─────────
+- decl: [replica, ItemImpl]
+- call: [client.register_id, replica, item_nid]
+
+- set: [tries, 0]
+- while:
+    condition: { "&&": [{ lt: [replica.tags.len, 3] }, { lt: [tries, 200] }] }
+    body:
+      - call: [client.update]
+      - call: [time.sleep_ms, 10]
+      - set: [tries, { "+": [tries, 1] }]
+
+- print: ["client: replica.name='${replica.name}' tags.len=${replica.tags.len}"]
+- if:
+    condition: { neq: [replica.tags.len, 3] }
+    then:
+      - print: ["FAIL phase1: replica.tags.len=${replica.tags.len} expected=3"]
+      - call: [sys.exit, 1]
+
+- decl: [direct_first, string, { at: [replica.tags, 0] }]
+- if:
+    condition: { neq: [direct_first, "tool"] }
+    then:
+      - print: ["FAIL phase1 direct: got '${direct_first}'"]
+      - call: [sys.exit, 1]
+- print: ["phase1a PASS (direct replica.tags[0]='tool')"]
+
+# Via interface vtable.
+- decl: [view, ptr<Tagged>, replica]
+- decl: [got, list<string>, { call: [view.tags] }]
+- if:
+    condition: { neq: [got.len, 3] }
+    then:
+      - print: ["FAIL phase1b: got.len=${got.len}"]
+      - call: [sys.exit, 1]
+- decl: [via_first, string, { at: [got, 0] }]
+- if:
+    condition: { neq: [via_first, "tool"] }
+    then:
+      - print: ["FAIL phase1b vtable: got '${via_first}'"]
+      - call: [sys.exit, 1]
+- print: ["phase1b PASS (vtable view.tags()[0]='tool')"]
+
+# ── Phase 2: send RPC `cast` with payload containing list<string> ─────────────
+# DataCreatures: same pattern — send_rpc carries a model with list<string>.
+- decl: [outgoing, RpcCast]
+- set: [outgoing.name, "ember"]
+- set: [outgoing.amount, 12]
+- call: [outgoing.tags.push, "spell"]
+- call: [outgoing.tags.push, "fire"]
+- print: ["client: sending RPC cast with ${outgoing.tags.len} tags"]
+- call: [client.send_rpc, item_nid, "cast", 99, outgoing]
+- call: [time.sleep_ms, 200]
+- call: [client.update]
+- print: ["phase2 PASS (send_rpc with list<string> payload)"]
+
+# ── Phase 3: register a Detail-handler, request, receive nested reply ─────────
+# This is EXACTLY the DataCreatures pattern that crashes on hover:
+#   client sends request_detail → server replies deliver_detail (Detail
+#   with list<ptr<ItemImpl>> where each item has list<string> tags)
+#   client polls + decode_rpc → access first item's tags via vtable.
+- decl: [detail_handler_local, Detail]
+- decl: [local_nid, i32, { call: [client.register, detail_handler_local] }]
+- print: ["client: registered local Detail nid=${local_nid}"]
+- call: [time.sleep_ms, 50]
+- call: [client.update]
+
+# Send request_detail to the Detail handler nid.
+- decl: [req, Detail]
+- set: [req.creature_id, "creature-42"]
+- print: ["client: sending request_detail to nid=${detail_nid}"]
+- call: [client.send_rpc, detail_nid, "request_detail", 0, req]
+
+# Pump for the deliver_detail reply (an RPC from server).
+- decl: [got_reply, i32, 0]
+- decl: [reply, Detail]
+- set: [tries, 0]
+- while:
+    condition: { "&&": [{ eq: [got_reply, 0] }, { lt: [tries, 200] }] }
+    body:
+      - call: [client.update]
+      - decl: [rpc, rpc_event, { call: [client.poll_rpc] }]
+      - if:
+          condition: { eq: [rpc.method, "deliver_detail"] }
+          then:
+            - decl: [drc, i32, { call: [client.decode_rpc, rpc, reply] }]
+            - if:
+                condition: { eq: [drc, 0] }
+                then:
+                  - set: [got_reply, 1]
+                  - print: ["client: received deliver_detail items.len=${reply.items.len}"]
+                else:
+                  - print: ["client: decode_rpc deliver_detail FAILED rc=${drc}"]
+      - call: [time.sleep_ms, 10]
+      - set: [tries, { "+": [tries, 1] }]
+
+- if:
+    condition: { eq: [got_reply, 0] }
+    then:
+      - print: ["FAIL phase3: no deliver_detail received"]
+      - call: [sys.exit, 1]
+
+- if:
+    condition: { neq: [reply.items.len, 2] }
+    then:
+      - print: ["FAIL phase3: reply.items.len=${reply.items.len} expected=2"]
+      - call: [sys.exit, 1]
+
+# CRITICAL: access first item's tags via interface vtable.
+# This is the EXACT path DataCreatures takes for tile_tags on hover.
+- decl: [first_item, ptr<ItemImpl>, { at: [reply.items, 0] }]
+- print: ["client: first_item.name='${first_item.name}' tags.len=${first_item.tags.len}"]
+- if:
+    condition: { neq: [first_item.tags.len, 2] }
+    then:
+      - print: ["FAIL phase3 direct: first_item.tags.len=${first_item.tags.len} expected=2"]
+      - call: [sys.exit, 1]
+
+- decl: [dt0, string, { at: [first_item.tags, 0] }]
+- print: ["client: first_item.tags[0]='${dt0}'"]
+- if:
+    condition: { neq: [dt0, "tool"] }
+    then:
+      - print: ["FAIL phase3 direct: tags[0]='${dt0}' expected='tool'"]
+      - call: [sys.exit, 1]
+- print: ["phase3a PASS (nested direct access)"]
+
+# Same access via interface vtable — DataCreatures' crash spot.
+- decl: [iview, ptr<Tagged>, first_item]
+- decl: [igot, list<string>, { call: [iview.tags] }]
+- if:
+    condition: { neq: [igot.len, 2] }
+    then:
+      - print: ["FAIL phase3 vtable: igot.len=${igot.len} expected=2"]
+      - call: [sys.exit, 1]
+- decl: [ift0, string, { at: [igot, 0] }]
+- print: ["client: vtable view.tags()[0]='${ift0}'"]
+- if:
+    condition: { neq: [ift0, "tool"] }
+    then:
+      - print: ["FAIL phase3 vtable: tags[0]='${ift0}' expected='tool'"]
+      - call: [sys.exit, 1]
+- print: ["phase3b PASS (nested via vtable)"]
+
+- call: [client.close]
+- print: ["PASS"]
+- call: [sys.exit, 0]

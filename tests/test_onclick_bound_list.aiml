@@ -1,0 +1,77 @@
+# static-check: off
+# Phase 5: OnClick + bound list-of-cascade rows via ptr<Model> wrapper.
+# The wrapper Model owns the list; the OnClick handler holds a ptr to it.
+# This gives true shared mutation semantics on today's AIML.
+
+- model:
+    name: ClickCtx
+    fields:
+      - [source_widget, string]
+
+- interface:
+    name: OnClick
+    methods:
+      - [fire, void, [[ctx, ptr<ClickCtx>]]]
+
+# Wrapper model that owns the list — needed because members with type
+# list<T> get struct-copied on set:; a ptr<Model> gives shared access.
+- model:
+    name: CascadeList
+    fields:
+      - [items, list<list<i32>>]
+
+- class:
+    name: RowPush
+    implements: [OnClick]
+    members:
+      - [target,     ptr<CascadeList>]
+      - [default_id, i32]
+    methods:
+      - def:
+          name: fire
+          args: [[ctx, ptr<ClickCtx>]]
+          body:
+            - decl: [row, list<i32>]
+            - call: [row.push, <.default_id]
+            - call: [<.target.items.push, row]
+
+- class:
+    name: RowPop
+    implements: [OnClick]
+    members:
+      - [target, ptr<CascadeList>]
+    methods:
+      - def:
+          name: fire
+          args: [[ctx, ptr<ClickCtx>]]
+          body:
+            - if: { condition: { gt: [<.target.items.len, 0] }, then: [{ call: [<.target.items.pop] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      # The "model" — a CascadeList holding the effect rows.
+      - decl: [effects, ptr<CascadeList>, { new: CascadeList }]
+
+      # Bind buttons.
+      - decl: [pushact, ptr<RowPush>, { new: RowPush }]
+      - set: [pushact.target,     effects]
+      - set: [pushact.default_id, 42]
+
+      - decl: [popact, ptr<RowPop>, { new: RowPop }]
+      - set: [popact.target, effects]
+
+      # Upcast to the OnClick interface — this is how the prefab-runtime
+      # will hold on_click values without knowing the concrete type.
+      - decl: [push_iface, ptr<OnClick>, pushact]
+      - decl: [pop_iface,  ptr<OnClick>, popact]
+
+      - decl: [ctx0, ptr<ClickCtx>, { new: ClickCtx }]
+      - call: [push_iface.fire, ctx0]
+      - call: [push_iface.fire, ctx0]
+      - call: [push_iface.fire, ctx0]
+      - print: ["after 3 pushes: len=${effects.items.len}"]
+      - call: [pop_iface.fire, ctx0]
+      - print: ["after 1 pop:    len=${effects.items.len}"]
+      - return: 0

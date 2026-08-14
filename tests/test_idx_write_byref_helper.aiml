@@ -1,0 +1,91 @@
+# Regression test: idx: write into a list<Model> arg of a class-method
+# helper used to corrupt heap memory (often the next Kv handle, manifesting
+# as `std::mutex: Invalid argument` on the next .set() call).  Root cause:
+# byref-passed list arg's alloca holds a POINTER to the list struct, but
+# visitIdxStmt list<T>-branch GEP'd into the alloca itself.  Fix in
+# ast_compiler_stmt.cpp:1322 — deref the alloca if sym->is_byref_arg
+# (same as visitVariable does for the `at:` read path).
+#
+# Repro pattern from 9rooms_v2 Phase 7.5 Player-list refactor:
+#   helper `reset_acks(players: list<PlayerState>)` does `at:`→modify→`idx:`
+#   loop; subsequent matches.set() crashed in __pthread_mutex_lock_full.
+#
+# Expected exit code: 0
+
+- model:
+    name: Item
+    fields:
+      - [name, string]
+      - [val,  i32]
+
+- model:
+    name: Box
+    fields:
+      - [items, list<Item>]
+
+- class:
+    name: Svc
+    members:
+      - [store, Kv<string:Box>]
+    methods:
+      - def:
+          name: init
+          body:
+            - call: [io.remove_all, "/tmp/test_idx_write_byref_kv/"]
+            - set: [<.store, { call: [db.open_kv, "boxes", {persist: true, path: "/tmp/test_idx_write_byref_kv/"}] }]
+
+      - def:
+          name: zero_all
+          args: [[lst, list<Item>]]
+          body:
+            - decl: [idx, i32, 0]
+            - while:
+                condition: { lt: [idx, lst.len] }
+                body:
+                  - decl: [ele, Item, { at: [lst, idx] }]
+                  - set: [ele.val, 0]
+                  - idx: [lst, idx, ele]      # ← the bug site
+                  - set: [idx, { +: [idx, 1] }]
+
+      - def:
+          name: roundtrip
+          args: [[key, string]]
+          body:
+            - decl: [box, Box, { call: [<.store.get_copy, key] }]
+            - call: [<.zero_all, box.items]
+            - call: [<.store.set, key, box]   # used to crash here
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [svc, ptr<Svc>, { new: Svc }]
+      - call: [svc.init]
+
+      - decl: [box, Box]
+      - decl: [it1, Item]
+      - set: [it1.name, "alpha"]
+      - set: [it1.val,  10]
+      - call: [box.items.push, it1]
+      - decl: [it2, Item]
+      - set: [it2.name, "beta"]
+      - set: [it2.val,  20]
+      - call: [box.items.push, it2]
+      - call: [svc.store.set, "K", box]
+
+      - call: [svc.roundtrip, "K"]
+      - call: [svc.roundtrip, "K"]
+      - call: [svc.roundtrip, "K"]
+
+      # Verify all vals were zeroed and survived the 3 roundtrips.
+      - decl: [back, Box, { call: [svc.store.get_copy, "K"] }]
+      - if: { condition: { neq: [back.items.len, 2] }, then: [{ print: ["FAIL items.len"] }, { call: [sys.exit, 1] }] }
+      - decl: [back0, Item, { at: [back.items, 0] }]
+      - decl: [back1, Item, { at: [back.items, 1] }]
+      - if: { condition: { neq: [back0.val, 0] }, then: [{ print: ["FAIL back0.val=${back0.val}"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [back1.val, 0] }, then: [{ print: ["FAIL back1.val=${back1.val}"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [back0.name, "alpha"] }, then: [{ print: ["FAIL back0.name=${back0.name}"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [back1.name, "beta"]  }, then: [{ print: ["FAIL back1.name=${back1.name}"] }, { call: [sys.exit, 1] }] }
+
+      - print: ["PASS idx-write byref helper: 3 roundtrips OK, items preserved"]
+      - return: 0

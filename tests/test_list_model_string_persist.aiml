@@ -1,0 +1,88 @@
+# Repro: pushing a Model with a string field into list<Model> loses the
+# string content across get.  Observed in 9rooms_v2 DeckEditor:
+#   - decl: [d, Deck]           # value (nicht ptr)
+#   - set:  [d.name, "hello"]
+#   - call: [decks.push, d]
+#   - decl: [x, Deck, { call: [decks.get, 0] }]
+#   - # x.name is "" instead of "hello"
+#
+# Expected: PASS (name survives).  Actual (Jul 2026): FAIL (name empty).
+
+- model:
+    name: Thing
+    fields:
+      - [name,   string]
+      - [amount, i32]
+
+- class:
+    name: Holder
+    members:
+      - [items, list<Thing>]
+    methods:
+      - def:
+          name: add
+          args: [[name_a, string], [amt, i32]]
+          body:
+            - decl: [thing, Thing]
+            - set: [thing.name,   name_a]
+            - set: [thing.amount, amt]
+            - call: [<.items.push, thing]
+
+      - def:
+          name: read_name
+          args: [[idx, i32]]
+          return: string
+          body:
+            - decl: [thing, Thing, { call: [<.items.get, idx] }]
+            - return: thing.name
+
+      - def:
+          name: read_amount
+          args: [[idx, i32]]
+          return: i32
+          body:
+            - decl: [thing, Thing, { call: [<.items.get, idx] }]
+            - return: thing.amount
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [hld, ptr<Holder>, { new: Holder }]
+      - call: [hld.add, "hello", 42]
+      - call: [hld.add, "world", 99]
+      - decl: [nam0, string, { call: [hld.read_name, 0] }]
+      - decl: [nam1, string, { call: [hld.read_name, 1] }]
+      - decl: [amt0, i32,    { call: [hld.read_amount, 0] }]
+      - decl: [amt1, i32,    { call: [hld.read_amount, 1] }]
+      - print: ["items[0]: name='${nam0}' amount=${amt0}"]
+      - print: ["items[1]: name='${nam1}' amount=${amt1}"]
+      - decl: [fails, i32, 0]
+      - if:
+          condition: { neq: [nam0, "hello"] }
+          then:
+            - print: ["FAIL: items[0].name='${nam0}' want='hello'"]
+            - set: [fails, { +: [fails, 1] }]
+      - if:
+          condition: { neq: [nam1, "world"] }
+          then:
+            - print: ["FAIL: items[1].name='${nam1}' want='world'"]
+            - set: [fails, { +: [fails, 1] }]
+      - if:
+          condition: { neq: [amt0, 42] }
+          then:
+            - print: ["FAIL: items[0].amount=${amt0} want=42"]
+            - set: [fails, { +: [fails, 1] }]
+      - if:
+          condition: { neq: [amt1, 99] }
+          then:
+            - print: ["FAIL: items[1].amount=${amt1} want=99"]
+            - set: [fails, { +: [fails, 1] }]
+      - if:
+          condition: { eq: [fails, 0] }
+          then:
+            - print: ["PASS: list<Model>-string-persist OK"]
+            - return: 0
+          else:
+            - print: ["FAIL: ${fails} assertions failed"]
+            - return: 1

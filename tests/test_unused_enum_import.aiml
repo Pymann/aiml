@@ -1,0 +1,13 @@
+# Whole-Program-Merge: Weekday ist im importierten Modul deklariert, hier wird
+# nur `mon` referenziert → tue/wed sind build-weit ungenutzt (Warnings im
+# noCache/Object-Build).  Expected exit code: 0.
+- import: "tests/_enum_import_lib.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [day_val, i32, Weekday.mon]
+      - if: { condition: { neq: [day_val, 1] }, then: [{ print: ["FAIL"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS unused_enum_import"]
+      - return: 0

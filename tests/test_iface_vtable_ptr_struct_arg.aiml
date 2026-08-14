@@ -1,0 +1,42 @@
+# static-check: off
+# BUG-Repro: ein Interface-Methode nimmt ptr<Struct>; beim POLYMORPHEN
+# (vtable) Aufruf wird ein Struct-VARIABLEN-Argument by-value geladen statt
+# dessen Adresse übergeben → "Call parameter type does not match function
+# signature".  Der direkte (nicht-vtable) Methoden-Aufruf coerct korrekt;
+# der vtable-Dispatch-Pfad (ast_compiler_call.cpp ~595) noch nicht.
+#
+# Erwartung nach Fix: kompiliert, dst.val wird via vtable-Call gesetzt.
+
+- model: { name: Box, fields: [[val, i32]] }
+- model: { name: AData, fields: [[aid, i32]] }
+
+- interface:
+    name: Filler
+    methods:
+      - [fill, void, [[dst, ptr<Box>]]]
+
+- class:
+    name: AImpl
+    models: [AData]
+    implements: [Filler]
+    methods:
+      - def:
+          name: fill
+          args: [[dst, ptr<Box>]]
+          return: void
+          body: [{ set: [dst.val, 42] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [imp, ptr<AImpl>, { new: AImpl }]
+      - decl: [flr, ptr<Filler>, imp]
+      - decl: [box, Box]
+      # POLYMORPHER vtable-Call mit Struct-Var-Arg (implicit-ref soll Adresse geben):
+      - call: [flr.fill, box]
+      - if:
+          condition: { eq: [box.val, 42] }
+          then: [{ print: ["PASS iface_vtable_ptr_struct_arg: struct-var coerced to ptr in vtable call"] }]
+          else: [{ print: ["FAIL box.val=${box.val} want 42"] }]
+      - return: { -: [42, box.val] }

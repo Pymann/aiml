@@ -1,0 +1,12 @@
+# Negative: gl.tex mit string-literalem unbekanntem Stem → Compile-Hard-Error.
+#
+# AssetRoots: tests/_asset_fixtures/basic/resources/textures
+# Expected exit code: 1
+# ExpectedStderr: gl.tex: stem 'missing_stem' not in texture store
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [tex, gl_texture, { call: [gl.tex, "missing_stem"] }]
+      - return: 0

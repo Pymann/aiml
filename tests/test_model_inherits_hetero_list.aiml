@@ -1,0 +1,79 @@
+# static-check: off
+# Test A: pure model inheritance mit heterogener list<BaseCard>.
+#
+# Frage: kann eine list<BaseCard> Instanzen von CreatureCard UND ManaCard
+# gleichzeitig halten und beim get korrekt die base-Felder liefern?
+#
+# Erwartung: entweder funktioniert (Base-Slice-Semantik) oder wir sehen
+# einen Compile/Runtime-Fehler.  Beides ist informativ.
+#
+# auch mit list<any> funktioniert es nicht.
+# Es bleibt zu entscheiden, wie der compiler hinsichtlich Typisierung gestaltet wird.
+
+- model:
+    name: BaseCard
+    fields:
+      - [nam,       string]
+      - [card_type, string]
+      - [mkp,       i32]
+
+- model:
+    name: CreatureCard
+    inherits: BaseCard
+    fields:
+      - [attack,  i32]
+      - [defense, i32]
+
+- model:
+    name: ManaCard
+    inherits: BaseCard
+    fields:
+      - [provides_color,  i32]
+      - [provides_amount, i32]
+
+- class:
+    name: Runner
+    members:
+      - [bases, list<any>]
+    methods:
+      - def:
+          name: run
+          return: i32
+          body:
+            - decl: [crt, CreatureCard]
+            - set: [crt.nam,       "Dragon"]
+            - set: [crt.card_type, "creature"]
+            - set: [crt.mkp,       5]
+            - set: [crt.attack,    4]
+            - set: [crt.defense,   3]
+            - call: [<.bases.push, crt]
+            - decl: [man, ManaCard]
+            - set: [man.nam,             "FireMana"]
+            - set: [man.card_type,       "mana"]
+            - set: [man.mkp,             1]
+            - set: [man.provides_color,  0]
+            - set: [man.provides_amount, 2]
+            - call: [<.bases.push, man]
+            - decl: [bas0, BaseCard, { call: [<.bases.get, 0] }]
+            - decl: [bas1, BaseCard, { call: [<.bases.get, 1] }]
+            - print: ["A[0]: name='${bas0.nam}' type='${bas0.card_type}' mkp=${bas0.mkp}"]
+            - print: ["A[1]: name='${bas1.nam}' type='${bas1.card_type}' mkp=${bas1.mkp}"]
+            - decl: [fails, i32, 0]
+            - if:
+                condition: { neq: [bas0.nam, "Dragon"] }
+                then: [{ set: [fails, { +: [fails, 1] }] }]
+            - if:
+                condition: { neq: [bas1.nam, "FireMana"] }
+                then: [{ set: [fails, { +: [fails, 1] }] }]
+            - if:
+                condition: { eq: [fails, 0] }
+                then: [{ print: ["PASS: pure model inheritance heterogen list works"] }]
+                else: [{ print: ["FAIL: ${fails} assertion(s)"] }]
+            - return: fails
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [rnr, ptr<Runner>, { new: Runner }]
+      - return: { call: [rnr.run] }

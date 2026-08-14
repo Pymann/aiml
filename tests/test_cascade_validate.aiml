@@ -1,0 +1,105 @@
+# TDD: cascade.validate(name, row) → -1 valid | >=0 bad-index | -2 unknown cascade.
+# Prüft OwnerType/CardKind-Enum-Membership, Node-id-Lookup, Arity (Truncation +
+# Trailing).  cascade.explain liefert einen Grund-String (leer wenn valid).
+
+- enum: { name: OwnerRef, values: [none, player, opponent] }        # player=1, opponent=2
+- enum: { name: CardKind, values: [none, creature, spell] }         # creature=1, spell=2
+
+# Verschachtelte Cascade als Feldtyp — spiegelt die echten Spiel-Cascades
+# (Trigger.on_card_played nutzt OwnerRef, das selbst eine Cascade ist).
+- cascade:
+    name: Zone
+    nodes:
+      - here:     [1]              # keine Payload
+      - in_deck:  [2, CardKind]    # ein Enum-Feld
+
+- cascade:
+    name: Trig
+    nodes:
+      - on_attack:  [5, OwnerRef]
+      - on_played:  [9, OwnerRef, CardKind]
+      - on_move:    [4, Zone, CardKind]   # verschachtelte Cascade + Enum
+
+- def:
+    name: chk
+    args: [[got, i32], [want, i32], [label, string]]
+    body:
+      - if: { condition: { neq: [got, want] }, then: [{ print: ["FAIL ${label}: got=${got} want=${want}"] }, { call: [sys.exit, 1] }] }
+
+- def:
+    name: row3
+    args: [[aval, i32], [bval, i32], [cval, i32]]
+    return: list<i32>
+    body:
+      - decl: [rww, list<i32>]
+      - call: [rww.push, aval]
+      - call: [rww.push, bval]
+      - call: [rww.push, cval]
+      - return: rww
+
+- def:
+    name: main
+    return: i32
+    body:
+      # ── gültig: on_played [9, opponent(2), creature(1)] → -1
+      - decl: [ok_played, list<i32>, { call: [row3, 9, 2, 1] }]
+      - call: [chk, { call: [cascade.validate, "Trig", ok_played] }, -1, "on_played gültig"]
+
+      # ── gültig: on_attack [5, player(1)] → -1  (Arity: genau 1 Feld)
+      - decl: [ok_attack, list<i32>]
+      - call: [ok_attack.push, 5]
+      - call: [ok_attack.push, 1]
+      - call: [chk, { call: [cascade.validate, "Trig", ok_attack] }, -1, "on_attack gültig"]
+
+      # ── CardKind 9 ungültig → bad-index 2
+      - decl: [bad_kind, list<i32>, { call: [row3, 9, 2, 9] }]
+      - call: [chk, { call: [cascade.validate, "Trig", bad_kind] }, 2, "CardKind ungültig → idx 2"]
+
+      # ── OwnerRef 99 ungültig → bad-index 1
+      - decl: [bad_owner, list<i32>, { call: [row3, 9, 99, 1] }]
+      - call: [chk, { call: [cascade.validate, "Trig", bad_owner] }, 1, "OwnerRef ungültig → idx 1"]
+
+      # ── unbekannte Node-id 7 → bad-index 0
+      - decl: [bad_id, list<i32>, { call: [row3, 7, 1, 1] }]
+      - call: [chk, { call: [cascade.validate, "Trig", bad_id] }, 0, "unbekannte Node-id → idx 0"]
+
+      # ── truncated: on_played ohne CardKind [9, 2] → bad-index 2 (fehlt)
+      - decl: [trunc, list<i32>]
+      - call: [trunc.push, 9]
+      - call: [trunc.push, 2]
+      - call: [chk, { call: [cascade.validate, "Trig", trunc] }, 2, "truncated → idx 2"]
+
+      # ── trailing: on_attack mit Extra [5, 1, 99] → bad-index 2 (Müll dahinter)
+      - decl: [trail, list<i32>, { call: [row3, 5, 1, 99] }]
+      - call: [chk, { call: [cascade.validate, "Trig", trail] }, 2, "trailing garbage → idx 2"]
+
+      # ── verschachtelte Cascade: on_move [4, Zone=in_deck(2)+CardKind, CardKind]
+      #    → [4, 2, 1, 2] gültig (Zone.in_deck verbraucht sein CardKind, dann das
+      #    äußere CardKind).  -1
+      - decl: [nest_ok, list<i32>]
+      - call: [nest_ok.push, 4]
+      - call: [nest_ok.push, 2]   # Zone.in_deck
+      - call: [nest_ok.push, 1]   # dessen CardKind = creature
+      - call: [nest_ok.push, 2]   # äußeres CardKind = spell
+      - call: [chk, { call: [cascade.validate, "Trig", nest_ok] }, -1, "verschachtelte Cascade gültig"]
+
+      # ── verschachtelte Cascade mit ungültigem inneren Enum: [4, 2, 9, 2] → idx 2
+      - decl: [nest_bad, list<i32>]
+      - call: [nest_bad.push, 4]
+      - call: [nest_bad.push, 2]   # Zone.in_deck
+      - call: [nest_bad.push, 9]   # inneres CardKind ungültig!
+      - call: [nest_bad.push, 2]
+      - call: [chk, { call: [cascade.validate, "Trig", nest_bad] }, 2, "verschachtelt: inneres Enum ungültig → idx 2"]
+
+      # ── unbekannte Cascade → -2
+      - call: [chk, { call: [cascade.validate, "Nope", ok_played] }, -2, "unbekannte Cascade → -2"]
+
+      # ── explain: valid → "", invalid → nicht-leer
+      - decl: [ex_ok, string, { call: [cascade.explain, "Trig", ok_played] }]
+      - if: { condition: { neq: [ex_ok.len, 0] }, then: [{ print: ["FAIL explain valid sollte leer sein: ${ex_ok}"] }, { call: [sys.exit, 1] }] }
+      - decl: [ex_bad, string, { call: [cascade.explain, "Trig", bad_kind] }]
+      - if: { condition: { eq: [ex_bad.len, 0] }, then: [{ print: ["FAIL explain invalid sollte Grund liefern"] }, { call: [sys.exit, 1] }] }
+      - print: ["explain(bad_kind) = ${ex_bad}"]
+
+      - print: ["PASS cascade_validate: enum-membership, node-id, arity (trunc+trailing), unknown-cascade, explain"]
+      - return: 0

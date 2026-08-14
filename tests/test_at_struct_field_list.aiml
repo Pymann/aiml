@@ -1,0 +1,45 @@
+# Repro: `at: [struct.field_list, i]` schlägt mit "at: unknown variable
+# 'struct.field_list'" fehl, obwohl die Indexierung einer list<T>-Member-
+# Property logisch korrekt ist.  Workaround: in lokale Variable kopieren.
+#
+# Spec status (2026-06-01):
+#   - spec/52_arrays.md zeigt at: nur mit bare-variable-containern
+#   - spec/53_dyn_arrays.md ebenso
+#   - Compiler ast_compiler_expr.cpp:911 fordert hart ein VariableExpr
+#
+# Ohne Spec-/Compiler-Erweiterung sollte zumindest die Fehlermeldung klar
+# sagen, dass at: einen einfachen Variablen-Container braucht (statt
+# "unknown variable", was nach Symbol-Lookup-Failure aussieht).
+#
+# Erwarteter Status: failing build → demonstriert die Einschränkung.
+# Wenn future-fix erlaubt: at: mit struct.field-Container → exit 0.
+
+- model:
+    name: Holder
+    fields:
+      - [var_xs, list<i32>]
+
+- decl: [var_h, Holder]
+- call: [var_h.var_xs.push, 10]
+- call: [var_h.var_xs.push, 20]
+- call: [var_h.var_xs.push, 30]
+
+# Variante A: bare-variable, funktioniert
+- decl: [xs_local, list<i32>, var_h.var_xs]
+- decl: [var_a0, i32, { at: [xs_local, 0] }]
+- if:
+    condition: { neq: [var_a0, 10] }
+    then:
+      - print: ["FAIL bare-variable at: expected 10, got ${var_a0}"]
+      - exit: [1]
+
+# Variante B: struct.field als at-container — Compile-Error in current state.
+# Wenn future-fix das erlaubt, sollte dies var_a1 = 10 setzen.
+- decl: [var_a1, i32, { at: [var_h.var_xs, 0] }]
+- if:
+    condition: { neq: [var_a1, 10] }
+    then:
+      - print: ["FAIL struct-field at: expected 10, got ${var_a1}"]
+      - exit: [1]
+
+- print: ["PASS test_at_struct_field_list"]

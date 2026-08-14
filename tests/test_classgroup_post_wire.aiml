@@ -1,0 +1,45 @@
+# M3 — a group-function named `on_wired` is a POST-WIRE hook: __ctor calls it
+# automatically after phase-1 sees back-patch, so it may use sees collaborators.
+# This is the clean home for init that intertwines intrinsic setup with a
+# collaborator (e.g. the real MatchService's reaction_window.init needing cards),
+# which the sees-blind phase-0 constructor cannot do.  Spec §3 ("start()").
+#
+# Spec: spec/58_classgroups.md §3 (post-wire hook).
+
+- class:
+    name: Src
+    members:
+      - [val, i32, 7]          # default 7 (applied at construction, phase 0)
+    methods:
+      - def: { name: get_val, return: i32, body: [{ return: <.val }] }
+
+- class:
+    name: Sink
+    members:
+      - [captured, i32]
+    methods:
+      - def: { name: capture, args: [[amt, i32]], body: [{ set: [<.captured, amt] }] }
+      - def: { name: got,     return: i32, body: [{ return: <.captured }] }
+
+- classgroup:
+    name: PostRt
+    instances:
+      - class: Src
+        instance: src
+      - class: Sink
+        instance: snk
+        sees: [src]
+        functions:
+          # Runs AFTER src is wired → reads the collaborator and captures 7.
+          - def: { name: on_wired, body: [{ call: [<.capture, { call: [<.src.get_val] }] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [prt, ptr<PostRt>, { new: PostRt }]
+      # If on_wired ran after wiring, snk captured src.val (7); else it stays 0.
+      - decl: [cap, i32, { call: [prt.snk.got] }]
+      - if: { condition: { neq: [cap, 7] }, then: [{ print: ["FAIL captured=${cap} exp 7 — on_wired hook did not run post-wire"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS classgroup_post_wire: on_wired runs after sees back-patch and uses the collaborator"]
+      - return: 0

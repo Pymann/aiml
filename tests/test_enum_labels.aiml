@@ -1,0 +1,32 @@
+# Phase 2: enum with labels — 3 syntactic forms in one file.
+
+# 1) Compact — labels auto-derived at consumer sites, no explicit map
+- enum:
+    name: GamePhase
+    values: [start, draw, mana, spell, combat, end]
+
+# 2) Compact + explicit labels-map (for acronyms / display strings)
+- enum:
+    name: AttributeType
+    values: [lp, atk, def, ini, mov, mor]
+    labels: {1: "LP", 2: "ATK", 3: "DEF", 4: "INI", 5: "MOV", 6: "MOR"}
+
+# 3) Full form (explicit id + name + label per value)
+- enum:
+    name: OwnerType
+    values:
+      - {id: 1, name: player,     label: "Player"}
+      - {id: 2, name: opponent,   label: "Opponent"}
+      - {id: 4, name: all_allies, label: "All Allies"}
+
+# 4) Legacy compact-with-override (name→id) still supported
+- enum:
+    name: LegacyMix
+    values: [{Red: 5}, {Green: 8}]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - print: ["enum labels parse OK"]
+      - return: 0

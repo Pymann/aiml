@@ -1,0 +1,26 @@
+# Minimal repro.
+- def:
+    name: main
+    return: i32
+    body:
+      - print: ["hello"]
+      - decl: [outer, list<list<i32>>]
+      - decl: [row_0, list<i32>]
+      - call: [row_0.push, 0]
+      - call: [outer.push, row_0]
+      - print: ["before persist outer.len=${outer.len}"]
+
+      - decl: [vals, list<i32>]
+      - call: [vals.push, 1]
+      - call: [vals.push, 3]
+      - print: ["vals.len=${vals.len}"]
+      - call: [cascade.persist_row, outer, 0, 12, vals]
+      - print: ["after persist"]
+
+      - decl: [row, list<i32>, { call: [outer.get, 0] }]
+      - print: ["row.len=${row.len}"]
+      - decl: [slot0, i32, { call: [row.get, 0] }]
+      - decl: [slot1, i32, { call: [row.get, 1] }]
+      - decl: [slot2, i32, { call: [row.get, 2] }]
+      - print: ["row=[${slot0},${slot1},${slot2}]"]
+      - return: 0

@@ -1,0 +1,35 @@
+# Regression: `implements: Iface` (scalar shorthand) must populate
+# classNode->interfaces — otherwise no vtable is emitted and any
+# interface-dispatch via `ptr<Iface>` SIGSEGVs because the fat-pointer
+# slot's vtable field is null.
+#
+# Bug-history (2026-06-27): class_builder.cpp only processed implements:
+# inside a YAML sequence (insideImplements flag); scalar `implements: X`
+# silently dropped the value.  Combined with classInfo.interfaces never
+# being populated from cls->interfaces in registerTypeDecl, the symptom
+# was a successful build but null vtable at runtime.  Fix: support both
+# scalar and list forms in class_builder + propagate cls->interfaces
+# into ClassInfo.interfaces in ast_compiler.cpp.
+#
+# Expected output: "iface_call=42"
+
+- interface:
+    name: Greeter
+    methods:
+      - [hello, i32, []]
+
+- class:
+    name: SayBye
+    implements: Greeter      # ← scalar form, used to be silently dropped
+    methods:
+      - def: { name: hello, return: i32, args: [], body: [{ return: 42 }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [obj, ptr<SayBye>, { new: SayBye }]
+      - decl: [grt, ptr<Greeter>, obj]
+      - decl: [ret, i32, { call: [grt.hello] }]
+      - print: ["iface_call=${ret}"]
+      - return: 0

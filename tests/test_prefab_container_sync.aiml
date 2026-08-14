@@ -1,0 +1,88 @@
+# Requires: display
+# Phase 6d: CHILD_CONTAINER with bind_list + spawn.  After binding a list
+# with N rows and running one draw pass, the parent's child_instances
+# vector should hold N spawned prefab-instances.  Grow / shrink via
+# .push / .pop on the bound list drives the sync.
+
+- config:
+    entry: main
+
+- prefab:
+    name: RowChip
+    width: 100
+    height: 20
+    texture: ""
+    children:
+      - name: caption
+        type: label
+        x: 4
+        y: 4
+        label: "row"
+
+- prefab:
+    name: RowContainer
+    width: 200
+    height: 200
+    texture: ""
+    children:
+      - name: rows_box
+        type: container
+        x: 8
+        y: 8
+        width: 180
+        height: 180
+        bind_list: rows
+        spawn: RowChip
+        layout: vflow
+        gap: 4
+
+- model:
+    name: CascadeList
+    fields:
+      - [items, list<list<i32>>]
+
+- def:
+    name: main
+    body:
+      - decl: [win, window_handle]
+      - set:  [win, { call: [engine.create_window, 400, 400, "container-sync"] }]
+
+      - decl: [store, ptr<CascadeList>, { new: CascadeList }]
+      # 3 rows in the model list.
+      - decl: [row_a, list<i32>]
+      - call: [row_a.push, 1]
+      - call: [store.items.push, row_a]
+      - decl: [row_b, list<i32>]
+      - call: [row_b.push, 2]
+      - call: [store.items.push, row_b]
+      - decl: [row_c, list<i32>]
+      - call: [row_c.push, 3]
+      - call: [store.items.push, row_c]
+
+      - decl: [page, prefab_instance, { call: [engine.instantiate, "RowContainer"] }]
+      - call: [page.bind_list, store.items]
+
+      # Run one frame — triggers container_sync internally.
+      - call: [gl.clear_all, 0.05, 0.05, 0.08, 1.0]
+      - call: [engine.draw_scene]
+      - print: ["OK — bound N=${store.items.len} rows, container should have spawned same"]
+
+      # Grow by 2 → next draw should spawn 2 more.
+      - decl: [row_d, list<i32>]
+      - call: [row_d.push, 4]
+      - call: [store.items.push, row_d]
+      - decl: [row_e, list<i32>]
+      - call: [row_e.push, 5]
+      - call: [store.items.push, row_e]
+      - call: [engine.draw_scene]
+      - print: ["OK — after grow to N=${store.items.len}"]
+
+      # Shrink by 4 → keeps 1.
+      - call: [store.items.pop]
+      - call: [store.items.pop]
+      - call: [store.items.pop]
+      - call: [store.items.pop]
+      - call: [engine.draw_scene]
+      - print: ["OK — after shrink to N=${store.items.len}"]
+
+      - call: [engine.destroy_window, win]

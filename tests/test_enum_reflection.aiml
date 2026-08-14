@@ -1,0 +1,41 @@
+# enums.name / enums.value — compile-time Enum-Reflection (spec/14_enums.md).
+
+- enum:
+    name: Color
+    values:
+      - red:   1
+      - green: 2
+      - blue:  10
+
+- def:
+    name: streq
+    args: [[lhs, string], [rhs, string]]
+    return: i32
+    body:
+      - if: { condition: { eq: [lhs, rhs] }, then: [{ return: 1 }] }
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      # enums.name: Wert → Member-Name.
+      - decl: [nm1, string, { call: [enums.name, "Color", Color.red] }]
+      - if: { condition: { eq: [{ call: [streq, nm1, "red"] }, 0] }, then: [{ print: ["FAIL name(red)=${nm1}"] }, { call: [sys.exit, 1] }] }
+      - decl: [nm2, string, { call: [enums.name, "Color", 10] }]
+      - if: { condition: { eq: [{ call: [streq, nm2, "blue"] }, 0] }, then: [{ print: ["FAIL name(10)=${nm2}"] }, { call: [sys.exit, 1] }] }
+      # Laufzeit-Wert (nicht-Literal) funktioniert auch.
+      - decl: [cvl, i32, 2]
+      - decl: [nm3, string, { call: [enums.name, "Color", cvl] }]
+      - if: { condition: { eq: [{ call: [streq, nm3, "green"] }, 0] }, then: [{ print: ["FAIL name(cvl=2)=${nm3}"] }, { call: [sys.exit, 1] }] }
+      # Kein Member mit diesem Wert → "".
+      - decl: [nm4, string, { call: [enums.name, "Color", 99] }]
+      - if: { condition: { eq: [{ call: [streq, nm4, ""] }, 0] }, then: [{ print: ["FAIL name(99) sollte leer sein, war ${nm4}"] }, { call: [sys.exit, 1] }] }
+
+      # enums.value: Member-Name → Wert (== Color.member).
+      - decl: [val1, i32, { call: [enums.value, "Color", "blue"] }]
+      - if: { condition: { neq: [val1, 10] }, then: [{ print: ["FAIL value(blue)=${val1} (erwartet 10)"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [val1, Color.blue] }, then: [{ print: ["FAIL value(blue) != Color.blue"] }, { call: [sys.exit, 1] }] }
+
+      - print: ["OK enum_reflection: name(1→red, 10→blue, cvl=2→green, 99→''), value(blue→10)"]
+      - return: 0

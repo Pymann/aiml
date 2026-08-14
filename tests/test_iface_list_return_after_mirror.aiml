@@ -1,0 +1,172 @@
+# Repro: ItemImpl with list<string> goes through real mirror.register →
+# wire encode (aiml_ser_encode) → wire decode (aiml_ser_decode) roundtrip,
+# matching DataCreatures' WS-RPC binary serializer path.  After roundtrip,
+# access the synced list via interface vtable.
+#
+# Native only (uses spawn).  Expected exit code: 0.
+
+- interface:
+    name: Tagged
+    methods:
+      - [tags, list<string>, []]
+
+- model:
+    name: Item
+    sync: [name, tags]
+    fields:
+      - [name, string]
+      - [tags, list<string>]
+
+- class:
+    name: ItemImpl
+    models: [Item]
+    implements: [Tagged]
+    methods:
+      - def:
+          name: tags
+          return: list<string>
+          args: []
+          body:
+            - decl: [var_r, list<string>, <.tags]
+            - return: var_r
+
+# ── Host thread ───────────────────────────────────────────────────────────────
+- def:
+    name: host_fn
+    args: []
+    body:
+      - decl: [sess, mirror_session]
+      - set: [sess, { call: [mirror.listen, "tcp://127.0.0.1:19981"] }]
+      - decl: [obj, ItemImpl]
+      - set: [obj.name, "Hammer"]
+      - call: [obj.tags.push, "tool"]
+      - call: [obj.tags.push, "metal"]
+      - call: [obj.tags.push, "starter"]
+      - decl: [nid, i32]
+      - set: [nid, { call: [sess.register, obj] }]
+      - print: ["host: registered nid=${nid} tags.len=${obj.tags.len}"]
+      # First batch of updates to send initial sync
+      - decl: [var_i, i32, 0]
+      - while:
+          condition: { lt: [var_i, 15] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [var_i, { +: [var_i, 1] }]
+      # MUTATE tags — this triggers a delta packet to the client
+      - call: [obj.tags.push, "edge"]
+      - print: ["host: pushed 'edge' (tags.len=${obj.tags.len})"]
+      # Send the delta
+      - set: [var_i, 0]
+      - while:
+          condition: { lt: [var_i, 25] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 10]
+            - set: [var_i, { +: [var_i, 1] }]
+      - call: [sess.close]
+
+- decl: [host_th, thread_handle]
+- set: [host_th, { spawn: [host_fn] }]
+- call: [time.sleep_ms, 100]
+
+# ── Client ────────────────────────────────────────────────────────────────────
+- decl: [client, mirror_session]
+- set: [client, { call: [mirror.connect_timeout, "tcp://127.0.0.1:19981", 2000] }]
+- print: ["client: connected"]
+
+# Receive object_registered event
+- call: [time.sleep_ms, 100]
+- call: [client.update]
+- decl: [hev, i32, { call: [client.has_event] }]
+- print: ["client: has_event=${hev}"]
+- if:
+    condition: { eq: [hev, 0] }
+    then:
+      - print: ["FAIL: no event"]
+      - call: [sys.exit, 1]
+
+- decl: [var_ev, mirror_event, { call: [client.next_event] }]
+- decl: [ev_nid, i32, var_ev.net_id]
+- print: ["client: event nid=${ev_nid}"]
+
+# Register replica with same nid — mirror fills it via deltas
+- decl: [replica, ItemImpl]
+- call: [client.register_id, replica, ev_nid]
+- print: ["client: replica registered nid=${ev_nid}"]
+
+# Pump updates until tags arrive
+- decl: [tries, i32, 0]
+- while:
+    condition: { "&&": [{ lt: [replica.tags.len, 3] }, { lt: [tries, 50] }] }
+    body:
+      - call: [client.update]
+      - call: [time.sleep_ms, 10]
+      - set: [tries, { +: [tries, 1] }]
+
+- print: ["client: replica.name='${replica.name}' tags.len=${replica.tags.len}"]
+# Host pushes a 4th tag ("edge") after the initial sync to test delta sync.
+# By the time we poll, len may be 3 OR 4 depending on how the update cycles
+# race against the host's second push.  We only care that the INITIAL sync
+# arrived (len >= 3); index 0 is always "tool" regardless of final length.
+- if:
+    condition: { lt: [replica.tags.len, 3] }
+    then:
+      - print: ["FAIL: replica.tags.len=${replica.tags.len} expected>=3"]
+      - call: [sys.exit, 1]
+
+# Access via interface vtable — DataCreatures' crash spot.
+- decl: [view, ptr<Tagged>, replica]
+- decl: [got, list<string>, { call: [view.tags] }]
+- print: ["client: got.len=${got.len}"]
+- if:
+    condition: { lt: [got.len, 3] }
+    then:
+      - print: ["FAIL got.len=${got.len} expected>=3"]
+      - call: [sys.exit, 1]
+
+# CRITICAL: at: [got, 0] — does data ptr survive the roundtrip + vtable?
+- decl: [first, string, { at: [got, 0] }]
+- print: ["client: A first='${first}'"]
+
+# Check 1: equality immediately
+- if:
+    condition: { eq: [first, "tool"] }
+    then: [{ print: ["check1 PASS (immediate)"] }]
+    else: [{ print: ["check1 FAIL: first='${first}'"] }]
+
+# Check 2: equality after another update() — mimics DataCreatures' per-frame
+# update() loop that runs while user is hovering.
+- call: [time.sleep_ms, 50]
+- call: [client.update]
+- print: ["client: B after update, first='${first}'"]
+- if:
+    condition: { eq: [first, "tool"] }
+    then: [{ print: ["check2 PASS (after update)"] }]
+    else: [{ print: ["check2 FAIL: first='${first}'"] }]
+
+# Check 3: after 10 more updates
+- decl: [var_u, i32, 0]
+- while:
+    condition: { lt: [var_u, 10] }
+    body:
+      - call: [client.update]
+      - call: [time.sleep_ms, 10]
+      - set: [var_u, { +: [var_u, 1] }]
+- print: ["client: C after 10 updates, first='${first}'"]
+- if:
+    condition: { eq: [first, "tool"] }
+    then: [{ print: ["check3 PASS (after 10 updates)"] }]
+    else: [{ print: ["check3 FAIL: first='${first}'"] }]
+
+- call: [client.close]
+- call: [host_th.join]
+
+- if:
+    condition: { eq: [first, "tool"] }
+    then:
+      - print: ["PASS"]
+      - call: [sys.exit, 0]
+    else:
+      - print: ["FAIL first='${first}'"]
+      - call: [sys.exit, 1]

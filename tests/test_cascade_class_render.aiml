@@ -1,0 +1,84 @@
+# M3a + M3b — EXECUTABLE render with self.field.  render(carrier, block) is synthesized:
+# it switches on block[0], stores the block, and before each handler sets the current
+# index so handlers read the actual element via `<.field()`.  The carrier is threaded
+# by-ref through the resolved chain.
+#
+#   block [1, 7] (deal_dmg, target=7) → render → ["deal", "t7"]
+#   block [2, 9] (heal_dmg, target=9) → render → ["heal", "t9"]
+
+- enum:
+    name: TargetT
+    values: [ {creature: 1} ]
+
+- enum:
+    name: EffCode
+    values: [ {deal_dmg: 1}, {heal_dmg: 2} ]
+
+- cascade:
+    name: EffPipe
+    opcode: EffCode
+    nodes:
+      - [deal_dmg, TargetT]
+      - [heal_dmg, TargetT]
+
+- class:
+    name: EffSkel
+    renders: EffPipe
+    rules:
+      - before: []
+        on: deal_dmg
+        def: { name: b_deal, args: [[carry, list<string>]], return: list<string>, body: [ { call: [carry.push, "deal"] }, { return: carry } ] }
+      - before: []
+        on: heal_dmg
+        def: { name: b_heal, args: [[carry, list<string>]], return: list<string>, body: [ { call: [carry.push, "heal"] }, { return: carry } ] }
+
+- class:
+    name: TgtText
+    renders: TargetT
+    rules:
+      # reads the ACTUAL block element via <.field() (resolves to the pool's field()
+      # after the handler is folded into the synthesized pool class).
+      - before: ["*"]
+        on: TargetT
+        def: { name: tgt, args: [[carry, list<string>]], return: list<string>, body: [ { decl: [tval, i32, { call: [<.field] }] }, { call: [carry.push, "t${tval}"] }, { return: carry } ] }
+
+- cascade_class:
+    name: EffText
+    binds_cascade: EffPipe
+    carrier: list<string>
+    taker:   list<string>
+    members: [EffSkel, TgtText]
+
+- def:
+    name: chk
+    args: [[got, string], [want, string], [label, string]]
+    body:
+      - if: { condition: { neq: [got, want] }, then: [{ print: ["FAIL ${label}: got='${got}' want='${want}'"] }, { call: [sys.exit, 1] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pool, ptr<EffText>, { new: EffText }]
+
+      # deal_dmg block: [1, 7]
+      - decl: [blk, list<i32>]
+      - call: [blk.push, 1]
+      - call: [blk.push, 7]
+      - decl: [carry, list<string>]
+      - decl: [out, list<string>, { call: [pool.render, carry, blk] }]
+      - if: { condition: { neq: [out.len, 2] }, then: [{ print: ["FAIL deal len ${out.len}"] }, { call: [sys.exit, 1] }] }
+      - call: [chk, { at: [out, 0] }, "deal", "deal[0]"]
+      - call: [chk, { at: [out, 1] }, "t7",   "deal[1] self.field"]
+
+      # heal_dmg block: [2, 9]
+      - decl: [blk2, list<i32>]
+      - call: [blk2.push, 2]
+      - call: [blk2.push, 9]
+      - decl: [carry2, list<string>]
+      - decl: [out2, list<string>, { call: [pool.render, carry2, blk2] }]
+      - call: [chk, { at: [out2, 0] }, "heal", "heal[0]"]
+      - call: [chk, { at: [out2, 1] }, "t9",   "heal[1] self.field"]
+
+      - print: ["PASS cascade_class_render: render chain + carrier threading + self.field (real block data)"]
+      - return: 0

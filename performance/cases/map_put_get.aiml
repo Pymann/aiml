@@ -1,0 +1,20 @@
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [n, i32, 50000]
+      - decl: [i, i32, 0]
+      - decl: [acc, i32, 0]
+      - decl: [m, "map<i32:i32>"]
+      - while:
+          cond: { <: [i, n] }
+          body:
+            - call: [m.put, i, { "*": [i, 3] }]
+            - set: [i, { +: [i, 1] }]
+      - set: [i, 0]
+      - while:
+          cond: { <: [i, n] }
+          body:
+            - set: [acc, { +: [acc, { call: [m.get, i] }] }]
+            - set: [i, { +: [i, 1] }]
+      - return: acc

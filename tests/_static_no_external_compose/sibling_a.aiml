@@ -1,0 +1,12 @@
+# Helper imported by tests/test_static_main_no_external_compose.aiml.
+# Declares a class that the negative-test's main does NOT instantiate —
+# triggering the "main does not compose an external class" hard-error.
+
+- class:
+    name: SiblingARunner
+    members:
+      - [calls, i32, 0]
+    methods:
+      - def:
+          name: bump
+          body: [{ set: [<.calls, { +: [<.calls, 1] }] }]

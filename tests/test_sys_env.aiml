@@ -1,0 +1,31 @@
+# Regression: sys.env must return the process environment as a populated
+# map<string:string>, not an empty stub.  (Was previously a no-op that
+# allocated an empty map — silently broke every env-var read.)
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [envm, map<string:string>, { call: [sys.env] }]
+      - decl: [count, i32, envm.len]
+      # An empty map means the builtin is back to its broken stub state.
+      - if:
+          condition: { le: [count, 0] }
+          then:
+            - print: ["FAIL: sys.env returned an empty map (count=${count})"]
+            - call: [sys.exit, 1]
+      # PATH is present in virtually every process environment; verify a real
+      # key resolves (not just that some entries exist).
+      - if:
+          condition: { neq: [{ call: [envm.contains, "PATH"] }, 1] }
+          then:
+            - print: ["FAIL: sys.env has no PATH entry"]
+            - call: [sys.exit, 1]
+      - decl: [path_val, string, { call: [envm.get, "PATH"] }]
+      - if:
+          condition: { le: [path_val.len, 0] }
+          then:
+            - print: ["FAIL: sys.env PATH value is empty"]
+            - call: [sys.exit, 1]
+      - print: ["sys.env OK — ${count} vars, PATH resolved"]
+      - return: 0

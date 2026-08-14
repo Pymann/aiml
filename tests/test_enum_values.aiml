@@ -1,0 +1,31 @@
+# Enum-value registration (headless smoke): a sparse, non-1-based enum must
+# register cleanly through the 3-arg aiml_prefab_register_enum(name, labels,
+# values) path at program init.  The parallel values pipe ("1|2|10|30") is what
+# lets an enum-bound dropdown/radio return the TRUE member value instead of the
+# old selected_index+1 assumption (which only holds for gap-free 1-based enums).
+#
+# Full selected-value assertion via `scene.dropdown_enum` needs a display — see
+# the display-gated test.  This one guards that the registration + init path
+# compiles and runs without crashing.
+#
+# Expected exit code: 0
+
+- enum:
+    name: GameZone
+    values:
+      - {id: 1,  name: hand,          label: "Hand"}
+      - {id: 2,  name: graveyard}
+      - {id: 10, name: mana_zone}
+      - {id: 30, name: room_soulmage, label: "Soul Room"}
+
+# A gap-free 1-based enum too — both forms must register side by side.
+- enum:
+    name: Phase
+    values: [start, draw, mana, spell, combat, end]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - print: ["enum values register OK"]
+      - return: 0
