@@ -3,65 +3,65 @@
 - decl: [pass, i32, 0]
 - decl: [fail, i32, 0]
 
-- decl: [kv, "Kv<string:i32>"]
-- set: [kv, { call: [db.open_kv, "test_kv_i32"] }]
+- decl: [var_kv, "Kv<string:i32>"]
+- set: [var_kv, { call: [db.open_kv, "test_kv_i32"] }]
 
 # put + get
-- call: [kv.set, "alpha", 42]
-- call: [kv.set, "beta", 99]
-- call: [kv.set, "zero", 0]
+- call: [var_kv.set, "alpha", 42]
+- call: [var_kv.set, "beta", 99]
+- call: [var_kv.set, "zero", 0]
 
-- decl: [v1, i32]
-- set: [v1, { call: [kv.get, "alpha"] }]
+- decl: [var_v1, i32]
+- set: [var_v1, { call: [var_kv.get, "alpha"] }]
 - if:
-    condition: { eq: [v1, 42] }
+    condition: { eq: [var_v1, 42] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
-    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL get alpha=${v1}"] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL get alpha=${var_v1}"] }]
 
-- decl: [v2, i32]
-- set: [v2, { call: [kv.get, "beta"] }]
+- decl: [var_v2, i32]
+- set: [var_v2, { call: [var_kv.get, "beta"] }]
 - if:
-    condition: { eq: [v2, 99] }
+    condition: { eq: [var_v2, 99] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
-    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL get beta=${v2}"] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL get beta=${var_v2}"] }]
 
-- decl: [v3, i32]
-- set: [v3, { call: [kv.get, "zero"] }]
+- decl: [var_v3, i32]
+- set: [var_v3, { call: [var_kv.get, "zero"] }]
 - if:
-    condition: { eq: [v3, 0] }
+    condition: { eq: [var_v3, 0] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
-    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL get zero=${v3}"] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL get zero=${var_v3}"] }]
 
 # has
-- decl: [h1, i32]
-- set: [h1, { call: [kv.has, "alpha"] }]
+- decl: [var_h1, i32]
+- set: [var_h1, { call: [var_kv.has, "alpha"] }]
 - if:
-    condition: { eq: [h1, 1] }
+    condition: { eq: [var_h1, 1] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL has alpha"] }]
 
-- decl: [h2, i32]
-- set: [h2, { call: [kv.has, "missing"] }]
+- decl: [var_h2, i32]
+- set: [var_h2, { call: [var_kv.has, "missing"] }]
 - if:
-    condition: { eq: [h2, 0] }
+    condition: { eq: [var_h2, 0] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL has missing"] }]
 
 # overwrite
-- call: [kv.set, "alpha", 7]
-- decl: [v4, i32]
-- set: [v4, { call: [kv.get, "alpha"] }]
+- call: [var_kv.set, "alpha", 7]
+- decl: [var_v4, i32]
+- set: [var_v4, { call: [var_kv.get, "alpha"] }]
 - if:
-    condition: { eq: [v4, 7] }
+    condition: { eq: [var_v4, 7] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
-    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL overwrite alpha=${v4}"] }]
+    else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL overwrite alpha=${var_v4}"] }]
 
 # delete
-- call: [kv.delete, "beta"]
-- decl: [h3, i32]
-- set: [h3, { call: [kv.has, "beta"] }]
+- call: [var_kv.delete, "beta"]
+- decl: [var_h3, i32]
+- set: [var_h3, { call: [var_kv.has, "beta"] }]
 - if:
-    condition: { eq: [h3, 0] }
+    condition: { eq: [var_h3, 0] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL delete beta"] }]
 

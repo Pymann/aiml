@@ -1,5 +1,8 @@
 #include "compiler.h"
 #include "exec_impl.h"
+#include "src/core/builtin_registry.h"
+#include "src/core/asset_scanner.h"
+#include "src/sys/asset_runtime.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -71,14 +74,237 @@ constexpr int kAimlFileWarningLines = 1000;
 constexpr int kAimlFileErrorLines = 1500;
 constexpr int kAimlFunctionErrorLines = 301;
 constexpr int kAimlFunctionMaxArgs = 5;
+// Per-file structural limit: how many top-level model/class/interface
+// declarations are allowed in a single AIML source file.  Forces module
+// splitting at the declaration-level instead of the file-line-level alone.
+constexpr int kAimlMaxModelsPerFile = 3;
 
+// Effektive Zeilen: ignoriert reine Kommentar-Zeilen (`# ...`) und
+// komplett leere Zeilen.  Doku ist gratis, der Limit zählt nur Code.
+// Eine Zeile mit Code + trailing comment (`set: [x, 1]  # note`) wird
+// gezählt — das ist Code.
 int countFileLines(const std::string& path) {
     std::ifstream in(path);
     if (!in.is_open()) return -1;
     int lines = 0;
     std::string line;
-    while (std::getline(in, line)) lines++;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        size_t first = line.find_first_not_of(" \t");
+        if (first == std::string::npos) continue;            // leer
+        if (line[first] == '#') continue;                    // reiner Kommentar
+        lines++;
+    }
     return lines;
+}
+
+std::string canonicalizeDiagPath(const std::string& path);
+
+// Count top-level `- model:` / `- class:` / `- interface:` declarations
+// in a raw AIML YAML file.  We do NOT parse YAML — we scan line-prefix
+// patterns, which is robust enough because top-level list items always
+// start at column 0 with "- " followed by the keyword.
+// Returns {n_models, n_classes, n_interfaces}.
+struct DeclCounts { int models = 0; int classes = 0; int interfaces = 0; };
+DeclCounts countTopLevelDeclsInFile(const std::string& path) {
+    DeclCounts c;
+    std::ifstream in(path);
+    if (!in.is_open()) return c;
+    std::string line;
+    while (std::getline(in, line)) {
+        // Strip CR for CRLF files.
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        // Top-level YAML list items start at column 0.  Indented items
+        // (members, methods within a class) are skipped automatically.
+        if (line.rfind("- model:",     0) == 0) { c.models++;     continue; }
+        if (line.rfind("- class:",     0) == 0) { c.classes++;    continue; }
+        if (line.rfind("- interface:", 0) == 0) { c.interfaces++; continue; }
+    }
+    return c;
+}
+
+/// True if the file's first ~20 lines carry a comment opting out of the static
+/// architecture checks.  Any of these markers works:
+///   # static-check: off
+///   # static-check: relaxed
+///   # Requires: library
+/// Library files are imported by other tests and can genuinely exceed the
+/// per-file type cap.
+static bool fileOptsOutOfStaticChecks(const std::string& path) {
+    std::ifstream in(path);
+    if (!in) return false;
+    std::string line;
+    int scanned = 0;
+    while (std::getline(in, line) && scanned++ < 20) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        // Strip leading whitespace.
+        size_t s = line.find_first_not_of(" \t");
+        if (s == std::string::npos) continue;
+        std::string rest = line.substr(s);
+        if (rest.rfind("# static-check: off",     0) == 0) return true;
+        if (rest.rfind("# static-check: relaxed", 0) == 0) return true;
+        if (rest.rfind("# Requires: library",     0) == 0) return true;
+    }
+    return false;
+}
+
+void logAimlDeclCountDiagnostic(const std::string& path) {
+    static std::mutex s_mu;
+    static std::unordered_set<std::string> s_seen;
+    {
+        std::lock_guard<std::mutex> lk(s_mu);
+        if (!s_seen.insert(canonicalizeDiagPath(path)).second) return;
+    }
+    if (fileOptsOutOfStaticChecks(path)) return;
+    DeclCounts c = countTopLevelDeclsInFile(path);
+    int total = c.models + c.classes + c.interfaces;
+    if (total > kAimlMaxModelsPerFile) {
+        LOG_ERROR(path + ": file declares " + std::to_string(total) +
+                  " top-level types (" + std::to_string(c.models) + " model, " +
+                  std::to_string(c.classes) + " class, " +
+                  std::to_string(c.interfaces) + " interface). " +
+                  "Maximum is " + std::to_string(kAimlMaxModelsPerFile) +
+                  "; split this file into smaller modules.");
+    }
+}
+
+// Helpers for the "main composes external class" rule (3+ project files).
+// We do a raw text scan instead of an AST walk to keep this independent
+// of compile passes.  Top-level `- class:` blocks have their `name: X` on
+// the next non-empty line at column 4 (YAML two-space indent applied to
+// list item).  Same shape for `- model:` and `- interface:`.
+
+struct TopLevelDecl { std::string name; std::string kind; }; // kind = class|model|interface
+std::vector<TopLevelDecl> scanTopLevelDecls(const std::string& path) {
+    std::vector<TopLevelDecl> out;
+    std::ifstream in(path);
+    if (!in.is_open()) return out;
+    std::string line;
+    std::string pendingKind;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.rfind("- model:",     0) == 0) { pendingKind = "model";     continue; }
+        if (line.rfind("- class:",     0) == 0) { pendingKind = "class";     continue; }
+        if (line.rfind("- interface:", 0) == 0) { pendingKind = "interface"; continue; }
+        if (!pendingKind.empty()) {
+            // Look for "name: X" (any indent — usually 4 spaces).
+            auto pos = line.find("name:");
+            if (pos != std::string::npos) {
+                size_t i = pos + 5;
+                while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) i++;
+                std::string name;
+                while (i < line.size() && (std::isalnum((unsigned char)line[i]) || line[i] == '_')) {
+                    name += line[i++];
+                }
+                if (!name.empty()) out.push_back({name, pendingKind});
+                pendingKind.clear();
+            } else if (!line.empty() && line[0] != ' ' && line[0] != '\t' && line[0] != '#') {
+                // Next top-level item arrived without `name:` — bail.
+                pendingKind.clear();
+            }
+        }
+    }
+    return out;
+}
+
+// Look for `- def:` ... `name: main` pattern in raw text.  Returns true
+// if the file declares a top-level `main` function.
+bool fileDeclaresMain(const std::string& path) {
+    std::ifstream in(path);
+    if (!in.is_open()) return false;
+    std::string line;
+    bool inDef = false;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.rfind("- def:", 0) == 0) { inDef = true; continue; }
+        if (inDef) {
+            auto pos = line.find("name:");
+            if (pos != std::string::npos) {
+                size_t i = pos + 5;
+                while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) i++;
+                std::string name;
+                while (i < line.size() && (std::isalnum((unsigned char)line[i]) || line[i] == '_')) {
+                    name += line[i++];
+                }
+                if (name == "main") return true;
+                inDef = false;
+            } else if (!line.empty() && line[0] != ' ' && line[0] != '\t' && line[0] != '#') {
+                inDef = false;
+            }
+        }
+    }
+    return false;
+}
+
+// Collect all class names instantiated via `{ new: ClassName }` in the
+// given file.  We grep for the substring "new:" and read the following
+// identifier — that's the class name being instantiated.
+std::set<std::string> findNewExprClassNames(const std::string& path) {
+    std::set<std::string> out;
+    std::ifstream in(path);
+    if (!in.is_open()) return out;
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        size_t pos = 0;
+        while ((pos = line.find("new:", pos)) != std::string::npos) {
+            size_t i = pos + 4;
+            while (i < line.size() && (line[i] == ' ' || line[i] == '\t')) i++;
+            std::string name;
+            while (i < line.size() && (std::isalnum((unsigned char)line[i]) || line[i] == '_')) {
+                name += line[i++];
+            }
+            if (!name.empty()) out.insert(name);
+            pos += 4;
+        }
+    }
+    return out;
+}
+
+void logMainComposesExternalClassDiagnostic(
+        const std::string& entryFile,
+        const std::vector<std::string>& importedFiles)
+{
+    size_t projectFileCount = 1 + importedFiles.size();
+    if (projectFileCount < 3) return;
+    if (fileOptsOutOfStaticChecks(entryFile)) return;
+
+    if (!fileDeclaresMain(entryFile)) {
+        LOG_ERROR(entryFile + ": project spans " + std::to_string(projectFileCount) +
+                  " AIML files but does not declare a `main` function. " +
+                  "Projects with 3+ files must use a `main` entry point.");
+        return;
+    }
+
+    // Build {className -> sourceFile} for class declarations across all files.
+    std::map<std::string, std::string> classToFile;
+    auto absorb = [&](const std::string& f) {
+        for (auto& d : scanTopLevelDecls(f)) {
+            if (d.kind == "class") classToFile[d.name] = f;
+        }
+    };
+    absorb(entryFile);
+    for (const auto& f : importedFiles) absorb(f);
+
+    // Find all `new: X` in the entry file.
+    auto news = findNewExprClassNames(entryFile);
+    std::string entryCanonical = canonicalizeDiagPath(entryFile);
+    bool composedExternal = false;
+    for (const auto& cls : news) {
+        auto it = classToFile.find(cls);
+        if (it == classToFile.end()) continue;
+        if (canonicalizeDiagPath(it->second) != entryCanonical) {
+            composedExternal = true;
+            break;
+        }
+    }
+    if (!composedExternal) {
+        LOG_ERROR(entryFile + ": project spans " + std::to_string(projectFileCount) +
+                  " AIML files; `main` must instantiate at least one class " +
+                  "declared in another file. Without external composition the " +
+                  "extra files are dead weight — split the entry point and " +
+                  "wire it from a separate module.");
+    }
 }
 
 std::string canonicalizeDiagPath(const std::string& path) {
@@ -141,6 +367,28 @@ int maxStmtSourceLine(const AIML::AST::Stmt* stmt) {
     return maxLine;
 }
 
+// Zähle Code-Zeilen (keine reinen Kommentare, keine leeren) im Bereich
+// [startLine, endLine] inklusive einer Datei.  Spiegelbild von
+// countFileLines aber für einen Subrange.  Falls Datei fehlt → roher span.
+int countCodeLinesInRange(const std::string& path, int startLine, int endLine) {
+    std::ifstream in(path);
+    if (!in.is_open()) return endLine - startLine + 1;
+    int curLine = 0;
+    int count = 0;
+    std::string line;
+    while (std::getline(in, line)) {
+        ++curLine;
+        if (curLine < startLine) continue;
+        if (curLine > endLine) break;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        size_t first = line.find_first_not_of(" \t");
+        if (first == std::string::npos) continue;
+        if (line[first] == '#') continue;
+        ++count;
+    }
+    return count;
+}
+
 void logAimlFunctionSizeDiagnostic(const std::string& path, const AIML::AST::FunctionDecl* func) {
     if (!func || func->sourceLine <= 0 || !func->body) return;
     // Respect static_off: ["lines"] — skip line-count check for this function
@@ -149,7 +397,7 @@ void logAimlFunctionSizeDiagnostic(const std::string& path, const AIML::AST::Fun
     }
     int endLine = maxBlockSourceLine(func->body.get());
     if (endLine < func->sourceLine) endLine = func->sourceLine;
-    int lines = endLine - func->sourceLine + 1;
+    int lines = countCodeLinesInRange(path, func->sourceLine, endLine);
     if (lines >= kAimlFunctionErrorLines) {
         std::string key = "fn_lines|" + canonicalizeDiagPath(path) + "|" +
                           std::to_string(func->sourceLine) + "|" + func->name;
@@ -225,12 +473,355 @@ const llvm::Module& AIMLCompiler::getModule() const {
 
 // ... (Functions compile, compileToObject, etc.)
 
+// --prefab-report: format the merged wiring facts (tab-separated records
+// D/I/S/C, see checkPrefabUsage) into a per-prefab report and print to stdout.
+// The report is the deliverable, so it goes to std::cout, not the logger.
+static void printPrefabReport(const std::vector<std::string>& rawLines,
+                              const std::string& entry,
+                              const std::string& filter) {
+    // Case-insensitive substring match (empty filter matches everything).
+    auto icontains = [](const std::string& hay, const std::string& needle) -> bool {
+        if (needle.empty()) return true;
+        auto lower = [](std::string s) { for (char& c : s) c = (char)std::tolower((unsigned char)c); return s; };
+        return lower(hay).find(lower(needle)) != std::string::npos;
+    };
+    struct Child { std::string name, type, spawnTgt, channel, attrs; };
+    struct PInfo {
+        bool declared = false;
+        bool drag = false;                       // whole-prefab draggable
+        std::string declLoc;
+        std::vector<Child> children;             // in declaration order
+        std::vector<std::string> inst;           // engine.instantiate sites (roots)
+        std::map<std::string, std::vector<std::string>> childAccess;  // set_* per child
+        std::set<std::string> buttons;           // child names of type=button
+    };
+    auto split = [](const std::string& s) {
+        std::vector<std::string> out; size_t i = 0;
+        for (;;) {
+            size_t t = s.find('\t', i);
+            if (t == std::string::npos) { out.push_back(s.substr(i)); break; }
+            out.push_back(s.substr(i, t - i)); i = t + 1;
+        }
+        return out;
+    };
+    auto trimLoc = [](std::string l) {           // fmtLoc yields "file:line: "
+        while (!l.empty() && (l.back() == ' ' || l.back() == ':')) l.pop_back();
+        return l;
+    };
+    // Order-preserving dedup (diamond imports can merge a module twice) — keeps
+    // child declaration order, which the recursive tree relies on.
+    std::set<std::string> seenSet;
+    std::vector<std::string> lines;
+    for (const auto& l : rawLines) if (seenSet.insert(l).second) lines.push_back(l);
+    std::map<std::string, PInfo> P;
+    std::set<std::string> clicked;               // button names polled via child_clicked
+    std::set<std::string> spawnTargets;          // every prefab named by a spawn/payload_spawn
+    // Behavioral wiring (F/O records).
+    struct FieldOp { std::string op, bucket, def, arg0; };
+    std::map<std::string, std::string> fieldPrefab;               // "class\tfield" -> prefab
+    std::map<std::string, std::vector<FieldOp>> fieldOps;         // "class\tfield" -> ops
+    std::map<std::string, std::vector<std::string>> prefabOwners; // prefab -> ["class\tfield", ...]
+    // Collections (list<prefab_instance> fields): M declares, L binds element, T touches.
+    struct Coll { std::string elem; std::set<std::string> touchedBy; };
+    std::map<std::string, Coll> colls;                            // "class\tfield" (list only)
+    std::map<std::string, std::vector<std::string>> prefabInColl; // prefab -> ["class.field", ...]
+    std::map<std::string, std::set<std::string>> actions;         // "class\tdef" -> {net_* calls}
+    std::map<std::string, std::set<std::string>> keyHandlers;     // key -> {"class\tdef"}
+    for (const auto& line : lines) {
+        auto f = split(line);
+        if (f.empty()) continue;
+        if      (f[0] == "D" && f.size() >= 3) { auto& p = P[f[1]]; p.declared = true; p.declLoc = trimLoc(f[2]); }
+        else if (f[0] == "I" && f.size() >= 3) P[f[1]].inst.push_back(trimLoc(f[2]));
+        else if (f[0] == "C" && f.size() >= 4) P[f[1]].childAccess[f[2]].push_back(trimLoc(f[3]));
+        else if (f[0] == "B" && f.size() >= 3) P[f[1]].buttons.insert(f[2]);
+        else if (f[0] == "G" && f.size() >= 3) { if (f[2] == "*") P[f[1]].drag = true; }
+        else if (f[0] == "K" && f.size() >= 2) clicked.insert(f[1]);
+        else if (f[0] == "F" && f.size() >= 4) {
+            std::string key = f[1] + "\t" + f[2];
+            fieldPrefab[key] = f[3];
+            auto& own = prefabOwners[f[3]];
+            if (std::find(own.begin(), own.end(), key) == own.end()) own.push_back(key);
+        }
+        else if (f[0] == "O" && f.size() >= 6) {
+            FieldOp o; o.op = f[3]; o.bucket = f[4]; o.def = f[5]; o.arg0 = (f.size() >= 7) ? f[6] : "";
+            fieldOps[f[1] + "\t" + f[2]].push_back(o);
+        }
+        else if (f[0] == "M" && f.size() >= 4) {                  // list<prefab_instance> member
+            if (f[3] == "1") colls[f[1] + "\t" + f[2]];           // ensure entry exists
+        }
+        else if (f[0] == "L" && f.size() >= 5) {                  // list push: element prefab
+            std::string key = f[1] + "\t" + f[2];
+            auto& c = colls[key];
+            if (c.elem.empty()) c.elem = f[3];
+            c.touchedBy.insert(f[4]);
+            std::string label = (f[1].empty() ? "" : f[1] + ".") + f[2];
+            auto& v = prefabInColl[f[3]];
+            if (std::find(v.begin(), v.end(), label) == v.end()) v.push_back(label);
+        }
+        else if (f[0] == "T" && f.size() >= 4) colls[f[1] + "\t" + f[2]].touchedBy.insert(f[3]);
+        else if (f[0] == "N" && f.size() >= 4) actions[f[1] + "\t" + f[2]].insert(f[3]);
+        else if (f[0] == "Y" && f.size() >= 4) keyHandlers[f[3]].insert(f[1] + "\t" + f[2]);
+        else if (f[0] == "H" && f.size() >= 6) {
+            Child c; c.name = f[2]; c.type = f[3]; c.spawnTgt = f[4]; c.channel = f[5];
+            c.attrs = (f.size() >= 7) ? f[6] : "";
+            if (!c.spawnTgt.empty()) spawnTargets.insert(c.spawnTgt);
+            P[f[1]].children.push_back(std::move(c));
+        }
+    }
+    // Helper: render the behavioral "driven by" block for a prefab into `os`.
+    // Groups the operations on each owner field by bucket, then by driver method,
+    // and appends completeness flags.  Returns nothing; prints indented lines.
+    auto behavioralBlock = [&](std::ostringstream& out, const std::string& prefab) {
+        auto oit = prefabOwners.find(prefab);
+        if (oit == prefabOwners.end()) return;   // not held in a class field we could link
+        static const char* order[] = {"create", "content", "gauge", "motion", "visibility", "interaction"};
+        for (const std::string& key : oit->second) {
+            size_t tab = key.find('\t');
+            std::string cls = key.substr(0, tab), fld = key.substr(tab + 1);
+            out << "    owner: " << (cls.empty() ? "(global)" : cls) << "." << fld << "\n";
+            auto fit = fieldOps.find(key);
+            std::set<std::string> buckets;
+            if (fit != fieldOps.end())
+                for (auto& o : fit->second) buckets.insert(o.bucket);
+            for (const char* b : order) {
+                if (!buckets.count(b)) continue;
+                // collect defs -> ops for this bucket
+                std::map<std::string, std::vector<std::string>> byDef;
+                for (auto& o : fit->second)
+                    if (o.bucket == b) {
+                        std::string t = o.op;
+                        if (!o.arg0.empty()) t += "(" + o.arg0 + ")";
+                        auto& v = byDef[o.def.empty() ? "?" : o.def];
+                        if (std::find(v.begin(), v.end(), t) == v.end()) v.push_back(t);
+                    }
+                out << "      " << b << ": ";
+                bool firstDef = true;
+                for (auto& dv : byDef) {
+                    if (!firstDef) out << "; "; firstDef = false;
+                    out << dv.first << " (";
+                    for (size_t i = 0; i < dv.second.size(); ++i) { out << dv.second[i]; if (i + 1 < dv.second.size()) out << ", "; }
+                    out << ")";
+                }
+                out << "\n";
+            }
+            // ── completeness flags for this owner field (only high-confidence
+            // ones; content is often set via a helper that takes the instance as
+            // a parameter, which the field-op scan cannot attribute, so we do NOT
+            // flag "no content" to avoid false positives). ──
+            bool hasGauge = buckets.count("gauge");
+            bool anyOp = (fit != fieldOps.end() && !fit->second.empty());
+            bool hasBarChild = false;
+            auto pit = P.find(prefab);
+            if (pit != P.end())
+                for (auto& c : pit->second.children)
+                    if (c.type == "bar") hasBarChild = true;
+            if (!anyOp)
+                out << "      (!) created but never driven — no set_*/positioning on this field\n";
+            if (hasBarChild && !hasGauge)
+                out << "      (!) has a bar/gauge child but set_bar_* is never called on this field\n";
+        }
+    };
+    int total = 0, reached = 0, dead = 0;
+    for (auto& kv : P) {
+        if (!kv.second.declared) continue;
+        ++total;
+        if (!kv.second.inst.empty() || spawnTargets.count(kv.first)) ++reached; else ++dead;
+    }
+    std::ostringstream os;
+    os << "\n===================== PREFAB WIRING TREE =====================\n";
+    os << "entry:  " << entry << "\n";
+    os << total << " declared  |  " << reached << " reached  |  " << dead << " DEAD\n";
+    os << "(roots = engine.instantiate sites, grouped by scene/source; children\n";
+    os << " recurse through spawn: / payload_spawn:)\n";
+    os << "owner: = class field holding the instance; below it the methods that\n";
+    os << " drive it, grouped by effect: content|gauge|motion|visibility|interaction.\n";
+    os << " NB: content set via a helper (populate(inst, ...)) is not attributed to\n";
+    os << " the field, so an empty 'content:' line is not proof of 'not wired'.\n";
+    if (!filter.empty())
+        os << "focused on scene: \"" << filter << "\" (roots by instantiate source; "
+              "collections by class; actions shown in full)\n";
+
+    // Scene index (navigation): each instantiate source with its root count.
+    {
+        std::map<std::string, int> sceneCount;
+        for (auto& kv : P) if (kv.second.declared && !kv.second.inst.empty()) sceneCount[kv.second.inst.front()]++;
+        os << "\nscenes (use --prefab-report=<substr> to focus one):\n";
+        for (auto& sc : sceneCount)
+            os << "  " << (icontains(sc.first, filter) ? "* " : "  ") << sc.first
+               << "   (" << sc.second << " roots)\n";
+    }
+
+    // Recursive child renderer.  `vis` guards against spawn cycles.
+    std::function<void(const std::string&, const std::string&, std::set<std::string>&)> tree;
+    tree = [&](const std::string& pf, const std::string& prefix, std::set<std::string>& vis) {
+        auto it = P.find(pf);
+        if (it == P.end()) return;
+        auto& kids = it->second.children;
+        for (size_t i = 0; i < kids.size(); ++i) {
+            const Child& c = kids[i];
+            bool last = (i + 1 == kids.size());
+            os << prefix << (last ? "\\-- " : "|-- ") << c.name << " (" << c.type << ")";
+            if (c.type == "button")
+                os << (clicked.count(c.name) ? "  [click]" : "  [click: NO HANDLER]");
+            if (it->second.childAccess.count(c.name)) os << "  [set_*]";
+            if (!c.attrs.empty()) os << "  " << c.attrs;
+            os << "\n";
+            std::string deep = prefix + (last ? "    " : "|   ");
+            if (!c.spawnTgt.empty()) {
+                if (vis.count(c.spawnTgt)) {
+                    os << deep << "\\-> " << c.spawnTgt << "  (" << c.channel << ", recursion cut)\n";
+                } else if (P.count(c.spawnTgt) && P[c.spawnTgt].declared) {
+                    os << deep << "\\-> " << c.spawnTgt << "  (" << c.channel << ")   ["
+                       << P[c.spawnTgt].declLoc << "]\n";
+                    vis.insert(c.spawnTgt);
+                    tree(c.spawnTgt, deep + "    ", vis);
+                    vis.erase(c.spawnTgt);
+                } else {
+                    os << deep << "\\-> " << c.spawnTgt << "  (" << c.channel
+                       << ", NOT declared in this build)\n";
+                }
+            }
+        }
+    };
+
+    // Roots grouped BY SCENE — as (instantiate-site, root) pairs across ALL of a
+    // root's instantiate sites, so a prefab used in several screens (e.g. CardFull
+    // in the board AND the card editor) appears under each.  A scene filter keeps
+    // only the sites whose source matches; because every field-owned prefab is
+    // instantiated in its owner class's source, a source substring like "board"
+    // captures the whole scene without needing a separate class match.
+    std::set<std::pair<std::string, std::string>> sceneRoots;   // (site, root)
+    for (auto& kv : P)
+        if (kv.second.declared)
+            for (auto& s : kv.second.inst) sceneRoots.insert({s, kv.first});
+    std::string curSite;
+    for (const auto& pr : sceneRoots) {
+        const std::string& site = pr.first;
+        const std::string& r = pr.second;
+        if (!filter.empty() && !icontains(site, filter)) continue;
+        if (site != curSite) {
+            curSite = site;
+            os << "\n==== scene/source: " << site << " ====\n";
+        }
+        os << "\n# " << r;
+        if (P[r].drag) os << "  [draggable]";
+        os << "   [" << P[r].declLoc << "]\n";
+        behavioralBlock(os, r);
+        auto cit = prefabInColl.find(r);
+        if (cit != prefabInColl.end()) {
+            os << "    in collection: ";
+            for (size_t i = 0; i < cit->second.size(); ++i) { os << cit->second[i] << " [list]"; if (i + 1 < cit->second.size()) os << ", "; }
+            os << "\n";
+        }
+        std::set<std::string> vis; vis.insert(r);
+        tree(r, "", vis);
+    }
+
+    // ── Collections: list<prefab_instance> fields, their element prefab (if a
+    // push binds one) and the methods that build/update them. ──
+    if (!colls.empty()) {
+        os << "\n==== COLLECTIONS (list<prefab_instance> fields) ====\n";
+        for (auto& kv : colls) {
+            size_t tab = kv.first.find('\t');
+            std::string cls = kv.first.substr(0, tab), fld = kv.first.substr(tab + 1);
+            if (!filter.empty() && !icontains(cls, filter)) continue;
+            os << (cls.empty() ? "" : cls + ".") << fld << "   element: "
+               << (kv.second.elem.empty() ? "? (filled via helper/param — not resolved)" : kv.second.elem)
+               << "   touched by: ";
+            bool first = true;
+            for (auto& d : kv.second.touchedBy) { if (!first) os << ", "; first = false; os << d; }
+            if (kv.second.touchedBy.empty()) os << "(none)";
+            os << "\n";
+        }
+    }
+
+    // DEAD prefabs: declared, never instantiated AND never a spawn target.
+    std::vector<std::string> deadList;
+    for (auto& kv : P)
+        if (kv.second.declared && kv.second.inst.empty() && !spawnTargets.count(kv.first))
+            deadList.push_back(kv.first);
+    if (!deadList.empty()) {
+        os << "\n==== DEAD (declared, never instantiated or spawned) ====\n";
+        for (auto& d : deadList) os << "# " << d << "   [" << P[d].declLoc << "]\n";
+    }
+
+    // ── Actions: which method fires which server RPC (net_*).  Surfaces the
+    // functional wiring behind interactions (e.g. handle_drop / dispatch ->
+    // net_play_card) that the structural tree alone cannot show. ──
+    if (!actions.empty()) {
+        os << "\n==== ACTIONS (server RPCs fired, by method) ====\n";
+        // ACTIONS is a cross-cutting overview (server RPCs often live in a
+        // dispatch class, not the scene class) — always shown in full, even under
+        // a scene filter, so e.g. net_play_card is never hidden from a board view.
+        for (auto& kv : actions) {
+            size_t tab = kv.first.find('\t');
+            std::string cls = kv.first.substr(0, tab), def = kv.first.substr(tab + 1);
+            os << "  " << (cls.empty() ? "" : cls + ".") << def << "  ->  ";
+            bool first = true;
+            for (auto& n : kv.second) { if (!first) os << ", "; first = false; os << n; }
+            os << "\n";
+        }
+    }
+
+    // ── Key bindings: keyboard keys handled via input.key_pressed("<key>"),
+    // and the method that reacts to each.  Filtered by class like collections
+    // (keys are scene-local), so a scene focus shows only that scene's keys. ──
+    if (!keyHandlers.empty()) {
+        std::vector<std::pair<std::string, std::vector<std::string>>> rows;
+        for (auto& kv : keyHandlers) {
+            std::vector<std::string> hs;
+            for (auto& h : kv.second) {
+                size_t tab = h.find('\t');
+                std::string cls = h.substr(0, tab), def = h.substr(tab + 1);
+                if (!filter.empty() && !icontains(cls, filter)) continue;
+                hs.push_back((cls.empty() ? "" : cls + ".") + def);
+            }
+            if (!hs.empty()) rows.push_back({kv.first, hs});
+        }
+        if (!rows.empty()) {
+            os << "\n==== KEY BINDINGS (input.key_pressed) ====\n";
+            for (auto& r : rows) {
+                os << "  \"" << r.first << "\""
+                   << std::string(r.first.size() < 6 ? 6 - r.first.size() : 1, ' ') << "->  ";
+                for (size_t i = 0; i < r.second.size(); ++i) { os << r.second[i]; if (i + 1 < r.second.size()) os << ", "; }
+                os << "\n";
+            }
+        }
+    }
+
+    // ── Interaction summary: buttons and drag-and-drop across the build ──
+    int btnTotal = 0, btnUnwired = 0, dragPrefabs = 0;
+    std::vector<std::string> unwired;   // "Prefab.button" never polled anywhere
+    for (auto& kv : P) {
+        if (!kv.second.declared) continue;
+        if (kv.second.drag) ++dragPrefabs;
+        for (auto& b : kv.second.buttons) {
+            ++btnTotal;
+            if (!clicked.count(b)) { ++btnUnwired; unwired.push_back(kv.first + "." + b); }
+        }
+    }
+    os << "\n===================== INTERACTION SUMMARY ====================\n";
+    os << "buttons: " << btnTotal << " total, " << btnUnwired
+       << " with NO child_clicked handler anywhere\n";
+    for (auto& u : unwired) os << "    (!) " << u << "\n";
+    os << "drag sources: " << dragPrefabs << " draggable prefab(s) "
+          "(drop targets are handled imperatively in board logic)\n";
+    os << "note: a button name polled via child_clicked anywhere counts as wired "
+          "(names are not prefab-unique — heuristic; NEVER polled = definite dead button).\n";
+    os << "=============================================================\n";
+    std::cout << os.str() << std::endl;
+}
 
 void AIMLCompiler::compile(const std::string& filename, const std::string& outputFilename) {
     LOG_DEBUG("Compiling " + filename);
+    // Asset Registry: scan roots once at the top of the compile.  Stored in
+    // a singleton so builtin_registry can validate string-literal lookups and
+    // the JIT-runtime can resolve stems via the same in-memory tables.
+    AIML::AssetScanner::instance().scan(assetRootsStr);
     YAML::Node config = YAML::LoadFile(filename);
     auto seenFileSizeDiagnostics = std::make_shared<std::unordered_set<std::string>>();
     logAimlFileSizeDiagnostic(filename, seenFileSizeDiagnostics.get());
+    logAimlDeclCountDiagnostic(filename);
 
     // 1. (Legacy __aiml_init creation removed. AST::Compiler now handles it)
 
@@ -249,8 +840,17 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
 
     ctx.compilerPath = compilerPath;
     ctx.libraryMode = libraryMode;
+    ctx.reportPrefabs = reportPrefabsMode;   // --prefab-report: collect wiring facts
     ctx.ir_gen = AIML::createLLVMGenerator(ctx);
-    
+
+    // Register builtins (classes, interfaces, namespace fns) BEFORE the
+    // sibling-import / header-scan phase parses any user code.  Otherwise a
+    // class header that says `implements: [mirror.RpcHandler]` fires
+    // "unknown interface" during sibling registration — that early visit
+    // runs registerTypes but never reaches the AST::Compiler::compile()
+    // call that normally seeds builtins.
+    registerBuiltins(ctx);
+
     // 3. Setup Globals: __argc, __argv for sys commands
     module_->getOrInsertGlobal("__argc", builder.getInt32Ty());
     module_->getOrInsertGlobal("__argv", builder.getInt8Ty()->getPointerTo()->getPointerTo());
@@ -337,6 +937,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
         if (fin.is_open()) {
             try {
                 logAimlFileSizeDiagnostic(path, seenFileSizeDiagnostics.get());
+                logAimlDeclCountDiagnostic(path);
                 YAML::Parser parser(fin);
                 parser.HandleNextDocument(subBuilder);
                 auto subProg = subBuilder.takeProgram();
@@ -443,6 +1044,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                     if (!sf.is_open()) continue;
                     try {
                         logAimlFileSizeDiagnostic(sibPath, seenFileSizeDiagnostics.get());
+                        logAimlDeclCountDiagnostic(sibPath);
                         YAML::Parser sp(sf);
                         sp.HandleNextDocument(sb);
                         auto p = sb.takeProgram();
@@ -467,6 +1069,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                                 if (dynamic_cast<AIML::AST::ClassDecl*>(decl.get()) ||
                                     dynamic_cast<AIML::AST::ModelDecl*>(decl.get()) ||
                                     dynamic_cast<AIML::AST::EnumDecl*>(decl.get()) ||
+                                    dynamic_cast<AIML::AST::InterfaceDecl*>(decl.get()) ||
                                     dynamic_cast<AIML::AST::ImportDecl*>(decl.get()))
                                     sc.registerTypeDecl(decl.get());
                             }
@@ -476,6 +1079,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                             if (dynamic_cast<AIML::AST::ClassDecl*>(decl.get()) ||
                                 dynamic_cast<AIML::AST::ModelDecl*>(decl.get()) ||
                                 dynamic_cast<AIML::AST::EnumDecl*>(decl.get()) ||
+                                dynamic_cast<AIML::AST::InterfaceDecl*>(decl.get()) ||
                                 dynamic_cast<AIML::AST::ImportDecl*>(decl.get()))
                                 astCompiler.registerTypeDecl(decl.get());
                         }
@@ -581,8 +1185,98 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                     ctx.objectFilesToLink.push_back(obj);
             }
 
+            // Hard OOP rule: if a compile spans >= 3 AIML project files,
+            // at least one real user class must exist somewhere in the project.
+            // Builtins and models do not count: the point is to force behavior-
+            // carrying object structure once a project grows beyond tiny size.
+            if (!fileOptsOutOfStaticChecks(filename)) {
+                size_t projectFileCount = 1 + this->importedSourceFiles.size();
+                size_t userClassCount = 0;
+                for (const auto& [name, ci] : ctx.classes) {
+                    if (!ci.isBuiltin && !ci.isModel) ++userClassCount;
+                }
+                if (projectFileCount >= 3 && userClassCount == 0) {
+                    LOG_ERROR(filename + ": project spans " + std::to_string(projectFileCount) +
+                              " AIML files but defines no class. Projects with 3+ files must define at least one class.");
+                }
+            }
+
+            // Additional rule for 3+ file projects: the entry file must
+            // expose a `main` function AND that function must instantiate
+            // (via `{ new: ClassName }`) a class declared in a DIFFERENT
+            // project file.  Without this the entry point is unnecessarily
+            // monolithic and the extra files are not actually wired in.
+            {
+                std::vector<std::string> imports(this->importedSourceFiles.begin(),
+                                                 this->importedSourceFiles.end());
+                logMainComposesExternalClassDiagnostic(filename, imports);
+            }
+
             // Pass 2: Full Code Generation
             astCompiler.compile(programAST.get());
+
+            // Tier-3 dead-prefab (spec/44_8): fold THIS module's prefab decls
+            // and instantiation sites into the merged sets.  Sub-compilers have
+            // already merged their (transitive) sets up via resolveImport, so at
+            // the top level these unions are whole-build complete.
+            for (const auto& kv : ctx.prefabDecls) allPrefabDecls.insert(kv.first);
+            allPrefabUses.insert(ctx.prefabUses.begin(), ctx.prefabUses.end());
+
+            // Unused-enumerator (spec/49): fold THIS module's declared/used enum
+            // members + decl locations into the whole-build sets, per enum.
+            for (const auto& kv : ctx.enumDeclMembers)
+                allEnumDeclMembers[kv.first].insert(kv.second.begin(), kv.second.end());
+            for (const auto& kv : ctx.enumUsedMembers)
+                allEnumUsedMembers[kv.first].insert(kv.second.begin(), kv.second.end());
+            for (const auto& kv : ctx.enumDeclLoc)
+                allEnumDeclLoc.emplace(kv.first, kv.second);   // first decl wins
+
+            // --prefab-report: fold THIS module's wiring facts in, then (at the
+            // top-level entry) print the whole-build report and skip warnings —
+            // the report supersedes the dead-prefab hint.
+            if (reportPrefabsMode) {
+                allPrefabReport.insert(allPrefabReport.end(),
+                    ctx.prefabReportLines.begin(), ctx.prefabReportLines.end());
+                if (!libraryMode)
+                    printPrefabReport(allPrefabReport, filename, prefabReportFilter);
+            }
+
+            // Warn once, at the top-level entry, on prefabs that are declared
+            // somewhere in the build but never instantiated.  Gate on a complete
+            // use-set: a real object/exe build (noCache) compiles every import
+            // fresh (no cache-hit skips), and a lone single file has no imports —
+            // both give a complete picture.  A warm-cache multi-file JIT run can
+            // skip imports, so we stay silent there to avoid false "dead" noise.
+            if (!libraryMode && !reportPrefabsMode && (noCache || importedSourceFiles.empty())) {
+                for (const auto& pname : allPrefabDecls) {
+                    if (!allPrefabUses.count(pname)) {
+                        LOG_WARNING("prefab '" + pname + "' is declared but never "
+                            "instantiated in this build — no engine.instantiate(\"" +
+                            pname + "\") anywhere. Remove the dead `- prefab:` "
+                            "declaration or wire it up.");
+                    }
+                }
+
+                // Unused-enumerator (spec/49): warn once, at the top-level entry,
+                // on enum members declared somewhere in the build but never
+                // referenced as `Enum.Member`.  Same complete-use-set gate as
+                // dead-prefab.  V1 counts only explicit symbolic references (not
+                // raw ints, persistence, or `enum:`-typed UI bindings), so the
+                // decl-location prefix points at the enum block.
+                for (const auto& kv : allEnumDeclMembers) {
+                    const std::string& enumName = kv.first;
+                    auto usedIt = allEnumUsedMembers.find(enumName);
+                    for (const auto& member : kv.second) {
+                        if (usedIt != allEnumUsedMembers.end() && usedIt->second.count(member))
+                            continue;
+                        auto locIt = allEnumDeclLoc.find(enumName);
+                        std::string loc = (locIt != allEnumDeclLoc.end()) ? locIt->second : "";
+                        LOG_WARNING(loc + "enum member '" + enumName + "." + member +
+                            "' is never referenced in this build — remove the unused "
+                            "enumerator or wire it up.");
+                    }
+                }
+            }
         } else {
             LOG_ERROR(filename + ": AST Builder failed to produce a valid program.");
         }
@@ -807,6 +1501,46 @@ void AIMLCompiler::generateEntryPoint() {
         }
     }
 
+    // 3.95. Initialize Asset Registry (spec/44_7).  The compile-time
+    // AssetScanner state lives only in the compiler process; the wasm/aot
+    // binary starts with an empty singleton.  std::filesystem walks of
+    // emscripten's preloaded VFS are unreliable, so we emit one explicit
+    // register call per known (kind, stem, path) entry.  Path is computed
+    // cwd-relative (`assets/items/hammer.png`) which works as a relative
+    // path in both native (cwd=project root) and WASM (cwd=/).
+    {
+        llvm::Type* i8p  = builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32t = builder.getInt32Ty();
+        llvm::FunctionType* regFt = llvm::FunctionType::get(
+            builder.getVoidTy(), {i32t, i8p, i8p}, false);
+        llvm::FunctionCallee regFn = module_->getOrInsertFunction(
+            "aiml_asset_runtime_register", regFt);
+        std::error_code rec;
+        std::filesystem::path cwd = std::filesystem::current_path(rec);
+        auto kindIdx = [](AIML::AssetKind k) -> int {
+            switch (k) {
+                case AIML::AssetKind::Texture: return 0;
+                case AIML::AssetKind::Audio:   return 1;
+                case AIML::AssetKind::Shader:  return 2;
+                case AIML::AssetKind::Font:    return 3;
+                case AIML::AssetKind::Data:    return 4;
+                default: return -1;
+            }
+        };
+        for (const auto& [kind, store] : AIML::AssetScanner::instance().all_stores()) {
+            int kidx = kindIdx(kind);
+            if (kidx < 0) continue;
+            for (const auto& [stem, entry] : store) {
+                std::error_code rel_ec;
+                std::filesystem::path rel = std::filesystem::relative(entry.abs_path, cwd, rel_ec);
+                std::string path_str = rel_ec ? entry.abs_path : rel.string();
+                llvm::Value* stemV = builder.CreateGlobalStringPtr(stem, "__a_stem");
+                llvm::Value* pathV = builder.CreateGlobalStringPtr(path_str, "__a_path");
+                builder.CreateCall(regFn, {builder.getInt32(kidx), stemV, pathV});
+            }
+        }
+    }
+
     // 4. Call __aiml_init()
     llvm::Function* initFunc = module_->getFunction("__aiml_init");
     if (initFunc) {
@@ -873,6 +1607,10 @@ void AIMLCompiler::setTargetTriple(const std::string& triple) {
     module_->setTargetTriple(triple);
     targetTripleStr = triple;
     LOG_DEBUG("compiler target set to " + triple);
+}
+
+void AIMLCompiler::setAssetRoots(const std::string& commaList) {
+    assetRootsStr = commaList;
 }
 
 void AIMLCompiler::saveModule(const std::string& outputFilename) {
@@ -965,6 +1703,17 @@ void AIMLCompiler::compileToObject(const std::string& /*filename*/, const std::s
 
     pass.run(*module_);
     LOG_INFO("Object code written to " + outputFilename);
+}
+
+// ── Uncaught-exception message capture ───────────────────────────────────────
+// AIML `throw` records its exception's `message` here right before __cxa_throw,
+// so the top-level try/catch in jitRun can report it when nothing catches the
+// exception (spec/22: unhandled → print message to stderr + sys.exit(2)).
+// Without this the exception would unwind out of runFunction() and std::terminate
+// the process (core dump, no diagnostic).
+static thread_local std::string g_aiml_last_thrown_msg;
+extern "C" void aiml_note_thrown_message(const char* msg) {
+    g_aiml_last_thrown_msg = msg ? msg : "";
 }
 
 int AIMLCompiler::jitRun() {
@@ -1211,6 +1960,22 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_get_path",           (void*)(intptr_t)aiml_db_get_path);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_set_blob",        (void*)(intptr_t)aiml_db_kv_set_blob);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_kv_get_blob",        (void*)(intptr_t)aiml_db_kv_get_blob);
+    // Secondary index (db_indexed)
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_index_open_for_kv",  (void*)(intptr_t)aiml_db_index_open_for_kv);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_index_lookup",       (void*)(intptr_t)aiml_db_index_lookup);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_index_add",          (void*)(intptr_t)aiml_db_index_add);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_index_remove",       (void*)(intptr_t)aiml_db_index_remove);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_index_findings",     (void*)(intptr_t)aiml_db_index_findings);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_index_finding",      (void*)(intptr_t)aiml_db_index_finding);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_db_index_backfill",     (void*)(intptr_t)aiml_db_index_backfill);
+    // Asset Registry (spec/22)
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_asset_get_texture",     (void*)(intptr_t)aiml_asset_get_texture);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_asset_get_sfx",         (void*)(intptr_t)aiml_asset_get_sfx);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_asset_get_music",       (void*)(intptr_t)aiml_asset_get_music);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_asset_read_data",       (void*)(intptr_t)aiml_asset_read_data);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_asset_get_font",        (void*)(intptr_t)aiml_asset_get_font);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_asset_init_runtime",    (void*)(intptr_t)aiml_asset_init_runtime);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_asset_runtime_register",(void*)(intptr_t)aiml_asset_runtime_register);
     // Iterator
     llvm::sys::DynamicLibrary::AddSymbol("aiml_iter_create_kv",        (void*)(intptr_t)aiml_iter_create_kv);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_iter_next",             (void*)(intptr_t)aiml_iter_next);
@@ -1654,6 +2419,7 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_create_window_fullscreen",   (void*)(intptr_t)aiml_engine_create_window_fullscreen);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_destroy_window",             (void*)(intptr_t)aiml_engine_destroy_window);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_set_title",                  (void*)(intptr_t)aiml_engine_set_title);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_maximize_window",            (void*)(intptr_t)aiml_engine_maximize_window);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_window_size_x",              (void*)(intptr_t)aiml_engine_window_size_x);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_window_size_y",              (void*)(intptr_t)aiml_engine_window_size_y);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_make_current",               (void*)(intptr_t)aiml_engine_make_current);
@@ -1695,12 +2461,17 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_alpha",                  (void*)(intptr_t)aiml_prefab_set_alpha);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_alpha",                  (void*)(intptr_t)aiml_prefab_get_alpha);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_draggable",              (void*)(intptr_t)aiml_prefab_set_draggable);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_layout_hflow",               (void*)(intptr_t)aiml_engine_layout_hflow);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_layout_vflow",               (void*)(intptr_t)aiml_engine_layout_vflow);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_layout_stack",               (void*)(intptr_t)aiml_engine_layout_stack);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_width",                  (void*)(intptr_t)aiml_prefab_get_width);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_height",                 (void*)(intptr_t)aiml_prefab_get_height);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_text",                   (void*)(intptr_t)aiml_prefab_set_text);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_texture",                (void*)(intptr_t)aiml_prefab_set_texture);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_color",                  (void*)(intptr_t)aiml_prefab_set_color);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_child_visible",          (void*)(intptr_t)aiml_prefab_set_child_visible);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_container_set_compact",      (void*)(intptr_t)aiml_prefab_container_set_compact);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_note_thrown_message",               (void*)(intptr_t)aiml_note_thrown_message);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_child",                      (void*)(intptr_t)aiml_prefab_child);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_dock_x",                     (void*)(intptr_t)aiml_prefab_dock_x);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_dock_y",                     (void*)(intptr_t)aiml_prefab_dock_y);
@@ -1714,6 +2485,29 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_update_drag",                (void*)(intptr_t)aiml_prefab_update_drag);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_dragged",                (void*)(intptr_t)aiml_prefab_get_dragged);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_cancel_drag",                (void*)(intptr_t)aiml_prefab_cancel_drag);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_add_child",                  (void*)(intptr_t)aiml_prefab_add_child);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_remove_child",               (void*)(intptr_t)aiml_prefab_remove_child);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_clip",                   (void*)(intptr_t)aiml_prefab_set_clip);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_scroll",                 (void*)(intptr_t)aiml_prefab_set_scroll);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_scroll_x",               (void*)(intptr_t)aiml_prefab_get_scroll_x);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_scroll_y",               (void*)(intptr_t)aiml_prefab_get_scroll_y);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_bar_value",              (void*)(intptr_t)aiml_prefab_set_bar_value);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_bar_max",                (void*)(intptr_t)aiml_prefab_set_bar_max);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_bar_fill",               (void*)(intptr_t)aiml_prefab_set_bar_fill);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_slider_value",           (void*)(intptr_t)aiml_prefab_get_slider_value);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_slider_value",           (void*)(intptr_t)aiml_prefab_set_slider_value);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_slider_min",             (void*)(intptr_t)aiml_prefab_set_slider_min);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_slider_max",             (void*)(intptr_t)aiml_prefab_set_slider_max);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_connect",                    (void*)(intptr_t)aiml_prefab_connect);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_connector_set_colors",              (void*)(intptr_t)aiml_connector_set_colors);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_connector_set_highlight",           (void*)(intptr_t)aiml_connector_set_highlight);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_connector_set_width",               (void*)(intptr_t)aiml_connector_set_width);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_connector_set_bow",                 (void*)(intptr_t)aiml_connector_set_bow);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_connector_set_visible",             (void*)(intptr_t)aiml_connector_set_visible);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_connector_set_z",                   (void*)(intptr_t)aiml_connector_set_z);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_connector_set_port",                (void*)(intptr_t)aiml_connector_set_port);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_connector_destroy",                 (void*)(intptr_t)aiml_connector_destroy);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_connector_anchor",       (void*)(intptr_t)aiml_prefab_set_connector_anchor);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_font",                   (void*)(intptr_t)aiml_prefab_set_font);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_register_callback",          (void*)(intptr_t)aiml_prefab_register_callback);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_material_register",                 (void*)(intptr_t)aiml_material_register);
@@ -1838,10 +2632,12 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_set_sync_mode",      (void*)(intptr_t)aiml_mirror_session_set_sync_mode);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_set_rpc_target",     (void*)(intptr_t)aiml_mirror_session_set_rpc_target);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_event_type",                 (void*)(intptr_t)aiml_mirror_event_type);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_type_enum",                  (void*)(intptr_t)aiml_mirror_type_enum);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_event_peer",                 (void*)(intptr_t)aiml_mirror_event_peer);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_event_net_id",               (void*)(intptr_t)aiml_mirror_event_net_id);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_send_rpc",           (void*)(intptr_t)aiml_mirror_session_send_rpc);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_send_rpc_model",     (void*)(intptr_t)aiml_mirror_session_send_rpc_model);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_send_and_await",     (void*)(intptr_t)aiml_mirror_session_send_and_await);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_rpc_event_decode_into",             (void*)(intptr_t)aiml_rpc_event_decode_into);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_has_rpc",            (void*)(intptr_t)aiml_mirror_session_has_rpc);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_next_rpc",           (void*)(intptr_t)aiml_mirror_session_next_rpc);
@@ -2082,7 +2878,19 @@ int AIMLCompiler::jitRun() {
 
     // Expose CompilerContext + engine to aiml_exec_code (called from JIT)
     aiml_set_active_context(compiler_ctx_, engine);
-    llvm::GenericValue result = engine->runFunction(mainFunc, args);
+    // Top-level guard: an unhandled AIML exception (thrown deep in any function,
+    // no matching catch) unwinds out of runFunction.  Catch it here so the
+    // process reports the message and exits cleanly (code 2) instead of
+    // std::terminate/core-dumping (spec/22 "Exception Propagation").
+    llvm::GenericValue result;
+    try {
+        result = engine->runFunction(mainFunc, args);
+    } catch (...) {
+        aiml_set_active_context(nullptr, nullptr);
+        std::fprintf(stderr, "Unhandled AIML exception: %s\n",
+                     g_aiml_last_thrown_msg.empty() ? "(no message)" : g_aiml_last_thrown_msg.c_str());
+        return 2;
+    }
     aiml_set_active_context(nullptr, nullptr);
 
     LOG_DEBUG("Main finished. Result: " + std::to_string(result.IntVal.getSExtValue()));
@@ -2117,7 +2925,16 @@ int AIMLCompiler::jitRun(int argc, char** argv) {
     gvArgs[1].PointerVal = argv;
 
     aiml_set_active_context(compiler_ctx_, engine);
-    llvm::GenericValue result = engine->runFunction(mainFunc, gvArgs);
+    // Top-level guard — see the no-arg jitRun() above.
+    llvm::GenericValue result;
+    try {
+        result = engine->runFunction(mainFunc, gvArgs);
+    } catch (...) {
+        aiml_set_active_context(nullptr, nullptr);
+        std::fprintf(stderr, "Unhandled AIML exception: %s\n",
+                     g_aiml_last_thrown_msg.empty() ? "(no message)" : g_aiml_last_thrown_msg.c_str());
+        return 2;
+    }
     aiml_set_active_context(nullptr, nullptr);
 
     return result.IntVal.getSExtValue();
@@ -2420,8 +3237,14 @@ void AIMLCompiler::resolveImport(const std::string& path) {
     subCompiler.compiledKeys = this->compiledKeys;   // share guard within run
     subCompiler.parsedPathsShared = this->parsedPathsShared;   // share parser dedup within run
     subCompiler.emitImportsAsLL = this->emitImportsAsLL;
+    subCompiler.reportPrefabsMode = this->reportPrefabsMode;
     if (!this->targetTripleStr.empty())
         subCompiler.setTargetTriple(this->targetTripleStr);
+    // Asset Registry (spec/44_7): propagate the same --asset-roots into the
+    // sub-compiler so imported files' prefab/gl.tex literals validate against
+    // the same store.  Without this the sub-compiler's scan("") would clear
+    // the singleton and every literal lookup would fail.
+    subCompiler.assetRootsStr = this->assetRootsStr;
     // Give the sub-compiler all known sibling imports (excluding itself).
     for (const auto& sib : this->siblingImports) {
         if (sib != path)
@@ -2429,7 +3252,10 @@ void AIMLCompiler::resolveImport(const std::string& path) {
     }
 
     subCompiler.compile(path, "/dev/null");
-    if (emitImportsAsLL) {
+    if (reportPrefabsMode) {
+        // Analysis-only: skip object/IR emission — we only want the wiring
+        // facts (merged below).
+    } else if (emitImportsAsLL) {
         // Text IR for external toolchains (emcc). Library imports don't need
         // a main() entry point so we skip generateEntryPoint here.
         subCompiler.saveModule(objPath);
@@ -2448,6 +3274,21 @@ void AIMLCompiler::resolveImport(const std::string& path) {
         if (std::find(importedSourceFiles.begin(), importedSourceFiles.end(), src) == importedSourceFiles.end())
             importedSourceFiles.push_back(src);
     }
+
+    // Propagate transitive prefab decl/use sets for Tier-3 dead-prefab analysis.
+    allPrefabDecls.insert(subCompiler.allPrefabDecls.begin(), subCompiler.allPrefabDecls.end());
+    allPrefabUses.insert(subCompiler.allPrefabUses.begin(),  subCompiler.allPrefabUses.end());
+
+    // Propagate transitive enum decl/use sets for unused-enumerator analysis.
+    for (const auto& kv : subCompiler.allEnumDeclMembers)
+        allEnumDeclMembers[kv.first].insert(kv.second.begin(), kv.second.end());
+    for (const auto& kv : subCompiler.allEnumUsedMembers)
+        allEnumUsedMembers[kv.first].insert(kv.second.begin(), kv.second.end());
+    for (const auto& kv : subCompiler.allEnumDeclLoc)
+        allEnumDeclLoc.emplace(kv.first, kv.second);
+    if (reportPrefabsMode)
+        allPrefabReport.insert(allPrefabReport.end(),
+            subCompiler.allPrefabReport.begin(), subCompiler.allPrefabReport.end());
 
     // Update cache manifest (JIT mode only) — new structured schema.
     if (!noCache) {

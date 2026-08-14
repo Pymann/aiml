@@ -6,6 +6,7 @@
 #define YYJSON_DISABLE_WRITER 0
 #include "yyjson.h"
 #include "yyjson_wrapper.h"
+#include "../sys/string_runtime.h"
 #include <cstdlib>
 #include <cstring>
 #include <cassert>
@@ -57,9 +58,11 @@ static void jw_arr_append(aiml_jw_t* w, yyjson_mut_val* val) {
 
 
 static char* aiml_strdup_cpp(const std::string& s) {
-    char* out = (char*)malloc(s.size() + 1);
+    // Refcounted alloc — returns to AIML user code (aiml_json_* / aiml_jr_*
+    // getters), which manages lifetime via aiml_str_decref on rebind/scope-exit.
+    char* out = aiml_str_alloc(s.size());
     if (!out) return nullptr;
-    memcpy(out, s.c_str(), s.size() + 1);
+    memcpy(out, s.c_str(), s.size());
     return out;
 }
 
@@ -343,10 +346,10 @@ int aiml_jr_bool(void* rv, const char* key) {
 
 char* aiml_jr_str(void* rv, const char* key) {
     auto* r = (aiml_jr_t*)rv;
-    if (!r || !r->val) return strdup("");
+    if (!r || !r->val) return aiml_str_dup("");
     yyjson_val* v = yyjson_obj_get(r->val, key);
     const char* s = v ? yyjson_get_str(v) : nullptr;
-    return s ? strdup(s) : strdup("");
+    return s ? aiml_str_dup(s) : aiml_str_dup("");
 }
 
 // ── Array reads ───────────────────────────────────────────────────────────────
@@ -397,7 +400,7 @@ char* aiml_jr_arr_str(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
     yyjson_val* v = yyjson_arr_get(jr_arr(r, key), (size_t)idx);
     const char* s = v ? yyjson_get_str(v) : nullptr;
-    return s ? strdup(s) : strdup("");
+    return s ? aiml_str_dup(s) : aiml_str_dup("");
 }
 
 void* aiml_jr_arr_sub(void* rv, const char* key, int idx) {
@@ -448,7 +451,7 @@ char* aiml_jr_map_key(void* rv, const char* key, int idx) {
     yyjson_val* obj = jr_map_obj(r, key);
     yyjson_val* k = jr_map_nth_key(obj, idx);
     const char* s = k ? yyjson_get_str(k) : nullptr;
-    return s ? strdup(s) : strdup("");
+    return s ? aiml_str_dup(s) : aiml_str_dup("");
 }
 
 int32_t aiml_jr_map_val_i32(void* rv, const char* key, int idx) {
@@ -485,7 +488,7 @@ char* aiml_jr_map_val_str(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
     yyjson_val* v = jr_map_nth_val(jr_map_obj(r, key), idx);
     const char* s = v ? yyjson_get_str(v) : nullptr;
-    return s ? strdup(s) : strdup("");
+    return s ? aiml_str_dup(s) : aiml_str_dup("");
 }
 
 // ── Value-level (keyless) array access ────────────────────────────────────────
@@ -534,10 +537,10 @@ int aiml_jr_val_bool(void* rv, int idx) {
 
 char* aiml_jr_val_str(void* rv, int idx) {
     auto* r = (aiml_jr_t*)rv;
-    if (!r || !r->val) return strdup("");
+    if (!r || !r->val) return aiml_str_dup("");
     yyjson_val* v = yyjson_arr_get(r->val, (size_t)idx);
     const char* s = v ? yyjson_get_str(v) : nullptr;
-    return s ? strdup(s) : strdup("");
+    return s ? aiml_str_dup(s) : aiml_str_dup("");
 }
 
 void* aiml_jr_val_sub(void* rv, int idx) {

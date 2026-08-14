@@ -4,18 +4,18 @@
 - class:
     name: ListBox
     members:
-      - [xs, list<i32>]
+      - [var_xs, list<i32>]
 
 - decl: [box, ref<ListBox>, { new: ListBox }]
 
-- call: [box.xs.push, 10]
-- call: [box.xs.push, 20]
+- call: [box.var_xs.push, 10]
+- call: [box.var_xs.push, 20]
 
-- decl: [n, i32, box.xs.len]
+- decl: [var_n, i32, box.var_xs.len]
 - if:
-    condition: { neq: [n, 2] }
+    condition: { neq: [var_n, 2] }
     then:
-      - print: ["FAIL list class-member len: expected 2, got ${n}"]
+      - print: ["FAIL list class-member len: expected 2, got ${var_n}"]
       - exit: [1]
 
 - free: [box]

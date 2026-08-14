@@ -8,15 +8,15 @@
 - decl: [scores, Store<Score>]
 - set: [scores, { call: [db.open, "scores"] }]
 
-- decl: [s, Score]
-- set: [s.pts, 50]
-- call: [scores.insert, s]
+- decl: [var_s, Score]
+- set: [var_s.pts, 50]
+- call: [scores.insert, var_s]
 
-- set: [s.pts, 100]
-- call: [scores.insert, s]
+- set: [var_s.pts, 100]
+- call: [scores.insert, var_s]
 
-- set: [s.pts, 30]
-- call: [scores.insert, s]
+- set: [var_s.pts, 30]
+- call: [scores.insert, var_s]
 
 # Ascending by pts → first = 30
 - decl: [asc, list<ptr<Score>>]
@@ -46,11 +46,11 @@
 # where predicate + order_by desc
 - def:
     name: above_40
-    args: [[p, ptr<Score>]]
+    args: [[var_p, ptr<Score>]]
     return: i32
     body:
       - if:
-          condition: { gt: [p.pts, 40] }
+          condition: { gt: [var_p.pts, 40] }
           then:
             - return: 1
           else:

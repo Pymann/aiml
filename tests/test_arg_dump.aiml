@@ -29,40 +29,40 @@
       - print: ["cfg.count   = ${cfg.count}"]
 
       # T1: steps >= 0
-      - decl: [t1, i32, 0]
+      - decl: [var_t1, i32, 0]
       - if:
           condition: { ">=": [cfg.steps, 0] }
           then:
-            - set: [t1, 1]
-      - print: ["T1: steps>=0 = ${t1}"]
+            - set: [var_t1, 1]
+      - print: ["T1: steps>=0 = ${var_t1}"]
 
       # T2: verbose is 0 or 1
-      - decl: [t2, i32, 0]
+      - decl: [var_t2, i32, 0]
       - if:
           condition: { "||": [{ eq: [cfg.verbose, 0] }, { eq: [cfg.verbose, 1] }] }
           then:
-            - set: [t2, 1]
-      - print: ["T2: verbose_ok = ${t2}"]
+            - set: [var_t2, 1]
+      - print: ["T2: verbose_ok = ${var_t2}"]
 
       # T3: --db-tag (hyphen in CLI) maps to db_tag field (underscore)
       - print: ["cfg.db_tag        = ${cfg.db_tag}"]
       - print: ["cfg.output_prefix = ${cfg.output_prefix}"]
       - print: ["cfg.limit_words   = ${cfg.limit_words}"]
-      - decl: [t3, i32, 0]
+      - decl: [var_t3, i32, 0]
       - if:
           condition: { eq: [cfg.db_tag, "myrun"] }
           then:
-            - set: [t3, 1]
-      - print: ["T3: db_tag(hyphen->underscore) = ${t3}"]
-      - decl: [t4, i32, 0]
+            - set: [var_t3, 1]
+      - print: ["T3: db_tag(hyphen->underscore) = ${var_t3}"]
+      - decl: [var_t4, i32, 0]
       - if:
           condition: { eq: [cfg.output_prefix, "ft"] }
           then:
-            - set: [t4, 1]
-      - print: ["T4: output_prefix(hyphen->underscore) = ${t4}"]
-      - decl: [t5, i32, 0]
+            - set: [var_t4, 1]
+      - print: ["T4: output_prefix(hyphen->underscore) = ${var_t4}"]
+      - decl: [var_t5, i32, 0]
       - if:
           condition: { eq: [cfg.limit_words, 100] }
           then:
-            - set: [t5, 1]
-      - print: ["T5: limit_words(hyphen->underscore) = ${t5}"]
+            - set: [var_t5, 1]
+      - print: ["T5: limit_words(hyphen->underscore) = ${var_t5}"]

@@ -14,6 +14,6 @@
 - decl: [pkg, Code]
 - set: [pkg, {call: [sys.bundle, "exec_target"]}]
 
-- decl: [rc, i32]
-- set: [rc, {call: [sys.exec, pkg]}]
-- print: ["rc: ${rc}"]
+- decl: [var_rc, i32]
+- set: [var_rc, {call: [sys.exec, pkg]}]
+- print: ["var_rc: ${var_rc}"]

@@ -27,3 +27,5 @@ aiml_bad_module.ll
 out/test_link_bug/
 test_link_bug
 out/aiml_wasm/
+
+assets/

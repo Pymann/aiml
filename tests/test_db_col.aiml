@@ -3,33 +3,33 @@
 
 - class:
     name: Particle
-    members: [[x, i32], [y, i32], [z, i32]]
+    members: [[var_x, i32], [var_y, i32], [var_z, i32]]
 
 - decl: [parts, Store<Particle>]
 - set: [parts, { call: [db.open, "particles", {layout: "column"}] }]
 
-- decl: [p, Particle]
-- set: [p.x, 10]
-- set: [p.y, 20]
-- set: [p.z, 30]
-- call: [parts.insert, p]
+- decl: [var_p, Particle]
+- set: [var_p.var_x, 10]
+- set: [var_p.var_y, 20]
+- set: [var_p.var_z, 30]
+- call: [parts.insert, var_p]
 
-- set: [p.x, 40]
-- set: [p.y, 50]
-- set: [p.z, 60]
-- call: [parts.insert, p]
+- set: [var_p.var_x, 40]
+- set: [var_p.var_y, 50]
+- set: [var_p.var_z, 60]
+- call: [parts.insert, var_p]
 
 - decl: [got, ptr<Particle>]
 - set: [got, { call: [parts.get, 1] }]
-- print: ["p1: ${got.x}, ${got.y}, ${got.z}"]
+- print: ["p1: ${got.var_x}, ${got.var_y}, ${got.var_z}"]
 
 - set: [got, { call: [parts.get, 2] }]
-- print: ["p2: ${got.x}, ${got.y}, ${got.z}"]
+- print: ["p2: ${got.var_x}, ${got.var_y}, ${got.var_z}"]
 
-- decl: [n, i32]
-- set: [n, { call: [parts.len] }]
-- print: ["col len: ${n}"]
+- decl: [var_n, i32]
+- set: [var_n, { call: [parts.len] }]
+- print: ["col len: ${var_n}"]
 
 - call: [parts.delete, 1]
-- set: [n, { call: [parts.len] }]
-- print: ["after del: ${n}"]
+- set: [var_n, { call: [parts.len] }]
+- print: ["after del: ${var_n}"]

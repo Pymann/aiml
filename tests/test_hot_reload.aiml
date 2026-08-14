@@ -1,9 +1,9 @@
 # Hot-Reload Test — sys.bundle + sys.exec version guard
 #
 # Expected output:
-#   v1 rc: 1       (hr_worker v1 called via fptable)
-#   v2 rc: 2       (hot-reload: fptable swapped to v2 code)
-#   v1 skip rc: 2  (v1 <= live v2 → version guard skips, v2 stays active)
+#   v1 var_rc: 1       (hr_worker v1 called via fptable)
+#   v2 var_rc: 2       (hot-reload: fptable swapped to v2 code)
+#   v1 skip var_rc: 2  (v1 <= live v2 → version guard skips, v2 stays active)
 
 # Define worker v1
 - def:
@@ -16,9 +16,9 @@
 # Bundle v1 and execute it
 - decl: [pkg1, Code]
 - set: [pkg1, {call: [sys.bundle, "hr_worker"]}]
-- decl: [rc, i32]
-- set: [rc, {call: [sys.exec, pkg1]}]
-- print: ["v1 rc: ${rc}"]
+- decl: [var_rc, i32]
+- set: [var_rc, {call: [sys.exec, pkg1]}]
+- print: ["v1 var_rc: ${var_rc}"]
 
 # Define worker v2 (hot-reload candidate)
 - def:
@@ -31,10 +31,10 @@
 # Bundle v2 and exec — should hot-reload hr_worker
 - decl: [pkg2, Code]
 - set: [pkg2, {call: [sys.bundle, "hr_worker"]}]
-- set: [rc, {call: [sys.exec, pkg2]}]
-- print: ["v2 rc: ${rc}"]
+- set: [var_rc, {call: [sys.exec, pkg2]}]
+- print: ["v2 var_rc: ${var_rc}"]
 
 # Execute v1 bundle again — version guard should skip (1 <= 2)
-# rc stays at 2 (v2 remains active)
-- set: [rc, {call: [sys.exec, pkg1]}]
-- print: ["v1 skip rc: ${rc}"]
+# var_rc stays at 2 (v2 remains active)
+- set: [var_rc, {call: [sys.exec, pkg1]}]
+- print: ["v1 skip var_rc: ${var_rc}"]

@@ -17,8 +17,8 @@
 
 # ── Phase B: SHA-3-256 ────────────────────────────────────────────────────
 
-- decl: [h3, string, { call: [hash.sha3_256, "abc"] }]
-- print: ["SHA3-256(abc): ${h3}"]
+- decl: [var_h3, string, { call: [hash.sha3_256, "abc"] }]
+- print: ["SHA3-256(abc): ${var_h3}"]
 # expected: 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532
 
 # ── Phase C: Keccak-256 (Ethereum-compatible) ─────────────────────────────
@@ -51,8 +51,8 @@
 
 # ── Phase F: MD5 ──────────────────────────────────────────────────────────
 
-- decl: [m, string, { call: [hash.md5, "hello world"] }]
-- print: ["MD5: ${m}"]
+- decl: [var_m, string, { call: [hash.md5, "hello world"] }]
+- print: ["MD5: ${var_m}"]
 # expected: 5eb63bbbe01eeed093cb22bb8f5acdc3
 
 # ── Phase G: CRC32 ────────────────────────────────────────────────────────

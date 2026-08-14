@@ -1,4 +1,4 @@
 # Test: decl modifiers are invalid in the 3rd list position
 # Expected exit code: 1
 
-- decl: [x, i32, { const: true }]
+- decl: [var_x, i32, { const: true }]

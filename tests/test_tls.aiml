@@ -3,12 +3,12 @@
 
 # ── Phase A: Lifecycle (no TLS traffic) ──────────────────────────────────────
 
-# Socket creation → fd must be >= 0
+# Socket creation → var_fd must be >= 0
 - decl: [sock, tls_socket_handle]
 - set: [sock, { call: [tls.socket] }]
-- decl: [fd, i32]
-- set: [fd, { call: [tls.fd, sock] }]
-- print: ["tls socket created (fd should be > 0): ${fd}"]
+- decl: [var_fd, i32]
+- set: [var_fd, { call: [tls.fd, sock] }]
+- print: ["tls socket created (var_fd should be > 0): ${var_fd}"]
 - call: [tls.close, sock]
 
 # bind to 127.0.0.1 + listen (no TLS handshake)
@@ -33,20 +33,20 @@
       - set: [cert, "tests/tls_certs/server.crt"]
       - decl: [key, path]
       - set: [key, "tests/tls_certs/server.key"]
-      - decl: [s, tls_socket_handle]
-      - set: [s, { call: [tls.socket] }]
-      - call: [tls.set_cert, s, cert, key]
-      - call: [tls.set_verify, s, "none"]
-      - call: [tls.bind, s, "127.0.0.1", 19877]
-      - call: [tls.listen, s, 5]
-      - decl: [c, tls_socket_handle]
-      - set: [c, { call: [tls.accept, s] }]
+      - decl: [var_s, tls_socket_handle]
+      - set: [var_s, { call: [tls.socket] }]
+      - call: [tls.set_cert, var_s, cert, key]
+      - call: [tls.set_verify, var_s, "none"]
+      - call: [tls.bind, var_s, "127.0.0.1", 19877]
+      - call: [tls.listen, var_s, 5]
+      - decl: [var_c, tls_socket_handle]
+      - set: [var_c, { call: [tls.accept, var_s] }]
       - decl: [msg, string]
-      - set: [msg, { call: [tls.recv_string, c, 64] }]
+      - set: [msg, { call: [tls.recv_string, var_c, 64] }]
       - print: ["tls server got: ${msg}"]
-      - call: [tls.send_string, c, "tls_pong"]
-      - call: [tls.close, c]
-      - call: [tls.close, s]
+      - call: [tls.send_string, var_c, "tls_pong"]
+      - call: [tls.close, var_c]
+      - call: [tls.close, var_s]
 
 - decl: [srv_thread, thread_handle]
 - set: [srv_thread, { spawn: [tls_server] }]

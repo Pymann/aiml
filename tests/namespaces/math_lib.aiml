@@ -2,14 +2,14 @@
 
 - def:
     name: add
-    args: [[a, i32], [b, i32]]
+    args: [[var_a, i32], [var_b, i32]]
     return: i32
     body:
-      - ret: { +: [a, b] }
+      - ret: { +: [var_a, var_b] }
 
 - def:
     name: sub
-    args: [[a, i32], [b, i32]]
+    args: [[var_a, i32], [var_b, i32]]
     return: i32
     body:
-      - ret: { -: [a, b] }
+      - ret: { -: [var_a, var_b] }

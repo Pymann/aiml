@@ -5,17 +5,17 @@
 
 - call: [io.write_file, "/tmp/aiml_evict_test/.keep", ""]
 
-- decl: [kv, Kv<string:string>]
-- set: [kv, { call: [db.open_kv, "evict_test", {persist: true, path: "/tmp/aiml_evict_test/"}] }]
+- decl: [var_kv, Kv<string:string>]
+- set: [var_kv, { call: [db.open_kv, "evict_test", {persist: true, path: "/tmp/aiml_evict_test/"}] }]
 
 # Fill with known data
-- call: [kv.set, "key_a", "alpha"]
-- call: [kv.set, "key_b", "beta"]
-- call: [kv.set, "key_c", "gamma"]
+- call: [var_kv.set, "key_a", "alpha"]
+- call: [var_kv.set, "key_b", "beta"]
+- call: [var_kv.set, "key_c", "gamma"]
 
-- decl: [n, i32]
-- set: [n, { call: [kv.len] }]
-- print: ["len before evict: ${n}"]
+- decl: [var_n, i32]
+- set: [var_n, { call: [var_kv.len] }]
+- print: ["len before evict: ${var_n}"]
 # CHECK: len before evict: 3
 
 # ── Phase A: evict + lazy-reload on read ─────────────────────────────────────
@@ -23,64 +23,64 @@
 # From the caller's perspective, data is always available — evict only frees RAM
 # temporarily until the next read.
 
-- call: [db.kv_evict, kv]
+- call: [db.kv_evict, var_kv]
 
 # len triggers lazy-reload → data back
-- set: [n, { call: [kv.len] }]
-- print: ["len after evict (lazy-reload): ${n}"]
+- set: [var_n, { call: [var_kv.len] }]
+- print: ["len after evict (lazy-reload): ${var_n}"]
 # CHECK: len after evict (lazy-reload): 3
 
 - decl: [has, i32]
-- set: [has, { call: [kv.has, "key_a"] }]
+- set: [has, { call: [var_kv.has, "key_a"] }]
 - print: ["has key_a after evict: ${has}"]
 # CHECK: has key_a after evict: 1
 
-- decl: [v, string]
-- set: [v, { call: [kv.get, "key_a"] }]
-- print: ["val key_a: ${v}"]
+- decl: [var_v, string]
+- set: [var_v, { call: [var_kv.get, "key_a"] }]
+- print: ["val key_a: ${var_v}"]
 # CHECK: val key_a: alpha
 
 # ── Phase B: evict + set + read ──────────────────────────────────────────────
 # Writing after evict appends to WAL AND triggers lazy-reload first,
 # so both old and new entries are visible.
 
-- call: [db.kv_evict, kv]
+- call: [db.kv_evict, var_kv]
 
 # set triggers lazy-reload → old entries restored, then new entry added
-- call: [kv.set, "key_d", "delta"]
+- call: [var_kv.set, "key_d", "delta"]
 
-- set: [n, { call: [kv.len] }]
-- print: ["len after evict+set: ${n}"]
+- set: [var_n, { call: [var_kv.len] }]
+- print: ["len after evict+set: ${var_n}"]
 # CHECK: len after evict+set: 4
 
-- set: [v, { call: [kv.get, "key_d"] }]
-- print: ["val key_d: ${v}"]
+- set: [var_v, { call: [var_kv.get, "key_d"] }]
+- print: ["val key_d: ${var_v}"]
 # CHECK: val key_d: delta
 
-- set: [v, { call: [kv.get, "key_b"] }]
-- print: ["val key_b: ${v}"]
+- set: [var_v, { call: [var_kv.get, "key_b"] }]
+- print: ["val key_b: ${var_v}"]
 # CHECK: val key_b: beta
 
 # ── Phase C: double evict is safe ────────────────────────────────────────────
 
-- call: [db.kv_evict, kv]
-- call: [db.kv_evict, kv]
+- call: [db.kv_evict, var_kv]
+- call: [db.kv_evict, var_kv]
 
-- set: [n, { call: [kv.len] }]
-- print: ["len after double evict: ${n}"]
+- set: [var_n, { call: [var_kv.len] }]
+- print: ["len after double evict: ${var_n}"]
 # CHECK: len after double evict: 4
 
 # ── Phase D: explicit reload_kv also works after evict ───────────────────────
 
-- call: [db.kv_evict, kv]
-- call: [db.reload_kv, kv]
+- call: [db.kv_evict, var_kv]
+- call: [db.reload_kv, var_kv]
 
-- set: [n, { call: [kv.len] }]
-- print: ["len after explicit reload: ${n}"]
+- set: [var_n, { call: [var_kv.len] }]
+- print: ["len after explicit reload: ${var_n}"]
 # CHECK: len after explicit reload: 4
 
-- set: [v, { call: [kv.get, "key_c"] }]
-- print: ["val key_c: ${v}"]
+- set: [var_v, { call: [var_kv.get, "key_c"] }]
+- print: ["val key_c: ${var_v}"]
 # CHECK: val key_c: gamma
 
 - print: ["ALL PASSED"]

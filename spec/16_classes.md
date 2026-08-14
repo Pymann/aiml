@@ -103,6 +103,67 @@ Each segment may be either a struct member or a list index (`field-0`):
 - call: [p1.move, 10, 20]
 ```
 
+### `<` — Implicit `this` Shortcut
+
+Inside a method body, the compiler injects an implicit first argument
+`this: ref<ClassName>` (see [18_refs_and_pointers.md](18_refs_and_pointers.md)).
+The `<` token is a syntactic shortcut that desugars to `this`:
+
+| Source            | Desugars to     | Use case                              |
+|-------------------|-----------------|---------------------------------------|
+| `<.field`         | `this.field`    | Member read/write inside a method     |
+| `<.method(...)`   | `this.method(...)` | Method call inside a method        |
+| `<` (standalone)  | `this`          | Pass the whole instance as argument   |
+
+```yaml
+- class:
+    name: Counter
+    members: [[value, i32, 0]]
+    methods:
+      - def:
+          name: bump
+          args: []
+          body:
+            - set: [<.value, { +: [<.value, 1] }]      # member write
+            - decl: [v, i32, <.value]                  # member read
+            - call: [log.info, "Counter v=${<.value}"] # in string interp
+
+      - def:
+          name: copy_self
+          args: []
+          return: Counter
+          body:
+            # Pass the whole instance to a free function (or sys.* builtin).
+            - return: { call: [sys.clone, <] }
+```
+
+#### When to use `<` standalone
+
+The `<`-shortcut for the whole instance is useful for:
+- `sys.clone(<)` — deep-copy of `this`
+- `sys.serialize(<)` — serialise `this` to JSON
+- `sess.decode_rpc(rpc, <)` — decode a mirror RPC payload into the
+  class's own model-mixin fields (when the class `models: [SomeReq]`
+  the wire payload lines up with the class's own member layout)
+- Passing `this` to a free helper function that takes `ptr<Class>` /
+  `ref<Class>`
+
+#### What `<` is **not**
+
+- Not a pointer literal — you can't write `set: [<, other_instance]`
+- Not an L-value root — `set: [<.field, …]` works because `<.` desugars
+  to `this.`, but bare `<` on the LHS of a set has no defined meaning
+- Not usable outside a class method body — there's no `this` to refer to
+- Not the YAML merge-key operator `<<:` — single `<` is plain scalar
+  text and never needs quoting
+
+### YAML Note: `<` and `>` in arg lists
+
+The `<` token is plain scalar in YAML — it does **not** need quoting in
+flow sequences (`[<]`) or block sequences (`- <`).  The only conflict
+would be `<<:` (YAML merge-key) which is two `<` characters; a single
+`<` is unambiguous.
+
 ## Internal Representation
 1. **Context Storage**: `CompilerContext` maintains a `ClassRegistry` mapping class names to `ClassInfo`.
 2. **ClassInfo Struct**:

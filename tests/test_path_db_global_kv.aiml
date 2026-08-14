@@ -10,14 +10,14 @@
 - call: [cfg.clear]
 - call: [cfg.set, "mode", "global-kv"]
 
-- decl: [n, i32]
-- set: [n, { call: [cfg.len] }]
-- print: ["global_kv_len=${n}"]
+- decl: [var_n, i32]
+- set: [var_n, { call: [cfg.len] }]
+- print: ["global_kv_len=${var_n}"]
 
 - decl: [got, string]
 - set: [got, { call: [cfg.get, "mode"] }]
 - print: ["global_kv_mode=${got}"]
 
-- decl: [cp, i32]
-- set: [cp, { call: [db.checkpoint] }]
-- print: ["global_kv_checkpoint=${cp}"]
+- decl: [var_cp, i32]
+- set: [var_cp, { call: [db.checkpoint] }]
+- print: ["global_kv_checkpoint=${var_cp}"]

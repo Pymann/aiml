@@ -8,8 +8,8 @@
 - decl: [tri, i32, gl.TRIANGLES]
 - decl: [lin, i32, gl.LINES]
 - decl: [pts, i32, gl.POINTS]
-- decl: [ts,  i32, gl.TRIANGLE_STRIP]
-- print: ["Phase A: TRIANGLES=${tri} LINES=${lin} POINTS=${pts} TRIANGLE_STRIP=${ts}"]
+- decl: [var_ts,  i32, gl.TRIANGLE_STRIP]
+- print: ["Phase A: TRIANGLES=${tri} LINES=${lin} POINTS=${pts} TRIANGLE_STRIP=${var_ts}"]
 
 - if: [{ neq: [tri, 4] }, true]
   then:
@@ -30,8 +30,8 @@
 
 - decl: [rep, i32, gl.REPEAT]
 - decl: [cte, i32, gl.CLAMP_TO_EDGE]
-- decl: [mr,  i32, gl.MIRRORED_REPEAT]
-- print: ["Phase B: REPEAT=${rep} CLAMP_TO_EDGE=${cte} MIRRORED_REPEAT=${mr}"]
+- decl: [var_mr,  i32, gl.MIRRORED_REPEAT]
+- print: ["Phase B: REPEAT=${rep} CLAMP_TO_EDGE=${cte} MIRRORED_REPEAT=${var_mr}"]
 
 - if: [{ neq: [rep, 10497] }, true]   # 0x2901 = 10497
   then:

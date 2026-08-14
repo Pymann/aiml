@@ -57,8 +57,11 @@ prefer the mapping layer in game code.
 | Call | Return | Description |
 |------|--------|-------------|
 | `input.key_down(key: string)` | `bool` | Key currently pressed |
-| `input.key_pressed(key: string)` | `bool` | Key went down **this frame** (rising edge) |
+| `input.key_pressed(key: string)` | `bool` | Key went down **this frame** (rising edge). Idempotent: returns the same value however many times it is polled this frame. |
+| `input.key_pressed_once(key: string)` | `bool` | Rising edge, **consumed on first read per frame**: the first poll this frame returns `true`, every later poll returns `false` until the edge resets next frame. Use for edge-triggered *actions* (skip, toggle, confirm) in code paths that may run more than once per frame — e.g. an input handler invoked from `render()`, which is often called several times per frame (once per reactive redraw after an action). Polling `key_pressed` there would fire the action once per redraw. |
 | `input.key_released(key: string)` | `bool` | Key came up **this frame** (falling edge) |
+
+> **Which press call?** Use `key_pressed` for *queries* (highlight a key, show a hint) — it is idempotent and safe to read from multiple systems. Use `key_pressed_once` for *actions that must happen exactly once per physical press*, especially when the polling site can run multiple times per frame. Because `key_pressed_once` consumes the edge, only the first reader in a frame sees it — do not use it if two independent systems must both react to the same key in the same frame.
 
 ### 2.2 Mouse
 
@@ -72,6 +75,20 @@ prefer the mapping layer in game code.
 | `input.mouse_scroll()` | `vec2` | Scroll delta this frame (x=horizontal, y=vertical) |
 
 Mouse button indices: `0` = left, `1` = right, `2` = middle.
+
+> **Pixels vs. design coordinates.** `input.mouse_pos_*` returns raw **window pixels**. Prefab positions (`set_pos`, `get_x`/`get_y`) live in **design coordinates** — the engine scales the design canvas to the window by `rel_scale`. `engine.hit_test`/`update_drag`/`update_hover` take pixel input and convert internally, so mixing them is fine; but if you place a widget **directly at the cursor** with `set_pos`, feeding raw pixels is wrong on a scaled window (the widget lands far off). Use the design-space cursor helpers instead:
+>
+> | Call | Return | Description |
+> |------|--------|-------------|
+> | `engine.mouse_design_x()` | `f32` | Cursor X in design coords (= pixel / `rel_scale`) |
+> | `engine.mouse_design_y()` | `f32` | Cursor Y in design coords (= pixel / `rel_scale`) |
+>
+> Example — snap a card's centroid to the cursor (card is 140×196 in design units, top-left `set_pos` anchor):
+>
+> ```yaml
+> - call: [card.set_pos, { -: [{ call: [engine.mouse_design_x] }, 70.0] },
+>                         { -: [{ call: [engine.mouse_design_y] }, 98.0] }]
+> ```
 
 ### 2.3 Gamepad
 
@@ -338,12 +355,16 @@ Likewise for `"Ctrl"` and `"Alt"`.
 
 ### 7.1 Frame State Buffer
 
-The C runtime holds two arrays of size `GLFW_KEY_LAST + 1`:
-`curr_keys[]` and `prev_keys[]`. `input.update()` copies `curr → prev` and
-then reads the new `curr` state via `glfwGetKey()`.
+The C runtime holds three arrays of size `GLFW_KEY_LAST + 1`:
+`curr_keys[]`, `prev_keys[]` and `consumed_press[]`. `input.update()` copies
+`curr → prev`, clears `consumed_press`, and then reads the new `curr` state via
+`glfwGetKey()`.
 
 `key_pressed(k)` = `curr[k] && !prev[k]`
 `key_released(k)` = `!curr[k] && prev[k]`
+`key_pressed_once(k)` = `curr[k] && !prev[k] && !consumed_press[k]`, and sets
+`consumed_press[k] = 1` on a `true` result — so only the first poll per frame
+sees the edge. `consumed_press` is reset once per frame in `input.update()`.
 
 ### 7.2 Scroll Accumulator
 

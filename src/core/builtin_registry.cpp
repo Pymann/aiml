@@ -9,6 +9,7 @@
 #include "path_runtime.h"
 #include "../../src/sys/net_runtime.h"
 #include "../../src/sys/db_runtime.h"
+#include "asset_scanner.h"
 #include "../../src/sys/http_runtime.h"
 #include "../../src/sys/compress_runtime.h"
 #include "../../src/sys/gltf_runtime.h"
@@ -18,6 +19,8 @@
 #include "../../src/sys/ui_runtime.h"
 #include "../../src/sys/tensor_runtime.h"
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/GlobalVariable.h>
 
 using IRValue = AIML::IRValue;
 
@@ -83,6 +86,40 @@ static llvm::BasicBlock* emitGuard(CompilerContext& ctx, llvm::Value* flag,
 // registerBuiltins
 // ---------------------------------------------------------------------------
 void registerBuiltins(CompilerContext& ctx) {
+
+    // -----------------------------------------------------------------------
+    // mirror.RpcHandler builtin interface
+    //
+    // Stand-in for the very common pattern in mirror-based servers:
+    //   - class:
+    //       name: LoginHandler
+    //       implements: [mirror.RpcHandler]
+    //       models:     [LoginReq]
+    //       methods:
+    //         - def:
+    //             name: run
+    //             args: [[rpc, rpc_event], [session, mirror_session]]
+    //             body: [...]
+    //
+    // The interface contract is `run(rpc_event, mirror_session) -> void`.
+    // A user-defined `RpcDispatcher` class then holds a
+    // `map<string:ptr<mirror.RpcHandler>>` and dispatches per `rpc.method`.
+    //
+    // Registering it here saves every project from re-defining the same
+    // interface block.  The vtable signature-check + missing-method
+    // hard-fail (ast_compiler.cpp visitTopLevel) work unchanged because
+    // they look up `cls->interfaces[i]` in `ctx.interfaces` by name.
+    // -----------------------------------------------------------------------
+    {
+        CompilerContext::InterfaceInfo iface;
+        iface.name = "mirror.RpcHandler";
+        CompilerContext::InterfaceMethod run;
+        run.name = "run";
+        run.returnType = "void";
+        run.args = {{"rpc", "rpc_event"}, {"session", "mirror_session"}};
+        iface.methods.push_back(std::move(run));
+        ctx.interfaces["mirror.RpcHandler"] = std::move(iface);
+    }
 
     // -----------------------------------------------------------------------
     // VecResult class — real LLVM struct {i8*, f32} so that r.id / r.score
@@ -188,6 +225,345 @@ void registerBuiltins(CompilerContext& ctx) {
     }
 
     // -----------------------------------------------------------------------
+    // cascade namespace  —  unit-testable helpers for cascade wire format
+    // -----------------------------------------------------------------------
+    {
+        auto& cas = ctx.namespaces["cascade"];
+        // cascade.persist_row(outer: list<list<i32>>, bound_index: i32,
+        //                     tag: i32,               values: list<i32>)
+        // Grows the row at bound_index to tag + n_values slots, then writes:
+        //     row[0]      = tag
+        //     row[1..N]   = values[0..N-1]
+        // Standalone from the widget runtime so it can be exercised headless.
+        cas.builtinFuncs["persist_row"] = [](CompilerContext& ctx,
+                                             const std::vector<IRValue*>& args) -> IRValue* {
+            auto* vd  = ctx.builder.getVoidTy();
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            if (args.size() < 4) return ctx.ir_gen->getInt32(0);
+            llvm::Value* outer = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* idx   = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            llvm::Value* tag   = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]));
+            llvm::Value* vals  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[3]));
+            /* args[3] may arrive as either a struct-by-value (loaded from
+             * the local list<i32> alloca) or already a pointer.  If we got
+             * a struct, spill it to a fresh alloca first so we can GEP on
+             * a pointer.  outer (args[0]) is a list<list<i32>> which reads
+             * as a struct pointer; also normalise the same way. */
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            auto normalise = [&](llvm::Value* v, const char* name) -> llvm::Value* {
+                if (v->getType()->isPointerTy()) return v;
+                llvm::IRBuilder<> tmp(&ctx.builder.GetInsertBlock()->getParent()->getEntryBlock(),
+                                       ctx.builder.GetInsertBlock()->getParent()->getEntryBlock().begin());
+                llvm::AllocaInst* al = tmp.CreateAlloca(v->getType(), nullptr, name);
+                ctx.builder.CreateStore(v, al);
+                return al;
+            };
+            llvm::Value* outerP = normalise(outer, "outer_spill");
+            llvm::Value* valsP  = normalise(vals,  "vals_spill");
+            llvm::Value* sizeGep = ctx.builder.CreateStructGEP(listTy, valsP, 0, "vals_size_gep");
+            llvm::Value* nVals   = ctx.builder.CreateLoad(i32, sizeGep, "vals_size");
+            llvm::Value* dataGep = ctx.builder.CreateStructGEP(listTy, valsP, 2, "vals_data_gep");
+            llvm::Value* dataP   = ctx.builder.CreateLoad(i8p,  dataGep, "vals_data");
+            ctx.builder.CreateCall(
+                ctx.getFunction("aiml_cascade_persist_row", vd,
+                                {i8p, i32, i32, i8p, i32}),
+                {outerP, idx, tag, dataP, nVals});
+            return ctx.ir_gen->getInt32(0);
+        };
+
+        // cascade.validate(name: string, row: list<i32>) → i32
+        //   -1 valid | >=0 first bad index | -2 unknown cascade.
+        // cascade.explain(name: string, row: list<i32>) → string  (reason / "").
+        // Both extract row's (data_ptr, size) from the list struct (size@0,
+        // data@2) and forward to the aiml_cascade_* runtime.
+        auto cascadeCheck = [](CompilerContext& ctx, const std::vector<IRValue*>& args,
+                               const char* fnName, llvm::Type* retTy) -> llvm::Value* {
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));   // string → i8p
+            llvm::Value* row  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));   // list<i32>
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            llvm::Value* rowP = row;
+            if (!row->getType()->isPointerTy()) {
+                llvm::IRBuilder<> tmp(&ctx.builder.GetInsertBlock()->getParent()->getEntryBlock(),
+                                       ctx.builder.GetInsertBlock()->getParent()->getEntryBlock().begin());
+                llvm::AllocaInst* al = tmp.CreateAlloca(row->getType(), nullptr, "row_spill");
+                ctx.builder.CreateStore(row, al);
+                rowP = al;
+            }
+            llvm::Value* sizeGep = ctx.builder.CreateStructGEP(listTy, rowP, 0, "row_size_gep");
+            llvm::Value* len     = ctx.builder.CreateLoad(i32, sizeGep, "row_len");
+            llvm::Value* dataGep = ctx.builder.CreateStructGEP(listTy, rowP, 2, "row_data_gep");
+            llvm::Value* dataP   = ctx.builder.CreateLoad(i8p, dataGep, "row_data");
+            return ctx.builder.CreateCall(ctx.getFunction(fnName, retTy, {i8p, i8p, i32}),
+                                          {name, dataP, len});
+        };
+
+        cas.builtinFuncs["validate"] = [cascadeCheck](CompilerContext& ctx,
+                                        const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.size() < 2) return ctx.ir_gen->getInt32(-2);
+            return ctx.ir_gen->wrap(cascadeCheck(ctx, args, "aiml_cascade_validate",
+                                                 ctx.builder.getInt32Ty()));
+        };
+        cas.builtinFuncs["explain"] = [cascadeCheck](CompilerContext& ctx,
+                                       const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            if (args.size() < 2) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            return ctx.ir_gen->wrap(cascadeCheck(ctx, args, "aiml_cascade_explain", i8p));
+        };
+
+        // cascade.field_indices(name: string, row: list<i32>, field_type: string)
+        //     → list<i32>
+        //   Row indices of every payload field of type `field_type` in the node
+        //   `row` selects (e.g. "TargetType" in an Effect row — a type may recur).
+        //   Empty list = the field does not occur in that node.  Allocates a fresh
+        //   list<i32>, fills it via the runtime, returns it (io.list_dir pattern).
+        cas.builtinFuncs["field_indices"] = [](CompilerContext& ctx,
+                                              const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i32   = ctx.builder.getInt32Ty();
+            auto* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            // Fresh list<i32> for the result.
+            llvm::Value* outAlloca = ctx.createEntryAlloca(listTy, "casc_fidx_out");
+            ListImpl::initList(ctx, outAlloca, i32, 4);
+            if (args.size() < 3) return ctx.ir_gen->wrap(outAlloca);
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* row  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            llvm::Value* ftyp = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]));
+            // Extract row's (data_ptr, size).
+            llvm::Value* rowP = row;
+            if (!row->getType()->isPointerTy()) {
+                llvm::IRBuilder<> tmp(&ctx.builder.GetInsertBlock()->getParent()->getEntryBlock(),
+                                       ctx.builder.GetInsertBlock()->getParent()->getEntryBlock().begin());
+                llvm::AllocaInst* al = tmp.CreateAlloca(row->getType(), nullptr, "row_spill");
+                ctx.builder.CreateStore(row, al);
+                rowP = al;
+            }
+            llvm::Value* sizeGep = ctx.builder.CreateStructGEP(listTy, rowP, 0, "row_size_gep");
+            llvm::Value* len     = ctx.builder.CreateLoad(i32, sizeGep, "row_len");
+            llvm::Value* dataGep = ctx.builder.CreateStructGEP(listTy, rowP, 2, "row_data_gep");
+            llvm::Value* dataP   = ctx.builder.CreateLoad(i8p, dataGep, "row_data");
+            ctx.builder.CreateCall(
+                ctx.getFunction("aiml_cascade_field_indices", i32, {i8p, i8p, i32, i8p, ptrTy}),
+                {name, dataP, len, ftyp, outAlloca});
+            return ctx.ir_gen->wrap(outAlloca);
+        };
+
+        // cascade.count(name: string, start_op?: i32, end_op?: i32) → i64
+        //   Total number of enumerable rows: opcodes × enum-members × nested
+        //   sub-opcodes (value/alias fields = 1 representative).  Optional
+        //   start_op/end_op bound the TOP-LEVEL opcode ids (defaults = all).
+        //   Saturates at i64 max instead of wrapping.
+        cas.builtinFuncs["count"] = [](CompilerContext& ctx,
+                                       const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto* i64 = ctx.builder.getInt64Ty();
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.getInt64(0));
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            auto opArg = [&](size_t i, int32_t dflt) -> llvm::Value* {
+                if (args.size() <= i) return ctx.builder.getInt32(dflt);
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
+                if (v->getType() != i32) v = ctx.builder.CreateSExtOrTrunc(v, i32);
+                return v;
+            };
+            llvm::Value* lo = opArg(1, (-2147483647 - 1));
+            llvm::Value* hi = opArg(2, 2147483647);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_cascade_row_count", i64, {i8p, i32, i32}),
+                {name, lo, hi}));
+        };
+
+        // cascade.row_at(name: string, k: i64, start_op?: i32, end_op?: i32)
+        //     → list<i32>   (the k-th enumerated row; empty if k out of range).
+        //   Mixed-radix decode — O(depth), no materialisation.  Loop k in
+        //   [0, cascade.count(...)) to stream every row.
+        cas.builtinFuncs["row_at"] = [](CompilerContext& ctx,
+                                        const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i32   = ctx.builder.getInt32Ty();
+            auto* i64   = ctx.builder.getInt64Ty();
+            auto* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            llvm::Value* outAlloca = ctx.createEntryAlloca(listTy, "casc_row_out");
+            ListImpl::initList(ctx, outAlloca, i32, 8);
+            if (args.size() < 2) return ctx.ir_gen->wrap(outAlloca);
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* k    = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            if (k->getType() != i64) k = ctx.builder.CreateSExtOrTrunc(k, i64);
+            auto opArg = [&](size_t i, int32_t dflt) -> llvm::Value* {
+                if (args.size() <= i) return ctx.builder.getInt32(dflt);
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
+                if (v->getType() != i32) v = ctx.builder.CreateSExtOrTrunc(v, i32);
+                return v;
+            };
+            llvm::Value* lo = opArg(2, (-2147483647 - 1));
+            llvm::Value* hi = opArg(3, 2147483647);
+            ctx.builder.CreateCall(
+                ctx.getFunction("aiml_cascade_row_at", i32, {i8p, i64, i32, i32, ptrTy}),
+                {name, k, lo, hi, outAlloca});
+            return ctx.ir_gen->wrap(outAlloca);
+        };
+
+        // cascade.type_range(type: string) → list<i32>
+        //   Mögliche Werte eines Feld-Typs: enum→Member-Werte, cascade→Sub-Node-
+        //   IDs, value/alias→leer.  Serialisierbar (sys.serialize).
+        cas.builtinFuncs["type_range"] = [](CompilerContext& ctx,
+                                            const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i32   = ctx.builder.getInt32Ty();
+            auto* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            llvm::Value* out = ctx.createEntryAlloca(listTy, "casc_range_out");
+            ListImpl::initList(ctx, out, i32, 8);
+            if (args.empty()) return ctx.ir_gen->wrap(out);
+            llvm::Value* ty = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            ctx.builder.CreateCall(
+                ctx.getFunction("aiml_cascade_type_range", i32, {i8p, ptrTy}), {ty, out});
+            return ctx.ir_gen->wrap(out);
+        };
+
+        // cascade.describe(cascade: string, opcodes?: list<i32>) → list<string>
+        //   Datentyp-Kombinationen der Opcodes (opcodes leer/fehlt → ALLE).
+        //   Element 0 = Opcode-Enum-Name (z.B. "EffectCode"); danach je Opcode
+        //   eine Zeile "[id]node [range]Type …".
+        cas.builtinFuncs["describe"] = [](CompilerContext& ctx,
+                                          const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i32   = ctx.builder.getInt32Ty();
+            auto* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* ptrTy = llvm::PointerType::get(ctx.context, 0);
+            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            llvm::Value* out = ctx.createEntryAlloca(listTy, "casc_desc_out");
+            ListImpl::initList(ctx, out, i8p, 8);
+            if (args.empty()) return ctx.ir_gen->wrap(out);
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            // Optionale Opcode-list<i32> → (data, len); fehlt → (null, 0) = alle.
+            llvm::Value* opD = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+            llvm::Value* opN = ctx.builder.getInt32(0);
+            if (args.size() >= 2) {
+                llvm::Value* ol = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+                llvm::Value* olP = ol;
+                if (!ol->getType()->isPointerTy()) {
+                    llvm::IRBuilder<> tmp(&ctx.builder.GetInsertBlock()->getParent()->getEntryBlock(),
+                                          ctx.builder.GetInsertBlock()->getParent()->getEntryBlock().begin());
+                    llvm::AllocaInst* al = tmp.CreateAlloca(ol->getType(), nullptr, "opc_spill");
+                    ctx.builder.CreateStore(ol, al);
+                    olP = al;
+                }
+                llvm::Value* szGep = ctx.builder.CreateStructGEP(listTy, olP, 0, "opc_size_gep");
+                opN = ctx.builder.CreateLoad(i32, szGep, "opc_len");
+                llvm::Value* dGep = ctx.builder.CreateStructGEP(listTy, olP, 2, "opc_data_gep");
+                opD = ctx.builder.CreateLoad(i8p, dGep, "opc_data");
+            }
+            ctx.builder.CreateCall(
+                ctx.getFunction("aiml_cascade_describe", i32, {i8p, i8p, i32, ptrTy}),
+                {name, opD, opN, out});
+            return ctx.ir_gen->wrap(out);
+        };
+    }
+
+    // -----------------------------------------------------------------------
+    // enums namespace — compile-time enum reflection (spec/14_enums.md)
+    //   enums.name(type: string-literal, value: i32)      → string  (value → member name)
+    //   enums.value(type: string-literal, member: string) → i32     (member name → value)
+    // Resolved from CompilerContext at compile time; enums.name lowers to a
+    // select-chain (no runtime table).  enums.name(T,…) marks the WHOLE enum T
+    // referenced for the unused-enumerator analysis (spec/49 §18).
+    // -----------------------------------------------------------------------
+    {
+        auto& en = ctx.namespaces["enums"];
+
+        // Extract a compile-time string literal from an evaluated arg (a global
+        // string constant), or "" if the value is not a literal.
+        auto litStr = [](llvm::Value* v) -> std::string {
+            if (!v) return {};
+            v = v->stripPointerCasts();
+            if (auto* gv = llvm::dyn_cast<llvm::GlobalVariable>(v)) {
+                if (gv->hasInitializer()) {
+                    if (auto* cda = llvm::dyn_cast<llvm::ConstantDataArray>(gv->getInitializer())) {
+                        std::string s = cda->getAsString().str();
+                        if (!s.empty() && s.back() == '\0') s.pop_back();
+                        return s;
+                    }
+                }
+            }
+            return {};
+        };
+
+        // Resolve an enum name to its (registry key, member-map); tries the bare
+        // name and the caller-qualified name.  nullptr if unknown.
+        auto findEnum = [](CompilerContext& ctx, const std::string& typeName,
+                           std::string& outKey) -> std::map<std::string,int>* {
+            auto it = ctx.enums.find(typeName);
+            if (it != ctx.enums.end()) { outKey = it->first; return &it->second; }
+            it = ctx.enums.find(ctx.qualify(typeName));
+            if (it != ctx.enums.end()) { outKey = it->first; return &it->second; }
+            return nullptr;
+        };
+
+        en.builtinFuncs["name"] = [litStr, findEnum](CompilerContext& ctx,
+                                    const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.size() < 2) {
+                LOG_ERROR(ctx.fmtLoc() + "enums.name: expected (type, value)");
+                return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            }
+            std::string typeName = litStr(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])));
+            if (typeName.empty()) {
+                LOG_ERROR(ctx.fmtLoc() + "enums.name: 'type' argument must be a string literal");
+                return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            }
+            std::string key;
+            auto* em = findEnum(ctx, typeName, key);
+            if (!em) {
+                LOG_ERROR(ctx.fmtLoc() + "enums.name: unknown enum type '" + typeName + "'");
+                return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            }
+            // Reflective whole-enum use (spec/49 §18): mark every member referenced.
+            for (const auto& kv : *em) ctx.enumUsedMembers[key].insert(kv.first);
+            llvm::Value* val = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            if (val->getType() != ctx.builder.getInt32Ty())
+                val = ctx.builder.CreateZExtOrTrunc(val, ctx.builder.getInt32Ty());
+            // Select-chain: value → member name, default "".
+            llvm::Value* result = ctx.builder.CreateGlobalStringPtr("");
+            for (const auto& kv : *em) {
+                llvm::Value* cond = ctx.builder.CreateICmpEQ(val, ctx.builder.getInt32(kv.second));
+                llvm::Value* nm   = ctx.builder.CreateGlobalStringPtr(kv.first);
+                result = ctx.builder.CreateSelect(cond, nm, result);
+            }
+            return ctx.ir_gen->wrap(result);
+        };
+
+        en.builtinFuncs["value"] = [litStr, findEnum](CompilerContext& ctx,
+                                     const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.size() < 2) {
+                LOG_ERROR(ctx.fmtLoc() + "enums.value: expected (type, member)");
+                return ctx.ir_gen->getInt32(0);
+            }
+            std::string typeName = litStr(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])));
+            std::string member   = litStr(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])));
+            if (typeName.empty() || member.empty()) {
+                LOG_ERROR(ctx.fmtLoc() + "enums.value: 'type' and 'member' must be string literals");
+                return ctx.ir_gen->getInt32(0);
+            }
+            std::string key;
+            auto* em = findEnum(ctx, typeName, key);
+            if (!em) {
+                LOG_ERROR(ctx.fmtLoc() + "enums.value: unknown enum type '" + typeName + "'");
+                return ctx.ir_gen->getInt32(0);
+            }
+            auto mi = em->find(member);
+            if (mi == em->end()) {
+                LOG_ERROR(ctx.fmtLoc() + "enums.value: enum '" + typeName + "' has no member '" + member + "'");
+                return ctx.ir_gen->getInt32(0);
+            }
+            ctx.enumUsedMembers[key].insert(member);
+            return ctx.ir_gen->getInt32(mi->second);
+        };
+    }
+
+    // -----------------------------------------------------------------------
     // sys namespace
     // -----------------------------------------------------------------------
     auto& sys = ctx.namespaces["sys"];
@@ -229,21 +605,19 @@ void registerBuiltins(CompilerContext& ctx) {
     };
 
     sys.builtinFuncs["env"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+        // Delegate to the runtime, which populates a map<string:string> from
+        // `environ`.  The returned AimlHttpMap* shares map<K:V>'s memory layout,
+        // so AIML map methods (get/contains/…) operate on it transparently.
         llvm::Type* strTy = ctx.builder.getInt8Ty()->getPointerTo();
         llvm::StructType* mapTy = llvm::StructType::get(ctx.context, {
             ctx.builder.getInt32Ty(), ctx.builder.getInt32Ty(),
             ctx.builder.getInt8Ty()->getPointerTo(),
             strTy->getPointerTo(), strTy->getPointerTo()
         });
-        llvm::DataLayout dl(&ctx.module);
-        uint64_t mapSize = dl.getTypeAllocSize(mapTy);
-        llvm::Function* callocF = ctx.getFunction("calloc",
-            ctx.builder.getInt8Ty()->getPointerTo(),
-            {ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty()});
-        llvm::Value* raw = ctx.builder.CreateCall(callocF,
-            {ctx.builder.getInt64(1), ctx.builder.getInt64(mapSize)});
+        llvm::Function* f = ctx.getFunction("aiml_sys_env",
+            ctx.builder.getInt8Ty()->getPointerTo(), {});
+        llvm::Value* raw = ctx.builder.CreateCall(f);
         llvm::Value* mapPtr = ctx.builder.CreateBitCast(raw, mapTy->getPointerTo(), "sys_env_map");
-        MapImpl::initMap(ctx, mapPtr, strTy, strTy, 4);
         return ctx.ir_gen->wrap(mapPtr);
     };
 
@@ -1307,6 +1681,27 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {v}));
         };
 
+        // io.read_asset(stem) → string content from data-Kind asset store
+        // (spec/44_7).  Compile-time validation when arg is a string literal.
+        io.builtinFuncs["read_asset"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            if (!args.empty() && ctx.currentCall && !ctx.currentCall->args.empty()) {
+                if (auto* lit = dynamic_cast<AIML::AST::LiteralExpr*>(
+                        ctx.currentCall->args[0].get())) {
+                    if (lit->type == "string" &&
+                        !AIML::AssetScanner::instance().has_stem(
+                            AIML::AssetKind::Data, lit->value)) {
+                        LOG_ERROR(std::string("io.read_asset: stem '") +
+                                  lit->value + "' not in data store");
+                    }
+                }
+            }
+            llvm::Function* f = ctx.getFunction("aiml_asset_read_data", i8p, {i8p});
+            if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {v}));
+        };
+
         // io.write_file(path, content) -> i32  (0=ok, -1=error)
         io.builtinFuncs["write_file"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             llvm::Type* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
@@ -2240,6 +2635,7 @@ void registerBuiltins(CompilerContext& ctx) {
             bool hasHeap = vName != "string"
                 && ctx.classes.count(vName) && ctx.classes[vName].hasHeapFields
                 && ctx.classes[vName].serNodesVar;
+            llvm::Value* kvHandle = nullptr;
             if (hasHeap) {
                 auto& ci = ctx.classes[vName];
                 llvm::Value* nodesPtr = ci.serNodesVar;
@@ -2251,15 +2647,14 @@ void registerBuiltins(CompilerContext& ctx) {
                               llvm::PointerType::getUnqual(ctx.context));
                     llvm::Function* f = ctx.getFunction("aiml_db_kv_open_typed_persist",
                         i8p, {i8p, i64, i8p, i8p, i32});
-                    return ctx.ir_gen->wrap(ctx.builder.CreateCall(f,
-                        {nameVal, ctx.builder.getInt64(valSize), pathVal, nodesPtr, nNodes}));
+                    kvHandle = ctx.builder.CreateCall(f,
+                        {nameVal, ctx.builder.getInt64(valSize), pathVal, nodesPtr, nNodes});
+                } else {
+                    llvm::Function* f = ctx.getFunction("aiml_db_kv_open_typed", i8p, {i8p, i64, i8p, i32});
+                    kvHandle = ctx.builder.CreateCall(f,
+                        {nameVal, ctx.builder.getInt64(valSize), nodesPtr, nNodes});
                 }
-                llvm::Function* f = ctx.getFunction("aiml_db_kv_open_typed", i8p, {i8p, i64, i8p, i32});
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(f,
-                    {nameVal, ctx.builder.getInt64(valSize), nodesPtr, nNodes}));
-            }
-
-            if (ctx.dbOpenPersist) {
+            } else if (ctx.dbOpenPersist) {
                 // path:nullptr → C-Resolver (resolve_aiondb_dir) nutzt
                 // db.set_path / AIONDB_PATH / Fallback einheitlich.
                 llvm::Value* pathVal = ctx.dbOpenBasePathVal
@@ -2267,11 +2662,53 @@ void registerBuiltins(CompilerContext& ctx) {
                     : llvm::ConstantPointerNull::get(
                           llvm::PointerType::getUnqual(ctx.context));
                 llvm::Function* f = ctx.getFunction("aiml_db_kv_open_persist", i8p, {i8p, i64, i8p});
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(f,
-                    {nameVal, ctx.builder.getInt64(valSize), pathVal}));
+                kvHandle = ctx.builder.CreateCall(f,
+                    {nameVal, ctx.builder.getInt64(valSize), pathVal});
+            } else {
+                llvm::Function* f = ctx.getFunction("aiml_db_kv_open", i8p, {i8p, i64});
+                kvHandle = ctx.builder.CreateCall(f, {nameVal, ctx.builder.getInt64(valSize)});
             }
-            llvm::Function* f = ctx.getFunction("aiml_db_kv_open", i8p, {i8p, i64});
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {nameVal, ctx.builder.getInt64(valSize)}));
+
+            // Secondary indexes: for each db_indexed field on the value type,
+            // emit a call to aiml_db_index_open_for_kv (registers the index
+            // handle for later findings_by/finding_by lookups) and then a
+            // backfill call so the index is consistent with any existing kv
+            // entries (cross-process reopen, or first-time enabling the
+            // modifier on an already-populated Kv).
+            if (ctx.classes.count(vName) && ctx.classes[vName].type) {
+                auto& vci = ctx.classes[vName];
+                llvm::StructType* vStructTy = vci.type;
+                llvm::DataLayout dl(&ctx.module);
+                const llvm::StructLayout* sl = dl.getStructLayout(vStructTy);
+                for (auto& [fname, mem] : vci.members) {
+                    if (!mem.db_indexed) continue;
+
+                    llvm::Value* fNameVal = ctx.builder.CreateGlobalStringPtr(fname);
+                    llvm::Value* modeVal  = ctx.builder.CreateGlobalStringPtr(mem.db_indexed_mode);
+                    llvm::Value* uniqVal  = ctx.builder.getInt32(mem.db_indexed_unique ? 1 : 0);
+                    llvm::Function* idxOpen = ctx.getFunction(
+                        "aiml_db_index_open_for_kv", i8p, {i8p, i8p, i32, i8p});
+                    llvm::Value* idxHandle = ctx.builder.CreateCall(
+                        idxOpen, {kvHandle, fNameVal, uniqVal, modeVal});
+
+                    // Backfill tag — must match AimlIndexFieldTag in db_runtime.cpp.
+                    int32_t tag = -1;
+                    const std::string& fTy = mem.typeName;
+                    if      (fTy == "string")             tag = 0;
+                    else if (fTy == "i32")                tag = 1;
+                    else if (fTy == "i64")                tag = 2;
+                    else if (fTy == "list<string>")       tag = 3;
+                    if (tag < 0) continue;  // unsupported type: open only, no backfill
+
+                    int32_t off = (int32_t)sl->getElementOffset((unsigned)mem.index);
+                    llvm::Function* idxBackfill = ctx.getFunction(
+                        "aiml_db_index_backfill",
+                        ctx.builder.getVoidTy(), {i8p, i8p, i32, i32});
+                    ctx.builder.CreateCall(idxBackfill,
+                        {kvHandle, idxHandle, ctx.builder.getInt32(off), ctx.builder.getInt32(tag)});
+                }
+            }
+            return ctx.ir_gen->wrap(kvHandle);
         };
 
         // db.open_vec("name", dims) → VecStore
@@ -5400,15 +5837,93 @@ void registerBuiltins(CompilerContext& ctx) {
                     ctx.getFunction("aiml_gl_load_shader", p, {p, p}), {vp, fp}));
             };
 
-            // gl.load_texture(path) → gl_texture
+            // gl.load_texture(path) → gl_texture.  Escape-Hatch for runtime-
+            // generated paths.  Spec/22: when arg is a string literal AND the
+            // path resolves under an `asset_directory`, emit a hard error
+            // forcing the caller to switch to gl.tex(stem).
             gl.builtinFuncs["load_texture"] = [](CompilerContext& ctx,
                 const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
                 auto* p = llvm::PointerType::get(ctx.context, 0);
+                if (!args.empty()) {
+                    if (auto* lit = dynamic_cast<AIML::AST::LiteralExpr*>(
+                            ctx.currentCall ? ctx.currentCall->args[0].get() : nullptr)) {
+                        if (lit->type == "string" &&
+                            AIML::AssetScanner::instance().path_under_root(lit->value)) {
+                            // Suggest the stem for the user's existing path.
+                            std::string suggest;
+                            auto dot = lit->value.find_last_of('.');
+                            auto slash = lit->value.find_last_of('/');
+                            size_t a = (slash == std::string::npos) ? 0 : slash + 1;
+                            size_t b = (dot == std::string::npos || dot < a)
+                                       ? lit->value.size() : dot;
+                            suggest = lit->value.substr(a, b - a);
+                            LOG_ERROR(std::string("gl.load_texture: literal path '") +
+                                      lit->value + "' is in the asset bundle; use gl.tex(\"" +
+                                      suggest + "\") instead");
+                        }
+                    }
+                }
                 llvm::Value* arg = args.empty()
                     ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
                     : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                     ctx.getFunction("aiml_gl_load_texture", p, {p}), {arg}));
+            };
+
+            // gl.tex(stem) → gl_texture (Asset Registry, spec/44_7).  String-
+            // literal arg gets compile-time validation against the texture
+            // store; dynamic args fall through and runtime-error on miss.
+            gl.builtinFuncs["tex"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* p = llvm::PointerType::get(ctx.context, 0);
+                if (!args.empty() && ctx.currentCall &&
+                    !ctx.currentCall->args.empty()) {
+                    if (auto* lit = dynamic_cast<AIML::AST::LiteralExpr*>(
+                            ctx.currentCall->args[0].get())) {
+                        if (lit->type == "string" &&
+                            !AIML::AssetScanner::instance().has_stem(
+                                AIML::AssetKind::Texture, lit->value)) {
+                            LOG_ERROR(std::string("gl.tex: stem '") +
+                                      lit->value + "' not in texture store");
+                        }
+                    }
+                }
+                llvm::Value* arg = args.empty()
+                    ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                    : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_asset_get_texture", p, {p}), {arg}));
+            };
+
+            // gl.font(stem, size) → ui_font (spec/44_7).  Stem-literal-check
+            // wie gl.tex; size darf dynamisch sein.  Backend: aiml_ui_load_font
+            // via Asset-Resolver mit per-(stem,size) Cache.
+            gl.builtinFuncs["font"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* p    = llvm::PointerType::get(ctx.context, 0);
+                auto* f32  = ctx.builder.getFloatTy();
+                if (!args.empty() && ctx.currentCall &&
+                    !ctx.currentCall->args.empty()) {
+                    if (auto* lit = dynamic_cast<AIML::AST::LiteralExpr*>(
+                            ctx.currentCall->args[0].get())) {
+                        if (lit->type == "string" &&
+                            !AIML::AssetScanner::instance().has_stem(
+                                AIML::AssetKind::Font, lit->value)) {
+                            LOG_ERROR(std::string("gl.font: stem '") +
+                                      lit->value + "' not in font store");
+                        }
+                    }
+                }
+                llvm::Value* stem = args.empty()
+                    ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                    : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                llvm::Value* sz   = (args.size() < 2)
+                    ? llvm::ConstantFP::get(f32, 12.0)
+                    : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+                // Promote double → float if needed (literals come as f64).
+                if (sz->getType()->isDoubleTy()) sz = ctx.builder.CreateFPTrunc(sz, f32);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_asset_get_font", p, {p, f32}), {stem, sz}));
             };
 
             // gl.create_texture(w, h, px_buf) → gl_texture
@@ -5667,6 +6182,18 @@ void registerBuiltins(CompilerContext& ctx) {
             return nullptr;
         };
 
+        // engine.maximize(win) — System-Maximize-State setzen.
+        eng.builtinFuncs["maximize"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* w = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            ctx.builder.CreateCall(ctx.getFunction("aiml_engine_maximize_window",
+                ctx.builder.getVoidTy(), {p}), {w});
+            return nullptr;
+        };
+
         // engine.window_size(win) → ivec2  (return {w, h} as i32 pair)
         // We expose as two functions here; ivec2 construction requires math types
         // For now: engine.window_size_x / engine.window_size_y returning i32
@@ -5885,6 +6412,27 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.builder.getVoidTy(), {i8p}), {inst});
             return nullptr;
         };
+        // engine.is_alive(inst) → i32  (1 = noch in der Szene, 0 = zerstört/null;
+        // safe mit stale handle, dereferenziert nicht)
+        eng.builtinFuncs["is_alive"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* inst = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_is_alive", i32, {i8p}), {inst}));
+        };
+        // engine.connect(from, to) → connector  (cable between two instances)
+        eng.builtinFuncs["connect"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* from = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* to   = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_connect", i8p, {i8p, i8p}), {from, to}));
+        };
         // engine.draw_scene()
         eng.builtinFuncs["draw_scene"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
@@ -5911,6 +6459,22 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                 ctx.getFunction("aiml_prefab_get_dragged", i8p, {}), {}));
         };
+        // engine.mouse_design_x() / engine.mouse_design_y() → f32
+        // Cursor-Position in DESIGN-Koordinaten (= Pixel / rel_scale).  set_pos et al.
+        // arbeiten in Design-Koords, input.mouse_pos_* liefert World/Pixel — dies
+        // kapselt die Umrechnung an einer Stelle (Runtime kennt rel_scale).
+        eng.builtinFuncs["mouse_design_x"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            auto* f32 = ctx.builder.getFloatTy();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_mouse_design_x", f32, {}), {}));
+        };
+        eng.builtinFuncs["mouse_design_y"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            auto* f32 = ctx.builder.getFloatTy();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_mouse_design_y", f32, {}), {}));
+        };
         // engine.update_hover(mx, my)
         eng.builtinFuncs["update_hover"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
@@ -5929,6 +6493,80 @@ void registerBuiltins(CompilerContext& ctx) {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                 ctx.getFunction("aiml_prefab_get_hovered", i8p, {}), {}));
+        };
+        // engine.layout_hflow(items: list<prefab_instance>, x, y, gap)
+        // engine.layout_vflow(items: list<prefab_instance>, x, y, gap)
+        // engine.layout_stack(items: list<prefab_instance>, x, y, dx, dy, z_step)
+        // Spec 44_6 §Layout — sibling auto-arrange.  items wird als
+        // AimlList* (i8*) durchgereicht; das Runtime liest size/data.
+        // Helper: list<prefab_instance>-Struct → (data_ptr i8*, count i32).
+        // Akzeptiert sowohl Struct-Value (locale list-Variable) als auch
+        // Pointer-to-Struct (class-member list, durch `<.X` ref-loaded).
+        auto extractListDataCount = [](CompilerContext& ctx, AIML::IRValue* listArg,
+                                       llvm::Value*& out_data, llvm::Value*& out_count) {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* listVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(listArg));
+            llvm::StructType* listStructTy = ListImpl::getListStructType(ctx);
+            llvm::Value* sizePtrOrField;
+            llvm::Value* dataPtrOrField;
+            if (listVal->getType()->isPointerTy()) {
+                // Pointer to AimlList → GEP into the struct in-place
+                llvm::Value* sizeGEP = ctx.builder.CreateStructGEP(listStructTy, listVal, 0, "list_size_gep");
+                out_count = ctx.builder.CreateLoad(i32, sizeGEP, "list_size");
+                llvm::Value* dataGEP = ctx.builder.CreateStructGEP(listStructTy, listVal, 2, "list_data_gep");
+                out_data = ctx.builder.CreateLoad(i8p, dataGEP, "list_data");
+            } else {
+                // Struct value → ExtractValue
+                out_count = ctx.builder.CreateExtractValue(listVal, {0});
+                if (out_count->getType() != i32) out_count = ctx.builder.CreateZExtOrTrunc(out_count, i32);
+                llvm::Value* dataPtr = ctx.builder.CreateExtractValue(listVal, {2});
+                if (dataPtr->getType() != i8p) dataPtr = ctx.builder.CreateBitCast(dataPtr, i8p);
+                out_data = dataPtr;
+            }
+        };
+
+        auto makeFlowFn = [extractListDataCount](const char* c_name) {
+            return [c_name, extractListDataCount](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                auto* f32 = ctx.builder.getFloatTy();
+                auto* i32 = ctx.builder.getInt32Ty();
+                llvm::Value* data_v = nullptr;
+                llvm::Value* count_v = nullptr;
+                extractListDataCount(ctx, args[0], data_v, count_v);
+                auto toF32 = [&](AIML::IRValue* a) -> llvm::Value* {
+                    llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                    if (v->getType() != f32) v = ctx.builder.CreateSIToFP(v, f32);
+                    return v;
+                };
+                ctx.builder.CreateCall(ctx.getFunction(c_name,
+                    ctx.builder.getVoidTy(), {i8p, i32, f32, f32, f32}),
+                    {data_v, count_v, toF32(args[1]), toF32(args[2]), toF32(args[3])});
+                return nullptr;
+            };
+        };
+        eng.builtinFuncs["layout_hflow"] = makeFlowFn("aiml_engine_layout_hflow");
+        eng.builtinFuncs["layout_vflow"] = makeFlowFn("aiml_engine_layout_vflow");
+        eng.builtinFuncs["layout_stack"] = [extractListDataCount](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* data_v = nullptr;
+            llvm::Value* count_v = nullptr;
+            extractListDataCount(ctx, args[0], data_v, count_v);
+            auto toF32 = [&](AIML::IRValue* a) -> llvm::Value* {
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                if (v->getType() != f32) v = ctx.builder.CreateSIToFP(v, f32);
+                return v;
+            };
+            llvm::Value* zs = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[5]));
+            if (zs->getType() != i32) zs = ctx.builder.CreateZExtOrTrunc(zs, i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_engine_layout_stack",
+                ctx.builder.getVoidTy(), {i8p, i32, f32, f32, f32, f32, i32}),
+                {data_v, count_v, toF32(args[1]), toF32(args[2]), toF32(args[3]), toF32(args[4]), zs});
+            return nullptr;
         };
         // engine.update_drag(mx, my, btn_down, btn_released)
         eng.builtinFuncs["update_drag"] = [](CompilerContext& ctx,
@@ -6164,6 +6802,149 @@ void registerBuiltins(CompilerContext& ctx) {
             return nullptr;
         };
 
+        // set_compact(container_name, on) — toggle compacting layout on a
+        // container child: hidden spawned rows take no layout space, visible
+        // rows re-pack contiguously.  Also settable as `compact: true` in the
+        // prefab definition.
+        ci.builtinMethods["set_compact"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* v    = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            if (v->getType() != i32) v = ctx.builder.CreateZExtOrTrunc(v, i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_container_set_compact",
+                ctx.builder.getVoidTy(), {i8p, i8p, i32}), {base, name, v});
+            return nullptr;
+        };
+
+        // set_child_font_size(child_name, size_px) — override a child's
+        // `font_size` at runtime (useful for reusing a prefab as scaled
+        // preview where the design-time font would render too large).
+        ci.builtinMethods["set_child_font_size"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* v    = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            if (v->getType() != f32) v = ctx.builder.CreateSIToFP(v, f32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_set_child_font_size",
+                ctx.builder.getVoidTy(), {i8p, i8p, f32}), {base, name, v});
+            return nullptr;
+        };
+
+        // container_row_count(child_name) → i32 — # spawned rows
+        ci.builtinMethods["container_row_count"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* rv = ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_container_row_count", i32, {i8p, i8p}),
+                {base, name});
+            return ctx.ir_gen->wrap(rv);
+        };
+
+        // container_row(child_name, idx) → prefab_instance — the spawned row
+        // instance at that index (or null if out of range).  Enables AIML
+        // code to iterate rows and call set_text / set_texture etc. on each.
+        ci.builtinMethods["container_row"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* idx  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            llvm::Value* rv = ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_container_row", i8p, {i8p, i8p, i32}),
+                {base, name, idx});
+            return ctx.ir_gen->wrap(rv);
+        };
+
+        // set_bar_value(child_name, value) — update a "bar" child's fill
+        ci.builtinMethods["set_bar_value"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* v    = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            if (v->getType() != f32) v = ctx.builder.CreateSIToFP(v, f32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_set_bar_value",
+                ctx.builder.getVoidTy(), {i8p, i8p, f32}), {base, name, v});
+            return nullptr;
+        };
+        // set_bar_max(child_name, max)
+        ci.builtinMethods["set_bar_max"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* v    = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            if (v->getType() != f32) v = ctx.builder.CreateSIToFP(v, f32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_set_bar_max",
+                ctx.builder.getVoidTy(), {i8p, i8p, f32}), {base, name, v});
+            return nullptr;
+        };
+        // set_bar_fill(child_name, color) — recolor a "bar" child's fill
+        ci.builtinMethods["set_bar_fill"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* c    = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            if (c->getType() != i32) c = ctx.builder.CreateZExtOrTrunc(c, i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_set_bar_fill",
+                ctx.builder.getVoidTy(), {i8p, i8p, i32}), {base, name, c});
+            return nullptr;
+        };
+
+        // ── slider child accessors ────────────────────────────────────────
+        // get_slider_value(child_name) → f32
+        ci.builtinMethods["get_slider_value"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_get_slider_value", f32, {i8p, i8p}),
+                {base, name}));
+        };
+        // set_slider_value(child_name, value)
+        ci.builtinMethods["set_slider_value"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* v    = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            if (v->getType() != f32) v = ctx.builder.CreateSIToFP(v, f32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_set_slider_value",
+                ctx.builder.getVoidTy(), {i8p, i8p, f32}), {base, name, v});
+            return nullptr;
+        };
+        // set_slider_min(child_name, min)
+        ci.builtinMethods["set_slider_min"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* v    = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            if (v->getType() != f32) v = ctx.builder.CreateSIToFP(v, f32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_set_slider_min",
+                ctx.builder.getVoidTy(), {i8p, i8p, f32}), {base, name, v});
+            return nullptr;
+        };
+        // set_slider_max(child_name, max)
+        ci.builtinMethods["set_slider_max"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* v    = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            if (v->getType() != f32) v = ctx.builder.CreateSIToFP(v, f32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_set_slider_max",
+                ctx.builder.getVoidTy(), {i8p, i8p, f32}), {base, name, v});
+            return nullptr;
+        };
+
         // child(name) → prefab_instance
         ci.builtinMethods["child"] = [](CompilerContext& ctx, llvm::Value* base,
             AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
@@ -6190,6 +6971,23 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                 ctx.getFunction("aiml_prefab_child_clicked", i32, {i8p, i8p}), {base, name}));
+        };
+
+        // child_contains(child_name, screen_x, screen_y) → i32 (1 if the SCREEN
+        // point is inside the named child's bounds — works for any child type,
+        // incl. non-interactive rects; used for drop-target detection).
+        ci.builtinMethods["child_contains"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            auto* f32 = ctx.builder.getFloatTy();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* sx   = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            llvm::Value* sy   = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[2].get())));
+            if (sx->getType()->isIntegerTy()) sx = ctx.builder.CreateSIToFP(sx, f32);
+            if (sy->getType()->isIntegerTy()) sy = ctx.builder.CreateSIToFP(sy, f32);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_child_contains", i32, {i8p, i8p, f32, f32}), {base, name, sx, sy}));
         };
 
         // child_focused(child_name) → i32 (1 if text_input child has focus)
@@ -6226,8 +7024,315 @@ void registerBuiltins(CompilerContext& ctx) {
             return nullptr;
         };
 
+        // dropdown_index(child_name) → i32 — current selected index
+        ci.builtinMethods["dropdown_index"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_dropdown_index", i32, {i8p, i8p}), {base, name}));
+        };
+
+        // dropdown_value(child_name) → string — current selected option label
+        ci.builtinMethods["dropdown_value"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_dropdown_value", i8p, {i8p, i8p}), {base, name}));
+        };
+
+        // dropdown_enum(child_name) → i32 — selected option's real enum member
+        // value (for a dropdown declared with `enum: TypeName`).  i32 is enum-
+        // compatible, so the result compares/assigns directly against the enum.
+        ci.builtinMethods["dropdown_enum"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_dropdown_enum_value", i32, {i8p, i8p}), {base, name}));
+        };
+
+        // set_dropdown_options(child_name, options) — replace pipe-separated options list
+        ci.builtinMethods["set_dropdown_options"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* opts = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_set_dropdown_options", ctx.builder.getVoidTy(), {i8p, i8p, i8p}),
+                {base, name, opts});
+            return nullptr;
+        };
+
+        // set_dropdown_index(child_name, index) — set selected index
+        ci.builtinMethods["set_dropdown_index"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* v    = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            if (v->getType() != i32) v = ctx.builder.CreateZExtOrTrunc(v, i32);
+            ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_set_dropdown_index", ctx.builder.getVoidTy(), {i8p, i8p, i32}),
+                {base, name, v});
+            return nullptr;
+        };
+
+        // set_dropdown_selected(child_name, value) — find value in the dropdown's
+        // pipe-separated options and set that index.  No-op if value not found.
+        ci.builtinMethods["set_dropdown_selected"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* val  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_set_dropdown_selected", ctx.builder.getVoidTy(), {i8p, i8p, i8p}),
+                {base, name, val});
+            return nullptr;
+        };
+
+        // Phase 6: bind_list(list_ptr) — attach the raw list<list<i32>> struct
+        // that CHILD_CONTAINER widgets iterate over.  The argument is the
+        // AIML list value itself (or `list_field` on a model); we just take
+        // its address as the struct pointer.
+        // ── Widget↔model binding (spec 44.6 §5d) ──────────────────────────
+        // bind_model(m) attaches a model instance; sync_from/to_model move each
+        // bound child's field to/from its widget.  Offsets/tags are baked into
+        // the prefab at compile time (see ast_compiler prefab emission).
+        ci.builtinMethods["bind_model"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            if (call->args.empty()) return nullptr;
+            llvm::Value* modelPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            if (modelPtr->getType() != i8p) modelPtr = ctx.builder.CreateBitCast(modelPtr, i8p);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_bind_model",
+                ctx.builder.getVoidTy(), {i8p, i8p}), {base, modelPtr});
+            return nullptr;
+        };
+        ci.builtinMethods["sync_from_model"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* /*call*/, auto /*evalExpr*/) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_sync_from_model",
+                ctx.builder.getVoidTy(), {i8p}), {base});
+            return nullptr;
+        };
+        ci.builtinMethods["sync_to_model"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* /*call*/, auto /*evalExpr*/) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_sync_to_model",
+                ctx.builder.getVoidTy(), {i8p}), {base});
+            return nullptr;
+        };
+        ci.builtinMethods["bind_list"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            /* Two forms:
+             *   scene.bind_list(list)                        (instance-level)
+             *   scene.bind_list("child_name", list)          (per-widget)   */
+            if (call->args.size() >= 2) {
+                llvm::Value* childNm = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                llvm::Value* listPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+                ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_child_bind_list",
+                    ctx.builder.getVoidTy(), {i8p, i8p, i8p}), {base, childNm, listPtr});
+            } else {
+                llvm::Value* listPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_bind_list",
+                    ctx.builder.getVoidTy(), {i8p, i8p}), {base, listPtr});
+            }
+            return nullptr;
+        };
+        // bound_list() — inverse of bind_list; returns the attached pointer or null.
+        ci.builtinMethods["bound_list"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* /*call*/, auto /*evalExpr*/) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_bound_list", i8p, {i8p}), {base}));
+        };
+        // bound_index() — for spawned children: index into the parent's bound_list.
+        ci.builtinMethods["bound_index"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* /*call*/, auto /*evalExpr*/) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_bound_index", ctx.builder.getInt32Ty(), {i8p}),
+                {base}));
+        };
+
+        // add_child(other) — nest another instance under this one (inherits transform)
+        ci.builtinMethods["add_child"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* child = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_add_child",
+                ctx.builder.getVoidTy(), {i8p, i8p}), {base, child});
+            return nullptr;
+        };
+        // remove_child(other) — detach a nested instance (back to top-level)
+        ci.builtinMethods["remove_child"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* child = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_remove_child",
+                ctx.builder.getVoidTy(), {i8p, i8p}), {base, child});
+            return nullptr;
+        };
+
+        // set_clip(enabled) — clip nested children to this instance's bounds
+        ci.builtinMethods["set_clip"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            if (v->getType() != i32) v = ctx.builder.CreateZExtOrTrunc(v, i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_set_clip",
+                ctx.builder.getVoidTy(), {i8p, i32}), {base, v});
+            return nullptr;
+        };
+        // set_scroll(sx, sy) — scroll offset (local px) for nested children
+        ci.builtinMethods["set_scroll"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            llvm::Value* x = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* y = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            if (x->getType() != f32) x = ctx.builder.CreateSIToFP(x, f32);
+            if (y->getType() != f32) y = ctx.builder.CreateSIToFP(y, f32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_set_scroll",
+                ctx.builder.getVoidTy(), {i8p, f32, f32}), {base, x, y});
+            return nullptr;
+        };
+        ci.builtinMethods["get_scroll_x"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr*, auto) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_get_scroll_x", ctx.builder.getFloatTy(), {i8p}), {base}));
+        };
+        ci.builtinMethods["get_scroll_y"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr*, auto) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                ctx.getFunction("aiml_prefab_get_scroll_y", ctx.builder.getFloatTy(), {i8p}), {base}));
+        };
+
+        // set_connector_anchor(mode) — 0=center, 1=edge, 2=distributed.
+        // Controls how cables (see engine.connect) attach to this instance.
+        ci.builtinMethods["set_connector_anchor"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* m = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            if (m->getType() != i32) m = ctx.builder.CreateZExtOrTrunc(m, i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_set_connector_anchor",
+                ctx.builder.getVoidTy(), {i8p, i32}), {base, m});
+            return nullptr;
+        };
+
         ctx.classes["prefab_instance"] = std::move(ci);
     } // end prefab_instance
+
+    // ==========================================================================
+    // connector — cable between two prefab instances (see engine.connect)
+    // ==========================================================================
+    {
+        CompilerContext::ClassInfo ci;
+        ci.name = "connector"; ci.isBuiltin = true;
+        ci.preLoadBase = true;
+
+        // set_colors(c0, c1) — gradient start/end (0xRRGGBBAA)
+        ci.builtinMethods["set_colors"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* a = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* b = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            if (a->getType() != i32) a = ctx.builder.CreateZExtOrTrunc(a, i32);
+            if (b->getType() != i32) b = ctx.builder.CreateZExtOrTrunc(b, i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_connector_set_colors",
+                ctx.builder.getVoidTy(), {i8p, i32, i32}), {base, a, b});
+            return nullptr;
+        };
+        // set_highlight(color) — specular streak tint
+        ci.builtinMethods["set_highlight"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* a = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            if (a->getType() != i32) a = ctx.builder.CreateZExtOrTrunc(a, i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_connector_set_highlight",
+                ctx.builder.getVoidTy(), {i8p, i32}), {base, a});
+            return nullptr;
+        };
+        // set_width(w) — cable thickness in px
+        ci.builtinMethods["set_width"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            llvm::Value* w = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            if (w->getType() != f32) w = ctx.builder.CreateSIToFP(w, f32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_connector_set_width",
+                ctx.builder.getVoidTy(), {i8p, f32}), {base, w});
+            return nullptr;
+        };
+        // set_bow(amount) — perpendicular curve (0 = straight). Fraction of chord length.
+        ci.builtinMethods["set_bow"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            llvm::Value* w = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            if (w->getType() != f32) w = ctx.builder.CreateSIToFP(w, f32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_connector_set_bow",
+                ctx.builder.getVoidTy(), {i8p, f32}), {base, w});
+            return nullptr;
+        };
+        // set_visible(v)
+        ci.builtinMethods["set_visible"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            if (v->getType() != i32) v = ctx.builder.CreateZExtOrTrunc(v, i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_connector_set_visible",
+                ctx.builder.getVoidTy(), {i8p, i32}), {base, v});
+            return nullptr;
+        };
+        // set_z(z) — z-order for interleaving with prefabs in draw_scene
+        ci.builtinMethods["set_z"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* z = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            if (z->getType() != i32) z = ctx.builder.CreateZExtOrTrunc(z, i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_connector_set_z",
+                ctx.builder.getVoidTy(), {i8p, i32}), {base, z});
+            return nullptr;
+        };
+        // set_port(tex, scale) — optional endpoint sprite; scale = size / width
+        ci.builtinMethods["set_port"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* f32 = ctx.builder.getFloatTy();
+            llvm::Value* tex = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* sc  = call->args.size() > 1
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())))
+                : llvm::ConstantFP::get(f32, 1.6);
+            if (sc->getType() != f32) sc = ctx.builder.CreateSIToFP(sc, f32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_connector_set_port",
+                ctx.builder.getVoidTy(), {i8p, i8p, f32}), {base, tex, sc});
+            return nullptr;
+        };
+        // destroy()
+        ci.builtinMethods["destroy"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr*, auto) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            ctx.builder.CreateCall(ctx.getFunction("aiml_connector_destroy",
+                ctx.builder.getVoidTy(), {i8p}), {base});
+            return nullptr;
+        };
+
+        ctx.classes["connector"] = std::move(ci);
+    } // end connector
 
     // ==========================================================================
     // input — keyboard / mouse / gamepad / event-queue / mapping layer
@@ -6326,9 +7431,10 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
                 ctx.getFunction(cName, ctx.builder.getInt32Ty(), {i8p}), {k})); \
         };
-        INP_KEY_FUNC("key_down",     "aiml_input_key_down")
-        INP_KEY_FUNC("key_pressed",  "aiml_input_key_pressed")
-        INP_KEY_FUNC("key_released", "aiml_input_key_released")
+        INP_KEY_FUNC("key_down",        "aiml_input_key_down")
+        INP_KEY_FUNC("key_pressed",     "aiml_input_key_pressed")
+        INP_KEY_FUNC("key_pressed_once","aiml_input_key_pressed_once")
+        INP_KEY_FUNC("key_released",    "aiml_input_key_released")
 #undef INP_KEY_FUNC
 
         // input.mouse_pos_x/y / delta_x/y / scroll_x/y → f32
@@ -7658,6 +8764,34 @@ void registerBuiltins(CompilerContext& ctx) {
                 return v;
             };
 
+            // audio.sfx(stem) / audio.music(stem) → audio_handle (spec/44_7).
+            auto mkAssetAudio = [](const char* runtime_fn, AIML::AssetKind kind,
+                                   const char* method) {
+                return [runtime_fn, kind, method](CompilerContext& ctx,
+                    const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                    auto* p = llvm::PointerType::get(ctx.context, 0);
+                    if (!args.empty() && ctx.currentCall &&
+                        !ctx.currentCall->args.empty()) {
+                        if (auto* lit = dynamic_cast<AIML::AST::LiteralExpr*>(
+                                ctx.currentCall->args[0].get())) {
+                            if (lit->type == "string" &&
+                                !AIML::AssetScanner::instance().has_stem(kind, lit->value)) {
+                                LOG_ERROR(std::string("audio.") + method +
+                                          ": stem '" + lit->value +
+                                          "' not in audio store");
+                            }
+                        }
+                    }
+                    llvm::Value* arg = args.empty()
+                        ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                        : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                    return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                        ctx.getFunction(runtime_fn, p, {p}), {arg}));
+                };
+            };
+            ns.builtinFuncs["sfx"]   = mkAssetAudio("aiml_asset_get_sfx",   AIML::AssetKind::Audio, "sfx");
+            ns.builtinFuncs["music"] = mkAssetAudio("aiml_asset_get_music", AIML::AssetKind::Audio, "music");
+
             // audio.init()
             ns.builtinFuncs["init"] = [](CompilerContext& ctx,
                 const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
@@ -7770,29 +8904,43 @@ void registerBuiltins(CompilerContext& ctx) {
         llvm::Type* vd  = ctx.builder.getVoidTy();
 
         // ── mirror_event (isBuiltin=false — real struct for field GEP access) ──
+        // Layout MUST match AimlMirrorEvent in mirror_runtime.cpp:
+        //   { i8* type, i8* peer, i32 net_id, i32 peer_id }
+        // peer_id is the unique per-connection sender id assigned at accept-
+        // time by the host (1..N); use this (not net_id) to identify which
+        // client a peer_connected / peer_disconnected event refers to.
         {
             llvm::StructType* evTy = llvm::StructType::getTypeByName(ctx.context, "mirror_event");
             if (!evTy)
-                evTy = llvm::StructType::create(ctx.context, {i8p, i8p, i32}, "mirror_event");
+                evTy = llvm::StructType::create(ctx.context, {i8p, i8p, i32, i32}, "mirror_event");
 
             CI ci; ci.name = "mirror_event"; ci.type = evTy; ci.isBuiltin = false;
             auto mk = [](llvm::Type* t, int idx, const std::string& tn) {
                 CompilerContext::StructMember m; m.type = t; m.index = idx; m.typeName = tn; return m;
             };
-            ci.members["type"]   = mk(i8p, 0, "string");
-            ci.members["peer"]   = mk(i8p, 1, "mirror_peer");
-            ci.members["net_id"] = mk(i32, 2, "i32");
+            ci.members["type"]    = mk(i8p, 0, "string");
+            ci.members["peer"]    = mk(i8p, 1, "mirror_peer");
+            ci.members["net_id"]  = mk(i32, 2, "i32");
+            ci.members["peer_id"] = mk(i32, 3, "i32");
+            // NB: type_enum() is dispatched as a special-case in
+            // ast_compiler_call.cpp (mirror_event is isBuiltin=false, so its
+            // builtinMethods map is not consulted).
             ctx.classes["mirror_event"] = std::move(ci);
         }
 
         // ── rpc_event (isBuiltin=false — real struct, layout MUST mirror AimlRpcEvent in mirror_runtime.cpp)
-        //   { i8* method, i32 net_id, i32 arg, i32 arg_kind, i8* arg_blob, i32 arg_blob_len }
+        //   { i8* method, i32 net_id, i32 arg, i32 arg_kind, i8* arg_blob, i32 arg_blob_len, i32 peer_id }
         // Natural alignment inserts 4-byte padding between arg_kind (idx 3) and
         // arg_blob (idx 4) — matches the C struct on x86-64 / aarch64.
+        //
+        // peer_id is the unique per-connection sender id (host-assigned at
+        // accept-time); multi-client servers MUST use this — NOT net_id —
+        // to identify the sender, since clients can race-allocate the same
+        // net_id for their respective AuthRequest objects.
         {
             llvm::StructType* evTy = llvm::StructType::getTypeByName(ctx.context, "rpc_event");
             if (!evTy)
-                evTy = llvm::StructType::create(ctx.context, {i8p, i32, i32, i32, i8p, i32}, "rpc_event");
+                evTy = llvm::StructType::create(ctx.context, {i8p, i32, i32, i32, i8p, i32, i32}, "rpc_event");
 
             CI ci; ci.name = "rpc_event"; ci.type = evTy; ci.isBuiltin = false;
             auto mk = [](llvm::Type* t, int idx, const std::string& tn) {
@@ -7804,6 +8952,7 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.members["arg_kind"]     = mk(i32, 3, "i32");
             ci.members["arg_blob"]     = mk(i8p, 4, "ptr");
             ci.members["arg_blob_len"] = mk(i32, 5, "i32");
+            ci.members["peer_id"]      = mk(i32, 6, "i32");
 
             // (decode is exposed as mirror_session.decode_rpc(ev, target) — see below.)
 #if 0
@@ -8116,19 +9265,35 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* outPtr = nullptr;
                 std::string  outTn;
                 if (auto* vx = dynamic_cast<AIML::AST::VariableExpr*>(call->args[1].get())) {
+                    // `<` als standalone this-Referenz (analog visitVariable).
+                    std::string vname = (vx->name == "<") ? std::string("this") : vx->name;
                     Symbol* sym = nullptr;
                     CompilerContext::Scope* sc = ctx.currentScope;
                     while (sc) {
-                        if (sc->variables.count(vx->name)) { sym = &sc->variables[vx->name]; break; }
+                        if (sc->variables.count(vname)) { sym = &sc->variables[vname]; break; }
                         sc = sc->parent;
                     }
-                    if (!sym && ctx.symbol_table.count(vx->name)) sym = &ctx.symbol_table[vx->name];
+                    if (!sym && ctx.symbol_table.count(vname)) sym = &ctx.symbol_table[vname];
                     if (sym) {
                         llvm::Value* av = sym->alloca_inst
                             ? static_cast<llvm::Value*>(sym->alloca_inst)
                             : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
                         outPtr = ctx.builder.CreateBitCast(av, i8p);
                         outTn  = sym->typeName;
+                        // ref<T>/ptr<T> sind heute funktional identisch
+                        // (siehe spec/18_refs_and_pointers.md).  In beiden
+                        // Fällen ist die alloca ein Pointer auf den Object-
+                        // Pointer — wir müssen ihn dereferenzieren und den
+                        // Class-Namen aus den Brackets extrahieren.
+                        if ((outTn.rfind("ref<", 0) == 0 || outTn.rfind("ptr<", 0) == 0) &&
+                            outTn.back() == '>') {
+                            outTn = outTn.substr(4, outTn.size() - 5);
+                            llvm::Value* ptrLoaded = ctx.builder.CreateLoad(i8p,
+                                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+                                    sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst))),
+                                "deref_obj");
+                            outPtr = ctx.builder.CreateBitCast(ptrLoaded, i8p);
+                        }
                     }
                 }
                 if (!outPtr || outTn.empty()
@@ -8153,6 +9318,112 @@ void registerBuiltins(CompilerContext& ctx) {
                     ctx.getFunction("aiml_rpc_event_decode_into",
                         i32, {i8p, i8p, i8p, i32}),
                     {evPtr, outPtr, nodesPtr, nNodes});
+                return ctx.ir_gen->wrap(r);
+            };
+
+            // ── send_and_await(target_peer, method, req, out, timeout_ms) → i32
+            //
+            // One-shot RPC roundtrip: encode `req` (typed model), send to
+            // `target_peer` with method name, then poll the incoming queue
+            // for `timeout_ms` waiting for an RPC with method=="set_result";
+            // on match decode into `out` (typed ptr<Model>) and return 1.
+            // Return 0 on timeout / decode failure.
+            //
+            // Replaces the hand-rolled per-Type await-loop pattern that
+            // client-side tests had to repeat — see 9rooms_v2 MockClient
+            // refactor for the motivating use-case.
+            //
+            // Both `req` and `out` MUST be model-typed VariableExpr — the
+            // builtin extracts schema-nodes from the registered class info.
+            // `out` may be `ptr<Model>` or plain `Model` (ref/ptr identical
+            // today — same convention as decode_rpc).
+            ci.builtinMethods["send_and_await"] = [i8p, i32, vd](CompilerContext& ctx,
+                llvm::Value* base, AIML::AST::CallExpr* call, EvalFn evalExpr) -> IRValue* {
+                if (call->args.size() < 5) {
+                    LOG_ERROR(ctx.fmtLoc() + "send_and_await: expected (target_peer, method, req, out, timeout_ms) — got " +
+                              std::to_string(call->args.size()) + " args");
+                    return ctx.ir_gen->getInt32(0);
+                }
+                llvm::Value* s        = ctx.builder.CreateLoad(i8p, base, "sess_ptr");
+                llvm::Value* targetId = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                llvm::Value* method   = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+
+                auto extractModelPtr = [&](AIML::AST::Expr* expr,
+                                           llvm::Value*& outPtr,
+                                           llvm::Value*& outNodesPtr,
+                                           llvm::Value*& outNNodes,
+                                           uint64_t& outSizeBytes,
+                                           std::string& outTypeName,
+                                           bool zeroInit) -> bool
+                {
+                    auto* vx = dynamic_cast<AIML::AST::VariableExpr*>(expr);
+                    if (!vx) return false;
+                    Symbol* sym = nullptr;
+                    CompilerContext::Scope* sc = ctx.currentScope;
+                    while (sc) {
+                        if (sc->variables.count(vx->name)) { sym = &sc->variables[vx->name]; break; }
+                        sc = sc->parent;
+                    }
+                    if (!sym && ctx.symbol_table.count(vx->name)) sym = &ctx.symbol_table[vx->name];
+                    if (!sym) return false;
+                    std::string tn = sym->typeName;
+                    bool isPtr = (tn.size() > 4 && tn.substr(0,4) == "ptr<" && tn.back() == '>');
+                    bool isRef = (tn.size() > 4 && tn.substr(0,4) == "ref<" && tn.back() == '>');
+                    if (isPtr || isRef) tn = tn.substr(4, tn.size() - 5);
+                    if (!ctx.classes.count(tn) || !ctx.classes[tn].serNodesVar) return false;
+                    auto& ci2 = ctx.classes[tn];
+
+                    llvm::Value* av = sym->alloca_inst
+                        ? static_cast<llvm::Value*>(sym->alloca_inst)
+                        : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
+                    if (isPtr || isRef) {
+                        outPtr = ctx.builder.CreateLoad(i8p, av, "obj_deref");
+                    } else {
+                        outPtr = ctx.builder.CreateBitCast(av, i8p);
+                    }
+                    outNodesPtr = ci2.serNodesVar;
+                    outNNodes   = ctx.builder.getInt32((uint32_t)ci2.serNodesCount);
+                    llvm::DataLayout dl(&ctx.module);
+                    outSizeBytes = dl.getTypeAllocSize(ci2.type);
+                    outTypeName  = tn;
+                    if (zeroInit) {
+                        ctx.builder.CreateMemSet(
+                            outPtr, ctx.builder.getInt8(0),
+                            ctx.builder.getInt64(outSizeBytes),
+                            llvm::MaybeAlign(1));
+                    }
+                    return true;
+                };
+
+                llvm::Value *reqPtr=nullptr, *reqNodes=nullptr, *reqN=nullptr;
+                llvm::Value *outPtr=nullptr, *outNodes=nullptr, *outN=nullptr;
+                uint64_t reqSz=0, outSz=0;
+                std::string reqTn, outTn;
+
+                if (!extractModelPtr(call->args[2].get(), reqPtr, reqNodes, reqN, reqSz, reqTn, /*zeroInit=*/false)) {
+                    LOG_ERROR(ctx.fmtLoc() + "send_and_await: 3rd arg must be a serializable model variable");
+                    return ctx.ir_gen->getInt32(0);
+                }
+                if (!extractModelPtr(call->args[3].get(), outPtr, outNodes, outN, outSz, outTn, /*zeroInit=*/true)) {
+                    LOG_ERROR(ctx.fmtLoc() + "send_and_await: 4th arg must be a serializable model variable (typically ptr<Model>)");
+                    return ctx.ir_gen->getInt32(0);
+                }
+
+                llvm::Value* timeoutMs = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[4].get())));
+
+                // Filter-method is hard-coded to "set_result" — the dominant
+                // pattern across all known callers.  Future signature could
+                // accept a 6th arg if needed.
+                llvm::Value* expectMethod = ctx.builder.CreateGlobalStringPtr("set_result");
+
+                llvm::Value* r = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_mirror_session_send_and_await",
+                        i32, {i8p, i32, i8p, i32, i8p, i8p, i32, i8p, i8p, i8p, i32, i32}),
+                    {s, targetId, method, ctx.builder.getInt32(0),
+                     reqPtr, reqNodes, reqN,
+                     expectMethod,
+                     outPtr, outNodes, outN,
+                     timeoutMs});
                 return ctx.ir_gen->wrap(r);
             };
 
@@ -8393,6 +9664,115 @@ void registerBuiltins(CompilerContext& ctx) {
             return nullptr;
         };
     } // end log namespace
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // vocab namespace — i18n runtime.  Thin wrapper around
+    // src/sys/vocab_runtime.cpp; see spec/44_8_vocab.md for the design.
+    // Functions:
+    //   vocab.load(langs_json, vocab_json) → i32   0=ok / -1 / -2
+    //   vocab.set_language(idx)                    void
+    //   vocab.current_language() → i32
+    //   vocab.language_count() → i32
+    //   vocab.language_code(idx) → string          nullable
+    //   vocab.lookup(source) → string              always non-null
+    // ═══════════════════════════════════════════════════════════════════════
+    {
+        auto& vocab = ctx.namespaces["vocab"];
+        auto* p   = llvm::PointerType::get(ctx.context, 0);
+        auto* vd  = ctx.builder.getVoidTy();
+        auto* i32 = ctx.builder.getInt32Ty();
+
+        // vocab.load(langs_json, vocab_json) → i32
+        vocab.builtinFuncs["load"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p8   = llvm::PointerType::get(ctx.context, 0);
+            auto* i32t = ctx.builder.getInt32Ty();
+            llvm::Function* fn = ctx.module.getFunction("aiml_vocab_load");
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(i32t, {p8, p8}, false),
+                llvm::Function::ExternalLinkage, "aiml_vocab_load", ctx.module);
+            llvm::Value* langs = args.size() > 0
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+                : ctx.builder.CreateGlobalStringPtr("{}");
+            llvm::Value* voc = args.size() > 1
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+                : ctx.builder.CreateGlobalStringPtr("{}");
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {langs, voc}));
+        };
+
+        // vocab.set_language(idx)
+        vocab.builtinFuncs["set_language"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* vdt  = ctx.builder.getVoidTy();
+            auto* i32t = ctx.builder.getInt32Ty();
+            llvm::Function* fn = ctx.module.getFunction("aiml_vocab_set_language");
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(vdt, {i32t}, false),
+                llvm::Function::ExternalLinkage, "aiml_vocab_set_language", ctx.module);
+            llvm::Value* idx = args.size() > 0
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+                : ctx.builder.getInt32(0);
+            if (idx->getType() != i32t) idx = ctx.builder.CreateZExtOrTrunc(idx, i32t);
+            ctx.builder.CreateCall(fn, {idx});
+            return nullptr;
+        };
+
+        // vocab.current_language() → i32
+        vocab.builtinFuncs["current_language"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            auto* i32t = ctx.builder.getInt32Ty();
+            llvm::Function* fn = ctx.module.getFunction("aiml_vocab_current_language");
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(i32t, {}, false),
+                llvm::Function::ExternalLinkage, "aiml_vocab_current_language", ctx.module);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {}));
+        };
+
+        // vocab.language_count() → i32
+        vocab.builtinFuncs["language_count"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+            auto* i32t = ctx.builder.getInt32Ty();
+            llvm::Function* fn = ctx.module.getFunction("aiml_vocab_language_count");
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(i32t, {}, false),
+                llvm::Function::ExternalLinkage, "aiml_vocab_language_count", ctx.module);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {}));
+        };
+
+        // vocab.language_code(idx) → string (may be NULL)
+        vocab.builtinFuncs["language_code"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p8   = llvm::PointerType::get(ctx.context, 0);
+            auto* i32t = ctx.builder.getInt32Ty();
+            llvm::Function* fn = ctx.module.getFunction("aiml_vocab_language_code");
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(p8, {i32t}, false),
+                llvm::Function::ExternalLinkage, "aiml_vocab_language_code", ctx.module);
+            llvm::Value* idx = args.size() > 0
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+                : ctx.builder.getInt32(0);
+            if (idx->getType() != i32t) idx = ctx.builder.CreateZExtOrTrunc(idx, i32t);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {idx}));
+        };
+
+        // vocab.lookup(source) → string (never NULL — falls back to source)
+        vocab.builtinFuncs["lookup"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p8 = llvm::PointerType::get(ctx.context, 0);
+            llvm::Function* fn = ctx.module.getFunction("aiml_vocab_lookup");
+            if (!fn) fn = llvm::Function::Create(
+                llvm::FunctionType::get(p8, {p8}, false),
+                llvm::Function::ExternalLinkage, "aiml_vocab_lookup", ctx.module);
+            llvm::Value* src = args.size() > 0
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))
+                : ctx.builder.CreateGlobalStringPtr("");
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {src}));
+        };
+
+        // Suppress "unused variable" warnings on the outer aliases when
+        // the closures compile down to nothing referencing them.
+        (void)p; (void)vd; (void)i32;
+    } // end vocab namespace
 
     // ═══════════════════════════════════════════════════════════════════════
     // tensor builtin class (instance methods on tensor = i8*)

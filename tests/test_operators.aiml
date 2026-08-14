@@ -3,18 +3,18 @@
 
 # ── Phase A: eq / neq (integer) ───────────────────────────────────────────────
 
-- decl: [a, i32, 5]
-- decl: [b, i32, 5]
-- decl: [c, i32, 7]
+- decl: [var_a, i32, 5]
+- decl: [var_b, i32, 5]
+- decl: [var_c, i32, 7]
 
 - if:
-    condition: { neq: [a, b] }
+    condition: { neq: [var_a, var_b] }
     then:
       - print: ["FAIL A1: eq integer"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { eq: [a, c] }
+    condition: { eq: [var_a, var_c] }
     then:
       - print: ["FAIL A2: neq integer"]
       - call: [sys.exit, 1]
@@ -23,18 +23,18 @@
 
 # ── Phase B: eq / neq (string content) ────────────────────────────────────────
 
-- decl: [s1, string, "hello"]
-- decl: [s2, string, "hello"]
-- decl: [s3, string, "world"]
+- decl: [var_s1, string, "hello"]
+- decl: [var_s2, string, "hello"]
+- decl: [var_s3, string, "world"]
 
 - if:
-    condition: { neq: [s1, s2] }
+    condition: { neq: [var_s1, var_s2] }
     then:
       - print: ["FAIL B1: eq string content"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { eq: [s1, s3] }
+    condition: { eq: [var_s1, var_s3] }
     then:
       - print: ["FAIL B2: neq string content"]
       - call: [sys.exit, 1]
@@ -43,43 +43,43 @@
 
 # ── Phase C: lt / gt / lte / gte ─────────────────────────────────────────────
 
-- decl: [x, i32, 3]
-- decl: [y, i32, 7]
+- decl: [var_x, i32, 3]
+- decl: [var_y, i32, 7]
 
 - if:
-    condition: { gt: [x, y] }
+    condition: { gt: [var_x, var_y] }
     then:
       - print: ["FAIL C1: lt"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { lt: [y, x] }
+    condition: { lt: [var_y, var_x] }
     then:
       - print: ["FAIL C2: gt"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { gte: [x, y] }
+    condition: { gte: [var_x, var_y] }
     then:
       - print: ["FAIL C3: lte"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { lte: [y, x] }
+    condition: { lte: [var_y, var_x] }
     then:
       - print: ["FAIL C4: gte"]
       - call: [sys.exit, 1]
 
-# boundary: x lte x (should be true — if x > x that is false, so no fail)
+# boundary: var_x lte var_x (should be true — if var_x > var_x that is false, so no fail)
 - if:
-    condition: { gt: [x, x] }
+    condition: { gt: [var_x, var_x] }
     then:
       - print: ["FAIL C5: lte equal"]
       - call: [sys.exit, 1]
 
-# boundary: x gte x (should be true — if x < x that is false, so no fail)
+# boundary: var_x gte var_x (should be true — if var_x < var_x that is false, so no fail)
 - if:
-    condition: { lt: [x, x] }
+    condition: { lt: [var_x, var_x] }
     then:
       - print: ["FAIL C6: gte equal"]
       - call: [sys.exit, 1]
@@ -88,21 +88,21 @@
 
 # ── Phase D: peq / pneq (pointer identity) ────────────────────────────────────
 
-- decl: [p1, string, "same"]
-- decl: [p2, string, "same"]
-- decl: [p3, string, "other"]
+- decl: [var_p1, string, "same"]
+- decl: [var_p2, string, "same"]
+- decl: [var_p3, string, "other"]
 
-# p1 eq p2 => true (content)  but peq may differ (different alloca/ptrs)
-# peq p1 p1 must be true (same pointer)
+# var_p1 eq var_p2 => true (content)  but peq may differ (different alloca/ptrs)
+# peq var_p1 var_p1 must be true (same pointer)
 - if:
-    condition: { pneq: [p1, p1] }
+    condition: { pneq: [var_p1, var_p1] }
     then:
       - print: ["FAIL D1: peq self"]
       - call: [sys.exit, 1]
 
-# pneq p1 p3 should be true (different allocations)
+# pneq var_p1 var_p3 should be true (different allocations)
 - if:
-    condition: { peq: [p1, p3] }
+    condition: { peq: [var_p1, var_p3] }
     then:
       - print: ["FAIL D2: pneq different"]
       - call: [sys.exit, 1]
@@ -114,8 +114,8 @@
 - class:
     name: Point
     members:
-      - [px, i32]
-      - [py, i32]
+      - [var_px, i32]
+      - [var_py, i32]
     methods:
       - def:
           name: __eq__
@@ -123,26 +123,26 @@
           return: i32
           body:
             - if:
-                condition: { neq: [<.px, other.px] }
+                condition: { neq: [<.var_px, other.var_px] }
                 then:
                   - return: [0]
             - if:
-                condition: { neq: [<.py, other.py] }
+                condition: { neq: [<.var_py, other.var_py] }
                 then:
                   - return: [0]
             - return: [1]
 
 - decl: [pt1, Point]
-- set: [pt1.px, 3]
-- set: [pt1.py, 4]
+- set: [pt1.var_px, 3]
+- set: [pt1.var_py, 4]
 
 - decl: [pt2, Point]
-- set: [pt2.px, 3]
-- set: [pt2.py, 4]
+- set: [pt2.var_px, 3]
+- set: [pt2.var_py, 4]
 
 - decl: [pt3, Point]
-- set: [pt3.px, 1]
-- set: [pt3.py, 2]
+- set: [pt3.var_px, 1]
+- set: [pt3.var_py, 2]
 
 - if:
     condition: { neq: [pt1, pt2] }

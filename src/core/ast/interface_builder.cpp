@@ -24,8 +24,16 @@ bool InterfaceBuilder::OnScalar(const std::string& value, const std::string& tag
             // Outer [name, ret, args] — first two scalars.
             if (currentMethod.name.empty()) currentMethod.name = value;
             else if (currentMethod.returnType.empty()) currentMethod.returnType = value;
+        } else if (methodDepth == 3) {
+            // Inner [argName, argType] sub-sequence.
+            if (!curArgGotName) {
+                currentArg.first = value;
+                curArgGotName = true;
+            } else {
+                currentArg.second = value;
+            }
         }
-        // methodDepth == 2 → args sub-sequence (skipped for now)
+        // methodDepth == 2 → args sub-sequence container, scalars there ignored
     } else if (currentKey == "name") {
         interfaceNode->name = value;
     }
@@ -41,13 +49,21 @@ bool InterfaceBuilder::OnSequenceStart() {
         if (methodDepth == 1) {
             insideMethodDef = true;
             currentMethod = MethodSignature{};
+        } else if (methodDepth == 3) {
+            // Start of an [argName, argType] pair inside args.
+            currentArg = {};
+            curArgGotName = false;
         }
-        // depth >= 2: inner sub-sequence (the args [])
+        // depth == 2: args sub-sequence container
     }
     return true;
 }
 bool InterfaceBuilder::OnSequenceEnd() {
     if (insideMethods && methodDepth > 0) {
+        if (methodDepth == 3 && curArgGotName && !currentArg.first.empty()) {
+            // End of [argName, argType] pair.
+            currentMethod.args.push_back(currentArg);
+        }
         methodDepth--;
         if (methodDepth == 0 && insideMethodDef) {
             if (!currentMethod.name.empty())

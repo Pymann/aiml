@@ -14,16 +14,16 @@
             - set: [result, { call: [text.split, " "] }]
             - return: [result]
 
-- decl: [sp, Splitter]
+- decl: [var_sp, Splitter]
 - decl: [parts, list<string>]
-- set: [parts, { call: [sp.do_split, "hello world foo"] }]
-- decl: [n, i32, parts.len]
-- print: ["count=${n}"]
+- set: [parts, { call: [var_sp.do_split, "hello world foo"] }]
+- decl: [var_n, i32, parts.len]
+- print: ["count=${var_n}"]
 - if:
-    condition: { eq: [n, 3] }
+    condition: { eq: [var_n, 3] }
     then:
       - print: ["PASS"]
       - call: [sys.exit, 0]
     else:
-      - print: ["FAIL n=${n}"]
+      - print: ["FAIL var_n=${var_n}"]
       - call: [sys.exit, 1]

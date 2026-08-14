@@ -62,4 +62,25 @@ Applies at arbitrary depth: `p.nested.field` dereferences `p` and then accesses 
 field `nested` of the resulting struct.
 
 For primitive types (`ptr<i32>` etc.) `{ ?: [p] }` is still required for reading and
-`store: [p, val]` for writing.
+`store: [p, val]` for writing.  Semantik analog C:
+
+| C            | AIML                       |
+|--------------|----------------------------|
+| `p = 5`      | `set: [p, 5]`              | (rebind pointer slot)
+| `*p = 5`     | `store: [p, 5]`            | (deref-write, depth=1)
+| `**pp = 5`   | `store: [pp, 5, 2]`        | (deref-write, depth=2)
+| `int v = *p` | `set: [v, { '?': [p] }]`   | (read via deref)
+
+`store:` ist das natürliche out-param-Pattern:
+
+```yaml
+- def:
+    name: write_out
+    args: [[out, ptr<i32>]]
+    body:
+      - store: [out, 5]      # *out = 5
+
+- decl: [val, i32, 0]
+- call: [write_out, { '&': [val] }]
+# nach Call: val == 5
+```

@@ -33,13 +33,13 @@
           return: i32
           body:
             - print: ["push_event_like start event_count=${<.event_count} event_seq=${<.event_seq}"]
-            - decl: [ev, EventLite]
-            - set: [ev.seq, <.event_seq]
-            - set: [ev.kind, kind]
-            - set: [ev.text, text]
-            - set: [ev.phase, phase]
+            - decl: [var_ev, EventLite]
+            - set: [var_ev.seq, <.event_seq]
+            - set: [var_ev.kind, kind]
+            - set: [var_ev.text, text]
+            - set: [var_ev.phase, phase]
             - decl: [lst, list<EventLite>, <.events]
-            - call: [lst.push, ev]
+            - call: [lst.push, var_ev]
             - print: ["after lst.push len=${lst.len}"]
             - set: [<.events, lst]
             - print: ["after set events"]
@@ -54,55 +54,55 @@
     return: i32
     body:
       - print: ["test_event_system_layout_repro START"]
-      - decl: [es, ptr<EventLikeSystem>, {new: EventLikeSystem}]
+      - decl: [var_es, ptr<EventLikeSystem>, {new: EventLikeSystem}]
       - decl: [evs, list<EventLite>]
       - decl: [trs, list<TriggerLite>]
-      - set: [es.events, evs]
-      - set: [es.active_triggers, trs]
-      - set: [es.event_seq, 0]
-      - set: [es.event_count, 0]
-      - set: [es.trigger_seq, 0]
-      - set: [es.active_trigger_count, 0]
-      - set: [es.react_count, 0]
+      - set: [var_es.events, evs]
+      - set: [var_es.active_triggers, trs]
+      - set: [var_es.event_seq, 0]
+      - set: [var_es.event_count, 0]
+      - set: [var_es.trigger_seq, 0]
+      - set: [var_es.active_trigger_count, 0]
+      - set: [var_es.react_count, 0]
       - print: ["system initialized"]
-      - decl: [rc1, i32, {call: [es.push_event_like, "phase_start", "Round start", 1]}]
+      - decl: [rc1, i32, {call: [var_es.push_event_like, "phase_start", "Round start", 1]}]
       - print: ["rc1=${rc1}"]
-      - decl: [rc2, i32, {call: [es.push_event_like, "phase_start", "Round start 2", 2]}]
+      - decl: [rc2, i32, {call: [var_es.push_event_like, "phase_start", "Round start 2", 2]}]
       - print: ["rc2=${rc2}"]
       - if:
-          condition: { neq: [es.event_count, 2]}
+          condition: { neq: [var_es.event_count, 2]}
           then:
-            - print: ["FAIL event_count=${es.event_count}"]
+            - print: ["FAIL event_count=${var_es.event_count}"]
             - return: [1]
       - if:
-          condition: { neq: [es.event_seq, 2]}
+          condition: { neq: [var_es.event_seq, 2]}
           then:
-            - print: ["FAIL event_seq=${es.event_seq}"]
+            - print: ["FAIL event_seq=${var_es.event_seq}"]
             - return: [1]
       - if:
-          condition: { neq: [es.events.len, 2]}
+          condition: { neq: [var_es.events.len, 2]}
           then:
-            - print: ["FAIL events.len=${es.events.len}"]
+            - print: ["FAIL events.len=${var_es.events.len}"]
             - return: [1]
       - if:
-          condition: { neq: [es.events-0.seq, 0]}
+          condition: { neq: [var_es.events-0.seq, 0]}
           then:
-            - print: ["FAIL seq0=${es.events-0.seq}"]
+            - print: ["FAIL seq0=${var_es.events-0.seq}"]
             - return: [1]
       - if:
-          condition: { neq: [es.events-1.seq, 1]}
+          condition: { neq: [var_es.events-1.seq, 1]}
           then:
-            - print: ["FAIL seq1=${es.events-1.seq}"]
+            - print: ["FAIL seq1=${var_es.events-1.seq}"]
             - return: [1]
       - if:
-          condition: { neq: [es.events-0.phase, 1]}
+          condition: { neq: [var_es.events-0.phase, 1]}
           then:
-            - print: ["FAIL phase0=${es.events-0.phase}"]
+            - print: ["FAIL phase0=${var_es.events-0.phase}"]
             - return: [1]
       - if:
-          condition: { neq: [es.events-1.phase, 2]}
+          condition: { neq: [var_es.events-1.phase, 2]}
           then:
-            - print: ["FAIL phase1=${es.events-1.phase}"]
+            - print: ["FAIL phase1=${var_es.events-1.phase}"]
             - return: [1]
       - print: ["test_event_system_layout_repro PASS"]
       - return: [0]

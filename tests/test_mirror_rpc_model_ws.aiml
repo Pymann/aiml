@@ -29,13 +29,13 @@
       - set: [nid, { call: [sess.register, player] }]
       - print: ["host-model: registered net_id=${nid}"]
 
-      - decl: [i, i32, 0]
+      - decl: [var_i, i32, 0]
       - while:
-          condition: { lt: [i, 35] }
+          condition: { lt: [var_i, 35] }
           body:
             - call: [sess.update]
             - call: [time.sleep_ms, 10]
-            - set: [i, { +: [i, 1] }]
+            - set: [var_i, { +: [var_i, 1] }]
 
       - decl: [empty_rpc, rpc_event]
       - set: [empty_rpc, { call: [sess.poll_rpc] }]
@@ -45,9 +45,9 @@
             - set: [player.score, 800]
             - call: [sess.sync_now, player]
 
-      - set: [i, 0]
+      - set: [var_i, 0]
       - while:
-          condition: { lt: [i, 50] }
+          condition: { lt: [var_i, 50] }
           body:
             - call: [sess.update]
             - if:
@@ -56,7 +56,7 @@
                   - decl: [rpc_ev, rpc_event]
                   - set: [rpc_ev, { call: [sess.next_rpc] }]
                   - decl: [cast, RpcCast]
-                  - decl: [rc, i32, -1]
+                  - decl: [var_rc, i32, -1]
                   - if:
                       condition: { neq: [rpc_ev.arg_kind, 1] }
                       then:
@@ -72,9 +72,9 @@
                                   then:
                                     - set: [player.score, 803]
                                   else:
-                                    - set: [rc, { call: [sess.decode_rpc, rpc_ev, cast] }]
+                                    - set: [var_rc, { call: [sess.decode_rpc, rpc_ev, cast] }]
                                     - if:
-                                        condition: { neq: [rc, 0] }
+                                        condition: { neq: [var_rc, 0] }
                                         then:
                                           - set: [player.score, 804]
                                         else:
@@ -107,7 +107,7 @@
                                                                         - set: [player.score, 888]
                   - call: [sess.sync_now, player]
             - call: [time.sleep_ms, 10]
-            - set: [i, { +: [i, 1] }]
+            - set: [var_i, { +: [var_i, 1] }]
 
       - call: [sess.close]
 
@@ -128,10 +128,10 @@
       - print: ["FAIL model-rpc no object_registered event"]
       - call: [sys.exit, 1]
 
-- decl: [ev, mirror_event]
-- set: [ev, { call: [client.next_event] }]
+- decl: [var_ev, mirror_event]
+- set: [var_ev, { call: [client.next_event] }]
 - decl: [replica, NetPlayer]
-- call: [client.register_id, replica, ev.net_id]
+- call: [client.register_id, replica, var_ev.net_id]
 
 - decl: [cast, RpcCast]
 - set: [cast.name, "ember"]
@@ -143,7 +143,7 @@
 - call: [client.update]
 - print: ["client-model: initial health=${replica.health} score=${replica.score}"]
 
-- call: [client.send_rpc, ev.net_id, "cast", 99, cast]
+- call: [client.send_rpc, var_ev.net_id, "cast", 99, cast]
 - print: ["client-model: sent cast payload"]
 
 - call: [time.sleep_ms, 240]

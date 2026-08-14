@@ -19,6 +19,7 @@ class ClassBuilder : public StateHandler {
     bool insideMethods = false;
     bool insideModels = false;
     bool insideImplements = false;
+    bool insideRules = false;   // function-cascade `rules:` (spec/57)
     int mapDepth = 0; // Start at 0
     int sequenceDepth = 0;
     int memberAttrIndex = 0; // Tracks which column [name, type, default, modifiers]

@@ -1,3 +1,4 @@
+# static-check: off
 # Probe: model + class via `models:` + `implements:` für Interface-Polymorphismus.
 # Saubere Architektur: Modell hält Daten, Klasse referenziert via `models:` das
 # Modell und implementiert das Interface.
@@ -31,16 +32,16 @@
     methods:
       - def: { name: say, return: string, args: [], body: [{ return: "Woof! I am ${<.name}" }] }
 
-- decl: [c, ptr<CatBehavior>, { new: CatBehavior }]
-- set: [c.name, "Whiskers"]
-- decl: [d, ptr<DogBehavior>, { new: DogBehavior }]
-- set: [d.name, "Rex"]
+- decl: [var_c, ptr<CatBehavior>, { new: CatBehavior }]
+- set: [var_c.name, "Whiskers"]
+- decl: [var_d, ptr<DogBehavior>, { new: DogBehavior }]
+- set: [var_d.name, "Rex"]
 
-- print: ["cat direct: ${call: [c.say]}"]
-- print: ["dog direct: ${call: [d.say]}"]
+- print: ["cat direct: ${call: [var_c.say]}"]
+- print: ["dog direct: ${call: [var_d.say]}"]
 
 # Polymorphismus über ptr<Sayable>
-- decl: [s1, ptr<Sayable>, c]
-- decl: [s2, ptr<Sayable>, d]
-- print: ["cat poly:   ${call: [s1.say]}"]
-- print: ["dog poly:   ${call: [s2.say]}"]
+- decl: [var_s1, ptr<Sayable>, var_c]
+- decl: [var_s2, ptr<Sayable>, var_d]
+- print: ["cat poly:   ${call: [var_s1.say]}"]
+- print: ["dog poly:   ${call: [var_s2.say]}"]

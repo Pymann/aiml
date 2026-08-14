@@ -12,20 +12,20 @@
 - decl: [players, Store<RelativeStorePlayer>]
 - set: [players, { call: [db.open, "players_rel_global", {persist: true, path: db_dir}] }]
 
-- decl: [p, RelativeStorePlayer]
-- set: [p.score, 314]
-- set: [p.level, 15]
+- decl: [var_p, RelativeStorePlayer]
+- set: [var_p.score, 314]
+- set: [var_p.level, 15]
 
-- decl: [id, i32]
-- set: [id, { call: [players.insert, p] }]
-- print: ["rel_global_id=${id}"]
+- decl: [var_id, i32]
+- set: [var_id, { call: [players.insert, var_p] }]
+- print: ["rel_global_id=${var_id}"]
 
-- decl: [n, i32]
-- set: [n, { call: [players.len] }]
-- print: ["rel_global_len=${n}"]
+- decl: [var_n, i32]
+- set: [var_n, { call: [players.len] }]
+- print: ["rel_global_len=${var_n}"]
 
 - decl: [got, ptr<RelativeStorePlayer>]
-- set: [got, { call: [players.get, id] }]
+- set: [got, { call: [players.get, var_id] }]
 - if:
     condition: { eq: [got, null] }
     then:
@@ -34,6 +34,6 @@
 
 - print: ["rel_global_score=${got.score} level=${got.level}"]
 
-- decl: [cp, i32]
-- set: [cp, { call: [db.checkpoint] }]
-- print: ["rel_global_checkpoint=${cp}"]
+- decl: [var_cp, i32]
+- set: [var_cp, { call: [db.checkpoint] }]
+- print: ["rel_global_checkpoint=${var_cp}"]

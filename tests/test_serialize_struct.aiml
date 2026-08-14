@@ -19,24 +19,24 @@
       - print: ["TEST START"]
       # Test: empty abilities list
       - decl: [json1, string, '{"__type":"TestCard","name":"Fireball","abilities":[]}']
-      - decl: [c1, TestCard]
-      - set: [c1, {call: [sys.deserialize, json1, "TestCard"]}]
-      - print: ["card1.name=${c1.name} abilities=${c1.abilities.len}"]
+      - decl: [var_c1, TestCard]
+      - set: [var_c1, {call: [sys.deserialize, json1, "TestCard"]}]
+      - print: ["card1.name=${var_c1.name} abilities=${var_c1.abilities.len}"]
 
       # Test: ability with nested lists
       - decl: [json2, string, '{"__type":"TestCard","name":"Dragon","abilities":[{"cost_text":"2 Fire","activation_cost":[1,2],"trigger":[],"effects":[[10,3],[20,5,1]]}]}']
-      - decl: [c2, TestCard]
-      - set: [c2, {call: [sys.deserialize, json2, "TestCard"]}]
-      - print: ["card2.name=${c2.name} abilities=${c2.abilities.len}"]
-      - decl: [ab, Ability, c2.abilities-0]
-      - print: ["ab.cost_text=${ab.cost_text}"]
-      - print: ["ab.activation_cost.len=${ab.activation_cost.len}"]
-      - print: ["ab.trigger.len=${ab.trigger.len}"]
-      - print: ["ab.effects.len=${ab.effects.len}"]
+      - decl: [var_c2, TestCard]
+      - set: [var_c2, {call: [sys.deserialize, json2, "TestCard"]}]
+      - print: ["card2.name=${var_c2.name} abilities=${var_c2.abilities.len}"]
+      - decl: [var_ab, Ability, var_c2.abilities-0]
+      - print: ["var_ab.cost_text=${var_ab.cost_text}"]
+      - print: ["var_ab.activation_cost.len=${var_ab.activation_cost.len}"]
+      - print: ["var_ab.trigger.len=${var_ab.trigger.len}"]
+      - print: ["var_ab.effects.len=${var_ab.effects.len}"]
 
       # Serialize back and check
       - decl: [ser, string]
-      - set: [ser, {call: [sys.serialize, c2, "TestCard"]}]
+      - set: [ser, {call: [sys.serialize, var_c2, "TestCard"]}]
       - print: ["serialized=${ser}"]
       - print: ["ALL PASS"]
       - return: 0

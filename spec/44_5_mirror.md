@@ -256,21 +256,76 @@ model:
   name: rpc_event
   fields:
     - [method, string]       # name of the called method; "" when queue is empty (poll_rpc sentinel)
-    - [net_id, i32]          # net_id of the target object
+    - [net_id, i32]          # net_id of the target object (client-assigned, may collide across peers)
     - [arg, i32]             # legacy i32 argument / fast discriminator
     - [arg_kind, i32]        # 0 = i32 only, 1 = typed model payload
     - [arg_blob, ptr]        # internal blob pointer; AIML code uses decode_rpc instead
     - [arg_blob_len, i32]    # length of the payload blob in bytes
+    - [peer_id, i32]         # unique per-connection sender id (host-assigned at accept) — use this, NOT net_id, to identify the sender in multi-client servers
 ```
+
+### Multi-Client Safety: `peer_id` vs `net_id`
+
+`net_id` in `rpc_event` (and `mirror_event`) is the **object-id** that the
+client assigned when registering its object (`session.register(obj)`).
+Each client's `register` call independently allocates from its own
+`next_net_id = 1` counter, so two clients connecting to the same host
+will BOTH typically assign `net_id = 1` for their first registered
+object (e.g. `AuthRequest`).  The host's `by_net_id` map keeps the
+first registration and silently ignores the colliding second one — but
+RPCs from BOTH clients continue to carry `net_id = 1`, making them
+indistinguishable by that field alone.
+
+To identify which client a packet came from, use **`peer_id`**:
+
+- `peer_id` is assigned by the host the moment a connection is accepted
+  (`mirror_try_accept` sets `peer->id = peers.size() + 1`)
+- It is unique per active connection and remains stable until the peer
+  disconnects
+- It is populated on all `mirror_event` (`peer_connected`,
+  `peer_disconnected`, `object_registered`, `object_unregistered`) and
+  on every `rpc_event` emitted by the host's `process_packet`
+- A non-host client sees `peer_id = 0` on inbound events (only the host
+  observes peer-level identity)
+
+**Rule:** any per-client state on the host (auth-token maps, online-
+presence tracking, session-scoped resources) MUST be keyed by `peer_id`,
+not `net_id`.  Using `net_id` works for single-client setups but breaks
+silently the moment a second client connects.
+
+### Targeted Send: `send_rpc(peer_id, …)`
+
+On the host side, `session.send_rpc(target, method, …)` uses the first
+argument as a **peer-routing key**:
+
+- `target > 0` and a connected peer with `peer->id == target` exists →
+  the packet is sent **only to that peer**.
+- `target == 0` or no matching peer found → fallback to broadcast (all
+  connected peers receive the packet).
+
+This makes replying to a specific client trivial — just pass
+`rpc.peer_id`:
+
+```aiml
+- call: [sess.send_rpc, rpc.peer_id, "set_result", 0, result]   # 1:1 reply
+```
+
+For multi-recipient fanout (e.g. realm chat), iterate the known peer
+ids and call `send_rpc` once per receiver — that produces N targeted
+packets, not 1 broadcast.  Targeted-only is the safer default because
+broadcast leaks per-client state (creature details, private chat
+messages) to ALL clients, which is the exact bug multi-client servers
+need to avoid.
 
 | Call | Return | Description |
 |--------|----------|--------------|
 | `session.has_rpc()` | `i32` | Number of pending RPCs in the queue |
 | `session.next_rpc()` | `rpc_event` | Consume next RPC (queue must not be empty — UB if empty) |
 | `session.poll_rpc()` | `rpc_event` | Consume next RPC, or empty sentinel (`method == ""`) if queue is empty |
-| `session.send_rpc(net_id, method, arg)` | - | Send legacy RPC with pure `i32` argument |
-| `session.send_rpc(net_id, method, arg, model)` | - | Send RPC with `i32` plus typed model payload |
+| `session.send_rpc(target, method, arg)` | - | Send legacy RPC.  `target` is interpreted on the host side as a **peer_id** for targeted delivery (only the matching peer receives the packet); `0` or non-matching falls back to broadcast.  Clients (`is_host=false`) always send to the single server peer. |
+| `session.send_rpc(target, method, arg, model)` | - | Send RPC with `i32` plus typed model payload (same routing rule as above) |
 | `session.decode_rpc(ev, target_model)` | `i32` | Decode model payload from `ev` into `target_model`; `0` = ok, `-1` = wrong type / decode error |
+| `session.send_and_await(target, method, req_model, out_model, timeout_ms)` | `i32` | Client convenience: encode `req_model`, `send_rpc(target, method, 0, req)`, then poll the incoming queue for up to `timeout_ms` waiting for an RPC with `method=="set_result"`.  On match, decode into `out_model` (typically `ptr<RespModel>`) and return `1`.  Return `0` on timeout / decode failure.  **Unrelated inbound RPCs are preserved** (re-queued in order), not dropped — so server-initiated pushes that race an in-flight request/response survive and remain available to a later `has_rpc()` / `poll_rpc()` drain.  This makes event-driven server→client push reliable alongside the request/response pattern. |
 
 ### RPC Payload v2
 
@@ -343,6 +398,35 @@ Notes:
 - Models with `string`, `list<T>` or `map<K:V>` are allowed; decoding uses heap serialization from Chapter 45.
 - If `rpc.arg_kind != 1`, the model type does not match, or the blob is corrupt, `decode_rpc(...)` returns `-1`.
 
+### Convenience: One-Shot Send + Await
+
+For the dominant request/response client-pattern there is `send_and_await`,
+which collapses the send + poll-loop + decode triple into one call:
+
+```aiml
+- decl: [req,  CreateCardReq]
+- set: [req.token, my_tok]
+- set: [req.name,  "Stone Golem"]
+- decl: [resp, ptr<CardResp>, { new: CardResp }]
+- decl: [ok,   i32, { call: [session.send_and_await, 0, "create_card", req, resp, 4000] }]
+- if: { condition: { eq: [ok, 0] }, then: [<timeout-handler>] }
+- if: { condition: { neq: [resp.success, 1] }, then: [<error-handler>] }
+```
+
+Internally drives `update + poll-queue + decode_rpc` in 20ms ticks until
+either a matching `set_result` arrives or `timeout_ms` elapses.  Unrelated
+RPCs received during the wait window are **preserved** (re-queued in arrival
+order), so in-band server→client push-notifications interleaved with
+request/response are safe: a message that arrives mid-`send_and_await` is not
+lost and shows up on the next `has_rpc()` / `poll_rpc()` drain.  A typical
+event-driven client therefore uses `send_and_await` for its own requests and,
+each frame, drains `poll_rpc()` for server pushes (chat, presence, live match
+updates) — no polling of the server required.
+
+Both `req` and `out_model` must be variables of registered model types so
+the compiler can attach their `serNodes`/`serNodesCount` to the runtime
+call.  `out_model` may be a plain model or `ptr<Model>` — both work.
+
 ---
 
 ## 8. Peer Events
@@ -361,7 +445,33 @@ model:
                              # "" when queue is empty (poll_event sentinel)
     - [peer,    mirror_peer] # affected peer (null for object_* events)
     - [net_id,  i32]         # affected object ID (for object_*); 0 for peer_* events
+    - [peer_id, i32]         # unique per-connection peer id (host-assigned at accept); use this to identify clients in multi-tab/multi-client servers
 ```
+
+### `type_enum()` — typed event kind
+
+`mirror_event` also exposes a method `type_enum()` returning the built-in enum
+`MirrorEventType`, the typed companion to the `type` string field:
+
+```
+enum MirrorEventType:
+  none = 0                 # empty/sentinel (queue empty)
+  peer_connected = 1
+  peer_disconnected = 2
+  object_registered = 3
+  object_unregistered = 4
+```
+
+Prefer it over a string switch on `evt.type` — it is enum-checked and avoids the
+`str_cmp` static rule (spec/49 §16):
+
+```aiml
+- decl: [ev,   mirror_event,    { call: [sess.poll_event] }]
+- decl: [kind, MirrorEventType, { call: [ev.type_enum] }]
+- if: { condition: { eq: [kind, MirrorEventType.peer_connected] }, then: [ ... ] }
+```
+
+`MirrorEventType` is a built-in enum (always available, no declaration needed).
 
 `poll_event()` simplifies event loops when only a specific event type is expected:
 

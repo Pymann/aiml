@@ -75,6 +75,29 @@ as `ref<ClassName>` (see
 Every `<.field` and `<.method()` reads through the implicit `ref<Counter>`
 argument. This is a genuine borrow: `this` doesn't outlive the call.
 
+## Interface upcast — `ptr<Concrete>` → `ptr<Interface>`
+
+An interface pointer is a **fat pointer** `AimlFatPtr_<Iface> = {i8* obj,
+i8* vtable}`. Assigning a concrete-class pointer into an interface-typed
+slot upcasts it: the compiler emits the `{obj, __vtable_<Class>_<Iface>}`
+struct (see `Compiler::buildInterfaceUpcast`). This happens implicitly in
+every context that has both the source class name and the target interface:
+
+- **decl** — `decl: [b, ptr<CardBase>, concrete]`
+- **method / call argument** — passing `concrete` to a `ptr<Iface>` param
+- **container insert** — `list<ptr<Iface>>.push(concrete)`, `map.put(k, concrete)`
+- **return** — `return: obj` where `obj` is `ptr<Concrete>` and the function
+  returns `ptr<Iface>`. The fat pointer is built at the return site; a bare
+  `return` of a concrete pointer does **not** reinterpret the object's first
+  bytes as a fat pointer (that produced a garbage vtable → SIGSEGV before the
+  2026-07-10 fix). Canonical: `test_peq_iface_ptr_null.aiml`.
+
+`return: null` for an interface return type yields a zero fat pointer
+`{obj=null, vtable=null}`; test it with `peq [x, null]` / `pneq [x, null]`
+(plain `eq` has no `__eq__` for fat pointers). `peq`/`pneq` compare the
+`obj` slot, so a freshly-built interface pointer is non-null and a
+`return: null` one is null.
+
 ## Serialisation
 
 As of 2026-05-23, `list<ptr<T>>` is **serialisable** when `T` is a

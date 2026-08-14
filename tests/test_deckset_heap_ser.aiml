@@ -31,12 +31,12 @@
             - print: ["FAIL ds1.primordial_id=${ds1.primordial_id}"]
             - call: [sys.exit, 1]
 
-      - decl: [kv, Kv<string:DeckSet>]
-      - set: [kv, { call: [db.open_kv, "deckset_heap_ser", {persist: true, path: "/tmp/aiml_test_deckset_heap_ser/"}] }]
-      - call: [kv.set, "ds_a", ds1]
+      - decl: [var_kv, Kv<string:DeckSet>]
+      - set: [var_kv, { call: [db.open_kv, "deckset_heap_ser", {persist: true, path: "/tmp/aiml_test_deckset_heap_ser/"}] }]
+      - call: [var_kv.set, "ds_a", ds1]
 
       - decl: [got1, ptr<DeckSet>]
-      - set: [got1, { call: [kv.get, "ds_a"] }]
+      - set: [got1, { call: [var_kv.get, "ds_a"] }]
       - if:
           condition: { eq: [{ eq: [got1.name, "Starter"] }, 0] }
           then:
@@ -51,10 +51,10 @@
       - decl: [json2, string, '{"__type":"DeckSet","name":"Starter B","mana_deck_id":"m2","spell_deck_id":"s2","creature_deck_id":"c2","item_deck_id":"i2","primordial_id":"p2","created_at":1}']
       - decl: [ds2, DeckSet]
       - set: [ds2, { call: [sys.deserialize, json2, "DeckSet"] }]
-      - call: [kv.set, "ds_a", ds2]
+      - call: [var_kv.set, "ds_a", ds2]
 
       - decl: [got2, ptr<DeckSet>]
-      - set: [got2, { call: [kv.get, "ds_a"] }]
+      - set: [got2, { call: [var_kv.get, "ds_a"] }]
       - if:
           condition: { eq: [{ eq: [got2.name, "Starter B"] }, 0] }
           then:

@@ -1,14 +1,34 @@
 #include "mem_runtime.h"
+#include "http_runtime.h"  // AimlHttpMap + aiml_http_map_new/put (map<K:V> layout shim)
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 #ifdef __linux__
 #include <sys/resource.h>  // setrlimit, getrlimit
 #include <unistd.h>        // getpagesize
 #endif
 
+extern char **environ;
+
 extern "C" {
+
+// sys.env — build a map<string:string> of all process environment variables.
+// Returns an AimlHttpMap* whose { size, capacity, occupied, keys, values }
+// layout matches AIML's map<K:V>, so map methods (get/contains/…) work on it.
+void* aiml_sys_env(void) {
+    AimlHttpMap* m = aiml_http_map_new();
+    if (!environ) return m;
+    for (char** e = environ; *e != nullptr; ++e) {
+        const char* entry = *e;
+        const char* eq = strchr(entry, '=');
+        if (!eq) continue;                       // skip malformed entries
+        std::string key(entry, (size_t)(eq - entry));
+        aiml_http_map_put(m, key.c_str(), eq + 1);
+    }
+    return m;
+}
 
 void aiml_sys_mem_limit(int64_t bytes) {
 #ifdef __linux__

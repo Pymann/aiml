@@ -28,14 +28,18 @@
 
 #include <string>
 #include <vector>
+#include <set>
+#include <functional>
 #include <unordered_map>
 #include <algorithm>
+#include <stdexcept>
 
 #include <stb/stb_truetype.h>  /* header-only, no IMPLEMENTATION (ui_runtime owns it) */
 
 #include "prefab_runtime.h"
 #include "ui_runtime.h"
 #include "gl_runtime.h"
+#include "asset_runtime.h"
 
 /* ── Forward declarations from other runtimes ────────────────────────────── */
 extern "C" int32_t aiml_input_mouse_pressed(int32_t btn);
@@ -56,6 +60,12 @@ extern "C" void*   aiml_input_next_event(void);
 extern "C" const char* aiml_input_event_type(void* ev);
 extern "C" const char* aiml_input_event_key(void* ev);
 extern "C" const char* aiml_input_event_char_(void* ev);
+extern "C" float       aiml_input_mouse_pos_x(void);
+extern "C" float       aiml_input_mouse_pos_y(void);
+extern "C" float       aiml_input_mouse_scroll_y(void);
+extern "C" int32_t     aiml_input_key_pressed(const char* k);
+
+static void render_dropdown_popups(void);
 
 /* ── External struct layouts (from gl_runtime / ui_runtime) ──────────────── */
 
@@ -67,7 +77,7 @@ struct AimlUIFont {
     unsigned char* ttf_data;   /* malloc'd copy */
     int     ttf_size;          /* byte length of ttf_data */
     GLuint  atlas_tex;
-    stbtt_bakedchar cdata[96]; /* ASCII 32..127 */
+    stbtt_bakedchar cdata[224]; /* codepoints 32..255 (ASCII + Latin-1 Supplement) */
     float   line_height;
     float   ascent_px;
     float   scale;
@@ -84,6 +94,12 @@ enum PrefabChildType {
     CHILD_BUTTON     = 3,
     CHILD_TEXT_INPUT = 4,
     CHILD_CHECKBOX   = 5,
+    CHILD_BAR        = 6,
+    CHILD_SLIDER     = 7,
+    CHILD_RADIO      = 8,   /* exklusive Auswahl innerhalb `group` */
+    CHILD_DROPDOWN   = 9,   /* Klick cycled durch `options` (pipe-getrennt) */
+    CHILD_CONTAINER  = 10,  /* Phase 6: bind_list-driven dynamic spawner       */
+    CHILD_CASCADE    = 11,  /* Phase 6: cascade root-dropdown + payload sub-UI */
 };
 
 /* ── Prefab definition (from YAML compile-time) ──────────────────────────── */
@@ -96,6 +112,7 @@ struct PrefabChildDef {
     uint32_t color;                  /* legacy: sprite tint or rect solid fill */
     std::string texture_path;
     std::string anchor;              /* "left", "center", "right" */
+    std::string valign;              /* "top", "center" (default), "bottom" */
 
     /* ── UI-widget style fields (button, text_input, rect with frame) ───── */
     uint32_t bg_color      = 0;      /* 0xRRGGBBAA */
@@ -104,15 +121,93 @@ struct PrefabChildDef {
     float    corner_radius = 0.0f;
     uint32_t hover_color   = 0;      /* button hover */
     uint32_t active_color  = 0;      /* button pressed / input focused */
+    /* Label outline (see PrefabChild::outline_color). */
+    uint32_t outline_color = 0;
+    float    outline_px    = 0.0f;
+    /* Tileable background texture for `rect` — stem resolved to a GL id
+     * at instantiate time.  Tile repeats every `tile_size` logical pixels
+     * regardless of panel dimensions. */
+    std::string bg_texture_path;
+    float       tile_size  = 128.0f;
+    /* Slider skin: optional textured frame around the track and knob.
+     * When set, the corresponding SDF pass is skipped and the sprite is
+     * drawn stretched to the widget/knob bounds so the artwork keeps its
+     * proportions.  handle_gem_texture (optional) is composited on top of
+     * handle_texture and tinted with fill_color — meant for splittable
+     * handles where the metal grip stays neutral and the inset gem takes
+     * the mana color and glows during drag. */
+    std::string track_texture_path;
+    std::string handle_texture_path;
+    std::string handle_gem_texture_path;
+    /* Tileable border piece — same asset tiles along all 4 button edges.
+     * `frame_border_size` is the on-screen thickness of the edge strips
+     * (also used as tile pitch) so the pattern stays consistent no matter
+     * how wide the button is.  Content sits INSIDE the border area. */
+    std::string frame_border_texture_path;
+    float       frame_border_size = 6.0f;
+    /* Mirror the sprite horizontally at draw time — handy for reusing the
+     * same asset for a "left" and "right" arrow button. */
+    bool flip_h = false;
+    /* Slider snap: when > 0, the slider's value quantizes to multiples of
+     * `snap` while the user drags.  Zero means continuous. */
+    float slider_snap = 0.0f;
     std::string label_text;          /* button label / static label */
     bool     is_secret     = false;  /* text_input: render '*' instead of chars */
 
+    /* ── Bar/gauge (type "bar") + slider (type "slider") ────────────────────
+     *   bar:    fill sized value/max of width (read-only progress widget)
+     *   slider: same value/max + slider_min for the lower bound; mouse
+     *           interaction maps cursor-x → value in [min, max]. A handle
+     *           is rendered at the current fraction. */
+    float    bar_value     = 0.0f;
+    float    bar_max       = 1.0f;
+    float    slider_min    = 0.0f;
+    uint32_t fill_color    = 0;
+
     /* ── Callback function names (resolved at render time) ──────────────── */
     std::string on_click_fn;         /* button */
-    std::string on_change_fn;        /* text_input value changed */
+    std::string on_change_fn;        /* text_input value changed; slider value changed */
+
+    /* ── Radio-Gruppe (exklusive Auswahl über Instances mit gleicher Gruppe) */
+    std::string group;
+
+    /* ── Dropdown: Pipe-separierte Optionen ("A|B|C") */
+    std::string options;
 
     /* ── Material name (resolved at instantiate time to Material*) ──────── */
     std::string material_name;
+
+    /* ── Phase 6: model-binding + container attributes ─────────────────────
+     *   bind:      scalar field on the enclosing prefab's bound Model
+     *              (two-way sync with widget value at render time)
+     *   bind_list: list<T> field; container spawns one Prefab instance per
+     *              element and keeps the count synchronized with .len
+     *   spawn:     Prefab name to instantiate per element (used with bind_list)
+     *   layout:    "vflow" / "hflow" — how spawned children are placed
+     *   gap:       spacing between spawned children (pixels)                */
+    std::string bind;
+    /* Widget↔model binding (spec 44.6 §5d): field byte-offset + type tag
+     * (0=i32, 1=f32, 2=string, 3=enum) baked by the compiler when the
+     * enclosing prefab declares binds_model.  -1 = this child is not bound. */
+    int         bind_offset = -1;
+    int         bind_tag    = -1;
+    std::string bind_list;
+    std::string spawn;
+    std::string layout;
+    float       gap = 0.0f;
+    /* Phase 6f — cascade widget metadata reference */
+    std::string cascade_type;
+    std::string payload_spawn;
+    /* "horizontal" (default) or "vertical" — controls how the cascade's
+     * spawned payload prefabs are laid out relative to the dropdown.       */
+    std::string cascade_flow;
+    /* `enum: TypeName` on a dropdown/radio — options come from the enum's
+     * labels and the value accessor returns the true member value. */
+    std::string enum_type;
+    /* container `compact: true` — hidden spawned rows take NO layout space;
+     * visible rows re-pack contiguously from the container origin each frame.
+     * Lets AIML filter a list purely via set_visible without leaving gaps. */
+    bool        compact = false;
 };
 
 struct PrefabDef {
@@ -120,6 +215,10 @@ struct PrefabDef {
     float width, height;
     std::string texture_path;
     bool draggable;
+    /* Phase 6: which Model/cascade type this prefab is bound to.  Runtime
+     * uses it to route per-child `bind:` lookups to the right Model instance
+     * held by this prefab-instance.                                          */
+    std::string binds;
     std::vector<PrefabChildDef> children;
 };
 
@@ -160,6 +259,9 @@ struct Material {
 
 /* ── Runtime instances ───────────────────────────────────────────────────── */
 
+/* Forward — PrefabChild::spawned holds pointers to instances of THIS type. */
+struct AimlPrefabInstance;
+
 struct PrefabChild {
     std::string name;
     PrefabChildType type;
@@ -177,10 +279,46 @@ struct PrefabChild {
     float    corner_radius = 0.0f;
     uint32_t hover_color   = 0;
     uint32_t active_color  = 0;
+    /* Text outline (labels only for now): if outline_px > 0 and outline_color
+     * has non-zero alpha, the text is drawn 8 times at ±outline_px offsets in
+     * outline_color, then once at the anchor in the main color — cheap
+     * poor-man's stroke that stays readable over any icon background. */
+    uint32_t outline_color = 0;
+    float    outline_px    = 0.0f;
+    /* Tileable background texture for `rect` (loaded from Def at
+     * instantiate time).  0 → no bg texture; fill falls back to bg_color. */
+    GLuint   bg_texture    = 0;
+    float    tile_size     = 128.0f;
+    /* Slider skin — resolved at instantiate time.  See PrefabChildDef. */
+    GLuint   track_texture       = 0;
+    GLuint   handle_texture      = 0;
+    GLuint   handle_gem_texture  = 0;
+    GLuint   frame_border_texture = 0;
+    float    frame_border_size    = 6.0f;
+    bool     flip_h              = false;
+    float    slider_snap         = 0.0f;
     std::string label_text;
     bool     is_secret     = false;
     std::string on_click_fn;
     std::string on_change_fn;
+    std::string group;   /* radio */
+    std::string options; /* dropdown: pipe-separiert */
+    /* Per-child buffer für aiml_prefab_dropdown_value: früher gab es einen
+     * einzigen thread_local buffer für alle dropdowns — bei zwei dropdown_value-
+     * Aufrufen in einer Expression überschrieb der zweite Aufruf den Puffer,
+     * der Pointer aus dem ersten Aufruf zeigte dann auf den zweiten Wert. */
+    mutable std::string dd_value_cache;
+    int32_t     selected_index = 0;
+    bool        dropdown_open  = false;
+    int32_t     scroll_offset  = 0;   /* Popup-Scroll (# skipped rows) */
+    bool        sb_dragging    = false; /* Popup-Scrollbar-Drag */
+
+    /* ── Bar/gauge runtime state + slider state ─────────────────────────── */
+    float    bar_value     = 0.0f;
+    float    bar_max       = 1.0f;
+    float    slider_min    = 0.0f;
+    uint32_t fill_color    = 0;
+    bool     slider_dragging = false;  /* slider: mouse held down on track */
 
     /* ── Material (custom shader + uniforms). Null = use default pipeline. */
     Material* material = nullptr;
@@ -192,11 +330,75 @@ struct PrefabChild {
     bool     focused       = false; /* text_input: keyboard focus */
     int32_t  cursor_pos    = 0;     /* text_input: cursor index into text */
     bool     checked       = false; /* checkbox: toggle state */
+
+    /* ── Phase 6: container / cascade widget state ────────────────────────
+     * `spawned` are child prefab instances that this container widget
+     * created based on the bound_list length.  Their lifecycle is managed
+     * by the container in the sync-pass at render-time. */
+    std::vector<AimlPrefabInstance*> spawned;
+    /* copies of the compile-time binding attributes from the ChildDef so
+     * we don't need to chase back to the def per frame. */
+    std::string bind;
+    /* Widget↔model binding (spec 44.6 §5d): field byte-offset + type tag
+     * (0=i32, 1=f32, 2=string, 3=enum) baked by the compiler when the
+     * enclosing prefab declares binds_model.  -1 = this child is not bound. */
+    int         bind_offset = -1;
+    int         bind_tag    = -1;
+    std::string bind_list;
+    std::string spawn;
+    std::string layout;
+    float       gap = 0.0f;
+    std::string cascade_type;
+    std::string payload_spawn;
+    std::string cascade_flow;  /* "horizontal" (default) or "vertical" */
+    /* `enum: TypeName` — dropdown/radio bound to an enum; drives options and
+     * lets aiml_prefab_dropdown_enum_value return the true member value. */
+    std::string enum_type;
+    /* container compaction (copied from PrefabChildDef; may also be toggled at
+     * runtime via aiml_prefab_container_set_compact).  See PrefabChildDef. */
+    bool        compact = false;
+    /* Set by a NESTED cascade_payload_sync when one of our spawned_payload
+     * instances respawned (its width changed).  Cleared after we re-layout
+     * our own siblings.  Guards the whole cascade_payload_sync body so it
+     * runs only on actual change (no per-frame layout).                     */
+    bool needs_relayout = false;
+
+    /* Phase 6f-w: per-widget bound_list.  A single prefab-instance can host
+     * multiple containers each bound to a DIFFERENT list<list<i32>> — the
+     * Ability page holds one container for triggers, one for effects, one
+     * for costs.  When this pointer is non-null, container_sync prefers it
+     * over the enclosing instance's bound_list. */
+    void*   bound_list_widget = nullptr;
+    /* Tracks the last outer-list pointer the container_sync saw for THIS
+     * child.  When the caller swaps the bind_list (e.g. Ability Pager page
+     * switch), we need to nuke every previously-spawned row so its widget
+     * state (dropdown selected_index, text_input contents, popup-open, …)
+     * doesn't leak into the new backing data on the very next persist pass. */
+    void*   last_bound_list_seen = (void*)-1;   /* sentinel: never-seen */
+
+    /* Phase 6f runtime state — reactive cascade widget:
+     *   • `last_node_id`     — last observed tag; when the widget's dropdown
+     *                          selection or the bound row's slot 0 changes,
+     *                          the widget rebuilds its payload.
+     *   • `spawned_payload`  — sub-widget prefab-instances currently mounted
+     *                          below this cascade widget, one per field of
+     *                          the current node.  Destroyed on node change. */
+    int32_t                          last_node_id = -1;
+    std::vector<AimlPrefabInstance*> spawned_payload;
 };
 
 struct AimlPrefabInstance {
     PrefabDef* def;
+    /* Widget↔model binding (spec 44.6 §5d): the model instance attached via
+     * bind_model(); borrowed (caller-owned).  sync_from/to_model read/write
+     * each bound child's field at bound_model + child.bind_offset. */
+    void*  bound_model = nullptr;
     float x, y;
+    /* Per-instance width override — 0 means use def->width.  Cascade-payload
+     * sync sets this on numeric text_input payloads so a "Value" chip can
+     * be narrower than the generic AAFieldChip prefab (which also serves
+     * wide enum dropdowns).                                                */
+    float width_override = 0.0f;
     float scale_x, scale_y;
     float rotation;
     int32_t z_order;
@@ -217,12 +419,70 @@ struct AimlPrefabInstance {
 
     /* hover state (set by update_hover each frame) */
     bool hovered;
+
+    /* Nested instances: a prefab instance can host other instances as
+     * children. They inherit the parent's world transform (position + scale)
+     * and are rendered right after the parent. Parented instances are skipped
+     * in the top-level draw + hit-test loops (rendered/handled via the parent). */
+    AimlPrefabInstance* parent = nullptr;
+    std::vector<AimlPrefabInstance*> child_instances;
+
+    /* Scroll-viewport: when clip_children is set, nested children are clipped
+     * to this instance's world bounds (GL scissor) and shifted by scroll_x/y
+     * (in local px). Turns a parent + nested content into a scroll container. */
+    bool  clip_children = false;
+    float scroll_x = 0.0f, scroll_y = 0.0f;
+
+    /* Connector anchor mode for lines attached to this instance:
+     *   0 = center      (all lines meet the instance centre)
+     *   1 = edge        (all lines meet the centre of the edge facing the partner)
+     *   2 = distributed (lines spread evenly along the facing edge) */
+    int32_t connector_anchor = 0;
+
+    /* Phase 6: model binding.
+     *   bound_list  — pointer to a list<list<i32>> struct (aa_data / cascade
+     *                 rows).  When a child has type=container + bind_list, the
+     *                 container reads .len from this list and spawns/kills
+     *                 sub-prefab-instances to match.
+     *   bound_index — for prefab-instances spawned by a container:
+     *                 the index into the parent's bound_list.  Their children
+     *                 with bind: <field> read the list<i32> at this index. */
+    void*   bound_list  = nullptr;
+    int32_t bound_index = -1;
+
+    /* Phase 6f-2 defer-delete.  container_sync / cascade_payload_sync can
+     * mark an instance for deletion mid-frame, but the actual delete has to
+     * wait until draw_scene's outer render loop has finished — otherwise a
+     * still-cached pointer in that loop would dereference freed memory.
+     * Marked instances are skipped in all rendering / hit-testing passes
+     * and swept + freed at the end of draw_scene. */
+    bool pending_delete = false;
+};
+
+/* ── Connector (cable between two instances) ─────────────────────────────────
+ * Endpoints are resolved every frame from the live position/size of `from`
+ * and `to`, so a cable follows its prefabs as they move.  Rendered as a
+ * tessellated ribbon with a cylindrical-shading fragment mode (looks like a
+ * round cable seen from above). */
+struct AimlConnector {
+    AimlPrefabInstance* from = nullptr;
+    AimlPrefabInstance* to   = nullptr;
+    uint32_t color0    = 0x44CCFFFFu;  /* gradient colour at the `from` end */
+    uint32_t color1    = 0x2266AAFFu;  /* gradient colour at the `to` end   */
+    uint32_t highlight = 0xFFFFFFFFu;  /* specular streak colour            */
+    float    width     = 6.0f;         /* cable thickness in px             */
+    float    bow        = 0.0f;        /* perpendicular curve amount (0 = straight) */
+    int32_t  z_order   = -1;           /* default: behind all prefabs (z≥0) */
+    bool     visible   = true;
+    GLuint   port_tex  = 0;            /* optional endpoint sprite (0 = none) */
+    float    port_scale = 1.6f;        /* port sprite size = width * port_scale */
 };
 
 /* ── Scene state ─────────────────────────────────────────────────────────── */
 
 struct PrefabScene {
     std::vector<AimlPrefabInstance*> instances;
+    std::vector<AimlConnector*>      connectors;   /* cables between instances */
     AimlPrefabInstance* dragged;
     AimlPrefabInstance* hovered;
     /* Global keyboard-focus target for text_input children (one at a time). */
@@ -258,19 +518,52 @@ struct PrefabScene {
 
 static PrefabScene* g_scene = nullptr;
 
-/* Helper: get actual pixel position from (possibly relative) coords */
-static inline void get_actual_pos(AimlPrefabInstance* inst,
-                                   float& ax, float& ay) {
-    if (inst->is_relative && g_scene) {
-        ax = inst->x * g_scene->screen_w;
-        ay = inst->y * g_scene->screen_h;
-    } else {
-        ax = inst->x;
-        ay = inst->y;
+/* ── Phase 6f: cascade metadata registry ───────────────────────────────
+ *  Populated at program init via aiml_prefab_register_cascade().  Widget
+ *  code (CHILD_CASCADE) consults it to build the dropdown, look up field
+ *  types, and manage payload sub-widget lifecycle. */
+struct CascadeFieldMeta {
+    std::string name;
+    std::string type;
+    std::string default_value;
+};
+struct CascadeNodeMeta {
+    std::string              name;
+    int                      id = -1;
+    std::string              label;
+    std::vector<CascadeFieldMeta> fields;
+};
+struct CascadeMeta {
+    std::string                    name;
+    std::string                    opcode_enum;    /* Enum-Name des Opcodes (z.B. "EffectCode") */
+    std::vector<CascadeNodeMeta>   nodes;
+    std::string                    options_cache;  /* pipe-joined labels */
+    std::unordered_map<int,int>    id_to_opt_idx;  /* node.id → nodes[idx] */
+};
+static std::unordered_map<std::string, CascadeMeta> g_cascades;
+/* Enum registry: name → pipe-separated labels ("Player|Opponent|…"). */
+static std::unordered_map<std::string, std::string> g_enums;
+/* Parallel enum values: name → member i32 values, index-aligned with labels.
+ * Lets an enum-bound widget return the true member value (not selected_index+1)
+ * for sparse / non-1-based enums (e.g. GameZone 1,2,10,11,…). */
+static std::unordered_map<std::string, std::vector<int>> g_enum_values;
+
+/* Auto-derive a UI label from a snake_case identifier: "draw_card" → "Draw Card",
+ * "counter_trap" → "Counter Trap".  Used when the cascade decl doesn't set one. */
+static std::string derive_label_from_name(const std::string& n) {
+    std::string out;
+    out.reserve(n.size());
+    bool cap = true;
+    for (char c : n) {
+        if (c == '_') { out += ' '; cap = true; }
+        else if (cap) { out += (char)toupper((unsigned char)c); cap = false; }
+        else          { out += c; }
     }
+    return out;
 }
 
-/* Helper: get scale factor for relative instances (screen / design resolution) */
+/* Helper: get scale factor screen/design resolution (vor get_actual_pos
+ * definiert weil dieser es jetzt auch nutzt). */
 static inline void get_rel_scale(float& rsx, float& rsy) {
     if (g_scene && g_scene->design_w > 0 && g_scene->design_h > 0) {
         rsx = (float)g_scene->screen_w / (float)g_scene->design_w;
@@ -278,6 +571,31 @@ static inline void get_rel_scale(float& rsx, float& rsy) {
     } else {
         rsx = 1.0f;
         rsy = 1.0f;
+    }
+}
+
+/* Helper: get actual pixel position from coords.
+ * Spec/44_6 §Coordinates: alle Pos/Size sind in design-space (1280×720,
+ * or whatever scene_init wurde mit gerufen).  Render skaliert mit
+ * screen_w/design_w  so dass das UI bei window-resize/maximize
+ * mitwächst.  is_relative=true: x,y als 0..1 Ratios (legacy). */
+static inline void get_actual_pos(AimlPrefabInstance* inst,
+                                   float& ax, float& ay) {
+    if (!g_scene) { ax = inst->x; ay = inst->y; return; }
+    if (inst->is_relative) {
+        ax = inst->x * g_scene->screen_w;
+        ay = inst->y * g_scene->screen_h;
+    } else if (inst->parent) {
+        /* Nested: local design coords.  The parent's render_instance already
+         * folded rel_scale into g_render_scale_{x,y}; applying it again here
+         * would double-scale and push the child far past its intended
+         * position.  Keep raw and let the outer multiply do the work. */
+        ax = inst->x;
+        ay = inst->y;
+    } else {
+        float rsx, rsy; get_rel_scale(rsx, rsy);
+        ax = inst->x * rsx;
+        ay = inst->y * rsy;
     }
 }
 
@@ -396,6 +714,25 @@ void main(){
         }
         final_col.a *= outer;
         out_color = final_col;
+    } else if (u_mode == 4) {
+        /* Connector cable. v_uv.x = length param [0,1] (gradient already baked
+         * into v_color per-vertex), v_uv.y = cross param [0,1] across the
+         * ribbon width.  Shade as a cylinder seen from the side: bright spine,
+         * darker toward the rim, plus a narrow specular highlight.  The border
+         * color (v_bcolor) carries the highlight tint; v_style.x carries the
+         * edge anti-alias half-width in cross-units. */
+        float cross = v_uv.y * 2.0 - 1.0;            /* -1 .. +1 across width */
+        float c2    = clamp(1.0 - cross * cross, 0.0, 1.0);
+        float round = sqrt(c2);                      /* 1 at spine, 0 at rim  */
+        /* Cylindrical body shading: rim ~0.70 (still well-saturated), spine 1.0 */
+        vec3 body = v_color.rgb * (0.70 + 0.30 * round);
+        /* Specular streak slightly above the spine (mild — avoid washing out) */
+        float spec = pow(clamp(1.0 - abs(cross + 0.25) * 2.4, 0.0, 1.0), 3.0);
+        body += v_bcolor.rgb * spec * 0.35;
+        /* Anti-aliased edge: fade alpha only over the outermost rim pixels */
+        float aa = max(v_style.x, 1e-4);
+        float edge = smoothstep(0.0, aa, c2);
+        out_color = vec4(body, v_color.a * edge);
     } else {
         /* Solid color (rect, no texture) */
         out_color = v_color;
@@ -586,14 +923,63 @@ static void flush_batch(DrawBatch& batch) {
 
 /* ── Text rendering into a batch ─────────────────────────────────────────── */
 
+/* Forward-decl: texture cache lives further down but the text renderer needs
+ * it for inline `{icon:stem}` tokens. */
+static GLuint load_texture_cached(const char* path);
+
+/* If `p` points to a `{icon:stem}` token, fill *stem_out (nullable) with the
+ * stem, advance *end_out past the closing brace, and return true.  Otherwise
+ * false and no state is touched.  Used by both wrap/width and render passes so
+ * they agree on token boundaries. */
+static bool try_parse_icon_tok(const char* p, std::string* stem_out, const char** end_out) {
+    if (!p || strncmp(p, "{icon:", 6) != 0) return false;
+    const char* start = p + 6;
+    const char* end = strchr(start, '}');
+    if (!end) return false;
+    if (stem_out) stem_out->assign(start, (size_t)(end - start));
+    if (end_out)  *end_out = end + 1;
+    return true;
+}
+
+/* Decode one UTF-8 code point from p, advance p past it, and return the
+ * codepoint.  Only handles Latin-1 Supplement (2-byte sequences) — enough
+ * for German/French; for 3+ byte sequences the function returns 0 so the
+ * caller drops the char.  Invariant: p is advanced by at least 1 byte on
+ * every call to prevent infinite loops on malformed input. */
+static uint32_t decode_utf8_char(const char*& p) {
+    unsigned char b0 = (unsigned char)*p++;
+    if (b0 < 0x80) return b0;                        /* ASCII */
+    if ((b0 & 0xE0) == 0xC0) {                        /* 2-byte */
+        unsigned char b1 = (unsigned char)*p;
+        if ((b1 & 0xC0) != 0x80) return 0;
+        ++p;
+        return ((uint32_t)(b0 & 0x1F) << 6) | (b1 & 0x3F);
+    }
+    /* 3-/4-byte sequences: consume + drop.  Not covered by the current
+     * 32..255 atlas anyway. */
+    if ((b0 & 0xF0) == 0xE0) { if (*p) ++p; if (*p) ++p; }
+    else if ((b0 & 0xF8) == 0xF0) { if (*p) ++p; if (*p) ++p; if (*p) ++p; }
+    return 0;
+}
+
 static float text_width_font(AimlUIFont* font, const char* text) {
     if (!font || !text) return 0;
     float w = 0;
-    while (*text) {
-        unsigned char c = (unsigned char)*text++;
-        if (c == '\n') break;
-        if (c < 32 || c >= 128) continue;
-        w += font->cdata[c - 32].xadvance;
+    const char* p = text;
+    while (*p) {
+        /* Inline icon token — width = ascent_px (icon is a square glyph
+         * aligned with cap-height; keep the width formula in lockstep
+         * with push_text_batch or centering / wrapping desyncs). */
+        const char* tok_end;
+        if (try_parse_icon_tok(p, nullptr, &tok_end)) {
+            w += font->ascent_px;
+            p = tok_end;
+            continue;
+        }
+        if (*p == '\n') break;
+        uint32_t cp = decode_utf8_char(p);
+        if (cp < 32 || cp >= 256) continue;
+        w += font->cdata[cp - 32].xadvance;
     }
     return w;
 }
@@ -645,15 +1031,26 @@ static std::vector<std::string> wrap_text_lines(AimlUIFont* font, const char* te
     return lines;
 }
 
+/* Forward-decl — vocab runtime lives in vocab_runtime.cpp. */
+extern "C" const char* aiml_vocab_lookup(const char* source);
+
 static void push_text_batch(DrawBatch& batch, AimlUIFont* font,
                             const char* text, float cx, float cy,
                             float max_w, uint32_t rgba, const char* anchor)
 {
     if (!font || !text || !*text) return;
+    /* Universal i18n hook: swap the source string for its translation
+     * before any layout/glyph work.  Falls back to `text` unchanged if
+     * no vocab is loaded or the source has no entry — nothing to do
+     * for callers that use English-canonical labels. */
+    text = aiml_vocab_lookup(text);
+    if (!text || !*text) return;
 
     std::vector<std::string> lines = wrap_text_lines(font, text, max_w);
     float line_height = font->line_height;
     float base_y = cy + font->ascent_px;
+    /* White sprite tint — icons render at their native RGB, no color mult. */
+    const uint32_t kIconTint = 0xFFFFFFFFu;
 
     for (size_t li = 0; li < lines.size(); ++li) {
         const std::string& line = lines[li];
@@ -669,10 +1066,45 @@ static void push_text_batch(DrawBatch& batch, AimlUIFont* font,
         float y = base_y + (float)li * line_height;
         float limit = x + max_w;
 
-        for (char raw_c : line) {
-            unsigned char c = (unsigned char)raw_c;
-            if (c < 32 || c >= 128) continue;
-            stbtt_bakedchar* bc = &font->cdata[c - 32];
+        const char* p = line.c_str();
+        while (*p) {
+            /* Inline icon: {icon:stem} — render as a square sprite the
+             * height of the line, sitting on the text baseline (top-left
+             * = baseline - line_height). Flushes the pending text batch,
+             * draws the icon in its own sprite batch, then continues
+             * appending to the same text batch. */
+            std::string icon_stem;
+            const char* tok_end;
+            if (try_parse_icon_tok(p, &icon_stem, &tok_end)) {
+                /* Icon sits on the text baseline aligned with the top of
+                 * the caps: top = baseline - ascent_px, size = ascent_px
+                 * (square).  Using line_height for the size made icons
+                 * hang above the visible x-height by the line_gap, so
+                 * they looked lifted vs. the surrounding glyphs. */
+                float icon_size = font->ascent_px;
+                float x1 = x + icon_size;
+                if (max_w > 0 && x1 > limit) break;
+                /* Flush accumulated glyphs so the icon draws on top of
+                 * anything before it and doesn't get lumped into the
+                 * font-atlas draw call. */
+                flush_batch(batch);
+                batch.verts.clear();
+                GLuint tex = load_texture_cached(icon_stem.c_str());
+                if (tex) {
+                    DrawBatch ib;
+                    ib.tex  = tex;
+                    ib.mode = 1;   /* rgba texture */
+                    push_quad(ib, x, y - font->ascent_px, icon_size, icon_size,
+                              0, 0, 1, 1, kIconTint);
+                    flush_batch(ib);
+                }
+                x = x1;
+                p = tok_end;
+                continue;
+            }
+            uint32_t cp = decode_utf8_char(p);
+            if (cp < 32 || cp >= 256) continue;
+            stbtt_bakedchar* bc = &font->cdata[cp - 32];
             float x0 = x + bc->xoff;
             float y0 = y + bc->yoff;
             float gw = (float)(bc->x1 - bc->x0);
@@ -698,8 +1130,17 @@ static GLuint load_texture_cached(const char* path) {
     auto it = s_texture_cache.find(path);
     if (it != s_texture_cache.end()) return it->second;
 
-    /* Use gl_runtime's loader which returns AimlGLTexture* */
-    void* t = aiml_gl_load_texture(path);
+    /* Asset-registry-first: when the prefab gives a stem (no slash, no
+     * extension), resolve via the AssetScanner.  Falls back to raw-path
+     * loading for legacy callers that pass a real path. */
+    void* t = nullptr;
+    bool looks_like_stem = !strchr(path, '/') && !strchr(path, '.');
+    if (looks_like_stem) {
+        t = aiml_asset_get_texture(path);
+    }
+    if (!t) {
+        t = aiml_gl_load_texture(path);
+    }
     if (!t) {
         fprintf(stderr, "[prefab] failed to load texture: %s\n", path);
         s_texture_cache[path] = 0;
@@ -722,6 +1163,12 @@ static PrefabChildType parse_child_type(const char* s) {
     if (strcmp(s, "button") == 0)     return CHILD_BUTTON;
     if (strcmp(s, "text_input") == 0) return CHILD_TEXT_INPUT;
     if (strcmp(s, "checkbox") == 0)   return CHILD_CHECKBOX;
+    if (strcmp(s, "radio") == 0)      return CHILD_RADIO;
+    if (strcmp(s, "dropdown") == 0)   return CHILD_DROPDOWN;
+    if (strcmp(s, "bar") == 0)        return CHILD_BAR;
+    if (strcmp(s, "slider") == 0)     return CHILD_SLIDER;
+    if (strcmp(s, "container") == 0)  return CHILD_CONTAINER;
+    if (strcmp(s, "cascade") == 0)    return CHILD_CASCADE;
     return CHILD_SPRITE;
 }
 
@@ -790,8 +1237,12 @@ static std::vector<PrefabChildDef> parse_children_json(const char* json) {
             }
             else if (key == "texture") cd.texture_path = parse_json_string(p);
             else if (key == "anchor") cd.anchor = parse_json_string(p);
-            else if (key == "x") cd.x = (float)parse_json_number(p);
-            else if (key == "y") cd.y = (float)parse_json_number(p);
+            else if (key == "valign") cd.valign = parse_json_string(p);
+            // `x`/`y` are legacy; the AIML naming-lint forces ≥3-char identifiers,
+            // so YAML prefab children naturally write `pos_x`/`pos_y` to stay
+            // consistent with the rest of the source.  Accept both.
+            else if (key == "x" || key == "pos_x") cd.x = (float)parse_json_number(p);
+            else if (key == "y" || key == "pos_y") cd.y = (float)parse_json_number(p);
             else if (key == "width") cd.width = (float)parse_json_number(p);
             else if (key == "height") cd.height = (float)parse_json_number(p);
             else if (key == "font_size") cd.font_size = (float)parse_json_number(p);
@@ -803,11 +1254,41 @@ static std::vector<PrefabChildDef> parse_children_json(const char* json) {
             else if (key == "corner_radius") cd.corner_radius = (float)parse_json_number(p);
             else if (key == "hover_color")   cd.hover_color = (uint32_t)parse_json_number(p);
             else if (key == "active_color")  cd.active_color = (uint32_t)parse_json_number(p);
+            else if (key == "outline_color") cd.outline_color = (uint32_t)parse_json_number(p);
+            else if (key == "outline_px")    cd.outline_px = (float)parse_json_number(p);
+            else if (key == "bg_texture")    cd.bg_texture_path = parse_json_string(p);
+            else if (key == "tile_size")     cd.tile_size = (float)parse_json_number(p);
+            else if (key == "track_texture")      cd.track_texture_path      = parse_json_string(p);
+            else if (key == "handle_texture")     cd.handle_texture_path     = parse_json_string(p);
+            else if (key == "handle_gem_texture") cd.handle_gem_texture_path = parse_json_string(p);
+            else if (key == "frame_border_texture") cd.frame_border_texture_path = parse_json_string(p);
+            else if (key == "frame_border_size")    cd.frame_border_size = (float)parse_json_number(p);
+            else if (key == "flip_h")             cd.flip_h = (parse_json_number(p) != 0);
+            else if (key == "snap")               cd.slider_snap = (float)parse_json_number(p);
             else if (key == "label")         cd.label_text = parse_json_string(p);
             else if (key == "secret")        cd.is_secret = (parse_json_number(p) != 0);
+            else if (key == "value")         cd.bar_value = (float)parse_json_number(p);
+            else if (key == "max")           cd.bar_max = (float)parse_json_number(p);
+            else if (key == "min")           cd.slider_min = (float)parse_json_number(p);
+            else if (key == "fill_color")    cd.fill_color = (uint32_t)parse_json_number(p);
             else if (key == "on_click")      cd.on_click_fn = parse_json_string(p);
+            else if (key == "group")         cd.group       = parse_json_string(p);
+            else if (key == "options")       cd.options     = parse_json_string(p);
+            else if (key == "enum")          cd.enum_type   = parse_json_string(p);
             else if (key == "on_change")     cd.on_change_fn = parse_json_string(p);
             else if (key == "material")      cd.material_name = parse_json_string(p);
+            /* Phase 6: model binding + container attributes */
+            else if (key == "bind")          cd.bind = parse_json_string(p);
+            else if (key == "bind_offset")   cd.bind_offset = (int)parse_json_number(p);
+            else if (key == "bind_tag")      cd.bind_tag = (int)parse_json_number(p);
+            else if (key == "bind_list")     cd.bind_list = parse_json_string(p);
+            else if (key == "spawn")         cd.spawn = parse_json_string(p);
+            else if (key == "layout")        cd.layout = parse_json_string(p);
+            else if (key == "gap")           cd.gap = (float)parse_json_number(p);
+            else if (key == "compact")       cd.compact = (parse_json_number(p) != 0);
+            else if (key == "cascade_type")  cd.cascade_type = parse_json_string(p);
+            else if (key == "payload_spawn") cd.payload_spawn = parse_json_string(p);
+            else if (key == "cascade_flow")  cd.cascade_flow = parse_json_string(p);
             else {
                 /* skip unknown value */
                 if (*p == '"') parse_json_string(p);
@@ -841,21 +1322,505 @@ static void rotate_batch_verts(DrawBatch& batch, size_t start_idx,
 
 static AimlUIFont* font_for_size(PrefabScene* s, float font_size);
 
+/* Parent-transform applied to the instance currently being rendered. Set while
+ * recursing into nested child instances; identity for top-level instances. */
+static float g_render_off_x = 0.0f, g_render_off_y = 0.0f;
+static float g_render_scale_x = 1.0f, g_render_scale_y = 1.0f;
+
+/* ── Phase 6d: container sync ────────────────────────────────────────────
+ * For every CHILD_CONTAINER widget with a `spawn:` and the enclosing
+ * instance's `bound_list` set: read the outer list.size and adjust the
+ * container's `spawned` vector so we render exactly one child prefab per
+ * list element.  The spawned instance's `bound_list` is set to the
+ * corresponding inner list<i32> (the cascade row) so its own children
+ * can bind scalar fields to slots of that row. */
+static void container_sync(AimlPrefabInstance* inst) {
+    if (!inst) return;
+    /* AIML list<T> layout: { i32 size, i32 capacity, ptr data }.
+     * For list<list<i32>>, `data` is an array of the same 16-byte struct. */
+    struct ListHdr { int32_t size; int32_t capacity; void* data; };
+
+    for (auto& ch : inst->children) {
+        if (ch.type != CHILD_CONTAINER)  continue;
+        if (ch.spawn.empty())            continue;
+
+        /* Per-widget bound_list wins over instance-level fallback.  Lets a
+         * single AbilityPage host separate Trigger / Effects / Costs
+         * containers each bound to its own list<list<i32>>.               */
+        ListHdr* outer = (ListHdr*)(ch.bound_list_widget ? ch.bound_list_widget
+                                                        : inst->bound_list);
+        if (!outer) continue;
+
+        /* Detect a bind_list SWAP (page-switch on the Ability Pager) and
+         * nuke every existing spawned row.  Without this the surviving
+         * widgets carry their old selected_index / text into the next
+         * frame's persist pass and stomp the new ability's data. */
+        if (ch.last_bound_list_seen != (void*)outer) {
+            for (AimlPrefabInstance* dead : ch.spawned) {
+                if (dead) dead->pending_delete = true;
+            }
+            ch.spawned.clear();
+            ch.last_bound_list_seen = (void*)outer;
+        }
+
+        int desired = outer->size;
+        if (desired < 0) desired = 0;
+
+        /* Shrink first — mark for deferred deletion (see the pending_delete
+         * doc-comment on AimlPrefabInstance). */
+        while ((int)ch.spawned.size() > desired) {
+            AimlPrefabInstance* dead = ch.spawned.back();
+            ch.spawned.pop_back();
+            if (dead) dead->pending_delete = true;
+        }
+        /* Grow */
+        bool hflow = (ch.layout == "hflow");
+        while ((int)ch.spawned.size() < desired) {
+            void* raw = aiml_prefab_instantiate(ch.spawn.c_str());
+            if (!raw) break;  /* unknown prefab — bail rather than loop forever */
+            auto* row = (AimlPrefabInstance*)raw;
+            row->parent = inst;
+            row->bound_index = (int)ch.spawned.size();
+            /* Layout: vflow (default) stacks rows top-down.  hflow lays them
+             * side-by-side left-to-right — useful for card-library rows.    */
+            if (hflow) {
+                row->x = ch.x + row->bound_index * (row->def->width + ch.gap);
+                row->y = ch.y;
+            } else {
+                row->x = ch.x;
+                row->y = ch.y + row->bound_index * (row->def->height + ch.gap);
+            }
+            inst->child_instances.push_back(row);
+            ch.spawned.push_back(row);
+        }
+        /* Refresh each row's outer-list pointer + index.  Storing the outer
+         * struct pointer (NOT outer->data) is safe: outer itself lives on
+         * the caller's model and isn't reallocated when list.push grows the
+         * inner data buffer.  Consumers (cascade_payload_sync) dereference
+         * outer->data at ACCESS time so a mid-frame realloc is invisible.  */
+        for (int i = 0; i < (int)ch.spawned.size(); ++i) {
+            if (!ch.spawned[i]) continue;
+            ch.spawned[i]->bound_index = i;
+            ch.spawned[i]->bound_list  = outer;
+        }
+
+        /* For each freshly-spawned chip, PULL the cascade dropdown's
+         * selected_index from the bound row's tag ONCE — right after
+         * spawn, before cascade_payload_sync gets to react.  We detect
+         * "freshly spawned" by `last_node_id == -1` (its struct-init
+         * value; cascade_payload_sync stamps a real id once it processes
+         * the widget).  If we ran this every frame, we'd overwrite the
+         * user's live click before the persist pass sees it. */
+        for (int i = 0; i < (int)ch.spawned.size(); ++i) {
+            AimlPrefabInstance* row = ch.spawned[i];
+            if (!row) continue;
+            for (auto& sub : row->children) {
+                if (sub.cascade_type.empty())                                continue;
+                if (sub.type != CHILD_DROPDOWN && sub.type != CHILD_CASCADE) continue;
+                if (sub.last_node_id != -1)                                  break;
+                if (i >= outer->size)                                        break;
+                ListHdr* inner = (ListHdr*)((char*)outer->data +
+                                            (size_t)i * sizeof(ListHdr));
+                if (!inner || inner->size < 1 || !inner->data)               break;
+                int32_t stored_id = ((int32_t*)inner->data)[0];
+                int32_t opt = aiml_prefab_cascade_opt_idx_for(
+                                  sub.cascade_type.c_str(), stored_id);
+                if (opt >= 0) sub.selected_index = opt;
+                break;
+            }
+        }
+
+        /* ── Compacting layout ────────────────────────────────────────────
+         * When `compact` is set, hidden rows (set_visible(0)) take NO layout
+         * space: we re-pack the VISIBLE spawned rows contiguously from the
+         * container origin every frame.  This lets AIML filter a bound list
+         * purely by toggling row visibility — no gaps, always left-aligned.
+         * Cheap (arithmetic over the spawned rows); safe to run per frame. */
+        if (ch.compact) {
+            bool cflow_h = (ch.layout == "hflow");
+            int slot = 0;
+            for (AimlPrefabInstance* row : ch.spawned) {
+                if (!row || !row->visible) continue;
+                /* Don't fight an active drag: the row being dragged keeps its
+                 * cursor-following position (set by the drag handler).  We still
+                 * reserve its slot so the remaining rows don't shift underneath
+                 * it.  Without this the compact re-pack overwrites row->x/y every
+                 * frame → the dragged card snaps back into the grid and never
+                 * follows the pointer. */
+                if (g_scene && g_scene->dragged == row) { ++slot; continue; }
+                if (cflow_h) {
+                    row->x = ch.x + slot * (row->def->width  + ch.gap);
+                    row->y = ch.y;
+                } else {
+                    row->x = ch.x;
+                    row->y = ch.y + slot * (row->def->height + ch.gap);
+                }
+                ++slot;
+            }
+        }
+    }
+}
+
+/* ── Phase 6f-2: cascade widget reactive payload sync ────────────────────
+ * For every dropdown widget with a `cascade_type` + `payload_spawn`, watch
+ * the selection.  When it changes:
+ *   1) Destroy every currently mounted `spawned_payload` prefab-instance
+ *      (removed from BOTH parent.child_instances AND g_scene->instances).
+ *      Any recursive spawns underneath fall away with them because a
+ *      destroyed instance's own container/cascade state is gone.
+ *   2) Spawn one `payload_spawn` instance per field of the newly-selected
+ *      node.  Each spawned row is positioned right of / below the
+ *      dropdown box, marked as a nested child (parent = inst).
+ * This is what makes the user-visible cascade "collapse" and "re-expand"
+ * as a node higher up in the chain gets changed. */
+static void cascade_payload_sync(AimlPrefabInstance* inst) {
+    if (!inst || !g_scene) return;
+    for (auto& ch : inst->children) {
+        if (ch.type != CHILD_DROPDOWN && ch.type != CHILD_CASCADE) continue;
+        if (ch.cascade_type.empty() || ch.payload_spawn.empty())   continue;
+
+        /* Read current selection.  For MVP we drive off the widget's
+         * selected_index (user click).  Later this widens to reading the
+         * bound cascade row's slot 0 so external mutation also triggers
+         * a rebuild. */
+        int opt_idx = ch.selected_index;
+        int32_t node_id = aiml_prefab_cascade_node_id_at(ch.cascade_type.c_str(), opt_idx);
+
+        bool respawn = (node_id != ch.last_node_id);
+        /* needs_relayout: a NESTED cascade in one of our spawned_payload
+         * instances changed (its expansion width shifted), so our own
+         * siblings need to slide.  Propagated bottom-up from the inner
+         * cascade_payload_sync that did the respawn — see the walk-up
+         * loop below.  Guards spawn + layout so those only run on actual
+         * change; the persist pass further down still runs every frame so
+         * text-input edits get pushed through to the wire.                  */
+        bool do_spawn_or_layout = (respawn || ch.needs_relayout);
+
+        /* Persist the user's node choice into the bound cascade row.  The
+         * enclosing container refreshed row->bound_list to the current outer
+         * list<list<i32>> pointer; combined with bound_index we can reach
+         * the row's inner list<i32> and stamp slot 0 = node_id.            */
+        AimlPrefabInstance* row = inst;
+        if (respawn && row->bound_list && row->bound_index >= 0) {
+            struct ListHdr { int32_t size; int32_t capacity; void* data; };
+            ListHdr* outer = (ListHdr*)row->bound_list;
+            if (outer && row->bound_index < outer->size) {
+                ListHdr* inner = (ListHdr*)((char*)outer->data + row->bound_index * sizeof(ListHdr));
+                if (inner && inner->data && inner->size >= 1) {
+                    ((int32_t*)inner->data)[0] = node_id;
+                }
+            }
+            /* Dump the whole outer list to stderr so the user can see how
+             * their UI clicks translate to the wire bytecode.  Cheap because
+             * this only fires ON CHANGE, not every frame.                   */
+            ListHdr* outer2 = (ListHdr*)row->bound_list;
+            if (outer2) {
+                fprintf(stderr, "[cascade] model=[");
+                for (int32_t r = 0; r < outer2->size; ++r) {
+                    ListHdr* inner = (ListHdr*)((char*)outer2->data + r * sizeof(ListHdr));
+                    fprintf(stderr, r ? ", [" : "[");
+                    for (int32_t k = 0; inner && k < inner->size; ++k) {
+                        fprintf(stderr, k ? ",%d" : "%d", ((int32_t*)inner->data)[k]);
+                    }
+                    fprintf(stderr, "]");
+                }
+                fprintf(stderr, "]\n");
+            }
+        }
+
+        /* 1) On change: mark previously mounted payload for delete.  Actual
+         *    delete + detach happens in the end-of-frame sweep, so any cached
+         *    ptr in the outer render loop reads a pending_delete=true and
+         *    safely skips the instance. */
+        if (respawn) {
+            for (AimlPrefabInstance* dead : ch.spawned_payload) {
+                if (dead) dead->pending_delete = true;
+            }
+            ch.spawned_payload.clear();
+            ch.last_node_id = node_id;
+        }
+
+        if (node_id < 0) continue;  /* nothing to render for "---" / invalid */
+
+        /* 2) Spawn one payload prefab per field of the current node (only on
+         *    change — otherwise we just re-layout the existing instances). */
+        int n_fields = aiml_prefab_cascade_field_count(ch.cascade_type.c_str(), node_id);
+        if (n_fields <= 0) continue;
+        /* Reach the bound row now — we may need to seed newly-spawned
+         * payload widgets with their previously-stored values so a bind-
+         * swap (Ability pager) doesn't reset their selections. */
+        struct ListHdrIn { int32_t size; int32_t capacity; void* data; };
+        ListHdrIn* outer_r = (ListHdrIn*)inst->bound_list;
+        int32_t* stored_wire = nullptr;
+        int32_t  stored_size = 0;
+        if (outer_r && inst->bound_index >= 0 &&
+            inst->bound_index < outer_r->size) {
+            ListHdrIn* inner_r = (ListHdrIn*)((char*)outer_r->data +
+                                (size_t)inst->bound_index * sizeof(ListHdrIn));
+            if (inner_r) {
+                stored_wire = (int32_t*)inner_r->data;
+                stored_size = inner_r->size;
+            }
+        }
+        /* SPAWN phase (only on node change): instantiate one payload prefab
+         * per field of the newly-selected node, mutate its first child to the
+         * appropriate widget kind, seed from the stored wire.  Positions are
+         * placeholder — real placement happens in the LAYOUT phase below,
+         * which runs every frame so nested-cascade expansion in siblings can
+         * push subsequent siblings further right without an extra dirty flag. */
+        if (respawn) {
+        for (int f = 0; f < n_fields; ++f) {
+            void* raw = aiml_prefab_instantiate(ch.payload_spawn.c_str());
+            if (!raw) break;
+            auto* pi = (AimlPrefabInstance*)raw;
+            pi->parent      = inst;
+            pi->bound_index = f;
+            pi->x = 0.0f;     /* placeholder — LAYOUT phase overwrites */
+            pi->y = 0.0f;
+            /* Mutate the payload prefab's first child to the right widget
+             * kind for the field's type:
+             *   • registered enum      → dropdown (options = enum labels)
+             *   • registered cascade   → dropdown (options = node labels)
+             *   • primitive / alias    → label showing "name: type"
+             *                            (later: numeric text_input)
+             * The payload prefab (`FieldChip`) is designed with a single
+             * child so mutation is cheap and the shape stays predictable. */
+            const char* flabel = aiml_prefab_cascade_field_label(ch.cascade_type.c_str(), node_id, f);
+            const char* ftype  = aiml_prefab_cascade_field_type (ch.cascade_type.c_str(), node_id, f);
+            if (!pi->children.empty()) {
+                auto& w = pi->children[0];
+                const char* enum_labels    = aiml_prefab_enum_labels(ftype);
+                const char* cascade_labels = aiml_prefab_cascade_options(ftype);
+                if (enum_labels && *enum_labels) {
+                    w.type          = CHILD_DROPDOWN;
+                    w.options       = enum_labels;
+                    w.enum_type     = ftype;   /* → real member value in collect() */
+                    w.selected_index = 0;
+                    w.dropdown_open = false;
+                    w.text.clear();
+                    w.label_text.clear();
+                } else if (cascade_labels && *cascade_labels) {
+                    /* Nested cascade — propagate payload_spawn so the widget's
+                     * OWN selection change spawns another payload row below.
+                     * Recursion falls out of the same cascade_payload_sync
+                     * pass on the next render frame.                          */
+                    w.type          = CHILD_DROPDOWN;
+                    w.options       = cascade_labels;
+                    w.selected_index = 0;
+                    w.dropdown_open = false;
+                    w.cascade_type  = ftype;
+                    w.payload_spawn = ch.payload_spawn;
+                    w.last_node_id  = -1;      /* force fresh spawn on first frame */
+                    w.spawned_payload.clear();
+                    w.text.clear();
+                    w.label_text.clear();
+                } else {
+                    /* Primitive or role-alias (VALUE / COUNT / SIDES etc.) —
+                     * render a numeric text_input.  Defaults to "1" because
+                     * "0" reads as "no effect" in most bytecodes (0 damage,
+                     * 0 turns) which is almost never the desired starting
+                     * value for a fresh field.                              */
+                    w.type          = CHILD_TEXT_INPUT;
+                    w.text          = "1";
+                    w.label_text    = flabel;
+                    w.options.clear();
+                    w.selected_index = 0;
+                    w.dropdown_open = false;
+                    /* Numeric inputs (values, counts) rarely exceed 3 digits.
+                     * Shrink the widget + instance width so the sibling
+                     * layout can pack cost/duration chips tightly right after
+                     * the numeric.  Kept at 40px = ~3 digits at font_size 10.  */
+                    w.width      = 40.0f;
+                    pi->width_override = 40.0f;
+                }
+            }
+            /* Seed the widget from the stored wire slot if one is available.
+             * Slot layout: wire[0] = tag, wire[1+f] = value of field f.
+             * Enum / cascade dropdowns store `index + 1` — undo by
+             * subtracting.  text_input for i32 / alias just formats the int
+             * back into the buffer. */
+            if (!pi->children.empty() && stored_wire && (1 + f) < stored_size) {
+                auto& w2 = pi->children[0];
+                int32_t sv = stored_wire[1 + f];
+                if (w2.type == CHILD_DROPDOWN || w2.type == CHILD_CASCADE) {
+                    if (sv >= 1) w2.selected_index = sv - 1;
+                } else if (w2.type == CHILD_TEXT_INPUT) {
+                    char buf[16]; snprintf(buf, sizeof(buf), "%d", (int)sv);
+                    w2.text = buf;
+                }
+            }
+            inst->child_instances.push_back(pi);
+            ch.spawned_payload.push_back(pi);
+        }
+        }  /* end if (respawn) */
+
+        /* LAYOUT phase — runs on respawn or when a nested cascade in one of
+         * our spawned_payload widgets signalled needs_relayout.  Positions
+         * each pi based on the ACTUAL rendered extent of the previous
+         * sibling (own width plus recursive nested-payload expansion), so
+         * a subsequent field never lands on top of a preceding field's
+         * expanded payload.                                                */
+        if (do_spawn_or_layout) {
+            bool vertical = (ch.cascade_flow == "vertical");
+            float gap = 4.0f;
+            float pos_x = vertical ? ch.x                    : ch.x + ch.width + 6.0f;
+            float pos_y = vertical ? ch.y + ch.height + gap  : ch.y;
+            /* Local right/bottom edge in a pi's own coord space, walking
+             * its widgets' spawned_payload chains recursively.             */
+            std::function<float(AimlPrefabInstance*)> right_edge;
+            right_edge = [&right_edge](AimlPrefabInstance* pi) -> float {
+                float r = pi->width_override > 0.0f
+                              ? pi->width_override
+                              : (pi->def ? pi->def->width : 0.0f);
+                for (auto& w : pi->children) {
+                    for (auto* sp : w.spawned_payload) {
+                        if (!sp || sp->pending_delete) continue;
+                        float sr = sp->x + right_edge(sp);
+                        if (sr > r) r = sr;
+                    }
+                }
+                return r;
+            };
+            std::function<float(AimlPrefabInstance*)> bottom_edge;
+            bottom_edge = [&bottom_edge](AimlPrefabInstance* pi) -> float {
+                float b = pi->def ? pi->def->height : 0.0f;
+                for (auto& w : pi->children) {
+                    for (auto* sp : w.spawned_payload) {
+                        if (!sp || sp->pending_delete) continue;
+                        float sb = sp->y + bottom_edge(sp);
+                        if (sb > b) b = sb;
+                    }
+                }
+                return b;
+            };
+            for (auto* pi : ch.spawned_payload) {
+                if (!pi || pi->pending_delete) continue;
+                pi->x = pos_x;
+                pi->y = pos_y;
+                if (vertical) pos_y += bottom_edge(pi) + gap;
+                else          pos_x += right_edge(pi)  + gap;
+            }
+        }
+        ch.needs_relayout = false;
+
+        /* Propagate: our respawn (or re-layout) changed our own extent, so
+         * our enclosing outer cascade widget (if any) must re-layout ITS
+         * siblings.  Walk up: for each ancestor instance, find the child
+         * widget whose spawned_payload contains us, mark it dirty.  Terminate
+         * at the first ancestor with no such owning widget (top-level
+         * container — its own siblings aren't cascade-driven).               */
+        if (do_spawn_or_layout) {
+            AimlPrefabInstance* child_inst = inst;
+            AimlPrefabInstance* parent_inst = child_inst->parent;
+            while (parent_inst) {
+                bool found = false;
+                for (auto& pw : parent_inst->children) {
+                    for (auto* sp : pw.spawned_payload) {
+                        if (sp == child_inst) { pw.needs_relayout = true; found = true; break; }
+                    }
+                    if (found) break;
+                }
+                if (!found) break;
+                child_inst = parent_inst;
+                parent_inst = child_inst->parent;
+            }
+        }
+    }  /* end for (auto& ch : inst->children) — cascade widget handling loop */
+
+    /* ── Persist each payload widget's value back into the bound row every
+     *    frame.  Gathers values from the spawned sub-widgets, then hands
+     *    them to the pure `aiml_cascade_persist_row` helper (unit-tested
+     *    separately).  Sub-widget kind → slot value:
+     *        enum-dropdown     → selected_index + 1
+     *        cascade-dropdown  → node_id + RECURSIVE inline expansion of
+     *                            its own payload widgets (so nested Value
+     *                            / Duration / etc. cascades get flattened
+     *                            into the wire the bytecode consumers
+     *                            expect — e.g. draw_card [1,DeckType,
+     *                            ValueType,Value] instead of the truncated
+     *                            [1,DeckType,ValueTag]).
+     *        text_input        → atoi(text) — VALUE / COUNT / SIDES.       */
+    std::function<void(const PrefabChild&, std::vector<int32_t>&)> collect;
+    collect = [&collect](const PrefabChild& w, std::vector<int32_t>& out) {
+        if (w.type == CHILD_TEXT_INPUT) {
+            out.push_back(w.text.empty() ? 0 : atoi(w.text.c_str()));
+            return;
+        }
+        if (w.type != CHILD_DROPDOWN && w.type != CHILD_CASCADE) {
+            out.push_back(0);
+            return;
+        }
+        if (w.cascade_type.empty()) {
+            /* plain enum — one slot.  Use the true member value from the enum
+             * registry; fall back to selected_index+1 only for legacy widgets
+             * that carry no enum_type (gap-free 1-based assumption). */
+            if (!w.enum_type.empty()) {
+                int32_t ev = aiml_prefab_enum_value_at(w.enum_type.c_str(), w.selected_index);
+                out.push_back(ev >= 0 ? ev : w.selected_index + 1);
+            } else {
+                out.push_back(w.selected_index + 1);
+            }
+            return;
+        }
+        /* nested cascade — resolve node_id (not selected_index+1, which
+         * only matches for gap-free option lists) and recurse into its
+         * payload widgets so their values get inlined right after. */
+        int32_t sub_node_id = aiml_prefab_cascade_node_id_at(
+                                  w.cascade_type.c_str(), w.selected_index);
+        out.push_back(sub_node_id < 0 ? 0 : sub_node_id);
+        for (auto* pi : w.spawned_payload) {
+            if (!pi || pi->children.empty()) { out.push_back(0); continue; }
+            collect(pi->children[0], out);
+        }
+    };
+    for (auto& ch : inst->children) {
+        if (ch.type != CHILD_DROPDOWN && ch.type != CHILD_CASCADE) continue;
+        if (ch.cascade_type.empty())                                continue;
+        if (!inst->bound_list || inst->bound_index < 0)              continue;
+        int32_t node_id = aiml_prefab_cascade_node_id_at(
+                              ch.cascade_type.c_str(), ch.selected_index);
+        if (node_id < 0) continue;
+        std::vector<int32_t> vals;
+        for (auto* pi : ch.spawned_payload) {
+            if (!pi || pi->children.empty()) { vals.push_back(0); continue; }
+            collect(pi->children[0], vals);
+        }
+        aiml_cascade_persist_row(inst->bound_list, inst->bound_index,
+                                 node_id,
+                                 vals.empty() ? nullptr : vals.data(),
+                                 (int32_t)vals.size());
+    }
+}
+
 static void render_instance(AimlPrefabInstance* inst) {
     if (!inst || !inst->visible) return;
+    if (inst->pending_delete) return;
+    /* Phase 6d: sync container children with bound list length. */
+    container_sync(inst);
+    /* Phase 6f-2: reactive cascade payload (destroy + respawn on node change). */
+    cascade_payload_sync(inst);
     PrefabScene* s = g_scene;
 
     float ox, oy;
     get_actual_pos(inst, ox, oy);
     float sx = inst->scale_x;
     float sy = inst->scale_y;
-    /* For relative-mode instances, also scale size by screen/design ratio */
-    if (inst->is_relative) {
+    /* Sizes: apply the design→screen ratio ONCE.  For nested instances the
+     * parent's g_render_scale already carries rel_scale, so we skip it here
+     * to avoid the same double-scale that hit position math. */
+    if (!inst->parent) {
         float rsx, rsy;
         get_rel_scale(rsx, rsy);
         sx *= rsx;
         sy *= rsy;
     }
+    /* Inherit parent transform (nested instances). Identity at top level. */
+    ox = g_render_off_x + ox * g_render_scale_x;
+    oy = g_render_off_y + oy * g_render_scale_y;
+    sx *= g_render_scale_x;
+    sy *= g_render_scale_y;
+    /* World origin/scale of THIS instance — used to transform nested children. */
+    const float wox = ox, woy = oy, wsx = sx, wsy = sy;
     float alpha = inst->alpha;
     float rot = inst->rotation;
     /* Rotation center = center of the instance bounding box */
@@ -900,7 +1865,45 @@ static void render_instance(AimlPrefabInstance* inst) {
         }
         case CHILD_RECT: {
             DrawBatch batch;
-            if (ch.texture != 0) {
+            if (ch.bg_texture != 0) {
+                /* Tileable panel background — UV wraps every tile_size
+                 * logical pixels.  Multiply the wrap count by the world-
+                 * scale to keep the tile at a constant screen size across
+                 * design→screen resizes.  V-flipped UV to match sprite
+                 * orientation (stb_image top-down rows vs. GL bottom-up). */
+                float wraps_x = (ch.tile_size > 0.0f)
+                                    ? (cw / (ch.tile_size * sx))
+                                    : 1.0f;
+                float wraps_y = (ch.tile_size > 0.0f)
+                                    ? (ch_h / (ch.tile_size * sy))
+                                    : 1.0f;
+                DrawBatch tile;
+                tile.tex  = ch.bg_texture;
+                tile.mode = 1;
+                /* Always white tint — the tile pattern brings its own
+                 * darkness; multiplying by the panel's bg_color
+                 * (typically already dark for a dark theme) crushed the
+                 * texture to near-black on dark backgrounds and made it
+                 * look invisible. */
+                uint32_t col = color_with_alpha(0xFFFFFFu, alpha);
+                push_quad(tile, cx, cy, cw, ch_h,
+                          0.0f, wraps_y, wraps_x, 0.0f, col);
+                rotate_batch_verts(tile, 0, rot_cx, rot_cy, rot);
+                flush_batch(tile);
+                /* Optional SDF border/rounded corners on top of the
+                 * tile: transparent bg (already drawn) + solid border
+                 * stroke.  Runs only if the child has a visible border. */
+                if (ch.border_width > 0.0f && ch.border_color != 0) {
+                    batch.tex  = s->white_tex;
+                    batch.mode = 3;
+                    batch.material = ch.material;
+                    uint32_t fg = 0;   /* transparent — bg already painted */
+                    uint32_t bd = rgba32_to_gl(ch.border_color, alpha);
+                    push_quad_sdf(batch, cx, cy, cw, ch_h, fg, bd,
+                                  ch.corner_radius * sx,
+                                  ch.border_width * sx);
+                }
+            } else if (ch.texture != 0) {
                 /* Textured panel/frame — alpha from texture (sprite mode).
                  * V-flipped UV (v0=1, v1=0) — matches CHILD_SPRITE so that
                  * asymmetric textures (creature images, icons) render with
@@ -933,6 +1936,177 @@ static void render_instance(AimlPrefabInstance* inst) {
             flush_batch(batch);
             break;
         }
+        case CHILD_BAR: {
+            /* Track (background) — rounded rect from bg_color/border. */
+            DrawBatch track;
+            track.tex  = s->white_tex;
+            track.mode = 3;
+            uint32_t tg = rgba32_to_gl(ch.bg_color, alpha);
+            uint32_t bd = rgba32_to_gl(ch.border_color, alpha);
+            push_quad_sdf(track, cx, cy, cw, ch_h, tg, bd,
+                          ch.corner_radius * sx, ch.border_width * sx);
+            rotate_batch_verts(track, 0, rot_cx, rot_cy, rot);
+            flush_batch(track);
+
+            /* Fill — fraction value/max of the width, same rounding. */
+            float frac = (ch.bar_max > 1e-6f) ? (ch.bar_value / ch.bar_max) : 0.0f;
+            if (frac < 0.0f) frac = 0.0f; if (frac > 1.0f) frac = 1.0f;
+            if (frac > 0.0f && ch.fill_color != 0) {
+                DrawBatch fill;
+                fill.tex  = s->white_tex;
+                fill.mode = 3;
+                uint32_t fg = rgba32_to_gl(ch.fill_color, alpha);
+                float fw = cw * frac;
+                push_quad_sdf(fill, cx, cy, fw, ch_h, fg, 0,
+                              ch.corner_radius * sx, 0.0f);
+                rotate_batch_verts(fill, 0, rot_cx, rot_cy, rot);
+                flush_batch(fill);
+            }
+            break;
+        }
+        case CHILD_SLIDER: {
+            /* Slider: track + fill (range min..max → value) + handle knob.
+             * Skin variants:
+             *   • plain (default): SDF rounded rect track / fill / knob.
+             *   • track_texture:   colored fill first, then the ornate frame
+             *                      sprite stretched over the full rect.
+             *   • handle_texture:  knob rendered as a stretched sprite. */
+            float range = ch.bar_max - ch.slider_min;
+            float frac  = (range > 1e-6f) ? (ch.bar_value - ch.slider_min) / range : 0.0f;
+            if (frac < 0.0f) frac = 0.0f; if (frac > 1.0f) frac = 1.0f;
+
+            /* ── Track background: two-phase when a track_texture is set:
+             *    1) fill (colored bar showing value/max) BEHIND the frame
+             *    2) frame sprite (ornate rounded panel) ON TOP
+             * Otherwise fall back to the SDF track + separate fill. */
+            if (ch.track_texture != 0) {
+                /* Inset the visible fill so it stays inside the frame's
+                 * inner opening — the artwork has ~6% padding on each side
+                 * horizontally and ~30% vertically before the transparent
+                 * hole starts. */
+                float fx_pad = cw * 0.06f;
+                float fy_pad = ch_h * 0.30f;
+                float track_x = cx + fx_pad;
+                float track_y = cy + fy_pad;
+                float track_w = cw - fx_pad * 2.0f;
+                float track_h = ch_h - fy_pad * 2.0f;
+                if (frac > 0.0f && ch.fill_color != 0) {
+                    DrawBatch fill;
+                    fill.tex  = s->white_tex;
+                    fill.mode = 3;
+                    uint32_t fg = rgba32_to_gl(ch.fill_color, alpha);
+                    float fw = track_w * frac;
+                    push_quad_sdf(fill, track_x, track_y, fw, track_h, fg, 0,
+                                  ch.corner_radius * sx, 0.0f);
+                    rotate_batch_verts(fill, 0, rot_cx, rot_cy, rot);
+                    flush_batch(fill);
+                }
+                /* Ornate frame — sprite, v-flipped UVs (stb_image top-down). */
+                DrawBatch frame;
+                frame.tex  = ch.track_texture;
+                frame.mode = 1;
+                uint32_t tint = color_with_alpha(0xFFFFFFu, alpha);
+                push_quad(frame, cx, cy, cw, ch_h, 0, 1, 1, 0, tint);
+                rotate_batch_verts(frame, 0, rot_cx, rot_cy, rot);
+                flush_batch(frame);
+            } else {
+                DrawBatch track;
+                track.tex  = s->white_tex;
+                track.mode = 3;
+                uint32_t tg = rgba32_to_gl(ch.bg_color, alpha);
+                uint32_t bd = rgba32_to_gl(ch.border_color, alpha);
+                push_quad_sdf(track, cx, cy, cw, ch_h, tg, bd,
+                              ch.corner_radius * sx, ch.border_width * sx);
+                rotate_batch_verts(track, 0, rot_cx, rot_cy, rot);
+                flush_batch(track);
+
+                if (frac > 0.0f && ch.fill_color != 0) {
+                    DrawBatch fill;
+                    fill.tex  = s->white_tex;
+                    fill.mode = 3;
+                    uint32_t fg = rgba32_to_gl(ch.fill_color, alpha);
+                    float fw = cw * frac;
+                    push_quad_sdf(fill, cx, cy, fw, ch_h, fg, 0,
+                                  ch.corner_radius * sx, 0.0f);
+                    rotate_batch_verts(fill, 0, rot_cx, rot_cy, rot);
+                    flush_batch(fill);
+                }
+            }
+
+            /* ── Handle: sprite when handle_texture is set, else SDF knob.
+             * When a track_texture is used, constrain the knob's travel to
+             * the frame's inner opening so at value=min the knob sits at
+             * the LEFT diamond marker and at value=max at the RIGHT one,
+             * instead of half-hanging outside the ornate frame. */
+            float knob_h = ch_h * 1.6f;
+            float knob_w = ch_h * (ch.handle_texture ? 1.4f : 0.9f);
+            float travel_x0 = cx;
+            float travel_w  = cw;
+            if (ch.track_texture != 0) {
+                float fx_pad = cw * 0.06f;
+                travel_x0 = cx + fx_pad;
+                travel_w  = cw - fx_pad * 2.0f;
+            }
+            float knob_x = travel_x0 + travel_w * frac - knob_w * 0.5f;
+            float knob_y = cy + (ch_h - knob_h) * 0.5f;
+            if (ch.handle_texture != 0) {
+                /* Metal grip — neutral tint, keeps its natural silver. */
+                DrawBatch knob;
+                knob.tex  = ch.handle_texture;
+                knob.mode = 1;
+                uint32_t tint = color_with_alpha(0xFFFFFFu, alpha);
+                push_quad(knob, knob_x, knob_y, knob_w, knob_h, 0, 1, 1, 0, tint);
+                rotate_batch_verts(knob, 0, rot_cx, rot_cy, rot);
+                flush_batch(knob);
+
+                /* Gem overlay — tinted with fill_color, brightens (and
+                 * grows slightly) during drag/hover to simulate a glow. */
+                if (ch.handle_gem_texture != 0) {
+                    uint32_t gem_rgb =
+                        ch.fill_color ? (ch.fill_color >> 8) : 0xFFFFFFu;
+                    bool active = (ch.slider_dragging || ch.hot);
+                    if (active) {
+                        /* Mix 45 % toward white so the gem visibly lights
+                         * up but keeps its color identity. */
+                        uint32_t r = (gem_rgb >> 16) & 0xFF;
+                        uint32_t g = (gem_rgb >>  8) & 0xFF;
+                        uint32_t b = (gem_rgb      ) & 0xFF;
+                        r = r + (255 - r) * 45 / 100;
+                        g = g + (255 - g) * 45 / 100;
+                        b = b + (255 - b) * 45 / 100;
+                        gem_rgb = (r << 16) | (g << 8) | b;
+                    }
+                    uint32_t gem_tint = color_with_alpha(gem_rgb, alpha);
+                    DrawBatch gem;
+                    gem.tex  = ch.handle_gem_texture;
+                    gem.mode = 1;
+                    /* Grow the gem quad ~8 % when active — cheap bloom
+                     * that reads as the gem "swelling" under the cursor. */
+                    float grow = active ? 1.08f : 1.0f;
+                    float gw = knob_w * grow;
+                    float gh = knob_h * grow;
+                    float gx = knob_x + (knob_w - gw) * 0.5f;
+                    float gy = knob_y + (knob_h - gh) * 0.5f;
+                    push_quad(gem, gx, gy, gw, gh, 0, 1, 1, 0, gem_tint);
+                    rotate_batch_verts(gem, 0, rot_cx, rot_cy, rot);
+                    flush_batch(gem);
+                }
+            } else {
+                uint32_t knob_rgba = ch.slider_dragging && ch.active_color ? ch.active_color
+                                  : ch.hot              && ch.hover_color  ? ch.hover_color
+                                  : (ch.fill_color ? ch.fill_color : 0xFFFFFFFF);
+                uint32_t kc = rgba32_to_gl(knob_rgba, alpha);
+                uint32_t kb = rgba32_to_gl(ch.border_color ? ch.border_color : 0x00000080, alpha);
+                DrawBatch knob;
+                knob.tex  = s->white_tex;
+                knob.mode = 3;
+                push_quad_sdf(knob, knob_x, knob_y, knob_w, knob_h, kc, kb,
+                              (knob_w * 0.5f) * sx, 1.5f * sx);
+                rotate_batch_verts(knob, 0, rot_cx, rot_cy, rot);
+                flush_batch(knob);
+            }
+            break;
+        }
         case CHILD_BUTTON: {
             /* Pick bg based on widget state. */
             uint32_t bg_rgba = ch.pressed_now && ch.active_color ? ch.active_color
@@ -948,8 +2122,12 @@ static void render_instance(AimlPrefabInstance* inst) {
                 uint32_t tint = rgba32_to_gl(bg_rgba ? bg_rgba : 0xFFFFFFFF, alpha);
                 /* V-flipped UV (v0=1, v1=0) — same as CHILD_SPRITE.
                  * Without the flip, asymmetric icons render upside-down because
-                 * stb_image returns top-down rows while GL expects bottom-up. */
-                push_quad(batch, cx, cy, cw, ch_h, 0, 1, 1, 0, tint);
+                 * stb_image returns top-down rows while GL expects bottom-up.
+                 * `flip_h` mirrors horizontally so a single "left arrow" asset
+                 * can serve as both prev/next by only setting the flag. */
+                float bu0 = ch.flip_h ? 1.0f : 0.0f;
+                float bu1 = ch.flip_h ? 0.0f : 1.0f;
+                push_quad(batch, cx, cy, cw, ch_h, bu0, 1, bu1, 0, tint);
                 rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
                 flush_batch(batch);
                 /* Optional border around the icon. */
@@ -963,6 +2141,70 @@ static void render_instance(AimlPrefabInstance* inst) {
                     rotate_batch_verts(frame, 0, rot_cx, rot_cy, rot);
                     flush_batch(frame);
                 }
+            } else if (ch.bg_texture != 0) {
+                /* Text-button with tileable stone bg (same field as rect):
+                 * pattern repeats every tile_size logical pixels so a
+                 * short button doesn't stretch the stone into blur.  An
+                 * SDF border on top gives a clean rounded frame around
+                 * the tile.  Hover/pressed tint the whole thing.
+                 *
+                 * If a frame_border_texture is also set, inset the bg by
+                 * frame_border_size on every side so the stone doesn't
+                 * peek past the rounded corners of the border tiling. */
+                float bg_inset = (ch.frame_border_texture != 0)
+                                     ? ch.frame_border_size * sx
+                                     : 0.0f;
+                float bg_x = cx + bg_inset;
+                float bg_y = cy + bg_inset;
+                float bg_w = cw   - 2.0f * bg_inset;
+                float bg_h = ch_h - 2.0f * bg_inset;
+                if (bg_w < 1.0f) bg_w = 1.0f;
+                if (bg_h < 1.0f) bg_h = 1.0f;
+                float wraps_x = (ch.tile_size > 0.0f)
+                                    ? (bg_w / (ch.tile_size * sx))
+                                    : 1.0f;
+                float wraps_y = (ch.tile_size > 0.0f)
+                                    ? (bg_h / (ch.tile_size * sy))
+                                    : 1.0f;
+                DrawBatch tile;
+                tile.tex  = ch.bg_texture;
+                tile.mode = 1;
+                uint32_t tint_rgb =
+                    ch.pressed_now && ch.active_color ? (ch.active_color >> 8)
+                  : ch.hot         && ch.hover_color  ? (ch.hover_color  >> 8)
+                                                       : 0xFFFFFFu;
+                uint32_t tint = color_with_alpha(tint_rgb, alpha);
+                push_quad(tile, bg_x, bg_y, bg_w, bg_h,
+                          0.0f, wraps_y, wraps_x, 0.0f, tint);
+                rotate_batch_verts(tile, 0, rot_cx, rot_cy, rot);
+                flush_batch(tile);
+                if (ch.border_width > 0.0f && ch.border_color != 0) {
+                    DrawBatch fr;
+                    fr.tex  = s->white_tex;
+                    fr.mode = 3;
+                    uint32_t bd = rgba32_to_gl(ch.border_color, alpha);
+                    push_quad_sdf(fr, cx, cy, cw, ch_h, 0, bd,
+                                  ch.corner_radius * sx,
+                                  ch.border_width * sx);
+                    rotate_batch_verts(fr, 0, rot_cx, rot_cy, rot);
+                    flush_batch(fr);
+                }
+            } else if (ch.track_texture != 0) {
+                /* Text-button with ornate frame — same slot as slider skins.
+                 * The stretched frame carries the visual weight; hover /
+                 * pressed states show as a tint on the sprite (fill_color
+                 * fallback: warm gold if unset). */
+                DrawBatch frame;
+                frame.tex  = ch.track_texture;
+                frame.mode = 1;
+                uint32_t tint_rgb =
+                    ch.pressed_now && ch.active_color ? (ch.active_color >> 8)
+                  : ch.hot         && ch.hover_color  ? (ch.hover_color  >> 8)
+                                                       : 0xFFFFFFu;
+                uint32_t tint = color_with_alpha(tint_rgb, alpha);
+                push_quad(frame, cx, cy, cw, ch_h, 0, 1, 1, 0, tint);
+                rotate_batch_verts(frame, 0, rot_cx, rot_cy, rot);
+                flush_batch(frame);
             } else {
                 /* Text-button: SDF rounded rect, label drawn below. */
                 DrawBatch batch;
@@ -976,6 +2218,101 @@ static void render_instance(AimlPrefabInstance* inst) {
                 rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
                 flush_batch(batch);
             }
+            /* Tileable frame border — one shared mini-tile placed around
+             * the perimeter as discrete rotated instances, so the ornament
+             * orientation follows the edge direction.  Corners get a
+             * quarter-circle arc of tiles rotating from the "top-edge
+             * orientation" to the next edge, so the ornament turns
+             * smoothly instead of butting against a hard 90° join. */
+            if (ch.frame_border_texture != 0 && ch.frame_border_size > 0.0f) {
+                float fbs = ch.frame_border_size * sx;
+                /* Corner radius = fbs by default → produces one full tile
+                 * of arc, enough for a visible curved turn without eating
+                 * too much of a short button.  Straight edges start
+                 * inside the arc's tangent point. */
+                float R  = fbs;
+                float pi_f = (float)M_PI;
+                uint32_t tint = color_with_alpha(0xFFFFFFu, alpha);
+                DrawBatch b;
+                b.tex  = ch.frame_border_texture;
+                b.mode = 1;
+                /* Helper (lambda): push one square tile centered at
+                 * (px, py), rotated by `deg` degrees around its center. */
+                auto tile = [&](float px, float py, float deg) {
+                    size_t v0 = b.verts.size();
+                    push_quad(b, px - fbs * 0.5f, py - fbs * 0.5f,
+                              fbs, fbs, 0.0f, 1.0f, 1.0f, 0.0f, tint);
+                    if (deg != 0.0f) rotate_batch_verts(b, v0, px, py, deg);
+                };
+                /* Straight-edge tile counts (excluding the corner arcs).
+                 * ceil, nicht floor — so garantiert step_x/step_y ≤ fbs
+                 * und die Kacheln überlappen leicht statt Lücken zu
+                 * lassen bei nicht-glatt teilbarer Kantenlänge (z.B.
+                 * straight_x=88 / fbs=6 → step=6.286 mit floor → 0.29 px
+                 * Lücke pro Kante; mit ceil step=5.87 → 0.13 px Überlapp). */
+                float straight_x = cw   - 2.0f * R;
+                float straight_y = ch_h - 2.0f * R;
+                int nx = straight_x > 0.0f ? (int)ceilf(straight_x / fbs) : 0;
+                int ny = straight_y > 0.0f ? (int)ceilf(straight_y / fbs) : 0;
+                if (nx < 1) nx = 1;
+                if (ny < 1) ny = 1;
+                float step_x = nx > 0 ? straight_x / (float)nx : fbs;
+                float step_y = ny > 0 ? straight_y / (float)ny : fbs;
+                /* Top edge — natural orientation. */
+                for (int i = 0; i < nx; ++i) {
+                    float tx = cx + R + (i + 0.5f) * step_x;
+                    tile(tx, cy + fbs * 0.5f, 0.0f);
+                }
+                /* Bottom edge — rotated 180° so ornament faces outward. */
+                for (int i = 0; i < nx; ++i) {
+                    float tx = cx + R + (i + 0.5f) * step_x;
+                    tile(tx, cy + ch_h - fbs * 0.5f, 180.0f);
+                }
+                /* Left edge — rotated 270° (-90°): ornament runs down the side. */
+                for (int i = 0; i < ny; ++i) {
+                    float ty = cy + R + (i + 0.5f) * step_y;
+                    tile(cx + fbs * 0.5f, ty, 270.0f);
+                }
+                /* Right edge — rotated 90°. */
+                for (int i = 0; i < ny; ++i) {
+                    float ty = cy + R + (i + 0.5f) * step_y;
+                    tile(cx + cw - fbs * 0.5f, ty, 90.0f);
+                }
+                /* Four corner arcs — N tiles each, rotating 90°/N per step.
+                 * Tile CENTERS follow an arc of radius (R - fbs/2), not R,
+                 * so they stay on the same fbs/2-inset locus as the
+                 * straight-edge tile centers.  Using R itself put the
+                 * centers on the button's outer corner, making the halbe
+                 * Kachel nach außen ragen (siehe User-Screenshot). */
+                float arc_r   = R - fbs * 0.5f;
+                if (arc_r < 0.0f) arc_r = 0.0f;
+                int   corner_n = (int)ceilf((pi_f * 0.5f * (arc_r + fbs * 0.5f)) / fbs);
+                if (corner_n < 3) corner_n = 3;
+                struct Corner { float ax, ay, base_theta, base_deg; };
+                /* Order: top-left, top-right, bottom-right, bottom-left.
+                 * base_theta = angle of the FIRST tile from arc center;
+                 * base_deg   = tile rotation at that position (the tile at
+                 * top-left starts as a "left-edge" tile, ends as a "top-edge"
+                 * tile, so it rotates from 270° down to 0°). */
+                Corner corners[4] = {
+                    { cx + R,          cy + R,          pi_f,           270.0f },
+                    { cx + cw - R,     cy + R,          -pi_f * 0.5f,     0.0f },
+                    { cx + cw - R,     cy + ch_h - R,   0.0f,            90.0f },
+                    { cx + R,          cy + ch_h - R,   pi_f * 0.5f,    180.0f },
+                };
+                for (const auto& c : corners) {
+                    for (int k = 0; k < corner_n; ++k) {
+                        float t   = (k + 0.5f) / (float)corner_n;   /* 0..1 */
+                        float th  = c.base_theta + t * (pi_f * 0.5f);
+                        float px  = c.ax + arc_r * cosf(th);
+                        float py  = c.ay + arc_r * sinf(th);
+                        float deg = c.base_deg + t * 90.0f;
+                        tile(px, py, deg);
+                    }
+                }
+                rotate_batch_verts(b, 0, rot_cx, rot_cy, rot);
+                flush_batch(b);
+            }
             /* Caption centered (skipped for icon-only buttons with empty text).
              * Reads ch.text so the AIML side can re-label a button via set_text. */
             if (!ch.text.empty() && s->font) {
@@ -988,6 +2325,25 @@ static void render_instance(AimlPrefabInstance* inst) {
                     uint32_t col = rgba32_to_gl(ch.color ? ch.color : 0xFFFFFFFF, alpha);
                     float text_cx = cx + cw * 0.5f;
                     float text_cy = cy + (ch_h - lf->line_height) * 0.5f;
+                    /* Optional outline halo — same 8-tap ring used for
+                     * CHILD_LABEL, ported so Text-Buttons can get a colored
+                     * schein (z.B. hellblau) um die Beschriftung.  Läuft nur
+                     * wenn outline_px > 0 UND outline_color eine Alpha hat. */
+                    if (ch.outline_px > 0.0f && (ch.outline_color & 0xFFu)) {
+                        uint32_t ocol = rgba32_to_gl(ch.outline_color, alpha);
+                        float d = ch.outline_px * sx;
+                        const float offs[8][2] = {
+                            { -d, -d }, {  0, -d }, {  d, -d },
+                            { -d,  0 },              {  d,  0 },
+                            { -d,  d }, {  0,  d }, {  d,  d },
+                        };
+                        for (int oi = 0; oi < 8; ++oi) {
+                            push_text_batch(batch, lf, ch.text.c_str(),
+                                            text_cx + offs[oi][0],
+                                            text_cy + offs[oi][1],
+                                            cw, ocol, "center");
+                        }
+                    }
                     push_text_batch(batch, lf, ch.text.c_str(),
                                     text_cx, text_cy, cw, col, "center");
                     rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
@@ -1110,10 +2466,16 @@ static void render_instance(AimlPrefabInstance* inst) {
                 batch.tex  = s->white_tex;
                 batch.mode = 3;
                 batch.material = ch.material;
-                uint32_t fg = rgba32_to_gl(bg_rgba,         alpha);
-                uint32_t bd = rgba32_to_gl(ch.border_color, alpha);
+                /* Default-Umrandung: ohne explizites border_color/border_width
+                 * wäre die Box unsichtbar (fg==bg oft 0).  Damit eine Checkbox
+                 * IMMER sichtbar ist, fällt sie auf einen dezenten Rahmen zurück
+                 * (überschreibbar via border_color/border_width im Prefab). */
+                uint32_t box_border = ch.border_color ? ch.border_color : 0x8899AACC;
+                float    box_bw     = ch.border_width > 0.0f ? ch.border_width : 1.5f;
+                uint32_t fg = rgba32_to_gl(bg_rgba,     alpha);
+                uint32_t bd = rgba32_to_gl(box_border,  alpha);
                 push_quad_sdf(batch, cx, cy, box_size, box_size, fg, bd,
-                              ch.corner_radius * sx, ch.border_width * sx);
+                              ch.corner_radius * sx, box_bw * sx);
                 rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
                 flush_batch(batch);
             }
@@ -1153,6 +2515,133 @@ static void render_instance(AimlPrefabInstance* inst) {
             }
             break;
         }
+        case CHILD_DROPDOWN: {
+            /* Button-artiges Feld mit currentem Option-Label + "▼".  Klick
+             * cycled durch die pipe-separierte Options-Liste (siehe input
+             * loop).  Rendering: bg + label links, arrow rechts. */
+            uint32_t bg_rgba = ch.pressed_now && ch.active_color ? ch.active_color
+                            : ch.hot         && ch.hover_color  ? ch.hover_color
+                            :                                     ch.bg_color;
+            DrawBatch batch;
+            batch.tex  = s->white_tex;
+            batch.mode = 3;
+            batch.material = ch.material;
+            uint32_t fg = rgba32_to_gl(bg_rgba,         alpha);
+            uint32_t bd = rgba32_to_gl(ch.border_color, alpha);
+            push_quad_sdf(batch, cx, cy, cw, ch_h, fg, bd,
+                          ch.corner_radius * sx, ch.border_width * sx);
+            rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
+            flush_batch(batch);
+            if (s->font) {
+                /* Aktuelle Option ermitteln. */
+                std::string current;
+                if (!ch.options.empty()) {
+                    int idx = 0;
+                    size_t start = 0;
+                    for (size_t p = 0; p <= ch.options.size(); ++p) {
+                        if (p == ch.options.size() || ch.options[p] == '|') {
+                            if (idx == ch.selected_index) {
+                                current = ch.options.substr(start, p - start);
+                                break;
+                            }
+                            idx++;
+                            start = p + 1;
+                        }
+                    }
+                }
+                float target_size = ch.font_size > 0.0f ? ch.font_size * sx : 0.0f;
+                AimlUIFont* lf = (target_size > 0.0f) ? font_for_size(s, target_size) : s->font;
+                if (lf) {
+                    DrawBatch tb;
+                    tb.tex  = lf->atlas_tex;
+                    tb.mode = 2;
+                    uint32_t lcol = rgba32_to_gl(ch.color ? ch.color : 0xFFFFFFFF, alpha);
+                    float pad_l = 8.0f * sx;
+                    float text_cx = cx + pad_l;
+                    float text_cy = cy + (ch_h - lf->line_height) * 0.5f;
+                    push_text_batch(tb, lf, current.c_str(),
+                                    text_cx, text_cy, cw - 24.0f * sx, lcol, "left");
+                    rotate_batch_verts(tb, 0, rot_cx, rot_cy, rot);
+                    flush_batch(tb);
+                    /* Arrow rechts — kleines nach-unten zeigendes Dreieck
+                     * statt "v"-Buchstabe.  3 Vertices als eigener Batch
+                     * (mode 0 = solid weiß-texture).                        */
+                    {
+                        DrawBatch ab;
+                        ab.tex  = s->white_tex;
+                        ab.mode = 0;
+                        float arrow_w = 8.0f * sx;
+                        float arrow_h = 5.0f * sx;
+                        float arrow_cx = cx + cw - 12.0f * sx;
+                        float arrow_cy = cy + ch_h * 0.5f;
+                        PrefabVertex vl{ arrow_cx - arrow_w * 0.5f, arrow_cy - arrow_h * 0.5f,
+                                         0, 0, lcol, 0,0,0,0,0 };
+                        PrefabVertex vr{ arrow_cx + arrow_w * 0.5f, arrow_cy - arrow_h * 0.5f,
+                                         1, 0, lcol, 0,0,0,0,0 };
+                        PrefabVertex vb{ arrow_cx,                  arrow_cy + arrow_h * 0.5f,
+                                         0.5f, 1, lcol, 0,0,0,0,0 };
+                        ab.verts.push_back(vl);
+                        ab.verts.push_back(vr);
+                        ab.verts.push_back(vb);
+                        rotate_batch_verts(ab, 0, rot_cx, rot_cy, rot);
+                        flush_batch(ab);
+                    }
+                }
+            }
+            break;
+        }
+        case CHILD_RADIO: {
+            /* Kreisförmige Anzeige links + Label rechts (analog CHILD_CHECKBOX
+             * ohne Textur-Zweig).  corner_radius wird auf halbe Box-Größe
+             * gezwungen damit die Optik immer rund ist, unabhängig vom YAML. */
+            float box_size = ch_h < cw ? ch_h : cw;
+            uint32_t bg_rgba = ch.checked && ch.active_color    ? ch.active_color
+                            : ch.pressed_now && ch.active_color ? ch.active_color
+                            : ch.hot         && ch.hover_color  ? ch.hover_color
+                            :                                     ch.bg_color;
+            float radius = box_size * 0.5f;
+            {
+                DrawBatch batch;
+                batch.tex  = s->white_tex;
+                batch.mode = 3;
+                uint32_t fg = rgba32_to_gl(bg_rgba,         alpha);
+                uint32_t bd = rgba32_to_gl(ch.border_color, alpha);
+                push_quad_sdf(batch, cx, cy, box_size, box_size, fg, bd,
+                              radius, ch.border_width * sx);
+                rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
+                flush_batch(batch);
+            }
+            if (ch.checked) {
+                float inset = box_size * 0.25f;
+                DrawBatch dot;
+                dot.tex  = s->white_tex;
+                dot.mode = 3;
+                uint32_t dot_fill = rgba32_to_gl(0xFFFFFFFF, alpha);
+                push_quad_sdf(dot, cx + inset, cy + inset,
+                              box_size - 2.0f * inset, box_size - 2.0f * inset,
+                              dot_fill, 0, radius * 0.5f, 0);
+                rotate_batch_verts(dot, 0, rot_cx, rot_cy, rot);
+                flush_batch(dot);
+            }
+            if (!ch.text.empty() && s->font) {
+                float target_size = ch.font_size > 0.0f ? ch.font_size * sx : 0.0f;
+                AimlUIFont* lf = (target_size > 0.0f) ? font_for_size(s, target_size) : s->font;
+                if (lf) {
+                    DrawBatch tb;
+                    tb.tex  = lf->atlas_tex;
+                    tb.mode = 2;
+                    uint32_t lcol = rgba32_to_gl(ch.color ? ch.color : 0xFFFFFFFF, alpha);
+                    float gap = 8.0f * sx;
+                    float text_cx = cx + box_size + gap;
+                    float text_cy = cy + (ch_h - lf->line_height) * 0.5f;
+                    push_text_batch(tb, lf, ch.text.c_str(),
+                                    text_cx, text_cy, cw - box_size - gap, lcol, "left");
+                    rotate_batch_verts(tb, 0, rot_cx, rot_cy, rot);
+                    flush_batch(tb);
+                }
+            }
+            break;
+        }
         case CHILD_LABEL: {
             if (ch.text.empty() || !s->font) break;
             /* Select font for this label's font_size (cached per size). */
@@ -1161,6 +2650,27 @@ static void render_instance(AimlPrefabInstance* inst) {
                              ? font_for_size(s, target_size)
                              : s->font;
             if (!lf) break;
+            /* Auto-fit: In eine „kurze" Box (Titel-Höhe ≈ eine Zeile) würde ein
+             * langer Text umbrechen und aus dem Rahmen laufen.  Statt umzubrechen
+             * die Schrift so verkleinern, dass der (umbruchfreie) Text in die
+             * Breite passt.  Nur bei kurzen Boxen OHNE expliziten Zeilenumbruch —
+             * mehrzeilige Labels (Ability-Text, valign:top, hohe Box) bleiben. */
+            if (target_size > 0.0f && ch.height > 0.0f &&
+                ch.text.find('\n') == std::string::npos &&
+                ch.text.find('|') == std::string::npos) {
+                float fit_w = ch.width > 0.0f ? ch.width * sx
+                                              : (inst->def ? inst->def->width * sx : 0.0f);
+                float box_h = ch.height * sx;
+                if (fit_w > 0.0f && box_h < 1.8f * lf->line_height) {
+                    float tw = text_width_font(lf, ch.text.c_str());
+                    if (tw > fit_w) {
+                        float fit_size = target_size * (fit_w / tw);
+                        if (fit_size < target_size * 0.4f) fit_size = target_size * 0.4f;
+                        AimlUIFont* fitf = font_for_size(s, fit_size);
+                        if (fitf) lf = fitf;
+                    }
+                }
+            }
             DrawBatch batch;
             batch.tex = lf->atlas_tex;
             batch.mode = 2; /* font atlas */
@@ -1168,22 +2678,139 @@ static void render_instance(AimlPrefabInstance* inst) {
              * via rgba32_to_gl. The legacy 0xRRGGBB interpretation would
              * shift channels and disagree with button/checkbox labels. */
             uint32_t col = rgba32_to_gl(ch.color ? ch.color : 0xFFFFFFFF, alpha);
-            /* anchor handling: cx is the x reference point */
+            /* anchor + valign aus dem Def (PrefabChild ist nur Render-Snapshot;
+             * Layout-Hints leben in PrefabChildDef). */
             const char* anchor = "left";
+            const char* valign = "";
             auto it = inst->child_index.find(ch.name);
             if (it != inst->child_index.end() && inst->def) {
                 int idx = it->second;
                 if (idx >= 0 && idx < (int)inst->def->children.size()) {
                     anchor = inst->def->children[idx].anchor.c_str();
+                    valign = inst->def->children[idx].valign.c_str();
+                }
+            }
+            /* Vertikal-Position: valign explizit (top/center/bottom) override't
+             * den Default.  Default = center wenn height>0, sonst Top
+             * (Baseline auf cy + ascent durch push_text_batch).
+             * Bei multi-line "bottom" / "top" → text-block-Höhe einrechnen. */
+            float text_cy;
+            if (valign && strcmp(valign, "top") == 0) {
+                text_cy = cy;
+            } else if (valign && strcmp(valign, "bottom") == 0) {
+                float box_h = (ch.height > 0.0f) ? ch.height * sx : (float)lf->line_height;
+                auto lines = wrap_text_lines(lf, ch.text.c_str(),
+                                             ch.width > 0.0f ? ch.width * sx : inst->def->width * sx);
+                float block_h = (float)lines.size() * lf->line_height;
+                text_cy = cy + (box_h - block_h);
+            } else {
+                /* Default-Centered (oder top wenn height==0) — wie vorher. */
+                text_cy = (ch.height > 0.0f)
+                              ? cy + (ch.height * sx - lf->line_height) * 0.5f
+                              : cy;
+            }
+            /* push_text_batch erwartet bei anchor="center"/"right" dass cx
+             * der Mittel- bzw. rechte-Rand-Referenzpunkt ist (siehe x-Formel
+             * dort: cx - tw*0.5f / cx - tw).  Für Labels haben wir aber die
+             * LINKE Kante als cx — verschieben anhand des anchors. */
+            float text_w = ch.width > 0.0f ? ch.width * sx : inst->def->width * sx;
+            float text_cx = cx;
+            if (anchor && strcmp(anchor, "center") == 0) {
+                text_cx = cx + text_w * 0.5f;
+            } else if (anchor && strcmp(anchor, "right") == 0) {
+                text_cx = cx + text_w;
+            }
+            /* Optionaler Outline-Pass — bevor der Haupt-Text gezeichnet wird.
+             * 8-Sample-Ring bei ±outline_px in outline_color, dann Text drüber.
+             * Verhindert das Verschwinden weißer Zahlen auf hellen Icons
+             * (z.B. Count-Label auf Light-Mana). */
+            if (ch.outline_px > 0.0f && (ch.outline_color & 0xFFu)) {
+                uint32_t ocol = rgba32_to_gl(ch.outline_color, alpha);
+                float d = ch.outline_px * sx;
+                const float offs[8][2] = {
+                    { -d, -d }, {  0, -d }, {  d, -d },
+                    { -d,  0 },              {  d,  0 },
+                    { -d,  d }, {  0,  d }, {  d,  d },
+                };
+                for (int oi = 0; oi < 8; ++oi) {
+                    push_text_batch(batch, lf, ch.text.c_str(),
+                                    text_cx + offs[oi][0],
+                                    text_cy + offs[oi][1],
+                                    text_w, ocol, anchor);
                 }
             }
             push_text_batch(batch, lf, ch.text.c_str(),
-                           cx, cy, ch.width > 0.0f ? ch.width * sx : inst->def->width * sx, col, anchor);
+                           text_cx, text_cy, text_w, col, anchor);
             rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
             flush_batch(batch);
             break;
         }
         }
+    }
+
+    /* Nested child instances — inherit this instance's world transform.
+     * If this instance is a clip/scroll container, scissor to its world
+     * bounds and shift children by the scroll offset (local px). */
+    if (!inst->child_instances.empty()) {
+        float s_ox = g_render_off_x, s_oy = g_render_off_y;
+        float s_sx = g_render_scale_x, s_sy = g_render_scale_y;
+
+        bool clipping = inst->clip_children;
+        GLboolean prev_scissor = GL_FALSE;
+        GLint prev_box[4] = {0,0,0,0};
+        if (clipping) {
+            prev_scissor = glIsEnabled(GL_SCISSOR_TEST);
+            glGetIntegerv(GL_SCISSOR_BOX, prev_box);
+            float cw = inst->def->width * wsx;
+            float ch = inst->def->height * wsy;
+            /* GL scissor origin is bottom-left; our coords are top-left.
+             * Round the box INWARD (ceil position, floor size) so sub-pixel
+             * widths/heights never leave a one-pixel gap where content can
+             * leak beyond the visible panel. */
+            int sxp = (int)ceilf(wox);
+            int syp = (int)ceilf((float)g_scene->screen_h - (woy + ch));
+            int swp = (int)floorf(cw);
+            int shp = (int)floorf(ch);
+            if (swp < 0) swp = 0; if (shp < 0) shp = 0;
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(sxp, syp, swp, shp);
+            g_render_off_x = wox - inst->scroll_x * wsx;
+            g_render_off_y = woy - inst->scroll_y * wsy;
+        } else {
+            g_render_off_x = wox; g_render_off_y = woy;
+        }
+        g_render_scale_x = wsx; g_render_scale_y = wsy;
+        /* Parent's world bounds (used by the cull below). */
+        const float pbx = wox, pby = woy;
+        const float pbw = inst->def->width  * wsx;
+        const float pbh = inst->def->height * wsy;
+        for (auto* ci : inst->child_instances) {
+            /* Software clip: when this instance is a clip container, render
+             * each child only if its full bounding box fits inside the
+             * parent's world bounds.  Strict cull (no partial-overlap render)
+             * because GL_SCISSOR_TEST does not always clip reliably in our
+             * WebGL2/emcc setup; this guarantees no edge leakage. The visual
+             * trade-off: scrolling becomes discrete per row instead of smooth
+             * (callers can mitigate by snapping scroll_y to the row pitch). */
+            if (clipping) {
+                float cw_ = ci->def->width  * wsx;
+                float ch_ = ci->def->height * wsy;
+                float clx = g_render_off_x + ci->x * wsx;
+                float cly = g_render_off_y + ci->y * wsy;
+                if (clx < pbx || clx + cw_ > pbx + pbw ||
+                    cly < pby || cly + ch_ > pby + pbh) {
+                    continue;
+                }
+            }
+            render_instance(ci);
+        }
+
+        if (clipping) {
+            if (prev_scissor) glScissor(prev_box[0], prev_box[1], prev_box[2], prev_box[3]);
+            else              glDisable(GL_SCISSOR_TEST);
+        }
+        g_render_off_x = s_ox; g_render_off_y = s_oy;
+        g_render_scale_x = s_sx; g_render_scale_y = s_sy;
     }
 }
 
@@ -1208,6 +2835,16 @@ static std::vector<PendingMaterial> g_pending_materials;
 static void register_prefab_def(const char* name, float width, float height,
                                 const char* texture_path, int32_t draggable,
                                 const char* children_json);
+
+/* Resize: nur screen-Dims + Projection updaten, ohne g_scene zu erzeugen.
+ * design_w/h bleibt von der initialen aiml_prefab_scene_init.  Wird vom
+ * GLFW-framebuffer-size-Callback gerufen damit das UI mitwächst. */
+void aiml_prefab_scene_resize(int32_t screen_w, int32_t screen_h) {
+    if (!g_scene) return;
+    g_scene->screen_w = screen_w;
+    g_scene->screen_h = screen_h;
+    ortho(g_scene->proj, 0, (float)screen_w, (float)screen_h, 0);
+}
 
 void aiml_prefab_scene_init(int32_t screen_w, int32_t screen_h) {
     if (g_scene) {
@@ -1340,17 +2977,80 @@ void* aiml_prefab_instantiate(const char* prefab_name) {
         child.corner_radius = cd.corner_radius;
         child.hover_color   = cd.hover_color;
         child.active_color  = cd.active_color;
+        child.outline_color = cd.outline_color;
+        child.outline_px    = cd.outline_px;
+        /* Tileable rect bg: resolve stem to GL id once — same cache as
+         * sprite textures, so `stone_texture_dark_cracked_tileable` gets
+         * loaded from the asset registry with GL_REPEAT wrap already set
+         * by aiml_gl_load_texture (see gl_runtime.cpp:124-125). */
+        if (!cd.bg_texture_path.empty()) {
+            child.bg_texture = load_texture_cached(cd.bg_texture_path.c_str());
+        }
+        child.tile_size     = cd.tile_size > 0.0f ? cd.tile_size : 128.0f;
+        if (!cd.track_texture_path.empty()) {
+            child.track_texture = load_texture_cached(cd.track_texture_path.c_str());
+        }
+        if (!cd.handle_texture_path.empty()) {
+            child.handle_texture = load_texture_cached(cd.handle_texture_path.c_str());
+        }
+        if (!cd.handle_gem_texture_path.empty()) {
+            child.handle_gem_texture =
+                load_texture_cached(cd.handle_gem_texture_path.c_str());
+        }
+        if (!cd.frame_border_texture_path.empty()) {
+            child.frame_border_texture =
+                load_texture_cached(cd.frame_border_texture_path.c_str());
+        }
+        child.frame_border_size = cd.frame_border_size > 0.0f ? cd.frame_border_size : 6.0f;
+        child.flip_h        = cd.flip_h;
+        child.slider_snap   = cd.slider_snap;
         child.label_text    = cd.label_text;
         child.is_secret     = cd.is_secret;
+        child.bar_value     = cd.bar_value;
+        child.bar_max       = cd.bar_max;
+        child.slider_min    = cd.slider_min;
+        child.fill_color    = cd.fill_color;
         child.on_click_fn   = cd.on_click_fn;
         child.on_change_fn  = cd.on_change_fn;
+        child.group         = cd.group;
+        child.options       = cd.options;
+        child.selected_index = 0;
         child.material      = material_find(cd.material_name.c_str());
+        /* Phase 6 bindings — carry compile-time attributes to the runtime widget */
+        child.bind          = cd.bind;
+        child.bind_offset   = cd.bind_offset;
+        child.bind_tag      = cd.bind_tag;
+        child.bind_list     = cd.bind_list;
+        child.spawn         = cd.spawn;
+        child.layout        = cd.layout;
+        child.gap           = cd.gap;
+        child.compact       = cd.compact;
+        child.cascade_type  = cd.cascade_type;
+        child.payload_spawn = cd.payload_spawn;
+        child.cascade_flow  = cd.cascade_flow;
+        child.enum_type     = cd.enum_type;
+        /* `enum: TypeName` on a dropdown/radio — pull the display labels from
+         * the enum registry (snake_case already derived to "Title Case" by the
+         * compiler) so the author doesn't hard-code them.  The value accessor
+         * (aiml_prefab_dropdown_enum_value) returns the true member value. */
+        if (!cd.enum_type.empty() && child.options.empty()) {
+            const char* enum_labels = aiml_prefab_enum_labels(cd.enum_type.c_str());
+            if (enum_labels && *enum_labels) child.options = enum_labels;
+        }
+        /* Auto-populate dropdown options from the cascade metadata so the
+         * prefab author doesn't have to hard-code node labels. */
+        if (!cd.cascade_type.empty() &&
+            (cd.type == CHILD_DROPDOWN || cd.type == CHILD_CASCADE)) {
+            const char* opts = aiml_prefab_cascade_options(cd.cascade_type.c_str());
+            if (opts && *opts) child.options = opts;
+        }
         /* Seed text buffer: text_input uses label as initial value; static
          * labels use it as their displayed text; buttons use it as the
          * displayed caption (so set_text can re-label a button at runtime);
          * checkboxes use it as the label text rendered next to the box. */
         if (child.type == CHILD_TEXT_INPUT || child.type == CHILD_LABEL
-            || child.type == CHILD_BUTTON  || child.type == CHILD_CHECKBOX)
+            || child.type == CHILD_BUTTON  || child.type == CHILD_CHECKBOX
+            || child.type == CHILD_RADIO)
             child.text = cd.label_text;
 
         /* Resolve material name → Material* (null if unknown — falls back
@@ -1377,9 +3077,52 @@ void aiml_prefab_destroy(void* p) {
         g_scene->focused_input_child_idx = -1;
     }
 
+    /* Detach from parent, then take dynamically-spawned children (bind_list rows /
+     * spawn_child) DOWN with this instance.  They must not be left as orphans:
+     * their x/y are parent-LOCAL, so an orphan renders at raw local coords near
+     * the window origin (e.g. a stray ack-checkbox at 0,0 behind another widget).
+     * We do NOT delete them inline — rows are tracked in BOTH `child_instances`
+     * AND their container widget's `spawned`/`spawned_payload` lists, so an inline
+     * recursive delete double-frees.  Instead mark them `pending_delete` + clear
+     * their parent, exactly like the container-sync sweep in the render loop,
+     * which frees them safely on the next frame. */
+    if (inst->parent) {
+        auto& sib = inst->parent->child_instances;
+        sib.erase(std::remove(sib.begin(), sib.end(), inst), sib.end());
+        inst->parent = nullptr;
+    }
+    for (auto& c : inst->children) {
+        for (auto* s : c.spawned)         { if (s) { s->parent = nullptr; s->pending_delete = true; } }
+        for (auto* s : c.spawned_payload) { if (s) { s->parent = nullptr; s->pending_delete = true; } }
+    }
+    for (auto* ci : inst->child_instances) { if (ci) { ci->parent = nullptr; ci->pending_delete = true; } }
+
+    /* Drop any cables touching this instance. */
+    {
+        auto& cs = g_scene->connectors;
+        for (auto* c : cs) if (c->from == inst || c->to == inst) c->visible = false;
+        cs.erase(std::remove_if(cs.begin(), cs.end(),
+            [&](AimlConnector* c){
+                if (c->from == inst || c->to == inst) { delete c; return true; }
+                return false;
+            }), cs.end());
+    }
+
     auto& v = g_scene->instances;
     v.erase(std::remove(v.begin(), v.end(), inst), v.end());
     delete inst;
+}
+
+/* Is a prefab instance still alive (present in the scene)?  Compares the
+ * pointer VALUE against the live instance list — never dereferences `p`, so it
+ * is safe to call with a stale/dangling handle.  Returns 1 if alive, 0 if it
+ * was destroyed (or null / no scene).  Lets AIML code guard against use-after-
+ * destroy instead of blindly re-destroying. */
+int32_t aiml_prefab_is_alive(void* p) {
+    if (!p || !g_scene) return 0;
+    auto* inst = (AimlPrefabInstance*)p;
+    return std::find(g_scene->instances.begin(), g_scene->instances.end(), inst)
+               != g_scene->instances.end() ? 1 : 0;
 }
 
 /* ── Transform ───────────────────────────────────────────────────────────── */
@@ -1433,6 +3176,72 @@ float aiml_prefab_get_alpha(void* p) {
 void aiml_prefab_set_draggable(void* p, int32_t d) {
     auto* inst = (AimlPrefabInstance*)p; if (inst) inst->draggable = (d != 0);
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Layout-Helpers (Spec 44_6 §Layout) — Sibling-Liste in einer Reihe / Spalte
+// / Stack auto-positionieren.  Spart die manuelle Schleife+Spacing-Math
+// die sonst in jedem Hand/Zone-Render-Code dupliziert wird.
+//
+// list_ptr ist ein `list<prefab_instance>` (also AimlList* mit i8*-Daten).
+// ────────────────────────────────────────────────────────────────────────
+
+namespace {
+    inline AimlPrefabInstance* layout_item(void** entries, int32_t count, int32_t idx) {
+        if (!entries || idx < 0 || idx >= count) return nullptr;
+        return static_cast<AimlPrefabInstance*>(entries[idx]);
+    }
+    inline float layout_w(AimlPrefabInstance* pi) {
+        if (!pi || !pi->def) return 0.0f;
+        return pi->def->width * pi->scale_x;
+    }
+    inline float layout_h(AimlPrefabInstance* pi) {
+        if (!pi || !pi->def) return 0.0f;
+        return pi->def->height * pi->scale_y;
+    }
+}
+
+// Signatur: data_ptr ist data[] der list<prefab_instance> (= i8**), count
+// ist die size der Liste.  Caller (Compiler-Glue) extrahiert via
+// CreateExtractValue auf dem AimlList-Struct.  Vermeidet bitcast struct→ptr.
+void aiml_engine_layout_hflow(void* data_ptr, int32_t count, float x, float y, float gap) {
+    if (!data_ptr || count <= 0) return;
+    void** entries = static_cast<void**>(data_ptr);
+    float cur_x = x;
+    for (int32_t i = 0; i < count; ++i) {
+        AimlPrefabInstance* pi = static_cast<AimlPrefabInstance*>(entries[i]);
+        if (!pi) continue;
+        pi->x = cur_x;
+        pi->y = y;
+        pi->is_relative = false;
+        cur_x += layout_w(pi) + gap;
+    }
+}
+
+void aiml_engine_layout_vflow(void* data_ptr, int32_t count, float x, float y, float gap) {
+    void** entries = static_cast<void**>(data_ptr);
+    float cur_y = y;
+    for (int32_t i = 0; i < count; ++i) {
+        AimlPrefabInstance* pi = layout_item(entries, count, i);
+        if (!pi) continue;
+        pi->x = x;
+        pi->y = cur_y;
+        pi->is_relative = false;
+        cur_y += layout_h(pi) + gap;
+    }
+}
+
+void aiml_engine_layout_stack(void* data_ptr, int32_t count,
+                              float x, float y, float dx, float dy, int32_t z_step) {
+    void** entries = static_cast<void**>(data_ptr);
+    for (int32_t i = 0; i < count; ++i) {
+        AimlPrefabInstance* pi = layout_item(entries, count, i);
+        if (!pi) continue;
+        pi->x = x + dx * static_cast<float>(i);
+        pi->y = y + dy * static_cast<float>(i);
+        pi->is_relative = false;
+        pi->z_order += z_step * i;
+    }
+}
 float aiml_prefab_get_width(void* p) {
     auto* inst = (AimlPrefabInstance*)p;
     return inst ? inst->def->width * inst->scale_x : 0;
@@ -1448,8 +3257,27 @@ static PrefabChild* find_child(void* p, const char* child_name) {
     auto* inst = (AimlPrefabInstance*)p;
     if (!inst || !child_name) return nullptr;
     auto it = inst->child_index.find(child_name);
-    if (it == inst->child_index.end()) return nullptr;
-    return &inst->children[it->second];
+    if (it != inst->child_index.end()) return &inst->children[it->second];
+    // Unknown child name — von ALLEN scene-Methoden (set_child_visible/set_text/
+    // dropdown_value/…) zentral geprüft.  Fast immer ein Tippfehler / veralteter /
+    // falscher Widget-Name.  Früher no-op → Bugs blieben lange verborgen (z.B.
+    // dropdown "pa0" statt "pa_slot0" → Passive weder gerendert noch gespeichert).
+    // Jetzt LAUT: klare Fatal-Meldung mit Prefab-Name + allen gültigen Children.
+    // Escape-Hatch: AIML_PREFAB_LENIENT=1 stuft auf Warnung herab (return null).
+    std::string avail;
+    for (auto& kv : inst->child_index) { if (!avail.empty()) avail += ", "; avail += kv.first; }
+    const char* pf = (inst->def && !inst->def->name.empty()) ? inst->def->name.c_str() : "<unknown>";
+    static const bool lenient = (getenv("AIML_PREFAB_LENIENT") != nullptr);
+    char msg[512];
+    snprintf(msg, sizeof(msg),
+             "prefab widget child '%s' not found in prefab '%s' — gültige Children: %s",
+             child_name, pf, avail.c_str());
+    fprintf(stderr, "[prefab-%s] %s\n", lenient ? "WARN" : "EXCEPTION", msg);
+    if (lenient) return nullptr;
+    // Echte Exception: propagiert durch die AIML-C++-EH (Personality-Funktionen);
+    // per AIML try/catch (catch-all) fangbar, sonst → terminate mit klarer
+    // "what()"-Meldung + Crash-Handler-Backtrace zur Call-Site.
+    throw std::runtime_error(msg);
 }
 
 void aiml_prefab_set_text(void* inst, const char* child_name, const char* text) {
@@ -1464,6 +3292,148 @@ void aiml_prefab_set_texture(void* inst, const char* child_name, void* tex) {
     ch->texture = id;
 }
 
+int32_t aiml_prefab_dropdown_index(void* inst, const char* child_name) {
+    PrefabChild* ch = find_child(inst, child_name);
+    return ch ? ch->selected_index : 0;
+}
+
+int32_t aiml_prefab_dropdown_enum_value(void* inst, const char* child_name) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (!ch || ch->enum_type.empty()) return -1;
+    return aiml_prefab_enum_value_at(ch->enum_type.c_str(), ch->selected_index);
+}
+
+/* ── Widget↔model binding (spec 44.6 §5d) ─────────────────────────────────
+ * A prefab declaring `binds_model: T` attaches one T instance via bind_model;
+ * each child the compiler resolved carries (bind_offset, bind_tag).  The two
+ * sync calls move each bound field to/from its widget's existing state. */
+
+/* enum member value → option index (reverse of aiml_prefab_enum_value_at). */
+static int enum_index_of_value(const std::string& enum_type, int value) {
+    auto it = g_enum_values.find(enum_type);
+    if (it == g_enum_values.end()) return -1;
+    const std::vector<int>& vals = it->second;
+    for (size_t i = 0; i < vals.size(); ++i)
+        if (vals[i] == value) return (int)i;
+    return -1;
+}
+
+void aiml_prefab_bind_model(void* inst_ptr, void* model_ptr) {
+    auto* inst = static_cast<AimlPrefabInstance*>(inst_ptr);
+    if (inst) inst->bound_model = model_ptr;
+}
+
+void aiml_prefab_sync_from_model(void* inst_ptr) {
+    auto* inst = static_cast<AimlPrefabInstance*>(inst_ptr);
+    if (!inst || !inst->bound_model) return;
+    uint8_t* base = static_cast<uint8_t*>(inst->bound_model);
+    for (auto& ch : inst->children) {
+        if (ch.bind_tag < 0 || ch.bind_offset < 0) continue;
+        uint8_t* fld = base + ch.bind_offset;
+        if (ch.bind_tag == 0) {            /* i32 → slider/bar */
+            float v = (float)(*reinterpret_cast<int32_t*>(fld));
+            if (v < ch.slider_min) v = ch.slider_min;
+            if (v > ch.bar_max)    v = ch.bar_max;
+            ch.bar_value = v;
+        } else if (ch.bind_tag == 1) {     /* f32 → slider/bar */
+            float v = *reinterpret_cast<float*>(fld);
+            if (v < ch.slider_min) v = ch.slider_min;
+            if (v > ch.bar_max)    v = ch.bar_max;
+            ch.bar_value = v;
+        } else if (ch.bind_tag == 3) {     /* enum → dropdown */
+            int idx = enum_index_of_value(ch.enum_type, *reinterpret_cast<int32_t*>(fld));
+            ch.selected_index = idx >= 0 ? idx : 0;
+        }
+        /* bind_tag == 2 (string): Phase 2 */
+    }
+}
+
+void aiml_prefab_sync_to_model(void* inst_ptr) {
+    auto* inst = static_cast<AimlPrefabInstance*>(inst_ptr);
+    if (!inst || !inst->bound_model) return;
+    uint8_t* base = static_cast<uint8_t*>(inst->bound_model);
+    for (auto& ch : inst->children) {
+        if (ch.bind_tag < 0 || ch.bind_offset < 0) continue;
+        uint8_t* fld = base + ch.bind_offset;
+        if (ch.bind_tag == 0) {            /* slider/bar → i32 (round to nearest) */
+            float v = ch.bar_value;
+            *reinterpret_cast<int32_t*>(fld) = (int32_t)(v + (v >= 0.0f ? 0.5f : -0.5f));
+        } else if (ch.bind_tag == 1) {     /* slider/bar → f32 */
+            *reinterpret_cast<float*>(fld) = ch.bar_value;
+        } else if (ch.bind_tag == 3) {     /* dropdown → enum */
+            int ev = aiml_prefab_enum_value_at(ch.enum_type.c_str(), ch.selected_index);
+            *reinterpret_cast<int32_t*>(fld) = ev >= 0 ? ev : 0;
+        }
+        /* bind_tag == 2 (string): Phase 2 */
+    }
+}
+
+void aiml_prefab_set_dropdown_options(void* inst, const char* child_name, const char* options) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (!ch) return;
+    std::string prev = ch->options;
+    ch->options = options ? options : "";
+    /* Options changed → reset selected_index + scroll_offset */
+    if (prev != ch->options) {
+        ch->selected_index = 0;
+        ch->scroll_offset  = 0;
+    }
+}
+
+void aiml_prefab_set_dropdown_index(void* inst, const char* child_name, int32_t idx) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (!ch) return;
+    int n_opts = ch->options.empty() ? 0 : 1;
+    for (char c : ch->options) if (c == '|') n_opts++;
+    if (n_opts <= 0) { ch->selected_index = 0; return; }
+    if (idx < 0) idx = 0;
+    if (idx >= n_opts) idx = n_opts - 1;
+    ch->selected_index = idx;
+}
+
+void aiml_prefab_set_dropdown_selected(void* inst, const char* child_name, const char* value) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (!ch || ch->options.empty() || !value) return;
+    std::string target = value;
+    int idx = 0;
+    size_t start = 0;
+    for (size_t p = 0; p <= ch->options.size(); ++p) {
+        if (p == ch->options.size() || ch->options[p] == '|') {
+            if (ch->options.compare(start, p - start, target) == 0) {
+                ch->selected_index = idx;
+                return;
+            }
+            idx++;
+            start = p + 1;
+        }
+    }
+    /* Not found — reset to 0 so a stale selection doesn't leak across
+     * page-switches.  Previously we kept the current index, which meant
+     * "load stored value 'X'" was a no-op when 'X' wasn't in the current
+     * options — the widget kept showing whatever was there before. */
+    ch->selected_index = 0;
+}
+
+const char* aiml_prefab_dropdown_value(void* inst, const char* child_name) {
+    /* Returns a strdup'd copy so consumers can safely store it in Model
+     * fields — see text_value comment.  Caller owns and frees. */
+    PrefabChild* ch = find_child(inst, child_name);
+    if (!ch || ch->options.empty()) return strdup("");
+    int idx = 0;
+    size_t start = 0;
+    for (size_t p = 0; p <= ch->options.size(); ++p) {
+        if (p == ch->options.size() || ch->options[p] == '|') {
+            if (idx == ch->selected_index) {
+                std::string cur(ch->options, start, p - start);
+                return strdup(cur.c_str());
+            }
+            idx++;
+            start = p + 1;
+        }
+    }
+    return strdup("");
+}
+
 void aiml_prefab_set_color(void* inst, const char* child_name, int32_t color) {
     PrefabChild* ch = find_child(inst, child_name);
     if (ch) ch->color = (uint32_t)color;
@@ -1472,6 +3442,72 @@ void aiml_prefab_set_color(void* inst, const char* child_name, int32_t color) {
 void aiml_prefab_set_child_visible(void* inst, const char* child_name, int32_t v) {
     PrefabChild* ch = find_child(inst, child_name);
     if (ch) ch->visible = (v != 0);
+}
+
+void aiml_prefab_set_child_font_size(void* inst, const char* child_name, float size_px) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (ch) ch->font_size = size_px;
+}
+
+/* Toggle compacting layout on a container child at runtime.  See the
+ * `compact` doc-comment on PrefabChildDef / container_sync.  Same effect as
+ * `compact: true` in the prefab definition, but settable per instance. */
+void aiml_prefab_container_set_compact(void* inst, const char* child_name, int32_t v) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (ch) ch->compact = (v != 0);
+}
+
+/* Reach into a container's spawned rows.  For a container widget bound via
+ * bind_list to a list<Model> (or list<i32>), the runtime spawns one row per
+ * element; these helpers let AIML code iterate them and call the standard
+ * set_text / set_texture / set_dropdown_index / … on individual rows. */
+int32_t aiml_prefab_container_row_count(void* inst, const char* child_name) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (!ch) return 0;
+    return (int32_t)ch->spawned.size();
+}
+void* aiml_prefab_container_row(void* inst, const char* child_name, int32_t idx) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (!ch) return nullptr;
+    if (idx < 0 || idx >= (int32_t)ch->spawned.size()) return nullptr;
+    return (void*)ch->spawned[idx];
+}
+
+/* Bar/gauge: update the current value (fill = value/max of width). */
+void aiml_prefab_set_bar_value(void* inst, const char* child_name, float value) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (ch) ch->bar_value = value;
+}
+void aiml_prefab_set_bar_max(void* inst, const char* child_name, float max_value) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (ch) ch->bar_max = max_value;
+}
+void aiml_prefab_set_bar_fill(void* inst, const char* child_name, int32_t color) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (ch) ch->fill_color = (uint32_t)color;
+}
+
+/* Slider: read/write current value and bounds. Same value/max as bar;
+ * additionally a slider_min lower bound (bar always assumes min=0).
+ * Setters clamp the resulting value into [min, max]. */
+float aiml_prefab_get_slider_value(void* inst, const char* child_name) {
+    PrefabChild* ch = find_child(inst, child_name);
+    return ch ? ch->bar_value : 0.0f;
+}
+void aiml_prefab_set_slider_value(void* inst, const char* child_name, float value) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (!ch) return;
+    if (value < ch->slider_min) value = ch->slider_min;
+    if (value > ch->bar_max)    value = ch->bar_max;
+    ch->bar_value = value;
+}
+void aiml_prefab_set_slider_min(void* inst, const char* child_name, float min_value) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (ch) ch->slider_min = min_value;
+}
+void aiml_prefab_set_slider_max(void* inst, const char* child_name, float max_value) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (ch) ch->bar_max = max_value;
 }
 
 void* aiml_prefab_child(void* p, const char* child_name) {
@@ -1485,6 +3521,851 @@ void* aiml_prefab_child(void* p, const char* child_name) {
     /* For now, return parent instance — child access is via set_text/set_color etc.
      * A full child-as-instance would need a wrapper struct. */
     return p;
+}
+
+/* Phase 6f: register a cascade type from its compile-time JSON blob.
+ * See prefab_runtime.h for the expected shape. */
+void aiml_cascade_persist_row(void* outer_ptr, int32_t bound_index,
+                              int32_t tag,
+                              const int32_t* values, int32_t n_values)
+{
+    if (!outer_ptr || bound_index < 0) return;
+    if (n_values < 0) n_values = 0;
+    if (n_values > 0 && !values) return;
+    struct ListHdr { int32_t size; int32_t capacity; void* data; };
+    ListHdr* outer = (ListHdr*)outer_ptr;
+    if (bound_index >= outer->size) return;
+    ListHdr* inner = (ListHdr*)((char*)outer->data + (size_t)bound_index * sizeof(ListHdr));
+    /* Grow the row buffer to fit tag + N payload slots. */
+    int32_t need = 1 + n_values;
+    if (need > inner->capacity) {
+        int32_t newcap = need < 4 ? 4 : need;
+        void* nd = realloc(inner->data, (size_t)newcap * sizeof(int32_t));
+        if (!nd) return;
+        inner->data     = nd;
+        inner->capacity = newcap;
+    }
+    int32_t* wire = (int32_t*)inner->data;
+    /* Zero any newly-exposed slots between old size and new size. */
+    for (int32_t i = inner->size; i < need; ++i) wire[i] = 0;
+    inner->size = need;
+    /* Stamp tag + payload. */
+    wire[0] = tag;
+    for (int32_t f = 0; f < n_values; ++f) wire[1 + f] = values[f];
+}
+
+void aiml_prefab_register_cascade(const char* name, const char* nodes_json,
+                                  const char* opcode_enum) {
+    if (!name || !nodes_json) return;
+    CascadeMeta m;
+    m.name = name;
+    m.opcode_enum = opcode_enum ? opcode_enum : "";
+
+    const char* p = nodes_json;
+    auto skip_ws = [&]() { while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++; };
+    auto parse_str = [&]() -> std::string {
+        skip_ws();
+        if (*p != '"') return "";
+        p++;
+        std::string s;
+        while (*p && *p != '"') {
+            if (*p == '\\' && p[1]) {
+                char c = p[1];
+                if      (c == 'n')  s += '\n';
+                else if (c == 't')  s += '\t';
+                else if (c == 'r')  s += '\r';
+                else if (c == '"')  s += '"';
+                else if (c == '\\') s += '\\';
+                else                s += c;
+                p += 2;
+            } else s += *p++;
+        }
+        if (*p == '"') p++;
+        return s;
+    };
+    auto parse_int = [&]() -> int {
+        skip_ws();
+        int sign = 1;
+        if (*p == '-') { sign = -1; p++; }
+        int v = 0; while (*p >= '0' && *p <= '9') { v = v*10 + (*p - '0'); p++; }
+        return sign * v;
+    };
+
+    skip_ws();
+    if (*p != '[') return;
+    p++;
+    while (*p) {
+        skip_ws();
+        if (*p == ']') { p++; break; }
+        if (*p == ',') { p++; continue; }
+        if (*p != '{') break;
+        p++; /* node object */
+        CascadeNodeMeta n;
+        while (*p && *p != '}') {
+            skip_ws();
+            if (*p == ',') { p++; continue; }
+            std::string key = parse_str();
+            skip_ws();
+            if (*p == ':') { p++; skip_ws(); }
+            if      (key == "name")  n.name  = parse_str();
+            else if (key == "label") n.label = parse_str();
+            else if (key == "id")    n.id    = parse_int();
+            else if (key == "fields") {
+                if (*p == '[') {
+                    p++;
+                    while (*p && *p != ']') {
+                        skip_ws();
+                        if (*p == ',') { p++; continue; }
+                        if (*p != '{') break;
+                        p++;
+                        CascadeFieldMeta f;
+                        while (*p && *p != '}') {
+                            skip_ws();
+                            if (*p == ',') { p++; continue; }
+                            std::string k2 = parse_str();
+                            skip_ws();
+                            if (*p == ':') { p++; skip_ws(); }
+                            if      (k2 == "name")    f.name          = parse_str();
+                            else if (k2 == "type")    f.type          = parse_str();
+                            else if (k2 == "default") f.default_value = parse_str();
+                            else                      parse_str();
+                        }
+                        if (*p == '}') p++;
+                        n.fields.push_back(std::move(f));
+                    }
+                    if (*p == ']') p++;
+                }
+            } else {
+                /* skip unknown value (string or number) */
+                skip_ws();
+                if (*p == '"') parse_str();
+                else if (*p == '[' || *p == '{') {
+                    /* skip balanced */
+                    int depth = 0; char open = *p, close = (open == '[') ? ']' : '}';
+                    do {
+                        if (*p == open)  depth++;
+                        if (*p == close) depth--;
+                        p++;
+                    } while (*p && depth > 0);
+                } else parse_int();
+            }
+        }
+        if (*p == '}') p++;
+        if (n.label.empty()) n.label = derive_label_from_name(n.name);
+        m.nodes.push_back(std::move(n));
+    }
+
+    /* Build derived caches */
+    for (size_t i = 0; i < m.nodes.size(); ++i) {
+        if (i) m.options_cache += "|";
+        m.options_cache += m.nodes[i].label;
+        if (m.nodes[i].id >= 0) m.id_to_opt_idx[m.nodes[i].id] = (int)i;
+    }
+    g_cascades[m.name] = std::move(m);
+}
+
+void aiml_prefab_register_enum(const char* name, const char* labels_pipe,
+                               const char* values_pipe) {
+    if (!name || !labels_pipe) return;
+    g_enums[name] = labels_pipe;
+    /* Parse the parallel "0|1|2" values into a vector so widgets bound to this
+     * enum can map selected-index → true member value.  Missing/short
+     * values_pipe leaves the vector empty (callers fall back gracefully). */
+    std::vector<int>& vals = g_enum_values[name];
+    vals.clear();
+    if (values_pipe && *values_pipe) {
+        const char* p = values_pipe;
+        while (*p) {
+            char* end = nullptr;
+            long v = strtol(p, &end, 10);
+            if (end == p) break;          /* no digits — stop */
+            vals.push_back((int)v);
+            p = end;
+            if (*p == '|') ++p;           /* skip separator */
+        }
+    }
+}
+const char* aiml_prefab_enum_labels(const char* name) {
+    static const char kEmpty[] = "";
+    if (!name) return kEmpty;
+    auto it = g_enums.find(name);
+    if (it == g_enums.end()) return kEmpty;
+    return it->second.c_str();
+}
+int32_t aiml_prefab_enum_value_at(const char* name, int32_t opt_idx) {
+    if (!name || opt_idx < 0) return -1;
+    auto it = g_enum_values.find(name);
+    if (it == g_enum_values.end()) return -1;
+    const std::vector<int>& vals = it->second;
+    if (opt_idx >= (int32_t)vals.size()) return -1;
+    return (int32_t)vals[opt_idx];
+}
+
+const char* aiml_prefab_cascade_options(const char* cascade_name) {
+    static const char kEmpty[] = "";
+    if (!cascade_name) return kEmpty;
+    auto it = g_cascades.find(cascade_name);
+    if (it == g_cascades.end()) return kEmpty;
+    return it->second.options_cache.c_str();
+}
+int32_t aiml_prefab_cascade_node_id_at(const char* cascade_name, int32_t opt_idx) {
+    if (!cascade_name) return -1;
+    auto it = g_cascades.find(cascade_name);
+    if (it == g_cascades.end()) return -1;
+    if (opt_idx < 0 || opt_idx >= (int)it->second.nodes.size()) return -1;
+    return it->second.nodes[opt_idx].id;
+}
+int32_t aiml_prefab_cascade_opt_idx_for(const char* cascade_name, int32_t node_id) {
+    if (!cascade_name) return -1;
+    auto it = g_cascades.find(cascade_name);
+    if (it == g_cascades.end()) return -1;
+    auto it2 = it->second.id_to_opt_idx.find(node_id);
+    if (it2 == it->second.id_to_opt_idx.end()) return -1;
+    return it2->second;
+}
+int32_t aiml_prefab_cascade_field_count(const char* cascade_name, int32_t node_id) {
+    if (!cascade_name) return -1;
+    auto it = g_cascades.find(cascade_name);
+    if (it == g_cascades.end()) return -1;
+    auto it2 = it->second.id_to_opt_idx.find(node_id);
+    if (it2 == it->second.id_to_opt_idx.end()) return -1;
+    return (int32_t)it->second.nodes[it2->second].fields.size();
+}
+const char* aiml_prefab_cascade_field_type(const char* cascade_name, int32_t node_id, int32_t field_idx) {
+    static const char kEmpty[] = "";
+    if (!cascade_name) return kEmpty;
+    auto it = g_cascades.find(cascade_name);
+    if (it == g_cascades.end()) return kEmpty;
+    auto it2 = it->second.id_to_opt_idx.find(node_id);
+    if (it2 == it->second.id_to_opt_idx.end()) return kEmpty;
+    const auto& n = it->second.nodes[it2->second];
+    if (field_idx < 0 || field_idx >= (int)n.fields.size()) return kEmpty;
+    return n.fields[field_idx].type.c_str();
+}
+const char* aiml_prefab_cascade_field_label(const char* cascade_name, int32_t node_id, int32_t field_idx) {
+    static const char kEmpty[] = "";
+    if (!cascade_name) return kEmpty;
+    auto it = g_cascades.find(cascade_name);
+    if (it == g_cascades.end()) return kEmpty;
+    auto it2 = it->second.id_to_opt_idx.find(node_id);
+    if (it2 == it->second.id_to_opt_idx.end()) return kEmpty;
+    const auto& n = it->second.nodes[it2->second];
+    if (field_idx < 0 || field_idx >= (int)n.fields.size()) return kEmpty;
+    const auto& f = n.fields[field_idx];
+    /* Prefer explicit name, else derive from type. */
+    return f.name.empty() ? f.type.c_str() : f.name.c_str();
+}
+
+/* ── Cascade validation (spec/44_7_cascade_validate.md) ────────────────────
+ * Verify that a `list<i32>` row is a well-formed instance of a cascade: the
+ * first int is a node id, followed by that node's typed payload fields.  A
+ * field type may be another cascade (recurse), an enum (value must be a valid
+ * member) or a numeric alias/i32 (any value).  Returns the next index on
+ * success; on failure sets *bad to the offending index and returns -1, filling
+ * *reason when non-null.  Uses g_cascades + g_enum_values (both populated at
+ * program start for every declared cascade/enum → works headless). */
+static int aiml_casc_validate_from(const std::string& casc,
+                                   const int32_t* row, int len, int pos,
+                                   int* bad, std::string* reason) {
+    auto it = g_cascades.find(casc);
+    if (it == g_cascades.end()) {
+        *bad = pos; if (reason) *reason = "unknown cascade '" + casc + "'"; return -1;
+    }
+    if (pos >= len) {
+        *bad = pos;
+        if (reason) *reason = "pos " + std::to_string(pos) + ": expected a node id of '" + casc + "', row truncated";
+        return -1;
+    }
+    int32_t node_id = row[pos];
+    auto idIt = it->second.id_to_opt_idx.find(node_id);
+    if (idIt == it->second.id_to_opt_idx.end()) {
+        *bad = pos;
+        if (reason) *reason = "pos " + std::to_string(pos) + ": " + std::to_string(node_id) +
+                              " is not a node id of cascade '" + casc + "'";
+        return -1;
+    }
+    const CascadeNodeMeta& node = it->second.nodes[idIt->second];
+    pos++;  /* consumed the node id */
+    for (const auto& fld : node.fields) {
+        const std::string& ft = fld.type;
+        std::string fname = fld.name.empty() ? ft : fld.name;
+        if (g_cascades.count(ft)) {
+            /* nested cascade → recurse in place */
+            pos = aiml_casc_validate_from(ft, row, len, pos, bad, reason);
+            if (pos < 0) return -1;
+        } else if (g_enum_values.count(ft)) {
+            if (pos >= len) {
+                *bad = pos;
+                if (reason) *reason = "pos " + std::to_string(pos) + ": node '" + node.name +
+                                      "' field '" + fname + "' (" + ft + ") missing — row truncated";
+                return -1;
+            }
+            int32_t v = row[pos];
+            const std::vector<int>& vals = g_enum_values[ft];
+            if (std::find(vals.begin(), vals.end(), (int)v) == vals.end()) {
+                *bad = pos;
+                if (reason) *reason = "pos " + std::to_string(pos) + ": node '" + node.name +
+                                      "' field '" + fname + "' — value " + std::to_string(v) +
+                                      " is not a valid " + ft;
+                return -1;
+            }
+            pos++;
+        } else {
+            /* numeric alias / i32 → any value, but it must be present */
+            if (pos >= len) {
+                *bad = pos;
+                if (reason) *reason = "pos " + std::to_string(pos) + ": node '" + node.name +
+                                      "' field '" + fname + "' (" + ft + ") missing — row truncated";
+                return -1;
+            }
+            pos++;
+        }
+    }
+    return pos;
+}
+
+int32_t aiml_cascade_validate(const char* cascade_name, const void* row_data, int32_t len) {
+    if (!cascade_name) return -2;
+    std::string casc(cascade_name);
+    if (!g_cascades.count(casc)) return -2;
+    const int32_t* row = static_cast<const int32_t*>(row_data);
+    int bad = -1;
+    int end = aiml_casc_validate_from(casc, row, (int)len, 0, &bad, nullptr);
+    if (end < 0) return bad;         /* structural error at `bad` */
+    if (end != (int)len) return end; /* trailing garbage after a complete node */
+    return -1;                       /* valid */
+}
+
+const char* aiml_cascade_explain(const char* cascade_name, const void* row_data, int32_t len) {
+    static thread_local std::string buf;
+    buf.clear();
+    if (!cascade_name) { buf = "null cascade name"; return buf.c_str(); }
+    std::string casc(cascade_name);
+    if (!g_cascades.count(casc)) { buf = "unknown cascade '" + casc + "'"; return buf.c_str(); }
+    const int32_t* row = static_cast<const int32_t*>(row_data);
+    int bad = -1;
+    int end = aiml_casc_validate_from(casc, row, (int)len, 0, &bad, &buf);
+    if (end < 0) return buf.c_str();
+    if (end != (int)len) {
+        buf = "pos " + std::to_string(end) + ": trailing element(s) after a complete '" + casc + "' node";
+        return buf.c_str();
+    }
+    buf.clear();  /* valid → empty reason */
+    return buf.c_str();
+}
+
+/* ── Cascade field lookup (spec/44_7) ──────────────────────────────────────
+ * Walk the node selected by row[pos], consuming its fields exactly like
+ * validate (nested cascade → recurse; enum/alias → one slot), and collect the
+ * row index of EVERY field whose declared type == `field_type`.  A type may
+ * occur several times in one node (e.g. revive: [47, OwnerRef, OwnerRef, …]),
+ * so all positions are returned, in declaration/row order.  Returns the next
+ * index (advancing) or -1 if the row can't be walked (truncated / bad node id
+ * / unknown nested cascade); matches collected so far are kept regardless. */
+static int aiml_casc_collect_field_from(const std::string& casc,
+                                        const int32_t* row, int len, int pos,
+                                        const std::string& field_type,
+                                        std::vector<int>& out) {
+    auto it = g_cascades.find(casc);
+    if (it == g_cascades.end()) return -1;
+    if (pos >= len) return -1;
+    int32_t node_id = row[pos];
+    auto idIt = it->second.id_to_opt_idx.find(node_id);
+    if (idIt == it->second.id_to_opt_idx.end()) return -1;
+    const CascadeNodeMeta& node = it->second.nodes[idIt->second];
+    pos++;  /* consumed the node id */
+    for (const auto& fld : node.fields) {
+        const std::string& ft = fld.type;
+        if (ft == field_type) out.push_back(pos);
+        if (g_cascades.count(ft)) {
+            pos = aiml_casc_collect_field_from(ft, row, len, pos, field_type, out);
+            if (pos < 0) return -1;
+        } else {
+            if (pos >= len) return -1;   /* payload slot missing — row truncated */
+            pos++;
+        }
+    }
+    return pos;
+}
+
+/* i32-list layout mirrors GenericList: {i32 size, i32 capacity, int32_t* data}.
+ * (list<i32> stores elements inline as a contiguous int32 array, so `data`
+ * reads as int32_t* — same buffer validate walks.) */
+struct AimlI32ListRaw { int32_t size; int32_t capacity; int32_t* data; };
+static void aiml_i32list_push(AimlI32ListRaw* l, int32_t v) {
+    if (l->size >= l->capacity) {
+        int newCap = l->capacity > 0 ? l->capacity * 2 : 4;
+        int32_t* nd = static_cast<int32_t*>(std::realloc(l->data, (size_t)newCap * sizeof(int32_t)));
+        if (!nd) return;
+        l->data = nd; l->capacity = newCap;
+    }
+    l->data[l->size++] = v;
+}
+
+/* Fill `out_list` (a list<i32>) with the row indices of every `field_type`
+ * field in the node `row` selects.  Returns the count (>=0), or -2 unknown
+ * cascade.  An empty result means the field does not occur in that node. */
+int32_t aiml_cascade_field_indices(const char* cascade_name, const void* row_data,
+                                   int32_t len, const char* field_type, void* out_list) {
+    if (!cascade_name || !field_type || !out_list) return -2;
+    std::string casc(cascade_name);
+    if (!g_cascades.count(casc)) return -2;
+    const int32_t* row = static_cast<const int32_t*>(row_data);
+    std::vector<int> found;
+    aiml_casc_collect_field_from(casc, row, (int)len, 0, std::string(field_type), found);
+    AimlI32ListRaw* out = static_cast<AimlI32ListRaw*>(out_list);
+    for (int p : found) aiml_i32list_push(out, p);
+    return (int32_t)found.size();
+}
+
+/* ── Cascade full enumeration (spec 44_7 — smoke-test corpus) ─────────────────
+ * Enumerate EVERY possible row of a cascade: opcodes × enum-members × nested
+ * sub-opcodes.  A value/alias field contributes exactly ONE representative
+ * (its `default`, else 1) — numbers do not branch text/execution and would be
+ * unbounded.  Lazy random access via mixed-radix ranking (no materialisation):
+ *   aiml_cascade_row_count(name, start_op, end_op)         -> i64 total rows
+ *   aiml_cascade_row_at   (name, k, start_op, end_op, out) -> 0 ok / -1 k-range
+ *                                                             / -2 unknown
+ * start_op/end_op bound which TOP-LEVEL opcode ids participate (kCascOpMin /
+ * kCascOpMax = unbounded); nested cascades always enumerate all their nodes. */
+static const int64_t kCascI64Max = 0x7fffffffffffffffLL;
+static const int32_t kCascOpMin  = (-2147483647 - 1);
+static const int32_t kCascOpMax  = 2147483647;
+
+static int64_t casc_sat_mul(int64_t a, int64_t b) {
+    if (a == 0 || b == 0) return 0;
+    if (a > kCascI64Max / b) return kCascI64Max;   /* saturate, don't wrap */
+    return a * b;
+}
+static int64_t casc_sat_add(int64_t a, int64_t b) {
+    if (a > kCascI64Max - b) return kCascI64Max;
+    return a + b;
+}
+
+/* Number of representative values a field of `type` yields:
+ *   enum    -> member count ; cascade -> Σ over nodes of Π field-domains ;
+ *   else (value/alias/i32) -> 1.  Memoised; `active` guards cascade cycles. */
+static int64_t casc_type_domain(const std::string& type,
+                                std::unordered_map<std::string,int64_t>& memo,
+                                std::set<std::string>& active) {
+    auto e = g_enum_values.find(type);
+    if (e != g_enum_values.end() && !e->second.empty())
+        return (int64_t)e->second.size();
+    auto c = g_cascades.find(type);
+    if (c != g_cascades.end()) {
+        if (active.count(type)) return 1;                 /* cycle -> 1 repr */
+        auto m = memo.find(type);
+        if (m != memo.end()) return m->second;
+        active.insert(type);
+        int64_t sum = 0;
+        for (const auto& n : c->second.nodes) {
+            int64_t prod = 1;
+            for (const auto& f : n.fields)
+                prod = casc_sat_mul(prod, casc_type_domain(f.type, memo, active));
+            sum = casc_sat_add(sum, prod);
+        }
+        active.erase(type);
+        memo[type] = sum;
+        return sum;
+    }
+    return 1;
+}
+
+static int32_t casc_field_repr(const CascadeFieldMeta& f) {
+    if (!f.default_value.empty()) {
+        char* end = nullptr;
+        long v = strtol(f.default_value.c_str(), &end, 10);
+        if (end != f.default_value.c_str()) return (int32_t)v;
+    }
+    return 1;
+}
+
+static void casc_decode_cascade(const std::string& name, int64_t k,
+                                int32_t lo, int32_t hi,
+                                std::unordered_map<std::string,int64_t>& memo,
+                                AimlI32ListRaw* out);
+
+/* Decode the k-th value of one field into `out` (recurses into cascades). */
+static void casc_decode_field(const CascadeFieldMeta& f, int64_t k,
+                              std::unordered_map<std::string,int64_t>& memo,
+                              AimlI32ListRaw* out) {
+    auto e = g_enum_values.find(f.type);
+    if (e != g_enum_values.end() && !e->second.empty()) {
+        int64_t idx = k % (int64_t)e->second.size();
+        aiml_i32list_push(out, e->second[(size_t)idx]);
+        return;
+    }
+    if (g_cascades.count(f.type)) {
+        casc_decode_cascade(f.type, k, kCascOpMin, kCascOpMax, memo, out);
+        return;
+    }
+    aiml_i32list_push(out, casc_field_repr(f));   /* value/alias representative */
+}
+
+/* Emit the k-th node-row of cascade `name`.  [lo,hi] filters top-level opcode
+ * ids (nested calls pass the unbounded range). */
+static void casc_decode_cascade(const std::string& name, int64_t k,
+                                int32_t lo, int32_t hi,
+                                std::unordered_map<std::string,int64_t>& memo,
+                                AimlI32ListRaw* out) {
+    auto c = g_cascades.find(name);
+    if (c == g_cascades.end()) return;
+    for (const auto& n : c->second.nodes) {
+        if (n.id < lo || n.id > hi) continue;
+        std::set<std::string> active;
+        int64_t nodeSize = 1;
+        for (const auto& f : n.fields) {
+            active.clear();
+            nodeSize = casc_sat_mul(nodeSize, casc_type_domain(f.type, memo, active));
+        }
+        if (k >= nodeSize) { k -= nodeSize; continue; }
+        aiml_i32list_push(out, n.id);                    /* opcode */
+        for (const auto& f : n.fields) {                 /* mixed-radix fields */
+            active.clear();
+            int64_t d = casc_type_domain(f.type, memo, active);
+            int64_t sub = (d > 0) ? (k % d) : 0;
+            k          = (d > 0) ? (k / d) : k;
+            casc_decode_field(f, sub, memo, out);
+        }
+        return;
+    }
+}
+
+extern "C" int64_t aiml_cascade_row_count(const char* cascade_name,
+                                          int32_t start_op, int32_t end_op) {
+    if (!cascade_name) return 0;
+    auto c = g_cascades.find(cascade_name);
+    if (c == g_cascades.end()) return 0;
+    std::unordered_map<std::string,int64_t> memo;
+    int64_t sum = 0;
+    for (const auto& n : c->second.nodes) {
+        if (n.id < start_op || n.id > end_op) continue;
+        std::set<std::string> active;
+        int64_t prod = 1;
+        for (const auto& f : n.fields) {
+            active.clear();
+            prod = casc_sat_mul(prod, casc_type_domain(f.type, memo, active));
+        }
+        sum = casc_sat_add(sum, prod);
+    }
+    return sum;
+}
+
+extern "C" int32_t aiml_cascade_row_at(const char* cascade_name, int64_t k,
+                                       int32_t start_op, int32_t end_op,
+                                       void* out_list) {
+    if (!cascade_name || !out_list) return -2;
+    if (!g_cascades.count(cascade_name)) return -2;
+    int64_t total = aiml_cascade_row_count(cascade_name, start_op, end_op);
+    if (k < 0 || k >= total) return -1;
+    std::unordered_map<std::string,int64_t> memo;
+    casc_decode_cascade(cascade_name, k, start_op, end_op,
+                        memo, static_cast<AimlI32ListRaw*>(out_list));
+    return 0;
+}
+
+/* aiml_cascade_describe(name) -> string: Schema-Beschreibung eines Cascade —
+ * pro Node (Opcode) die Feld-Struktur als `[werte]TypeName`.  Für enum-Felder
+ * die Member-Werte, für nested-Cascade-Felder die Sub-Node-IDs, für value/alias
+ * leer.  Eine Zeile pro Opcode.  Rein informativ (Review/Doku der möglichen
+ * Datentyp-Kombinationen). */
+static std::string casc_range_of(const std::string& type) {
+    std::string s;
+    auto e = g_enum_values.find(type);
+    if (e != g_enum_values.end() && !e->second.empty()) {
+        for (size_t i = 0; i < e->second.size(); ++i) { if (i) s += ","; s += std::to_string(e->second[i]); }
+        return s;
+    }
+    auto c = g_cascades.find(type);
+    if (c != g_cascades.end()) {
+        bool first = true;
+        for (const auto& n : c->second.nodes) { if (!first) s += ","; s += std::to_string(n.id); first = false; }
+        return s;
+    }
+    return "";   /* value/alias/i32 → kein Enum-Bereich */
+}
+/* String-Listen-ABI (GenericList: {i32 size, i32 cap, void** data} mit
+ * refcounted char*-Elementen; siehe string_runtime aiml_str_split_fill). */
+extern "C" char* aiml_str_dup(const char* s);
+struct AimlStrListRaw { int32_t size; int32_t capacity; void** data; };
+static void casc_strlist_push(AimlStrListRaw* l, const std::string& s) {
+    if (l->size >= l->capacity) {
+        int nc = l->capacity > 0 ? l->capacity * 2 : 8;
+        void** nd = static_cast<void**>(std::realloc(l->data, (size_t)nc * sizeof(void*)));
+        if (!nd) return;
+        l->data = nd; l->capacity = nc;
+    }
+    l->data[l->size++] = aiml_str_dup(s.c_str());
+}
+
+/* aiml_cascade_describe(cascade, opcodes, opc_len, out) → list<string>: die
+ * möglichen Datentyp-Kombinationen der angegebenen Opcodes (opc_len==0 → ALLE).
+ * Element 0 = Opcode-Enum-Name (z.B. "EffectCode"); danach je Opcode EINE Zeile
+ * "[id]node [range]Type [range]Type …" (enum→Member-Werte, nested cascade→Sub-
+ * Node-IDs).  Rückgabe = Elementanzahl. */
+extern "C" int32_t aiml_cascade_describe(const char* cascade_name,
+                                         const void* opcodes, int32_t opc_len,
+                                         void* out_list) {
+    if (!cascade_name || !out_list) return 0;
+    AimlStrListRaw* out = static_cast<AimlStrListRaw*>(out_list);
+    auto c = g_cascades.find(cascade_name);
+    if (c == g_cascades.end()) return 0;
+    const int32_t* ops = static_cast<const int32_t*>(opcodes);
+    casc_strlist_push(out, c->second.opcode_enum);          /* Element 0: Opcode-Enum */
+    for (const auto& n : c->second.nodes) {
+        if (opc_len > 0 && ops) {                            /* Filter auf gewählte Opcodes */
+            bool want = false;
+            for (int i = 0; i < opc_len; ++i) if (ops[i] == n.id) { want = true; break; }
+            if (!want) continue;
+        }
+        std::string line = "[" + std::to_string(n.id) + "]" + n.name;
+        for (const auto& f : n.fields)
+            line += " [" + casc_range_of(f.type) + "]" + f.type;
+        casc_strlist_push(out, line);
+    }
+    return out->size;
+}
+
+/* aiml_cascade_type_range(type, out) → i32: die möglichen Werte eines Feld-Typs
+ * als serialisierbare list<i32>.  enum → Member-Werte; nested cascade → Sub-Node-
+ * IDs; value/alias → leer.  Anzahl als Rückgabe. */
+extern "C" int32_t aiml_cascade_type_range(const char* type_name, void* out_list) {
+    if (!type_name || !out_list) return 0;
+    AimlI32ListRaw* out = static_cast<AimlI32ListRaw*>(out_list);
+    std::string ty(type_name);
+    auto e = g_enum_values.find(ty);
+    if (e != g_enum_values.end()) {
+        for (int v : e->second) aiml_i32list_push(out, v);
+        return (int32_t)e->second.size();
+    }
+    auto c = g_cascades.find(ty);
+    if (c != g_cascades.end()) {
+        int32_t cnt = 0;
+        for (const auto& n : c->second.nodes) { aiml_i32list_push(out, n.id); ++cnt; }
+        return cnt;
+    }
+    return 0;
+}
+
+/* Phase 6: attach a bound list<list<i32>> to a prefab-instance.  Consumed
+ * by CHILD_CONTAINER widgets whose `bind_list` names the list on the model. */
+void aiml_prefab_bind_list(void* inst, void* list_ptr) {
+    if (!inst) return;
+    ((AimlPrefabInstance*)inst)->bound_list = list_ptr;
+}
+void aiml_prefab_child_bind_list(void* inst, const char* child_name, void* list_ptr) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (!ch) return;
+    ch->bound_list_widget = list_ptr;
+}
+void* aiml_prefab_bound_list(void* inst) {
+    if (!inst) return nullptr;
+    return ((AimlPrefabInstance*)inst)->bound_list;
+}
+int32_t aiml_prefab_bound_index(void* inst) {
+    if (!inst) return -1;
+    return ((AimlPrefabInstance*)inst)->bound_index;
+}
+
+/* ── Connector (cable) rendering ─────────────────────────────────────────── */
+
+/* Walk the parent chain and return the instance's WORLD position + total
+ * accumulated scale.  Each parent contributes its own world position + scale,
+ * and the child's local position is scaled (and scroll-shifted, for clip
+ * containers) by the parent's accumulated scale. Mirrors the render-time
+ * logic in render_instance() so cable endpoints (and bounds) match exactly
+ * where nested children are drawn. */
+static void inst_world_transform(AimlPrefabInstance* in,
+                                 float& wx, float& wy,
+                                 float& sx, float& sy) {
+    float lx, ly; get_actual_pos(in, lx, ly);
+    sx = in->scale_x;
+    sy = in->scale_y;
+    /* rel_scale only at top-level.  For nested instances the parent's psx
+     * already carries it — folding it in again would double-scale, blowing
+     * every child hitbox up to ~2× its drawn size and making dropdowns
+     * appear to "hover" from far away.  Mirrors the render_instance /
+     * get_actual_pos policy. */
+    if (!in->parent) {
+        float rsx, rsy; get_rel_scale(rsx, rsy); sx *= rsx; sy *= rsy;
+    }
+    if (in->parent) {
+        float pwx, pwy, psx, psy;
+        inst_world_transform(in->parent, pwx, pwy, psx, psy);
+        wx = pwx + (lx - in->parent->scroll_x) * psx;
+        wy = pwy + (ly - in->parent->scroll_y) * psy;
+        sx *= psx;
+        sy *= psy;
+    } else {
+        wx = lx;
+        wy = ly;
+    }
+}
+
+/* Resolve an instance's WORLD pixel bounds (top-left + size), accounting for
+ * relative positioning, per-axis scale, and the full parent transform chain. */
+static void inst_bounds(AimlPrefabInstance* in,
+                        float& x, float& y, float& w, float& h) {
+    float sx, sy;
+    inst_world_transform(in, x, y, sx, sy);
+    w = in->def->width * sx;
+    h = in->def->height * sy;
+}
+
+/* Compute the anchor point where a cable meets `in` on its way to (tx,ty).
+ * `idx`/`cnt` index this cable among all cables sharing the same edge (used by
+ * the `distributed` anchor mode). */
+static void connector_anchor_point(AimlPrefabInstance* in, float tx, float ty,
+                                   int idx, int cnt, float& px, float& py) {
+    float x, y, w, h; inst_bounds(in, x, y, w, h);
+    float cx = x + w * 0.5f, cy = y + h * 0.5f;
+    if (in->connector_anchor == 0) {           /* center */
+        px = cx; py = cy; return;
+    }
+    /* Decide which edge faces the partner (dominant axis of the delta). */
+    float dx = tx - cx, dy = ty - cy;
+    bool horizontal = fabsf(dx) >= fabsf(dy);
+    /* Position along the facing edge: 0.5 for `edge` mode, spread for `distributed`. */
+    float t = 0.5f;
+    if (in->connector_anchor == 2 && cnt > 1)
+        t = (float)(idx + 1) / (float)(cnt + 1);
+    if (horizontal) {
+        px = (dx >= 0.0f) ? x + w : x;          /* right or left edge */
+        py = y + h * t;
+    } else {
+        px = x + w * t;
+        py = (dy >= 0.0f) ? y + h : y;          /* bottom or top edge */
+    }
+}
+
+/* Per-instance counters for distributed anchoring (filled each frame). */
+static void connector_count_for(AimlPrefabInstance* in, int& total, int& mine,
+                                AimlConnector* self) {
+    total = 0; mine = -1;
+    if (in->connector_anchor != 2) return;      /* only distributed needs ordering */
+    for (auto* c : g_scene->connectors) {
+        if (!c->visible) continue;
+        if (c->from == in || c->to == in) {
+            if (c == self) mine = total;
+            total++;
+        }
+    }
+    if (mine < 0) mine = 0;
+}
+
+static inline uint32_t lerp_rgba(uint32_t a, uint32_t b, float t) {
+    float ar = (a >> 24) & 0xFF, ag = (a >> 16) & 0xFF, ab = (a >> 8) & 0xFF, aa = a & 0xFF;
+    float br = (b >> 24) & 0xFF, bg = (b >> 16) & 0xFF, bb = (b >> 8) & 0xFF, ba = b & 0xFF;
+    uint32_t r = (uint32_t)(ar + (br - ar) * t);
+    uint32_t g = (uint32_t)(ag + (bg - ag) * t);
+    uint32_t bl= (uint32_t)(ab + (bb - ab) * t);
+    uint32_t al= (uint32_t)(aa + (ba - aa) * t);
+    return (r << 24) | (g << 16) | (bl << 8) | al;
+}
+
+/* Tessellate a quadratic Bézier (p0 → ctrl → p1) into a ribbon of width `w`,
+ * pushing mode-4 verts (cross-UV in .y, length-UV in .x, per-vertex gradient
+ * colour, highlight tint in border_rgba, edge-AA half-width in radius). */
+static void push_cable(DrawBatch& batch, float x0, float y0, float x1, float y1,
+                       float bow, float w, uint32_t c0, uint32_t c1, uint32_t hl)
+{
+    /* GL vertex colours expect ABGR byte order (little-endian); incoming
+     * args are AIML's RRGGBBAA convention. Convert once before interpolation. */
+    c0 = rgba32_to_gl(c0, 1.0f);
+    c1 = rgba32_to_gl(c1, 1.0f);
+    hl = rgba32_to_gl(hl, 1.0f);
+
+    /* Overshoot both endpoints into their prefabs along the chord direction.
+     * The ribbon end stands perpendicular to the curve tangent and would leave
+     * a slanted gap against a horizontal/vertical prefab edge when the cable
+     * meets it at an angle.  Extending past the anchor by ≥ half-width lets
+     * the (higher-z) prefab cover that slanted edge cleanly. */
+    {
+        float dxe = x1 - x0, dye = y1 - y0;
+        float dl  = sqrtf(dxe * dxe + dye * dye);
+        if (dl > 1e-3f) {
+            float ex = dxe / dl, ey = dye / dl;
+            float overshoot = w * 0.5f + 2.0f;
+            x0 -= ex * overshoot; y0 -= ey * overshoot;
+            x1 += ex * overshoot; y1 += ey * overshoot;
+        }
+    }
+
+    const int SEG = 24;
+    float mx = (x0 + x1) * 0.5f, my = (y0 + y1) * 0.5f;
+    /* Control point bowed perpendicular to the chord. */
+    float dx = x1 - x0, dy = y1 - y0;
+    float len = sqrtf(dx*dx + dy*dy);
+    float nx = 0.0f, ny = 0.0f;
+    if (len > 1e-3f) { nx = -dy / len; ny = dx / len; }
+    float cxp = mx + nx * bow * len;
+    float cyp = my + ny * bow * len;
+    float half = w * 0.5f;
+    /* Edge anti-alias band in cross-units. cross goes -1..+1 over the full
+     * width; the AA band corresponds to ~1 pixel along that axis. Slightly
+     * narrower than 1/half to keep the cable solidly opaque except on the
+     * outermost rim. */
+    float aa = (half > 0.5f) ? (0.6f / half) : 0.3f;
+
+    float prevx = 0, prevy = 0, ptanx = 0, ptany = 0;
+    for (int i = 0; i <= SEG; ++i) {
+        float t  = (float)i / (float)SEG;
+        float omt = 1.0f - t;
+        /* Quadratic Bézier point */
+        float bxp = omt*omt*x0 + 2*omt*t*cxp + t*t*x1;
+        float byp = omt*omt*y0 + 2*omt*t*cyp + t*t*y1;
+        /* Tangent → normal */
+        float tgx = 2*omt*(cxp - x0) + 2*t*(x1 - cxp);
+        float tgy = 2*omt*(cyp - y0) + 2*t*(y1 - cyp);
+        float tl = sqrtf(tgx*tgx + tgy*tgy);
+        float n2x = 0, n2y = 0;
+        if (tl > 1e-3f) { n2x = -tgy / tl; n2y = tgx / tl; }
+        if (i > 0) {
+            uint32_t cp = lerp_rgba(c0, c1, (float)(i-1) / (float)SEG);
+            uint32_t cc = lerp_rgba(c0, c1, t);
+            /* Quad between previous slice and this slice. */
+            float pax = prevx + ptanx * half, pay = prevy + ptany * half; /* prev +n */
+            float pbx = prevx - ptanx * half, pby = prevy - ptany * half; /* prev -n */
+            float cax = bxp + n2x * half,    cay = byp + n2y * half;       /* cur +n */
+            float cbx = bxp - n2x * half,    cby = byp - n2y * half;       /* cur -n */
+            float up = (float)(i-1) / (float)SEG, uc = t;
+            PrefabVertex pa = {pax, pay, up, 0.0f, cp, 0,0, aa, 0, hl};
+            PrefabVertex pb = {pbx, pby, up, 1.0f, cp, 0,0, aa, 0, hl};
+            PrefabVertex ca = {cax, cay, uc, 0.0f, cc, 0,0, aa, 0, hl};
+            PrefabVertex cb = {cbx, cby, uc, 1.0f, cc, 0,0, aa, 0, hl};
+            batch.verts.push_back(pa); batch.verts.push_back(pb); batch.verts.push_back(ca);
+            batch.verts.push_back(pb); batch.verts.push_back(cb); batch.verts.push_back(ca);
+        }
+        prevx = bxp; prevy = byp; ptanx = n2x; ptany = n2y;
+    }
+}
+
+/* Render a single cable + its optional endpoint ports at its current
+ * endpoints (resolved live from both instances). */
+static void render_one_connector(AimlConnector* c) {
+    if (!c->visible || !c->from || !c->to) return;
+    int tf=0, mf=0, tt=0, mt=0;
+    connector_count_for(c->from, tf, mf, c);
+    connector_count_for(c->to,   tt, mt, c);
+    float fbx, fby, fbw, fbh; inst_bounds(c->from, fbx, fby, fbw, fbh);
+    float tbx, tby, tbw, tbh; inst_bounds(c->to,   tbx, tby, tbw, tbh);
+    float fcx = fbx + fbw*0.5f, fcy = fby + fbh*0.5f;
+    float tcx = tbx + tbw*0.5f, tcy = tby + tbh*0.5f;
+    float x0, y0, x1, y1;
+    connector_anchor_point(c->from, tcx, tcy, mf, tf, x0, y0);
+    connector_anchor_point(c->to,   fcx, fcy, mt, tt, x1, y1);
+
+    DrawBatch cable; cable.tex = g_scene->white_tex; cable.mode = 4;
+    push_cable(cable, x0, y0, x1, y1, c->bow, c->width, c->color0, c->color1, c->highlight);
+    flush_batch(cable);
+
+    if (c->port_tex != 0) {
+        float ps = c->width * c->port_scale;
+        DrawBatch pb; pb.tex = c->port_tex; pb.mode = 1;
+        push_quad(pb, x0 - ps*0.5f, y0 - ps*0.5f, ps, ps, 0,0,1,1, 0xFFFFFFFFu);
+        push_quad(pb, x1 - ps*0.5f, y1 - ps*0.5f, ps, ps, 0,0,1,1, 0xFFFFFFFFu);
+        flush_batch(pb);
+    }
 }
 
 /* ── Scene rendering ─────────────────────────────────────────────────────── */
@@ -1522,8 +4403,225 @@ void aiml_prefab_draw_scene(void) {
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDisable(GL_DEPTH_TEST);
 
-    for (auto* inst : g_scene->instances) {
+    /* Interleave cables with instances by z_order so each cable sits behind
+     * the prefabs it visually belongs to (its z + 1) but in front of layers
+     * below it.  Connectors default to z_order = 0; the AIML side picks a z
+     * one less than the nodes it links. */
+    std::vector<AimlConnector*> cs;
+    cs.reserve(g_scene->connectors.size());
+    for (auto* c : g_scene->connectors) if (c->visible) cs.push_back(c);
+    std::stable_sort(cs.begin(), cs.end(),
+        [](AimlConnector* a, AimlConnector* b){ return a->z_order < b->z_order; });
+
+    /* Snapshot the instance list — render_instance() may spawn new instances
+     * (via container_sync / cascade_payload_sync) which push_back into
+     * g_scene->instances and can invalidate the range-for iterator. */
+    std::vector<AimlPrefabInstance*> render_targets;
+    render_targets.reserve(g_scene->instances.size());
+    for (auto* inst : g_scene->instances) render_targets.push_back(inst);
+    size_t ci = 0;
+    for (auto* inst : render_targets) {
+        if (inst->parent) continue;
+        while (ci < cs.size() && cs[ci]->z_order < inst->z_order) {
+            render_one_connector(cs[ci]); ++ci;
+        }
         render_instance(inst);
+    }
+    while (ci < cs.size()) { render_one_connector(cs[ci]); ++ci; }
+
+    /* Zweiter Pass: offene Dropdown-Popups über allem rendern. */
+    render_dropdown_popups();
+
+    /* Phase 6f-2 sweep: retire any prefab-instance marked for delete by
+     * container_sync / cascade_payload_sync earlier this frame.  Detach
+     * from parent nesting, drop from the scene registry, then free.       */
+    {
+        std::vector<AimlPrefabInstance*> dead_list;
+        for (auto* p : g_scene->instances)
+            if (p && p->pending_delete) dead_list.push_back(p);
+        for (auto* dead : dead_list) {
+            if (dead->parent) {
+                auto& sib = dead->parent->child_instances;
+                sib.erase(std::remove(sib.begin(), sib.end(), dead), sib.end());
+            }
+            /* If this dead instance had its OWN spawned payload / rows,
+             * mark them dead too so a follow-up frame cleans them up.
+             * Critical: also clear their `parent` pointer BEFORE we free
+             * this instance — otherwise next frame's sweep for `s` would
+             * dereference `s->parent` which now points to freed memory. */
+            for (auto& c : dead->children) {
+                for (auto* s : c.spawned) {
+                    if (!s) continue;
+                    s->parent = nullptr;
+                    s->pending_delete = true;
+                }
+                for (auto* s : c.spawned_payload) {
+                    if (!s) continue;
+                    s->parent = nullptr;
+                    s->pending_delete = true;
+                }
+            }
+            /* Same for any direct-nested children (add_child API) so the
+             * chain doesn't dangle either. */
+            for (auto* s : dead->child_instances) {
+                if (!s) continue;
+                s->parent = nullptr;
+                s->pending_delete = true;
+            }
+            auto& all = g_scene->instances;
+            all.erase(std::remove(all.begin(), all.end(), dead), all.end());
+            delete dead;
+        }
+    }
+}
+
+static void child_screen_bbox(AimlPrefabInstance* inst, const PrefabChild& ch,
+                              float& bx, float& by, float& bw, float& bh);
+
+/* Compute the popup rect for a CHILD_DROPDOWN.  Anchored below the box by
+ * default; flips above the box when the popup would overflow the bottom of
+ * the screen (so dropdowns at the bottom edge open upward instead of being
+ * clipped).  n_opts controls popup_h so the caller doesn't have to remember
+ * the MAX_VIS / row_h math. */
+static inline void compute_popup_rect(float bx, float by, float bw, float bh,
+                                      int n_opts,
+                                      float& popup_x, float& popup_y,
+                                      float& popup_w, float& popup_h)
+{
+    const int MAX_VIS = 10;
+    int visible = n_opts < MAX_VIS ? n_opts : MAX_VIS;
+    if (visible < 1) visible = 1;
+    float row_h = bh;
+    popup_x = bx;
+    popup_w = bw;
+    popup_h = row_h * visible;
+    float scr_h = g_scene ? (float)g_scene->screen_h : 0.0f;
+    /* Below the box normally. Flip above only if it truly won't fit — and
+     * only if flipping up actually gives more headroom. */
+    if (scr_h > 0.0f && (by + bh + popup_h) > scr_h && by >= popup_h) {
+        popup_y = by - popup_h;
+    } else {
+        popup_y = by + bh;
+    }
+}
+
+static void render_dropdown_popups(void) {
+    if (!g_scene) return;
+    for (auto* inst : g_scene->instances) {
+        if (!inst->visible) continue;
+        for (auto& ch : inst->children) {
+            if (ch.type != CHILD_DROPDOWN || !ch.dropdown_open) continue;
+            if (!ch.visible) continue;
+            float bx, by, bw, bh;
+            child_screen_bbox(inst, ch, bx, by, bw, bh);
+            int n_opts = ch.options.empty() ? 0 : 1;
+            for (char c : ch.options) if (c == '|') n_opts++;
+            if (n_opts <= 0) continue;
+            const int MAX_VIS = 10;
+            /* scroll_offset auf gültigen Bereich clampen, damit visible immer
+             * MIN(n_opts, MAX_VIS) Rows füllt (keine leeren Rows am Ende). */
+            int max_scroll = n_opts - MAX_VIS; if (max_scroll < 0) max_scroll = 0;
+            if (ch.scroll_offset > max_scroll) ch.scroll_offset = max_scroll;
+            if (ch.scroll_offset < 0) ch.scroll_offset = 0;
+            int visible = n_opts < MAX_VIS ? n_opts : MAX_VIS;
+            float row_h = bh;
+            float popup_x, popup_y, popup_w, popup_h;
+            compute_popup_rect(bx, by, bw, bh, n_opts, popup_x, popup_y, popup_w, popup_h);
+            float sx = 1.0f; { float rsx, rsy; get_rel_scale(rsx, rsy); sx *= rsx; }
+            /* Popup-Hintergrund */
+            {
+                DrawBatch bg;
+                bg.tex  = g_scene->white_tex;
+                bg.mode = 3;
+                uint32_t fg = rgba32_to_gl(0x0C1424FF, 1.0f);
+                /* Border muted (früher 0x88BBEE hellblau) — passt jetzt zum
+                 * dunklen Popup und zieht die Aufmerksamkeit nicht mehr weg
+                 * von der markierten Zeile. */
+                uint32_t bd = rgba32_to_gl(0x4A6890FF, 1.0f);
+                push_quad_sdf(bg, popup_x, popup_y, popup_w, popup_h, fg, bd,
+                              ch.corner_radius * sx, 1.5f * sx);
+                flush_batch(bg);
+            }
+            AimlUIFont* lf = nullptr;
+            if (g_scene->font) {
+                float target_size = ch.font_size > 0.0f ? ch.font_size * sx : 0.0f;
+                lf = (target_size > 0.0f) ? font_for_size(g_scene, target_size) : g_scene->font;
+            }
+            std::vector<std::string> opts;
+            size_t start = 0;
+            for (size_t p = 0; p <= ch.options.size(); ++p) {
+                if (p == ch.options.size() || ch.options[p] == '|') {
+                    opts.push_back(ch.options.substr(start, p - start));
+                    start = p + 1;
+                }
+            }
+            float mx = aiml_input_mouse_pos_x();
+            float my = aiml_input_mouse_pos_y();
+            for (int r = 0; r < visible; ++r) {
+                int idx = ch.scroll_offset + r;
+                if (idx >= (int)opts.size()) break;
+                float ry = popup_y + r * row_h;
+                bool row_hot = (mx >= popup_x && mx < popup_x + popup_w
+                             && my >= ry && my < ry + row_h);
+                bool row_sel = (idx == ch.selected_index);
+                uint32_t row_bg = row_hot ? 0x1E3554FF : (row_sel ? 0x162034FF : 0x0C1424FF);
+                DrawBatch rb;
+                rb.tex  = g_scene->white_tex;
+                rb.mode = 0;
+                /* row_bg is 0xRRGGBBAA — strip the alpha byte (shift 8),
+                 * NOT mask the low 24 bits (which would drop RR and keep
+                 * alpha as if it were B — the old code turned every row
+                 * into knallblau because 0xXX__.__.FF became R,G,255). */
+                uint32_t col = color_with_alpha(row_bg >> 8, 1.0f);
+                /* Inset the first/last visible row by 1 px vertically so
+                 * the outer popup border stays visible at top and bottom —
+                 * otherwise the row fill overdraws the SDF stroke. */
+                float row_y  = ry + (r == 0 ? 1.0f : 0.0f);
+                float row_bh = row_h
+                             - (r == 0 ? 1.0f : 0.0f)
+                             - (r == visible - 1 ? 1.0f : 0.0f);
+                push_quad(rb, popup_x + 1, row_y, popup_w - 2, row_bh, 0, 0, 1, 1, col);
+                flush_batch(rb);
+                if (lf) {
+                    DrawBatch tb;
+                    tb.tex  = lf->atlas_tex;
+                    tb.mode = 2;
+                    uint32_t lcol = rgba32_to_gl(0xFFFFFFFF, 1.0f);
+                    float pad_l = 8.0f * sx;
+                    float text_cy = ry + (row_h - lf->line_height) * 0.5f;
+                    push_text_batch(tb, lf, opts[idx].c_str(),
+                                    popup_x + pad_l, text_cy, popup_w - pad_l, lcol, "left");
+                    flush_batch(tb);
+                }
+            }
+            if (n_opts > visible) {
+                float sb_w = 6.0f * sx;
+                float sb_x = popup_x + popup_w - sb_w - 2.0f * sx;
+                float track_y = popup_y + 2.0f * sx;
+                float track_h = popup_h - 4.0f * sx;
+                /* Track-Hintergrund */
+                {
+                    DrawBatch tb;
+                    tb.tex = g_scene->white_tex; tb.mode = 0;
+                    uint32_t tcol = color_with_alpha(0x101828, 0.6f);
+                    push_quad(tb, sb_x, track_y, sb_w, track_h, 0, 0, 1, 1, tcol);
+                    flush_batch(tb);
+                }
+                float thumb_h = track_h * (float)visible / (float)n_opts;
+                if (thumb_h < 16.0f * sx) thumb_h = 16.0f * sx;
+                float thumb_y = track_y
+                              + (track_h - thumb_h) * (float)ch.scroll_offset
+                                / (float)std::max(1, n_opts - visible);
+                DrawBatch sb;
+                sb.tex = g_scene->white_tex; sb.mode = 0;
+                /* Thumb im Ton der neuen dunklen Palette (früher 0x88BBEE
+                 * hellblau) — sitzt jetzt kontrastreich aber ruhig auf dem
+                 * fast-schwarzen Popup. */
+                uint32_t col = color_with_alpha(0x3A5578, 0.95f);
+                push_quad(sb, sb_x, thumb_y, sb_w, thumb_h, 0, 0, 1, 1, col);
+                flush_batch(sb);
+            }
+        }
     }
 }
 
@@ -1536,11 +4634,12 @@ void* aiml_prefab_hit_test(float mx, float my) {
     for (int i = (int)g_scene->instances.size() - 1; i >= 0; i--) {
         auto* inst = g_scene->instances[i];
         if (!inst->visible) continue;
+        if (inst->parent) continue;  /* nested children: not hit-tested (local coords) */
 
         float ax, ay;
         get_actual_pos(inst, ax, ay);
         float sx = inst->scale_x, sy = inst->scale_y;
-        if (inst->is_relative) { float rsx, rsy; get_rel_scale(rsx, rsy); sx *= rsx; sy *= rsy; }
+        { float rsx, rsy; get_rel_scale(rsx, rsy); sx *= rsx; sy *= rsy; }
         float w = inst->def->width * sx;
         float h = inst->def->height * sy;
         if (mx >= ax && mx <= ax + w &&
@@ -1559,15 +4658,14 @@ static int32_t s_mouse_btn_pressed[3] = {0, 0, 0};
 static void child_screen_bbox(AimlPrefabInstance* inst, const PrefabChild& ch,
                               float& bx, float& by, float& bw, float& bh)
 {
-    float ox, oy;
-    get_actual_pos(inst, ox, oy);
-    float sx = inst->scale_x, sy = inst->scale_y;
-    if (inst->is_relative) {
-        float rsx, rsy; get_rel_scale(rsx, rsy);
-        sx *= rsx; sy *= rsy;
-    }
-    bx = ox + ch.x * sx;
-    by = oy + ch.y * sy;
+    /* Walk the parent chain so nested / spawned instances (e.g. container
+     * rows) get their true world-space bounds — otherwise a widget's
+     * hit-box would be computed as if the row were at the top-left of the
+     * window, and clicks on the visible dropdown would miss it. */
+    float wx, wy, sx, sy;
+    inst_world_transform(inst, wx, wy, sx, sy);
+    bx = wx + ch.x * sx;
+    by = wy + ch.y * sy;
     bw = ch.width  * sx;
     bh = ch.height * sy;
 }
@@ -1652,6 +4750,47 @@ void aiml_prefab_update_hover(float mx, float my) {
     AimlPrefabInstance* new_focus_inst = nullptr;
     int32_t              new_focus_idx  = -1;
 
+    /* Erst über ALLE Widget-Children (auch hidden Instances) laufen und
+     * clicked_frame resetten — sonst bleibt der Flag stale bei zwischenzeit-
+     * lich unsichtbaren Prefabs (Overlays öffnen→schließen→öffnen crash). */
+    for (auto* inst : g_scene->instances) {
+        for (auto& ch : inst->children) {
+            if (ch.type == CHILD_BUTTON
+             || ch.type == CHILD_TEXT_INPUT
+             || ch.type == CHILD_CHECKBOX
+             || ch.type == CHILD_RADIO
+             || ch.type == CHILD_DROPDOWN
+             || ch.type == CHILD_SLIDER) {
+                ch.clicked_frame = false;
+            }
+        }
+    }
+
+    /* If any dropdown popup is open AND the mouse is inside its popup rect,
+     * click events must go to that popup only — otherwise a click on a
+     * popup row would also fire on any widget rendered underneath it
+     * (spawned rows in a container, sibling dropdowns, etc.). */
+    bool click_absorbed_by_popup = false;
+    for (auto* inst : g_scene->instances) {
+        if (!inst->visible) continue;
+        for (auto& ch : inst->children) {
+            if (ch.type != CHILD_DROPDOWN || !ch.dropdown_open || !ch.visible) continue;
+            float bx, by, bw, bh;
+            child_screen_bbox(inst, ch, bx, by, bw, bh);
+            int n_opts = ch.options.empty() ? 0 : 1;
+            for (char c : ch.options) if (c == '|') n_opts++;
+            if (n_opts <= 0) continue;
+            float popup_x, popup_y, popup_w, popup_h;
+            compute_popup_rect(bx, by, bw, bh, n_opts, popup_x, popup_y, popup_w, popup_h);
+            if (mx >= popup_x && mx < popup_x + popup_w
+             && my >= popup_y && my < popup_y + popup_h) {
+                click_absorbed_by_popup = true;
+                break;
+            }
+        }
+        if (click_absorbed_by_popup) break;
+    }
+
     for (auto* inst : g_scene->instances) {
         if (!inst->visible) continue;
         for (size_t i = 0; i < inst->children.size(); i++) {
@@ -1659,13 +4798,20 @@ void aiml_prefab_update_hover(float mx, float my) {
             if (!ch.visible) continue;
             if (ch.type != CHILD_BUTTON
                 && ch.type != CHILD_TEXT_INPUT
-                && ch.type != CHILD_CHECKBOX) continue;
+                && ch.type != CHILD_CHECKBOX
+                && ch.type != CHILD_RADIO
+                && ch.type != CHILD_DROPDOWN
+                && ch.type != CHILD_SLIDER) continue;
+            /* Popup absorbs the click — but only for CLOSED dropdowns and
+             * other widgets.  The dropdown that OWNS the open popup still
+             * needs to process its own release-outside-popup to close. */
+            if (click_absorbed_by_popup && !(ch.type == CHILD_DROPDOWN && ch.dropdown_open))
+                continue;
 
             float bx, by, bw, bh;
             child_screen_bbox(inst, ch, bx, by, bw, bh);
             bool over = (mx >= bx && mx < bx + bw && my >= by && my < by + bh);
             ch.hot = over;
-            ch.clicked_frame = false;  /* clear from last frame */
 
             if (ch.type == CHILD_BUTTON) {
                 if (mb_pressed && over) ch.pressed_now = true;
@@ -1691,6 +4837,93 @@ void aiml_prefab_update_hover(float mx, float my) {
                     }
                     ch.pressed_now = false;
                 }
+            } else if (ch.type == CHILD_RADIO) {
+                /* Radio: on release, set THIS checked, uncheck all others with
+                 * the same group name across the scene. */
+                if (mb_pressed && over) ch.pressed_now = true;
+                if (mb_released) {
+                    if (ch.pressed_now && over) {
+                        ch.clicked_frame = true;
+                        if (!ch.checked || !ch.group.empty()) {
+                            /* Deselect siblings first. */
+                            if (!ch.group.empty()) {
+                                for (auto* other_inst : g_scene->instances) {
+                                    for (auto& other_ch : other_inst->children) {
+                                        if (other_ch.type == CHILD_RADIO
+                                            && other_ch.group == ch.group) {
+                                            other_ch.checked = false;
+                                        }
+                                    }
+                                }
+                            }
+                            ch.checked = true;
+                        }
+                        if (!ch.on_click_fn.empty())
+                            prefab_invoke_callback(ch.on_click_fn, inst);
+                        if (!ch.on_change_fn.empty())
+                            prefab_invoke_callback(ch.on_change_fn, inst);
+                    }
+                    ch.pressed_now = false;
+                }
+            } else if (ch.type == CHILD_DROPDOWN) {
+                /* Dropdown: click on box toggles popup (dropdown_open).  Popup-
+                 * Handling (Row-Click, Scroll, Click-Outside) läuft in einer
+                 * separaten Loop nach dieser (siehe unten). */
+                if (mb_pressed && over && !ch.dropdown_open) ch.pressed_now = true;
+                if (mb_released) {
+                    if (ch.pressed_now && over) {
+                        ch.dropdown_open = !ch.dropdown_open;
+                        if (ch.dropdown_open) {
+                            /* Scroll auf selected zentrieren. */
+                            ch.scroll_offset = std::max(0, ch.selected_index - 3);
+                        }
+                    }
+                    ch.pressed_now = false;
+                }
+            } else if (ch.type == CHILD_SLIDER) {
+                /* Slider: press inside the track starts dragging; while
+                 * dragging, follow the cursor and continuously map x → value
+                 * within [slider_min, bar_max].  Fires on_change when value
+                 * actually changes.  Release ends the drag.
+                 * When the slider has a track_texture skin, the interactive
+                 * range is limited to the frame's inner opening so mouse
+                 * position maps to knob position 1:1 (matches the render
+                 * pass in CHILD_SLIDER). */
+                if (mb_pressed && over) {
+                    ch.slider_dragging = true;
+                }
+                bool held = (aiml_input_mouse_button(0) != 0);
+                float drag_x0 = bx;
+                float drag_w  = bw;
+                if (ch.track_texture != 0) {
+                    float fx_pad = bw * 0.06f;
+                    drag_x0 = bx + fx_pad;
+                    drag_w  = bw - fx_pad * 2.0f;
+                }
+                if (ch.slider_dragging && held && drag_w > 0.0f) {
+                    float rel = (mx - drag_x0) / drag_w;
+                    if (rel < 0.0f) rel = 0.0f; if (rel > 1.0f) rel = 1.0f;
+                    float range  = ch.bar_max - ch.slider_min;
+                    float new_v  = ch.slider_min + rel * range;
+                    /* Snap-to-step: quantize to nearest multiple of
+                     * `slider_snap`, offset from slider_min so the min
+                     * itself is always a valid rest state. */
+                    if (ch.slider_snap > 0.0f) {
+                        float step = ch.slider_snap;
+                        float off  = new_v - ch.slider_min;
+                        new_v = ch.slider_min + roundf(off / step) * step;
+                        if (new_v > ch.bar_max)    new_v = ch.bar_max;
+                        if (new_v < ch.slider_min) new_v = ch.slider_min;
+                    }
+                    if (new_v != ch.bar_value) {
+                        ch.bar_value = new_v;
+                        if (!ch.on_change_fn.empty())
+                            prefab_invoke_callback(ch.on_change_fn, inst);
+                    }
+                }
+                if (mb_released) {
+                    ch.slider_dragging = false;
+                }
             } else if (ch.type == CHILD_TEXT_INPUT) {
                 if (mb_pressed && over) {
                     new_focus_inst = inst;
@@ -1713,6 +4946,105 @@ void aiml_prefab_update_hover(float mx, float my) {
         g_scene->focused_input_child_idx = new_focus_idx;
         if (new_focus_inst && new_focus_idx >= 0) {
             new_focus_inst->children[new_focus_idx].focused = true;
+        }
+    }
+
+    /* Popup-Dropdown Interaktion nach dem normalen Widget-Loop.  Iteriert
+     * alle offenen Dropdowns, resolved Row-Klick / Scroll / Click-Outside. */
+    float scroll_dy = aiml_input_mouse_scroll_y();
+    int32_t mb_held = aiml_input_mouse_button(0);
+    int32_t key_up_p    = aiml_input_key_pressed("Up");
+    int32_t key_down_p  = aiml_input_key_pressed("Down");
+    int32_t key_enter_p = aiml_input_key_pressed("Enter");
+    int32_t key_esc_p   = aiml_input_key_pressed("Escape");
+    for (auto* inst : g_scene->instances) {
+        if (!inst->visible) continue;
+        for (auto& ch : inst->children) {
+            if (ch.type != CHILD_DROPDOWN || !ch.dropdown_open) continue;
+            float bx, by, bw, bh;
+            child_screen_bbox(inst, ch, bx, by, bw, bh);
+            /* Options zählen */
+            int n_opts = ch.options.empty() ? 0 : 1;
+            for (char c : ch.options) if (c == '|') n_opts++;
+            if (n_opts <= 0) { ch.dropdown_open = false; continue; }
+            const int MAX_VIS = 10;
+            int visible = n_opts < MAX_VIS ? n_opts : MAX_VIS;
+            /* Row-Höhe: an Font gebunden, ca. Box-Höhe */
+            float row_h = bh;
+            float popup_x, popup_y, popup_w, popup_h;
+            compute_popup_rect(bx, by, bw, bh, n_opts, popup_x, popup_y, popup_w, popup_h);
+            bool over_popup = (mx >= popup_x && mx < popup_x + popup_w
+                            && my >= popup_y && my < popup_y + popup_h);
+            bool over_box   = (mx >= bx      && mx < bx + bw
+                            && my >= by      && my < by + bh);
+            /* Scroll — solange popup offen (auch wenn Maus über der Box steht). */
+            if (n_opts > visible && scroll_dy != 0.0f) {
+                int step = 0;
+                if (scroll_dy > 0.0f) step =  (int)ceilf(scroll_dy);
+                else                  step = -(int)ceilf(-scroll_dy);
+                ch.scroll_offset -= step;
+                if (ch.scroll_offset < 0) ch.scroll_offset = 0;
+                if (ch.scroll_offset > n_opts - visible) ch.scroll_offset = n_opts - visible;
+            }
+            /* Keyboard-Navigation solange popup offen. */
+            if (key_up_p) {
+                if (ch.selected_index > 0) ch.selected_index--;
+                if (ch.selected_index < ch.scroll_offset) ch.scroll_offset = ch.selected_index;
+            }
+            if (key_down_p) {
+                if (ch.selected_index < n_opts - 1) ch.selected_index++;
+                if (ch.selected_index >= ch.scroll_offset + visible)
+                    ch.scroll_offset = ch.selected_index - visible + 1;
+            }
+            if (key_enter_p) {
+                ch.clicked_frame = true;
+                ch.dropdown_open = false;
+                if (!ch.on_click_fn.empty())
+                    prefab_invoke_callback(ch.on_click_fn, inst);
+                if (!ch.on_change_fn.empty())
+                    prefab_invoke_callback(ch.on_change_fn, inst);
+                continue;
+            }
+            if (key_esc_p) {
+                ch.dropdown_open = false;
+                continue;
+            }
+            /* Scrollbar-Drag: bbox rechts im Popup.  Start on press,
+             * follow while held, release stops. */
+            float sx2 = 1.0f; { float rsx, rsy; get_rel_scale(rsx, rsy); sx2 *= rsx; }
+            float sb_w = 6.0f * sx2;
+            float sb_x = popup_x + popup_w - sb_w - 2.0f * sx2;
+            float sb_track_y = popup_y + 2.0f * sx2;
+            float sb_track_h = popup_h - 4.0f * sx2;
+            bool over_sb = (n_opts > visible)
+                        && (mx >= sb_x && mx < sb_x + sb_w
+                            && my >= sb_track_y && my < sb_track_y + sb_track_h);
+            if (mb_pressed && over_sb) {
+                ch.sb_dragging = true;
+            }
+            if (!mb_held) ch.sb_dragging = false;
+            if (ch.sb_dragging && sb_track_h > 0.0f) {
+                float rel = (my - sb_track_y) / sb_track_h;
+                if (rel < 0.0f) rel = 0.0f; if (rel > 1.0f) rel = 1.0f;
+                ch.scroll_offset = (int)(rel * (float)(n_opts - visible) + 0.5f);
+                if (ch.scroll_offset < 0) ch.scroll_offset = 0;
+                if (ch.scroll_offset > n_opts - visible) ch.scroll_offset = n_opts - visible;
+            }
+            /* Row-Klick (nicht während Scrollbar-Drag). */
+            if (mb_released && over_popup && !ch.sb_dragging && !over_sb) {
+                int row = (int)((my - popup_y) / row_h) + ch.scroll_offset;
+                if (row >= 0 && row < n_opts) {
+                    ch.selected_index = row;
+                    ch.clicked_frame  = true;
+                    if (!ch.on_click_fn.empty())
+                        prefab_invoke_callback(ch.on_click_fn, inst);
+                    if (!ch.on_change_fn.empty())
+                        prefab_invoke_callback(ch.on_change_fn, inst);
+                }
+                ch.dropdown_open = false;
+            } else if (mb_released && !over_popup && !over_box && !ch.sb_dragging) {
+                ch.dropdown_open = false;
+            }
         }
     }
 
@@ -2002,28 +5334,47 @@ static PrefabChild* find_child_mut(AimlPrefabInstance* inst, const char* name) {
 }
 
 const char* aiml_prefab_text_value(void* inst, const char* child_name) {
-    auto* ch = find_child_mut((AimlPrefabInstance*)inst, child_name);
-    if (!ch) return "";
-    return ch->text.c_str();
+    /* Return a strdup'd copy — AIML owns strings via strdup/malloc.  Handing
+     * back ch->text.c_str() (the widget's internal std::string data) leaves
+     * callers with a dangling pointer as soon as the widget's text is
+     * reassigned (e.g. set_text("") after reading the value into a Model
+     * field).  The consumer takes ownership of the returned buffer. */
+    auto* ch = find_child(inst, child_name);
+    return strdup(ch ? ch->text.c_str() : "");
 }
 
 int32_t aiml_prefab_child_clicked(void* inst, const char* child_name) {
-    auto* ch = find_child_mut((AimlPrefabInstance*)inst, child_name);
+    auto* ch = find_child(inst, child_name);
     return (ch && ch->clicked_frame) ? 1 : 0;
 }
 
+/* Point-in-child test in SCREEN coords — works for ANY child type (incl.
+ * non-interactive `rect`s like the deck-set slots), unlike child_clicked which
+ * only tracks interactive widgets.  Uses the same screen-bbox as click hit-
+ * detection, so window scaling is handled.  Used for drop-target detection. */
+int32_t aiml_prefab_child_contains(void* inst_p, const char* child_name,
+                                   float sx, float sy) {
+    auto* inst = (AimlPrefabInstance*)inst_p;
+    if (!inst || !child_name) return 0;
+    auto it = inst->child_index.find(child_name);
+    if (it == inst->child_index.end()) return 0;
+    float bx, by, bw, bh;
+    child_screen_bbox(inst, inst->children[it->second], bx, by, bw, bh);
+    return (sx >= bx && sx < bx + bw && sy >= by && sy < by + bh) ? 1 : 0;
+}
+
 int32_t aiml_prefab_child_focused(void* inst, const char* child_name) {
-    auto* ch = find_child_mut((AimlPrefabInstance*)inst, child_name);
+    auto* ch = find_child(inst, child_name);
     return (ch && ch->focused) ? 1 : 0;
 }
 
 int32_t aiml_prefab_child_checked(void* inst, const char* child_name) {
-    auto* ch = find_child_mut((AimlPrefabInstance*)inst, child_name);
+    auto* ch = find_child(inst, child_name);
     return (ch && ch->checked) ? 1 : 0;
 }
 
 void aiml_prefab_set_checked(void* inst, const char* child_name, int32_t checked) {
-    auto* ch = find_child_mut((AimlPrefabInstance*)inst, child_name);
+    auto* ch = find_child(inst, child_name);
     if (ch) ch->checked = (checked != 0);
 }
 
@@ -2033,17 +5384,18 @@ void aiml_prefab_update_drag(float mx, float my, int32_t btn_down, int32_t btn_r
     if (!g_scene) return;
 
     if (btn_down && !g_scene->dragged) {
-        /* Start drag: find topmost draggable instance under cursor */
+        /* Start drag: find topmost draggable instance under cursor.
+         * Use the full world-transform bounds (inst_bounds) — the SAME transform
+         * that rendering + widget hit-testing use — so NESTED (container-row)
+         * draggables are picked at their actual drawn location, not at raw local
+         * coords.  drag_offset is stored in WORLD pixels; drag_origin stays local
+         * for snap-back. */
         for (int i = (int)g_scene->instances.size() - 1; i >= 0; i--) {
             auto* inst = g_scene->instances[i];
             if (!inst->visible || !inst->draggable) continue;
 
-            float ax, ay;
-            get_actual_pos(inst, ax, ay);
-            float isx = inst->scale_x, isy = inst->scale_y;
-            if (inst->is_relative) { float rsx, rsy; get_rel_scale(rsx, rsy); isx *= rsx; isy *= rsy; }
-            float w = inst->def->width * isx;
-            float h = inst->def->height * isy;
+            float ax, ay, w, h;
+            inst_bounds(inst, ax, ay, w, h);
             if (mx >= ax && mx <= ax + w &&
                 my >= ay && my <= ay + h) {
                 inst->is_dragging = true;
@@ -2058,19 +5410,44 @@ void aiml_prefab_update_drag(float mx, float my, int32_t btn_down, int32_t btn_r
     }
 
     if (g_scene->dragged && g_scene->dragged->is_dragging) {
-        /* Update position — convert back to relative if needed */
+        /* Update position.  drag_offset is in WORLD pixels, so the desired
+         * world top-left is (mx,my) - drag_offset.  Convert that back into the
+         * coordinate space of d->x/d->y:
+         *   - relative:  0..1 window ratio,
+         *   - nested:    parent-local design coords (undo parent world+scale+scroll),
+         *   - top-level: design coords (undo rel_scale).
+         * so the item sticks to the cursor at any scale/nesting. */
         auto* d = g_scene->dragged;
+        float tgt_wx = mx - d->drag_offset_x;
+        float tgt_wy = my - d->drag_offset_y;
         if (d->is_relative && g_scene->screen_w > 0 && g_scene->screen_h > 0) {
-            d->x = (mx - d->drag_offset_x) / g_scene->screen_w;
-            d->y = (my - d->drag_offset_y) / g_scene->screen_h;
+            d->x = tgt_wx / g_scene->screen_w;
+            d->y = tgt_wy / g_scene->screen_h;
+        } else if (d->parent) {
+            float pwx, pwy, psx, psy;
+            inst_world_transform(d->parent, pwx, pwy, psx, psy);
+            if (psx <= 0.0f) psx = 1.0f;
+            if (psy <= 0.0f) psy = 1.0f;
+            d->x = (tgt_wx - pwx) / psx + d->parent->scroll_x;
+            d->y = (tgt_wy - pwy) / psy + d->parent->scroll_y;
         } else {
-            d->x = mx - d->drag_offset_x;
-            d->y = my - d->drag_offset_y;
+            float rsx, rsy; get_rel_scale(rsx, rsy);
+            if (rsx <= 0.0f) rsx = 1.0f;
+            if (rsy <= 0.0f) rsy = 1.0f;
+            d->x = tgt_wx / rsx;
+            d->y = tgt_wy / rsy;
         }
     }
 
     if (btn_released && g_scene->dragged) {
-        /* End drag */
+        /* End drag — SNAP the item back to where it was picked up.  A drag is a
+         * GESTURE: the visual item returns to its origin unless the drop handler
+         * explicitly repositions it (e.g. board zones move the card, the deck
+         * editor only appends a card_id).  Without this, a dragged library card
+         * is left "placed" wherever it was dropped instead of staying in the
+         * browser.  drag_origin_{x,y} were recorded at drag start. */
+        g_scene->dragged->x = g_scene->dragged->drag_origin_x;
+        g_scene->dragged->y = g_scene->dragged->drag_origin_y;
         g_scene->dragged->is_dragging = false;
         g_scene->dragged = nullptr;
     }
@@ -2088,6 +5465,119 @@ void aiml_prefab_cancel_drag(void* p) {
     inst->is_dragging = false;
     if (g_scene && g_scene->dragged == inst)
         g_scene->dragged = nullptr;
+}
+
+/* Cursor position in DESIGN coordinates (= raw pixel / rel_scale).  set_pos and
+ * friends work in design coords, but input.mouse_pos_* returns world/pixel — this
+ * exposes the same conversion update_drag/hit_test use internally, so AIML can
+ * place things at the cursor (drag-centering, tooltips, context menus …). */
+float aiml_prefab_mouse_design_x(void) {
+    float rsx, rsy; get_rel_scale(rsx, rsy);
+    if (rsx <= 0.0f) rsx = 1.0f;
+    return aiml_input_mouse_pos_x() / rsx;
+}
+float aiml_prefab_mouse_design_y(void) {
+    float rsx, rsy; get_rel_scale(rsx, rsy);
+    if (rsy <= 0.0f) rsy = 1.0f;
+    return aiml_input_mouse_pos_y() / rsy;
+}
+
+/* ── Nested instances ────────────────────────────────────────────────────── */
+
+/* Attach `child` under `parent`. The child's position/scale become local to
+ * the parent and it renders with the parent's world transform. The child stays
+ * in the scene's instance list but is skipped by the top-level draw/hit loops. */
+void aiml_prefab_add_child(void* parent, void* child) {
+    auto* p = (AimlPrefabInstance*)parent;
+    auto* c = (AimlPrefabInstance*)child;
+    if (!p || !c || p == c) return;
+    /* Detach from a previous parent first. */
+    if (c->parent) {
+        auto& sib = c->parent->child_instances;
+        sib.erase(std::remove(sib.begin(), sib.end(), c), sib.end());
+    }
+    c->parent = p;
+    if (std::find(p->child_instances.begin(), p->child_instances.end(), c)
+        == p->child_instances.end())
+        p->child_instances.push_back(c);
+}
+
+/* Detach `child` from its parent (becomes a top-level instance again). */
+void aiml_prefab_remove_child(void* parent, void* child) {
+    auto* p = (AimlPrefabInstance*)parent;
+    auto* c = (AimlPrefabInstance*)child;
+    if (!c) return;
+    if (p) {
+        auto& sib = p->child_instances;
+        sib.erase(std::remove(sib.begin(), sib.end(), c), sib.end());
+    }
+    c->parent = nullptr;
+}
+
+/* ── Scroll viewport / clipping ──────────────────────────────────────────── */
+
+/* Enable/disable clipping of nested children to this instance's world bounds. */
+void aiml_prefab_set_clip(void* p, int32_t enabled) {
+    auto* inst = (AimlPrefabInstance*)p;
+    if (inst) inst->clip_children = (enabled != 0);
+}
+/* Set the scroll offset (local px) applied to nested children. */
+void aiml_prefab_set_scroll(void* p, float sx, float sy) {
+    auto* inst = (AimlPrefabInstance*)p;
+    if (inst) { inst->scroll_x = sx; inst->scroll_y = sy; }
+}
+float aiml_prefab_get_scroll_x(void* p) {
+    auto* inst = (AimlPrefabInstance*)p; return inst ? inst->scroll_x : 0.0f;
+}
+float aiml_prefab_get_scroll_y(void* p) {
+    auto* inst = (AimlPrefabInstance*)p; return inst ? inst->scroll_y : 0.0f;
+}
+
+/* ── Connectors (cables between instances) ───────────────────────────────── */
+
+void* aiml_prefab_connect(void* from, void* to) {
+    if (!g_scene || !from || !to) return nullptr;
+    auto* c = new AimlConnector();
+    c->from = (AimlPrefabInstance*)from;
+    c->to   = (AimlPrefabInstance*)to;
+    g_scene->connectors.push_back(c);
+    return c;
+}
+
+void aiml_connector_set_colors(void* p, int32_t c0, int32_t c1) {
+    auto* c = (AimlConnector*)p; if (c) { c->color0 = (uint32_t)c0; c->color1 = (uint32_t)c1; }
+}
+void aiml_connector_set_highlight(void* p, int32_t hl) {
+    auto* c = (AimlConnector*)p; if (c) c->highlight = (uint32_t)hl;
+}
+void aiml_connector_set_width(void* p, float w) {
+    auto* c = (AimlConnector*)p; if (c) c->width = w;
+}
+void aiml_connector_set_bow(void* p, float bow) {
+    auto* c = (AimlConnector*)p; if (c) c->bow = bow;
+}
+void aiml_connector_set_visible(void* p, int32_t v) {
+    auto* c = (AimlConnector*)p; if (c) c->visible = (v != 0);
+}
+void aiml_connector_set_z(void* p, int32_t z) {
+    auto* c = (AimlConnector*)p; if (c) c->z_order = z;
+}
+void aiml_connector_set_port(void* p, void* tex, float scale) {
+    auto* c = (AimlConnector*)p; if (!c) return;
+    c->port_tex = tex ? ((AimlGLTexture*)tex)->id : 0;
+    if (scale > 0.0f) c->port_scale = scale;
+}
+void aiml_connector_destroy(void* p) {
+    auto* c = (AimlConnector*)p; if (!c || !g_scene) return;
+    auto& v = g_scene->connectors;
+    v.erase(std::remove(v.begin(), v.end(), c), v.end());
+    delete c;
+}
+
+/* Set how cables attach to an instance: 0=center, 1=edge, 2=distributed. */
+void aiml_prefab_set_connector_anchor(void* p, int32_t mode) {
+    auto* inst = (AimlPrefabInstance*)p;
+    if (inst) inst->connector_anchor = mode;
 }
 
 /* ── Dock to UI grid cell ────────────────────────────────────────────────── */

@@ -43,6 +43,9 @@ namespace AIML {
         bool is_const = false;
         bool is_volatile = false;
         bool is_global = false;   // True for module-level GlobalVariable (not a local alloca)
+        bool is_byref_arg = false; // True for list<T>/map<K:V> args passed by reference:
+                                   // alloca holds a pointer-to-struct instead of the struct itself.
+                                   // Method dispatch must dereference once before reaching the list/map.
         AccessLevel access = AccessLevel::Public; // Default for vars
     };
 
@@ -77,6 +80,7 @@ namespace AIML {
             int fptable_index = -1;           // Index in __aiml_fptable / fptable_current (-1 = not in table)
             std::string sourceYaml;           // YAML dump of the function AST node (for sys.bundle)
             std::set<std::string> referencedTypes; // User-defined types referenced in the body
+            bool deprecated = false;          // meta: [deprecated] → warn at each call site
         };
 
         struct StructMember {
@@ -87,7 +91,19 @@ namespace AIML {
             bool is_const = false;
             bool is_volatile = false;
             uint64_t version = 1; // Version of the field (u64)
-            std::shared_ptr<AIML::AST::Expr> initValue; 
+            std::shared_ptr<AIML::AST::Expr> initValue;
+
+            // AionDB secondary-index modifier (spec/45_db_indexed_fields.md).
+            // Activated by 4th-position dict in model field: e.g.
+            //   - [name, string, "", { db_indexed: true, unique: true }]
+            // When set on a model used as Kv<string:Model>'s value type, the
+            // compiler emits a sidecar Kv ("<main_name>__<field>") and hooks
+            // set/delete to maintain it; auto-method findings_by_<field> /
+            // finding_by_<field> resolves against the sidecar.
+            bool db_indexed = false;
+            std::string db_indexed_mode;   // "" | "lower"
+            bool db_indexed_unique = false;
+            bool db_indexed_skip_empty = false;
         };
 
         // Builtin method handler: receives base alloca (raw ptr), full CallExpr for
@@ -244,8 +260,99 @@ namespace AIML {
     std::map<std::string, FunctionInfo> functions;
     std::map<std::string, ClassInfo> classes; // Class Registry
     std::map<std::string, std::map<std::string, int>> enums; // Enum Registry
+    std::map<std::string, std::map<int, std::string>> enumLabels; // enum name → id → display label
     std::map<std::string, std::string> enumSources;          // enum name → YAML source (for sys.bundle)
+
+    /// Unused-enumerator analysis (spec/49): every enum member declared in THIS
+    /// module (qualified enum name → set of member names), the members actually
+    /// referenced as `Enum.Member`, and each enum's declaration source location.
+    /// Merged up the AIMLCompiler sub-compiler hierarchy (allEnumDeclMembers /
+    /// allEnumUsedMembers) exactly like prefabDecls/prefabUses, so the top-level
+    /// build warns on declared-but-never-referenced members.  Keyed identically
+    /// to `enums` (qualified name) so decl and use sets line up.
+    std::map<std::string, std::set<std::string>> enumDeclMembers;
+    std::map<std::string, std::set<std::string>> enumUsedMembers;
+    std::map<std::string, std::string>            enumDeclLoc;   // enum name → "file:line: "
     std::map<std::string, std::string> interfaceSources;     // interface name → YAML source (for sys.bundle)
+
+    // Cascade Registry — a cascade is an algebraic sum type: it has multiple
+    // named nodes; each node carries a distinct bytecode id and a payload
+    // (list of typed fields).  Serializes as `list<i32>` = [id, f0, f1, ...]
+    // with nested cascade-typed fields expanding recursively.
+    struct CascadeFieldInfo {
+        std::string name;         // auto-generated at parse-time if compact form
+        std::string typeName;     // resolved lazily (may reference forward-decl'd type)
+        std::string defaultValue; // literal or empty
+    };
+    struct CascadeNodeInfo {
+        std::string name;
+        int         id = -1;
+        std::string label;
+        std::vector<CascadeFieldInfo> fields;
+    };
+    struct CascadeInfo {
+        std::string name;
+        std::string opcode;   // optional enum typing element 0 (node id); "" = none
+        std::vector<CascadeNodeInfo> nodes;
+        // Convenience lookups derived at registration time:
+        std::map<int, size_t>         byId;    // id → index into `nodes`
+        std::map<std::string, size_t> byName;  // node-name → index
+    };
+    std::map<std::string, CascadeInfo> cascades;     // Cascade Registry
+    std::map<std::string, std::string> cascadeSources; // cascade name → YAML source
+
+    // Function-cascade method pool (spec/57).  M1a: pool declaration + wiring.
+    struct CascadeClassInfo {
+        std::string name;
+        std::string boundName;   // the cascade or enum it renders
+        bool        bindsEnum = false;  // false = cascade, true = enum
+        std::string carrier;     // entry carrier type
+        std::string taker;       // exit carrier type
+        std::vector<std::string> members;  // rule-holding class names
+    };
+    std::map<std::string, CascadeClassInfo> cascadeClasses;   // CascadeClass Registry
+
+    /// ClassGroup Registry (spec/58) — synthesized container-class names.  On
+    /// {new: <container>}, visitNewExpr calls the synthesized `<container>___ctor`
+    /// to allocate every instance and back-patch the sees pointers.
+    std::set<std::string> classGroupContainers;
+
+    /// Prefab Registry — maps every `- prefab:` name declared locally or in a
+    /// (transitively) imported module to the set of its declared child names.
+    /// Populated during registerTypes so that checkPrefabUsage can statically
+    /// verify engine.instantiate("<Name>") (Tier 1) and child-addressing method
+    /// calls like inst.set_text("<child>", …) (Tier 2).  A prefab with no
+    /// children still gets an (empty) entry, so `.count(name)` answers the
+    /// Tier-1 "is this a known prefab?" question.  See spec/44_8_prefab_static.md.
+    std::map<std::string, std::set<std::string>> prefabDecls;
+
+    /// Prefab names instantiated (via engine.instantiate("<literal>")) anywhere
+    /// in THIS module's bodies.  Collected by checkPrefabUsage; merged up the
+    /// sub-compiler hierarchy (AIMLCompiler::allPrefabUses) so the top-level
+    /// build can warn on declared-but-never-instantiated prefabs (Tier 3
+    /// dead-prefab).  See spec/44_8_prefab_static.md.
+    std::set<std::string> prefabUses;
+
+    /// Prefab-report mode (`--prefab-report`): when set, checkPrefabUsage also
+    /// emits tab-separated fact records into `prefabReportLines` (declarations,
+    /// engine.instantiate sites, spawn/payload_spawn wiring, child accesses).
+    /// These are merged up the sub-compiler chain and printed once at the top
+    /// level instead of producing a binary.  See spec/44_8_prefab_static.md.
+    bool reportPrefabs = false;
+    std::vector<std::string> prefabReportLines;
+
+    /// Alias — named alias for a primitive type carrying widget metadata.
+    /// Used by cascade payloads for role names (VALUE, COUNT, SIDES, ...) that
+    /// map to i32 but rendere as constrained numeric inputs.
+    struct AliasInfo {
+        std::string name;
+        std::string typeName;      // underlying type
+        std::string label;
+        std::string minValue;
+        std::string maxValue;
+        std::string defaultValue;
+    };
+    std::map<std::string, AliasInfo> aliases;
 
     // Interface Registry — name → ordered method signatures.  Used for:
     //   1. resolving ptr<Interface> as a fat-pointer type (obj_ptr + vtbl_ptr)
@@ -288,6 +395,12 @@ namespace AIML {
     std::string currentSourceFile;   // Relative path of file being compiled
     std::string currentFunctionName; // Name of the function/method currently being compiled
     int         currentLine = -1;    // 1-based line of the statement being compiled (-1 = unknown)
+    // Decorator list of the function currently being compiled (spec/55).
+    // Set at visitFunction entry, restored at exit.  Empty vector = plain fn.
+    std::vector<std::string> currentFunctionDecorators;
+    // Return type name of the current function (e.g. "string", "i32") — the
+    // return-wrap logic needs it to know whether e.g. `vocab` applies.
+    std::string              currentFunctionReturnType;
 
     // Returns an AIML-source location prefix for diagnostic messages.
     // Format: "file:line: " or "file (in func): " or "file: " or "".
@@ -323,6 +436,38 @@ namespace AIML {
         return loc + ": ";
     }
 
+    // Lint: identifiers (variable/arg/field/function/class/interface names) must
+    // be at least 3 characters.  Catches loop-counter style like `k`/`i`/`n` and
+    // forces names that read at the call-site without context.  Returns true
+    // when the name is valid; emits LOG_ERROR and returns false otherwise.
+    // `kind` describes the role for the diagnostic (e.g. "variable", "argument").
+    bool validateIdentifier(const std::string& name, const std::string& kind,
+                            const YAML::Node& srcNode) const {
+        if (name.size() >= 3) return true;
+        // Empty names indicate a parser bug, reported elsewhere — don't double-log.
+        if (name.empty()) return true;
+        LOG_ERROR(fmtLoc(srcNode) + kind + " name '" + name +
+                  "' is shorter than 3 characters — pick a descriptive name");
+        return false;
+    }
+
+    // Prefab names and prefab child names must be at least 5 characters.  A
+    // prefab and its children are addressed BY NAME across files (engine.
+    // instantiate, spawn:, set_text/set_texture/child_clicked), so a terse name
+    // like `bg` / `btn` reads as noise at every call-site and collides easily.
+    // Stricter than validateIdentifier's 3-char floor because these names form
+    // the UI's cross-file wiring vocabulary.  See spec/44_8_prefab_static.md.
+    bool validatePrefabName(const std::string& name, const std::string& kind,
+                            const YAML::Node& srcNode) const {
+        if (name.size() >= 5) return true;
+        if (name.empty()) return true;   // parser bug, reported elsewhere
+        LOG_ERROR(fmtLoc(srcNode) + kind + " name '" + name +
+                  "' is shorter than 5 characters — prefab and child names are "
+                  "referenced by name across files; pick a descriptive name "
+                  "(>=5 chars)");
+        return false;
+    }
+
     // Hot-Reload: next free fptable slot index (incremented in visitFunction)
     int fptable_next_index = 0;
 
@@ -351,6 +496,12 @@ namespace AIML {
     bool        kvGetCalled         = false;   // last dispatched Kv method was get or get_copy
     std::string kvGetValueType;                // V from Kv<K:V> for diagnostic messages
 
+    // Transient: the CallExpr currently being dispatched.  Set by visitCall
+    // before invoking a builtinFunc lambda so the lambda can inspect literal
+    // args (e.g. asset registry compile-time validation of gl.tex("stem")).
+    // Reset after dispatch — do not hold across nested calls.
+    AIML::AST::CallExpr* currentCall = nullptr;
+
     // Set by visitCall for db.query option bags:
     // {where: fn_name}, {order_by: "field"}, {dir: "asc"/"desc"}, {limit: N}, {offset: N}
     std::string dbQueryStoreType;   // type of the first arg (e.g. "Store<Score>") for order_by field lookup
@@ -368,6 +519,12 @@ namespace AIML {
         // list<T>
         if (typeName.size() > 5 && typeName.rfind("list<", 0) == 0 && typeName.back() == '>') {
             collectUserTypes(typeName.substr(5, typeName.size() - 6), out);
+            return;
+        }
+        // cascade<X>  — the inner name is a top-level cascade decl
+        if (typeName.size() > 8 && typeName.rfind("cascade<", 0) == 0 && typeName.back() == '>') {
+            std::string inner = typeName.substr(8, typeName.size() - 9);
+            if (cascades.count(inner)) out.insert(inner);
             return;
         }
         // map<K:V>  (AIML uses colon as separator)
@@ -406,6 +563,22 @@ namespace AIML {
         // Check for Enums (Trace back to i32)
         if (enums.count(typeName)) {
              return llvm::Type::getInt32Ty(context);
+        }
+
+        // Aliases: resolve to the underlying type.  The widget metadata
+        // (label/min/max/default) is only consulted at UI-render time.
+        if (aliases.count(typeName)) {
+             return getLLVMType(aliases.at(typeName).typeName);
+        }
+
+        // cascade<X>: the wire format (and initial in-memory representation)
+        // matches the bytecode signature `[node_id, field0, field1, ...]`
+        // recursively.  So cascade<X> re-uses the list<i32> LLVM layout.
+        // Higher-level operations (typed field access, widget binding,
+        // serialize helpers) go through the cascade name looked up in
+        // `cascades[typeName-innerX]` at the call site.
+        if (typeName.rfind("cascade<", 0) == 0 && typeName.back() == '>') {
+            return getLLVMType("list<i32>");
         }
 
         // Check for List type: "list<T>"
@@ -678,7 +851,9 @@ namespace AIML {
         if (typeName == "socket_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlSocket*
         if (typeName == "tls_socket_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlTlsSocket*
         if (typeName == "ws_handle") return llvm::Type::getInt8Ty(context)->getPointerTo();          // AimlWs*
+        if (typeName == "audio_handle") return llvm::Type::getInt8Ty(context)->getPointerTo();       // V1 sentinel (asset registry)
         if (typeName == "prefab_instance") return llvm::Type::getInt8Ty(context)->getPointerTo();  // AimlPrefabInstance*
+        if (typeName == "connector") return llvm::Type::getInt8Ty(context)->getPointerTo();      // AimlConnector*
         if (typeName == "tensor") return llvm::Type::getInt8Ty(context)->getPointerTo();       // AimlTensor*
         if (typeName == "any") return llvm::Type::getInt8Ty(context)->getPointerTo();         // void*
 

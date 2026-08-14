@@ -39,6 +39,10 @@ public:
     // --target wasm32 for emcc consumers. Defaults to the native triple.
     void setTargetTriple(const std::string& triple);
 
+    // Pass --asset-roots=a,b,c through to the AssetScanner before compile.
+    // Parsed lazily at compile-start; empty roots disables the scan.
+    void setAssetRoots(const std::string& commaList);
+
     // Generates the standard C main() entry point wrapper.
     // Call this ONLY when building an executable or running JIT.
     void generateEntryPoint();
@@ -84,12 +88,37 @@ public:
     
     std::vector<std::string> linkedObjects;
     std::vector<std::string> importedSourceFiles;  // source paths of all imports (for .d file)
+    // Tier-3 dead-prefab analysis (spec/44_8): union of all `- prefab:` names
+    // declared, and all names instantiated via engine.instantiate("<literal>"),
+    // across this module AND every (transitive) import.  Merged up through
+    // resolveImport() exactly like importedSourceFiles.  At the top-level
+    // (non-library) build, prefabs in allPrefabDecls \ allPrefabUses are warned
+    // as declared-but-never-instantiated.
+    std::set<std::string> allPrefabDecls;
+    std::set<std::string> allPrefabUses;
+    // Unused-enumerator analysis (spec/49): union across this module AND every
+    // (transitive) import of declared enum members (qualified enum → members),
+    // referenced members, and each enum's decl location.  Merged up through
+    // resolveImport() like allPrefab*.  At the top-level build, members in
+    // allEnumDeclMembers \ allEnumUsedMembers are warned as never-referenced.
+    std::map<std::string, std::set<std::string>> allEnumDeclMembers;
+    std::map<std::string, std::set<std::string>> allEnumUsedMembers;
+    std::map<std::string, std::string>            allEnumDeclLoc;
+    // `--prefab-report`: analysis-only mode.  Collects prefab wiring facts
+    // (declarations, instantiate sites, spawn/payload_spawn wiring, child
+    // accesses) across the whole build, prints a grouped report at the top
+    // level, and skips object/entry emission.  See spec/44_8_prefab_static.md.
+    bool reportPrefabsMode = false;
+    std::string prefabReportFilter;   // --prefab-report=<scene>: focus one scene
+    std::vector<std::string> allPrefabReport;
     std::string compilerPath;
     std::string entryPointName = "main";
     // Stored target triple (set via setTargetTriple). Empty = use native default.
     // Propagated to sub-compilers spawned for imports so they emit IR for the
     // same target.
     std::string targetTripleStr;
+    // Raw --asset-roots=a,b,c value, parsed at compile-start.
+    std::string assetRootsStr;
     // When true, resolveImport emits each import as text-format LLVM IR (.ll)
     // instead of a native object (.o). Set automatically by main.cpp when the
     // top-level output is .ll (typically a WASM build via emcc). Native builds

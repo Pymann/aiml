@@ -4,7 +4,7 @@
     name: Bank
     members:
       - [balance, i32, 0, { access: private }]
-      - [id, i32, 12345, { access: public, const: true }]
+      - [var_id, i32, 12345, { access: public, const: true }]
     methods:
       - def:
           name: deposit
@@ -24,13 +24,13 @@
           body:
              - return: <.balance
 
-- decl: [b, Bank] # Stack allocation, default init (id=12345, balance=0)
+- decl: [var_b, Bank] # Stack allocation, default init (var_id=12345, balance=0)
 
-- print: ["Bank ID: ", b.id]
+- print: ["Bank ID: ", var_b.var_id]
 
 
 
 # Invalid: Access private member (Uncomment to test error)
-- set: [b.balance, 500]
-- print: [b.balance]
+- set: [var_b.balance, 500]
+- print: [var_b.balance]
 

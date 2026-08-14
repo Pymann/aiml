@@ -6,21 +6,21 @@
     return: i32
     body:
       - decl: [name, string, "World"]
-      - decl: [a, i32, 10]
-      - decl: [b, i32, 20]
+      - decl: [var_a, i32, 10]
+      - decl: [var_b, i32, 20]
       
       # 1. Simple Variable Expansion
       - print: "Hello ${name}"
 
       # 2. Expression Expansion (Arithmetic)
-      - print: "10 + 20 = ${ { +: [a, b] } }"
+      - print: "10 + 20 = ${ { +: [var_a, var_b] } }"
       
       # 3. Nested Expression (Function Call)
-      - print: "Result from lib: ${ { call: [my.lib.add, a, b] } }"
+      - print: "Result from lib: ${ { call: [my.lib.add, var_a, var_b] } }"
 
       # 4. Implicit Type Conversion in Decl
       - decl: [res_str, string]
-      - set: [res_str, "${ { +: [a, b] } }"]
+      - set: [res_str, "${ { +: [var_a, var_b] } }"]
       - print: "String variable holds: ${res_str}"
       
       # 5. Implicit Cast String -> Int (via ReturnCommand logic if applicable, or explicit atoi)

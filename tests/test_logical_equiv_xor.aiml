@@ -2,14 +2,14 @@
     name: main
     return: i32
     body:
-      - decl: [t, bool, true]
-      - decl: [f, bool, false]
+      - decl: [var_t, bool, true]
+      - decl: [var_f, bool, false]
 
       # equiv truth table
-      - decl: [e_tt, bool, { equiv: [t, t] }]
-      - decl: [e_tf, bool, { equiv: [t, f] }]
-      - decl: [e_ft, bool, { equiv: [f, t] }]
-      - decl: [e_ff, bool, { equiv: [f, f] }]
+      - decl: [e_tt, bool, { equiv: [var_t, var_t] }]
+      - decl: [e_tf, bool, { equiv: [var_t, var_f] }]
+      - decl: [e_ft, bool, { equiv: [var_f, var_t] }]
+      - decl: [e_ff, bool, { equiv: [var_f, var_f] }]
       - if: [{ neq: [e_tt, 1] }, true]
         then: [{ return: 1 }]
       - if: [{ neq: [e_tf, 0] }, true]
@@ -20,10 +20,10 @@
         then: [{ return: 4 }]
 
       # xor truth table
-      - decl: [x_tt, bool, { xor: [t, t] }]
-      - decl: [x_tf, bool, { xor: [t, f] }]
-      - decl: [x_ft, bool, { xor: [f, t] }]
-      - decl: [x_ff, bool, { xor: [f, f] }]
+      - decl: [x_tt, bool, { xor: [var_t, var_t] }]
+      - decl: [x_tf, bool, { xor: [var_t, var_f] }]
+      - decl: [x_ft, bool, { xor: [var_f, var_t] }]
+      - decl: [x_ff, bool, { xor: [var_f, var_f] }]
       - if: [{ neq: [x_tt, 0] }, true]
         then: [{ return: 5 }]
       - if: [{ neq: [x_tf, 1] }, true]
@@ -34,19 +34,19 @@
         then: [{ return: 8 }]
 
       # not alias
-      - decl: [nt, bool, { not: [t] }]
-      - decl: [nf, bool, { not: [f] }]
-      - if: [{ neq: [nt, 0] }, true]
+      - decl: [var_nt, bool, { not: [var_t] }]
+      - decl: [var_nf, bool, { not: [var_f] }]
+      - if: [{ neq: [var_nt, 0] }, true]
         then: [{ return: 9 }]
-      - if: [{ neq: [nf, 1] }, true]
+      - if: [{ neq: [var_nf, 1] }, true]
         then: [{ return: 10 }]
 
       # equiv/xor with i32 coercion
-      - decl: [a, i32, 5]
-      - decl: [b, i32, 0]
-      - decl: [ec1, bool, { equiv: [a, a] }]
-      - decl: [ec2, bool, { equiv: [a, b] }]
-      - decl: [xc1, bool, { xor: [a, b] }]
+      - decl: [var_a, i32, 5]
+      - decl: [var_b, i32, 0]
+      - decl: [ec1, bool, { equiv: [var_a, var_a] }]
+      - decl: [ec2, bool, { equiv: [var_a, var_b] }]
+      - decl: [xc1, bool, { xor: [var_a, var_b] }]
       - if: [{ neq: [ec1, 1] }, true]
         then: [{ return: 11 }]
       - if: [{ neq: [ec2, 0] }, true]

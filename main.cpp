@@ -2,6 +2,7 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#include <cstring>
 #include "compiler.h"
 #include "logger.h"
 #include <filesystem>
@@ -14,7 +15,10 @@ int main(int argc, char** argv) {
 
     bool runMode = false;
     bool emitMain = false;
+    bool reportPrefabs = false;
+    std::string reportFilter;
     std::string targetTriple;
+    std::string assetRoots;  // raw comma-separated string, parsed in compile()
 
     // Program args: everything after '--' is forwarded to the AIML program
     int programArgc = 0;
@@ -40,11 +44,22 @@ int main(int argc, char** argv) {
             runMode = true;
         } else if (arg == "--emit-main") {
             emitMain = true;
+        } else if (arg == "--prefab-report") {
+            reportPrefabs = true;
+        } else if (arg.rfind("--prefab-report=", 0) == 0) {
+            // --prefab-report=<scene> — focus on one scene: case-insensitive
+            // substring matched against source path / owner class / action class.
+            reportPrefabs = true;
+            reportFilter = arg.substr(strlen("--prefab-report="));
         } else if (arg == "--target" && i + 1 < argc) {
             targetTriple = argv[++i];
             if (targetTriple == "wasm32") targetTriple = "wasm32-unknown-emscripten";
         } else if (arg == "-o" && i + 1 < argc) {
             outputFile = argv[++i];
+        } else if (arg.rfind("--asset-roots=", 0) == 0) {
+            // Asset Registry (spec/22, backlog 2026-06-07): scan these roots
+            // (dirs or single files) at compile-start, register stems by kind.
+            assetRoots = arg.substr(strlen("--asset-roots="));
         } else if (arg[0] == '-') {
             std::cerr << "Unknown option: " << arg << std::endl;
             return 1;
@@ -80,6 +95,7 @@ int main(int argc, char** argv) {
 
     AIMLCompiler compiler;
     if (!targetTriple.empty()) compiler.setTargetTriple(targetTriple);
+    if (!assetRoots.empty()) compiler.setAssetRoots(assetRoots);
     
     // Resolve compiler path (argv[0]) to absolute path for recursive calls
     try {
@@ -109,6 +125,17 @@ int main(int argc, char** argv) {
     
     bool isObjectFile = outputFile.length() >= 2 && outputFile.substr(outputFile.length() - 2) == ".o";
     LOG_DEBUG("isObjectFile=" + std::to_string(isObjectFile));
+
+    if (reportPrefabs) {
+        // --prefab-report: analysis-only.  Walk the whole import graph and print
+        // a prefab wiring report; emit no objects/binary.  noCache forces every
+        // import to be re-walked (a cache hit would skip a module's facts).
+        compiler.reportPrefabsMode = true;
+        compiler.prefabReportFilter = reportFilter;
+        compiler.noCache = true;
+        compiler.compile(inputFile, "/dev/null");
+        return 0;
+    }
 
     if (runMode) {
         // JIT Mode

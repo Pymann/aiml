@@ -30,52 +30,52 @@
 
 # seek(0) + sequentiell zuruecklesen
 - call: [buf.seek, 0]
-- decl: [v0, f32, { call: [buf.read, f32] }]
-- decl: [v1, f32, { call: [buf.read, f32] }]
-- decl: [v2, f32, { call: [buf.read, f32] }]
-- decl: [v3, f32, { call: [buf.read, f32] }]
+- decl: [var_v0, f32, { call: [buf.read, f32] }]
+- decl: [var_v1, f32, { call: [buf.read, f32] }]
+- decl: [var_v2, f32, { call: [buf.read, f32] }]
+- decl: [var_v3, f32, { call: [buf.read, f32] }]
 
 - if:
-    condition: { "&&": [{ tolerance: [v0, 0.1, eps] }, { tolerance: [v1, 0.2, eps] }] }
+    condition: { "&&": [{ tolerance: [var_v0, 0.1, eps] }, { tolerance: [var_v1, 0.2, eps] }] }
     then:
-      - print: ["PASS: A2 read v0=${v0} v1=${v1}"]
+      - print: ["PASS: A2 read var_v0=${var_v0} var_v1=${var_v1}"]
       - set: [pass, { +: [pass, 1] }]
     else:
-      - print: ["FAIL: A2 v0=${v0} v1=${v1}"]
+      - print: ["FAIL: A2 var_v0=${var_v0} var_v1=${var_v1}"]
       - set: [fail, { +: [fail, 1] }]
 
 - if:
-    condition: { "&&": [{ tolerance: [v2, 0.3, eps] }, { tolerance: [v3, 0.4, eps] }] }
+    condition: { "&&": [{ tolerance: [var_v2, 0.3, eps] }, { tolerance: [var_v3, 0.4, eps] }] }
     then:
-      - print: ["PASS: A3 read v2=${v2} v3=${v3}"]
+      - print: ["PASS: A3 read var_v2=${var_v2} var_v3=${var_v3}"]
       - set: [pass, { +: [pass, 1] }]
     else:
-      - print: ["FAIL: A3 v2=${v2} v3=${v3}"]
+      - print: ["FAIL: A3 var_v2=${var_v2} var_v3=${var_v3}"]
       - set: [fail, { +: [fail, 1] }]
 
 # ── Phase B: Random access read via seek ───────────────────────────────────
 # Index 2 (3. Float) = byte offset 8
 - call: [buf.seek, 8]
-- decl: [r2, f32, { call: [buf.read, f32] }]
+- decl: [var_r2, f32, { call: [buf.read, f32] }]
 - if:
-    condition: { tolerance: [r2, 0.3, eps] }
+    condition: { tolerance: [var_r2, 0.3, eps] }
     then:
-      - print: ["PASS: B1 random read idx=2 -> ${r2}"]
+      - print: ["PASS: B1 random read idx=2 -> ${var_r2}"]
       - set: [pass, { +: [pass, 1] }]
     else:
-      - print: ["FAIL: B1 random read idx=2 -> ${r2} expected 0.3"]
+      - print: ["FAIL: B1 random read idx=2 -> ${var_r2} expected 0.3"]
       - set: [fail, { +: [fail, 1] }]
 
 # Index 0 (1. Float) = byte offset 0
 - call: [buf.seek, 0]
-- decl: [r0, f32, { call: [buf.read, f32] }]
+- decl: [var_r0, f32, { call: [buf.read, f32] }]
 - if:
-    condition: { tolerance: [r0, 0.1, eps] }
+    condition: { tolerance: [var_r0, 0.1, eps] }
     then:
-      - print: ["PASS: B2 random read idx=0 -> ${r0}"]
+      - print: ["PASS: B2 random read idx=0 -> ${var_r0}"]
       - set: [pass, { +: [pass, 1] }]
     else:
-      - print: ["FAIL: B2 random read idx=0 -> ${r0} expected 0.1"]
+      - print: ["FAIL: B2 random read idx=0 -> ${var_r0} expected 0.1"]
       - set: [fail, { +: [fail, 1] }]
 
 # ── Phase C: Random access write (in-place update) ────────────────────────
@@ -85,37 +85,37 @@
 
 # Verifiziere: seek back + read
 - call: [buf.seek, 4]
-- decl: [u1, f32, { call: [buf.read, f32] }]
+- decl: [var_u1, f32, { call: [buf.read, f32] }]
 - if:
-    condition: { tolerance: [u1, 9.99, eps] }
+    condition: { tolerance: [var_u1, 9.99, eps] }
     then:
-      - print: ["PASS: C1 in-place update idx=1 -> ${u1}"]
+      - print: ["PASS: C1 in-place update idx=1 -> ${var_u1}"]
       - set: [pass, { +: [pass, 1] }]
     else:
-      - print: ["FAIL: C1 in-place update idx=1 -> ${u1} expected 9.99"]
+      - print: ["FAIL: C1 in-place update idx=1 -> ${var_u1} expected 9.99"]
       - set: [fail, { +: [fail, 1] }]
 
 # Andere Werte unberuehrt?
 - call: [buf.seek, 0]
-- decl: [c0, f32, { call: [buf.read, f32] }]
+- decl: [var_c0, f32, { call: [buf.read, f32] }]
 - if:
-    condition: { tolerance: [c0, 0.1, eps] }
+    condition: { tolerance: [var_c0, 0.1, eps] }
     then:
-      - print: ["PASS: C2 idx=0 unberuehrt -> ${c0}"]
+      - print: ["PASS: C2 idx=0 unberuehrt -> ${var_c0}"]
       - set: [pass, { +: [pass, 1] }]
     else:
-      - print: ["FAIL: C2 idx=0 -> ${c0} expected 0.1"]
+      - print: ["FAIL: C2 idx=0 -> ${var_c0} expected 0.1"]
       - set: [fail, { +: [fail, 1] }]
 
 - call: [buf.seek, 8]
-- decl: [c2, f32, { call: [buf.read, f32] }]
+- decl: [var_c2, f32, { call: [buf.read, f32] }]
 - if:
-    condition: { tolerance: [c2, 0.3, eps] }
+    condition: { tolerance: [var_c2, 0.3, eps] }
     then:
-      - print: ["PASS: C3 idx=2 unberuehrt -> ${c2}"]
+      - print: ["PASS: C3 idx=2 unberuehrt -> ${var_c2}"]
       - set: [pass, { +: [pass, 1] }]
     else:
-      - print: ["FAIL: C3 idx=2 -> ${c2} expected 0.3"]
+      - print: ["FAIL: C3 idx=2 -> ${var_c2} expected 0.3"]
       - set: [fail, { +: [fail, 1] }]
 
 # ── Phase D: Realistische EmbeddingTable-Belastung ────────────────────────
@@ -124,12 +124,12 @@
 - call: [emb.alloc, 524288]
 
 # Schreibe 131072 Nullen sequentiell
-- decl: [i, i32, 0]
+- decl: [var_i, i32, 0]
 - while:
-    condition: { "<": [i, 131072] }
+    condition: { "<": [var_i, 131072] }
     body:
       - call: [emb.write, 0.0, f32]
-      - set: [i, { +: [i, 1] }]
+      - set: [var_i, { +: [var_i, 1] }]
 
 - decl: [elen, i32, emb.len]
 - if:
@@ -173,13 +173,13 @@
       - set: [fail, { +: [fail, 1] }]
 
 # ── Phase F: SGD-Update pattern ───────────────────────────────────────────
-# emb[5][0] = emb[5][0] - lr * grad
-# cur=1.5, lr=0.01, grad=10.0 -> new = 1.5 - 0.1 = 1.4
+# emb[5][0] = emb[5][0] - var_lr * grad
+# cur=1.5, var_lr=0.01, grad=10.0 -> new = 1.5 - 0.1 = 1.4
 - call: [emb.seek, 640]
 - decl: [cur, f32, { call: [emb.read, f32] }]
-- decl: [lr, f32, 0.01]
+- decl: [var_lr, f32, 0.01]
 - decl: [grad, f32, 10.0]
-- decl: [updated, f32, { "-": [cur, { "*": [lr, grad] }] }]
+- decl: [updated, f32, { "-": [cur, { "*": [var_lr, grad] }] }]
 - call: [emb.seek, 640]
 - call: [emb.write, updated, f32]
 
@@ -198,8 +198,8 @@
 # ── Phase G: Dynamischer seek mit berechneter Adresse ─────────────────────
 - decl: [token_id, i32, 10]
 - decl: [dim, i32, 32]
-- decl: [d, i32, 3]
-- decl: [byte_offset, i32, { "*": [{ "+": [{ "*": [token_id, dim] }, d] }, 4] }]
+- decl: [var_d, i32, 3]
+- decl: [byte_offset, i32, { "*": [{ "+": [{ "*": [token_id, dim] }, var_d] }, 4] }]
 # byte_offset = (10*32 + 3) * 4 = 323 * 4 = 1292
 
 - call: [emb.seek, byte_offset]
@@ -217,10 +217,10 @@
       - set: [fail, { +: [fail, 1] }]
 
 # ── Phase H: tolerance Operator selbst testen ─────────────────────────────
-- decl: [ta, f32, 1.0]
-- decl: [tb, f32, 1.0005]
+- decl: [var_ta, f32, 1.0]
+- decl: [var_tb, f32, 1.0005]
 - if:
-    condition: { tolerance: [ta, tb, 0.001] }
+    condition: { tolerance: [var_ta, var_tb, 0.001] }
     then:
       - print: ["PASS: H1 tolerance(1.0, 1.0005, 0.001) = true"]
       - set: [pass, { +: [pass, 1] }]
@@ -229,7 +229,7 @@
       - set: [fail, { +: [fail, 1] }]
 
 - if:
-    condition: { tolerance: [ta, tb, 0.0001] }
+    condition: { tolerance: [var_ta, var_tb, 0.0001] }
     then:
       - print: ["FAIL: H2 tolerance(1.0, 1.0005, 0.0001) should be false"]
       - set: [fail, { +: [fail, 1] }]
@@ -238,10 +238,10 @@
       - set: [pass, { +: [pass, 1] }]
 
 # Negative Werte
-- decl: [tc, f32, -3.5]
-- decl: [td, f32, -3.501]
+- decl: [var_tc, f32, -3.5]
+- decl: [var_td, f32, -3.501]
 - if:
-    condition: { tolerance: [tc, td, 0.01] }
+    condition: { tolerance: [var_tc, var_td, 0.01] }
     then:
       - print: ["PASS: H3 tolerance(-3.5, -3.501, 0.01) = true"]
       - set: [pass, { +: [pass, 1] }]

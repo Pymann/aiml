@@ -1,3 +1,4 @@
+# static-check: off
 # Probe: complex websocket mirror test, but drain multiple client updates
 # before dereferencing replica nested lists/structs.
 # Expected exit code: 0
@@ -57,7 +58,7 @@
 
 - model:
     name: ParticipantState
-    sync: [slot, participant_id, display_name, is_bot, is_connected, is_ready, is_active, hp, max_hp, hand_count, field_count, graveyard_count, mana_zone_count, spell_zone_count, trap_zone_count, item_zone_count, mana_played_this_round, counters, flags]
+    sync: [slot, participant_id, display_name, is_bot, is_connected, is_ready, is_active, var_hp, max_hp, hand_count, field_count, graveyard_count, mana_zone_count, spell_zone_count, trap_zone_count, item_zone_count, mana_played_this_round, counters, flags]
     fields:
       - [slot, i32, -1]
       - [participant_id, string]
@@ -66,7 +67,7 @@
       - [is_connected, i32, 0]
       - [is_ready, i32, 0]
       - [is_active, i32, 0]
-      - [hp, i32, 100]
+      - [var_hp, i32, 100]
       - [max_hp, i32, 100]
       - [hand_count, i32, 0]
       - [field_count, i32, 0]
@@ -159,32 +160,32 @@
     body:
       - decl: [sess, mirror_session]
       - set: [sess, { call: [mirror.listen, "ws://127.0.0.1:19896"] }]
-      - decl: [root_json, string, '{"__type":"GameStateRoot","match":{"match_id":"match-9r","mode":"pvb","status":"running","round":7,"turn":3,"active_slot":0,"priority_slot":0,"winner_slot":-1,"phase":{"phase_id":"main","phase_label":"Main Phase","step":2},"waiting_for_command":1,"prompt_kind":"play_card","prompt_source_id":"card-77","prompt_target_zone":"field_0","combat_attacker_id":"att-1","combat_defender_id":"def-1","last_event":"initial_sync","flags":[{"name":"combat","enabled":1},{"name":"priority","enabled":1}]},"participants":[{"slot":0,"participant_id":"p1","display_name":"Alice","is_bot":0,"is_connected":1,"is_ready":1,"is_active":1,"hp":26,"max_hp":30,"hand_count":5,"field_count":2,"graveyard_count":1,"mana_zone_count":3,"spell_zone_count":1,"trap_zone_count":0,"item_zone_count":1,"mana_played_this_round":1,"counters":[{"name":"mana","value":3},{"name":"rage","value":1}],"flags":[{"name":"shield","enabled":1}]},{"slot":1,"participant_id":"p2","display_name":"Bot Bob","is_bot":1,"is_connected":1,"is_ready":1,"is_active":0,"hp":22,"max_hp":30,"hand_count":4,"field_count":1,"graveyard_count":2,"mana_zone_count":4,"spell_zone_count":0,"trap_zone_count":1,"item_zone_count":0,"mana_played_this_round":0,"counters":[{"name":"mana","value":4}],"flags":[{"name":"stunned","enabled":0}]}],"selected_decksets":[{"deckset_id":"ds-1","owner_slot":0,"display_name":"Starter Alpha","mana_deck_id":"m-1","spell_deck_id":"s-1","creature_deck_id":"c-1","item_deck_id":"i-1","primordial_deck_id":"p-1"}],"decks":[{"deck_id":"deck-1","owner_slot":0,"deck_type":"mana","display_name":"Mana Core","remaining_cards":27,"total_cards":30,"top_known_card_id":"mana-3"}],"zones":[{"zone_id":"field_0","zone_label":"Field 0","owner_slot":0,"zone_kind":"field","visibility_mode":"public","capacity":5,"card_count":1,"cards":[{"instance_id":"ci-1","owner_slot":0,"zone_id":"field_0","order_idx":0}]},{"zone_id":"hand_0","zone_label":"Hand 0","owner_slot":0,"zone_kind":"hand","visibility_mode":"owner","capacity":10,"card_count":2,"cards":[{"instance_id":"ci-2","owner_slot":0,"zone_id":"hand_0","order_idx":0},{"instance_id":"ci-3","owner_slot":0,"zone_id":"hand_0","order_idx":1}]}],"card_instances":[{"instance_id":"ci-1","base_card_id":"base-1","display_name":"Fire Adept","owner_slot":0,"controller_slot":0,"zone_id":"field_0","position_idx":0,"card_type":"creature","is_face_up":1,"is_tapped":0,"round_played":3,"current_hp":5,"base_hp":5,"attack":4,"defense":2,"initiative":3,"moral":1,"movement":2,"counters":[{"name":"burn","value":2}],"flags":[{"name":"flying","enabled":1}]}]}' ]
+      - decl: [root_json, string, '{"__type":"GameStateRoot","match":{"match_id":"match-9r","mode":"pvb","status":"running","round":7,"turn":3,"active_slot":0,"priority_slot":0,"winner_slot":-1,"phase":{"phase_id":"main","phase_label":"Main Phase","step":2},"waiting_for_command":1,"prompt_kind":"play_card","prompt_source_id":"card-77","prompt_target_zone":"field_0","combat_attacker_id":"att-1","combat_defender_id":"def-1","last_event":"initial_sync","flags":[{"name":"combat","enabled":1},{"name":"priority","enabled":1}]},"participants":[{"slot":0,"participant_id":"p1","display_name":"Alice","is_bot":0,"is_connected":1,"is_ready":1,"is_active":1,"var_hp":26,"max_hp":30,"hand_count":5,"field_count":2,"graveyard_count":1,"mana_zone_count":3,"spell_zone_count":1,"trap_zone_count":0,"item_zone_count":1,"mana_played_this_round":1,"counters":[{"name":"mana","value":3},{"name":"rage","value":1}],"flags":[{"name":"shield","enabled":1}]},{"slot":1,"participant_id":"p2","display_name":"Bot Bob","is_bot":1,"is_connected":1,"is_ready":1,"is_active":0,"var_hp":22,"max_hp":30,"hand_count":4,"field_count":1,"graveyard_count":2,"mana_zone_count":4,"spell_zone_count":0,"trap_zone_count":1,"item_zone_count":0,"mana_played_this_round":0,"counters":[{"name":"mana","value":4}],"flags":[{"name":"stunned","enabled":0}]}],"selected_decksets":[{"deckset_id":"ds-1","owner_slot":0,"display_name":"Starter Alpha","mana_deck_id":"var_m-1","spell_deck_id":"s-1","creature_deck_id":"c-1","item_deck_id":"var_i-1","primordial_deck_id":"p-1"}],"decks":[{"deck_id":"deck-1","owner_slot":0,"deck_type":"mana","display_name":"Mana Core","remaining_cards":27,"total_cards":30,"top_known_card_id":"mana-3"}],"zones":[{"zone_id":"field_0","zone_label":"Field 0","owner_slot":0,"zone_kind":"field","visibility_mode":"public","capacity":5,"card_count":1,"cards":[{"instance_id":"ci-1","owner_slot":0,"zone_id":"field_0","order_idx":0}]},{"zone_id":"hand_0","zone_label":"Hand 0","owner_slot":0,"zone_kind":"hand","visibility_mode":"owner","capacity":10,"card_count":2,"cards":[{"instance_id":"ci-2","owner_slot":0,"zone_id":"hand_0","order_idx":0},{"instance_id":"ci-3","owner_slot":0,"zone_id":"hand_0","order_idx":1}]}],"card_instances":[{"instance_id":"ci-1","base_card_id":"base-1","display_name":"Fire Adept","owner_slot":0,"controller_slot":0,"zone_id":"field_0","position_idx":0,"card_type":"creature","is_face_up":1,"is_tapped":0,"round_played":3,"current_hp":5,"base_hp":5,"attack":4,"defense":2,"initiative":3,"moral":1,"movement":2,"counters":[{"name":"burn","value":2}],"flags":[{"name":"flying","enabled":1}]}]}' ]
       - decl: [root, GameStateRoot]
       - set: [root, { call: [sys.deserialize, root_json, "GameStateRoot"] }]
       - decl: [nid, i32]
       - set: [nid, { call: [sess.register, root] }]
 
-      - decl: [i, i32, 0]
+      - decl: [var_i, i32, 0]
       - while:
-          condition: { lt: [i, 35] }
+          condition: { lt: [var_i, 35] }
           body:
             - call: [sess.update]
             - call: [time.sleep_ms, 10]
-            - set: [i, { +: [i, 1] }]
+            - set: [var_i, { +: [var_i, 1] }]
 
       - decl: [match_delta_json, string, '{"__type":"MatchState","match_id":"match-9r","mode":"pvb","status":"running","round":8,"turn":3,"active_slot":0,"priority_slot":0,"winner_slot":-1,"phase":{"phase_id":"main","phase_label":"Main Phase","step":2},"waiting_for_command":0,"prompt_kind":"play_card","prompt_source_id":"card-77","prompt_target_zone":"field_0","combat_attacker_id":"att-1","combat_defender_id":"def-1","last_event":"delta_round_8","flags":[{"name":"combat","enabled":1},{"name":"priority","enabled":1}]}' ]
       - decl: [match_delta, MatchState]
       - set: [match_delta, { call: [sys.deserialize, match_delta_json, "MatchState"] }]
       - set: [root.match, match_delta]
 
-      - set: [i, 0]
+      - set: [var_i, 0]
       - while:
-          condition: { lt: [i, 25] }
+          condition: { lt: [var_i, 25] }
           body:
             - call: [sess.update]
             - call: [time.sleep_ms, 10]
-            - set: [i, { +: [i, 1] }]
+            - set: [var_i, { +: [var_i, 1] }]
 
       - call: [sess.close]
 
@@ -197,10 +198,10 @@
 - call: [time.sleep_ms, 120]
 - call: [client.update]
 
-- decl: [ev, mirror_event]
-- set: [ev, { call: [client.next_event] }]
+- decl: [var_ev, mirror_event]
+- set: [var_ev, { call: [client.next_event] }]
 - decl: [replica, GameStateRoot]
-- call: [client.register_id, replica, ev.net_id]
+- call: [client.register_id, replica, var_ev.net_id]
 
 - decl: [poll_i, i32, 0]
 - while:
@@ -210,16 +211,16 @@
       - call: [client.update]
       - set: [poll_i, { +: [poll_i, 1] }]
 
-- decl: [m, MatchState, replica.match]
-- decl: [p0, ParticipantState, replica.participants-0]
-- decl: [z0, ZoneState, replica.zones-0]
+- decl: [var_m, MatchState, replica.match]
+- decl: [var_p0, ParticipantState, replica.participants-0]
+- decl: [var_z0, ZoneState, replica.zones-0]
 - decl: [ci0, CardInstanceState, replica.card_instances-0]
-- print: ["complex-poll: round=${m.round} p0=${p0.display_name}/${p0.hp} z0=${z0.zone_id}/${z0.card_count} ci0=${ci0.display_name}/${ci0.current_hp}"]
+- print: ["complex-poll: round=${var_m.round} var_p0=${var_p0.display_name}/${var_p0.var_hp} var_z0=${var_z0.zone_id}/${var_z0.card_count} ci0=${ci0.display_name}/${ci0.current_hp}"]
 
 - if:
-    condition: { eq: [{ eq: [m.match_id, "match-9r"] }, 0] }
+    condition: { eq: [{ eq: [var_m.match_id, "match-9r"] }, 0] }
     then:
-      - print: ["FAIL complex-poll: match_id=${m.match_id}"]
+      - print: ["FAIL complex-poll: match_id=${var_m.match_id}"]
       - call: [sys.exit, 1]
 
 - if:
@@ -241,9 +242,9 @@
       - call: [sys.exit, 1]
 
 - if:
-    condition: { neq: [m.round, 8] }
+    condition: { neq: [var_m.round, 8] }
     then:
-      - print: ["FAIL complex-poll: round=${m.round}"]
+      - print: ["FAIL complex-poll: round=${var_m.round}"]
       - call: [sys.exit, 1]
 
 - call: [client.close]

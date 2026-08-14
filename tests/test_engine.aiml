@@ -136,18 +136,18 @@
 # prim.to_gl_mesh() führt intern positions/uvs/normals/indices-Abruf und
 # aiml_gl_create_mesh durch und gibt das fertige gl_mesh zurück.
 
-- decl: [gp, path, "tests/test.glb"]
-- decl: [scene, gltf_scene, { call: [gltf.load, gp] }]
-- decl: [sv, i32, { call: [scene.valid] }]
-- if: [{ eq: [sv, 0] }, true]
+- decl: [var_gp, path, "tests/test.glb"]
+- decl: [scene, gltf_scene, { call: [gltf.load, var_gp] }]
+- decl: [var_sv, i32, { call: [scene.valid] }]
+- if: [{ eq: [var_sv, 0] }, true]
   then:
     - print: ["FAIL Phase E: gltf.load failed"]
     - call: [sys.exit, 1]
 
 - decl: [meshes, list<gltf_mesh>]
 - set:  [meshes, { call: [scene.meshes] }]
-- decl: [mc, i32, { call: [meshes.len] }]
-- if: [{ <: [mc, 1] }, true]
+- decl: [var_mc, i32, { call: [meshes.len] }]
+- if: [{ <: [var_mc, 1] }, true]
   then:
     - print: ["FAIL Phase E: no meshes in scene"]
     - call: [sys.exit, 1]
@@ -175,14 +175,14 @@
 # Jeder engine.swap-Aufruf: SwapBuffers + PollEvents + frame_count++
 # Wir prüfen, dass engine.frame() nach N Frames >= N ist.
 
-- decl: [fr, i32, 0]
+- decl: [var_fr, i32, 0]
 - while:
-    condition: { lt: [fr, 30] }
+    condition: { lt: [var_fr, 30] }
     body:
       - call: [gl.clear_all, 0.0, 0.0, 0.1, 1.0]
       - call: [tri_mesh.draw]
       - call: [engine.swap, win]
-      - set: [fr, { +: [fr, 1] }]
+      - set: [var_fr, { +: [var_fr, 1] }]
 
 - decl: [eng_frame, i64, { call: [engine.frame] }]
 - if: [{ <: [eng_frame, 30] }, true]

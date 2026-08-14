@@ -12,20 +12,20 @@
 - decl: [players, Store<GlobalStorePlayer>]
 - set: [players, { call: [db.open, "path_db_global_store", {persist: true, path: db_dir}] }]
 
-- decl: [p, GlobalStorePlayer]
-- set: [p.score, 101]
-- set: [p.level, 7]
+- decl: [var_p, GlobalStorePlayer]
+- set: [var_p.score, 101]
+- set: [var_p.level, 7]
 
-- decl: [id, i32]
-- set: [id, { call: [players.insert, p] }]
-- print: ["global_store_id=${id}"]
+- decl: [var_id, i32]
+- set: [var_id, { call: [players.insert, var_p] }]
+- print: ["global_store_id=${var_id}"]
 
-- decl: [n, i32]
-- set: [n, { call: [players.len] }]
-- print: ["global_store_len=${n}"]
+- decl: [var_n, i32]
+- set: [var_n, { call: [players.len] }]
+- print: ["global_store_len=${var_n}"]
 
 - decl: [got, ptr<GlobalStorePlayer>]
-- set: [got, { call: [players.get, id] }]
+- set: [got, { call: [players.get, var_id] }]
 - if:
     condition: { eq: [got, null] }
     then:
@@ -34,6 +34,6 @@
 
 - print: ["global_store_score=${got.score} level=${got.level}"]
 
-- decl: [cp, i32]
-- set: [cp, { call: [db.checkpoint] }]
-- print: ["global_store_checkpoint=${cp}"]
+- decl: [var_cp, i32]
+- set: [var_cp, { call: [db.checkpoint] }]
+- print: ["global_store_checkpoint=${var_cp}"]

@@ -106,6 +106,34 @@ void    aiml_db_kv_evict(void* kv);    // free in-memory map, keep WAL on disk
 void    aiml_db_kv_set_blob(void* kv, const char* key, const void* data, int32_t size);
 void*   aiml_db_kv_get_blob(void* kv, const char* key, int32_t* out_size);
 
+// ── Secondary Index (db_indexed modifier, spec/45) ──────────────────────────
+// Opaque handle to an in-memory secondary index keyed by a value-type field.
+// Registered per (parent_kv, field_name); subsequent opens of the same pair
+// return the existing handle (idempotent).  `unique` = 0 for 1:N
+// (findings_by → list<string>) or 1 for unique (finding_by → string).
+// `mode` is "" (default) or "lower" (case-insensitive).
+void* aiml_db_index_open_for_kv(void* parent_kv, const char* field_name,
+                                int32_t unique, const char* mode);
+// Returns existing index for (parent_kv, field_name) or nullptr.
+void* aiml_db_index_lookup(void* parent_kv, const char* field_name);
+// 1:N: add kv_key under field_val (idempotent).
+// unique: overwrite the single mapping.
+void  aiml_db_index_add(void* idx, const char* field_val, const char* kv_key);
+// 1:N: remove kv_key from field_val's list (no-op if absent).
+// unique: clear if current mapping points to kv_key.
+void  aiml_db_index_remove(void* idx, const char* field_val, const char* kv_key);
+// Fills out_list (AimlListRaw*) with all kv_keys mapped to field_val.
+// For unique-mode index the list contains 0 or 1 element.
+void  aiml_db_index_findings(void* idx, const char* field_val, void* out_list);
+// Returns mapped kv_key for field_val (unique-mode); for 1:N returns the
+// first element (or "" if none).  Pointer lives as long as the index entry.
+const char* aiml_db_index_finding(void* idx, const char* field_val);
+// Walks existing entries in the parent kv and populates the index from the
+// field at byte-offset `field_offset`.  `field_tag`: 0=string, 1=i32, 2=i64,
+// 3=list<string>.  Called once at open-time when the index is empty but the
+// main Kv already has data (cross-process reopen, first-time db_indexed).
+void aiml_db_index_backfill(void* kv, void* idx, int32_t field_offset, int32_t field_tag);
+
 // ── Iterator ─────────────────────────────────────────────────────────────────
 // Generic iterator handle.  Currently supports KV key iteration (type=0).
 // Future: list (type=1), store (type=2), map (type=3), …

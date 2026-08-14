@@ -250,16 +250,28 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
             return "";
         };
         std::map<std::string, std::string> entries;
+        std::vector<std::pair<std::string, std::unique_ptr<Expr>>> entriesExpr;
         std::string firstVal = getStr(args[0].get());
         entries[op] = firstVal;
+        entriesExpr.emplace_back(op, std::move(args[0]));
         bool ok = true;
         for (size_t i = 1; i + 1 < args.size(); i += 2) {
-            auto* k = dynamic_cast<VariableExpr*>(args[i].get());
-            if (!k) { ok = false; break; }
-            entries[k->name] = getStr(args[i+1].get());
+            std::string keyName;
+            if (auto* v = dynamic_cast<VariableExpr*>(args[i].get())) {
+                keyName = v->name;
+            } else if (auto* lit = dynamic_cast<LiteralExpr*>(args[i].get())) {
+                keyName = lit->value;
+            } else {
+                ok = false; break;
+            }
+            entries[keyName] = getStr(args[i+1].get());
+            entriesExpr.emplace_back(keyName, std::move(args[i+1]));
         }
-        if (ok && !entries.empty())
-            return std::make_unique<DictLiteralExpr>(std::move(entries));
+        if (ok && !entries.empty()) {
+            auto d = std::make_unique<DictLiteralExpr>(std::move(entries));
+            d->entriesExpr = std::move(entriesExpr);
+            return d;
+        }
     }
 
     // Unary/binary fallback for args that didn't come via sequence

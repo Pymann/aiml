@@ -1,3 +1,4 @@
+# static-check: off
 # Regression test: approximate 9rooms deck create flow
 # Expected exit code: 0
 
@@ -64,7 +65,7 @@
     name: Card
     inherits: BaseCard
     fields:
-      - [lp, i32]
+      - [var_lp, i32]
       - [attack, i32]
       - [defense, i32]
       - [initiative, i32]
@@ -91,30 +92,30 @@
       - decl: [cards_kv, Kv<string:Card>]
       - set: [cards_kv, { call: [db.open_kv, "9r_cards_test", {persist: true, path: "/tmp/aiml_test_9rooms_deck_flow/"}] }]
 
-      - decl: [cjson1, string, '{"__type":"Card","name":"Spark","card_type":3,"mkp":2,"mana_cost":{},"description":"mana source","passive_abilities":[],"active_abilities":[],"lp":0,"attack":0,"defense":0,"initiative":0,"moral":0,"movement":0,"spell_type":2,"equip_cost":0,"created_at":0}']
-      - decl: [cjson2, string, '{"__type":"Card","name":"Blaze","card_type":3,"mkp":5,"mana_cost":{"1":1},"description":"bigger mana","passive_abilities":[18],"active_abilities":[],"lp":0,"attack":0,"defense":0,"initiative":0,"moral":0,"movement":0,"spell_type":2,"equip_cost":0,"created_at":0}']
+      - decl: [cjson1, string, '{"__type":"Card","name":"Spark","card_type":3,"mkp":2,"mana_cost":{},"description":"mana source","passive_abilities":[],"active_abilities":[],"var_lp":0,"attack":0,"defense":0,"initiative":0,"moral":0,"movement":0,"spell_type":2,"equip_cost":0,"created_at":0}']
+      - decl: [cjson2, string, '{"__type":"Card","name":"Blaze","card_type":3,"mkp":5,"mana_cost":{"1":1},"description":"bigger mana","passive_abilities":[18],"active_abilities":[],"var_lp":0,"attack":0,"defense":0,"initiative":0,"moral":0,"movement":0,"spell_type":2,"equip_cost":0,"created_at":0}']
 
-      - decl: [c1, Card]
-      - decl: [c2, Card]
-      - set: [c1, { call: [sys.deserialize, cjson1, "Card"] }]
-      - set: [c2, { call: [sys.deserialize, cjson2, "Card"] }]
-      - call: [cards_kv.set, "c1", c1]
-      - call: [cards_kv.set, "c2", c2]
+      - decl: [var_c1, Card]
+      - decl: [var_c2, Card]
+      - set: [var_c1, { call: [sys.deserialize, cjson1, "Card"] }]
+      - set: [var_c2, { call: [sys.deserialize, cjson2, "Card"] }]
+      - call: [cards_kv.set, "var_c1", var_c1]
+      - call: [cards_kv.set, "var_c2", var_c2]
 
-      - decl: [djson, string, '{"__type":"Deck","name":"Mana Starter","deck_type":"mana_deck","description":"starter","card_ids":["c1","c2"],"total_mkp":0,"created_at":0}']
-      - decl: [d, Deck]
-      - set: [d, { call: [sys.deserialize, djson, "Deck"] }]
+      - decl: [djson, string, '{"__type":"Deck","name":"Mana Starter","deck_type":"mana_deck","description":"starter","card_ids":["var_c1","var_c2"],"total_mkp":0,"created_at":0}']
+      - decl: [var_d, Deck]
+      - set: [var_d, { call: [sys.deserialize, djson, "Deck"] }]
 
       - decl: [mkp_sum, i32, 0]
       - decl: [mk_i, i32, 0]
-      - decl: [mk_n, i32, d.card_ids.len]
+      - decl: [mk_n, i32, var_d.card_ids.len]
       - decl: [mk_cid, string]
       - decl: [mk_has, i32]
       - decl: [mk_cp, ptr<Card>]
       - while:
           condition: { lt: [mk_i, mk_n] }
           body:
-            - set: [mk_cid, d.card_ids-mk_i]
+            - set: [mk_cid, var_d.card_ids-mk_i]
             - set: [mk_has, { call: [cards_kv.has, mk_cid] }]
             - if:
                 condition: { eq: [mk_has, 1] }
@@ -129,11 +130,11 @@
             - print: ["FAIL mkp_sum=${mkp_sum}"]
             - call: [sys.exit, 1]
 
-      - set: [d.total_mkp, mkp_sum]
+      - set: [var_d.total_mkp, mkp_sum]
 
       - decl: [decks_kv, Kv<string:Deck>]
       - set: [decks_kv, { call: [db.open_kv, "9r_decks_test", {persist: true, path: "/tmp/aiml_test_9rooms_deck_flow/"}] }]
-      - call: [decks_kv.set, "deck_a", d]
+      - call: [decks_kv.set, "deck_a", var_d]
 
       - decl: [got, ptr<Deck>]
       - set: [got, { call: [decks_kv.get, "deck_a"] }]
@@ -153,12 +154,12 @@
             - print: ["FAIL got.card_ids.len=${got.card_ids.len}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { eq: [{ eq: [got.card_ids-0, "c1"] }, 0] }
+          condition: { eq: [{ eq: [got.card_ids-0, "var_c1"] }, 0] }
           then:
             - print: ["FAIL got.card_ids-0=${got.card_ids-0}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { eq: [{ eq: [got.card_ids-1, "c2"] }, 0] }
+          condition: { eq: [{ eq: [got.card_ids-1, "var_c2"] }, 0] }
           then:
             - print: ["FAIL got.card_ids-1=${got.card_ids-1}"]
             - call: [sys.exit, 1]

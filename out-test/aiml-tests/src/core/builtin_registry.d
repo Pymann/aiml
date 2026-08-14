@@ -162,13 +162,15 @@ out-test/aiml-tests/src/core/builtin_registry.o: \
  /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/net_runtime.h \
  /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/db_runtime.h \
  /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/ser_runtime.h \
+ /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/asset_scanner.h \
  /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/http_runtime.h \
  /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/compress_runtime.h \
  /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/gltf_runtime.h \
  /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/gl_runtime.h \
  /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/engine_runtime.h \
  /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/input_runtime.h \
- /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/ui_runtime.h
+ /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/ui_runtime.h \
+ /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/tensor_runtime.h
 /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/__exodus_cache/apt/libc6-dev/amd64/2.39-0ubuntu8.7/payload/usr/include/stdc-predef.h:
 /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/builtin_registry.h:
 /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/context.h:
@@ -331,6 +333,7 @@ out-test/aiml-tests/src/core/builtin_registry.o: \
 /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/net_runtime.h:
 /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/db_runtime.h:
 /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/ser_runtime.h:
+/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/asset_scanner.h:
 /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/http_runtime.h:
 /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/compress_runtime.h:
 /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/gltf_runtime.h:
@@ -338,3 +341,4 @@ out-test/aiml-tests/src/core/builtin_registry.o: \
 /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/engine_runtime.h:
 /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/input_runtime.h:
 /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/ui_runtime.h:
+/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/../../src/sys/tensor_runtime.h:

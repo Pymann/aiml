@@ -19,11 +19,11 @@
 
 # ── Phase B: Laden einer minimalen .glb-Datei ─────────────────────────────
 
-- decl: [p, path, "tests/test.glb"]
-- decl: [scene, gltf_scene, { call: [gltf.load, p] }]
-- decl: [ok, i32, { call: [scene.valid] }]
-- print: ["Phase B: scene.valid=${ok}"]
-- if: [{ eq: [ok, 0] }, true]
+- decl: [var_p, path, "tests/test.glb"]
+- decl: [scene, gltf_scene, { call: [gltf.load, var_p] }]
+- decl: [var_ok, i32, { call: [scene.valid] }]
+- print: ["Phase B: scene.valid=${var_ok}"]
+- if: [{ eq: [var_ok, 0] }, true]
   then:
     - decl: [err, string, { call: [scene.error] }]
     - print: ["FAIL: load error: ${err}"]
@@ -34,17 +34,17 @@
 # ── Phase C: Scene-Listen ─────────────────────────────────────────────────
 
 - decl: [nodes, list<gltf_node>, { call: [scene.nodes] }]
-- decl: [nc, i32, { call: [nodes.len] }]
-- print: ["Phase C: nodes.len=${nc}"]
-- if: [{ <: [nc, 1] }, true]
+- decl: [var_nc, i32, { call: [nodes.len] }]
+- print: ["Phase C: nodes.len=${var_nc}"]
+- if: [{ <: [var_nc, 1] }, true]
   then:
     - print: ["FAIL: expected >= 1 node"]
     - call: [sys.exit, 1]
 
 - decl: [meshes, list<gltf_mesh>, { call: [scene.meshes] }]
-- decl: [mc, i32, { call: [meshes.len] }]
-- print: ["Phase C: meshes.len=${mc}"]
-- if: [{ <: [mc, 1] }, true]
+- decl: [var_mc, i32, { call: [meshes.len] }]
+- print: ["Phase C: meshes.len=${var_mc}"]
+- if: [{ <: [var_mc, 1] }, true]
   then:
     - print: ["FAIL: expected >= 1 mesh"]
     - call: [sys.exit, 1]
@@ -66,18 +66,18 @@
 - decl: [node_name, string, { call: [node.name] }]
 - print: ["Phase D: node.name=${node_name}"]
 
-- decl: [tx, f32, { call: [node.translation_x] }]
-- decl: [ty, f32, { call: [node.translation_y] }]
-- decl: [tz, f32, { call: [node.translation_z] }]
-- print: ["Phase D: translation=(${tx},${ty},${tz})"]
+- decl: [var_tx, f32, { call: [node.translation_x] }]
+- decl: [var_ty, f32, { call: [node.translation_y] }]
+- decl: [var_tz, f32, { call: [node.translation_z] }]
+- print: ["Phase D: translation=(${var_tx},${var_ty},${var_tz})"]
 
-- decl: [rw, f32, { call: [node.rotation_w] }]
-- print: ["Phase D: rotation_w=${rw}"]
+- decl: [var_rw, f32, { call: [node.rotation_w] }]
+- print: ["Phase D: rotation_w=${var_rw}"]
 
-- decl: [sx, f32, { call: [node.scale_x] }]
-- decl: [sy, f32, { call: [node.scale_y] }]
-- decl: [sz, f32, { call: [node.scale_z] }]
-- print: ["Phase D: scale=(${sx},${sy},${sz})"]
+- decl: [var_sx, f32, { call: [node.scale_x] }]
+- decl: [var_sy, f32, { call: [node.scale_y] }]
+- decl: [var_sz, f32, { call: [node.scale_z] }]
+- print: ["Phase D: scale=(${var_sx},${var_sy},${var_sz})"]
 
 - print: ["Phase D OK"]
 
@@ -88,23 +88,23 @@
 - decl: [mesh_name, string, { call: [mesh.name] }]
 - print: ["Phase E: mesh.name=${mesh_name}"]
 
-- decl: [pc, i32, { call: [mesh.primitive_count] }]
-- print: ["Phase E: primitive_count=${pc}"]
-- if: [{ <: [pc, 1] }, true]
+- decl: [var_pc, i32, { call: [mesh.primitive_count] }]
+- print: ["Phase E: primitive_count=${var_pc}"]
+- if: [{ <: [var_pc, 1] }, true]
   then:
     - print: ["FAIL: expected >= 1 primitive"]
     - call: [sys.exit, 1]
 
 - decl: [prim, gltf_primitive, { call: [mesh.primitive, 0] }]
 
-- decl: [vc, i32, { call: [prim.vertex_count] }]
-- decl: [ic, i32, { call: [prim.index_count] }]
-- print: ["Phase E: vertex_count=${vc}, index_count=${ic}"]
-- if: [{ eq: [vc, 0] }, true]
+- decl: [var_vc, i32, { call: [prim.vertex_count] }]
+- decl: [var_ic, i32, { call: [prim.index_count] }]
+- print: ["Phase E: vertex_count=${var_vc}, index_count=${var_ic}"]
+- if: [{ eq: [var_vc, 0] }, true]
   then:
     - print: ["FAIL: expected > 0 vertices"]
     - call: [sys.exit, 1]
-- if: [{ eq: [ic, 0] }, true]
+- if: [{ eq: [var_ic, 0] }, true]
   then:
     - print: ["FAIL: expected > 0 indices"]
     - call: [sys.exit, 1]
@@ -130,12 +130,12 @@
     - call: [sys.exit, 1]
 
 # Ersten Positions-Wert lesen (x der ersten Position)
-- decl: [x0, f32, { call: [positions.get, 0] }]
-- print: ["Phase F: positions[0]=${x0}"]
+- decl: [var_x0, f32, { call: [positions.get, 0] }]
+- print: ["Phase F: positions[0]=${var_x0}"]
 
 # Ersten Index lesen
-- decl: [i0, u32, { call: [indices.get, 0] }]
-- print: ["Phase F: indices[0]=${i0}"]
+- decl: [var_i0, u32, { call: [indices.get, 0] }]
+- print: ["Phase F: indices[0]=${var_i0}"]
 
 - print: ["Phase F OK"]
 
@@ -145,19 +145,19 @@
 - decl: [mat_name, string, { call: [mat.name] }]
 - print: ["Phase G: mat.name=${mat_name}"]
 
-- decl: [r, f32, { call: [mat.base_color_r] }]
-- decl: [g, f32, { call: [mat.base_color_g] }]
-- decl: [b, f32, { call: [mat.base_color_b] }]
-- decl: [a, f32, { call: [mat.base_color_a] }]
-- print: ["Phase G: base_color=(${r},${g},${b},${a})"]
+- decl: [var_r, f32, { call: [mat.base_color_r] }]
+- decl: [var_g, f32, { call: [mat.base_color_g] }]
+- decl: [var_b, f32, { call: [mat.base_color_b] }]
+- decl: [var_a, f32, { call: [mat.base_color_a] }]
+- print: ["Phase G: base_color=(${var_r},${var_g},${var_b},${var_a})"]
 
 - decl: [met, f32, { call: [mat.metallic] }]
 - decl: [rough, f32, { call: [mat.roughness] }]
 - print: ["Phase G: metallic=${met}, roughness=${rough}"]
 
 - decl: [alpha, string, { call: [mat.alpha_mode] }]
-- decl: [ds, i32, { call: [mat.double_sided] }]
-- print: ["Phase G: alpha_mode=${alpha}, double_sided=${ds}"]
+- decl: [var_ds, i32, { call: [mat.double_sided] }]
+- print: ["Phase G: alpha_mode=${alpha}, double_sided=${var_ds}"]
 
 - print: ["Phase G OK"]
 

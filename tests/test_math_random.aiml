@@ -4,16 +4,16 @@
 - decl: [fail, i32, 0]
 
 # math.random_int(0, 10): must land in [0, 10)
-- decl: [i, i32, 0]
+- decl: [var_i, i32, 0]
 - decl: [n_in_range, i32, 0]
 - while:
-    condition: { lt: [i, 100] }
+    condition: { lt: [var_i, 100] }
     body:
-      - decl: [r, i32, { call: [math.random_int, 0, 10] }]
+      - decl: [var_r, i32, { call: [math.random_int, 0, 10] }]
       - if:
-          condition: { "&&": [{ gte: [r, 0] }, { lt: [r, 10] }] }
+          condition: { "&&": [{ gte: [var_r, 0] }, { lt: [var_r, 10] }] }
           then: [{ set: [n_in_range, { "+": [n_in_range, 1] }] }]
-      - set: [i, { "+": [i, 1] }]
+      - set: [var_i, { "+": [var_i, 1] }]
 - if:
     condition: { eq: [n_in_range, 100] }
     then:
@@ -24,16 +24,16 @@
       - print: ["FAIL: random_int(0,10) ${n_in_range}/100 in range"]
 
 # math.random(0.0, 1.0): must land in [0, 1)
-- decl: [j, i32, 0]
+- decl: [var_j, i32, 0]
 - decl: [f_ok, i32, 0]
 - while:
-    condition: { lt: [j, 100] }
+    condition: { lt: [var_j, 100] }
     body:
-      - decl: [f, f32, { call: [math.random, 0.0, 1.0] }]
+      - decl: [var_f, f32, { call: [math.random, 0.0, 1.0] }]
       - if:
-          condition: { "&&": [{ gte: [f, 0.0] }, { lt: [f, 1.0] }] }
+          condition: { "&&": [{ gte: [var_f, 0.0] }, { lt: [var_f, 1.0] }] }
           then: [{ set: [f_ok, { "+": [f_ok, 1] }] }]
-      - set: [j, { "+": [j, 1] }]
+      - set: [var_j, { "+": [var_j, 1] }]
 - if:
     condition: { eq: [f_ok, 100] }
     then:
@@ -44,23 +44,23 @@
       - print: ["FAIL: random(0,1) ${f_ok}/100 in range"]
 
 # Spread test: random_int(0, 4) over 200 samples should hit every bucket ≥1 time
-- decl: [b0, i32, 0]
-- decl: [b1, i32, 0]
-- decl: [b2, i32, 0]
-- decl: [b3, i32, 0]
-- decl: [k, i32, 0]
+- decl: [var_b0, i32, 0]
+- decl: [var_b1, i32, 0]
+- decl: [var_b2, i32, 0]
+- decl: [var_b3, i32, 0]
+- decl: [var_k, i32, 0]
 - while:
-    condition: { lt: [k, 200] }
+    condition: { lt: [var_k, 200] }
     body:
-      - decl: [v, i32, { call: [math.random_int, 0, 4] }]
-      - if: { condition: { eq: [v, 0] }, then: [{ set: [b0, { "+": [b0, 1] }] }] }
-      - if: { condition: { eq: [v, 1] }, then: [{ set: [b1, { "+": [b1, 1] }] }] }
-      - if: { condition: { eq: [v, 2] }, then: [{ set: [b2, { "+": [b2, 1] }] }] }
-      - if: { condition: { eq: [v, 3] }, then: [{ set: [b3, { "+": [b3, 1] }] }] }
-      - set: [k, { "+": [k, 1] }]
-- print: ["spread random_int(0,4) over 200: b0=${b0} b1=${b1} b2=${b2} b3=${b3}"]
+      - decl: [var_v, i32, { call: [math.random_int, 0, 4] }]
+      - if: { condition: { eq: [var_v, 0] }, then: [{ set: [var_b0, { "+": [var_b0, 1] }] }] }
+      - if: { condition: { eq: [var_v, 1] }, then: [{ set: [var_b1, { "+": [var_b1, 1] }] }] }
+      - if: { condition: { eq: [var_v, 2] }, then: [{ set: [var_b2, { "+": [var_b2, 1] }] }] }
+      - if: { condition: { eq: [var_v, 3] }, then: [{ set: [var_b3, { "+": [var_b3, 1] }] }] }
+      - set: [var_k, { "+": [var_k, 1] }]
+- print: ["spread random_int(0,4) over 200: var_b0=${var_b0} var_b1=${var_b1} var_b2=${var_b2} var_b3=${var_b3}"]
 - if:
-    condition: { "&&": [{ "&&": [{ gt: [b0, 0] }, { gt: [b1, 0] }] }, { "&&": [{ gt: [b2, 0] }, { gt: [b3, 0] }] }] }
+    condition: { "&&": [{ "&&": [{ gt: [var_b0, 0] }, { gt: [var_b1, 0] }] }, { "&&": [{ gt: [var_b2, 0] }, { gt: [var_b3, 0] }] }] }
     then:
       - set: [pass, { "+": [pass, 1] }]
       - print: ["PASS: all 4 buckets hit"]

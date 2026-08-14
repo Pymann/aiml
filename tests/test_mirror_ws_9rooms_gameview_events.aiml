@@ -1,10 +1,11 @@
+# static-check: off
 # 9rooms real-type mirror probe: import actual models + shared GameView,
 # then sync events/trigger/reaction fields over websocket mirror.
 # Extended to cover both in-place mutation of existing list elements and later push operations.
 # Expected exit code: 0
 
-- import: "/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/9rooms/models/models.aiml"
-- import: "/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/9rooms/shared/game_view.aiml"
+- import: "tests/fixtures_9rooms/models/models.aiml"
+- import: "tests/fixtures_9rooms/shared/game_view.aiml"
 
 - def:
     name: mirror_ws_9rooms_gameview_host
@@ -12,14 +13,14 @@
     body:
       - decl: [sess, mirror_session]
       - set: [sess, { call: [mirror.listen, "ws://127.0.0.1:19912"] }]
-      - decl: [v, GameView]
+      - decl: [var_v, GameView]
 
       - decl: [events, list<GameEventView>]
       - decl: [triggers, list<TriggerEventView>]
       - decl: [reactables, list<TriggerEventView>]
-      - set: [v.events, events]
-      - set: [v.active_triggers, triggers]
-      - set: [v.reactable_triggers, reactables]
+      - set: [var_v.events, events]
+      - set: [var_v.active_triggers, triggers]
+      - set: [var_v.reactable_triggers, reactables]
 
       - decl: [ge0, GameEventView]
       - set: [ge0.seq, 0]
@@ -30,9 +31,9 @@
       - set: [ge0.round, 1]
       - set: [ge0.source_iid, "src-1"]
       - set: [ge0.target_iid, "tgt-1"]
-      - call: [v.events.push, ge0]
-      - set: [v.event_seq, 1]
-      - set: [v.event_count, 1]
+      - call: [var_v.events.push, ge0]
+      - set: [var_v.event_seq, 1]
+      - set: [var_v.event_count, 1]
 
       - decl: [te0, TriggerEventView]
       - set: [te0.seq, 0]
@@ -46,55 +47,55 @@
       - set: [te0.resolved, 0]
       - set: [te0.expired, 0]
       - set: [te0.text, "On draw"]
-      - call: [v.active_triggers.push, te0]
-      - call: [v.reactable_triggers.push, te0]
-      - set: [v.trigger_seq_counter, 1]
-      - set: [v.active_trigger_count, 1]
+      - call: [var_v.active_triggers.push, te0]
+      - call: [var_v.reactable_triggers.push, te0]
+      - set: [var_v.trigger_seq_counter, 1]
+      - set: [var_v.active_trigger_count, 1]
 
-      - set: [v.reaction_state.window_open, 1]
-      - set: [v.reaction_state.react_player_mask, 3]
-      - set: [v.reaction_state.window_kind, "card_played"]
-      - set: [v.reaction_state.window_prompt, "Respond"]
-      - set: [v.reaction_state.window_ms, 900]
-      - set: [v.reaction_state.reactable_count, 1]
-      - set: [v.reaction_state.reactable_card_mask, "ci-1,ci-2"]
+      - set: [var_v.reaction_state.window_open, 1]
+      - set: [var_v.reaction_state.react_player_mask, 3]
+      - set: [var_v.reaction_state.window_kind, "card_played"]
+      - set: [var_v.reaction_state.window_prompt, "Respond"]
+      - set: [var_v.reaction_state.window_ms, 900]
+      - set: [var_v.reaction_state.reactable_count, 1]
+      - set: [var_v.reaction_state.reactable_card_mask, "ci-1,ci-2"]
 
       - decl: [nid, i32]
-      - set: [nid, { call: [sess.register, v] }]
+      - set: [nid, { call: [sess.register, var_v] }]
 
-      - decl: [i, i32, 0]
+      - decl: [var_i, i32, 0]
       - while:
-          condition: { lt: [i, 30] }
+          condition: { lt: [var_i, 30] }
           body:
             - call: [sess.update]
             - call: [time.sleep_ms, 10]
-            - set: [i, { +: [i, 1] }]
+            - set: [var_i, { +: [var_i, 1] }]
 
       - decl: [ge0_ptr, ptr<GameEventView>]
-      - set: [ge0_ptr, { call: [v.events.get, 0] }]
+      - set: [ge0_ptr, { call: [var_v.events.get, 0] }]
       - set: [ge0_ptr.text, "Round start updated"]
       - set: [ge0_ptr.target_iid, "tgt-1b"]
 
       - decl: [at0_ptr, ptr<TriggerEventView>]
-      - set: [at0_ptr, { call: [v.active_triggers.get, 0] }]
+      - set: [at0_ptr, { call: [var_v.active_triggers.get, 0] }]
       - set: [at0_ptr.resolved, 1]
       - set: [at0_ptr.text, "On draw resolved"]
 
       - decl: [rt0_ptr, ptr<TriggerEventView>]
-      - set: [rt0_ptr, { call: [v.reactable_triggers.get, 0] }]
+      - set: [rt0_ptr, { call: [var_v.reactable_triggers.get, 0] }]
       - set: [rt0_ptr.expired, 1]
       - set: [rt0_ptr.text, "On draw expired"]
 
-      - set: [v.reaction_state.window_prompt, "Respond updated"]
-      - set: [v.reaction_state.reactable_card_mask, "ci-1"]
+      - set: [var_v.reaction_state.window_prompt, "Respond updated"]
+      - set: [var_v.reaction_state.reactable_card_mask, "ci-1"]
 
-      - set: [i, 0]
+      - set: [var_i, 0]
       - while:
-          condition: { lt: [i, 25] }
+          condition: { lt: [var_i, 25] }
           body:
             - call: [sess.update]
             - call: [time.sleep_ms, 10]
-            - set: [i, { +: [i, 1] }]
+            - set: [var_i, { +: [var_i, 1] }]
 
       - decl: [ge1, GameEventView]
       - set: [ge1.seq, 1]
@@ -105,9 +106,9 @@
       - set: [ge1.round, 2]
       - set: [ge1.source_iid, "src-2"]
       - set: [ge1.target_iid, "tgt-2"]
-      - call: [v.events.push, ge1]
-      - set: [v.event_seq, 2]
-      - set: [v.event_count, 2]
+      - call: [var_v.events.push, ge1]
+      - set: [var_v.event_seq, 2]
+      - set: [var_v.event_count, 2]
 
       - decl: [te1, TriggerEventView]
       - set: [te1.seq, 1]
@@ -121,26 +122,26 @@
       - set: [te1.resolved, 0]
       - set: [te1.expired, 0]
       - set: [te1.text, "On play"]
-      - call: [v.active_triggers.push, te1]
-      - call: [v.reactable_triggers.push, te1]
-      - set: [v.trigger_seq_counter, 2]
-      - set: [v.active_trigger_count, 2]
+      - call: [var_v.active_triggers.push, te1]
+      - call: [var_v.reactable_triggers.push, te1]
+      - set: [var_v.trigger_seq_counter, 2]
+      - set: [var_v.active_trigger_count, 2]
 
-      - set: [v.reaction_state.window_open, 0]
-      - set: [v.reaction_state.react_player_mask, 1]
-      - set: [v.reaction_state.window_kind, ""]
-      - set: [v.reaction_state.window_prompt, "Closed"]
-      - set: [v.reaction_state.window_ms, 0]
-      - set: [v.reaction_state.reactable_count, 2]
-      - set: [v.reaction_state.reactable_card_mask, "ci-3"]
+      - set: [var_v.reaction_state.window_open, 0]
+      - set: [var_v.reaction_state.react_player_mask, 1]
+      - set: [var_v.reaction_state.window_kind, ""]
+      - set: [var_v.reaction_state.window_prompt, "Closed"]
+      - set: [var_v.reaction_state.window_ms, 0]
+      - set: [var_v.reaction_state.reactable_count, 2]
+      - set: [var_v.reaction_state.reactable_card_mask, "ci-3"]
 
-      - set: [i, 0]
+      - set: [var_i, 0]
       - while:
-          condition: { lt: [i, 40] }
+          condition: { lt: [var_i, 40] }
           body:
             - call: [sess.update]
             - call: [time.sleep_ms, 10]
-            - set: [i, { +: [i, 1] }]
+            - set: [var_i, { +: [var_i, 1] }]
 
       - call: [sess.close]
 
@@ -153,10 +154,10 @@
 - call: [time.sleep_ms, 120]
 - call: [client.update]
 
-- decl: [ev, mirror_event]
-- set: [ev, { call: [client.next_event] }]
+- decl: [var_ev, mirror_event]
+- set: [var_ev, { call: [client.next_event] }]
 - decl: [replica, GameView]
-- call: [client.register_id, replica, ev.net_id]
+- call: [client.register_id, replica, var_ev.net_id]
 
 - decl: [poll_i, i32, 0]
 - while:

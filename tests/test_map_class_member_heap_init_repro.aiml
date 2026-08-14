@@ -11,11 +11,11 @@
 - call: [box.scores.put, "alice", 7]
 - call: [box.scores.put, "bob", 9]
 
-- decl: [n, i32, box.scores.len]
+- decl: [var_n, i32, box.scores.len]
 - if:
-    condition: { neq: [n, 2] }
+    condition: { neq: [var_n, 2] }
     then:
-      - print: ["FAIL map class-member len: expected 2, got ${n}"]
+      - print: ["FAIL map class-member len: expected 2, got ${var_n}"]
       - exit: [1]
 
 - decl: [alice, i32, { call: [box.scores.get, "alice"] }]

@@ -71,6 +71,8 @@ struct AimlGLShader {
 
 struct AimlGLTexture {
     GLuint id;
+    int    width  = 0;
+    int    height = 0;
 };
 
 struct AimlGLFramebuffer {
@@ -396,6 +398,15 @@ void aiml_gl_shader_delete(void* shader) {
 
 /* ── Textur ─────────────────────────────────────────────────────────────── */
 
+// Headless detection: native uses glfwGetCurrentContext; WASM is always in a
+// browser GL context (no GLFW), so just always upload.
+#ifndef AIML_WASM_BUILD
+extern "C" void* glfwGetCurrentContext(void);
+static inline bool aiml_gl_has_context() { return glfwGetCurrentContext() != nullptr; }
+#else
+static inline bool aiml_gl_has_context() { return true; }
+#endif
+
 void* aiml_gl_load_texture(const char* path) {
     if (!path) return nullptr;
     stbi_set_flip_vertically_on_load(1);
@@ -406,8 +417,14 @@ void* aiml_gl_load_texture(const char* path) {
         return nullptr;
     }
     AimlGLTexture* t = new AimlGLTexture();
-    glGenTextures(1, &t->id);
-    upload_texture(t->id, w, h, px);
+    if (aiml_gl_has_context()) {
+        glGenTextures(1, &t->id);
+        upload_texture(t->id, w, h, px);
+    } else {
+        t->id = 0;
+    }
+    t->width  = w;
+    t->height = h;
     stbi_image_free(px);
     return t;
 }

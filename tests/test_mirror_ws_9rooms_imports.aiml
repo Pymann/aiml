@@ -1,3 +1,4 @@
+# static-check: off
 # 9rooms-like websocket mirror repro with imported globals on both sides.
 # Expected exit code: 0
 
@@ -12,10 +13,10 @@
       - decl: [sess, mirror_session]
       - set: [sess, { call: [mirror.listen, "ws://127.0.0.1:19897"] }]
 
-      - decl: [v, GameViewWs9]
+      - decl: [var_v, GameViewWs9]
       - decl: [nid, i32]
-      - set: [nid, { call: [sess.register, v] }]
-      - print: ["ws9-host: view registered net_id=${nid} p1='${v.p1_name}'"]
+      - set: [nid, { call: [sess.register, var_v] }]
+      - print: ["ws9-host: view registered net_id=${nid} p1='${var_v.p1_name}'"]
 
       - decl: [got_peer, i32, 0]
       - decl: [peer_wait, i32, 0]
@@ -26,10 +27,10 @@
             - if:
                 condition: { call: [sess.has_event] }
                 then:
-                  - decl: [ev, mirror_event]
-                  - set: [ev, { call: [sess.next_event] }]
+                  - decl: [var_ev, mirror_event]
+                  - set: [var_ev, { call: [sess.next_event] }]
                   - if:
-                      condition: { eq: [ev.type, "peer_connected"] }
+                      condition: { eq: [var_ev.type, "peer_connected"] }
                       then:
                         - set: [got_peer, 1]
             - if:
@@ -65,21 +66,21 @@
                   - call: [time.sleep_ms, 16]
                   - set: [ci_wait, { +: [ci_wait, 1] }]
 
-      - set: [v.round, 7]
-      - set: [v.p1_name, g_ws9_server_client_info.player_name]
-      - set: [v.p2_name, "Bot"]
-      - set: [v.hand_count, 3]
-      - set: [v.p1_hp, 26]
-      - set: [v.p2_hp, 22]
-      - print: ["ws9-host: filled view p1='${v.p1_name}' round=${v.round}"]
+      - set: [var_v.round, 7]
+      - set: [var_v.p1_name, g_ws9_server_client_info.player_name]
+      - set: [var_v.p2_name, "Bot"]
+      - set: [var_v.hand_count, 3]
+      - set: [var_v.p1_hp, 26]
+      - set: [var_v.p2_hp, 22]
+      - print: ["ws9-host: filled view p1='${var_v.p1_name}' round=${var_v.round}"]
 
-      - decl: [i, i32, 0]
+      - decl: [var_i, i32, 0]
       - while:
-          condition: { lt: [i, 40] }
+          condition: { lt: [var_i, 40] }
           body:
             - call: [sess.update]
             - call: [time.sleep_ms, 16]
-            - set: [i, { +: [i, 1] }]
+            - set: [var_i, { +: [var_i, 1] }]
 
       - call: [sess.close]
 
@@ -104,12 +105,12 @@
       - if:
           condition: { call: [client.has_event] }
           then:
-            - decl: [ev, mirror_event]
-            - set: [ev, { call: [client.next_event] }]
+            - decl: [var_ev, mirror_event]
+            - set: [var_ev, { call: [client.next_event] }]
             - if:
-                condition: { eq: [ev.type, "object_registered"] }
+                condition: { eq: [var_ev.type, "object_registered"] }
                 then:
-                  - set: [g_ws9_view_nid, ev.net_id]
+                  - set: [g_ws9_view_nid, var_ev.net_id]
                   - set: [got_view, 1]
                   - print: ["ws9-client: view object_registered net_id=${g_ws9_view_nid}"]
       - if:

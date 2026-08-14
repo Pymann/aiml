@@ -17,8 +17,8 @@
     name: main
     return: i32
     body:
-      - decl: [kv, Kv<string:ManaBag>]
-      - set: [kv, { call: [db.open_kv, "map_enum_key_persist", {persist: true, path: "/tmp/aiml_test_map_enum_key_persist/"}] }]
+      - decl: [var_kv, Kv<string:ManaBag>]
+      - set: [var_kv, { call: [db.open_kv, "map_enum_key_persist", {persist: true, path: "/tmp/aiml_test_map_enum_key_persist/"}] }]
 
       - decl: [bag, ManaBag]
       - set: [bag.name, "enum-map"]
@@ -38,10 +38,10 @@
             - print: ["FAIL pre_earth=${pre_earth}"]
             - call: [sys.exit, 1]
 
-      - call: [kv.set, "bag", bag]
+      - call: [var_kv.set, "bag", bag]
 
       - decl: [got, ptr<ManaBag>]
-      - set: [got, { call: [kv.get, "bag"] }]
+      - set: [got, { call: [var_kv.get, "bag"] }]
       - if:
           condition: { eq: [got, null] }
           then:

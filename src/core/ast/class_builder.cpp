@@ -3,11 +3,19 @@
 #include "class_builder.h"
 #include "expression_builder.h"
 #include "function_builder.h"
+#include "rule_builder.h"
 
 namespace AIML {
 namespace AST {
 
 bool ClassBuilder::OnMapStart() {
+    if (insideRules) {
+        // A rule item map opens → delegate to RuleBuilder (forward this open).
+        auto rb = std::make_unique<RuleBuilder>(builder);
+        rb->OnMapStart();
+        builder->pushState(std::move(rb));
+        return true;
+    }
     if (insideMembers && sequenceDepth == 2) {
          if (memberAttrIndex == 2) {
              // Let ExpressionBuilder handle the default value AST node
@@ -59,13 +67,23 @@ bool ClassBuilder::OnScalar(const std::string& value, const std::string& tag) {
         return true;
     }
     
-    if (!insideMembers && !insideMethods && !insideModels && !insideImplements) {
+    if (!insideMembers && !insideMethods && !insideModels && !insideImplements && !insideRules) {
         if (currentKey == "name") classNode->name = value;
+        else if (currentKey == "renders") classNode->renders = value;
         else if (currentKey == "extends") classNode->parentName = value;
         else if (currentKey == "version") {
             if (!value.empty()) {
                 try { classNode->version = std::stoull(value); } catch (...) {}
             }
+        }
+        // Scalar shorthand: `implements: Iface` (one) instead of `implements: [Iface]`.
+        // Same for `models:`.  Without this, the single-iface form silently parses
+        // to interfaces=[] → no vtable emitted → SIGSEGV on interface dispatch.
+        else if (currentKey == "implements") {
+            if (!value.empty()) classNode->interfaces.push_back(value);
+        }
+        else if (currentKey == "models") {
+            if (!value.empty()) classNode->models.push_back(value);
         }
     }
     else if (insideModels) {
@@ -79,9 +97,12 @@ bool ClassBuilder::OnScalar(const std::string& value, const std::string& tag) {
         if (sequenceDepth == 2) {
             if (memberAttrIndex == 0) { currentField = value; memberAttrIndex++; return true; }
             if (memberAttrIndex == 1) { currentType = value; memberAttrIndex++; return true; }
-            if (memberAttrIndex == 2) { 
+            if (memberAttrIndex == 2) {
                  if (tag == "!") {
                      currentInitValue = std::make_unique<LiteralExpr>(value, "string");
+                 } else if (value == "null") {
+                     // `null` default: pointer/handle zero-init, not a variable lookup.
+                     currentInitValue = std::make_unique<LiteralExpr>(value, "null");
                  } else if (value == "true" || value == "false" || isdigit(value[0]) || (value.length() > 0 && value[0] == '-')) {
                      currentInitValue = std::make_unique<LiteralExpr>(value, "unknown");
                  } else {
@@ -112,7 +133,7 @@ bool ClassBuilder::OnScalar(const std::string& value, const std::string& tag) {
         }
     }
     
-    if (!insideMembers && !insideMethods && !insideModels && !insideImplements) expectingKey = true;
+    if (!insideMembers && !insideMethods && !insideModels && !insideImplements && !insideRules) expectingKey = true;
     return true;
 }
 
@@ -132,6 +153,10 @@ bool ClassBuilder::OnSequenceStart() {
     }
     else if (currentKey == "implements") {
         insideImplements = true;
+        currentKey = ""; // consumed
+    }
+    else if (currentKey == "rules") {
+        insideRules = true;
         currentKey = ""; // consumed
     }
     else if (insideMembers) {
@@ -175,6 +200,9 @@ bool ClassBuilder::OnSequenceEnd() {
             insideMembers = false;
             expectingKey = true;
         }
+    } else if (insideRules) {
+        insideRules = false;
+        expectingKey = true;
     } else if (insideMethods) {
         insideMethods = false;
         expectingKey = true;
@@ -198,6 +226,13 @@ void ClassBuilder::receiveChildNode(std::unique_ptr<Node> node) {
              memberAttrIndex++;
              return;
         }
+    }
+    if (auto r = dynamic_cast<RuleDecl*>(node.get())) {
+        LOG_DEBUG("ClassBuilder received rule");
+        (void)r;
+        classNode->rules.push_back(std::unique_ptr<RuleDecl>(static_cast<RuleDecl*>(node.release())));
+        expectingKey = true; // wait for next rule map or end of sequence
+        return;
     }
     if (auto f = dynamic_cast<FunctionDecl*>(node.get())) {
         LOG_DEBUG("ClassBuilder received method: " + f->name);

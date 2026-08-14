@@ -69,6 +69,9 @@ struct AimlInputState {
     /* Keyboard (updated by GLFW callbacks + glfwGetKey in update) */
     uint8_t curr_keys[AIML_MAX_KEYS];
     uint8_t prev_keys[AIML_MAX_KEYS];
+    /* Per-frame "rising edge already consumed" flags for key_pressed_once.
+     * Cleared each frame in aiml_input_update; set on first _once read. */
+    uint8_t consumed_press[AIML_MAX_KEYS];
 
     /* Mouse buttons */
     uint8_t curr_mouse[AIML_MAX_MOUSE];
@@ -471,6 +474,9 @@ void aiml_input_update(void) {
     /* 1. Save prev state */
     memcpy(g_input->prev_keys,  g_input->curr_keys,  AIML_MAX_KEYS);
     memcpy(g_input->prev_mouse, g_input->curr_mouse, AIML_MAX_MOUSE);
+    /* New frame → rising-edge consumption for key_pressed_once resets, so the
+     * first _once read this frame sees the edge (subsequent reads get 0). */
+    memset(g_input->consumed_press, 0, AIML_MAX_KEYS);
     for (int i = 0; i < AIML_MAX_GAMEPADS; i++)
         g_input->prev_gamepad[i] = g_input->curr_gamepad[i];
 
@@ -534,6 +540,30 @@ void aiml_input_set_capture(int32_t on) {
 int32_t aiml_input_key_down    (const char* k) { return curr_key_active(k) ? 1 : 0; }
 int32_t aiml_input_key_pressed (const char* k) { return (curr_key_active(k) && !prev_key_active(k)) ? 1 : 0; }
 int32_t aiml_input_key_released(const char* k) { return (!curr_key_active(k) && prev_key_active(k)) ? 1 : 0; }
+
+/* Single per-frame consume slot for a key name (aliases → their left key). */
+static int consume_slot_for(const char* name) {
+    if (!name) return -1;
+    if (strcmp(name,"Shift")==0) return GLFW_KEY_LEFT_SHIFT;
+    if (strcmp(name,"Ctrl")==0)  return GLFW_KEY_LEFT_CONTROL;
+    if (strcmp(name,"Alt")==0)   return GLFW_KEY_LEFT_ALT;
+    int k = key_name_to_glfw(name);
+    if (k < 0 || k >= AIML_MAX_KEYS) return -1;
+    return k;
+}
+/* key_pressed_once: rising edge, but consumed on first read per frame — so a
+ * handler polled multiple times per frame (e.g. from render() called after each
+ * action) fires exactly ONCE per physical press.  Use for edge-triggered actions
+ * (skip, toggles); key_pressed stays idempotent for queries. */
+int32_t aiml_input_key_pressed_once(const char* k) {
+    if (!g_input) return 0;
+    if (!(curr_key_active(k) && !prev_key_active(k))) return 0;   /* not a rising edge */
+    int slot = consume_slot_for(k);
+    if (slot < 0) return 1;                       /* edge but unmappable → report, no dedup */
+    if (g_input->consumed_press[slot]) return 0;  /* already consumed this frame */
+    g_input->consumed_press[slot] = 1;
+    return 1;
+}
 
 /* ── Raw polling: mouse ──────────────────────────────────────────────────── */
 
@@ -844,6 +874,7 @@ struct BrowserInputState {
     /* keyboard */
     uint8_t curr_keys[AIML_MAX_KEYS];  // indexed by emscripten DOM_PK_* keyCode mod-256
     uint8_t prev_keys[AIML_MAX_KEYS];
+    uint8_t consumed_press[AIML_MAX_KEYS];  // per-frame edge consumption (key_pressed_once)
     /* event queue for "text" + "key_down" — consumed by ui_runtime */
     std::deque<AimlInputEvent> events;
     /* small backing store so the char* fields returned in event accessors stay
@@ -900,6 +931,9 @@ static EM_BOOL bin_wheel(int /*type*/, const EmscriptenWheelEvent* e, void* /*ud
     return EM_TRUE;
 }
 
+/* Forward declaration — defined further below in this same WASM section. */
+static int32_t name_to_slot(const char* k);
+
 /* Stash a string in the persistent backing store and return a stable ptr. */
 static const char* bin_keep_string(const char* s) {
     if (!g_b || !s) return "";
@@ -914,12 +948,19 @@ static EM_BOOL bin_keydown(int /*type*/, const EmscriptenKeyboardEvent* e, void*
     ev.type = "key_down";
     ev.key  = bin_keep_string(e->key);
     g_b->events.push_back(ev);
-    /* Update curr_keys for raw polling (use keyCode mod 256 as a rough slot). */
-    uint32_t slot = (uint32_t)e->keyCode % AIML_MAX_KEYS;
-    g_b->curr_keys[slot] = 1;
+    /* Update curr_keys using name_to_slot so that polling
+     * input.key_down("up") sees the same slot we wrote here when the user
+     * pressed ArrowUp. */
+    int slot = name_to_slot(e->key);
+    if (slot >= 0) g_b->curr_keys[slot] = 1;
     /* Swallow Backspace/Tab so the browser doesn't navigate or change focus
-     * while the user types. Other keys pass through. */
-    if (strcmp(e->key, "Backspace") == 0 || strcmp(e->key, "Tab") == 0)
+     * while the user types.  Also swallow Arrow keys / PageUp/PageDown /
+     * Space so the page doesn't scroll while the user navigates a graph. */
+    if (strcmp(e->key, "Backspace") == 0 || strcmp(e->key, "Tab") == 0 ||
+        strcmp(e->key, "ArrowUp")  == 0 || strcmp(e->key, "ArrowDown") == 0 ||
+        strcmp(e->key, "ArrowLeft")== 0 || strcmp(e->key, "ArrowRight")== 0 ||
+        strcmp(e->key, "PageUp")   == 0 || strcmp(e->key, "PageDown")  == 0 ||
+        strcmp(e->key, " ")        == 0)
         return EM_TRUE;
     return EM_FALSE;
 }
@@ -930,8 +971,8 @@ static EM_BOOL bin_keyup(int /*type*/, const EmscriptenKeyboardEvent* e, void* /
     ev.type = "key_up";
     ev.key  = bin_keep_string(e->key);
     g_b->events.push_back(ev);
-    uint32_t slot = (uint32_t)e->keyCode % AIML_MAX_KEYS;
-    g_b->curr_keys[slot] = 0;
+    int slot = name_to_slot(e->key);
+    if (slot >= 0) g_b->curr_keys[slot] = 0;
     return EM_FALSE;
 }
 
@@ -981,6 +1022,7 @@ void aiml_input_update(void) {
     if (!g_b) return;
     memcpy(g_b->prev_mouse, g_b->curr_mouse, AIML_MAX_MOUSE);
     memcpy(g_b->prev_keys,  g_b->curr_keys,  AIML_MAX_KEYS);
+    memset(g_b->consumed_press, 0, AIML_MAX_KEYS);  // new frame → reset _once edges
     g_b->delta_x = (float)(g_b->curr_pos_x - g_b->prev_pos_x);
     g_b->delta_y = (float)(g_b->curr_pos_y - g_b->prev_pos_y);
     g_b->prev_pos_x = g_b->curr_pos_x;
@@ -1000,20 +1042,49 @@ void aiml_input_update(void) {
 
 void aiml_input_set_capture(int32_t /*on*/) { /* PointerLock not wired yet */ }
 
-/* Map a key name (from emscripten e->key) to a curr_keys[] slot. We don't have
- * a 1:1 keyCode → name table, so we hash a tiny set of common ones. Used by
- * key_down / key_pressed / key_released raw polling. */
+/* Map a key name (JS event.key OR AIML canonical) to a curr_keys[] slot.
+ *
+ * Both the WASM keydown-callback (which receives JS event.key like
+ * "ArrowUp" / " " / "Escape") and AIML polling (which uses canonical names
+ * like "up" / "space" / "escape" / "plus") go through this function — that
+ * way both sides agree on a single slot per logical key.
+ *
+ * Normalisation: known JS aliases are rewritten to AIML canonical, then the
+ * name is lowercased.  Single-character names hash to ASCII; multi-char names
+ * use a small string hash. */
 static int32_t name_to_slot(const char* k) {
     if (!k || !k[0]) return -1;
-    /* Single ASCII character → use its uppercase code */
-    if (k[1] == '\0') {
-        char c = k[0];
+
+    /* Step 1: JS aliases → AIML canonical. */
+    const char* in = k;
+    if      (strcmp(k, "ArrowUp")    == 0) in = "up";
+    else if (strcmp(k, "ArrowDown")  == 0) in = "down";
+    else if (strcmp(k, "ArrowLeft")  == 0) in = "left";
+    else if (strcmp(k, "ArrowRight") == 0) in = "right";
+    else if (strcmp(k, " ")          == 0) in = "space";
+    else if (strcmp(k, "+")          == 0) in = "plus";
+    else if (strcmp(k, "-")          == 0) in = "minus";
+    else if (strcmp(k, "=")          == 0) in = "equal";
+    else if (strcmp(k, "PageUp")     == 0) in = "pageup";
+    else if (strcmp(k, "PageDown")   == 0) in = "pagedown";
+
+    /* Step 2: copy + lowercase. */
+    char canon[32];
+    int len = 0;
+    for (; in[len] && len < 31; ++len)
+        canon[len] = (in[len] >= 'A' && in[len] <= 'Z')
+                   ? (char)(in[len] + 32) : in[len];
+    canon[len] = '\0';
+
+    /* Step 3: single ASCII char → uppercase code mod MAX (compact slot for
+     * letter/digit keys). Multi-char → small hash. */
+    if (canon[1] == '\0') {
+        char c = canon[0];
         if (c >= 'a' && c <= 'z') c -= 32;
         return ((int32_t)(uint8_t)c) % AIML_MAX_KEYS;
     }
-    /* Hash the multi-char name */
     uint32_t h = 0;
-    for (const char* p = k; *p; ++p) h = h * 131u + (uint8_t)*p;
+    for (const char* p = canon; *p; ++p) h = h * 131u + (uint8_t)*p;
     return (int32_t)(h % AIML_MAX_KEYS);
 }
 int32_t aiml_input_key_down    (const char* k) {
@@ -1027,6 +1098,15 @@ int32_t aiml_input_key_pressed (const char* k) {
     int slot = name_to_slot(k);
     if (slot < 0) return 0;
     return (g_b->curr_keys[slot] && !g_b->prev_keys[slot]) ? 1 : 0;
+}
+int32_t aiml_input_key_pressed_once(const char* k) {
+    if (!g_b) return 0;
+    int slot = name_to_slot(k);
+    if (slot < 0) return 0;
+    if (!(g_b->curr_keys[slot] && !g_b->prev_keys[slot])) return 0;  /* not a rising edge */
+    if (g_b->consumed_press[slot]) return 0;                          /* consumed this frame */
+    g_b->consumed_press[slot] = 1;
+    return 1;
 }
 int32_t aiml_input_key_released(const char* k) {
     if (!g_b) return 0;
@@ -1129,6 +1209,7 @@ void    aiml_input_set_capture(int32_t /*on*/)  { /* TODO: platform */ }
 
 int32_t aiml_input_key_down    (const char*) { return 0; }
 int32_t aiml_input_key_pressed (const char*) { return 0; }
+int32_t aiml_input_key_pressed_once(const char*) { return 0; }
 int32_t aiml_input_key_released(const char*) { return 0; }
 
 float   aiml_input_mouse_pos_x   (void) { return 0.f; }

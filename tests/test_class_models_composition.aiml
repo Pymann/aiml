@@ -4,17 +4,17 @@
 - model:
     name: Bar
     fields:
-      - [n, i32, 7]
-      - [s, string]
+      - [var_n, i32, 7]
+      - [var_s, string]
 
 - class:
     name: BarBehavior
     models: [Bar]
     methods:
-      - def: { name: greet, return: string, args: [], body: [{ return: "n=${<.n} s=${<.s}" }] }
+      - def: { name: greet, return: string, args: [], body: [{ return: "var_n=${<.var_n} var_s=${<.var_s}" }] }
 
-- decl: [b, BarBehavior]
-- set: [b.n, 99]
-- set: [b.s, "yo"]
-- decl: [out, string, { call: [b.greet] }]
+- decl: [var_b, BarBehavior]
+- set: [var_b.var_n, 99]
+- set: [var_b.var_s, "yo"]
+- decl: [out, string, { call: [var_b.greet] }]
 - print: ["got='${out}'"]

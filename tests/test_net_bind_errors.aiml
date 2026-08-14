@@ -7,18 +7,18 @@
       - decl: [pass, i32, 0]
       - decl: [fail, i32, 0]
 
-      - decl: [s1, socket_handle]
-      - set: [s1, { call: [net.socket, "tcp"] }]
-      - decl: [s2, socket_handle]
-      - set: [s2, { call: [net.socket, "tcp"] }]
+      - decl: [var_s1, socket_handle]
+      - set: [var_s1, { call: [net.socket, "tcp"] }]
+      - decl: [var_s2, socket_handle]
+      - set: [var_s2, { call: [net.socket, "tcp"] }]
 
       - decl: [brc1, i32]
-      - set: [brc1, { call: [net.bind, s1, "127.0.0.1", 23191] }]
+      - set: [brc1, { call: [net.bind, var_s1, "127.0.0.1", 23191] }]
       # listen() makes the port truly exclusive — SO_REUSEADDR allows
       # duplicate bind() on unlistened sockets, but not after listen().
-      - call: [net.listen, s1, 1]
+      - call: [net.listen, var_s1, 1]
       - decl: [brc2, i32]
-      - set: [brc2, { call: [net.bind, s2, "127.0.0.1", 23191] }]
+      - set: [brc2, { call: [net.bind, var_s2, "127.0.0.1", 23191] }]
 
       - if:
           condition: { eq: [brc1, 0] }
@@ -36,8 +36,8 @@
             - print: ["[FAIL] second net.bind expected non-zero got ${brc2}"]
             - set: [fail, { +: [fail, 1] }]
 
-      - call: [net.close, s2]
-      - call: [net.close, s1]
+      - call: [net.close, var_s2]
+      - call: [net.close, var_s1]
 
       - print: "Passed: ${pass} / ${ { +: [pass, fail] } }"
       - print: "Failed: ${fail}"

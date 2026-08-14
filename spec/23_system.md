@@ -58,6 +58,47 @@
 - decl: [first_arg, string]
 - set: [first_arg, { call: [sys.get_arg, 1] }]
 
+# sys.arg_dump
+# Parses CLI flags directly into an existing struct/model variable.
+# Signature: sys.arg_dump(target: ModelOrStruct) -> void
+#
+# Supported field types in the current implementation:
+#   i32     - consumes next token as atoi(value)
+#             if omitted or followed by another flag, sets field to 1
+#   f32     - consumes next token as atof(value)
+#   string  - consumes next token as strdup(value)
+#   i64     - consumes next token as atoll(value)
+#
+# Flag-name mapping:
+#   --foo-bar  -> foo_bar
+#   --foo      -> foo
+#
+# Notes:
+# - argv[0] is ignored; parsing starts at argv[1].
+# - Positional arguments (tokens not starting with '-') are silently ignored.
+# - Unknown flags print an error and terminate the process with exit code 1.
+# - The target must be a named struct/model variable, not an arbitrary expression.
+#
+# Example:
+- model:
+    name: TrainCfg
+    fields:
+      - [config, string, ""]
+      - [epochs, i32, 10]
+      - [lr, f32, 0.001]
+      - [seed, i64, 0]
+
+- decl: [cfg, TrainCfg]
+- call: [sys.arg_dump, cfg]
+#
+# Example invocation:
+#   ./prog --config train.json --epochs 20 --lr 0.0005 --seed 42
+# Result:
+#   cfg.config = "train.json"
+#   cfg.epochs = 20
+#   cfg.lr = 0.0005
+#   cfg.seed = 42
+
 # 4. Size and Type
 - decl: [any_class, AnyClass]
 - decl: [size, u64]

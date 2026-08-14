@@ -68,12 +68,12 @@
             - print: ["FAIL ts_reuse_at=${sample_b.val}"]
             - call: [sys.exit, 1]
 
-      - decl: [rc, i32]
-      - set: [rc, { call: [db.checkpoint] }]
+      - decl: [var_rc, i32]
+      - set: [var_rc, { call: [db.checkpoint] }]
       - if:
-          condition: { neq: [rc, 0] }
+          condition: { neq: [var_rc, 0] }
           then:
-            - print: ["FAIL checkpoint_rc=${rc}"]
+            - print: ["FAIL checkpoint_rc=${var_rc}"]
             - call: [sys.exit, 1]
 
       - print: ["AionDB kv/ts persist reuse PASS"]

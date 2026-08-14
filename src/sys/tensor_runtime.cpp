@@ -47,6 +47,7 @@ enum OpType {
     OP_SLICE,
     OP_WEIGHTED_CROSS_ENTROPY,
     OP_ABS,
+    OP_RESHAPE,
     OP_COUNT  // sentinel — must be last
 };
 
@@ -461,7 +462,14 @@ void* aiml_tensor_reshape(void* tv, const int32_t* shape, int32_t ndim) {
     t->grad_node_id = -1;
     t->owns_data = 0;  // view — does not own data
     t->is_param = 0;   // reshape view = ephemeral
+    t->alloc_epoch = g_graph_epoch;
     g_all_tensors.insert(t);
+    // Autograd: reshape is a no-op on data; grad flows through unchanged
+    // (only the shape header differs).  backward_reshape just adds the
+    // output's grad data into src->grad — element count is identical.
+    if (needs_grad(src)) {
+        record_node(OP_RESHAPE, t, src);
+    }
     return t;
 }
 
@@ -1445,6 +1453,18 @@ static void backward_neg(GradNode& n) {
     }
 }
 
+// Reshape: data layout in memory is identical (same flat float* on input
+// and output), only shape header differs.  Gradient propagates element-wise.
+static void backward_reshape(GradNode& n) {
+    if (n.inputs[0]->requires_grad) {
+        ensure_grad(n.inputs[0]);
+        float* og = n.output->grad;
+        if (og == nullptr) return;
+        for (int i = 0; i < n.inputs[0]->size; i++)
+            n.inputs[0]->grad[i] += og[i];
+    }
+}
+
 static void backward_concat(GradNode& n) {
     // Backward of concat: slice the output gradient back to inputs
     float* og = n.output->grad;
@@ -1894,6 +1914,7 @@ void aiml_tensor_backward(void* lv) {
         backward_slice,                    // OP_SLICE
         backward_weighted_cross_entropy,   // OP_WEIGHTED_CROSS_ENTROPY
         backward_abs,                      // OP_ABS
+        backward_reshape,                  // OP_RESHAPE
     };
 
     // Traverse graph in reverse order

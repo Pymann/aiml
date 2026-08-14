@@ -5,8 +5,8 @@
 # The inner program runs to completion and its exit code is returned.
 #
 # Expected output:
-#   shared rc: 42
-#   isolated rc: 42
+#   shared var_rc: 42
+#   isolated var_rc: 42
 
 # --- Define a simple zero-arg function that returns a known value ---
 - def:
@@ -19,13 +19,13 @@
 - decl: [pkg, Code]
 - set: [pkg, { call: [sys.bundle, "ctx_probe"] }]
 
-- decl: [rc, i32]
-- set: [rc, { call: [sys.exec, pkg] }]
-- print: ["shared rc: ${rc}"]
+- decl: [var_rc, i32]
+- set: [var_rc, { call: [sys.exec, pkg] }]
+- print: ["shared var_rc: ${var_rc}"]
 
 # --- Isolated-context execution (new_context=1) ---
 - decl: [ipkg, Code]
 - set: [ipkg, { call: [sys.bundle, "ctx_probe", {context: true}] }]
 
-- set: [rc, { call: [sys.exec, ipkg] }]
-- print: ["isolated rc: ${rc}"]
+- set: [var_rc, { call: [sys.exec, ipkg] }]
+- print: ["isolated var_rc: ${var_rc}"]

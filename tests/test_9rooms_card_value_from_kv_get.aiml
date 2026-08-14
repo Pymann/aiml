@@ -52,7 +52,7 @@
     name: Card
     inherits: BaseCard
     fields:
-      - [lp, i32]
+      - [var_lp, i32]
       - [attack, i32]
       - [defense, i32]
       - [initiative, i32]
@@ -73,16 +73,16 @@
       - decl: [db_dir, path, "/tmp/aiml_test_9rooms_card_value_from_kv_get/"]
       - call: [io.remove_all, db_dir]
 
-      - decl: [j1, string, '{"__type":"Card","name":"Fire Mana","card_type":3,"mkp":2,"mana_cost":{},"description":"mana source","passive_abilities":[18],"active_abilities":[{"cost_text":"Tap","activation_cost":[1],"trigger":[[1,7]],"effects":[[10,3]]}],"lp":0,"attack":0,"defense":0,"initiative":0,"moral":0,"movement":0,"spell_type":0,"equip_cost":0,"provides":{"1":1},"skp_cost":0,"duration":0,"room_effect":0,"created_at":0}']
+      - decl: [var_j1, string, '{"__type":"Card","name":"Fire Mana","card_type":3,"mkp":2,"mana_cost":{},"description":"mana source","passive_abilities":[18],"active_abilities":[{"cost_text":"Tap","activation_cost":[1],"trigger":[[1,7]],"effects":[[10,3]]}],"var_lp":0,"attack":0,"defense":0,"initiative":0,"moral":0,"movement":0,"spell_type":0,"equip_cost":0,"provides":{"1":1},"skp_cost":0,"duration":0,"room_effect":0,"created_at":0}']
       - decl: [src, Card]
-      - set: [src, { call: [sys.deserialize, j1, "Card"] }]
+      - set: [src, { call: [sys.deserialize, var_j1, "Card"] }]
 
-      - decl: [kv, Kv<string:Card>]
-      - set: [kv, { call: [db.open_kv, "card_value_from_kv_get", {persist: true, path: db_dir}] }]
-      - call: [kv.set, "mana", src]
+      - decl: [var_kv, Kv<string:Card>]
+      - set: [var_kv, { call: [db.open_kv, "card_value_from_kv_get", {persist: true, path: db_dir}] }]
+      - call: [var_kv.set, "mana", src]
 
       - decl: [gotp, ptr<Card>]
-      - set: [gotp, { call: [kv.get, "mana"] }]
+      - set: [gotp, { call: [var_kv.get, "mana"] }]
       - if:
           condition: { eq: [gotp, null] }
           then:
@@ -96,7 +96,7 @@
             - print: ["FAIL ptr_amt=${ptr_amt}"]
             - call: [sys.exit, 1]
 
-      - decl: [gotv, Card, { call: [kv.get_copy, "mana"] }]
+      - decl: [gotv, Card, { call: [var_kv.get_copy, "mana"] }]
       - if:
           condition: { eq: [{ eq: [gotv.name, "Fire Mana"] }, 0] }
           then:
@@ -115,5 +115,5 @@
             - print: ["FAIL val_amt=${val_amt}"]
             - call: [sys.exit, 1]
 
-      - print: ["9rooms card value-from-kv-get PASS"]
+      - print: ["9rooms card value-from-var_kv-get PASS"]
       - return: 0

@@ -9,6 +9,7 @@
 
 #include "engine_runtime.h"
 #include "input_runtime.h"
+#include "prefab_runtime.h"  /* aiml_prefab_scene_init für resize-callback */
 
 #include <cstring>
 #include <cmath>
@@ -173,9 +174,18 @@ void* aiml_engine_create_window(int32_t w, int32_t h, const char* title) {
         glViewport(0, 0, fbw, fbh);
     }
 
-    /* Keep viewport in sync when the user resizes the window */
+    /* Keep viewport + prefab scene size in sync when the user resizes/
+     * maximizes the window.  scene_init's re-init-Branch updated nur
+     * screen_w/h + Projection — design_w/h bleibt vom ersten Aufruf
+     * → ratio (screen/design) ≠ 1 → UI skaliert mit. */
     glfwSetFramebufferSizeCallback(glfw, [](GLFWwindow*, int fbw, int fbh) {
         glViewport(0, 0, fbw, fbh);
+        /* scene_resize updated nur screen_w/h — design_w/h bleibt fixed
+         * vom ersten scene_init.  Wichtig: nicht scene_init nutzen, sonst
+         * würde das initial-create design = maximized-Dims setzen wenn
+         * der Callback vor dem explizten scene_init feuert (z.B. weil
+         * engine.maximize() aufgerufen wurde). */
+        aiml_prefab_scene_resize(fbw, fbh);
     });
 
     AimlWindow* win = new AimlWindow();
@@ -237,6 +247,17 @@ void aiml_engine_set_title(void* win_ptr, const char* title) {
     if (!win_ptr || !title) return;
 #if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
     glfwSetWindowTitle(((AimlWindow*)win_ptr)->glfw, title);
+#endif
+}
+
+/* Maximize the window (system-defined "maximized" state). Spec/44_1 §window-ops. */
+void aiml_engine_maximize_window(void* win_ptr) {
+#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+    if (!win_ptr) return;
+    AimlWindow* win = (AimlWindow*)win_ptr;
+    if (win->glfw) glfwMaximizeWindow(win->glfw);
+#else
+    (void)win_ptr;
 #endif
 }
 

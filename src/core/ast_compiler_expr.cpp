@@ -7,6 +7,7 @@
 #include "string_utils.h"
 #include <iostream>
 #include <cmath>
+#include <set>
 
 namespace AIML {
 namespace AST {
@@ -102,53 +103,58 @@ IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
             ? (uint64_t)classInfo.padded_size
             : ctx.module.getDataLayout().getTypeAllocSize(structTy);
 
-        // Ensure calloc exists
+        // Ensure calloc exists.  size_t width is target-dependent (i64 on
+        // x86-64, i32 on wasm32) — using ctx.getSizeType() makes the linker
+        // signature match libc's.
+        llvm::Type* sz = ctx.getSizeType();
         llvm::Function* callocFunc = ctx.module.getFunction("calloc");
         if (!callocFunc) {
-             llvm::FunctionType* callocType = llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty()}, false);
+             llvm::FunctionType* callocType = llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {sz, sz}, false);
              llvm::Function::Create(callocType, llvm::Function::ExternalLinkage, "calloc", ctx.module);
         }
 
         std::vector<IRValue*> callArgs;
-        callArgs.push_back(ctx.ir_gen->wrap(ctx.builder.getInt64(1)));
-        callArgs.push_back(ctx.ir_gen->wrap(ctx.builder.getInt64(allocSize)));
+        callArgs.push_back(ctx.ir_gen->wrap(ctx.getSizeConst(1)));
+        callArgs.push_back(ctx.ir_gen->wrap(ctx.getSizeConst(allocSize)));
         
         IRValue* rawPtr = ctx.ir_gen->createCall("calloc", callArgs, "calloc_call");
+        llvm::Value* rawPtrCast = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rawPtr));
 
-        // Auto-initialize members. This mirrors the special-case initialization
-        // that stack `decl` already does for builtin handle/container fields.
+        // Default-initialise every field via the SAME path the stack `decl`
+        // uses (initClassContainerMembers): list/map → empty container, string →
+        // "" (NOT null — calloc leaves i8* null and `.len`=strlen(null) segfaults),
+        // chan/buffer → init, nested class → recurse, plus per-member defaults.
+        // spec/15_models.md §"Default Field Initialization" mandates this for
+        // BOTH stack decls AND `{ new: Model }` — previously `{new:}` only inited
+        // explicit-default/chan/buffer, so unset string/list/map/nested fields
+        // were left as null/zero.  Repro: tests/test_model_string_default_heap_new.aiml.
+        initClassContainerMembers(rawPtrCast, className);
+
+        // Apply per-instantiation overrides (`{ new: T, field: val }`) on top of
+        // the defaults so an explicit init still wins.
         for (auto& [name, member] : classInfo.members) {
-             Expr* initExpr = nullptr;
-             if (newExpr->initValues.count(name)) {
-                 initExpr = newExpr->initValues[name].get();
-             } else if (member.initValue != nullptr) {
-                 initExpr = member.initValue.get();
+             if (!newExpr->initValues.count(name)) continue;
+             IRValue* fieldInitV = visitExpression(newExpr->initValues[name].get());
+             if (!fieldInitV) {
+                 LOG_ERROR(ctx.fmtLoc(newExpr->sourceNode) + "Failed to compile AST expression for initialization of member: " + name);
+                 continue;
              }
-             
-             if (initExpr != nullptr) {
-                  IRValue* fieldInitV = visitExpression(initExpr);
-                  if (fieldInitV) {
-                      llvm::Value* initVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldInitV));
-                      if (initVal) {
-                          llvm::Value* rawPtrCast = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rawPtr));
-                          llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(classInfo.type, rawPtrCast, member.index, name + "_gep");
-                          ctx.builder.CreateStore(initVal, fieldPtr);
-                      } else {
-                          LOG_ERROR(ctx.fmtLoc(newExpr->sourceNode) + "Null LLVM value evaluated for initialization of member: " + name);
-                      }
-                  } else {
-                      LOG_ERROR(ctx.fmtLoc(newExpr->sourceNode) + "Failed to compile AST expression for initialization of member: " + name);
-                  }
-             } else if (member.typeName.find("chan<") == 0 && member.typeName.back() == '>') {
-                  llvm::Value* rawPtrCast = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rawPtr));
-                  llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(classInfo.type, rawPtrCast, member.index, name + "_gep");
-                  ChanImpl::init(ctx, fieldPtr, ctx.builder.getInt64(0));
-             } else if (member.typeName == "buffer" ||
-                        (member.typeName.rfind("buffer<", 0) == 0 && member.typeName.back() == '>')) {
-                  llvm::Value* rawPtrCast = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rawPtr));
-                  llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(classInfo.type, rawPtrCast, member.index, name + "_gep");
-                  BufferImpl::alloc(ctx, fieldPtr, ctx.builder.getInt32(4096));
+             llvm::Value* initVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldInitV));
+             if (!initVal) {
+                 LOG_ERROR(ctx.fmtLoc(newExpr->sourceNode) + "Null LLVM value evaluated for initialization of member: " + name);
+                 continue;
              }
+             llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(classInfo.type, rawPtrCast, member.index, name + "_gep");
+             ctx.builder.CreateStore(initVal, fieldPtr);
+        }
+
+        // classgroup container (spec/58): run the synthesized wiring ctor so the
+        // new group has all instances allocated (phase 0) + sees pointers
+        // back-patched (phase 1).  Nothing else auto-invokes methods on {new:}.
+        if (ctx.classGroupContainers.count(className)) {
+            std::string ctorName = className + "___ctor";
+            if (ctx.module.getFunction(ctorName))
+                ctx.ir_gen->createCall(ctorName, { rawPtr }, "");
         }
         return rawPtr;
     }
@@ -164,6 +170,43 @@ IRValue* Compiler::visitLiteral(LiteralExpr* lit) {
             return ctx.ir_gen->getInt32(0);
         }
     } else if (lit->type == "string") {
+        // Asset-Registry strict-lint (spec/44_7): catches stale asset-path
+        // literals that should be stems.  Fires on:
+        //   - literal starts with "resources/" OR "assets/" AND
+        //   - ends with a known image / audio / shader / font extension
+        // This is narrow enough to skip legitimate `tests/foo.wav`-style
+        // test file paths but catches every Migration-leftover in seeds,
+        // prefab specs, icon_path sets, anywhere in DataCreatures.
+        {
+            const std::string& s = lit->value;
+            bool stale_prefix = s.rfind("resources/", 0) == 0 || s.rfind("assets/", 0) == 0;
+            if (stale_prefix) {
+                auto dot = s.find_last_of('.');
+                bool asset_ext = false;
+                if (dot != std::string::npos && dot + 1 < s.size()) {
+                    std::string ext = s.substr(dot + 1);
+                    for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+                    static const std::set<std::string> kAssetExts = {
+                        "png","jpg","jpeg","webp","svg",
+                        "ogg","wav","mp3","flac",
+                        "glsl","frag","vert",
+                        "ttf","otf",
+                    };
+                    asset_ext = kAssetExts.count(ext) > 0;
+                }
+                if (asset_ext) {
+                    std::string suggest;
+                    size_t a = s.find_last_of('/');
+                    a = (a == std::string::npos) ? 0 : a + 1;
+                    size_t b = (dot == std::string::npos || dot < a) ? s.size() : dot;
+                    suggest = s.substr(a, b - a);
+                    LOG_ERROR(ctx.fmtLoc(lit->sourceNode) +
+                              "asset-path literal not allowed: \"" + s +
+                              "\" — use the stem \"" + suggest +
+                              "\" (spec/44_7 Asset Registry)");
+                }
+            }
+        }
         return ctx.ir_gen->createGlobalStringPtr(lit->value);
     } else if (lit->type == "bool") {
         return ctx.ir_gen->getInt32(lit->value == "true" ? 1 : 0);
@@ -210,7 +253,10 @@ IRValue* Compiler::visitLiteral(LiteralExpr* lit) {
 }
 IRValue* Compiler::visitVariable(VariableExpr* var) {
     std::string varName = var->name;
-    if (varName.find("<.") == 0) {
+    if (varName == "<") {
+        // Standalone `<` als this-Referenz (z.B. `decode_rpc(rpc, <)`).
+        varName = "this";
+    } else if (varName.find("<.") == 0) {
         varName = "this." + varName.substr(2);
     }
     
@@ -305,8 +351,20 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
     
     IRValue* baseAlloca = sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst);
     IRType* baseElemTy = sym->ir_element_type ? sym->ir_element_type : ctx.ir_gen->wrapType(sym->element_type);
-    
+
+    // list/map by-ref args: alloca enthält den Pointer, nicht den Struct.
+    // Lese-Pfade müssen einmal dereferenzieren bevor sie auf den Struct zugreifen.
+    if (sym->is_byref_arg) {
+        auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Value* allocaRaw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+        llvm::Value* loaded = ctx.builder.CreateLoad(i8p, allocaRaw, "byref_deref_var");
+        baseAlloca = ctx.ir_gen->wrap(loaded);
+    }
+
     if (propName.empty()) {
+        // Für byref-args: baseAlloca ist jetzt der struct-Pointer.  Load des
+        // Structs liefert eine Kopie der aktuellen size/capacity/data-Werte des
+        // CALLER-Structs — genau was beim Weitergeben gebraucht wird.
         return ctx.ir_gen->createLoad(baseElemTy, baseAlloca, baseName + "_val");
     } else {
         llvm::Type* llvmBaseElemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(baseElemTy));
@@ -532,6 +590,20 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
         bool isEq = (bin->op == "peq");
         llvm::Value* lv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs));
         llvm::Value* rv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs));
+        // Interface pointers are fat pointers (AimlFatPtr_<Iface> = {obj,
+        // vtable}).  Address identity / null comparison is on the OBJECT slot
+        // (field 0), not the whole struct — otherwise we'd emit ICmp on a
+        // struct type and crash LLVM.  Repro: tests/test_peq_iface_ptr_null.aiml
+        auto extractFatObj = [&](llvm::Value* v) -> llvm::Value* {
+            if (v && v->getType()->isStructTy()) {
+                auto* st = llvm::cast<llvm::StructType>(v->getType());
+                if (st->hasName() && st->getName().startswith("AimlFatPtr_"))
+                    return ctx.builder.CreateExtractValue(v, 0, "fatptr_obj");
+            }
+            return v;
+        };
+        lv = extractFatObj(lv);
+        rv = extractFatObj(rv);
         llvm::Type* rawLTy = lv->getType();
         llvm::Type* rawRTy = rv->getType();
 
@@ -612,10 +684,28 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
         // compared as equal, breaking e.g. drag-and-drop "which tile is
         // this?" lookups.
         if (lTy->isPointerTy() && rTy->isPointerTy()) {
+            // Resolve type-name for VariableExpr (incl. dotted member-access
+            // wie `tick.terrain_id`) und LiteralExpr.  Ohne den Dot-Pfad würde
+            // string-typed Struct-Feld als unbekannt durchlaufen und auf
+            // Pointer-Identity statt strcmp fallen → bricht spec/39 §0
+            // ("For string pointers: byte-by-byte content comparison").
             auto resolveTypeName = [&](Expr* expr) {
                 std::string name;
                 if (auto* varEx = dynamic_cast<VariableExpr*>(expr)) {
-                    if (Symbol* s = resolveVariable(varEx->name)) name = s->typeName;
+                    if (Symbol* s = resolveVariable(varEx->name)) {
+                        name = s->typeName;
+                    } else {
+                        size_t dotPos = varEx->name.find('.');
+                        if (dotPos != std::string::npos) {
+                            std::string baseName = varEx->name.substr(0, dotPos);
+                            std::string propPath = varEx->name.substr(dotPos + 1);
+                            if (Symbol* baseSym = resolveVariable(baseName)) {
+                                std::string propTypeName;
+                                resolvePropertyWritePtr(baseSym, propPath, propTypeName);
+                                name = propTypeName;
+                            }
+                        }
+                    }
                 } else if (auto* lit = dynamic_cast<LiteralExpr*>(expr)) {
                     name = lit->type;
                 }
@@ -629,6 +719,17 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
                 return res;
             if (lhsTypeName == "string" || rhsTypeName == "string") {
                 return visitStringCompare(isNeq, lv, rv);
+            }
+            // Warning wenn beide Typen unbekannt UND wir auf Pointer-Identity
+            // fallen müssen — sehr wahrscheinlich ein User-Bug (z.B. eq auf
+            // einem string-Feld dessen Typ-Resolver gefailed hat).  peq/pneq
+            // ist der explizite Pointer-Compare; eq sollte content meinen.
+            if (lhsTypeName.empty() && rhsTypeName.empty()) {
+                LOG_WARNING(ctx.fmtLoc(bin->sourceNode) +
+                            "eq/neq on two pointers without resolvable type — "
+                            "falling back to pointer-identity comparison. "
+                            "Use peq/pneq for explicit address comparison or "
+                            "copy into a typed local first.");
             }
             // Default: pointer-identity comparison.
             llvm::Value* cmp = isNeq
@@ -675,11 +776,10 @@ static std::string stripPtrWrapper(const std::string& typeName) {
 IRValue* Compiler::visitUnary(UnaryExpr* unary) {
     // '&'  / '&&'  — address-of (N levels): return the alloca pointer of the variable
     if (unary->op.find_first_not_of('&') == std::string::npos) {
-        auto* varExpr = dynamic_cast<VariableExpr*>(unary->operand.get());
-        if (!varExpr) { LOG_ERROR(ctx.fmtLoc(unary->sourceNode) + "Unary '&': operand must be a variable"); return nullptr; }
-        Symbol* sym = resolveVariable(varExpr->name);
-        if (!sym) { LOG_ERROR(ctx.fmtLoc(unary->sourceNode) + "Unary '&': undefined variable: " + varExpr->name); return nullptr; }
-        IRValue* alloca = sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst);
+        // Address of a plain variable OR a dotted member-access (obj.field).
+        std::string lvTy;
+        IRValue* alloca = emitLValueAddress(unary->operand.get(), lvTy);
+        if (!alloca) { LOG_ERROR(ctx.fmtLoc(unary->sourceNode) + "Unary '&': operand must be an addressable lvalue (variable or member-access)"); return nullptr; }
         if (unary->op == "&") {
             return alloca; // pointer to x
         }
@@ -907,15 +1007,50 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
 }
 
 IRValue* Compiler::visitAtExpr(AtExpr* at) {
-    // Evaluate container — must be a variable
+    // Evaluate container — must be a variable (or struct/ptr field path).
     auto* varExpr = dynamic_cast<VariableExpr*>(at->container.get());
     if (!varExpr) {
-        LOG_ERROR(ctx.fmtLoc() + "at: container must be a variable");
+        LOG_ERROR(ctx.fmtLoc() + "at: container must be a variable or struct field path");
         return nullptr;
     }
-    Symbol* sym = resolveVariable(varExpr->name);
+
+    // Class-method this-shortcut: `<` und `<.member` → `this` / `this.member`,
+    // analog visitVariable.
+    std::string varName = varExpr->name;
+    if (varName == "<") {
+        varName = "this";
+    } else if (varName.find("<.") == 0) {
+        varName = "this." + varName.substr(2);
+    }
+
+    // Field-path resolution: "h.xs", "a.b.c.list", "ptr.field" — when the
+    // bare name isn't a symbol, try splitting at the first dot and resolving
+    // through resolvePropertyWritePtr (which handles arbitrarily nested
+    // struct/ptr access and gives us an alloca-style pointer to the inner
+    // list<T>/array<T> / dyn_array<T> / tensor).
+    Symbol* sym = resolveVariable(varName);
+    Symbol  tempSym;  // backs synthesized Symbol when we resolve a field path
     if (!sym) {
-        LOG_ERROR(ctx.fmtLoc() + "at: unknown variable '" + varExpr->name + "'");
+        size_t dotPos = varName.find('.');
+        if (dotPos != std::string::npos) {
+            std::string baseName = varName.substr(0, dotPos);
+            std::string propPath = varName.substr(dotPos + 1);
+            Symbol* baseSym = resolveVariable(baseName);
+            if (baseSym) {
+                std::string propTypeName;
+                IRValue* propPtr = resolvePropertyWritePtr(baseSym, propPath, propTypeName);
+                if (propPtr && !propTypeName.empty()) {
+                    tempSym.typeName        = propTypeName;
+                    tempSym.ir_alloca_inst  = propPtr;
+                    // ir_element_type ist nicht zwingend nötig — die Branches
+                    // unten lesen nur typeName + alloca_inst (über ir_alloca_inst).
+                    sym = &tempSym;
+                }
+            }
+        }
+    }
+    if (!sym) {
+        LOG_ERROR(ctx.fmtLoc() + "at: unknown variable '" + varName + "'");
         return nullptr;
     }
 
@@ -999,9 +1134,35 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
         llvm::Type* elemTy = ctx.getLLVMType(elemName);
         llvm::Value* listPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
             sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst)));
+        // Byref function arg: the alloca holds a POINTER to the caller's
+        // list struct, not the struct itself.  Deref once so getElementPtr
+        // sees the real list.  resolveProperty does the same for `.len`.
+        // Without this, `at: [lst, i]` GEPs into the 4-byte ptr alloca and
+        // reads garbage at offset 8 → WASM bounds trap on the next load.
+        // Repro: tests/wasm/test_mirror_rpc_client_multifile.aiml phase 4.
+        if (sym->is_byref_arg) {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            listPtr = ctx.builder.CreateLoad(i8p, listPtr, "byref_deref_at");
+        }
         if (indexVals.empty()) { LOG_ERROR("at: list requires at least one index"); return nullptr; }
         llvm::Value* elemPtr = ListImpl::getElementPtr(ctx, listPtr, indexVals[0], elemTy);
         llvm::Value* val = ctx.builder.CreateLoad(elemTy, elemPtr, "list_at");
+        // Refcount: borrowing a string out of a list adds an alias.  Incref
+        // so the caller's local var holds a real ref; when the underlying
+        // list is later released (e.g. mirror's aiml_ser_free_decoded), the
+        // string survives.  No-op on non-refcounted strings (literals).
+        // Repro: tests/test_mirror_close_string_uaf.aiml
+        if (elemName == "string") {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* voidTy = llvm::Type::getVoidTy(ctx.context);
+            llvm::Function* incref = ctx.module.getFunction("aiml_str_incref");
+            if (!incref) {
+                auto* fty = llvm::FunctionType::get(voidTy, {i8p}, false);
+                incref = llvm::Function::Create(fty, llvm::Function::ExternalLinkage,
+                                                "aiml_str_incref", ctx.module);
+            }
+            ctx.builder.CreateCall(incref, {val});
+        }
         return ctx.ir_gen->wrap(val);
     }
 

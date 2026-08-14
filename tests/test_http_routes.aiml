@@ -4,10 +4,10 @@
     name: handle_user
     args: [[req, http_request_handle], [resp, http_response_handle]]
     body:
-      - decl: [p, map<string:string>]
-      - set: [p, req.params]
+      - decl: [var_p, map<string:string>]
+      - set: [var_p, req.params]
       - decl: [uid, string]
-      - set: [uid, { call: [p.get, "id"] }]
+      - set: [uid, { call: [var_p.get, "id"] }]
       - set: [resp.status, 200]
       - set: [resp.body, "user:${uid}"]
       - call: [resp.send]

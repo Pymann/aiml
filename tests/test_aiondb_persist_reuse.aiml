@@ -49,12 +49,12 @@
             - print: ["FAIL store_reuse_level=${ent_b.level}"]
             - call: [sys.exit, 1]
 
-      - decl: [rc, i32]
-      - set: [rc, { call: [db.checkpoint] }]
+      - decl: [var_rc, i32]
+      - set: [var_rc, { call: [db.checkpoint] }]
       - if:
-          condition: { neq: [rc, 0] }
+          condition: { neq: [var_rc, 0] }
           then:
-            - print: ["FAIL checkpoint_rc=${rc}"]
+            - print: ["FAIL checkpoint_rc=${var_rc}"]
             - call: [sys.exit, 1]
 
       - print: ["AionDB store persist reuse PASS"]

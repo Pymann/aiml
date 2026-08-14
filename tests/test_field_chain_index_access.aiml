@@ -4,7 +4,7 @@
 - model:
     name: Item
     fields:
-      - [hp, i32]
+      - [var_hp, i32]
       - [name, string]
 
 - model:
@@ -16,7 +16,7 @@
     name: main
     return: i32
     body:
-      - decl: [json, string, '{"__type":"Bag","items":[{"hp":3,"name":"alpha"},{"hp":7,"name":"beta"}] }']
+      - decl: [json, string, '{"__type":"Bag","items":[{"var_hp":3,"name":"alpha"},{"var_hp":7,"name":"beta"}] }']
       - decl: [bag, Bag]
       - set: [bag, { call: [sys.deserialize, json, "Bag"] }]
 
@@ -27,9 +27,9 @@
             - call: [sys.exit, 1]
 
       - if:
-          condition: { neq: [bag.items-0.hp, 3] }
+          condition: { neq: [bag.items-0.var_hp, 3] }
           then:
-            - print: ["FAIL item0_hp=${bag.items-0.hp}"]
+            - print: ["FAIL item0_hp=${bag.items-0.var_hp}"]
             - call: [sys.exit, 1]
 
       - if:
@@ -38,11 +38,11 @@
             - print: ["FAIL item1_name=${bag.items-1.name}"]
             - call: [sys.exit, 1]
 
-      - set: [bag.items-1.hp, 9]
+      - set: [bag.items-1.var_hp, 9]
       - if:
-          condition: { neq: [bag.items-1.hp, 9] }
+          condition: { neq: [bag.items-1.var_hp, 9] }
           then:
-            - print: ["FAIL item1_hp_after_set=${bag.items-1.hp}"]
+            - print: ["FAIL item1_hp_after_set=${bag.items-1.var_hp}"]
             - call: [sys.exit, 1]
 
       - print: ["field chain index access PASS"]

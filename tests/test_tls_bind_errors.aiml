@@ -7,18 +7,18 @@
       - decl: [pass, i32, 0]
       - decl: [fail, i32, 0]
 
-      - decl: [s1, tls_socket_handle]
-      - set: [s1, { call: [tls.socket] }]
-      - decl: [s2, tls_socket_handle]
-      - set: [s2, { call: [tls.socket] }]
+      - decl: [var_s1, tls_socket_handle]
+      - set: [var_s1, { call: [tls.socket] }]
+      - decl: [var_s2, tls_socket_handle]
+      - set: [var_s2, { call: [tls.socket] }]
 
       - decl: [brc1, i32]
-      - set: [brc1, { call: [tls.bind, s1, "127.0.0.1", 23192] }]
+      - set: [brc1, { call: [tls.bind, var_s1, "127.0.0.1", 23192] }]
       # listen() makes the port truly exclusive — SO_REUSEADDR allows
       # duplicate bind() on unlistened sockets, but not after listen().
-      - call: [tls.listen, s1, 1]
+      - call: [tls.listen, var_s1, 1]
       - decl: [brc2, i32]
-      - set: [brc2, { call: [tls.bind, s2, "127.0.0.1", 23192] }]
+      - set: [brc2, { call: [tls.bind, var_s2, "127.0.0.1", 23192] }]
 
       - if:
           condition: { eq: [brc1, 0] }
@@ -36,8 +36,8 @@
             - print: ["[FAIL] second tls.bind expected non-zero got ${brc2}"]
             - set: [fail, { +: [fail, 1] }]
 
-      - call: [tls.close, s2]
-      - call: [tls.close, s1]
+      - call: [tls.close, var_s2]
+      - call: [tls.close, var_s1]
 
       - print: "Passed: ${pass} / ${ { +: [pass, fail] } }"
       - print: "Failed: ${fail}"

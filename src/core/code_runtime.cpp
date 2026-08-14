@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include "../sys/string_runtime.h"
 
 // ── Internal struct mirrors ───────────────────────────────────────────────────
 
@@ -50,15 +51,17 @@ static void aiml_list_push_borrow(AimlList* l, char* s) {
     l->data[l->size++] = s;  // borrowed pointer; caller keeps ownership
 }
 
-// Concatenate all strings in list with '\n' separator. Caller must free result.
+// Concatenate all strings in list with '\n' separator. Caller must release
+// via aiml_str_decref (or, when stored in an AIML variable, automatic).
 static char* aiml_list_concat(AimlList* l) {
-    if (!l || l->size == 0) return strdup("");
+    if (!l || l->size == 0) return aiml_str_alloc(0);
     size_t total = 0;
     for (int i = 0; i < l->size; i++) {
         if (l->data[i]) total += strlen(l->data[i]) + 1;  // +1 for '\n'
     }
-    if (total == 0) return strdup("");
-    char* buf = (char*)malloc(total + 1);
+    if (total == 0) return aiml_str_alloc(0);
+    // aiml_str_alloc(total) gives `total` writable bytes + trailing \0.
+    char* buf = aiml_str_alloc(total);
     char* p = buf;
     for (int i = 0; i < l->size; i++) {
         if (!l->data[i]) continue;
@@ -67,7 +70,8 @@ static char* aiml_list_concat(AimlList* l) {
         p += len;
         *p++ = '\n';
     }
-    *p = '\0';
+    // Note: we wrote `total` bytes ending with '\n'; aiml_str_alloc already
+    // null-terminated at offset `total`, so the result is properly \0-terminated.
     return buf;
 }
 
@@ -88,10 +92,11 @@ int aiml_code_contains(void* raw, const char* needle) {
     return 0;
 }
 
-// aiml_code_tostring(void* code) -> char* (heap-allocated, caller frees)
-// Returns code_chunks + data_chunks concatenated with '\n' separator.
+// aiml_code_tostring(void* code) -> char* (refcounted; caller eventually
+// releases via aiml_str_decref).  Returns code_chunks + data_chunks
+// concatenated with '\n' separator.
 char* aiml_code_tostring(void* raw) {
-    if (!raw) return strdup("");
+    if (!raw) return aiml_str_alloc(0);
     AimlCode* c = (AimlCode*)raw;
     char* code_str = aiml_list_concat(c->code_chunks);
     char* data_str = aiml_list_concat(c->data_chunks);
@@ -99,18 +104,17 @@ char* aiml_code_tostring(void* raw) {
     bool code_empty = (code_str[0] == '\0');
     bool data_empty = (data_str[0] == '\0');
 
-    if (code_empty && data_empty) { free(data_str); return code_str; }
-    if (data_empty)               { free(data_str); return code_str; }
-    if (code_empty)               { free(code_str); return data_str; }
+    if (code_empty && data_empty) { aiml_str_decref(data_str); return code_str; }
+    if (data_empty)               { aiml_str_decref(data_str); return code_str; }
+    if (code_empty)               { aiml_str_decref(code_str); return data_str; }
 
     size_t clen = strlen(code_str);
     size_t dlen = strlen(data_str);
-    char* result = (char*)malloc(clen + dlen + 1);
+    char* result = aiml_str_alloc(clen + dlen);
     memcpy(result, code_str, clen);
     memcpy(result + clen, data_str, dlen);
-    result[clen + dlen] = '\0';
-    free(code_str);
-    free(data_str);
+    aiml_str_decref(code_str);
+    aiml_str_decref(data_str);
     return result;
 }
 

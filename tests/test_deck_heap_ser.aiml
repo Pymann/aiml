@@ -16,41 +16,41 @@
     return: i32
     body:
       - decl: [json1, string, '{"__type":"Deck","name":"Mana Alpha","deck_type":"mana_deck","description":"first","card_ids":["c1","c2","c3"],"total_mkp":7,"created_at":0}']
-      - decl: [d1, Deck]
-      - set: [d1, { call: [sys.deserialize, json1, "Deck"] }]
+      - decl: [var_d1, Deck]
+      - set: [var_d1, { call: [sys.deserialize, json1, "Deck"] }]
 
       - if:
-          condition: { eq: [{ eq: [d1.name, "Mana Alpha"] }, 0] }
+          condition: { eq: [{ eq: [var_d1.name, "Mana Alpha"] }, 0] }
           then:
-            - print: ["FAIL d1.name=${d1.name}"]
+            - print: ["FAIL var_d1.name=${var_d1.name}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { eq: [{ eq: [d1.deck_type, "mana_deck"] }, 0] }
+          condition: { eq: [{ eq: [var_d1.deck_type, "mana_deck"] }, 0] }
           then:
-            - print: ["FAIL d1.deck_type=${d1.deck_type}"]
+            - print: ["FAIL var_d1.deck_type=${var_d1.deck_type}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { neq: [d1.card_ids.len, 3] }
+          condition: { neq: [var_d1.card_ids.len, 3] }
           then:
-            - print: ["FAIL d1.card_ids.len=${d1.card_ids.len}"]
+            - print: ["FAIL var_d1.card_ids.len=${var_d1.card_ids.len}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { eq: [{ eq: [d1.card_ids-0, "c1"] }, 0] }
+          condition: { eq: [{ eq: [var_d1.card_ids-0, "c1"] }, 0] }
           then:
-            - print: ["FAIL d1.card_ids-0=${d1.card_ids-0}"]
+            - print: ["FAIL var_d1.card_ids-0=${var_d1.card_ids-0}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { eq: [{ eq: [d1.card_ids-2, "c3"] }, 0] }
+          condition: { eq: [{ eq: [var_d1.card_ids-2, "c3"] }, 0] }
           then:
-            - print: ["FAIL d1.card_ids-2=${d1.card_ids-2}"]
+            - print: ["FAIL var_d1.card_ids-2=${var_d1.card_ids-2}"]
             - call: [sys.exit, 1]
 
-      - decl: [kv, Kv<string:Deck>]
-      - set: [kv, { call: [db.open_kv, "deck_heap_ser", {persist: true, path: "/tmp/aiml_test_deck_heap_ser/"}] }]
-      - call: [kv.set, "deck_a", d1]
+      - decl: [var_kv, Kv<string:Deck>]
+      - set: [var_kv, { call: [db.open_kv, "deck_heap_ser", {persist: true, path: "/tmp/aiml_test_deck_heap_ser/"}] }]
+      - call: [var_kv.set, "deck_a", var_d1]
 
       - decl: [got1, ptr<Deck>]
-      - set: [got1, { call: [kv.get, "deck_a"] }]
+      - set: [got1, { call: [var_kv.get, "deck_a"] }]
       - if:
           condition: { eq: [{ eq: [got1.name, "Mana Alpha"] }, 0] }
           then:
@@ -68,12 +68,12 @@
             - call: [sys.exit, 1]
 
       - decl: [json2, string, '{"__type":"Deck","name":"Mana Beta","deck_type":"mana_deck","description":"overwrite","card_ids":["x1","x2"],"total_mkp":11,"created_at":0}']
-      - decl: [d2, Deck]
-      - set: [d2, { call: [sys.deserialize, json2, "Deck"] }]
-      - call: [kv.set, "deck_a", d2]
+      - decl: [var_d2, Deck]
+      - set: [var_d2, { call: [sys.deserialize, json2, "Deck"] }]
+      - call: [var_kv.set, "deck_a", var_d2]
 
       - decl: [got2, ptr<Deck>]
-      - set: [got2, { call: [kv.get, "deck_a"] }]
+      - set: [got2, { call: [var_kv.get, "deck_a"] }]
       - if:
           condition: { eq: [{ eq: [got2.name, "Mana Beta"] }, 0] }
           then:

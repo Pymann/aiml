@@ -11,7 +11,7 @@
     name: CreatureCard
     inherits: BaseCard
     fields:
-      - [lp,     i32]
+      - [var_lp,     i32]
       - [attack, i32]
 
 - model:
@@ -20,22 +20,22 @@
     fields:
       - [spell_type, string]
 
-- decl: [c, CreatureCard]
-- set:  [c.name,      "Dragon"]
-- set:  [c.card_type, "creature"]
-- set:  [c.mkp,       5]
-- set:  [c.lp,        30]
-- set:  [c.attack,    4]
-- print: ["name: ${c.name}"]
-- print: ["card_type: ${c.card_type}"]
-- print: ["mkp: ${c.mkp}"]
-- print: ["lp: ${c.lp}"]
-- print: ["attack: ${c.attack}"]
+- decl: [var_c, CreatureCard]
+- set:  [var_c.name,      "Dragon"]
+- set:  [var_c.card_type, "creature"]
+- set:  [var_c.mkp,       5]
+- set:  [var_c.var_lp,        30]
+- set:  [var_c.attack,    4]
+- print: ["name: ${var_c.name}"]
+- print: ["card_type: ${var_c.card_type}"]
+- print: ["mkp: ${var_c.mkp}"]
+- print: ["var_lp: ${var_c.var_lp}"]
+- print: ["attack: ${var_c.attack}"]
 
-- decl: [s, SpellCard]
-- set:  [s.name,       "Fireball"]
-- set:  [s.card_type,  "spell"]
-- set:  [s.mkp,        3]
-- set:  [s.spell_type, "sorcery"]
-- print: ["spell name: ${s.name}"]
-- print: ["spell_type: ${s.spell_type}"]
+- decl: [var_s, SpellCard]
+- set:  [var_s.name,       "Fireball"]
+- set:  [var_s.card_type,  "spell"]
+- set:  [var_s.mkp,        3]
+- set:  [var_s.spell_type, "sorcery"]
+- print: ["spell name: ${var_s.name}"]
+- print: ["spell_type: ${var_s.spell_type}"]

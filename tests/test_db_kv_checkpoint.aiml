@@ -5,18 +5,18 @@
 
 - call: [io.write_file, "/tmp/aiml_chkpt_test/.keep", ""]
 
-- decl: [kv, Kv<string:string>]
-- set: [kv, { call: [db.open_kv, "chkpt_test", {persist: true, path: "/tmp/aiml_chkpt_test/"}] }]
+- decl: [var_kv, Kv<string:string>]
+- set: [var_kv, { call: [db.open_kv, "chkpt_test", {persist: true, path: "/tmp/aiml_chkpt_test/"}] }]
 
 # ── Phase A: fill with payload-heavy entries ─────────────────────────────────
-- decl: [i, i32, 0]
+- decl: [var_i, i32, 0]
 - while:
-    condition: { "<": [i, 200] }
+    condition: { "<": [var_i, 200] }
     body:
-      - call: [kv.set, "k${i}", "value_with_some_payload_to_take_space_${i}"]
-      - set: [i, { +: [i, 1] }]
+      - call: [var_kv.set, "k${var_i}", "value_with_some_payload_to_take_space_${var_i}"]
+      - set: [var_i, { +: [var_i, 1] }]
 
-- decl: [n_after_fill, i32, { call: [kv.len] }]
+- decl: [n_after_fill, i32, { call: [var_kv.len] }]
 - print: ["after fill: len=${n_after_fill}"]
 
 - if:
@@ -26,14 +26,14 @@
       - call: [sys.exit, 1]
 
 # ── Phase B: delete all but a few entries ────────────────────────────────────
-- set: [i, 0]
+- set: [var_i, 0]
 - while:
-    condition: { "<": [i, 195] }
+    condition: { "<": [var_i, 195] }
     body:
-      - call: [kv.delete, "k${i}"]
-      - set: [i, { +: [i, 1] }]
+      - call: [var_kv.delete, "k${var_i}"]
+      - set: [var_i, { +: [var_i, 1] }]
 
-- decl: [n_after_delete, i32, { call: [kv.len] }]
+- decl: [n_after_delete, i32, { call: [var_kv.len] }]
 - print: ["after delete: len=${n_after_delete}"]
 
 - if:
@@ -47,8 +47,8 @@
 - print: ["checkpoint done"]
 
 # ── Phase D: read live entries → still accessible ────────────────────────────
-- decl: [v195, string, { call: [kv.get, "k195"] }]
-- decl: [v199, string, { call: [kv.get, "k199"] }]
+- decl: [v195, string, { call: [var_kv.get, "k195"] }]
+- decl: [v199, string, { call: [var_kv.get, "k199"] }]
 - print: ["k195=${v195}"]
 - print: ["k199=${v199}"]
 
@@ -59,7 +59,7 @@
       - print: ["FAIL: k195 wrong value '${v195}'"]
       - call: [sys.exit, 1]
 
-- decl: [n_after_chkpt, i32, { call: [kv.len] }]
+- decl: [n_after_chkpt, i32, { call: [var_kv.len] }]
 - print: ["after checkpoint: len=${n_after_chkpt}"]
 
 - if:
@@ -69,7 +69,7 @@
       - call: [sys.exit, 1]
 
 # ── Phase E: deleted entries stay deleted ────────────────────────────────────
-- decl: [has_old, i32, { call: [kv.has, "k0"] }]
+- decl: [has_old, i32, { call: [var_kv.has, "k0"] }]
 - print: ["has k0 (deleted): ${has_old}"]
 - if:
     condition: { neq: [has_old, 0] }
@@ -78,8 +78,8 @@
       - call: [sys.exit, 1]
 
 # ── Phase F: writes after checkpoint still work ──────────────────────────────
-- call: [kv.set, "post_chkpt", "alive"]
-- decl: [v_post, string, { call: [kv.get, "post_chkpt"] }]
+- call: [var_kv.set, "post_chkpt", "alive"]
+- decl: [v_post, string, { call: [var_kv.get, "post_chkpt"] }]
 - print: ["post_chkpt=${v_post}"]
 - if:
     condition: { neq: [v_post, "alive"] }

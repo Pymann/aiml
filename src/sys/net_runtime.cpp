@@ -1,4 +1,5 @@
 #include "net_runtime.h"
+#include "string_runtime.h"
 #include <sys/socket.h>
 #include <netdb.h>
 #include <arpa/inet.h>
@@ -199,11 +200,13 @@ extern "C" int aiml_net_send_string(void* sock, const char* str) {
 
 extern "C" char* aiml_net_recv_string(void* sock, int32_t max_bytes) {
     if (!sock || max_bytes <= 0) return nullptr;
-    char* buf = static_cast<char*>(std::malloc(static_cast<size_t>(max_bytes) + 1));
+    // Allocate worst-case max_bytes + header; we'll write the real length
+    // after recv (\0 already set by aiml_str_alloc at offset max_bytes).
+    char* buf = aiml_str_alloc(static_cast<size_t>(max_bytes));
     if (!buf) return nullptr;
     int n = static_cast<int>(::recv(to_sock(sock)->fd, buf,
                                     static_cast<size_t>(max_bytes), 0));
-    if (n < 0) { std::free(buf); return nullptr; }
-    buf[n] = '\0';
+    if (n < 0) { aiml_str_decref(buf); return nullptr; }
+    if (n < max_bytes) buf[n] = '\0';  // shorten to actual length
     return buf;
 }

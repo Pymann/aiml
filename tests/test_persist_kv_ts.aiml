@@ -9,9 +9,9 @@
 - call: [cfg.set, "mode", "fast"]
 - call: [cfg.set, "debug", "true"]
 
-- decl: [v, string]
-- set: [v, { call: [cfg.get, "mode"] }]
-- print: ["mode: ${v}"]
+- decl: [var_v, string]
+- set: [var_v, { call: [cfg.get, "mode"] }]
+- print: ["mode: ${var_v}"]
 
 - decl: [has, i32]
 - set: [has, { call: [cfg.has, "debug"] }]
@@ -38,31 +38,31 @@
     name: Reading
     members: [[val, i32]]
 
-- decl: [ts, TimeSeries<Reading>]
-- set: [ts, { call: [db.open_timeseries, "persist_ts", {persist: true}] }]
+- decl: [var_ts, TimeSeries<Reading>]
+- set: [var_ts, { call: [db.open_timeseries, "persist_ts", {persist: true}] }]
 
-- decl: [r, Reading]
-- set: [r.val, 42]
-- call: [ts.append, r, 1000]
+- decl: [var_r, Reading]
+- set: [var_r.val, 42]
+- call: [var_ts.append, var_r, 1000]
 
-- set: [r.val, 99]
-- call: [ts.append, r, 2000]
+- set: [var_r.val, 99]
+- call: [var_ts.append, var_r, 2000]
 
-- set: [r.val, 7]
-- call: [ts.append, r, 3000]
+- set: [var_r.val, 7]
+- call: [var_ts.append, var_r, 3000]
 
 - decl: [tlen, i32]
-- set: [tlen, { call: [ts.len] }]
-- print: ["ts len: ${tlen}"]
+- set: [tlen, { call: [var_ts.len] }]
+- print: ["var_ts len: ${tlen}"]
 
-- decl: [tp, ptr<Reading>]
-- set: [tp, { call: [ts.at, 1500] }]
-- print: ["at 1500: ${tp.val}"]
+- decl: [var_tp, ptr<Reading>]
+- set: [var_tp, { call: [var_ts.at, 1500] }]
+- print: ["at 1500: ${var_tp.val}"]
 
-- set: [tp, { call: [ts.at, 2500] }]
-- print: ["at 2500: ${tp.val}"]
+- set: [var_tp, { call: [var_ts.at, 2500] }]
+- print: ["at 2500: ${var_tp.val}"]
 
 # checkpoint flushes both
-- decl: [rc, i32]
-- set: [rc, { call: [db.checkpoint] }]
-- print: ["checkpoint rc: ${rc}"]
+- decl: [var_rc, i32]
+- set: [var_rc, { call: [db.checkpoint] }]
+- print: ["checkpoint var_rc: ${var_rc}"]

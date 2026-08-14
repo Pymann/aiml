@@ -5,24 +5,24 @@
 
 - def:
     name: add
-    args: [[a, i32], [b, i32]]
+    args: [[var_a, i32], [var_b, i32]]
     return: i32
     body:
-      - return: { +: [a, b] }
+      - return: { +: [var_a, var_b] }
 
 - def:
     name: double
-    args: [[n, i32]]
+    args: [[var_n, i32]]
     return: i32
     body:
-      - return: { "*": [n, 2] }
+      - return: { "*": [var_n, 2] }
 
 - def:
     name: apply
-    args: [[f, fn<i32:i32>], [x, i32]]
+    args: [[var_f, fn<i32:i32>], [var_x, i32]]
     return: i32
     body:
-      - return: { call: [f, x] }
+      - return: { call: [var_f, var_x] }
 
 - def:
     name: greet
@@ -33,41 +33,41 @@
 
 # ── Phase A: decl + set + call ────────────────────────────────────────────────
 
-- decl: [fp, fn<i32, i32:i32>]
-- set: [fp, add]
-- decl: [r, i32, { call: [fp, 3, 4] }]
-- if: [{ neq: [r, 7] }, true]
+- decl: [var_fp, fn<i32, i32:i32>]
+- set: [var_fp, add]
+- decl: [var_r, i32, { call: [var_fp, 3, 4] }]
+- if: [{ neq: [var_r, 7] }, true]
   then:
-    - print: ["FAIL A: fp(3,4) expected 7, got ", r]
+    - print: ["FAIL A: var_fp(3,4) expected 7, got ", var_r]
     - call: [sys.exit, 1]
-- print: ["Phase A OK: fn<i32,i32:i32> call via fp = ", r]
+- print: ["Phase A OK: fn<i32,i32:i32> call via var_fp = ", var_r]
 
 # ── Phase B: reassign to different function ────────────────────────────────────
 
-- set: [fp, double]   # fn<i32, i32:i32> = double — only uses first arg
+- set: [var_fp, double]   # fn<i32, i32:i32> = double — only uses first arg
 - decl: [fp2, fn<i32:i32>]
 - set: [fp2, double]
-- decl: [r2, i32, { call: [fp2, 5] }]
-- if: [{ neq: [r2, 10] }, true]
+- decl: [var_r2, i32, { call: [fp2, 5] }]
+- if: [{ neq: [var_r2, 10] }, true]
   then:
-    - print: ["FAIL B: fp2(5) expected 10, got ", r2]
+    - print: ["FAIL B: fp2(5) expected 10, got ", var_r2]
     - call: [sys.exit, 1]
-- print: ["Phase B OK: fn<i32:i32> call via fp2 = ", r2]
+- print: ["Phase B OK: fn<i32:i32> call via fp2 = ", var_r2]
 
 # ── Phase C: fn as function parameter ─────────────────────────────────────────
 
-- decl: [r3, i32, { call: [apply, double, 6] }]
-- if: [{ neq: [r3, 12] }, true]
+- decl: [var_r3, i32, { call: [apply, double, 6] }]
+- if: [{ neq: [var_r3, 12] }, true]
   then:
-    - print: ["FAIL C: apply(double,6) expected 12, got ", r3]
+    - print: ["FAIL C: apply(double,6) expected 12, got ", var_r3]
     - call: [sys.exit, 1]
-- print: ["Phase C OK: fn parameter = ", r3]
+- print: ["Phase C OK: fn parameter = ", var_r3]
 
 # ── Phase D: null check ────────────────────────────────────────────────────────
 
-- decl: [cb, fn<>]
+- decl: [var_cb, fn<>]
 - decl: [called, i32, 0]
-- if: [{ eq: [cb, 0] }, true]
+- if: [{ eq: [var_cb, 0] }, true]
   then:
     - set: [called, 1]
 - if: [{ neq: [called, 1] }, true]

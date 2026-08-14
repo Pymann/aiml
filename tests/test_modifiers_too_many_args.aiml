@@ -1,8 +1,8 @@
 - def:
     name: too_many
-    args: [[a, i32], [b, i32], [c, i32], [d, i32], [e, i32], [f, i32]]
+    args: [[var_a, i32], [var_b, i32], [var_c, i32], [var_d, i32], [var_e, i32], [var_f, i32]]
     return: i32
     body:
-      - return: [{ +: [a, b, c, d, e, f] }]
+      - return: [{ +: [var_a, var_b, var_c, var_d, var_e, var_f] }]
 
 - call: [too_many, 1, 2, 3, 4, 5, 6]

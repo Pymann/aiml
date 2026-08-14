@@ -23,9 +23,19 @@ class ModelBuilder : public StateHandler {
     // State for parsing member sequence entry
     std::string currentField;
     std::string currentType;
-    int memberAttrIndex = 0; // [name, type, default]
+    int memberAttrIndex = 0; // [name, type, default, {modifiers}]
     std::unique_ptr<Expr> currentInitValue;
     std::string currentAccess = "public";
+
+    // State for parsing the 4th-position modifier dict (db_indexed etc.)
+    bool insideModifier = false;
+    bool modifierExpectingKey = true;
+    std::string modifierKey;
+    // Captured modifier values applied to StructMember in OnSequenceEnd.
+    bool curDbIndexed = false;
+    std::string curDbIndexedMode;
+    bool curDbIndexedUnique = false;
+    bool curDbIndexedSkipEmpty = false;
 public:
     ModelBuilder(Builder* b) : StateHandler(b) { modelNode = std::make_unique<ModelDecl>(); }
     bool OnMapStart() override;

@@ -1,9 +1,9 @@
 - def:
     name: add_two
-    args: [[a, i32], [b, i32]]
+    args: [[var_a, i32], [var_b, i32]]
     return: i32
     body:
-      - return: { +: [a, b] }
+      - return: { +: [var_a, var_b] }
 
 - def:
     name: greet

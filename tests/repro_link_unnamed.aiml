@@ -18,62 +18,62 @@
 - import: "tests/repro_link_unnamed_base.aiml"
 
 # ReproToolCfg ist im base-File definiert (mit voller TulTrainCfg-Struktur).
-# Hier nur Helper im selben File wie main, die analog zu main.aiml's
+# Hier nur Helper im selben File wie main, die analog zu main.aiml'var_s
 # expand_glob/build_default_bpe_tag-Helpern viele kleine Funktionen hinzufuegen.
 
 - def:
     name: local_helper_a
-    args: [[s, string]]
+    args: [[var_s, string]]
     return: string
     body:
-      - print: ["local_helper_a input=${s}"]
-      - return: [s]
+      - print: ["local_helper_a input=${var_s}"]
+      - return: [var_s]
 
 - def:
     name: local_helper_b
-    args: [[s, string]]
+    args: [[var_s, string]]
     return: i32
     body:
-      - print: ["local_helper_b parse=${s}"]
-      - return: [{ call: [s.len] }]
+      - print: ["local_helper_b parse=${var_s}"]
+      - return: [{ call: [var_s.len] }]
 
 - def:
     name: local_helper_c
-    args: [[a, i32], [b, i32]]
+    args: [[var_a, i32], [var_b, i32]]
     return: i32
     body:
-      - print: ["local_helper_c a=${a} b=${b}"]
-      - return: [{ +: [a, b] }]
+      - print: ["local_helper_c var_a=${var_a} var_b=${var_b}"]
+      - return: [{ +: [var_a, var_b] }]
 
 - def:
     name: main
     args: []
     return: i32
     body:
-      # Mimik von main.aiml's load_train_cfg pattern.
+      # Mimik von main.aiml'var_s load_train_cfg pattern.
       - decl: [cfg, ReproToolCfg]
       - call: [sys.arg_dump, cfg]
       - set: [cfg.config, "/tmp/x.json"]
       - print: ["cfg loaded"]
       # Cross-Module-Function-Calls: zwingt main.o die fptable-Slots fuer
       # diese Funktionen zu emittieren (mit Pointern in andere Compilation-Units).
-      - decl: [a, i32, { call: [helper_a, 1] }]
-      - decl: [b, i32, { call: [helper_b, 2] }]
-      - decl: [c, i32, { call: [helper_c, 3] }]
-      - decl: [d, i32, { call: [helper_d, 4] }]
-      - decl: [e, i32, { call: [helper_e, 5] }]
-      - decl: [f, i32, { call: [helper_f, 6] }]
-      - decl: [g, i32, { call: [helper_g, 7] }]
-      - decl: [h, i32, { call: [helper_h, 8] }]
-      - decl: [i, i32, { call: [helper_i, 9] }]
-      - decl: [j, i32, { call: [helper_j, 10] }]
-      - print: ["a=${a} b=${b} c=${c} d=${d} e=${e}"]
-      - print: ["f=${f} g=${g} h=${h} i=${i} j=${j}"]
+      - decl: [var_a, i32, { call: [helper_a, 1] }]
+      - decl: [var_b, i32, { call: [helper_b, 2] }]
+      - decl: [var_c, i32, { call: [helper_c, 3] }]
+      - decl: [var_d, i32, { call: [helper_d, 4] }]
+      - decl: [var_e, i32, { call: [helper_e, 5] }]
+      - decl: [var_f, i32, { call: [helper_f, 6] }]
+      - decl: [var_g, i32, { call: [helper_g, 7] }]
+      - decl: [var_h, i32, { call: [helper_h, 8] }]
+      - decl: [var_i, i32, { call: [helper_i, 9] }]
+      - decl: [var_j, i32, { call: [helper_j, 10] }]
+      - print: ["var_a=${var_a} var_b=${var_b} var_c=${var_c} var_d=${var_d} var_e=${var_e}"]
+      - print: ["var_f=${var_f} var_g=${var_g} var_h=${var_h} var_i=${var_i} var_j=${var_j}"]
       # Lokale Helper auch aufrufen
-      - decl: [s, string, { call: [local_helper_a, "test"] }]
-      - decl: [n, i32, { call: [local_helper_b, "test"] }]
-      - decl: [m, i32, { call: [local_helper_c, 1, 2] }]
-      - print: ["s=${s} n=${n} m=${m}"]
+      - decl: [var_s, string, { call: [local_helper_a, "test"] }]
+      - decl: [var_n, i32, { call: [local_helper_b, "test"] }]
+      - decl: [var_m, i32, { call: [local_helper_c, 1, 2] }]
+      - print: ["var_s=${var_s} var_n=${var_n} var_m=${var_m}"]
       # sys.serialize: erzeugt anonymen String-Konstanten + Schema-Lookup
       - decl: [json_str, string, { call: [sys.serialize, cfg] }]
       - print: ["${json_str}"]

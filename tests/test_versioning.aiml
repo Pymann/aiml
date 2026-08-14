@@ -18,25 +18,25 @@
 - decl: [buf, buffer]
 - call: [buf.alloc, 1024]
 
-- decl: [u1, UserV1]
-- set: [u1.name, "Bob"]
+- decl: [var_u1, UserV1]
+- set: [var_u1.name, "Bob"]
 
 # Write V1 Object (Auto-prepends Version 1)
-- call: [buf.write, u1, UserV1]
+- call: [buf.write, var_u1, UserV1]
 
 # Reset data cursor
 - call: [buf.seek, 0]
 
 # Read as UserV2 (Auto-reads Version 1 Header and migrates)
-- decl: [u, UserV2]
-- set: [u, {call: [buf.read_versioned, UserV2]}]
+- decl: [var_u, UserV2]
+- set: [var_u, {call: [buf.read_versioned, UserV2]}]
 
-- print: ["Name: ", u.name]
-- print: ["Email: ", u.email]
+- print: ["Name: ", var_u.name]
+- print: ["Email: ", var_u.email]
 
 # Validation
 - if:
-    condition: {eq: [u.email, "no-email"]}
+    condition: {eq: [var_u.email, "no-email"]}
     then:
       - print: ["SUCCESS: Email skipped and defaulted"]
     else:
