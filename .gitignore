@@ -25,7 +25,11 @@ aiml_bad_module.ll
 
 # Exodus artifacts
 out/test_link_bug/
+out-test/
 test_link_bug
 out/aiml_wasm/
 
 assets/
+
+out/aot_repro/
+aot_trycatch_repro
