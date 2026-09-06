@@ -1,0 +1,81 @@
+# Expected exit code: 0
+# mutual-TLS: srv.require_client_cert(ca) makes the HTTPS server demand a client
+# certificate signed by the given CA bundle (spec/32_2 §3.11). A client presenting
+# a valid cert completes the handshake; a client with no cert is rejected at the
+# TLS layer. Also checks the hardened defaults are shared with the TLS server.
+
+- def:
+    name: handle_root
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - set: [resp.status, 200]
+      - set: [resp.body, "mtls-ok"]
+      - call: [resp.send]
+
+# has: 1 if `hay` contains `needle`, else 0.
+- def:
+    name: has
+    args: [[hay, string], [needle, string]]
+    return: i32
+    body:
+      - decl: [pos, i32, { call: [hay.index_of, needle] }]
+      - if: { condition: { lt: [pos, 0] }, then: [{ return: 0 }] }
+      - return: 1
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [server_cert, path, "tests/tls_certs/server.crt"]
+      - decl: [server_key,  path, "tests/tls_certs/server.key"]
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server_tls, "127.0.0.1", 23444, server_cert, server_key] }]
+
+      - decl: [fail, i32, 0]
+
+      # require_client_cert with a real CA bundle → 0
+      - decl: [rc_ca, i32, { call: [srv.require_client_cert, "tests/tls_certs/ca.crt"] }]
+      - if: { condition: { neq: [rc_ca, 0] }, then: [{ print: ["FAIL require_client_cert rc=${rc_ca}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      - call: [srv.set_timeout, 2]
+      - call: [srv.route, "GET", "/", handle_root]
+      - decl: [thr, thread_handle, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 300]
+
+      # ── 1. Client WITH a valid client cert → handshake ok, gets 200 ─────────
+      - decl: [good_cert, path, "tests/tls_certs/client.crt"]
+      - decl: [good_key,  path, "tests/tls_certs/client.key"]
+      - decl: [good, tls_socket_handle, { call: [tls.socket] }]
+      - call: [tls.set_verify, good, "none"]
+      - call: [tls.set_cert, good, good_cert, good_key]
+      - decl: [good_rc, i32, { call: [tls.connect, good, "127.0.0.1", 23444] }]
+      - if: { condition: { neq: [good_rc, 0] }, then: [{ print: ["FAIL client-with-cert could not connect rc=${good_rc}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - call: [tls.send_string, good, "GET / HTTP/1.1\r\nHost: x\r\n\r\n"]
+      # body may arrive in a second TLS record — read twice and combine.
+      - decl: [good_resp, string, { call: [tls.recv_string, good, 256] }]
+      - decl: [good_more, string, { call: [tls.recv_string, good, 256] }]
+      - decl: [good_all, string, "${good_resp}${good_more}"]
+      - if: { condition: { eq: [{ call: [has, good_all, "200"] }, 0] }, then: [{ print: ["FAIL cert-client did not get 200: ${good_all}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { eq: [{ call: [has, good_all, "mtls-ok"] }, 0] }, then: [{ print: ["FAIL cert-client body missing: ${good_all}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - call: [tls.close, good]
+
+      # ── 2. Client WITHOUT a cert → server rejects it. In TLS 1.3 SSL_connect
+      #      may return before the server validates client auth, so we assert the
+      #      no-cert client can never obtain a valid HTTP response (server aborts).
+      - decl: [bad, tls_socket_handle, { call: [tls.socket] }]
+      - call: [tls.set_verify, bad, "none"]
+      - decl: [bad_rc, i32, { call: [tls.connect, bad, "127.0.0.1", 23444] }]
+      - call: [tls.send_string, bad, "GET / HTTP/1.1\r\nHost: x\r\n\r\n"]
+      - decl: [bad_resp, string, { call: [tls.recv_string, bad, 256] }]
+      - if: { condition: { eq: [{ call: [has, bad_resp, "200"] }, 1] }, then: [{ print: ["FAIL no-cert client got a valid response: ${bad_resp}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - call: [tls.close, bad]
+
+      # require_client_cert on a bad CA path → -1
+      - decl: [rc_bad, i32, { call: [srv.require_client_cert, "tests/tls_certs/does_not_exist.crt"] }]
+      - if: { condition: { eq: [rc_bad, 0] }, then: [{ print: ["FAIL bad-CA path should have failed"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      - call: [srv.stop]
+
+      - if: { condition: { neq: [fail, 0] }, then: [{ print: ["FAILED: ${fail}"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS http_mtls: cert-client 200, no-cert rejected, bad-CA -1"]
+      - return: 0

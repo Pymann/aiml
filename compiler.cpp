@@ -15,6 +15,7 @@
 #include "src/sys/process_runtime.h"
 #include "src/sys/mem_runtime.h"
 #include "src/core/path_runtime.h"
+#include "src/sys/yaml_runtime.h"
 #include "src/sys/string_runtime.h"
 #include "src/sys/net_runtime.h"
 #include "src/sys/tls_runtime.h"
@@ -174,7 +175,7 @@ void logAimlDeclCountDiagnostic(const std::string& path) {
 // the next non-empty line at column 4 (YAML two-space indent applied to
 // list item).  Same shape for `- model:` and `- interface:`.
 
-struct TopLevelDecl { std::string name; std::string kind; }; // kind = class|model|interface
+struct TopLevelDecl { std::string name; std::string kind; }; // kind = class|model|interface|classgroup
 std::vector<TopLevelDecl> scanTopLevelDecls(const std::string& path) {
     std::vector<TopLevelDecl> out;
     std::ifstream in(path);
@@ -183,9 +184,12 @@ std::vector<TopLevelDecl> scanTopLevelDecls(const std::string& path) {
     std::string pendingKind;
     while (std::getline(in, line)) {
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line.rfind("- model:",     0) == 0) { pendingKind = "model";     continue; }
-        if (line.rfind("- class:",     0) == 0) { pendingKind = "class";     continue; }
-        if (line.rfind("- interface:", 0) == 0) { pendingKind = "interface"; continue; }
+        if (line.rfind("- model:",      0) == 0) { pendingKind = "model";      continue; }
+        if (line.rfind("- class:",      0) == 0) { pendingKind = "class";      continue; }
+        if (line.rfind("- interface:",  0) == 0) { pendingKind = "interface";  continue; }
+        // A classgroup synthesizes a container class of the group's name; a
+        // `{new: <Group>}` from another file is external composition (spec/58).
+        if (line.rfind("- classgroup:", 0) == 0) { pendingKind = "classgroup"; continue; }
         if (!pendingKind.empty()) {
             // Look for "name: X" (any indent — usually 4 spaces).
             auto pos = line.find("name:");
@@ -280,7 +284,7 @@ void logMainComposesExternalClassDiagnostic(
     std::map<std::string, std::string> classToFile;
     auto absorb = [&](const std::string& f) {
         for (auto& d : scanTopLevelDecls(f)) {
-            if (d.kind == "class") classToFile[d.name] = f;
+            if (d.kind == "class" || d.kind == "classgroup") classToFile[d.name] = f;
         }
     };
     absorb(entryFile);
@@ -944,6 +948,13 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                 if (subProg) {
                     AIML::AST::Compiler subCompiler(ctx);
                     subCompiler.registerTypes(subProg.get());
+                    // spec/58 §11: synthesize any classgroup DEFINED in this
+                    // imported file so its container + subclass TYPES are visible
+                    // here.  This appends the synthesized ClassDecls to
+                    // subProg->declarations; the loop below visitTopLevel's them in
+                    // header-only mode (forward-declaring __ctor + group methods).
+                    // Bodies are emitted only in the defining unit's own compile().
+                    subCompiler.synthesizeImportedGroups(subProg.get());
                     for (const auto& decl : subProg->declarations) {
                         if (auto func = dynamic_cast<AIML::AST::FunctionDecl*>(decl.get())) {
                             logAimlFunctionSizeDiagnostic(path, func);
@@ -989,6 +1000,13 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                             ctx.symbol_table[d->varName] = sym;
                         }
                     }
+                    // spec/58 §11: keep this imported AST alive for the rest of
+                    // the compilation — ctx.pendingGroupMethods holds raw pointers
+                    // into it that mergeGroupMethods folds into their target group
+                    // later (in the unit that also has the classgroup).
+                    ctx.astKeepAlive.push_back(std::shared_ptr<void>(
+                        subProg.release(),
+                        [](void* p){ delete static_cast<AIML::AST::Program*>(p); }));
                 }
             } catch (...) {
                 LOG_ERROR(path + ": Failed to parse import signatures");
@@ -1070,6 +1088,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                                     dynamic_cast<AIML::AST::ModelDecl*>(decl.get()) ||
                                     dynamic_cast<AIML::AST::EnumDecl*>(decl.get()) ||
                                     dynamic_cast<AIML::AST::InterfaceDecl*>(decl.get()) ||
+                                    dynamic_cast<AIML::AST::GroupMethodsDecl*>(decl.get()) ||
                                     dynamic_cast<AIML::AST::ImportDecl*>(decl.get()))
                                     sc.registerTypeDecl(decl.get());
                             }
@@ -1152,6 +1171,15 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                         }
                     }
                 }
+
+                // spec/58 §11: keep sibling ASTs alive for the rest of this
+                // compile — ctx.pendingGroupMethods holds raw pointers into them
+                // (from Phase A) that mergeGroupMethods folds into this file's
+                // classgroup below in astCompiler.compile().
+                for (auto& sp : sibProgs)
+                    ctx.astKeepAlive.push_back(std::shared_ptr<void>(
+                        sp.prog.release(),
+                        [](void* p){ delete static_cast<AIML::AST::Program*>(p); }));
 
                 ctx.headerOnlyMode = prevHeaderOnly;
             } else {
@@ -1854,6 +1882,23 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_path_cwd",         (void*)(intptr_t)aiml_path_cwd);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_path_current_exe", (void*)(intptr_t)aiml_path_current_exe);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_path_config_dir",  (void*)(intptr_t)aiml_path_config_dir);
+    // YAML document symbols
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_yaml_parse", (void*)(intptr_t)aiml_yaml_parse);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_yaml_parse_file", (void*)(intptr_t)aiml_yaml_parse_file);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_yaml_error", (void*)(intptr_t)aiml_yaml_error);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_yaml_free", (void*)(intptr_t)aiml_yaml_free);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_yaml_root", (void*)(intptr_t)aiml_yaml_root);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_yaml_kind", (void*)(intptr_t)aiml_yaml_kind);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_yaml_size", (void*)(intptr_t)aiml_yaml_size);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_yaml_scalar", (void*)(intptr_t)aiml_yaml_scalar);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_yaml_line", (void*)(intptr_t)aiml_yaml_line);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_yaml_column", (void*)(intptr_t)aiml_yaml_column);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_yaml_dump", (void*)(intptr_t)aiml_yaml_dump);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_yaml_item", (void*)(intptr_t)aiml_yaml_item);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_yaml_key", (void*)(intptr_t)aiml_yaml_key);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_yaml_value", (void*)(intptr_t)aiml_yaml_value);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_yaml_get", (void*)(intptr_t)aiml_yaml_get);
+
     // IO / filesystem symbols
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_exists",     (void*)(intptr_t)aiml_io_exists);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_is_dir",     (void*)(intptr_t)aiml_io_is_dir);
@@ -2469,6 +2514,8 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_text",                   (void*)(intptr_t)aiml_prefab_set_text);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_texture",                (void*)(intptr_t)aiml_prefab_set_texture);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_color",                  (void*)(intptr_t)aiml_prefab_set_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_bg_color",               (void*)(intptr_t)aiml_prefab_set_bg_color);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_border_color",           (void*)(intptr_t)aiml_prefab_set_border_color);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_child_visible",          (void*)(intptr_t)aiml_prefab_set_child_visible);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_container_set_compact",      (void*)(intptr_t)aiml_prefab_container_set_compact);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_note_thrown_message",               (void*)(intptr_t)aiml_note_thrown_message);
@@ -2489,6 +2536,8 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_remove_child",               (void*)(intptr_t)aiml_prefab_remove_child);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_clip",                   (void*)(intptr_t)aiml_prefab_set_clip);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_scroll",                 (void*)(intptr_t)aiml_prefab_set_scroll);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_focus",                  (void*)(intptr_t)aiml_prefab_set_focus);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_scroll_to_end",              (void*)(intptr_t)aiml_prefab_scroll_to_end);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_scroll_x",               (void*)(intptr_t)aiml_prefab_get_scroll_x);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_get_scroll_y",               (void*)(intptr_t)aiml_prefab_get_scroll_y);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_prefab_set_bar_value",              (void*)(intptr_t)aiml_prefab_set_bar_value);

@@ -1,0 +1,88 @@
+# test_ws_poll_recv.aiml — non-blocking receive pattern for the media client.
+#
+# The browser frame loop must NOT block on the media WS: it polls
+# `ws.poll(conn, 0)` (returns immediately) and only calls `buffer.ws_recv`
+# when data is ready.  This test proves the pattern: the server delays before
+# sending one chunk, and the client spins the non-blocking poll (seeing 0
+# repeatedly) until the chunk arrives, then receives + verifies it.
+#
+# Expected exit code: 0
+
+- def:
+    name: delayed_sender
+    args: []
+    body:
+      - decl: [srv, ws_handle, { call: [ws.server, "127.0.0.1", 19941] }]
+      - decl: [conn, ws_handle, { call: [ws.accept, srv] }]
+      - call: [time.sleep_ms, 250]           # simulate work before data is ready
+      - decl: [chk, buffer]
+      - call: [chk.alloc, 64]
+      - call: [chk.write, 7, i32]
+      - call: [chk.write, 8, i32]
+      - call: [chk.write, 9, i32]
+      - call: [chk.write, 10, i32]
+      - call: [chk.ws_send, conn]
+      - decl: [bye, string, { call: [ws.recv, conn] }]   # block until client closes
+      - call: [ws.close, conn]
+      - call: [ws.close, srv]
+
+- decl: [pass, i32, 0]
+- decl: [fail, i32, 0]
+
+- decl: [snd_t, thread_handle]
+- set: [snd_t, { spawn: [delayed_sender] }]
+- call: [time.sleep_ms, 150]
+
+- decl: [cli, ws_handle, { call: [ws.connect, "127.0.0.1", 19941, "/"] }]
+
+- decl: [rbuf, buffer]
+- call: [rbuf.alloc, 4096]
+- decl: [zero_polls, i32, 0]
+- decl: [got, i32, 0]
+- decl: [iters, i32, 0]
+- while:
+    condition: { "&&": [{ eq: [got, 0] }, { "<": [iters, 3000] }] }
+    body:
+      - decl: [ready, i32, { call: [ws.poll, cli, 0] }]   # non-blocking
+      - if:
+          condition: { eq: [ready, 1] }
+          then:
+            - decl: [rcv, i32, { call: [rbuf.ws_recv, cli] }]
+            - set: [got, 1]
+          else:
+            - set: [zero_polls, { +: [zero_polls, 1] }]
+            - call: [time.sleep_ms, 2]
+      - set: [iters, { +: [iters, 1] }]
+
+# The poll must have returned 0 at least once (proves it did not block waiting)
+- if:
+    condition: { ">": [zero_polls, 0] }
+    then:
+      - print: ["PASS: poll was non-blocking (${zero_polls} empty polls before data)"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: poll never returned 0 — data arrived instantly or poll blocked"]
+      - set: [fail, { +: [fail, 1] }]
+
+# The chunk must have arrived and be exactly [7,8,9,10]
+- call: [rbuf.seek, 0]
+- decl: [rv0, i32, { call: [rbuf.read, i32] }]
+- decl: [rv1, i32, { call: [rbuf.read, i32] }]
+- decl: [rv2, i32, { call: [rbuf.read, i32] }]
+- decl: [rv3, i32, { call: [rbuf.read, i32] }]
+- if:
+    condition: { "&&": [{ eq: [got, 1] },
+                        { "&&": [{ "&&": [{ eq: [rv0, 7] }, { eq: [rv1, 8] }] },
+                                 { "&&": [{ eq: [rv2, 9] }, { eq: [rv3, 10] }] }] }] }
+    then:
+      - print: ["PASS: chunk received via poll+ws_recv = (${rv0},${rv1},${rv2},${rv3})"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: got=${got} chunk=(${rv0},${rv1},${rv2},${rv3})"]
+      - set: [fail, { +: [fail, 1] }]
+
+- call: [ws.close, cli]
+- call: [snd_t.join]
+
+- print: [""]
+- print: ["=== test_ws_poll_recv: ${pass} passed, ${fail} failed ==="]

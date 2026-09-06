@@ -10,6 +10,8 @@ extern "C" {
 // Texture: returns gl_texture* (loaded + cached) or null when the stem is
 // unknown to the asset scanner.  Same return type as aiml_gl_load_texture.
 void* aiml_asset_get_texture(const char* stem);
+void  aiml_asset_register_texture(const char* stem, void* tex);  // register a decoded texture under a stem (@art:<hash>)
+int32_t aiml_asset_has_texture(const char* stem);                // 1 if a texture is cached under this stem
 
 // Audio: separate caches per playback role (sfx = one-shot, music = streamed).
 // V1 returns a placeholder handle (i8*); concrete audio engine integration TBD.
@@ -22,6 +24,10 @@ const char* aiml_asset_read_data(const char* stem);
 // Font: resolves stem to path and calls ui.load_font internally.  Cache key
 // includes size (same TTF at multiple sizes = multiple cached handles).
 void* aiml_asset_get_font(const char* stem, float size);
+
+// Shader: resolves a fragment-shader stem to its on-disk path for the current
+// target (abs on native, preload path on wasm).  Used by the material system.
+const char* aiml_asset_shader_path(const char* stem);
 
 // Runtime-side scan trigger.  Native JIT only — calls AssetScanner::scan with
 // the same roots the compiler used.  For WASM, std::filesystem walks of

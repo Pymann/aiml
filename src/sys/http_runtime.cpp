@@ -21,7 +21,16 @@
 #include <sstream>
 #include <algorithm>
 #include <openssl/ssl.h>
+#include <openssl/x509v3.h>   // X509_CHECK_FLAG_* for strict hostname verification
+#include "ws_runtime.h"       // aiml_ws_client_insecure — shared client-TLS toggle
 #include <openssl/err.h>
+#include "tls_runtime.h"   // aiml_tls_harden_server_ctx / aiml_tls_require_client_cert (shared policy)
+#include <mutex>
+#include <atomic>
+#include <unordered_map>
+#include <ctime>
+#include <ctime>              // time() — request read deadline (slowloris defence)
+#include "string_runtime.h"   // aiml_str_dup: refcounted copy (AIML decref frees it, no leak)
 
 /* ────────────────────────────────────────────────────────────────
  * Helpers
@@ -98,72 +107,9 @@ static int recv_n(int fd, void* ssl, char* buf, int n) {
     return got;
 }
 
-/* ────────────────────────────────────────────────────────────────
- * AimlHttpMap implementation
- * ──────────────────────────────────────────────────────────────── */
-
-extern "C" AimlHttpMap* aiml_http_map_new(void) {
-    AimlHttpMap* m = static_cast<AimlHttpMap*>(calloc(1, sizeof(AimlHttpMap)));
-    int init_cap = 8;
-    m->capacity = init_cap;
-    m->occupied = static_cast<int8_t*>(calloc(init_cap, 1));
-    m->keys     = static_cast<char**>(calloc(init_cap, sizeof(char*)));
-    m->values   = static_cast<char**>(calloc(init_cap, sizeof(char*)));
-    return m;
-}
-
-static void map_grow(AimlHttpMap* m) {
-    int new_cap = m->capacity * 2;
-    m->occupied = static_cast<int8_t*>(realloc(m->occupied, new_cap));
-    m->keys     = static_cast<char**>(realloc(m->keys, new_cap * sizeof(char*)));
-    m->values   = static_cast<char**>(realloc(m->values, new_cap * sizeof(char*)));
-    memset(m->occupied + m->capacity, 0, new_cap - m->capacity);
-    m->capacity = new_cap;
-}
-
-extern "C" void aiml_http_map_put(AimlHttpMap* m, const char* key, const char* val) {
-    if (!m || !key) return;
-    // Update existing
-    for (int i = 0; i < m->capacity; ++i) {
-        if (m->occupied[i] && m->keys[i] && strcmp(m->keys[i], key) == 0) {
-            free(m->values[i]);
-            m->values[i] = xstrdup(val);
-            return;
-        }
-    }
-    // Insert new
-    if (m->size >= m->capacity * 3 / 4) map_grow(m);
-    for (int i = 0; i < m->capacity; ++i) {
-        if (!m->occupied[i]) {
-            m->occupied[i] = 1;
-            m->keys[i]   = xstrdup(key);
-            m->values[i] = xstrdup(val);
-            m->size++;
-            return;
-        }
-    }
-}
-
-extern "C" char* aiml_http_map_get(AimlHttpMap* m, const char* key) {
-    if (!m || !key) return nullptr;
-    for (int i = 0; i < m->capacity; ++i) {
-        if (m->occupied[i] && m->keys[i] && strcmp(m->keys[i], key) == 0)
-            return m->values[i];
-    }
-    return nullptr;
-}
-
-extern "C" int32_t aiml_http_map_len(AimlHttpMap* m) {
-    return m ? m->size : 0;
-}
-
-extern "C" void aiml_http_map_free(AimlHttpMap* m) {
-    if (!m) return;
-    for (int i = 0; i < m->capacity; ++i) {
-        if (m->occupied[i]) { free(m->keys[i]); free(m->values[i]); }
-    }
-    free(m->occupied); free(m->keys); free(m->values); free(m);
-}
+/* AimlHttpMap (aiml_http_map_new/put/get/len/free) lives in http_map.cpp — a
+ * portable translation unit so the WASM runtime (no HTTP server) can still link
+ * sys.env, which returns one of these maps. */
 
 /* ────────────────────────────────────────────────────────────────
  * URL parsing
@@ -410,9 +356,22 @@ static AimlHttpResponse* do_http_request(const char* method, AimlUrl* u,
     if (use_ssl) {
         SSL_library_init();
         ssl_ctx = SSL_CTX_new(TLS_client_method());
+        SSL_CTX_set_min_proto_version(ssl_ctx, TLS1_2_VERSION);
+        SSL_CTX_set_default_verify_paths(ssl_ctx);
+        const char* https_ca = getenv("AIML_WSS_CA");   // shared client-TLS CA bundle
+        if (https_ca && *https_ca) SSL_CTX_load_verify_locations(ssl_ctx, https_ca, nullptr);
+        // Verify the server cert (chain + hostname) by default → defeats active MITM.
+        // Shares the client-TLS insecure toggle with the wss client
+        // (mirror.tls_insecure(1) / AIML_WSS_INSECURE=1) for local dev.
+        bool https_insecure = aiml_ws_client_insecure() != 0;
+        SSL_CTX_set_verify(ssl_ctx, https_insecure ? SSL_VERIFY_NONE : SSL_VERIFY_PEER, nullptr);
         ssl = SSL_new(ssl_ctx);
         SSL_set_fd(ssl, fd);
         SSL_set_tlsext_host_name(ssl, u->host);
+        if (!https_insecure) {
+            SSL_set_hostflags(ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+            SSL_set1_host(ssl, u->host);
+        }
         if (SSL_connect(ssl) <= 0) {
             SSL_free(ssl); SSL_CTX_free(ssl_ctx); ::close(fd);
             return nullptr;
@@ -518,9 +477,12 @@ extern "C" void* aiml_http_resp_headers(void* resp) {
     return resp ? static_cast<AimlHttpResponse*>(resp)->headers : nullptr;
 }
 extern "C" char* aiml_http_resp_body(void* resp) {
-    if (!resp) return (char*)"";
-    char* b = static_cast<AimlHttpResponse*>(resp)->body;
-    return b ? b : (char*)"";
+    // Return a REFCOUNTED copy (aiml_str_dup) so the string's lifetime is managed
+    // by the AIML runtime (decref frees it — no leak), independent of the response
+    // object.  Handing out the internal ->body pointer caused a use-after-free
+    // (garbage body once the caller did resp.free(), which frees ->body).
+    char* b = resp ? static_cast<AimlHttpResponse*>(resp)->body : nullptr;
+    return aiml_str_dup(b ? b : "");
 }
 extern "C" void aiml_http_resp_free(void* resp) {
     if (!resp) return;
@@ -558,6 +520,15 @@ struct AimlHttpServer {
     volatile int running    = 0;
     pthread_t    accept_tid = 0;
     pthread_mutex_t lock    = PTHREAD_MUTEX_INITIALIZER;
+    int          read_timeout_secs = 15; // per-recv + total request-read deadline (slowloris)
+
+    // ── Abuse resistance (spec/32_2 §3.12) ────────────────────────────────
+    int              max_conns = 0;          // 0 = unlimited concurrent connections
+    std::atomic<int> active_conns{0};        // live handler threads
+    int              rate_max  = 0;          // 0 = per-IP rate limiting off
+    int              rate_window_secs = 60;  // fixed-window length
+    std::unordered_map<uint32_t, std::pair<time_t,int>> rate_map; // ip → (window_start, count)
+    std::mutex       rate_mtx;
 };
 
 struct AimlHttpRoute {
@@ -596,16 +567,32 @@ static bool match_pattern(const std::string& pattern, const std::string& path,
 }
 
 // Parse HTTP/1.1 request from fd/ssl
-static AimlHttpRequest* parse_http_request(int fd, void* ssl) {
+static AimlHttpRequest* parse_http_request(int fd, void* ssl, int timeout_secs) {
     AimlHttpRequest* req = static_cast<AimlHttpRequest*>(calloc(1, sizeof(AimlHttpRequest)));
     req->params      = aiml_http_map_new();
     req->req_headers = aiml_http_map_new();
     req->cookies     = aiml_http_map_new();
+    // Total wall-clock deadline for reading the whole request (slowloris/drip-feed
+    // defence — complements the per-recv SO_RCVTIMEO set on the socket).
+    const time_t deadline = time(nullptr) + (timeout_secs > 0 ? timeout_secs : 15);
 
     char line[8192];
     // Request line
     int n = recv_line(fd, ssl, line, sizeof(line));
-    if (n <= 0) { return req; }
+    if (n <= 0) {
+        // EOF / recv-timeout before any request line (bare connect, dropped peer,
+        // slowloris).  Skip dispatch (null method would crash route matching).
+        req->method = xstrdup("GET"); req->path = xstrdup("/");
+        req->reject_status = 408;
+        return req;
+    }
+    // recv_line truncates at the buffer size; a full buffer without a terminating
+    // newline means the request line (method + URI) is over-long → reject.
+    if (n >= static_cast<int>(sizeof(line)) - 1 && line[n-1] != '\n') {
+        req->method = xstrdup("GET"); req->path = xstrdup("/");
+        req->reject_status = 414;                      // URI Too Long
+        return req;
+    }
     while (n > 0 && (line[n-1] == '\r' || line[n-1] == '\n')) line[--n] = '\0';
 
     char method[16] = {}, path_buf[4096] = {};
@@ -639,12 +626,30 @@ static AimlHttpRequest* parse_http_request(int fd, void* ssl) {
     }
     req->url = u;
 
+    // ── Parser limits (DoS/abuse resistance, spec/32_2 §hardening) ─────────────
+    //   Reject early instead of allocating unbounded memory or looping forever.
+    constexpr int    MAX_HEADER_COUNT = 100;         // # of header lines
+    constexpr size_t MAX_HEADER_BYTES = 64 * 1024;   // total header bytes
+    constexpr long   MAX_BODY_BYTES   = 8L * 1024 * 1024; // 8 MiB request body
+
     // Headers
-    int content_length = 0;
+    long   content_length = 0;
+    int    header_count   = 0;
+    size_t header_bytes   = 0;
     while (true) {
+        if (time(nullptr) > deadline) { req->reject_status = 408; return req; } // Request Timeout
         n = recv_line(fd, ssl, line, sizeof(line));
+        // raw recv_line == 0 means EOF/recv-timeout BEFORE the terminating blank
+        // line — an incomplete request (slowloris / dropped peer), NOT end-of-headers.
+        // A real blank line arrives as "\r\n" (raw >= 1) and strips to 0 below.
+        if (n <= 0) { req->reject_status = 408; return req; }
         while (n > 0 && (line[n-1] == '\r' || line[n-1] == '\n')) line[--n] = '\0';
-        if (n == 0) break;
+        if (n == 0) break;   // terminating blank line → headers complete
+        header_bytes += static_cast<size_t>(n) + 2;   // + CRLF
+        if (++header_count > MAX_HEADER_COUNT || header_bytes > MAX_HEADER_BYTES) {
+            req->reject_status = 431;                  // Request Header Fields Too Large
+            return req;
+        }
         char* colon = strchr(line, ':');
         if (colon) {
             *colon = '\0';
@@ -652,7 +657,22 @@ static AimlHttpRequest* parse_http_request(int fd, void* ssl) {
             while (*v == ' ') ++v;
             std::string lk = str_tolower(k);
             aiml_http_map_put(req->req_headers, lk.c_str(), v);
-            if (lk == "content-length") content_length = atoi(v);
+            if (lk == "content-length") {
+                // Validate: a single, well-formed, non-negative integer within cap.
+                errno = 0;
+                char* endp = nullptr;
+                long cl = strtol(v, &endp, 10);
+                while (endp && (*endp == ' ' || *endp == '\t')) ++endp;
+                if (errno != 0 || !endp || *endp != '\0' || cl < 0) {
+                    req->reject_status = 400;          // Bad Request (malformed length)
+                    return req;
+                }
+                if (cl > MAX_BODY_BYTES) {
+                    req->reject_status = 413;          // Payload Too Large
+                    return req;
+                }
+                content_length = cl;
+            }
             if (lk == "cookie") {
                 // Parse "key=val; key2=val2"
                 std::string cookie_str(v);
@@ -671,10 +691,10 @@ static AimlHttpRequest* parse_http_request(int fd, void* ssl) {
         }
     }
 
-    // Body
+    // Body (content_length already validated + capped to MAX_BODY_BYTES above).
     if (content_length > 0) {
-        std::vector<char> buf(content_length + 1, '\0');
-        recv_n(fd, ssl, buf.data(), content_length);
+        std::vector<char> buf(static_cast<size_t>(content_length) + 1, '\0');
+        recv_n(fd, ssl, buf.data(), static_cast<int>(content_length));
         req->body = xstrdup(buf.data());
     }
 
@@ -697,6 +717,7 @@ static void free_request(AimlHttpRequest* req) {
     aiml_http_map_free(req->params);
     aiml_http_map_free(req->req_headers);
     aiml_http_map_free(req->cookies);
+    free(req->peer_ip);
     free(req);
 }
 
@@ -704,6 +725,8 @@ static void free_response(AimlHttpResponse* resp) {
     if (!resp) return;
     aiml_http_map_free(resp->headers);
     free(resp->body); free(resp->body_file);
+    for (int i = 0; i < resp->n_set_cookies; ++i) free(resp->set_cookies[i]);
+    free(resp->set_cookies);
     free(resp);
 }
 
@@ -748,6 +771,12 @@ static void send_response(AimlHttpResponse* resp) {
         if (!resp->headers->occupied[i]) continue;
         out += resp->headers->keys[i]; out += ": ";
         out += resp->headers->values[i]; out += "\r\n";
+    }
+    // Set-Cookie headers — kept out of the header map because a client may receive
+    // several, and the map holds one value per key. Emitted as distinct lines.
+    for (int i = 0; i < resp->n_set_cookies; ++i) {
+        if (!resp->set_cookies[i]) continue;
+        out += "Set-Cookie: "; out += resp->set_cookies[i]; out += "\r\n";
     }
     out += "\r\n";
 
@@ -826,13 +855,27 @@ extern "C" char* aiml_http_req_header(void* req_ptr, const char* name) {
     AimlHttpRequest* req = static_cast<AimlHttpRequest*>(req_ptr);
     if (!req || !name) return nullptr;
     std::string lname = str_tolower(name);
-    return aiml_http_map_get(req->req_headers, lname.c_str());
+    // Refcounted copy so the value outlives the request (no UAF after req free);
+    // preserve nullptr for "header not present".
+    const char* v = aiml_http_map_get(req->req_headers, lname.c_str());
+    return v ? aiml_str_dup(v) : nullptr;
 }
 
 extern "C" char* aiml_http_req_cookie(void* req_ptr, const char* name) {
     AimlHttpRequest* req = static_cast<AimlHttpRequest*>(req_ptr);
     if (!req || !name) return nullptr;
-    return aiml_http_map_get(req->cookies, name);
+    const char* v = aiml_http_map_get(req->cookies, name);
+    return v ? aiml_str_dup(v) : nullptr;   // refcounted copy; nullptr if absent
+}
+
+// req.client_ip() — the trusted socket peer IP (dotted), captured at accept time.
+// It deliberately IGNORES X-Forwarded-For / X-Real-IP: those are attacker-controlled
+// unless the app explicitly reads and validates them behind a trusted proxy. Returns
+// a refcounted string ("" if unknown, e.g. a client-side response object).
+extern "C" char* aiml_http_req_client_ip(void* req_ptr) {
+    AimlHttpRequest* req = static_cast<AimlHttpRequest*>(req_ptr);
+    if (!req || !req->peer_ip) return aiml_str_dup("");
+    return aiml_str_dup(req->peer_ip);
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -864,9 +907,14 @@ static const char* mime_for_ext(const std::string& path) {
     return "application/octet-stream";
 }
 
-// Reject path segments that would escape the served root.
+// Reject (already URL-decoded) relative paths that could escape the served root:
+// any ".." segment, a leading "/" (absolute), a NUL byte (truncation attack), or a
+// backslash (Windows-style separator).  The realpath containment check in
+// resolve_under is the definitive backstop; this rejects the obvious cases early.
 static bool path_is_safe(const std::string& rel) {
-    if (rel.find("..") != std::string::npos) return false;
+    if (rel.find("..")   != std::string::npos) return false;
+    if (rel.find('\0')   != std::string::npos) return false;
+    if (rel.find('\\')   != std::string::npos) return false;
     if (!rel.empty() && rel[0] == '/') return false;
     return true;
 }
@@ -918,6 +966,21 @@ static bool is_regular_file(const std::string& path) {
 
 // Try to resolve a candidate file under one root directory.
 // Returns absolute path on success, empty string otherwise.
+// Canonical-containment backstop: resolve symlinks/./.. in BOTH paths and confirm
+// the resolved file really lives under the resolved root.  Catches symlink escapes
+// and any traversal that slipped past the string checks.  Both must exist.
+static bool path_within_root(const std::string& root, const std::string& candidate) {
+    char* rp_root = realpath(root.c_str(), nullptr);
+    if (!rp_root) return false;
+    char* rp_cand = realpath(candidate.c_str(), nullptr);
+    if (!rp_cand) { free(rp_root); return false; }
+    std::string r(rp_root), c(rp_cand);
+    free(rp_root); free(rp_cand);
+    if (c == r) return true;                       // the root itself
+    if (!r.empty() && r.back() != '/') r += '/';
+    return c.rfind(r, 0) == 0;                      // c starts with "<root>/"
+}
+
 static std::string resolve_under(const std::string& root,
                                   const std::string& rel_path,
                                   const std::string& index_file) {
@@ -929,14 +992,16 @@ static std::string resolve_under(const std::string& root,
         if (!candidate.empty() && candidate.back() != '/') candidate += '/';
         candidate += index_file;
     }
-    if (is_regular_file(candidate)) return candidate;
+    // Must be a regular file AND canonically inside the served root (symlink-safe).
+    if (is_regular_file(candidate) && path_within_root(root, candidate)) return candidate;
     return std::string();
 }
 
 // Serve a single file: status 200 + content-type + cache-control + body.
 static void serve_file(AimlHttpResponse* resp,
                         const std::string& file_path,
-                        const RouteEntry& route) {
+                        const RouteEntry& route,
+                        const char* range_header = nullptr) {
     // Open + stat the file. We stream via sendfile() rather than reading
     // into a userspace buffer — this avoids per-request 10–100 MB heap
     // allocations and lets the kernel handle TCP back-pressure cleanly,
@@ -964,24 +1029,93 @@ static void serve_file(AimlHttpResponse* resp,
     // We don't support keep-alive yet — tell HTTP/1.1 clients explicitly
     // so they don't try to reuse the connection.
     aiml_http_map_put(resp->headers, "connection", "close");
+    // Advertise byte-range support so clients can resume / chunk large bundles
+    // (the WASM client streams client.data in ranged chunks — big single
+    // fetches OOM/abort on mobile browsers).
+    aiml_http_map_put(resp->headers, "accept-ranges", "bytes");
+    // Version tag (size + mtime) so a client can skip re-downloading an unchanged
+    // file.  The WASM client caches the big bundle in IndexedDB keyed by this ETag;
+    // browsers also use it for If-None-Match / If-Modified-Since revalidation.
+    {
+        char etag[80];
+        snprintf(etag, sizeof(etag), "\"%llx-%llx\"",
+                 (unsigned long long)st.st_size,
+                 (unsigned long long)st.st_mtime);
+        aiml_http_map_put(resp->headers, "etag", etag);
+        char lm[48]; struct tm gmt;
+        time_t mt = (time_t)st.st_mtime;
+        if (gmtime_r(&mt, &gmt)) {
+            strftime(lm, sizeof(lm), "%a, %d %b %Y %H:%M:%S GMT", &gmt);
+            aiml_http_map_put(resp->headers, "last-modified", lm);
+        }
+    }
     if (route.fs_cache_max_age > 0) {
         char cache_val[64];
         snprintf(cache_val, sizeof(cache_val),
                  "max-age=%d", route.fs_cache_max_age);
         aiml_http_map_put(resp->headers, "cache-control", cache_val);
+    } else {
+        // No explicit max-age → force ETag revalidation on every request rather
+        // than letting the browser heuristically reuse a stale copy.  Without this,
+        // a rebuilt client.js (loaded via a <script> tag) is served from cache while
+        // the fresh client.wasm is fetched → EM_ASM address mismatch → crash.
+        aiml_http_map_put(resp->headers, "cache-control", "no-cache");
     }
-    resp->status = 200;
 
-    char cl_buf[32];
-    snprintf(cl_buf, sizeof(cl_buf), "%zu", total);
-    aiml_http_map_put(resp->headers, "content-length", cl_buf);
+    // ── Parse a single `Range: bytes=START-END` (START or END may be empty;
+    // a "-N" suffix range means the last N bytes).  Multi-range is not
+    // supported — we serve the whole file in that case.
+    size_t range_start = 0, range_end = (total > 0 ? total - 1 : 0);
+    bool is_range = false, unsatisfiable = false;
+    if (range_header && total > 0) {
+        const char* p = strstr(range_header, "bytes=");
+        if (p && !strchr(range_header, ',')) {
+            p += 6;
+            long long s = -1, e = -1;
+            char* endp = nullptr;
+            if (*p != '-') { s = strtoll(p, &endp, 10); p = endp; }
+            if (*p == '-') { p++; if (*p && *p != ' ') e = strtoll(p, &endp, 10); }
+            if (s < 0 && e >= 0) {                       // suffix: last e bytes
+                long long len = e > (long long)total ? (long long)total : e;
+                range_start = total - (size_t)len; range_end = total - 1;
+                is_range = true;
+            } else if (s >= 0) {
+                range_start = (size_t)s;
+                range_end = (e >= 0 && (size_t)e < total) ? (size_t)e : total - 1;
+                if (range_start >= total || range_start > range_end) unsatisfiable = true;
+                else is_range = true;
+            }
+        }
+    }
 
     resp->resp_sent = 1;
     int fd = resp->conn_fd;
     void* ssl = resp->ssl;
+    char cl_buf[32];
 
-    // Build + send headers via the existing user-space path.
-    std::string head = "HTTP/1.1 200 \r\n";
+    if (unsatisfiable) {
+        resp->status = 416;
+        char cr[64]; snprintf(cr, sizeof(cr), "bytes */%zu", total);
+        aiml_http_map_put(resp->headers, "content-range", cr);
+        aiml_http_map_put(resp->headers, "content-length", "0");
+    } else {
+        resp->status = is_range ? 206 : 200;
+        if (is_range) {
+            char cr[96];
+            snprintf(cr, sizeof(cr), "bytes %zu-%zu/%zu",
+                     range_start, range_end, total);
+            aiml_http_map_put(resp->headers, "content-range", cr);
+        }
+        size_t body_len = is_range ? (range_end - range_start + 1) : total;
+        snprintf(cl_buf, sizeof(cl_buf), "%zu", body_len);
+        aiml_http_map_put(resp->headers, "content-length", cl_buf);
+    }
+
+    // Build + send the status line + headers.
+    const char* reason = resp->status == 206 ? "Partial Content"
+                       : resp->status == 416 ? "Range Not Satisfiable" : "OK";
+    std::string head = "HTTP/1.1 ";
+    head += std::to_string(resp->status); head += " "; head += reason; head += "\r\n";
     for (int i = 0; i < resp->headers->capacity; ++i) {
         if (!resp->headers->occupied[i]) continue;
         head += resp->headers->keys[i];
@@ -992,13 +1126,17 @@ static void serve_file(AimlHttpResponse* resp,
     head += "\r\n";
     send_all_fd(fd, ssl, head.c_str(), static_cast<int>(head.size()));
 
-    // Stream the body. sendfile() needs a non-SSL fd. For TLS routes
-    // we fall back to a read+SSL_write loop with a small reusable
-    // stack buffer.
-    if (total > 0) {
+    if (unsatisfiable) { ::close(ffd); return; }
+
+    // Stream the (possibly ranged) body. sendfile() needs a non-SSL fd; for
+    // TLS routes we fall back to a read+SSL_write loop with a small buffer.
+    size_t body_off = is_range ? range_start : 0;
+    size_t body_len = is_range ? (range_end - range_start + 1) : total;
+    if (body_len > 0) {
         if (ssl) {
             char buf[64 * 1024];
-            size_t remaining = total;
+            if (body_off > 0) ::lseek(ffd, (off_t)body_off, SEEK_SET);
+            size_t remaining = body_len;
             while (remaining > 0) {
                 ssize_t r = ::read(ffd, buf,
                     remaining < sizeof(buf) ? remaining : sizeof(buf));
@@ -1007,27 +1145,24 @@ static void serve_file(AimlHttpResponse* resp,
                 remaining -= static_cast<size_t>(r);
             }
         } else {
-            off_t off = 0;
-            size_t remaining = total;
+            off_t off = (off_t)body_off;
+            size_t remaining = body_len;
             while (remaining > 0) {
                 ssize_t n = ::sendfile(fd, ffd, &off, remaining);
                 if (n < 0) {
                     if (errno == EINTR || errno == EAGAIN) continue;
                     // EPIPE / ECONNRESET / etc. — peer closed mid-stream.
-                    // Log so we can see who's giving up. file_path + how
-                    // many bytes made it before the break is the useful
-                    // diagnostic.
                     fprintf(stderr,
                         "[http] serve_file: sendfile aborted at %zu/%zu "
                         "errno=%d (%s) path=%s\n",
-                        total - remaining, total, errno, strerror(errno),
+                        body_len - remaining, body_len, errno, strerror(errno),
                         file_path.c_str());
                     break;
                 }
                 if (n == 0) {
                     fprintf(stderr,
                         "[http] serve_file: sendfile returned 0 at %zu/%zu "
-                        "path=%s\n", total - remaining, total,
+                        "path=%s\n", body_len - remaining, body_len,
                         file_path.c_str());
                     break;
                 }
@@ -1041,19 +1176,22 @@ static void serve_file(AimlHttpResponse* resp,
 static void fs_handle(AimlHttpRequest* req, AimlHttpResponse* resp,
                        const RouteEntry& route) {
     std::string req_path = req->path ? req->path : "/";
-    std::string rel = strip_url_prefix(route.fs_url_prefix, req_path);
+    // URL-decode BEFORE the traversal check so percent-encoded escapes
+    // (e.g. %2e%2e%2f = "../", %00 = NUL) cannot slip past path_is_safe.
+    std::string rel = url_decode(strip_url_prefix(route.fs_url_prefix, req_path));
     if (!path_is_safe(rel)) {
         resp->status = 400;
         resp->body   = xstrdup("Bad Request");
         send_response(resp);
         return;
     }
+    const char* range = aiml_http_map_get(req->req_headers, "range");
 
     // Try each directory in order, first hit wins.
     for (const auto& dir : route.fs_dirs) {
         std::string found = resolve_under(dir, rel, route.fs_index);
         if (!found.empty()) {
-            serve_file(resp, found, route);
+            serve_file(resp, found, route, range);
             return;
         }
     }
@@ -1063,7 +1201,7 @@ static void fs_handle(AimlHttpRequest* req, AimlHttpResponse* resp,
         std::string found =
             resolve_under(route.fs_dirs.front(), "", route.fs_index);
         if (!found.empty()) {
-            serve_file(resp, found, route);
+            serve_file(resp, found, route, range);
             return;
         }
     }
@@ -1081,6 +1219,13 @@ struct ConnCtx {
     int             fd;
     SSL*            ssl;
     AimlHttpServer* server;
+    uint32_t        peer_ip;   // network-order IPv4 of the connecting socket
+};
+
+// Decrements the live-connection counter on scope exit (both handler return paths).
+struct ConnGuard {
+    AimlHttpServer* srv;
+    ~ConnGuard() { srv->active_conns.fetch_sub(1, std::memory_order_relaxed); }
 };
 
 static void* handle_connection(void* arg) {
@@ -1088,9 +1233,53 @@ static void* handle_connection(void* arg) {
     int fd = ctx->fd;
     SSL* ssl = ctx->ssl;
     AimlHttpServer* srv = ctx->server;
+    uint32_t peer_ip = ctx->peer_ip;
     delete ctx;
+    ConnGuard conn_guard{srv};   // decrements active_conns on every return path
 
-    AimlHttpRequest* req = parse_http_request(fd, ssl);
+    // Per-recv read timeout on the connection socket: a client that opens a
+    // connection and then stalls will not pin this handler thread forever.
+    int to_secs = srv->read_timeout_secs > 0 ? srv->read_timeout_secs : 15;
+    struct timeval rtv = { to_secs, 0 };
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rtv, sizeof(rtv));
+
+    AimlHttpRequest* req = parse_http_request(fd, ssl, to_secs);
+
+    // Record the trusted socket peer IP (dotted) so req.client_ip() never has to
+    // trust a spoofable X-Forwarded-For header. struct in_addr wants network order.
+    {
+        struct in_addr ina; ina.s_addr = peer_ip;
+        req->peer_ip = xstrdup(inet_ntoa(ina));
+    }
+
+    // Parser limit hit → send a clean protocol error and skip dispatch entirely.
+    if (req->reject_status != 0) {
+        AimlHttpResponse* er = static_cast<AimlHttpResponse*>(calloc(1, sizeof(AimlHttpResponse)));
+        er->status  = req->reject_status;
+        er->headers = aiml_http_map_new();
+        er->conn_fd = fd;
+        er->ssl     = ssl;
+        // Security/default headers apply to parser-reject errors too (consistency).
+        if (srv->default_headers) {
+            for (int i = 0; i < srv->default_headers->capacity; ++i) {
+                if (!srv->default_headers->occupied[i]) continue;
+                aiml_http_map_put(er->headers, srv->default_headers->keys[i],
+                                  srv->default_headers->values[i]);
+            }
+        }
+        const char* msg = req->reject_status == 413 ? "Payload Too Large"
+                        : req->reject_status == 431 ? "Request Header Fields Too Large"
+                        : req->reject_status == 414 ? "URI Too Long"
+                        : req->reject_status == 408 ? "Request Timeout"
+                        : "Bad Request";
+        er->body = xstrdup(msg);
+        send_response(er);
+        if (ssl) { SSL_shutdown(ssl); SSL_free(ssl); }
+        ::close(fd);
+        free_response(er);
+        free_request(req);
+        return nullptr;
+    }
 
     // Find matching route
     RouteEntry* matched = nullptr;
@@ -1182,6 +1371,33 @@ static void* handle_connection(void* arg) {
  * http_server_handle API
  * ──────────────────────────────────────────────────────────────── */
 
+// Minimal one-shot status line for connections rejected before dispatch (plain
+// HTTP only — on a TLS listener the client speaks TLS first, so we just close).
+static void send_raw_status(int fd, int code, const char* reason) {
+    char buf[160];
+    int n = snprintf(buf, sizeof(buf),
+        "HTTP/1.1 %d %s\r\nConnection: close\r\nContent-Length: 0\r\n\r\n", code, reason);
+    if (n > 0) ::send(fd, buf, static_cast<size_t>(n), MSG_NOSIGNAL);
+}
+
+// Per-IP fixed-window rate limit. Returns true if the connection is allowed.
+// Prunes stale windows when the table grows, so unique-IP floods stay bounded.
+static bool rate_allow(AimlHttpServer* srv, uint32_t ip) {
+    if (srv->rate_max <= 0) return true;
+    time_t now = time(nullptr);
+    std::lock_guard<std::mutex> g(srv->rate_mtx);
+    if (srv->rate_map.size() > 4096) {
+        for (auto it = srv->rate_map.begin(); it != srv->rate_map.end(); ) {
+            if (now - it->second.first >= srv->rate_window_secs) it = srv->rate_map.erase(it);
+            else ++it;
+        }
+    }
+    auto& e = srv->rate_map[ip];
+    if (now - e.first >= srv->rate_window_secs) { e.first = now; e.second = 0; }
+    e.second++;
+    return e.second <= srv->rate_max;
+}
+
 static void* accept_loop(void* arg) {
     AimlHttpServer* srv = static_cast<AimlHttpServer*>(arg);
     while (srv->running) {
@@ -1192,6 +1408,27 @@ static void* accept_loop(void* arg) {
             if (srv->running) continue;
             break;
         }
+        uint32_t peer_ip = addr.sin_addr.s_addr;
+
+        // Per-IP rate limit — reject before spending a thread or TLS handshake.
+        if (!rate_allow(srv, peer_ip)) {
+            if (!srv->ssl_ctx) send_raw_status(cfd, 429, "Too Many Requests");
+            ::close(cfd);
+            fprintf(stderr, "[http] rate-limit: rejected %s (>%d/%ds)\n",
+                    inet_ntoa(addr.sin_addr), srv->rate_max, srv->rate_window_secs);
+            continue;
+        }
+        // Concurrent-connection cap — bound thread/resource growth under load.
+        if (srv->max_conns > 0 &&
+            srv->active_conns.load(std::memory_order_relaxed) >= srv->max_conns) {
+            if (!srv->ssl_ctx) send_raw_status(cfd, 503, "Service Unavailable");
+            ::close(cfd);
+            fprintf(stderr, "[http] conn-cap: rejected %s (active=%d max=%d)\n",
+                    inet_ntoa(addr.sin_addr),
+                    srv->active_conns.load(std::memory_order_relaxed), srv->max_conns);
+            continue;
+        }
+
         SSL* cssl = nullptr;
         if (srv->ssl_ctx) {
             cssl = SSL_new(srv->ssl_ctx);
@@ -1200,7 +1437,8 @@ static void* accept_loop(void* arg) {
                 SSL_free(cssl); ::close(cfd); continue;
             }
         }
-        ConnCtx* c = new ConnCtx{cfd, cssl, srv};
+        srv->active_conns.fetch_add(1, std::memory_order_relaxed);
+        ConnCtx* c = new ConnCtx{cfd, cssl, srv, peer_ip};
         pthread_t tid;
         pthread_create(&tid, nullptr, handle_connection, c);
         pthread_detach(tid);
@@ -1233,15 +1471,32 @@ extern "C" void* aiml_http_server_tls(const char* host, int32_t port,
                                        const char* cert_path, const char* key_path) {
     AimlHttpServer* srv = static_cast<AimlHttpServer*>(aiml_http_server(host, port));
     if (!srv) return nullptr;
-    SSL_library_init();
+    // Modern, thread-safe one-time OpenSSL init (mirrors tls_runtime.cpp).
+    static std::once_flag s_http_ssl_init;
+    std::call_once(s_http_ssl_init, []{
+        OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS | OPENSSL_INIT_LOAD_CRYPTO_STRINGS, nullptr);
+    });
     SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
     if (!ctx) { delete srv; return nullptr; }
+    // Hardened server defaults shared with the WSS server (see tls_runtime.cpp):
+    // min TLS 1.2, no SSLv2/3/TLS1.0/1.1, no compression, server cipher preference.
+    aiml_tls_harden_server_ctx(ctx);
     if (SSL_CTX_use_certificate_file(ctx, cert_path, SSL_FILETYPE_PEM) <= 0 ||
         SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) <= 0) {
         SSL_CTX_free(ctx); delete srv; return nullptr;
     }
     srv->ssl_ctx = ctx;
     return srv;
+}
+
+// Enable mutual-TLS on an HTTPS server: require every client to present a
+// certificate signed by the CA bundle at `ca_path` (PEM). Must be called on a
+// server created via aiml_http_server_tls (an SSL_CTX must already exist).
+// Returns 0 on success, -1 if the server is non-TLS or the CA cannot be loaded.
+extern "C" int aiml_http_server_require_client_cert(void* srv_ptr, const char* ca_path) {
+    AimlHttpServer* s = static_cast<AimlHttpServer*>(srv_ptr);
+    if (!s || !s->ssl_ctx) return -1;
+    return aiml_tls_require_client_cert(s->ssl_ctx, ca_path);
 }
 
 extern "C" void aiml_http_server_route(void* srv_ptr, const char* method,
@@ -1277,6 +1532,53 @@ extern "C" void aiml_http_server_set_header(void* srv_ptr, const char* name, con
     AimlHttpServer* s = static_cast<AimlHttpServer*>(srv_ptr);
     if (!s || !name) return;
     aiml_http_map_put(s->default_headers, name, val);
+}
+
+// Configure the request-read timeout (seconds): the per-recv socket timeout AND
+// the total request-read deadline (slowloris defence).  <= 0 keeps the default.
+extern "C" void aiml_http_server_set_timeout(void* srv_ptr, int32_t secs) {
+    AimlHttpServer* s = static_cast<AimlHttpServer*>(srv_ptr);
+    if (!s || secs <= 0) return;
+    s->read_timeout_secs = secs;
+}
+
+// Cap concurrent handler threads. n <= 0 → unlimited. Over the cap, new
+// connections are rejected (503 on plain HTTP, immediate close on TLS) without
+// spawning a thread — bounds resource growth under load / connection floods.
+extern "C" void aiml_http_server_set_max_connections(void* srv_ptr, int32_t n) {
+    AimlHttpServer* s = static_cast<AimlHttpServer*>(srv_ptr);
+    if (!s) return;
+    s->max_conns = n > 0 ? n : 0;
+}
+
+// Per-IP fixed-window rate limit: at most max_per_window connections per
+// window_secs from one IP; excess is rejected (429 on plain HTTP) before any
+// thread/TLS work. max_per_window <= 0 disables it; window_secs <= 0 → 60s.
+extern "C" void aiml_http_server_set_rate_limit(void* srv_ptr,
+                                                 int32_t max_per_window, int32_t window_secs) {
+    AimlHttpServer* s = static_cast<AimlHttpServer*>(srv_ptr);
+    if (!s) return;
+    s->rate_max          = max_per_window > 0 ? max_per_window : 0;
+    s->rate_window_secs  = window_secs > 0 ? window_secs : 60;
+}
+
+// Enable a conservative bundle of browser-facing security response headers on every
+// response (opt-in, since e.g. X-Frame-Options can break legitimate embedding).
+// hsts != 0 also adds Strict-Transport-Security (only meaningful behind HTTPS/TLS).
+// Existing values set via set_header win (put-if-absent), so callers can override.
+extern "C" void aiml_http_server_secure_headers(void* srv_ptr, int32_t hsts) {
+    AimlHttpServer* s = static_cast<AimlHttpServer*>(srv_ptr);
+    if (!s) return;
+    if (!s->default_headers) s->default_headers = aiml_http_map_new();
+    auto put_if_absent = [&](const char* k, const char* v) {
+        if (!aiml_http_map_get(s->default_headers, k))
+            aiml_http_map_put(s->default_headers, k, v);
+    };
+    put_if_absent("X-Content-Type-Options", "nosniff");
+    put_if_absent("X-Frame-Options",        "DENY");
+    put_if_absent("Referrer-Policy",        "no-referrer");
+    if (hsts)
+        put_if_absent("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
 }
 
 extern "C" void aiml_http_server_start(void* srv_ptr) {
@@ -1448,6 +1750,42 @@ extern "C" void aiml_http_resp_set_body(void* resp, const char* body) {
     r->body = xstrdup(body);
 }
 
+// A cookie name/value must not carry control chars or the delimiters we use to
+// build the header — otherwise an attacker-controlled value could inject extra
+// headers (HTTP response splitting) or forge attributes.
+static bool cookie_token_safe(const char* s) {
+    if (!s) return false;
+    for (const unsigned char* p = (const unsigned char*)s; *p; ++p) {
+        if (*p < 0x20 || *p == 0x7f) return false;   // CTLs incl. CR/LF
+        if (*p == ';' || *p == ',' || *p == ' ')     return false;   // cookie delimiters
+    }
+    return true;
+}
+
+// resp.set_cookie(name, value, max_age, same_site): append a Set-Cookie header with
+// secure-by-default attributes — Path=/, HttpOnly, Secure, SameSite (default "Lax").
+// max_age >= 0 → persistent cookie with Max-Age; max_age < 0 → session cookie.
+// Rejects (no-op) names/values that would allow header injection.
+extern "C" void aiml_http_resp_set_cookie(void* resp, const char* name, const char* value,
+                                          int32_t max_age, const char* same_site) {
+    AimlHttpResponse* r = static_cast<AimlHttpResponse*>(resp);
+    if (!r || !cookie_token_safe(name) || !cookie_token_safe(value)) return;
+
+    const char* ss = (same_site && *same_site) ? same_site : "Lax";
+    // Only allow the three valid SameSite tokens; anything else falls back to Lax.
+    if (strcmp(ss, "Strict") != 0 && strcmp(ss, "Lax") != 0 && strcmp(ss, "None") != 0)
+        ss = "Lax";
+
+    std::string c = std::string(name) + "=" + value + "; Path=/; HttpOnly; Secure; SameSite=" + ss;
+    if (max_age >= 0) { c += "; Max-Age="; c += std::to_string(max_age); }
+
+    char** grown = static_cast<char**>(
+        realloc(r->set_cookies, sizeof(char*) * (r->n_set_cookies + 1)));
+    if (!grown) return;
+    r->set_cookies = grown;
+    r->set_cookies[r->n_set_cookies++] = xstrdup(c.c_str());
+}
+
 extern "C" void aiml_http_resp_set_body_bytes(void* resp, void* buf) {
     if (!resp) return;
     static_cast<AimlHttpResponse*>(resp)->body_bytes = buf;
@@ -1462,16 +1800,21 @@ extern "C" void* aiml_http_resp_get_headers(void* resp) {
  * http_request_handle getters
  * ──────────────────────────────────────────────────────────────── */
 
+// method/path/body: return refcounted copies (aiml_str_dup) so they are lifetime-
+// safe if referenced past the request's own free — consistent with aiml_http_resp_body.
 extern "C" char* aiml_http_req_method(void* req) {
-    return req ? static_cast<AimlHttpRequest*>(req)->method : nullptr;
+    const char* v = req ? static_cast<AimlHttpRequest*>(req)->method : nullptr;
+    return v ? aiml_str_dup(v) : nullptr;
 }
 
 extern "C" char* aiml_http_req_path(void* req) {
-    return req ? static_cast<AimlHttpRequest*>(req)->path : nullptr;
+    const char* v = req ? static_cast<AimlHttpRequest*>(req)->path : nullptr;
+    return v ? aiml_str_dup(v) : nullptr;
 }
 
 extern "C" char* aiml_http_req_body(void* req) {
-    return req ? static_cast<AimlHttpRequest*>(req)->body : nullptr;
+    const char* v = req ? static_cast<AimlHttpRequest*>(req)->body : nullptr;
+    return v ? aiml_str_dup(v) : nullptr;
 }
 
 extern "C" void* aiml_http_req_url(void* req) {

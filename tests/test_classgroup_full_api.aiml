@@ -1,0 +1,64 @@
+# spec/58 §5.1 — concrete sees edges are typed as the sibling's SUBCLASS
+# (inheritor), so a coordination `methods:` method may call the sibling's
+# GROUP FUNCTION across the edge (not just base API).  Unidirectional AND
+# bidirectional (cycle) sees.
+
+- class:
+    name: Alpha
+    members: [[aval, i32]]
+    methods:
+      - def:
+          name: base_a
+          return: i32
+          body: [{ return: <.aval }]
+
+- class:
+    name: Beta
+    members: [[bval, i32]]
+    methods:
+      - def:
+          name: base_b
+          return: i32
+          body: [{ return: <.bval }]
+
+- classgroup:
+    name: FullApiRuntime
+    instances:
+      - class: Alpha
+        instance: alpha
+        sees: [beta]
+        methods:
+          - def:
+              name: grp_a
+              return: i32
+              body:
+                - decl: [bgv, i32, { call: [<.beta.grp_b] }]
+                - return: { +: [bgv, 1] }
+      - class: Beta
+        instance: beta
+        sees: [alpha]
+        methods:
+          - def:
+              name: grp_b
+              return: i32
+              body:
+                - decl: [bbv, i32, { call: [<.base_b] }]
+                - return: { +: [bbv, 10] }
+          - def:
+              name: cross_b
+              return: i32
+              body:
+                - return: { call: [<.alpha.grp_a] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [rtm, ptr<FullApiRuntime>, { new: FullApiRuntime }]
+      - set: [rtm.beta.bval, 100]
+      - decl: [gaa, i32, { call: [rtm.alpha.grp_a] }]
+      - if: { condition: { neq: [gaa, 111] }, then: [{ print: ["FAIL grp_a=${gaa} want 111"] }, { call: [sys.exit, 1] }] }
+      - decl: [cbb, i32, { call: [rtm.beta.cross_b] }]
+      - if: { condition: { neq: [cbb, 111] }, then: [{ print: ["FAIL cross_b=${cbb} want 111"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS test_classgroup_full_api"]
+      - return: 0

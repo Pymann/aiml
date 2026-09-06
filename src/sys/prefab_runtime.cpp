@@ -40,9 +40,11 @@
 #include "ui_runtime.h"
 #include "gl_runtime.h"
 #include "asset_runtime.h"
+#include "log_runtime.h"   // F1-Debug: Drag-Pick-Diagnose
 
 /* ── Forward declarations from other runtimes ────────────────────────────── */
 extern "C" int32_t aiml_input_mouse_pressed(int32_t btn);
+
 
 /* Forward declarations for material helpers used by flush_batch and the
  * instantiate path. Definitions live further down in this translation
@@ -63,7 +65,31 @@ extern "C" const char* aiml_input_event_char_(void* ev);
 extern "C" float       aiml_input_mouse_pos_x(void);
 extern "C" float       aiml_input_mouse_pos_y(void);
 extern "C" float       aiml_input_mouse_scroll_y(void);
+extern "C" int32_t     aiml_input_drag_active(int32_t btn);
+extern "C" float       aiml_input_drag_origin_x(int32_t btn);
+extern "C" float       aiml_input_drag_origin_y(int32_t btn);
+extern "C" float       aiml_input_drag_delta_y(int32_t btn);
 extern "C" int32_t     aiml_input_key_pressed(const char* k);
+extern "C" int32_t     aiml_input_key_down(const char* k);
+extern "C" int32_t     aiml_input_mouse_button(int32_t b);
+extern "C" const char* aiml_input_clipboard_get(void);
+extern "C" void        aiml_input_clipboard_set(const char* s);
+
+/* ── UTF-8 caret navigation (text_input) — move by whole codepoint so umlauts
+ *    (ä/ö/ü) and other multi-byte chars are never split. ───────────────── */
+static int32_t utf8_prev(const std::string& t, int32_t pos) {
+    if (pos <= 0) return 0;
+    --pos;
+    while (pos > 0 && ((unsigned char)t[pos] & 0xC0) == 0x80) --pos;  /* skip continuation bytes */
+    return pos;
+}
+static int32_t utf8_next(const std::string& t, int32_t pos) {
+    int32_t n = (int32_t)t.size();
+    if (pos >= n) return n;
+    ++pos;
+    while (pos < n && ((unsigned char)t[pos] & 0xC0) == 0x80) ++pos;
+    return pos;
+}
 
 static void render_dropdown_popups(void);
 
@@ -100,6 +126,7 @@ enum PrefabChildType {
     CHILD_DROPDOWN   = 9,   /* Klick cycled durch `options` (pipe-getrennt) */
     CHILD_CONTAINER  = 10,  /* Phase 6: bind_list-driven dynamic spawner       */
     CHILD_CASCADE    = 11,  /* Phase 6: cascade root-dropdown + payload sub-UI */
+    CHILD_TEXTBOX    = 12,  /* multi-line scrollable text area (chat/log): wrap + window + scrollbar */
 };
 
 /* ── Prefab definition (from YAML compile-time) ──────────────────────────── */
@@ -208,6 +235,11 @@ struct PrefabChildDef {
      * visible rows re-pack contiguously from the container origin each frame.
      * Lets AIML filter a list purely via set_visible without leaving gaps. */
     bool        compact = false;
+    bool        scrollable = false;  /* container: engine-managed row window + visible scrollbar (track+thumb, wheel+drag) */
+    bool        tail = false;         /* textbox: stick to bottom as content grows (chat) */
+    int32_t     tb_prev_max = -1;     /* textbox: last max scroll offset (for tail-follow detection) */
+    int32_t     tb_total = 0;         /* textbox render cache: wrapped line count (read by input) */
+    int32_t     tb_visible = 0;       /* textbox render cache: visible line count (read by input) */
 };
 
 struct PrefabDef {
@@ -312,6 +344,8 @@ struct PrefabChild {
     bool        dropdown_open  = false;
     int32_t     scroll_offset  = 0;   /* Popup-Scroll (# skipped rows) */
     bool        sb_dragging    = false; /* Popup-Scrollbar-Drag */
+    bool        tb_drag        = false; /* textbox: body drag-to-scroll active (touch/maus) */
+    int32_t     tb_drag_off    = 0;     /* textbox: scroll_offset bei Drag-Beginn */
 
     /* ── Bar/gauge runtime state + slider state ─────────────────────────── */
     float    bar_value     = 0.0f;
@@ -328,7 +362,13 @@ struct PrefabChild {
     bool     pressed_now   = false; /* mouse down + initially pressed inside */
     bool     clicked_frame = false; /* set on mouse_released over a pressed button (cleared next frame) */
     bool     focused       = false; /* text_input: keyboard focus */
-    int32_t  cursor_pos    = 0;     /* text_input: cursor index into text */
+    int32_t  cursor_pos    = 0;     /* text_input: cursor BYTE index into text */
+    int32_t  sel_anchor    = 0;     /* text_input: selection anchor (byte idx); selection = [min(anchor,cursor), max] */
+    bool     sel_dragging  = false; /* text_input: mouse drag-select in progress */
+    float    text_scroll_x = 0.0f;  /* text_input single-line: horizontal scroll offset (px) — caret-follow */
+    float    text_scroll_y = 0.0f;  /* text_input multi-line: vertical scroll offset (line index) — caret-follow */
+    std::vector<int32_t> caret_byte;/* text_input render cache: byte offset per caret stop (codepoint boundaries) */
+    std::vector<float>   caret_x;   /* text_input render cache: screen-x per caret stop (parallel to caret_byte, already scroll-shifted) */
     bool     checked       = false; /* checkbox: toggle state */
 
     /* ── Phase 6: container / cascade widget state ────────────────────────
@@ -357,6 +397,11 @@ struct PrefabChild {
     /* container compaction (copied from PrefabChildDef; may also be toggled at
      * runtime via aiml_prefab_container_set_compact).  See PrefabChildDef. */
     bool        compact = false;
+    bool        scrollable = false;  /* container: engine-managed row window + visible scrollbar (track+thumb, wheel+drag) */
+    bool        tail = false;         /* textbox: stick to bottom as content grows (chat) */
+    int32_t     tb_prev_max = -1;     /* textbox: last max scroll offset (for tail-follow detection) */
+    int32_t     tb_total = 0;         /* textbox render cache: wrapped line count (read by input) */
+    int32_t     tb_visible = 0;       /* textbox render cache: visible line count (read by input) */
     /* Set by a NESTED cascade_payload_sync when one of our spawned_payload
      * instances respawned (its width changed).  Cleared after we re-layout
      * our own siblings.  Guards the whole cascade_payload_sync body so it
@@ -449,6 +494,18 @@ struct AimlPrefabInstance {
      *                 with bind: <field> read the list<i32> at this index. */
     void*   bound_list  = nullptr;
     int32_t bound_index = -1;
+
+    /* Cascade payload seeding (load path).  A NESTED cascade payload instance
+     * has no bound_list of its own; instead the enclosing cascade hands it a
+     * pointer into the shared wire buffer so its cascade_payload_sync can
+     * restore its sub-field values recursively (mirror of collect()'s
+     * recursive save).  `seed_off` is the index of THIS cascade's node tag
+     * within seed_wire.  One-shot: cleared after the first seed so later user
+     * edits are not clobbered by a re-seed.  Top-level instances leave these
+     * null and seed from bound_list instead. */
+    int32_t* seed_wire = nullptr;
+    int32_t  seed_len  = 0;
+    int32_t  seed_off  = 0;
 
     /* Phase 6f-2 defer-delete.  container_sync / cascade_payload_sync can
      * mark an instance for deletion mid-frame, but the actual delete has to
@@ -1168,6 +1225,7 @@ static PrefabChildType parse_child_type(const char* s) {
     if (strcmp(s, "bar") == 0)        return CHILD_BAR;
     if (strcmp(s, "slider") == 0)     return CHILD_SLIDER;
     if (strcmp(s, "container") == 0)  return CHILD_CONTAINER;
+    if (strcmp(s, "textbox") == 0)    return CHILD_TEXTBOX;
     if (strcmp(s, "cascade") == 0)    return CHILD_CASCADE;
     return CHILD_SPRITE;
 }
@@ -1286,6 +1344,8 @@ static std::vector<PrefabChildDef> parse_children_json(const char* json) {
             else if (key == "layout")        cd.layout = parse_json_string(p);
             else if (key == "gap")           cd.gap = (float)parse_json_number(p);
             else if (key == "compact")       cd.compact = (parse_json_number(p) != 0);
+            else if (key == "scrollable")    cd.scrollable = (parse_json_number(p) != 0);
+            else if (key == "tail")          cd.tail = (parse_json_number(p) != 0);
             else if (key == "cascade_type")  cd.cascade_type = parse_json_string(p);
             else if (key == "payload_spawn") cd.payload_spawn = parse_json_string(p);
             else if (key == "cascade_flow")  cd.cascade_flow = parse_json_string(p);
@@ -1436,7 +1496,29 @@ static void container_sync(AimlPrefabInstance* inst) {
          * container origin every frame.  This lets AIML filter a bound list
          * purely by toggling row visibility — no gaps, always left-aligned.
          * Cheap (arithmetic over the spawned rows); safe to run per frame. */
-        if (ch.compact) {
+        /* ── Scrollable window ────────────────────────────────────────────
+         * `scrollable: true` → the ENGINE windows the spawned rows by
+         * ch.scroll_offset (row index): only [offset, offset+visible) are shown
+         * and then packed like `compact`.  visible = floor(extent / row_pitch).
+         * (Overrides AIML row-visibility — for filtered lists keep AIML
+         * pagination instead.) */
+        if (ch.scrollable && !ch.spawned.empty()) {
+            bool sflow_h = (ch.layout == "hflow");
+            AimlPrefabInstance* r0 = ch.spawned[0];
+            float pitch  = sflow_h ? (r0->def->width + ch.gap) : (r0->def->height + ch.gap);
+            float extent = sflow_h ? ch.width : ch.height;
+            int   visible = (pitch > 0.0f) ? (int)(extent / pitch) : (int)ch.spawned.size();
+            if (visible < 1) visible = 1;
+            int total   = (int)ch.spawned.size();
+            int max_off = total > visible ? total - visible : 0;
+            if (ch.scroll_offset > max_off) ch.scroll_offset = max_off;
+            if (ch.scroll_offset < 0)       ch.scroll_offset = 0;
+            for (int k = 0; k < total; ++k) {
+                if (ch.spawned[k])
+                    ch.spawned[k]->visible = (k >= ch.scroll_offset && k < ch.scroll_offset + visible);
+            }
+        }
+        if (ch.compact || ch.scrollable) {
             bool cflow_h = (ch.layout == "hflow");
             int slot = 0;
             for (AimlPrefabInstance* row : ch.spawned) {
@@ -1473,6 +1555,37 @@ static void container_sync(AimlPrefabInstance* inst) {
  *      dropdown box, marked as a nested child (parent = inst).
  * This is what makes the user-visible cascade "collapse" and "re-expand"
  * as a node higher up in the chain gets changed. */
+/* Fwd-decl: enum member value → option index (defined below, near enum_value_at).
+ * Used by the payload-seed load path to stay symmetric with collect()'s save. */
+static int enum_index_of_value(const std::string& enum_type, int value);
+
+/* Advance `pos` past exactly ONE value of `type` in the flat wire buffer.
+ * Mirrors the recursive consumption in aiml_casc_collect_field_from / the
+ * recursive save collect(): a cascade-typed value consumes its node tag plus,
+ * recursively, one value per field of that node; every other type (enum /
+ * alias / primitive) consumes a single slot.  Returns the next position, or
+ * -1 if the wire is truncated / the sub-node id is unknown.  This is what lets
+ * the load path compute each field's TRUE wire offset instead of the old flat
+ * `1 + f` (which drifted after any multi-slot field and never restored nested
+ * Value/Duration sub-values). */
+static int casc_advance_value(const std::string& type,
+                              const int32_t* wire, int len, int pos) {
+    auto it = g_cascades.find(type);
+    if (it == g_cascades.end()) {           /* enum / alias / primitive → 1 slot */
+        return (pos >= 0 && pos < len) ? pos + 1 : -1;
+    }
+    if (pos < 0 || pos >= len) return -1;
+    int32_t node_id = wire[pos++];          /* consume the sub-node tag */
+    auto idIt = it->second.id_to_opt_idx.find(node_id);
+    if (idIt == it->second.id_to_opt_idx.end()) return -1;
+    const CascadeNodeMeta& node = it->second.nodes[idIt->second];
+    for (const auto& fld : node.fields) {
+        pos = casc_advance_value(fld.type, wire, len, pos);
+        if (pos < 0) return -1;
+    }
+    return pos;
+}
+
 static void cascade_payload_sync(AimlPrefabInstance* inst) {
     if (!inst || !g_scene) return;
     for (auto& ch : inst->children) {
@@ -1550,18 +1663,31 @@ static void cascade_payload_sync(AimlPrefabInstance* inst) {
          * payload widgets with their previously-stored values so a bind-
          * swap (Ability pager) doesn't reset their selections. */
         struct ListHdrIn { int32_t size; int32_t capacity; void* data; };
-        ListHdrIn* outer_r = (ListHdrIn*)inst->bound_list;
         int32_t* stored_wire = nullptr;
         int32_t  stored_size = 0;
-        if (outer_r && inst->bound_index >= 0 &&
-            inst->bound_index < outer_r->size) {
-            ListHdrIn* inner_r = (ListHdrIn*)((char*)outer_r->data +
-                                (size_t)inst->bound_index * sizeof(ListHdrIn));
-            if (inner_r) {
-                stored_wire = (int32_t*)inner_r->data;
-                stored_size = inner_r->size;
+        int32_t  wire_base   = 0;   /* index of THIS node's tag within stored_wire */
+        if (inst->seed_wire) {
+            /* NESTED cascade payload: seed from the parent-supplied wire slice.
+             * Our node tag sits at seed_off; fields follow it. */
+            stored_wire = inst->seed_wire;
+            stored_size = inst->seed_len;
+            wire_base   = inst->seed_off;
+        } else {
+            ListHdrIn* outer_r = (ListHdrIn*)inst->bound_list;
+            if (outer_r && inst->bound_index >= 0 &&
+                inst->bound_index < outer_r->size) {
+                ListHdrIn* inner_r = (ListHdrIn*)((char*)outer_r->data +
+                                    (size_t)inst->bound_index * sizeof(ListHdrIn));
+                if (inner_r) {
+                    stored_wire = (int32_t*)inner_r->data;
+                    stored_size = inner_r->size;
+                }
             }
         }
+        /* Running wire offset of the field currently being spawned.  Starts one
+         * past this node's tag; advances by each field's TRUE (recursive) span
+         * so nested cascade fields don't drift the offsets of later siblings. */
+        int wire_fpos = (stored_wire) ? wire_base + 1 : -1;
         /* SPAWN phase (only on node change): instantiate one payload prefab
          * per field of the newly-selected node, mutate its first child to the
          * appropriate widget kind, seed from the stored wire.  Positions are
@@ -1634,16 +1760,52 @@ static void cascade_payload_sync(AimlPrefabInstance* inst) {
                     pi->width_override = 40.0f;
                 }
             }
-            /* Seed the widget from the stored wire slot if one is available.
-             * Slot layout: wire[0] = tag, wire[1+f] = value of field f.
-             * Enum / cascade dropdowns store `index + 1` — undo by
-             * subtracting.  text_input for i32 / alias just formats the int
-             * back into the buffer. */
-            if (!pi->children.empty() && stored_wire && (1 + f) < stored_size) {
+            /* Seed the widget from the stored wire.  `wire_fpos` is this
+             * field's TRUE offset (computed with the recursive span walk, not
+             * the old flat 1+f which drifted after any multi-slot field).  We
+             * read the slot, seed the widget, then advance wire_fpos past this
+             * field's full (recursive) span so the next sibling reads the right
+             * slot.  For a NESTED cascade we also hand the payload instance a
+             * seed slice (seed_wire + seed_off) so its own cascade_payload_sync
+             * restores its sub-field values recursively — mirror of collect(). */
+            int this_off = wire_fpos;   /* -1 when there is no stored wire */
+            if (stored_wire && wire_fpos >= 0) {
+                wire_fpos = casc_advance_value(ftype ? ftype : "",
+                                               stored_wire, stored_size, wire_fpos);
+            }
+            if (!pi->children.empty() && stored_wire &&
+                this_off >= 0 && this_off < stored_size) {
                 auto& w2 = pi->children[0];
-                int32_t sv = stored_wire[1 + f];
+                int32_t sv = stored_wire[this_off];
                 if (w2.type == CHILD_DROPDOWN || w2.type == CHILD_CASCADE) {
-                    if (sv >= 1) w2.selected_index = sv - 1;
+                    if (!w2.enum_type.empty()) {
+                        /* Enum dropdown: the stored wire value is the REAL enum member
+                         * value → map it to its option index (symmetric with collect()'s
+                         * aiml_prefab_enum_value_at).  The old `sv - 1` assumed a
+                         * contiguous 1-based layout and corrupted any enum whose value
+                         * != index+1 (subset/non-0-based) — e.g. CardState on load. */
+                        int ix = enum_index_of_value(w2.enum_type, (int)sv);
+                        if (ix >= 0) w2.selected_index = ix;
+                    } else if (!w2.cascade_type.empty()) {
+                        /* Nested cascade: the stored slot is the sub-node id (NOT
+                         * index+1 — node ids are opcode enum values that may be
+                         * sparse/non-0-based, the same corruption class as enums).
+                         * Map id → option index via the cascade registry, then
+                         * propagate the wire slice so the nested sync restores
+                         * ITS sub-fields on the next frame. */
+                        auto cit = g_cascades.find(w2.cascade_type);
+                        if (cit != g_cascades.end()) {
+                            auto oit = cit->second.id_to_opt_idx.find((int)sv);
+                            if (oit != cit->second.id_to_opt_idx.end())
+                                w2.selected_index = oit->second;
+                        }
+                        pi->seed_wire = stored_wire;
+                        pi->seed_len  = stored_size;
+                        pi->seed_off  = this_off;   /* nested node tag sits here */
+                    } else if (sv >= 1) {
+                        /* Legacy cascade-node dropdown with no cascade_type. */
+                        w2.selected_index = sv - 1;
+                    }
                 } else if (w2.type == CHILD_TEXT_INPUT) {
                     char buf[16]; snprintf(buf, sizeof(buf), "%d", (int)sv);
                     w2.text = buf;
@@ -1652,6 +1814,13 @@ static void cascade_payload_sync(AimlPrefabInstance* inst) {
             inst->child_instances.push_back(pi);
             ch.spawned_payload.push_back(pi);
         }
+        /* One-shot: the seed slice has been consumed (and propagated to any
+         * nested payload instances above).  Clear it so a later user-driven
+         * respawn on this instance starts nested sub-nodes at their defaults
+         * instead of re-applying the now-stale saved values. */
+        inst->seed_wire = nullptr;
+        inst->seed_len  = 0;
+        inst->seed_off  = 0;
         }  /* end if (respawn) */
 
         /* LAYOUT phase — runs on respawn or when a nested cascade in one of
@@ -2367,42 +2536,236 @@ static void render_instance(AimlPrefabInstance* inst) {
                 rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
                 flush_batch(batch);
             }
-            /* Displayed text: hide chars when secret. */
+            /* Displayed text: hide chars when secret.  Single line with
+             * horizontal caret-follow scrolling — long text stays visible and
+             * is clipped (GL scissor) to the field's inner box. */
             if (s->font) {
                 std::string display = ch.is_secret
                                         ? std::string(ch.text.size(), '*')
                                         : ch.text;
                 float target_size = ch.font_size > 0.0f ? ch.font_size * sx : 0.0f;
                 AimlUIFont* lf = (target_size > 0.0f) ? font_for_size(s, target_size) : s->font;
-                if (lf && !display.empty()) {
-                    DrawBatch batch;
-                    batch.tex  = lf->atlas_tex;
-                    batch.mode = 2;
+                if (lf) {
+                    float padding    = 8.0f * sx;
+                    float inner_w    = cw - 2.0f * padding;
+                    float text_start = cx + padding;
+                    float line_h     = lf->line_height;
+                    int32_t dlen = (int32_t)display.size();
+                    size_t cpos0 = (size_t)ch.cursor_pos <= display.size() ? (size_t)ch.cursor_pos : display.size();
                     uint32_t col = rgba32_to_gl(ch.color ? ch.color : 0xFFFFFFFF, alpha);
-                    float padding = 8.0f * sx;
-                    float text_cx = cx + padding;
-                    float text_cy = cy + (ch_h - lf->line_height) * 0.5f;
-                    push_text_batch(batch, lf, display.c_str(),
-                                    text_cx, text_cy, cw - 2 * padding, col, "left");
-                    rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
-                    flush_batch(batch);
+                    /* A field taller than ~1.8 lines is MULTI-LINE (wrap + vertical
+                     * caret-follow scroll); otherwise SINGLE-LINE (horizontal
+                     * caret-follow scroll).  Both clip to the inner box. */
+                    bool multiline = ch_h >= 1.8f * line_h;
+
+                    GLboolean prev_sc = glIsEnabled(GL_SCISSOR_TEST);
+                    GLint prev_box[4] = {0,0,0,0};
+                    glGetIntegerv(GL_SCISSOR_BOX, prev_box);
+                    int sxp = (int)ceilf(text_start);
+                    int syp = (int)ceilf((float)g_scene->screen_h - (cy + ch_h));
+                    int swp = (int)floorf(inner_w);
+                    int shp = (int)floorf(ch_h);
+                    if (swp < 0) swp = 0;
+                    if (shp < 0) shp = 0;
+                    glEnable(GL_SCISSOR_TEST);
+                    glScissor(sxp, syp, swp, shp);
+
+                    if (!multiline) {
+                        float caret_off = text_width_font(lf, display.substr(0, cpos0).c_str());
+                        if (!ch.focused) {
+                            ch.text_scroll_x = 0.0f;
+                        } else {
+                            if (caret_off - ch.text_scroll_x > inner_w) ch.text_scroll_x = caret_off - inner_w;
+                            if (caret_off - ch.text_scroll_x < 0.0f)    ch.text_scroll_x = caret_off;
+                            if (ch.text_scroll_x < 0.0f)                ch.text_scroll_x = 0.0f;
+                        }
+                        float tsx = ch.text_scroll_x;
+                        ch.caret_byte.clear();
+                        ch.caret_x.clear();
+                        ch.caret_byte.push_back(0);
+                        ch.caret_x.push_back(text_start - tsx);
+                        int32_t bpos = 0;
+                        while (bpos < (int32_t)ch.text.size()) {
+                            bpos = utf8_next(ch.text, bpos);
+                            int32_t db = bpos < dlen ? bpos : dlen;
+                            float w = text_width_font(lf, display.substr(0, (size_t)db).c_str());
+                            ch.caret_byte.push_back(bpos);
+                            ch.caret_x.push_back(text_start + w - tsx);
+                        }
+                        if (ch.focused && ch.sel_anchor != ch.cursor_pos) {
+                            int32_t lo = ch.sel_anchor < ch.cursor_pos ? ch.sel_anchor : ch.cursor_pos;
+                            int32_t hi = ch.sel_anchor < ch.cursor_pos ? ch.cursor_pos : ch.sel_anchor;
+                            if (lo < 0) lo = 0;
+                            if (hi > dlen) hi = dlen;
+                            if (lo > dlen) lo = dlen;
+                            float xlo = text_start - tsx + text_width_font(lf, display.substr(0, (size_t)lo).c_str());
+                            float xhi = text_start - tsx + text_width_font(lf, display.substr(0, (size_t)hi).c_str());
+                            float sel_h = line_h;
+                            float hy = cy + (ch_h - sel_h) * 0.5f;
+                            DrawBatch hb; hb.tex = s->white_tex; hb.mode = 0;
+                            uint32_t hc = rgba32_to_gl(0x3A5FA0FF, alpha);
+                            push_quad(hb, xlo, hy, xhi - xlo, sel_h, 0,0,1,1, hc);
+                            rotate_batch_verts(hb, 0, rot_cx, rot_cy, rot);
+                            flush_batch(hb);
+                        }
+                        if (!display.empty()) {
+                            DrawBatch batch; batch.tex = lf->atlas_tex; batch.mode = 2;
+                            float text_cy = cy + (ch_h - line_h) * 0.5f;
+                            push_text_batch(batch, lf, display.c_str(),
+                                            text_start - tsx, text_cy, 1.0e9f, col, "left");
+                            rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
+                            flush_batch(batch);
+                        }
+                        if (ch.focused) {
+                            float bx = text_start - tsx + caret_off;
+                            float by = cy + (ch_h - line_h) * 0.5f;
+                            DrawBatch cbatch; cbatch.tex = s->white_tex; cbatch.mode = 0;
+                            push_quad(cbatch, bx, by, 1.5f * sx, line_h, 0,0,1,1, col);
+                            rotate_batch_verts(cbatch, 0, rot_cx, rot_cy, rot);
+                            flush_batch(cbatch);
+                        }
+                    } else {
+                        /* Multi-line: wrap at inner_w, top-aligned, vertical scroll
+                         * follows the caret line.  The whole wrapped text is drawn
+                         * shifted up by scroll_line*line_h; the scissor windows it. */
+                        float vpad = 4.0f * sx;
+                        int visible_lines = (int)floorf((ch_h - 2.0f * vpad) / line_h);
+                        if (visible_lines < 1) visible_lines = 1;
+                        std::vector<std::string> pre_lines =
+                            wrap_text_lines(lf, display.substr(0, cpos0).c_str(), inner_w);
+                        int   caret_line = pre_lines.empty() ? 0 : (int)pre_lines.size() - 1;
+                        float caret_lx   = pre_lines.empty() ? 0.0f
+                                           : text_width_font(lf, pre_lines.back().c_str());
+                        int scroll_line = (int)ch.text_scroll_y;
+                        if (!ch.focused) {
+                            scroll_line = 0;
+                        } else {
+                            if (caret_line < scroll_line) scroll_line = caret_line;
+                            if (caret_line >= scroll_line + visible_lines) scroll_line = caret_line - visible_lines + 1;
+                            if (scroll_line < 0) scroll_line = 0;
+                        }
+                        ch.text_scroll_y = (float)scroll_line;
+                        /* Minimal caret cache — multi-line click-positioning falls
+                         * back to the start; typing/caret movement stay correct. */
+                        ch.caret_byte.clear();
+                        ch.caret_x.clear();
+                        ch.caret_byte.push_back(0);
+                        ch.caret_x.push_back(text_start);
+                        if (!display.empty()) {
+                            DrawBatch batch; batch.tex = lf->atlas_tex; batch.mode = 2;
+                            float top_y = cy + vpad - (float)scroll_line * line_h;
+                            push_text_batch(batch, lf, display.c_str(),
+                                            text_start, top_y, inner_w, col, "left");
+                            rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
+                            flush_batch(batch);
+                        }
+                        if (ch.focused) {
+                            float bx = text_start + caret_lx;
+                            float by = cy + vpad + (float)(caret_line - scroll_line) * line_h;
+                            DrawBatch cbatch; cbatch.tex = s->white_tex; cbatch.mode = 0;
+                            push_quad(cbatch, bx, by, 1.5f * sx, line_h, 0,0,1,1, col);
+                            rotate_batch_verts(cbatch, 0, rot_cx, rot_cy, rot);
+                            flush_batch(cbatch);
+                        }
+                    }
+
+                    if (prev_sc) glScissor(prev_box[0], prev_box[1], prev_box[2], prev_box[3]);
+                    else         glDisable(GL_SCISSOR_TEST);
                 }
-                /* Cursor: a thin vertical bar after the text. */
-                if (ch.focused && lf) {
-                    float caret_w = 1.5f * sx;
-                    float caret_h = lf->line_height;
-                    std::string before = display.substr(0, (size_t)ch.cursor_pos);
-                    float tw = text_width_font(lf, before.c_str());
-                    float padding = 8.0f * sx;
-                    float bx = cx + padding + tw;
-                    float by = cy + (ch_h - caret_h) * 0.5f;
-                    DrawBatch cbatch;
-                    cbatch.tex  = s->white_tex;
-                    cbatch.mode = 0;
-                    uint32_t col = rgba32_to_gl(ch.color ? ch.color : 0xFFFFFFFF, alpha);
-                    push_quad(cbatch, bx, by, caret_w, caret_h, 0,0,1,1, col);
-                    rotate_batch_verts(cbatch, 0, rot_cx, rot_cy, rot);
-                    flush_batch(cbatch);
+            }
+            break;
+        }
+        case CHILD_TEXTBOX: {
+            /* Multi-line scrollable text area: wrap ch.text into lines, draw a
+             * window [scroll_offset, +visible), and a scrollbar on the right.
+             * `tail: true` keeps the view stuck to the bottom as content grows. */
+            if (!s->font) break;
+            if (ch.bg_color || ch.border_width > 0.0f) {
+                DrawBatch bb; bb.tex = s->white_tex; bb.mode = 3; bb.material = ch.material;
+                push_quad_sdf(bb, cx, cy, cw, ch_h, rgba32_to_gl(ch.bg_color, alpha),
+                              rgba32_to_gl(ch.border_color, alpha),
+                              ch.corner_radius * sx, ch.border_width * sx);
+                rotate_batch_verts(bb, 0, rot_cx, rot_cy, rot);
+                flush_batch(bb);
+            }
+            float tb_target = ch.font_size > 0.0f ? ch.font_size * sx : 0.0f;
+            AimlUIFont* lf = (tb_target > 0.0f) ? font_for_size(s, tb_target) : s->font;
+            if (!lf) break;
+            float pad     = 6.0f * sx;
+            float inner_w = cw - 2.0f * pad - 8.0f * sx;     /* leave room for the scrollbar */
+            std::vector<std::string> lines = wrap_text_lines(lf, ch.text.c_str(), inner_w);
+            int   total   = (int)lines.size();
+            float line_h  = lf->line_height;
+            int   visible = (line_h > 0.0f) ? (int)((ch_h - 2.0f * pad) / line_h) : total;
+            if (visible < 1) visible = 1;
+            int   max_off = total > visible ? total - visible : 0;
+            ch.tb_total = total; ch.tb_visible = visible;    /* cache for the input pass */
+            /* Tail-follow (chat): stick to bottom when we were already there. */
+            if (ch.tail) {
+                if (ch.tb_prev_max < 0 || ch.scroll_offset >= ch.tb_prev_max)
+                    ch.scroll_offset = max_off;
+                ch.tb_prev_max = max_off;
+            }
+            if (ch.scroll_offset > max_off) ch.scroll_offset = max_off;
+            if (ch.scroll_offset < 0)       ch.scroll_offset = 0;
+            {
+                DrawBatch tbx; tbx.tex = lf->atlas_tex; tbx.mode = 2;
+                uint32_t col = rgba32_to_gl(ch.color ? ch.color : 0xFFFFFFFF, alpha);
+                float ty = cy + pad;
+                for (int li = ch.scroll_offset; li < ch.scroll_offset + visible && li < total; ++li) {
+                    push_text_batch(tbx, lf, lines[li].c_str(), cx + pad, ty, inner_w, col, "left");
+                    ty += line_h;
+                }
+                rotate_batch_verts(tbx, 0, rot_cx, rot_cy, rot);
+                flush_batch(tbx);
+            }
+            if (total > visible) {
+                float sb_w    = 6.0f * sx;
+                float sb_x    = cx + cw - sb_w - 2.0f * sx;
+                float track_y = cy + 2.0f * sy;
+                float track_h = ch_h - 4.0f * sy;
+                { DrawBatch tk; tk.tex = s->white_tex; tk.mode = 0;
+                  push_quad(tk, sb_x, track_y, sb_w, track_h, 0,0,1,1, rgba32_to_gl(0x101828A0, alpha));
+                  rotate_batch_verts(tk, 0, rot_cx, rot_cy, rot); flush_batch(tk); }
+                float thumb_h = track_h * (float)visible / (float)total;
+                if (thumb_h < 16.0f * sy) thumb_h = 16.0f * sy;
+                float thumb_y = track_y + (track_h - thumb_h) * (float)ch.scroll_offset / (float)std::max(1, max_off);
+                DrawBatch th; th.tex = s->white_tex; th.mode = 0;
+                push_quad(th, sb_x, thumb_y, sb_w, thumb_h, 0,0,1,1, rgba32_to_gl(0x3A5578F0, alpha));
+                rotate_batch_verts(th, 0, rot_cx, rot_cy, rot); flush_batch(th);
+            }
+            break;
+        }
+        case CHILD_CONTAINER: {
+            /* Native scrollbar for `scrollable` containers: a track + thumb on
+             * the right edge, shown when more rows are spawned than fit. */
+            if (ch.scrollable && !ch.spawned.empty()) {
+                bool cflow_h = (ch.layout == "hflow");
+                AimlPrefabInstance* r0 = ch.spawned[0];
+                float pitch  = cflow_h ? (r0->def->width + ch.gap) : (r0->def->height + ch.gap);
+                float extent = cflow_h ? ch.width : ch.height;
+                int   visible = (pitch > 0.0f) ? (int)(extent / pitch) : (int)ch.spawned.size();
+                if (visible < 1) visible = 1;
+                int total = (int)ch.spawned.size();
+                if (total > visible) {
+                    float sb_w    = 6.0f * sx;
+                    float sb_x    = cx + cw - sb_w - 2.0f * sx;
+                    float track_y = cy + 2.0f * sy;
+                    float track_h = ch_h - 4.0f * sy;
+                    { DrawBatch tb; tb.tex = s->white_tex; tb.mode = 0;
+                      push_quad(tb, sb_x, track_y, sb_w, track_h, 0,0,1,1,
+                                rgba32_to_gl(0x101828A0, alpha));
+                      rotate_batch_verts(tb, 0, rot_cx, rot_cy, rot);
+                      flush_batch(tb); }
+                    float thumb_h = track_h * (float)visible / (float)total;
+                    if (thumb_h < 16.0f * sy) thumb_h = 16.0f * sy;
+                    float thumb_y = track_y + (track_h - thumb_h)
+                                  * (float)ch.scroll_offset / (float)std::max(1, total - visible);
+                    DrawBatch sb; sb.tex = s->white_tex; sb.mode = 0;
+                    push_quad(sb, sb_x, thumb_y, sb_w, thumb_h, 0,0,1,1,
+                              rgba32_to_gl(0x3A5578F0, alpha));
+                    rotate_batch_verts(sb, 0, rot_cx, rot_cy, rot);
+                    flush_batch(sb);
                 }
             }
             break;
@@ -2654,7 +3017,14 @@ static void render_instance(AimlPrefabInstance* inst) {
              * langer Text umbrechen und aus dem Rahmen laufen.  Statt umzubrechen
              * die Schrift so verkleinern, dass der (umbruchfreie) Text in die
              * Breite passt.  Nur bei kurzen Boxen OHNE expliziten Zeilenumbruch —
-             * mehrzeilige Labels (Ability-Text, valign:top, hohe Box) bleiben. */
+             * mehrzeilige Labels (Ability-Text, valign:top, hohe Box) bleiben.
+             *
+             * WICHTIG: iterativ mit Sicherheits-Marge verkleinern.  Ein einmaliges
+             * fit_size = target*(fit_w/tw) trifft die Breite nur GESCHÄTZT — nach
+             * dem Neu-Backen bei der kleineren Größe rundet die (ganzzahlige) Glyph-
+             * Breite ggf. minimal über fit_w, sodass der Text DOCH auf 2 Zeilen
+             * umbricht und aus der Titelbox rutscht.  Deshalb: messen → schrumpfen
+             * (mit 4 % Marge) → neu messen, bis er sicher in EINE Zeile passt. */
             if (target_size > 0.0f && ch.height > 0.0f &&
                 ch.text.find('\n') == std::string::npos &&
                 ch.text.find('|') == std::string::npos) {
@@ -2662,13 +3032,20 @@ static void render_instance(AimlPrefabInstance* inst) {
                                               : (inst->def ? inst->def->width * sx : 0.0f);
                 float box_h = ch.height * sx;
                 if (fit_w > 0.0f && box_h < 1.8f * lf->line_height) {
-                    float tw = text_width_font(lf, ch.text.c_str());
-                    if (tw > fit_w) {
-                        float fit_size = target_size * (fit_w / tw);
-                        if (fit_size < target_size * 0.4f) fit_size = target_size * 0.4f;
-                        AimlUIFont* fitf = font_for_size(s, fit_size);
-                        if (fitf) lf = fitf;
+                    float min_size = target_size * 0.4f;
+                    float cur_size = target_size;
+                    AimlUIFont* fitf = lf;
+                    for (int fit_it = 0; fit_it < 6; ++fit_it) {
+                        float tw = text_width_font(fitf, ch.text.c_str());
+                        if (tw <= fit_w) break;               /* passt auf eine Zeile */
+                        cur_size = cur_size * (fit_w / tw) * 0.96f;  /* Marge gegen Rundung */
+                        if (cur_size < min_size) cur_size = min_size;
+                        AimlUIFont* nf = font_for_size(s, cur_size);
+                        if (!nf) break;
+                        fitf = nf;
+                        if (cur_size <= min_size) break;      /* Untergrenze erreicht */
                     }
+                    lf = fitf;
                 }
             }
             DrawBatch batch;
@@ -3025,6 +3402,8 @@ void* aiml_prefab_instantiate(const char* prefab_name) {
         child.layout        = cd.layout;
         child.gap           = cd.gap;
         child.compact       = cd.compact;
+        child.scrollable    = cd.scrollable;
+        child.tail          = cd.tail;
         child.cascade_type  = cd.cascade_type;
         child.payload_spawn = cd.payload_spawn;
         child.cascade_flow  = cd.cascade_flow;
@@ -3050,7 +3429,7 @@ void* aiml_prefab_instantiate(const char* prefab_name) {
          * checkboxes use it as the label text rendered next to the box. */
         if (child.type == CHILD_TEXT_INPUT || child.type == CHILD_LABEL
             || child.type == CHILD_BUTTON  || child.type == CHILD_CHECKBOX
-            || child.type == CHILD_RADIO)
+            || child.type == CHILD_RADIO   || child.type == CHILD_TEXTBOX)
             child.text = cd.label_text;
 
         /* Resolve material name → Material* (null if unknown — falls back
@@ -3282,7 +3661,49 @@ static PrefabChild* find_child(void* p, const char* child_name) {
 
 void aiml_prefab_set_text(void* inst, const char* child_name, const char* text) {
     PrefabChild* ch = find_child(inst, child_name);
-    if (ch) ch->text = text ? text : "";
+    if (!ch) return;
+    ch->text = text ? text : "";
+    /* An external text change (e.g. clearing a chat input after send) must keep
+     * the text_input cursor/selection valid, else the next insert/erase/substr
+     * runs past the end and throws std::out_of_range. */
+    int32_t len = (int32_t)ch->text.size();
+    if (ch->cursor_pos > len) ch->cursor_pos = len;
+    if (ch->cursor_pos < 0)   ch->cursor_pos = 0;
+    if (ch->sel_anchor > len) ch->sel_anchor = len;
+    if (ch->sel_anchor < 0)   ch->sel_anchor = 0;
+}
+
+/* Programmatically give keyboard focus to a text_input child (e.g. re-focus the
+ * chat input after the Send button stole focus). */
+void aiml_prefab_set_focus(void* inst_p, const char* child_name) {
+    auto* inst = (AimlPrefabInstance*)inst_p;
+    if (!inst || !g_scene || !child_name) return;
+    PrefabChild* ch = find_child(inst_p, child_name);
+    if (!ch || ch->type != CHILD_TEXT_INPUT) return;
+    if (g_scene->focused_input_inst && g_scene->focused_input_child_idx >= 0) {
+        auto* old = g_scene->focused_input_inst;
+        int32_t oi = g_scene->focused_input_child_idx;
+        if (oi < (int32_t)old->children.size()) old->children[oi].focused = false;
+    }
+    for (size_t i = 0; i < inst->children.size(); ++i) {
+        if (&inst->children[i] == ch) {
+            g_scene->focused_input_inst = inst;
+            g_scene->focused_input_child_idx = (int32_t)i;
+            ch->focused = true;
+            ch->sel_anchor = ch->cursor_pos;   /* collapsed cursor */
+            break;
+        }
+    }
+}
+
+/* Pin a textbox / scrollable container to its bottom (newest line / last row).
+ * Sets an out-of-range offset that render clamps to max, and re-arms textbox
+ * tail-follow so subsequent growth keeps sticking to the bottom. */
+void aiml_prefab_scroll_to_end(void* inst_p, const char* child_name) {
+    PrefabChild* ch = find_child(inst_p, child_name);
+    if (!ch) return;
+    ch->scroll_offset = 1 << 30;   /* render clamps to max_off */
+    ch->tb_prev_max   = -1;        /* textbox: re-arm tail-follow */
 }
 
 void aiml_prefab_set_texture(void* inst, const char* child_name, void* tex) {
@@ -3437,6 +3858,19 @@ const char* aiml_prefab_dropdown_value(void* inst, const char* child_name) {
 void aiml_prefab_set_color(void* inst, const char* child_name, int32_t color) {
     PrefabChild* ch = find_child(inst, child_name);
     if (ch) ch->color = (uint32_t)color;
+}
+
+/* Generic child fill/border color setters (mirror set_color).  For a rect the
+ * visible fill is bg_color (color is usually 0) — needed to flash a whole panel
+ * (e.g. the Soulmage banner on hit/heal). */
+void aiml_prefab_set_bg_color(void* inst, const char* child_name, int32_t color) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (ch) ch->bg_color = (uint32_t)color;
+}
+
+void aiml_prefab_set_border_color(void* inst, const char* child_name, int32_t color) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (ch) ch->border_color = (uint32_t)color;
 }
 
 void aiml_prefab_set_child_visible(void* inst, const char* child_name, int32_t v) {
@@ -4673,6 +5107,28 @@ static void child_screen_bbox(AimlPrefabInstance* inst, const PrefabChild& ch,
 /* Forward declaration — callback dispatch (defined further below). */
 static void prefab_invoke_callback(const std::string& fn_name, AimlPrefabInstance* inst);
 
+#ifdef __EMSCRIPTEN__
+/* Mobile soft-keyboard bridge (see input_runtime.cpp).  When the focused
+ * text_input changes, raise/lower the hidden DOM <input> so the on-screen
+ * keyboard appears/dismisses. */
+extern "C" void aiml_web_kbd_open(int is_secret, int is_numeric, int is_email);
+extern "C" void aiml_web_kbd_close(void);
+static void prefab_web_kbd_sync() {
+    static AimlPrefabInstance* prev_inst  = nullptr;
+    static int32_t             prev_child = -1;
+    AimlPrefabInstance* cur   = g_scene ? g_scene->focused_input_inst      : nullptr;
+    int32_t             child = g_scene ? g_scene->focused_input_child_idx : -1;
+    if (cur == prev_inst && child == prev_child) return;   /* no transition */
+    prev_inst = cur; prev_child = child;
+    if (cur && child >= 0 && child < (int32_t)cur->children.size() &&
+        cur->children[child].type == CHILD_TEXT_INPUT) {
+        aiml_web_kbd_open(cur->children[child].is_secret ? 1 : 0, 0, 0);
+    } else {
+        aiml_web_kbd_close();
+    }
+}
+#endif
+
 /* Apply text/key events from the input event queue to the currently focused
  * text_input child. Mirrors ui_runtime's focus behaviour. */
 static void apply_text_events_to_focus() {
@@ -4683,24 +5139,92 @@ static void apply_text_events_to_focus() {
     PrefabChild& ch = inst->children[idx];
     if (ch.type != CHILD_TEXT_INPUT) return;
 
+    /* Defensive: the text may have been shrunk externally (set_text) since the
+     * cursor last moved — clamp before any insert/erase/substr below. */
+    {
+        int32_t len0 = (int32_t)ch.text.size();
+        if (ch.cursor_pos > len0) ch.cursor_pos = len0;
+        if (ch.cursor_pos < 0)    ch.cursor_pos = 0;
+        if (ch.sel_anchor > len0) ch.sel_anchor = len0;
+        if (ch.sel_anchor < 0)    ch.sel_anchor = 0;
+    }
+
+    /* Ctrl held (either side) → clipboard/select shortcuts instead of typing.
+     * Exclude Alt: AltGr (needed for @/€/… on e.g. German layouts) reports as
+     * Ctrl+Alt on some platforms — must still type its character, not shortcut. */
+    bool alt_held = aiml_input_key_down("lalt") || aiml_input_key_down("ralt");
+    bool ctrl  = (aiml_input_key_down("lctrl")  || aiml_input_key_down("rctrl"))  && !alt_held;
+    bool shift =  aiml_input_key_down("lshift") || aiml_input_key_down("rshift");
     bool changed = false;
+
+    auto has_sel = [&]() { return ch.sel_anchor != ch.cursor_pos; };
+    auto sel_lo  = [&]() { return ch.sel_anchor < ch.cursor_pos ? ch.sel_anchor : ch.cursor_pos; };
+    auto sel_hi  = [&]() { return ch.sel_anchor < ch.cursor_pos ? ch.cursor_pos : ch.sel_anchor; };
+    auto del_sel = [&]() {
+        int32_t a = sel_lo(), b = sel_hi();
+        ch.text.erase((size_t)a, (size_t)(b - a));
+        ch.cursor_pos = a; ch.sel_anchor = a; changed = true;
+    };
+
     while (aiml_input_has_event()) {
         void* ev = aiml_input_next_event();
         const char* type = aiml_input_event_type(ev);
         if (!type) continue;
         if (strcmp(type, "text") == 0) {
+            /* GLFW usually suppresses char events for Ctrl+letter, but guard
+             * anyway so Ctrl+V/C/etc. never inserts the literal letter. */
+            if (ctrl) continue;
             const char* s = aiml_input_event_char_(ev);
             if (!s) continue;
-            ch.text += s;
-            ch.cursor_pos = (int32_t)ch.text.size();
+            if (has_sel()) del_sel();
+            ch.text.insert((size_t)ch.cursor_pos, s);
+            ch.cursor_pos += (int32_t)strlen(s);
+            ch.sel_anchor = ch.cursor_pos;
             changed = true;
         } else if (strcmp(type, "key_down") == 0) {
             const char* key = aiml_input_event_key(ev);
             if (!key) continue;
-            if (strcmp(key, "Backspace") == 0 && !ch.text.empty()) {
-                ch.text.pop_back();
-                ch.cursor_pos = (int32_t)ch.text.size();
-                changed = true;
+            int32_t len = (int32_t)ch.text.size();
+            if (ctrl && strcmp(key, "A") == 0) {
+                ch.sel_anchor = 0; ch.cursor_pos = len;               /* select all */
+            } else if (ctrl && strcmp(key, "C") == 0) {
+                if (has_sel()) aiml_input_clipboard_set(ch.text.substr((size_t)sel_lo(), (size_t)(sel_hi() - sel_lo())).c_str());
+            } else if (ctrl && strcmp(key, "X") == 0) {
+                if (has_sel()) { aiml_input_clipboard_set(ch.text.substr((size_t)sel_lo(), (size_t)(sel_hi() - sel_lo())).c_str()); del_sel(); }
+            } else if (ctrl && strcmp(key, "V") == 0) {
+                const char* clip = aiml_input_clipboard_get();
+                if (clip && *clip) {
+                    if (has_sel()) del_sel();
+                    ch.text.insert((size_t)ch.cursor_pos, clip);
+                    ch.cursor_pos += (int32_t)strlen(clip);
+                    ch.sel_anchor = ch.cursor_pos; changed = true;
+                }
+            } else if (strcmp(key, "Left") == 0) {
+                if (!shift && has_sel()) ch.cursor_pos = sel_lo();
+                else                     ch.cursor_pos = utf8_prev(ch.text, ch.cursor_pos);
+                if (!shift) ch.sel_anchor = ch.cursor_pos;
+            } else if (strcmp(key, "Right") == 0) {
+                if (!shift && has_sel()) ch.cursor_pos = sel_hi();
+                else                     ch.cursor_pos = utf8_next(ch.text, ch.cursor_pos);
+                if (!shift) ch.sel_anchor = ch.cursor_pos;
+            } else if (strcmp(key, "Home") == 0) {
+                ch.cursor_pos = 0; if (!shift) ch.sel_anchor = 0;
+            } else if (strcmp(key, "End") == 0) {
+                ch.cursor_pos = len; if (!shift) ch.sel_anchor = len;
+            } else if (strcmp(key, "Backspace") == 0) {
+                if (has_sel()) del_sel();
+                else if (ch.cursor_pos > 0) {
+                    int32_t p = utf8_prev(ch.text, ch.cursor_pos);
+                    ch.text.erase((size_t)p, (size_t)(ch.cursor_pos - p));
+                    ch.cursor_pos = p; ch.sel_anchor = p; changed = true;
+                }
+            } else if (strcmp(key, "Delete") == 0) {
+                if (has_sel()) del_sel();
+                else if (ch.cursor_pos < len) {
+                    int32_t q = utf8_next(ch.text, ch.cursor_pos);
+                    ch.text.erase((size_t)ch.cursor_pos, (size_t)(q - ch.cursor_pos));
+                    ch.sel_anchor = ch.cursor_pos; changed = true;
+                }
             } else if (strcmp(key, "Enter") == 0) {
                 if (!ch.on_change_fn.empty())
                     prefab_invoke_callback(ch.on_change_fn, inst);
@@ -4711,6 +5235,10 @@ static void apply_text_events_to_focus() {
             }
         }
     }
+    /* Clamp cursor+anchor into range (paranoia against desync). */
+    int32_t len = (int32_t)ch.text.size();
+    if (ch.cursor_pos < 0) ch.cursor_pos = 0; if (ch.cursor_pos > len) ch.cursor_pos = len;
+    if (ch.sel_anchor < 0) ch.sel_anchor = 0; if (ch.sel_anchor > len) ch.sel_anchor = len;
     if (changed && !ch.on_change_fn.empty()) {
         prefab_invoke_callback(ch.on_change_fn, inst);
     }
@@ -4801,7 +5329,9 @@ void aiml_prefab_update_hover(float mx, float my) {
                 && ch.type != CHILD_CHECKBOX
                 && ch.type != CHILD_RADIO
                 && ch.type != CHILD_DROPDOWN
-                && ch.type != CHILD_SLIDER) continue;
+                && ch.type != CHILD_SLIDER
+                && ch.type != CHILD_CONTAINER
+                && ch.type != CHILD_TEXTBOX) continue;
             /* Popup absorbs the click — but only for CLOSED dropdowns and
              * other widgets.  The dropdown that OWNS the open popup still
              * needs to process its own release-outside-popup to close. */
@@ -4810,7 +5340,22 @@ void aiml_prefab_update_hover(float mx, float my) {
 
             float bx, by, bw, bh;
             child_screen_bbox(inst, ch, bx, by, bw, bh);
-            bool over = (mx >= bx && mx < bx + bw && my >= by && my < by + bh);
+            float hx = bx, hy = by, hw = bw, hh = bh;
+#ifdef __EMSCRIPTEN__
+            /* Touch hit-slop: a 20px design checkbox shrinks to a few screen
+             * pixels on a phone (the 1280x720 board is scaled to fit) and is
+             * essentially untappable with a finger.  Grow the HIT rect (not the
+             * drawn rect) of small tappable widgets to a minimum finger size,
+             * centered, so ack-checkboxes / small buttons can be tapped.  Large
+             * widgets are unchanged. */
+            if (ch.type == CHILD_CHECKBOX || ch.type == CHILD_RADIO
+                || ch.type == CHILD_BUTTON || ch.type == CHILD_DROPDOWN) {
+                const float MIN_TOUCH = 30.0f;
+                if (hw < MIN_TOUCH) { hx -= (MIN_TOUCH - hw) * 0.5f; hw = MIN_TOUCH; }
+                if (hh < MIN_TOUCH) { hy -= (MIN_TOUCH - hh) * 0.5f; hh = MIN_TOUCH; }
+            }
+#endif
+            bool over = (mx >= hx && mx < hx + hw && my >= hy && my < hy + hh);
             ch.hot = over;
 
             if (ch.type == CHILD_BUTTON) {
@@ -4925,10 +5470,120 @@ void aiml_prefab_update_hover(float mx, float my) {
                     ch.slider_dragging = false;
                 }
             } else if (ch.type == CHILD_TEXT_INPUT) {
+                /* Map a screen-x to the nearest caret stop (byte index), using the
+                 * per-char x positions cached during the last render. */
+                auto idx_from_x = [&](float x) -> int32_t {
+                    if (ch.caret_x.empty()) return 0;
+                    int32_t best = ch.caret_byte[0];
+                    float   bd   = fabsf(ch.caret_x[0] - x);
+                    for (size_t k = 1; k < ch.caret_x.size(); ++k) {
+                        float d = fabsf(ch.caret_x[k] - x);
+                        if (d < bd) { bd = d; best = ch.caret_byte[k]; }
+                    }
+                    return best;
+                };
                 if (mb_pressed && over) {
                     new_focus_inst = inst;
                     new_focus_idx  = (int32_t)i;
+                    int32_t ci = idx_from_x(mx);
+                    ch.cursor_pos = ci;
+                    ch.sel_anchor = ci;          /* click → collapsed cursor */
+                    ch.sel_dragging = true;
+                } else if (ch.sel_dragging && ch.focused && aiml_input_mouse_button(0)) {
+                    ch.cursor_pos = idx_from_x(mx);   /* drag → extend selection (anchor stays) */
                 }
+                if (mb_released) ch.sel_dragging = false;
+            } else if (ch.type == CHILD_CONTAINER) {
+                /* Scrollable container: mouse wheel over it + drag the thumb. */
+                if (ch.scrollable && !ch.spawned.empty()) {
+                    bool cflow_h = (ch.layout == "hflow");
+                    AimlPrefabInstance* r0 = ch.spawned[0];
+                    float pitch  = cflow_h ? (r0->def->width + ch.gap) : (r0->def->height + ch.gap);
+                    float extent = cflow_h ? ch.width : ch.height;
+                    int   visible = (pitch > 0.0f) ? (int)(extent / pitch) : (int)ch.spawned.size();
+                    if (visible < 1) visible = 1;
+                    int total   = (int)ch.spawned.size();
+                    int max_off = total > visible ? total - visible : 0;
+                    if (total > visible) {
+                        float scx = (ch.width  > 0.0f) ? bw / ch.width  : 1.0f;
+                        float scy = (ch.height > 0.0f) ? bh / ch.height : 1.0f;
+                        if (over) {
+                            float wy = aiml_input_mouse_scroll_y();
+                            if      (wy > 0.0f && ch.scroll_offset > 0)       ch.scroll_offset--;
+                            else if (wy < 0.0f && ch.scroll_offset < max_off) ch.scroll_offset++;
+                        }
+                        float sb_w    = 6.0f * scx;
+                        float sb_x    = bx + bw - sb_w - 2.0f * scx;
+                        float track_y = by + 2.0f * scy;
+                        float track_h = bh - 4.0f * scy;
+                        float thumb_h = track_h * (float)visible / (float)total;
+                        if (thumb_h < 16.0f * scy) thumb_h = 16.0f * scy;
+                        float denom = track_h - thumb_h;
+                        float thumb_y = track_y + (denom > 0.0f ? denom * (float)ch.scroll_offset / (float)std::max(1, max_off) : 0.0f);
+                        bool over_thumb = (mx >= sb_x && mx <= sb_x + sb_w && my >= thumb_y && my <= thumb_y + thumb_h);
+                        if (mb_pressed && over_thumb) ch.sb_dragging = true;
+                        if (ch.sb_dragging && aiml_input_mouse_button(0) && denom > 0.0f) {
+                            float frac = (my - track_y - thumb_h * 0.5f) / denom;
+                            if (frac < 0.0f) frac = 0.0f;
+                            if (frac > 1.0f) frac = 1.0f;
+                            ch.scroll_offset = (int)(frac * (float)max_off + 0.5f);
+                        }
+                    }
+                }
+                if (mb_released) ch.sb_dragging = false;
+            } else if (ch.type == CHILD_TEXTBOX) {
+                /* Scrollable text area: wheel over it + drag the thumb.  Line
+                 * counts come from the render pass (tb_total / tb_visible). */
+                int total = ch.tb_total, visible = ch.tb_visible;
+                int max_off = total > visible ? total - visible : 0;
+                if (max_off > 0) {
+                    float scx = (ch.width  > 0.0f) ? bw / ch.width  : 1.0f;
+                    float scy = (ch.height > 0.0f) ? bh / ch.height : 1.0f;
+                    if (over) {
+                        float wy = aiml_input_mouse_scroll_y();
+                        if      (wy > 0.0f && ch.scroll_offset > 0)       ch.scroll_offset--;
+                        else if (wy < 0.0f && ch.scroll_offset < max_off) ch.scroll_offset++;
+                    }
+                    float sb_w    = 6.0f * scx;
+                    float sb_x    = bx + bw - sb_w - 2.0f * scx;
+                    float track_y = by + 2.0f * scy;
+                    float track_h = bh - 4.0f * scy;
+                    float thumb_h = track_h * (float)visible / (float)std::max(1, total);
+                    if (thumb_h < 16.0f * scy) thumb_h = 16.0f * scy;
+                    float denom = track_h - thumb_h;
+                    float thumb_y = track_y + (denom > 0.0f ? denom * (float)ch.scroll_offset / (float)std::max(1, max_off) : 0.0f);
+                    bool over_thumb = (mx >= sb_x && mx <= sb_x + sb_w && my >= thumb_y && my <= thumb_y + thumb_h);
+                    if (mb_pressed && over_thumb) ch.sb_dragging = true;
+                    if (ch.sb_dragging && aiml_input_mouse_button(0) && denom > 0.0f) {
+                        float frac = (my - track_y - thumb_h * 0.5f) / denom;
+                        if (frac < 0.0f) frac = 0.0f;
+                        if (frac > 1.0f) frac = 1.0f;
+                        ch.scroll_offset = (int)(frac * (float)max_off + 0.5f);
+                    }
+                    /* Body-Drag-Scroll (Touch/Maus): ein button-0-Drag, dessen
+                     * URSPRUNG in dieser Textbox liegt, scrollt sie — so ist die
+                     * Textbox am Handy per Finger scrollbar (kein Wheel/Thumb nötig).
+                     * Nur wenn NICHT der Thumb gezogen wird.  Textboxen haben KEINE
+                     * ziehbaren Kinder → kein Konflikt mit Karten-Drag; Kosten fallen
+                     * nur an, während ein Drag aktiv ist. */
+                    if (!ch.sb_dragging && aiml_input_drag_active(0)) {
+                        float ox = aiml_input_drag_origin_x(0);
+                        float oy = aiml_input_drag_origin_y(0);
+                        if (ox >= bx && ox < bx + bw && oy >= by && oy < by + bh) {
+                            if (!ch.tb_drag) { ch.tb_drag = true; ch.tb_drag_off = ch.scroll_offset; }
+                            float line_h_screen = bh / (float)std::max(1, visible);
+                            if (line_h_screen < 1.0f) line_h_screen = 1.0f;
+                            int delta_lines = (int)(aiml_input_drag_delta_y(0) / line_h_screen);
+                            int no = ch.tb_drag_off - delta_lines;
+                            if (no < 0) no = 0;
+                            if (no > max_off) no = max_off;
+                            ch.scroll_offset = no;
+                        }
+                    } else {
+                        ch.tb_drag = false;
+                    }
+                }
+                if (mb_released) ch.sb_dragging = false;
             }
         }
     }
@@ -4939,12 +5594,17 @@ void aiml_prefab_update_hover(float mx, float my) {
         if (g_scene->focused_input_inst && g_scene->focused_input_child_idx >= 0) {
             auto* old = g_scene->focused_input_inst;
             int32_t oi = g_scene->focused_input_child_idx;
-            if (oi < (int32_t)old->children.size())
-                old->children[oi].focused = false;
+            if (oi < (int32_t)old->children.size()) {
+                PrefabChild& oc = old->children[oi];
+                oc.focused = false;
+                oc.sel_anchor = oc.cursor_pos;   /* collapse selection on blur */
+                oc.sel_dragging = false;
+            }
         }
         g_scene->focused_input_inst = new_focus_inst;
         g_scene->focused_input_child_idx = new_focus_idx;
         if (new_focus_inst && new_focus_idx >= 0) {
+            /* cursor/anchor were set by the click branch above; just take focus. */
             new_focus_inst->children[new_focus_idx].focused = true;
         }
     }
@@ -5050,6 +5710,10 @@ void aiml_prefab_update_hover(float mx, float my) {
 
     /* Feed keyboard events into focused text_input. */
     apply_text_events_to_focus();
+#ifdef __EMSCRIPTEN__
+    /* Raise/lower the mobile soft keyboard on focus changes. */
+    prefab_web_kbd_sync();
+#endif
 }
 
 void* aiml_prefab_get_hovered(void) {
@@ -5107,12 +5771,26 @@ static const char* MATERIAL_FRAG_PREAMBLE =
     "uniform float     u_time;\n"
     "out vec4 out_color;\n";
 
+/* Resolve a shader STEM → on-disk path for the current target (asset_runtime).
+ * Declared here to avoid pulling in the whole asset_runtime.h. */
+extern "C" const char* aiml_asset_shader_path(const char* stem);
+
 static GLuint material_get_or_compile(const char* shader_path) {
     if (!g_scene || !shader_path || !*shader_path) return 0;
     auto it = g_scene->shader_programs.find(shader_path);
     if (it != g_scene->shader_programs.end()) return it->second;
 
-    std::string body = read_text_file(shader_path);
+    /* A bare stem (no '/' and no '.') is resolved via the asset registry so it
+     * works on both native (abs path) and wasm (preload path), like gl.tex /
+     * gl.font.  A raw path (contains '/' or '.') is opened as-is (legacy). */
+    std::string path_str = shader_path;
+    if (path_str.find('/') == std::string::npos &&
+        path_str.find('.') == std::string::npos) {
+        const char* resolved = aiml_asset_shader_path(shader_path);
+        if (resolved && *resolved) path_str = resolved;
+    }
+
+    std::string body = read_text_file(path_str.c_str());
     if (body.empty()) return 0;
 
     /* Prepend platform header + standard preamble so user shaders are
@@ -5126,12 +5804,19 @@ static GLuint material_get_or_compile(const char* shader_path) {
     glAttachShader(p, f);
     glLinkProgram(p);
     GLint ok; glGetProgramiv(p, GL_LINK_STATUS, &ok);
+    glDeleteShader(v);
+    glDeleteShader(f);
     if (!ok) {
         char buf[512]; glGetProgramInfoLog(p, 512, nullptr, buf);
         fprintf(stderr, "[material] link error for '%s': %s\n", shader_path, buf);
+        /* A linked-but-failed program must NOT be used — glUseProgram on it
+         * renders garbage/nothing and can wreck an unrelated widget that shares
+         * the batch.  Drop it and cache the failure (0) so the batch falls back
+         * cleanly to the default shader instead. */
+        glDeleteProgram(p);
+        g_scene->shader_programs[shader_path] = 0;
+        return 0;
     }
-    glDeleteShader(v);
-    glDeleteShader(f);
 
     g_scene->shader_programs[shader_path] = p;
     return p;
@@ -5396,8 +6081,8 @@ void aiml_prefab_update_drag(float mx, float my, int32_t btn_down, int32_t btn_r
 
             float ax, ay, w, h;
             inst_bounds(inst, ax, ay, w, h);
-            if (mx >= ax && mx <= ax + w &&
-                my >= ay && my <= ay + h) {
+            bool inside = (mx >= ax && mx <= ax + w && my >= ay && my <= ay + h);
+            if (inside) {
                 inst->is_dragging = true;
                 inst->drag_offset_x = mx - ax;
                 inst->drag_offset_y = my - ay;

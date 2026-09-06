@@ -1,0 +1,40 @@
+# Reproduziert pow15_i (x^1.5 via f32-sqrt) + f32→i64 via `set` in WASM.
+- def:
+    name: pow15_i
+    args: [[val, i64]]
+    return: i64
+    body:
+      - decl: [res, i64, 0]
+      - if:
+          condition: { gt: [val, 0] }
+          then:
+            - decl: [vfl, f32, val]
+            - decl: [sqp, f32, { call: [math.sqrt, vfl] }]
+            - decl: [pfl, f32, { '*': [vfl, sqp] }]
+            - set: [res, pfl]
+      - return: res
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      # pow15(34969) = 34969 * sqrt(34969) ≈ 34969 * 187.0 ≈ 6.54M
+      - decl: [pw1, i64, { call: [pow15_i, 34969] }]
+      - print: ["pow15(34969) = ${pw1} (erwartet ~6539000)"]
+      - if: { condition: { '||': [{ lt: [pw1, 6400000] }, { gt: [pw1, 6700000] }] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
+      # pow15(2797) = 2797 * ~52.9 ≈ 148000
+      - decl: [pw2, i64, { call: [pow15_i, 2797] }]
+      - print: ["pow15(2797) = ${pw2} (erwartet ~148000)"]
+      - if: { condition: { '||': [{ lt: [pw2, 145000] }, { gt: [pw2, 151000] }] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
+      # f32→i64 via set direkt
+      - decl: [rval, i64, 0]
+      - decl: [fval, f32, 4624.0]
+      - set: [rval, fval]
+      - print: ["set i64 <- f32 4624.0 = ${rval} (erwartet 4624)"]
+      - if: { condition: { neq: [rval, 4624] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
+      - if:
+          condition: { eq: [fails, 0] }
+          then: [{ print: ["PASS pow15/set"] }]
+          else: [{ print: ["FAIL pow15/set: ${fails}"] }]
+      - return: fails

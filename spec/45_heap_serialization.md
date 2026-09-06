@@ -400,8 +400,33 @@ struct AimlMirrorRegistered {
 - `chan<T>` thread handoff
 - Mirror dirty detection as blob comparison (fixes automatic detection of
   Kv / map / list in-place mutations without explicit `sync_now`)
-- Circular references (explicitly forbidden — compiler error)
-- `ptr<T>` / `ref<T>` as struct fields (pointers to other objects — not serializable)
+
+### `ptr<T>` fields and recursive / back-reference types
+
+A `ptr<T>` (or `ref<T>`) field pointing at a **registered user struct** is followed:
+the descriptor emits a `PTR_STRUCT` node wrapping `T`'s subtree, and the runtime
+allocates/follows through the pointer at encode/decode time (the raw pointer value
+is meaningless on the receiving side).
+
+Following pointers makes the type graph **potentially cyclic**. A component that
+holds a back-reference to its owner is the common case:
+
+```aiml
+- class: { name: Owner,  members: [[child, ptr<Child>]] }
+- class: { name: Child,  members: [[owner, ptr<Owner>]] }   # back-ref
+```
+
+The descriptor builder (`serBuildSubtree`) keeps a **DFS active-path set** of the
+struct types currently being expanded. When a `ptr<T>` points back at a type
+already on that path, the pointer is **not** followed — it is emitted as an opaque
+pointer-sized `RAWBYTES` leaf and left out of the serialized data. Rationale: a
+back-reference is a *wired reference*, not owned data, so cutting it there both
+terminates the walk and avoids duplicating the owner. (Same principle as the
+classgroup-collaborator skip.) A type is still followed normally when it recurs in
+a *sibling* subtree — only genuine ancestor cycles are cut. This makes
+back-reference components (e.g. a screen ↔ its extracted sub-view) compile; before
+the guard the builder recursed forever and crashed. Regression:
+`tests/test_recursive_ptr_ser.aiml`.
 
 ---
 

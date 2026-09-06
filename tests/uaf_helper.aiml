@@ -1,0 +1,4 @@
+- class:
+    name: UafHelper
+    methods:
+      - def: { name: ping, return: i32, body: [{ return: 42 }] }

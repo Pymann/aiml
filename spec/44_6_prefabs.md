@@ -37,13 +37,14 @@
 | `label` | Text line (requires `font_size`, `color`; optional `anchor`, `valign`, `label`). Supports `\n` for multi-line; combine with `valign: top` to align the text block to the top of the box (default centers a single line vertically). |
 | `rect` | Rectangle. Solid color (`color`), rounded with border (`bg_color` + `corner_radius` + `border_color`/`border_width`), or textured (`texture`). |
 | `button` | Interactive clickable widget. Hover/active states; callback on click. |
-| `text_input` | Editable single-line text field. Keyboard focus, cursor, `secret` mode. |
+| `text_input` | Editable single-line text field. Keyboard focus, a movable cursor, text **selection** (mouse drag, Shift+arrows, Ctrl+A) and **clipboard** (Ctrl+C / Ctrl+V / Ctrl+X); UTF-8-aware. `secret` mode. Text longer than the field **scrolls horizontally** so the caret stays visible, and is clipped to the field's inner box (no wrapping — the field is always one line regardless of its `height`). See §5e. |
 | `checkbox` | Toggleable box + label. State stored on the child; click flips. Use `width × height` to size the surrounding region; the box itself is `min(width, height)` square on the left, label fills the remaining width. When neither `border_color` nor `border_width` is set, the box falls back to a subtle default outline (so an unstyled checkbox is always visible); set them explicitly to override. |
 | `radio` | Exclusive choice within a named `group`. Round toggle + label; visually identical layout to `checkbox` but rendered as a circle. Clicking sets THIS child checked and unchecks every other `radio` with the same `group` string across the entire scene. Use the same `is_checked` / `set_checked` API as checkbox for programmatic read/write. |
 | `dropdown` | Single-choice selector. Options come from a pipe-separated `options:` string ("A\|B\|C") **or** from an `enum: TypeName` binding (labels auto-derived from the enum members). Click opens a popup list; selection is stored as an index. Read the label with `dropdown_value`, the index with `dropdown_index`, and — for an `enum:`-bound dropdown — the true enum member value with `dropdown_enum` (see §5b). |
 | `bar` | Progress/gauge. A rounded track (`bg_color` + `border_*` + `corner_radius`) with a fill (`fill_color`) sized `value/max` of the width. Update at runtime via `set_bar_value` / `set_bar_max` / `set_bar_fill`. |
 | `slider` | Interactive horizontal slider. Same track + fill as `bar`, with a drag-handle knob centered on the value-position. Mouse press inside the track grabs the handle; while held, cursor-x maps linearly to a value in `[min, max]`. Fires `on_change` whenever the value changes. Reads via `get_slider_value(child)`, writes via `set_slider_value`/`set_slider_min`/`set_slider_max`. The handle uses `fill_color` (or white if absent) with `hover_color`/`active_color` tints. |
-| `container` | Dynamic list spawner. Bound to a `list<T>` on the instance's model via `bind_list:`; spawns one instance of `spawn: <Prefab>` per element and keeps the count synced with `.len`. `layout:` (`vflow`/`hflow`) + `gap:` control placement; `compact:` re-packs only visible rows. See §5c. |
+| `container` | Dynamic list spawner. Bound to a `list<T>` on the instance's model via `bind_list:`; spawns one instance of `spawn: <Prefab>` per element and keeps the count synced with `.len`. `layout:` (`vflow`/`hflow`) + `gap:` control placement; `compact:` re-packs only visible rows; `scrollable:` gives it a **native scrollbar** (mouse wheel + draggable thumb, engine-windowed). See §5c. |
+| `textbox` | Multi-line, scrollable, read-only text area (chat logs, event logs). Wraps on width and on `\n`/`\|`; native scrollbar (mouse wheel + draggable thumb). `tail: true` sticks the view to the bottom as content grows. Set the whole text at once with `set_text`. See §5f. |
 
 ### Child Style Fields
 
@@ -64,6 +65,8 @@ All UI-widget children (`rect`, `button`, `text_input`) accept the following sty
 | `anchor` | `"left"` \| `"center"` \| `"right"` | `"left"` | (label) horizontal alignment of the text inside the box. |
 | `valign` | `"top"` \| `"center"` \| `"bottom"` | `"center"` (when `height>0`) | (label) vertical alignment. Default centers a single-line label inside its `height` box. Use `"top"` for multi-line text blocks (e.g. tooltip bodies) — without it, a 3-line string is centered around the first line's vertical center, pushing the block downward. `"bottom"` aligns the block flush to the bottom edge. |
 | `secret` | bool | `false` | (text_input) Render chars as `*` (password mode). |
+| `scrollable` | bool | `false` | (container) Engine-managed row window + native scrollbar (see §5c). |
+| `tail` | bool | `false` | (textbox) Keep the view pinned to the bottom (newest line) as content grows; releases while the user scrolls up, re-follows once back at the bottom (see §5f). |
 | `on_click` | function name | `""` | (button, checkbox, radio) Callback fired when the widget is clicked. |
 | `on_change` | function name | `""` | (text_input, checkbox, radio, slider) Callback fired when the value changes. |
 | `group` | string | `""` | (radio) Group name for exclusive-choice behavior. Clicking one radio deselects every other radio (across the whole scene) sharing the same `group` string. Ignored on non-radio widgets. |
@@ -153,6 +156,8 @@ Opaque handle (`i8*`) to a live prefab instance.
 | `.set_color(child, color)` | `(string, i32) -> void` | Set color of a child (label text color, rect fill color) |
 | `.set_child_visible(child, v)` | `(string, i32) -> void` | Visibility of a child |
 | `.set_compact(child, on)` | `(string, i32) -> void` | (container) Enable/disable compacting layout — hidden rows take no space (see §5c). |
+| `.focus(child)` | `(string) -> void` | (text_input) Give this input keyboard focus programmatically (e.g. re-focus the chat box after the Send button stole focus). No-op if the child isn't a `text_input`. |
+| `.scroll_to_end(child)` | `(string) -> void` | (textbox / scrollable container) Pin the child to its bottom (newest line / last row) and re-arm a textbox's `tail` follow. |
 | `.child(child_name)` | `(string) -> prefab_instance` | Child as its own instance for direct manipulation |
 | `.text_value(child)` | `(string) -> string` | (text_input) Current text of an input field |
 | `.child_clicked(child)` | `(string) -> i32` | (button) `1` if button was clicked this frame, else `0` |
@@ -236,6 +241,7 @@ lists, ability chips) is built without manual add/remove bookkeeping.
 | `layout` | `"vflow"` \| `"hflow"` | `vflow` (default) stacks rows top-down; `hflow` lays them left-to-right. |
 | `gap` | float | Pixel spacing between spawned rows. |
 | `compact` | bool | When `true`, **hidden rows take no layout space** — see below. Default `false`. |
+| `scrollable` | bool | When `true`, the engine windows the rows and draws a **native scrollbar** (mouse wheel + draggable thumb) — see "Native scrolling" below. Default `false`. |
 
 ```yaml
 - { name: lib_container, type: container, pos_x: 18, pos_y: 526,
@@ -292,6 +298,25 @@ The compaction pass is pure arithmetic over the spawned rows (cost is negligible
 and composes with `layout`: `hflow` packs left-to-right, `vflow` top-down. The
 row currently being dragged is **skipped** by the re-pack (its slot is reserved)
 so a drag follows the pointer instead of being yanked back into the grid.
+
+### `scrollable` — native scrollbar
+
+`scrollable: true` makes the **engine** own the scrolling: it shows only a window
+of rows (visible count = container extent ÷ row pitch), packs them from the origin
+like `compact`, and draws a track + draggable thumb on the right edge whenever
+there are more rows than fit. The mouse wheel over the container and dragging the
+thumb both move the window — no AIML scroll bookkeeping.
+
+```yaml
+- { name: pl_container, type: container, x: 20, y: 96, width: 224, height: 400,
+    spawn: PlayerRow, layout: vflow, gap: 4, scrollable: true }
+```
+
+The AIML side just binds the list and fills each row's text (per §5c) — it must
+**not** call `set_visible` on the rows, since the engine controls visibility.
+`scrollable` windows **every** spawned row, so it is for **unfiltered** lists;
+a filtered browser (where AIML hides non-matching rows) keeps its own paging.
+Jump to the last row with `scroll_to_end(child)`.
 
 ---
 
@@ -370,6 +395,72 @@ type the offsets are constant — no runtime schema registry is needed.
 *Phase 1* covers numeric + enum fields (sliders, bars, dropdowns); *Phase 2*
 adds `string` fields (text/label). Nested (`bind: a.b`) and per-frame auto-sync
 are out of scope.
+
+---
+
+## 5e. `text_input` — editing, selection, clipboard
+
+A focused `text_input` behaves like a normal single-line editor. All navigation
+and deletion is **UTF-8-aware** (moves/deletes whole codepoints, so `ä`/`ö`/`ü`
+are never split), and cursor/selection positions are **byte offsets** into the
+text.
+
+**Cursor + editing**
+- Typing inserts at the cursor; `Backspace` deletes before it, `Delete` after it.
+- `←` / `→` move by one character; `Home` / `End` jump to start / end.
+
+**Selection**
+- Click-drag with the mouse selects a range; `Shift`+`←/→/Home/End` extends it;
+  `Ctrl+A` selects all. The selection is drawn as a highlight.
+- Typing, paste, or `Backspace`/`Delete` over a selection **replaces** it.
+
+**Clipboard** (system clipboard, via the window)
+- `Ctrl+C` copies the selection, `Ctrl+X` cuts it, `Ctrl+V` pastes at the cursor
+  (replacing any selection).
+- `AltGr` is **not** treated as `Ctrl` (so `@`, `€`, … still type on layouts
+  where `AltGr` reports as `Ctrl+Alt`).
+
+**Focus** — clicking a `text_input` focuses it; clicking elsewhere (e.g. a button)
+blurs it. Re-focus programmatically with `focus(child)` — e.g. to keep the caret
+in a chat box after its Send button was clicked:
+
+```yaml
+- if:
+    condition: { eq: [{ call: [<.scene.child_clicked, "chat_send"] }, 1] }
+    then:
+      - call: [net_send_chat, msg]
+      - call: [<.scene.set_text, "chat_input", ""]
+      - call: [<.scene.focus, "chat_input"]     # keep typing without re-clicking
+```
+
+---
+
+## 5f. `textbox` — multi-line scrollable text
+
+A `type: textbox` is a **read-only, scrollable** multi-line text area — the widget
+for chat logs, event logs, and other growing text (a `label` can't scroll). It
+accepts the usual style fields (`font_size`, `color`, optional `bg_color` +
+`border_*`).
+
+- **Content:** set the whole text with `set_text(child, text)`. It wraps to the
+  box width and breaks on `\n` **and** `|` (so a pipe-joined line list works).
+- **Scrolling:** the engine windows the wrapped lines and draws a track + thumb
+  when the text overflows; mouse wheel over the box and dragging the thumb scroll
+  it. No AIML scroll bookkeeping.
+- **`tail: true`:** keeps the view stuck to the **bottom** (newest line) as the
+  text grows — ideal for chat. It releases while the user scrolls up and
+  re-follows once they scroll back to the bottom. `scroll_to_end(child)` pins it
+  to the bottom on demand (e.g. right after the user sends a message).
+
+```yaml
+- { name: chat_log, type: textbox, x: 276, y: 96, width: 496, height: 340,
+    font_size: 12, color: 0xDDDDDDFF, tail: true }
+```
+
+```yaml
+# on each poll: hand the full log to the box; windowing + tail are automatic
+- call: [<.scene.set_text, "chat_log", { call: [join_pipe, clog.lines] }]
+```
 
 ---
 

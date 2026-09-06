@@ -46,7 +46,7 @@
       - class: Service
         instance: svc
         sees: [logi:Logger]
-        functions:
+        methods:
           - def: { name: run, body: [{ call: [<.logi.write, 7] }, { call: [<.logi.write, 3] }] }
 
 - classgroup:
@@ -57,7 +57,7 @@
       - class: Service
         instance: svc
         sees: [logi:Logger]
-        functions:
+        methods:
           - def: { name: run, body: [{ call: [<.logi.write, 7] }, { call: [<.logi.write, 3] }] }
 
 - def:

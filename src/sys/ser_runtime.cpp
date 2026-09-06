@@ -351,16 +351,17 @@ static void dec(const uint8_t* blob, int& pos, int end,
 
     case AIML_TD_STRUCT: {
         int nf = n.param1, fi = n.param2;
-        SER_DBG("STRUCT idx=%d nf=%d off=%d sz=%d pos=%d depth=%d",
-                idx, nf, n.offset, n.elem_size, pos, g_ser_depth);
+        if (g_aiml_ser_debug && g_ser_depth <= 1)
+            fprintf(stderr, "[ser-DBG] STRUCT idx=%d nf=%d off=%d sz=%d pos=%d depth=%d\n",
+                    idx, nf, n.offset, n.elem_size, pos, g_ser_depth);
         g_ser_depth++;
         for (int i = 0; i < nf; i++) {
             const AimlTypeNode& f = ns[fi + i];
             int pos_before = pos;
             dec(blob, pos, end, fi + i, ns, nn, out + f.offset);
-            if (g_aiml_ser_debug && g_ser_depth <= 3)
-                fprintf(stderr, "[ser-DBG]   field[%d] kind=%d off=%d esz=%d pos=%d->%d bytes=%d\n",
-                        i, f.kind, f.offset, f.elem_size, pos_before, pos, pos - pos_before);
+            if (g_aiml_ser_debug && g_ser_depth <= 1)
+                fprintf(stderr, "[ser-DBG] d%d field[%d] kind=%d off=%d esz=%d pos=%d->%d bytes=%d\n",
+                        g_ser_depth, i, f.kind, f.offset, f.elem_size, pos_before, pos, pos - pos_before);
         }
         g_ser_depth--;
         break;
@@ -580,6 +581,79 @@ extern "C" int32_t aiml_ser_encoded_size(const void*         obj,
     tmp.reserve(256);
     enc(tmp, 0, nodes, n_nodes, (const uint8_t*)obj);
     return (int32_t)tmp.size();
+}
+
+// ── Debug dump ───────────────────────────────────────────────────────────────
+// A 4th walker (alongside enc/dec/fre): print a live struct's field values.
+// String fields are magic-checked before strlen so a corrupt/garbage pointer is
+// reported as **INVALID** instead of crashing the dump.  For hunting WASM decode
+// corruption.  Bound to `sys.dump(model)`.
+#define AIML_DUMP_STR_MAGIC 0x5354524Eu   // "STRN" — matches string_runtime.cpp
+static void dump_walk(const uint8_t* data, int idx, const AimlTypeNode* ns, int nn, int depth) {
+    if (!data || idx < 0 || idx >= nn || depth > 10) return;
+    const AimlTypeNode& n = ns[idx];
+    char ind[24]; int ni = depth * 2; if (ni > 22) ni = 22; memset(ind, ' ', ni); ind[ni] = 0;
+    switch (n.kind) {
+    case AIML_TD_I8:  { int8_t  v; memcpy(&v, data, 1); fprintf(stderr, "%si8=%d\n",  ind, (int)v); break; }
+    case AIML_TD_I16: { int16_t v; memcpy(&v, data, 2); fprintf(stderr, "%si16=%d\n", ind, (int)v); break; }
+    case AIML_TD_I32: { int32_t v; memcpy(&v, data, 4); fprintf(stderr, "%si32=%d\n", ind, v); break; }
+    case AIML_TD_I64: { int64_t v; memcpy(&v, data, 8); fprintf(stderr, "%si64=%lld\n", ind, (long long)v); break; }
+    case AIML_TD_STRING: {
+        char* str; memcpy(&str, data, sizeof(char*));
+        if (!str) { fprintf(stderr, "%sstr=NULL\n", ind); break; }
+        uint32_t magic = 0; memcpy(&magic, str - 8, 4);  // AimlStrHeader {u32 magic; u32 refcount}
+        if (magic != AIML_DUMP_STR_MAGIC)
+            fprintf(stderr, "%sstr=**INVALID** ptr=%p magic=0x%08x (not an aiml string → corrupt)\n",
+                    ind, (const void*)str, magic);
+        else {
+            size_t l = strlen(str);
+            fprintf(stderr, "%sstr len=%zu \"%.48s\"%s\n", ind, l, str, l > 48 ? "..." : "");
+        }
+        break;
+    }
+    case AIML_TD_STRUCT: {
+        int nf = n.param1, fi = n.param2;
+        fprintf(stderr, "%sstruct nf=%d off=%d sz=%d {\n", ind, nf, n.offset, n.elem_size);
+        for (int i = 0; i < nf; i++) {
+            const AimlTypeNode& f = ns[fi + i];
+            fprintf(stderr, "%s  [%d] off=%d kind=%d: ", ind, i, f.offset, f.kind);
+            dump_walk(data + f.offset, fi + i, ns, nn, depth + 1);
+        }
+        fprintf(stderr, "%s}\n", ind);
+        break;
+    }
+    case AIML_TD_LIST: {
+        const SerList* list = (const SerList*)data;
+        int esz = n.elem_size;
+        fprintf(stderr, "%slist count=%d esz=%d [\n", ind, list->size, esz);
+        int lim = (list->size < 16) ? list->size : 16;
+        for (int i = 0; i < lim; i++) {
+            fprintf(stderr, "%s  <%d> ", ind, i);
+            dump_walk((const uint8_t*)list->data + (size_t)i * esz, n.param1, ns, nn, depth + 1);
+        }
+        if (list->size > lim) fprintf(stderr, "%s  ...(%d more)\n", ind, list->size - lim);
+        fprintf(stderr, "%s]\n", ind);
+        break;
+    }
+    case AIML_TD_MAP:    { const SerMap*    m = (const SerMap*)data;    fprintf(stderr, "%smap count=%d\n", ind, m->size); break; }
+    case AIML_TD_BUFFER: { const SerBuffer* b = (const SerBuffer*)data; fprintf(stderr, "%sbuffer size=%d\n", ind, b->size); break; }
+    case AIML_TD_RAWBYTES: fprintf(stderr, "%sraw %d bytes\n", ind, n.param1); break;
+    case AIML_TD_PTR_STRUCT: {
+        const void* obj = nullptr; memcpy(&obj, data, sizeof(void*));
+        if (!obj) { fprintf(stderr, "%sptr=NULL\n", ind); break; }
+        fprintf(stderr, "%sptr-> ", ind);
+        dump_walk((const uint8_t*)obj, n.param1, ns, nn, depth + 1);
+        break;
+    }
+    default: fprintf(stderr, "%skind=%d (unhandled)\n", ind, n.kind); break;
+    }
+}
+
+extern "C" void aiml_ser_dump(const void* obj, const AimlTypeNode* nodes, int32_t n_nodes) {
+    if (!obj || !nodes || n_nodes <= 0) { fprintf(stderr, "[dump] (null obj/nodes)\n"); return; }
+    fprintf(stderr, "[dump] ===== BEGIN (n_nodes=%d) =====\n", n_nodes);
+    dump_walk((const uint8_t*)obj, 0, nodes, n_nodes, 0);
+    fprintf(stderr, "[dump] ===== END =====\n");
 }
 
 extern "C" char* aiml_ser_encode(const void*         obj,

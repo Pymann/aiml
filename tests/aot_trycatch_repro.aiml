@@ -1,0 +1,71 @@
+# AOT try/catch repro — mirrors the 9rooms server crash:
+# a function/method throws a user Exception subtype that is caught by-type in a
+# try/catch in the caller.  JIT (aiml -r) catches it fine; the AOT executable
+# (this build) aborts with "terminate called without an active exception".
+#
+# Expected (correct) output:
+#   CAUGHT free: boom from free fn
+#   CAUGHT method: boom from method
+#   MAIN DONE
+# static-check: off
+
+- class:
+    name: Exception
+    members:
+      - [message, string]
+
+- class:
+    name: MyException
+    extends: Exception
+
+# free function that throws
+- def:
+    name: boom
+    return: i32
+    body:
+      - throw: { new: MyException, message: "boom from free fn" }
+      - return: 0
+
+- class:
+    name: Svc
+    methods:
+      - def:
+          name: boom_method
+          return: i32
+          body:
+            - throw: { new: MyException, message: "boom from method" }
+            - return: 0
+      - def:
+          name: run
+          return: i32
+          body:
+            - try:
+                body:
+                  - decl: [res, i32, { call: [<.boom_method] }]
+                  - print: ["NO THROW method (BAD)"]
+                catch:
+                  - type: MyException
+                    var: exc
+                    body:
+                      - print: ["CAUGHT method: ${exc.message}"]
+            - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      # (1) free-function throw caught by-type
+      - try:
+          body:
+            - decl: [afree, i32, { call: [boom] }]
+            - print: ["NO THROW free (BAD)"]
+          catch:
+            - type: MyException
+              var: exc
+              body:
+                - print: ["CAUGHT free: ${exc.message}"]
+      # (2) method throw caught by-type inside the method's own try/catch
+      - decl: [svc, Svc]
+      - call: [svc.run]
+      - print: ["MAIN DONE"]
+      - return: 0

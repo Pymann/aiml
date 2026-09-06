@@ -26,7 +26,7 @@
       - class: Counter
         instance: driver
         sees: [engine.hidden]         # hidden is not exported → must fail
-        functions:
+        methods:
           - def: { name: tick, body: [{ call: [<.hidden.bump] }] }
 
 - def:

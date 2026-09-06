@@ -16,6 +16,7 @@
 #include "mirror_runtime.h"
 #include "ser_runtime.h"
 #include "ws_runtime.h"
+#include "string_runtime.h"   // aiml_str_dup — refcounted peer-ip return
 #include "time_runtime.h"
 
 #include <cstdlib>
@@ -41,8 +42,52 @@
 #ifndef __EMSCRIPTEN__
 #  include <execinfo.h>
 #  include <sys/syscall.h>
+#else
+#  include <emscripten.h>
 #endif
 #include <signal.h>
+
+/* ── Render-loop watchdog: RPC breadcrumb ─────────────────────────────────────
+ * send_and_await sets this to the in-flight method name while it blocks in the
+ * poll loop, and clears it on exit.  aiml_rt_frame_counter() (engine_runtime)
+ * is the heartbeat; when the JS watchdog sees the counter frozen it reads this
+ * breadcrumb to name the call the render loop is stuck inside.  A blocking RPC
+ * from inside the frame is the prime suspect for a WASM freeze. */
+namespace { const char* volatile g_rt_rpc_phase = ""; }
+/* Generic frame-phase breadcrumb, shared across runtime files (mirror + prefab).
+ * Each instrumented op sets it at entry and clears it ("") at exit; if the frame
+ * is STUCK inside an op it never reaches the clear, so the JS watchdog reads the
+ * op name.  External linkage so prefab_runtime can mark its render primitives. */
+extern "C" void aiml_rt_set_phase(const char* p) { g_rt_rpc_phase = p ? p : ""; }
+#if defined(__EMSCRIPTEN__)
+extern "C" EMSCRIPTEN_KEEPALIVE const char* aiml_rt_rpc_phase(void) {
+    const char* p = g_rt_rpc_phase;
+    return p ? p : "";
+}
+#else
+extern "C" const char* aiml_rt_rpc_phase(void) {
+    const char* p = g_rt_rpc_phase;
+    return p ? p : "";
+}
+#endif
+
+/* Emit a loud stack trace when an RPC misbehaves (timeout / decode failure).
+ * WASM: emscripten_get_callstack gives a mixed JS+wasm trace (needs -g for
+ * names).  Native: fall back to a plain marker line.  Shipped to the browser
+ * log-bridge via stderr. */
+static void aiml_rpc_stall_trace(const char* tag, const char* method, int32_t waited_ms) {
+#if defined(__EMSCRIPTEN__)
+    char buf[4096];
+    int flags = EM_LOG_C_STACK | EM_LOG_JS_STACK | EM_LOG_DEMANGLE | EM_LOG_NO_PATHS;
+    emscripten_get_callstack(flags, buf, (int)sizeof(buf));
+    fprintf(stderr, "\n=== AIML RPC %s: method='%s' waited=%dms ===\n%s\n",
+            tag, method ? method : "?", waited_ms, buf);
+#else
+    fprintf(stderr, "[rpc] %s: method='%s' waited=%dms\n",
+            tag, method ? method : "?", waited_ms);
+#endif
+    fflush(stderr);
+}
 
 /* ── Debug logging (AIML_DEBUG=1 env var) ─────────────────────────────────── */
 
@@ -98,6 +143,7 @@ struct AimlMirrorTransport {
 struct AimlMirrorPeer {
     AimlMirrorTransport transport;
     int32_t id = 0;
+    std::string ip;   /* dotted peer IP, captured at accept (for rate-limit / bans) */
 };
 
 struct AimlMirrorRegistered {
@@ -518,6 +564,7 @@ static void mirror_try_accept(AimlMirrorSession* s) {
         peer->transport.type   = MT_TCP;
         peer->transport.tcp_fd = client_fd;
         peer->id = (int32_t)s->peers.size() + 1;
+        peer->ip = inet_ntoa(addr.sin_addr);
         s->peers.push_back(peer);
 
         /* Send all known objects to new peer */
@@ -545,6 +592,7 @@ static void mirror_try_accept(AimlMirrorSession* s) {
         peer->transport.type   = s->listener.type;
         peer->transport.ws_ptr = ws_client;
         peer->id = (int32_t)s->peers.size() + 1;
+        peer->ip = aiml_ws_peer_ip(ws_client);
         s->peers.push_back(peer);
 
         /* Send all known objects to new peer */
@@ -639,7 +687,9 @@ static void mirror_recv_from_peers(AimlMirrorSession* s) {
                 if (pr == 0) break;                       /* no data ready */
                 if (pr < 0) { disconnected.push_back(peer); break; }
                 int32_t msg_len = 0;
+                const char* _rr_prev = g_rt_rpc_phase; g_rt_rpc_phase = "ws.recv_raw";
                 void* msg = aiml_ws_recv_raw(peer->transport.ws_ptr, &msg_len);
+                g_rt_rpc_phase = _rr_prev;
                 if (!msg || msg_len <= 0) { disconnected.push_back(peer); break; }
                 process_packet(s, peer, (const uint8_t*)msg, msg_len);
                 free(msg);
@@ -669,14 +719,17 @@ static AimlMirrorSession* mirror_make_session() {
     return new AimlMirrorSession();
 }
 
-void* aiml_mirror_listen(const char* url) {
-    return aiml_mirror_listen_max(url, 64);
-}
-
-void* aiml_mirror_listen_max(const char* url, int32_t max_peers) {
+// Shared listen implementation. For a wss:// URL, cert+key (PEM paths) are
+// required — the WSS server needs a certificate to complete a TLS handshake.
+static void* mirror_listen_impl(const char* url, int32_t max_peers,
+                                const char* cert, const char* key) {
     ParsedUrl pu = mirror_parse_url(url);
     if (!pu.ok) {
         fprintf(stderr, "[mirror] invalid url: %s\n", url ? url : "(null)");
+        return nullptr;
+    }
+    if (pu.type == MT_WSS && (!cert || !*cert || !key || !*key)) {
+        fprintf(stderr, "[mirror] wss:// requires a cert and key — use mirror.listen_tls(url, cert, key)\n");
         return nullptr;
     }
 
@@ -703,18 +756,42 @@ void* aiml_mirror_listen_max(const char* url, int32_t max_peers) {
         s->listener.type   = MT_TCP;
         s->listener.tcp_fd = srv;
     } else {
-        /* WS/WSS server */
+        /* WS/WSS server — WSS gets the hardened TLS defaults from ws_runtime */
         void* ws_srv = nullptr;
         if (pu.type == MT_WS)
             ws_srv = aiml_ws_server(pu.host.c_str(), pu.port);
         else
-            ws_srv = aiml_wss_server(pu.host.c_str(), pu.port, nullptr, nullptr);
+            ws_srv = aiml_wss_server(pu.host.c_str(), pu.port, cert, key);
         if (!ws_srv) { delete s; return nullptr; }
         s->listener.type   = pu.type;
         s->listener.ws_ptr = ws_srv;
     }
 
     return s;
+}
+
+void* aiml_mirror_listen(const char* url) {
+    return mirror_listen_impl(url, 64, nullptr, nullptr);
+}
+
+void* aiml_mirror_listen_max(const char* url, int32_t max_peers) {
+    return mirror_listen_impl(url, max_peers, nullptr, nullptr);
+}
+
+// wss:// listener with an explicit server certificate (PEM cert + key paths).
+void* aiml_mirror_listen_tls(const char* url, const char* cert, const char* key) {
+    return mirror_listen_impl(url, 64, cert, key);
+}
+
+// Dotted IP of a connected peer (by peer_id), captured at accept. "" if unknown.
+// Lets RPC handlers rate-limit / ban by source IP (peer_id comes from rpc_event).
+char* aiml_mirror_peer_ip(void* session, int32_t peer_id) {
+    AimlMirrorSession* s = static_cast<AimlMirrorSession*>(session);
+    if (!s) return aiml_str_dup("");
+    for (auto* peer : s->peers) {
+        if (peer && peer->id == peer_id) return aiml_str_dup(peer->ip.c_str());
+    }
+    return aiml_str_dup("");
 }
 
 void* aiml_mirror_connect(const char* url) {
@@ -834,6 +911,11 @@ void aiml_mirror_session_close(void* session) {
 void aiml_mirror_session_update(void* session) {
     auto* s = (AimlMirrorSession*)session;
     if (!s) return;
+    /* Watchdog: net_pump calls this every frame; if the WS recv path below
+     * emscripten_sleep()s and never rewinds, the render loop dies with this
+     * breadcrumb naming session.update as the culprit. */
+    const char* _su_prev = g_rt_rpc_phase; g_rt_rpc_phase = "mirror.session_update";
+    struct _SuGuard { const char* p; ~_SuGuard(){ g_rt_rpc_phase = p; } } _su_guard{_su_prev};
 
     if (!s->event_queue.empty() || !s->rpc_queue.empty())
         AIML_DBG("update peers=%d registered=%d events=%d rpcs=%d",
@@ -1284,9 +1366,16 @@ int32_t aiml_mirror_session_send_and_await(
           || !expect_method)
         return 0;
 
+    /* Watchdog breadcrumb: name the in-flight method while we block here so the
+     * render-loop watchdog can report exactly where a frozen frame is stuck.
+     * Save/restore the previous phase (send_and_await can be nested inside a
+     * render op that owns the outer breadcrumb). */
+    const char* prev_phase = g_rt_rpc_phase;
+    g_rt_rpc_phase = method;
+
     /* 1. encode + send the request — mirrors aiml_mirror_session_send_rpc_model */
     char* blob = aiml_ser_encode(req_obj, req_nodes, req_n_nodes);
-    if (!blob) return 0;
+    if (!blob) { g_rt_rpc_phase = prev_phase; return 0; }
     int32_t  payload_len = read_i32_le((const uint8_t*)blob);
     uint32_t total_len   = (uint32_t)(payload_len + 4);
     mirror_send_rpc_v2(s, net_id, method, /*arg_kind=*/1, arg_i32,
@@ -1296,6 +1385,11 @@ int32_t aiml_mirror_session_send_and_await(
     /* 2. poll-loop with 20ms ticks until match or timeout */
     const int32_t tick_ms = 20;
     int32_t tries = (timeout_ms <= 0) ? 1 : ((timeout_ms + tick_ms - 1) / tick_ms);
+    /* One-shot mid-wait trace: if the response has not arrived after ~2s the RPC
+     * is behaving oddly (server silent / lost) — dump a stack so we see it even
+     * before the full timeout. */
+    const int32_t warn_after_ms = 2000;
+    bool warned = false;
     /* Unrelated inbound RPCs (e.g. server-initiated pushes like chat) must NOT
      * be dropped — otherwise event-driven push is unreliable whenever a push
      * races an in-flight request/response.  Carry them across the scan and
@@ -1309,18 +1403,33 @@ int32_t aiml_mirror_session_send_and_await(
             AimlRpcEvent* ev = s->rpc_queue.front();
             s->rpc_queue.pop();
             if (ev && ev->method && std::strcmp(ev->method, expect_method) == 0) {
-                /* matched — decode into caller's slot */
+                /* method matches — try to decode into the caller's expected type */
                 int32_t rc = aiml_rpc_event_decode_into(ev, out_obj, out_nodes, out_n_nodes);
-                found = (rc == 0) ? 1 : 0;
-                break;
+                if (rc == 0) { found = 1; break; }
+                /* Method matched but the payload is a DIFFERENT type — a straggler
+                 * reply belonging to another request.  ALL replies share the
+                 * generic method "set_result", so the async lobby poller's
+                 * fire-only requests leave replies in the queue that a later
+                 * blocking send_and_await (deck editor, board) would otherwise
+                 * mis-consume and fail on.  The decoder validates the type
+                 * (rc != 0 on mismatch), so treat this as "not ours": carry it
+                 * back and keep waiting for the reply that decodes cleanly.       */
+                carry.push_back(ev);
+                continue;
             }
             carry.push_back(ev);
         }
         for (AimlRpcEvent* kept : carry) s->rpc_queue.push(kept);
         carry.clear();
-        if (found >= 0) return found;
+        if (found >= 0) { g_rt_rpc_phase = prev_phase; return found; }
+        if (!warned && (i * tick_ms) >= warn_after_ms) {
+            warned = true;
+            aiml_rpc_stall_trace("SLOW-NO-RESPONSE", method, i * tick_ms);
+        }
         time_sleep_ms(tick_ms);
     }
+    aiml_rpc_stall_trace("TIMEOUT", method, timeout_ms);
+    g_rt_rpc_phase = prev_phase;
     return 0;
 }
 

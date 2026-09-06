@@ -1,0 +1,35 @@
+# Isoliert f32→i64/i32-Konvertierung in WASM.  Erwartung: numerische Konvertierung
+# (64.0 → 64), NICHT Bit-Reinterpret (64.0-Bits = 1115619328).
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      # (a) f32-VARIABLE → i64
+      - decl: [fval, f32, 64.0]
+      - decl: [ival, i64, fval]
+      - print: ["(a) f32-var 64.0 -> i64 = ${ival} (erwartet 64)"]
+      - if: { condition: { neq: [ival, 64] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
+
+      # (b) f32-VARIABLE → i32
+      - decl: [ival32, i32, fval]
+      - print: ["(b) f32-var 64.0 -> i32 = ${ival32} (erwartet 64)"]
+      - if: { condition: { neq: [ival32, 64] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
+
+      # (c) inline f32-Ausdruck → i64
+      - decl: [jval, i64, { '*': [fval, 2.0] }]
+      - print: ["(c) f32-inline 128.0 -> i64 = ${jval} (erwartet 128)"]
+      - if: { condition: { neq: [jval, 128] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
+
+      # (d) größerer Wert (näher am MKP-Fall)
+      - decl: [big_f, f32, 118339.0]
+      - decl: [big_i, i64, big_f]
+      - print: ["(d) f32-var 118339.0 -> i64 = ${big_i} (erwartet 118339)"]
+      - if: { condition: { neq: [big_i, 118339] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
+
+      - if:
+          condition: { eq: [fails, 0] }
+          then: [{ print: ["PASS f32->int cast"] }]
+          else: [{ print: ["FAIL f32->int cast: ${fails}"] }]
+      - return: fails

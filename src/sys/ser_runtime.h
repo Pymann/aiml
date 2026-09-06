@@ -132,6 +132,16 @@ int32_t aiml_ser_encoded_size(const void*          obj,
 // previous value so callers can save/restore (nesting-safe).  See ser_runtime.cpp.
 int     aiml_ser_set_guard(int on);
 
+// Debug: walk a live struct via its type descriptor and print every field
+// (i-values, string content+len with an AimlStrHeader-magic sanity check, list
+// counts + element size, nested structs) to stderr.  String pointers whose
+// header magic doesn't match are reported as **INVALID** instead of being
+// strlen'd — so a corrupt/garbage pointer from a bad decode is surfaced rather
+// than crashing the dump.  Bound to the `sys.dump(model)` builtin.
+void    aiml_ser_dump(const void*          obj,
+                      const AimlTypeNode*  nodes,
+                      int32_t              n_nodes);
+
 #ifdef __cplusplus
 }
 #endif

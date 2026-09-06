@@ -1,0 +1,60 @@
+# static-check: off
+# Positive controls for rejecting pointer expressions in aggregate value lists.
+# Covers nested model-returning calls, explicit value copies, pointer lists,
+# field copies, and list growth past its initial capacity.
+- model: { name: Item, fields: [[marker, i32], [title, string]] }
+- model: { name: Holder, fields: [[item, Item]] }
+- def:
+    name: make_item
+    args: [[marker, i32]]
+    return: Item
+    body:
+      - decl: [value, Item]
+      - set: [value.marker, marker]
+      - set: [value.title, "payload"]
+      - return: value
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [items, list<Item>]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 12] }
+          body:
+            - call: [items.push, { call: [make_item, idx] }]
+            - set: [idx, { +: [idx, 1] }]
+      - decl: [copies, list<Item>]
+      - decl: [pointers, list<ptr<Item>>]
+      - set: [idx, 0]
+      - while:
+          condition: { lt: [idx, items.len] }
+          body:
+            - decl: [value, Item, { call: [items.get, idx] }]
+            - call: [copies.push, value]
+            - call: [pointers.push, { call: [items.get, idx] }]
+            - set: [idx, { +: [idx, 1] }]
+      - decl: [holder, Holder]
+      - set: [holder.item, { call: [make_item, 12] }]
+      - call: [copies.push, holder.item]
+      - if: { condition: { neq: [copies.len, 13] }, then: [{ return: 1 }] }
+      - set: [idx, 0]
+      - while:
+          condition: { lt: [idx, copies.len] }
+          body:
+            - decl: [value, ptr<Item>, { call: [copies.get, idx] }]
+            - if: { condition: { neq: [value.marker, idx] }, then: [{ return: 2 }] }
+            - if: { condition: { neq: [value.title, "payload"] }, then: [{ return: 3 }] }
+            - set: [idx, { +: [idx, 1] }]
+      - decl: [first, ptr<Item>, { call: [items.get, 0] }]
+      - set: [first.marker, 99]
+      - decl: [copied, ptr<Item>, { call: [copies.get, 0] }]
+      - decl: [shared, ptr<Item>, { call: [pointers.get, 0] }]
+      - if: { condition: { neq: [copied.marker, 0] }, then: [{ return: 4 }] }
+      - if: { condition: { neq: [shared.marker, 99] }, then: [{ return: 5 }] }
+      - decl: [dereferenced, list<Item>]
+      - call: [dereferenced.push, { '?': [first] }]
+      - decl: [explicit_value, ptr<Item>, { call: [dereferenced.get, 0] }]
+      - if: { condition: { neq: [explicit_value.marker, 99] }, then: [{ return: 6 }] }
+      - print: ["PASS model value/call/member copies, explicit dereference, pointer lists, growth and sharing"]
+      - return: 0

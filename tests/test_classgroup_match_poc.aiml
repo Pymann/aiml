@@ -59,7 +59,7 @@
         instance: match_svc
         sees: [cards]
         implements: [Resolver]
-        functions:
+        methods:
           # Uses a BASE method (<.pop, <.add_dmg, <.get_depth) AND a sees
           # collaborator (<.cards) — the shape a base method alone cannot express.
           - def:
@@ -75,7 +75,7 @@
       - class: CombatCore
         instance: combat
         sees: [match_svc:Resolver]
-        functions:
+        methods:
           # The real resolve_if_all_passed loop — NO svc param, calls across the
           # interface edge until the stack drains.
           - def:

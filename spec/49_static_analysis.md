@@ -38,6 +38,7 @@ The compiler currently supports these static structural checks:
 | String-literal comparison of a variable | same variable exactly `1` time | Warning |
 | `ptr<T>` pushed into a value `list<T>` | always-on | Compiler error |
 | Unused enum member (never referenced `Enum.Member`) | whole-program, gated | Warning |
+| Blocking call reachable from a per-frame `engine.run` callback | whole-program, gated | Warning |
 
 The current compiler also contains two hard OOP architecture rules:
 
@@ -55,6 +56,7 @@ The current `static_off`-controlled structural rules are:
 - shared-argument grouping (`"same_arg"`)
 - string-literal comparison (`"str_cmp"`)
 - pointer-indirection mismatch (`"ptr_indirection"`, see §19)
+- blocking call in frame context (`"frame_blocking"`, see §20)
 
 Additionally, one rule is controlled by an environment variable rather than
 a per-`def` opt-out:
@@ -224,6 +226,7 @@ Currently these options are implemented:
 - `"same_arg"`
 - `"str_cmp"`
 - `"ptr_indirection"`
+- `"frame_blocking"`
 
 `"lines"` disables the function size check for the affected
 function or method.
@@ -244,6 +247,10 @@ single-comparison warning are suppressed for that `def`.
 `"ptr_indirection"` disables the pointer-indirection mismatch warning (see §19)
 for the affected function or method — use it for a deliberate `ptr<ptr<T>>`
 out-parameter.
+
+`"frame_blocking"` disables the blocking-call-in-frame-context warning (see §20)
+for the affected function or method — use it for a deliberate one-shot blocking
+call that cannot recur per frame (e.g. a synchronous load on a transition screen).
 
 ### 5.4 Semantics
 
@@ -463,11 +470,13 @@ The current compiler state implements:
 - non-`const` top-level `decl` check (always-on, see §13)
 - `static_off` as `list<string>` on `FunctionDecl`
 - the concrete `static_off` options `"lines"`, `"args"`, `"same_arg"`,
-  `"str_cmp"`, `"ptr_indirection"`
+  `"str_cmp"`, `"ptr_indirection"`, `"frame_blocking"`
 - `ptr<T>`-into-value-`list<T>` push check (always-on, see §17)
 - unused enum member whole-program warning (gated, see §18)
 - pointer-indirection mismatch warning (always-on, `ptr_indirection`-opt-out,
   see §19)
+- blocking-call-in-frame-context warning (gated, `frame_blocking`-opt-out,
+  see §20)
 
 Additional static rules can later be added via further
 `static_off` keys or additional fixed compiler checks.
@@ -1101,3 +1110,108 @@ function/method — use it for a genuine `ptr<ptr<T>>` out-parameter.
 See `tests/test_ptr_indirection_warning.aiml` — a method over-indirects a free
 function (warning), a second suppresses it via `static_off`, a third passes the
 pointer correctly (no warning); the program compiles + runs (exit `0`).
+
+## 20. Blocking Call in Frame Context (always-on **warning**, `frame_blocking`-opt-out)
+
+A **blocking** call (one that suspends the thread — an RPC await, a sleep, a
+blocking socket read) that is statically reachable from a **per-frame callback**
+(the `update`/`render` functions handed to `engine.run`) is a latent stall: the
+render loop cannot make progress while the call is parked.  This is the AIML
+analogue of the Linux-kernel `might_sleep()`-in-atomic-context check — a
+"can-this-block?" **effect** propagated over the call graph, intersected with a
+"does-this-run-every-frame?" **context**.
+
+```text
+lobby_screen.aiml:143: blocking call `session.send_and_await` runs inside the
+per-frame render loop (engine.run → mm_menu_update → MainMenuApp.frame →
+LobbyScreen.render → refresh_presence).  A blocking RPC/sleep in the frame loop
+stalls rendering — under WASM asyncify it can freeze the page.  Make it async
+(`send_rpc` + `poll_rpc` across frames) or suppress with
+`static_off: ["frame_blocking"]`.
+```
+
+### 20.1 Rationale
+
+`engine.run` is portable: native runs a frame-limited `while` loop, the browser
+uses `emscripten_set_main_loop`.  A blocking primitive lowers, under WASM, to an
+`emscripten_sleep` (asyncify) that **unwinds the whole main-loop callback** and
+depends on a later rewind.  Doing this deep inside the per-frame call chain is
+fragile: it stutters the loop (each blocked call is dead wall-clock) and, under
+load, the asyncify rewind can fail to resume — the page freezes with no crash.
+Native tolerates the same code as a mere hitch (a real `usleep`), so the acute
+failure is WASM-only, but a blocking call in a render loop is bad UX on every
+target.  The fix is always the same: don't block the loop — fire the request
+(`send_rpc`) and consume the response over subsequent frames (`session.update`
++ `poll_rpc` + `decode_rpc`).
+
+### 20.2 The Blocking Effect
+
+A call is a **blocking primitive** if it is one of the compiler's known
+thread-suspending builtins.  The V1 seed set:
+
+- `session.send_and_await(...)` — the RPC request/await poll-loop (§44_5),
+- `time.sleep_ms(...)` / `time.sleep(...)`,
+- `ws.recv(...)` / any WebSocket op that blocks until a frame/open arrives.
+
+A user `def` is **blocking** if its body (transitively) calls a blocking
+primitive or another blocking `def`.  The property is inferred as a
+fixed-point over the direct-call graph — the same whole-program machinery used
+for the unused-enum and dead-prefab checks — so `refresh_presence` is blocking
+because it calls `net_list_online`, which calls `send_and_await`.
+
+### 20.3 The Frame Context
+
+A function is in **frame context** if it is a per-frame callback or is
+(transitively) called by one.  The seed is precise: `engine.run(win, update,
+render)` names its `update` and `render` callbacks as arguments, so the compiler
+marks exactly those two functions as frame-context roots and propagates the mark
+along direct calls (`<.method`, `obj.method`, free `fn`).  `LobbyScreen.render`
+is frame-context because `MainMenuApp.frame` calls it and `frame` is the
+`engine.run` update callback.
+
+### 20.4 The Violation
+
+The check reports the intersection: a **blocking** call lexically inside a
+**frame-context** function.  The diagnostic anchors at the offending call site
+and prints the reachability chain from the `engine.run` callback down to the
+blocking primitive, so the author sees exactly which frame path is at fault.
+Severity is a non-blocking **warning** (V1) — the build proceeds and runs; a
+future revision may escalate to an error on WASM targets.
+
+### 20.5 V1 Scope & Limits
+
+V1 is deliberately sound-by-under-approximation (no false positives, may miss):
+
+- **Direct calls only.** Both the blocking-effect closure and the frame-context
+  closure follow statically resolvable calls.  Calls through `ptr<Interface>`,
+  a `classgroup` component slot, a vtable, or a callback stored in a field are
+  **not** followed — such a hidden path is neither flagged nor propagated.  This
+  catches the common direct render-chain (the case that bit us) with zero false
+  alarms, at the cost of missing indirection-hidden blocking.
+- **V2 (documented, not implemented):** let an `interface` / `rpc:` method
+  declare the `blocking` effect in its signature (à la async-trait / Koka
+  effects); implementations must conform, and indirect calls then propagate the
+  effect precisely.
+
+### 20.6 Gating
+
+Like the other whole-program checks, the intersection is computed only when the
+call graph is complete: a top-level (non-library) real object/exe build, or a
+single file with no imports.  A warm-cache multi-file JIT run that may skip
+recompiling imports stays silent, to avoid a false "not reachable" (or false
+"not blocking") from an unseen edge.
+
+### 20.7 `static_off`
+
+`static_off: ["frame_blocking"]` on a `def` suppresses the warning for that
+function/method — use it for a deliberate one-shot blocking call that is
+acceptable to run on a dedicated loading/transition screen (e.g. a synchronous
+asset load guarded so it cannot recur per frame).
+
+### 20.8 Tests
+
+- `tests/test_frame_blocking_warning.aiml` — an `engine.run` update callback
+  whose transitive callee calls `time.sleep_ms` (warning naming the chain); a
+  second callback chain that opts out via `static_off: ["frame_blocking"]` (no
+  warning); a non-frame `def` that blocks freely (no warning — blocking is only
+  illegal *in* frame context); the program compiles + runs (exit `0`).

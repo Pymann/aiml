@@ -30,4 +30,20 @@ namespace ListImpl {
     void clear(CompilerContext& ctx, llvm::Value* listPtr);
     void insert(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, llvm::Value* val);
     void remove(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, llvm::Type* elemType);
+
+    // ── List-Builtins (doc/ideas/list_builtins_plan.md) ─────────────────────
+    // M1: search + bulk-append.  indexOf returns i32 (first match, -1 if none);
+    // count returns i32; extend appends value-copies of src into dst (snapshotting
+    // src length up front so self.extend(self) and realloc are safe).
+    llvm::Value* indexOf(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* needle,
+                         llvm::Type* elemType, const std::string& elemTypeName);
+    llvm::Value* count(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* needle,
+                       llvm::Type* elemType, const std::string& elemTypeName);
+    void extend(CompilerContext& ctx, llvm::Value* dstPtr, llvm::Value* srcPtr, llvm::Type* elemType);
+    // M2: in-place ordering.  sortList = stable insertion sort (ascending or
+    // descending); shuffle = Fisher-Yates via aiml_math_random_int.
+    void reverse(CompilerContext& ctx, llvm::Value* listPtr, llvm::Type* elemType);
+    void sortList(CompilerContext& ctx, llvm::Value* listPtr, llvm::Type* elemType,
+                  const std::string& elemTypeName, bool descending);
+    void shuffle(CompilerContext& ctx, llvm::Value* listPtr, llvm::Type* elemType);
 } // namespace ListImpl

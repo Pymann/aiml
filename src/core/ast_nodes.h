@@ -305,6 +305,10 @@ struct StructMember {
     std::string access = "public";
     bool is_const = false;
     bool is_volatile = false;
+    // classgroup sees-member: a wired COLLABORATOR pointer, not owned data.
+    // Serialization skips it (spec/58 §9: skip / re-inject on load), which also
+    // breaks the infinite ser-schema recursion of bidirectional sees cycles.
+    bool is_collaborator = false;
 
     // AionDB db_indexed modifier — see CompilerContext::StructMember mirror.
     // Parsed from 4th-position dict in model field declaration.
@@ -470,15 +474,44 @@ public:
     // External config the group needs (name, type) — becomes container members,
     // set at {new: <group>, param: val}, and readable by constructors in phase 0.
     std::vector<std::pair<std::string, std::string>> params;
+    // Required external instances — PORTS (spec/58 §6, `requires:`).  Each is a
+    // (port name, base class) pair.  A subgroup declares the parent instances it
+    // consumes; the embedding parent BINDS each port to one of its own instances
+    // (see `subgroupPorts`).  Inside the group, a `sees: [port]` edge resolves to
+    // a base-typed member wired to the bound parent instance (child→parent).
+    std::vector<std::pair<std::string, std::string>> ports;
     // Embedded child groups (member name, group type) — owned + constructed by
     // this group's container in phase 0.
     std::vector<std::pair<std::string, std::string>> subgroups;
+    // Port bindings per embedded subgroup: subgroup member name → list of
+    // (child port name, THIS group's instance name).  Populated from the optional
+    // 3rd map element of a `subgroups:` entry (`[fx, EffectRuntime, {cards: cards}]`).
+    std::map<std::string, std::vector<std::pair<std::string, std::string>>> subgroupPorts;
     // Instance names visible outside this group (its public surface).  Empty =
     // all instances exported (backwards-compatible with M1).
     std::vector<std::string> exports;
     std::vector<ClassGroupInstance> instances;
 
     std::string toString() const override { return "ClassGroupDecl(" + name + ")"; }
+};
+
+// One target of an external `groupmethods:` block: the coordination methods to
+// attach to a named instance of the target classgroup.
+struct GroupMethodsTarget {
+    std::string instanceName;
+    std::vector<std::unique_ptr<FunctionDecl>> methods;
+};
+
+// External `groupmethods:` block (spec/58) — lets an instance's coordination
+// methods live in their OWN file instead of inline in the classgroup body.  It
+// names a target `group:` and, per `instance:`, a `methods:` list.  Merged into
+// the target ClassGroupInstance.functions before checkClassGroups/synthesize, so
+// the methods are lifted onto the synthesized subclass exactly like inline ones.
+class GroupMethodsDecl : public Node {
+public:
+    std::string group;   // target classgroup name
+    std::vector<GroupMethodsTarget> targets;
+    std::string toString() const override { return "GroupMethodsDecl(" + group + ")"; }
 };
 
 /// Alias — a named alias for a primitive type with UI-metadata attached.

@@ -134,6 +134,26 @@ when an HTTP request is received, and can also be created independently from a s
 - set: [resp, { call: [http.head,   status_url] }]
 ```
 
+**`http.fetch_text(url: string) → string`** — a one-shot GET that returns just the
+response body as text (or `""` on error). Unlike `http.get`, it takes a plain URL
+**string** (no `url` object) and is available in the **WASM/browser** build, where it
+uses `window.fetch` — the browser client has no `http_client` (that is native-only),
+so this is the way a WASM build reads a small endpoint such as a discovery list.
+Natively it wraps `http.get`. Pair it with `sys.deserialize` to parse a served model.
+
+```aiml
+- decl: [raw, string, { call: [http.fetch_text, "/servers.json"] }]   # relative → same-origin in the browser
+- decl: [list, ptr<ServerList>, { call: [sys.deserialize, raw, "ServerList"] }]
+```
+
+> **HTTPS client verification (strict by default):** `http.get` / `http.fetch_text`
+> over `https://` verify the server certificate — chain against the system CA store
+> plus hostname match — so a self-signed, expired, or name-mismatched cert makes the
+> request fail (empty body / null response). This shares the one client-TLS insecure
+> toggle with the mirror wss client: `mirror.tls_insecure(1)` or `AIML_WSS_INSECURE=1`
+> disables it for local dev; `AIML_WSS_CA=/path/ca.pem` trusts a private CA. Plain
+> `http://` is unaffected. (Browser build: the browser enforces TLS itself.)
+
 ### 2.2 Request Builder (with headers, timeout, etc.)
 
 ```aiml
@@ -387,6 +407,11 @@ rest_client_handle    ← + base URL + auto JSON headers + relative paths
 | `start_async` | —                                                      | `thread_handle`     | Non-blocking (starts thread) |
 | `stop`        | —                                                      | —                   | Signals accept loop to stop |
 | `set_header`  | `name: string, val: string`                            | —                   | Global default header for all responses |
+| `set_timeout` | `secs: i32`                                            | —                   | Request-read timeout in seconds (slowloris defence; default 15) |
+| `secure_headers` | `hsts: i32`                                         | —                   | Add nosniff / X-Frame-Options / Referrer-Policy (+ HSTS if `hsts != 0`) to every response |
+| `require_client_cert` | `ca_path: string`                             | `i32`               | Enable mTLS: require + verify a client cert against the CA bundle PEM; `0` on success, `-1` on error (TLS server only) — see §3.11 |
+| `set_max_connections` | `n: i32`                                      | —                   | Cap concurrent handler threads (`0` = unlimited); excess connections get `503` and close — see §3.12 |
+| `set_rate_limit`      | `max: i32, window_secs: i32`                  | —                   | Per-IP fixed-window limit; excess connections get `429` and close (`max <= 0` disables) — see §3.12 |
 
 **Routing rules:**
 - Exact paths: `"/api/v1/users"` — matches only this exact path
@@ -427,6 +452,7 @@ No own listener — `start`/`stop`/`start_async` are not present.
 |----------|----------------|----------|-------------|
 | `header` | `name: string` | `string` | Request header value; null if missing |
 | `cookie` | `name: string` | `string` | Read request cookie; null if not present |
+| `client_ip` | —           | `string` | Trusted socket peer IP (dotted); **ignores** `X-Forwarded-For`/`X-Real-IP` — see §3.13 |
 
 ### 3.6 `http_response_handle` — Members and Methods (Server — Writing)
 
@@ -440,7 +466,7 @@ No own listener — `start`/`stop`/`start_async` are not present.
 | `body_bytes` | `buffer<u8>`         | Response body as bytes |
 | `body_file`  | `path`               | File as body — streamed during `send` (range-request-aware) |
 
-**Methods** (5):
+**Methods** (6):
 
 | Method        | Arguments          | Description |
 |---------------|--------------------|-------------|
@@ -449,6 +475,7 @@ No own listener — `start`/`stop`/`start_async` are not present.
 | `write_bytes` | `data: buffer<u8>` | Like `write`, but without userspace copy — passes `buf.ptr` directly to `send()` |
 | `flush`       | —                  | Flushes buffer (SSE keepalive) |
 | `close`       | —                  | Terminal chunk, ends chunked transfer; sets `resp_sent` |
+| `set_cookie`  | `name, value: string, [max_age: i32], [same_site: string]` | Append a `Set-Cookie` with secure defaults (`Path=/; HttpOnly; Secure; SameSite`) — see §3.13 |
 
 > **Note:** `resp_sent` is set by `send`, the first `write` call, and `close`.
 > Middleware can use this to skip the handler without needing a return value.
@@ -668,6 +695,26 @@ the `list<path>` is passed once at startup.
 - call: [srv.filesystem, "/static", dirs, opts]
 ```
 
+#### Byte-Range Requests (resumable / chunked downloads)
+
+Served files support HTTP byte ranges. Every response advertises
+`Accept-Ranges: bytes`. A request carrying a single `Range: bytes=START-END`
+header is answered with **`206 Partial Content`** — `Content-Range: bytes
+START-END/TOTAL` and a `Content-Length` covering just the requested slice.
+`START` and `END` may each be omitted (`bytes=1000-` = from 1000 to the end;
+`bytes=-500` = the last 500 bytes). A range wholly past the end returns
+**`416 Range Not Satisfiable`** with `Content-Range: bytes */TOTAL`. Multi-range
+requests (a comma-separated set) are not split — the whole file is sent as `200`.
+
+This lets clients **stream a large asset in chunks** instead of one giant fetch.
+The WASM client does exactly this for its multi-hundred-MB `client.data` bundle:
+a single `fetch().arrayBuffer()` of the whole file is buffered twice (stream +
+final `ArrayBuffer` ≈ 2× peak) and mobile browsers abort it under memory
+pressure (the server then logs a mid-stream broken pipe and the page stays
+black). Downloading 8 MB ranged chunks into one pre-allocated buffer keeps peak
+memory at ≈ `total + one chunk` and makes a transient abort cost a single
+chunk retry rather than the entire download. Test: `tests/test_http_range.aiml`.
+
 #### Example: Protected Downloads via `srv.group`
 
 ```aiml
@@ -683,6 +730,171 @@ the `list<path>` is passed once at startup.
 
 > **Note:** `filesystem` combines with `srv.group` for middleware authorization.
 > Range requests (`Content-Range`) and `ETag`/`Last-Modified` are handled automatically.
+
+> **Path-traversal safety:** the request path is URL-decoded and then rejected if it
+> contains `..`, a NUL byte, a backslash, or a leading `/` → `400 Bad Request`. As a
+> definitive backstop the resolved file is `realpath`-canonicalized and must lie under
+> the served directory, so **symlinks cannot escape the root**. Verified by
+> `tests/test_http_traversal.aiml` (`../`, `%2e%2e`, missing → 400/400/404).
+
+---
+
+## 3.10 Security Hardening (secure defaults)
+
+The server applies conservative limits so a single malicious/broken client cannot
+exhaust memory or pin a handler thread. Malformed or oversized requests get a clean
+protocol error and are **not** dispatched to any handler.
+
+| Condition | Limit (default) | Response |
+|---|---|---|
+| Request line / URI too long | 8 KiB | `414 URI Too Long` |
+| Too many header lines | 100 | `431 Request Header Fields Too Large` |
+| Total header bytes | 64 KiB | `431 Request Header Fields Too Large` |
+| Malformed / negative `Content-Length` | — | `400 Bad Request` |
+| `Content-Length` over cap | 8 MiB | `413 Payload Too Large` |
+| Slow/stalled request read (slowloris) | `set_timeout`, default **15 s** | `408 Request Timeout` |
+
+- The read timeout is both a per-`recv` socket timeout **and** a total request-read
+  deadline, so byte-at-a-time drip-feeding cannot hold a connection open indefinitely.
+  Tune it with `srv.set_timeout(secs)` (e.g. `1` in tests, `15`–`30` in production).
+- A validated `Content-Length` is required before the body buffer is allocated — an
+  attacker cannot make the server allocate an arbitrary amount of memory.
+
+```aiml
+- call: [srv.set_timeout, 20]     # 20s read timeout for public hosting
+```
+
+**Security response headers** (opt-in): `srv.secure_headers(hsts)` adds a conservative
+browser-facing bundle to **every** response — normal, middleware-short-circuit, **and**
+parser-reject errors:
+
+| Header | Value |
+|---|---|
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `Referrer-Policy` | `no-referrer` |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` (only when `hsts != 0`; use behind HTTPS) |
+
+Values already set via `set_header` win (put-if-absent), so any of these can be overridden.
+Opt-in because e.g. `X-Frame-Options: DENY` breaks legitimate framing and HSTS is sticky.
+
+```aiml
+- call: [srv.secure_headers, 1]   # nosniff + X-Frame-Options + Referrer-Policy + HSTS
+```
+
+See `tests/test_http_hardening.aiml` (413/400/431/408), `tests/test_http_traversal.aiml`
+(path traversal), `tests/test_http_secure_headers.aiml` (headers on 200 + errors).
+
+## 3.11 Mutual TLS — `srv.require_client_cert`
+
+By default an HTTPS server authenticates itself to the client but accepts any client.
+`srv.require_client_cert(ca_path)` turns on **mutual TLS**: every client must present a
+certificate signed by the CA bundle at `ca_path`, or the TLS handshake is rejected.
+Use it for machine-to-machine APIs and internal services where clients hold issued certs.
+
+- Must be called on a server created with `http.server_tls` (a plain `http.server` has no
+  `SSL_CTX`); returns `0` on success, `-1` if the server is non-TLS or the CA cannot be loaded.
+- `ca_path` is a PEM bundle of the CA(s) allowed to issue client certs — typically **not**
+  a public CA, but your own internal issuing CA.
+- Verification uses `SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT`, so a client with no
+  cert cannot complete the handshake.
+
+```aiml
+- decl: [srv, http_server_handle]
+- set: [srv, { call: [http.server_tls, "0.0.0.0", 8443, cert, key] }]
+- decl: [rc, i32, { call: [srv.require_client_cert, "/etc/myapp/client-ca.crt"] }]
+# rc == 0 → mTLS active; every request must now carry a CA-signed client cert
+- call: [srv.route, "GET", "/", handle_root]
+- call: [srv.start]
+```
+
+> **TLS 1.3 note:** with TLS 1.3, `SSL_connect` on a client that omits its certificate may
+> return *before* the server evaluates client auth (client auth completes after the client's
+> Finished). The rejection then surfaces on the client's first read — a cert-less client can
+> open the socket but never receives a valid response. `tests/test_http_mtls.aiml` asserts
+> exactly this: a cert-bearing client gets `200`, a cert-less client gets no valid response.
+
+## 3.12 Abuse Resistance (connection caps + rate limiting)
+
+The server uses one thread per connection. Two opt-in controls keep that model
+survivable under load and against floods. Both reject **before** a handler thread or
+TLS handshake runs, and both log the rejection to `stderr`.
+
+| Method | Arguments | Effect |
+|---|---|---|
+| `set_max_connections` | `n: i32` | At most `n` concurrent handler threads; over the cap a new connection is rejected (`503 Service Unavailable` on plain HTTP, immediate close on TLS). `0` = unlimited. |
+| `set_rate_limit` | `max: i32, window_secs: i32` | Per-IP fixed window: at most `max` connections per `window_secs` from one client IP; excess gets `429 Too Many Requests` (plain HTTP) / close (TLS). `max <= 0` disables; `window_secs <= 0` → 60. |
+
+```aiml
+- call: [srv.set_max_connections, 512]   # bound thread growth
+- call: [srv.set_rate_limit, 60, 60]     # ≤ 60 requests/minute per IP
+```
+
+- The connection cap is an atomic live-thread counter, decremented when each handler
+  returns — sequential traffic (each connection closes before the next) is never
+  falsely rejected; only genuine concurrency beyond `n` is shed.
+- The rate limiter is a fixed window keyed by client IP; the window itself acts as the
+  cooldown. Its table is pruned of stale windows when it grows, so a flood of unique
+  source IPs cannot grow it without bound.
+- On a TLS listener the client speaks TLS first, so a rejected connection is closed
+  rather than sent a plaintext status; the plaintext `503`/`429` applies to `http.server`.
+- These stack with the slowloris read timeout (§3.10): slow clients time out, floods are
+  rate-limited, and total concurrency is capped.
+
+See `tests/test_http_rate_limit.aiml` (3 allowed then `429`; cap does not block sequential traffic).
+
+## 3.13 Auth / Session Primitives
+
+First-class helpers for the secure patterns the REST docs already imply, so auth code
+does not rely on ad-hoc string handling.
+
+### Secure cookies — `resp.set_cookie`
+
+`resp.set_cookie(name, value, [max_age], [same_site])` appends a `Set-Cookie` header with
+safe-by-default attributes: **`Path=/; HttpOnly; Secure; SameSite`**.
+
+- `max_age` (seconds): `>= 0` → persistent cookie with `Max-Age`; omitted or `< 0` → session cookie.
+- `same_site`: `"Strict"` / `"Lax"` / `"None"`; omitted or invalid → `"Lax"`.
+- `HttpOnly` and `Secure` are **always** set (JS cannot read the cookie; it is sent over HTTPS
+  only). For a deliberately JS-readable cookie, set the header manually via `resp.headers`.
+- Multiple calls emit multiple `Set-Cookie` lines (the header map holds one value per key, so
+  cookies are tracked separately).
+- **Header-injection safe:** a `name`/`value` containing control chars or cookie delimiters
+  (`; , space CR LF`) is rejected (the call is a no-op) — an attacker-controlled value cannot
+  smuggle extra headers (HTTP response splitting).
+
+```aiml
+- decl: [token, string, { call: [math.random_hex, 32] }]   # CSPRNG session id (spec 43_0)
+- call: [resp.set_cookie, "sid", token, 3600, "Strict"]     # persistent, 1h, strict
+- call: [resp.set_cookie, "theme", "dark"]                   # session cookie, SameSite=Lax
+```
+
+### Constant-time secret compare — `hash.const_time_eq`
+
+`hash.const_time_eq(a, b) → i32` returns `1` if the two strings are equal, `0` otherwise,
+using `CRYPTO_memcmp` so the comparison time does not leak how many leading bytes matched.
+Use it in auth middleware to compare session tokens / API keys / HMAC tags — a normal `eq`
+short-circuits on the first mismatching byte and is exploitable by timing.
+
+```aiml
+- decl: [ok, i32, { call: [hash.const_time_eq, presented_token, stored_token] }]
+- if: { condition: { neq: [ok, 1] }, then: [ { set: [resp.status, 401] }, { call: [resp.send] } ] }
+```
+
+### Trusted client IP — `req.client_ip`
+
+`req.client_ip()` returns the **socket peer IP** captured at accept time. It deliberately
+**ignores `X-Forwarded-For` / `X-Real-IP`**: those headers are attacker-controlled and must
+never be trusted unless the app explicitly reads and validates them behind a known trusted
+proxy. This gives rate-limiting/audit/authorization code a spoof-proof source address by
+default; read `req.header("x-forwarded-for")` yourself only when you control the proxy in front.
+
+```aiml
+- decl: [ip, string, { call: [req.client_ip] }]   # e.g. "203.0.113.7" — never the XFF value
+```
+
+See `tests/test_http_auth_helpers.aiml` (secure cookie attributes + injection guard + client_ip
+ignores XFF + `const_time_eq`).
 
 ---
 
@@ -704,6 +916,16 @@ the `list<path>` is passed once at startup.
 `http.server_tls` combines `tls.*` internally for the transport with the same
 HTTP/1.1 parser as `http.server`.
 
+**Secure TLS defaults:** the `SSL_CTX` enforces a **minimum of TLS 1.2** (TLS 1.3 is
+negotiated automatically when the client supports it); SSLv2/SSLv3/TLS 1.0/TLS 1.1 and
+TLS-layer compression (CRIME) are disabled, and the server cipher preference is honoured.
+The same parser limits and read timeout as `http.server` (§3.10) apply over TLS.
+
+This exact policy is a single shared helper (`aiml_tls_harden_server_ctx`) applied to
+**both** the HTTPS server and the WebSocket-over-TLS server (`wss.server`, chapter 32_4),
+so the two transports never drift apart. For client-certificate authentication, see
+§3.11 (`srv.require_client_cert`).
+
 ---
 
 ## 5. Namespace Reference
@@ -720,6 +942,7 @@ HTTP/1.1 parser as `http.server`.
 |------|--------|-------------|
 | `{ call: [http.session] }` | `http_session_handle` | New persistent session (cookie jar, keep-alive) |
 | `{ call: [http.get, u] }` | `http_response_handle` | Single GET without session (`u: url`) |
+| `{ call: [http.fetch_text, url_str] }` | `string` | One-shot GET → body text; takes a string URL; WASM-capable (browser `fetch`) |
 | `{ call: [http.post, u, body] }` | `http_response_handle` | Single POST without session (`u: url`) |
 | `{ call: [http.put, u, body] }` | `http_response_handle` | Single PUT without session (`u: url`) |
 | `{ call: [http.delete, u] }` | `http_response_handle` | Single DELETE without session (`u: url`) |

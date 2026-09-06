@@ -1,0 +1,72 @@
+# Tests für hash.pbkdf2 (Passwort-KDF) + math.random_hex (CSPRNG).
+# Expected exit code: 0 (jeder Fehlschlag → sys.exit 1)
+
+# ── 1. PBKDF2 known-answer (RFC 6070 style, HMAC-SHA256) ───────────────────
+#     pbkdf2("password", "salt", 1) → 120fb6cf...be17b (32-byte key, 64 hex)
+- decl: [vector_key, string, { call: [hash.pbkdf2, "password", "salt", 1] }]
+- print: ["pbkdf2 vector: ${vector_key}"]
+- if:
+    condition: { eq: [vector_key, "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"] }
+    then:
+      - print: ["  [ok] known-answer matches"]
+    else:
+      - print: ["  [FAIL] known-answer mismatch"]
+      - call: [sys.exit, 1]
+
+# ── 2. Output length is always 64 hex chars ───────────────────────────────
+- decl: [key_len, i32, { call: [vector_key.len] }]
+- if:
+    condition: { eq: [key_len, 64] }
+    then:
+      - print: ["  [ok] key length 64"]
+    else:
+      - call: [sys.exit, 1]
+
+# ── 3. Deterministic for identical (password, salt, iterations) ────────────
+- decl: [det_one, string, { call: [hash.pbkdf2, "correct horse", "randomsalt", 5000] }]
+- decl: [det_two, string, { call: [hash.pbkdf2, "correct horse", "randomsalt", 5000] }]
+- if:
+    condition: { eq: [det_one, det_two] }
+    then:
+      - print: ["  [ok] deterministic"]
+    else:
+      - call: [sys.exit, 1]
+
+# ── 4. Different salt → different key ──────────────────────────────────────
+- decl: [salt_alt, string, { call: [hash.pbkdf2, "correct horse", "othersalt_", 5000] }]
+- if:
+    condition: { eq: [det_one, salt_alt] }
+    then:
+      - print: ["  [FAIL] different salt produced same key"]
+      - call: [sys.exit, 1]
+    else:
+      - print: ["  [ok] salt-sensitive"]
+
+# ── 5. math.random_hex length = 2*nbytes ──────────────────────────────────
+- decl: [rand_short, string, { call: [math.random_hex, 16] }]
+- decl: [rand_long,  string, { call: [math.random_hex, 32] }]
+- if:
+    condition: { eq: [{ call: [rand_short.len] }, 32] }
+    then:
+      - print: ["  [ok] random_hex(16) → 32 chars"]
+    else:
+      - call: [sys.exit, 1]
+- if:
+    condition: { eq: [{ call: [rand_long.len] }, 64] }
+    then:
+      - print: ["  [ok] random_hex(32) → 64 chars"]
+    else:
+      - call: [sys.exit, 1]
+
+# ── 6. Two draws differ (secure randomness, not a constant) ────────────────
+- decl: [rand_other, string, { call: [math.random_hex, 16] }]
+- if:
+    condition: { eq: [rand_short, rand_other] }
+    then:
+      - print: ["  [FAIL] two random_hex draws were equal"]
+      - call: [sys.exit, 1]
+    else:
+      - print: ["  [ok] random draws differ"]
+
+- print: ["all pbkdf2/random_hex checks passed"]
+- call: [sys.exit, 0]

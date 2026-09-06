@@ -201,6 +201,13 @@ Ping frames from the peer are automatically answered with pong.
 - call: [srv.start]
 ```
 
+**Secure TLS defaults:** the WSS server applies the *same* hardened `SSL_CTX` policy as the
+HTTPS server (chapter 32_2 §4) via the shared `aiml_tls_harden_server_ctx` helper —
+**minimum TLS 1.2**, SSLv2/SSLv3/TLS 1.0/TLS 1.1 and TLS-layer compression disabled, server
+cipher preference honoured. A missing or unreadable cert/key makes `ws.server_tls` fail
+(returns null) rather than starting a listener that cannot complete any handshake. The
+`tests/test_ws.aiml` Phase C wss loopback exercises this hardened path.
+
 ### 3.4 `ws_server_handle` Methods
 
 | Method              | Arguments              | Return          | Description |
@@ -258,6 +265,39 @@ A running HTTP server can upgrade individual connections to WebSocket:
 | `{ call: [ws.connect, u] }` | `ws_handle` | Connect to WS/WSS URL (`u: url`); scheme determines transport |
 | `{ call: [ws.server, host, port] }` | `ws_server_handle` | Plain WS server |
 | `{ call: [ws.server_tls, host, port, cert, key] }` | `ws_server_handle` | WSS server (`cert, key: path`) |
+
+---
+
+## 5.1 Binary Media Transport (implemented)
+
+The callback server model of §3 (`on_connect` / `on_binary` / `start`) is **not wired**
+in the current runtime.  Servers use the **imperative** model instead:
+
+```aiml
+- decl: [srv,  ws_handle, { call: [ws.server, "0.0.0.0", 8766] }]
+- decl: [conn, ws_handle, { call: [ws.accept, srv] }]   # blocks for one client
+- decl: [poll, i32,       { call: [ws.poll, conn, 0] }]  # 1=data ready, 0=timeout, -1=closed
+```
+
+Binary frames are moved with these primitives (all binary-safe — no NUL truncation):
+
+| Call | Return | Description |
+|------|--------|-------------|
+| `{ call: [buf.ws_send, conn] }` | `i32` | Send `buf`'s written bytes (`wIdx`) as one binary frame. Bytes sent, or `-1`. |
+| `{ call: [buf.ws_recv, conn] }` | `i32` | Receive the next frame **into** `buf` (updates `size`/`wIdx`, resets `rIdx=0`). Returns bytes received, `0` on close, `-1` error, `-2` if the frame exceeded `buf` capacity (buf filled to cap, remainder dropped). |
+| `{ call: [ws.send_kv_blob, conn, kv, key] }` | `i32` | **Zero-copy** send: streams the KV blob at `key` straight from the mmap'd WAL region to the socket as one binary frame — no intermediate AIML buffer. Bytes sent, `0` if key absent/empty, `-1` error. Pairs with `kv.set_blob`. |
+| `{ call: [buf.ws_send_range, conn, offset, len] }` | `i32` | Send `buf.data[offset .. offset+len]` as one binary frame (zero-copy slice). Chunk a large buffer into fixed-size frames without copying. |
+| `{ call: [buf.ws_recv_append, conn] }` | `i32` | Receive the next frame **appended** at `buf`'s write index (advances wIdx/size). Reassemble N chunk frames: `buf.alloc(cap)` once, then `buf.ws_recv_append(conn)` N times. Returns bytes / `0` close / `-1` err / `-2` overflow. |
+| `{ call: [ws.peer_ip, conn] }` | `string` | Dotted peer IP of an accepted connection (owned copy). For per-IP rate-limiting on a server's accept loop. |
+
+`buf.ws_send` / `buf.ws_recv` are **buffer methods** (not `ws.*` namespace calls) because
+the buffer must be passed by its real address so `ws_recv` can write the length back — a
+`ws.func(conn, buf)` form would receive the buffer struct by value and could not mutate it.
+
+**Chunked-streaming pattern** (media server): store each 64 KiB chunk under its own key
+(`blob:<hash>#<seq>`) via `kv.set_blob`, then on download loop `ws.send_kv_blob` over the
+keys.  The DB chunk equals the WS frame, so nothing is reassembled or copied in memory on
+the send side (mmap page → socket).  See `tests/test_ws_media.aiml`.
 
 ---
 

@@ -41,6 +41,23 @@ extern "C" void* aiml_asset_get_texture(const char* stem) {
     return tex;
 }
 
+// Register a runtime-created texture under a synthetic stem (e.g. "@art:<hash>")
+// so load_texture_cached / aiml_asset_get_texture resolve a sprite's texture_path
+// to it — the hook for dynamically decoded card artwork.  Idempotent overwrite.
+extern "C" void aiml_asset_register_texture(const char* stem, void* tex) {
+    if (!stem || !tex) return;
+    std::lock_guard<std::mutex> lk(g_mtx);
+    g_tex_cache[stem] = tex;
+}
+
+// True (1) if a texture is already registered under this stem — lets the client
+// skip re-fetch/decode when the artwork is cached.
+extern "C" int32_t aiml_asset_has_texture(const char* stem) {
+    if (!stem) return 0;
+    std::lock_guard<std::mutex> lk(g_mtx);
+    return g_tex_cache.count(stem) ? 1 : 0;
+}
+
 // SFX: full decode + cache.  One-shot playback via audio_sound.play().
 extern "C" void* aiml_asset_get_sfx(const char* stem) {
     if (!stem) return nullptr;
@@ -92,6 +109,18 @@ extern "C" void* aiml_asset_get_font(const char* stem, float size) {
     void* f = aiml_ui_load_font((void*)abs, size);
     g_font_cache[key] = f;
     return f;
+}
+
+// Resolve a fragment-shader STEM (e.g. "glitter") to its on-disk path for the
+// current target — abs path on native, preload path on wasm — exactly like
+// aiml_asset_get_texture/font.  The material system (prefab_runtime) calls this
+// so `shader: "<stem>"` works cross-target and is validated at compile time,
+// instead of a raw fopen path that silently fell back to the default shader.
+// Returns nullptr if the stem is not in the shader store.
+extern "C" const char* aiml_asset_shader_path(const char* stem) {
+    if (!stem) return nullptr;
+    return AIML::AssetScanner::instance().lookup_abs_path(
+        AIML::AssetKind::Shader, stem);
 }
 
 extern "C" void aiml_asset_init_runtime(const char* roots) {

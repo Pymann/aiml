@@ -79,6 +79,10 @@ EM_JS(char*, js_storage_host, (), {
     return ptr;
 });
 
+EM_JS(int, js_storage_is_secure, (), {
+    return (window.location.protocol === "https:") ? 1 : 0;
+});
+
 /* The EM_JS getter returns a malloc'd pointer; we cache it per key so the
  * returned C-string stays valid until the next call mutates that key. */
 static std::unordered_map<std::string, char*>& g_emjs_cache() {
@@ -129,6 +133,10 @@ extern "C" const char* aiml_storage_host(void) {
     if (last) { free(last); last = nullptr; }
     last = js_storage_host();
     return last ? last : "localhost";
+}
+
+extern "C" int32_t aiml_storage_is_secure(void) {
+    return js_storage_is_secure();
 }
 
 #else
@@ -231,6 +239,10 @@ extern "C" void aiml_storage_clear(void) {
 
 extern "C" const char* aiml_storage_host(void) {
     return "localhost";
+}
+
+extern "C" int32_t aiml_storage_is_secure(void) {
+    return 0;   /* native has no page protocol */
 }
 
 #endif

@@ -541,6 +541,18 @@ int32_t aiml_input_key_down    (const char* k) { return curr_key_active(k) ? 1 :
 int32_t aiml_input_key_pressed (const char* k) { return (curr_key_active(k) && !prev_key_active(k)) ? 1 : 0; }
 int32_t aiml_input_key_released(const char* k) { return (!curr_key_active(k) && prev_key_active(k)) ? 1 : 0; }
 
+/* System clipboard (text_input copy/paste).  Backed by the GLFW window; empty
+ * string when no window/clipboard is available. */
+extern "C" const char* aiml_input_clipboard_get(void) {
+    if (!g_input || !g_input->window) return "";
+    const char* s = glfwGetClipboardString(g_input->window);
+    return s ? s : "";
+}
+extern "C" void aiml_input_clipboard_set(const char* s) {
+    if (!g_input || !g_input->window || !s) return;
+    glfwSetClipboardString(g_input->window, s);
+}
+
 /* Single per-frame consume slot for a key name (aliases → their left key). */
 static int consume_slot_for(const char* name) {
     if (!name) return -1;
@@ -843,6 +855,7 @@ void aiml_input_drag_set_threshold(float px) {
 
 #elif defined(__EMSCRIPTEN__)
 /* ─── Browser implementation via emscripten HTML5 callbacks ──────────────── */
+#include <emscripten.h>          /* EM_ASM_DOUBLE (canvas getBoundingClientRect) */
 #include <emscripten/html5.h>
 #include <math.h>
 #include <deque>
@@ -884,16 +897,49 @@ struct BrowserInputState {
 
 static BrowserInputState* g_b = nullptr;
 
+/* Map a browser mouse event's viewport coords (clientX/Y) into the GL
+ * backing-store coordinate space the engine/UI hit-test in.
+ *
+ * We compute from clientX/Y minus the canvas bounding rect — NOT from the
+ * event's targetX/Y.  Reason: the mousemove/mouseup callbacks are registered on
+ * the WINDOW (so drags keep tracking when the cursor leaves the canvas), and for
+ * a window-target event Emscripten sets targetX == clientX (viewport-relative,
+ * with NO canvas offset).  The canvas is centered + letterboxed, so using
+ * targetX directly shifts hover/hit-testing by the letterbox margin (the "hover
+ * fires a bit next to the widget" bug).  Subtracting the canvas rect works for
+ * both window- and canvas-registered callbacks.  Then scale CSS→backing (the
+ * canvas is displayed CSS-scaled while its backing store stays at the logical
+ * size, e.g. 1280x720). */
+static void bin_event_xy(double clientX, double clientY, double* out_x, double* out_y) {
+    double rectL = EM_ASM_DOUBLE({
+        var c = document.getElementById('canvas');
+        return c ? c.getBoundingClientRect().left : 0;
+    });
+    double rectT = EM_ASM_DOUBLE({
+        var c = document.getElementById('canvas');
+        return c ? c.getBoundingClientRect().top : 0;
+    });
+    int    bw = 0, bh = 0;
+    double cw = 0.0, ch = 0.0;
+    emscripten_get_canvas_element_size("#canvas", &bw, &bh);
+    emscripten_get_element_css_size("#canvas", &cw, &ch);
+    double sx = (cw > 0.0) ? (double)bw / cw : 1.0;
+    double sy = (ch > 0.0) ? (double)bh / ch : 1.0;
+    *out_x = (clientX - rectL) * sx;
+    *out_y = (clientY - rectT) * sy;
+}
+
 static EM_BOOL bin_mousemove(int /*type*/, const EmscriptenMouseEvent* e, void* /*ud*/) {
     if (!g_b) return EM_FALSE;
-    g_b->curr_pos_x = e->targetX;
-    g_b->curr_pos_y = e->targetY;
+    double mx, my; bin_event_xy(e->clientX, e->clientY, &mx, &my);
+    g_b->curr_pos_x = mx;
+    g_b->curr_pos_y = my;
     /* drag accumulator update */
     for (int b = 0; b < AIML_MAX_MOUSE; b++) {
         auto& ds = g_b->drag[b];
         if (!ds.held) continue;
-        ds.acc_x = (float)e->targetX - ds.origin_x;
-        ds.acc_y = (float)e->targetY - ds.origin_y;
+        ds.acc_x = (float)mx - ds.origin_x;
+        ds.acc_y = (float)my - ds.origin_y;
         float dist = sqrtf(ds.acc_x * ds.acc_x + ds.acc_y * ds.acc_y);
         if (!ds.active && dist >= g_b->drag_threshold) {
             ds.active             = true;
@@ -907,10 +953,12 @@ static EM_BOOL bin_mousedown(int /*type*/, const EmscriptenMouseEvent* e, void* 
     int b = e->button; /* 0=left 1=middle 2=right */
     if (b < 0 || b >= AIML_MAX_MOUSE) return EM_TRUE;
     g_b->curr_mouse[b] = 1;
+    double mx, my; bin_event_xy(e->clientX, e->clientY, &mx, &my);
+    g_b->curr_pos_x = mx; g_b->curr_pos_y = my;
     auto& ds = g_b->drag[b];
     ds.held = true; ds.active = false;
     ds.started_this_frame = ds.ended_this_frame = false;
-    ds.origin_x = (float)e->targetX; ds.origin_y = (float)e->targetY;
+    ds.origin_x = (float)mx; ds.origin_y = (float)my;
     ds.acc_x = ds.acc_y = 0.f;
     return EM_TRUE;
 }
@@ -928,6 +976,57 @@ static EM_BOOL bin_wheel(int /*type*/, const EmscriptenWheelEvent* e, void* /*ud
     if (!g_b) return EM_FALSE;
     g_b->scroll_accum_x += (float)e->deltaX;
     g_b->scroll_accum_y += (float)e->deltaY;
+    return EM_TRUE;
+}
+
+/* ── Touch → synthesized left-mouse (button 0) ───────────────────────────────
+ * Mobile browsers deliver touch events, not mouse events (and do NOT reliably
+ * synthesize mouse events for canvas apps).  We map the FIRST touch point to
+ * mouse button 0 using the same clientX/Y→backing mapping as the mouse path, so
+ * taps, hover-position and press-move-release DRAGS all work with one finger.
+ * Returning EM_TRUE preventDefault()s → no page scroll/zoom/synthetic-mouse. */
+static EM_BOOL bin_touchstart(int /*type*/, const EmscriptenTouchEvent* e, void* /*ud*/) {
+    if (!g_b || e->numTouches <= 0) return EM_FALSE;
+    if (e->numTouches >= 2) {   /* two fingers = pan/zoom gesture (shell), not game
+                                 * input — release any in-progress single-tap press. */
+        g_b->curr_mouse[0] = 0; g_b->drag[0].held = false; g_b->drag[0].active = false;
+        return EM_FALSE;
+    }
+    double mx, my; bin_event_xy(e->touches[0].clientX, e->touches[0].clientY, &mx, &my);
+    g_b->curr_pos_x = mx; g_b->curr_pos_y = my;
+    g_b->curr_mouse[0] = 1;
+    auto& ds = g_b->drag[0];
+    ds.held = true; ds.active = false;
+    ds.started_this_frame = ds.ended_this_frame = false;
+    ds.origin_x = (float)mx; ds.origin_y = (float)my;
+    ds.acc_x = ds.acc_y = 0.f;
+    return EM_TRUE;
+}
+static EM_BOOL bin_touchmove(int /*type*/, const EmscriptenTouchEvent* e, void* /*ud*/) {
+    if (!g_b || e->numTouches <= 0) return EM_FALSE;
+    if (e->numTouches >= 2) return EM_FALSE;   /* two-finger pan/zoom → shell, not game */
+    double mx, my; bin_event_xy(e->touches[0].clientX, e->touches[0].clientY, &mx, &my);
+    g_b->curr_pos_x = mx; g_b->curr_pos_y = my;
+    auto& ds = g_b->drag[0];
+    if (ds.held) {
+        ds.acc_x = (float)mx - ds.origin_x;
+        ds.acc_y = (float)my - ds.origin_y;
+        float dist = sqrtf(ds.acc_x * ds.acc_x + ds.acc_y * ds.acc_y);
+        if (!ds.active && dist >= g_b->drag_threshold) {
+            ds.active = true; ds.started_this_frame = true;
+        }
+    }
+    return EM_TRUE;
+}
+/* Used for both touchend and touchcancel — the last touchmove already set the
+ * final position, so we only release button 0 here (touchend's `touches` list
+ * no longer contains the lifted finger). */
+static EM_BOOL bin_touchend(int /*type*/, const EmscriptenTouchEvent* /*e*/, void* /*ud*/) {
+    if (!g_b) return EM_FALSE;
+    g_b->curr_mouse[0] = 0;
+    auto& ds = g_b->drag[0];
+    if (ds.active) ds.ended_this_frame = true;
+    ds.held = false; ds.active = false;
     return EM_TRUE;
 }
 
@@ -956,11 +1055,27 @@ static EM_BOOL bin_keydown(int /*type*/, const EmscriptenKeyboardEvent* e, void*
     /* Swallow Backspace/Tab so the browser doesn't navigate or change focus
      * while the user types.  Also swallow Arrow keys / PageUp/PageDown /
      * Space so the page doesn't scroll while the user navigates a graph. */
+    if (strcmp(e->key, " ") == 0) {
+        /* Space is special: it is BOTH a printable char (text_input) AND a
+         * page-scroll trigger we must preventDefault (EM_TRUE below).  But
+         * preventDefault() on keydown suppresses the browser's follow-up
+         * `keypress` event — which is the ONLY source of our "text" event
+         * (see bin_keypress).  So the space would never reach a focused
+         * text_input.  Emit the "text" event here ourselves; bin_keypress
+         * skips space to avoid any double-insert on browsers that still fire
+         * keypress.  Ctrl-held space is ignored by the text consumer
+         * (apply_text_events_to_focus skips text events while Ctrl is down). */
+        AimlInputEvent tev = {};
+        tev.type = "text";
+        tev.char_buf[0] = ' ';
+        tev.char_buf[1] = '\0';
+        g_b->events.push_back(tev);
+        return EM_TRUE;
+    }
     if (strcmp(e->key, "Backspace") == 0 || strcmp(e->key, "Tab") == 0 ||
         strcmp(e->key, "ArrowUp")  == 0 || strcmp(e->key, "ArrowDown") == 0 ||
         strcmp(e->key, "ArrowLeft")== 0 || strcmp(e->key, "ArrowRight")== 0 ||
-        strcmp(e->key, "PageUp")   == 0 || strcmp(e->key, "PageDown")  == 0 ||
-        strcmp(e->key, " ")        == 0)
+        strcmp(e->key, "PageUp")   == 0 || strcmp(e->key, "PageDown")  == 0)
         return EM_TRUE;
     return EM_FALSE;
 }
@@ -981,6 +1096,10 @@ static EM_BOOL bin_keypress(int /*type*/, const EmscriptenKeyboardEvent* e, void
     /* keypress fires for printable chars. e->key is the typed character (UTF-8
      * sequence in e->key as a string). Use it as the text payload. */
     if (e->key[0] == '\0') return EM_FALSE;
+    /* Space is emitted from bin_keydown (its keypress is usually suppressed by
+     * our preventDefault); skip here so a browser that still fires keypress for
+     * space cannot double-insert it. */
+    if (e->key[0] == ' ' && e->key[1] == '\0') return EM_TRUE;
     /* Filter: only forward keys that look like a single visible character.
      * Skips names like "Enter", "Shift", "Control" which arrive on some
      * platforms. */
@@ -994,6 +1113,118 @@ static EM_BOOL bin_keypress(int /*type*/, const EmscriptenKeyboardEvent* e, void
     g_b->events.push_back(ev);
     return EM_TRUE;
 }
+
+/* ── Web soft-keyboard DOM bridge ────────────────────────────────────────────
+ * Canvas text_inputs are drawn on the GL surface, not real DOM elements, so
+ * mobile browsers never raise the soft keyboard for them.  The prefab runtime
+ * calls aiml_web_kbd_open/close when a text_input gains/loses focus; a tiny
+ * transparent REAL <input> is focused so the (Android) keyboard appears, and
+ * its beforeinput/composition events are translated into the SAME "text" /
+ * "key_down" events the queue already carries.  Character flow:
+ *   DOM <input>  →  aiml_input_web_text / aiml_input_web_key  →  events queue
+ *                →  apply_text_events_to_focus() (prefab_runtime)  →  canvas. */
+
+/* Push UTF-8 text as one or more "text" events.  char_buf holds only 7 usable
+ * bytes, so chunk on codepoint boundaries — each chunk inserts sequentially at
+ * the caret, so autocorrect words / pastes / emoji all arrive intact. */
+extern "C" EMSCRIPTEN_KEEPALIVE void aiml_input_web_text(const char* utf8) {
+    if (!g_b || !utf8) return;
+    const unsigned char* p = (const unsigned char*)utf8;
+    while (*p) {
+        AimlInputEvent ev = {};
+        ev.type = "text";
+        int n = 0;
+        while (*p && n < 7) {
+            unsigned char c = *p;
+            int clen = 1;
+            if      ((c & 0x80) == 0x00) clen = 1;
+            else if ((c & 0xE0) == 0xC0) clen = 2;
+            else if ((c & 0xF0) == 0xE0) clen = 3;
+            else if ((c & 0xF8) == 0xF0) clen = 4;
+            if (n + clen > 7) break;                 /* don't split a codepoint */
+            for (int i = 0; i < clen && *p; ++i) ev.char_buf[n++] = (char)*p++;
+        }
+        ev.char_buf[n] = '\0';
+        if (n == 0) break;                            /* malformed byte guard */
+        g_b->events.push_back(ev);
+    }
+}
+
+/* Push a control key ("Backspace", "Enter", "Delete", "Left", "Right") as a
+ * "key_down" event — consumed by apply_text_events_to_focus (prefab_runtime). */
+extern "C" EMSCRIPTEN_KEEPALIVE void aiml_input_web_key(const char* key) {
+    if (!g_b || !key) return;
+    AimlInputEvent ev = {};
+    ev.type = "key_down";
+    ev.key  = bin_keep_string(key);
+    g_b->events.push_back(ev);
+}
+
+/* Open/focus the hidden DOM <input> so the mobile soft keyboard appears, and
+ * (first call) install the beforeinput/composition translation listeners. */
+EM_JS(void, aiml_web_kbd_open, (int is_secret, int is_numeric, int is_email), {
+    var el = document.getElementById('aiml_kbd');
+    if (!el) {
+        el = document.createElement('input');
+        el.id = 'aiml_kbd';
+        el.setAttribute('autocomplete', 'off');
+        el.setAttribute('autocorrect', 'off');
+        el.setAttribute('autocapitalize', 'off');
+        el.setAttribute('spellcheck', 'false');
+        /* Tiny, transparent, parked off-canvas — but NOT display:none, so it
+         * stays focusable (that is what raises the keyboard). */
+        el.style.cssText = 'position:fixed;left:-2000px;top:0;width:1px;height:1px;' +
+                           'opacity:0;border:0;padding:0;margin:0;z-index:-1;';
+        document.body.appendChild(el);
+        var pushText = Module.cwrap('aiml_input_web_text', null, ['string']);
+        var pushKey  = Module.cwrap('aiml_input_web_key',  null, ['string']);
+        /* Zero-width sentinel: keeps the field non-empty so Backspace always
+         * raises a deleteContentBackward beforeinput even when the AIML field
+         * is empty (an empty <input> emits no delete event). */
+        var ZWSP = String.fromCharCode(0x200b);
+        var reset = function () { el.value = ZWSP; try { el.setSelectionRange(1, 1); } catch (e) {} };
+        el._composing = false;
+        el.addEventListener('compositionstart', function () { el._composing = true; });
+        el.addEventListener('compositionend', function (e) {
+            el._composing = false;
+            if (e.data) pushText(e.data);
+            reset();
+        });
+        el.addEventListener('beforeinput', function (e) {
+            if (el._composing) return;               /* commit handled at compositionend */
+            var t = e.inputType;
+            if (t === 'insertText' || t === 'insertFromPaste' ||
+                t === 'insertReplacementText' || t === 'insertFromComposition') {
+                if (e.data) pushText(e.data);
+                e.preventDefault();
+            } else if (t === 'insertLineBreak' || t === 'insertParagraph') {
+                pushKey('Enter'); e.preventDefault();
+            } else if (t === 'deleteContentBackward') {
+                pushKey('Backspace'); e.preventDefault(); reset();
+            } else if (t === 'deleteContentForward') {
+                pushKey('Delete'); e.preventDefault();
+            }
+        });
+        /* Hardware-keyboard / some-IME fallback (character keys still go through
+         * beforeinput above; this only covers control keys). */
+        el.addEventListener('keydown', function (e) {
+            if      (e.key === 'Enter')      { pushKey('Enter'); e.preventDefault(); }
+            else if (e.key === 'ArrowLeft')  { pushKey('Left');  e.preventDefault(); }
+            else if (e.key === 'ArrowRight') { pushKey('Right'); e.preventDefault(); }
+        });
+    }
+    el.type = is_secret ? 'password' : (is_email ? 'email' : 'text');
+    if (is_numeric) el.setAttribute('inputmode', 'numeric'); else el.removeAttribute('inputmode');
+    el.value = String.fromCharCode(0x200b);
+    try { el.focus({ preventScroll: true }); } catch (e) { el.focus(); }
+    try { el.setSelectionRange(1, 1); } catch (e) {}
+});
+
+/* Blur the hidden input → mobile keyboard hides. */
+EM_JS(void, aiml_web_kbd_close, (), {
+    var el = document.getElementById('aiml_kbd');
+    if (el) el.blur();
+});
 
 void aiml_input_init(void* /*win*/) {
     if (g_b) { delete g_b; g_b = nullptr; }
@@ -1009,6 +1240,12 @@ void aiml_input_init(void* /*win*/) {
     emscripten_set_mousedown_callback("#canvas", nullptr, EM_TRUE, bin_mousedown);
     emscripten_set_mouseup_callback  (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_mouseup);
     emscripten_set_wheel_callback    ("#canvas", nullptr, EM_TRUE, bin_wheel);
+    /* Touch → mouse-button-0 (mobile).  Start on the canvas; move/end on the
+     * window so a drag keeps tracking if the finger leaves the canvas. */
+    emscripten_set_touchstart_callback ("#canvas", nullptr, EM_TRUE, bin_touchstart);
+    emscripten_set_touchmove_callback  (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_touchmove);
+    emscripten_set_touchend_callback   (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_touchend);
+    emscripten_set_touchcancel_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_touchend);
     /* Keyboard goes on the window target — canvas elements need explicit
      * tabindex to receive key events, but window always works. */
     emscripten_set_keydown_callback (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_keydown);
@@ -1201,6 +1438,13 @@ void    aiml_input_drag_set_payload  (void* p) { if (g_b) g_b->drag_payload = p;
 void*   aiml_input_drag_get_payload  (void)    { return g_b ? g_b->drag_payload : nullptr; }
 void    aiml_input_drag_set_threshold(float t) { if (g_b) g_b->drag_threshold = t; }
 
+/* Browser clipboard: an in-page buffer so within-app copy/paste works during a
+ * session without the async navigator.clipboard permission flow.  The real
+ * system clipboard (navigator.clipboard.read/writeText) is a later polish. */
+static std::string g_em_clipboard;
+extern "C" const char* aiml_input_clipboard_get(void)         { return g_em_clipboard.c_str(); }
+extern "C" void        aiml_input_clipboard_set(const char* s) { g_em_clipboard = s ? s : ""; }
+
 #else /* __ANDROID__ */
 
 void    aiml_input_init       (void* /*win*/)   { /* TODO: platform */ }
@@ -1259,5 +1503,8 @@ float   aiml_input_drag_delta_y      (int32_t) { return 0.f; }
 void    aiml_input_drag_set_payload  (void*)    {}
 void*   aiml_input_drag_get_payload  (void)     { return nullptr; }
 void    aiml_input_drag_set_threshold(float)    {}
+
+extern "C" const char* aiml_input_clipboard_get(void)        { return ""; }
+extern "C" void        aiml_input_clipboard_set(const char*) {}
 
 #endif /* platform stubs */

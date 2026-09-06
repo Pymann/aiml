@@ -27,7 +27,7 @@
       - class: Ping
         instance: ping
         sees: [pong]
-        functions:
+        methods:
           - def:
               name: cross
               return: i32
@@ -37,7 +37,7 @@
       - class: Pong
         instance: pong
         sees: [ping]
-        functions:
+        methods:
           - def:
               name: cross
               return: i32

@@ -1,6 +1,17 @@
 # 58 — Class Groups (static component wiring)  [DRAFT]
 
 Status: **Design settled. M1 + M2 + M3 implemented + tested.**
+- **M2d** — subgroup **ports** (injected dependencies, §6.1): a subgroup declares
+  the external instances it consumes via `requires: [[port, BaseClass]]`; the
+  embedding parent **binds** each port to one of its own instances through the
+  optional 3rd map element of a `subgroups:` entry
+  (`subgroups: [[fx, EffectRuntime, { cards: cards }]]`).  A child instance may
+  then name the port in `sees` — a **child→parent** reference, the inverse of the
+  parent→child `subgroup.instance` edge, wired address-only in a deferred
+  `__wire_ports` pass so a ported child's `on_wired` never observes an unbound
+  port.  This lets a cohesive subsystem be its own subgroup that depends on a
+  shared parent service (9rooms: an effect cluster needing `cards`) without a
+  flat god-group.  Test: `tests/test_classgroup_subgroup_port.aiml`.
 - **M3** — instance-level `implements: [Iface]`: a group instance may implement an
   interface satisfied by its base methods **and** its group `functions`, so a
   coordination function can implement an interface method and be **called across
@@ -64,14 +75,14 @@ import cycles between mutually-referencing subsystems.
         instance: match_svc
         sees: [cards, effects, triggers]   # sibling instances this one may reference
         constructor: [init_bare, db_dir]
-        functions:                         # coordination methods added to THIS instance
+        methods:                         # coordination methods added to THIS instance
           - def: { name: drive_ai_combat,        args: [[match_id, string]], body: [ ... ] }
           - def: { name: resolve_declared_spell, args: [ ... ],              body: [ ... ] }
 
       - class: CombatPriority
         instance: combat
         sees: [match_svc]
-        functions:
+        methods:
           - def: { name: resolve_if_all_passed, args: [[req_email, string], [match_id, string]], body: [ ... ] }
 
     export: [match_svc, combat]            # instances visible to the outside / a parent group
@@ -89,7 +100,32 @@ Each `instances[]` entry names:
   instance, §6), or `inst:Iface` (interface-typed edge, §5.2).
 - `constructor` — a base-class method that initializes intrinsic state (optional,
   phase 0, sees-blind, §4).
-- `functions` — coordination methods added to this instance (optional).
+- `methods` — coordination methods added to this instance (optional).  Lifted onto
+  the synthesized subclass, where the `sees` members live, so they have the full
+  cross-edge API (§5.1).  (`functions` is accepted as a legacy alias.)
+
+### 1.1 Splitting methods across files — `groupmethods:`
+
+An instance's coordination `methods:` may live **outside** the group body — in its
+own file — via a top-level `groupmethods:` block that names the target `group:` and,
+per `instance:`, a `methods:` list:
+
+```yaml
+# phase_coordinator.aiml  (its own file)
+- groupmethods:
+    group: ServerRuntime          # target classgroup (defined elsewhere)
+    instances:
+      - instance: phaseco          # target instance
+        methods:
+          - def: { name: confirm_phase, ... }   # body uses <.matches (the sees member)
+```
+
+Before validation/synthesis the compiler folds every `groupmethods:` block into its
+target `ClassGroupInstance` (`mergeGroupMethods`), so an externally-defined method is
+**indistinguishable** from one written inline: it is lifted onto the synthesized
+subclass with the same full cross-edge API (§5.1).  This keeps the group body lean
+(just `class`/`instance`/`sees`) while each coordinator carries its own methods in its
+own file.  An unknown `group:` or `instance:` is a hard error.
 
 ## 2. Desugaring — an instance *is* a synthesized subclass
 
@@ -97,16 +133,20 @@ Each entry lowers to a real subclass. `match_svc` above becomes exactly:
 
 ```yaml
 - class:
-    name: match_svc
+    name: MatchRuntime_match_svc
     extends: MatchService
-    members:
-      - [cards,    ptr<CardService>]        # from sees
-      - [effects,  ptr<EffectProcessor>]
-      - [triggers, ptr<TriggerManager>]
+    members:                                 # ALL from sees — compiler-generated,
+      - [cards,    ptr<MatchRuntime_cards>]   # typed as the sibling's SUBCLASS
+      - [effects,  ptr<MatchRuntime_effects>] # (inheritor) → full API across the edge
+      - [triggers, ptr<MatchRuntime_triggers>]
     methods:
-      - def: { name: drive_ai_combat,        ... }   # body references self.* (base) + cards/effects/triggers
-      - def: { name: resolve_declared_spell, ... }
+      - def: { name: drive_ai_combat,        ... }   # a group function: body references
+      - def: { name: resolve_declared_spell, ... }   # self.* (base) + cards/effects/triggers
 ```
+
+You never write this — the compiler synthesizes it from `sees:` + `methods:`,
+and `__ctor` instantiates + wires every member.  (The member type is the
+sibling's subclass, not its base — §5.1.)
 
 Therefore:
 
@@ -170,12 +210,32 @@ type** decides what is callable across it.  Two forms:
 
 ### 5.1 Concrete (default) — `sees: [log]`
 
-The edge member is typed as the **base class** of the target instance
-(`ptr<CombatLog>`).  Rationale: the base class is already registered when the
-subclass is synthesized, so this resolves even for a `sees` cycle (address-only
-wiring), and it keeps layering honest — only the sibling's **base API** is
-callable across the edge (a sibling's group `functions` are not).  This is the
-default and covers same-group and cross-group (`subgroup.instance`) edges.
+The edge member is typed as the target instance's synthesized **subclass**
+(the *inheritor*, `ptr<CombatRuntime_log>`) — the exact instance the group
+constructs.  So the edge exposes the sibling's **full API**: its base methods
+**and** its group `functions`, reached by ordinary member resolution +
+inheritance.  This means a coordination `methods:` method can drive a
+sibling's coordination method across the edge **without** an interface-typed
+edge (§5.2) and **without** the sibling declaring `implements:`.
+
+The subclass type is often not yet synthesized when the seeing subclass is built
+(any `sees` cycle, e.g. `A sees B` and `B sees A`), so this relies on two
+properties: (a) a `ptr<T>` is an **opaque** pointer whose layout is independent
+of `T` — the pointee is resolved lazily at member-access, never at member
+declaration; and (b) a synthesized sees-member is a wired **collaborator**, so
+serialization **skips** it (§9) — which is what stops a bidirectional cycle from
+recursing forever while the ser schema is built.  Wiring stays address-only, so
+cycles need no diagnostic.  Covers same-group and cross-group
+(`subgroup.instance`) edges.
+
+**sees onto a base member (base-typed).**  If a sees target's name matches a
+member the base class **already declares** (`Consumer` has `dep: ptr<Dep>` and
+`sees: [dep]`), the classgroup wires that existing member instead of synthesizing
+a subclass-typed one.  That member keeps its declared (base) type, so this is the
+path for ordinary **base methods** that use `<.dep` (a base method is compiled
+against the base class and cannot see a subclass-synthesized member).  Use this
+when the collaboration lives in base methods; use a synthesized subclass-typed
+member (above) when it lives in group `functions`.
 
 **sees onto a base member.**  If a sees target's name matches a member the base
 class **already declares** (e.g. `Consumer` has `dep: ptr<Dep>` and `sees: [dep]`),
@@ -224,13 +284,13 @@ interface vtable, so the synthesized subclass does not re-declare `implements`:
   instance: match_svc
   sees: [cards]
   implements: [Resolver]          # satisfied by the group-function below
-  functions:
+  methods:
     - def: { name: resolve_top, return: i32, body: [ ... uses <.cards + base ... ] }
 
 - class: CombatCore
   instance: combat
   sees: [match_svc:Resolver]      # calls <.match_svc.resolve_top across the edge
-  functions:
+  methods:
     - def: { name: resolve_all, ... body: [ ... <.match_svc.resolve_top ... ] }
 ```
 
@@ -255,11 +315,81 @@ supported.)
 This yields real architectural boundaries and avoids the flat "god-group": large
 systems compose from small groups, each with an explicit surface.
 
+Plain subgroup visibility is **one-way**: the parent references a child's exported
+instance (`sees: [engine.counter]`), but a child instance cannot reach back into
+the parent.  Ports (§6.1) add the inverse edge.
+
+### 6.1 Ports — injected dependencies (child → parent)
+
+A subgroup often depends on a service the **parent** owns (the 9rooms effect
+cluster needs `cards`).  A subgroup declares such a dependency as a **port** and
+the embedding parent **binds** it — a typed, validated injection point, not an
+export.
+
+```yaml
+- classgroup:
+    name: EffectRuntime
+    requires: [[cards, CardSvc]]          # PORT: needs an external CardSvc instance
+    instances:
+      - class: EffectProc
+        instance: effects
+        sees: [cards, triggers]           # `cards` = the port (UP to parent); `triggers` = sibling
+      - class: TriggerMgr
+        instance: triggers
+        sees: [cards]
+    export: [effects, triggers]
+
+- classgroup:
+    name: ServerRT
+    instances:
+      - { class: CardSvc, instance: cards }
+      - class: MatchSvc
+        instance: matches
+        sees: [fx.effects, fx.triggers]   # parent → child exported (already §6)
+    subgroups: [[fx, EffectRuntime, { cards: cards }]]   # BIND port cards → parent instance cards
+```
+
+- **`requires: [[port, BaseClass]], …`** — group-level port declarations.  Each
+  port is a name plus the base class an eligible binding must satisfy.
+- **Binding** — a `subgroups:` entry may carry an optional 3rd element, a map
+  `{ port: parentInstance, … }`.  Every port required by the child group must be
+  bound exactly once, to an **instance of the embedding parent group** (not a
+  grandchild, not an arbitrary member) whose class is the port's base class or a
+  subclass of it.
+- **`sees: [port]`** — inside the subgroup a port is a first-class `sees` target.
+  Its edge member is typed as the port's declared **base** class (`ptr<CardSvc>`),
+  a base-typed collaborator: it exposes the service's base API, deliberately not a
+  child-specific subclass API.  Concrete same-group and cross-group edges keep
+  their existing subclass typing (§5.1).
+
+**Construction lifecycle.**  Ports wire address-only, like `sees`, but one phase
+later than a plain subgroup because the bound parent instances must exist first.
+The parent's `__ctor`:
+
+1. constructs the child subgroups (phase 0, their own `__ctor` runs — but a ported
+   child **defers** its `on_wired`, see below);
+2. allocates and constructs the parent's own instances (so every binding source
+   now has an address);
+3. assigns each configured binding into the child container's port member and
+   calls the child's synthesized **`__wire_ports`** helper, which back-patches
+   every ported child instance's port member and *then* runs that child's
+   deferred `on_wired` hooks — so a hook never observes an unbound port;
+4. performs the parent's own phase-1 `sees` wiring and phase-2 `on_wired`.
+
+A group **without** ports is unchanged: its `on_wired` still runs inside its own
+`__ctor` (§3).  The deferral applies only to a group that declares `requires:`.
+
 ## 7. Static checks (compiler-enforced)
 
-- every `sees` target names an instance in the same group (or, for a dotted
-  `subgroup.instance`, an **exported** instance of an embedded subgroup) —
-  unknown/unexported target is a hard error;
+- every `sees` target names an instance in the same group, a declared **port**
+  of the same group (§6.1), or, for a dotted `subgroup.instance`, an **exported**
+  instance of an embedded subgroup — unknown/unexported target is a hard error;
+- each `requires:` port name is non-empty, unique across the instance/subgroup/
+  port namespace, and names a known base class;
+- each subgroup port **binding** names a real port of the child group, is supplied
+  at most once, binds to an **instance of the embedding parent group** whose class
+  satisfies the port's base type, and every child port is bound (no unmet
+  dependency);
 - for an interface-typed edge `inst:Iface`, `Iface` must be a declared interface
   (its base implementing it is enforced by the upcast at wiring);
 - `instance` (and `subgroups` member) names are unique within a group;
@@ -281,10 +411,15 @@ systems compose from small groups, each with an explicit surface.
 
 ## 9. Open questions
 
-- **Resolved** (§5): edges are base-typed by default; interface typing is opt-in
-  per edge via `inst:Iface`.  (Instance-typing — calling a sibling's group
-  `functions` across an edge — is intentionally *not* offered; promote such a
-  method onto an interface instead.)
+- **Resolved** (§5.1): concrete edges are typed as the sibling's **subclass**
+  (inheritor), so a coordination method calls the sibling's base API *and* its
+  group `methods:` across the edge — the full API, no interface required.
+  Interface typing remains available as an opt-in per edge via `inst:Iface` (§5.2)
+  when a narrowed contract or a swappable implementation is wanted.
+- **Resolved** (§11): container + subclass types are visible in importing units
+  (import-time header synthesis); coordination methods are callable cross-unit via
+  the container (`g_runtime.<instance>.<method>`), retiring the per-instance `g_*`
+  global bridge.
 - Interface typing combined with a cross-group target (`subgroup.inst:Iface`) is
   not yet supported.
 - May a `functions[]` def be marked private to the instance vs part of its public
@@ -321,14 +456,14 @@ limit because coordination logic must live in the base file.
         instance: match_svc
         sees: [cards, effects, triggers, lobbies, decks, dsets]
         constructor: [init_bare, db_dir]
-        functions:
+        methods:
           - def: { name: drive_ai_combat,        args: [[match_id, string]], body: [ ... cards / effects / triggers ... ] }
           - def: { name: resolve_declared_spell, args: [ ... ],              body: [ ... ] }
 
       - class: CombatPriority
         instance: combat
         sees: [match_svc]
-        functions:
+        methods:
           - def:
               name: resolve_if_all_passed
               args: [[req_email, string], [match_id, string]]
@@ -347,3 +482,66 @@ Result:
   relieving the line limit;
 - the construction argument order that `MatchService.init` fixes by hand is now
   derived and validated from `sees`.
+
+## 11. Cross-unit visibility & the runtime-root (`g_runtime`) pattern
+
+### 11.1 The model
+
+A classgroup desugars to synthesized **types** — one `Group_<instance>` subclass per
+instance plus a `Group` **container** class (§2).  These types are ordinary classes
+and are **visible in every unit that (transitively) imports the file defining the
+classgroup**, exactly like a hand-written `class`.  A handler in another file may
+therefore write:
+
+```yaml
+- decl: [g_runtime, ptr<ServerRuntime>]        # the container type, imported
+...
+- call: [g_runtime.match_svc.play_card, pid, mid, card, zone]   # base API
+- call: [g_runtime.phaseco.confirm_phase, pid, mid]             # a group method
+```
+
+`g_runtime.<instance>` is the instance's **subclass** pointer, so the call has the
+instance's **full API** — its base methods *and* its group `methods:` (§5.1) — across
+unit boundaries.
+
+### 11.2 Linkage — one body, many forward-decls
+
+The synthesized method bodies (`__ctor`, each subclass's group `methods:`) are
+**emitted once**, in the unit that *defines* the classgroup (e.g. `server_state`).
+Every importing unit re-runs classgroup synthesis in **header-only** form during
+import processing: it registers the container + subclass **types** and
+**forward-declares** their methods, then links to the defining unit's emitted
+bodies — the same one-definition rule that governs a regular imported class and its
+methods.  The synthesized layout is deterministic, so every unit builds a
+structurally identical container/subclass and the pointers are ABI-compatible.
+
+`{new: <Group>}` (which runs `__ctor`) is normally issued only in the defining unit
+(e.g. `init_server_state`); importing units hold the resulting pointer via the
+container global and never re-construct it.
+
+### 11.3 The runtime-root pattern — retiring the `g_*` bridge
+
+Historically each instance was aliased to its own base-typed global
+(`g_matches: ptr<MatchService>`, `g_phaseco: ptr<PhaseCoordinator>`, …) because
+only base-typed globals were reachable across units, and base-typed globals can
+only call **base** methods.  That forced every coordination method to be a base
+method with a hand-declared `members: [matches]` (redundant with `sees`).
+
+With cross-unit container visibility (§11.1) the whole bridge collapses to **one**
+global:
+
+```yaml
+# server_state — ONE global instead of a dozen g_* aliases
+- decl: [g_runtime, ptr<ServerRuntime>]
+...
+- set: [g_runtime, { new: ServerRuntime, db_dir: db_dir }]
+
+# any handler, any file — full API on every instance
+- call: [g_runtime.matches.play_card, ...]
+- call: [g_runtime.phaseco.confirm_phase, ...]
+```
+
+Each coordinator now needs neither its own `g_*` global, its aliasing line in
+`init`, nor a `members:` declaration for what `sees` already grants — the sees
+member is synthesized on the subclass (§5.1) and reached through
+`g_runtime.<instance>`.

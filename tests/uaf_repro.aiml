@@ -1,0 +1,61 @@
+# Nested deep-copy repro matching 9rooms: player = {at:[players,i]} deep-copies a
+# PlayerState that CONTAINS a list<Entry> (spell_zone).  Each Entry has strings +
+# a map + a list<string>.  If the WASM deep-copy of nested list<Model>-in-Model
+# corrupts, player.entries[0].card_id becomes a wild pointer → .len (strlen) traps
+# — the exact browser crash (mock_state → fill_zone → find_mock → strlen).
+- model:
+    name: Entry
+    fields:
+      - [iid,         string]
+      - [card_id,     string]
+      - [open_cost,   map<string:i32>]
+      - [equipped_to, string]
+      - [items,       list<string>]
+
+- model:
+    name: Player
+    fields:
+      - [email,   string]
+      - [entries, list<Entry>]
+
+- def:
+    name: mk_entry
+    args: [[plr, ptr<Player>], [tag, string]]
+    body:
+      - decl: [ent, Entry]
+      - set:  [ent.iid,        "IID_${tag}"]
+      - set:  [ent.card_id,    "CARDID_MARKER_${tag}_ABCDEF"]
+      - call: [ent.open_cost.put, "red", 3]
+      - set:  [ent.equipped_to, "EQ_${tag}"]
+      - call: [ent.items.push, "ITEM_${tag}"]
+      - call: [plr.entries.push, ent]
+
+- def:
+    name: seed
+    args: [[players, list<Player>]]
+    body:
+      - decl: [plr, Player]
+      - set:  [plr.email, "me@test.com"]
+      - call: [mk_entry, {"&": [plr]}, "AAA"]
+      - call: [mk_entry, {"&": [plr]}, "BBB"]
+      - call: [players.push, plr]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [players, list<Player>]
+      - call: [seed, players]
+      - decl: [plr, Player, { at: [players, 0] }]        # deep-copy PlayerState (nested list<Entry>)
+      - decl: [total, i32, 0]
+      - decl: [eix, i32, 0]
+      - while:
+          condition: { lt: [eix, plr.entries.len] }
+          body:
+            - decl: [ent, Entry, { at: [plr.entries, eix] }]   # deep-copy Entry (like fill_zone)
+            - decl: [clen, i32, ent.card_id.len]               # strlen — traps if wild
+            - set:  [total, { +: [total, clen] }]
+            - print: ["entry ${eix}: card_id.len=${clen} \"${ent.card_id}\""]
+            - set:  [eix, { +: [eix, 1] }]
+      - print: ["PASS: nested deep-copy intact, total_len=${total}"]
+      - return: 0

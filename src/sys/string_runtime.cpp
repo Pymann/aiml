@@ -3,6 +3,7 @@
 #include <cstdlib>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 
 // Must match GenericList layout (list_impl.cpp / path_runtime.cpp)
 struct AimlListRaw {
@@ -42,6 +43,14 @@ extern "C" char* aiml_str_alloc(size_t len) {
     char* data = (char*)mem + sizeof(AimlStrHeader);
     data[len] = '\0';
     return data;
+}
+
+// aiml_dbg_strcmp: retained as a thin strcmp delegate.  The compiler emits a
+// direct `strcmp` for AIML string ==/!= again (the instrumented variant was a
+// WASM string-corruption hunt, root-caused to a serializer stride bug — see
+// container_abi.h).  Kept so the exported symbol/header decl stay valid.
+extern "C" int aiml_dbg_strcmp(const char* a, const char* b) {
+    return strcmp(a, b);
 }
 
 extern "C" char* aiml_str_dup(const char* s) {

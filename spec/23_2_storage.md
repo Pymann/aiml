@@ -15,6 +15,12 @@
 | `storage.remove(key)` | `(string) -> void` | Delete; no-op if missing. |
 | `storage.has(key)` | `(string) -> i32` | `1` if present, `0` if not. |
 | `storage.clear()` | `() -> void` | Wipe everything for this origin / namespace. |
+| `storage.host()` | `() -> string` | Web: the page hostname (`window.location.hostname`); native: `"localhost"`. |
+| `storage.is_secure()` | `() -> i32` | Web: `1` if the page is served over HTTPS (`location.protocol === "https:"`), else `0`; native: always `0`. |
+
+`storage.host` / `storage.is_secure` let a web build derive its server URL from the
+page it was served by — e.g. pick `wss://` on an HTTPS page (a browser blocks a plain
+`ws://` connection from an HTTPS page as mixed content) and `ws://` otherwise.
 
 ---
 

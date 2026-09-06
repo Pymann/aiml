@@ -1,0 +1,75 @@
+# test_img_resize.aiml — buffer.resize_crop enforces a fixed dimension (cover-crop),
+# and the editor pipeline decode → resize_crop → encode_webp → decode preserves it.
+#
+# Expected exit code: 0
+
+- decl: [pass, i32, 0]
+- decl: [fail, i32, 0]
+
+# ── Source: 16x8 RGBA, solid (100,50,200,255) ───────────────────────────────
+- decl: [src, buffer]
+- call: [src.alloc, 4096]
+- decl: [pix, i32, 0]
+- while:
+    condition: { "<": [pix, 128] }
+    body:
+      - call: [src.write, 100, u8]
+      - call: [src.write, 50, u8]
+      - call: [src.write, 120, u8]
+      - call: [src.write, 255, u8]
+      - set: [pix, { +: [pix, 1] }]
+
+# ── Cover-crop (mode 0) 16x8 (2:1) → 8x5: enforce exact dimension ────────────
+- decl: [dst, buffer]
+- call: [dst.alloc, 4096]
+- decl: [rsn, i32, { call: [dst.resize_crop, src, 16, 8, 8, 5, 0] }]
+- decl: [dlen, i32, dst.len]
+- call: [dst.seek, 0]
+- decl: [dp0, i32, { call: [dst.read, u8] }]
+- decl: [dp1, i32, { call: [dst.read, u8] }]
+- decl: [dp2, i32, { call: [dst.read, u8] }]
+- if:
+    condition: { "&&": [{ eq: [rsn, 160] }, { "&&": [{ eq: [dlen, 160] }, { "&&": [{ eq: [dp0, 100] }, { eq: [dp2, 120] }] }] }] }
+    then:
+      - print: ["PASS: resize_crop → 8x5 (${dlen}B), pixel=(${dp0},${dp1},${dp2})"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: resize rsn=${rsn} len=${dlen} px=(${dp0},${dp1},${dp2})"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── Stretch (mode 1) 16x8 → 10x6: fills exactly, no crop ─────────────────────
+- decl: [sxb, buffer]
+- call: [sxb.alloc, 4096]
+- decl: [sxn, i32, { call: [sxb.resize_crop, src, 16, 8, 10, 6, 1] }]
+- call: [sxb.seek, 0]
+- decl: [sx0, i32, { call: [sxb.read, u8] }]
+- decl: [sx2, i32, { call: [sxb.read, u8] }]
+- decl: [sx2b, i32, { call: [sxb.read, u8] }]
+- if:
+    condition: { "&&": [{ eq: [sxn, 240] }, { "&&": [{ eq: [sx0, 100] }, { eq: [sx2b, 120] }] }] }
+    then:
+      - print: ["PASS: stretch (mode 1) → 10x6 (${sxn}B), pixel=(${sx0},${sx2},${sx2b})"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: stretch sxn=${sxn} px=(${sx0},${sx2},${sx2b})"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── Full editor pipeline: resized RGBA → WebP → decode → dims preserved ──────
+- decl: [webp, buffer]
+- call: [webp.alloc, 65536]
+- decl: [enc, i32, { call: [webp.encode_webp, dst, 8, 5, -1] }]
+- decl: [back, buffer]
+- call: [back.alloc, 4096]
+- decl: [dims, i64, { call: [back.decode_image, webp] }]
+- decl: [blen, i32, back.len]
+- if:
+    condition: { "&&": [{ gt: [enc, 0] }, { "&&": [{ ">": [dims, 0] }, { eq: [blen, 160] }] }] }
+    then:
+      - print: ["PASS: pipeline encode(${enc}B)→decode → 8x5 (${blen}B) enforced"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: pipeline enc=${enc} dims=${dims} blen=${blen}"]
+      - set: [fail, { +: [fail, 1] }]
+
+- print: [""]
+- print: ["=== test_img_resize: ${pass} passed, ${fail} failed ==="]

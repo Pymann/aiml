@@ -228,6 +228,21 @@ OPENSSL_init_ssl(OPENSSL_INIT_LOAD_SSL_STRINGS | OPENSSL_INIT_LOAD_CRYPTO_STRING
 The system CA store is loaded via `SSL_CTX_set_default_verify_paths(ctx)` (reads
 `/etc/ssl/certs/` on Linux automatically).
 
+### 6.2a Shared server-hardening helpers
+
+`tls_runtime.cpp` exposes two `SSL_CTX*`-level helpers so every server transport shares one
+policy instead of re-deriving it:
+
+- `aiml_tls_harden_server_ctx(ctx)` — minimum **TLS 1.2**, disables SSLv2/SSLv3/TLS 1.0/TLS 1.1
+  and TLS-layer compression (CRIME), honours the server cipher preference. Applied by both the
+  HTTPS server (`http.server_tls`, chapter 32_2) and the WSS server (`ws.server_tls`, chapter 32_4).
+- `aiml_tls_require_client_cert(ctx, ca_path)` — enables mTLS
+  (`SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT`) against a CA bundle PEM; returns `0`/`-1`.
+  This backs `srv.require_client_cert` on the HTTPS server (chapter 32_2 §3.11).
+
+Keeping these in `tls_runtime` means the direct `tls.*` sockets, the HTTPS server, and the WSS
+server can never drift to different TLS floors.
+
 ### 6.3 Link Flags
 
 ```

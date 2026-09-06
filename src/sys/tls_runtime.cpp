@@ -49,6 +49,33 @@ struct AimlBuffer {
 
 static AimlTlsSocket* to_tls(void* p) { return static_cast<AimlTlsSocket*>(p); }
 
+// ── Shared server-side TLS policy ─────────────────────────────────────────────
+// Single source of truth for hardened server defaults, applied to any SSL_CTX.
+// Both the HTTPS server (http_runtime.cpp) and the WSS server (ws_runtime.cpp)
+// call this so the two transports share one policy:
+//   - minimum TLS 1.2 (TLS 1.3 negotiated automatically when both peers support it)
+//   - drop SSLv2/SSLv3/TLS1.0/TLS1.1 explicitly + disable TLS-layer compression (CRIME)
+//   - honour server cipher preference
+extern "C" void aiml_tls_harden_server_ctx(void* ssl_ctx) {
+    SSL_CTX* ctx = static_cast<SSL_CTX*>(ssl_ctx);
+    if (!ctx) return;
+    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+    SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3 |
+                             SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1 |
+                             SSL_OP_NO_COMPRESSION | SSL_OP_CIPHER_SERVER_PREFERENCE);
+}
+
+// Enable mutual-TLS on a server SSL_CTX: require a client certificate and verify
+// it against the CA bundle at `ca_path` (PEM). A handshake without a valid client
+// cert then fails. Returns 0 on success, -1 if the CA bundle cannot be loaded.
+extern "C" int aiml_tls_require_client_cert(void* ssl_ctx, const char* ca_path) {
+    SSL_CTX* ctx = static_cast<SSL_CTX*>(ssl_ctx);
+    if (!ctx || !ca_path || !*ca_path) return -1;
+    if (SSL_CTX_load_verify_locations(ctx, ca_path, nullptr) != 1) return -1;
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, nullptr);
+    return 0;
+}
+
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 extern "C" void* aiml_tls_socket(void) {

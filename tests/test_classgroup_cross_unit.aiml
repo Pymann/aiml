@@ -1,0 +1,20 @@
+# spec/58 §11 — a classgroup's synthesized container + subclass types are visible
+# in an IMPORTING unit: `{new: CrossRuntime}` and `rt.coord.combined` resolve here
+# even though CrossRuntime is DEFINED in tests/_cross/cg_lib.aiml.  This exercises
+# import-time header synthesis (types registered + methods forward-declared; the
+# bodies link from the defining unit).  Expected exit code: 0.
+
+- import: "tests/_cross/cg_lib.aiml"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [rtm, ptr<CrossRuntime>, { new: CrossRuntime }]   # container type, cross-unit
+      - set: [rtm.data.val, 21]
+      - decl: [res, i32, { call: [rtm.coord.combined] }]        # subclass method, cross-unit
+      - if:
+          condition: { neq: [res, 43] }
+          then: [{ print: ["FAIL cross-unit combined=${res} want 43"] }, { call: [sys.exit, 1] }]
+      - print: ["PASS test_classgroup_cross_unit"]
+      - return: 0

@@ -22,12 +22,23 @@
 | CRC32           | `hash.crc32`        | `i32`               | Checksums, protocol frames |
 | HMAC-SHA256     | `hash.hmac_sha256`  | 64 characters       | API signatures (AWS, webhooks) |
 | HMAC-SHA512     | `hash.hmac_sha512`  | 128 characters      | Token signing |
+| PBKDF2-HMAC-SHA256 | `hash.pbkdf2`    | 64 characters       | **Password storage** (deliberately slow) |
+
+> **Password storage:** use `hash.pbkdf2`, never a bare `hash.sha256`/`hash.sha512`.
+> Plain digests are far too fast and let an attacker brute-force a stolen hash
+> table. `hash.pbkdf2` stretches the work by a caller-chosen iteration count and
+> takes a per-user random salt (`math.random_hex`, spec 43_0). See §3.8.
 
 ---
 
 ## 2. Signatures
 
-All hash functions accept `string` **or** `buffer<u8>` as input.
+All hash functions accept `string` **or** `buffer<u8>` as input. For the hex digests
+`sha256`, `sha512`, `sha3_256`, `blake2b`, `blake2s`, `md5` a `buffer<u8>` argument is hashed
+**binary-safe over its exact byte length** (pointer + `size`), not as a C string — so bytes
+containing `0x00` hash correctly (verified by `tests/test_hash_buffer.aiml`). This makes
+`hash.sha256(buf)` the content-address of raw bytes without a per-type hash method. (The `_raw`
+variants and `keccak256`/`ripemd160` currently take `string` only.)
 
 ```
 hash.<algo>(data)              → string     hex-encoded digest
@@ -35,7 +46,19 @@ hash.<algo>_raw(data)          → buffer<u8> raw digest bytes (for chaining)
 hash.hmac_<algo>(key, msg)     → string     hex-encoded MAC
 hash.hmac_<algo>_raw(key, msg) → buffer<u8> raw MAC
 hash.crc32(data)               → i32        checksum as unsigned 32-bit value
+hash.pbkdf2(password, salt, iterations) → string  PBKDF2-HMAC-SHA256, 32-byte key as 64 hex chars
+hash.const_time_eq(a, b)       → i32        constant-time string compare: 1 = equal, 0 = not
 ```
+
+`hash.const_time_eq` compares two strings in **constant time** (`CRYPTO_memcmp`), so the compare
+time does not reveal how many leading bytes matched. Use it to compare secrets — session tokens,
+API keys, HMAC/CSRF tags — where a short-circuiting `eq` would leak information to a timing attack.
+Differing lengths return `0`.
+
+`hash.pbkdf2` takes two `string` arguments plus an `i32` iteration count. The
+iteration count is a work factor: higher is slower and more brute-force-resistant
+(a value `< 1` is floored to `100000`). The derived key is always 32 bytes
+(SHA-256 output size), returned as 64 lowercase hex characters.
 
 ---
 
@@ -151,6 +174,38 @@ Bitcoin addresses use `RIPEMD-160(SHA-256(pubkey))`:
 - print: ["BLAKE2s: ${b2s}"]
 ```
 
+### 3.8 Password Storage (PBKDF2)
+
+`hash.pbkdf2` is the correct primitive for storing user passwords. On sign-up,
+generate a random salt, derive the key, and store **salt + iterations + key**
+(never the password). On login, re-derive with the stored salt/iterations and
+compare.
+
+```aiml
+# ── Sign-up: derive and store ────────────────────────────────────────────
+- decl: [pw_salt,  string, { call: [math.random_hex, 16] }]        # 128-bit random salt
+- decl: [pw_iters, i32, 100000]                                    # work factor
+- decl: [pw_key,   string, { call: [hash.pbkdf2, "s3cret!", pw_salt, pw_iters] }]
+# persist { pw_salt, pw_iters, pw_key } for the user
+
+# ── Login: re-derive with the SAME salt + iterations and compare ──────────
+- decl: [try_key, string, { call: [hash.pbkdf2, "s3cret!", pw_salt, pw_iters] }]
+- if:
+    condition: { eq: [try_key, pw_key] }                           # string equality
+    then:
+      - print: ["login ok"]
+    else:
+      - print: ["login rejected"]
+```
+
+Deterministic for the same `(password, salt, iterations)`; a different salt (or
+password) yields a completely different key. Known-answer check
+(`hash.pbkdf2("password", "salt", 1)`):
+`120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b`.
+
+> ⚠️ Compare with a constant-time equality where available. Always use a fresh
+> per-user salt from `math.random_hex` — never a shared or hard-coded salt.
+
 ---
 
 ## 4. Namespace Reference
@@ -174,6 +229,8 @@ Bitcoin addresses use `RIPEMD-160(SHA-256(pubkey))`:
 | `{ call: [hash.hmac_sha256, key, msg] }` | `string, string` | `string` | HMAC-SHA256 hex |
 | `{ call: [hash.hmac_sha256_raw, key, msg] }` | `string\|buf, string\|buf` | `buffer<u8>` | HMAC-SHA256 raw bytes |
 | `{ call: [hash.hmac_sha512, key, msg] }` | `string, string` | `string` | HMAC-SHA512 hex |
+| `{ call: [hash.pbkdf2, password, salt, iterations] }` | `string, string, i32` | `string` | PBKDF2-HMAC-SHA256, 32-byte key as 64 hex chars |
+| `{ call: [hash.const_time_eq, a, b] }` | `string, string` | `i32` | Constant-time compare (1 = equal); for tokens/HMAC tags |
 
 ---
 
@@ -187,6 +244,8 @@ Bitcoin addresses use `RIPEMD-160(SHA-256(pubkey))`:
 | RIPEMD-160 | OpenSSL `EVP_ripemd160()` |
 | BLAKE2b, BLAKE2s | OpenSSL `EVP_blake2bX()` |
 | HMAC | OpenSSL `HMAC()` |
+| PBKDF2 | OpenSSL `PKCS5_PBKDF2_HMAC()` with `EVP_sha256()`, 32-byte output |
+| const_time_eq | OpenSSL `CRYPTO_memcmp()` (length-checked) |
 | MD5 | OpenSSL `EVP_md5()` |
 | CRC32 | zlib `crc32()` (or handrolled — no external dep) |
 | Keccak-256 | **Handrolled** — OpenSSL implements SHA-3 (≠ Keccak), Ethereum-compatible variant |

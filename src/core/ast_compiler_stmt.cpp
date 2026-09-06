@@ -7,11 +7,75 @@
 #include "string_utils.h"
 #include <algorithm>
 #include <iostream>
+#include <cstdlib>   // std::getenv (AIML_SIZETRACE)
+#include <vector>
 
 namespace AIML {
 namespace AST {
 
 namespace {
+
+// ── AIML_SIZETRACE (compile-time gated) ──────────────────────────────────────
+// The compiler reads AIML_SIZETRACE once (comma-separated function-name tokens,
+// or "*"/"all") and instruments only matching functions.  Matching is
+// substring-based, so a token like "collect_owned" also matches a mangled
+// "CardService_collect_owned".  Emits an aiml_sizetrace() call per traced symbol
+// (variable decl / assignment / call result) printing size + address + type.
+static bool sizetrace_active(const std::string& fname) {
+    static bool inited = false, all = false;
+    static std::vector<std::string> tokens;
+    if (!inited) {
+        inited = true;
+        const char* env = std::getenv("AIML_SIZETRACE");
+        if (env && *env) {
+            std::string v(env);
+            if (v == "*" || v == "all") { all = true; }
+            else {
+                size_t pos = 0;
+                while (pos <= v.size()) {
+                    size_t c = v.find(',', pos); if (c == std::string::npos) c = v.size();
+                    std::string t = v.substr(pos, c - pos);
+                    size_t s = t.find_first_not_of(" \t"), e = t.find_last_not_of(" \t");
+                    if (s != std::string::npos) tokens.push_back(t.substr(s, e - s + 1));
+                    pos = c + 1;
+                }
+            }
+        }
+    }
+    if (all) return true;
+    if (fname.empty()) return false;
+    for (auto& t : tokens) if (!t.empty() && fname.find(t) != std::string::npos) return true;
+    return false;
+}
+
+// Emit aiml_sizetrace(fname, sym, type, size, addr) for symName's current
+// symbol-table entry.  No-op if it has no alloca/element type (e.g. a global or
+// a decl that errored out).  size = compile-time DataLayout alloc-size;
+// addr = runtime storage pointer.
+static void emitSizeTrace(CompilerContext& ctx, const std::string& symName) {
+    auto it = ctx.symbol_table.find(symName);
+    if (it == ctx.symbol_table.end()) return;
+    auto& s = it->second;
+    if (!s.ir_alloca_inst || !s.ir_element_type) return;
+    llvm::Value* allocaV = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(s.ir_alloca_inst));
+    llvm::Type*  elemTy  = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(s.ir_element_type));
+    if (!allocaV || !elemTy) return;
+    uint64_t size = ctx.module.getDataLayout().getTypeAllocSize(elemTy);
+    std::string typeStr = s.typeName.empty() ? "?" : s.typeName;
+
+    llvm::PointerType* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+    llvm::Type*        i64t = ctx.builder.getInt64Ty();
+    llvm::FunctionCallee fn = ctx.module.getOrInsertFunction(
+        "aiml_sizetrace",
+        llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p, i8p, i64t, i8p}, false));
+    llvm::Value* fnameV = ctx.builder.CreateGlobalStringPtr(ctx.currentFunctionName, "sz_fn");
+    llvm::Value* symV   = ctx.builder.CreateGlobalStringPtr(symName, "sz_sym");
+    llvm::Value* typeV  = ctx.builder.CreateGlobalStringPtr(typeStr, "sz_ty");
+    llvm::Value* sizeV  = llvm::ConstantInt::get(i64t, size);
+    llvm::Value* addrV  = ctx.builder.CreatePointerCast(allocaV, i8p, "sz_addr");
+    ctx.builder.CreateCall(fn, {fnameV, symV, typeV, sizeV, addrV});
+}
+
 // Detects `decl: [name, T, { call: [fn, ...] }]` or `set: [target, { call: [fn, ...] }]`
 // where `fn` has a void return type.  Storing a void value into a typed location
 // produces malformed IR (LLVM's getPrefTypeAlignment recurses to stack overflow
@@ -105,8 +169,14 @@ void coerceOrStoreFieldDefault(CompilerContext& ctx,
 
 void Compiler::visitStatement(Stmt* stmt) {
     if (stmt->sourceLine > 0) ctx.currentLine = stmt->sourceLine;
-    if (auto decl = dynamic_cast<DeclStmt*>(stmt)) visitDeclStmt(decl);
-    else if (auto setStmt = dynamic_cast<SetStmt*>(stmt)) visitSetStmt(setStmt);
+    if (auto decl = dynamic_cast<DeclStmt*>(stmt)) {
+        visitDeclStmt(decl);
+        if (sizetrace_active(ctx.currentFunctionName)) emitSizeTrace(ctx, decl->varName);
+    }
+    else if (auto setStmt = dynamic_cast<SetStmt*>(stmt)) {
+        visitSetStmt(setStmt);
+        if (sizetrace_active(ctx.currentFunctionName)) emitSizeTrace(ctx, setStmt->target);
+    }
     else if (auto exprStmt = dynamic_cast<ExprStmt*>(stmt)) visitExprStmt(exprStmt);
     else if (auto retStmt = dynamic_cast<RetStmt*>(stmt)) visitRetStmt(retStmt);
     else if (auto blockStmt = dynamic_cast<BlockStmt*>(stmt)) visitBlockStmt(blockStmt);

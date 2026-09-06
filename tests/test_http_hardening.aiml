@@ -1,0 +1,73 @@
+# Expected exit code: 0
+# HTTP server hardening (spec/32_2 §Server hardening): parser limits (413 oversized
+# body, 400 malformed Content-Length, 431 header flood) + slowloris read timeout (408).
+# Uses raw TCP (net.*) to send deliberately malformed/partial requests.
+
+- def:
+    name: handle_root
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - set: [resp.status, 200]
+      - set: [resp.body, "ok"]
+      - call: [resp.send]
+
+# probe: open a raw TCP socket, send `raw`, return the response text (status line first).
+- def:
+    name: probe
+    args: [[raw, string]]
+    return: string
+    body:
+      - decl: [sock, socket_handle]
+      - set: [sock, { call: [net.socket, "tcp"] }]
+      - call: [net.connect, sock, "127.0.0.1", 23191]
+      - call: [net.send_string, sock, raw]
+      - decl: [rsp, string]
+      - set: [rsp, { call: [net.recv_string, sock, 256] }]
+      - call: [net.close, sock]
+      - return: rsp
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server, "127.0.0.1", 23191] }]
+      - call: [srv.set_timeout, 1]            # 1s read timeout (fast slowloris test)
+      - call: [srv.route, "GET", "/", handle_root]
+      - call: [srv.route, "POST", "/", handle_root]
+      - decl: [thr, thread_handle]
+      - set: [thr, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 300]
+      - decl: [fail, i32, 0]
+
+      # valid GET → 200
+      - decl: [r_ok, string, { call: [probe, "GET / HTTP/1.1\r\nHost: x\r\n\r\n"] }]
+      - if: { condition: { eq: [{ call: [r_ok.starts_with, "HTTP/1.1 200"] }, 0] }, then: [{ print: ["FAIL valid: ${r_ok}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # oversized Content-Length → 413 (no OOM allocation)
+      - decl: [r_big, string, { call: [probe, "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 999999999999\r\n\r\n"] }]
+      - if: { condition: { eq: [{ call: [r_big.starts_with, "HTTP/1.1 413"] }, 0] }, then: [{ print: ["FAIL oversized: ${r_big}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # malformed Content-Length → 400
+      - decl: [r_bad, string, { call: [probe, "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: abc\r\n\r\n"] }]
+      - if: { condition: { eq: [{ call: [r_bad.starts_with, "HTTP/1.1 400"] }, 0] }, then: [{ print: ["FAIL malformed-CL: ${r_bad}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # header flood (>100) → 431
+      - decl: [flood, string, "GET / HTTP/1.1\r\nHost: x\r\n"]
+      - decl: [hidx, i32, 0]
+      - while:
+          condition: { lt: [hidx, 120] }
+          body:
+            - set: [flood, "${flood}X-H${hidx}: v\r\n"]
+            - set: [hidx, { +: [hidx, 1] }]
+      - set: [flood, "${flood}\r\n"]
+      - decl: [r_flood, string, { call: [probe, flood] }]
+      - if: { condition: { eq: [{ call: [r_flood.starts_with, "HTTP/1.1 431"] }, 0] }, then: [{ print: ["FAIL header-flood: ${r_flood}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # partial request, never terminated → 408 after the 1s read timeout (slowloris)
+      - decl: [r_to, string, { call: [probe, "GET / HTTP/1.1\r\nHost: x\r\n"] }]
+      - if: { condition: { eq: [{ call: [r_to.starts_with, "HTTP/1.1 408"] }, 0] }, then: [{ print: ["FAIL timeout: ${r_to}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      - if: { condition: { neq: [fail, 0] }, then: [{ print: ["FAILED: ${fail}"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS http_hardening: 200 + 413(oversized) + 400(malformed CL) + 431(header flood) + 408(slowloris)"]
+      - return: 0

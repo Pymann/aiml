@@ -1,0 +1,74 @@
+# spec/58 — external `groupmethods:` block: an instance's coordination methods
+# live OUTSIDE the classgroup body (in their own block/file), folded in by
+# mergeGroupMethods() before synthesis.  The classgroup body stays lean (only
+# class/instance/sees); the lifted methods still get the full cross-edge API
+# (call the sibling's group function across the sees edge), exactly like inline
+# `methods:`.  Covers both directions of a bidirectional sees cycle.
+
+- class:
+    name: Alpha
+    members: [[aval, i32]]
+    methods:
+      - def:
+          name: base_a
+          return: i32
+          body: [{ return: <.aval }]
+
+- class:
+    name: Beta
+    members: [[bval, i32]]
+    methods:
+      - def:
+          name: base_b
+          return: i32
+          body: [{ return: <.bval }]
+
+# Lean group body — NO inline methods here.
+- classgroup:
+    name: SplitRuntime
+    instances:
+      - class: Alpha
+        instance: alpha
+        sees: [beta]
+      - class: Beta
+        instance: beta
+        sees: [alpha]
+
+# Coordination methods supplied externally (could be in separate files).
+- groupmethods:
+    group: SplitRuntime
+    instances:
+      - instance: alpha
+        methods:
+          - def:
+              name: grp_a
+              return: i32
+              body:
+                - decl: [bgv, i32, { call: [<.beta.grp_b] }]   # cross-edge group fn
+                - return: { +: [bgv, 1] }
+      - instance: beta
+        methods:
+          - def:
+              name: grp_b
+              return: i32
+              body:
+                - decl: [bbv, i32, { call: [<.base_b] }]        # own base method
+                - return: { +: [bbv, 10] }
+          - def:
+              name: cross_b
+              return: i32
+              body:
+                - return: { call: [<.alpha.grp_a] }             # back across the cycle
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [rtm, ptr<SplitRuntime>, { new: SplitRuntime }]
+      - set: [rtm.beta.bval, 100]
+      - decl: [gaa, i32, { call: [rtm.alpha.grp_a] }]
+      - if: { condition: { neq: [gaa, 111] }, then: [{ print: ["FAIL grp_a=${gaa} want 111"] }, { call: [sys.exit, 1] }] }
+      - decl: [cbb, i32, { call: [rtm.beta.cross_b] }]
+      - if: { condition: { neq: [cbb, 111] }, then: [{ print: ["FAIL cross_b=${cbb} want 111"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS test_classgroup_groupmethods"]
+      - return: 0

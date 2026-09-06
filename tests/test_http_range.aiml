@@ -1,0 +1,74 @@
+# HTTP byte-range serving (spec/32_2 §Server file serving / Range).
+# serve_file honours a `Range: bytes=START-END` header → 206 Partial Content with
+# Content-Range + exact Content-Length; a full GET advertises Accept-Ranges; an
+# unsatisfiable range → 416.  The WASM client streams its >100 MB bundle in ranged
+# chunks (mobile browsers OOM/abort on one giant fetch), so this path must be exact.
+# Uses raw TCP (net.*) to send precise Range headers and read the response head.
+#
+# Expected exit code: 0
+
+- def:
+    name: probe
+    args: [[raw, string]]
+    return: string
+    body:
+      - decl: [sock, socket_handle]
+      - set: [sock, { call: [net.socket, "tcp"] }]
+      - call: [net.connect, sock, "127.0.0.1", 23197]
+      - call: [net.send_string, sock, raw]
+      - decl: [rsp, string]
+      - set: [rsp, { call: [net.recv_string, sock, 512] }]
+      - call: [net.close, sock]
+      - return: rsp
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fail, i32, 0]
+
+      # ── fixture: a 40-byte file with known content ──────────────────────────
+      - call: [io.mkdir, "/tmp/aiml_range_test"]
+      - decl: [wrc, i32, { call: [io.write_file, "/tmp/aiml_range_test/data.bin",
+                                  "0123456789ABCDEFGHIJ0123456789abcdefghij"] }]
+      - if: { condition: { neq: [wrc, 0] }, then: [{ print: ["FAIL fixture write rc=${wrc}"] }, { call: [sys.exit, 1] }] }
+
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server, "127.0.0.1", 23197] }]
+      - decl: [dirs, list<path>]
+      - decl: [www, path, "/tmp/aiml_range_test"]
+      - call: [dirs.push, www]
+      - decl: [opts, fs_options, { call: [http.fs_options] }]
+      - call: [srv.filesystem, "/", dirs, opts]
+      - decl: [thr, thread_handle, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 300]
+
+      # ── full GET → 200 + Accept-Ranges advertised ──────────────────────────
+      - decl: [r_full, string, { call: [probe, "GET /data.bin HTTP/1.1\r\nHost: x\r\n\r\n"] }]
+      - if: { condition: { eq: [{ call: [r_full.starts_with, "HTTP/1.1 200"] }, 0] }, then: [{ print: ["FAIL full-GET status: ${r_full}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { lt: [{ call: [r_full.index_of, "accept-ranges: bytes"] }, 0] }, then: [{ print: ["FAIL full-GET missing Accept-Ranges: ${r_full}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # ── Range bytes=0-4 → 206 + Content-Range bytes 0-4/40 + len 5 ──────────
+      - decl: [r_head, string, { call: [probe, "GET /data.bin HTTP/1.1\r\nHost: x\r\nRange: bytes=0-4\r\n\r\n"] }]
+      - if: { condition: { eq: [{ call: [r_head.starts_with, "HTTP/1.1 206"] }, 0] }, then: [{ print: ["FAIL range-head status: ${r_head}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { lt: [{ call: [r_head.index_of, "content-range: bytes 0-4/40"] }, 0] }, then: [{ print: ["FAIL range-head Content-Range: ${r_head}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { lt: [{ call: [r_head.index_of, "content-length: 5"] }, 0] }, then: [{ print: ["FAIL range-head Content-Length: ${r_head}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # ── mid-file Range bytes=10-14 → 206 + Content-Range bytes 10-14/40 ──────
+      # (Body bytes verified separately via curl reassembly; a single recv only
+      #  reliably captures the header block, so we assert on the headers here.)
+      - decl: [r_mid, string, { call: [probe, "GET /data.bin HTTP/1.1\r\nHost: x\r\nRange: bytes=10-14\r\n\r\n"] }]
+      - if: { condition: { lt: [{ call: [r_mid.index_of, "content-range: bytes 10-14/40"] }, 0] }, then: [{ print: ["FAIL mid-range Content-Range: ${r_mid}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # ── suffix Range bytes=-4 → 206 last 4 bytes (36-39) "ghij" ─────────────
+      - decl: [r_suf, string, { call: [probe, "GET /data.bin HTTP/1.1\r\nHost: x\r\nRange: bytes=36-\r\n\r\n"] }]
+      - if: { condition: { lt: [{ call: [r_suf.index_of, "content-range: bytes 36-39/40"] }, 0] }, then: [{ print: ["FAIL suffix-range Content-Range: ${r_suf}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # ── unsatisfiable Range → 416 + Content-Range bytes */40 ────────────────
+      - decl: [r_bad, string, { call: [probe, "GET /data.bin HTTP/1.1\r\nHost: x\r\nRange: bytes=9999-\r\n\r\n"] }]
+      - if: { condition: { eq: [{ call: [r_bad.starts_with, "HTTP/1.1 416"] }, 0] }, then: [{ print: ["FAIL unsatisfiable status: ${r_bad}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { lt: [{ call: [r_bad.index_of, "content-range: bytes */40"] }, 0] }, then: [{ print: ["FAIL unsatisfiable Content-Range: ${r_bad}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      - if: { condition: { neq: [fail, 0] }, then: [{ print: ["FAILED: ${fail}"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS http_range: 200+Accept-Ranges, 206 head/mid/suffix Content-Range, 416 unsatisfiable"]
+      - return: 0

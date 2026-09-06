@@ -30,7 +30,13 @@ char*   aiml_hash_md5       (const char* s);
 
 int32_t aiml_hash_crc32     (const char* s);
 
+/* Length-aware hex digest over raw bytes (binary-safe). algo: "sha256","sha512",
+ * "sha3_256","blake2b","blake2s","md5". Used when hash.<algo> gets a buffer<u8>. */
+char*   aiml_hash_hex_buf(const char* algo, const void* data, int32_t len);
+
 char*   aiml_hash_hmac_sha256(const char* key, const char* msg);
+char*   aiml_hash_pbkdf2(const char* password, const char* salt, int32_t iterations);   /* password KDF; pair with math.random_hex salt */
+int32_t aiml_hash_const_time_eq(const char* a, const char* b);   /* constant-time secret compare → 1/0 */
 char*   aiml_hash_hmac_sha512(const char* key, const char* msg);
 
 /* ── raw-bytes output (heap-alloc'd AimlHashBuffer*, cast to void*) ────── */

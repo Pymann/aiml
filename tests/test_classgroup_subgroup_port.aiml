@@ -1,0 +1,102 @@
+# M2d — subgroup PORTS (injected dependencies).  A subgroup declares the external
+# instances it consumes via `requires: [[port, BaseClass]]`; the parent BINDS each
+# port to one of its own instances at embed time
+# (`subgroups: [[fxg, EffectRuntime, { cards: cards }]]`).  Inside the subgroup a
+# `sees: [cards]` edge then resolves to the port — a CHILD instance reaching UP to
+# a PARENT instance, which plain subgroups (parent→child only) cannot express.
+#
+# This is the 9rooms shape: an effect subsystem (a cohesive cluster) that depends
+# on the shared `cards` service owned by the parent runtime, exports the surface
+# the parent drives, and threads NO service pointer.
+#
+# Spec: spec/58_classgroups.md §6 (subgroups — ports / injected dependencies).
+
+# ── shared parent service ───────────────────────────────────────────────────
+- class:
+    name: CardSvc
+    members:
+      - [tag, i32]
+    methods:
+      - def: { name: set_tag, args: [[val, i32]], body: [{ set: [<.tag, val] }] }
+      - def: { name: get_tag, return: i32, body: [{ return: <.tag }] }
+
+# ── child-cluster classes ───────────────────────────────────────────────────
+- class:
+    name: EffectProc
+    members: []
+    methods: []
+
+- class:
+    name: TriggerMgr
+    members: []
+    methods: []
+
+# ── the subgroup: needs `cards` from whoever embeds it ───────────────────────
+- classgroup:
+    name: EffectRuntime
+    requires: [[cards, CardSvc]]          # PORT: an external CardSvc instance
+    instances:
+      - class: EffectProc
+        instance: effects
+        sees: [cards, triggers]           # `cards` = the port (UP to parent); `triggers` = sibling
+        methods:
+          # reads the parent service across the port, and drives a sibling
+          - def:
+              name: read_via_port
+              return: i32
+              body:
+                - return: { call: [<.cards.get_tag] }
+          - def:
+              name: read_via_sibling
+              return: i32
+              body:
+                - return: { call: [<.triggers.port_plus_one] }
+      - class: TriggerMgr
+        instance: triggers
+        sees: [cards]                      # also reaches the port
+        methods:
+          - def:
+              name: port_plus_one
+              return: i32
+              body:
+                - return: { +: [{ call: [<.cards.get_tag] }, 1] }
+    export: [effects, triggers]
+
+# ── the parent runtime: owns `cards`, embeds the subgroup, binds the port ─────
+- classgroup:
+    name: ServerRT
+    instances:
+      - class: CardSvc
+        instance: cards
+      - class: CardSvc
+        instance: driver                   # a parent instance that drives the child
+        sees: [fxg.effects]                # parent → child exported instance (already supported)
+        methods:
+          - def:
+              name: drive
+              return: i32
+              body:
+                - return: { call: [<.effects.read_via_port] }
+    subgroups: [[fxg, EffectRuntime, { cards: cards }]]   # BIND port cards → parent instance cards
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [srt, ptr<ServerRT>, { new: ServerRT }]
+      - call: [srt.cards.set_tag, 42]
+      # child reads the parent service through the port
+      - decl: [rva, i32, { call: [srt.fxg.effects.read_via_port] }]
+      - if: { condition: { neq: [rva, 42] }, then: [{ print: ["FAIL read_via_port=${rva} exp 42 — port not wired to parent cards"] }, { call: [sys.exit, 1] }] }
+      # child → sibling → port chain (triggers also reaches the port)
+      - decl: [rvb, i32, { call: [srt.fxg.effects.read_via_sibling] }]
+      - if: { condition: { neq: [rvb, 43] }, then: [{ print: ["FAIL read_via_sibling=${rvb} exp 43 — sibling/port chain broken"] }, { call: [sys.exit, 1] }] }
+      # parent instance drives the child, which reads through the port
+      - decl: [rvc, i32, { call: [srt.driver.drive] }]
+      - if: { condition: { neq: [rvc, 42] }, then: [{ print: ["FAIL driver.drive=${rvc} exp 42 — parent→child→port broken"] }, { call: [sys.exit, 1] }] }
+      # a later parent write is visible through the port (same object, not a copy)
+      - call: [srt.cards.set_tag, 7]
+      - decl: [rvd, i32, { call: [srt.fxg.effects.read_via_port] }]
+      - if: { condition: { neq: [rvd, 7] }, then: [{ print: ["FAIL post-write read_via_port=${rvd} exp 7 — port is a copy, not the wired instance"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS classgroup_subgroup_port: subgroup port injects a parent instance into child instances (child→parent dependency)"]
+      - return: 0

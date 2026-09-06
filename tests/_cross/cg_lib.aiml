@@ -1,0 +1,25 @@
+# Helper for test_classgroup_cross_unit.aiml (spec/58 §11 + §1.1).  Defines a
+# classgroup in ITS OWN file; the test imports it and reaches the synthesized
+# container + subclass types cross-unit.  CoordSvc is an EMPTY base — `sees: [data]`
+# SYNTHESIZES the `data` member (no `members:` line), and its coordination method
+# lives in a SEPARATE file (cg_coord_methods.aiml) via `groupmethods:`, merged
+# cross-file.  Mirrors the 9rooms shape (server_state imports the coordinator file).
+# Not run standalone (tests/_*/ is skipped by the runner).
+
+- import: "tests/_cross/cg_coord_methods.aiml"   # groupmethods: CoordSvc.combined
+
+- class:
+    name: DataSvc
+    members: [[val, i32]]
+    methods:
+      - def: { name: doubled, return: i32, body: [{ return: { +: [<.val, <.val] } }] }
+
+- class: { name: CoordSvc }        # EMPTY base — sees synthesizes `data`; method via groupmethods
+
+- classgroup:
+    name: CrossRuntime
+    instances:
+      - { class: DataSvc,  instance: data }
+      - class: CoordSvc
+        instance: coord
+        sees: [data]

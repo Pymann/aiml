@@ -49,6 +49,12 @@
 # Sleep (Execution Pause)
 - call: [time.sleep_ms, 1000] # Sleep 1s
 
+# Format an epoch-ms timestamp as "YYYY-MM-DD HH:MM" (UTC).  Returns a string.
+# Reusable for any i64 millisecond timestamp (e.g. time.now).  Works natively
+# and in the WASM build (gmtime_r/strftime under the hood).
+- decl: [when, string]
+- set: [when, { call: [time.format_utc, ts] }]   # e.g. "2026-09-02 18:07"
+
 # 3. System Environment
 # Exit Progam
 - call: [sys.exit, 1]
