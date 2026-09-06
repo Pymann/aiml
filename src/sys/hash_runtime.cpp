@@ -1,6 +1,11 @@
 #include "hash_runtime.h"
+#include "sha256.h"         // aiml_sha256_hex — shared portable sha256 (native + WASM)
+#include "math_runtime.h"   // aiml_math_random_hex decl (C linkage); impl here (OpenSSL)
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
+#include <openssl/rand.h>
+#include <openssl/crypto.h>   // CRYPTO_memcmp (constant-time)
+#include "string_runtime.h"   // aiml_str_alloc: refcounted result (no leak)
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -291,15 +296,96 @@ void* aiml_hash_keccak256_raw(const char* s) {
 
 /* ── OpenSSL-backed functions ────────────────────────────────────────── */
 
-char* aiml_hash_sha256    (const char* s) { return evp_hex(EVP_sha256(),    s); }
+// SHA-256 (string + buffer) lives in sha256.cpp — one portable impl shared with
+// the WASM client, since OpenSSL is native-only.  `aiml_hash_sha256` and the
+// sha256 case of `aiml_hash_hex_buf` route there; the rest stay on OpenSSL.
 char* aiml_hash_sha512    (const char* s) { return evp_hex(EVP_sha512(),    s); }
 char* aiml_hash_sha3_256  (const char* s) { return evp_hex(EVP_sha3_256(),  s); }
 char* aiml_hash_blake2b   (const char* s) { return evp_hex(EVP_blake2b512(), s); }
 char* aiml_hash_blake2s   (const char* s) { return evp_hex(EVP_blake2s256(), s); }
 char* aiml_hash_md5       (const char* s) { return evp_hex(EVP_md5(),        s); }
 
+// Length-aware hex digest over RAW bytes (binary-safe — no strlen).  Used when a
+// hash function is handed a buffer<u8> instead of a string, so the same
+// hash.<algo> surface works on binary data (e.g. content-addressing WebP bytes).
+char* aiml_hash_hex_buf(const char* algo, const void* data, int32_t len) {
+    // sha256 (also the default) → shared portable impl, identical to the WASM client.
+    if (!algo || strcmp(algo, "sha256") == 0) return aiml_sha256_hex(data, len);
+    const EVP_MD* md = EVP_sha256();
+    if      (strcmp(algo, "sha512")   == 0) md = EVP_sha512();
+    else if (strcmp(algo, "sha3_256") == 0) md = EVP_sha3_256();
+    else if (strcmp(algo, "blake2b")  == 0) md = EVP_blake2b512();
+    else if (strcmp(algo, "blake2s")  == 0) md = EVP_blake2s256();
+    else if (strcmp(algo, "md5")      == 0) md = EVP_md5();
+    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctx, md, nullptr);
+    if (data && len > 0) EVP_DigestUpdate(ctx, data, (size_t)len);
+    uint8_t digest[EVP_MAX_MD_SIZE];
+    unsigned int dlen = 0;
+    EVP_DigestFinal_ex(ctx, digest, &dlen);
+    EVP_MD_CTX_free(ctx);
+    return to_hex(digest, dlen);
+}
+
 char* aiml_hash_hmac_sha256(const char* key, const char* msg) { return hmac_hex(EVP_sha256(), key, msg); }
 char* aiml_hash_hmac_sha512(const char* key, const char* msg) { return hmac_hex(EVP_sha512(), key, msg); }
+
+/* ── Password hashing (slow) + secure random ──────────────────────────────────
+ * These return REFCOUNTED strings (aiml_str_alloc) so the AIML runtime frees them
+ * via decref — unlike to_hex()/malloc, which leaks for non-refcounted returns. */
+
+// Refcounted lowercase-hex of `len` bytes.
+static char* to_hex_rc(const uint8_t* bytes, size_t len) {
+    char* s = aiml_str_alloc(len * 2);          // payload len*2 (+ NUL, refcount=1)
+    if (!s) return nullptr;
+    static const char hx[] = "0123456789abcdef";
+    for (size_t i = 0; i < len; i++) {
+        s[i*2]   = hx[bytes[i] >> 4];
+        s[i*2+1] = hx[bytes[i] & 0xF];
+    }
+    s[len * 2] = '\0';
+    return s;
+}
+
+// PBKDF2-HMAC-SHA256(password, salt, iterations) → 32-byte key, hex (64 chars).
+// A deliberately slow password hash; pair with a per-user random salt (hash.random_hex).
+char* aiml_hash_pbkdf2(const char* password, const char* salt, int32_t iterations) {
+    if (!password) password = "";
+    if (!salt)     salt     = "";
+    if (iterations < 1) iterations = 100000;    // sane floor if caller passes 0
+    uint8_t out[32];
+    int ok = PKCS5_PBKDF2_HMAC(password, (int)strlen(password),
+                               (const unsigned char*)salt, (int)strlen(salt),
+                               iterations, EVP_sha256(), (int)sizeof(out), out);
+    if (ok != 1) return aiml_str_alloc(0);
+    return to_hex_rc(out, sizeof(out));
+}
+
+// hash.const_time_eq(a, b) — constant-time string comparison for secrets (tokens,
+// session ids, HMAC tags). Returns 1 if equal, 0 otherwise. Uses CRYPTO_memcmp so
+// the compare time does not leak how many leading bytes matched (defeats timing
+// attacks that a short-circuiting strcmp/== would enable). Differing lengths → 0
+// (length itself is not secret for fixed-size tokens).
+int32_t aiml_hash_const_time_eq(const char* a, const char* b) {
+    if (!a || !b) return (a == b) ? 1 : 0;
+    size_t la = strlen(a), lb = strlen(b);
+    if (la != lb) return 0;
+    return CRYPTO_memcmp(a, b, la) == 0 ? 1 : 0;
+}
+
+// math.random_hex(nbytes) — CSPRNG (OpenSSL RAND_bytes) → hex (2*nbytes chars).
+// Exposed under the `math` namespace but implemented here because the WASM
+// runtime compiles math_runtime.cpp without OpenSSL. For salts/tokens/session-ids.
+char* aiml_math_random_hex(int32_t nbytes) {
+    if (nbytes < 1)    nbytes = 16;
+    if (nbytes > 1024) nbytes = 1024;           // clamp: for salts/nonces/tokens
+    uint8_t* buf = (uint8_t*)malloc((size_t)nbytes);
+    if (!buf) return aiml_str_alloc(0);
+    if (RAND_bytes(buf, nbytes) != 1) { free(buf); return aiml_str_alloc(0); }
+    char* hex = to_hex_rc(buf, (size_t)nbytes);
+    free(buf);
+    return hex;
+}
 
 void* aiml_hash_sha256_raw    (const char* s) { return evp_raw(EVP_sha256(),    s); }
 void* aiml_hash_sha512_raw    (const char* s) { return evp_raw(EVP_sha512(),    s); }

@@ -18,6 +18,9 @@ void*   aiml_ws_server(const char* host, int32_t port);
 void*   aiml_wss_server(const char* host, int32_t port, const char* cert, const char* key);
 // Blocks until a client arrives; performs HTTP Upgrade handshake (+ TLS if server is wss).
 void*   aiml_ws_accept(void* srv);
+const char* aiml_ws_peer_ip(void* ws);   /* dotted peer IP of an accepted client; "" if unknown */
+void    aiml_ws_set_client_insecure(int32_t on);  /* 1 = disable wss server-cert verification (dev only) */
+int32_t aiml_ws_client_insecure(void);            /* current insecure flag (shared by http client) */
 
 // ── I/O ───────────────────────────────────────────────────────────────────────
 int     aiml_ws_send(void* ws, const char* text);        // UTF-8 text frame
@@ -28,6 +31,11 @@ int     aiml_ws_ping(void* ws);                          // send ping frame
 // ── Raw binary I/O (used by mirror transport) ────────────────────────────────
 int     aiml_ws_send_raw(void* ws, const void* data, int32_t len); // binary frame from raw ptr+len
 void*   aiml_ws_recv_raw(void* ws, int32_t* out_len);              // recv next frame, sets length (caller frees)
+
+// ── Media transport (chunked artwork streaming) ──────────────────────────────
+int32_t aiml_ws_recv_binary(void* ws, void* dst_buf);              // recv frame into AIML buffer; ret len / 0 close / -1 err / -2 overflow
+int32_t aiml_ws_recv_append(void* ws, void* dst_buf);             // recv frame appended at wIdx (reassemble N chunks)
+int32_t aiml_ws_send_kv_blob(void* ws, void* kv, const char* key); // zero-copy: stream a KV blob (mmap) as one binary frame
 
 // ── Common ────────────────────────────────────────────────────────────────────
 int     aiml_ws_close(void* ws);   // send close frame, shutdown, free

@@ -88,6 +88,8 @@ void  aiml_prefab_set_text   (void* inst, const char* child_name, const char* te
 void  aiml_prefab_set_texture(void* inst, const char* child_name, void* tex);
 /* Set color of a child (label text color, rect fill color). */
 void  aiml_prefab_set_color  (void* inst, const char* child_name, int32_t color);
+void  aiml_prefab_set_bg_color    (void* inst, const char* child_name, int32_t color);
+void  aiml_prefab_set_border_color(void* inst, const char* child_name, int32_t color);
 /* Set child visibility. */
 void  aiml_prefab_set_child_visible(void* inst, const char* child_name, int32_t v);
 /* Override a child's font_size at runtime (labels / text_inputs / buttons). */
@@ -246,6 +248,11 @@ void  aiml_prefab_set_clip(void* inst, int32_t enabled);
 void  aiml_prefab_set_scroll(void* inst, float sx, float sy);
 float aiml_prefab_get_scroll_x(void* inst);
 float aiml_prefab_get_scroll_y(void* inst);
+
+/* Give keyboard focus to a text_input child; pin a textbox/scrollable container
+ * to its bottom (and re-arm textbox tail-follow). */
+void  aiml_prefab_set_focus(void* inst, const char* child_name);
+void  aiml_prefab_scroll_to_end(void* inst, const char* child_name);
 
 /* ── Connectors (cables between two instances) ───────────────────────────── */
 

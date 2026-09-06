@@ -126,6 +126,7 @@ float aiml_math_fmax_list(const float* data, int32_t len);
  */
 float   aiml_math_random_f32(float lo, float hi);
 int32_t aiml_math_random_int(int32_t lo, int32_t hi);
+char*   aiml_math_random_hex(int32_t nbytes);   /* CSPRNG hex (RAND_bytes); refcounted result */
 
 #ifdef __cplusplus
 }

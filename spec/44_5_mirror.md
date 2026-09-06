@@ -157,6 +157,31 @@ In the browser (WASM), only `ws://` and `wss://` are available.
 |--------|----------|--------------|
 | `mirror.listen(url: string)` | `mirror_session` | Listen for incoming connections; non-blocking |
 | `mirror.listen_max(url: string, max_peers: i32)` | `mirror_session` | With peer limit |
+| `mirror.listen_tls(url: string, cert: string, key: string)` | `mirror_session` | `wss://` host with a server cert (PEM cert + key paths) |
+
+**TLS hosting (`wss://`)** requires a server certificate — a plain `mirror.listen`
+on a `wss://` URL fails, because the WSS server cannot complete a handshake without
+one. Use `mirror.listen_tls(url, cert, key)`; the underlying WSS server applies the
+hardened TLS defaults (min TLS 1.2, no SSLv2/3/TLS1.0/1.1, no compression — see
+chapter 32_4 §3.3). Example:
+
+```aiml
+- decl: [session, mirror_session,
+    { call: [mirror.listen_tls, "wss://0.0.0.0:8765", "server.crt", "server.key"] }]
+```
+
+> **Client verification (strict by default):** `mirror.connect` to a `wss://` host
+> **verifies the server certificate** — chain against the system CA store plus hostname
+> match (SNI + `SSL_set1_host`) — so it defeats an **active** man-in-the-middle, not just
+> passive eavesdropping. A cert that is self-signed, expired, or whose name doesn't match
+> the host makes the connection fail.
+> - Production: deploy a CA-signed certificate (e.g. Let's Encrypt) for the host name
+>   clients connect to — verification then passes with no extra config.
+> - A private/internal CA: point `AIML_WSS_CA=/path/to/ca.pem` at its bundle.
+> - Local dev with a self-signed cert: `mirror.tls_insecure(1)` (or env
+>   `AIML_WSS_INSECURE=1`) disables verification, with a stderr warning. **Never in
+>   production.** (In the browser build the browser's own TLS stack enforces this;
+>   `mirror.tls_insecure` is a native no-op there.)
 
 ### 3.3 Client / Connect
 
@@ -176,6 +201,14 @@ In the browser (WASM), only `ws://` and `wss://` are available.
 | `session.close()` | Close session and all peer connections |
 | `session.is_connected()` | `bool` — session active and at least one peer connected |
 | `session.peer_count()` | `i32` — number of connected peers |
+| `session.peer_ip(peer_id: i32)` | `string` — dotted IP of a connected peer, captured at accept; `""` if unknown |
+
+**`session.peer_ip`** gives a handler the **trusted source IP** of an RPC sender —
+`peer_id` comes from `rpc_event.peer_id`. It is read from the accepted socket, so it
+cannot be spoofed by the client (unlike anything in the RPC payload). Use it for
+server-side rate-limiting, per-IP bans, or audit logging. For TCP and WS/WSS transports
+the IP is the peer socket address; behind a reverse proxy it is the proxy's address
+(read a forwarded header yourself only if you control that proxy).
 
 ---
 

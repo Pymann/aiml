@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstring>
 #include "compiler.h"
+#include "src/core/asset_scanner.h"   // AssetScanner::all_stores() → Asset-Deps in die .d schreiben
 #include "logger.h"
 #include <filesystem>
 
@@ -201,6 +202,15 @@ int main(int argc, char** argv) {
             for (const auto& src : compiler.importedSourceFiles) {
                 depOut << " \\\n  " << src;
             }
+            // Asset-Deps: die via --asset-roots gescannten Assets werden in die
+            // Registry gebacken → dieses Objekt hängt an ihren Pfaden.  So triggert
+            // Exodus' .d-mtime-Check einen Recompile, wenn ein Asset sich ändert
+            // (kein --clean mehr nötig nach png→webp o.ä.).
+            for (const auto& kv : AIML::AssetScanner::instance().all_stores()) {
+                for (const auto& se : kv.second) {
+                    depOut << " \\\n  " << se.second.abs_path;
+                }
+            }
             depOut << "\n";
         }
         
@@ -275,6 +285,13 @@ int main(int argc, char** argv) {
                  depOut << objFile << ": " << inputFile;
                  for (const auto& src : compiler.importedSourceFiles) {
                      depOut << " \\\n  " << src;
+                 }
+                 // Asset-Deps (siehe .ll-Zweig): gescannte Assets als Abhängigkeiten
+                 // → Recompile bei Asset-Änderung ohne --clean.
+                 for (const auto& kv : AIML::AssetScanner::instance().all_stores()) {
+                     for (const auto& se : kv.second) {
+                         depOut << " \\\n  " << se.second.abs_path;
+                     }
                  }
                  depOut << "\n";
              }

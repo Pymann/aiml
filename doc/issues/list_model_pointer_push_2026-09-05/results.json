@@ -1,0 +1,152 @@
+[
+  {
+    "test": "test_ptr_push_into_value_list_error",
+    "status": "PASS",
+    "exit_code": 1
+  },
+  {
+    "test": "test_ptr_member_push_into_value_list_error",
+    "status": "PASS",
+    "exit_code": 1
+  },
+  {
+    "test": "test_ptr_call_push_into_value_list_error",
+    "status": "PASS",
+    "exit_code": 1
+  },
+  {
+    "test": "test_list_model_nested_get_push_repro",
+    "status": "PASS",
+    "exit_code": 1
+  },
+  {
+    "test": "test_list_model_push_value_and_pointer",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_list",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_list_builtins",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_list_slice",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_list_f32_flat",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_list_list_inner_values",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_list_list_struct",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_at_struct_field_list",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_class_list_struct_scalar_writeback",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_struct_list_field_assign",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_model_inherits_hetero_list",
+    "status": "FAIL",
+    "exit_code": -11
+  },
+  {
+    "test": "test_class_method_list_arg",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_return_list_from_call",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_repro_getcopy_list_of_model",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_iface_list_iterate",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_iface_list_ptr_heterogen",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_iface_list_ptr_multi",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_iface_list_ptr_serialize",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_iface_list_return",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_iface_list_return_after_ser",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_iface_list_return_model_field",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_iface_list_return_via_listptr",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_list_model_string_persist",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_list_model_string_persist2",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_list_model_string_persist3",
+    "status": "PASS",
+    "exit_code": 0
+  },
+  {
+    "test": "test_list_model_string_persist4",
+    "status": "PASS",
+    "exit_code": 0
+  }
+]

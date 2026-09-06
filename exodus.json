@@ -690,6 +690,48 @@
             "arch": "amd64",
             "required": true,
             "digest": "2b05896c477275ad3473bb63a5ac5a5b8a7e4a6ad6ed7cb23c442ccd1abc28f5"
+        },
+        {
+            "name": "libwebp-dev",
+            "version": "1.3.2-0.4build3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "7ba3a6f29d2656b89d5600322c959d6bc7841f1a88e1fa2770c60d639379effe"
+        },
+        {
+            "name": "libwebp7",
+            "version": "1.3.2-0.4build3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "c86f6439f0bbc531f7199794654231f3b29327d6585958511b958795d51c2484"
+        },
+        {
+            "name": "libwebpdemux2",
+            "version": "1.3.2-0.4build3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "15e98f127e1fdbf0889cf4b2f5604b60a6da0b988f20bf34731c9a2307d490d6"
+        },
+        {
+            "name": "libwebpmux3",
+            "version": "1.3.2-0.4build3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "0dd0f2de0fbbda7239209332ddfe512f4383d0489dd3f9fb25398f58c1621724"
+        },
+        {
+            "name": "libwebpdecoder3",
+            "version": "1.3.2-0.4build3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "b1fa298b942141acec1cf14ef70870dd43393ba28c4409c8badb6ad681753548"
+        },
+        {
+            "name": "libsharpyuv0",
+            "version": "1.3.2-0.4build3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "4e1763494e5b9d34192313aa88e38201fc67b3f13ea96ca268d26401a3002791"
         }
     ],
     "conan_packages": [],
@@ -773,7 +815,8 @@
         "__exodus_cache/apt/libglu1-mesa-dev/amd64/9.0.2-1.1build1/payload/usr/include",
         "__exodus_cache/apt/rpcsvc-proto/amd64/1.4.2-0ubuntu7/payload/usr/include",
         "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/include",
-        "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/include/x86_64-linux-gnu/openblas-serial"
+        "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/include/x86_64-linux-gnu/openblas-serial",
+        "__exodus_cache/apt/libwebp-dev/amd64/1.3.2-0.4build3/payload/usr/include"
     ],
     "sources": [
         "*.c",
@@ -842,6 +885,8 @@
             "GL",
             "glfw",
             "png",
+            "webp",
+            "sharpyuv",
             "GLEW",
             "m",
             "dl",
@@ -927,7 +972,13 @@
             "__exodus_cache/apt/libgfortran5/amd64/14.2.0-4ubuntu2~24.04.1/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libopenblas0-serial/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu",
             "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu/openblas-serial",
-            "__exodus_cache/apt/libopenblas0-serial/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu/openblas-serial"
+            "__exodus_cache/apt/libopenblas0-serial/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu/openblas-serial",
+            "__exodus_cache/apt/libwebpdemux2/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libwebpmux3/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libwebpdecoder3/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libwebp-dev/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libsharpyuv0/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libwebp7/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu"
         ],
         "rpath": true
     }

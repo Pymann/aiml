@@ -162,6 +162,15 @@ Strings are null-terminated, immutable UTF-8 C-strings. Methods return new alloc
 - **`[free]`**: Explicit memory release if no RAII.
 - **`.empty`** `(property)`: Returns `bool`, `true` if empty.
 - **`.len`** `(property)`: Returns element count `i32`.
+- **`[contains, val: T] -> i32`**: `1`/`0`. `eq`-semantics (strings by content).
+- **`[index_of, val: T] -> i32`**: First matching index, or `-1`.
+- **`[count, val: T] -> i32`**: Number of matches.
+- **`[remove_value, val: T] -> i32`**: Removes the FIRST match; `1`/`0`.
+- **`[extend, other: list<T>]`**: Appends value-copies of `other` (same `T`; `self.extend(self)` ok).
+- **`[reverse]`**: In-place reverse.
+- **`[sort]` / `[sort_desc]`**: In-place stable insertion sort. Only int/enum/float/string.
+- **`[shuffle]`**: In-place Fisher-Yates (uses `math.random_int`; non-deterministic).
+- **Type rules:** `contains/index_of/count/remove_value` reject struct/model elements; `extend` rejects a different `list<U>`; unsupported types are compile errors with a source location.
 - **Index syntax:** `list-0`, `list-idx` and `set: [list-idx, value]` are actively used for dynamic list access and mutation.
 
 ### 3.3 Map Methods (`map<K:V>`)

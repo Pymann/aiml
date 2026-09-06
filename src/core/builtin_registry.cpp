@@ -7,6 +7,7 @@
 #include "code_impl.h"
 #include "ir_generator.h"
 #include "path_runtime.h"
+#include "../sys/yaml_runtime.h"
 #include "../../src/sys/net_runtime.h"
 #include "../../src/sys/db_runtime.h"
 #include "asset_scanner.h"
@@ -86,6 +87,7 @@ static llvm::BasicBlock* emitGuard(CompilerContext& ctx, llvm::Value* flag,
 // registerBuiltins
 // ---------------------------------------------------------------------------
 void registerBuiltins(CompilerContext& ctx) {
+    ctx.enums["yaml"] = {{"null", 0}, {"scalar", 1}, {"sequence", 2}, {"mapping", 3}};
 
     // -----------------------------------------------------------------------
     // mirror.RpcHandler builtin interface
@@ -1052,6 +1054,15 @@ void registerBuiltins(CompilerContext& ctx) {
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(f));
     };
 
+    time.builtinFuncs["format_utc"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+        auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        if (args.empty()) return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(i8p));
+        llvm::Function* f = ctx.getFunction("time_format_utc", i8p, {ctx.builder.getInt64Ty()});
+        llvm::Value* ms = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+        if (ms->getType()->isIntegerTy(32)) ms = ctx.builder.CreateSExt(ms, ctx.builder.getInt64Ty());
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {ms}));
+    };
+
     time.builtinFuncs["sleep_ms"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
         if (args.empty()) return ctx.ir_gen->getInt32(0);
         llvm::Function* f = ctx.getFunction("time_sleep_ms", ctx.builder.getVoidTy(), {ctx.builder.getInt32Ty()});
@@ -1110,6 +1121,10 @@ void registerBuiltins(CompilerContext& ctx) {
 
         storage.builtinFuncs["host"] = [i8p](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
             llvm::Function* f = ctx.getFunction("aiml_storage_host", i8p, {});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {}));
+        };
+        storage.builtinFuncs["is_secure"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+            llvm::Function* f = ctx.getFunction("aiml_storage_is_secure", ctx.builder.getInt32Ty(), {});
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {}));
         };
     }
@@ -1243,6 +1258,188 @@ void registerBuiltins(CompilerContext& ctx) {
             if (verVal) explicitVer = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(verVal));
         }
         return ctx.ir_gen->wrap(BufferImpl::read_versioned(ctx, baseAlloca, ty, realEval, explicitVer));
+    };
+
+    // buffer.ws_recv(conn) → i32 — receive the next WebSocket frame straight into
+    // THIS buffer (baseAlloca is the real buffer, so size/wIdx/rIdx are written
+    // back).  Returns bytes received, 0 on close, -1 error, -2 overflow.
+    bufInfo.builtinMethods["ws_recv"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        if (call->args.empty()) return ctx.ir_gen->getInt32(-1);
+        IRValue* connV = evalExpr(call->args[0].get());
+        if (!connV) return ctx.ir_gen->getInt32(-1);
+        llvm::Function* f = ctx.getFunction("aiml_ws_recv_binary", i32, {i8p, i8p});
+        llvm::Value* bufP = ctx.builder.CreateBitCast(baseAlloca, i8p);
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+            static_cast<llvm::Value*>(ctx.ir_gen->unwrap(connV)), bufP }));
+    };
+
+    // buffer.ws_send(conn) → i32 — send THIS buffer's written bytes as one binary frame.
+    bufInfo.builtinMethods["ws_send"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        if (call->args.empty()) return ctx.ir_gen->getInt32(-1);
+        IRValue* connV = evalExpr(call->args[0].get());
+        if (!connV) return ctx.ir_gen->getInt32(-1);
+        llvm::Function* f = ctx.getFunction("aiml_ws_send_binary", i32, {i8p, i8p});
+        llvm::Value* bufP = ctx.builder.CreateBitCast(baseAlloca, i8p);
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+            static_cast<llvm::Value*>(ctx.ir_gen->unwrap(connV)), bufP }));
+    };
+
+    // buffer.ws_recv_append(conn) → i32 — receive the next frame APPENDED at this
+    // buffer's write index (reassemble N chunk frames: alloc once, recv_append N×).
+    bufInfo.builtinMethods["ws_recv_append"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        if (call->args.empty()) return ctx.ir_gen->getInt32(-1);
+        IRValue* connV = evalExpr(call->args[0].get());
+        if (!connV) return ctx.ir_gen->getInt32(-1);
+        llvm::Function* f = ctx.getFunction("aiml_ws_recv_append", i32, {i8p, i8p});
+        llvm::Value* bufP = ctx.builder.CreateBitCast(baseAlloca, i8p);
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+            static_cast<llvm::Value*>(ctx.ir_gen->unwrap(connV)), bufP }));
+    };
+
+    // buffer.ws_send_range(conn, offset, len) → i32 — send data[offset..offset+len]
+    // as one binary frame (zero-copy from the buffer's data pointer).  For chunked
+    // uploads: slice this buffer into fixed-size frames without copying.
+    bufInfo.builtinMethods["ws_send_range"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        if (call->args.size() < 3) return ctx.ir_gen->getInt32(-1);
+        IRValue* connV = evalExpr(call->args[0].get());
+        IRValue* offV  = evalExpr(call->args[1].get());
+        IRValue* lenV  = evalExpr(call->args[2].get());
+        if (!connV || !offV || !lenV) return ctx.ir_gen->getInt32(-1);
+        auto* bufType = ctx.getLLVMType("buffer");
+        llvm::Value* dataPtrPtr = ctx.builder.CreateStructGEP(bufType, baseAlloca, 4, "buf_data_ptr");
+        llvm::Value* dataPtr = ctx.builder.CreateLoad(i8p, dataPtrPtr, "buf_data");
+        llvm::Value* off = ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(offV)), i32);
+        llvm::Value* len = ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lenV)), i32);
+        llvm::Value* atPtr = ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty(), dataPtr, off, "buf_at");
+        llvm::Function* f = ctx.getFunction("aiml_ws_send_raw", i32, {i8p, i8p, i32});
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+            static_cast<llvm::Value*>(ctx.ir_gen->unwrap(connV)), atPtr, len }));
+    };
+
+    // buffer.decode_image(src: buffer) → i64  — decode PNG/JPG/WebP bytes in `src`
+    // into THIS buffer as tightly-packed RGBA.  Returns ((w<<32)|h), 0 on failure.
+    bufInfo.builtinMethods["decode_image"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        llvm::Type* i64 = ctx.builder.getInt64Ty();
+        if (call->args.empty()) return ctx.ir_gen->wrap(ctx.builder.getInt64(0));
+        IRValue* srcV = evalExpr(call->args[0].get());
+        if (!srcV) return ctx.ir_gen->wrap(ctx.builder.getInt64(0));
+        llvm::Value* srcVal  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(srcV));
+        llvm::Value* srcData = ctx.builder.CreateExtractValue(srcVal, {4}, "src_data");
+        llvm::Value* srcLen  = ctx.builder.CreateExtractValue(srcVal, {0}, "src_len");
+        llvm::Function* f = ctx.getFunction("aiml_img_decode", i64, {i8p, i8p, i32});
+        llvm::Value* dstP = ctx.builder.CreateBitCast(baseAlloca, i8p);
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {dstP, srcData, srcLen}));
+    };
+
+    // buffer.encode_webp(src: buffer, w: i32, h: i32, quality: i32) → i32 — encode the
+    // RGBA bytes in `src` (w*h*4) to WebP into THIS buffer.  quality<0 = lossless.
+    bufInfo.builtinMethods["encode_webp"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        if (call->args.size() < 4) return ctx.ir_gen->getInt32(0);
+        IRValue* srcV = evalExpr(call->args[0].get());
+        IRValue* wV   = evalExpr(call->args[1].get());
+        IRValue* hV   = evalExpr(call->args[2].get());
+        IRValue* qV   = evalExpr(call->args[3].get());
+        if (!srcV || !wV || !hV || !qV) return ctx.ir_gen->getInt32(0);
+        llvm::Value* srcVal  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(srcV));
+        llvm::Value* srcData = ctx.builder.CreateExtractValue(srcVal, {4}, "src_data");
+        llvm::Value* srcLen  = ctx.builder.CreateExtractValue(srcVal, {0}, "src_len");
+        llvm::Value* wVal = ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(wV)), i32);
+        llvm::Value* hVal = ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(hV)), i32);
+        llvm::Value* qVal = ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(qV)), i32);
+        llvm::Function* f = ctx.getFunction("aiml_img_encode_webp", i32, {i8p, i8p, i32, i32, i32, i32});
+        llvm::Value* dstP = ctx.builder.CreateBitCast(baseAlloca, i8p);
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {dstP, srcData, srcLen, wVal, hVal, qVal}));
+    };
+
+    // buffer.resize_crop(src, sw, sh, dw, dh, mode) → i32 — resize RGBA in `src`
+    // (sw×sh) to EXACTLY dw×dh into THIS buffer.  mode 0 = cover-crop (aspect kept),
+    // 1 = stretch (fill exactly, may distort).  Enforces the canonical size.
+    bufInfo.builtinMethods["resize_crop"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        if (call->args.size() < 6) return ctx.ir_gen->getInt32(0);
+        IRValue* srcV = evalExpr(call->args[0].get());
+        IRValue* swV  = evalExpr(call->args[1].get());
+        IRValue* shV  = evalExpr(call->args[2].get());
+        IRValue* dwV  = evalExpr(call->args[3].get());
+        IRValue* dhV  = evalExpr(call->args[4].get());
+        IRValue* mdV  = evalExpr(call->args[5].get());
+        if (!srcV || !swV || !shV || !dwV || !dhV || !mdV) return ctx.ir_gen->getInt32(0);
+        llvm::Value* srcVal  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(srcV));
+        llvm::Value* srcData = ctx.builder.CreateExtractValue(srcVal, {4}, "rc_src_data");
+        llvm::Value* srcLen  = ctx.builder.CreateExtractValue(srcVal, {0}, "rc_src_len");
+        auto tr = [&](IRValue* v) { return ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v)), i32); };
+        llvm::Type* f32 = ctx.builder.getFloatTy();
+        llvm::Function* f = ctx.getFunction("aiml_img_resize_crop", i32, {i8p, i8p, i32, i32, i32, i32, i32, i32, f32, f32});
+        llvm::Value* dstP = ctx.builder.CreateBitCast(baseAlloca, i8p);
+        llvm::Value* half = llvm::ConstantFP::get(f32, 0.5);   // centered crop (API unchanged)
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {dstP, srcData, srcLen, tr(swV), tr(shV), tr(dwV), tr(dhV), tr(mdV), half, half}));
+    };
+
+    // buffer.pick_webp(dw, dh, mode) → i32 — open a file picker, convert the chosen
+    // image to a dw×dh WebP and write it into THIS buffer.  mode 0 = cover-crop,
+    // 1 = stretch.  Returns bytes written (0 = cancelled / error).  Native uses a
+    // zenity/kdialog dialog + stb/libwebp; WASM uses a browser file input + canvas.
+    bufInfo.builtinMethods["pick_webp"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        if (call->args.size() < 3) return ctx.ir_gen->getInt32(0);
+        IRValue* dwV = evalExpr(call->args[0].get());
+        IRValue* dhV = evalExpr(call->args[1].get());
+        IRValue* mdV = evalExpr(call->args[2].get());
+        if (!dwV || !dhV || !mdV) return ctx.ir_gen->getInt32(0);
+        auto tr = [&](IRValue* v) { return ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v)), i32); };
+        llvm::Function* f = ctx.getFunction("aiml_art_pick_webp", i32, {i8p, i32, i32, i32});
+        llvm::Value* dstP = ctx.builder.CreateBitCast(baseAlloca, i8p);
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {dstP, tr(dwV), tr(dhV), tr(mdV)}));
+    };
+
+    // buffer.encode_source(dw, dh, mode, panx, pany) → i32 — crop the stashed pan
+    // source (from gl.pick_source) at pan (0..1 per axis) and WebP-encode it into
+    // THIS buffer.  Returns bytes written (0 = no source / error).  The final-save
+    // counterpart to the live gl.source_texture preview.
+    bufInfo.builtinMethods["encode_source"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        llvm::Type* f32 = ctx.builder.getFloatTy();
+        if (call->args.size() < 5) return ctx.ir_gen->getInt32(0);
+        IRValue* dwV = evalExpr(call->args[0].get());
+        IRValue* dhV = evalExpr(call->args[1].get());
+        IRValue* mdV = evalExpr(call->args[2].get());
+        IRValue* pxV = evalExpr(call->args[3].get());
+        IRValue* pyV = evalExpr(call->args[4].get());
+        if (!dwV || !dhV || !mdV || !pxV || !pyV) return ctx.ir_gen->getInt32(0);
+        auto tr = [&](IRValue* v) { return ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v)), i32); };
+        auto trf = [&](IRValue* v) -> llvm::Value* {
+            llvm::Value* x = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v));
+            if (x->getType()->isIntegerTy()) return ctx.builder.CreateSIToFP(x, f32);
+            if (x->getType()->isDoubleTy())  return ctx.builder.CreateFPCast(x, f32);
+            return x;
+        };
+        llvm::Function* f = ctx.getFunction("aiml_art_encode_source", i32, {i8p, i32, i32, i32, f32, f32});
+        llvm::Value* dstP = ctx.builder.CreateBitCast(baseAlloca, i8p);
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {dstP, tr(dwV), tr(dhV), tr(mdV), trf(pxV), trf(pyV)}));
     };
 
     ctx.classes["buffer"] = std::move(bufInfo);
@@ -1616,6 +1813,77 @@ void registerBuiltins(CompilerContext& ctx) {
                 ? ctx.builder.CreateGlobalStringPtr("")
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {app}));
+        };
+    }
+
+    // ── yaml namespace: parsed document navigation ──────────────────────────
+    {
+        auto& yaml = ctx.namespaces["yaml"];
+        auto unaryPtr = [](const char* name) {
+            return [name](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                if (args.empty()) return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(i8p));
+                auto* function = ctx.getFunction(name, i8p, {i8p});
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(function, {
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))}));
+            };
+        };
+        auto unaryI32 = [](const char* name) {
+            return [name](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                auto* i32 = ctx.builder.getInt32Ty();
+                if (args.empty()) return ctx.ir_gen->getInt32(0);
+                auto* function = ctx.getFunction(name, i32, {i8p});
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(function, {
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))}));
+            };
+        };
+        yaml.builtinFuncs["parse"] = unaryPtr("aiml_yaml_parse");
+        yaml.builtinFuncs["parse_file"] = unaryPtr("aiml_yaml_parse_file");
+        yaml.builtinFuncs["error"] = unaryPtr("aiml_yaml_error");
+        yaml.builtinFuncs["root"] = unaryPtr("aiml_yaml_root");
+        yaml.builtinFuncs["kind"] = unaryI32("aiml_yaml_kind");
+        yaml.builtinFuncs["size"] = unaryI32("aiml_yaml_size");
+        yaml.builtinFuncs["line"] = unaryI32("aiml_yaml_line");
+        yaml.builtinFuncs["column"] = unaryI32("aiml_yaml_column");
+        yaml.builtinFuncs["scalar"] = unaryPtr("aiml_yaml_scalar");
+        yaml.builtinFuncs["dump"] = unaryPtr("aiml_yaml_dump");
+        yaml.builtinFuncs["free"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            if (args.empty()) return nullptr;
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* function = ctx.getFunction("aiml_yaml_free", ctx.builder.getVoidTy(), {i8p});
+            ctx.builder.CreateCall(function, {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))});
+            return nullptr;
+        };
+        auto indexedPtr = [](const char* name) {
+            return [name](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                auto* i32 = ctx.builder.getInt32Ty();
+                if (args.size() < 2) return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(i8p));
+                auto* function = ctx.getFunction(name, i8p, {i8p, i32});
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(function, {
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))}));
+            };
+        };
+        yaml.builtinFuncs["item"] = indexedPtr("aiml_yaml_item");
+        yaml.builtinFuncs["value"] = indexedPtr("aiml_yaml_value");
+        yaml.builtinFuncs["key"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (args.size() < 2) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
+            auto* function = ctx.getFunction("aiml_yaml_key", i8p, {i8p, i32});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(function, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))}));
+        };
+        yaml.builtinFuncs["get"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            if (args.size() < 2) return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(i8p));
+            auto* function = ctx.getFunction("aiml_yaml_get", i8p, {i8p, i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(function, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))}));
         };
     }
 
@@ -2399,6 +2667,31 @@ void registerBuiltins(CompilerContext& ctx) {
             }));
         };
 
+        // ws.send_kv_blob(ws, kv, key) → i32  (zero-copy: stream a KV blob straight from mmap)
+        ws.builtinFuncs["send_kv_blob"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_ws_send_kv_blob", i32, {i8p, i8p, i8p});
+            if (args.size() < 3) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))
+            }));
+        };
+
+        // ws.peer_ip(conn) → string — dotted peer IP of an accepted connection.
+        // strdup so AIML owns the result (the runtime returns a struct-internal ptr).
+        ws.builtinFuncs["peer_ip"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            if (args.empty()) return ctx.ir_gen->wrap(llvm::Constant::getNullValue(i8p));
+            llvm::Function* fip = ctx.getFunction("aiml_ws_peer_ip", i8p, {i8p});
+            llvm::Value* raw = ctx.builder.CreateCall(fip, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) });
+            llvm::Function* fdup = ctx.getFunction("strdup", i8p, {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fdup, {raw}));
+        };
+
         // ws.recv(ws) → string
         ws.builtinFuncs["recv"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -2447,6 +2740,20 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Type* i32 = ctx.builder.getInt32Ty();
             llvm::Function* f = ctx.getFunction("aiml_ws_poll", i32, {i8p, i32});
+            if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+            }));
+        };
+
+        // ws.poll_listener(srv, timeout_ms) → i32 — 1 if a client is waiting to be
+        // accepted, 0 on timeout, -1 on error.  Lets a server accept without
+        // blocking, so it can multiplex many client connections in one loop.
+        ws.builtinFuncs["poll_listener"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Type* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* f = ctx.getFunction("aiml_ws_poll_listener", i32, {i8p, i32});
             if (args.size() < 2) return ctx.ir_gen->getInt32(-1);
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {
                 static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
@@ -2988,6 +3295,16 @@ void registerBuiltins(CompilerContext& ctx) {
         // ── http namespace functions ──────────────────────────────────────
         {
             auto& http = ctx.namespaces["http"];
+            // http.fetch_text(url) → string  (one-shot GET body; WASM uses browser fetch)
+            http.builtinFuncs["fetch_text"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_fetch_text");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p}, false), llvm::Function::ExternalLinkage, "aiml_fetch_text", ctx.module);
+                llvm::Value* url = args.empty()
+                    ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p))
+                    : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {url}));
+            };
             // http.get(url) → http_response_handle
             http.builtinFuncs["get"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
                 if (args.empty()) return ctx.ir_gen->getInt32(0);
@@ -3147,6 +3464,66 @@ void registerBuiltins(CompilerContext& ctx) {
                 IRValue* a1 = evalExpr(call->args[1].get());
                 ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a0)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a1))});
                 return nullptr;
+            };
+            // srv.set_timeout(secs) — request-read timeout (slowloris defence)
+            ci.builtinMethods["set_timeout"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32 = ctx.builder.getInt32Ty();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_server_set_timeout");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i32}, false), llvm::Function::ExternalLinkage, "aiml_http_server_set_timeout", ctx.module);
+                if (!call || call->args.empty()) return nullptr;
+                IRValue* a0 = evalExpr(call->args[0].get());
+                ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a0))});
+                return nullptr;
+            };
+            // srv.secure_headers(hsts) — enable nosniff/X-Frame-Options/Referrer-Policy (+HSTS if hsts!=0)
+            ci.builtinMethods["secure_headers"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32 = ctx.builder.getInt32Ty();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_server_secure_headers");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i32}, false), llvm::Function::ExternalLinkage, "aiml_http_server_secure_headers", ctx.module);
+                llvm::Value* hsts = call && !call->args.empty()
+                    ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())))
+                    : ctx.builder.getInt32(0);
+                ctx.builder.CreateCall(fn, {base, hsts});
+                return nullptr;
+            };
+            // srv.set_max_connections(n) — cap concurrent handler threads (0 = unlimited)
+            ci.builtinMethods["set_max_connections"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32 = ctx.builder.getInt32Ty();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_server_set_max_connections");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i32}, false), llvm::Function::ExternalLinkage, "aiml_http_server_set_max_connections", ctx.module);
+                if (!call || call->args.empty()) return nullptr;
+                IRValue* a0 = evalExpr(call->args[0].get());
+                ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a0))});
+                return nullptr;
+            };
+            // srv.set_rate_limit(max_per_window, window_secs) — per-IP fixed-window limit
+            ci.builtinMethods["set_rate_limit"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32 = ctx.builder.getInt32Ty();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_server_set_rate_limit");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i32, i32}, false), llvm::Function::ExternalLinkage, "aiml_http_server_set_rate_limit", ctx.module);
+                if (!call || call->args.size() < 2) return nullptr;
+                IRValue* a0 = evalExpr(call->args[0].get());
+                IRValue* a1 = evalExpr(call->args[1].get());
+                ctx.builder.CreateCall(fn, {base,
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a0)),
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a1))});
+                return nullptr;
+            };
+            // srv.require_client_cert(ca_path) — enable mTLS: require+verify a client
+            // cert against the CA bundle PEM. Returns i32 (0 ok, -1 error). TLS server only.
+            ci.builtinMethods["require_client_cert"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32 = ctx.builder.getInt32Ty();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_server_require_client_cert");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i32, {i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_server_require_client_cert", ctx.module);
+                if (!call || call->args.empty()) return nullptr;
+                IRValue* a0 = evalExpr(call->args[0].get());
+                llvm::Value* r = ctx.builder.CreateCall(fn, {base, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a0))});
+                return ctx.ir_gen->wrap(r);
             };
             // srv.filesystem(prefix, dirs, opts) — serve static files
             ci.builtinMethods["filesystem"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
@@ -3339,6 +3716,27 @@ void registerBuiltins(CompilerContext& ctx) {
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_free", ctx.module);
                 ctx.builder.CreateCall(fn, {base}); return nullptr;
             };
+            // resp.set_cookie(name, value, max_age, same_site) — Set-Cookie with secure
+            // defaults (Path=/, HttpOnly, Secure, SameSite). max_age<0 → session cookie;
+            // same_site "" → "Lax". Multiple calls emit multiple Set-Cookie headers.
+            ci.builtinMethods["set_cookie"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Type* i32 = ctx.builder.getInt32Ty();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_resp_set_cookie");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p, i8p, i32, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_resp_set_cookie", ctx.module);
+                if (!call || call->args.size() < 2) return nullptr;
+                llvm::Value* nameA = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                llvm::Value* valA  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+                llvm::Value* ageA  = call->args.size() > 2
+                    ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[2].get())))
+                    : llvm::ConstantInt::getSigned(i32, -1);
+                if (ageA->getType()->isPointerTy()) ageA = ctx.builder.CreatePtrToInt(ageA, i32);
+                llvm::Value* ssA = call->args.size() > 3
+                    ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[3].get())))
+                    : llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+                ctx.builder.CreateCall(fn, {base, nameA, valA, ageA, ssA});
+                return nullptr;
+            };
             // Property setters (called via visitSetStmt → builtinSetters)
             ci.builtinSetters["status"] = [](CompilerContext& ctx, llvm::Value* base, AIML::IRValue* newVal) {
                 llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -3412,6 +3810,13 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* nameArg = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
                 if (call && !call->args.empty()) { IRValue* a = evalExpr(call->args[0].get()); if (a) nameArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)); }
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base, nameArg}));
+            };
+            // req.client_ip() — trusted socket peer IP (ignores X-Forwarded-For)
+            ci.builtinMethods["client_ip"] = [](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr*, auto) -> IRValue* {
+                llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* fn = ctx.module.getFunction("aiml_http_req_client_ip");
+                if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i8p, {i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_req_client_ip", ctx.module);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {base}));
             };
             ctx.classes["http_request_handle"] = std::move(ci);
         }
@@ -3861,6 +4266,24 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Value* hi = args.size() > 1 ? toI32(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])))
                                               : llvm::ConstantInt::get(i32t, 0);
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {lo, hi}));
+        };
+
+        // math.random_hex(nbytes: i32) → string (hex of cryptographically-secure random bytes, RAND_bytes)
+        math.builtinFuncs["random_hex"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            auto* i32t = ctx.builder.getInt32Ty();
+            llvm::Function* fn = ctx.module.getFunction("aiml_math_random_hex");
+            if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(p, {i32t}, false),
+                                                 llvm::Function::ExternalLinkage, "aiml_math_random_hex", ctx.module);
+            auto toI32 = [&](llvm::Value* v) -> llvm::Value* {
+                if (v->getType()->isIntegerTy(32)) return v;
+                if (v->getType()->isIntegerTy(64)) return ctx.builder.CreateTrunc(v, i32t);
+                if (v->getType()->isFloatingPointTy()) return ctx.builder.CreateFPToSI(v, i32t);
+                return v;
+            };
+            llvm::Value* n = args.size() > 0 ? toI32(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])))
+                                             : llvm::ConstantInt::get(i32t, 16);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {n}));
         };
 
         // fract = x - floor(x)
@@ -4480,6 +4903,30 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {a})); \
         };
 
+/* Buffer-aware hex digest: if the argument is a buffer<u8>, hash its raw bytes
+ * (data ptr + size, binary-safe) via aiml_hash_hex_buf; otherwise the normal
+ * null-terminated string path.  Keeps a single hash.<algo> surface — no per-type
+ * or per-class hash methods. */
+#define REG_HASH1B(aimlName, cName) \
+        hash.builtinFuncs[aimlName] = [declHash1](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
+            auto* p   = llvm::PointerType::get(ctx.context, 0); \
+            auto* i32 = ctx.builder.getInt32Ty(); \
+            llvm::Value* a = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) \
+                                              : llvm::Constant::getNullValue(p); \
+            if (a && a->getType() == ctx.getLLVMType("buffer")) { \
+                llvm::Value* dataP = ctx.builder.CreateExtractValue(a, {4}, "hash_buf_data"); \
+                llvm::Value* lenV  = ctx.builder.CreateExtractValue(a, {0}, "hash_buf_len"); \
+                llvm::Function* bf = ctx.module.getFunction("aiml_hash_hex_buf"); \
+                if (!bf) bf = llvm::Function::Create( \
+                    llvm::FunctionType::get(p, {p, p, i32}, false), \
+                    llvm::Function::ExternalLinkage, "aiml_hash_hex_buf", ctx.module); \
+                llvm::Value* algo = ctx.builder.CreateGlobalStringPtr(aimlName); \
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(bf, {algo, dataP, lenV})); \
+            } \
+            auto* fn = declHash1(cName); \
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {a})); \
+        };
+
 #define REG_HASH2(aimlName, cName) \
         hash.builtinFuncs[aimlName] = [declHash2](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* { \
             auto* fn = declHash2(cName); \
@@ -4491,14 +4938,14 @@ void registerBuiltins(CompilerContext& ctx) {
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {a0, a1})); \
         };
 
-        REG_HASH1("sha256",        "aiml_hash_sha256")
-        REG_HASH1("sha512",        "aiml_hash_sha512")
-        REG_HASH1("sha3_256",      "aiml_hash_sha3_256")
+        REG_HASH1B("sha256",       "aiml_hash_sha256")
+        REG_HASH1B("sha512",       "aiml_hash_sha512")
+        REG_HASH1B("sha3_256",     "aiml_hash_sha3_256")
         REG_HASH1("keccak256",     "aiml_hash_keccak256")
         REG_HASH1("ripemd160",     "aiml_hash_ripemd160")
-        REG_HASH1("blake2b",       "aiml_hash_blake2b")
-        REG_HASH1("blake2s",       "aiml_hash_blake2s")
-        REG_HASH1("md5",           "aiml_hash_md5")
+        REG_HASH1B("blake2b",      "aiml_hash_blake2b")
+        REG_HASH1B("blake2s",      "aiml_hash_blake2s")
+        REG_HASH1B("md5",          "aiml_hash_md5")
         REG_HASH1("sha256_raw",    "aiml_hash_sha256_raw")
         REG_HASH1("sha512_raw",    "aiml_hash_sha512_raw")
         REG_HASH1("sha3_256_raw",  "aiml_hash_sha3_256_raw")
@@ -4508,6 +4955,30 @@ void registerBuiltins(CompilerContext& ctx) {
         REG_HASH2("hmac_sha256",      "aiml_hash_hmac_sha256")
         REG_HASH2("hmac_sha512",      "aiml_hash_hmac_sha512")
         REG_HASH2("hmac_sha256_raw",  "aiml_hash_hmac_sha256_raw")
+
+        // hash.const_time_eq(a: string, b: string) → i32 (1 = equal, constant-time)
+        hash.builtinFuncs["const_time_eq"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* fn = ctx.module.getFunction("aiml_hash_const_time_eq");
+            if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(i32, {p, p}, false),
+                                                 llvm::Function::ExternalLinkage, "aiml_hash_const_time_eq", ctx.module);
+            llvm::Value* a0 = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) : llvm::Constant::getNullValue(p);
+            llvm::Value* a1 = args.size() > 1 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])) : llvm::Constant::getNullValue(p);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {a0, a1}));
+        };
+        // hash.pbkdf2(password: string, salt: string, iterations: i32) → string (hex)
+        hash.builtinFuncs["pbkdf2"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Function* fn = ctx.module.getFunction("aiml_hash_pbkdf2");
+            if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(p, {p, p, i32}, false),
+                                                 llvm::Function::ExternalLinkage, "aiml_hash_pbkdf2", ctx.module);
+            llvm::Value* a0 = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) : llvm::Constant::getNullValue(p);
+            llvm::Value* a1 = args.size() > 1 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])) : llvm::Constant::getNullValue(p);
+            llvm::Value* a2 = args.size() > 2 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2])) : ctx.builder.getInt32(0);
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {a0, a1, a2}));
+        };
 
 #undef REG_HASH1
 #undef REG_HASH2
@@ -5950,6 +6421,89 @@ void registerBuiltins(CompilerContext& ctx) {
                     {g32(0), g32(1), pxArg}));
             };
 
+            // gl.register_texture(stem, tex) → void — register a decoded texture
+            // under a synthetic stem ("@art:<hash>") so a sprite's texture_path
+            // resolves to it via the asset registry / load_texture_cached.
+            gl.builtinFuncs["register_texture"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* p = llvm::PointerType::get(ctx.context, 0);
+                if (args.size() < 2) return ctx.ir_gen->getInt32(0);
+                ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_asset_register_texture", ctx.builder.getVoidTy(), {p, p}),
+                    { static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
+                      static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])) });
+                return ctx.ir_gen->getInt32(0);
+            };
+
+            // gl.has_texture(stem) → i32 — 1 if a texture is cached under this stem.
+            gl.builtinFuncs["has_texture"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* i32 = ctx.builder.getInt32Ty();
+                if (args.empty()) return ctx.ir_gen->getInt32(0);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_asset_has_texture", i32, {p}),
+                    { static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) }));
+            };
+
+            // gl.decode_texture(webp: buffer) → gl_texture — decode encoded image
+            // bytes (WebP/PNG/JPG) in `webp` into a GPU texture.  Native uses the
+            // stb/libwebp path; WASM decodes in the browser (createImageBitmap).
+            // Returns a gl_texture handle (null on failure).  Needs a live GL
+            // context (client render path, not headless).
+            gl.builtinFuncs["decode_texture"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* p  = llvm::PointerType::get(ctx.context, 0);
+                auto* bt = ctx.getLLVMType("buffer");
+                if (args.empty())
+                    return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p)));
+                // aiml_art_decode_texture reads ->data/->size, so it needs the
+                // buffer's ADDRESS — pass an incoming pointer through, else spill
+                // the by-value struct to a temp alloca (mirrors gl.create_texture).
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                llvm::Value* bufPtr = v->getType()->isPointerTy() ? v :
+                    ([&]() -> llvm::Value* {
+                        auto* _a = ctx.createEntryAlloca(bt, "art_dec_in");
+                        ctx.builder.CreateStore(v, _a); return _a; }());
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_art_decode_texture", p, {p}), {bufPtr}));
+            };
+
+            // gl.pick_source() → i32 — open a file picker + decode + stash the full
+            // image as the pan-crop source (for source_texture / buffer.encode_source).
+            // 1 = ok, 0 = cancelled/failed.  Needs a display (client path).
+            gl.builtinFuncs["pick_source"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>&) -> AIML::IRValue* {
+                auto* i32 = ctx.builder.getInt32Ty();
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_art_pick_source", i32, {}), {}));
+            };
+
+            // gl.source_texture(dw, dh, mode, panx, pany) → gl_texture — crop the
+            // stashed source (mode 0 cover / 1 stretch) at pan (0..1 per axis) into a
+            // dw×dh preview texture.  For live drag-to-position.  null on failure.
+            gl.builtinFuncs["source_texture"] = [](CompilerContext& ctx,
+                const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* i32 = ctx.builder.getInt32Ty();
+                auto* f32 = ctx.builder.getFloatTy();
+                auto gi = [&](int i) -> llvm::Value* {
+                    if ((int)args.size() <= i) return ctx.builder.getInt32(0);
+                    return ctx.builder.CreateZExtOrTrunc(
+                        static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])), i32);
+                };
+                auto gf = [&](int i) -> llvm::Value* {
+                    if ((int)args.size() <= i) return llvm::ConstantFP::get(f32, 0.5);
+                    llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i]));
+                    if (v->getType()->isIntegerTy()) return ctx.builder.CreateSIToFP(v, f32);
+                    if (v->getType()->isDoubleTy())  return ctx.builder.CreateFPCast(v, f32);
+                    return v;
+                };
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_art_source_texture", p, {i32, i32, i32, f32, f32}),
+                    {gi(0), gi(1), gi(2), gf(3), gf(4)}));
+            };
+
             // gl.bind_texture(tex, slot) → void
             gl.builtinFuncs["bind_texture"] = [](CompilerContext& ctx,
                 const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
@@ -6789,6 +7343,32 @@ void registerBuiltins(CompilerContext& ctx) {
             return nullptr;
         };
 
+        // set_bg_color(child_name, color) — child FILL color (rect bg / SDF).
+        ci.builtinMethods["set_bg_color"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* name  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* color = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            if (color->getType() != i32) color = ctx.builder.CreateZExtOrTrunc(color, i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_set_bg_color",
+                ctx.builder.getVoidTy(), {i8p, i8p, i32}), {base, name, color});
+            return nullptr;
+        };
+
+        // set_border_color(child_name, color) — child border/stroke color.
+        ci.builtinMethods["set_border_color"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* name  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            llvm::Value* color = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+            if (color->getType() != i32) color = ctx.builder.CreateZExtOrTrunc(color, i32);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_set_border_color",
+                ctx.builder.getVoidTy(), {i8p, i8p, i32}), {base, name, color});
+            return nullptr;
+        };
+
         // set_child_visible(child_name, v)
         ci.builtinMethods["set_child_visible"] = [](CompilerContext& ctx, llvm::Value* base,
             AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
@@ -7201,6 +7781,24 @@ void registerBuiltins(CompilerContext& ctx) {
             if (y->getType() != f32) y = ctx.builder.CreateSIToFP(y, f32);
             ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_set_scroll",
                 ctx.builder.getVoidTy(), {i8p, f32, f32}), {base, x, y});
+            return nullptr;
+        };
+        // focus(child) — give keyboard focus to a text_input child.
+        ci.builtinMethods["focus"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_set_focus",
+                ctx.builder.getVoidTy(), {i8p, i8p}), {base, name});
+            return nullptr;
+        };
+        // scroll_to_end(child) — pin a textbox / scrollable container to the bottom.
+        ci.builtinMethods["scroll_to_end"] = [](CompilerContext& ctx, llvm::Value* base,
+            AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+            ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_scroll_to_end",
+                ctx.builder.getVoidTy(), {i8p, i8p}), {base, name});
             return nullptr;
         };
         ci.builtinMethods["get_scroll_x"] = [](CompilerContext& ctx, llvm::Value* base,
@@ -9074,6 +9672,17 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.builtinMethods["peer_count"]   = mkI320("aiml_mirror_session_peer_count");
             ci.builtinMethods["has_event"]    = mkI320("aiml_mirror_session_has_event");
 
+            // session.peer_ip(peer_id) → string  (dotted IP of a peer, captured at accept)
+            ci.builtinMethods["peer_ip"] = [i8p, i32](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr* call, EvalFn evalExpr) -> IRValue* {
+                llvm::Value* s = ctx.builder.CreateLoad(i8p, base, "sess_ptr");
+                llvm::Value* pid = (call && !call->args.empty())
+                    ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())))
+                    : ctx.builder.getInt32(0);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_mirror_peer_ip", i8p, {i8p, i32}), {s, pid}));
+            };
+
             // ── register(obj) → i32 (net_id) ──────────────────────────────────
             ci.builtinMethods["register"] = [i8p, i32, i64, vd](CompilerContext& ctx,
                 llvm::Value* base, AIML::AST::CallExpr* call, EvalFn evalExpr) -> IRValue* {
@@ -9568,6 +10177,31 @@ void registerBuiltins(CompilerContext& ctx) {
                     : ctx.builder.getInt32(8);
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(
                     ctx.getFunction("aiml_mirror_listen_max", i8p, {i8p, i32}), {url, mx}));
+            };
+            // mirror.listen_tls(url, cert, key) — wss:// host with a server cert
+            mir.builtinFuncs["listen_tls"] = [i8p](CompilerContext& ctx,
+                const std::vector<IRValue*>& args) -> IRValue* {
+                llvm::Value* url = args.empty()
+                    ? ctx.builder.CreateGlobalStringPtr("wss://0.0.0.0:9443")
+                    : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                llvm::Value* cert = args.size() >= 2
+                    ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))
+                    : llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+                llvm::Value* key = args.size() >= 3
+                    ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]))
+                    : llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_mirror_listen_tls", i8p, {i8p, i8p, i8p}), {url, cert, key}));
+            };
+            // mirror.tls_insecure(on) — disable wss server-cert verification (dev only)
+            mir.builtinFuncs["tls_insecure"] = [](CompilerContext& ctx,
+                const std::vector<IRValue*>& args) -> IRValue* {
+                llvm::Type* i32t = ctx.builder.getInt32Ty();
+                llvm::Value* on = args.empty() ? ctx.builder.getInt32(1)
+                    : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_ws_set_client_insecure", ctx.builder.getVoidTy(), {i32t}), {on});
+                return ctx.ir_gen->wrap(ctx.builder.getInt32(0));
             };
             mir.builtinFuncs["connect"] = [i8p](CompilerContext& ctx,
                 const std::vector<IRValue*>& args) -> IRValue* {

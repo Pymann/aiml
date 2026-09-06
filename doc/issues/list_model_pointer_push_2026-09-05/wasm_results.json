@@ -1,0 +1,22 @@
+[
+  {
+    "test": "test_list_model_nested_get_push_repro",
+    "status": "PASS",
+    "exit_code": 1
+  },
+  {
+    "test": "test_ptr_member_push_into_value_list_error",
+    "status": "PASS",
+    "exit_code": 1
+  },
+  {
+    "test": "test_ptr_call_push_into_value_list_error",
+    "status": "PASS",
+    "exit_code": 1
+  },
+  {
+    "test": "test_list_model_push_value_and_pointer",
+    "status": "PASS",
+    "exit_code": 0
+  }
+]

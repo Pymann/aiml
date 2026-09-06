@@ -1,0 +1,6 @@
+json={"__type":"ItemImpl","name":"Hammer","tags":["tool","metal","starter"]}
+restored.name=Hammer
+restored.tags.len=3
+got.len=3
+first='tool'
+PASS

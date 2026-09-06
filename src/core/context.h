@@ -18,6 +18,7 @@ namespace AIML {
     namespace AST {
         class Expr;
         class CallExpr;
+        class GroupMethodsDecl;
     }
 }
 
@@ -92,6 +93,10 @@ namespace AIML {
             bool is_volatile = false;
             uint64_t version = 1; // Version of the field (u64)
             std::shared_ptr<AIML::AST::Expr> initValue;
+            // classgroup sees-member: a wired COLLABORATOR pointer, not owned data.
+            // Serialization skips it (spec/58 §9); also breaks the ser-schema
+            // recursion of bidirectional sees cycles.
+            bool is_collaborator = false;
 
             // AionDB secondary-index modifier (spec/45_db_indexed_fields.md).
             // Activated by 4th-position dict in model field: e.g.
@@ -316,6 +321,19 @@ namespace AIML {
     /// {new: <container>}, visitNewExpr calls the synthesized `<container>___ctor`
     /// to allocate every instance and back-patch the sees pointers.
     std::set<std::string> classGroupContainers;
+
+    /// External `groupmethods:` blocks (spec/58 §1.1/§11) collected during type
+    /// registration, awaiting merge into their target classgroup.  Cross-file:
+    /// the block and its target group may live in different units, so the methods
+    /// are recorded here (raw ptrs into an AST kept alive by `astKeepAlive`) and
+    /// folded in by mergeGroupMethods once the target group is in scope.  Entries
+    /// are removed as they are consumed.
+    std::vector<AIML::AST::GroupMethodsDecl*> pendingGroupMethods;
+    /// Keeps imported sub-file ASTs alive for the whole compilation so the raw
+    /// pointers in `pendingGroupMethods` (and their FunctionDecls) stay valid.
+    /// `shared_ptr<void>` with a typed deleter avoids needing the AST types
+    /// complete in this header.
+    std::vector<std::shared_ptr<void>> astKeepAlive;
 
     /// Prefab Registry — maps every `- prefab:` name declared locally or in a
     /// (transitively) imported module to the set of its declared child names.
@@ -638,8 +656,13 @@ namespace AIML {
                 return ifaceIt->second.fatPtrType;
             }
 
-            llvm::Type* elemType = getLLVMType(innerType);
-            if (!elemType) return nullptr;
+            // Opaque pointer: the LLVM layout is independent of the pointee, so
+            // resolve the inner type LAZILY (at deref / member-access), NEVER here.
+            // Eagerly resolving it would (a) spuriously fail/mis-default a forward-
+            // declared or cyclic class type to i32 (crashing a later member call),
+            // exactly the reason list<T> above skips inner resolution — and this is
+            // what lets a classgroup sees-member be typed as a sibling's not-yet-
+            // synthesized subclass (spec/58, bidirectional sees cycles).
             return llvm::PointerType::get(context, 0); // Opaque pointer
         }
 

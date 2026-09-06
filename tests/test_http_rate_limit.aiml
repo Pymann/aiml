@@ -1,0 +1,79 @@
+# Expected exit code: 0
+# Priority-D abuse resistance (spec/32_2 §3.12): per-IP fixed-window rate limit.
+# srv.set_rate_limit(max, window) rejects connections over the quota with 429
+# BEFORE a handler thread runs. srv.set_max_connections(n) caps concurrency but
+# must not reject sequential traffic (each connection closes before the next).
+
+- def:
+    name: handle_root
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - set: [resp.status, 200]
+      - set: [resp.body, "ok"]
+      - call: [resp.send]
+
+# probe: open a fresh connection, send one GET, return the raw response.
+- def:
+    name: probe
+    args: [[raw, string]]
+    return: string
+    body:
+      - decl: [sock, socket_handle]
+      - set: [sock, { call: [net.socket, "tcp"] }]
+      - call: [net.connect, sock, "127.0.0.1", 23557]
+      - call: [net.send_string, sock, raw]
+      - decl: [rsp, string]
+      - set: [rsp, { call: [net.recv_string, sock, 256] }]
+      - call: [net.close, sock]
+      - return: rsp
+
+# has: 1 if `hay` contains `needle`, else 0.
+- def:
+    name: has
+    args: [[hay, string], [needle, string]]
+    return: i32
+    body:
+      - decl: [pos, i32, { call: [hay.index_of, needle] }]
+      - if: { condition: { lt: [pos, 0] }, then: [{ return: 0 }] }
+      - return: 1
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server, "127.0.0.1", 23557] }]
+      - call: [srv.set_timeout, 2]
+      - call: [srv.set_max_connections, 64]   # generous cap: must not reject sequential traffic
+      - call: [srv.set_rate_limit, 3, 60]      # at most 3 connections / 60s from one IP
+      - call: [srv.route, "GET", "/", handle_root]
+      - decl: [thr, thread_handle, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 300]
+
+      - decl: [fail, i32, 0]
+      - decl: [ok_count, i32, 0]
+      - decl: [limited_count, i32, 0]
+
+      # 5 requests from the same IP; first 3 → 200, remaining 2 → 429.
+      - decl: [req_str, string, "GET / HTTP/1.1\r\nHost: x\r\n\r\n"]
+
+      - decl: [resp_1, string, { call: [probe, req_str] }]
+      - if: { condition: { eq: [{ call: [has, resp_1, "200"] }, 1] }, then: [{ set: [ok_count, { +: [ok_count, 1] }] }] }
+      - decl: [resp_2, string, { call: [probe, req_str] }]
+      - if: { condition: { eq: [{ call: [has, resp_2, "200"] }, 1] }, then: [{ set: [ok_count, { +: [ok_count, 1] }] }] }
+      - decl: [resp_3, string, { call: [probe, req_str] }]
+      - if: { condition: { eq: [{ call: [has, resp_3, "200"] }, 1] }, then: [{ set: [ok_count, { +: [ok_count, 1] }] }] }
+      - decl: [resp_4, string, { call: [probe, req_str] }]
+      - if: { condition: { eq: [{ call: [has, resp_4, "429"] }, 1] }, then: [{ set: [limited_count, { +: [limited_count, 1] }] }] }
+      - decl: [resp_5, string, { call: [probe, req_str] }]
+      - if: { condition: { eq: [{ call: [has, resp_5, "429"] }, 1] }, then: [{ set: [limited_count, { +: [limited_count, 1] }] }] }
+
+      - print: ["ok=${ok_count} limited=${limited_count}"]
+      - if: { condition: { neq: [ok_count, 3] }, then: [{ print: ["FAIL expected 3 allowed, got ${ok_count} (resp_4=${resp_4})"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { neq: [limited_count, 2] }, then: [{ print: ["FAIL expected 2 limited, got ${limited_count} (resp_5=${resp_5})"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      - call: [srv.stop]
+
+      - if: { condition: { neq: [fail, 0] }, then: [{ print: ["FAILED: ${fail}"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS http_rate_limit: 3 allowed then 429; max_connections did not block sequential traffic"]
+      - return: 0

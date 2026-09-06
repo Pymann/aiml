@@ -1,0 +1,3 @@
+bag pre-ser: items=2 left=1 right=1
+serialized: {"__type":"Bag","items":[{"name":"alpha","var_n":1},{"name":"beta","var_n":2}],"left":[{"name":"gamma","var_n":10}],"right":[{"name":"delta","var_n":20}]}
+bag2 post-deser: items=2 left=1 right=1

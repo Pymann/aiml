@@ -1,0 +1,55 @@
+# Regression: mutually-recursive types via ptr<> must not blow up the ser-tree
+# builder.  Owner holds ptr<Child>, Child holds a back-ref ptr<Owner>.  Building
+# @__aiml_sernodes_<Name> for either class walked Owner→ptr<Child>→Child→
+# ptr<Owner>→… forever (serBuildSubtree, ast_compiler.cpp) → stack overflow /
+# SIGSEGV at COMPILE time.  A DFS active-path guard now cuts the cycle at the
+# back-ref ptr (treated as an opaque, non-owned reference).  This test compiles
+# only because of that fix; it also exercises the back-ref at runtime.
+#
+# Expected exit code: 0
+
+- class:
+    name: OwnerNode
+    members:
+      - [tag,   i32]
+      - [child, ptr<ChildNode>]
+    methods:
+      - def:
+          name: get_tag
+          return: i32
+          body: [{ return: <.tag }]
+      - def:
+          name: run_link
+          return: i32
+          body:
+            - set: [<.tag, 41]
+            - set: [<.child, { new: ChildNode }]
+            - set: [<.child.owner, < ]           # bare < = self-pointer (ptr<OwnerNode>)
+            - set: [<.child.note, 1]
+            # read our own tag *through* the child's back-ref
+            - return: { call: [<.child.owner_tag] }
+
+- class:
+    name: ChildNode
+    members:
+      - [note,  i32]
+      - [owner, ptr<OwnerNode>]                  # recursive back-ref → the ser cycle
+    methods:
+      - def:
+          name: owner_tag
+          return: i32
+          body: [{ return: { call: [<.owner.get_tag] } }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [host, ptr<OwnerNode>, { new: OwnerNode }]
+      - decl: [seen, i32, { call: [host.run_link] }]
+      - if:
+          condition: { neq: [seen, 41] }
+          then:
+            - print: ["FAIL recursive-ptr back-ref: got ${seen}, want 41"]
+            - call: [sys.exit, 1]
+      - print: ["PASS recursive-ptr ser guard + back-ref read = ${seen}"]
+      - return: 0

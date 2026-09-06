@@ -80,4 +80,13 @@ void aiml_trace(const char* fname, const char* dir, const char* args) {
     g_trace.log(fname, dir, args);
 }
 
+// ── AIML_SIZETRACE emit ───────────────────────────────────────────────────────
+// Compile-time gated: the compiler only emits calls to this for instrumented
+// functions, so this just formats one line.
+void aiml_sizetrace(const char* fname, const char* sym, const char* type,
+                    long long size, const void* addr) {
+    fprintf(stderr, "[SIZETRACE] %s | %-18s : %-22s size=%-6lld addr=%p\n",
+            fname ? fname : "?", sym ? sym : "?", type ? type : "?", size, addr);
+}
+
 } // extern "C"

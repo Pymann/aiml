@@ -28,7 +28,7 @@
       - class: Counter
         instance: driver
         sees: [engine.counter]        # cross-group sees to an exported instance
-        functions:
+        methods:
           - def:
               name: tick
               return: i32

@@ -8,10 +8,18 @@ namespace AST {
 
 // Map depths (only maps count toward `depth`; sequences do not):
 //   1 = the group body            { name:, instances: }
-//   2 = one instance's map        { class:, instance:, sees:, functions: }
-//   3 = a `functions:` element    { def: ... }   ("def" then delegates)
+//   2 = one instance's map        { class:, instance:, sees:, methods: }
+//   3 = a `methods:` element       { def: ... }   ("def" then delegates)
 bool ClassGroupBuilder::OnMapStart() {
     ++depth;
+    // Optional 3rd element of a `subgroups:` entry — a `{port: inst}` binding map
+    // (`[fx, EffectRuntime, {cards: cards}]`).  Its scalars are key/value pairs.
+    if (inSubgroups && subgDepth == 2) {
+        inSubgPortMap = true;
+        subgPortKey = true;
+        expectingKey = true;
+        return true;
+    }
     if (depth == 2 && inInstances && !inFunctions) {
         // Start a fresh instance.
         inInstanceMap = true;
@@ -24,6 +32,14 @@ bool ClassGroupBuilder::OnMapStart() {
 }
 
 bool ClassGroupBuilder::OnMapEnd() {
+    if (inSubgPortMap) {
+        // Close the subgroup's port-binding map; store under the subgroup name.
+        node_->subgroupPorts[curSubg.first] = curSubgPorts;
+        curSubgPorts.clear();
+        inSubgPortMap = false;
+        --depth;
+        return true;
+    }
     if (depth == 2 && inInstanceMap) {
         node_->instances.push_back(std::move(cur_));
         inInstanceMap = false;
@@ -37,6 +53,9 @@ bool ClassGroupBuilder::OnSequenceStart() {
     // Group-level `params: [[name, type], ...]` — a sequence of 2-element pairs.
     if (inParams) { paramsDepth = 2; paramField = 0; curParam = {}; return true; }
     if (!inInstanceMap && currentKey == "params") { inParams = true; paramsDepth = 1; return true; }
+    // Group-level `requires: [[port, BaseClass], ...]` — same pair shape (ports).
+    if (inPorts) { portsDepth = 2; portField = 0; curPort = {}; return true; }
+    if (!inInstanceMap && currentKey == "requires") { inPorts = true; portsDepth = 1; return true; }
     // Group-level `subgroups: [[name, GroupType], ...]` — same pair shape.
     if (inSubgroups) { subgDepth = 2; subgField = 0; curSubg = {}; return true; }
     if (!inInstanceMap && currentKey == "subgroups") { inSubgroups = true; subgDepth = 1; return true; }
@@ -46,7 +65,10 @@ bool ClassGroupBuilder::OnSequenceStart() {
     if (!inInstanceMap && currentKey == "instances") inInstances = true;
     else if (inInstanceMap && currentKey == "sees")        inSees = true;
     else if (inInstanceMap && currentKey == "implements")  inImplements = true;
-    else if (inInstanceMap && currentKey == "functions")   inFunctions = true;
+    // `methods:` is the canonical instance-level key (coordination methods lifted
+    // onto the synthesized subclass); `functions:` is a legacy alias.
+    else if (inInstanceMap && (currentKey == "methods" ||
+                               currentKey == "functions")) inFunctions = true;
     else if (inInstanceMap && currentKey == "constructor") inCtor = true;
     return true;
 }
@@ -55,6 +77,9 @@ bool ClassGroupBuilder::OnSequenceEnd() {
     // params: inner pair closes → push; outer closes → leave params.
     if (inParams && paramsDepth == 2) { node_->params.push_back(curParam); paramsDepth = 1; return true; }
     if (inParams && paramsDepth == 1) { inParams = false; paramsDepth = 0; expectingKey = true; return true; }
+    // requires: same pair shape.
+    if (inPorts && portsDepth == 2) { node_->ports.push_back(curPort); portsDepth = 1; return true; }
+    if (inPorts && portsDepth == 1) { inPorts = false; portsDepth = 0; expectingKey = true; return true; }
     // subgroups: same pair shape.
     if (inSubgroups && subgDepth == 2) { node_->subgroups.push_back(curSubg); subgDepth = 1; return true; }
     if (inSubgroups && subgDepth == 1) { inSubgroups = false; subgDepth = 0; expectingKey = true; return true; }
@@ -77,7 +102,20 @@ bool ClassGroupBuilder::OnScalar(const std::string& value, const std::string& /*
         else                 { curParam.second = value; paramField = 2; }
         return true;
     }
-    // `subgroups: [[name, GroupType], ...]` — two scalars per pair.
+    // A subgroup entry's `{port: inst}` binding map — key/value scalars.  Checked
+    // before the generic `inSubgroups` branch (both flags are set inside the map).
+    if (inSubgPortMap) {
+        if (subgPortKey) { curSubgPortKey = value; subgPortKey = false; }
+        else             { curSubgPorts.push_back({curSubgPortKey, value}); subgPortKey = true; }
+        return true;
+    }
+    // `requires: [[port, BaseClass], ...]` — two scalars per pair.
+    if (inPorts) {
+        if (portField == 0) { curPort.first = value;  portField = 1; }
+        else                { curPort.second = value; portField = 2; }
+        return true;
+    }
+    // `subgroups: [[name, GroupType], ...]` — two scalars per pair (+ optional map).
     if (inSubgroups) {
         if (subgField == 0) { curSubg.first = value;  subgField = 1; }
         else                { curSubg.second = value; subgField = 2; }
@@ -100,7 +138,7 @@ bool ClassGroupBuilder::OnScalar(const std::string& value, const std::string& /*
         cur_.constructor.push_back(value);
         return true;
     }
-    // `functions: [- def: ...]` — delegate each `def` to a FunctionBuilder; the
+    // `methods: [- def: ...]` — delegate each `def` to a FunctionBuilder; the
     // finished FunctionDecl arrives via receiveChildNode.
     if (inFunctions && expectingKey && value == "def") {
         builder->pushState(std::make_unique<FunctionBuilder>(builder));

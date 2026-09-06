@@ -1,0 +1,149 @@
+# Chapter 60 — YAML Documents API.
+# Expected exit code: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      # ── Parse and traverse a mapping containing a sequence. ───────────────
+      - decl: [source, string, "name: Ada\nitems:\n  - red\n  - blue"]
+      - decl: [document, ptr<yaml_doc>, { call: [yaml.parse, source] }]
+      - decl: [parse_error, string, { call: [yaml.error, document] }]
+      - if:
+          condition: { neq: [parse_error, ""] }
+          then:
+            - print: ["FAIL yaml.parse error=${parse_error}"]
+            - call: [sys.exit, 1]
+
+      - decl: [root, ptr<yaml_node>, { call: [yaml.root, document] }]
+      - decl: [root_kind, i32, { call: [yaml.kind, root] }]
+      - if:
+          condition: { neq: [root_kind, yaml.mapping] }
+          then:
+            - print: ["FAIL root kind=${root_kind} exp yaml.mapping"]
+            - call: [sys.exit, 1]
+      - decl: [root_size, i32, { call: [yaml.size, root] }]
+      - if:
+          condition: { neq: [root_size, 2] }
+          then:
+            - print: ["FAIL root size=${root_size} exp 2"]
+            - call: [sys.exit, 1]
+
+      # Mapping lookup and scalar access.
+      - decl: [name_node, ptr<yaml_node>, { call: [yaml.get, root, "name"] }]
+      - decl: [name_value, string, { call: [yaml.scalar, name_node] }]
+      - if:
+          condition: { neq: [name_value, "Ada"] }
+          then:
+            - print: ["FAIL name=${name_value} exp Ada"]
+            - call: [sys.exit, 1]
+
+      # Ordered mapping iteration and sequence traversal.
+      - decl: [first_key, string, { call: [yaml.key, root, 0] }]
+      - decl: [second_key, string, { call: [yaml.key, root, 1] }]
+      - if:
+          condition: { neq: [first_key, "name"] }
+          then:
+            - print: ["FAIL mapping key 0=${first_key} exp name"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { neq: [second_key, "items"] }
+          then:
+            - print: ["FAIL mapping key 1=${second_key} exp items"]
+            - call: [sys.exit, 1]
+      - decl: [items_node, ptr<yaml_node>, { call: [yaml.value, root, 1] }]
+      - decl: [items_kind, i32, { call: [yaml.kind, items_node] }]
+      - if:
+          condition: { neq: [items_kind, yaml.sequence] }
+          then:
+            - print: ["FAIL items kind=${items_kind} exp yaml.sequence"]
+            - call: [sys.exit, 1]
+      - decl: [items_size, i32, { call: [yaml.size, items_node] }]
+      - if:
+          condition: { neq: [items_size, 2] }
+          then:
+            - print: ["FAIL items size=${items_size} exp 2"]
+            - call: [sys.exit, 1]
+      - decl: [blue_node, ptr<yaml_node>, { call: [yaml.item, items_node, 1] }]
+      - decl: [blue_value, string, { call: [yaml.scalar, blue_node] }]
+      - if:
+          condition: { neq: [blue_value, "blue"] }
+          then:
+            - print: ["FAIL item 1=${blue_value} exp blue"]
+            - call: [sys.exit, 1]
+      - decl: [blue_line, i32, { call: [yaml.line, blue_node] }]
+      - if:
+          condition: { neq: [blue_line, 4] }
+          then:
+            - print: ["FAIL blue line=${blue_line} exp 4"]
+            - call: [sys.exit, 1]
+
+      # Missing and wrong-kind access return null nodes rather than throwing.
+      - decl: [missing_node, ptr<yaml_node>, { call: [yaml.get, root, "missing"] }]
+      - decl: [missing_kind, i32, { call: [yaml.kind, missing_node] }]
+      - if:
+          condition: { neq: [missing_kind, yaml.null] }
+          then:
+            - print: ["FAIL missing kind=${missing_kind} exp yaml.null"]
+            - call: [sys.exit, 1]
+      - decl: [wrong_kind, ptr<yaml_node>, { call: [yaml.item, name_node, 0] }]
+      - decl: [wrong_kind_id, i32, { call: [yaml.kind, wrong_kind] }]
+      - if:
+          condition: { neq: [wrong_kind_id, yaml.null] }
+          then:
+            - print: ["FAIL scalar item kind=${wrong_kind_id} exp yaml.null"]
+            - call: [sys.exit, 1]
+      - decl: [dumped, string, { call: [yaml.dump, items_node] }]
+      - if:
+          condition: { eq: [dumped, ""] }
+          then:
+            - print: ["FAIL yaml.dump returned empty output"]
+            - call: [sys.exit, 1]
+      - call: [yaml.free, document]
+
+      # ── parse_file uses the same document API. ────────────────────────────
+      - decl: [temp_dir, path, { call: [path.temp_dir] }]
+      - decl: [yaml_file, path, { call: [temp_dir.join, "aiml_yaml_documents_test.yaml"] }]
+      - decl: [write_result, i32, { call: [io.write_file, yaml_file, "answer: 42"] }]
+      - if:
+          condition: { neq: [write_result, 0] }
+          then:
+            - print: ["FAIL write fixture=${write_result}"]
+            - call: [sys.exit, 1]
+      - decl: [file_document, ptr<yaml_doc>, { call: [yaml.parse_file, yaml_file] }]
+      - decl: [file_error, string, { call: [yaml.error, file_document] }]
+      - if:
+          condition: { neq: [file_error, ""] }
+          then:
+            - print: ["FAIL yaml.parse_file error=${file_error}"]
+            - call: [sys.exit, 1]
+      - decl: [file_root, ptr<yaml_node>, { call: [yaml.root, file_document] }]
+      - decl: [answer_node, ptr<yaml_node>, { call: [yaml.get, file_root, "answer"] }]
+      - decl: [answer_value, string, { call: [yaml.scalar, answer_node] }]
+      - if:
+          condition: { neq: [answer_value, "42"] }
+          then:
+            - print: ["FAIL file answer=${answer_value} exp 42"]
+            - call: [sys.exit, 1]
+      - call: [yaml.free, file_document]
+      - call: [io.remove, yaml_file]
+
+      # ── Invalid YAML remains inspectable through its error document. ───────
+      - decl: [bad_document, ptr<yaml_doc>, { call: [yaml.parse, "items: ["] }]
+      - decl: [bad_error, string, { call: [yaml.error, bad_document] }]
+      - if:
+          condition: { eq: [bad_error, ""] }
+          then:
+            - print: ["FAIL malformed YAML has no error"]
+            - call: [sys.exit, 1]
+      - decl: [bad_root, ptr<yaml_node>, { call: [yaml.root, bad_document] }]
+      - decl: [bad_kind, i32, { call: [yaml.kind, bad_root] }]
+      - if:
+          condition: { neq: [bad_kind, yaml.null] }
+          then:
+            - print: ["FAIL malformed YAML root kind=${bad_kind} exp yaml.null"]
+            - call: [sys.exit, 1]
+      - call: [yaml.free, bad_document]
+
+      - print: ["PASS yaml_documents"]
+      - return: 0

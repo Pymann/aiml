@@ -1,0 +1,17 @@
+# Helper: an external `groupmethods:` block (spec/58 §1.1) for CrossRuntime.coord,
+# in a DIFFERENT file than the classgroup (which is in cg_lib.aiml).  Proves the
+# cross-file merge: the method is folded onto the synthesized CoordSvc subclass and
+# uses `<.data` — the sees member synthesized by the classgroup, not a `members:`
+# declaration.  Not run standalone.
+
+- groupmethods:
+    group: CrossRuntime
+    instances:
+      - instance: coord
+        methods:
+          - def:
+              name: combined
+              return: i32
+              body:
+                - decl: [dbl, i32, { call: [<.data.doubled] }]   # cross-edge, synthesized member
+                - return: { +: [dbl, 1] }

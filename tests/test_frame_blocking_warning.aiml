@@ -1,0 +1,77 @@
+# ExpectedStderr: per-frame
+# FEATURE: blocking-call-in-frame-context (spec/49 §20).  A blocking primitive
+# (session.send_and_await / time.sleep_ms / ws.recv) whose enclosing def is
+# statically reachable from an `engine.run` update/render callback stalls the
+# render loop — under WASM asyncify it can freeze the page.  The compiler emits
+# a WARNING (not an error; the program still compiles + runs).  Per-def opt-out
+# via `static_off: ["frame_blocking"]`.  Blocking OUTSIDE the frame context (a
+# plain worker never reached from a callback) is legitimate and is NOT warned.
+#
+# This test compiles + runs (exit 0).  The real assertion is the stderr warning
+# for `frame_bad` (direct) + `deep_leaf` (transitive) and its ABSENCE for
+# `frame_optout` (static_off), `frame_render` (non-blocking) and `plain_worker`
+# (non-frame).
+
+# ── frame callbacks + their callees ──────────────────────────────────────────
+
+# BAD (direct): an update callback that blocks directly → WARNING.
+- def:
+    name: frame_bad
+    args: [[dtf, f32]]
+    body:
+      - call: [time.sleep_ms, 5]
+
+# BAD (transitive): a render callback → helper → blocking primitive.  The
+# primitive's enclosing def (deep_leaf) is frame-context via frame_deep → WARNING
+# on deep_leaf.  frame_deep itself calls no primitive directly → no warning there.
+- def:
+    name: deep_leaf
+    body:
+      - call: [time.sleep_ms, 5]
+
+- def:
+    name: frame_deep
+    body:
+      - call: [deep_leaf]
+
+# OPTOUT: same direct blocking call, suppressed → NO warning.
+- def:
+    name: frame_optout
+    static_off: ["frame_blocking"]
+    args: [[dtf, f32]]
+    body:
+      - call: [time.sleep_ms, 5]
+
+# render callback, non-blocking → NO warning.
+- def:
+    name: frame_render
+    body:
+      - call: [frame_deep]
+
+# NON-FRAME: blocks freely, never reached from a callback → NO warning.
+- def:
+    name: plain_worker
+    body:
+      - call: [time.sleep_ms, 5]
+
+# wire_loop / wire_loop_optout are PARSED + statically analysed (they seed the
+# engine.run callbacks as frame-context roots) but are NEVER executed at runtime,
+# so no real window opens and no loop runs — the check works purely on the AST.
+- def:
+    name: wire_loop
+    body:
+      - decl: [win, window_handle, null]
+      - call: [engine.run, win, frame_bad, frame_render]
+
+- def:
+    name: wire_loop_optout
+    body:
+      - decl: [wino, window_handle, null]
+      - call: [engine.run, wino, frame_optout, frame_render]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - print: ["PASS frame_blocking_warning: compiles + runs; frame-context blocking warned on stderr"]
+      - return: 0

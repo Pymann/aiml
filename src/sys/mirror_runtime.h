@@ -22,6 +22,10 @@ extern "C" {
 /* Host: listen for incoming connections (non-blocking accept loop in update) */
 void* aiml_mirror_listen         (const char* url);
 void* aiml_mirror_listen_max     (const char* url, int32_t max_peers);
+/* wss:// host with an explicit server cert (PEM cert + key paths); required for TLS. */
+void* aiml_mirror_listen_tls     (const char* url, const char* cert, const char* key);
+/* Dotted IP of a connected peer (by peer_id), captured at accept; refcounted, "" if unknown. */
+char* aiml_mirror_peer_ip        (void* session, int32_t peer_id);
 
 /* Client: connect to host */
 void* aiml_mirror_connect        (const char* url);

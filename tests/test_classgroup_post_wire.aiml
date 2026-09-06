@@ -29,7 +29,7 @@
       - class: Sink
         instance: snk
         sees: [src]
-        functions:
+        methods:
           # Runs AFTER src is wired → reads the collaborator and captures 7.
           - def: { name: on_wired, body: [{ call: [<.capture, { call: [<.src.get_val] }] }] }
 

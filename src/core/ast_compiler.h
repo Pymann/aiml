@@ -12,6 +12,13 @@ public:
     
     void compile(Program* prog);
     void registerTypes(Program* prog);
+    // Header-only (spec/58 §11): register an imported file's classgroup
+    // container/subclass TYPES and let the caller forward-declare their methods,
+    // so importing units can reference the synthesized types cross-unit.  Merges
+    // any `groupmethods:` present in `prog`, then synthesizes (which appends the
+    // container/subclass ClassDecls to prog->declarations for the caller to visit
+    // in header-only mode).  Method BODIES are emitted only in the defining unit.
+    void synthesizeImportedGroups(Program* prog);
     void registerTypeDecl(Node* node);
     void visitFunction(FunctionDecl* func);
     void visitTopLevel(Node* node);
@@ -29,6 +36,11 @@ private:
     // heuristic.  LLVM opaque pointers hide the depth, so this is source-level.
     // Suppress per-function via `static_off: ["ptr_indirection"]`.
     void checkPtrIndirection(Program* prog);
+    // Static check: a blocking primitive (send_and_await / sleep_ms / sleep)
+    // reachable over the direct-call graph from an `engine.run` per-frame
+    // callback stalls the render loop (freezes the WASM page via asyncify).
+    // Warning; per-def opt-out `static_off: ["frame_blocking"]`. See spec/49 §20.
+    void checkFrameBlocking(Program* prog);
     // Static check: engine.instantiate("<Name>") against a name with no
     // matching `- prefab:` declaration (silent runtime no-op → hard error).
     // Runs for entry and imported files. See spec/44_8_prefab_static.md.
@@ -36,6 +48,7 @@ private:
     void checkCascadeClasses(Program* prog);
     void checkCascadeClassSemantics(Program* prog);
     void synthesizeCascadeClasses(Program* prog);   // M3: emit each pool's render class
+    void mergeGroupMethods(Program* prog);          // spec/58: fold external `groupmethods:` into groups
     void checkClassGroups(Program* prog);           // spec/58: validate group wiring
     void synthesizeClassGroups(Program* prog);      // spec/58: emit subclasses + container
     void visitExternBlock(ExternBlock* ext);

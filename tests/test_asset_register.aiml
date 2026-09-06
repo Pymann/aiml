@@ -1,0 +1,28 @@
+# test_asset_register.aiml — gl.register_texture / gl.has_texture (the @art:<hash>
+# asset-registry hook for dynamic card artwork).  No GL context needed — the
+# registry is just a map keyed by stem.  A ws_handle stands in as a fake texture
+# handle (any non-null i8* works for the map).
+#
+# Expected exit code: 0
+
+- decl: [pass, i32, 0]
+- decl: [fail, i32, 0]
+
+- decl: [fake, ws_handle, { call: [ws.server, "127.0.0.1", 19981] }]
+
+- decl: [before, i32, { call: [gl.has_texture, "@art:probe"] }]
+- call: [gl.register_texture, "@art:probe", fake]
+- decl: [after, i32, { call: [gl.has_texture, "@art:probe"] }]
+- decl: [miss, i32, { call: [gl.has_texture, "@art:absent"] }]
+
+- if:
+    condition: { "&&": [{ eq: [before, 0] }, { "&&": [{ eq: [after, 1] }, { eq: [miss, 0] }] }] }
+    then:
+      - print: ["PASS: register→has (before=${before} after=${after} miss=${miss})"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: before=${before} after=${after} miss=${miss}"]
+      - set: [fail, { +: [fail, 1] }]
+
+- call: [ws.close, fake]
+- print: ["=== test_asset_register: ${pass} passed, ${fail} failed ==="]

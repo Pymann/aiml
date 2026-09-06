@@ -14,6 +14,10 @@ extern "C" {
 // ctx.getSizeType() — i64 on x86_64, i32 on wasm32).  Internal storage is
 // uint32 refcount, so practical max string is 4GB which we'll never hit.
 char* aiml_str_alloc(size_t len);
+// Instrumented strcmp used by AIML string ==/!= : delegates to strcmp but logs
+// (to stderr) when either operand is a corrupt/dangling pointer (bad magic AND
+// unterminated within 256 bytes) — pinpoints bad comparisons right before an OOB.
+int   aiml_dbg_strcmp(const char* a, const char* b);
 char* aiml_str_dup(const char* s);
 char* aiml_str_ndup(const char* s, size_t len);
 void  aiml_str_incref(char* s);

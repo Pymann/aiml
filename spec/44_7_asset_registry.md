@@ -162,6 +162,33 @@ V2 (WASM-Bundle): wenn das aiml-Binary nach WASM compiled wird, ersetzt
 der Bundle-Loader den Disk-Lookup durch einen emscripten-VFS-Lookup über
 den rel_path.
 
+### Runtime-Texturen (nicht aus dem Asset-Bundle)
+
+Manche Texturen entstehen erst zur Laufzeit — z.B. **Card-Artwork**, das ein
+User hochlädt und der Client per WebSocket vom Media-Server holt (nicht Teil
+des gebauten Asset-Bundles).  Sie werden unter einem **synthetischen Stem**
+`@art:<sha256>` in denselben Texture-Store gelegt, sodass ein Sprite-`texture_path`
+bzw. `gl.tex("@art:<hash>")` sie wie jede gebündelte Textur auflöst.
+
+| Builtin | Signatur | Zweck |
+|---|---|---|
+| `gl.register_texture` | `gl.register_texture(stem: string, tex: gl_texture) → void` | Eine zur Laufzeit erzeugte Textur unter `stem` registrieren (Store = Cache). |
+| `gl.has_texture` | `gl.has_texture(stem: string) → i32` | `1` wenn unter `stem` eine Textur gecacht ist (Hit-Test = Dedup). |
+| `gl.decode_texture` | `gl.decode_texture(webp: buffer) → gl_texture` | Kodierte Bytes (WebP/PNG/JPG) in `webp` → GPU-Textur. Cross-target (nativ stb/libwebp, WASM `createImageBitmap`). `null` bei Fehler. Braucht GL-Kontext. |
+
+Muster (Fetch → Decode → Register, idempotent über den Store als Cache):
+
+```
+- if:
+    condition: { eq: [{ call: [gl.has_texture, "@art:${hsh}"] }, 0] }
+    then:
+      # … webp-Bytes per WS holen …
+      - decl: [tex, gl_texture, { call: [gl.decode_texture, webp] }]
+      - if:
+          condition: { pneq: [tex, null] }
+          then: [ { call: [gl.register_texture, "@art:${hsh}", tex] } ]
+```
+
 ## Architektur
 
 ```

@@ -419,3 +419,7 @@ extern "C" int32_t aiml_math_random_int(int32_t lo, int32_t hi) {
     std::uniform_int_distribution<int32_t> dist(lo, hi - 1);
     return dist(aiml_rng());
 }
+
+/* NOTE: aiml_math_random_hex (math.random_hex, CSPRNG via OpenSSL RAND_bytes)
+ * lives in hash_runtime.cpp — the WASM runtime compiles this file but has no
+ * OpenSSL, so the crypto-random impl must stay out of math_runtime.cpp. */

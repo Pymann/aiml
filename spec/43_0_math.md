@@ -258,7 +258,18 @@ When passed to functions, a copy is made (analogous to `i32`).
 # Random — thread-local mt19937, seeded from std::random_device on first use
 - decl: [r,  f32, { call: [math.random,     0.0, 1.0] }]   # uniform in [0.0, 1.0)
 - decl: [ri, i32, { call: [math.random_int, 0,   10 ] }]   # uniform integer in [0, 10)
+
+# Secure random — cryptographically-secure bytes (OpenSSL RAND_bytes), NOT the mt19937 above.
+# Returns lowercase hex of `nbytes` bytes (so 2*nbytes chars). Default 16, clamped to 1..1024.
+# Use for salts, tokens, session-ids — never math.random/random_int for those.
+- decl: [salt,  string, { call: [math.random_hex, 16] }]   # 32 hex chars, e.g. "80b02d85…"
+- decl: [token, string, { call: [math.random_hex, 32] }]   # 64 hex chars
 ```
+
+> **`math.random` / `math.random_int` are NOT cryptographically secure** (deterministic
+> Mersenne-Twister). For any security-sensitive value — password salts, session tokens,
+> CSRF/nonce values — use `math.random_hex`, which draws from the OS CSPRNG via OpenSSL
+> `RAND_bytes`. Pair it with `hash.pbkdf2` (spec 33_1) for password storage.
 
 ---
 

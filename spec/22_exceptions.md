@@ -54,6 +54,20 @@
 - If no `catch` block matches at any level, the program calls `sys.exit(2)` and prints
   the exception message to stderr.
 
+## Implementation invariant — calls inside `try` must be `invoke`
+
+For a `throw` in a *called* function/method to reach an enclosing `try`, **every
+call emitted inside a try block must be an LLVM `invoke`** whose unwind edge is
+the catch landingpad (tracked via `ctx.catchBlock`). A plain `call` lets the
+exception unwind straight past the handler → uncaught: AOT `std::terminate`
+("terminate called without an active exception"), JIT top-level "Unhandled AIML
+exception". Every call-emission path in `ast_compiler_call.cpp` (free functions,
+the fptable branch's not-yet-emitted `cur_gv==null` fallback, **and regular
+method calls**) must honor `ctx.catchBlock`. Symptom of a missed path in the IR:
+`catch_block: ; No predecessors!`. Regression test: `tests/aot_trycatch_repro.aiml`
+(free-function *and* method throw, caught by-type; expects `CAUGHT …` lines),
+built AOT via `exodus-aot-repro.json` — must be checked in AOT, not only JIT.
+
 ## Built-in System Exceptions
 
 | Exception | Trigger |

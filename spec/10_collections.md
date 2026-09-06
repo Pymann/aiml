@@ -22,6 +22,28 @@
 - set: [len, scores.len]         # Element count (property, i32)
 - set: [is_empty, scores.empty]  # Check if empty (property, bool)
 
+# List Builtins (search, bulk, ordering)
+# Equality uses the same semantics as `eq`: strings compare by content
+# (null-safe), floats by `oeq`, ints/enums/pointers bitwise/by identity.
+# Search methods (contains/index_of/count/remove_value) are NOT available for
+# struct/model element types (no canonical model equality yet) — that is a
+# compile error with a source location.
+- set: [has,  { call: [scores.contains, 100] }]     # -> i32 1/0
+- set: [idx,  { call: [scores.index_of, 100] }]      # -> i32 first index, or -1
+- set: [hits, { call: [scores.count, 100] }]         # -> i32 number of matches
+- set: [gone, { call: [scores.remove_value, 100] }]  # remove FIRST match; -> i32 1/0
+- call: [scores.extend, more]    # append value-copies of another list<i32>
+                                 # (self.extend(self) is defined; realloc-safe).
+                                 # A different list<U> is a compile error.
+- call: [scores.reverse]         # in-place reverse
+- call: [scores.sort]            # in-place ascending, stable insertion sort
+- call: [scores.sort_desc]       # in-place descending
+- call: [scores.shuffle]         # in-place Fisher-Yates (uses math.random_int;
+                                 # order is non-deterministic — not replay-safe)
+# sort/sort_desc support only int, enum, float and string element types.
+# Floats: ascending puts NaN toward the end.  shuffle/reverse/extend work for
+# any element type (whole values are moved, no comparison needed).
+
 # Access
 - set: [val, scores-0]           # Get element at index 0
 - set: [subset, scores-1-3]      # Slice: elements at index 1 and 2
@@ -111,11 +133,18 @@ models/classes (structs). The storage semantics depend on `T`:
 | `i32`, `f32`, ... | value in array | value copy | value copy |
 | `string` (`i8*`) | pointer in array | pointer copy | pointer copy |
 | `ptr<MyModel>` | pointer in array | pointer copy (shared heap object) | pointer copy |
-| `MyModel` (struct) | full struct in array | full struct copy (value semantics) | full struct copy |
+| `MyModel` (struct) | full struct in array | full struct copy (value semantics) | pointer to the element; a typed model local materializes a value copy |
 
 **Implementation**: `list.push(val)` does `CreateStore(val, &data[size])` — the LLVM value
 is stored directly into the data array. For structs this is a full byte-for-byte copy
-(`sizeof(MyModel)` bytes per element). For pointers it is an 8-byte pointer copy.
+(`sizeof(MyModel)` bytes per element). For pointers it is a target-pointer-sized copy (4 bytes on wasm32, 8 bytes on a 64-bit native target).
+
+A pointer expression cannot be pushed directly into an aggregate value list. This is
+a compile-time error for variables, members and nested calls alike. For example,
+`destination.push(source.get(index))` is invalid when both lists hold model values:
+`get()` returns an element pointer. Declare a local `MyModel` initialized from the
+`get()` result, then push that value; use `list<ptr<MyModel>>` when pointer sharing
+is intended. Calls returning actual model values remain valid push arguments.
 
 **Consequence**: `list<MyModel>` and `list<ptr<MyModel>>` are both valid but have
 fundamentally different semantics:

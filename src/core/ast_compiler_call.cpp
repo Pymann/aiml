@@ -516,9 +516,27 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                 callRes = ctx.ir_gen->wrap(res);
             }
         } else {
-            // fptable not yet emitted (e.g. during registerTypes pass) — direct call
+            // fptable not yet emitted (e.g. during registerTypes pass) — direct call.
+            // MUST still honor an active try/catch: inside a try block every call
+            // has to be an `invoke` unwinding to the catch landingpad, otherwise a
+            // thrown exception sails past the handler (uncaught → AOT std::terminate
+            // / JIT top-level).  This branch previously emitted a plain call and
+            // silently broke try/catch around any fptable-eligible user function.
             coerceArgs();
-            callRes = ctx.ir_gen->createCall(f->getName().str(), argVals);
+            if (ctx.catchBlock) {
+                llvm::Function* cur = ctx.builder.GetInsertBlock()->getParent();
+                llvm::BasicBlock* cont =
+                    llvm::BasicBlock::Create(ctx.context, "invoke_cont", cur);
+                std::vector<llvm::Value*> rawArgs;
+                for (auto& av : argVals)
+                    rawArgs.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(av)));
+                llvm::Value* invRes = ctx.builder.CreateInvoke(
+                    f, cont, ctx.catchBlock, rawArgs, funcName + "_inv");
+                callRes = ctx.ir_gen->wrap(invRes);
+                ctx.builder.SetInsertPoint(cont);
+            } else {
+                callRes = ctx.ir_gen->createCall(f->getName().str(), argVals);
+            }
         }
     } else if (f) {
         // ── Direct call (builtins / external / functions outside fptable) ─────
@@ -1214,31 +1232,22 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          llvm::Type* llvmListElemType = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(listElemName)));
          if (methodName == "push" && argVals.size() > 0) {
              llvm::Value* pushVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
-             // ── Static check: push(ptr<T>) into a VALUE list<T> ────────────
-             // Ein 8-byte Pointer würde in einen Value-Struct-Slot geschrieben
-             // (nur die ersten 8 bytes gesetzt, Rest garbage) → Heap-Korruption
-             // / SIGSEGV beim Serialisieren (aiml_ser_encode).  Compile-Fehler.
-             // Ausgenommen: list<ptr<T>> (element = ptr, ok) und Interface-
-             // FatPtr-Listen (eigenes Upcast-Handling direkt darunter).
-             {
-                 bool elemIsPtr = (listElemName.rfind("ptr<", 0) == 0);
-                 bool elemIsFatPtr = llvmListElemType && llvmListElemType->isStructTy() &&
-                     llvm::cast<llvm::StructType>(llvmListElemType)->hasName() &&
-                     llvm::cast<llvm::StructType>(llvmListElemType)->getName().startswith("AimlFatPtr_");
-                 if (!elemIsPtr && !elemIsFatPtr) {
-                     if (auto* pushVar = dynamic_cast<VariableExpr*>(call->args[0].get())) {
-                         if (Symbol* pushSym = resolveVariable(pushVar->name)) {
-                             if (pushSym->typeName == "ptr<" + listElemName + ">") {
-                                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
-                                     "list<" + listElemName + ">.push() got a ptr<" + listElemName +
-                                     "> ('" + pushVar->name + "'): an 8-byte pointer would be written into a " +
-                                     "value-struct slot (heap corruption / SIGSEGV on serialize). " +
-                                     "Dereference it — { '?': [" + pushVar->name +
-                                     "] } — or declare the list as list<ptr<" + listElemName + ">>.");
-                             }
-                         }
-                     }
-                 }
+             // Reject pointer representations in aggregate VALUE lists, regardless
+             // of the argument AST shape (variable, member, nested get/call).
+             // get() returns an element pointer for structs; passing it through
+             // would make ListImpl::push allocate/store pointer-sized elements.
+             // Interface fat pointers retain their existing upcast path below.
+             const bool aggregateValue = llvmListElemType && llvmListElemType->isStructTy();
+             const bool interfaceValue = aggregateValue &&
+                 llvm::cast<llvm::StructType>(llvmListElemType)->hasName() &&
+                 llvm::cast<llvm::StructType>(llvmListElemType)->getName().startswith("AimlFatPtr_");
+             if (aggregateValue && !interfaceValue && pushVal && pushVal->getType()->isPointerTy()) {
+                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
+                     "list<" + listElemName + ">.push() got a pointer instead of a value: "
+                     "storing pointer-sized elements would corrupt the list layout. "
+                     "Copy/dereference the element into a local " + listElemName +
+                     " value before push(), or use list<ptr<" + listElemName + ">>.");
+                 return nullptr;
              }
              // Interface-Upcast für push(ptr<Concrete>) wenn list-elem = ptr<Interface>.
              // Ohne diesen Schritt landet ein 8-byte class-ptr in einem 16-byte
@@ -1297,6 +1306,112 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              return nullptr;
          } else if (methodName == "len") {
              return ctx.ir_gen->wrap(ListImpl::getSize(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca))));
+         }
+         // ── List-Builtins (doc/ideas/list_builtins_plan.md) ────────────────
+         else if (methodName == "contains" || methodName == "index_of" ||
+                  methodName == "count"    || methodName == "remove_value") {
+             // Value-lists only: struct/model elements have no canonical equality in M1.
+             if (llvmListElemType && llvmListElemType->isStructTy()) {
+                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "list<" + listElemName + ">." + methodName +
+                     " is not supported for struct/model element types (no canonical equality in M1).");
+                 return ctx.ir_gen->getInt32(0);
+             }
+             if (argVals.size() != 1) {
+                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "list<" + listElemName + ">." + methodName +
+                     " expects 1 argument, got " + std::to_string(argVals.size()));
+                 return ctx.ir_gen->getInt32(0);
+             }
+             llvm::Value* listPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+             llvm::Value* needle  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+             if (methodName == "index_of")
+                 return ctx.ir_gen->wrap(ListImpl::indexOf(ctx, listPtr, needle, llvmListElemType, listElemName));
+             if (methodName == "count")
+                 return ctx.ir_gen->wrap(ListImpl::count(ctx, listPtr, needle, llvmListElemType, listElemName));
+             if (methodName == "contains") {
+                 llvm::Value* idx = ListImpl::indexOf(ctx, listPtr, needle, llvmListElemType, listElemName);
+                 return ctx.ir_gen->wrap(ctx.builder.CreateZExt(
+                     ctx.builder.CreateICmpSGE(idx, ctx.builder.getInt32(0)), ctx.builder.getInt32Ty()));
+             }
+             // remove_value: indexOf + conditional remove; returns i32 1 (removed) / 0.
+             llvm::Value* idx = ListImpl::indexOf(ctx, listPtr, needle, llvmListElemType, listElemName);
+             llvm::Function* pf = ctx.builder.GetInsertBlock()->getParent();
+             llvm::Value* outVar = ctx.createEntryAlloca(ctx.builder.getInt32Ty(), "lrmv_out");
+             ctx.builder.CreateStore(ctx.builder.getInt32(0), outVar);
+             auto* rmBB  = llvm::BasicBlock::Create(ctx.context, "lrmv_do", pf);
+             auto* endBB = llvm::BasicBlock::Create(ctx.context, "lrmv_end", pf);
+             ctx.builder.CreateCondBr(ctx.builder.CreateICmpSGE(idx, ctx.builder.getInt32(0)), rmBB, endBB);
+             ctx.builder.SetInsertPoint(rmBB);
+             ListImpl::remove(ctx, listPtr, idx, llvmListElemType);
+             ctx.builder.CreateStore(ctx.builder.getInt32(1), outVar);
+             ctx.builder.CreateBr(endBB);
+             ctx.builder.SetInsertPoint(endBB);
+             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), outVar, "lrmv_res"));
+         }
+         else if (methodName == "extend") {
+             if (argVals.size() != 1) {
+                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) + className + ".extend expects 1 argument, got " +
+                     std::to_string(argVals.size()));
+                 return nullptr;
+             }
+             // The argument must be a list VARIABLE: we need its struct pointer
+             // (alloca), not the by-value load that argVals[0] produced.  Also
+             // static-type-check it against the receiver (no implicit conversion).
+             llvm::Value* srcPtr = nullptr;
+             std::string argTypeName;
+             if (auto* v = dynamic_cast<VariableExpr*>(call->args[0].get())) {
+                 if (Symbol* s = resolveVariable(v->name)) {
+                     argTypeName = s->typeName;
+                     srcPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+                         s->ir_alloca_inst ? s->ir_alloca_inst
+                                           : ctx.ir_gen->wrap(s->alloca_inst)));
+                 }
+             }
+             if (argTypeName.rfind("cascade<", 0) == 0 && !argTypeName.empty() && argTypeName.back() == '>')
+                 argTypeName = "list<i32>";
+             if (!srcPtr) {
+                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) + className +
+                     ".extend expects a list variable as argument.");
+                 return nullptr;
+             }
+             if (!argTypeName.empty() && argTypeName != className) {
+                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) + className + ".extend expects " + className +
+                     ", got " + argTypeName);
+                 return nullptr;
+             }
+             ListImpl::extend(ctx,
+                 static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
+                 srcPtr, llvmListElemType);
+             return nullptr;
+         }
+         else if (methodName == "reverse" || methodName == "shuffle") {
+             if (!argVals.empty()) {
+                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "list<" + listElemName + ">." + methodName +
+                     " expects 0 arguments, got " + std::to_string(argVals.size()));
+                 return nullptr;
+             }
+             llvm::Value* listPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+             if (methodName == "reverse") ListImpl::reverse(ctx, listPtr, llvmListElemType);
+             else                          ListImpl::shuffle(ctx, listPtr, llvmListElemType);
+             return nullptr;
+         }
+         else if (methodName == "sort" || methodName == "sort_desc") {
+             if (!argVals.empty()) {
+                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "list<" + listElemName + ">." + methodName +
+                     " expects 0 arguments, got " + std::to_string(argVals.size()));
+                 return nullptr;
+             }
+             bool elemIsString = (listElemName == "string");
+             bool sortable = elemIsString || (llvmListElemType &&
+                 (llvmListElemType->isIntegerTy() || llvmListElemType->isFloatingPointTy()));
+             if (!sortable) {
+                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "list<" + listElemName + ">." + methodName +
+                     " supports only int, enum, float and string element types.");
+                 return nullptr;
+             }
+             ListImpl::sortList(ctx,
+                 static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
+                 llvmListElemType, listElemName, methodName == "sort_desc");
+             return nullptr;
          }
          LOG_ERROR("Unknown list method: " + methodName + " on " + className);
          return ctx.ir_gen->getInt32(0);
@@ -2379,7 +2494,25 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              }
              methodArgs.push_back(a);
          }
-         IRValue* callResult = ctx.ir_gen->createCall(func->getName().str(), methodArgs, "call_method");
+         // Inside a try block a method call must be an `invoke` unwinding to the
+         // catch landingpad — otherwise an exception thrown by the callee (e.g.
+         // persist_from_req → InvalidCascadeException) sails past the handler
+         // (uncaught → AOT std::terminate).  Same fix as the free-function path.
+         IRValue* callResult;
+         if (ctx.catchBlock) {
+             llvm::BasicBlock* contBB = llvm::BasicBlock::Create(
+                 ctx.context, "invoke_cont",
+                 ctx.builder.GetInsertBlock()->getParent());
+             IRBlock* contWrapped  = ctx.ir_gen->wrapBlock(contBB);
+             IRBlock* catchWrapped = ctx.ir_gen->wrapBlock(ctx.catchBlock);
+             const std::string invName =
+                 func->getReturnType()->isVoidTy() ? "" : "call_method";
+             callResult = ctx.ir_gen->createInvoke(
+                 func->getName().str(), contWrapped, catchWrapped, methodArgs, invName);
+             ctx.builder.SetInsertPoint(contBB);
+         } else {
+             callResult = ctx.ir_gen->createCall(func->getName().str(), methodArgs, "call_method");
+         }
          // If the method returns a struct (list<T>, model, etc.), store the value
          // into a temporary alloca and return the pointer.  This matches what
          // builtin handlers do and what visitSetStmt/visitDeclStmt expect for

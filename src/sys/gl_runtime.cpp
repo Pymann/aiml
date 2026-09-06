@@ -33,6 +33,16 @@
 #include <cstring>
 #include <unordered_map>
 #include <string>
+#include <vector>
+
+/* WebP-Texturdecode für gl.tex:
+ *   Native — libwebp (WebPDecodeRGBA), wie img_runtime; libwebp ist verlinkt.
+ *   Web     — der Browser (createImageBitmap) via aiml_art_decode_texture
+ *             (art_runtime); libwebp ist unter emcc NICHT verlinkt. */
+#ifndef __EMSCRIPTEN__
+#include <webp/decode.h>
+#endif
+extern "C" void* aiml_art_decode_texture(void* enc_buf);   // bytes → GL-Textur (WASM: browser)
 
 /* ── Interne Struct-Definitionen ────────────────────────────────────────── */
 
@@ -409,13 +419,62 @@ static inline bool aiml_gl_has_context() { return true; }
 
 void* aiml_gl_load_texture(const char* path) {
     if (!path) return nullptr;
-    stbi_set_flip_vertically_on_load(1);
-    int w, h, ch;
-    uint8_t* px = stbi_load(path, &w, &h, &ch, 4);
-    if (!px) {
-        fprintf(stderr, "[aiml_gl] load_texture: cannot load %s\n", path);
-        return nullptr;
+    // Datei komplett in den Speicher lesen — so kann JEDER Codec dieselben Bytes
+    // dekodieren (stb kann kein WebP; darum format-erkennend statt stbi_load(path)).
+    FILE* fp = fopen(path, "rb");
+    if (!fp) { fprintf(stderr, "[aiml_gl] load_texture: cannot open %s\n", path); return nullptr; }
+    fseek(fp, 0, SEEK_END);
+    long flen = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    if (flen <= 0) { fclose(fp); fprintf(stderr, "[aiml_gl] load_texture: empty %s\n", path); return nullptr; }
+    std::vector<uint8_t> bytes((size_t)flen);
+    size_t rd = fread(bytes.data(), 1, (size_t)flen, fp);
+    fclose(fp);
+    if (rd != (size_t)flen) { fprintf(stderr, "[aiml_gl] load_texture: read failed %s\n", path); return nullptr; }
+
+    const bool is_webp = (flen >= 12 &&
+        memcmp(bytes.data(), "RIFF", 4) == 0 &&
+        memcmp(bytes.data() + 8, "WEBP", 4) == 0);
+
+#ifdef __EMSCRIPTEN__
+    // Web: über den Browser dekodieren (createImageBitmap; PNG/JPG/WebP) — derselbe
+    // bewährte Pfad wie die Card-Art, inkl. FLIP_Y auf die Engine-Konvention.
+    struct EncBuf { int32_t size, cap, rIdx, wIdx; char* data; } eb;
+    eb.data = (char*)bytes.data();
+    eb.size = (int32_t)flen; eb.cap = (int32_t)flen; eb.rIdx = 0; eb.wIdx = (int32_t)flen;
+    void* t = aiml_art_decode_texture(&eb);   // AimlArtTex* ist layout-gleich zu AimlGLTexture*
+    if (!t) { fprintf(stderr, "[aiml_gl] load_texture: browser decode failed %s\n", path); return nullptr; }
+    // gl.tex-Konvention an die native upload_texture angleichen: REPEAT (sonst
+    // kacheln Tiling-Texturen wie Lobby-Hintergrund/Rahmen NICHT) + Mipmaps.
+    // aiml_art_decode_texture setzt CLAMP_TO_EDGE (für Card-Art korrekt) — hier
+    // überschreiben.
+    glBindTexture(GL_TEXTURE_2D, ((AimlGLTexture*)t)->id);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return t;
+#else
+    int w = 0, h = 0;
+    uint8_t* px = nullptr;
+    if (is_webp) {
+        px = WebPDecodeRGBA(bytes.data(), (size_t)flen, &w, &h);   // top-down
+        if (px) {  // auf bottom-up flippen (Engine-Konvention wie stbi flip-on-load)
+            const int stride = w * 4;
+            for (int y = 0; y < h / 2; ++y) {
+                uint8_t* a = px + (size_t)y * stride;
+                uint8_t* b = px + (size_t)(h - 1 - y) * stride;
+                for (int x = 0; x < stride; ++x) { uint8_t tmp = a[x]; a[x] = b[x]; b[x] = tmp; }
+            }
+        }
+    } else {
+        stbi_set_flip_vertically_on_load(1);
+        int ch = 0;
+        px = stbi_load_from_memory(bytes.data(), (int)flen, &w, &h, &ch, 4);
     }
+    if (!px) { fprintf(stderr, "[aiml_gl] load_texture: cannot decode %s\n", path); return nullptr; }
     AimlGLTexture* t = new AimlGLTexture();
     if (aiml_gl_has_context()) {
         glGenTextures(1, &t->id);
@@ -425,8 +484,9 @@ void* aiml_gl_load_texture(const char* path) {
     }
     t->width  = w;
     t->height = h;
-    stbi_image_free(px);
+    if (is_webp) WebPFree(px); else stbi_image_free(px);
     return t;
+#endif
 }
 
 void* aiml_gl_create_texture(int32_t w, int32_t h, void* px_buf) {

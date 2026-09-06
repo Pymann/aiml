@@ -53,9 +53,17 @@ private:
     int  paramField   = 0;          // 0 = expect name, 1 = expect type
     std::pair<std::string, std::string> curParam;  // param pair under construction
     bool inSubgroups  = false;      // inside the group-level `subgroups:` sequence
-    int  subgDepth    = 0;          // 1 = outer subgroups seq, 2 = one [name,type] pair
-    int  subgField    = 0;          // 0 = expect name, 1 = expect group-type
+    int  subgDepth    = 0;          // 1 = outer subgroups seq, 2 = one [name,type,{ports}] entry
+    int  subgField    = 0;          // 0 = expect name, 1 = expect group-type, 2 = done (opt ports map)
     std::pair<std::string, std::string> curSubg;   // subgroup pair under construction
+    bool inSubgPortMap = false;     // inside a subgroup entry's optional `{port: inst}` map
+    bool subgPortKey   = true;      // expecting a port-binding key vs its value
+    std::string curSubgPortKey;     // port-binding key under construction
+    std::vector<std::pair<std::string, std::string>> curSubgPorts;  // bindings for curSubg
+    bool inPorts      = false;      // inside the group-level `requires:` sequence
+    int  portsDepth   = 0;          // 1 = outer requires seq, 2 = one [name,class] pair
+    int  portField    = 0;          // 0 = expect port name, 1 = expect base class
+    std::pair<std::string, std::string> curPort;   // requires pair under construction
     bool inExports    = false;      // inside the group-level `export:` sequence
     ClassGroupInstance cur_;        // instance under construction
 };

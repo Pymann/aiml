@@ -68,6 +68,12 @@
 | `seek` | `buffer.seek(pos: i32)` | Sets both readIndex and writeIndex to `pos` (byte offset). |
 | `zero` | `buffer.zero()` | `memset(data, 0, capacity)` + sets size and writeIndex to capacity. |
 | `len` | `buffer.len → i32` | Returns current size (number of bytes written). Property access, no `call:` needed. |
+| `ws_send` | `buffer.ws_send(conn: ws_handle) → i32` | Send the written bytes (`wIdx`) as one WebSocket binary frame. See chapter 32_4 §5.1. |
+| `ws_recv` | `buffer.ws_recv(conn: ws_handle) → i32` | Receive the next WebSocket frame into this buffer (updates size/wIdx, resets rIdx). See chapter 32_4 §5.1. |
+| `decode_image` | `buffer.decode_image(src: buffer) → i64` | Decode PNG/JPG/WebP bytes in `src` into this buffer as tightly-packed RGBA. Returns `(width << 32) | height`, or `0` on failure. Native only (WASM decodes in-browser). |
+| `encode_webp` | `buffer.encode_webp(src: buffer, w: i32, h: i32, quality: i32) → i32` | Encode RGBA bytes in `src` (`w*h*4`) to WebP into this buffer. `quality < 0` = lossless, `0..100` = lossy. Returns encoded byte count, or `0`. Native only. |
+| `resize_crop` | `buffer.resize_crop(src: buffer, sw: i32, sh: i32, dw: i32, dh: i32, mode: i32) → i32` | Resize RGBA in `src` (`sw×sh`) to EXACTLY `dw×dh` into this buffer. `mode 0` = cover-crop (aspect kept, overflowing axis centered-cropped), `mode 1` = stretch (fill exactly, may distort). Returns `dw*dh*4`, or `0`. Native only. |
+| `pick_webp` | `buffer.pick_webp(dw: i32, dh: i32, mode: i32) → i32` | Open a file picker, decode the chosen image, resize/crop it to `dw×dh` (mode as `resize_crop`) and WebP-encode it into this buffer. Returns bytes written, or `0` (cancelled/error). Cross-target: native uses a zenity/kdialog dialog + stb/libwebp, WASM a browser `<input type=file>` + canvas `toBlob`. Needs a display (client path). |
 
 ## zero — Bulk Initialization
 

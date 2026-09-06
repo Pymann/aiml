@@ -34,6 +34,7 @@ void        aiml_storage_clear (void);
  * Natively returns "localhost".
  * Returned pointer is valid until the next call to this function. */
 const char* aiml_storage_host  (void);
+int32_t     aiml_storage_is_secure(void);   /* 1 if the page is served over https (WASM); 0 native */
 
 #ifdef __cplusplus
 }

@@ -1,0 +1,66 @@
+# Expected exit code: 0
+# srv.secure_headers(hsts) adds nosniff / X-Frame-Options / Referrer-Policy (+ HSTS)
+# to EVERY response — normal 200 AND parser-reject errors (spec/32_2 §3.10).
+
+- def:
+    name: handle_root
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - set: [resp.status, 200]
+      - set: [resp.body, "ok"]
+      - call: [resp.send]
+
+- def:
+    name: probe
+    args: [[raw, string]]
+    return: string
+    body:
+      - decl: [sock, socket_handle]
+      - set: [sock, { call: [net.socket, "tcp"] }]
+      - call: [net.connect, sock, "127.0.0.1", 23189]
+      - call: [net.send_string, sock, raw]
+      - decl: [rsp, string]
+      - set: [rsp, { call: [net.recv_string, sock, 512] }]
+      - call: [net.close, sock]
+      - return: rsp
+
+# has: 1 if `hay` contains `needle`, else 0.
+- def:
+    name: has
+    args: [[hay, string], [needle, string]]
+    return: i32
+    body:
+      - decl: [pos, i32, { call: [hay.index_of, needle] }]
+      - if: { condition: { lt: [pos, 0] }, then: [{ return: 0 }] }
+      - return: 1
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server, "127.0.0.1", 23189] }]
+      - call: [srv.set_timeout, 2]
+      - call: [srv.secure_headers, 1]        # enable bundle incl. HSTS
+      - call: [srv.route, "GET", "/", handle_root]
+      - call: [srv.route, "POST", "/", handle_root]
+      - decl: [thr, thread_handle]
+      - set: [thr, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 300]
+      - decl: [fail, i32, 0]
+
+      # normal 200 response carries all security headers
+      - decl: [r_ok, string, { call: [probe, "GET / HTTP/1.1\r\nHost: x\r\n\r\n"] }]
+      - if: { condition: { eq: [{ call: [has, r_ok, "X-Content-Type-Options: nosniff"] }, 0] }, then: [{ print: ["FAIL nosniff missing: ${r_ok}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { eq: [{ call: [has, r_ok, "X-Frame-Options: DENY"] }, 0] },        then: [{ print: ["FAIL xfo missing"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { eq: [{ call: [has, r_ok, "Referrer-Policy: no-referrer"] }, 0] }, then: [{ print: ["FAIL referrer missing"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { eq: [{ call: [has, r_ok, "Strict-Transport-Security:"] }, 0] },   then: [{ print: ["FAIL hsts missing"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # parser-reject error (413) ALSO carries the security headers (consistency)
+      - decl: [r_err, string, { call: [probe, "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 999999999999\r\n\r\n"] }]
+      - if: { condition: { eq: [{ call: [has, r_err, "HTTP/1.1 413"] }, 0] },                 then: [{ print: ["FAIL err not 413: ${r_err}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { eq: [{ call: [has, r_err, "X-Content-Type-Options: nosniff"] }, 0] }, then: [{ print: ["FAIL err nosniff missing: ${r_err}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      - if: { condition: { neq: [fail, 0] }, then: [{ print: ["FAILED: ${fail}"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS http_secure_headers: nosniff+XFO+Referrer+HSTS on 200 and on 413 error"]
+      - return: 0

@@ -1,0 +1,77 @@
+# test_img_webp.aiml — in-memory WebP encode + decode round-trip (libwebp).
+#
+# Build an 8x8 RGBA image, encode it lossless to WebP, decode it back, and
+# verify dimensions, byte length and exact pixel values (lossless == exact).
+# Proves libwebp linking + buffer.encode_webp / buffer.decode_image.
+#
+# Expected exit code: 0
+
+- decl: [pass, i32, 0]
+- decl: [fail, i32, 0]
+
+# ── Source: 8x8 RGBA, pixel(x,y) = (x*16, y*16, 64, 255) ─────────────────────
+- decl: [rgba, buffer]
+- call: [rgba.alloc, 4096]
+- decl: [row, i32, 0]
+- while:
+    condition: { "<": [row, 8] }
+    body:
+      - decl: [col, i32, 0]
+      - while:
+          condition: { "<": [col, 8] }
+          body:
+            - call: [rgba.write, { "*": [col, 16] }, u8]
+            - call: [rgba.write, { "*": [row, 16] }, u8]
+            - call: [rgba.write, 64, u8]
+            - call: [rgba.write, 255, u8]
+            - set: [col, { +: [col, 1] }]
+      - set: [row, { +: [row, 1] }]
+
+# ── Encode lossless WebP ─────────────────────────────────────────────────────
+- decl: [webp, buffer]
+- call: [webp.alloc, 65536]
+- decl: [enc_n, i32, { call: [webp.encode_webp, rgba, 8, 8, -1] }]
+- if:
+    condition: { ">": [enc_n, 0] }
+    then:
+      - print: ["PASS: encode → ${enc_n} WebP bytes"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: encode returned ${enc_n}"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── Decode back to RGBA ──────────────────────────────────────────────────────
+- decl: [out, buffer]
+- call: [out.alloc, 4096]
+- decl: [dims, i64, { call: [out.decode_image, webp] }]
+- decl: [out_len, i32, out.len]
+- if:
+    condition: { "&&": [{ ">": [dims, 0] }, { eq: [out_len, 256] }] }
+    then:
+      - print: ["PASS: decode ok, ${out_len} RGBA bytes (dims packed=${dims})"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: decode dims=${dims} len=${out_len}"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── Verify pixel(0,0) = (0,0,64) and pixel(7,7) = (112,112,64) ───────────────
+- call: [out.seek, 0]
+- decl: [p0r, i32, { call: [out.read, u8] }]
+- decl: [p0g, i32, { call: [out.read, u8] }]
+- decl: [p0b, i32, { call: [out.read, u8] }]
+- call: [out.seek, 252]
+- decl: [p7r, i32, { call: [out.read, u8] }]
+- decl: [p7g, i32, { call: [out.read, u8] }]
+- decl: [p7b, i32, { call: [out.read, u8] }]
+- if:
+    condition: { "&&": [{ "&&": [{ eq: [p0r, 0] }, { eq: [p0g, 0] }] },
+                        { "&&": [{ eq: [p0b, 64] }, { "&&": [{ eq: [p7r, 112] }, { eq: [p7b, 64] }] }] }] }
+    then:
+      - print: ["PASS: pixels exact — p0=(${p0r},${p0g},${p0b}) p7=(${p7r},${p7g},${p7b})"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: pixels p0=(${p0r},${p0g},${p0b}) p7=(${p7r},${p7g},${p7b})"]
+      - set: [fail, { +: [fail, 1] }]
+
+- print: [""]
+- print: ["=== test_img_webp: ${pass} passed, ${fail} failed ==="]

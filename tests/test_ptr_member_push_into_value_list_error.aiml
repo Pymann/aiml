@@ -1,0 +1,14 @@
+# static-check: off
+# Expected: compile error, pointer expression cannot be pushed into a value list.
+- model: { name: Payload, fields: [[marker, i32], [title, string]] }
+- model: { name: Holder, fields: [[item, ptr<Payload>]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [items, list<Payload>]
+      - decl: [holder, Holder]
+      - set: [holder.item, { new: Payload }]
+      - call: [items.push, holder.item]
+      - print: ["UNEXPECTED_RUNTIME: invalid pointer push compiled"]
+      - return: 0

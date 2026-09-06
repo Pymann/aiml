@@ -48,7 +48,7 @@
       - class: DamageResolver
         instance: resolver
         sees: [log]
-        functions:
+        methods:
           - def:
               name: apply
               args: [[amount, i32]]

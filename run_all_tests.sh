@@ -131,6 +131,7 @@ for TEST in $TEST_FILES; do
     echo "Running: $TEST" | tee -a "$OUTPUT_FILE"
     echo "--------------------------------------------------------" | tee -a "$OUTPUT_FILE"
 
+    TEST_LOG_START=$(wc -l < "$OUTPUT_FILE")
     # Run the test, capture stdout and stderr, and append to the output file.
     # Asset-Registry tests use the helper-script: it parses `# AssetRoots:`
     # from the test header and invokes aiml with --asset-roots.
@@ -205,7 +206,10 @@ for TEST in $TEST_FILES; do
         # Negative test: void-call initializer must fail at compile time
         # instead of triggering a stack overflow in LLVM type layout.
         EXPECTED_CODE=1
-    elif [[ "$TEST" == *"test_ptr_push_into_value_list_error.aiml" ]]; then
+    elif [[ "$TEST" == *"test_ptr_push_into_value_list_error.aiml" ||
+            "$TEST" == *"test_ptr_member_push_into_value_list_error.aiml" ||
+            "$TEST" == *"test_ptr_call_push_into_value_list_error.aiml" ||
+            "$TEST" == *"test_list_model_nested_get_push_repro.aiml" ]]; then
         # Negative test: push(ptr<T>) into value list<T> — an 8-byte pointer
         # into a value-struct slot corrupts the heap / SIGSEGVs on serialize.
         # Must be a compile error (deref { '?': [x] } or use list<ptr<T>>).
@@ -214,6 +218,16 @@ for TEST in $TEST_FILES; do
         # Negative test: assigning a string literal to an enum-typed slot must
         # be a compile error (enum is i32 — a string would coerce to garbage).
         EXPECTED_CODE=1
+    fi
+
+    # These negatives must fail at compile time, not via the old runtime corruption.
+    if [[ "$TEST" == *"test_ptr_push_into_value_list_error.aiml" ||
+          "$TEST" == *"test_ptr_member_push_into_value_list_error.aiml" ||
+          "$TEST" == *"test_ptr_call_push_into_value_list_error.aiml" ||
+          "$TEST" == *"test_list_model_nested_get_push_repro.aiml" ]]; then
+        if ! tail -n "+$((TEST_LOG_START + 1))" "$OUTPUT_FILE" | grep -q "pointer instead of a value"; then
+            EXIT_CODE=99
+        fi
     fi
 
     if [ $EXIT_CODE -eq $EXPECTED_CODE ]; then

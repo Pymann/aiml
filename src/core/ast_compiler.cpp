@@ -16,6 +16,7 @@
 #include <set>
 #include <iostream>
 #include "../sys/ser_runtime.h"  // AimlTypeNode, AimlTDKind (spec 45)
+#include "container_abi.h"       // target-ABI SerList/SerMap/SerBuffer header sizes
 #include "../sys/trace_runtime.h"
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -450,6 +451,212 @@ void Compiler::checkPtrIndirection(Program* prog) {
         } else if (auto* cd = dynamic_cast<ClassDecl*>(d.get())) {
             for (const auto& m : cd->methods) checkFn(m.get());
         }
+    }
+}
+
+// Static check: a *blocking* primitive (a thread-suspending builtin —
+// session.send_and_await / time.sleep_ms / time.sleep) whose enclosing def is
+// statically reachable, over the direct-call graph, from a per-frame `engine.run`
+// update/render callback stalls the render loop — under WASM asyncify it can
+// freeze the page.  Emits a WARNING (build proceeds); per-def opt-out via
+// `static_off: ["frame_blocking"]`.  Sound-by-under-approximation: only precisely
+// resolvable calls (free fns, `<.method`, `<.field.method`, typed receivers) are
+// followed; unresolvable indirect dispatch is neither flagged nor propagated.
+// See spec/49 §20.
+void Compiler::checkFrameBlocking(Program* prog) {
+    if (!prog) return;
+
+    // A call is a blocking primitive iff its final name segment matches.
+    auto isBlockingPrim = [](const std::string& fn) {
+        std::string leaf = fn;
+        auto dot = fn.rfind('.');
+        if (dot != std::string::npos) leaf = fn.substr(dot + 1);
+        return leaf == "send_and_await" || leaf == "sleep_ms" || leaf == "sleep";
+    };
+    // Base class of a declared type: strip leading ptr<>/ref<> wrappers.
+    auto baseType = [](std::string t) -> std::string {
+        while (t.rfind("ptr<", 0) == 0 || t.rfind("ref<", 0) == 0) {
+            if (t.size() < 5) return "";
+            t = t.substr(4, t.size() - 5);
+        }
+        return t;
+    };
+
+    // ── Registries ──
+    std::map<std::string, FunctionDecl*> freeFns;                 // name -> fn
+    std::map<std::string, FunctionDecl*> methods;                 // "Class::name" -> fn
+    std::map<std::string, std::string>   nodeClass;               // id -> enclosing class ("" free)
+    std::map<std::string, std::map<std::string, std::string>> classFields; // Class -> field -> type
+    std::map<std::string, std::string>   globalTypes;             // globalVar -> type
+    auto fnId = [](const std::string& n) { return "fn:" + n; };
+
+    for (const auto& d : prog->declarations) {
+        if (auto* fn = dynamic_cast<FunctionDecl*>(d.get())) {
+            freeFns[fn->name] = fn;
+            nodeClass[fnId(fn->name)] = "";
+        } else if (auto* cd = dynamic_cast<ClassDecl*>(d.get())) {
+            for (const auto& m : cd->members) classFields[cd->name][m.name] = m.type;
+            for (const auto& mth : cd->methods) {
+                std::string id = cd->name + "::" + mth->name;
+                methods[id] = mth.get();
+                nodeClass[id] = cd->name;
+            }
+        } else if (auto* ds = dynamic_cast<DeclStmt*>(d.get())) {
+            if (!ds->typeName.empty()) globalTypes[ds->varName] = ds->typeName;
+        }
+    }
+
+    // Resolve a call's functionName to a callee node-id (precise cases only; ""
+    // when it can't be resolved → intentionally not followed).
+    auto resolveCallee = [&](const std::string& fname, const std::string& encClass,
+                             std::map<std::string, std::string>& localTypes) -> std::string {
+        auto dot = fname.find('.');
+        if (dot == std::string::npos)
+            return freeFns.count(fname) ? fnId(fname) : std::string();
+        std::string recv = fname.substr(0, dot);
+        std::string rest = fname.substr(dot + 1);
+        std::string method = rest, midField;
+        auto d2 = rest.rfind('.');
+        if (d2 != std::string::npos) { midField = rest.substr(0, d2); method = rest.substr(d2 + 1); }
+        std::string recvType;
+        if (recv == "<") {                                  // self: <.method / <.field.method
+            if (!midField.empty()) {
+                auto it = classFields.find(encClass);
+                if (it != classFields.end() && it->second.count(midField))
+                    recvType = baseType(it->second.at(midField));
+            } else {
+                recvType = encClass;
+            }
+        } else {                                            // recv var: local/param/field/global
+            std::string vt;
+            if (localTypes.count(recv)) vt = localTypes[recv];
+            else if (!encClass.empty() && classFields.count(encClass)
+                     && classFields[encClass].count(recv)) vt = classFields[encClass][recv];
+            else if (globalTypes.count(recv)) vt = globalTypes[recv];
+            if (!vt.empty()) recvType = baseType(vt);
+        }
+        if (!recvType.empty()) {
+            std::string id = recvType + "::" + method;
+            if (methods.count(id)) return id;
+        }
+        return std::string();
+    };
+
+    // Collect declared var types (params + body decls) for one function body.
+    std::function<void(Stmt*, std::map<std::string, std::string>&)> collectDecls;
+    collectDecls = [&](Stmt* s, std::map<std::string, std::string>& vt) {
+        if (!s) return;
+        if (auto* b = dynamic_cast<BlockStmt*>(s)) { for (auto& st : b->statements) collectDecls(st.get(), vt); }
+        else if (auto* d = dynamic_cast<DeclStmt*>(s)) { if (!d->typeName.empty()) vt[d->varName] = d->typeName; }
+        else if (auto* iff = dynamic_cast<IfStmt*>(s)) { collectDecls(iff->thenBranch.get(), vt); collectDecls(iff->elseBranch.get(), vt); }
+        else if (auto* wh = dynamic_cast<WhileStmt*>(s)) { collectDecls(wh->body.get(), vt); }
+        else if (auto* tr = dynamic_cast<TryStmt*>(s)) { collectDecls(tr->tryBlock.get(), vt); collectDecls(tr->catchBlock.get(), vt); }
+    };
+
+    // Walk a function body: gather direct-call edges, blocking-primitive call
+    // sites, and any engine.run(win, update, render) frame-root seeds.
+    struct BlockSite { std::string fname; YAML::Node loc; };
+    std::map<std::string, std::vector<std::string>> edges;         // id -> callee ids
+    std::map<std::string, std::vector<BlockSite>>   blockSites;    // id -> primitive calls
+    std::set<std::string> frameRoots;
+    // Statement-level `- call:` CallExprs carry no own source mark; fall back to
+    // the enclosing statement's node so the diagnostic points at the real line.
+    YAML::Node curLoc;
+    auto pickLoc = [&](const YAML::Node& n) -> const YAML::Node& {
+        return (n.IsDefined() && n.Mark().line >= 0) ? n : curLoc;
+    };
+
+    std::function<void(Expr*, const std::string&, const std::string&, std::map<std::string, std::string>&)> scanExpr;
+    std::function<void(Stmt*, const std::string&, const std::string&, std::map<std::string, std::string>&)> scanStmt;
+    auto onCall = [&](const std::string& fname, std::vector<std::unique_ptr<Expr>>& args,
+                      const YAML::Node& loc, const std::string& selfId,
+                      const std::string& encClass, std::map<std::string, std::string>& vt) {
+        if (fname == "engine.run") {                        // seed frame roots (arg1, arg2 = callbacks)
+            for (size_t i = 1; i + 1 <= args.size() && i <= 2; ++i)
+                if (auto* v = dynamic_cast<VariableExpr*>(args[i].get()))
+                    if (freeFns.count(v->name)) frameRoots.insert(fnId(v->name));
+            return;
+        }
+        if (isBlockingPrim(fname)) blockSites[selfId].push_back({fname, pickLoc(loc)});
+        std::string callee = resolveCallee(fname, encClass, vt);
+        if (!callee.empty()) edges[selfId].push_back(callee);
+    };
+    scanExpr = [&](Expr* e, const std::string& selfId, const std::string& encClass,
+                   std::map<std::string, std::string>& vt) {
+        if (!e) return;
+        if (auto* call = dynamic_cast<CallExpr*>(e)) {
+            onCall(call->functionName, call->args, call->sourceNode, selfId, encClass, vt);
+            for (auto& a : call->args) scanExpr(a.get(), selfId, encClass, vt);
+        } else if (auto* sp = dynamic_cast<SpawnExpr*>(e)) {
+            onCall(sp->functionName, sp->args, sp->sourceNode, selfId, encClass, vt);
+            for (auto& a : sp->args) scanExpr(a.get(), selfId, encClass, vt);
+        } else if (auto* bin = dynamic_cast<BinaryExpr*>(e)) { scanExpr(bin->lhs.get(), selfId, encClass, vt); scanExpr(bin->rhs.get(), selfId, encClass, vt); }
+        else if (auto* un = dynamic_cast<UnaryExpr*>(e)) { scanExpr(un->operand.get(), selfId, encClass, vt); }
+        else if (auto* interp = dynamic_cast<StringInterpolationExpr*>(e)) { for (auto& p : interp->parts) scanExpr(p.get(), selfId, encClass, vt); }
+        else if (auto* ne = dynamic_cast<NewExpr*>(e)) { for (auto& kv : ne->initValues) scanExpr(kv.second.get(), selfId, encClass, vt); }
+        else if (auto* at = dynamic_cast<AtExpr*>(e)) { scanExpr(at->container.get(), selfId, encClass, vt); for (auto& i : at->indices) scanExpr(i.get(), selfId, encClass, vt); }
+        else if (auto* dl = dynamic_cast<DictLiteralExpr*>(e)) { for (auto& kv : dl->entriesExpr) scanExpr(kv.second.get(), selfId, encClass, vt); }
+    };
+    scanStmt = [&](Stmt* s, const std::string& selfId, const std::string& encClass,
+                   std::map<std::string, std::string>& vt) {
+        if (!s) return;
+        if (s->sourceNode.IsDefined() && s->sourceNode.Mark().line >= 0) curLoc = s->sourceNode;
+        if (auto* b = dynamic_cast<BlockStmt*>(s)) { for (auto& st : b->statements) scanStmt(st.get(), selfId, encClass, vt); }
+        else if (auto* d = dynamic_cast<DeclStmt*>(s)) { scanExpr(d->initialValue.get(), selfId, encClass, vt); }
+        else if (auto* st = dynamic_cast<SetStmt*>(s)) { scanExpr(st->value.get(), selfId, encClass, vt); }
+        else if (auto* so = dynamic_cast<StoreStmt*>(s)) { scanExpr(so->value.get(), selfId, encClass, vt); }
+        else if (auto* ix = dynamic_cast<IdxStmt*>(s)) { for (auto& i : ix->indices) scanExpr(i.get(), selfId, encClass, vt); scanExpr(ix->value.get(), selfId, encClass, vt); }
+        else if (auto* es = dynamic_cast<ExprStmt*>(s)) { scanExpr(es->expr.get(), selfId, encClass, vt); }
+        else if (auto* iff = dynamic_cast<IfStmt*>(s)) { scanExpr(iff->condition.get(), selfId, encClass, vt); scanStmt(iff->thenBranch.get(), selfId, encClass, vt); scanStmt(iff->elseBranch.get(), selfId, encClass, vt); }
+        else if (auto* wh = dynamic_cast<WhileStmt*>(s)) { scanExpr(wh->condition.get(), selfId, encClass, vt); scanStmt(wh->body.get(), selfId, encClass, vt); }
+        else if (auto* rs = dynamic_cast<RetStmt*>(s)) { scanExpr(rs->value.get(), selfId, encClass, vt); }
+        else if (auto* th = dynamic_cast<ThrowStmt*>(s)) { scanExpr(th->value.get(), selfId, encClass, vt); }
+        else if (auto* tr = dynamic_cast<TryStmt*>(s)) { scanStmt(tr->tryBlock.get(), selfId, encClass, vt); scanStmt(tr->catchBlock.get(), selfId, encClass, vt); }
+    };
+
+    auto walkFn = [&](FunctionDecl* fn, const std::string& id, const std::string& encClass) {
+        if (!fn || !fn->body) return;
+        std::map<std::string, std::string> vt;
+        for (const auto& [n, t] : fn->args) vt[n] = t;
+        collectDecls(fn->body.get(), vt);
+        scanStmt(fn->body.get(), id, encClass, vt);
+    };
+    for (const auto& d : prog->declarations) {
+        if (auto* fn = dynamic_cast<FunctionDecl*>(d.get())) walkFn(fn, fnId(fn->name), "");
+        else if (auto* cd = dynamic_cast<ClassDecl*>(d.get()))
+            for (const auto& m : cd->methods) walkFn(m.get(), cd->name + "::" + m->name, cd->name);
+    }
+
+    if (frameRoots.empty()) return;   // no engine.run in this unit → nothing to check
+
+    // Frame-context = roots + transitive direct callees (BFS).
+    std::set<std::string> frameSet;
+    std::vector<std::string> work(frameRoots.begin(), frameRoots.end());
+    while (!work.empty()) {
+        std::string id = work.back(); work.pop_back();
+        if (!frameSet.insert(id).second) continue;
+        auto it = edges.find(id);
+        if (it != edges.end()) for (const auto& c : it->second) if (!frameSet.count(c)) work.push_back(c);
+    }
+
+    // Report: every blocking-primitive call site inside a frame-context def
+    // (unless that def opted out via static_off: ["frame_blocking"]).
+    auto declFor = [&](const std::string& id) -> FunctionDecl* {
+        if (id.rfind("fn:", 0) == 0) { auto it = freeFns.find(id.substr(3)); return it == freeFns.end() ? nullptr : it->second; }
+        auto it = methods.find(id); return it == methods.end() ? nullptr : it->second;
+    };
+    for (const auto& [id, sites] : blockSites) {
+        if (!frameSet.count(id)) continue;
+        FunctionDecl* fn = declFor(id);
+        if (fn) { bool off = false; for (const auto& s : fn->staticOff) if (s == "frame_blocking") { off = true; break; } if (off) continue; }
+        std::string where = (id.rfind("fn:", 0) == 0) ? id.substr(3) : id;
+        for (const auto& bs : sites)
+            LOG_WARNING(ctx.fmtLoc(bs.loc) + "blocking call `" + bs.fname +
+                "` runs inside `" + where + "`, which is reachable from a per-frame "
+                "`engine.run` render/update callback.  A blocking RPC/sleep in the "
+                "frame loop stalls rendering — under WASM asyncify it can freeze the "
+                "page.  Make it async (`send_rpc` + `poll_rpc` across frames) or "
+                "suppress with `static_off: [\"frame_blocking\"]`.");
     }
 }
 
@@ -1024,6 +1231,7 @@ void Compiler::compile(Program* prog) {
     // container class.  Same ordering rationale as cascade_class — validate
     // first (synthesis moves the function defs), synthesize before visitTopLevel
     // so {new: <group>} resolves the container + its __ctor.
+    mergeGroupMethods(prog);
     checkClassGroups(prog);
     synthesizeClassGroups(prog);
 
@@ -1184,6 +1392,7 @@ void Compiler::compile(Program* prog) {
         // Static check also applies to imported/library modules (not just entry).
         checkStringComparisons(prog);
         checkPtrIndirection(prog);
+        checkFrameBlocking(prog);
         checkPrefabUsage(prog);
     } else {
         // Create __aiml_init function to hold top-level statements
@@ -1424,6 +1633,7 @@ void Compiler::compile(Program* prog) {
         // modules are checked too — unlike same_arg which is entry-only.
         checkStringComparisons(prog);
         checkPtrIndirection(prog);
+        checkFrameBlocking(prog);
         checkPrefabUsage(prog);
 
         // Emit hot-reload support tables (after all functions and types are registered)
@@ -1929,6 +2139,60 @@ void Compiler::synthesizeCascadeClasses(Program* prog) {
 }
 
 // ── classgroup (spec/58) ────────────────────────────────────────────────────
+// Fold every external `groupmethods:` block into its target group's instances
+// BEFORE validation/synthesis: the collected `methods:` are moved onto the named
+// ClassGroupInstance.functions, so from here on an externally-defined method is
+// indistinguishable from one written inline in the classgroup body.  This lets a
+// coordinator's methods live in its own file while the group body stays lean.
+// Header-only classgroup synthesis for imported files (spec/58 §11).  Folds any
+// `groupmethods:` in `prog`, then synthesizes the container + per-instance
+// subclass ClassDecls (appended to prog->declarations, types registered).  The
+// caller (resolveImportCallback) then visitTopLevel's the appended ClassDecls in
+// header-only mode to forward-declare their methods; the bodies are emitted only
+// in the unit that defines the classgroup.  Validation (checkClassGroups) is
+// intentionally skipped here — the defining unit reports any wiring errors.
+void Compiler::synthesizeImportedGroups(Program* prog) {
+    if (!prog) return;
+    mergeGroupMethods(prog);
+    synthesizeClassGroups(prog);
+}
+
+void Compiler::mergeGroupMethods(Program* prog) {
+    if (!prog) return;
+    // Only classgroups DEFINED in this prog can receive methods now; a group not
+    // yet in scope keeps its pending `groupmethods:` for the unit that has both.
+    std::map<std::string, ClassGroupDecl*> groupByName;
+    for (const auto& d : prog->declarations)
+        if (auto* gg = dynamic_cast<ClassGroupDecl*>(d.get())) groupByName[gg->name] = gg;
+    if (groupByName.empty()) return;
+
+    // Consume matching entries from the cross-file pending list (spec/58 §11):
+    // a `groupmethods:` block and its target group may be in different units, so
+    // the block was recorded in ctx during type registration.  Fold every pending
+    // block whose group is present here; leave the rest for another prog.
+    auto& pending = ctx.pendingGroupMethods;
+    for (auto it = pending.begin(); it != pending.end(); ) {
+        GroupMethodsDecl* gm = *it;
+        auto git = groupByName.find(gm->group);
+        if (git == groupByName.end()) { ++it; continue; }   // group not here — keep
+        ClassGroupDecl* g = git->second;
+        for (auto& tgt : gm->targets) {
+            ClassGroupInstance* inst = nullptr;
+            for (auto& ci : g->instances)
+                if (ci.instanceName == tgt.instanceName) { inst = &ci; break; }
+            if (!inst) {
+                LOG_ERROR(ctx.fmtLoc() + "groupmethods for group '" + gm->group +
+                          "': unknown instance '" + tgt.instanceName + "'.");
+                continue;
+            }
+            for (auto& fn : tgt.methods)
+                if (fn) inst->functions.push_back(std::move(fn));
+            tgt.methods.clear();
+        }
+        it = pending.erase(it);   // consumed
+    }
+}
+
 // Validate one architecture cluster's wiring: instance-name uniqueness, base
 // class existence, sees targets resolve to same-group instances (no self, no
 // dup), and no function overrides a base method.  Runs before synthesis so an
@@ -1997,6 +2261,78 @@ void Compiler::checkClassGroups(Program* prog) {
                 LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name +
                           "': export '" + e + "' is not an instance of this group.");
 
+        // requires: PORT names (spec/58 §6) — unique across the instance/subgroup
+        // namespace + the port's declared base class exists.  A `sees: [port]` edge
+        // (pass 2) resolves against these.
+        std::set<std::string> portNames;
+        for (auto& p : g->ports) {
+            if (p.first.empty())
+                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name +
+                          "': a `requires` port is missing its name.");
+            else if (instNames.count(p.first) || !portNames.insert(p.first).second)
+                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': port '" + p.first +
+                          "' clashes with an instance/subgroup/port of the same name.");
+            if (!p.second.empty() && !ctx.classes.count(p.second) &&
+                !ctx.classes.count(ctx.qualify(p.second)))
+                LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': port '" + p.first +
+                          "' names unknown class '" + p.second + "'.");
+        }
+
+        // Subgroup PORT BINDINGS: `subgroups: [[fx, EffectRuntime, {cards: cards}]]`.
+        // Every binding names a real port of the child group and a real instance of
+        // THIS group whose class satisfies the port; and every child port must be
+        // bound (no unmet dependency).
+        auto isSubclassOf = [&](const std::string& sub0, const std::string& base) {
+            std::string sub = ctx.classes.count(sub0) ? sub0 : ctx.qualify(sub0);
+            std::string b   = ctx.classes.count(base)  ? base  : ctx.qualify(base);
+            std::set<std::string> seen;
+            while (!sub.empty() && seen.insert(sub).second) {
+                if (sub == b) return true;
+                if (!ctx.classes.count(sub)) break;
+                sub = ctx.classes[sub].parentName;
+                if (!sub.empty() && !ctx.classes.count(sub)) sub = ctx.qualify(sub);
+            }
+            return sub0 == base;
+        };
+        auto instClass = [&](const std::string& n) -> std::string {
+            for (auto& gi : g->instances) if (gi.instanceName == n) return gi.className;
+            return "";
+        };
+        for (auto& sg : g->subgroups) {
+            auto git = groupByName.find(sg.second);
+            if (git == groupByName.end()) continue;   // unknown group already reported
+            ClassGroupDecl* cg = git->second;
+            auto bit = g->subgroupPorts.find(sg.first);
+            std::set<std::string> bound;
+            if (bit != g->subgroupPorts.end())
+                for (auto& b : bit->second) {
+                    // port exists on the child group?
+                    bool portExists = false;
+                    std::string portClass;
+                    for (auto& cp : cg->ports) if (cp.first == b.first) { portExists = true; portClass = cp.second; }
+                    if (!portExists)
+                        LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': subgroup '" + sg.first +
+                                  "' binds unknown port '" + b.first + "' of group '" + sg.second + "'.");
+                    // bound target is a real instance of THIS group?
+                    std::string bc = instClass(b.second);
+                    if (bc.empty())
+                        LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': subgroup '" + sg.first +
+                                  "' binds port '" + b.first + "' to '" + b.second +
+                                  "' which is not an instance of this group.");
+                    else if (!portClass.empty() && !isSubclassOf(bc, portClass))
+                        LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': subgroup '" + sg.first +
+                                  "' binds port '" + b.first + "' (needs '" + portClass + "') to '" +
+                                  b.second + "' of incompatible class '" + bc + "'.");
+                    if (portExists && !bound.insert(b.first).second)
+                        LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': subgroup '" + sg.first +
+                                  "' binds port '" + b.first + "' more than once.");
+                }
+            for (auto& cp : cg->ports)
+                if (!bound.count(cp.first))
+                    LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': subgroup '" + sg.first +
+                              "' (group '" + sg.second + "') leaves port '" + cp.first + "' unbound.");
+        }
+
         // pass 2: sees targets (exist / not self / not dup) + no override.
         for (auto& inst : g->instances) {
             std::set<std::string> seenSees;
@@ -2015,11 +2351,11 @@ void Compiler::checkClassGroups(Program* prog) {
                               "' names unknown interface '" + iface + "'.");
                 auto dot = tpart.find('.');
                 if (dot == std::string::npos) {
-                    // Same-group sibling.
+                    // Same-group sibling, or a declared PORT (child→parent injection).
                     if (tpart == inst.instanceName)
                         LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': instance '" +
                                   inst.instanceName + "' sees itself.");
-                    else if (!instNames.count(tpart))
+                    else if (!instNames.count(tpart) && !portNames.count(tpart))
                         LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': instance '" +
                                   inst.instanceName + "' sees unknown instance '" + tpart + "'.");
                     continue;
@@ -2097,6 +2433,13 @@ void Compiler::synthesizeClassGroups(Program* prog) {
             baseOf[inst.instanceName] = inst.className;
             implementsOf[inst.instanceName].insert(inst.implements.begin(), inst.implements.end());
         }
+        // PORTS (spec/58 §6, `requires:`): port name → declared base class.  A
+        // `sees: [port]` edge synthesizes a base-typed collaborator, wired to a
+        // parent instance in a deferred `__wire_ports` pass (child→parent).
+        std::map<std::string, std::string> portClassOf;
+        for (auto& p : g->ports) portClassOf[p.first] = p.second;
+        bool hasPorts = !g->ports.empty();
+        auto isPortName = [&](const std::string& n) { return portClassOf.count(n) > 0; };
         auto subgTypeOf = [&](const std::string& sgName) -> std::string {
             for (auto& sg : g->subgroups) if (sg.first == sgName) return sg.second;
             return "";
@@ -2114,8 +2457,13 @@ void Compiler::synthesizeClassGroups(Program* prog) {
             auto dot = s.find('.');
             if (dot == std::string::npos) {
                 auto it = baseOf.find(s);
-                if (it == baseOf.end() || it->second.empty()) return false;
-                memberName = s; baseType = it->second; return true;
+                if (it != baseOf.end() && !it->second.empty()) {
+                    memberName = s; baseType = it->second; return true;
+                }
+                // A port name resolves to its declared base class (base-typed edge).
+                auto pit = portClassOf.find(s);
+                if (pit != portClassOf.end()) { memberName = s; baseType = pit->second; return true; }
+                return false;
             }
             std::string sgName = s.substr(0, dot), tgt = s.substr(dot + 1);
             std::string sgType = subgTypeOf(sgName);
@@ -2154,7 +2502,28 @@ void Compiler::synthesizeClassGroups(Program* prog) {
                     continue;
                 StructMember m;
                 m.name = mName;
-                m.type = iface.empty() ? ("ptr<" + baseType + ">") : ("ptr<" + iface + ">");
+                if (!iface.empty()) {
+                    m.type = "ptr<" + iface + ">";
+                } else if (isPortName(mName)) {
+                    // Port edge (spec/58 §6): base-typed collaborator, wired to a
+                    // parent instance in `__wire_ports`.  Deliberately the port's
+                    // declared base (not a child subclass) — a service API.
+                    m.type = "ptr<" + baseType + ">";
+                } else {
+                    // Concrete edge: type the member as the sibling's SUBCLASS
+                    // (inheritor, `Group_target`), not the base.  The subclass is
+                    // exactly the instance the group constructs, so the edge exposes
+                    // its FULL API — base methods AND its group `functions` — via
+                    // ordinary member resolution + inheritance (spec/58 §5.1).
+                    std::string sStrip = s;
+                    auto sc = sStrip.find(':'); if (sc != std::string::npos) sStrip = sStrip.substr(0, sc);
+                    auto sd = sStrip.find('.');
+                    std::string subT = (sd == std::string::npos)
+                        ? subName(mName)                                   // same-group instance
+                        : (subgTypeOf(sStrip.substr(0, sd)) + "_" + mName); // subgroup.instance
+                    m.type = "ptr<" + subT + ">";
+                }
+                m.is_collaborator = true;   // wired collaborator — not serialized (spec/58 §9)
                 sub->members.push_back(std::move(m));
             }
             for (auto& fn : inst.functions) {
@@ -2185,6 +2554,16 @@ void Compiler::synthesizeClassGroups(Program* prog) {
             m.type = "ptr<" + sg.second + ">";
             cont->members.push_back(std::move(m));
         }
+        // Port members (spec/58 §6): one `ptr<BaseClass>` per required port.  The
+        // parent sets these to its own instances before calling `__wire_ports`;
+        // they are wired collaborators (not serialized).
+        for (auto& p : g->ports) {
+            StructMember m;
+            m.name = p.first;
+            m.type = "ptr<" + p.second + ">";
+            m.is_collaborator = true;
+            cont->members.push_back(std::move(m));
+        }
         for (auto& inst : g->instances) {
             StructMember m;
             m.name = inst.instanceName;
@@ -2204,8 +2583,17 @@ void Compiler::synthesizeClassGroups(Program* prog) {
         for (auto& inst : g->instances) {
             body += "      - set: [<." + inst.instanceName + ", { new: " +
                     subName(inst.instanceName) + " }]\n";
-            bool needLocal = !inst.sees.empty() || !inst.constructor.empty() ||
-                             postHookInsts.count(inst.instanceName);
+            // A __ctor local is needed only if this instance is wired here (a
+            // sibling / cross-group sees), constructed, or runs on_wired here.
+            // Pure-port sees are wired in __wire_ports, so they don't count.
+            bool hasWiredSees = false;
+            for (auto& s : inst.sees) {
+                std::string t = s; auto c = t.find(':'); if (c != std::string::npos) t = t.substr(0, c);
+                if (t.find('.') != std::string::npos) { hasWiredSees = true; break; } // subgroup.instance
+                if (!isPortName(t))                   { hasWiredSees = true; break; } // sibling
+            }
+            bool needLocal = hasWiredSees || !inst.constructor.empty() ||
+                             (postHookInsts.count(inst.instanceName) && !hasPorts);
             if (needLocal)
                 body += "      - decl: [w_" + inst.instanceName + ", ptr<" +
                         subName(inst.instanceName) + ">, <." + inst.instanceName + "]\n";
@@ -2220,6 +2608,18 @@ void Compiler::synthesizeClassGroups(Program* prog) {
                 body += line;
             }
         }
+        // Port injection into embedded subgroups (spec/58 §6).  Now that both the
+        // subgroup containers (phase 0) and this group's own instances exist, bind
+        // each configured port to a parent instance and run the child's deferred
+        // `__wire_ports` (which wires the child instances + runs their on_wired).
+        for (auto& sg : g->subgroups) {
+            auto bit = g->subgroupPorts.find(sg.first);
+            if (bit == g->subgroupPorts.end() || bit->second.empty()) continue;
+            for (auto& b : bit->second)
+                body += "      - set: [<." + sg.first + "." + b.first + ", <." + b.second + "]\n";
+            body += "      - call: [<." + sg.first + ".__wire_ports]\n";
+        }
+
         std::set<std::string> declaredSubgLocals;
         for (auto& inst : g->instances) {
             if (inst.sees.empty()) continue;
@@ -2231,6 +2631,9 @@ void Compiler::synthesizeClassGroups(Program* prog) {
                 auto colon = tpart.find(':');
                 if (colon != std::string::npos) tpart = tpart.substr(0, colon);
                 auto dot = tpart.find('.');
+                // Port edges (spec/58 §6) are wired later, in `__wire_ports`, after
+                // the parent has bound the port to one of its instances.
+                if (dot == std::string::npos && isPortName(tpart)) continue;
                 std::string srcExpr;
                 if (dot == std::string::npos) {
                     srcExpr = "<." + tpart;
@@ -2273,15 +2676,52 @@ void Compiler::synthesizeClassGroups(Program* prog) {
         // Phase 2: post-wire hooks.  After every sees is back-patched, call each
         // instance's `on_wired` group-function (if present).  It may use sees —
         // the home for init that intertwines intrinsic setup with a collaborator
-        // (spec/58 §3, the automated "start()").
-        for (auto& inst : g->instances)
-            if (postHookInsts.count(inst.instanceName))
-                body += "      - call: [w_" + inst.instanceName + ".on_wired]\n";
+        // (spec/58 §3, the automated "start()").  For a group with PORTS the hooks
+        // are DEFERRED to `__wire_ports` (spec/58 §6): a ported child's on_wired
+        // must never observe an unbound port, so it runs only after the parent has
+        // injected the ports.
+        if (!hasPorts)
+            for (auto& inst : g->instances)
+                if (postHookInsts.count(inst.instanceName))
+                    body += "      - call: [w_" + inst.instanceName + ".on_wired]\n";
         std::string ctorText = "- def:\n    name: __ctor\n    args: []\n    body:\n" + body;
         if (auto ctorFn = parseDefSnippet(ctorText))
             cont->methods.push_back(std::move(ctorFn));
         else
             LOG_ERROR("classgroup '" + g->name + "': internal — failed to synthesize __ctor.");
+
+        // `__wire_ports` (spec/58 §6): the parent calls this after it has set the
+        // container's port members to its own instances.  It back-patches each
+        // ported child instance's collaborator member from the container port, then
+        // runs the deferred `on_wired` hooks (now every port is bound).
+        if (hasPorts) {
+            auto seesPort = [&](const ClassGroupInstance& inst) {
+                for (auto& s : inst.sees) {
+                    std::string t = s; auto c = t.find(':'); if (c != std::string::npos) t = t.substr(0, c);
+                    if (t.find('.') == std::string::npos && isPortName(t)) return true;
+                }
+                return false;
+            };
+            std::string wire;
+            for (auto& inst : g->instances)
+                if (seesPort(inst) || postHookInsts.count(inst.instanceName))
+                    wire += "      - decl: [w_" + inst.instanceName + ", ptr<" +
+                            subName(inst.instanceName) + ">, <." + inst.instanceName + "]\n";
+            for (auto& inst : g->instances)
+                for (auto& s : inst.sees) {
+                    std::string t = s; auto c = t.find(':'); if (c != std::string::npos) t = t.substr(0, c);
+                    if (t.find('.') == std::string::npos && isPortName(t))
+                        wire += "      - set: [w_" + inst.instanceName + "." + t + ", <." + t + "]\n";
+                }
+            for (auto& inst : g->instances)
+                if (postHookInsts.count(inst.instanceName))
+                    wire += "      - call: [w_" + inst.instanceName + ".on_wired]\n";
+            std::string wpText = "- def:\n    name: __wire_ports\n    args: []\n    body:\n" + wire;
+            if (auto wpFn = parseDefSnippet(wpText))
+                cont->methods.push_back(std::move(wpFn));
+            else
+                LOG_ERROR("classgroup '" + g->name + "': internal — failed to synthesize __wire_ports.");
+        }
 
         registerTypeDecl(cont.get());
         ctx.classGroupContainers.insert(g->name);
@@ -2421,6 +2861,18 @@ static std::vector<AimlTypeNode> serBuildSubtree(
     const std::string& typeName, int32_t offset,
     CompilerContext& ctx, const llvm::DataLayout& dl);
 
+// DFS active-path guard against recursive types.  A struct that (transitively,
+// via ptr<>) refers back to itself — e.g. a back-reference component holding a
+// `ptr<Owner>` while the owner holds a `ptr<Component>` — would otherwise make
+// serBuildSubtree recurse forever (Owner→ptr<Comp>→Comp→ptr<Owner>→…) and blow
+// the stack.  We record each struct type currently being expanded; when a ptr<T>
+// points at a type already on the path we stop following it (emit an opaque
+// pointer leaf below) instead of descending.  A *path* set (erased on unwind),
+// not a global visited-set, so the same type may still appear in sibling
+// subtrees — only genuine ancestor cycles are cut.  This mirrors the
+// classgroup-collaborator skip a few lines down.
+static thread_local std::set<std::string> g_serActivePath;
+
 // Build a flat DFS descriptor node array for typeName.  Root is at index 0.
 // offset = byte offset of this value within its parent struct (0 = top-level).
 static std::vector<AimlTypeNode> serBuildSubtree(
@@ -2447,9 +2899,14 @@ static std::vector<AimlTypeNode> serBuildSubtree(
         } else if (ctx.enums.count(inner)) {
             esz = 4;  // enum = i32
         } else if (inner.size()>5 && inner.substr(0,5)=="list<") {
-            esz = 16;  // sizeof(SerList) = {i32 size, i32 cap, void* data}
+            // Target-ABI SerList size (64-bit 16, wasm32 12) — NOT host sizeof.
+            esz = aiml::serListHeaderSize(ctx.context, dl);
+        } else if (inner.size()>3 && inner.substr(0,4)=="map<") {
+            // Target-ABI SerMap size (64-bit 32, wasm32 20).
+            esz = aiml::serMapHeaderSize(ctx.context, dl);
         } else if (inner.size()>7 && inner.substr(0,7)=="buffer<") {
-            esz = 24;  // sizeof(SerBuffer) = {i64 size, i64 cap, void* data}
+            // Target-ABI SerBuffer size (64-bit 24, wasm32 20).
+            esz = aiml::serBufferHeaderSize(ctx.context, dl);
         } else if (!inner.empty() && std::isupper((unsigned char)inner[0])) {
             // Unregistered user-defined type during Phase-A — use placeholder.
             // The model depending on this list<T> should also have been deferred,
@@ -2499,14 +2956,21 @@ static std::vector<AimlTypeNode> serBuildSubtree(
         && typeName.back() == '>') {
         std::string inner = typeName.substr(4, typeName.size() - 5);
         auto pit = ctx.classes.find(inner);
-        if (pit != ctx.classes.end() && !pit->second.isBuiltin && pit->second.type) {
+        // …but NOT if `inner` is already being expanded on the current DFS path:
+        // that is a recursive back-reference (e.g. Component.owner → ptr<Owner>
+        // while Owner is mid-expansion).  Following it would loop forever, so we
+        // fall through to the opaque raw-pointer leaf instead — the back-ref is a
+        // wired reference, not owned data, and must not be deep-serialised.
+        if (pit != ctx.classes.end() && !pit->second.isBuiltin && pit->second.type
+            && !g_serActivePath.count(inner)) {
             int32_t inner_sz = (int32_t)dl.getTypeAllocSize(pit->second.type);
             auto sub = serBuildSubtree(inner, 0, ctx, dl);
             res.push_back({AIML_TD_PTR_STRUCT, 1, 0, offset, inner_sz, 0});
             for (auto& n : sub) res.push_back(snShift(n, 1));
             return res;
         }
-        // Inner type unknown — fall through to raw-pointer (RAWBYTES 8) below.
+        // Inner type unknown or a recursive back-ref — fall through to raw-pointer
+        // (RAWBYTES, pointer-sized) below.
     }
 
     // ── User struct (must already be in ctx.classes) ──────────────────────────
@@ -2520,10 +2984,19 @@ static std::vector<AimlTypeNode> serBuildSubtree(
             for (auto& [mn, mem] : ci.members) sm.push_back({mn, mem});
             std::sort(sm.begin(), sm.end(),
                       [](auto& a, auto& b){ return a.second.index < b.second.index; });
+            // Mark this struct as on the active DFS path so a recursive ptr<> back
+            // to it (via any member subtree) is cut instead of looping forever.
+            bool onPath = g_serActivePath.insert(typeName).second;
             std::vector<std::vector<AimlTypeNode>> fsubs;
-            for (auto& [mn, mem] : sm)
+            for (auto& [mn, mem] : sm) {
+                // classgroup sees-members are wired collaborators, not owned data:
+                // skip them (spec/58 §9) — and this breaks the infinite recursion a
+                // bidirectional sees cycle would otherwise cause here.
+                if (mem.is_collaborator) continue;
                 fsubs.push_back(serBuildSubtree(mem.typeName,
                     (int32_t)sl->getElementOffset(mem.index), ctx, dl));
+            }
+            if (onPath) g_serActivePath.erase(typeName);
             return serBuildStructNodes(fsubs, offset, sz);
         }
     }
@@ -2712,6 +3185,7 @@ void Compiler::registerTypeDecl(Node* node) {
             member.index = currentIndex++;
             member.type = memberType;
             member.typeName = typeName;
+            member.is_collaborator = astMember.is_collaborator;
             member.version = astMember.version;
             member.initValue = std::shared_ptr<Expr>(const_cast<Expr*>(astMember.initialValue.release()));
             
@@ -2773,10 +3247,12 @@ void Compiler::registerTypeDecl(Node* node) {
             const llvm::DataLayout& dl = ctx.module.getDataLayout();
             const llvm::StructLayout* sl = dl.getStructLayout(structType);
             int32_t sz = (int32_t)dl.getTypeAllocSize(structType);
+            bool onPathC = g_serActivePath.insert(className).second;  // seed cycle guard
             std::vector<std::vector<AimlTypeNode>> fsubs;
             for (auto& [mn, mem] : orderedMembers)
                 fsubs.push_back(serBuildSubtree(mem.typeName,
                     (int32_t)sl->getElementOffset(mem.index), ctx, dl));
+            if (onPathC) g_serActivePath.erase(className);
             auto nodes = serBuildStructNodes(fsubs, 0, sz);
             serEmitGlobal(className, nodes, ctx, classInfo);
         }
@@ -2979,10 +3455,12 @@ void Compiler::registerTypeDecl(Node* node) {
             for (auto& [mn, mem] : classInfo.members) sm.push_back({mn, mem});
             std::sort(sm.begin(), sm.end(),
                       [](auto& a, auto& b){ return a.second.index < b.second.index; });
+            bool onPathM = g_serActivePath.insert(modelName).second;  // seed cycle guard
             std::vector<std::vector<AimlTypeNode>> fsubs;
             for (auto& [mn, mem] : sm)
                 fsubs.push_back(serBuildSubtree(mem.typeName,
                     (int32_t)sl->getElementOffset(mem.index), ctx, dl));
+            if (onPathM) g_serActivePath.erase(modelName);
             auto nodes = serBuildStructNodes(fsubs, 0, sz);
             serEmitGlobal(modelName, nodes, ctx, classInfo);
         }
@@ -3170,6 +3648,15 @@ void Compiler::registerTypeDecl(Node* node) {
         // classgroup (spec/58): no-op during the type-registration pass.  The
         // synthesized subclasses + container are built + registered later in
         // synthesizeClassGroups (from compile()), once every base class exists.
+        return;
+    } else if (auto gm = dynamic_cast<GroupMethodsDecl*>(node)) {
+        // groupmethods (spec/58 §1.1/§11): record for later merge into its target
+        // classgroup.  The block and its group may be in different units, so we
+        // stash the node (its AST is kept alive by the import machinery) and let
+        // mergeGroupMethods fold the methods in once the group is in scope.
+        if (std::find(ctx.pendingGroupMethods.begin(), ctx.pendingGroupMethods.end(), gm)
+            == ctx.pendingGroupMethods.end())
+            ctx.pendingGroupMethods.push_back(gm);
         return;
     } else if (auto iface = dynamic_cast<InterfaceDecl*>(node)) {
         std::string ifaceName = ctx.qualify(iface->name);
@@ -3771,10 +4258,27 @@ void Compiler::visitTopLevel(Node* node) {
         // classgroup (spec/58): no codegen — it was desugared in
         // synthesizeClassGroups into subclasses + a container class (which ARE
         // in prog->declarations and get their code generated normally).
+    } else if (dynamic_cast<GroupMethodsDecl*>(node)) {
+        // groupmethods (spec/58): no codegen — its methods were folded into the
+        // target group by mergeGroupMethods() and emitted as subclass methods.
     } else if (auto mat = dynamic_cast<MaterialDecl*>(node)) {
         /* Emit aiml_material_register(name, shader, uniforms_json) at program
          * init. uniforms_json uses a compact tagged format the runtime parser
          * understands; see prefab_runtime.h. */
+        /* Asset-Registry-Validierung: `shader: "<stem>"` muss zur Compile-Zeit
+         * auflösbar sein (gleicher Vertrag wie texture:/gl.tex).  Ohne diese
+         * Prüfung schlägt ein Tippfehler erst zur Laufzeit fehl — und dort nur
+         * still (Fallback auf den Default-Shader).  Pfade mit Slash/Punkt =
+         * legacy raw paths, die weiter durchs runtime fopen laufen. */
+        if (!mat->shader.empty() &&
+            mat->shader.find('/') == std::string::npos &&
+            mat->shader.find('.') == std::string::npos &&
+            !AIML::AssetScanner::instance().has_stem(
+                AIML::AssetKind::Shader, mat->shader)) {
+            LOG_ERROR(ctx.fmtLoc(mat->sourceNode) +
+                      "material '" + mat->name + "': shader stem '" +
+                      mat->shader + "' not in shader asset store");
+        }
         auto* vd  = ctx.builder.getVoidTy();
         auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
 

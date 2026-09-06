@@ -116,6 +116,9 @@ void* aiml_wss_connect(const char* host, int32_t port, const char* path) {
 void* aiml_ws_server(const char*, int32_t)                                  { errno = ENOTSUP; return nullptr; }
 void* aiml_wss_server(const char*, int32_t, const char*, const char*)       { errno = ENOTSUP; return nullptr; }
 void* aiml_ws_accept(void*)                                                 { errno = ENOTSUP; return nullptr; }
+const char* aiml_ws_peer_ip(void*)                                          { return ""; }
+void aiml_ws_set_client_insecure(int32_t)                                   { /* browser TLS is enforced by the browser */ }
+int32_t aiml_ws_client_insecure()                                           { return 0; }
 
 int aiml_ws_send(void* h, const char* text) {
     if (!h || !text) return -1;
@@ -133,12 +136,14 @@ int aiml_ws_send_raw(void* h, const void* data, int32_t len) {
 }
 
 int aiml_ws_send_binary(void* h, void* buf_ptr) {
-    // Native uses AimlBuffer { i32 size, i32 capacity, void* data, ... };
-    // Same layout in WASM since this file owns the struct.
+    // AIML buffer layout (shared with native, same compiler emits it):
+    //   { i32 size, i32 cap, i32 rIdx, i32 wIdx; i8* data }  — data at offset 16.
+    // Length sent = wIdx (bytes written), matching the native send path.
     if (!h || !buf_ptr) return -1;
-    struct Buf { int32_t size; int32_t capacity; void* data; };
-    Buf* b = static_cast<Buf*>(buf_ptr);
-    return aiml_ws_send_raw(h, b->data, b->size);
+    struct AimlBuf { int32_t size, cap, rIdx, wIdx; char* data; };
+    AimlBuf* b = static_cast<AimlBuf*>(buf_ptr);
+    if (!b->data || b->wIdx <= 0) return 0;
+    return aiml_ws_send_raw(h, b->data, b->wIdx);
 }
 
 char* aiml_ws_recv(void* h) {
@@ -167,6 +172,49 @@ void* aiml_ws_recv_raw(void* h, int32_t* out_len) {
     free(n);
     return p;
 }
+
+// Binary receive into a caller-owned AIML buffer (browser client side).
+// Mirrors the native ABI; one copy (rx node → dst).  See native impl for docs.
+int32_t aiml_ws_recv_binary(void* conn, void* dst_buf) {
+    if (!conn || !dst_buf) return -1;
+    struct AimlBuf { int32_t size, cap, rIdx, wIdx; char* data; };
+    AimlBuf* dst = static_cast<AimlBuf*>(dst_buf);
+    if (!dst->data || dst->cap <= 0) return -1;
+    int32_t len = 0;
+    void* payload = aiml_ws_recv_raw(conn, &len);
+    if (!payload) return 0;
+    int32_t n = len, rc = len;
+    if (n > dst->cap) { n = dst->cap; rc = -2; }
+    memcpy(dst->data, payload, (size_t)n);
+    free(payload);
+    dst->size = n; dst->wIdx = n; dst->rIdx = 0;
+    return rc;
+}
+
+// Append a received frame at the buffer's write index (browser client side) —
+// for reassembling N chunk frames.  Mirrors the native ABI.
+int32_t aiml_ws_recv_append(void* conn, void* dst_buf) {
+    if (!conn || !dst_buf) return -1;
+    struct AimlBuf { int32_t size, cap, rIdx, wIdx; char* data; };
+    AimlBuf* dst = static_cast<AimlBuf*>(dst_buf);
+    if (!dst->data || dst->cap <= 0) return -1;
+    int32_t len = 0;
+    void* payload = aiml_ws_recv_raw(conn, &len);
+    if (!payload) return 0;
+    int32_t pos = dst->wIdx;
+    if (pos < 0) pos = 0;
+    int32_t n = len, rc = len;
+    if (pos + n > dst->cap) { n = dst->cap - pos; rc = -2; }
+    if (n > 0) memcpy(dst->data + pos, payload, (size_t)n);
+    free(payload);
+    dst->wIdx = pos + n;
+    dst->size = dst->wIdx;
+    return rc;
+}
+
+// No mmap'd KV in the browser — the media server (which owns the store) is
+// native only.  Present for ABI symmetry; always fails in WASM.
+int32_t aiml_ws_send_kv_blob(void*, void*, const char*) { errno = ENOTSUP; return -1; }
 
 int aiml_ws_ping(void*) {
     // Browser WebSocket API does not expose client-initiated ping; runtime handles keepalive.
@@ -209,6 +257,8 @@ int aiml_ws_poll_listener(void*, int32_t) { errno = ENOTSUP; return -1; }
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/x509v3.h>   // X509_CHECK_FLAG_* for strict hostname verification
+#include "tls_runtime.h"   // aiml_tls_harden_server_ctx / aiml_tls_require_client_cert (shared policy)
 
 #include <sys/socket.h>
 #include <netdb.h>
@@ -353,6 +403,7 @@ struct AimlWs {
     SSL_CTX* ctx;            // server listener holds CTX here; client SSL_CTX freed after connect
     bool     is_listener;    // true = server listen socket
     bool     is_client_side; // true = WS client role (must mask outgoing frames)
+    char     ip[46];         // accepted peer's IP (dotted); "" unless set at accept
 };
 
 static AimlWs* to_ws(void* p) { return static_cast<AimlWs*>(p); }
@@ -670,17 +721,51 @@ extern "C" void* aiml_ws_connect(const char* host, int32_t port, const char* pat
     return ws;
 }
 
+// wss client certificate-verification policy. Default: verify (secure). Seeded
+// from AIML_WSS_INSECURE on first use; mirror.tls_insecure(on) overrides at runtime.
+// -1 = not yet seeded, 0 = verify, 1 = insecure (dev only).
+static int g_wss_insecure = -1;
+static bool ws_client_insecure() {
+    if (g_wss_insecure < 0) {
+        const char* e = getenv("AIML_WSS_INSECURE");
+        g_wss_insecure = (e && e[0] == '1') ? 1 : 0;
+    }
+    return g_wss_insecure != 0;
+}
+extern "C" void aiml_ws_set_client_insecure(int32_t on) { g_wss_insecure = on ? 1 : 0; }
+// Shared "insecure client TLS" flag — also consumed by the http client so a single
+// mirror.tls_insecure(1) / AIML_WSS_INSECURE=1 relaxes verification for both.
+extern "C" int32_t aiml_ws_client_insecure() { return ws_client_insecure() ? 1 : 0; }
+
 extern "C" void* aiml_wss_connect(const char* host, int32_t port, const char* path) {
     std::call_once(g_ws_ssl_once, ws_ssl_init);
     int fd = tcp_connect(host, port);
     if (fd < 0) return nullptr;
 
     SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
+    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
     SSL_CTX_set_default_verify_paths(ctx);
+    // Optional private/self-signed CA bundle (e.g. a dev or internal CA).
+    const char* wss_ca = getenv("AIML_WSS_CA");
+    if (wss_ca && *wss_ca) SSL_CTX_load_verify_locations(ctx, wss_ca, nullptr);
+    // Verify the server certificate by default (chain + hostname via SSL_set1_host
+    // below) → defeats active MITM.  Disable only for local dev with a self-signed
+    // cert — via mirror.tls_insecure(1) or AIML_WSS_INSECURE=1 — with a loud warning.
+    bool insecure = ws_client_insecure();
+    if (insecure) {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
+        fprintf(stderr, "[wss] WARNING: TLS certificate verification DISABLED (AIML_WSS_INSECURE=1)\n");
+    } else {
+        SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
+    }
     SSL* ssl = SSL_new(ctx);
     SSL_set_fd(ssl, fd);
     SSL_set_tlsext_host_name(ssl, host);
-    SSL_set1_host(ssl, host);
+    // Enforce hostname match against the cert (SAN/CN) under SSL_VERIFY_PEER.
+    if (!insecure) {
+        SSL_set_hostflags(ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+        SSL_set1_host(ssl, host);
+    }
 
     if (SSL_connect(ssl) != 1) {
         SSL_free(ssl); SSL_CTX_free(ctx); ::close(fd); return nullptr;
@@ -707,8 +792,15 @@ extern "C" void* aiml_wss_server(const char* host, int32_t port,
     std::call_once(g_ws_ssl_once, ws_ssl_init);
     SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
     if (!ctx) return nullptr;
-    SSL_CTX_use_certificate_file(ctx, cert, SSL_FILETYPE_PEM);
-    SSL_CTX_use_PrivateKey_file(ctx, key, SSL_FILETYPE_PEM);
+    // Same hardened server defaults as the HTTPS server (shared policy in
+    // tls_runtime.cpp): min TLS 1.2, no SSLv2/3/TLS1.0/1.1, no compression.
+    aiml_tls_harden_server_ctx(ctx);
+    // Fail loudly if the cert/key cannot be loaded — otherwise the listener
+    // would come up with no usable certificate and every handshake would fail.
+    if (SSL_CTX_use_certificate_file(ctx, cert, SSL_FILETYPE_PEM) <= 0 ||
+        SSL_CTX_use_PrivateKey_file(ctx, key, SSL_FILETYPE_PEM) <= 0) {
+        SSL_CTX_free(ctx); return nullptr;
+    }
 
     int fd = tcp_server_fd(host, port);
     if (fd < 0) { SSL_CTX_free(ctx); return nullptr; }
@@ -735,12 +827,20 @@ extern "C" void* aiml_ws_accept(void* srv_ptr) {
         }
     }
 
-    AimlWs* client = new AimlWs{cfd, ssl, nullptr, false, false};
+    AimlWs* client = new AimlWs{cfd, ssl, nullptr, false, false, {0}};
+    inet_ntop(AF_INET, &addr.sin_addr, client->ip, sizeof(client->ip));
     if (ws_server_handshake(client) < 0) {
         if (ssl) SSL_free(ssl);
         ::close(cfd); delete client; return nullptr;
     }
     return client;
+}
+
+// Peer IP (dotted) of a client returned by aiml_ws_accept; "" if unknown.
+extern "C" const char* aiml_ws_peer_ip(void* p) {
+    if (!p) return "";
+    AimlWs* ws = to_ws(p);
+    return ws->ip;
 }
 
 extern "C" int aiml_ws_send(void* p, const char* text) {
@@ -818,6 +918,66 @@ extern "C" void* aiml_ws_recv_raw(void* p, int32_t* out_len) {
                 free(payload); return nullptr;
         }
     }
+}
+
+// ── Binary receive into a caller-owned AIML buffer ───────────────────────────
+// dst is an AIML buffer { i32 size, cap, rIdx, wIdx; i8* data }.  Copies the
+// next data frame into dst->data (bounded by dst->cap), sets size/wIdx = len and
+// rIdx = 0 so a following seek(0)+read works.  Returns bytes received, 0 on a
+// clean close, -1 on error, -2 if the frame exceeded dst capacity (dst is filled
+// to cap, the remainder dropped).  One copy (frame → dst); no whole-payload
+// juggling — callers stream fixed-size chunks through a reused buffer.
+extern "C" int32_t aiml_ws_recv_binary(void* conn, void* dst_buf) {
+    if (!conn || !dst_buf) return -1;
+    struct AimlBuf { int32_t size, cap, rIdx, wIdx; char* data; };
+    AimlBuf* dst = static_cast<AimlBuf*>(dst_buf);
+    if (!dst->data || dst->cap <= 0) return -1;
+    int32_t len = 0;
+    void* payload = aiml_ws_recv_raw(conn, &len);
+    if (!payload) return 0;                       // close / error
+    int32_t n = len, rc = len;
+    if (n > dst->cap) { n = dst->cap; rc = -2; }
+    memcpy(dst->data, payload, (size_t)n);
+    free(payload);
+    dst->size = n; dst->wIdx = n; dst->rIdx = 0;
+    return rc;
+}
+
+// ── Binary receive APPENDED at the buffer's write index ──────────────────────
+// Like aiml_ws_recv_binary but copies the frame at dst->wIdx (not offset 0) and
+// advances wIdx/size — so a client can reassemble N chunk frames into one buffer
+// (alloc once, recv_append N times).  Returns bytes received, 0 on close, -1 err,
+// -2 if the frame would overflow (appended up to capacity, remainder dropped).
+extern "C" int32_t aiml_ws_recv_append(void* conn, void* dst_buf) {
+    if (!conn || !dst_buf) return -1;
+    struct AimlBuf { int32_t size, cap, rIdx, wIdx; char* data; };
+    AimlBuf* dst = static_cast<AimlBuf*>(dst_buf);
+    if (!dst->data || dst->cap <= 0) return -1;
+    int32_t len = 0;
+    void* payload = aiml_ws_recv_raw(conn, &len);
+    if (!payload) return 0;
+    int32_t pos = dst->wIdx;
+    if (pos < 0) pos = 0;
+    int32_t n = len, rc = len;
+    if (pos + n > dst->cap) { n = dst->cap - pos; rc = -2; }
+    if (n > 0) memcpy(dst->data + pos, payload, (size_t)n);
+    free(payload);
+    dst->wIdx = pos + n;
+    dst->size = dst->wIdx;
+    return rc;
+}
+
+// ── Zero-copy send of a KV blob straight from the mmap'd WAL to the socket ────
+// No intermediate AIML buffer: resolves the blob's pointer in the mmap region
+// and streams it as one binary frame (mmap page → socket, no userspace copy).
+// Returns bytes sent, 0 if the key is absent/empty, -1 on error.
+extern "C" void* aiml_db_kv_get_blob(void* kv_ptr, const char* key, int32_t* out_size);
+extern "C" int32_t aiml_ws_send_kv_blob(void* conn, void* kv, const char* key) {
+    if (!conn || !kv || !key) return -1;
+    int32_t sz = 0;
+    void* ptr = aiml_db_kv_get_blob(kv, key, &sz);
+    if (!ptr || sz <= 0) return 0;
+    return aiml_ws_send_raw(conn, ptr, sz);
 }
 
 extern "C" int aiml_ws_ping(void* p) {

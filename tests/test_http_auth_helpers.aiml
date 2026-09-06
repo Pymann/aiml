@@ -1,0 +1,93 @@
+# Expected exit code: 0
+# Priority-E auth/session primitives (spec/32_2 §3.13):
+#   resp.set_cookie  — Set-Cookie with secure defaults (HttpOnly/Secure/SameSite/Path)
+#                      + header-injection guard
+#   req.client_ip    — trusted socket peer IP (ignores X-Forwarded-For)
+#   hash.const_time_eq — constant-time secret compare
+
+- def:
+    name: handle_login
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - decl: [token, string, { call: [math.random_hex, 16] }]
+      - call: [resp.set_cookie, "sid", token, 3600, "Strict"]     # persistent, strict
+      - call: [resp.set_cookie, "theme", "dark"]                   # session cookie, default Lax
+      # header-injection attempt — must be rejected (no-op), never emitted
+      - call: [resp.set_cookie, "evil", "x\r\nInjected: 1", 0, "Lax"]
+      - set: [resp.status, 200]
+      - set: [resp.body, "ok"]
+      - call: [resp.send]
+
+- def:
+    name: handle_whoami
+    args: [[req, http_request_handle], [resp, http_response_handle]]
+    body:
+      - decl: [who, string, { call: [req.client_ip] }]
+      - set: [resp.status, 200]
+      - set: [resp.body, who]
+      - call: [resp.send]
+
+- def:
+    name: probe
+    args: [[raw, string]]
+    return: string
+    body:
+      - decl: [sock, socket_handle]
+      - set: [sock, { call: [net.socket, "tcp"] }]
+      - call: [net.connect, sock, "127.0.0.1", 23601]
+      - call: [net.send_string, sock, raw]
+      - decl: [rsp, string]
+      - set: [rsp, { call: [net.recv_string, sock, 512] }]
+      - call: [net.close, sock]
+      - return: rsp
+
+- def:
+    name: has
+    args: [[hay, string], [needle, string]]
+    return: i32
+    body:
+      - decl: [pos, i32, { call: [hay.index_of, needle] }]
+      - if: { condition: { lt: [pos, 0] }, then: [{ return: 0 }] }
+      - return: 1
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fail, i32, 0]
+
+      # ── constant-time compare (pure builtin, no server needed) ─────────────
+      - if: { condition: { neq: [{ call: [hash.const_time_eq, "s3cret-token", "s3cret-token"] }, 1] }, then: [{ print: ["FAIL const_time_eq equal"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { neq: [{ call: [hash.const_time_eq, "s3cret-token", "s3cret-toXen"] }, 0] }, then: [{ print: ["FAIL const_time_eq diff"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { neq: [{ call: [hash.const_time_eq, "abc", "abcd"] }, 0] }, then: [{ print: ["FAIL const_time_eq length"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server, "127.0.0.1", 23601] }]
+      - call: [srv.set_timeout, 2]
+      - call: [srv.route, "GET", "/login", handle_login]
+      - call: [srv.route, "GET", "/whoami", handle_whoami]
+      - decl: [thr, thread_handle, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 300]
+
+      # ── set_cookie: secure attributes present ─────────────────────────────
+      - decl: [login_resp, string, { call: [probe, "GET /login HTTP/1.1\r\nHost: x\r\n\r\n"] }]
+      - if: { condition: { eq: [{ call: [has, login_resp, "Set-Cookie: sid="] }, 0] }, then: [{ print: ["FAIL sid cookie missing: ${login_resp}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { eq: [{ call: [has, login_resp, "HttpOnly"] }, 0] }, then: [{ print: ["FAIL HttpOnly missing"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { eq: [{ call: [has, login_resp, "Secure"] }, 0] }, then: [{ print: ["FAIL Secure missing"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { eq: [{ call: [has, login_resp, "SameSite=Strict"] }, 0] }, then: [{ print: ["FAIL SameSite=Strict missing"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { eq: [{ call: [has, login_resp, "Max-Age=3600"] }, 0] }, then: [{ print: ["FAIL Max-Age missing"] }, { set: [fail, { +: [fail, 1] }] }] }
+      - if: { condition: { eq: [{ call: [has, login_resp, "SameSite=Lax"] }, 0] }, then: [{ print: ["FAIL theme cookie (Lax default) missing"] }, { set: [fail, { +: [fail, 1] }] }] }
+      # injection guard: the forged header must NOT appear
+      - if: { condition: { eq: [{ call: [has, login_resp, "Injected:"] }, 1] }, then: [{ print: ["FAIL cookie header injection succeeded: ${login_resp}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # ── client_ip returns the loopback peer ───────────────────────────────
+      - decl: [who_resp, string, { call: [probe, "GET /whoami HTTP/1.1\r\nHost: x\r\nX-Forwarded-For: 9.9.9.9\r\n\r\n"] }]
+      - if: { condition: { eq: [{ call: [has, who_resp, "127.0.0.1"] }, 0] }, then: [{ print: ["FAIL client_ip not loopback: ${who_resp}"] }, { set: [fail, { +: [fail, 1] }] }] }
+      # client_ip must ignore the spoofed X-Forwarded-For
+      - if: { condition: { eq: [{ call: [has, who_resp, "9.9.9.9"] }, 1] }, then: [{ print: ["FAIL client_ip trusted X-Forwarded-For: ${who_resp}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      - call: [srv.stop]
+
+      - if: { condition: { neq: [fail, 0] }, then: [{ print: ["FAILED: ${fail}"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS http_auth_helpers: secure cookies + injection guard + client_ip + const_time_eq"]
+      - return: 0

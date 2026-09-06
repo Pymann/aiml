@@ -1,0 +1,18 @@
+[WARNING]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:256] tests/test_model_inherits_hetero_list.aiml:79: variable 'bas0.nam' is compared against a string literal in 'run' — consider a regular expression for string matching.
+[WARNING]  [/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/src/core/ast_compiler.cpp:256] tests/test_model_inherits_hetero_list.aiml:79: variable 'bas1.nam' is compared against a string literal in 'run' — consider a regular expression for string matching.
+
+=== AIML CRASH (signal 11 at addr=(nil) tid=84388) ===
+backtrace: 13 frames
+/tmp/aiml-list-fix-baseline/aiml(+0xa0f74d)[0x5b46ad32b74d]
+/lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x7efc75045330]
+/lib/x86_64-linux-gnu/libc.so.6(+0x18b95d)[0x7efc7518b95d]
+[0x7efc7fa20553]
+[0x7efc7fa20263]
+[0x7efc7fa204f5]
+[0x7efc7fa20654]
+/lib/x86_64-linux-gnu/libLLVM.so.18.1(_ZN4llvm5MCJIT11runFunctionEPNS_8FunctionENS_8ArrayRefINS_12GenericValueEEE+0x23d)[0x7efc7abac71d]
+/tmp/aiml-list-fix-baseline/aiml(_ZN12AIMLCompiler6jitRunEv+0xea53)[0x5b46acc9ec6f]
+/tmp/aiml-list-fix-baseline/aiml(main+0x1039)[0x5b46accf87ac]
+/lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca)[0x7efc7502a1ca]
+/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x7efc7502a28b]
+/tmp/aiml-list-fix-baseline/aiml(_start+0x25)[0x5b46acc7d885]

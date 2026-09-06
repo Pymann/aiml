@@ -1,0 +1,68 @@
+# test_hash_buffer.aiml — hash.sha256 on a buffer<u8> is binary-safe (length-aware).
+#
+# A buffer whose first byte is 0x00 would hash as the EMPTY string if the runtime
+# used strlen.  We hash a single 0x00 byte and compare against the known vector
+# SHA-256(0x00) = 6e34...  (SHA-256("") would be e3b0c442...).  This proves the
+# hash.<algo> surface reads the buffer's pointer + length, not a C string.
+#
+# Expected exit code: 0
+
+- decl: [pass, i32, 0]
+- decl: [fail, i32, 0]
+
+# ── One 0x00 byte ────────────────────────────────────────────────────────────
+- decl: [one, buffer]
+- call: [one.alloc, 16]
+- call: [one.write, 0, u8]
+- decl: [got1, string, { call: [hash.sha256, one] }]
+- decl: [want1, string, "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d"]
+- decl: [empty_hash, string, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"]
+- if:
+    condition: { eq: [got1, want1] }
+    then:
+      - print: ["PASS: sha256(0x00) matches known vector (binary-safe)"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: sha256(0x00)=${got1} want ${want1}"]
+      - set: [fail, { +: [fail, 1] }]
+- if:
+    condition: { eq: [got1, empty_hash] }
+    then:
+      - print: ["FAIL: hashed as empty string — strlen-truncated at 0x00"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── Length matters: 4 zero bytes vs 2 zero bytes must differ ─────────────────
+- decl: [four, buffer]
+- call: [four.alloc, 16]
+- call: [four.write, 0, u8]
+- call: [four.write, 0, u8]
+- call: [four.write, 0, u8]
+- call: [four.write, 0, u8]
+- decl: [two, buffer]
+- call: [two.alloc, 16]
+- call: [two.write, 0, u8]
+- call: [two.write, 0, u8]
+- decl: [hfour, string, { call: [hash.sha256, four] }]
+- decl: [htwo, string, { call: [hash.sha256, two] }]
+- if:
+    condition: { neq: [hfour, htwo] }
+    then:
+      - print: ["PASS: 4 vs 2 zero bytes hash differently (length is honoured)"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: 4 and 2 zero bytes hashed the same (h=${hfour})"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── String path still works (regression) ─────────────────────────────────────
+- decl: [hstr, string, { call: [hash.sha256, "abc"] }]
+- if:
+    condition: { eq: [hstr, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"] }
+    then:
+      - print: ["PASS: sha256(\"abc\") string path intact"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: sha256(\"abc\")=${hstr}"]
+      - set: [fail, { +: [fail, 1] }]
+
+- print: [""]
+- print: ["=== test_hash_buffer: ${pass} passed, ${fail} failed ==="]

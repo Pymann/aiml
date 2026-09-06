@@ -9,6 +9,14 @@ extern "C" {
 // Returns heap-allocated AimlTlsSocket* cast to void*, or nullptr on failure.
 void*   aiml_tls_socket(void);
 
+// ── Shared server-side TLS policy (SSL_CTX* passed as void*) ──────────────────
+// Apply hardened server defaults to an SSL_CTX: min TLS 1.2, no SSLv2/3/TLS1.0/1.1,
+// no TLS compression, server cipher preference. Used by both the HTTPS and WSS servers.
+void    aiml_tls_harden_server_ctx(void* ssl_ctx);
+// Enable mutual-TLS: require + verify a client cert against the CA bundle PEM at
+// ca_path. Returns 0 on success, -1 if the CA bundle cannot be loaded.
+int     aiml_tls_require_client_cert(void* ssl_ctx, const char* ca_path);
+
 // ── Config (call before connect/bind) ────────────────────────────────────────
 // cert_path + key_path: PEM files (server or client cert)
 int     aiml_tls_set_cert(void* sock, const char* cert_path, const char* key_path);

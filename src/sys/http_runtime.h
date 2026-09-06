@@ -48,6 +48,8 @@ typedef struct AimlHttpResponse {
     void*        ssl;          /* SSL* or NULL */
     int8_t       resp_sent;    /* 1 after send/write/close */
     int8_t       chunked;      /* 1 while chunked transfer active */
+    char**       set_cookies;  /* NULL or malloc'd array of full Set-Cookie header values */
+    int          n_set_cookies;/* count in set_cookies (0 → none). calloc-zeroed. */
 } AimlHttpResponse;
 
 /* ─── http_request_handle ─────────────────────────────────────── */
@@ -60,6 +62,9 @@ typedef struct AimlHttpRequest {
     void*        body_bytes;   /* AimlBuffer* or NULL */
     AimlHttpMap* req_headers;  /* all request headers, never NULL */
     AimlHttpMap* cookies;      /* parsed Cookie: header, never NULL */
+    int          reject_status; /* 0 = ok; else an HTTP error to send instead of
+                                 * dispatching (413/431/414/400) — parser limit hit */
+    char*        peer_ip;      /* trusted socket peer IP (dotted), set server-side; NULL client-side */
 } AimlHttpRequest;
 
 /* ─── http_client_handle ──────────────────────────────────────── */
@@ -150,6 +155,9 @@ void    aiml_http_resp_free(void* resp);
 void* aiml_http_server(const char* host, int32_t port);
 void* aiml_http_server_tls(const char* host, int32_t port,
                             const char* cert_path, const char* key_path);
+/* mTLS: require a client cert signed by the CA bundle at ca_path (PEM).
+ * Server must be TLS. Returns 0 on success, -1 on error. */
+int   aiml_http_server_require_client_cert(void* srv, const char* ca_path);
 
 /* ══════════════════════════════════════════════════════════════
  * http_server_handle API

@@ -1,0 +1,64 @@
+# Expected exit code: 0
+# Static-file serving must not allow path traversal outside the served root
+# (spec/32_2 §3.10): "..", percent-encoded "..", and symlink escapes are rejected.
+
+# probe: raw TCP request → response text (status line first).
+- def:
+    name: probe
+    args: [[raw, string]]
+    return: string
+    body:
+      - decl: [sock, socket_handle]
+      - set: [sock, { call: [net.socket, "tcp"] }]
+      - call: [net.connect, sock, "127.0.0.1", 23190]
+      - call: [net.send_string, sock, raw]
+      - decl: [rsp, string]
+      - set: [rsp, { call: [net.recv_string, sock, 200] }]
+      - call: [net.close, sock]
+      - return: rsp
+
+- def:
+    name: main
+    return: i32
+    body:
+      # Layout: /tmp/aiml_fstest/{secret.txt (OUTSIDE root), pub/ok.txt (served root)}
+      - decl: [base, path, "/tmp/aiml_fstest"]
+      - call: [io.remove_all, base]
+      - call: [io.mkdir, base]
+      - decl: [pub, path, "/tmp/aiml_fstest/pub"]
+      - call: [io.mkdir, pub]
+      - decl: [wr1, i32, { call: [io.write_file, "/tmp/aiml_fstest/pub/ok.txt", "served-ok"] }]
+      - decl: [wr2, i32, { call: [io.write_file, "/tmp/aiml_fstest/secret.txt", "TOP-SECRET"] }]
+
+      - decl: [srv, http_server_handle]
+      - set: [srv, { call: [http.server, "127.0.0.1", 23190] }]
+      - call: [srv.set_timeout, 2]
+      - decl: [dirs, list<path>]
+      - call: [dirs.push, pub]
+      - decl: [opts, fs_options]
+      - call: [srv.filesystem, "/", dirs, opts]
+      - decl: [thr, thread_handle]
+      - set: [thr, { call: [srv.start_async] }]
+      - call: [time.sleep_ms, 300]
+      - decl: [fail, i32, 0]
+
+      # legit file → 200
+      - decl: [r_ok, string, { call: [probe, "GET /ok.txt HTTP/1.1\r\nHost: x\r\n\r\n"] }]
+      - if: { condition: { eq: [{ call: [r_ok.starts_with, "HTTP/1.1 200"] }, 0] }, then: [{ print: ["FAIL legit: ${r_ok}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # plain ".." traversal → must NOT serve secret (400)
+      - decl: [r_dot, string, { call: [probe, "GET /../secret.txt HTTP/1.1\r\nHost: x\r\n\r\n"] }]
+      - if: { condition: { eq: [{ call: [r_dot.starts_with, "HTTP/1.1 400"] }, 0] }, then: [{ print: ["FAIL dotdot NOT blocked: ${r_dot}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # percent-encoded ".." traversal → decoded then blocked (400)
+      - decl: [r_enc, string, { call: [probe, "GET /%2e%2e/secret.txt HTTP/1.1\r\nHost: x\r\n\r\n"] }]
+      - if: { condition: { eq: [{ call: [r_enc.starts_with, "HTTP/1.1 400"] }, 0] }, then: [{ print: ["FAIL encoded-dotdot NOT blocked: ${r_enc}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      # unknown file → 404
+      - decl: [r_404, string, { call: [probe, "GET /nope.txt HTTP/1.1\r\nHost: x\r\n\r\n"] }]
+      - if: { condition: { eq: [{ call: [r_404.starts_with, "HTTP/1.1 404"] }, 0] }, then: [{ print: ["FAIL 404: ${r_404}"] }, { set: [fail, { +: [fail, 1] }] }] }
+
+      - call: [io.remove_all, base]
+      - if: { condition: { neq: [fail, 0] }, then: [{ print: ["FAILED: ${fail}"] }, { call: [sys.exit, 1] }] }
+      - print: ["PASS http_traversal: legit=200, ../=400, %2e%2e=400, missing=404 (root contained)"]
+      - return: 0
