@@ -239,8 +239,15 @@ IRValue* Compiler::visitLiteral(LiteralExpr* lit) {
                 unsigned long ul = std::stoul(sv, &pos, 16);
                 return ctx.ir_gen->getInt32(static_cast<int32_t>(static_cast<uint32_t>(ul)));
             }
-            int num = std::stoi(sv, &pos, 0);
-            return ctx.ir_gen->getInt32(num);
+            // Parse as 64-bit so integer literals beyond the i32 range (e.g.
+            // 3000000000, 2147483648) are valid i64 literals instead of a parse
+            // error.  Values within i32 range stay i32 (unchanged behaviour).
+            long long ll = std::stoll(sv, &pos, 0);
+            if (ll >= -2147483648LL && ll <= 2147483647LL) {
+                return ctx.ir_gen->getInt32(static_cast<int32_t>(ll));
+            }
+            return ctx.ir_gen->wrap(llvm::ConstantInt::get(
+                ctx.builder.getInt64Ty(), static_cast<uint64_t>(ll), /*isSigned=*/true));
         } catch (...) {
             LOG_ERROR(ctx.fmtLoc(lit->sourceNode) + "Invalid unknown literal (expected bool or number): " + sv);
             return ctx.ir_gen->getInt32(0);

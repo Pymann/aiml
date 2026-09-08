@@ -197,7 +197,17 @@ struct AimlMirrorSession {
     std::unordered_map<void*,   AimlMirrorRegistered*> by_ptr;
     std::queue<AimlMirrorEvent*>                      event_queue;
     std::queue<AimlRpcEvent*>                         rpc_queue;
+    /* Last event/rpc handed to AIML via the next/poll accessors.  The returned heap
+     * object is borrowed by the caller until its NEXT poll (its method/arg_blob
+     * pointers are aliased into the AIML struct and read/decoded before then); we free
+     * it on the following poll and on session close.  Bounds the per-RPC leak to one. */
+    AimlRpcEvent*                                    last_consumed_rpc   = nullptr;
+    AimlMirrorEvent*                                 last_consumed_event = nullptr;
 };
+
+/* Free helpers for consumed queue objects (defined after the empty sentinels). */
+static void aiml_free_rpc_event(AimlRpcEvent* ev);
+static void aiml_free_mirror_event(AimlMirrorEvent* ev);
 
 /* ── URL parsing ──────────────────────────────────────────────────────────── */
 
@@ -708,6 +718,8 @@ static void mirror_recv_from_peers(AimlMirrorSession* s) {
         s->event_queue.push(ev);
         if (peer->transport.type == MT_TCP && peer->transport.tcp_fd >= 0)
             close(peer->transport.tcp_fd);
+        else if (peer->transport.ws_ptr)
+            aiml_ws_close(peer->transport.ws_ptr);   /* WS/WSS: full close (socket+SSL+object) — was leaked */
         s->peers.erase(std::remove(s->peers.begin(), s->peers.end(), peer), s->peers.end());
         delete peer;
     }
@@ -893,17 +905,19 @@ void aiml_mirror_session_close(void* session) {
         free(reg->shadow_blob);
         delete reg;
     }
+    /* Free the last events still borrowed by AIML (not yet freed by a later poll). */
+    aiml_free_rpc_event(s->last_consumed_rpc);      s->last_consumed_rpc   = nullptr;
+    aiml_free_mirror_event(s->last_consumed_event); s->last_consumed_event = nullptr;
     /* Drain event queue */
     while (!s->event_queue.empty()) {
-        delete s->event_queue.front();
+        aiml_free_mirror_event(s->event_queue.front());
         s->event_queue.pop();
     }
-    /* Drain RPC queue (free heap-allocated method strings) */
+    /* Drain RPC queue (free method string + payload blob + event). */
     while (!s->rpc_queue.empty()) {
         AimlRpcEvent* ev = s->rpc_queue.front();
         s->rpc_queue.pop();
-        if (ev->method) free((void*)ev->method);
-        delete ev;
+        aiml_free_rpc_event(ev);
     }
     delete s;
 }
@@ -1148,20 +1162,45 @@ void aiml_mirror_session_register_id_typed(void* session, void* obj, int64_t obj
 static AimlMirrorEvent s_empty_mirror_event = { "", nullptr, 0, 0 };
 static AimlRpcEvent    s_empty_rpc_event    = { "", 0, 0, 0, nullptr, 0, 0 };
 
+/* Free a consumed RPC event: method string + payload blob (both malloc'd) + the
+ * heap event itself.  Never touches the static empty sentinel. */
+static void aiml_free_rpc_event(AimlRpcEvent* ev) {
+    if (!ev || ev == &s_empty_rpc_event) return;
+    if (ev->method)   free((void*)ev->method);
+    if (ev->arg_blob) free((void*)ev->arg_blob);
+    delete ev;
+}
+/* Free a consumed mirror event: only the heap object — `type` is a static string
+ * literal and `peer` is owned by the session (or already deleted on disconnect). */
+static void aiml_free_mirror_event(AimlMirrorEvent* ev) {
+    if (!ev || ev == &s_empty_mirror_event) return;
+    delete ev;
+}
+
 void* aiml_mirror_session_poll_event(void* session) {
     auto* s = (AimlMirrorSession*)session;
-    if (!s || s->event_queue.empty()) return &s_empty_mirror_event;
+    if (!s) return &s_empty_mirror_event;
+    /* Previous event borrowed by AIML is done now (next poll) — free it. */
+    aiml_free_mirror_event(s->last_consumed_event);
+    s->last_consumed_event = nullptr;
+    if (s->event_queue.empty()) return &s_empty_mirror_event;
     AimlMirrorEvent* ev = s->event_queue.front();
     s->event_queue.pop();
+    s->last_consumed_event = ev;
     AIML_DBG("poll_event type=%s net_id=%d", ev->type ? ev->type : "", ev->net_id);
     return ev;
 }
 
 void* aiml_mirror_session_poll_rpc(void* session) {
     auto* s = (AimlMirrorSession*)session;
-    if (!s || s->rpc_queue.empty()) return &s_empty_rpc_event;
+    if (!s) return &s_empty_rpc_event;
+    /* Previous rpc borrowed by AIML is done now (next poll) — free it. */
+    aiml_free_rpc_event(s->last_consumed_rpc);
+    s->last_consumed_rpc = nullptr;
+    if (s->rpc_queue.empty()) return &s_empty_rpc_event;
     AimlRpcEvent* ev = s->rpc_queue.front();
     s->rpc_queue.pop();
+    s->last_consumed_rpc = ev;
     AIML_DBG("poll_rpc method=%s net_id=%d arg=%d arg_kind=%d",
              ev->method ? ev->method : "", ev->net_id, ev->arg, ev->arg_kind);
     return ev;
@@ -1176,9 +1215,13 @@ int32_t aiml_mirror_session_has_event(void* session) {
 
 void* aiml_mirror_session_next_event(void* session) {
     auto* s = (AimlMirrorSession*)session;
-    if (!s || s->event_queue.empty()) return nullptr;
+    if (!s) return nullptr;
+    aiml_free_mirror_event(s->last_consumed_event);
+    s->last_consumed_event = nullptr;
+    if (s->event_queue.empty()) return nullptr;
     AimlMirrorEvent* ev = s->event_queue.front();
     s->event_queue.pop();
+    s->last_consumed_event = ev;
     return ev;
 }
 
@@ -1405,7 +1448,8 @@ int32_t aiml_mirror_session_send_and_await(
             if (ev && ev->method && std::strcmp(ev->method, expect_method) == 0) {
                 /* method matches — try to decode into the caller's expected type */
                 int32_t rc = aiml_rpc_event_decode_into(ev, out_obj, out_nodes, out_n_nodes);
-                if (rc == 0) { found = 1; break; }
+                /* Decoded into the caller's object (deep copy) → event is done, free it. */
+                if (rc == 0) { aiml_free_rpc_event(ev); found = 1; break; }
                 /* Method matched but the payload is a DIFFERENT type — a straggler
                  * reply belonging to another request.  ALL replies share the
                  * generic method "set_result", so the async lobby poller's
@@ -1440,8 +1484,12 @@ int32_t aiml_mirror_session_has_rpc(void* session) {
 
 void* aiml_mirror_session_next_rpc(void* session) {
     auto* s = (AimlMirrorSession*)session;
-    if (!s || s->rpc_queue.empty()) return nullptr;
+    if (!s) return nullptr;
+    aiml_free_rpc_event(s->last_consumed_rpc);
+    s->last_consumed_rpc = nullptr;
+    if (s->rpc_queue.empty()) return nullptr;
     AimlRpcEvent* ev = s->rpc_queue.front();
     s->rpc_queue.pop();
+    s->last_consumed_rpc = ev;
     return ev;
 }

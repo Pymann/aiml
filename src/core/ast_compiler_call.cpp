@@ -1829,6 +1829,20 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             }
             return ctx.ir_gen->wrap(retPtr);
 
+        } else if (methodName == "get_copy_at" && argVals.size() >= 2) {
+            // get_copy_at(key, dst) — deep-copy into a CALLER-owned buffer `dst`
+            // (spec/31 §6.7.2).  dst is a ptr<T> (pass {'&':[buf]} for a value-type
+            // local/member, or a ptr<T> directly).  The runtime frees dst's prior
+            // heap, then decodes a fresh independent copy into it (the struct shell is
+            // reused; nested heap fields are re-decoded each call → no accumulation,
+            // not zero allocation).  Returns i32: 1=copied, 0=missing key, -1=value
+            // present but undecodable (schema mismatch/corrupt; dst left zero-inited).
+            // Callers MUST only use dst when the result is 1.
+            llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            llvm::Value* dstVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
+            llvm::Function* f = ctx.getFunction("aiml_db_kv_get_copy_at", i32, {i8p, i8p, i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {kvPtr, keyVal, dstVal}));
+
         } else if (methodName == "has" && !argVals.empty()) {
             llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
             llvm::Function* f = ctx.getFunction("aiml_db_kv_has", i32, {i8p, i8p});

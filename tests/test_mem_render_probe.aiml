@@ -1,0 +1,244 @@
+# Render-/Prefab-Memory-Probe (headless): misst RSS-Delta je Render-Primitive über
+# eine Schleife (N und 2N).  Bildet die Client-Board-Render-Last ab.  Leckt eine
+# Primitive, ist 2N≈2·N; ist sie sauber, bleiben beide ~flach.
+#
+# Läuft mit GL-Kontext (create_window), aber ohne echtes Sichtbar-Rendern.  Ohne
+# Display (headless CI) meldet create_window 0 → Probe wird übersprungen (kein Fehler).
+#
+# Parametrisierung (Memory-Lifetime-Plan §8.1 — Primitiven ISOLIERT trennen):
+#   AIML_RENDER_PROBE = A|A0|B|BL|C|CF|all   (Default all)
+#   AIML_MEM_ITERS    = <N>                  (Default 20000; gemessen N und 2N)
+# Getrennte Primitiven:
+#   A  = instantiate + populate(interp) + destroy   (Spawn/Despawn MIT Text)
+#   A0 = instantiate + destroy OHNE populate         (reiner Spawn/Despawn)
+#   B  = set_text mit INTERPOLATION (persistente Instanz)
+#   BL = set_text mit LITERALEN (persistente Instanz) — trennt Interp vom set_text-Store
+#   C  = draw_scene einer UNVERÄNDERTEN Szene (Diagnosekontrolle, kein populate)
+#   CF = voller Frame: clear + populate + draw_scene + swap (per-Frame-Last)
+
+- config:
+    entry: main
+
+- prefab:
+    name: ProbeCard
+    width: 138
+    height: 190
+    draggable: false
+    children:
+      - { name: card_name,   type: label, x: 6, y: 4,   width: 126, height: 20, font_size: 12, color: 0xFFFFFF }
+      - { name: type_text,   type: label, x: 6, y: 26,  width: 126, height: 16, font_size: 10, color: 0x99AACC }
+      - { name: ability_text,type: label, x: 6, y: 46,  width: 126, height: 90, font_size: 9,  color: 0xDDDDDD }
+      - { name: lp_lbl,      type: label, x: 6, y: 140, width: 40,  height: 16, font_size: 11, color: 0xFF8888 }
+      - { name: atk_lbl,     type: label, x: 50, y: 140,width: 40,  height: 16, font_size: 11, color: 0xFFCC88 }
+      - { name: art_img,     type: sprite,x: 6, y: 46,  width: 126, height: 90 }
+
+# populate (INTERPOLATION): simuliert populate_card_full — set_text mit dyn-Strings.
+- def:
+    name: populate
+    static_off: ["same_arg"]
+    args: [[inst, prefab_instance], [num, i32]]
+    body:
+      - call: [inst.set_text, "card_name",    "Card number ${num} with a name"]
+      - call: [inst.set_text, "type_text",    "Creature — Sorcery"]
+      - call: [inst.set_text, "ability_text", "Deal ${num} damage to target and draw a card then gain life"]
+      - call: [inst.set_text, "lp_lbl",       "${num}/${num}"]
+      - call: [inst.set_text, "atk_lbl",      "${num}"]
+      - call: [inst.set_child_visible, "art_img", 1]
+      - call: [inst.set_child_visible, "lp_lbl", 1]
+      - call: [inst.set_child_visible, "atk_lbl", 1]
+
+# populate_literal: identische set_text-Last, aber NUR Literale (keine Interpolation).
+# Trennt das Interp-Temporary (Paket C) vom set_text-Store selbst (Paket D/Runtime).
+- def:
+    name: populate_literal
+    static_off: ["same_arg"]
+    args: [[inst, prefab_instance]]
+    body:
+      - call: [inst.set_text, "card_name",    "Card number with a name"]
+      - call: [inst.set_text, "type_text",    "Creature — Sorcery"]
+      - call: [inst.set_text, "ability_text", "Deal damage to target and draw a card then gain life"]
+      - call: [inst.set_text, "lp_lbl",       "9/9"]
+      - call: [inst.set_text, "atk_lbl",      "9"]
+      - call: [inst.set_child_visible, "art_img", 1]
+      - call: [inst.set_child_visible, "lp_lbl", 1]
+      - call: [inst.set_child_visible, "atk_lbl", 1]
+
+# A: instantiate + populate(interp) + destroy je Iteration.
+- def:
+    name: probe_inst_destroy
+    static_off: ["same_arg"]
+    args: [[iters, i32]]
+    return: i64
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [racnt, i32, 0]
+      - while:
+          condition: { lt: [racnt, iters] }
+          body:
+            - decl: [inst, prefab_instance, { call: [engine.instantiate, "ProbeCard"] }]
+            - call: [populate, inst, racnt]
+            - call: [engine.destroy, inst]
+            - set: [racnt, { +: [racnt, 1] }]
+      - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+# A0: instantiate + destroy OHNE populate (reiner Spawn/Despawn-Pfad).
+- def:
+    name: probe_inst_destroy_bare
+    static_off: ["same_arg"]
+    args: [[iters, i32]]
+    return: i64
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [rzcnt, i32, 0]
+      - while:
+          condition: { lt: [rzcnt, iters] }
+          body:
+            - decl: [inst, prefab_instance, { call: [engine.instantiate, "ProbeCard"] }]
+            - call: [engine.destroy, inst]
+            - set: [rzcnt, { +: [rzcnt, 1] }]
+      - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+# B: persistente Instanz, set_text mit INTERPOLATION je Iteration.
+- def:
+    name: probe_set_text
+    static_off: ["same_arg"]
+    args: [[inst, prefab_instance], [iters, i32]]
+    return: i64
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [rbcnt, i32, 0]
+      - while:
+          condition: { lt: [rbcnt, iters] }
+          body:
+            - call: [populate, inst, rbcnt]
+            - set: [rbcnt, { +: [rbcnt, 1] }]
+      - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+# BL: persistente Instanz, set_text mit LITERALEN je Iteration.
+- def:
+    name: probe_set_text_literal
+    static_off: ["same_arg"]
+    args: [[inst, prefab_instance], [iters, i32]]
+    return: i64
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [rlcnt, i32, 0]
+      - while:
+          condition: { lt: [rlcnt, iters] }
+          body:
+            - call: [populate_literal, inst]
+            - set: [rlcnt, { +: [rlcnt, 1] }]
+      - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+# C: draw_scene einer UNVERÄNDERTEN Szene (kein populate) — Diagnosekontrolle.
+- def:
+    name: probe_draw_only
+    static_off: ["same_arg"]
+    args: [[iters, i32]]
+    return: i64
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [rdcnt, i32, 0]
+      - while:
+          condition: { lt: [rdcnt, iters] }
+          body:
+            - call: [engine.draw_scene]
+            - set: [rdcnt, { +: [rdcnt, 1] }]
+      - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+# CF: voller Frame — clear + populate + draw_scene + swap je Iteration.
+- def:
+    name: probe_frame_full
+    static_off: ["same_arg"]
+    args: [[inst, prefab_instance], [win, window_handle], [iters, i32]]
+    return: i64
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [rfcnt, i32, 0]
+      - while:
+          condition: { lt: [rfcnt, iters] }
+          body:
+            - call: [gl.clear_all, 0.08, 0.08, 0.12, 1.0]
+            - call: [populate, inst, rfcnt]
+            - call: [engine.draw_scene]
+            - call: [engine.swap, win]
+            - set: [rfcnt, { +: [rfcnt, 1] }]
+      - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+# want: Probe-Selektion aus AIML_RENDER_PROBE (all → immer).
+- def:
+    name: want
+    static_off: ["same_arg", "str_cmp"]
+    args: [[sel, string], [tag, string]]
+    return: i32
+    body:
+      - if: { condition: { eq: [sel, "all"] }, then: [{ return: 1 }] }
+      - if: { condition: { eq: [sel, tag] }, then: [{ return: 1 }] }
+      - return: 0
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 800, 600, "Render Mem Probe"] }]
+      - if: { condition: { eq: [win, 0] }, then: [{ call: [log.warn, "no window (headless w/o display?) — skipping render probe"] }, { return: 0 }] }
+      - call: [gl.init]
+      - call: [ui.init]
+      - call: [engine.prefab_scene_init, 800, 600]
+      - decl: [font, ui_font, { call: [ui.load_font_default, 14.0] }]
+      - call: [engine.prefab_set_font, font]
+
+      - decl: [envm, map<string:string>, { call: [sys.env] }]
+      - decl: [sel, string, "all"]
+      - if: { condition: { gt: [{ call: [envm.contains, "AIML_RENDER_PROBE"] }, 0] }, then: [{ set: [sel, { call: [envm.get, "AIML_RENDER_PROBE"] }] }] }
+      - decl: [reps, i32, 20000]
+      - if: { condition: { gt: [{ call: [envm.contains, "AIML_MEM_ITERS"] }, 0] }, then: [{ decl: [itxt, string, { call: [envm.get, "AIML_MEM_ITERS"] }] }, { set: [reps, { call: [itxt.to_int] }] }] }
+      - decl: [reps2, i32, { '*': [reps, 2] }]
+
+      - decl: [held, prefab_instance, { call: [engine.instantiate, "ProbeCard"] }]
+      - call: [log.info, "RENDERPROBE sel=${sel} N=${reps} 2N=${reps2} (Leck ⇔ 2N≈2·N)"]
+      # Font-/Glyph-Warmup, damit einmalige Lazy-Allokationen nicht als Leck zählen.
+      - decl: [warm, i64, { call: [probe_set_text, held, 2000] }]
+
+      - if:
+          condition: { gt: [{ call: [want, sel, "A"] }, 0] }
+          then:
+            - decl: [res_an, i64, { call: [probe_inst_destroy, reps] }]
+            - decl: [res_a2, i64, { call: [probe_inst_destroy, reps2] }]
+            - call: [log.info, "  A  inst+populate+destroy : N=${res_an}  2N=${res_a2} bytes"]
+      - if:
+          condition: { gt: [{ call: [want, sel, "A0"] }, 0] }
+          then:
+            - decl: [res_zn, i64, { call: [probe_inst_destroy_bare, reps] }]
+            - decl: [res_z2, i64, { call: [probe_inst_destroy_bare, reps2] }]
+            - call: [log.info, "  A0 inst+destroy (bare)   : N=${res_zn}  2N=${res_z2} bytes"]
+      - if:
+          condition: { gt: [{ call: [want, sel, "B"] }, 0] }
+          then:
+            - decl: [res_bn, i64, { call: [probe_set_text, held, reps] }]
+            - decl: [res_b2, i64, { call: [probe_set_text, held, reps2] }]
+            - call: [log.info, "  B  set_text interp       : N=${res_bn}  2N=${res_b2} bytes"]
+      - if:
+          condition: { gt: [{ call: [want, sel, "BL"] }, 0] }
+          then:
+            - decl: [res_ln, i64, { call: [probe_set_text_literal, held, reps] }]
+            - decl: [res_l2, i64, { call: [probe_set_text_literal, held, reps2] }]
+            - call: [log.info, "  BL set_text literal      : N=${res_ln}  2N=${res_l2} bytes"]
+      - if:
+          condition: { gt: [{ call: [want, sel, "C"] }, 0] }
+          then:
+            - decl: [res_dn, i64, { call: [probe_draw_only, reps] }]
+            - decl: [res_d2, i64, { call: [probe_draw_only, reps2] }]
+            - call: [log.info, "  C  draw_scene (unchanged): N=${res_dn}  2N=${res_d2} bytes"]
+      - if:
+          condition: { gt: [{ call: [want, sel, "CF"] }, 0] }
+          then:
+            - decl: [res_fn, i64, { call: [probe_frame_full, held, win, reps] }]
+            - decl: [res_f2, i64, { call: [probe_frame_full, held, win, reps2] }]
+            - call: [log.info, "  CF full frame (clear+draw+swap): N=${res_fn}  2N=${res_f2} bytes"]
+
+      # held VOR Window-/GL-Abbau zerstören (§8.1): sonst zählt sein Heap fälschlich mit.
+      - call: [engine.destroy, held]
+      - call: [engine.destroy_window, win]
+      - return: 0

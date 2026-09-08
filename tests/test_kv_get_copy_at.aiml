@@ -1,0 +1,128 @@
+# Akzeptanz-Test für kv.get_copy_at (spec/31 §6.7.2).  Spec-first: definiert das
+# Zielverhalten; läuft grün, sobald get_copy_at implementiert ist.
+#
+# get_copy_at(key, dst) deep-copyt den Wert in einen CALLER-eigenen, wiederverwendeten
+# Puffer — gibt dst's vorigen Heap VOR dem Refill frei → keine per-Call-Allokation,
+# kein Wachstum bei Reuse.  Unabhängig vom decoded_cache (wie get_copy).
+#
+# Erwartet:
+#   1. Korrektheit: füllt dst mit dem gespeicherten Wert; Rückgabe 1=gefunden, 0=fehlt.
+#   2. Refill: erneuter Aufruf in DENSELBEN Puffer zeigt den neuen Wert (alter Inhalt weg).
+#   3. Fehlender Key → Rückgabe 0, dst unverändert.
+#   4. Memory: 20 000 Aufrufe in EINEN Puffer wachsen NICHT (Regressionswächter);
+#      get_copy (Vergleich) leckt hier ~16 MB.
+
+- model:
+    name: Rec
+    fields:
+      - [name, string]
+      - [tags, list<string>]
+
+- class:
+    name: Store
+    members:
+      - [store, Kv<string:Rec>]
+      - [work,  Rec]           # wiederverwendeter Zielpuffer (EINMAL alloziert)
+    methods:
+      - def:
+          name: setup
+          args: [[dir, string]]
+          body:
+            - set: [<.store, { call: [db.open_kv, "get_copy_at_test", {persist: true, path: dir}] }]
+
+      - def:
+          name: seed
+          static_off: ["same_arg"]
+          args: [[key, string], [nmv, string], [ntags, i32]]
+          body:
+            - decl: [rec, Rec]
+            - set: [rec.name, nmv]
+            - decl: [tix, i32, 0]
+            - while:
+                condition: { lt: [tix, ntags] }
+                body:
+                  - call: [rec.tags.push, "tag-${nmv}-${tix}"]
+                  - set: [tix, { +: [tix, 1] }]
+            - call: [<.store.set, key, rec]
+
+      # fetch_into: get_copy_at in den wiederverwendeten <.work-Puffer.
+      - def:
+          name: fetch_into
+          args: [[key, string]]
+          return: i32
+          body:
+            - return: { call: [<.store.get_copy_at, key, {'&': [<.work]}] }
+
+      # write_corrupt: schreibt einen absichtlich zu kurzen Blob (Längen-Präfix=1)
+      # ROH via set_blob → beim Decode läuft schon das erste Feld über `end` (F1)
+      # → aiml_ser_decode meldet -1 → get_copy_at gibt -1 zurück.
+      - def:
+          name: write_corrupt
+          args: [[key, string]]
+          body:
+            - decl: [cbuf, buffer<u8>]
+            - call: [cbuf.alloc, 8]
+            - call: [cbuf.write, 1, i32]     # data_len-Präfix = 1 (Felder laufen über end)
+            - call: [cbuf.write, 0, i32]     # Padding
+            - call: [<.store.set_blob, key, cbuf]
+
+      # probe_reuse: N Aufrufe in DENSELBEN Puffer → RSS-Delta (soll ~0 sein).
+      - def:
+          name: probe_reuse
+          args: [[iters, i32]]
+          return: i64
+          body:
+            - decl: [before, i64, { call: [sys.mem_usage] }]
+            - decl: [rcnt, i32, 0]
+            - while:
+                condition: { lt: [rcnt, iters] }
+                body:
+                  - decl: [okr, i32, { call: [<.store.get_copy_at, "k", {'&': [<.work]}] }]
+                  - set: [rcnt, { +: [rcnt, 1] }]
+            - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - call: [io.remove_all, "/tmp/aiml_get_copy_at/"]
+      - decl: [svc, ptr<Store>, { new: Store }]
+      - call: [svc.setup, "/tmp/aiml_get_copy_at/"]
+      - decl: [fails, i32, 0]
+
+      # ── 1. Korrektheit: Erstbefüllung ─────────────────────────────────────
+      - call: [svc.seed, "k", "hello", 1]
+      - decl: [ok1, i32, { call: [svc.fetch_into, "k"] }]
+      - if: { condition: { neq: [ok1, 1] }, then: [{ print: ["FAIL 1: get_copy_at returned ${ok1} (exp 1)"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [svc.work.name, "hello"] }, then: [{ print: ["FAIL 2: work.name=${svc.work.name} (exp hello)"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [svc.work.tags.len, 1] }, then: [{ print: ["FAIL 3: work.tags.len=${svc.work.tags.len} (exp 1)"] }, { set: [fails, { +: [fails, 1] }] }] }
+
+      # ── 2. Refill in DENSELBEN Puffer: neuer Wert, alter Inhalt weg ────────
+      - call: [svc.seed, "k", "world", 3]
+      - decl: [ok2, i32, { call: [svc.fetch_into, "k"] }]
+      - if: { condition: { neq: [svc.work.name, "world"] }, then: [{ print: ["FAIL 4: refill name=${svc.work.name} (exp world)"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [svc.work.tags.len, 3] }, then: [{ print: ["FAIL 5: refill tags.len=${svc.work.tags.len} (exp 3, alter Inhalt muss weg sein)"] }, { set: [fails, { +: [fails, 1] }] }] }
+
+      # ── 3. Fehlender Key → 0, Puffer unverändert ──────────────────────────
+      - decl: [ok3, i32, { call: [svc.fetch_into, "does-not-exist"] }]
+      - if: { condition: { neq: [ok3, 0] }, then: [{ print: ["FAIL 6: missing key returned ${ok3} (exp 0)"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [svc.work.name, "world"] }, then: [{ print: ["FAIL 7: missing key mutated buffer (name=${svc.work.name})"] }, { set: [fails, { +: [fails, 1] }] }] }
+
+      # ── F3: korrupter/abgeschnittener Blob → -1, Puffer sicher genullt ─────
+      - call: [svc.write_corrupt, "bad"]
+      - decl: [okc, i32, { call: [svc.fetch_into, "bad"] }]
+      - if: { condition: { neq: [okc, -1] }, then: [{ print: ["FAIL 9: corrupt blob returned ${okc} (exp -1)"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [svc.work.tags.len, 0] }, then: [{ print: ["FAIL 10: corrupt blob left non-empty buffer (tags.len=${svc.work.tags.len}, exp 0/gezeroed)"] }, { set: [fails, { +: [fails, 1] }] }] }
+
+      # ── 4. Memory-Regression: Reuse wächst NICHT ──────────────────────────
+      - decl: [warm, i64, { call: [svc.probe_reuse, 2000] }]
+      - decl: [delta, i64, { call: [svc.probe_reuse, 20000] }]
+      - call: [log.info, "get_copy_at reuse delta over 20000 calls: ${delta} bytes (Ziel ~0; get_copy leckte hier ~16 MB)"]
+      # Großzügige Schranke: < 4 MB = kein Akkumulieren (get_copy: ~16 MB).
+      - if: { condition: { gt: [delta, 4194304] }, then: [{ print: ["FAIL 8: reuse leaked ${delta} bytes (>4MB — get_copy_at akkumuliert)"] }, { set: [fails, { +: [fails, 1] }] }] }
+
+      - if:
+          condition: { eq: [fails, 0] }
+          then: [{ print: ["PASS get_copy_at: Korrektheit + Refill + missing-key + korrupt-blob(-1) + kein Reuse-Leak"] }, { return: 0 }]
+          else: [{ print: ["FAIL get_copy_at: ${fails} Fehler"] }, { return: 1 }]

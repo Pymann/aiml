@@ -1,0 +1,255 @@
+# Memory-Leak-Probe: jede Probe-Methode läuft eine Primitive N-mal in einer Schleife
+# und liefert das RSS-Delta (sys.mem_usage, Bytes).  Leckt eine Primitive, wächst das
+# Delta ~linear mit N → die 2N-Messung ist dann ~doppelt so groß wie die N-Messung.
+# Bleibt beides ~flach (Allocator recycelt), ist die Primitive sauber.
+#
+# Motiviert durch den 9rooms-Server-Leak (~13 MB/30s): der Scheduler ruft pro Tick
+# match_get → matches.get_copy (Deep-Copy einer MatchSession).  Probe A bildet genau
+# das ab; B–G sind Vergleichs-/Kontrollfälle.
+#
+# Parametrisierung (Memory-Lifetime-Plan §8.1 — Proben ISOLIERT in eigenen Prozessen):
+#   AIML_MEM_PROBE = A|B|C|D|E|F|G|all   (Default all)
+#   AIML_MEM_ITERS = <N>                 (Default 20000; gemessen werden N und 2N)
+# Für eine saubere Zuschreibung immer EINE Probe pro Prozess starten, z.B.
+#   AIML_MEM_PROBE=A AIML_MEM_ITERS=20000 aiml -r tests/test_mem_leak_probe.aiml
+
+- model:
+    name: Rec
+    fields:
+      - [name,  string]
+      - [tags,  list<string>]
+      - [nums,  list<i32>]
+
+- class:
+    name: Store
+    members:
+      - [store, Kv<string:Rec>]
+    methods:
+      - def:
+          name: setup
+          args: [[dir, string]]
+          body:
+            - set: [<.store, { call: [db.open_kv, "mem_leak_probe", {persist: true, path: dir}] }]
+            # Ein Eintrag mit spürbarem Heap (String + zwei Listen).
+            - decl: [rec, Rec]
+            - set: [rec.name, "some reasonably long value for the heap"]
+            - decl: [sidx, i32, 0]
+            - while:
+                condition: { lt: [sidx, 16] }
+                body:
+                  - call: [rec.tags.push, "tag-entry-${sidx}"]
+                  - call: [rec.nums.push, sidx]
+                  - set: [sidx, { +: [sidx, 1] }]
+            - call: [<.store.set, "k", rec]
+
+      # Probe A: get_copy Deep-Copy pro Iteration, Local fällt am Iter-Ende aus dem Scope.
+      - def:
+          name: probe_get_copy
+          args: [[iters, i32]]
+          return: i64
+          body:
+            - decl: [before, i64, { call: [sys.mem_usage] }]
+            - decl: [acnt, i32, 0]
+            - while:
+                condition: { lt: [acnt, iters] }
+                body:
+                  - decl: [mrec, Rec, { call: [<.store.get_copy, "k"] }]
+                  - set: [acnt, { +: [acnt, 1] }]
+            - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+      # Probe C: kv.set desselben Keys pro Iteration (Scheduler-Write-Back-Pfad).
+      # WICHTIG (§8.1): KONSTANTE Payload — ein vorhandenes Skalar-Element ERSETZEN,
+      # nicht pro Iteration anhängen (sonst wächst der Record selbst und die Messung
+      # ist unbrauchbar/Test-Artefakt).
+      - def:
+          name: probe_set
+          args: [[iters, i32]]
+          return: i64
+          body:
+            - decl: [before, i64, { call: [sys.mem_usage] }]
+            - decl: [ccnt, i32, 0]
+            - while:
+                condition: { lt: [ccnt, iters] }
+                body:
+                  - decl: [mrec, Rec, { call: [<.store.get_copy, "k"] }]
+                  - idx: [mrec.nums, 0, ccnt]        # Skalar ersetzen → Payload konstant
+                  - call: [<.store.set, "k", mrec]
+                  - set: [ccnt, { +: [ccnt, 1] }]
+            - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+# Probe B: frische Model-Instanz pro Iteration (Heap-Felder), fällt am Iter-Ende raus.
+- def:
+    name: probe_model_new
+    static_off: ["same_arg"]
+    args: [[iters, i32]]
+    return: i64
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [bcnt, i32, 0]
+      - while:
+          condition: { lt: [bcnt, iters] }
+          body:
+            - decl: [mrec, Rec]
+            - set: [mrec.name, "local model instance with heap"]
+            - call: [mrec.tags.push, "x"]
+            - call: [mrec.tags.push, "y"]
+            - call: [mrec.nums.push, bcnt]
+            - set: [bcnt, { +: [bcnt, 1] }]
+      - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+# Probe D: reine list<string> Aufbau+Drop pro Iteration (STRING-LITERALE).
+- def:
+    name: probe_list
+    static_off: ["same_arg"]
+    args: [[iters, i32]]
+    return: i64
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [dcnt, i32, 0]
+      - while:
+          condition: { lt: [dcnt, iters] }
+          body:
+            - decl: [lst, list<string>]
+            - call: [lst.push, "aaaaaaaaaaaaaaaa"]
+            - call: [lst.push, "bbbbbbbbbbbbbbbb"]
+            - call: [lst.push, "cccccccccccccccc"]
+            - set: [dcnt, { +: [dcnt, 1] }]
+      - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+# Probe E: list<string> mit DYNAMISCHEN (interpolierten) Strings pro Iteration.
+# Disambiguiert: leckt nur Model-Heap (dann E≈0) oder dynamischer Heap in JEDEM
+# Container (dann E≈B)?
+- def:
+    name: probe_list_dyn
+    static_off: ["same_arg"]
+    args: [[iters, i32]]
+    return: i64
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [ecnt, i32, 0]
+      - while:
+          condition: { lt: [ecnt, iters] }
+          body:
+            - decl: [lst, list<string>]
+            - call: [lst.push, "dyn-value-${ecnt}-first"]
+            - call: [lst.push, "dyn-value-${ecnt}-second"]
+            - call: [lst.push, "dyn-value-${ecnt}-third"]
+            - set: [ecnt, { +: [ecnt, 1] }]
+      - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+# Probe F (Kontrolle §8.1): NACKTE Interpolation OHNE Container — ein dynamischer
+# String-Local pro Iteration, sonst nichts.  Isoliert das Interpolations-Temporary
+# selbst (leckt der interpolierte String schon ohne jede Liste?).
+- def:
+    name: probe_interp_bare
+    static_off: ["same_arg"]
+    args: [[iters, i32]]
+    return: i64
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [fcnt, i32, 0]
+      - while:
+          condition: { lt: [fcnt, iters] }
+          body:
+            - decl: [sval, string, "bare interpolation ${fcnt} value payload"]
+            - set: [fcnt, { +: [fcnt, 1] }]
+      - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+# Probe G (Kontrolle §8.1): Liste mit AUSSERHALB der Schleife erzeugten dynamischen
+# Strings.  Pro Iteration werden dieselben (bereits besessenen) dyn-Strings in eine
+# frische Liste gepusht + die Liste gedroppt.  Trennt Container-Element-Ownership
+# (push/drop) von der String-Erzeugung: leckt G, liegt es am Container-Drop, nicht
+# am Erzeugen dynamischer Strings.
+- def:
+    name: probe_list_dyn_hoisted
+    static_off: ["same_arg"]
+    args: [[iters, i32]]
+    return: i64
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [hsa, string, "hoisted-dyn-${iters}-alpha"]
+      - decl: [hsb, string, "hoisted-dyn-${iters}-beta"]
+      - decl: [hsc, string, "hoisted-dyn-${iters}-gamma"]
+      - decl: [gcnt, i32, 0]
+      - while:
+          condition: { lt: [gcnt, iters] }
+          body:
+            - decl: [lst, list<string>]
+            - call: [lst.push, hsa]
+            - call: [lst.push, hsb]
+            - call: [lst.push, hsc]
+            - set: [gcnt, { +: [gcnt, 1] }]
+      - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+# want: Probe-Selektion aus AIML_MEM_PROBE (all → immer).
+- def:
+    name: want
+    static_off: ["same_arg", "str_cmp"]
+    args: [[sel, string], [letter, string]]
+    return: i32
+    body:
+      - if: { condition: { eq: [sel, "all"] }, then: [{ return: 1 }] }
+      - if: { condition: { eq: [sel, letter] }, then: [{ return: 1 }] }
+      - return: 0
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - call: [io.remove_all, "/tmp/aiml_mem_probe/"]
+      - decl: [svc, ptr<Store>, { new: Store }]
+      - call: [svc.setup, "/tmp/aiml_mem_probe/"]
+      - decl: [envm, map<string:string>, { call: [sys.env] }]
+      - decl: [sel, string, "all"]
+      - if: { condition: { gt: [{ call: [envm.contains, "AIML_MEM_PROBE"] }, 0] }, then: [{ set: [sel, { call: [envm.get, "AIML_MEM_PROBE"] }] }] }
+      - decl: [reps, i32, 20000]
+      - if: { condition: { gt: [{ call: [envm.contains, "AIML_MEM_ITERS"] }, 0] }, then: [{ decl: [itxt, string, { call: [envm.get, "AIML_MEM_ITERS"] }] }, { set: [reps, { call: [itxt.to_int] }] }] }
+      - decl: [reps2, i32, { '*': [reps, 2] }]
+      - call: [log.info, "MEMPROBE sel=${sel} N=${reps} 2N=${reps2} (Leck ⇔ 2N≈2·N; sauber ⇔ beide≈0)"]
+      # Warmup, damit einmalige Lazy-Allokationen nicht als Leck zählen.
+      - decl: [warm, i64, { call: [svc.probe_get_copy, 2000] }]
+
+      - if:
+          condition: { gt: [{ call: [want, sel, "A"] }, 0] }
+          then:
+            - decl: [res_an, i64, { call: [svc.probe_get_copy, reps] }]
+            - decl: [res_a2, i64, { call: [svc.probe_get_copy, reps2] }]
+            - call: [log.info, "  A get_copy   deep-copy : N=${res_an}  2N=${res_a2} bytes"]
+      - if:
+          condition: { gt: [{ call: [want, sel, "B"] }, 0] }
+          then:
+            - decl: [res_bn, i64, { call: [probe_model_new, reps] }]
+            - decl: [res_b2, i64, { call: [probe_model_new, reps2] }]
+            - call: [log.info, "  B model_new  instance  : N=${res_bn}  2N=${res_b2} bytes"]
+      - if:
+          condition: { gt: [{ call: [want, sel, "C"] }, 0] }
+          then:
+            - decl: [res_cn, i64, { call: [svc.probe_set, reps] }]
+            - decl: [res_c2, i64, { call: [svc.probe_set, reps2] }]
+            - call: [log.info, "  C kv.set     write-back : N=${res_cn}  2N=${res_c2} bytes"]
+      - if:
+          condition: { gt: [{ call: [want, sel, "D"] }, 0] }
+          then:
+            - decl: [res_dn, i64, { call: [probe_list, reps] }]
+            - decl: [res_d2, i64, { call: [probe_list, reps2] }]
+            - call: [log.info, "  D list<str>  literals   : N=${res_dn}  2N=${res_d2} bytes"]
+      - if:
+          condition: { gt: [{ call: [want, sel, "E"] }, 0] }
+          then:
+            - decl: [res_en, i64, { call: [probe_list_dyn, reps] }]
+            - decl: [res_e2, i64, { call: [probe_list_dyn, reps2] }]
+            - call: [log.info, "  E list<str>  dynamic    : N=${res_en}  2N=${res_e2} bytes"]
+      - if:
+          condition: { gt: [{ call: [want, sel, "F"] }, 0] }
+          then:
+            - decl: [res_fn, i64, { call: [probe_interp_bare, reps] }]
+            - decl: [res_f2, i64, { call: [probe_interp_bare, reps2] }]
+            - call: [log.info, "  F interp     bare       : N=${res_fn}  2N=${res_f2} bytes"]
+      - if:
+          condition: { gt: [{ call: [want, sel, "G"] }, 0] }
+          then:
+            - decl: [res_gn, i64, { call: [probe_list_dyn_hoisted, reps] }]
+            - decl: [res_g2, i64, { call: [probe_list_dyn_hoisted, reps2] }]
+            - call: [log.info, "  G list<str>  dyn-hoisted : N=${res_gn}  2N=${res_g2} bytes"]
+      - return: 0

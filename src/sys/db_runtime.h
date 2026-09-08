@@ -98,6 +98,9 @@ void*   aiml_db_kv_get(void* kv, const char* key);
 // Deep-copy variant: returned struct has independent heap allocations.
 // Safe for mutate-and-set-same-key. See doc/issue/kv_get_mutate_set_same_key_crash.md
 void*   aiml_db_kv_get_copy(void* kv, const char* key);
+// Reusable deep-copy into a caller-owned buffer `dst` (spec/31 §6.7.2): frees dst's
+// prior heap, then decodes a fresh independent copy into it.  Returns 1=copied, 0=missing.
+int32_t aiml_db_kv_get_copy_at(void* kv, const char* key, void* dst);
 int32_t aiml_db_kv_has(void* kv, const char* key);
 int32_t aiml_db_kv_len(void* kv);
 void    aiml_db_kv_delete(void* kv, const char* key);

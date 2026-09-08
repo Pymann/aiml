@@ -162,7 +162,7 @@ static void w_raw(std::vector<uint8_t>& b, const void* data, size_t n) {
 // ── Read helpers (little-endian) ──────────────────────────────────────────────
 
 static int32_t r_i32(const uint8_t* blob, int& pos, int end) {
-    if (pos + 4 > end) return 0;
+    if (pos + 4 > end) { g_dec_error = true; return 0; }  // truncated length/count prefix (F1)
     uint32_t u = (uint32_t)blob[pos]
               | ((uint32_t)blob[pos+1] <<  8)
               | ((uint32_t)blob[pos+2] << 16)
@@ -316,26 +316,32 @@ static void dec(const uint8_t* blob, int& pos, int end,
 
     switch ((AimlTDKind)n.kind) {
 
+    // Truncated scalar = corrupt blob → flag it (F1); a valid blob always has all
+    // field bytes present, so pos+N>end is never a legitimate decode.
     case AIML_TD_I8:
-        if (pos + 1 <= end) { *out = blob[pos++]; }
+        if (end - pos >= 1) { *out = blob[pos++]; } else { g_dec_error = true; }
         break;
 
     case AIML_TD_I16:
-        if (pos + 2 <= end) { memcpy(out, blob + pos, 2); pos += 2; }
+        if (end - pos >= 2) { memcpy(out, blob + pos, 2); pos += 2; } else { g_dec_error = true; }
         break;
 
     case AIML_TD_I32:
-        if (pos + 4 <= end) { memcpy(out, blob + pos, 4); pos += 4; }
+        if (end - pos >= 4) { memcpy(out, blob + pos, 4); pos += 4; } else { g_dec_error = true; }
         break;
 
     case AIML_TD_I64:
-        if (pos + 8 <= end) { memcpy(out, blob + pos, 8); pos += 8; }
+        if (end - pos >= 8) { memcpy(out, blob + pos, 8); pos += 8; } else { g_dec_error = true; }
         break;
 
     case AIML_TD_STRING: {
         int32_t len = r_i32(blob, pos, end);
         char* str;
-        if (len > 0 && pos + len <= end) {
+        // Overflow-safe bound (P0.1): NEVER compute pos+len — `len` is blob-controlled
+        // and pos+len can signed-overflow, defeating the check → giant aiml_str_alloc /
+        // OOB memcpy.  pos<=end holds by construction, so compare against remaining
+        // bytes (end-pos, always >=0).
+        if (len > 0 && len <= end - pos) {
             // Refcounted alloc — when aiml_ser_free_decoded later releases
             // this slot, it uses aiml_str_decref; if the user has aliased
             // the pointer to a local variable (incref'd), the string survives.
@@ -343,6 +349,10 @@ static void dec(const uint8_t* blob, int& pos, int end,
             memcpy(str, blob + pos, (size_t)len);
             pos += len;
         } else {
+            // len==0 is a VALID empty string (no error).  len<0 or a length that runs
+            // past the remaining bytes is corruption/truncation → flag it (F1).
+            // (A truncated length prefix is already flagged inside r_i32.)
+            if (len != 0) g_dec_error = true;
             str = aiml_str_alloc(0);
         }
         memcpy(out, &str, sizeof(char*));
@@ -385,8 +395,12 @@ static void dec(const uint8_t* blob, int& pos, int end,
         list->data = malloc(alloc > 0 ? alloc : 1);
         memset(list->data, 0, alloc > 0 ? alloc : 1);
         uint8_t* base = (uint8_t*)list->data;
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < count; i++) {
+            // Abort on a prior decode error so a corrupt count/element can't drive
+            // further allocations; already-decoded elements stay freeable (P0.2).
+            if (g_dec_error) break;
             dec(blob, pos, end, n.param1, ns, nn, base + i * esz);
+        }
         break;
     }
 
@@ -411,7 +425,9 @@ static void dec(const uint8_t* blob, int& pos, int end,
         map->keys     = calloc((size_t)cap, (size_t)ksz > 0 ? (size_t)ksz : 1);
         map->values   = calloc((size_t)cap, (size_t)vsz > 0 ? (size_t)vsz : 1);
         for (int i = 0; i < count; i++) {
-            if (pos >= end) break;
+            // Fewer bytes than announced entries = truncation → flag it (was a silent
+            // break).  Also abort if a sub-decode already failed (P0.2).
+            if (pos >= end || g_dec_error) { g_dec_error = true; break; }
             map->occupied[i] = 1;
             dec(blob, pos, end, n.param1, ns, nn, (uint8_t*)map->keys  + i * ksz);
             dec(blob, pos, end, n.param2, ns, nn, (uint8_t*)map->values + i * vsz);
@@ -424,26 +440,35 @@ static void dec(const uint8_t* blob, int& pos, int end,
         // out points directly to the inline SerBuffer struct
         SerBuffer* b = (SerBuffer*)out;
         memset(b, 0, sizeof(SerBuffer));
-        b->size       = sz;
-        b->capacity   = sz > 0 ? sz : 4;
         int esz = n.elem_size > 0 ? n.elem_size : 1;
-        size_t alloc = (size_t)b->capacity * esz;
-        b->data = malloc(alloc);
-        memset(b->data, 0, alloc);
+        // Validate BEFORE allocating (P0.2): non-negative size, and the payload must
+        // fit in the remaining bytes.  Overflow-safe: compare via division instead of
+        // computing sz*esz (which can overflow) or pos+bytes (signed overflow).
+        if (sz < 0 || (sz > 0 && (size_t)sz > (size_t)(end - pos) / (size_t)esz)) {
+            g_dec_error = true;
+            b->size = 0; b->capacity = 4;
+            b->data = calloc((size_t)b->capacity, (size_t)esz);
+            break;
+        }
+        b->size     = sz;
+        b->capacity = sz > 0 ? sz : 4;
+        size_t alloc = (size_t)b->capacity * (size_t)esz;
+        b->data = calloc(1, alloc > 0 ? alloc : 1);
         if (sz > 0) {
-            size_t bytes = (size_t)sz * esz;
-            if (pos + (int)bytes <= end) {
-                memcpy(b->data, blob + pos, bytes);
-                pos += (int)bytes;
-            }
+            size_t bytes = (size_t)sz * (size_t)esz;   // no overflow: bounded above
+            memcpy(b->data, blob + pos, bytes);
+            pos += (int)bytes;
         }
         break;
     }
 
     case AIML_TD_RAWBYTES:
-        if (pos + n.param1 <= end) {
+        // Overflow-safe remaining-length check; truncated fixed-bytes field = error (P0.2).
+        if (n.param1 >= 0 && n.param1 <= end - pos) {
             memcpy(out, blob + pos, (size_t)n.param1);
             pos += n.param1;
+        } else {
+            g_dec_error = true;
         }
         break;
 
@@ -452,6 +477,7 @@ static void dec(const uint8_t* blob, int& pos, int end,
         // struct, decode subtree into it, store pointer in slot.
         uint8_t marker = 0;
         if (pos < end) { marker = blob[pos++]; }
+        else { g_dec_error = true; }   // missing marker byte = truncation, not valid null (P0.2)
         void* obj = nullptr;
         if (marker != 0) {
             size_t inner_sz = (size_t)(n.elem_size > 0 ? n.elem_size : (int32_t)sizeof(void*));
