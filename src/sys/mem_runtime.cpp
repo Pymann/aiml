@@ -10,6 +10,10 @@
 #include <unistd.h>        // getpagesize
 #endif
 
+#ifdef __EMSCRIPTEN__
+#include <malloc.h>        // mallinfo — used bytes in the WASM/dlmalloc heap
+#endif
+
 extern char **environ;
 
 extern "C" {
@@ -70,6 +74,11 @@ int64_t aiml_sys_mem_usage(void) {
     }
     fclose(f);
     return (int64_t)pages_rss * (int64_t)getpagesize();
+#elif defined(__EMSCRIPTEN__)
+    // WASM: es gibt kein /proc.  mallinfo().uordblks = aktuell belegte Bytes im
+    // dlmalloc-Heap → reicht, um client-seitig Wachstum/Explosion zu beobachten.
+    struct mallinfo mi = mallinfo();
+    return (int64_t)(uint32_t)mi.uordblks;
 #else
     return 0;
 #endif

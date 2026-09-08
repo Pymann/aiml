@@ -8,17 +8,17 @@
 
       # (a) kleiner i64 gegen i32-Max
       - decl: [small, i64, 7500]
-      - decl: [c1, i32, 0]
-      - if: { condition: { gt: [small, 2147483647] }, then: [{ set: [c1, 1] }] }
-      - print: ["(a) small=${small} gt_max=${c1} (erwartet 7500, 0)"]
-      - if: { condition: { neq: [c1, 0] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
+      - decl: [cmp_a, i32, 0]
+      - if: { condition: { gt: [small, 2147483647] }, then: [{ set: [cmp_a, 1] }] }
+      - print: ["(a) small=${small} gt_max=${cmp_a} (erwartet 7500, 0)"]
+      - if: { condition: { neq: [cmp_a, 0] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
 
       # (b) großer i64 (3 Mrd) gegen i32-Max
       - decl: [big, i64, 3000000000]
-      - decl: [c2, i32, 0]
-      - if: { condition: { gt: [big, 2147483647] }, then: [{ set: [c2, 1] }] }
-      - print: ["(b) big=${big} gt_max=${c2} (erwartet 3000000000, 1)"]
-      - if: { condition: { neq: [c2, 1] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
+      - decl: [cmp_b, i32, 0]
+      - if: { condition: { gt: [big, 2147483647] }, then: [{ set: [cmp_b, 1] }] }
+      - print: ["(b) big=${big} gt_max=${cmp_b} (erwartet 3000000000, 1)"]
+      - if: { condition: { neq: [cmp_b, 1] }, then: [{ set: [fails, { +: [fails, 1] }] }] }
 
       # (c) i64-Produkt i64×i32 (Promotion) + Interpolation
       - decl: [base64, i64, 15000]

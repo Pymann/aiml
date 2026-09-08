@@ -764,6 +764,70 @@ plain bookkeeping drop (no `free_decoded`) — the cache and user struct
 share the same heap pointers (some of which may be user-pushed literals
 or non-decoded data), and double-freeing them is undefined.
 
+### 6.7.2 Reusable deep-copy into a caller buffer (`kv.get_copy_at`)
+
+`kv.get_copy(k)` allocates a **fresh independent deep-copy on every call**.  In a
+hot loop that copies the same record each iteration (e.g. a per-tick scheduler that
+does `decl: [m, T, kv.get_copy(k)]` every frame), that is one full heap allocation
+per iteration.  Until the codegen frees value-type locals at scope exit, those
+copies accumulate; and even once it does, the allocate/free churn is pure overhead.
+
+`kv.get_copy_at(key, dst)` gives the **same isolation as `get_copy` with a bounded,
+non-accumulating footprint**: it deep-copies the stored value **into a caller-owned
+buffer that is reused across calls**.  The reused thing is the **struct shell**; the
+nested heap fields (lists/strings/maps) are still re-decoded (allocated) each call,
+with the buffer's previous heap freed first — so the live footprint stays bounded
+across calls (no accumulation), but each call is not literally zero-allocation.
+
+| Pattern | Declaration / call | Semantics | When to use |
+|---|---|---|---|
+| **Reusable deep-copy** | `decl: [buf, T]` **once**, then `kv.get_copy_at(k, {'&': [buf]})` per use (or `kv.get_copy_at(k, pbuf)` with `pbuf: ptr<T>`) | Before refilling, the runtime **deep-frees `buf`'s current heap fields**, then decodes the stored value fresh into `buf`.  `buf` is fully independent of the decoded_cache (like `get_copy`).  Returns `i32` — `1` = found & copied, `0` = missing key (`buf` left unchanged), `-1` = value present but the blob failed to decode (schema mismatch / corrupt): `buf` is deep-freed and zero-inited, so it is **safe to reuse but holds no valid value** — the caller must not read/tick/write it back. | Hot paths that repeatedly copy a record into the same working buffer (scheduler tick, per-frame reads) — bounded footprint, no accumulation across calls (decode still allocates the heap fields each call, but the prior ones are freed first). |
+
+Ownership / lifetime contract:
+
+- The caller owns `buf` and declares it **once** (a class member, or a local hoisted
+  out of the loop).  `get_copy_at` never allocates `buf` itself.
+- Each call is self-cleaning: `buf`'s previous heap (nested lists/strings/maps) is
+  freed **before** the new decode overwrites it, so repeated calls into the same
+  `buf` do **not** grow memory.  On the first call `buf` must be zero-initialised
+  (the default for `decl: [buf, T]`); freeing zeroed fields is a no-op.
+- After the call, `buf` holds an **independent** deep copy: mutating it does not touch
+  the cache; `kv.set(key, buf)` encodes `buf` then evicts, exactly like the `get_copy`
+  value path.
+- `buf`'s type must be the Kv's value type `T`.  `T` without heap fields degrades to a
+  plain byte copy (still valid).  The `dst` argument is a `ptr<T>` (pass `{'&': [buf]}`
+  for a value-type local, or a `ptr<T>` directly).
+- **Decode-error contract (`-1`):** if the stored blob cannot be decoded into `T`
+  (schema fingerprint mismatch after a model change, or a structurally corrupt blob),
+  the runtime deep-frees any partially-decoded fields, zero-inits `buf`, and returns
+  `-1`.  Callers **must** branch on the result and only read/tick/write-back `buf`
+  when the result is `1`.  Because a schema-mismatched blob stays undecodable until it
+  is rewritten, a hot loop should record such keys and skip them rather than decode
+  them every iteration (each failed decode re-emits the `[ser-FATAL]` diagnostic).
+
+```aiml
+# Reusable buffer — ONE allocation for the lifetime of the owner.
+- class:
+    name: Scheduler
+    members:
+      - [work, MatchSession]     # reused per tick, never re-alloc'd
+    methods:
+      - def:
+          name: tick_one
+          args: [[mid, string]]
+          body:
+            - decl: [ok, i32, { call: [<.matches.get_copy_at, mid, {'&': [<.work]}] }]
+            # Only 1 means <.work holds a valid copy; 0 = missing, -1 = undecodable.
+            - if: { condition: { neq: [ok, 1] }, then: [{ return }] }
+            # <.work is now an independent copy of matches[mid]; mutate + set back.
+            - call: [<.matches.set, mid, <.work]
+```
+
+Runtime: `aiml_db_kv_get_copy_at(kv, key, dst)` — missing key → return `0` (dst
+untouched); else `aiml_ser_free_decoded(dst, nodes, n)` then `aiml_ser_decode(wal_val,
+dst, nodes, n)` → return `1`.  Never returns the cache slot; `dst` is always
+caller-owned and independent.
+
 ### 6.8 Migration Notes — Format Versions
 
 Each `.kvwal` file starts with a 32-byte header containing magic

@@ -67,7 +67,10 @@
       - call: [srv.route, "GET", "/login", handle_login]
       - call: [srv.route, "GET", "/whoami", handle_whoami]
       - decl: [thr, thread_handle, { call: [srv.start_async] }]
-      - call: [time.sleep_ms, 300]
+      # Readiness-Marge: unter voller Testsuite-Last braucht der async-Server länger
+      # bis zum listen(); 300ms waren zu knapp (grün standalone, flaky in der Suite) →
+      # großzügige Marge, damit probe() nicht vor dem listen connectet.
+      - call: [time.sleep_ms, 1500]
 
       # ── set_cookie: secure attributes present ─────────────────────────────
       - decl: [login_resp, string, { call: [probe, "GET /login HTTP/1.1\r\nHost: x\r\n\r\n"] }]

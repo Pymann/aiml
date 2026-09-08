@@ -1272,16 +1272,28 @@ extern "C" void* aiml_db_kv_open_persist(const char* name, int64_t val_size,
     kv->persistent = true;
     kv->wal_path   = dir + nm + ".kvwal";
     int fd = kv_wal_open_with_header(kv->wal_path, /*typed=*/false, val_size);
-    if (fd >= 0) {
-        kv->wal_fd = fd;
-        if (!kv_mmap_attach(kv)) {
-            close(fd);
-            kv->wal_fd = -1;
-            delete kv;
-            return nullptr;
-        }
-        kv_wal_replay(kv);
+    if (fd < 0) {
+        // A persistent KV whose backing WAL cannot be opened MUST fail loudly.
+        // Previously the setup was guarded by `if (fd >= 0)` and a non-null KV with
+        // wal_fd=-1 was still returned → every set() became a silent no-op (data
+        // never persisted, no error). That is how a root-owned / unwritable .kvwal
+        // manifested as "matches never persist, no diagnostic". No fallback: fail
+        // hard, exactly like the checkpoint / header-mismatch paths in this file.
+        fprintf(stderr,
+            "[AionDB] FATAL: cannot open persistent KV WAL '%s' (errno=%d) — "
+            "check file ownership/permissions (is it owned by another user?).\n",
+            kv->wal_path.c_str(), errno);
+        delete kv;
+        _exit(1);
     }
+    kv->wal_fd = fd;
+    if (!kv_mmap_attach(kv)) {
+        close(fd);
+        kv->wal_fd = -1;
+        delete kv;
+        return nullptr;
+    }
+    kv_wal_replay(kv);
     g_persistent_kvs_by_name[registry_key] = kv;
     g_persistent_kvs.push_back(kv);
     return kv;
@@ -1561,7 +1573,13 @@ extern "C" void* aiml_db_kv_get(void* kv_ptr, const char* key) {
                 return dc->second.data();
             }
             std::vector<uint8_t> decoded((size_t)kv->val_size, 0);
-            aiml_ser_decode(val_ptr, decoded.data(), kv->ser_nodes, kv->ser_n);
+            if (aiml_ser_decode(val_ptr, decoded.data(), kv->ser_nodes, kv->ser_n) != 0) {
+                // Corrupt/schema-mismatched blob: free any partial heap and cache a
+                // CLEAN zeroed value instead of publishing a half-decoded one (P0.3).
+                // (Zeroed slot rather than nullptr → ptr<T> view callers don't null-deref.)
+                aiml_ser_free_decoded(decoded.data(), kv->ser_nodes, kv->ser_n);
+                decoded.assign((size_t)kv->val_size, 0);
+            }
             auto& cached = kv->decoded_cache[key];
             cached = std::move(decoded);
             kv_decoded_touch(kv, key);
@@ -1582,8 +1600,11 @@ extern "C" void* aiml_db_kv_get(void* kv_ptr, const char* key) {
             return dc->second.data();
         }
         std::vector<uint8_t> decoded((size_t)kv->val_size, 0);
-        aiml_ser_decode(reinterpret_cast<const char*>(it->second.data()),
-                        decoded.data(), kv->ser_nodes, kv->ser_n);
+        if (aiml_ser_decode(reinterpret_cast<const char*>(it->second.data()),
+                            decoded.data(), kv->ser_nodes, kv->ser_n) != 0) {
+            aiml_ser_free_decoded(decoded.data(), kv->ser_nodes, kv->ser_n);
+            decoded.assign((size_t)kv->val_size, 0);   // clean zeroed, no garbage (P0.3)
+        }
         auto& cached = kv->decoded_cache[key];
         cached = std::move(decoded);
         kv_decoded_touch(kv, key);
@@ -1620,9 +1641,14 @@ extern "C" void* aiml_db_kv_get_copy(void* kv_ptr, const char* key) {
             // Always decode fresh from WAL. Previous slot heap allocations
             // (if any from a prior get/get_copy) are freed first.
             kv_decoded_evict(kv, key);
+            std::vector<uint8_t> decoded((size_t)kv->val_size, 0);
+            if (aiml_ser_decode(val_ptr, decoded.data(), kv->ser_nodes, kv->ser_n) != 0) {
+                // Corrupt blob: free partial heap, publish a CLEAN zeroed slot (P0.3).
+                aiml_ser_free_decoded(decoded.data(), kv->ser_nodes, kv->ser_n);
+                decoded.assign((size_t)kv->val_size, 0);
+            }
             auto& slot = kv->decoded_cache[key];
-            slot.assign((size_t)kv->val_size, 0);
-            aiml_ser_decode(val_ptr, slot.data(), kv->ser_nodes, kv->ser_n);
+            slot = std::move(decoded);
             kv_decoded_touch(kv, key);
             kv_decoded_lru_trim(kv);
             return slot.data();
@@ -1634,10 +1660,14 @@ extern "C" void* aiml_db_kv_get_copy(void* kv_ptr, const char* key) {
     if (it == kv->map.end()) return nullptr;
     if (kv->ser_nodes) {
         kv_decoded_evict(kv, key);
+        std::vector<uint8_t> decoded((size_t)kv->val_size, 0);
+        if (aiml_ser_decode(reinterpret_cast<const char*>(it->second.data()),
+                            decoded.data(), kv->ser_nodes, kv->ser_n) != 0) {
+            aiml_ser_free_decoded(decoded.data(), kv->ser_nodes, kv->ser_n);
+            decoded.assign((size_t)kv->val_size, 0);   // clean zeroed (P0.3)
+        }
         auto& slot = kv->decoded_cache[key];
-        slot.assign((size_t)kv->val_size, 0);
-        aiml_ser_decode(reinterpret_cast<const char*>(it->second.data()),
-                        slot.data(), kv->ser_nodes, kv->ser_n);
+        slot = std::move(decoded);
         kv_decoded_touch(kv, key);
         kv_decoded_lru_trim(kv);
         return slot.data();
@@ -1648,6 +1678,61 @@ extern "C" void* aiml_db_kv_get_copy(void* kv_ptr, const char* key) {
         return ptr;
     }
     return it->second.data();
+}
+
+// get_copy_at — deep-copy the value for `key` into a CALLER-owned buffer `dst`
+// (spec/31 §6.7.2).  Unlike get_copy (which allocates a fresh copy each call and
+// hands back a decoded_cache slot), this reuses the caller's buffer: it frees dst's
+// prior heap fields FIRST, then decodes a fresh independent copy into dst.  The
+// STRUCT SHELL (dst) is reused, but decode re-allocates the nested heap fields
+// (lists/strings/maps) each call and the prior ones are freed first — so there is
+// no accumulation across calls into the same dst (a bounded steady-state footprint),
+// NOT zero allocation.  Never touches the decoded_cache.  Returns:
+//    1 = found & copied,
+//    0 = missing key (dst left unchanged),
+//   -1 = value present but the blob failed to decode (schema mismatch / corrupt);
+//        dst is deep-freed and zero-inited (safe, but holds no valid value).
+// On the first call dst must be zero-initialised (freeing zeroed fields is a no-op).
+extern "C" int32_t aiml_db_kv_get_copy_at(void* kv_ptr, const char* key, void* dst) {
+    SerGuardOn _sg_;
+    if (!kv_ptr || !key || !dst) return 0;
+    AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
+    std::lock_guard<std::mutex> lock(kv->mtx);
+    const char* val_ptr = nullptr;
+    if (kv->persistent) {
+        auto it = kv->index.find(key);
+        if (it == kv->index.end()) return 0;
+        val_ptr = (const char*)kv->wal_mmap + it->second.offset;
+    } else {
+        auto it = kv->map.find(key);
+        if (it == kv->map.end()) return 0;
+        val_ptr = reinterpret_cast<const char*>(it->second.data());
+    }
+    if (kv->ser_nodes) {
+        // Free the caller buffer's prior heap (nested lists/strings/maps) before the
+        // refill, then decode a fresh independent deep-copy into it.  No cache touch.
+        aiml_ser_free_decoded(dst, kv->ser_nodes, kv->ser_n);
+        memset(dst, 0, (size_t)kv->val_size);
+        int rc = aiml_ser_decode(val_ptr, dst, kv->ser_nodes, kv->ser_n);
+        if (rc != 0) {
+            // Invalid blob (schema mismatch = -2, structural error = -1).  decode()
+            // may have partially populated dst before failing → deep-free the partial
+            // heap and re-zero so the caller never reads a half-decoded value.  Signal
+            // -1 so the caller skips this record (no tick, no write-back).
+            aiml_ser_free_decoded(dst, kv->ser_nodes, kv->ser_n);
+            memset(dst, 0, (size_t)kv->val_size);
+            return -1;
+        }
+        return 1;
+    }
+    // Non-serialized typed value: plain byte copy of val_size bytes.
+    if (kv->val_size > 0) {
+        memcpy(dst, val_ptr, (size_t)kv->val_size);
+        return 1;
+    }
+    // val_size==0 (pointer-stored / non-typed): copy the stored pointer.
+    memcpy(dst, val_ptr, sizeof(void*));
+    return 1;
 }
 
 extern "C" int32_t aiml_db_kv_has(void* kv_ptr, const char* key) {
@@ -2450,8 +2535,14 @@ extern "C" void aiml_db_index_backfill(void* kv_ptr, void* idx_ptr,
                 auto dc = kv->decoded_cache.find(key);
                 if (dc == kv->decoded_cache.end()) {
                     std::vector<uint8_t> decoded((size_t)kv->val_size, 0);
-                    aiml_ser_decode((const char*)val_ptr, decoded.data(),
-                                    kv->ser_nodes, kv->ser_n);
+                    if (aiml_ser_decode((const char*)val_ptr, decoded.data(),
+                                        kv->ser_nodes, kv->ser_n) != 0) {
+                        // Corrupt record: free partial heap and SKIP indexing it — do
+                        // not feed garbage field pointers to extract_and_add (P0.3).
+                        // Partial index (bad rows omitted) rather than a hard abort.
+                        aiml_ser_free_decoded(decoded.data(), kv->ser_nodes, kv->ser_n);
+                        continue;
+                    }
                     auto& cached = kv->decoded_cache[key];
                     cached = std::move(decoded);
                     dc = kv->decoded_cache.find(key);
