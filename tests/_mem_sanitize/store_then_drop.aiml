@@ -1,0 +1,67 @@
+# Memory-safety probe (run under valgrind by run_memory_sanitizers.sh): exercises the
+# get_copy → store-into-member → scope-drop pattern that spec/61 A1+A2 must make safe.
+# Each loop iteration: deep-copy a record into a local, store it into a member (must be an
+# INDEPENDENT deep-copy, A1), then the local is dropped at loop-body scope exit (A2).  If
+# the store shared heap with the local, dropping it would leave the member dangling →
+# valgrind would report Invalid read/free when the member is read back.  Also covers a
+# fresh-model store.  Lives in tests/_mem_sanitize/ (excluded from the normal suite).
+- model:
+    name: Rec
+    fields:
+      - [name, string]
+      - [tags, list<string>]
+
+- class:
+    name: Holder
+    members:
+      - [store, Kv<string:Rec>]
+      - [slot,  Rec]
+      - [slot2, Rec]
+    methods:
+      - def:
+          name: setup
+          args: [[dir, string]]
+          body:
+            - set: [<.store, { call: [db.open_kv, "std_probe", {persist: true, path: dir}] }]
+            - decl: [seed, Rec]
+            - set: [seed.name, "hello world value"]
+            - call: [seed.tags.push, "tag-one"]
+            - call: [seed.tags.push, "tag-two"]
+            - call: [<.store.set, "k", seed]
+      - def:
+          name: churn
+          args: [[iters, i32]]
+          return: i32
+          body:
+            - decl: [cnt, i32, 0]
+            - while:
+                condition: { lt: [cnt, iters] }
+                body:
+                  # get_copy → local (deep-copy), store into member (A1 deep-copy),
+                  # local `rec` dropped at loop-body scope exit (A2).
+                  - decl: [rec, Rec, { call: [<.store.get_copy, "k"] }]
+                  - set: [<.slot, rec]
+                  # fresh model → populate → store into another member → dropped at exit
+                  - decl: [fr, Rec]
+                  - set: [fr.name, "fresh instance value"]
+                  - call: [fr.tags.push, "fx"]
+                  - set: [<.slot2, fr]
+                  - set: [cnt, { +: [cnt, 1] }]
+            # read members back — must be valid (no UAF from the dropped locals)
+            - if: { condition: { neq: [<.slot.name, "hello world value"] }, then: [{ return: 1 }] }
+            - if: { condition: { neq: [<.slot2.name, "fresh instance value"] }, then: [{ return: 1 }] }
+            - if: { condition: { neq: [<.slot.tags.len, 2] }, then: [{ return: 1 }] }
+            - return: 0
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - call: [io.remove_all, "/tmp/aiml_std_probe/"]
+      - decl: [hld, ptr<Holder>, { new: Holder }]
+      - call: [hld.setup, "/tmp/aiml_std_probe/"]
+      - decl: [bad, i32, { call: [hld.churn, 500] }]
+      - if: { condition: { neq: [bad, 0] }, then: [{ print: ["FAIL store_then_drop: member corrupted after store+drop"] }, { return: 1 }] }
+      - print: ["PASS store_then_drop: members valid after get_copy/fresh → store → drop x500"]
+      - return: 0

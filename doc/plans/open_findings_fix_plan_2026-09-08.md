@@ -2,6 +2,10 @@
 
 Stand: 2026-09-08. Zeilenangaben beziehen sich auf den während der Prüfung gelesenen, laufend bearbeiteten Arbeitsbaum; Funktionsnamen dienen als stabile Anker. Dies ist ein Implementierungsplan, kein Nachweis ausgeführter Tests. Keine Runtime-/Compiler-Änderungen im Rahmen dieser Prüfung.
 
+## Maßgeblicher Lifetime-Ansatz (Korrektur 2026-09-08)
+
+WP-C ist laut Nutzer verworfen. Maßgeblich sind `spec/61_lifetime_ownership.md` (noch als PROPOSAL markiert) und `doc/plans/lifetime_qualifier_2026-09-08.md`: lokal bestimmte Single-Owner-Semantik mit `scope`/`persistent`/`consumed`, ohne Ganzprogramm-Escape-Analyse und ohne Runtime-Drop-Flags. Dieser Restarbeitsplan reaktiviert WP-C nicht. Die Decoder- und KV-Befunde sind davon unabhängig; ihr Implementierungsstatus muss wegen laufender Änderungen jeweils neu geprüft werden.
+
 ## 1. Bereinigter Status
 
 - F1: Die ursprünglich beanstandeten Skalare und Stringlängen sind korrigiert (`src/sys/ser_runtime.cpp:164–174,319–354`). Der Decoder insgesamt ist noch nicht freigegeben: Restlücken siehe P0.1 und P0.2.
@@ -54,7 +58,7 @@ Zusätzlich LIST/MAP-Rekursion (`:377–424`) bei bereits gesetztem Fehler beend
 - Bei Fehler partiellen Heap deep-freigeben; keinen scheinbar gültigen Cacheeintrag hinterlassen. `get`/`get_copy` geben `nullptr` zurück. AIML-Aufrufer/Codegen auf diese Fehlerdarstellung prüfen; nicht durch einen Pointer auf ein leeres Objekt kaschieren.
 - Indexaufbau: fehlerhaften Datensatz nicht an `extract_and_add` übergeben; Cleanup und nachvollziehbare Fehlerdiagnose. Ob der gesamte Aufbau abbrechen soll oder einen dokumentierten Teilindex liefern darf, am bestehenden Indexvertrag festmachen.
 - `get_copy_at` behält `1 / 0 / -1` und die vorhandene Cleanup-/Nullungslogik, erhält aber den längengeprüften Einstieg aus P0.1.
-- Separates Anschluss-Audit: `aiml_ser_deep_copy` (`ser_runtime.cpp:702–717`) ignoriert ebenfalls den Status und liefert `void`. Für WP-C-Replace ist ein checked Erfolgskontrakt nötig; keine breite Ownership-Umstellung in diesen Decoderfix mischen.
+- Separates Anschluss-Audit: `aiml_ser_deep_copy` (`ser_runtime.cpp:702–717`) ignoriert ebenfalls den Status und liefert `void`. Für fehlerfestes Deep-Copy/Replace nach Kapitel 61 ist ein checked Erfolgskontrakt nötig; keine breite Ownership-Umstellung in diesen Decoderfix mischen.
 
 **Abnahme:** Fehlerhafte Daten werden weder gecacht noch indexiert. Nach Fehler funktioniert eine anschließende gültige Abfrage. Wiederholte Fehler erzeugen kein proportional wachsendes Live-Heap-Aufkommen.
 
@@ -81,7 +85,7 @@ Der Scheduler prüft bereits `tok == 1` und markiert bei `-1` den Schlüssel zum
 
 Nach bestandenem Decode-Gate mindestens ca. 50 Minuten mit dokumentiertem, vergleichbarem Match-/Verbindungsprofil messen. RSS-Verlauf, Live-Heap wenn verfügbar, Match-/Spieler-/Verbindungszahlen, Decodefehler und tatsächliche erfolgreiche Ticks erfassen. Undekodierbare Datensätze dürfen weder getickt noch zurückgeschrieben werden. Flaches RSS bei ausgefallener Spiellogik zählt nicht als Erfolg.
 
-Vor dem Lauf Warmup und Bewertungskriterium für Restwachstum festhalten. Bestätigte Stabilität nimmt WP-C den OOM-Notfallstatus; sie ersetzt nicht dessen Sicherheitsabnahme. Ergebnis mit Binary-/Quellstand und Messdaten als neuen Bericht unter 9rooms `doc/analysis/memory_checks/` ablegen.
+Vor dem Lauf Warmup und Bewertungskriterium für Restwachstum festhalten. Bestätigte Stabilität bewertet die Wirksamkeit der Scheduler-Mitigation; sie ersetzt nicht die Sicherheitsabnahme einer späteren Umsetzung von Kapitel 61. WP-C bleibt verworfen. Ergebnis mit Binary-/Quellstand und Messdaten als neuen Bericht unter 9rooms `doc/analysis/memory_checks/` ablegen.
 
 ## 7. P1.2 — Sanitizer-Abdeckung des erzeugten Codes nachweisen
 
@@ -108,3 +112,15 @@ Zunächst kein zwingender Umbau der produktiven JIT-Pipeline. Der AOT-Prüflauf 
 P0.1 → P0.2 → P0.3 → P0.4 mit nativer Sanitizer-Prüfung → Server-Nachmessung. P2 kann im jeweiligen Änderungspaket mitlaufen. Vollständige AIML-Instrumentierung aus P1.2 ist spätestens vor Abnahme der Ownership-Änderungen verbindlich; sie soll den kleinen Runtimefix nicht zu einem Compiler-Großumbau machen.
 
 Die neuen Decoder-/Aufruferbefunde sind aus dem aktuellen Quelltext abgeleitet. Ihre konkrete Auswirkung auf den beobachteten Server-OOM ist damit nicht bewiesen. Keine zusätzliche Sprachsemantikänderung ist Teil dieses Restarbeitsplans.
+
+## 10. Offene Spezifikationsfragen in Kapitel 61
+
+Quellstand der Kapitelprüfung: 2026-09-08, Kapitel mit 144 Zeilen. Dies sind Designlücken, keine nachgewiesenen Implementierungsfehler.
+
+1. **`consumed` ohne Übergabe** (`:33,73–88,121–123`): Tabelle verspricht keinen Drop, Nicht-Konsum/uneinheitlicher Konsum sind nur Warnungen. Für einen weiter kompilierenden Pfad ist damit kein sicherer Cleanup festgelegt. Vorschlag: nie konsumierte Werte trotz Warnung wie `scope` droppen; divergierenden Besitz am Merge auch für `consumed` als Fehler behandeln, solange keine explizite statische Normalisierung definiert ist. Das behält die Vorgabe ohne Runtime-Flags bei.
+2. **`persistent` braucht einen konkreten Besitzer** (`:25,32,61–62`): Ein lokales persistent-Objekt unterdrückt Drop, ohne anzugeben, wie es in den längerlebigen Besitzer gelangt. Copy an einen anderen Besitzer entsorgt das Original nicht. Vorschlag: persistent nur mit nachweislich gebundener Owner-Speicherung zulassen oder einen expliziten Release-Vertrag definieren; freie lokale Deklaration ohne Owner/Release ablehnen.
+3. **Copy/Move ist widersprüchlich** (`:65–66,104–115`): Assignment ist einmal Deep-Copy und einmal optional Move; die Definition von „consumable“ fehlt. Außerdem Copy-Ausnahme für persistent (`:61`) gegen „owned box storing always move“ (`:112`). Vorschlag: eine verbindliche Tabelle für Zielart, Quellbesitz und Operation mit eindeutiger Rangfolge; Beispiele für lokale Zuweisung, Member-Set und persistente Box ergänzen. Kein implizites Last-Use-Verhalten voraussetzen.
+4. **Borrow-Sicherheit innerhalb desselben Scopes** (`:43–46,100,124`): Escape-Verbot allein verhindert keinen ungültigen View nach `clear`, `remove`, Reallocation, Ersetzen oder Freigabe des Owners. Vorschlag: lokale Invalidierungs-/Mutationsregeln sowie Rückgabe und Weitergabe an Funktionen explizit festlegen. Dafür ist keine Ganzprogramm-Escape-Analyse nötig.
+5. **Funktionsgrenzen fehlen** (`:43,55–56,133–135`): consuming Parameter werden erwähnt, aber ihre Deklaration und ihr Verhältnis zu by-ref Listen/Maps und by-value Modellen nicht definiert. Vorschlag: Signaturvertrag für borrow/consume/copy und Rückgaben festlegen; insbesondere dürfen by-ref Parameter nicht durch die allgemeine Regel „Wertetyp = owned“ am Callee-Ende gedroppt werden.
+
+Sanitizer-Abdeckung bleibt auch für diesen neuen Ansatz relevant; der neue Lifetime-Plan fordert sie selbst in §8. Aus diesen Fragen folgt keine Rückkehr zum verworfenen WP-C.

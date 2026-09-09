@@ -1,0 +1,21 @@
+# spec/61: the `lifetime` decl-qualifier (scope|persistent|consumed) parses and is
+# accepted as the 4th decl element [name, type, value, { lifetime: … }], like the
+# existing const/volatile/extern modifiers.  This is the FOUNDATION step: the qualifier
+# is stored as ownership metadata on the symbol; automatic drop emission + move/consume
+# diagnostics are a later step, so this test only verifies parsing/acceptance + that
+# behavior is unchanged.
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [nms, string, "hi", { lifetime: persistent }]
+      - decl: [cns, string, "yo", { lifetime: consumed }]
+      - decl: [cnt, i32, 5, { lifetime: scope }]
+      - decl: [pln, string, "plain"]                       # no qualifier → default scope
+      - if: { condition: { neq: [nms, "hi"] },   then: [{ print: ["FAIL persistent value"] }, { return: 1 }] }
+      - if: { condition: { neq: [cns, "yo"] },   then: [{ print: ["FAIL consumed value"] }, { return: 1 }] }
+      - if: { condition: { neq: [cnt, 5] },      then: [{ print: ["FAIL scope value"] }, { return: 1 }] }
+      - if: { condition: { neq: [pln, "plain"] },then: [{ print: ["FAIL default value"] }, { return: 1 }] }
+      - print: ["PASS lifetime qualifier: scope|persistent|consumed parse + accepted"]
+      - return: 0
