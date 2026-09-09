@@ -61,11 +61,12 @@ class ModifierBuilder : public StateHandler {
     bool* is_const;
     bool* is_volatile;
     bool* is_extern;
+    std::string* lifetime;
     bool expectingKey = true;
     std::string currentKey;
 public:
-    ModifierBuilder(Builder* b, bool* ic, bool* iv, bool* ie)
-        : StateHandler(b), is_const(ic), is_volatile(iv), is_extern(ie) {}
+    ModifierBuilder(Builder* b, bool* ic, bool* iv, bool* ie, std::string* lt)
+        : StateHandler(b), is_const(ic), is_volatile(iv), is_extern(ie), lifetime(lt) {}
     bool OnMapStart() override { expectingKey = true; return true; }
     bool OnMapEnd() override { builder->popState(); return true; }
     bool OnScalar(const std::string& value, const std::string& tag) override {
@@ -76,6 +77,13 @@ public:
             if (currentKey == "const")    *is_const   = (value == "true" || value == "1");
             if (currentKey == "volatile") *is_volatile = (value == "true" || value == "1");
             if (currentKey == "extern")   *is_extern   = (value == "true" || value == "1");
+            if (currentKey == "lifetime") {  // spec/61 ownership qualifier
+                if (value == "scope" || value == "persistent" || value == "consumed") {
+                    if (lifetime) *lifetime = value;
+                } else {
+                    LOG_ERROR("decl lifetime must be scope|persistent|consumed, got '" + value + "'");
+                }
+            }
             expectingKey = true;
         }
         return true;
@@ -93,7 +101,7 @@ bool StatementBuilder::OnMapStart() {
         // Let's only push ModifierBuilder if args.size() >= 3. Wait, test_modifiers.aiml does NOT omit default value.
         // So args.size() is 3.
         if (args.size() >= 3) {
-            builder->pushState(std::make_unique<ModifierBuilder>(builder, &is_const, &is_volatile, &is_extern));
+            builder->pushState(std::make_unique<ModifierBuilder>(builder, &is_const, &is_volatile, &is_extern, &decl_lifetime));
             return true;
         }
     }
@@ -169,6 +177,7 @@ std::unique_ptr<Node> StatementBuilder::finish() {
          decl->is_const    = is_const;
          decl->is_volatile = is_volatile;
          decl->is_extern   = is_extern;
+         decl->lifetime    = decl_lifetime;
          decl->sourceLine  = capturedLine;
          return decl;
     }

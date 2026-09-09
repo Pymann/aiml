@@ -288,9 +288,40 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         sym.typeName = decl->typeName;
         sym.is_const = decl->is_const;
         sym.is_volatile = decl->is_volatile;
+        sym.lifetime = decl->lifetime;   // spec/61 ownership metadata (drop emission: later step)
         ctx.symbol_table[decl->varName] = sym;
+
+        // spec/61 (A2+A3): a FRESH value-model local with heap fields (no initializer,
+        // populated later) owns an independent heap → register a scope-exit drop.  Safe
+        // now that A3 move-detection removes the drop if the local is later consumed
+        // (push/return/store).  Excludes ptr<T>/ref<T> (box/borrow) and `persistent`.
+        if (!decl->initialValue && decl->lifetime != "persistent"
+            && decl->typeName.rfind("ptr<", 0) != 0
+            && decl->typeName.rfind("ref<", 0) != 0
+            && !ctx.cleanupStack.empty()) {
+            auto ci = ctx.classes.find(decl->typeName);
+            if (ci != ctx.classes.end() && ci->second.hasHeapFields && ci->second.serNodesVar) {
+                ctx.cleanupStack.back().push_back(
+                    { unwrappedAlloca, ci->second.serNodesVar, ci->second.serNodesCount });
+            }
+        }
+
+        // spec/61 (A2/A3): a string local initialised from an INTERPOLATION owns a fresh
+        // heap string (aiml_str_alloc) → register a decref-drop.  ONLY interpolation
+        // origins (never string literals — decref reads a header before the pointer,
+        // which is UB for .rodata literals; see string_runtime).  A3 move-detection
+        // removes this drop if the string is later consumed (push/return/store).
+        if (decl->typeName == "string" && decl->lifetime != "persistent"
+            && decl->initialValue
+            && dynamic_cast<StringInterpolationExpr*>(decl->initialValue.get())
+            && !ctx.cleanupStack.empty()) {
+            CompilerContext::ScopeDrop sd;
+            sd.addr = unwrappedAlloca;
+            sd.kind = 1;
+            ctx.cleanupStack.back().push_back(sd);
+        }
     }
-    
+
     LOG_DEBUG("Compiled AST Decl: " + decl->varName + " of " + decl->typeName);
 
     if (!decl->initialValue) {
@@ -601,6 +632,14 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                             ciIt->second.serNodesVar,
                             ctx.builder.getInt32(ciIt->second.serNodesCount)
                         });
+                        // spec/61 (A2): this local now owns an INDEPENDENT heap (deep-copied)
+                        // → register it for a scope-exit drop, unless it is persistent
+                        // (owned elsewhere) — persistent skips auto-drop.
+                        if (decl->lifetime != "persistent" && !ctx.cleanupStack.empty()) {
+                            ctx.cleanupStack.back().push_back(
+                                { unwrappedAlloca, ciIt->second.serNodesVar,
+                                  ciIt->second.serNodesCount });
+                        }
                     } else {
                         uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(declTy);
                         llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
@@ -716,11 +755,16 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     ctx.kvGetCopy = false;
     ctx.kvGetValueType.clear();
 
+    // spec/61 (A3): assigning a plain owned local moves it into the target → drop its
+    // pending scope-cleanup (the target now owns its heap via the transfer).  No-op for
+    // non-variable RHS (calls, member reads) and for locals without a pending drop.
+    if (setStmt->value) consumeLocalDrop(setStmt->value.get());
+
     std::string targetStr = setStmt->target;
     if (targetStr.find("<.") == 0) {
         targetStr = "this." + targetStr.substr(2);
     }
-    
+
     // Support dot-notation (obj.prop) and dash-notation (arr-index)
     size_t dotPos = targetStr.find('.');
     size_t dashPos = targetStr.find('-');
@@ -1155,6 +1199,8 @@ void Compiler::visitExprStmt(ExprStmt* exprStmt) {
     visitExpression(exprStmt->expr.get());
 }
 void Compiler::visitRetStmt(RetStmt* retStmt) {
+    // spec/61 (A3): returning a local moves it to the caller → do not drop it here.
+    if (retStmt->value) consumeLocalDrop(retStmt->value.get());
     llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
     llvm::Type* retTy = currentFunc->getReturnType();
 
@@ -1282,11 +1328,59 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     llvm::BasicBlock* deadBB = llvm::BasicBlock::Create(ctx.context, "ret_dead", currentFunc);
     ctx.builder.SetInsertPoint(deadBB);
 }
+void Compiler::consumeLocalDrop(Expr* argExpr) {
+    // spec/61 (A3): a plain local passed to push/return/store is MOVED into the target.
+    // Remove its pending scope-drop so it is not freed at scope exit (the container /
+    // caller / member now owns its heap via the shallow transfer).  Only plain locals —
+    // members (`<.x`) and non-variable expressions are not owned-locals here.
+    auto* var = dynamic_cast<VariableExpr*>(argExpr);
+    if (!var) return;
+    const std::string& nm = var->name;
+    if (nm.find('.') != std::string::npos || nm.find('<') != std::string::npos) return;
+    auto it = ctx.symbol_table.find(nm);
+    if (it == ctx.symbol_table.end() || !it->second.ir_alloca_inst) return;
+    llvm::Value* addr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(it->second.ir_alloca_inst));
+    if (!addr) return;
+    for (auto& frame : ctx.cleanupStack) {
+        for (size_t i = 0; i < frame.size(); ) {
+            if (frame[i].addr == addr) frame.erase(frame.begin() + (long)i);
+            else ++i;
+        }
+    }
+}
 void Compiler::visitBlockStmt(BlockStmt* block) {
     auto savedSymbols = ctx.symbol_table;
+    ctx.cleanupStack.emplace_back();            // spec/61: per-block cleanup frame
     for (const auto& stmt : block->statements) {
         visitStatement(stmt.get());
     }
+    // spec/61 (A2): drop owned value-locals declared in this block, in reverse decl
+    // order, at NORMAL block exit — only if this basic block is not already terminated
+    // (a return/break left on this path; those exits get their own cleanup in a later
+    // step, so skipping here is a residual leak on that path, never a double-free).
+    {
+        auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
+        if (bb && !bb->getTerminator()) {
+            llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+            auto& frame = ctx.cleanupStack.back();
+            for (auto it = frame.rbegin(); it != frame.rend(); ++it) {
+                if (it->kind == 1) {
+                    // owned heap string: load the char* and decref it (refcount-aware;
+                    // only registered for aiml_str_alloc'd origins — never literals).
+                    llvm::Value* sptr = ctx.builder.CreateLoad(i8p, it->addr, "drop_str");
+                    llvm::Function* dc = ctx.getFunction("aiml_str_decref",
+                        ctx.builder.getVoidTy(), {i8p});
+                    ctx.builder.CreateCall(dc, { sptr });
+                } else {
+                    llvm::Function* fn = ctx.getFunction("aiml_ser_free_decoded",
+                        ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
+                    ctx.builder.CreateCall(fn, { it->addr, it->serNodes,
+                                                 ctx.builder.getInt32(it->serNodesCount) });
+                }
+            }
+        }
+    }
+    ctx.cleanupStack.pop_back();
     ctx.symbol_table = savedSymbols;
 }
 void Compiler::visitIfStmt(IfStmt* ifStmt) {

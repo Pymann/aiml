@@ -44,6 +44,8 @@ namespace AIML {
         bool is_const = false;
         bool is_volatile = false;
         bool is_global = false;   // True for module-level GlobalVariable (not a local alloca)
+        std::string lifetime = "scope"; // spec/61 ownership: scope|persistent|consumed.
+                                        // Metadata for the lifetime pass; drop emission is a later step.
         bool is_byref_arg = false; // True for list<T>/map<K:V> args passed by reference:
                                    // alloca holds a pointer-to-struct instead of the struct itself.
                                    // Method dispatch must dereference once before reaching the list/map.
@@ -262,6 +264,19 @@ namespace AIML {
 
     // Symbol Table (Scope-aware in future)
     std::map<std::string, Symbol> symbol_table;
+
+    // spec/61 lifetime: ordered per-scope cleanup list. One frame per block; a
+    // deep-copied owned value-local (independent heap) registers a drop here at decl,
+    // and visitBlockStmt emits aiml_ser_free_decoded for the frame (reverse order) at
+    // normal block exit.  (A2: normal-exit only; return/break cleanup is a later step.)
+    struct ScopeDrop {
+        llvm::Value*          addr = nullptr;        // alloca of the owned value-local
+        llvm::GlobalVariable* serNodes = nullptr;    // its class's @__aiml_sernodes global
+        int32_t               serNodesCount = 0;
+        int                   kind = 0;              // 0 = model (aiml_ser_free_decoded),
+                                                     // 1 = string (load char* → aiml_str_decref)
+    };
+    std::vector<std::vector<ScopeDrop>> cleanupStack;
     std::map<std::string, FunctionInfo> functions;
     std::map<std::string, ClassInfo> classes; // Class Registry
     std::map<std::string, std::map<std::string, int>> enums; // Enum Registry

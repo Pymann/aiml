@@ -59,6 +59,9 @@ private:
     void visitExprStmt(ExprStmt* exprStmt);
     void visitRetStmt(RetStmt* retStmt);
     void visitBlockStmt(BlockStmt* block);
+    // spec/61 (A3): mark a local consumed by push/return/store as MOVED — drop its
+    // pending scope-cleanup entry so it is not freed here (the target now owns it).
+    void consumeLocalDrop(Expr* argExpr);
     void visitIfStmt(IfStmt* ifStmt);
     void visitWhileStmt(WhileStmt* whileStmt);
     void visitTry(TryStmt* tryStmt);

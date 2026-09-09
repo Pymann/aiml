@@ -1231,6 +1231,8 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          std::string listElemName = className.substr(5, className.length() - 6);
          llvm::Type* llvmListElemType = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(listElemName)));
          if (methodName == "push" && argVals.size() > 0) {
+             // spec/61 (A3): pushing a local moves it into the container → do not drop it.
+             if (!call->args.empty()) consumeLocalDrop(call->args[0].get());
              llvm::Value* pushVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
              // Reject pointer representations in aggregate VALUE lists, regardless
              // of the argument AST shape (variable, member, nested get/call).
