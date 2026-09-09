@@ -64,10 +64,22 @@ IRValue* Compiler::visitStringInterpolation(StringInterpolationExpr* expr) {
             strVal = StringUtils::doubleToString(ctx, val);
         }
         
+        // spec/61: register EVERY freshly-allocated interpolation string as an owned
+        // statement temporary (a conversion result, and each concat accumulator).  A
+        // single string variable/literal part (no conversion/concat) is a borrow/literal
+        // and is NOT fresh → not registered (decref'ing it would double-free the source
+        // or misread a literal).  The final result is consumed by the enclosing
+        // decl/push/set/return (removed from the list); the intermediates are decref'd at
+        // statement end — this reclaims the int→string + intermediate-concat temporaries.
+        if (strVal != val && !ctx.stmtTempStack.empty()) {
+            ctx.stmtTempStack.back().push_back(strVal);      // fresh conversion result
+        }
         if (!currentStr) currentStr = strVal;
-        else currentStr = StringUtils::concat(ctx, currentStr, strVal);
+        else {
+            currentStr = StringUtils::concat(ctx, currentStr, strVal);
+            if (!ctx.stmtTempStack.empty()) ctx.stmtTempStack.back().push_back(currentStr);
+        }
     }
-    
     return ctx.ir_gen->wrap(currentStr);
 }
 IRValue* Compiler::visitNewArrayExpr(NewArrayExpr* na) {

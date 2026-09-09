@@ -6,14 +6,31 @@ namespace AIML {
 namespace AST {
 
 bool InterfaceBuilder::OnMapStart() {
+    // spec/61 §3.1: a { lifetime: consumed } modifier map as the 3rd element of an arg pair.
+    if (insideMethods && methodDepth == 3) {
+        inArgModMap = true;
+        argModExpectKey = true;
+        return true;
+    }
     expectingKey = true;
     return true;
 }
 bool InterfaceBuilder::OnMapEnd() {
+    if (inArgModMap) { inArgModMap = false; return true; }
     builder->popState();
     return true;
 }
 bool InterfaceBuilder::OnScalar(const std::string& value, const std::string& tag) {
+    if (inArgModMap) {
+        if (argModExpectKey) { argModKey = value; argModExpectKey = false; }
+        else {
+            if (argModKey == "lifetime" &&
+                (value == "scope" || value == "persistent" || value == "consumed"))
+                curArgLifetime = value;
+            argModExpectKey = true;
+        }
+        return true;
+    }
     if (expectingKey) {
         currentKey = value;
         expectingKey = false;
@@ -53,6 +70,7 @@ bool InterfaceBuilder::OnSequenceStart() {
             // Start of an [argName, argType] pair inside args.
             currentArg = {};
             curArgGotName = false;
+            curArgLifetime = "scope";
         }
         // depth == 2: args sub-sequence container
     }
@@ -63,6 +81,7 @@ bool InterfaceBuilder::OnSequenceEnd() {
         if (methodDepth == 3 && curArgGotName && !currentArg.first.empty()) {
             // End of [argName, argType] pair.
             currentMethod.args.push_back(currentArg);
+            currentMethod.argLifetimes.push_back(curArgLifetime);  // parallel to args (spec/61)
         }
         methodDepth--;
         if (methodDepth == 0 && insideMethodDef) {

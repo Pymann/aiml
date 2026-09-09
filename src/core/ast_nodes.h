@@ -279,12 +279,21 @@ public:
 
 // --- Top-Level Declarations ---
 
+// Per-parameter modifiers (spec/61 §3.1). Parallel to FunctionDecl::args (same index).
+// Kept as a separate vector so the many existing `args[i].first/.second` readers stay
+// valid; only ownership-aware code consults argMods.
+struct ParamMod {
+    std::string lifetime = "scope";  // "scope" (borrow, default) | "consumed" | "persistent"
+    bool is_const = false;           // read-only parameter (spec/61 §3.1, const params — later)
+};
+
 class FunctionDecl : public Node {
 public:
     std::string name;
     std::string returnType;
     uint64_t    version = 1;  // Hot-Reload version (default 1)
     std::vector<std::pair<std::string, std::string>> args; // name, type
+    std::vector<ParamMod> argMods;   // parallel to args; default-constructed = plain borrow
     std::unique_ptr<BlockStmt> body;
     std::vector<std::string> staticOff; // disabled static checks, e.g. "lines"
     // Function decorators — right-to-left applied at compile time.  Built-in
@@ -324,6 +333,7 @@ struct MethodSignature {
     std::string name;
     std::string returnType;
     std::vector<std::pair<std::string, std::string>> args;
+    std::vector<std::string> argLifetimes;  // spec/61 §3.1, parallel to args ("scope" default)
 };
 
 // Function-cascade rule context slot (spec/57).  One `Mask` per path stage:

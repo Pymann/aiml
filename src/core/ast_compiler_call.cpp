@@ -412,6 +412,24 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                     "' is deprecated — " + exprToAiml(call));
     }
 
+    // spec/61 §3.1 caller-move: an argument passed to a `consumed` parameter is MOVED into
+    // the callee — the caller must no longer free it.  Remove its pending scope-drop (safe:
+    // consumeLocalDrop only drops a matching plain-local's drop, so at worst a leak, never a
+    // double-free).  All consumed params are pointer/handle types (validated at the def), so
+    // the callee receives the same handle — a true move, not a copy.
+    if (funcInfo && ctx.lifetimeDropsEnabled && !funcInfo->argLifetimes.empty()) {
+        for (size_t i = 0; i < call->args.size() && i < funcInfo->argLifetimes.size(); ++i) {
+            if (funcInfo->argLifetimes[i] != "consumed") continue;
+            consumeLocalDrop(call->args[i].get());                 // moved-out local: no scope-drop
+            // A directly-passed interpolation temp ("x-${i}") is also moved into the callee —
+            // remove it from the statement-temp decref list, else the caller frees it at stmt end
+            // AND the callee frees it → double-free/UAF (spec/61 §3.1). consumeLocalDrop misses it
+            // (not a VariableExpr); consumeStringTemp matches the evaluated temp value.
+            if (i < argVals.size())
+                consumeStringTemp(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[i])));
+        }
+    }
+
     // Coerce argument types (pointer/struct adjustments) — shared for both paths
     auto coerceArgs = [&]() {
         if (!f) return;
@@ -700,6 +718,15 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 {ctx.builder.getInt32(0), ctx.builder.getInt32(slot)}, "vtbl_slot");
             llvm::Value* fnPtr = ctx.builder.CreateLoad(i8p, slotPtr, "vtbl_fn");
 
+            // spec/61 §3.1 caller-move on interface (vtable) dispatch: an argument passed
+            // to a `consumed` interface-method parameter is moved into the callee — drop the
+            // caller's ownership. m.argLifetimes is parallel to call->args (no implicit this).
+            if (ctx.lifetimeDropsEnabled && !m.argLifetimes.empty()) {
+                for (size_t ai = 0; ai < call->args.size() && ai < m.argLifetimes.size(); ++ai)
+                    if (m.argLifetimes[ai] == "consumed")
+                        consumeLocalDrop(call->args[ai].get());
+            }
+
             // Eagerly eval call args.
             std::vector<llvm::Value*> callArgs;
             callArgs.push_back(objPtr);
@@ -707,6 +734,11 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 IRValue* av = visitExpression(call->args[ai].get());
                 if (!av) continue;
                 llvm::Value* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(av));
+                // spec/61 §3.1: a directly-passed interpolation temp moved into a consumed
+                // interface-method parameter must leave the caller's statement-temp decref list.
+                if (ctx.lifetimeDropsEnabled && ai < m.argLifetimes.size()
+                    && m.argLifetimes[ai] == "consumed")
+                    consumeStringTemp(raw);
                 // "expected ptr, got struct" coercion for the vtable-dispatch
                 // path — mirrors coerceArgs()/the direct-method path.  A struct
                 // lvalue (plain variable OR member-access) passed where the
@@ -1234,6 +1266,9 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              // spec/61 (A3): pushing a local moves it into the container → do not drop it.
              if (!call->args.empty()) consumeLocalDrop(call->args[0].get());
              llvm::Value* pushVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+             // spec/61: an interpolation temp pushed into a list is MOVED (the list owns
+             // the char*) → remove it from the statement-temp decref list.
+             consumeStringTemp(pushVal);
              // Reject pointer representations in aggregate VALUE lists, regardless
              // of the argument AST shape (variable, member, nested get/call).
              // get() returns an element pointer for structs; passing it through
@@ -1433,6 +1468,14 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          if (methodName == "put" && argVals.size() > 1) {
              llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
              llvm::Value* valVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
+             // spec/61 (same root as the consumed direct-interp fix): MapImpl::put stores the
+             // key/value RAW (no dup/incref), so a directly-passed interpolation TEMP is moved
+             // into the map. Remove it from the statement-temp decref list — otherwise the temp
+             // is freed at statement end while the map still holds it → dangling key → strcmp
+             // UAF on the next put. This converts a UAF into a (safe) leak; the map's own heap is
+             // reclaimed later once the map scope-drop is completed (MapImpl occ/slot audit).
+             consumeStringTemp(keyVal);
+             consumeStringTemp(valVal);
              // Interface-Upcast für put(key, ptr<Concrete>) wenn V = ptr<Interface>.
              // Zentralisiert in Compiler::buildInterfaceUpcast.
              if (vTy->isStructTy() && llvm::cast<llvm::StructType>(vTy)->hasName() &&
@@ -2381,6 +2424,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
     // User Class Methods
     else if (!className.empty() && ctx.classes.count(className)) {
          std::string mangledName = className + "_" + methodName;
+         std::string resolvedMangled = mangledName;  // the name whose FunctionInfo we actually call
          llvm::Function* func = ctx.module.getFunction(mangledName);
          if (!func) {
              std::string currClass = className;
@@ -2389,7 +2433,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  if (!pName.empty()) {
                      currClass = pName;
                      func = ctx.module.getFunction(currClass + "_" + methodName);
-                     if (func) break;
+                     if (func) { resolvedMangled = currClass + "_" + methodName; break; }
                  } else {
                      break;
                  }
@@ -2424,6 +2468,24 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              }
              LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "Unknown method: " + className + "_" + methodName);
              return ctx.ir_gen->getInt32(0);
+         }
+         // spec/61 §3.1 caller-move for a DIRECT method call: an argument passed to a
+         // `consumed` parameter is moved into the callee — remove the caller's scope-drop
+         // (safe: at worst a leak, never a double-free). argLifetimes includes the implicit
+         // `this` at index 0, so explicit call->args[j] lines up with argLifetimes[j+1].
+         if (ctx.lifetimeDropsEnabled) {
+             auto mfit = ctx.functions.find(resolvedMangled);
+             if (mfit != ctx.functions.end() && !mfit->second.argLifetimes.empty()) {
+                 const auto& lifos = mfit->second.argLifetimes;
+                 for (size_t j = 0; j < call->args.size() && (j + 1) < lifos.size(); ++j) {
+                     if (lifos[j + 1] != "consumed") continue;
+                     consumeLocalDrop(call->args[j].get());
+                     // directly-passed interpolation temp moved into the callee (see the
+                     // free-function path) — remove it from the statement-temp decref list.
+                     if (j < argVals.size())
+                         consumeStringTemp(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[j])));
+                 }
+             }
          }
          IRValue* thisPtr = baseAlloca;
          if (baseElemTy->isPointer()) {

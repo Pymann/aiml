@@ -92,6 +92,71 @@ extern "C" void aiml_str_decref(char* s) {
     }
 }
 
+// ── spec/61 list scope-drop primitive ───────────────────────────────────────
+// Frees an owned list<T> value-local's heap at scope exit (visitBlockStmt, kind 2).
+// elemKind: 0 = raw/scalar (free the data buffer only); 1 = string (decref each
+// element char*, then free the buffer); 2 = model (free each element struct's heap
+// fields via aiml_ser_free_decoded using elemSize as the stride + serNodes, then free
+// the buffer).  The list owns its elements by MOVE (ListImpl::push stores the raw value,
+// no incref/copy — see list_impl.cpp), so exactly one free per element balances the
+// original alloc.  Idempotent: nulls the struct so a double-drop (should not happen
+// given move-detection) is a no-op, not a crash.
+extern "C" void aiml_ser_free_decoded(void* obj, void* nodes, int32_t node_count);
+extern "C" void aiml_list_free(void* list_ptr, int32_t elemKind,
+                               int64_t elemSize, void* serNodes, int32_t serNodesCount) {
+    if (!list_ptr) return;
+    AimlListRaw* lst = static_cast<AimlListRaw*>(list_ptr);
+    if (!lst->data) { lst->size = 0; lst->capacity = 0; return; }
+    if (elemKind == 1) {
+        char** elems = reinterpret_cast<char**>(lst->data);
+        for (int32_t i = 0; i < lst->size; ++i)
+            if (elems[i]) aiml_str_decref(elems[i]);
+    } else if (elemKind == 2 && serNodes && elemSize > 0) {
+        char* base = reinterpret_cast<char*>(lst->data);
+        for (int32_t i = 0; i < lst->size; ++i)
+            aiml_ser_free_decoded(base + (int64_t)i * elemSize, serNodes, serNodesCount);
+    }
+    free(lst->data);
+    lst->data = nullptr;
+    lst->size = 0;
+    lst->capacity = 0;
+}
+
+// ── spec/61 map scope-drop primitive ────────────────────────────────────────
+// Layout mirrors MapImpl (map_impl.cpp): { i32 size, i32 capacity, uint8_t* occ,
+// void* keys, void* vals }.  occ[i]==1 marks slot i occupied.  Frees the occ/keys/vals
+// buffers and, per occupied slot, decref's string keys/values (kind 1) and frees model
+// values' heap (kind 2, via valStride + valNodes).  Same safety profile as list-drop:
+// a map<K:V> value-local is a stack struct (by-ref), it does not escape by design.
+struct AimlMapRaw { int32_t size; int32_t capacity; uint8_t* occ; void* keys; void* vals; };
+extern "C" void aiml_map_free(void* map_ptr, int32_t keyKind, int64_t keyStride,
+                              int32_t valKind, int64_t valStride,
+                              void* valNodes, int32_t valNodesCount) {
+    if (!map_ptr) return;
+    AimlMapRaw* m = static_cast<AimlMapRaw*>(map_ptr);
+    if (m->occ && (keyKind == 1 || valKind == 1 || valKind == 2)) {
+        char* keyBase = reinterpret_cast<char*>(m->keys);
+        char* valBase = reinterpret_cast<char*>(m->vals);
+        for (int32_t i = 0; i < m->capacity; ++i) {
+            if (!m->occ[i]) continue;
+            if (keyKind == 1 && keyBase) {
+                char* k = *reinterpret_cast<char**>(keyBase + (int64_t)i * keyStride);
+                if (k) aiml_str_decref(k);
+            }
+            if (valKind == 1 && valBase) {
+                char* v = *reinterpret_cast<char**>(valBase + (int64_t)i * valStride);
+                if (v) aiml_str_decref(v);
+            } else if (valKind == 2 && valBase && valNodes) {
+                aiml_ser_free_decoded(valBase + (int64_t)i * valStride, valNodes, valNodesCount);
+            }
+        }
+    }
+    free(m->occ);  m->occ  = nullptr;
+    free(m->keys); m->keys = nullptr;
+    free(m->vals); m->vals = nullptr;
+    m->size = 0; m->capacity = 0;
+}
+
 // ── string.lower ─────────────────────────────────────────────────────────────
 extern "C" char* aiml_str_lower(const char* s) {
     if (!s) return aiml_str_alloc(0);

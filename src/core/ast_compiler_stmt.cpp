@@ -167,8 +167,18 @@ void coerceOrStoreFieldDefault(CompilerContext& ctx,
 }
 }
 
+void Compiler::consumeStringTemp(llvm::Value* v) {
+    if (!v) return;
+    for (auto& frame : ctx.stmtTempStack) {
+        for (size_t i = 0; i < frame.size(); ) {
+            if (frame[i] == v) frame.erase(frame.begin() + (long)i);
+            else ++i;
+        }
+    }
+}
 void Compiler::visitStatement(Stmt* stmt) {
     if (stmt->sourceLine > 0) ctx.currentLine = stmt->sourceLine;
+    ctx.stmtTempStack.emplace_back();   // spec/61: per-statement owned-string-temp frame
     if (auto decl = dynamic_cast<DeclStmt*>(stmt)) {
         visitDeclStmt(decl);
         if (sizetrace_active(ctx.currentFunctionName)) emitSizeTrace(ctx, decl->varName);
@@ -186,6 +196,19 @@ void Compiler::visitStatement(Stmt* stmt) {
     else if (auto throwStmt = dynamic_cast<ThrowStmt*>(stmt)) visitThrow(throwStmt);
     else if (auto idxStmt = dynamic_cast<IdxStmt*>(stmt)) visitIdxStmt(idxStmt);
     else if (auto storeStmt = dynamic_cast<StoreStmt*>(stmt)) visitStoreStmt(storeStmt);
+    // spec/61: decref owned string temporaries not consumed by this statement (e.g.
+    // interpolation results passed as borrowed call args that the callee copied).
+    {
+        auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
+        if (bb && !bb->getTerminator() && !ctx.stmtTempStack.empty() && ctx.lifetimeDropsEnabled) {
+            llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+            for (llvm::Value* t : ctx.stmtTempStack.back()) {
+                llvm::Function* dc = ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {i8p});
+                ctx.builder.CreateCall(dc, { t });
+            }
+        }
+    }
+    if (!ctx.stmtTempStack.empty()) ctx.stmtTempStack.pop_back();
 }
 void Compiler::visitDeclStmt(DeclStmt* decl) {
     ctx.validateIdentifier(decl->varName, "variable", decl->sourceNode);
@@ -320,6 +343,45 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             sd.kind = 1;
             ctx.cleanupStack.back().push_back(sd);
         }
+
+        // spec/61 (A2/A3): a FRESH list<T> value-local (no initializer → an empty list
+        // initList'd above, then populated by push) owns its malloc'd data buffer → register
+        // a list-drop (aiml_list_free frees the buffer; for list<string> it decref's each
+        // element, which push MOVED in — see list_impl.cpp).  Conservative: only the no-init
+        // case (assignment/return-initialised lists may alias and are left to leak = safe).
+        // A3 move-detection removes this drop if the list is later pushed/returned/stored.
+        if (decl->typeName.rfind("list<", 0) == 0 && decl->typeName.back() == '>'
+            && !decl->initialValue && decl->lifetime != "persistent"
+            && !decl->is_extern && !ctx.cleanupStack.empty()) {
+            std::string elemName = decl->typeName.substr(5, decl->typeName.length() - 6);
+            CompilerContext::ScopeDrop sd;
+            sd.addr = unwrappedAlloca;
+            sd.kind = 2;
+            if (elemName == "string") {
+                sd.elemKind = 1;                       // decref each element char*
+            } else {
+                // list<Model> whose element type carries heap fields → free each element's
+                // heap (elemKind 2) using the class's serNodes + struct stride. Otherwise a
+                // plain scalar/POD element list → just free the data buffer (elemKind 0).
+                auto ci = ctx.classes.find(elemName);
+                if (ci != ctx.classes.end() && ci->second.hasHeapFields
+                    && ci->second.serNodesVar && ci->second.type) {
+                    sd.elemKind = 2;
+                    sd.serNodes = ci->second.serNodesVar;
+                    sd.serNodesCount = ci->second.serNodesCount;
+                    sd.elemSize = (int64_t)ctx.module.getDataLayout().getTypeAllocSize(ci->second.type);
+                } else {
+                    sd.elemKind = 0;                   // scalar/POD: free the buffer only
+                }
+            }
+            ctx.cleanupStack.back().push_back(sd);
+        }
+
+        // spec/61 (deferred): a map<K:V> scope-drop (aiml_map_free, kind 3) is implemented in
+        // the runtime + visitBlockStmt, but NOT registered here yet: a first attempt hit a
+        // strcmp UAF + leak because it must pair with a map.put ownership-move AND match
+        // MapImpl's open-addressing occ/slot layout, which needs an audit. No measured map
+        // leak makes this low-priority — enable once that audit + a valgrind probe are green.
     }
 
     LOG_DEBUG("Compiled AST Decl: " + decl->varName + " of " + decl->typeName);
@@ -443,6 +505,9 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         ctx.deserializeTargetType = decl->typeName;
         IRValue* initVal = visitExpression(decl->initialValue.get());
         ctx.deserializeTargetType.clear();
+        // spec/61: a string temp used as a decl initializer is owned by the new local
+        // (its scope-drop handles it) → remove it from the statement-temp decref list.
+        if (initVal) consumeStringTemp(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal)));
         if (initVal) {
             // path: auto-intern so pointer identity == path equality
             if (decl->typeName == "path") {
@@ -774,6 +839,24 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     std::string baseName = (sepPos != std::string::npos) ? targetStr.substr(0, sepPos) : targetStr;
     std::string propName = (sepPos != std::string::npos) ? targetStr.substr(sepPos + 1) : "";
 
+    // spec/61 §7.1 borrow-escape (WARNING — non-breaking; becomes an error under Migration A):
+    // storing a borrowed ptr/ref PARAMETER into one of THIS object's members lets the pointee
+    // (owned by the caller) be reached after the call returns, when it may already be gone.
+    // Copy the pointee, or take ownership via a { lifetime: consumed } parameter instead.
+    if (!isDash && baseName == "this" && !propName.empty() && setStmt->value) {
+        if (auto* ve = dynamic_cast<VariableExpr*>(setStmt->value.get())) {
+            auto vit = ctx.symbol_table.find(ve->name);
+            if (vit != ctx.symbol_table.end() && vit->second.is_param
+                && (vit->second.typeName.rfind("ptr<", 0) == 0
+                    || vit->second.typeName.rfind("ref<", 0) == 0)) {
+                LOG_WARNING(ctx.fmtLoc() + "borrow-escape: storing borrowed parameter '" + ve->name +
+                    "' (" + vit->second.typeName + ") into member '<." + propName + "'. Its pointee is "
+                    "owned by the caller and may not outlive this object (spec/61 §7.1). Copy it, or "
+                    "take ownership with a { lifetime: consumed } parameter.");
+            }
+        }
+    }
+
     Symbol* sym = resolveVariable(baseName);
     if (!sym) {
         LOG_ERROR(ctx.fmtLoc() + "Undefined variable (set target): " + targetStr);
@@ -812,6 +895,9 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     }
     IRValue* val = visitExpression(setStmt->value.get());
     ctx.deserializeTargetType.clear();
+    // spec/61: a string temp assigned into a target is moved (target owns the char*) →
+    // remove it from the statement-temp decref list (idempotent for non-temp values).
+    if (val) consumeStringTemp(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)));
     if (!val) {
         LOG_ERROR(ctx.fmtLoc() + "Failed to evaluate value expression for assignment to: " + targetStr);
         return;
@@ -1238,6 +1324,8 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         ctx.ir_gen->createRet(nullptr);
     } else if (retStmt->value) {
         IRValue* val = visitExpression(retStmt->value.get());
+        // spec/61: a returned string temp is moved to the caller → not a statement temp.
+        if (val) consumeStringTemp(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)));
         if (val) {
             // Struct-by-value return (list/buffer/map): visitExpression often
             // yields an alloca-pointer to the struct (e.g. from `str.split` or
@@ -1351,6 +1439,14 @@ void Compiler::consumeLocalDrop(Expr* argExpr) {
 void Compiler::visitBlockStmt(BlockStmt* block) {
     auto savedSymbols = ctx.symbol_table;
     ctx.cleanupStack.emplace_back();            // spec/61: per-block cleanup frame
+    // spec/61 §3.1: seed staged consumed-parameter drops into THIS frame (the function
+    // body — visitFunction stages them immediately before this call, so only the body
+    // block receives them; nested blocks see the now-empty staging vector).
+    if (!ctx.pendingParamDrops.empty()) {
+        auto& frame = ctx.cleanupStack.back();
+        frame.insert(frame.end(), ctx.pendingParamDrops.begin(), ctx.pendingParamDrops.end());
+        ctx.pendingParamDrops.clear();
+    }
     for (const auto& stmt : block->statements) {
         visitStatement(stmt.get());
     }
@@ -1360,7 +1456,7 @@ void Compiler::visitBlockStmt(BlockStmt* block) {
     // step, so skipping here is a residual leak on that path, never a double-free).
     {
         auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
-        if (bb && !bb->getTerminator()) {
+        if (bb && !bb->getTerminator() && ctx.lifetimeDropsEnabled) {
             llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
             auto& frame = ctx.cleanupStack.back();
             for (auto it = frame.rbegin(); it != frame.rend(); ++it) {
@@ -1371,6 +1467,36 @@ void Compiler::visitBlockStmt(BlockStmt* block) {
                     llvm::Function* dc = ctx.getFunction("aiml_str_decref",
                         ctx.builder.getVoidTy(), {i8p});
                     ctx.builder.CreateCall(dc, { sptr });
+                } else if (it->kind == 2) {
+                    // spec/61: owned list<T> value-local — free its data buffer, decref'ing
+                    // each element for list<string> (elemKind 1) or freeing each element's
+                    // heap for list<Model> (elemKind 2, via elemSize stride + serNodes).
+                    // addr is the list struct alloca. Move-detection removed this drop if the
+                    // list was pushed/returned/stored → exactly one free per owned list.
+                    llvm::Value* nodesArg = it->serNodes
+                        ? static_cast<llvm::Value*>(it->serNodes)
+                        : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p));
+                    llvm::Function* lf = ctx.getFunction("aiml_list_free",
+                        ctx.builder.getVoidTy(),
+                        {i8p, ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(), i8p, ctx.builder.getInt32Ty()});
+                    ctx.builder.CreateCall(lf, { it->addr, ctx.builder.getInt32(it->elemKind),
+                                                 ctx.builder.getInt64(it->elemSize), nodesArg,
+                                                 ctx.builder.getInt32(it->serNodesCount) });
+                } else if (it->kind == 3) {
+                    // spec/61: owned map<K:V> value-local — free occ/keys/vals buffers,
+                    // decref string keys/values, free model values' heap. Same move-detection
+                    // discipline as list (consumeLocalDrop removes this drop on store/return).
+                    llvm::Value* vNodes = it->serNodes
+                        ? static_cast<llvm::Value*>(it->serNodes)
+                        : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p));
+                    llvm::Function* mf = ctx.getFunction("aiml_map_free",
+                        ctx.builder.getVoidTy(),
+                        {i8p, ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(),
+                         ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(), i8p, ctx.builder.getInt32Ty()});
+                    ctx.builder.CreateCall(mf, { it->addr,
+                        ctx.builder.getInt32(it->keyKind), ctx.builder.getInt64(it->keyStride),
+                        ctx.builder.getInt32(it->elemKind), ctx.builder.getInt64(it->elemSize),
+                        vNodes, ctx.builder.getInt32(it->serNodesCount) });
                 } else {
                     llvm::Function* fn = ctx.getFunction("aiml_ser_free_decoded",
                         ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
@@ -1696,6 +1822,7 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
 
     // Evaluate the value to store
     IRValue* valIR = visitExpression(idx->value.get());
+    if (valIR) consumeStringTemp(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(valIR))); // spec/61: moved into element
     if (!valIR) return;
     llvm::Value* storeVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(valIR));
 
@@ -1900,6 +2027,7 @@ void Compiler::visitStoreStmt(StoreStmt* st) {
     }
 
     IRValue* val = visitExpression(st->value.get());
+    if (val) consumeStringTemp(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val))); // spec/61: moved via store
     if (!val) {
         LOG_ERROR(ctx.fmtLoc() + "store: failed to evaluate value expression");
         return;

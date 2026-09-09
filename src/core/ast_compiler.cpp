@@ -3674,6 +3674,7 @@ void Compiler::registerTypeDecl(Node* node) {
                 m.name = sig.name;
                 m.returnType = sig.returnType;
                 m.args = sig.args;
+                m.argLifetimes = sig.argLifetimes;  // spec/61 §3.1
                 info.methods.push_back(std::move(m));
             }
             ctx.interfaces[ifaceName] = std::move(info);
@@ -3820,6 +3821,13 @@ void Compiler::visitTopLevel(Node* node) {
             std::string oldName = method->name;
             method->name = cls->name + "_" + method->name;
             auto it = method->args.insert(method->args.begin(), {"this", "ref<" + cls->name + ">"});
+            // Keep argMods index-synced with args: `this` gets a default (borrow) modifier
+            // slot at the front, so argMods[i] still lines up with args[i] (spec/61 §3.1).
+            bool insertedMod = false;
+            if (!method->argMods.empty() || !method->args.empty()) {
+                method->argMods.insert(method->argMods.begin(), ParamMod{});
+                insertedMod = true;
+            }
 
             std::string oldClassName = ctx.currentClassName;
             ctx.currentClassName = cls->name;
@@ -3829,6 +3837,7 @@ void Compiler::visitTopLevel(Node* node) {
             ctx.currentClassName = oldClassName;
 
             method->args.erase(it);
+            if (insertedMod && !method->argMods.empty()) method->argMods.erase(method->argMods.begin());
             method->name = oldName;
         }
 
@@ -4361,8 +4370,10 @@ void Compiler::visitFunction(FunctionDecl* func) {
     std::vector<IRType*> argTypes;
     std::vector<std::string> argNames;
     std::vector<bool>        argIsByref;  // parallel to argTypes; true for list/map args
+    std::vector<std::string> argLifetimes; // parallel to argNames; spec/61 §3.1 ownership
 
-    for (const auto& arg : func->args) {
+    for (size_t ai = 0; ai < func->args.size(); ++ai) {
+        const auto& arg = func->args[ai];
         ctx.validateIdentifier(arg.first, "argument", func->sourceNode);
         // list<T>/map<K:V> args werden implizit by-reference übergeben (Python-/Java-Stil).
         // LLVM-Signatur: opaque pointer statt struct-by-value, damit size++/data-Wachstum
@@ -4374,6 +4385,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
             argTypes.push_back(t);
             argNames.push_back(arg.first);
             argIsByref.push_back(byref);
+            argLifetimes.push_back(ai < func->argMods.size() ? func->argMods[ai].lifetime : "scope");
         }
     }
     
@@ -4400,6 +4412,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
     CompilerContext::FunctionInfo funcInfo;
     funcInfo.func = static_cast<llvm::Function*>(ctx.ir_gen->unwrap(funcVal));
     funcInfo.argNames = argNames;
+    funcInfo.argLifetimes = argLifetimes;  // spec/61 §3.1 (parallel to argNames)
     funcInfo.version = func->version;
     funcInfo.compiled_version = func->version;  // locked at compile time
     // Assign fptable slot — preserve any pre-existing index (e.g. from an alias entry)
@@ -4475,6 +4488,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
         sym.ir_alloca_inst = argAlloca;
         sym.ir_type = ctx.ir_gen->getPointerTy();
         sym.typeName = func->args[i].second;
+        sym.is_param = true;   // spec/61 §7.1: parameters are borrows (borrow-escape check)
         // list/map are already passed with one level of indirection (by-ref);
         // an explicit ptr<> would add a second one. Silence via
         // AIML_ALLOW_PTR_CONTAINER when double indirection is intended.
@@ -4496,6 +4510,93 @@ void Compiler::visitFunction(FunctionDecl* func) {
             sym.is_byref_arg = true;
         } else {
             sym.ir_element_type = argTypes[i];
+        }
+
+        // spec/61 §3.1: parameter ownership qualifier (argMods is parallel to func->args).
+        // Look up by name — argNames may skip an arg whose type failed to resolve, so the
+        // index into argMods is not guaranteed identical.
+        {
+            std::string paramType;
+            const std::string* pLife = nullptr;
+            for (size_t j = 0; j < func->args.size() && j < func->argMods.size(); ++j)
+                if (func->args[j].first == argNames[i]) {
+                    // spec/61 §3.1: const parameter → read-only in the body (the existing
+                    // set/store const-write checks honour Symbol.is_const).
+                    sym.is_const = func->argMods[j].is_const;
+                    pLife = &func->argMods[j].lifetime;
+                    paramType = func->args[j].second;
+                    break;
+                }
+            if (pLife) {
+                sym.lifetime = *pLife;
+                if (*pLife == "consumed") {
+                    // Both direct method calls and interface (vtable) dispatch now apply
+                    // caller-move — BUT interface dispatch reads the INTERFACE signature's
+                    // lifetime, not the concrete method's. So a concrete method that overrides
+                    // an interface method may only be `consumed` on a parameter the interface
+                    // ALSO declares `consumed`; otherwise the interface path would not move and
+                    // the arg would be double-freed. Reject that mismatch. (spec/61 §3.1)
+                    bool isMethod = (!func->args.empty() && func->args[0].first == "this");
+                    if (isMethod && !ctx.currentClassName.empty()) {
+                        const std::string& cls = ctx.currentClassName;
+                        std::string prefix = cls + "_";
+                        std::string um = (func->name.rfind(prefix, 0) == 0)
+                                         ? func->name.substr(prefix.size()) : func->name;
+                        auto cit = ctx.classes.find(cls);
+                        if (cit != ctx.classes.end()) {
+                            for (const auto& ifn : cit->second.interfaces) {
+                                auto iit = ctx.interfaces.find(ifn);
+                                if (iit == ctx.interfaces.end()) iit = ctx.interfaces.find(ctx.qualify(ifn));
+                                if (iit == ctx.interfaces.end()) continue;
+                                for (const auto& im : iit->second.methods) {
+                                    if (im.name != um) continue;
+                                    // Find this param in the interface signature by name; its
+                                    // declared lifetime must be consumed too.
+                                    bool ifaceConsumed = false;
+                                    for (size_t k = 0; k < im.args.size(); ++k)
+                                        if (im.args[k].first == argNames[i]) {
+                                            ifaceConsumed = (k < im.argLifetimes.size()
+                                                             && im.argLifetimes[k] == "consumed");
+                                            break;
+                                        }
+                                    if (!ifaceConsumed)
+                                        LOG_ERROR(func->name + ": { lifetime: consumed } on parameter '" +
+                                            argNames[i] + "' overrides interface '" + ifn + "." + um +
+                                            "' whose signature does NOT declare it consumed — interface "
+                                            "dispatch would not move it → double-free. Declare the parameter "
+                                            "consumed on the interface method too, or drop the qualifier. (spec/61 §3.1)");
+                                }
+                            }
+                        }
+                    }
+                    // A consumed parameter must lower to a pointer/handle (ptr<T>, list/map
+                    // by-ref, string, or a handle built-in). Reject value structs & scalars:
+                    // moving a shallow-copied value struct would double-free its shared heap.
+                    bool isPtr = (i < argIsByref.size() && argIsByref[i]);
+                    if (!isPtr) {
+                        llvm::Type* lt = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(argTypes[i]));
+                        isPtr = lt && lt->isPointerTy();
+                    }
+                    if (!isPtr) {
+                        LOG_ERROR(func->name + ": parameter '" + argNames[i] + "' of type '" +
+                            paramType + "' cannot be { lifetime: consumed } — consumed requires "
+                            "a reference/handle type (ptr<T>, list, map, string, or a handle "
+                            "built-in). For a value model/class pass ptr<" + paramType +
+                            "> instead; a scalar owns no heap. (spec/61 §3.1)");
+                    } else if (paramType == "string" && ctx.lifetimeDropsEnabled) {
+                        // callee-drop safety net for an un-consumed `consumed` string param:
+                        // decref at function-body exit (kind 1) unless push/return/store moves
+                        // it out first.  Only string has a drop primitive today; ptr/list/map
+                        // consumed params rely on caller-move + are freed by whoever they are
+                        // moved into (leak-on-unconsumed only, never double-free). Staged here,
+                        // drained into the body frame by the next visitBlockStmt.
+                        CompilerContext::ScopeDrop sd;
+                        sd.addr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argAlloca));
+                        sd.kind = 1;
+                        ctx.pendingParamDrops.push_back(sd);
+                    }
+                }
+            }
         }
         ctx.symbol_table[argNames[i]] = sym;
     }

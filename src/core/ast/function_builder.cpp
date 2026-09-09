@@ -8,13 +8,25 @@ namespace AST {
 
 class ArgsBuilder : public StateHandler {
     std::vector<std::pair<std::string, std::string>>* args_out;
+    std::vector<ParamMod>* mods_out;   // parallel to args_out; one entry per parameter
     std::string currentArgName;
     std::string pendingType;  // accumulates split type names like "fn<i32"
     int typeDepth = 0;        // unbalanced '<' count in pendingType
     int depth = 1; // Start at 1 because FunctionBuilder consumed the first OnSequenceStart
+    int mapDepth = 0;         // >0 while inside a per-parameter modifier map { ... }
+    std::string modKey;       // current key inside a modifier map
+    bool modExpectKey = true;
+
+    // Push a completed (name, type) pair plus its default modifier slot, keeping the two
+    // vectors index-synced.  The modifier map (if any) follows the pair and edits mods_out->back().
+    void pushParam(const std::string& name, const std::string& type) {
+        args_out->push_back({name, type});
+        if (mods_out) mods_out->emplace_back();
+    }
 public:
-    ArgsBuilder(Builder* b, std::vector<std::pair<std::string, std::string>>* out)
-        : StateHandler(b), args_out(out) {}
+    ArgsBuilder(Builder* b, std::vector<std::pair<std::string, std::string>>* out,
+                std::vector<ParamMod>* mods)
+        : StateHandler(b), args_out(out), mods_out(mods) {}
 
     bool OnSequenceStart() override {
         depth++;
@@ -27,13 +39,46 @@ public:
         return true;
     }
 
+    // spec/61 §3.1: a per-parameter modifier map `[name, type, { lifetime: consumed }]`.
+    // Parameters have no init-value slot, so a map in 3rd position is unambiguously a
+    // modifier (locals put it in 4th position, after the init — see statement_builder).
+    bool OnMapStart() override {
+        mapDepth++;
+        if (mapDepth == 1) modExpectKey = true;
+        return true;
+    }
+
+    bool OnMapEnd() override {
+        if (mapDepth > 0) mapDepth--;
+        return true;
+    }
+
     bool OnScalar(const std::string& value, const std::string& tag) override {
+        if (mapDepth > 0) {
+            // Inside a parameter modifier map — parse key/value pairs into mods_out->back().
+            if (modExpectKey) { modKey = value; modExpectKey = false; return true; }
+            modExpectKey = true;
+            if (!mods_out || mods_out->empty()) return true;  // defensive: no param to attach to
+            ParamMod& pm = mods_out->back();
+            if (modKey == "lifetime") {
+                if (value == "scope" || value == "persistent" || value == "consumed") {
+                    pm.lifetime = value;
+                } else {
+                    LOG_ERROR("parameter lifetime must be scope|persistent|consumed, got '" + value + "'");
+                }
+            } else if (modKey == "const") {
+                pm.is_const = (value == "true" || value == "1");
+            } else {
+                LOG_ERROR("unknown parameter modifier '" + modKey + "' (expected lifetime|const)");
+            }
+            return true;
+        }
         if (!pendingType.empty()) {
             // Continuation of a split type name (YAML comma inside angle brackets)
             pendingType += ", " + value;
             for (char c : value) { if (c=='<') ++typeDepth; else if (c=='>') --typeDepth; }
             if (typeDepth <= 0) {
-                args_out->push_back({currentArgName, pendingType});
+                pushParam(currentArgName, pendingType);
                 currentArgName = "";
                 pendingType = "";
                 typeDepth = 0;
@@ -48,7 +93,7 @@ public:
                 pendingType = value;
                 typeDepth = d;
             } else {
-                args_out->push_back({currentArgName, value});
+                pushParam(currentArgName, value);
                 currentArgName = "";
             }
         }
@@ -106,7 +151,7 @@ bool FunctionBuilder::OnSequenceStart() {
         expectingValue = false;
         return true;
     } else if (currentKey == "args") {
-        builder->pushState(std::make_unique<ArgsBuilder>(builder, &func->args));
+        builder->pushState(std::make_unique<ArgsBuilder>(builder, &func->args, &func->argMods));
         expectingKey = true;
         expectingValue = false;
         return true;
