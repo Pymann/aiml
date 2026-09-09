@@ -1,0 +1,53 @@
+# Regression repro for the 9rooms_v2 login/deckset break ("something fundamental with KV").
+# Mimics: a service method get_copy's a model and returns it (login reads User); then the
+# SAME key is read again (decksets after login).  If the scope-drop of the first copy frees
+# heap shared with the KV decoded_cache, the second read returns corrupted/empty data.
+- model:
+    name: DUser
+    fields:
+      - [uname, string]
+      - [pass,  string]
+      - [decks, list<string>]
+
+- class:
+    name: Svc
+    members:
+      - [store, Kv<string:DUser>]
+    methods:
+      - def:
+          name: setup
+          args: [[dir, string]]
+          body:
+            - set: [<.store, { call: [db.open_kv, "du_repro", {persist: true, path: dir}] }]
+            - decl: [seed, DUser]
+            - set: [seed.uname, "alice"]
+            - set: [seed.pass, "secret123"]
+            - call: [seed.decks.push, "deck-a"]
+            - call: [seed.decks.push, "deck-b"]
+            - call: [<.store.set, "alice", seed]
+      - def:
+          name: get_user
+          args: [[uid, string]]
+          return: DUser
+          body:
+            - decl: [usr, DUser, { call: [<.store.get_copy, uid] }]
+            - return: usr
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - call: [io.remove_all, "/tmp/du_repro/"]
+      - decl: [svc, ptr<Svc>, { new: Svc }]
+      - call: [svc.setup, "/tmp/du_repro/"]
+      - decl: [usa, DUser, { call: [svc.get_user, "alice"] }]
+      - if: { condition: { neq: [usa.uname, "alice"] },    then: [{ print: ["FAIL uname1='${usa.uname}'"] }, { return: 1 }] }
+      - if: { condition: { neq: [usa.pass, "secret123"] }, then: [{ print: ["FAIL pass1='${usa.pass}'"] }, { return: 1 }] }
+      # re-read the SAME key (login → decksets pattern): must still be intact.
+      - decl: [usb, DUser, { call: [svc.get_user, "alice"] }]
+      - if: { condition: { neq: [usb.uname, "alice"] },    then: [{ print: ["FAIL uname2='${usb.uname}' (KV corrupted after 1st get+drop)"] }, { return: 1 }] }
+      - if: { condition: { neq: [usb.decks.len, 2] },      then: [{ print: ["FAIL decks2 len=${usb.decks.len}"] }, { return: 1 }] }
+      - if: { condition: { neq: [usb.pass, "secret123"] }, then: [{ print: ["FAIL pass2='${usb.pass}'"] }, { return: 1 }] }
+      - print: ["PASS kv get_copy → return → drop → re-read intact"]
+      - return: 0

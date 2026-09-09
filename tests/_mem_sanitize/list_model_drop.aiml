@@ -1,0 +1,36 @@
+# spec/61: fresh list<Rec> value-local (Rec has heap fields) built by push, dropped at
+# scope exit each call. aiml_list_free elemKind 2 frees each element's heap + the buffer.
+- model:
+    name: Rec
+    fields:
+      - [name, string]
+      - [tags, list<string>]
+
+- def:
+    name: build_recs
+    args: [[reps, i32]]
+    body:
+      - decl: [recs, list<Rec>]
+      - decl: [jdx, i32, 0]
+      - while:
+          condition: { lt: [jdx, reps] }
+          body:
+            - decl: [rec, Rec]
+            - set: [rec.name, "rec-${jdx}"]
+            - call: [rec.tags.push, "t-${jdx}"]
+            - call: [recs.push, rec]
+            - set: [jdx, { +: [jdx, 1] }]
+      # recs (list<Rec>) dropped here → each Rec's name/tags heap freed + buffer freed.
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 300] }
+          body:
+            - call: [build_recs, 10]
+            - set: [idx, { +: [idx, 1] }]
+      - print: ["PASS list_model_drop: 300×(list<Rec> of 10) built + dropped"]
+      - return: 0

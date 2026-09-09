@@ -1,0 +1,37 @@
+# spec/61 §3.1 (P1): a DIRECTLY-PASSED interpolation temp to a `consumed` parameter must be
+# MOVED (caller-move must consumeStringTemp it, not only consumeLocalDrop) — else the caller
+# frees it at statement end AND the callee frees/owns it → double-free/dangling. Covers the
+# drop path (callee doesn't store) and the move-into-member path, on the free-function route.
+- class:
+    name: Sink
+    members:
+      - [bag, list<string>]
+
+- def:
+    name: keep_into
+    args: [[snk, ptr<Sink>], [txt, string, { lifetime: consumed }]]
+    body:
+      - call: [snk.bag.push, txt]
+
+- def:
+    name: drop_str
+    static_off: ["str_cmp"]
+    args: [[txt, string, { lifetime: consumed }]]
+    body:
+      - if: { condition: { neq: [txt, "impossible"] }, then: [{ print: ["", txt] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [snk, ptr<Sink>, { new: Sink }]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 300] }
+          body:
+            - call: [keep_into, snk, "kept-${idx}"]   # direct interp → consumed (moved into member)
+            - call: [drop_str, "tmp-${idx}"]          # direct interp → consumed (dropped by callee)
+            - set: [idx, { +: [idx, 1] }]
+      - if: { condition: { neq: [snk.bag.len, 300] }, then: [{ print: ["FAIL count"] }, { return: 1 }] }
+      - print: ["PASS consumed_direct_interp: direct interp temp moved into consumed param (bag=300)"]
+      - return: 0

@@ -1,0 +1,18 @@
+# spec/61 §3.1: `consumed` on a value model parameter must be REJECTED at compile time
+# (a shallow struct copy shares inner heap → moving it would double-free). Expect an error.
+- model:
+    name: Card
+    fields:
+      - [name, string]
+
+- def:
+    name: bad_model
+    args: [[card, Card, { lifetime: consumed }]]
+    body:
+      - print: ["should not compile"]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - return: 0
