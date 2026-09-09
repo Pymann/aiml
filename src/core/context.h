@@ -49,6 +49,9 @@ namespace AIML {
         bool is_byref_arg = false; // True for list<T>/map<K:V> args passed by reference:
                                    // alloca holds a pointer-to-struct instead of the struct itself.
                                    // Method dispatch must dereference once before reaching the list/map.
+        bool is_param = false;     // spec/61 §7.1: a function/method parameter — a BORROW by
+                                   // default. Storing a ptr/ref param into a member/container is a
+                                   // borrow-escape (warned; will become an error under Migration A).
         AccessLevel access = AccessLevel::Public; // Default for vars
     };
 
@@ -77,6 +80,10 @@ namespace AIML {
         struct FunctionInfo {
             llvm::Function* func = nullptr;
             std::vector<std::string> argNames;
+            // spec/61 §3.1: per-parameter ownership qualifier, parallel to argNames.
+            // "scope" (borrow, default) | "consumed" | "persistent". Read at the call site
+            // to move a `consumed` argument out of the caller (drop the caller's ownership).
+            std::vector<std::string> argLifetimes;
             AccessLevel access = AccessLevel::Public;
             uint64_t version = 1;             // Latest version (updated by visitTopLevel re-def)
             uint64_t compiled_version = 1;    // Version actually compiled into IR (set once in visitFunction)
@@ -274,9 +281,40 @@ namespace AIML {
         llvm::GlobalVariable* serNodes = nullptr;    // its class's @__aiml_sernodes global
         int32_t               serNodesCount = 0;
         int                   kind = 0;              // 0 = model (aiml_ser_free_decoded),
-                                                     // 1 = string (load char* → aiml_str_decref)
+                                                     // 1 = string (load char* → aiml_str_decref),
+                                                     // 2 = list  (aiml_list_free(addr, elemKind, …)),
+                                                     // 3 = map   (aiml_map_free(addr, keyKind, …))
+        int                   elemKind = 0;          // kind 2: 0=scalar,1=string,2=model. kind 3: VALUE kind
+        int64_t               elemSize = 0;          // kind 2 elemKind 2: elem stride. kind 3: VALUE stride
+        int                   keyKind = 0;           // kind 3: key kind (0 = scalar, 1 = string)
+        int64_t               keyStride = 0;         // kind 3: key element stride
     };
     std::vector<std::vector<ScopeDrop>> cleanupStack;
+
+    // spec/61 §3.1 (consumed parameters): visitFunction stages a `consumed` handle
+    // parameter's callee-drop here, and the NEXT visitBlockStmt (the function body) drains
+    // these into its own cleanup frame — so an un-consumed consumed-param is freed at
+    // function-body exit (the linear-obligation safety net) unless a push/return/store
+    // consumes it first (consumeLocalDrop removes it, exactly like a scope local).
+    std::vector<ScopeDrop> pendingParamDrops;
+
+    // spec/61 render-temporaries: owned heap-string TEMPORARIES (interpolation results)
+    // created while compiling a statement.  One frame per statement (visitStatement).  A
+    // temp consumed by decl-init / push / set / return is removed (moved); the remainder
+    // (e.g. borrowed call args like set_text, which copy synchronously) is decref'd at
+    // statement end.  This reclaims the unnamed `"${…}"` temporaries that drive the
+    // client render-`populate` leak, which decl-local drops cannot reach.
+    std::vector<std::vector<llvm::Value*>> stmtTempStack;
+
+    // spec/61: master switch for automatic drop/decref EMISSION.  OFF by default —
+    // the model/string scope-drops + render-temp decrefs are correct on the aiml test
+    // suite but regressed 9rooms_v2 (login/deckset KV paths not covered by the suite).
+    // Registration/consume logic stays active (harmless when nothing is emitted); flip
+    // this ON only after server-connected 9rooms e2e validation.  See spec/61 §8.
+    // Re-enabled 2026-09-09: the 9rooms login/deckset break was the KV loud-fail _exit
+    // (now softened) + root-owned side KVs, NOT the drops (aiml suite + all repros green).
+    // Now validating drops ON against the live server.
+    bool lifetimeDropsEnabled = true;
     std::map<std::string, FunctionInfo> functions;
     std::map<std::string, ClassInfo> classes; // Class Registry
     std::map<std::string, std::map<std::string, int>> enums; // Enum Registry
@@ -395,6 +433,7 @@ namespace AIML {
         std::string name;
         std::string returnType;
         std::vector<std::pair<std::string, std::string>> args; // [argName, argType]
+        std::vector<std::string> argLifetimes;                 // spec/61 §3.1, parallel to args
     };
     struct InterfaceInfo {
         std::string name;

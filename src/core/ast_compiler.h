@@ -62,6 +62,9 @@ private:
     // spec/61 (A3): mark a local consumed by push/return/store as MOVED — drop its
     // pending scope-cleanup entry so it is not freed here (the target now owns it).
     void consumeLocalDrop(Expr* argExpr);
+    // spec/61 render-temporaries: a heap-string temp value moved into a decl-local /
+    // container / member / caller is removed from the pending statement-temp decref list.
+    void consumeStringTemp(llvm::Value* v);
     void visitIfStmt(IfStmt* ifStmt);
     void visitWhileStmt(WhileStmt* whileStmt);
     void visitTry(TryStmt* tryStmt);

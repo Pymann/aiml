@@ -146,16 +146,19 @@ std::unique_ptr<Node> StatementBuilder::finish() {
                  if (auto* dict = dynamic_cast<DictLiteralExpr*>(exprArg.get())) {
                      bool modifierOnly = !dict->entries.empty();
                      for (const auto& [k, v] : dict->entries) {
-                         if (k != "const" && k != "volatile" && k != "extern") {
+                         if (k != "const" && k != "volatile" && k != "extern" && k != "lifetime") {
                              modifierOnly = false;
                              break;
                          }
                      }
                      if (modifierOnly) {
+                         // spec/61 §2: the modifier map (incl. `lifetime`) is the 4th element,
+                         // after the initializer. For a qualified local with no init, put the
+                         // `null` literal in the 3rd (init) slot: [name, type, null, { lifetime: persistent }].
                          if (capturedLine > 0)
-                             LOG_ERROR("line " + std::to_string(capturedLine) + ": decl modifiers must be the 4th list element: [name, type, value, { const: true }]. A modifier map in 3rd position is invalid.");
+                             LOG_ERROR("line " + std::to_string(capturedLine) + ": decl modifiers must be the 4th list element: [name, type, value, { const: true }] (use null as the value when there is no initializer, e.g. [buf, T, null, { lifetime: persistent }]). A modifier map in 3rd position is invalid.");
                          else
-                             LOG_ERROR("decl modifiers must be the 4th list element: [name, type, value, { const: true }]. A modifier map in 3rd position is invalid.");
+                             LOG_ERROR("decl modifiers must be the 4th list element: [name, type, value, { const: true }] (use null as the value when there is no initializer). A modifier map in 3rd position is invalid.");
                          return nullptr;
                      }
                  }

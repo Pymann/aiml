@@ -58,6 +58,12 @@
             - return: { -: [{ call: [sys.mem_usage] }, before] }
 
       # Probe C: kv.set desselben Keys pro Iteration (Scheduler-Write-Back-Pfad).
+      # NOTE (2026-09-09): the RSS delta this reports is an ALLOCATOR/WAL-ring ARTIFACT,
+      # not a true heap leak.  valgrind definite-lost is identical at 100 and 900 iters
+      # (~20.9 KB, all compiler/JIT one-time), i.e. it does NOT scale — the kv.set path is
+      # clean (blob freed, decoded_cache evicted, the get_copy mrec dropped).  glibc simply
+      # does not return freed memory to the OS (arena growth) + the 16 MB WAL ring touches
+      # pages as it fills.  Track true leaks with valgrind, not this RSS number.
       # WICHTIG (§8.1): KONSTANTE Payload — ein vorhandenes Skalar-Element ERSETZEN,
       # nicht pro Iteration anhängen (sonst wächst der Record selbst und die Messung
       # ist unbrauchbar/Test-Artefakt).

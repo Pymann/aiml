@@ -1273,27 +1273,28 @@ extern "C" void* aiml_db_kv_open_persist(const char* name, int64_t val_size,
     kv->wal_path   = dir + nm + ".kvwal";
     int fd = kv_wal_open_with_header(kv->wal_path, /*typed=*/false, val_size);
     if (fd < 0) {
-        // A persistent KV whose backing WAL cannot be opened MUST fail loudly.
-        // Previously the setup was guarded by `if (fd >= 0)` and a non-null KV with
-        // wal_fd=-1 was still returned → every set() became a silent no-op (data
-        // never persisted, no error). That is how a root-owned / unwritable .kvwal
-        // manifested as "matches never persist, no diagnostic". No fallback: fail
-        // hard, exactly like the checkpoint / header-mismatch paths in this file.
+        // A persistent KV whose backing WAL cannot be opened is reported LOUDLY, but we
+        // MUST NOT take down the whole server (an earlier version _exit(1)'d here — that
+        // turned a single side KV owned by another user, e.g. a root-owned wallets/auc
+        // .kvwal, into a boot crash that killed unrelated services like login/decksets).
+        // Instead: name the offending file, and return the KV in a crippled (wal_fd<0)
+        // state — reads are empty, writes are refused by aiml_db_kv_set with a loud
+        // diagnostic (see there).  The server keeps running; ops fixes the ownership.
         fprintf(stderr,
-            "[AionDB] FATAL: cannot open persistent KV WAL '%s' (errno=%d) — "
-            "check file ownership/permissions (is it owned by another user?).\n",
+            "[AionDB] ERROR: cannot open persistent KV WAL '%s' (errno=%d) — "
+            "check file ownership/permissions (owned by another user?). This KV is "
+            "UNAVAILABLE (reads empty, writes refused); the server continues.\n",
             kv->wal_path.c_str(), errno);
-        delete kv;
-        _exit(1);
+    } else {
+        kv->wal_fd = fd;
+        if (!kv_mmap_attach(kv)) {
+            close(fd);
+            kv->wal_fd = -1;
+            delete kv;
+            return nullptr;
+        }
+        kv_wal_replay(kv);
     }
-    kv->wal_fd = fd;
-    if (!kv_mmap_attach(kv)) {
-        close(fd);
-        kv->wal_fd = -1;
-        delete kv;
-        return nullptr;
-    }
-    kv_wal_replay(kv);
     g_persistent_kvs_by_name[registry_key] = kv;
     g_persistent_kvs.push_back(kv);
     return kv;
@@ -1474,6 +1475,19 @@ extern "C" void aiml_db_kv_set(void* kv_ptr, const char* key, const void* val, i
     if (!kv_ptr || !key) return;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
     std::lock_guard<std::mutex> lock(kv->mtx);
+    // A crippled persistent KV (its WAL could not be opened — see aiml_db_kv_open_persist)
+    // has no backing store.  Refuse the write LOUDLY (once) instead of dereferencing a
+    // null mmap; the server stays up but this KV cannot persist until ops fixes it.
+    if (kv->persistent && kv->wal_fd < 0) {
+        static thread_local bool warned_crippled = false;
+        if (!warned_crippled) {
+            warned_crippled = true;
+            fprintf(stderr, "[AionDB] ERROR: write to UNAVAILABLE KV '%s' refused "
+                    "(its WAL could not be opened — check file ownership/permissions).\n",
+                    kv->wal_path.c_str());
+        }
+        return;
+    }
     if (kv->ser_nodes && val) {
         // Typed: encode struct → blob, then invalidate decoded cache.
         //

@@ -18,13 +18,25 @@ pointer move (zero-copy).
 ## 2. The `lifetime` qualifier
 
 Ownership is expressed with a qualifier on the **variable declaration**, alongside the
-existing decl qualifiers:
+existing decl qualifiers. The qualifier is a **modifier map**, and — like every other decl
+modifier (`const`, `volatile`, …) — it lives in the **4th position**, *after* the initializer;
+it is never a separate position that competes with the init-value:
 
 ```aiml
-- decl: [x,   MatchSession, { lifetime: scope }, <init>]    # scope is the default — omit it
-- decl: [buf, MatchSession, { lifetime: persistent }]       # outlives this scope
-- decl: [h,   FileHandle,   { lifetime: consumed }, <init>] # MUST be moved out exactly once
+- decl: [x,   MatchSession, <init>, { lifetime: scope }]      # scope is the default — omit it
+- decl: [buf, MatchSession, null,   { lifetime: persistent }] # outlives this scope; no init → null
+- decl: [h,   FileHandle,   <init>, { lifetime: consumed }]   # MUST be moved out exactly once
 ```
+
+**Position, and why there is no ambiguity.** The decl grammar is `[name, type, init, {mods}]`.
+The initializer always occupies position 3 and the modifier map always position 4, so a map
+in position 4 is unambiguously a qualifier and a map in position 3 is unambiguously an
+init-value. When a qualified local needs **no** initializer (e.g. an uninitialized
+`persistent` buffer), put the `null` literal in position 3 (a struct-init no-op) so the
+qualifier keeps its position-4 slot — never collapse the qualifier into position 3.
+(**Parameters** are the one case where the qualifier sits in position 3: a parameter
+declaration is `[name, type, {mods}]` and has *no* init slot, so a map there can only be a
+qualifier — see §3.1.)
 
 | Value | Meaning | Dropped at scope exit? |
 |---|---|---|
@@ -69,18 +81,61 @@ signature syntax):
 ```aiml
 - def:
     name: keep
-    args: [[item, Thing, { lifetime: consumed }]]   # this function takes ownership of item
+    args: [[item, ptr<Thing>, { lifetime: consumed }]]  # this function takes ownership of item
     body:
-      - push: [<.store, item]                        # item moved into the member (see §4)
+      - push: [<.store, item]                           # item moved into the member (see §4)
 ```
+
+### 3.1.1 `consumed` requires a reference/handle type
+
+**A `consumed` parameter must be a reference/handle** — something that is *one handle to
+one heap resource*, so that "move" is the transfer of that single owner. Concretely the
+parameter must lower to a **pointer**:
+
+- **`ptr<T>`** (explicit pointer / owned box),
+- **`list<T>` / `map<K:V>`** (implicitly by-reference — an implicit pointer),
+- **`string`** (a reference-counted heap handle),
+- and any **built-in handle type** that lowers to a pointer (`path`, `thread`, file/socket
+  handles, …). The rule is **structural** — the compiler accepts `consumed` on *any*
+  parameter whose lowered type is a pointer — so new handle built-ins qualify automatically
+  without touching this rule.
+
+`consumed` is **rejected at compile time** on the two categories that are not single
+handles:
+
+- **A value `model`/`class` parameter** (passed as a *shallow struct copy* whose inner heap
+  is shared with the caller): "moving" it is ambiguous and would double-free the shared
+  inner heap. To move a model, pass **`ptr<Model>`** instead (or let the callee copy it with
+  `push_from` / assignment, keeping the parameter a borrow).
+- **A scalar** (`i32`/`f32`/`i64`/`bool`/enum): no heap, nothing to own.
 
 Semantics of a `consumed` parameter: the caller's argument is **moved in** — it is
 consumed at the call site (dead in the caller afterward; the caller does not free it),
-and the callee now owns it and must consume or drop it (§5). The built-in ownership-taking
-operations (`push`, and container inserts) behave as if their element parameter is
-`consumed`; `return` moves the returned value to the caller. Everything else — the common
-case, e.g. a function that only reads/mutates its argument or copies from it (like a KV
-`set` that encodes a copy) — leaves the parameter a borrow, and the caller keeps its value.
+and the callee now owns the handle and must consume or drop it (§5). The built-in
+ownership-taking operations (`push`, and container inserts) behave as if their element
+parameter is `consumed`; `return` moves the returned value to the caller. Everything
+else — the common case, e.g. a function that only reads/mutates its argument or copies
+from it (like a KV `set` that encodes a copy) — leaves the parameter a borrow, and the
+caller keeps its value.
+
+### 3.1.2 Implementation status
+
+The two halves of a `consumed` move are wired in stages, so that any not-yet-complete
+combination is a **leak (under-drop), never a double-free**:
+
+- **caller-move** (drop the caller's ownership of a moved argument): implemented on the
+  **free-function** call path and on **direct method calls** (`obj.m(x)` on a concretely
+  typed receiver). **Interface (vtable) dispatch** does not apply it yet — it sees only the
+  interface signature, which carries no lifetime — so `consumed` on a parameter of a method
+  that **overrides an interface method is rejected at compile time** (calling only via the
+  concrete type, or a free function taking the handle, works today).
+- **callee-drop** (free an un-consumed `consumed` handle at function-body exit — the §5
+  safety net): implemented for **`string`** (the only pointer-handle with a scope-drop
+  primitive today). For `ptr<T>`/`list`/`map` the parameter is still accepted and
+  caller-move applies, but there is no callee-drop yet — an un-consumed such parameter
+  leaks (safe) until the box/list/map drop primitives exist (tracked with the leak work).
+- **use-after-move** diagnostics (§4: using a moved value is a compile error) are not yet
+  emitted; misuse is a latent leak/UAF only under programmer error, not from codegen.
 
 ## 4. Consumption: `push`, `return`, and consuming functions
 

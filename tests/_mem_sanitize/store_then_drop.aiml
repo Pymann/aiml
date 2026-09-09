@@ -42,10 +42,10 @@
                   - decl: [rec, Rec, { call: [<.store.get_copy, "k"] }]
                   - set: [<.slot, rec]
                   # fresh model → populate → store into another member → dropped at exit
-                  - decl: [fr, Rec]
-                  - set: [fr.name, "fresh instance value"]
-                  - call: [fr.tags.push, "fx"]
-                  - set: [<.slot2, fr]
+                  - decl: [fresh, Rec]
+                  - set: [fresh.name, "fresh instance value"]
+                  - call: [fresh.tags.push, "fx"]
+                  - set: [<.slot2, fresh]
                   - set: [cnt, { +: [cnt, 1] }]
             # read members back — must be valid (no UAF from the dropped locals)
             - if: { condition: { neq: [<.slot.name, "hello world value"] }, then: [{ return: 1 }] }

@@ -22,6 +22,11 @@ class InterfaceBuilder : public StateHandler {
     MethodSignature currentMethod;
     std::pair<std::string,std::string> currentArg;  // accumulates [name, type] while methodDepth==3
     bool curArgGotName = false;
+    // spec/61 §3.1: an arg pair may carry a 3rd modifier map { lifetime: consumed }.
+    std::string curArgLifetime = "scope";
+    bool inArgModMap = false;       // inside the { ... } modifier map of an arg pair
+    bool argModExpectKey = true;
+    std::string argModKey;
 public:
     InterfaceBuilder(Builder* b) : StateHandler(b) { interfaceNode = std::make_unique<InterfaceDecl>(); }
     bool OnMapStart() override;
