@@ -1,0 +1,34 @@
+# spec/61 §3.1: `consumed` string param on a plain (non-interface) class method, called on
+# the DIRECT path — must compile, run correctly, and be double-free/UAF-free under valgrind.
+# caller-move (visitObjectMethodCall) removes the caller's decref; push moves it into items.
+- class:
+    name: Bag
+    members:
+      - [items, list<string>]
+    methods:
+      - def:
+          name: keep
+          args: [[txt, string, { lifetime: consumed }]]
+          body:
+            - call: [<.items.push, txt]
+      - def:
+          name: size
+          return: i32
+          body:
+            - return: <.items.len
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [bag, ptr<Bag>, { new: Bag }]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 300] }
+          body:
+            - decl: [msg, string, "m-${idx}"]
+            - call: [bag.keep, msg]
+            - set: [idx, { +: [idx, 1] }]
+      - if: { condition: { neq: [{ call: [bag.size] }, 300] }, then: [{ print: ["FAIL consumed_method: count"] }, { return: 1 }] }
+      - print: ["PASS consumed_method: direct method consumed-string move-out (items=300)"]
+      - return: 0

@@ -1,0 +1,24 @@
+# spec/61 §3.1: interface + concrete BOTH declare `consumed` → allowed (both dispatch paths move).
+- interface:
+    name: Keeper
+    methods:
+      - [absorb, void, [[txt, string, { lifetime: consumed }]]]
+- class:
+    name: KBag
+    implements: [Keeper]
+    members:
+      - [items, list<string>]
+    methods:
+      - def:
+          name: absorb
+          args: [[txt, string, { lifetime: consumed }]]
+          body:
+            - call: [<.items.push, txt]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [bag, ptr<KBag>, { new: KBag }]
+      - call: [bag.absorb, "hello"]
+      - print: ["PASS consumed_iface_ok"]
+      - return: 0

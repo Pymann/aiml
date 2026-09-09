@@ -1,0 +1,41 @@
+# spec/61 §3.1 memory-safety probe (run under valgrind): a `consumed` STRING parameter,
+# exercised on the free-function call path (caller-move covers it).
+#   - keep_into: consumed txt is MOVED into a member list (push consumes → callee-drop removed).
+#   - drop_str : consumed txt is NOT stored → callee-drop safety net decrefs it at fn exit.
+# The caller passes fresh interpolated strings (aiml_str_alloc'd, refcounted). caller-move
+# removes the caller's decref so exactly ONE owner remains. Must be double-free/UAF-free.
+- class:
+    name: Sink
+    members:
+      - [bag, list<string>]
+
+- def:
+    name: keep_into
+    args: [[snk, ptr<Sink>], [txt, string, { lifetime: consumed }]]
+    body:
+      - call: [snk.bag.push, txt]
+
+- def:
+    name: drop_str
+    static_off: ["str_cmp"]
+    args: [[txt, string, { lifetime: consumed }]]
+    body:
+      - if: { condition: { neq: [txt, "impossible"] }, then: [{ print: ["saw ", txt] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [snk, ptr<Sink>, { new: Sink }]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 300] }
+          body:
+            - decl: [msg, string, "kept-${idx}"]
+            - call: [keep_into, snk, msg]
+            - decl: [tmp, string, "tmp-${idx}"]
+            - call: [drop_str, tmp]
+            - set: [idx, { +: [idx, 1] }]
+      - if: { condition: { neq: [snk.bag.len, 300] }, then: [{ print: ["FAIL consumed_string: bag count wrong"] }, { return: 1 }] }
+      - print: ["PASS consumed_string: move-out + drop-safety-net clean (bag=300)"]
+      - return: 0

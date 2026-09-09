@@ -1,0 +1,22 @@
+- class:
+    name: Node
+    members: [[val, i32, 0]]
+- class:
+    name: Holder
+    members:
+      - [kept, ptr<Node>]
+    methods:
+      - def:
+          name: hold
+          args: [[node, ptr<Node>]]
+          body:
+            - set: [<.kept, node]   # borrow-escape → WARNING, still compiles
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [hld, ptr<Holder>, { new: Holder }]
+      - decl: [node2, ptr<Node>, { new: Node }]
+      - call: [hld.hold, node2]
+      - print: ["PASS borrow_escape_warn (compiled with warning)"]
+      - return: 0

@@ -1,0 +1,29 @@
+# spec/61 E-leak probe: a fresh list<string> value-local built by pushing interpolated
+# strings, going out of scope every iteration. Before the list scope-drop this leaked the
+# data buffer + all element strings; now aiml_list_free reclaims them. Must be double-free/UAF-free.
+- def:
+    name: build_and_drop
+    args: [[reps, i32]]
+    body:
+      # local list<string> — owns its buffer; populated by push; dropped at block exit.
+      - decl: [words, list<string>]
+      - decl: [jdx, i32, 0]
+      - while:
+          condition: { lt: [jdx, reps] }
+          body:
+            - call: [words.push, "w-${jdx}"]
+            - set: [jdx, { +: [jdx, 1] }]
+      # words goes out of scope here → list-drop frees buffer + decrefs each element.
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 500] }
+          body:
+            - call: [build_and_drop, 20]
+            - set: [idx, { +: [idx, 1] }]
+      - print: ["PASS list_string_drop: 500×(list<string> of 20) built + dropped"]
+      - return: 0

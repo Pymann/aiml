@@ -1,0 +1,27 @@
+# spec/61: map<string:string>.put with fresh interpolated keys in a loop. Before the put
+# ownership-move this dangled (strcmp UAF); consumeStringTemp in map.put makes the map own the
+# key/value char*, so the build is UAF-free. A residual leak is expected (map scope-drop is a
+# separate, deferred step) — this probe only asserts memory-SAFETY (no UAF/double-free).
+- def:
+    name: build_map
+    args: [[reps, i32]]
+    body:
+      - decl: [dict, map<string:string>]
+      - decl: [jdx, i32, 0]
+      - while:
+          condition: { lt: [jdx, reps] }
+          body:
+            - call: [dict.put, "k-${jdx}", "v-${jdx}"]
+            - set: [jdx, { +: [jdx, 1] }]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 100] }
+          body:
+            - call: [build_map, 12]
+            - set: [idx, { +: [idx, 1] }]
+      - print: ["PASS map_string_uaf: 100×(map<string:string> of 12) built, no UAF"]
+      - return: 0

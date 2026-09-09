@@ -1,0 +1,37 @@
+# spec/61 §3.1: `consumed` is valid on reference/handle parameters (lower to a pointer).
+# This file must COMPILE and run cleanly.
+- model:
+    name: Card
+    fields:
+      - [name, string]
+
+- def:
+    name: keep_ptr
+    args: [[card, ptr<Card>, { lifetime: consumed }]]
+    body:
+      - print: ["keep_ptr"]
+
+- def:
+    name: keep_str
+    args: [[txt, string, { lifetime: consumed }]]
+    body:
+      - print: [txt]
+
+- def:
+    name: keep_list
+    args: [[strs, list<string>, { lifetime: consumed }]]
+    body:
+      - print: ["keep_list"]
+
+- def:
+    name: read_const
+    args: [[card, ptr<Card>, { const: true }]]
+    body:
+      - print: ["read_const"]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - print: ["PASS consumed_param_ok: consumed accepted on ptr/string/list, const on ptr"]
+      - return: 0
