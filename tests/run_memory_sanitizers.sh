@@ -140,6 +140,10 @@ probe "local->local model assign = deep copy + self-assign no-op (§4.2/§4.6)" 
     "$AIML_BIN" -r tests/_mem_sanitize/assign_local_copy.aiml
 probe "§4 ownership gate: inner-list view in a VOID fn is not double-freed" "oiv" \
     "$AIML_BIN" -r tests/_mem_sanitize/ownership_inner_view_void.aiml
+probe "§7.0 (C): shared value-model member-store deep-copies → no double-free" "csm" \
+    "$AIML_BIN" -r tests/_mem_sanitize/ownership_shared_member_void.aiml
+probe "P2a return-cleanup (dataflow-gated): scalar-return frees owned locals" "rc" \
+    "$AIML_BIN" -r tests/_mem_sanitize/return_cleanup.aiml
 probe "map<string:string> put-move: build is UAF-free (drop deferred, §8 audit)" "msd" \
     "$AIML_BIN" -r tests/_mem_sanitize/map_string_drop.aiml
 probe "list<string> scope-drop (E-leak): buffer + element decref reclaimed, no double-free" "lsd" \

@@ -121,6 +121,26 @@ struct Analyzer {
             return st;
         }
         if (auto* set = dynamic_cast<const SetStmt*>(s)) {
+            // spec/61 §7.0 (Increment C): for a MEMBER store, record whether the source is an
+            // owned local (→ Move, shallow, current) or anything else — a param/view/rebound
+            // local (→ DeepCopy, so the member gets an INDEPENDENT heap and the aggregate cannot
+            // later double-free a shared sub-heap). Codegen reads plan.statements[set].transfer.
+            {
+                const std::string& t = set->target;
+                bool memberTgt = (t.rfind("<.", 0) == 0) || (t.find('.') != std::string::npos);
+                bool dashIdx   = (t.find('-') != std::string::npos) && (t.find('.') == std::string::npos);
+                if (memberTgt && !dashIdx) {
+                    Origin srcO = Origin::Unknown;
+                    if (auto* v = dynamic_cast<const VariableExpr*>(set->value.get()))
+                        if (v->name.find('.') == std::string::npos && v->name.find('<') == std::string::npos) {
+                            auto it = st.slots.find(lookup(v->name));
+                            if (it != st.slots.end()) srcO = it->second.origin;
+                        }
+                    StatementPlan sp;
+                    sp.transfer = (srcO == Origin::Owned) ? Transfer::Move : Transfer::DeepCopy;
+                    plan.statements[set] = sp;
+                }
+            }
             std::string tgt = set->target;
             if (tgt.rfind("<.", 0) == 0) tgt.clear();     // member store → not a plain-local rebind
             std::string local = plainLocalTarget(tgt);
@@ -172,16 +192,19 @@ struct Analyzer {
     }
 
     OwnershipPlan run(const FunctionDecl& fn) {
-        // Parameters: borrows (no resource → never dropped by this analysis).
+        // Parameters: borrows (no resource → never dropped). Recorded in the entry state so a
+        // member-store from a param classifies as DeepCopy (Increment C).
         scopes.emplace_back();
+        std::vector<OwnershipId> paramIds;
         for (size_t i = 0; i < fn.args.size(); ++i) {
             OwnershipId id = nextId++;
             scopes.back()[fn.args[i].first] = id;
-            // (kept only for lexical resolution; params get no droppable resource)
+            paramIds.push_back(id);
         }
         assignIds(fn.body.get());
         FlowState entry;
         entry.reachable = true;
+        for (OwnershipId id : paramIds) entry.slots[id] = OwnFact{Origin::Borrowed, Live, {}};
         analyzeBlock(fn.body.get(), std::move(entry));
         scopes.pop_back();
         return std::move(plan);

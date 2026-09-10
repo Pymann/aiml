@@ -921,8 +921,19 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             }
         }
     }
+    // spec/61 §7.0 (Increment C): does the ownership plan classify this MEMBER store as a
+    // DeepCopy (source is a param/view/rebound local, not an owned local)? If so the member
+    // must get an INDEPENDENT heap and the source is NOT consumed (it keeps its ownership).
+    bool memberDeepCopy = false;
+    if (ctx.ownershipPlan) {
+        auto sp = ctx.ownershipPlan->statements.find(setStmt);
+        if (sp != ctx.ownershipPlan->statements.end()
+            && sp->second.transfer == AIML::AST::Transfer::DeepCopy)
+            memberDeepCopy = true;
+    }
     // Move (default): a plain owned local moved into a longer-lived sink → drop its cleanup.
-    if (setStmt->value) consumeLocalDrop(setStmt->value.get());
+    // Skipped for a planned DeepCopy (the source is copied, so it retains its own drop).
+    if (setStmt->value && !memberDeepCopy) consumeLocalDrop(setStmt->value.get());
 
     // Expose the target variable's type so db.open_kv / sys.deserialize can infer
     // the value type.  For plain variables (propName empty) use the variable's own
@@ -1265,6 +1276,26 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 {
                     auto cIt = ctx.classes.find(finalTypeName);
                     if (cIt != ctx.classes.end() && !cIt->second.isBuiltin && cIt->second.type) {
+                        // spec/61 §7.0 (Increment C) fast-path: the ownership plan says this
+                        // member store copies a borrowed/view/param source → deep-copy from the
+                        // source's ADDRESS so the member owns an INDEPENDENT heap. Using the
+                        // lvalue address handles a value-model source loaded as a struct value
+                        // (a plain `srcPtr isPointerTy` check below would miss it → shallow share).
+                        if (memberDeepCopy && cIt->second.hasHeapFields && cIt->second.serNodesVar) {
+                            std::string lvTy;
+                            IRValue* srcAddr = emitLValueAddress(setStmt->value.get(), lvTy);
+                            if (srcAddr) {
+                                llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                                llvm::Function* fn = ctx.getFunction("aiml_ser_deep_copy",
+                                    ctx.builder.getVoidTy(), {ptrTy, ptrTy, ptrTy, ctx.builder.getInt32Ty()});
+                                ctx.builder.CreateCall(fn, {
+                                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(targetGep)),
+                                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(srcAddr)),
+                                    cIt->second.serNodesVar,
+                                    ctx.builder.getInt32(cIt->second.serNodesCount) });
+                                return;
+                            }
+                        }
                         // Model target ← plain variable of a DIFFERENT model type
                         // is almost always a bug (silent wrong-size memcpy).
                         if (auto* rve = dynamic_cast<VariableExpr*>(setStmt->value.get())) {
@@ -1287,7 +1318,12 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                             llvm::StructType* structTy = cIt->second.type;
                             llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                             llvm::Value* dstPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(targetGep));
-                            bool needsDeepCopy = ctx.kvGetCopy
+                            // spec/61 §7.0 (Increment C): deep-copy when kv.get_copy sourced it
+                            // OR the ownership plan says this store copies a borrowed/view/param
+                            // source (memberDeepCopy) → the member owns an INDEPENDENT heap, so a
+                            // later recursive free of the aggregate cannot double-free a shared
+                            // sub-heap (fixes the shared value-model member-store double-free).
+                            bool needsDeepCopy = (ctx.kvGetCopy || memberDeepCopy)
                                                  && cIt->second.hasHeapFields
                                                  && cIt->second.serNodesVar;
                             if (needsDeepCopy) {
@@ -1347,17 +1383,45 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
     llvm::Type* retTy = currentFunc->getReturnType();
 
-    // spec/61 §6 (P2a return-cleanup) — DEFERRED (blocked on the ownership dataflow, §4).
-    // A first attempt emitted all in-scope scope-drops before the return terminator. It is
-    // path-correct AND does not double-emit, BUT it UN-MASKS a pre-existing shared-heap
-    // double-free: a value-typed local that shallow-shares another owner's heap (e.g.
-    // `decl:[cb,list<i32>]; set:[cb, ability.inner_list.get(0)]`, or a view from get()) is
-    // currently NEVER dropped on a returning function (the return terminates the block, so
-    // visitBlockStmt skips), which safely masks the sharing. Dropping such a local on the
-    // return path frees a buffer its true owner (the model) also frees → double-free
-    // (regression: test_list_list_inner_values, test_class_member_shared_tensor). This needs
-    // §4's owned-vs-borrowed/shared classification first. Until then the return path LEAKS
-    // (under-drop, safe). `emitScopeDrop` (extracted above) is ready for the safe version.
+    // spec/61 §6 (P2a return-cleanup) — ENABLED, gated by the §4 dataflow. Frees in-scope owned
+    // locals before the return terminator (so consumed params / list / map / model locals that
+    // never reach normal block exit are not leaked on the return path). Two safety layers:
+    //   (1) mayDrop() against the return's exit facts suppresses shared-VIEW slots (fixes the
+    //       intra-function case, test_list_list_inner_values);
+    //   (2) Increment C deep-copies value-model member-stores of borrowed sources, so an owned
+    //       aggregate has no internal shallow sharing to double-free (test_class_member_shared_tensor);
+    //   plus the returned value's own owner is exempted (§6.2) so `return x.field` is safe.
+    const OwnershipPlan* retPlan = ctx.ownershipPlan;
+    const FlowState* retExit = nullptr;
+    if (retPlan) {
+        auto ee = retPlan->earlyExits.find(retStmt);
+        if (ee != retPlan->earlyExits.end()) retExit = &ee->second;
+    }
+    OwnershipId retBaseId = NoOwnership;
+    if (auto* rv = dynamic_cast<VariableExpr*>(retStmt->value.get())) {
+        std::string base = rv->name;
+        size_t dot = base.find('.');
+        if (dot != std::string::npos) base = base.substr(0, dot);   // `x.field` → exempt owner x
+        if (Symbol* bs = resolveVariable(base)) retBaseId = bs->ownershipId;
+    }
+    // Only alias-safe return shapes may run the cleanup; otherwise the returned value's
+    // provenance is unclear, so the return path is left leaking (under-drop, safe):
+    //   void / scalar-typed return (cannot alias heap), or a plain/member VariableExpr return
+    //   (its owner is exempted above). Calls/interpolations/arithmetic → skip.
+    bool retVar    = dynamic_cast<VariableExpr*>(retStmt->value.get()) != nullptr;
+    bool retScalar = retTy && !retTy->isVoidTy() && !retTy->isPointerTy() && !retTy->isStructTy();
+    bool safeToCleanup = (retTy && retTy->isVoidTy()) || retScalar || retVar;
+    auto emitReturnCleanup = [&]() {
+        if (!ctx.lifetimeDropsEnabled || !retPlan || !retExit) return;
+        auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
+        if (!bb || bb->getTerminator()) return;
+        for (auto fit = ctx.cleanupStack.rbegin(); fit != ctx.cleanupStack.rend(); ++fit)
+            for (auto it = fit->rbegin(); it != fit->rend(); ++it) {
+                if (it->ownershipId != NoOwnership && it->ownershipId == retBaseId) continue;
+                if (mayDrop(*retPlan, *retExit, it->ownershipId))
+                    emitScopeDrop(ctx, *it);
+            }
+    };
 
     // Decorator wrapping — right-to-left, one hook per built-in.  Currently
     // only `vocab` is recognised (wraps string returns with
@@ -1390,11 +1454,15 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     // Void function: always emit ret void, evaluate expression only for side effects
     if (retTy->isVoidTy()) {
         if (retStmt->value) visitExpression(retStmt->value.get());
+        emitReturnCleanup();   // §6/P2a: void → return value cannot alias a dropped owner
         ctx.ir_gen->createRet(nullptr);
     } else if (retStmt->value) {
         IRValue* val = visitExpression(retStmt->value.get());
         // spec/61: a returned string temp is moved to the caller → not a statement temp.
         if (val) consumeStringTemp(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)));
+        // §6/P2a: cleanup after the value is in an SSA register / its owner is exempted, only
+        // for alias-safe return shapes; the value the branches below build then stays valid.
+        if (safeToCleanup) emitReturnCleanup();
         if (val) {
             // Struct-by-value return (list/buffer/map): visitExpression often
             // yields an alloca-pointer to the struct (e.g. from `str.split` or
