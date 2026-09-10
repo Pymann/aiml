@@ -123,11 +123,59 @@ textuell; unbekannte Ressourcen konservativ) erfüllt.
 - **F (interproz. Retain-Effekte, shared-tensor)**: NICHT modelliert — im aktuellen Umfang
   sicher durch den konservativen Default (Member-Store eines Borrow-Params erzeugt keinen neuen
   Drop). Für P2a-Reaktivierung nötig.
-- **P2a Return-Cleanup**: bleibt AUS (Paket §1). Jetzt de-risked — die `earlyExits`-Fakten +
-  `mayDrop` liegen bereit; Re-Aktivierung braucht zusätzlich die Return-Wert-Owner-Exemption
-  (§6.2) und ist der benannte nächste Schritt.
+- **P2a Return-Cleanup**: GEBAUT (mayDrop-gegated + Return-Wert-Owner-Exemption §6.2), aber
+  **DISABLED** (via `(void)`-Casts in visitRetStmt). Ergebnis der Reaktivierung:
+  - `test_list_list_inner_values` → **jetzt grün** (intra-function shared-VIEW durch `mayDrop`
+    unterdrückt). ✓
+  - `test_class_member_shared_tensor` → **weiterhin segfault** ✗. Ursache **präzise**: nicht der
+    tensor-Destructor — ein minimaler **path-only-Repro** (`shared_path.aiml`, Leaf mit
+    path+list<string>, in zwei Holder flach kopiert) reproduziert denselben
+    `aiml_ser_free_decoded`-Double-Free. Wurzel = **flaches Value-Model-Member-Store-Sharing**:
+    `bind(a_leaf: Leaf)` nimmt das Model by-value (flache Copy), `set:[<.leaf, a_leaf]` speichert
+    es flach → mehrere Member teilen denselben inneren Heap → rekursives `free_decoded` gibt ihn
+    mehrfach frei. Der intra-function-`mayDrop` sieht dieses **interne** Aggregat-Sharing nicht.
+  - **Blocker/Root-Fix = Increment C**: `set:[<.member, valueModel]` muss **tief kopieren**
+    (spec §3/§7.0 „value type = owned, copy on store"), damit Member unabhängig sind. Das behebt
+    P2a UND den **vorbestehenden latenten** internen-Aggregat-Double-Free (heute maskiert, weil
+    solche Funktionen returnen). C ist eine **breite Semantik-Entscheidung** (Member-Store wird
+    Copy statt Move; Perf: Deep-Copy pro Store) → dem Nutzer vorzulegen.
 
 ---
+
+---
+
+## Increment C — Member-Store Copy/Move (plan-getrieben, 2026-09-10)
+
+Nutzerentscheidung: „copy borrowed, move owned". Umgesetzt:
+- **Analyzer** (`ownership_analyzer.cpp`): Param-Facts (Borrowed) im Entry-State; für jeden
+  MEMBER-Store wird `plan.statements[set].transfer` gesetzt — Quelle `Owned`-Local → `Move`,
+  sonst (Param/View/rebound) → `DeepCopy`.
+- **Codegen** (`visitSetStmt`): `memberDeepCopy` aus dem Plan gelesen; bei DeepCopy wird der
+  consumeLocalDrop des Sinks übersprungen (Quelle behält Besitz), und der Model-Member-Store
+  bekommt einen Fast-Path, der via `emitLValueAddress` die Quell-ADRESSE nimmt und
+  `aiml_ser_deep_copy` in den Member emittiert (funktioniert auch für einen als Struct-Wert
+  geladenen Value-Model-Param — der reine `srcPtr isPointerTy`-Pfad verfehlte ihn).
+
+**Validierung:** neue Probe `ownership_shared_member_void.aiml` (Value-Model by-value in zwei
+Holder gespeichert, Aggregat bei NORMALEM Exit gedroppt) → **VG_RC=0** (vorher Double-Free in
+`aiml_ser_free_decoded`). `store_then_drop` (owned-Local-Move) weiter grün. (Voll-Suite/Harness-
+Gate lief zum Zeitpunkt dieser Notiz.)
+
+**Wichtige Zwischen-Notiz (Session-Neustart):** ein Scratchpad-Repro ging beim Neustart
+verloren → ein `YAML::BadFile`-Abort (Exit 134) täuschte kurz einen Fehler vor; Proben gehören
+daher persistent nach `tests/_mem_sanitize/`, nicht in den Scratchpad.
+
+**P2a REAKTIVIERT & grün (2026-09-10):** Mit C + dem §4-Gate besteht P2a jetzt BEIDE zuvor
+gebrochenen Tests (list_list_inner_values via mayDrop; class_member_shared_tensor via C).
+Return-Cleanup in `visitRetStmt` aktiv (void + alias-sichere Return-Shapes), jeder Drop durch
+`mayDrop` gegen die `earlyExits`-Fakten gegated + Return-Wert-Owner-Exemption (§6.2).
+**Voller Gate: Suite 402/363/1 (Baseline), Sanitizer-Harness alle grün** (inkl. neuer Proben
+`ownership_shared_member_void`, `return_cleanup`). `return_cleanup` beweist: der Leak-on-return
+für owned list<string>-Locals ist behoben (0 `aiml_str_alloc`-Leaks über 500 Calls).
+
+**Damit sind A, B, C, D(basic), E UND P2a durchgezogen und validiert.** Offen bleiben nur die
+im Paket als EIGENE Folgepakete benannten: F (explizite interproz. Retain-Effekte — aktuell
+konservativ abgedeckt), Box-Drop, Map-Drop-full (occ/grow-Audit) — plus Server-e2e.
 
 ## Laufende Imperfektions-/Deferral-Liste
 1. deep_copy „unfehlbar" angenommen; kein free-old-target bei Reassignment (P1b inc1).
