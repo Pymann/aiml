@@ -1,6 +1,7 @@
 #define DEBUG_MODE
 #include "ast_compiler.h"
 #include "ast_builder.h"
+#include "ownership_analyzer.h"   // spec/61 §4: per-function ownership plan
 #include <limits>
 #include "asset_scanner.h"
 #include "builtin_registry.h"
@@ -4677,6 +4678,14 @@ void Compiler::visitFunction(FunctionDecl* func) {
     // Compile Body (track referenced user types for sys.bundle)
     ctx.bundleTrackingTarget = mangledName;
     if (func->body) {
+        // spec/61 §4: compute the intraprocedural ownership plan and make it current for the
+        // whole body emission (RAII restore). visitDeclStmt tags ScopeDrops with their slot id;
+        // visitBlockStmt then gates each drop through mayDrop() (fail-safe: doubt → no drop).
+        OwnershipPlan ownPlan = buildOwnershipPlan(ctx, *func);
+        const OwnershipPlan* prevPlan = ctx.ownershipPlan;
+        ctx.ownershipPlan = &ownPlan;
+        struct PlanGuard { CompilerContext& c; const OwnershipPlan* p; ~PlanGuard(){ c.ownershipPlan = p; } }
+            planGuard{ctx, prevPlan};
         visitBlockStmt(func->body.get());
     }
     ctx.bundleTrackingTarget.clear();

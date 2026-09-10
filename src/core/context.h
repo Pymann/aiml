@@ -13,6 +13,7 @@
 #include "../../compiler.h" // For Symbol struct
 #include <set>
 #include "ir_generator.h"
+#include "ownership_flow.h"   // spec/61 §4: OwnershipId / OwnershipPlan (LLVM-free)
 
 namespace AIML {
     namespace AST {
@@ -52,6 +53,7 @@ namespace AIML {
         bool is_param = false;     // spec/61 §7.1: a function/method parameter — a BORROW by
                                    // default. Storing a ptr/ref param into a member/container is a
                                    // borrow-escape (warned; will become an error under Migration A).
+        AIML::AST::OwnershipId ownershipId = AIML::AST::NoOwnership;  // spec/61 §4: ownership-plan slot id
         AccessLevel access = AccessLevel::Public; // Default for vars
     };
 
@@ -288,6 +290,7 @@ namespace AIML {
         int64_t               elemSize = 0;          // kind 2 elemKind 2: elem stride. kind 3: VALUE stride
         int                   keyKind = 0;           // kind 3: key kind (0 = scalar, 1 = string)
         int64_t               keyStride = 0;         // kind 3: key element stride
+        AIML::AST::OwnershipId ownershipId = AIML::AST::NoOwnership;  // spec/61 §4: owning slot (mayDrop-gated)
     };
     std::vector<std::vector<ScopeDrop>> cleanupStack;
 
@@ -297,6 +300,12 @@ namespace AIML {
     // function-body exit (the linear-obligation safety net) unless a push/return/store
     // consumes it first (consumeLocalDrop removes it, exactly like a scope local).
     std::vector<ScopeDrop> pendingParamDrops;
+
+    // spec/61 §4: the current function's ownership plan (borrowed, set by visitFunction via an
+    // RAII guard). When present, visitBlockStmt gates each registered scope-drop through
+    // mayDrop() — a drop fires only for a provably-owned, un-rebound slot. nullptr (e.g. module
+    // init outside a function) → the pre-plan behaviour (emit as registered).
+    const AIML::AST::OwnershipPlan* ownershipPlan = nullptr;
 
     // spec/61 render-temporaries: owned heap-string TEMPORARIES (interpolation results)
     // created while compiling a statement.  One frame per statement (visitStatement).  A

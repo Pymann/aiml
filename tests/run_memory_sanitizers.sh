@@ -136,6 +136,12 @@ probe "consumed STRING param on a DIRECT method call: move-out, no double-free/U
     "$AIML_BIN" -r tests/_mem_sanitize/consumed_method.aiml
 probe "consumed DIRECT interp temp (P1): moved, not double-freed" "cdi" \
     "$AIML_BIN" -r tests/_mem_sanitize/consumed_direct_interp.aiml
+probe "local->local model assign = deep copy + self-assign no-op (§4.2/§4.6)" "alc" \
+    "$AIML_BIN" -r tests/_mem_sanitize/assign_local_copy.aiml
+probe "§4 ownership gate: inner-list view in a VOID fn is not double-freed" "oiv" \
+    "$AIML_BIN" -r tests/_mem_sanitize/ownership_inner_view_void.aiml
+probe "map<string:string> put-move: build is UAF-free (drop deferred, §8 audit)" "msd" \
+    "$AIML_BIN" -r tests/_mem_sanitize/map_string_drop.aiml
 probe "list<string> scope-drop (E-leak): buffer + element decref reclaimed, no double-free" "lsd" \
     "$AIML_BIN" -r tests/_mem_sanitize/list_string_drop.aiml
 probe "list<Model> scope-drop (elemKind 2): per-element heap + buffer freed, no double-free" "lmd" \
