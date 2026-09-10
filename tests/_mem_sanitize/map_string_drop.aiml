@@ -1,0 +1,28 @@
+# spec/61 §8: map<string:string> built by put with interpolated keys/values. map.put moves the
+# temps into the map (consumeStringTemp) so the build is UAF-free (was a strcmp UAF). The map
+# scope-drop itself is DEFERRED (aiml_map_free occ-walk needs a grow/rehash audit), so this
+# probe asserts memory-SAFETY (no UAF/double-free) + correct content, and tolerates a leak.
+- def:
+    name: build_map
+    static_off: ["str_cmp"]
+    args: [[reps, i32]]
+    body:
+      - decl: [dict, map<string:string>]
+      - decl: [jdx, i32, 0]
+      - while:
+          condition: { lt: [jdx, reps] }
+          body:
+            - call: [dict.put, "k-${jdx}", "v-${jdx}"]
+            - set: [jdx, { +: [jdx, 1] }]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 200] }
+          body:
+            - call: [build_map, 12]
+            - set: [idx, { +: [idx, 1] }]
+      - print: ["PASS map_string_drop: 200×(map<string:string> of 12) built, UAF-free"]
+      - return: 0

@@ -1,0 +1,34 @@
+# spec/61 §4.2/§4.6: local→local assignment of a heap-bearing model must be a DEEP COPY
+# (source stays valid after the shorter-lived target is dropped), and self-assignment is a
+# no-op. Before the fix, `set:[y,x]` shallow-copied + dropped x → x dangled when inner y was
+# dropped → UAF. Loop amplifies; must be double-free/UAF-free under valgrind.
+- model:
+    name: Rec
+    fields:
+      - [name, string]
+      - [tags, list<string>]
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [outer, i32, 0]
+      - while:
+          condition: { lt: [outer, 300] }
+          body:
+            - decl: [xrec, Rec]
+            - set: [xrec.name, "x-value-${outer}"]
+            - call: [xrec.tags.push, "tag"]
+            - set: [xrec, xrec]            # §4.6 self-assignment → no-op, must keep xrec intact
+            - if:
+                condition: { eq: [1, 1] }
+                then:
+                  - decl: [yrec, Rec]
+                  - set: [yrec, xrec]      # §4.2 local→local copy (deep, independent)
+                  - if: { condition: { neq: [yrec.name, xrec.name] }, then: [{ print: ["FAIL copy content"] }, { return: 1 }] }
+                  # yrec dropped here (inner block) — must NOT free xrec's heap
+            - if: { condition: { neq: [xrec.name, "x-value-${outer}"] }, then: [{ print: ["FAIL xrec dangled after inner drop"] }, { return: 1 }] }
+            - set: [outer, { +: [outer, 1] }]
+      - print: ["PASS assign_local_copy: local->local model copy independent; self-assign no-op"]
+      - return: 0

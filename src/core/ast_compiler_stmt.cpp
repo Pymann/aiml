@@ -312,6 +312,10 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         sym.is_const = decl->is_const;
         sym.is_volatile = decl->is_volatile;
         sym.lifetime = decl->lifetime;   // spec/61 ownership metadata (drop emission: later step)
+        // spec/61 §4: the ownership-plan id for this declaration (gates its drop in visitBlockStmt).
+        OwnershipId declOid = (ctx.ownershipPlan && ctx.ownershipPlan->declarations.count(decl))
+            ? ctx.ownershipPlan->declarations.at(decl) : NoOwnership;
+        sym.ownershipId = declOid;
         ctx.symbol_table[decl->varName] = sym;
 
         // spec/61 (A2+A3): a FRESH value-model local with heap fields (no initializer,
@@ -324,8 +328,12 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             && !ctx.cleanupStack.empty()) {
             auto ci = ctx.classes.find(decl->typeName);
             if (ci != ctx.classes.end() && ci->second.hasHeapFields && ci->second.serNodesVar) {
-                ctx.cleanupStack.back().push_back(
-                    { unwrappedAlloca, ci->second.serNodesVar, ci->second.serNodesCount });
+                CompilerContext::ScopeDrop sd;
+                sd.addr = unwrappedAlloca;
+                sd.serNodes = ci->second.serNodesVar;
+                sd.serNodesCount = ci->second.serNodesCount;
+                sd.ownershipId = declOid;
+                ctx.cleanupStack.back().push_back(sd);
             }
         }
 
@@ -341,6 +349,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             CompilerContext::ScopeDrop sd;
             sd.addr = unwrappedAlloca;
             sd.kind = 1;
+            sd.ownershipId = declOid;
             ctx.cleanupStack.back().push_back(sd);
         }
 
@@ -374,14 +383,18 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     sd.elemKind = 0;                   // scalar/POD: free the buffer only
                 }
             }
+            sd.ownershipId = declOid;
             ctx.cleanupStack.back().push_back(sd);
         }
 
-        // spec/61 (deferred): a map<K:V> scope-drop (aiml_map_free, kind 3) is implemented in
-        // the runtime + visitBlockStmt, but NOT registered here yet: a first attempt hit a
-        // strcmp UAF + leak because it must pair with a map.put ownership-move AND match
-        // MapImpl's open-addressing occ/slot layout, which needs an audit. No measured map
-        // leak makes this low-priority — enable once that audit + a valgrind probe are green.
+        // spec/61 §8 (map-drop DEFERRED — MapImpl audit required): aiml_map_free + kind-3
+        // emission exist, and map.put now moves temps (consumeStringTemp, so a map<string:*>
+        // build is UAF-free = a safe leak). But REGISTERING the drop here still trips an
+        // "Invalid read of size 1" inside aiml_map_free's occ walk once the map has GROWN
+        // (initial cap 4 → 8 → 16 within a build loop) — the occ/keys/vals layout after
+        // grow/rehash does not match the simple [0,capacity) occupancy assumption (§8.2).
+        // No measured map leak → left OFF until the grow/rehash occ semantics are audited and
+        // a valgrind map probe (empty / one / many / collisions / rehash) is green.
     }
 
     LOG_DEBUG("Compiled AST Decl: " + decl->varName + " of " + decl->typeName);
@@ -701,9 +714,14 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                         // → register it for a scope-exit drop, unless it is persistent
                         // (owned elsewhere) — persistent skips auto-drop.
                         if (decl->lifetime != "persistent" && !ctx.cleanupStack.empty()) {
-                            ctx.cleanupStack.back().push_back(
-                                { unwrappedAlloca, ciIt->second.serNodesVar,
-                                  ciIt->second.serNodesCount });
+                            CompilerContext::ScopeDrop sd;
+                            sd.addr = unwrappedAlloca;
+                            sd.serNodes = ciIt->second.serNodesVar;
+                            sd.serNodesCount = ciIt->second.serNodesCount;
+                            sd.ownershipId =
+                                (ctx.ownershipPlan && ctx.ownershipPlan->declarations.count(decl))
+                                ? ctx.ownershipPlan->declarations.at(decl) : NoOwnership;
+                            ctx.cleanupStack.back().push_back(sd);
                         }
                     } else {
                         uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(declTy);
@@ -820,10 +838,9 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     ctx.kvGetCopy = false;
     ctx.kvGetValueType.clear();
 
-    // spec/61 (A3): assigning a plain owned local moves it into the target → drop its
-    // pending scope-cleanup (the target now owns its heap via the transfer).  No-op for
-    // non-variable RHS (calls, member reads) and for locals without a pending drop.
-    if (setStmt->value) consumeLocalDrop(setStmt->value.get());
+    // spec/61 (A3): move-detection (consumeLocalDrop) is applied LATER — only after the
+    // target and RHS are classified, so a local→local copy does not wrongly drop the source
+    // (see §4.2/§4.4 below).  It must not run unconditionally here.
 
     std::string targetStr = setStmt->target;
     if (targetStr.find("<.") == 0) {
@@ -867,7 +884,46 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     IRType* baseElemTy = sym->ir_element_type ? sym->ir_element_type : ctx.ir_gen->wrapType(sym->element_type);
     
     if (!baseAlloca) return;
-    
+
+    // ── spec/61 §4.2/§4.4/§4.6: ownership-correct assignment for a PLAIN-LOCAL target ──
+    // The move-detection (consumeLocalDrop) that used to run unconditionally at the top is
+    // decided here, after target + RHS are known:
+    //   • self-assignment (set:[x,x]) is a no-op — never lose the single owner's drop, never
+    //     free-then-read the same heap (§4.6);
+    //   • a local→local copy of a heap-bearing model is a DEEP copy so source and target stay
+    //     independently owned (both keep their scope-drop) — a shallow struct copy plus
+    //     consuming the source would dangle the source when the target is dropped (§4.2);
+    //   • every other case falls through to consumeLocalDrop (the move into a member/container/
+    //     return sink, unchanged).
+    if (propName.empty() && !isDash) {
+        if (auto* sv = dynamic_cast<VariableExpr*>(setStmt->value.get())) {
+            if (sv->name == baseName) return;   // §4.6 self-assignment: no-op
+            if (sv->name.find('.') == std::string::npos && sv->name.find('<') == std::string::npos
+                && !sym->is_global) {
+                auto tci = ctx.classes.find(sym->typeName);
+                Symbol* ssym = resolveVariable(sv->name);
+                if (tci != ctx.classes.end() && tci->second.hasHeapFields && tci->second.serNodesVar
+                    && ssym && ssym->typeName == sym->typeName && !ssym->is_global
+                    && ssym->ir_alloca_inst) {
+                    // NOTE (§4.4.5, deferred): deep_copy overwrites the target without freeing
+                    // its previous heap → a reassigned target leaks the old heap (under-drop,
+                    // safe). A freshly-decl'd local (the §4.2 case) has none. Free-old-target
+                    // + a fallible-copy contract (§4.4.6) come with the assignment-dataflow step.
+                    llvm::Value* dst = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+                    llvm::Value* src = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(ssym->ir_alloca_inst));
+                    llvm::Type* p = llvm::PointerType::get(ctx.context, 0);
+                    llvm::Function* dc = ctx.getFunction("aiml_ser_deep_copy",
+                        ctx.builder.getVoidTy(), {p, p, p, ctx.builder.getInt32Ty()});
+                    ctx.builder.CreateCall(dc, { dst, src, tci->second.serNodesVar,
+                                                 ctx.builder.getInt32(tci->second.serNodesCount) });
+                    return;   // source keeps its drop — do NOT consumeLocalDrop
+                }
+            }
+        }
+    }
+    // Move (default): a plain owned local moved into a longer-lived sink → drop its cleanup.
+    if (setStmt->value) consumeLocalDrop(setStmt->value.get());
+
     // Expose the target variable's type so db.open_kv / sys.deserialize can infer
     // the value type.  For plain variables (propName empty) use the variable's own
     // type.  For `this.field` assignments (class member writes), look up the
@@ -1284,11 +1340,24 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
 void Compiler::visitExprStmt(ExprStmt* exprStmt) {
     visitExpression(exprStmt->expr.get());
 }
+static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop& it);  // defined below
 void Compiler::visitRetStmt(RetStmt* retStmt) {
     // spec/61 (A3): returning a local moves it to the caller → do not drop it here.
     if (retStmt->value) consumeLocalDrop(retStmt->value.get());
     llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
     llvm::Type* retTy = currentFunc->getReturnType();
+
+    // spec/61 §6 (P2a return-cleanup) — DEFERRED (blocked on the ownership dataflow, §4).
+    // A first attempt emitted all in-scope scope-drops before the return terminator. It is
+    // path-correct AND does not double-emit, BUT it UN-MASKS a pre-existing shared-heap
+    // double-free: a value-typed local that shallow-shares another owner's heap (e.g.
+    // `decl:[cb,list<i32>]; set:[cb, ability.inner_list.get(0)]`, or a view from get()) is
+    // currently NEVER dropped on a returning function (the return terminates the block, so
+    // visitBlockStmt skips), which safely masks the sharing. Dropping such a local on the
+    // return path frees a buffer its true owner (the model) also frees → double-free
+    // (regression: test_list_list_inner_values, test_class_member_shared_tensor). This needs
+    // §4's owned-vs-borrowed/shared classification first. Until then the return path LEAKS
+    // (under-drop, safe). `emitScopeDrop` (extracted above) is ready for the safe version.
 
     // Decorator wrapping — right-to-left, one hook per built-in.  Currently
     // only `vocab` is recognised (wraps string returns with
@@ -1436,6 +1505,40 @@ void Compiler::consumeLocalDrop(Expr* argExpr) {
         }
     }
 }
+// spec/61: emit ONE scope-drop (model / string / list / map) at the current insert point.
+// Shared by normal block exit (visitBlockStmt) and early-exit cleanup (visitRetStmt).
+static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop& it) {
+    llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+    if (it.kind == 1) {
+        llvm::Value* sptr = ctx.builder.CreateLoad(i8p, it.addr, "drop_str");
+        llvm::Function* dc = ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {i8p});
+        ctx.builder.CreateCall(dc, { sptr });
+    } else if (it.kind == 2) {
+        llvm::Value* nodesArg = it.serNodes
+            ? static_cast<llvm::Value*>(it.serNodes)
+            : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p));
+        llvm::Function* lf = ctx.getFunction("aiml_list_free", ctx.builder.getVoidTy(),
+            {i8p, ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(), i8p, ctx.builder.getInt32Ty()});
+        ctx.builder.CreateCall(lf, { it.addr, ctx.builder.getInt32(it.elemKind),
+                                     ctx.builder.getInt64(it.elemSize), nodesArg,
+                                     ctx.builder.getInt32(it.serNodesCount) });
+    } else if (it.kind == 3) {
+        llvm::Value* vNodes = it.serNodes
+            ? static_cast<llvm::Value*>(it.serNodes)
+            : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p));
+        llvm::Function* mf = ctx.getFunction("aiml_map_free", ctx.builder.getVoidTy(),
+            {i8p, ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(),
+             ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(), i8p, ctx.builder.getInt32Ty()});
+        ctx.builder.CreateCall(mf, { it.addr,
+            ctx.builder.getInt32(it.keyKind), ctx.builder.getInt64(it.keyStride),
+            ctx.builder.getInt32(it.elemKind), ctx.builder.getInt64(it.elemSize),
+            vNodes, ctx.builder.getInt32(it.serNodesCount) });
+    } else {
+        llvm::Function* fn = ctx.getFunction("aiml_ser_free_decoded",
+            ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
+        ctx.builder.CreateCall(fn, { it.addr, it.serNodes, ctx.builder.getInt32(it.serNodesCount) });
+    }
+}
 void Compiler::visitBlockStmt(BlockStmt* block) {
     auto savedSymbols = ctx.symbol_table;
     ctx.cleanupStack.emplace_back();            // spec/61: per-block cleanup frame
@@ -1457,52 +1560,22 @@ void Compiler::visitBlockStmt(BlockStmt* block) {
     {
         auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
         if (bb && !bb->getTerminator() && ctx.lifetimeDropsEnabled) {
-            llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
             auto& frame = ctx.cleanupStack.back();
+            // spec/61 §4/§9.2: gate each registered drop through the ownership plan's exit facts.
+            // A drop fires only for a provably-owned, un-rebound slot (mayDrop). If there is no
+            // plan (e.g. module init) or the analyzer did not record this block, fall back to the
+            // pre-plan behaviour (emit as registered) — never worse than before for that context.
+            const OwnershipPlan* plan = ctx.ownershipPlan;
+            const FlowState* exit = nullptr;
+            if (plan) {
+                auto pe = plan->normalExits.find(block);
+                if (pe != plan->normalExits.end()) exit = &pe->second;
+            }
             for (auto it = frame.rbegin(); it != frame.rend(); ++it) {
-                if (it->kind == 1) {
-                    // owned heap string: load the char* and decref it (refcount-aware;
-                    // only registered for aiml_str_alloc'd origins — never literals).
-                    llvm::Value* sptr = ctx.builder.CreateLoad(i8p, it->addr, "drop_str");
-                    llvm::Function* dc = ctx.getFunction("aiml_str_decref",
-                        ctx.builder.getVoidTy(), {i8p});
-                    ctx.builder.CreateCall(dc, { sptr });
-                } else if (it->kind == 2) {
-                    // spec/61: owned list<T> value-local — free its data buffer, decref'ing
-                    // each element for list<string> (elemKind 1) or freeing each element's
-                    // heap for list<Model> (elemKind 2, via elemSize stride + serNodes).
-                    // addr is the list struct alloca. Move-detection removed this drop if the
-                    // list was pushed/returned/stored → exactly one free per owned list.
-                    llvm::Value* nodesArg = it->serNodes
-                        ? static_cast<llvm::Value*>(it->serNodes)
-                        : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p));
-                    llvm::Function* lf = ctx.getFunction("aiml_list_free",
-                        ctx.builder.getVoidTy(),
-                        {i8p, ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(), i8p, ctx.builder.getInt32Ty()});
-                    ctx.builder.CreateCall(lf, { it->addr, ctx.builder.getInt32(it->elemKind),
-                                                 ctx.builder.getInt64(it->elemSize), nodesArg,
-                                                 ctx.builder.getInt32(it->serNodesCount) });
-                } else if (it->kind == 3) {
-                    // spec/61: owned map<K:V> value-local — free occ/keys/vals buffers,
-                    // decref string keys/values, free model values' heap. Same move-detection
-                    // discipline as list (consumeLocalDrop removes this drop on store/return).
-                    llvm::Value* vNodes = it->serNodes
-                        ? static_cast<llvm::Value*>(it->serNodes)
-                        : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p));
-                    llvm::Function* mf = ctx.getFunction("aiml_map_free",
-                        ctx.builder.getVoidTy(),
-                        {i8p, ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(),
-                         ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(), i8p, ctx.builder.getInt32Ty()});
-                    ctx.builder.CreateCall(mf, { it->addr,
-                        ctx.builder.getInt32(it->keyKind), ctx.builder.getInt64(it->keyStride),
-                        ctx.builder.getInt32(it->elemKind), ctx.builder.getInt64(it->elemSize),
-                        vNodes, ctx.builder.getInt32(it->serNodesCount) });
-                } else {
-                    llvm::Function* fn = ctx.getFunction("aiml_ser_free_decoded",
-                        ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
-                    ctx.builder.CreateCall(fn, { it->addr, it->serNodes,
-                                                 ctx.builder.getInt32(it->serNodesCount) });
-                }
+                if (plan && exit && it->ownershipId != NoOwnership
+                    && !mayDrop(*plan, *exit, it->ownershipId))
+                    continue;   // not provably owned at this exit → suppress (leak, never UAF)
+                emitScopeDrop(ctx, *it);
             }
         }
     }

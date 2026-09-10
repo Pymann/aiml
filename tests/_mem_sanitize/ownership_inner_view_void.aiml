@@ -1,0 +1,34 @@
+# spec/61 §4: a VOID function binds a local list to a view of a model's inner list, then falls
+# off the end (normal block exit). Before the ownership gate this double-freed (vieww's list-drop
+# + the model's recursive drop both free the shared buffer). The analyzer must classify vieww as
+# rebound-from-view (not Owned) → its drop is suppressed → memory-safe.
+- model:
+    name: Ability
+    fields:
+      - [name, string]
+      - [cost, list<list<i32>>]
+
+- def:
+    name: touch
+    args: [[reps, i32]]
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, reps] }
+          body:
+            - decl: [abil, Ability]
+            - set: [abil.name, "a-${idx}"]
+            - decl: [inner, list<i32>]
+            - call: [inner.push, idx]
+            - call: [abil.cost.push, inner]
+            - decl: [vieww, list<i32>]
+            - set: [vieww, { call: [abil.cost.get, 0] }]   # vieww binds a VIEW of abil's inner buffer
+            # vieww + abil dropped at loop-body exit → vieww's drop MUST be suppressed (view), abil owns it
+            - set: [idx, { +: [idx, 1] }]
+- def:
+    name: main
+    return: i32
+    body:
+      - call: [touch, 200]
+      - print: ["PASS ownership_inner_view_void: view not double-freed"]
+      - return: 0
