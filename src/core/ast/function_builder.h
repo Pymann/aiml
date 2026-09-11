@@ -18,6 +18,12 @@ class FunctionBuilder : public StateHandler {
     bool expectingKey = false;
     bool expectingValue = false;
     int mapDepth = 0;  // tracks nested map depth; 1 = outer function map
+    // spec/61 §3.2: object-form `return: { type: T, lifetime: producer }` — a nested map after
+    // the `return` key. `producer` marks the function as returning an owned value (return-
+    // ownership: the caller owns + drops it). Parsed like ArgsBuilder's per-param modifier map.
+    bool inReturnMap = false;
+    std::string returnMapKey;
+    bool returnMapExpectKey = true;
 public:
     FunctionBuilder(Builder* b) : StateHandler(b), capturedLine(b->currentLine) {
         func = std::make_unique<FunctionDecl>();

@@ -93,6 +93,7 @@ namespace AIML {
             std::string sourceYaml;           // YAML dump of the function AST node (for sys.bundle)
             std::set<std::string> referencedTypes; // User-defined types referenced in the body
             bool deprecated = false;          // meta: [deprecated] → warn at each call site
+            bool ownsReturn = false;          // spec/61 return-ownership: returns an owned heap box
         };
 
         struct StructMember {
@@ -287,7 +288,11 @@ namespace AIML {
                                                      // 2 = list  (aiml_list_free(addr, elemKind, …)),
                                                      // 3 = map   (aiml_map_free(addr, keyKind, …)),
                                                      // 4 = owned new-box ptr<T> (load ptr →
-                                                     //     aiml_ser_free_decoded(ptr) then free(ptr) shell)
+                                                     //     aiml_ser_free_decoded(ptr) then free(ptr) shell),
+                                                     // 5 = owned interface fat-pointer box (load {obj,vtable}
+                                                     //     → call vtable's trailing __free_<Class> slot on obj)
+        llvm::Type*           fatPtrType = nullptr;   // kind 5: AimlFatPtr_<Iface> struct type (GEP obj/vtable)
+        int                   ifaceMethodCount = 0;   // kind 5: interface method count = free-slot index
         int                   elemKind = 0;          // kind 2: 0=scalar,1=string,2=model. kind 3: VALUE kind
         int64_t               elemSize = 0;          // kind 2 elemKind 2: elem stride. kind 3: VALUE stride
         int                   keyKind = 0;           // kind 3: key kind (0 = scalar, 1 = string)
@@ -331,6 +336,11 @@ namespace AIML {
     // =1).  Re-enable by default only once the FULL 9rooms suite passes with it on.
     bool lifetimeDropsEnabled = false;
     std::map<std::string, FunctionInfo> functions;
+    // spec/61 return-ownership: ORIGINAL (un-mangled) short names of functions/methods
+    // declared `owns_return: true`. Captured at parse-order (before method-name mangling)
+    // so a call site's dotted `functionName` (e.g. `<.cards.get_base`) can be matched by its
+    // trailing identifier — mirrors the `.get_copy` suffix precedent in the ownership analyzer.
+    std::set<std::string> ownsReturnFns;
     std::map<std::string, ClassInfo> classes; // Class Registry
     std::map<std::string, std::map<std::string, int>> enums; // Enum Registry
     std::map<std::string, std::map<int, std::string>> enumLabels; // enum name → id → display label

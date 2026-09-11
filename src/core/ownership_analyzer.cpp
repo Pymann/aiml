@@ -44,21 +44,53 @@ struct Analyzer {
         auto ci = ctx.classes.find(t);
         if (ci != ctx.classes.end() && ci->second.hasHeapFields && ci->second.serNodesVar) {
             if (!d->initialValue) return true;
-            if (auto* c = dynamic_cast<CallExpr*>(d->initialValue.get()))
+            if (auto* c = dynamic_cast<CallExpr*>(d->initialValue.get())) {
                 if (endsWith(c->functionName, ".get_copy")) return true;
+                // spec/61 return-ownership for VALUE models: a call to an `owns_return: true`
+                // function returns a freshly-built INDEPENDENT model (e.g. DeckService.list →
+                // DeckListResp in every RPC handler's `resp`). The caller owns it → drop at scope
+                // exit (kind-0) unless moved. Matched by the call's trailing identifier, like the
+                // box case. (Getters that `return <.member` are NOT annotated → not dropped → the
+                // safe leak-not-double-free baseline.)
+                const std::string& fn = c->functionName;
+                size_t dp = fn.rfind('.');
+                std::string shortName = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                if (ctx.ownsReturnFns.count(shortName) > 0) return true;
+            }
         }
-        // spec/61: owned new-box — `decl [x, ptr<T>, { new: T }]` heap-allocates T (calloc)
-        // and x owns it → drop at scope exit (deep-free pointee + free shell) unless moved.
-        // Restricted to a plain model/class with heap fields + a ser-subtree; classgroup
-        // containers are excluded (their `new` wires sub-instances — teardown is not a plain
-        // deep-free).  MUST stay in lockstep with the box-drop registration in visitDeclStmt.
-        if (t.rfind("ptr<", 0) == 0 && !t.empty() && t.back() == '>' && d->initialValue
-            && dynamic_cast<NewExpr*>(d->initialValue.get())) {
-            std::string boxed = t.substr(4, t.size() - 5);
-            auto bi = ctx.classes.find(boxed);
-            if (bi != ctx.classes.end() && bi->second.hasHeapFields && bi->second.serNodesVar
-                && bi->second.type && !ctx.classGroupContainers.count(boxed))
-                return true;
+        // spec/61: owned box `decl [x, ptr<T>, INIT]` where x owns the pointee → drop at scope
+        // exit (deep-free pointee + free shell) unless moved. Two INIT forms:
+        //   (1) `{ new: T }`               — heap-allocates T (calloc) locally.
+        //   (2) `{ call: fn(...) }` where fn is `owns_return: true` (return-ownership) — the
+        //       callee freshly allocated the box and transfers it (e.g. get_base). Matched by
+        //       the call's trailing identifier against ctx.ownsReturnFns (the `.get_copy` suffix
+        //       precedent above). Restricted to a plain model/class with heap fields + a
+        //       ser-subtree; classgroup containers excluded. MUST stay in lockstep with the
+        //       box-drop registration in visitDeclStmt.
+        if (t.rfind("ptr<", 0) == 0 && !t.empty() && t.back() == '>' && d->initialValue) {
+            bool ownedInit = dynamic_cast<NewExpr*>(d->initialValue.get()) != nullptr;
+            if (!ownedInit) {
+                if (auto* c = dynamic_cast<CallExpr*>(d->initialValue.get())) {
+                    const std::string& fn = c->functionName;
+                    size_t dp = fn.rfind('.');
+                    std::string shortName = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                    ownedInit = ctx.ownsReturnFns.count(shortName) > 0;
+                }
+            }
+            if (ownedInit) {
+                std::string boxed = t.substr(4, t.size() - 5);
+                auto bi = ctx.classes.find(boxed);
+                if (bi != ctx.classes.end() && bi->second.hasHeapFields && bi->second.serNodesVar
+                    && bi->second.type && !ctx.classGroupContainers.count(boxed))
+                    return true;
+                // Interface fat-pointer box (owns_return call only; you cannot `{ new: Iface }`):
+                // deep-freed by virtual dispatch on the concrete type at the drop site (kind 5).
+                // Only interface existence is checked here (fatPtrType is materialized lazily in
+                // resolveType — guaranteed set by the time visitDeclStmt registers the kind-5 drop,
+                // since it resolves this decl's type first; the codegen side null-guards regardless).
+                if (ctx.interfaces.count(boxed) > 0)
+                    return true;
+            }
         }
         return false;
     }

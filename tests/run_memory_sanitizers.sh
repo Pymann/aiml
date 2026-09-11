@@ -181,6 +181,8 @@ probe "owned new-box scope-drop (spec/61): { new: T } local deep-freed at scope 
     "$AIML_BIN" -r tests/_mem_sanitize/newbox_scope_drop.aiml
 probe "string field from an interpolation TEMP: single ref transferred (not incref'd) → no per-store ref leak, bounded RSS" "sfi" \
     "$AIML_BIN" -r tests/_mem_sanitize/string_field_interp_drop.aiml
+probe "conditional push of a value-model (9rooms DeckService.list): source freed on skip paths, no per-iter leak, bounded RSS" "cpd" \
+    "$AIML_BIN" -r tests/_mem_sanitize/conditional_push_drop.aiml
 
 echo "────────────────────────────────────────"
 if [ "$fails" -eq 0 ]; then
