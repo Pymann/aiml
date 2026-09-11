@@ -25,6 +25,15 @@ public:
 
 private:
     CompilerContext& ctx;
+    // spec/61 §7.0 — deep-copy an inline container field (list/map/buffer of `typeName`) from
+    // `srcPtr` into `dstPtr` (both are addresses of the inline container struct) so the
+    // destination owns an INDEPENDENT heap.  Used when a container field is member-stored from a
+    // borrowed/view source, so the destination model can keep its scope-drop without double-
+    // freeing a buffer shared with the source's owner.  Zero-inits dst first (decode precondition;
+    // any prior container in dst leaks — documented §4.4.5 deferral).  Returns false if TypeNodes
+    // could not be built (caller then falls back to the shallow memcpy).
+    bool emitContainerFieldDeepCopy(llvm::Value* dstPtr, llvm::Value* srcPtr,
+                                    const std::string& typeName);
     // Static check: hand-rolled string switches (enum/regex hints). Runs for
     // entry and imported (libraryMode) files. See spec/49 §16.
     void checkStringComparisons(Program* prog);

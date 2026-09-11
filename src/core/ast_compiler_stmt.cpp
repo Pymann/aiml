@@ -210,6 +210,19 @@ void Compiler::visitStatement(Stmt* stmt) {
     }
     if (!ctx.stmtTempStack.empty()) ctx.stmtTempStack.pop_back();
 }
+// AIML_TRACE_SYMBOL lifetime-value tracing (defined below, used by decl/set/drop).
+static bool aimlTraceSymbol(const std::string& name);
+static void emitSymbolValueTrace(CompilerContext& ctx, const char* phase, const std::string& name,
+                                 int kind, const std::string& typeName, llvm::Value* addr);
+// Map a declared type name to the trace "kind": 1=string, 2=list, 3=map, 0=model, -1=skip(scalar).
+static int aimlTraceKind(CompilerContext& ctx, const std::string& tn) {
+    if (tn == "string") return 1;
+    if (tn.rfind("list<", 0) == 0) return 2;
+    if (tn.rfind("map<", 0) == 0) return 3;
+    if (ctx.classes.count(tn) && !ctx.classes[tn].isBuiltin) return 0;
+    return -1;
+}
+
 void Compiler::visitDeclStmt(DeclStmt* decl) {
     ctx.validateIdentifier(decl->varName, "variable", decl->sourceNode);
 
@@ -333,6 +346,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 sd.serNodes = ci->second.serNodesVar;
                 sd.serNodesCount = ci->second.serNodesCount;
                 sd.ownershipId = declOid;
+                sd.debugName = decl->varName; sd.debugType = decl->typeName;
                 ctx.cleanupStack.back().push_back(sd);
             }
         }
@@ -350,6 +364,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             sd.addr = unwrappedAlloca;
             sd.kind = 1;
             sd.ownershipId = declOid;
+            sd.debugName = decl->varName; sd.debugType = decl->typeName;
             ctx.cleanupStack.back().push_back(sd);
         }
 
@@ -384,6 +399,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 }
             }
             sd.ownershipId = declOid;
+            sd.debugName = decl->varName; sd.debugType = decl->typeName;
             ctx.cleanupStack.back().push_back(sd);
         }
 
@@ -721,6 +737,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                             sd.ownershipId =
                                 (ctx.ownershipPlan && ctx.ownershipPlan->declarations.count(decl))
                                 ? ctx.ownershipPlan->declarations.at(decl) : NoOwnership;
+                            sd.debugName = decl->varName; sd.debugType = decl->typeName;
                             ctx.cleanupStack.back().push_back(sd);
                         }
                     } else {
@@ -778,6 +795,15 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     ctx.ir_gen->createStore(initVal, alloca);
                 }
             }
+        }
+    }
+    // AIML_TRACE_SYMBOL: log the symbol's value at declaration (birth of its lifetime).
+    if (aimlTraceSymbol(decl->varName)) {
+        auto sit = ctx.symbol_table.find(decl->varName);
+        int kind = aimlTraceKind(ctx, decl->typeName);
+        if (kind >= 0 && sit != ctx.symbol_table.end() && sit->second.ir_alloca_inst) {
+            llvm::Value* a = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sit->second.ir_alloca_inst));
+            emitSymbolValueTrace(ctx, "DECL", decl->varName, kind, decl->typeName, a);
         }
     }
 }
@@ -898,13 +924,20 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     if (propName.empty() && !isDash) {
         if (auto* sv = dynamic_cast<VariableExpr*>(setStmt->value.get())) {
             if (sv->name == baseName) return;   // §4.6 self-assignment: no-op
-            if (sv->name.find('.') == std::string::npos && sv->name.find('<') == std::string::npos
+            if (ctx.lifetimeDropsEnabled     // AIML_LIFETIME_DROPS=0 → full pre-feature revert
+                && sv->name.find('.') == std::string::npos && sv->name.find('<') == std::string::npos
                 && !sym->is_global) {
                 auto tci = ctx.classes.find(sym->typeName);
                 Symbol* ssym = resolveVariable(sv->name);
                 if (tci != ctx.classes.end() && tci->second.hasHeapFields && tci->second.serNodesVar
                     && ssym && ssym->typeName == sym->typeName && !ssym->is_global
                     && ssym->ir_alloca_inst) {
+                    // Finding #7: this early deep-copy path returns before the generic const
+                    // check below, so enforce it here — a const target must not be written.
+                    if (sym->is_const) {
+                        LOG_ERROR(ctx.fmtLoc() + "Cannot assign to const variable " + targetStr);
+                        return;
+                    }
                     // NOTE (§4.4.5, deferred): deep_copy overwrites the target without freeing
                     // its previous heap → a reassigned target leaks the old heap (under-drop,
                     // safe). A freshly-decl'd local (the §4.2 case) has none. Free-old-target
@@ -925,7 +958,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     // DeepCopy (source is a param/view/rebound local, not an owned local)? If so the member
     // must get an INDEPENDENT heap and the source is NOT consumed (it keeps its ownership).
     bool memberDeepCopy = false;
-    if (ctx.ownershipPlan) {
+    if (ctx.ownershipPlan && ctx.lifetimeDropsEnabled) {   // AIML_LIFETIME_DROPS=0 → full pre-feature revert
         auto sp = ctx.ownershipPlan->statements.find(setStmt);
         if (sp != ctx.ownershipPlan->statements.end()
             && sp->second.transfer == AIML::AST::Transfer::DeepCopy)
@@ -1257,6 +1290,16 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                     llvm::Value* srcPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
                     llvm::Value* dstPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(targetGep));
                     if (fieldTy && srcPtr && srcPtr->getType()->isPointerTy()) {
+                        // spec/61 §7.0 — a plain struct memcpy is a SHALLOW copy: the destination
+                        // field would share the source's heap buffer (data/keys/vals).  When the
+                        // source is NOT a fresh owned local (plan → DeepCopy: a borrow/param/view,
+                        // e.g. `dat.produces = req.produces`), DEEP-COPY the container so the
+                        // destination owns an INDEPENDENT buffer — then the destination model can
+                        // keep its scope-drop with no double-free (was the 9rooms create_bundle
+                        // crash) AND no leak.  For an owned-local source (Move) the shallow memcpy
+                        // is correct: consumeLocalDrop(value) has already transferred ownership.
+                        if (memberDeepCopy && emitContainerFieldDeepCopy(dstPtr, srcPtr, finalTypeName))
+                            return;
                         uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(fieldTy);
                         llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                         llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy,
@@ -1276,12 +1319,34 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 {
                     auto cIt = ctx.classes.find(finalTypeName);
                     if (cIt != ctx.classes.end() && !cIt->second.isBuiltin && cIt->second.type) {
-                        // spec/61 §7.0 (Increment C) fast-path: the ownership plan says this
-                        // member store copies a borrowed/view/param source → deep-copy from the
-                        // source's ADDRESS so the member owns an INDEPENDENT heap. Using the
-                        // lvalue address handles a value-model source loaded as a struct value
-                        // (a plain `srcPtr isPointerTy` check below would miss it → shallow share).
-                        if (memberDeepCopy && cIt->second.hasHeapFields && cIt->second.serNodesVar) {
+                        // Model target ← plain variable of a DIFFERENT model type is almost always
+                        // a bug (silent wrong-size memcpy). Run this check FIRST so the Increment C
+                        // fast-path below cannot bypass it (finding #3).
+                        bool srcIsPtrLike = false;   // finding #2: a ptr<T>/ref<T> source variable
+                        if (auto* rve = dynamic_cast<VariableExpr*>(setStmt->value.get())) {
+                            if (rve->name.find('.') == std::string::npos) {
+                                if (Symbol* rs = resolveVariable(rve->name)) {
+                                    if (rs->typeName.rfind("ptr<", 0) == 0 || rs->typeName.rfind("ref<", 0) == 0)
+                                        srcIsPtrLike = true;
+                                    if (!srcIsPtrLike && rs->typeName != finalTypeName &&
+                                        ctx.classes.count(rs->typeName) &&
+                                        !ctx.classes[rs->typeName].isBuiltin &&
+                                        !modelsInheritanceRelated(ctx, rs->typeName, finalTypeName)) {
+                                        LOG_ERROR(ctx.fmtLoc() + "Incompatible assignment to '" + targetStr +
+                                            "': target is model '" + finalTypeName + "' but the value is unrelated model '" +
+                                            rs->typeName + "'");
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        // spec/61 §7.0 (Increment C) fast-path: the plan says this member store
+                        // copies a borrowed/view/param source → deep-copy from the source's ADDRESS
+                        // so the member owns an INDEPENDENT heap. Skipped for a ptr<T>/ref<T> source
+                        // (finding #2: emitLValueAddress would give the pointer SLOT, not the pointee
+                        // model — those fall through to the pointer-aware logic below).
+                        if (memberDeepCopy && !srcIsPtrLike
+                            && cIt->second.hasHeapFields && cIt->second.serNodesVar) {
                             std::string lvTy;
                             IRValue* srcAddr = emitLValueAddress(setStmt->value.get(), lvTy);
                             if (srcAddr) {
@@ -1294,23 +1359,6 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                                     cIt->second.serNodesVar,
                                     ctx.builder.getInt32(cIt->second.serNodesCount) });
                                 return;
-                            }
-                        }
-                        // Model target ← plain variable of a DIFFERENT model type
-                        // is almost always a bug (silent wrong-size memcpy).
-                        if (auto* rve = dynamic_cast<VariableExpr*>(setStmt->value.get())) {
-                            if (rve->name.find('.') == std::string::npos) {
-                                if (Symbol* rs = resolveVariable(rve->name)) {
-                                    if (rs->typeName != finalTypeName &&
-                                        ctx.classes.count(rs->typeName) &&
-                                        !ctx.classes[rs->typeName].isBuiltin &&
-                                        !modelsInheritanceRelated(ctx, rs->typeName, finalTypeName)) {
-                                        LOG_ERROR(ctx.fmtLoc() + "Incompatible assignment to '" + targetStr +
-                                            "': target is model '" + finalTypeName + "' but the value is unrelated model '" +
-                                            rs->typeName + "'");
-                                        return;
-                                    }
-                                }
                             }
                         }
                         llvm::Value* srcPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
@@ -1406,11 +1454,18 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     }
     // Only alias-safe return shapes may run the cleanup; otherwise the returned value's
     // provenance is unclear, so the return path is left leaking (under-drop, safe):
-    //   void / scalar-typed return (cannot alias heap), or a plain/member VariableExpr return
-    //   (its owner is exempted above). Calls/interpolations/arithmetic → skip.
-    bool retVar    = dynamic_cast<VariableExpr*>(retStmt->value.get()) != nullptr;
+    //   • void / scalar-typed return (cannot alias heap);
+    //   • a VariableExpr return whose OWNER is provably Owned at the return (a genuine move-out,
+    //     exempted below). Finding #1: a VIEW/borrow variable is NOT Owned here → cleanup is
+    //     skipped, so we never free the owner whose heap the returned view aliases.
     bool retScalar = retTy && !retTy->isVoidTy() && !retTy->isPointerTy() && !retTy->isStructTy();
-    bool safeToCleanup = (retTy && retTy->isVoidTy()) || retScalar || retVar;
+    bool retBaseOwned = false;
+    if (retExit && retBaseId != AIML::AST::NoOwnership) {
+        auto it = retExit->slots.find(retBaseId);
+        if (it != retExit->slots.end() && it->second.origin == AIML::AST::Origin::Owned)
+            retBaseOwned = true;
+    }
+    bool safeToCleanup = (retTy && retTy->isVoidTy()) || retScalar || retBaseOwned;
     auto emitReturnCleanup = [&]() {
         if (!ctx.lifetimeDropsEnabled || !retPlan || !retExit) return;
         auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
@@ -1575,8 +1630,57 @@ void Compiler::consumeLocalDrop(Expr* argExpr) {
 }
 // spec/61: emit ONE scope-drop (model / string / list / map) at the current insert point.
 // Shared by normal block exit (visitBlockStmt) and early-exit cleanup (visitRetStmt).
+// AIML_TRACE_SYMBOL — is this source symbol name selected for lifetime-value tracing?
+// Unset → off (zero overhead). "1"/"all" → every symbol. Else a comma-list of names.
+static bool aimlTraceSymbol(const std::string& name) {
+    const char* e = getenv("AIML_TRACE_SYMBOL");
+    if (!e || !*e || name.empty()) return false;
+    std::string s = e;
+    if (s == "1" || s == "all" || s == "ALL") return true;
+    size_t p = 0;
+    while (p <= s.size()) {
+        size_t c = s.find(',', p);
+        std::string tok = s.substr(p, c == std::string::npos ? std::string::npos : c - p);
+        size_t a = tok.find_first_not_of(" \t"), b = tok.find_last_not_of(" \t");
+        if (a != std::string::npos) tok = tok.substr(a, b - a + 1); else tok.clear();
+        if (tok == name) return true;
+        if (c == std::string::npos) break;
+        p = c + 1;
+    }
+    return false;
+}
+
+// AIML_TRACE_SYMBOL — emit a runtime printf of a symbol's VALUE at a lifetime phase (DECL/SET/
+// DROP). string → its content; list/map → element count + address; model → address. Lets you
+// watch a symbol's value from birth until it is dropped/cleaned up (find poison / premature free).
+static void emitSymbolValueTrace(CompilerContext& ctx, const char* phase, const std::string& name,
+                                 int kind, const std::string& typeName, llvm::Value* addr) {
+    if (!addr) return;
+    llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+    llvm::FunctionType* pfTy = llvm::FunctionType::get(ctx.builder.getInt32Ty(), {i8p}, /*varArg=*/true);
+    llvm::FunctionCallee pf = ctx.module.getOrInsertFunction("printf", pfTy);
+    llvm::Value* phaseS = ctx.builder.CreateGlobalStringPtr(phase);
+    llvm::Value* nameS  = ctx.builder.CreateGlobalStringPtr(name);
+    if (kind == 1) {  // string local: print the char* content (shows poison/garbage directly)
+        llvm::Value* sptr = ctx.builder.CreateLoad(i8p, addr, "trace_str");
+        llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (string) @%p = \"%s\"\n");
+        ctx.builder.CreateCall(pf, { fmt, phaseS, nameS, addr, sptr });
+    } else if (kind == 2) {  // list: element count (struct field 0) + address
+        llvm::Value* sz = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), addr, "trace_len");
+        llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(typeName);
+        llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) len=%d @%p\n");
+        ctx.builder.CreateCall(pf, { fmt, phaseS, nameS, tyS, sz, addr });
+    } else {  // model / map / other: address (+ type)
+        llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(typeName.empty() ? "?" : typeName);
+        llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) @%p\n");
+        ctx.builder.CreateCall(pf, { fmt, phaseS, nameS, tyS, addr });
+    }
+}
+
 static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop& it) {
     llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+    if (aimlTraceSymbol(it.debugName))       // AIML_TRACE_SYMBOL: value right before the free
+        emitSymbolValueTrace(ctx, "DROP", it.debugName, it.kind, it.debugType, it.addr);
     if (it.kind == 1) {
         llvm::Value* sptr = ctx.builder.CreateLoad(i8p, it.addr, "drop_str");
         llvm::Function* dc = ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {i8p});

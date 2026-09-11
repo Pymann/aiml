@@ -1,0 +1,54 @@
+# spec/61 §7.0 (Increment C): a value-model (Leaf) passed by-value to a method and stored into
+# a member is SHALLOW by default → two Holders would share base's inner heap → free_decoded of
+# the owning aggregate double-frees it. C deep-copies the borrowed source into the member so the
+# members are INDEPENDENT. VOID `touch` → the aggregate is dropped at NORMAL block exit, so this
+# exercises C without P2a. Must be double-free/UAF-free under valgrind.
+- class:
+    name: Leaf
+    members:
+      - [tag, path]
+      - [items, list<string>]
+    methods:
+      - def:
+          name: fill
+          args: []
+          body:
+            - set: [<.tag, "/t"]
+            - call: [<.items.push, "a"]
+- class:
+    name: Holder
+    members:
+      - [leaf, Leaf]
+    methods:
+      - def:
+          name: bind
+          args: [[a_leaf, Leaf]]
+          body:
+            - set: [<.leaf, a_leaf]
+- class:
+    name: Wks
+    members:
+      - [base, Leaf]
+      - [hld1, Holder]
+      - [hld2, Holder]
+    methods:
+      - def:
+          name: run
+          args: []
+          body:
+            - call: [<.base.fill]
+            - call: [<.hld1.bind, <.base]
+            - call: [<.hld2.bind, <.base]
+- def:
+    name: touch
+    args: []
+    body:
+      - decl: [wks, Wks]
+      - call: [wks.run]
+- def:
+    name: main
+    return: i32
+    body:
+      - call: [touch]
+      - print: ["PASS ownership_shared_member_void: shared value-model member-store not double-freed"]
+      - return: 0

@@ -110,6 +110,22 @@ namespace ListImpl {
         ctx.builder.CreateStore(newSize, sizePtr);
     }
 
+    void pushDeepCopyModel(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* srcAddr,
+                           llvm::Type* elemType, llvm::Value* serNodes, int serCount) {
+        // Append a zero-initialised slot (reuse push's grow/append), then deep-copy the source
+        // model into it. The zeroed slot satisfies aiml_ser_deep_copy's "dst all-NULL" precondition.
+        push(ctx, listPtr, llvm::Constant::getNullValue(elemType));
+        llvm::StructType* st = getListStructType(ctx);
+        llvm::Value* sizePtr = ctx.builder.CreateStructGEP(st, listPtr, 0, "sizePtr");
+        llvm::Value* sizeNow = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), sizePtr, "size");
+        llvm::Value* idx = ctx.builder.CreateSub(sizeNow, ctx.builder.getInt32(1), "lastIdx");
+        llvm::Value* slot = getElementPtr(ctx, listPtr, idx, elemType);
+        llvm::Type* p = llvm::PointerType::get(ctx.context, 0);
+        llvm::Function* dc = ctx.getFunction("aiml_ser_deep_copy", ctx.builder.getVoidTy(),
+            {p, p, p, ctx.builder.getInt32Ty()});
+        ctx.builder.CreateCall(dc, { slot, srcAddr, serNodes, ctx.builder.getInt32(serCount) });
+    }
+
     llvm::Value* pop(CompilerContext& ctx, llvm::Value* listPtr, llvm::Type* elemType) {
         llvm::StructType* structType = getListStructType(ctx);
 

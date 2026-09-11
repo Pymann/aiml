@@ -1,0 +1,29 @@
+# spec/61 §7.0 — a map/list/buffer FIELD stored from a BORROWED source must be DEEP-copied,
+# not shallow-memcpy'd. Else the dest model's scope-drop double-frees the buffer the source's
+# owner also frees. `persist(req)` takes req by value (borrow); `dat.produces = req.produces`
+# must give dat its own map. 200 iters, model dat dropped each call → must be double-free-free
+# under valgrind AND leak-free (deep-copy gives dat an independent buffer it drops).
+- model: { name: Req, fields: [[produces, map<string:i32>], [tags, list<string>]] }
+- model: { name: Dat, fields: [[produces, map<string:i32>], [tags, list<string>]] }
+- def:
+    name: persist
+    args: [[req, Req]]
+    body:
+      - decl: [dat, Dat]
+      - set: [dat.produces, req.produces]
+      - set: [dat.tags, req.tags]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 200] }
+          body:
+            - decl: [req_mn, Req]
+            - call: [req_mn.produces.put, "1", 2]
+            - call: [req_mn.tags.push, "fire"]
+            - call: [persist, req_mn]
+            - set: [idx, { +: [idx, 1] }]
+      - print: ["PASS member_container_deepcopy"]
+      - return: 0

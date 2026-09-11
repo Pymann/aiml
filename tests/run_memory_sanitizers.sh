@@ -32,6 +32,10 @@ set -uo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 AIML_BIN="${AIML_BIN:-./out/aiml/aiml}"
+# spec/61 heap-lifetime drops are DEFAULT OFF in the compiler while they harden against real-world
+# aliasing (see Compiler::compile / context.h).  This harness EXISTS to exercise that feature, so
+# turn it ON for every probe here.  (Exported so the `env VAR=val aiml` probe launches inherit it.)
+export AIML_LIFETIME_DROPS=1
 # --errors-for-leak-kinds=none: leaks are REPORTED (--show-leak-kinds=definite) and tracked,
 # but do NOT count toward --error-exitcode, so exit 99 means a genuine memory error only.
 # --trace-children=yes: some probes are launched via `env VAR=val aiml …`; without this
@@ -127,6 +131,9 @@ must_reject "consumed on value model must be REJECTED (spec/61 §3.1)" "$TMP/rej
 must_reject "consumed on concrete method MISMATCHING its interface must be REJECTED" "$TMP/reji.log" \
     "does NOT declare it consumed" \
     "$AIML_BIN" -r tests/_mem_sanitize/consumed_param_bad_iface.aiml
+must_reject "assign to { const: true } local must be REJECTED (finding #7)" "$TMP/rejc.log" \
+    "Cannot assign to const variable" \
+    "$AIML_BIN" -r tests/_mem_sanitize/const_local_reject.aiml
 
 probe "consumed param syntax: accepted on ptr/string/list, const on ptr" "cok" \
     "$AIML_BIN" -r tests/_mem_sanitize/consumed_param_ok.aiml
@@ -158,6 +165,14 @@ probe "get_copy_at: correctness + corrupt→-1 + refill + final-drop" "gca" \
     "$AIML_BIN" -r tests/test_kv_get_copy_at.aiml
 probe "store-then-drop: get_copy/fresh → member store → move (A3, no double-free/UAF)" "std" \
     "$AIML_BIN" -r tests/_mem_sanitize/store_then_drop.aiml
+probe "double-move member (finding #4): 2nd move of same local deep-copies, no double-free" "dmm" \
+    "$AIML_BIN" -r tests/_mem_sanitize/double_move_member.aiml
+probe "member container-field deep-copy (9rooms persist_from_req): map/list field from a borrow → independent heap, no double-free/leak" "mcd" \
+    "$AIML_BIN" -r tests/_mem_sanitize/member_container_deepcopy.aiml
+probe "model into two list<Model> containers / at->push: deep-copy per insert, no shared-heap double-free" "m2c" \
+    "$AIML_BIN" -r tests/_mem_sanitize/model_into_two_containers.aiml
+probe "map.put moves a DECLARED string key (9rooms mana_choice): put consumes the key's drop, map keeps its key" "mpk" \
+    "$AIML_BIN" -r tests/_mem_sanitize/map_put_declared_key.aiml
 probe "leak-probe A (model deep-copy, N=200)" "pa" \
     env AIML_MEM_PROBE=A AIML_MEM_ITERS=200 "$AIML_BIN" -r tests/test_mem_leak_probe.aiml
 

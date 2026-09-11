@@ -131,14 +131,23 @@ struct Analyzer {
                 bool dashIdx   = (t.find('-') != std::string::npos) && (t.find('.') == std::string::npos);
                 if (memberTgt && !dashIdx) {
                     Origin srcO = Origin::Unknown;
+                    OwnershipId sid = NoOwnership;
                     if (auto* v = dynamic_cast<const VariableExpr*>(set->value.get()))
                         if (v->name.find('.') == std::string::npos && v->name.find('<') == std::string::npos) {
-                            auto it = st.slots.find(lookup(v->name));
+                            sid = lookup(v->name);
+                            auto it = st.slots.find(sid);
                             if (it != st.slots.end()) srcO = it->second.origin;
                         }
                     StatementPlan sp;
                     sp.transfer = (srcO == Origin::Owned) ? Transfer::Move : Transfer::DeepCopy;
                     plan.statements[set] = sp;
+                    // Finding #4: once an owned local is MOVED into a member it no longer owns its
+                    // heap — mark it moved so a SECOND member-store of the same local classifies as
+                    // DeepCopy (independent), not another shallow Move that would share + double-free.
+                    if (sp.transfer == Transfer::Move && sid != NoOwnership) {
+                        auto it = st.slots.find(sid);
+                        if (it != st.slots.end()) { it->second.origin = Origin::Unknown; it->second.life = Moved; }
+                    }
                 }
             }
             std::string tgt = set->target;

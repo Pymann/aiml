@@ -1,0 +1,30 @@
+# spec/61 — map.put moves the key/value string RAW (no dup/incref). A DECLARED string local
+# used as key (decl colkey "${n}" → m.put(colkey, v)) has a scope-drop (kind-1 decref); the put
+# must consume it, else that decref frees the string the map still holds → corrupted/empty map
+# (was the 9rooms mana_choice regression). Populate via a ptr<Model> param (as 9rooms put_prod
+# does), then read the map back: must find the keys. 300 iters → double-free-free + correct.
+- model: { name: Card, fields: [[produces, map<string:i32>]] }
+- def:
+    name: populate
+    args: [[crd, ptr<Card>], [color, i32], [amount, i32]]
+    body:
+      - decl: [colkey, string, "${color}"]
+      - call: [crd.produces.put, colkey, amount]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 300] }
+          body:
+            - decl: [card, Card]
+            - call: [populate, card, 1, 7]
+            - call: [populate, card, 9, 3]
+            - if: { condition: { eq: [{ call: [card.produces.contains, "1"] }, 0] }, then: [{ print: ["FAIL key 1 gone (put freed the declared key)"] }, { return: 1 }] }
+            - decl: [got, i32, { call: [card.produces.get, "1"] }]
+            - if: { condition: { neq: [got, 7] }, then: [{ print: ["FAIL got=${got} exp 7"] }, { return: 1 }] }
+            - if: { condition: { neq: [{ call: [card.produces.get, "9"] }, 3] }, then: [{ print: ["FAIL key 9"] }, { return: 1 }] }
+            - set: [idx, { +: [idx, 1] }]
+      - print: ["PASS map_put_declared_key"]
+      - return: 0
