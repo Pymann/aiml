@@ -1402,6 +1402,21 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         return;
                     }
                 }
+                // spec/61 §7.0 — a STRING field stored from a BORROWED source (memberDeepCopy: a
+                // member-access / param field, e.g. `mock.name = cdat.name`) shares the source's
+                // refcounted buffer. The destination model must own an INDEPENDENT reference, else
+                // when the source model is dropped (aiml_ser_free_decoded decref's its strings) the
+                // stored copy dangles (the 9rooms deck-editor card-title/artwork UAF). incref here;
+                // the destination model's own drop decref's it, keeping the count balanced. (Move
+                // cases — memberDeepCopy=false — consume the source local instead, no incref.)
+                if (finalTypeName == "string" && memberDeepCopy) {
+                    llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                    if (sv && sv->getType()->isPointerTy()) {
+                        llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+                        llvm::Function* inc = ctx.getFunction("aiml_str_incref", ctx.builder.getVoidTy(), {i8p});
+                        ctx.builder.CreateCall(inc, { sv });
+                    }
+                }
                 ctx.ir_gen->createStore(val, targetGep);
                 return;
             }

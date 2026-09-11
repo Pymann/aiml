@@ -171,6 +171,8 @@ probe "member container-field deep-copy (9rooms persist_from_req): map/list fiel
     "$AIML_BIN" -r tests/_mem_sanitize/member_container_deepcopy.aiml
 probe "model into two list<Model> containers / at->push: deep-copy per insert, no shared-heap double-free" "m2c" \
     "$AIML_BIN" -r tests/_mem_sanitize/model_into_two_containers.aiml
+probe "string field from a borrow incref'd (9rooms deck-editor UAF): no-init source dropped, library string survives" "sfs" \
+    "$AIML_BIN" -r tests/_mem_sanitize/string_field_share_uaf.aiml
 probe "map.put moves a DECLARED string key (9rooms mana_choice): put consumes the key's drop, map keeps its key" "mpk" \
     "$AIML_BIN" -r tests/_mem_sanitize/map_put_declared_key.aiml
 probe "leak-probe A (model deep-copy, N=200)" "pa" \

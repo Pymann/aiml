@@ -1,0 +1,57 @@
+# pump_load pattern: a NO-INIT source model (cbr) filled by a by-ref call (decode), library built
+# from at-views sharing cbr's strings, then cbr DROPS at scope exit → frees the shared strings →
+# the persistent library dangles. (Earlier repros used init-from-call sources → not dropped → passed.)
+- model: { name: Card, fields: [[name, string], [artwork_id, string]] }
+- model: { name: Bundle, fields: [[creatures, list<Card>]] }
+- def:
+    name: fake_decode
+    args: [[out, ptr<Bundle>]]
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 8] }
+          body:
+            - decl: [one, Card]
+            - set: [one.name, "Real-Name-${idx}"]
+            - set: [one.artwork_id, "hash-${idx}"]
+            - call: [out.creatures.push, one]
+            - set: [idx, { +: [idx, 1] }]
+- def:
+    name: build_lib
+    args: [[lib, list<Card>]]
+    body:
+      - decl: [cbr, Bundle]
+      - call: [fake_decode, {'&': [cbr]}]
+      - decl: [cri, i32, 0]
+      - while:
+          condition: { lt: [cri, cbr.creatures.len] }
+          body:
+            - decl: [cdat, Card, { at: [cbr.creatures, cri] }]
+            - decl: [mck, Card]
+            - set: [mck.name, cdat.name]
+            - set: [mck.artwork_id, cdat.artwork_id]
+            - call: [lib.push, mck]
+            - set: [cri, { +: [cri, 1] }]
+      # cbr drops here (feature ON) → frees cbr.creatures[*].name/artwork_id
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [lib, list<Card>]
+      - call: [build_lib, lib]
+      - decl: [frame, i32, 0]
+      - decl: [bad, i32, 0]
+      - while:
+          condition: { lt: [frame, 20] }
+          body:
+            - decl: [idx, i32, 0]
+            - while:
+                condition: { lt: [idx, lib.len] }
+                body:
+                  - decl: [card, Card, { call: [lib.get, idx] }]
+                  - if: { condition: { eq: [{ call: [card.name.starts_with, "Real-Name-"] }, 0] }, then: [{ set: [bad, { +: [bad, 1] }] }, { if: { condition: { lt: [bad, 4] }, then: [{ print: ["CORRUPT f=${frame} i=${idx} name='${card.name}'"] }] } }] }
+                  - set: [idx, { +: [idx, 1] }]
+            - set: [frame, { +: [frame, 1] }]
+      - if: { condition: { neq: [bad, 0] }, then: [{ print: ["FAIL bad=${bad}"] }, { return: 1 }] }
+      - print: ["PASS cbr_uaf"]
+      - return: 0
