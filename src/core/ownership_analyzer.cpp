@@ -47,6 +47,19 @@ struct Analyzer {
             if (auto* c = dynamic_cast<CallExpr*>(d->initialValue.get()))
                 if (endsWith(c->functionName, ".get_copy")) return true;
         }
+        // spec/61: owned new-box — `decl [x, ptr<T>, { new: T }]` heap-allocates T (calloc)
+        // and x owns it → drop at scope exit (deep-free pointee + free shell) unless moved.
+        // Restricted to a plain model/class with heap fields + a ser-subtree; classgroup
+        // containers are excluded (their `new` wires sub-instances — teardown is not a plain
+        // deep-free).  MUST stay in lockstep with the box-drop registration in visitDeclStmt.
+        if (t.rfind("ptr<", 0) == 0 && !t.empty() && t.back() == '>' && d->initialValue
+            && dynamic_cast<NewExpr*>(d->initialValue.get())) {
+            std::string boxed = t.substr(4, t.size() - 5);
+            auto bi = ctx.classes.find(boxed);
+            if (bi != ctx.classes.end() && bi->second.hasHeapFields && bi->second.serNodesVar
+                && bi->second.type && !ctx.classGroupContainers.count(boxed))
+                return true;
+        }
         return false;
     }
 

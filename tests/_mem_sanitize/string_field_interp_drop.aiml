@@ -1,0 +1,63 @@
+# spec/61: a STRING FIELD stored from a fresh OWNED temp (a string interpolation) must
+# TRANSFER its single refcount into the field — NOT be incref'd.  The deck-editor UAF fix
+# increfs a string field stored from a BORROW (a VariableExpr like `mock.name = cdat.name`);
+# applying that incref to an interpolation temp leaks one reference per store (the temp is
+# never decref'd, the field's deep-free decref only brings it 2→1).  This probe guards that
+# regression: build a value-model whose string field is set from an interpolation, drop it at
+# scope exit, and assert the per-iteration heap does NOT grow linearly.
+#
+# Detection: N vs 3N RSS delta.  A clean transfer → both deltas ≈ allocator arena (sublinear,
+# after warmup).  A leak → 3N leaks ~3x as much as N, so (delta_3n - delta_n) ≈ 2*N*stringbytes.  The
+# string is padded to ~256 bytes so the leak is well above RSS/arena noise.
+
+- model:
+    name: Rec
+    fields:
+      - [name, string]
+
+- def:
+    name: fill_rec
+    args: [[rec, ptr<Rec>], [num, i32]]
+    body:
+      # ~512-byte dynamic string so a leaked reference is well above RSS/arena noise with
+      # relatively few iterations (keeps the harness valgrind run — cost ∝ alloc count — cheap).
+      - set: [rec.name, "rec-${num}-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef-end"]
+
+- def:
+    name: loop_strfield
+    static_off: ["same_arg"]
+    args: [[iters, i32]]
+    return: i64
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [cnt, i32, 0]
+      - while:
+          condition: { lt: [cnt, iters] }
+          body:
+            - decl: [val, Rec]
+            - call: [fill_rec, {'&': [val]}, cnt]
+            - set: [cnt, { +: [cnt, 1] }]
+      - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [reps, i32, 8000]
+      - decl: [reps3, i32, 24000]
+      # Warmup absorbs one-time lazy allocations + grows the allocator arena so the
+      # measured deltas reflect steady-state, not first-touch page growth.
+      - decl: [warm, i64, { call: [loop_strfield, 8000] }]
+      - decl: [delta_n, i64, { call: [loop_strfield, reps] }]
+      - decl: [delta_3n, i64, { call: [loop_strfield, reps3] }]
+      - decl: [grow, i64, { -: [delta_3n, delta_n] }]
+      - call: [log.info, "string_field_interp_drop: delta_n(N=${reps})=${delta_n} B  delta_3n(3N=${reps3})=${delta_3n} B  grow=${grow} B"]
+      # Leak ⇒ delta_3n ≈ 3*delta_n and grow ≈ 2*N*~540 B ≈ 8.5 MB.  Clean ⇒ grow ≈ 0 (±arena).
+      # Bright line at 4 MB: well above arena jitter, far below the ~8.5 MB leak signature.
+      - if:
+          condition: { gt: [grow, 4194304] }
+          then:
+            - call: [log.info, "FAIL string_field_interp_drop: string field from interpolation leaks a ref per store (grow=${grow} B > 4 MB)"]
+            - return: 1
+      - call: [log.info, "PASS string_field_interp_drop: interpolation temp transferred (no per-store ref leak)"]
+      - return: 0

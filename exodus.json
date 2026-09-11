@@ -1,4 +1,5 @@
 {
+    "jobs": 8,
     "$schema": "exodus.project.config-1.0",
     "name": "aiml",
     "version": "0.1.0",

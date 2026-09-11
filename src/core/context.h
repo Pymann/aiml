@@ -285,7 +285,9 @@ namespace AIML {
         int                   kind = 0;              // 0 = model (aiml_ser_free_decoded),
                                                      // 1 = string (load char* → aiml_str_decref),
                                                      // 2 = list  (aiml_list_free(addr, elemKind, …)),
-                                                     // 3 = map   (aiml_map_free(addr, keyKind, …))
+                                                     // 3 = map   (aiml_map_free(addr, keyKind, …)),
+                                                     // 4 = owned new-box ptr<T> (load ptr →
+                                                     //     aiml_ser_free_decoded(ptr) then free(ptr) shell)
         int                   elemKind = 0;          // kind 2: 0=scalar,1=string,2=model. kind 3: VALUE kind
         int64_t               elemSize = 0;          // kind 2 elemKind 2: elem stride. kind 3: VALUE stride
         int                   keyKind = 0;           // kind 3: key kind (0 = scalar, 1 = string)
