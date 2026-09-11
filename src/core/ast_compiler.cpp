@@ -1219,6 +1219,20 @@ void Compiler::checkPrefabUsage(Program* prog) {
 void Compiler::compile(Program* prog) {
     if (!prog) return;
 
+    // spec/61 — the heap-lifetime feature (scope-drops + Increment C member deep-copy + P2a
+    // return-cleanup) is DEFAULT OFF while it hardens against real-world aliasing: on 9rooms it
+    // still trips double-frees (shallow container/model member-stores from borrows) and changes
+    // aliasing semantics.  Default OFF = the pre-feature leak-not-crash baseline, so production
+    // (9rooms) runs out-of-box.  Opt IN with AIML_LIFETIME_DROPS=1 (the memory-sanitizer harness
+    // sets it, to keep exercising + hardening the feature).  Re-enable by default only once the
+    // FULL 9rooms suite passes with it on (the acceptance gate).
+    ctx.lifetimeDropsEnabled = false;
+    if (const char* de = getenv("AIML_LIFETIME_DROPS")) {
+        std::string s = de;
+        ctx.lifetimeDropsEnabled = !(s.empty() || s == "0" || s == "off" || s == "OFF"
+                                     || s == "false" || s == "FALSE");
+    }
+
     registerBuiltins(ctx);
 
     // Function cascades (spec/57): validate pools/rules (M1/M2), then synthesize the
@@ -3060,6 +3074,54 @@ static void serEmitGlobal(
     // hasHeapFields is computed by the caller based on serHasHeap; do not force-set it.
     classInfo.serNodesVar   = gv;
     classInfo.serNodesCount = (int32_t)nodes.size();
+}
+
+bool Compiler::emitContainerFieldDeepCopy(llvm::Value* dstPtr, llvm::Value* srcPtr,
+                                          const std::string& typeName) {
+    if (!dstPtr || !srcPtr) return false;
+    llvm::DataLayout dl(&ctx.module);
+    // Build the descriptor for the container type at offset 0 (dst/src are already the field
+    // addresses). serBuildSubtree handles list<>/map<>/buffer<> incl. nested models.
+    std::vector<AimlTypeNode> nodes = serBuildSubtree(typeName, 0, ctx, dl);
+    if (nodes.empty()) return false;
+    llvm::LLVMContext& lctx = ctx.context;
+    llvm::Type* i32Ty = llvm::Type::getInt32Ty(lctx);
+    llvm::Type* ptrTy = llvm::PointerType::get(lctx, 0);
+    llvm::StructType* nodeTy = llvm::StructType::get(lctx, {i32Ty,i32Ty,i32Ty,i32Ty,i32Ty,i32Ty});
+    // Emit (or reuse) a LinkOnceODR global for this type's nodes — merged across callsites/units.
+    std::string symName = "__aiml_sernodes_fieldcopy_" + typeName;
+    for (char& c : symName) if (c=='<'||c=='>'||c==':'||c==' '||c==','||c=='/') c = '_';
+    llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(symName);
+    if (!gv) {
+        std::vector<llvm::Constant*> elems;
+        for (auto& n : nodes) {
+            llvm::Constant* f[6] = {
+                llvm::ConstantInt::get(i32Ty, (uint64_t)n.kind),
+                llvm::ConstantInt::get(i32Ty, (uint64_t)n.param1),
+                llvm::ConstantInt::get(i32Ty, (uint64_t)n.param2),
+                llvm::ConstantInt::get(i32Ty, (uint64_t)n.offset),
+                llvm::ConstantInt::get(i32Ty, (uint64_t)n.elem_size),
+                llvm::ConstantInt::get(i32Ty, 0),
+            };
+            elems.push_back(llvm::ConstantStruct::get(nodeTy, f));
+        }
+        llvm::ArrayType* arrTy = llvm::ArrayType::get(nodeTy, elems.size());
+        gv = new llvm::GlobalVariable(ctx.module, arrTy, /*isConstant=*/true,
+            llvm::GlobalValue::LinkOnceODRLinkage,
+            llvm::ConstantArray::get(arrTy, elems), symName);
+        gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+        gv->setVisibility(llvm::GlobalValue::HiddenVisibility);
+    }
+    // aiml_ser_deep_copy requires dst zero-inited (all heap pointers NULL). Zero the field first.
+    if (llvm::Type* fieldTy = ctx.getLLVMType(typeName)) {
+        uint64_t sz = dl.getTypeAllocSize(fieldTy);
+        llvm::Function* memsetF = ctx.getFunction("memset", ptrTy, {ptrTy, i32Ty, ctx.getSizeType()});
+        ctx.builder.CreateCall(memsetF, { dstPtr, ctx.builder.getInt32(0), ctx.getSizeConst(sz) });
+    }
+    llvm::Function* dcF = ctx.getFunction("aiml_ser_deep_copy", ctx.builder.getVoidTy(),
+        {ptrTy, ptrTy, ptrTy, i32Ty});
+    ctx.builder.CreateCall(dcF, { dstPtr, srcPtr, gv, ctx.builder.getInt32((int32_t)nodes.size()) });
+    return true;
 }
 
 void Compiler::registerTypeDecl(Node* node) {

@@ -1,0 +1,41 @@
+# Finding #4: moving the SAME owned local into two members must NOT leave them shallow-sharing
+# (the second store must deep-copy) — else free_decoded of the aggregate double-frees the shared
+# heap. Value-Two local dropped at scope exit each call; must be double-free-free under valgrind.
+- model:
+    name: Rec
+    fields:
+      - [name, string]
+      - [tags, list<string>]
+- class:
+    name: Two
+    members:
+      - [aaa, Rec]
+      - [bbb, Rec]
+    methods:
+      - def:
+          name: fill
+          args: []
+          body:
+            - decl: [rec, Rec]
+            - set: [rec.name, "shared"]
+            - call: [rec.tags.push, "t"]
+            - set: [<.aaa, rec]
+            - set: [<.bbb, rec]
+- def:
+    name: run_once
+    args: []
+    body:
+      - decl: [two, Two]
+      - call: [two.fill]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 200] }
+          body:
+            - call: [run_once]
+            - set: [idx, { +: [idx, 1] }]
+      - print: ["PASS double_move_member: second move deep-copied, no double-free"]
+      - return: 0

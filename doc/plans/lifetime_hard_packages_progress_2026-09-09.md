@@ -177,6 +177,165 @@ für owned list<string>-Locals ist behoben (0 `aiml_str_alloc`-Leaks über 500 C
 im Paket als EIGENE Folgepakete benannten: F (explizite interproz. Retain-Effekte — aktuell
 konservativ abgedeckt), Box-Drop, Map-Drop-full (occ/grow-Audit) — plus Server-e2e.
 
+## 2026-09-10 — 9rooms-Realitätscheck: Feature DEFAULT OFF gestellt (Härtungsphase)
+
+Der aiml-Gate war grün (Suite 402/363/1, Sanitizer-Harness alle grün), ABER die **9rooms-Suite
+crasht mit dem Feature AN in ~20 % der Tests** — die synthetischen Proben deckten die realen
+Aliasing-Muster nicht ab. Zwei Klassen:
+- **Double-Frees (rc=134/139):** `aiml_ser_free_decoded` doppelt. Bestätigt per valgrind
+  (46 Fehler, `Invalid free`) + Minimal-Repro. **Root-Cause #1 (GEFIXT):** Member-Store eines
+  `map/list/buffer`-**Feldes** aus einer geborgten Quelle (`set: [dat.produces, req.produces]` in
+  `card_service.persist_from_req`) macht ein **shallow memcpy** (ast_compiler_stmt.cpp ~1261) →
+  Ziel-Feld teilt den Buffer mit der Quelle; da jetzt BEIDE Owner einen Scope-Drop bekommen →
+  Doppelfreigabe. Fix: Increment C deckte nur Wert-*Modell*-Quellen ab (deep_copy), NICHT
+  Container-Felder. Jetzt: bei `memberDeepCopy` (nicht-owned Quelle) wird der **Drop des
+  Ziel-Basis-Locals widerrufen** (es ist kein Allein-Owner) → Crash→beschränkter Leak. Es gibt
+  WEITERE Muster (z. B. `test_activate_ability`-Init), noch nicht einzeln gewurzelt.
+- **Logik-Regressionen (rc=1/3/6):** Increment-C-deep_copy ändert Aliasing-Semantik (ein Member,
+  der vorher aliaste, ist jetzt eine unabhängige Kopie → Mutationen propagieren nicht).
+
+**Entscheidung (User, 2026-09-10): Feature DEFAULT OFF, dann härten.**
+- `lifetimeDropsEnabled` ist jetzt **default false** (context.h). `Compiler::compile()` liest
+  `AIML_LIFETIME_DROPS` (unset ⇒ OFF; `=1` ⇒ ON; `0/off/false` ⇒ OFF). Der Schalter gated ALLES:
+  Drop-Emission (visitBlockStmt/visitRetStmt), Increment-C-`memberDeepCopy` **und** den
+  lokal→lokal-Modell-deep_copy (§4.2) → OFF = vollständiges Vor-Feature-Verhalten.
+- `tests/run_memory_sanitizers.sh` exportiert `AIML_LIFETIME_DROPS=1` → übt das Feature weiter.
+- **Re-Enable-Gate:** die VOLLE 9rooms-Suite muss mit Drops AN grün sein, bevor Default wieder AN.
+- Verifiziert: mit `AIML_LIFETIME_DROPS=0` laufen zuvor crashende Tests wieder (card_all_types_kv,
+  create_spell, card_base_engine_api, effect_processor, mana_choice). `test_activate_ability`
+  crasht nicht mehr, hat aber einen EIGENEN latenten shallow-Aliasing-Logikfehler
+  (`bob life=30` statt 20) — den das deep_copy-Feature sogar FIXEN würde; separat zu untersuchen.
+
+**Offene Härtungs-TODOs für das Re-Enable:**
+- Container-Feld-**deep_copy** (statt Drop-Widerruf) als zero-leak Root-Fix: per-Feld-`AimlTypeNode`
+  synthetisieren + `aiml_ser_deep_copy` auf das eine Feld (map key/val-Kind beachten).
+- Restliche Double-Free-Muster (activate_ability-Init etc.) einzeln wurzeln.
+- Logik-Regressionen aus Increment-C-Semantik prüfen (welche 9rooms-Stellen auf Alias-Mutation
+  bauten — evtl. sind das echte Bugs, die deep_copy korrekt aufdeckt).
+
+## 2026-09-10 (Fortsetzung) — Container-Feld deep_copy = zero-leak Root-Fix
+
+Der Drop-Widerruf-Workaround wurde durch den **echten Root-Fix** ersetzt: neuer Helper
+`Compiler::emitContainerFieldDeepCopy` (ast_compiler.cpp) baut per `serBuildSubtree(typeName,0)`
+die `AimlTypeNode` für das Container-Feld, emittiert ein LinkOnceODR-Global und ruft
+`aiml_ser_deep_copy(dst,src,nodes,n)` — d. h. `dat.produces = req.produces` (map/list/buffer-Feld
+aus einer geborgten Quelle) bekommt jetzt einen **unabhängigen Heap**. Damit behält das Ziel-Modell
+seinen Scope-Drop → **kein Double-Free UND kein Leak** (valgrind: 0 unsafe, 0 runtime-Leak; alle
+„definitely lost" sind LLVM/JIT-Infrastruktur-Baseline). Proben-Gate grün inkl. neuer
+`member_container_deepcopy`-Probe.
+
+**Wirkung auf 9rooms (mit `AIML_LIFETIME_DROPS=1`):** die gesamte `persist_from_req`/`create_bundle`-
+Crash-Klasse ist weg — `test_card_all_types_kv`, `card_base_engine_api`, `create_spell` grün, und
+`test_activate_ability` crasht nicht mehr (134→rc=1, das ist der SEPARATE dice_roll-Logikfehler,
+siehe unten). Voller 9rooms-Suite-Lauf mit Feature-AN: **keine Abstürze mehr** (nur noch rc=1/3/6
+Logik-Fails).
+
+**Fremd-Ursache identifiziert (NICHT unser Feature): nichtdeterministischer Soulmage-Schaden.**
+`sources/match/dice_roll.aiml` (in 9rooms UNTRACKED/neu) macht Soulmage-Schaden zu einem Range
+`floor(value/2)..value` (Rulebook §7), deterministisch nur wenn `mat.dice_queue` geseedet ist.
+Tests wie `effect_processor`/`creature_damage`/`activate_ability` seeden nicht → flaky. Rein
+9rooms-seitig (Tests seeden lassen wie `test_combat_dice`).
+
+**Noch offen fürs Re-Enable:** prüfen, ob die Feature-AN-only Logik-Fails (cost_processor,
+mana_choice, mana_pick, amorphous_mana, forum_service) Increment-C-deep_copy-Semantik-Regressionen
+sind (Alias-Mutation, die deep_copy jetzt entkoppelt) oder ebenfalls dice/pre-existing.
+
+## 2026-09-10 (Fortsetzung 2) — map.put DECLARED-key Move-Gap gefixt (mana_choice-Regression)
+
+Isolierte ON-vs-OFF-Kategorisierung der Suite-Fails ergab: fast alle „Fails" der Feature-AN-Suite
+waren **Contention-Flakes** (unter paralleler valgrind-Last), NICHT echte Regressionen. In
+Isolation: die meisten passen ON & OFF; `effect_processor`/`activate_ability` failen BEIDE
+(dice_roll-Feature, 9rooms-seitig); `enchantment_picker` failt BEIDE (pre-existing). Die EINZIGE
+echte Feature-AN-Regression war `test_mana_choice` (deterministisch ON=fail, OFF=pass).
+
+**Root-Cause (gefixt):** `MapImpl::put` speichert Key/Value RAW (Move, kein dup/incref). Ein als
+Key übergebener **deklarierter** String-Local (`decl colkey "${color}"` → `m.put(colkey, v)`) hat
+einen kind-1 decref-Scope-Drop in `cleanupStack`. `map.put` rief nur `consumeStringTemp` (nur
+inline stmt-temps) — der deklarierte Local behielt seinen Drop → dessen decref bei Scope-Exit gab
+den String frei, den die Map noch hält → korrupte/leere Map. Fix (ast_compiler_call.cpp ~1477):
+zusätzlich `consumeLocalDrop(call->args[0/1])` (wie list.push). Minimal-Repro + neue Probe
+`map_put_declared_key`. `test_mana_choice` jetzt grün mit Feature AN; Memsan-Gate grün.
+
+**Re-Enable-Status:** Mit Feature AN sind (a) alle Crashes weg (Container-deep_copy) und (b) die
+einzige echte Logik-Regression (mana_choice) gefixt. Verbleibende 9rooms-Fails = eigenes
+untracked dice_roll-Feature (Tests seeden lassen) + pre-existing (enchantment_picker). Voller
+isolierter ON-Suite-Lauf läuft zur Bestätigung. Danach kann Default wieder AN erwogen werden.
+
+## 2026-09-10 (Fortsetzung 3) — Re-Enable-Readiness: Compiler-Seite sauber
+
+Definitive Isolationsmessung (ON vs OFF, ohne Suite-Contention):
+- **Zero NEUE Crashes durch das Feature.** Jede mit Feature-AN gesehene 134/139 tritt ENTWEDER
+  auch mit Feature-AUS auf (pre-existing) ODER war ein Contention-Artefakt der parallel laufenden
+  valgrind/Suite/User-Messung.
+- `test_enchantment_picker`: intermittenter **segv (139) + Logikfehler „zweiter Effekt verloren"
+  AUCH mit AIML_LIFETIME_DROPS=0** (4/6 Läufe crashen bei OFF) → **pre-existing 9rooms-Bug**, nicht
+  unser Feature. Separat 9rooms-seitig zu untersuchen.
+- `effect_processor`/`creature_damage`/`activate_ability`: failen ON & OFF = dice_roll-Feature
+  (Tests seeden `mat.dice_queue` nicht) — 9rooms-seitig.
+- `mana_choice`: einzige echte Feature-AN-Regression, GEFIXT (map.put declared-key move).
+- Übrige Suite-„Fails" (forum_service, mana_pick, aura_ops, card_states, chat_nickname, …) passen
+  in Isolation ON & OFF → **Contention-Flakes** (die Suite JIT-kompiliert pro Test die gesamten
+  9rooms-Quellen; unter paralleler Last race/timeout).
+
+**Fazit:** Die spec/61-Feature-Seite ist gegen reale 9rooms-Aliasing-Muster gehärtet (Container-
+deep_copy + map.put-key-move). Kein bekannter Feature-verursachter Crash oder Logik-Regress mehr.
+**Default bleibt vorerst AUS** (User-Gate: volle 9rooms-Suite muss mit Feature AN grün sein — das
+scheitert aktuell NUR an 9rooms-eigenen Sachen: dice_roll-Test-Seeding + pre-existing
+enchantment_picker-segv). Für den finalen Gate-Nachweis braucht es einen ruhigen (contention-freien)
+vollen ON-Suite-Lauf.
+
+## 2026-09-11 — WASM-Client-Crash → Klasse „Modell shallow-geteilt über mehrere Container"
+
+Client-WASM-Crash mit Feature AN: `RuntimeError: index out of bounds` im Asyncify-Rewind
+(doRewind/handleSleep) = Heap-Korruption. Headless eingegrenzt (WASM-Runner `tools/run_wasm_test.sh`,
+`AIML_LIFETIME_DROPS=1`):
+- Kern-Feature-Pfade sind in WASM **sauber**: `member_container_deepcopy`, `map_put_declared_key`,
+  `list_model_drop`, sowie async+drop über `time.sleep_ms` (Asyncify-Suspend) — alle grün.
+- Einzel-Container-deep_copy von NESTED-Model-Feldern (`list<Model>`/`map<string:Model>`) einzeln:
+  grün.
+- **Reproduziert (nativ 134 UND WASM):** dasselbe Modell in ZWEI Container eines Owners
+  (`src.items.push(inr)` + `src.bykey.put("k", inr)`). push/put moven das Modell SHALLOW → beide
+  Container teilen `inr`s inneren Heap; der Model-Drop des Owners (`aiml_ser_free_decoded`) läuft
+  über beide Container → **Doppel-/Dreifach-free**. OFF = grün (nur Leak). NICHT der Container-
+  deep_copy-Fix — `copyover` ist gar nicht beteiligt.
+
+**Wurzel:** die Drop-Logik nimmt an, dass jedes owned Modell seinen Heap ALLEIN besitzt. `push`/`put`
+eines Modells in einen Container ist aber ein SHALLOW-Move; ein Modell, das aus >1 Container erreichbar
+ist (oder nach dem Insert als lebender Local weiterbenutzt wird), wird beim Drop mehrfach freigegeben.
+Einzel-Container-Fälle funktionieren (darum waren Proben + `card_all_types_kv` grün). Das ist die
+wahrscheinliche Client-Crash-Ursache (Karten/Modelle in mehreren Views/Zonen).
+
+**Nötiger Fix (groß, Design):** Modelle beim `push`/`put` in Container DEEP-kopieren (jedes
+Container-Element besitzt unabhängigen Heap — analog Increment C für Member-Stores), ODER Container-
+Element-Ownership anders modellieren. Broad + Perf-Kosten → bewusst NICHT ad hoc umgesetzt.
+**Default bleibt AUS.** WASM zusätzlich validieren, sobald die Klasse gefixt ist.
+
+## 2026-09-11 (Fortsetzung) — list<Model>.push deep-copy (Modell-Container-Aliasing gefixt)
+
+Vor der Umsetzung 9rooms-Nutzung erhoben (User-Frage „geht 9rooms von derselben Instanz aus?"):
+- 164 `get_copy→push` (Wert-Kopie), `push({at:[l,i]})` (Listen→Listen-Kopie), get-modify-**set**
+  Write-back. Geteilte Identität IMMER via `list<ptr<Model>>`. **0 Fundstellen** „Local pushen,
+  danach `.field` mutieren". ⇒ 9rooms behandelt Wert-Container als Werte; **kein `push_at`/`push_from`
+  nötig** — der Typ (`list<Model>` vs `list<ptr<Model>>`) kodiert die Absicht bereits.
+
+**Fix:** `list<Model>.push` eines Wert-Modells kopiert das Element jetzt TIEF, außer die Quelle ist
+ein beweisbar toter, frischer owned Local (lebender kind-0 Scope-Drop) → dann Move (billig, wie
+bisher). Increment-C-Prinzip auf push angewandt. Umsetzung: `ListImpl::pushDeepCopyModel`
+(list_impl.cpp: leeren Slot anhängen + `aiml_ser_deep_copy` hinein) + Call-Site-Routing
+(ast_compiler_call.cpp push-Handler): Quell-Adresse = Element-Pointer (get/at) direkt, sonst
+struct-Value in Temp-Alloca spillen. Nur Wert-Modelle (serNodes); ptr<>/Skalar/String unberührt.
+Alles hinter `lifetimeDropsEnabled` (OFF = unverändert).
+
+**Verifiziert (Feature AN):** neue Probe `model_into_two_containers` (dasselbe Modell in 2 Listen +
+`at`→push): nativ PASS, valgrind 0 Fehler + 0 Runtime-Leak, **WASM PASS**. Move-Fast-Path intakt
+(`card_all_types_kv`/`card_base_engine_api`/`card_pick` grün mit AN). Memsan-Gate grün (+m2c).
+
+**Noch offen:** `map<K:Model>`-VALUE-Insert deep-kopiert noch NICHT (MapImpl put hat 2 Store-Sites
+update+insert). **9rooms nutzt kein `map<*:Model>`** → nicht client-relevant, aber Sprach-Lücke:
+ein Modell als Map-VALUE + drops ON kann noch double-freen (nur synthetische Repros). Als eigenes
+kleines Paket nachziehen (analog `pushDeepCopyModel`). Danach: WASM-Client mit Feature AN neu bauen
+und live testen.
+
 ## Laufende Imperfektions-/Deferral-Liste
 1. deep_copy „unfehlbar" angenommen; kein free-old-target bei Reassignment (P1b inc1).
 2. Map-Drop-Registrierung weiter zurückgestellt bis occ/slot-Audit (map.put-UAF ist bereits als

@@ -21,6 +21,13 @@ namespace ListImpl {
     llvm::StructType* getListStructType(CompilerContext& ctx);
     void initList(CompilerContext& ctx, llvm::Value* listPtr, llvm::Type* elemType, int initialCapacity = 4);
     void push(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* val);
+    // spec/61 §7.0 — append a value-MODEL element by DEEP-COPYING the source model at `srcAddr`
+    // into a fresh (zero-initialised) slot, so the list element owns an INDEPENDENT heap. Used
+    // when the pushed model is NOT a movable owned local (an `at`-expr, a member/param field, or a
+    // local already moved) → otherwise a shallow struct store would share the source's inner heap
+    // and the owner drops would double-free it. `serNodes`/`serCount` describe the element model.
+    void pushDeepCopyModel(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* srcAddr,
+                           llvm::Type* elemType, llvm::Value* serNodes, int serCount);
     llvm::Value* pop(CompilerContext& ctx, llvm::Value* listPtr, llvm::Type* elemType);
     llvm::Value* get(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, llvm::Type* elemType);
     llvm::Value* getElementPtr(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, llvm::Type* elemType);

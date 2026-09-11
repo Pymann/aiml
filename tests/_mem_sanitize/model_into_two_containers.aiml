@@ -1,0 +1,31 @@
+# spec/61 §7.0 — a value MODEL pushed into TWO containers (or a list->list copy via at) must be
+# DEEP-copied per insert, so each element owns an independent inner heap. Else the owner's model-
+# drop frees a shared inner heap twice (the list<Model> double-free / 9rooms WASM client crash).
+# push of a movable owned local = move (fast); every other source = deep-copy.
+- model: { name: Inner, fields: [[label, string], [vals, list<i32>]] }
+- model: { name: Bag,   fields: [[prim, list<Inner>], [dup, list<Inner>]] }
+- def:
+    name: build
+    args: [[out, ptr<Bag>]]
+    body:
+      - decl: [inr, Inner]
+      - set: [inr.label, "x"]
+      - call: [inr.vals.push, 7]
+      - call: [out.prim.push, inr]     # 1st push: movable owned local → move
+      - call: [out.dup.push, inr]      # 2nd push of SAME local → must deep-copy (indep heap)
+      - call: [out.dup.push, { at: [out.prim, 0] }]   # at->push list-to-list copy → deep-copy
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 200] }
+          body:
+            - decl: [bag, Bag]
+            - call: [build, bag]
+            - if: { condition: { neq: [bag.prim.len, 1] }, then: [{ print: ["FAIL prim len"] }, { return: 1 }] }
+            - if: { condition: { neq: [bag.dup.len, 2] }, then: [{ print: ["FAIL dup len=${bag.dup.len}"] }, { return: 1 }] }
+            - set: [idx, { +: [idx, 1] }]
+      - print: ["PASS model_into_two_containers"]
+      - return: 0

@@ -1,0 +1,44 @@
+# Mimics the client display-list build: received cards → push into a list<CreatureData> display
+# list (deep-copy path, since source is an `at`-view / reused local), then read artwork_id from the
+# list every "frame". Exercises list<Model>.push deep-copy on a REAL complex card model (strings +
+# nested list<ActiveAbility>). Feature-ON string-integrity check.
+- import: "sources/cards/card_service.aiml"
+- model: { name: Disp, fields: [[cards, list<CreatureData>]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [db_dir, path, "/tmp/9rv2_art_dl/"]
+      - call: [io.remove_all, db_dir]
+      - decl: [svc, ptr<CardService>, { new: CardService }]
+      - call: [svc.init, db_dir]
+      - decl: [alice, string, "alice@example.com"]
+      - decl: [req_cr, CreateCardReq]
+      - set: [req_cr.name, "Stone Golem"]
+      - set: [req_cr.card_type, CardType.creature]
+      - set: [req_cr.mkp, 4]
+      - set: [req_cr.artwork_id, "deadbeefcafe1234"]
+      - decl: [resc, CardBundleResp, { call: [svc.create_bundle, alice, req_cr] }]
+      # Build a display list by pushing the received card (from an at-view → deep-copy path)
+      - decl: [disp, Disp]
+      - decl: [frame, i32, 0]
+      - while:
+          condition: { lt: [frame, 50] }
+          body:
+            - decl: [lst, CardBundleResp, { call: [svc.list_bundle, alice] }]
+            - decl: [card0, CreatureData, { at: [lst.creatures, 0] }]
+            - call: [disp.cards.push, card0]                 # push a view/local → deep-copy
+            - call: [disp.cards.push, { at: [lst.creatures, 0] }]  # push an at-view directly
+            - set: [frame, { +: [frame, 1] }]
+      # Now read artwork_id from EVERY display-list element (the per-frame render read)
+      - decl: [idx, i32, 0]
+      - decl: [bad, i32, 0]
+      - while:
+          condition: { lt: [idx, disp.cards.len] }
+          body:
+            - decl: [dcard, CreatureData, { at: [disp.cards, idx] }]
+            - if: { condition: { neq: [dcard.artwork_id, "deadbeefcafe1234"] }, then: [{ set: [bad, { +: [bad, 1] }] }, { if: { condition: { lt: [bad, 3] }, then: [{ print: ["CORRUPT idx=${idx} artwork_id='${dcard.artwork_id}'"] }] } }] }
+            - set: [idx, { +: [idx, 1] }]
+      - if: { condition: { neq: [bad, 0] }, then: [{ print: ["FAIL ${bad}/${disp.cards.len} corrupted"] }, { return: 1 }] }
+      - print: ["PASS art_displaylist: ${disp.cards.len} display cards, artwork_id intact"]
+      - return: 0

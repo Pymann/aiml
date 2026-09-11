@@ -1263,9 +1263,60 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          std::string listElemName = className.substr(5, className.length() - 6);
          llvm::Type* llvmListElemType = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(listElemName)));
          if (methodName == "push" && argVals.size() > 0) {
+             llvm::Value* pushVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+             // spec/61 §7.0 — VALUE-MODEL element (struct with heap fields): a plain shallow store
+             // shares the source model's inner heap. If the source is a MOVABLE owned local (a fresh
+             // get_copy/no-init model whose scope-drop is still live), MOVE it (shallow + consume the
+             // drop — cheap, current fast path). Otherwise (an `at`-expr, member/param field, or a
+             // local already moved into another container) DEEP-COPY the model into an independent
+             // slot, so the owner drops don't double-free a shared inner heap (the list<Model>
+             // double-free / 9rooms WASM client crash). Only value models — ptr<>/scalar/string
+             // elements keep their existing paths.
+             if (ctx.lifetimeDropsEnabled && llvmListElemType && llvmListElemType->isStructTy() && pushVal) {
+                 auto eci = ctx.classes.find(listElemName);
+                 bool modelElem = eci != ctx.classes.end() && !eci->second.isBuiltin
+                     && eci->second.hasHeapFields && eci->second.serNodesVar && eci->second.type
+                     && !(llvm::cast<llvm::StructType>(llvmListElemType)->hasName()
+                          && llvm::cast<llvm::StructType>(llvmListElemType)->getName().startswith("AimlFatPtr_"));
+                 if (modelElem) {
+                     // MOVABLE owned local: a plain-local model whose kind-0 scope-drop is still live
+                     // (a fresh get_copy/no-init not yet moved). Those MOVE (cheap shallow store +
+                     // consume the drop) via the fallthrough below. Everything else (an at/get element
+                     // pointer, a member/param field, or a local already moved) DEEP-COPIES here so the
+                     // list element owns an INDEPENDENT heap (no shared-inner-heap double-free).
+                     bool moveOwned = false;
+                     if (auto* ve = dynamic_cast<VariableExpr*>(call->args[0].get())) {
+                         if (ve->name.find('.') == std::string::npos && ve->name.find('<') == std::string::npos) {
+                             if (Symbol* s = resolveVariable(ve->name)) {
+                                 llvm::Value* a = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+                                     s->ir_alloca_inst ? s->ir_alloca_inst : ctx.ir_gen->wrap(s->alloca_inst)));
+                                 if (a) for (auto& fr : ctx.cleanupStack) for (auto& d : fr)
+                                     if (d.addr == a && d.kind == 0) { moveOwned = true; break; }
+                             }
+                         }
+                     }
+                     if (!moveOwned) {
+                         // Source address for the deep-copy: pushVal is either already an element
+                         // pointer (get/at on a struct list) or a loaded struct value — spill the
+                         // latter to a temp alloca so aiml_ser_deep_copy can read its inner pointers.
+                         llvm::Value* srcAddr;
+                         if (pushVal->getType()->isPointerTy()) {
+                             srcAddr = pushVal;
+                         } else {
+                             llvm::AllocaInst* tmp = ctx.createEntryAlloca(llvmListElemType, "push_src");
+                             ctx.builder.CreateStore(pushVal, tmp);
+                             srcAddr = tmp;
+                         }
+                         ListImpl::pushDeepCopyModel(ctx,
+                             static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
+                             srcAddr, llvmListElemType,
+                             eci->second.serNodesVar, eci->second.serNodesCount);
+                         return nullptr;
+                     }
+                 }
+             }
              // spec/61 (A3): pushing a local moves it into the container → do not drop it.
              if (!call->args.empty()) consumeLocalDrop(call->args[0].get());
-             llvm::Value* pushVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
              // spec/61: an interpolation temp pushed into a list is MOVED (the list owns
              // the char*) → remove it from the statement-temp decref list.
              consumeStringTemp(pushVal);
@@ -1476,6 +1527,14 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              // reclaimed later once the map scope-drop is completed (MapImpl occ/slot audit).
              consumeStringTemp(keyVal);
              consumeStringTemp(valVal);
+             // spec/61 — MapImpl::put stores key/value RAW (move, no dup/incref), so a DECLARED
+             // string local passed as key/value (e.g. `decl colkey "${c}"` → `m.put(colkey, …)`)
+             // is moved into the map too. consumeStringTemp only clears inline stmt-temps; the
+             // declared local has a scope-drop (kind-1 decref) in cleanupStack that would otherwise
+             // fire at scope exit and free the string the map still holds → corrupted/empty map
+             // (was the 9rooms mana_choice regression). Remove that drop — the map owns it now.
+             if (!call->args.empty()) consumeLocalDrop(call->args[0].get());
+             if (call->args.size() > 1) consumeLocalDrop(call->args[1].get());
              // Interface-Upcast für put(key, ptr<Concrete>) wenn V = ptr<Interface>.
              // Zentralisiert in Compiler::buildInterfaceUpcast.
              if (vTy->isStructTy() && llvm::cast<llvm::StructType>(vTy)->hasName() &&

@@ -1,0 +1,32 @@
+# spec/61 §6 (P2a, dataflow-gated): a function builds an owned list<string> local and RETURNS
+# A SCALAR. Before P2a the list-drop was bypassed (return terminates the block) → per-call leak.
+# With gated return-cleanup the owned `words` slot is freed before the return (mayDrop=true),
+# while any shared-view slot would be suppressed. Must be UAF/double-free-free and not leak
+# proportionally to the 500 calls.
+- def:
+    name: count_words
+    args: [[reps, i32]]
+    return: i32
+    body:
+      - decl: [words, list<string>]
+      - decl: [jdx, i32, 0]
+      - while:
+          condition: { lt: [jdx, reps] }
+          body:
+            - call: [words.push, "w-${jdx}"]
+            - set: [jdx, { +: [jdx, 1] }]
+      - return: { call: [words.len] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - decl: [total, i32, 0]
+      - while:
+          condition: { lt: [idx, 500] }
+          body:
+            - set: [total, { +: [total, { call: [count_words, 8] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - if: { condition: { neq: [total, 4000] }, then: [{ print: ["FAIL total=", total] }, { return: 1 }] }
+      - print: ["PASS return_cleanup: scalar-return frees owned list local (total=4000)"]
+      - return: 0

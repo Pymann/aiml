@@ -291,6 +291,8 @@ namespace AIML {
         int                   keyKind = 0;           // kind 3: key kind (0 = scalar, 1 = string)
         int64_t               keyStride = 0;         // kind 3: key element stride
         AIML::AST::OwnershipId ownershipId = AIML::AST::NoOwnership;  // spec/61 §4: owning slot (mayDrop-gated)
+        std::string           debugName;             // AIML_TRACE_SYMBOL: source var name for lifetime tracing
+        std::string           debugType;             // AIML_TRACE_SYMBOL: declared type name (list<>/map<>/model)
     };
     std::vector<std::vector<ScopeDrop>> cleanupStack;
 
@@ -320,10 +322,12 @@ namespace AIML {
     // suite but regressed 9rooms_v2 (login/deckset KV paths not covered by the suite).
     // Registration/consume logic stays active (harmless when nothing is emitted); flip
     // this ON only after server-connected 9rooms e2e validation.  See spec/61 §8.
-    // Re-enabled 2026-09-09: the 9rooms login/deckset break was the KV loud-fail _exit
-    // (now softened) + root-owned side KVs, NOT the drops (aiml suite + all repros green).
-    // Now validating drops ON against the live server.
-    bool lifetimeDropsEnabled = true;
+    // 2026-09-10: DEFAULT OFF again — with the drops ON the 9rooms suite double-frees on real
+    // aliasing (shallow container/model member-stores from borrows) in ~20% of tests, and the
+    // Increment-C deep-copy changes aliasing semantics (logic regressions).  Compiler::compile()
+    // sets this from AIML_LIFETIME_DROPS (unset ⇒ OFF; =1 ⇒ ON; the mem-sanitizer harness sets
+    // =1).  Re-enable by default only once the FULL 9rooms suite passes with it on.
+    bool lifetimeDropsEnabled = false;
     std::map<std::string, FunctionInfo> functions;
     std::map<std::string, ClassInfo> classes; // Class Registry
     std::map<std::string, std::map<std::string, int>> enums; // Enum Registry
