@@ -1,4 +1,4 @@
-# Spec 48 — AIML_TRACE / AIML_SIZETRACE: Function & Size Tracing
+# Spec 48 — AIML_TRACE / AIML_SIZETRACE / AIML_TRACE_SYMBOL: Function, Size & Value Tracing
 
 ## Overview
 
@@ -184,3 +184,59 @@ a crash inside a `get_copy` / persist initializer).
 - `src/core/ast_compiler_stmt.cpp` — `sizetrace_active()` parses `AIML_SIZETRACE`
   once; `emitSizeTrace()` builds the call from the symbol's `alloca` + element
   type + `DataLayout` size; the hook is in `visitStatement` after decl/set.
+
+---
+
+# AIML_TRACE_SYMBOL: Per-Symbol Value Lifetime Tracing
+
+## Overview
+
+`AIML_TRACE_SYMBOL` is the value/lifetime sibling of `AIML_TRACE`. For the **local
+symbols** you name, it prints the symbol's **value** at two lifetime points —
+**DECL** (birth: its initial value) and **DROP** (the value immediately before its
+scope-drop frees it). It is built for use-after-free / premature-drop / move-vs-copy
+diagnosis: you watch a value from creation until cleanup and see whether it was
+**moved** (no drop) or **freed while still referenced** (garbage at a later read).
+
+Like `AIML_SIZETRACE` (and unlike the runtime-gated `AIML_TRACE`), it is
+**compile-time gated**: the compiler reads the variable and emits the trace only for
+matching symbols. Unset → zero code emitted, no overhead.
+
+## Usage — `env` field of `exodus*.json` (compile-time; same cache caveat as AIML_SIZETRACE)
+
+Comma-separated local-variable names, or `1` / `all` for every symbol:
+
+```json
+{ "env": { "AIML_TRACE_SYMBOL": "artdbg,card_name" } }
+```
+
+## Output Format
+
+To **stdout** (so it appears in the browser console for WASM builds):
+
+```
+[aiml-trace] DECL <name> (string) @<addr> = "<value>"    # string: content
+[aiml-trace] DECL <name> (list<T>) len=<n> @<addr>       # list: element count
+[aiml-trace] DROP <name> (<type>) @<addr> = "<value>"    # value right before free
+```
+
+- **string** → its content (shows poison/garbage directly).
+- **list** → element count + storage address; **model / map** → address.
+- A symbol that shows **DECL but no DROP** was **moved** — its scope-drop was consumed
+  by a `push`/`return`/member-store. This directly distinguishes a move from a free.
+
+## What is traced
+
+DECL fires at the end of each matching `decl:` (heap types: string / list / map /
+model). DROP fires inside every scope-drop whose symbol name matches. Only **locals**
+are traced, by declared name — to watch a **model field**, bind it to a string local
+(`decl: [dbg, string, card.artwork_id]`) and trace `dbg`.
+
+## Implementation Notes
+
+- `src/core/ast_compiler_stmt.cpp` — `aimlTraceSymbol()` parses `AIML_TRACE_SYMBOL`;
+  `emitSymbolValueTrace()` emits the `printf`; DECL hook at `visitDeclStmt` end, DROP
+  hook in `emitScopeDrop`. `ScopeDrop` carries `debugName`/`debugType`, set at each
+  drop-registration site.
+- Pure diagnostic, **independent of spec/61 ownership**: it observes drops/moves but
+  changes no semantics.
