@@ -103,6 +103,30 @@
             - set: [bcnt, { +: [bcnt, 1] }]
       - return: { -: [{ call: [sys.mem_usage] }, before] }
 
+# Probe H: OWNED new-Box pro Iteration (ptr<Rec> via { new: Rec }, Heap-Felder), fällt
+# am Iter-Ende aus dem Scope.  Gegenstück zu B (Value-Model-Local): B bleibt flach
+# (Scope-Drop tief), H MUSS ebenfalls flach bleiben — tut es das nicht, werden owned
+# new-Boxen am Scope-Ende nicht freigegeben (Wurzel der 9rooms-Leaks: get_base /
+# new CardMkpMath).  Regressions-Assertion in _mem_sanitize/newbox_scope_drop.aiml.
+- def:
+    name: probe_box_new
+    static_off: ["same_arg"]
+    args: [[iters, i32]]
+    return: i64
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [hcnt, i32, 0]
+      - while:
+          condition: { lt: [hcnt, iters] }
+          body:
+            - decl: [box, ptr<Rec>, { new: Rec }]
+            - set: [box.name, "owned new-box instance with heap"]
+            - call: [box.tags.push, "x"]
+            - call: [box.tags.push, "y"]
+            - call: [box.nums.push, hcnt]
+            - set: [hcnt, { +: [hcnt, 1] }]
+      - return: { -: [{ call: [sys.mem_usage] }, before] }
+
 # Probe D: reine list<string> Aufbau+Drop pro Iteration (STRING-LITERALE).
 - def:
     name: probe_list
@@ -228,6 +252,12 @@
             - decl: [res_bn, i64, { call: [probe_model_new, reps] }]
             - decl: [res_b2, i64, { call: [probe_model_new, reps2] }]
             - call: [log.info, "  B model_new  instance  : N=${res_bn}  2N=${res_b2} bytes"]
+      - if:
+          condition: { gt: [{ call: [want, sel, "H"] }, 0] }
+          then:
+            - decl: [res_hn, i64, { call: [probe_box_new, reps] }]
+            - decl: [res_h2, i64, { call: [probe_box_new, reps2] }]
+            - call: [log.info, "  H new-box    owned ptr  : N=${res_hn}  2N=${res_h2} bytes"]
       - if:
           condition: { gt: [{ call: [want, sel, "C"] }, 0] }
           then:

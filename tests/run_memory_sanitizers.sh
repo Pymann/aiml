@@ -177,6 +177,10 @@ probe "map.put moves a DECLARED string key (9rooms mana_choice): put consumes th
     "$AIML_BIN" -r tests/_mem_sanitize/map_put_declared_key.aiml
 probe "leak-probe A (model deep-copy, N=200)" "pa" \
     env AIML_MEM_PROBE=A AIML_MEM_ITERS=200 "$AIML_BIN" -r tests/test_mem_leak_probe.aiml
+probe "owned new-box scope-drop (spec/61): { new: T } local deep-freed at scope exit, bounded RSS + no double-free/UAF" "nbx" \
+    "$AIML_BIN" -r tests/_mem_sanitize/newbox_scope_drop.aiml
+probe "string field from an interpolation TEMP: single ref transferred (not incref'd) → no per-store ref leak, bounded RSS" "sfi" \
+    "$AIML_BIN" -r tests/_mem_sanitize/string_field_interp_drop.aiml
 
 echo "────────────────────────────────────────"
 if [ "$fails" -eq 0 ]; then

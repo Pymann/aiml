@@ -1,0 +1,93 @@
+# spec/61: an OWNED new-box local — `decl [box, ptr<Rec>, { new: Rec }]` (Rec has heap
+# fields) — must be DEEP-dropped at scope exit (aiml_ser_free_decoded on the pointee, then
+# free the calloc'd shell), exactly like a value-model local.  Before the fix, new-boxes
+# were NEVER freed (leaked ~linearly even with AIML_LIFETIME_DROPS=1) — the root cause of the
+# 9rooms client `new CardMkpMath` per-frame leak.
+#
+# Native RSS-delta assertion (valgrind never returns freed memory to the OS, so RSS-leak
+# metrics are only meaningful natively — see run_memory_sanitizers.sh).  A clean new-box loop
+# tracks the value-model control (a few MB of allocator arena at N=20000); a leaking one grows
+# ~5 KB/iter ≈ 100 MB.  The 40 MB bright line separates them with wide margin.
+#
+# CONTROL in the same run: the value-model loop MUST already be bounded (it was fixed long ago);
+# if even that exceeds the limit the environment/threshold is wrong → the probe says so.
+
+- model:
+    name: Rec
+    fields:
+      - [name, string]
+      - [tags, list<string>]
+      - [nums, list<i32>]
+
+- def:
+    name: fill_rec
+    args: [[rec, ptr<Rec>], [num, i32]]
+    body:
+      - set: [rec.name, "rec-${num}-payload-string-for-the-heap"]
+      - decl: [jdx, i32, 0]
+      - while:
+          condition: { lt: [jdx, 40] }
+          body:
+            - call: [rec.tags.push, "tag-${num}-${jdx}"]
+            - call: [rec.nums.push, { +: [num, jdx] }]
+            - set: [jdx, { +: [jdx, 1] }]
+
+# Value-model local per iteration (control: known-bounded since spec/61 A2/A3).
+- def:
+    name: loop_value
+    static_off: ["same_arg"]
+    args: [[iters, i32]]
+    return: i64
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [vcnt, i32, 0]
+      - while:
+          condition: { lt: [vcnt, iters] }
+          body:
+            - decl: [val, Rec]
+            - call: [fill_rec, {'&': [val]}, vcnt]
+            - set: [vcnt, { +: [vcnt, 1] }]
+      - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+# Owned new-box local per iteration (subject: must be dropped at scope exit).
+- def:
+    name: loop_newbox
+    static_off: ["same_arg"]
+    args: [[iters, i32]]
+    return: i64
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [bcnt, i32, 0]
+      - while:
+          condition: { lt: [bcnt, iters] }
+          body:
+            - decl: [box, ptr<Rec>, { new: Rec }]
+            - call: [fill_rec, box, bcnt]
+            - set: [bcnt, { +: [bcnt, 1] }]
+      - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [reps, i32, 20000]
+      - decl: [limit, i64, 41943040]   # 40 MB bright line (clean ≈ single-digit MB; leak ≈ 100 MB)
+      # Warmup: absorb one-time lazy allocations so they don't count against either loop.
+      - decl: [warm, i64, { call: [loop_newbox, 2000] }]
+      - decl: [ctrl, i64, { call: [loop_value, reps] }]
+      - decl: [subj, i64, { call: [loop_newbox, reps] }]
+      - call: [log.info, "newbox_scope_drop: value-ctrl=${ctrl} B  new-box=${subj} B  (limit=${limit} B, N=${reps})"]
+      - decl: [bad, i32, 0]
+      - if:
+          condition: { gt: [ctrl, limit] }
+          then:
+            - call: [log.info, "FAIL newbox_scope_drop: value-model CONTROL leaked (${ctrl} B > ${limit} B) — threshold/env wrong"]
+            - set: [bad, 1]
+      - if:
+          condition: { gt: [subj, limit] }
+          then:
+            - call: [log.info, "FAIL newbox_scope_drop: owned new-box NOT freed at scope exit (${subj} B > ${limit} B)"]
+            - set: [bad, 1]
+      - if: { condition: { eq: [bad, 1] }, then: [{ return: 1 }] }
+      - call: [log.info, "PASS newbox_scope_drop: owned new-box freed at scope exit (bounded RSS)"]
+      - return: 0

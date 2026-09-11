@@ -220,6 +220,13 @@ static int aimlTraceKind(CompilerContext& ctx, const std::string& tn) {
     if (tn.rfind("list<", 0) == 0) return 2;
     if (tn.rfind("map<", 0) == 0) return 3;
     if (ctx.classes.count(tn) && !ctx.classes[tn].isBuiltin) return 0;
+    // owned new-box: `ptr<T>` where T is a class/model — the alloca holds a heap pointer
+    // (kind 4 in emitSymbolValueTrace loads + prints it). Lets AIML_TRACE_SYMBOL follow a
+    // { new: T } local's lifetime (DECL + DROP), which was previously invisible.
+    if (tn.rfind("ptr<", 0) == 0 && !tn.empty() && tn.back() == '>') {
+        std::string boxed = tn.substr(4, tn.size() - 5);
+        if (ctx.classes.count(boxed) && !ctx.classes[boxed].isBuiltin) return 4;
+    }
     return -1;
 }
 
@@ -345,6 +352,34 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 sd.addr = unwrappedAlloca;
                 sd.serNodes = ci->second.serNodesVar;
                 sd.serNodesCount = ci->second.serNodesCount;
+                sd.ownershipId = declOid;
+                sd.debugName = decl->varName; sd.debugType = decl->typeName;
+                ctx.cleanupStack.back().push_back(sd);
+            }
+        }
+
+        // spec/61: OWNED new-box — `decl [box, ptr<T>, { new: T }]` calloc's a T (visitNewExpr)
+        // and `box` owns it → register a kind-4 drop: deep-free the pointee (aiml_ser_free_decoded)
+        // then free the heap shell.  Removed by consumeLocalDrop when the box is MOVED (return/
+        // member-store/push/put — e.g. get_base's `return obj` keeps the transfer intact), and
+        // mayDrop-gated via the ownership plan (freshOwned marks it Owned+Live) — the SAME safety
+        // the value-model no-init drop above relies on.  Restricted to a plain model/class with a
+        // ser-subtree; classgroup containers are excluded (their `new` wires sub-instances, so
+        // teardown is not a plain deep-free).  Call-initialised ptr locals (`= get_base(...)`) are
+        // NOT covered here — that is return-ownership (a separate step), not a locally-owned box.
+        if (decl->initialValue && decl->lifetime != "persistent"
+            && decl->typeName.rfind("ptr<", 0) == 0 && decl->typeName.back() == '>'
+            && dynamic_cast<NewExpr*>(decl->initialValue.get())
+            && !ctx.cleanupStack.empty()) {
+            std::string boxed = decl->typeName.substr(4, decl->typeName.size() - 5);
+            auto bi = ctx.classes.find(boxed);
+            if (bi != ctx.classes.end() && bi->second.hasHeapFields && bi->second.serNodesVar
+                && bi->second.type && !ctx.classGroupContainers.count(boxed)) {
+                CompilerContext::ScopeDrop sd;
+                sd.addr = unwrappedAlloca;
+                sd.kind = 4;
+                sd.serNodes = bi->second.serNodesVar;
+                sd.serNodesCount = bi->second.serNodesCount;
                 sd.ownershipId = declOid;
                 sd.debugName = decl->varName; sd.debugType = decl->typeName;
                 ctx.cleanupStack.back().push_back(sd);
@@ -1409,7 +1444,17 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 // stored copy dangles (the 9rooms deck-editor card-title/artwork UAF). incref here;
                 // the destination model's own drop decref's it, keeping the count balanced. (Move
                 // cases — memberDeepCopy=false — consume the source local instead, no incref.)
-                if (finalTypeName == "string" && memberDeepCopy) {
+                //
+                // BUT only a NAMED source (a VariableExpr: a plain local, a member-access like
+                // `cdat.name`, or a borrowed param) genuinely SHARES an existing refcounted buffer.
+                // A fresh OWNED temp — string interpolation `"..${x}.."`, a call result, a string
+                // literal — is classified DeepCopy here too (its origin is Unknown, not Owned), but
+                // it TRANSFERS its single reference into the member: increfing it leaks one ref (the
+                // temp is never decref'd), and increfing a .rodata literal corrupts the byte before
+                // it. So gate the incref on a VariableExpr source. (Owned-local sources take the
+                // Move path — memberDeepCopy=false — and never reach here.)
+                if (finalTypeName == "string" && memberDeepCopy
+                    && dynamic_cast<VariableExpr*>(setStmt->value.get())) {
                     llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
                     if (sv && sv->getType()->isPointerTy()) {
                         llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
@@ -1685,6 +1730,11 @@ static void emitSymbolValueTrace(CompilerContext& ctx, const char* phase, const 
         llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(typeName);
         llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) len=%d @%p\n");
         ctx.builder.CreateCall(pf, { fmt, phaseS, nameS, tyS, sz, addr });
+    } else if (kind == 4) {  // owned new-box: the alloca holds a heap pointer → load + print it
+        llvm::Value* bptr = ctx.builder.CreateLoad(i8p, addr, "trace_box");
+        llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(typeName.empty() ? "?" : typeName);
+        llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) box@%p\n");
+        ctx.builder.CreateCall(pf, { fmt, phaseS, nameS, tyS, bptr });
     } else {  // model / map / other: address (+ type)
         llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(typeName.empty() ? "?" : typeName);
         llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) @%p\n");
@@ -1720,6 +1770,15 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
             ctx.builder.getInt32(it.keyKind), ctx.builder.getInt64(it.keyStride),
             ctx.builder.getInt32(it.elemKind), ctx.builder.getInt64(it.elemSize),
             vNodes, ctx.builder.getInt32(it.serNodesCount) });
+    } else if (it.kind == 4) {
+        // owned new-box: the alloca holds a heap pointer (calloc'd in visitNewExpr).
+        // Load it, deep-free the pointee's heap fields, then free the shell.
+        llvm::Value* boxptr = ctx.builder.CreateLoad(i8p, it.addr, "drop_box");
+        llvm::Function* fn = ctx.getFunction("aiml_ser_free_decoded",
+            ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
+        ctx.builder.CreateCall(fn, { boxptr, it.serNodes, ctx.builder.getInt32(it.serNodesCount) });
+        llvm::Function* fr = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
+        ctx.builder.CreateCall(fr, { boxptr });
     } else {
         llvm::Function* fn = ctx.getFunction("aiml_ser_free_decoded",
             ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
