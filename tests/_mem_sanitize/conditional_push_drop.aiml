@@ -1,0 +1,113 @@
+# spec/61: a fresh owned value-model local that is CONDITIONALLY moved into a container
+# (push inside an `if` in a loop body) must still be freed on the paths that SKIP the push.
+#
+# Root cause (9rooms DeckService.list, ~12 strings/iter leak): the push fast-path takes a
+# shallow MOVE — it stores the struct into the list element and consumeLocalDrop erases the
+# source's kind-0 scope-drop from EVERY cleanup frame. That is sound only when the push
+# DOMINATES the source's scope exit (push + decl in the same innermost block). When the push
+# sits in a nested/conditional block, the source's drop lives in an OUTER frame; erasing it
+# globally leaks the source (its whole heap: name + card_ids) on every path that skips the
+# push. Fix (ast_compiler_call.cpp): the shallow-move fast-path fires ONLY when the source's
+# live kind-0 drop is in the TOPMOST cleanup frame; otherwise fall back to DEEP-COPY, so the
+# source keeps its drop (freed at its own scope exit) while the list owns an independent heap.
+#
+# Native RSS-delta assertion (valgrind never returns freed memory to the OS → RSS-leak metrics
+# are only meaningful natively; see run_memory_sanitizers.sh). A clean conditional-push loop
+# tracks the unconditional-push control; a leaking one grows ~1 model + its list<string> per
+# skipped iteration. The 40 MB bright line separates them with wide margin.
+
+- model:
+    name: Deckish
+    fields:
+      - [owner, string]
+      - [tags,  list<string>]
+
+- model:
+    name: OutBox
+    fields:
+      - [items, list<Deckish>]
+
+- def:
+    name: make_deck
+    static_off: ["same_arg"]
+    args: [[own, string]]
+    return: { type: Deckish, lifetime: producer }
+    body:
+      - decl: [dck, Deckish]
+      - set: [dck.owner, own]
+      - decl: [jdx, i32, 0]
+      - while:
+          condition: { lt: [jdx, 12] }
+          body:
+            - call: [dck.tags.push, "card-${jdx}-payload-string-for-heap"]
+            - set: [jdx, { +: [jdx, 1] }]
+      - return: dck
+
+# SUBJECT: only every other fresh deck is pushed (mirrors DeckService.list owner filter).
+# The skipped ones must be freed at loop-body scope exit.
+- def:
+    name: loop_cond_push
+    static_off: ["same_arg"]
+    args: [[iters, i32]]
+    return: i64
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [out, OutBox]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, iters] }
+          body:
+            - decl: [own, string, "u${idx}"]
+            - decl: [deck, Deckish, { call: [make_deck, own] }]
+            - if:
+                condition: { eq: [{ '%': [idx, 2] }, 0] }
+                then:
+                  - call: [out.items.push, deck]
+            - set: [idx, { +: [idx, 1] }]
+      - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+# CONTROL: unconditional push — the shallow-move fast-path, known-bounded (the list owns
+# every deck; nothing is skipped). If even this exceeds the limit the threshold/env is wrong.
+- def:
+    name: loop_uncond_push
+    static_off: ["same_arg"]
+    args: [[iters, i32]]
+    return: i64
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [out, OutBox]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, iters] }
+          body:
+            - decl: [own, string, "u${idx}"]
+            - decl: [deck, Deckish, { call: [make_deck, own] }]
+            - call: [out.items.push, deck]
+            - set: [idx, { +: [idx, 1] }]
+      - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [reps, i32, 40000]
+      - decl: [limit, i64, 41943040]   # 40 MB bright line (clean ≈ single-digit MB; leak ≈ 100+ MB)
+      # Warmup: absorb one-time lazy allocations so they don't count against either loop.
+      - decl: [warm, i64, { call: [loop_cond_push, 2000] }]
+      - decl: [ctrl, i64, { call: [loop_uncond_push, reps] }]
+      - decl: [subj, i64, { call: [loop_cond_push, reps] }]
+      - call: [log.info, "conditional_push_drop: uncond-ctrl=${ctrl} B  cond-push=${subj} B  (limit=${limit} B, N=${reps})"]
+      - decl: [bad, i32, 0]
+      - if:
+          condition: { gt: [ctrl, limit] }
+          then:
+            - call: [log.info, "FAIL conditional_push_drop: unconditional-push CONTROL leaked (${ctrl} B > ${limit} B) — threshold/env wrong"]
+            - set: [bad, 1]
+      - if:
+          condition: { gt: [subj, limit] }
+          then:
+            - call: [log.info, "FAIL conditional_push_drop: skipped value-model NOT freed at scope exit (${subj} B > ${limit} B)"]
+            - set: [bad, 1]
+      - if: { condition: { eq: [bad, 1] }, then: [{ return: 1 }] }
+      - call: [log.info, "PASS conditional_push_drop: conditionally-pushed value-model freed on skip paths (bounded RSS)"]
+      - return: 0

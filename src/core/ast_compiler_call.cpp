@@ -1290,8 +1290,20 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                              if (Symbol* s = resolveVariable(ve->name)) {
                                  llvm::Value* a = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
                                      s->ir_alloca_inst ? s->ir_alloca_inst : ctx.ir_gen->wrap(s->alloca_inst)));
-                                 if (a) for (auto& fr : ctx.cleanupStack) for (auto& d : fr)
-                                     if (d.addr == a && d.kind == 0) { moveOwned = true; break; }
+                                 // spec/61: the shallow-MOVE fast path (store the struct into the element
+                                 // and consumeLocalDrop the source) is sound only when the push DOMINATES
+                                 // the source's scope exit — i.e. the push and the decl sit in the SAME
+                                 // innermost block, so the source's still-live kind-0 drop is in the
+                                 // TOPMOST cleanup frame. If the drop lives in an OUTER frame the push is
+                                 // inside a nested/conditional block (e.g. an `if` in a loop body):
+                                 // consumeLocalDrop erases the drop from every frame, so on the paths that
+                                 // skip the push the source leaks (its whole heap — observed as ~1 model +
+                                 // its card_ids/strings per iteration in DeckService.list). Fall back to
+                                 // DEEP-COPY there: the source keeps its drop and is freed at its own scope
+                                 // exit, while the list element owns an INDEPENDENT heap (no double-free).
+                                 if (a && !ctx.cleanupStack.empty())
+                                     for (auto& d : ctx.cleanupStack.back())
+                                         if (d.addr == a && d.kind == 0) { moveOwned = true; break; }
                              }
                          }
                      }

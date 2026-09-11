@@ -90,6 +90,40 @@ static llvm::Function* getOrCreateSretStub(CompilerContext& ctx,
     return stub;
 }
 
+// spec/61 return-ownership (interface boxes): synthesize once `void __free_<Class>(i8* obj)`
+// for a concrete class C — deep-free C's heap fields (aiml_ser_free_decoded with C's
+// __aiml_sernodes_C, only when C has heap fields + a ser subtree and is not a classgroup
+// container), then free(obj) the shell. Placed in the trailing slot of every interface vtable
+// C implements so an owned `ptr<Iface>` fat-pointer box can be deep-freed by virtual dispatch
+// on its concrete type (kind-5 ScopeDrop). Idempotent (one per class, reused across interfaces).
+static llvm::Function* getOrCreateClassFree(CompilerContext& ctx, const std::string& className) {
+    std::string name = "__free_" + className;
+    if (auto* existing = ctx.module.getFunction(name)) return existing;
+    auto* i8p = llvm::PointerType::get(ctx.context, 0);
+    auto* fnTy = llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.context), {i8p}, false);
+    auto* fn = llvm::Function::Create(
+        fnTy, llvm::GlobalValue::LinkOnceODRLinkage, name, ctx.module);
+    auto savedIP = ctx.builder.saveIP();
+    auto* entry = llvm::BasicBlock::Create(ctx.context, "entry", fn);
+    ctx.builder.SetInsertPoint(entry);
+    llvm::Value* obj = &*fn->arg_begin();
+    auto ci = ctx.classes.find(className);
+    bool deepFree = (ci != ctx.classes.end() && ci->second.hasHeapFields
+                     && ci->second.serNodesVar && !ctx.classGroupContainers.count(className));
+    if (deepFree) {
+        auto* sf = ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
+                                   {i8p, i8p, ctx.builder.getInt32Ty()});
+        ctx.builder.CreateCall(sf, { obj,
+            static_cast<llvm::Value*>(ci->second.serNodesVar),
+            ctx.builder.getInt32(ci->second.serNodesCount) });
+    }
+    auto* freeFn = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
+    ctx.builder.CreateCall(freeFn, { obj });
+    ctx.builder.CreateRetVoid();
+    ctx.builder.restoreIP(savedIP);
+    return fn;
+}
+
 // Recursively initialises container-typed members (list/map/chan/buffer) of
 // a class instance at `basePtr`.  See ast_compiler.h.
 void Compiler::initClassContainerMembers(llvm::Value* basePtr,
@@ -3112,6 +3146,29 @@ bool Compiler::emitContainerFieldDeepCopy(llvm::Value* dstPtr, llvm::Value* srcP
         gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
         gv->setVisibility(llvm::GlobalValue::HiddenVisibility);
     }
+    // spec/61: the destination container field usually already owns heap — either the empty
+    // default storage that `new`+initClassContainerMembers allocated (get_base's box → copy_header
+    // assigns mana_cost/active_abilities/passive_abilities), or prior data being replaced. The
+    // memset below zeroes the field's pointers WITHOUT freeing that storage → it leaks (the
+    // get_base per-card leak). Release it first with aiml_ser_free_decoded(dst, nodes) — BUT guard
+    // against self-copy (dst==src): freeing dst would then release the very storage deep_copy is
+    // about to read from src (UAF). A distinct dst never shares buffers with src on this path
+    // (member field vs a borrowed source), so freeing is safe when the addresses differ.
+    {
+        llvm::Function* sfF = ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
+            {ptrTy, ptrTy, i32Ty});
+        llvm::Value* dstI = ctx.builder.CreatePtrToInt(dstPtr, ctx.getSizeType());
+        llvm::Value* srcI = ctx.builder.CreatePtrToInt(srcPtr, ctx.getSizeType());
+        llvm::Value* distinct = ctx.builder.CreateICmpNE(dstI, srcI, "fieldcopy_distinct");
+        llvm::Function* curFn = ctx.builder.GetInsertBlock()->getParent();
+        auto* freeBB = llvm::BasicBlock::Create(lctx, "fieldcopy.free", curFn);
+        auto* zeroBB = llvm::BasicBlock::Create(lctx, "fieldcopy.zero", curFn);
+        ctx.builder.CreateCondBr(distinct, freeBB, zeroBB);
+        ctx.builder.SetInsertPoint(freeBB);
+        ctx.builder.CreateCall(sfF, { dstPtr, gv, ctx.builder.getInt32((int32_t)nodes.size()) });
+        ctx.builder.CreateBr(zeroBB);
+        ctx.builder.SetInsertPoint(zeroBB);
+    }
     // aiml_ser_deep_copy requires dst zero-inited (all heap pointers NULL). Zero the field first.
     if (llvm::Type* fieldTy = ctx.getLLVMType(typeName)) {
         uint64_t sz = dl.getTypeAllocSize(fieldTy);
@@ -3882,6 +3939,9 @@ void Compiler::visitTopLevel(Node* node) {
         }
         for (const auto& method : cls->methods) {
             std::string oldName = method->name;
+            // spec/61 return-ownership: capture the ORIGINAL method name (pre-mangle) so a
+            // call site `<.recv.get_base` matches by its trailing identifier.
+            if (method->ownsReturn) ctx.ownsReturnFns.insert(oldName);
             method->name = cls->name + "_" + method->name;
             auto it = method->args.insert(method->args.begin(), {"this", "ref<" + cls->name + ">"});
             // Keep argMods index-synced with args: `this` gets a default (borrow) modifier
@@ -3982,6 +4042,13 @@ void Compiler::visitTopLevel(Node* node) {
                 // Hard-fail policy: do not emit a partial / null-slot vtable.
                 continue;
             }
+            // spec/61 return-ownership: TRAILING slot = __free_<Class> (deep-free + shell free),
+            // at fixed index iface.methods.size(). A kind-5 ScopeDrop on an owned ptr<Iface> box
+            // dispatches through this slot on the concrete type. Method slot indices are unchanged
+            // (appended at the end), so existing virtual dispatch is unaffected — but the forward-
+            // declared vtable array in buildInterfaceUpcast is sized methods.size()+1 to match.
+            slots.push_back(llvm::ConstantExpr::getBitCast(
+                getOrCreateClassFree(ctx, cls->name), i8p));
             auto* arrTy = llvm::ArrayType::get(i8p, slots.size());
             auto* init = llvm::ConstantArray::get(arrTy, slots);
             std::string vtableName = "__vtable_" + cls->name + "_" + ifaceName;
@@ -4486,6 +4553,11 @@ void Compiler::visitFunction(FunctionDecl* func) {
     funcInfo.sourceYaml = YAML::Dump(func->sourceNode);
     funcInfo.deprecated = std::find(func->meta.begin(), func->meta.end(),
                                     "deprecated") != func->meta.end();
+    funcInfo.ownsReturn = func->ownsReturn;   // spec/61 return-ownership
+    // Record the ORIGINAL short name for call-site suffix matching. Methods are captured in
+    // visitTopLevel BEFORE mangling (oldName); free functions (no enclosing class) here.
+    if (func->ownsReturn && ctx.currentClassName.empty())
+        ctx.ownsReturnFns.insert(func->name);
     // Track user-defined arg + return types for sys.bundle (recurses into list<T>/map<K,V>)
     auto trackType = [&](const std::string& typeName) {
         std::set<std::string> found;
@@ -5266,8 +5338,11 @@ llvm::Value* Compiler::buildInterfaceUpcast(llvm::Value* srcValue,
         }
         if (!implementsIface) return nullptr;
         auto* i8p_local = ctx.builder.getInt8Ty()->getPointerTo();
-        size_t methodCount = ctx.interfaces.count(ifaceName)
-            ? ctx.interfaces[ifaceName].methods.size() : 1;
+        // +1 for the trailing __free_<Class> slot (spec/61 return-ownership). MUST match the
+        // vtable DEFINITION's size (visitTopLevel appends the free slot) or the LinkOnceODR
+        // globals collide with mismatched array types across compilation units.
+        size_t methodCount = (ctx.interfaces.count(ifaceName)
+            ? ctx.interfaces[ifaceName].methods.size() : 1) + 1;
         auto* arrTy = llvm::ArrayType::get(i8p_local, methodCount);
         vtbl = new llvm::GlobalVariable(ctx.module, arrTy, /*isConstant=*/true,
             llvm::GlobalValue::ExternalLinkage, /*initializer=*/nullptr, vtableName);

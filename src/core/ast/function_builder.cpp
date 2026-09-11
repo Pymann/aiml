@@ -104,6 +104,12 @@ public:
 bool FunctionBuilder::OnMapStart() {
     mapDepth++;
     if (mapDepth > 1) {
+        // spec/61 §3.2: object-form return `return: { type: T, lifetime: producer }`.
+        if (currentKey == "return") {
+            inReturnMap = true;
+            returnMapExpectKey = true;
+            return true;
+        }
         // Nested map inside function definition — most likely args: { name: type }
         // which is the wrong syntax. Emit a helpful error and discard the submap.
         if (currentKey == "args") {
@@ -120,6 +126,11 @@ bool FunctionBuilder::OnMapStart() {
 
 bool FunctionBuilder::OnMapEnd() {
     mapDepth--;
+    if (inReturnMap && mapDepth == 1) {   // closing the object-form `return { … }` submap
+        inReturnMap = false;
+        expectingKey = true;              // back to outer function-map keys
+        expectingValue = false;
+    }
     if (mapDepth > 0) return true;  // closing a nested submap, keep going
     builder->popState();
     return true;
@@ -179,16 +190,37 @@ bool FunctionBuilder::OnSequenceStart() {
 }
 
 bool FunctionBuilder::OnScalar(const std::string& value, const std::string& tag) {
+    // spec/61 §3.2: inside object-form `return: { type: T, lifetime: producer }`.
+    if (inReturnMap) {
+        if (returnMapExpectKey) { returnMapKey = value; returnMapExpectKey = false; return true; }
+        returnMapExpectKey = true;
+        if (returnMapKey == "type") {
+            func->returnType = value;
+        } else if (returnMapKey == "lifetime") {
+            // `producer` = the function produces a fresh owned value → the caller owns/drops it
+            // (return-ownership). `scope` (default) = ordinary return (borrow/shared, not dropped).
+            if (value == "producer") {
+                func->ownsReturn = true;
+            } else if (value == "scope") {
+                func->ownsReturn = false;
+            } else {
+                LOG_ERROR("return lifetime must be scope|producer, got '" + value + "'");
+            }
+        } else {
+            LOG_ERROR("unknown return modifier '" + returnMapKey + "' (expected type|lifetime)");
+        }
+        return true;
+    }
     if (expectingKey) {
         currentKey = value;
         expectingKey = false;
         expectingValue = true;
         return true;
     }
-    
+
     if (expectingValue) {
         if (currentKey == "name") func->name = value;
-        else if (currentKey == "return") func->returnType = value;
+        else if (currentKey == "return") func->returnType = value;  // bare scalar form: `return: T`
         else if (currentKey == "version") {
             try { func->version = std::stoull(value); } catch (...) {}
         }

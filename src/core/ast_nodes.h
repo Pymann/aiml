@@ -291,6 +291,12 @@ class FunctionDecl : public Node {
 public:
     std::string name;
     std::string returnType;
+    // spec/61 return-ownership: `owns_return: true` marks this function as returning an
+    // OWNED heap box (a ptr<T> whose pointee it freshly allocated, e.g. get_base's
+    // `{ new: <Type>Card }`). A caller's `decl: [x, ptr<T>, { call: this-fn }]` local then
+    // gets a deep scope-drop (kind 4), exactly like a `{ new: T }` local — unless it escapes
+    // (return/store/push → consumeLocalDrop removes the drop). Default false = borrow/view.
+    bool        ownsReturn = false;
     uint64_t    version = 1;  // Hot-Reload version (default 1)
     std::vector<std::pair<std::string, std::string>> args; // name, type
     std::vector<ParamMod> argMods;   // parallel to args; default-constructed = plain borrow

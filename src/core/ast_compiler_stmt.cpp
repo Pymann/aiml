@@ -226,6 +226,9 @@ static int aimlTraceKind(CompilerContext& ctx, const std::string& tn) {
     if (tn.rfind("ptr<", 0) == 0 && !tn.empty() && tn.back() == '>') {
         std::string boxed = tn.substr(4, tn.size() - 5);
         if (ctx.classes.count(boxed) && !ctx.classes[boxed].isBuiltin) return 4;
+        // ptr<Interface> fat-pointer — kind 6 loads the obj slot (field 0) + prints it, so
+        // AIML_TRACE_SYMBOL can follow an owned interface box (e.g. get_base → ptr<CardBase>).
+        if (ctx.interfaces.count(boxed)) return 6;
     }
     return -1;
 }
@@ -338,11 +341,26 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         sym.ownershipId = declOid;
         ctx.symbol_table[decl->varName] = sym;
 
-        // spec/61 (A2+A3): a FRESH value-model local with heap fields (no initializer,
-        // populated later) owns an independent heap → register a scope-exit drop.  Safe
-        // now that A3 move-detection removes the drop if the local is later consumed
-        // (push/return/store).  Excludes ptr<T>/ref<T> (box/borrow) and `persistent`.
-        if (!decl->initialValue && decl->lifetime != "persistent"
+        // spec/61 (A2+A3): a FRESH value-model local with heap fields owns an independent heap
+        // → register a scope-exit drop. Safe now that A3 move-detection removes the drop if the
+        // local is later consumed (push/return/store). Excludes ptr<T>/ref<T> (box/borrow) and
+        // `persistent`. Two owned-model INIT forms (kv.get_copy is registered separately below):
+        //   • no initializer (populated later), and
+        //   • a call to an `owns_return: true` function — return-ownership for VALUE models: the
+        //     callee returns a freshly-built INDEPENDENT model (e.g. every RPC handler's
+        //     `decl resp = svc.list(...)`); the caller owns it. Matched by the call's trailing
+        //     identifier against ctx.ownsReturnFns (mirrors freshOwned). The address-based drop
+        //     is valid even though the call stores into the alloca later — it fires at scope exit.
+        bool modelOwnedInit = (decl->initialValue == nullptr);
+        if (!modelOwnedInit && decl->initialValue) {
+            if (auto* mc = dynamic_cast<CallExpr*>(decl->initialValue.get())) {
+                const std::string& fn = mc->functionName;
+                size_t dp = fn.rfind('.');
+                std::string shortName = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                if (ctx.ownsReturnFns.count(shortName) > 0) modelOwnedInit = true;
+            }
+        }
+        if (modelOwnedInit && decl->lifetime != "persistent"
             && decl->typeName.rfind("ptr<", 0) != 0
             && decl->typeName.rfind("ref<", 0) != 0
             && !ctx.cleanupStack.empty()) {
@@ -358,31 +376,57 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             }
         }
 
-        // spec/61: OWNED new-box — `decl [box, ptr<T>, { new: T }]` calloc's a T (visitNewExpr)
-        // and `box` owns it → register a kind-4 drop: deep-free the pointee (aiml_ser_free_decoded)
-        // then free the heap shell.  Removed by consumeLocalDrop when the box is MOVED (return/
-        // member-store/push/put — e.g. get_base's `return obj` keeps the transfer intact), and
-        // mayDrop-gated via the ownership plan (freshOwned marks it Owned+Live) — the SAME safety
-        // the value-model no-init drop above relies on.  Restricted to a plain model/class with a
-        // ser-subtree; classgroup containers are excluded (their `new` wires sub-instances, so
-        // teardown is not a plain deep-free).  Call-initialised ptr locals (`= get_base(...)`) are
-        // NOT covered here — that is return-ownership (a separate step), not a locally-owned box.
+        // spec/61: OWNED box — `decl [box, ptr<T>, INIT]` where `box` owns the pointee → register
+        // a kind-4 drop: deep-free the pointee (aiml_ser_free_decoded) then free the heap shell.
+        // Removed by consumeLocalDrop when the box is MOVED (return/member-store/push/put — e.g.
+        // get_base's own `return obj` keeps the transfer intact), and mayDrop-gated via the
+        // ownership plan (freshOwned marks it Owned+Live) — the SAME safety the value-model drop
+        // above relies on. Two INIT forms (MUST match freshOwned in ownership_analyzer.cpp):
+        //   (1) `{ new: T }`               — locally calloc'd (visitNewExpr).
+        //   (2) `{ call: fn(...) }` where fn is `owns_return: true` — the callee freshly allocated
+        //       the box and transfers ownership to us (return-ownership; e.g. `cbase = get_base(...)`
+        //       in compute_mkp). Matched by the call's trailing identifier against ctx.ownsReturnFns.
+        // Restricted to a plain model/class with a ser-subtree; classgroup containers excluded.
         if (decl->initialValue && decl->lifetime != "persistent"
             && decl->typeName.rfind("ptr<", 0) == 0 && decl->typeName.back() == '>'
-            && dynamic_cast<NewExpr*>(decl->initialValue.get())
             && !ctx.cleanupStack.empty()) {
-            std::string boxed = decl->typeName.substr(4, decl->typeName.size() - 5);
-            auto bi = ctx.classes.find(boxed);
-            if (bi != ctx.classes.end() && bi->second.hasHeapFields && bi->second.serNodesVar
-                && bi->second.type && !ctx.classGroupContainers.count(boxed)) {
-                CompilerContext::ScopeDrop sd;
-                sd.addr = unwrappedAlloca;
-                sd.kind = 4;
-                sd.serNodes = bi->second.serNodesVar;
-                sd.serNodesCount = bi->second.serNodesCount;
-                sd.ownershipId = declOid;
-                sd.debugName = decl->varName; sd.debugType = decl->typeName;
-                ctx.cleanupStack.back().push_back(sd);
+            bool ownedInit = dynamic_cast<NewExpr*>(decl->initialValue.get()) != nullptr;
+            if (!ownedInit) {
+                if (auto* c = dynamic_cast<CallExpr*>(decl->initialValue.get())) {
+                    const std::string& fn = c->functionName;
+                    size_t dp = fn.rfind('.');
+                    std::string shortName = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                    ownedInit = ctx.ownsReturnFns.count(shortName) > 0;
+                }
+            }
+            if (ownedInit) {
+                std::string boxed = decl->typeName.substr(4, decl->typeName.size() - 5);
+                auto bi = ctx.classes.find(boxed);
+                auto ii = ctx.interfaces.find(boxed);
+                if (bi != ctx.classes.end() && bi->second.hasHeapFields && bi->second.serNodesVar
+                    && bi->second.type && !ctx.classGroupContainers.count(boxed)) {
+                    // Concrete class box → kind-4 (static serNodes deep-free + shell free).
+                    CompilerContext::ScopeDrop sd;
+                    sd.addr = unwrappedAlloca;
+                    sd.kind = 4;
+                    sd.serNodes = bi->second.serNodesVar;
+                    sd.serNodesCount = bi->second.serNodesCount;
+                    sd.ownershipId = declOid;
+                    sd.debugName = decl->varName; sd.debugType = decl->typeName;
+                    ctx.cleanupStack.back().push_back(sd);
+                } else if (ii != ctx.interfaces.end() && ii->second.fatPtrType) {
+                    // Interface fat-pointer box (e.g. get_base → ptr<CardBase>) → kind-5:
+                    // dispatch the concrete type's __free_<Class> via the vtable's trailing slot.
+                    // (Only the owns_return CALL form reaches here — you cannot `{ new: Iface }`.)
+                    CompilerContext::ScopeDrop sd;
+                    sd.addr = unwrappedAlloca;
+                    sd.kind = 5;
+                    sd.fatPtrType = static_cast<llvm::Type*>(ii->second.fatPtrType);
+                    sd.ifaceMethodCount = (int)ii->second.methods.size();
+                    sd.ownershipId = declOid;
+                    sd.debugName = decl->varName; sd.debugType = decl->typeName;
+                    ctx.cleanupStack.back().push_back(sd);
+                }
             }
         }
 
@@ -1735,6 +1779,21 @@ static void emitSymbolValueTrace(CompilerContext& ctx, const char* phase, const 
         llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(typeName.empty() ? "?" : typeName);
         llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) box@%p\n");
         ctx.builder.CreateCall(pf, { fmt, phaseS, nameS, tyS, bptr });
+    } else if (kind == 5 || kind == 6) {  // interface fat-pointer: load obj slot (field 0) + print
+        // kind 6 = DECL (from aimlTraceKind), kind 5 = DROP (from ScopeDrop.kind). Extract the
+        // interface name from typeName ("ptr<Iface>") to GEP the fat-pointer's obj slot.
+        std::string ifn = (typeName.rfind("ptr<", 0) == 0 && typeName.back() == '>')
+            ? typeName.substr(4, typeName.size() - 5) : std::string();
+        auto ii = ctx.interfaces.find(ifn);
+        llvm::Value* objp = addr;
+        if (ii != ctx.interfaces.end() && ii->second.fatPtrType) {
+            auto* fpTy = static_cast<llvm::StructType*>(ii->second.fatPtrType);
+            llvm::Value* objField = ctx.builder.CreateStructGEP(fpTy, addr, 0, "trace_fp_obj");
+            objp = ctx.builder.CreateLoad(i8p, objField, "trace_iface_obj");
+        }
+        llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(typeName.empty() ? "?" : typeName);
+        llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) iface_obj@%p\n");
+        ctx.builder.CreateCall(pf, { fmt, phaseS, nameS, tyS, objp });
     } else {  // model / map / other: address (+ type)
         llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(typeName.empty() ? "?" : typeName);
         llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) @%p\n");
@@ -1779,6 +1838,35 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         ctx.builder.CreateCall(fn, { boxptr, it.serNodes, ctx.builder.getInt32(it.serNodesCount) });
         llvm::Function* fr = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
         ctx.builder.CreateCall(fr, { boxptr });
+    } else if (it.kind == 5) {
+        // owned interface fat-pointer box: it.addr is the AimlFatPtr_<Iface> alloca {obj, vtable}.
+        // Load obj (field 0) + vtable (field 1); the vtable's TRAILING slot (index = method count)
+        // is __free_<Class> (void(i8*)) for the concrete type. Dispatch it on obj → deep-free +
+        // shell free of the concrete object. Mirrors interface method dispatch (ast_compiler_call).
+        auto* fpTy = static_cast<llvm::StructType*>(it.fatPtrType);
+        llvm::Value* objField  = ctx.builder.CreateStructGEP(fpTy, it.addr, 0, "fp_obj");
+        llvm::Value* vtblField = ctx.builder.CreateStructGEP(fpTy, it.addr, 1, "fp_vtbl");
+        llvm::Value* objPtr  = ctx.builder.CreateLoad(i8p, objField,  "drop_iface_obj");
+        llvm::Value* vtblPtr = ctx.builder.CreateLoad(i8p, vtblField, "drop_iface_vtbl");
+        // NULL-guard: a null interface box carries {obj=null, vtable=null} (e.g. get_base's
+        // `return null` for not-found / not-owner). Dispatching the vtable free slot on a null
+        // vtable would deref address 0x8 → SIGSEGV. Only free when the vtable is non-null.
+        auto* nullp = llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p));
+        llvm::Value* isNull = ctx.builder.CreateICmpEQ(vtblPtr, nullp, "fp_vtbl_null");
+        llvm::Function* curFn = ctx.builder.GetInsertBlock()->getParent();
+        auto* doBB   = llvm::BasicBlock::Create(ctx.context, "ifacedrop.do", curFn);
+        auto* contBB = llvm::BasicBlock::Create(ctx.context, "ifacedrop.cont", curFn);
+        ctx.builder.CreateCondBr(isNull, contBB, doBB);
+        ctx.builder.SetInsertPoint(doBB);
+        auto* slotsTy = llvm::ArrayType::get(i8p, (uint64_t)it.ifaceMethodCount + 1);
+        llvm::Value* slotsBase = ctx.builder.CreateBitCast(vtblPtr, slotsTy->getPointerTo());
+        llvm::Value* slotPtr = ctx.builder.CreateInBoundsGEP(slotsTy, slotsBase,
+            { ctx.builder.getInt32(0), ctx.builder.getInt32(it.ifaceMethodCount) }, "free_slot");
+        llvm::Value* freeFnPtr = ctx.builder.CreateLoad(i8p, slotPtr, "free_fn");
+        auto* freeTy = llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p}, false);
+        ctx.builder.CreateCall(freeTy, freeFnPtr, { objPtr });
+        ctx.builder.CreateBr(contBB);
+        ctx.builder.SetInsertPoint(contBB);
     } else {
         llvm::Function* fn = ctx.getFunction("aiml_ser_free_decoded",
             ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
