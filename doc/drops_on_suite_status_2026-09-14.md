@@ -25,12 +25,17 @@ All are drops-on-gated (drops-off path untouched):
    refcounted `""` (`aiml_str_empty()`), literal defaults (`[artwork_id, string, ""]`) are dup'd.
    → add_life_clamp, buff_expiry, x_mana_cost, ability_text, cost_processor, typed_card_persist.
    (report §12, commit 8acff58)
-4. **AIML string literals are immortal** (header-carrying `{STRN, IMMORTAL, data}`) — a literal in a
-   refcounted slot (model field, container, return) is now decref-safe everywhere.
-   → listptr_inplace_kv, on_death_zone_fallback, any_deck_draw; effect_processor,
-     target_pause_resume, trigger_stage2 no longer crash. (commit afdd6cb)
+4. ~~**AIML string literals are immortal** (header-carrying)~~ — **TRIED AND REVERTED** (afdd6cb →
+   revert ed30b58). Making ALL literals header-carrying was NET-NEGATIVE: it broke ~20 previously-
+   green integration tests (mana/card-type comparisons — "primordial cannot be played from hand", a
+   card-type/string comparison misfiring on the header-carrying literal) while only fixing 3 crashes
+   (listptr_inplace_kv, on_death_zone_fallback, any_deck_draw). **Lesson: a broad codegen change MUST
+   be gated with the FULL 9rooms suite before commit** — the sanitizer suite + a small sample passed
+   and hid the regression. The 3 crashes it fixed are the "literal assigned into a model string
+   field → decref segv" class; they need a NARROW fix instead (dup the literal only at the
+   member-store into a string field), or v2.
 
-Net: ~15 drops-on crash sites cleared; suite 120 → ~127-130 / 149.
+Net (after revert): ~12 drops-on crash sites cleared; suite ~125/149 (baseline restored).
 
 ## Remaining fails — categorized
 
