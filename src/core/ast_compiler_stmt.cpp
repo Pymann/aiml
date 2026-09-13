@@ -126,6 +126,15 @@ void coerceOrStoreFieldDefault(CompilerContext& ctx,
         storeVal = ctx.builder.CreateCall(internFn, {storeVal}, "path_default_init");
     }
 
+    // spec/61: a STRING member with a literal default stores a raw .rodata pointer, which drops-on's
+    // aiml_ser_free_decoded then decref's → segfault (reading the literal's `-8` header). Dup it into
+    // a refcounted, decref-safe string. Mirrors the initClassContainerMembers m.initValue path.
+    if (member.typeName == "string" && storeVal->getType()->isPointerTy()) {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Function* dupFn = ctx.getFunction("aiml_str_dup", i8p, {i8p});
+        storeVal = ctx.builder.CreateCall(dupFn, { storeVal }, "str_default_dup");
+    }
+
     bool copyByMemcpy =
         (member.typeName.find("buffer<") == 0) ||
         (member.typeName.find("list<") == 0) ||

@@ -174,7 +174,13 @@ void Compiler::initClassContainerMembers(llvm::Value* basePtr,
         // Repro: reading `.len` of an unset model string field crashed the
         // DeckEditor (build_card_text on a card whose ability_text was never set).
         else if (mt == "string" && !m.initValue) {
-            llvm::Value* emptyStr = ctx.builder.CreateGlobalStringPtr("");
+            // spec/61: default an unset model string field to the IMMORTAL refcounted "" (not a
+            // raw .rodata literal). `.len`/strlen still see "" (safe to read), and drops-on's
+            // aiml_ser_free_decoded can decref it safely (no-op) — a raw literal here segfaults at
+            // free (decref reading its `-8` header). Repro: test_add_life_clamp under AIML_LIFETIME_DROPS=1.
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* emptyFn = ctx.getFunction("aiml_str_empty", i8p, {});
+            llvm::Value* emptyStr = ctx.builder.CreateCall(emptyFn, {}, "str_empty_default");
             ctx.builder.CreateStore(emptyStr, fieldPtr);
         }
         // Scalar / pointer member with an explicit per-member default: apply
@@ -186,7 +192,19 @@ void Compiler::initClassContainerMembers(llvm::Value* basePtr,
             IRValue* v = visitExpression(m.initValue.get());
             if (v) {
                 llvm::Value* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v));
-                if (raw) ctx.builder.CreateStore(raw, fieldPtr);
+                if (raw) {
+                    // spec/61: a STRING member with a literal default (e.g. `[artwork_id, string, ""]`)
+                    // would store a raw .rodata pointer, which drops-on's aiml_ser_free_decoded then
+                    // decref's → segfault (reading the literal's `-8` header). Dup the literal into a
+                    // refcounted, decref-safe string (aiml_str_dup("") → an owned ""), like assigned
+                    // string values. Non-string defaults store as-is.
+                    if (mt == "string" && raw->getType()->isPointerTy()) {
+                        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                        llvm::Function* dupFn = ctx.getFunction("aiml_str_dup", i8p, {i8p});
+                        raw = ctx.builder.CreateCall(dupFn, { raw }, "str_default_dup");
+                    }
+                    ctx.builder.CreateStore(raw, fieldPtr);
+                }
             }
         }
     }

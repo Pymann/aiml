@@ -1956,6 +1956,7 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_str_parse_f32",    (void*)(intptr_t)aiml_str_parse_f32);
     // spec/61 §7 managed string-local assignment helpers (called only from generated code →
     // register + reference so they resolve in JIT and are not stripped from the binary).
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_str_empty",        (void*)(intptr_t)aiml_str_empty);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_str_assign_copy",  (void*)(intptr_t)aiml_str_assign_copy);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_str_assign_move",  (void*)(intptr_t)aiml_str_assign_move);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_str_take_local",   (void*)(intptr_t)aiml_str_take_local);

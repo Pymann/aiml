@@ -47,6 +47,18 @@ extern "C" char* aiml_str_alloc(size_t len) {
     return data;
 }
 
+// IMMORTAL empty string: a single static "" with the STRN header and a sentinel refcount that
+// incref/decref never touch and never free. Used for the DEFAULT value of unset model string
+// fields (spec/61): a `.rodata` "" literal there is unsafe under drops-on — aiml_ser_free_decoded
+// decref's every string field, and decref of a raw literal reads its `-8` header (may fault at a
+// page boundary, or false-positive the STRN magic and free() rodata → SIGSEGV, the drops-on
+// ZoneEntry-free crash). This immortal, header-carrying "" is safe to decref (no-op), `.len`→0.
+#define AIML_STR_IMMORTAL 0xFFFFFFFFu
+extern "C" char* aiml_str_empty(void) {
+    static struct { AimlStrHeader hdr; char data[1]; } g_empty = { { AIML_STR_MAGIC, AIML_STR_IMMORTAL }, { '\0' } };
+    return g_empty.data;
+}
+
 // aiml_dbg_strcmp: retained as a thin strcmp delegate.  The compiler emits a
 // direct `strcmp` for AIML string ==/!= again (the instrumented variant was a
 // WASM string-corruption hunt, root-caused to a serializer stride bug — see
@@ -79,6 +91,7 @@ extern "C" void aiml_str_incref(char* s) {
     if (!s || (uintptr_t)s < sizeof(AimlStrHeader)) return;
     AimlStrHeader* hdr = (AimlStrHeader*)((char*)s - sizeof(AimlStrHeader));
     if (hdr->magic != AIML_STR_MAGIC) return;
+    if (hdr->refcount == AIML_STR_IMMORTAL) return;   // immortal "" default — never counted
     hdr->refcount++;
 }
 
@@ -86,6 +99,7 @@ extern "C" void aiml_str_decref(char* s) {
     if (!s || (uintptr_t)s < sizeof(AimlStrHeader)) return;
     AimlStrHeader* hdr = (AimlStrHeader*)((char*)s - sizeof(AimlStrHeader));
     if (hdr->magic != AIML_STR_MAGIC) return;
+    if (hdr->refcount == AIML_STR_IMMORTAL) return;   // immortal "" default — never freed
     if (hdr->refcount <= 1) {
         hdr->magic = 0;  // poison to catch use-after-free in next access
         aiml_memdiff_forget(s);

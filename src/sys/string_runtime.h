@@ -14,6 +14,9 @@ extern "C" {
 // ctx.getSizeType() — i64 on x86_64, i32 on wasm32).  Internal storage is
 // uint32 refcount, so practical max string is 4GB which we'll never hit.
 char* aiml_str_alloc(size_t len);
+// Immortal refcounted "" (spec/61): default for unset model string fields — safe to decref at
+// drops-on free (no-op) while `.len`/strlen see an empty string. See string_runtime.cpp.
+char* aiml_str_empty(void);
 // Instrumented strcmp used by AIML string ==/!= : delegates to strcmp but logs
 // (to stderr) when either operand is a corrupt/dangling pointer (bad magic AND
 // unterminated within 256 bytes) — pinpoints bad comparisons right before an OOB.
