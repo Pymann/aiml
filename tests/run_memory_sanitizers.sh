@@ -207,6 +207,8 @@ probe "list<string> owns its elements (spec/61 §8): a string pushed through a H
     "$AIML_BIN" -r tests/_mem_sanitize/event_log_push_drop.aiml
 probe "value-model set from a VIEW deep-copies (spec/61 §4.2): a producer that fills an owned model local via set:[out,{at:[view,i]}] and returns it (9rooms load_entry_at→att_entry→aent in drive_ai_combat) must give out an INDEPENDENT heap — a shallow store shares the container element's list buffer → double-free when both the returned copy and the container drop; memory-safe" "svr" \
     "$AIML_BIN" -r tests/_mem_sanitize/producer_set_view_return.aiml
+probe "nested model-list push+index-writeback (9rooms add_buff→buffs.push + idx:[zone,i,ent]): a model with list<Buff> (Buff = string + list<i32> + list<Model>) built via extract→build→push→writeback→free must keep the inner string intact and be memory-safe (bounded RSS)" "nml" \
+    "$AIML_BIN" -r tests/_mem_sanitize/nested_model_list_deepcopy.aiml
 
 echo "────────────────────────────────────────"
 if [ "$fails" -eq 0 ]; then

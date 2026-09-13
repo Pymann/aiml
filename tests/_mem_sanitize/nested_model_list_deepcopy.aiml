@@ -1,0 +1,85 @@
+# Isolates the 9rooms card_states/enchantment_picker crash class: a model (EntX) with a list<BuffX>,
+# where BuffX has a STRING + nested scalar-list + nested model-list (the Buff shape). The game builds
+# a buff, push-deep-copies it into ent.buffs (add_buff), then idx-writes ent back into a container
+# (idx deep-copy). At drops-on free the buff's source_id came back GARBAGE → decref segv. Reproduces
+# build → push → index-writeback → free and asserts memory-safety + correctness.
+
+- model:
+    name: AttrModX
+    fields:
+      - [attr,  i32]
+      - [delta, i32]
+
+- model:
+    name: BuffX
+    fields:
+      - [source_id, string]
+      - [kind,      i32]
+      - [states,    list<i32>]
+      - [mods,      list<AttrModX>]
+
+- model:
+    name: EntX
+    fields:
+      - [iid,   string]
+      - [buffs, list<BuffX>]
+
+# mirrors add_buff: push a by-value Buff into ent.buffs (deep-copy path)
+- def:
+    name: nml_add_buff
+    args: [[ent, ptr<EntX>], [buff, BuffX]]
+    body:
+      - call: [ent.buffs.push, buff]
+
+# mirrors the effect handler: grid<EntX>, extract ent, build+add a buff, write ent back, read back
+- def:
+    name: nml_run_one
+    args: [[num, i32]]
+    return: i32
+    body:
+      - decl: [grid, list<EntX>]
+      - decl: [ent0, EntX]
+      - set: [ent0.iid, "creature-${num}"]
+      - call: [grid.push, ent0]                  # grid[0] = a fresh EntX
+      - decl: [ent, EntX, { at: [grid, 0] }]     # extract (view/copy)
+      - decl: [buff, BuffX]
+      - set: [buff.source_id, ent.iid]           # source_id from a model member string
+      - set: [buff.kind, 2]
+      - call: [buff.states.push, 7]
+      - decl: [amod, AttrModX]
+      - set: [amod.attr, 1]
+      - set: [amod.delta, 2]
+      - call: [buff.mods.push, amod]
+      - call: [nml_add_buff, {'&': [ent]}, buff]  # push buff into ent.buffs (deep-copy)
+      - idx: [grid, 0, ent]                        # write ent back into grid[0] (idx deep-copy)
+      - decl: [chk, EntX, { at: [grid, 0] }]
+      - if: { condition: { eq: [chk.buffs.len, 0] }, then: [{ return: -1 }] }
+      - decl: [bff0, BuffX, { at: [chk.buffs, 0] }]
+      - return: bff0.source_id.len                 # nonzero, correct length ("creature-N")
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [idx, i32, 0]
+      - decl: [bad, i32, 0]
+      - while:
+          condition: { lt: [idx, 20000] }
+          body:
+            - if: { condition: { lt: [{ call: [nml_run_one, idx] }, 9] }, then: [{ set: [bad, { +: [bad, 1] }] }] }
+            - set: [idx, { +: [idx, 1] }]
+      - decl: [grow_b, i64, { -: [{ call: [sys.mem_usage] }, before] }]
+      - call: [log.info, "nested_model_list_deepcopy: bad=${bad} growth=${grow_b} B"]
+      - if:
+          condition: { gt: [bad, 0] }
+          then:
+            - call: [log.info, "FAIL nested_model_list_deepcopy: buff.source_id corrupted after push+writeback (${bad})"]
+            - return: 1
+      - if:
+          condition: { gt: [grow_b, 16777216] }
+          then:
+            - call: [log.info, "FAIL nested_model_list_deepcopy: leaked (${grow_b} B)"]
+            - return: 1
+      - call: [log.info, "PASS nested_model_list_deepcopy: nested model-list push+writeback safe + bounded RSS"]
+      - return: 0
