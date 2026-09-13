@@ -105,6 +105,7 @@
         "src/sys/string_runtime.cpp",
         "src/sys/vocab_runtime.cpp",
         "src/sys/mem_runtime.cpp",
+        "src/sys/mem_diff_runtime.cpp",
         "src/sys/http_map.cpp",
         "src/sys/fetch_runtime.cpp",
         "src/sys/binary_io_runtime.cpp",

@@ -300,15 +300,24 @@ namespace ListImpl {
         ctx.builder.CreateStore(newSize, sizePtr);
     }
 
-    void remove(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, llvm::Type* elemType) {
+    void remove(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, llvm::Type* elemType, bool elemIsString) {
         llvm::StructType* structType = getListStructType(ctx);
         llvm::Value* sizePtr = ctx.builder.CreateStructGEP(structType, listPtr, 0, "sizePtr");
         llvm::Value* sizeVal = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), sizePtr);
-        
+
         llvm::Value* dataPtrMember = ctx.builder.CreateStructGEP(structType, listPtr, 2, "dataPtr");
         llvm::Value* dataBase = ctx.builder.CreateLoad(llvm::PointerType::get(ctx.context, 0), dataPtrMember, "dataBase");
-        
+
         llvm::Value* destPtr = ctx.builder.CreateInBoundsGEP(elemType, dataBase, indexVal);
+        // spec/61 §8: the list OWNS its string elements (push dups) → decref the removed element
+        // before the memmove overwrites its slot, otherwise a churning capped list (event_log's
+        // 40-line ring, effect/trigger logs) leaks one string per remove.
+        if (elemIsString) {
+            llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* gone = ctx.builder.CreateLoad(i8p, destPtr, "rm_elem");
+            llvm::Function* dec = ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {i8p});
+            ctx.builder.CreateCall(dec, { gone });
+        }
         llvm::Value* srcPtr = ctx.builder.CreateInBoundsGEP(elemType, dataBase, ctx.builder.CreateAdd(indexVal, ctx.builder.getInt32(1)));
         
         llvm::Value* newSize = ctx.builder.CreateSub(sizeVal, ctx.builder.getInt32(1));

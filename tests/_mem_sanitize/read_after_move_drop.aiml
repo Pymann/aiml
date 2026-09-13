@@ -1,0 +1,63 @@
+# spec/61 §7: a managed string local that is handed to a container (push/put) must stay VALID for a
+# subsequent read (AIML code reads event-log lines / mana-color keys after pushing them — the old
+# shallow-share semantics). The managed model gives the local its own dup at the move, so:
+#   (correctness) reading the local after the push returns the right content, and
+#   (safety) both the container's copy and the local's copy are freed exactly once (bounded RSS).
+# Regression for the live "no mana / broken event logs" bug (null-on-move blanked the source).
+
+- class:
+    name: Svc
+    members: [[dummy, i32]]
+    methods:
+      # push a string local into a list, THEN read it back (len). With null-on-move this returned 0.
+      - def:
+          name: build_and_read
+          static_off: ["same_arg"]
+          args: [[num, i32]]
+          return: i32
+          body:
+            - decl: [msg, string, "event-fixed-payloadxx"]   # len 21, constant
+            - decl: [events, list<string>]
+            - call: [events.push, msg]                        # move msg into the list
+            - return: msg.len                                 # READ msg after the move → must be 21
+
+      - def:
+          name: run
+          static_off: ["same_arg"]
+          args: [[iters, i32]]
+          return: i64
+          body:
+            - decl: [before, i64, { call: [sys.mem_usage] }]
+            - decl: [idx, i32, 0]
+            - decl: [bad_reads, i32, 0]
+            - while:
+                condition: { lt: [idx, iters] }
+                body:
+                  - if: { condition: { neq: [{ call: [<.build_and_read, idx] }, 21] }, then: [{ set: [bad_reads, { +: [bad_reads, 1] }] }] }
+                  - set: [idx, { +: [idx, 1] }]
+            - decl: [corrupt, i64, 9000000000]   # sentinel > any plausible RSS growth
+            - if: { condition: { gt: [bad_reads, 0] }, then: [{ return: corrupt }] }   # correctness failure signal
+            - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [reps, i32, 300000]
+      - decl: [limit, i64, 16777216]   # 16 MB
+      - decl: [svc, ptr<Svc>, { new: Svc }]
+      - decl: [warm, i64, { call: [svc.run, 2000] }]
+      - decl: [grow_b, i64, { call: [svc.run, reps] }]
+      - if:
+          condition: { gte: [grow_b, 9000000000] }
+          then:
+            - call: [log.info, "FAIL read_after_move_drop: reading a string local after push returned wrong content (null-on-move regression)"]
+            - return: 1
+      - call: [log.info, "read_after_move_drop: growth=${grow_b} B (limit=${limit} B, N=${reps})"]
+      - if:
+          condition: { gt: [grow_b, limit] }
+          then:
+            - call: [log.info, "FAIL read_after_move_drop: push+read string local leaked (${grow_b} B > ${limit} B)"]
+            - return: 1
+      - call: [log.info, "PASS read_after_move_drop: read-after-move valid + bounded RSS (managed move dups the source)"]
+      - return: 0

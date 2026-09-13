@@ -1,0 +1,77 @@
+# Mirrors 9rooms event-log (sources/match/event_log.aiml log_event): a helper takes a string
+# PARAM and pushes it into a model's list<string>; callers invoke it with an INTERPOLATION TEMP
+# ("${a} attacks ${b}"). The live regression was "event-logs komisch bis kaputt": list<string>.push
+# stored the borrowed param pointer raw (no dup, no incref for a plain param), while the caller's
+# interpolation temp was freed at its own statement end → the list held a dangling pointer → the
+# log rendered garbage/empty. A robust container OWNS its string elements (dup on push), so the
+# caller stays a pure borrower regardless of call depth. Asserts correctness (content readable +
+# correct length after the pushing frame returns) AND bounded RSS.
+
+- model:
+    name: LogData
+    fields:
+      - [lines, list<string>]
+
+- class:
+    name: Logger
+    models: [LogData]
+    methods:
+      # emulates free-fn log_event: push a borrowed string PARAM into the member list, cap at 40
+      - def:
+          name: log_line
+          args: [[msg, string]]
+          body:
+            - call: [<.lines.push, msg]
+            - if: { condition: { gt: [{ call: [<.lines.len] }, 40] }, then: [{ call: [<.lines.remove, 0] }] }
+
+      # build an interpolation temp and hand it to log_line (the caller's temp is freed at stmt end)
+      - def:
+          name: emit
+          static_off: ["same_arg"]
+          args: [[num, i32]]
+          body:
+            - call: [<.log_line, "line number ${num} payload"]
+
+      # read the LAST line back and return its length — must be a sane, nonzero, correct length
+      - def:
+          name: last_len
+          static_off: ["same_arg"]
+          args: [[num, i32]]
+          return: i32
+          body:
+            - decl: [cnt, i32, { call: [<.lines.len] }]
+            - if: { condition: { lte: [cnt, 0] }, then: [{ return: -1 }] }
+            - decl: [last, string, { call: [<.lines.get, { -: [cnt, 1] }] }]
+            - return: last.len
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [lgr, ptr<Logger>, { new: Logger }]
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [idx, i32, 0]
+      - decl: [bad, i32, 0]
+      - decl: [iters, i32, 200000]
+      - while:
+          condition: { lt: [idx, iters] }
+          body:
+            - call: [lgr.emit, idx]                       # push a temp through the helper
+            # after emit() returned (its temp is gone), the last line must still be valid.
+            # "line number <idx> payload" — length varies with idx digits; assert >= 18 (min for 1-digit)
+            - if: { condition: { lt: [{ call: [lgr.last_len, idx] }, 18] }, then: [{ set: [bad, { +: [bad, 1] }] }] }
+            - set: [idx, { +: [idx, 1] }]
+      - decl: [grow_b, i64, { -: [{ call: [sys.mem_usage] }, before] }]
+      - call: [log.info, "event_log_push_drop: bad=${bad} growth=${grow_b} B"]
+      - if:
+          condition: { gt: [bad, 0] }
+          then:
+            - call: [log.info, "FAIL event_log_push_drop: pushed line unreadable after helper returned (${bad} bad reads) — list stored a borrowed/dangling string"]
+            - return: 1
+      - if:
+          condition: { gt: [grow_b, 16777216] }
+          then:
+            - call: [log.info, "FAIL event_log_push_drop: list<string> leaked (${grow_b} B > 16 MB)"]
+            - return: 1
+      - call: [log.info, "PASS event_log_push_drop: event-log lines readable after push + bounded RSS (list owns its strings)"]
+      - return: 0

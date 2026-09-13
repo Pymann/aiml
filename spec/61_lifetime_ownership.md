@@ -205,6 +205,13 @@ The drop matches the return type:
   `__free_<Class>` (deep-free + shell free) in a **trailing slot of that interface's vtable**;
   the drop loads that slot and calls it with `obj`. A **null** fat pointer (e.g. a
   `producer` function that `return null` on a not-found path) is skipped.
+- **`list<T>`** — the caller's local is a kind-2 list-drop: the data buffer is freed and, for
+  `list<string>`, each element is decref'd; for `list<Model>` with heap fields, each element is
+  deep-freed. (A caller local initialized from a `producer` list call must **not** re-run the
+  empty-buffer `initList` before the returned struct is memcpy'd in — that would orphan the
+  freshly-allocated buffer; the compiler skips it for call/variable initializers.) `map<K:V>`
+  producers are accepted syntactically but the caller-side map-drop is still **disabled** (see
+  §8), so a `map` producer result currently leaks (safe) until the map-drop audit lands.
 
 **When to declare `producer`:** a function that *builds* a fresh independent result — `decl
 out; …; return out`, `return { new: T }`, or a deep copy (`get_copy`-style). **When NOT:** a

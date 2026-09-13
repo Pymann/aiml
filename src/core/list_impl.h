@@ -36,7 +36,7 @@ namespace ListImpl {
     llvm::Value* isEmpty(CompilerContext& ctx, llvm::Value* listPtr);
     void clear(CompilerContext& ctx, llvm::Value* listPtr);
     void insert(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, llvm::Value* val);
-    void remove(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, llvm::Type* elemType);
+    void remove(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, llvm::Type* elemType, bool elemIsString = false);
 
     // ── List-Builtins (doc/ideas/list_builtins_plan.md) ─────────────────────
     // M1: search + bulk-append.  indexOf returns i32 (first match, -1 if none);

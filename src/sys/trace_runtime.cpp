@@ -1,6 +1,7 @@
 #include "trace_runtime.h"
 #include <cstdlib>
 #include <cstdio>
+#include <cstdarg>
 #include <cstring>
 #include <string>
 #include <unordered_set>
@@ -78,6 +79,15 @@ int aiml_trace_active(const char* fname) {
 
 void aiml_trace(const char* fname, const char* dir, const char* args) {
     g_trace.log(fname, dir, args);
+}
+
+void aiml_trace_format(const char* fname, const char* format, ...) {
+    fprintf(stderr, "[TRACE] => %s(", fname ? fname : "?");
+    va_list args;
+    va_start(args, format);
+    vfprintf(stderr, format ? format : "", args);
+    va_end(args);
+    fputs(")\n", stderr);
 }
 
 // ── AIML_SIZETRACE emit ───────────────────────────────────────────────────────

@@ -1,0 +1,88 @@
+# Isolates the 9rooms drive_ai_combat crash (load_entry_at → att_entry → aent). A PRODUCER fills an
+# owned value-model local via `set [out, {at: [view, pos]}]` (a SHALLOW struct copy sharing the
+# container element's list buffers) and returns it. The `set`-rebind suppresses out's own drop, but
+# the producer return hands the shallow copy to the caller as an OWNED value → the caller's drop
+# double-frees the shared list buffer with the container's drop. Reproduces:
+#   decl [lez, list<Zen>, { at: [outer.rows, i] }]   # shallow view of the nested list
+#   set  [out, { at: [lez, pos] }]                    # SHALLOW copy → out shares rows[i][pos] heap
+#   return out                                        # producer: caller owns + drops it
+
+- model:
+    name: Zen
+    fields:
+      - [iid,  string]
+      - [tags, list<i32>]     # heap list — the buffer that double-frees
+
+- model:
+    name: Board
+    fields:
+      - [rows, list<list<Zen>>]   # nested: mirrors mat.combat_zones (list<list<ZoneEntry>>)
+
+- class:
+    name: Svc
+    members: [[dummy, i32]]
+    methods:
+      - def:
+          name: make_board
+          static_off: ["same_arg"]
+          args: [[num, i32]]
+          return: { type: Board, lifetime: producer }
+          body:
+            - decl: [out, Board]
+            - decl: [row, list<Zen>]
+            - decl: [one, Zen]
+            - set: [one.iid, "e${num}"]
+            - call: [one.tags.push, 7]
+            - call: [one.tags.push, 8]
+            - call: [row.push, one]
+            - call: [out.rows.push, row]
+            - return: out
+
+      # mirrors load_entry_at/att_entry: producer that set-copies a nested element via a view + returns
+      - def:
+          name: load_entry
+          static_off: ["same_arg"]
+          args: [[brd, ptr<Board>]]
+          return: { type: Zen, lifetime: producer }
+          body:
+            - decl: [out, Zen]
+            - decl: [lez, list<Zen>, { at: [brd.rows, 0] }]   # shallow view of rows[0]
+            - set: [out, { at: [lez, 0] }]                    # SHALLOW copy → out shares rows[0][0].tags
+            - return: out
+
+      - def:
+          name: run
+          static_off: ["same_arg"]
+          args: [[iters, i32]]
+          return: i64
+          body:
+            - decl: [before, i64, { call: [sys.mem_usage] }]
+            - decl: [idx, i32, 0]
+            - decl: [acc, i32, 0]
+            - while:
+                condition: { lt: [idx, iters] }
+                body:
+                  - decl: [brd, Board, { call: [<.make_board, idx] }]   # owned, kind-0 drop
+                  - decl: [aent, Zen, { call: [<.load_entry, {'&': [brd]}] }]  # owned producer return (SHARES brd)
+                  - set: [acc, { +: [acc, aent.tags.len] }]
+                  - set: [idx, { +: [idx, 1] }]
+                  # aent dropped + brd dropped → double free of rows[0][0].tags if shared
+            - decl: [grow, i64, { -: [{ call: [sys.mem_usage] }, before] }]
+            - if: { condition: { lt: [acc, 0] }, then: [{ set: [grow, 0] }] }
+            - return: grow
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [svc, ptr<Svc>, { new: Svc }]
+      - decl: [warm, i64, { call: [svc.run, 100] }]
+      - decl: [grow_b, i64, { call: [svc.run, 50000] }]
+      - call: [log.info, "producer_set_view_return: growth=${grow_b} B"]
+      - if:
+          condition: { gt: [grow_b, 16777216] }
+          then:
+            - call: [log.info, "FAIL producer_set_view_return: leaked (${grow_b} B)"]
+            - return: 1
+      - call: [log.info, "PASS producer_set_view_return: set-from-view producer return is memory-safe"]
+      - return: 0

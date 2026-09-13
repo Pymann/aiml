@@ -1,0 +1,104 @@
+# spec/61 §7.0 — a repeated member assignment `set: [<.field, x]` must RELEASE the field's previous
+# value before overwriting it. The compiler was overwriting a container field's {len,cap,data} (or a
+# model field's struct) WITHOUT freeing the prior heap → the old buffer + its elements/strings leaked
+# on every assignment. Two real 9rooms leaks: ConnRegistry.take_gone_players (`<.entries = kept` every
+# ~250 ms — a list<Model>) and poll_board_state (`<.board_state = …` every poll — a model with nested
+# lists/strings). Fix: a centralized member-field release (free + zero, guarded self-assign) covering
+# every member-store sub-path; list<Model> fields are deep-freed per element via aiml_list_free.
+#
+# Native RSS-delta assertion (valgrind never returns freed memory to the OS). Two subjects: a member
+# list<Model> reassigned from an owned local, and a member model reassigned from a producer call.
+
+- model: { name: Ent, fields: [[pid, string], [num, i32]] }
+- model: { name: BoardState, fields: [[phase, i32], [names, list<string>], [attacker, string]] }
+
+- def:
+    name: make_state
+    static_off: ["same_arg"]
+    args: [[num, i32]]
+    return: { type: BoardState, lifetime: producer }
+    body:
+      - decl: [out, BoardState]
+      - set: [out.phase, num]
+      - set: [out.attacker, "att-${num}-payload-string-for-heap"]
+      - decl: [jdx, i32, 0]
+      - while:
+          condition: { lt: [jdx, 8] }
+          body:
+            - call: [out.names.push, "unit-${num}-${jdx}-payload-string"]
+            - set: [jdx, { +: [jdx, 1] }]
+      - return: out
+
+- class:
+    name: App
+    members: [[entries, list<Ent>], [board_state, BoardState]]
+    methods:
+      - def:
+          name: seed
+          static_off: ["same_arg"]
+          args: [[cnt, i32]]
+          body:
+            - decl: [idx, i32, 0]
+            - while:
+                condition: { lt: [idx, cnt] }
+                body:
+                  - decl: [ent, Ent]
+                  - set: [ent.pid, "pid-${idx}-payload-string-for-heap"]
+                  - call: [<.entries.push, ent]
+                  - set: [idx, { +: [idx, 1] }]
+      # SUBJECT A: rebuild a local list<Ent> from <.entries and store it back (take_gone_players).
+      - def:
+          name: sweep_entries
+          static_off: ["same_arg"]
+          body:
+            - decl: [kept, list<Ent>]
+            - decl: [idx, i32, 0]
+            - while:
+                condition: { lt: [idx, <.entries.len] }
+                body:
+                  - decl: [ent, Ent, { at: [<.entries, idx] }]
+                  - call: [kept.push, ent]
+                  - set: [idx, { +: [idx, 1] }]
+            - set: [<.entries, kept]
+      # SUBJECT B: reassign a member MODEL from a producer call (poll_board_state).
+      - def:
+          name: poll_state
+          static_off: ["same_arg"]
+          args: [[num, i32]]
+          body:
+            - set: [<.board_state, { call: [make_state, num] }]
+
+      - def:
+          name: run
+          static_off: ["same_arg"]
+          args: [[iters, i32]]
+          return: i64
+          body:
+            - decl: [before, i64, { call: [sys.mem_usage] }]
+            - decl: [idx, i32, 0]
+            - while:
+                condition: { lt: [idx, iters] }
+                body:
+                  - call: [<.sweep_entries]
+                  - call: [<.poll_state, idx]
+                  - set: [idx, { +: [idx, 1] }]
+            - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [reps, i32, 40000]
+      - decl: [limit, i64, 41943040]   # 40 MB bright line
+      - decl: [app, ptr<App>, { new: App }]
+      - call: [app.seed, 6]
+      - decl: [warm, i64, { call: [app.run, 2000] }]
+      - decl: [subj, i64, { call: [app.run, reps] }]
+      - call: [log.info, "member_reassign_free: delta=${subj} B (limit=${limit} B, N=${reps})"]
+      - if:
+          condition: { gt: [subj, limit] }
+          then:
+            - call: [log.info, "FAIL member_reassign_free: member field's previous value NOT released on reassign (${subj} B > ${limit} B)"]
+            - return: 1
+      - call: [log.info, "PASS member_reassign_free: member fields released on reassign (bounded RSS)"]
+      - return: 0

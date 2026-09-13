@@ -11,8 +11,8 @@ namespace MapImpl {
     void initMap(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Type* keyType, llvm::Type* valType, int initialCapacity = 4);
     llvm::Value* compareKeys(CompilerContext& ctx, llvm::Value* k1, llvm::Value* k2, llvm::Type* keyType);
     llvm::Value* getSize(CompilerContext& ctx, llvm::Value* mapPtr, llvm::StructType* mapType);
-    void put(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Value* valVal, llvm::StructType* mapType);
+    void put(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Value* valVal, llvm::StructType* mapType, bool valIsString = false);
     llvm::Value* get(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Type* valType, llvm::StructType* mapType);
     llvm::Value* contains(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::StructType* mapType);
-    void remove(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Type* valType, llvm::StructType* mapType);
+    void remove(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Type* valType, llvm::StructType* mapType, bool valIsString = false);
 } // namespace MapImpl

@@ -1,0 +1,17 @@
+# Repeated traced calls should not allocate AIML formatting strings.
+- def:
+    name: trace_probe
+    args: [[iteration, i32], [label, string]]
+    body: [{ return: [] }]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 20000] }
+          body:
+            - call: [trace_probe, idx, "trace stress"]
+            - set: [idx, { +: [idx, 1] }]
+      - print: ["PASS trace_stress"]
+      - return: 0

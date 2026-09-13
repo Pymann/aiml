@@ -1,0 +1,51 @@
+# spec/61 (T1b): a `return "${…}"` that builds interpolation INTERMEDIATE temps (int→string
+# conversion of ${num}, sub-concat accumulators) must not leak them. The returned final value is
+# moved to the caller; the intermediates were previously leaked because `createRet` terminates the
+# block before visitStatement's per-statement temp-decref loop runs. Native RSS-delta.
+
+- class:
+    name: Svc
+    members: [[dummy, i32]]
+    methods:
+      # Direct interpolation return WITH a conversion intermediate (${num} = int→string).
+      - def:
+          name: ret_direct
+          static_off: ["same_arg"]
+          args: [[num, i32]]
+          return: { type: string, lifetime: producer }
+          body:
+            - return: "payload-${num}-segment-${num}-xxxxxxxxxxxxxxxx"
+      - def:
+          name: loop_direct
+          static_off: ["same_arg"]
+          args: [[iters, i32]]
+          return: i64
+          body:
+            - decl: [before, i64, { call: [sys.mem_usage] }]
+            - decl: [idx, i32, 0]
+            - decl: [sink, i32, 0]
+            - while:
+                condition: { lt: [idx, iters] }
+                body:
+                  - decl: [got, string, { call: [<.ret_direct, idx] }]
+                  - set: [sink, { +: [sink, got.len] }]
+                  - set: [idx, { +: [idx, 1] }]
+            - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [reps, i32, 400000]
+      - decl: [limit, i64, 16777216]   # 16 MB (clean ~0; leak was ~24 MB at N=400k)
+      - decl: [svc, ptr<Svc>, { new: Svc }]
+      - decl: [warm, i64, { call: [svc.loop_direct, 2000] }]
+      - decl: [direct_b, i64, { call: [svc.loop_direct, reps] }]
+      - call: [log.info, "return_interp_temp_drop: return-direct-interp=${direct_b} B  (limit=${limit} B, N=${reps})"]
+      - if:
+          condition: { gt: [direct_b, limit] }
+          then:
+            - call: [log.info, "FAIL return_interp_temp_drop: interpolation intermediates leaked on direct `return \"${...}\"` (${direct_b} B > ${limit} B)"]
+            - return: 1
+      - call: [log.info, "PASS return_interp_temp_drop: direct interpolation return frees its intermediates (bounded RSS)"]
+      - return: 0

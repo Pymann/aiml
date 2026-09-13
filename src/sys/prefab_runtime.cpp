@@ -3835,24 +3835,27 @@ void aiml_prefab_set_dropdown_selected(void* inst, const char* child_name, const
     ch->selected_index = 0;
 }
 
+extern "C" char* aiml_str_dup(const char* s);   // RC-managed dup (string_runtime); see below
+
 const char* aiml_prefab_dropdown_value(void* inst, const char* child_name) {
-    /* Returns a strdup'd copy so consumers can safely store it in Model
-     * fields — see text_value comment.  Caller owns and frees. */
+    /* spec/61 — return an RC-managed copy (aiml_str_dup, NOT strdup): AIML strings carry a
+     * refcount header, and the compiler now decref's the string local this fills (an owned-string
+     * builtin). A raw strdup would have no header, so the decref would corrupt the heap. */
     PrefabChild* ch = find_child(inst, child_name);
-    if (!ch || ch->options.empty()) return strdup("");
+    if (!ch || ch->options.empty()) return aiml_str_dup("");
     int idx = 0;
     size_t start = 0;
     for (size_t p = 0; p <= ch->options.size(); ++p) {
         if (p == ch->options.size() || ch->options[p] == '|') {
             if (idx == ch->selected_index) {
                 std::string cur(ch->options, start, p - start);
-                return strdup(cur.c_str());
+                return aiml_str_dup(cur.c_str());
             }
             idx++;
             start = p + 1;
         }
     }
-    return strdup("");
+    return aiml_str_dup("");
 }
 
 void aiml_prefab_set_color(void* inst, const char* child_name, int32_t color) {
@@ -6019,13 +6022,13 @@ static PrefabChild* find_child_mut(AimlPrefabInstance* inst, const char* name) {
 }
 
 const char* aiml_prefab_text_value(void* inst, const char* child_name) {
-    /* Return a strdup'd copy — AIML owns strings via strdup/malloc.  Handing
-     * back ch->text.c_str() (the widget's internal std::string data) leaves
-     * callers with a dangling pointer as soon as the widget's text is
-     * reassigned (e.g. set_text("") after reading the value into a Model
-     * field).  The consumer takes ownership of the returned buffer. */
+    /* spec/61 — return an RC-managed copy (aiml_str_dup, NOT strdup): the returned string carries
+     * the AIML refcount header, so the compiler-emitted decref on the receiving local frees it
+     * correctly (a raw strdup has no header → decref would corrupt the heap). Handing back
+     * ch->text.c_str() would dangle once the widget's text is reassigned; the consumer owns the
+     * returned buffer (balanced by its scope-drop). */
     auto* ch = find_child(inst, child_name);
-    return strdup(ch ? ch->text.c_str() : "");
+    return aiml_str_dup(ch ? ch->text.c_str() : "");
 }
 
 int32_t aiml_prefab_child_clicked(void* inst, const char* child_name) {

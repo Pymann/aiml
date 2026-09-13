@@ -1,4 +1,5 @@
 #include "string_runtime.h"
+#include "mem_diff_runtime.h"   // AIML_MEM_DIFF leaf-allocation tracking (no-op when disabled)
 #include <cstring>
 #include <cstdlib>
 #include <cctype>
@@ -42,6 +43,7 @@ extern "C" char* aiml_str_alloc(size_t len) {
     hdr->refcount = 1;
     char* data = (char*)mem + sizeof(AimlStrHeader);
     data[len] = '\0';
+    aiml_memdiff_record(data, sizeof(AimlStrHeader) + len + 1);
     return data;
 }
 
@@ -86,10 +88,39 @@ extern "C" void aiml_str_decref(char* s) {
     if (hdr->magic != AIML_STR_MAGIC) return;
     if (hdr->refcount <= 1) {
         hdr->magic = 0;  // poison to catch use-after-free in next access
+        aiml_memdiff_forget(s);
         free(hdr);
     } else {
         hdr->refcount--;
     }
+}
+
+// ── spec/61 §7 managed string-local assignment helpers ───────────────────────
+// See string_runtime.h. These maintain the invariant "slot = null | one owned RC ref" and
+// never dereference a header before a foreign/possibly-freed address (dup reads only content;
+// the released value is the slot's own owned reference).
+extern "C" int32_t aiml_str_assign_copy(char** dst, const char* src) {
+    if (!dst) return 0;
+    char* next = aiml_str_dup(src);   // acquire an independent RC reference BEFORE releasing old
+    if (!next && src) return 0;        // allocation failure → leave slot unchanged (src!=null case)
+    char* old = *dst;
+    *dst = next;
+    aiml_str_decref(old);              // safe: `old` was this slot's own owned ref (or null)
+    return 1;
+}
+
+extern "C" void aiml_str_assign_move(char** dst, char* next) {
+    if (!dst) return;
+    char* old = *dst;
+    *dst = next;                       // `next` is a separate owned reference (or null)
+    aiml_str_decref(old);
+}
+
+extern "C" char* aiml_str_take_local(char** src) {
+    if (!src) return nullptr;
+    char* value = *src;
+    *src = nullptr;                    // slot nulled → its later scope-drop / decref-old is a no-op
+    return value;
 }
 
 // ── spec/61 list scope-drop primitive ───────────────────────────────────────
@@ -134,11 +165,15 @@ extern "C" void aiml_map_free(void* map_ptr, int32_t keyKind, int64_t keyStride,
                               void* valNodes, int32_t valNodesCount) {
     if (!map_ptr) return;
     AimlMapRaw* m = static_cast<AimlMapRaw*>(map_ptr);
-    if (m->occ && (keyKind == 1 || valKind == 1 || valKind == 2)) {
+    // MapImpl (map_impl.cpp) is a DENSE store: put appends at keys[size]/vals[size] and bumps
+    // size; get/contains/remove linear-scan [0,size). The `occ` bitmap is vestigial (never written
+    // by put — walking it read past the never-grown occ buffer, the old "Invalid read of size 1").
+    // Reclaim over the dense range [0,size): put OWNS its string keys/values via dup (§8), so one
+    // decref per live entry balances that dup exactly.
+    if (keyKind == 1 || valKind == 1 || valKind == 2) {
         char* keyBase = reinterpret_cast<char*>(m->keys);
         char* valBase = reinterpret_cast<char*>(m->vals);
-        for (int32_t i = 0; i < m->capacity; ++i) {
-            if (!m->occ[i]) continue;
+        for (int32_t i = 0; i < m->size; ++i) {
             if (keyKind == 1 && keyBase) {
                 char* k = *reinterpret_cast<char**>(keyBase + (int64_t)i * keyStride);
                 if (k) aiml_str_decref(k);

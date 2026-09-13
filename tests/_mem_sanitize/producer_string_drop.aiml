@@ -1,0 +1,128 @@
+# spec/61: a `producer` function returning a FRESH string hands ownership to the caller, which must
+# drop it. This probe reproduces the 9rooms deckset-editor leak shapes that a naive concat-local
+# return does NOT (freshOwned already handles that one):
+#   W) return a BARE CALL RESULT — `return: { call: [inner] }` (card_display_type → card_type_to_string)
+#   T) producer result as a TRANSIENT arg to a BUILTIN — `call [path.exists, { call: [make] }]`
+#      (populate_card_full → set_text/gl.tex(mana_stem(…)))
+# Native RSS-delta assertion (valgrind never returns freed memory to the OS → RSS metrics are only
+# meaningful natively; see run_memory_sanitizers.sh).
+
+- class:
+    name: Svc
+    members: [[dummy, i32]]
+    methods:
+      # Genuine producer: builds a fresh, independent string (concat local) and returns it.
+      - def:
+          name: make_inner
+          static_off: ["same_arg"]
+          args: [[num, i32]]
+          return: { type: string, lifetime: producer }
+          body:
+            # MIXED returns like card_type_to_string / mana_stem: a bare LITERAL (borrow) on one
+            # path, a FRESH owned concat on the other. The loop always drives num>=0 (owned path),
+            # but the literal branch may flip freshOwned's classification to "borrow" → no drop.
+            - if: { condition: { lt: [num, 0] }, then: [{ return: "amorph-literal-const" }] }
+            - decl: [out, string, "deckset-editor-card-label-payload-${num}-xxxxxxxxxxxxxxxx"]
+            - return: out
+
+      # W-shape: a wrapper that RETURNS A BARE CALL RESULT (no local). Mirrors card_display_type's
+      # `- return: { call: [card_type_to_string, card_type] }`.
+      - def:
+          name: make_wrap
+          static_off: ["same_arg"]
+          args: [[num, i32]]
+          return: { type: string, lifetime: producer }
+          body:
+            - return: { call: [<.make_inner, num] }
+
+      # Borrow sink: takes a string param (borrow, default), does not own it.
+      - def:
+          name: sink
+          static_off: ["same_arg"]
+          args: [[lbl, string]]
+          return: i32
+          body:
+            - return: lbl.len
+
+      # SUBJECT W: bare-call-result-return consumed into a scope local → must drop at scope exit.
+      - def:
+          name: loop_wrap
+          static_off: ["same_arg"]
+          args: [[iters, i32]]
+          return: i64
+          body:
+            - decl: [before, i64, { call: [sys.mem_usage] }]
+            - decl: [idx, i32, 0]
+            - while:
+                condition: { lt: [idx, iters] }
+                body:
+                  - decl: [lbl, string, { call: [<.make_wrap, idx] }]
+                  - set: [idx, { +: [idx, 1] }]
+            - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+      # SUBJECT (Part 1): producer result bound directly to a scope local → drop at scope exit.
+      - def:
+          name: loop_direct
+          static_off: ["same_arg"]
+          args: [[iters, i32]]
+          return: i64
+          body:
+            - decl: [before, i64, { call: [sys.mem_usage] }]
+            - decl: [idx, i32, 0]
+            - while:
+                condition: { lt: [idx, iters] }
+                body:
+                  - decl: [lbl, string, { call: [<.make_inner, idx] }]
+                  - set: [idx, { +: [idx, 1] }]
+            - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+      # SUBJECT (Part 2): producer result used as a TRANSIENT argument (never bound) → must be
+      # decref'd at statement end. This is the populate_card_full `set_text(…, build_card_text(card))`
+      # / `gl.tex(mana_stem(…))` shape (sink stands in for the borrow-taking builtin).
+      - def:
+          name: loop_transient
+          static_off: ["same_arg"]
+          args: [[iters, i32]]
+          return: i64
+          body:
+            - decl: [before, i64, { call: [sys.mem_usage] }]
+            - decl: [idx, i32, 0]
+            - decl: [acc, i32, 0]
+            - while:
+                condition: { lt: [idx, iters] }
+                body:
+                  - set: [acc, { call: [<.sink, { call: [<.make_inner, idx] }] }]
+                  - set: [idx, { +: [idx, 1] }]
+            - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [reps, i32, 400000]
+      - decl: [limit, i64, 16777216]   # 16 MB bright line (clean ~0; each broken shape leaks ~31 MB at N=400k; kept moderate so the valgrind SAFETY run stays tractable)
+      - decl: [svc, ptr<Svc>, { new: Svc }]
+      - decl: [warm, i64, { call: [svc.loop_direct, 2000] }]
+      - decl: [direct_b, i64, { call: [svc.loop_direct, reps] }]
+      - decl: [wrap_b,   i64, { call: [svc.loop_wrap, reps] }]
+      - decl: [trans_b,  i64, { call: [svc.loop_transient, reps] }]
+      - call: [log.info, "producer_string_drop: bound-direct=${direct_b} B  bound-wrap=${wrap_b} B  transient=${trans_b} B  (limit=${limit} B, N=${reps})"]
+      - decl: [bad, i32, 0]
+      - if:
+          condition: { gt: [direct_b, limit] }
+          then:
+            - call: [log.info, "FAIL producer_string_drop: bound producer string (direct) NOT freed at scope exit (${direct_b} B > ${limit} B)"]
+            - set: [bad, 1]
+      - if:
+          condition: { gt: [wrap_b, limit] }
+          then:
+            - call: [log.info, "FAIL producer_string_drop: bound producer string (bare-call-result return) NOT freed at scope exit (${wrap_b} B > ${limit} B)"]
+            - set: [bad, 1]
+      - if:
+          condition: { gt: [trans_b, limit] }
+          then:
+            - call: [log.info, "FAIL producer_string_drop: transient producer string arg NOT freed at statement end (${trans_b} B > ${limit} B)"]
+            - set: [bad, 1]
+      - if: { condition: { eq: [bad, 1] }, then: [{ return: 1 }] }
+      - call: [log.info, "PASS producer_string_drop: producer strings freed in bound (direct/wrap) and transient shapes (bounded RSS)"]
+      - return: 0

@@ -1,0 +1,103 @@
+# spec/61 §7: a plain string LOCAL owns its value. Two coupled behaviors this probe pins:
+#   (copy)  `set:[dst, <borrow>]` increfs the source → dst owns an INDEPENDENT ref (so a later drop
+#           of the source does not dangle dst — the 9rooms ability_block_cached `set:[blk, line]`
+#           where `line` is a loop-local that drops each iteration).
+#   (reuse) `set:[acc, "${acc}…"]` (self-referential reassignment) decref's the OLD accumulator →
+#           the per-iteration string is reclaimed (the deckset-editor build_card_text / ability_block
+#           / CardArtCache string-builder leak — class 3).
+# Native RSS-delta (leak) + must be memory-safe under valgrind (no UAF/double-free from the sharing).
+
+- class:
+    name: Svc
+    members: [[dummy, i32]]
+    methods:
+      # Producer: a fresh loop-local string source (stands in for generate_ability_text's `line`).
+      - def:
+          name: gen_line
+          static_off: ["same_arg"]
+          args: [[num, i32]]
+          return: { type: string, lifetime: producer }
+          body:
+            - return: "ability-line-${num}-payloadpayloadpayloadpayload"
+
+      # SUBJECT A (self-accumulation): build a string by repeated self-reassignment. Each iteration's
+      # old accumulator must be freed → bounded RSS.
+      - def:
+          name: loop_self_accum
+          static_off: ["same_arg"]
+          args: [[iters, i32]]
+          return: i64
+          body:
+            - decl: [before, i64, { call: [sys.mem_usage] }]
+            - decl: [idx, i32, 0]
+            - decl: [sink, i32, 0]
+            - while:
+                condition: { lt: [idx, iters] }
+                body:
+                  - decl: [acc, string, "seed"]
+                  - decl: [seg, i32, 0]
+                  - while:
+                      condition: { lt: [seg, 8] }
+                      body:
+                        - set: [acc, "${acc}-segment-${seg}-tail"]
+                        - set: [seg, { +: [seg, 1] }]
+                  - set: [sink, { +: [sink, acc.len] }]
+                  - set: [idx, { +: [idx, 1] }]
+            - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+      # SUBJECT B (sharing + self-accum mix, the ability_block_cached shape): first set from a
+      # loop-local producer (`blk = line`), then self-accumulate. `line` drops at each inner-iteration
+      # end; blk must have its own ref (incref-on-copy) so reading blk next iteration is not a UAF,
+      # and the old blk is freed on the self-ref set → bounded RSS + memory-safe.
+      - def:
+          name: loop_share_accum
+          static_off: ["same_arg"]
+          args: [[iters, i32]]
+          return: i64
+          body:
+            - decl: [before, i64, { call: [sys.mem_usage] }]
+            - decl: [idx, i32, 0]
+            - decl: [sink, i32, 0]
+            - while:
+                condition: { lt: [idx, iters] }
+                body:
+                  - decl: [blk, string, ""]
+                  - decl: [aix, i32, 0]
+                  - while:
+                      condition: { lt: [aix, 6] }
+                      body:
+                        - decl: [line, string, { call: [<.gen_line, aix] }]
+                        - if:
+                            condition: { gt: [blk.len, 0] }
+                            then: [{ set: [blk, "${blk}|${line}"] }]
+                            else: [{ set: [blk, line] }]
+                        - set: [aix, { +: [aix, 1] }]
+                  - set: [sink, { +: [sink, blk.len] }]
+                  - set: [idx, { +: [idx, 1] }]
+            - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [reps, i32, 300000]
+      - decl: [limit, i64, 16777216]   # 16 MB bright line (clean ~0; each broken shape leaks 100+ MB)
+      - decl: [svc, ptr<Svc>, { new: Svc }]
+      - decl: [warm, i64, { call: [svc.loop_self_accum, 2000] }]
+      - decl: [accum_b, i64, { call: [svc.loop_self_accum, reps] }]
+      - decl: [share_b, i64, { call: [svc.loop_share_accum, reps] }]
+      - call: [log.info, "string_reassign_drop: self-accum=${accum_b} B  share+accum=${share_b} B  (limit=${limit} B, N=${reps})"]
+      - decl: [bad, i32, 0]
+      - if:
+          condition: { gt: [accum_b, limit] }
+          then:
+            - call: [log.info, "FAIL string_reassign_drop: self-accumulating local string NOT freed on reassignment (${accum_b} B > ${limit} B)"]
+            - set: [bad, 1]
+      - if:
+          condition: { gt: [share_b, limit] }
+          then:
+            - call: [log.info, "FAIL string_reassign_drop: shared-then-accumulated local string leaked or dangled (${share_b} B > ${limit} B)"]
+            - set: [bad, 1]
+      - if: { condition: { eq: [bad, 1] }, then: [{ return: 1 }] }
+      - call: [log.info, "PASS string_reassign_drop: local string reassignment frees old + copy owns an independent ref (bounded RSS, memory-safe)"]
+      - return: 0
