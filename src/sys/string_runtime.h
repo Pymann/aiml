@@ -23,6 +23,24 @@ char* aiml_str_ndup(const char* s, size_t len);
 void  aiml_str_incref(char* s);
 void  aiml_str_decref(char* s);
 
+// ── spec/61 §7 managed string-local assignment helpers ───────────────────────
+// A "managed" local string slot holds EITHER nullptr OR exactly one owned RC reference.
+// These maintain that invariant; they must only be applied to normalized managed slots
+// (not to raw/borrowed member slots). They never read a header before a foreign address:
+// dup reads only the source CONTENT; the old value is decref'd via the slot invariant, not
+// via magic-guessing on an arbitrary pointer.
+//
+// COPY: acquire an independent reference to `src` (dup) BEFORE releasing the old slot value.
+// `src` must be a live, NUL-terminated borrowed string, or null. Returns 0 on allocation
+// failure (leaving *dst unchanged, old value intact); 1 on success.
+int32_t aiml_str_assign_copy(char** dst, const char* src);
+// MOVE: `next` transfers a separate owned RC reference (or null) into the slot; the old slot
+// value is released. The caller must exclude a no-transfer self-assignment.
+void    aiml_str_assign_move(char** dst, char* next);
+// TAKE: read the slot value and null the slot (ownership handed to the caller). Used at a
+// committed move-out point so the slot's scope-drop / next decref-old is a null no-op.
+char*   aiml_str_take_local(char** src);
+
 // string.lower() -> string — all ASCII uppercase to lowercase
 char* aiml_str_lower(const char* s);
 

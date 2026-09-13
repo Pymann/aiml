@@ -1,0 +1,98 @@
+# spec/61: a bare `list<T>` / `map` returned by an `owns_return` (producer) function is a
+# FRESH independent container the CALLER owns → the caller's local must be dropped (kind-2) at
+# scope exit, exactly like a value-model producer result. TWO bugs combined to leak it (the
+# 9rooms DeckService/active_match_ids per-tick list leak):
+#   1. freshOwned + the list-drop registration only accepted the NO-INIT list case, so a
+#      `decl [ids, list<string>, {call: producer}]` was never dropped (buffer + strings leaked).
+#   2. even once dropped, a call-initialized list still ran initList() first (allocating an empty
+#      data buffer) and THEN memcpy'd the returned struct over it — orphaning that 32-byte buffer
+#      every call. Fix: skip initList when the initializer is a call/variable (struct-producing).
+#
+# Native RSS-delta assertion (valgrind never returns freed memory to the OS → RSS metrics are
+# only meaningful natively; see run_memory_sanitizers.sh). A clean producer-list loop tracks the
+# no-init-list control; a leaking one grows ~1 list buffer (+ its strings) per call.
+
+- class:
+    name: Svc
+    members: [[dummy, i32]]
+    methods:
+      # Producer: builds a fresh list<string> and returns it (return-ownership).
+      - def:
+          name: make_ids
+          static_off: ["same_arg"]
+          args: [[cnt, i32]]
+          return: { type: list<string>, lifetime: producer }
+          body:
+            - decl: [out, list<string>]
+            - decl: [jdx, i32, 0]
+            - while:
+                condition: { lt: [jdx, cnt] }
+                body:
+                  - call: [out.push, "match-id-${jdx}-payload-string-for-heap"]
+                  - set: [jdx, { +: [jdx, 1] }]
+            - return: out
+
+      # SUBJECT: each iteration decls a fresh producer-list local that must drop at scope exit.
+      - def:
+          name: loop_producer
+          static_off: ["same_arg"]
+          args: [[iters, i32]]
+          return: i64
+          body:
+            - decl: [before, i64, { call: [sys.mem_usage] }]
+            - decl: [idx, i32, 0]
+            - while:
+                condition: { lt: [idx, iters] }
+                body:
+                  - decl: [ids, list<string>, { call: [<.make_ids, 6] }]
+                  - set: [idx, { +: [idx, 1] }]
+            - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+      # CONTROL: no-init list built inline per iteration (known-bounded since spec/61 A2/A3).
+      - def:
+          name: loop_plain
+          static_off: ["same_arg"]
+          args: [[iters, i32]]
+          return: i64
+          body:
+            - decl: [before, i64, { call: [sys.mem_usage] }]
+            - decl: [idx, i32, 0]
+            - while:
+                condition: { lt: [idx, iters] }
+                body:
+                  - decl: [lst, list<string>]
+                  - decl: [jdx, i32, 0]
+                  - while:
+                      condition: { lt: [jdx, 6] }
+                      body:
+                        - call: [lst.push, "match-id-${jdx}-payload-string-for-heap"]
+                        - set: [jdx, { +: [jdx, 1] }]
+                  - set: [idx, { +: [idx, 1] }]
+            - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [reps, i32, 40000]
+      - decl: [limit, i64, 41943040]   # 40 MB bright line (clean ≈ single-digit MB; leak ≈ 100+ MB)
+      - decl: [svc, ptr<Svc>, { new: Svc }]
+      # Warmup: absorb one-time lazy allocations so they don't count against either loop.
+      - decl: [warm, i64, { call: [svc.loop_producer, 2000] }]
+      - decl: [ctrl, i64, { call: [svc.loop_plain, reps] }]
+      - decl: [subj, i64, { call: [svc.loop_producer, reps] }]
+      - call: [log.info, "producer_list_drop: plain-ctrl=${ctrl} B  producer-list=${subj} B  (limit=${limit} B, N=${reps})"]
+      - decl: [bad, i32, 0]
+      - if:
+          condition: { gt: [ctrl, limit] }
+          then:
+            - call: [log.info, "FAIL producer_list_drop: no-init-list CONTROL leaked (${ctrl} B > ${limit} B) — threshold/env wrong"]
+            - set: [bad, 1]
+      - if:
+          condition: { gt: [subj, limit] }
+          then:
+            - call: [log.info, "FAIL producer_list_drop: producer-returned list NOT freed at caller scope exit (${subj} B > ${limit} B)"]
+            - set: [bad, 1]
+      - if: { condition: { eq: [bad, 1] }, then: [{ return: 1 }] }
+      - call: [log.info, "PASS producer_list_drop: producer-returned list freed at caller scope exit (bounded RSS)"]
+      - return: 0

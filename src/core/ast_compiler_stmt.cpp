@@ -176,6 +176,41 @@ void Compiler::consumeStringTemp(llvm::Value* v) {
         }
     }
 }
+
+// spec/61 §7: is `v` an OWNED string temp (a fresh interpolation/producer result in the current
+// statement's temp list)? Such a value is MOVED into a managed string slot (stored as-is); anything
+// else assigned into a managed slot is a BORROW that is DUPLICATED. Query BEFORE consumeStringTemp.
+static bool inStringTempStack(CompilerContext& ctx, llvm::Value* v) {
+    if (!v) return false;
+    for (auto& frame : ctx.stmtTempStack)
+        for (llvm::Value* t : frame)
+            if (t == v) return true;
+    return false;
+}
+
+// spec/61 (T1c): decref + clear the current statement's owned-string temps NOW (at the current
+// insert point). Used after an if/while CONDITION is evaluated: a condition interpolation temp
+// (e.g. `if has_texture("@art:${hsh}")`) must be freed on every path, including a branch that
+// terminates (return/break) before the per-statement decref loop in visitStatement would run.
+static void decrefCurrentStmtTemps(CompilerContext& ctx) {
+    if (!ctx.lifetimeDropsEnabled || ctx.stmtTempStack.empty()) return;
+    auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
+    if (!bb || bb->getTerminator()) return;
+    llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+    for (llvm::Value* t : ctx.stmtTempStack.back()) {
+        llvm::Function* dc = ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {i8p});
+        ctx.builder.CreateCall(dc, { t });
+    }
+    ctx.stmtTempStack.back().clear();
+}
+static void traceSymbolTarget(CompilerContext& ctx, const char* phase, const std::string& target);
+// spec/61 §7 KILL-SWITCH: the managed string-local model (dup-on-copy + assign_copy/move +
+// null-slot-on-move + all-strings-owned) is DISABLED pending a fix for an open-match double-free
+// (OpenLobbyHandler → nick_for path) the sanitizer probes don't cover. false → the compiler falls
+// back to the T1/T1b/T1c behaviour. MUST match kManagedStringLocals in ownership_analyzer.cpp.
+static constexpr bool kManagedStringLocals = true;
+static bool isManagedStringLocalSym(const Symbol& s);  // spec/61 §7 (defined below)
+
 void Compiler::visitStatement(Stmt* stmt) {
     if (stmt->sourceLine > 0) ctx.currentLine = stmt->sourceLine;
     ctx.stmtTempStack.emplace_back();   // spec/61: per-statement owned-string-temp frame
@@ -184,7 +219,9 @@ void Compiler::visitStatement(Stmt* stmt) {
         if (sizetrace_active(ctx.currentFunctionName)) emitSizeTrace(ctx, decl->varName);
     }
     else if (auto setStmt = dynamic_cast<SetStmt*>(stmt)) {
+        traceSymbolTarget(ctx, "BEFORE_SET", setStmt->target);
         visitSetStmt(setStmt);
+        traceSymbolTarget(ctx, "SET", setStmt->target);
         if (sizetrace_active(ctx.currentFunctionName)) emitSizeTrace(ctx, setStmt->target);
     }
     else if (auto exprStmt = dynamic_cast<ExprStmt*>(stmt)) visitExprStmt(exprStmt);
@@ -284,9 +321,18 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
     if (isPrePromotedGlobal) {
         // fall through — initializer eval still happens below
     } else if (tName.find("list<") == 0 && tName.back() == '>') {
-        std::string elemName = tName.substr(5, tName.length() - 6);
-        llvm::Type* elemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
-        if (elemTy) ListImpl::initList(ctx, unwrappedAlloca, elemTy, 4);
+        // Auto-alloc the empty data buffer ONLY when there is no initializer (later populated
+        // by push) OR the initializer is a buffer-literal (expands to element writes onto this
+        // list). A call/variable initializer produces a FULL list struct that is memcpy'd over
+        // this alloca below (the list<> init path) — pre-allocating a buffer here would orphan
+        // it (a 32-byte leak per call; the DeckService/active_match_ids producer-list leak).
+        bool listLiteralInit = decl->initialValue &&
+                               dynamic_cast<BufferLiteralExpr*>(decl->initialValue.get());
+        if (!decl->initialValue || listLiteralInit) {
+            std::string elemName = tName.substr(5, tName.length() - 6);
+            llvm::Type* elemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
+            if (elemTy) ListImpl::initList(ctx, unwrappedAlloca, elemTy, 4);
+        }
     } else if (tName.find("cascade<") == 0 && tName.back() == '>') {
         // cascade<X> shares the list<i32> layout; init the same way.
         llvm::Type* elemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType("i32")));
@@ -339,6 +385,37 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         OwnershipId declOid = (ctx.ownershipPlan && ctx.ownershipPlan->declarations.count(decl))
             ? ctx.ownershipPlan->declarations.at(decl) : NoOwnership;
         sym.ownershipId = declOid;
+        // spec/61 §6.3 (systemic value-semantics): a value-model local declared from a sharing VIEW
+        // (`decl [x, Model, {at:..}]` / `{obj.field}` / a container accessor) is a VALUE — it must
+        // become an INDEPENDENT deep copy, not a shallow alias of the container's inline list/map
+        // heap. Otherwise, when x is later dropped, returned, or stored, its shared buffers are freed
+        // twice with the container's own drop (the pervasive drops-on ZoneEntry/PlayerState double-
+        // free class). We deep-copy at the DECL (see the value-model init store below) and mark it
+        // owned (modelOwnedInit), so it is dropped exactly once at scope exit. Read-only views pay a
+        // copy; escapes (return/store) then just move an already-independent owned value.
+        // NOTE: full value-semantics deep-copy-at-decl was tried and reverted — 9rooms code relies
+        // on view-in-place mutation (`myc = at(..); apply_buff(myc)` mutates the source), which a
+        // deep copy breaks (enchantment_picker), plus a per-read perf cost. We keep the view SHARED
+        // and only deep-copy at genuine ESCAPE points (return/set/idx-store), tainting via is_view_alias.
+        if (ctx.lifetimeDropsEnabled && decl->initialValue) {
+            auto tciDecl = ctx.classes.find(decl->typeName);
+            if (tciDecl != ctx.classes.end() && tciDecl->second.hasHeapFields && tciDecl->second.serNodesVar) {
+                Expr* iv = decl->initialValue.get();
+                if (dynamic_cast<AtExpr*>(iv)) {
+                    sym.is_view_alias = true;
+                } else if (auto* ve = dynamic_cast<VariableExpr*>(iv)) {
+                    if (ve->name.find('.') != std::string::npos || ve->name.find('<') != std::string::npos)
+                        sym.is_view_alias = true;
+                } else if (auto* ce = dynamic_cast<CallExpr*>(iv)) {
+                    const std::string& fn = ce->functionName;
+                    size_t dp = fn.rfind('.');
+                    std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                    if ((sn == "at" || sn == "get" || sn == "first" || sn == "last")
+                        && !ctx.ownsReturnMatches(sn, decl->typeName))
+                        sym.is_view_alias = true;
+                }
+            }
+        }
         ctx.symbol_table[decl->varName] = sym;
 
         // spec/61 (A2+A3): a FRESH value-model local with heap fields owns an independent heap
@@ -357,7 +434,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 const std::string& fn = mc->functionName;
                 size_t dp = fn.rfind('.');
                 std::string shortName = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
-                if (ctx.ownsReturnFns.count(shortName) > 0) modelOwnedInit = true;
+                if (ctx.ownsReturnMatches(shortName, decl->typeName)) modelOwnedInit = true;
             }
         }
         if (modelOwnedInit && decl->lifetime != "persistent"
@@ -396,7 +473,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     const std::string& fn = c->functionName;
                     size_t dp = fn.rfind('.');
                     std::string shortName = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
-                    ownedInit = ctx.ownsReturnFns.count(shortName) > 0;
+                    ownedInit = ctx.ownsReturnMatches(shortName, decl->typeName);   // collision guard (handlers.get)
                 }
             }
             if (ownedInit) {
@@ -404,7 +481,11 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 auto bi = ctx.classes.find(boxed);
                 auto ii = ctx.interfaces.find(boxed);
                 if (bi != ctx.classes.end() && bi->second.hasHeapFields && bi->second.serNodesVar
-                    && bi->second.type && !ctx.classGroupContainers.count(boxed)) {
+                    && bi->second.type && !ctx.classGroupContainers.count(boxed)
+                    // spec/58: cascade_class instances borrow the shared, loaded-once cascade buffer
+                    // (every `new` points at the same global rows) → a box-drop double-frees it.
+                    // Must stay in lockstep with freshOwned in ownership_analyzer.cpp.
+                    && !ctx.cascadeClasses.count(boxed)) {
                     // Concrete class box → kind-4 (static serNodes deep-free + shell free).
                     CompilerContext::ScopeDrop sd;
                     sd.addr = unwrappedAlloca;
@@ -430,31 +511,69 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             }
         }
 
-        // spec/61 (A2/A3): a string local initialised from an INTERPOLATION owns a fresh
-        // heap string (aiml_str_alloc) → register a decref-drop.  ONLY interpolation
-        // origins (never string literals — decref reads a header before the pointer,
-        // which is UB for .rodata literals; see string_runtime).  A3 move-detection
-        // removes this drop if the string is later consumed (push/return/store).
-        if (decl->typeName == "string" && decl->lifetime != "persistent"
-            && decl->initialValue
-            && dynamic_cast<StringInterpolationExpr*>(decl->initialValue.get())
-            && !ctx.cleanupStack.empty()) {
+        // spec/61 §7: EVERY managed string local owns its value → register a null-safe kind-1
+        // decref-drop (managedStringSlot). The slot invariant "null | one owned RC ref" is enforced
+        // by the init-store normalisation below (dup a borrow / move an owned temp) and by
+        // visitSetStmt (assign_copy/move) + committed-move nulling (consumeLocalDrop). A no-init slot
+        // is null → decref(null) no-op. Excludes persistent/extern/pre-promoted-global (not managed).
+        bool managedStringDecl = kManagedStringLocals && decl->typeName == "string"
+            && decl->lifetime != "persistent" && !decl->is_extern && !isPrePromotedGlobal;
+        if (managedStringDecl && !ctx.cleanupStack.empty()) {
             CompilerContext::ScopeDrop sd;
             sd.addr = unwrappedAlloca;
             sd.kind = 1;
             sd.ownershipId = declOid;
+            sd.managedStringSlot = true;
             sd.debugName = decl->varName; sd.debugType = decl->typeName;
             ctx.cleanupStack.back().push_back(sd);
+        } else if (!kManagedStringLocals && decl->typeName == "string" && decl->lifetime != "persistent"
+                   && !ctx.cleanupStack.empty()) {
+            // Managed model OFF → T1-era gate: only INTERPOLATION or producer/text_value-call string
+            // inits own a fresh RC string that must be decref'd (a literal/borrow must NOT be dropped).
+            bool ownedStringInit =
+                decl->initialValue && dynamic_cast<StringInterpolationExpr*>(decl->initialValue.get());
+            if (!ownedStringInit && decl->initialValue) {
+                if (auto* sc = dynamic_cast<CallExpr*>(decl->initialValue.get())) {
+                    const std::string& fn = sc->functionName;
+                    size_t dp = fn.rfind('.');
+                    std::string shortName = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                    if (shortName == "text_value" || shortName == "dropdown_value"
+                        || ctx.ownsReturnMatches(shortName, decl->typeName))
+                        ownedStringInit = true;
+                }
+            }
+            if (ownedStringInit) {
+                CompilerContext::ScopeDrop sd;
+                sd.addr = unwrappedAlloca;
+                sd.kind = 1;
+                sd.ownershipId = declOid;
+                sd.debugName = decl->varName; sd.debugType = decl->typeName;
+                ctx.cleanupStack.back().push_back(sd);
+            }
         }
 
-        // spec/61 (A2/A3): a FRESH list<T> value-local (no initializer → an empty list
-        // initList'd above, then populated by push) owns its malloc'd data buffer → register
+        // spec/61 (A2/A3): a FRESH list<T> value-local owns its malloc'd data buffer → register
         // a list-drop (aiml_list_free frees the buffer; for list<string> it decref's each
-        // element, which push MOVED in — see list_impl.cpp).  Conservative: only the no-init
-        // case (assignment/return-initialised lists may alias and are left to leak = safe).
+        // element, which push MOVED in — see list_impl.cpp).  Two owned-init forms (MUST match
+        // freshOwned in ownership_analyzer.cpp):
+        //   • no initializer (empty list initList'd above, then populated by push), and
+        //   • a call to an `owns_return: true` (producer) function — return-ownership for LISTS:
+        //     the callee returns a freshly-built INDEPENDENT list (e.g. active_match_ids /
+        //     take_gone_players → list<string>); the caller owns it. Matched by the call's
+        //     trailing identifier against ctx.ownsReturnFns (mirrors the model/box cases).
+        //     (assignment / at / get inits may alias a view and are left to leak = safe).
         // A3 move-detection removes this drop if the list is later pushed/returned/stored.
+        bool listOwnedInit = (decl->initialValue == nullptr);
+        if (!listOwnedInit && decl->initialValue) {
+            if (auto* lc = dynamic_cast<CallExpr*>(decl->initialValue.get())) {
+                const std::string& fn = lc->functionName;
+                size_t dp = fn.rfind('.');
+                std::string shortName = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                if (ctx.ownsReturnMatches(shortName, decl->typeName)) listOwnedInit = true;
+            }
+        }
         if (decl->typeName.rfind("list<", 0) == 0 && decl->typeName.back() == '>'
-            && !decl->initialValue && decl->lifetime != "persistent"
+            && listOwnedInit && decl->lifetime != "persistent"
             && !decl->is_extern && !ctx.cleanupStack.empty()) {
             std::string elemName = decl->typeName.substr(5, decl->typeName.length() - 6);
             CompilerContext::ScopeDrop sd;
@@ -582,7 +701,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                                 } else if (vTy->isFloatingPointTy() && v->getType()->isFloatingPointTy() && v->getType() != vTy) {
                                     v = ctx.builder.CreateFPCast(v, vTy, "mlit_v");
                                 }
-                                MapImpl::put(ctx, unwrappedAlloca, kVal, v, mapStructTy);
+                                MapImpl::put(ctx, unwrappedAlloca, kVal, v, mapStructTy, vName == "string");
                             }
                             return; // done — skip normal expression init
                         }
@@ -613,6 +732,24 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         ctx.deserializeTargetType = decl->typeName;
         IRValue* initVal = visitExpression(decl->initialValue.get());
         ctx.deserializeTargetType.clear();
+        // spec/61 §7: normalise a managed string local's init to "one owned RC ref". An owned temp
+        // (interpolation/producer, in the stmt-temp list) is MOVED (stored as-is, then removed from
+        // the temp list below). A BORROW (variable/member/at/non-producer call/literal) is DUPLICATED
+        // so the slot owns an INDEPENDENT ref — dup reads only content, never a header before a
+        // foreign address, and never aliases the source (whose own lifetime is unchanged).
+        {
+            bool managedStringDeclInit = kManagedStringLocals && decl->typeName == "string"
+                && decl->lifetime != "persistent" && !decl->is_extern && !isPrePromotedGlobal;
+            if (ctx.lifetimeDropsEnabled && managedStringDeclInit && initVal) {
+                llvm::Value* iv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal));
+                bool ownedTemp = iv && inStringTempStack(ctx, iv);
+                if (iv && iv->getType()->isPointerTy() && !ownedTemp) {
+                    llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+                    llvm::Function* dup = ctx.getFunction("aiml_str_dup", i8p, {i8p});
+                    initVal = ctx.ir_gen->wrap(ctx.builder.CreateCall(dup, { iv }, "managed_dup"));
+                }
+            }
+        }
         // spec/61: a string temp used as a decl initializer is owned by the new local
         // (its scope-drop handles it) → remove it from the statement-temp decref list.
         if (initVal) consumeStringTemp(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal)));
@@ -882,6 +1019,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         int kind = aimlTraceKind(ctx, decl->typeName);
         if (kind >= 0 && sit != ctx.symbol_table.end() && sit->second.ir_alloca_inst) {
             llvm::Value* a = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sit->second.ir_alloca_inst));
+            ctx.traceDeclarationSites[a] = ctx.fmtLoc();
             emitSymbolValueTrace(ctx, "DECL", decl->varName, kind, decl->typeName, a);
         }
     }
@@ -1045,7 +1183,19 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     }
     // Move (default): a plain owned local moved into a longer-lived sink → drop its cleanup.
     // Skipped for a planned DeepCopy (the source is copied, so it retains its own drop).
-    if (setStmt->value && !memberDeepCopy) consumeLocalDrop(setStmt->value.get());
+    // spec/61 §7: a MANAGED string local SOURCE in a `set` is COPIED into the target (plain-local
+    // target → assign_copy dup; member target → incref below), never moved via this path — and this
+    // consume runs BEFORE the value is loaded (nulling here would feed null to the store). So skip it
+    // for a managed string source; the source keeps its owned ref + null-safe drop.
+    bool srcIsManagedString = false;
+    if (auto* sv = dynamic_cast<VariableExpr*>(setStmt->value.get())) {
+        if (sv->name.find('.') == std::string::npos && sv->name.find('<') == std::string::npos) {
+            auto sit = ctx.symbol_table.find(sv->name);
+            if (sit != ctx.symbol_table.end() && isManagedStringLocalSym(sit->second))
+                srcIsManagedString = true;
+        }
+    }
+    if (setStmt->value && !memberDeepCopy && !srcIsManagedString) consumeLocalDrop(setStmt->value.get());
 
     // Expose the target variable's type so db.open_kv / sys.deserialize can infer
     // the value type.  For plain variables (propName empty) use the variable's own
@@ -1074,6 +1224,11 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     }
     IRValue* val = visitExpression(setStmt->value.get());
     ctx.deserializeTargetType.clear();
+    // spec/61 §7: was the RHS an OWNED string temp (interpolation/producer)? Captured BEFORE
+    // consumeStringTemp clears it — a managed set MOVES an owned temp (assign_move) and COPIES a
+    // borrow (assign_copy = dup).
+    bool rhsWasOwnedStringTemp = val
+        && inStringTempStack(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)));
     // spec/61: a string temp assigned into a target is moved (target owns the char*) →
     // remove it from the statement-temp decref list (idempotent for non-temp values).
     if (val) consumeStringTemp(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)));
@@ -1096,6 +1251,55 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 LOG_ERROR(ctx.fmtLoc() + "Cannot assign a string to enum-typed '" + targetStr +
                           "' (" + sym->typeName + ") — use " + sym->typeName + ".<value> or an int");
                 return;
+            }
+        }
+        // ── spec/61 §4.2: value-model set from a SHARING VIEW → DEEP COPY (not shallow) ──
+        // `set [x, at(list,i)]` / `set [x, obj.field]` must give x an INDEPENDENT copy (value
+        // semantics). A shallow store shares the container element's inline list/map heap; if x is
+        // then RETURNED from a producer (load_entry_at → att_entry → aent) the caller owns that
+        // shallow copy and its scope-drop double-frees the buffer with the container's own drop
+        // (the 9rooms drive_ai_combat ZoneEntry double-free). Gated to sharing-view sources only:
+        // a producer/owns-return call returns an already-independent owned temp (MOVE — deep-copying
+        // it would leak the temp), and a same-type owned local is handled by the §4.2 block above.
+        if (propName.empty() && !isDash && ctx.lifetimeDropsEnabled
+            && !sym->is_global && !sym->is_byref_arg && !sym->is_const && !ctx.kvGetCopy) {
+            auto tciView = ctx.classes.find(sym->typeName);
+            if (tciView != ctx.classes.end() && tciView->second.hasHeapFields
+                && tciView->second.serNodesVar && tciView->second.type) {
+                bool rhsIsView = false;
+                Expr* rv = setStmt->value.get();
+                if (dynamic_cast<AtExpr*>(rv)) {
+                    rhsIsView = true;                          // container[index] → shared element view
+                } else if (auto* ce = dynamic_cast<CallExpr*>(rv)) {
+                    const std::string& fn = ce->functionName;
+                    size_t dp = fn.rfind('.');
+                    std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                    if ((sn == "at" || sn == "get" || sn == "first" || sn == "last")
+                        && !ctx.ownsReturnMatches(sn, sym->typeName))
+                        rhsIsView = true;
+                } else if (auto* ve = dynamic_cast<VariableExpr*>(rv)) {
+                    if (ve->name.find('.') != std::string::npos || ve->name.find('<') != std::string::npos)
+                        rhsIsView = true;                      // member/field access
+                }
+                if (rhsIsView) {
+                    llvm::Value* rawVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                    llvm::Type* p = llvm::PointerType::get(ctx.context, 0);
+                    llvm::Value* srcAddr;
+                    if (rawVal->getType()->isPointerTy()) {
+                        srcAddr = rawVal;
+                    } else {
+                        llvm::AllocaInst* tmp = ctx.createEntryAlloca(tciView->second.type, "set_view_src");
+                        ctx.builder.CreateStore(rawVal, tmp);
+                        srcAddr = tmp;
+                    }
+                    llvm::Value* dst = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+                    llvm::Function* dc = ctx.getFunction("aiml_ser_deep_copy",
+                        ctx.builder.getVoidTy(), {p, p, p, ctx.builder.getInt32Ty()});
+                    ctx.builder.CreateCall(dc, { dst, srcAddr, tciView->second.serNodesVar,
+                                                 ctx.builder.getInt32(tciView->second.serNodesCount) });
+                    sym->is_view_alias = false;   // now an INDEPENDENT copy → not a view
+                    return;
+                }
             }
         }
         // For a BY-REF container param (list/map/buffer passed by reference), the alloca
@@ -1265,6 +1469,32 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 return;
             }
         }
+        // spec/61 §7: managed string-local reassignment maintains "null | one owned RC ref" and frees
+        // the OLD value (fixes the deckset-editor self-accumulation leak: build_card_text /
+        // ability_block_cached / CardArtCache_fetch). An owned temp (interpolation/producer) is MOVED
+        // (assign_move: store + decref old); a borrow is COPIED (assign_copy: dup + decref old). The
+        // exact self-assignment `set:[x,x]` was already returned as a no-op above.
+        if (ctx.lifetimeDropsEnabled && isManagedStringLocalSym(*sym)) {
+            if (sym->is_const) {
+                LOG_ERROR(ctx.fmtLoc() + "Cannot assign to const variable " + targetStr);
+                return;
+            }
+            llvm::Value* newRaw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+            llvm::Value* slot   = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+            if (newRaw && newRaw->getType()->isPointerTy()) {
+                llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+                if (rhsWasOwnedStringTemp) {
+                    llvm::Function* mv = ctx.getFunction("aiml_str_assign_move",
+                        ctx.builder.getVoidTy(), {i8p->getPointerTo(), i8p});
+                    ctx.builder.CreateCall(mv, { slot, newRaw });
+                } else {
+                    llvm::Function* cp = ctx.getFunction("aiml_str_assign_copy",
+                        ctx.builder.getInt32Ty(), {i8p->getPointerTo(), i8p});
+                    ctx.builder.CreateCall(cp, { slot, newRaw });
+                }
+                return;
+            }
+        }
         ctx.ir_gen->createStore(val, baseAlloca);
     } else {
         std::string className = sym->typeName;
@@ -1332,6 +1562,33 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         return;
                     }
                 }
+                // spec/61 §7.0 — RELEASE the member's PREVIOUS value before overwriting it, so a
+                // repeated assignment (poll_board_state's `<.board_state = …`, take_gone_players's
+                // `<.entries = kept`) does not leak the prior heap. SCOPE (important): only a
+                // `this`-rooted member store of a CONTAINER (list/map/buffer) or a heap-owning MODEL.
+                //   • `this`-member only: a class member exclusively owns its heap (assignment already
+                //     Moves/DeepCopies into it). A `local.field` store (e.g. `ent.player_id` where
+                //     `ent` is a shallow `at(<.list, i)` element view) may ALIAS a container element,
+                //     so freeing "the old value" there would double-free the shared element.
+                //   • container/model only: string/scalar/enum/ptr fields either own no heap or are
+                //     handled by their own store path (the string-field incref); releasing them here
+                //     would double-decref a shared string (the reconnect double-free).
+                if (ctx.lifetimeDropsEnabled && baseName == "this" && !finalTypeName.empty()) {
+                    bool relHeap = finalTypeName.rfind("list<", 0) == 0
+                                || finalTypeName.rfind("map<", 0) == 0
+                                || finalTypeName.rfind("buffer<", 0) == 0;
+                    if (!relHeap) {
+                        auto rci = ctx.classes.find(finalTypeName);
+                        relHeap = (rci != ctx.classes.end() && !rci->second.isBuiltin
+                                   && rci->second.hasHeapFields);
+                    }
+                    if (relHeap) {
+                        llvm::Value* dstRel = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(targetGep));
+                        llvm::Value* rawV   = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                        llvm::Value* srcRel = (rawV && rawV->getType()->isPointerTy()) ? rawV : nullptr;
+                        emitContainerFieldFree(dstRel, srcRel, finalTypeName);
+                    }
+                }
                 // Apply integer narrowing/widening for final member type
                 if (!finalTypeName.empty()) {
                     llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
@@ -1379,6 +1636,10 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         // is correct: consumeLocalDrop(value) has already transferred ownership.
                         if (memberDeepCopy && emitContainerFieldDeepCopy(dstPtr, srcPtr, finalTypeName))
                             return;
+                        // MOVE case (owned-local source, shallow struct memcpy). The member's prior
+                        // value was already released by the centralized member-field free above, so
+                        // this memcpy writes into a zeroed field; the moved-in source's own scope-drop
+                        // was consumed by consumeLocalDrop → no double-free, no leak.
                         uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(fieldTy);
                         llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                         llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy,
@@ -1497,8 +1758,12 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 // temp is never decref'd), and increfing a .rodata literal corrupts the byte before
                 // it. So gate the incref on a VariableExpr source. (Owned-local sources take the
                 // Move path — memberDeepCopy=false — and never reach here.)
-                if (finalTypeName == "string" && memberDeepCopy
-                    && dynamic_cast<VariableExpr*>(setStmt->value.get())) {
+                // spec/61 §7: a managed string LOCAL source is copied into the member (its consume was
+                // skipped, so it stays owned) → the member needs its own incref'd ref, regardless of
+                // memberDeepCopy. The existing memberDeepCopy case covers borrowed member/param sources.
+                if (finalTypeName == "string"
+                    && dynamic_cast<VariableExpr*>(setStmt->value.get())
+                    && (memberDeepCopy || srcIsManagedString)) {
                     llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
                     if (sv && sv->getType()->isPointerTy()) {
                         llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
@@ -1530,8 +1795,10 @@ void Compiler::visitExprStmt(ExprStmt* exprStmt) {
 }
 static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop& it);  // defined below
 void Compiler::visitRetStmt(RetStmt* retStmt) {
-    // spec/61 (A3): returning a local moves it to the caller → do not drop it here.
-    if (retStmt->value) consumeLocalDrop(retStmt->value.get());
+    // spec/61 (A3): returning a local moves it to the caller → do not drop it here. This runs BEFORE
+    // the value is loaded, so a managed string return uses ERASE mode (nullManagedStringSlot=false):
+    // the value is captured afterwards and the returned value's owner is exempted from cleanup.
+    if (retStmt->value) consumeLocalDrop(retStmt->value.get(), /*nullManagedStringSlot=*/false);
     llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
     llvm::Type* retTy = currentFunc->getReturnType();
 
@@ -1570,13 +1837,21 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
             retBaseOwned = true;
     }
     bool safeToCleanup = (retTy && retTy->isVoidTy()) || retScalar || retBaseOwned;
+    // spec/61 §6.2 (T1): the returned value only aliases the owner's heap when the return TYPE is a
+    // pointer/struct (`return x.field` handing out x's sub-heap). For a SCALAR/void return the value
+    // is a copy that cannot alias — e.g. `return str_local.len` yields an i32 — so the owner must NOT
+    // be exempted from cleanup, else it leaks (the deckset-editor `build_a`/`iso3` case: str_local
+    // never dropped). Narrowing the exemption to alias-capable returns only ADDS drops of
+    // already-owned locals (mayDrop-gated) → cannot double-free.
+    const bool returnMayAliasHeap = retTy && (retTy->isPointerTy() || retTy->isStructTy());
     auto emitReturnCleanup = [&]() {
         if (!ctx.lifetimeDropsEnabled || !retPlan || !retExit) return;
         auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
         if (!bb || bb->getTerminator()) return;
         for (auto fit = ctx.cleanupStack.rbegin(); fit != ctx.cleanupStack.rend(); ++fit)
             for (auto it = fit->rbegin(); it != fit->rend(); ++it) {
-                if (it->ownershipId != NoOwnership && it->ownershipId == retBaseId) continue;
+                if (returnMayAliasHeap && it->ownershipId != NoOwnership && it->ownershipId == retBaseId)
+                    continue;   // owner of an alias-capable returned value → exempt (would double-free)
                 if (mayDrop(*retPlan, *retExit, it->ownershipId))
                     emitScopeDrop(ctx, *it);
             }
@@ -1619,6 +1894,21 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         IRValue* val = visitExpression(retStmt->value.get());
         // spec/61: a returned string temp is moved to the caller → not a statement temp.
         if (val) consumeStringTemp(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)));
+        // spec/61 (T1b): a `return "${…}"` builds interpolation INTERMEDIATE temps (int→string
+        // conversions, sub-concat accumulators) into this statement's temp frame. The returned final
+        // value was just removed via consumeStringTemp; the remaining intermediates would normally be
+        // decref'd by the per-statement temp loop in visitStatement — but the `createRet` below
+        // TERMINATES the block, so that loop is skipped (it guards on !getTerminator()). Decref them
+        // here, before the terminator, so they are not leaked (the `return <local>` form avoids this
+        // because its interpolation ran in the non-terminating decl statement).
+        if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) {
+            llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+            for (llvm::Value* t : ctx.stmtTempStack.back()) {
+                llvm::Function* dc = ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {i8p});
+                ctx.builder.CreateCall(dc, { t });
+            }
+            ctx.stmtTempStack.back().clear();
+        }
         // §6/P2a: cleanup after the value is in an SSA register / its owner is exempted, only
         // for alias-safe return shapes; the value the branches below build then stays valid.
         if (safeToCleanup) emitReturnCleanup();
@@ -1691,8 +1981,58 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     if (fat) {
                         ctx.ir_gen->createRet(ctx.ir_gen->wrap(fat));
                     } else {
-                        llvm::Value* loaded = ctx.builder.CreateLoad(retTy, raw, "ret_struct_load");
-                        ctx.ir_gen->createRet(ctx.ir_gen->wrap(loaded));
+                        // ── spec/61 §6.3: producer returning a value-model VIEW → DEEP COPY ──
+                        // A value-model is a value type. When the returned value is a VIEW that shares
+                        // a container element's inline list/map heap — `return at(zone,i)`,
+                        // `return e.field`, an accessor `return zone.get(i)`, or a plain local that
+                        // was filled from such a view (freshOwned=false → not Owned here) — a plain
+                        // struct load hands the caller a SHALLOW copy. The caller then owns that copy
+                        // and its scope-drop double-frees the element's buffer with the container's own
+                        // drop (9rooms load_entry_at → att_entry → aent, freed in drive_ai_combat).
+                        // Deep-copy into an independent temp so the caller owns its own heap. An OWNED
+                        // producer temp / owned local (retBaseOwned, or an owns-return call) is a real
+                        // move and is NOT deep-copied (that would leak the temp).
+                        bool retIsView = false;
+                        auto ciRetV = ctx.classes.find(ctx.currentFunctionReturnType);
+                        if (ctx.lifetimeDropsEnabled && ciRetV != ctx.classes.end()
+                            && ciRetV->second.hasHeapFields && ciRetV->second.serNodesVar) {
+                            Expr* rv = retStmt->value.get();
+                            if (dynamic_cast<AtExpr*>(rv)) {
+                                retIsView = true;                       // container[index]
+                            } else if (auto* ve = dynamic_cast<VariableExpr*>(rv)) {
+                                // member/field access (obj.field / <.field) shares the aggregate sub-heap.
+                                // A plain local is a view only if it was flagged is_view_alias at its decl
+                                // (decl-from-view, kept cheap = uncopied until it escapes HERE). This is
+                                // precise — no reliance on flow facts — so owned built locals (MatchResp
+                                // `out` etc.) are never falsely deep-copied+leaked.
+                                if (ve->name.find('.') != std::string::npos || ve->name.find('<') != std::string::npos) {
+                                    retIsView = true;
+                                } else if (Symbol* rsym = resolveVariable(ve->name)) {
+                                    if (rsym->is_view_alias) retIsView = true;
+                                }
+                            } else if (auto* ce = dynamic_cast<CallExpr*>(rv)) {
+                                const std::string& fn = ce->functionName;
+                                size_t dp = fn.rfind('.');
+                                std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                                if ((sn == "at" || sn == "get" || sn == "first" || sn == "last")
+                                    && !ctx.ownsReturnMatches(sn, ctx.currentFunctionReturnType))
+                                    retIsView = true;                   // container accessor (not a producer)
+                            }
+                        }
+                        if (retIsView) {
+                            auto* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                            llvm::Value* tmp = ctx.builder.CreateAlloca(retTy, nullptr, "retviewcopy");
+                            ctx.builder.CreateStore(llvm::ConstantAggregateZero::get(retTy), tmp);
+                            llvm::Function* fn = ctx.getFunction("aiml_ser_deep_copy",
+                                ctx.builder.getVoidTy(), {ptrTy, ptrTy, ptrTy, ctx.builder.getInt32Ty()});
+                            ctx.builder.CreateCall(fn, { tmp, raw, ciRetV->second.serNodesVar,
+                                                         ctx.builder.getInt32(ciRetV->second.serNodesCount) });
+                            llvm::Value* loaded = ctx.builder.CreateLoad(retTy, tmp, "ret_view_load");
+                            ctx.ir_gen->createRet(ctx.ir_gen->wrap(loaded));
+                        } else {
+                            llvm::Value* loaded = ctx.builder.CreateLoad(retTy, raw, "ret_struct_load");
+                            ctx.ir_gen->createRet(ctx.ir_gen->wrap(loaded));
+                        }
                     }
                     }
                 }
@@ -1712,7 +2052,14 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     llvm::BasicBlock* deadBB = llvm::BasicBlock::Create(ctx.context, "ret_dead", currentFunc);
     ctx.builder.SetInsertPoint(deadBB);
 }
-void Compiler::consumeLocalDrop(Expr* argExpr) {
+// spec/61 §7: a plain local string whose slot is codegen-managed ("null | one owned RC ref").
+static bool isManagedStringLocalSym(const Symbol& s) {
+    return kManagedStringLocals
+        && s.typeName == "string" && !s.is_byref_arg && !s.is_global && !s.is_param
+        && s.lifetime != "persistent";
+}
+
+void Compiler::consumeLocalDrop(Expr* argExpr, bool nullManagedStringSlot) {
     // spec/61 (A3): a plain local passed to push/return/store is MOVED into the target.
     // Remove its pending scope-drop so it is not freed at scope exit (the container /
     // caller / member now owns its heap via the shallow transfer).  Only plain locals —
@@ -1725,9 +2072,38 @@ void Compiler::consumeLocalDrop(Expr* argExpr) {
     if (it == ctx.symbol_table.end() || !it->second.ir_alloca_inst) return;
     llvm::Value* addr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(it->second.ir_alloca_inst));
     if (!addr) return;
+    // spec/61 §7: a committed move of a MANAGED string local hands its owned reference to the sink.
+    // Instead of ERASING the drop (which cannot express a branch-divergent move), NULL the slot at
+    // runtime and KEEP the drop (null-safe): the moved-out slot's later scope-drop / decref-old is a
+    // null no-op, and paths that did not move still own + free their value. Callers must invoke this
+    // AFTER the moved value is captured for the sink (true for return/push/put/consuming-arg; the
+    // pre-value-load member/container set-store skips this for managed strings and copies instead).
+    if (ctx.lifetimeDropsEnabled && nullManagedStringSlot && isManagedStringLocalSym(it->second)) {
+        if (aimlTraceSymbol(nm))
+            emitSymbolValueTrace(ctx, "MOVE", nm, 1, it->second.typeName, addr);
+        // spec/61 §7: the sink (push/put/consuming-arg) captured the ORIGINAL char* just above. AIML
+        // code frequently READS a string local again after handing it to a container (event-log lines,
+        // mana-color keys — the old shallow-share semantics), so we must NOT null the slot. Give this
+        // local its OWN independent copy (dup): the sink owns the original, the local owns the copy →
+        // read-after-move stays valid, and the local's scope-drop / a later decref-old frees a DISTINCT
+        // buffer (no double-free, incl. reassign-after-move). The copy is freed at scope exit.
+        llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+        llvm::Value* cur  = ctx.builder.CreateLoad(i8p, addr, "managed_move_cur");
+        llvm::Function* dup = ctx.getFunction("aiml_str_dup", i8p, {i8p});
+        llvm::Value* copy = ctx.builder.CreateCall(dup, { cur }, "managed_move_copy");
+        ctx.builder.CreateStore(copy, addr);
+        return;
+    }
+    // (nullManagedStringSlot == false: fall through to the legacy compile-time drop-erase — used at
+    // the pre-value-load return site, where erase is safe because the returned value is captured
+    // afterwards and its owner is exempted from the return-cleanup.)
     for (auto& frame : ctx.cleanupStack) {
         for (size_t i = 0; i < frame.size(); ) {
-            if (frame[i].addr == addr) frame.erase(frame.begin() + (long)i);
+            if (frame[i].addr == addr) {
+                if (aimlTraceSymbol(nm))
+                    emitSymbolValueTrace(ctx, "MOVE", nm, frame[i].kind, frame[i].debugType, addr);
+                frame.erase(frame.begin() + (long)i);
+            }
             else ++i;
         }
     }
@@ -1763,20 +2139,38 @@ static void emitSymbolValueTrace(CompilerContext& ctx, const char* phase, const 
     llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
     llvm::FunctionType* pfTy = llvm::FunctionType::get(ctx.builder.getInt32Ty(), {i8p}, /*varArg=*/true);
     llvm::FunctionCallee pf = ctx.module.getOrInsertFunction("printf", pfTy);
+    std::string site = ctx.currentFunctionName + " | " + ctx.fmtLoc();
+    auto declaration = ctx.traceDeclarationSites.find(addr);
+    if (declaration != ctx.traceDeclarationSites.end()) site += "decl=" + declaration->second;
+    if (std::string(phase) == "DECL") {
+        bool registered = false;
+        for (const auto& frame : ctx.cleanupStack)
+            for (const auto& drop : frame) if (drop.addr == addr) registered = true;
+        site += registered ? " cleanup=registered" : " cleanup=unregistered";
+    }
+    // Keep the original phase/name prefix parseable; append context to the type label.
+    std::string tracedType = (typeName.empty() ? "?" : typeName) + " | " + site;
     llvm::Value* phaseS = ctx.builder.CreateGlobalStringPtr(phase);
     llvm::Value* nameS  = ctx.builder.CreateGlobalStringPtr(name);
     if (kind == 1) {  // string local: print the char* content (shows poison/garbage directly)
         llvm::Value* sptr = ctx.builder.CreateLoad(i8p, addr, "trace_str");
-        llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (string) @%p = \"%s\"\n");
-        ctx.builder.CreateCall(pf, { fmt, phaseS, nameS, addr, sptr });
+        llvm::Value* safe = ctx.builder.CreateSelect(ctx.builder.CreateICmpEQ(sptr,
+            llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p))),
+            ctx.builder.CreateGlobalStringPtr("<null>"), sptr);
+        llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) slot@%p data@%p = \"%.256s\"\n");
+        ctx.builder.CreateCall(pf, { fmt, phaseS, nameS,
+            ctx.builder.CreateGlobalStringPtr(tracedType), addr, sptr, safe });
     } else if (kind == 2) {  // list: element count (struct field 0) + address
         llvm::Value* sz = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), addr, "trace_len");
-        llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(typeName);
-        llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) len=%d @%p\n");
-        ctx.builder.CreateCall(pf, { fmt, phaseS, nameS, tyS, sz, addr });
+        llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(tracedType);
+        auto* listTy = ListImpl::getListStructType(ctx);
+        llvm::Value* dataSlot = ctx.builder.CreateStructGEP(listTy, addr, 2);
+        llvm::Value* data = ctx.builder.CreateLoad(i8p, dataSlot);
+        llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) len=%d slot@%p data@%p\n");
+        ctx.builder.CreateCall(pf, { fmt, phaseS, nameS, tyS, sz, addr, data });
     } else if (kind == 4) {  // owned new-box: the alloca holds a heap pointer → load + print it
         llvm::Value* bptr = ctx.builder.CreateLoad(i8p, addr, "trace_box");
-        llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(typeName.empty() ? "?" : typeName);
+        llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(tracedType);
         llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) box@%p\n");
         ctx.builder.CreateCall(pf, { fmt, phaseS, nameS, tyS, bptr });
     } else if (kind == 5 || kind == 6) {  // interface fat-pointer: load obj slot (field 0) + print
@@ -1791,14 +2185,43 @@ static void emitSymbolValueTrace(CompilerContext& ctx, const char* phase, const 
             llvm::Value* objField = ctx.builder.CreateStructGEP(fpTy, addr, 0, "trace_fp_obj");
             objp = ctx.builder.CreateLoad(i8p, objField, "trace_iface_obj");
         }
-        llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(typeName.empty() ? "?" : typeName);
+        llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(tracedType);
         llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) iface_obj@%p\n");
         ctx.builder.CreateCall(pf, { fmt, phaseS, nameS, tyS, objp });
     } else {  // model / map / other: address (+ type)
-        llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(typeName.empty() ? "?" : typeName);
+        llvm::Value* tyS = ctx.builder.CreateGlobalStringPtr(tracedType);
         llvm::Value* fmt = ctx.builder.CreateGlobalStringPtr("[aiml-trace] %s %s (%s) @%p\n");
         ctx.builder.CreateCall(pf, { fmt, phaseS, nameS, tyS, addr });
     }
+}
+
+static void traceSymbolTarget(CompilerContext& ctx, const char* phase, const std::string& target) {
+    std::string path = target;
+    if (path.rfind("<.", 0) == 0) path = "this." + path.substr(2);
+    size_t dot = path.find('.');
+    std::string leaf = path.substr(path.find_last_of('.') == std::string::npos ? 0 : path.find_last_of('.') + 1);
+    if (!aimlTraceSymbol(target) && !aimlTraceSymbol(leaf)) return;
+    auto it = ctx.symbol_table.find(path.substr(0, dot));
+    if (it == ctx.symbol_table.end() || !it->second.ir_alloca_inst) return;
+    llvm::Value* addr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(it->second.ir_alloca_inst));
+    std::string tn = it->second.typeName;
+    if (it->second.is_byref_arg) addr = ctx.builder.CreateLoad(ctx.builder.getPtrTy(), addr);
+    while (dot != std::string::npos) {
+        if (tn.rfind("ptr<", 0) == 0 || tn.rfind("ref<", 0) == 0) {
+            tn = tn.substr(4, tn.size() - 5);
+            addr = ctx.builder.CreateLoad(ctx.builder.getPtrTy(), addr);
+        }
+        auto cls = ctx.classes.find(tn);
+        if (cls == ctx.classes.end() || !cls->second.type) return;
+        size_t next = path.find('.', dot + 1);
+        auto member = cls->second.members.find(path.substr(dot + 1, next == std::string::npos ? next : next - dot - 1));
+        if (member == cls->second.members.end()) return;
+        addr = ctx.builder.CreateStructGEP(cls->second.type, addr, member->second.index);
+        tn = member->second.typeName;
+        dot = next;
+    }
+    int kind = aimlTraceKind(ctx, tn);
+    if (kind >= 0) emitSymbolValueTrace(ctx, phase, target, kind, tn, addr);
 }
 
 static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop& it) {
@@ -1809,6 +2232,10 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         llvm::Value* sptr = ctx.builder.CreateLoad(i8p, it.addr, "drop_str");
         llvm::Function* dc = ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {i8p});
         ctx.builder.CreateCall(dc, { sptr });
+        // spec/61 §7: a managed string slot is nulled after the drop so that a second drop on a
+        // merged Live|Moved path (or a later decref-old) is a null no-op — the slot invariant holds.
+        if (it.managedStringSlot)
+            ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
     } else if (it.kind == 2) {
         llvm::Value* nodesArg = it.serNodes
             ? static_cast<llvm::Value*>(it.serNodes)
@@ -1928,7 +2355,11 @@ void Compiler::visitIfStmt(IfStmt* ifStmt) {
         IRValue* zero = ctx.ir_gen->getInt32(0); // Assuming 32-bit compare for now
         condVal = ctx.ir_gen->createICmpNE(condVal, zero, "to_bool");
     }
-    
+    // spec/61 (T1c): free the condition's owned-string temps before branching (the boolean is already
+    // computed), so a terminating then/else branch cannot leak them (CardArtCache `if has_texture(
+    // "@art:${hsh}") return 1` leaked the concat every cache-hit frame).
+    decrefCurrentStmtTemps(ctx);
+
     IRBlock* thenBB = ctx.ir_gen->createBasicBlock("if_then");
     IRBlock* mergeBB = nullptr;
     IRBlock* elseBB = nullptr;
@@ -1980,7 +2411,11 @@ void Compiler::visitWhileStmt(WhileStmt* whileStmt) {
         IRValue* zero = ctx.ir_gen->getInt32(0);
         condVal = ctx.ir_gen->createICmpNE(condVal, zero, "while_cond_bool");
     }
-    
+    // spec/61 (T1c): free the while-condition's owned-string temps each iteration (evaluated here in
+    // loopBB), before entering the body/exit — a condition interpolation temp would otherwise leak
+    // once per iteration, and the per-statement decref (after the loop) would only see the last value.
+    decrefCurrentStmtTemps(ctx);
+
     ctx.ir_gen->createCondBr(condVal, bodyBB, endBB);
     
     // Body Block
@@ -2357,14 +2792,59 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
         // (typically 8) into a slot meant for the full struct (e.g. 24+
         // bytes for a model with multiple fields), corrupting both the
         // list element and adjacent heap memory.
-        if (elemTy->isStructTy() && storeVal->getType()->isPointerTy()) {
-            uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(elemTy);
+        // spec/61 §4.2: a VALUE-MODEL element store (`idx: [list, i, ent]`, e.g. store_entry_at's
+        // sez[pos]=ent) must OWN an independent heap. A shallow store/memcpy shares the source's
+        // inline list/map buffers with the list slot → double-free when both the source and the
+        // container drop (the 9rooms combat store_entry_at / creature-cost path). It also overwrites
+        // the old element WITHOUT freeing it → leak. So (drops-on) free the old element, then
+        // DEEP-COPY the source into the slot. Handles the source as either an element POINTER or a
+        // loaded struct VALUE (spilled to a temp). The member-store deep-copy analyzer skips index
+        // targets (dashIdx), so index stores are handled here.
+        if (elemTy->isStructTy()) {
+            auto ciElem = ctx.classes.find(elemName);
+            bool modelElem = ctx.lifetimeDropsEnabled && ciElem != ctx.classes.end()
+                && ciElem->second.hasHeapFields && ciElem->second.serNodesVar && ciElem->second.type
+                && !(llvm::cast<llvm::StructType>(elemTy)->hasName()
+                     && llvm::cast<llvm::StructType>(elemTy)->getName().startswith("AimlFatPtr_"));
             llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
-            llvm::Function* memcpyFunc = ctx.getFunction("memcpy",
-                ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
-            ctx.builder.CreateCall(memcpyFunc,
-                {elemPtr, storeVal, ctx.getSizeConst(sz)});
-            return;
+            if (modelElem) {
+                // source address: an element pointer directly, or spill the loaded struct to a temp
+                llvm::Value* srcAddr;
+                if (storeVal->getType()->isPointerTy()) {
+                    srcAddr = storeVal;
+                } else {
+                    llvm::AllocaInst* tmp = ctx.createEntryAlloca(elemTy, "idx_src");
+                    ctx.builder.CreateStore(storeVal, tmp);
+                    srcAddr = tmp;
+                }
+                // CRITICAL ordering: the source may ALIAS the destination slot — the write-back
+                // idiom `idx: [c, i, at(c, i)]` (store_entry_at/remove_entry_at) passes a view of the
+                // very slot being written. So deep-copy the source into an INDEPENDENT temp FIRST
+                // (while the source is still valid), THEN free the old slot, THEN move the temp in.
+                // Freeing the slot before the copy would read freed memory in enc() → SIGSEGV.
+                uint64_t esz = ctx.module.getDataLayout().getTypeAllocSize(elemTy);
+                llvm::AllocaInst* indep = ctx.createEntryAlloca(elemTy, "idx_indep");
+                ctx.builder.CreateStore(llvm::ConstantAggregateZero::get(elemTy), indep);
+                llvm::Function* dc = ctx.getFunction("aiml_ser_deep_copy",
+                    ctx.builder.getVoidTy(), {ptrTy, ptrTy, ptrTy, ctx.builder.getInt32Ty()});
+                ctx.builder.CreateCall(dc, { indep, srcAddr, ciElem->second.serNodesVar,
+                                             ctx.builder.getInt32(ciElem->second.serNodesCount) });
+                llvm::Function* freeFn = ctx.getFunction("aiml_ser_free_decoded",
+                    ctx.builder.getVoidTy(), {ptrTy, ptrTy, ctx.builder.getInt32Ty()});
+                ctx.builder.CreateCall(freeFn, { elemPtr, ciElem->second.serNodesVar,
+                                                 ctx.builder.getInt32(ciElem->second.serNodesCount) });
+                llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
+                ctx.builder.CreateCall(mcf, { elemPtr, indep, ctx.getSizeConst(esz) });
+                return;
+            }
+            if (storeVal->getType()->isPointerTy()) {
+                uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(elemTy);
+                llvm::Function* memcpyFunc = ctx.getFunction("memcpy",
+                    ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
+                ctx.builder.CreateCall(memcpyFunc,
+                    {elemPtr, storeVal, ctx.getSizeConst(sz)});
+                return;
+            }
         }
 
         if (storeVal->getType() != elemTy) {

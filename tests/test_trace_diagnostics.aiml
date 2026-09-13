@@ -1,0 +1,59 @@
+# Run with AIML_TRACE=trace_args,trace_numbers and AIML_TRACE_SYMBOL=all, both lifetime modes.
+# Pointer formatting must not read memory through null or model pointers.
+- interface:
+    name: TraceFace
+    methods:
+      - [number, i32, []]
+- class:
+    name: TraceBox
+    implements: [TraceFace]
+    members: [[text, string], [items, list<string>]]
+    methods:
+      - def:
+          name: number
+          return: i32
+          body: [{ return: 7 }]
+      - def:
+          name: replace
+          body:
+            - decl: [fresh, list<string>]
+            - call: [fresh.push, "replacement"]
+            - set: [<.items, fresh]
+            - set: [<.text, "after"]
+- def:
+    name: trace_make
+    return: { type: ptr<TraceFace>, lifetime: producer }
+    body:
+      - decl: [box, ptr<TraceBox>, { new: TraceBox }]
+      - set: [box.text, "before"]
+      - call: [box.replace]
+      - return: box
+- def:
+    name: trace_args
+    static_off: ["same_arg"]
+    args: [[txt, string], [ptr, ptr<TraceBox>], [face, ptr<TraceFace>]]
+    body:
+      - return: []
+- def:
+    name: trace_numbers
+    args: [[small, i16], [large, i64], [frac, f32], [yes, bool]]
+    body: [{ return: [] }]
+- def:
+    name: main
+    static_off: ["same_arg", "str_cmp"]
+    return: i32
+    body:
+      - decl: [receiver, ptr<TraceFace>, { call: [trace_make] }]
+      - decl: [owned, ptr<TraceBox>, { new: TraceBox }]
+      - decl: [number, i32, 7]
+      - decl: [message, string, "hello-${number}"]
+      - call: [trace_args, message, null, receiver]
+      - call: [trace_args, message, owned, receiver]
+      - call: [trace_args, null, null, receiver]
+      - if: { condition: { neq: [message, "hello-7"] }, then: [{ return: 2 }] }
+      - decl: [negative, i16, -123]
+      - decl: [enabled, bool, true]
+      - call: [trace_numbers, negative, 1234567890123, 1.25, enabled]
+      - if: { condition: { neq: [{ call: [receiver.number] }, 7] }, then: [{ return: 1 }] }
+      - print: ["PASS trace_diagnostics"]
+      - return: 0

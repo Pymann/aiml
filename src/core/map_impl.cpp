@@ -107,7 +107,28 @@ namespace MapImpl {
         return ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), sizePtr, "size_val");
     }
 
-    void put(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Value* valVal, llvm::StructType* mapType) {
+    // spec/61 §8: a map<string:*> OWNS its string keys, and a map<*:string> OWNS its string
+    // values — put DUPS them (fresh RC copy) so the caller keeps pure borrow semantics regardless
+    // of call depth (the ManaPool.add_color→colors.put helper-indirection bug: the key's real
+    // owner is a frame up, out of reach of any caller-side drop-suppression). Ownership is then
+    // reclaimed symmetrically in remove() and aiml_map_free() (dense [0,size) walk).
+    static llvm::Value* dupIfString(CompilerContext& ctx, llvm::Value* v, bool isStr) {
+        if (!isStr) return v;
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Value* asP = v->getType() == i8p ? v : ctx.builder.CreateBitCast(v, i8p);
+        llvm::Function* dup = ctx.getFunction("aiml_str_dup", i8p, {i8p});
+        llvm::Value* copy = ctx.builder.CreateCall(dup, { asP }, "map_str_own");
+        return v->getType() == i8p ? copy : ctx.builder.CreateBitCast(copy, v->getType());
+    }
+    static void decrefIfString(CompilerContext& ctx, llvm::Value* v, bool isStr) {
+        if (!isStr) return;
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Value* asP = v->getType() == i8p ? v : ctx.builder.CreateBitCast(v, i8p);
+        llvm::Function* dec = ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {i8p});
+        ctx.builder.CreateCall(dec, { asP });
+    }
+
+    void put(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Value* valVal, llvm::StructType* mapType, bool valIsString) {
         // Implement Put (Linear Scan)
         llvm::Value* sizePtr = ctx.builder.CreateStructGEP(mapType, mapPtr, 0, "sizePtr");
         llvm::Value* capPtr = ctx.builder.CreateStructGEP(mapType, mapPtr, 1, "capPtr");
@@ -154,10 +175,15 @@ namespace MapImpl {
         ctx.builder.CreateStore(nextI, iVar);
         ctx.builder.CreateBr(loopBB);
 
-        // Found: Update Value
+        // Found: Update Value. The key already exists (map-owned) — leave it. For a string value
+        // the map owns the old value → decref it before overwriting with a fresh dup (§8).
         ctx.builder.SetInsertPoint(foundBB);
         llvm::Value* valSlot = ctx.builder.CreateInBoundsGEP(valType, valsPtr, iVal);
-        ctx.builder.CreateStore(valVal, valSlot);
+        if (valIsString) {
+            llvm::Value* oldVal = ctx.builder.CreateLoad(valType, valSlot, "map_old_val");
+            decrefIfString(ctx, oldVal, true);
+        }
+        ctx.builder.CreateStore(dupIfString(ctx, valVal, valIsString), valSlot);
         ctx.builder.CreateBr(endBB);
 
         // Not Found: Append
@@ -214,11 +240,14 @@ namespace MapImpl {
         // Reload Size (it hasn't changed, but just to be safe if optimized away)
         // Actually sizeVal is cached from entry, it is valid as long as we don't change size before here.
         
+        // Append a NEW entry — the map takes ownership of string key/value via a fresh dup (§8),
+        // so the caller's local/temp is a pure borrow that frees on its own scope-drop.
+        bool keyIsStr = keyType->isPointerTy();
         llvm::Value* keyDest = ctx.builder.CreateInBoundsGEP(keyType, keysBase, sizeVal);
-        ctx.builder.CreateStore(keyVal, keyDest);
-        
+        ctx.builder.CreateStore(dupIfString(ctx, keyVal, keyIsStr), keyDest);
+
         llvm::Value* valDest = ctx.builder.CreateInBoundsGEP(valType, valsBase, sizeVal);
-        ctx.builder.CreateStore(valVal, valDest);
+        ctx.builder.CreateStore(dupIfString(ctx, valVal, valIsString), valDest);
 
         llvm::Value* newSize = ctx.builder.CreateAdd(sizeVal, ctx.builder.getInt32(1));
         ctx.builder.CreateStore(newSize, sizePtr);
@@ -329,7 +358,7 @@ namespace MapImpl {
         return ctx.builder.CreateLoad(ctx.builder.getInt1Ty(), resVar);
     }
     
-    void remove(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Type* valType, llvm::StructType* mapType) {
+    void remove(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Type* valType, llvm::StructType* mapType, bool valIsString) {
         llvm::Value* sizePtr = ctx.builder.CreateStructGEP(mapType, mapPtr, 0, "sizePtr");
         llvm::Value* sizeVal = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), sizePtr);
         
@@ -363,8 +392,17 @@ namespace MapImpl {
         ctx.builder.CreateCondBr(code, foundBB, nextIterBB);
 
         ctx.builder.SetInsertPoint(foundBB);
+        // Found: the map owns the removed string key/value → decref them before the slot is
+        // overwritten by the memmove shift (§8). existingKey is loaded above; reload the value.
+        if (keyType->isPointerTy())
+            decrefIfString(ctx, existingKey, true);
+        if (valIsString) {
+            llvm::Value* remValSlot = ctx.builder.CreateInBoundsGEP(valType, valsPtr, iVal);
+            llvm::Value* remVal = ctx.builder.CreateLoad(valType, remValSlot, "rm_val");
+            decrefIfString(ctx, remVal, true);
+        }
         // Found: Shift [i+1, size] to [i]
-        
+
         llvm::Value* nextIdx = ctx.builder.CreateAdd(iVal, ctx.builder.getInt32(1));
         llvm::Value* count = ctx.builder.CreateSub(sizeVal, nextIdx); // Items to move
         

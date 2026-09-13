@@ -1254,12 +1254,15 @@ void Compiler::compile(Program* prog) {
     if (!prog) return;
 
     // spec/61 — the heap-lifetime feature (scope-drops + Increment C member deep-copy + P2a
-    // return-cleanup) is DEFAULT OFF while it hardens against real-world aliasing: on 9rooms it
-    // still trips double-frees (shallow container/model member-stores from borrows) and changes
-    // aliasing semantics.  Default OFF = the pre-feature leak-not-crash baseline, so production
-    // (9rooms) runs out-of-box.  Opt IN with AIML_LIFETIME_DROPS=1 (the memory-sanitizer harness
-    // sets it, to keep exercising + hardening the feature).  Re-enable by default only once the
-    // FULL 9rooms suite passes with it on (the acceptance gate).
+    // return-cleanup + producer return-ownership + the §7.0.1 conditional-push dominance rule) is
+    // DEFAULT OFF while it hardens against real-world aliasing.  A trial default-ON flip on
+    // 2026-09-11 ran the full 9rooms suite drops-on and still hit REAL failures (NOT flakiness,
+    // reproduced standalone): teardown double-frees (test_ceremony_cost, test_mkp_math,
+    // test_conditional_durations "free(): double free"), a SEGV (test_activate_ability), and a
+    // behavioral regression (test_creature_costs "sac1 nicht im Friedhof" — a card dropped before
+    // reaching the graveyard).  So the acceptance gate is NOT green yet; kept OFF.  Opt IN with
+    // AIML_LIFETIME_DROPS=1 (memory-sanitizer harness + 9rooms server/media/static json set it).
+    // Re-flip the default to true only once the FULL 9rooms suite passes drops-on.
     ctx.lifetimeDropsEnabled = false;
     if (const char* de = getenv("AIML_LIFETIME_DROPS")) {
         std::string s = de;
@@ -3110,19 +3113,18 @@ static void serEmitGlobal(
     classInfo.serNodesCount = (int32_t)nodes.size();
 }
 
-bool Compiler::emitContainerFieldDeepCopy(llvm::Value* dstPtr, llvm::Value* srcPtr,
-                                          const std::string& typeName) {
-    if (!dstPtr || !srcPtr) return false;
+// serBuildSubtree + a reusable LinkOnceODR sernodes global for a container field type. Shared by
+// emitContainerFieldFree and emitContainerFieldDeepCopy. Returns null gv (and sets nodeCount 0)
+// when the type has no descriptor.
+static llvm::GlobalVariable* getFieldSerNodesGlobal(CompilerContext& ctx, const std::string& typeName,
+                                                    int& nodeCount) {
     llvm::DataLayout dl(&ctx.module);
-    // Build the descriptor for the container type at offset 0 (dst/src are already the field
-    // addresses). serBuildSubtree handles list<>/map<>/buffer<> incl. nested models.
     std::vector<AimlTypeNode> nodes = serBuildSubtree(typeName, 0, ctx, dl);
-    if (nodes.empty()) return false;
+    nodeCount = (int)nodes.size();
+    if (nodes.empty()) return nullptr;
     llvm::LLVMContext& lctx = ctx.context;
     llvm::Type* i32Ty = llvm::Type::getInt32Ty(lctx);
-    llvm::Type* ptrTy = llvm::PointerType::get(lctx, 0);
     llvm::StructType* nodeTy = llvm::StructType::get(lctx, {i32Ty,i32Ty,i32Ty,i32Ty,i32Ty,i32Ty});
-    // Emit (or reuse) a LinkOnceODR global for this type's nodes — merged across callsites/units.
     std::string symName = "__aiml_sernodes_fieldcopy_" + typeName;
     for (char& c : symName) if (c=='<'||c=='>'||c==':'||c==' '||c==','||c=='/') c = '_';
     llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(symName);
@@ -3146,29 +3148,114 @@ bool Compiler::emitContainerFieldDeepCopy(llvm::Value* dstPtr, llvm::Value* srcP
         gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
         gv->setVisibility(llvm::GlobalValue::HiddenVisibility);
     }
+    return gv;
+}
+
+// spec/61 §7.0 — free the heap a container field currently owns (guarded against dst==src).
+bool Compiler::emitContainerFieldFree(llvm::Value* dstPtr, llvm::Value* srcPtr,
+                                      const std::string& typeName) {
+    if (!dstPtr) return false;
+    llvm::LLVMContext& lctx = ctx.context;
+    llvm::Type* i32Ty = llvm::Type::getInt32Ty(lctx);
+    llvm::Type* i64Ty = llvm::Type::getInt64Ty(lctx);
+    llvm::Type* ptrTy = llvm::PointerType::get(lctx, 0);
+
+    // Emit the type-appropriate free inside the dst!=src guard. A list<T> field is freed with
+    // aiml_list_free — the SAME per-element deep-free the scope-drop uses (elemKind 0 scalar /
+    // 1 string-decref / 2 model deep-free via the element class's serNodes+stride). This matters:
+    // aiml_ser_free_decoded frees a list's buffer but NOT its element MODELS' heap (the
+    // take_gone_players list<ConnEntry> element strings leaked). map<>/buffer<>/nested fields use
+    // aiml_ser_free_decoded via the field descriptor.
+    auto emitFree = [&]() -> bool {
+        if (typeName.rfind("list<", 0) == 0 && typeName.back() == '>') {
+            std::string elemName = typeName.substr(5, typeName.size() - 6);
+            int elemKind = 0; int nodeCount = 0; int64_t elemSize = 0;
+            llvm::Value* nodes = llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(ptrTy));
+            if (elemName == "string") {
+                elemKind = 1;
+            } else {
+                auto ci = ctx.classes.find(elemName);
+                if (ci != ctx.classes.end() && ci->second.hasHeapFields
+                    && ci->second.serNodesVar && ci->second.type) {
+                    elemKind = 2;
+                    nodes = static_cast<llvm::Value*>(ci->second.serNodesVar);
+                    nodeCount = ci->second.serNodesCount;
+                    elemSize = (int64_t)ctx.module.getDataLayout().getTypeAllocSize(ci->second.type);
+                }
+            }
+            llvm::Function* lf = ctx.getFunction("aiml_list_free", ctx.builder.getVoidTy(),
+                {ptrTy, i32Ty, i64Ty, ptrTy, i32Ty});
+            ctx.builder.CreateCall(lf, { dstPtr, ctx.builder.getInt32(elemKind),
+                ctx.builder.getInt64(elemSize), nodes, ctx.builder.getInt32(nodeCount) });
+            return true;
+        }
+        // A value-MODEL field → deep-free via the class's full (recursive) serNodes.
+        auto ci = ctx.classes.find(typeName);
+        if (ci != ctx.classes.end() && !ci->second.isBuiltin && ci->second.hasHeapFields
+            && ci->second.serNodesVar) {
+            llvm::Function* sfF = ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
+                {ptrTy, ptrTy, i32Ty});
+            ctx.builder.CreateCall(sfF, { dstPtr,
+                static_cast<llvm::Value*>(ci->second.serNodesVar),
+                ctx.builder.getInt32(ci->second.serNodesCount) });
+            return true;
+        }
+        // map<>/buffer<>/other container field → generic descriptor free.
+        int nodeCount = 0;
+        llvm::GlobalVariable* gv = getFieldSerNodesGlobal(ctx, typeName, nodeCount);
+        if (!gv) return false;
+        llvm::Function* sfF = ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
+            {ptrTy, ptrTy, i32Ty});
+        ctx.builder.CreateCall(sfF, { dstPtr, gv, ctx.builder.getInt32(nodeCount) });
+        return true;
+    };
+
+    // Guard against a self-assign (dst==src): freeing dst would release the storage the caller is
+    // about to read/move from src. When srcPtr is null the free is unconditional.
+    llvm::Function* curFn = ctx.builder.GetInsertBlock()->getParent();
+    auto* freeBB = llvm::BasicBlock::Create(lctx, "fieldfree.do", curFn);
+    auto* contBB = llvm::BasicBlock::Create(lctx, "fieldfree.cont", curFn);
+    if (srcPtr) {
+        llvm::Value* dstI = ctx.builder.CreatePtrToInt(dstPtr, ctx.getSizeType());
+        llvm::Value* srcI = ctx.builder.CreatePtrToInt(srcPtr, ctx.getSizeType());
+        llvm::Value* distinct = ctx.builder.CreateICmpNE(dstI, srcI, "fieldfree_distinct");
+        ctx.builder.CreateCondBr(distinct, freeBB, contBB);
+    } else {
+        ctx.builder.CreateBr(freeBB);
+    }
+    ctx.builder.SetInsertPoint(freeBB);
+    bool ok = emitFree();
+    if (ok) {
+        // Zero the field after releasing it: the caller then writes the new value (memcpy / store /
+        // aiml_ser_deep_copy) into a clean field, and any redundant downstream free (e.g.
+        // emitContainerFieldDeepCopy's own guarded free) becomes a no-op on the nulled pointers.
+        if (llvm::Type* fieldTy = ctx.getLLVMType(typeName)) {
+            uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(fieldTy);
+            llvm::Function* memsetF = ctx.getFunction("memset", ptrTy, {ptrTy, i32Ty, ctx.getSizeType()});
+            ctx.builder.CreateCall(memsetF, { dstPtr, ctx.builder.getInt32(0), ctx.getSizeConst(sz) });
+        }
+    }
+    ctx.builder.CreateBr(contBB);
+    ctx.builder.SetInsertPoint(contBB);
+    return ok;
+}
+
+bool Compiler::emitContainerFieldDeepCopy(llvm::Value* dstPtr, llvm::Value* srcPtr,
+                                          const std::string& typeName) {
+    if (!dstPtr || !srcPtr) return false;
+    llvm::DataLayout dl(&ctx.module);
+    llvm::LLVMContext& lctx = ctx.context;
+    llvm::Type* i32Ty = llvm::Type::getInt32Ty(lctx);
+    llvm::Type* ptrTy = llvm::PointerType::get(lctx, 0);
+    int nodeCount = 0;
+    llvm::GlobalVariable* gv = getFieldSerNodesGlobal(ctx, typeName, nodeCount);
+    if (!gv) return false;
     // spec/61: the destination container field usually already owns heap — either the empty
     // default storage that `new`+initClassContainerMembers allocated (get_base's box → copy_header
     // assigns mana_cost/active_abilities/passive_abilities), or prior data being replaced. The
     // memset below zeroes the field's pointers WITHOUT freeing that storage → it leaks (the
-    // get_base per-card leak). Release it first with aiml_ser_free_decoded(dst, nodes) — BUT guard
-    // against self-copy (dst==src): freeing dst would then release the very storage deep_copy is
-    // about to read from src (UAF). A distinct dst never shares buffers with src on this path
-    // (member field vs a borrowed source), so freeing is safe when the addresses differ.
-    {
-        llvm::Function* sfF = ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
-            {ptrTy, ptrTy, i32Ty});
-        llvm::Value* dstI = ctx.builder.CreatePtrToInt(dstPtr, ctx.getSizeType());
-        llvm::Value* srcI = ctx.builder.CreatePtrToInt(srcPtr, ctx.getSizeType());
-        llvm::Value* distinct = ctx.builder.CreateICmpNE(dstI, srcI, "fieldcopy_distinct");
-        llvm::Function* curFn = ctx.builder.GetInsertBlock()->getParent();
-        auto* freeBB = llvm::BasicBlock::Create(lctx, "fieldcopy.free", curFn);
-        auto* zeroBB = llvm::BasicBlock::Create(lctx, "fieldcopy.zero", curFn);
-        ctx.builder.CreateCondBr(distinct, freeBB, zeroBB);
-        ctx.builder.SetInsertPoint(freeBB);
-        ctx.builder.CreateCall(sfF, { dstPtr, gv, ctx.builder.getInt32((int32_t)nodes.size()) });
-        ctx.builder.CreateBr(zeroBB);
-        ctx.builder.SetInsertPoint(zeroBB);
-    }
+    // get_base per-card leak). Release it first (guarded against dst==src, see emitContainerFieldFree).
+    emitContainerFieldFree(dstPtr, srcPtr, typeName);
     // aiml_ser_deep_copy requires dst zero-inited (all heap pointers NULL). Zero the field first.
     if (llvm::Type* fieldTy = ctx.getLLVMType(typeName)) {
         uint64_t sz = dl.getTypeAllocSize(fieldTy);
@@ -3177,7 +3264,7 @@ bool Compiler::emitContainerFieldDeepCopy(llvm::Value* dstPtr, llvm::Value* srcP
     }
     llvm::Function* dcF = ctx.getFunction("aiml_ser_deep_copy", ctx.builder.getVoidTy(),
         {ptrTy, ptrTy, ptrTy, i32Ty});
-    ctx.builder.CreateCall(dcF, { dstPtr, srcPtr, gv, ctx.builder.getInt32((int32_t)nodes.size()) });
+    ctx.builder.CreateCall(dcF, { dstPtr, srcPtr, gv, ctx.builder.getInt32(nodeCount) });
     return true;
 }
 
@@ -3941,7 +4028,11 @@ void Compiler::visitTopLevel(Node* node) {
             std::string oldName = method->name;
             // spec/61 return-ownership: capture the ORIGINAL method name (pre-mangle) so a
             // call site `<.recv.get_base` matches by its trailing identifier.
-            if (method->ownsReturn) ctx.ownsReturnFns.insert(oldName);
+            if (method->ownsReturn) {
+                ctx.ownsReturnFns.insert(oldName);
+                ctx.ownsReturnFnTypes[oldName].insert(method->returnType);   // spec/61: name→return type (collision guard)
+                if (method->returnType == "string") ctx.stringProducerFns.insert(oldName);
+            }
             method->name = cls->name + "_" + method->name;
             auto it = method->args.insert(method->args.begin(), {"this", "ref<" + cls->name + ">"});
             // Keep argMods index-synced with args: `this` gets a default (borrow) modifier
@@ -4485,6 +4576,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
     // Basic mapping using our old context structure for now
     std::string mangledName = ctx.qualify(func->name);
     ctx.currentFunctionName = func->name;
+    ctx.traceDeclarationSites.clear();
 
     /* Snapshot + install decorator context so visitRetStmt can consult it
      * without needing a pointer back to the FunctionDecl.  Cleared on exit
@@ -4556,8 +4648,11 @@ void Compiler::visitFunction(FunctionDecl* func) {
     funcInfo.ownsReturn = func->ownsReturn;   // spec/61 return-ownership
     // Record the ORIGINAL short name for call-site suffix matching. Methods are captured in
     // visitTopLevel BEFORE mangling (oldName); free functions (no enclosing class) here.
-    if (func->ownsReturn && ctx.currentClassName.empty())
+    if (func->ownsReturn && ctx.currentClassName.empty()) {
         ctx.ownsReturnFns.insert(func->name);
+        ctx.ownsReturnFnTypes[func->name].insert(func->returnType);   // spec/61: name→return type (collision guard)
+        if (func->returnType == "string") ctx.stringProducerFns.insert(func->name);
+    }
     // Track user-defined arg + return types for sys.bundle (recurses into list<T>/map<K,V>)
     auto trackType = [&](const std::string& typeName) {
         std::set<std::string> found;
@@ -4752,8 +4847,8 @@ void Compiler::visitFunction(FunctionDecl* func) {
             "aiml_trace_active",
             llvm::FunctionType::get(i32t, {i8p}, false));
         llvm::FunctionCallee traceFn = ctx.module.getOrInsertFunction(
-            "aiml_trace",
-            llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p, i8p}, false));
+            "aiml_trace_format",
+            llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p}, true));
 
         llvm::Value* fnameStr = ctx.builder.CreateGlobalStringPtr(func->name, "tr_fname");
         llvm::Value* trActive = ctx.builder.CreateCall(traceActiveFn, {fnameStr}, "tr_active");
@@ -4767,42 +4862,53 @@ void Compiler::visitFunction(FunctionDecl* func) {
         // ── trace_bb: build "name=val, ..." string and call aiml_trace ────────
         ctx.builder.SetInsertPoint(traceBB);
 
-        llvm::Value* argsStr = ctx.builder.CreateGlobalStringPtr("", "tr_args");
-        bool firstArg = true;
+        // Pass typed values directly to the runtime formatter: no AIML heap
+        // temporaries and no reads through opaque pointers. Source types distinguish
+        // strings from objects even when LLVM represents both as opaque pointers.
+        std::string format;
+        std::vector<llvm::Value*> values;
         for (size_t i = 0; i < argNames.size(); ++i) {
             const std::string& nm = argNames[i];
-            std::string prefix = (firstArg ? "" : ", ") + nm + "=";
-            firstArg = false;
-
-            Symbol& sym    = ctx.symbol_table[nm];
-            llvm::Value* allocaV = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym.ir_alloca_inst));
-            llvm::Type*  elemTy  = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(sym.ir_element_type));
-            llvm::Value* loaded  = ctx.builder.CreateLoad(elemTy, allocaV, nm + "_tr");
-
-            llvm::Value* valStr = nullptr;
-            if (elemTy->isIntegerTy(64)) {
-                valStr = StringUtils::int64ToString(ctx, loaded);
-            } else if (elemTy->isIntegerTy(32)) {
-                valStr = StringUtils::intToString(ctx, loaded);
-            } else if (elemTy->isIntegerTy(16) || elemTy->isIntegerTy(8) || elemTy->isIntegerTy(1)) {
-                valStr = StringUtils::intToString(ctx, ctx.builder.CreateZExt(loaded, i32t));
-            } else if (elemTy->isFloatTy()) {
-                valStr = StringUtils::floatToString(ctx, loaded);
-            } else if (elemTy->isDoubleTy()) {
-                valStr = StringUtils::doubleToString(ctx, loaded);
-            } else if (elemTy->isPointerTy()) {
-                valStr = loaded; // i8* string or opaque handle
+            if (i) format += ", ";
+            format += nm + "=";
+            Symbol& sym = ctx.symbol_table[nm];
+            auto* slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym.ir_alloca_inst));
+            auto* ty = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(sym.ir_element_type));
+            auto* value = ctx.builder.CreateLoad(ty, slot, nm + "_tr");
+            if (sym.typeName == "string" && ty->isPointerTy()) {
+                format += "%s";
+                auto* nullp = llvm::ConstantPointerNull::get(i8p);
+                values.push_back(ctx.builder.CreateSelect(ctx.builder.CreateICmpEQ(value, nullp),
+                    ctx.builder.CreateGlobalStringPtr("<null>"), value));
+            } else if (ty->isPointerTy()) {
+                format += "%p";
+                values.push_back(value);
+            } else if (ty->isIntegerTy(64)) {
+                format += "%lld";
+                values.push_back(value);
+            } else if (ty->isIntegerTy()) {
+                format += "%d";
+                values.push_back(ty->isIntegerTy(1)
+                    ? ctx.builder.CreateZExt(value, i32t)
+                    : ctx.builder.CreateSExtOrTrunc(value, i32t));
+            } else if (ty->isFloatingPointTy()) {
+                format += ty->isFloatTy() ? "%.6g" : "%.15g";
+                values.push_back(ctx.builder.CreateFPCast(value, ctx.builder.getDoubleTy()));
+            } else if (auto* st = llvm::dyn_cast<llvm::StructType>(ty);
+                       sym.typeName.rfind("ptr<", 0) == 0 &&
+                       ctx.interfaces.count(sym.typeName.substr(4, sym.typeName.size() - 5)) &&
+                       st && st->getNumElements() == 2 &&
+                       st->getElementType(0)->isPointerTy() && st->getElementType(1)->isPointerTy()) {
+                format += "{obj=%p,vtable=%p}";
+                values.push_back(ctx.builder.CreateExtractValue(value, {0}));
+                values.push_back(ctx.builder.CreateExtractValue(value, {1}));
             } else {
-                valStr = ctx.builder.CreateGlobalStringPtr("<?>", "tr_unk");
+                format += "<?>";
             }
-
-            llvm::Value* prefixV = ctx.builder.CreateGlobalStringPtr(prefix, "tr_pfx");
-            argsStr = StringUtils::concat(ctx, argsStr, prefixV);
-            argsStr = StringUtils::concat(ctx, argsStr, valStr);
         }
-
-        llvm::Value* dirStr = ctx.builder.CreateGlobalStringPtr("=>", "tr_dir");
-        ctx.builder.CreateCall(traceFn, {fnameStr, dirStr, argsStr});
+        std::vector<llvm::Value*> printArgs = {fnameStr, ctx.builder.CreateGlobalStringPtr(format)};
+        printArgs.insert(printArgs.end(), values.begin(), values.end());
+        ctx.builder.CreateCall(traceFn, printArgs);
         ctx.builder.CreateBr(bodyBB);
 
         // ── body_bb: actual function body follows ─────────────────────────────
@@ -4953,14 +5059,14 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
             llvm::Function* strlenFunc = ctx.module.getFunction("strlen");
             if (!strlenFunc)
                 strlenFunc = llvm::Function::Create(
-                    llvm::FunctionType::get(ctx.builder.getInt64Ty(),
+                    llvm::FunctionType::get(ctx.getSizeType(),
                         {ctx.builder.getInt8Ty()->getPointerTo()}, false),
                     llvm::Function::ExternalLinkage, "strlen", ctx.module);
             llvm::Value* strVal = ctx.builder.CreateLoad(
                 ctx.builder.getInt8Ty()->getPointerTo(),
                 static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
             llvm::Value* len64 = ctx.builder.CreateCall(strlenFunc, {strVal});
-            return ctx.ir_gen->wrap(ctx.builder.CreateTrunc(len64, ctx.builder.getInt32Ty(), "str_len_i32"));
+            return ctx.ir_gen->wrap(ctx.builder.CreateZExtOrTrunc(len64, ctx.builder.getInt32Ty(), "str_len_i32"));
         }
     }
 

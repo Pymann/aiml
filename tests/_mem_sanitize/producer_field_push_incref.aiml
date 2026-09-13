@@ -1,0 +1,79 @@
+# spec/61 §7.0: pushing a BORROWED string (a member/field access like `ent.pid` / `<.name`) into a
+# list must INCREF — the list takes its own reference. Otherwise the list aliases the source model's
+# refcounted buffer, and dropping the list (e.g. a `producer` return the caller drops) frees a string
+# the source model still owns → use-after-free / heap corruption. This was the 9rooms
+# `ConnRegistry.take_gone_players` crash: `gone.push(ent.player_id)` in a producer whose caller now
+# drops the result → `malloc_consolidate(): invalid chunk size` mid-match.
+#
+# The probe collects member field-strings into a producer list, drops the list N times, then re-reads
+# the member strings: a UAF corrupts them (garbage / freed). It self-asserts (native exit 1 on
+# corruption) AND is memory-checked under valgrind by the harness (Invalid read/free before the fix).
+
+- model: { name: Ent, fields: [[pid, string], [num, i32]] }
+
+- class:
+    name: Store
+    members: [[ents, list<Ent>]]
+    methods:
+      - def:
+          name: seed
+          static_off: ["same_arg"]
+          args: [[cnt, i32]]
+          body:
+            - decl: [idx, i32, 0]
+            - while:
+                condition: { lt: [idx, cnt] }
+                body:
+                  - decl: [ent, Ent]
+                  - set: [ent.pid, "pid-${idx}-payload-string-for-heap"]
+                  - set: [ent.num, idx]
+                  - call: [<.ents.push, ent]
+                  - set: [idx, { +: [idx, 1] }]
+
+      # producer: pushes the FIELD string ent.pid directly (the crash form) → must incref.
+      - def:
+          name: collect
+          static_off: ["same_arg"]
+          return: { type: list<string>, lifetime: producer }
+          body:
+            - decl: [out, list<string>]
+            - decl: [idx, i32, 0]
+            - while:
+                condition: { lt: [idx, <.ents.len] }
+                body:
+                  - decl: [ent, Ent, { at: [<.ents, idx] }]
+                  - call: [out.push, ent.pid]
+                  - set: [idx, { +: [idx, 1] }]
+            - return: out
+
+      # after many producer-drops, is the member field-string still the seeded value?
+      - def:
+          name: check
+          static_off: ["same_arg", "str_cmp"]
+          return: i32
+          body:
+            - decl: [ent0, Ent, { at: [<.ents, 0] }]
+            - if: { condition: { eq: [ent0.pid, "pid-0-payload-string-for-heap"] }, then: [{ return: 0 }] }
+            - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [store, ptr<Store>, { new: Store }]
+      - call: [store.seed, 6]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 2000] }
+          body:
+            - decl: [got, list<string>, { call: [store.collect] }]   # producer result dropped here
+            - set: [idx, { +: [idx, 1] }]
+      - decl: [bad, i32, { call: [store.check] }]
+      - if:
+          condition: { eq: [bad, 1] }
+          then:
+            - call: [log.info, "FAIL producer_field_push_incref: member field-string corrupted after producer-list drops (push did not incref → UAF)"]
+            - return: 1
+      - call: [log.info, "PASS producer_field_push_incref: member field-strings intact after producer-list drops (push increfs the borrow)"]
+      - return: 0

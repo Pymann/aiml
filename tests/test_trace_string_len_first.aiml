@@ -1,0 +1,16 @@
+# Regression: string.len must declare wasm32 strlen as i32 BEFORE any concat.
+# Previously the old trace formatter masked the wrong first declaration.
+- def:
+    name: length_first
+    args: [[text, string]]
+    return: i32
+    body:
+      - return: text.len
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [actual, i32, { call: [length_first, "build stamp"] }]
+      - if: { condition: { neq: [actual, 11] }, then: [{ return: 1 }] }
+      - print: ["PASS trace_string_len_first"]
+      - return: 0

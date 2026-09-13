@@ -54,6 +54,12 @@ namespace AIML {
                                    // default. Storing a ptr/ref param into a member/container is a
                                    // borrow-escape (warned; will become an error under Migration A).
         AIML::AST::OwnershipId ownershipId = AIML::AST::NoOwnership;  // spec/61 §4: ownership-plan slot id
+        // spec/61 §6.3: a value-model local declared from a sharing VIEW (decl:[x,Model,{at:..}] /
+        // {obj.field} / a container accessor) — its inline list/map heap ALIASES the container
+        // element. Cheap for read-only use (no copy at decl), but if it ESCAPES by being returned it
+        // must be deep-copied so the caller does not double-free the aliased buffer with the
+        // container's own drop (9rooms load_entry_at / creature-cost helpers → drive_ai_combat).
+        bool is_view_alias = false;
         AccessLevel access = AccessLevel::Public; // Default for vars
     };
 
@@ -298,10 +304,16 @@ namespace AIML {
         int                   keyKind = 0;           // kind 3: key kind (0 = scalar, 1 = string)
         int64_t               keyStride = 0;         // kind 3: key element stride
         AIML::AST::OwnershipId ownershipId = AIML::AST::NoOwnership;  // spec/61 §4: owning slot (mayDrop-gated)
+        // spec/61 §7 managed string local (kind 1): the slot invariant is "null | one owned RC ref".
+        // Its drop is null-safe (load; decref; store null) and a committed move nulls the slot rather
+        // than erasing the drop, so Live|Moved control-flow merges free exactly once.
+        bool                  managedStringSlot = false;
         std::string           debugName;             // AIML_TRACE_SYMBOL: source var name for lifetime tracing
         std::string           debugType;             // AIML_TRACE_SYMBOL: declared type name (list<>/map<>/model)
     };
     std::vector<std::vector<ScopeDrop>> cleanupStack;
+    std::map<llvm::Value*, std::string> traceDeclarationSites; // diagnostic-only source locations
+
 
     // spec/61 §3.1 (consumed parameters): visitFunction stages a `consumed` handle
     // parameter's callee-drop here, and the NEXT visitBlockStmt (the function body) drains
@@ -341,6 +353,28 @@ namespace AIML {
     // so a call site's dotted `functionName` (e.g. `<.cards.get_base`) can be matched by its
     // trailing identifier — mirrors the `.get_copy` suffix precedent in the ownership analyzer.
     std::set<std::string> ownsReturnFns;
+    // spec/61: a producer short name → the set of declared RETURN TYPES of producers with that name.
+    // A short name alone is ambiguous — a container builtin `.get` collides with user producer `get`
+    // methods (e.g. deck/lobby/match service `get` → *Resp), which wrongly classified a borrowed
+    // `decl [hnd, ptr<RpcHandler>, {call: handlers.get}]` as an owned interface box → double-free of
+    // the registered handler on every dispatch. freshOwned/visitDeclStmt therefore require the
+    // producer's return type to match the decl's owned type, not just the name.
+    std::map<std::string, std::set<std::string>> ownsReturnFnTypes;
+    // spec/61: does a producer named `shortName` return a value whose type matches an owned local of
+    // declared type `declType`? Guards the return-ownership classification against short-name
+    // collisions (container `.get`/`.at` builtins vs user producer methods).
+    bool ownsReturnMatches(const std::string& shortName, const std::string& declType) const {
+        if (ownsReturnFns.count(shortName) == 0) return false;
+        auto it = ownsReturnFnTypes.find(shortName);
+        if (it == ownsReturnFnTypes.end()) return false;
+        return it->second.count(declType) > 0;
+    }
+    // spec/61 §3.2 Part 2: the subset of ownsReturnFns whose return TYPE is `string`. A producer
+    // string result used as a TRANSIENT sub-expression (not bound to a local) must be decref'd at
+    // statement end — registered as an owned stmt-temp at the call site (aiml_str_decref). Gated on
+    // string specifically because that temp mechanism is string-only (a list/model producer temp
+    // would be wrongly decref'd). Matched by the call's trailing identifier, like ownsReturnFns.
+    std::set<std::string> stringProducerFns;
     std::map<std::string, ClassInfo> classes; // Class Registry
     std::map<std::string, std::map<std::string, int>> enums; // Enum Registry
     std::map<std::string, std::map<int, std::string>> enumLabels; // enum name → id → display label

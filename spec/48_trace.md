@@ -44,7 +44,8 @@ Output goes to `stderr`.  The program's normal stdout output is unaffected.
 | `f32 / f64`   | `%.6g` / `%.15g` float       |
 | `bool / i8`   | decimal integer (0 or 1)     |
 | `string`      | string value                 |
-| `i8*` handle  | string value (best-effort)   |
+| opaque handle / model pointer | pointer address (`%p`), never read as text |
+| interface fat pointer | object and vtable addresses |
 | struct / list / map | `<?>` (opaque)        |
 
 ## Hot-Path Cost
@@ -71,15 +72,15 @@ subprocess.
 
 To enable tracing for specific functions, set the value to a comma-separated
 function list or `"*"` for all.  An empty string `""` disables tracing.
-Override from the command line if needed:
+For builds, configure the selection in the JSON `env` object. Exodus merges
+`{**os.environ, **config.env}` (after expanding config paths), so **JSON values win**
+when a key is present in both places. A shell prefix only supplies keys absent
+from the JSON configuration.
 
-```bash
-AIML_TRACE="pf_worker_loop,pf_dispatch_jobs" exodus build -c exodus-train.json
-```
-
-Note: the `env` field in the JSON is the canonical way to persist the setting.
-A command-line override takes precedence over the JSON value (shell env wins
-because exodus merges `{**os.environ, **config.env}`).
+For AOT/WASM, a nonempty build-time `AIML_TRACE` is baked into the binary and
+initialized without rereading the runtime environment. With no baked selection,
+native execution can read `AIML_TRACE` at startup. Changing a baked selection
+requires rebuilding; runtime gating does not imply runtime override of baked values.
 
 > **Important:** JSON does not allow duplicate keys.  A file with two `"env"`
 > entries will silently use only the second one.  Always merge all environment
@@ -87,13 +88,13 @@ because exodus merges `{**os.environ, **config.env}`).
 
 ## Implementation Notes
 
-- `src/sys/trace_runtime.h/cpp` — `TraceRuntime` class + 2 extern C symbols:
-  `aiml_trace_active(fname) → i32`, `aiml_trace(fname, dir, args) → void`
+- `src/sys/trace_runtime.h/cpp` — `TraceRuntime` class and C runtime entry points:
+  `aiml_trace_active(fname) → i32`, `aiml_trace_format(fname, format, ...) → void`
 - `compiler.cpp` `jitRun()` — calls `aiml_trace_init()` before JIT execution;
-  registers `aiml_trace_active` and `aiml_trace` as JIT symbols via `AddSymbol`
+  registers `aiml_trace_active`, `aiml_trace_format` and the legacy `aiml_trace` via `AddSymbol`
 - `src/core/ast_compiler.cpp` `visitFunction()` — emits trace prologue IR into
   every user-defined function body: conditional branch → trace side-block →
-  string-build with existing `StringUtils` helpers → `aiml_trace` call
+  source-typed varargs → `aiml_trace_format` (no temporary AIML strings)
 
 ---
 
@@ -138,9 +139,8 @@ also matches a mangled method symbol such as `CardService_collect_owned`.
 > old (or no) instrumentation and you silently trace the wrong set. Changing the
 > value **inside `exodus*.json`** changes the config → forces a full recompile →
 > the instrumentation is always correct. This is the canonical, reliable way.
-> (`AIML_TRACE` tolerates a shell prefix because it is runtime-gated — the code
-> is emitted unconditionally and the env is read when the program runs. That
-> does not apply to the compile-time `AIML_SIZETRACE`.)
+> Function trace instrumentation is runtime-gated, but AOT/WASM may bake the
+> selection at build time; use JSON configuration for reliable build invalidation.
 
 ## Output Format
 
@@ -191,12 +191,12 @@ a crash inside a `get_copy` / persist initializer).
 
 ## Overview
 
-`AIML_TRACE_SYMBOL` is the value/lifetime sibling of `AIML_TRACE`. For the **local
-symbols** you name, it prints the symbol's **value** at two lifetime points —
-**DECL** (birth: its initial value) and **DROP** (the value immediately before its
-scope-drop frees it). It is built for use-after-free / premature-drop / move-vs-copy
-diagnosis: you watch a value from creation until cleanup and see whether it was
-**moved** (no drop) or **freed while still referenced** (garbage at a later read).
+`AIML_TRACE_SYMBOL` observes selected heap locals at **DECL**, **MOVE**, and
+**DROP**, plus selected local/model-field assignments at **BEFORE_SET** and **SET**.
+MOVE means a pending local cleanup was consumed at an ownership handoff.
+BEFORE_SET is before RHS evaluation, SET is after the assignment; these events
+observe values, not allocator frees. Missing DROP alone cannot distinguish a move,
+a borrow/static value, disabled ownership cleanup, or a missing cleanup.
 
 Like `AIML_SIZETRACE` (and unlike the runtime-gated `AIML_TRACE`), it is
 **compile-time gated**: the compiler reads the variable and emits the trace only for
@@ -204,7 +204,9 @@ matching symbols. Unset → zero code emitted, no overhead.
 
 ## Usage — `env` field of `exodus*.json` (compile-time; same cache caveat as AIML_SIZETRACE)
 
-Comma-separated local-variable names, or `1` / `all` for every symbol:
+Comma-separated local-variable names and assignment targets, or `1` / `all` for
+every supported symbol. A field matches its exact target (e.g. `<.library`) or its
+final field name (`library`):
 
 ```json
 { "env": { "AIML_TRACE_SYMBOL": "artdbg,card_name" } }
@@ -215,28 +217,171 @@ Comma-separated local-variable names, or `1` / `all` for every symbol:
 To **stdout** (so it appears in the browser console for WASM builds):
 
 ```
-[aiml-trace] DECL <name> (string) @<addr> = "<value>"    # string: content
-[aiml-trace] DECL <name> (list<T>) len=<n> @<addr>       # list: element count
-[aiml-trace] DROP <name> (<type>) @<addr> = "<value>"    # value right before free
+[aiml-trace] DECL text (string | fn | file:line: decl=file:line: cleanup=registered) slot@0x... data@0x... = "value"
+[aiml-trace] MOVE items (list<string> | fn | ...) len=3 slot@0x... data@0x...
+[aiml-trace] SET <.library (list<Card> | fn | ...) len=3 slot@0x... data@0x...
+[aiml-trace] DROP base (ptr<CardBase> | fn | ...) iface_obj@0x...
 ```
 
-- **string** → its content (shows poison/garbage directly).
-- **list** → element count + storage address; **model / map** → address.
-- A symbol that shows **DECL but no DROP** was **moved** — its scope-drop was consumed
-  by a `push`/`return`/member-store. This directly distinguishes a move from a free.
+- Strings: slot/data addresses and up to 256 content bytes; null-safe, but reading
+  a corrupt non-null pointer is still unsafe. A byte limit can split UTF-8 text.
+- Lists: length, slot and buffer addresses. Models/maps: storage address.
+- Boxed classes: heap address; interfaces: underlying object address.
+- Local declarations retain their source location in subsequent events. Event
+  locations and the function name disambiguate repeated local names.
+- `cleanup=registered` indicates a pending scope cleanup; `unregistered` does not
+  prove a leak or a borrow. Ownership-enabled and disabled runs can differ.
 
 ## What is traced
 
-DECL fires at the end of each matching `decl:` (heap types: string / list / map /
-model). DROP fires inside every scope-drop whose symbol name matches. Only **locals**
-are traced, by declared name — to watch a **model field**, bind it to a string local
-(`decl: [dbg, string, card.artwork_id]`) and trace `dbg`.
+DECL fires after initialization of a matching local string/list/map/model/box.
+MOVE fires when `consumeLocalDrop` removes a registered local cleanup. DROP fires
+immediately before its cleanup code. Early returns use the same cleanup hooks.
+
+BEFORE_SET/SET cover plain locals and dot-separated model/class fields (including
+`<.field`), resolved without evaluating extra AIML expressions. By-reference
+container parameters are dereferenced to their actual storage. These events do
+not cover indexed writes, standalone calls, `list.push`, `decode_rpc`,
+`get_copy_at`, native handle destruction or automatic recursive field cleanup.
+Those require separate runtime/allocator evidence. Field aliases do not observe
+the complete lifetime of the original field.
 
 ## Implementation Notes
 
 - `src/core/ast_compiler_stmt.cpp` — `aimlTraceSymbol()` parses `AIML_TRACE_SYMBOL`;
   `emitSymbolValueTrace()` emits the `printf`; DECL hook at `visitDeclStmt` end, DROP
-  hook in `emitScopeDrop`. `ScopeDrop` carries `debugName`/`debugType`, set at each
+  hook in `emitScopeDrop`, MOVE in `consumeLocalDrop`, assignment hooks around
+  `visitSetStmt`. `ScopeDrop` carries `debugName`/`debugType`, set at each
   drop-registration site.
 - Pure diagnostic, **independent of spec/61 ownership**: it observes drops/moves but
   changes no semantics.
+
+---
+
+# AIML_MEM_DIFF: Live-Allocation Diff by Call-Stack
+
+## Overview
+
+`AIML_MEM_DIFF` answers **"what is accumulating?"** at runtime, without a manual `AIML_TRACE_SYMBOL`
+DECL-vs-DROP tally or a multi-hundred-MB trace. Every AIML heap **leaf-allocation** — currently every
+refcounted string (`aiml_str_alloc`) — is recorded in a live map keyed by the **C++ call-stack** at the
+allocation; the matching free (`aiml_str_decref` on refcount→0) forgets it. `sys.mem_diff()` (or the
+automatic process-exit dump) prints, per allocation site, the **live bytes + block count** and the
+**delta since the previous dump** — so a site that keeps growing between two dumps is the leak, in the
+function that made it (symbolized via `backtrace_symbols`; on the AOT build with debug info that reads as
+e.g. `CardService_get_base`).
+
+**Recursive models / nested class-members are captured cleanly and for free:** tracking is at the leaf
+(each string), and deep-free (`aiml_ser_free_decoded`) recurses to those same leaves, so a
+`list<Model>`-of-models-with-strings, a nested member, or a recursive `ptr<>` structure is exactly one
+balanced record/forget per nested string — no per-type logic. A container whose elements carry heap
+(strings/models) therefore shows its leak through those elements. (Not yet tracked: the `list`/`map`
+**data buffers** themselves and `{new:}` box shells — they are allocated as inline IR, not through a
+runtime choke point; a pure-scalar `list<i32>` buffer leak is thus invisible in v1. Planned follow-up.)
+
+## Gating — COMPILE-TIME via baked activation (the AIML_TRACE model, no defines)
+
+`AIML_MEM_DIFF` is **compile-time gated**, consistent with the other trace features and with no `#ifdef`
+defines. The leaf-allocation hooks live in `libaiml`, but the tracker is **inert** — a single
+never-taken branch on a global `g_on` — unless the **compiler** emits one `aiml_memdiff_init_baked(file,
+interval)` call into the program prologue. The compiler emits it **iff `AIML_MEM_DIFF` is set in the build
+environment** (`exodus.json` `env`), reading `AIML_MEM_DIFF_FILE` / `AIML_MEM_DIFF_INTERVAL` at compile
+time and **baking** them in. There is **no runtime `getenv`**: a binary built without the feature ignores
+a runtime `AIML_MEM_DIFF`, and one built with it needs no runtime env. Changing the selection requires a
+rebuild (same cache-invalidation reasoning as `AIML_SIZETRACE`). This keeps the leaf-level accuracy and
+move-correctness of an allocator hook (it catches deep `aiml_ser_decode` strings and recursive
+model/class-member strings, each one balanced record/forget) while emitting **zero activation** when off.
+
+## Usage — set in `exodus.json` `env` (build-time), like the other trace features
+
+```json
+{ "env": {
+    "AIML_MEM_DIFF": "1",
+    "AIML_MEM_DIFF_FILE": "logs/mem_diff_server.txt",
+    "AIML_MEM_DIFF_INTERVAL": "60"
+} }
+```
+
+Then `exodus build`. The dumps then run automatically (activity-driven periodic + a final exit dump) with
+no source change; `sys.mem_diff()` (returns total live bytes) forces an immediate dump if wanted.
+
+## Output Format (to `AIML_MEM_DIFF_FILE`, appended; else `stderr`)
+
+Each dump is one timestamped block, appended to the file so dumps accumulate over the run and the file is
+readable live:
+
+```
+[mem-diff 2026-09-12 17:39:12] total live: 239575 bytes in 9010 blocks across 11 sites (top 30 by growth since last dump)
+  [+21390 B]  live 64170 B / 1500 blocks (ever 1500)
+        ./game(CardService_get_base+0x1c4) [0x...]
+        ./game(...) [0x...]
+  [+0 B]      live 4096 B / 64 blocks (ever 128000)
+        ...
+```
+
+- `[+N B]` — growth in that site's live bytes since the previous dump. Sites are sorted by this delta:
+  the top entries with a large positive delta are what is actively accumulating.
+- `live … / … blocks` — current live bytes and block count for the site; `ever` is the total ever
+  recorded there (churn context — a high `ever` with `[+0 B]` is hot but balanced, not a leak).
+- Frames are the call-stack (top `kPrintFrames`), symbolized on native builds with debug info.
+
+## Implementation Notes
+
+- `src/sys/mem_diff_runtime.h/.cpp` — `aiml_memdiff_init_baked(file, interval)` (the compile-baked
+  activation: sets `g_on`, `g_file`, `g_interval` — NO getenv), `aiml_memdiff_record/forget/dump`,
+  `aiml_sys_mem_diff`; live map `ptr → {size, site}`, aggregate `site-hash → {frames, live_count,
+  live_bytes, last_dump_bytes}`; one mutex; a thread-local recursion guard; opportunistic activity-driven
+  periodic dump (checks elapsed every ~2048 records) + `atexit`. `backtrace`/`backtrace_symbols` are
+  `#ifndef __EMSCRIPTEN__` (WASM tracks totals without frames).
+- `compiler.cpp` prologue — emits `aiml_memdiff_init_baked(fileStr, interval)` iff `getenv("AIML_MEM_DIFF")`
+  is truthy at compile time (mirrors the `aiml_trace_init_baked` bake); `jitRun()` `AddSymbol`s it for JIT.
+- `src/sys/string_runtime.cpp` — `aiml_str_alloc` → `record`, `aiml_str_decref`(on free) → `forget`
+  (both a single `g_on` branch when off).
+- `src/core/builtin_registry.cpp` — `sys.mem_diff()` → `aiml_sys_mem_diff` (dump + total live bytes).
+- Pure diagnostic; changes no semantics. Independent of `AIML_LIFETIME_DROPS` (but most useful with drops
+  ON, where a still-growing site is a real leak rather than the drops-OFF leak-everything baseline).
+
+## Diagnostic updates (2026-09-12)
+
+`AIML_TRACE` formats source-typed arguments through `aiml_trace_format` directly
+using stdio, without allocating AIML strings. Only source `string` arguments
+are read as text (null prints `<null>`). Other pointers print addresses; interface
+fat pointers print object/vtable addresses. Integer varargs use the required
+promotions, including signed i16; f32 promotes to double. Existing `aiml_trace`
+remains available for previously generated code. Rebuild the compiler and native /
+WASM runtime libraries together before rebuilding applications.
+
+`AIML_TRACE_SYMBOL` additionally emits `MOVE`, `BEFORE_SET` and `SET`. `MOVE`
+records removal of a registered local cleanup at an ownership handoff; it is not
+a destructor event. `BEFORE_SET` observes the target before RHS evaluation;
+`SET` observes it after assignment. Neither proves that old heap storage was freed.
+Selections now also cover model fields on `set`, either by exact target spelling
+(e.g. `<.library`) or final field name (`library`). Direct runtime mutation
+(e.g. `get_copy_at`, `decode_rpc`, `list.push`) does not produce SET events.
+
+Events include the function/event location and, for local declarations, their
+declaration location. DECL reports `cleanup=registered` or `cleanup=unregistered`;
+unregistered may mean borrowed, static, moved ownership elsewhere, or disabled
+lifetime drops, and is not proof of a leak. Strings print slot and data addresses
+plus at most 256 content bytes (null-safe); lists print slot and buffer addresses.
+A corrupt non-null string can still fail during content inspection.
+
+A missing DROP alone does not prove a move: use MOVE events, cleanup registration,
+and the receiving owner. Field replacement and native-handle cleanup still need
+allocator/runtime evidence to establish a complete lifetime balance.
+
+## Regression checks
+
+After activating `exvenv` and running `exodus build --all`, run
+`python3 tests/run_trace_tests.py --wasm`. It checks native and WASM execution
+with lifetime drops on/off, disabled tracing, null/object/interface arguments,
+signed numeric formatting, dynamic string preservation, field SET events,
+box-to-interface MOVE/DROP address continuity, and 20,000 traced calls.
+For allocator evidence, compare `tests/test_trace_stress.aiml` under Valgrind
+with `AIML_TRACE=trace_probe` versus an empty selection; compiler/JIT baseline
+allocations must not be attributed to generated trace code.
+
+The regression `test_trace_string_len_first.aiml` exercises string length before
+any concatenation, with tracing on/off. Removing trace string concatenation must
+not expose declaration-order-dependent libc ABI errors: `strlen` returns target
+`size_t` (i32 on wasm32, i64 on x86_64), independently of which builtin declares it.

@@ -1,0 +1,102 @@
+# spec/61 §6.2 (T1): the return-cleanup owner-exemption must fire ONLY for alias-capable
+# (pointer/struct) returns. For a SCALAR return the value is a copy that cannot alias the owner's
+# heap, so an owned string local must still be dropped. Regression for the deckset-editor `build_a`
+# case (`decl s=producer(); return s.len` leaked one string per call). Native RSS-delta + must be
+# memory-safe under valgrind (the heap-return subject checks the exemption still protects moves).
+
+- class:
+    name: Svc
+    members: [[dummy, i32]]
+    methods:
+      # Return via a LOCAL (not a direct `return "<interpolation>"`, which has its own separate
+      # return-lowering leak, documented elsewhere) so this probe isolates T1 only.
+      - def:
+          name: make_line
+          static_off: ["same_arg"]
+          args: [[num, i32]]
+          return: { type: string, lifetime: producer }
+          body:
+            - decl: [tmp, string, "return-cleanup-payload-${num}-xxxxxxxxxxxxxxxx"]
+            - return: tmp
+
+      # SUBJECT (the fix): owned string local, SCALAR return (`.len`). The owner cannot alias an i32,
+      # so it must be dropped at the return. Was leaked (exemption over-fired on `str_local.len`).
+      - def:
+          name: scalar_return
+          static_off: ["same_arg"]
+          args: [[num, i32]]
+          return: i32
+          body:
+            - decl: [line0, string, { call: [<.make_line, num] }]
+            - return: line0.len
+
+      # CROSS-CHECK (no regression / no double-free): heap (string) return — the returned value IS
+      # the owner's buffer (a genuine move-out), so the owner MUST stay exempted. The caller binds the
+      # producer result (Part 1 drops it) → bounded AND memory-safe (no double-free of the moved value).
+      - def:
+          name: heap_return
+          static_off: ["same_arg"]
+          args: [[num, i32]]
+          return: { type: string, lifetime: producer }
+          body:
+            - decl: [line0, string, { call: [<.make_line, num] }]
+            - return: line0
+
+      - def:
+          name: loop_scalar
+          static_off: ["same_arg"]
+          args: [[iters, i32]]
+          return: i64
+          body:
+            - decl: [before, i64, { call: [sys.mem_usage] }]
+            - decl: [idx, i32, 0]
+            - decl: [sink, i32, 0]
+            - while:
+                condition: { lt: [idx, iters] }
+                body:
+                  - set: [sink, { +: [sink, { call: [<.scalar_return, idx] }] }]
+                  - set: [idx, { +: [idx, 1] }]
+            - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+      - def:
+          name: loop_heap
+          static_off: ["same_arg"]
+          args: [[iters, i32]]
+          return: i64
+          body:
+            - decl: [before, i64, { call: [sys.mem_usage] }]
+            - decl: [idx, i32, 0]
+            - decl: [sink, i32, 0]
+            - while:
+                condition: { lt: [idx, iters] }
+                body:
+                  - decl: [got, string, { call: [<.heap_return, idx] }]
+                  - set: [sink, { +: [sink, got.len] }]
+                  - set: [idx, { +: [idx, 1] }]
+            - return: { -: [{ call: [sys.mem_usage] }, before] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [reps, i32, 400000]
+      - decl: [limit, i64, 16777216]   # 16 MB bright line (clean ~0; leak ≈ 22 MB at N=400k)
+      - decl: [svc, ptr<Svc>, { new: Svc }]
+      - decl: [warm, i64, { call: [svc.loop_scalar, 2000] }]
+      - decl: [scalar_b, i64, { call: [svc.loop_scalar, reps] }]
+      - decl: [heap_b, i64, { call: [svc.loop_heap, reps] }]
+      - call: [log.info, "return_cleanup_scalar_drop: scalar-return=${scalar_b} B  heap-return=${heap_b} B  (limit=${limit} B, N=${reps})"]
+      - decl: [bad, i32, 0]
+      - if:
+          condition: { gt: [scalar_b, limit] }
+          then:
+            - call: [log.info, "FAIL return_cleanup_scalar_drop: owned string local NOT dropped on scalar return (${scalar_b} B > ${limit} B)"]
+            - set: [bad, 1]
+      - if:
+          condition: { gt: [heap_b, limit] }
+          then:
+            - call: [log.info, "FAIL return_cleanup_scalar_drop: heap (string) return leaked or over-dropped (${heap_b} B > ${limit} B)"]
+            - set: [bad, 1]
+      - if: { condition: { eq: [bad, 1] }, then: [{ return: 1 }] }
+      - call: [log.info, "PASS return_cleanup_scalar_drop: scalar-return drops the owner, heap-return stays exempt (bounded RSS, memory-safe)"]
+      - return: 0

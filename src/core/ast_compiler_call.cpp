@@ -617,6 +617,16 @@ IRValue* Compiler::visitCall(CallExpr* call) {
         LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "Unknown function: " + funcName);
         return nullptr;
     }
+    // spec/61 §3.2 Part 2: a `producer` free function returning a fresh STRING, used as a TRANSIENT
+    // sub-expression (e.g. `set_text(…, build_card_text(card))`), must be decref'd at statement end.
+    // Register it as an owned stmt-temp; a consuming decl/set/push/return removes it via
+    // consumeStringTemp (its own scope-drop then handles it) — so bound uses don't double-free.
+    if (callRes && ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) {
+        size_t dp = funcName.rfind('.');
+        std::string shortName = (dp == std::string::npos) ? funcName : funcName.substr(dp + 1);
+        if (ctx.stringProducerFns.count(shortName) > 0)
+            ctx.stmtTempStack.back().push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(callRes)));
+    }
     return callRes;
 }
 IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std::string& methodName, Symbol* sym, CallExpr* call) {
@@ -1327,11 +1337,17 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                      }
                  }
              }
-             // spec/61 (A3): pushing a local moves it into the container → do not drop it.
-             if (!call->args.empty()) consumeLocalDrop(call->args[0].get());
-             // spec/61: an interpolation temp pushed into a list is MOVED (the list owns
-             // the char*) → remove it from the statement-temp decref list.
-             consumeStringTemp(pushVal);
+             // spec/61 §8: a list<string> now OWNS its elements via a dup at the push site (below),
+             // so a STRING element is a pure BORROW — the caller keeps its scope-drop / stmt-temp and
+             // frees its own copy, no matter how many frames away it was built (the event_log
+             // log_event(msg)→lines.push(msg) helper-indirection: the real owner is the caller's
+             // interpolation temp, out of reach of consumeLocalDrop here). Non-string elements keep
+             // MOVE semantics: the list stores them raw, so consume the source's still-live drop.
+             if (listElemName != "string") {
+                 // spec/61 (A3): pushing a local moves it into the container → do not drop it.
+                 if (!call->args.empty()) consumeLocalDrop(call->args[0].get());
+                 consumeStringTemp(pushVal);
+             }
              // Reject pointer representations in aggregate VALUE lists, regardless
              // of the argument AST shape (variable, member, nested get/call).
              // get() returns an element pointer for structs; passing it through
@@ -1372,6 +1388,21 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                      }
                  }
              }
+             // spec/61 §8 — the list OWNS an INDEPENDENT copy of every string element (dup at the
+             // push site). This unifies (and subsumes) the older split paths — MOVE for owned
+             // locals/interpolation temps and incref for borrowed member strings — into one robust
+             // rule: pushing a plain local, a param, an interpolation temp, or a member/field access
+             // (ent.player_id / <.name) all leave the source untouched, and the list's element
+             // decref (kind-2 elemKind-1 drop) frees exactly this dup. Fixes uniformly both the
+             // take_gone_players shared-buffer UAF (`malloc_consolidate: invalid chunk size`) and the
+             // event_log dangling-temp corruption (a string pushed through a helper param, whose real
+             // owner — the caller's interpolation temp — is freed at the caller's statement end).
+             if (listElemName == "string" && pushVal && pushVal->getType()->isPointerTy()) {
+                 llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+                 llvm::Value* asP = pushVal->getType() == i8p ? pushVal : ctx.builder.CreateBitCast(pushVal, i8p);
+                 llvm::Function* dup = ctx.getFunction("aiml_str_dup", i8p, {i8p});
+                 pushVal = ctx.builder.CreateCall(dup, { asP }, "list_str_own");
+             }
              ListImpl::push(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), pushVal);
              return nullptr;
          } else if (methodName == "pop") {
@@ -1386,7 +1417,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              ListImpl::insert(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1])));
              return nullptr;
          } else if (methodName == "remove" && argVals.size() > 0) {
-             ListImpl::remove(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), llvmListElemType);
+             ListImpl::remove(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), llvmListElemType, listElemName == "string");
              return nullptr;
          } else if (methodName == "clear") {
              ListImpl::clear(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
@@ -1441,7 +1472,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              auto* endBB = llvm::BasicBlock::Create(ctx.context, "lrmv_end", pf);
              ctx.builder.CreateCondBr(ctx.builder.CreateICmpSGE(idx, ctx.builder.getInt32(0)), rmBB, endBB);
              ctx.builder.SetInsertPoint(rmBB);
-             ListImpl::remove(ctx, listPtr, idx, llvmListElemType);
+             ListImpl::remove(ctx, listPtr, idx, llvmListElemType, listElemName == "string");
              ctx.builder.CreateStore(ctx.builder.getInt32(1), outVar);
              ctx.builder.CreateBr(endBB);
              ctx.builder.SetInsertPoint(endBB);
@@ -1531,22 +1562,19 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          if (methodName == "put" && argVals.size() > 1) {
              llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
              llvm::Value* valVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
-             // spec/61 (same root as the consumed direct-interp fix): MapImpl::put stores the
-             // key/value RAW (no dup/incref), so a directly-passed interpolation TEMP is moved
-             // into the map. Remove it from the statement-temp decref list — otherwise the temp
-             // is freed at statement end while the map still holds it → dangling key → strcmp
-             // UAF on the next put. This converts a UAF into a (safe) leak; the map's own heap is
-             // reclaimed later once the map scope-drop is completed (MapImpl occ/slot audit).
-             consumeStringTemp(keyVal);
-             consumeStringTemp(valVal);
-             // spec/61 — MapImpl::put stores key/value RAW (move, no dup/incref), so a DECLARED
-             // string local passed as key/value (e.g. `decl colkey "${c}"` → `m.put(colkey, …)`)
-             // is moved into the map too. consumeStringTemp only clears inline stmt-temps; the
-             // declared local has a scope-drop (kind-1 decref) in cleanupStack that would otherwise
-             // fire at scope exit and free the string the map still holds → corrupted/empty map
-             // (was the 9rooms mana_choice regression). Remove that drop — the map owns it now.
-             if (!call->args.empty()) consumeLocalDrop(call->args[0].get());
-             if (call->args.size() > 1) consumeLocalDrop(call->args[1].get());
+             bool valIsString = (vName == "string");
+             // spec/61 §8: MapImpl::put now DUPS string keys and string values (map owns its own
+             // copy), so the caller is a pure BORROWER — its key/value temp or declared local
+             // keeps its normal scope-drop and frees itself, no matter how many call frames away
+             // it was declared (fixes the ManaPool.add_color→colors.put helper-indirection where
+             // caller-side drop-suppression could not reach the real owner one frame up → the key
+             // was freed under the map → all mana colors collapsed into one slot).
+             // NON-string values (model/ptr) still MOVE into the map (stored raw): suppress the
+             // caller's drop for those, exactly as before.
+             if (!valIsString) {
+                 consumeStringTemp(valVal);
+                 if (call->args.size() > 1) consumeLocalDrop(call->args[1].get());
+             }
              // Interface-Upcast für put(key, ptr<Concrete>) wenn V = ptr<Interface>.
              // Zentralisiert in Compiler::buildInterfaceUpcast.
              if (vTy->isStructTy() && llvm::cast<llvm::StructType>(vTy)->hasName() &&
@@ -1571,7 +1599,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              if (keyVal->getType()->isPointerTy() && keyVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
                  keyVal = ctx.builder.CreateBitCast(keyVal, ctx.builder.getInt8Ty()->getPointerTo());
              }
-             MapImpl::put(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, valVal, mapStructTy);
+             MapImpl::put(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, valVal, mapStructTy, valIsString);
              return nullptr;
          } else if (methodName == "get" && argVals.size() > 0) {
              llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
@@ -1584,7 +1612,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              if (keyVal->getType()->isPointerTy() && keyVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
                  keyVal = ctx.builder.CreateBitCast(keyVal, ctx.builder.getInt8Ty()->getPointerTo());
              }
-             MapImpl::remove(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, vTy, mapStructTy);
+             MapImpl::remove(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, vTy, mapStructTy, vName == "string");
              return nullptr;
          } else if (methodName == "contains" && argVals.size() > 0) {
              llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
@@ -2673,6 +2701,12 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  ctx.builder.CreateStore(raw, tmp);
                  return ctx.ir_gen->wrap(static_cast<llvm::Value*>(tmp));
              }
+             // spec/61 §3.2 Part 2: a `producer` METHOD returning a fresh STRING used as a transient
+             // sub-expression must be decref'd at statement end (see the free-function path). A
+             // consuming decl/set/push/return removes it via consumeStringTemp first.
+             if (ctx.lifetimeDropsEnabled && ctx.stringProducerFns.count(methodName) > 0
+                 && !ctx.stmtTempStack.empty())
+                 ctx.stmtTempStack.back().push_back(raw);
          }
          return callResult;
     }

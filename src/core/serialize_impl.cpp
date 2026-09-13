@@ -823,11 +823,16 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
             ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(idx,cnt),lb,le);
             ctx.builder.SetInsertPoint(lb);
             llvm::Value* kv;
+            // aiml_jr_map_key / _val_str return OWNED heap dups (yyjson_wrapper). MapImpl::put now
+            // DUPS string keys/values into map-owned storage (§8), so free the reader's dup after
+            // put — otherwise it leaks (was leaking regardless, pre-§8).
+            llvm::Function* decf = ctx.getFunction("aiml_str_decref",ctx.builder.getVoidTy(),{i8pT(ctx)});
+            llvm::Value* keyDup = nullptr;
             if(intKey){
-                // enum/integer key: JSON key is a string like "1" → convert via atoi
-                llvm::Value* ks = ctx.builder.CreateCall(gJrMapKey(ctx),{reader,fkey,idx},"ks");
+                // enum/integer key: JSON key is a string like "1" → convert via atoi, then free it.
+                keyDup = ctx.builder.CreateCall(gJrMapKey(ctx),{reader,fkey,idx},"ks");
                 llvm::Function* atoiFn = ctx.getFunction("atoi",i32T(ctx),{i8pT(ctx)});
-                kv = ctx.builder.CreateCall(atoiFn,{ks},"k");
+                kv = ctx.builder.CreateCall(atoiFn,{keyDup},"k");
             } else {
                 kv = ctx.builder.CreateCall(gJrMapKey(ctx),{reader,fkey,idx},"k");
             }
@@ -837,7 +842,10 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
             else if(valTn=="f32")      vv=ctx.builder.CreateCall(gJrMapValF32(ctx),{reader,fkey,idx},"v");
             else if(valTn=="f64")      vv=ctx.builder.CreateCall(gJrMapValF64(ctx),{reader,fkey,idx},"v");
             else                       vv=ctx.builder.CreateCall(gJrMapValI32(ctx),{reader,fkey,idx},"v");
-            MapImpl::put(ctx,fieldPtr,kv,vv,mapTy);
+            MapImpl::put(ctx,fieldPtr,kv,vv,mapTy,valTn=="string");
+            if(intKey && keyDup) ctx.builder.CreateCall(decf,{keyDup});   // reader dup of the int-key string
+            else if(!intKey)     ctx.builder.CreateCall(decf,{kv});       // reader dup of the string key
+            if(valTn=="string")  ctx.builder.CreateCall(decf,{vv});       // reader dup of the string value
             llvm::Value* ni=ctx.builder.CreateAdd(idx,ctx.builder.getInt32(1),"ni");
             idx->addIncoming(ni,ctx.builder.GetInsertBlock());
             ctx.builder.CreateBr(lc);
@@ -1023,10 +1031,14 @@ static llvm::Function* emitDeserializeMap(CompilerContext& ctx,
     ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(idx,cnt),lb,le);
     ctx.builder.SetInsertPoint(lb);
     llvm::Value* kv;
+    // aiml_jr_map_key / _val_str return OWNED heap dups; MapImpl::put DUPS string key/value into
+    // map-owned storage (§8) → free the reader's dup after put.
+    llvm::Function* decf = ctx.getFunction("aiml_str_decref",ctx.builder.getVoidTy(),{i8pT(ctx)});
+    llvm::Value* keyDup = nullptr;
     if(intKey){
-        llvm::Value* ks = ctx.builder.CreateCall(gJrMapKey(ctx),{reader,ek,idx},"ks");
+        keyDup = ctx.builder.CreateCall(gJrMapKey(ctx),{reader,ek,idx},"ks");
         llvm::Function* atoiFn = ctx.getFunction("atoi",i32T(ctx),{i8pT(ctx)});
-        kv = ctx.builder.CreateCall(atoiFn,{ks},"k");
+        kv = ctx.builder.CreateCall(atoiFn,{keyDup},"k");
     } else {
         kv = ctx.builder.CreateCall(gJrMapKey(ctx),{reader,ek,idx},"k");
     }
@@ -1036,7 +1048,10 @@ static llvm::Function* emitDeserializeMap(CompilerContext& ctx,
     else if(valTn=="f32")      vv=ctx.builder.CreateCall(gJrMapValF32(ctx),{reader,ek,idx},"v");
     else if(valTn=="f64")      vv=ctx.builder.CreateCall(gJrMapValF64(ctx),{reader,ek,idx},"v");
     else                       vv=ctx.builder.CreateCall(gJrMapValI32(ctx),{reader,ek,idx},"v");
-    MapImpl::put(ctx,heap,kv,vv,mapTy);
+    MapImpl::put(ctx,heap,kv,vv,mapTy,valTn=="string");
+    if(intKey && keyDup) ctx.builder.CreateCall(decf,{keyDup});
+    else if(!intKey)     ctx.builder.CreateCall(decf,{kv});
+    if(valTn=="string")  ctx.builder.CreateCall(decf,{vv});
     llvm::Value* ni=ctx.builder.CreateAdd(idx,ctx.builder.getInt32(1),"ni");
     idx->addIncoming(ni,ctx.builder.GetInsertBlock());
     ctx.builder.CreateBr(lc);

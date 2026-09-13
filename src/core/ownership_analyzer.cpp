@@ -17,6 +17,10 @@ bool endsWith(const std::string& s, const char* suf) {
     return s.size() >= t.size() && s.compare(s.size() - t.size(), t.size(), t) == 0;
 }
 
+// spec/61 §7 KILL-SWITCH — MUST match kManagedStringLocals in ast_compiler_stmt.cpp. Disabled
+// pending a fix for an open-match double-free; OFF → T1-era string ownership.
+static constexpr bool kManagedStringLocals = true;
+
 struct Analyzer {
     const CompilerContext& ctx;
     OwnershipPlan plan;
@@ -24,6 +28,7 @@ struct Analyzer {
     std::uint32_t nextRes = 1;
     std::map<OwnershipId, ResourceId> ownedResource;   // fresh-owned decl id → its singleton resource
     std::map<const DeclStmt*, bool> declFreshOwned;    // pass-1 classification cache
+    std::map<OwnershipId, std::string> slotType;       // §7: local id → declared type (string rebind keeps Owned)
     // lexical name → id stack (pass 2)
     std::vector<std::map<std::string, OwnershipId>> scopes;
 
@@ -36,11 +41,39 @@ struct Analyzer {
     bool freshOwned(const DeclStmt* d) const {
         if (d->lifetime == "persistent" || d->is_extern) return false;
         const std::string& t = d->typeName;
-        if (t.rfind("list<", 0) == 0 && !t.empty() && t.back() == '>' && !d->initialValue)
-            return true;
-        if (t == "string" && d->initialValue &&
-            dynamic_cast<StringInterpolationExpr*>(d->initialValue.get()))
-            return true;
+        if (t.rfind("list<", 0) == 0 && !t.empty() && t.back() == '>') {
+            if (!d->initialValue) return true;
+            // spec/61 return-ownership for LIST producers: a call to an `owns_return: true`
+            // function returns a freshly-built INDEPENDENT list the caller owns (e.g.
+            // active_match_ids / take_gone_players → list<string>). Drop it at scope exit
+            // (kind-2) unless moved. Matched by the call's trailing identifier, like the model
+            // and box cases. MUST stay in lockstep with the list-drop registration in
+            // visitDeclStmt. (Assignment / at / get inits are views → left non-owned = safe leak.)
+            if (auto* c = dynamic_cast<CallExpr*>(d->initialValue.get())) {
+                const std::string& fn = c->functionName;
+                size_t dp = fn.rfind('.');
+                std::string shortName = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                if (ctx.ownsReturnMatches(shortName, t)) return true;
+            }
+            return false;
+        }
+        // spec/61 §7: managed string-local ownership (kill-switch kManagedStringLocals). ON → every
+        // string local owns its value. OFF (current, pending open-match crash fix) → T1-era gate:
+        // only an INTERPOLATION or producer-call string init owns a fresh RC string. MUST stay in
+        // lockstep with kManagedStringLocals in ast_compiler_stmt.cpp.
+        if (t == "string") {
+            if (kManagedStringLocals) return true;
+            if (d->initialValue) {
+                if (dynamic_cast<StringInterpolationExpr*>(d->initialValue.get())) return true;
+                if (auto* c = dynamic_cast<CallExpr*>(d->initialValue.get())) {
+                    const std::string& fn = c->functionName;
+                    size_t dp = fn.rfind('.');
+                    std::string shortName = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                    if (ctx.ownsReturnMatches(shortName, t)) return true;
+                }
+            }
+            return false;
+        }
         auto ci = ctx.classes.find(t);
         if (ci != ctx.classes.end() && ci->second.hasHeapFields && ci->second.serNodesVar) {
             if (!d->initialValue) return true;
@@ -49,13 +82,12 @@ struct Analyzer {
                 // spec/61 return-ownership for VALUE models: a call to an `owns_return: true`
                 // function returns a freshly-built INDEPENDENT model (e.g. DeckService.list →
                 // DeckListResp in every RPC handler's `resp`). The caller owns it → drop at scope
-                // exit (kind-0) unless moved. Matched by the call's trailing identifier, like the
-                // box case. (Getters that `return <.member` are NOT annotated → not dropped → the
-                // safe leak-not-double-free baseline.)
+                // exit (kind-0) unless moved. Matched by trailing identifier AND return type (so a
+                // container `.get` or a same-named producer of a different type does not collide).
                 const std::string& fn = c->functionName;
                 size_t dp = fn.rfind('.');
                 std::string shortName = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
-                if (ctx.ownsReturnFns.count(shortName) > 0) return true;
+                if (ctx.ownsReturnMatches(shortName, t)) return true;
             }
         }
         // spec/61: owned box `decl [x, ptr<T>, INIT]` where x owns the pointee → drop at scope
@@ -74,14 +106,23 @@ struct Analyzer {
                     const std::string& fn = c->functionName;
                     size_t dp = fn.rfind('.');
                     std::string shortName = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
-                    ownedInit = ctx.ownsReturnFns.count(shortName) > 0;
+                    // Return-type match (not just name) — a `map<K:ptr<Iface>>.get` returns a BORROW
+                    // and must NOT be classified as an owned box (the OpenLobby handler double-free:
+                    // `handlers.get` collided with the service `get` producers).
+                    ownedInit = ctx.ownsReturnMatches(shortName, t);
                 }
             }
             if (ownedInit) {
                 std::string boxed = t.substr(4, t.size() - 5);
                 auto bi = ctx.classes.find(boxed);
                 if (bi != ctx.classes.end() && bi->second.hasHeapFields && bi->second.serNodesVar
-                    && bi->second.type && !ctx.classGroupContainers.count(boxed))
+                    && bi->second.type && !ctx.classGroupContainers.count(boxed)
+                    // spec/58: a cascade_class instance (`new MkpEffPool`) holds a BORROW of the
+                    // shared, loaded-once cascade buffer in a heap field — every instance points at
+                    // the same global rows. A kind-4 box-drop would free that shared buffer, so the
+                    // next instance (or a later score call) double-frees it. Exclude cascade classes
+                    // from the owned-box drop (they borrow; the global cascade store persists).
+                    && !ctx.cascadeClasses.count(boxed))
                     return true;
                 // Interface fat-pointer box (owns_return call only; you cannot `{ new: Iface }`):
                 // deep-freed by virtual dispatch on the concrete type at the drop site (kind 5).
@@ -154,6 +195,7 @@ struct Analyzer {
             OwnershipId id = plan.declarations.at(d);
             scopes.back()[d->varName] = id;
             blockLocals.push_back(id);
+            slotType[id] = d->typeName;
             OwnFact f;
             f.life = Live;
             if (declFreshOwned.at(d)) {
@@ -209,8 +251,24 @@ struct Analyzer {
                         selfAssign = (v->name == local);
                     if (!selfAssign) {
                         auto it = st.slots.find(id);
-                        if (it != st.slots.end() && it->second.origin == Origin::Owned)
+                        auto tyIt = slotType.find(id);
+                        bool isString = kManagedStringLocals
+                            && (tyIt != slotType.end() && tyIt->second == "string");
+                        if (isString) {
+                            // §7: a managed string local stays Owned across a rebind — codegen
+                            // dup's a borrowed RHS / moves an owned temp, so the slot always holds an
+                            // independent RC ref; its null-safe scope-drop must still fire on the
+                            // final value. Restore Owned + its stable decl resource (assigned in
+                            // pass 1 because freshOwned(string)=true), keeping the fixpoint stable.
+                            auto res = ownedResource.find(id);
+                            if (it != st.slots.end() && res != ownedResource.end()) {
+                                it->second.origin = Origin::Owned;
+                                it->second.life = Live;
+                                it->second.resources.insert(res->second);
+                            }
+                        } else if (it != st.slots.end() && it->second.origin == Origin::Owned) {
                             it->second.origin = Origin::Unknown;   // rebound → not provably owned
+                        }
                     }
                 }
             }

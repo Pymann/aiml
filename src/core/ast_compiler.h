@@ -34,6 +34,13 @@ private:
     // could not be built (caller then falls back to the shallow memcpy).
     bool emitContainerFieldDeepCopy(llvm::Value* dstPtr, llvm::Value* srcPtr,
                                     const std::string& typeName);
+    // spec/61 §7.0 — release the heap a container field (list/map/buffer) currently owns before it
+    // is overwritten, guarded against dst==src (self-assign). Used by the member-store MOVE path
+    // (free the previous value before the shallow struct memcpy) so a repeated `set: [<.field, x]`
+    // does not leak the prior container (the 9rooms take_gone_players / poll_board_state leaks).
+    // Returns false if the type has no serialization descriptor (caller skips the free).
+    bool emitContainerFieldFree(llvm::Value* dstPtr, llvm::Value* srcPtr,
+                                const std::string& typeName);
     // Static check: hand-rolled string switches (enum/regex hints). Runs for
     // entry and imported (libraryMode) files. See spec/49 §16.
     void checkStringComparisons(Program* prog);
@@ -70,7 +77,11 @@ private:
     void visitBlockStmt(BlockStmt* block);
     // spec/61 (A3): mark a local consumed by push/return/store as MOVED — drop its
     // pending scope-cleanup entry so it is not freed here (the target now owns it).
-    void consumeLocalDrop(Expr* argExpr);
+    // nullManagedStringSlot: for a MANAGED string local (spec/61 §7), true = null the slot at runtime
+    // and keep its null-safe drop (post-value-capture move sites: push/put/consuming-arg); false =
+    // erase the drop like the legacy path (pre-value-load sites: return — the moved value is captured
+    // afterwards and the returned value's owner is exempted from cleanup, so erase is safe there).
+    void consumeLocalDrop(Expr* argExpr, bool nullManagedStringSlot = true);
     // spec/61 render-temporaries: a heap-string temp value moved into a decl-local /
     // container / member / caller is removed from the pending statement-temp decref list.
     void consumeStringTemp(llvm::Value* v);

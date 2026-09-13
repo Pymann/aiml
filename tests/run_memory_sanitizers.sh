@@ -183,6 +183,30 @@ probe "string field from an interpolation TEMP: single ref transferred (not incr
     "$AIML_BIN" -r tests/_mem_sanitize/string_field_interp_drop.aiml
 probe "conditional push of a value-model (9rooms DeckService.list): source freed on skip paths, no per-iter leak, bounded RSS" "cpd" \
     "$AIML_BIN" -r tests/_mem_sanitize/conditional_push_drop.aiml
+probe "producer-returned list<string> (9rooms active_match_ids): caller's list freed at scope exit + no orphaned initList buffer, bounded RSS" "pld" \
+    "$AIML_BIN" -r tests/_mem_sanitize/producer_list_drop.aiml
+probe "push of a borrowed field-string into a producer list (9rooms take_gone_players): list increfs the borrow, source model's string survives the drop (no UAF/heap corruption)" "pfp" \
+    "$AIML_BIN" -r tests/_mem_sanitize/producer_field_push_incref.aiml
+probe "member field reassign releases the old value (9rooms take_gone_players + poll_board_state): repeated set:[<.field,x] frees prior list<Model>/model heap, bounded RSS" "mrf" \
+    "$AIML_BIN" -r tests/_mem_sanitize/member_reassign_free.aiml
+probe "managed string local (spec/61 §7 class 3): self-accum frees old + borrow-copy owns independent ref, bounded RSS + no UAF" "srd" \
+    "$AIML_BIN" -r tests/_mem_sanitize/string_reassign_drop.aiml
+probe "producer-returned STRING (9rooms deckset-editor populate_card_full): fresh string freed when bound to a local (direct + bare-call-result return) AND when used as a transient call arg, bounded RSS" "psd" \
+    "$AIML_BIN" -r tests/_mem_sanitize/producer_string_drop.aiml
+probe "return-cleanup owner-exemption (spec/61 §6.2 T1): a SCALAR return (return s.len) drops the owned string local; a heap (string) return stays exempt (moved out), bounded RSS + no double-free" "rcs" \
+    "$AIML_BIN" -r tests/_mem_sanitize/return_cleanup_scalar_drop.aiml
+probe "direct interpolation return (spec/61 T1b): `return \"\${…}\"` frees its intermediate conversion/concat temps (block terminator skips the per-statement temp loop), bounded RSS" "rit" \
+    "$AIML_BIN" -r tests/_mem_sanitize/return_interp_temp_drop.aiml
+probe "if/while condition interpolation temp (spec/61 T1c): a concat built in an if/while condition is freed on every path incl. a terminating branch (CardArtCache has_texture hit path), bounded RSS" "cit" \
+    "$AIML_BIN" -r tests/_mem_sanitize/cond_interp_temp_drop.aiml
+probe "read-after-move managed string (spec/61 §7): a string local pushed into a container stays VALID for a later read (9rooms event-log/mana-key read-after-push) — managed move DUPS the source; both copies freed, bounded RSS + correct content" "ram" \
+    "$AIML_BIN" -r tests/_mem_sanitize/read_after_move_drop.aiml
+probe "map<string:*> owns its keys (spec/61 §8): interpolated map keys passed through a HELPER (ManaPool.add_color→colors.put) must not collapse — put DUPS keys so the caller's key local frees independently; accumulates correctly (no 10× slot-collapse) + bounded RSS + memory-safe" "mpk" \
+    "$AIML_BIN" -r tests/_mem_sanitize/mana_pool_key_drop.aiml
+probe "list<string> owns its elements (spec/61 §8): a string pushed through a HELPER param (event_log log_event(msg)→lines.push(msg), caller passes an interpolation temp) stays readable after the pushing frame returns — push DUPS the element; correct content + bounded RSS + memory-safe" "elp" \
+    "$AIML_BIN" -r tests/_mem_sanitize/event_log_push_drop.aiml
+probe "value-model set from a VIEW deep-copies (spec/61 §4.2): a producer that fills an owned model local via set:[out,{at:[view,i]}] and returns it (9rooms load_entry_at→att_entry→aent in drive_ai_combat) must give out an INDEPENDENT heap — a shallow store shares the container element's list buffer → double-free when both the returned copy and the container drop; memory-safe" "svr" \
+    "$AIML_BIN" -r tests/_mem_sanitize/producer_set_view_return.aiml
 
 echo "────────────────────────────────────────"
 if [ "$fails" -eq 0 ]; then

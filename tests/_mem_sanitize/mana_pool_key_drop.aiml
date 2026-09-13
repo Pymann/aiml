@@ -1,0 +1,92 @@
+# Mirrors 9rooms ManaPool (sources/models/mana_pool.aiml): a MODEL-backed map<string:i32>
+# whose keys are managed string locals built from "${i}" interpolation, used as map keys via
+# contains/get/put across many calls, accumulating. The live regression was "kein Mana mehr":
+# if the managed-string model frees/mangles a key that the map stored (move instead of borrow,
+# or scope-drop of a key the map now owns), then contains()/get() MISS and accumulated mana
+# reads back as 0. This probe asserts BOTH correctness (values persist + accumulate) and
+# bounded RSS.
+
+- model:
+    name: PoolData
+    fields:
+      - [colors, map<string:i32>]
+
+- class:
+    name: Pool
+    models: [PoolData]
+    methods:
+      - def:
+          name: amount
+          args: [[key, string]]
+          return: i32
+          body:
+            - if: { condition: { eq: [{ call: [<.colors.contains, key] }, 1] }, then: [{ return: { call: [<.colors.get, key] } }] }
+            - return: 0
+
+      - def:
+          name: add_color
+          args: [[key, string], [delta, i32]]
+          body:
+            - call: [<.colors.put, key, { +: [{ call: [<.amount, key] }, delta] }]
+
+      # produce: add +1 to every color 1..10 using an INTERPOLATED managed-string key (the ManaPool pattern)
+      - def:
+          name: produce
+          static_off: ["same_arg"]
+          args: [[dummy, i32]]
+          body:
+            - decl: [cix, i32, 1]
+            - while:
+                condition: { lte: [cix, 10] }
+                body:
+                  - decl: [kky, string, "${cix}"]           # managed string local, interpolation temp
+                  - call: [<.add_color, kky, 1]            # kky passed as map-key borrow (via add_color→put)
+                  - set: [cix, { +: [cix, 1] }]
+
+      # read back the total across all 10 colors, rebuilding keys fresh (as the real code does)
+      - def:
+          name: total
+          static_off: ["same_arg"]
+          args: [[dummy, i32]]
+          return: i32
+          body:
+            - decl: [sum, i32, 0]
+            - decl: [tix, i32, 1]
+            - while:
+                condition: { lte: [tix, 10] }
+                body:
+                  - decl: [tky, string, "${tix}"]
+                  - set: [sum, { +: [sum, { call: [<.amount, tky] }] }]
+                  - set: [tix, { +: [tix, 1] }]
+            - return: sum
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pool, ptr<Pool>, { new: Pool }]
+      - decl: [before, i64, { call: [sys.mem_usage] }]
+      - decl: [cnt, i32, 0]
+      - decl: [rounds, i32, 200000]
+      # accumulate: each produce() adds +1 to each of 10 colors → after R rounds every color == R
+      - while:
+          condition: { lt: [cnt, rounds] }
+          body:
+            - call: [pool.produce, 0]
+            - set: [cnt, { +: [cnt, 1] }]
+      - decl: [grow_b, i64, { -: [{ call: [sys.mem_usage] }, before] }]
+      - decl: [tot, i32, { call: [pool.total, 0] }]
+      - decl: [want, i32, { '*': [rounds, 10] }]   # 10 colors × rounds
+      - call: [log.info, "mana_pool_key_drop: total=${tot} want=${want} growth=${grow_b} B"]
+      - if:
+          condition: { neq: [tot, want] }
+          then:
+            - call: [log.info, "FAIL mana_pool_key_drop: accumulated mana lost — map keys corrupted by managed-string model (got ${tot}, want ${want})"]
+            - return: 1
+      - if:
+          condition: { gt: [grow_b, 16777216] }
+          then:
+            - call: [log.info, "FAIL mana_pool_key_drop: map<string:i32> leaked (${grow_b} B > 16 MB)"]
+            - return: 1
+      - call: [log.info, "PASS mana_pool_key_drop: mana accumulates correctly + bounded RSS"]
+      - return: 0

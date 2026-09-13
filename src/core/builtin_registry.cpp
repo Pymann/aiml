@@ -606,6 +606,16 @@ void registerBuiltins(CompilerContext& ctx) {
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(f));
     };
 
+    // sys.mem_diff() → i64 — AIML_MEM_DIFF: print the live-allocation diff (top sites by growth
+    // since the last call, symbolized by function) to stderr and return total live bytes. No-op
+    // returning 0 when the AIML_MEM_DIFF env var is unset. Call it from the periodic [mem] tick to
+    // watch what accumulates. See spec/48.
+    sys.builtinFuncs["mem_diff"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+        llvm::Function* f = ctx.getFunction("aiml_sys_mem_diff",
+            ctx.builder.getInt64Ty(), {});
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f));
+    };
+
     sys.builtinFuncs["env"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
         // Delegate to the runtime, which populates a map<string:string> from
         // `environ`.  The returned AimlHttpMap* shares map<K:V>'s memory layout,
@@ -770,17 +780,17 @@ void registerBuiltins(CompilerContext& ctx) {
         ctx.builder.SetInsertPoint(invalidBB);
         ctx.builder.CreateBr(mergeBB);
         ctx.builder.SetInsertPoint(validBB);
-        llvm::Function* strlenF = ctx.getFunction("strlen", ctx.builder.getInt64Ty(), {i8p});
+        llvm::Function* strlenF = ctx.getFunction("strlen", ctx.getSizeType(), {i8p});
         llvm::Value* len = ctx.builder.CreateCall(strlenF, {text});
-        llvm::Function* fwF = ctx.getFunction("fwrite", ctx.builder.getInt64Ty(),
-            {i8p, ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty(), i8p});
-        llvm::Value* written = ctx.builder.CreateCall(fwF, {text, ctx.builder.getInt64(1), len, handle});
+        llvm::Function* fwF = ctx.getFunction("fwrite", ctx.getSizeType(),
+            {i8p, ctx.getSizeType(), ctx.getSizeType(), i8p});
+        llvm::Value* written = ctx.builder.CreateCall(fwF, {text, ctx.getSizeConst(1), len, handle});
         ctx.builder.CreateBr(mergeBB);
         ctx.builder.SetInsertPoint(mergeBB);
-        llvm::PHINode* phi = ctx.builder.CreatePHI(ctx.builder.getInt64Ty(), 2, "write_res");
-        phi->addIncoming(ctx.builder.getInt64(0), invalidBB);
+        llvm::PHINode* phi = ctx.builder.CreatePHI(ctx.getSizeType(), 2, "write_res");
+        phi->addIncoming(ctx.getSizeConst(0), invalidBB);
         phi->addIncoming(written, validBB);
-        return ctx.ir_gen->wrap(ctx.builder.CreateTrunc(phi, ctx.builder.getInt32Ty()));
+        return ctx.ir_gen->wrap(ctx.builder.CreateZExtOrTrunc(phi, ctx.builder.getInt32Ty()));
     };
 
     io.builtinFuncs["read"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {

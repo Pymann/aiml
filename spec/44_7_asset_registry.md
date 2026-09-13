@@ -145,6 +145,18 @@ zurück.
 Konsequenz: identische `gl.tex("hammer")`-Calls überall im Code teilen
 sich genau eine GPU-Texture.
 
+### TODO: Zugriffszeitstempel und Cache-Bereinigung
+
+- [ ] Runtime-Asset-Symbole/Cache-Einträge mit einem monotonen
+  `last_used`-Zeitstempel versehen; bei Lookup und tatsächlicher Nutzung
+  (auch über bereits gespeicherte Render-Handles) aktualisieren.
+- [ ] Alte, ungenutzte Einträge periodisch nach konfigurierbarer Ruhezeit
+  aufräumen. Noch referenzierte/gepinnte Assets behalten; vor dem Entfernen
+  abhängige Prefab-/Material-Caches berücksichtigen und CPU-/GPU-Ressourcen
+  genau einmal über den jeweiligen Eigentümer freigeben. Gebündelte
+  Stem-/Pfad-Metadaten für erneutes Laden erhalten; für Runtime-Stems
+  (`@art:…`) erneutes Anfordern ermöglichen.
+
 ### Headless-Modus
 
 Bei fehlendem GL-Kontext (z.B. CLI-Tests ohne Display) gibt

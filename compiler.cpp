@@ -36,6 +36,7 @@
 #include "src/sys/ai_runtime.h"
 #include "src/sys/ui_runtime.h"
 #include "src/sys/trace_runtime.h"
+#include "src/sys/mem_diff_runtime.h"
 #include "src/sys/tensor_runtime.h"
 #include "src/sys/arg_dump_runtime.h"
 #include "src/sys/binary_io_runtime.h"
@@ -1529,6 +1530,35 @@ void AIMLCompiler::generateEntryPoint() {
         }
     }
 
+    // 3.91. AIML_MEM_DIFF (spec/48) — compile-time gated via COMPILER-BAKED ACTIVATION (AIML_TRACE
+    // model): the leaf-allocation tracker in libaiml is inert (a single never-taken branch) unless
+    // this init call is emitted, and it is emitted ONLY when AIML_MEM_DIFF is set in the build env
+    // (exodus.json). No runtime getenv, no defines. The output file + dump interval are baked from
+    // AIML_MEM_DIFF_FILE / AIML_MEM_DIFF_INTERVAL (compile-time), so the running app needs no env.
+    {
+        const char* md = getenv("AIML_MEM_DIFF");
+        bool md_on = md && *md && strcmp(md, "0") && strcmp(md, "off") && strcmp(md, "OFF")
+                     && strcmp(md, "false") && strcmp(md, "FALSE");
+        if (md_on) {
+            const char* mdFile = getenv("AIML_MEM_DIFF_FILE");
+            const char* mdIv   = getenv("AIML_MEM_DIFF_INTERVAL");
+            const char* mdEnd  = getenv("AIML_MEM_DIFF_ENDPOINT");   // HTTP receiver (memlog host) for WASM
+            long ivVal = mdIv ? atol(mdIv) : 60;
+            // int32 interval (fixed width): matches the C int32_t param on native AND wasm32 — `long`
+            // is 32-bit on wasm32, so an i64 arg would mismatch the callee there (wasm-ld error).
+            llvm::Value* fileArg = (mdFile && *mdFile)
+                ? builder.CreateGlobalStringPtr(mdFile, "__aiml_memdiff_file")
+                : llvm::ConstantPointerNull::get(builder.getPtrTy());
+            llvm::Value* endArg = (mdEnd && *mdEnd)
+                ? builder.CreateGlobalStringPtr(mdEnd, "__aiml_memdiff_endpoint")
+                : llvm::ConstantPointerNull::get(builder.getPtrTy());
+            llvm::FunctionType* ft = llvm::FunctionType::get(
+                builder.getVoidTy(), {builder.getPtrTy(), builder.getInt32Ty(), builder.getPtrTy()}, false);
+            llvm::FunctionCallee initFn = module_->getOrInsertFunction("aiml_memdiff_init_baked", ft);
+            builder.CreateCall(initFn, { fileArg, builder.getInt32((int32_t)ivVal), endArg });
+        }
+    }
+
     // 3.95. Initialize Asset Registry (spec/44_7).  The compile-time
     // AssetScanner state lives only in the compiler process; the wasm/aot
     // binary starts with an empty singleton.  std::filesystem walks of
@@ -1829,6 +1859,10 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_trace_init_baked", (void*)(intptr_t)aiml_trace_init_baked);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_trace_active",     (void*)(intptr_t)aiml_trace_active);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_trace",            (void*)(intptr_t)aiml_trace);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_trace_format",     (void*)(intptr_t)aiml_trace_format);
+    // AIML_MEM_DIFF: resolve the compiler-baked activation + dump entry points for JIT (aiml -r).
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_memdiff_init_baked", (void*)(intptr_t)aiml_memdiff_init_baked);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_sys_mem_diff",       (void*)(intptr_t)aiml_sys_mem_diff);
 
     // sys.arg_dump runtime
     llvm::sys::DynamicLibrary::AddSymbol("aiml_arg_dump_impl", (void*)(intptr_t)aiml_arg_dump_impl);
@@ -1920,6 +1954,11 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_str_split_fill",    (void*)(intptr_t)aiml_str_split_fill);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_str_parse_i32",    (void*)(intptr_t)aiml_str_parse_i32);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_str_parse_f32",    (void*)(intptr_t)aiml_str_parse_f32);
+    // spec/61 §7 managed string-local assignment helpers (called only from generated code →
+    // register + reference so they resolve in JIT and are not stripped from the binary).
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_str_assign_copy",  (void*)(intptr_t)aiml_str_assign_copy);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_str_assign_move",  (void*)(intptr_t)aiml_str_assign_move);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_str_take_local",   (void*)(intptr_t)aiml_str_take_local);
 
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_can_read",       (void*)(intptr_t)aiml_io_can_read);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_io_can_write",      (void*)(intptr_t)aiml_io_can_write);

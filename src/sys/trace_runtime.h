@@ -24,6 +24,9 @@ extern "C" {
     // Emit one trace line to stderr: "[TRACE] dir fname(args)"
     void aiml_trace(const char* fname, const char* dir, const char* args);
 
+    // Typed printf arguments; no AIML string allocations.
+    void aiml_trace_format(const char* fname, const char* format, ...);
+
     // ── AIML_SIZETRACE ────────────────────────────────────────────────────────
     // Compile-time gated (the COMPILER reads AIML_SIZETRACE and only instruments
     // the listed functions), so no runtime active-check is needed here.  Emits
