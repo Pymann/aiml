@@ -12,33 +12,6 @@
 namespace AIML {
 namespace AST {
 
-// spec/61: emit an AIML string literal as an IMMORTAL, header-carrying refcounted string instead of
-// a raw `.rodata` C string. The header {magic 'STRN', refcount 0xFFFFFFFF=IMMORTAL} sits inline
-// right before the data, so the returned data pointer looks exactly like an aiml_str_alloc'd string
-// to incref/decref — but the IMMORTAL sentinel makes both a no-op (never counted, never freed).
-// Why: a literal routinely lands in a refcounted string SLOT (model field via `set`, container
-// element, return value); drops-on's aiml_ser_free_decoded decref's every such slot, and decref of
-// a RAW literal reads its `-8` header → SIGSEGV (page-boundary fault, or a false-positive STRN match
-// → free() of rodata). Consumers (strlen/strcmp/C calls) only see the data pointer → transparent.
-static llvm::Value* emitImmortalStringLiteral(CompilerContext& ctx, const std::string& s) {
-    llvm::Type* i32 = ctx.builder.getInt32Ty();
-    llvm::Type* i8  = ctx.builder.getInt8Ty();
-    llvm::ArrayType* dataTy = llvm::ArrayType::get(i8, s.size() + 1);
-    llvm::StructType* boxTy = llvm::StructType::get(ctx.context, { i32, i32, dataTy });
-    llvm::Constant* init = llvm::ConstantStruct::get(boxTy, {
-        llvm::ConstantInt::get(i32, 0x5354524Eu),   // 'STRN'
-        llvm::ConstantInt::get(i32, 0xFFFFFFFFu),   // AIML_STR_IMMORTAL
-        llvm::ConstantDataArray::getString(ctx.context, s, /*AddNull=*/true) });
-    auto* gv = new llvm::GlobalVariable(ctx.module, boxTy, /*isConstant=*/true,
-        llvm::GlobalValue::PrivateLinkage, init, "aiml_strlit");
-    gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
-    // Constant GEP to field 2 (the data) → i8* at offset 8; (data-8) is the {magic,refcount} header.
-    // ConstantExpr form so it needs no builder insert point (literals appear in global initializers too).
-    llvm::Constant* zero = llvm::ConstantInt::get(i32, 0);
-    llvm::Constant* two  = llvm::ConstantInt::get(i32, 2);
-    return llvm::ConstantExpr::getInBoundsGetElementPtr(boxTy, gv, llvm::ArrayRef<llvm::Constant*>{ zero, two });
-}
-
 IRValue* Compiler::visitExpression(Expr* expr) {
     if (auto lit = dynamic_cast<LiteralExpr*>(expr)) return visitLiteral(lit);
     if (auto var = dynamic_cast<VariableExpr*>(expr)) return visitVariable(var);
@@ -246,7 +219,7 @@ IRValue* Compiler::visitLiteral(LiteralExpr* lit) {
                 }
             }
         }
-        return ctx.ir_gen->wrap(emitImmortalStringLiteral(ctx, lit->value));
+        return ctx.ir_gen->createGlobalStringPtr(lit->value);
     } else if (lit->type == "bool") {
         return ctx.ir_gen->getInt32(lit->value == "true" ? 1 : 0);
     } else if (lit->type == "null") {
