@@ -978,3 +978,39 @@ Adress-Logs wie ein Double-Free aus — nur der MALLOC_CHECK-Abbruch bzw. valgri
 **Offen:** Leak-Prüfung der Suite via `AIML_MEM_DIFF` (User-Wunsch) — nachdem die Crashes weg sind.
 Perf: die Escape-Deep-Copies laufen nur an Escape-Stellen (Return/Set-from-View/Index-Store), NICHT
 bei jedem read-only View-Zugriff.
+
+# 12. Drops-on-Suite-Härtung: per-Route-Fixes (2026-09-13, Fortsetzung)
+
+Auf User-Wunsch läuft die 9rooms-Suite jetzt drops-on per Default. Sie deckte ~28 Fehler auf; ~18
+davon waren drops-on-SPEZIFISCHE Crashes (rc=139 SIGSEGV / rc=134 double-free; alle grün mit
+drops-off) — die VORBESTEHENDE, nie-gegatete drops-on-Klasse. Kein Wurzel-Fix erreichte alle auf
+einmal; es sind MEHRERE eigenständige Wurzeln. Debug durchweg via `MALLOC_CHECK_=3`+gdb
+(symbolisiert JIT-Funktionen + `ns=__aiml_sernodes_X` nennt das Modell).
+
+Gefixte Wurzeln (alle drops-on-gated):
+- **Value-Model-Write-Back-Klasse** (§11): `store_entry_at`-Self-Alias-Index-Store (Deep-Copy-zuerst-
+  dann-free), Producer-gibt-View-zurück, cascade_class-Box-Drop-Ausschluss. → 7 Tests grün
+  (match_play, creature_costs, creature_ability_reaction, target_soulmage_or_creature,
+  trigger_per_match, mkp_effect_cascade, mkp_multi_trigger).
+- **Model-String-Feld-Default = IMMORTAL "" statt `.rodata`-Literal.** `initClassContainerMembers`
+  setzte unbelegte String-Felder auf `CreateGlobalStringPtr("")` (rodata). aiml_ser_free_decoded
+  decreft beim Drop JEDES String-Feld — decref eines rodata-Literals liest dessen `-8`-Header
+  (Seitenrand-Fault ODER STRN-Magic-False-Positive → `free()` von rodata → SIGSEGV). Fix: neuer
+  `aiml_str_empty()` liefert ein statisches, refcounted "" mit Sentinel-Refcount
+  `AIML_STR_IMMORTAL` (incref/decref no-op, nie freigegeben). `.len`/strlen sehen weiter "".
+  → +5 Tests grün (add_life_clamp, buff_expiry, x_mana_cost, ability_text, cost_processor);
+  enchantment_picker von Crash→Logik-Fail. **12 Crash-Sites gesamt gefixt.**
+
+**Verworfen (net-negativ):** volle Value-Semantik (Deep-Copy von Views bei der Decl). Brach
+9rooms-Logik (enchantment_picker: In-Place-View-Mutation `myc=at(..); apply_buff(myc)` verliert den
+Buff) UND Perf (match_play-Timeout: Deep-Copy in Hot-Loops). 9rooms-Code SETZT auf geteilte
+Views-mit-In-Place-Mutation → echte Value-Semantik erfordert Game-Code-Rewrite. Daher: Views bleiben
+GETEILT, Deep-Copy NUR an echten Escape-Stellen (return/set/idx-store).
+
+**Verbleibende drops-on-Crashes (eigenständige Wurzeln, offen):**
+- `typed_card_persist`: rodata-"" in einem CreatureCard-String-Feld MIT explizitem Default
+  (`m.initValue`-Pfad in initClassContainerMembers, ODER embedded-Model-Feld) — der Immortal-Fix
+  deckt nur `!m.initValue`. Fix-Richtung: String-Literal-Defaults ebenfalls immortal/dup.
+- `card_states`: `list<Buff>`/`list<CardState>`-Element mit GARBAGE-String (nicht rodata — echter
+  Müll-Pointer) → Init-/Korruptions-Wurzel bei list<Model>-Elementen.
+- `any_deck_draw`: C++ `__cxa_throw` → abort (AIML-Exception, KEIN Memory-Crash) — separate Ursache.
