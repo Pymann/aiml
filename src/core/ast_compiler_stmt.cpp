@@ -2287,6 +2287,41 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     }
                 }
             } else {
+                // AIML v2: a refcount-MODEL pointer return must hand the caller an OWNED reference.
+                // A returned OWNED/shared LOCAL is a MOVE — its scope-drop is exempted (retModelAddr)
+                // and its existing ref transfers, so no incref. But a returned BORROW — a parameter
+                // (is_param: no owned ref, no scope-drop to move) or a view (`obj.field` / `at(...)` /
+                // a non-owns-return accessor) — aliases someone else's object, so the caller would get
+                // a ref it doesn't own and its decref-old would free the still-live object (the
+                // CostDraft cascade `return carry`: builder returns its borrowed param, the caller's
+                // `set:[carry, b_x(carry)]` decref'd the aliased old value → free → UAF, caught by
+                // AIML_MODEL_TRACE). Incref the borrow so the returned reference is genuinely owned.
+                if (ctx.lifetimeDropsEnabled && retTy->isPointerTy()
+                    && ctx.isRefcountModel(ctx.currentFunctionReturnType) && raw) {
+                    bool retIsBorrow = false;
+                    Expr* rv = retStmt->value.get();
+                    if (dynamic_cast<AtExpr*>(rv)) {
+                        retIsBorrow = true;
+                    } else if (auto* ve = dynamic_cast<VariableExpr*>(rv)) {
+                        if (ve->name.find('.') != std::string::npos || ve->name.find('<') != std::string::npos)
+                            retIsBorrow = true;                       // member/field view
+                        else if (Symbol* rsym = resolveVariable(ve->name))
+                            retIsBorrow = rsym->is_param;             // borrowed parameter (no owned ref)
+                    } else if (auto* ce = dynamic_cast<CallExpr*>(rv)) {
+                        const std::string& fn = ce->functionName; size_t dp = fn.rfind('.');
+                        std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                        if ((sn == "at" || sn == "get" || sn == "first" || sn == "last")
+                            && !ctx.ownsReturnMatches(sn, ctx.currentFunctionReturnType))
+                            retIsBorrow = true;                       // container accessor (shared view)
+                    }
+                    if (retIsBorrow) {
+                        auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                        llvm::Value* incObj = (raw->getType() == i8p) ? raw
+                                              : ctx.builder.CreateBitCast(raw, i8p, "ret_incref_cast");
+                        llvm::Function* inc = ctx.getFunction("aiml_model_incref", ctx.builder.getVoidTy(), {i8p});
+                        ctx.builder.CreateCall(inc, { incObj });
+                    }
+                }
                 raw = apply_decorators(raw);
                 ctx.ir_gen->createRet(ctx.ir_gen->wrap(raw));
             }

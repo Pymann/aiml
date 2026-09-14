@@ -1,5 +1,6 @@
 #include "string_runtime.h"
 #include "mem_diff_runtime.h"   // AIML_MEM_DIFF leaf-allocation tracking (no-op when disabled)
+#include "log_runtime.h"        // AIML_MODEL_TRACE diagnostic ring (no-op when disabled)
 #include <cstring>
 #include <cstdlib>
 #include <cctype>
@@ -165,6 +166,7 @@ extern "C" void aiml_list_free(void* list_ptr, int32_t elemKind,
     } else if (elemKind == 3 && serNodes) {
         // AIML v2 P3: elements are %M* references — decref each (order-independent, frees at 0).
         char** elems = reinterpret_cast<char**>(lst->data);
+        aiml_trace_record("list_free3", list_ptr, (unsigned long)lst->data, (unsigned long)lst->size, "elemK3");
         for (int32_t i = 0; i < lst->size; ++i)
             if (elems[i]) aiml_model_decref(elems[i], serNodes, serNodesCount);
     }
@@ -207,6 +209,7 @@ extern "C" void aiml_map_free(void* map_ptr, int32_t keyKind, int64_t keyStride,
             } else if (valKind == 3 && valBase && valNodes) {
                 // AIML v2 P3: map<K:Model> value is a %M* reference — decref it.
                 char* v = *reinterpret_cast<char**>(valBase + (int64_t)i * valStride);
+                aiml_trace_record("map_free3", map_ptr, (unsigned long)v, (unsigned long)i, "valK3");
                 if (v) aiml_model_decref(v, valNodes, valNodesCount);
             }
         }
