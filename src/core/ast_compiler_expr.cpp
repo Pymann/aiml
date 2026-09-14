@@ -811,6 +811,15 @@ IRValue* Compiler::visitUnary(UnaryExpr* unary) {
         std::string lvTy;
         IRValue* alloca = emitLValueAddress(unary->operand.get(), lvTy);
         if (!alloca) { LOG_ERROR(ctx.fmtLoc(unary->sourceNode) + "Unary '&': operand must be an addressable lvalue (variable or member-access)"); return nullptr; }
+        // AIML v2: `&x` where x is a refcount-MODEL lvalue — the slot already holds a %M* reference,
+        // so `&x` (a ptr<M> for the callee to mutate through) is that STORED pointer, NOT the address
+        // of the slot (%M**). Load it. Under v1 (isRefcountModel=false) the slot IS the struct →
+        // its address is the ptr<M>, unchanged.
+        if (unary->op == "&" && ctx.isRefcountModel(lvTy)) {
+            auto* i8p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(i8p, slot, "amp_refmodel"));
+        }
         if (unary->op == "&") {
             return alloca; // pointer to x
         }
