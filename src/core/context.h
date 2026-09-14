@@ -689,6 +689,22 @@ namespace AIML {
         return currentNamespace + "." + name;
     }
 
+    // AIML v2 (doc/aiml_v2_impl_plan.md): is `typeName` a model that uses reference semantics —
+    // i.e. a refcounted heap object (aiml_model_alloc, %M* everywhere)? True only when the
+    // AIML_MODEL_REFCOUNT flag is ON and the type is a user MODEL with heap fields. A scalar-only
+    // model, a class, an interface, or the flag being OFF all return false → the v1 inline-value
+    // path is used unchanged. This is THE single gate for every v2 model-representation branch, so
+    // that OFF stays byte-for-byte the v1 compiler. `bare` strips a leading ptr<>/ref<> wrapper.
+    bool isRefcountModel(const std::string& typeName) const {
+        if (!modelRefcount) return false;
+        std::string bare = typeName;
+        if ((bare.rfind("ptr<", 0) == 0 || bare.rfind("ref<", 0) == 0) && !bare.empty() && bare.back() == '>')
+            bare = bare.substr(4, bare.size() - 5);
+        auto it = classes.find(bare);
+        return it != classes.end() && it->second.isModel && !it->second.isBuiltin
+               && it->second.hasHeapFields;
+    }
+
     // Helper: Get LLVM Type from string
     llvm::Type* getLLVMType(const std::string& typeName) {
         if (typeName == "" || typeName == "<.balance" || typeName == "${ { +: [a, b] } }") {
