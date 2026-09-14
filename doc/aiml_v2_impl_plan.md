@@ -172,6 +172,28 @@ Then: run the full 9rooms suite with drops-on + refcount-on and watch category-A
   container/temp alloc that skips zero-init. NEXT: audit `list<Model>` slot writes (push/idx grow
   paths) for a slot read before write; or run under `gdb` + a hardware watchpoint on the field; the
   `--clean` binary crashes ~100% so a code-removal (not print-adding) bisect can localize it.
+
+### Heisenbug hunt (2026-09-14, cont.) — narrowed, list-slots RULED OUT, ASan is next
+- The v2 crash is **extremely ASLR/heap-nondeterministic**: the SAME `--clean` binary gave 10/10
+  CRASH in one batch and 30/30 PASS in another. Fresh (zeroed) pages → a null field → `incref`
+  no-op → PASS; reused (dirty) pages → garbage-as-pointer → crash. Every diagnostic MASKS it
+  (`MALLOC_PERTURB_=42`, any added `print`, valgrind, sometimes gdb). Code-removal bisect is also
+  unreliable (it shifts heap). Net: runtime tools cannot pin it.
+- **Probabilistic bisect** pointed at `set:[mst.chosen_iid, ctx.chosen_iid]` in do_deal_damage
+  (ctx.chosen_iid garbage), but `{new: EffectCtx}` init is correct in isolation (5/5), so it is a
+  game-flow corruption, not the constructor.
+- **RULED OUT — uninitialized list slots.** Tried making `ListImpl` zero its capacity (initList
+  calloc + memset the realloc-grown region). It made v2 creature_damage 30/30 PASS **but broke OFF
+  (0/10)** — i.e. it MASKED v2 (heap shift) while breaking the deployed path. REVERTED; OFF back to
+  10/10. So the culprit is NOT a list capacity slot.
+- **NEXT TOOL: AddressSanitizer.** All runtime perturbation masks this; ASan detects the
+  uninitialized/OOB access deterministically regardless of heap luck. Build aiml with
+  `-fsanitize=address` (a build-config change) and run creature_damage under `AIML_MODEL_REFCOUNT=1`
+  — ASan will name the exact alloc + read site. That is the right next step; further blind runtime
+  bisecting is not productive.
+- **STATE: OFF = 10/10 (deployed path solid, verified clean-build); v2 = flaky crash (unfixed).**
+  Committed v2 fixes so far (&-of-model, string-into-model-field incref, set-path gates) are real +
+  OFF-safe and advanced do_deal_damage materially; the remaining heisenbug needs ASan.
 - **DESIGN HAZARD (secondary):** `CompilerContext::isRefcountModel` STRIPS a leading `ptr<`/
   `ref<` wrapper, so `ptr<Model>` and value `Model` are treated identically (both → i8p reference,
   MODL alloc). That conflates an explicit box with a value reference and mishandles
