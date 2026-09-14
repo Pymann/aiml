@@ -1274,6 +1274,19 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          llvm::Type* llvmListElemType = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(listElemName)));
          if (methodName == "push" && argVals.size() > 0) {
              llvm::Value* pushVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+             // AIML v2 P3: a list<Model> stores %M* REFERENCES (stride 8). push increfs the object
+             // and stores the pointer; the source keeps its own reference (share, not move) — the
+             // element's decref (list-free / remove / idx-overwrite) balances this incref. No
+             // deep-copy: the object is shared, in-place mutation is visible through every holder.
+             if (ctx.isRefcountModel(listElemName) && pushVal) {
+                 auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                 llvm::Value* objp = (pushVal->getType() == i8p) ? pushVal
+                                     : ctx.builder.CreateBitCast(pushVal, i8p, "push_modelptr");
+                 llvm::Function* inc = ctx.getFunction("aiml_model_incref", ctx.builder.getVoidTy(), {i8p});
+                 ctx.builder.CreateCall(inc, { objp });
+                 ListImpl::push(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), objp);
+                 return nullptr;
+             }
              // spec/61 §7.0 — VALUE-MODEL element (struct with heap fields): a plain shallow store
              // shares the source model's inner heap. If the source is a MOVABLE owned local (a fresh
              // get_copy/no-init model whose scope-drop is still live), MOVE it (shallow + consume the
@@ -1408,6 +1421,16 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          } else if (methodName == "pop") {
              return ctx.ir_gen->wrap(ListImpl::pop(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), llvmListElemType));
          } else if (methodName == "get" && argVals.size() > 0) {
+             // AIML v2 P3: a list<Model> element is a %M* — LOAD it (stride 8) and return the
+             // reference. It is a pointer-to-struct, the same shape v1's getElementPtr yields for a
+             // struct list, so downstream field access is identical. A borrow — the caller increfs
+             // only if it BINDS the result into a local (visitDeclStmt's at/get share path).
+             if (ctx.isRefcountModel(listElemName)) {
+                 auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                 return ctx.ir_gen->wrap(ListImpl::get(ctx,
+                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
+                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), i8p));
+             }
              // For struct element types, return a pointer (ptr<T>) instead of by-value copy
              if (llvmListElemType->isStructTy()) {
                  return ctx.ir_gen->wrap(ListImpl::getElementPtr(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), llvmListElemType));

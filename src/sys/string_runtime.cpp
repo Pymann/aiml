@@ -147,6 +147,8 @@ extern "C" char* aiml_str_take_local(char** src) {
 // original alloc.  Idempotent: nulls the struct so a double-drop (should not happen
 // given move-detection) is a no-op, not a crash.
 extern "C" void aiml_ser_free_decoded(void* obj, void* nodes, int32_t node_count);
+// AIML v2: decref a %M* reference element/value (frees inner heap + shell at refcount 0).
+extern "C" void aiml_model_decref(void* obj, const void* nodes, int32_t n_nodes);
 extern "C" void aiml_list_free(void* list_ptr, int32_t elemKind,
                                int64_t elemSize, void* serNodes, int32_t serNodesCount) {
     if (!list_ptr) return;
@@ -160,6 +162,11 @@ extern "C" void aiml_list_free(void* list_ptr, int32_t elemKind,
         char* base = reinterpret_cast<char*>(lst->data);
         for (int32_t i = 0; i < lst->size; ++i)
             aiml_ser_free_decoded(base + (int64_t)i * elemSize, serNodes, serNodesCount);
+    } else if (elemKind == 3 && serNodes) {
+        // AIML v2 P3: elements are %M* references — decref each (order-independent, frees at 0).
+        char** elems = reinterpret_cast<char**>(lst->data);
+        for (int32_t i = 0; i < lst->size; ++i)
+            if (elems[i]) aiml_model_decref(elems[i], serNodes, serNodesCount);
     }
     free(lst->data);
     lst->data = nullptr;
@@ -197,6 +204,10 @@ extern "C" void aiml_map_free(void* map_ptr, int32_t keyKind, int64_t keyStride,
                 if (v) aiml_str_decref(v);
             } else if (valKind == 2 && valBase && valNodes) {
                 aiml_ser_free_decoded(valBase + (int64_t)i * valStride, valNodes, valNodesCount);
+            } else if (valKind == 3 && valBase && valNodes) {
+                // AIML v2 P3: map<K:Model> value is a %M* reference — decref it.
+                char* v = *reinterpret_cast<char**>(valBase + (int64_t)i * valStride);
+                if (v) aiml_model_decref(v, valNodes, valNodesCount);
             }
         }
     }

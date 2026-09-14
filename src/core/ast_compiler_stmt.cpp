@@ -422,7 +422,11 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                                dynamic_cast<BufferLiteralExpr*>(decl->initialValue.get());
         if (!decl->initialValue || listLiteralInit) {
             std::string elemName = tName.substr(5, tName.length() - 6);
-            llvm::Type* elemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
+            // AIML v2 P3: a list<Model> stores %M* references (stride 8), so init with a pointer
+            // element type. Otherwise the struct element type (v1 inline-value stride).
+            llvm::Type* elemTy = ctx.isRefcountModel(elemName)
+                ? llvm::PointerType::get(ctx.context, 0)
+                : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
             if (elemTy) ListImpl::initList(ctx, unwrappedAlloca, elemTy, 4);
         }
     } else if (tName.find("cascade<") == 0 && tName.back() == '>') {
@@ -673,6 +677,13 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             sd.kind = 2;
             if (elemName == "string") {
                 sd.elemKind = 1;                       // decref each element char*
+            } else if (ctx.isRefcountModel(elemName)) {
+                // AIML v2 P3: list<Model> stores %M* references → decref each element (elemKind 3).
+                auto ci = ctx.classes.find(elemName);
+                sd.elemKind = 3;
+                sd.serNodes = ci->second.serNodesVar;
+                sd.serNodesCount = ci->second.serNodesCount;
+                sd.elemSize = 8;                       // pointer stride
             } else {
                 // list<Model> whose element type carries heap fields → free each element's
                 // heap (elemKind 2) using the class's serNodes + struct stride. Otherwise a
