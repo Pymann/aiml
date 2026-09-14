@@ -1,0 +1,56 @@
+- model:
+    name: Buff
+    fields:
+      - [label, string]
+      - [power, i32]
+- model:
+    name: Zone
+    fields:
+      - [zid, string]
+      - [buffs, list<Buff>]
+
+- class:
+    name: Store
+    members:
+      - [store, Kv<string:Zone>]
+    methods:
+      - def:
+          name: setup
+          args: [[dir, string]]
+          body:
+            - set: [<.store, { call: [db.open_kv, "v2kvzone", {persist: true, path: dir}] }]
+      - def:
+          name: seed
+          args: [[key, string]]
+          body:
+            - decl: [zone, Zone]
+            - set: [zone.zid, key]
+            - decl: [buff1, Buff]
+            - set: [buff1.label, "haste"]
+            - set: [buff1.power, 7]
+            - call: [zone.buffs.push, buff1]
+            - call: [<.store.set, key, zone]
+      - def:
+          name: check
+          args: [[key, string]]
+          return: i32
+          body:
+            - decl: [got, Zone, { call: [<.store.get_copy, key] }]
+            - if: {condition: {neq: [got.zid, key]}, then: [{print: ["FAIL zid=${got.zid}"]}, {return: 1}]}
+            - if: {condition: {neq: [got.buffs.len, 1]}, then: [{print: ["FAIL buffs.len=${got.buffs.len}"]}, {return: 1}]}
+            - decl: [gotBuff, Buff, {at: [got.buffs, 0]}]
+            - if: {condition: {neq: [gotBuff.label, "haste"]}, then: [{print: ["FAIL label=${gotBuff.label}"]}, {return: 1}]}
+            - if: {condition: {neq: [gotBuff.power, 7]}, then: [{print: ["FAIL power=${gotBuff.power}"]}, {return: 1}]}
+            - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [svc, Store]
+      - call: [svc.setup, "/tmp/v2kvzone/"]
+      - call: [svc.seed, "zone1"]
+      - decl: [rcode, i32, {call: [svc.check, "zone1"]}]
+      - if: {condition: {neq: [rcode, 0]}, then: [{call: [sys.exit, 1]}]}
+      - print: ["PASS KV round-trip nested list<Model>: encode(set)+decode(get_copy) intact"]
+      - return: 0
