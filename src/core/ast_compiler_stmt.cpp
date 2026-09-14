@@ -1382,8 +1382,12 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         // (the 9rooms drive_ai_combat ZoneEntry double-free). Gated to sharing-view sources only:
         // a producer/owns-return call returns an already-independent owned temp (MOVE — deep-copying
         // it would leak the temp), and a same-type owned local is handled by the §4.2 block above.
+        // AIML v2: a refcount-model local is a %M* reference — the v1 set-view DEEP-COPY (into an
+        // inline struct slot) is wrong here (it would write a full struct into the 8-byte pointer
+        // slot). The v2 rebind branch below (incref-new/decref-old, store the %M*) handles it.
         if (propName.empty() && !isDash && ctx.lifetimeDropsEnabled
-            && !sym->is_global && !sym->is_byref_arg && !sym->is_const && !ctx.kvGetCopy) {
+            && !sym->is_global && !sym->is_byref_arg && !sym->is_const && !ctx.kvGetCopy
+            && !ctx.isRefcountModel(sym->typeName)) {
             auto tciView = ctx.classes.find(sym->typeName);
             if (tciView != ctx.classes.end() && tciView->second.hasHeapFields
                 && tciView->second.serNodesVar && tciView->second.type) {
@@ -1485,8 +1489,12 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         // doc/issue/kv_get_mutate_set_same_key_crash.md). visitDeclStmt has the
         // same logic for decl-with-init; this branch handles `set: [exp, kv.get_copy(...)]`
         // where exp was declared earlier without an initializer.
+        // AIML v2: a refcount-model target is a %M* slot, NOT an inline struct — a struct memcpy
+        // here would write the struct's bytes into the 8-byte pointer slot (storing the first field
+        // as the "pointer"). The v2 rebind branch below stores the %M* reference instead.
         auto classIt = ctx.classes.find(sym->typeName);
-        if (classIt != ctx.classes.end() && !classIt->second.isBuiltin && classIt->second.type) {
+        if (classIt != ctx.classes.end() && !classIt->second.isBuiltin && classIt->second.type
+            && !ctx.isRefcountModel(sym->typeName)) {
             llvm::StructType* structTy = classIt->second.type;
             uint64_t structSize = ctx.module.getDataLayout().getTypeAllocSize(structTy);
             llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
