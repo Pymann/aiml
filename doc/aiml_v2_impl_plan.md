@@ -118,6 +118,24 @@ best driven by the `MALLOC_CHECK_=3` + gdb + `ns=__aiml_sernodes_X` recipe to pi
 - **`list.remove`/`first`/`last`/`contains`**, **map local scope-drop**.
 Then: run the full 9rooms suite with drops-on + refcount-on and watch category-A crashes go to 0.
 
+### Integration findings (2026-09-14, from `test_creature_damage` under v2)
+- **DONE:** rebind + member-store of models (P5b) — `set:[local,m]` / `set:[parent.model_field,m]`
+  incref-new/decref-old; class-method ABI signatures; game compiles under v2.
+- **CURRENT CRASH:** `do_deal_damage` (effect_handlers.aiml:670) `set:[mst.ctrl_player_id,
+  ctrl.player_id]` → `aiml_str_incref` on ASCII bytes (a string read as a pointer). `ctrl =
+  at(mat.players, ctx.source_owner_idx)`; either the index (read from `ctx: ptr<EffectCtx>`) or the
+  fetched `%PlayerState*` is garbage → a layout/offset mismatch somewhere in the
+  MatchSession/EffectCtx/PlayerState graph as built-vs-read under v2. Needs the
+  `MALLOC_CHECK_=3`+gdb+`ns=__aiml_sernodes_X` recipe to trace which model is mis-laid-out.
+- **DESIGN HAZARD to resolve first:** `CompilerContext::isRefcountModel` STRIPS a leading `ptr<`/
+  `ref<` wrapper, so `ptr<Model>` and value `Model` are treated identically (both → i8p reference,
+  MODL alloc). That conflates an explicit box with a value reference and mishandles
+  `list<ptr<Model>>` / `ptr<Model>` boxes (e.g. a `ptr<M>` decl's `ci=classes.find("ptr<M>")` misses
+  → no scope-decref registered → leak; a box-drop kind-4 `free(obj)` on a MODL frees `obj` not
+  `obj-8`). Decide `ptr<Model>` semantics under v2 (likely: do NOT strip — `ptr<Model>` stays an
+  explicit borrow/box, only bare `Model` is the refcounted value) BEFORE chasing the crash, since it
+  shapes the fix. 9rooms uses `ptr<Model>` pervasively (services, `<`-self-pointer, get_base).
+
 - [ ] **P7. `at_copy` / `copy(x)` builtins.** Opt-in deep copy (alloc + `aiml_ser_deep_copy`). Also
       useful under v1, so can land independently and early if wanted.
 - [ ] **P8. Weak back-refs.** Mutual/back-ref `ptr<>` fields default weak (no incref/decref) or
