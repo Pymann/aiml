@@ -1929,11 +1929,18 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         if (ee != retPlan->earlyExits.end()) retExit = &ee->second;
     }
     OwnershipId retBaseId = NoOwnership;
+    // AIML v2 (P4): `return <model_local>` is a MOVE — the callee hands its reference to the caller,
+    // so the returned model's kind-7 decref must NOT fire on the return path. Record its alloca.
+    llvm::Value* retModelAddr = nullptr;
     if (auto* rv = dynamic_cast<VariableExpr*>(retStmt->value.get())) {
         std::string base = rv->name;
         size_t dot = base.find('.');
         if (dot != std::string::npos) base = base.substr(0, dot);   // `x.field` → exempt owner x
-        if (Symbol* bs = resolveVariable(base)) retBaseId = bs->ownershipId;
+        if (Symbol* bs = resolveVariable(base)) {
+            retBaseId = bs->ownershipId;
+            if (dot == std::string::npos && ctx.isRefcountModel(bs->typeName) && bs->ir_alloca_inst)
+                retModelAddr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bs->ir_alloca_inst));
+        }
     }
     // Only alias-safe return shapes may run the cleanup; otherwise the returned value's
     // provenance is unclear, so the return path is left leaking (under-drop, safe):
@@ -1948,7 +1955,9 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         if (it != retExit->slots.end() && it->second.origin == AIML::AST::Origin::Owned)
             retBaseOwned = true;
     }
-    bool safeToCleanup = (retTy && retTy->isVoidTy()) || retScalar || retBaseOwned;
+    // AIML v2 (P4): returning a refcount model is alias-safe to clean up — the returned object is
+    // exempted by retModelAddr (a move), and every other local's kind-7 decref is order-independent.
+    bool safeToCleanup = (retTy && retTy->isVoidTy()) || retScalar || retBaseOwned || (retModelAddr != nullptr);
     // spec/61 §6.2 (T1): the returned value only aliases the owner's heap when the return TYPE is a
     // pointer/struct (`return x.field` handing out x's sub-heap). For a SCALAR/void return the value
     // is a copy that cannot alias — e.g. `return str_local.len` yields an i32 — so the owner must NOT
@@ -1967,7 +1976,11 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                 // AIML v2: a refcount MODEL decref (kind 7) is order-independent and always safe
                 // (freed only at 0), so it is NOT mayDrop-gated — emit on every return path unless
                 // this model is the value being returned (the retBaseId exemption above = a move).
-                if (it->kind == 7) { emitScopeDrop(ctx, *it); continue; }
+                if (it->kind == 7) {
+                    if (retModelAddr && it->addr == retModelAddr) continue;  // moved-out: caller takes the ref
+                    emitScopeDrop(ctx, *it);
+                    continue;
+                }
                 if (!retPlan || !retExit) continue;   // v1 drops need the ownership plan
                 if (mayDrop(*retPlan, *retExit, it->ownershipId))
                     emitScopeDrop(ctx, *it);
