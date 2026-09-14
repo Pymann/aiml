@@ -1780,6 +1780,26 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         ctx.builder.CreateCall(inc, { sv });
                     }
                 }
+                // spec/61 §7.0: a bare string LITERAL source is a raw .rodata pointer (no refcount
+                // header). Stored into a model string field, aiml_ser_free_decoded later decref's it →
+                // reads the byte at `-8` → segfault (test_any_deck_draw / on_death_zone_fallback /
+                // listptr_inplace_kv). Dup it into a refcounted, decref-safe buffer so the member owns
+                // an independent reference (mirrors coerceOrStoreFieldDefault's default-init dup). Only
+                // the bare literal needs this: interpolation / call-result temps are already owned
+                // refcounted strings that TRANSFER their single ref, and a VariableExpr source is
+                // incref'd above. Drops-on only — drops-off never frees the field, so no dup is needed.
+                if (ctx.lifetimeDropsEnabled && finalTypeName == "string") {
+                    if (auto* lit = dynamic_cast<LiteralExpr*>(setStmt->value.get())) {
+                        if (lit->type == "string") {
+                            llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                            if (sv && sv->getType()->isPointerTy()) {
+                                llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+                                llvm::Function* dupFn = ctx.getFunction("aiml_str_dup", i8p, {i8p});
+                                val = ctx.ir_gen->wrap(ctx.builder.CreateCall(dupFn, { sv }, "str_lit_member_dup"));
+                            }
+                        }
+                    }
+                }
                 ctx.ir_gen->createStore(val, targetGep);
                 return;
             }
