@@ -334,7 +334,25 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             }
             IRValue* initV = visitExpression(iv);
             objPtr = initV ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initV)) : nullptr;
-            if (objPtr && shareIncref) {
+            if (objPtr && ctx.kvGetCalled && ci != ctx.classes.end() && ci->second.serNodesVar) {
+                // AIML v2 P6b: kv.get/get_copy returns a pointer into the runtime's DECODE CACHE
+                // (a plain struct buffer the runtime owns — NOT a MODL). Deep-copy it into a fresh
+                // refcounted MODL shell so this local owns a decref-safe, independent reference.
+                uint64_t allocSize = (ci->second.padded_size > 0)
+                    ? (uint64_t)ci->second.padded_size
+                    : ctx.module.getDataLayout().getTypeAllocSize(ci->second.type);
+                llvm::Function* allocFn = ctx.getFunction("aiml_model_alloc", i8p, { ctx.getSizeType() });
+                llvm::Value* newObj = ctx.builder.CreateCall(allocFn, { ctx.getSizeConst(allocSize) }, "kv_model_alloc");
+                llvm::Type* ptrT = llvm::PointerType::get(ctx.context, 0);
+                llvm::Function* dcp = ctx.getFunction("aiml_ser_deep_copy",
+                    ctx.builder.getVoidTy(), {ptrT, ptrT, ptrT, ctx.builder.getInt32Ty()});
+                ctx.builder.CreateCall(dcp, { newObj, objPtr,
+                    static_cast<llvm::Value*>(ci->second.serNodesVar),
+                    ctx.builder.getInt32(ci->second.serNodesCount) });
+                objPtr = newObj;
+                shareIncref = false;   // owned fresh MODL — no incref (move)
+                ctx.kvGetCalled = false; ctx.kvGetCopy = false;
+            } else if (objPtr && shareIncref) {
                 llvm::Function* inc = ctx.getFunction("aiml_model_incref", ctx.builder.getVoidTy(), {i8p});
                 ctx.builder.CreateCall(inc, { objPtr });
             }
