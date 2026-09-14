@@ -127,7 +127,19 @@ Then: run the full 9rooms suite with drops-on + refcount-on and watch category-A
   fetched `%PlayerState*` is garbage → a layout/offset mismatch somewhere in the
   MatchSession/EffectCtx/PlayerState graph as built-vs-read under v2. Needs the
   `MALLOC_CHECK_=3`+gdb+`ns=__aiml_sernodes_X` recipe to trace which model is mis-laid-out.
-- **DESIGN HAZARD to resolve first:** `CompilerContext::isRefcountModel` STRIPS a leading `ptr<`/
+- **PINPOINTED (2026-09-14, aiml -r source-instrumentation):** the crash is NOT the ptr<> strip —
+  `mat:ptr<MatchSession>` / `ctx:ptr<EffectCtx>` args work (do_deal_damage read `ctrl.player_id="me"`,
+  `opp.player_id="opp"`, `ctx.source_owner_idx=0`, `players.len=2` all correctly). It crashes at
+  `fxp.find_creature_zone(mat, ctx.source_iid)` → `locate_in_combat` iterating **`combat_zones`, a
+  `list<list<ZoneEntry>>`** (nested containers of a refcount model) → `aiml_str_incref` on ASCII
+  bytes = a `ZoneEntry` string field read at a wrong offset / a garbage element. **Next: fix
+  nested-container-of-models (`list<list<Model>>`).** The outer `list<list<ZoneEntry>>` stores inline
+  SerList structs (esz=serListHeaderSize); each inner `list<ZoneEntry>` stores `%ZoneEntry*` (esz=8,
+  MODEL elem). Suspect: the inner-list VIEW obtained via `at(combat_zones,i)` + push/idx-writeback
+  (store_entry_at/load_entry_at helpers) doesn't round-trip the `%ZoneEntry*` elements correctly, or
+  a ZoneEntry was pushed as an inline struct somewhere. Add a `list<list<Model>>` probe first, then
+  fix. (The ptr<> strip is still worth cleaning up but is NOT this crash.)
+- **DESIGN HAZARD (secondary):** `CompilerContext::isRefcountModel` STRIPS a leading `ptr<`/
   `ref<` wrapper, so `ptr<Model>` and value `Model` are treated identically (both → i8p reference,
   MODL alloc). That conflates an explicit box with a value reference and mishandles
   `list<ptr<Model>>` / `ptr<Model>` boxes (e.g. a `ptr<M>` decl's `ci=classes.find("ptr<M>")` misses
