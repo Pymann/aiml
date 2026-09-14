@@ -3576,9 +3576,11 @@ void Compiler::registerTypeDecl(Node* node) {
                 std::vector<llvm::Type*> paramTys;
                 paramTys.push_back(i8p);   /* implicit this */
                 for (const auto& arg : method->args) {
+                    // AIML v2 P4: refcount-MODEL arg is by-ref (%M*), like list/map. MUST match
+                    // the method definition (visitFunction) or signatures mismatch at the call.
                     bool byref = (arg.second.rfind("list<", 0) == 0 ||
                                   arg.second.rfind("map<",  0) == 0);
-                    if (byref) { paramTys.push_back(i8p); continue; }
+                    if (byref || ctx.isRefcountModel(arg.second)) { paramTys.push_back(i8p); continue; }
                     IRType* irt = ctx.ir_gen->resolveType(arg.second);
                     llvm::Type* t = irt
                         ? static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(irt))
@@ -3588,6 +3590,8 @@ void Compiler::registerTypeDecl(Node* node) {
                 llvm::Type* retTy = nullptr;
                 if (method->returnType.empty() || method->returnType == "void") {
                     retTy = llvm::Type::getVoidTy(ctx.context);
+                } else if (ctx.isRefcountModel(method->returnType)) {
+                    retTy = i8p;   // AIML v2 P4: refcount-model return = %M* pointer
                 } else {
                     IRType* irt = ctx.ir_gen->resolveType(method->returnType);
                     retTy = irt
