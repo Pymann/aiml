@@ -66,3 +66,22 @@ extern "C" uint32_t aiml_model_refcount(const void* obj) {
     if (hdr->magic != AIML_MODEL_MAGIC) return 0;
     return hdr->refcount;
 }
+
+extern "C" int aiml_model_dec_hits_zero(void* obj) {
+    if (!obj || (uintptr_t)obj < sizeof(AimlModelHeader)) return 0;
+    AimlModelHeader* hdr = (AimlModelHeader*)((char*)obj - sizeof(AimlModelHeader));
+    if (hdr->magic != AIML_MODEL_MAGIC) return 0;   // stack model / borrowed view — nothing to free
+    if (hdr->refcount <= 1) {
+        hdr->magic = 0;   // poison now; the caller frees the inner heap then the shell
+        return 1;
+    }
+    hdr->refcount--;
+    return 0;
+}
+
+extern "C" void aiml_model_free_shell(void* obj) {
+    if (!obj || (uintptr_t)obj < sizeof(AimlModelHeader)) return;
+    void* base = (char*)obj - sizeof(AimlModelHeader);
+    aiml_memdiff_forget(obj);
+    free(base);
+}

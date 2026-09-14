@@ -1,5 +1,6 @@
 #include "ser_runtime.h"
 #include "string_runtime.h"
+#include "model_runtime.h"   // AIML v2: aiml_model_alloc / dec_hits_zero / free_shell (AIML_TD_MODEL)
 #include <cstring>
 #include <cstdlib>
 #include <vector>
@@ -68,6 +69,7 @@ static void aiml_ser_fp_walk(const AimlTypeNode* nodes, int32_t n,
         case AIML_TD_LIST:
         case AIML_TD_BUFFER:
         case AIML_TD_PTR_STRUCT:
+        case AIML_TD_MODEL:
             aiml_ser_fp_walk(nodes, n, nd.param1, h, depth + 1);
             break;
         case AIML_TD_MAP:
@@ -290,9 +292,11 @@ static void enc(std::vector<uint8_t>& buf,
         w_raw(buf, data, (size_t)n.param1);
         break;
 
-    case AIML_TD_PTR_STRUCT: {
+    case AIML_TD_PTR_STRUCT:
+    case AIML_TD_MODEL: {
         // `data` points at the pointer slot in the parent.  Follow it; if
         // null, write a 0 marker; else write 1 + the inner struct bytes.
+        // (MODEL shares the wire format with PTR_STRUCT — only alloc/free differ on decode.)
         const void* obj = nullptr;
         memcpy(&obj, data, sizeof(void*));
         if (!obj) {
@@ -472,16 +476,19 @@ static void dec(const uint8_t* blob, int& pos, int end,
         }
         break;
 
-    case AIML_TD_PTR_STRUCT: {
-        // Read marker byte.  0 → store null pointer.  1 → calloc inner
-        // struct, decode subtree into it, store pointer in slot.
+    case AIML_TD_PTR_STRUCT:
+    case AIML_TD_MODEL: {
+        // Read marker byte.  0 → store null pointer.  1 → allocate the inner struct, decode the
+        // subtree into it, store the pointer in the slot. PTR_STRUCT calloc's a plain heap struct;
+        // AIML_TD_MODEL allocates a refcounted MODL shell (header + refcount 1) so the decoded
+        // reference is lifetime-managed like every other v2 model.
         uint8_t marker = 0;
         if (pos < end) { marker = blob[pos++]; }
         else { g_dec_error = true; }   // missing marker byte = truncation, not valid null (P0.2)
         void* obj = nullptr;
         if (marker != 0) {
             size_t inner_sz = (size_t)(n.elem_size > 0 ? n.elem_size : (int32_t)sizeof(void*));
-            obj = calloc(1, inner_sz);
+            obj = (n.kind == AIML_TD_MODEL) ? aiml_model_alloc(inner_sz) : calloc(1, inner_sz);
             if (obj) {
                 dec(blob, pos, end, n.param1, ns, nn, (uint8_t*)obj);
             }
@@ -591,6 +598,22 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         break;
     }
 
+    case AIML_TD_MODEL: {
+        // AIML v2: a refcounted MODEL reference. Decref; only when it hits 0 do we free the inner
+        // heap (fre at the struct subtree n.param1 — NOT node 0, so aiml_model_decref cannot be
+        // used here) and the shell. A shared reference (refcount>1) is just decremented. The slot is
+        // nulled so a second free is a null no-op.
+        void* obj = nullptr;
+        memcpy(&obj, data, sizeof(void*));
+        if (obj && aiml_model_dec_hits_zero(obj)) {
+            fre(n.param1, ns, nn, (uint8_t*)obj);
+            aiml_model_free_shell(obj);
+        }
+        obj = nullptr;
+        memcpy(data, &obj, sizeof(void*));
+        break;
+    }
+
     // I8/I16/I32/I64/RAWBYTES — no heap allocations
     default:
         break;
@@ -664,10 +687,11 @@ static void dump_walk(const uint8_t* data, int idx, const AimlTypeNode* ns, int 
     case AIML_TD_MAP:    { const SerMap*    m = (const SerMap*)data;    fprintf(stderr, "%smap count=%d\n", ind, m->size); break; }
     case AIML_TD_BUFFER: { const SerBuffer* b = (const SerBuffer*)data; fprintf(stderr, "%sbuffer size=%d\n", ind, b->size); break; }
     case AIML_TD_RAWBYTES: fprintf(stderr, "%sraw %d bytes\n", ind, n.param1); break;
-    case AIML_TD_PTR_STRUCT: {
+    case AIML_TD_PTR_STRUCT:
+    case AIML_TD_MODEL: {
         const void* obj = nullptr; memcpy(&obj, data, sizeof(void*));
         if (!obj) { fprintf(stderr, "%sptr=NULL\n", ind); break; }
-        fprintf(stderr, "%sptr-> ", ind);
+        fprintf(stderr, "%s%s-> ", ind, n.kind == AIML_TD_MODEL ? "model" : "ptr");
         dump_walk((const uint8_t*)obj, n.param1, ns, nn, depth + 1);
         break;
     }

@@ -46,4 +46,17 @@ void  aiml_model_decref(void* obj, const void* nodes, int32_t n_nodes);
 // allocation. Diagnostics + sanitizer probes only.
 uint32_t aiml_model_refcount(const void* obj);
 
+// Split decref for the serializer's nested-field path (aiml_ser_free_decoded / fre), where the
+// inner struct's field descriptors start at a subtree index — NOT at node 0 — so the caller must
+// free the inner heap itself (fre at that subtree) and cannot use aiml_model_decref (which assumes
+// nodes[0] is the struct root). Protocol:
+//   if (obj && aiml_model_dec_hits_zero(obj)) { <free inner heap>; aiml_model_free_shell(obj); }
+// aiml_model_dec_hits_zero: magic-guarded; decrements the refcount; returns 1 iff it reached 0
+//   (poisoning the header so a later access traps) — the caller then frees the inner heap + shell;
+//   returns 0 otherwise (still referenced) or for a non-MODL/null pointer (nothing to free).
+int  aiml_model_dec_hits_zero(void* obj);
+// aiml_model_free_shell: free()s the allocation (header + struct). Call ONLY after
+// aiml_model_dec_hits_zero returned 1 and the inner heap has been freed.
+void aiml_model_free_shell(void* obj);
+
 } // extern "C"
