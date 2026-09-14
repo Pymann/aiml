@@ -152,6 +152,26 @@ Then: run the full 9rooms suite with drops-on + refcount-on and watch category-A
 - **LESSON:** an incremental `exodus build` can leave a STALE binary that crashes; a spurious "OFF
   regression" vanished after a CLEAN rebuild. Always clean-rebuild before concluding an OFF
   regression. OFF confirmed unbroken at HEAD (creature_damage PASS 3/3, pristine env).
+
+### Integration state — HONEST (2026-09-14, clean builds only)
+- **CORRECTION:** an earlier note claimed `test_creature_damage` PASSED under v2 3/3 — that was a
+  STALE INCREMENTAL build. On a **`--clean` build the truth is: OFF = 10/10 PASS (deployed path
+  solid), v2 = 0/10 PASS (consistent crash).** ALWAYS build with `--clean` when a header
+  (`context.h`) changed — the incremental binary genuinely differed (OFF/v2 results inverted between
+  incremental and clean of the same source; treat only `--clean` results as real).
+- **Two real v2 fixes landed (both `--clean`-verified OFF-safe, gated):** `&model_local` → pass the
+  `%M*` not `%M**` (fill_owner_zone) [69…]; incref a borrowed string stored into a refcount-model
+  field so the parent's decref doesn't free it out from under the source [8d6ab0c]. These advanced
+  do_deal_damage from crashing at fill_owner_zone → past all its string sets.
+- **REMAINING v2 crash — a HEISENBUG:** `do_deal_damage` still SIGSEGVs in `aiml_str_incref` on
+  uninitialized bytes. It is an **uninitialized malloc'd field read as a string pointer**:
+  `MALLOC_PERTURB_=42` makes it PASS, adding any `print` (heap alloc) makes it PASS, and valgrind
+  reports 0 errors (its allocator masks it). Since `aiml_model_alloc` memsets 0, the culprit is a
+  **non-zeroed malloc** — prime suspect: a `list<Model>` element slot left uninitialized (ListImpl
+  realloc does not zero new capacity; some read/write-back idiom exposes a slot ≥ old size), or a
+  container/temp alloc that skips zero-init. NEXT: audit `list<Model>` slot writes (push/idx grow
+  paths) for a slot read before write; or run under `gdb` + a hardware watchpoint on the field; the
+  `--clean` binary crashes ~100% so a code-removal (not print-adding) bisect can localize it.
 - **DESIGN HAZARD (secondary):** `CompilerContext::isRefcountModel` STRIPS a leading `ptr<`/
   `ref<` wrapper, so `ptr<Model>` and value `Model` are treated identically (both → i8p reference,
   MODL alloc). That conflates an explicit box with a value reference and mishandles
