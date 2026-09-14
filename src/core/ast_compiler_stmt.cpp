@@ -1967,9 +1967,15 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 // spec/61 §7: a managed string LOCAL source is copied into the member (its consume was
                 // skipped, so it stays owned) → the member needs its own incref'd ref, regardless of
                 // memberDeepCopy. The existing memberDeepCopy case covers borrowed member/param sources.
+                // AIML v2: a refcount-model PARENT always deep-frees its string fields at its kind-7
+                // decref, so a borrowed (VariableExpr) string stored into one MUST be incref'd —
+                // regardless of the v1 memberDeepCopy analysis (which does not always flag it). Else
+                // the parent's decref frees a string still owned elsewhere (the do_deal_damage
+                // `mst.source_iid = ctx.source_iid` premature-free: mst's decref freed ctx's iid, so
+                // the next effect's read saw garbage). OFF: isRefcountModel=false → v1 condition.
                 if (finalTypeName == "string"
                     && dynamic_cast<VariableExpr*>(setStmt->value.get())
-                    && (memberDeepCopy || srcIsManagedString)) {
+                    && (memberDeepCopy || srcIsManagedString || ctx.isRefcountModel(sym->typeName))) {
                     llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
                     if (sv && sv->getType()->isPointerTy()) {
                         llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
