@@ -83,10 +83,18 @@ gating a different config than shipped (`feedback_broad_codegen_full_suite_gate`
       emitted unconditionally on block-exit AND return paths (a decref is always safe, never
       mayDrop-gated), except the moved-out returned object. **Rebind (`set:[local, other_model]`)
       decref-old/incref-new not yet done.**
-- [ ] **P6. Ser/deser/KV.** `aiml_ser_decode` allocates nested/element models via `aiml_model_alloc`
-      and stores `%M*`; `aiml_ser_free_decoded` decrefs them; encode follows the pointer. `kv.get` =
-      shared ref (incref), `kv.get_copy` stays deep. Wire format on disk/wire is UNCHANGED (still the
-      flat encoding) — only the in-memory decoded shape changes.
+- [x] **P6. Ser/deser (core) — nested + element models.** `AIML_TD_MODEL` (kind 11) descriptor:
+      encode follows the `%M*` (marker + struct bytes, wire UNCHANGED); decode allocates the shell via
+      `aiml_model_alloc`; free decrefs (frees inner heap at the subtree index + shell at 0); deep_copy
+      = encode+decode inherits it. serBuildSubtree emits it for a direct model field, `list<Model>`
+      (esz=8) and `map<K:Model>` (vsz=8); struct construction makes a direct model field a `%M*`;
+      initClassContainerMembers inits accordingly. **snShift fixed to shift `AIML_TD_MODEL.param1`**
+      (was the nested-Buff-i32-came-back-0 bug). Verified: `Zone{buffs:list<Buff>}` field push/at +
+      KV round-trip (encode via set / decode via get_copy) value-correct; scope-free valgrind-clean.
+      **REMAINING (P6b): the typed-KV `get`/`get_copy`/`get_copy_at` methods must return/decode into a
+      MODL pointer for a refcount-model value** — today they decode into a struct buffer, so the
+      decl's kind-7 decref of the result reads a non-MODL pointer (a harmless-magic-mismatch but a
+      valgrind Invalid read + the decoded value is not refcount-managed). This is the last KV piece.
 - [ ] **P7. `at_copy` / `copy(x)` builtins.** Opt-in deep copy (alloc + `aiml_ser_deep_copy`). Also
       useful under v1, so can land independently and early if wanted.
 - [ ] **P8. Weak back-refs.** Mutual/back-ref `ptr<>` fields default weak (no incref/decref) or
