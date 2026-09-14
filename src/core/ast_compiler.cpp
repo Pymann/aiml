@@ -2907,7 +2907,8 @@ static AimlTypeNode snShift(AimlTypeNode n, int32_t delta) {
     switch (n.kind) {
         case AIML_TD_LIST:
         case AIML_TD_BUFFER:
-        case AIML_TD_PTR_STRUCT: n.param1 += delta; break;
+        case AIML_TD_PTR_STRUCT:
+        case AIML_TD_MODEL:  n.param1 += delta; break;  // param1 = child index (struct subtree)
         case AIML_TD_MAP:    n.param1 += delta; n.param2 += delta; break;
         case AIML_TD_STRUCT: n.param2 += delta; break; // param1 = n_fields (not an index)
         default: break;
