@@ -347,6 +347,12 @@ namespace AIML {
     // sets this from AIML_LIFETIME_DROPS (unset ⇒ OFF; =1 ⇒ ON; the mem-sanitizer harness sets
     // =1).  Re-enable by default only once the FULL 9rooms suite passes with it on.
     bool lifetimeDropsEnabled = false;
+    // AIML v2 reference-semantics for heap-field models (doc/aiml_v2_memory_model.md +
+    // aiml_v2_impl_plan.md). When ON, a model with heap fields is a refcounted heap object
+    // (aiml_model_alloc/incref/decref); locals/fields/elements hold %M*. DEFAULT OFF (env
+    // AIML_MODEL_REFCOUNT) — the v1 inline-value-model path — until the phased representation
+    // change (P1–P6) lands and the full 9rooms suite is green with it. INERT until then.
+    bool modelRefcount = false;
     std::map<std::string, FunctionInfo> functions;
     // spec/61 return-ownership: ORIGINAL (un-mangled) short names of functions/methods
     // declared `owns_return: true`. Captured at parse-order (before method-name mangling)

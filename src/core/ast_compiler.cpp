@@ -1288,6 +1288,16 @@ void Compiler::compile(Program* prog) {
                                      || s == "false" || s == "FALSE");
     }
 
+    // AIML v2 reference-semantics for heap-field models (doc/aiml_v2_impl_plan.md). DEFAULT OFF
+    // (v1 inline-value-model path). Opt IN with AIML_MODEL_REFCOUNT=1 once P1–P6 land and the full
+    // 9rooms suite is green with it. INERT today — no codegen reads this flag yet.
+    ctx.modelRefcount = false;
+    if (const char* mr = getenv("AIML_MODEL_REFCOUNT")) {
+        std::string s = mr;
+        ctx.modelRefcount = !(s.empty() || s == "0" || s == "off" || s == "OFF"
+                              || s == "false" || s == "FALSE");
+    }
+
     registerBuiltins(ctx);
 
     // Function cascades (spec/57): validate pools/rules (M1/M2), then synthesize the
