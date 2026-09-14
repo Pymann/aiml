@@ -1,0 +1,19 @@
+# v2 refcount-model probe: decl {new} + field read/write auto-deref + scope decref.
+# Run with AIML_MODEL_REFCOUNT=1 AIML_LIFETIME_DROPS=1 (v2 reference semantics).
+- model:
+    name: Thing
+    fields:
+      - [tag, string]
+      - [count, i32]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [thing, Thing, {new: Thing}]
+      - set: [thing.tag, "hit"]
+      - set: [thing.count, 7]
+      - if: {condition: {neq: [thing.tag, "hit"]}, then: [{print: ["FAIL tag=${thing.tag}"]}, {call: [sys.exit, 1]}]}
+      - if: {condition: {neq: [thing.count, 7]}, then: [{print: ["FAIL count=${thing.count}"]}, {call: [sys.exit, 1]}]}
+      - print: ["PASS refmodel decl+field: tag=${thing.tag} count=${thing.count}"]
+      - return: 0
