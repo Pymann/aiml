@@ -2815,6 +2815,15 @@ void Compiler::synthesizeClassGroups(Program* prog) {
 void Compiler::registerTypes(Program* prog) {
     if (!prog) return;
 
+    // AIML v2: registerTypes forward-declares functions (model arg/return signatures depend on
+    // isRefcountModel → ctx.modelRefcount), and it runs BEFORE Compiler::compile() reads the env.
+    // Read the flag here too (idempotent) so forward-decl signatures match the later definitions.
+    if (const char* mr = getenv("AIML_MODEL_REFCOUNT")) {
+        std::string s = mr;
+        ctx.modelRefcount = !(s.empty() || s == "0" || s == "off" || s == "OFF"
+                              || s == "false" || s == "FALSE");
+    }
+
     // Inject built-in enum: MirrorEventType — typed companion to the string
     // `mirror_event.type` field.  `evt.type_enum()` returns this enum so code
     // can `eq: [evt.type_enum(), MirrorEventType.peer_connected]` instead of a
@@ -3937,8 +3946,10 @@ void Compiler::registerTypeDecl(Node* node) {
         std::vector<llvm::Type*> paramTys;
         for (const auto& arg : func->args) {
             // SAME byref policy as visitFunction: list/map args become opaque ptr.
+            // AIML v2 (P4): a refcount MODEL arg is likewise an opaque ptr (%M* by-ref). MUST match
+            // visitFunction's predicate or the definition/forward-decl signatures mismatch.
             bool byref = (arg.second.rfind("list<", 0) == 0 || arg.second.rfind("map<", 0) == 0);
-            if (byref) {
+            if (byref || ctx.isRefcountModel(arg.second)) {
                 paramTys.push_back(i8p);
                 continue;
             }
@@ -3949,6 +3960,8 @@ void Compiler::registerTypeDecl(Node* node) {
         llvm::Type* retTy = nullptr;
         if (func->returnType.empty() || func->returnType == "void")
             retTy = llvm::Type::getVoidTy(ctx.context);
+        else if (ctx.isRefcountModel(func->returnType))
+            retTy = i8p;   // AIML v2 (P4): refcount model return = %M* pointer
         else {
             IRType* irt = ctx.ir_gen->resolveType(func->returnType);
             retTy = irt ? static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(irt)) : i8p;
@@ -4620,6 +4633,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
     std::vector<IRType*> argTypes;
     std::vector<std::string> argNames;
     std::vector<bool>        argIsByref;  // parallel to argTypes; true for list/map args
+    std::vector<bool>        argIsRefModel; // parallel to argTypes; true for v2 refcount-model args
     std::vector<std::string> argLifetimes; // parallel to argNames; spec/61 §3.1 ownership
 
     for (size_t ai = 0; ai < func->args.size(); ++ai) {
@@ -4629,18 +4643,25 @@ void Compiler::visitFunction(FunctionDecl* func) {
         // LLVM-Signatur: opaque pointer statt struct-by-value, damit size++/data-Wachstum
         // zum Caller propagiert.  Forward-decl in registerTypeDecl verwendet die GLEICHE
         // Logik (sonst signature mismatch).  Spec/22_call_semantics.md.
+        // AIML v2 (P4): a refcount MODEL arg is likewise passed by-ref as a %M* (borrow) — the
+        // callee shares the caller's object; in-place mutation is visible to the caller.
         bool byref = (arg.second.rfind("list<", 0) == 0 || arg.second.rfind("map<", 0) == 0);
-        IRType* t = byref ? ctx.ir_gen->getPointerTy() : ctx.ir_gen->resolveType(arg.second);
+        bool refModel = ctx.isRefcountModel(arg.second);
+        IRType* t = (byref || refModel) ? ctx.ir_gen->getPointerTy() : ctx.ir_gen->resolveType(arg.second);
         if (t) {
             argTypes.push_back(t);
             argNames.push_back(arg.first);
             argIsByref.push_back(byref);
+            argIsRefModel.push_back(refModel);
             argLifetimes.push_back(ai < func->argMods.size() ? func->argMods[ai].lifetime : "scope");
         }
     }
-    
+
     IRType* retTy = nullptr;
-    if (!func->returnType.empty()) retTy = ctx.ir_gen->resolveType(func->returnType);
+    // AIML v2 (P4): a refcount MODEL return is a %M* pointer (the callee hands its reference to
+    // the caller). Otherwise resolve the declared type as usual.
+    if (ctx.isRefcountModel(func->returnType)) retTy = ctx.ir_gen->getPointerTy();
+    else if (!func->returnType.empty()) retTy = ctx.ir_gen->resolveType(func->returnType);
     if (!retTy) retTy = ctx.ir_gen->resolveType("void");
     
     // Reuse forward-declared function if it exists (from registerTypeDecl), else create new
@@ -4760,7 +4781,14 @@ void Compiler::visitFunction(FunctionDecl* func) {
                     "adds a second indirection.");
             }
         }
-        if (i < argIsByref.size() && argIsByref[i]) {
+        if (i < argIsRefModel.size() && argIsRefModel[i]) {
+            // AIML v2 (P4): a refcount MODEL arg — the alloca holds a %M* (the caller's shared
+            // object). Give the symbol a POINTER element type so the existing pointer auto-deref
+            // (resolveProperty / resolvePropertyWritePtr: `baseElemTy->isPointer()`) handles field
+            // read AND write — same mechanism as a model local. NOT is_byref_arg (whose deref the
+            // dotted-write lvalue path does not apply). Borrow: no incref/decref for the arg itself.
+            sym.ir_element_type = ctx.ir_gen->getPointerTy();
+        } else if (i < argIsByref.size() && argIsByref[i]) {
             // ir_element_type bleibt die echte struct shape (für member-dispatch),
             // aber alloca hält tatsächlich nur einen pointer.  Method-dispatch
             // muss is_byref_arg checken und einen extra-load machen.
