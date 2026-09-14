@@ -65,21 +65,35 @@ underlying corruption (a workaround, against the root-cause-first preference).
   → abort. Not a free/decref crash; a runtime error in the buff apply path. Needs its own trace
   (independent of the memory model).
 
-### C. Dice-nondeterminism (game-test issue, independent of memory model)
+### C. Dice-nondeterminism (game-test issue, independent of memory model) — RESOLVED
 `roll_soulmage_dmg` draws from `mat.dice_queue` when seeded, else `math.random_int` → flaky.
 Fix = seed `mat.dice_queue` with values whose `die % span` yields the asserted (usually max) result.
+For service-layer e2e tests (match lives in KV, no direct `mat` handle) seed via the
+`matches.inject_dice(match_id, dice)` test-hook (match_service_base.aiml:382).
 
-- **creature_damage**: SEEDED (`mat.dice_queue.push, 2` → soulmage step value 4 → 16). Now largely
-  green (residual flakiness suggests one more draw somewhere — verify draw count/order).
-- **activate_ability** ("bob life pre=30"), **trigger_on_phase_start** ("ali pre life=30"),
-  **match_service**, **reaction_state**: likely the same class — seed their dice_queue per roll.
-- **mana_pick** (rc=4, "drain-submit rc=0 exp 1"): looks like a real logic assertion, not dice.
+- **creature_damage**: SEEDED (`mat.dice_queue.push, 2`) — green.
+- **activate_ability**: SEEDED via `matches.inject_dice` (value 3 → dlo=1, span=3; die 2 → 3 dmg) +
+  the battle-size life fix below. GREEN (commit on 9rooms main, 2026-09-14).
 
-### D. Real logic fails (slow, need per-test debugging — independent of memory model)
-- **auth_e2e_mirror** (rc=1, emits a `[ERROR]` — completes in <240s, not a hang).
-- **mana_pool** (rc=1).
-These finish (the earlier rc=124 was the 60s per-test timeout being too short for e2e) and fail an
-assertion — investigate the specific logic.
+### D. Real logic / setup fails — RESOLVED
+- **activate_ability**, **trigger_on_phase_start**, **match_service**: hard-coded soulmage start
+  life 20; correct value is `soulmage_life_for(skirmish)=30` (battle-size based). Fixed the stale
+  expectations. activate_ability + trigger_on_phase_start GREEN. **match_service** still hits a
+  category-A double-free (`aiml_ser_free_decoded`) under drops-on AFTER the life check passes — the
+  D-part is fixed, the A-crash remains (see below).
+- **mana_pool**: `build_mana_loadout` pushed the SAME mana `card_id` twice into the mana deck, which
+  `deck_service` now rejects ("each card only once", deck_service.aiml:116) → `mana_deck_id` empty →
+  no mana in the initial draw → "trap only in spell or end phase". Fixed: two distinct mana cards +
+  find-mana-in-hand-by-type instead of a fixed index. GREEN.
+- **auth_e2e_mirror**: NOT a logic fail — the test PASSES (register+login+validate), it just takes
+  ~3-4 min (real websocket mirror round-trips) and the 120s per-test timeout scored it a false
+  TIMEOUT (rc=124). Fixed: `run_all_tests.sh` raises the per-test floor to 420s for `*_e2e_mirror`.
+
+**Reclassified to A** (turned out to be memory corruption, not C/D):
+- **reaction_state** (rc=1): "recent_target iid=<garbage> expected v1" — the iid string is garbage
+  bytes (the `list<string>` element-holds-header-bytes corruption class, same as trigger_stage3/4).
+- **mana_pick**: flaky between rc=4 ("drain-submit rc=0 exp 1", a corrupted-value read) and rc=134
+  (abort) — value-model corruption, not a stable logic assertion.
 
 ## Notes for next session
 - Suite runs drops-on by default now (`run_all_tests.sh` exports `AIML_LIFETIME_DROPS=1`).
