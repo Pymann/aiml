@@ -139,6 +139,19 @@ Then: run the full 9rooms suite with drops-on + refcount-on and watch category-A
   (store_entry_at/load_entry_at helpers) doesn't round-trip the `%ZoneEntry*` elements correctly, or
   a ZoneEntry was pushed as an inline struct somewhere. Add a `list<list<Model>>` probe first, then
   fix. (The ptr<> strip is still worth cleaning up but is NOT this crash.)
+- **FIXED (96bdb3f):** `set:[model_local, at(..)/view/deserialized]` hit two v1 value-model set
+  paths (set-view deep-copy + "user struct from i8* → memcpy") that wrote a full struct into the
+  model local's 8-byte `%M*` slot → the local held the first field (a string ptr) as its "value".
+  Both now `isRefcountModel`-gated; the v2 rebind stores the `%M*`. Isolated repro
+  (`set out=at(lez,0)` → `out.iid=cr7`) fixed. The basic `list<list<Model>>` probe already passed.
+- **STILL CRASHING (next):** `test_creature_damage` under v2 still SIGSEGVs in `do_deal_damage` at
+  `aiml_str_incref` on ASCII bytes — a `ModStat` string-member-store (`set:[mst.<str>, src.<str>]`,
+  mst a fresh refcount model) or the `fill_owner_zone(block,&mst)` path reads/writes a `ModStat`
+  string field at a wrong offset (ModStat may have a nested model/list field shifting offsets).
+  Bisect further inside do_deal_damage (665-690) per-line.
+- **LESSON:** an incremental `exodus build` can leave a STALE binary that crashes; a spurious "OFF
+  regression" vanished after a CLEAN rebuild. Always clean-rebuild before concluding an OFF
+  regression. OFF confirmed unbroken at HEAD (creature_damage PASS 3/3, pristine env).
 - **DESIGN HAZARD (secondary):** `CompilerContext::isRefcountModel` STRIPS a leading `ptr<`/
   `ref<` wrapper, so `ptr<Model>` and value `Model` are treated identically (both → i8p reference,
   MODL alloc). That conflates an explicit box with a value reference and mishandles
