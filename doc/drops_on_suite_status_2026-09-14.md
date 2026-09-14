@@ -34,8 +34,20 @@ All are drops-on-gated (drops-off path untouched):
    and hid the regression. The 3 crashes it fixed are the "literal assigned into a model string
    field → decref segv" class; they need a NARROW fix instead (dup the literal only at the
    member-store into a string field), or v2.
+5. **NARROW literal-into-string-field member-store dup** — DONE (2026-09-14, this session). The
+   member-store `set:[model.strfield, "literal"]` stored the raw .rodata pointer; drops-on's
+   aiml_ser_free_decoded then decref'd it → reading `s-8` on a page-aligned literal hits an unmapped
+   page → SIGSEGV. Fix (ast_compiler_stmt.cpp visitSetStmt): a bare string-`LiteralExpr` source into
+   a string field is dup'd into a refcounted buffer before the store, drops-on-gated, mirroring the
+   default-init dup. Narrow (only bare literals; interpolation/call temps transfer their ref,
+   VariableExpr sources are incref'd) → NOT the reverted broad change. **Gated with the full 9rooms
+   suite: +3 fixed (any_deck_draw, listptr_inplace_kv, on_death_zone_fallback), 0 regressions**
+   (target_pause_resume + the e2e_mirror timeouts crash/time-out identically on the pre-change
+   baseline binary). Sanitizer suite green.
 
-Net (after revert): ~12 drops-on crash sites cleared; suite ~125/149 (baseline restored).
+Net (this session): C+D fully resolved (dice-seed + battle-size life + mana-deck-dup + e2e timeout)
+plus the narrow literal-dup. Suite drops-on now **~131/149** (was 126 baseline; 17 fails, 1 skip).
+All 17 remaining fails are category A (value-model shared-heap corruption → v2) or slow e2e (below).
 
 ## Remaining fails — categorized
 
@@ -85,9 +97,26 @@ For service-layer e2e tests (match lives in KV, no direct `mat` handle) seed via
   `deck_service` now rejects ("each card only once", deck_service.aiml:116) → `mana_deck_id` empty →
   no mana in the initial draw → "trap only in spell or end phase". Fixed: two distinct mana cards +
   find-mana-in-hand-by-type instead of a fixed index. GREEN.
-- **auth_e2e_mirror**: NOT a logic fail — the test PASSES (register+login+validate), it just takes
-  ~3-4 min (real websocket mirror round-trips) and the 120s per-test timeout scored it a false
-  TIMEOUT (rc=124). Fixed: `run_all_tests.sh` raises the per-test floor to 420s for `*_e2e_mirror`.
+- **auth_e2e_mirror**, **deck_e2e_mirror**, **play_e2e_mirror**, **game_server_init**: NOT logic
+  fails — each PASSES, but takes >120s (real websocket mirror round-trips / full ServerRuntime init
+  under drops-on) and the default per-test timeout scored them false TIMEOUTs (rc=124). Fixed:
+  `run_all_tests.sh` raises the per-test floor to 420s for these + `*_e2e_mirror`. All verified
+  green at 420s. (match_e2e_mirror is in the list too but crashes early — real category A.)
+
+## Remaining 14 fails — ALL category A (value-model shared-heap corruption → v2)
+
+After C+D + the narrow literal-dup, every remaining drops-on fail is the value-model shared-heap
+corruption class that v2 reference-semantics removes by design (no sharing → no double/garbage free):
+
+  all_in_zone_buff, card_states, ceremony_cost, effect_codes_real, enchantment_picker, mana_pick,
+  match_e2e_mirror, match_service, reaction_state, target_pause_resume, trigger_stage2,
+  trigger_stage3_reaction, trigger_stage4_chain, view_filter.
+
+Crash signatures: SIGSEGV in aiml_str_decref←aiml_ser_free_decoded (garbage/freed string header),
+"corrupted size vs prev_size"/tcache double-free (signal 6), or a garbage value read (mana_pick rc=4,
+reaction_state garbage iid). They do NOT reproduce in isolation (the standalone
+`_mem_sanitize/nested_model_list_deepcopy` probe passes) — they are the deep game-specific
+shared-heap class. Per the root-cause-first preference, these are the v2 work, not more v1 retrofit.
 
 **Reclassified to A** (turned out to be memory corruption, not C/D):
 - **reaction_state** (rc=1): "recent_target iid=<garbage> expected v1" — the iid string is garbage
