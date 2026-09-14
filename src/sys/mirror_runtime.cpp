@@ -17,6 +17,7 @@
 #include "ser_runtime.h"
 #include "ws_runtime.h"
 #include "string_runtime.h"   // aiml_str_dup — refcounted peer-ip return
+#include "log_runtime.h"      // aiml_trace_dump — model-lifetime ring on crash
 #include "time_runtime.h"
 
 #include <cstdlib>
@@ -111,6 +112,11 @@ static void aiml_crash_handler(int sig, siginfo_t* info, void*) {
      * even if symbol resolution itself faults. */
     fsync(STDERR_FILENO);
     backtrace_symbols_fd(bt, cnt, STDERR_FILENO);
+    fsync(STDERR_FILENO);
+    /* AIML_MODEL_TRACE: dump the whole model-lifetime ring so the alloc/free/UAF
+     * history leading to this fault is visible (no-op when tracing is off). Not
+     * strictly async-signal-safe, but the process is already dying. */
+    aiml_trace_dump(nullptr, "SIGSEGV — full model-lifetime ring");
     fsync(STDERR_FILENO);
     struct sigaction sa = {};
     sa.sa_handler = SIG_DFL;
