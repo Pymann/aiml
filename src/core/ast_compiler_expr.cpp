@@ -125,11 +125,23 @@ IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
              llvm::Function::Create(callocType, llvm::Function::ExternalLinkage, "calloc", ctx.module);
         }
 
-        std::vector<IRValue*> callArgs;
-        callArgs.push_back(ctx.ir_gen->wrap(ctx.getSizeConst(1)));
-        callArgs.push_back(ctx.ir_gen->wrap(ctx.getSizeConst(allocSize)));
-        
-        IRValue* rawPtr = ctx.ir_gen->createCall("calloc", callArgs, "calloc_call");
+        IRValue* rawPtr;
+        if (ctx.isRefcountModel(className)) {
+            // AIML v2 (doc/aiml_v2_impl_plan.md P1): a heap-field model is a refcounted MODL
+            // object. Allocate the shell via aiml_model_alloc (8-byte {magic,refcount=1} header,
+            // zeroed struct) instead of calloc, so incref/decref manage its lifetime and a shared
+            // reference is freed exactly once. Fields are default-initialised below exactly as the
+            // calloc path (aiml_model_alloc returns the zeroed data pointer past the header).
+            auto* i8pTy = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* allocFn = ctx.getFunction("aiml_model_alloc", i8pTy, { sz });
+            llvm::Value* obj = ctx.builder.CreateCall(allocFn, { ctx.getSizeConst(allocSize) }, "model_alloc");
+            rawPtr = ctx.ir_gen->wrap(obj);
+        } else {
+            std::vector<IRValue*> callArgs;
+            callArgs.push_back(ctx.ir_gen->wrap(ctx.getSizeConst(1)));
+            callArgs.push_back(ctx.ir_gen->wrap(ctx.getSizeConst(allocSize)));
+            rawPtr = ctx.ir_gen->createCall("calloc", callArgs, "calloc_call");
+        }
         llvm::Value* rawPtrCast = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rawPtr));
 
         // Default-initialise every field via the SAME path the stack `decl`
