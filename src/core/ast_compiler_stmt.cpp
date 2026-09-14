@@ -285,6 +285,89 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
     IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
     if (!ty) return;
 
+    // ── AIML v2 (doc/aiml_v2_impl_plan.md P1/P5): refcounted MODEL local ─────────────────────────
+    // A heap-field model is a shared refcounted heap object. The local's alloca holds a %M*
+    // (pointer), NOT an inline struct — exactly like a ptr<M> box, so the existing pointer-element
+    // auto-deref (resolveProperty / resolvePropertyWritePtr: `baseElemTy->isPointer()`) gives field
+    // read/write for free. Entirely isolated from the v1 path below; only reachable when
+    // AIML_MODEL_REFCOUNT is ON (isRefcountModel gates it). OFF stays byte-for-byte v1.
+    if (ctx.isRefcountModel(decl->typeName)) {
+        if (ctx.symbol_table.count(decl->varName)) {
+            LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "Variable shadowing is not allowed: '"
+                      + decl->varName + "' is already declared in an outer scope");
+            return;
+        }
+        auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        IRType* ptrTy = ctx.ir_gen->getPointerTy();
+        IRValue* palloca = ctx.ir_gen->createAlloca(ptrTy, decl->varName);
+        llvm::Value* pallocaRaw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(palloca));
+        ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), pallocaRaw);
+
+        auto ci = ctx.classes.find(decl->typeName);
+
+        // Produce the object pointer to store into the slot.
+        llvm::Value* objPtr = nullptr;
+        bool shareIncref = false;   // true → the init is a borrow/share of an existing object
+        if (!decl->initialValue) {
+            // No initializer: allocate a fresh, default-initialised model (refcount 1).
+            uint64_t allocSize = (ci != ctx.classes.end() && ci->second.padded_size > 0)
+                ? (uint64_t)ci->second.padded_size
+                : ctx.module.getDataLayout().getTypeAllocSize(ci->second.type);
+            llvm::Function* allocFn = ctx.getFunction("aiml_model_alloc", i8p, { ctx.getSizeType() });
+            objPtr = ctx.builder.CreateCall(allocFn, { ctx.getSizeConst(allocSize) }, "refmodel_alloc");
+            initClassContainerMembers(objPtr, decl->typeName);
+        } else {
+            // Evaluate the initializer → a %M* (NewExpr / producer call → owned move; a
+            // VariableExpr / AtExpr / member-access → a shared borrow → incref).
+            Expr* iv = decl->initialValue.get();
+            if (dynamic_cast<AtExpr*>(iv)) shareIncref = true;
+            else if (auto* ve = dynamic_cast<VariableExpr*>(iv)) { (void)ve; shareIncref = true; }
+            else if (auto* ce = dynamic_cast<CallExpr*>(iv)) {
+                const std::string& fn = ce->functionName;
+                size_t dp = fn.rfind('.');
+                std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                // A producer (owns_return) call MOVES its fresh ref; a plain accessor
+                // (at/get/first/last that is NOT owns_return) SHARES → incref.
+                if ((sn == "at" || sn == "get" || sn == "first" || sn == "last")
+                    && !ctx.ownsReturnMatches(sn, decl->typeName))
+                    shareIncref = true;
+            }
+            IRValue* initV = visitExpression(iv);
+            objPtr = initV ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initV)) : nullptr;
+            if (objPtr && shareIncref) {
+                llvm::Function* inc = ctx.getFunction("aiml_model_incref", ctx.builder.getVoidTy(), {i8p});
+                ctx.builder.CreateCall(inc, { objPtr });
+            }
+        }
+        if (objPtr) ctx.builder.CreateStore(objPtr, pallocaRaw);
+
+        OwnershipId declOid = (ctx.ownershipPlan && ctx.ownershipPlan->declarations.count(decl))
+            ? ctx.ownershipPlan->declarations.at(decl) : NoOwnership;
+        Symbol sym;
+        sym.ir_alloca_inst  = palloca;
+        sym.ir_type         = ptrTy;
+        sym.ir_element_type  = ptrTy;   // pointer element → field access auto-derefs (kept as-is per design)
+        sym.typeName        = decl->typeName;
+        sym.is_const        = decl->is_const;
+        sym.lifetime        = decl->lifetime;
+        sym.ownershipId     = declOid;
+        ctx.symbol_table[decl->varName] = sym;
+
+        // spec/61 §7 / v2 P5: scope-exit decref (kind 7). Frees the shell + inner heap at refcount 0.
+        if (ctx.lifetimeDropsEnabled && decl->lifetime != "persistent"
+            && !ctx.cleanupStack.empty() && ci != ctx.classes.end() && ci->second.serNodesVar) {
+            CompilerContext::ScopeDrop sd;
+            sd.addr = pallocaRaw;
+            sd.kind = 7;
+            sd.serNodes = ci->second.serNodesVar;
+            sd.serNodesCount = ci->second.serNodesCount;
+            sd.ownershipId = declOid;
+            sd.debugName = decl->varName; sd.debugType = decl->typeName;
+            ctx.cleanupStack.back().push_back(sd);
+        }
+        return;
+    }
+
     // Reset Kv.get/get_copy tracking flags at statement entry — they leak from
     // earlier statements (e.g. a `set: [x, kv.get(k)]` that doesn't consume them).
     // If this decl's initial value evaluation contains a kv.get/get_copy call,
@@ -1874,13 +1957,18 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     // already-owned locals (mayDrop-gated) → cannot double-free.
     const bool returnMayAliasHeap = retTy && (retTy->isPointerTy() || retTy->isStructTy());
     auto emitReturnCleanup = [&]() {
-        if (!ctx.lifetimeDropsEnabled || !retPlan || !retExit) return;
+        if (!ctx.lifetimeDropsEnabled) return;
         auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
         if (!bb || bb->getTerminator()) return;
         for (auto fit = ctx.cleanupStack.rbegin(); fit != ctx.cleanupStack.rend(); ++fit)
             for (auto it = fit->rbegin(); it != fit->rend(); ++it) {
                 if (returnMayAliasHeap && it->ownershipId != NoOwnership && it->ownershipId == retBaseId)
                     continue;   // owner of an alias-capable returned value → exempt (would double-free)
+                // AIML v2: a refcount MODEL decref (kind 7) is order-independent and always safe
+                // (freed only at 0), so it is NOT mayDrop-gated — emit on every return path unless
+                // this model is the value being returned (the retBaseId exemption above = a move).
+                if (it->kind == 7) { emitScopeDrop(ctx, *it); continue; }
+                if (!retPlan || !retExit) continue;   // v1 drops need the ownership plan
                 if (mayDrop(*retPlan, *retExit, it->ownershipId))
                     emitScopeDrop(ctx, *it);
             }
@@ -2323,6 +2411,14 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         ctx.builder.CreateCall(freeTy, freeFnPtr, { objPtr });
         ctx.builder.CreateBr(contBB);
         ctx.builder.SetInsertPoint(contBB);
+    } else if (it.kind == 7) {
+        // AIML v2 (doc/aiml_v2_impl_plan.md P5): refcounted MODEL local — the alloca holds a %M*.
+        // Load it and aiml_model_decref: at refcount 0 it deep-frees the inner heap (via the model's
+        // serNodes) and frees the shell; otherwise just decrements. Order-independent, no double-free.
+        llvm::Value* objptr = ctx.builder.CreateLoad(i8p, it.addr, "drop_refmodel");
+        llvm::Function* dref = ctx.getFunction("aiml_model_decref", ctx.builder.getVoidTy(),
+            {i8p, i8p, ctx.builder.getInt32Ty()});
+        ctx.builder.CreateCall(dref, { objptr, it.serNodes, ctx.builder.getInt32(it.serNodesCount) });
     } else {
         llvm::Function* fn = ctx.getFunction("aiml_ser_free_decoded",
             ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
@@ -2362,7 +2458,8 @@ void Compiler::visitBlockStmt(BlockStmt* block) {
                 if (pe != plan->normalExits.end()) exit = &pe->second;
             }
             for (auto it = frame.rbegin(); it != frame.rend(); ++it) {
-                if (plan && exit && it->ownershipId != NoOwnership
+                // AIML v2: refcount MODEL decref (kind 7) is always safe → never suppressed.
+                if (it->kind != 7 && plan && exit && it->ownershipId != NoOwnership
                     && !mayDrop(*plan, *exit, it->ownershipId))
                     continue;   // not provably owned at this exit → suppress (leak, never UAF)
                 emitScopeDrop(ctx, *it);
