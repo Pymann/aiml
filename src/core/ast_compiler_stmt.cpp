@@ -1616,6 +1616,45 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 return;
             }
         }
+        // AIML v2 P5b: rebind a refcount-MODEL local (`set:[local, m]`). Store the new %M* with
+        // incref-new-BEFORE-decref-old (self-alias `set:[x,x]` safe). A borrow source
+        // (variable/at/member) is incref'd (share); an owned temp (new/producer call) MOVES (no
+        // incref). The old reference is decref'd (freed at 0).
+        if (ctx.isRefcountModel(sym->typeName)) {
+            if (sym->is_const) { LOG_ERROR(ctx.fmtLoc() + "Cannot assign to const variable " + targetStr); return; }
+            auto* i8p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* newObj = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+            llvm::Value* slot   = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+            if (newObj && newObj->getType()->isPointerTy()) {
+                if (newObj->getType() != i8p) newObj = ctx.builder.CreateBitCast(newObj, i8p, "set_modelptr");
+                bool shareIncref = false;
+                Expr* rv = setStmt->value.get();
+                if (dynamic_cast<AtExpr*>(rv)) shareIncref = true;
+                else if (dynamic_cast<VariableExpr*>(rv)) shareIncref = true;
+                else if (auto* ce = dynamic_cast<CallExpr*>(rv)) {
+                    const std::string& fn = ce->functionName; size_t dp = fn.rfind('.');
+                    std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                    if ((sn == "at" || sn == "get" || sn == "first" || sn == "last")
+                        && !ctx.ownsReturnMatches(sn, sym->typeName)) shareIncref = true;
+                }
+                if (shareIncref) {
+                    llvm::Function* inc = ctx.getFunction("aiml_model_incref", ctx.builder.getVoidTy(), {i8p});
+                    ctx.builder.CreateCall(inc, { newObj });
+                }
+                if (ctx.lifetimeDropsEnabled) {
+                    auto ci = ctx.classes.find(sym->typeName);
+                    if (ci != ctx.classes.end() && ci->second.serNodesVar) {
+                        llvm::Value* oldObj = ctx.builder.CreateLoad(i8p, slot, "set_old_modelptr");
+                        llvm::Function* dref = ctx.getFunction("aiml_model_decref", ctx.builder.getVoidTy(),
+                            {i8p, i8p, ctx.builder.getInt32Ty()});
+                        ctx.builder.CreateCall(dref, { oldObj, ci->second.serNodesVar,
+                                                       ctx.builder.getInt32(ci->second.serNodesCount) });
+                    }
+                }
+                ctx.builder.CreateStore(newObj, slot);
+                return;
+            }
+        }
         ctx.ir_gen->createStore(val, baseAlloca);
     } else {
         std::string className = sym->typeName;
@@ -1680,6 +1719,44 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                     if (sv && sv->getType()->isPointerTy()) {
                         LOG_ERROR(ctx.fmtLoc() + "Cannot assign a string to enum-typed '" + targetStr +
                                   "' (" + finalTypeName + ") — use " + finalTypeName + ".<value> or an int");
+                        return;
+                    }
+                }
+                // AIML v2 P5b: store into a refcount-MODEL field (`set:[parent.model_field, m]`). The
+                // slot holds a %M*; store the new pointer with incref-new-BEFORE-decref-old (self-alias
+                // safe). A borrow source (variable/at/member) is incref'd (share); an owned temp
+                // (new/producer) MOVES. Bypasses the container/deep-copy paths below.
+                if (ctx.isRefcountModel(finalTypeName)) {
+                    auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                    llvm::Value* dstSlot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(targetGep));
+                    llvm::Value* newObj  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                    if (newObj && newObj->getType()->isPointerTy()) {
+                        if (newObj->getType() != i8p) newObj = ctx.builder.CreateBitCast(newObj, i8p, "setf_modelptr");
+                        bool shareIncref = false;
+                        Expr* rv = setStmt->value.get();
+                        if (dynamic_cast<AtExpr*>(rv)) shareIncref = true;
+                        else if (dynamic_cast<VariableExpr*>(rv)) shareIncref = true;
+                        else if (auto* ce = dynamic_cast<CallExpr*>(rv)) {
+                            const std::string& fn = ce->functionName; size_t dp = fn.rfind('.');
+                            std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                            if ((sn == "at" || sn == "get" || sn == "first" || sn == "last")
+                                && !ctx.ownsReturnMatches(sn, finalTypeName)) shareIncref = true;
+                        }
+                        if (shareIncref) {
+                            llvm::Function* inc = ctx.getFunction("aiml_model_incref", ctx.builder.getVoidTy(), {i8p});
+                            ctx.builder.CreateCall(inc, { newObj });
+                        }
+                        if (ctx.lifetimeDropsEnabled) {
+                            auto ci = ctx.classes.find(finalTypeName);
+                            if (ci != ctx.classes.end() && ci->second.serNodesVar) {
+                                llvm::Value* oldObj = ctx.builder.CreateLoad(i8p, dstSlot, "setf_old_modelptr");
+                                llvm::Function* dref = ctx.getFunction("aiml_model_decref", ctx.builder.getVoidTy(),
+                                    {i8p, i8p, ctx.builder.getInt32Ty()});
+                                ctx.builder.CreateCall(dref, { oldObj, ci->second.serNodesVar,
+                                                               ctx.builder.getInt32(ci->second.serNodesCount) });
+                            }
+                        }
+                        ctx.builder.CreateStore(newObj, dstSlot);
                         return;
                     }
                 }
