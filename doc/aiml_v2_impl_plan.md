@@ -84,6 +84,69 @@ gating a different config than shipped (`feedback_broad_codegen_full_suite_gate`
       ownership fix (dup on insert) + the narrow literal-into-field dup + immortal `""` — strings stay
       value-owned by containers, independent of the model decision.
 
+## 3a. P4 ABI — detailed design (staked out 2026-09-14)
+
+**Finding that de-risks the whole phase:** model args are the *only* non-container aggregate still
+passed **by value**. `list<T>`/`map<K:V>` already pass **by reference** as an opaque `i8p` via the
+`is_byref_arg` path (`visitFunction` ast_compiler.cpp:4632 sets `byref` for `list<`/`map<`; the
+call-site derefs at ast_compiler_call.cpp:670; `argIsByref` is parallel to `argTypes`). **v2's model
+ABI reuses this exact machinery** — a heap-field model arg becomes a byref `i8p` just like a list.
+
+### Signatures (flag ON, heap-field models only; scalar-only models stay by-value structs)
+
+| | v1 today | v2 (P4) |
+|---|---|---|
+| **arg** `[m, M]` | `resolveType(M)` = `%M` struct, by-value (private copy / borrow) | `i8p` = `%M*`, **by-ref borrow** (`is_byref_arg`); callee sees the caller's shared object |
+| **return** `M` | `%M` struct by-value (+ WASM sret stub, ast_compiler.cpp:44 `getOrCreateSretStub`) | `i8p` = `%M*`; **sret stub disappears** for heap-field models (pointer return needs no struct lowering) |
+| **interface/vtable** | `this`=i8p, model params by-value struct, struct-return via sret stub in the vtable slot | model params/returns become `i8p` → uniform with `this`/byref args; **no sret stub** for those slots |
+| **classgroup cross-unit** (`g_runtime`) | same as free fn | same — signatures shift with the free-fn rule, both sides recompiled together |
+
+### Refcount placement (the rules)
+
+- **arg = borrow, NO incref/decref.** The caller holds a live reference across the whole call, so the
+  callee borrows for free — identical to how list/map args are not refcounted. If the callee *stores*
+  the arg into a container/field that outlives the call, **that store increfs** (P3), so lifetime stays
+  balanced without touching the arg itself. (`argLifetimes`/spec/61 §3.1 already models
+  scope-vs-consumed; a `consumed` model arg = the callee takes ownership → decref on callee exit.)
+- **return:** reuse the ownership analyzer's owned-vs-borrowed verdict (`ownsReturn`/`freshOwned`):
+  - returning an **owned fresh** object (`return {new:M}` / a producer local) → **move** (transfer the
+    existing ref; refcount unchanged; the local's scope-decref is suppressed — the return consumes it).
+  - returning a **borrowed reference** (`return at(list,i)` / `return <.field`) → **incref before
+    return** so the caller gets its own ref while the container keeps its own. This *replaces* the v1
+    return-view deep-copy hack (P9).
+- **caller of a model-returning fn:** binds the returned `%M*` into a local that now owns a ref;
+  scope-exit decrefs it (P5).
+
+### What P4 touches
+
+- `visitFunction` (ast_compiler.cpp:4632): extend the `byref` predicate to heap-field models when
+  `ctx.modelRefcount`; set `argIsByref`/`is_byref_arg` for them.
+- Forward-decl in `registerTypeDecl` (ast_compiler.cpp:3531 `byref` block) — **must** use the identical
+  predicate or signatures mismatch (the note already warns about this for list/map).
+- Call-site arg passing (ast_compiler_call.cpp): pass the model local's `%M*` (already a pointer under
+  P1); a by-value struct-arg caller path is retired for these under the flag.
+- Return (`visitRetStmt`): return the `%M*`; incref-if-borrowed / move-if-owned per above.
+- `getOrCreateSretStub` + vtable slot wiring: skip the sret stub for heap-field model returns.
+
+### Dependency + first testable slice
+
+P4 is **not runnable before P1** (the object must be a heap `%M*` for a pointer ABI to mean anything —
+a by-ref stack struct cannot outlive the callee, defeating the point). The **minimal coherent,
+valgrind-testable unit** is **P1-core + P4-arg + P4-return**, no containers/`at` needed:
+
+```
+- def: {name: bump, args: [[obj, Thing]], body: [ - set: [obj.tag, "hit"] ]}   # mutate through byref
+- def: {name: make, return: Thing, body: [ - decl: [t, Thing, {new: Thing}], - return: t ]}  # move-out
+- def: {name: main, return: i32, body:
+    - decl: [t, Thing, {call: [make]}]     # P1 alloc via producer + move; t owns the ref
+    - call: [bump, t]                       # P4 arg byref → in-place mutate
+    - # assert t.tag == "hit"               # proves shared in-place mutation
+    - return: 0 }                            # P5 scope-decref frees once
+```
+`Thing` must carry a heap field (e.g. `tag: string`) so it is a MODL object (scalar-only stays inline).
+Probe `_mem_sanitize/model_ref_arg_return.aiml` under valgrind: correct value + bounded RSS + no
+double-free. This slice is the recommended first implementation increment.
+
 ## 4. Gating (every phase, non-negotiable)
 
 - `_mem_sanitize/` probe(s) under valgrind in `run_memory_sanitizers.sh` (bounded RSS + correctness).
