@@ -1,0 +1,31 @@
+- model:
+    name: Thing
+    fields:
+      - [tag, string]
+      - [count, i32]
+
+- def:
+    name: bump_thing
+    args: [[obj, Thing]]
+    body:
+      - set: [obj.tag, "hit"]
+      - set: [obj.count, {+: [obj.count, 1]}]
+
+- def:
+    name: make_thing
+    return: Thing
+    body:
+      - decl: [made, Thing, {new: Thing}]
+      - set: [made.count, 41]
+      - return: made
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [thing, Thing, {call: [make_thing]}]
+      - call: [bump_thing, thing]
+      - if: {condition: {neq: [thing.tag, "hit"]}, then: [{print: ["FAIL tag=${thing.tag}"]}, {call: [sys.exit, 1]}]}
+      - if: {condition: {neq: [thing.count, 42]}, then: [{print: ["FAIL count=${thing.count}"]}, {call: [sys.exit, 1]}]}
+      - print: ["PASS refmodel ABI: in-place mutate + move-return work (tag=${thing.tag} count=${thing.count})"]
+      - return: 0
