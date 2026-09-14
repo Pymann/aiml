@@ -95,6 +95,29 @@ gating a different config than shipped (`feedback_broad_codegen_full_suite_gate`
       MODL pointer for a refcount-model value** — today they decode into a struct buffer, so the
       decl's kind-7 decref of the result reads a non-MODL pointer (a harmless-magic-mismatch but a
       valgrind Invalid read + the decoded value is not refcount-managed). This is the last KV piece.
+- [~] **P4b. Class-method ABI.** DONE for signatures: the method forward-decl (registerTypeDecl) +
+      definition (visitFunction) both build a refcount-model arg/return as `%M*`. The 9rooms game now
+      COMPILES under `AIML_MODEL_REFCOUNT=1` (all IR verifies).
+
+## Integration status (2026-09-14) — CORE DONE, runtime integration NEXT
+
+Every v2 mechanism is implemented and **valgrind-clean via isolated probes**
+(`tests/_mem_sanitize/v2/`): model locals, by-ref args + move-return, list/map reference
+containers (push/get/at/idx/put), nested model fields, `list<Model>`/`map<Model>` fields, and the
+full **nested-model KV round-trip** (encode/decode/free). The game **compiles** under v2.
+
+But a real 9rooms test (`test_creature_damage`) **SIGSEGVs at runtime under v2** — the game exercises
+model-usage patterns the probes don't yet cover. Remaining integration work (the next focused phase,
+best driven by the `MALLOC_CHECK_=3` + gdb + `ns=__aiml_sernodes_X` recipe to pinpoint each crash):
+- **Rebind / member-store of a MODEL field/local** (`set:[parent.model_field, x]`, `set:[local, m]`):
+  store the `%M*` with incref-new + decref-old (like idx). NOT yet implemented → likely the current
+  crash (a model field store goes through the generic struct/scalar path).
+- **`ptr<Model>` interplay** with refcount models (boxes, `<`-self-pointer, get_base fat-pointers).
+- **classgroup** instances + `sees`-collaborators holding models.
+- **interface vtable dispatch** with model args/returns (sret-stub skip for model returns).
+- **`list.remove`/`first`/`last`/`contains`**, **map local scope-drop**.
+Then: run the full 9rooms suite with drops-on + refcount-on and watch category-A crashes go to 0.
+
 - [ ] **P7. `at_copy` / `copy(x)` builtins.** Opt-in deep copy (alloc + `aiml_ser_deep_copy`). Also
       useful under v1, so can land independently and early if wanted.
 - [ ] **P8. Weak back-refs.** Mutual/back-ref `ptr<>` fields default weak (no incref/decref) or
