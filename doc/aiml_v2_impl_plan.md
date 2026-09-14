@@ -59,18 +59,26 @@ gating a different config than shipped (`feedback_broad_codegen_full_suite_gate`
 
 - [x] **P0. Runtime primitives** — `aiml_model_alloc/incref/decref/refcount` (`src/sys/model_runtime.*`).
       DONE, inert. `aiml_ser_deep_copy`/`aiml_ser_free_decoded` already exist for `at_copy`/decref.
-- [ ] **P1. Flag + type representation.** Add `ctx.modelRefcount` (env-gated). When ON, a heap-field
-      model's LLVM local/field type becomes `%M*`; `decl` no-init emits `aiml_model_alloc`; field GEP
-      auto-derefs. Scalar-only models unchanged. Old path fully preserved when OFF.
-- [ ] **P2. Reference reads.** `at`/`get`/`first`/`last`/member-access (heap-field model) → load `%M*`
-      + incref. Retire the v1 shallow-view copy on this path (flag-gated).
+- [x] **P1. Flag + type representation (core).** `ctx.modelRefcount` (env `AIML_MODEL_REFCOUNT`,
+      read in both compile() AND registerTypes() — forward-decl runs first). A heap-field model local's
+      alloca holds a `%M*` (pointer element type → existing `baseElemTy->isPointer()` auto-deref gives
+      field read/write); `decl` no-init/`{new:M}` → `aiml_model_alloc`; move (new/producer) vs incref
+      (variable/at share) at init. `visitNewExpr` uses `aiml_model_alloc`. Scalar-only models + OFF
+      unchanged. **Field/rebind for a model *field of another model* not yet done — see P3/P6.**
+- [ ] **P2. Reference reads.** `at`/`get`/`first`/`last` (heap-field model *element*) → load `%M*`
+      + incref. (member-access on a model local already works via P1 pointer auto-deref.) Needs P3.
 - [ ] **P3. Container element type = `%M*`.** `list<M>`/`map<K:M>` store pointers (stride 8, serNodes
       LIST/MAP elem = a MODLPTR kind). `push`/`put`/`idx`/member-store: incref new + decref old slot.
       `remove`: decref. Update `elem_size`/stride everywhere it is assumed `sizeof(struct)`.
-- [ ] **P4. ABI: return + by-value arg.** Return hands out the `%M*` (ownership to caller). By-value
-      model arg: incref on callee entry, decref on exit (or borrow-no-count if provably call-scoped).
-- [ ] **P5. Scope-exit / rebind / remove → decref.** Replace the drops-on `aiml_ser_free_decoded`
-      scope-drop for heap-field models with `aiml_model_decref`. Rebind decrefs old, increfs new.
+- [x] **P4. ABI: return + by-ref arg.** DONE. A refcount-model arg passes by-ref as `%M*` (borrow, no
+      count; param symbol has a pointer element type → field read AND write auto-deref). A
+      refcount-model return is a `%M*`; `return <model_local>` MOVES (kind-7 decref suppressed for the
+      returned object via retModelAddr). Forward-decl + definition + registerTypes env-read all aligned.
+      Verified end-to-end (make→move-return + by-ref in-place mutation) + valgrind-clean.
+- [x] **P5. Scope-exit → decref (core).** kind-7 ScopeDrop = `aiml_model_decref(obj, serNodes, n)`;
+      emitted unconditionally on block-exit AND return paths (a decref is always safe, never
+      mayDrop-gated), except the moved-out returned object. **Rebind (`set:[local, other_model]`)
+      decref-old/incref-new not yet done.**
 - [ ] **P6. Ser/deser/KV.** `aiml_ser_decode` allocates nested/element models via `aiml_model_alloc`
       and stores `%M*`; `aiml_ser_free_decoded` decrefs them; encode follows the pointer. `kv.get` =
       shared ref (incref), `kv.get_copy` stays deep. Wire format on disk/wire is UNCHANGED (still the
