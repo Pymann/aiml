@@ -1582,10 +1582,26 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              vTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
          }
          if (!vTy) vTy = ctx.builder.getInt8Ty()->getPointerTo();
+         // AIML v2 P3: a map<K:Model> stores %M* references (pointer values).
+         bool refVal = ctx.isRefcountModel(vName);
+         if (refVal) vTy = ctx.builder.getInt8Ty()->getPointerTo();
          if (methodName == "put" && argVals.size() > 1) {
              llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
              llvm::Value* valVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
              bool valIsString = (vName == "string");
+             // AIML v2 P3: refcount-model value → incref + store the %M* (share). The map OWNS a
+             // reference (balanced by the map-free valKind-3 decref); the source keeps its own.
+             if (refVal) {
+                 auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                 llvm::Value* objp = (valVal->getType() == i8p) ? valVal
+                                     : ctx.builder.CreateBitCast(valVal, i8p, "put_modelptr");
+                 llvm::Function* inc = ctx.getFunction("aiml_model_incref", ctx.builder.getVoidTy(), {i8p});
+                 ctx.builder.CreateCall(inc, { objp });
+                 if (keyVal->getType()->isPointerTy() && keyVal->getType() != i8p)
+                     keyVal = ctx.builder.CreateBitCast(keyVal, i8p);
+                 MapImpl::put(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, objp, mapStructTy, false);
+                 return nullptr;
+             }
              // spec/61 §8: MapImpl::put now DUPS string keys and string values (map owns its own
              // copy), so the caller is a pure BORROWER — its key/value temp or declared local
              // keeps its normal scope-drop and frees itself, no matter how many call frames away
