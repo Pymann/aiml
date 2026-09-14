@@ -28,6 +28,11 @@ typedef enum {
                              //   param1=child_index (the inner struct subtree)
                              //   elem_size=sizeof(inner struct) — used by decoder for calloc.
                              // Wire format: 1-byte marker (0=null, 1=non-null) + struct bytes.
+    AIML_TD_MODEL      = 11, // AIML v2: a refcounted MODEL reference (%M*). Same wire format as
+                             //   PTR_STRUCT (marker + struct bytes) so on-disk/wire is unchanged,
+                             //   but decode allocates the shell via aiml_model_alloc (MODL header +
+                             //   refcount 1) and free decrefs it (frees at 0). param1=inner struct
+                             //   subtree; elem_size=sizeof(inner struct).
 } AimlTDKind;
 
 // Each node is 24 bytes.  The whole descriptor for a type is an array of these.
