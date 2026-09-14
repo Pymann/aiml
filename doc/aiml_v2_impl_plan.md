@@ -65,11 +65,15 @@ gating a different config than shipped (`feedback_broad_codegen_full_suite_gate`
       field read/write); `decl` no-init/`{new:M}` → `aiml_model_alloc`; move (new/producer) vs incref
       (variable/at share) at init. `visitNewExpr` uses `aiml_model_alloc`. Scalar-only models + OFF
       unchanged. **Field/rebind for a model *field of another model* not yet done — see P3/P6.**
-- [ ] **P2. Reference reads.** `at`/`get`/`first`/`last` (heap-field model *element*) → load `%M*`
-      + incref. (member-access on a model local already works via P1 pointer auto-deref.) Needs P3.
-- [ ] **P3. Container element type = `%M*`.** `list<M>`/`map<K:M>` store pointers (stride 8, serNodes
-      LIST/MAP elem = a MODLPTR kind). `push`/`put`/`idx`/member-store: incref new + decref old slot.
-      `remove`: decref. Update `elem_size`/stride everywhere it is assumed `sizeof(struct)`.
+- [x] **P2. Reference reads (list).** `at`/`get` on a `list<Model>` return the loaded `%M*` (a
+      borrow; `visitDeclStmt` increfs when binding). member-access on a model local works via P1
+      pointer auto-deref. **`first`/`last` and struct-field model-elem reads still TODO.**
+- [x] **P3. Containers store `%M*` (core).** `list<Model>`: init (8-byte stride), push (incref +
+      store pointer), get/at (load pointer), idx (incref-new-before-decref-old, self-alias safe),
+      scope-free elemKind 3 (decref each). `map<K:Model>`: put (incref + store), get (load pointer),
+      free valKind 3. All verified reference-semantic + valgrind-clean. **`remove` decref, `contains`/
+      `index_of`/`sort` (identity vs deep), and map local scope-drop (map-drop disabled) still TODO;
+      element stride in nested-model FIELDS is P6.**
 - [x] **P4. ABI: return + by-ref arg.** DONE. A refcount-model arg passes by-ref as `%M*` (borrow, no
       count; param symbol has a pointer element type → field read AND write auto-deref). A
       refcount-model return is a `%M*`; `return <model_local>` MOVES (kind-7 decref suppressed for the
