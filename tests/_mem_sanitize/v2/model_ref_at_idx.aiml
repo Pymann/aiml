@@ -1,0 +1,30 @@
+- model:
+    name: Thing
+    fields:
+      - [tag, string]
+      - [count, i32]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [items, list<Thing>]
+      - decl: [thing1, Thing, {new: Thing}]
+      - set: [thing1.count, 10]
+      - call: [items.push, thing1]
+      # at-form access + in-place mutation
+      - decl: [viaAt, Thing, {at: [items, 0]}]
+      - if: {condition: {neq: [viaAt.count, 10]}, then: [{print: ["FAIL viaAt.count=${viaAt.count}"]}, {call: [sys.exit, 1]}]}
+      - set: [viaAt.count, 55]
+      # self-alias writeback (should be harmless no-op)
+      - idx: [items, 0, {at: [items, 0]}]
+      - decl: [after, Thing, {at: [items, 0]}]
+      - if: {condition: {neq: [after.count, 55]}, then: [{print: ["FAIL after-writeback count=${after.count}"]}, {call: [sys.exit, 1]}]}
+      # idx store a DIFFERENT model
+      - decl: [thing2, Thing, {new: Thing}]
+      - set: [thing2.count, 77]
+      - idx: [items, 0, thing2]
+      - decl: [after2, Thing, {at: [items, 0]}]
+      - if: {condition: {neq: [after2.count, 77]}, then: [{print: ["FAIL after idx-replace count=${after2.count}"]}, {call: [sys.exit, 1]}]}
+      - print: ["PASS list<Model> at+idx: self-alias + replace (count=${after2.count})"]
+      - return: 0

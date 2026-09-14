@@ -1176,6 +1176,15 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
             listPtr = ctx.builder.CreateLoad(i8p, listPtr, "byref_deref_at");
         }
         if (indexVals.empty()) { LOG_ERROR("at: list requires at least one index"); return nullptr; }
+        // AIML v2 P3/P2: a list<Model> element is a %M* — load and return the reference (a
+        // pointer-to-struct; field access derefs it, `decl e = at(..)` increfs in visitDeclStmt).
+        // A borrow: no incref here (transient `at(..).field` reads must not leak a ref).
+        if (ctx.isRefcountModel(elemName)) {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* slot = ListImpl::getElementPtr(ctx, listPtr, indexVals[0], i8p);
+            llvm::Value* objp = ctx.builder.CreateLoad(i8p, slot, "list_at_modelptr");
+            return ctx.ir_gen->wrap(objp);
+        }
         llvm::Value* elemPtr = ListImpl::getElementPtr(ctx, listPtr, indexVals[0], elemTy);
         llvm::Value* val = ctx.builder.CreateLoad(elemTy, elemPtr, "list_at");
         // Refcount: borrowing a string out of a list adds an alias.  Incref

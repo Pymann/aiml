@@ -2935,6 +2935,28 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
             listPtr = ctx.builder.CreateLoad(ptrTy, listPtr, "byref_list_deref");
         }
         if (indexVals.empty()) { LOG_ERROR("idx: list requires at least one index"); return; }
+
+        // AIML v2 P3: list<Model> slot holds a %M* reference. Store the new pointer with
+        // incref-new-BEFORE-decref-old so the self-alias write-back `idx:[c,i,at(c,i)]` is safe
+        // (decref-first could free the object at refcount 1 before we re-store it).
+        if (ctx.isRefcountModel(elemName)) {
+            auto* i8p = llvm::PointerType::get(ctx.context, 0);
+            auto ciElem = ctx.classes.find(elemName);
+            llvm::Value* slot = ListImpl::getElementPtr(ctx, listPtr, indexVals[0], i8p);
+            llvm::Value* newObj = (storeVal->getType() == i8p) ? storeVal
+                                  : ctx.builder.CreateBitCast(storeVal, i8p, "idx_modelptr");
+            llvm::Function* inc = ctx.getFunction("aiml_model_incref", ctx.builder.getVoidTy(), {i8p});
+            ctx.builder.CreateCall(inc, { newObj });
+            if (ctx.lifetimeDropsEnabled && ciElem != ctx.classes.end() && ciElem->second.serNodesVar) {
+                llvm::Value* oldObj = ctx.builder.CreateLoad(i8p, slot, "idx_old_modelptr");
+                llvm::Function* dref = ctx.getFunction("aiml_model_decref", ctx.builder.getVoidTy(),
+                    {i8p, i8p, ctx.builder.getInt32Ty()});
+                ctx.builder.CreateCall(dref, { oldObj, ciElem->second.serNodesVar,
+                                               ctx.builder.getInt32(ciElem->second.serNodesCount) });
+            }
+            ctx.builder.CreateStore(newObj, slot);
+            return;
+        }
         llvm::Value* elemPtr = ListImpl::getElementPtr(ctx, listPtr, indexVals[0], elemTy);
 
         // struct elements + pointer-typed source: memcpy the whole struct.
