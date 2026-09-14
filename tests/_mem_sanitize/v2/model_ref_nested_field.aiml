@@ -1,0 +1,27 @@
+- model:
+    name: Buff
+    fields:
+      - [label, string]
+      - [power, i32]
+- model:
+    name: Zone
+    fields:
+      - [zid, string]
+      - [buffs, list<Buff>]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [zone, Zone, {new: Zone}]
+      - set: [zone.zid, "z1"]
+      - decl: [buff1, Buff, {new: Buff}]
+      - set: [buff1.label, "haste"]
+      - set: [buff1.power, 3]
+      - call: [zone.buffs.push, buff1]
+      - if: {condition: {neq: [zone.buffs.len, 1]}, then: [{print: ["FAIL buffs.len=${zone.buffs.len}"]}, {call: [sys.exit, 1]}]}
+      - decl: [gotBuff, Buff, {at: [zone.buffs, 0]}]
+      - if: {condition: {neq: [gotBuff.label, "haste"]}, then: [{print: ["FAIL gotBuff.label=${gotBuff.label}"]}, {call: [sys.exit, 1]}]}
+      - if: {condition: {neq: [gotBuff.power, 3]}, then: [{print: ["FAIL gotBuff.power=${gotBuff.power}"]}, {call: [sys.exit, 1]}]}
+      - print: ["PASS nested list<Model> field: zone.buffs[0]=${gotBuff.label}/${gotBuff.power}"]
+      - return: 0

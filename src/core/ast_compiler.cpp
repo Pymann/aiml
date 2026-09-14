@@ -138,8 +138,10 @@ void Compiler::initClassContainerMembers(llvm::Value* basePtr,
             info.type, basePtr, m.index, memberName + "_init_gep");
         if (mt.rfind("list<", 0) == 0 && mt.back() == '>') {
             std::string elemName = mt.substr(5, mt.length() - 6);
-            llvm::Type* elemTy = static_cast<llvm::Type*>(
-                ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
+            // AIML v2 P3/P6: a list<Model> field stores %M* references → pointer element stride.
+            llvm::Type* elemTy = ctx.isRefcountModel(elemName)
+                ? llvm::PointerType::get(ctx.context, 0)
+                : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
             if (elemTy) ListImpl::initList(ctx, fieldPtr, elemTy, 4);
         } else if (mt.rfind("map<", 0) == 0 && mt.back() == '>') {
             std::string inner = mt.substr(4, mt.length() - 5);
@@ -161,6 +163,12 @@ void Compiler::initClassContainerMembers(llvm::Value* basePtr,
             // both; keep this in sync so `{new:}` via initClassContainerMembers
             // inits bare-buffer members too.  Repro: test_buffer_class_member_heap_init_repro.)
             BufferImpl::alloc(ctx, fieldPtr, ctx.builder.getInt32(4096));
+        }
+        // AIML v2 P6: a direct refcount-MODEL field is a %M* pointer slot (not an inline struct) —
+        // leave it null (calloc/model_alloc already zeroed it); it is populated by an explicit
+        // set/decode. Recursing here would treat the pointer slot as a struct base → corruption.
+        else if (ctx.isRefcountModel(mt)) {
+            // no-op (null reference by default, like a ptr<Model> field)
         }
         // Nested class instances: recurse so deeply-embedded containers init too.
         else if (ctx.classes.count(mt) && !ctx.classes[mt].isBuiltin) {
@@ -2983,7 +2991,9 @@ static std::vector<AimlTypeNode> serBuildSubtree(
         int32_t esz;
         // Determine element size without calling getLLVMType on unregistered types
         // (which would log spurious errors during Phase-A sibling type registration).
-        if (ctx.classes.count(inner) && ctx.classes[inner].type) {
+        if (ctx.isRefcountModel(inner)) {
+            esz = 8;  // AIML v2 P3/P6: list<Model> stores %M* references (pointer stride)
+        } else if (ctx.classes.count(inner) && ctx.classes[inner].type) {
             esz = (int32_t)dl.getTypeAllocSize(ctx.classes[inner].type);
         } else if (ctx.enums.count(inner)) {
             esz = 4;  // enum = i32
@@ -3029,8 +3039,10 @@ static std::vector<AimlTypeNode> serBuildSubtree(
         auto ksub = serBuildSubtree(kT, 0, ctx, dl);
         auto vsub = serBuildSubtree(vT, 0, ctx, dl);
         int32_t kc = (int32_t)ksub.size();
-        llvm::Type* vLT = ctx.getLLVMType(vT);
-        int32_t vsz = vLT ? (int32_t)dl.getTypeAllocSize(vLT) : 0;
+        // AIML v2 P3/P6: map<K:Model> stores %M* references (pointer value stride).
+        int32_t vsz;
+        if (ctx.isRefcountModel(vT)) vsz = 8;
+        else { llvm::Type* vLT = ctx.getLLVMType(vT); vsz = vLT ? (int32_t)dl.getTypeAllocSize(vLT) : 0; }
         res.push_back({AIML_TD_MAP, 1, 1+kc, offset, vsz, 0});
         for (auto& n : ksub) res.push_back(snShift(n, 1));
         for (auto& n : vsub) res.push_back(snShift(n, 1+kc));
@@ -3060,6 +3072,32 @@ static std::vector<AimlTypeNode> serBuildSubtree(
         }
         // Inner type unknown or a recursive back-ref — fall through to raw-pointer
         // (RAWBYTES, pointer-sized) below.
+    }
+
+    // ── AIML v2: a refcount-MODEL reference field/element → AIML_TD_MODEL wrapping the inner
+    // struct subtree (mirrors the PTR_STRUCT block: marker + struct bytes; decode allocs a MODL
+    // shell, free decrefs). The field/element slot is a %M* pointer (8 bytes). A back-reference to
+    // a type already on the DFS path is cut to a raw pointer below (not owned data).
+    if (ctx.isRefcountModel(typeName) && !g_serActivePath.count(typeName)) {
+        auto& ci = ctx.classes[typeName];
+        const llvm::StructLayout* sl = dl.getStructLayout(ci.type);
+        int32_t inner_sz = (int32_t)dl.getTypeAllocSize(ci.type);
+        std::vector<std::pair<std::string, CompilerContext::StructMember>> sm;
+        for (auto& [mn, mem] : ci.members) sm.push_back({mn, mem});
+        std::sort(sm.begin(), sm.end(),
+                  [](auto& a, auto& b){ return a.second.index < b.second.index; });
+        bool onPath = g_serActivePath.insert(typeName).second;
+        std::vector<std::vector<AimlTypeNode>> fsubs;
+        for (auto& [mn, mem] : sm) {
+            if (mem.is_collaborator) continue;
+            fsubs.push_back(serBuildSubtree(mem.typeName,
+                (int32_t)sl->getElementOffset(mem.index), ctx, dl));
+        }
+        if (onPath) g_serActivePath.erase(typeName);
+        auto structNodes = serBuildStructNodes(fsubs, 0, inner_sz);  // struct root at index 0 of subvec
+        res.push_back({AIML_TD_MODEL, 1, 0, offset, inner_sz, 0});
+        for (auto& n : structNodes) res.push_back(snShift(n, 1));
+        return res;
     }
 
     // ── User struct (must already be in ctx.classes) ──────────────────────────
@@ -3644,7 +3682,12 @@ void Compiler::registerTypeDecl(Node* node) {
             std::string typeName = astMember.type;
             ctx.validateIdentifier(fieldName, "model field", mod->sourceNode);
 
-            llvm::Type* fieldType = ctx.getLLVMType(typeName);
+            // AIML v2 P6: a direct refcount-MODEL field is a %M* pointer (8 bytes), not an inline
+            // struct — the parent shares/owns a reference (aiml_model_alloc'd, decref'd on free),
+            // and field access auto-derefs the pointer. Otherwise the declared type.
+            llvm::Type* fieldType = ctx.isRefcountModel(typeName)
+                ? llvm::PointerType::get(ctx.context, 0)
+                : ctx.getLLVMType(typeName);
             if (!fieldType) {
                  LOG_ERROR(ctx.fmtLoc(mod->sourceNode) + "Unknown type '" + typeName + "' for field '" + fieldName + "' in model '" + modelName + "'");
                  continue;
