@@ -13,16 +13,16 @@
 # mutate a scalar field of a by-value param → caller unaffected
 - def:
     name: bump_scalar
-    args: [[c, Conf]]
+    args: [[itc, Conf]]
     body:
-      - set: [c.port, 9090]           # local copy's scalar only
+      - set: [itc.port, 9090]           # local copy's scalar only
 
 # mutate a CONTAINER field of a by-value param → caller SEES it (shared, §7/§5)
 - def:
     name: tag_it
-    args: [[c, Conf]]
+    args: [[itc, Conf]]
     body:
-      - call: [c.tags.push, "hot"]    # c.tags is shared (incref) with the caller's Conf
+      - call: [itc.tags.push, "hot"]    # c.tags is shared (incref) with the caller's Conf
 
 - def:
     name: main

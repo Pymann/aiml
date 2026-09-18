@@ -232,6 +232,14 @@ namespace AIML {
             std::string s = mr;
             modelRefcount = !(s.empty() || s == "0" || s == "off" || s == "OFF" || s == "false" || s == "FALSE");
         }
+        // spec/61 memory model (v3): gated by AIML_MEM_V3, read at construction (same reason as
+        // modelRefcount above — every context, incl. header-only sub-compilers, must agree). Under
+        // this gate the compiler emits the spec/61 target behavior incrementally (first: string
+        // assignment = share/incref, §4). Default OFF → deployed/OFF path byte-identical.
+        if (const char* mv = std::getenv("AIML_MEM_V3")) {
+            std::string s = mv;
+            memV3 = !(s.empty() || s == "0" || s == "off" || s == "OFF" || s == "false" || s == "FALSE");
+        }
         // initialized lazily or explicitly later to avoid circular dependency here
         llvm::Type* i32 = llvm::Type::getInt32Ty(context);
         llvm::Type* p = llvm::PointerType::get(context, 0);
@@ -365,6 +373,10 @@ namespace AIML {
     // AIML_MODEL_REFCOUNT) — the v1 inline-value-model path — until the phased representation
     // change (P1–P6) lands and the full 9rooms suite is green with it. INERT until then.
     bool modelRefcount = false;
+    // spec/61 memory model (v3): gated by AIML_MEM_V3 (read in ctor). When ON, the compiler emits
+    // the spec/61 target behavior, landed incrementally (first: string assignment = share/incref,
+    // §4). DEFAULT OFF → the deployed/OFF path is byte-identical. See spec/61_memory_management.
+    bool memV3 = false;
     std::map<std::string, FunctionInfo> functions;
     // spec/61 return-ownership: ORIGINAL (un-mangled) short names of functions/methods
     // declared `owns_return: true`. Captured at parse-order (before method-name mangling)

@@ -15,9 +15,9 @@
     return: i32
     body:
       # tensor is a Class-4 ptr-like handle: explicit free, clone via aiml_tensor_clone
-      - decl: [t, tensor, { call: [tensor.zeros, 8] }]
-      - decl: [t2, tensor, { clone: t }]  # deep clone of the tensor's data (element clone exists)
-      - call: [tensor.free, t2]           # explicit resource teardown
+      - decl: [itt, tensor, { call: [tensor.zeros, 8] }]
+      - decl: [tenb, tensor, { clone: itt }]  # deep clone of the tensor's data (element clone exists)
+      - call: [tensor.free, tenb]           # explicit resource teardown
       # a Layer holds a tensor by value → move-only; build one, move it into a list<Layer>? no —
       # move-only aggregate: pass by move / hold uniquely. Here: construct, use, drop (closes tensor).
       - decl: [lyr, Layer]
@@ -25,6 +25,6 @@
       - set: [lyr.weights, { call: [tensor.ones, 4] }]   # move a fresh tensor into the field
       - if: { condition: { neq: [lyr.name, "dense"] }, then: [{ print: ["FAIL layer"] }, { return: 1 }] }
       # scope exit: lyr drops → its `weights` tensor is closed (Class-4 teardown), name decref'd.
-      - call: [tensor.free, t]
+      - call: [tensor.free, itt]
       - print: ["PASS 14 tensor_resource_moveonly"]
       - return: 0

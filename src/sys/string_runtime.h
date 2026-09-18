@@ -40,6 +40,11 @@ int32_t aiml_str_assign_copy(char** dst, const char* src);
 // MOVE: `next` transfers a separate owned RC reference (or null) into the slot; the old slot
 // value is released. The caller must exclude a no-transfer self-assignment.
 void    aiml_str_assign_move(char** dst, char* next);
+// SHARE (spec/61 §4, AIML_MEM_V3): incref `src` (share its buffer) and release the old slot
+// value — secure-before-release, so self-assignment `set:[x,x]` is a safe no-op. `src` may be a
+// managed buffer, a literal, or the immortal "" (incref no-ops on the latter two). Immutable
+// strings make sharing observationally identical to copying (no dup).
+int32_t aiml_str_assign_share(char** dst, char* src);
 // TAKE: read the slot value and null the slot (ownership handed to the caller). Used at a
 // committed move-out point so the slot's scope-drop / next decref-old is a null no-op.
 char*   aiml_str_take_local(char** src);

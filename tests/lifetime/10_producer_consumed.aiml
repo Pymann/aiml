@@ -3,7 +3,7 @@
 # CONSTRUCT: producer return (owned, move-out) + consumed param (sink) (§9.2, §8).
 # COVERS: lifetime: producer (return owns, no realloc), lifetime: consumed (ptr param moved in),
 #         use-after-move is an error. Symbols: lifetime: producer, lifetime: consumed.
-- model: { name: Job, fields: [[id, i32, 0]] }
+- model: { name: Job, fields: [[ident, i32, 0]] }
 - model: { name: Store, fields: [[jobs, list<ptr<Job>>]] }
 
 # producer: returns a freshly-owned box; the caller owns it (moved out, no realloc)
@@ -11,26 +11,26 @@
     name: make_job
     return: { type: ptr<Job>, lifetime: producer }
     body:
-      - decl: [j, ptr<Job>, { new: Job }]     # scope box…
-      - set: [j.id, 7]
-      - return: j                             # …moved out (scope drop suppressed)
+      - decl: [jdx, ptr<Job>, { new: Job }]     # scope box…
+      - set: [jdx.ident, 7]
+      - return: jdx                             # …moved out (scope drop suppressed)
 
 # consumed: sink — takes ownership of `job`; the caller's box is moved out.
 # `st` is a borrow (ref) of the caller's store; `job` is consumed (moved in).
 - def:
     name: keep
-    args: [[st, ref<Store>], [job, ptr<Job>, { lifetime: consumed }]]
+    args: [[storer, ref<Store>], [job, ptr<Job>, { lifetime: consumed }]]
     body:
-      - call: [st.jobs.push, job]             # callee moves the owned job into the store
+      - call: [storer.jobs.push, job]             # callee moves the owned job into the store
 
 - def:
     name: main
     return: i32
     body:
       - decl: [store, Store]
-      - decl: [r, ptr<Job>, { call: [make_job] }]   # producer ⇒ r owns; scope-default would free it
-      - if: { condition: { neq: [r.id, 7] }, then: [{ print: ["FAIL id=${r.id}"] }, { return: 1 }] }
-      - call: [keep, store, r]                       # consumed ⇒ r is MOVED into keep; r moved-out
+      - decl: [itr, ptr<Job>, { call: [make_job] }]   # producer ⇒ r owns; scope-default would free it
+      - if: { condition: { neq: [itr.ident, 7] }, then: [{ print: ["FAIL ident=${itr.ident}"] }, { return: 1 }] }
+      - call: [keep, store, itr]                       # consumed ⇒ r is MOVED into keep; r moved-out
       # using r here would be a use-after-move error (documented; not executed)
       - if: { condition: { neq: [store.jobs.len, 1] }, then: [{ print: ["FAIL store ${store.jobs.len}"] }, { return: 1 }] }
       - print: ["PASS 10 producer_consumed"]

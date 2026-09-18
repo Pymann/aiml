@@ -19,7 +19,7 @@ ONLY="${ONLY:-}"
 
 env_common=(AIML_MODEL_TRACE="$TRACE")
 case "$MODE" in
-  spec61) : ;;                                                   # target model = plain compiler
+  spec61) env_common+=(AIML_LIFETIME_DROPS=1 AIML_MEM_V3=1) ;;   # spec/61 target model (v3 gate)
   off)    env_common+=(AIML_LIFETIME_DROPS=1) ;;                 # old drops-on / value model
   v2)     env_common+=(AIML_LIFETIME_DROPS=1 AIML_MODEL_REFCOUNT=1) ;;  # old refcount-everything
   *) echo "unknown MODE=$MODE (use spec61|off|v2)"; exit 2 ;;

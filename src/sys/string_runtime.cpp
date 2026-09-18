@@ -131,6 +131,21 @@ extern "C" void aiml_str_assign_move(char** dst, char* next) {
     aiml_str_decref(old);
 }
 
+// ── spec/61 §4 target: SHARE on assignment (incref), not dup (AIML_MEM_V3 gate) ──────────────
+// `set: [a, b]` where b is a borrow SHARES b's buffer (incref) instead of deep-copying it.
+// Secure-before-release order (§5.5): incref the source FIRST, then decref the old dst — so a
+// self-assignment `set:[x,x]` (src == old) is a safe no-op (rc +1 then −1). A literal / immortal
+// src has no header → incref is a no-op (still shared safely). Distinct from aiml_str_assign_copy
+// (which dups): this is the immutable-string share of §4, used only under AIML_MEM_V3.
+extern "C" int32_t aiml_str_assign_share(char** dst, char* src) {
+    if (!dst) return 0;
+    aiml_str_incref(src);              // acquire a shared reference BEFORE releasing old
+    char* old = *dst;
+    *dst = src;
+    aiml_str_decref(old);             // safe even if old == src (net rc unchanged)
+    return 1;
+}
+
 extern "C" char* aiml_str_take_local(char** src) {
     if (!src) return nullptr;
     char* value = *src;

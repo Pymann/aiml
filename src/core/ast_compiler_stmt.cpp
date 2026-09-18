@@ -866,8 +866,17 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 bool ownedTemp = iv && inStringTempStack(ctx, iv);
                 if (iv && iv->getType()->isPointerTy() && !ownedTemp) {
                     llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
-                    llvm::Function* dup = ctx.getFunction("aiml_str_dup", i8p, {i8p});
-                    initVal = ctx.ir_gen->wrap(ctx.builder.CreateCall(dup, { iv }, "managed_dup"));
+                    if (ctx.memV3) {
+                        // spec/61 §4: SHARE the borrow (incref) — the slot owns a shared ref, freed
+                        // by its scope-drop decref. Immutable → same content, no dup.
+                        llvm::Function* inc = ctx.getFunction("aiml_str_incref",
+                            ctx.builder.getVoidTy(), {i8p});
+                        ctx.builder.CreateCall(inc, { iv });
+                        // initVal stays `iv` (the shared buffer)
+                    } else {
+                        llvm::Function* dup = ctx.getFunction("aiml_str_dup", i8p, {i8p});
+                        initVal = ctx.ir_gen->wrap(ctx.builder.CreateCall(dup, { iv }, "managed_dup"));
+                    }
                 }
             }
         }
@@ -1621,6 +1630,12 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                     llvm::Function* mv = ctx.getFunction("aiml_str_assign_move",
                         ctx.builder.getVoidTy(), {i8p->getPointerTo(), i8p});
                     ctx.builder.CreateCall(mv, { slot, newRaw });
+                } else if (ctx.memV3) {
+                    // spec/61 §4: a borrow is SHARED (incref), not dup'd. Secure-before-release in
+                    // aiml_str_assign_share makes self-assignment a no-op. Immutable → same content.
+                    llvm::Function* sh = ctx.getFunction("aiml_str_assign_share",
+                        ctx.builder.getInt32Ty(), {i8p->getPointerTo(), i8p});
+                    ctx.builder.CreateCall(sh, { slot, newRaw });
                 } else {
                     llvm::Function* cp = ctx.getFunction("aiml_str_assign_copy",
                         ctx.builder.getInt32Ty(), {i8p->getPointerTo(), i8p});
