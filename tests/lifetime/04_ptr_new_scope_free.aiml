@@ -6,7 +6,7 @@
 - model:
     name: Node
     fields:
-      - [label, string, "n"]
+      - [label, string, "itn"]
       - [vals, list<i32>]
 
 # a scope box: no `free` written — released automatically at scope exit (§9.1)
@@ -14,10 +14,10 @@
     name: use_scope
     return: i32
     body:
-      - decl: [p, ptr<Node>, { new: Node }]   # heap; scope-managed by default
-      - set: [p.label, "boxed"]               # dot-access auto-derefs
-      - call: [p.vals.push, 7]
-      - if: { condition: { neq: [p.label, "boxed"] }, then: [{ print: ["FAIL label ${p.label}"] }, { return: 1 }] }
+      - decl: [itp, ptr<Node>, { new: Node }]   # heap; scope-managed by default
+      - set: [itp.label, "boxed"]               # dot-access auto-derefs
+      - call: [itp.vals.push, 7]
+      - if: { condition: { neq: [itp.label, "boxed"] }, then: [{ print: ["FAIL label ${itp.label}"] }, { return: 1 }] }
       - return: 0                              # p auto-freed here — no manual free needed
 
 # early free: releases now + nulls the slot; scope drop then a no-op (no double free)
@@ -25,23 +25,23 @@
     name: use_early_free
     return: i32
     body:
-      - decl: [q, ptr<Node>, { new: Node }]
-      - call: [q.vals.push, 1]
-      - free: [q]                             # explicit EARLY release
+      - decl: [itq, ptr<Node>, { new: Node }]
+      - call: [itq.vals.push, 1]
+      - free: [itq]                             # explicit EARLY release
       - return: 0
 
 - def:
     name: main
     return: i32
     body:
-      - decl: [i, i32, 0]
+      - decl: [idx, i32, 0]
       - while:
-          condition: { lt: [i, 20] }
+          condition: { lt: [idx, 20] }
           body:
             - decl: [rc, i32, { call: [use_scope] }]   # new+free per iteration, no accumulation
             - if: { condition: { neq: [rc, 0] }, then: [{ print: ["FAIL use_scope"] }, { return: 1 }] }
             - decl: [rc2, i32, { call: [use_early_free] }]
             - if: { condition: { neq: [rc2, 0] }, then: [{ print: ["FAIL use_early_free"] }, { return: 1 }] }
-            - set: [i, { +: [i, 1] }]
+            - set: [idx, { +: [idx, 1] }]
       - print: ["PASS 04 ptr_new_scope_free"]
       - return: 0

@@ -19,19 +19,19 @@
     name: main
     return: i32
     body:
-      - decl: [z, ptr<Zone>, { new: Zone }]
-      - decl: [i, i32, 0]
+      - decl: [itz, ptr<Zone>, { new: Zone }]
+      - decl: [idx, i32, 0]
       - while:
-          condition: { lt: [i, 3] }
+          condition: { lt: [idx, 3] }
           body:
             - decl: [card, ptr<Card>, { new: Card }]
-            - set: [card.title, "t${i}"]
-            - set: [card.owner, { ref: z }]      # weak back-edge (no incref of z)
-            - call: [z.cards.push, card]         # move card into the zone (owning)
-            - set: [i, { +: [i, 1] }]
-      - if: { condition: { neq: [z.cards.len, 3] }, then: [{ print: ["FAIL len=${z.cards.len}"] }, { return: 1 }] }
-      - decl: [c1, ref<Card>, { at: [z.cards, 1] }]
-      - if: { condition: { neq: [c1.owner.name, "zone"] }, then: [{ print: ["FAIL weak read"] }, { return: 1 }] }
+            - set: [card.title, "itt${idx}"]
+            - set: [card.owner, { ref: itz }]      # weak back-edge (no incref of z)
+            - call: [itz.cards.push, card]         # move card into the zone (owning)
+            - set: [idx, { +: [idx, 1] }]
+      - if: { condition: { neq: [itz.cards.len, 3] }, then: [{ print: ["FAIL len=${itz.cards.len}"] }, { return: 1 }] }
+      - decl: [carda, ref<Card>, { at: [itz.cards, 1] }]
+      - if: { condition: { neq: [carda.owner.name, "zone"] }, then: [{ print: ["FAIL weak read"] }, { return: 1 }] }
       # scope exit: z drops → rc 0 → releases each card; card.owner weak edges hold nothing → no leak
       - print: ["PASS 08 ref_weak_cycle"]
       - return: 0

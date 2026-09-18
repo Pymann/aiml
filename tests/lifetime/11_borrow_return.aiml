@@ -5,26 +5,26 @@
 #         disambiguated by `borrows:`. Symbols: ref return, borrows: annotation.
 # EXPECT: the returned ref is valid while the anchor argument lives (and until §5.4 invalidation).
 - model: { name: Zone, fields: [[cards, list<ptr<Card>>]] }
-- model: { name: Card, fields: [[title, string, "c"]] }
+- model: { name: Card, fields: [[title, string, "itc"]] }
 
 # two ref params → `borrows:` REQUIRED to name the anchor; result derives from `a` via owning path
 - def:
     name: pick
-    args: [[a, ref<Zone>], [b, ref<Zone>]]
-    return: { type: ref<Card>, borrows: a }
+    args: [[ita, ref<Zone>], [itb, ref<Zone>]]
+    return: { type: ref<Card>, borrows: ita }
     body:
-      - return: { at: [a.cards, 0] }          # borrow of a.cards[0] — owning path a → cards → elem
+      - return: { at: [ita.cards, 0] }          # borrow of a.cards[0] — owning path a → cards → elem
 
 - def:
     name: main
     return: i32
     body:
-      - decl: [z1, Zone]
-      - decl: [z2, Zone]
-      - decl: [c, ptr<Card>, { new: Card }]
-      - set: [c.title, "ace"]
-      - call: [z1.cards.push, c]
-      - decl: [got, ref<Card>, { call: [pick, z1, z2] }]  # got borrows z1 (the anchor)
+      - decl: [zonea, Zone]
+      - decl: [zoneb, Zone]
+      - decl: [itc, ptr<Card>, { new: Card }]
+      - set: [itc.title, "ace"]
+      - call: [zonea.cards.push, itc]
+      - decl: [got, ref<Card>, { call: [pick, zonea, zoneb] }]  # got borrows z1 (the anchor)
       - if: { condition: { neq: [got.title, "ace"] }, then: [{ print: ["FAIL borrow ret ${got.title}"] }, { return: 1 }] }
       # got is valid while z1 lives AND z1.cards is not mutated (§5.4). No ownership handed back.
       - print: ["PASS 11 borrow_return"]

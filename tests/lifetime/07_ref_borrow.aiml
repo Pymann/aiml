@@ -3,14 +3,14 @@
 # CONSTRUCT: ref<T> non-owning borrow — param borrow + mutate; explicit {ref: x}; auto-borrow (§8, §6.2).
 # COVERS: ref<T> param (borrow, no free, mutate in place), {ref: x} explicit borrow of a value var,
 #         auto-borrow of a value variable at a ref param. Symbols: ref<T>, {ref}.
-- model: { name: Counter, fields: [[n, i32, 0]] }
+- model: { name: Counter, fields: [[itn, i32, 0]] }
 
 # borrow + mutate in place; caller keeps ownership; callee does NOT free
 - def:
     name: inc
-    args: [[c, ref<Counter>]]
+    args: [[itc, ref<Counter>]]
     body:
-      - set: [c.n, { +: [c.n, 1] }]
+      - set: [itc.itn, { +: [itc.itn, 1] }]
 
 - def:
     name: main
@@ -19,10 +19,10 @@
       - decl: [ctr, Counter]                 # value local (owning lvalue)
       - call: [inc, ctr]                     # auto-borrow: ctr passed to a ref<Counter> param
       - call: [inc, ctr]
-      - if: { condition: { neq: [ctr.n, 2] }, then: [{ print: ["FAIL n=${ctr.n}"] }, { return: 1 }] }
-      - decl: [r, ref<Counter>, { ref: ctr }]  # explicit borrow of a named value var
-      - set: [r.n, 10]                       # mutate through the borrow
-      - if: { condition: { neq: [ctr.n, 10] }, then: [{ print: ["FAIL through-ref ${ctr.n}"] }, { return: 1 }] }
+      - if: { condition: { neq: [ctr.itn, 2] }, then: [{ print: ["FAIL itn=${ctr.itn}"] }, { return: 1 }] }
+      - decl: [itr, ref<Counter>, { ref: ctr }]  # explicit borrow of a named value var
+      - set: [itr.itn, 10]                       # mutate through the borrow
+      - if: { condition: { neq: [ctr.itn, 10] }, then: [{ print: ["FAIL through-ref ${ctr.itn}"] }, { return: 1 }] }
       # ctr is still owned here; r never owned it (no free of ctr by anyone but its scope)
       - print: ["PASS 07 ref_borrow"]
       - return: 0

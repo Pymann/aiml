@@ -4,7 +4,7 @@
 # COVERS: free protocol per type class — string (Class 2, decref), list/map (Class 3, decref),
 #         ptr<> field (owning, followed), shared<> field (decref), ref<> field (weak, ignored),
 #         nested value model (recurse). Symbols: free release protocol, mixed fields.
-- model: { name: Inner, fields: [[tag, string, "i"], [nums, list<i32>]] }
+- model: { name: Inner, fields: [[tag, string, "idx"], [nums, list<i32>]] }
 - model:
     name: Big
     fields:
@@ -18,18 +18,18 @@
     name: main
     return: i32
     body:
-      - decl: [i, i32, 0]
+      - decl: [idx, i32, 0]
       - while:
-          condition: { lt: [i, 20] }
+          condition: { lt: [idx, 20] }
           body:
-            - decl: [b, ptr<Big>, { new: Big }]
-            - set: [b.name, "n${i}"]
-            - call: [b.rows.push, "r"]
-            - call: [b.table.put, "k", i]
-            - set: [b.child, { new: Inner }]        # owning ptr child
-            - call: [b.child.nums.push, i]
-            - set: [b.inline.tag, "in${i}"]
-            - free: [b]                             # class-based release: all fields once, then block
-            - set: [i, { +: [i, 1] }]
+            - decl: [itb, ptr<Big>, { new: Big }]
+            - set: [itb.name, "itn${idx}"]
+            - call: [itb.rows.push, "itr"]
+            - call: [itb.table.put, "kdx", idx]
+            - set: [itb.child, { new: Inner }]        # owning ptr child
+            - call: [itb.child.nums.push, idx]
+            - set: [itb.inline.tag, "in${idx}"]
+            - free: [itb]                             # class-based release: all fields once, then block
+            - set: [idx, { +: [idx, 1] }]
       - print: ["PASS 09 free_release_protocol"]
       - return: 0

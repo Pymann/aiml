@@ -6,6 +6,7 @@
 - def:
     name: main
     return: i32
+    static_off: ["str_cmp"]
     body:
       - decl: [name, string, "Ada"]        # literal (static, no rc) — never freed (§4.6)
       - decl: [alias, string, name]        # SHARE: alias and name are the same buffer (incref)

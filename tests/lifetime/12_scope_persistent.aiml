@@ -4,35 +4,35 @@
 # COVERS: lifetime: scope (explicit, = default auto-free), lifetime: persistent (opt out of the
 #         scope drop when ownership escapes into a longer-lived owner). Symbols: lifetime: scope,
 #         lifetime: persistent.
-- model: { name: Node, fields: [[v, i32, 0]] }
+- model: { name: Node, fields: [[itv, i32, 0]] }
 - model: { name: Tree, fields: [[nodes, list<ptr<Node>>]] }
 
 # build into a caller-owned tree: the box ESCAPES this scope → persistent (not auto-freed here)
 - def:
     name: attach
-    args: [[t, ref<Tree>], [v, i32]]
+    args: [[itt, ref<Tree>], [itv, i32]]
     body:
-      - decl: [n, ptr<Node>, { new: Node }, { lifetime: persistent }]  # ownership escapes into t
-      - set: [n.v, v]
-      - call: [t.nodes.push, n]              # moved into t; NOT auto-freed at this scope exit
+      - decl: [itn, ptr<Node>, { new: Node }, { lifetime: persistent }]  # ownership escapes into t
+      - set: [itn.itv, itv]
+      - call: [itt.nodes.push, itn]              # moved into t; NOT auto-freed at this scope exit
 
 - def:
     name: scratch
     return: i32
     body:
       - decl: [tmp, ptr<Node>, { new: Node }, { lifetime: scope }]  # explicit scope = the default
-      - set: [tmp.v, 99]
-      - if: { condition: { neq: [tmp.v, 99] }, then: [{ return: 1 }] }
+      - set: [tmp.itv, 99]
+      - if: { condition: { neq: [tmp.itv, 99] }, then: [{ return: 1 }] }
       - return: 0                            # tmp auto-freed here (scope)
 
 - def:
     name: main
     return: i32
     body:
-      - decl: [t, Tree]
-      - call: [attach, t, 1]
-      - call: [attach, t, 2]
-      - if: { condition: { neq: [t.nodes.len, 2] }, then: [{ print: ["FAIL persistent escape ${t.nodes.len}"] }, { return: 1 }] }
+      - decl: [itt, Tree]
+      - call: [attach, itt, 1]
+      - call: [attach, itt, 2]
+      - if: { condition: { neq: [itt.nodes.len, 2] }, then: [{ print: ["FAIL persistent escape ${itt.nodes.len}"] }, { return: 1 }] }
       - decl: [rc, i32, { call: [scratch] }]
       - if: { condition: { neq: [rc, 0] }, then: [{ print: ["FAIL scratch"] }, { return: 1 }] }
       # scope exit: t (owning list<ptr<Node>>) frees the two attached nodes exactly once.
