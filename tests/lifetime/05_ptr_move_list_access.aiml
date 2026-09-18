@@ -23,7 +23,7 @@
       # set(i): replace element 0 — secure new, then release old (§5.5 order)
       - decl: [cardc, ptr<Card>, { new: Card }]
       - set: [cardc.name, "fizz"]
-      - set: [{ at: [hand, 0] }, cardc]               # release old bolt-box, move c3 in
+      - idx: [hand, 0, cardc]                         # set(i): release old bolt-box, move c3 in
       # pop = MOVE the owned ptr OUT (caller owns it now; the pointee stays alive)
       - decl: [taken, ptr<Card>, { call: [hand.pop] }]
       - if: { condition: { neq: [hand.len, 1] }, then: [{ print: ["FAIL len ${hand.len}"] }, { return: 1 }] }

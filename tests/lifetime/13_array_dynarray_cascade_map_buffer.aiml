@@ -10,12 +10,12 @@
     body:
       # array<i32:N> — inline value block (Class-1 storage), value-copied element-wise
       - decl: [xsarr, "array<i32:4>"]
-      - set: [{ at: [xsarr, 0] }, 10]
-      - set: [{ at: [xsarr, 1] }, 20]
+      - idx: [xsarr, 0, 10]                            # element write = idx: (not set:[{at}])
+      - idx: [xsarr, 1, 20]
       - if: { condition: { neq: [{ at: [xsarr, 1] }, 20] }, then: [{ print: ["FAIL array<i32>"] }, { return: 1 }] }
       # array<string:N> — inline, but each element is an rc string → released per element on drop
       - decl: [labels, "array<string:3>"]
-      - set: [{ at: [labels, 0] }, "ita"]
+      - idx: [labels, 0, "ita"]
       - if: { condition: { neq: [{ at: [labels, 0] }, "ita"] }, then: [{ print: ["FAIL array<string>"] }, { return: 1 }] }
       # dyn_array<T> — heap, runtime-sized, Class-3 rc container (same discipline as list)
       - decl: [buf, "dyn_array<i32>"]

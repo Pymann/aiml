@@ -38,10 +38,10 @@
       - while:
           condition: { lt: [idx, 20] }
           body:
-            - decl: [rc, i32, { call: [use_scope] }]   # new+free per iteration, no accumulation
-            - if: { condition: { neq: [rc, 0] }, then: [{ print: ["FAIL use_scope"] }, { return: 1 }] }
-            - decl: [rc2, i32, { call: [use_early_free] }]
-            - if: { condition: { neq: [rc2, 0] }, then: [{ print: ["FAIL use_early_free"] }, { return: 1 }] }
+            - decl: [retc, i32, { call: [use_scope] }]   # new+free per iteration, no accumulation
+            - if: { condition: { neq: [retc, 0] }, then: [{ print: ["FAIL use_scope"] }, { return: 1 }] }
+            - decl: [retc2, i32, { call: [use_early_free] }]
+            - if: { condition: { neq: [retc2, 0] }, then: [{ print: ["FAIL use_early_free"] }, { return: 1 }] }
             - set: [idx, { +: [idx, 1] }]
       - print: ["PASS 04 ptr_new_scope_free"]
       - return: 0

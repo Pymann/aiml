@@ -297,6 +297,10 @@ public:
     // gets a deep scope-drop (kind 4), exactly like a `{ new: T }` local — unless it escapes
     // (return/store/push → consumeLocalDrop removes the drop). Default false = borrow/view.
     bool        ownsReturn = false;
+    // spec/61 §8: for a `ref<T>` return, the parameter name the borrow is anchored to
+    // (`return: { type: ref<T>, borrows: <param> }`). Recorded for the future modular borrow
+    // lifetime check; not enforced yet (a ref-return behaves like a ptr-return today).
+    std::string returnBorrowsParam;
     uint64_t    version = 1;  // Hot-Reload version (default 1)
     std::vector<std::pair<std::string, std::string>> args; // name, type
     std::vector<ParamMod> argMods;   // parallel to args; default-constructed = plain borrow

@@ -206,8 +206,13 @@ bool FunctionBuilder::OnScalar(const std::string& value, const std::string& tag)
             } else {
                 LOG_ERROR("return lifetime must be scope|producer, got '" + value + "'");
             }
+        } else if (returnMapKey == "borrows") {
+            // spec/61 §8: names the ref<T> parameter the returned borrow is anchored to. The
+            // modular borrow lifetime check is not enforced yet — accept the annotation so the
+            // return type stays a plain borrow (behaves like a ptr-return today).
+            func->returnBorrowsParam = value;
         } else {
-            LOG_ERROR("unknown return modifier '" + returnMapKey + "' (expected type|lifetime)");
+            LOG_ERROR("unknown return modifier '" + returnMapKey + "' (expected type|lifetime|borrows)");
         }
         return true;
     }
