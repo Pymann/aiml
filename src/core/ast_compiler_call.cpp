@@ -1440,6 +1440,33 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              ListImpl::insert(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1])));
              return nullptr;
          } else if (methodName == "remove" && argVals.size() > 0) {
+             // AIML v2 P3: a list<Model> stores %M* REFERENCES (stride 8, NOT the struct size). The
+             // removed reference must be DECREF'd (balances push's incref) and the memmove must shift
+             // by pointer stride — using the struct type here shifts by sizeof(Model) and corrupts the
+             // pointer array (garbage element → aiml_model_incref SIGSEGV in the 9rooms buff remove).
+             if (ctx.isRefcountModel(listElemName)) {
+                 auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                 llvm::Value* listP = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+                 llvm::Value* idxV  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+                 // decref the element about to be removed (bounds already enforced by callers/at).
+                 if (ctx.lifetimeDropsEnabled) {
+                     auto ci = ctx.classes.find(listElemName);
+                     if (ci != ctx.classes.end() && ci->second.serNodesVar) {
+                         llvm::StructType* lstTy = ListImpl::getListStructType(ctx);
+                         llvm::Value* dataP = ctx.builder.CreateLoad(i8p,
+                             ctx.builder.CreateStructGEP(lstTy, listP, 2, "rm_dataPtr"), "rm_dataBase");
+                         llvm::Value* slot = ctx.builder.CreateInBoundsGEP(i8p, dataP, idxV, "rm_slot");
+                         llvm::Value* gone = ctx.builder.CreateLoad(i8p, slot, "rm_modelptr");
+                         llvm::Function* dref = ctx.getFunction("aiml_model_decref", ctx.builder.getVoidTy(),
+                             {i8p, i8p, ctx.builder.getInt32Ty()});
+                         ctx.builder.CreateCall(dref, { gone, ci->second.serNodesVar,
+                                                        ctx.builder.getInt32(ci->second.serNodesCount) });
+                     }
+                 }
+                 // Shift with POINTER stride (i8p), and do NOT str-decref.
+                 ListImpl::remove(ctx, listP, idxV, i8p, /*elemIsString=*/false);
+                 return nullptr;
+             }
              ListImpl::remove(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), llvmListElemType, listElemName == "string");
              return nullptr;
          } else if (methodName == "clear") {
@@ -2825,6 +2852,24 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), "deref_ptr");
                 return ctx.ir_gen->wrap(SerializeImpl::serialize(ctx, ptrVal, innerType, stylePtr));
             }
+        }
+
+        // AIML v2: a refcount-MODEL local's alloca holds a %M* (pointer to the object), NOT an
+        // inline struct — so serialize the LOADED pointer, exactly like the ptr<T> case above.
+        // Passing the alloca (a pointer-to-%M*) makes SerializeImpl read the %M* bytes as the first
+        // struct field → empty/garbage output (the ability-text cache produced identical keys →
+        // false cache hits + a read-past-buffer SIGSEGV). See probe_ser.aiml.
+        if (argSym && ctx.isRefcountModel(argType)) {
+            if (!SerializeImpl::isSerializable(ctx, argType)) {
+                LOG_ERROR("sys.serialize: type '" + argType + "' is not serialisable");
+                return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr("(error)"));
+            }
+            IRValue* baseAlloca = argSym->ir_alloca_inst
+                ? argSym->ir_alloca_inst : ctx.ir_gen->wrap(argSym->alloca_inst);
+            llvm::Value* objVal = ctx.builder.CreateLoad(
+                llvm::PointerType::get(ctx.context, 0),
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), "ser_modelptr");
+            return ctx.ir_gen->wrap(SerializeImpl::serialize(ctx, objVal, argType, stylePtr));
         }
 
         // Validate serializability

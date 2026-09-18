@@ -1,0 +1,39 @@
+# static-check: off
+# TIER: T2
+# CONSTRUCT: the remaining container/aggregate built-ins and their disciplines (§2.1, §5).
+# COVERS: array<T:N> (inline value, element-recursive drop), dyn_array<T> (Class-3 rc),
+#         cascade<X> (reuses list<i32>), map<K:V> (Class-3), buffer (Class-3).
+#         Symbols: array<T:N>, dyn_array<T>, cascade<X>, map<K:V>, buffer.
+- def:
+    name: main
+    return: i32
+    body:
+      # array<i32:N> — inline value block (Class-1 storage), value-copied element-wise
+      - decl: [xs, "array<i32:4>"]
+      - set: [{ at: [xs, 0] }, 10]
+      - set: [{ at: [xs, 1] }, 20]
+      - if: { condition: { neq: [{ at: [xs, 1] }, 20] }, then: [{ print: ["FAIL array<i32>"] }, { return: 1 }] }
+      # array<string:N> — inline, but each element is an rc string → released per element on drop
+      - decl: [labels, "array<string:3>"]
+      - set: [{ at: [labels, 0] }, "a"]
+      - if: { condition: { neq: [{ at: [labels, 0] }, "a"] }, then: [{ print: ["FAIL array<string>"] }, { return: 1 }] }
+      # dyn_array<T> — heap, runtime-sized, Class-3 rc container (same discipline as list)
+      - decl: [buf, "dyn_array<i32>"]
+      - call: [buf.push, 1]
+      - call: [buf.push, 2]
+      - if: { condition: { neq: [buf.len, 2] }, then: [{ print: ["FAIL dyn_array len=${buf.len}"] }, { return: 1 }] }
+      # map<K:V> — Class-3 rc container; get_copy = independent element copy (§5.4)
+      - decl: [m, "map<string:i32>"]
+      - call: [m.put, "k", 7]
+      - if: { condition: { neq: [{ call: [m.get, "k"] }, 7] }, then: [{ print: ["FAIL map"] }, { return: 1 }] }
+      - decl: [kc, i32, { call: [m.get_copy, "k"] }]   # get_copy → independent copy of the value
+      - if: { condition: { neq: [kc, 7] }, then: [{ print: ["FAIL get_copy=${kc}"] }, { return: 1 }] }
+      # buffer — Class-3 mutable byte buffer
+      - decl: [bytes, buffer]
+      - call: [bytes.alloc, 16]
+      # cascade<X> — reuses the list<i32> layout (Class-3, same rc/aliasing discipline)
+      - decl: [eff, "cascade<Effect>"]                 # Effect is a top-level cascade type
+      - decl: [row, "list<i32>"]
+      - call: [row.push, 3]
+      - print: ["PASS 13 array_dynarray_cascade_map_buffer"]
+      - return: 0

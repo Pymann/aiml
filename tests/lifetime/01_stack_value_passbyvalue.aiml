@@ -1,0 +1,39 @@
+# static-check: off
+# TIER: T1
+# CONSTRUCT: a value model on the stack (§3); pass-by-value copies member-wise.
+# COVERS: value model (plain decl = stack), scalar isolation, container-field ALIASING on copy,
+#         scope-exit release. Symbols: decl (no new), member-wise copy (§7), list<i32> field.
+# EXPECT: scalar param mutation is isolated; container-field mutation is VISIBLE to caller (alias).
+- model:
+    name: Conf
+    fields:
+      - [port, i32, 0]
+      - [tags, list<string>]
+
+# mutate a scalar field of a by-value param → caller unaffected
+- def:
+    name: bump_scalar
+    args: [[c, Conf]]
+    body:
+      - set: [c.port, 9090]           # local copy's scalar only
+
+# mutate a CONTAINER field of a by-value param → caller SEES it (shared, §7/§5)
+- def:
+    name: tag_it
+    args: [[c, Conf]]
+    body:
+      - call: [c.tags.push, "hot"]    # c.tags is shared (incref) with the caller's Conf
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [conf, Conf]            # stack value (NOT heap)
+      - set: [conf.port, 8080]
+      - call: [conf.tags.push, "base"]
+      - call: [bump_scalar, conf]
+      - if: { condition: { neq: [conf.port, 8080] }, then: [{ print: ["FAIL scalar leaked ${conf.port}"] }, { return: 1 }] }
+      - call: [tag_it, conf]
+      - if: { condition: { neq: [conf.tags.len, 2] }, then: [{ print: ["FAIL tags not aliased len=${conf.tags.len}"] }, { return: 1 }] }
+      - print: ["PASS 01 stack_value_passbyvalue"]
+      - return: 0

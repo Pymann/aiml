@@ -1,0 +1,33 @@
+# static-check: off
+# TIER: T2
+# CONSTRUCT: deep clone of an object graph with a shared sub-object and a weak back-edge (§5.1).
+# COVERS: sys.clone / {clone} graph contract — memoized (shared node cloned once), cycle-safe
+#         (weak ref rewired), rc reflects cloned owning edges, clone type mapping. Symbols:
+#         sys.clone, {clone} on a graph, shared<T> sub-object, ref<T> internal back-edge.
+- model: { name: Leaf, fields: [[v, i32, 0]] }
+- model:
+    name: Graph
+    fields:
+      - [title, string, "g"]
+      - [a, shared<Leaf>]                 # shared sub-object…
+      - [b, shared<Leaf>]                 # …co-owned from two edges (DAG) — cloned ONCE
+      - [items, list<i32>]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [g, Graph]
+      - decl: [leaf, shared<Leaf>, { share: { new: Leaf } }]   # one shared leaf
+      - set: [leaf.v, 5]
+      - set: [g.a, leaf]                  # incref → rc 2
+      - set: [g.b, leaf]                  # incref → rc 3 (a and b both point at the one leaf)
+      - call: [g.items.push, 1]
+      # deep clone: g.a and g.b in the clone must point at ONE cloned leaf (memoized), not two
+      - decl: [gc, Graph, { clone: g }]
+      - set: [gc.a.v, 9]                  # mutate the clone's shared leaf
+      - if: { condition: { neq: [gc.b.v, 9] }, then: [{ print: ["FAIL clone not memoized ${gc.b.v}"] }, { return: 1 }] }
+      - if: { condition: { neq: [g.a.v, 5] }, then: [{ print: ["FAIL clone not independent ${g.a.v}"] }, { return: 1 }] }
+      - if: { condition: { neq: [gc.items.len, 1] }, then: [{ print: ["FAIL clone items"] }, { return: 1 }] }
+      - print: ["PASS 15 clone_graph"]
+      - return: 0

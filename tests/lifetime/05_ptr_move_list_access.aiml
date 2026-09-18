@@ -1,0 +1,35 @@
+# static-check: off
+# TIER: T2
+# CONSTRUCT: unique ptr<T> move + list<ptr<T>> access verbs (§6.2, §5.4).
+# COVERS: ptr move (source moved-out), list<ptr<T>>, at=borrow(ref), pop=move-out, remove=release,
+#         set(i)=secure-new-then-release-old. Symbols: list<ptr<T>>, at, pop, remove, set, move.
+- model: { name: Card, fields: [[name, string, "c"], [cost, i32, 0]] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [hand, list<ptr<Card>>]
+      - decl: [c, ptr<Card>, { new: Card }]
+      - set: [c.name, "bolt"]
+      - call: [hand.push, c]                       # MOVE c into the list; c is moved-out afterward
+      # at/get = BORROW (ref<Card>); the list keeps ownership
+      - decl: [view, ref<Card>, { at: [hand, 0] }]
+      - if: { condition: { neq: [view.name, "bolt"] }, then: [{ print: ["FAIL borrow ${view.name}"] }, { return: 1 }] }
+      # push a second owned box
+      - decl: [c2, ptr<Card>, { new: Card }]
+      - set: [c2.name, "zap"]
+      - call: [hand.push, c2]                      # move-in
+      # set(i): replace element 0 — secure new, then release old (§5.5 order)
+      - decl: [c3, ptr<Card>, { new: Card }]
+      - set: [c3.name, "fizz"]
+      - set: [{ at: [hand, 0] }, c3]               # release old bolt-box, move c3 in
+      # pop = MOVE the owned ptr OUT (caller owns it now; the pointee stays alive)
+      - decl: [taken, ptr<Card>, { call: [hand.pop] }]
+      - if: { condition: { neq: [hand.len, 1] }, then: [{ print: ["FAIL len ${hand.len}"] }, { return: 1 }] }
+      - free: [taken]                              # caller now owns it → release (or scope would)
+      # remove = RELEASE the remaining element (frees its box)
+      - call: [hand.remove, 0]
+      - if: { condition: { neq: [hand.len, 0] }, then: [{ print: ["FAIL after remove ${hand.len}"] }, { return: 1 }] }
+      - print: ["PASS 05 ptr_move_list_access"]
+      - return: 0

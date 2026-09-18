@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# run_lifetime.sh — run the lifetime lab probes against the spec/61 target model.
+#
+#   bash tests/lifetime/run_lifetime.sh              # spec61 target (default) — RED until the
+#                                                    #   compiler implements spec/61 (expected)
+#   MODE=off  bash tests/lifetime/run_lifetime.sh    # old drops-on model, for model-agnostic probes
+#   MODE=v2   bash tests/lifetime/run_lifetime.sh    # old v2 refcount-everything model
+#   TRACE=2   bash tests/lifetime/run_lifetime.sh    # + AIML_MODEL_TRACE ring / UAF reports
+#   ONLY=03   bash tests/lifetime/run_lifetime.sh    # run only probes whose name matches
+#
+# Exit 0 iff every probe returns 0. Under the default (spec61) that will NOT hold until the
+# compiler rewrite lands — the probes are the acceptance target (see README).
+set -uo pipefail
+cd "$(dirname "$0")/../.."                 # → aiml project root
+AIML="${AIML:-out/aiml/aiml}"
+TRACE="${TRACE:-0}"
+MODE="${MODE:-spec61}"
+ONLY="${ONLY:-}"
+
+env_common=(AIML_MODEL_TRACE="$TRACE")
+case "$MODE" in
+  spec61) : ;;                                                   # target model = plain compiler
+  off)    env_common+=(AIML_LIFETIME_DROPS=1) ;;                 # old drops-on / value model
+  v2)     env_common+=(AIML_LIFETIME_DROPS=1 AIML_MODEL_REFCOUNT=1) ;;  # old refcount-everything
+  *) echo "unknown MODE=$MODE (use spec61|off|v2)"; exit 2 ;;
+esac
+
+echo "── lifetime lab — MODE=$MODE  (spec61 = target; expect RED until the compiler rewrite) ──"
+fail=0; pass=0
+for f in tests/lifetime/[0-9]*.aiml; do
+  base=$(basename "$f")
+  [ -n "$ONLY" ] && [[ "$base" != *"$ONLY"* ]] && continue
+  tier=$(grep -m1 -oE '# TIER: T[0-2]' "$f" | grep -oE 'T[0-2]' || echo "--")
+  out=$(env "${env_common[@]}" "$AIML" "$f" -r 2>&1); rc=$?
+  line=$(echo "$out" | grep -E "PASS|FAIL|use-after-free|error:" | head -1)
+  if [ $rc -eq 0 ]; then pass=$((pass+1)); printf "  ok   [%s] %-34s %s\n" "$tier" "$base" "$line"
+  else fail=$((fail+1)); printf "  FAIL [%s] %-34s rc=%-3d %s\n" "$tier" "$base" "$rc" "$line"; fi
+done
+echo "── $pass passed, $fail failed (MODE=$MODE) ──"
+[ $fail -eq 0 ]

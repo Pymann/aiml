@@ -1,0 +1,30 @@
+# static-check: off
+# TIER: T2
+# CONSTRUCT: a Class-4 resource (tensor) and a model that holds one by value (§2.1, §7).
+# COVERS: tensor (Class-4 move-only handle, tensor.free, tensor.clone), model with a resource
+#         field ⇒ MOVE-ONLY (§7 composition), clonable only via the element clone.
+#         Symbols: tensor, resource field, move-only aggregate, tensor.clone, tensor.free.
+- model:
+    name: Layer
+    fields:
+      - [name, string, "layer"]
+      - [weights, tensor]                 # Class-4 resource by value ⇒ Layer is MOVE-ONLY
+
+- def:
+    name: main
+    return: i32
+    body:
+      # tensor is a Class-4 ptr-like handle: explicit free, clone via aiml_tensor_clone
+      - decl: [t, tensor, { call: [tensor.zeros, 8] }]
+      - decl: [t2, tensor, { clone: t }]  # deep clone of the tensor's data (element clone exists)
+      - call: [tensor.free, t2]           # explicit resource teardown
+      # a Layer holds a tensor by value → move-only; build one, move it into a list<Layer>? no —
+      # move-only aggregate: pass by move / hold uniquely. Here: construct, use, drop (closes tensor).
+      - decl: [lyr, Layer]
+      - set: [lyr.name, "dense"]
+      - set: [lyr.weights, { call: [tensor.ones, 4] }]   # move a fresh tensor into the field
+      - if: { condition: { neq: [lyr.name, "dense"] }, then: [{ print: ["FAIL layer"] }, { return: 1 }] }
+      # scope exit: lyr drops → its `weights` tensor is closed (Class-4 teardown), name decref'd.
+      - call: [tensor.free, t]
+      - print: ["PASS 14 tensor_resource_moveonly"]
+      - return: 0

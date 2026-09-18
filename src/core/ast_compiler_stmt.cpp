@@ -1267,7 +1267,12 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 && !sym->is_global) {
                 auto tci = ctx.classes.find(sym->typeName);
                 Symbol* ssym = resolveVariable(sv->name);
+                // AIML v2: a refcount-model local holds a %M* (pointer), NOT an inline struct — this
+                // local→local DEEP-COPY (which passes both ALLOCAS to aiml_ser_deep_copy) would read
+                // the %M* slot as a struct base → crash (lifetime lab 08). Skip it so the v2 rebind
+                // branch below (incref-new / decref-old / store the %M*) handles it by reference.
                 if (tci != ctx.classes.end() && tci->second.hasHeapFields && tci->second.serNodesVar
+                    && !ctx.isRefcountModel(sym->typeName)
                     && ssym && ssym->typeName == sym->typeName && !ssym->is_global
                     && ssym->ir_alloca_inst) {
                     // Finding #7: this early deep-copy path returns before the generic const
@@ -3257,6 +3262,37 @@ void Compiler::visitStoreStmt(StoreStmt* st) {
     for (int i = 0; i < st->depth; ++i) {
         cur = ctx.builder.CreateLoad(ptrTy, cur, "store_chain_" + std::to_string(i));
     }
+
+    // AIML v2: `store: [ptr<Model>, model_value]` — `*dst = src` is a VALUE assignment through the
+    // pointer, so dst must end up with an INDEPENDENT copy of src's heap (the fill_header_widgets
+    // deep-copy: the copy must survive the source being freed). Under v2 `src` is a %M* and `dst`
+    // (`cur`) is the destination object address; a plain CreateStore would write the source POINTER
+    // into dst's first field (nested lists lost). Free dst's current heap, then deep-copy src into it.
+    if (ctx.isRefcountModel(remaining) && storeVal->getType()->isPointerTy()) {
+        auto ci = ctx.classes.find(remaining);
+        if (ci != ctx.classes.end() && ci->second.serNodesVar) {
+            llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+            // Skip a self-store (`store: [p, *p]`): freeing dst would free src too.
+            llvm::Value* same = ctx.builder.CreateICmpEQ(storeVal, cur, "store_self");
+            llvm::Function* fn = ctx.builder.GetInsertBlock()->getParent();
+            llvm::BasicBlock* doBB   = llvm::BasicBlock::Create(ctx.context, "store_deepcopy", fn);
+            llvm::BasicBlock* postBB = llvm::BasicBlock::Create(ctx.context, "store_post", fn);
+            ctx.builder.CreateCondBr(same, postBB, doBB);
+            ctx.builder.SetInsertPoint(doBB);
+            llvm::Function* freeFn = ctx.getFunction("aiml_ser_free_decoded",
+                ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
+            ctx.builder.CreateCall(freeFn, { cur, ci->second.serNodesVar,
+                                             ctx.builder.getInt32(ci->second.serNodesCount) });
+            llvm::Function* dcp = ctx.getFunction("aiml_ser_deep_copy",
+                ctx.builder.getVoidTy(), {i8p, i8p, i8p, ctx.builder.getInt32Ty()});
+            ctx.builder.CreateCall(dcp, { cur, storeVal, ci->second.serNodesVar,
+                                          ctx.builder.getInt32(ci->second.serNodesCount) });
+            ctx.builder.CreateBr(postBB);
+            ctx.builder.SetInsertPoint(postBB);
+            return;
+        }
+    }
+
     ctx.builder.CreateStore(storeVal, cur);
 }
 

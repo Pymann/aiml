@@ -1,0 +1,24 @@
+# static-check: off
+# TIER: T2
+# CONSTRUCT: containers are refcounted handles (§5, Option B).
+# COVERS: assign = SHARE (aliasing); {copy: a} = shallow (independent spine, shared referents);
+#         {clone: a} = deep (independent). Symbols: list<T>, {copy}, {clone}.
+# EXPECT: b aliases a; c (copy) has independent spine; d (clone) is fully independent.
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [a, list<i32>]
+      - call: [a.push, 1]
+      - decl: [b, list<i32>, a]              # SHARE (incref) — same list
+      - call: [a.push, 2]
+      - if: { condition: { neq: [b.len, 2] }, then: [{ print: ["FAIL alias b.len=${b.len}"] }, { return: 1 }] }   # aliasing → 2
+      - decl: [c, list<i32>, { copy: a }]    # shallow copy — independent spine
+      - call: [a.push, 3]
+      - if: { condition: { neq: [c.len, 2] }, then: [{ print: ["FAIL copy c.len=${c.len}"] }, { return: 1 }] }     # unaffected
+      - decl: [d, list<i32>, { clone: a }]   # deep clone — fully independent
+      - call: [a.push, 4]
+      - if: { condition: { neq: [d.len, 3] }, then: [{ print: ["FAIL clone d.len=${d.len}"] }, { return: 1 }] }
+      # scope exit: a,b drop the shared list once at rc 0; c and d free their own buffers.
+      - print: ["PASS 03 container_aliasing_copy_clone"]
+      - return: 0
