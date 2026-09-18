@@ -4,12 +4,32 @@ Small, **self-verifying** probes that pin down the memory behavior mandated by
 `spec/61_memory_management_DRAFT.md`. Each probe defines its own types, performs one
 lifetime operation, checks the survivors, and returns exit code 0 (PASS) / 1 (FAIL).
 
-## ⚠ These probes are the TARGET, not the current behavior
+## Implementation status (branch `mem-v3-compiler`, gate `AIML_MEM_V3`)
 
-They assert the **new** model (spec/61). Against today's compiler most are **RED** on
-purpose — the compiler still does the old thing (containers don't alias, strings *dup*
-on assign, `ptr`/`ref` are identical, `new` has no scope-default). They turn green as the
-compiler is rewritten. This is deliberate test-first: the probes define "done".
+These probes are the spec/61 **acceptance target**. Implementation progress under
+`MODE=spec61` (which sets `AIML_LIFETIME_DROPS=1 AIML_MEM_V3=1`):
+
+**GREEN — 12/16:** 02 string share (§4), 04 ptr/new/scope-free (§6/§9.1), 05 ptr move +
+list<ptr> access (§6.2/§5.4), 06 shared<T> co-ownership (§6.2), 07 ref borrow + {ref} (§8),
+08 ref weak cycle (§5.2), 09 free release protocol (§6.1), 10 producer/consumed (§9.2),
+11 borrow-return + `borrows:` (§8), 12 scope/persistent (§9), 13 array/dyn_array/cascade/map/
+buffer/get_copy (§2.1/§5), 14 tensor/resource move-only (§7).
+
+**RED — 4 remaining, each a large architectural feature (not yet built):**
+- **01, 03 — container refcounting/aliasing (Option B).** `list`/`map` must become refcounted
+  *handles* (heap `{rc,size,cap,data}`) so assignment shares and mutation aliases. Today they
+  are inline value structs `{size,cap,ptr}` — an ABI change touching every container op. Largest.
+- **15 — memoized deep-clone graph (§5.1).** `aiml_ser_deep_copy` must gain a memo map so a
+  shared sub-object reached by two owning edges is cloned **once** (DAG-preserving) and cycles
+  terminate. A serializer rewrite.
+- **16 — thread move/guard (§5.3).** move-send (`chan.send`/`send_unique`), `spawn`, `shared`
+  and `lock` all exist, but spawn arg-marshaling of `chan`/`shared`/`lock` hits an IR bitcast
+  bug, and the statically-enforced `lock:` guard scope is unbuilt.
+
+Deployed/OFF path is **byte-identical**: every change is gated on `AIML_MEM_V3` (default OFF) or
+additive. Run the old model for comparison with `MODE=off`.
+
+Tier legend below (T0/T1/T2) is retained for reference.
 
 Run: `bash tests/lifetime/run_lifetime.sh`
 Under the tracer: `TRACE=2 bash tests/lifetime/run_lifetime.sh`
