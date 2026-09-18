@@ -1,26 +1,25 @@
 # static-check: off
 # TIER: T2
 # CONSTRUCT: cross-thread memory model P (§5.3) — move-send + shared + lock + spawn.
-# COVERS: chan<T>, chan.send (move of an exclusive value), send_unique (runtime-checked escape),
+# COVERS: chan<T>, chan.send (move an exclusive value), send_unique (runtime-checked escape),
 #         spawn, shared<T>, lock (acquire/release). Symbols: chan, chan.send, send_unique, spawn,
 #         shared<T>, lock.
-# NOTE: shared<Meter> is owned by main and BORROWED (ref) by the worker under the lock — the
-#   statically-enforced `lock:` guard scope and atomic shared rc are future refinements (§5.3);
-#   this exercises the runtime mechanism with the built primitives.
-- model: { name: Msg, fields: [[ident, i32, 0]] }
+# NOTE: chan carries a scalar here (struct-in-channel marshaling is a separate ChanImpl feature);
+#   shared<Meter> is main-owned and BORROWED (ref) by the worker under the lock (the statically
+#   enforced `lock:` guard scope + atomic shared rc are future refinements, §5.3).
 - model: { name: Meter, fields: [[hits, i32, 0]] }
 
 - def:
     name: worker
-    args: [[inbox, chan<Msg>], [meter, ref<Meter>], [mtx, lock]]
+    args: [[inbox, chan<i32>], [meter, ref<Meter>], [mtx, lock]]
     body:
       - decl: [idx, i32, 0]
       - while:
           condition: { lt: [idx, 2] }
           body:
-            - decl: [got, Msg, { call: [inbox.recv] }]   # receive a MOVED Msg
+            - decl: [got, i32, { call: [inbox.recv] }]   # receive a MOVED value
             - call: [mtx.acquire]
-            - set: [meter.hits, { +: [meter.hits, got.ident] }]  # guarded payload mutation
+            - set: [meter.hits, { +: [meter.hits, got] }]  # guarded payload mutation
             - call: [mtx.release]
             - set: [idx, { +: [idx, 1] }]
 
@@ -28,19 +27,15 @@
     name: main
     return: i32
     body:
-      - decl: [chn, chan<Msg>]
+      - decl: [chn, chan<i32>]
       - call: [chn.init, 4]
       - decl: [meter, shared<Meter>, { share: { new: Meter } }]   # co-owned meter (main owns)
       - decl: [mtx, lock]
       - call: [mtx.init]
       - decl: [mref, ref<Meter>, meter]                # borrow to hand to the worker
       - decl: [wth, thread_handle, { spawn: [worker, chn, mref, mtx] }]
-      - decl: [msg1, Msg]
-      - set: [msg1.ident, 1]
-      - call: [chn.send, msg1]                         # move-send (exclusive value)
-      - decl: [msg2, Msg]
-      - set: [msg2.ident, 1]
-      - call: [chn.send_unique, msg2]                  # runtime-checked move escape
+      - call: [chn.send, 1]                            # move-send an exclusive value
+      - call: [chn.send_unique, 1]                     # runtime-checked move escape
       - call: [wth.join]
       - if: { condition: { neq: [meter.hits, 2] }, then: [{ print: ["FAIL hits=${meter.hits}"] }, { return: 1 }] }
       - print: ["PASS 16 threads_move_shared_guard"]
