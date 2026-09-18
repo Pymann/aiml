@@ -174,6 +174,12 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
              atExpr->indices.push_back(std::move(args[i]));
          return atExpr;
     }
+    if (op == "ref" && args.size() == 1) {
+         // spec/61 §6.2: { ref: x } is an explicit non-owning borrow of the lvalue `x`. The
+         // target `ref<T>` slot/parameter drives the borrow (a ref<T> local bound from `x`
+         // already takes the borrow, verified), so lowering the wrapper to `x` is sufficient.
+         return std::move(args[0]);
+    }
     if (op == "slice" && args.size() >= 3) {
          // { slice: [container, start, end] } → CallExpr("__builtin_slice", container, start, end)
          auto call = std::make_unique<CallExpr>("__builtin_slice");

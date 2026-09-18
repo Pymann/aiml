@@ -100,7 +100,11 @@ bool StatementBuilder::OnMapStart() {
         // Actually, if we just push ModifierBuilder when args.size() >= 2, we might break default exprs.
         // Let's only push ModifierBuilder if args.size() >= 3. Wait, test_modifiers.aiml does NOT omit default value.
         // So args.size() is 3.
-        if (args.size() >= 3) {
+        // Modifier map when the value slot is already filled: either a scalar value made
+        // args.size()>=3, OR a MAP value was already captured into exprArg (a map value does not
+        // grow `args`, so a following map is the modifier). Fixes spec/61
+        // `[name, type, {new:T}, {lifetime: persistent}]`.
+        if (args.size() >= 3 || exprArg) {
             builder->pushState(std::make_unique<ModifierBuilder>(builder, &is_const, &is_volatile, &is_extern, &decl_lifetime));
             return true;
         }
