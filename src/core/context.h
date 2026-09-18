@@ -720,10 +720,17 @@ namespace AIML {
     // path is used unchanged. This is THE single gate for every v2 model-representation branch, so
     // that OFF stays byte-for-byte the v1 compiler. `bare` strips a leading ptr<>/ref<> wrapper.
     bool isRefcountModel(const std::string& typeName) const {
-        if (!modelRefcount) return false;
         std::string bare = typeName;
         if ((bare.rfind("ptr<", 0) == 0 || bare.rfind("ref<", 0) == 0) && !bare.empty() && bare.back() == '>')
             bare = bare.substr(4, bare.size() - 5);
+        // spec/61 §6.2: `shared<T>` is an opt-in refcounted co-owned handle. Under AIML_MEM_V3 it
+        // reuses the (well-tested) v2 refcounted-object machinery — %M* alloc/incref/decref,
+        // member auto-deref, list<%M*> elements — WITHOUT the global modelRefcount flag: only the
+        // `shared<>`-wrapped type is a refcount model, the bare `T` stays a value model.
+        bool sharedWrap = (bare.rfind("shared<", 0) == 0 && bare.back() == '>');
+        if (sharedWrap) bare = bare.substr(7, bare.size() - 8);
+        // Gate: the global v2 flag OR a memV3 shared<> wrapper enables refcount semantics.
+        if (!modelRefcount && !(memV3 && sharedWrap)) return false;
         auto it = classes.find(bare);
         return it != classes.end() && it->second.isModel && !it->second.isBuiltin
                && it->second.hasHeapFields;
@@ -823,6 +830,12 @@ namespace AIML {
             // what lets a classgroup sees-member be typed as a sibling's not-yet-
             // synthesized subclass (spec/58, bidirectional sees cycles).
             return llvm::PointerType::get(context, 0); // Opaque pointer
+        }
+
+        // spec/61 §6.2: shared<T> is an 8-byte opaque handle to a refcounted %M* block (reuses
+        // the v2 model-refcount runtime). Inner type resolved lazily at member access, like ptr<>.
+        if (typeName.rfind("shared<", 0) == 0 && typeName.back() == '>') {
+            return llvm::PointerType::get(context, 0);
         }
 
         // Check for Map type: "map<K:V>"

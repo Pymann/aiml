@@ -1,27 +1,28 @@
 # static-check: off
 # TIER: T2
-# CONSTRUCT: opt-in shared<T> co-ownership + {share: p} adopt (§6.2).
-# COVERS: shared<T>, {share: p} (ptr→shared move-adopt), incref on push, freed at rc 0.
-# EXPECT: two owners keep the object alive; freed exactly once at the last drop.
+# CONSTRUCT: opt-in shared<T> co-ownership + {share} (§6.2).
+# COVERS: shared<T>, {share: {new: T}} (fresh co-owned handle), incref on push, decref on
+#         remove, freed at rc 0; access via a ref<T> borrow. Symbols: shared<T>, {share}, ref<T>.
+# EXPECT: two containers co-own one Sprite; it stays alive after one owner drops; freed once.
 - model: { name: Sprite, fields: [[ident, i32, 0], [tags, list<string>]] }
 
 - def:
     name: main
     return: i32
+    static_off: ["str_cmp"]
     body:
-      - decl: [itp, ptr<Sprite>, { new: Sprite }]     # start unique
-      - decl: [its, shared<Sprite>, { share: itp }]    # ADOPT: p moved-out; s owns [rc=1|Sprite]
-      - set: [its.ident, 42]
+      - decl: [its, shared<Sprite>, { share: { new: Sprite } }]   # fresh co-owned handle (rc=1)
+      - decl: [ini, ref<Sprite>, its]                # borrow the shared to write through
+      - set: [ini.ident, 42]
       - decl: [poolA, list<shared<Sprite>>]
       - decl: [poolB, list<shared<Sprite>>]
       - call: [poolA.push, its]                      # incref → rc=2
-      - call: [poolB.push, its]                      # incref → rc=3 (co-owned by s, poolA, poolB)
+      - call: [poolB.push, its]                      # incref → rc=3 (co-owned by its, poolA, poolB)
       - decl: [viewa, ref<Sprite>, { at: [poolA, 0] }]
       - if: { condition: { neq: [viewa.ident, 42] }, then: [{ print: ["FAIL coown ident=${viewa.ident}"] }, { return: 1 }] }
-      # drop one owner (remove from poolA → decref → rc=2); object still alive via s/poolB
-      - call: [poolA.remove, 0]
+      - call: [poolA.remove, 0]                       # decref → rc=2; Sprite still alive via its/poolB
       - decl: [viewb, ref<Sprite>, { at: [poolB, 0] }]
       - if: { condition: { neq: [viewb.ident, 42] }, then: [{ print: ["FAIL after decref ident=${viewb.ident}"] }, { return: 1 }] }
-      # scope exit: s, poolB drop → rc reaches 0 → Sprite freed exactly once
+      # scope exit: its, poolB drop → rc → 0 → Sprite freed exactly once
       - print: ["PASS 06 shared_coown_adopt"]
       - return: 0

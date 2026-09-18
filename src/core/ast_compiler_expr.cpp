@@ -126,7 +126,11 @@ IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
         }
 
         IRValue* rawPtr;
-        if (ctx.isRefcountModel(className)) {
+        // spec/61 §6.2: `{ new: T }` initialising a `shared<T>` slot allocates a refcounted %M*
+        // block (not a value calloc), so it becomes a co-owned handle. The target type carries
+        // the `shared<>` wrapper (deserializeTargetType is set to the decl type during init).
+        bool sharedTarget = ctx.isRefcountModel(ctx.deserializeTargetType);
+        if (ctx.isRefcountModel(className) || sharedTarget) {
             // AIML v2 (doc/aiml_v2_impl_plan.md P1): a heap-field model is a refcounted MODL
             // object. Allocate the shell via aiml_model_alloc (8-byte {magic,refcount=1} header,
             // zeroed struct) instead of calloc, so incref/decref manage its lifetime and a shared

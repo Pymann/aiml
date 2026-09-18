@@ -180,6 +180,12 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
          // already takes the borrow, verified), so lowering the wrapper to `x` is sufficient.
          return std::move(args[0]);
     }
+    if (op == "share" && args.size() == 1) {
+         // spec/61 §6.2: { share: E } yields a shared<T> co-owned handle. The target `shared<T>`
+         // slot drives the %M* allocation ({ new: T } under a shared target allocs a refcounted
+         // block) / adoption, so lowering the wrapper to E is sufficient for the fresh-new case.
+         return std::move(args[0]);
+    }
     if (op == "slice" && args.size() >= 3) {
          // { slice: [container, start, end] } → CallExpr("__builtin_slice", container, start, end)
          auto call = std::make_unique<CallExpr>("__builtin_slice");
