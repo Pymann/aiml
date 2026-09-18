@@ -5142,6 +5142,8 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
     std::string className = baseSym->typeName;
     if ((className.rfind("ptr<", 0) == 0 || className.rfind("ref<", 0) == 0) && className.back() == '>') {
          className = className.substr(4, className.length() - 5);
+    } else if (className.rfind("shared<", 0) == 0 && className.back() == '>') {
+         className = className.substr(7, className.length() - 8);  // spec/61 §6.2 shared<T> member access
     }
     // buffer<T> → "buffer" (all buffer variants share the same class registration)
     if (className.rfind("buffer<", 0) == 0 && className.back() == '>') {
@@ -5392,6 +5394,8 @@ IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& p
     std::string className = baseSym->typeName;
     if ((className.rfind("ptr<", 0) == 0 || className.rfind("ref<", 0) == 0) && className.back() == '>') {
         className = className.substr(4, className.length() - 5);
+    } else if (className.rfind("shared<", 0) == 0 && className.back() == '>') {
+        className = className.substr(7, className.length() - 8);  // spec/61 §6.2 shared<T> member write
     }
 
     IRValue* baseAlloca = baseSym->ir_alloca_inst ? baseSym->ir_alloca_inst : ctx.ir_gen->wrap(baseSym->alloca_inst);
