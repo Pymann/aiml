@@ -12,8 +12,7 @@
     static_off: ["str_cmp"]
     body:
       - decl: [its, shared<Sprite>, { share: { new: Sprite } }]   # fresh co-owned handle (rc=1)
-      - decl: [ini, ref<Sprite>, its]                # borrow the shared to write through
-      - set: [ini.ident, 42]
+      - set: [its.ident, 42]                         # direct member write through the shared handle
       - decl: [poolA, list<shared<Sprite>>]
       - decl: [poolB, list<shared<Sprite>>]
       - call: [poolA.push, its]                      # incref → rc=2
