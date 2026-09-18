@@ -1667,7 +1667,10 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              }
              MapImpl::put(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, valVal, mapStructTy, valIsString);
              return nullptr;
-         } else if (methodName == "get" && argVals.size() > 0) {
+         } else if ((methodName == "get" || methodName == "get_copy") && argVals.size() > 0) {
+             // spec/61 §5.4: get_copy returns an independent copy of the value. For a value/scalar
+             // value type it is identical to get (get already yields a value copy); for a handle
+             // value type a deep-copy refinement is future work — accepted alias for now.
              llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
              if (keyVal->getType()->isPointerTy() && keyVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
                  keyVal = ctx.builder.CreateBitCast(keyVal, ctx.builder.getInt8Ty()->getPointerTo());
