@@ -1706,7 +1706,10 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
 
         llvm::Value* rawAlloca = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
 
-        if (methodName == "send" && !argVals.empty()) {
+        if ((methodName == "send" || methodName == "send_unique") && !argVals.empty()) {
+            // spec/61 §5.3: send moves an exclusive value across the thread boundary.
+            // send_unique is the runtime-checked escape (rc==1 assertion) — accepted here as the
+            // same move; the exclusivity assertion is a future runtime-check refinement.
             llvm::Value* val = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
             ChanImpl::send(ctx, rawAlloca, val, elemTy);
             return nullptr;
