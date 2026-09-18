@@ -17,11 +17,13 @@
       - decl: [labels, "array<string:3>"]
       - idx: [labels, 0, "ita"]
       - if: { condition: { neq: [{ at: [labels, 0] }, "ita"] }, then: [{ print: ["FAIL array<string>"] }, { return: 1 }] }
-      # dyn_array<T> — heap, runtime-sized, Class-3 rc container (same discipline as list)
-      - decl: [buf, "dyn_array<i32>"]
-      - call: [buf.push, 1]
-      - call: [buf.push, 2]
-      - if: { condition: { neq: [buf.len, 2] }, then: [{ print: ["FAIL dyn_array len=${buf.len}"] }, { return: 1 }] }
+      # dyn_array<T> — heap, runtime-sized (spec/53): new_array to allocate, idx/at to write/read,
+      # .free to release. Not list's push/len — a fixed count set at allocation.
+      - decl: [buf, "dyn_array<i32>", { new_array: [i32, 4] }]
+      - idx: [buf, 0, 1]
+      - idx: [buf, 1, 2]
+      - if: { condition: { neq: [{ at: [buf, 1] }, 2] }, then: [{ print: ["FAIL dyn_array"] }, { return: 1 }] }
+      - call: [buf.free]
       # map<K:V> — Class-3 rc container; get_copy = independent element copy (§5.4)
       - decl: [itm, "map<string:i32>"]
       - call: [itm.put, "kdx", 7]
