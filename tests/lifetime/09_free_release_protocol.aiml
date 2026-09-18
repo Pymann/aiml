@@ -1,0 +1,35 @@
+# static-check: off
+# TIER: T1
+# CONSTRUCT: a heap object owning fields of several classes; free runs the class-based release (§6.1).
+# COVERS: free protocol per type class — string (Class 2, decref), list/map (Class 3, decref),
+#         ptr<> field (owning, followed), shared<> field (decref), ref<> field (weak, ignored),
+#         nested value model (recurse). Symbols: free release protocol, mixed fields.
+- model: { name: Inner, fields: [[tag, string, "i"], [nums, list<i32>]] }
+- model:
+    name: Big
+    fields:
+      - [name, string, "big"]            # Class 2 → decref
+      - [rows, list<string>]             # Class 3 → decref (elements decref at rc 0)
+      - [table, map<string:i32>]         # Class 3 → decref
+      - [child, ptr<Inner>]              # owning ptr → followed + freed
+      - [inline, Inner]                  # nested value model → recurse
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [i, i32, 0]
+      - while:
+          condition: { lt: [i, 20] }
+          body:
+            - decl: [b, ptr<Big>, { new: Big }]
+            - set: [b.name, "n${i}"]
+            - call: [b.rows.push, "r"]
+            - call: [b.table.put, "k", i]
+            - set: [b.child, { new: Inner }]        # owning ptr child
+            - call: [b.child.nums.push, i]
+            - set: [b.inline.tag, "in${i}"]
+            - free: [b]                             # class-based release: all fields once, then block
+            - set: [i, { +: [i, 1] }]
+      - print: ["PASS 09 free_release_protocol"]
+      - return: 0

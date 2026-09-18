@@ -6,6 +6,7 @@
 #include <llvm/IR/GlobalVariable.h>
 #include <map>
 #include <string>
+#include <cstdlib>   // std::getenv (modelRefcount env-read in ctor)
 #include <memory>
 #include <vector>
 #include <functional>
@@ -220,6 +221,17 @@ namespace AIML {
         
     CompilerContext(llvm::LLVMContext& ctx, llvm::Module& mod, llvm::IRBuilder<>& b)
         : context(ctx), module(mod), builder(b) {
+        // AIML v2: read AIML_MODEL_REFCOUNT HERE, at construction, so `modelRefcount` is set
+        // consistently in EVERY context from birth — including the header-only import sub-compilers
+        // (which share/copy a context and register types BEFORE compile() runs its own env-read).
+        // Otherwise a header-only pass with modelRefcount=false lays out a model's value-model
+        // fields INLINE while the main compile (modelRefcount=true) emits incref/decref on them as
+        // %M* pointers → an incref-on-struct IR verify failure / crash (the reaction/trigger cluster:
+        // PendingReaction.sub). The later reads in compile()/registerTypes stay (idempotent).
+        if (const char* mr = std::getenv("AIML_MODEL_REFCOUNT")) {
+            std::string s = mr;
+            modelRefcount = !(s.empty() || s == "0" || s == "off" || s == "OFF" || s == "false" || s == "FALSE");
+        }
         // initialized lazily or explicitly later to avoid circular dependency here
         llvm::Type* i32 = llvm::Type::getInt32Ty(context);
         llvm::Type* p = llvm::PointerType::get(context, 0);

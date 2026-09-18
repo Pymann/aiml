@@ -1,0 +1,27 @@
+# static-check: off
+# TIER: T2
+# CONSTRUCT: opt-in shared<T> co-ownership + {share: p} adopt (§6.2).
+# COVERS: shared<T>, {share: p} (ptr→shared move-adopt), incref on push, freed at rc 0.
+# EXPECT: two owners keep the object alive; freed exactly once at the last drop.
+- model: { name: Sprite, fields: [[id, i32, 0], [tags, list<string>]] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [p, ptr<Sprite>, { new: Sprite }]     # start unique
+      - decl: [s, shared<Sprite>, { share: p }]    # ADOPT: p moved-out; s owns [rc=1|Sprite]
+      - set: [s.id, 42]
+      - decl: [poolA, list<shared<Sprite>>]
+      - decl: [poolB, list<shared<Sprite>>]
+      - call: [poolA.push, s]                      # incref → rc=2
+      - call: [poolB.push, s]                      # incref → rc=3 (co-owned by s, poolA, poolB)
+      - decl: [va, ref<Sprite>, { at: [poolA, 0] }]
+      - if: { condition: { neq: [va.id, 42] }, then: [{ print: ["FAIL coown id=${va.id}"] }, { return: 1 }] }
+      # drop one owner (remove from poolA → decref → rc=2); object still alive via s/poolB
+      - call: [poolA.remove, 0]
+      - decl: [vb, ref<Sprite>, { at: [poolB, 0] }]
+      - if: { condition: { neq: [vb.id, 42] }, then: [{ print: ["FAIL after decref id=${vb.id}"] }, { return: 1 }] }
+      # scope exit: s, poolB drop → rc reaches 0 → Sprite freed exactly once
+      - print: ["PASS 06 shared_coown_adopt"]
+      - return: 0

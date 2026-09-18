@@ -1,0 +1,38 @@
+# static-check: off
+# TIER: T2
+# CONSTRUCT: cross-thread memory model P (§5.3) — move-send + guarded shared + Class-5 primitives.
+# COVERS: chan<T>, chan.send (move of an exclusive value), send_unique (runtime-checked escape),
+#         spawn, guarded shared<T> + lock (payload only in the guard), Class-5 lock.
+#         Symbols: chan, chan.send, send_unique, spawn, shared<T> guarded, lock.
+- model: { name: Msg, fields: [[id, i32, 0], [tags, list<string>]] }
+- model: { name: Meter, fields: [[hits, i32, 0]] }
+
+# worker receives moved Msgs and counts them via a lock-guarded shared meter
+- def:
+    name: worker
+    args: [[inbox, chan<Msg>], [meter, shared<Meter>]]
+    body:
+      - decl: [m, Msg, { call: [inbox.recv] }]     # receives a MOVED Msg (sole owner now)
+      - if: { condition: { neq: [m.id, 1] }, then: [{ print: ["FAIL recv id=${m.id}"] }] }
+      - lock: [meter, [{ set: [meter.hits, { +: [meter.hits, 1] }] }]]  # guarded: payload only in guard
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [ch, chan<Msg>]
+      - decl: [meter, shared<Meter>, { share: { new: Meter } }]  # guarded shared (lock-bundled)
+      - decl: [t, thread_handle, { call: [spawn, worker, ch, meter] }]  # spawn: meter shared, ch moved-capable
+      # build a Msg locally (exclusive) and MOVE it through the channel — zero copy
+      - decl: [m, Msg]
+      - set: [m.id, 1]
+      - call: [m.tags.push, "hot"]
+      - call: [ch.send, m]                        # move-send: m is exclusive → moved out
+      # send_unique: runtime-checked escape for a value the static analysis can't prove exclusive
+      - decl: [m2, Msg]
+      - set: [m2.id, 1]
+      - call: [ch.send_unique, m2]                # rc==1 checked at runtime, then moved
+      - call: [t.join]
+      - lock: [meter, [{ if: { condition: { neq: [meter.hits, 2] }, then: [{ print: ["FAIL hits=${meter.hits}"] }, { return: 1 }] } }]]
+      - print: ["PASS 16 threads_move_shared_guard"]
+      - return: 0

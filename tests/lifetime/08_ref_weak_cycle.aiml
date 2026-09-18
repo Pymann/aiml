@@ -1,0 +1,37 @@
+# static-check: off
+# TIER: T2
+# CONSTRUCT: a Zone owning cards, each Card weak-referencing its Zone (§5.2).
+# COVERS: ref<T> weak back-edge breaks a would-be cycle → no leak; id + registry as the durable
+#         alternative. Symbols: owning list<ptr<Card>>, ref<Zone> weak field.
+# EXPECT: zone drop releases its cards; card.owner (weak) never kept zone alive → no leak.
+- model:
+    name: Zone
+    fields:
+      - [name, string, "zone"]
+      - [cards, list<ptr<Card>>]           # OWNING: zone keeps its cards alive
+- model:
+    name: Card
+    fields:
+      - [title, string, "card"]
+      - [owner, ref<Zone>]                 # WEAK back-ref: does NOT keep Zone alive (breaks cycle)
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [z, ptr<Zone>, { new: Zone }]
+      - decl: [i, i32, 0]
+      - while:
+          condition: { lt: [i, 3] }
+          body:
+            - decl: [card, ptr<Card>, { new: Card }]
+            - set: [card.title, "t${i}"]
+            - set: [card.owner, { ref: z }]      # weak back-edge (no incref of z)
+            - call: [z.cards.push, card]         # move card into the zone (owning)
+            - set: [i, { +: [i, 1] }]
+      - if: { condition: { neq: [z.cards.len, 3] }, then: [{ print: ["FAIL len=${z.cards.len}"] }, { return: 1 }] }
+      - decl: [c1, ref<Card>, { at: [z.cards, 1] }]
+      - if: { condition: { neq: [c1.owner.name, "zone"] }, then: [{ print: ["FAIL weak read"] }, { return: 1 }] }
+      # scope exit: z drops → rc 0 → releases each card; card.owner weak edges hold nothing → no leak
+      - print: ["PASS 08 ref_weak_cycle"]
+      - return: 0

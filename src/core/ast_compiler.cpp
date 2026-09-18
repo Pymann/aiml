@@ -164,11 +164,33 @@ void Compiler::initClassContainerMembers(llvm::Value* basePtr,
             // inits bare-buffer members too.  Repro: test_buffer_class_member_heap_init_repro.)
             BufferImpl::alloc(ctx, fieldPtr, ctx.builder.getInt32(4096));
         }
-        // AIML v2 P6: a direct refcount-MODEL field is a %M* pointer slot (not an inline struct) —
-        // leave it null (calloc/model_alloc already zeroed it); it is populated by an explicit
-        // set/decode. Recursing here would treat the pointer slot as a struct base → corruption.
+        // AIML v2 P6: a direct refcount-MODEL field is a %M* pointer slot (not an inline struct).
         else if (ctx.isRefcountModel(mt)) {
-            // no-op (null reference by default, like a ptr<Model> field)
+            // A `ptr<Model>` / `ref<Model>` field is a BORROW/optional reference → leave it null
+            // (like v1); it is populated by an explicit set/decode, and this also breaks the
+            // recursion of self/mutually-referential models (cycles MUST go through ptr<>).
+            bool isPtrField = (mt.rfind("ptr<", 0) == 0 || mt.rfind("ref<", 0) == 0);
+            if (!isPtrField) {
+                // A BARE value-model field must EXIST after construction (v1 had it inline /
+                // default-constructed). Under v2 the slot holds a %M*, so allocate a fresh
+                // refcounted instance (refcount 1, owned by this parent — freed by the parent's
+                // AIML_TD_MODEL decref) and recurse to init ITS containers. Value-model nesting is
+                // finite + acyclic (the struct layout forbids an inline cycle; cycles use ptr<>),
+                // so this terminates. Without it, reading `parent.field.x` derefs NULL → SIGSEGV
+                // (probe: a model with a direct value-model field).
+                auto ci = ctx.classes.find(mt);
+                if (ci != ctx.classes.end() && ci->second.type) {
+                    auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                    uint64_t allocSize = (ci->second.padded_size > 0)
+                        ? (uint64_t)ci->second.padded_size
+                        : ctx.module.getDataLayout().getTypeAllocSize(ci->second.type);
+                    llvm::Function* allocFn = ctx.getFunction("aiml_model_alloc", i8p, { ctx.getSizeType() });
+                    llvm::Value* obj = ctx.builder.CreateCall(allocFn, { ctx.getSizeConst(allocSize) }, "field_model_alloc");
+                    ctx.builder.CreateStore(obj, fieldPtr);
+                    initClassContainerMembers(obj, mt);
+                }
+            }
+            // else: ptr<Model>/ref<Model> — null reference by default.
         }
         // Nested class instances: recurse so deeply-embedded containers init too.
         else if (ctx.classes.count(mt) && !ctx.classes[mt].isBuiltin) {

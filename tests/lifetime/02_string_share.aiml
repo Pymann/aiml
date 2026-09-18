@@ -1,0 +1,20 @@
+# static-check: off
+# TIER: T1
+# CONSTRUCT: strings are refcounted immutable handles (§4).
+# COVERS: string assign = SHARE (incref, not dup); modify = NEW buffer; literal never freed.
+# EXPECT: alias sees the same buffer; a modification does not touch the shared buffer; PASS.
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [name, string, "Ada"]        # literal (static, no rc) — never freed (§4.6)
+      - decl: [alias, string, name]        # SHARE: alias and name are the same buffer (incref)
+      - if: { condition: { neq: [alias, "Ada"] }, then: [{ print: ["FAIL alias=${alias}"] }, { return: 1 }] }
+      - decl: [greeting, string, "Hi ${name}"]  # NEW buffer (rc=1); does not touch name's buffer
+      - if: { condition: { neq: [name, "Ada"] }, then: [{ print: ["FAIL name mutated ${name}"] }, { return: 1 }] }
+      - if: { condition: { neq: [greeting, "Hi Ada"] }, then: [{ print: ["FAIL greeting=${greeting}"] }, { return: 1 }] }
+      # rebind: old `alias` handle is dropped (decref of "Ada" is a literal no-op), new share taken
+      - set: [alias, greeting]             # share greeting's buffer (incref)
+      - if: { condition: { neq: [alias, "Hi Ada"] }, then: [{ print: ["FAIL rebind ${alias}"] }, { return: 1 }] }
+      - print: ["PASS 02 string_share"]
+      - return: 0

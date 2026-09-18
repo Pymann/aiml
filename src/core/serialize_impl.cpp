@@ -164,7 +164,11 @@ static void emitWriteListElementsIntoWriter(CompilerContext& ctx, llvm::Value* w
                                              llvm::Function* parentFn,
                                              const std::string& lbl)
 {
-    llvm::Type* elemTy = ctx.getLLVMType(elemTn);
+    // AIML v2: a list<Model> whose element is a refcount-model stores %M* references (pointer
+    // stride 8), NOT inline structs — walk it with pointer stride and deref each element, exactly
+    // like list<ptr<T>>. Without this the GEP strides by sizeof(Model) and reads garbage → crash.
+    bool elemIsRefModel = ctx.isRefcountModel(elemTn);
+    llvm::Type* elemTy = elemIsRefModel ? ptrT(ctx) : ctx.getLLVMType(elemTn);
     auto* ph = ctx.builder.GetInsertBlock();
     auto* lc = llvm::BasicBlock::Create(ctx.context, lbl+"_lc", parentFn);
     auto* lb = llvm::BasicBlock::Create(ctx.context, lbl+"_lb", parentFn);
@@ -177,7 +181,25 @@ static void emitWriteListElementsIntoWriter(CompilerContext& ctx, llvm::Value* w
     ctx.builder.SetInsertPoint(lb);
     llvm::Value* ep = ctx.builder.CreateGEP(elemTy, dp, idx, lbl+"_ep");
 
-    if(ctx.classes.count(elemTn) && ctx.classes[elemTn].type) {
+    if(elemIsRefModel && ctx.classes.count(elemTn) && ctx.classes[elemTn].type) {
+        // v2: element slot holds a %M* → load it, null→{}, else serialize the pointee's fields.
+        llvm::Value* rp = ctx.builder.CreateLoad(ptrT(ctx), ep, lbl+"_mrp");
+        auto* okBB = llvm::BasicBlock::Create(ctx.context, lbl+"_mok", parentFn);
+        auto* dnBB = llvm::BasicBlock::Create(ctx.context, lbl+"_mdn", parentFn);
+        auto* emBB = llvm::BasicBlock::Create(ctx.context, lbl+"_mem", parentFn);
+        ctx.builder.CreateCondBr(
+            ctx.builder.CreateICmpNE(rp, llvm::Constant::getNullValue(ptrT(ctx))), okBB, emBB);
+        ctx.builder.SetInsertPoint(okBB);
+        ctx.builder.CreateCall(gJwArrObjBgn(ctx), {writer});
+        emitWriteStructFields(ctx, writer, rp, elemTn);
+        ctx.builder.CreateCall(gJwArrObjEnd(ctx), {writer});
+        ctx.builder.CreateBr(dnBB);
+        ctx.builder.SetInsertPoint(emBB);
+        ctx.builder.CreateCall(gJwArrObjBgn(ctx), {writer});
+        ctx.builder.CreateCall(gJwArrObjEnd(ctx), {writer});
+        ctx.builder.CreateBr(dnBB);
+        ctx.builder.SetInsertPoint(dnBB);
+    } else if(ctx.classes.count(elemTn) && ctx.classes[elemTn].type) {
         ctx.builder.CreateCall(gJwArrObjBgn(ctx), {writer});
         emitWriteStructFields(ctx, writer, ep, elemTn);
         ctx.builder.CreateCall(gJwArrObjEnd(ctx), {writer});
@@ -719,7 +741,32 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
             ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(idx,cnt),lb,le);
             ctx.builder.SetInsertPoint(lb);
 
-            if(ctx.classes.count(elemTn) && ctx.classes[elemTn].type){
+            if(ctx.isRefcountModel(elemTn) && ctx.classes.count(elemTn) && ctx.classes[elemTn].type){
+                // AIML v2: list<Model> element is a %M* → alloc a refcounted MODL shell (rc=1,
+                // zeroed = decode precondition), decode the sub-object into it, push the POINTER
+                // (the list owns that reference). Null sub-reader → push null (index alignment).
+                auto& ci2 = ctx.classes[elemTn];
+                uint64_t subSz = (ci2.padded_size > 0)
+                    ? (uint64_t)ci2.padded_size
+                    : ctx.module.getDataLayout().getTypeAllocSize(ci2.type);
+                llvm::Value* sr = ctx.builder.CreateCall(gJrArrSub(ctx),{reader,fkey,idx},"msr");
+                llvm::BasicBlock* srOk   = llvm::BasicBlock::Create(ctx.context,fname+"_msrok",parentFn);
+                llvm::BasicBlock* srNull = llvm::BasicBlock::Create(ctx.context,fname+"_msrnull",parentFn);
+                llvm::BasicBlock* srDone = llvm::BasicBlock::Create(ctx.context,fname+"_msrdone",parentFn);
+                ctx.builder.CreateCondBr(
+                    ctx.builder.CreateICmpNE(sr,llvm::Constant::getNullValue(ptrT(ctx))),srOk,srNull);
+                ctx.builder.SetInsertPoint(srOk);
+                llvm::Function* allocFn = ctx.getFunction("aiml_model_alloc", ptrT(ctx), { ctx.getSizeType() });
+                llvm::Value* obj = ctx.builder.CreateCall(allocFn, { ctx.getSizeConst(subSz) }, "msr_alloc");
+                emitDeserStructFields(ctx,sr,obj,elemTn,parentFn);
+                ListImpl::push(ctx,fieldPtr,obj);
+                ctx.builder.CreateCall(gJrFree(ctx),{sr});
+                ctx.builder.CreateBr(srDone);
+                ctx.builder.SetInsertPoint(srNull);
+                ListImpl::push(ctx,fieldPtr,llvm::Constant::getNullValue(ptrT(ctx)));
+                ctx.builder.CreateBr(srDone);
+                ctx.builder.SetInsertPoint(srDone);
+            } else if(ctx.classes.count(elemTn) && ctx.classes[elemTn].type){
                 // list<Struct>: sub-reader per element
                 llvm::StructType* subSt = ctx.classes[elemTn].type;
                 uint64_t subSz = ctx.module.getDataLayout().getTypeAllocSize(subSt);

@@ -9586,8 +9586,13 @@ void registerBuiltins(CompilerContext& ctx) {
                     llvm::Value* av = sym->alloca_inst
                         ? static_cast<llvm::Value*>(sym->alloca_inst)
                         : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
-                    outPtr = ctx.builder.CreateBitCast(av, i8p);
+                    // AIML v2: a value-model local's slot holds a %M* (pointer to the object), not
+                    // the inline struct — load it so we decode INTO the object (and memset the
+                    // object, not the 8-byte slot + adjacent stack). v1: the alloca IS the struct.
                     outTn  = sym->typeName;
+                    outPtr = ctx.isRefcountModel(outTn)
+                        ? ctx.builder.CreateLoad(i8p, av, "decode_modelptr")
+                        : ctx.builder.CreateBitCast(av, i8p);
                 }
                 if (!outPtr || outTn.empty()) return ctx.ir_gen->getInt32(-1);
                 if (!ctx.classes.count(outTn) || !ctx.classes[outTn].serNodesVar)
@@ -9636,13 +9641,17 @@ void registerBuiltins(CompilerContext& ctx) {
                     llvm::Value* _av = _os.alloca_inst \
                         ? static_cast<llvm::Value*>(_os.alloca_inst) \
                         : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(_os.ir_alloca_inst)); \
-                    return ctx.builder.CreateBitCast(_av, i8p); } _sc = _sc->parent; } \
+                    llvm::Value* _mp = ctx.builder.CreateBitCast(_av, i8p); \
+                    if (ctx.isRefcountModel(_os.typeName)) _mp = ctx.builder.CreateLoad(i8p, _mp, "mirror_modelptr"); \
+                    return _mp; } _sc = _sc->parent; } \
                 if (ctx.symbol_table.count(_vx->name)) { \
                     Symbol& _os = ctx.symbol_table[_vx->name]; \
                     llvm::Value* _av = _os.alloca_inst \
                         ? static_cast<llvm::Value*>(_os.alloca_inst) \
                         : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(_os.ir_alloca_inst)); \
-                    return ctx.builder.CreateBitCast(_av, i8p); } \
+                    llvm::Value* _mp = ctx.builder.CreateBitCast(_av, i8p); \
+                    if (ctx.isRefcountModel(_os.typeName)) _mp = ctx.builder.CreateLoad(i8p, _mp, "mirror_modelptr"); \
+                    return _mp; } \
             } \
             IRValue* _av2 = evalExpr(call->args[(call_arg_idx)].get()); \
             if (!_av2) return nullptr; \
@@ -9706,6 +9715,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     llvm::DataLayout dl(&ctx.module);
                     objSize = (int64_t)dl.getTypeAllocSize(ctx.classes[tn].type);
                 }
+                // (v2 %M* deref handled in MIRROR_FIND_OBJ_PTR — objPtr is the object.)
                 // Spec 45: typed register for heap-containing structs.
                 if (!tn.empty() && ctx.classes.count(tn)
                         && ctx.classes[tn].hasHeapFields && ctx.classes[tn].serNodesVar) {
@@ -9740,6 +9750,7 @@ void registerBuiltins(CompilerContext& ctx) {
                     llvm::DataLayout dl(&ctx.module);
                     objSize = (int64_t)dl.getTypeAllocSize(ctx.classes[tn].type);
                 }
+                // (v2 %M* deref handled in MIRROR_FIND_OBJ_PTR — objPtr is the object.)
                 // Spec 45: typed register_id for heap-containing structs.
                 if (!tn.empty() && ctx.classes.count(tn)
                         && ctx.classes[tn].hasHeapFields && ctx.classes[tn].serNodesVar) {
@@ -9822,9 +9833,11 @@ void registerBuiltins(CompilerContext& ctx) {
                             llvm::Value* objAv = sym->alloca_inst
                                 ? static_cast<llvm::Value*>(sym->alloca_inst)
                                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
-                            // If ptr<X>: alloca holds a pointer to the struct — load it
+                            // The alloca holds a POINTER to the struct when the arg is a ptr<X> OR,
+                            // under AIML v2, a value-model whose local slot holds a %M* — load it.
+                            // Otherwise (v1 inline value struct) the alloca IS the struct.
                             llvm::Value* objPtr;
-                            if (isPtr) {
+                            if (isPtr || ctx.isRefcountModel(tn)) {
                                 objPtr = ctx.builder.CreateLoad(i8p, objAv, "pay_ptr");
                             } else {
                                 objPtr = ctx.builder.CreateBitCast(objAv, i8p);
