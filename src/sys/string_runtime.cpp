@@ -290,6 +290,59 @@ extern "C" void aiml_map_free(void* map_ptr, int32_t keyKind, int64_t keyStride,
     m->size = 0; m->capacity = 0;
 }
 
+// ── spec/61 §5 Option B (memV3): map<K:V> as a refcounted HANDLE ──────────────
+// Same discipline as the list handle: a heap block [i32 rc][i32 pad][AimlMapRaw] with the
+// stored pointer at the AimlMapRaw part, so every MapImpl op is unchanged. Assignment increfs
+// (aliasing); scope-exit decrefs and frees at rc 0. memV3-only (map stays inline under OFF).
+extern "C" void* aiml_map_handle_new() {
+    char* block = static_cast<char*>(calloc(1, 8 + sizeof(AimlMapRaw)));
+    if (!block) return nullptr;
+    *reinterpret_cast<int32_t*>(block) = 1;   // rc = 1
+    return block + 8;
+}
+extern "C" void aiml_map_handle_incref(void* h) {
+    if (!h) return;
+    (*reinterpret_cast<int32_t*>(static_cast<char*>(h) - 8))++;
+}
+extern "C" void aiml_map_handle_release(void* h, int32_t keyKind, int64_t keyStride,
+                                        int32_t valKind, int64_t valStride,
+                                        void* valNodes, int32_t valNodesCount) {
+    if (!h) return;
+    int32_t* rc = reinterpret_cast<int32_t*>(static_cast<char*>(h) - 8);
+    if (--(*rc) > 0) return;
+    aiml_map_free(h, keyKind, keyStride, valKind, valStride, valNodes, valNodesCount);
+    free(static_cast<char*>(h) - 8);
+}
+// {copy: M} — new INDEPENDENT-spine map: fresh dense arrays, entries value-copied; shared string/
+// model referents incref'd (both spines can then free). keyKind/valKind: 0 scalar, 1 string, 3 %M*.
+extern "C" void* aiml_map_handle_copy(void* src, int64_t keyStride, int64_t valStride,
+                                      int32_t keyKind, int32_t valKind) {
+    void* h = aiml_map_handle_new();
+    if (!h || !src) return h;
+    AimlMapRaw* s = static_cast<AimlMapRaw*>(src);
+    AimlMapRaw* d = static_cast<AimlMapRaw*>(h);
+    int32_t n = s->size;
+    if (n <= 0) return h;
+    d->size = n; d->capacity = n;
+    d->occ  = static_cast<uint8_t*>(calloc((size_t)n, 1));
+    d->keys = malloc((size_t)n * (size_t)keyStride);
+    d->vals = malloc((size_t)n * (size_t)valStride);
+    if (s->keys) memcpy(d->keys, s->keys, (size_t)n * (size_t)keyStride);
+    if (s->vals) memcpy(d->vals, s->vals, (size_t)n * (size_t)valStride);
+    if (keyKind == 1 && d->keys) {
+        char* kb = reinterpret_cast<char*>(d->keys);
+        for (int32_t i = 0; i < n; ++i) { char* k = *reinterpret_cast<char**>(kb + (int64_t)i*keyStride); if (k) aiml_str_incref(k); }
+    }
+    if (valKind == 1 && d->vals) {
+        char* vb = reinterpret_cast<char*>(d->vals);
+        for (int32_t i = 0; i < n; ++i) { char* v = *reinterpret_cast<char**>(vb + (int64_t)i*valStride); if (v) aiml_str_incref(v); }
+    } else if (valKind == 3 && d->vals) {
+        char* vb = reinterpret_cast<char*>(d->vals);
+        for (int32_t i = 0; i < n; ++i) { void* v = *reinterpret_cast<void**>(vb + (int64_t)i*valStride); if (v) aiml_model_incref(v); }
+    }
+    return h;
+}
+
 // ── string.lower ─────────────────────────────────────────────────────────────
 extern "C" char* aiml_str_lower(const char* s) {
     if (!s) return aiml_str_alloc(0);

@@ -411,6 +411,123 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
     }
 }
 
+// spec/61 §5 Option B (memV3): a map<K:V> value-local becomes a refcounted HANDLE, mirroring the
+// list-handle path. Fresh init → aiml_map_handle_new + initMap; init from another map var → SHARE
+// (incref); { copy: M } → independent-spine map; scope-exit decref (kind 3, isListHandle→map).
+void Compiler::emitMapHandleDecl(DeclStmt* decl) {
+    auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+    llvm::Type* i32Ty = ctx.builder.getInt32Ty();
+    llvm::Type* i64Ty = ctx.builder.getInt64Ty();
+
+    // Parse map<K:V>.
+    std::string inner = decl->typeName.substr(4, decl->typeName.length() - 5);
+    size_t colon = inner.find(':');
+    std::string kName = (colon == std::string::npos) ? inner : inner.substr(0, colon);
+    std::string vName = (colon == std::string::npos) ? std::string("i32") : inner.substr(colon + 1);
+    llvm::Type* kTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(kName)));
+    llvm::Type* vTyRaw = ctx.isRefcountModel(vName)
+        ? i8p
+        : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
+    if (!kTy) kTy = i32Ty;
+    if (!vTyRaw) vTyRaw = i32Ty;
+    llvm::DataLayout dl(&ctx.module);
+
+    // Key/value classification for copy + release.
+    int keyKind = (kName == "string") ? 1 : 0;
+    int64_t keyStride = (kName == "string") ? 8 : (int64_t)dl.getTypeAllocSize(kTy);
+    int valKind; int64_t valStride; llvm::GlobalVariable* valNodes = nullptr; int32_t valNodesCount = 0;
+    if (vName == "string") { valKind = 1; valStride = 8; }
+    else if (ctx.isRefcountModel(vName)) {
+        valKind = 3; valStride = 8;
+        auto ci = ctx.classes.find(vName);
+        if (ci != ctx.classes.end()) { valNodes = ci->second.serNodesVar; valNodesCount = ci->second.serNodesCount; }
+    } else {
+        auto ci = ctx.classes.find(vName);
+        if (ci != ctx.classes.end() && ci->second.hasHeapFields && ci->second.serNodesVar && ci->second.type) {
+            valKind = 2; valNodes = ci->second.serNodesVar; valNodesCount = ci->second.serNodesCount;
+            valStride = (int64_t)dl.getTypeAllocSize(ci->second.type);
+        } else {
+            valKind = 0; valStride = (int64_t)dl.getTypeAllocSize(vTyRaw);
+        }
+    }
+
+    // Pointer slot.
+    IRType* ptrTy = ctx.ir_gen->getPointerTy();
+    IRValue* alloca = ctx.ir_gen->createAlloca(ptrTy, decl->varName);
+    llvm::Value* slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
+    ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), slot);
+
+    Expr* iv = decl->initialValue.get();
+    bool isShareVar = iv && dynamic_cast<VariableExpr*>(iv);
+    bool isCopyClone = false;
+    if (iv) if (auto* ce = dynamic_cast<CallExpr*>(iv))
+        isCopyClone = (ce->functionName == "sys.copy" || ce->functionName == "sys.clone");
+
+    llvm::Value* handle = nullptr;
+    if (isShareVar) {
+        auto* ve = static_cast<VariableExpr*>(iv);
+        Symbol* src = resolveVariable(ve->name);
+        if (src) {
+            llvm::Value* srcSlot = src->ir_alloca_inst
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(src->ir_alloca_inst)) : src->alloca_inst;
+            handle = ctx.builder.CreateLoad(i8p, srcSlot, "maph_src");
+            llvm::Function* inc = ctx.getFunction("aiml_map_handle_incref", ctx.builder.getVoidTy(), {i8p});
+            ctx.builder.CreateCall(inc, { handle });
+        }
+    } else if (isCopyClone) {
+        auto* ce = static_cast<CallExpr*>(iv);
+        llvm::Value* srcHandle = nullptr;
+        if (!ce->args.empty()) if (auto* av = dynamic_cast<VariableExpr*>(ce->args[0].get())) {
+            Symbol* src = resolveVariable(av->name);
+            if (src) {
+                llvm::Value* srcSlot = src->ir_alloca_inst
+                    ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(src->ir_alloca_inst)) : src->alloca_inst;
+                srcHandle = ctx.builder.CreateLoad(i8p, srcSlot, "maph_copysrc");
+            }
+        }
+        llvm::Function* cp = ctx.getFunction("aiml_map_handle_copy", i8p, {i8p, i64Ty, i64Ty, i32Ty, i32Ty});
+        handle = ctx.builder.CreateCall(cp, { srcHandle ? srcHandle
+                                              : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)),
+                                              ctx.builder.getInt64(keyStride), ctx.builder.getInt64(valStride),
+                                              ctx.builder.getInt32(keyKind), ctx.builder.getInt32(valKind) }, "maph_copy");
+    } else {
+        llvm::Function* nw = ctx.getFunction("aiml_map_handle_new", i8p, {});
+        handle = ctx.builder.CreateCall(nw, {}, "maph_new");
+        MapImpl::initMap(ctx, handle, kTy, vTyRaw, 4);
+    }
+    if (handle) ctx.builder.CreateStore(handle, slot);
+
+    Symbol sym;
+    sym.ir_alloca_inst  = alloca;
+    sym.ir_type         = ptrTy;
+    sym.ir_element_type = ctx.ir_gen->wrapType(MapImpl::getMapStructType(ctx, kTy, vTyRaw));
+    sym.typeName        = decl->typeName;
+    sym.is_const        = decl->is_const;
+    sym.is_volatile     = decl->is_volatile;
+    sym.lifetime        = decl->lifetime;
+    sym.is_byref_arg    = true;
+    OwnershipId declOid = (ctx.ownershipPlan && ctx.ownershipPlan->declarations.count(decl))
+        ? ctx.ownershipPlan->declarations.at(decl) : NoOwnership;
+    sym.ownershipId     = declOid;
+    ctx.symbol_table[decl->varName] = sym;
+
+    if (decl->lifetime != "persistent" && ctx.lifetimeDropsEnabled && !ctx.cleanupStack.empty()) {
+        CompilerContext::ScopeDrop sd;
+        sd.addr = slot;
+        sd.kind = 3;
+        sd.isListHandle = true;   // reused flag: kind 3 + isListHandle → aiml_map_handle_release
+        sd.keyKind = keyKind;
+        sd.keyStride = keyStride;
+        sd.elemKind = valKind;    // kind 3 uses elemKind as the VALUE kind
+        sd.elemSize = valStride;  // kind 3 uses elemSize as the VALUE stride
+        sd.serNodes = valNodes;
+        sd.serNodesCount = valNodesCount;
+        sd.ownershipId = declOid;
+        sd.debugName = decl->varName; sd.debugType = decl->typeName;
+        ctx.cleanupStack.back().push_back(sd);
+    }
+}
+
 void Compiler::visitDeclStmt(DeclStmt* decl) {
     ctx.validateIdentifier(decl->varName, "variable", decl->sourceNode);
 
@@ -434,6 +551,13 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             && !ctx.symbol_table.count(decl->varName)
             && !ctx.cleanupStack.empty()) {
             emitListHandleDecl(decl, isCascadeLocal);
+            return;
+        }
+        bool isMapLocal = (decl->typeName.rfind("map<", 0) == 0 && decl->typeName.back() == '>');
+        if (ctx.memV3 && isMapLocal && !decl->is_extern
+            && !ctx.symbol_table.count(decl->varName)
+            && !ctx.cleanupStack.empty()) {
+            emitMapHandleDecl(decl);
             return;
         }
     }
@@ -2718,13 +2842,25 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         llvm::Value* vNodes = it.serNodes
             ? static_cast<llvm::Value*>(it.serNodes)
             : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p));
-        llvm::Function* mf = ctx.getFunction("aiml_map_free", ctx.builder.getVoidTy(),
-            {i8p, ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(),
-             ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(), i8p, ctx.builder.getInt32Ty()});
-        ctx.builder.CreateCall(mf, { it.addr,
-            ctx.builder.getInt32(it.keyKind), ctx.builder.getInt64(it.keyStride),
-            ctx.builder.getInt32(it.elemKind), ctx.builder.getInt64(it.elemSize),
-            vNodes, ctx.builder.getInt32(it.serNodesCount) });
+        if (it.isListHandle) {
+            // spec/61 §5 Option B (memV3): map handle — load the pointer, decref (frees at rc 0).
+            llvm::Value* hptr = ctx.builder.CreateLoad(i8p, it.addr, "drop_maph");
+            llvm::Function* rel = ctx.getFunction("aiml_map_handle_release", ctx.builder.getVoidTy(),
+                {i8p, ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(),
+                 ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(), i8p, ctx.builder.getInt32Ty()});
+            ctx.builder.CreateCall(rel, { hptr,
+                ctx.builder.getInt32(it.keyKind), ctx.builder.getInt64(it.keyStride),
+                ctx.builder.getInt32(it.elemKind), ctx.builder.getInt64(it.elemSize),
+                vNodes, ctx.builder.getInt32(it.serNodesCount) });
+        } else {
+            llvm::Function* mf = ctx.getFunction("aiml_map_free", ctx.builder.getVoidTy(),
+                {i8p, ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(),
+                 ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(), i8p, ctx.builder.getInt32Ty()});
+            ctx.builder.CreateCall(mf, { it.addr,
+                ctx.builder.getInt32(it.keyKind), ctx.builder.getInt64(it.keyStride),
+                ctx.builder.getInt32(it.elemKind), ctx.builder.getInt64(it.elemSize),
+                vNodes, ctx.builder.getInt32(it.serNodesCount) });
+        }
     } else if (it.kind == 4) {
         // owned new-box: the alloca holds a heap pointer (calloc'd in visitNewExpr).
         // Load it, deep-free the pointee's heap fields, then free the shell.

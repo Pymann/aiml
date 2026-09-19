@@ -1,0 +1,24 @@
+# static-check: off
+# TIER: T2
+# CONSTRUCT: map<K:V> is a refcounted handle (§5, Option B) — same discipline as list.
+# COVERS: assign = SHARE (aliasing); {copy: a} = shallow (independent spine, shared referents).
+#         Symbols: map<K:V>, map.put, map.get, map.len, {copy}.
+# EXPECT: b aliases a (a.put visible through b); c (copy) has an independent spine.
+- def:
+    name: main
+    return: i32
+    static_off: ["str_cmp"]
+    body:
+      - decl: [ita, "map<string:i32>"]
+      - call: [ita.put, "kdx", 1]
+      - decl: [itb, "map<string:i32>", ita]           # SHARE (incref) — same map
+      - call: [ita.put, "kdy", 2]
+      - if: { condition: { neq: [itb.len, 2] }, then: [{ print: ["FAIL alias itb.len=${itb.len}"] }, { return: 1 }] }   # aliasing → 2
+      - if: { condition: { neq: [{ call: [itb.get, "kdy"] }, 2] }, then: [{ print: ["FAIL alias get through b"] }, { return: 1 }] }
+      - decl: [itc, "map<string:i32>", { copy: ita }]  # shallow copy — independent spine
+      - call: [ita.put, "kdz", 3]
+      - if: { condition: { neq: [itc.len, 2] }, then: [{ print: ["FAIL copy itc.len=${itc.len}"] }, { return: 1 }] }     # unaffected
+      - if: { condition: { neq: [{ call: [itc.get, "kdx"] }, 1] }, then: [{ print: ["FAIL copy lost element"] }, { return: 1 }] }
+      # scope exit: a,b drop the shared map once at rc 0; c frees its own block.
+      - print: ["PASS 17 map_aliasing_copy"]
+      - return: 0
