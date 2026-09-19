@@ -328,6 +328,10 @@ namespace AIML {
         // Its drop is null-safe (load; decref; store null) and a committed move nulls the slot rather
         // than erasing the drop, so Live|Moved control-flow merges free exactly once.
         bool                  managedStringSlot = false;
+        // spec/61 §5 Option B (memV3): kind 2 where the slot holds a POINTER to a refcounted
+        // list handle (not an inline struct) → drop = aiml_list_handle_release (decref; free
+        // data+block at rc 0) after loading the pointer from the slot.
+        bool                  isListHandle = false;
         std::string           debugName;             // AIML_TRACE_SYMBOL: source var name for lifetime tracing
         std::string           debugType;             // AIML_TRACE_SYMBOL: declared type name (list<>/map<>/model)
     };
