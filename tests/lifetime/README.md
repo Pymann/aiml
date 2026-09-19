@@ -9,21 +9,32 @@ lifetime operation, checks the survivors, and returns exit code 0 (PASS) / 1 (FA
 These probes are the spec/61 **acceptance target**. Implementation progress under
 `MODE=spec61` (which sets `AIML_LIFETIME_DROPS=1 AIML_MEM_V3=1`):
 
-**GREEN — 16/16 (complete):** 01 stack value + by-value member-wise copy with container-field
-aliasing (§3/§7), 02 string share (§4), 03 container aliasing + {copy}/{clone} (§5/§5.1),
+**GREEN — 18/18 (complete):** 01 stack value + by-value member-wise copy with container-field
+aliasing (§3/§7), 02 string share (§4), 03 list aliasing + {copy}/{clone} (§5/§5.1),
 04 ptr/new/scope-free (§6/§9.1), 05 ptr move + list<ptr> access (§6.2/§5.4), 06 shared<T>
 co-ownership (§6.2), 07 ref borrow + {ref} (§8), 08 ref weak cycle (§5.2), 09 free release
 protocol (§6.1), 10 producer/consumed (§9.2), 11 borrow-return + `borrows:` (§8), 12 scope/
 persistent (§9), 13 array/dyn_array/cascade/map/buffer/get_copy (§2.1/§5), 14 tensor/resource
-move-only (§7), 15 memoized deep-clone graph (§5.1), 16 threads move/shared/guard (§5.3).
+move-only (§7), 15 memoized deep-clone graph (§5.1), 16 threads move/shared/guard (§5.3),
+17 map aliasing + {copy} (§5), 18 map field aliasing (§5/§7).
 
-**Container Option B (§5) — `list<T>` is a refcounted HANDLE under memV3:** a heap block
-[rc][pad][{size,cap,data}] behind a pointer. A list LOCAL and a list model FIELD both hold the
-pointer, so assignment / by-value model copy SHARES (increfs → aliasing) and scope-exit
-decrefs (frees data + block at rc 0). `{copy}` = independent spine (fresh buffer, shared
-referents); `{clone}` = deep, DAG-preserving. `map`/`buffer` stay inline for now (they pass as
-value structs; a follow-up can lift them to handles the same way). All of it is gated on
-`AIML_MEM_V3` (serializer carries a new `AIML_TD_LIST_PTR` node only under the gate).
+**Container Option B (§5) — `list<T>` and `map<K:V>` are refcounted HANDLES under memV3:** a
+heap block `[rc][pad][struct]` behind a pointer (`{size,cap,data}` for list, `{size,cap,occ,
+keys,vals}` for map). Both a container LOCAL and a container model FIELD hold the pointer, so
+assignment / by-value model copy SHARES (increfs → aliasing) and scope-exit decrefs (frees at
+rc 0). `{copy}` = independent spine (fresh arrays, string/model referents incref'd); `{clone}`
+= deep, DAG-preserving. `cascade<X>` rides the `list<i32>` layout. Gated on `AIML_MEM_V3`; the
+serializer carries new `AIML_TD_LIST_PTR`/`AIML_TD_MAP_PTR` nodes only under the gate.
+
+**Remaining Class-3 (scoped, not yet handles):**
+- `buffer` — spec §2.1 is ambiguous (row 3 lists it Class-3, but the note reads "the *data
+  buffer* it points at is Class 3", i.e. maybe only the data, not the whole header, is rc'd).
+  Left inline pending a spec clarification rather than guessing the aliasing depth.
+- `dyn_array<T>` — spec §2.1 says "same rc/aliasing as list", but it is currently a raw
+  explicit-`free` `i8*` (new_array/idx/at/free). Lifting it to the rc-handle discipline would
+  change its manual-free API; deferred.
+- Passing a **bare** container LOCAL (not a model field) as a function argument under memV3 is
+  not yet wired through `coerceArgs` (no probe exercises it; real code paths run under OFF).
 
 Deployed/OFF path is **byte-identical**: every change is gated on `AIML_MEM_V3` (default OFF) or
 additive. Run the old model for comparison with `MODE=off`.
