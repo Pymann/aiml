@@ -1250,6 +1250,15 @@ argument beyond the call (see below) — a real added contract.
 
 ## 10. Diagnostics
 
+> **Implementation status (memV3).** Implemented today: **shallow `{copy}` of a move-only element**
+> (`list<ptr<T>>`) is rejected at compile time (negative probe `tests/lifetime/neg/n01`). The rest
+> of §10 — use-after-free, use-after-move, double-free, `free`-of-shared/`ref`/non-heap, illegal
+> cross-kind assignment, invalidated element borrow, and the leak / owning-cycle lints — require a
+> dedicated **ownership/borrow static-analysis pass** (flow analysis + a type-graph walk) and are a
+> separate workstream. (`free`-misuse also needs the `free:` statement routing unified: a non-`ptr`
+> operand is currently dropped before any check point.) Negative probes accrue under `neg/` as each
+> diagnostic lands.
+
 - **use-after-free** — using a `ptr<T>` after `free` on it, within visible scope: error.
 - **use-after-move** — using a `ptr<T>` (or a `shared` handed to `{share}`) after it was
   moved (assigned/pushed/passed-by-value/returned/consumed): error. This is what enforces

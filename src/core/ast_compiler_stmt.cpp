@@ -349,6 +349,14 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
             ctx.builder.CreateCall(inc, { handle });
         }
     } else if (isCopy || isClone) {
+        // spec/61 §10: shallow `{ copy: L }` of a container whose element is MOVE-ONLY (ptr<T>,
+        // a unique owner) is a compile error — pointer-copying a unique owner would give two
+        // containers that each free the same object (double free). Use `{ clone: L }` (deep).
+        if (isCopy && elemName.rfind("ptr<", 0) == 0) {
+            LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "shallow copy of list<" + elemName +
+                ">: the element type is move-only (a unique owner) — {copy} would duplicate one "
+                "owner into two containers (double free). Use {clone} (deep) instead (§10/§5.1).");
+        }
         // { copy: L } / { clone: L } → independent-spine handle. For scalar/string elements copy
         // and clone coincide (fresh data buffer; strings shared). (Deep clone of model elements
         // is a later refinement — Stage B.)

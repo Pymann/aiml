@@ -382,6 +382,10 @@ IRValue* Compiler::visitCall(CallExpr* call) {
          return ctx.ir_gen->createCall("printf", printArgs, "print_call");
     } else if (funcName == "free") {
          if (argVals.empty()) return ctx.ir_gen->getInt32(0);
+         // NOTE (spec/61 §10): free-of-non-heap / free-of-shared / free-of-ref diagnostics belong
+         // here, but the `free:` STATEMENT routing is type-dependent (a shared/value operand is
+         // dropped before this point), so a reliable check needs that routing unified first — it is
+         // part of the §10 ownership-diagnostics workstream (see tests/lifetime/README.md).
          // iterator<T> handles are allocated with C++ `new` (aiml_iter_create_kv)
          // → must be released via aiml_iter_free (delete), not libc free.  Mixing
          // new/free is UB (see spec/54 §5).  Detect the arg's declared type.
