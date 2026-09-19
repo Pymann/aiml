@@ -1088,6 +1088,20 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         // grow/rehash does not match the simple [0,capacity) occupancy assumption (§8.2).
         // No measured map leak → left OFF until the grow/rehash occ semantics are audited and
         // a valgrind map probe (empty / one / many / collisions / rehash) is green.
+
+        // spec/61 §5.6 (memV3): a dyn_array<T> local is a Class-4 unique buffer that OWNS its single
+        // malloc → register a scope-default free (kind 9 = free(ptr)). `.free` nulls the slot so this
+        // drop is a null no-op (no double free). Owned when init is a `new_array` (the alloc site).
+        if (ctx.memV3 && decl->typeName.rfind("dyn_array<", 0) == 0 && decl->typeName.back() == '>'
+            && decl->initialValue && dynamic_cast<NewArrayExpr*>(decl->initialValue.get())
+            && decl->lifetime != "persistent" && !decl->is_extern && !ctx.cleanupStack.empty()) {
+            CompilerContext::ScopeDrop sd;
+            sd.addr = unwrappedAlloca;
+            sd.kind = 9;                 // raw heap pointer → free(load(slot))
+            sd.ownershipId = declOid;
+            sd.debugName = decl->varName; sd.debugType = decl->typeName;
+            ctx.cleanupStack.back().push_back(sd);
+        }
     }
 
     LOG_DEBUG("Compiled AST Decl: " + decl->varName + " of " + decl->typeName);
@@ -2994,6 +3008,12 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         llvm::Value* hptr = ctx.builder.CreateLoad(i8p, it.addr, "drop_bufh");
         llvm::Function* rel = ctx.getFunction("aiml_buffer_handle_release", ctx.builder.getVoidTy(), {i8p});
         ctx.builder.CreateCall(rel, { hptr });
+    } else if (it.kind == 9) {
+        // spec/61 §5.6 (memV3): dyn_array<T> Class-4 unique buffer — load the raw i8* and free it.
+        // free(NULL) is a no-op, so an earlier `.free` (which nulls the slot) makes this safe.
+        llvm::Value* rawptr = ctx.builder.CreateLoad(i8p, it.addr, "drop_dynarr");
+        llvm::Function* fr = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
+        ctx.builder.CreateCall(fr, { rawptr });
     } else {
         llvm::Function* fn = ctx.getFunction("aiml_ser_free_decoded",
             ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});

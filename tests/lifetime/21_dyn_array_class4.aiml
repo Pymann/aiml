@@ -1,0 +1,31 @@
+# static-check: off
+# TIER: T2
+# CONSTRUCT: dyn_array<T> is a Class-4 unique unmanaged buffer (§5.6) — single malloc, freed once
+#            at owner drop (scope default), with .free as an optional EARLY release (no double-free).
+# COVERS: new_array (one malloc), at/idx, scope-default free (no .free written → no leak/crash),
+#         early .free nulls the slot so the scope-drop is a no-op. Symbols: dyn_array<T>, new_array,
+#         at, idx, .free (early).
+- def:
+    name: fill_scope
+    args: [[cnt, i32]]
+    return: i32
+    body:
+      - decl: [arr, "dyn_array<i32>", { new_array: [i32, 4] }]   # owns a heap block; NO .free written
+      - idx: [arr, 0, 7]
+      - idx: [arr, 3, 9]
+      - return: { +: [{ at: [arr, 0] }, { at: [arr, 3] }] }        # 16 — arr freed at scope exit (§9.1)
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [total, i32, { call: [fill_scope, 4] }]
+      - if: { condition: { neq: [total, 16] }, then: [{ print: ["FAIL scope total=${total}"] }, { return: 1 }] }
+      # early .free then scope-drop must NOT double-free
+      - decl: [buf, "dyn_array<i32>", { new_array: [i32, 8] }]
+      - idx: [buf, 5, 42]
+      - if: { condition: { neq: [{ at: [buf, 5] }, 42] }, then: [{ print: ["FAIL idx"] }, { return: 1 }] }
+      - call: [buf.free]                                           # early release; nulls the slot
+      # scope exit: buf slot is null → scope-default drop is a no-op (no double free)
+      - print: ["PASS 21 dyn_array_class4"]
+      - return: 0
