@@ -651,6 +651,20 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         }
     }
 
+    // spec/61 §6.2/§10: shared<T> → ptr<T> is a FORBIDDEN cross-kind assignment — you cannot
+    // extract unique ownership from a co-owned object (other owners may exist; layouts differ).
+    // Localized check (no flow analysis) at the decl init. memV3-gated → OFF path unchanged.
+    if (ctx.memV3 && decl->typeName.rfind("ptr<", 0) == 0 && decl->initialValue) {
+        if (auto* sv = dynamic_cast<VariableExpr*>(decl->initialValue.get())) {
+            Symbol* ss = resolveVariable(sv->name);
+            if (ss && ss->typeName.rfind("shared<", 0) == 0) {
+                LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "illegal shared<T> → ptr<T> assignment ('"
+                    + decl->varName + "' <- '" + sv->name + "'): a unique owner cannot be extracted "
+                    "from a shared (co-owned) object (§6.2/§10). Borrow it as ref<T>, or co-own as shared<T>.");
+            }
+        }
+    }
+
     // ── AIML v2 (doc/aiml_v2_impl_plan.md P1/P5): refcounted MODEL local ─────────────────────────
     // A heap-field model is a shared refcounted heap object. The local's alloca holds a %M*
     // (pointer), NOT an inline struct — exactly like a ptr<M> box, so the existing pointer-element
