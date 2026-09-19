@@ -9,18 +9,21 @@ lifetime operation, checks the survivors, and returns exit code 0 (PASS) / 1 (FA
 These probes are the spec/61 **acceptance target**. Implementation progress under
 `MODE=spec61` (which sets `AIML_LIFETIME_DROPS=1 AIML_MEM_V3=1`):
 
-**GREEN — 14/16:** 02 string share (§4), 04 ptr/new/scope-free (§6/§9.1), 05 ptr move +
-list<ptr> access (§6.2/§5.4), 06 shared<T> co-ownership (§6.2), 07 ref borrow + {ref} (§8),
-08 ref weak cycle (§5.2), 09 free release protocol (§6.1), 10 producer/consumed (§9.2),
-11 borrow-return + `borrows:` (§8), 12 scope/persistent (§9), 13 array/dyn_array/cascade/map/
-buffer/get_copy (§2.1/§5), 14 tensor/resource move-only (§7), 15 memoized deep-clone graph
-(§5.1), 16 threads move/shared/guard (§5.3).
+**GREEN — 16/16 (complete):** 01 stack value + by-value member-wise copy with container-field
+aliasing (§3/§7), 02 string share (§4), 03 container aliasing + {copy}/{clone} (§5/§5.1),
+04 ptr/new/scope-free (§6/§9.1), 05 ptr move + list<ptr> access (§6.2/§5.4), 06 shared<T>
+co-ownership (§6.2), 07 ref borrow + {ref} (§8), 08 ref weak cycle (§5.2), 09 free release
+protocol (§6.1), 10 producer/consumed (§9.2), 11 borrow-return + `borrows:` (§8), 12 scope/
+persistent (§9), 13 array/dyn_array/cascade/map/buffer/get_copy (§2.1/§5), 14 tensor/resource
+move-only (§7), 15 memoized deep-clone graph (§5.1), 16 threads move/shared/guard (§5.3).
 
-**RED — 2 remaining (container refcounting/aliasing, Option B):**
-- **01, 03 — container refcounting/aliasing (Option B).** `list`/`map` must become refcounted
-  *handles* (heap block behind a pointer, rc header + `{size,cap,data}`) so assignment shares
-  and mutation aliases. Today they are inline value structs `{size,cap,ptr}` — an ABI change
-  touching every container op. Largest; in progress under `AIML_MEM_V3`.
+**Container Option B (§5) — `list<T>` is a refcounted HANDLE under memV3:** a heap block
+[rc][pad][{size,cap,data}] behind a pointer. A list LOCAL and a list model FIELD both hold the
+pointer, so assignment / by-value model copy SHARES (increfs → aliasing) and scope-exit
+decrefs (frees data + block at rc 0). `{copy}` = independent spine (fresh buffer, shared
+referents); `{clone}` = deep, DAG-preserving. `map`/`buffer` stay inline for now (they pass as
+value structs; a follow-up can lift them to handles the same way). All of it is gated on
+`AIML_MEM_V3` (serializer carries a new `AIML_TD_LIST_PTR` node only under the gate).
 
 Deployed/OFF path is **byte-identical**: every change is gated on `AIML_MEM_V3` (default OFF) or
 additive. Run the old model for comparison with `MODE=off`.
