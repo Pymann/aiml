@@ -1,0 +1,12 @@
+# static-check: off
+# NEGATIVE (§6.2/§10): shared<T> → ptr<T> is a forbidden cross-kind assignment — you cannot
+# extract unique ownership from a co-owned object. Borrow (ref<T>) or co-own (shared<T>) instead.
+# EXPECT-ERROR: illegal shared<T> → ptr<T> assignment
+- model: { name: Wid, fields: [[ident, i32, 0]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [shw, shared<Wid>, { share: { new: Wid } }]
+      - decl: [uniq, ptr<Wid>, shw]         # ← must be rejected
+      - return: 0
