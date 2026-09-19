@@ -1,0 +1,35 @@
+# static-check: off
+# TIER: T2
+# CONSTRUCT: secure-before-release assignment order (§5.5) — self-assignment is a no-op, and a
+#            source reachable through the destination is secured before the old dst is released.
+# COVERS: self-assign string (no UAF), self-assign list handle (no-op), and the {set: [p, p.child]}
+#         move (capture+null the child slot, free old parent, child survives). Symbols: set self-move
+#         guard, secure-before-release, ptr field move-through-owner.
+- model: { name: Node, fields: [[val, i32, 0], [child, ptr<Node>]] }
+
+- def:
+    name: main
+    return: i32
+    static_off: ["str_cmp"]
+    body:
+      # self-assign a string → no-op, content intact (no double-free/UAF)
+      - decl: [txt, string, "hello"]
+      - set: [txt, txt]
+      - if: { condition: { neq: [txt, "hello"] }, then: [{ print: ["FAIL str self ${txt}"] }, { return: 1 }] }
+      # self-assign a list handle → no-op (rc unchanged, elements intact)
+      - decl: [lst, list<i32>]
+      - call: [lst.push, 5]
+      - call: [lst.push, 6]
+      - set: [lst, lst]
+      - if: { condition: { neq: [lst.len, 2] }, then: [{ print: ["FAIL list self ${lst.len}"] }, { return: 1 }] }
+      # source reachable through the target: move the child ptr into its own owner slot.
+      # §5.5 step 1 captures par.child and NULLS the child slot; step 2 frees old par, whose
+      # recursive release finds child=null and skips it → the extracted child survives.
+      - decl: [par, ptr<Node>, { new: Node }]
+      - set: [par.val, 1]
+      - set: [par.child, { new: Node }]
+      - set: [par.child.val, 2]
+      - set: [par, par.child]
+      - if: { condition: { neq: [par.val, 2] }, then: [{ print: ["FAIL p=p.child val=${par.val}"] }, { return: 1 }] }
+      - print: ["PASS 22 assignment_order"]
+      - return: 0

@@ -1,0 +1,27 @@
+# static-check: off
+# TIER: T2
+# CONSTRUCT: ptr<T> → shared<T> adoption via { share: p } (§6.2 conversion matrix) — the only
+#            legal way to turn a unique owner into a co-owned one: realloc [rc=1|fields], move the
+#            fields (handles bit-copied, no incref), free the old ptr block raw, p is moved-out.
+# COVERS: { share: existingPtr } (distinct from probe 06's { share: {new} }), then co-ownership
+#         via a list<shared<T>> + ref borrow. Symbols: shared<T>, { share: p }, ptr→shared adopt.
+- model: { name: Card, fields: [[ident, i32, 0], [tags, list<string>]] }
+
+- def:
+    name: main
+    return: i32
+    static_off: ["str_cmp"]
+    body:
+      - decl: [uni, ptr<Card>, { new: Card }]        # unique owner
+      - set: [uni.ident, 7]
+      - call: [uni.tags.push, "fire"]                # a heap (list<string>) field to carry across
+      - decl: [shc, shared<Card>, { share: uni }]    # ADOPT: uni moved-out; shc owns [rc=1|Card]
+      - if: { condition: { neq: [shc.ident, 7] }, then: [{ print: ["FAIL adopt ident=${shc.ident}"] }, { return: 1 }] }
+      - if: { condition: { neq: [shc.tags.len, 1] }, then: [{ print: ["FAIL adopt tags moved ${shc.tags.len}"] }, { return: 1 }] }
+      - decl: [poolS, list<shared<Card>>]
+      - call: [poolS.push, shc]                       # incref → rc=2 (co-owned)
+      - decl: [view, ref<Card>, { at: [poolS, 0] }]
+      - if: { condition: { neq: [view.ident, 7] }, then: [{ print: ["FAIL coowned ${view.ident}"] }, { return: 1 }] }
+      # scope exit: shc drops (rc 2→1), poolS drops its element (rc 1→0 → freed once). uni is dead.
+      - print: ["PASS 23 ptr_to_shared_adopt"]
+      - return: 0
