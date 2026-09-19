@@ -1,0 +1,36 @@
+# static-check: off
+# TIER: T2
+# CONSTRUCT: passing a container shares it (§5 rule 1: "Assigning / passing / storing a container
+#            shares it (incref), never copies"). The third verb — PASSING a bare container LOCAL
+#            as a function argument — completes locals(assign) + fields(store) already covered.
+# COVERS: pass list<i32> / map<string:i32> local to a fn param → callee mutation VISIBLE to caller
+#         (shared handle, aliasing). Symbols: list/map as a by-ref-shared function argument.
+- def:
+    name: add_two
+    args: [[itx, list<i32>]]
+    body:
+      - call: [itx.push, 10]
+      - call: [itx.push, 20]
+
+- def:
+    name: put_one
+    args: [[itm, "map<string:i32>"]]
+    body:
+      - call: [itm.put, "b", 2]
+
+- def:
+    name: main
+    return: i32
+    static_off: ["str_cmp"]
+    body:
+      - decl: [nums, list<i32>]
+      - call: [nums.push, 1]
+      - call: [add_two, nums]                 # callee pushes into the SHARED list
+      - if: { condition: { neq: [nums.len, 3] }, then: [{ print: ["FAIL list arg not shared len=${nums.len}"] }, { return: 1 }] }
+      - decl: [tab, "map<string:i32>"]
+      - call: [tab.put, "a", 1]
+      - call: [put_one, tab]                  # callee puts into the SHARED map
+      - if: { condition: { neq: [tab.len, 2] }, then: [{ print: ["FAIL map arg not shared len=${tab.len}"] }, { return: 1 }] }
+      - if: { condition: { neq: [{ call: [tab.get, "b"] }, 2] }, then: [{ print: ["FAIL map arg get"] }, { return: 1 }] }
+      - print: ["PASS 20 container_arg_share"]
+      - return: 0
