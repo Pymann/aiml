@@ -1,6 +1,8 @@
 #include "ser_runtime.h"
 #include "string_runtime.h"
 #include "model_runtime.h"   // AIML v2: aiml_model_alloc / dec_hits_zero / free_shell (AIML_TD_MODEL)
+// spec/61 §5 Option B (memV3): list-handle allocator (string_runtime.cpp).
+extern "C" void* aiml_list_handle_new();
 #include <cstring>
 #include <cstdlib>
 #include <vector>
@@ -70,6 +72,7 @@ static void aiml_ser_fp_walk(const AimlTypeNode* nodes, int32_t n,
         case AIML_TD_BUFFER:
         case AIML_TD_PTR_STRUCT:
         case AIML_TD_MODEL:
+        case AIML_TD_LIST_PTR:
             aiml_ser_fp_walk(nodes, n, nd.param1, h, depth + 1);
             break;
         case AIML_TD_MAP:
@@ -307,6 +310,16 @@ static void enc(std::vector<uint8_t>& buf,
         }
         break;
     }
+
+    case AIML_TD_LIST_PTR: {
+        // spec/61 §5 Option B (memV3): the slot holds a POINTER to a list handle. Follow it;
+        // 0 marker = null, else 1 + the inner list payload (encoded from the handle's struct).
+        const void* obj = nullptr;
+        memcpy(&obj, data, sizeof(void*));
+        if (!obj) { w_u8(buf, 0); }
+        else { w_u8(buf, 1); enc(buf, n.param1, ns, nn, (const uint8_t*)obj); }
+        break;
+    }
     }
 }
 
@@ -496,6 +509,20 @@ static void dec(const uint8_t* blob, int& pos, int end,
         memcpy(out, &obj, sizeof(void*));
         break;
     }
+
+    case AIML_TD_LIST_PTR: {
+        // spec/61 §5 Option B (memV3): allocate a fresh list handle, decode the inner list into
+        // its {size,cap,data} part, store the pointer. 0 marker → null slot.
+        uint8_t marker = 0;
+        if (pos < end) { marker = blob[pos++]; } else { g_dec_error = true; }
+        void* obj = nullptr;
+        if (marker != 0) {
+            obj = aiml_list_handle_new();     // rc 1, zeroed {size,cap,data}
+            if (obj) dec(blob, pos, end, n.param1, ns, nn, (uint8_t*)obj);
+        }
+        memcpy(out, &obj, sizeof(void*));
+        break;
+    }
     }
 }
 
@@ -608,6 +635,23 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         if (obj && aiml_model_dec_hits_zero(obj)) {
             fre(n.param1, ns, nn, (uint8_t*)obj);
             aiml_model_free_shell(obj);
+        }
+        obj = nullptr;
+        memcpy(data, &obj, sizeof(void*));
+        break;
+    }
+
+    case AIML_TD_LIST_PTR: {
+        // spec/61 §5 Option B (memV3): list handle behind a pointer. Decref via the rc header;
+        // at rc 0 free the list's data+elements (fre at the inner LIST node) and the block.
+        void* obj = nullptr;
+        memcpy(&obj, data, sizeof(void*));
+        if (obj) {
+            int32_t* rc = (int32_t*)((char*)obj - 8);
+            if (--(*rc) <= 0) {
+                fre(n.param1, ns, nn, (uint8_t*)obj);   // frees data + per-element heap
+                free((char*)obj - 8);                    // free the handle block
+            }
         }
         obj = nullptr;
         memcpy(data, &obj, sizeof(void*));
@@ -891,6 +935,20 @@ static void clw(int idx, const AimlTypeNode* ns, int nn,
                     clw(n.param1, ns, nn, (const uint8_t*)obj, (uint8_t*)nobj);
                 }
             }
+        }
+        memcpy(dst, &nobj, sizeof(void*));
+        break;
+    }
+
+    case AIML_TD_LIST_PTR: {
+        // spec/61 §5.1 (memV3): deep-clone the list into a NEW independent handle (containers are
+        // NOT memoized — a clone gets its own list; aliasing is a {copy}/assign concern, not clone).
+        const void* obj = nullptr;
+        memcpy(&obj, src, sizeof(void*));
+        void* nobj = nullptr;
+        if (obj) {
+            nobj = aiml_list_handle_new();
+            if (nobj) clw(n.param1, ns, nn, (const uint8_t*)obj, (uint8_t*)nobj);
         }
         memcpy(dst, &nobj, sizeof(void*));
         break;

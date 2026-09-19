@@ -142,7 +142,17 @@ void Compiler::initClassContainerMembers(llvm::Value* basePtr,
             llvm::Type* elemTy = ctx.isRefcountModel(elemName)
                 ? llvm::PointerType::get(ctx.context, 0)
                 : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
-            if (elemTy) ListImpl::initList(ctx, fieldPtr, elemTy, 4);
+            if (ctx.memV3) {
+                // spec/61 §5 Option B: the field is a POINTER to a refcounted handle — allocate the
+                // handle, store the pointer in the field slot, then initList on the handle's struct.
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* nw = ctx.getFunction("aiml_list_handle_new", i8p, {});
+                llvm::Value* handle = ctx.builder.CreateCall(nw, {}, "fld_listh_new");
+                ctx.builder.CreateStore(handle, fieldPtr);
+                if (elemTy) ListImpl::initList(ctx, handle, elemTy, 4);
+            } else if (elemTy) {
+                ListImpl::initList(ctx, fieldPtr, elemTy, 4);
+            }
         } else if (mt.rfind("map<", 0) == 0 && mt.back() == '>') {
             std::string inner = mt.substr(4, mt.length() - 5);
             size_t colon = inner.find(':');
@@ -2930,7 +2940,8 @@ static AimlTypeNode snShift(AimlTypeNode n, int32_t delta) {
         case AIML_TD_LIST:
         case AIML_TD_BUFFER:
         case AIML_TD_PTR_STRUCT:
-        case AIML_TD_MODEL:  n.param1 += delta; break;  // param1 = child index (struct subtree)
+        case AIML_TD_MODEL:
+        case AIML_TD_LIST_PTR: n.param1 += delta; break;  // param1 = child index (struct subtree)
         case AIML_TD_MAP:    n.param1 += delta; n.param2 += delta; break;
         case AIML_TD_STRUCT: n.param2 += delta; break; // param1 = n_fields (not an index)
         default: break;
@@ -2980,6 +2991,25 @@ static std::vector<AimlTypeNode> serBuildStructNodes(
 static std::vector<AimlTypeNode> serBuildSubtree(
     const std::string& typeName, int32_t offset,
     CompilerContext& ctx, const llvm::DataLayout& dl);
+
+// spec/61 §5 Option B (memV3): build a STRUCT FIELD's subtree. A list<T>/cascade<X> field is a
+// POINTER to a refcounted handle → wrap the inner LIST subtree in an AIML_TD_LIST_PTR node at the
+// pointer slot. Everything else (and the OFF path) builds the field subtree inline as before. Only
+// the FIELD level is wrapped — nested list ELEMENTS (list<list<T>>) stay inline via serBuildSubtree.
+static std::vector<AimlTypeNode> serFieldSubtree(
+    const std::string& typeName, int32_t offset,
+    CompilerContext& ctx, const llvm::DataLayout& dl)
+{
+    bool memV3ListField = ctx.memV3 &&
+        ((typeName.rfind("list<", 0) == 0 && typeName.back() == '>') ||
+         (typeName.rfind("cascade<", 0) == 0 && typeName.back() == '>'));
+    if (!memV3ListField) return serBuildSubtree(typeName, offset, ctx, dl);
+    std::string inner = (typeName.rfind("cascade<", 0) == 0) ? std::string("list<i32>") : typeName;
+    std::vector<AimlTypeNode> res;
+    res.push_back({AIML_TD_LIST_PTR, 1, 0, offset, 8, 0});          // pointer slot
+    for (auto& n : serBuildSubtree(inner, 0, ctx, dl)) res.push_back(snShift(n, 1));
+    return res;
+}
 
 // DFS active-path guard against recursive types.  A struct that (transitively,
 // via ptr<>) refers back to itself — e.g. a back-reference component holding a
@@ -3122,7 +3152,7 @@ static std::vector<AimlTypeNode> serBuildSubtree(
         std::vector<std::vector<AimlTypeNode>> fsubs;
         for (auto& [mn, mem] : sm) {
             if (mem.is_collaborator) continue;
-            fsubs.push_back(serBuildSubtree(mem.typeName,
+            fsubs.push_back(serFieldSubtree(mem.typeName,
                 (int32_t)sl->getElementOffset(mem.index), ctx, dl));
         }
         if (onPath) g_serActivePath.erase(typeName);
@@ -3152,7 +3182,7 @@ static std::vector<AimlTypeNode> serBuildSubtree(
                 // skip them (spec/58 §9) — and this breaks the infinite recursion a
                 // bidirectional sees cycle would otherwise cause here.
                 if (mem.is_collaborator) continue;
-                fsubs.push_back(serBuildSubtree(mem.typeName,
+                fsubs.push_back(serFieldSubtree(mem.typeName,
                     (int32_t)sl->getElementOffset(mem.index), ctx, dl));
             }
             if (onPath) g_serActivePath.erase(typeName);
@@ -3564,7 +3594,7 @@ void Compiler::registerTypeDecl(Node* node) {
             bool onPathC = g_serActivePath.insert(className).second;  // seed cycle guard
             std::vector<std::vector<AimlTypeNode>> fsubs;
             for (auto& [mn, mem] : orderedMembers)
-                fsubs.push_back(serBuildSubtree(mem.typeName,
+                fsubs.push_back(serFieldSubtree(mem.typeName,
                     (int32_t)sl->getElementOffset(mem.index), ctx, dl));
             if (onPathC) g_serActivePath.erase(className);
             auto nodes = serBuildStructNodes(fsubs, 0, sz);
@@ -3721,7 +3751,13 @@ void Compiler::registerTypeDecl(Node* node) {
             // AIML v2 P6: a direct refcount-MODEL field is a %M* pointer (8 bytes), not an inline
             // struct — the parent shares/owns a reference (aiml_model_alloc'd, decref'd on free),
             // and field access auto-derefs the pointer. Otherwise the declared type.
-            llvm::Type* fieldType = ctx.isRefcountModel(typeName)
+            // spec/61 §5 Option B (memV3): a list<T>/cascade<X> field is a POINTER to a refcounted
+            // handle (8 bytes) so by-value model copy shares (aliases) the container. Gated on
+            // memV3 → OFF/deployed struct layout is byte-identical.
+            bool memV3ListField = ctx.memV3 &&
+                ((typeName.rfind("list<", 0) == 0 && typeName.back() == '>') ||
+                 (typeName.rfind("cascade<", 0) == 0 && typeName.back() == '>'));
+            llvm::Type* fieldType = (ctx.isRefcountModel(typeName) || memV3ListField)
                 ? llvm::PointerType::get(ctx.context, 0)
                 : ctx.getLLVMType(typeName);
             if (!fieldType) {
@@ -3781,7 +3817,7 @@ void Compiler::registerTypeDecl(Node* node) {
             bool onPathM = g_serActivePath.insert(modelName).second;  // seed cycle guard
             std::vector<std::vector<AimlTypeNode>> fsubs;
             for (auto& [mn, mem] : sm)
-                fsubs.push_back(serBuildSubtree(mem.typeName,
+                fsubs.push_back(serFieldSubtree(mem.typeName,
                     (int32_t)sl->getElementOffset(mem.index), ctx, dl));
             if (onPathM) g_serActivePath.erase(modelName);
             auto nodes = serBuildStructNodes(fsubs, 0, sz);
@@ -5279,6 +5315,11 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
                         std::string elemName = member.typeName.substr(5, member.typeName.length() - 6);
                         llvm::Type* elemType = ctx.getLLVMType(elemName);
                         llvm::Value* listAllocaVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldGep));
+                        // spec/61 §5 Option B (memV3): the field is a POINTER to the handle → load it.
+                        if (ctx.memV3) {
+                            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                            listAllocaVal = ctx.builder.CreateLoad(i8p, listAllocaVal, "listh_idx");
+                        }
 
                         llvm::Value* idxVal = nullptr;
                         try {
@@ -5316,6 +5357,15 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
                         tmpSym.typeName         = member.typeName;
                         tmpSym.ir_alloca_inst   = fieldGep;
                         tmpSym.ir_element_type  = fieldElemTy;
+                        // spec/61 §5 Option B (memV3): a list<T>/cascade<X> field is a POINTER to a
+                        // handle → mark byref so the recursion derefs the slot to the handle before
+                        // property access (.len/.empty/…).
+                        if (ctx.memV3 &&
+                            (member.typeName.rfind("list<", 0) == 0 || member.typeName.rfind("cascade<", 0) == 0)
+                            && member.typeName.back() == '>') {
+                            tmpSym.is_byref_arg = true;
+                            tmpSym.ir_element_type = ctx.ir_gen->wrapType(ListImpl::getListStructType(ctx));
+                        }
                         return resolveProperty(&tmpSym, rest);
                     }
                 }
@@ -5343,6 +5393,15 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
             // ast_compiler_call.cpp converts ptr→struct if the callee wants
             // value, but it can't reconstruct a ptr from a loaded struct.
             // Repro: aiml/tests/test_class_member_as_func_arg.aiml
+            // spec/61 §5 Option B (memV3): a list<T>/cascade<X> field is a POINTER to a handle —
+            // LOAD it so callers get the handle (a pointer to {size,cap,data}), exactly the shape
+            // ListImpl ops / byref-container params expect. buffer/map fields stay inline (return gep).
+            if (ctx.memV3 &&
+                (member.typeName.rfind("list<", 0) == 0 || member.typeName.rfind("cascade<", 0) == 0)) {
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                return ctx.ir_gen->wrap(ctx.builder.CreateLoad(i8p,
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(gep)), propName + "_listh"));
+            }
             if (member.typeName.rfind("list<", 0) == 0 ||
                 member.typeName.rfind("buffer<", 0) == 0 ||
                 member.typeName.rfind("map<", 0) == 0) {
@@ -5524,7 +5583,19 @@ IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& p
             structPtr = ctx.ir_gen->createLoad(baseElemTy, baseAlloca, "prop_ptr_base_w");
 
         outTypeName = member.typeName;
-        return ctx.ir_gen->createStructGEP(structTy, structPtr, member.index, "set_prop_ptr_w");
+        IRValue* fieldGep = ctx.ir_gen->createStructGEP(structTy, structPtr, member.index, "set_prop_ptr_w");
+        // spec/61 §5 Option B (memV3): a list<T>/cascade<X> field is a POINTER to a handle. As a
+        // method RECEIVER (e.g. `obj.tags.push`) callers want the handle (a pointer to
+        // {size,cap,data}), so LOAD it. (A whole-list `set:[obj.tags, L]` replace would want the
+        // slot address; that path is not yet exercised under memV3 — Stage B follow-up.)
+        if (ctx.memV3 &&
+            (member.typeName.rfind("list<", 0) == 0 || member.typeName.rfind("cascade<", 0) == 0)
+            && member.typeName.back() == '>') {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            return ctx.ir_gen->wrap(ctx.builder.CreateLoad(i8p,
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldGep)), "listh_recv_w"));
+        }
+        return fieldGep;
     }
 
     return nullptr;

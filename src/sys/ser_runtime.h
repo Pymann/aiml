@@ -33,6 +33,10 @@ typedef enum {
                              //   but decode allocates the shell via aiml_model_alloc (MODL header +
                              //   refcount 1) and free decrefs it (frees at 0). param1=inner struct
                              //   subtree; elem_size=sizeof(inner struct).
+    AIML_TD_LIST_PTR   = 12, // spec/61 §5 Option B (memV3 only): a list<T> FIELD stored as a
+                             //   POINTER to a refcounted handle ([rc][pad][{size,cap,data}]).
+                             //   param1=the inner AIML_TD_LIST node index. The slot is 8 bytes.
+                             //   Emitted only under memV3 → OFF/deployed descriptors never carry it.
 } AimlTDKind;
 
 // Each node is 24 bytes.  The whole descriptor for a type is an array of these.

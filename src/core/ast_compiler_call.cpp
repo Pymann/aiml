@@ -2638,8 +2638,19 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                      Symbol fieldSym;
                      fieldSym.ir_alloca_inst = ctx.ir_gen->wrap(static_cast<llvm::Value*>(fieldPtr));
                      fieldSym.typeName = fieldIt->second.typeName;
-                     fieldSym.ir_element_type = ctx.ir_gen->wrapType(fieldIt->second.type);
                      fieldSym.ir_type = ctx.ir_gen->getPointerTy();
+                     // spec/61 §5 Option B (memV3): a list<T>/cascade<X> field is a POINTER to a
+                     // handle. Mark the temp as is_byref_arg with the list struct as element type so
+                     // method dispatch derefs the slot once → the handle (the {size,cap,data} ptr).
+                     bool memV3ListFld = ctx.memV3 &&
+                         (fieldSym.typeName.rfind("list<", 0) == 0 || fieldSym.typeName.rfind("cascade<", 0) == 0)
+                         && fieldSym.typeName.back() == '>';
+                     if (memV3ListFld) {
+                         fieldSym.is_byref_arg = true;
+                         fieldSym.ir_element_type = ctx.ir_gen->wrapType(ListImpl::getListStructType(ctx));
+                     } else {
+                         fieldSym.ir_element_type = ctx.ir_gen->wrapType(fieldIt->second.type);
+                     }
                      return visitObjectMethodCall(baseName + "." + fieldName, subMethod, &fieldSym, call);
                  }
              }
