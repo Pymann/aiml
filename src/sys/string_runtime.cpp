@@ -246,6 +246,45 @@ extern "C" void* aiml_list_handle_copy(void* src, int64_t elemSize, int32_t elem
     return h;
 }
 
+// ── spec/61 §5 Option B (memV3): buffer as a refcounted HANDLE ────────────────
+// Buffer layout (mirrors compress_runtime.h / BufferImpl): { i32 size, i32 cap, i32 read,
+// i32 write, i8* data } = 24 bytes on 64-bit. Handle = [i32 rc][i32 pad][AimlBufRaw]; the stored
+// pointer targets the AimlBufRaw so every BufferImpl op is unchanged. No element ownership (raw
+// bytes) → release just frees the data buffer + block. memV3-only (buffer stays inline under OFF).
+struct AimlBufRaw { int32_t size; int32_t capacity; int32_t read_idx; int32_t write_idx; void* data; };
+extern "C" void* aiml_buffer_handle_new() {
+    char* block = static_cast<char*>(calloc(1, 8 + sizeof(AimlBufRaw)));
+    if (!block) return nullptr;
+    *reinterpret_cast<int32_t*>(block) = 1;   // rc = 1
+    return block + 8;
+}
+extern "C" void aiml_buffer_handle_incref(void* h) {
+    if (!h) return;
+    (*reinterpret_cast<int32_t*>(static_cast<char*>(h) - 8))++;
+}
+extern "C" void aiml_buffer_handle_release(void* h) {
+    if (!h) return;
+    int32_t* rc = reinterpret_cast<int32_t*>(static_cast<char*>(h) - 8);
+    if (--(*rc) > 0) return;
+    AimlBufRaw* b = static_cast<AimlBufRaw*>(h);
+    free(b->data); b->data = nullptr;
+    free(static_cast<char*>(h) - 8);
+}
+// {copy: B} — new INDEPENDENT buffer: fresh data block (capacity bytes) with the bytes copied.
+extern "C" void* aiml_buffer_handle_copy(void* src) {
+    void* h = aiml_buffer_handle_new();
+    if (!h || !src) return h;
+    AimlBufRaw* s = static_cast<AimlBufRaw*>(src);
+    AimlBufRaw* d = static_cast<AimlBufRaw*>(h);
+    d->size = s->size; d->capacity = s->capacity;
+    d->read_idx = s->read_idx; d->write_idx = s->write_idx;
+    if (s->capacity > 0) {
+        d->data = malloc((size_t)s->capacity);
+        if (d->data && s->data) memcpy(d->data, s->data, (size_t)s->capacity);
+    }
+    return h;
+}
+
 // ── spec/61 map scope-drop primitive ────────────────────────────────────────
 // Layout mirrors MapImpl (map_impl.cpp): { i32 size, i32 capacity, uint8_t* occ,
 // void* keys, void* vals }.  occ[i]==1 marks slot i occupied.  Frees the occ/keys/vals

@@ -1,0 +1,41 @@
+# static-check: off
+# TIER: T2
+# CONSTRUCT: buffer is a refcounted handle (§5, Option B, Class-3) — resolved from the §2.1
+#            contradiction: the whole buffer header is an rc handle (share/alias), not a value.
+# COVERS: buffer LOCAL aliasing on assign; {copy} = independent; buffer model FIELD aliasing on
+#         by-value model copy. Symbols: buffer, buffer.alloc, buffer.zero, buffer.resize, buffer.len.
+- model:
+    name: Blob
+    fields:
+      - [tag, i32, 0]
+      - [bin, buffer]
+
+- def:
+    name: grow_bin
+    args: [[itb, Blob]]
+    body:
+      - call: [itb.bin.resize, 12]          # mutate the buffer field of a by-value param
+
+- def:
+    name: main
+    return: i32
+    body:
+      # ── local aliasing ──
+      - decl: [bufa, buffer]
+      - call: [bufa.alloc, 8]
+      - call: [bufa.zero]                    # len = 8
+      - decl: [bufb, buffer, bufa]           # SHARE (incref) — same buffer
+      - call: [bufa.resize, 16]              # grows the shared buffer
+      - if: { condition: { neq: [bufb.len, 16] }, then: [{ print: ["FAIL alias bufb.len=${bufb.len}"] }, { return: 1 }] }
+      # ── {copy} independence ──
+      - decl: [bufc, buffer, { copy: bufa }] # shallow copy — independent block
+      - call: [bufa.resize, 24]
+      - if: { condition: { neq: [bufc.len, 16] }, then: [{ print: ["FAIL copy bufc.len=${bufc.len}"] }, { return: 1 }] }
+      # ── buffer model FIELD aliasing on by-value copy ──
+      - decl: [blob, Blob]
+      - call: [blob.bin.alloc, 4]
+      - call: [blob.bin.zero]                # field buffer len = 4
+      - call: [grow_bin, blob]               # by-value param; field is a shared handle
+      - if: { condition: { neq: [blob.bin.len, 12] }, then: [{ print: ["FAIL field not aliased len=${blob.bin.len}"] }, { return: 1 }] }
+      - print: ["PASS 19 buffer_aliasing"]
+      - return: 0

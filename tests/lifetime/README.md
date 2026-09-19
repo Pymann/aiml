@@ -16,20 +16,19 @@ co-ownership (§6.2), 07 ref borrow + {ref} (§8), 08 ref weak cycle (§5.2), 09
 protocol (§6.1), 10 producer/consumed (§9.2), 11 borrow-return + `borrows:` (§8), 12 scope/
 persistent (§9), 13 array/dyn_array/cascade/map/buffer/get_copy (§2.1/§5), 14 tensor/resource
 move-only (§7), 15 memoized deep-clone graph (§5.1), 16 threads move/shared/guard (§5.3),
-17 map aliasing + {copy} (§5), 18 map field aliasing (§5/§7).
+17 map aliasing + {copy} (§5), 18 map field aliasing (§5/§7), 19 buffer aliasing +
+{copy} + field (§5/§7).
 
-**Container Option B (§5) — `list<T>` and `map<K:V>` are refcounted HANDLES under memV3:** a
-heap block `[rc][pad][struct]` behind a pointer (`{size,cap,data}` for list, `{size,cap,occ,
-keys,vals}` for map). Both a container LOCAL and a container model FIELD hold the pointer, so
-assignment / by-value model copy SHARES (increfs → aliasing) and scope-exit decrefs (frees at
-rc 0). `{copy}` = independent spine (fresh arrays, string/model referents incref'd); `{clone}`
-= deep, DAG-preserving. `cascade<X>` rides the `list<i32>` layout. Gated on `AIML_MEM_V3`; the
-serializer carries new `AIML_TD_LIST_PTR`/`AIML_TD_MAP_PTR` nodes only under the gate.
+**Container Option B (§5) — `list<T>`, `map<K:V>` and `buffer` are refcounted HANDLES under
+memV3:** a heap block `[rc][pad][struct]` behind a pointer (`{size,cap,data}` for list,
+`{size,cap,occ,keys,vals}` for map, `{size,cap,r,w,data}` for buffer). Both a container LOCAL
+and a container model FIELD hold the pointer, so assignment / by-value model copy SHARES
+(increfs → aliasing) and scope-exit decrefs (frees at rc 0). `{copy}` = independent spine
+(fresh arrays, string/model referents incref'd); `{clone}` = deep, DAG-preserving. `cascade<X>`
+rides the `list<i32>` layout. Gated on `AIML_MEM_V3`; the serializer carries new
+`AIML_TD_LIST_PTR`/`AIML_TD_MAP_PTR`/`AIML_TD_BUFFER_PTR` nodes only under the gate.
 
 **Remaining Class-3 (scoped, not yet handles):**
-- `buffer` — spec §2.1 is ambiguous (row 3 lists it Class-3, but the note reads "the *data
-  buffer* it points at is Class 3", i.e. maybe only the data, not the whole header, is rc'd).
-  Left inline pending a spec clarification rather than guessing the aliasing depth.
 - `dyn_array<T>` — spec §2.1 says "same rc/aliasing as list", but it is currently a raw
   explicit-`free` `i8*` (new_array/idx/at/free). Lifting it to the rc-handle discipline would
   change its manual-free API; deferred.

@@ -2647,7 +2647,12 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                          && fieldSym.typeName.back() == '>';
                      bool memV3MapFld = ctx.memV3 &&
                          fieldSym.typeName.rfind("map<", 0) == 0 && fieldSym.typeName.back() == '>';
-                     if (memV3ListFld) {
+                     bool memV3BufFld = ctx.memV3 && (fieldSym.typeName == "buffer" ||
+                         (fieldSym.typeName.rfind("buffer<", 0) == 0 && fieldSym.typeName.back() == '>'));
+                     if (memV3BufFld) {
+                         fieldSym.is_byref_arg = true;
+                         fieldSym.ir_element_type = ctx.ir_gen->wrapType(ctx.getLLVMType("buffer"));
+                     } else if (memV3ListFld) {
                          fieldSym.is_byref_arg = true;
                          fieldSym.ir_element_type = ctx.ir_gen->wrapType(ListImpl::getListStructType(ctx));
                      } else if (memV3MapFld) {

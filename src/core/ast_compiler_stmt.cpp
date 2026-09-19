@@ -528,6 +528,79 @@ void Compiler::emitMapHandleDecl(DeclStmt* decl) {
     }
 }
 
+// spec/61 §5 Option B (memV3): a buffer value-local becomes a refcounted HANDLE, mirroring the
+// list/map handle path. Fresh init → aiml_buffer_handle_new (data alloc'd on demand by .alloc);
+// init from another buffer var → SHARE (incref); { copy } → independent buffer; scope-exit
+// decref (kind 8) frees data + block at rc 0. No element ownership (raw bytes).
+void Compiler::emitBufferHandleDecl(DeclStmt* decl) {
+    auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+
+    IRType* ptrTy = ctx.ir_gen->getPointerTy();
+    IRValue* alloca = ctx.ir_gen->createAlloca(ptrTy, decl->varName);
+    llvm::Value* slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
+    ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), slot);
+
+    Expr* iv = decl->initialValue.get();
+    bool isShareVar = iv && dynamic_cast<VariableExpr*>(iv);
+    bool isCopyClone = false;
+    if (iv) if (auto* ce = dynamic_cast<CallExpr*>(iv))
+        isCopyClone = (ce->functionName == "sys.copy" || ce->functionName == "sys.clone");
+
+    llvm::Value* handle = nullptr;
+    if (isShareVar) {
+        auto* ve = static_cast<VariableExpr*>(iv);
+        Symbol* src = resolveVariable(ve->name);
+        if (src) {
+            llvm::Value* srcSlot = src->ir_alloca_inst
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(src->ir_alloca_inst)) : src->alloca_inst;
+            handle = ctx.builder.CreateLoad(i8p, srcSlot, "bufh_src");
+            llvm::Function* inc = ctx.getFunction("aiml_buffer_handle_incref", ctx.builder.getVoidTy(), {i8p});
+            ctx.builder.CreateCall(inc, { handle });
+        }
+    } else if (isCopyClone) {
+        auto* ce = static_cast<CallExpr*>(iv);
+        llvm::Value* srcHandle = nullptr;
+        if (!ce->args.empty()) if (auto* av = dynamic_cast<VariableExpr*>(ce->args[0].get())) {
+            Symbol* src = resolveVariable(av->name);
+            if (src) {
+                llvm::Value* srcSlot = src->ir_alloca_inst
+                    ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(src->ir_alloca_inst)) : src->alloca_inst;
+                srcHandle = ctx.builder.CreateLoad(i8p, srcSlot, "bufh_copysrc");
+            }
+        }
+        llvm::Function* cp = ctx.getFunction("aiml_buffer_handle_copy", i8p, {i8p});
+        handle = ctx.builder.CreateCall(cp, { srcHandle ? srcHandle
+                                              : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)) }, "bufh_copy");
+    } else {
+        llvm::Function* nw = ctx.getFunction("aiml_buffer_handle_new", i8p, {});
+        handle = ctx.builder.CreateCall(nw, {}, "bufh_new");
+    }
+    if (handle) ctx.builder.CreateStore(handle, slot);
+
+    Symbol sym;
+    sym.ir_alloca_inst  = alloca;
+    sym.ir_type         = ptrTy;
+    sym.ir_element_type = ctx.ir_gen->wrapType(ctx.getLLVMType("buffer"));
+    sym.typeName        = decl->typeName;
+    sym.is_const        = decl->is_const;
+    sym.is_volatile     = decl->is_volatile;
+    sym.lifetime        = decl->lifetime;
+    sym.is_byref_arg    = true;
+    OwnershipId declOid = (ctx.ownershipPlan && ctx.ownershipPlan->declarations.count(decl))
+        ? ctx.ownershipPlan->declarations.at(decl) : NoOwnership;
+    sym.ownershipId     = declOid;
+    ctx.symbol_table[decl->varName] = sym;
+
+    if (decl->lifetime != "persistent" && ctx.lifetimeDropsEnabled && !ctx.cleanupStack.empty()) {
+        CompilerContext::ScopeDrop sd;
+        sd.addr = slot;
+        sd.kind = 8;   // buffer handle → aiml_buffer_handle_release
+        sd.ownershipId = declOid;
+        sd.debugName = decl->varName; sd.debugType = decl->typeName;
+        ctx.cleanupStack.back().push_back(sd);
+    }
+}
+
 void Compiler::visitDeclStmt(DeclStmt* decl) {
     ctx.validateIdentifier(decl->varName, "variable", decl->sourceNode);
 
@@ -558,6 +631,14 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             && !ctx.symbol_table.count(decl->varName)
             && !ctx.cleanupStack.empty()) {
             emitMapHandleDecl(decl);
+            return;
+        }
+        bool isBufLocal = (decl->typeName == "buffer"
+            || (decl->typeName.rfind("buffer<", 0) == 0 && decl->typeName.back() == '>'));
+        if (ctx.memV3 && isBufLocal && !decl->is_extern
+            && !ctx.symbol_table.count(decl->varName)
+            && !ctx.cleanupStack.empty()) {
+            emitBufferHandleDecl(decl);
             return;
         }
     }
@@ -2907,6 +2988,12 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         llvm::Function* dref = ctx.getFunction("aiml_model_decref", ctx.builder.getVoidTy(),
             {i8p, i8p, ctx.builder.getInt32Ty()});
         ctx.builder.CreateCall(dref, { objptr, it.serNodes, ctx.builder.getInt32(it.serNodesCount) });
+    } else if (it.kind == 8) {
+        // spec/61 §5 Option B (memV3): buffer handle — load the pointer, decref (frees data + block
+        // at rc 0). Null-safe in the runtime.
+        llvm::Value* hptr = ctx.builder.CreateLoad(i8p, it.addr, "drop_bufh");
+        llvm::Function* rel = ctx.getFunction("aiml_buffer_handle_release", ctx.builder.getVoidTy(), {i8p});
+        ctx.builder.CreateCall(rel, { hptr });
     } else {
         llvm::Function* fn = ctx.getFunction("aiml_ser_free_decoded",
             ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
