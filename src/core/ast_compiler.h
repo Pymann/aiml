@@ -73,6 +73,8 @@ private:
     void visitDeclStmt(DeclStmt* decl);
     // spec/61 §5 Option B (memV3): declare a list<T>/cascade<X> value-local as a refcounted handle.
     void emitListHandleDecl(DeclStmt* decl, bool isCascade);
+    // spec/61 §5 Option B (memV3): declare a map<K:V> value-local as a refcounted handle.
+    void emitMapHandleDecl(DeclStmt* decl);
     void visitSetStmt(SetStmt* setStmt);
     void visitExprStmt(ExprStmt* exprStmt);
     void visitRetStmt(RetStmt* retStmt);
