@@ -17,7 +17,8 @@ protocol (§6.1), 10 producer/consumed (§9.2), 11 borrow-return + `borrows:` (�
 persistent (§9), 13 array/dyn_array/cascade/map/buffer/get_copy (§2.1/§5), 14 tensor/resource
 move-only (§7), 15 memoized deep-clone graph (§5.1), 16 threads move/shared/guard (§5.3),
 17 map aliasing + {copy} (§5), 18 map field aliasing (§5/§7), 19 buffer aliasing +
-{copy} + field (§5/§7), 20 container arg-passing shares (§5 rule 1).
+{copy} + field (§5/§7), 20 container arg-passing shares (§5 rule 1), 21 dyn_array
+Class-4 unique buffer — scope-default free + early `.free` (§5.6).
 
 **Container Option B (§5) — `list<T>`, `map<K:V>` and `buffer` are refcounted HANDLES under
 memV3:** a heap block `[rc][pad][struct]` behind a pointer (`{size,cap,data}` for list,
@@ -33,10 +34,11 @@ All three §5-rule-1 verbs are covered: **assigning** (locals, probes 03/17/19),
 through the existing `is_byref_arg` container-param path, so a callee's mutation is visible to
 the caller; verified as real aliasing, not a value-copy).
 
-**Remaining Class-3 (scoped):**
-- `dyn_array<T>` — spec §2.1 says "same rc/aliasing as list", but it is currently a raw
-  explicit-`free` `i8*` (new_array/idx/at/free). Lifting it to the rc-handle discipline would
-  change its manual-free API; deferred pending a decision.
+**`dyn_array<T>` is Class-4, not Class-3** (§5.6, resolved): a *unique, unmanaged* single-`malloc`
+scalar buffer — its advantage over `list` is exactly ONE allocation and zero per-op rc. Under
+memV3 it is freed **once at owner drop** (scope-default, like `ptr<T>`), with `.free` as an
+optional **early** release that nulls the slot (no double-free). Move-on-assign (copy forbidden;
+duplicate via `clone`) is the intended rule — the static move-check is a follow-up. Probe 21.
 
 Deployed/OFF path is **byte-identical**: every change is gated on `AIML_MEM_V3` (default OFF) or
 additive. Run the old model for comparison with `MODE=off`.

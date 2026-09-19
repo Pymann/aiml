@@ -38,14 +38,22 @@ Compiles to: load `i8*` pointer → bitcast to `T*` → GEP with index → load.
 
 Compiles to: load `i8*` pointer → bitcast to `T*` → GEP with index → store.
 
-## 4. Free — `arr.free`
+## 4. Free — scope-default, with `arr.free` as an optional early release
+
+`dyn_array<T>` is a **Class-4 unique resource** (spec/61 §5.6, §2.1): a single-owner heap buffer,
+**not** refcounted or aliased. Its lifetime follows the `ptr<T>` discipline (spec/61 §6, §9.1):
+
+- **Released automatically at owner drop** (scope exit) — you rarely write `free`. (Under the
+  memory model this replaces the older "optional `.free`, leaks otherwise".)
+- **`arr.free` is an optional *early* release** — it `free(ptr)`s now and nulls the slot, so the
+  scope-default drop becomes a null no-op (no double free). Use it to reclaim a large buffer
+  before scope end (e.g. per loop iteration).
+- **Move-on-assign:** assigning / passing / returning a `dyn_array` **moves** it (unique owner);
+  a shallow copy is forbidden (double-free). Duplicate with `clone` (fresh `malloc` + byte-copy).
 
 ```yaml
-- call: [arr.free]
+- call: [arr.free]     # optional early release; otherwise freed at scope exit
 ```
-
-Calls `free(ptr)`. Optional — memory is reclaimed on process exit regardless.
-Recommended for long-running programs that allocate large arrays repeatedly.
 
 ## 5. Comparison: `array<T:N>` vs `dyn_array<T>`
 
@@ -56,7 +64,7 @@ Recommended for long-running programs that allocate large arrays repeatedly.
 | Per-access overhead   | 0 (GEP only)            | 0 (GEP only, after load)|
 | Per-alloc cost        | 0 (hoisted to entry)    | malloc call             |
 | Max size              | ~8 MB (thread stack)    | Limited by heap/RAM     |
-| Lifetime              | Function scope          | Until `.free` or exit   |
+| Lifetime              | Function scope          | Owner drop (scope); `.free`=early |
 | Use case              | Fixed inner-loop buffers| Runtime-sized buffers   |
 
 ## 6. Example
@@ -84,6 +92,9 @@ Recommended for long-running programs that allocate large arrays repeatedly.
 - `dyn_array<T>` is stored as `i8*` at the LLVM level (same as all other pointer types).
 - `new_array` emits `malloc(count * sizeof(elemTy))`.
 - `at` / `idx` load the `i8*`, bitcast to `T*`, then emit GEP + load/store.
-- `.free` emits a `free(ptr)` call.
+- `.free` emits a `free(ptr)` call and nulls the slot (early release; spec/61 §5.6).
+- Under the memory model (spec/61 §5.6) a `dyn_array` local registers a **scope-default free**
+  (Class-4 unique resource, freed once at owner drop) — gated on the memory-model build flag; the
+  legacy/OFF path keeps the manual-`.free`-or-leak behavior byte-for-byte.
 - No bounds checking — same raw-pointer semantics as `array<T:N>`.
 - Element types must be LLVM primitive types; structs and pointer elements are not yet supported.

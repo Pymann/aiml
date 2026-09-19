@@ -649,6 +649,10 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             freeFn = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "free", ctx.module);
         }
         ctx.builder.CreateCall(freeFn, {rawPtr});
+        // spec/61 §5.6 (memV3): `.free` is an EARLY release — null the slot so the Class-4
+        // scope-default drop (kind 9) becomes a null no-op (free(NULL)), preventing a double free.
+        if (ctx.memV3)
+            ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), ptrAlloca);
         return ctx.ir_gen->getInt32(0);
     }
 

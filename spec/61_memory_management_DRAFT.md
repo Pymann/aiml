@@ -170,8 +170,8 @@ job. The inventory below is by class:
 | **1 — Value (POD / value struct)** | `i8 i8_fast i8_least i16 i32 i64 u8 u16 u32 u64 f32 f64 bool`, enums; `vec2 vec3 vec4 ivec2 ivec3 quat mat4`; `mirror_event` `rpc_event` (value structs of borrowed fields); `ui_style` (base config struct); `JsonStyle` (config struct, `isBuiltin=false`); `fn<…>` (code pointer). **These are trivially copyable, no teardown.** |
 | **1′ — Inline value aggregate (element-recursive)** | **`array<T:N>`** — a fixed-size inline `[N × T]` **value block** (Class-1 *storage*: inline, no own heap block, no own rc), but its **copy / move / drop are recursive on `T`** (the composition rule, §7), **not** unconditionally POD: `array<i32:N>` is trivial; `array<string:N>` incref's/decref's each element; **`array<tensor:N>`** (real, and `tensor` is a Class-4 `ptr`-handle) is **move-only** — shallow-copy forbidden, drop frees each `tensor`, deep-`clone` via per-element `aiml_tensor_clone`; `array<ptr<T>:N>` likewise move-only (may be unimplemented today). Same footing as a value model with those field types. |
 | **2 — Immutable handle (rc-eligible)** | `string` (`char*`), `path` (interned immutable `char*` — **confirmed**, not Class 1) |
-| **3 — Mutable container (rc, Option B)** | `list<T>` `map<K:V>` `buffer` (value header + heap data buffer) **`dyn_array<T>`** (heap `i8*`, runtime-sized — same rc/aliasing as `list`) **`cascade<X>`** (reuses the `list<i32>` layout — a cascade *is* a `list<i32>` row, so same rc/aliasing discipline) |
-| **4 — Unique resource (move-only, close once)** | **OS/IO:** `file_handle` `process` `thread_handle` `socket_handle` `tls_socket_handle` `ws_handle` `url` `url_credential` `http_server_handle` `http_route_handle` `http_request_handle` `http_response_handle` `http_client_handle` `http_session_handle` `fs_options`. **GPU/render:** `gl_buffer` `gl_vao` `gl_shader` `gl_texture` `gl_framebuffer` `gl_renderbuffer` `gl_mesh` `window_handle`. **Assets:** `gltf_scene/node/mesh/primitive/material/animation/skin/texture/image` `audio_sound` `audio_group` `audio_handle` (legacy V1 asset-registry sentinel) `tensor` (explicit `tensor.free()`; single-owner via `owns_data`, slices are non-owning views) `connector` `ui_font` `ui_slider_style ui_button_style ui_label_style ui_progress_style ui_panel_style` (heap, **mutable**, currently †leaked). **Iteration:** `iterator<T>`. **Session:** `mirror_session` (explicit `session.close()`). `Code` (JIT code object). |
+| **3 — Mutable container (rc, Option B)** | `list<T>` `map<K:V>` `buffer` (rc handle → heap `{size,cap,…,data}` block) **`cascade<X>`** (reuses the `list<i32>` layout — a cascade *is* a `list<i32>` row, so same rc/aliasing discipline) |
+| **4 — Unique resource (move-only, close once)** | **OS/IO:** `file_handle` `process` `thread_handle` `socket_handle` `tls_socket_handle` `ws_handle` `url` `url_credential` `http_server_handle` `http_route_handle` `http_request_handle` `http_response_handle` `http_client_handle` `http_session_handle` `fs_options`. **GPU/render:** `gl_buffer` `gl_vao` `gl_shader` `gl_texture` `gl_framebuffer` `gl_renderbuffer` `gl_mesh` `window_handle`. **Assets:** `gltf_scene/node/mesh/primitive/material/animation/skin/texture/image` `audio_sound` `audio_group` `audio_handle` (legacy V1 asset-registry sentinel) `tensor` (explicit `tensor.free()`; single-owner via `owns_data`, slices are non-owning views) `connector` `ui_font` `ui_slider_style ui_button_style ui_label_style ui_progress_style ui_panel_style` (heap, **mutable**, currently †leaked). **Iteration:** `iterator<T>`. **Session:** `mirror_session` (explicit `session.close()`). `Code` (JIT code object). **Raw buffer:** **`dyn_array<T>`** (a single-`malloc`, runtime-sized, **unmanaged** heap scalar buffer — a unique owner, **not** rc'd/aliased; its whole point is *one* allocation and no per-op rc; freed once at owner drop, with `.free` as an optional early release; §5.6, spec/53). |
 | **5 — Shared resource (rc + external close; **atomic** rc)** | `chan<T>` (**registered today** as `i8*`, not merely future); `lock` (mutex — structurally co-owned by the threads it guards; currently †leaked, no `pthread_mutex_destroy`). Cross-thread by nature → their rc is **atomic** (§5.3), internal state runtime-synchronized. |
 | **6 — Runtime-owned singleton (non-owning user handle)** | **DB:** `Store<T>` `Kv<T>` `TimeSeries<T>` `VecStore` — `db.open_*` returns the **same handle** for the same name+path (Spec 47 §1, Category 1); the **runtime owns and mutex-protects** them. The user's handle is **non-owning**: never `free`/`close`d by user code (that would break other holders → premature close / double free). Lifetime is the runtime's. |
 | **special / non-owning (borrowed view)** | `any` (`void*`, type-erased borrow); `input_event` (pointer into a **static global** event buffer, overwritten each poll); `mirror_peer` (owned by its `mirror_session`; user code refers to it by `peer_id`); `prefab_instance` (**engine-owned, single classification: non-owning user handle** — like a
@@ -327,9 +327,10 @@ data→buffer}`. This is the Class-3 discipline of §2.1.
 > the §2.1 "only the data buffer is Class-3" reading is superseded (see the §2.1 note).
 > All three §5-rule-1 verbs are covered under memV3 — **assign** (locals), **store** (fields)
 > and **pass** (function args, probe 20: the handle flows through the existing container by-ref
-> param path, so a callee's mutation aliases the caller's container). **Remaining:**
-> **`dyn_array<T>`** is described as "same rc/aliasing as `list`" but is currently a raw
-> explicit-`free` `i8*`; unifying it with the handle discipline is a separate change.
+> param path, so a callee's mutation aliases the caller's container). **`dyn_array<T>` is Class 4,
+> not Class 3** (§5.6): a unique single-`malloc` buffer, freed once at owner drop with `.free` as
+> an optional early release (probe 21). Acceptance probes 03,17,18,19,20 (Class-3) + 21 (Class-4
+> dyn_array). The OFF/deployed path keeps the inline value struct (byte-identical).
 
 Rules:
 
@@ -576,7 +577,7 @@ independent obligations.
 
 The per-class contract:
 
-- **Class 2/3 (`string`, `list`, `map`, `buffer`, `dyn_array`) — non-atomic rc, moved across
+- **Class 2/3 (`string`, `list`, `map`, `buffer`) — non-atomic rc, moved across
   threads (Model P, message passing).** They cross a thread boundary only by **move** — a
   `chan.send(v)` or spawn argument **consumes** `v` (move-out; nothing remains in the sender). The
   transfer is safe iff the **entire transitively-reachable owned subgraph is EXCLUSIVE** to `v`
@@ -749,6 +750,37 @@ compiler's assignment lowering (not an optimization); a `ptr` move captures-then
 the same order. It applies to every rc/owning slot: `string` (§4), containers (§5), `shared`
 (§6.2), model/aggregate fields (§7), and container elements (§5.4).
 
+### 5.6 `dyn_array<T>` — the unmanaged single-`malloc` buffer (Class 4)
+
+`dyn_array<T>` is the deliberate **low-level** counterpart to the Class-3 containers: a
+**single-`malloc`, runtime-sized, contiguous scalar buffer** (`i32`/`i64`/`f32`/`f64`/`u8`/`i8`/
+`bool` only — see spec/53). Its whole reason to exist alongside `list<T>` is **one allocation and
+zero per-operation refcounting**: no `{size,cap}` header, no rc, no growth/realloc, no aliasing —
+just a typed heap block with `at`/`idx` (raw GEP, no bounds check). Use it for hot numeric /
+FFI-shaped buffers whose exact size is known at allocation; use `list<T>` when you want growth,
+a rich API, or shared/aliased ownership.
+
+Because it is **not** rc'd, it is a **Class-4 unique resource** (§2.1), with the same lifetime
+discipline as `ptr<T>` (§6, §9.1):
+
+1. **Unique owner, move-on-assign.** Assigning / passing / returning a `dyn_array<T>` **moves**
+   it (the source is moved-out); it is never silently shared. A shallow pointer-copy is forbidden
+   (two owners would each free the one block → double free). To duplicate, **`clone`** (fresh
+   `malloc` + byte-copy of the elements).
+2. **Freed once at owner drop (scope default, §9.1).** You rarely write `free`: the buffer is
+   released automatically when its owning slot leaves scope (unless it was moved out, or is
+   qualified `persistent`, §9). This replaces spec/53's "manual `.free` or it leaks".
+3. **`.free` is an optional *early* release.** `arr.free` frees the block now and **nulls the
+   slot**, so the scope-default drop is a null no-op (no double free) — exactly the `ptr<T>`
+   early-`free` rule (§6.1).
+
+```yaml
+- decl: [buf, "dyn_array<i32>", { new_array: [i32, n] }]  # one malloc, unique owner
+- idx: [buf, 0, 42]
+- decl: [x, i32, { at: [buf, 0] }]
+# no `free` written → released automatically at scope exit (§9.1). `buf.free` = optional early.
+```
+
 ## 6. Explicit heap — `new`, `ptr<T>`, `free`
 
 A heap object is created with `{ new: T }`. By default it is **`scope`-managed** (§9.1): the
@@ -800,7 +832,7 @@ Rules:
    **type class** (§2.1); concrete types are only examples:
    - **Class 2 — immutable rc handle** (`string`, `path`) → **decref**; the buffer frees at
      rc 0.
-   - **Class 3 — rc container** (`list<E>`, `map<K:V>`, `buffer`, `dyn_array<E>`, `cascade<X>`)
+   - **Class 3 — rc container** (`list<E>`, `map<K:V>`, `buffer`, `cascade<X>`)
      → **decref** the container handle; at rc 0 it releases each element/key/value **by its own
      class** (recursively) and frees its block; at rc > 0 nothing frees (another handle shares
      it).
@@ -1325,7 +1357,9 @@ frees). Coordinated with Spec 47.
 `[N × T]` value block → **Class-1 storage**, but copy/move/drop are **recursive on `T`** (§7):
 trivial for `array<i32:N>`, incref/decref for `array<string:N>`, **move-only** for
 `array<tensor:N>`/`array<ptr<T>:N>` (§2.1 row 1′). `dyn_array<T>` is a heap `i8*` runtime-sized
-buffer → **Class 3** (rc container, same discipline as `list`).
+buffer → **Class 4** (a *unique, unmanaged* single-`malloc` scalar buffer — **not** rc'd/aliased;
+its advantage over `list` is exactly *one* allocation and zero per-op rc; §5.6). It is **not**
+Class 3: the earlier "same discipline as `list`" reading is superseded (§5.6, spec/53).
 
 **11.12 Aggregates with Class-4 (resource) members.** **RESOLVED (§6.1/§7 composition rule):**
 a model/struct/`array` holding a resource **by value** is **move-only** and releasing it
@@ -1446,10 +1480,13 @@ specified there before the thread path is implemented.
   Spec 52 must adopt the §5.4 verbs and the element-recursive copy/move/drop (§2.1 row 1′).
 - **spec/53 (Dynamic arrays, `dyn_array<T>`) — COORDINATED UPDATE REQUIRED.** Spec 53 makes
   lifetime a **manual, optional `arr.free`** (`free(ptr)`; "optional — reclaimed on exit
-  otherwise", i.e. it leaks if omitted). Under §5 `dyn_array<T>` is **Class 3 (rc-managed)**:
-  released automatically at rc 0 / scope exit, aliasing on share, elements released per class.
-  `.free` becomes at most an **early** release, never the primary (leak-prone) lifetime. Spec 53
-  must switch from manual-`.free`-or-leak to the Class-3 rc discipline.
+  otherwise", i.e. it leaks if omitted). Under §5.6 `dyn_array<T>` is **Class 4 (unique,
+  unmanaged single-`malloc` buffer)** — **not** rc'd/aliased (its advantage is exactly *one*
+  allocation): it is freed **once at owner drop** (scope-default, §9.1), with `.free` as an
+  **optional early** release (nulls the slot so the scope-drop is a no-op). Assignment/pass is a
+  **move** (unique owner; shallow copy would double-free); `clone` (fresh `malloc` + byte-copy)
+  is the way to duplicate. Spec 53 must switch from *manual-`.free`-or-leak* to *scope-default
+  free once* + `.free`-as-early-release, and state the move-on-assign rule.
 - **spec/47 (Thread safety) — COORDINATED UPDATE REQUIRED.** §5.3 adopts **Model P**
   (message-passing primary, §11.18): non-atomic rc for Class 2/3, crossing threads only by
   **statically-checked move-send** of an exclusive value (`send_unique` runtime escape;
