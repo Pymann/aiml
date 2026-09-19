@@ -17,7 +17,7 @@ protocol (§6.1), 10 producer/consumed (§9.2), 11 borrow-return + `borrows:` (�
 persistent (§9), 13 array/dyn_array/cascade/map/buffer/get_copy (§2.1/§5), 14 tensor/resource
 move-only (§7), 15 memoized deep-clone graph (§5.1), 16 threads move/shared/guard (§5.3),
 17 map aliasing + {copy} (§5), 18 map field aliasing (§5/§7), 19 buffer aliasing +
-{copy} + field (§5/§7).
+{copy} + field (§5/§7), 20 container arg-passing shares (§5 rule 1).
 
 **Container Option B (§5) — `list<T>`, `map<K:V>` and `buffer` are refcounted HANDLES under
 memV3:** a heap block `[rc][pad][struct]` behind a pointer (`{size,cap,data}` for list,
@@ -28,12 +28,15 @@ and a container model FIELD hold the pointer, so assignment / by-value model cop
 rides the `list<i32>` layout. Gated on `AIML_MEM_V3`; the serializer carries new
 `AIML_TD_LIST_PTR`/`AIML_TD_MAP_PTR`/`AIML_TD_BUFFER_PTR` nodes only under the gate.
 
-**Remaining Class-3 (scoped, not yet handles):**
+All three §5-rule-1 verbs are covered: **assigning** (locals, probes 03/17/19), **storing**
+(model fields, probes 01/18/19) and **passing** (function args, probe 20 — the handle flows
+through the existing `is_byref_arg` container-param path, so a callee's mutation is visible to
+the caller; verified as real aliasing, not a value-copy).
+
+**Remaining Class-3 (scoped):**
 - `dyn_array<T>` — spec §2.1 says "same rc/aliasing as list", but it is currently a raw
   explicit-`free` `i8*` (new_array/idx/at/free). Lifting it to the rc-handle discipline would
-  change its manual-free API; deferred.
-- Passing a **bare** container LOCAL (not a model field) as a function argument under memV3 is
-  not yet wired through `coerceArgs` (no probe exercises it; real code paths run under OFF).
+  change its manual-free API; deferred pending a decision.
 
 Deployed/OFF path is **byte-identical**: every change is gated on `AIML_MEM_V3` (default OFF) or
 additive. Run the old model for comparison with `MODE=off`.

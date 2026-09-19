@@ -325,10 +325,11 @@ data→buffer}`. This is the Class-3 discipline of §2.1.
 >
 > **`buffer` resolved:** the whole `buffer` header is an rc handle (share/alias like `list`);
 > the §2.1 "only the data buffer is Class-3" reading is superseded (see the §2.1 note).
-> **Remaining:** **`dyn_array<T>`** is described as "same rc/aliasing as `list`" but is
-> currently a raw explicit-`free` `i8*`; unifying it with the handle discipline is a separate
-> change. Passing a **bare** container local (not a model field) as a function argument under
-> memV3 is not yet wired through the arg-coercion path.
+> All three §5-rule-1 verbs are covered under memV3 — **assign** (locals), **store** (fields)
+> and **pass** (function args, probe 20: the handle flows through the existing container by-ref
+> param path, so a callee's mutation aliases the caller's container). **Remaining:**
+> **`dyn_array<T>`** is described as "same rc/aliasing as `list`" but is currently a raw
+> explicit-`free` `i8*`; unifying it with the handle discipline is a separate change.
 
 Rules:
 
