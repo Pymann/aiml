@@ -4,6 +4,7 @@
 // spec/61 §5 Option B (memV3): list/map-handle allocators (string_runtime.cpp).
 extern "C" void* aiml_list_handle_new();
 extern "C" void* aiml_map_handle_new();
+extern "C" void* aiml_buffer_handle_new();
 #include <cstring>
 #include <cstdlib>
 #include <vector>
@@ -75,6 +76,7 @@ static void aiml_ser_fp_walk(const AimlTypeNode* nodes, int32_t n,
         case AIML_TD_MODEL:
         case AIML_TD_LIST_PTR:
         case AIML_TD_MAP_PTR:
+        case AIML_TD_BUFFER_PTR:
             aiml_ser_fp_walk(nodes, n, nd.param1, h, depth + 1);
             break;
         case AIML_TD_MAP:
@@ -314,9 +316,10 @@ static void enc(std::vector<uint8_t>& buf,
     }
 
     case AIML_TD_LIST_PTR:
-    case AIML_TD_MAP_PTR: {
-        // spec/61 §5 Option B (memV3): the slot holds a POINTER to a list/map handle. Follow it;
-        // 0 marker = null, else 1 + the inner container payload (encoded from the handle's struct).
+    case AIML_TD_MAP_PTR:
+    case AIML_TD_BUFFER_PTR: {
+        // spec/61 §5 Option B (memV3): the slot holds a POINTER to a list/map/buffer handle.
+        // Follow it; 0 marker = null, else 1 + the inner container payload.
         const void* obj = nullptr;
         memcpy(&obj, data, sizeof(void*));
         if (!obj) { w_u8(buf, 0); }
@@ -514,14 +517,17 @@ static void dec(const uint8_t* blob, int& pos, int end,
     }
 
     case AIML_TD_LIST_PTR:
-    case AIML_TD_MAP_PTR: {
-        // spec/61 §5 Option B (memV3): allocate a fresh list/map handle, decode the inner
+    case AIML_TD_MAP_PTR:
+    case AIML_TD_BUFFER_PTR: {
+        // spec/61 §5 Option B (memV3): allocate a fresh list/map/buffer handle, decode the inner
         // container into its struct part, store the pointer. 0 marker → null slot.
         uint8_t marker = 0;
         if (pos < end) { marker = blob[pos++]; } else { g_dec_error = true; }
         void* obj = nullptr;
         if (marker != 0) {
-            obj = (n.kind == AIML_TD_MAP_PTR) ? aiml_map_handle_new() : aiml_list_handle_new();
+            obj = (n.kind == AIML_TD_MAP_PTR) ? aiml_map_handle_new()
+                : (n.kind == AIML_TD_BUFFER_PTR) ? aiml_buffer_handle_new()
+                : aiml_list_handle_new();
             if (obj) dec(blob, pos, end, n.param1, ns, nn, (uint8_t*)obj);
         }
         memcpy(out, &obj, sizeof(void*));
@@ -646,9 +652,10 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
     }
 
     case AIML_TD_LIST_PTR:
-    case AIML_TD_MAP_PTR: {
-        // spec/61 §5 Option B (memV3): list/map handle behind a pointer. Decref via the rc header;
-        // at rc 0 free the container's arrays+elements (fre at the inner node) and the block.
+    case AIML_TD_MAP_PTR:
+    case AIML_TD_BUFFER_PTR: {
+        // spec/61 §5 Option B (memV3): list/map/buffer handle behind a pointer. Decref via the rc
+        // header; at rc 0 free the container's arrays/elements (fre at the inner node) and block.
         void* obj = nullptr;
         memcpy(&obj, data, sizeof(void*));
         if (obj) {
@@ -946,14 +953,17 @@ static void clw(int idx, const AimlTypeNode* ns, int nn,
     }
 
     case AIML_TD_LIST_PTR:
-    case AIML_TD_MAP_PTR: {
+    case AIML_TD_MAP_PTR:
+    case AIML_TD_BUFFER_PTR: {
         // spec/61 §5.1 (memV3): deep-clone the container into a NEW independent handle (containers
         // are NOT memoized — a clone gets its own copy; aliasing is a {copy}/assign concern).
         const void* obj = nullptr;
         memcpy(&obj, src, sizeof(void*));
         void* nobj = nullptr;
         if (obj) {
-            nobj = (n.kind == AIML_TD_MAP_PTR) ? aiml_map_handle_new() : aiml_list_handle_new();
+            nobj = (n.kind == AIML_TD_MAP_PTR) ? aiml_map_handle_new()
+                : (n.kind == AIML_TD_BUFFER_PTR) ? aiml_buffer_handle_new()
+                : aiml_list_handle_new();
             if (nobj) clw(n.param1, ns, nn, (const uint8_t*)obj, (uint8_t*)nobj);
         }
         memcpy(dst, &nobj, sizeof(void*));

@@ -151,8 +151,11 @@ every built-in is already fixed in the compiler and splits cleanly:
 
 - **By-value** (an LLVM struct or scalar copied field-by-field): scalars; `vec2/3/4`,
   `ivec2/3`, `quat`, `mat4`; the event structs `mirror_event` `{ptr,ptr,i32}` and `rpc_event`
-  `{ptr,i32,i32}`; `ui_style` (the 72-byte base config struct); `buffer` (a `{i32×4, i8* data}`
-  header — but the *data buffer* it points at is Class 3); `fn<…>` (a code pointer).
+  `{ptr,i32,i32}`; `ui_style` (the 72-byte base config struct); `fn<…>` (a code pointer).
+  (**Resolved:** `buffer` is **not** by-value — it is a **Class-3 refcounted handle** like
+  `list`/`map` (§5); the earlier "header is a value, only its data buffer is Class 3" reading is
+  superseded. The whole `{i32×4, i8* data}` header lives behind an rc handle, so assignment /
+  by-value model copy **shares and aliases** the buffer.)
 - **Handle** (an opaque `i8*`, or a pointer to a heap struct — **assignment copies the
   pointer, i.e. shares the referent**): everything else. This is why *"we always get handles /
   pointers"* is the correct recollection.
@@ -311,20 +314,21 @@ others are **containers** (Class 3, §5), the **shared resources** (Class 5), an
 data→buffer}`. This is the Class-3 discipline of §2.1.
 
 > **Implementation status (gate `AIML_MEM_V3`, branch `mem-v3-compiler`).** Option B is
-> implemented for **`list<T>`, `map<K:V>` and `cascade<X>`** — as value **locals** *and* as
-> model **fields** (a field is a pointer-to-handle, so a by-value model copy shares/aliases the
-> container). Runtime: `aiml_{list,map}_handle_{new,incref,release,copy}`; the block is
-> `[rc][pad][struct]` with the stored pointer at the struct so all `ListImpl`/`MapImpl` ops are
-> unchanged. Serializer nodes `AIML_TD_LIST_PTR`/`AIML_TD_MAP_PTR` carry the field indirection
-> (emitted only under the gate). Acceptance probes: `tests/lifetime/03,17,18` (+ 01 for field
-> aliasing). The OFF/deployed path keeps the inline value struct (byte-identical).
+> implemented for **`list<T>`, `map<K:V>`, `buffer` and `cascade<X>`** — as value **locals**
+> *and* as model **fields** (a field is a pointer-to-handle, so a by-value model copy
+> shares/aliases the container). Runtime: `aiml_{list,map,buffer}_handle_{new,incref,release,
+> copy}`; the block is `[rc][pad][struct]` with the stored pointer at the struct so all
+> `ListImpl`/`MapImpl`/`BufferImpl` ops are unchanged. Serializer nodes `AIML_TD_LIST_PTR`/
+> `AIML_TD_MAP_PTR`/`AIML_TD_BUFFER_PTR` carry the field indirection (emitted only under the
+> gate). Acceptance probes: `tests/lifetime/03,17,18,19` (+ 01 for field aliasing). The
+> OFF/deployed path keeps the inline value struct (byte-identical).
 >
-> **Open (needs a decision):** **`buffer`** — §2.1 row 3 lists it Class-3, but the §2.1 *note*
-> says only "the **data buffer** it points at is Class 3", i.e. it is unclear whether the whole
-> `buffer` **header** is an rc handle (share/alias like `list`) or the header stays a value and
-> only its data buffer is rc-managed. Left **inline** pending this clarification.
-> **`dyn_array<T>`** is described here as "same rc/aliasing as `list`" but is currently a raw
-> explicit-`free` `i8*`; unifying it with the handle discipline is a separate change.
+> **`buffer` resolved:** the whole `buffer` header is an rc handle (share/alias like `list`);
+> the §2.1 "only the data buffer is Class-3" reading is superseded (see the §2.1 note).
+> **Remaining:** **`dyn_array<T>`** is described as "same rc/aliasing as `list`" but is
+> currently a raw explicit-`free` `i8*`; unifying it with the handle discipline is a separate
+> change. Passing a **bare** container local (not a model field) as a function argument under
+> memV3 is not yet wired through the arg-coercion path.
 
 Rules:
 

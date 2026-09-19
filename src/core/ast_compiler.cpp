@@ -182,7 +182,16 @@ void Compiler::initClassContainerMembers(llvm::Value* basePtr,
             // struct layout and need alloc.  (visitNewExpr's heap path matched
             // both; keep this in sync so `{new:}` via initClassContainerMembers
             // inits bare-buffer members too.  Repro: test_buffer_class_member_heap_init_repro.)
-            BufferImpl::alloc(ctx, fieldPtr, ctx.builder.getInt32(4096));
+            if (ctx.memV3) {
+                // spec/61 §5 Option B: buffer field is a POINTER to a handle — alloc + store ptr.
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::Function* nw = ctx.getFunction("aiml_buffer_handle_new", i8p, {});
+                llvm::Value* handle = ctx.builder.CreateCall(nw, {}, "fld_bufh_new");
+                ctx.builder.CreateStore(handle, fieldPtr);
+                BufferImpl::alloc(ctx, handle, ctx.builder.getInt32(4096));
+            } else {
+                BufferImpl::alloc(ctx, fieldPtr, ctx.builder.getInt32(4096));
+            }
         }
         // AIML v2 P6: a direct refcount-MODEL field is a %M* pointer slot (not an inline struct).
         else if (ctx.isRefcountModel(mt)) {
@@ -2952,7 +2961,8 @@ static AimlTypeNode snShift(AimlTypeNode n, int32_t delta) {
         case AIML_TD_PTR_STRUCT:
         case AIML_TD_MODEL:
         case AIML_TD_LIST_PTR:
-        case AIML_TD_MAP_PTR:  n.param1 += delta; break;  // param1 = child index (subtree)
+        case AIML_TD_MAP_PTR:
+        case AIML_TD_BUFFER_PTR: n.param1 += delta; break;  // param1 = child index (subtree)
         case AIML_TD_MAP:    n.param1 += delta; n.param2 += delta; break;
         case AIML_TD_STRUCT: n.param2 += delta; break; // param1 = n_fields (not an index)
         default: break;
@@ -2967,6 +2977,9 @@ static bool serHasHeap(const std::string& typeName, CompilerContext& ctx) {
     if (typeName.size() > 5 && typeName.substr(0,5) == "list<")   return true;
     if (typeName.size() > 4 && typeName.substr(0,4) == "map<")    return true;
     if (typeName.size() > 7 && typeName.substr(0,7) == "buffer<") return true;
+    // spec/61 §5 Option B (memV3): bare `buffer` is a Class-3 rc handle → heap-bearing, so a model
+    // with a buffer field gets serNodes + a drop. OFF keeps the old value-header classification.
+    if (ctx.memV3 && typeName == "buffer") return true;
     auto it = ctx.classes.find(typeName);
     if (it != ctx.classes.end() && !it->second.isBuiltin)
         for (auto& [mn, mem] : it->second.members)
@@ -3015,9 +3028,24 @@ static std::vector<AimlTypeNode> serFieldSubtree(
         ((typeName.rfind("list<", 0) == 0 && typeName.back() == '>') ||
          (typeName.rfind("cascade<", 0) == 0 && typeName.back() == '>'));
     bool memV3MapField = ctx.memV3 && typeName.rfind("map<", 0) == 0 && typeName.back() == '>';
-    if (!memV3ListField && !memV3MapField) return serBuildSubtree(typeName, offset, ctx, dl);
-    std::string inner = (typeName.rfind("cascade<", 0) == 0) ? std::string("list<i32>") : typeName;
+    bool memV3BufField = ctx.memV3 && (typeName == "buffer" ||
+                                       (typeName.rfind("buffer<", 0) == 0 && typeName.back() == '>'));
+    if (!memV3ListField && !memV3MapField && !memV3BufField)
+        return serBuildSubtree(typeName, offset, ctx, dl);
     std::vector<AimlTypeNode> res;
+    if (memV3BufField) {
+        res.push_back({AIML_TD_BUFFER_PTR, 1, 0, offset, 8, 0});   // idx 0: pointer slot → BUFFER at 1
+        if (typeName == "buffer") {
+            // Bare byte buffer: BUFFER(param1=2 → i8 element, esz 1). fre recurses fre(param1) per
+            // element, so param1 MUST point at a scalar (i8, a fre no-op), not node 0.
+            res.push_back({AIML_TD_BUFFER, 2, 0, 0, 1, 0});        // idx 1
+            res.push_back({AIML_TD_I8,     0, 0, 0, 0, 0});        // idx 2: element type
+        } else {
+            for (auto& n : serBuildSubtree(typeName, 0, ctx, dl)) res.push_back(snShift(n, 1));
+        }
+        return res;
+    }
+    std::string inner = (typeName.rfind("cascade<", 0) == 0) ? std::string("list<i32>") : typeName;
     res.push_back({memV3MapField ? AIML_TD_MAP_PTR : AIML_TD_LIST_PTR, 1, 0, offset, 8, 0}); // pointer slot
     for (auto& n : serBuildSubtree(inner, 0, ctx, dl)) res.push_back(snShift(n, 1));
     return res;
@@ -3769,7 +3797,9 @@ void Compiler::registerTypeDecl(Node* node) {
             bool memV3ContainerField = ctx.memV3 &&
                 ((typeName.rfind("list<", 0) == 0 && typeName.back() == '>') ||
                  (typeName.rfind("cascade<", 0) == 0 && typeName.back() == '>') ||
-                 (typeName.rfind("map<", 0) == 0 && typeName.back() == '>'));
+                 (typeName.rfind("map<", 0) == 0 && typeName.back() == '>') ||
+                 (typeName == "buffer") ||
+                 (typeName.rfind("buffer<", 0) == 0 && typeName.back() == '>'));
             llvm::Type* fieldType = (ctx.isRefcountModel(typeName) || memV3ContainerField)
                 ? llvm::PointerType::get(ctx.context, 0)
                 : ctx.getLLVMType(typeName);
@@ -5392,6 +5422,10 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
                             if (!mvTy) mvTy = ctx.builder.getInt32Ty();
                             tmpSym.is_byref_arg = true;
                             tmpSym.ir_element_type = ctx.ir_gen->wrapType(MapImpl::getMapStructType(ctx, mkTy, mvTy));
+                        } else if (ctx.memV3 && (member.typeName == "buffer"
+                                   || (member.typeName.rfind("buffer<", 0) == 0 && member.typeName.back() == '>'))) {
+                            tmpSym.is_byref_arg = true;
+                            tmpSym.ir_element_type = ctx.ir_gen->wrapType(ctx.getLLVMType("buffer"));
                         }
                         return resolveProperty(&tmpSym, rest);
                     }
@@ -5426,7 +5460,8 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
             // stay inline (return gep).
             if (ctx.memV3 &&
                 (member.typeName.rfind("list<", 0) == 0 || member.typeName.rfind("cascade<", 0) == 0
-                 || member.typeName.rfind("map<", 0) == 0)) {
+                 || member.typeName.rfind("map<", 0) == 0 || member.typeName == "buffer"
+                 || member.typeName.rfind("buffer<", 0) == 0)) {
                 auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
                 return ctx.ir_gen->wrap(ctx.builder.CreateLoad(i8p,
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(gep)), propName + "_conh"));
@@ -5618,9 +5653,10 @@ IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& p
         // handle (a pointer to the container struct), so LOAD it. (A whole-container replace
         // `set:[obj.tags, L]` would want the slot address; not yet exercised under memV3.)
         if (ctx.memV3 &&
-            (member.typeName.rfind("list<", 0) == 0 || member.typeName.rfind("cascade<", 0) == 0
-             || member.typeName.rfind("map<", 0) == 0)
-            && member.typeName.back() == '>') {
+            ((member.typeName.rfind("list<", 0) == 0 || member.typeName.rfind("cascade<", 0) == 0
+              || member.typeName.rfind("map<", 0) == 0 || member.typeName.rfind("buffer<", 0) == 0)
+              ? member.typeName.back() == '>'
+              : member.typeName == "buffer")) {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(i8p,
                 static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldGep)), "conh_recv_w"));

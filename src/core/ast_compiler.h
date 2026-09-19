@@ -75,6 +75,8 @@ private:
     void emitListHandleDecl(DeclStmt* decl, bool isCascade);
     // spec/61 §5 Option B (memV3): declare a map<K:V> value-local as a refcounted handle.
     void emitMapHandleDecl(DeclStmt* decl);
+    // spec/61 §5 Option B (memV3): declare a buffer value-local as a refcounted handle.
+    void emitBufferHandleDecl(DeclStmt* decl);
     void visitSetStmt(SetStmt* setStmt);
     void visitExprStmt(ExprStmt* exprStmt);
     void visitRetStmt(RetStmt* retStmt);
