@@ -37,4 +37,25 @@ for f in tests/lifetime/[0-9]*.aiml; do
   else fail=$((fail+1)); printf "  FAIL [%s] %-34s rc=%-3d %s\n" "$tier" "$base" "$rc" "$line"; fi
 done
 echo "── $pass passed, $fail failed (MODE=$MODE) ──"
+
+# ── Negative probes (§10 diagnostics): each MUST be REJECTED at compile time with a message
+# matching its `# EXPECT-ERROR:` header. Only meaningful under spec61 (memV3 gates the checks).
+if [ "$MODE" = "spec61" ] && [ -d tests/lifetime/neg ]; then
+  npass=0; nfail=0
+  for f in tests/lifetime/neg/*.aiml; do
+    [ -e "$f" ] || continue
+    base=$(basename "$f")
+    [ -n "$ONLY" ] && [[ "$base" != *"$ONLY"* ]] && continue
+    want=$(grep -m1 -oE '# EXPECT-ERROR: .*' "$f" | sed 's/# EXPECT-ERROR: //')
+    out=$(env "${env_common[@]}" "$AIML" "$f" -r 2>&1); rc=$?
+    if [ $rc -ne 0 ] && echo "$out" | grep -qF "$want"; then
+      npass=$((npass+1)); printf "  ok   [NEG] %-30s rejected: %s\n" "$base" "$want"
+    else
+      nfail=$((nfail+1)); printf "  FAIL [NEG] %-30s rc=%-3d (wanted error containing: %s)\n" "$base" "$rc" "$want"
+    fi
+  done
+  echo "── neg: $npass rejected as expected, $nfail wrong (MODE=$MODE) ──"
+  fail=$((fail + nfail))
+fi
+
 [ $fail -eq 0 ]

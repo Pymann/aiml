@@ -34,6 +34,15 @@ All three §5-rule-1 verbs are covered: **assigning** (locals, probes 03/17/19),
 through the existing `is_byref_arg` container-param path, so a callee's mutation is visible to
 the caller; verified as real aliasing, not a value-copy).
 
+**§10 diagnostics (compile-time, negative probes in `neg/`).** Implemented: **shallow `{copy}`
+of a move-only element** (`list<ptr<T>>` etc.) is rejected (`neg/n01`). The runner's NEG section
+requires each `neg/*.aiml` to be rejected with its `# EXPECT-ERROR:` message. **Remaining §10 =
+a dedicated ownership/borrow static-analysis pass** (its own workstream): use-after-free,
+use-after-move, double-free, free-of-shared/ref/non-heap (needs the `free:` statement routing
+unified first — a non-ptr operand is currently dropped before the check point), illegal
+cross-kind assignment (`shared→ptr`), invalidated element borrow, and the leak / owning-cycle
+lints. These need flow analysis + a type-graph pass and are out of scope for the runtime probes.
+
 **`dyn_array<T>` is Class-4, not Class-3** (§5.6, resolved): a *unique, unmanaged* single-`malloc`
 scalar buffer — its advantage over `list` is exactly ONE allocation and zero per-op rc. Under
 memV3 it is freed **once at owner drop** (scope-default, like `ptr<T>`), with `.free` as an

@@ -1,0 +1,12 @@
+# static-check: off
+# NEGATIVE (§10): shallow {copy} of a container whose element is move-only (ptr<T>) is a
+# COMPILE ERROR — it would duplicate a unique owner into two containers (double free). Use {clone}.
+# EXPECT-ERROR: shallow copy of list<ptr
+- model: { name: Wid, fields: [[ident, i32, 0]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [src, list<ptr<Wid>>]
+      - decl: [dst, list<ptr<Wid>>, { copy: src }]     # ← must be rejected
+      - return: 0
