@@ -188,6 +188,12 @@ IRValue* Compiler::visitCall(CallExpr* call) {
         if (baseName == "sys" && methodName == "clone") {
             return visitSysCloneCall(call);
         }
+        if (baseName == "sys" && methodName == "copy") {
+            // spec/61 §5.1: shallow copy. list<T> copies are intercepted at the decl (handle
+            // path); for other types a shallow copy of a value with only shared/immutable
+            // referents coincides with the deep-copy machinery, so route there for now.
+            return visitSysCloneCall(call);
+        }
         if (baseName == "sys" && methodName == "bundle") {
             return visitSysBundleCall(call);
         }

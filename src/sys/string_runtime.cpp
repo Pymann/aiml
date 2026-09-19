@@ -165,6 +165,7 @@ extern "C" char* aiml_str_take_local(char** src) {
 extern "C" void aiml_ser_free_decoded(void* obj, void* nodes, int32_t node_count);
 // AIML v2: decref a %M* reference element/value (frees inner heap + shell at refcount 0).
 extern "C" void aiml_model_decref(void* obj, const void* nodes, int32_t n_nodes);
+extern "C" void aiml_model_incref(void* obj);
 extern "C" void aiml_list_free(void* list_ptr, int32_t elemKind,
                                int64_t elemSize, void* serNodes, int32_t serNodesCount) {
     if (!list_ptr) return;
@@ -189,6 +190,60 @@ extern "C" void aiml_list_free(void* list_ptr, int32_t elemKind,
     lst->data = nullptr;
     lst->size = 0;
     lst->capacity = 0;
+}
+
+// ── spec/61 §5 Option B: list<T> as a refcounted HANDLE (memV3 only) ──────────
+// A list<T> value-local under AIML_MEM_V3 is a heap block laid out as
+//   [ int32 rc ][ int32 pad ][ AimlListRaw {size,cap,data} ]
+// and the pointer stored in the variable slot points at the AimlListRaw part, so
+// every ListImpl op (which GEPs a GenericList) is UNCHANGED — the rc lives 8
+// bytes before the returned pointer. Assignment increfs (aliasing); scope-exit
+// decrefs and frees data + block at rc 0. Kept out of the OFF/deployed path
+// (list stays an inline value struct there).
+extern "C" void* aiml_list_handle_new() {
+    // 8-byte header + AimlListRaw (16 bytes on 64-bit); calloc → size=cap=0, data=null.
+    char* block = static_cast<char*>(calloc(1, 8 + sizeof(AimlListRaw)));
+    if (!block) return nullptr;
+    *reinterpret_cast<int32_t*>(block) = 1;   // rc = 1
+    return block + 8;                          // pointer at the AimlListRaw
+}
+extern "C" void aiml_list_handle_incref(void* h) {
+    if (!h) return;
+    int32_t* rc = reinterpret_cast<int32_t*>(static_cast<char*>(h) - 8);
+    (*rc)++;
+}
+// decref; at rc 0 free the elements + data buffer (via aiml_list_free) and the block.
+extern "C" void aiml_list_handle_release(void* h, int32_t elemKind,
+                                         int64_t elemSize, void* serNodes,
+                                         int32_t serNodesCount) {
+    if (!h) return;
+    int32_t* rc = reinterpret_cast<int32_t*>(static_cast<char*>(h) - 8);
+    if (--(*rc) > 0) return;
+    aiml_list_free(h, elemKind, elemSize, serNodes, serNodesCount);  // frees data + elements
+    free(static_cast<char*>(h) - 8);                                  // free the handle block
+}
+// {copy: L} — new INDEPENDENT-spine handle: fresh data buffer, elements copied by
+// value (referents shared; strings/models are pointers copied verbatim then
+// incref'd by the caller per elemKind). elemSize = per-element stride in bytes.
+extern "C" void* aiml_list_handle_copy(void* src, int64_t elemSize, int32_t elemKind) {
+    void* h = aiml_list_handle_new();
+    if (!h || !src) return h;
+    AimlListRaw* s = static_cast<AimlListRaw*>(src);
+    AimlListRaw* d = static_cast<AimlListRaw*>(h);
+    int32_t n = s->size;
+    if (n <= 0 || !s->data) return h;
+    d->size = n; d->capacity = n;
+    d->data = static_cast<void**>(malloc((size_t)n * (size_t)elemSize));
+    memcpy(d->data, s->data, (size_t)n * (size_t)elemSize);
+    // Shallow copy: shared referents must be retained so both spines can free.
+    if (elemKind == 1) {                       // list<string>: incref each shared string
+        char** e = reinterpret_cast<char**>(d->data);
+        for (int32_t i = 0; i < n; ++i) if (e[i]) aiml_str_incref(e[i]);
+    } else if (elemKind == 3) {                 // list<shared/%M*>: incref each shared model
+        void** e = reinterpret_cast<void**>(d->data);
+        for (int32_t i = 0; i < n; ++i) if (e[i]) aiml_model_incref(e[i]);
+    }
+    return h;
 }
 
 // ── spec/61 map scope-drop primitive ────────────────────────────────────────

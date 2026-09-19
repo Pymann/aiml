@@ -279,11 +279,164 @@ static int aimlTraceKind(CompilerContext& ctx, const std::string& tn) {
     return -1;
 }
 
+// spec/61 §5 Option B (memV3): a list<T>/cascade<X> value-local becomes a refcounted HANDLE.
+// The slot holds a pointer to a heap block [rc][pad][{size,cap,data}] (pointer at the struct
+// part). Fresh init → aiml_list_handle_new + initList; init from another list var → SHARE
+// (incref the source's handle); { copy: L } / { clone: L } → an independent-spine handle.
+// A scope-exit decref (kind 2, isListHandle) frees data + block at rc 0.
+void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
+    auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+    llvm::Type* i32Ty = ctx.builder.getInt32Ty();
+    llvm::Type* i64Ty = ctx.builder.getInt64Ty();
+
+    // Element classification (mirrors the list scope-drop logic below).
+    std::string elemName = isCascade ? std::string("i32")
+        : decl->typeName.substr(5, decl->typeName.length() - 6);
+    int elemKind; int64_t elemSize; llvm::GlobalVariable* serNodes = nullptr; int32_t serNodesCount = 0;
+    llvm::Type* elemTy;
+    if (elemName == "string") {
+        elemKind = 1; elemSize = 8;
+        elemTy = i8p;
+    } else if (ctx.isRefcountModel(elemName)) {
+        elemKind = 3; elemSize = 8;
+        auto ci = ctx.classes.find(elemName);
+        if (ci != ctx.classes.end()) { serNodes = ci->second.serNodesVar; serNodesCount = ci->second.serNodesCount; }
+        elemTy = i8p;
+    } else {
+        auto ci = ctx.classes.find(elemName);
+        if (ci != ctx.classes.end() && ci->second.hasHeapFields && ci->second.serNodesVar && ci->second.type) {
+            elemKind = 2;
+            serNodes = ci->second.serNodesVar; serNodesCount = ci->second.serNodesCount;
+            elemSize = (int64_t)ctx.module.getDataLayout().getTypeAllocSize(ci->second.type);
+            elemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
+        } else {
+            elemKind = 0;
+            elemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
+            elemSize = elemTy ? (int64_t)ctx.module.getDataLayout().getTypeAllocSize(elemTy) : 8;
+        }
+    }
+    if (!elemTy) elemTy = i8p;
+
+    // Pointer slot for the handle.
+    IRType* ptrTy = ctx.ir_gen->getPointerTy();
+    IRValue* alloca = ctx.ir_gen->createAlloca(ptrTy, decl->varName);
+    llvm::Value* slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
+    ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), slot);
+
+    // Classify the initializer.
+    Expr* iv = decl->initialValue.get();
+    bool isShareVar = false, isCopy = false, isClone = false;
+    if (iv) {
+        if (dynamic_cast<VariableExpr*>(iv)) {
+            isShareVar = true;                        // decl:[b, list<T>, a] → SHARE (incref)
+        } else if (auto* ce = dynamic_cast<CallExpr*>(iv)) {
+            if (ce->functionName == "sys.copy")  isCopy  = true;
+            if (ce->functionName == "sys.clone") isClone = true;
+        }
+    }
+
+    llvm::Value* handle = nullptr;
+    if (isShareVar) {
+        // Load the source list's handle pointer and incref (aliasing).
+        auto* ve = static_cast<VariableExpr*>(iv);
+        Symbol* src = resolveVariable(ve->name);
+        if (src) {
+            llvm::Value* srcSlot = src->ir_alloca_inst
+                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(src->ir_alloca_inst))
+                : src->alloca_inst;
+            handle = ctx.builder.CreateLoad(i8p, srcSlot, "listh_src");
+            llvm::Function* inc = ctx.getFunction("aiml_list_handle_incref", ctx.builder.getVoidTy(), {i8p});
+            ctx.builder.CreateCall(inc, { handle });
+        }
+    } else if (isCopy || isClone) {
+        // { copy: L } / { clone: L } → independent-spine handle. For scalar/string elements copy
+        // and clone coincide (fresh data buffer; strings shared). (Deep clone of model elements
+        // is a later refinement — Stage B.)
+        auto* ce = static_cast<CallExpr*>(iv);
+        llvm::Value* srcHandle = nullptr;
+        if (!ce->args.empty()) {
+            if (auto* av = dynamic_cast<VariableExpr*>(ce->args[0].get())) {
+                Symbol* src = resolveVariable(av->name);
+                if (src) {
+                    llvm::Value* srcSlot = src->ir_alloca_inst
+                        ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(src->ir_alloca_inst))
+                        : src->alloca_inst;
+                    srcHandle = ctx.builder.CreateLoad(i8p, srcSlot, "listh_copysrc");
+                }
+            }
+        }
+        llvm::Function* cp = ctx.getFunction("aiml_list_handle_copy", i8p, {i8p, i64Ty, i32Ty});
+        handle = ctx.builder.CreateCall(cp, { srcHandle ? srcHandle
+                                              : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)),
+                                              ctx.builder.getInt64(elemSize),
+                                              ctx.builder.getInt32(elemKind) }, "listh_copy");
+    } else {
+        // Fresh empty list: new handle + initList on the heap struct.
+        llvm::Function* nw = ctx.getFunction("aiml_list_handle_new", i8p, {});
+        handle = ctx.builder.CreateCall(nw, {}, "listh_new");
+        ListImpl::initList(ctx, handle, elemTy, 4);
+    }
+    if (handle) ctx.builder.CreateStore(handle, slot);
+
+    // Register the symbol as a by-ref handle: reads/methods deref once (is_byref_arg path),
+    // then load/GEP the {size,cap,data} struct.
+    Symbol sym;
+    sym.ir_alloca_inst  = alloca;
+    sym.ir_type         = ptrTy;
+    sym.ir_element_type = ctx.ir_gen->wrapType(ListImpl::getListStructType(ctx));
+    sym.typeName        = decl->typeName;
+    sym.is_const        = decl->is_const;
+    sym.is_volatile     = decl->is_volatile;
+    sym.lifetime        = decl->lifetime;
+    sym.is_byref_arg    = true;
+    OwnershipId declOid = (ctx.ownershipPlan && ctx.ownershipPlan->declarations.count(decl))
+        ? ctx.ownershipPlan->declarations.at(decl) : NoOwnership;
+    sym.ownershipId     = declOid;
+    ctx.symbol_table[decl->varName] = sym;
+
+    // Scope-exit decref (unless persistent). Every list local owns exactly one handle ref
+    // (fresh alloc, incref'd share, or fresh copy) → one decref balances it.
+    if (decl->lifetime != "persistent" && ctx.lifetimeDropsEnabled && !ctx.cleanupStack.empty()) {
+        CompilerContext::ScopeDrop sd;
+        sd.addr = slot;
+        sd.kind = 2;
+        sd.isListHandle = true;
+        sd.elemKind = elemKind;
+        sd.elemSize = elemSize;
+        sd.serNodes = serNodes;
+        sd.serNodesCount = serNodesCount;
+        sd.ownershipId = declOid;
+        sd.debugName = decl->varName; sd.debugType = decl->typeName;
+        ctx.cleanupStack.back().push_back(sd);
+    }
+}
+
 void Compiler::visitDeclStmt(DeclStmt* decl) {
     ctx.validateIdentifier(decl->varName, "variable", decl->sourceNode);
 
     IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
     if (!ty) return;
+
+    // ── spec/61 §5 Option B (memV3): list<T>/cascade<X> value-LOCAL = refcounted HANDLE ──────────
+    // The slot holds a POINTER to a heap block [i32 rc][i32 pad][{size,cap,data}]; the stored
+    // pointer targets the {size,cap,data} part so every ListImpl op is unchanged, reached via the
+    // is_byref_arg deref. Assignment shares (incref → aliasing); scope-exit decrefs (frees data +
+    // block at rc 0). LOCALS only here (globals/model fields stay inline — Stage B). The whole
+    // block is gated on ctx.memV3, so the OFF/deployed path is byte-identical.
+    {
+        bool isListLocal = (decl->typeName.rfind("list<", 0) == 0 && decl->typeName.back() == '>');
+        bool isCascadeLocal = (decl->typeName.rfind("cascade<", 0) == 0 && decl->typeName.back() == '>');
+        // Globals (pre-promoted) are already in symbol_table (is_global) → the shadow guard
+        // excludes them; they stay inline (Stage B). Note we do NOT exclude inTopLevelInit:
+        // the `-r` JIT path compiles a script's function bodies under inTopLevelInit=true, and
+        // those locals still want handle semantics + scope drop.
+        if (ctx.memV3 && (isListLocal || isCascadeLocal) && !decl->is_extern
+            && !ctx.symbol_table.count(decl->varName)
+            && !ctx.cleanupStack.empty()) {
+            emitListHandleDecl(decl, isCascadeLocal);
+            return;
+        }
+    }
 
     // ── AIML v2 (doc/aiml_v2_impl_plan.md P1/P5): refcounted MODEL local ─────────────────────────
     // A heap-field model is a shared refcounted heap object. The local's alloca holds a %M*
@@ -2545,11 +2698,22 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         llvm::Value* nodesArg = it.serNodes
             ? static_cast<llvm::Value*>(it.serNodes)
             : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p));
-        llvm::Function* lf = ctx.getFunction("aiml_list_free", ctx.builder.getVoidTy(),
-            {i8p, ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(), i8p, ctx.builder.getInt32Ty()});
-        ctx.builder.CreateCall(lf, { it.addr, ctx.builder.getInt32(it.elemKind),
-                                     ctx.builder.getInt64(it.elemSize), nodesArg,
-                                     ctx.builder.getInt32(it.serNodesCount) });
+        if (it.isListHandle) {
+            // spec/61 §5 Option B (memV3): the slot holds a POINTER to a refcounted handle —
+            // load it, then decref (frees data + block at rc 0). Null-safe in the runtime.
+            llvm::Value* hptr = ctx.builder.CreateLoad(i8p, it.addr, "drop_listh");
+            llvm::Function* rel = ctx.getFunction("aiml_list_handle_release", ctx.builder.getVoidTy(),
+                {i8p, ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(), i8p, ctx.builder.getInt32Ty()});
+            ctx.builder.CreateCall(rel, { hptr, ctx.builder.getInt32(it.elemKind),
+                                          ctx.builder.getInt64(it.elemSize), nodesArg,
+                                          ctx.builder.getInt32(it.serNodesCount) });
+        } else {
+            llvm::Function* lf = ctx.getFunction("aiml_list_free", ctx.builder.getVoidTy(),
+                {i8p, ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(), i8p, ctx.builder.getInt32Ty()});
+            ctx.builder.CreateCall(lf, { it.addr, ctx.builder.getInt32(it.elemKind),
+                                         ctx.builder.getInt64(it.elemSize), nodesArg,
+                                         ctx.builder.getInt32(it.serNodesCount) });
+        }
     } else if (it.kind == 3) {
         llvm::Value* vNodes = it.serNodes
             ? static_cast<llvm::Value*>(it.serNodes)
