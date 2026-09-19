@@ -125,6 +125,20 @@ void    aiml_ser_deep_copy(void*                dst,
                            const AimlTypeNode*  nodes,
                            int32_t              n_nodes);
 
+// ── spec/61 §5.1 memoized deep-clone (in-memory, no blob) ─────────────────────
+// Like aiml_ser_deep_copy but walks src→dst directly (no encode/decode roundtrip)
+// and MEMOIZES AIML_TD_MODEL (shared<T>/refcount) references by source pointer:
+// a sub-object reached through two owning edges is cloned ONCE and the second
+// edge increfs the already-cloned object (DAG-preserving, cycle-terminating).
+// Strings are shared (incref, immutable per §4).  ptr<T> (PTR_STRUCT) stays
+// unique — each is cloned independently.  dst must be zero-initialised.
+// Kept separate from aiml_ser_deep_copy so the deployed mirror/KV wire format
+// (encode/decode) is untouched.
+void    aiml_clone_deep(void*                dst,
+                        const void*          src,
+                        const AimlTypeNode*  nodes,
+                        int32_t              n_nodes);
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // Returns the byte length of the payload (the value stored in the 4-byte prefix),
