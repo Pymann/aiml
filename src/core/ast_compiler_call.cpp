@@ -2645,9 +2645,25 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                      bool memV3ListFld = ctx.memV3 &&
                          (fieldSym.typeName.rfind("list<", 0) == 0 || fieldSym.typeName.rfind("cascade<", 0) == 0)
                          && fieldSym.typeName.back() == '>';
+                     bool memV3MapFld = ctx.memV3 &&
+                         fieldSym.typeName.rfind("map<", 0) == 0 && fieldSym.typeName.back() == '>';
                      if (memV3ListFld) {
                          fieldSym.is_byref_arg = true;
                          fieldSym.ir_element_type = ctx.ir_gen->wrapType(ListImpl::getListStructType(ctx));
+                     } else if (memV3MapFld) {
+                         // Map struct type: parse map<K:V> for the k/v LLVM types.
+                         std::string minner = fieldSym.typeName.substr(4, fieldSym.typeName.length() - 5);
+                         size_t mcolon = minner.find(':');
+                         std::string mkName = (mcolon == std::string::npos) ? minner : minner.substr(0, mcolon);
+                         std::string mvName = (mcolon == std::string::npos) ? std::string("i32") : minner.substr(mcolon + 1);
+                         auto* i8pT = ctx.builder.getInt8Ty()->getPointerTo();
+                         llvm::Type* mkTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(mkName)));
+                         llvm::Type* mvTy = ctx.isRefcountModel(mvName) ? i8pT
+                             : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(mvName)));
+                         if (!mkTy) mkTy = ctx.builder.getInt32Ty();
+                         if (!mvTy) mvTy = ctx.builder.getInt32Ty();
+                         fieldSym.is_byref_arg = true;
+                         fieldSym.ir_element_type = ctx.ir_gen->wrapType(MapImpl::getMapStructType(ctx, mkTy, mvTy));
                      } else {
                          fieldSym.ir_element_type = ctx.ir_gen->wrapType(fieldIt->second.type);
                      }

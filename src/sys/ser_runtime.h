@@ -37,6 +37,9 @@ typedef enum {
                              //   POINTER to a refcounted handle ([rc][pad][{size,cap,data}]).
                              //   param1=the inner AIML_TD_LIST node index. The slot is 8 bytes.
                              //   Emitted only under memV3 → OFF/deployed descriptors never carry it.
+    AIML_TD_MAP_PTR    = 13, // spec/61 §5 Option B (memV3 only): a map<K:V> FIELD stored as a
+                             //   POINTER to a refcounted handle ([rc][pad][{size,cap,occ,keys,vals}]).
+                             //   param1=the inner AIML_TD_MAP node index. Emitted only under memV3.
 } AimlTDKind;
 
 // Each node is 24 bytes.  The whole descriptor for a type is an array of these.
