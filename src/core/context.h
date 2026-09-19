@@ -732,8 +732,12 @@ namespace AIML {
         // Gate: the global v2 flag OR a memV3 shared<> wrapper enables refcount semantics.
         if (!modelRefcount && !(memV3 && sharedWrap)) return false;
         auto it = classes.find(bare);
-        return it != classes.end() && it->second.isModel && !it->second.isBuiltin
-               && it->second.hasHeapFields;
+        if (it == classes.end() || !it->second.isModel || it->second.isBuiltin) return false;
+        // An explicit `shared<T>` opts into heap co-ownership regardless of whether T has
+        // heap fields — the user asked for a refcounted %M* handle. The global modelRefcount
+        // path keeps the v2 optimization (heap-field-less value models need no refcount).
+        if (memV3 && sharedWrap) return true;
+        return it->second.hasHeapFields;
     }
 
     // Helper: Get LLVM Type from string

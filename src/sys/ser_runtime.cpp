@@ -760,6 +760,155 @@ extern "C" void aiml_ser_deep_copy(void*               dst,
     free(blob);
 }
 
+// ── spec/61 §5.1 memoized deep-clone ──────────────────────────────────────────
+// A per-clone src-pointer → dst-pointer memo for AIML_TD_MODEL references, so a
+// shared sub-object reached by several owning edges is cloned once (the DAG is
+// preserved) and a cycle terminates (the back-edge finds the in-progress clone).
+#include <unordered_map>
+static thread_local std::unordered_map<const void*, void*>* g_clone_memo = nullptr;
+
+static void clw(int idx, const AimlTypeNode* ns, int nn,
+                const uint8_t* src, uint8_t* dst) {
+    if (idx < 0 || idx >= nn) return;
+    const AimlTypeNode& n = ns[idx];
+
+    switch ((AimlTDKind)n.kind) {
+
+    case AIML_TD_I8:  *dst = *src; break;
+    case AIML_TD_I16: memcpy(dst, src, 2); break;
+    case AIML_TD_I32: memcpy(dst, src, 4); break;
+    case AIML_TD_I64: memcpy(dst, src, 8); break;
+
+    case AIML_TD_STRING: {
+        // Immutable RC handle (§4): share by incref, store the same pointer.
+        char* s = nullptr;
+        memcpy(&s, src, sizeof(char*));
+        if (s) aiml_str_incref(s);
+        memcpy(dst, &s, sizeof(char*));
+        break;
+    }
+
+    case AIML_TD_STRUCT: {
+        int nf = n.param1, fi = n.param2;
+        for (int i = 0; i < nf; i++) {
+            const AimlTypeNode& f = ns[fi + i];
+            clw(fi + i, ns, nn, src + f.offset, dst + f.offset);
+        }
+        break;
+    }
+
+    case AIML_TD_LIST: {
+        const SerList* s = (const SerList*)src;
+        SerList* d = (SerList*)dst;
+        int esz = n.elem_size;
+        int32_t count = (s->size > 0) ? s->size : 0;
+        d->size     = count;
+        d->capacity = count > 0 ? count : 4;
+        size_t alloc = (size_t)d->capacity * (size_t)esz;
+        d->data = malloc(alloc > 0 ? alloc : 1);
+        memset(d->data, 0, alloc > 0 ? alloc : 1);
+        if (count > 0 && s->data) {
+            const uint8_t* sb = (const uint8_t*)s->data;
+            uint8_t* db = (uint8_t*)d->data;
+            for (int i = 0; i < count; i++)
+                clw(n.param1, ns, nn, sb + i * esz, db + i * esz);
+        }
+        break;
+    }
+
+    case AIML_TD_MAP: {
+        const SerMap* s = (const SerMap*)src;
+        SerMap* d = (SerMap*)dst;
+        int32_t count = (s->size > 0) ? s->size : 0;
+        int cap = count > 0 ? count : 4;
+        int ksz = key_stride(n.param1, ns, nn);
+        int vsz = n.elem_size;
+        d->size     = count;
+        d->capacity = cap;
+        d->occupied = (int8_t*)calloc((size_t)cap, 1);
+        d->keys     = calloc((size_t)cap, (size_t)ksz > 0 ? (size_t)ksz : 1);
+        d->values   = calloc((size_t)cap, (size_t)vsz > 0 ? (size_t)vsz : 1);
+        if (count > 0 && s->keys && s->values) {
+            for (int i = 0; i < count; i++) {
+                d->occupied[i] = 1;
+                clw(n.param1, ns, nn, (const uint8_t*)s->keys   + i * ksz, (uint8_t*)d->keys   + i * ksz);
+                clw(n.param2, ns, nn, (const uint8_t*)s->values + i * vsz, (uint8_t*)d->values + i * vsz);
+            }
+        }
+        break;
+    }
+
+    case AIML_TD_BUFFER: {
+        const SerBuffer* s = (const SerBuffer*)src;
+        SerBuffer* d = (SerBuffer*)dst;
+        int esz = n.elem_size > 0 ? n.elem_size : 1;
+        int32_t sz = (s->size > 0) ? s->size : 0;
+        d->size     = sz;
+        d->capacity = sz > 0 ? sz : 4;
+        d->read_idx = s->read_idx;
+        d->write_idx = s->write_idx;
+        size_t alloc = (size_t)d->capacity * (size_t)esz;
+        d->data = calloc(1, alloc > 0 ? alloc : 1);
+        if (sz > 0 && s->data) memcpy(d->data, s->data, (size_t)sz * (size_t)esz);
+        break;
+    }
+
+    case AIML_TD_RAWBYTES:
+        memcpy(dst, src, (size_t)n.param1);
+        break;
+
+    case AIML_TD_PTR_STRUCT: {
+        // Unique owner (ptr<T>): clone independently, no memo.
+        const void* obj = nullptr;
+        memcpy(&obj, src, sizeof(void*));
+        void* nobj = nullptr;
+        if (obj) {
+            size_t inner_sz = (size_t)(n.elem_size > 0 ? n.elem_size : (int32_t)sizeof(void*));
+            nobj = calloc(1, inner_sz);
+            if (nobj) clw(n.param1, ns, nn, (const uint8_t*)obj, (uint8_t*)nobj);
+        }
+        memcpy(dst, &nobj, sizeof(void*));
+        break;
+    }
+
+    case AIML_TD_MODEL: {
+        // shared<T>/refcount reference: MEMOIZE by source pointer so the DAG is
+        // preserved and cycles terminate.
+        const void* obj = nullptr;
+        memcpy(&obj, src, sizeof(void*));
+        void* nobj = nullptr;
+        if (obj) {
+            auto it = g_clone_memo->find(obj);
+            if (it != g_clone_memo->end()) {
+                // Already cloned via another owning edge — reuse and incref.
+                nobj = it->second;
+                aiml_model_incref(nobj);
+            } else {
+                size_t inner_sz = (size_t)(n.elem_size > 0 ? n.elem_size : (int32_t)sizeof(void*));
+                nobj = aiml_model_alloc(inner_sz);   // refcount 1
+                if (nobj) {
+                    (*g_clone_memo)[obj] = nobj;     // record BEFORE recursing (cycle-safe)
+                    clw(n.param1, ns, nn, (const uint8_t*)obj, (uint8_t*)nobj);
+                }
+            }
+        }
+        memcpy(dst, &nobj, sizeof(void*));
+        break;
+    }
+    }
+}
+
+extern "C" void aiml_clone_deep(void*               dst,
+                                const void*         src,
+                                const AimlTypeNode* nodes,
+                                int32_t             n_nodes) {
+    if (!dst || !src || !nodes || n_nodes <= 0) return;
+    std::unordered_map<const void*, void*> memo;
+    g_clone_memo = &memo;
+    clw(0, nodes, n_nodes, (const uint8_t*)src, (uint8_t*)dst);
+    g_clone_memo = nullptr;
+}
+
 extern "C" int aiml_ser_decode(const char*         blob,
                                 void*               out,
                                 const AimlTypeNode* nodes,

@@ -3102,7 +3102,16 @@ static std::vector<AimlTypeNode> serBuildSubtree(
     // shell, free decrefs). The field/element slot is a %M* pointer (8 bytes). A back-reference to
     // a type already on the DFS path is cut to a raw pointer below (not owned data).
     if (ctx.isRefcountModel(typeName) && !g_serActivePath.count(typeName)) {
-        auto& ci = ctx.classes[typeName];
+        // Unwrap a shared<T>/ptr<T>/ref<T> wrapper to the bare class name — the
+        // %M* slot points at a T shell, and ctx.classes is keyed by the bare name.
+        std::string modelClass = typeName;
+        if (modelClass.rfind("shared<",0)==0 && modelClass.back()=='>')
+            modelClass = modelClass.substr(7, modelClass.size()-8);
+        else if (modelClass.rfind("ptr<",0)==0 && modelClass.back()=='>')
+            modelClass = modelClass.substr(4, modelClass.size()-5);
+        else if (modelClass.rfind("ref<",0)==0 && modelClass.back()=='>')
+            modelClass = modelClass.substr(4, modelClass.size()-5);
+        auto& ci = ctx.classes[modelClass];
         const llvm::StructLayout* sl = dl.getStructLayout(ci.type);
         int32_t inner_sz = (int32_t)dl.getTypeAllocSize(ci.type);
         std::vector<std::pair<std::string, CompilerContext::StructMember>> sm;
@@ -5707,8 +5716,11 @@ IRValue* Compiler::visitSysCloneCall(CallExpr* call) {
                                               : ctx.ir_gen->wrap(argSym->alloca_inst);
     llvm::Value* srcPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(srcBase));
 
-    // Call aiml_ser_deep_copy(dst, src, nodes, n_nodes).
-    llvm::Function* dcF = ctx.getFunction("aiml_ser_deep_copy", voidTy,
+    // spec/61 §5.1: under memV3 use the memoized in-memory clone (shared<T>/%M*
+    // sub-objects cloned once → DAG-preserving, cycle-safe). Otherwise fall back
+    // to the encode/decode roundtrip (deployed mirror/KV path, byte-identical).
+    const char* cloneFn = ctx.memV3 ? "aiml_clone_deep" : "aiml_ser_deep_copy";
+    llvm::Function* dcF = ctx.getFunction(cloneFn, voidTy,
         {ptrTy, ptrTy, ptrTy, i32Ty});
     ctx.builder.CreateCall(dcF, {
         dstAlloca,

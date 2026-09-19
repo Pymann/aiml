@@ -106,6 +106,20 @@ std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node) {
             return spawnExpr;
         }
         
+        // spec/61 §5.1: { clone: x } / { copy: x } — deep / shallow copy.
+        if ((op == "clone" || op == "copy") && !argsNode.IsSequence()) {
+            auto call = std::make_unique<CallExpr>(op == "clone" ? "sys.clone" : "sys.copy");
+            call->sourceNode = node;
+            call->args.push_back(nodeToExpr(argsNode));
+            return call;
+        }
+        if ((op == "clone" || op == "copy") && argsNode.IsSequence() && argsNode.size() == 1) {
+            auto call = std::make_unique<CallExpr>(op == "clone" ? "sys.clone" : "sys.copy");
+            call->sourceNode = node;
+            call->args.push_back(nodeToExpr(argsNode[0]));
+            return call;
+        }
+
         // Unary operators: single-argument maps like { '?': [p] }, { '&': [x] }
         if (argsNode.IsSequence() && argsNode.size() == 1) {
             return std::make_unique<UnaryExpr>(op, nodeToExpr(argsNode[0]));

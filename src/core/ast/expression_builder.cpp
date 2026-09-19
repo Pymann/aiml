@@ -186,6 +186,18 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
          // block) / adoption, so lowering the wrapper to E is sufficient for the fresh-new case.
          return std::move(args[0]);
     }
+    if (op == "clone" && args.size() == 1) {
+         // spec/61 §5.1: { clone: x } is a deep (memoized, graph-preserving) copy.
+         auto call = std::make_unique<CallExpr>("sys.clone");
+         call->args.push_back(std::move(args[0]));
+         return call;
+    }
+    if (op == "copy" && args.size() == 1) {
+         // spec/61 §5.1: { copy: x } is a shallow copy (referents shared).
+         auto call = std::make_unique<CallExpr>("sys.copy");
+         call->args.push_back(std::move(args[0]));
+         return call;
+    }
     if (op == "slice" && args.size() >= 3) {
          // { slice: [container, start, end] } → CallExpr("__builtin_slice", container, start, end)
          auto call = std::make_unique<CallExpr>("__builtin_slice");
