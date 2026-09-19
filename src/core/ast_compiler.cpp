@@ -161,9 +161,19 @@ void Compiler::initClassContainerMembers(llvm::Value* basePtr,
                 std::string vName = inner.substr(colon + 1);
                 llvm::Type* kTy = static_cast<llvm::Type*>(
                     ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(kName)));
-                llvm::Type* vTy = static_cast<llvm::Type*>(
-                    ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
-                if (kTy && vTy) MapImpl::initMap(ctx, fieldPtr, kTy, vTy, 4);
+                llvm::Type* vTy = ctx.isRefcountModel(vName)
+                    ? ctx.builder.getInt8Ty()->getPointerTo()
+                    : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
+                if (ctx.memV3 && kTy && vTy) {
+                    // spec/61 §5 Option B: map field is a POINTER to a handle — alloc + store ptr.
+                    auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                    llvm::Function* nw = ctx.getFunction("aiml_map_handle_new", i8p, {});
+                    llvm::Value* handle = ctx.builder.CreateCall(nw, {}, "fld_maph_new");
+                    ctx.builder.CreateStore(handle, fieldPtr);
+                    MapImpl::initMap(ctx, handle, kTy, vTy, 4);
+                } else if (kTy && vTy) {
+                    MapImpl::initMap(ctx, fieldPtr, kTy, vTy, 4);
+                }
             }
         } else if (mt.rfind("chan<", 0) == 0 && mt.back() == '>') {
             ChanImpl::init(ctx, fieldPtr, ctx.builder.getInt64(0));
@@ -2941,7 +2951,8 @@ static AimlTypeNode snShift(AimlTypeNode n, int32_t delta) {
         case AIML_TD_BUFFER:
         case AIML_TD_PTR_STRUCT:
         case AIML_TD_MODEL:
-        case AIML_TD_LIST_PTR: n.param1 += delta; break;  // param1 = child index (struct subtree)
+        case AIML_TD_LIST_PTR:
+        case AIML_TD_MAP_PTR:  n.param1 += delta; break;  // param1 = child index (subtree)
         case AIML_TD_MAP:    n.param1 += delta; n.param2 += delta; break;
         case AIML_TD_STRUCT: n.param2 += delta; break; // param1 = n_fields (not an index)
         default: break;
@@ -3003,10 +3014,11 @@ static std::vector<AimlTypeNode> serFieldSubtree(
     bool memV3ListField = ctx.memV3 &&
         ((typeName.rfind("list<", 0) == 0 && typeName.back() == '>') ||
          (typeName.rfind("cascade<", 0) == 0 && typeName.back() == '>'));
-    if (!memV3ListField) return serBuildSubtree(typeName, offset, ctx, dl);
+    bool memV3MapField = ctx.memV3 && typeName.rfind("map<", 0) == 0 && typeName.back() == '>';
+    if (!memV3ListField && !memV3MapField) return serBuildSubtree(typeName, offset, ctx, dl);
     std::string inner = (typeName.rfind("cascade<", 0) == 0) ? std::string("list<i32>") : typeName;
     std::vector<AimlTypeNode> res;
-    res.push_back({AIML_TD_LIST_PTR, 1, 0, offset, 8, 0});          // pointer slot
+    res.push_back({memV3MapField ? AIML_TD_MAP_PTR : AIML_TD_LIST_PTR, 1, 0, offset, 8, 0}); // pointer slot
     for (auto& n : serBuildSubtree(inner, 0, ctx, dl)) res.push_back(snShift(n, 1));
     return res;
 }
@@ -3754,10 +3766,11 @@ void Compiler::registerTypeDecl(Node* node) {
             // spec/61 §5 Option B (memV3): a list<T>/cascade<X> field is a POINTER to a refcounted
             // handle (8 bytes) so by-value model copy shares (aliases) the container. Gated on
             // memV3 → OFF/deployed struct layout is byte-identical.
-            bool memV3ListField = ctx.memV3 &&
+            bool memV3ContainerField = ctx.memV3 &&
                 ((typeName.rfind("list<", 0) == 0 && typeName.back() == '>') ||
-                 (typeName.rfind("cascade<", 0) == 0 && typeName.back() == '>'));
-            llvm::Type* fieldType = (ctx.isRefcountModel(typeName) || memV3ListField)
+                 (typeName.rfind("cascade<", 0) == 0 && typeName.back() == '>') ||
+                 (typeName.rfind("map<", 0) == 0 && typeName.back() == '>'));
+            llvm::Type* fieldType = (ctx.isRefcountModel(typeName) || memV3ContainerField)
                 ? llvm::PointerType::get(ctx.context, 0)
                 : ctx.getLLVMType(typeName);
             if (!fieldType) {
@@ -5357,14 +5370,28 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
                         tmpSym.typeName         = member.typeName;
                         tmpSym.ir_alloca_inst   = fieldGep;
                         tmpSym.ir_element_type  = fieldElemTy;
-                        // spec/61 §5 Option B (memV3): a list<T>/cascade<X> field is a POINTER to a
-                        // handle → mark byref so the recursion derefs the slot to the handle before
-                        // property access (.len/.empty/…).
+                        // spec/61 §5 Option B (memV3): a list<T>/cascade<X>/map<K:V> field is a
+                        // POINTER to a handle → mark byref so the recursion derefs the slot to the
+                        // handle before property access (.len/.empty/…).
                         if (ctx.memV3 &&
                             (member.typeName.rfind("list<", 0) == 0 || member.typeName.rfind("cascade<", 0) == 0)
                             && member.typeName.back() == '>') {
                             tmpSym.is_byref_arg = true;
                             tmpSym.ir_element_type = ctx.ir_gen->wrapType(ListImpl::getListStructType(ctx));
+                        } else if (ctx.memV3 && member.typeName.rfind("map<", 0) == 0
+                                   && member.typeName.back() == '>') {
+                            std::string minner = member.typeName.substr(4, member.typeName.length() - 5);
+                            size_t mcolon = minner.find(':');
+                            std::string mkName = (mcolon == std::string::npos) ? minner : minner.substr(0, mcolon);
+                            std::string mvName = (mcolon == std::string::npos) ? std::string("i32") : minner.substr(mcolon + 1);
+                            auto* i8pT = ctx.builder.getInt8Ty()->getPointerTo();
+                            llvm::Type* mkTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(mkName)));
+                            llvm::Type* mvTy = ctx.isRefcountModel(mvName) ? i8pT
+                                : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(mvName)));
+                            if (!mkTy) mkTy = ctx.builder.getInt32Ty();
+                            if (!mvTy) mvTy = ctx.builder.getInt32Ty();
+                            tmpSym.is_byref_arg = true;
+                            tmpSym.ir_element_type = ctx.ir_gen->wrapType(MapImpl::getMapStructType(ctx, mkTy, mvTy));
                         }
                         return resolveProperty(&tmpSym, rest);
                     }
@@ -5393,14 +5420,16 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
             // ast_compiler_call.cpp converts ptr→struct if the callee wants
             // value, but it can't reconstruct a ptr from a loaded struct.
             // Repro: aiml/tests/test_class_member_as_func_arg.aiml
-            // spec/61 §5 Option B (memV3): a list<T>/cascade<X> field is a POINTER to a handle —
-            // LOAD it so callers get the handle (a pointer to {size,cap,data}), exactly the shape
-            // ListImpl ops / byref-container params expect. buffer/map fields stay inline (return gep).
+            // spec/61 §5 Option B (memV3): a list<T>/cascade<X>/map<K:V> field is a POINTER to a
+            // handle — LOAD it so callers get the handle (a pointer to the container struct),
+            // exactly the shape ListImpl/MapImpl ops / byref-container params expect. buffer fields
+            // stay inline (return gep).
             if (ctx.memV3 &&
-                (member.typeName.rfind("list<", 0) == 0 || member.typeName.rfind("cascade<", 0) == 0)) {
+                (member.typeName.rfind("list<", 0) == 0 || member.typeName.rfind("cascade<", 0) == 0
+                 || member.typeName.rfind("map<", 0) == 0)) {
                 auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
                 return ctx.ir_gen->wrap(ctx.builder.CreateLoad(i8p,
-                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(gep)), propName + "_listh"));
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(gep)), propName + "_conh"));
             }
             if (member.typeName.rfind("list<", 0) == 0 ||
                 member.typeName.rfind("buffer<", 0) == 0 ||
@@ -5584,16 +5613,17 @@ IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& p
 
         outTypeName = member.typeName;
         IRValue* fieldGep = ctx.ir_gen->createStructGEP(structTy, structPtr, member.index, "set_prop_ptr_w");
-        // spec/61 §5 Option B (memV3): a list<T>/cascade<X> field is a POINTER to a handle. As a
-        // method RECEIVER (e.g. `obj.tags.push`) callers want the handle (a pointer to
-        // {size,cap,data}), so LOAD it. (A whole-list `set:[obj.tags, L]` replace would want the
-        // slot address; that path is not yet exercised under memV3 — Stage B follow-up.)
+        // spec/61 §5 Option B (memV3): a list<T>/cascade<X>/map<K:V> field is a POINTER to a
+        // handle. As a method RECEIVER (e.g. `obj.tags.push`, `obj.slots.put`) callers want the
+        // handle (a pointer to the container struct), so LOAD it. (A whole-container replace
+        // `set:[obj.tags, L]` would want the slot address; not yet exercised under memV3.)
         if (ctx.memV3 &&
-            (member.typeName.rfind("list<", 0) == 0 || member.typeName.rfind("cascade<", 0) == 0)
+            (member.typeName.rfind("list<", 0) == 0 || member.typeName.rfind("cascade<", 0) == 0
+             || member.typeName.rfind("map<", 0) == 0)
             && member.typeName.back() == '>') {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             return ctx.ir_gen->wrap(ctx.builder.CreateLoad(i8p,
-                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldGep)), "listh_recv_w"));
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldGep)), "conh_recv_w"));
         }
         return fieldGep;
     }

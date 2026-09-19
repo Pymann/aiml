@@ -1,0 +1,42 @@
+# static-check: off
+# TIER: T2
+# CONSTRUCT: a map<K:V> model FIELD is a refcounted handle (§5, Option B) — by-value model copy
+#            SHARES the map (aliasing), like a list field (probe 01), while scalars stay isolated.
+# COVERS: map<K:V> field, member-wise copy aliasing (§7/§5), map.put/get/len through a field.
+#         Symbols: map<K:V> field, pass-by-value model, map.put.
+# EXPECT: scalar param mutation isolated; map-field mutation VISIBLE to caller (shared handle).
+- model:
+    name: Reg
+    fields:
+      - [seq, i32, 0]
+      - [slots, "map<string:i32>"]
+
+# mutate a scalar of a by-value param → caller unaffected
+- def:
+    name: bump_seq
+    args: [[itr, Reg]]
+    body:
+      - set: [itr.seq, 99]
+
+# mutate the MAP field of a by-value param → caller SEES it (shared handle, §7/§5)
+- def:
+    name: add_slot
+    args: [[itr, Reg]]
+    body:
+      - call: [itr.slots.put, "hot", 7]
+
+- def:
+    name: main
+    return: i32
+    static_off: ["str_cmp"]
+    body:
+      - decl: [reg, Reg]
+      - set: [reg.seq, 1]
+      - call: [reg.slots.put, "base", 1]
+      - call: [bump_seq, reg]
+      - if: { condition: { neq: [reg.seq, 1] }, then: [{ print: ["FAIL scalar leaked ${reg.seq}"] }, { return: 1 }] }
+      - call: [add_slot, reg]
+      - if: { condition: { neq: [reg.slots.len, 2] }, then: [{ print: ["FAIL map not aliased len=${reg.slots.len}"] }, { return: 1 }] }
+      - if: { condition: { neq: [{ call: [reg.slots.get, "hot"] }, 7] }, then: [{ print: ["FAIL alias get"] }, { return: 1 }] }
+      - print: ["PASS 18 map_field_aliasing"]
+      - return: 0
