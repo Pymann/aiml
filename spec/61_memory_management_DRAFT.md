@@ -1255,12 +1255,14 @@ argument beyond the call (see below) — a real added contract.
 > §10. **Errors:** shallow `{copy}` of a move-only element; illegal `shared→ptr` assignment;
 > **use-after-move**; **use-after-free**; **double-free**; `free` of a `shared<T>`; `free` of a
 > non-heap value. **Warnings:** the **owning-cycle** lint and the **persistent-leak** lint. The
-> pass is an intra-function Live/Moved/Freed flow with must-move/free merge across `if`/`else`
-> (loops/`try` reset) — no false positives on the acceptance suite. `free:` now materializes as a
-> real node under memV3 (active early-release + slot-null; OFF drops it byte-identically), which is
-> what makes the free-based checks possible. Probes: `tests/lifetime/neg/n01–n07`, `warn/w01–w02`.
-> **Remaining:** *invalidated element borrow* (§5.4 — needs alias/mutation flow analysis) and the
-> minor `ref→ptr` cross-kind case.
+> pass is an intra-function flow (ptr Live/Moved/Freed + `at`/`get` ref-borrow Valid/Invalidated)
+> with must-* merge across `if`/`else` (loops/`try` reset) — no false positives on the acceptance
+> suite. `free:` now materializes as a real node under memV3 (active early-release + slot-null; OFF
+> drops it byte-identically), which is what makes the free-based checks possible.
+>
+> **§10 is now COMPLETE.** Also implemented: **`ref→ptr`/`ref→shared` cross-kind** rejection and
+> the **invalidated element borrow** check (§5.4 — a ref from `at`/`get` used after a structural
+> mutation of its container). Probes: `tests/lifetime/neg/n01–n09`, `warn/w01–w02`.
 
 - **use-after-free** — using a `ptr<T>` after `free` on it, within visible scope: error.
 - **use-after-move** — using a `ptr<T>` (or a `shared` handed to `{share}`) after it was

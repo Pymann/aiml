@@ -1,0 +1,12 @@
+# static-check: off
+# NEGATIVE (§6.2/§10): ref<T> → ptr<T> is forbidden — a borrow does not own.
+# EXPECT-ERROR: illegal ref<T> → ptr<T> assignment
+- model: { name: Wid, fields: [[ident, i32, 0]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [box, ptr<Wid>, { new: Wid }]
+      - decl: [rww, ref<Wid>, box]          # borrow (ptr→ref ok)
+      - decl: [steal, ptr<Wid>, rww]        # ← ref→ptr forbidden
+      - return: 0

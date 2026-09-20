@@ -8,6 +8,8 @@
 #include <vector>
 #include <string>
 #include <functional>
+#include <cstdio>
+#include <cstdlib>
 
 namespace AIML { namespace AST {
 namespace {
@@ -28,6 +30,11 @@ struct BorrowChecker {
     std::map<std::string, St> state;
     // §10 leak lint: `persistent`-qualified ptr locals + their decl line.
     std::map<std::string, int> persistentPtrs;
+    // §5.4 invalidated element borrow: a ref<T> local bound from at/get on a container → the
+    // container it borrows from; and whether that borrow has been invalidated by a structural
+    // mutation of the container. refInvalid participates in the if/else/loop/try flow merge.
+    std::map<std::string, std::string> refBorrowOf;   // ref local → container base name
+    std::map<std::string, bool> refInvalid;           // ref local → invalidated?
 
     explicit BorrowChecker(const CompilerContext& c) : ctx(c) {}
 
@@ -38,13 +45,35 @@ struct BorrowChecker {
 
     void flagUse(const std::string& n, int line, const char* how) {
         auto it = state.find(n);
-        if (it == state.end()) return;
-        if (it->second == St::Moved)
-            LOG_ERROR(loc(line) + "use-after-move: '" + n + "' was moved out and is used here ("
-                + how + ") — a ptr<T> has a single owner (§6.2/§10). Re-bind it (set/new) first.");
-        else if (it->second == St::Freed)
-            LOG_ERROR(loc(line) + "use-after-free: '" + n + "' was freed and is used here ("
-                + how + ") (§10).");
+        if (it != state.end()) {
+            if (it->second == St::Moved)
+                LOG_ERROR(loc(line) + "use-after-move: '" + n + "' was moved out and is used here ("
+                    + how + ") — a ptr<T> has a single owner (§6.2/§10). Re-bind it (set/new) first.");
+            else if (it->second == St::Freed)
+                LOG_ERROR(loc(line) + "use-after-free: '" + n + "' was freed and is used here ("
+                    + how + ") (§10).");
+        }
+        // §5.4: an element borrow used after its container was structurally mutated is dangling.
+        auto ri = refInvalid.find(n);        if (ri != refInvalid.end() && ri->second)
+            LOG_ERROR(loc(line) + "invalidated element borrow: '" + n + "' borrows an element of '"
+                + refBorrowOf[n] + "', which was structurally mutated (push/insert/remove/clear/…) "
+                "since the borrow — the ref may dangle (§5.4/§10). Re-borrow after the mutation.");
+    }
+
+    // If `e` is `{at:[C,..]}` / `{get:[C,..]}` / `C.at(..)` / `C.get(..)` etc., return C's base.
+    std::string borrowSourceContainer(const Expr* e) {
+        if (auto* at = dynamic_cast<const AtExpr*>(e))
+            if (auto* cv = dynamic_cast<const VariableExpr*>(at->container.get())) return baseName(cv->name);
+        if (auto* c = dynamic_cast<const CallExpr*>(e)) {
+            const std::string& fn = c->functionName;
+            size_t dot = fn.rfind('.');
+            if (dot != std::string::npos) {
+                std::string method = fn.substr(dot + 1);
+                if (method == "at" || method == "get" || method == "first" || method == "last")
+                    return baseName(fn.substr(0, dot));
+            }
+        }
+        return "";
     }
 
     // Scan an expression for READS of tracked ptr locals in a bad state.
@@ -52,7 +81,7 @@ struct BorrowChecker {
         if (!e) return;
         if (auto* v = dynamic_cast<const VariableExpr*>(e)) {
             std::string b = baseName(v->name);
-            if (tracked(b)) flagUse(b, line, "read");
+            if (tracked(b) || refBorrowOf.count(b)) flagUse(b, line, "read");
             return;
         }
         if (auto* b = dynamic_cast<const BinaryExpr*>(e)) { scanUses(b->lhs.get(), line); scanUses(b->rhs.get(), line); return; }
@@ -103,6 +132,10 @@ struct BorrowChecker {
                 ptrLocals[d->varName] = d->typeName; state[d->varName] = St::Live;
                 if (d->lifetime == "persistent") persistentPtrs[d->varName] = line;
             }
+            // §5.4: a ref<T> local bound from at/get on a container records the borrow (Valid).
+            if (d->typeName.rfind("ref<", 0) == 0 && d->initialValue) {
+                std::string cont = borrowSourceContainer(d->initialValue.get());                if (!cont.empty()) { refBorrowOf[d->varName] = cont; refInvalid[d->varName] = false; }
+            }
             return;
         }
         if (auto* set = dynamic_cast<const SetStmt*>(s)) {
@@ -123,6 +156,11 @@ struct BorrowChecker {
                 // target is some other local possibly of ptr/shared type — a move of a ptr source.
                 std::string src = asPtrVar(set->value.get());
                 if (!src.empty() && src != tb) markMoved(src, line);
+            }
+            // §5.4: re-binding a ref local (set:[r, {at:[C,i]}]) refreshes the borrow → Valid again.
+            if (plainTarget && refBorrowOf.count(tb)) {
+                std::string cont = borrowSourceContainer(set->value.get());
+                if (!cont.empty()) { refBorrowOf[tb] = cont; refInvalid[tb] = false; }
             }
             // member/index target (p.child = …) is a write THROUGH p → scanUses already flagged it.
             return;
@@ -151,15 +189,15 @@ struct BorrowChecker {
         if (auto* i = dynamic_cast<const IfStmt*>(s)) {
             int line = i->sourceLine;
             scanUses(i->condition.get(), line);
-            std::map<std::string, St> pre = state;
+            auto pre = state; auto preRef = refInvalid;
             run(i->thenBranch.get());
-            std::map<std::string, St> afterThen = state;
-            state = pre;
+            auto afterThen = state; auto afterThenRef = refInvalid;
+            state = pre; refInvalid = preRef;
             if (i->elseBranch) run(i->elseBranch.get());
-            std::map<std::string, St> afterElse = state;
-            // Merge: a state is carried past the if only if it holds on EVERY path (must-move/free).
+            auto afterElse = state; auto afterElseRef = refInvalid;
+            // Merge: a bad state is carried past the if only if it holds on EVERY path (must-*).
             // No else ⇒ the fall-through path keeps `pre`, so nothing bad is carried forward.
-            state = pre;
+            state = pre; refInvalid = preRef;
             if (i->elseBranch) {
                 for (auto& kv : ptrLocals) {
                     const std::string& n = kv.first;
@@ -167,23 +205,29 @@ struct BorrowChecker {
                     St b = afterElse.count(n) ? afterElse[n] : St::Live;
                     if (a == b && a != St::Live) state[n] = a;
                 }
+                for (auto& kv : refBorrowOf) {
+                    const std::string& n = kv.first;
+                    bool a = afterThenRef.count(n) && afterThenRef[n];
+                    bool b = afterElseRef.count(n) && afterElseRef[n];
+                    if (a && b) refInvalid[n] = true;
+                }
             }
             return;
         }
         if (auto* w = dynamic_cast<const WhileStmt*>(s)) {
             int line = w->sourceLine;
             scanUses(w->condition.get(), line);
-            std::map<std::string, St> pre = state;
+            auto pre = state; auto preRef = refInvalid;
             run(w->body.get());       // catch in-body violations (from the pre-loop state)
-            state = pre;              // conservative: body moves do not escape the loop
+            state = pre; refInvalid = preRef;   // conservative: body effects do not escape the loop
             return;
         }
         if (auto* t = dynamic_cast<const TryStmt*>(s)) {
-            std::map<std::string, St> pre = state;
+            auto pre = state; auto preRef = refInvalid;
             run(t->tryBlock.get());
-            state = pre;
+            state = pre; refInvalid = preRef;
             run(t->catchBlock.get());
-            state = pre;              // conservative: exceptions make branch effects uncertain
+            state = pre; refInvalid = preRef;   // conservative: exceptions make branch effects uncertain
             return;
         }
     }
@@ -216,6 +260,13 @@ struct BorrowChecker {
             const std::string& fn = c->functionName;
             size_t dot = fn.rfind('.');
             std::string method = (dot == std::string::npos) ? fn : fn.substr(dot + 1);
+            std::string recvBase = (dot == std::string::npos) ? "" : baseName(fn.substr(0, dot));
+            // §5.4: a structural mutation of a container invalidates every element borrow of it
+            // (the backing may reallocate/shift). pop/idx-set are excluded (no realloc/shift here).
+            if (!recvBase.empty() &&
+                (method == "push" || method == "append" || method == "add" || method == "insert" ||
+                 method == "remove" || method == "clear" || method == "sort" || method == "reverse")) {                for (auto& rb : refBorrowOf) if (rb.second == recvBase) refInvalid[rb.first] = true;
+            }
             if (method == "push" || method == "append" || method == "add") {
                 for (auto& a : c->args) { std::string src = asPtrVar(a.get()); if (!src.empty()) markMoved(src, line); }
                 return;

@@ -651,16 +651,30 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         }
     }
 
-    // spec/61 §6.2/§10: shared<T> → ptr<T> is a FORBIDDEN cross-kind assignment — you cannot
-    // extract unique ownership from a co-owned object (other owners may exist; layouts differ).
-    // Localized check (no flow analysis) at the decl init. memV3-gated → OFF path unchanged.
-    if (ctx.memV3 && decl->typeName.rfind("ptr<", 0) == 0 && decl->initialValue) {
-        if (auto* sv = dynamic_cast<VariableExpr*>(decl->initialValue.get())) {
-            Symbol* ss = resolveVariable(sv->name);
-            if (ss && ss->typeName.rfind("shared<", 0) == 0) {
-                LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "illegal shared<T> → ptr<T> assignment ('"
-                    + decl->varName + "' <- '" + sv->name + "'): a unique owner cannot be extracted "
-                    "from a shared (co-owned) object (§6.2/§10). Borrow it as ref<T>, or co-own as shared<T>.");
+    // spec/61 §6.2/§10: illegal cross-kind assignments (localized, no flow analysis; memV3-gated →
+    // OFF path unchanged). The §6.2 matrix forbids:
+    //   • ptr<T>    ← shared<T>  (cannot extract unique ownership from a co-owned object), and
+    //   • ptr<T>    ← ref<T>     (a borrow does not own), and
+    //   • shared<T> ← ref<T>     (a borrow cannot become a co-owner).
+    if (ctx.memV3 && decl->initialValue) {
+        bool tgtPtr    = decl->typeName.rfind("ptr<", 0) == 0;
+        bool tgtShared = decl->typeName.rfind("shared<", 0) == 0;
+        if (tgtPtr || tgtShared) {
+            if (auto* sv = dynamic_cast<VariableExpr*>(decl->initialValue.get())) {
+                Symbol* ss = resolveVariable(sv->name);
+                const std::string sty = ss ? ss->typeName : std::string();
+                if (tgtPtr && sty.rfind("shared<", 0) == 0)
+                    LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "illegal shared<T> → ptr<T> assignment ('"
+                        + decl->varName + "' <- '" + sv->name + "'): a unique owner cannot be extracted "
+                        "from a shared (co-owned) object (§6.2/§10). Borrow it as ref<T>, or co-own as shared<T>.");
+                else if (tgtPtr && sty.rfind("ref<", 0) == 0)
+                    LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "illegal ref<T> → ptr<T> assignment ('"
+                        + decl->varName + "' <- '" + sv->name + "'): a borrow does not own, so it cannot "
+                        "become a unique owner (§6.2/§10).");
+                else if (tgtShared && sty.rfind("ref<", 0) == 0)
+                    LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "illegal ref<T> → shared<T> assignment ('"
+                        + decl->varName + "' <- '" + sv->name + "'): a borrow does not own, so it cannot "
+                        "become a co-owner (§6.2/§10).");
             }
         }
     }
