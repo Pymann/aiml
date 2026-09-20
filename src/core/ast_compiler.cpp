@@ -3147,8 +3147,13 @@ static std::vector<AimlTypeNode> serBuildSubtree(
     // Wraps the inner struct's subtree in an AIML_TD_PTR_STRUCT node.  At
     // encode/decode time the runtime follows / allocates through the pointer
     // (otherwise the raw pointer value is meaningless on the receiver side).
-    if ((typeName.rfind("ptr<", 0) == 0 || typeName.rfind("ref<", 0) == 0)
-        && typeName.back() == '>') {
+    // spec/61 §5.1 rule 4 (memV3): a `ref<T>` is a WEAK edge — clone must PRESERVE it (copy the
+    // pointer verbatim), never deep-copy the referent. So under memV3 a ref<T> field falls through
+    // to the opaque raw-pointer leaf below; only an owning `ptr<T>` is followed (PTR_STRUCT).
+    // Under OFF both ptr<>/ref<> keep the historical deep-copy (byte-identical deployed behavior).
+    bool followAsOwningPtr = typeName.rfind("ptr<", 0) == 0
+        || (typeName.rfind("ref<", 0) == 0 && !ctx.memV3);
+    if (followAsOwningPtr && typeName.back() == '>') {
         std::string inner = typeName.substr(4, typeName.size() - 5);
         auto pit = ctx.classes.find(inner);
         // …but NOT if `inner` is already being expanded on the current DFS path:
