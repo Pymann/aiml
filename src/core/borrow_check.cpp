@@ -26,6 +26,8 @@ struct BorrowChecker {
     std::map<std::string, std::string> ptrLocals;
     // Flow state for tracked locals. Absent ⇒ Live (or not yet declared).
     std::map<std::string, St> state;
+    // §10 leak lint: `persistent`-qualified ptr locals + their decl line.
+    std::map<std::string, int> persistentPtrs;
 
     explicit BorrowChecker(const CompilerContext& c) : ctx(c) {}
 
@@ -97,7 +99,10 @@ struct BorrowChecker {
                 if (!src.empty()) markMoved(src, line);
             }
             // Register the new local (shadowing is disallowed elsewhere). ptr<T> → tracked, Live.
-            if (ptrTgt) { ptrLocals[d->varName] = d->typeName; state[d->varName] = St::Live; }
+            if (ptrTgt) {
+                ptrLocals[d->varName] = d->typeName; state[d->varName] = St::Live;
+                if (d->lifetime == "persistent") persistentPtrs[d->varName] = line;
+            }
             return;
         }
         if (auto* set = dynamic_cast<const SetStmt*>(s)) {
@@ -107,6 +112,8 @@ struct BorrowChecker {
             bool plainTarget = (set->target.find_first_of(".-<") == std::string::npos);
             // A member/index target (`p.child = …`) writes THROUGH p → that is a USE of p.
             if (!plainTarget && tracked(tb)) flagUse(tb, line, "write through");
+            // Storing a ptr local INTO a member/container slot moves it (§7 aggregate ownership).
+            if (!plainTarget) { std::string src = asPtrVar(set->value.get()); if (!src.empty()) markMoved(src, line); }
             // rebind of a ptr local from another ptr local (target is ptr<T> or shared<T>): move src.
             if (plainTarget && tracked(tb)) {
                 std::string src = asPtrVar(set->value.get());
@@ -233,6 +240,20 @@ void checkBorrowsMemV3(const ::CompilerContext& ctx, const FunctionDecl& fn) {
     BorrowChecker bc(ctx);
     // Parameters are borrows by default (§8) — do not track them as owned ptr locals.
     bc.run(fn.body.get());
+    // §10 leak lint: a `persistent` box that reaches function exit still Live never escaped
+    // (the declared escape did not happen) → WARNING. `scope` (default) boxes cannot leak — they
+    // auto-free. Honours `static_off: ["leak"]`.
+    bool leakOff = false;
+    for (const auto& so : fn.staticOff) if (so == "leak") leakOff = true;
+    if (!leakOff)
+        for (const auto& kv : bc.persistentPtrs) {
+            auto it = bc.state.find(kv.first);
+            if (it != bc.state.end() && it->second == St::Live)
+                LOG_WARNING(BorrowChecker::loc(kv.second) + "leak: persistent box '" + kv.first +
+                    "' reaches scope exit without being moved out / stored / returned — its declared "
+                    "escape never happens, so it leaks (§9.1/§10). Move it out, or drop `persistent` "
+                    "to auto-free at scope. (static_off: [\"leak\"] to silence.)");
+        }
 }
 
 // ── §10 owning-cycle lint ─────────────────────────────────────────────────────
