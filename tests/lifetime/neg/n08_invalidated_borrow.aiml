@@ -1,0 +1,17 @@
+# static-check: off
+# NEGATIVE (§5.4/§10): using a ref<T> element borrow after the container was structurally mutated
+# (push may reallocate the backing) is an error — the borrow may dangle.
+# EXPECT-ERROR: invalidated element borrow
+- model: { name: Wid, fields: [[ident, i32, 0]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pool, list<shared<Wid>>]
+      - decl: [spa, shared<Wid>, { share: { new: Wid } }]
+      - call: [pool.push, spa]
+      - decl: [view, ref<Wid>, { at: [pool, 0] }]   # borrow element 0
+      - decl: [spb, shared<Wid>, { share: { new: Wid } }]
+      - call: [pool.push, spb]                        # structural mutation → invalidates view
+      - if: { condition: { neq: [view.ident, 0] }, then: [{ print: ["x"] }, { return: 1 }] }  # ← use
+      - return: 0

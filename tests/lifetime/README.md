@@ -37,16 +37,16 @@ the caller; verified as real aliasing, not a value-copy).
 **§10 diagnostics (memV3-only, isolated report-only pass `src/core/borrow_check.cpp`).** The
 runner has a **NEG** section (each `neg/*.aiml` must be REJECTED with its `# EXPECT-ERROR:`) and a
 **WARN** section (each `warn/*.aiml` must compile+run *and* emit its `# EXPECT-WARN:`).
-Implemented — **errors:** shallow `{copy}` of a move-only element (`neg/n01`), illegal
-`shared→ptr` cross-kind assignment (`n02`), **use-after-move** (`n03`), **use-after-free**
-(`n04`), **double-free** (`n05`), **free of shared\<T\>** (`n06`), **free of a non-heap value**
-(`n07`). **Warnings:** **owning-cycle** lint (`warn/w01`), **persistent-leak** lint (`w02`).
-The borrow-checker is a conservative intra-function flow pass (Live/Moved/Freed with
-must-move/free merge across if/else; loops/try reset) — no false positives on the 23 positive
-probes. To make the free checks possible, `free:` now materializes as a real node **under memV3**
-(active early-release + slot-null; OFF still drops it byte-identically). **Remaining §10:**
-*invalidated element borrow* (§5.4 — needs alias/mutation flow analysis) and `ref→ptr` cross-kind
-(minor); both scoped for later.
+**§10 is complete** — **errors (9):** shallow `{copy}` of a move-only element (`neg/n01`),
+illegal `shared→ptr` (`n02`) and `ref→ptr` (`n09`) cross-kind assignment (plus `ref→shared`),
+**use-after-move** (`n03`), **use-after-free** (`n04`), **double-free** (`n05`), **free of
+shared\<T\>** (`n06`), **free of a non-heap value** (`n07`), **invalidated element borrow**
+(`n08`, §5.4). **Warnings (2):** **owning-cycle** lint (`warn/w01`), **persistent-leak** lint
+(`w02`). The borrow-checker is a conservative intra-function flow pass (Live/Moved/Freed for
+ptr locals + Valid/Invalidated for `at`/`get` ref borrows, with must-* merge across if/else;
+loops/try reset) — no false positives on the 23 positive probes. To make the free checks
+possible, `free:` now materializes as a real node **under memV3** (active early-release +
+slot-null; OFF still drops it byte-identically).
 
 **`dyn_array<T>` is Class-4, not Class-3** (§5.6, resolved): a *unique, unmanaged* single-`malloc`
 scalar buffer — its advantage over `list` is exactly ONE allocation and zero per-op rc. Under
