@@ -3694,6 +3694,8 @@ void Compiler::registerTypeDecl(Node* node) {
                     retTy = llvm::Type::getVoidTy(ctx.context);
                 } else if (ctx.isRefcountModel(method->returnType)) {
                     retTy = i8p;   // AIML v2 P4: refcount-model return = %M* pointer
+                } else if (ctx.isMemV3ContainerHandle(method->returnType)) {
+                    retTy = i8p;   // spec/61 §5 (memV3): container return = handle pointer
                 } else {
                     IRType* irt = ctx.ir_gen->resolveType(method->returnType);
                     retTy = irt
@@ -4121,6 +4123,8 @@ void Compiler::registerTypeDecl(Node* node) {
             retTy = llvm::Type::getVoidTy(ctx.context);
         else if (ctx.isRefcountModel(func->returnType))
             retTy = i8p;   // AIML v2 (P4): refcount model return = %M* pointer
+        else if (ctx.isMemV3ContainerHandle(func->returnType))
+            retTy = i8p;   // spec/61 §5 (memV3): container return = refcounted handle pointer
         else {
             IRType* irt = ctx.ir_gen->resolveType(func->returnType);
             retTy = irt ? static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(irt)) : i8p;
@@ -4820,6 +4824,8 @@ void Compiler::visitFunction(FunctionDecl* func) {
     // AIML v2 (P4): a refcount MODEL return is a %M* pointer (the callee hands its reference to
     // the caller). Otherwise resolve the declared type as usual.
     if (ctx.isRefcountModel(func->returnType)) retTy = ctx.ir_gen->getPointerTy();
+    // spec/61 §5 (memV3): a container return is a refcounted HANDLE → returned as a pointer.
+    else if (ctx.isMemV3ContainerHandle(func->returnType)) retTy = ctx.ir_gen->getPointerTy();
     else if (!func->returnType.empty()) retTy = ctx.ir_gen->resolveType(func->returnType);
     if (!retTy) retTy = ctx.ir_gen->resolveType("void");
     

@@ -1,0 +1,21 @@
+# static-check: off
+# NEGATIVE Spec 61 §8: borrows:left must reject a return derived from right.
+# EXPECT-ERROR: borrow-return anchor
+# Main keeps both owners alive: unexpected acceptance is proved without dereferencing a dangling ref.
+- model: { name: AnchorItem, fields: [[ident, i32, 0]] }
+- def:
+    name: wrong_anchor
+    args: [[left, ref<AnchorItem>], [right, ref<AnchorItem>]]
+    return: { type: ref<AnchorItem>, borrows: left }
+    body:
+      - return: right
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [leftowner, AnchorItem]
+      - decl: [rightowner, AnchorItem]
+      - set: [rightowner.ident, 42]
+      - decl: [view, ref<AnchorItem>, { call: [wrong_anchor, leftowner, rightowner] }]
+      - print: ["UNEXPECTED ACCEPT: borrows:left returned right, ident=${view.ident}"]
+      - return: 0

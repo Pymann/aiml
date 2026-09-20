@@ -1,0 +1,28 @@
+# static-check: off
+# TIER: T2
+# CONSTRUCT: a function that RETURNS a container by value (§5 rule 1 — return shares/moves the
+#            handle to the caller). The callee builds a fresh list and returns it; the caller owns
+#            it (freed once at the caller's scope exit). Symbols: list<T> return, {call} init.
+- def:
+    name: make_seq
+    args: [[hdv, i32], [tlv, i32]]
+    return: list<i32>
+    body:
+      - decl: [out, list<i32>]
+      - call: [out.push, hdv]
+      - call: [out.push, tlv]
+      - return: out                    # move the handle to the caller (out's drop suppressed)
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [seq, list<i32>, { call: [make_seq, 4, 9] }]   # caller owns the returned handle
+      - if: { condition: { neq: [seq.len, 2] }, then: [{ print: ["FAIL len=${seq.len}"] }, { return: 1 }] }
+      - if: { condition: { neq: [{ at: [seq, 0] }, 4] }, then: [{ print: ["FAIL a"] }, { return: 1 }] }
+      - if: { condition: { neq: [{ at: [seq, 1] }, 9] }, then: [{ print: ["FAIL b"] }, { return: 1 }] }
+      - call: [seq.push, 1]            # caller mutates its owned list
+      - if: { condition: { neq: [seq.len, 3] }, then: [{ print: ["FAIL push"] }, { return: 1 }] }
+      # scope exit: seq drops (rc 1→0 → freed once)
+      - print: ["PASS 27 container_return"]
+      - return: 0

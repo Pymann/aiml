@@ -1,0 +1,19 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5.4: growth moves pointer slots, not the separately allocated pointee.
+# A ref from list<shared<T>> must remain usable across push, even with reallocation.
+- model: { name: GrowthItem, fields: [[ident, i32, 0]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pool, list<shared<GrowthItem>>]
+      - decl: [owner, shared<GrowthItem>, { share: { new: GrowthItem } }]
+      - set: [owner.ident, 37]
+      - call: [pool.push, owner]
+      - decl: [view, ref<GrowthItem>, { at: [pool, 0] }]
+      - decl: [second, shared<GrowthItem>, { share: { new: GrowthItem } }]
+      - call: [pool.push, second]
+      - if: { condition: { neq: [view.ident, 37] }, then: [{ print: ["FAIL shared pointee changed after push"] }, { return: 1 }] }
+      - print: ["PASS 25 review_shared_borrow_growth"]
+      - return: 0

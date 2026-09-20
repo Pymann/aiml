@@ -1,0 +1,18 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5.1: clone accepts the ref returned by at/get and yields an owned value.
+- model: { name: CloneItem, fields: [[ident, i32, 0]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pool, list<shared<CloneItem>>]
+      - decl: [owner, shared<CloneItem>, { share: { new: CloneItem } }]
+      - set: [owner.ident, 37]
+      - call: [pool.push, owner]
+      - decl: [duplicate, CloneItem, { clone: { at: [pool, 0] } }]
+      - if: { condition: { neq: [duplicate.ident, 37] }, then: [{ print: ["FAIL cloned value"] }, { return: 1 }] }
+      - set: [duplicate.ident, 99]
+      - if: { condition: { neq: [owner.ident, 37] }, then: [{ print: ["FAIL clone aliases original"] }, { return: 1 }] }
+      - print: ["PASS 26 review_clone_inline_borrow"]
+      - return: 0
