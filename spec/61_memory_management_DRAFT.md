@@ -1250,14 +1250,17 @@ argument beyond the call (see below) — a real added contract.
 
 ## 10. Diagnostics
 
-> **Implementation status (memV3).** Implemented today: **shallow `{copy}` of a move-only element**
-> (`list<ptr<T>>`) is rejected at compile time (negative probe `tests/lifetime/neg/n01`). The rest
-> of §10 — use-after-free, use-after-move, double-free, `free`-of-shared/`ref`/non-heap, illegal
-> cross-kind assignment, invalidated element borrow, and the leak / owning-cycle lints — require a
-> dedicated **ownership/borrow static-analysis pass** (flow analysis + a type-graph walk) and are a
-> separate workstream. (`free`-misuse also needs the `free:` statement routing unified: a non-`ptr`
-> operand is currently dropped before any check point.) Negative probes accrue under `neg/` as each
-> diagnostic lands.
+> **Implementation status (memV3).** A conservative, report-only borrow/ownership pass
+> (`src/core/borrow_check.cpp`, memV3-only, isolated from drop-planning) now implements most of
+> §10. **Errors:** shallow `{copy}` of a move-only element; illegal `shared→ptr` assignment;
+> **use-after-move**; **use-after-free**; **double-free**; `free` of a `shared<T>`; `free` of a
+> non-heap value. **Warnings:** the **owning-cycle** lint and the **persistent-leak** lint. The
+> pass is an intra-function Live/Moved/Freed flow with must-move/free merge across `if`/`else`
+> (loops/`try` reset) — no false positives on the acceptance suite. `free:` now materializes as a
+> real node under memV3 (active early-release + slot-null; OFF drops it byte-identically), which is
+> what makes the free-based checks possible. Probes: `tests/lifetime/neg/n01–n07`, `warn/w01–w02`.
+> **Remaining:** *invalidated element borrow* (§5.4 — needs alias/mutation flow analysis) and the
+> minor `ref→ptr` cross-kind case.
 
 - **use-after-free** — using a `ptr<T>` after `free` on it, within visible scope: error.
 - **use-after-move** — using a `ptr<T>` (or a `shared` handed to `{share}`) after it was
