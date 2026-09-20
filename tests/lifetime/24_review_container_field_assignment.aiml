@@ -1,0 +1,19 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5 rule 1: assigning a container field shares its handle (incref).
+# A mutation through the source field must be visible through the destination field.
+- model:
+    name: FieldPair
+    fields: [[left, list<i32>], [right, list<i32>]]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pair, FieldPair]
+      - call: [pair.left.push, 7]
+      - set: [pair.right, pair.left]
+      - if: { condition: { neq: [pair.right.len, 1] }, then: [{ print: ["FAIL field assignment: expected initial right.len=1, actual=${pair.right.len}"] }, { return: 2 }] }
+      - call: [pair.left.push, 8]
+      - if: { condition: { neq: [pair.right.len, 2] }, then: [{ print: ["FAIL field assignment must share: expected right.len=2, actual=${pair.right.len}"] }, { return: 1 }] }
+      - print: ["PASS 24 review_container_field_assignment"]
+      - return: 0

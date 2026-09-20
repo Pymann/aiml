@@ -378,6 +378,11 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
                                               : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)),
                                               ctx.builder.getInt64(elemSize),
                                               ctx.builder.getInt32(elemKind) }, "listh_copy");
+    } else if (iv && dynamic_cast<CallExpr*>(iv)) {
+        // spec/61 §5 (memV3): init from a call that RETURNS a list → the callee handed us a handle
+        // (moved). Use it directly; no fresh alloc, no incref (we own the returned rc).
+        IRValue* cv = visitExpression(iv);
+        handle = cv ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(cv)) : nullptr;
     } else {
         // Fresh empty list: new handle + initList on the heap struct.
         llvm::Function* nw = ctx.getFunction("aiml_list_handle_new", i8p, {});
@@ -498,6 +503,11 @@ void Compiler::emitMapHandleDecl(DeclStmt* decl) {
                                               : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)),
                                               ctx.builder.getInt64(keyStride), ctx.builder.getInt64(valStride),
                                               ctx.builder.getInt32(keyKind), ctx.builder.getInt32(valKind) }, "maph_copy");
+    } else if (iv && dynamic_cast<CallExpr*>(iv)) {
+        // spec/61 §5 (memV3): init from a call that RETURNS a map → the callee handed us a handle
+        // (moved). Use it directly; no fresh alloc, no incref (we own the returned rc).
+        IRValue* cv = visitExpression(iv);
+        handle = cv ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(cv)) : nullptr;
     } else {
         llvm::Function* nw = ctx.getFunction("aiml_map_handle_new", i8p, {});
         handle = ctx.builder.CreateCall(nw, {}, "maph_new");
@@ -579,6 +589,10 @@ void Compiler::emitBufferHandleDecl(DeclStmt* decl) {
         llvm::Function* cp = ctx.getFunction("aiml_buffer_handle_copy", i8p, {i8p});
         handle = ctx.builder.CreateCall(cp, { srcHandle ? srcHandle
                                               : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)) }, "bufh_copy");
+    } else if (iv && dynamic_cast<CallExpr*>(iv)) {
+        // spec/61 §5 (memV3): init from a call that RETURNS a buffer → use the returned handle.
+        IRValue* cv = visitExpression(iv);
+        handle = cv ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(cv)) : nullptr;
     } else {
         llvm::Function* nw = ctx.getFunction("aiml_buffer_handle_new", i8p, {});
         handle = ctx.builder.CreateCall(nw, {}, "bufh_new");
@@ -2480,6 +2494,10 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     // AIML v2 (P4): `return <model_local>` is a MOVE — the callee hands its reference to the caller,
     // so the returned model's kind-7 decref must NOT fire on the return path. Record its alloca.
     llvm::Value* retModelAddr = nullptr;
+    // spec/61 §5 (memV3): `return <container-local>` returns the HANDLE pointer (share/move to the
+    // caller). Capture the local's slot so (a) we return the loaded handle ptr and (b) its handle
+    // drop is exempted on the return path (a move — the caller takes the ref).
+    llvm::Value* retContainerSlot = nullptr;
     if (auto* rv = dynamic_cast<VariableExpr*>(retStmt->value.get())) {
         std::string base = rv->name;
         size_t dot = base.find('.');
@@ -2488,6 +2506,9 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
             retBaseId = bs->ownershipId;
             if (dot == std::string::npos && ctx.isRefcountModel(bs->typeName) && bs->ir_alloca_inst)
                 retModelAddr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bs->ir_alloca_inst));
+            if (dot == std::string::npos && bs->is_byref_arg && ctx.isMemV3ContainerHandle(bs->typeName)
+                && bs->ir_alloca_inst)
+                retContainerSlot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bs->ir_alloca_inst));
         }
     }
     // Only alias-safe return shapes may run the cleanup; otherwise the returned value's
@@ -2505,7 +2526,8 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     }
     // AIML v2 (P4): returning a refcount model is alias-safe to clean up — the returned object is
     // exempted by retModelAddr (a move), and every other local's kind-7 decref is order-independent.
-    bool safeToCleanup = (retTy && retTy->isVoidTy()) || retScalar || retBaseOwned || (retModelAddr != nullptr);
+    bool safeToCleanup = (retTy && retTy->isVoidTy()) || retScalar || retBaseOwned
+                         || (retModelAddr != nullptr) || (retContainerSlot != nullptr);
     // spec/61 §6.2 (T1): the returned value only aliases the owner's heap when the return TYPE is a
     // pointer/struct (`return x.field` handing out x's sub-heap). For a SCALAR/void return the value
     // is a copy that cannot alias — e.g. `return str_local.len` yields an i32 — so the owner must NOT
@@ -2529,6 +2551,11 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     emitScopeDrop(ctx, *it);
                     continue;
                 }
+                // spec/61 §5 (memV3): the returned container handle is MOVED to the caller → skip its
+                // decref/free on the return path (kind 2 list / 3 map / 8 buffer, isListHandle).
+                if (retContainerSlot && it->addr == retContainerSlot
+                    && (it->kind == 2 || it->kind == 3 || it->kind == 8))
+                    continue;
                 if (!retPlan || !retExit) continue;   // v1 drops need the ownership plan
                 if (mayDrop(*retPlan, *retExit, it->ownershipId))
                     emitScopeDrop(ctx, *it);
@@ -2568,6 +2595,13 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         if (retStmt->value) visitExpression(retStmt->value.get());
         emitReturnCleanup();   // §6/P2a: void → return value cannot alias a dropped owner
         ctx.ir_gen->createRet(nullptr);
+    } else if (retContainerSlot) {
+        // spec/61 §5 (memV3): return the container HANDLE pointer (moved to the caller). Load it
+        // from the local's slot, run cleanup (the returned handle is exempted above), then ret.
+        auto* i8p = llvm::PointerType::get(ctx.context, 0);
+        llvm::Value* handle = ctx.builder.CreateLoad(i8p, retContainerSlot, "ret_conh");
+        emitReturnCleanup();
+        ctx.ir_gen->createRet(ctx.ir_gen->wrap(handle));
     } else if (retStmt->value) {
         IRValue* val = visitExpression(retStmt->value.get());
         // spec/61: a returned string temp is moved to the caller → not a statement temp.

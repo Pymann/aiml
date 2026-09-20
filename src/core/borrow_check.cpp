@@ -35,6 +35,23 @@ struct BorrowChecker {
     // mutation of the container. refInvalid participates in the if/else/loop/try flow merge.
     std::map<std::string, std::string> refBorrowOf;   // ref local → container base name
     std::map<std::string, bool> refInvalid;           // ref local → invalidated?
+    std::map<std::string, std::string> containerType; // container local → declared type
+
+    // §5.4: a POINTER-element container (list<ptr/shared/ref>, map<:ptr/shared/ref>) stores
+    // pointer slots; growth (push/insert) moves the SLOTS but not the separately-allocated
+    // pointees, so an element borrow (which points at the pointee) survives growth. An
+    // INLINE-element container (list<i32>, list<ValueModel>, buffer) moves the elements
+    // themselves on growth → the borrow dangles.
+    bool isPointerElementContainer(const std::string& t) const {
+        std::string inner;
+        if (t.rfind("list<", 0) == 0 && t.back() == '>') inner = t.substr(5, t.size() - 6);
+        else if (t.rfind("cascade<", 0) == 0) return false;      // list<i32> layout — inline
+        else if (t.rfind("map<", 0) == 0 && t.back() == '>') {   // value type after ':'
+            std::string i = t.substr(4, t.size() - 5); size_t c = i.find(':');
+            inner = (c == std::string::npos) ? std::string() : i.substr(c + 1);
+        } else return false;                                     // buffer etc.
+        return inner.rfind("ptr<", 0) == 0 || inner.rfind("shared<", 0) == 0 || inner.rfind("ref<", 0) == 0;
+    }
 
     explicit BorrowChecker(const CompilerContext& c) : ctx(c) {}
 
@@ -134,8 +151,16 @@ struct BorrowChecker {
             }
             // §5.4: a ref<T> local bound from at/get on a container records the borrow (Valid).
             if (d->typeName.rfind("ref<", 0) == 0 && d->initialValue) {
-                std::string cont = borrowSourceContainer(d->initialValue.get());                if (!cont.empty()) { refBorrowOf[d->varName] = cont; refInvalid[d->varName] = false; }
+                std::string cont = borrowSourceContainer(d->initialValue.get());
+                if (!cont.empty()) { refBorrowOf[d->varName] = cont; refInvalid[d->varName] = false; }
             }
+            // §5.4: remember container local types so mutation can differentiate inline vs pointer
+            // element containers (growth invalidates borrows only for inline-element containers).
+            if ((d->typeName.rfind("list<", 0) == 0 || d->typeName.rfind("map<", 0) == 0
+                 || d->typeName.rfind("cascade<", 0) == 0 || d->typeName == "buffer"
+                 || d->typeName.rfind("buffer<", 0) == 0) && d->typeName.back() == '>')
+                containerType[d->varName] = d->typeName;
+            else if (d->typeName == "buffer") containerType[d->varName] = d->typeName;
             return;
         }
         if (auto* set = dynamic_cast<const SetStmt*>(s)) {
@@ -261,11 +286,16 @@ struct BorrowChecker {
             size_t dot = fn.rfind('.');
             std::string method = (dot == std::string::npos) ? fn : fn.substr(dot + 1);
             std::string recvBase = (dot == std::string::npos) ? "" : baseName(fn.substr(0, dot));
-            // §5.4: a structural mutation of a container invalidates every element borrow of it
-            // (the backing may reallocate/shift). pop/idx-set are excluded (no realloc/shift here).
-            if (!recvBase.empty() &&
-                (method == "push" || method == "append" || method == "add" || method == "insert" ||
-                 method == "remove" || method == "clear" || method == "sort" || method == "reverse")) {                for (auto& rb : refBorrowOf) if (rb.second == recvBase) refInvalid[rb.first] = true;
+            // §5.4: GROWTH (push/insert) invalidates element borrows only for INLINE-element
+            // containers — a pointer-element container (list<ptr/shared/ref>, map<:ptr/…>) keeps
+            // its pointees put across growth (probe 25). remove/clear/sort/reverse free/reorder and
+            // invalidate regardless. pop/idx-set are excluded (no realloc/shift).
+            if (!recvBase.empty()) {
+                bool growth  = (method == "push" || method == "append" || method == "add" || method == "insert");
+                bool reorder = (method == "remove" || method == "clear" || method == "sort" || method == "reverse");
+                bool ptrElem = isPointerElementContainer(containerType.count(recvBase) ? containerType[recvBase] : "");
+                if (reorder || (growth && !ptrElem))
+                    for (auto& rb : refBorrowOf) if (rb.second == recvBase) refInvalid[rb.first] = true;
             }
             if (method == "push" || method == "append" || method == "add") {
                 for (auto& a : c->args) { std::string src = asPtrVar(a.get()); if (!src.empty()) markMoved(src, line); }

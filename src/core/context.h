@@ -746,6 +746,19 @@ namespace AIML {
         return it->second.hasHeapFields;
     }
 
+    // spec/61 §5 Option B (memV3): true iff `typeName` is a container that is represented as a
+    // refcounted HANDLE (an 8-byte pointer) under memV3 — list<T>/map<K:V>/cascade<X>/buffer.
+    // Used wherever a container crosses a value boundary as a POINTER (function return type, and
+    // — see §5 — model fields / by-ref params already handle this). OFF → always false.
+    bool isMemV3ContainerHandle(const std::string& typeName) const {
+        if (!memV3) return false;
+        return (typeName.rfind("list<", 0) == 0 && typeName.back() == '>')
+            || (typeName.rfind("map<", 0) == 0 && typeName.back() == '>')
+            || (typeName.rfind("cascade<", 0) == 0 && typeName.back() == '>')
+            || typeName == "buffer"
+            || (typeName.rfind("buffer<", 0) == 0 && typeName.back() == '>');
+    }
+
     // Helper: Get LLVM Type from string
     llvm::Type* getLLVMType(const std::string& typeName) {
         if (typeName == "" || typeName == "<.balance" || typeName == "${ { +: [a, b] } }") {

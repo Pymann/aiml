@@ -1,17 +1,18 @@
 # static-check: off
-# NEGATIVE (§5.4/§10): using a ref<T> element borrow after the container was structurally mutated
-# (push may reallocate the backing) is an error — the borrow may dangle.
+# NEGATIVE (§5.4/§10): using a ref<T> element borrow of an INLINE-element container after growth
+# (push may reallocate the backing → the inline element MOVES) is an error — the borrow dangles.
+# (A pointer-element container survives growth; see probe 25_review_shared_borrow_growth.)
 # EXPECT-ERROR: invalidated element borrow
-- model: { name: Wid, fields: [[ident, i32, 0]] }
+- model: { name: Slot, fields: [[ident, i32, 0]] }
 - def:
     name: main
     return: i32
     body:
-      - decl: [pool, list<shared<Wid>>]
-      - decl: [spa, shared<Wid>, { share: { new: Wid } }]
-      - call: [pool.push, spa]
-      - decl: [view, ref<Wid>, { at: [pool, 0] }]   # borrow element 0
-      - decl: [spb, shared<Wid>, { share: { new: Wid } }]
-      - call: [pool.push, spb]                        # structural mutation → invalidates view
+      - decl: [pool, list<Slot>]                     # INLINE value-model elements
+      - decl: [one, Slot]
+      - call: [pool.push, one]
+      - decl: [view, ref<Slot>, { at: [pool, 0] }]   # borrow inline element 0
+      - decl: [two, Slot]
+      - call: [pool.push, two]                        # growth reallocs → element moves → view dangles
       - if: { condition: { neq: [view.ident, 0] }, then: [{ print: ["x"] }, { return: 1 }] }  # ← use
       - return: 0
