@@ -58,4 +58,23 @@ if [ "$MODE" = "spec61" ] && [ -d tests/lifetime/neg ]; then
   fail=$((fail + nfail))
 fi
 
+# ── Warn probes (§10 lints): each MUST compile+run (rc 0) AND emit its `# EXPECT-WARN:` message.
+if [ "$MODE" = "spec61" ] && [ -d tests/lifetime/warn ]; then
+  wpass=0; wfail=0
+  for f in tests/lifetime/warn/*.aiml; do
+    [ -e "$f" ] || continue
+    base=$(basename "$f")
+    [ -n "$ONLY" ] && [[ "$base" != *"$ONLY"* ]] && continue
+    want=$(grep -m1 -oE '# EXPECT-WARN: .*' "$f" | sed 's/# EXPECT-WARN: //')
+    out=$(env "${env_common[@]}" "$AIML" "$f" -r 2>&1); rc=$?
+    if [ $rc -eq 0 ] && echo "$out" | grep -qF "$want"; then
+      wpass=$((wpass+1)); printf "  ok   [WARN] %-30s warned: %s\n" "$base" "$want"
+    else
+      wfail=$((wfail+1)); printf "  FAIL [WARN] %-30s rc=%-3d (wanted rc0 + warning: %s)\n" "$base" "$rc" "$want"
+    fi
+  done
+  echo "── warn: $wpass warned as expected, $wfail wrong (MODE=$MODE) ──"
+  fail=$((fail + wfail))
+fi
+
 [ $fail -eq 0 ]

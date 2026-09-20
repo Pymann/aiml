@@ -5139,6 +5139,8 @@ void Compiler::visitFunction(FunctionDecl* func) {
         // spec/61 §10 (memV3-only): conservative ownership diagnostics (use-after-move/free,
         // double-free). Pure reporting — never affects codegen or the OFF/deployed path.
         AIML::AST::checkBorrowsMemV3(ctx, *func);
+        // §10 owning-cycle lint — once per compile (types are all registered by now).
+        if (ctx.memV3 && !ctx.ownCycleLintDone) { ctx.ownCycleLintDone = true; AIML::AST::checkOwningCyclesMemV3(ctx); }
         OwnershipPlan ownPlan = buildOwnershipPlan(ctx, *func);
         const OwnershipPlan* prevPlan = ctx.ownershipPlan;
         ctx.ownershipPlan = &ownPlan;

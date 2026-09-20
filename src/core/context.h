@@ -381,6 +381,8 @@ namespace AIML {
     // the spec/61 target behavior, landed incrementally (first: string assignment = share/incref,
     // §4). DEFAULT OFF → the deployed/OFF path is byte-identical. See spec/61_memory_management.
     bool memV3 = false;
+    // spec/61 §10 owning-cycle lint: run once per compile (set by the first visitFunction).
+    bool ownCycleLintDone = false;
     std::map<std::string, FunctionInfo> functions;
     // spec/61 return-ownership: ORIGINAL (un-mangled) short names of functions/methods
     // declared `owns_return: true`. Captured at parse-order (before method-name mangling)

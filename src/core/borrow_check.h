@@ -19,4 +19,8 @@ namespace AIML { namespace AST {
 class FunctionDecl;
 // Emit spec/61 §10 ownership diagnostics for `fn`. No-op unless ctx.memV3 is set.
 void checkBorrowsMemV3(const ::CompilerContext& ctx, const FunctionDecl& fn);
+// spec/61 §10 owning-cycle lint (WARNING): a type graph whose owning edges (ptr/shared/container
+// elements/nested value models) form a cycle with no ref<T> to break it can leak. Runs once over
+// all registered model types. No-op unless ctx.memV3.
+void checkOwningCyclesMemV3(const ::CompilerContext& ctx);
 } }

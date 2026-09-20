@@ -4,7 +4,10 @@
 #include "context.h"
 #include "../../logger.h"   // LOG_ERROR (fails compilation)
 #include <map>
+#include <set>
+#include <vector>
 #include <string>
+#include <functional>
 
 namespace AIML { namespace AST {
 namespace {
@@ -230,6 +233,75 @@ void checkBorrowsMemV3(const ::CompilerContext& ctx, const FunctionDecl& fn) {
     BorrowChecker bc(ctx);
     // Parameters are borrows by default (§8) — do not track them as owned ptr locals.
     bc.run(fn.body.get());
+}
+
+// ── §10 owning-cycle lint ─────────────────────────────────────────────────────
+namespace {
+// The owned model types a field of `typeName` transitively references. `ref<T>` is WEAK →
+// contributes nothing (it is the cycle-breaker). Descends ptr/shared/list/cascade/buffer/map.
+static void collectOwnedModels(const ::CompilerContext& ctx, const std::string& typeName,
+                               std::vector<std::string>& out) {
+    std::string t = typeName;
+    if (t.rfind("ref<", 0) == 0) return;                       // weak edge — not owned
+    auto inner = [](const std::string& s, size_t pfx) { return s.substr(pfx, s.size() - pfx - 1); };
+    if (t.rfind("ptr<", 0) == 0 && t.back() == '>')    { collectOwnedModels(ctx, inner(t, 4), out); return; }
+    if (t.rfind("shared<", 0) == 0 && t.back() == '>') { collectOwnedModels(ctx, inner(t, 7), out); return; }
+    if (t.rfind("list<", 0) == 0 && t.back() == '>')   { collectOwnedModels(ctx, inner(t, 5), out); return; }
+    if (t.rfind("cascade<", 0) == 0 && t.back() == '>'){ collectOwnedModels(ctx, inner(t, 8), out); return; }
+    if (t.rfind("buffer<", 0) == 0 && t.back() == '>') { collectOwnedModels(ctx, inner(t, 7), out); return; }
+    if (t.rfind("map<", 0) == 0 && t.back() == '>') {          // values are owned; keys scalar/string
+        std::string i = inner(t, 4); size_t c = i.find(':');
+        if (c != std::string::npos) collectOwnedModels(ctx, i.substr(c + 1), out);
+        return;
+    }
+    auto it = ctx.classes.find(t);
+    if (it != ctx.classes.end() && it->second.isModel && !it->second.isBuiltin)
+        out.push_back(t);                                       // an owned model reference
+}
+} // namespace
+
+void checkOwningCyclesMemV3(const ::CompilerContext& ctx) {
+    if (!ctx.memV3) return;
+    // Build owning adjacency over model types.
+    std::map<std::string, std::vector<std::string>> adj;
+    for (const auto& [name, ci] : ctx.classes) {
+        if (!ci.isModel || ci.isBuiltin) continue;
+        auto& edges = adj[name];
+        for (const auto& [mn, mem] : ci.members) {
+            (void)mn;
+            std::vector<std::string> owned;
+            collectOwnedModels(ctx, mem.typeName, owned);
+            for (auto& b : owned) if (b != name || true) edges.push_back(b);  // include self-cycles
+        }
+    }
+    // DFS cycle detection (white/gray/black), dedupe warnings by the cycle's member set.
+    std::map<std::string, int> color;       // 0 white, 1 gray, 2 black
+    std::vector<std::string> stack;
+    std::set<std::string> warned;           // sorted-join keys already reported
+    std::function<void(const std::string&)> dfs = [&](const std::string& u) {
+        color[u] = 1; stack.push_back(u);
+        auto it = adj.find(u);
+        if (it != adj.end()) for (const std::string& v : it->second) {
+            if (color[v] == 1) {
+                // back-edge → cycle from v..u on the stack.
+                std::vector<std::string> cyc;
+                bool in = false;
+                for (auto& n : stack) { if (n == v) in = true; if (in) cyc.push_back(n); }
+                std::set<std::string> keyset(cyc.begin(), cyc.end());
+                std::string key; for (auto& n : keyset) key += n + ",";
+                if (warned.insert(key).second) {
+                    std::string path; for (size_t i = 0; i < cyc.size(); ++i) path += (i ? " → " : "") + cyc[i];
+                    path += " → " + v;
+                    LOG_WARNING("spec/61 §10 owning-cycle: " + path + " form a cycle of OWNING edges "
+                        "(ptr/shared/container/nested) with no ref<T> to break it — this structure can "
+                        "leak (the refcounts never reach 0). Make one back-edge a ref<T> (§5.2).");
+                }
+            } else if (color[v] == 0) dfs(v);
+        }
+        color[u] = 2; stack.pop_back();
+    };
+    for (const auto& [name, ci] : ctx.classes)
+        if (ci.isModel && !ci.isBuiltin && color[name] == 0) dfs(name);
 }
 
 } } // namespace AIML::AST
