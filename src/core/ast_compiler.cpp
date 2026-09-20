@@ -4354,10 +4354,14 @@ void Compiler::visitTopLevel(Node* node) {
                     anyError = true;
                     continue;
                 }
-                // Compare return type.
+                // Compare return type — mirror visitFunction's lowering so a memV3 container/
+                // refcount-model return (lowered to a handle pointer) matches the interface's
+                // declared type (also a pointer under memV3).
                 std::string ifaceRet = m.returnType.empty() ? "void" : m.returnType;
-                llvm::Type* expectedRet = static_cast<llvm::Type*>(
-                    ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(ifaceRet)));
+                llvm::Type* expectedRet =
+                    (ctx.isRefcountModel(ifaceRet) || ctx.isMemV3ContainerHandle(ifaceRet))
+                    ? static_cast<llvm::Type*>(i8p)
+                    : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(ifaceRet)));
                 if (expectedRet && fnTy->getReturnType() != expectedRet) {
                     LOG_ERROR(ctx.fmtLoc(cls->sourceNode) +
                         "class '" + cls->name + "' method '" + m.name +
@@ -4368,8 +4372,15 @@ void Compiler::visitTopLevel(Node* node) {
                 // Compare arg types (skip arg 0 = this).
                 bool argMismatch = false;
                 for (size_t ai = 0; ai < m.args.size(); ++ai) {
-                    llvm::Type* expectedArg = static_cast<llvm::Type*>(
-                        ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(m.args[ai].second)));
+                    // Mirror visitFunction's parameter lowering: list<>/map<> are by-ref (pointer),
+                    // a refcount-model (incl. memV3 shared<>) is a %M* pointer — otherwise the
+                    // declared type. Keeps the interface check consistent under memV3.
+                    const std::string& at = m.args[ai].second;
+                    bool byref = at.rfind("list<", 0) == 0 || at.rfind("map<", 0) == 0;
+                    bool refModel = ctx.isRefcountModel(at);
+                    llvm::Type* expectedArg = (byref || refModel)
+                        ? static_cast<llvm::Type*>(i8p)
+                        : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(at)));
                     if (expectedArg && fnTy->getParamType(ai + 1) != expectedArg) {
                         LOG_ERROR(ctx.fmtLoc(cls->sourceNode) +
                             "class '" + cls->name + "' method '" + m.name +
