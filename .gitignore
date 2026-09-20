@@ -33,3 +33,5 @@ assets/
 
 out/aot_repro/
 aot_trycatch_repro
+
+out-asan/
