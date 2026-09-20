@@ -34,14 +34,19 @@ All three §5-rule-1 verbs are covered: **assigning** (locals, probes 03/17/19),
 through the existing `is_byref_arg` container-param path, so a callee's mutation is visible to
 the caller; verified as real aliasing, not a value-copy).
 
-**§10 diagnostics (compile-time, negative probes in `neg/`).** Implemented: **shallow `{copy}`
-of a move-only element** (`list<ptr<T>>` etc.) is rejected (`neg/n01`). The runner's NEG section
-requires each `neg/*.aiml` to be rejected with its `# EXPECT-ERROR:` message. **Remaining §10 =
-a dedicated ownership/borrow static-analysis pass** (its own workstream): use-after-free,
-use-after-move, double-free, free-of-shared/ref/non-heap (needs the `free:` statement routing
-unified first — a non-ptr operand is currently dropped before the check point), illegal
-cross-kind assignment (`shared→ptr`), invalidated element borrow, and the leak / owning-cycle
-lints. These need flow analysis + a type-graph pass and are out of scope for the runtime probes.
+**§10 diagnostics (memV3-only, isolated report-only pass `src/core/borrow_check.cpp`).** The
+runner has a **NEG** section (each `neg/*.aiml` must be REJECTED with its `# EXPECT-ERROR:`) and a
+**WARN** section (each `warn/*.aiml` must compile+run *and* emit its `# EXPECT-WARN:`).
+Implemented — **errors:** shallow `{copy}` of a move-only element (`neg/n01`), illegal
+`shared→ptr` cross-kind assignment (`n02`), **use-after-move** (`n03`), **use-after-free**
+(`n04`), **double-free** (`n05`), **free of shared\<T\>** (`n06`), **free of a non-heap value**
+(`n07`). **Warnings:** **owning-cycle** lint (`warn/w01`), **persistent-leak** lint (`w02`).
+The borrow-checker is a conservative intra-function flow pass (Live/Moved/Freed with
+must-move/free merge across if/else; loops/try reset) — no false positives on the 23 positive
+probes. To make the free checks possible, `free:` now materializes as a real node **under memV3**
+(active early-release + slot-null; OFF still drops it byte-identically). **Remaining §10:**
+*invalidated element borrow* (§5.4 — needs alias/mutation flow analysis) and `ref→ptr` cross-kind
+(minor); both scoped for later.
 
 **`dyn_array<T>` is Class-4, not Class-3** (§5.6, resolved): a *unique, unmanaged* single-`malloc`
 scalar buffer — its advantage over `list` is exactly ONE allocation and zero per-op rc. Under
