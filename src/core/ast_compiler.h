@@ -142,7 +142,10 @@ private:
     IRValue* resolveProperty(Symbol* baseSym, const std::string& propName);
     // Like resolveProperty but returns the GEP pointer (for writes) instead of loading.
     // Sets outTypeName to the final member's type name for caller-side coercions.
-    IRValue* resolvePropertyWritePtr(Symbol* baseSym, const std::string& propName, std::string& outTypeName);
+    // wantContainerSlot: for a memV3 container field, return the pointer-to-handle SLOT (not the
+    // loaded handle) so a `set:[obj.field, X]` can share into it (§5 rule 1).
+    IRValue* resolvePropertyWritePtr(Symbol* baseSym, const std::string& propName, std::string& outTypeName,
+                                     bool wantContainerSlot = false);
     // Address (storage pointer) of an addressable lvalue expression: a plain
     // variable OR a dotted member-access (a.b.c).  Used for unary '&' and for
     // passing member-access as a ptr<T> argument.  outTypeName gets the type

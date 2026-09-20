@@ -1,0 +1,19 @@
+# static-check: off
+# NEGATIVE Spec 61 §8: a plain ptr<T> parameter moves ownership, without consumed.
+# EXPECT-ERROR: use-after-move
+- model: { name: SinkItem, fields: [[ident, i32, 0]] }
+- def:
+    name: take_owner
+    args: [[item, ptr<SinkItem>]]
+    return: i32
+    body:
+      - return: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [owner, ptr<SinkItem>, { new: SinkItem }]
+      - call: [take_owner, owner]
+      # Pointer comparison reads the moved variable without dereferencing potentially freed memory.
+      - if: { condition: { peq: [owner, null] }, then: [{ print: ["UNEXPECTED ACCEPT: moved pointer read (null)"] }], else: [{ print: ["UNEXPECTED ACCEPT: moved pointer read (non-null)"] }] }
+      - return: 0

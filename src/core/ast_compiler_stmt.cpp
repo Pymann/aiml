@@ -2210,6 +2210,58 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         return;
                     }
                 }
+                // spec/61 §5 rule 1 (memV3): `set:[obj.field, src]` where field is a CONTAINER
+                // SHARES the handle (incref new, decref old, store) — a mutation through either
+                // field is then visible through the other (probe 24). The RHS was evaluated to the
+                // source handle (resolveProperty loads a container field/local's handle).
+                if (ctx.memV3 && ctx.isMemV3ContainerHandle(finalTypeName)) {
+                    auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                    llvm::Type* i32Ty = ctx.builder.getInt32Ty();
+                    llvm::Type* i64Ty = ctx.builder.getInt64Ty();
+                    // targetGep is the LOADED handle (receiver form); re-resolve to the SLOT so we
+                    // can store the shared handle into the field.
+                    std::string slotTy;
+                    IRValue* slotIR = resolvePropertyWritePtr(&tmpBaseSym, propName, slotTy, /*wantContainerSlot=*/true);
+                    llvm::Value* dstSlot = slotIR ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(slotIR)) : nullptr;
+                    llvm::Value* newH    = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                    if (!dstSlot) { /* fall through to generic path */ } else
+                    if (newH && newH->getType()->isPointerTy()) {
+                        std::string kind = finalTypeName.rfind("map<",0)==0 ? "map"
+                            : ((finalTypeName=="buffer"||finalTypeName.rfind("buffer<",0)==0) ? "buffer" : "list");
+                        // incref-new BEFORE decref-old (self-assign safe).
+                        llvm::Function* inc = ctx.getFunction("aiml_"+kind+"_handle_incref", ctx.builder.getVoidTy(), {i8p});
+                        ctx.builder.CreateCall(inc, { newH });
+                        if (ctx.lifetimeDropsEnabled) {
+                            llvm::Value* oldH = ctx.builder.CreateLoad(i8p, dstSlot, "setf_old_conh");
+                            llvm::Value* nullp = llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p));
+                            if (kind == "buffer") {
+                                llvm::Function* rel = ctx.getFunction("aiml_buffer_handle_release", ctx.builder.getVoidTy(), {i8p});
+                                ctx.builder.CreateCall(rel, { oldH });
+                            } else if (kind == "list") {
+                                std::string en = finalTypeName.rfind("cascade<",0)==0 ? "i32"
+                                    : finalTypeName.substr(5, finalTypeName.size()-6);
+                                int ek = (en=="string")?1 : (ctx.isRefcountModel(en)?3:0);
+                                llvm::Function* rel = ctx.getFunction("aiml_list_handle_release", ctx.builder.getVoidTy(),
+                                    {i8p, i32Ty, i64Ty, i8p, i32Ty});
+                                ctx.builder.CreateCall(rel, { oldH, ctx.builder.getInt32(ek),
+                                    ctx.builder.getInt64(8), nullp, ctx.builder.getInt32(0) });
+                            } else { // map
+                                llvm::Function* rel = ctx.getFunction("aiml_map_handle_release", ctx.builder.getVoidTy(),
+                                    {i8p, i32Ty, i64Ty, i32Ty, i64Ty, i8p, i32Ty});
+                                std::string inr = finalTypeName.substr(4, finalTypeName.size()-5);
+                                size_t col = inr.find(':');
+                                std::string kn = col==std::string::npos?inr:inr.substr(0,col);
+                                std::string vn = col==std::string::npos?std::string("i32"):inr.substr(col+1);
+                                int kk = (kn=="string")?1:0;
+                                int vk = (vn=="string")?1:(ctx.isRefcountModel(vn)?3:0);
+                                ctx.builder.CreateCall(rel, { oldH, ctx.builder.getInt32(kk), ctx.builder.getInt64(8),
+                                    ctx.builder.getInt32(vk), ctx.builder.getInt64(8), nullp, ctx.builder.getInt32(0) });
+                            }
+                        }
+                        ctx.builder.CreateStore(newH, dstSlot);
+                        return;
+                    }
+                }
                 // spec/61 §7.0 — RELEASE the member's PREVIOUS value before overwriting it, so a
                 // repeated assignment (poll_board_state's `<.board_state = …`, take_gone_players's
                 // `<.entries = kept`) does not leak the prior heap. SCOPE (important): only a
