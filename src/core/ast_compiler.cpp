@@ -2,6 +2,7 @@
 #include "ast_compiler.h"
 #include "ast_builder.h"
 #include "ownership_analyzer.h"   // spec/61 §4: per-function ownership plan
+#include "borrow_check.h"         // spec/61 §10: memV3-only ownership diagnostics
 #include <limits>
 #include "asset_scanner.h"
 #include "builtin_registry.h"
@@ -5135,6 +5136,9 @@ void Compiler::visitFunction(FunctionDecl* func) {
         // spec/61 §4: compute the intraprocedural ownership plan and make it current for the
         // whole body emission (RAII restore). visitDeclStmt tags ScopeDrops with their slot id;
         // visitBlockStmt then gates each drop through mayDrop() (fail-safe: doubt → no drop).
+        // spec/61 §10 (memV3-only): conservative ownership diagnostics (use-after-move/free,
+        // double-free). Pure reporting — never affects codegen or the OFF/deployed path.
+        AIML::AST::checkBorrowsMemV3(ctx, *func);
         OwnershipPlan ownPlan = buildOwnershipPlan(ctx, *func);
         const OwnershipPlan* prevPlan = ctx.ownershipPlan;
         ctx.ownershipPlan = &ownPlan;

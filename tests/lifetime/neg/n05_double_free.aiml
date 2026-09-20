@@ -1,0 +1,12 @@
+# static-check: off
+# NEGATIVE (§10): freeing the same ptr<T> twice is an error.
+# EXPECT-ERROR: double free
+- model: { name: Wid, fields: [[ident, i32, 0]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [box, ptr<Wid>, { new: Wid }]
+      - free: [box]
+      - free: [box]                          # ← double free
+      - return: 0
