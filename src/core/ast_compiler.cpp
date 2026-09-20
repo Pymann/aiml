@@ -1328,6 +1328,13 @@ void Compiler::checkPrefabUsage(Program* prog) {
     }
 }
 
+// Forward declarations for the §5.1 recursive-type registration emitted in __aiml_init (both are
+// file-static, defined further down after Compiler::compile).
+static std::vector<AimlTypeNode> serBuildSubtree(const std::string& typeName, int32_t offset,
+                                                 CompilerContext& ctx, const llvm::DataLayout& dl);
+static void serEmitGlobal(const std::string& name, const std::vector<AimlTypeNode>& nodes,
+                          CompilerContext& ctx, CompilerContext::ClassInfo& classInfo);
+
 void Compiler::compile(Program* prog) {
     if (!prog) return;
 
@@ -1715,6 +1722,36 @@ void Compiler::compile(Program* prog) {
         if (strict && hasExplicitMainCall) {
             LOG_ERROR("explicit `- call: [main]` at top-level causes a double-call: "
                       "`main` is already invoked by the C entry-point.  Remove the explicit call.");
+        }
+
+        // spec/61 §5.1 (memV3): register each recursive type's descriptor (referenced by an
+        // AIML_TD_PTR_REF) under its runtime type-id, so the clone/free walkers can follow the
+        // recursive edge. Runs in __aiml_init (insert point is still __aiml_init here). Builds a
+        // standalone descriptor for any referenced type that lacks one.
+        if (ctx.memV3 && !ctx.modelTypeIds.empty()) {
+            auto* bbInit = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
+            if (bbInit && !bbInit->getTerminator()) {
+                auto* i32 = ctx.builder.getInt32Ty();
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                llvm::DataLayout dl(&ctx.module);
+                llvm::Function* regF = ctx.getFunction("aiml_ser_register_type",
+                    ctx.builder.getVoidTy(), {i32, i8p, i32, i32});
+                for (auto& [tname, tid] : ctx.modelTypeIds) {
+                    auto ci = ctx.classes.find(tname);
+                    if (ci == ctx.classes.end() || !ci->second.type) continue;
+                    if (!ci->second.serNodesVar) {
+                        std::vector<AimlTypeNode> nodes = serBuildSubtree(tname, 0, ctx, dl);
+                        serEmitGlobal(tname, nodes, ctx, ci->second);
+                    }
+                    if (!ci->second.serNodesVar) continue;
+                    int32_t sz = (int32_t)dl.getTypeAllocSize(ci->second.type);
+                    ctx.builder.CreateCall(regF, {
+                        ctx.builder.getInt32(tid),
+                        static_cast<llvm::Value*>(ci->second.serNodesVar),
+                        ctx.builder.getInt32(ci->second.serNodesCount),
+                        ctx.builder.getInt32(sz) });
+                }
+            }
         }
 
         // Finish __aiml_init
@@ -3167,6 +3204,20 @@ static std::vector<AimlTypeNode> serBuildSubtree(
             auto sub = serBuildSubtree(inner, 0, ctx, dl);
             res.push_back({AIML_TD_PTR_STRUCT, 1, 0, offset, inner_sz, 0});
             for (auto& n : sub) res.push_back(snShift(n, 1));
+            return res;
+        }
+        // spec/61 §5.1 (memV3): a RECURSIVE owning ptr<T> (T mid-expansion on the DFS path) cannot
+        // be inlined in the static descriptor. Emit an AIML_TD_PTR_REF that references T by runtime
+        // type-id; the clone/free walkers look T's descriptor up and recurse (memoized), so a
+        // finite recursive chain is deep-cloned/freed instead of shared. OFF keeps the raw-pointer
+        // cut (byte-identical). Only for owning ptr<T> — a ref<T> weak edge stays a raw pointer.
+        if (ctx.memV3 && typeName.rfind("ptr<", 0) == 0
+            && pit != ctx.classes.end() && !pit->second.isBuiltin && pit->second.type
+            && g_serActivePath.count(inner)) {
+            int32_t inner_sz = (int32_t)dl.getTypeAllocSize(pit->second.type);
+            int32_t tid = ctx.getModelTypeId(inner);
+            int32_t isModel = ctx.isRefcountModel(inner) ? 1 : 0;
+            res.push_back({AIML_TD_PTR_REF, tid, isModel, offset, inner_sz, 0});
             return res;
         }
         // Inner type unknown or a recursive back-ref — fall through to raw-pointer
