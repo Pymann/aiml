@@ -5534,7 +5534,7 @@ IRValue* Compiler::emitLValueAddress(Expr* e, std::string& outTypeName) {
     return resolvePropertyWritePtr(&tmp, prop, outTypeName);
 }
 
-IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& propName, std::string& outTypeName) {
+IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& propName, std::string& outTypeName, bool wantContainerSlot) {
     std::string className = baseSym->typeName;
     if ((className.rfind("ptr<", 0) == 0 || className.rfind("ref<", 0) == 0) && className.back() == '>') {
         className = className.substr(4, className.length() - 5);
@@ -5660,11 +5660,10 @@ IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& p
 
         outTypeName = member.typeName;
         IRValue* fieldGep = ctx.ir_gen->createStructGEP(structTy, structPtr, member.index, "set_prop_ptr_w");
-        // spec/61 §5 Option B (memV3): a list<T>/cascade<X>/map<K:V> field is a POINTER to a
-        // handle. As a method RECEIVER (e.g. `obj.tags.push`, `obj.slots.put`) callers want the
-        // handle (a pointer to the container struct), so LOAD it. (A whole-container replace
-        // `set:[obj.tags, L]` would want the slot address; not yet exercised under memV3.)
-        if (ctx.memV3 &&
+        // spec/61 §5 Option B (memV3): a container field is a POINTER to a handle. As a method
+        // RECEIVER (obj.tags.push) callers want the handle → LOAD it. The whole-container SET path
+        // (set:[obj.field, X]) computes the slot itself (it detects the container field first).
+        if (!wantContainerSlot && ctx.memV3 &&
             ((member.typeName.rfind("list<", 0) == 0 || member.typeName.rfind("cascade<", 0) == 0
               || member.typeName.rfind("map<", 0) == 0 || member.typeName.rfind("buffer<", 0) == 0)
               ? member.typeName.back() == '>'

@@ -1,0 +1,19 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5.1: a finite acyclic chain must be deeply cloned despite its recursive TYPE.
+- model: { name: ChainNode, fields: [[ident, i32, 0], [next, ptr<ChainNode>]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [root, ptr<ChainNode>, { new: ChainNode }]
+      - decl: [child, ptr<ChainNode>, { new: ChainNode }]
+      - set: [child.ident, 42]
+      - set: [root.next, child]
+      - decl: [duplicate, ptr<ChainNode>, { clone: root }]
+      - if: { condition: { peq: [duplicate, root] }, then: [{ print: ["FAIL clone root aliases original"] }, { return: 2 }] }
+      - if: { condition: { peq: [duplicate.next, null] }, then: [{ print: ["FAIL clone lost owned child"] }, { return: 3 }] }
+      - if: { condition: { peq: [duplicate.next, root.next] }, then: [{ print: ["FAIL recursive clone shares unique owned child with original"] }, { return: 1 }] }
+      - if: { condition: { neq: [duplicate.next.ident, 42] }, then: [{ print: ["FAIL cloned child value"] }, { return: 4 }] }
+      - print: ["PASS 29 more_clone_recursive_owned"]
+      - return: 0

@@ -1,0 +1,20 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5.1 rule 4: external weak references are preserved, never deep-cloned.
+- model: { name: ExternalItem, fields: [[ident, i32, 37]] }
+- model: { name: Observer, fields: [[target, ref<ExternalItem>]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [owner, shared<ExternalItem>, { share: { new: ExternalItem } }]
+      - decl: [original, Observer]
+      - set: [original.target, owner]
+      - decl: [duplicate, Observer, { clone: original }]
+      - decl: [same, bool, { peq: [duplicate.target, owner] }]
+      # Clear weak slots before teardown; neither is supposed to own its target.
+      - set: [original.target, null]
+      - set: [duplicate.target, null]
+      - if: { condition: { eq: [same, false] }, then: [{ print: ["FAIL external weak target was cloned instead of preserved"] }, { return: 1 }] }
+      - print: ["PASS 28 more_clone_external_weak"]
+      - return: 0
