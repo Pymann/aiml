@@ -407,6 +407,25 @@ IRValue* Compiler::visitCall(CallExpr* call) {
              ptrVal = ctx.builder.CreateBitCast(ptrVal, ctx.builder.getInt8Ty()->getPointerTo());
          }
          ctx.builder.CreateCall(freeFunc, {ptrVal});
+         // spec/61 §6.1 (memV3): `free` is an EARLY release — null the slot so the scope-default
+         // drop (kind 4/7, null-safe) becomes a no-op instead of double-freeing. Only when the
+         // operand is a plain local we can address. (Under memV3 the `free:` node only exists at
+         // all — OFF leaves the statement dropped, byte-identical.)
+         if (ctx.memV3) {
+             if (auto* fv = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get())) {
+                 if (fv->name.find('.') == std::string::npos) {
+                     Symbol* fs = resolveVariable(fv->name);
+                     if (fs) {
+                         llvm::Value* slot = fs->ir_alloca_inst
+                             ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fs->ir_alloca_inst))
+                             : fs->alloca_inst;
+                         auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                         if (slot) ctx.builder.CreateStore(
+                             llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), slot);
+                     }
+                 }
+             }
+         }
          return ctx.ir_gen->getInt32(0);
     }
     

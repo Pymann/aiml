@@ -2,6 +2,7 @@
 #include "../ast_builder.h"
 #include "statement_builder.h"
 #include "expression_builder.h"
+#include <cstdlib>   // std::getenv — spec/61 §10 memV3 gate for materializing `free:`
 
 namespace AIML {
 namespace AST {
@@ -303,6 +304,30 @@ std::unique_ptr<Node> StatementBuilder::finish() {
          if (exprArg) ret->value = std::move(exprArg);
          ret->sourceLine = capturedLine;
          return ret;
+    }
+    // spec/61 §6.1/§10 (memV3 only): materialize `free: [p]` as an ExprStmt(CallExpr("free", …))
+    // so the explicit release is a real AST node — enabling the §10 ownership diagnostics
+    // (use-after-free / double-free, borrow_check.cpp) AND an active early-release in codegen.
+    // Under OFF this key is left to drop to nullptr exactly as before (byte-identical: `free:`
+    // has historically been a no-op, with scope-drop doing the release). Gated by the same env
+    // read as CompilerContext::memV3 so parse-time and compile-time agree.
+    if (type == "free") {
+        static const bool kMemV3 = [](){
+            const char* mv = std::getenv("AIML_MEM_V3");
+            if (!mv) return false; std::string s = mv;
+            return !(s.empty() || s == "0" || s == "off" || s == "OFF" || s == "false" || s == "FALSE");
+        }();
+        if (kMemV3 && (args.size() >= 1 || !orderedCallArgs.empty())) {
+            auto call = std::make_unique<CallExpr>("free");
+            for (auto& ea : orderedCallArgs) call->args.push_back(std::move(ea));
+            for (size_t i = 0; i < args.size(); ++i)
+                call->args.push_back(parseScalarExpr(args[i].first, args[i].second));
+            call->sourceLine = capturedLine;
+            auto exprStmt = std::make_unique<ExprStmt>(std::move(call));
+            exprStmt->sourceLine = capturedLine;
+            return exprStmt;
+        }
+        // OFF: fall through to the historical nullptr drop.
     }
     if (type == "throw") {
          if (exprArg) {

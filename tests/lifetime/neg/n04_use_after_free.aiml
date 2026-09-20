@@ -1,0 +1,12 @@
+# static-check: off
+# NEGATIVE (§10): using a ptr<T> after `free` is an error.
+# EXPECT-ERROR: use-after-free
+- model: { name: Wid, fields: [[ident, i32, 0]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [box, ptr<Wid>, { new: Wid }]
+      - free: [box]
+      - set: [box.ident, 3]                 # ← use-after-free
+      - return: 0
