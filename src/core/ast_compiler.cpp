@@ -5787,18 +5787,30 @@ IRValue* Compiler::visitSysCloneCall(CallExpr* call) {
         return ctx.ir_gen->getInt32(0);
     }
 
-    // Resolve argument variable + type.
+    // Resolve argument + type. Two forms:
+    //   • a bare variable — clone its declared type (from the symbol table);
+    //   • spec/61 §5.1 (review probe 26): an inline element BORROW ({at:[c,i]}/c.at(i)/c.get(k)) —
+    //     clone the borrowed value as the DECLARED target type (deserializeTargetType), yielding an
+    //     owned, independent value.
     auto* var = dynamic_cast<VariableExpr*>(call->args[0].get());
-    if (!var) {
-        LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.clone: argument must be a variable name");
-        return ctx.ir_gen->getInt32(0);
+    Symbol* argSym = var ? resolveVariable(var->name) : nullptr;
+    std::string argType;
+    bool inlineBorrow = false;
+    if (var) {
+        if (!argSym) {
+            LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.clone: unknown variable '" + var->name + "'");
+            return ctx.ir_gen->getInt32(0);
+        }
+        argType = argSym->typeName;
+    } else {
+        argType = ctx.deserializeTargetType;   // clone of an inline expression → the declared target type
+        inlineBorrow = true;
+        if (argType.empty()) {
+            LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.clone: an inline argument (e.g. {at:…}) needs a "
+                "typed target — use `decl: [x, <Type>, { clone: {at:…} }]`.");
+            return ctx.ir_gen->getInt32(0);
+        }
     }
-    Symbol* argSym = resolveVariable(var->name);
-    if (!argSym) {
-        LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.clone: unknown variable '" + var->name + "'");
-        return ctx.ir_gen->getInt32(0);
-    }
-    const std::string& argType = argSym->typeName;
     if (argType.empty() || argType == "any") {
         LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.clone: type '" + argType + "' is not cloneable");
         return ctx.ir_gen->getInt32(0);
@@ -5860,9 +5872,23 @@ IRValue* Compiler::visitSysCloneCall(CallExpr* call) {
     });
 
     // src pointer = address-of caller's alloca.
-    IRValue* srcBase = argSym->ir_alloca_inst ? argSym->ir_alloca_inst
-                                              : ctx.ir_gen->wrap(argSym->alloca_inst);
-    llvm::Value* srcPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(srcBase));
+    llvm::Value* srcPtr = nullptr;
+    if (inlineBorrow) {
+        // Evaluate the borrow expression → a pointer to the borrowed value (the element fields).
+        IRValue* bv = visitExpression(call->args[0].get());
+        srcPtr = bv ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bv)) : nullptr;
+        if (srcPtr && !srcPtr->getType()->isPointerTy()) {
+            // A loaded value (e.g. a %M* element) — spill to a temp so we have an address to clone from.
+            llvm::AllocaInst* tmp = ctx.createEntryAlloca(srcPtr->getType());
+            ctx.builder.CreateStore(srcPtr, tmp);
+            srcPtr = tmp;
+        }
+        if (!srcPtr) { LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.clone: could not evaluate the borrow argument"); return ctx.ir_gen->getInt32(0); }
+    } else {
+        IRValue* srcBase = argSym->ir_alloca_inst ? argSym->ir_alloca_inst
+                                                  : ctx.ir_gen->wrap(argSym->alloca_inst);
+        srcPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(srcBase));
+    }
 
     // spec/61 §5.1: under memV3 use the memoized in-memory clone (shared<T>/%M*
     // sub-objects cloned once → DAG-preserving, cycle-safe). Otherwise fall back
