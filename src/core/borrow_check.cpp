@@ -36,6 +36,10 @@ struct BorrowChecker {
     std::map<std::string, std::string> refBorrowOf;   // ref local → container base name
     std::map<std::string, bool> refInvalid;           // ref local → invalidated?
     std::map<std::string, std::string> containerType; // container local → declared type
+    // §8 borrow-return anchor: the declared `borrows:` param and the set of ref<T> params. A
+    // `return <refParam>` whose param is not the anchor is a wrong-anchor borrow return.
+    std::string returnAnchor;
+    std::set<std::string> refParams;
 
     // §5.4: a POINTER-element container (list<ptr/shared/ref>, map<:ptr/shared/ref>) stores
     // pointer slots; growth (push/insert) moves the SLOTS but not the separately-allocated
@@ -208,6 +212,18 @@ struct BorrowChecker {
             int line = r->sourceLine;
             scanUses(r->value.get(), line);
             if (r->value) { std::string src = asPtrVar(r->value.get()); if (!src.empty()) state[src] = St::Moved; }
+            // §8 (probe n10): a `borrows: <anchor>` function must return a borrow of THAT param.
+            // Returning a different ref<T> param is a wrong-anchor borrow return (would hand out a
+            // borrow whose lifetime is tied to the wrong owner).
+            if (!returnAnchor.empty() && r->value)
+                if (auto* rv = dynamic_cast<const VariableExpr*>(r->value.get())) {
+                    std::string b = baseName(rv->name);
+                    if (refParams.count(b) && b != returnAnchor)
+                        LOG_ERROR(loc(line) + "borrow-return anchor mismatch: this function declares "
+                            "`borrows: " + returnAnchor + "` but returns a borrow derived from '" + b +
+                            "' — the returned ref<T>'s lifetime is anchored to the wrong parameter (§8). "
+                            "Return a borrow of '" + returnAnchor + "', or change the `borrows:` anchor.");
+                }
             return;
         }
         if (auto* es = dynamic_cast<const ExprStmt*>(s)) { exprStmt(es->expr.get(), es->sourceLine); return; }
@@ -301,12 +317,18 @@ struct BorrowChecker {
                 for (auto& a : c->args) { std::string src = asPtrVar(a.get()); if (!src.empty()) markMoved(src, line); }
                 return;
             }
-            // consumed parameters (free functions): argLifetimes is parallel to the params.
+            // §6.2/§8/§3.1 (free functions): passing a ptr<T> local to a by-value ptr<T> param
+            // MOVES it (probe n11); a `consumed` param also moves; a ref<T>/shared<T> param does
+            // not. argTypeNames tells ptr-param (move) from ref-param (borrow).
             auto fit = ctx.functions.find(fn);
-            if (fit != ctx.functions.end() && !fit->second.argLifetimes.empty()) {
+            if (fit != ctx.functions.end()) {
                 const auto& lifos = fit->second.argLifetimes;
-                for (size_t j = 0; j < c->args.size() && j < lifos.size(); ++j)
-                    if (lifos[j] == "consumed") { std::string src = asPtrVar(c->args[j].get()); if (!src.empty()) markMoved(src, line); }
+                const auto& tys   = fit->second.argTypeNames;
+                for (size_t j = 0; j < c->args.size(); ++j) {
+                    bool consumed = (j < lifos.size() && lifos[j] == "consumed");
+                    bool ptrParam = (j < tys.size() && tys[j].rfind("ptr<", 0) == 0);
+                    if (consumed || ptrParam) { std::string src = asPtrVar(c->args[j].get()); if (!src.empty()) markMoved(src, line); }
+                }
             }
             return;
         }
@@ -319,6 +341,10 @@ struct BorrowChecker {
 void checkBorrowsMemV3(const ::CompilerContext& ctx, const FunctionDecl& fn) {
     if (!ctx.memV3 || !fn.body) return;
     BorrowChecker bc(ctx);
+    // §8 borrow-return anchor: record the declared anchor + the ref<T> params for the check.
+    bc.returnAnchor = fn.returnBorrowsParam;
+    for (const auto& a : fn.args)
+        if (a.second.rfind("ref<", 0) == 0) bc.refParams.insert(a.first);
     // Parameters are borrows by default (§8) — do not track them as owned ptr locals.
     bc.run(fn.body.get());
     // §10 leak lint: a `persistent` box that reaches function exit still Live never escaped

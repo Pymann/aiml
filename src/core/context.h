@@ -89,6 +89,10 @@ namespace AIML {
         struct FunctionInfo {
             llvm::Function* func = nullptr;
             std::vector<std::string> argNames;
+            // spec/61 §6.2/§8 (memV3 borrow-check): declared parameter TYPE strings, parallel to
+            // argNames — lets the caller-side borrow-check tell a by-value ptr<T> param (a MOVE)
+            // from a ref<T> param (a borrow). Populated in visitFunction.
+            std::vector<std::string> argTypeNames;
             // spec/61 §3.1: per-parameter ownership qualifier, parallel to argNames.
             // "scope" (borrow, default) | "consumed" | "persistent". Read at the call site
             // to move a `consumed` argument out of the caller (drop the caller's ownership).
