@@ -83,6 +83,9 @@ static void aiml_ser_fp_walk(const AimlTypeNode* nodes, int32_t n,
             aiml_ser_fp_walk(nodes, n, nd.param1, h, depth + 1);
             aiml_ser_fp_walk(nodes, n, nd.param2, h, depth + 1);
             break;
+        case AIML_TD_PTR_REF:
+            h = (h ^ (uint32_t)nd.param1) * 16777619u;   // recursive type-id (registry ref)
+            break;
         case AIML_TD_RAWBYTES:
             h = (h ^ (uint32_t)nd.param1) * 16777619u;   // byte count
             break;
@@ -192,6 +195,19 @@ static int key_stride(int key_idx, const AimlTypeNode* ns, int nn) {
     case AIML_TD_RAWBYTES: return ns[key_idx].param1;  // enum/opaque types (e.g. i32 enum = 4)
     default:               return (int)sizeof(char*);
     }
+}
+
+// ── spec/61 §5.1 runtime type-descriptor registry (AIML_TD_PTR_REF, recursive ptr<T>) ─────────
+struct AimlTypeReg { const AimlTypeNode* nodes; int32_t n; int32_t size; };
+static std::vector<AimlTypeReg> g_type_registry;
+extern "C" void aiml_ser_register_type(int32_t id, const AimlTypeNode* nodes, int32_t n, int32_t size) {
+    if (id < 0) return;
+    if ((size_t)id >= g_type_registry.size()) g_type_registry.resize((size_t)id + 1, AimlTypeReg{nullptr, 0, 0});
+    g_type_registry[(size_t)id] = AimlTypeReg{ nodes, n, size };
+}
+static const AimlTypeReg* aiml_ser_lookup_type(int32_t id) {
+    if (id < 0 || (size_t)id >= g_type_registry.size() || !g_type_registry[(size_t)id].nodes) return nullptr;
+    return &g_type_registry[(size_t)id];
 }
 
 // ── Forward declarations ──────────────────────────────────────────────────────
@@ -324,6 +340,18 @@ static void enc(std::vector<uint8_t>& buf,
         memcpy(&obj, data, sizeof(void*));
         if (!obj) { w_u8(buf, 0); }
         else { w_u8(buf, 1); enc(buf, n.param1, ns, nn, (const uint8_t*)obj); }
+        break;
+    }
+
+    case AIML_TD_PTR_REF: {
+        // spec/61 §5.1 (memV3): recursive ptr<T> — follow via the type registry.
+        const void* obj = nullptr; memcpy(&obj, data, sizeof(void*));
+        if (!obj) { w_u8(buf, 0); }
+        else {
+            w_u8(buf, 1);
+            const AimlTypeReg* r = aiml_ser_lookup_type(n.param1);
+            if (r) enc(buf, 0, r->nodes, r->n, (const uint8_t*)obj);
+        }
         break;
     }
     }
@@ -533,6 +561,23 @@ static void dec(const uint8_t* blob, int& pos, int end,
         memcpy(out, &obj, sizeof(void*));
         break;
     }
+
+    case AIML_TD_PTR_REF: {
+        // spec/61 §5.1 (memV3): recursive ptr<T> — alloc via the registry and decode recursively.
+        uint8_t marker = 0;
+        if (pos < end) { marker = blob[pos++]; } else { g_dec_error = true; }
+        void* obj = nullptr;
+        if (marker != 0) {
+            const AimlTypeReg* r = aiml_ser_lookup_type(n.param1);
+            if (r) {
+                size_t sz = (size_t)(n.elem_size > 0 ? n.elem_size : r->size);
+                obj = (n.param2 != 0) ? aiml_model_alloc(sz) : calloc(1, sz > 0 ? sz : 1);
+                if (obj) dec(blob, pos, end, 0, r->nodes, r->n, (uint8_t*)obj);
+            }
+        }
+        memcpy(out, &obj, sizeof(void*));
+        break;
+    }
     }
 }
 
@@ -663,6 +708,27 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
             if (--(*rc) <= 0) {
                 fre(n.param1, ns, nn, (uint8_t*)obj);   // frees arrays + per-element heap
                 free((char*)obj - 8);                    // free the handle block
+            }
+        }
+        obj = nullptr;
+        memcpy(data, &obj, sizeof(void*));
+        break;
+    }
+
+    case AIML_TD_PTR_REF: {
+        // spec/61 §5.1 (memV3): recursive ptr<T>/shared<T> — free/decref via the type registry.
+        void* obj = nullptr;
+        memcpy(&obj, data, sizeof(void*));
+        if (obj) {
+            const AimlTypeReg* r = aiml_ser_lookup_type(n.param1);
+            if (n.param2 != 0) {                         // refcount MODEL: decref, free inner+shell at 0
+                if (aiml_model_dec_hits_zero(obj)) {
+                    if (r) fre(0, r->nodes, r->n, (uint8_t*)obj);
+                    aiml_model_free_shell(obj);
+                }
+            } else {                                     // unique ptr box: free inner heap + the box
+                if (r) fre(0, r->nodes, r->n, (uint8_t*)obj);
+                free(obj);
             }
         }
         obj = nullptr;
@@ -965,6 +1031,32 @@ static void clw(int idx, const AimlTypeNode* ns, int nn,
                 : (n.kind == AIML_TD_BUFFER_PTR) ? aiml_buffer_handle_new()
                 : aiml_list_handle_new();
             if (nobj) clw(n.param1, ns, nn, (const uint8_t*)obj, (uint8_t*)nobj);
+        }
+        memcpy(dst, &nobj, sizeof(void*));
+        break;
+    }
+
+    case AIML_TD_PTR_REF: {
+        // spec/61 §5.1 (memV3): recursive ptr<T>/shared<T> — deep-clone via the type registry,
+        // MEMOIZED by source pointer (DAG-preserving, cycle-terminating).
+        const void* obj = nullptr; memcpy(&obj, src, sizeof(void*));
+        void* nobj = nullptr;
+        if (obj) {
+            auto it = g_clone_memo->find(obj);
+            if (it != g_clone_memo->end()) {
+                nobj = it->second;
+                if (n.param2 != 0) aiml_model_incref(nobj);   // shared: extra owning edge
+            } else {
+                const AimlTypeReg* r = aiml_ser_lookup_type(n.param1);
+                if (r) {
+                    size_t sz = (size_t)(n.elem_size > 0 ? n.elem_size : r->size);
+                    nobj = (n.param2 != 0) ? aiml_model_alloc(sz) : calloc(1, sz > 0 ? sz : 1);
+                    if (nobj) {
+                        (*g_clone_memo)[obj] = nobj;          // record BEFORE recursing (cycle-safe)
+                        clw(0, r->nodes, r->n, (const uint8_t*)obj, (uint8_t*)nobj);
+                    }
+                }
+            }
         }
         memcpy(dst, &nobj, sizeof(void*));
         break;

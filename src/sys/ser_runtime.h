@@ -43,6 +43,13 @@ typedef enum {
     AIML_TD_BUFFER_PTR = 14, // spec/61 §5 Option B (memV3 only): a buffer FIELD stored as a
                              //   POINTER to a refcounted handle ([rc][pad][{size,cap,r,w,data}]).
                              //   param1=the inner AIML_TD_BUFFER node index. Emitted only under memV3.
+    AIML_TD_PTR_REF    = 15, // spec/61 §5.1 (memV3 only): an owning ptr<T> to a RECURSIVE type (T
+                             //   is mid-expansion on the DFS path, so its subtree cannot be inlined
+                             //   in the static descriptor). param1 = T's runtime TYPE-ID (registered
+                             //   via aiml_ser_register_type); param2 = 1 if T is a refcount MODEL
+                             //   (%M* shell), else 0 (plain heap box); elem_size = sizeof(T). The
+                             //   clone/free walkers look T's descriptor up at runtime and recurse
+                             //   (memoized), so a finite recursive chain is deep-cloned/freed.
 } AimlTDKind;
 
 // Each node is 24 bytes.  The whole descriptor for a type is an array of these.
@@ -148,6 +155,14 @@ void    aiml_clone_deep(void*                dst,
                         const void*          src,
                         const AimlTypeNode*  nodes,
                         int32_t              n_nodes);
+
+// spec/61 §5.1: register a model type's descriptor under a runtime TYPE-ID, so the clone/free
+// walkers can follow an AIML_TD_PTR_REF (a recursive ptr<T> edge that the static descriptor could
+// not inline). Called once per referenced recursive type from the module-init prologue.
+void    aiml_ser_register_type(int32_t              type_id,
+                               const AimlTypeNode*  nodes,
+                               int32_t              n_nodes,
+                               int32_t              struct_size);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

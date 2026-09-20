@@ -387,6 +387,18 @@ namespace AIML {
     bool memV3 = false;
     // spec/61 §10 owning-cycle lint: run once per compile (set by the first visitFunction).
     bool ownCycleLintDone = false;
+    // spec/61 §5.1 (memV3): stable runtime TYPE-IDs for recursive types referenced by an
+    // AIML_TD_PTR_REF node — assigned on demand while building descriptors; each is registered
+    // (id → descriptor) in the __aiml_init prologue so the clone/free walkers can recurse.
+    std::map<std::string, int32_t> modelTypeIds;
+    int32_t nextModelTypeId = 0;
+    int32_t getModelTypeId(const std::string& name) {
+        auto it = modelTypeIds.find(name);
+        if (it != modelTypeIds.end()) return it->second;
+        int32_t id = nextModelTypeId++;
+        modelTypeIds[name] = id;
+        return id;
+    }
     std::map<std::string, FunctionInfo> functions;
     // spec/61 return-ownership: ORIGINAL (un-mangled) short names of functions/methods
     // declared `owns_return: true`. Captured at parse-order (before method-name mangling)
