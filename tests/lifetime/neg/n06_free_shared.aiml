@@ -1,0 +1,11 @@
+# static-check: off
+# NEGATIVE (§10/§6.2): freeing a shared<T> is an error — it is released by refcount, never freed.
+# EXPECT-ERROR: free of a shared<T>
+- model: { name: Wid, fields: [[ident, i32, 0]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [shw, shared<Wid>, { share: { new: Wid } }]
+      - free: [shw]                          # ← must be rejected
+      - return: 0

@@ -1,0 +1,11 @@
+# static-check: off
+# NEGATIVE (§10): freeing a stack value (non-heap) is an error — stack values auto-release at scope.
+# EXPECT-ERROR: free of a non-heap value
+- model: { name: Wid, fields: [[ident, i32, 0]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [locw, Wid]
+      - free: [locw]                         # ← must be rejected
+      - return: 0

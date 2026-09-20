@@ -382,10 +382,30 @@ IRValue* Compiler::visitCall(CallExpr* call) {
          return ctx.ir_gen->createCall("printf", printArgs, "print_call");
     } else if (funcName == "free") {
          if (argVals.empty()) return ctx.ir_gen->getInt32(0);
-         // NOTE (spec/61 §10): free-of-non-heap / free-of-shared / free-of-ref diagnostics belong
-         // here, but the `free:` STATEMENT routing is type-dependent (a shared/value operand is
-         // dropped before this point), so a reliable check needs that routing unified first — it is
-         // part of the §10 ownership-diagnostics workstream (see tests/lifetime/README.md).
+         // spec/61 §10 (memV3): `free` is only for a ptr<T> new-box (and the raw dyn_array /
+         // iterator handles). A shared<T> is released by refcount, a ref<T> never owns, and a
+         // stack value is auto-released at scope — freeing any of those is a compile error. Now
+         // reachable because the `free:` statement materializes as a node under memV3.
+         if (ctx.memV3) {
+             if (auto* fv = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get())) {
+                 Symbol* fs = (fv->name.find('.') == std::string::npos) ? resolveVariable(fv->name) : nullptr;
+                 if (fs) {
+                     const std::string& tn = fs->typeName;
+                     if (tn.rfind("shared<", 0) == 0)
+                         LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "free of a shared<T> ('" + fv->name +
+                             "'): a shared value is released by refcount at rc 0, never freed (§10/§6.2). "
+                             "Let it drop at scope exit.");
+                     else if (tn.rfind("ref<", 0) == 0)
+                         LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "free of a ref<T> ('" + fv->name +
+                             "'): a borrow never owns and must not be freed (§10).");
+                     else if (tn.rfind("ptr<", 0) != 0 && tn.rfind("dyn_array<", 0) != 0
+                              && tn.rfind("iterator<", 0) != 0)
+                         LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "free of a non-heap value '" + fv->name +
+                             "' of type '" + tn + "': only a ptr<T> new-box is released with free (§10). "
+                             "Stack values are released automatically at scope exit.");
+                 }
+             }
+         }
          // iterator<T> handles are allocated with C++ `new` (aiml_iter_create_kv)
          // → must be released via aiml_iter_free (delete), not libc free.  Mixing
          // new/free is UB (see spec/54 §5).  Detect the arg's declared type.
