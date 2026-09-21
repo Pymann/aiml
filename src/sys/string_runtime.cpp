@@ -217,6 +217,19 @@ extern "C" void aiml_list_free(void* list_ptr, int32_t elemKind,
         char* base = reinterpret_cast<char*>(lst->data);
         for (int32_t i = 0; i < lst->size; ++i)
             aiml_ser_free_decoded(base + (int64_t)i * elemSize, serNodes, serNodesCount);
+    } else if (elemKind == 6 && elemSize > 0) {
+        // interface polymorphism: list<ptr<Interface>> elements are 16-byte fat pointers
+        // {obj, vtable} (elemSize = sizeof(AimlFatPtr_<Iface>)). Stride by elemSize and free ONLY the
+        // obj pointer (field 0) — the concrete implementation object push moved in (one owner). A
+        // char** (8B) walk would misread the vtable global at odd indices and free() it → "invalid
+        // pointer" (test_card_base_engine_api). The concrete type is dynamic, so there is no serNodes
+        // to deep-free the obj's own heap fields here; the obj shell is freed shallow (behaviors are
+        // field-less — a stateful implementor's inner heap fields would leak, not corrupt).
+        char* base = reinterpret_cast<char*>(lst->data);
+        for (int32_t i = 0; i < lst->size; ++i) {
+            void* obj = *reinterpret_cast<void**>(base + (int64_t)i * elemSize);  // field 0 = obj
+            if (obj) free(obj);
+        }
     }
     if (lst->data && aiml_trace_fre())
         fprintf(stderr, "[FRE] %-10s h=%p rc=%d  (elemKind=%d size=%d)\n", "LDATA", lst->data, elemKind, elemKind, lst->size);
