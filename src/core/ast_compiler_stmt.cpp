@@ -314,9 +314,26 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
         // deep-frees each box + fields (elemKind 4) via T's serNodes — else the boxes leaked.
         elemKind = 4; elemSize = 8;
         std::string boxed = elemName.substr(4, elemName.size() - 5);
-        auto ci = ctx.classes.find(boxed);
-        if (ci != ctx.classes.end()) { serNodes = ci->second.serNodesVar; serNodesCount = ci->second.serNodesCount; }
-        elemTy = i8p;
+        if (ctx.interfaces.count(boxed)) {
+            // interface polymorphism: `list<ptr<Interface>>` elements are 16-byte fat pointers
+            // {obj, vtable} (AimlFatPtr_<Iface>), NOT plain 8-byte pointers. push stores the full fat
+            // pointer (16B stride), so the data buffer MUST be sized with the fat-pointer stride —
+            // else the initial capacity buffer (elemTy i8p → 8B stride) overflowed and corrupted the
+            // heap (realloc: invalid next size) at server boot in build_card_behaviors
+            // (list<ptr<CardBehavior>>, 7 pushes). resolveType("ptr<Iface>") is the fat-ptr struct.
+            // elemKind 6 (own interface box): the scope-drop strides by elemSize and frees only the
+            // obj pointer (field 0) — a plain char** (8B) walk would free the vtable global at odd
+            // indices (free(): invalid pointer, test_card_base_engine_api). The concrete type is
+            // dynamic so there is no per-element serNodes; the obj shell is freed shallow.
+            elemKind = 6;
+            elemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
+            if (!elemTy) elemTy = i8p;
+            elemSize = (int64_t)ctx.module.getDataLayout().getTypeAllocSize(elemTy);
+        } else {
+            auto ci = ctx.classes.find(boxed);
+            if (ci != ctx.classes.end()) { serNodes = ci->second.serNodesVar; serNodesCount = ci->second.serNodesCount; }
+            elemTy = i8p;
+        }
     } else if (ctx.memV3 && ctx.isMemV3ContainerHandle(elemName)) {
         // spec/61 §5.7 (memV3): a NESTED CONTAINER element (list<list<T>>/list<map<…>>/list<buffer>)
         // is a refcounted HANDLE (pointer stride). Scope-drop (elemKind 5) releases each element via
