@@ -564,17 +564,20 @@ static void dec(const uint8_t* blob, int& pos, int end,
     case AIML_TD_LIST_PTR:
     case AIML_TD_MAP_PTR:
     case AIML_TD_BUFFER_PTR: {
-        // spec/61 §5 Option B (memV3): allocate a fresh list/map/buffer handle, decode the inner
-        // container into its struct part, store the pointer. 0 marker → null slot.
+        // spec/61 §5 Option B (memV3): a container FIELD is ALWAYS a live refcounted handle, never
+        // null — field access (.len/.at/push/…) unconditionally derefs it, exactly like a plain-decl
+        // empty container. So allocate an (empty) handle even for the 0 marker (empty/absent list);
+        // only marker != 0 decodes inner elements into its struct part. Previously the 0 marker left
+        // the field null, so `deserialize` of a model with an empty container field (e.g. TestCard
+        // {abilities:[]}) crashed on the first `.len` (test_serialize_struct + the whole
+        // serialize/persist/db cluster). No inner bytes are consumed for the 0 marker, so the blob
+        // position is unchanged.
         uint8_t marker = 0;
         if (pos < end) { marker = blob[pos++]; } else { g_dec_error = true; }
-        void* obj = nullptr;
-        if (marker != 0) {
-            obj = (n.kind == AIML_TD_MAP_PTR) ? aiml_map_handle_new()
-                : (n.kind == AIML_TD_BUFFER_PTR) ? aiml_buffer_handle_new()
-                : aiml_list_handle_new();
-            if (obj) dec(blob, pos, end, n.param1, ns, nn, (uint8_t*)obj);
-        }
+        void* obj = (n.kind == AIML_TD_MAP_PTR) ? aiml_map_handle_new()
+            : (n.kind == AIML_TD_BUFFER_PTR) ? aiml_buffer_handle_new()
+            : aiml_list_handle_new();
+        if (obj && marker != 0) dec(blob, pos, end, n.param1, ns, nn, (uint8_t*)obj);
         memcpy(out, &obj, sizeof(void*));
         break;
     }
