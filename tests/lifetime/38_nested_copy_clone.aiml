@@ -1,0 +1,28 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5.1/§5.7: shallow `copy` of a nested container shares the inner containers (incref);
+# deep `clone` produces independent inner containers. This is the combat_zone_at-class case.
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [orig, list<list<i32>>]
+      - decl: [seed, list<i32>]
+      - call: [seed.push, 1]
+      - call: [orig.push, seed]
+      # shallow copy: shares the inner list → mutating the copy's inner is visible in orig
+      - decl: [shal, list<list<i32>>, { copy: orig }]
+      - decl: [shrow, list<i32>, { at: [shal, 0] }]
+      - call: [shrow.push, 2]
+      - decl: [ochk, list<i32>, { at: [orig, 0] }]
+      - if: { condition: { neq: [ochk.len, 2] }, then: [{ print: ["FAIL copy did not share inner: orig[0].len=${ochk.len}"] }, { return: 1 }] }
+      # deep clone: independent inner → mutating the clone's inner does NOT affect orig
+      - decl: [deep, list<list<i32>>, { clone: orig }]
+      - decl: [dprow, list<i32>, { at: [deep, 0] }]
+      - call: [dprow.push, 3]
+      - decl: [ochk2, list<i32>, { at: [orig, 0] }]
+      - if: { condition: { neq: [ochk2.len, 2] }, then: [{ print: ["FAIL clone shared inner: orig[0].len changed to ${ochk2.len}"] }, { return: 1 }] }
+      - decl: [dchk, list<i32>, { at: [deep, 0] }]
+      - if: { condition: { neq: [dchk.len, 3] }, then: [{ print: ["FAIL clone inner wrong len=${dchk.len}"] }, { return: 1 }] }
+      - print: ["PASS 38 nested_copy_clone"]
+      - return: 0

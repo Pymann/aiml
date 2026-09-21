@@ -1,0 +1,24 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5: `set: [obj.mapfield, freshLocalMap]` must honor the ownership plan — a map member-store
+# is classified DeepCopy, so the field gets an INDEPENDENT handle; a plain incref-SHARE aliased the
+# source into the field and both freed it → DOUBLE-FREE (test_typed_card_persist, rc139). The list
+# variant is a MOVE. Both must free the handle exactly once at teardown.
+- model:
+    name: ThingLike
+    fields:
+      - [mana_cost, map<string:i32>]
+      - [attack, i32]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [orig, ThingLike]
+      - decl: [cost, map<string:i32>]
+      - call: [cost.put, "1", 2]
+      - call: [cost.put, "5", 1]
+      - set: [orig.mana_cost, cost]
+      - decl: [got, i32, { call: [orig.mana_cost.get, "1"] }]
+      - if: { condition: { neq: [got, 2] }, then: [{ print: ["FAIL map-member: get=${got}, expected 2"] }, { return: 1 }] }
+      - print: ["PASS 42 map_member_store"]
+      - return: 0

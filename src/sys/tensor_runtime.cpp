@@ -170,10 +170,18 @@ static bool arena_owns(const float* ptr) {
 // MUST be thread_local: concurrent worker threads call struct_alloc/struct_free
 // simultaneously; a shared pool causes two threads to pop the same pointer → two
 // AimlTensor objects aliasing the same struct → heap corruption → SIGABRT.
-static thread_local std::vector<AimlTensor*> g_struct_pool;
+// Wrapped in an RAII holder so the pooled (logically-dead) structs are actually free()'d at thread
+// exit — otherwise the pool's contents show as "definitely lost" under valgrind (the pooled struct's
+// data/shape/grad were already freed by aiml_tensor_free before pooling; only the shell is retained).
+struct AimlStructPool {
+    std::vector<AimlTensor*> pool;
+    ~AimlStructPool() { for (auto* p : pool) free(p); pool.clear(); }
+};
+static thread_local AimlStructPool g_struct_pool_holder;
 static constexpr int STRUCT_POOL_MAX = 256;
 
 static AimlTensor* struct_alloc() {
+    auto& g_struct_pool = g_struct_pool_holder.pool;
     if (!g_struct_pool.empty()) {
         auto* t = g_struct_pool.back();
         g_struct_pool.pop_back();
@@ -183,6 +191,7 @@ static AimlTensor* struct_alloc() {
 }
 
 static void struct_free(AimlTensor* t) {
+    auto& g_struct_pool = g_struct_pool_holder.pool;
     if ((int)g_struct_pool.size() < STRUCT_POOL_MAX) {
         g_struct_pool.push_back(t);
     } else {
@@ -1364,9 +1373,10 @@ void aiml_tensor_thread_cleanup(void) {
 
     // Drain the thread-local struct pool: since pool entries are raw AimlTensor*
     // allocated with malloc, they must be freed explicitly — the vector destructor
-    // only destroys the vector, not the pointed-to objects.
-    for (auto* t : g_struct_pool) free(t);
-    g_struct_pool.clear();
+    // only destroys the vector, not the pointed-to objects. (The holder's destructor
+    // does the same at thread exit; this explicit drain covers thread-reuse resets.)
+    for (auto* t : g_struct_pool_holder.pool) free(t);
+    g_struct_pool_holder.pool.clear();
 
     // Free MHA scratch buffers. These are plain float* (no destructor) so they
     // would otherwise be leaked on thread-reuse (glibc re-initialises TLS to nullptr,

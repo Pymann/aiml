@@ -1,0 +1,39 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5.4: `store: [out_ptr, view]` where Model is a VALUE model with heap fields must DEEP-COPY
+# (find_*_entry out-param fill). `at`/member views alias the container element's field buffers; a
+# shallow store makes the out-target share them → both free them (double-free, test_mana_pick path).
+- model:
+    name: PlayerLike
+    fields:
+      - [purse, map<string:i32>]
+      - [cards, list<string>]
+- model:
+    name: MatchLike
+    fields:
+      - [players, list<PlayerLike>]
+- def:
+    name: copy_out
+    args: [[mat, ref<MatchLike>], [idx, i32], [out_p, ptr<PlayerLike>]]
+    return: i32
+    body:
+      - decl: [view, PlayerLike, { at: [mat.players, idx] }]
+      - store: [out_p, view]
+      - return: 1
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [mtch, ptr<MatchLike>, { new: MatchLike }]
+      - decl: [alice, PlayerLike]
+      - call: [alice.purse.put, "gold", 7]
+      - call: [alice.cards.push, "ace"]
+      - call: [mtch.players.push, alice]
+      - decl: [grabbed, PlayerLike]
+      - decl: [okk, i32, { call: [copy_out, mtch, 0, {'&': [grabbed]} ] }]
+      - decl: [amt, i32, { call: [grabbed.purse.get, "gold"] }]
+      - decl: [nca, i32, { call: [grabbed.cards.len] }]
+      - if: { condition: { neq: [amt, 7] }, then: [{ print: ["FAIL store-view: amt=${amt}, expected 7"] }, { return: 1 }] }
+      - if: { condition: { neq: [nca, 1] }, then: [{ print: ["FAIL store-view: ncards=${nca}, expected 1"] }, { return: 1 }] }
+      - print: ["PASS 45 store_view_outparam"]
+      - return: 0

@@ -327,9 +327,20 @@ void registerBuiltins(CompilerContext& ctx) {
             auto* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
             auto* ptrTy = llvm::PointerType::get(ctx.context, 0);
             llvm::StructType* listTy = ListImpl::getListStructType(ctx);
-            // Fresh list<i32> for the result.
-            llvm::Value* outAlloca = ctx.createEntryAlloca(listTy, "casc_fidx_out");
-            ListImpl::initList(ctx, outAlloca, i32, 4);
+            // Fresh list<i32> for the result. spec/61 §5 (memV3): a `list<i32>` binding is a
+            // refcounted HEAP HANDLE freed via aiml_list_handle_release — returning a pointer to a
+            // STACK alloca made the caller's local own stack memory, so its scope-drop released a
+            // stack pointer (garbage rc → crash: do_deal_damage's eff_pos → field_indices, the
+            // test_creature_damage/effect rc134 cluster). Mirror the `.split` fix.
+            llvm::Value* outAlloca;
+            if (ctx.memV3) {
+                outAlloca = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, "casc_fidx_h");
+                ListImpl::initList(ctx, outAlloca, i32, 4);
+            } else {
+                outAlloca = ctx.createEntryAlloca(listTy, "casc_fidx_out");
+                ListImpl::initList(ctx, outAlloca, i32, 4);
+            }
             if (args.size() < 3) return ctx.ir_gen->wrap(outAlloca);
             llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             llvm::Value* row  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
@@ -389,8 +400,15 @@ void registerBuiltins(CompilerContext& ctx) {
             auto* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
             auto* ptrTy = llvm::PointerType::get(ctx.context, 0);
             llvm::StructType* listTy = ListImpl::getListStructType(ctx);
-            llvm::Value* outAlloca = ctx.createEntryAlloca(listTy, "casc_row_out");
-            ListImpl::initList(ctx, outAlloca, i32, 8);
+            // spec/61 §5 (memV3): return a HEAP handle, not a stack alloca (see field_indices).
+            llvm::Value* outAlloca;
+            if (ctx.memV3) {
+                outAlloca = ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, "casc_row_h");
+                ListImpl::initList(ctx, outAlloca, i32, 8);
+            } else {
+                outAlloca = ctx.createEntryAlloca(listTy, "casc_row_out");
+                ListImpl::initList(ctx, outAlloca, i32, 8);
+            }
             if (args.size() < 2) return ctx.ir_gen->wrap(outAlloca);
             llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             llvm::Value* k    = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
@@ -418,8 +436,15 @@ void registerBuiltins(CompilerContext& ctx) {
             auto* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
             auto* ptrTy = llvm::PointerType::get(ctx.context, 0);
             llvm::StructType* listTy = ListImpl::getListStructType(ctx);
-            llvm::Value* out = ctx.createEntryAlloca(listTy, "casc_range_out");
-            ListImpl::initList(ctx, out, i32, 8);
+            // spec/61 §5 (memV3): return a HEAP handle, not a stack alloca (see field_indices).
+            llvm::Value* out;
+            if (ctx.memV3) {
+                out = ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, "casc_range_h");
+                ListImpl::initList(ctx, out, i32, 8);
+            } else {
+                out = ctx.createEntryAlloca(listTy, "casc_range_out");
+                ListImpl::initList(ctx, out, i32, 8);
+            }
             if (args.empty()) return ctx.ir_gen->wrap(out);
             llvm::Value* ty = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             ctx.builder.CreateCall(
@@ -437,8 +462,15 @@ void registerBuiltins(CompilerContext& ctx) {
             auto* i8p   = ctx.builder.getInt8Ty()->getPointerTo();
             auto* ptrTy = llvm::PointerType::get(ctx.context, 0);
             llvm::StructType* listTy = ListImpl::getListStructType(ctx);
-            llvm::Value* out = ctx.createEntryAlloca(listTy, "casc_desc_out");
-            ListImpl::initList(ctx, out, i8p, 8);
+            // spec/61 §5 (memV3): return a HEAP handle, not a stack alloca (see field_indices).
+            llvm::Value* out;
+            if (ctx.memV3) {
+                out = ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, "casc_desc_h");
+                ListImpl::initList(ctx, out, i8p, 8);
+            } else {
+                out = ctx.createEntryAlloca(listTy, "casc_desc_out");
+                ListImpl::initList(ctx, out, i8p, 8);
+            }
             if (args.empty()) return ctx.ir_gen->wrap(out);
             llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
             // Optionale Opcode-list<i32> → (data, len); fehlt → (null, 0) = alle.

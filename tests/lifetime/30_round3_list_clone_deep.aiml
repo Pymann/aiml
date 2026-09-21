@@ -1,0 +1,18 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5.1: clone of a list must clone its owned mutable elements, not only its spine.
+- model: { name: DeepItem, fields: [[ident, i32, 0]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [items, list<shared<DeepItem>>]
+      - decl: [owner, shared<DeepItem>, { share: { new: DeepItem } }]
+      - set: [owner.ident, 7]
+      - call: [items.push, owner]
+      - decl: [duplicate, list<shared<DeepItem>>, { clone: items }]
+      - decl: [view, ref<DeepItem>, { at: [duplicate, 0] }]
+      - set: [view.ident, 99]
+      - if: { condition: { neq: [owner.ident, 7] }, then: [{ print: ["FAIL list clone shares mutable element: original=${owner.ident}, expected=7"] }, { return: 1 }] }
+      - print: ["PASS 30 round3_list_clone_deep"]
+      - return: 0

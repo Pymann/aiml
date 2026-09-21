@@ -1,0 +1,22 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5: a bodyless / fall-off-the-end method returning a container HANDLE must return a valid
+# FRESH EMPTY handle, not null — the caller binds it and calls methods on it (.contains/.len);
+# null → SIGSEGV (bodyless creature/item `get_produces: map<string:i32>`, test_card_base_engine_api).
+- class:
+    name: ThingCard
+    members:
+      - [attack, i32]
+    methods:
+      - def: { name: get_produces, return: map<string:i32> }
+      - def: { name: touch, body: [] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [crc, ptr<ThingCard>, { new: ThingCard }]
+      - decl: [prod, map<string:i32>, { call: [crc.get_produces] }]
+      - decl: [has1, i32, { call: [prod.contains, "1"] }]
+      - if: { condition: { neq: [has1, 0] }, then: [{ print: ["FAIL bodyless: empty map reports contains=1"] }, { return: 1 }] }
+      - print: ["PASS 43 bodyless_container_return"]
+      - return: 0

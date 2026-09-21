@@ -33,6 +33,14 @@ extern "C" {
 // Returns the struct pointer (header hidden at obj-8), or nullptr on OOM.
 void* aiml_model_alloc(size_t structSize);
 
+// spec/61 §6.2 adopt (`{ share: p }`): turn a unique `ptr<T>` block (layout `[fields]`, no rc)
+// into a co-owned `shared<T>` block (layout `[rc=1|fields]`). Allocates a new refcounted shell,
+// BIT-COPIES `structSize` field bytes from `oldObj` into it (string/container handles move
+// verbatim — NO incref/decref, the members are moved, not copied), then frees `oldObj`'s block as
+// RAW memory (no member release — they moved). Returns the new struct pointer (rc=1). The caller
+// nulls the source slot and drops its scope-cleanup (`oldObj` is moved-out). null-safe.
+void* aiml_model_adopt(void* oldObj, size_t structSize);
+
 // refcount++ (magic-guarded, null-safe, no-op on non-MODL pointers).
 void  aiml_model_incref(void* obj);
 

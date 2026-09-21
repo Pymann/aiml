@@ -40,6 +40,14 @@ struct BorrowChecker {
     // `return <refParam>` whose param is not the anchor is a wrong-anchor borrow return.
     std::string returnAnchor;
     std::set<std::string> refParams;
+    // F3 (§8/§5.4): declared type of every local and parameter, keyed by base name. A missing
+    // entry in `ptrLocals` does NOT prove an owning target — a `ref<T>` target must borrow, not
+    // move. declTypes lets the SetStmt branch classify the target slot reliably.
+    std::map<std::string, std::string> declTypes;
+    bool isOwningTargetType(const std::string& t) const {
+        return t.rfind("ptr<", 0) == 0 || t.rfind("shared<", 0) == 0;
+    }
+    bool isRefTargetType(const std::string& t) const { return t.rfind("ref<", 0) == 0; }
 
     // §5.4: a POINTER-element container (list<ptr/shared/ref>, map<:ptr/shared/ref>) stores
     // pointer slots; growth (push/insert) moves the SLOTS but not the separately-allocated
@@ -57,10 +65,12 @@ struct BorrowChecker {
         return inner.rfind("ptr<", 0) == 0 || inner.rfind("shared<", 0) == 0 || inner.rfind("ref<", 0) == 0;
     }
 
+    std::string fnName;   // enclosing function (for multi-file diagnostics)
     explicit BorrowChecker(const CompilerContext& c) : ctx(c) {}
 
-    static std::string loc(int line) {
-        return line > 0 ? ("line " + std::to_string(line) + ": ") : std::string();
+    std::string loc(int line) const {
+        std::string p = fnName.empty() ? std::string() : (fnName + " ");
+        return p + (line > 0 ? ("line " + std::to_string(line) + ": ") : std::string());
     }
     bool tracked(const std::string& n) const { return ptrLocals.count(n) != 0; }
 
@@ -111,7 +121,7 @@ struct BorrowChecker {
             // (deref `?p`, addr `&p`, `!x`) is a read of its operand.
             scanUses(u->operand.get(), line); return;
         }
-        if (auto* c = dynamic_cast<const CallExpr*>(e)) { for (auto& a : c->args) scanUses(a.get(), line); return; }
+        if (auto* c = dynamic_cast<const CallExpr*>(e)) { for (auto& a : c->args) scanUses(a.get(), line); applyCallEffects(*c, line); return; }
         if (auto* s = dynamic_cast<const SpawnExpr*>(e)) { for (auto& a : s->args) scanUses(a.get(), line); return; }
         if (auto* at = dynamic_cast<const AtExpr*>(e)) { scanUses(at->container.get(), line); for (auto& i : at->indices) scanUses(i.get(), line); return; }
         if (auto* si = dynamic_cast<const StringInterpolationExpr*>(e)) { for (auto& p : si->parts) scanUses(p.get(), line); return; }
@@ -148,6 +158,7 @@ struct BorrowChecker {
                 std::string src = asPtrVar(d->initialValue.get());
                 if (!src.empty()) markMoved(src, line);
             }
+            declTypes[d->varName] = d->typeName;   // F3: reliable target-type resolution
             // Register the new local (shadowing is disallowed elsewhere). ptr<T> → tracked, Live.
             if (ptrTgt) {
                 ptrLocals[d->varName] = d->typeName; state[d->varName] = St::Live;
@@ -182,9 +193,20 @@ struct BorrowChecker {
                 if (!src.empty() && src != tb) markMoved(src, line);
                 state[tb] = St::Live;          // rebind (incl. self-assign) revives the slot
             } else if (plainTarget) {
-                // target is some other local possibly of ptr/shared type — a move of a ptr source.
+                // F3 (§8/§5.4): classify the target by its DECLARED type — a missing ptrLocals
+                // entry is not proof of an owning slot. Only ptr<T>/shared<T> targets move the
+                // source; a `ref<T>` target BORROWS (use-check the source, never move it); other
+                // (value) targets do not move a pointer at all.
+                std::string tgtType = declTypes.count(tb) ? declTypes[tb] : std::string();
                 std::string src = asPtrVar(set->value.get());
-                if (!src.empty() && src != tb) markMoved(src, line);
+                if (isRefTargetType(tgtType)) {
+                    // `set: [view, owner]` — view : ref<T> borrows owner; owner stays a valid owner.
+                    if (!src.empty()) flagUse(src, line, "borrow");
+                } else if (isOwningTargetType(tgtType) || tgtType.empty()) {
+                    // Owning rebind, or an unknown slot (conservative: keep the legacy move so real
+                    // owning aggregates not captured in declTypes still diagnose double ownership).
+                    if (!src.empty() && src != tb) markMoved(src, line);
+                }
             }
             // §5.4: re-binding a ref local (set:[r, {at:[C,i]}]) refreshes the borrow → Valid again.
             if (plainTarget && refBorrowOf.count(tb)) {
@@ -273,6 +295,44 @@ struct BorrowChecker {
         }
     }
 
+    // round4 §4: the ownership effects of a call — container growth/reorder borrow-invalidation,
+    // push/append/add MOVES, and free-function ptr-param / `consumed` MOVES. Called from scanUses so
+    // EVERY call (statement, DeclStmt initializer, assignment RHS, return, nested argument) applies
+    // its moves exactly once — previously only statement-level calls (exprStmt) did, so a move inside
+    // an initializer (`decl:[x,T,{call:fn(p)}]`) went untracked (neg n12).
+    void applyCallEffects(const CallExpr& c, int line) {
+        const std::string& fn = c.functionName;
+        if (fn == "free") return;   // `free` is handled as a statement in exprStmt, not a move here
+        size_t dot = fn.rfind('.');
+        std::string method   = (dot == std::string::npos) ? fn : fn.substr(dot + 1);
+        std::string recvBase = (dot == std::string::npos) ? "" : baseName(fn.substr(0, dot));
+        // §5.4: growth (push/insert) invalidates element borrows only for INLINE-element containers;
+        // remove/clear/sort/reverse invalidate regardless (probe 25).
+        if (!recvBase.empty()) {
+            bool growth  = (method == "push" || method == "append" || method == "add" || method == "insert");
+            bool reorder = (method == "remove" || method == "clear" || method == "sort" || method == "reverse");
+            bool ptrElem = isPointerElementContainer(containerType.count(recvBase) ? containerType[recvBase] : "");
+            if (reorder || (growth && !ptrElem))
+                for (auto& rb : refBorrowOf) if (rb.second == recvBase) refInvalid[rb.first] = true;
+        }
+        if (method == "push" || method == "append" || method == "add") {
+            for (auto& a : c.args) { std::string src = asPtrVar(a.get()); if (!src.empty()) markMoved(src, line); }
+            return;
+        }
+        // §6.2/§8/§3.1 (free functions): a ptr<T> local passed to a by-value ptr<T> param MOVES it
+        // (n11); a `consumed` param also moves; ref<T>/shared<T> params do not. argTypeNames tells them apart.
+        auto fit = ctx.functions.find(fn);
+        if (fit != ctx.functions.end()) {
+            const auto& lifos = fit->second.argLifetimes;
+            const auto& tys   = fit->second.argTypeNames;
+            for (size_t j = 0; j < c.args.size(); ++j) {
+                bool consumed = (j < lifos.size() && lifos[j] == "consumed");
+                bool ptrParam = (j < tys.size() && tys[j].rfind("ptr<", 0) == 0);
+                if (consumed || ptrParam) { std::string src = asPtrVar(c.args[j].get()); if (!src.empty()) markMoved(src, line); }
+            }
+        }
+    }
+
     void exprStmt(const Expr* e, int line) {
         if (!e) return;
         // `free: [p]` lowers to UnaryExpr("free", p) or CallExpr("free", [p]).
@@ -294,44 +354,9 @@ struct BorrowChecker {
             scanUses(freeArg, line);
             return;
         }
-        // A method/function call: scan args for bad reads, then apply `consumed`-param moves and
-        // container push/append moves (both are genuine moves of a ptr local).
-        if (auto* c = dynamic_cast<const CallExpr*>(e)) {
-            for (auto& a : c->args) scanUses(a.get(), line);
-            const std::string& fn = c->functionName;
-            size_t dot = fn.rfind('.');
-            std::string method = (dot == std::string::npos) ? fn : fn.substr(dot + 1);
-            std::string recvBase = (dot == std::string::npos) ? "" : baseName(fn.substr(0, dot));
-            // §5.4: GROWTH (push/insert) invalidates element borrows only for INLINE-element
-            // containers — a pointer-element container (list<ptr/shared/ref>, map<:ptr/…>) keeps
-            // its pointees put across growth (probe 25). remove/clear/sort/reverse free/reorder and
-            // invalidate regardless. pop/idx-set are excluded (no realloc/shift).
-            if (!recvBase.empty()) {
-                bool growth  = (method == "push" || method == "append" || method == "add" || method == "insert");
-                bool reorder = (method == "remove" || method == "clear" || method == "sort" || method == "reverse");
-                bool ptrElem = isPointerElementContainer(containerType.count(recvBase) ? containerType[recvBase] : "");
-                if (reorder || (growth && !ptrElem))
-                    for (auto& rb : refBorrowOf) if (rb.second == recvBase) refInvalid[rb.first] = true;
-            }
-            if (method == "push" || method == "append" || method == "add") {
-                for (auto& a : c->args) { std::string src = asPtrVar(a.get()); if (!src.empty()) markMoved(src, line); }
-                return;
-            }
-            // §6.2/§8/§3.1 (free functions): passing a ptr<T> local to a by-value ptr<T> param
-            // MOVES it (probe n11); a `consumed` param also moves; a ref<T>/shared<T> param does
-            // not. argTypeNames tells ptr-param (move) from ref-param (borrow).
-            auto fit = ctx.functions.find(fn);
-            if (fit != ctx.functions.end()) {
-                const auto& lifos = fit->second.argLifetimes;
-                const auto& tys   = fit->second.argTypeNames;
-                for (size_t j = 0; j < c->args.size(); ++j) {
-                    bool consumed = (j < lifos.size() && lifos[j] == "consumed");
-                    bool ptrParam = (j < tys.size() && tys[j].rfind("ptr<", 0) == 0);
-                    if (consumed || ptrParam) { std::string src = asPtrVar(c->args[j].get()); if (!src.empty()) markMoved(src, line); }
-                }
-            }
-            return;
-        }
+        // Everything else (including calls) → scanUses scans reads AND applies each call's ownership
+        // effects (applyCallEffects) exactly once. Statement-level and initializer-level calls thus
+        // share one path (round4 §4); no separate move handling here to avoid double-moving.
         scanUses(e, line);
     }
 };
@@ -341,10 +366,13 @@ struct BorrowChecker {
 void checkBorrowsMemV3(const ::CompilerContext& ctx, const FunctionDecl& fn) {
     if (!ctx.memV3 || !fn.body) return;
     BorrowChecker bc(ctx);
+    bc.fnName = fn.name;
     // §8 borrow-return anchor: record the declared anchor + the ref<T> params for the check.
     bc.returnAnchor = fn.returnBorrowsParam;
-    for (const auto& a : fn.args)
+    for (const auto& a : fn.args) {
         if (a.second.rfind("ref<", 0) == 0) bc.refParams.insert(a.first);
+        bc.declTypes[a.first] = a.second;   // F3: params participate in target-type resolution
+    }
     // Parameters are borrows by default (§8) — do not track them as owned ptr locals.
     bc.run(fn.body.get());
     // §10 leak lint: a `persistent` box that reaches function exit still Live never escaped
@@ -356,7 +384,7 @@ void checkBorrowsMemV3(const ::CompilerContext& ctx, const FunctionDecl& fn) {
         for (const auto& kv : bc.persistentPtrs) {
             auto it = bc.state.find(kv.first);
             if (it != bc.state.end() && it->second == St::Live)
-                LOG_WARNING(BorrowChecker::loc(kv.second) + "leak: persistent box '" + kv.first +
+                LOG_WARNING(bc.loc(kv.second) + "leak: persistent box '" + kv.first +
                     "' reaches scope exit without being moved out / stored / returned — its declared "
                     "escape never happens, so it leaks (§9.1/§10). Move it out, or drop `persistent` "
                     "to auto-free at scope. (static_off: [\"leak\"] to silence.)");

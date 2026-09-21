@@ -1,0 +1,35 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5: a DEEP-chain container member-store `set: [mat.pick.eff, block]` (a.b.c where c is a
+# list/map/buffer field of a value-model sub-field) must resolve the SLOT and share/adopt the handle.
+# resolvePropertyWritePtr's chain recursion dropped wantContainerSlot → it returned the loaded handle
+# instead of the slot, and the store then read a garbage "old handle" from it and released it → crash
+# (open_mana_pick `set:[mat.pending_mana_pick.pending_effect, block]`, test_mana_pick rc139).
+- model:
+    name: PendingLike
+    fields:
+      - [active, i32]
+      - [eff, list<i32>]
+- model:
+    name: MatchLike
+    fields:
+      - [pick, PendingLike]
+- def:
+    name: park
+    args: [[mat, ref<MatchLike>], [block, list<i32>]]
+    body:
+      - set: [mat.pick.active, 1]
+      - set: [mat.pick.eff, block]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [mtch, ptr<MatchLike>, { new: MatchLike }]
+      - decl: [blk, list<i32>]
+      - call: [blk.push, 10]
+      - call: [blk.push, 20]
+      - call: [park, mtch, blk]
+      - decl: [cnt, i32, { call: [mtch.pick.eff.len] }]
+      - if: { condition: { neq: [cnt, 2] }, then: [{ print: ["FAIL deep-chain: eff.len=${cnt}, expected 2"] }, { return: 1 }] }
+      - print: ["PASS 46 deep_chain_member_store"]
+      - return: 0

@@ -83,6 +83,21 @@ extern "C" void* aiml_model_alloc(size_t structSize) {
     return obj;
 }
 
+extern "C" void* aiml_model_adopt(void* oldObj, size_t structSize) {
+    // spec/61 §6.2: ptr<T> [fields] → shared<T> [rc=1|fields]. New refcounted shell, move the
+    // fields in verbatim (handles bit-copied, no incref), free the old ptr block as raw memory.
+    if (!oldObj) return nullptr;
+    void* obj = aiml_model_alloc(structSize);        // [rc=1|fields], fields zeroed
+    if (!obj) return nullptr;
+    memcpy(obj, oldObj, structSize);                 // move fields (string/container handles verbatim)
+    // The old block is a unique ptr<T> box: plain-allocated (calloc in visitNewExpr), no MODL
+    // header, no member release (members moved). Free it raw at its own base.
+    aiml_memdiff_forget(oldObj);
+    if (aiml_trace_level()) take_alloc_size(oldObj);
+    free(oldObj);
+    return obj;
+}
+
 extern "C" void aiml_model_incref(void* obj) {
     if (!obj || (uintptr_t)obj < sizeof(AimlModelHeader)) return;
     AimlModelHeader* hdr = (AimlModelHeader*)((char*)obj - sizeof(AimlModelHeader));

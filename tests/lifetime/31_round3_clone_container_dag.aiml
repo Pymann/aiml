@@ -1,0 +1,21 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5.1: clone preserves internal DAG sharing while becoming independent of the source.
+- model:
+    name: DagPair
+    fields: [[left, list<i32>], [right, list<i32>]]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [original, DagPair]
+      - call: [original.left.push, 7]
+      - set: [original.right, original.left]
+      - call: [original.left.push, 8]
+      - if: { condition: { neq: [original.right.len, 2] }, then: [{ print: ["FAIL setup: source fields must alias (probe 24)"] }, { return: 2 }] }
+      - decl: [duplicate, DagPair, { clone: original }]
+      - call: [duplicate.left.push, 9]
+      - if: { condition: { neq: [original.left.len, 2] }, then: [{ print: ["FAIL clone aliases original container"] }, { return: 3 }] }
+      - if: { condition: { neq: [duplicate.right.len, 3] }, then: [{ print: ["FAIL clone loses container DAG: right.len=${duplicate.right.len}, expected=3"] }, { return: 1 }] }
+      - print: ["PASS 31 round3_clone_container_dag"]
+      - return: 0

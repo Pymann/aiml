@@ -14,6 +14,20 @@ struct AimlListRaw {
     void**  data;
 };
 
+// ── Handle lifecycle trace (AIML_TRACE_FRE) ─────────────────────────────────
+// Debug-only: log every list/map handle new / incref / release / fre-decref with
+// the handle-block pointer + rc, to pinpoint a double-free (an address whose rc
+// drops to 0 and is freed, then freed again). No-op unless AIML_TRACE_FRE is set.
+static inline bool aiml_trace_fre() {
+    static int on = -1;
+    if (on < 0) { const char* e = getenv("AIML_TRACE_FRE"); on = (e && *e) ? 1 : 0; }
+    return on == 1;
+}
+extern "C" void aiml_trace_fre_log(const char* tag, void* h, int rc) {
+    if (aiml_trace_fre() && h)
+        fprintf(stderr, "[FRE] %-10s h=%p rc=%d\n", tag, h, rc);
+}
+
 // ── Refcounted string allocator (UAF protection) ─────────────────────────────
 // Strings allocated via aiml_str_alloc get an 8-byte header prefixed:
 //   {uint32_t magic = 'STRN', uint32_t refcount}
@@ -185,7 +199,27 @@ extern "C" void aiml_list_free(void* list_ptr, int32_t elemKind,
         aiml_trace_record("list_free3", list_ptr, (unsigned long)lst->data, (unsigned long)lst->size, "elemK3");
         for (int32_t i = 0; i < lst->size; ++i)
             if (elems[i]) aiml_model_decref(elems[i], serNodes, serNodesCount);
+    } else if (elemKind == 4) {
+        // spec/61 §5.5 (memV3): list<ptr<T>> elements are OWNING boxes ([fields], no rc). Deep-free
+        // each box's heap fields (when it has a serNodes descriptor) then free the box shell. push
+        // moved the box in (one owner) → exactly one free per element.
+        char** elems = reinterpret_cast<char**>(lst->data);
+        for (int32_t i = 0; i < lst->size; ++i)
+            if (elems[i]) {
+                if (serNodes) aiml_ser_free_decoded(elems[i], serNodes, serNodesCount);
+                free(elems[i]);
+            }
+    } else if (elemKind == 5 && serNodes) {
+        // spec/61 §5.7 (memV3): a NESTED CONTAINER element is a refcounted HANDLE. Each element slot
+        // holds a handle pointer; release it via its handle-rooted descriptor (LIST_PTR/MAP_PTR/
+        // BUFFER_PTR root) → decref the inner handle, recursively releasing its own elements at rc 0.
+        // elemSize is the pointer stride; the descriptor root reads the handle at the slot address.
+        char* base = reinterpret_cast<char*>(lst->data);
+        for (int32_t i = 0; i < lst->size; ++i)
+            aiml_ser_free_decoded(base + (int64_t)i * elemSize, serNodes, serNodesCount);
     }
+    if (lst->data && aiml_trace_fre())
+        fprintf(stderr, "[FRE] %-10s h=%p rc=%d  (elemKind=%d size=%d)\n", "LDATA", lst->data, elemKind, elemKind, lst->size);
     free(lst->data);
     lst->data = nullptr;
     lst->size = 0;
@@ -205,12 +239,14 @@ extern "C" void* aiml_list_handle_new() {
     char* block = static_cast<char*>(calloc(1, 8 + sizeof(AimlListRaw)));
     if (!block) return nullptr;
     *reinterpret_cast<int32_t*>(block) = 1;   // rc = 1
+    aiml_trace_fre_log("LNEW", block + 8, 1);
     return block + 8;                          // pointer at the AimlListRaw
 }
 extern "C" void aiml_list_handle_incref(void* h) {
     if (!h) return;
     int32_t* rc = reinterpret_cast<int32_t*>(static_cast<char*>(h) - 8);
     (*rc)++;
+    aiml_trace_fre_log("LINC", h, *rc);
 }
 // decref; at rc 0 free the elements + data buffer (via aiml_list_free) and the block.
 extern "C" void aiml_list_handle_release(void* h, int32_t elemKind,
@@ -218,7 +254,9 @@ extern "C" void aiml_list_handle_release(void* h, int32_t elemKind,
                                          int32_t serNodesCount) {
     if (!h) return;
     int32_t* rc = reinterpret_cast<int32_t*>(static_cast<char*>(h) - 8);
+    aiml_trace_fre_log("LREL", h, *rc - 1);
     if (--(*rc) > 0) return;
+    aiml_trace_fre_log("LFREE", h, *rc);
     aiml_list_free(h, elemKind, elemSize, serNodes, serNodesCount);  // frees data + elements
     free(static_cast<char*>(h) - 8);                                  // free the handle block
 }
@@ -242,6 +280,12 @@ extern "C" void* aiml_list_handle_copy(void* src, int64_t elemSize, int32_t elem
     } else if (elemKind == 3) {                 // list<shared/%M*>: incref each shared model
         void** e = reinterpret_cast<void**>(d->data);
         for (int32_t i = 0; i < n; ++i) if (e[i]) aiml_model_incref(e[i]);
+    } else if (elemKind == 5) {                 // spec/61 §5.7: nested container handle — share (incref)
+        // all list/map/buffer handles carry the same [i32 rc][i32 pad] header, so a generic rc
+        // bump at (handle-8) co-owns the inner container regardless of its kind (shallow copy).
+        void** e = reinterpret_cast<void**>(d->data);
+        for (int32_t i = 0; i < n; ++i)
+            if (e[i]) ++(*reinterpret_cast<int32_t*>(static_cast<char*>(e[i]) - 8));
     }
     return h;
 }
@@ -323,6 +367,7 @@ extern "C" void aiml_map_free(void* map_ptr, int32_t keyKind, int64_t keyStride,
             }
         }
     }
+    if (m->keys) aiml_trace_fre_log("MKEYS", m->keys, valKind);
     free(m->occ);  m->occ  = nullptr;
     free(m->keys); m->keys = nullptr;
     free(m->vals); m->vals = nullptr;
@@ -337,18 +382,22 @@ extern "C" void* aiml_map_handle_new() {
     char* block = static_cast<char*>(calloc(1, 8 + sizeof(AimlMapRaw)));
     if (!block) return nullptr;
     *reinterpret_cast<int32_t*>(block) = 1;   // rc = 1
+    aiml_trace_fre_log("MNEW", block + 8, 1);
     return block + 8;
 }
 extern "C" void aiml_map_handle_incref(void* h) {
     if (!h) return;
     (*reinterpret_cast<int32_t*>(static_cast<char*>(h) - 8))++;
+    aiml_trace_fre_log("MINC", h, *reinterpret_cast<int32_t*>(static_cast<char*>(h) - 8));
 }
 extern "C" void aiml_map_handle_release(void* h, int32_t keyKind, int64_t keyStride,
                                         int32_t valKind, int64_t valStride,
                                         void* valNodes, int32_t valNodesCount) {
     if (!h) return;
     int32_t* rc = reinterpret_cast<int32_t*>(static_cast<char*>(h) - 8);
+    aiml_trace_fre_log("MREL", h, *rc - 1);
     if (--(*rc) > 0) return;
+    aiml_trace_fre_log("MFREE", h, *rc);
     aiml_map_free(h, keyKind, keyStride, valKind, valStride, valNodes, valNodesCount);
     free(static_cast<char*>(h) - 8);
 }

@@ -1,10 +1,14 @@
 #include "ser_runtime.h"
 #include "string_runtime.h"
 #include "model_runtime.h"   // AIML v2: aiml_model_alloc / dec_hits_zero / free_shell (AIML_TD_MODEL)
+#include "tensor_runtime.h"  // round4 §3: aiml_tensor_clone / aiml_tensor_free (AIML_TD_TENSOR)
 // spec/61 §5 Option B (memV3): list/map-handle allocators (string_runtime.cpp).
 extern "C" void* aiml_list_handle_new();
 extern "C" void* aiml_map_handle_new();
 extern "C" void* aiml_buffer_handle_new();
+extern "C" void  aiml_list_handle_incref(void*);
+extern "C" void  aiml_map_handle_incref(void*);
+extern "C" void  aiml_buffer_handle_incref(void*);
 #include <cstring>
 #include <cstdlib>
 #include <vector>
@@ -221,6 +225,7 @@ static void dec(const uint8_t* blob, int& pos, int end,
                 uint8_t* out);
 
 static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data);
+extern "C" void aiml_trace_fre_log(const char* tag, void* h, int rc);  // AIML_TRACE_FRE (string_runtime)
 
 // ── Encode (recursive) ────────────────────────────────────────────────────────
 
@@ -231,6 +236,12 @@ static void enc(std::vector<uint8_t>& buf,
     const AimlTypeNode& n = ns[idx];
 
     switch ((AimlTDKind)n.kind) {
+
+    // round4 §1/§3: CLONE-only leaf kinds — a live resource / weak edge is not wire-serialisable.
+    // Skip explicitly (rather than silently) so the blob layout is well-defined; dec mirrors this.
+    case AIML_TD_TENSOR:
+    case AIML_TD_WEAK_REF:
+        break;
 
     case AIML_TD_I8:
         w_u8(buf, *data);
@@ -366,6 +377,12 @@ static void dec(const uint8_t* blob, int& pos, int end,
     const AimlTypeNode& n = ns[idx];
 
     switch ((AimlTDKind)n.kind) {
+
+    // round4 §1/§3: CLONE-only leaf kinds — enc wrote no bytes for them, so dec consumes none and
+    // leaves the (zero-initialised) slot null. A tensor/weak field does not survive a wire round-trip.
+    case AIML_TD_TENSOR:
+    case AIML_TD_WEAK_REF:
+        break;
 
     // Truncated scalar = corrupt blob → flag it (F1); a valid blob always has all
     // field bytes present, so pos+N>end is never a legitimate decode.
@@ -705,7 +722,9 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         memcpy(&obj, data, sizeof(void*));
         if (obj) {
             int32_t* rc = (int32_t*)((char*)obj - 8);
+            aiml_trace_fre_log("FRE_PTR", obj, *rc - 1);
             if (--(*rc) <= 0) {
+                aiml_trace_fre_log("FRE_FREE", obj, *rc);
                 fre(n.param1, ns, nn, (uint8_t*)obj);   // frees arrays + per-element heap
                 free((char*)obj - 8);                    // free the handle block
             }
@@ -733,6 +752,18 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         }
         obj = nullptr;
         memcpy(data, &obj, sizeof(void*));
+        break;
+    }
+
+    // round4 §1/§2/§3: CLONE-only leaf kinds. They never appear in Existing (wire/scope-drop)
+    // descriptors, so fre normally never sees them — but if a clone descriptor is ever used to free a
+    // partially-built clone, a weak ref must be a no-op (not owned) and a tensor a proper resource drop.
+    case AIML_TD_WEAK_REF:
+        break;   // weak edge — not owned, nothing to free
+    case AIML_TD_TENSOR: {
+        void* t = nullptr; memcpy(&t, data, sizeof(t));
+        if (t) aiml_tensor_free(t);
+        t = nullptr; memcpy(data, &t, sizeof(t));
         break;
     }
 
@@ -882,12 +913,33 @@ extern "C" void aiml_ser_deep_copy(void*               dst,
     free(blob);
 }
 
-// ── spec/61 §5.1 memoized deep-clone ──────────────────────────────────────────
-// A per-clone src-pointer → dst-pointer memo for AIML_TD_MODEL references, so a
-// shared sub-object reached by several owning edges is cloned once (the DAG is
-// preserved) and a cycle terminates (the back-edge finds the in-progress clone).
+// ── spec/61 §5.1 / round4 §2 memoized deep-clone ──────────────────────────────
+// `ownedMemo` maps a source OWNED object → its clone, so a shared sub-object reached by several
+// owning edges is cloned once (DAG preserved) and a cycle terminates (the back-edge finds the
+// in-progress clone). `relocated` additionally maps EVERY cloned referent address (owned objects
+// AND cloned tensors) → its clone, so a weak `ref<T>` that targets an INTERNAL object can be
+// redirected to that object's clone in a second phase. `weakFixups` records each weak slot to
+// redirect; `finishWeakCloneRefs` runs once after the whole walk (the target may be cloned AFTER
+// the weak slot is visited — a one-pass memo lookup is insufficient, round4 §2).
 #include <unordered_map>
-static thread_local std::unordered_map<const void*, void*>* g_clone_memo = nullptr;
+#include <vector>
+struct WeakCloneFixup { uint8_t* destinationSlot; const void* originalTarget; };
+struct CloneContext {
+    std::unordered_map<const void*, void*> ownedMemo;   // owned src → clone (DAG/cycle memo)
+    std::unordered_map<const void*, void*> relocated;   // any cloned referent src → clone (weak redirect)
+    std::vector<WeakCloneFixup>            weakFixups;
+};
+static thread_local CloneContext* g_clone_ctx = nullptr;
+
+static void finishWeakCloneRefs(CloneContext& context) {
+    for (const auto& fixup : context.weakFixups) {
+        const auto found = context.relocated.find(fixup.originalTarget);
+        // Internal target → redirect to its clone; external target → keep the original pointer.
+        const void* target = (found != context.relocated.end()) ? found->second : fixup.originalTarget;
+        // A weak ref never increfs and is not freed through — just store the (possibly redirected) ptr.
+        memcpy(fixup.destinationSlot, &target, sizeof(target));
+    }
+}
 
 static void clw(int idx, const AimlTypeNode* ns, int nn,
                 const uint8_t* src, uint8_t* dst) {
@@ -980,14 +1032,18 @@ static void clw(int idx, const AimlTypeNode* ns, int nn,
         break;
 
     case AIML_TD_PTR_STRUCT: {
-        // Unique owner (ptr<T>): clone independently, no memo.
+        // Unique owner (ptr<T>): clone independently. No owning-memo (a unique owner is not shared),
+        // but record the address in `relocated` so an internal weak ref to it can be redirected.
         const void* obj = nullptr;
         memcpy(&obj, src, sizeof(void*));
         void* nobj = nullptr;
         if (obj) {
             size_t inner_sz = (size_t)(n.elem_size > 0 ? n.elem_size : (int32_t)sizeof(void*));
             nobj = calloc(1, inner_sz);
-            if (nobj) clw(n.param1, ns, nn, (const uint8_t*)obj, (uint8_t*)nobj);
+            if (nobj) {
+                if (g_clone_ctx) g_clone_ctx->relocated.emplace(obj, nobj);  // before recursion (weak redirect)
+                clw(n.param1, ns, nn, (const uint8_t*)obj, (uint8_t*)nobj);
+            }
         }
         memcpy(dst, &nobj, sizeof(void*));
         break;
@@ -1000,8 +1056,8 @@ static void clw(int idx, const AimlTypeNode* ns, int nn,
         memcpy(&obj, src, sizeof(void*));
         void* nobj = nullptr;
         if (obj) {
-            auto it = g_clone_memo->find(obj);
-            if (it != g_clone_memo->end()) {
+            auto it = g_clone_ctx->ownedMemo.find(obj);
+            if (it != g_clone_ctx->ownedMemo.end()) {
                 // Already cloned via another owning edge — reuse and incref.
                 nobj = it->second;
                 aiml_model_incref(nobj);
@@ -1009,7 +1065,8 @@ static void clw(int idx, const AimlTypeNode* ns, int nn,
                 size_t inner_sz = (size_t)(n.elem_size > 0 ? n.elem_size : (int32_t)sizeof(void*));
                 nobj = aiml_model_alloc(inner_sz);   // refcount 1
                 if (nobj) {
-                    (*g_clone_memo)[obj] = nobj;     // record BEFORE recursing (cycle-safe)
+                    g_clone_ctx->ownedMemo[obj] = nobj;   // record BEFORE recursing (cycle-safe)
+                    g_clone_ctx->relocated.emplace(obj, nobj);   // weak-redirect target
                     clw(n.param1, ns, nn, (const uint8_t*)obj, (uint8_t*)nobj);
                 }
             }
@@ -1021,16 +1078,30 @@ static void clw(int idx, const AimlTypeNode* ns, int nn,
     case AIML_TD_LIST_PTR:
     case AIML_TD_MAP_PTR:
     case AIML_TD_BUFFER_PTR: {
-        // spec/61 §5.1 (memV3): deep-clone the container into a NEW independent handle (containers
-        // are NOT memoized — a clone gets its own copy; aliasing is a {copy}/assign concern).
+        // spec/61 §5.1 (F2): a container handle is MEMOIZED by source pointer — two owning edges to
+        // the same container clone ONE shared container (DAG preserved). On a memo hit, reuse the
+        // cloned handle and incref its CONTAINER refcount (not the model rc — different runtime
+        // contract). New handle → record in the memo BEFORE recursing (cycle-safe).
         const void* obj = nullptr;
         memcpy(&obj, src, sizeof(void*));
         void* nobj = nullptr;
         if (obj) {
-            nobj = (n.kind == AIML_TD_MAP_PTR) ? aiml_map_handle_new()
-                : (n.kind == AIML_TD_BUFFER_PTR) ? aiml_buffer_handle_new()
-                : aiml_list_handle_new();
-            if (nobj) clw(n.param1, ns, nn, (const uint8_t*)obj, (uint8_t*)nobj);
+            auto it = g_clone_ctx->ownedMemo.find(obj);
+            if (it != g_clone_ctx->ownedMemo.end()) {
+                nobj = it->second;
+                if (n.kind == AIML_TD_MAP_PTR)         aiml_map_handle_incref(nobj);
+                else if (n.kind == AIML_TD_BUFFER_PTR)  aiml_buffer_handle_incref(nobj);
+                else                                    aiml_list_handle_incref(nobj);
+            } else {
+                nobj = (n.kind == AIML_TD_MAP_PTR) ? aiml_map_handle_new()
+                    : (n.kind == AIML_TD_BUFFER_PTR) ? aiml_buffer_handle_new()
+                    : aiml_list_handle_new();
+                if (nobj) {
+                    g_clone_ctx->ownedMemo[obj] = nobj;   // record BEFORE recursing (DAG/cycle-safe)
+                    g_clone_ctx->relocated.emplace(obj, nobj);   // weak-redirect target
+                    clw(n.param1, ns, nn, (const uint8_t*)obj, (uint8_t*)nobj);
+                }
+            }
         }
         memcpy(dst, &nobj, sizeof(void*));
         break;
@@ -1042,8 +1113,8 @@ static void clw(int idx, const AimlTypeNode* ns, int nn,
         const void* obj = nullptr; memcpy(&obj, src, sizeof(void*));
         void* nobj = nullptr;
         if (obj) {
-            auto it = g_clone_memo->find(obj);
-            if (it != g_clone_memo->end()) {
+            auto it = g_clone_ctx->ownedMemo.find(obj);
+            if (it != g_clone_ctx->ownedMemo.end()) {
                 nobj = it->second;
                 if (n.param2 != 0) aiml_model_incref(nobj);   // shared: extra owning edge
             } else {
@@ -1052,13 +1123,36 @@ static void clw(int idx, const AimlTypeNode* ns, int nn,
                     size_t sz = (size_t)(n.elem_size > 0 ? n.elem_size : r->size);
                     nobj = (n.param2 != 0) ? aiml_model_alloc(sz) : calloc(1, sz > 0 ? sz : 1);
                     if (nobj) {
-                        (*g_clone_memo)[obj] = nobj;          // record BEFORE recursing (cycle-safe)
+                        g_clone_ctx->ownedMemo[obj] = nobj;       // record BEFORE recursing (cycle-safe)
+                        g_clone_ctx->relocated.emplace(obj, nobj); // weak-redirect target
                         clw(0, r->nodes, r->n, (const uint8_t*)obj, (uint8_t*)nobj);
                     }
                 }
             }
         }
         memcpy(dst, &nobj, sizeof(void*));
+        break;
+    }
+
+    case AIML_TD_WEAK_REF: {
+        // round4 §2: a `ref<T>` weak edge. Copy the pointer now; record a fixup so that if the target
+        // is an INTERNAL object (cloned elsewhere in this walk) it is redirected to the clone in the
+        // second phase. No incref (weak), never freed through.
+        const void* target = nullptr;
+        memcpy(&target, src, sizeof(target));
+        memcpy(dst, &target, sizeof(target));
+        if (target && g_clone_ctx) g_clone_ctx->weakFixups.push_back({dst, target});
+        break;
+    }
+
+    case AIML_TD_TENSOR: {
+        // round4 §3: an owned `tensor` handle — deep-clone via the tensor runtime (data/views/meta),
+        // never a shared alias. Record the clone in `relocated` so an internal weak ref<tensor> can
+        // point at the new handle.
+        void* orig = nullptr; memcpy(&orig, src, sizeof(orig));
+        void* cloned = orig ? aiml_tensor_clone(orig) : nullptr;
+        memcpy(dst, &cloned, sizeof(cloned));
+        if (orig && cloned && g_clone_ctx) g_clone_ctx->relocated.emplace(orig, cloned);
         break;
     }
     }
@@ -1069,10 +1163,15 @@ extern "C" void aiml_clone_deep(void*               dst,
                                 const AimlTypeNode* nodes,
                                 int32_t             n_nodes) {
     if (!dst || !src || !nodes || n_nodes <= 0) return;
-    std::unordered_map<const void*, void*> memo;
-    g_clone_memo = &memo;
+    // round4 §2: RAII save/restore of the thread-local context so nested aiml_clone_deep calls (e.g.
+    // a runtime path that clones while inside another clone) each get a fresh context and the outer
+    // one is restored — the old bare set-to-nullptr broke reentrancy.
+    CloneContext context;
+    CloneContext* prev = g_clone_ctx;
+    g_clone_ctx = &context;
     clw(0, nodes, n_nodes, (const uint8_t*)src, (uint8_t*)dst);
-    g_clone_memo = nullptr;
+    finishWeakCloneRefs(context);   // phase 2: redirect internal weak refs to their clones
+    g_clone_ctx = prev;
 }
 
 extern "C" int aiml_ser_decode(const char*         blob,

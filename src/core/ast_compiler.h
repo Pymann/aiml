@@ -77,6 +77,12 @@ private:
     void emitMapHandleDecl(DeclStmt* decl);
     // spec/61 §5 Option B (memV3): declare a buffer value-local as a refcounted handle.
     void emitBufferHandleDecl(DeclStmt* decl);
+    // spec/61 §5.1 (memV3): deep-clone a container from srcSlot (holds a handle pointer) into
+    // dstSlot, using a LIST_PTR/MAP_PTR/BUFFER_PTR-rooted descriptor + the memoized clone walker.
+    void emitContainerCloneDeep(llvm::Value* dstSlot, llvm::Value* srcSlot, const std::string& containerType);
+    // spec/61 §5.7: HANDLE-rooted (serFieldSubtree) descriptor global for a nested container element
+    // type (e.g. "list<i32>" → LIST_PTR…). Drives the outer container's per-element release (elemKind 5).
+    llvm::GlobalVariable* elemHandleSerNodes(const std::string& typeName, int& nodeCount);
     void visitSetStmt(SetStmt* setStmt);
     void visitExprStmt(ExprStmt* exprStmt);
     void visitRetStmt(RetStmt* retStmt);

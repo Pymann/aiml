@@ -50,6 +50,12 @@ typedef enum {
                              //   (%M* shell), else 0 (plain heap box); elem_size = sizeof(T). The
                              //   clone/free walkers look T's descriptor up at runtime and recurse
                              //   (memoized), so a finite recursive chain is deep-cloned/freed.
+    AIML_TD_WEAK_REF   = 16, // round4 §2 (memV3 CLONE descriptors only): a ref<T> weak edge. A leaf
+                             //   (pointer slot, no subtree). The clone walker copies the pointer,
+                             //   then in a second phase redirects it to the clone of an internal
+                             //   target (via CloneContext.relocated); no incref, not freed at drop.
+    AIML_TD_TENSOR     = 17, // round4 §3 (memV3 CLONE descriptors only): an owned `tensor` handle. A
+                             //   leaf; the clone walker deep-copies it via aiml_tensor_clone.
 } AimlTDKind;
 
 // Each node is 24 bytes.  The whole descriptor for a type is an array of these.
