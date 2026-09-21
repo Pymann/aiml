@@ -3381,6 +3381,7 @@ static void serEmitGlobal(
         elems.push_back(llvm::ConstantStruct::get(nodeTy, f));
     }
     llvm::ArrayType* arrTy = llvm::ArrayType::get(nodeTy, elems.size());
+    llvm::Constant* init = llvm::ConstantArray::get(arrTy, elems);
     // LinkOnceODRLinkage: wenn zwei Compilation-Units denselben Typ
     // serialisieren (z.B. Modul A öffnet `Kv<string:T>`, importiertes Modul B
     // öffnet dieselbe Kv), emittieren beide identische ser_nodes-Arrays.
@@ -3390,10 +3391,39 @@ static void serEmitGlobal(
     // Caller mit MISMATCH-Pointer encode mit anderen Offsets. Mit linkonce_odr
     // werden die Symbole vom Linker gemerged: alle Module zeigen auf
     // dieselbe ser_nodes-Definition.
-    auto* gv = new llvm::GlobalVariable(ctx.module, arrTy, /*isConstant=*/true,
-        llvm::GlobalValue::LinkOnceODRLinkage,
-        llvm::ConstantArray::get(arrTy, elems),
-        "__aiml_sernodes_" + name);
+    //
+    // Dedup INNERHALB einer Compilation-Unit: serEmitGlobal wird für denselben Typ mehrfach
+    // aufgerufen — inline in registerTypeDecl und danach aus rebuildSerNodesFor bei JEDER
+    // registerTypes-Phase (imports, siblings, main, compileFromString). Ein jedes Mal ein frisches
+    // Global anzulegen ließ LLVM den kollidierenden Namen durchnummerieren
+    // (__aiml_sernodes_ServerRuntime.NNNNN); bei O0 werden diese LinkOnceODR-Duplikate nie
+    // dead-gestrippt, sodass ein einzelnes .o hunderte 59-KB-Kopien ansammelte (ServerRuntime
+    // allein: 495×) → jedes Objekt ~31 MB → der 5,5-GB-Server-Link sprengte das small code model
+    // (relocation truncated to fit). Deshalb die bestehende Definition wiederverwenden.
+    // Wiederverwenden NUR bei bit-identischem Inhalt: LLVM uniquet Constants, also liefert
+    // ConstantArray::get(arrTy, elems) für gleiche Elemente denselben Constant* → `init` ist
+    // pointer-identisch zum vorhandenen Initializer genau dann, wenn der Descriptor unverändert
+    // ist. Das ist der 185×-Fall (dieselbe registerTypes-Phase über Imports/Siblings/Main). Dann
+    // kein neues Global. Bei ABWEICHENDEM Inhalt NICHT den bestehenden Initializer mutieren (ein
+    // früherer setInitializer-Ansatz überschrieb bei zufällig gleicher Node-Zahl ein bereits
+    // korrektes Descriptor-Global mit anderem Inhalt → unter memV3 treibt der Descriptor
+    // Teardown/Free → Crash, siehe mkp_* rc139). Stattdessen frisch anlegen und das alte
+    // (forward-ref-unvollständige) per RAUW umbiegen + entfernen — semantisch wie vor dem Dedup,
+    // nur ohne die dead-Duplikate.
+    std::string symName = "__aiml_sernodes_" + name;
+    llvm::GlobalVariable* old = ctx.module.getNamedGlobal(symName);
+    llvm::GlobalVariable* gv = nullptr;
+    if (old && old->hasInitializer() && old->getInitializer() == init) {
+        gv = old;
+    } else {
+        gv = new llvm::GlobalVariable(ctx.module, arrTy, /*isConstant=*/true,
+            llvm::GlobalValue::LinkOnceODRLinkage, init, old ? "" : symName);
+        if (old) {
+            old->replaceAllUsesWith(llvm::ConstantExpr::getBitCast(gv, old->getType()));
+            old->eraseFromParent();
+            gv->setName(symName);
+        }
+    }
     gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
     gv->setVisibility(llvm::GlobalValue::HiddenVisibility);
     // hasHeapFields is computed by the caller based on serHasHeap; do not force-set it.
