@@ -2551,6 +2551,22 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {idxHandle, searchVal}));
             }
             // findings_by: returns list<string> via out-param.
+            // spec/61 §5 (memV3): list<string> is a refcounted HANDLE (aiml_list_handle_release).
+            // Allocate a real heap handle — its {size,cap,data} struct pointer IS the out-param the
+            // fill writes into (mirrors str.split). A STACK alloca would make the caller's binding
+            // "own" stack memory → its scope-drop frees a stack pointer, and a direct
+            // `return: [{ call: [<.arts.findings_by, …] }]` (MediaStore.art_owner_cards) would return
+            // a by-value %list_string struct against a handle-ptr return type → invalid IR
+            // ("return type does not match operand type of return inst").
+            if (ctx.memV3) {
+                llvm::Function* nw = ctx.getFunction("aiml_list_handle_new", i8p, {});
+                llvm::Value* handle = ctx.builder.CreateCall(nw, {}, "findings_handle");
+                ListImpl::initList(ctx, handle, i8p, 8);
+                llvm::Function* f = ctx.getFunction(
+                    "aiml_db_index_findings", ctx.builder.getVoidTy(), {i8p, i8p, i8p});
+                ctx.builder.CreateCall(f, {idxHandle, searchVal, handle});
+                return ctx.ir_gen->wrap(handle);
+            }
             llvm::Type* listTy = ctx.getLLVMType("list<string>");
             if (!listTy) {
                 LOG_ERROR(methodName + ": list<string> type unavailable");
