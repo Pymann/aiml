@@ -1859,10 +1859,27 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             if (vit != ctx.symbol_table.end() && vit->second.is_param
                 && (vit->second.typeName.rfind("ptr<", 0) == 0
                     || vit->second.typeName.rfind("ref<", 0) == 0)) {
-                LOG_WARNING(ctx.fmtLoc() + "borrow-escape: storing borrowed parameter '" + ve->name +
-                    "' (" + vit->second.typeName + ") into member '<." + propName + "'. Its pointee is "
-                    "owned by the caller and may not outlive this object (spec/61 §7.1). Copy it, or "
-                    "take ownership with a { lifetime: consumed } parameter.");
+                // spec/61 §5.2/§6.2: a `ref<T>` MEMBER is a declared WEAK back-reference — it does not
+                // own, does not incref, and is not freed through, so storing a borrow into it is the
+                // sanctioned back-edge pattern (`Card { owner: ref<Zone> }`), NOT an escape. Only an
+                // OWNING target member (bare model / ptr<T> / shared<T>) can dangle a borrowed pointee.
+                // Look up the direct member's declared type; skip the warning for a ref<T> member.
+                bool targetIsWeakRef = false;
+                if (propName.find('.') == std::string::npos) {
+                    auto cit = ctx.classes.find(ctx.currentClassName);
+                    if (cit != ctx.classes.end()) {
+                        auto mit = cit->second.members.find(propName);
+                        if (mit != cit->second.members.end()
+                            && mit->second.typeName.rfind("ref<", 0) == 0)
+                            targetIsWeakRef = true;
+                    }
+                }
+                if (!targetIsWeakRef)
+                    LOG_WARNING(ctx.fmtLoc() + "borrow-escape: storing borrowed parameter '" + ve->name +
+                        "' (" + vit->second.typeName + ") into OWNING member '<." + propName + "'. Its "
+                        "pointee is owned by the caller and may not outlive this object (spec/61 §6.2). "
+                        "Declare the member ref<T> (weak back-edge), copy it, or take ownership with a "
+                        "{ lifetime: consumed } parameter.");
             }
         }
     }
