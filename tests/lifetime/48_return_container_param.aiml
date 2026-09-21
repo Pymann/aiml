@@ -1,0 +1,30 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §8: returning a borrowed container-handle PARAM (`return carry`) SHARES it — the caller
+# still owns the argument, so the return path must incref, not move. Without it the returned handle
+# and the caller's own reference both free the rc-1 handle → double-free. This is the cascade
+# `carrier: list<T>` render pattern: a behavior does `carry.push(x); return carry`, and the caller's
+# `parts = render(carry, ..)` aliases its own `carry` local (trig_text, test_ability_text rc139).
+- def:
+    name: render
+    args: [[carry, list<string>], [tag, i32]]
+    return: list<string>
+    body:
+      - call: [carry.push, "x"]
+      - return: carry
+- def:
+    name: use_it
+    args: [[tag, i32]]
+    return: i32
+    body:
+      - decl: [carry, list<string>]
+      - decl: [parts, list<string>, { call: [render, carry, tag] }]   # parts aliases carry
+      - return: parts.len                                              # both drop the same handle once
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [num, i32, { call: [use_it, 1] }]
+      - if: { condition: { neq: [num, 1] }, then: [{ print: ["FAIL return-param: len=${num}, expected 1"] }, { return: 1 }] }
+      - print: ["PASS 48 return_container_param"]
+      - return: 0

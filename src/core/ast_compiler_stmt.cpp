@@ -2926,6 +2926,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     // caller). Capture the local's slot so (a) we return the loaded handle ptr and (b) its handle
     // drop is exempted on the return path (a move — the caller takes the ref).
     llvm::Value* retContainerSlot = nullptr;
+    bool retContainerIsParam = false;   // spec/61 §8: a returned container-handle PARAM is a borrow → share (incref)
     if (auto* rv = dynamic_cast<VariableExpr*>(retStmt->value.get())) {
         std::string base = rv->name;
         size_t dot = base.find('.');
@@ -2934,9 +2935,11 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
             retBaseId = bs->ownershipId;
             if (dot == std::string::npos && ctx.isRefcountModel(bs->typeName) && bs->ir_alloca_inst)
                 retModelAddr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bs->ir_alloca_inst));
-            if (dot == std::string::npos && bs->is_byref_arg && ctx.isMemV3ContainerHandle(bs->typeName)
-                && bs->ir_alloca_inst)
+            if (dot == std::string::npos && bs->is_byref_arg
+                && ctx.isMemV3ContainerHandle(bs->typeName) && bs->ir_alloca_inst) {
                 retContainerSlot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bs->ir_alloca_inst));
+                retContainerIsParam = bs->is_param;   // borrowed arg → the caller still owns it
+            }
         }
     }
     // Only alias-safe return shapes may run the cleanup; otherwise the returned value's
@@ -3036,10 +3039,20 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         emitReturnCleanup();   // §6/P2a: void → return value cannot alias a dropped owner
         ctx.ir_gen->createRet(nullptr);
     } else if (retContainerSlot) {
-        // spec/61 §5 (memV3): return the container HANDLE pointer (moved to the caller). Load it
-        // from the local's slot, run cleanup (the returned handle is exempted above), then ret.
+        // spec/61 §5 (memV3): return the container HANDLE pointer. Load it from the slot, then ret.
+        // An OWNED local is MOVED (its drop is exempted by cleanup). A borrowed PARAM is SHARED — the
+        // caller still owns the argument, so incref before returning, else the returned handle and the
+        // caller's own reference both free the rc-1 handle → double-free (the cascade `carrier:
+        // list<T>` render `return carry`, test_ability_text/trig_text).
         auto* i8p = llvm::PointerType::get(ctx.context, 0);
         llvm::Value* handle = ctx.builder.CreateLoad(i8p, retContainerSlot, "ret_conh");
+        if (retContainerIsParam) {
+            const std::string& rt = ctx.currentFunctionReturnType;
+            const char* incF = (rt.rfind("map<", 0) == 0) ? "aiml_map_handle_incref"
+                : (rt == "buffer" || rt.rfind("buffer<", 0) == 0) ? "aiml_buffer_handle_incref"
+                : "aiml_list_handle_incref";
+            ctx.builder.CreateCall(ctx.getFunction(incF, ctx.builder.getVoidTy(), {i8p}), { handle });
+        }
         emitReturnCleanup();
         ctx.ir_gen->createRet(ctx.ir_gen->wrap(handle));
     } else if (retStmt->value) {
