@@ -728,7 +728,18 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
         if(isListType(tn)){
             std::string elemTn = listElem(tn);
             llvm::Type* elemTy = ctx.getLLVMType(elemTn);
-            ListImpl::initList(ctx,fieldPtr,elemTy,4);
+            // spec/61 §5 (memV3): a list FIELD is a refcounted HANDLE pointer, not an inline struct.
+            // Allocate the handle, store it into the field, and target it for initList/push — else the
+            // {size,cap,data} is written into the 8-byte ptr field and a later `.len`/`.at` derefs
+            // garbage (deserialize of any model with a list field crashed — test_serialize_struct and
+            // the whole JSON serialize/persist cluster).
+            llvm::Value* listTgt = fieldPtr;
+            if(ctx.memV3 && ctx.isMemV3ContainerHandle(tn)){
+                llvm::Function* nw = ctx.getFunction("aiml_list_handle_new", ptrT(ctx), {});
+                listTgt = ctx.builder.CreateCall(nw,{},"deser_lh");
+                ctx.builder.CreateStore(listTgt,fieldPtr);
+            }
+            ListImpl::initList(ctx,listTgt,elemTy,4);
             llvm::Value* cnt = ctx.builder.CreateCall(gJrArrLen(ctx),{reader,fkey},"cnt");
             llvm::BasicBlock* ph = ctx.builder.GetInsertBlock();
             llvm::BasicBlock* lc = llvm::BasicBlock::Create(ctx.context,fname+"_dlc",parentFn);
@@ -759,11 +770,11 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
                 llvm::Function* allocFn = ctx.getFunction("aiml_model_alloc", ptrT(ctx), { ctx.getSizeType() });
                 llvm::Value* obj = ctx.builder.CreateCall(allocFn, { ctx.getSizeConst(subSz) }, "msr_alloc");
                 emitDeserStructFields(ctx,sr,obj,elemTn,parentFn);
-                ListImpl::push(ctx,fieldPtr,obj);
+                ListImpl::push(ctx,listTgt,obj);
                 ctx.builder.CreateCall(gJrFree(ctx),{sr});
                 ctx.builder.CreateBr(srDone);
                 ctx.builder.SetInsertPoint(srNull);
-                ListImpl::push(ctx,fieldPtr,llvm::Constant::getNullValue(ptrT(ctx)));
+                ListImpl::push(ctx,listTgt,llvm::Constant::getNullValue(ptrT(ctx)));
                 ctx.builder.CreateBr(srDone);
                 ctx.builder.SetInsertPoint(srDone);
             } else if(ctx.classes.count(elemTn) && ctx.classes[elemTn].type){
@@ -785,7 +796,7 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
                 emitDeserStructFields(ctx,sr,tmp,elemTn,parentFn);
                 // load struct value from alloca so push copies struct data (not pointer)
                 llvm::Value* sval = ctx.builder.CreateLoad(subSt,tmp,"sval");
-                ListImpl::push(ctx,fieldPtr,sval);
+                ListImpl::push(ctx,listTgt,sval);
                 ctx.builder.CreateCall(gJrFree(ctx),{sr});
                 ctx.builder.CreateBr(srDone);
                 ctx.builder.SetInsertPoint(srDone);
@@ -814,11 +825,11 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
                     llvm::Value* heap = ctx.builder.CreateCall(callocFn,
                         {ctx.builder.getInt64(1), ctx.builder.getInt64(subSz)}, "rheap");
                     emitDeserStructFields(ctx,sr,heap,innerTn,parentFn);
-                    ListImpl::push(ctx,fieldPtr,heap);
+                    ListImpl::push(ctx,listTgt,heap);
                     ctx.builder.CreateCall(gJrFree(ctx),{sr});
                     ctx.builder.CreateBr(srDone);
                     ctx.builder.SetInsertPoint(srNull);
-                    ListImpl::push(ctx,fieldPtr,llvm::Constant::getNullValue(ptrT(ctx)));
+                    ListImpl::push(ctx,listTgt,llvm::Constant::getNullValue(ptrT(ctx)));
                     ctx.builder.CreateBr(srDone);
                     ctx.builder.SetInsertPoint(srDone);
                 }
@@ -840,11 +851,11 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
                 ctx.builder.CreateBr(isrDone);
                 ctx.builder.SetInsertPoint(isrDone);
                 llvm::Value* ilVal = ctx.builder.CreateLoad(innerListTy,ilAlloca,"ilval");
-                ListImpl::push(ctx,fieldPtr,ilVal);
+                ListImpl::push(ctx,listTgt,ilVal);
             } else {
                 // list of primitives
                 llvm::Value* elem = emitReadArrElem(ctx,reader,fkey,idx,elemTn);
-                ListImpl::push(ctx,fieldPtr,elem);
+                ListImpl::push(ctx,listTgt,elem);
             }
             llvm::Value* ni=ctx.builder.CreateAdd(idx,ctx.builder.getInt32(1),"ni");
             idx->addIncoming(ni,ctx.builder.GetInsertBlock());
@@ -857,7 +868,14 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
             llvm::Type* keyTy = intKey ? i32T(ctx) : ctx.getLLVMType("string");
             llvm::Type* valTy = ctx.getLLVMType(valTn);
             llvm::StructType* mapTy = MapImpl::getMapStructType(ctx,keyTy,valTy);
-            MapImpl::initMap(ctx,fieldPtr,keyTy,valTy,8);
+            // spec/61 §5 (memV3): a map FIELD is a refcounted HANDLE pointer (see the list case above).
+            llvm::Value* mapTgt = fieldPtr;
+            if(ctx.memV3 && ctx.isMemV3ContainerHandle(tn)){
+                llvm::Function* nw = ctx.getFunction("aiml_map_handle_new", ptrT(ctx), {});
+                mapTgt = ctx.builder.CreateCall(nw,{},"deser_mh");
+                ctx.builder.CreateStore(mapTgt,fieldPtr);
+            }
+            MapImpl::initMap(ctx,mapTgt,keyTy,valTy,8);
             llvm::Value* cnt = ctx.builder.CreateCall(gJrMapCount(ctx),{reader,fkey},"cnt");
             llvm::BasicBlock* ph = ctx.builder.GetInsertBlock();
             llvm::BasicBlock* lc = llvm::BasicBlock::Create(ctx.context,fname+"_dmc",parentFn);
@@ -889,7 +907,7 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
             else if(valTn=="f32")      vv=ctx.builder.CreateCall(gJrMapValF32(ctx),{reader,fkey,idx},"v");
             else if(valTn=="f64")      vv=ctx.builder.CreateCall(gJrMapValF64(ctx),{reader,fkey,idx},"v");
             else                       vv=ctx.builder.CreateCall(gJrMapValI32(ctx),{reader,fkey,idx},"v");
-            MapImpl::put(ctx,fieldPtr,kv,vv,mapTy,valTn=="string");
+            MapImpl::put(ctx,mapTgt,kv,vv,mapTy,valTn=="string");
             if(intKey && keyDup) ctx.builder.CreateCall(decf,{keyDup});   // reader dup of the int-key string
             else if(!intKey)     ctx.builder.CreateCall(decf,{kv});       // reader dup of the string key
             if(valTn=="string")  ctx.builder.CreateCall(decf,{vv});       // reader dup of the string value
