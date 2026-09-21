@@ -1,0 +1,19 @@
+# static-check: off
+# NEGATIVE Spec 61 §8 / §10: an owning call moves its ptr argument even inside a decl initializer.
+# EXPECT-ERROR: use-after-move
+- model: { name: ExprOwner, fields: [[ident, i32, 0]] }
+- def:
+    name: consume_for_result
+    args: [[item, ptr<ExprOwner>]]
+    return: i32
+    body:
+      - return: 7
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [owner, ptr<ExprOwner>, { new: ExprOwner }]
+      - decl: [result, i32, { call: [consume_for_result, owner] }]
+      # Reading the pointer is invalid; comparison avoids dereferencing potentially freed memory.
+      - if: { condition: { peq: [owner, null] }, then: [{ print: ["UNEXPECTED ACCEPT: moved pointer read, result=${result} (null)"] }], else: [{ print: ["UNEXPECTED ACCEPT: moved pointer read, result=${result} (non-null)"] }] }
+      - return: 0

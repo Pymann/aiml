@@ -1,0 +1,21 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5.7: a container element is a refcounted HANDLE. `at` returns an owning handle that
+# ALIASES the inner container → mutation through it is visible in the outer container; the
+# extract/mutate/write-back idiom stays correct (idx re-stores the same handle → no-op).
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [outer, list<list<i32>>]
+      - decl: [row0, list<i32>]
+      - call: [row0.push, 7]
+      - call: [outer.push, row0]                       # store handle (co-own)
+      - decl: [view, list<i32>, { at: [outer, 0] }]    # owning handle aliasing inner
+      - call: [view.push, 8]                           # mutate through the alias
+      - idx: [outer, 0, view]                          # write-back (same handle → no-op)
+      - decl: [chk, list<i32>, { at: [outer, 0] }]
+      - if: { condition: { neq: [chk.len, 2] }, then: [{ print: ["FAIL nested alias: outer[0].len=${chk.len}, expected 2"] }, { return: 1 }] }
+      - if: { condition: { neq: [{ at: [chk, 1] }, 8] }, then: [{ print: ["FAIL nested alias: outer[0][1] wrong"] }, { return: 1 }] }
+      - print: ["PASS 35 nested_alias_writeback"]
+      - return: 0

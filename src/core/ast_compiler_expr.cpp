@@ -1198,6 +1198,15 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
             llvm::Value* objp = ctx.builder.CreateLoad(i8p, slot, "list_at_modelptr");
             return ctx.ir_gen->wrap(objp);
         }
+        // spec/61 §5.7 (memV3): a NESTED CONTAINER element is a HANDLE pointer — load and return it.
+        // A borrow here (no incref); binding it into a `list<T>` local increfs (emitListHandleDecl's
+        // at-init share path), so transient `at(..).len` reads do not leak a handle ref.
+        if (ctx.memV3 && ctx.isMemV3ContainerHandle(elemName)) {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* slot = ListImpl::getElementPtr(ctx, listPtr, indexVals[0], i8p);
+            llvm::Value* hp = ctx.builder.CreateLoad(i8p, slot, "list_at_innerh");
+            return ctx.ir_gen->wrap(hp);
+        }
         llvm::Value* elemPtr = ListImpl::getElementPtr(ctx, listPtr, indexVals[0], elemTy);
         llvm::Value* val = ctx.builder.CreateLoad(elemTy, elemPtr, "list_at");
         // Refcount: borrowing a string out of a list adds an alias.  Incref

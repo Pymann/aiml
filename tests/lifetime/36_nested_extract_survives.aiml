@@ -1,0 +1,24 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5.7: an inner container handle co-owned elsewhere (rc>1) survives the outer's drop —
+# the outer drop DECREFs each element; the inner block frees only at its own rc 0.
+- def:
+    name: build_outer
+    return: list<i32>
+    body:
+      - decl: [innr, list<i32>]
+      - call: [innr.push, 42]
+      - decl: [oub, list<list<i32>>]
+      - call: [oub.push, innr]                         # oub co-owns innr (rc 2: innr + oub[0])
+      - decl: [kept, list<i32>, { at: [oub, 0] }]      # kept also co-owns (rc 3)
+      - return: kept                                   # move kept out; oub drops here (decref elems)
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [survivor, list<i32>, { call: [build_outer] }]
+      - if: { condition: { neq: [survivor.len, 1] }, then: [{ print: ["FAIL survivor.len=${survivor.len}"] }, { return: 1 }] }
+      - decl: [sv0, i32, { at: [survivor, 0] }]
+      - if: { condition: { neq: [sv0, 42] }, then: [{ print: ["FAIL survivor[0]=${sv0}"] }, { return: 1 }] }
+      - print: ["PASS 36 nested_extract_survives"]
+      - return: 0

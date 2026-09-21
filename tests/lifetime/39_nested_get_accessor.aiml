@@ -1,0 +1,28 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5.7: `outer.get(i)` on a nested container is IDENTICAL to `at` — it loads the inner
+# element HANDLE at pointer stride and increfs when bound (an owning alias), NOT the inline-struct
+# getter (which reads at struct stride → GARBAGE and would then decref an alias it never owned).
+# Regression: test_mkp_math ability_score `abil.effects.get(e_idx)` returned garbage + double-freed
+# (crash). Here: `.get` reads the right length, and the element survives the local's scope-drop
+# (co-owned by the outer). Kept non-looping so the suite stays valgrind-clean — a loop-carried
+# extract hits a SEPARATE, pre-existing ownership-analysis leak-suppression (mayDrop), unrelated
+# to this accessor fix.
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [outer, list<list<i32>>]
+      - decl: [row0, list<i32>]
+      - call: [row0.push, 10]
+      - call: [row0.push, 20]
+      - call: [outer.push, row0]
+      # `.get` must load the inner handle (len 2), NOT struct-stride garbage.
+      - decl: [eff, list<i32>, { call: [outer.get, 0] }]
+      - if: { condition: { neq: [eff.len, 2] }, then: [{ print: ["FAIL get: len=${eff.len}, expected 2"] }, { return: 1 }] }
+      - if: { condition: { neq: [{ at: [eff, 1] }, 20] }, then: [{ print: ["FAIL get: eff[1] wrong"] }, { return: 1 }] }
+      # eff scope-drops here (decref) — the element must survive (outer still co-owns it).
+      - decl: [chk, list<i32>, { at: [outer, 0] }]
+      - if: { condition: { neq: [chk.len, 2] }, then: [{ print: ["FAIL survive: outer[0].len=${chk.len}, expected 2"] }, { return: 1 }] }
+      - print: ["PASS 39 nested_get_accessor"]
+      - return: 0

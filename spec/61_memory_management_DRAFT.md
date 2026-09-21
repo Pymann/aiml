@@ -331,6 +331,11 @@ data→buffer}`. This is the Class-3 discipline of §2.1.
 > not Class 3** (§5.6): a unique single-`malloc` buffer, freed once at owner drop with `.free` as
 > an optional early release (probe 21). Acceptance probes 03,17,18,19,20 (Class-3) + 21 (Class-4
 > dyn_array). The OFF/deployed path keeps the inline value struct (byte-identical).
+>
+> **Nested containers (§5.7):** a container used as an **element/key/value** of another container
+> is the same handle (a pointer-sized slot), not an inlined `{size,cap,data}` struct — required by
+> the §6.1 Class-3 "release each element by its own class (decref)" rule. `AIML_TD_LIST_PTR`/
+> `_MAP_PTR`/`_BUFFER_PTR` descriptors are emitted for nested element slots exactly as for fields.
 
 Rules:
 
@@ -780,6 +785,49 @@ discipline as `ptr<T>` (§6, §9.1):
 - decl: [x, i32, { at: [buf, 0] }]
 # no `free` written → released automatically at scope exit (§9.1). `buf.free` = optional early.
 ```
+
+### 5.7 Nested containers — a container as an element / key / value
+
+A container used **as an element, key or value of another container** is the **same refcounted
+handle** it is as a local, a field, or a return value — never an inline value block. So the
+element/value slot of a `list<list<T>>`, `list<map<K:V>>`, `map<K:list<V>>`, `map<K:map<…>>`,
+`buffer<list<…>>` (etc.) holds a **handle** (a target-pointer-sized slot: 8 bytes on 64-bit,
+4 bytes on wasm32 — the element **stride is the target pointer size**, never a fixed 8 and never
+the inner `{size,cap,data}` struct inlined). This is a direct consequence of §6.1's Class-3 rule:
+the outer container "at rc 0 releases each element/key/value **by its own class**" — an inner
+`list`/`map`/`buffer` element is released by **decref**, which only makes sense if the slot holds a
+handle. There is no separate "inline nested container" representation; the OFF path is out of scope.
+
+**Ownership per operation** (identical to the container's local/field/return contract — the element
+slot is just another place an owning reference lives):
+
+| Operation | Ownership behaviour |
+|---|---|
+| `push(inner)` / `insert` | store the handle. A **copy** source (aliasing) → **incref** (the container co-owns); a genuine **move** source → take over the source's owning reference (no incref, source moved-out). |
+| `at(outer, i)` **or** `outer.get(i)` read as a `list<T>` **value** | load the handle and **secure an owning reference** for the result value (incref) — the result is an owning handle, aliasing the same inner container (mutation is visible in the outer, §5.4). The `at` and `.get` accessors are **identical** for a nested-container element: both load the handle at pointer stride and incref when bound; neither may fall back to the inline-struct getter (which would read the element at struct stride and return garbage). |
+| `idx(outer, i, inner)` (replace) | **secure-before-release** (§5.5): incref/adopt the new handle, **decref the old** slot handle, then store the new handle. A no-op **only** when the slot already holds exactly the same handle — not blanket for the write-back pattern. |
+| `pop(outer)` / `take` | **transfer** the slot's owning reference into the result: remove it from the container and hand back its existing owning handle. **No decref** of the returned element — ownership moves to the caller. |
+| `remove(outer, i)` / replace-old / **outer drop** | **decref** the inner handle; its recursive drop (releasing the inner container's own elements + block) runs only at **its** rc 0. |
+
+A **borrowed** (non-owning) view of an inner element — `ref<list<T>>` from an explicitly borrowing
+access — is defined separately (it never increfs and is never freed through); it is not the
+owning-value `at` above.
+
+**The write-back pattern** `sez = at(outer, i); …mutate sez…; idx(outer, i, sez)` stays correct but
+becomes **semantically redundant**: `at` already returns an owning handle aliasing the inner
+container, so the mutations are already visible in `outer`; the trailing `idx` re-stores the same
+handle (its old==new fast-path makes it a no-op). Code may keep it or drop it.
+
+**`copy` vs `clone` (§5.1) compose transitively here.** A shallow `{ copy: outer }` duplicates the
+outer spine but **shares** (increfs) each inner container handle — both outers see inner mutations.
+A deep `{ clone: outer }` produces **independent** inner containers (each cloned once, internal
+aliases preserved via the memoized graph walk, §5.1).
+
+**One classification, everywhere.** Element stride, load/store, incref/decref and the serializer
+type descriptor for a nested container element are all driven by the **same** type classification
+(a container element → a `*_PTR` handle descriptor, e.g. `AIML_TD_LIST_PTR`). `push`, `at`, `idx`,
+`pop`, `remove`, iteration, growth/realloc, `copy`/`clone` and serialization must all agree that the
+slot is a pointer; mixing a new pointer stride with an old inlined-struct copy corrupts memory.
 
 ## 6. Explicit heap — `new`, `ptr<T>`, `free`
 

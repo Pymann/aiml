@@ -1,0 +1,17 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §7: `string.substr` must return a REFCOUNTED string (aiml_str_alloc header at ptr-8).
+# It used raw strndup/strdup (header-less); binding the result increfs/decrefs → reads/frees (ptr-8)
+# of an unowned block → heap corruption (test_ability_text `cost.substr`, rc139). aiml_str_ndup/
+# aiml_str_dup carry the header, so incref/decref and scope-drop are safe.
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [full, string, "hello world"]
+      - decl: [head, string, { call: [full.substr, 0, 5] }]     # bound → incref/decref (needs header)
+      - decl: [tail, string, { call: [full.substr, 6, 5] }]
+      - if: { condition: { neq: [head.len, 5] }, then: [{ print: ["FAIL substr: head.len=${head.len}, expected 5"] }, { return: 1 }] }
+      - if: { condition: { neq: [tail.len, 5] }, then: [{ print: ["FAIL substr: tail.len=${tail.len}, expected 5"] }, { return: 1 }] }
+      - print: ["PASS 47 substr_refcount (${head}/${tail})"]
+      - return: 0

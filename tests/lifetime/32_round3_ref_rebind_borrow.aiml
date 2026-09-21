@@ -1,0 +1,17 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §6.2: assigning ptr<T> to ref<T> borrows; it never moves the owner.
+- model: { name: BorrowItem, fields: [[ident, i32, 0]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [first, ptr<BorrowItem>, { new: BorrowItem }]
+      - decl: [second, ptr<BorrowItem>, { new: BorrowItem }]
+      - set: [second.ident, 37]
+      - decl: [view, ref<BorrowItem>, first]
+      - set: [view, second]
+      - if: { condition: { neq: [second.ident, 37] }, then: [{ print: ["FAIL rebinding ref changed owner"] }, { return: 1 }] }
+      - if: { condition: { pneq: [view, second] }, then: [{ print: ["FAIL ref does not point at new owner"] }, { return: 2 }] }
+      - print: ["PASS 32 round3_ref_rebind_borrow"]
+      - return: 0

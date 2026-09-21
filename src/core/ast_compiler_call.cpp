@@ -426,6 +426,30 @@ IRValue* Compiler::visitCall(CallExpr* call) {
          if (ptrVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
              ptrVal = ctx.builder.CreateBitCast(ptrVal, ctx.builder.getInt8Ty()->getPointerTo());
          }
+         // spec/61 §6.1 (memV3): `free` on a ptr<T> box must run the class-based release — deep-free
+         // the pointee's owned fields (strings decref, list/map/buffer handles release, owning ptr
+         // children followed, nested value models recursed) BEFORE freeing the block. Mirrors the
+         // kind-4 scope-drop (emitScopeDrop). Without this, `free:` freed only the shell and every
+         // heap field leaked (probe 09). OFF is unaffected (the `free:` node only exists under memV3).
+         if (ctx.memV3) {
+             if (auto* fv = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get())) {
+                 Symbol* fs = (fv->name.find('.') == std::string::npos) ? resolveVariable(fv->name) : nullptr;
+                 if (fs && fs->typeName.rfind("ptr<", 0) == 0 && fs->typeName.back() == '>') {
+                     std::string boxed = fs->typeName.substr(4, fs->typeName.size() - 5);
+                     auto bi = ctx.classes.find(boxed);
+                     if (bi != ctx.classes.end() && bi->second.hasHeapFields && bi->second.serNodesVar
+                         && bi->second.type && !ctx.classGroupContainers.count(boxed)
+                         && !ctx.cascadeClasses.count(boxed)) {
+                         auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                         llvm::Function* dfree = ctx.getFunction("aiml_ser_free_decoded",
+                             ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
+                         ctx.builder.CreateCall(dfree, { ptrVal,
+                             static_cast<llvm::Value*>(bi->second.serNodesVar),
+                             ctx.builder.getInt32(bi->second.serNodesCount) });
+                     }
+                 }
+             }
+         }
          ctx.builder.CreateCall(freeFunc, {ptrVal});
          // spec/61 §6.1 (memV3): `free` is an EARLY release — null the slot so the scope-default
          // drop (kind 4/7, null-safe) becomes a no-op instead of double-freeing. Only when the
@@ -1185,24 +1209,22 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Value* start = ctx.builder.CreateSExtOrTrunc(
                 static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), sizeTy);
             llvm::Value* offsetPtr = ctx.builder.CreateGEP(ctx.builder.getInt8Ty(), strPtr, start);
+            // spec/61 §7: substr must return a REFCOUNTED string (aiml_str_alloc header at ptr-8).
+            // Raw strndup/strdup gave a header-less string; binding it increfs/decrefs → reads/frees
+            // (ptr-8) of an unowned block → heap corruption (test_ability_text `cost.substr`, rc139).
+            // aiml_str_ndup/aiml_str_dup allocate the STRN header (size_t len matches the ABI).
             if (argVals.size() >= 2) {
-                // strndup(str + start, len)
-                llvm::Function* strndupFn = ctx.module.getFunction("strndup");
-                if (!strndupFn) strndupFn = llvm::Function::Create(
-                    llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(),
-                        {ctx.builder.getInt8Ty()->getPointerTo(), sizeTy}, false),
-                    llvm::Function::ExternalLinkage, "strndup", ctx.module);
+                llvm::Function* ndupFn = ctx.getFunction("aiml_str_ndup",
+                    ctx.builder.getInt8Ty()->getPointerTo(),
+                    {ctx.builder.getInt8Ty()->getPointerTo(), sizeTy});
                 llvm::Value* lenN = ctx.builder.CreateSExtOrTrunc(
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1])), sizeTy);
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(strndupFn, {offsetPtr, lenN}));
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(ndupFn, {offsetPtr, lenN}));
             } else {
-                // strdup(str + start)
-                llvm::Function* strdupFn = ctx.module.getFunction("strdup");
-                if (!strdupFn) strdupFn = llvm::Function::Create(
-                    llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(),
-                        {ctx.builder.getInt8Ty()->getPointerTo()}, false),
-                    llvm::Function::ExternalLinkage, "strdup", ctx.module);
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(strdupFn, {offsetPtr}));
+                llvm::Function* dupFn = ctx.getFunction("aiml_str_dup",
+                    ctx.builder.getInt8Ty()->getPointerTo(),
+                    {ctx.builder.getInt8Ty()->getPointerTo()});
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(dupFn, {offsetPtr}));
             }
         } else if (methodName == "starts_with") {
             // starts_with(prefix) → i32 (1 or 0)
@@ -1303,12 +1325,24 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Type* i32ty = ctx.builder.getInt32Ty();
             llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
 
+            llvm::Function* fillFn = ctx.getFunction("aiml_str_split_fill", i32ty, {i8p, i8p, ptrTy});
+            llvm::Value* delimV = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+            // spec/61 §5 (memV3): a `list<string>` local is a refcounted HANDLE freed via
+            // aiml_list_handle_release. `split` must return a real HEAP handle — returning a pointer
+            // to a STACK alloca made the binding local "own" stack memory, so its scope-drop released
+            // a stack pointer (garbage rc header → free of the stack) → non-deterministic heap
+            // corruption (test_auth_helpers / validate_email `.split` rc134/rc139). The handle IS the
+            // {size,cap,data} struct pointer, so aiml_str_split_fill writes into it unchanged.
+            if (ctx.memV3) {
+                llvm::Function* nw = ctx.getFunction("aiml_list_handle_new", i8p, {});
+                llvm::Value* handle = ctx.builder.CreateCall(nw, {}, "split_handle");
+                ListImpl::initList(ctx, handle, i8p, 8);
+                ctx.builder.CreateCall(fillFn, {strPtr, delimV, handle});
+                return ctx.ir_gen->wrap(handle);
+            }
             llvm::StructType* listTy = ListImpl::getListStructType(ctx);
             llvm::Value* listAlloca  = ctx.createEntryAlloca(listTy, "split_alloca");
             ListImpl::initList(ctx, listAlloca, i8p, 8);
-
-            llvm::Function* fillFn = ctx.getFunction("aiml_str_split_fill", i32ty, {i8p, i8p, ptrTy});
-            llvm::Value* delimV = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
             ctx.builder.CreateCall(fillFn, {strPtr, delimV, listAlloca});
 
             return ctx.ir_gen->wrap(listAlloca);
@@ -1327,6 +1361,32 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          llvm::Type* llvmListElemType = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(listElemName)));
          if (methodName == "push" && argVals.size() > 0) {
              llvm::Value* pushVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+             // spec/61 §5.7 (memV3): a NESTED CONTAINER element (list<list<T>>, list<map<…>>,
+             // list<buffer>) stores the inner container's HANDLE (a pointer). push CO-OWNS it →
+             // incref the inner handle and store the pointer; the source keeps its own handle
+             // (share, aliasing — §5.7). The source is a container local, so read its slot directly
+             // (the by-ref deref would give the {size,cap,data} struct, not the handle pointer).
+             if (ctx.memV3 && ctx.isMemV3ContainerHandle(listElemName)) {
+                 auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                 llvm::Value* hp = nullptr;
+                 if (auto* ve = dynamic_cast<VariableExpr*>(call->args[0].get())) {
+                     if (Symbol* s = resolveVariable(ve->name)) {
+                         llvm::Value* slot = s->ir_alloca_inst
+                             ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(s->ir_alloca_inst)) : s->alloca_inst;
+                         if (slot) hp = ctx.builder.CreateLoad(i8p, slot, "push_innerh");
+                     }
+                 }
+                 if (!hp) hp = (pushVal && pushVal->getType() == i8p) ? pushVal
+                              : (pushVal ? ctx.builder.CreateBitCast(pushVal, i8p, "push_innerh_c") : nullptr);
+                 if (hp) {
+                     const char* incF = (listElemName.rfind("map<", 0) == 0) ? "aiml_map_handle_incref"
+                         : (listElemName == "buffer" || listElemName.rfind("buffer<", 0) == 0) ? "aiml_buffer_handle_incref"
+                         : "aiml_list_handle_incref";
+                     ctx.builder.CreateCall(ctx.getFunction(incF, ctx.builder.getVoidTy(), {i8p}), { hp });
+                     ListImpl::push(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), hp);
+                 }
+                 return nullptr;
+             }
              // AIML v2 P3: a list<Model> stores %M* REFERENCES (stride 8). push increfs the object
              // and stores the pointer; the source keeps its own reference (share, not move) — the
              // element's decref (list-free / remove / idx-overwrite) balances this incref. No
@@ -1484,6 +1544,18 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                      static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
                      static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), i8p));
              }
+             // spec/61 §5.7 (memV3): a NESTED CONTAINER element is a HANDLE pointer stored at pointer
+             // stride — load and return it (a borrow, matching visitAtExpr).  Without this the element
+             // type is the inline %GenericList struct → the struct-stride getElementPtr branch below
+             // GEPs by sizeof(struct) and returns garbage (test_mkp_math ability_score `.effects.get`).
+             // Binding into a `list<T>` local increfs (emitListHandleDecl's at/get share path).
+             if (ctx.memV3 && ctx.isMemV3ContainerHandle(listElemName)) {
+                 auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                 llvm::Value* slot = ListImpl::getElementPtr(ctx,
+                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
+                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), i8p);
+                 return ctx.ir_gen->wrap(ctx.builder.CreateLoad(i8p, slot, "list_get_innerh"));
+             }
              // For struct element types, return a pointer (ptr<T>) instead of by-value copy
              if (llvmListElemType->isStructTy()) {
                  return ctx.ir_gen->wrap(ListImpl::getElementPtr(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), llvmListElemType));
@@ -1503,7 +1575,13 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  llvm::Value* idxV  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
                  // decref the element about to be removed (bounds already enforced by callers/at).
                  if (ctx.lifetimeDropsEnabled) {
-                     auto ci = ctx.classes.find(listElemName);
+                     // ctx.classes is keyed by the BARE class; a memV3 list<shared<T>> element name
+                     // is "shared<T>" → strip the wrapper, else serNodes is not found and the removed
+                     // element is never decref'd (probe 06: the shared model + its heap leaked).
+                     std::string bareElem = listElemName;
+                     if (bareElem.rfind("shared<", 0) == 0 && bareElem.back() == '>')
+                         bareElem = bareElem.substr(7, bareElem.size() - 8);
+                     auto ci = ctx.classes.find(bareElem);
                      if (ci != ctx.classes.end() && ci->second.serNodesVar) {
                          llvm::StructType* lstTy = ListImpl::getListStructType(ctx);
                          llvm::Value* dataP = ctx.builder.CreateLoad(i8p,
@@ -1520,6 +1598,61 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  ListImpl::remove(ctx, listP, idxV, i8p, /*elemIsString=*/false);
                  return nullptr;
              }
+             // spec/61 §5.5 (memV3): list<ptr<T>> element = an OWNING box → remove RELEASES it
+             // (deep-free fields + free shell) before the memmove shifts the pointer slots. Without
+             // this the removed box + its heap leaked (probe 05). Pointer stride (i8p) for the shift.
+             if (ctx.memV3 && listElemName.rfind("ptr<", 0) == 0 && listElemName.back() == '>') {
+                 auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                 llvm::Value* listP = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+                 llvm::Value* idxV  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+                 if (ctx.lifetimeDropsEnabled) {
+                     std::string boxed = listElemName.substr(4, listElemName.size() - 5);
+                     auto bi = ctx.classes.find(boxed);
+                     llvm::StructType* lstTy = ListImpl::getListStructType(ctx);
+                     llvm::Value* dataP = ctx.builder.CreateLoad(i8p,
+                         ctx.builder.CreateStructGEP(lstTy, listP, 2, "rm_dataPtr"), "rm_dataBase");
+                     llvm::Value* slot = ctx.builder.CreateInBoundsGEP(i8p, dataP, idxV, "rm_slot");
+                     llvm::Value* gone = ctx.builder.CreateLoad(i8p, slot, "rm_ptrbox");
+                     if (bi != ctx.classes.end() && bi->second.hasHeapFields && bi->second.serNodesVar) {
+                         llvm::Function* dfree = ctx.getFunction("aiml_ser_free_decoded",
+                             ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
+                         ctx.builder.CreateCall(dfree, { gone, bi->second.serNodesVar,
+                                                         ctx.builder.getInt32(bi->second.serNodesCount) });
+                     }
+                     llvm::Function* fr = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
+                     ctx.builder.CreateCall(fr, { gone });
+                 }
+                 ListImpl::remove(ctx, listP, idxV, i8p, /*elemIsString=*/false);
+                 return nullptr;
+             }
+             // spec/61 §5.7 (memV3): a NESTED CONTAINER element is a HANDLE → remove DECREFs it (via
+             // its handle-rooted descriptor → recursive release at rc 0), then shifts pointer slots.
+             if (ctx.memV3 && ctx.isMemV3ContainerHandle(listElemName)) {
+                 auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                 llvm::Value* listP = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+                 llvm::Value* idxV  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+                 if (ctx.lifetimeDropsEnabled) {
+                     int nc = 0; llvm::GlobalVariable* ed = elemHandleSerNodes(listElemName, nc);
+                     if (ed) {
+                         llvm::StructType* lstTy = ListImpl::getListStructType(ctx);
+                         llvm::Value* dataP = ctx.builder.CreateLoad(i8p,
+                             ctx.builder.CreateStructGEP(lstTy, listP, 2, "rm_dataPtr"), "rm_dataBase");
+                         llvm::Value* slot = ctx.builder.CreateInBoundsGEP(i8p, dataP, idxV, "rm_slot");
+                         llvm::Function* dfree = ctx.getFunction("aiml_ser_free_decoded",
+                             ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
+                         ctx.builder.CreateCall(dfree, { slot, ed, ctx.builder.getInt32(nc) });  // decref inner handle
+                     }
+                 }
+                 ListImpl::remove(ctx, listP, idxV, i8p, /*elemIsString=*/false);
+                 return nullptr;
+             }
+             // NOTE: a VALUE-MODEL element (`list<Model>` inline at struct stride) with heap fields is
+             // NOT deep-freed here on remove — the removed element's container/string fields leak
+             // (spec/61 §5.4 says release-members, a known deferral). A deep-free was tried and REVERTED:
+             // effect code holds a live view/copy of the element across the remove (extract → mutate →
+             // remove), so freeing the inline fields here double-freed them (regressed effect_processor
+             // / effect_death_on_destroy). Correct fix needs escape-time deep-copy of value-model views,
+             // not a blind remove-time free. See memory memv3-nested-containers.
              ListImpl::remove(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), llvmListElemType, listElemName == "string");
              return nullptr;
          } else if (methodName == "clear") {

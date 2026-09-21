@@ -1,0 +1,18 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5.1 / §7: tensor is clonable; cloning an aggregate must clone its owned tensor data.
+- model: { name: TensorOwner, fields: [[weights, tensor]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [original, TensorOwner]
+      - set: [original.weights, { call: [tensor.ones, 4] }]
+      - decl: [before, f32, { call: [original.weights.get, 0] }]
+      - if: { condition: { neq: [before, 1.0] }, then: [{ print: ["FAIL setup: tensor.ones"] }, { return: 2 }] }
+      - decl: [duplicate, TensorOwner, { clone: original }]
+      - call: [tensor.fill, duplicate.weights, 9.0]
+      - decl: [after, f32, { call: [original.weights.get, 0] }]
+      - if: { condition: { neq: [after, 1.0] }, then: [{ print: ["FAIL tensor member clone aliases original: actual=${after}, expected=1"] }, { return: 1 }] }
+      - print: ["PASS 34 round4_clone_tensor_member"]
+      - return: 0

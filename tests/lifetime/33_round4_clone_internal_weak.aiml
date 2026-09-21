@@ -1,0 +1,22 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5.1 rule 4: a weak ref into the owned graph must point into the cloned graph.
+- model: { name: InnerLeaf, fields: [[ident, i32, 0]] }
+- model: { name: InnerGraph, fields: [[owned, shared<InnerLeaf>], [view, ref<InnerLeaf>]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [leaf, shared<InnerLeaf>, { share: { new: InnerLeaf } }]
+      - set: [leaf.ident, 7]
+      - decl: [original, InnerGraph]
+      - set: [original.owned, leaf]
+      - set: [original.view, leaf]
+      - if: { condition: { pneq: [original.view, original.owned] }, then: [{ print: ["FAIL setup: weak edge must target owned leaf"] }, { return: 2 }] }
+      - decl: [duplicate, InnerGraph, { clone: original }]
+      - if: { condition: { peq: [duplicate.owned, original.owned] }, then: [{ print: ["FAIL setup: owned leaf was not cloned"] }, { return: 3 }] }
+      - if: { condition: { pneq: [duplicate.view, duplicate.owned] }, then: [{ print: ["FAIL internal weak ref was not rewired to cloned owner"] }, { return: 1 }] }
+      - set: [duplicate.owned.ident, 99]
+      - if: { condition: { neq: [duplicate.view.ident, 99] }, then: [{ print: ["FAIL internal weak ref observes wrong object"] }, { return: 4 }] }
+      - print: ["PASS 33 round4_clone_internal_weak"]
+      - return: 0

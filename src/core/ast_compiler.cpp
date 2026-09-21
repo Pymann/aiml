@@ -1328,12 +1328,22 @@ void Compiler::checkPrefabUsage(Program* prog) {
     }
 }
 
+// round4 §1: which contract a descriptor is being built for. Existing = wire/serialize + scope-drop
+// (unchanged, also the OFF path). Clone = the memV3 in-memory deep-clone walker, which needs its own
+// leaf semantics for `ref<T>` (WEAK_REF, redirected in a second phase) and `tensor` (TENSOR, cloned
+// via aiml_tensor_clone). Clone descriptors are cached/emitted under distinct global names so a
+// serialize of the same type never picks up a clone descriptor.
+enum class DescriptorPurpose { Existing, Clone };
+
 // Forward declarations for the §5.1 recursive-type registration emitted in __aiml_init (both are
 // file-static, defined further down after Compiler::compile).
 static std::vector<AimlTypeNode> serBuildSubtree(const std::string& typeName, int32_t offset,
-                                                 CompilerContext& ctx, const llvm::DataLayout& dl);
+                                                 CompilerContext& ctx, const llvm::DataLayout& dl,
+                                                 DescriptorPurpose purpose = DescriptorPurpose::Existing);
 static void serEmitGlobal(const std::string& name, const std::vector<AimlTypeNode>& nodes,
                           CompilerContext& ctx, CompilerContext::ClassInfo& classInfo);
+// round4 (forward-ref fix): rebuild a type's serNodes after the registration fixpoint (defined below).
+static void rebuildSerNodesFor(CompilerContext& ctx, const std::string& typeName);
 
 void Compiler::compile(Program* prog) {
     if (!prog) return;
@@ -2987,6 +2997,17 @@ void Compiler::registerTypes(Program* prog) {
         if (total == prevTotal) break;
         prevTotal = total;
     }
+    // round4 (forward-ref fix): serNodes built inline during registration cut forward-referenced
+    // field types (a type declared later) to opaque RAWBYTES → the scope-drop then never freed those
+    // pointees (probe 11). Now that the fixpoint has registered every type, rebuild each type's
+    // serNodes so forward ptr/shared/model/container-element fields resolve to their real (freed)
+    // descriptors. Idempotent; superseded globals are dead-stripped.
+    {
+        std::vector<std::string> names;
+        names.reserve(ctx.classes.size());
+        for (auto& kv : ctx.classes) names.push_back(kv.first);
+        for (const auto& nm : names) rebuildSerNodesFor(ctx, nm);
+    }
 }
 
 // ── Spec-45: Heap-type descriptor helpers ────────────────────────────────────
@@ -3018,6 +3039,15 @@ static bool serHasHeap(const std::string& typeName, CompilerContext& ctx) {
     // spec/61 §5 Option B (memV3): bare `buffer` is a Class-3 rc handle → heap-bearing, so a model
     // with a buffer field gets serNodes + a drop. OFF keeps the old value-header classification.
     if (ctx.memV3 && typeName == "buffer") return true;
+    // round4 §3 (memV3): an owned `tensor` field is a Class-4 resource → the model owns it and must
+    // close it at scope drop (fre → aiml_tensor_free). So a tensor-field model needs serNodes + drop.
+    if (ctx.memV3 && typeName == "tensor") return true;
+    // spec/61 §6.2 (memV3): a `shared<T>` (refcounted co-owned) or `ptr<T>` (unique owner) FIELD owns
+    // heap → the model must decref/free it at scope drop. Without this a model whose ONLY heap-bearing
+    // fields are shared/ptr (no string/list/tensor) got hasHeapFields=false → no drop → leak (probe
+    // 33: InnerGraph{owned:shared<InnerLeaf>, view:ref<InnerLeaf>}). `ref<T>` is a WEAK borrow → false.
+    if (ctx.memV3 && typeName.back() == '>'
+        && (typeName.rfind("shared<", 0) == 0 || typeName.rfind("ptr<", 0) == 0)) return true;
     auto it = ctx.classes.find(typeName);
     if (it != ctx.classes.end() && !it->second.isBuiltin)
         for (auto& [mn, mem] : it->second.members)
@@ -3052,7 +3082,8 @@ static std::vector<AimlTypeNode> serBuildStructNodes(
 // Forward declaration.
 static std::vector<AimlTypeNode> serBuildSubtree(
     const std::string& typeName, int32_t offset,
-    CompilerContext& ctx, const llvm::DataLayout& dl);
+    CompilerContext& ctx, const llvm::DataLayout& dl,
+    DescriptorPurpose purpose);
 
 // spec/61 §5 Option B (memV3): build a STRUCT FIELD's subtree. A list<T>/cascade<X> field is a
 // POINTER to a refcounted handle → wrap the inner LIST subtree in an AIML_TD_LIST_PTR node at the
@@ -3060,7 +3091,8 @@ static std::vector<AimlTypeNode> serBuildSubtree(
 // the FIELD level is wrapped — nested list ELEMENTS (list<list<T>>) stay inline via serBuildSubtree.
 static std::vector<AimlTypeNode> serFieldSubtree(
     const std::string& typeName, int32_t offset,
-    CompilerContext& ctx, const llvm::DataLayout& dl)
+    CompilerContext& ctx, const llvm::DataLayout& dl,
+    DescriptorPurpose purpose = DescriptorPurpose::Existing)
 {
     bool memV3ListField = ctx.memV3 &&
         ((typeName.rfind("list<", 0) == 0 && typeName.back() == '>') ||
@@ -3069,7 +3101,7 @@ static std::vector<AimlTypeNode> serFieldSubtree(
     bool memV3BufField = ctx.memV3 && (typeName == "buffer" ||
                                        (typeName.rfind("buffer<", 0) == 0 && typeName.back() == '>'));
     if (!memV3ListField && !memV3MapField && !memV3BufField)
-        return serBuildSubtree(typeName, offset, ctx, dl);
+        return serBuildSubtree(typeName, offset, ctx, dl, purpose);
     std::vector<AimlTypeNode> res;
     if (memV3BufField) {
         res.push_back({AIML_TD_BUFFER_PTR, 1, 0, offset, 8, 0});   // idx 0: pointer slot → BUFFER at 1
@@ -3079,13 +3111,13 @@ static std::vector<AimlTypeNode> serFieldSubtree(
             res.push_back({AIML_TD_BUFFER, 2, 0, 0, 1, 0});        // idx 1
             res.push_back({AIML_TD_I8,     0, 0, 0, 0, 0});        // idx 2: element type
         } else {
-            for (auto& n : serBuildSubtree(typeName, 0, ctx, dl)) res.push_back(snShift(n, 1));
+            for (auto& n : serBuildSubtree(typeName, 0, ctx, dl, purpose)) res.push_back(snShift(n, 1));
         }
         return res;
     }
     std::string inner = (typeName.rfind("cascade<", 0) == 0) ? std::string("list<i32>") : typeName;
     res.push_back({memV3MapField ? AIML_TD_MAP_PTR : AIML_TD_LIST_PTR, 1, 0, offset, 8, 0}); // pointer slot
-    for (auto& n : serBuildSubtree(inner, 0, ctx, dl)) res.push_back(snShift(n, 1));
+    for (auto& n : serBuildSubtree(inner, 0, ctx, dl, purpose)) res.push_back(snShift(n, 1));
     return res;
 }
 
@@ -3105,9 +3137,25 @@ static thread_local std::set<std::string> g_serActivePath;
 // offset = byte offset of this value within its parent struct (0 = top-level).
 static std::vector<AimlTypeNode> serBuildSubtree(
     const std::string& typeName, int32_t offset,
-    CompilerContext& ctx, const llvm::DataLayout& dl)
+    CompilerContext& ctx, const llvm::DataLayout& dl,
+    DescriptorPurpose purpose)
 {
     std::vector<AimlTypeNode> res;
+
+    // ── round4 §1/§3: memV3 leaf semantics (before the pointer/builtin/RAWBYTES fallbacks) ──
+    // A `tensor` → TENSOR in BOTH purposes: Clone deep-copies it (aiml_tensor_clone), and the
+    // scope-drop / model-free (Existing → fre) closes it (aiml_tensor_free) — an owned Class-4
+    // resource is torn down with its owner (spec/61; probe 14 "lyr drops → weights tensor closed").
+    // enc/dec skip TENSOR (a live resource handle is not wire-serialisable). A `ref<T>` weak edge →
+    // WEAK_REF only for Clone (phase-2 redirect, no incref, not freed); for Existing a ref<T> field
+    // stays the raw non-owning pointer (unchanged) — a weak edge is never freed at drop.
+    if (ctx.memV3) {
+        if (typeName == "tensor")
+            { res.push_back({AIML_TD_TENSOR, 0,0,offset,0,0}); return res; }
+        if (purpose == DescriptorPurpose::Clone
+            && typeName.rfind("ref<", 0) == 0 && typeName.back() == '>')
+            { res.push_back({AIML_TD_WEAK_REF, 0,0,offset,0,0}); return res; }
+    }
 
     // ── Primitive scalars ─────────────────────────────────────────────────────
     if (typeName=="string")                                    { res.push_back({AIML_TD_STRING, 0,0,offset,0,0}); return res; }
@@ -3122,7 +3170,9 @@ static std::vector<AimlTypeNode> serBuildSubtree(
         int32_t esz;
         // Determine element size without calling getLLVMType on unregistered types
         // (which would log spurious errors during Phase-A sibling type registration).
-        if (ctx.isRefcountModel(inner)) {
+        if (ctx.isMemV3ContainerHandle(inner)) {
+            esz = (int32_t)dl.getPointerSize();  // §5.7: nested container element = HANDLE (ptr stride)
+        } else if (ctx.isRefcountModel(inner)) {
             esz = 8;  // AIML v2 P3/P6: list<Model> stores %M* references (pointer stride)
         } else if (ctx.classes.count(inner) && ctx.classes[inner].type) {
             esz = (int32_t)dl.getTypeAllocSize(ctx.classes[inner].type);
@@ -3147,7 +3197,10 @@ static std::vector<AimlTypeNode> serBuildSubtree(
             esz = iT ? (int32_t)dl.getTypeAllocSize(iT) : 8;
         }
         res.push_back({AIML_TD_LIST, 1, 0, offset, esz, 0});
-        for (auto& n : serBuildSubtree(inner, 0, ctx, dl)) res.push_back(snShift(n, 1));
+        // spec/61 §5.7: a nested CONTAINER element is a HANDLE → recurse via serFieldSubtree so a
+        // list<list<T>>/list<map<…>>/list<buffer> element becomes a *_PTR handle descriptor (not an
+        // inlined struct). serFieldSubtree falls back to serBuildSubtree for non-container elements.
+        for (auto& n : serFieldSubtree(inner, 0, ctx, dl, purpose)) res.push_back(snShift(n, 1));
         return res;
     }
 
@@ -3157,7 +3210,7 @@ static std::vector<AimlTypeNode> serBuildSubtree(
         llvm::Type* iT = ctx.getLLVMType(inner);
         int32_t esz = iT ? (int32_t)dl.getTypeAllocSize(iT) : 1;
         res.push_back({AIML_TD_BUFFER, 1, 0, offset, esz, 0});
-        for (auto& n : serBuildSubtree(inner, 0, ctx, dl)) res.push_back(snShift(n, 1));
+        for (auto& n : serFieldSubtree(inner, 0, ctx, dl, purpose)) res.push_back(snShift(n, 1));   // §5.7 nested handle
         return res;
     }
 
@@ -3167,12 +3220,13 @@ static std::vector<AimlTypeNode> serBuildSubtree(
         size_t col = inner.find(':');
         std::string kT = (col!=std::string::npos) ? inner.substr(0,col)   : "string";
         std::string vT = (col!=std::string::npos) ? inner.substr(col+1)   : inner;
-        auto ksub = serBuildSubtree(kT, 0, ctx, dl);
-        auto vsub = serBuildSubtree(vT, 0, ctx, dl);
+        auto ksub = serFieldSubtree(kT, 0, ctx, dl, purpose);   // §5.7 nested container value/key = handle
+        auto vsub = serFieldSubtree(vT, 0, ctx, dl, purpose);
         int32_t kc = (int32_t)ksub.size();
         // AIML v2 P3/P6: map<K:Model> stores %M* references (pointer value stride).
         int32_t vsz;
-        if (ctx.isRefcountModel(vT)) vsz = 8;
+        if (ctx.isMemV3ContainerHandle(vT)) vsz = (int32_t)dl.getPointerSize();  // §5.7 nested handle value
+        else if (ctx.isRefcountModel(vT)) vsz = 8;
         else { llvm::Type* vLT = ctx.getLLVMType(vT); vsz = vLT ? (int32_t)dl.getTypeAllocSize(vLT) : 0; }
         res.push_back({AIML_TD_MAP, 1, 1+kc, offset, vsz, 0});
         for (auto& n : ksub) res.push_back(snShift(n, 1));
@@ -3201,7 +3255,7 @@ static std::vector<AimlTypeNode> serBuildSubtree(
         if (pit != ctx.classes.end() && !pit->second.isBuiltin && pit->second.type
             && !g_serActivePath.count(inner)) {
             int32_t inner_sz = (int32_t)dl.getTypeAllocSize(pit->second.type);
-            auto sub = serBuildSubtree(inner, 0, ctx, dl);
+            auto sub = serBuildSubtree(inner, 0, ctx, dl, purpose);
             res.push_back({AIML_TD_PTR_STRUCT, 1, 0, offset, inner_sz, 0});
             for (auto& n : sub) res.push_back(snShift(n, 1));
             return res;
@@ -3250,7 +3304,7 @@ static std::vector<AimlTypeNode> serBuildSubtree(
         for (auto& [mn, mem] : sm) {
             if (mem.is_collaborator) continue;
             fsubs.push_back(serFieldSubtree(mem.typeName,
-                (int32_t)sl->getElementOffset(mem.index), ctx, dl));
+                (int32_t)sl->getElementOffset(mem.index), ctx, dl, purpose));
         }
         if (onPath) g_serActivePath.erase(typeName);
         auto structNodes = serBuildStructNodes(fsubs, 0, inner_sz);  // struct root at index 0 of subvec
@@ -3280,7 +3334,7 @@ static std::vector<AimlTypeNode> serBuildSubtree(
                 // bidirectional sees cycle would otherwise cause here.
                 if (mem.is_collaborator) continue;
                 fsubs.push_back(serFieldSubtree(mem.typeName,
-                    (int32_t)sl->getElementOffset(mem.index), ctx, dl));
+                    (int32_t)sl->getElementOffset(mem.index), ctx, dl, purpose));
             }
             if (onPath) g_serActivePath.erase(typeName);
             return serBuildStructNodes(fsubs, offset, sz);
@@ -3347,6 +3401,74 @@ static void serEmitGlobal(
     classInfo.serNodesCount = (int32_t)nodes.size();
 }
 
+// Rebuild one class/model's serNodes descriptor from its (now fully-registered) members. serNodes
+// are first built inline during registerTypeDecl, but a FIELD that references a type declared LATER
+// (a forward reference, e.g. `Zone{cards:list<ptr<Card>>}` before `Card`) resolves to an opaque
+// RAWBYTES leaf at that point → the scope-drop never frees the pointee (probe 11: the Card box + its
+// title leaked). registerTypes calls this for every type AFTER the registration fixpoint, so the
+// descriptor is rebuilt with all types present (PTR_STRUCT/MODEL, correctly freed). Idempotent; the
+// superseded global is dead-stripped. Also recomputes hasHeapFields (a forward ptr/shared field now
+// counts). Skips builtins / typeless entries.
+static void rebuildSerNodesFor(CompilerContext& ctx, const std::string& typeName) {
+    auto it = ctx.classes.find(typeName);
+    if (it == ctx.classes.end()) return;
+    CompilerContext::ClassInfo& ci = it->second;
+    if (ci.isBuiltin || !ci.type) return;
+    llvm::DataLayout dl(&ctx.module);
+    const llvm::StructLayout* sl = dl.getStructLayout(ci.type);
+    int32_t sz = (int32_t)dl.getTypeAllocSize(ci.type);
+    bool anyHeap = false;
+    for (auto& kv : ci.members) if (serHasHeap(kv.second.typeName, ctx)) { anyHeap = true; break; }
+    ci.hasHeapFields = anyHeap;
+    std::vector<std::pair<std::string, CompilerContext::StructMember>> sm(ci.members.begin(), ci.members.end());
+    std::sort(sm.begin(), sm.end(), [](auto& a, auto& b){ return a.second.index < b.second.index; });
+    bool onPath = g_serActivePath.insert(typeName).second;
+    std::vector<std::vector<AimlTypeNode>> fsubs;
+    for (auto& [mn, mem] : sm) {
+        if (mem.is_collaborator) continue;   // spec/58 wired collaborators are not owned data
+        fsubs.push_back(serFieldSubtree(mem.typeName, (int32_t)sl->getElementOffset(mem.index), ctx, dl));
+    }
+    if (onPath) g_serActivePath.erase(typeName);
+    auto nodes = serBuildStructNodes(fsubs, 0, sz);
+    serEmitGlobal(typeName, nodes, ctx, ci);
+}
+
+// spec/61 §5.1 (F1): deep-clone a container from srcSlot (holds a handle pointer) into dstSlot,
+// via a LIST_PTR/MAP_PTR/BUFFER_PTR-rooted descriptor + the memoized clone walker. One
+// aiml_clone_deep call = one memo table for the whole container + its element DAG (so shared
+// elements clone once). memV3-only (serFieldSubtree emits the *_PTR root only under the gate).
+void Compiler::emitContainerCloneDeep(llvm::Value* dstSlot, llvm::Value* srcSlot,
+                                      const std::string& containerType) {
+    if (!dstSlot || !srcSlot) return;
+    auto* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
+    auto* i32  = ctx.builder.getInt32Ty();
+    llvm::DataLayout dl(&ctx.module);
+    std::vector<AimlTypeNode> nodes = serFieldSubtree(containerType, 0, ctx, dl, DescriptorPurpose::Clone);
+    if (nodes.empty()) return;
+    // Emit a LinkOnceODR descriptor global (mirrors visitSysCloneCall).
+    llvm::StructType* nodeTy = llvm::StructType::get(ctx.context, {i32,i32,i32,i32,i32,i32});
+    std::vector<llvm::Constant*> elems;
+    for (auto& n : nodes) {
+        llvm::Constant* f[6] = {
+            llvm::ConstantInt::get(i32,(uint64_t)n.kind),  llvm::ConstantInt::get(i32,(uint64_t)n.param1),
+            llvm::ConstantInt::get(i32,(uint64_t)n.param2), llvm::ConstantInt::get(i32,(uint64_t)n.offset),
+            llvm::ConstantInt::get(i32,(uint64_t)n.elem_size), llvm::ConstantInt::get(i32,0) };
+        elems.push_back(llvm::ConstantStruct::get(nodeTy, f));
+    }
+    llvm::ArrayType* arrTy = llvm::ArrayType::get(nodeTy, elems.size());
+    std::string sym = "__aiml_clonenodes_" + containerType;
+    for (char& c : sym) if (c=='<'||c=='>'||c==':'||c==' '||c==','||c=='/') c='_';
+    llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(sym);
+    if (!gv) {
+        gv = new llvm::GlobalVariable(ctx.module, arrTy, /*const=*/true,
+            llvm::GlobalValue::LinkOnceODRLinkage, llvm::ConstantArray::get(arrTy, elems), sym);
+        gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+        gv->setVisibility(llvm::GlobalValue::HiddenVisibility);
+    }
+    llvm::Function* dcF = ctx.getFunction("aiml_clone_deep", ctx.builder.getVoidTy(), {i8p,i8p,i8p,i32});
+    ctx.builder.CreateCall(dcF, { dstSlot, srcSlot, gv, ctx.builder.getInt32((int32_t)nodes.size()) });
+}
+
 // serBuildSubtree + a reusable LinkOnceODR sernodes global for a container field type. Shared by
 // emitContainerFieldFree and emitContainerFieldDeepCopy. Returns null gv (and sets nodeCount 0)
 // when the type has no descriptor.
@@ -3383,6 +3505,45 @@ static llvm::GlobalVariable* getFieldSerNodesGlobal(CompilerContext& ctx, const 
         gv->setVisibility(llvm::GlobalValue::HiddenVisibility);
     }
     return gv;
+}
+
+// spec/61 §5.7: a HANDLE-rooted (serFieldSubtree) descriptor global for a container element type,
+// e.g. "list<i32>" → [LIST_PTR, LIST, i32]. Used by the outer container's scope-drop (elemKind 5)
+// to release each nested-container element via aiml_ser_free_decoded (decref the inner handle,
+// recursively releasing at its rc 0). Distinct symbol from the inline getFieldSerNodesGlobal.
+static llvm::GlobalVariable* getElemHandleSerNodesGlobal(CompilerContext& ctx, const std::string& typeName,
+                                                         int& nodeCount) {
+    llvm::DataLayout dl(&ctx.module);
+    std::vector<AimlTypeNode> nodes = serFieldSubtree(typeName, 0, ctx, dl);
+    nodeCount = (int)nodes.size();
+    if (nodes.empty()) return nullptr;
+    llvm::LLVMContext& lctx = ctx.context;
+    llvm::Type* i32Ty = llvm::Type::getInt32Ty(lctx);
+    llvm::StructType* nodeTy = llvm::StructType::get(lctx, {i32Ty,i32Ty,i32Ty,i32Ty,i32Ty,i32Ty});
+    std::string symName = "__aiml_sernodes_elemh_" + typeName;
+    for (char& c : symName) if (c=='<'||c=='>'||c==':'||c==' '||c==','||c=='/') c = '_';
+    llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(symName);
+    if (!gv) {
+        std::vector<llvm::Constant*> elems;
+        for (auto& n : nodes) {
+            llvm::Constant* f[6] = {
+                llvm::ConstantInt::get(i32Ty, (uint64_t)n.kind),  llvm::ConstantInt::get(i32Ty, (uint64_t)n.param1),
+                llvm::ConstantInt::get(i32Ty, (uint64_t)n.param2), llvm::ConstantInt::get(i32Ty, (uint64_t)n.offset),
+                llvm::ConstantInt::get(i32Ty, (uint64_t)n.elem_size), llvm::ConstantInt::get(i32Ty, 0) };
+            elems.push_back(llvm::ConstantStruct::get(nodeTy, f));
+        }
+        llvm::ArrayType* arrTy = llvm::ArrayType::get(nodeTy, elems.size());
+        gv = new llvm::GlobalVariable(ctx.module, arrTy, /*isConstant=*/true,
+            llvm::GlobalValue::LinkOnceODRLinkage, llvm::ConstantArray::get(arrTy, elems), symName);
+        gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+        gv->setVisibility(llvm::GlobalValue::HiddenVisibility);
+    }
+    return gv;
+}
+
+// Public wrapper (Compiler method) so ast_compiler_stmt.cpp can obtain the element-handle descriptor.
+llvm::GlobalVariable* Compiler::elemHandleSerNodes(const std::string& typeName, int& nodeCount) {
+    return getElemHandleSerNodesGlobal(ctx, typeName, nodeCount);
 }
 
 // spec/61 §7.0 — free the heap a container field currently owns (guarded against dst==src).
@@ -5232,6 +5393,19 @@ void Compiler::visitFunction(FunctionDecl* func) {
             ctx.ir_gen->createRet(nullptr);
         } else if (unwrappedRetTy->isIntegerTy()) {
             ctx.ir_gen->createRet(ctx.ir_gen->wrap(llvm::ConstantInt::get(unwrappedRetTy, 0)));
+        } else if (ctx.memV3 && ctx.isMemV3ContainerHandle(func->returnType)) {
+            // spec/61 §5: a bodyless / fall-off-the-end method returning a container HANDLE must
+            // return a valid FRESH EMPTY handle, not null — the caller binds it (aiml_*_handle_release
+            // at scope exit) and calls methods on it (.contains/.len). Null → SIGSEGV (the bodyless
+            // creature/item/… `get_produces: map<string:i32>` in test_card_base_engine_api, rc139).
+            // handle_new callocs a valid empty {size=0,cap=0,data=null} handle (rc=1).
+            auto* i8p = llvm::PointerType::get(ctx.context, 0);
+            const std::string& rt = func->returnType;
+            const char* nf = (rt.rfind("map<", 0) == 0) ? "aiml_map_handle_new"
+                : (rt == "buffer" || rt.rfind("buffer<", 0) == 0) ? "aiml_buffer_handle_new"
+                : "aiml_list_handle_new";
+            llvm::Value* h = ctx.builder.CreateCall(ctx.getFunction(nf, i8p, {}), {}, "default_conh");
+            ctx.ir_gen->createRet(ctx.ir_gen->wrap(h));
         } else if (unwrappedRetTy->isPointerTy()) {
             ctx.ir_gen->createRet(ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(unwrappedRetTy))));
         } else if (unwrappedRetTy->isFloatingPointTy()) {
@@ -5692,15 +5866,19 @@ IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& p
                         tmpSym.typeName        = elemName;
                         tmpSym.ir_alloca_inst  = ctx.ir_gen->wrap(elemPtr);
                         tmpSym.ir_element_type = ctx.ir_gen->wrapType(elemType);
-                        return resolvePropertyWritePtr(&tmpSym, afterIdx, outTypeName);
+                        // spec/61 §5: forward wantContainerSlot so a DEEP chain (a.b.c) whose leaf is a
+                        // container field returns the SLOT (not the loaded handle) — else the whole-
+                        // container set path reads a garbage "old handle" from the loaded value and
+                        // releases it → crash (set:[mat.pending_mana_pick.pending_effect, blk], mana_pick).
+                        return resolvePropertyWritePtr(&tmpSym, afterIdx, outTypeName, wantContainerSlot);
                     }
                 } else {
-                    // Dot chain: recurse into next field
+                    // Dot chain: recurse into next field (forward wantContainerSlot — see above).
                     Symbol tmpSym;
                     tmpSym.typeName        = member.typeName;
                     tmpSym.ir_alloca_inst  = fieldGep;
                     tmpSym.ir_element_type = fieldElemTy;
-                    return resolvePropertyWritePtr(&tmpSym, rest, outTypeName);
+                    return resolvePropertyWritePtr(&tmpSym, rest, outTypeName, wantContainerSlot);
                 }
             }
         }
@@ -5891,9 +6069,11 @@ IRValue* Compiler::visitSysCloneCall(CallExpr* call) {
         return ctx.ir_gen->getInt32(0);
     }
 
-    // Build TypeNodes for the argument type and emit them as a global constant.
+    // Build TypeNodes for the argument type and emit them as a global constant. round4 §1: this is a
+    // CLONE descriptor (ref<T>→WEAK_REF, tensor→TENSOR under memV3). The Clone leaf branch is itself
+    // memV3-gated, so under OFF this yields the identical Existing descriptor (byte-identical deploy).
     llvm::DataLayout dl(&ctx.module);
-    std::vector<AimlTypeNode> nodes = serBuildSubtree(argType, 0, ctx, dl);
+    std::vector<AimlTypeNode> nodes = serBuildSubtree(argType, 0, ctx, dl, DescriptorPurpose::Clone);
     if (nodes.empty()) {
         LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.clone: failed to build TypeNodes for '" + argType + "'");
         return ctx.ir_gen->getInt32(0);

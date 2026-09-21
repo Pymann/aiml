@@ -78,6 +78,10 @@ struct Analyzer {
         if (ci != ctx.classes.end() && ci->second.hasHeapFields && ci->second.serNodesVar) {
             if (!d->initialValue) return true;
             if (auto* c = dynamic_cast<CallExpr*>(d->initialValue.get())) {
+                // spec/61 §5.1: `{ clone: X }` / `{ copy: X }` produce a FRESH, INDEPENDENT owned
+                // value model → owned, dropped at scope exit (else the cloned heap leaks; probes
+                // 14/15/34). MUST stay in lockstep with modelOwnedInit in ast_compiler_stmt.cpp.
+                if (c->functionName == "sys.clone" || c->functionName == "sys.copy") return true;
                 if (endsWith(c->functionName, ".get_copy")) return true;
                 // spec/61 return-ownership for VALUE models: a call to an `owns_return: true`
                 // function returns a freshly-built INDEPENDENT model (e.g. DeckService.list →
@@ -217,6 +221,35 @@ struct Analyzer {
                 bool memberTgt = (t.rfind("<.", 0) == 0) || (t.find('.') != std::string::npos);
                 bool dashIdx   = (t.find('-') != std::string::npos) && (t.find('.') == std::string::npos);
                 if (memberTgt && !dashIdx) {
+                    // spec/61 §6.2: is the target member a WEAK `ref<T>` field? Then `{ref: x}` (lowered
+                    // to bare `x`) stored into it is a BORROW, not a move — the source keeps ownership
+                    // and its scope-drop must still fire (probe 08: Zone.owner ref back-edge). Resolve
+                    // the field's declared type via the base local's class.
+                    bool refField = false;
+                    {
+                        size_t dot = t.find('.');
+                        std::string base = (t.rfind("<.", 0) == 0) ? std::string("this")
+                                          : (dot != std::string::npos ? t.substr(0, dot) : std::string());
+                        std::string field = (t.rfind("<.", 0) == 0) ? t.substr(2)
+                                           : (dot != std::string::npos ? t.substr(dot + 1) : std::string());
+                        if (field.find('.') == std::string::npos && !base.empty() && !field.empty()) {
+                            std::string bt;
+                            auto bid = lookup(base);
+                            auto tyIt = slotType.find(bid);
+                            if (tyIt != slotType.end()) bt = tyIt->second;
+                            if (bt.rfind("ptr<", 0) == 0 || bt.rfind("shared<", 0) == 0) {
+                                size_t lt = bt.find('<');
+                                if (lt != std::string::npos && bt.back() == '>') bt = bt.substr(lt + 1, bt.size() - lt - 2);
+                            }
+                            auto ci = ctx.classes.find(bt);
+                            if (ci != ctx.classes.end()) {
+                                auto mit = ci->second.members.find(field);
+                                if (mit != ci->second.members.end()
+                                    && mit->second.typeName.rfind("ref<", 0) == 0)
+                                    refField = true;
+                            }
+                        }
+                    }
                     Origin srcO = Origin::Unknown;
                     OwnershipId sid = NoOwnership;
                     if (auto* v = dynamic_cast<const VariableExpr*>(set->value.get()))
@@ -226,12 +259,15 @@ struct Analyzer {
                             if (it != st.slots.end()) srcO = it->second.origin;
                         }
                     StatementPlan sp;
-                    sp.transfer = (srcO == Origin::Owned) ? Transfer::Move : Transfer::DeepCopy;
+                    // A ref<T> (weak) target never moves the source; a copy into it is neither Move nor a
+                    // deep-copy of an owned heap — treat as DeepCopy (no source consumption downstream).
+                    sp.transfer = (!refField && srcO == Origin::Owned) ? Transfer::Move : Transfer::DeepCopy;
                     plan.statements[set] = sp;
                     // Finding #4: once an owned local is MOVED into a member it no longer owns its
                     // heap — mark it moved so a SECOND member-store of the same local classifies as
                     // DeepCopy (independent), not another shallow Move that would share + double-free.
-                    if (sp.transfer == Transfer::Move && sid != NoOwnership) {
+                    // A ref<T> weak target does NOT move → the source stays Owned+Live (probe 08).
+                    if (!refField && sp.transfer == Transfer::Move && sid != NoOwnership) {
                         auto it = st.slots.find(sid);
                         if (it != st.slots.end()) { it->second.origin = Origin::Unknown; it->second.life = Moved; }
                     }

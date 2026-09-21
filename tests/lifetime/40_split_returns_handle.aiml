@@ -1,0 +1,24 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5: a `list<string>` local is a refcounted HEAP HANDLE freed via aiml_list_handle_release.
+# `.split` must return a real heap handle — it previously returned a pointer to a STACK alloca, so the
+# binding local "owned" stack memory and its scope-drop released a stack pointer (garbage rc header →
+# non-deterministic heap corruption). Regression: test_auth_helpers / validate_email `.split`
+# (rc134/rc139, flaky ~2-3/8). Here: split → bind list<string> local → read len → teardown; the list
+# handle release must free every string element exactly once (no double-free, no stack-pointer free).
+# (No `at` borrow — that exercises a separate pre-existing string-borrow decref path; this probe
+# isolates the split-handle teardown and stays valgrind-clean.)
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [email, string, "alice@example.com"]
+      - decl: [parts, list<string>, { call: [email.split, "@"] }]
+      - decl: [np1, i32, { call: [parts.len] }]
+      - if: { condition: { neq: [np1, 2] }, then: [{ print: ["FAIL split @: len=${np1}, expected 2"] }, { return: 1 }] }
+      - decl: [csv, string, "x.y.z.w"]
+      - decl: [cells, list<string>, { call: [csv.split, "."] }]
+      - decl: [np2, i32, { call: [cells.len] }]
+      - if: { condition: { neq: [np2, 4] }, then: [{ print: ["FAIL split .: len=${np2}, expected 4"] }, { return: 1 }] }
+      - print: ["PASS 40 split_returns_handle"]
+      - return: 0

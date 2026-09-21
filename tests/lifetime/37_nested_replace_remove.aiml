@@ -1,0 +1,25 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5.7: replace (idx) and remove decref the OLD/removed inner handle, but an inner list
+# still co-owned by another handle must NOT be destroyed (rc keeps it alive).
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [outer, list<list<i32>>]
+      - decl: [rowa, list<i32>]
+      - call: [rowa.push, 1]
+      - call: [outer.push, rowa]                       # outer[0] co-owns rowa (rc 2)
+      - decl: [repl, list<i32>]
+      - call: [repl.push, 9]
+      - idx: [outer, 0, repl]                          # replace: decref old (rowa rc 2→1), store repl
+      # rowa is still held by our local → must still be valid (len 1)
+      - if: { condition: { neq: [rowa.len, 1] }, then: [{ print: ["FAIL replaced rowa destroyed: len=${rowa.len}"] }, { return: 1 }] }
+      - decl: [orow, list<i32>, { at: [outer, 0] }]
+      - decl: [orow0, i32, { at: [orow, 0] }]
+      - if: { condition: { neq: [orow0, 9] }, then: [{ print: ["FAIL outer[0] not replaced: ${orow0}"] }, { return: 1 }] }
+      - call: [outer.remove, 0]                        # remove: decref repl (rc→0 → freed)
+      - if: { condition: { neq: [outer.len, 0] }, then: [{ print: ["FAIL remove: outer.len=${outer.len}"] }, { return: 1 }] }
+      - if: { condition: { neq: [rowa.len, 1] }, then: [{ print: ["FAIL rowa affected by remove: len=${rowa.len}"] }, { return: 1 }] }
+      - print: ["PASS 37 nested_replace_remove"]
+      - return: 0

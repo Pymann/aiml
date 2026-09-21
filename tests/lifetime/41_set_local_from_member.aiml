@@ -1,0 +1,33 @@
+# static-check: off
+# TIER: T2
+# Spec 61 §5: `set: [localHandle, model.field]` reassigning a container-HANDLE local from a MEMBER
+# field must SHARE the handle (incref src, release loc's old handle, store the pointer), NOT memcpy
+# the {size,cap,data} struct (which shares src's data buffer → both loc and the model free it →
+# double-free). Root cause of the effect cluster: effect_targetable `set etp = ent.passive_abilities`
+# with `ent` a by-value ZoneEntry (test_creature_damage/on_death, rc134). Element mutations propagate
+# (shared handle); teardown frees the buffer exactly once.
+- model:
+    name: EntryLike
+    fields:
+      - [iid, string]
+      - [passives, list<i32>]
+- def:
+    name: peek
+    args: [[ent, EntryLike]]
+    return: i32
+    body:
+      - decl: [etp, list<i32>]                 # fresh empty handle
+      - set: [etp, ent.passives]               # SHARE ent's field handle (incref), release old
+      - return: etp.len                         # etp + ent.passives freed once each at teardown
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [ent0, EntryLike]
+      - call: [ent0.passives.push, 7]
+      - call: [ent0.passives.push, 9]
+      - decl: [num, i32, { call: [peek, ent0] }]
+      - if: { condition: { neq: [num, 2] }, then: [{ print: ["FAIL set-member: len=${num}, expected 2"] }, { return: 1 }] }
+      - if: { condition: { neq: [ent0.passives.len, 2] }, then: [{ print: ["FAIL set-member: source corrupted (${ent0.passives.len})"] }, { return: 1 }] }
+      - print: ["PASS 41 set_local_from_member"]
+      - return: 0
