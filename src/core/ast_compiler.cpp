@@ -1355,10 +1355,9 @@ void Compiler::compile(Program* prog) {
     // reproduced standalone): teardown double-frees (test_ceremony_cost, test_mkp_math,
     // test_conditional_durations "free(): double free"), a SEGV (test_activate_ability), and a
     // behavioral regression (test_creature_costs "sac1 nicht im Friedhof" — a card dropped before
-    // reaching the graveyard).  So the acceptance gate is NOT green yet; kept OFF.  Opt IN with
-    // AIML_LIFETIME_DROPS=1 (memory-sanitizer harness + 9rooms server/media/static json set it).
-    // Re-flip the default to true only once the FULL 9rooms suite passes drops-on.
-    ctx.lifetimeDropsEnabled = false;
+    // spec/61 lifetime drops are now the DEFAULT (paired with memV3 as the standard model,
+    // Entscheidung 2026-09-21). Opt OUT for pre-feature comparison with AIML_LIFETIME_DROPS=0.
+    ctx.lifetimeDropsEnabled = true;
     if (const char* de = getenv("AIML_LIFETIME_DROPS")) {
         std::string s = de;
         ctx.lifetimeDropsEnabled = !(s.empty() || s == "0" || s == "off" || s == "OFF"

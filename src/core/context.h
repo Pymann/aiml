@@ -381,10 +381,11 @@ namespace AIML {
     // AIML_MODEL_REFCOUNT) — the v1 inline-value-model path — until the phased representation
     // change (P1–P6) lands and the full 9rooms suite is green with it. INERT until then.
     bool modelRefcount = false;
-    // spec/61 memory model (v3): gated by AIML_MEM_V3 (read in ctor). When ON, the compiler emits
-    // the spec/61 target behavior, landed incrementally (first: string assignment = share/incref,
-    // §4). DEFAULT OFF → the deployed/OFF path is byte-identical. See spec/61_memory_management.
-    bool memV3 = false;
+    // spec/61 memory model (v3): the compiler's DEFAULT memory model (Entscheidung 2026-09-20/21 —
+    // v1/OFF and v2 are no longer maintained). When ON, the compiler emits the spec/61 target
+    // behavior. Opt OUT for A/B comparison with AIML_MEM_V3=0 (parsed in the ctor). See
+    // spec/61_memory_management.
+    bool memV3 = true;
     // spec/61 §10 owning-cycle lint: run once per compile (set by the first visitFunction).
     bool ownCycleLintDone = false;
     // spec/61 §5.1 (memV3): stable runtime TYPE-IDs for recursive types referenced by an
