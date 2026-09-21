@@ -164,12 +164,22 @@ namespace ListImpl {
     llvm::Value* slice(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* startVal, llvm::Value* endVal, llvm::Type* elemType) {
         // We need struct type for allocation of the new list
         llvm::StructType* structType = getListStructType(ctx);
-        
-        // Allocate struct on stack
-        llvm::AllocaInst* newList = ctx.createEntryAlloca(structType, "slice_list");
-        
+
+        // spec/61 §5 (memV3): a list<T> value is a refcounted HANDLE freed via
+        // aiml_list_handle_release. slice must return a real HEAP handle — a stack alloca made the
+        // receiving `sliced` local "own" stack memory, so its scope-drop released a stack pointer
+        // (garbage rc header → crash in aiml_list_handle_release, test_list_slice). Mirrors str.split.
+        llvm::Value* newList;
+        if (ctx.memV3) {
+            auto* i8p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Function* nw = ctx.getFunction("aiml_list_handle_new", i8p, {});
+            newList = ctx.builder.CreateCall(nw, {}, "slice_handle");
+        } else {
+            newList = ctx.createEntryAlloca(structType, "slice_list");
+        }
+
         // Init
-        initList(ctx, newList, elemType, 4); 
+        initList(ctx, newList, elemType, 4);
         
         llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
         llvm::BasicBlock* headerBB = llvm::BasicBlock::Create(ctx.context, "slice_loop_head", parentFunc);
