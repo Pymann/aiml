@@ -1609,7 +1609,8 @@ specified there before the thread path is implemented.
 > (`ptr`/`ref` semantics), **spec/47** (thread-safety of rc — §5.3), **spec/10** (collection
 > element access/extraction/invalidation §5.4, aliasing under Option B), **spec/52** (fixed
 > `array<T:N>` — raw-pointer `at`/`idx` and element ownership), **spec/53** (`dyn_array<T>` —
-> manual `.free` lifetime → Class-3 rc), and **spec/45** (deep-`clone` graph contract — the
+> **Class 4**: a unique, unmanaged single-`malloc` buffer freed once at owner-drop, `.free`
+> optional early release — **not** rc'd, §5.6), and **spec/45** (deep-`clone` graph contract — the
 > truncating serializer copy is insufficient, §5.1), and **spec/29.3** (copy/clone verb type
 > mapping). Each is listed below.
 
