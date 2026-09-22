@@ -2944,6 +2944,17 @@ void registerBuiltins(CompilerContext& ctx) {
             }
 
             // ── Default: in-memory ────────────────────────────────────────────
+            // A heap-bearing element type opens a TYPED in-memory store so insert can retain the
+            // element's strings/containers (§7 share) — else reusing the source model after insert
+            // dangles the stored record's strings (test_model).
+            if (hasHeap) {
+                auto& ci = ctx.classes[elemName];
+                llvm::Function* ft = ctx.getFunction("aiml_db_store_open_typed",
+                    i8p, {i8p, i8p, i64, i8p, i32});
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(ft,
+                    {nameVal, tnVal, ctx.builder.getInt64(elemSize),
+                     ci.serNodesVar, ctx.builder.getInt32((uint32_t)ci.serNodesCount)}));
+            }
             llvm::Function* f = ctx.getFunction("aiml_db_store_open", i8p, {i8p, i8p, i64});
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f,
                 {nameVal, tnVal, ctx.builder.getInt64(elemSize)}));

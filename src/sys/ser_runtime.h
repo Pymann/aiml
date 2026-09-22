@@ -126,6 +126,13 @@ void    aiml_ser_free_decoded(void*                obj,
                               const AimlTypeNode*  nodes,
                               int32_t              n_nodes);
 
+// Retain (incref) every rc-bearing field of *obj* (strings, containers, shared/model refs) — the
+// mirror of aiml_ser_free_decoded. Used after a shallow bit-copy so the copy co-owns the referents
+// with a balanced refcount (spec/61 §7). Does NOT allocate.
+void    aiml_ser_retain(void*                obj,
+                        const AimlTypeNode*  nodes,
+                        int32_t              n_nodes);
+
 // ── Deep copy ────────────────────────────────────────────────────────────────
 //
 // Produces a deep copy of *src* into *dst*.  After this call, *dst* owns its
