@@ -4,9 +4,9 @@
 # 1. Fixed-Size Arrays (Primitive)
 # Allocated on Stack (via 'alloca' array type).
 # Out-of-bounds access raises IndexOutOfBoundsException.
-# Syntax: type-size (e.g. i32-3). Hyphen syntax used because YAML reserves [].
-- decl: [coords, i32-3]
-- set: [coords-0, 10]
+# Syntax: array<T:N>. (The deprecated `type-size`/`name-index` hyphen forms are removed — spec/01.)
+- decl: [coords, "array<i32:3>"]
+- idx: [coords, 0, 10]              # write element 0; read with { at: [coords, 0] }
 
 # 2. Dynamic List (Strongly Typed)
 # Syntax: list<T>

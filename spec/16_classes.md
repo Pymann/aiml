@@ -76,7 +76,9 @@ Arbitrarily deep paths are supported for both reads and writes:
 ```
 
 The segment model is resolved iteratively internally (no special syntactic case).
-Each segment may be either a struct member or a list index (`field-0`):
+Each segment may be either a struct member or a list index. Element access uses the
+`{ at: [...] }` read form with a dot-prefixed member path and the `idx:` write form
+(the deprecated `field-0` hyphen notation is removed — spec/01):
 
 ```yaml
 # Mixed chain: list element, then member
@@ -84,16 +86,16 @@ Each segment may be either a struct member or a list index (`field-0`):
     name: Container
     members: [[items, list<Inner>]]
 
-- decl: [c, Container]
+- decl: [con, Container]
 - decl: [elem, Inner]
 - set: [elem.value, 7]
-- call: [c.items.push, elem]
+- call: [con.items.push, elem]
 
-# Read: items-0.value
-- decl: [hp, i32, c.items-0.value]
+# Read: element 0's .value
+- decl: [hpv, i32, { at: [con.items, 0, .value] }]
 
-# Write: items-0.value
-- set: [c.items-0.value, 13]
+# Write: element 0's .value
+- idx: [con.items, 0, .value, 13]
 ```
 
 **Access control** is enforced at every segment of the chain — not just the last one.

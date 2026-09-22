@@ -198,9 +198,9 @@ If the delimiter does not occur, the result contains exactly one element: the or
 - decl: [parts, list<string>]
 - set:  [parts, { call: [line.split, " "] }]
 # parts.len == 3
-# parts-0 == "fire"
-# parts-1 == "earth"
-# parts-2 == "water"
+# { at: [parts, 0] } == "fire"
+# { at: [parts, 1] } == "earth"
+# { at: [parts, 2] } == "water"
 ```
 
 ---
