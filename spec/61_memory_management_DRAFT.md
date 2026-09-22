@@ -814,14 +814,19 @@ this section:
   **unchanged** (read-only borrow); **self-extend** (`x.extend(x)`) is defined and realloc-safe
   (snapshot the length first). The element **type must match** (`list<U>` into `list<T>`, `U≠T`,
   is a compile error, Spec 10).
-- **A slice `x[a:b]`** produces a **new, independent container** (a fresh handle, its own spine),
+- **A slice** — written **`{call: [x.slice, start, end]}`** (start inclusive, end exclusive; `end`
+  optional → to `len`); the deprecated hyphen form `x-a-b` is being removed (spec/01) — produces a
+  **new, independent container** (a fresh handle, its own spine),
   **not** a view: its elements are filled **by element class** exactly as `extend` above (scalars
-  copied; strings/containers/`shared` incref'd). **A move-only element type cannot be sliced** for
+  copied; strings/containers/`shared` incref'd — the slice loop passes the element's incref so the
+  slice and source co-own each rc-bearing element with a balanced refcount, freed once). **A
+  move-only element type (`list<ptr<T>>`) cannot be sliced** for
   the same reason (duplicating unique owners) — a **compile error**, and `clone`-first does not
   help (same type); build the sub-range explicitly by **moving** or **per-element `clone`+push**.
   Mutating the slice's spine (push/remove) does not affect the source; mutating a **shared element
   through the slice** is visible in the source (they co-own that element). A slice is thus a
-  shallow **`copy`** of the selected range (§5.1), never a borrow of the source's buffer.
+  shallow **`copy`** of the selected range (§5.1), never a borrow of the source's buffer. The fresh
+  handle is **adopted** by the receiving local/global (§5 storage-invariant), not incref'd.
 
 ### 5.5 Assignment order — secure-before-release (self-assignment & aliased sources)
 

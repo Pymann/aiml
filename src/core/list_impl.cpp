@@ -161,7 +161,11 @@ namespace ListImpl {
          return ctx.builder.CreateInBoundsGEP(elemType, dataBase, indexVal);
     }
     
-    llvm::Value* slice(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* startVal, llvm::Value* endVal, llvm::Type* elemType) {
+    // retainFnName (spec/61 §5.4/§5.1): a shallow slice must co-own each rc-bearing element — pass
+    // the element's incref (aiml_str_incref / aiml_model_incref / aiml_{list,map,buffer}_handle_incref)
+    // so the fresh slice and the source share the referent with a balanced refcount (else the slice's
+    // scope-drop decref/free unbalances it → leak, or double-free). nullptr = scalar (no retain).
+    llvm::Value* slice(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* startVal, llvm::Value* endVal, llvm::Type* elemType, const char* retainFnName) {
         // We need struct type for allocation of the new list
         llvm::StructType* structType = getListStructType(ctx);
 
@@ -201,7 +205,17 @@ namespace ListImpl {
         ctx.builder.SetInsertPoint(bodyBB);
         llvm::Value* elem = get(ctx, listPtr, iVal, elemType);
         push(ctx, newList, elem);
-        
+        if (retainFnName) {
+            // §5.4: co-own the shared element (incref) — balances the slice's per-element scope drop.
+            auto* i8p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* elemP = (elem->getType() == i8p) ? elem
+                : (elem->getType()->isPointerTy() ? ctx.builder.CreateBitCast(elem, i8p) : nullptr);
+            if (elemP) {
+                llvm::Function* inc = ctx.getFunction(retainFnName, ctx.builder.getVoidTy(), {i8p});
+                ctx.builder.CreateCall(inc, { elemP });
+            }
+        }
+
         llvm::Value* nextI = ctx.builder.CreateAdd(iVal, ctx.builder.getInt32(1));
         ctx.builder.CreateStore(nextI, iVar);
         ctx.builder.CreateBr(headerBB);

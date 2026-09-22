@@ -31,7 +31,7 @@ namespace ListImpl {
     llvm::Value* pop(CompilerContext& ctx, llvm::Value* listPtr, llvm::Type* elemType);
     llvm::Value* get(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, llvm::Type* elemType);
     llvm::Value* getElementPtr(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* indexVal, llvm::Type* elemType);
-    llvm::Value* slice(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* startVal, llvm::Value* endVal, llvm::Type* elemType);
+    llvm::Value* slice(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* startVal, llvm::Value* endVal, llvm::Type* elemType, const char* retainFnName = nullptr);
     llvm::Value* getSize(CompilerContext& ctx, llvm::Value* listPtr);
     llvm::Value* isEmpty(CompilerContext& ctx, llvm::Value* listPtr);
     void clear(CompilerContext& ctx, llvm::Value* listPtr);
