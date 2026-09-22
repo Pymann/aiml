@@ -36,7 +36,7 @@
 # ── 3. Dynamic index read (data-i with variable) ──────────────────────────
 
 - decl: [idx, i32, 2]
-- decl: [var_v2, f32, data-idx]
+- decl: [var_v2, f32, { at: [data, idx] }]
 - print: ["data-${idx}: ${var_v2}"]
 - if:
     condition: { "&&": [{ ">": [var_v2, -0.31] }, { "<": [var_v2, -0.29] }] }
@@ -56,7 +56,7 @@
 # ── 5. Dynamic index write ─────────────────────────────────────────────────
 
 - decl: [var_wi, i32, 1]
-- set: [data-var_wi, 7.77]
+- idx: [data, var_wi, 7.77]
 - decl: [var_w1, f32, { at: [data, 1] }]
 - print: ["after set data-${var_wi}: ${var_w1}"]
 - if:
@@ -88,23 +88,23 @@
 
 # Write token 0: [0.1, 0.2, 0.3, 0.4]
 - decl: [t0_base, i32, 0]
-- set: [flat-t0_base, 0.1]
+- idx: [flat, t0_base, 0.1]
 - decl: [t0_1, i32, { +: [t0_base, 1] }]
-- set: [flat-t0_1, 0.2]
+- idx: [flat, t0_1, 0.2]
 - decl: [t0_2, i32, { +: [t0_base, 2] }]
-- set: [flat-t0_2, 0.3]
+- idx: [flat, t0_2, 0.3]
 - decl: [t0_3, i32, { +: [t0_base, 3] }]
-- set: [flat-t0_3, 0.4]
+- idx: [flat, t0_3, 0.4]
 
 # Write token 2: [1.0, 2.0, 3.0, 4.0] at offset 2*4=8
 - decl: [t2_base, i32, { "*": [2, dim] }]
-- set: [flat-t2_base, 1.0]
+- idx: [flat, t2_base, 1.0]
 - decl: [t2_1, i32, { +: [t2_base, 1] }]
-- set: [flat-t2_1, 2.0]
+- idx: [flat, t2_1, 2.0]
 - decl: [t2_2, i32, { +: [t2_base, 2] }]
-- set: [flat-t2_2, 3.0]
+- idx: [flat, t2_2, 3.0]
 - decl: [t2_3, i32, { +: [t2_base, 3] }]
-- set: [flat-t2_3, 4.0]
+- idx: [flat, t2_3, 4.0]
 
 # Read back token 0
 - decl: [var_r0, f32, { at: [flat, 0] }]
@@ -117,9 +117,9 @@
 
 # Read back token 2 via computed index
 - decl: [t2_read_base, i32, { "*": [2, dim] }]
-- decl: [t2r0, f32, flat-t2_read_base]
+- decl: [t2r0, f32, { at: [flat, t2_read_base] }]
 - decl: [t2r1_idx, i32, { +: [t2_read_base, 1] }]
-- decl: [t2r1, f32, flat-t2r1_idx]
+- decl: [t2r1, f32, { at: [flat, t2r1_idx] }]
 - print: ["token2: [${t2r0}, ${t2r1}, ...]"]
 - if:
     condition: { "&&": [{ ">": [t2r0, 0.99] }, { "<": [t2r0, 1.01] }] }
@@ -132,7 +132,7 @@
 
 # Token 1 should still be all zeros (untouched)
 - decl: [t1_base, i32, { "*": [1, dim] }]
-- decl: [t1r0, f32, flat-t1_base]
+- decl: [t1r0, f32, { at: [flat, t1_base] }]
 - print: ["token1[0] (should be 0): ${t1r0}"]
 - if:
     condition: { "&&": [{ ">=": [t1r0, -0.01] }, { "<=": [t1r0, 0.01] }] }

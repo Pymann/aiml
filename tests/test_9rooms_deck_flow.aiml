@@ -115,7 +115,7 @@
       - while:
           condition: { lt: [mk_i, mk_n] }
           body:
-            - set: [mk_cid, var_d.card_ids-mk_i]
+            - set: [mk_cid, { at: [var_d.card_ids, mk_i] }]
             - set: [mk_has, { call: [cards_kv.has, mk_cid] }]
             - if:
                 condition: { eq: [mk_has, 1] }
