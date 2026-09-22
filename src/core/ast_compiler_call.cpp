@@ -380,7 +380,10 @@ IRValue* Compiler::visitCall(CallExpr* call) {
              printfFunc = llvm::Function::Create(printfType, llvm::Function::ExternalLinkage, "printf", ctx.module);
          }
          return ctx.ir_gen->createCall("printf", printArgs, "print_call");
-    } else if (funcName == "free") {
+    } else if (funcName == "free" && !ctx.functions.count("free")) {
+         // A user-declared `extern "C" free` (FFI, e.g. libc free on a raw ptr) shadows the AIML
+         // free keyword — when one exists, fall through to the normal call path (test_ffi). Only the
+         // built-in memory `free` (no user decl) runs the §10 ownership check below.
          if (argVals.empty()) return ctx.ir_gen->getInt32(0);
          // spec/61 §10 (memV3): `free` is only for a ptr<T> new-box (and the raw dyn_array /
          // iterator handles). A shared<T> is released by refcount, a ref<T> never owns, and a
