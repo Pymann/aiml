@@ -1517,9 +1517,28 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                      if (Symbol* srcSym = resolveVariable(varExpr->name)) {
                          std::string srcTy = srcSym->typeName;
                          if (pushVal && !pushVal->getType()->isPointerTy()) {
-                             pushVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+                             // Source is a VALUE-MODEL local (struct). The list element is an owning fat
+                             // pointer whose obj is freed by the elemKind-6 scope-drop — so it MUST point
+                             // at HEAP, not the stack local (else the drop frees a stack address →
+                             // "double free or corruption", test_list_of_iface_ptr). MOVE the model onto
+                             // the heap (malloc + memcpy) and consume the source's own drop, so the list
+                             // solely owns the object.
+                             auto* i8pT = ctx.builder.getInt8Ty()->getPointerTo();
+                             llvm::Value* stackAddr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
                                  srcSym->ir_alloca_inst ? srcSym->ir_alloca_inst
                                                         : ctx.ir_gen->wrap(srcSym->alloca_inst)));
+                             int64_t boxSz = 8;
+                             auto sci = ctx.classes.find(srcSym->typeName);
+                             if (sci != ctx.classes.end() && sci->second.type) {
+                                 llvm::DataLayout dl(&ctx.module);
+                                 boxSz = (int64_t)dl.getTypeAllocSize(sci->second.type);
+                             }
+                             llvm::Function* mallocF = ctx.getFunction("malloc", i8pT, {ctx.getSizeType()});
+                             llvm::Value* heapBox = ctx.builder.CreateCall(mallocF, {ctx.getSizeConst((uint64_t)boxSz)}, "iface_box");
+                             llvm::Function* memcpyF = ctx.getFunction("memcpy", i8pT, {i8pT, i8pT, ctx.getSizeType()});
+                             ctx.builder.CreateCall(memcpyF, {heapBox, stackAddr, ctx.getSizeConst((uint64_t)boxSz)});
+                             consumeLocalDrop(call->args[0].get());   // moved onto the heap — source must not free
+                             pushVal = heapBox;
                              srcTy = "ptr<" + srcTy + ">";
                          }
                          llvm::Value* fat = buildInterfaceUpcast(pushVal, srcTy,
