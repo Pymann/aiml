@@ -299,7 +299,16 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
     size_t dashPos = varName.find('-');
     size_t sepPos = (dotPos != std::string::npos) ? dotPos : dashPos;
     bool isDash = (dashPos != std::string::npos && dotPos == std::string::npos);
-    
+    // spec/01: the deprecated hyphen index/slice notation (`x-0`, `x-1-4`) is removed. Reject it with
+    // a pointer to the replacement forms instead of silently reinterpreting `x-0` as subtraction.
+    if (isDash) {
+        LOG_ERROR(ctx.fmtLoc() + "deprecated hyphen index/slice '" + varName +
+            "' is removed — use { at: [" + varName.substr(0, dashPos) + ", <index>] } to read, "
+            "idx: [<container>, <index>, <value>] to write, or { call: [" + varName.substr(0, dashPos) +
+            ".slice, <start>, <end>] } to slice (spec/01).");
+        return nullptr;
+    }
+
     std::string baseName = (sepPos != std::string::npos) ? varName.substr(0, sepPos) : varName;
     std::string propName = (sepPos != std::string::npos) ? varName.substr(sepPos + 1) : "";
 
