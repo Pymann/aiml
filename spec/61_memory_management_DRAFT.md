@@ -639,6 +639,14 @@ The per-class contract:
     inside, at guard exit) are under the lock — the "implicit drop escapes the lock" hazard
     cannot arise. To *keep* a field's value beyond the guard, **`clone`** it inside the guard (the
     clone is independent and leaves as an owned value, not a shared rc handle).
+    **The clone must be self-contained.** `clone` copies *owned* structure but **preserves weak
+    `ref<T>` edges** (§5.1) — so cloning only *part* of the protected graph can carry a `ref` that
+    still points at a **protected original**, re-opening unguarded access. Counter-example: the
+    protected object owns `a` and `b`, and `a` holds a `ref` to `b`; cloning only `a` yields a clone
+    whose `ref` still reaches the protected `b` outside the lock. A clone may leave the guard **only
+    if none of its weak references reach any object that stays protected**. Otherwise it is a
+    **compile error** — clone the **fully weak-closed subgraph** (so every referent is copied too),
+    or null/re-anchor the escaping `ref` to a non-protected owner (id + Category-1 registry, §5.2).
   - **Entry contract — no pre-existing unguarded alias of the protected subgraph.** The guard only
     serialises access reached *through the guard*; it cannot retroactively serialise a handle that
     was already shared **before** the value became guarded. So at the transition to a guarded
@@ -653,6 +661,16 @@ The per-class contract:
     error** at the guard-transition, diagnosed by the same affine/uniqueness pass as `send` (§5.3
     weak-ref-closure). Bring data in by **move** (or `clone` a private copy) so nothing outside the
     guard aliases the protected nodes.
+  - **The entry check also governs every later write INTO the protected subgraph.** The same rule
+    is not one-shot at construction — it applies to **every `store`/`insert`/`set(i)`/field-swap**
+    that puts a value into a protected node from *inside* the guard. An ordinary share-assignment of
+    an **external** handle into a guarded field would leave the external variable holding an
+    **unguarded alias** after the guard exits (counter-example: a correctly guarded model is given
+    an outside `list<T>` by a plain share inside the guard; the outside local still reaches that
+    handle unlocked). So a value written into the protected subgraph must be **moved in** (source
+    emptied) or **cloned** (independent copy); a value **already in the same lock domain** (read
+    from this or another node of the same guard) may be shared. Writing an external, still-aliased
+    handle in is a **compile error**, checked identically to the entry contract above.
   - So a guarded `shared<T>` is fully static-safe: rc lifetime via the atomic count, payload via
     the lock guard, no rc op straddling the lock, **and no pre-existing alias bypassing it**.
     Non-guarded thread-shared mutation of a non-atomic field remains a compile error (you must go
