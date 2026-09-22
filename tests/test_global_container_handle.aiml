@@ -1,0 +1,55 @@
+# spec/61 §5: a top-level (global) container is a refcounted HANDLE, exactly like a local —
+# storage location is representation-invariant. Covers: global list built via push + read via
+# .get, a global assigned an OWNED handle from a builtin (string.split returns a heap list<string>
+# handle → must be adopted into the global's pointer slot, not strided as an inline struct),
+# aliasing between two globals (share = same heap block), and a global map. Deterministic; exit 0.
+# NOTE: uses method access (.get/.put), no deprecated hyphen index/slice notation.
+
+- decl: [g_nums, list<i32>]
+- call: [g_nums.push, 10]
+- call: [g_nums.push, 20]
+- call: [g_nums.push, 30]
+- decl: [num0, i32, { call: [g_nums.get, 0] }]
+- if:
+    condition: { neq: [num0, 10] }
+    then:
+      - print: ["FAIL g_nums.get(0)=${num0} expected 10"]
+      - call: [sys.exit, 1]
+
+# A global assigned the OWNED handle a builtin yields — must adopt it (not stride it as inline).
+- decl: [csv, string, "a,b,c"]
+- decl: [g_parts, list<string>]
+- set: [g_parts, { call: [csv.split, ","] }]
+- if:
+    condition: { neq: [g_parts.len, 3] }
+    then:
+      - print: ["FAIL g_parts.len=${g_parts.len} expected 3"]
+      - call: [sys.exit, 1]
+- decl: [part1, string, { call: [g_parts.get, 1] }]
+- if:
+    condition: { neq: [part1, "b"] }
+    then:
+      - print: ["FAIL g_parts.get(1)=${part1} expected b"]
+      - call: [sys.exit, 1]
+
+# Aliasing between two globals: SHARE (incref), same block — a mutation is visible through both.
+- decl: [g_alias, list<i32>, g_nums]   # SHARE
+- call: [g_nums.push, 40]
+- if:
+    condition: { neq: [g_alias.len, 4] }
+    then:
+      - print: ["FAIL g_alias.len=${g_alias.len} expected 4 (aliasing)"]
+      - call: [sys.exit, 1]
+
+# A global map handle.
+- decl: [g_map, map<string:i32>]
+- call: [g_map.put, "a", 1]
+- call: [g_map.put, "b", 2]
+- if:
+    condition: { neq: [g_map.len, 2] }
+    then:
+      - print: ["FAIL g_map.len=${g_map.len} expected 2"]
+      - call: [sys.exit, 1]
+
+- print: ["global container handle PASS"]
+- call: [sys.exit, 0]

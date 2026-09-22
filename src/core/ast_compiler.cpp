@@ -1442,6 +1442,11 @@ void Compiler::compile(Program* prog) {
             IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
             if (!ty) continue;
             llvm::Type* llvmTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ty));
+            // §5 storage-location invariance: memV3 container global = handle pointer slot (see the
+            // main-mode block below). Keep lib-mode and main-mode representations identical so a
+            // library-defined container global and its main-mode extern view share one ABI.
+            bool memV3HandleGlobal = ctx.memV3 && ctx.isMemV3ContainerHandle(decl->typeName);
+            if (memV3HandleGlobal) llvmTy = llvm::PointerType::get(ctx.context, 0);
             std::string symName = decl->is_extern
                 ? "__lib_" + decl->varName
                 : "__lib_" + filePrefix + decl->varName;
@@ -1469,6 +1474,7 @@ void Compiler::compile(Program* prog) {
             sym.is_const        = decl->is_const;
             sym.is_volatile     = decl->is_volatile;
             sym.is_global       = true;
+            if (memV3HandleGlobal) sym.is_byref_arg = true;
             ctx.symbol_table[decl->varName] = sym;
 
             // Collect container globals (list/map/chan/buffer) AND class-
@@ -1479,6 +1485,7 @@ void Compiler::compile(Program* prog) {
             bool isContainer = (tn.rfind("list<",   0) == 0 ||
                                 tn.rfind("map<",    0) == 0 ||
                                 tn.rfind("chan<",   0) == 0 ||
+                                tn == "buffer" ||   // bare buffer is a Class-3 handle too (§5)
                                 tn.rfind("buffer<", 0) == 0);
             bool isClassInstance = ctx.classes.count(tn) &&
                                    !ctx.classes[tn].isBuiltin &&
@@ -1496,11 +1503,26 @@ void Compiler::compile(Program* prog) {
         ensureLibInit();
         for (auto& [decl, gv, ty] : globalContainers) {
             const std::string& tn = decl->typeName;
+            // §5 storage-location invariance: a memV3 container global is a handle. Allocate the
+            // heap handle, store the pointer into the (pointer-typed) global, and init THROUGH the
+            // handle — exactly the local-handle prologue. Non-memV3 keeps the inline-struct global.
+            bool memV3HandleGlobal = ctx.memV3 && ctx.isMemV3ContainerHandle(tn);
+            // A memV3 container global WITH an initializer gets its handle from that initializer
+            // (visitDeclStmt → emitListHandleDecl writes the global var), so Phase-2 must NOT also
+            // allocate one here (that handle would leak, overwritten by the initializer's store).
+            if (memV3HandleGlobal && decl->initialValue) continue;
+            auto handleInitTgt = [&](const char* newFn) -> llvm::Value* {
+                if (!memV3HandleGlobal) return static_cast<llvm::Value*>(gv);
+                llvm::Function* nw = ctx.getFunction(newFn, ctx.builder.getInt8Ty()->getPointerTo(), {});
+                llvm::Value* hnd = ctx.builder.CreateCall(nw, {}, "gcont_h");
+                ctx.builder.CreateStore(hnd, gv);
+                return hnd;
+            };
             if (tn.rfind("list<", 0) == 0) {
                 std::string elemName = tn.substr(5, tn.length() - 6);
                 llvm::Type* elemTy = static_cast<llvm::Type*>(
                     ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
-                if (elemTy) ListImpl::initList(ctx, gv, elemTy, 4);
+                if (elemTy) ListImpl::initList(ctx, handleInitTgt("aiml_list_handle_new"), elemTy, 4);
             } else if (tn.rfind("map<", 0) == 0) {
                 std::string inner = tn.substr(4, tn.length() - 5);
                 size_t colon = inner.find(':');
@@ -1511,12 +1533,18 @@ void Compiler::compile(Program* prog) {
                         ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(kName)));
                     llvm::Type* vTy = static_cast<llvm::Type*>(
                         ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
-                    if (kTy && vTy) MapImpl::initMap(ctx, gv, kTy, vTy, 4);
+                    if (kTy && vTy) MapImpl::initMap(ctx, handleInitTgt("aiml_map_handle_new"), kTy, vTy, 4);
                 }
             } else if (tn.rfind("chan<", 0) == 0) {
                 ChanImpl::init(ctx, gv, ctx.builder.getInt64(0));
-            } else if (tn.rfind("buffer<", 0) == 0 && !decl->initialValue) {
-                BufferImpl::alloc(ctx, gv, ctx.builder.getInt32(4096));
+            } else if (tn == "buffer" || tn.rfind("buffer<", 0) == 0) {
+                // A memV3 buffer global (bare `buffer` OR `buffer<T>`) needs its handle allocated so
+                // the pointer slot is non-null before any .alloc/.write. The bare `buffer` had no
+                // Phase-2 init in the OFF path (data alloc'd on demand); under memV3 the HANDLE still
+                // must exist. `buffer<T>` keeps the eager 4096-byte data pre-alloc.
+                llvm::Value* bufTgt = handleInitTgt("aiml_buffer_handle_new");
+                if (tn.rfind("buffer<", 0) == 0 && !decl->initialValue)
+                    BufferImpl::alloc(ctx, bufTgt, ctx.builder.getInt32(4096));
             } else if (ctx.classes.count(tn) && !ctx.classes[tn].isBuiltin &&
                        ctx.classes[tn].type != nullptr) {
                 initClassContainerMembers(gv, tn);
@@ -1584,6 +1612,12 @@ void Compiler::compile(Program* prog) {
             IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
             if (!ty) continue;
             llvm::Type* llvmTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ty));
+            // spec/61 §5 "storage location is representation-invariant": under memV3 a Class-3
+            // container global is a HANDLE, exactly like a local — the global variable holds a
+            // handle pointer (not an inline {size,cap,data} struct). Declare it as a pointer slot
+            // and mark the symbol is_byref_arg so every access derefs the handle (like a local).
+            bool memV3HandleGlobal = ctx.memV3 && ctx.isMemV3ContainerHandle(decl->typeName);
+            if (memV3HandleGlobal) llvmTy = llvm::PointerType::get(ctx.context, 0);
             std::string symName = decl->is_extern
                 ? "__lib_" + decl->varName
                 : "__global_" + decl->varName;
@@ -1611,12 +1645,16 @@ void Compiler::compile(Program* prog) {
             sym.is_const        = decl->is_const;
             sym.is_volatile     = decl->is_volatile;
             sym.is_global       = true;
+            // memV3 container global: slot holds the handle pointer → route all access through the
+            // same by-ref deref path as local handles (§5 storage-location invariance).
+            if (memV3HandleGlobal) sym.is_byref_arg = true;
             ctx.symbol_table[decl->varName] = sym;
 
             const std::string& tn = decl->typeName;
             bool isContainer = (tn.rfind("list<",   0) == 0 ||
                                 tn.rfind("map<",    0) == 0 ||
                                 tn.rfind("chan<",   0) == 0 ||
+                                tn == "buffer" ||   // bare buffer is a Class-3 handle too (§5)
                                 tn.rfind("buffer<", 0) == 0);
             bool isClassInstance = ctx.classes.count(tn) &&
                                    !ctx.classes[tn].isBuiltin &&
@@ -1639,11 +1677,26 @@ void Compiler::compile(Program* prog) {
         // imperative statements) might access them.
         for (auto& [decl, gv, ty] : globalContainers) {
             const std::string& tn = decl->typeName;
+            // §5 storage-location invariance: a memV3 container global is a handle. Allocate the
+            // heap handle, store the pointer into the (pointer-typed) global, and init THROUGH the
+            // handle — exactly the local-handle prologue. Non-memV3 keeps the inline-struct global.
+            bool memV3HandleGlobal = ctx.memV3 && ctx.isMemV3ContainerHandle(tn);
+            // A memV3 container global WITH an initializer gets its handle from that initializer
+            // (visitDeclStmt → emitListHandleDecl writes the global var), so Phase-2 must NOT also
+            // allocate one here (that handle would leak, overwritten by the initializer's store).
+            if (memV3HandleGlobal && decl->initialValue) continue;
+            auto handleInitTgt = [&](const char* newFn) -> llvm::Value* {
+                if (!memV3HandleGlobal) return static_cast<llvm::Value*>(gv);
+                llvm::Function* nw = ctx.getFunction(newFn, ctx.builder.getInt8Ty()->getPointerTo(), {});
+                llvm::Value* hnd = ctx.builder.CreateCall(nw, {}, "gcont_h");
+                ctx.builder.CreateStore(hnd, gv);
+                return hnd;
+            };
             if (tn.rfind("list<", 0) == 0) {
                 std::string elemName = tn.substr(5, tn.length() - 6);
                 llvm::Type* elemTy = static_cast<llvm::Type*>(
                     ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
-                if (elemTy) ListImpl::initList(ctx, gv, elemTy, 4);
+                if (elemTy) ListImpl::initList(ctx, handleInitTgt("aiml_list_handle_new"), elemTy, 4);
             } else if (tn.rfind("map<", 0) == 0) {
                 std::string inner = tn.substr(4, tn.length() - 5);
                 size_t colon = inner.find(':');
@@ -1654,12 +1707,18 @@ void Compiler::compile(Program* prog) {
                         ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(kName)));
                     llvm::Type* vTy = static_cast<llvm::Type*>(
                         ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
-                    if (kTy && vTy) MapImpl::initMap(ctx, gv, kTy, vTy, 4);
+                    if (kTy && vTy) MapImpl::initMap(ctx, handleInitTgt("aiml_map_handle_new"), kTy, vTy, 4);
                 }
             } else if (tn.rfind("chan<", 0) == 0) {
                 ChanImpl::init(ctx, gv, ctx.builder.getInt64(0));
-            } else if (tn.rfind("buffer<", 0) == 0 && !decl->initialValue) {
-                BufferImpl::alloc(ctx, gv, ctx.builder.getInt32(4096));
+            } else if (tn == "buffer" || tn.rfind("buffer<", 0) == 0) {
+                // A memV3 buffer global (bare `buffer` OR `buffer<T>`) needs its handle allocated so
+                // the pointer slot is non-null before any .alloc/.write. The bare `buffer` had no
+                // Phase-2 init in the OFF path (data alloc'd on demand); under memV3 the HANDLE still
+                // must exist. `buffer<T>` keeps the eager 4096-byte data pre-alloc.
+                llvm::Value* bufTgt = handleInitTgt("aiml_buffer_handle_new");
+                if (tn.rfind("buffer<", 0) == 0 && !decl->initialValue)
+                    BufferImpl::alloc(ctx, bufTgt, ctx.builder.getInt32(4096));
             } else if (ctx.classes.count(tn) && !ctx.classes[tn].isBuiltin &&
                        ctx.classes[tn].type != nullptr) {
                 initClassContainerMembers(gv, tn);

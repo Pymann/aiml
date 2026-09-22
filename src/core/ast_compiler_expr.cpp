@@ -410,10 +410,9 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
             // the struct pointer, so load the handle first — else getSize/getElementPtr/slice read the
             // handle-pointer bytes as {size,cap,data} → garbage/crash (test_list_slice `lst-1-4`). The
             // `.len`/method path already loads the handle in its own branch.
-            // NOTE: only LOCALS are handles under memV3; globals stay inline (Stage B), so a global's
-            // slot IS the {size,cap,data} struct — do not load a "handle" from it (would read the
-            // struct's first 8 bytes as a pointer → garbage).
-            if (ctx.memV3 && !sym->is_global && ctx.isMemV3ContainerHandle(sym->typeName)) {
+            // spec/61 §5 storage-location invariance: memV3 container LOCALS *and* GLOBALS are
+            // handle-pointer slots (is_byref_arg), so both load the handle here.
+            if (ctx.memV3 && ctx.isMemV3ContainerHandle(sym->typeName)) {
                 auto* i8pH = llvm::PointerType::get(ctx.context, 0);
                 baseAllocaVal = ctx.builder.CreateLoad(i8pH, baseAllocaVal, "conh_dash");
             }

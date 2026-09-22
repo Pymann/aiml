@@ -2371,6 +2371,10 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                     bufAlloca = sym->alloca_inst
                         ? static_cast<llvm::Value*>(sym->alloca_inst)
                         : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
+                    // spec/61 §5: a memV3 buffer (LOCAL or GLOBAL) slot holds the handle POINTER, not
+                    // the inline struct — load it so the StructGEPs below hit the {…,data} struct.
+                    if (sym->is_byref_arg)
+                        bufAlloca = ctx.builder.CreateLoad(i8p, bufAlloca, "blob_conh");
                 } else if (sym && !prop.empty()) {
                     // struct member access — resolve class name (strip ref<> wrapper)
                     std::string clsName = sym->typeName;
@@ -2426,6 +2430,10 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                     bufAlloca = sym->alloca_inst
                         ? static_cast<llvm::Value*>(sym->alloca_inst)
                         : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
+                    // spec/61 §5: a memV3 buffer (LOCAL or GLOBAL) slot holds the handle POINTER, not
+                    // the inline struct — load it so the StructGEPs below hit the {…,data} struct.
+                    if (sym->is_byref_arg)
+                        bufAlloca = ctx.builder.CreateLoad(i8p, bufAlloca, "blob_conh");
                 } else if (sym && !prop.empty()) {
                     std::string clsName = sym->typeName;
                     if (clsName.find("ref<") == 0 && clsName.back() == '>')

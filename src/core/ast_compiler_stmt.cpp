@@ -358,11 +358,24 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
     }
     if (!elemTy) elemTy = i8p;
 
-    // Pointer slot for the handle.
+    // Pointer slot for the handle. A memV3 container GLOBAL (§5 storage-location invariance) already
+    // owns a pointer-typed global variable (declared + is_byref_arg in the global-registration pass);
+    // reuse it as the slot so the initializer's share/adopt/copy writes the global, not a fresh local
+    // alloca. A local decl allocates its own slot.
     IRType* ptrTy = ctx.ir_gen->getPointerTy();
-    IRValue* alloca = ctx.ir_gen->createAlloca(ptrTy, decl->varName);
-    llvm::Value* slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
-    ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), slot);
+    auto gsymIt = ctx.symbol_table.find(decl->varName);
+    bool isGlobalDecl = (gsymIt != ctx.symbol_table.end() && gsymIt->second.is_global);
+    IRValue* alloca;
+    llvm::Value* slot;
+    if (isGlobalDecl) {
+        alloca = gsymIt->second.ir_alloca_inst;
+        slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
+        // gv is program-zero-inited (null); Phase-2 skipped its handle_new for an initialized global.
+    } else {
+        alloca = ctx.ir_gen->createAlloca(ptrTy, decl->varName);
+        slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
+        ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), slot);
+    }
 
     // Classify the initializer.
     Expr* iv = decl->initialValue.get();
@@ -504,14 +517,17 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
     sym.is_volatile     = decl->is_volatile;
     sym.lifetime        = decl->lifetime;
     sym.is_byref_arg    = true;
+    sym.is_global       = isGlobalDecl;   // preserve global storage class (slot IS the global var)
     OwnershipId declOid = (ctx.ownershipPlan && ctx.ownershipPlan->declarations.count(decl))
         ? ctx.ownershipPlan->declarations.at(decl) : NoOwnership;
     sym.ownershipId     = declOid;
     ctx.symbol_table[decl->varName] = sym;
 
     // Scope-exit decref (unless persistent). Every list local owns exactly one handle ref
-    // (fresh alloc, incref'd share, or fresh copy) → one decref balances it.
-    if (decl->lifetime != "persistent" && ctx.lifetimeDropsEnabled && !ctx.cleanupStack.empty()) {
+    // (fresh alloc, incref'd share, or fresh copy) → one decref balances it. A GLOBAL is not
+    // function-scoped — it lives for the whole program (like the OFF-path inline global, which was
+    // never scope-dropped either), so no scope-drop is registered for it.
+    if (!isGlobalDecl && decl->lifetime != "persistent" && ctx.lifetimeDropsEnabled && !ctx.cleanupStack.empty()) {
         CompilerContext::ScopeDrop sd;
         sd.addr = slot;
         sd.kind = 2;
@@ -570,11 +586,20 @@ void Compiler::emitMapHandleDecl(DeclStmt* decl) {
         }
     }
 
-    // Pointer slot.
+    // Pointer slot. A memV3 container GLOBAL reuses its existing pointer-typed global var (§5).
     IRType* ptrTy = ctx.ir_gen->getPointerTy();
-    IRValue* alloca = ctx.ir_gen->createAlloca(ptrTy, decl->varName);
-    llvm::Value* slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
-    ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), slot);
+    auto gsymIt = ctx.symbol_table.find(decl->varName);
+    bool isGlobalDecl = (gsymIt != ctx.symbol_table.end() && gsymIt->second.is_global);
+    IRValue* alloca;
+    llvm::Value* slot;
+    if (isGlobalDecl) {
+        alloca = gsymIt->second.ir_alloca_inst;
+        slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
+    } else {
+        alloca = ctx.ir_gen->createAlloca(ptrTy, decl->varName);
+        slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
+        ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), slot);
+    }
 
     Expr* iv = decl->initialValue.get();
     // A plain local (`a`) → resolveVariable + incref. A MEMBER access (`obj.field`) or an at-element
@@ -672,12 +697,13 @@ void Compiler::emitMapHandleDecl(DeclStmt* decl) {
     sym.is_volatile     = decl->is_volatile;
     sym.lifetime        = decl->lifetime;
     sym.is_byref_arg    = true;
+    sym.is_global       = isGlobalDecl;   // preserve global storage class (slot IS the global var)
     OwnershipId declOid = (ctx.ownershipPlan && ctx.ownershipPlan->declarations.count(decl))
         ? ctx.ownershipPlan->declarations.at(decl) : NoOwnership;
     sym.ownershipId     = declOid;
     ctx.symbol_table[decl->varName] = sym;
 
-    if (decl->lifetime != "persistent" && ctx.lifetimeDropsEnabled && !ctx.cleanupStack.empty()) {
+    if (!isGlobalDecl && decl->lifetime != "persistent" && ctx.lifetimeDropsEnabled && !ctx.cleanupStack.empty()) {
         CompilerContext::ScopeDrop sd;
         sd.addr = slot;
         sd.kind = 3;
@@ -702,9 +728,18 @@ void Compiler::emitBufferHandleDecl(DeclStmt* decl) {
     auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
 
     IRType* ptrTy = ctx.ir_gen->getPointerTy();
-    IRValue* alloca = ctx.ir_gen->createAlloca(ptrTy, decl->varName);
-    llvm::Value* slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
-    ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), slot);
+    auto gsymIt = ctx.symbol_table.find(decl->varName);
+    bool isGlobalDecl = (gsymIt != ctx.symbol_table.end() && gsymIt->second.is_global);
+    IRValue* alloca;
+    llvm::Value* slot;
+    if (isGlobalDecl) {
+        alloca = gsymIt->second.ir_alloca_inst;   // memV3 container global reuses its global var (§5)
+        slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
+    } else {
+        alloca = ctx.ir_gen->createAlloca(ptrTy, decl->varName);
+        slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
+        ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), slot);
+    }
 
     Expr* iv = decl->initialValue.get();
     // Plain local → resolveVariable + incref. Member (`obj.field`) / at-element → share via
@@ -774,12 +809,13 @@ void Compiler::emitBufferHandleDecl(DeclStmt* decl) {
     sym.is_volatile     = decl->is_volatile;
     sym.lifetime        = decl->lifetime;
     sym.is_byref_arg    = true;
+    sym.is_global       = isGlobalDecl;   // preserve global storage class (slot IS the global var)
     OwnershipId declOid = (ctx.ownershipPlan && ctx.ownershipPlan->declarations.count(decl))
         ? ctx.ownershipPlan->declarations.at(decl) : NoOwnership;
     sym.ownershipId     = declOid;
     ctx.symbol_table[decl->varName] = sym;
 
-    if (decl->lifetime != "persistent" && ctx.lifetimeDropsEnabled && !ctx.cleanupStack.empty()) {
+    if (!isGlobalDecl && decl->lifetime != "persistent" && ctx.lifetimeDropsEnabled && !ctx.cleanupStack.empty()) {
         CompilerContext::ScopeDrop sd;
         sd.addr = slot;
         sd.kind = 8;   // buffer handle → aiml_buffer_handle_release
@@ -838,28 +874,32 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
     {
         bool isListLocal = (decl->typeName.rfind("list<", 0) == 0 && decl->typeName.back() == '>');
         bool isCascadeLocal = (decl->typeName.rfind("cascade<", 0) == 0 && decl->typeName.back() == '>');
-        // Globals (pre-promoted) are already in symbol_table (is_global) → the shadow guard
-        // excludes them; they stay inline (Stage B). Note we do NOT exclude inTopLevelInit:
-        // the `-r` JIT path compiles a script's function bodies under inTopLevelInit=true, and
-        // those locals still want handle semantics + scope drop.
+        // Two entry conditions into the handle-decl path:
+        //  • LOCAL: not yet in symbol_table + inside a cleanup scope (the normal case).
+        //  • GLOBAL WITH INITIALIZER (§5 storage-location invariance): a container global is a handle
+        //    now, so its share/adopt/copy initializer must run the handle path (writing the existing
+        //    global var), not the OFF inline fall-through. A global WITHOUT an initializer is prepared
+        //    by the Phase-2 prologue instead (handle_new), so it is NOT taken here.
+        auto gsIt = ctx.symbol_table.find(decl->varName);
+        bool declGlobalInit = ctx.memV3 && !decl->is_extern && decl->initialValue
+            && gsIt != ctx.symbol_table.end() && gsIt->second.is_global
+            && ctx.isMemV3ContainerHandle(decl->typeName);
+        bool declLocal = !ctx.symbol_table.count(decl->varName) && !ctx.cleanupStack.empty();
         if (ctx.memV3 && (isListLocal || isCascadeLocal) && !decl->is_extern
-            && !ctx.symbol_table.count(decl->varName)
-            && !ctx.cleanupStack.empty()) {
+            && (declLocal || declGlobalInit)) {
             emitListHandleDecl(decl, isCascadeLocal);
             return;
         }
         bool isMapLocal = (decl->typeName.rfind("map<", 0) == 0 && decl->typeName.back() == '>');
         if (ctx.memV3 && isMapLocal && !decl->is_extern
-            && !ctx.symbol_table.count(decl->varName)
-            && !ctx.cleanupStack.empty()) {
+            && (declLocal || declGlobalInit)) {
             emitMapHandleDecl(decl);
             return;
         }
         bool isBufLocal = (decl->typeName == "buffer"
             || (decl->typeName.rfind("buffer<", 0) == 0 && decl->typeName.back() == '>'));
         if (ctx.memV3 && isBufLocal && !decl->is_extern
-            && !ctx.symbol_table.count(decl->varName)
-            && !ctx.cleanupStack.empty()) {
+            && (declLocal || declGlobalInit)) {
             emitBufferHandleDecl(decl);
             return;
         }
@@ -2537,7 +2577,15 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                     llvm::Type* resolved = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(innerName)));
                     if (resolved) innerElemTy = resolved;
                 }
-                elemPtr = ListImpl::getElementPtr(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), idxVal, innerElemTy);
+                // spec/61 §5: a memV3 list (LOCAL or GLOBAL, both is_byref_arg) slot holds the handle
+                // POINTER, not the {size,cap,data} struct — load it before GEP, else the pointer bytes
+                // are strided as the struct → element write corrupts memory (test_list `set:[lst-0,v]`).
+                llvm::Value* listBase = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+                if (sym->is_byref_arg) {
+                    auto* i8pH = ctx.builder.getInt8Ty()->getPointerTo();
+                    listBase = ctx.builder.CreateLoad(i8pH, listBase, "conh_dashset");
+                }
+                elemPtr = ListImpl::getElementPtr(ctx, listBase, idxVal, innerElemTy);
             }
             ctx.builder.CreateStore(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)), elemPtr);
             return;

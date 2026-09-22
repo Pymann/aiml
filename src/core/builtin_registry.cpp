@@ -5404,7 +5404,12 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Value* dim = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]));
 
             llvm::StructType* listTy = ListImpl::getListStructType(ctx);
-            llvm::Value* listAlloca = ctx.createEntryAlloca(listTy, "enc_dense_list");
+            // spec/61 §5: a list-returning builtin must hand back a HEAP HANDLE under memV3 (a value
+            // local/global adopts the returned rc), not an inline struct — else the adopt strides the
+            // struct bytes as a handle pointer → crash (test_ai_dense `enc.len` on a global list<f32>).
+            llvm::Value* listAlloca = ctx.memV3
+                ? static_cast<llvm::Value*>(ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, "enc_dense_h"))
+                : ctx.createEntryAlloca(listTy, "enc_dense_list");
             ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 0));
             ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 1));
             llvm::Value* totalBytes = ctx.builder.CreateMul(
@@ -5417,6 +5422,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.builder.getVoidTy(), {ptrTy, i32ty, i8p, i32ty, ptrTy});
             ctx.builder.CreateCall(fn, {idsPtr, nTokens, flatPtr, dim, dataPtr});
 
+            if (ctx.memV3) return ctx.ir_gen->wrap(listAlloca);   // handle pointer (adopted by caller)
             llvm::Value* listVal = ctx.builder.CreateLoad(listTy, listAlloca, "enc_dense_result");
             return ctx.ir_gen->wrap(listVal);
         };
@@ -5439,7 +5445,10 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Value* dim = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]));
 
             llvm::StructType* listTy = ListImpl::getListStructType(ctx);
-            llvm::Value* listAlloca = ctx.createEntryAlloca(listTy, "encw_list");
+            // §5: heap handle under memV3 (see encode_dense) so the caller adopts an rc, not a struct.
+            llvm::Value* listAlloca = ctx.memV3
+                ? static_cast<llvm::Value*>(ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, "encw_h"))
+                : ctx.createEntryAlloca(listTy, "encw_list");
             ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 0));
             ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 1));
             llvm::Value* totalBytes = ctx.builder.CreateMul(
@@ -5452,6 +5461,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.builder.getVoidTy(), {ptrTy, i32ty, i8p, i32ty, ptrTy});
             ctx.builder.CreateCall(fn, {idsPtr, nTokens, flatPtr, dim, dataPtr});
 
+            if (ctx.memV3) return ctx.ir_gen->wrap(listAlloca);   // handle pointer
             llvm::Value* listVal = ctx.builder.CreateLoad(listTy, listAlloca, "encw_result");
             return ctx.ir_gen->wrap(listVal);
         };
@@ -5512,7 +5522,10 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Value* dim = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[4]));
 
             llvm::StructType* listTy = ListImpl::getListStructType(ctx);
-            llvm::Value* listAlloca = ctx.createEntryAlloca(listTy, "tg_list");
+            // §5: heap handle under memV3 (see encode_dense) so the caller adopts an rc, not a struct.
+            llvm::Value* listAlloca = ctx.memV3
+                ? static_cast<llvm::Value*>(ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new", ptrTy, {}), {}, "tg_h"))
+                : ctx.createEntryAlloca(listTy, "tg_list");
             ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 0));
             ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 1));
             llvm::Value* totalBytes = ctx.builder.CreateMul(
@@ -5525,6 +5538,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.builder.getVoidTy(), {ptrTy, ptrTy, ptrTy, f32ty, i32ty, ptrTy});
             ctx.builder.CreateCall(fn, {qPtr, posPtr, negPtr, margin, dim, dataPtr});
 
+            if (ctx.memV3) return ctx.ir_gen->wrap(listAlloca);   // handle pointer
             llvm::Value* listVal = ctx.builder.CreateLoad(listTy, listAlloca, "tg_result");
             return ctx.ir_gen->wrap(listVal);
         };
