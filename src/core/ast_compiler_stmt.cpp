@@ -4288,15 +4288,22 @@ void Compiler::visitStoreStmt(StoreStmt* st) {
         LOG_ERROR(ctx.fmtLoc() + "store: undefined pointer variable '" + st->target + "'");
         return;
     }
-    if (sym->typeName.rfind("ptr<", 0) != 0 || sym->typeName.back() != '>') {
+    // A `store` target is a pointer we deref-write through: an owning `ptr<T>` OR a borrow `ref<T>`
+    // (both are target-pointer slots). A `ref<T>` out-parameter (§8: a borrow that must NOT take
+    // ownership — unlike `ptr<T>` which moves) is the correct spelling for a copy-out fill, so store
+    // must accept it. The pointed-to type strips one `ptr<`/`ref<` layer either way (4-char prefix).
+    auto isPtrLike = [](const std::string& t){
+        return (t.rfind("ptr<", 0) == 0 || t.rfind("ref<", 0) == 0) && !t.empty() && t.back() == '>';
+    };
+    if (!isPtrLike(sym->typeName)) {
         LOG_ERROR(ctx.fmtLoc() + "store: target '" + st->target
-                  + "' is not a pointer (type=" + sym->typeName + ")");
+                  + "' is not a pointer or borrow (type=" + sym->typeName + ")");
         return;
     }
-    // Determine innermost pointed-to type by stripping `depth` `ptr<...>`-layers.
+    // Determine innermost pointed-to type by stripping `depth` `ptr<...>`/`ref<...>`-layers.
     std::string remaining = sym->typeName;
     for (int i = 0; i < st->depth; ++i) {
-        if (remaining.rfind("ptr<", 0) != 0 || remaining.back() != '>') {
+        if (!isPtrLike(remaining)) {
             LOG_ERROR(ctx.fmtLoc() + "store: depth=" + std::to_string(st->depth)
                       + " exceeds pointer nesting of '" + sym->typeName + "'");
             return;
@@ -4338,14 +4345,16 @@ void Compiler::visitStoreStmt(StoreStmt* st) {
         cur = ctx.builder.CreateLoad(ptrTy, cur, "store_chain_" + std::to_string(i));
     }
 
-    // spec/61 §5.4/§6.3: `store: [ptr<Model>, view]` where Model is a VALUE model with heap fields
-    // (the find_*_entry / copy-out out-parameter fill) is a VALUE assignment — dst must own an
-    // INDEPENDENT copy of src's heap. `at`/`get` returns a shallow view (scalars copied, container/
-    // string field pointers ALIAS the source element), so a plain CreateStore makes dst alias the
-    // container element's heap → both free it (the ZoneEntry/PlayerState out-param double-free,
-    // test_mana_pick / find_noncombat_entry). isRefcountModel (%M*) is handled below; this covers a
-    // plain value model, deep-copying from the source's ADDRESS (an addressable lvalue: a local view
-    // or a dotted member). Free dst's (freshly-decl'd, empty) heap first, then deep-copy src into it.
+    // spec/61 §7: `store: [ref<Model>, view]` where Model is a VALUE model with heap fields (the
+    // find_*_entry / copy-out out-parameter fill, out-param spelled `ref<Model>` = borrow, §8) is a
+    // VALUE assignment = member-wise **SHARE**: bit-copy the struct, then **retain** (incref each
+    // string/container/shared field) so dst and src co-own with a balanced refcount — each side's
+    // later drop decrefs once → freed exactly once. A plain CreateStore would share WITHOUT the
+    // incref → both free the same heap (the ZoneEntry/PlayerState out-param double-free,
+    // test_mana_pick / find_noncombat_entry); a deep-copy would violate §7 (deep independence is
+    // `clone`, not a plain store). `at`/`get` on a value-model element is a `ref` borrow (§5.4), so
+    // its fields alias the container element — retain balances that aliasing. isRefcountModel (%M*)
+    // is handled below.
     if (ctx.memV3 && !ctx.isRefcountModel(remaining)) {
         auto vci = ctx.classes.find(remaining);
         if (vci != ctx.classes.end() && vci->second.hasHeapFields && vci->second.serNodesVar) {
@@ -4357,17 +4366,21 @@ void Compiler::visitStoreStmt(StoreStmt* st) {
                 // Self-store guard (`store: [p, *p-ish]`): freeing dst would free src.
                 llvm::Value* same = ctx.builder.CreateICmpEQ(srcAddr, cur, "store_self_vm");
                 llvm::Function* fn = ctx.builder.GetInsertBlock()->getParent();
-                llvm::BasicBlock* doBB   = llvm::BasicBlock::Create(ctx.context, "store_vm_deepcopy", fn);
+                llvm::BasicBlock* doBB   = llvm::BasicBlock::Create(ctx.context, "store_vm_share", fn);
                 llvm::BasicBlock* postBB = llvm::BasicBlock::Create(ctx.context, "store_vm_post", fn);
                 ctx.builder.CreateCondBr(same, postBB, doBB);
                 ctx.builder.SetInsertPoint(doBB);
+                // release dst's (freshly-decl'd, empty) heap first, then bit-copy + retain (share)
                 llvm::Function* freeFn = ctx.getFunction("aiml_ser_free_decoded",
                     ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
                 ctx.builder.CreateCall(freeFn, { cur, vci->second.serNodesVar,
                                                  ctx.builder.getInt32(vci->second.serNodesCount) });
-                llvm::Function* dcp = ctx.getFunction("aiml_ser_deep_copy",
-                    ctx.builder.getVoidTy(), {i8p, i8p, i8p, ctx.builder.getInt32Ty()});
-                ctx.builder.CreateCall(dcp, { cur, srcAddr, vci->second.serNodesVar,
+                uint64_t vsz = ctx.module.getDataLayout().getTypeAllocSize(vci->second.type);
+                ctx.builder.CreateMemCpy(cur, llvm::MaybeAlign(8), srcAddr, llvm::MaybeAlign(8),
+                                         ctx.builder.getInt64(vsz));
+                llvm::Function* rtn = ctx.getFunction("aiml_ser_retain",
+                    ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
+                ctx.builder.CreateCall(rtn, { cur, vci->second.serNodesVar,
                                               ctx.builder.getInt32(vci->second.serNodesCount) });
                 ctx.builder.CreateBr(postBB);
                 ctx.builder.SetInsertPoint(postBB);

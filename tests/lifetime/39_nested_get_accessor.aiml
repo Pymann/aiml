@@ -4,10 +4,22 @@
 # element HANDLE at pointer stride and increfs when bound (an owning alias), NOT the inline-struct
 # getter (which reads at struct stride → GARBAGE and would then decref an alias it never owned).
 # Regression: test_mkp_math ability_score `abil.effects.get(e_idx)` returned garbage + double-freed
-# (crash). Here: `.get` reads the right length, and the element survives the local's scope-drop
-# (co-owned by the outer). Kept non-looping so the suite stays valgrind-clean — a loop-carried
-# extract hits a SEPARATE, pre-existing ownership-analysis leak-suppression (mayDrop), unrelated
-# to this accessor fix.
+# (crash). Here: `.get` reads the right length, and the extracted local's scope-drop (decref) must
+# NOT free the element — the outer still co-owns it. The extract lives in a HELPER function so it
+# actually drops at the helper's return, BEFORE main re-reads the outer (a same-block decl would
+# only drop at end-of-main, never exercising survival). Kept non-looping so the suite stays
+# valgrind-clean — a loop-carried extract hits a SEPARATE, pre-existing ownership-analysis
+# leak-suppression (mayDrop), unrelated to this accessor fix.
+- def:
+    name: extract_len
+    args: [[outer, list<list<i32>>]]   # container param = SHARED handle (incref), §8
+    return: i32
+    body:
+      # `.get` must load the inner handle (len 2), NOT struct-stride garbage. `eff` is an owning
+      # alias (incref); it decrefs at THIS function's return — the shared outer must keep it alive.
+      - decl: [eff, list<i32>, { call: [outer.get, 0] }]
+      - if: { condition: { neq: [{ at: [eff, 1] }, 20] }, then: [{ print: ["FAIL get: eff[1] wrong"] }, { return: -1 }] }
+      - return: eff.len
 - def:
     name: main
     return: i32
@@ -17,11 +29,9 @@
       - call: [row0.push, 10]
       - call: [row0.push, 20]
       - call: [outer.push, row0]
-      # `.get` must load the inner handle (len 2), NOT struct-stride garbage.
-      - decl: [eff, list<i32>, { call: [outer.get, 0] }]
-      - if: { condition: { neq: [eff.len, 2] }, then: [{ print: ["FAIL get: len=${eff.len}, expected 2"] }, { return: 1 }] }
-      - if: { condition: { neq: [{ at: [eff, 1] }, 20] }, then: [{ print: ["FAIL get: eff[1] wrong"] }, { return: 1 }] }
-      # eff scope-drops here (decref) — the element must survive (outer still co-owns it).
+      - decl: [glen, i32, { call: [extract_len, outer] }]   # share outer; eff drops inside the callee here
+      - if: { condition: { neq: [glen, 2] }, then: [{ print: ["FAIL get: len=${glen}, expected 2"] }, { return: 1 }] }
+      # after the extract's decref, the element must survive (outer still co-owns it).
       - decl: [chk, list<i32>, { at: [outer, 0] }]
       - if: { condition: { neq: [chk.len, 2] }, then: [{ print: ["FAIL survive: outer[0].len=${chk.len}, expected 2"] }, { return: 1 }] }
       - print: ["PASS 39 nested_get_accessor"]

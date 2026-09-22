@@ -776,7 +776,56 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
     }
 }
 
+// ── Retain (incref) — the mirror of `fre` ─────────────────────────────────────
+// spec/61 §7: a value aggregate COPY (assignment / pass-by-value) is member-wise SHARE: each
+// string/container/shared-model field gets an incref so the two aggregates co-own one referent with
+// a balanced refcount (each side's later drop = one decref → freed exactly once). This is the
+// counterpart to `fre` (which decrefs). Used by aiml_ser_retain after a struct bit-copy so a
+// `store: [ref<Model>, view]` shares the source's heap instead of aliasing it unbalanced (which
+// double-freed) or deep-copying it (which §7 forbids — deep independence is `clone`).
+static void ret(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
+    if (idx < 0 || idx >= nn) return;
+    const AimlTypeNode& n = ns[idx];
+    switch ((AimlTDKind)n.kind) {
+    case AIML_TD_STRING: {
+        char* str = nullptr; memcpy(&str, data, sizeof(char*));
+        if (str) aiml_str_incref(str);
+        break;
+    }
+    case AIML_TD_STRUCT: {
+        int nf = n.param1, fi = n.param2;
+        for (int i = 0; i < nf; i++) ret(fi + i, ns, nn, data + ns[fi + i].offset);
+        break;
+    }
+    case AIML_TD_LIST_PTR:   { void* o=nullptr; memcpy(&o,data,sizeof(o)); if(o) aiml_list_handle_incref(o);   break; }
+    case AIML_TD_MAP_PTR:    { void* o=nullptr; memcpy(&o,data,sizeof(o)); if(o) aiml_map_handle_incref(o);    break; }
+    case AIML_TD_BUFFER_PTR: { void* o=nullptr; memcpy(&o,data,sizeof(o)); if(o) aiml_buffer_handle_incref(o); break; }
+    case AIML_TD_MODEL: {   // refcounted %M* reference — co-own by one incref
+        void* o=nullptr; memcpy(&o,data,sizeof(o)); if(o) aiml_model_incref(o);
+        break;
+    }
+    case AIML_TD_PTR_REF: {  // recursive: only a refcount MODEL/shared (param2!=0) is shareable
+        void* o=nullptr; memcpy(&o,data,sizeof(o));
+        if (o && n.param2 != 0) aiml_model_incref(o);
+        // param2==0 = a unique ptr<T> box: move-only, §7 forbids sharing it — no incref (a value
+        // model carrying one is not copyable; this path should not be reached for a share).
+        break;
+    }
+    // AIML_TD_PTR_STRUCT (unique box) / AIML_TD_TENSOR (resource) are move-only (§7) → not shared.
+    // AIML_TD_LIST/MAP/BUFFER are inline value containers (do not occur as a memV3 model FIELD — those
+    // are *_PTR handles); a weak ref is not owned. Nothing to retain for these.
+    default:
+        break;
+    }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
+
+// spec/61 §7: incref every heap-owning member of a just-bit-copied aggregate (share semantics).
+extern "C" void aiml_ser_retain(void* obj, const AimlTypeNode* nodes, int32_t n_nodes) {
+    if (!obj || !nodes || n_nodes <= 0) return;
+    ret(0, nodes, n_nodes, (uint8_t*)obj);
+}
 
 extern "C" int32_t aiml_ser_encoded_size(const void*         obj,
                                           const AimlTypeNode* nodes,
