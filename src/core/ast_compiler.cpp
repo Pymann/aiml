@@ -5692,6 +5692,13 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
                     IRType*  fieldElemTy = ctx.ir_gen->wrapType(member.type);
 
                     if (dashFirst) {
+                        // spec/01: the deprecated hyphen member-index chain (`obj.list-i.field`) is
+                        // removed — use { at: [obj.list, i, .field] } to read.
+                        LOG_ERROR(ctx.fmtLoc() + "deprecated hyphen index in member chain ('" + fieldName +
+                            "-" + rest + "') is removed — use { at: [<container>, <index>, .<member>] } (spec/01).");
+                        return nullptr;
+                    }
+                    if (false) {
                         // List index: field-idx
                         if (member.typeName.rfind("list<", 0) != 0 || member.typeName.back() != '>') {
                             LOG_ERROR("Dash-index on non-list field: " + fieldName + " (type: " + member.typeName + ")");
@@ -5946,6 +5953,12 @@ IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& p
                 IRType*  fieldElemTy = ctx.ir_gen->wrapType(member.type);
 
                 if (dashFirst) {
+                    // spec/01: deprecated hyphen member-index write chain (`obj.list-i.field`) removed.
+                    LOG_ERROR(ctx.fmtLoc() + "deprecated hyphen index in member write chain ('" + fieldName +
+                        "-" + rest + "') is removed — use idx: [<container>, <index>, .<member>, <value>] (spec/01).");
+                    return nullptr;
+                }
+                if (false) {
                     // List element: field-idx[.further]
                     if (member.typeName.rfind("list<", 0) != 0 || member.typeName.back() != '>') {
                         LOG_ERROR("Dash-index on non-list field: " + fieldName);

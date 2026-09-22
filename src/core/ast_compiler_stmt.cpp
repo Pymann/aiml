@@ -1953,7 +1953,14 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     size_t dashPos = targetStr.find('-');
     size_t sepPos = (dotPos != std::string::npos) ? dotPos : dashPos;
     bool isDash = (dashPos != std::string::npos && dotPos == std::string::npos);
-    
+    // spec/01: the deprecated hyphen index write (`set: [x-0, v]`) is removed. Direct to idx:.
+    if (isDash) {
+        LOG_ERROR(ctx.fmtLoc() + "deprecated hyphen index write '" + targetStr +
+            "' is removed — use idx: [" + targetStr.substr(0, dashPos) +
+            ", <index>, <value>] instead (spec/01).");
+        return;
+    }
+
     std::string baseName = (sepPos != std::string::npos) ? targetStr.substr(0, sepPos) : targetStr;
     std::string propName = (sepPos != std::string::npos) ? targetStr.substr(sepPos + 1) : "";
 
