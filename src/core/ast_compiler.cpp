@@ -5895,6 +5895,15 @@ IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& p
                     std::string elemName = member.typeName.substr(5, member.typeName.length() - 6);
                     llvm::Type* elemType = ctx.getLLVMType(elemName);
                     llvm::Value* listAllocaVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldGep));
+                    // spec/61 §5 (memV3): a list FIELD holds a HANDLE pointer, so fieldGep is the
+                    // address of that pointer slot — load the handle to reach the {size,cap,data}
+                    // struct before indexing. Without this, getElementPtr reads the handle-pointer
+                    // bytes as size/data → wrong element address (write lands nowhere, read-back
+                    // stale, later access crashes: `set:[bag.items-1.var_hp, …]`, test_field_chain).
+                    if (ctx.memV3 && ctx.isMemV3ContainerHandle(member.typeName)) {
+                        auto* i8pH = llvm::PointerType::get(ctx.context, 0);
+                        listAllocaVal = ctx.builder.CreateLoad(i8pH, listAllocaVal, "chain_field_conh");
+                    }
 
                     // rest may be "idx" or "idx.further"
                     size_t dotInRest = rest.find('.');
