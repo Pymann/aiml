@@ -496,6 +496,23 @@ extern "C" void* aiml_db_store_open(const char* name, const char* type_name, int
     return s;
 }
 
+// In-memory store for an element type WITH heap fields (strings/containers). The ser_nodes let
+// insert co-own (retain) the element's heap fields so a caller reusing/mutating the source model
+// after insert (e.g. `insert(u); set:[u.name,"..."]; insert(u)`) does not free the stored record's
+// strings (spec/61 §7: aggregate copy = member-wise share). Without this the in-memory memcpy shared
+// the caller's string pointers → dangling after the caller's next reassignment (test_model).
+extern "C" void* aiml_db_store_open_typed(const char* name, const char* type_name,
+                                          int64_t elem_size,
+                                          const AimlTypeNode* nodes, int32_t n_nodes) {
+    if (elem_size <= 0) return nullptr;
+    AimlStore* s = new AimlStore();
+    s->type_name = type_name ? type_name : "";
+    s->elem_size = elem_size;
+    s->ser_nodes = nodes;   // in-memory (not persistent) → typed_persistent stays false
+    s->ser_n = n_nodes;
+    return s;
+}
+
 extern "C" void* aiml_db_store_open_persist(const char* name, const char* type_name,
                                               int64_t elem_size, const char* base_path) {
     if (elem_size <= 0) return nullptr;
@@ -679,6 +696,12 @@ extern "C" int32_t aiml_db_store_insert(void* store, const void* elem, int64_t e
     s->mem_data.resize((size_t)(s->total + 1) * (size_t)s->elem_size);
     s->mem_active.resize((size_t)(s->total + 1));
     memcpy(s->mem_data.data() + (size_t)s->total * s->elem_size, elem, (size_t)s->elem_size);
+    // spec/61 §7: the memcpy shares the source's heap-field pointers (strings/containers). Retain
+    // them so the store co-owns the referents — else a caller that reuses/mutates the source model
+    // after insert frees strings the stored record still points at (dangling → test_model). Needs
+    // the element's ser_nodes (in-memory typed store via aiml_db_store_open_typed).
+    if (s->ser_nodes)
+        aiml_ser_retain(s->mem_data.data() + (size_t)s->total * s->elem_size, s->ser_nodes, s->ser_n);
     s->mem_active[s->total] = 1;
     s->total++;
     s->count++;
