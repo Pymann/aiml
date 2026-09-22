@@ -143,6 +143,8 @@ static void emitWriteField(CompilerContext& ctx, llvm::Value* writer,
                            const std::string& fname, const CompilerContext::StructMember& fm);
 static void emitWriteStructFields(CompilerContext& ctx, llvm::Value* writer,
                                   llvm::Value* structPtr, const std::string& typeName);
+static llvm::Value* memv3LoadContainerHandleOrEmpty(CompilerContext& ctx, llvm::Value* fp,
+                                                    llvm::Type* structTy);
 static void emitWriteListElementsIntoWriter(CompilerContext& ctx, llvm::Value* writer,
                                              llvm::Value* dp, llvm::Value* sz,
                                              const std::string& elemTn,
@@ -230,6 +232,10 @@ static void emitWriteListElementsIntoWriter(CompilerContext& ctx, llvm::Value* w
     } else if(isListType(elemTn)) {
         llvm::Type* innerListTy = ctx.getLLVMType(elemTn);
         std::string innerElemTn = listElem(elemTn);
+        // NOTE: JSON deserialize currently stores NESTED list elements INLINE (emitDeserStructFields
+        // list<list<T>> path pushes the inner list struct value, not a handle), so encode must read
+        // them inline too — do NOT load a handle here. The full nested-element→handle migration
+        // (spec/61 §5.7 consistency across deser+encode) is a separate item.
         llvm::Value* isg = ctx.builder.CreateStructGEP(innerListTy, ep, 0, "isg");
         llvm::Value* isz = ctx.builder.CreateLoad(i32T(ctx), isg, "isz");
         llvm::Value* idg = ctx.builder.CreateStructGEP(innerListTy, ep, 2, "idg");
@@ -275,6 +281,25 @@ static void emitWriteStructFields(CompilerContext& ctx, llvm::Value* writer,
         emitWriteField(ctx, writer, structPtr, st, fn, fm);
 }
 
+// spec/61 §5 (memV3): a container FIELD holds a handle POINTER. Load it so callers can GEP the
+// {size,cap,data}/map struct. A null handle (a bare `new Model` never initialised the field) is
+// replaced by a pointer into a zeroed region so the size/data reads yield 0/null (empty), never a
+// load from null. `fp` is &field (the pointer slot); returns a pointer to the live struct.
+static llvm::Value* memv3LoadContainerHandleOrEmpty(CompilerContext& ctx, llvm::Value* fp,
+                                                    llvm::Type* /*structTy*/){
+    auto* ptr = ptrT(ctx);
+    llvm::Value* h = ctx.builder.CreateLoad(ptr, fp, "conh");
+    const char* gname = "__aiml_container_zero64";
+    llvm::GlobalVariable* zg = ctx.module.getGlobalVariable(gname);
+    if(!zg){
+        llvm::ArrayType* at = llvm::ArrayType::get(i8T(ctx), 64);
+        zg = new llvm::GlobalVariable(ctx.module, at, /*const=*/true,
+            llvm::GlobalValue::PrivateLinkage, llvm::ConstantAggregateZero::get(at), gname);
+    }
+    llvm::Value* isn = ctx.builder.CreateICmpEQ(h, llvm::Constant::getNullValue(ptr), "conh_null");
+    return ctx.builder.CreateSelect(isn, static_cast<llvm::Value*>(zg), h, "conh_safe");
+}
+
 static void emitWriteField(CompilerContext& ctx, llvm::Value* writer,
                            llvm::Value* structPtr, llvm::StructType* structLLVMTy,
                            const std::string& fname,
@@ -287,6 +312,13 @@ static void emitWriteField(CompilerContext& ctx, llvm::Value* writer,
         std::string elemTn = listElem(tn);
         llvm::Type* listTy = ctx.getLLVMType(tn);
         llvm::Value* fp = ctx.builder.CreateStructGEP(structLLVMTy,structPtr,fm.index,"lfp");
+        // spec/61 §5 (memV3): a list FIELD is a handle POINTER, not an inline {size,cap,data} struct.
+        // Load the handle to reach the struct — else the handle-pointer bytes are misread as
+        // size/data → garbage length → the element loop walks arbitrary memory (nondeterministic UAF
+        // in serialize of any model with a list field, test_serialize_struct). A null handle (never
+        // produced by decode/decl, but possible for a bare `new Model`) → substitute an empty list.
+        if(ctx.memV3 && ctx.isMemV3ContainerHandle(tn))
+            fp = memv3LoadContainerHandleOrEmpty(ctx, fp, listTy);
         llvm::Value* sg = ctx.builder.CreateStructGEP(listTy,fp,0,"lsg");
         llvm::Value* sz = ctx.builder.CreateLoad(i32T(ctx),sg,"lsz");
         llvm::Value* dg = ctx.builder.CreateStructGEP(listTy,fp,2,"ldg");
@@ -305,6 +337,9 @@ static void emitWriteField(CompilerContext& ctx, llvm::Value* writer,
         bool intKey = (keyTn != "string");  // enum/integer key: stored as i32 in key array
         llvm::Type* mapTy = ctx.getLLVMType(tn);
         llvm::Value* fp   = ctx.builder.CreateStructGEP(structLLVMTy,structPtr,fm.index,"mfp");
+        // memV3: map FIELD is a handle pointer (see the list case) → load before GEP.
+        if(ctx.memV3 && ctx.isMemV3ContainerHandle(tn))
+            fp = memv3LoadContainerHandleOrEmpty(ctx, fp, mapTy);
         llvm::Value* cg   = ctx.builder.CreateStructGEP(mapTy,fp,1,"mcg");
         llvm::Value* cap  = ctx.builder.CreateLoad(i32T(ctx),cg,"mcap");
         llvm::Value* og   = ctx.builder.CreateStructGEP(mapTy,fp,2,"mog");
