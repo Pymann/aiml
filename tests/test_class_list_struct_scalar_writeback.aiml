@@ -64,14 +64,14 @@
             - print: ["FAIL events.len=${var_h.events.len}"]
             - return: [1]
       - if:
-          condition: { neq: [var_h.events-0.text, "first"]}
+          condition: { neq: [{ at: [var_h.events, 0, .text] }, "first"]}
           then:
-            - print: ["FAIL first=${var_h.events-0.text}"]
+            - print: ["FAIL first=${ { at: [var_h.events, 0, .text] } }"]
             - return: [1]
       - if:
-          condition: { neq: [var_h.events-1.text, "second"]}
+          condition: { neq: [{ at: [var_h.events, 1, .text] }, "second"]}
           then:
-            - print: ["FAIL second=${var_h.events-1.text}"]
+            - print: ["FAIL second=${ { at: [var_h.events, 1, .text] } }"]
             - return: [1]
       - print: ["test_class_list_struct_scalar_writeback PASS"]
       - return: [0]

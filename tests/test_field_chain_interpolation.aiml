@@ -56,7 +56,7 @@
             - call: [sys.exit, 1]
 
       - decl: [hand_line, string]
-      - set: [hand_line, "first=${state.hand-0.iid}:${state.hand-0.name}"]
+      - set: [hand_line, "first=${ { at: [state.hand, 0, .iid] } }:${ { at: [state.hand, 0, .name] } }"]
       - if:
           condition: { eq: [hand_line, "first=h-1:Fire Bolt"] }
           else:
@@ -72,7 +72,7 @@
             - call: [sys.exit, 1]
 
       - call: [assert_line, "call_arg_player", "arg=${state.client_info.player_name}", "arg=Niko"]
-      - call: [assert_line, "call_arg_hand", "arg=${state.hand-1.iid}:${state.hand-1.name}", "arg=h-2:Fire Trap"]
+      - call: [assert_line, "call_arg_hand", "arg=${ { at: [state.hand, 1, .iid] } }:${ { at: [state.hand, 1, .name] } }", "arg=h-2:Fire Trap"]
 
       - print: ["field chain interpolation PASS"]
       - return: 0

@@ -262,17 +262,21 @@ std::unique_ptr<Node> StatementBuilder::finish() {
     // `idx: [list, i, { call: [...] }]`.
     if (type == "idx" && (args.size() >= 3 || (args.size() >= 2 && exprArg))) {
          auto idx = std::make_unique<IdxStmt>(args[0].first);
-         // Middle args are indices (as expressions), last arg OR exprArg is the value
+         // Middle args are INDICES, then optional DOT-PREFIXED member names (.field), then the value.
+         // idx: [container, i, .field, value] writes element[i].field = value (dash-free element-set).
+         auto pushIdxOrMember = [&](size_t i) {
+             const std::string& s = args[i].first;
+             if (!s.empty() && s[0] == '.') idx->memberPath.push_back(s.substr(1));
+             else idx->indices.push_back(parseScalarExpr(args[i].first, args[i].second));
+         };
          size_t lastScalar = args.size() - 1;
          if (exprArg) {
              // Value was an expression map: idx: [arr, i, { "+": [a, b] }]
-             for (size_t i = 1; i < args.size(); ++i)
-                 idx->indices.push_back(parseScalarExpr(args[i].first, args[i].second));
+             for (size_t i = 1; i < args.size(); ++i) pushIdxOrMember(i);
              idx->value = std::move(exprArg);
          } else {
              // Value is last scalar: idx: [arr, i, 42.0]
-             for (size_t i = 1; i < lastScalar; ++i)
-                 idx->indices.push_back(parseScalarExpr(args[i].first, args[i].second));
+             for (size_t i = 1; i < lastScalar; ++i) pushIdxOrMember(i);
              idx->value = parseScalarExpr(args[lastScalar].first, args[lastScalar].second);
          }
          idx->sourceLine = capturedLine;

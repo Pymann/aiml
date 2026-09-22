@@ -158,9 +158,9 @@
       - call: [sys.exit, 1]
 
 - if:
-    condition: { neq: [replica.events-1.kind, "phase_draw"] }
+    condition: { neq: [{ at: [replica.events, 1, .kind] }, "phase_draw"] }
     then:
-      - print: ["FAIL events-tail: last kind='${replica.events-1.kind}'"]
+      - print: ["FAIL events-tail: last kind='${ { at: [replica.events, 1, .kind] } }'"]
       - call: [sys.exit, 1]
 
 - if:

@@ -27,22 +27,22 @@
             - call: [sys.exit, 1]
 
       - if:
-          condition: { neq: [bag.items-0.var_hp, 3] }
+          condition: { neq: [{ at: [bag.items, 0, .var_hp] }, 3] }
           then:
-            - print: ["FAIL item0_hp=${bag.items-0.var_hp}"]
+            - print: ["FAIL item0_hp=${ { at: [bag.items, 0, .var_hp] } }"]
             - call: [sys.exit, 1]
 
       - if:
-          condition: { neq: [bag.items-1.name, "beta"] }
+          condition: { neq: [{ at: [bag.items, 1, .name] }, "beta"] }
           then:
-            - print: ["FAIL item1_name=${bag.items-1.name}"]
+            - print: ["FAIL item1_name=${ { at: [bag.items, 1, .name] } }"]
             - call: [sys.exit, 1]
 
-      - set: [bag.items-1.var_hp, 9]
+      - idx: [bag.items, 1, .var_hp, 9]
       - if:
-          condition: { neq: [bag.items-1.var_hp, 9] }
+          condition: { neq: [{ at: [bag.items, 1, .var_hp] }, 9] }
           then:
-            - print: ["FAIL item1_hp_after_set=${bag.items-1.var_hp}"]
+            - print: ["FAIL item1_hp_after_set=${ { at: [bag.items, 1, .var_hp] } }"]
             - call: [sys.exit, 1]
 
       - print: ["field chain index access PASS"]

@@ -1215,6 +1215,50 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
             listPtr = ctx.builder.CreateLoad(i8p, listPtr, "byref_deref_at");
         }
         if (indexVals.empty()) { LOG_ERROR("at: list requires at least one index"); return nullptr; }
+        // Trailing member path: { at: [list, i, "field", ...] } = element[i].field... — the dash-free
+        // form of `list-i.field`. Get a pointer to the element (a %M* for a refcount model, else the
+        // inline struct slot), then resolve the member path on it and load the final field.
+        if (!at->memberPath.empty()) {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* elemBase;
+            if (ctx.isRefcountModel(elemName)) {
+                llvm::Value* slot = ListImpl::getElementPtr(ctx, listPtr, indexVals[0], i8p);
+                elemBase = ctx.builder.CreateLoad(i8p, slot, "at_mp_modelptr");
+            } else {
+                elemBase = ListImpl::getElementPtr(ctx, listPtr, indexVals[0], elemTy);
+            }
+            std::string joined;
+            for (size_t i = 0; i < at->memberPath.size(); ++i)
+                joined += (i ? "." : "") + at->memberPath[i];
+            Symbol elemSym;
+            elemSym.typeName       = elemName;
+            elemSym.ir_alloca_inst = ctx.ir_gen->wrap(elemBase);
+            // elemBase IS the struct address (a %M* for a model, or the inline element ptr), so the
+            // element "type" is the struct itself (not a pointer) — resolvePropertyWritePtr then GEPs
+            // fields directly from it instead of loading a pointer first.
+            if (ctx.classes.count(elemName) && ctx.classes[elemName].type)
+                elemSym.ir_element_type = ctx.ir_gen->wrapType(ctx.classes[elemName].type);
+            std::string fldTypeName;
+            IRValue* fldPtr = resolvePropertyWritePtr(&elemSym, joined, fldTypeName);
+            if (!fldPtr || fldTypeName.empty()) {
+                LOG_ERROR(ctx.fmtLoc() + "at: member path '" + joined + "' unresolved on element of " + tName);
+                return nullptr;
+            }
+            llvm::Value* fp = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fldPtr));
+            // A memV3 container final field: resolvePropertyWritePtr already LOADED and returned the
+            // handle (wantContainerSlot=false), so fldPtr IS the handle — return it directly (bindable
+            // / method-callable). A scalar/string field returns its slot → load the value.
+            if (ctx.memV3 && ctx.isMemV3ContainerHandle(fldTypeName)) {
+                return fldPtr;
+            }
+            llvm::Type* fldTy = ctx.getLLVMType(fldTypeName);
+            llvm::Value* fv = ctx.builder.CreateLoad(fldTy, fp, "at_mp_fld");
+            if (fldTypeName == "string") {   // borrowing a string out adds an alias → incref (see below)
+                llvm::Function* incref = ctx.getFunction("aiml_str_incref", ctx.builder.getVoidTy(), {i8p});
+                ctx.builder.CreateCall(incref, {fv});
+            }
+            return ctx.ir_gen->wrap(fv);
+        }
         // AIML v2 P3/P2: a list<Model> element is a %M* — load and return the reference (a
         // pointer-to-struct; field access derefs it, `decl e = at(..)` increfs in visitDeclStmt).
         // A borrow: no incref here (transient `at(..).field` reads must not leak a ref).

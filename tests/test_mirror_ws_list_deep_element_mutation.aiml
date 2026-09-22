@@ -98,7 +98,7 @@
       - call: [client.update]
       - set: [poll_i, { +: [poll_i, 1] }]
 
-- print: ["deep-client: effects.len=${replica.effects.len} fx0=${replica.effects-0.amount}/${replica.effects-0.remaining_turns}/${replica.effects-0.key} fx1=${replica.effects-1.amount}/${replica.effects-1.remaining_turns}/${replica.effects-1.key}"]
+- print: ["deep-client: effects.len=${ replica.effects.len } fx0=${ { at: [replica.effects, 0, .amount] } }/${ { at: [replica.effects, 0, .remaining_turns] } }/${ { at: [replica.effects, 0, .key] } } fx1=${ { at: [replica.effects, 1, .amount] } }/${ { at: [replica.effects, 1, .remaining_turns] } }/${ { at: [replica.effects, 1, .key] } }"]
 
 - if:
     condition: { neq: [replica.effects.len, 2] }
@@ -107,39 +107,39 @@
       - call: [sys.exit, 1]
 
 - if:
-    condition: { neq: [replica.effects-0.amount, 9] }
+    condition: { neq: [{ at: [replica.effects, 0, .amount] }, 9] }
     then:
-      - print: ["FAIL deep: fx0.amount=${replica.effects-0.amount}"]
+      - print: ["FAIL deep: fx0.amount=${ { at: [replica.effects, 0, .amount] } }"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { neq: [replica.effects-0.remaining_turns, 0] }
+    condition: { neq: [{ at: [replica.effects, 0, .remaining_turns] }, 0] }
     then:
-      - print: ["FAIL deep: fx0.remaining_turns=${replica.effects-0.remaining_turns}"]
+      - print: ["FAIL deep: fx0.remaining_turns=${ { at: [replica.effects, 0, .remaining_turns] } }"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { neq: [replica.effects-0.key, "paralyze_done"] }
+    condition: { neq: [{ at: [replica.effects, 0, .key] }, "paralyze_done"] }
     then:
-      - print: ["FAIL deep: fx0.key='${replica.effects-0.key}'"]
+      - print: ["FAIL deep: fx0.key='${ { at: [replica.effects, 0, .key] } }'"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { neq: [replica.effects-1.amount, 8] }
+    condition: { neq: [{ at: [replica.effects, 1, .amount] }, 8] }
     then:
-      - print: ["FAIL deep: fx1.amount=${replica.effects-1.amount}"]
+      - print: ["FAIL deep: fx1.amount=${ { at: [replica.effects, 1, .amount] } }"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { neq: [replica.effects-1.remaining_turns, 4] }
+    condition: { neq: [{ at: [replica.effects, 1, .remaining_turns] }, 4] }
     then:
-      - print: ["FAIL deep: fx1.remaining_turns=${replica.effects-1.remaining_turns}"]
+      - print: ["FAIL deep: fx1.remaining_turns=${ { at: [replica.effects, 1, .remaining_turns] } }"]
       - call: [sys.exit, 1]
 
 - if:
-    condition: { neq: [replica.effects-1.key, "atk_up_big"] }
+    condition: { neq: [{ at: [replica.effects, 1, .key] }, "atk_up_big"] }
     then:
-      - print: ["FAIL deep: fx1.key='${replica.effects-1.key}'"]
+      - print: ["FAIL deep: fx1.key='${ { at: [replica.effects, 1, .key] } }'"]
       - call: [sys.exit, 1]
 
 - call: [client.close]
