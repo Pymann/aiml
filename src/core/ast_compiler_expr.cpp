@@ -519,6 +519,21 @@ static llvm::Value* coerceToBool(CompilerContext& ctx, llvm::Value* v) {
 }
 
 IRValue* Compiler::visitBinary(BinaryExpr* bin) {
+    // `{ at: [container, index] }` in an expression/interpolation context (e.g. `${ { at: [x, i] } }`)
+    // is produced by the parser as a BinaryExpr op="at", not an AtExpr. Route it to element-access
+    // semantics so the dash-free read form `{at:[x,i]}` works uniformly for lists AND arrays, in bare
+    // code and inside string interpolation (dash-index eradication). Must run before lhs/rhs are
+    // evaluated as values — visitAtExpr needs the container as an lvalue/variable, not a loaded value.
+    if (bin->op == "at") {
+        AtExpr tmp;
+        tmp.sourceNode = bin->sourceNode;
+        tmp.container = std::move(bin->lhs);
+        tmp.indices.push_back(std::move(bin->rhs));
+        IRValue* r = visitAtExpr(&tmp);
+        bin->lhs = std::move(tmp.container);
+        bin->rhs = std::move(tmp.indices[0]);
+        return r;
+    }
     IRValue* lhs = visitExpression(bin->lhs.get());
     IRValue* rhs = visitExpression(bin->rhs.get());
     if (!lhs || !rhs) return nullptr;
