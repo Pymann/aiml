@@ -62,7 +62,7 @@
 - decl: [var_v, Vec32, { call: [table.lookup, 0] }]
 - print: ["T1: returned, var_v.size=${var_v.size}"]
 - print: ["T1: var_v.data.len=${var_v.data.len}"]
-- decl: [var_v0, f32, var_v.data-0]
+- decl: [var_v0, f32, { at: [var_v.data, 0] }]
 - print: ["T1: var_v0=${var_v0}"]
 - if:
     condition: { "&&": [{ ">": [var_v0, 0.99] }, { "<": [var_v0, 1.01] }] }
@@ -93,7 +93,7 @@
 - call: [table.update, 0, var_g, 1.0]
 # After: [0.9, 1.8, 2.7, 3.6]
 - decl: [var_v2, Vec32, { call: [table.lookup, 0] }]
-- decl: [v2_0, f32, var_v2.data-0]
+- decl: [v2_0, f32, { at: [var_v2.data, 0] }]
 - if:
     condition: { "&&": [{ ">": [v2_0, 0.89] }, { "<": [v2_0, 0.91] }] }
     then:

@@ -181,8 +181,8 @@
 - call: [client.update]
 
 - decl: [var_m0, MatchState, replica.match]
-- decl: [pz1, ParticipantState, replica.participants-1]
-- decl: [zz0, ZoneState, replica.zones-0]
+- decl: [pz1, ParticipantState, { at: [replica.participants, 1] }]
+- decl: [zz0, ZoneState, { at: [replica.zones, 0] }]
 - print: ["client-mut: round=${var_m0.round} last_event=${var_m0.last_event}"]
 - print: ["client-mut: var_p1 var_hp=${pz1.var_hp} active=${pz1.is_active}"]
 - print: ["client-mut: zone0 count=${zz0.card_count} card_instances.len=${replica.card_instances.len}"]

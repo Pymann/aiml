@@ -1,5 +1,5 @@
 # spec/61 — map.put moves the key/value string RAW (no dup/incref). A DECLARED string local
-# used as key (decl colkey "${n}" → m.put(colkey, v)) has a scope-drop (kind-1 decref); the put
+# used as key (decl colkey "${n}" → m.put(colkey, v)) has a scope-drop ({ at: [kind, 1] } decref); the put
 # must consume it, else that decref frees the string the map still holds → corrupted/empty map
 # (was the 9rooms mana_choice regression). Populate via a ptr<Model> param (as 9rooms put_prod
 # does), then read the map back: must find the keys. 300 iters → double-free-free + correct.

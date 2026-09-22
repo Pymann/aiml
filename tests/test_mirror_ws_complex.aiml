@@ -224,12 +224,12 @@
 
 - decl: [var_m, MatchState, replica.match]
 - decl: [var_ph, MatchPhaseState, var_m.phase]
-- decl: [var_p0, ParticipantState, replica.participants-0]
-- decl: [p0c0, CounterState, var_p0.counters-0]
-- decl: [var_z0, ZoneState, replica.zones-0]
-- decl: [zc0, VisibleCardRef, var_z0.cards-0]
-- decl: [ci0, CardInstanceState, replica.card_instances-0]
-- decl: [mf0, StatusFlagState, var_m.flags-0]
+- decl: [var_p0, ParticipantState, { at: [replica.participants, 0] }]
+- decl: [p0c0, CounterState, { at: [var_p0.counters, 0] }]
+- decl: [var_z0, ZoneState, { at: [replica.zones, 0] }]
+- decl: [zc0, VisibleCardRef, { at: [var_z0.cards, 0] }]
+- decl: [ci0, CardInstanceState, { at: [replica.card_instances, 0] }]
+- decl: [mf0, StatusFlagState, { at: [var_m.flags, 0] }]
 
 - print: ["client: match_id=${var_m.match_id} round=${var_m.round} phase=${var_ph.phase_id}/${var_ph.step} last_event=${var_m.last_event}"]
 - print: ["client: participants.len=${replica.participants.len} zones.len=${replica.zones.len} cards.len=${replica.card_instances.len}"]

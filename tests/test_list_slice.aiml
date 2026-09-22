@@ -9,20 +9,20 @@
 - print: ["Original Size: ${lst.len}"]
 
 - decl: [sliced, list<i32>]
-- set: [sliced, lst-1-4] # Elements at index 1, 2, 3 (20, 30, 40)
+- set: [sliced, { call: [lst.slice, 1, 4] }] # Elements at index 1, 2, 3 (20, 30, 40)
 - print: ["Sliced Size: ${sliced.len}"]
-- print: ["sliced-0 = ${sliced-0}"]
-- print: ["sliced-1 = ${sliced-1}"]
-- print: ["sliced-2 = ${sliced-2}"]
+- print: ["sliced-0 = ${ { at: [sliced, 0] } }"]
+- print: ["sliced-1 = ${ { at: [sliced, 1] } }"]
+- print: ["sliced-2 = ${ { at: [sliced, 2] } }"]
 
 - decl: [sliced2, list<i32>]
-- set: [sliced2, lst-2-] # Elements at index 2, 3, 4 (30, 40, 50)
+- set: [sliced2, { call: [lst.slice, 2] }] # Elements at index 2, 3, 4 (30, 40, 50)
 - print: ["Sliced2 Size: ${sliced2.len}"]
-- print: ["sliced2-0 = ${sliced2-0}"]
+- print: ["sliced2-0 = ${ { at: [sliced2, 0] } }"]
 
 - decl: [sliced3, list<i32>]
-- set: [sliced3, lst--2] # Elements at index 0, 1 (10, 20)
+- set: [sliced3, { call: [lst.slice, 0, 2] }] # Elements at index 0, 1 (10, 20)
 - print: ["Sliced3 Size: ${sliced3.len}"]
-- print: ["sliced3-1 = ${sliced3-1}"]
+- print: ["sliced3-1 = ${ { at: [sliced3, 1] } }"]
 
 - call: [sys.exit, 0]

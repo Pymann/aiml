@@ -23,8 +23,8 @@
 # Lookup token 0
 - decl: [var_v0, list<f32>]
 - set: [var_v0, { call: [ai.embedding_lookup, buf, 0, 4] }]
-- decl: [v0_0, f32, var_v0-0]
-- decl: [v0_3, f32, var_v0-3]
+- decl: [v0_0, f32, { at: [var_v0, 0] }]
+- decl: [v0_3, f32, { at: [var_v0, 3] }]
 - if:
     condition: { "&&": [{ ">": [v0_0, 0.99] }, { "<": [v0_0, 1.01] }] }
     then:
@@ -43,7 +43,7 @@
 # Lookup token 1
 - decl: [var_v1, list<f32>]
 - set: [var_v1, { call: [ai.embedding_lookup, buf, 1, 4] }]
-- decl: [v1_0, f32, var_v1-0]
+- decl: [v1_0, f32, { at: [var_v1, 0] }]
 - if:
     condition: { "&&": [{ ">": [v1_0, 4.99] }, { "<": [v1_0, 5.01] }] }
     then:
@@ -75,8 +75,8 @@
 # Read back
 - decl: [v0b, list<f32>]
 - set: [v0b, { call: [ai.embedding_lookup, buf, 0, 4] }]
-- decl: [v0b_0, f32, v0b-0]
-- decl: [v0b_3, f32, v0b-3]
+- decl: [v0b_0, f32, { at: [v0b, 0] }]
+- decl: [v0b_3, f32, { at: [v0b, 3] }]
 - if:
     condition: { "&&": [{ ">": [v0b_0, 0.89] }, { "<": [v0b_0, 0.91] }] }
     then:

@@ -98,26 +98,26 @@
       - set: [pass, { +: [pass, 1] }]
 
 - if:
-    condition: { eq: [{ eq: [words-0, "fire"] }, 0] }
+    condition: { eq: [{ eq: [{ at: [words, 0] }, "fire"] }, 0] }
     then:
       - set: [fail, { +: [fail, 1] }]
-      - print: ["FAIL split words-0=${words-0}"]
+      - print: ["FAIL split words-0=${ { at: [words, 0] } }"]
     else:
       - set: [pass, { +: [pass, 1] }]
 
 - if:
-    condition: { eq: [{ eq: [words-1, "earth"] }, 0] }
+    condition: { eq: [{ eq: [{ at: [words, 1] }, "earth"] }, 0] }
     then:
       - set: [fail, { +: [fail, 1] }]
-      - print: ["FAIL split words-1=${words-1}"]
+      - print: ["FAIL split words-1=${ { at: [words, 1] } }"]
     else:
       - set: [pass, { +: [pass, 1] }]
 
 - if:
-    condition: { eq: [{ eq: [words-2, "water"] }, 0] }
+    condition: { eq: [{ eq: [{ at: [words, 2] }, "water"] }, 0] }
     then:
       - set: [fail, { +: [fail, 1] }]
-      - print: ["FAIL split words-2=${words-2}"]
+      - print: ["FAIL split words-2=${ { at: [words, 2] } }"]
     else:
       - set: [pass, { +: [pass, 1] }]
 
@@ -132,10 +132,10 @@
       - set: [pass, { +: [pass, 1] }]
 
 - if:
-    condition: { eq: [{ eq: [csv_parts-3, "beta"] }, 0] }
+    condition: { eq: [{ eq: [{ at: [csv_parts, 3] }, "beta"] }, 0] }
     then:
       - set: [fail, { +: [fail, 1] }]
-      - print: ["FAIL split csv last=${csv_parts-3}"]
+      - print: ["FAIL split csv last=${ { at: [csv_parts, 3] } }"]
     else:
       - set: [pass, { +: [pass, 1] }]
 
@@ -150,10 +150,10 @@
       - set: [pass, { +: [pass, 1] }]
 
 - if:
-    condition: { eq: [{ eq: [single_part-0, "HeLLo WOrld"] }, 0] }
+    condition: { eq: [{ eq: [{ at: [single_part, 0] }, "HeLLo WOrld"] }, 0] }
     then:
       - set: [fail, { +: [fail, 1] }]
-      - print: ["FAIL split no-delim val=${single_part-0}"]
+      - print: ["FAIL split no-delim val=${ { at: [single_part, 0] } }"]
     else:
       - set: [pass, { +: [pass, 1] }]
 

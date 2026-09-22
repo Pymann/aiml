@@ -212,9 +212,9 @@
       - set: [poll_i, { +: [poll_i, 1] }]
 
 - decl: [var_m, MatchState, replica.match]
-- decl: [var_p0, ParticipantState, replica.participants-0]
-- decl: [var_z0, ZoneState, replica.zones-0]
-- decl: [ci0, CardInstanceState, replica.card_instances-0]
+- decl: [var_p0, ParticipantState, { at: [replica.participants, 0] }]
+- decl: [var_z0, ZoneState, { at: [replica.zones, 0] }]
+- decl: [ci0, CardInstanceState, { at: [replica.card_instances, 0] }]
 - print: ["complex-poll: round=${var_m.round} var_p0=${var_p0.display_name}/${var_p0.var_hp} var_z0=${var_z0.zone_id}/${var_z0.card_count} ci0=${ci0.display_name}/${ci0.current_hp}"]
 
 - if:

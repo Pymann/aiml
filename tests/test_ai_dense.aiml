@@ -27,8 +27,8 @@
 - call: [ids.push, 1]
 - decl: [enc, list<f32>, { call: [ai.encode_dense, ids, flat, 2] }]
 - print: ["T1: enc.len=${enc.len}"]
-- decl: [var_e0, f32, enc-0]
-- decl: [var_e1, f32, enc-1]
+- decl: [var_e0, f32, { at: [enc, 0] }]
+- decl: [var_e1, f32, { at: [enc, 1] }]
 - print: ["T1: enc=[${var_e0}, ${var_e1}]"]
 - if:
     condition: { "&&": [{ ">": [var_e0, 0.49] }, { "<": [var_e0, 0.51] }] }
@@ -86,8 +86,8 @@
 
 # T4: triplet_grad — should be 2*(neg-pos) = 2*([0,1]-[-1,0]) = [2,2]
 - decl: [grad, list<f32>, { call: [ai.triplet_grad, var_q, pos2, neg2, 1.0, 2] }]
-- decl: [var_g0, f32, grad-0]
-- decl: [var_g1, f32, grad-1]
+- decl: [var_g0, f32, { at: [grad, 0] }]
+- decl: [var_g1, f32, { at: [grad, 1] }]
 - print: ["T4: grad=[${var_g0}, ${var_g1}] (expected [2,2])"]
 - if:
     condition: { "&&": [{ ">": [var_g0, 1.99] }, { "<": [var_g0, 2.01] }] }

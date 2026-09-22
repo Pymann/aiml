@@ -3,12 +3,12 @@
 #
 # Root cause (9rooms DeckService.list, ~12 strings/iter leak): the push fast-path takes a
 # shallow MOVE — it stores the struct into the list element and consumeLocalDrop erases the
-# source's kind-0 scope-drop from EVERY cleanup frame. That is sound only when the push
+# source's { at: [kind, 0] } scope-drop from EVERY cleanup frame. That is sound only when the push
 # DOMINATES the source's scope exit (push + decl in the same innermost block). When the push
 # sits in a nested/conditional block, the source's drop lives in an OUTER frame; erasing it
 # globally leaks the source (its whole heap: name + card_ids) on every path that skips the
 # push. Fix (ast_compiler_call.cpp): the shallow-move fast-path fires ONLY when the source's
-# live kind-0 drop is in the TOPMOST cleanup frame; otherwise fall back to DEEP-COPY, so the
+# live { at: [kind, 0] } drop is in the TOPMOST cleanup frame; otherwise fall back to DEEP-COPY, so the
 # source keeps its drop (freed at its own scope exit) while the list owns an independent heap.
 #
 # Native RSS-delta assertion (valgrind never returns freed memory to the OS → RSS-leak metrics

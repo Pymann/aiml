@@ -1,6 +1,6 @@
 # static-check: off
 # TIER: T2
-# CONSTRUCT: dyn_array<T> is a Class-4 unique unmanaged buffer (§5.6) — single malloc, freed once
+# CONSTRUCT: dyn_array<T> is a { at: [Class, 4] } unique unmanaged buffer (§5.6) — single malloc, freed once
 #            at owner drop (scope default), with .free as an optional EARLY release (no double-free).
 # COVERS: new_array (one malloc), at/idx, scope-default free (no .free written → no leak/crash),
 #         early .free nulls the slot so the scope-drop is a no-op. Symbols: dyn_array<T>, new_array,

@@ -1,6 +1,6 @@
 # static-check: off
 # TIER: T2
-# CONSTRUCT: buffer is a refcounted handle (§5, Option B, Class-3) — resolved from the §2.1
+# CONSTRUCT: buffer is a refcounted handle (§5, Option B, { at: [Class, 3] }) — resolved from the §2.1
 #            contradiction: the whole buffer header is an rc handle (share/alias), not a value.
 # COVERS: buffer LOCAL aliasing on assign; {copy} = independent; buffer model FIELD aliasing on
 #         by-value model copy. Symbols: buffer, buffer.alloc, buffer.zero, buffer.resize, buffer.len.

@@ -154,14 +154,14 @@
             - print: ["FAIL got.card_ids.len=${got.card_ids.len}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { eq: [{ eq: [got.card_ids-0, "var_c1"] }, 0] }
+          condition: { eq: [{ eq: [{ at: [got.card_ids, 0] }, "var_c1"] }, 0] }
           then:
-            - print: ["FAIL got.card_ids-0=${got.card_ids-0}"]
+            - print: ["FAIL got.card_ids-0=${ { at: [got.card_ids, 0] } }"]
             - call: [sys.exit, 1]
       - if:
-          condition: { eq: [{ eq: [got.card_ids-1, "var_c2"] }, 0] }
+          condition: { eq: [{ eq: [{ at: [got.card_ids, 1] }, "var_c2"] }, 0] }
           then:
-            - print: ["FAIL got.card_ids-1=${got.card_ids-1}"]
+            - print: ["FAIL got.card_ids-1=${ { at: [got.card_ids, 1] } }"]
             - call: [sys.exit, 1]
 
       - call: [db.checkpoint]

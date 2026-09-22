@@ -1,7 +1,7 @@
 # static-check: off
 # TIER: T2
-# Spec 61 §7: `string.substr` must return a REFCOUNTED string (aiml_str_alloc header at ptr-8).
-# It used raw strndup/strdup (header-less); binding the result increfs/decrefs → reads/frees (ptr-8)
+# Spec 61 §7: `string.substr` must return a REFCOUNTED string (aiml_str_alloc header at { at: [ptr, 8] }).
+# It used raw strndup/strdup (header-less); binding the result increfs/decrefs → reads/frees ({ at: [ptr, 8] })
 # of an unowned block → heap corruption (test_ability_text `cost.substr`, rc139). aiml_str_ndup/
 # aiml_str_dup carry the header, so incref/decref and scope-drop are safe.
 - def:
