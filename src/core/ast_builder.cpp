@@ -120,6 +120,26 @@ std::unique_ptr<Expr> nodeToExpr(const YAML::Node& node) {
             return call;
         }
 
+        // { at: [container, index..., .member...] } — element access with an optional dot-prefixed
+        // trailing member path (the dash-free `c-i.field` form, also usable in interpolation).
+        if (op == "at" && argsNode.IsSequence() && argsNode.size() >= 1) {
+            auto atExpr = std::make_unique<AtExpr>();
+            atExpr->sourceNode = node;
+            atExpr->container = nodeToExpr(argsNode[0]);
+            bool inMembers = false;
+            for (size_t i = 1; i < argsNode.size(); ++i) {
+                std::string mn;
+                if (argsNode[i].IsScalar()) {
+                    std::string s = argsNode[i].as<std::string>();
+                    if (!s.empty() && s[0] == '.') mn = s.substr(1);
+                }
+                if (!mn.empty()) inMembers = true;
+                if (inMembers) { if (!mn.empty()) atExpr->memberPath.push_back(mn); }
+                else atExpr->indices.push_back(nodeToExpr(argsNode[i]));
+            }
+            return atExpr;
+        }
+
         // Unary operators: single-argument maps like { '?': [p] }, { '&': [x] }
         if (argsNode.IsSequence() && argsNode.size() == 1) {
             return std::make_unique<UnaryExpr>(op, nodeToExpr(argsNode[0]));

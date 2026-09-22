@@ -117,6 +117,9 @@ class AtExpr : public Expr {
 public:
     std::unique_ptr<Expr> container;
     std::vector<std::unique_ptr<Expr>> indices;
+    // Optional trailing member path: { at: [container, index, "field", "field2"] } reads
+    // element[index].field.field2 — the dash-free form of `container-index.field.field2`.
+    std::vector<std::string> memberPath;
 
     AtExpr() {}
     std::string toString() const override { return "At(...)"; }
@@ -205,6 +208,9 @@ class IdxStmt : public Stmt {
 public:
     std::string container;
     std::vector<std::unique_ptr<Expr>> indices;
+    // Optional trailing member path: idx: [container, index, .field, .f2, value] writes
+    // element[index].field.f2 = value (dash-free `set: [container-index.field.f2, value]`).
+    std::vector<std::string> memberPath;
     std::unique_ptr<Expr> value;
 
     IdxStmt(std::string c) : container(c) {}

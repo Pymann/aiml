@@ -85,24 +85,24 @@
             - print: ["FAIL events.len=${var_es.events.len}"]
             - return: [1]
       - if:
-          condition: { neq: [var_es.events-0.seq, 0]}
+          condition: { neq: [{ at: [var_es.events, 0, .seq] }, 0]}
           then:
-            - print: ["FAIL seq0=${var_es.events-0.seq}"]
+            - print: ["FAIL seq0=${ { at: [var_es.events, 0, .seq] } }"]
             - return: [1]
       - if:
-          condition: { neq: [var_es.events-1.seq, 1]}
+          condition: { neq: [{ at: [var_es.events, 1, .seq] }, 1]}
           then:
-            - print: ["FAIL seq1=${var_es.events-1.seq}"]
+            - print: ["FAIL seq1=${ { at: [var_es.events, 1, .seq] } }"]
             - return: [1]
       - if:
-          condition: { neq: [var_es.events-0.phase, 1]}
+          condition: { neq: [{ at: [var_es.events, 0, .phase] }, 1]}
           then:
-            - print: ["FAIL phase0=${var_es.events-0.phase}"]
+            - print: ["FAIL phase0=${ { at: [var_es.events, 0, .phase] } }"]
             - return: [1]
       - if:
-          condition: { neq: [var_es.events-1.phase, 2]}
+          condition: { neq: [{ at: [var_es.events, 1, .phase] }, 2]}
           then:
-            - print: ["FAIL phase1=${var_es.events-1.phase}"]
+            - print: ["FAIL phase1=${ { at: [var_es.events, 1, .phase] } }"]
             - return: [1]
       - print: ["test_event_system_layout_repro PASS"]
       - return: [0]

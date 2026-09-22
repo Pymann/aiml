@@ -170,8 +170,22 @@ std::unique_ptr<Node> ExpressionBuilder::finish() {
     if (op == "at" && !args.empty()) {
          auto atExpr = std::make_unique<AtExpr>();
          atExpr->container = std::move(args[0]);
-         for (size_t i = 1; i < args.size(); ++i)
-             atExpr->indices.push_back(std::move(args[i]));
+         // args[1..]: leading INDICES, then optional trailing DOT-PREFIXED member names —
+         // { at: [c, i, .field, .f2] } = c[i].field.f2 (dash-free `c-i.field.f2`). A leading '.'
+         // is unambiguous (indices/variables never start with one) and needs no quotes, so it is
+         // safe inside string interpolation.
+         auto memberName = [](Expr* e) -> std::string {
+             if (auto* v = dynamic_cast<VariableExpr*>(e)) if (!v->name.empty() && v->name[0]=='.') return v->name.substr(1);
+             if (auto* l = dynamic_cast<LiteralExpr*>(e))  if (!l->value.empty() && l->value[0]=='.') return l->value.substr(1);
+             return std::string();
+         };
+         bool inMembers = false;
+         for (size_t i = 1; i < args.size(); ++i) {
+             std::string mn = memberName(args[i].get());
+             if (!mn.empty()) inMembers = true;
+             if (inMembers) { if (!mn.empty()) atExpr->memberPath.push_back(mn); }
+             else atExpr->indices.push_back(std::move(args[i]));
+         }
          return atExpr;
     }
     if (op == "ref" && args.size() == 1) {

@@ -37,21 +37,22 @@
             - print: ["FAIL nodes_len_method=${nodes_len_m}"]
             - call: [sys.exit, 1]
 
-      - decl: [cost_len, i32, { call: [root.nodes-0.stats.cost.len] }]
+      - decl: [node0_cost, map<string:i32>, { at: [root.nodes, 0, .stats, .cost] }]
+      - decl: [cost_len, i32, { call: [node0_cost.len] }]
       - if:
           condition: { neq: [cost_len, 2] }
           then:
             - print: ["FAIL cost_len=${cost_len}"]
             - call: [sys.exit, 1]
 
-      - decl: [fire_amt, i32, { call: [root.nodes-0.stats.cost.get, "1"] }]
+      - decl: [fire_amt, i32, { call: [node0_cost.get, "1"] }]
       - if:
           condition: { neq: [fire_amt, 2] }
           then:
             - print: ["FAIL fire_amt=${fire_amt}"]
             - call: [sys.exit, 1]
 
-      - decl: [shadow_amt, i32, { call: [root.nodes-0.stats.cost.get, "3"] }]
+      - decl: [shadow_amt, i32, { call: [node0_cost.get, "3"] }]
       - if:
           condition: { neq: [shadow_amt, 1] }
           then:

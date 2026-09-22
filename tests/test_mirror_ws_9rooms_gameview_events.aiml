@@ -167,7 +167,7 @@
       - call: [client.update]
       - set: [poll_i, { +: [poll_i, 1] }]
 
-- print: ["gv9: event_seq=${replica.event_seq} event_count=${replica.event_count} events.len=${replica.events.len} ev0='${replica.events-0.text}' trig_seq=${replica.trigger_seq_counter} active=${replica.active_trigger_count} active0_resolved=${replica.active_triggers-0.resolved} reactable0_expired=${replica.reactable_triggers-0.expired} react_prompt='${replica.reaction_state.window_prompt}' cards='${replica.reaction_state.reactable_card_mask}'"]
+- print: ["gv9: event_seq=${ replica.event_seq } event_count=${ replica.event_count } events.len=${ replica.events.len } ev0='${ { at: [replica.events, 0, .text] } }' trig_seq=${ replica.trigger_seq_counter } active=${ replica.active_trigger_count } active0_resolved=${ { at: [replica.active_triggers, 0, .resolved] } } reactable0_expired=${ { at: [replica.reactable_triggers, 0, .expired] } } react_prompt='${ replica.reaction_state.window_prompt }' cards='${ replica.reaction_state.reactable_card_mask }'"]
 
 - if:
     condition: { neq: [replica.event_seq, 2] }
@@ -185,14 +185,14 @@
       - print: ["FAIL gv9: events.len=${replica.events.len}"]
       - call: [sys.exit, 1]
 - if:
-    condition: { neq: [replica.events-0.text, "Round start updated"] }
+    condition: { neq: [{ at: [replica.events, 0, .text] }, "Round start updated"] }
     then:
-      - print: ["FAIL gv9: events-0.text='${replica.events-0.text}'"]
+      - print: ["FAIL gv9: events-0.text='${ { at: [replica.events, 0, .text] } }'"]
       - call: [sys.exit, 1]
 - if:
-    condition: { neq: [replica.events-0.target_iid, "tgt-1b"] }
+    condition: { neq: [{ at: [replica.events, 0, .target_iid] }, "tgt-1b"] }
     then:
-      - print: ["FAIL gv9: events-0.target_iid='${replica.events-0.target_iid}'"]
+      - print: ["FAIL gv9: events-0.target_iid='${ { at: [replica.events, 0, .target_iid] } }'"]
       - call: [sys.exit, 1]
 - if:
     condition: { neq: [replica.trigger_seq_counter, 2] }
@@ -210,14 +210,14 @@
       - print: ["FAIL gv9: active_triggers.len=${replica.active_triggers.len}"]
       - call: [sys.exit, 1]
 - if:
-    condition: { neq: [replica.active_triggers-0.resolved, 1] }
+    condition: { neq: [{ at: [replica.active_triggers, 0, .resolved] }, 1] }
     then:
-      - print: ["FAIL gv9: active_triggers-0.resolved=${replica.active_triggers-0.resolved}"]
+      - print: ["FAIL gv9: active_triggers-0.resolved=${ { at: [replica.active_triggers, 0, .resolved] } }"]
       - call: [sys.exit, 1]
 - if:
-    condition: { neq: [replica.active_triggers-0.text, "On draw resolved"] }
+    condition: { neq: [{ at: [replica.active_triggers, 0, .text] }, "On draw resolved"] }
     then:
-      - print: ["FAIL gv9: active_triggers-0.text='${replica.active_triggers-0.text}'"]
+      - print: ["FAIL gv9: active_triggers-0.text='${ { at: [replica.active_triggers, 0, .text] } }'"]
       - call: [sys.exit, 1]
 - if:
     condition: { neq: [replica.reactable_triggers.len, 2] }
@@ -225,14 +225,14 @@
       - print: ["FAIL gv9: reactable_triggers.len=${replica.reactable_triggers.len}"]
       - call: [sys.exit, 1]
 - if:
-    condition: { neq: [replica.reactable_triggers-0.expired, 1] }
+    condition: { neq: [{ at: [replica.reactable_triggers, 0, .expired] }, 1] }
     then:
-      - print: ["FAIL gv9: reactable_triggers-0.expired=${replica.reactable_triggers-0.expired}"]
+      - print: ["FAIL gv9: reactable_triggers-0.expired=${ { at: [replica.reactable_triggers, 0, .expired] } }"]
       - call: [sys.exit, 1]
 - if:
-    condition: { neq: [replica.reactable_triggers-0.text, "On draw expired"] }
+    condition: { neq: [{ at: [replica.reactable_triggers, 0, .text] }, "On draw expired"] }
     then:
-      - print: ["FAIL gv9: reactable_triggers-0.text='${replica.reactable_triggers-0.text}'"]
+      - print: ["FAIL gv9: reactable_triggers-0.text='${ { at: [replica.reactable_triggers, 0, .text] } }'"]
       - call: [sys.exit, 1]
 - if:
     condition: { neq: [replica.reaction_state.window_open, 0] }

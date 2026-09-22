@@ -4186,6 +4186,48 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
         }
         if (indexVals.empty()) { LOG_ERROR("idx: list requires at least one index"); return; }
 
+        // Trailing member path: idx: [list, i, .field, value] writes element[i].field = value. Get a
+        // pointer to the element (a %M* for a refcount model, else the inline struct slot), resolve
+        // the member path on it, then coerce+store the value into the final field.
+        if (!idx->memberPath.empty()) {
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* elemBase;
+            if (ctx.isRefcountModel(elemName)) {
+                llvm::Value* slot = ListImpl::getElementPtr(ctx, listPtr, indexVals[0], i8p);
+                elemBase = ctx.builder.CreateLoad(i8p, slot, "idx_mp_modelptr");
+            } else {
+                elemBase = ListImpl::getElementPtr(ctx, listPtr, indexVals[0], elemTy);
+            }
+            std::string joined;
+            for (size_t i = 0; i < idx->memberPath.size(); ++i)
+                joined += (i ? "." : "") + idx->memberPath[i];
+            Symbol elemSym;
+            elemSym.typeName       = elemName;
+            elemSym.ir_alloca_inst = ctx.ir_gen->wrap(elemBase);
+            if (ctx.classes.count(elemName) && ctx.classes[elemName].type)
+                elemSym.ir_element_type = ctx.ir_gen->wrapType(ctx.classes[elemName].type);
+            std::string fldTypeName;
+            IRValue* fldPtr = resolvePropertyWritePtr(&elemSym, joined, fldTypeName);
+            if (!fldPtr || fldTypeName.empty()) {
+                LOG_ERROR(ctx.fmtLoc() + "idx: member path '" + joined + "' unresolved on element of " + tName);
+                return;
+            }
+            llvm::Type* fldTy = ctx.getLLVMType(fldTypeName);
+            llvm::Value* fp = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fldPtr));
+            if (storeVal->getType() != fldTy) {
+                if (fldTy->isIntegerTy() && storeVal->getType()->isIntegerTy())
+                    storeVal = ctx.builder.CreateZExtOrTrunc(storeVal, fldTy, "idx_mp_icast");
+                else if (fldTy->isFloatingPointTy() && storeVal->getType()->isIntegerTy())
+                    storeVal = ctx.builder.CreateSIToFP(storeVal, fldTy, "idx_mp_i2f");
+                else if (fldTy->isFloatingPointTy() && storeVal->getType()->isFloatingPointTy())
+                    storeVal = ctx.builder.CreateFPCast(storeVal, fldTy, "idx_mp_fcast");
+                else if (fldTy->isPointerTy() && storeVal->getType()->isPointerTy())
+                    storeVal = ctx.builder.CreatePointerCast(storeVal, fldTy, "idx_mp_pcast");
+            }
+            ctx.builder.CreateStore(storeVal, fp);
+            return;
+        }
+
         // AIML v2 P3: list<Model> slot holds a %M* reference. Store the new pointer with
         // incref-new-BEFORE-decref-old so the self-alias write-back `idx:[c,i,at(c,i)]` is safe
         // (decref-first could free the object at refcount 1 before we re-store it).
