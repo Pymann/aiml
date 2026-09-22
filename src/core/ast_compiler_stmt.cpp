@@ -796,6 +796,39 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
     IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
     if (!ty) return;
 
+    // spec/61 §5.4/§7: binding a VALUE `Model` to an `at`/`get` read MATERIALISES a value-copy
+    // (member-wise, incref fields). That is forbidden when the model is MOVE-ONLY — it has a
+    // `ptr<T>` field (a unique owner): copying would duplicate the one box into two owners
+    // (double-free). `at`/`get` on such an element yields a `ref<T>` borrow, so the only legal
+    // bindings are `ref<Model>` (borrow) or `{ clone: … }` (a fresh box). Reject the value-copy
+    // form here (memV3; the accessor read never destructively moves out of a container).
+    if (ctx.memV3 && decl->initialValue) {
+        const std::string& dtn = decl->typeName;
+        auto mci = ctx.classes.find(dtn);
+        bool moveOnlyModel = false;
+        if (mci != ctx.classes.end() && !mci->second.isBuiltin && mci->second.type) {
+            for (auto& mkv : mci->second.members)
+                if (mkv.second.typeName.rfind("ptr<", 0) == 0) { moveOnlyModel = true; break; }
+        }
+        if (moveOnlyModel) {
+            Expr* iv0 = decl->initialValue.get();
+            std::string acc;
+            if (dynamic_cast<AtExpr*>(iv0)) acc = "at";
+            else if (auto* ce = dynamic_cast<CallExpr*>(iv0)) {
+                const std::string& fn = ce->functionName; size_t dp = fn.rfind('.');
+                std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                if (sn == "at" || sn == "get" || sn == "first" || sn == "last" || sn == "get_copy") acc = sn;
+            }
+            if (!acc.empty()) {
+                LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "decl: '" + decl->varName + "' binds a VALUE '"
+                    + dtn + "' to a '" + acc + "' read, which value-copies a MOVE-ONLY model (it has a "
+                    "ptr<T> field, §7) — duplicating a unique owner (double-free). Bind 'ref<" + dtn
+                    + ">' to borrow it, or use '{ clone: … }' for an independent copy (§5.4/§7).");
+                return;
+            }
+        }
+    }
+
     // ── spec/61 §5 Option B (memV3): list<T>/cascade<X> value-LOCAL = refcounted HANDLE ──────────
     // The slot holds a POINTER to a heap block [i32 rc][i32 pad][{size,cap,data}]; the stored
     // pointer targets the {size,cap,data} part so every ListImpl op is unchanged, reached via the
