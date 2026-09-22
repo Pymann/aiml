@@ -1,0 +1,18 @@
+# static-check: off
+# NEGATIVE (§5.4/§7): binding a VALUE move-only model to an `at`/`get` read materialises a
+# value-copy, which would duplicate the model's unique `ptr<T>` owner into two owners (double-free).
+# `at` on such an element yields a `ref<T>` borrow — bind `ref<Slot>` (borrow) or `{ clone: … }`.
+# EXPECT-ERROR: value-copies a MOVE-ONLY model
+- model: { name: Card, fields: [[power, i32, 0]] }
+- model: { name: Slot, fields: [[card, ptr<Card>]] }   # ptr<T> field ⇒ Slot is move-only (§7)
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [slots, list<Slot>]
+      - decl: [slt, Slot]
+      - decl: [crd, ptr<Card>, { new: Card }]
+      - set: [slt.card, crd]
+      - call: [slots.push, slt]                 # move slt into the list (move-only push = ok)
+      - decl: [scp, Slot, { at: [slots, 0] }]   # ← FORBIDDEN: value-copy of a move-only model
+      - return: 0
