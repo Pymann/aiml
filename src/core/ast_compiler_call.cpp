@@ -2731,6 +2731,13 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         auto getListDataAndSize = [&](llvm::Value* listAlloca)
                 -> std::pair<llvm::Value*, llvm::Value*> {
             llvm::StructType* listTy = ListImpl::getListStructType(ctx);
+            // spec/61 §5: a memV3 list local's slot holds the handle POINTER — load it so the GEPs hit
+            // the {size,cap,data} struct, not the handle-pointer bytes (else vec insert/search read a
+            // garbage size + data ptr → crash in aiml_db_vec_insert, test_db Phase C).
+            if (ctx.memV3) {
+                auto* i8pH = ctx.builder.getInt8Ty()->getPointerTo();
+                listAlloca = ctx.builder.CreateLoad(i8pH, listAlloca, "vec_list_conh");
+            }
             llvm::Value* sizeFld = ctx.builder.CreateStructGEP(listTy, listAlloca, 0, "vsz_fld");
             llvm::Value* listSz  = ctx.builder.CreateLoad(i32, sizeFld, "list_sz");
             llvm::Value* dataFld = ctx.builder.CreateStructGEP(listTy, listAlloca, 2, "vdata_fld");
