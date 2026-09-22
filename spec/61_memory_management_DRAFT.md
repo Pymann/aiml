@@ -340,6 +340,19 @@ data→buffer}`. This is the Class-3 discipline of §2.1.
 > inlined `{size,cap,data}` struct — required by
 > the §6.1 Class-3 "release each element by its own class (decref)" rule. `AIML_TD_LIST_PTR`/
 > `_MAP_PTR`/`_BUFFER_PTR` descriptors are emitted for nested element slots exactly as for fields.
+>
+> **Storage location is representation-invariant.** A Class-3 container is a handle **wherever it
+> lives** — a value **local**, a model **field**, a nested **element/value**, and a **top-level
+> (global) declaration** all hold the same pointer-sized handle to the same kind of heap block. A
+> top-level `decl: [g, list<T>]` is therefore a heap handle (`aiml_list_handle_new` at init, all
+> reads/writes deref the handle pointer), **exactly** like a local — there is no inline-struct
+> global form. This is forced by §5 rule 1 (assigning/passing/storing shares the handle): a
+> builtin that yields an owned handle (`slice`, `split`, `findings_by`, a class method returning
+> `list<T>`) assigned to a global must produce the identical representation a local gets, or the
+> assignment strides a handle pointer as an inline `{size,cap,data}` struct → corruption.
+> *(Implementation note: the memV3 compiler still allocates container globals as inline structs
+> and `initList`s them in place — the one remaining storage form out of line with this rule; its
+> migration to the handle form is the last representation item, tracked separately.)*
 
 Rules:
 
