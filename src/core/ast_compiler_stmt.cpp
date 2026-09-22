@@ -1785,16 +1785,23 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                                         decl->typeName.rfind("ref<", 0) == 0)
                                        && decl->typeName.back() == '>';
                     if (isPtrTarget && storeVal && storeVal->getType()->isStructTy()) {
-                        // initVal is a loaded struct — we need the alloca (address) instead
+                        // initVal is a loaded struct — we need the ADDRESS instead (a ptr/ref binds
+                        // the lvalue). A plain variable → its alloca; an `at`/member view → the
+                        // element/field address via emitLValueAddress (else the loaded struct value
+                        // was written into the 8-byte ref slot → garbage pointer, crash on deref).
+                        llvm::Value* addrVal = nullptr;
                         if (auto* varExpr = dynamic_cast<VariableExpr*>(decl->initialValue.get())) {
                             Symbol* srcSym = resolveVariable(varExpr->name);
-                            if (srcSym) {
-                                llvm::Value* addrVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
-                                    srcSym->ir_alloca_inst ? srcSym->ir_alloca_inst
-                                                           : ctx.ir_gen->wrap(srcSym->alloca_inst)));
-                                initVal = ctx.ir_gen->wrap(addrVal);
-                            }
+                            if (srcSym) addrVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+                                srcSym->ir_alloca_inst ? srcSym->ir_alloca_inst
+                                                       : ctx.ir_gen->wrap(srcSym->alloca_inst)));
                         }
+                        if (!addrVal) {
+                            std::string lvtn;
+                            IRValue* av = emitLValueAddress(decl->initialValue.get(), lvtn);
+                            if (av) addrVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(av));
+                        }
+                        if (addrVal) initVal = ctx.ir_gen->wrap(addrVal);
                     }
                     // Numeric coercion (int↔int, int→float, float→int)
                     llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(initVal));

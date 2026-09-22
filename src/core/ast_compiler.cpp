@@ -5775,6 +5775,40 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
 }
 
 IRValue* Compiler::emitLValueAddress(Expr* e, std::string& outTypeName) {
+    // spec/61 §5.4: `at`/`get` on a `list<Model>` value-model element is a `ref` borrow — its
+    // lvalue is the ELEMENT ADDRESS inside the container's data buffer. Return that pointer so a
+    // `decl:[r, ref<Model>, {at:…}]` binds the borrow (not a loaded struct value → garbage ptr) and
+    // `store` can write through it. Only VALUE-model elements have an addressable inline slot;
+    // refcount (%M*) / handle / scalar / string elements are returned by value by visitAtExpr.
+    if (auto* at = dynamic_cast<AtExpr*>(e)) {
+        auto* cv = dynamic_cast<VariableExpr*>(at->container.get());
+        if (!cv || at->indices.empty()) return nullptr;
+        Symbol* csym = resolveVariable(cv->name);
+        if (!csym) return nullptr;
+        const std::string& ctn = csym->typeName;
+        if (ctn.rfind("list<", 0) != 0 || ctn.back() != '>') return nullptr;
+        std::string elemName = ctn.substr(5, ctn.size() - 6);
+        auto eci = ctx.classes.find(elemName);
+        bool valueModel = (eci != ctx.classes.end() && !eci->second.isBuiltin && eci->second.type
+                           && !ctx.isRefcountModel(elemName) && !ctx.isMemV3ContainerHandle(elemName));
+        if (!valueModel) return nullptr;
+        llvm::Type* elemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
+        if (!elemTy) return nullptr;
+        llvm::Value* listPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
+            csym->ir_alloca_inst ? csym->ir_alloca_inst : ctx.ir_gen->wrap(csym->alloca_inst)));
+        if (csym->is_byref_arg) {   // memV3 list local / by-ref param: slot holds the handle ptr
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            listPtr = ctx.builder.CreateLoad(i8p, listPtr, "lval_at_conh");
+        }
+        IRValue* idxV = visitExpression(at->indices[0].get());
+        llvm::Value* idxVal = idxV ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(idxV)) : nullptr;
+        if (!idxVal) return nullptr;
+        if (idxVal->getType()->isIntegerTy() && idxVal->getType()->getIntegerBitWidth() != 32)
+            idxVal = ctx.builder.CreateIntCast(idxVal, ctx.builder.getInt32Ty(), true, "lval_at_idx");
+        llvm::Value* elemPtr = ListImpl::getElementPtr(ctx, listPtr, idxVal, elemTy);
+        outTypeName = elemName;
+        return ctx.ir_gen->wrap(elemPtr);
+    }
     auto* ve = dynamic_cast<VariableExpr*>(e);
     if (!ve) return nullptr;
     std::string name = ve->name;
