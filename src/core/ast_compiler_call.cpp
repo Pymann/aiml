@@ -1533,6 +1533,46 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              return nullptr;
          } else if (methodName == "pop") {
              return ctx.ir_gen->wrap(ListImpl::pop(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), llvmListElemType));
+         } else if (methodName == "slice" && !argVals.empty()) {
+             // spec/01/§5.4: list.slice(start, end) — shallow COPY of [start, end) into a fresh heap
+             // handle (start inclusive, end exclusive; end optional → to len). Dash-free form of
+             // `lst-a-b`. ListImpl::slice returns a real handle under memV3 (adopted by the caller).
+             // spec/61 §5.1: a shallow copy of a MOVE-ONLY element (ptr<T>, a unique owner) would put
+             // one owner into two containers → double free at drop (valgrind: Invalid free). Reject it;
+             // use `{clone}` for a deep, independent copy.
+             if (listElemName.rfind("ptr<", 0) == 0) {
+                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "list.slice of list<" + listElemName +
+                     ">: the element type is move-only (a unique owner) — a shallow slice would "
+                     "duplicate one owner into two containers (double free). Use {clone} (deep) "
+                     "of the range instead (§5.1).");
+                 return ctx.ir_gen->getInt32(0);
+             }
+             llvm::Type* i32ty = ctx.builder.getInt32Ty();
+             llvm::Value* listP = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+             llvm::Value* startV = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+             if (startV->getType()->isIntegerTy() && startV->getType()->getIntegerBitWidth() != 32)
+                 startV = ctx.builder.CreateIntCast(startV, i32ty, true, "slice_start");
+             llvm::Value* endV = (argVals.size() > 1)
+                 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]))
+                 : ListImpl::getSize(ctx, listP);
+             if (endV->getType()->isIntegerTy() && endV->getType()->getIntegerBitWidth() != 32)
+                 endV = ctx.builder.CreateIntCast(endV, i32ty, true, "slice_end");
+             // Element stride: nested-container / refcount-model elements are pointer-sized handles.
+             llvm::Type* sliceElemTy = (ctx.memV3 && (ctx.isMemV3ContainerHandle(listElemName)
+                                                      || ctx.isRefcountModel(listElemName)))
+                 ? llvm::PointerType::get(ctx.context, 0)
+                 : llvmListElemType;
+             // §5.4/§5.1: co-own each rc-bearing element (incref) so slice+source share with a
+             // balanced refcount — scalars need none. ptr<T> was rejected above (move-only).
+             const char* retainFn = nullptr;
+             if (listElemName == "string")                       retainFn = "aiml_str_incref";
+             else if (ctx.isRefcountModel(listElemName))         retainFn = "aiml_model_incref";
+             else if (ctx.memV3 && (listElemName.rfind("list<", 0) == 0
+                                    || listElemName.rfind("cascade<", 0) == 0)) retainFn = "aiml_list_handle_incref";
+             else if (ctx.memV3 && listElemName.rfind("map<", 0) == 0)          retainFn = "aiml_map_handle_incref";
+             else if (ctx.memV3 && (listElemName == "buffer"
+                                    || listElemName.rfind("buffer<", 0) == 0))  retainFn = "aiml_buffer_handle_incref";
+             return ctx.ir_gen->wrap(ListImpl::slice(ctx, listP, startV, endV, sliceElemTy, retainFn));
          } else if (methodName == "get" && argVals.size() > 0) {
              // AIML v2 P3: a list<Model> element is a %M* — LOAD it (stride 8) and return the
              // reference. It is a pointer-to-struct, the same shape v1's getElementPtr yields for a

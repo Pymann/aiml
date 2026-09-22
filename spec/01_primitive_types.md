@@ -40,6 +40,18 @@
 | `name-start-end` | Slice from `start` (inclusive) to `end` (exclusive) | `arr-0-2` |
 | **Note** | We use hyphen syntax (`-`) instead of brackets `[]` because YAML flow collections reserve brackets. | 
 
+> **⚠️ DEPRECATED — the `name-index` / `name-start-end` hyphen (`symbol-<index>`) notation is being eradicated.**
+> The hyphen overloads subtraction and collides with identifiers, so element access and slicing move to
+> explicit method calls:
+> - **Index** `name-index` → **`{call: [name.at, index]}`** (canonical, §5.4 element access; `.get` is the
+>   equivalent read verb and the most common in the corpus today).
+> - **Slice** `name-start-end` → **`{call: [name.slice, start, end]}`** (`list.slice(start, end)`: start
+>   inclusive, end exclusive, end optional → to len; a shallow copy into a fresh handle — spec/61 §5.4/§5.1,
+>   move-only `ptr<T>` elements rejected). Element **set** by index → **`idx: [name, index, value]`**.
+>
+> New code MUST use the method forms. The hyphen forms remain parseable during the migration but are
+> removed once the corpus and spec are converted.
+
 ## Inference Rules (for `set`)
 - Integer literal (`42`) -> `i32`
 - Float literal (`3.14`) -> `f64`
