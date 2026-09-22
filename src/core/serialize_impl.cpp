@@ -157,6 +157,15 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
                                   llvm::Value* structPtr, const std::string& typeName,
                                   llvm::Function* parentFn);
 
+// spec/61 §5.7: the stride of a list/map/buffer ELEMENT. A nested CONTAINER element
+// (list<list<T>>, list<map<…>>, list<buffer>) is a refcounted HANDLE → pointer stride
+// (8B), matching serFieldSubtree/serBuildSubtree (elem_size = pointer size) so deser,
+// encode and free agree. A non-container element keeps its natural LLVM type stride.
+static llvm::Type* listElemStrideTy(CompilerContext& ctx, const std::string& elemTn){
+    if(ctx.memV3 && ctx.isMemV3ContainerHandle(elemTn)) return ptrT(ctx);
+    return ctx.getLLVMType(elemTn);
+}
+
 // ─── emitWriteListElementsIntoWriter ─────────────────────────────────────────
 // Writes dp[0..sz-1] of type elemTn into writer. Recursive: handles
 // list<Struct>, list<list<T>>, and scalar elements at any nesting depth.
@@ -170,7 +179,9 @@ static void emitWriteListElementsIntoWriter(CompilerContext& ctx, llvm::Value* w
     // stride 8), NOT inline structs — walk it with pointer stride and deref each element, exactly
     // like list<ptr<T>>. Without this the GEP strides by sizeof(Model) and reads garbage → crash.
     bool elemIsRefModel = ctx.isRefcountModel(elemTn);
-    llvm::Type* elemTy = elemIsRefModel ? ptrT(ctx) : ctx.getLLVMType(elemTn);
+    // §5.7: a nested container element is a HANDLE pointer (ptr stride) — matches deser+free.
+    bool elemIsHandle = ctx.memV3 && ctx.isMemV3ContainerHandle(elemTn);
+    llvm::Type* elemTy = (elemIsRefModel || elemIsHandle) ? ptrT(ctx) : ctx.getLLVMType(elemTn);
     auto* ph = ctx.builder.GetInsertBlock();
     auto* lc = llvm::BasicBlock::Create(ctx.context, lbl+"_lc", parentFn);
     auto* lb = llvm::BasicBlock::Create(ctx.context, lbl+"_lb", parentFn);
@@ -232,17 +243,41 @@ static void emitWriteListElementsIntoWriter(CompilerContext& ctx, llvm::Value* w
     } else if(isListType(elemTn)) {
         llvm::Type* innerListTy = ctx.getLLVMType(elemTn);
         std::string innerElemTn = listElem(elemTn);
-        // NOTE: JSON deserialize currently stores NESTED list elements INLINE (emitDeserStructFields
-        // list<list<T>> path pushes the inner list struct value, not a handle), so encode must read
-        // them inline too — do NOT load a handle here. The full nested-element→handle migration
-        // (spec/61 §5.7 consistency across deser+encode) is a separate item.
-        llvm::Value* isg = ctx.builder.CreateStructGEP(innerListTy, ep, 0, "isg");
-        llvm::Value* isz = ctx.builder.CreateLoad(i32T(ctx), isg, "isz");
-        llvm::Value* idg = ctx.builder.CreateStructGEP(innerListTy, ep, 2, "idg");
-        llvm::Value* idp = ctx.builder.CreateLoad(ptrT(ctx), idg, "idp");
-        ctx.builder.CreateCall(gJwArrArrBgn(ctx), {writer});
-        emitWriteListElementsIntoWriter(ctx, writer, idp, isz, innerElemTn, parentFn, lbl+"i");
-        ctx.builder.CreateCall(gJwArrArrEnd(ctx), {writer});
+        // spec/61 §5.7: a nested list element is a refcounted HANDLE (ep is a pointer slot, ptr stride
+        // above). Load the handle — which points AT the {size,cap,data} struct — then read size/data
+        // from it. Deser (aiml_list_handle_new) and free (LIST_PTR) use the same handle layout. A null
+        // handle (never produced today, but defensive) emits an empty inner array.
+        llvm::Value* hbase = ep;
+        if(elemIsHandle){
+            hbase = ctx.builder.CreateLoad(ptrT(ctx), ep, "inner_conh");
+            auto* okBB = llvm::BasicBlock::Create(ctx.context, lbl+"_ihok", parentFn);
+            auto* emBB = llvm::BasicBlock::Create(ctx.context, lbl+"_ihem", parentFn);
+            auto* dnBB = llvm::BasicBlock::Create(ctx.context, lbl+"_ihdn", parentFn);
+            ctx.builder.CreateCondBr(
+                ctx.builder.CreateICmpNE(hbase, llvm::Constant::getNullValue(ptrT(ctx))), okBB, emBB);
+            ctx.builder.SetInsertPoint(okBB);
+            llvm::Value* isg = ctx.builder.CreateStructGEP(innerListTy, hbase, 0, "isg");
+            llvm::Value* isz = ctx.builder.CreateLoad(i32T(ctx), isg, "isz");
+            llvm::Value* idg = ctx.builder.CreateStructGEP(innerListTy, hbase, 2, "idg");
+            llvm::Value* idp = ctx.builder.CreateLoad(ptrT(ctx), idg, "idp");
+            ctx.builder.CreateCall(gJwArrArrBgn(ctx), {writer});
+            emitWriteListElementsIntoWriter(ctx, writer, idp, isz, innerElemTn, parentFn, lbl+"i");
+            ctx.builder.CreateCall(gJwArrArrEnd(ctx), {writer});
+            ctx.builder.CreateBr(dnBB);
+            ctx.builder.SetInsertPoint(emBB);
+            ctx.builder.CreateCall(gJwArrArrBgn(ctx), {writer});
+            ctx.builder.CreateCall(gJwArrArrEnd(ctx), {writer});
+            ctx.builder.CreateBr(dnBB);
+            ctx.builder.SetInsertPoint(dnBB);
+        } else {
+            llvm::Value* isg = ctx.builder.CreateStructGEP(innerListTy, hbase, 0, "isg");
+            llvm::Value* isz = ctx.builder.CreateLoad(i32T(ctx), isg, "isz");
+            llvm::Value* idg = ctx.builder.CreateStructGEP(innerListTy, hbase, 2, "idg");
+            llvm::Value* idp = ctx.builder.CreateLoad(ptrT(ctx), idg, "idp");
+            ctx.builder.CreateCall(gJwArrArrBgn(ctx), {writer});
+            emitWriteListElementsIntoWriter(ctx, writer, idp, isz, innerElemTn, parentFn, lbl+"i");
+            ctx.builder.CreateCall(gJwArrArrEnd(ctx), {writer});
+        }
     } else if(elemTn=="string") {
         ctx.builder.CreateCall(gJwArrStr(ctx),
             {writer, ctx.builder.CreateLoad(i8pT(ctx), ep, "sv")});
@@ -718,24 +753,42 @@ static void emitReadValListElements(CompilerContext& ctx, llvm::Value* subReader
             ctx.builder.SetInsertPoint(srDone);
         }
     } else if(isListType(elemTn)){
-        llvm::Type* innerListTy = ctx.getLLVMType(elemTn);
         std::string innerElemTn = listElem(elemTn);
-        llvm::Type* innerElemTy = ctx.getLLVMType(innerElemTn);
-        llvm::Value* ilAlloca = ctx.createEntryAlloca(innerListTy, "ila");
-        ListImpl::initList(ctx, ilAlloca, innerElemTy, 4);
         llvm::Value* isr = ctx.builder.CreateCall(gJrValSub(ctx), {subReader, idx}, "isr");
-        auto* isrOk   = llvm::BasicBlock::Create(ctx.context, lbl+"_isrok",   parentFn);
-        auto* isrDone = llvm::BasicBlock::Create(ctx.context, lbl+"_isrdone", parentFn);
-        ctx.builder.CreateCondBr(
-            ctx.builder.CreateICmpNE(isr, llvm::Constant::getNullValue(ptrT(ctx))),
-            isrOk, isrDone);
-        ctx.builder.SetInsertPoint(isrOk);
-        emitReadValListElements(ctx, isr, ilAlloca, innerElemTn, parentFn, lbl+"i");
-        ctx.builder.CreateCall(gJrFree(ctx), {isr});
-        ctx.builder.CreateBr(isrDone);
-        ctx.builder.SetInsertPoint(isrDone);
-        llvm::Value* ilVal = ctx.builder.CreateLoad(innerListTy, ilAlloca, "ilval");
-        ListImpl::push(ctx, listAlloca, ilVal);
+        if(ctx.memV3 && ctx.isMemV3ContainerHandle(elemTn)){
+            // spec/61 §5.7: nested inner list element = HANDLE. Heap-allocate, fill, push pointer.
+            llvm::Type* innerElemTy = listElemStrideTy(ctx, innerElemTn);
+            llvm::Function* nwh = ctx.getFunction("aiml_list_handle_new", ptrT(ctx), {});
+            llvm::Value* ih = ctx.builder.CreateCall(nwh,{},"deser_vilh");
+            ListImpl::initList(ctx, ih, innerElemTy, 4);
+            auto* isrOk   = llvm::BasicBlock::Create(ctx.context, lbl+"_visrok",   parentFn);
+            auto* isrDone = llvm::BasicBlock::Create(ctx.context, lbl+"_visrdone", parentFn);
+            ctx.builder.CreateCondBr(
+                ctx.builder.CreateICmpNE(isr, llvm::Constant::getNullValue(ptrT(ctx))), isrOk, isrDone);
+            ctx.builder.SetInsertPoint(isrOk);
+            emitReadValListElements(ctx, isr, ih, innerElemTn, parentFn, lbl+"i");
+            ctx.builder.CreateCall(gJrFree(ctx), {isr});
+            ctx.builder.CreateBr(isrDone);
+            ctx.builder.SetInsertPoint(isrDone);
+            ListImpl::push(ctx, listAlloca, ih);
+        } else {
+            llvm::Type* innerListTy = ctx.getLLVMType(elemTn);
+            llvm::Type* innerElemTy = ctx.getLLVMType(innerElemTn);
+            llvm::Value* ilAlloca = ctx.createEntryAlloca(innerListTy, "ila");
+            ListImpl::initList(ctx, ilAlloca, innerElemTy, 4);
+            auto* isrOk   = llvm::BasicBlock::Create(ctx.context, lbl+"_isrok",   parentFn);
+            auto* isrDone = llvm::BasicBlock::Create(ctx.context, lbl+"_isrdone", parentFn);
+            ctx.builder.CreateCondBr(
+                ctx.builder.CreateICmpNE(isr, llvm::Constant::getNullValue(ptrT(ctx))),
+                isrOk, isrDone);
+            ctx.builder.SetInsertPoint(isrOk);
+            emitReadValListElements(ctx, isr, ilAlloca, innerElemTn, parentFn, lbl+"i");
+            ctx.builder.CreateCall(gJrFree(ctx), {isr});
+            ctx.builder.CreateBr(isrDone);
+            ctx.builder.SetInsertPoint(isrDone);
+            llvm::Value* ilVal = ctx.builder.CreateLoad(innerListTy, ilAlloca, "ilval");
+            ListImpl::push(ctx, listAlloca, ilVal);
+        }
     } else {
         llvm::Value* ie = emitReadValElem(ctx, subReader, idx, elemTn);
         ListImpl::push(ctx, listAlloca, ie);
@@ -762,7 +815,8 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
 
         if(isListType(tn)){
             std::string elemTn = listElem(tn);
-            llvm::Type* elemTy = ctx.getLLVMType(elemTn);
+            // §5.7: nested container element = HANDLE (ptr stride) so deser/encode/free agree.
+            llvm::Type* elemTy = listElemStrideTy(ctx, elemTn);
             // spec/61 §5 (memV3): a list FIELD is a refcounted HANDLE pointer, not an inline struct.
             // Allocate the handle, store it into the field, and target it for initList/push — else the
             // {size,cap,data} is written into the 8-byte ptr field and a later `.len`/`.at` derefs
@@ -869,24 +923,44 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
                     ctx.builder.SetInsertPoint(srDone);
                 }
             } else if(isListType(elemTn)){
-                // list<list<T>> (any depth/struct): sub-reader per inner array, recurse
-                llvm::Type* innerListTy = ctx.getLLVMType(elemTn);
+                // list<list<T>> (any depth/struct): sub-reader per inner array, recurse.
                 std::string innerElemTn = listElem(elemTn);
-                llvm::Type* innerElemTy = ctx.getLLVMType(innerElemTn);
-                llvm::Value* ilAlloca = ctx.createEntryAlloca(innerListTy,"ila");
-                ListImpl::initList(ctx,ilAlloca,innerElemTy,4);
                 llvm::Value* isr = ctx.builder.CreateCall(gJrArrSub(ctx),{reader,fkey,idx},"isr");
-                llvm::BasicBlock* isrOk = llvm::BasicBlock::Create(ctx.context,fname+"_isrok",parentFn);
-                llvm::BasicBlock* isrDone = llvm::BasicBlock::Create(ctx.context,fname+"_isrdone",parentFn);
-                ctx.builder.CreateCondBr(
-                    ctx.builder.CreateICmpNE(isr,llvm::Constant::getNullValue(ptrT(ctx))),isrOk,isrDone);
-                ctx.builder.SetInsertPoint(isrOk);
-                emitReadValListElements(ctx,isr,ilAlloca,innerElemTn,parentFn,fname+"_il");
-                ctx.builder.CreateCall(gJrFree(ctx),{isr});
-                ctx.builder.CreateBr(isrDone);
-                ctx.builder.SetInsertPoint(isrDone);
-                llvm::Value* ilVal = ctx.builder.CreateLoad(innerListTy,ilAlloca,"ilval");
-                ListImpl::push(ctx,listTgt,ilVal);
+                if(ctx.memV3 && ctx.isMemV3ContainerHandle(elemTn)){
+                    // spec/61 §5.7: nested inner list element = refcounted HANDLE. Allocate a heap
+                    // handle, fill it, push the HANDLE POINTER (8B) — matches serFieldSubtree free
+                    // (elem_size = ptr, inner LIST_PTR) and the .get/access handle load.
+                    llvm::Type* innerElemTy = listElemStrideTy(ctx, innerElemTn);
+                    llvm::Function* nwh = ctx.getFunction("aiml_list_handle_new", ptrT(ctx), {});
+                    llvm::Value* ih = ctx.builder.CreateCall(nwh,{},"deser_ilh");
+                    ListImpl::initList(ctx,ih,innerElemTy,4);
+                    llvm::BasicBlock* isrOk = llvm::BasicBlock::Create(ctx.context,fname+"_isrok",parentFn);
+                    llvm::BasicBlock* isrDone = llvm::BasicBlock::Create(ctx.context,fname+"_isrdone",parentFn);
+                    ctx.builder.CreateCondBr(
+                        ctx.builder.CreateICmpNE(isr,llvm::Constant::getNullValue(ptrT(ctx))),isrOk,isrDone);
+                    ctx.builder.SetInsertPoint(isrOk);
+                    emitReadValListElements(ctx,isr,ih,innerElemTn,parentFn,fname+"_il");
+                    ctx.builder.CreateCall(gJrFree(ctx),{isr});
+                    ctx.builder.CreateBr(isrDone);
+                    ctx.builder.SetInsertPoint(isrDone);
+                    ListImpl::push(ctx,listTgt,ih);
+                } else {
+                    llvm::Type* innerListTy = ctx.getLLVMType(elemTn);
+                    llvm::Type* innerElemTy = ctx.getLLVMType(innerElemTn);
+                    llvm::Value* ilAlloca = ctx.createEntryAlloca(innerListTy,"ila");
+                    ListImpl::initList(ctx,ilAlloca,innerElemTy,4);
+                    llvm::BasicBlock* isrOk = llvm::BasicBlock::Create(ctx.context,fname+"_isrok",parentFn);
+                    llvm::BasicBlock* isrDone = llvm::BasicBlock::Create(ctx.context,fname+"_isrdone",parentFn);
+                    ctx.builder.CreateCondBr(
+                        ctx.builder.CreateICmpNE(isr,llvm::Constant::getNullValue(ptrT(ctx))),isrOk,isrDone);
+                    ctx.builder.SetInsertPoint(isrOk);
+                    emitReadValListElements(ctx,isr,ilAlloca,innerElemTn,parentFn,fname+"_il");
+                    ctx.builder.CreateCall(gJrFree(ctx),{isr});
+                    ctx.builder.CreateBr(isrDone);
+                    ctx.builder.SetInsertPoint(isrDone);
+                    llvm::Value* ilVal = ctx.builder.CreateLoad(innerListTy,ilAlloca,"ilval");
+                    ListImpl::push(ctx,listTgt,ilVal);
+                }
             } else {
                 // list of primitives
                 llvm::Value* elem = emitReadArrElem(ctx,reader,fkey,idx,elemTn);
@@ -1009,7 +1083,7 @@ static llvm::Function* emitDeserializeList(CompilerContext& ctx,
     std::string fnName = "__aiml_deser_"+sanitize(listTn);
     if(auto* f=ctx.module.getFunction(fnName)) return f;
     std::string elemTn = listElem(listTn);
-    llvm::Type* elemTy = ctx.getLLVMType(elemTn);
+    llvm::Type* elemTy = listElemStrideTy(ctx, elemTn);  // §5.7 nested container element = ptr stride
     llvm::Type* listTy = ctx.getLLVMType(listTn);
 
     auto savedIP = ctx.builder.saveIP();
@@ -1059,23 +1133,41 @@ static llvm::Function* emitDeserializeList(CompilerContext& ctx,
         ctx.builder.SetInsertPoint(srDone);
     } else if(isListType(elemTn)){
         // list<list<T>> (any depth/struct): sub-reader for inner array, recurse
-        llvm::Type* innerListTy = ctx.getLLVMType(elemTn);
         std::string innerElemTn = listElem(elemTn);
-        llvm::Type* innerElemTy = ctx.getLLVMType(innerElemTn);
-        llvm::Value* ilAlloca = ctx.createEntryAlloca(innerListTy,"ila");
-        ListImpl::initList(ctx,ilAlloca,innerElemTy,4);
         llvm::Value* isr = ctx.builder.CreateCall(gJrArrSub(ctx),{reader,vk,idx},"isr");
-        llvm::BasicBlock* isrOk = llvm::BasicBlock::Create(ctx.context,"dl_isrok",fn);
-        llvm::BasicBlock* isrDone = llvm::BasicBlock::Create(ctx.context,"dl_isrdone",fn);
-        ctx.builder.CreateCondBr(
-            ctx.builder.CreateICmpNE(isr,llvm::Constant::getNullValue(ptrT(ctx))),isrOk,isrDone);
-        ctx.builder.SetInsertPoint(isrOk);
-        emitReadValListElements(ctx,isr,ilAlloca,innerElemTn,fn,"dl_il");
-        ctx.builder.CreateCall(gJrFree(ctx),{isr});
-        ctx.builder.CreateBr(isrDone);
-        ctx.builder.SetInsertPoint(isrDone);
-        llvm::Value* ilVal = ctx.builder.CreateLoad(innerListTy,ilAlloca,"ilval");
-        ListImpl::push(ctx,heap,ilVal);
+        if(ctx.memV3 && ctx.isMemV3ContainerHandle(elemTn)){
+            // spec/61 §5.7: nested inner list element = HANDLE. Heap-allocate, fill, push pointer.
+            llvm::Type* innerElemTy = listElemStrideTy(ctx, innerElemTn);
+            llvm::Function* nwh = ctx.getFunction("aiml_list_handle_new", ptrT(ctx), {});
+            llvm::Value* ih = ctx.builder.CreateCall(nwh,{},"deser_dlh");
+            ListImpl::initList(ctx,ih,innerElemTy,4);
+            llvm::BasicBlock* isrOk = llvm::BasicBlock::Create(ctx.context,"dl_isrok",fn);
+            llvm::BasicBlock* isrDone = llvm::BasicBlock::Create(ctx.context,"dl_isrdone",fn);
+            ctx.builder.CreateCondBr(
+                ctx.builder.CreateICmpNE(isr,llvm::Constant::getNullValue(ptrT(ctx))),isrOk,isrDone);
+            ctx.builder.SetInsertPoint(isrOk);
+            emitReadValListElements(ctx,isr,ih,innerElemTn,fn,"dl_il");
+            ctx.builder.CreateCall(gJrFree(ctx),{isr});
+            ctx.builder.CreateBr(isrDone);
+            ctx.builder.SetInsertPoint(isrDone);
+            ListImpl::push(ctx,heap,ih);
+        } else {
+            llvm::Type* innerListTy = ctx.getLLVMType(elemTn);
+            llvm::Type* innerElemTy = ctx.getLLVMType(innerElemTn);
+            llvm::Value* ilAlloca = ctx.createEntryAlloca(innerListTy,"ila");
+            ListImpl::initList(ctx,ilAlloca,innerElemTy,4);
+            llvm::BasicBlock* isrOk = llvm::BasicBlock::Create(ctx.context,"dl_isrok",fn);
+            llvm::BasicBlock* isrDone = llvm::BasicBlock::Create(ctx.context,"dl_isrdone",fn);
+            ctx.builder.CreateCondBr(
+                ctx.builder.CreateICmpNE(isr,llvm::Constant::getNullValue(ptrT(ctx))),isrOk,isrDone);
+            ctx.builder.SetInsertPoint(isrOk);
+            emitReadValListElements(ctx,isr,ilAlloca,innerElemTn,fn,"dl_il");
+            ctx.builder.CreateCall(gJrFree(ctx),{isr});
+            ctx.builder.CreateBr(isrDone);
+            ctx.builder.SetInsertPoint(isrDone);
+            llvm::Value* ilVal = ctx.builder.CreateLoad(innerListTy,ilAlloca,"ilval");
+            ListImpl::push(ctx,heap,ilVal);
+        }
     } else {
         llvm::Value* elem = emitReadArrElem(ctx,reader,vk,idx,elemTn);
         ListImpl::push(ctx,heap,elem);
