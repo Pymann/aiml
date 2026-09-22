@@ -1731,6 +1731,13 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                      srcPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
                          s->ir_alloca_inst ? s->ir_alloca_inst
                                            : ctx.ir_gen->wrap(s->alloca_inst)));
+                     // spec/61 §5 (memV3): the arg local's slot holds a POINTER to the handle; load it
+                     // so extend reads the real {size,cap,data} struct, not the handle-pointer bytes
+                     // (otherwise src looks empty → dst.len unchanged, test_list_builtins ext_len).
+                     if (ctx.memV3 && srcPtr && ctx.isMemV3ContainerHandle(s->typeName)) {
+                         auto* i8pH = llvm::PointerType::get(ctx.context, 0);
+                         srcPtr = ctx.builder.CreateLoad(i8pH, srcPtr, "extend_src_h");
+                     }
                  }
              }
              if (argTypeName.rfind("cascade<", 0) == 0 && !argTypeName.empty() && argTypeName.back() == '>')

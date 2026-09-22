@@ -366,7 +366,7 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
 
     // Classify the initializer.
     Expr* iv = decl->initialValue.get();
-    bool isShareVar = false, isCopy = false, isClone = false, isShareAt = false;
+    bool isShareVar = false, isCopy = false, isClone = false, isShareAt = false, isAdoptExpr = false;
     if (iv) {
         if (auto* ve = dynamic_cast<VariableExpr*>(iv)) {
             // A plain local (`a`) → resolveVariable + incref (isShareVar). A MEMBER access
@@ -375,6 +375,12 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
             // (decl:[loc, list<T>, mmm.tagsm] produced an empty/null list → crash on use).
             if (ve->name.find('.') != std::string::npos || ve->name.find('<') != std::string::npos)
                 isShareAt = true;
+            else if (ve->name.find('-') != std::string::npos)
+                // a SLICE expression (`lst-1-3`, `lst-2-`, `lst--2`) parses as a VariableExpr whose
+                // name carries dashes; it returns a FRESH owned handle → adopt (no incref). Without
+                // this it was misclassified isShareVar, resolveVariable("lst-1-3") failed → the local
+                // stayed null → crash on first use (test_list_slice).
+                isAdoptExpr = true;
             else
                 isShareVar = true;                    // decl:[b, list<T>, a] → SHARE (incref)
         } else if (dynamic_cast<AtExpr*>(iv)) {
@@ -469,6 +475,11 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
                                               : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)),
                                               ctx.builder.getInt64(elemSize),
                                               ctx.builder.getInt32(elemKind) }, "listh_copy");
+    } else if (isAdoptExpr) {
+        // spec/61 §5: a slice expression returns a FRESH owned handle (aiml_list_handle_new inside
+        // ListImpl::slice) → adopt the pointer directly, no incref.
+        IRValue* v = visitExpression(iv);
+        handle = v ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v)) : nullptr;
     } else if (iv && dynamic_cast<CallExpr*>(iv)) {
         // spec/61 §5 (memV3): init from a call that RETURNS a list → the callee handed us a handle
         // (moved). Use it directly; no fresh alloc, no incref (we own the returned rc).
