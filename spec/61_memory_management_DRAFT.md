@@ -660,6 +660,13 @@ So: **`at`/`get` = borrow** (ownership stays in the list), **`pop`/`take` = move
 way to get an owning `ptr<T>` back), **`remove` = release**. There is no verb that both keeps
 the element in the list *and* hands a second owner out — that would break unique ownership.
 
+> **Exception — a container-valued element** (`list<list<T>>`, `list<map<…>>`, `list<buffer>`, and
+> the analogous map values): the element is itself a refcounted **handle**, so `at`/`get` returns an
+> **owning handle** (incref), aliasing the same inner container — **not** a `ref` borrow. This is the
+> §5.7 rule and it governs container-valued elements; the "`at`/`get` = borrow" statement above
+> applies to the scalar / `string` / value-model / `ptr` / `shared` element classes in the table,
+> not to a nested container. (`pop`/`take` still moves the handle out; `remove` still decrefs.)
+
 **Reads by element kind (the two special cases).**
 - **Scalar element** (`list<i32>`, `array<f32:N>`, …): `at`/`get` returns the scalar **by
   value** (a copy of the number), not a `ref` — a scalar is a value (§2.1 Class 1). `set`(i, v)
@@ -786,14 +793,24 @@ discipline as `ptr<T>` (§6, §9.1):
 # no `free` written → released automatically at scope exit (§9.1). `buf.free` = optional early.
 ```
 
-### 5.7 Nested containers — a container as an element / key / value
+### 5.7 Nested containers — a container as an element / value
 
-A container used **as an element, key or value of another container** is the **same refcounted
+A container used **as an element or value of another container** is the **same refcounted
 handle** it is as a local, a field, or a return value — never an inline value block. So the
-element/value slot of a `list<list<T>>`, `list<map<K:V>>`, `map<K:list<V>>`, `map<K:map<…>>`,
-`buffer<list<…>>` (etc.) holds a **handle** (a target-pointer-sized slot: 8 bytes on 64-bit,
+element/value slot of a `list<list<T>>`, `list<map<K:V>>`, `map<K:list<V>>`, `map<K:map<…>>`
+(etc.) holds a **handle** (a target-pointer-sized slot: 8 bytes on 64-bit,
 4 bytes on wasm32 — the element **stride is the target pointer size**, never a fixed 8 and never
 the inner `{size,cap,data}` struct inlined). This is a direct consequence of §6.1's Class-3 rule:
+
+> **Not covered here:** a **`buffer` with container content.** `buffer` (spec/11) is an **untyped
+> byte buffer**: `buffer.write(v, list<…>)` *serialises* the value into bytes (a deep copy), it does
+> **not** store a typed owning handle slot — so `buffer<list<…>>` is **not** a nested-handle
+> container and this section does not apply to it. A `list<buffer>` / `map<K:buffer>` is fine: its
+> element **is** a `buffer` handle (Class-3), released by decref like any other container element.
+> A **container as a map _key_** is likewise out of scope: it needs a defined content-equality and
+> hash (handle-identity keys break under `clone`; content keys break under mutation), which this
+> memory model does not specify — map keys stay the already-defined key types (`string`, integer,
+> enum). Only element and **value** positions get the nested-handle contract below.
 the outer container "at rc 0 releases each element/key/value **by its own class**" — an inner
 `list`/`map`/`buffer` element is released by **decref**, which only makes sense if the slot holds a
 handle. There is no separate "inline nested container" representation; the OFF path is out of scope.
@@ -805,7 +822,7 @@ slot is just another place an owning reference lives):
 |---|---|
 | `push(inner)` / `insert` | store the handle. A **copy** source (aliasing) → **incref** (the container co-owns); a genuine **move** source → take over the source's owning reference (no incref, source moved-out). |
 | `at(outer, i)` **or** `outer.get(i)` read as a `list<T>` **value** | load the handle and **secure an owning reference** for the result value (incref) — the result is an owning handle, aliasing the same inner container (mutation is visible in the outer, §5.4). The `at` and `.get` accessors are **identical** for a nested-container element: both load the handle at pointer stride and incref when bound; neither may fall back to the inline-struct getter (which would read the element at struct stride and return garbage). |
-| `idx(outer, i, inner)` (replace) | **secure-before-release** (§5.5): incref/adopt the new handle, **decref the old** slot handle, then store the new handle. A no-op **only** when the slot already holds exactly the same handle — not blanket for the write-back pattern. |
+| `idx(outer, i, inner)` (replace) | **secure-before-release** (§5.5): incref/adopt the new handle, **decref the old** slot handle, then store the new handle. **Full no-op only for the write-back pattern** — the source is the value that was just read from *this same slot* (old handle == new handle *and* same aliasing reference), so nothing is added or removed. A **move** source that merely happens to hold the same handle value (a *different* slot with its **own** owning reference) is **not** a no-op: the move must still **clear the source slot** and **decref the surplus reference** so the ownership count stays balanced. Identity of the *slot* skips the work; identity of the *handle value* alone does not. |
 | `pop(outer)` / `take` | **transfer** the slot's owning reference into the result: remove it from the container and hand back its existing owning handle. **No decref** of the returned element — ownership moves to the caller. |
 | `remove(outer, i)` / replace-old / **outer drop** | **decref** the inner handle; its recursive drop (releasing the inner container's own elements + block) runs only at **its** rc 0. |
 

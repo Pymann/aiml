@@ -1,8 +1,13 @@
 # static-check: off
 # TIER: T2
-# Spec 61 §5.4: `store: [out_ptr, view]` where Model is a VALUE model with heap fields must DEEP-COPY
-# (find_*_entry out-param fill). `at`/member views alias the container element's field buffers; a
-# shallow store makes the out-target share them → both free them (double-free, test_mana_pick path).
+# Spec 61 §7 + §8: `store: [ref<Model>, view]` where Model is a VALUE model with heap fields
+# (find_*_entry / copy-out out-parameter fill) is a member-wise VALUE ASSIGNMENT = SHARE: each
+# string/container field is INCREF'd, so the out-target and the container element co-own one heap
+# with a balanced refcount (each side's drop = one decref → freed exactly once; no double-free, no
+# leak). The out-parameter is `ref<Model>` (a borrow, §8) — a `ptr<Model>` parameter would MOVE
+# ownership (§8), which this out-fill must not do. Deep independence would require `clone` (§5.1),
+# NOT a plain store. This probe checks the decisive ALIASING behaviour (a mutation through the
+# out-target is visible in the container element), not just field contents.
 - model:
     name: PlayerLike
     fields:
@@ -14,11 +19,11 @@
       - [players, list<PlayerLike>]
 - def:
     name: copy_out
-    args: [[mat, ref<MatchLike>], [idx, i32], [out_p, ptr<PlayerLike>]]
+    args: [[mat, ref<MatchLike>], [idx, i32], [out_p, ref<PlayerLike>]]
     return: i32
     body:
-      - decl: [view, PlayerLike, { at: [mat.players, idx] }]
-      - store: [out_p, view]
+      - decl: [view, PlayerLike, { at: [mat.players, idx] }]   # ref borrow into the element
+      - store: [out_p, view]                                   # §7 SHARE (incref fields)
       - return: 1
 - def:
     name: main
@@ -31,9 +36,16 @@
       - call: [mtch.players.push, alice]
       - decl: [grabbed, PlayerLike]
       - decl: [okk, i32, { call: [copy_out, mtch, 0, {'&': [grabbed]} ] }]
+      # contents visible through the shared handles
       - decl: [amt, i32, { call: [grabbed.purse.get, "gold"] }]
       - decl: [nca, i32, { call: [grabbed.cards.len] }]
       - if: { condition: { neq: [amt, 7] }, then: [{ print: ["FAIL store-view: amt=${amt}, expected 7"] }, { return: 1 }] }
       - if: { condition: { neq: [nca, 1] }, then: [{ print: ["FAIL store-view: ncards=${nca}, expected 1"] }, { return: 1 }] }
+      # ALIASING: the store SHARED the element's cards handle → a push through `grabbed` is visible
+      # in the container element (a deep-copy would NOT show this; that is the point of §7 share).
+      - call: [grabbed.cards.push, "king"]
+      - decl: [chk, PlayerLike, { at: [mtch.players, 0] }]     # ref borrow into the same element
+      - decl: [ncb, i32, { call: [chk.cards.len] }]
+      - if: { condition: { neq: [ncb, 2] }, then: [{ print: ["FAIL alias: element cards.len=${ncb}, expected 2 (store must SHARE, not deep-copy)"] }, { return: 1 }] }
       - print: ["PASS 45 store_view_outparam"]
       - return: 0
