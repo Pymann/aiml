@@ -780,10 +780,16 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Value* objPtr  = ctx.builder.CreateLoad(i8p, objField,  "fp_obj");
             llvm::Value* vtblPtr = ctx.builder.CreateLoad(i8p, vtblField, "fp_vtbl");
 
-            // Build function type from interface signature.
+            // Build function type from interface signature — MUST mirror visitFunction's lowering
+            // (and the interface conformance check) so the indirect signature matches the real vtable
+            // function: a memV3 container / refcount-model RETURN is a handle pointer (i8p), not the
+            // inline struct. Otherwise a list<string> return took the >8-byte struct/sret path here
+            // while the callee returned i8p → garbage data pointer (test_iface_list_return*).
             llvm::Type* retTy = nullptr;
             if (m.returnType.empty() || m.returnType == "void")
                 retTy = llvm::Type::getVoidTy(ctx.context);
+            else if (ctx.isRefcountModel(m.returnType) || ctx.isMemV3ContainerHandle(m.returnType))
+                retTy = i8p;
             else {
                 IRType* irt = ctx.ir_gen->resolveType(m.returnType);
                 retTy = irt ? static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(irt)) : i8p;
@@ -791,7 +797,12 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             std::vector<llvm::Type*> paramTys;
             paramTys.push_back(i8p); // this
             for (const auto& a : m.args) {
-                IRType* irt = ctx.ir_gen->resolveType(a.second);
+                const std::string& at = a.second;
+                bool byref = at.rfind("list<", 0) == 0 || at.rfind("map<", 0) == 0
+                             || at == "buffer" || at.rfind("buffer<", 0) == 0
+                             || at.rfind("cascade<", 0) == 0;
+                if (byref || ctx.isRefcountModel(at)) { paramTys.push_back(i8p); continue; }
+                IRType* irt = ctx.ir_gen->resolveType(at);
                 paramTys.push_back(irt ? static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(irt)) : i8p);
             }
             auto* fnTy = llvm::FunctionType::get(retTy, paramTys, false);
