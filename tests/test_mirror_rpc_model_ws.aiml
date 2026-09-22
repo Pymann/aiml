@@ -94,12 +94,12 @@
                                                             - set: [player.score, 807]
                                                           else:
                                                             - if:
-                                                                condition: { neq: [cast.tags-0, "spell"] }
+                                                                condition: { neq: [{ at: [cast.tags, 0] }, "spell"] }
                                                                 then:
                                                                   - set: [player.score, 808]
                                                                 else:
                                                                   - if:
-                                                                      condition: { neq: [cast.tags-1, "fire"] }
+                                                                      condition: { neq: [{ at: [cast.tags, 1] }, "fire"] }
                                                                       then:
                                                                         - set: [player.score, 809]
                                                                       else:

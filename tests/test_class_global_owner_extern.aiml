@@ -1,6 +1,6 @@
 # Test: when one file owns the class instance global (no extern) and other
 # files import + extern-decl it, the defaults from the class declaration
-# ARE applied by the owner's Phase-2 init.
+# ARE applied by the owner's { at: [Phase, 2] } init.
 #
 # This is the "right" DataCreatures pattern: client_main owns g_app, panels
 # extern-reference it.  The previous all-extern setup wiped the class

@@ -19,14 +19,14 @@
 
 # ── 2. Index read (data-i syntax) ──────────────────────────────────────────
 
-- decl: [var_v0, f32, data-0]
+- decl: [var_v0, f32, { at: [data, 0] }]
 - print: ["data-0: ${var_v0}"]
 - if:
     condition: { "&&": [{ ">": [var_v0, 0.99] }, { "<": [var_v0, 1.01] }] }
     then: [{ set: [pass, { +: [pass, 1] }] }]
     else: [{ set: [fail, { +: [fail, 1] }] }, { print: ["FAIL read index 0"] }]
 
-- decl: [var_v1, f32, data-1]
+- decl: [var_v1, f32, { at: [data, 1] }]
 - print: ["data-1: ${var_v1}"]
 - if:
     condition: { "&&": [{ ">": [var_v1, 2.49] }, { "<": [var_v1, 2.51] }] }
@@ -45,8 +45,8 @@
 
 # ── 4. Index write (set: [data-i, val]) ────────────────────────────────────
 
-- set: [data-0, 9.99]
-- decl: [var_w0, f32, data-0]
+- idx: [data, 0, 9.99]
+- decl: [var_w0, f32, { at: [data, 0] }]
 - print: ["after set data-0: ${var_w0}"]
 - if:
     condition: { "&&": [{ ">": [var_w0, 9.98] }, { "<": [var_w0, 10.0] }] }
@@ -57,7 +57,7 @@
 
 - decl: [var_wi, i32, 1]
 - set: [data-var_wi, 7.77]
-- decl: [var_w1, f32, data-1]
+- decl: [var_w1, f32, { at: [data, 1] }]
 - print: ["after set data-${var_wi}: ${var_w1}"]
 - if:
     condition: { "&&": [{ ">": [var_w1, 7.76] }, { "<": [var_w1, 7.78] }] }
@@ -107,8 +107,8 @@
 - set: [flat-t2_3, 4.0]
 
 # Read back token 0
-- decl: [var_r0, f32, flat-0]
-- decl: [var_r1, f32, flat-1]
+- decl: [var_r0, f32, { at: [flat, 0] }]
+- decl: [var_r1, f32, { at: [flat, 1] }]
 - print: ["token0: [${var_r0}, ${var_r1}, ...]"]
 - if:
     condition: { "&&": [{ ">": [var_r0, 0.09] }, { "<": [var_r0, 0.11] }] }
@@ -144,10 +144,10 @@
 
 - decl: [var_lr, f32, 0.01]
 - decl: [grad0, f32, 2.0]
-- decl: [cur, f32, flat-0]
+- decl: [cur, f32, { at: [flat, 0] }]
 - decl: [updated, f32, { "-": [cur, { "*": [var_lr, grad0] }] }]
-- set: [flat-0, updated]
-- decl: [after_sgd, f32, flat-0]
+- idx: [flat, 0, updated]
+- decl: [after_sgd, f32, { at: [flat, 0] }]
 - print: ["after SGD: 0.1 - 0.01*2.0 = ${after_sgd}"]
 - if:
     condition: { "&&": [{ ">": [after_sgd, 0.079] }, { "<": [after_sgd, 0.081] }] }

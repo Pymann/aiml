@@ -161,8 +161,8 @@
       - call: [client.update]
       - set: [poll_i, { +: [poll_i, 1] }]
 
-- decl: [pz1, ParticipantState, replica.participants-1]
-- decl: [zz0, ZoneState, replica.zones-0]
+- decl: [pz1, ParticipantState, { at: [replica.participants, 1] }]
+- decl: [zz0, ZoneState, { at: [replica.zones, 0] }]
 - print: ["poll-mut: var_p1 var_hp=${pz1.var_hp} active=${pz1.is_active} zone0=${zz0.card_count} cards=${replica.card_instances.len}"]
 
 - if:

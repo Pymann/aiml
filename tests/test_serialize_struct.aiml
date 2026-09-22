@@ -28,7 +28,7 @@
       - decl: [var_c2, TestCard]
       - set: [var_c2, {call: [sys.deserialize, json2, "TestCard"]}]
       - print: ["card2.name=${var_c2.name} abilities=${var_c2.abilities.len}"]
-      - decl: [var_ab, Ability, var_c2.abilities-0]
+      - decl: [var_ab, Ability, { at: [var_c2.abilities, 0] }]
       - print: ["var_ab.cost_text=${var_ab.cost_text}"]
       - print: ["var_ab.activation_cost.len=${var_ab.activation_cost.len}"]
       - print: ["var_ab.trigger.len=${var_ab.trigger.len}"]

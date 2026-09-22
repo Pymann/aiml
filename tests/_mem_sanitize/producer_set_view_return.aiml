@@ -62,7 +62,7 @@
             - while:
                 condition: { lt: [idx, iters] }
                 body:
-                  - decl: [brd, Board, { call: [<.make_board, idx] }]   # owned, kind-0 drop
+                  - decl: [brd, Board, { call: [<.make_board, idx] }]   # owned, { at: [kind, 0] } drop
                   - decl: [aent, Zen, { call: [<.load_entry, {'&': [brd]}] }]  # owned producer return (SHARES brd)
                   - set: [acc, { +: [acc, aent.tags.len] }]
                   - set: [idx, { +: [idx, 1] }]

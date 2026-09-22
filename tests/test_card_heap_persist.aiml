@@ -92,7 +92,7 @@
           then:
             - print: ["FAIL got.active_abilities.len=${got.active_abilities.len}"]
             - call: [sys.exit, 1]
-      - decl: [var_ab, ActiveAbility, got.active_abilities-0]
+      - decl: [var_ab, ActiveAbility, { at: [got.active_abilities, 0] }]
       - if:
           condition: { eq: [{ eq: [var_ab.cost_text, "2 Fire"] }, 0] }
           then:

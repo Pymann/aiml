@@ -1,14 +1,14 @@
 # static-check: off
 # TIER: T2
 # CONSTRUCT: the remaining container/aggregate built-ins and their disciplines (§2.1, §5).
-# COVERS: array<T:N> (inline value, element-recursive drop), dyn_array<T> (Class-3 rc),
-#         cascade<X> (reuses list<i32>), map<K:V> (Class-3), buffer (Class-3).
+# COVERS: array<T:N> (inline value, element-recursive drop), dyn_array<T> ({ at: [Class, 3] } rc),
+#         cascade<X> (reuses list<i32>), map<K:V> ({ at: [Class, 3] }), buffer ({ at: [Class, 3] }).
 #         Symbols: array<T:N>, dyn_array<T>, cascade<X>, map<K:V>, buffer.
 - def:
     name: main
     return: i32
     body:
-      # array<i32:N> — inline value block (Class-1 storage), value-copied element-wise
+      # array<i32:N> — inline value block ({ at: [Class, 1] } storage), value-copied element-wise
       - decl: [xsarr, "array<i32:4>"]
       - idx: [xsarr, 0, 10]                            # element write = idx: (not set:[{at}])
       - idx: [xsarr, 1, 20]
@@ -24,16 +24,16 @@
       - idx: [buf, 1, 2]
       - if: { condition: { neq: [{ at: [buf, 1] }, 2] }, then: [{ print: ["FAIL dyn_array"] }, { return: 1 }] }
       - call: [buf.free]
-      # map<K:V> — Class-3 rc container; get_copy = independent element copy (§5.4)
+      # map<K:V> — { at: [Class, 3] } rc container; get_copy = independent element copy (§5.4)
       - decl: [itm, "map<string:i32>"]
       - call: [itm.put, "kdx", 7]
       - if: { condition: { neq: [{ call: [itm.get, "kdx"] }, 7] }, then: [{ print: ["FAIL map"] }, { return: 1 }] }
       - decl: [kcopy, i32, { call: [itm.get_copy, "kdx"] }]   # get_copy → independent copy of the value
       - if: { condition: { neq: [kcopy, 7] }, then: [{ print: ["FAIL get_copy=${kcopy}"] }, { return: 1 }] }
-      # buffer — Class-3 mutable byte buffer
+      # buffer — { at: [Class, 3] } mutable byte buffer
       - decl: [bytes, buffer]
       - call: [bytes.alloc, 16]
-      # cascade<X> — reuses the list<i32> layout (Class-3, same rc/aliasing discipline)
+      # cascade<X> — reuses the list<i32> layout ({ at: [Class, 3] }, same rc/aliasing discipline)
       - decl: [eff, "cascade<Effect>"]                 # Effect is a top-level cascade type
       - decl: [row, "list<i32>"]
       - call: [row.push, 3]

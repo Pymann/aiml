@@ -1,5 +1,5 @@
 # spec/61: a bare `list<T>` / `map` returned by an `owns_return` (producer) function is a
-# FRESH independent container the CALLER owns → the caller's local must be dropped (kind-2) at
+# FRESH independent container the CALLER owns → the caller's local must be dropped ({ at: [kind, 2] }) at
 # scope exit, exactly like a value-model producer result. TWO bugs combined to leak it (the
 # 9rooms DeckService/active_match_ids per-tick list leak):
 #   1. freshOwned + the list-drop registration only accepted the NO-INIT list case, so a

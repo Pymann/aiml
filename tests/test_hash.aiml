@@ -1,7 +1,7 @@
-# Tests für hash namespace: SHA-256/512, SHA-3, Keccak-256, RIPEMD-160, BLAKE2, MD5, CRC32, HMAC
+# Tests für hash namespace: { at: [SHA, 256] }/512, { at: [SHA, 3] }, { at: [Keccak, 256] }, { at: [RIPEMD, 160] }, BLAKE2, MD5, CRC32, HMAC
 # Expected exit code: 0
 
-# ── Phase A: SHA-256 / SHA-512 ─────────────────────────────────────────────
+# ── Phase A: { at: [SHA, 256] } / { at: [SHA, 512] } ─────────────────────────────────────────────
 
 - decl: [h256, string, { call: [hash.sha256, "hello world"] }]
 - print: ["SHA-256: ${h256}"]
@@ -15,13 +15,13 @@
 - print: ["SHA-256(empty): ${hempty}"]
 # expected: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 
-# ── Phase B: SHA-3-256 ────────────────────────────────────────────────────
+# ── Phase B: { call: [SHA.slice, 3, 256] } ────────────────────────────────────────────────────
 
 - decl: [var_h3, string, { call: [hash.sha3_256, "abc"] }]
 - print: ["SHA3-256(abc): ${var_h3}"]
 # expected: 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532
 
-# ── Phase C: Keccak-256 (Ethereum-compatible) ─────────────────────────────
+# ── Phase C: { at: [Keccak, 256] } (Ethereum-compatible) ─────────────────────────────
 
 - decl: [kec, string, { call: [hash.keccak256, ""] }]
 - print: ["Keccak-256(empty): ${kec}"]
@@ -31,7 +31,7 @@
 - print: ["Keccak-256(abc): ${kec2}"]
 # expected: 4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45
 
-# ── Phase D: RIPEMD-160 ───────────────────────────────────────────────────
+# ── Phase D: { at: [RIPEMD, 160] } ───────────────────────────────────────────────────
 
 - decl: [rmd, string, { call: [hash.ripemd160, "hello world"] }]
 - print: ["RIPEMD-160: ${rmd}"]

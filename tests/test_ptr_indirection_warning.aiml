@@ -1,7 +1,7 @@
 # ExpectedStderr: over-indirected
 # FEATURE: pointer-indirection mismatch (spec/49 §17).  A call argument whose
 # SOURCE pointer-depth EXCEEDS the parameter's declared depth (e.g. `{'&': [p]}`
-# where p is already a ptr → depth 2 into a depth-1 param) is over-indirected —
+# where p is already a ptr → depth 2 into a { at: [depth, 1] } param) is over-indirected —
 # the callee dereferences too few levels and reads/writes a bogus address.  The
 # compiler emits a WARNING (not an error; the program still compiles + runs).
 # Under-indirection (value → ptr param) is the legitimate implicit by-ref pass

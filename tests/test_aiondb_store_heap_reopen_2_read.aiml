@@ -46,14 +46,14 @@
             - print: ["FAIL store_heap_reopen_read_deps_len=${got.dependencies.len}"]
             - call: [sys.exit, 1]
       - if:
-          condition: { eq: [{ eq: [got.dependencies-0, "stdio"] }, 0] }
+          condition: { eq: [{ eq: [{ at: [got.dependencies, 0] }, "stdio"] }, 0] }
           then:
-            - print: ["FAIL store_heap_reopen_read_dep0=${got.dependencies-0}"]
+            - print: ["FAIL store_heap_reopen_read_dep0=${ { at: [got.dependencies, 0] } }"]
             - call: [sys.exit, 1]
       - if:
-          condition: { eq: [{ eq: [got.dependencies-1, "math"] }, 0] }
+          condition: { eq: [{ eq: [{ at: [got.dependencies, 1] }, "math"] }, 0] }
           then:
-            - print: ["FAIL store_heap_reopen_read_dep1=${got.dependencies-1}"]
+            - print: ["FAIL store_heap_reopen_read_dep1=${ { at: [got.dependencies, 1] } }"]
             - call: [sys.exit, 1]
 
       - print: ["AionDB store heap reopen read PASS"]

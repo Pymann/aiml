@@ -1,4 +1,4 @@
-# Tests for Spec-45: Heap Serialization (typed Kv + mirror typed register)
+# Tests for { at: [Spec, 45] }: Heap Serialization (typed Kv + mirror typed register)
 # Verifies correct encode/decode of structs with heap fields (string, list<string>).
 # Expected exit code: 0
 

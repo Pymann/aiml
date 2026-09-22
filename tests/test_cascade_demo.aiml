@@ -232,7 +232,7 @@
       - call: [engine.draw_scene]
       - print: ["── after pop: N=${ability.effects.len} effects ──"]
 
-      # Simulate a user push (add a Draw-2 draw_card).
+      # Simulate a user push (add a { at: [Draw, 2] } draw_card).
       - decl: [eff_new, list<i32>]
       - call: [eff_new.push, 1]
       - call: [eff_new.push, 1]
