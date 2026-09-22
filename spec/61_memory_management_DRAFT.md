@@ -16,7 +16,7 @@ Every abbreviation used in this document, spelled out once here:
 - **UAF** — *use-after-free*: reading or writing memory that has already been freed.
 - **UB** — *undefined behaviour*: the language gives no guarantee; may crash, corrupt, or
   appear to work. AIML never *silently* relies on UB — it diagnoses the visible cases.
-- **handle** — a small value (typically an 8-byte pointer) that refers to a heap resource;
+- **handle** — a small value (a target-pointer-sized slot: 8 bytes on 64-bit, 4 on wasm32) that refers to a heap resource;
   copying a handle does **not** copy the resource.
 - **ptr\<T\>** — *pointer to a T*: a **unique owning** handle to a heap `T`. There is at most
   **one** `ptr` owner; assigning/passing/pushing it is a **move** (the source becomes
@@ -195,18 +195,19 @@ are **not** built-ins and follow the model rules (§3 value, §6/§6.2 heap `ptr
 copy), not this table. `void` is not a value. If a new built-in is added, place it with the
 rule above and add a row here.
 
-**Cross-cutting fact (verified).** **No built-in type shares-by-refcount on assignment today.**
-The rc machinery (`isRefcountModel`, `context.h`) applies **only** to user `model` classes
-(`isModel && !isBuiltin && hasHeapFields`) under the `modelRefcount` flag. The rc discipline
-this spec assigns to **Class 2/3/5** is therefore **proposed, not current**.
-- **`string` — verified: DEEP-COPY (dup) today, not share.** `set: [a, b]` / `decl: [a,
-  string, b]` call `aiml_str_assign_copy` / `aiml_str_dup` (`string_runtime.cpp:71-125`,
-  `ast_compiler_stmt.cpp:856-872, 1606-1631`) — a fresh buffer per assignment. An 8-byte
-  `AimlStrHeader{magic, refcount}` **does** exist (`string_runtime.cpp:34-49`) with working
-  `aiml_str_incref`/`decref` and an immortal `""` (rc `0xFFFFFFFF`) — but it is used only for
-  UAF-protection of serializer-decoded strings, **not** for share-on-assign. §4's
-  share-by-incref is the **target**; the plumbing exists, only the assign path must flip from
-  `dup` to `incref` (see §12 — a bigger change than just `push`).
+**Cross-cutting fact (implemented under memV3).** The rc discipline this spec assigns to
+**Class 2/3/5** is the **default memory model** (`AIML_MEM_V3`, now the compiler default). Under it:
+- **`string` — share-by-incref.** `set: [a, b]` / `decl: [a, string, b]` **incref** the shared
+  buffer (the `AimlStrHeader{magic, refcount}` in `string_runtime.cpp`), not `aiml_str_dup` a
+  fresh copy; a string literal / the immortal `""` (rc `0xFFFFFFFF`) has no header and its drop is
+  a no-op (§4.6). This is §4's share-by-incref, implemented.
+- **`list`/`map`/`buffer` (Class 3) — refcounted handles** (§5 Option B): assignment increfs the
+  handle (aliasing), scope-exit decrefs, freed at rc 0. Container **fields** and nested container
+  **elements/values** are handles too (§5.7).
+- **user `model` with heap fields** — member-wise share per §7 (§2.1 rows 1′/handle).
+
+(The legacy pre-memV3 path — deep-copy strings, inline value containers — is no longer maintained;
+`AIML_MEM_V3=0` still selects it for A/B comparison only.)
 
 ### 2.2 The three allocation forms (where an instance lives)
 
@@ -268,7 +269,7 @@ value (which copies). `ref<T>` is the right tool for in-place mutation.
 
 ## 4. Strings — refcounted immutable handles
 
-A `string` value is an 8-byte **handle** to a reference-counted, immutable byte buffer on
+A `string` value is a **target-pointer-sized handle** (8 bytes on 64-bit, 4 on wasm32) to a reference-counted, immutable byte buffer on
 the heap.
 
 Rules:
@@ -310,7 +311,7 @@ others are **containers** (Class 3, §5), the **shared resources** (Class 5), an
 ## 5. Containers — `list<T>`, `map<K:V>`, `buffer`
 
 **Decision (was §11.1): containers are refcounted shared handles (reference types).** A
-`list`/`map`/`buffer` value is an 8-byte **handle** to a heap block `{rc, count, capacity,
+`list`/`map`/`buffer` value is a **target-pointer-sized handle** (8 bytes on 64-bit, 4 on wasm32) to a heap block `{rc, count, capacity,
 data→buffer}`. This is the Class-3 discipline of §2.1.
 
 > **Implementation status (gate `AIML_MEM_V3`, branch `mem-v3-compiler`).** Option B is
@@ -332,8 +333,9 @@ data→buffer}`. This is the Class-3 discipline of §2.1.
 > an optional early release (probe 21). Acceptance probes 03,17,18,19,20 (Class-3) + 21 (Class-4
 > dyn_array). The OFF/deployed path keeps the inline value struct (byte-identical).
 >
-> **Nested containers (§5.7):** a container used as an **element/key/value** of another container
-> is the same handle (a pointer-sized slot), not an inlined `{size,cap,data}` struct — required by
+> **Nested containers (§5.7):** a container used as an **element or value** of another container
+> (a container **key** is out of scope, §5.7) is the same handle (a pointer-sized slot), not an
+> inlined `{size,cap,data}` struct — required by
 > the §6.1 Class-3 "release each element by its own class (decref)" rule. `AIML_TD_LIST_PTR`/
 > `_MAP_PTR`/`_BUFFER_PTR` descriptors are emitted for nested element slots exactly as for fields.
 
@@ -599,9 +601,16 @@ The per-class contract:
       passes; a `send` of a value the analysis cannot prove unique is a **compile error** with the
       fix suggested (make members fresh, or use the escape / `clone`).
     - **`send_unique(v)` (runtime escape):** for a value the author knows is exclusive but the
-      static analysis cannot prove, `send_unique` performs a **runtime check** that every node's
-      rc == 1 (and no cross-thread reach) and moves it, else **traps**. A small runtime cost, no
-      clone.
+      static analysis cannot prove, `send_unique` performs a **runtime check that every node's
+      strong rc == 1** and moves it, else **traps**. A small runtime cost, no clone.
+      **Scope of the runtime check (decided):** the rc==1 test covers **strong ownership only**. A
+      **weak `ref<T>` is not counted** (§5.2), so RC **cannot** detect an *incoming* borrow into the
+      sent subgraph at runtime — `send_unique` therefore does **not** waive the **weak-ref-closed**
+      requirement below: borrow-freedom (no outstanding `ref` into or out of the subgraph) stays a
+      **static** guarantee, enforced by the affine/uniqueness pass at the `send` site, for both the
+      static and the `send_unique` paths. `send_unique` only escapes the *strong-uniqueness* proof,
+      never the weak-ref-closure check. (There is no runtime borrow registry; adding one — to make
+      incoming borrows runtime-detectable — is explicitly out of scope for this model.)
   - **Weak-ref-closed is required (binding).** The sent subgraph must contain **no `ref<T>`
     pointing at an object left behind in the sender** — an outbound weak edge would let the
     receiver reach sender-thread state (concurrent access + lifetime hazard). Such an edge is a
@@ -660,12 +669,34 @@ So: **`at`/`get` = borrow** (ownership stays in the list), **`pop`/`take` = move
 way to get an owning `ptr<T>` back), **`remove` = release**. There is no verb that both keeps
 the element in the list *and* hands a second owner out — that would break unique ownership.
 
-> **Exception — a container-valued element** (`list<list<T>>`, `list<map<…>>`, `list<buffer>`, and
-> the analogous map values): the element is itself a refcounted **handle**, so `at`/`get` returns an
-> **owning handle** (incref), aliasing the same inner container — **not** a `ref` borrow. This is the
-> §5.7 rule and it governs container-valued elements; the "`at`/`get` = borrow" statement above
-> applies to the scalar / `string` / value-model / `ptr` / `shared` element classes in the table,
-> not to a nested container. (`pop`/`take` still moves the handle out; `remove` still decrefs.)
+**"`at`/`get` = borrow" is shorthand for the pointer/model cases only — read the table per class:**
+
+| Element class | What `at`/`get` yields | Ownership |
+|---|---|---|
+| **scalar** (`i32`, `f32`, …) | the number **by value** (a copy) | no borrow, no handle — a value |
+| **`string`** | the **owning string handle** (incref) | co-owns the referent; balanced by its own drop |
+| **container** (`list`/`map`/`buffer` element, §5.7) | the **owning container handle** (incref) | co-owns; aliases the inner container |
+| **`ptr<T>` / `shared<T>` / value-`Model`** | a **`ref<T>` borrow** into the slot | the container keeps ownership; never moves out |
+
+So the "borrow" reading is exact **only** for the `ptr`/`shared`/value-model cases; a **scalar** is a
+value, and a **string** or **container** element is an **owning handle** (incref), not a borrow.
+(`pop`/`take` still moves the element out of the slot; `remove` still decrefs.)
+
+**Materialisation of a value-model read (the binding decides).** `at`/`get` on a `list<Model>`
+element yields a **borrow-view** of the slot; what the binding does with it is fixed by the
+**declared target type**, not by the accessor:
+
+- **`decl: [x, Model, { at: … }]`** — bind to a **value `Model`** → **materialise an owning
+  value-copy**: member-wise per §7 (each string/container/`shared` field **incref'd**, scalars
+  copied). `x` is independent of later list growth/reallocation and drops its own references at
+  scope exit. **Forbidden if `Model` is move-only** (a `ptr`/resource field, §7) — a copy would
+  duplicate a unique owner; use `ref<Model>` (borrow) or `clone`.
+- **`decl: [x, ref<Model>, { at: … }]`** — bind to **`ref<Model>`** → keep the **borrow** (no
+  incref, not freed through); invalidated by list growth or an external drop (below). This is the
+  only form allowed for a move-only model.
+
+The `store: [ref<Model>, view]` out-param fill (§7) is the same materialise-by-share rule applied
+through a borrow target: bit-copy + retain (incref fields).
 
 **Reads by element kind (the two special cases).**
 - **Scalar element** (`list<i32>`, `array<f32:N>`, …): `at`/`get` returns the scalar **by
@@ -711,6 +742,26 @@ side — the container **or** an external owner of the referent:
 Using an invalidated borrow is a use-after-free / dangling error (§10), diagnosed where locally
 visible. This corrects **Spec 10** (collections) **and Spec 52** (`array<T:N>`), which still
 describe element access as a pointer-copy (§12).
+
+**Bulk & derived operations — `extend`, slice (governs Spec 10).** These carry the **same per-class
+ownership contract** as the single-element verbs above; Spec 10 lists them but leaves ownership to
+this section:
+
+- **`dst.extend(src)`** appends each element of `src` **by its element class** — exactly `push`
+  applied element-wise: **scalar** copied by value; **`string`** incref'd (shared); **container**
+  handle incref'd (shared, §5.7); **`shared<T>`** incref'd. **`list<ptr<T>>` (move-only element):
+  a duplicating `extend` is a compile error** — it would give two owners of one unique box; move
+  the elements individually (`pop`+`push`) or `clone` the source first. `src` is **unchanged**
+  (read-only, borrowed for the duration); **self-extend** (`x.extend(x)`) is defined and
+  realloc-safe (snapshot the length first). The element **type must match** (`list<U>` into
+  `list<T>` with `U≠T` is a compile error, Spec 10).
+- **A slice `x[a:b]`** produces a **new, independent container** (a fresh handle, its own spine),
+  **not** a view: its elements are filled **by element class** exactly as `extend` above (scalars
+  copied; strings/containers/`shared` incref'd; **`list<ptr<T>>` cannot be sliced** — duplicating
+  unique owners — use `clone` or move). Mutating the slice's spine (push/remove) does not affect
+  the source; mutating a **shared element through the slice** is visible in the source (they
+  co-own that element). A slice is thus a shallow **`copy`** of the selected range (§5.1), never a
+  borrow of the source's buffer.
 
 ### 5.5 Assignment order — secure-before-release (self-assignment & aliased sources)
 
@@ -822,7 +873,7 @@ slot is just another place an owning reference lives):
 |---|---|
 | `push(inner)` / `insert` | store the handle. A **copy** source (aliasing) → **incref** (the container co-owns); a genuine **move** source → take over the source's owning reference (no incref, source moved-out). |
 | `at(outer, i)` **or** `outer.get(i)` read as a `list<T>` **value** | load the handle and **secure an owning reference** for the result value (incref) — the result is an owning handle, aliasing the same inner container (mutation is visible in the outer, §5.4). The `at` and `.get` accessors are **identical** for a nested-container element: both load the handle at pointer stride and incref when bound; neither may fall back to the inline-struct getter (which would read the element at struct stride and return garbage). |
-| `idx(outer, i, inner)` (replace) | **secure-before-release** (§5.5): incref/adopt the new handle, **decref the old** slot handle, then store the new handle. **Full no-op only for the write-back pattern** — the source is the value that was just read from *this same slot* (old handle == new handle *and* same aliasing reference), so nothing is added or removed. A **move** source that merely happens to hold the same handle value (a *different* slot with its **own** owning reference) is **not** a no-op: the move must still **clear the source slot** and **decref the surplus reference** so the ownership count stays balanced. Identity of the *slot* skips the work; identity of the *handle value* alone does not. |
+| `idx(outer, i, inner)` (replace) | **secure-before-release** (§5.5): incref/adopt the new handle, **decref the old** slot handle, then store the new handle. **No-op only when the source and destination are the *same slot*** (writing a slot back into itself). When they are **different slots that happen to hold the same handle value**: a **copy** source (it keeps its own reference) may be **optimised away** (the decref-old and incref-new cancel); a **move** source must still **clear the source slot** and **decref the surplus reference** so the count stays balanced. The provenance of the source (e.g. that it came from an earlier `at` on this same index) is **irrelevant** — only slot identity, and copy-vs-move, decide. |
 | `pop(outer)` / `take` | **transfer** the slot's owning reference into the result: remove it from the container and hand back its existing owning handle. **No decref** of the returned element — ownership moves to the caller. |
 | `remove(outer, i)` / replace-old / **outer drop** | **decref** the inner handle; its recursive drop (releasing the inner container's own elements + block) runs only at **its** rc 0. |
 
