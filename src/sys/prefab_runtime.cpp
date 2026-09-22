@@ -3972,7 +3972,12 @@ void aiml_cascade_persist_row(void* outer_ptr, int32_t bound_index,
     struct ListHdr { int32_t size; int32_t capacity; void* data; };
     ListHdr* outer = (ListHdr*)outer_ptr;
     if (bound_index >= outer->size) return;
-    ListHdr* inner = (ListHdr*)((char*)outer->data + (size_t)bound_index * sizeof(ListHdr));
+    // spec/61 §5.7 (memV3, the default): a `list<list<i32>>` stores its inner lists as refcounted
+    // HANDLE pointers (target-pointer stride), NOT inline {size,cap,data} structs — so index at
+    // pointer stride and dereference to reach the inner list. (Reading it as an inline-struct array
+    // used a 16-byte stride and no deref → wrong address → crash, test_cascade_persist_min.)
+    ListHdr* inner = *(ListHdr**)((char*)outer->data + (size_t)bound_index * sizeof(void*));
+    if (!inner) return;
     /* Grow the row buffer to fit tag + N payload slots. */
     int32_t need = 1 + n_values;
     if (need > inner->capacity) {
