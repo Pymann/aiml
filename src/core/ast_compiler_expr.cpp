@@ -405,7 +405,19 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
         llvm::Type* llvmBaseElemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(baseElemTy));
         if (isDash) {
             llvm::Value* baseAllocaVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst)));
-            
+            // spec/61 §5 (memV3): a list<T> local's slot holds a POINTER to the refcounted handle
+            // (the {size,cap,data} struct part). The dash slice/index ops below treat baseAllocaVal as
+            // the struct pointer, so load the handle first — else getSize/getElementPtr/slice read the
+            // handle-pointer bytes as {size,cap,data} → garbage/crash (test_list_slice `lst-1-4`). The
+            // `.len`/method path already loads the handle in its own branch.
+            // NOTE: only LOCALS are handles under memV3; globals stay inline (Stage B), so a global's
+            // slot IS the {size,cap,data} struct — do not load a "handle" from it (would read the
+            // struct's first 8 bytes as a pointer → garbage).
+            if (ctx.memV3 && !sym->is_global && ctx.isMemV3ContainerHandle(sym->typeName)) {
+                auto* i8pH = llvm::PointerType::get(ctx.context, 0);
+                baseAllocaVal = ctx.builder.CreateLoad(i8pH, baseAllocaVal, "conh_dash");
+            }
+
             bool isDynamicList = sym->typeName.find("list<") == 0;
             bool isRawArray = llvmBaseElemTy->isArrayTy();
             
