@@ -38,8 +38,10 @@ Every abbreviation used in this document, spelled out once here:
 - **exclusive (ownership)** — a value whose entire transitively-reachable owned subgraph is
   reached by **no** other handle (owning or weak), from any thread. The precondition for
   move-send; checked statically (affine analysis) or by `send_unique` at run time.
-- **`send_unique`** — the runtime-checked move-send escape: asserts every node's rc == 1 (and no
-  cross-thread reach) and moves, else traps (§5.3).
+- **`send_unique`** — the runtime-checked move-send escape: asserts every node's **strong rc == 1**
+  at run time and moves, else traps. Borrow-freedom (no incoming/outgoing `ref`, no cross-thread
+  reach) is **not** runtime-checked — weak refs aren't counted — so it stays a **static** guarantee
+  for both send paths; immortal literals are exempt from the rc check (§5.3).
 - **guarded `shared<T>`** — a cross-thread `shared<T>` bundled with a mandatory lock; its payload
   is reachable only inside the lock guard and no rc-bearing value escapes it (§5.3).
 - **incref / decref** — increment / decrement a refcounted resource's rc (on share / on drop).
@@ -611,6 +613,13 @@ The per-class contract:
       static and the `send_unique` paths. `send_unique` only escapes the *strong-uniqueness* proof,
       never the weak-ref-closure check. (There is no runtime borrow registry; adding one — to make
       incoming borrows runtime-detectable — is explicitly out of scope for this model.)
+      **Exemption — immortal, immutable memory.** A **string literal** and the immortal `""` carry
+      **no rc header** (§4.6, rc `0xFFFFFFFF`), and other static/immutable blobs likewise; they are
+      **immutable and never freed**, so they cannot be aliased-for-mutation or double-freed. Such
+      values are **exempt from both the static exclusivity proof and the `send_unique` rc==1 check**:
+      the static analysis already treats "a literal" as moved-in-fresh (unique), and `send_unique`
+      **skips the rc test for header-less immortal nodes** (there is no counter to read, and none is
+      needed). A message object carrying a string literal must therefore pass **both** send paths.
   - **Weak-ref-closed is required (binding).** The sent subgraph must contain **no `ref<T>`
     pointing at an object left behind in the sender** — an outbound weak edge would let the
     receiver reach sender-thread state (concurrent access + lifetime hazard). Such an edge is a
@@ -630,9 +639,24 @@ The per-class contract:
     inside, at guard exit) are under the lock — the "implicit drop escapes the lock" hazard
     cannot arise. To *keep* a field's value beyond the guard, **`clone`** it inside the guard (the
     clone is independent and leaves as an owned value, not a shared rc handle).
+  - **Entry contract — no pre-existing unguarded alias of the protected subgraph.** The guard only
+    serialises access reached *through the guard*; it cannot retroactively serialise a handle that
+    was already shared **before** the value became guarded. So at the transition to a guarded
+    `shared<T>` (constructing/first-sharing it cross-thread), the compiler requires that **no
+    unguarded external alias of the guarded subgraph survives**: every owning reference into the
+    protected object (and its rc-bearing members — its containers/strings/`shared` fields) must be
+    **either moved into the guard or gone**. Counter-example that must be rejected: a local
+    `list<T>` is stored into a model field, then that model is made a cross-thread guarded
+    `shared<T>` — the original local still reaches the same container handle **outside** the lock,
+    so mutation races. Rule: **all permitted access to the protected subgraph lives in one lock
+    domain**; a leftover unguarded alias (local, other field, outstanding `ref`) is a **compile
+    error** at the guard-transition, diagnosed by the same affine/uniqueness pass as `send` (§5.3
+    weak-ref-closure). Bring data in by **move** (or `clone` a private copy) so nothing outside the
+    guard aliases the protected nodes.
   - So a guarded `shared<T>` is fully static-safe: rc lifetime via the atomic count, payload via
-    the lock guard, no rc op straddling the lock. Non-guarded thread-shared mutation of a
-    non-atomic field remains a compile error (you must go through the guard).
+    the lock guard, no rc op straddling the lock, **and no pre-existing alias bypassing it**.
+    Non-guarded thread-shared mutation of a non-atomic field remains a compile error (you must go
+    through the guard).
 - **Class 5 (`chan<T>`, `lock`) — ATOMIC rc.** These are **shared across threads by their very
   nature** (a channel joins a sender thread and a receiver thread; a mutex guards several
   threads), so they **cannot** be single-thread-moved like Class 2/3 — their reference count
@@ -749,19 +773,24 @@ this section:
 
 - **`dst.extend(src)`** appends each element of `src` **by its element class** — exactly `push`
   applied element-wise: **scalar** copied by value; **`string`** incref'd (shared); **container**
-  handle incref'd (shared, §5.7); **`shared<T>`** incref'd. **`list<ptr<T>>` (move-only element):
-  a duplicating `extend` is a compile error** — it would give two owners of one unique box; move
-  the elements individually (`pop`+`push`) or `clone` the source first. `src` is **unchanged**
-  (read-only, borrowed for the duration); **self-extend** (`x.extend(x)`) is defined and
-  realloc-safe (snapshot the length first). The element **type must match** (`list<U>` into
-  `list<T>` with `U≠T` is a compile error, Spec 10).
+  handle incref'd (shared, §5.7); **`shared<T>`** incref'd. **A move-only element type — `ptr<T>`,
+  a by-value resource (`tensor`/`file_handle`/…), or a move-only value-model (§7) — cannot be
+  `extend`ed** (it would give two owners of one unique thing): a **compile error**. `clone`-first
+  does **not** fix it — the clone has the **same** `list<ptr<T>>` type, so `dst.extend(clone)` is
+  still a duplicating extend and still rejected. The legal alternatives are to **move** the
+  elements out of the (owned) source into `dst` **one by one** (`pop`+`push`, source emptied), or
+  to **`clone` each selected element individually** and `push` the fresh copy. `src` is
+  **unchanged** (read-only borrow); **self-extend** (`x.extend(x)`) is defined and realloc-safe
+  (snapshot the length first). The element **type must match** (`list<U>` into `list<T>`, `U≠T`,
+  is a compile error, Spec 10).
 - **A slice `x[a:b]`** produces a **new, independent container** (a fresh handle, its own spine),
   **not** a view: its elements are filled **by element class** exactly as `extend` above (scalars
-  copied; strings/containers/`shared` incref'd; **`list<ptr<T>>` cannot be sliced** — duplicating
-  unique owners — use `clone` or move). Mutating the slice's spine (push/remove) does not affect
-  the source; mutating a **shared element through the slice** is visible in the source (they
-  co-own that element). A slice is thus a shallow **`copy`** of the selected range (§5.1), never a
-  borrow of the source's buffer.
+  copied; strings/containers/`shared` incref'd). **A move-only element type cannot be sliced** for
+  the same reason (duplicating unique owners) — a **compile error**, and `clone`-first does not
+  help (same type); build the sub-range explicitly by **moving** or **per-element `clone`+push**.
+  Mutating the slice's spine (push/remove) does not affect the source; mutating a **shared element
+  through the slice** is visible in the source (they co-own that element). A slice is thus a
+  shallow **`copy`** of the selected range (§5.1), never a borrow of the source's buffer.
 
 ### 5.5 Assignment order — secure-before-release (self-assignment & aliased sources)
 
@@ -1507,11 +1536,11 @@ atomic overhead; only the shared kinds do. **Key principle:** the rc is separate
 payload — a user lock on the data does **not** protect the implicit incref/decref, and an atomic
 rc protects only the count, not the payload. Coordinated with Spec 47.
 
-**11.14 `string` is dup-on-assign today (verified).** `set`/`decl`/`push` of a string
-**deep-copy** via `aiml_str_dup` (`string_runtime.cpp:71-125`); the rc header exists but only
-for serializer UAF-protection, not share-on-assign. §4's share-by-incref is the **target**, and
-the migration (flip every assign/init/push from `dup` to `incref`) is pervasive but reuses the
-existing header/incref/decref/immortal-`""` plumbing (§12).
+**11.14 `string` is share-on-assign under memV3 (implemented).** `set`/`decl`/`push` of a string
+**incref** the shared buffer via its rc header (`string_runtime.cpp`), not `aiml_str_dup`; a
+string literal / immortal `""` (rc `0xFFFFFFFF`, no header) is a no-op on drop (§4.6). This is
+§4's share-by-incref, now the default (`AIML_MEM_V3`). (The legacy `dup`-on-assign path survives
+only under `AIML_MEM_V3=0` for A/B comparison; see §2.1.)
 
 **11.15 `prefab_instance` — single classification: engine-owned, non-owning handle.** Not a
 Class-4 unique owner *and* a borrow at once (that double reading is resolved): the **engine**
@@ -1627,17 +1656,14 @@ specified there before the thread path is implemented.
   Category table; and state the **rc-vs-payload principle** (a bare user lock does not cover the
   implicit incref/decref — only the guard does; atomic rc protects the count, not the payload).
   Confirms the singleton contract for Class-6 (§11.10).
-- **Migration — string sharing (verified: bigger than `push`).** The current compiler
-  **deep-copies (dups)** strings on **every** assignment path, not just container `push`:
-  `set: [a, b]` / `decl: [a, string, b]` call `aiml_str_assign_copy`/`aiml_str_dup`
-  (`string_runtime.cpp:71-125`, `ast_compiler_stmt.cpp:856-872, 1606-1631`), and `push` dups
-  each element (`ast_compiler_call.cpp` ~1404). Under §4 these must all become **incref
-  (share)** + decref-on-drop. The refcount header, `aiml_str_incref/decref`, and the immortal
-  `""` already exist — the migration flips the assign/init/push paths from `dup` to `incref`
-  and lets the existing scope-exit decref do the freeing. A focused but pervasive change.
-- **Migration — containers gain rc.** No built-in reference-counts today (verified, §2.1); the
-  `list`/`map`/`buffer` heap block must gain an `rc` field with incref-on-share /
-  decref-on-drop across assignment, storage, params, returns, and container removal.
+- **String sharing — DONE (memV3).** Every assignment path shares by **incref**, not `dup`:
+  `set: [a, b]` / `decl: [a, string, b]` and container `push` all incref the buffer via its rc
+  header; scope-exit decref frees at rc 0; the immortal `""` (no header) is a no-op. The legacy
+  `dup`-on-assign path is kept only under `AIML_MEM_V3=0` for A/B comparison (§2.1, §11.14).
+- **Containers gain rc — DONE (memV3).** `list`/`map`/`buffer` are refcounted **handles** (Option
+  B): the heap block carries an `rc`, incref-on-share / decref-on-drop across assignment, storage,
+  params, returns, and removal; container **fields** and nested **elements/values** are handles
+  too (§5.7). Freed at rc 0.
 - **Migration — 9rooms:** because `scope` is the default (§9.1), most 9rooms `new` boxes that
   were "freed implicitly / via drops-on" become **correct automatically** (auto-freed at scope)
   — there is **no** requirement to write a `free` for every `new`. The audit instead finds the
