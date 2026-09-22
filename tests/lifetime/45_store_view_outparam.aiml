@@ -22,8 +22,8 @@
     args: [[mat, ref<MatchLike>], [idx, i32], [out_p, ref<PlayerLike>]]
     return: i32
     body:
-      - decl: [view, PlayerLike, { at: [mat.players, idx] }]   # ref borrow into the element
-      - store: [out_p, view]                                   # §7 SHARE (incref fields)
+      - decl: [view, PlayerLike, { at: [mat.players, idx] }]   # decl [Model, at] = VALUE-COPY (§5.4 materialise: incref fields), not a borrow
+      - store: [out_p, view]                                   # §7 SHARE into the ref out-param (incref fields)
       - return: 1
 - def:
     name: main
@@ -44,7 +44,7 @@
       # ALIASING: the store SHARED the element's cards handle → a push through `grabbed` is visible
       # in the container element (a deep-copy would NOT show this; that is the point of §7 share).
       - call: [grabbed.cards.push, "king"]
-      - decl: [chk, PlayerLike, { at: [mtch.players, 0] }]     # ref borrow into the same element
+      - decl: [chk, PlayerLike, { at: [mtch.players, 0] }]     # VALUE-COPY of the element (shares its handles) → observes the shared push
       - decl: [ncb, i32, { call: [chk.cards.len] }]
       - if: { condition: { neq: [ncb, 2] }, then: [{ print: ["FAIL alias: element cards.len=${ncb}, expected 2 (store must SHARE, not deep-copy)"] }, { return: 1 }] }
       - print: ["PASS 45 store_view_outparam"]
