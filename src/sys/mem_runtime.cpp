@@ -18,20 +18,44 @@ extern char **environ;
 
 extern "C" {
 
+// spec/61 §5 (memV3): a map<string:string> is a refcounted HANDLE [i32 rc][i32 pad][AimlMapRaw],
+// with a DENSE store (keys[0..size)/vals[0..size)) of aiml-managed strings, freed by
+// aiml_map_handle_release → aiml_map_free (aiml_str_decref per entry). Declared here (defined in
+// string_runtime.cpp) so sys.env produces the SAME representation the caller's scope-drop expects.
+extern "C" void* aiml_map_handle_new(void);
+extern "C" char* aiml_str_dup(const char* s);
+
 // sys.env — build a map<string:string> of all process environment variables.
-// Returns an AimlHttpMap* whose { size, capacity, occupied, keys, values }
-// layout matches AIML's map<K:V>, so map methods (get/contains/…) work on it.
+// Returns a memV3 map HANDLE (rc=1) with a dense store of aiml-managed string keys/values, so the
+// caller's scope-drop (aiml_map_handle_release) frees it correctly. The old AimlHttpMap* return had
+// NO [rc][pad] header and used libc-strdup'd (header-less) strings in an open-addressing layout →
+// release read the rc header 8 bytes out of bounds and decref'd header-less strings → heap
+// corruption ("corrupted size vs. prev_size" at exit, test_system).
 void* aiml_sys_env(void) {
-    AimlHttpMap* m = aiml_http_map_new();
-    if (!environ) return m;
+    void* handle = aiml_map_handle_new();       // returns a pointer at the AimlMapRaw part
+    if (!handle) return handle;
+    AimlHttpMap* m = static_cast<AimlHttpMap*>(handle);  // AimlHttpMap == AimlMapRaw layout
+    if (!environ) return handle;
+    int32_t n = 0;
+    for (char** e = environ; *e != nullptr; ++e) ++n;
+    if (n == 0) return handle;
+    m->keys     = static_cast<char**>(calloc((size_t)n, sizeof(char*)));
+    m->values   = static_cast<char**>(calloc((size_t)n, sizeof(char*)));
+    m->occupied = nullptr;                       // dense store; occ bitmap is vestigial
+    m->capacity = n;
+    if (!m->keys || !m->values) { m->size = 0; return handle; }
+    int32_t idx = 0;
     for (char** e = environ; *e != nullptr; ++e) {
         const char* entry = *e;
         const char* eq = strchr(entry, '=');
         if (!eq) continue;                       // skip malformed entries
         std::string key(entry, (size_t)(eq - entry));
-        aiml_http_map_put(m, key.c_str(), eq + 1);
+        m->keys[idx]   = aiml_str_dup(key.c_str());
+        m->values[idx] = aiml_str_dup(eq + 1);
+        ++idx;
     }
-    return m;
+    m->size = idx;
+    return handle;
 }
 
 void aiml_sys_mem_limit(int64_t bytes) {
