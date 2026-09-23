@@ -854,10 +854,13 @@ namespace AIML {
             else innerType = typeName.substr(4, typeName.length() - 5); // ref< is also 4 chars
 
             // ptr<Interface> = fat pointer { i8* obj, i8* vtbl }.  Resolved via
-            // ctx.interfaces — the interface must be registered.  ref<Interface>
-            // is NOT supported (use ptr<Interface> for polymorphism).
+            // ctx.interfaces — the interface must be registered.  spec/61 §5.4:
+            // ref<Interface> is a BORROW of the same fat pointer (same representation,
+            // only ownership differs) — resolve it to the SAME AimlFatPtr_<Iface> so a
+            // borrowed interface (e.g. a `list<ptr<Iface>>`/store `.get` result bound to
+            // ref<Iface>) has one uniform {obj,vtable} layout for dispatch.
             auto ifaceIt = interfaces.find(innerType);
-            if (ifaceIt != interfaces.end() && typeName.rfind("ptr<", 0) == 0) {
+            if (ifaceIt != interfaces.end()) {
                 if (!ifaceIt->second.fatPtrType) {
                     auto* i8p = llvm::PointerType::get(context, 0);
                     ifaceIt->second.fatPtrType = llvm::StructType::create(

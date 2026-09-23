@@ -54,7 +54,7 @@
       - while:
           condition: { lt: [idx, things.len] }
           body:
-            - decl: [t_ptr, ptr<Named>, { at: [things, idx] }]
+            - decl: [t_ptr, ref<Named>, { at: [things, idx] }]
             - decl: [tid,   string,     { call: [t_ptr.my_id] }]
             - call: [log.info, "list[${idx}] id=${tid}"]
             - set: [idx, { "+": [idx, 1] }]

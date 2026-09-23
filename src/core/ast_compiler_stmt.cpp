@@ -895,11 +895,10 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
     // borrow, or use `get_copy` for an independent owned copy (which already exists — §5.4). Scoped to
     // KNOWN borrow-returning receivers so a user method happening to be named `get` is not caught.
     if (ctx.memV3 && decl->initialValue && decl->typeName.rfind("ptr<", 0) == 0) {
-        // Determine (accessor-name, receiver-name, receiver-type) for the method form
-        // `{ call: [recv.get, i] }`. NOTE: the `{ at: [recv, i] }` shorthand carries the SAME §5.4 rule
-        // (it is `recv.at(i)`), but enforcing it there requires ref<T> to work for the pervasive
-        // `list<ptr<Iface>>` dispatch idiom (ref<Iface> from a ptr-list element is not yet supported —
-        // dispatch/serialize/representation gaps), so it is intentionally left out for now.
+        // Determine (accessor-name, receiver-name, receiver-type) for either the method form
+        // `{ call: [recv.get, i] }` or the shorthand `{ at: [recv, i] }` (both are §5.4 borrow reads;
+        // ref<Iface> from a ptr-list element now shares the fat-pointer representation, so the pervasive
+        // `list<ptr<Iface>>` dispatch idiom migrates to ref<Iface> cleanly).
         std::string meth, recv, rt;
         if (auto* ce = dynamic_cast<CallExpr*>(decl->initialValue.get())) {
             const std::string& fn = ce->functionName;
@@ -908,6 +907,11 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 std::string m = fn.substr(dp + 1);
                 if (m == "get" || m == "at" || m == "first" || m == "last") { meth = m; recv = fn.substr(0, dp); }
             }
+        } else if (auto* ax = dynamic_cast<AtExpr*>(decl->initialValue.get())) {
+            // `{ at: [c, i] }` with NO trailing member path is exactly `c.at(i)` — a borrow read.
+            if (ax->memberPath.empty())
+                if (auto* cv = dynamic_cast<VariableExpr*>(ax->container.get()))
+                    if (cv->name.find('.') == std::string::npos) { meth = "at"; recv = cv->name; }
         }
         if (!meth.empty()) {
             if (recv == "yaml") rt = "yaml";   // builtin namespace: yaml.get → node view (borrow)
@@ -1807,8 +1811,12 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 // Interface upcast: decl: [s, ptr<Iface>, c] where c is a class
                 // instance / ref<Class>.  The target is a fat pointer struct
                 // {i8* obj, i8* vtbl}.  We need the SOURCE class name to look up
-                // the __vtable_<Class>_<Iface> global.
-                if (decl->typeName.rfind("ptr<", 0) == 0 && decl->typeName.back() == '>') {
+                // the __vtable_<Class>_<Iface> global. spec/61 §5.4: a `ref<Iface>`
+                // target is the borrow form of the same upcast (upcasting a borrowed
+                // concrete instance to an interface view) — handle it the same way;
+                // resolveType gives both the same AimlFatPtr_<Iface> layout.
+                if ((decl->typeName.rfind("ptr<", 0) == 0 || decl->typeName.rfind("ref<", 0) == 0)
+                    && decl->typeName.back() == '>') {
                     std::string ifaceName = decl->typeName.substr(4, decl->typeName.size() - 5);
                     if (ctx.interfaces.count(ifaceName)) {
                         // Resolve source class and raw object pointer.

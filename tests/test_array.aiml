@@ -159,7 +159,7 @@
 
 # F1: zero-init to null
 - decl: [ptrs, "array<ptr<ArrayNode>:3>"]
-- decl: [var_p0, ptr<ArrayNode>, { at: [ptrs, 0] }]
+- decl: [var_p0, ref<ArrayNode>, { at: [ptrs, 0] }]
 - if:
     condition: { eq: [var_p0, null] }
     then:
@@ -172,7 +172,7 @@
 - decl: [var_n1, ptr<ArrayNode>, { new: ArrayNode }]
 - set: [var_n1.value, 123]
 - idx: [ptrs, 1, var_n1]
-- decl: [var_p1, ptr<ArrayNode>, { at: [ptrs, 1] }]
+- decl: [var_p1, ref<ArrayNode>, { at: [ptrs, 1] }]
 - if:
     condition: { "&&": [{ peq: [var_p1, var_n1] }, { eq: [var_p1.value, 123] }] }
     then:
@@ -183,7 +183,7 @@
 
 # F3: overwrite with null
 - idx: [ptrs, 1, null]
-- decl: [p1_null, ptr<ArrayNode>, { at: [ptrs, 1] }]
+- decl: [p1_null, ref<ArrayNode>, { at: [ptrs, 1] }]
 - if:
     condition: { eq: [p1_null, null] }
     then:
@@ -195,7 +195,7 @@
 # F4: multidimensional pointer array
 - decl: [grid_ptr, "array<ptr<ArrayNode>:2:2>"]
 - idx: [grid_ptr, 1, 0, var_n1]
-- decl: [var_gp, ptr<ArrayNode>, { at: [grid_ptr, 1, 0] }]
+- decl: [var_gp, ref<ArrayNode>, { at: [grid_ptr, 1, 0] }]
 - if:
     condition: { "&&": [{ peq: [var_gp, var_n1] }, { eq: [var_gp.value, 123] }] }
     then:
