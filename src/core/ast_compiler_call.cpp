@@ -2299,13 +2299,14 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Function* f = ctx.getFunction("aiml_db_kv_get", i8p, {i8p, i8p});
             llvm::Value* retPtr = ctx.builder.CreateCall(f, {kvPtr, keyVal});
             if (valSize == 0) {
-                // spec/61: aiml_db_kv_get returns the Kv cache's char* (a BORROW). Binding it into a
-                // string local adds an alias whose scope-drop decref's — incref so the Kv keeps its
-                // own ref (else the local's drop frees the cache string → teardown double-free,
-                // test_path_db_options/test_aiondb_kv_reopen). incref is null/immortal-safe.
-                ctx.builder.CreateCall(
-                    ctx.getFunction("aiml_str_incref", ctx.builder.getVoidTy(), {i8p}), {retPtr});
-                return ctx.ir_gen->wrap(retPtr); // string: char* directly
+                // spec/61: aiml_db_kv_get returns a pointer into the Kv's storage — for a PERSISTENT
+                // Kv that is the mmap, which a later db.checkpoint remaps (mremap MAYMOVE) → any bound
+                // pointer dangles → teardown decref crashes (test_path_db_options/aiondb_kv_reopen).
+                // Return an OWNED copy (str_dup) so the caller's string survives checkpoints and its
+                // scope-drop frees its own heap, not the volatile cache. Null-safe (→ "").
+                llvm::Value* owned = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_str_dup", i8p, {i8p}), {retPtr}, "kv_get_own");
+                return ctx.ir_gen->wrap(owned); // string: owned char*
             } else if (vName == "f32") {
                 return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getFloatTy(), retPtr, "kv_f32"));
             } else if (vName == "f64") {
