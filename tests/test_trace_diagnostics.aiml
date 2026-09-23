@@ -31,7 +31,7 @@
 - def:
     name: trace_args
     static_off: ["same_arg"]
-    args: [[txt, string], [ptr, ptr<TraceBox>], [face, ptr<TraceFace>]]
+    args: [[txt, string], [ptr, ptr<TraceBox>], [face, ref<TraceFace>]]
     body:
       - return: []
 - def:

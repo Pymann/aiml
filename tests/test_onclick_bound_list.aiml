@@ -24,7 +24,7 @@
     name: RowPush
     implements: [OnClick]
     members:
-      - [target,     ptr<CascadeList>]
+      - [target,     shared<CascadeList>]
       - [default_id, i32]
     methods:
       - def:
@@ -39,7 +39,7 @@
     name: RowPop
     implements: [OnClick]
     members:
-      - [target, ptr<CascadeList>]
+      - [target, shared<CascadeList>]
     methods:
       - def:
           name: fire
@@ -52,7 +52,7 @@
     return: i32
     body:
       # The "model" — a CascadeList holding the effect rows.
-      - decl: [effects, ptr<CascadeList>, { new: CascadeList }]
+      - decl: [effects, shared<CascadeList>, { new: CascadeList }]
 
       # Bind buttons.
       - decl: [pushact, ptr<RowPush>, { new: RowPush }]
