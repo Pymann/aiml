@@ -1421,9 +1421,10 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  if (argTy.rfind("ptr<", 0) == 0 || argTy.rfind("ref<", 0) == 0
                      || argTy.rfind("shared<", 0) == 0) {
                      LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "cannot push a pointer expression of type '"
-                         + argTy + "' into a value list<" + listElemName + ">: the element is an inline "
-                         "value, not a pointer. Push a value (materialise/clone the pointee) or declare "
-                         "the list as list<ptr<" + listElemName + ">> (§6.2/§10).");
+                         + argTy + "' into a value list<" + listElemName + ">: the element slot is an "
+                         "inline value, so this would store a pointer instead of a value. Push a value "
+                         "(dereference { '?': [x] } / materialise / clone the pointee) or declare the list "
+                         "as list<ptr<" + listElemName + ">> (§6.2/§10).");
                      return ctx.ir_gen->getInt32(0);
                  }
              }
