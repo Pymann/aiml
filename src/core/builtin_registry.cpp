@@ -907,6 +907,11 @@ void registerBuiltins(CompilerContext& ctx) {
         llvm::PHINode* phi = ctx.builder.CreatePHI(i8p, 2, "read_all_res");
         phi->addIncoming(emptyManaged, invalidBB);
         phi->addIncoming(managed, doReadBB);
+        // spec/61 §7: the result is a FRESH owned aiml string → register as an owned stmt-temp so a
+        // binding local MOVES it (freed by its scope-drop) instead of the decl-init treating it as a
+        // borrow and increfing it (→ leak). Same as the yaml/str string builtins.
+        if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+            ctx.stmtTempStack.back().push_back(phi);
         return ctx.ir_gen->wrap(phi);
     };
 
