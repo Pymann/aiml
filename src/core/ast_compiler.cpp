@@ -2935,6 +2935,27 @@ void Compiler::synthesizeClassGroups(Program* prog) {
         else
             LOG_ERROR("classgroup '" + g->name + "': internal — failed to synthesize __ctor.");
 
+        // spec/58 + spec/61 §10: synthesized DESTRUCTOR. The __ctor `new`s one box per instance and
+        // per subgroup — those are OWNED by the container, so `free`ing the container (or its
+        // scope-drop) must release them. Ports/collaborators are WIRED borrows (not owned) and group
+        // params are inline value fields, so neither is freed here. Each `free: <.member` runs the box's
+        // class-based deep-free (strings decref, nested handles release, a subgroup recurses into its own
+        // __dtor) then frees the block. Without this, the container shell freed but every instance leaked.
+        {
+            std::string dtorBody;
+            for (auto& inst : g->instances)
+                dtorBody += "      - free: <." + inst.instanceName + "\n";
+            for (auto& sg : g->subgroups)
+                dtorBody += "      - free: <." + sg.first + "\n";
+            if (!dtorBody.empty()) {
+                std::string dtorText = "- def:\n    name: __dtor\n    args: []\n    body:\n" + dtorBody;
+                if (auto dtorFn = parseDefSnippet(dtorText))
+                    cont->methods.push_back(std::move(dtorFn));
+                else
+                    LOG_ERROR("classgroup '" + g->name + "': internal — failed to synthesize __dtor.");
+            }
+        }
+
         // `__wire_ports` (spec/58 §6): the parent calls this after it has set the
         // container's port members to its own instances.  It back-patches each
         // ported child instance's collaborator member from the container port, then

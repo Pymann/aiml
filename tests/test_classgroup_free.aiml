@@ -1,0 +1,41 @@
+# spec/58 + spec/61 §10: a classgroup instance is heap-owned by its container. `free`ing the
+# container (or its scope-drop) must run the synthesized __dtor to release each owned instance
+# (deep-free its heap fields), not just the container shell. Instances here carry a `string` heap
+# field so a shell-only free would leak it — the mem-sanitizer (valgrind) probe catches that.
+- class:
+    name: Greeter
+    members:
+      - [greeting, string, ""]
+    methods:
+      - def:
+          name: setup
+          args: []
+          body:
+            - set: [<.greeting, "hello from the classgroup instance"]
+      - def:
+          name: text
+          return: string
+          args: []
+          body: [{ return: <.greeting }]
+
+- classgroup:
+    name: App
+    instances:
+      - class: Greeter
+        instance: greeter
+    export: [greeter]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [app, ptr<App>, { new: App }]
+      - call: [app.greeter.setup]
+      - decl: [msg, string, { call: [app.greeter.text] }]
+      - print: ["${msg}"]
+      - free: app
+      - if:
+          condition: { neq: [msg, "hello from the classgroup instance"] }
+          then: [{ print: ["FAIL: wrong text"] }, { return: 1 }]
+      - print: ["PASS classgroup free runs __dtor"]
+      - return: 0

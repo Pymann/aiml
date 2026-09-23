@@ -435,15 +435,45 @@ IRValue* Compiler::visitCall(CallExpr* call) {
          // kind-4 scope-drop (emitScopeDrop). Without this, `free:` freed only the shell and every
          // heap field leaked (probe 09). OFF is unaffected (the `free:` node only exists under memV3).
          if (ctx.memV3) {
+             // Resolve the freed target's declared type — a plain local OR a member (`<.inst`,
+             // `this.field`, `obj.field`). The classgroup __dtor frees its instances via `free: <.inst`,
+             // so member targets must deep-free too (the pre-classgroup code only handled plain locals).
+             std::string ptrType;
              if (auto* fv = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get())) {
-                 Symbol* fs = (fv->name.find('.') == std::string::npos) ? resolveVariable(fv->name) : nullptr;
-                 if (fs && fs->typeName.rfind("ptr<", 0) == 0 && fs->typeName.back() == '>') {
-                     std::string boxed = fs->typeName.substr(4, fs->typeName.size() - 5);
+                 const std::string& nm = fv->name;
+                 size_t dp = nm.find('.');
+                 if (dp == std::string::npos) {
+                     if (Symbol* fs = resolveVariable(nm)) ptrType = fs->typeName;
+                 } else {
+                     std::string base = nm.substr(0, dp), field = nm.substr(dp + 1);
+                     std::string cls;
+                     if (base == "this" || base == "<") cls = ctx.currentClassName;
+                     else if (Symbol* bs = resolveVariable(base)) {
+                         cls = bs->typeName;
+                         if (cls.rfind("ptr<", 0) == 0 || cls.rfind("ref<", 0) == 0 || cls.rfind("shared<", 0) == 0) {
+                             size_t lt = cls.find('<');
+                             if (lt != std::string::npos && cls.back() == '>') cls = cls.substr(lt + 1, cls.size() - lt - 2);
+                         }
+                     }
+                     auto ci = ctx.classes.find(cls);
+                     if (ci != ctx.classes.end() && field.find('.') == std::string::npos) {
+                         auto mit = ci->second.members.find(field);
+                         if (mit != ci->second.members.end()) ptrType = mit->second.typeName;
+                     }
+                 }
+             }
+             if (ptrType.rfind("ptr<", 0) == 0 && ptrType.back() == '>') {
+                 std::string boxed = ptrType.substr(4, ptrType.size() - 5);
+                 auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                 if (ctx.classGroupContainers.count(boxed)) {
+                     // spec/58: a classgroup owns heap instances but has no ser descriptor — run its
+                     // synthesized __dtor to release them (recurses into subgroups) before the shell free.
+                     llvm::Function* dtor = ctx.module.getFunction(boxed + "___dtor");
+                     if (dtor) ctx.builder.CreateCall(dtor, { ptrVal });
+                 } else {
                      auto bi = ctx.classes.find(boxed);
                      if (bi != ctx.classes.end() && bi->second.hasHeapFields && bi->second.serNodesVar
-                         && bi->second.type && !ctx.classGroupContainers.count(boxed)
-                         && !ctx.cascadeClasses.count(boxed)) {
-                         auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                         && bi->second.type && !ctx.cascadeClasses.count(boxed)) {
                          llvm::Function* dfree = ctx.getFunction("aiml_ser_free_decoded",
                              ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
                          ctx.builder.CreateCall(dfree, { ptrVal,
