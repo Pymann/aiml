@@ -684,7 +684,50 @@ void Compiler::emitMapHandleDecl(DeclStmt* decl) {
     } else {
         llvm::Function* nw = ctx.getFunction("aiml_map_handle_new", i8p, {});
         handle = ctx.builder.CreateCall(nw, {}, "maph_new");
-        MapImpl::initMap(ctx, handle, kTy, vTyRaw, 4);
+        // spec/61 §5 (memV3): a map LITERAL initializer `{ k: v, ... }` is a DictLiteralExpr. The
+        // handle path previously fell through to a fresh EMPTY map and DROPPED the entries → the map
+        // was empty at runtime (deck_limit_tbl.contains → 0; legacy/OFF populated it, memV3 did not).
+        // Populate the fresh handle with one put per entry, mirroring the inline path (line ~1594).
+        auto* dictLit = dynamic_cast<DictLiteralExpr*>(iv);
+        int initCap = 4;
+        if (dictLit && (int)dictLit->entriesExpr.size() > initCap) initCap = (int)dictLit->entriesExpr.size();
+        MapImpl::initMap(ctx, handle, kTy, vTyRaw, initCap);
+        if (dictLit && !dictLit->entriesExpr.empty()) {
+            auto* mapStructTy = MapImpl::getMapStructType(ctx, kTy, vTyRaw);
+            for (auto& [keyStr, valExpr] : dictLit->entriesExpr) {
+                llvm::Value* kVal = nullptr;
+                if (kName == "string") {
+                    kVal = ctx.builder.CreateGlobalStringPtr(keyStr, "mlit_k");
+                } else if (kName == "i32") {
+                    kVal = ctx.builder.getInt32((int32_t)std::stoll(keyStr));
+                } else if (kName == "i64") {
+                    kVal = ctx.builder.getInt64(std::stoll(keyStr));
+                } else if (ctx.enums.count(kName) || ctx.enums.count(ctx.qualify(kName))) {
+                    const auto& enumVals = ctx.enums.count(kName)
+                        ? ctx.enums[kName] : ctx.enums[ctx.qualify(kName)];
+                    auto it = enumVals.find(keyStr);
+                    if (it == enumVals.end()) {
+                        LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "map literal: enum '" + kName +
+                                  "' has no value named '" + keyStr + "'");
+                        continue;
+                    }
+                    kVal = ctx.builder.getInt32((int32_t)it->second);
+                } else {
+                    LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "map literal: key type '" + kName +
+                              "' not supported yet");
+                    continue;
+                }
+                IRValue* vv = visitExpression(valExpr.get());
+                if (!vv) continue;
+                llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(vv));
+                if (vTyRaw->isIntegerTy() && v->getType()->isIntegerTy() && v->getType() != vTyRaw) {
+                    v = ctx.builder.CreateZExtOrTrunc(v, vTyRaw, "mlit_v");
+                } else if (vTyRaw->isFloatingPointTy() && v->getType()->isFloatingPointTy() && v->getType() != vTyRaw) {
+                    v = ctx.builder.CreateFPCast(v, vTyRaw, "mlit_v");
+                }
+                MapImpl::put(ctx, handle, kVal, v, mapStructTy, vName == "string");
+            }
+        }
     }
     if (handle) ctx.builder.CreateStore(handle, slot);
 
