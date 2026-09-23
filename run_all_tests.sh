@@ -79,7 +79,13 @@ echo "======================" | tee -a "$OUTPUT_FILE"
 # Sorted so paired tests (e.g. `_1_write` before `_2_read`) run in order —
 # `find` itself returns inode order, which would race the read against
 # its write counterpart and skip silently.
-TEST_FILES=$(find tests/ -name "*.aiml" | grep -v "__aiml_cache" | grep -v "build" | grep -v "out" | grep -v "/_" | sort)
+#
+# tests/lifetime/neg/ is excluded: those are NEGATIVE lifetime tests that MUST
+# fail (compile-time borrow-check rejection or a runtime free-check), validated
+# by tests/lifetime/run_lifetime.sh (which is MODE-aware). This generic runner
+# has no MODE/neg semantics and scored the compile-error ones as failures
+# (Expected 0), so they belong to the lifetime suite, not the corpus.
+TEST_FILES=$(find tests/ -name "*.aiml" | grep -v "__aiml_cache" | grep -v "build" | grep -v "out" | grep -v "/_" | grep -v "lifetime/neg" | sort)
 
 TOTAL=0
 PASSED=0
