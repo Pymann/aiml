@@ -888,6 +888,49 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         }
     }
 
+    // spec/61 §5.4: `.get`/`.at`/`.first`/`.last` on a container (list/map/cascade) or a Class-6 store
+    // (Kv/Store/TimeSeries/VecStore) yields a `ref<T>` BORROW — it never hands out a second owner. So
+    // binding the read to a `ptr<T>` (a UNIQUE OWNER) is illegal: the borrow would be treated as owned
+    // and freed on drop/reassign (the test_model / db-reopen double-free class). Bind `ref<T>` to
+    // borrow, or use `get_copy` for an independent owned copy (which already exists — §5.4). Scoped to
+    // KNOWN borrow-returning receivers so a user method happening to be named `get` is not caught.
+    if (ctx.memV3 && decl->initialValue && decl->typeName.rfind("ptr<", 0) == 0) {
+        // Determine (accessor-name, receiver-name, receiver-type) for the method form
+        // `{ call: [recv.get, i] }`. NOTE: the `{ at: [recv, i] }` shorthand carries the SAME §5.4 rule
+        // (it is `recv.at(i)`), but enforcing it there requires ref<T> to work for the pervasive
+        // `list<ptr<Iface>>` dispatch idiom (ref<Iface> from a ptr-list element is not yet supported —
+        // dispatch/serialize/representation gaps), so it is intentionally left out for now.
+        std::string meth, recv, rt;
+        if (auto* ce = dynamic_cast<CallExpr*>(decl->initialValue.get())) {
+            const std::string& fn = ce->functionName;
+            size_t dp = fn.rfind('.');
+            if (dp != std::string::npos) {
+                std::string m = fn.substr(dp + 1);
+                if (m == "get" || m == "at" || m == "first" || m == "last") { meth = m; recv = fn.substr(0, dp); }
+            }
+        }
+        if (!meth.empty()) {
+            if (recv == "yaml") rt = "yaml";   // builtin namespace: yaml.get → node view (borrow)
+            else if (Symbol* rs = resolveVariable(recv)) rt = rs->typeName;
+            bool borrowSource = rt == "yaml"
+                || rt.rfind("list<", 0) == 0 || rt.rfind("map<", 0) == 0
+                || rt.rfind("cascade<", 0) == 0 || rt.rfind("array<", 0) == 0
+                || rt.rfind("Kv<", 0) == 0 || rt.rfind("Store<", 0) == 0
+                || rt.rfind("TimeSeries<", 0) == 0 || rt == "VecStore";
+            if (borrowSource) {
+                std::string inner = decl->typeName.substr(4, decl->typeName.size() - 5);
+                LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "decl: '" + decl->varName + "' binds a "
+                    "'" + meth + "' read to ptr<" + inner + ">, but '" + meth + "' yields a "
+                    "ref<" + inner + "> BORROW (the container/store keeps ownership; it never "
+                    "hands out a second owner). A ptr<T> is a UNIQUE OWNER, so this would free a "
+                    "box it does not own (double-free on drop/reassign). Bind 'ref<" + inner +
+                    ">' to borrow it, or use '" + recv + ".get_copy(…)' for an independent owned "
+                    "copy (§5.4).");
+                return;
+            }
+        }
+    }
+
     // ── spec/61 §5 Option B (memV3): list<T>/cascade<X> value-LOCAL = refcounted HANDLE ──────────
     // The slot holds a POINTER to a heap block [i32 rc][i32 pad][{size,cap,data}]; the stored
     // pointer targets the {size,cap,data} part so every ListImpl op is unchanged, reached via the

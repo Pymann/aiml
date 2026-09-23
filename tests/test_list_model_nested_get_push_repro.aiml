@@ -39,7 +39,7 @@
       - decl: [copied_cards, list<ReproCard>]
       - decl: [value_copy, ReproCard, { call: [source_cards.get, 0] }]
       - call: [copied_cards.push, value_copy]
-      - decl: [control, ptr<ReproCard>, { call: [copied_cards.get, 0] }]
+      - decl: [control, ref<ReproCard>, { call: [copied_cards.get, 0] }]
       - if:
           condition: { '||': [{ neq: [control.marker, -1] }, { neq: [control.title, "Probe Card"] }] }
           then:
@@ -50,7 +50,7 @@
       # Control 2: a nested get IS valid when the destination holds pointers.
       - decl: [pointer_cards, list<ptr<ReproCard>>]
       - call: [pointer_cards.push, { call: [source_cards.get, 0] }]
-      - decl: [pointer_card, ptr<ReproCard>, { call: [pointer_cards.get, 0] }]
+      - decl: [pointer_card, ref<ReproCard>, { call: [pointer_cards.get, 0] }]
       - if:
           condition: { neq: [pointer_card.marker, -1] }
           then:
@@ -61,7 +61,7 @@
       # Reproduction: a pointer is silently stored as a model VALUE.
       - decl: [broken_cards, list<ReproCard>]
       - call: [broken_cards.push, { call: [source_cards.get, 0] }]
-      - decl: [broken, ptr<ReproCard>, { call: [broken_cards.get, 0] }]
+      - decl: [broken, ref<ReproCard>, { call: [broken_cards.get, 0] }]
       - if:
           condition: { neq: [broken.marker, -1] }
           then:

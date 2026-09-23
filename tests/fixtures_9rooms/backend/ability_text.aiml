@@ -885,7 +885,7 @@
 
 - def:
     name: generate_ability_text
-    args: [[var_ab, ptr<ActiveAbility>]]
+    args: [[var_ab, ref<ActiveAbility>]]
     return: string
     body:
       - decl: [trigger_text, string, ""]
@@ -1037,7 +1037,7 @@
             - while:
                 condition: { lt: [var_ai, aalen] }
                 body:
-                  - decl: [var_aa, ptr<ActiveAbility>, { call: [var_cp.active_abilities.get, var_ai] }]
+                  - decl: [var_aa, ref<ActiveAbility>, { call: [var_cp.active_abilities.get, var_ai] }]
                   - decl: [aa_str, string, { call: [generate_ability_text, var_aa] }]
                   - if:
                       condition: { gt: [{ call: [aa_str.len] }, 0] }
@@ -1103,7 +1103,7 @@
 # ser_active_ability_json — ptr<ActiveAbility> → JSON object string
 - def:
     name: ser_active_ability_json
-    args: [[var_ab, ptr<ActiveAbility>]]
+    args: [[var_ab, ref<ActiveAbility>]]
     return: string
     body:
       - decl: [cost_json, string, { call: [ser_int_list_list_json, var_ab.activation_cost] }]
@@ -1145,7 +1145,7 @@
       - while:
           condition: { "<": [var_i, var_n] }
           body:
-            - decl: [var_ab, ptr<ActiveAbility>, { call: [var_cp.active_abilities.get, var_i] }]
+            - decl: [var_ab, ref<ActiveAbility>, { call: [var_cp.active_abilities.get, var_i] }]
             - decl: [ab_json, string, { call: [ser_active_ability_json, var_ab] }]
             - if:
                 condition: { eq: [var_i, 0] }

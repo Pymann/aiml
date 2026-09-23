@@ -16,7 +16,7 @@
       # Get a stable ptr<ActiveAbility> via list.get(...) to avoid ptr/value ambiguity.
       - decl: [pool, list<ActiveAbility>]
       - call: [pool.push, var_ab]
-      - decl: [abp, ptr<ActiveAbility>, { call: [pool.get, 0] }]
+      - decl: [abp, ref<ActiveAbility>, { call: [pool.get, 0] }]
       - decl: [txt, string, { call: [generate_ability_text, abp] }]
 
       - if:
