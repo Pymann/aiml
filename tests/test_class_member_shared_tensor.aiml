@@ -46,14 +46,18 @@
 - class:
     name: Body
     members:
-      - [inner,        Inner]
+      # spec/61 §5.4/§7: Inner is MOVE-ONLY (it holds `tensor` fields, Class 4), so it cannot be a
+      # value member copied per-Body — that would duplicate a unique owner (double-free) or drop the
+      # tensor. The bodies SHARE the one embedder (which outlives them in Workspace): hold a ref<Inner>
+      # BORROW. The embedder owns the tensors and frees them once; the borrows never free.
+      - [inner,        ref<Inner>]
       - [hidden_dim,   i32, 16]
       - [weight_1,     tensor]
       - [bias_1,       tensor]
     methods:
       - def:
           name: setup
-          args: [[an_inner, Inner], [store_name, string]]
+          args: [[an_inner, ref<Inner>], [store_name, string]]
           body:
             - set: [<.inner, an_inner]
             - decl: [w_tmp, tensor, { call: [tensor.randn_ex, 0.0, 0.3, <.inner.d_dim, <.hidden_dim] }]
