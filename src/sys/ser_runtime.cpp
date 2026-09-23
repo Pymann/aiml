@@ -1289,6 +1289,46 @@ extern "C" int aiml_ser_decode(const char*         blob,
     return g_dec_error ? -1 : 0;
 }
 
+// spec/61 §5 (memV3): a container FIELD (list/map/buffer) is ALWAYS a live refcounted handle, never
+// null — field access (.len/.at/push/…) unconditionally derefs it. After a caller zeroes a decoded
+// struct (e.g. get_copy_at's decode-failure path memsets dst to 0), every *_PTR field is null and the
+// next `.len` would deref null → SIGSEGV. This walker re-establishes the invariant: allocate an EMPTY
+// handle for each null LIST_PTR/MAP_PTR/BUFFER_PTR field (recursing through inline STRUCTs). ptr<T>/
+// model fields legitimately stay null (not "always live"), so they are left untouched.
+static void initEmptyContainers(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
+    if (idx < 0 || idx >= nn) return;
+    const AimlTypeNode& n = ns[idx];
+    switch ((AimlTDKind)n.kind) {
+    case AIML_TD_STRUCT: {
+        int nf = n.param1, fi = n.param2;
+        for (int i = 0; i < nf; i++)
+            initEmptyContainers(fi + i, ns, nn, data + ns[fi + i].offset);
+        break;
+    }
+    case AIML_TD_LIST_PTR:
+    case AIML_TD_MAP_PTR:
+    case AIML_TD_BUFFER_PTR: {
+        void* cur = nullptr;
+        memcpy(&cur, data, sizeof(void*));
+        if (!cur) {
+            void* h = (n.kind == AIML_TD_MAP_PTR) ? aiml_map_handle_new()
+                : (n.kind == AIML_TD_BUFFER_PTR) ? aiml_buffer_handle_new()
+                : aiml_list_handle_new();
+            memcpy(data, &h, sizeof(void*));
+        }
+        break;
+    }
+    default: break;   // ptr/model/scalar fields: null is a valid state, nothing to init
+    }
+}
+
+extern "C" void aiml_ser_init_empty_containers(void*               obj,
+                                               const AimlTypeNode* nodes,
+                                               int32_t             n_nodes) {
+    if (!obj || !nodes || n_nodes <= 0) return;
+    initEmptyContainers(0, nodes, n_nodes, (uint8_t*)obj);
+}
+
 extern "C" void aiml_ser_free_decoded(void*               obj,
                                        const AimlTypeNode* nodes,
                                        int32_t             n_nodes) {

@@ -126,6 +126,14 @@ void    aiml_ser_free_decoded(void*                obj,
                               const AimlTypeNode*  nodes,
                               int32_t              n_nodes);
 
+// spec/61 §5 (memV3): re-establish the "container FIELD is never null" invariant after a caller has
+// zeroed a decoded struct (e.g. a decode-failure path). Allocates an EMPTY handle for each null
+// list/map/buffer FIELD (recursing through inline structs); ptr<T>/model fields stay null. Safe to
+// call on a fully-zeroed buffer. Does nothing under OFF descriptors (they carry no *_PTR nodes).
+void    aiml_ser_init_empty_containers(void*                obj,
+                                       const AimlTypeNode*  nodes,
+                                       int32_t              n_nodes);
+
 // Retain (incref) every rc-bearing field of *obj* (strings, containers, shared/model refs) — the
 // mirror of aiml_ser_free_decoded. Used after a shallow bit-copy so the copy co-owns the referents
 // with a balanced refcount (spec/61 §7). Does NOT allocate.
