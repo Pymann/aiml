@@ -890,11 +890,23 @@ void registerBuiltins(CompilerContext& ctx) {
         llvm::Value* nread = ctx.builder.CreateCall(freadF, {buf, ctx.builder.getInt64(1), size, handle});
         ctx.builder.CreateStore(ctx.builder.getInt8(0),
             ctx.builder.CreateInBoundsGEP(ctx.builder.getInt8Ty(), buf, nread));
+        // spec/61 §4: return an aiml-MANAGED string (with an AimlStrHeader), not a bare malloc buffer —
+        // the caller binds the result to a managed string local whose assign/drop calls
+        // aiml_str_incref/decref, which read the rc header at (s - 8). A header-less malloc buffer makes
+        // those touch 8 bytes out of bounds (valgrind Invalid read; a chance magic match would corrupt).
+        // Copy into an aiml string, then free the raw buffer.
+        llvm::Function* strDupF = ctx.getFunction("aiml_str_dup", i8p, {i8p});
+        llvm::Function* freeF   = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
+        llvm::Value* managed = ctx.builder.CreateCall(strDupF, {buf}, "read_all_managed");
+        ctx.builder.CreateCall(freeF, {buf});
         ctx.builder.CreateBr(mergeBB);
+        // Managed empty string for the invalid/empty path (same header contract as `managed`).
+        ctx.builder.SetInsertPoint(invalidBB->getTerminator());  // (invalidBB already branches to merge)
+        llvm::Value* emptyManaged = ctx.builder.CreateCall(strDupF, {emptyStr}, "read_all_empty_managed");
         ctx.builder.SetInsertPoint(mergeBB);
         llvm::PHINode* phi = ctx.builder.CreatePHI(i8p, 2, "read_all_res");
-        phi->addIncoming(emptyStr, invalidBB);
-        phi->addIncoming(buf, doReadBB);
+        phi->addIncoming(emptyManaged, invalidBB);
+        phi->addIncoming(managed, doReadBB);
         return ctx.ir_gen->wrap(phi);
     };
 
