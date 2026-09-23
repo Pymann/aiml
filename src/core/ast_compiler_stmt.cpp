@@ -1454,6 +1454,19 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
 
             for (const auto& [memberName, member] : orderedMembers) {
                 if (!member.initValue) continue;
+                // spec/61 §5 (memV3): a CONTAINER field (list/map/buffer) was already given a valid
+                // empty HANDLE by initClassContainerMembers. A scalar default (e.g. the `""` placeholder
+                // used because `[]` at field position 2 breaks the field parser) must NOT be applied —
+                // storing a string pointer over the handle slot clobbers the handle (leak) and turns the
+                // field into a bogus handle → the next set/access frees a string as a handle → SIGSEGV
+                // (test_db_indexed_list_field). Leave the empty handle in place.
+                {
+                    const std::string& mtn = member.typeName;
+                    bool isContainerField = (mtn.rfind("list<", 0) == 0 && mtn.back() == '>')
+                        || (mtn.rfind("map<", 0) == 0 && mtn.back() == '>')
+                        || mtn == "buffer" || (mtn.rfind("buffer<", 0) == 0 && mtn.back() == '>');
+                    if (ctx.memV3 && isContainerField) continue;
+                }
                 IRValue* fieldInitV = visitExpression(member.initValue.get());
                 if (!fieldInitV) {
                     LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "Failed to evaluate default value for member '" +

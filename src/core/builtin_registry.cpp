@@ -3057,7 +3057,9 @@ void registerBuiltins(CompilerContext& ctx) {
                     if      (fTy == "string")             tag = 0;
                     else if (fTy == "i32")                tag = 1;
                     else if (fTy == "i64")                tag = 2;
-                    else if (fTy == "list<string>")       tag = 3;
+                    // spec/61 §5: under memV3 a list<string> FIELD is a HANDLE pointer (tag 4), not the
+                    // inline {size,cap,data} struct (tag 3) — the backfill must deref it.
+                    else if (fTy == "list<string>")       tag = ctx.memV3 ? 4 : 3;
                     if (tag < 0) continue;  // unsupported type: open only, no backfill
 
                     int32_t off = (int32_t)sl->getElementOffset((unsigned)mem.index);
