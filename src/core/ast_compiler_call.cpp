@@ -3322,6 +3322,16 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
             IRValue* baseAlloca = argSym->ir_alloca_inst
                 ? argSym->ir_alloca_inst : ctx.ir_gen->wrap(argSym->alloca_inst);
             llvm::Value* rawAlloca = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+            // spec/61 §5 (memV3): a list/map/buffer local is a HANDLE — its slot holds a POINTER to the
+            // {size,cap,data} part, which is exactly what emitSerializeList/Map expects. Passing the
+            // alloca ADDRESS here (correct only under OFF, where the alloca IS the inline struct) makes
+            // the serializer read the handle-pointer's bytes as {size,cap,data} → `size` becomes the low
+            // 32 bits of a heap address (ASLR) → garbage/huge count → non-deterministic SIGSEGV
+            // (test_json_style_serialize, test_serialize_ext). Load the handle under memV3.
+            if (ctx.memV3 && ctx.isMemV3ContainerHandle(argType)) {
+                rawAlloca = ctx.builder.CreateLoad(
+                    llvm::PointerType::get(ctx.context, 0), rawAlloca, "ser_list_handle");
+            }
             return ctx.ir_gen->wrap(SerializeImpl::serialize(ctx, rawAlloca, argType, stylePtr));
         }
 
