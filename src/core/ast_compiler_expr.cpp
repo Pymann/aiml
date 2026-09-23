@@ -1303,6 +1303,13 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
                                                 "aiml_str_incref", ctx.module);
             }
             ctx.builder.CreateCall(incref, {val});
+            // spec/61 §7: this incref made a FRESH owned alias — register it as an owned stmt-temp
+            // (like the str.* producers do). A `decl x = at(list,i)` then MOVES it (the decl-init
+            // share-incref is skipped for owned temps), so the element is not incref'd TWICE and
+            // left leaking when both x's drop and the list release decref only once (grai
+            // match_key_of). A transient `at(..)` read is decref'd at statement end → balanced.
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+                ctx.stmtTempStack.back().push_back(val);
         }
         return ctx.ir_gen->wrap(val);
     }
