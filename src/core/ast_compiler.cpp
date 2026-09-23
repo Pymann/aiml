@@ -1439,14 +1439,21 @@ void Compiler::compile(Program* prog) {
         for (const auto& d : prog->declarations) {
             auto* decl = dynamic_cast<DeclStmt*>(d.get());
             if (!decl) continue;
-            IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
-            if (!ty) continue;
-            llvm::Type* llvmTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ty));
             // §5 storage-location invariance: memV3 container global = handle pointer slot (see the
             // main-mode block below). Keep lib-mode and main-mode representations identical so a
             // library-defined container global and its main-mode extern view share one ABI.
+            // Compute this BEFORE the `!ty` skip: a container type name whose element enum is defined
+            // in a not-yet-resolved import (map<CardType:i32> — CardType from a sibling) makes
+            // resolveType() return null, but the global is STILL a ptr handle. Skipping it here left
+            // it to be created lazily with the inline struct type (function-body ref) → Phase-2 then
+            // set a ptr-null init on a struct-typed global → LLVM verify "initializer type does not
+            // match" (mkp_tables' 7 enum-keyed map tables). Always materialise the ptr handle global.
             bool memV3HandleGlobal = ctx.memV3 && ctx.isMemV3ContainerHandle(decl->typeName);
-            if (memV3HandleGlobal) llvmTy = llvm::PointerType::get(ctx.context, 0);
+            IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
+            if (!ty && !memV3HandleGlobal) continue;
+            llvm::Type* llvmTy = memV3HandleGlobal
+                ? llvm::PointerType::get(ctx.context, 0)
+                : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ty));
             std::string symName = decl->is_extern
                 ? "__lib_" + decl->varName
                 : "__lib_" + filePrefix + decl->varName;
@@ -1454,6 +1461,20 @@ void Compiler::compile(Program* prog) {
                 ? llvm::GlobalValue::WeakAnyLinkage
                 : llvm::GlobalValue::ExternalLinkage;
             llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(symName);
+            // A prior lazy reference may have created this global with the WRONG value type (inline
+            // container struct instead of the memV3 ptr handle). Recreate it as the ptr handle so its
+            // type and null initializer agree — else module verification rejects the mismatch.
+            if (gv && gv->getValueType() != llvmTy) {
+                std::string tmpName = symName + ".mismatch";
+                gv->setName(tmpName);
+                auto* fixed = new llvm::GlobalVariable(
+                    ctx.module, llvmTy, /*isConstant=*/false, linkage,
+                    llvm::Constant::getNullValue(llvmTy), symName);
+                gv->replaceAllUsesWith(
+                    llvm::ConstantExpr::getBitCast(fixed, gv->getType()));
+                gv->eraseFromParent();
+                gv = fixed;
+            }
             if (gv) {
                 if (!gv->hasInitializer())
                     gv->setInitializer(llvm::Constant::getNullValue(llvmTy));
@@ -1609,15 +1630,18 @@ void Compiler::compile(Program* prog) {
         for (const auto& d : prog->declarations) {
             auto* decl = dynamic_cast<DeclStmt*>(d.get());
             if (!decl) continue;
-            IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
-            if (!ty) continue;
-            llvm::Type* llvmTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ty));
             // spec/61 §5 "storage location is representation-invariant": under memV3 a Class-3
             // container global is a HANDLE, exactly like a local — the global variable holds a
             // handle pointer (not an inline {size,cap,data} struct). Declare it as a pointer slot
             // and mark the symbol is_byref_arg so every access derefs the handle (like a local).
+            // Computed BEFORE the `!ty` skip: an enum-keyed container (map<CardType:i32>) whose enum
+            // is a not-yet-resolved import returns null from resolveType but is still a ptr handle.
             bool memV3HandleGlobal = ctx.memV3 && ctx.isMemV3ContainerHandle(decl->typeName);
-            if (memV3HandleGlobal) llvmTy = llvm::PointerType::get(ctx.context, 0);
+            IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
+            if (!ty && !memV3HandleGlobal) continue;
+            llvm::Type* llvmTy = memV3HandleGlobal
+                ? llvm::PointerType::get(ctx.context, 0)
+                : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ty));
             std::string symName = decl->is_extern
                 ? "__lib_" + decl->varName
                 : "__global_" + decl->varName;
@@ -1625,6 +1649,17 @@ void Compiler::compile(Program* prog) {
                 ? llvm::GlobalValue::WeakAnyLinkage
                 : llvm::GlobalValue::ExternalLinkage;
             llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(symName);
+            // A prior lazy reference may have created this global with the inline container struct
+            // type instead of the memV3 ptr handle. Recreate it as ptr so type + null init agree.
+            if (gv && gv->getValueType() != llvmTy) {
+                gv->setName(symName + ".mismatch");
+                auto* fixed = new llvm::GlobalVariable(
+                    ctx.module, llvmTy, /*isConstant=*/false, linkage,
+                    llvm::Constant::getNullValue(llvmTy), symName);
+                gv->replaceAllUsesWith(llvm::ConstantExpr::getBitCast(fixed, gv->getType()));
+                gv->eraseFromParent();
+                gv = fixed;
+            }
             if (gv) {
                 if (!gv->hasInitializer())
                     gv->setInitializer(llvm::Constant::getNullValue(llvmTy));
