@@ -1892,16 +1892,34 @@ void registerBuiltins(CompilerContext& ctx) {
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))}));
             };
         };
+        // spec/61 §7: a unary yaml accessor that returns a FRESH owned aiml string (scalar/dump/error,
+        // all via copyString → aiml_str_ndup, rc=1, no other owner). Register the result as an owned
+        // stmt-temp so a binding local MOVES it (single rc ref, decref'd by its scope-drop) and an
+        // unbound transient is decref'd at statement end. Without this the decl-init normalisation
+        // treats it as a BORROW and increfs it (rc 1→2, slot drops to 1) → the original ref leaks
+        // (the grai yaml-grep string leak).
+        auto unaryStrOwned = [](const char* name) {
+            return [name](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                if (args.empty()) return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(i8p));
+                auto* function = ctx.getFunction(name, i8p, {i8p});
+                llvm::Value* res = ctx.builder.CreateCall(function, {
+                    static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))});
+                if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+                    ctx.stmtTempStack.back().push_back(res);
+                return ctx.ir_gen->wrap(res);
+            };
+        };
         yaml.builtinFuncs["parse"] = unaryPtr("aiml_yaml_parse");
         yaml.builtinFuncs["parse_file"] = unaryPtr("aiml_yaml_parse_file");
-        yaml.builtinFuncs["error"] = unaryPtr("aiml_yaml_error");
+        yaml.builtinFuncs["error"] = unaryStrOwned("aiml_yaml_error");
         yaml.builtinFuncs["root"] = unaryPtr("aiml_yaml_root");
         yaml.builtinFuncs["kind"] = unaryI32("aiml_yaml_kind");
         yaml.builtinFuncs["size"] = unaryI32("aiml_yaml_size");
         yaml.builtinFuncs["line"] = unaryI32("aiml_yaml_line");
         yaml.builtinFuncs["column"] = unaryI32("aiml_yaml_column");
-        yaml.builtinFuncs["scalar"] = unaryPtr("aiml_yaml_scalar");
-        yaml.builtinFuncs["dump"] = unaryPtr("aiml_yaml_dump");
+        yaml.builtinFuncs["scalar"] = unaryStrOwned("aiml_yaml_scalar");
+        yaml.builtinFuncs["dump"] = unaryStrOwned("aiml_yaml_dump");
         yaml.builtinFuncs["free"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             if (args.empty()) return nullptr;
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
@@ -1927,9 +1945,14 @@ void registerBuiltins(CompilerContext& ctx) {
             auto* i32 = ctx.builder.getInt32Ty();
             if (args.size() < 2) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
             auto* function = ctx.getFunction("aiml_yaml_key", i8p, {i8p, i32});
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(function, {
+            // yaml.key returns a FRESH owned aiml string (copyString) → own it as a stmt-temp (see
+            // unaryStrOwned) so the binding local moves it / an unbound transient is decref'd.
+            llvm::Value* res = ctx.builder.CreateCall(function, {
                 static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
-                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))}));
+                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))});
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+                ctx.stmtTempStack.back().push_back(res);
+            return ctx.ir_gen->wrap(res);
         };
         yaml.builtinFuncs["get"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
