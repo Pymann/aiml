@@ -3229,10 +3229,30 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         if (it != retExit->slots.end() && it->second.origin == AIML::AST::Origin::Owned)
             retBaseOwned = true;
     }
+    // spec/61 §6.2: a `return: { call: <producer> }` hands back a FRESH owned value — a str.*/list
+    // builtin alloc'd with an rc-1 header, or a user fn in ownsReturnFns returning an owned box. The
+    // callee produced it, so it CANNOT alias any of THIS function's locals → dropping them on the
+    // return path is safe (and required: else a `list<string>` split-local declared before
+    // `return: head.trim` leaks — grai run_replace/match_key_of, the container never freed on any
+    // exit). Restricted to KNOWN producers so `return: obj.borrow_view()` (a view into a local) still
+    // conservatively skips cleanup.
+    bool retFreshOwned = false;
+    if (auto* rcx = dynamic_cast<CallExpr*>(retStmt->value.get())) {
+        const std::string& fn = rcx->functionName;
+        size_t dp = fn.rfind('.');
+        std::string shortName = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+        bool builtinFresh = shortName == "substr" || shortName == "lower" || shortName == "upper"
+            || shortName == "title" || shortName == "trim" || shortName == "replace"
+            || shortName == "split" || shortName == "slice";
+        if (builtinFresh || ctx.stringProducerFns.count(shortName)
+            || ctx.ownsReturnMatches(shortName, ctx.currentFunctionReturnType))
+            retFreshOwned = true;
+    }
     // AIML v2 (P4): returning a refcount model is alias-safe to clean up — the returned object is
     // exempted by retModelAddr (a move), and every other local's kind-7 decref is order-independent.
     bool safeToCleanup = (retTy && retTy->isVoidTy()) || retScalar || retBaseOwned
-                         || (retModelAddr != nullptr) || (retContainerSlot != nullptr);
+                         || (retModelAddr != nullptr) || (retContainerSlot != nullptr)
+                         || retFreshOwned;
     // spec/61 §6.2 (T1): the returned value only aliases the owner's heap when the return TYPE is a
     // pointer/struct (`return x.field` handing out x's sub-heap). For a SCALAR/void return the value
     // is a copy that cannot alias — e.g. `return str_local.len` yields an i32 — so the owner must NOT
