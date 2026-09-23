@@ -125,7 +125,7 @@
       - set: [tries, { "+": [tries, 1] }]
 - print: ["client: pumped 20x — accessing g_items now"]
 
-- decl: [first_item, ptr<ItemImpl>, { at: [g_items, 0] }]
+- decl: [first_item, ref<ItemImpl>, { at: [g_items, 0] }]
 - print: ["client: first_item.tags.len=${first_item.tags.len}"]
 
 # CRITICAL: via vtable, like DataCreatures' hover.

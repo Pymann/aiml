@@ -29,9 +29,9 @@
     args: [[var_i, i32]]
     return: ptr<Tagged>
     body:
-      - decl: [var_it, ptr<ItemBehavior>, { at: [items, var_i] }]
-      - decl: [view, ptr<Tagged>, var_it]
+      - decl: [var_it, ref<ItemBehavior>, { at: [items, var_i] }]
+      - decl: [view, ref<Tagged>, var_it]
       - return: view
 
-- decl: [var_v, ptr<Tagged>, { call: [tile_at, 0] }]
+- decl: [var_v, ref<Tagged>, { call: [tile_at, 0] }]
 - print: ["got=${call: [var_v.tag]}"]

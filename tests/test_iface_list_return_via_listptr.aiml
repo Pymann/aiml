@@ -42,8 +42,8 @@
 - call: [items.push, var_it]
 
 # Source the interface pointer through `at:` (matches DataCreatures pattern).
-- decl: [from_list, ptr<ItemImpl>, { at: [items, 0] }]
-- decl: [view, ptr<Tagged>, from_list]
+- decl: [from_list, ref<ItemImpl>, { at: [items, 0] }]
+- decl: [view, ref<Tagged>, from_list]
 - decl: [got, list<string>, { call: [view.tags] }]
 
 - print: ["len=${got.len}"]

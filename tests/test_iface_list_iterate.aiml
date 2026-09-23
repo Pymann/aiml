@@ -39,7 +39,7 @@
 - while:
     condition: { lt: [var_i, cats.len] }
     body:
-      - decl: [var_it, ptr<CatBehavior>, { at: [cats, var_i] }]
-      - decl: [view, ptr<Sayable>, var_it]
+      - decl: [var_it, ref<CatBehavior>, { at: [cats, var_i] }]
+      - decl: [view, ref<Sayable>, var_it]
       - print: ["poly[${var_i}]: ${call: [view.say]}"]
       - set: [var_i, { +: [var_i, 1] }]

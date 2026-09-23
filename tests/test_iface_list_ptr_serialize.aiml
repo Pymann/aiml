@@ -46,7 +46,7 @@
 - while:
     condition: { lt: [var_i, items2.len] }
     body:
-      - decl: [var_it, ptr<ItemBehavior>, { at: [items2, var_i] }]
-      - decl: [var_v,  ptr<Tagged>,       var_it]
+      - decl: [var_it, ref<ItemBehavior>, { at: [items2, var_i] }]
+      - decl: [var_v,  ref<Tagged>,       var_it]
       - print: ["bag2[${var_i}] poly: tag=${call: [var_v.tag]}"]
       - set: [var_i, { +: [var_i, 1] }]

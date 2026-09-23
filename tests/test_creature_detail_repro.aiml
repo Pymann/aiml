@@ -171,5 +171,5 @@
 - print: ["post: items=${cd2.items.len} active=${cd2.active_skills.len} base=${cd2.base_skills.len}"]
 
 - decl: [items2, list<ptr<ItemBehavior>>, cd2.items]
-- decl: [first, ptr<ItemBehavior>, { at: [items2, 0] }]
+- decl: [first, ref<ItemBehavior>, { at: [items2, 0] }]
 - print: ["first item name='${first.name}' icon='${first.icon_path}'"]
