@@ -1428,6 +1428,35 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                      return ctx.ir_gen->getInt32(0);
                  }
              }
+             // spec/61 §5.4: `list<ptr<T>>.push(x)` MOVES an OWNING ptr<T> in. A BORROW — a `.get`/`.at`
+             // read (which yields a ref<T>, not an owner) or a ref<T> variable — must NOT be pushed: the
+             // list would later free a box it does not own (double-free at teardown, the
+             // test_list_model_push_value_and_pointer crash). To alias borrows use `list<ref<T>>`; to
+             // hand an owner over use `pop`/`take` or a `{ new }`/producer result.
+             if (!call->args.empty() && listElemName.rfind("ptr<", 0) == 0) {
+                 Expr* ax = call->args[0].get();
+                 std::string why;
+                 if (auto* ce = dynamic_cast<CallExpr*>(ax)) {
+                     size_t dp = ce->functionName.rfind('.');
+                     std::string sn = (dp == std::string::npos) ? ce->functionName : ce->functionName.substr(dp + 1);
+                     if (sn == "get" || sn == "at" || sn == "first" || sn == "last")
+                         why = "a '" + sn + "' read yields a ref<T> borrow";
+                 } else if (auto* ve = dynamic_cast<VariableExpr*>(ax)) {
+                     if (ve->name.find('.') == std::string::npos) {
+                         if (Symbol* rs = resolveVariable(ve->name))
+                             if (rs->typeName.rfind("ref<", 0) == 0)
+                                 why = "'" + ve->name + "' is a ref<T> borrow";
+                     }
+                 }
+                 if (!why.empty()) {
+                     std::string inner = listElemName.substr(4, listElemName.size() - 5);
+                     LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "cannot push a borrow into list<" + listElemName +
+                         ">: " + why + ", but the list owns unique ptr<" + inner + "> boxes (it would free a "
+                         "box it does not own → double-free). Use list<ref<" + inner + ">> to hold borrows, "
+                         "or move an owner in via pop/take or a { new }/producer result (§5.4).");
+                     return ctx.ir_gen->getInt32(0);
+                 }
+             }
              llvm::Value* pushVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
              // spec/61 §5.7 (memV3): a NESTED CONTAINER element (list<list<T>>, list<map<…>>,
              // list<buffer>) stores the inner container's HANDLE (a pointer). push CO-OWNS it →
