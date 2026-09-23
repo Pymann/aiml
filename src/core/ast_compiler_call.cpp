@@ -1374,6 +1374,59 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          std::string listElemName = className.substr(5, className.length() - 6);
          llvm::Type* llvmListElemType = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(listElemName)));
          if (methodName == "push" && argVals.size() > 0) {
+             // spec/61 §6.2/§10: a pointer expression (ptr<T>/ref<T>/shared<T>, e.g. { call: [make]}
+             // or { call: [list.get, i] } or a member) MUST NOT be pushed into a VALUE list<Model> —
+             // the element slot is an inline value, so the pointer would be stored as struct bytes /
+             // duplicate a unique owner (double-free). Reject at compile time (test_ptr_call/member_
+             // push_into_value_list_error, test_list_model_nested_get_push_repro). The check catches
+             // Call/Member/At exprs the VariableExpr-only move check missed.
+             if (!call->args.empty() && ctx.classes.count(listElemName)
+                 && !ctx.classes[listElemName].isBuiltin && ctx.classes[listElemName].type
+                 && !ctx.isRefcountModel(listElemName)) {
+                 // Resolve the pushed expression's static type (the cases that yield a pointer):
+                 //   user fn call → its return type; recv.get/at/first/last on a list<Model> → ptr<M>;
+                 //   member access base.field → the field's declared type.
+                 std::string argTy;
+                 Expr* ax = call->args[0].get();
+                 if (auto* ce = dynamic_cast<CallExpr*>(ax)) {
+                     const std::string& fn = ce->functionName;
+                     size_t dp = fn.rfind('.');
+                     if (dp == std::string::npos) {
+                         if (auto* fi = resolveFunction(fn)) argTy = fi->returnTypeName;
+                     } else {
+                         std::string recv = fn.substr(0, dp), meth = fn.substr(dp + 1);
+                         if ((meth == "get" || meth == "at" || meth == "first" || meth == "last")) {
+                             if (Symbol* rs = resolveVariable(recv)) {
+                                 const std::string& rt = rs->typeName;
+                                 if (rt.rfind("list<", 0) == 0 && rt.back() == '>') {
+                                     std::string el = rt.substr(5, rt.size() - 6);
+                                     if (ctx.classes.count(el) && !ctx.isRefcountModel(el)) argTy = "ptr<" + el + ">";
+                                 }
+                             }
+                         }
+                     }
+                 } else if (auto* ve = dynamic_cast<VariableExpr*>(ax)) {
+                     std::string nm = ve->name;
+                     size_t dot = nm.find('.');
+                     if (dot != std::string::npos) {
+                         Symbol* bs = resolveVariable(nm.substr(0, dot));
+                         std::string field = nm.substr(dot + 1);
+                         if (bs && field.find('.') == std::string::npos && ctx.classes.count(bs->typeName)) {
+                             auto& mm = ctx.classes[bs->typeName].members;
+                             auto mit = mm.find(field);
+                             if (mit != mm.end()) argTy = mit->second.typeName;
+                         }
+                     }
+                 }
+                 if (argTy.rfind("ptr<", 0) == 0 || argTy.rfind("ref<", 0) == 0
+                     || argTy.rfind("shared<", 0) == 0) {
+                     LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "cannot push a pointer expression of type '"
+                         + argTy + "' into a value list<" + listElemName + ">: the element is an inline "
+                         "value, not a pointer. Push a value (materialise/clone the pointee) or declare "
+                         "the list as list<ptr<" + listElemName + ">> (§6.2/§10).");
+                     return ctx.ir_gen->getInt32(0);
+                 }
+             }
              llvm::Value* pushVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
              // spec/61 §5.7 (memV3): a NESTED CONTAINER element (list<list<T>>, list<map<…>>,
              // list<buffer>) stores the inner container's HANDLE (a pointer). push CO-OWNS it →
