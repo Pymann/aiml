@@ -2228,8 +2228,13 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                     std::string inner = fTy.substr(5, fTy.size() - 6);
                     if (inner != "string") return;  // V1: only list<string>
                     llvm::StructType* lstTy = (llvm::StructType*)ctx.getLLVMType(fTy);
-                    llvm::Value* sizePtr = ctx.builder.CreateStructGEP(lstTy, fldGep, 0);
-                    llvm::Value* dataPtr = ctx.builder.CreateStructGEP(lstTy, fldGep, 2);
+                    // spec/61 §5: a memV3 list FIELD holds the handle POINTER — load it before the
+                    // GEPs, else the handle-pointer bytes are read as {size,data} → null/garbage crash
+                    // (test_db_indexed_list_field).
+                    llvm::Value* lstBase = fldGep;
+                    if (ctx.memV3) lstBase = ctx.builder.CreateLoad(i8p, fldGep, "idx_list_conh");
+                    llvm::Value* sizePtr = ctx.builder.CreateStructGEP(lstTy, lstBase, 0);
+                    llvm::Value* dataPtr = ctx.builder.CreateStructGEP(lstTy, lstBase, 2);
                     llvm::Value* size    = ctx.builder.CreateLoad(i32, sizePtr);
                     llvm::Value* data    = ctx.builder.CreateLoad(i8p, dataPtr);
                     // Loop: for (i=0; i<size; ++i) op(idx, data[i], key)
