@@ -3585,7 +3585,13 @@ void registerBuiltins(CompilerContext& ctx) {
                 if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p, i8p, i8p}, false), llvm::Function::ExternalLinkage, "aiml_http_server_filesystem", ctx.module);
                 if (!call || call->args.size() < 3) return nullptr;
                 IRValue* a0 = evalExpr(call->args[0].get());
-                // dirs is a list<path> — pass alloca pointer, not loaded struct
+                // dirs is a list<path>. build_fs_route reads it as an AimlList {size,cap,data}.
+                // spec/61 §5 (memV3): the list local is a HANDLE — its slot holds a POINTER to the
+                // {size,cap,data} part, so the VALUE of the variable (evalExpr) IS the AimlList*.
+                // Passing the alloca ADDRESS here (as the OFF path does) would hand build_fs_route a
+                // pointer-to-pointer → it reads the handle pointer's bytes as size/data → empty/garbage
+                // fs_dirs → every request 404s (test_http_range/traversal). OFF keeps the alloca path
+                // (there the alloca IS the inline {size,cap,data} struct).
                 llvm::Value* dirsPtr = nullptr;
                 if (auto* vx = dynamic_cast<AIML::AST::VariableExpr*>(call->args[1].get())) {
                     Symbol* sym = nullptr;
@@ -3599,7 +3605,14 @@ void registerBuiltins(CompilerContext& ctx) {
                         llvm::Value* av = sym->alloca_inst
                             ? static_cast<llvm::Value*>(sym->alloca_inst)
                             : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
-                        dirsPtr = ctx.builder.CreateBitCast(av, i8p);
+                        if (ctx.memV3) {
+                            // memV3: the slot holds a POINTER to the {size,cap,data} part — LOAD it so
+                            // build_fs_route receives the AimlList*, not the slot address (which it would
+                            // misread as size/data → empty fs_dirs → 404). OFF: the alloca IS the struct.
+                            dirsPtr = ctx.builder.CreateLoad(i8p, av, "fs_dirs_handle");
+                        } else {
+                            dirsPtr = ctx.builder.CreateBitCast(av, i8p);
+                        }
                     }
                 }
                 if (!dirsPtr) {
