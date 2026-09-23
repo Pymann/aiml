@@ -972,9 +972,19 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                             // {extern: true} → plain __lib_<varName>
                             // otherwise      → file-qualified __lib_<sanitized_path>_<varName>
                             if (ctx.symbol_table.count(d->varName)) continue;
+                            // §5 storage-location invariance: a memV3 container global is a HANDLE —
+                            // the defining unit declares it as a ptr slot (ast_compiler.cpp Pass 1).
+                            // The consuming unit's EXTERN view MUST match: declare it ptr and mark the
+                            // symbol is_byref_arg so reads deref the handle. Creating it with the inline
+                            // container struct type here made the consumer read the handle pointer bits
+                            // as {size,cap,data} → garbage len / empty map across a file boundary
+                            // (mkp_math reading mkp_tables' global tables → strength 0 / INT_MAX).
+                            bool memV3HandleGlobal = ctx.memV3 && ctx.isMemV3ContainerHandle(d->typeName);
                             AIML::IRType* ty = ctx.ir_gen->resolveType(d->typeName);
-                            if (!ty) continue;
-                            llvm::Type* llvmTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ty));
+                            if (!ty && !memV3HandleGlobal) continue;
+                            llvm::Type* llvmTy = memV3HandleGlobal
+                                ? llvm::PointerType::get(ctx.context, 0)
+                                : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ty));
                             std::string symName;
                             if (d->is_extern) {
                                 symName = "__lib_" + d->varName;
@@ -984,6 +994,17 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                                 symName = "__lib_" + importSuffix + "_" + d->varName;
                             }
                             llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(symName);
+                            if (gv && gv->getValueType() != llvmTy) {
+                                // A prior reference created it with the wrong (inline struct) type.
+                                gv->setName(symName + ".mismatch");
+                                auto* fixed = new llvm::GlobalVariable(
+                                    ctx.module, llvmTy, false,
+                                    llvm::GlobalValue::ExternalLinkage, nullptr, symName);
+                                gv->replaceAllUsesWith(
+                                    llvm::ConstantExpr::getBitCast(fixed, gv->getType()));
+                                gv->eraseFromParent();
+                                gv = fixed;
+                            }
                             if (!gv) {
                                 gv = new llvm::GlobalVariable(
                                     ctx.module, llvmTy, false,
@@ -998,6 +1019,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                             sym.typeName       = d->typeName;
                             sym.is_const       = d->is_const;
                             sym.is_volatile    = d->is_volatile;
+                            if (memV3HandleGlobal) sym.is_byref_arg = true;
                             ctx.symbol_table[d->varName] = sym;
                         }
                     }
