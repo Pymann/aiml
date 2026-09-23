@@ -8,6 +8,7 @@
 // owner's teardown (fre → aiml_str_decref) can read the rc header at (s - 8). A libc strdup'd /
 // string-literal value has no header → the decref reads 8 bytes out of bounds.
 extern "C" char* aiml_str_dup(const char* s);
+extern "C" void  aiml_str_decref(char* s);
 
 // Normalize a CLI flag: strip leading '-' or '--', replace '-' with '_'.
 // Writes into buf (caller-owned, must be >= len(arg)+1 bytes).
@@ -79,6 +80,10 @@ void aiml_arg_dump_impl(void*        struct_ptr,
                 case 2: {  // string (i8*)
                     argi++;
                     const char* next = (argi < argc) ? argv[argi] : NULL;
+                    // The field already holds the model's default value (an aiml-managed "" the compiler
+                    // dup'd at construction). Decref it before overwriting, else that default leaks — the
+                    // owner's later scope-drop only frees the NEW value (spec/61 §7). Null/non-aiml-safe.
+                    aiml_str_decref(*(char**)field_ptr);
                     *(const char**)field_ptr = aiml_str_dup((next && next[0]) ? next : "");
                     break;
                 }
