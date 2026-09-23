@@ -16,6 +16,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+// spec/61 §4: aiml-managed string dup (allocates an AimlStrHeader + rc so the string can be
+// decref'd). A list<string> element MUST be aiml-managed — libc strdup has no rc header, so the
+// list's teardown (aiml_str_decref) would read garbage 4 bytes before the pointer (invalid access).
+extern "C" char* aiml_str_dup(const char* s);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // .db file header (32 bytes, packed)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2505,8 +2510,10 @@ extern "C" void aiml_db_index_findings(void* idx_ptr, const char* field_val, voi
         out->capacity = n;
     }
     for (int32_t i = 0; i < n; i++) {
-        // strdup so the returned char* survives later index mutations.
-        out->data[i] = strdup(hits[(size_t)i].c_str());
+        // aiml_str_dup (not libc strdup) so the returned char* is an aiml-managed string with an rc
+        // header — the findings list<string> is a memV3 handle whose teardown decrefs each element
+        // (libc strdup → no header → invalid read in aiml_str_decref). Survives index mutations.
+        out->data[i] = aiml_str_dup(hits[(size_t)i].c_str());
     }
     out->size = n;
 }
@@ -2514,10 +2521,11 @@ extern "C" void aiml_db_index_findings(void* idx_ptr, const char* field_val, voi
 // Field-type tags used by aiml_db_index_backfill.
 // 0=string (char*), 1=i32, 2=i64, 3=list<string>.
 enum AimlIndexFieldTag : int32_t {
-    AIML_IDX_FT_STRING    = 0,
-    AIML_IDX_FT_I32       = 1,
-    AIML_IDX_FT_I64       = 2,
-    AIML_IDX_FT_LIST_STR  = 3,
+    AIML_IDX_FT_STRING         = 0,
+    AIML_IDX_FT_I32            = 1,
+    AIML_IDX_FT_I64            = 2,
+    AIML_IDX_FT_LIST_STR       = 3,   // OFF: field IS the inline {size,cap,data} list struct
+    AIML_IDX_FT_LIST_STR_HANDLE = 4,  // memV3 (spec/61 §5): field is a POINTER to a list HANDLE
 };
 
 // Walks the main Kv (`kv`), extracting `field_name` from each decoded record
@@ -2555,9 +2563,25 @@ extern "C" void aiml_db_index_backfill(void* kv_ptr, void* idx_ptr,
                 break;
             }
             case AIML_IDX_FT_LIST_STR: {
-                // List layout: { i32 size, i32 capacity, char** data }
+                // OFF: `field` IS the inline list struct { i32 size, i32 capacity, char** data }.
                 int32_t size = *(const int32_t*)field;
                 char* const* data = *(char* const* const*)(field + 8);
+                if (!data || size <= 0) return;
+                for (int32_t i = 0; i < size; i++) {
+                    if (data[i]) aiml_db_index_add(idx, data[i], key.c_str());
+                }
+                break;
+            }
+            case AIML_IDX_FT_LIST_STR_HANDLE: {
+                // spec/61 §5 (memV3): `field` holds a POINTER to a refcounted list HANDLE
+                // [i32 rc][i32 pad][{ i32 size, i32 cap, char** data }]. Deref the handle first; its
+                // {size,cap,data} part starts at the handle pointer (8 bytes past the block start, which
+                // is exactly what the slot stores). Reading `field` inline would treat the handle
+                // pointer's bytes as size/data → garbage (a string's bytes as a pointer → SIGSEGV).
+                const uint8_t* handle = *(const uint8_t* const*)field;
+                if (!handle) return;
+                int32_t size = *(const int32_t*)handle;
+                char* const* data = *(char* const* const*)(handle + 8);
                 if (!data || size <= 0) return;
                 for (int32_t i = 0; i < size; i++) {
                     if (data[i]) aiml_db_index_add(idx, data[i], key.c_str());
