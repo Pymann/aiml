@@ -93,6 +93,10 @@ namespace AIML {
             // argNames — lets the caller-side borrow-check tell a by-value ptr<T> param (a MOVE)
             // from a ref<T> param (a borrow). Populated in visitFunction.
             std::vector<std::string> argTypeNames;
+            // spec/61 §6.2/§10: the declared RETURN TYPE string (e.g. "ptr<Payload>", "i32"), so a
+            // call site can tell a pointer-returning producer from a value one — used by the
+            // value-list push check to reject `list<Model>.push({call:[fn]})` when fn returns ptr<T>.
+            std::string returnTypeName;
             // spec/61 §3.1: per-parameter ownership qualifier, parallel to argNames.
             // "scope" (borrow, default) | "consumed" | "persistent". Read at the call site
             // to move a `consumed` argument out of the caller (drop the caller's ownership).
