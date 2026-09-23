@@ -826,6 +826,34 @@ void Compiler::emitBufferHandleDecl(DeclStmt* decl) {
     }
 }
 
+// spec/61 §5.4/§7: a value Model is MOVE-ONLY when it (transitively) owns a unique resource that a
+// member-wise value-copy would duplicate → double-free / dangling. Such a model cannot be value-copied
+// (bind ref<Model> to borrow, or { clone } for an independent copy). The move-only-inducing fields are
+// an owning ptr<T> (a unique box) and a `tensor` (Class-4 resource, single-owner via owns_data). A
+// shared<T> field is co-ownable (incref, NOT move-only); a ref<T> field is a non-owning borrow (NOT
+// move-only). Nested value-model fields are checked transitively (cycle-guarded).
+static bool modelIsMoveOnly(CompilerContext& ctx, const std::string& className,
+                            std::set<std::string>& seen) {
+    if (!seen.insert(className).second) return false;   // cycle guard (value nesting is acyclic anyway)
+    auto it = ctx.classes.find(className);
+    if (it == ctx.classes.end() || it->second.isBuiltin || !it->second.type) return false;
+    for (auto& mkv : it->second.members) {
+        const std::string& t = mkv.second.typeName;
+        if (t.rfind("ptr<", 0) == 0) return true;       // unique owning box
+        if (t == "tensor") return true;                 // Class-4 unique resource
+        // A bare nested value-model field: recurse (a ptr<>/ref<>/shared<> wrapper is not a value
+        // nesting — ptr is caught above, ref/shared are borrow/co-own, neither makes the parent
+        // move-only through a value copy of this slot).
+        if (ctx.classes.count(t) && !ctx.classes[t].isBuiltin && modelIsMoveOnly(ctx, t, seen))
+            return true;
+    }
+    return false;
+}
+static bool modelIsMoveOnly(CompilerContext& ctx, const std::string& className) {
+    std::set<std::string> seen;
+    return modelIsMoveOnly(ctx, className, seen);
+}
+
 void Compiler::visitDeclStmt(DeclStmt* decl) {
     ctx.validateIdentifier(decl->varName, "variable", decl->sourceNode);
 
@@ -840,13 +868,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
     // form here (memV3; the accessor read never destructively moves out of a container).
     if (ctx.memV3 && decl->initialValue) {
         const std::string& dtn = decl->typeName;
-        auto mci = ctx.classes.find(dtn);
-        bool moveOnlyModel = false;
-        if (mci != ctx.classes.end() && !mci->second.isBuiltin && mci->second.type) {
-            for (auto& mkv : mci->second.members)
-                if (mkv.second.typeName.rfind("ptr<", 0) == 0) { moveOnlyModel = true; break; }
-        }
-        if (moveOnlyModel) {
+        if (modelIsMoveOnly(ctx, dtn)) {
             Expr* iv0 = decl->initialValue.get();
             std::string acc;
             if (dynamic_cast<AtExpr*>(iv0)) acc = "at";
@@ -857,9 +879,10 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             }
             if (!acc.empty()) {
                 LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "decl: '" + decl->varName + "' binds a VALUE '"
-                    + dtn + "' to a '" + acc + "' read, which value-copies a MOVE-ONLY model (it has a "
-                    "ptr<T> field, §7) — duplicating a unique owner (double-free). Bind 'ref<" + dtn
-                    + ">' to borrow it, or use '{ clone: … }' for an independent copy (§5.4/§7).");
+                    + dtn + "' to a '" + acc + "' read, which value-copies a MOVE-ONLY model (it owns a "
+                    "ptr<T>/tensor resource, §7) — duplicating a unique owner (double-free / dangling). "
+                    "Bind 'ref<" + dtn + ">' to borrow it, or use '{ clone: … }' for an independent copy "
+                    "(§5.4/§7).");
                 return;
             }
         }
@@ -2017,7 +2040,54 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         LOG_ERROR(ctx.fmtLoc() + "Undefined variable (set target): " + targetStr);
         return;
     }
-    
+
+    // spec/61 §5.4/§7 (memV3): a VALUE-COPY into a whole MOVE-ONLY value Model duplicates a unique
+    // owner (ptr<T>/tensor) → double-free/dangling. The concrete crash was `set: [<.inner, an_inner]`
+    // copying a tensor-bearing model per-field (dropped the tensor / would double-free). Reject the
+    // value-copy form (plain value-model variable → bare value-model target). Legal alternatives: a
+    // ref<Model> target (borrow/alias) or `{ clone: … }` (independent copy). Precise + low-risk: only
+    // a bare value-model source variable into a bare value-model move-only target is caught here.
+    if (ctx.memV3 && setStmt->value) {
+        std::string tgtModelTy;
+        if (propName.empty()) tgtModelTy = sym->typeName;
+        else if (propName.find('.') == std::string::npos) {
+            std::string bcls = sym->typeName;
+            if (bcls.rfind("ptr<", 0) == 0 || bcls.rfind("ref<", 0) == 0 || bcls.rfind("shared<", 0) == 0) {
+                size_t lt = bcls.find('<');
+                if (lt != std::string::npos && bcls.back() == '>') bcls = bcls.substr(lt + 1, bcls.size() - lt - 2);
+            }
+            auto bci = ctx.classes.find(bcls);
+            if (bci != ctx.classes.end()) {
+                auto mit = bci->second.members.find(propName);
+                if (mit != bci->second.members.end()) tgtModelTy = mit->second.typeName;
+            }
+        }
+        if (!tgtModelTy.empty()
+            && tgtModelTy.rfind("ptr<", 0) != 0 && tgtModelTy.rfind("ref<", 0) != 0
+            && tgtModelTy.rfind("shared<", 0) != 0
+            && ctx.classes.count(tgtModelTy) && !ctx.classes[tgtModelTy].isBuiltin
+            && modelIsMoveOnly(ctx, tgtModelTy)) {
+            if (auto* ve = dynamic_cast<VariableExpr*>(setStmt->value.get())) {
+                if (ve->name.find('.') == std::string::npos) {
+                    Symbol* ssym = resolveVariable(ve->name);
+                    if (ssym) {
+                        const std::string& st = ssym->typeName;
+                        bool srcIsValueModel = st.rfind("ptr<", 0) != 0 && st.rfind("ref<", 0) != 0
+                            && st.rfind("shared<", 0) != 0 && ctx.classes.count(st);
+                        if (srcIsValueModel) {
+                            LOG_ERROR(ctx.fmtLoc() + "set: value-copies MOVE-ONLY model '" + tgtModelTy +
+                                "' from '" + ve->name + "' (it owns a ptr<T>/tensor, §7) — duplicating a "
+                                "unique owner (double-free/dangling). Declare the target 'ref<" + tgtModelTy +
+                                ">' to alias/borrow, or assign '{ clone: " + ve->name + " }' for an "
+                                "independent copy (§5.4/§7).");
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     IRValue* baseAlloca = sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst);
     IRType* baseElemTy = sym->ir_element_type ? sym->ir_element_type : ctx.ir_gen->wrapType(sym->element_type);
     
