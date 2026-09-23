@@ -1758,6 +1758,10 @@ extern "C" int32_t aiml_db_kv_get_copy_at(void* kv_ptr, const char* key, void* d
             // -1 so the caller skips this record (no tick, no write-back).
             aiml_ser_free_decoded(dst, kv->ser_nodes, kv->ser_n);
             memset(dst, 0, (size_t)kv->val_size);
+            // spec/61 §5 (memV3): the memset nulled every container-handle field, but a container FIELD
+            // is never null — the caller's next `.len`/`.at` on dst would deref null. Re-init empty
+            // handles so the caller reads a valid empty list/map/buffer (test_kv_get_copy_at F3/FAIL 10).
+            aiml_ser_init_empty_containers(dst, kv->ser_nodes, kv->ser_n);
             return -1;
         }
         return 1;
