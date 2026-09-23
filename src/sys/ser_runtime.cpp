@@ -15,10 +15,21 @@ extern "C" void  aiml_buffer_handle_incref(void*);
 #include <cstdint>
 #include <cstdio>
 #include <unistd.h>
+#include <unordered_set>
 
 // Thread-local decode-error flag — set when a structural error (absurd count etc.) is detected.
 // Reset at the start of aiml_ser_decode; checked at the end to return an error code.
 static thread_local bool g_dec_error = false;
+
+// spec/61 §5.1 (memV3): cycle guard for the free walker. A recursive UNIQUE ptr<T> graph can form a
+// runtime CYCLE — e.g. Owner owns ptr<Child> and Child holds a ptr<Owner> back-ref to that same
+// Owner (test_recursive_ptr_ser). The static descriptor cuts the cycle to an AIML_TD_PTR_REF, but
+// `fre` followed it unconditionally → Owner→Child→Owner→… infinite recursion (stack overflow) and a
+// double-free. ser_runtime.h documents the free walk as MEMOIZED; this set is that memoisation: each
+// unique heap box (PTR_STRUCT / PTR_REF param2==0) is freed at most once per top-level free tree. A
+// finite null-terminated chain (linked list) is unaffected — every node is a distinct address. It is
+// NOT used for refcount models/shared (those terminate via the refcount) or inline value fields.
+static thread_local std::unordered_set<const void*>* g_fre_seen = nullptr;
 
 /* ── Debug logging (AIML_DEBUG=1 env var) ─────────────────────────────────── */
 static int g_aiml_ser_debug = (getenv("AIML_DEBUG") != nullptr) ? 1 : 0;
@@ -692,8 +703,12 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         void* obj = nullptr;
         memcpy(&obj, data, sizeof(void*));
         if (obj) {
-            fre(n.param1, ns, nn, (uint8_t*)obj);
-            free(obj);
+            // Cycle guard: skip a box already freed on this teardown (a back-ref that closes a
+            // recursive-ptr cycle) — otherwise the follow re-enters and double-frees / overflows.
+            if (!g_fre_seen || g_fre_seen->insert(obj).second) {
+                fre(n.param1, ns, nn, (uint8_t*)obj);
+                free(obj);
+            }
             obj = nullptr;
             memcpy(data, &obj, sizeof(void*));
         }
@@ -749,8 +764,12 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
                     aiml_model_free_shell(obj);
                 }
             } else {                                     // unique ptr box: free inner heap + the box
-                if (r) fre(0, r->nodes, r->n, (uint8_t*)obj);
-                free(obj);
+                // Cycle guard (see AIML_TD_PTR_STRUCT): a back-ref closing a recursive-ptr cycle
+                // points at a box already being freed — free each unique box at most once.
+                if (!g_fre_seen || g_fre_seen->insert(obj).second) {
+                    if (r) fre(0, r->nodes, r->n, (uint8_t*)obj);
+                    free(obj);
+                }
             }
         }
         obj = nullptr;
@@ -1274,5 +1293,17 @@ extern "C" void aiml_ser_free_decoded(void*               obj,
                                        const AimlTypeNode* nodes,
                                        int32_t             n_nodes) {
     if (!obj || !nodes || n_nodes <= 0) return;
+    // spec/61 §5.1: establish the cycle guard at the OUTERMOST free entry (this call, or the
+    // aiml_model_decref that funnels here), so a recursive-ptr back-ref that points at the root box —
+    // or any box freed earlier in this tree — is not followed twice. Nested calls (list elements,
+    // model fields) reuse the same set; the root box is registered so a back-ref to it is a no-op.
+    if (g_fre_seen) {
+        fre(0, nodes, n_nodes, (uint8_t*)obj);
+        return;
+    }
+    std::unordered_set<const void*> seen;
+    seen.insert(obj);
+    g_fre_seen = &seen;
     fre(0, nodes, n_nodes, (uint8_t*)obj);
+    g_fre_seen = nullptr;
 }
