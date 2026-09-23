@@ -1219,6 +1219,17 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
     if (className == "string") {
         llvm::Value* strPtr = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(),
                                                      static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
+        // spec/61 §7: a string method that returns a FRESH owned aiml string (substr/lower/upper/title/
+        // trim/replace — all via aiml_str_* with an rc=1 header, no other owner) must register the
+        // result as an owned stmt-temp. Otherwise the managed-string decl-init normalisation treats it
+        // as a BORROW and increfs it (rc 1→2, the slot's scope-drop only decrements to 1) → the original
+        // ref leaks. Registered → a binding local MOVES it (one ref, freed by its drop), an unbound
+        // transient is decref'd at statement end. (starts_with/index_of return i32; split returns a list.)
+        auto ownStr = [&](llvm::Value* fresh) -> IRValue* {
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+                ctx.stmtTempStack.back().push_back(fresh);
+            return ctx.ir_gen->wrap(fresh);
+        };
         if (methodName == "substr") {
             // size_t = platform pointer-width int (i32 on WASM, i64 on x86_64).
             // Linking against libc strndup with hardcoded i64 trips wasm-ld's
@@ -1237,12 +1248,12 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                     {ctx.builder.getInt8Ty()->getPointerTo(), sizeTy});
                 llvm::Value* lenN = ctx.builder.CreateSExtOrTrunc(
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1])), sizeTy);
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(ndupFn, {offsetPtr, lenN}));
+                return ownStr(ctx.builder.CreateCall(ndupFn, {offsetPtr, lenN}));
             } else {
                 llvm::Function* dupFn = ctx.getFunction("aiml_str_dup",
                     ctx.builder.getInt8Ty()->getPointerTo(),
                     {ctx.builder.getInt8Ty()->getPointerTo()});
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(dupFn, {offsetPtr}));
+                return ownStr(ctx.builder.CreateCall(dupFn, {offsetPtr}));
             }
         } else if (methodName == "starts_with") {
             // starts_with(prefix) → i32 (1 or 0)
@@ -1306,13 +1317,13 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Function* fn = ctx.getFunction("aiml_str_lower",
                 ctx.builder.getInt8Ty()->getPointerTo(),
                 {ctx.builder.getInt8Ty()->getPointerTo()});
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {strPtr}));
+            return ownStr(ctx.builder.CreateCall(fn, {strPtr}));
         } else if (methodName == "upper") {
             // upper() -> string — aiml_str_upper(str)
             llvm::Function* fn = ctx.getFunction("aiml_str_upper",
                 ctx.builder.getInt8Ty()->getPointerTo(),
                 {ctx.builder.getInt8Ty()->getPointerTo()});
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {strPtr}));
+            return ownStr(ctx.builder.CreateCall(fn, {strPtr}));
         } else if (methodName == "title") {
             // title() -> string — aiml_str_title(str)
             // Capitalize first char of every word (separators: whitespace,
@@ -1321,13 +1332,13 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Function* fn = ctx.getFunction("aiml_str_title",
                 ctx.builder.getInt8Ty()->getPointerTo(),
                 {ctx.builder.getInt8Ty()->getPointerTo()});
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {strPtr}));
+            return ownStr(ctx.builder.CreateCall(fn, {strPtr}));
         } else if (methodName == "trim") {
             // trim() -> string — aiml_str_trim(str)
             llvm::Function* fn = ctx.getFunction("aiml_str_trim",
                 ctx.builder.getInt8Ty()->getPointerTo(),
                 {ctx.builder.getInt8Ty()->getPointerTo()});
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {strPtr}));
+            return ownStr(ctx.builder.CreateCall(fn, {strPtr}));
         } else if (methodName == "replace") {
             // replace(old, new) -> string — aiml_str_replace(str, old, new)
             if (argVals.size() < 2) return ctx.ir_gen->getInt32(0);
@@ -1335,7 +1346,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Function* fn = ctx.getFunction("aiml_str_replace", i8p, {i8p, i8p, i8p});
             llvm::Value* oldV = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
             llvm::Value* newV = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {strPtr, oldV, newV}));
+            return ownStr(ctx.builder.CreateCall(fn, {strPtr, oldV, newV}));
         } else if (methodName == "split") {
             // split(delimiter) -> list<string>
             if (argVals.empty()) return ctx.ir_gen->getInt32(0);
