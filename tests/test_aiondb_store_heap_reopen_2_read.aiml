@@ -29,7 +29,7 @@
             - print: ["FAIL store_heap_reopen_read_len=${var_n}"]
             - call: [sys.exit, 1]
 
-      - decl: [got, ptr<ReopenSnippet>, { call: [snips.get, 1] }]
+      - decl: [got, ref<ReopenSnippet>, { call: [snips.get, 1] }]
       - if:
           condition: { eq: [got, null] }
           then:

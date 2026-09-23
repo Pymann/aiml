@@ -724,6 +724,15 @@ So: **`at`/`get` = borrow** (ownership stays in the list), **`pop`/`take` = move
 way to get an owning `ptr<T>` back), **`remove` = release**. There is no verb that both keeps
 the element in the list *and* hands a second owner out — that would break unique ownership.
 
+> **Binding an `at`/`get` read to `ptr<T>` is a compile error.** Because the read is a `ref<T>`
+> borrow (never a second owner), a `ptr<T>` binding — a *unique owner* — would let the borrow be
+> freed on drop/reassign (double-free of the container's box). The legal bindings are **`ref<T>`**
+> (borrow it) or, for an independent owned copy, **`get_copy`** (which duplicates the referent).
+> The same rule applies to a **Class-6 store** read (`Kv`/`Store`/`TimeSeries`/`VecStore` `.get`) and
+> to builtin view reads (`yaml.get`): the store/document keeps ownership, so the result is a `ref<T>`
+> borrow, and `get_copy` is the independent-owned path. (Enforced in the compiler; the negative test
+> is `tests/test_ptr_bind_get_borrow_error.aiml`.)
+
 **"`at`/`get` = borrow" is shorthand for the pointer/model cases only — read the table per class:**
 
 | Element class | What `at`/`get` yields | Ownership |

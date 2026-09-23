@@ -758,7 +758,11 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
     // load vtbl from fat pointer, indirect call with obj as `this`.
     {
         auto ifaceIt = ctx.interfaces.find(className);
-        if (ifaceIt != ctx.interfaces.end() && sym->typeName.rfind("ptr<", 0) == 0) {
+        // spec/61 §5.4: a ref<Iface> BORROW dispatches through the SAME fat-pointer {obj,vtable} as an
+        // owning ptr<Iface> — only ownership differs, not the call. Accept both so a borrowed handler
+        // read from a container/store (e.g. `handlers.get(m)` → ref<RpcHandler>) can be invoked.
+        if (ifaceIt != ctx.interfaces.end()
+            && (sym->typeName.rfind("ptr<", 0) == 0 || sym->typeName.rfind("ref<", 0) == 0)) {
             const auto& iface = ifaceIt->second;
             int slot = -1;
             for (size_t i = 0; i < iface.methods.size(); ++i) {

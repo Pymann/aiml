@@ -30,7 +30,7 @@
             - call: [sys.exit, 1]
 
       # Mapping lookup and scalar access.
-      - decl: [name_node, ptr<yaml_node>, { call: [yaml.get, root, "name"] }]
+      - decl: [name_node, ref<yaml_node>, { call: [yaml.get, root, "name"] }]
       - decl: [name_value, string, { call: [yaml.scalar, name_node] }]
       - if:
           condition: { neq: [name_value, "Ada"] }
@@ -79,7 +79,7 @@
             - call: [sys.exit, 1]
 
       # Missing and wrong-kind access return null nodes rather than throwing.
-      - decl: [missing_node, ptr<yaml_node>, { call: [yaml.get, root, "missing"] }]
+      - decl: [missing_node, ref<yaml_node>, { call: [yaml.get, root, "missing"] }]
       - decl: [missing_kind, i32, { call: [yaml.kind, missing_node] }]
       - if:
           condition: { neq: [missing_kind, yaml.null] }
@@ -118,7 +118,7 @@
             - print: ["FAIL yaml.parse_file error=${file_error}"]
             - call: [sys.exit, 1]
       - decl: [file_root, ptr<yaml_node>, { call: [yaml.root, file_document] }]
-      - decl: [answer_node, ptr<yaml_node>, { call: [yaml.get, file_root, "answer"] }]
+      - decl: [answer_node, ref<yaml_node>, { call: [yaml.get, file_root, "answer"] }]
       - decl: [answer_value, string, { call: [yaml.scalar, answer_node] }]
       - if:
           condition: { neq: [answer_value, "42"] }

@@ -85,7 +85,7 @@
                 then:
                   - print: ["dispatcher: unknown rpc '${rpc.method}'"]
                   - return: []
-            - decl: [var_h, ptr<RpcHandler>, { call: [<.handlers.get, rpc.method] }]
+            - decl: [var_h, ref<RpcHandler>, { call: [<.handlers.get, rpc.method] }]
             - call: [var_h.run, rpc, sess, player]
 
 - def:

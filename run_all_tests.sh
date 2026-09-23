@@ -218,6 +218,11 @@ for TEST in $TEST_FILES; do
         # Negative test: assigning a string literal to an enum-typed slot must
         # be a compile error (enum is i32 — a string would coerce to garbage).
         EXPECTED_CODE=1
+    elif [[ "$TEST" == *"test_ptr_bind_get_borrow_error.aiml" ]]; then
+        # Negative test (spec/61 §5.4): binding a container/store .get/.at read
+        # (a ref<T> borrow) to ptr<T> (a unique owner) must be a compile error —
+        # it would free a box it does not own. Use ref<T> or get_copy.
+        EXPECTED_CODE=1
     fi
 
     # These negatives must fail at compile time, not via the old runtime corruption.

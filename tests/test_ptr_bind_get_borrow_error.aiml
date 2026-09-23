@@ -1,0 +1,28 @@
+# static-check: off
+# Negative test (spec/61 §5.4): `.get`/`.at`/`.first`/`.last` on a container (list/map/cascade) or a
+# Class-6 store (Kv/Store/TimeSeries/VecStore) yields a `ref<T>` BORROW — the container/store keeps
+# ownership and never hands out a second owner. Binding that read to a `ptr<T>` (a UNIQUE OWNER) is a
+# compile error: the borrow would be treated as owned and freed on drop/reassign (the historical
+# test_model / db-reopen double-free). The spec-correct forms are `ref<T>` (borrow) or `get_copy`
+# (an independent owned copy — which already exists).
+#
+# Expected: compilation fails (exit 1).  Before the §5.4 enforcement this compiled and could
+# double-free the container's element box.
+
+- model:
+    name: Card
+    fields:
+      - [nam, string]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [deck, list<Card>]
+      - decl: [one, Card]
+      - set: [one.nam, "Ace"]
+      - call: [deck.push, one]
+      # ERROR: `.get` yields ref<Card>, not ptr<Card>. Bind ref<Card>, or use deck.get_copy(0).
+      - decl: [bad, ptr<Card>, { call: [deck.get, 0] }]
+      - print: ["UNEXPECTED_RUNTIME: ptr-bound borrow compiled ${bad.nam}"]
+      - return: 0

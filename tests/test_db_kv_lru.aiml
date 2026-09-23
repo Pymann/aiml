@@ -41,7 +41,7 @@
       - while:
           condition: { "<": [var_i, 1500] }
           body:
-            - decl: [got, ptr<Counter>, { call: [var_kv.get, "k${var_i}"] }]
+            - decl: [got, ref<Counter>, { call: [var_kv.get, "k${var_i}"] }]
             - if:
                 condition: { neq: [got.var_n, var_i] }
                 then:
@@ -60,7 +60,7 @@
       - while:
           condition: { "<": [var_i, 100] }
           body:
-            - decl: [got2, ptr<Counter>, { call: [var_kv.get, "k${var_i}"] }]
+            - decl: [got2, ref<Counter>, { call: [var_kv.get, "k${var_i}"] }]
             - if:
                 condition: { neq: [got2.var_n, var_i] }
                 then:
