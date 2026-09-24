@@ -51,3 +51,16 @@ offene Arbeit ist der elemKind-2-Release-Leak plus die dafür nötige eigenstän
 | `p3_copyretain_survives_source_drop` | **GRÜN** (PASS + 0 lost + 0 errors, 200 Iter) | Eine retain-Kopie (memcpy + `aiml_ser_retain` via store-retain-Pfad) überlebt die kind-2-FREIGABE des Quell-Listen-Elements (aiml_list_free scope-drop = dieselbe `aiml_ser_free_decoded`, die remove/clear nutzen) mit intaktem Inhalt (string/list/map/nested-model) und balancierten rc — **kein double-free, kein Leak.** |
 
 **Fazit:** Die Runtime-Mechanik (retain-Kopie ⊕ Element-Release) ist risikofrei validiert. Der frühere remove-Deep-Free-Regress lag NICHT an der Freigabe, sondern an der fehlenden retain-Kopie (View). Verbleibende (riskante) Arbeit: CopyRetain in den IMPLIZITEN `decl copy = at(..)`-Pfad verdrahten (statt is_view_alias) + remove/clear/pop-Release aktivieren — betrifft die Kern-Strukturen (ZoneEntry/MockCard/ActiveAbility), braucht das volle Game+Client-Verhaltens-Gate.
+
+## Paket 3 — Stage-A-Versuch (decl-only CopyRetain) VERWORFEN (2026-09-24)
+
+Versuch: CopyRetain nur am `decl copy = at(..)`-Init emittieren (memcpy → `aiml_ser_retain` +
+owned-Drop + `is_view_alias=false`), Escape-Sinks (set/idx/return/push) UNVERÄNDERT.
+**Ergebnis: mem-sanitizer FAIL (1 Check).** → **Empirischer Beweis: decl allein reicht NICHT.**
+Die Escape-Pfade (ast_compiler_stmt.cpp 2313/2471/3655, 4662, ast_compiler_call.cpp:1545 push) haben
+eigene is_view_alias-/deep-copy-Logik; wenn decl die Kopie zu owned+retain macht, widersprechen die
+Escapes (doppeltes retain/copy oder falscher Move → double-free/Imbalance). Bestätigt Plan §3/§4:
+Value-Materialisierung muss über ALLE Sinks GLEICHZEITIG konsolidiert werden (decl + set + idx +
+return + push + store), mit einheitlichem Ownership-Fakt statt der is_view_alias-Heuristik. Stage A
+wurde reverted (grüner Stand wiederhergestellt). Die eigentliche Paket-3-Umsetzung ist damit ein
+koordinierter Multi-Sink-Umbau — kein isolierter decl-Patch.
