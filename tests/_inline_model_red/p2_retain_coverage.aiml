@@ -1,0 +1,44 @@
+# static-check: off
+# Paket 2 (doc/spec61_inline_value_model_release_plan_2026-09-24.md §2/§3): auditiert die Typ-
+# abdeckung von `aiml_ser_retain` über den BESTEHENDEN `store: [ref<Model>, at(list,i)]`-Pfad
+# (ast_compiler_stmt.cpp:4802 — release(dst) → memcpy(src) → retain). Ist die Abdeckung vollständig,
+# co-ownen dst und das Listen-Element jede Heap-Feldart mit balanciertem rc → beide Drops geben genau
+# einmal frei. Fehlt eine Feldart im retain, entsteht ein double-free (valgrind Invalid free) ODER ein
+# Leak. Deckt: string, list<i32>, nested Value-Model (mit eigenem string+list), map<string:i32>.
+# Erwartung: PASS + valgrind 0 lost + 0 errors (validiert §3-Audit — soll GRÜN sein).
+
+- model: { name: Inner, fields: [[tag, string], [nums, list<i32>]] }
+- model: { name: Rec, fields: [[label, string], [tags, list<i32>], [mana, map<string:i32>], [inner, Inner]] }
+
+- def:
+    name: fill_out
+    args: [[out, ref<Rec>], [lst, list<Rec>]]
+    body:
+      - store: [out, { at: [lst, 0] }]   # VALUE-share via retain (§7)
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [reps, i32, 0]
+      - decl: [itr, i32, 0]
+      - while:
+          condition: { lt: [itr, 200] }
+          body:
+            - decl: [rows, list<Rec>]
+            - decl: [src, Rec]
+            - set: [src.label, "hello-retain-${itr}"]
+            - call: [src.tags.push, 1]
+            - call: [src.tags.push, 2]
+            - call: [src.mana.put, "fire", 3]
+            - set: [src.inner.tag, "inner-tag-${itr}"]
+            - call: [src.inner.nums.push, 9]
+            - call: [rows.push, src]
+            - decl: [dst, Rec]
+            - call: [fill_out, dst, rows]        # dst shared-owns rows[0] (retain)
+            - if: { condition: { neq: [dst.label, "hello-retain-${itr}"] }, then: [{ print: ["FAIL dst.label: ${dst.label}"] }, { return: 1 }] }
+            - if: { condition: { neq: [dst.inner.tag, "inner-tag-${itr}"] }, then: [{ print: ["FAIL dst.inner.tag: ${dst.inner.tag}"] }, { return: 1 }] }
+            - set: [reps, { +: [reps, 1] }]
+            - set: [itr, { +: [itr, 1] }]
+      - print: ["PASS p2_retain_coverage reps=${reps}"]
+      - return: 0

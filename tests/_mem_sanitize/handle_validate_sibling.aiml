@@ -1,0 +1,101 @@
+# static-check: off
+# Faithful repro of 9rooms AuthService.handle_validate: a PRODUCER that returns a whole value-model
+# `out`, but along the way binds SIBLING owned value-model locals from member get_copy (`eml` string,
+# `vusr` User) used only to fill `out`. On `return out`, the siblings (vusr/eml) must be dropped.
+# If a get_copy'd value-model sibling local is NOT deep-freed on the whole-model return path, each
+# request leaks it (server: dec ← get_copy ← handle_validate).
+# Expected: native exit 0, valgrind definitely-lost does NOT scale with call count.
+
+- model:
+    name: User
+    fields:
+      - [email, string]
+      - [password_hash, string]
+      - [display_name, string]
+      - [salt, string]
+      - [player_id, string]
+      - [roles, list<string>]
+
+- model:
+    name: AuthResult
+    fields:
+      - [success, i32]
+      - [message, string]
+      - [token, string]
+      - [email, string]
+      - [display_name, string]
+      - [player_id, string]
+
+- class:
+    name: AuthSvc
+    members:
+      - [users, Kv<string:User>]
+      - [tokens, Kv<string:string>]
+    methods:
+      - def:
+          name: setup
+          body:
+            - set: [<.users, { call: [db.open_kv, "hv_users", {persist: true, path: "/tmp/hv_users/"}] }]
+            - set: [<.tokens, { call: [db.open_kv, "hv_tokens", {persist: true, path: "/tmp/hv_tokens/"}] }]
+            - decl: [usr, User]
+            - set: [usr.email, "hans@franz.de"]
+            - set: [usr.password_hash, "0123456789abcdef0123456789abcdef"]
+            - set: [usr.display_name, "Hans the Magnificent"]
+            - set: [usr.salt, "deadbeefcafebabe"]
+            - set: [usr.player_id, "u_existing_player_id_hash"]
+            - call: [usr.roles.push, "player"]
+            - call: [<.users.set, "hans@franz.de", usr]
+            - call: [<.tokens.set, "tok123", "hans@franz.de"]
+      - def:
+          name: pid_for
+          args: [[eml, string]]
+          return: { type: string, lifetime: producer }
+          body:
+            - if: { condition: { eq: [{ call: [<.users.has, eml] }, 0] }, then: [{ return: "" }] }
+            - decl: [pusr, User, { call: [<.users.get_copy, eml] }]
+            - if: { condition: { gt: [pusr.player_id.len, 0] }, then: [{ return: pusr.player_id }] }
+            - return: pusr.email
+      - def:
+          name: handle_validate
+          args: [[token, string]]
+          return: { type: AuthResult, lifetime: producer }
+          body:
+            - decl: [out, AuthResult]
+            - set: [out.success, 0]
+            - if: { condition: { eq: [{ call: [<.tokens.has, token] }, 0] }, then: [{ set: [out.message, "unknown token"] }, { return: out }] }
+            - decl: [eml, string, { call: [<.tokens.get_copy, token] }]
+            - decl: [vusr, User, { call: [<.users.get_copy, eml] }]
+            - set: [out.success, 1]
+            - set: [out.message, "valid"]
+            - set: [out.token, token]
+            - set: [out.email, eml]
+            - set: [out.display_name, vusr.display_name]
+            - set: [out.player_id, { call: [<.pid_for, eml] }]
+            - return: out
+
+- def:
+    name: resolve_token_pid
+    args: [[svc, ptr<AuthSvc>], [token, string]]
+    return: { type: string, lifetime: producer }
+    body:
+      - decl: [res, AuthResult, { call: [svc.handle_validate, token] }]
+      - if: { condition: { eq: [res.success, 1] }, then: [{ return: res.player_id }] }
+      - return: ""
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [svc, ptr<AuthSvc>, { new: AuthSvc }]
+      - call: [svc.setup]
+      - decl: [total, i32, 0]
+      - decl: [req, i32, 0]
+      - while:
+          condition: { lt: [req, 100] }
+          body:
+            - decl: [pid, string, { call: [resolve_token_pid, svc, "tok123"] }]
+            - set: [total, { +: [total, pid.len] }]
+            - set: [req, { +: [req, 1] }]
+      - free: svc
+      - print: ["done total=${total}"]
+      - return: 0

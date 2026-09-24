@@ -1,0 +1,92 @@
+# static-check: off
+# Repro for the 9rooms server per-request leak (list_cards handler).
+# Exact shape of the leaking path:
+#   producer list_bundle() returns a value-model Bundle whose list<Rec> field
+#   was filled by .push (deep copy of value-model Rec with a NESTED model-list).
+#   The RPC handler binds it to a VALUE local `resp` (not ptr, no explicit free)
+#   and lets it drop at function scope exit.
+#
+# If the scope-drop teardown of a value-model LOCAL does not deep-free its
+# list<Model> field elements, every request leaks them → the ~1KB/deck-editor
+# growth seen live (stack: dec ← aiml_ser_decode ← aiml_ser_deep_copy ← push).
+#
+# Expected after fix: 0 leaks, and leak (if any) must NOT scale with req count.
+
+- model:
+    name: Ability
+    fields:
+      - [kind, i32]
+      - [effects, list<list<i32>>]
+
+- model:
+    name: Rec
+    fields:
+      - [rec_id, string]
+      - [label,  string]
+      - [mana,   map<string:i32>]
+      - [tags,   list<i32>]
+      - [abis,   list<Ability>]
+
+- model:
+    name: Bundle
+    fields:
+      - [success, i32]
+      - [recs, list<Rec>]
+
+- class:
+    name: CardSvc
+    members: [[dummy, i32]]
+    methods:
+      # producer: builds a fresh Bundle value-model with pushed Rec elements.
+      - def:
+          name: list_bundle
+          args: [[num, i32]]
+          return: { type: Bundle, lifetime: producer }
+          body:
+            - decl: [out, Bundle]
+            - set: [out.success, 1]
+            - decl: [idx, i32, 0]
+            - while:
+                condition: { lt: [idx, num] }
+                body:
+                  - decl: [src, Rec]
+                  - set: [src.rec_id, "card-${idx}"]
+                  - set: [src.label,  "a reasonably long label string number ${idx}"]
+                  - call: [src.mana.put, "fire", idx]
+                  - call: [src.tags.push, idx]
+                  - decl: [abx, Ability]
+                  - set: [abx.kind, 3]
+                  - decl: [efx, list<i32>]
+                  - call: [efx.push, 10]
+                  - call: [efx.push, idx]
+                  - call: [abx.effects.push, efx]
+                  - call: [src.abis.push, abx]
+                  - call: [out.recs.push, src]   # deep copy Rec into list
+                  - set: [idx, { +: [idx, 1] }]
+            - return: out
+
+# Mirrors ListCardsHandler.run: bind producer result to a VALUE local, use it,
+# then let it drop at scope exit (NO explicit free — this is the real handler).
+- def:
+    name: handle_request
+    args: [[svc, ptr<CardSvc>], [num, i32]]
+    return: i32
+    body:
+      - decl: [resp, Bundle, { call: [svc.list_bundle, num] }]
+      - return: resp.recs.len   # "use" resp, then resp drops here
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [svc, ptr<CardSvc>, { new: CardSvc }]
+      - decl: [total, i32, 0]
+      - decl: [req, i32, 0]
+      - while:
+          condition: { lt: [req, 500] }
+          body:
+            - set: [total, { +: [total, { call: [handle_request, svc, 20] }] }]
+            - set: [req, { +: [req, 1] }]
+      - free: svc
+      - print: ["handled, total=${total}"]
+      - return: 0

@@ -1,0 +1,60 @@
+# static-check: off
+# Faithful repro of 9rooms ConnRegistry.touch: a value-model element is read from a list via `at`,
+# a STRING field is mutated, and the element is written back via `idx` — in a loop over the same
+# entry (stable peer_id → the "found" update path, no push). If either the `idx` writeback does not
+# free the slot's OLD heap before overwriting, or the `ent` local is not dropped, each iteration
+# leaks the string field → per-request growth (server: resolve_token_pid → g_conn.touch str_dup).
+# Expected: native exit 0, valgrind definitely-lost does NOT scale with iteration count.
+
+- model:
+    name: ConnEntry
+    fields:
+      - [peer_id,         i32]
+      - [player_id,       string]
+      - [last_seen,       i64]
+      - [disconnected_at, i64]
+
+- class:
+    name: ConnRegistry
+    members:
+      - [entries, list<ConnEntry>]
+    methods:
+      - def:
+          name: seed
+          body:
+            - decl: [ent0, ConnEntry]
+            - set: [ent0.peer_id, 1]
+            - set: [ent0.player_id, "u_initial"]
+            - call: [<.entries.push, ent0]
+      # Mirrors touch's "found" path: at → set string field → idx writeback.
+      - def:
+          name: touch
+          args: [[peer_id, i32], [player_id, string]]
+          body:
+            - decl: [tci, i32, 0]
+            - while:
+                condition: { lt: [tci, <.entries.len] }
+                body:
+                  - decl: [ent, ConnEntry, { at: [<.entries, tci] }]
+                  - if:
+                      condition: { eq: [ent.peer_id, peer_id] }
+                      then:
+                        - set: [ent.player_id, player_id]
+                        - idx: [<.entries, tci, ent]
+                  - set: [tci, { +: [tci, 1] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [reg, ptr<ConnRegistry>, { new: ConnRegistry }]
+      - call: [reg.seed]
+      - decl: [req, i32, 0]
+      - while:
+          condition: { lt: [req, 500] }
+          body:
+            - call: [reg.touch, 1, "u_player_id_hash_value_stable"]
+            - set: [req, { +: [req, 1] }]
+      - free: reg
+      - print: ["done"]
+      - return: 0

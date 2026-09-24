@@ -197,6 +197,10 @@ probe "producer-returned VALUE MODEL (spec/61 §3.2; 9rooms mkp_*_cascade render
     "$AIML_BIN" -r tests/_mem_sanitize/producer_value_model_drop.aiml
 probe "return-cleanup owner-exemption (spec/61 §6.2 T1): a SCALAR return (return s.len) drops the owned string local; a heap (string) return stays exempt (moved out), bounded RSS + no double-free" "rcs" \
     "$AIML_BIN" -r tests/_mem_sanitize/return_cleanup_scalar_drop.aiml
+probe "producer early-return of a STRING FIELD of an owned value-model local (spec/61 §6.2 T1; 9rooms AuthService.pid_for — leaked User siblings on EVERY authenticated request): field increfed + owner dropped FULLY, siblings freed, 500 iters leak-free" "erf" \
+    "$AIML_BIN" -r tests/_mem_sanitize/early_return_field_scope_drop.aiml
+probe "discarded list.pop + list.clear release element ownership mid-lifetime (spec/61 §5.4; 9rooms card-editor pop-loops leaked ptr<Model> boxes + nested list<i32> handles per drain): elemKind 4/5 freed on pop/clear, value-model-inline (kind 2) deferred, 300 iters leak-free + no double-free" "pcr" \
+    "$AIML_BIN" -r tests/_mem_sanitize/pop_clear_elem_release.aiml
 probe "direct interpolation return (spec/61 T1b): `return \"\${…}\"` frees its intermediate conversion/concat temps (block terminator skips the per-statement temp loop), bounded RSS" "rit" \
     "$AIML_BIN" -r tests/_mem_sanitize/return_interp_temp_drop.aiml
 probe "if/while condition interpolation temp (spec/61 T1c): a concat built in an if/while condition is freed on every path incl. a terminating branch (CardArtCache has_texture hit path), bounded RSS" "cit" \

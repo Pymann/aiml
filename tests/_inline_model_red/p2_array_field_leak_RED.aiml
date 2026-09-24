@@ -1,0 +1,34 @@
+# static-check: off
+# RED — Paket 2 §9.6 (doc/spec61_inline_value_model_release_plan_2026-09-24.md): ein Heap-ARRAY-Feld
+# (array<string:N>) in einem Model wird von serFieldSubtree auf RAWBYTES abgebildet (kein Array-
+# Zweig) → aiml_ser_retain/release sehen die String-Elemente NICHT → Leak (gemessen 6780 B/200 Iter,
+# kein double-free, reiner Leak). Ziel: Array-Feld als STRUCT-Komposition (N Element-Unterbäume mit
+# echtem Stride) im Lifecycle-Descriptor abbilden, ODER Heap-Array-Feld in den Copy/Release-Pfaden
+# mit gezielter Diagnose ablehnen — NICHT still als RAWBYTES-„sicher" behandeln.
+# ⚠️ RISIKO: serFieldSubtree ändert Serialisierungs-Descriptoren → kann den Schema-fp/Wire verändern
+# → KV-Inkompatibilität (wie die matches-KV-FATALs). Daher separaten Lifecycle-Descriptor erwägen,
+# Wire-Layout NICHT still ändern.
+- model: { name: ArrRec, fields: [[names, array<string:3>], [label, string]] }
+- def:
+    name: fill_out
+    args: [[out, ref<ArrRec>], [lst, list<ArrRec>]]
+    body: [{ store: [out, { at: [lst, 0] }] }]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [itr, i32, 0]
+      - while:
+          condition: { lt: [itr, 200] }
+          body:
+            - decl: [rows, list<ArrRec>]
+            - decl: [src, ArrRec]
+            - set: [src.label, "lbl-${itr}"]
+            - idx: [src.names, 0, "alpha-${itr}"]
+            - idx: [src.names, 1, "beta-${itr}"]
+            - call: [rows.push, src]
+            - decl: [dst, ArrRec]
+            - call: [fill_out, dst, rows]
+            - set: [itr, { +: [itr, 1] }]
+      - print: ["done arr"]
+      - return: 0

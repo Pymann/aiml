@@ -239,6 +239,66 @@ extern "C" void aiml_list_free(void* list_ptr, int32_t elemKind,
     lst->capacity = 0;
 }
 
+// spec/61 §5.4: free the OWNED heap reachable from ONE list element slot, WITHOUT touching the data
+// buffer or size. Mirrors the per-element branches of aiml_list_free. Used by clear()/pop() so a
+// drained element's ownership is released mid-lifetime (the pop-loop / clear() idiom) — not only at
+// the list's scope drop. `skipInlineValueModel` skips elemKind 2 (a value-model INLINE element):
+// effect code can hold a live view/copy of such an element across a remove/clear, so a blind
+// deep-free there would double-free (a known deferral — see ast_compiler_call.cpp remove note).
+// NOTE: skipping here is a DELIBERATE LEAK, not a hand-off — clear()/pop() shrink `size`, so the
+// list's final scope-drop (aiml_list_free iterates [0,size)) never revisits these slots. Closing it
+// safely needs the value-model CopyRetain materialization first (doc/spec61_inline_value_model_
+// release_plan_2026-09-24.md §6/§9.7). All other kinds are unique owners (ptr box, iface obj) or
+// refcounted handles (string/model/nested container) → safe to release here.
+static void free_list_elem_at(char* slot, int32_t elemKind, int64_t /*elemSize*/,
+                              void* serNodes, int32_t serNodesCount,
+                              bool skipInlineValueModel) {
+    if (!slot) return;
+    switch (elemKind) {
+        case 1: { char* s = *reinterpret_cast<char**>(slot); if (s) aiml_str_decref(s); break; }
+        case 3: { char* m = *reinterpret_cast<char**>(slot); if (m) aiml_model_decref(m, serNodes, serNodesCount); break; }
+        case 4: { char* box = *reinterpret_cast<char**>(slot);
+                  if (box) { if (serNodes) aiml_ser_free_decoded(box, serNodes, serNodesCount); free(box); } break; }
+        case 5: { if (serNodes) aiml_ser_free_decoded(slot, serNodes, serNodesCount); break; }  // nested handle (slot-rooted)
+        case 6: { void* obj = *reinterpret_cast<void**>(slot); if (obj) free(obj); break; }      // iface obj (field 0)
+        case 2: { if (!skipInlineValueModel && serNodes) aiml_ser_free_decoded(slot, serNodes, serNodesCount); break; }
+        default: break;  // elemKind 0: scalar/POD, nothing to free
+    }
+}
+
+// spec/61 §5.4: clear() — release every element's owned heap, then reset size to 0 KEEPING the data
+// buffer/capacity for reuse. Value-model-inline elements (kind 2) are skipped (see free_list_elem_at).
+extern "C" void aiml_list_clear_elems(void* list_ptr, int32_t elemKind, int64_t elemSize,
+                                      void* serNodes, int32_t serNodesCount) {
+    if (!list_ptr) return;
+    AimlListRaw* lst = static_cast<AimlListRaw*>(list_ptr);
+    if (lst->data && elemKind != 0) {
+        char* base = reinterpret_cast<char*>(lst->data);
+        int64_t stride = elemSize > 0 ? elemSize : 8;
+        for (int32_t i = 0; i < lst->size; ++i)
+            free_list_elem_at(base + (int64_t)i * stride, elemKind, elemSize,
+                              serNodes, serNodesCount, /*skipInlineValueModel=*/true);
+    }
+    lst->size = 0;
+}
+
+// spec/61 §5.4: pop() whose result is DISCARDED — release the last element's owned heap, then size--.
+// Same element-ownership release as clear(); keeps the buffer. (A BOUND pop — decl x = l.pop — goes
+// through ListImpl::pop and the local owns/drops the result instead.)
+extern "C" void aiml_list_pop_free(void* list_ptr, int32_t elemKind, int64_t elemSize,
+                                   void* serNodes, int32_t serNodesCount) {
+    if (!list_ptr) return;
+    AimlListRaw* lst = static_cast<AimlListRaw*>(list_ptr);
+    if (lst->size <= 0) return;
+    if (lst->data && elemKind != 0) {
+        char* base = reinterpret_cast<char*>(lst->data);
+        int64_t stride = elemSize > 0 ? elemSize : 8;
+        free_list_elem_at(base + (int64_t)(lst->size - 1) * stride, elemKind, elemSize,
+                          serNodes, serNodesCount, /*skipInlineValueModel=*/true);
+    }
+    lst->size -= 1;
+}
+
 // ── spec/61 §5 Option B: list<T> as a refcounted HANDLE (memV3 only) ──────────
 // A list<T> value-local under AIML_MEM_V3 is a heap block laid out as
 //   [ int32 rc ][ int32 pad ][ AimlListRaw {size,cap,data} ]
