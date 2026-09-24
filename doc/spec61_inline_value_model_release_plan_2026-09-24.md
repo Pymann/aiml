@@ -287,3 +287,50 @@ Das Leak-Gate führt eine explizite Liste isolierter Lifetime-/9rooms-Probes aus
 
 Historische rote Probes getrennt als reproduzierbare Befunde halten. Erst nach bestandenem Fix in die Liste der erwarteten Null-Leak-Probes aufnehmen; sichere bereits behobene Kinds jetzt aufnehmen. Kontrollen beweisen, dass das Gate einen absichtlichen Leak tatsächlich ablehnt. 10/1000-Läufe für Wachstumsnachweis weiter dokumentieren, still-reachable nicht pauschal als Verlust zählen. Compiler-/Runtime-Stand und vollständige Logs als Artefakte speichern. Die bestehenden Dateien unter `9rooms_v2/leak_probes` bleiben die projektbezogenen Reproduktionen.
 
+---
+
+## 10. Umsetzungsstand + geplante nächste Schritte (Claude, 2026-09-24 — zum Review)
+
+Dieser Abschnitt hält präzise fest, was tatsächlich umgesetzt/committet wurde, welche empirischen Befunde vorliegen, und was ich als nächstes vorhabe. Alle Commits: aiml branch `mem-v3-compiler`, 9rooms branch `memv3`.
+
+### 10.1 Erledigt + committet (sicher, verifiziert)
+
+**A. Zwei separate Leak-Klassen behoben (nicht der inline-Value-Model-Fall — das sind die *anderen*, sicheren Kinds):**
+- **owned-String-Return** (§6.2 T1): `retStrFieldOfOwnedModel` in visitRetStmt (incref Feld + Owner voll droppen, gekoppelt → nie double-free) + neues `currentFunctionOwnsReturn`-Flag. 9rooms-Quellen als `producer` markiert (pid_for/nick_for/nick_for_pid/resolve_token/resolve_token_pid; client avatar_initial/join_pipe/card_sig/zone_sig/board_content_sig/take_edit_card_id). — aiml `196b2c1`, 9rooms `585341c`.
+- **pop(verworfen)/clear Element-Release** für die SICHEREN Kinds (1 string / 3 refcount-model / 4 ptr<T>-box / 5 nested-container-handle / 6 iface): Runtime `free_list_elem_at` + `aiml_list_clear_elems` + `aiml_list_pop_free`; Compiler `classifyListElem` + clear/pop-Verdrahtung + `popResultDiscarded`-Flag. **elemKind 2 (Value-Model-inline) bewusst ÜBERSPRUNGEN.** — aiml `196b2c1`.
+- Beide valgrind-verifiziert (Standalone + 9rooms leak_probes 0-lost), mem-sanitizer memory-safe, Korpus 422/461 (kein neuer Regress). Regressionsprobes `erf` + `pcr` in run_memory_sanitizers.sh.
+
+**B. Verworfener Auto-Detect (String-Return-Klassifikator):** breite Auto-Klassifikation verursachte eine 9rooms-Client-Navigations-Regression (Deck→Card-Editor), die Leak/Sanitizer NICHT fingen → DISABLED belassen (`classifyOwnedStringReturn`, `[[maybe_unused]]`). Lehre: breite Ownership-ABI-Änderungen brauchen ein Game+Client-VERHALTENS-Gate.
+
+**C. Array-Feld-Diagnose (§9.6):** deduplizierte Warnung im serFieldSubtree-RAWBYTES-Fallback für Heap-Element-Array-Model-Felder (kein fp-Risiko; POD/lokale Arrays unbetroffen). — aiml `96bc6fa`.
+
+**D. Deferred-Kommentare markiert** (ast_compiler_call.cpp remove ~1873, ast_compiler_stmt.cpp decl ~1355, string_runtime.cpp free_list_elem_at) + Kommentarfehler korrigiert (§9.7: „left to scope-drop" war falsch → bewusster Leak).
+
+### 10.2 Paket 1 + 2 + Prototyp — Befunde
+
+- **Paket 1 (rote Vertrags-Tests, `tests/_inline_model_red/`, vom Korpus ausgeschlossen):** `49_value_survives_remove` (Content GRÜN, Leak RED 47+16 B), `50_share_semantics` (**bereits GRÜN** — container-shared + scalar-independent stimmt schon). **Re-Scoping-Befund:** Share-Semantik + Content sind bereits korrekt; die einzige Lücke ist der elemKind-2-Release-LEAK. Content ist nur grün, WEIL remove/clear kind-2 nicht freigibt (der Leak hält die View gültig) → naives Release ohne CopyRetain bricht den Content → beweist Sequenz 3→5.
+- **Paket 2 (Retain/Release-Audit):** `p2_retain_coverage` GRÜN (0 lost, 0 errors, 200 Iter) → `aiml_ser_retain` co-owned string/list/map/nested-model korrekt über den store-retain-Pfad. `p2_array_field_leak_RED` RED (6780 B) → §9.6-Lücke bestätigt. `modelIsMoveOnly` existiert (ast_compiler_stmt.cpp:923). → **Runtime-Primitive sind vorhanden + korrekt.**
+- **Paket 3 Prototyp (`p3_copyretain_survives_source_drop`, GRÜN):** eine retain-Kopie überlebt die kind-2-Freigabe des Quell-Elements (aiml_list_free scope-drop = dieselbe `aiml_ser_free_decoded` wie remove/clear) balanciert, intakter Inhalt über alle Feldarten. — aiml `9195ddb`. **→ Mechanik risikofrei bewiesen.**
+
+### 10.3 Paket-3-Umsetzungsversuch „Stage A" (decl-only) — VERWORFEN
+
+Versuch: CopyRetain nur am `decl copy = at(..)`-Init (memcpy → `aiml_ser_retain` + owned-Drop + `is_view_alias=false`), Escape-Sinks unverändert. **Ergebnis: mem-sanitizer FAIL (1 Check).** → **Empirischer Beweis: decl allein reicht NICHT.** Die Escape-Pfade (set/idx/return/push) tragen eigene is_view_alias-/deep-copy-Logik; eine owned+retain-Kopie am decl widerspricht ihnen (doppeltes retain/copy oder falscher Move → double-free/Imbalance). Reverted, grüner Stand + mem-sanitizer PASS bestätigt. — aiml `26caacc` (Doku).
+
+### 10.4 Exposure (ROI + Blast-Radius)
+
+elemKind-2 (`list<Value-Model>` mit Heap) betrifft die **Kern-Strukturen**: `list<ZoneEntry>` 93×, `list<MockCard>` 55×, `list<ActiveAbility>` 30×, `list<PlayerState>`/`Deck`/`ForumThread`/… → **hoher Nutzen ABER hoher Blast-Radius.** `list<ptr<Model>>` (elemKind 4, schon gefixt) ist selten (ActiveAbility 5×, CardBehavior 3×).
+
+### 10.5 WAS ICH VORHABE — koordinierter Multi-Sink-Paket-3-Umbau (Reihenfolge + Gate)
+
+Kein isolierter Patch mehr. Die Value-Materialisierung muss über ALLE Sinks mit EINEM Ownership-Fakt konsolidiert werden. Geplante Reihenfolge (jeder Schritt einzeln gegatet, Revert bei jeder Regression):
+
+1. **Gemeinsames Primitiv** `emitValueModelCopyRetain(dstAddr, srcAddr, type)` (memcpy + `aiml_ser_retain`, move-only via `modelIsMoveOnly` ablehnen) + `emitValueModelRelease` (bereits `aiml_ser_free_decoded`). EIN Helfer, den alle Sinks nutzen.
+2. **`is_view_alias` durch Ownership-Fakt ersetzen** (§9.4): die Sinks decl(1991)/set(2313,2471)/idx(4662)/return(3655)/push(ast_compiler_call.cpp:1545)/store(4790) ALLE gleichzeitig auf CopyRetain umstellen; kein Sink darf zusätzlich deep-copyen/retainen (sonst Imbalance wie Stage A). Reihenfolge secure-before-release (src retainen BEVOR dst-Release), auch indirektes Aliasing (§3).
+3. **elemKind-2-Release aktivieren** (`skipInlineValueModel=false`; remove/clear/pop/final-drop über EINEN Dispatcher `free_list_elem_at`, §9.7).
+4. **Gate pro Schritt:** mem-sanitizer (memory-safe) + Korpus (422/461) + `tests/lifetime` spec61 + die roten Tests (49 muss GRÜN werden: Content + 0 lost) + **hartes Leak-Zahlen-Gate** (§7, `run_lifetime_leak_gates.sh`) + 9rooms-Regressions (effect_processor/effect_death/mana_pick/enchantment_picker) + **Game+Client-Build + In-Game-Verhaltenstest** (Combat/Board/Deck-Editor). Erst wenn ALLE grün → nächster Sink.
+5. **Move-only + Array-Felder:** `isCopyableValue`-Trait (§9.5) an jedem CopyRetain-Sink prüfen (Diagnose statt stillem Leak); Array-Feld-Lifecycle-Descriptor (§9.6) separat, wegen fp-Risiko eigener Pass.
+
+**Offene Rest-Leaks (separat, nicht Teil dieses Plans):** Server ~540 B/Zyklus in `handle_validate` (Model-Geschwister-Teardown bei Whole-Model-`return out`, Repro `_mem_sanitize/handle_validate_sibling.aiml`) — andere Klasse, Fix offen.
+
+**Empfehlung:** Der Multi-Sink-Umbau (10.5 Schritte 1-3) ist ein fokussierter Einzelauftrag mit dem vollen Gate aus Schritt 4 — nicht am Ende einer langen Session, sondern als dedizierte Sitzung, weil jede Zwischenstufe die Kern-Strukturen berührt.
+
