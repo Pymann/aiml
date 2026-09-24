@@ -43,3 +43,11 @@ offene Arbeit ist der elemKind-2-Release-Leak plus die dafür nötige eigenstän
 | `p2_array_field_leak_RED` | **RED** (6780 B / 400 Blöcke lost, kein double-free) | `array<string:N>` als Model-Feld → serFieldSubtree RAWBYTES → retain/release sehen die Elemente nicht → reiner Leak. §9.6-Lücke bestätigt + quantifiziert. |
 
 **Offene Paket-2/3-CODE-Arbeit (mit Risiko):** (a) Array-Feld-Lifecycle-Descriptor (STRUCT-Komposition) — ⚠️ ändert serFieldSubtree → **Schema-fp/Wire-Risiko** (wie die matches-KV-FATALs); separaten Lifecycle-Descriptor erwägen. (b) `isCopyableValue`-Trait aus `modelIsMoveOnly` ableiten (§9.5). (c) CopyRetain-Materialisierung bei decl/set/return/push verdrahten (§9.2/§9.3, Paket 3) — der breite ABI-Eingriff, braucht das volle Verhaltens-Gate.
+
+## Paket 3 — CopyRetain-Mechanik isoliert BEWIESEN (2026-09-24)
+
+| Test | Ergebnis | Bedeutung |
+|---|---|---|
+| `p3_copyretain_survives_source_drop` | **GRÜN** (PASS + 0 lost + 0 errors, 200 Iter) | Eine retain-Kopie (memcpy + `aiml_ser_retain` via store-retain-Pfad) überlebt die kind-2-FREIGABE des Quell-Listen-Elements (aiml_list_free scope-drop = dieselbe `aiml_ser_free_decoded`, die remove/clear nutzen) mit intaktem Inhalt (string/list/map/nested-model) und balancierten rc — **kein double-free, kein Leak.** |
+
+**Fazit:** Die Runtime-Mechanik (retain-Kopie ⊕ Element-Release) ist risikofrei validiert. Der frühere remove-Deep-Free-Regress lag NICHT an der Freigabe, sondern an der fehlenden retain-Kopie (View). Verbleibende (riskante) Arbeit: CopyRetain in den IMPLIZITEN `decl copy = at(..)`-Pfad verdrahten (statt is_view_alias) + remove/clear/pop-Release aktivieren — betrifft die Kern-Strukturen (ZoneEntry/MockCard/ActiveAbility), braucht das volle Game+Client-Verhaltens-Gate.
