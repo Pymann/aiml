@@ -91,7 +91,7 @@
       - decl: [total, i32, 0]
       - decl: [req, i32, 0]
       - while:
-          condition: { lt: [req, 100] }
+          condition: { lt: [req, 500] }
           body:
             - decl: [pid, string, { call: [resolve_token_pid, svc, "tok123"] }]
             - set: [total, { +: [total, pid.len] }]

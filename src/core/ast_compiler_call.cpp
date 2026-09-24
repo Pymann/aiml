@@ -2487,6 +2487,14 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 // scope-drop frees its own heap, not the volatile cache. Null-safe (→ "").
                 llvm::Value* owned = ctx.builder.CreateCall(
                     ctx.getFunction("aiml_str_dup", i8p, {i8p}), {retPtr}, "kv_get_own");
+                // spec/61 §7: this dup is an OWNED fresh RC string (rc=1). Register it as an owned
+                // string temp so the managed-string init/set-store MOVES it (adopts as-is) instead of
+                // treating it as a borrow and applying an extra aiml_str_incref — a double-acquire that
+                // left rc=1 after the single scope-drop decref → leak (22 B/call: handle_validate /
+                // decl x = stringkv.get_copy(k)). A consuming decl/set/push/return removes it via
+                // consumeStringTemp (one owned ref); an unconsumed transient is decref'd at stmt end.
+                if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+                    ctx.stmtTempStack.back().push_back(owned);
                 return ctx.ir_gen->wrap(owned); // string: owned char*
             } else if (vName == "f32") {
                 return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getFloatTy(), retPtr, "kv_f32"));

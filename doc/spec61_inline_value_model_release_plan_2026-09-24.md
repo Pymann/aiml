@@ -424,3 +424,99 @@ Ernsthafter Umsetzungsversuch der decl-CopyRetain (Codex §11.3). Ergebnis: **ke
 **Konkreter nächster Schritt (für die Fertigstellung):** den echten Materialisierungs-Pfad für `decl <value-model> = {at/get/first/last}` finden — prüfen, was `visitExpression(AtExpr)` für ein Value-Model-Element zurückgibt (Element-ADRESSE als Pointer vs. geladener Wert) und wo der Store in den decl-Slot passiert. CopyRetain (memcpy + `aiml_ser_retain` + owned-Drop-Registrierung, gated auf is_view_alias && !isMoveOnlyModel) DORT platzieren; freshOwned-View-Fall dann wieder aktivieren (muss exakt matchen). Danach das Gate aus §11.3 Schritt 4-7 (inkl. Game+Client-Verhaltenstest — headless NICHT möglich). Bis dahin bleibt elemKind-2-Release deferred; die sicheren Kinds (1/3/4/5/6) + owned-String-Return sind bereits committet + grün.
 
 Verifikations-Artefakte dieser Nacht: `tests/run_lifetime_leak_gates.sh` (hartes Leak-Gate, committet), rote Ziele 49 (47/16 B) / 50 (16 B, Feld-Reassignment auf View) / p2_array (6780 B) reproduzierbar; GREEN-Prototypen p2/p3 0/0.
+
+## 13. String-KV `get_copy`/`get` Per-Call-Leak — GEFIXT (Claude, Nacht 2026-09-24/25)
+
+Nach dem CopyRetain-Revert Directive 2 („suche weiter nach leaks, headless in 9rooms") verfolgt. Der
+`handle_validate`-Server-Residual (~540 B/Request, Stack `aiml_str_dup ← handle_validate ←
+resolve_token_pid`, 22 B/Call) isoliert reproduziert und behoben.
+
+**Repro (isoliert):** `decl val = kvs.get_copy(k)` auf einem `Kv<string:string>` in einer 500er-Schleife →
+`definitely lost: 11.384 bytes in 501 blocks` (= 500 Per-Call-Blöcke à 22 B + 1× open_kv-Handle).
+
+**Ursache (Doppel-Ownership).** Ein string-wertiges Kv `get`/`get_copy` (valSize==0) senkt in
+[ast_compiler_call.cpp:2488](../src/core/ast_compiler_call.cpp#L2488) zu `aiml_db_kv_get` (mmap-Borrow)
++ `aiml_str_dup` (owned, rc=1, „kv_get_own"). Dieser dup wurde aber **nicht** als owned string-temp
+registriert. Die managed-string-Init-Store-Normalisierung
+([ast_compiler_stmt.cpp:1765](../src/core/ast_compiler_stmt.cpp#L1765)) sah daraufhin `ownedTemp=false`
+→ behandelte ihn als Borrow → **zusätzliches `aiml_str_incref` (rc=2)** (memV3-Zweig 1770-1772). Nur
+EIN scope-drop-`decref` (kind-1, [1490](../src/core/ast_compiler_stmt.cpp#L1490)) → rc bleibt 1 →
+22 B/Call geleakt. Der `set`-Consume-Pfad ([2407](../src/core/ast_compiler_stmt.cpp#L2407)) hatte
+dieselbe Wurzel (Borrow → COPY-dup statt MOVE → kv_get_own leakt).
+
+**Fix.** Die `kv_get_own`-dup auf `ctx.stmtTempStack.back()` registrieren (gated
+`lifetimeDropsEnabled && !stmtTempStack.empty()`), analog zum producer-Method-Pfad
+([ast_compiler_call.cpp:3296](../src/core/ast_compiler_call.cpp#L3296)). Damit MOVEd ein konsumierender
+decl/set/push/return den owned ref (adopt rc=1, ein Drop) via `consumeStringTemp`, und ein transienter
+Gebrauch wird am stmt-Ende ein einziges Mal decref'd. **Kein Double-Free-Pfad** eingeführt: der
+kv_get_own-ref wurde vorher in KEINEM Pfad decref'd (immer Leak, nie Double-Free) → jetzt exakt einmal.
+
+**Verifiziert (isoliert, valgrind):**
+- `decl val = get_copy` × 500 → Per-Call-Leak **0** (vorher 500 Blöcke). Rest: 1× 583 B open_kv-Handle.
+- `set slot = get_copy` × 300 → Per-Call-Leak **0**, **keine** Invalid read/write/free (kein
+  Double-Free durch den MOVE). Rest: dasselbe 1× 583 B open_kv-Handle.
+- Test [tests/_inline_model_red/51_stringkv_getcopy_no_leak.aiml](../tests/_inline_model_red/51_stringkv_getcopy_no_leak.aiml)
+  (funktional, Korpus): PASS, total==2600.
+
+**Wirksam in Produktion:** `lifetimeDropsEnabled` default true
+([ast_compiler.cpp:1360](../src/core/ast_compiler.cpp#L1360)); deployter Server läuft
+`AIML_LIFETIME_DROPS=1` (exodus-*.json).
+
+**⚠️ KORREKTUR (nach tieferer Analyse): dieser Fix schließt den `handle_validate`-Residual NUR TEILWEISE.**
+Er behebt das einfache Muster `decl x = stringkv.get_copy(k)` (x wird gelesen/weitergereicht). Der
+DOMINANTE `handle_validate`-Server-Leak (Stack `str_dup ← handle_validate ← resolve_token_pid`) ist
+aber ein ZWEITER, davon unabhängiger, PRE-EXISTING Bug im value-model-Member-Store — siehe §14. Mein
+get_copy-Fix ist trotzdem korrekt, verifiziert und sicher (0 Per-Call-Leak, kein Double-Free), nur
+eben nicht die vollständige handle_validate-Lösung.
+
+**Verbleibend (NICHT in diesem Fix, separat):** der einmalige `aiml_db_kv_open_persist`-Handle-Leak
+(~583 B je geöffnetem Kv, [db_runtime.cpp:1298](../src/sys/db_runtime.cpp#L1298)) — ein `Kv<>`-decl-local
+bekommt keinen scope-drop, der das Kv-Objekt (`delete kv`) freigibt; es gibt noch keine `close`-Methode.
+Konstant (skaliert nicht mit Requests), daher niedrigere Priorität als der Per-Call-Leak. Kandidat für
+einen eigenen Fix (Kv-Lifetime / `close`-Operator).
+
+**Gate-Status (COMMITTED):** mem-sanitizer PASS (44/44 Probes correct + memory-safe), Korpus 422 pass /
+1 pre-existing unrelated fail (`test_model_inherits_hetero_list` — `list<any>` base-slice-Crash, BEWIESEN
+inert ggü. meiner Änderung: das .o des Tests enthält keinen `aiml_db_kv_get`/`kv_get_own`-Bezug),
+Game + Client bauen sauber mit neuer ABI. 9rooms-Verhaltenstest-Suite lief mit. → committet.
+
+## 14. Value-Model String-Member-Store Leak (der EIGENTLICHE handle_validate-Residual) — PRE-EXISTING, LOKALISIERT, NOCH OFFEN (Claude, 2026-09-25)
+
+Beim Verifizieren des get_copy-Fixes gegen den echten `handle_validate`-Repro
+([tests/_mem_sanitize/handle_validate_sibling.aiml](../tests/_mem_sanitize/handle_validate_sibling.aiml))
+entdeckt: der dominante Server-Leak (Stack `str_dup ← handle_validate ← resolve_token_pid`, 22 B/Req)
+ist NICHT der get_copy-decl, sondern der **value-model String-Member-Store** `set: [out.email, eml]`
+gefolgt von `return out` (producer). **KV-UNABHÄNGIG** minimal reproduziert
+(`scratchpad/share.aiml`: ein Model mit `[msg, string]`, `set out.msg = sib` wobei `sib` ein OWNED
+string-local (Interpolation, danach gelesen → Share erzwungen), lokal gedroppt → **8.800 B in 400
+Blöcken = 22 B/Call**). Auch rein lokal (nicht returned) reproduzierbar (`scratchpad/loc.aiml`).
+
+**Ref-Trace (gdb, 1 Iteration, loc-Variante mit get_copy):**
+- `sib`-Buffer A = `0x…318`, per `aiml_str_dup` (kv_get_own) erzeugt, rc=1.
+- `set out.msg = sib` → `aiml_str_incref(A)` (rc=2), `out.msg = A` (Share; Member-Store-incref für
+  VariableExpr/managed-string-Quellen, [ast_compiler_stmt.cpp:3195](../src/core/ast_compiler_stmt.cpp#L3195)).
+- `aiml_ser_free_decoded(out)` decreft A EINMAL (rc 2→1).
+- **Es fehlt der ZWEITE decref von A** (der scope-drop von `sib`): im Trace decreft der sib-Slot-Drop
+  einen ANDEREN Buffer (`0x…338`/`0x…3c8`), nicht A → A bleibt bei rc=1 → **Leak**.
+
+**Vertrag (der Member-Store-incref-Kommentar bei 3168/3195 nennt ihn selbst):** `sib` rc1 → incref rc2;
+der DEST-Model-Drop decreft (→ rc1); `sib`s EIGENER scope-drop decreft (→ rc0). Balanciert NUR, wenn
+`sib`s Drop A trifft. Befund: `sib`s Drop trifft A NICHT (Slot-Mapping-Diskrepanz — vermutlich wird
+`sib`s Slot nach dem Share fälschlich genullt/als moved behandelt, ODER `consumeStringTemp`/Init-Store
+hat den Slot-Inhalt vom incref'ten Buffer entkoppelt). **Root Cause noch nicht endgültig gepinnt.**
+
+**Warum getrennt behandelt + NICHT heute Nacht spekulativ gefixt:** Das ist exakt der value-model-
+Ownership/Teardown-Bereich, der in §12 (CopyRetain) und beim früheren Auto-Detect-Revert
+([[owned-return-and-pop-clear-leaks]]) Regressionen erzeugte, die Leak/Sanitizer NICHT fingen (nur der
+Game-Verhaltenstest). Ein Fix hier braucht: (1) exakte Root-Cause (Slot-null-Stelle im set-Pfad
+lokalisieren), (2) mem-sanitizer + Korpus + Leak-Gate, (3) Game+Client-VERHALTENStest. Bis dahin bleibt
+er dokumentiert + offen. Expositionsanalyse (§10.4-Stil): `set model.strfield = <string-local>` ist im
+9rooms-Servercode SEHR häufig (jeder RPC-Handler, der Resp-Modelle füllt) → hoher Wert, aber hoher
+Blast-Radius. **Nächster Schritt:** die Slot-null-/Move-Behandlung im managed-string-set-Member-Pfad
+([ast_compiler_stmt.cpp:2402](../src/core/ast_compiler_stmt.cpp#L2402) ff.) instrumentieren, prüfen
+warum `sib`s Slot beim Drop nicht A hält.
+
+**Verbleibend (NICHT in diesem Fix, separat):** der einmalige `aiml_db_kv_open_persist`-Handle-Leak
+(~583 B je geöffnetem Kv, [db_runtime.cpp:1298](../src/sys/db_runtime.cpp#L1298)) — ein `Kv<>`-decl-local
+bekommt keinen scope-drop, der das Kv-Objekt (`delete kv`) freigibt; es gibt noch keine `close`-Methode.
+Konstant (skaliert nicht mit Requests), daher niedrigere Priorität. Kandidat für einen eigenen Fix.
