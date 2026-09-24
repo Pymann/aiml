@@ -2377,9 +2377,13 @@ void Compiler::synthesizeCascadeClasses(Program* prog) {
         std::string topDispatch = genDispatch(casc, {});
         if (!ok) continue;   // gaps/ties already reported by the semantic pass
 
+        // spec/61 §3.2: render produces a FRESH owned taker (the cascade dispatch deep-clones the
+        // carrier through the rule chain — see aiml_clone_deep), so it is a `producer`: the caller
+        // owns the returned value and deep-frees its heap fields at scope exit. Without this the
+        // taker's cloned string/list fields leak on every render call (mkp_*_cascade pools).
         std::string renderText =
             "- def:\n    name: render\n    args: [[carry, " + pool.carrier +
-            "], [block, list<i32>]]\n    return: " + pool.taker +
+            "], [block, list<i32>]]\n    return: { type: " + pool.taker + ", lifetime: producer }"
             "\n    body:\n      - set: [<.blk, block]\n      - set: [<.idx, 0]\n"
             "      - return: { call: [<." + topDispatch + ", carry] }\n";
         auto renderFn = parseDefSnippet(renderText);
