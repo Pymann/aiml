@@ -1,0 +1,49 @@
+# static-check: off
+# Paket 3 PROTOTYP (doc/spec61_inline_value_model_release_plan_2026-09-24.md §3): beweist die
+# CopyRetain-Mechanik ISOLIERT — eine retain-Kopie (hier via den bestehenden store-retain-Pfad,
+# ast_compiler_stmt.cpp:4802) überlebt die FREIGABE des Quell-Elements. build_and_copy legt eine
+# LOKALE list<Rec> an, kopiert rows[0] per `store` (memcpy + aiml_ser_retain) in den out-Parameter,
+# und lässt dann die Liste am Funktions-Scope-Ende droppen → aiml_list_free gibt das kind-2-
+# Inline-Element frei (aiml_ser_free_decoded: decref string/list/map/nested — DIESELBE Freigabe, die
+# remove/clear nutzen würden). Wenn retain vollständig ist, überlebt die Kopie im Caller mit intaktem
+# Inhalt und beide Seiten geben genau einmal frei.
+# Erwartung: PASS + valgrind 0 lost + 0 errors (Mechanik bewiesen). Wenn eine Feldart im retain fehlt:
+# double-free (Invalid free) oder Leak.
+
+- model: { name: Inner, fields: [[tag, string], [nums, list<i32>]] }
+- model: { name: Rec, fields: [[label, string], [tags, list<i32>], [mana, map<string:i32>], [inner, Inner]] }
+
+- def:
+    name: build_and_copy
+    args: [[out, ref<Rec>], [seed, i32]]
+    body:
+      - decl: [rows, list<Rec>]          # LOKALE Quelle — droppt am Funktions-Ende (kind-2-Release)
+      - decl: [src, Rec]
+      - set: [src.label, "survivor-${seed}"]
+      - call: [src.tags.push, seed]
+      - call: [src.mana.put, "fire", seed]
+      - set: [src.inner.tag, "inner-${seed}"]
+      - call: [src.inner.nums.push, 99]
+      - call: [rows.push, src]
+      - store: [out, { at: [rows, 0] }]  # retain-Kopie in den Caller-Slot (out überlebt rows)
+      # rows droppt hier → aiml_list_free gibt rows[0] (kind 2) frei; out muss überleben
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [reps, i32, 0]
+      - decl: [itr, i32, 0]
+      - while:
+          condition: { lt: [itr, 200] }
+          body:
+            - decl: [dst, Rec]
+            - call: [build_and_copy, dst, itr]     # dst = retain-Kopie; Quell-Liste bereits gedropt
+            - if: { condition: { neq: [dst.label, "survivor-${itr}"] }, then: [{ print: ["FAIL dst.label: ${dst.label}"] }, { return: 1 }] }
+            - if: { condition: { neq: [dst.inner.tag, "inner-${itr}"] }, then: [{ print: ["FAIL dst.inner.tag: ${dst.inner.tag}"] }, { return: 1 }] }
+            - decl: [tgv, i32, { at: [dst.tags, 0] }]
+            - if: { condition: { neq: [tgv, itr] }, then: [{ print: ["FAIL dst.tags[0]: ${tgv}"] }, { return: 1 }] }
+            - set: [reps, { +: [reps, 1] }]
+            - set: [itr, { +: [itr, 1] }]
+      - print: ["PASS p3_copyretain_survives_source_drop reps=${reps}"]
+      - return: 0
