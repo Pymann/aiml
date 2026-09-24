@@ -1,0 +1,36 @@
+# spec/61 §3.2 — a function that RETURNS a fresh value model (`return: { type: T, lifetime:
+# producer }`) transfers ownership to the caller: the caller's receiving local must deep-free the
+# returned model's heap fields (list/string) at scope exit. Without producer-return deep-free the
+# fresh list + string leak on EVERY call. 200 iters → an unbounded-RSS leak if the drop is missing;
+# bounded (leak-free) when the caller drops the producer's result. Mirrors the function-cascade
+# `render` case (a cascade taker is a producer value model) that leaked in 9rooms mkp_*_cascade.
+- model:
+    name: Draft
+    fields:
+      - [items, list<i32>]
+      - [tag, string, ""]
+- def:
+    name: make_draft
+    return: { type: Draft, lifetime: producer }
+    args: [[seed, i32]]
+    body:
+      - decl: [draft, Draft]
+      - call: [draft.items.push, seed]
+      - call: [draft.items.push, { +: [seed, 1] }]
+      - set: [draft.tag, "draft-${seed}"]
+      - return: draft
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - decl: [checksum, i32, 0]
+      - while:
+          condition: { lt: [idx, 200] }
+          body:
+            - decl: [out, Draft, { call: [make_draft, idx] }]
+            - set: [checksum, { +: [checksum, out.items.len] }]
+            - set: [idx, { +: [idx, 1] }]
+      - if: { condition: { neq: [checksum, 400] }, then: [{ print: ["FAIL producer_value_model_drop checksum=${checksum}"] }, { return: 1 }] }
+      - print: ["PASS producer_value_model_drop"]
+      - return: 0

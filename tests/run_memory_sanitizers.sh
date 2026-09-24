@@ -193,6 +193,8 @@ probe "managed string local (spec/61 §7 class 3): self-accum frees old + borrow
     "$AIML_BIN" -r tests/_mem_sanitize/string_reassign_drop.aiml
 probe "producer-returned STRING (9rooms deckset-editor populate_card_full): fresh string freed when bound to a local (direct + bare-call-result return) AND when used as a transient call arg, bounded RSS" "psd" \
     "$AIML_BIN" -r tests/_mem_sanitize/producer_string_drop.aiml
+probe "producer-returned VALUE MODEL (spec/61 §3.2; 9rooms mkp_*_cascade render taker): a { lifetime: producer } fn returns a fresh model with list+string fields → caller deep-frees them at scope exit, 200 iters leak-free" "pvm" \
+    "$AIML_BIN" -r tests/_mem_sanitize/producer_value_model_drop.aiml
 probe "return-cleanup owner-exemption (spec/61 §6.2 T1): a SCALAR return (return s.len) drops the owned string local; a heap (string) return stays exempt (moved out), bounded RSS + no double-free" "rcs" \
     "$AIML_BIN" -r tests/_mem_sanitize/return_cleanup_scalar_drop.aiml
 probe "direct interpolation return (spec/61 T1b): `return \"\${…}\"` frees its intermediate conversion/concat temps (block terminator skips the per-statement temp loop), bounded RSS" "rit" \
