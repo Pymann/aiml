@@ -334,3 +334,93 @@ Kein isolierter Patch mehr. Die Value-Materialisierung muss über ALLE Sinks mit
 
 **Empfehlung:** Der Multi-Sink-Umbau (10.5 Schritte 1-3) ist ein fokussierter Einzelauftrag mit dem vollen Gate aus Schritt 4 — nicht am Ende einer langen Session, sondern als dedizierte Sitzung, weil jede Zwischenstufe die Kern-Strukturen berührt.
 
+
+---
+
+## 11. Review der Fehleranalyse und Neuplanung (Codex, 24.09.2026)
+
+**Urteil: Richtung sinnvoll, §10.5 in der jetzigen Reihenfolge noch nicht umsetzungsreif.** Der gemeinsame Ownership-Vertrag ist richtig. Zu korrigieren sind die Beweisstärke der Stage-A-Erklärung, die Position der Typ-Sicherheitsprüfungen, der Umgang mit mehreren legitimen Besitzreferenzen und die widersprüchlichen Zwischen-Gates. Dieses Review präzisiert §10; historische Berichte oben bleiben erhalten.
+
+### 11.1 Verifikation und reproduzierte Ergebnisse
+
+Geprüfter Quellstand: HEAD `362349f`; die genannten AIML-Commits `196b2c1`, `96bc6fa`, `9195ddb`, `26caacc` sind vorhanden. Code bestätigt: String-Autoklassifikation an den Aufrufstellen auskommentiert, Kind-2-Skip bei clear/pop aktiv, Array-Feld-Warnung vorhanden. `26caacc` enthält ausschließlich die Dokumentation des verworfenen Versuchs, nicht dessen Patch oder Fehlertrace.
+
+Alle fünf vorhandenen Probes unverändert neu nach native Object kompiliert, mit g++ gegen die vorhandene libaiml gelinkt, nativ und unter Valgrind 3.22.0 ausgeführt. Beide Flags waren jeweils 1. **Kein kompletter Compiler-Neubuild, keine erneute vollständige Korpus-/Client-Abnahme.** Die Binäridentität ist deshalb separat festgehalten:
+
+- Compiler SHA256: `ec1b66547c4aebc50e74c0cc2c448bd44be3ae74803a519b6d133c61ed774c7b`
+- libaiml SHA256: `233596daaad53729ba867d10ea5abead2fcd6036295333809f66b23349451d9d`
+- Rohlogs dauerhaft: [analysis/inline_value_model_review_2026-09-24](analysis/inline_value_model_review_2026-09-24/). Temporäre Kompilate: `/tmp/inline-plan-review-wp17hded/`.
+
+| Probe | Native Exit | Definitely / indirectly lost | Valgrind Exit |
+|---|---:|---:|---:|
+| 49_value_survives_remove | 0 | 47 / 16 B | 99 |
+| 50_share_semantics | 0 | **16 / 0 B** | 99 |
+| p2_retain_coverage, 200 Iterationen | 0 | 0 / 0 B | 0 |
+| p3_copyretain_survives_source_drop, 200 Iterationen | 0 | 0 / 0 B | 0 |
+| p2_array_field_leak_RED | 0 | 6780 / 0 B | 99 |
+
+Die gemeldeten Valgrind-Fehler in diesen roten Läufen sind Leak-Records; die Logs zeigen keine Invalid-read/write/free-Meldungen. Verwendet wurde `--leak-check=full --show-leak-kinds=definite,indirect --errors-for-leak-kinds=definite,indirect --error-exitcode=99`. Build- und Native-Logs liegen jeweils beim Valgrind-Log.
+
+### 11.2 Priorisierte Befunde
+
+**P1 — Stage-A-Ursache nicht nachgewiesen (§10.3).** Ein fehlgeschlagener Check belegt die Regression dieses Versuchs, aber nicht „alle Sinks müssen gleichzeitig geändert werden“. Im dokumentierten Stand fehlen Testname, Fehlerart, Trace, reproduzierbarer Patch und minimaler Gegenfall. „Doppeltes retain/copy oder falscher Move“ sind alternative Hypothesen. Ein zusätzlicher Retain für einen zusätzlichen Besitzer ist korrekt; eine separat besitzende Deep-Copy kann semantisch falsch oder teuer sein, verursacht aber nicht allein dadurch Double-free.
+
+Vor einem breiteren Umbau Stage-A-Patch in isoliertem Checkout rekonstruieren/sichern, exakten roten Check mit Baseline vergleichen und auf Minimalprobe reduzieren. Besonders `ownership_analyzer.cpp::freshOwned`, `StatementPlan` und `mayDrop` gegen `visitDeclStmt::modelOwnedInit`/Cleanup-Registrierung abgleichen: ein IR-Retain plus registrierter Drop genügt nicht, wenn die Flow-Fakten den Drop verweigern oder einen Move falsch klassifizieren. Das ist eine konkrete Prüfrichtung, **keine hier bewiesene Fehlerursache**. Falls der ursprüngliche Versuch nicht rekonstruierbar ist, als nicht kausal geklärte Regression dokumentieren; die Multi-Sink-Architekturentscheidung davon unabhängig begründen.
+
+**P1 — Typ-/Lifecycle-Sicherheit kommt in §10.5 zu spät.** Schritt 5 (`isCopyableValue`, Array-Unterstützung) darf nicht erst nach CopyRetain und Kind-2-Freigabe kommen. Der vorhandene `modelIsMoveOnly` ist weiterhin auf ptr/tensor/Value-Nesting begrenzt. RAWBYTES-Array-Felder besitzen keine sichere Retain/Release-Abdeckung. Vor jedem neuen Materialisierungspfad getrennt prüfen: (a) semantisch kopierbar und (b) Lifecycle vollständig unterstützt. Ein kopierbares Array mit fehlendem Descriptor erfüllt nur (a). Für noch nicht unterstützte Typen gezielter Compilefehler oder klar isolierter alter Pfad ohne neue Freigabegarantie; Warnung allein ist keine Sicherheitsvoraussetzung. Array-Lifecycle darf separat implementiert werden, aber nicht nachträglich als Voraussetzung für bereits aktivierte allgemeine Freigaben behandelt werden.
+
+**P1 — „ALLE Sinks auf CopyRetain“ und „kein zusätzlicher Retain“ sind zu pauschal (§10.5.2).** Jeder Sink braucht dieselbe Transferentscheidung, nicht zwingend dieselbe Aktion:
+
+| Quelle / Verwendung | Aktion |
+|---|---|
+| kopierbare geborgte Quelle → neuer Value-Besitzer | CopyRetain |
+| bestehender besitzender Value bleibt beim Caller und wird zusätzlich gespeichert | CopyRetain für den zusätzlichen Besitzer |
+| tatsächlicher Besitztransfer eines Locals/Temps | Move/Adopt, Quelle invalidieren, genau einen Cleanup konsumieren |
+| echter ref-Borrow | kein Besitz-Retain und kein Owner-Drop |
+| explizites clone / unabhängige KV-Copy | vorhandenen unabhängigen Copy-Vertrag erhalten |
+
+Die Invariante lautet: **jede neu entstehende Besitzreferenz hat genau einen Retain oder einen übernommenen Besitz; jeder auslaufende Besitz genau einen Release.** Nicht „höchstens ein Retain pro Ausdruckskette“. Insbesondere `decl copy=at(...); push(copy)` benötigt je nach Copy-/Move-Vertrag unterschiedliche Aktionen. Die sinkweise Ausnahmetabelle §9.3 bleibt maßgeblich.
+
+**P1 — Temp-/Call-Ownership und echte Borrows fehlen in der verkürzten Neuplanung.** §10.5 nennt die wesentlichen Stores, aber übernimmt §9.8 sowie §5 nicht ausreichend in seine Freigabevoraussetzungen. `foo(rows.pop())`, ein verworfenes äußeres Ergebnis, Return/early-exit und Bedingungen müssen typisierte Temp-Cleanups besitzen. Call-Parameter unterscheiden Borrow, Value-Copy und Konsum. Bindungen `ref<Model>` dürfen durch remove/clear/Shift nicht unbemerkt zu UAF werden. Vor allgemeiner Kind-2-Aktivierung mindestens lokal beweisbare Invalidierungen diagnostizieren und entsprechende Negativtests ausführen. Vollständige interprozedurale Analyse kann begrenzt bleiben; die Grenze muss ausdrücklich dokumentiert sein.
+
+**P2 — „einzige Lücke ist Release-Leak“ und „risikofrei bewiesen“ überzeichnen die Tests (§10.2).** Test 50 verliert **16 Byte**, obwohl er weder remove noch clear benutzt. Der Trace zeigt `aiml_str_dup` im main; im Quelltext wird `copy.label = "changed"` gesetzt. Damit besteht bereits ein weiterer Verlustpfad innerhalb der unbalancierten Value-Kopie. Der konkrete Drop-Pfad ist beim Fix zu prüfen; ein reiner remove-Patch reicht für diesen Test nicht.
+
+Die P2/P3-Prototypen bestätigen den getesteten store-Retain-Pfad für bestimmte Felder. P3 prüft nach Quell-Drop label, inner.tag und tags[0], aber nicht mana-Inhalt und inner.nums; shared/Class-5/Arrays/Move-only/Call-Temps sind damit ebenfalls nicht vollständig abgedeckt. Korrekte Formulierung: „Mechanik für die getesteten Feldarten und den store-Pfad bestätigt; Integration und weitere Klassen offen“. Map-Inhalt, inner.nums, Wechsel der Drop-Reihenfolge und Selbst-/Unterobjekt-Aliasing als Assertions ergänzen.
+
+**P2 — Modell der bisherigen View ist ungenau.** Die Headerkommentare von Test 49/50 behaupten, ein Shift ändere den gelesenen äußeren Slot bzw. String-Assignment schreibe durch. Der aktuelle decl-Pfad kopiert jedoch bereits Struct-Bytes in lokale Storage (`ast_compiler_stmt.cpp`, gewöhnlicher memcpy-Zweig um 1990ff), ohne dabei vollständigen eigenen Member-Besitz zu materialisieren. Zu unterscheiden sind also (1) eigenständige Struct-Bytes mit ungesicherten Feldreferenzen und (2) echte ref auf einen Slot. Testheader an beobachteten Istzustand anpassen; kein pauschales „copy-on-write-at-set“ als Erklärung verwenden, solange nicht im jeweiligen Pfad belegt.
+
+**P2 — Gate-Reihenfolge widerspricht sich (§10.5.2–4).** Einerseits sollen alle Sinks gleichzeitig wechseln, andererseits „erst alle grün → nächster Sink“. Zudem kann Test 49 vor Aktivierung des Element-Release weiterhin erwartbar leaken; „alle Zieltests müssen nach jedem Vorbereitungsschritt grün sein“ blockiert den geplanten Ablauf. Tests nach Entwicklungsphase kennzeichnen: Baseline-Erhaltung, neue Helper-/Transfer-Tests, erwartete rote Zieltests, abschließendes Null-Leak-Gate. Koordinierter Endzustand kann aus kleinen überprüfbaren Commits bestehen. Kein teilkonvertierter Zustand wird als neue produktive Semantik ausgeliefert.
+
+**P2 — 422/461 ist kein hinreichendes Regression-Gate.** Dieselbe Anzahl grüner Tests kann neue Fehler bei gleichzeitig behobenen alten Fehlern verbergen. Identische Testauswahl und Flags, Vergleich der konkreten Status pro Test, Exitcodes und keine neuen Skips verlangen. Existierende Fehlschläge namentlich baselinen. Das angekündigte `tests/run_lifetime_leak_gates.sh` existiert beim Review noch nicht; daher vor dem nächsten Umsetzungsversuch als Harness bereitstellen. Client-Verhaltensprüfung konkret als Szenarien mit Soll-Ergebnis und Evidenz definieren (Deck→Card-Editor→zurück, Änderung speichern/neu öffnen, Buff anwenden/ablaufen lassen, Board-Zustand). Ein Client-Build allein erfüllt sie nicht.
+
+**P2 — Array-Warnung ist nützlich, aber keine vollständige Diagnose (§10.1.C).** `serFieldSubtree` trennt den Array-Elementtyp aktuell am ersten `:`; bei `array<map<string:i32>:N>` liegt dieser innerhalb des Elementtyps. ptr/shared/tensor/path/Class-5 sind nicht vollständig in `elemHeap` enthalten; spätere Typregistrierung kann den hasHeapFields-Befund beeinflussen. Gemeinsamen verschachtelungsfesten Typ-Parser und Lifecycle-Trait nutzen. Die deduplizierende Menge ist funktionsstatisch/prozessweit; für verlässliche Diagnosen besser pro CompilerContext/Compile-Run. Die Warnung verändert hier zwar keine Deskriptorbytes, deckt aber nicht alle gefährlichen Typen ab. Kein Sicherheitsnachweis aus ihrem Ausbleiben ableiten.
+
+### 11.3 Verbesserte Neuplanung (ersetzt die Reihenfolge aus §10.5)
+
+1. **Belege und Baseline sichern.** Stage-A-Failure isolieren oder die ungeklärte Ursache ausdrücklich festhalten. Test 50 in die Leak-Ziele aufnehmen. Historische README-/Testkommentare korrigieren. Compiler, Runtime, Flags und Teststatus pro Fall speichern.
+2. **Harness und Typvoraussetzungen vorziehen.** Hartes Leak-Gate erstellen; `isCopyableValue` plus gesonderte Lifecycle-Abdeckung zentralisieren. Unsupported-Array-/Unique-Fälle vor neuen Copy-Pfaden abfangen. Wire-/Lifecycle-Descriptor-Trennung vor Array-Arbeit festlegen.
+3. **Gemeinsame Transferprimitive ohne breite Aktivierung.** CopyRetain / Move / Borrow / Clone explizit unterscheiden. API mit Quell- und Zielzustand, einmaliger Evaluation und eindeutigem Cleanup-Token statt nacktem memcpy-Helper. Source sichern → retain bzw. move-invalidieren → release-old → commit; Self-/Unterobjekt-Alias und möglichen Realloc testen. Bestehenden store-Pfad damit absichern.
+4. **OwnershipPlan und Codegen gemeinsam migrieren.** Pro vollständiger Produzent-Verbraucher-Kette decl→set/store/idx/return/push und Call-Übergaben umstellen, einschließlich `freshOwned`, mayDrop, temp cleanup und Branch-Merges. Alte und neue Konvention dürfen sich nicht unmarkiert mischen. Nicht jedes Retain eliminieren; Referenzbilanz pro Besitzer prüfen. Neue Pfade vor Auslieferung vollständig über die relevante Matrix abdecken.
+5. **Borrows und Temp-Lifetime absichern.** Lokal erkennbare Invalidierung über Containeraliase, verworfene/weitergereichte pop-Ergebnisse, Return/early-exit und Short-circuit testen. Kein temporärer Owner darf vor dem letzten gültigen Borrow-Verbrauch droppen.
+6. **Kind-2-Release aktivieren und Dispatcher vereinheitlichen.** Vorhandenen `free_list_elem_at` auch für final-drop und remove nutzen, bisherige doppelte Spezialpfade entfernen. pop-transfer und pop-discard trennen; len/aktive Slots verhindern erneuten Drop. Erst jetzt Null-Leak-Ziele 49 und 50 sowie clear/pop/remove-Matrix verbindlich grün fordern.
+7. **Gesamtabnahme gegen Baseline und Spielverhalten.** Kein neuer Korpusfehler/Skip, komplette relevante Lifetime-Safety- und Leak-Gates, genannte 9rooms-Regressionen, WASM-Build und dokumentierter Client-/Combat-Smoke. Nicht ausführbare Gates bleiben ausdrücklich offen; keine Freigabe allein aufgrund nativer Prototypen.
+
+**Abgrenzung:** Die früher berichteten 422/461, die Deck-Editor-Regression, der konkrete Stage-A-Fehler und der Serververlust von ~540 B/Zyklus wurden in diesem Review nicht erneut reproduziert. Sie bleiben Berichte aus §10 und dürfen nicht als hier unabhängig bestätigte Kausalnachweise gelesen werden. Die fünf oben aufgeführten Probe-Ergebnisse wurden dagegen neu gemessen. Es wurden keine Compiler-/Runtime-Fixes vorgenommen.
+
+---
+
+## 12. CopyRetain-Umsetzungsversuch — Befunde (Claude, Nacht 2026-09-24/25)
+
+Ernsthafter Umsetzungsversuch der decl-CopyRetain (Codex §11.3). Ergebnis: **kein committable-grüner Stand erreicht; reverted.** Die Befunde (verifiziert, wertvoll für die Fertigstellung):
+
+1. **Stage A (CopyRetain an JEDEM struct-memcpy-from-pointer-Init, ast_compiler_stmt.cpp ~1991) → mem-sanitizer FAIL.** Isolierte Ursache: die Probe `producer_set_view_return` leakt 22,9 MB, weil der Init dort auch **Producer-Call-Ergebnisse** (`decl brd = make_board(idx)`, owns_return) trifft — die sind BEREITS owned/adoptiert; ein zusätzliches `aiml_ser_retain` über-increft sie. Bestätigt Codex P1: „producer/pop/clone-Ergebnisse werden adoptiert, nicht retained".
+
+2. **Stage B (CopyRetain nur wenn `sym.is_view_alias`, d.h. echter at/get/member-View) → mem-sanitizer PASS.** Das Gate schließt Producer/clone/owns-return korrekt aus; `producer_set_view_return` passt wieder; KEINE Escape-double-frees (alle Escape-Probes grün). Das view-gated retain ist also memory-safe.
+
+3. **ABER: `aiml_ser_retain` wird für `decl copy = at(rows,0)` GAR NICHT emittiert** (objdump: 0 Vorkommen im test-50-.o). D.h. der at-View-Value-Model-decl **erreicht den 1991-struct-memcpy-from-pointer-Zweig NICHT** (dort ist `initRaw->isPointerTy()` offenbar false für at-Value-Model-Elemente, oder ein anderer Store greift). → **Meine CopyRetain-Stelle ist die falsche.** Stage B war für die eigentlichen Views ein No-op (traf nur Producer-decls, die es korrekt skippt). Deshalb blieben 49/50 unverändert rot.
+
+4. **freshOwned-View-Fall + `CompilerContext::isMoveOnlyModel` (geteilt Codegen↔Analyzer) sind korrekt formuliert + bereit**, aber INERT ohne das retain im richtigen Pfad (freshOwned gated nur einen REGISTRIERTEN Drop; ohne CopyRetain-Block wird kein Drop registriert → harmlos, aber wirkungslos).
+
+**Konkreter nächster Schritt (für die Fertigstellung):** den echten Materialisierungs-Pfad für `decl <value-model> = {at/get/first/last}` finden — prüfen, was `visitExpression(AtExpr)` für ein Value-Model-Element zurückgibt (Element-ADRESSE als Pointer vs. geladener Wert) und wo der Store in den decl-Slot passiert. CopyRetain (memcpy + `aiml_ser_retain` + owned-Drop-Registrierung, gated auf is_view_alias && !isMoveOnlyModel) DORT platzieren; freshOwned-View-Fall dann wieder aktivieren (muss exakt matchen). Danach das Gate aus §11.3 Schritt 4-7 (inkl. Game+Client-Verhaltenstest — headless NICHT möglich). Bis dahin bleibt elemKind-2-Release deferred; die sicheren Kinds (1/3/4/5/6) + owned-String-Return sind bereits committet + grün.
+
+Verifikations-Artefakte dieser Nacht: `tests/run_lifetime_leak_gates.sh` (hartes Leak-Gate, committet), rote Ziele 49 (47/16 B) / 50 (16 B, Feld-Reassignment auf View) / p2_array (6780 B) reproduzierbar; GREEN-Prototypen p2/p3 0/0.
