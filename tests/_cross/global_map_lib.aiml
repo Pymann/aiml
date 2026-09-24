@@ -1,0 +1,19 @@
+# Fixture for tests/test_cross_file_global_map.aiml — a memV3 container GLOBAL (map<Enum:i32>)
+# defined + populated here (lib A) and read from the importing unit (lib B / entry). Regression
+# for the cross-file handle-type bug: the consumer's extern view was declared with the inline map
+# STRUCT type instead of the ptr handle, so it read the handle-pointer bits as {size,cap,data} →
+# garbage len / empty map across the file boundary (broke the whole 9rooms mkp table lookup).
+- enum: { name: Suit, values: [{ hearts: 1 }, { spades: 2 }, { clubs: 3 }] }
+- decl: [suit_weight, map<Suit:i32>, { hearts: 100, spades: 200, clubs: 300 }]
+- class:
+    name: SuitReader
+    methods:
+      - def:
+          name: weight_of
+          args: [[code, i32]]
+          return: i32
+          body: [{ return: { call: [suit_weight.get, code] } }]
+      - def:
+          name: table_len
+          return: i32
+          body: [{ return: suit_weight.len }]

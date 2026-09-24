@@ -1,0 +1,18 @@
+# Regression: a memV3 container GLOBAL (map<Enum:i32>) defined + populated in an imported unit
+# must read back CORRECTLY from the importing unit. The consumer's extern view is a ptr handle
+# (is_byref_arg), not the inline struct — else it reads garbage across the file boundary (the bug
+# that made 9rooms mkp_math read mkp_tables' global weight tables as empty → strength 0 / INT_MAX).
+- import: "tests/_cross/global_map_lib.aiml"
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [reader, ptr<SuitReader>, { new: SuitReader }]
+      - decl: [w_spades, i32, { call: [reader.weight_of, 2] }]
+      - decl: [tbl_len,  i32, { call: [reader.table_len] }]
+      - free: reader
+      - print: ["cross-file global map: weight_of(spades)=${w_spades} len=${tbl_len}"]
+      - if: { condition: { neq: [w_spades, 200] }, then: [{ print: ["FAIL: wrong weight (garbage read across file boundary)"] }, { return: 1 }] }
+      - if: { condition: { neq: [tbl_len, 3] }, then: [{ print: ["FAIL: wrong table len (empty map across file boundary)"] }, { return: 1 }] }
+      - print: ["OK cross_file_global_map"]
+      - return: 0
