@@ -6,8 +6,11 @@
 #   copy.label = "..."  → im Quell-Element NICHT sichtbar (unabhängiges Scalar/String-Feld).
 # Wer den Slot selbst ändern will, bindet ref<Model>.
 #
-# Aktueller Stand (is_view_alias = geteilte View): AUCH das String-Feld schreibt durch → das
-# Quell-Element zeigt "changed" statt "orig" (RED). Ziel nach Paket 3/5: label bleibt "orig".
+# Beobachteter Iststand (Codex §11, 2026-09-24): container-shared + scalar-independent ist bereits
+# beobachtbar korrekt (chk.label bleibt "orig"). ABER `copy.label = "changed"` LEAKT 16 B
+# (aiml_str_dup ← main): die Value-Kopie ist eine unbesessene View (kein scope-drop), der neu
+# zugewiesene String wird nie freigegeben. Zweiter Leak-Pfad NEBEN dem Release-Leak. Kein
+# "copy-on-write-at-set"-Beleg. Ziel nach dem Fix: chk.label=="orig" UND valgrind 0 lost.
 - model: { name: Rec, fields: [[label, string], [tags, list<i32>]] }
 - def:
     name: main

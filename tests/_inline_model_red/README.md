@@ -22,18 +22,22 @@ AIML_MEM_V3=1 AIML_LIFETIME_DROPS=1 valgrind --leak-check=full /tmp/r/bin
 | Test | Content (JIT) | Leak (valgrind) | Bedeutung |
 |---|---|---|---|
 | `49_value_survives_remove` | **PASS** | **RED: 47 def + 16 indirect lost** | Die Kopie überlebt `remove` inhaltlich — ABER das entfernte elemKind-2-Element wird nicht freigegeben (remove defert kind 2). |
-| `50_share_semantics` | **PASS** | (n/a) | Container-shared + Scalar-independent ist BEREITS korrekt (is_view_alias + copy-on-write-at-set). |
+| `50_share_semantics` | **PASS** | **RED: 16 B def lost** (Codex-Nachmessung 2026-09-24) | Container-shared + Scalar-independent ist beobachtbar korrekt, ABER `copy.label = "changed"` leakt den alten String (`aiml_str_dup ← main`). → **ZWEITER Leak-Pfad: Scalar/String-Feld-Reassignment auf einer Value-Model-View**, nicht nur der Release-Leak. Test 50 ist NICHT grün. |
 
 ## Zentrale Erkenntnis (empirisch, für die Umsetzung wichtig)
 
 Der Inhalt in Test 49 ist heute **nur deshalb** grün, weil `remove`/`clear` das Value-Model-Element
 NICHT freigeben (der Leak IST der Grund, warum die geteilte View gültig bleibt). Ein **naives**
-Aktivieren des Element-Release (Paket 5 ohne Paket 3) würde die View danglen lassen → Content bräche
-(double-free/UAF). Das bestätigt die Plan-Sequenz: **erst CopyRetain-Materialisierung (Paket 3), dann
-Release (Paket 5).** Test 49 verlangt am Ende BEIDES zusammen: PASS + 0 lost.
+Aktivieren des Element-Release (ohne CopyRetain) würde die View danglen lassen → Content bräche
+(double-free/UAF). Das stützt die Plan-Sequenz: **erst CopyRetain-Materialisierung, dann Release.**
+Test 49 verlangt am Ende BEIDES zusammen: PASS + 0 lost.
 
-Re-Scoping-Hinweis: Share-Semantik (§4) und Content-Korrektheit sind bereits erfüllt; die eigentliche
-offene Arbeit ist der elemKind-2-Release-Leak plus die dafür nötige eigenständige (retain-)Kopie.
+⚠️ **Korrektur (Codex §11):** Es ist NICHT „die einzige Lücke ist der Release-Leak". Test 50 zeigt
+einen zweiten Leak (Feld-Reassignment auf einer unbalancierten Value-Kopie). Ein reiner Release-Patch
+reicht also nicht. Share-Semantik ist beobachtbar korrekt, aber die Value-Kopie materialisiert HEUTE
+keinen eigenen Member-Besitz (der decl-Pfad memcpy't nur Struct-Bytes, ohne Retain — ast_compiler_stmt.cpp
+~1990). Genaue Unterscheidung: (1) eigenständige Struct-Bytes mit ungesicherten Feldreferenzen vs.
+(2) echte `ref` auf den Slot. „copy-on-write-at-set" ist im jeweiligen Pfad NICHT belegt.
 
 ## Paket 2 — Retain/Release-Audit (2026-09-24)
 

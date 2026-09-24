@@ -3477,12 +3477,27 @@ static std::vector<AimlTypeNode> serBuildSubtree(
     // element type so the latent leak is visible; the real fix is a STRUCT-composition lifecycle
     // descriptor (Paket 2, not done here — it risks the schema-fp/wire, so it needs its own pass).
     if (typeName.rfind("array<", 0) == 0 && typeName.back() == '>') {
-        std::string inner = typeName.substr(6, typeName.size() - 7);   // "string:3" / "T:3:4"
-        std::string elem = inner.substr(0, inner.find(':'));
-        auto eci = ctx.classes.find(elem);
-        bool elemHeap = (elem == "string")
+        std::string inner = typeName.substr(6, typeName.size() - 7);   // "string:3" / "map<string:i32>:3" / "T:3:4"
+        // Element type = up to the FIRST top-level ':' (dimensions follow). A ':' inside a nested
+        // generic (map<K:V>, list<...>) is NOT the dimension separator — track <> depth (P2/§11.2).
+        size_t sep = std::string::npos; int depth = 0;
+        for (size_t i = 0; i < inner.size(); ++i) {
+            char c = inner[i];
+            if (c == '<') depth++;
+            else if (c == '>') { if (depth > 0) depth--; }
+            else if (c == ':' && depth == 0) { sep = i; break; }
+        }
+        std::string elem = (sep == std::string::npos) ? inner : inner.substr(0, sep);
+        // strip a shared<>/ptr<>/ref<> wrapper to find the underlying class for the heap check
+        std::string bare = elem;
+        for (const char* w : {"shared<", "ptr<", "ref<"})
+            if (bare.rfind(w, 0) == 0 && bare.back() == '>') { bare = bare.substr(std::string(w).size(), bare.size() - std::string(w).size() - 1); break; }
+        auto eci = ctx.classes.find(bare);
+        bool elemHeap = (elem == "string" || elem == "path")
             || elem.rfind("list<", 0) == 0 || elem.rfind("map<", 0) == 0
             || elem.rfind("buffer", 0) == 0 || elem.rfind("array<", 0) == 0
+            || elem.rfind("ptr<", 0) == 0 || elem.rfind("shared<", 0) == 0
+            || elem.rfind("dyn_array<", 0) == 0 || elem.rfind("tensor", 0) == 0
             || (eci != ctx.classes.end() && eci->second.hasHeapFields && !eci->second.isBuiltin);
         if (elemHeap) {
             static std::set<std::string> warnedHeapArray;
