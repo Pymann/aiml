@@ -1,0 +1,63 @@
+# static-check: off
+# Regression: spec/61 §6.2 (T1) — a PRODUCER function that EARLY-RETURNS a STRING FIELD of an
+# owned value-model LOCAL must deep-free the local's SIBLING heap fields on that return path.
+#
+# The live 9rooms server leaked ~1KB on EVERY authenticated request here: AuthService.pid_for did
+#   decl: [pusr, User, { call: [users.get_copy, eml] }]   # deep-copy into value local
+#   if: { ... then: [{ return: pusr.player_id }] }         # early return of ONE field
+# The generic return-cleanup exempted the WHOLE owner (to protect the returned string), leaking
+# User.email / password_hash / display_name / salt / roles every call.  Fix: for a producer's
+# `return owned-model-local.string-field`, incref the field (survives) + drop the owner FULLY.
+#
+# Kv-free (no persistent decode-cache exit noise): the local is built + owned in-process. Loops
+# many iterations; each early-returns a field while 4 sibling string fields + a list hold heap.
+# Expected: native exit 0, valgrind definitely-lost 0 (leak must NOT scale with iteration count).
+
+- model:
+    name: User
+    fields:
+      - [email,         string]
+      - [password_hash, string]
+      - [display_name,  string]
+      - [salt,          string]
+      - [player_id,     string]
+      - [roles,         list<string>]
+
+- class:
+    name: AuthSvc
+    members: [[dummy, i32]]
+    methods:
+      # PRODUCER returning a string field of an owned value-model local, with an EARLY return
+      # (the common case) plus a late return — both must free the sibling fields.
+      - def:
+          name: pid_for
+          args: [[seed, i32]]
+          return: { type: string, lifetime: producer }
+          body:
+            - decl: [pusr, User]
+            - set: [pusr.email,         "user-${seed}@example.com"]
+            - set: [pusr.password_hash, "0123456789abcdef0123456789abcdef0123456789abcdef"]
+            - set: [pusr.display_name,  "Display Name Number ${seed} The Great"]
+            - set: [pusr.salt,          "deadbeefcafebabe-${seed}"]
+            - set: [pusr.player_id,     "u_player_id_hash_value_${seed}"]
+            - call: [pusr.roles.push, "player"]
+            - call: [pusr.roles.push, "beta"]
+            - if: { condition: { gt: [pusr.player_id.len, 0] }, then: [{ return: pusr.player_id }] }
+            - return: pusr.email
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [svc, ptr<AuthSvc>, { new: AuthSvc }]
+      - decl: [total, i32, 0]
+      - decl: [iter, i32, 0]
+      - while:
+          condition: { lt: [iter, 500] }
+          body:
+            - decl: [pid, string, { call: [svc.pid_for, iter] }]
+            - set: [total, { +: [total, pid.len] }]
+            - set: [iter, { +: [iter, 1] }]
+      - free: svc
+      - print: ["done total=${total}"]
+      - return: 0

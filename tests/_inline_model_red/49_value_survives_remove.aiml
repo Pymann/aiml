@@ -1,0 +1,32 @@
+# static-check: off
+# RED bis Paket 5 — doc/spec61_inline_value_model_release_plan_2026-09-24.md §1/§7.
+# Vertrag (Spec 61 §5.4): eine Value-Bindung `decl copy = at(list,i)` (Model) ist eine EIGENE inline
+# Kopie, deren string/container-Felder retained sind. Sie MUSS Entfernung/Realloc des Quell-Slots mit
+# INTAKTEM Inhalt überleben — keine geteilte View, die nach dem remove-Shift auf ein anderes Element
+# (oder Garbage) zeigt.
+#
+# Aktueller Stand (is_view_alias): `copy` ist eine geteilte VIEW → nach `remove(0)` (memmove-Shift)
+# liest `copy` das nachgerückte Element → falscher Inhalt (RED). Zusätzlich Leak-Gate: 0 definitely+
+# indirectly lost (elemKind-2-Release ist noch deferred → aktuell Leak).
+# Ziel nach Paket 5: PASS (Exit 0) UND valgrind 0 lost.
+- model: { name: Rec, fields: [[label, string], [tags, list<i32>]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [rows, list<Rec>]
+      - decl: [src, Rec]
+      - set: [src.label, "keep-me-intact"]
+      - call: [src.tags.push, 42]
+      - call: [rows.push, src]
+      - decl: [src2, Rec]
+      - set: [src2.label, "second-element"]
+      - call: [src2.tags.push, 7]
+      - call: [rows.push, src2]
+      - decl: [copy, Rec, { at: [rows, 0] }]     # Value-Bindung: muss eigenständige Kopie sein
+      - call: [rows.remove, 0]                     # Shift: eine geteilte View läse jetzt rows[1]
+      - if: { condition: { neq: [copy.label, "keep-me-intact"] }, then: [{ print: ["FAIL copy.label nach remove: ${copy.label}"] }, { return: 1 }] }
+      - decl: [tag0, i32, { at: [copy.tags, 0] }]
+      - if: { condition: { neq: [tag0, 42] }, then: [{ print: ["FAIL copy.tags[0]: ${tag0}"] }, { return: 1 }] }
+      - print: ["PASS 49 value_survives_remove"]
+      - return: 0

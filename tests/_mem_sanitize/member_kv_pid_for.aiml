@@ -1,0 +1,61 @@
+# static-check: off
+# Faithful repro of 9rooms AuthService.pid_for: a CLASS METHOD with a MEMBER Kv<string:User>
+# deep-copies a User via `<.users.get_copy` into a value-model local, then early-returns a string
+# field. Confirms the §6.2 T1 fix fires for the MEMBER-kv case (retBaseOwned must be true there too).
+# Expected: native exit 0, valgrind definitely-lost does NOT scale with call count.
+
+- model:
+    name: User
+    fields:
+      - [email,         string]
+      - [password_hash, string]
+      - [display_name,  string]
+      - [salt,          string]
+      - [player_id,     string]
+      - [roles,         list<string>]
+
+- class:
+    name: AuthSvc
+    members:
+      - [users, Kv<string:User>]
+    methods:
+      - def:
+          name: setup
+          body:
+            - set: [<.users, { call: [db.open_kv, "mkv_users", {persist: true, path: "/tmp/mkv_users/"}] }]
+            - decl: [usr, User]
+            - set: [usr.email,         "hans@franz.de"]
+            - set: [usr.password_hash, "0123456789abcdef0123456789abcdef0123456789abcdef"]
+            - set: [usr.display_name,  "Hans the Magnificent"]
+            - set: [usr.salt,          "deadbeefcafebabe"]
+            - set: [usr.player_id,     "u_existing_player_id_hash"]
+            - call: [usr.roles.push, "player"]
+            - call: [<.users.set, "hans@franz.de", usr]
+      # Mirrors pid_for exactly: member get_copy → value-model local → early field return.
+      - def:
+          name: pid_for
+          args: [[eml, string]]
+          return: { type: string, lifetime: producer }
+          body:
+            - if: { condition: { eq: [{ call: [<.users.has, eml] }, 0] }, then: [{ return: "" }] }
+            - decl: [pusr, User, { call: [<.users.get_copy, eml] }]
+            - if: { condition: { gt: [pusr.player_id.len, 0] }, then: [{ return: pusr.player_id }] }
+            - return: pusr.email
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [svc, ptr<AuthSvc>, { new: AuthSvc }]
+      - call: [svc.setup]
+      - decl: [total, i32, 0]
+      - decl: [req, i32, 0]
+      - while:
+          condition: { lt: [req, 500] }
+          body:
+            - decl: [pid, string, { call: [svc.pid_for, "hans@franz.de"] }]
+            - set: [total, { +: [total, pid.len] }]
+            - set: [req, { +: [req, 1] }]
+      - free: svc
+      - print: ["done total=${total}"]
+      - return: 0

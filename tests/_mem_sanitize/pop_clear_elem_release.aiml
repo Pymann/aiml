@@ -1,0 +1,88 @@
+# static-check: off
+# Regression: spec/61 §5.4 — a DISCARDED `list.pop` and `list.clear` must release each drained
+# element's OWNED heap mid-lifetime, not only at the list's scope drop. The 9rooms card-editor
+# pop-loops (card_editor_base/screen) leaked ~296 B per ptr<Model> element and ~40 B per nested
+# list<i32> element on every drain, because pop returned the element unfreed (discarded) and clear
+# only zeroed size (leak_probes round2 pop_ptr/clear_ptr = 296000 B / 1000; pop_nested/clear_nested
+# = 40000 B / 1000).
+#
+# Covered element kinds (all unique-owner or refcounted → safe to release on pop/clear):
+#   • ptr<Model> box (elemKind 4)         — deep-free fields + free box
+#   • nested list<i32> handle (elemKind 5) — decref inner handle
+# The value-model INLINE case (elemKind 2) is intentionally NOT released here (view-aliasing
+# double-free deferral) and is out of scope for this test.
+#
+# Expected: native exit 0, valgrind definitely+indirectly lost 0, no double-free. Must NOT scale.
+
+- model:
+    name: Ability
+    fields:
+      - [name, string]
+      - [effects, list<i32>]
+
+- def:
+    name: drain_ptr_pop
+    args: [[numa, i32]]
+    body:
+      - decl: [rows, list<ptr<Ability>>]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, numa] }
+          body:
+            - decl: [abx, ptr<Ability>, { new: Ability }]
+            - set: [abx.name, "ability-${idx}-abcdefghij"]
+            - call: [abx.effects.push, idx]
+            - call: [rows.push, abx]
+            - set: [idx, { +: [idx, 1] }]
+      # discarded pop-loop: each popped owned box must be freed
+      - while:
+          condition: { gt: [rows.len, 0] }
+          body: [{ call: [rows.pop] }]
+
+- def:
+    name: drain_ptr_clear
+    args: [[numb, i32]]
+    body:
+      - decl: [rows, list<ptr<Ability>>]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, numb] }
+          body:
+            - decl: [abx, ptr<Ability>, { new: Ability }]
+            - set: [abx.name, "clr-${idx}-abcdefghij"]
+            - call: [rows.push, abx]
+            - set: [idx, { +: [idx, 1] }]
+      - call: [rows.clear]   # must release all boxes, keep buffer
+
+- def:
+    name: drain_nested
+    args: [[numc, i32]]
+    body:
+      - decl: [outer, list<list<i32>>]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, numc] }
+          body:
+            - decl: [inner, list<i32>]
+            - call: [inner.push, idx]
+            - call: [inner.push, { +: [idx, 1] }]
+            - call: [outer.push, inner]
+            - set: [idx, { +: [idx, 1] }]
+      - while:
+          condition: { gt: [outer.len, 0] }
+          body: [{ call: [outer.pop] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [rep, i32, 0]
+      - while:
+          condition: { lt: [rep, 300] }
+          body:
+            - call: [drain_ptr_pop, 4]
+            - call: [drain_ptr_clear, 4]
+            - call: [drain_nested, 4]
+            - set: [rep, { +: [rep, 1] }]
+      - print: ["done"]
+      - return: 0

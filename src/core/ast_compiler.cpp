@@ -4550,6 +4550,11 @@ void Compiler::visitExternBlock(ExternBlock* ext) {
     }
 }
 
+// spec/61 §3.2: forward decl — auto return-ownership classifier (defined before visitFunction).
+// Currently DISABLED at its call sites (see notes there); kept for a future, fully behaviourally
+// regression-tested re-enable. [[maybe_unused]] so the disabled state does not warn/error.
+[[maybe_unused]] static bool classifyOwnedStringReturn(FunctionDecl* fn, CompilerContext& ctx);
+
 void Compiler::visitTopLevel(Node* node) {
     if (auto ext = dynamic_cast<ExternBlock*>(node)) {
         visitExternBlock(ext);
@@ -4595,6 +4600,10 @@ void Compiler::visitTopLevel(Node* node) {
         }
         for (const auto& method : cls->methods) {
             std::string oldName = method->name;
+            // spec/61 §3.2: auto-classify an owned string return (see classifyOwnedStringReturn).
+            // DISABLED (2026-09-24) — see the note in visitFunction; reverted to targeted annotations.
+            // if (!method->ownsReturn && classifyOwnedStringReturn(method.get(), ctx))
+            //     method->ownsReturn = true;
             // spec/61 return-ownership: capture the ORIGINAL method name (pre-mangle) so a
             // call site `<.recv.get_base` matches by its trailing identifier.
             if (method->ownsReturn) {
@@ -5152,11 +5161,99 @@ void Compiler::visitTopLevel(Node* node) {
                  + " (" + std::to_string(mat->uniforms.size()) + " uniforms)");
     }
 }
+// ── spec/61 §3.2: automatic string return-ownership classification ─────────────────────────────
+// A `string`-returning function whose EVERY return path is a provably-OWNED string (a fresh temp,
+// an owned string local moved out, or a string field of an owned value-model local) is an owns-return
+// producer: its callers must ADOPT the result (no incref). Without this the caller lowering treats a
+// returned string as a borrow and adds an incref, releasing only that extra reference on scope exit
+// and leaking the callee's original one (the 9rooms owned-string-return leak class:
+// avatar_initial/join_pipe/card_sig/zone_sig/take_edit_card_id/pid_for/nick_for/resolve_token_pid…).
+// SOUND + conservative: any BORROW path (a bare param, a `<.member`, a borrowed `param.field`, a
+// ref<>/ptr<> local field, an at-element view) or any unclassifiable path makes the whole function
+// stay a borrow (callers keep increfing) — never a double-free. This only ADDS owns-return, mirroring
+// the callee-side move-out exemptions already emitted in visitRetStmt; it does not weaken any borrow.
+static bool ownedStringReturnExpr(const Expr* e,
+                                  const std::set<std::string>& params,
+                                  const std::map<std::string, std::string>& locals,
+                                  CompilerContext& ctx) {
+    if (!e) return false;
+    if (auto* lit = dynamic_cast<const LiteralExpr*>(e)) return lit->type == "string";
+    if (dynamic_cast<const StringInterpolationExpr*>(e)) return true;   // fresh alloc
+    if (auto* call = dynamic_cast<const CallExpr*>(e)) {
+        const std::string& fn = call->functionName;
+        size_t dp = fn.rfind('.');
+        std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+        static const std::set<std::string> fresh = {
+            "substr", "lower", "upper", "title", "trim", "replace", "split", "slice",
+            "concat", "join", "format", "to_string", "repeat", "reverse", "pad_left", "pad_right" };
+        if (fresh.count(sn)) return true;
+        return ctx.stringProducerFns.count(sn) > 0;   // a callee already classified owns-return
+    }
+    if (auto* var = dynamic_cast<const VariableExpr*>(e)) {
+        const std::string& n = var->name;
+        if (n.find('<') != std::string::npos) return false;   // `<.member` = borrow
+        size_t dot = n.find('.');
+        if (dot != std::string::npos) {
+            std::string base = n.substr(0, dot);
+            if (params.count(base)) return false;             // borrowed param.field
+            auto li = locals.find(base);
+            if (li == locals.end()) return false;             // unknown base → conservative
+            const std::string& bt = li->second;
+            if (bt.rfind("ref<", 0) == 0 || bt.rfind("ptr<", 0) == 0
+                || bt.rfind("shared<", 0) == 0) return false; // borrowed handle field
+            auto ci = ctx.classes.find(bt);                   // owned value-model local field
+            return ci != ctx.classes.end() && ci->second.isModel
+                   && ci->second.hasHeapFields && !ci->second.isBuiltin;
+        }
+        if (params.count(n)) return false;                    // bare param → borrow (double-free risk)
+        auto li = locals.find(n);
+        return li != locals.end() && li->second == "string";  // owned string local (move-out)
+    }
+    return false;   // AtExpr element view / New / unknown → conservative borrow
+}
+static void collectLocalsAndReturns(const Stmt* s,
+                                    std::map<std::string, std::string>& locals,
+                                    std::vector<const Expr*>& returns) {
+    if (!s) return;
+    if (auto* d = dynamic_cast<const DeclStmt*>(s)) { locals[d->varName] = d->typeName; return; }
+    if (auto* r = dynamic_cast<const RetStmt*>(s)) { returns.push_back(r->value.get()); return; }
+    if (auto* b = dynamic_cast<const BlockStmt*>(s)) {
+        for (const auto& st : b->statements) collectLocalsAndReturns(st.get(), locals, returns); return; }
+    if (auto* i = dynamic_cast<const IfStmt*>(s)) {
+        collectLocalsAndReturns(i->thenBranch.get(), locals, returns);
+        collectLocalsAndReturns(i->elseBranch.get(), locals, returns); return; }
+    if (auto* w = dynamic_cast<const WhileStmt*>(s)) {
+        collectLocalsAndReturns(w->body.get(), locals, returns); return; }
+    if (auto* t = dynamic_cast<const TryStmt*>(s)) {
+        collectLocalsAndReturns(t->tryBlock.get(), locals, returns);
+        collectLocalsAndReturns(t->catchBlock.get(), locals, returns); return; }
+}
+static bool classifyOwnedStringReturn(FunctionDecl* fn, CompilerContext& ctx) {
+    if (!fn || fn->returnType != "string" || !fn->body) return false;
+    std::set<std::string> params;
+    for (const auto& a : fn->args) params.insert(a.first);
+    std::map<std::string, std::string> locals;
+    std::vector<const Expr*> returns;
+    collectLocalsAndReturns(fn->body.get(), locals, returns);
+    if (returns.empty()) return false;
+    for (const Expr* r : returns)
+        if (!ownedStringReturnExpr(r, params, locals, ctx)) return false;
+    return true;
+}
+
 void Compiler::visitFunction(FunctionDecl* func) {
     // Basic mapping using our old context structure for now
     std::string mangledName = ctx.qualify(func->name);
     ctx.currentFunctionName = func->name;
     ctx.traceDeclarationSites.clear();
+    // spec/61 §3.2: auto-classify an owned string return so callers ADOPT (see classifyOwnedStringReturn).
+    // Idempotent + additive (never clears an explicit annotation); runs in the header-only forward-decl
+    // pass too, so the flag is set before any call site is lowered.
+    // DISABLED (2026-09-24): the broad auto-classification introduced a hard-to-isolate 9rooms
+    // client navigation regression (deck-editor → card-editor). Reverted to the targeted, individually
+    // valgrind-verified producer annotations + the retStrFieldOfOwnedModel compiler fix. Re-enable only
+    // with a full 9rooms game+client behavioural regression pass, not just leak/sanitizer checks.
+    // if (!func->ownsReturn && classifyOwnedStringReturn(func, ctx)) func->ownsReturn = true;
 
     /* Snapshot + install decorator context so visitRetStmt can consult it
      * without needing a pointer back to the FunctionDecl.  Cleared on exit
@@ -5164,8 +5261,10 @@ void Compiler::visitFunction(FunctionDecl* func) {
      * during compilation don't leak decorator state up the stack). */
     auto _saved_decorators   = std::move(ctx.currentFunctionDecorators);
     auto _saved_return_type  = std::move(ctx.currentFunctionReturnType);
+    bool _saved_owns_return  = ctx.currentFunctionOwnsReturn;
     ctx.currentFunctionDecorators = func->decorators;
     ctx.currentFunctionReturnType = func->returnType;
+    ctx.currentFunctionOwnsReturn = func->ownsReturn;   // spec/61 §3.2 (producer)
 
     ctx.validateIdentifier(func->name, "function", func->sourceNode);
 
@@ -5580,6 +5679,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
     /* Restore decorator context — see snapshot at the top of visitFunction. */
     ctx.currentFunctionDecorators = std::move(_saved_decorators);
     ctx.currentFunctionReturnType = std::move(_saved_return_type);
+    ctx.currentFunctionOwnsReturn = _saved_owns_return;
 }
 Symbol* Compiler::resolveVariable(const std::string& name) {
     if (ctx.currentScope) {

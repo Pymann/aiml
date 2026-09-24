@@ -1,0 +1,28 @@
+# static-check: off
+# RED bis Paket 3/5 — doc/spec61_inline_value_model_release_plan_2026-09-24.md §4/§9.1.
+# Vertrag (Spec 61 §5.4): eine Value-Kopie TEILT ihre Container-Felder (retain = incref des Handles),
+# hat aber UNABHÄNGIGE Scalar-/String-Felder.
+#   copy.tags.push(x)  → im Quell-Element sichtbar (geteilter Container).
+#   copy.label = "..."  → im Quell-Element NICHT sichtbar (unabhängiges Scalar/String-Feld).
+# Wer den Slot selbst ändern will, bindet ref<Model>.
+#
+# Aktueller Stand (is_view_alias = geteilte View): AUCH das String-Feld schreibt durch → das
+# Quell-Element zeigt "changed" statt "orig" (RED). Ziel nach Paket 3/5: label bleibt "orig".
+- model: { name: Rec, fields: [[label, string], [tags, list<i32>]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [rows, list<Rec>]
+      - decl: [src, Rec]
+      - set: [src.label, "orig"]
+      - call: [src.tags.push, 1]
+      - call: [rows.push, src]
+      - decl: [copy, Rec, { at: [rows, 0] }]
+      - call: [copy.tags.push, 2]          # geteilter Container → in rows[0] sichtbar
+      - set: [copy.label, "changed"]        # unabhängiges String-Feld → in rows[0] NICHT sichtbar
+      - decl: [chk, Rec, { at: [rows, 0] }]
+      - if: { condition: { neq: [chk.tags.len, 2] }, then: [{ print: ["FAIL geteilter Container nicht sichtbar: len=${chk.tags.len}"] }, { return: 1 }] }
+      - if: { condition: { neq: [chk.label, "orig"] }, then: [{ print: ["FAIL Scalar schrieb durch: ${chk.label}"] }, { return: 1 }] }
+      - print: ["PASS 50 share_semantics"]
+      - return: 0

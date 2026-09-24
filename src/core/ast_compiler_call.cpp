@@ -1693,6 +1693,28 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              ListImpl::push(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), pushVal);
              return nullptr;
          } else if (methodName == "pop") {
+             // spec/61 §5.4: a DISCARDED pop (`call: [l.pop]`, result unbound) must release the drained
+             // element's owned heap — else the popped element leaks (the pop-loop idiom). Route owned-
+             // handle kinds (1/3/4/5/6) to aiml_list_pop_free (frees last element, size--, keeps buffer);
+             // elemKind 2 (value-model INLINE) is left to the list scope-drop (view-aliasing deferral).
+             // A BOUND pop (decl/set) keeps the normal path so the binding owns/drops the result.
+             bool popDiscarded = ctx.popResultDiscarded;
+             ctx.popResultDiscarded = false;   // consume: nested pops are not this discard
+             if (popDiscarded && ctx.lifetimeDropsEnabled) {
+                 int ek = 0; int64_t esz = 8; llvm::GlobalVariable* sn = nullptr; int32_t snc = 0;
+                 classifyListElem(listElemName, ek, esz, sn, snc);
+                 if (ek != 0 && ek != 2) {
+                     auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                     llvm::Value* pfListP = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+                     llvm::Value* snArg = sn ? static_cast<llvm::Value*>(sn)
+                                             : llvm::ConstantPointerNull::get(i8p);
+                     llvm::Function* pf = ctx.getFunction("aiml_list_pop_free", ctx.builder.getVoidTy(),
+                         {i8p, ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(), i8p, ctx.builder.getInt32Ty()});
+                     ctx.builder.CreateCall(pf, { pfListP, ctx.builder.getInt32(ek),
+                         ctx.builder.getInt64(esz), snArg, ctx.builder.getInt32(snc) });
+                     return nullptr;
+                 }
+             }
              return ctx.ir_gen->wrap(ListImpl::pop(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), llvmListElemType));
          } else if (methodName == "slice" && !argVals.empty()) {
              // spec/01/§5.4: list.slice(start, end) — shallow COPY of [start, end) into a fresh heap
@@ -1852,12 +1874,38 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              // (spec/61 §5.4 says release-members, a known deferral). A deep-free was tried and REVERTED:
              // effect code holds a live view/copy of the element across the remove (extract → mutate →
              // remove), so freeing the inline fields here double-freed them (regressed effect_processor
-             // / effect_death_on_destroy). Correct fix needs escape-time deep-copy of value-model views,
-             // not a blind remove-time free. See memory memv3-nested-containers.
+             // / effect_death_on_destroy).
+             // DEFERRED — tracked by doc/spec61_inline_value_model_release_plan_2026-09-24.md (§6/§9.7)
+             // + red test tests/_inline_model_red/49_value_survives_remove.aiml (content green ONLY
+             // because nothing is freed here → the leak is what keeps the view valid). The correct fix
+             // is CopyRetain value materialization (plan Paket 3) FIRST, then a single element-release
+             // dispatcher (free_list_elem_at) for remove/clear/pop/final-drop (Paket 5). Do NOT enable
+             // a blind remove-time free before Paket 3. See memory memv3-nested-containers.
              ListImpl::remove(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), llvmListElemType, listElemName == "string");
              return nullptr;
          } else if (methodName == "clear") {
-             ListImpl::clear(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
+             llvm::Value* clrListP = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+             // spec/61 §5.4: release each owned element's heap before resetting size — else clear()
+             // silently leaks all elements (it only zeroed size). Owned-handle kinds (1/3/4/5/6:
+             // string, refcount model, ptr<T> box, nested-container handle, iface obj) are unique
+             // owners / refcounted → safe to release here. elemKind 2 (value-model INLINE) is skipped
+             // inside aiml_list_clear_elems (a live view across clear would double-free — the known
+             // remove/clear deferral); those inline fields fall to the list's scope-drop.
+             if (ctx.lifetimeDropsEnabled) {
+                 int ek = 0; int64_t esz = 8; llvm::GlobalVariable* sn = nullptr; int32_t snc = 0;
+                 classifyListElem(listElemName, ek, esz, sn, snc);
+                 if (ek != 0 && ek != 2) {
+                     auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                     llvm::Value* snArg = sn ? static_cast<llvm::Value*>(sn)
+                                             : llvm::ConstantPointerNull::get(i8p);
+                     llvm::Function* cf = ctx.getFunction("aiml_list_clear_elems", ctx.builder.getVoidTy(),
+                         {i8p, ctx.builder.getInt32Ty(), ctx.builder.getInt64Ty(), i8p, ctx.builder.getInt32Ty()});
+                     ctx.builder.CreateCall(cf, { clrListP, ctx.builder.getInt32(ek),
+                         ctx.builder.getInt64(esz), snArg, ctx.builder.getInt32(snc) });
+                     return nullptr;   // size already reset by aiml_list_clear_elems
+                 }
+             }
+             ListImpl::clear(ctx, clrListP);
              return nullptr;
          } else if (methodName == "free") {
              // Free the data array and reset the list to empty/null state

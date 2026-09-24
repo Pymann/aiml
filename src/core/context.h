@@ -589,6 +589,15 @@ namespace AIML {
     // Return type name of the current function (e.g. "string", "i32") — the
     // return-wrap logic needs it to know whether e.g. `vocab` applies.
     std::string              currentFunctionReturnType;
+    // spec/61 §3.2: true iff the current function's return is `lifetime: producer`
+    // (ownsReturn) — the caller ADOPTS the returned value (no incref). visitRetStmt
+    // needs this to safely deep-free an owned value-model local whose string field is
+    // being returned (§6.2 T1): the incref+owner-drop only balances when the caller adopts.
+    bool                     currentFunctionOwnsReturn = false;
+    // spec/61 §5.4: set by visitExprStmt when the statement's DIRECT expression is a `list.pop` whose
+    // result is discarded → the pop handler releases the drained element (aiml_list_pop_free) instead
+    // of leaking it. Consumed (cleared) by the pop handler; only a top-level discarded pop sets it.
+    bool                     popResultDiscarded = false;
 
     // Returns an AIML-source location prefix for diagnostic messages.
     // Format: "file:line: " or "file (in func): " or "file: " or "".

@@ -284,6 +284,51 @@ static int aimlTraceKind(CompilerContext& ctx, const std::string& tn) {
 // part). Fresh init → aiml_list_handle_new + initList; init from another list var → SHARE
 // (incref the source's handle); { copy: L } / { clone: L } → an independent-spine handle.
 // A scope-exit decref (kind 2, isListHandle) frees data + block at rc 0.
+// spec/61 §5.4: classify a list element type into its runtime free kind. Mirrors the branches in
+// emitListHandleDecl below (kept in sync); used by clear()/discarded-pop() so mid-lifetime element
+// release agrees with the scope-drop. Does NOT compute the LLVM elem type (callers that need it
+// resolve it separately).
+void Compiler::classifyListElem(const std::string& elemName, int& elemKind, int64_t& elemSize,
+                                llvm::GlobalVariable*& serNodes, int32_t& serNodesCount) {
+    elemKind = 0; elemSize = 8; serNodes = nullptr; serNodesCount = 0;
+    if (elemName == "string") {
+        elemKind = 1; elemSize = 8;
+    } else if (ctx.isRefcountModel(elemName)) {
+        elemKind = 3; elemSize = 8;
+        std::string bareElem = elemName;
+        if (bareElem.rfind("shared<", 0) == 0 && bareElem.back() == '>')
+            bareElem = bareElem.substr(7, bareElem.size() - 8);
+        auto ci = ctx.classes.find(bareElem);
+        if (ci != ctx.classes.end()) { serNodes = ci->second.serNodesVar; serNodesCount = ci->second.serNodesCount; }
+    } else if (elemName.rfind("ptr<", 0) == 0 && elemName.back() == '>') {
+        elemKind = 4; elemSize = 8;
+        std::string boxed = elemName.substr(4, elemName.size() - 5);
+        if (ctx.interfaces.count(boxed)) {
+            elemKind = 6;
+            llvm::Type* et = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
+            elemSize = et ? (int64_t)ctx.module.getDataLayout().getTypeAllocSize(et) : 16;
+        } else {
+            auto ci = ctx.classes.find(boxed);
+            if (ci != ctx.classes.end()) { serNodes = ci->second.serNodesVar; serNodesCount = ci->second.serNodesCount; }
+        }
+    } else if (ctx.memV3 && ctx.isMemV3ContainerHandle(elemName)) {
+        elemKind = 5;
+        elemSize = (int64_t)ctx.module.getDataLayout().getPointerSize();
+        int nc = 0; serNodes = elemHandleSerNodes(elemName, nc); serNodesCount = (int32_t)nc;
+    } else {
+        auto ci = ctx.classes.find(elemName);
+        if (ci != ctx.classes.end() && ci->second.hasHeapFields && ci->second.serNodesVar && ci->second.type) {
+            elemKind = 2;
+            serNodes = ci->second.serNodesVar; serNodesCount = ci->second.serNodesCount;
+            elemSize = (int64_t)ctx.module.getDataLayout().getTypeAllocSize(ci->second.type);
+        } else {
+            elemKind = 0;
+            llvm::Type* et = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
+            elemSize = et ? (int64_t)ctx.module.getDataLayout().getTypeAllocSize(et) : 8;
+        }
+    }
+}
+
 void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
     auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
     llvm::Type* i32Ty = ctx.builder.getInt32Ty();
@@ -1311,6 +1356,12 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         // on view-in-place mutation (`myc = at(..); apply_buff(myc)` mutates the source), which a
         // deep copy breaks (enchantment_picker), plus a per-read perf cost. We keep the view SHARED
         // and only deep-copy at genuine ESCAPE points (return/set/idx-store), tainting via is_view_alias.
+        // DEFERRED / to be REPLACED — doc/spec61_inline_value_model_release_plan_2026-09-24.md (§9.2/§9.4):
+        // the target contract is CopyRetain at THIS decl (own inline copy; container fields retained =
+        // incref → still shared, so add_buff visibility is preserved; scalar fields independent), which
+        // then makes element release (remove/clear/pop) safe. is_view_alias is to be removed as an
+        // ownership source (replaced by OwnershipPlan provenance). Red contract tests:
+        // tests/_inline_model_red/ (50_share_semantics already green; 49 leaks until Paket 5).
         if (ctx.lifetimeDropsEnabled && decl->initialValue) {
             auto tciDecl = ctx.classes.find(decl->typeName);
             if (tciDecl != ctx.classes.end() && tciDecl->second.hasHeapFields && tciDecl->second.serNodesVar) {
@@ -3210,7 +3261,21 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     }
 }
 void Compiler::visitExprStmt(ExprStmt* exprStmt) {
+    // spec/61 §5.4: a bare `list.pop` statement discards the popped element — flag it so the pop
+    // handler releases the element's owned heap (aiml_list_pop_free) instead of leaking it. Only the
+    // DIRECT statement expression sets this (a pop nested as a call argument is consumed, not
+    // discarded); the pop handler clears the flag when it consumes it.
+    bool popDiscard = false;
+    if (auto* call = dynamic_cast<CallExpr*>(exprStmt->expr.get())) {
+        const std::string& fn = call->functionName;
+        size_t dot = fn.rfind('.');
+        if (dot != std::string::npos && fn.substr(dot + 1) == "pop" && call->args.empty())
+            popDiscard = true;
+    }
+    bool savedPop = ctx.popResultDiscarded;
+    ctx.popResultDiscarded = popDiscard;
     visitExpression(exprStmt->expr.get());
+    ctx.popResultDiscarded = savedPop;
 }
 static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop& it);  // defined below
 void Compiler::visitRetStmt(RetStmt* retStmt) {
@@ -3291,11 +3356,41 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
             || ctx.ownsReturnMatches(shortName, ctx.currentFunctionReturnType))
             retFreshOwned = true;
     }
+    // spec/61 §6.2 (T1): `return <owned value-model LOCAL>.<string field>` hands back a string that
+    // ALIASES the local's heap. The generic owner-exemption in emitReturnCleanup (below) would skip
+    // the WHOLE local's drop to protect that returned string → leaking its SIBLING heap fields on
+    // every call (auth_service pid_for leaked User.email/password_hash/display_name/salt/roles on
+    // EVERY authenticated request — ~1KB/request). Detect this shape so we can instead INCREF the
+    // returned string (it then survives the owner's deep-free) and drop the owner FULLY (freeing the
+    // siblings). Net refcount of the returned string is unchanged (incref +1, deep-free decref −1).
+    // String-only (incref = aiml_str_incref, which is null/rodata/immortal-safe); value models only
+    // (a refcount ptr<>/shared<> local is a kind-7 decref, order-independent, never exempted here).
+    // Gate on `lifetime: producer` (currentFunctionOwnsReturn): only then does the caller ADOPT
+    // the returned string (no incref), so incref(+1)+owner-deep-free(−1)+caller-drop(−1) balances
+    // to 0. A non-producer string return is a BORROW (caller increfs) — returning a field of a
+    // to-be-freed local is an inherent dangling borrow there; the user must mark it producer.
+    bool retStrFieldOfOwnedModel = false;
+    if (ctx.currentFunctionOwnsReturn && retBaseOwned && retModelAddr == nullptr
+        && ctx.currentFunctionReturnType == "string") {
+        if (auto* rv = dynamic_cast<VariableExpr*>(retStmt->value.get())) {
+            size_t dot = rv->name.find('.');
+            if (dot != std::string::npos && rv->name.find('<') == std::string::npos) {
+                std::string mbase = rv->name.substr(0, dot);
+                if (Symbol* mbs = resolveVariable(mbase)) {
+                    auto ci = ctx.classes.find(mbs->typeName);
+                    if (!mbs->is_byref_arg && ci != ctx.classes.end()
+                        && ci->second.isModel && ci->second.hasHeapFields && !ci->second.isBuiltin
+                        && !ctx.isRefcountModel(mbs->typeName))
+                        retStrFieldOfOwnedModel = true;
+                }
+            }
+        }
+    }
     // AIML v2 (P4): returning a refcount model is alias-safe to clean up — the returned object is
     // exempted by retModelAddr (a move), and every other local's kind-7 decref is order-independent.
     bool safeToCleanup = (retTy && retTy->isVoidTy()) || retScalar || retBaseOwned
                          || (retModelAddr != nullptr) || (retContainerSlot != nullptr)
-                         || retFreshOwned;
+                         || retFreshOwned || retStrFieldOfOwnedModel;
     // spec/61 §6.2 (T1): the returned value only aliases the owner's heap when the return TYPE is a
     // pointer/struct (`return x.field` handing out x's sub-heap). For a SCALAR/void return the value
     // is a copy that cannot alias — e.g. `return str_local.len` yields an i32 — so the owner must NOT
@@ -3309,8 +3404,12 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         if (!bb || bb->getTerminator()) return;
         for (auto fit = ctx.cleanupStack.rbegin(); fit != ctx.cleanupStack.rend(); ++fit)
             for (auto it = fit->rbegin(); it != fit->rend(); ++it) {
-                if (returnMayAliasHeap && it->ownershipId != NoOwnership && it->ownershipId == retBaseId)
-                    continue;   // owner of an alias-capable returned value → exempt (would double-free)
+                if (returnMayAliasHeap && it->ownershipId != NoOwnership && it->ownershipId == retBaseId
+                    && !retStrFieldOfOwnedModel)
+                    continue;   // owner of an alias-capable returned value → exempt (would double-free).
+                    // Exception (§6.2 T1): for `return owned-model-local.string-field` the field was
+                    // increfed before this cleanup, so the owner is dropped FULLY here (frees siblings;
+                    // the incref keeps the returned string alive across the deep-free).
                 // AIML v2: a refcount MODEL decref (kind 7) is order-independent and always safe
                 // (freed only at 0), so it is NOT mayDrop-gated — emit on every return path unless
                 // this model is the value being returned (the retBaseId exemption above = a move).
@@ -3433,6 +3532,17 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                 ctx.builder.CreateCall(dc, { t });
             }
             ctx.stmtTempStack.back().clear();
+        }
+        // spec/61 §6.2 (T1): incref the returned STRING FIELD of an owned value-model local BEFORE
+        // the cleanup so the owner's deep-free (now un-exempted) does not release it — net refcount
+        // unchanged, sibling heap fields freed. aiml_str_incref is null/rodata/immortal-safe.
+        if (retStrFieldOfOwnedModel && val) {
+            llvm::Value* rs = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+            if (rs) {
+                auto* i8pS = llvm::PointerType::get(ctx.context, 0);
+                ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_str_incref", ctx.builder.getVoidTy(), {i8pS}), { rs });
+            }
         }
         // §6/P2a: cleanup after the value is in an SSA register / its owner is exempted, only
         // for alias-safe return shapes; the value the branches below build then stays valid.
