@@ -1,0 +1,31 @@
+# static-check: off
+# spec/61 §7 regression: `decl v = stringkv.get_copy(k)` (string-valued Kv) must NOT leak per call.
+# BUG (fixed 2026-09-25): a string-valued Kv get/get_copy lowers to aiml_db_kv_get (borrow) +
+# aiml_str_dup (owned, rc=1), but the dup was NOT registered as an owned string temp. The managed-
+# string init-store then treated it as a BORROW and applied an extra aiml_str_incref (rc=2), while
+# only ONE scope-drop decref ran → rc stayed 1 → 22 B leaked PER CALL (handle_validate server
+# residual ~540 B/req; isolated loop leaked 11,384 B in 501 blocks = 500 per-iteration + 1 open_kv).
+# FIX (ast_compiler_call.cpp, string-KV get branch): register the kv_get_own dup on stmtTempStack so
+# a consuming decl/set/push/return MOVES it (adopts rc=1, one drop) and a transient is decref'd at
+# stmt end. After the fix the isolated loop leaks 0 additional bytes; only the one-time open_kv
+# handle (~583 B, a separate Kv-lifetime issue — no `close` yet) remains. This test is FUNCTIONAL
+# (corpus): it verifies correctness (total==2600) + no crash across 200 get_copy calls. The leak
+# verdict is carried by the isolated valgrind measurement + the mem-sanitizer, not by this file.
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [kvs, Kv<string:string>]
+      - set: [kvs, { call: [db.open_kv, "skv51", {persist: true, path: "/tmp/skv51_kv/"}] }]
+      - call: [kvs.set, "k", "hans@franz.de"]
+      - decl: [total, i32, 0]
+      - decl: [itr, i32, 0]
+      - while:
+          condition: { lt: [itr, 200] }
+          body:
+            - decl: [val, string, { call: [kvs.get_copy, "k"] }]
+            - set: [total, { +: [total, val.len] }]
+            - set: [itr, { +: [itr, 1] }]
+      - if: { condition: { neq: [total, 2600] }, then: [{ print: ["FAIL total=${total} (expected 2600)"] }, { return: 1 }] }
+      - print: ["PASS 51 stringkv_getcopy_no_leak"]
+      - return: 0
