@@ -3469,6 +3469,31 @@ static std::vector<AimlTypeNode> serBuildSubtree(
         res.push_back({AIML_TD_RAWBYTES, 8, 0, offset, 0, 0});
         return res;
     }
+    // spec/61 §9.6 (doc/spec61_inline_value_model_release_plan_2026-09-24.md): a fixed ARRAY field
+    // whose element type OWNS heap (string / container / heap-bearing user model) falls through to
+    // RAWBYTES here — the lifecycle descriptor then treats it as opaque bytes, so aiml_ser_retain /
+    // aiml_ser_free_decoded neither retain nor release the elements → LEAK on copy/scope-drop
+    // (measured 6780 B/200 iters, tests/_inline_model_red/p2_array_field_leak_RED.aiml). Warn once per
+    // element type so the latent leak is visible; the real fix is a STRUCT-composition lifecycle
+    // descriptor (Paket 2, not done here — it risks the schema-fp/wire, so it needs its own pass).
+    if (typeName.rfind("array<", 0) == 0 && typeName.back() == '>') {
+        std::string inner = typeName.substr(6, typeName.size() - 7);   // "string:3" / "T:3:4"
+        std::string elem = inner.substr(0, inner.find(':'));
+        auto eci = ctx.classes.find(elem);
+        bool elemHeap = (elem == "string")
+            || elem.rfind("list<", 0) == 0 || elem.rfind("map<", 0) == 0
+            || elem.rfind("buffer", 0) == 0 || elem.rfind("array<", 0) == 0
+            || (eci != ctx.classes.end() && eci->second.hasHeapFields && !eci->second.isBuiltin);
+        if (elemHeap) {
+            static std::set<std::string> warnedHeapArray;
+            if (warnedHeapArray.insert(typeName).second)
+                LOG_WARNING("array field of type '" + typeName + "' has heap-owning elements ('" + elem +
+                    "') that the lifecycle descriptor cannot track (falls back to opaque RAWBYTES) → its "
+                    "elements LEAK on copy/scope-drop (spec/61 §9.6). Avoid heap arrays as model fields "
+                    "for now, or use list<" + elem + ">. Tracked by "
+                    "doc/spec61_inline_value_model_release_plan_2026-09-24.md.");
+        }
+    }
     llvm::Type* t = ctx.getLLVMType(typeName);
     int32_t sz = t ? (int32_t)dl.getTypeAllocSize(t) : 8;
     res.push_back({AIML_TD_RAWBYTES, sz, 0, offset, 0, 0});
