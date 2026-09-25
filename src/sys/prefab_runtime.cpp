@@ -1425,6 +1425,21 @@ static void container_sync(AimlPrefabInstance* inst) {
 
         int desired = outer->size;
         if (desired < 0) desired = 0;
+        /* Defensive cap: `outer` is a NON-OWNING raw pointer into an AIML list handle
+         * (aiml_prefab_bind_list stores it as-is). If the bound list is freed/reassigned
+         * without a rebind (e.g. a screen's begin_load resets its list fields mid-load),
+         * this reads a DANGLING block → a wild `size` → an unbounded spawn loop that
+         * grows the (wasm) heap until OOM/abort (observed: 9rooms deck editor black
+         * screen, std::vector<PrefabChild> __throw_bad_alloc). A legitimate bound list is
+         * far below this cap; a value above it means a stale/garbage pointer, so render 0
+         * rows and log once rather than crash the whole client. */
+        static const int kPrefabMaxSpawn = 100000;
+        if (desired > kPrefabMaxSpawn) {
+            fprintf(stderr, "[prefab] ERROR: container '%s' bind_list size=%d exceeds cap %d "
+                    "(dangling/garbage bound_list — freed without rebind?) — spawning 0 rows\n",
+                    ch.name.c_str(), desired, kPrefabMaxSpawn);
+            desired = 0;
+        }
 
         /* Shrink first — mark for deferred deletion (see the pending_delete
          * doc-comment on AimlPrefabInstance). */
