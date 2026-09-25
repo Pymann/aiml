@@ -266,11 +266,20 @@ void aiml_jw_map_str (void* wv, const char* key, const char* val) { aiml_jw_set_
 char* aiml_jw_done(void* wv) {
     auto* w = (aiml_jw_t*)wv;
     size_t len = 0;
-    // yyjson_mut_write allocates a string via the default allocator (malloc)
+    // yyjson_mut_write allocates a string via the default allocator (malloc) — a RAW buffer with no
+    // rc-header. The only callers are the aiml `sys.serialize` codegen (gJwDone), which treats the
+    // result as an aiml rc-string (aiml_str_incref/decref reading the header at ptr-8). Returning the
+    // raw yyjson buffer made those read/free 8 bytes before the allocation (Invalid read) and never
+    // release it (leak: HTTP /servers.json etc., leak_probes/round3 §3). Copy into a refcounted
+    // string and free the yyjson buffer exactly once.
     char* json = yyjson_mut_write(w->doc, YYJSON_WRITE_NOFLAG, &len);
     yyjson_mut_doc_free(w->doc);
     free(w);
-    return json;  // caller must free()
+    if (!json) return aiml_str_alloc(0);
+    char* rc = aiml_str_alloc(len);      // rc-header + NUL, refcount=1
+    if (rc) memcpy(rc, json, len);       // aiml_str_alloc already NUL-terminates at [len]
+    free(json);                          // release the raw yyjson buffer once
+    return rc;
 }
 
 char* aiml_json_style_format(const char* json, int pretty, const char* indent, const char* newline_str) {

@@ -4391,7 +4391,14 @@ void registerBuiltins(CompilerContext& ctx) {
             };
             llvm::Value* n = args.size() > 0 ? toI32(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])))
                                              : llvm::ConstantInt::get(i32t, 16);
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {n}));
+            // spec/61 §7: aiml_math_random_hex returns an OWNED refcounted string (to_hex_rc →
+            // aiml_str_alloc). Register it as an owned string temp so a consuming decl/set MOVES it
+            // (one owned ref, one drop) and a transient is decref'd at stmt end — else the initial
+            // reference leaks (auth hash_password_new salt: 41 B/call, leak_probes/round3 §2).
+            llvm::Value* rhres = ctx.builder.CreateCall(fn, {n});
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+                ctx.stmtTempStack.back().push_back(rhres);
+            return ctx.ir_gen->wrap(rhres);
         };
 
         // fract = x - floor(x)
@@ -5008,7 +5015,11 @@ void registerBuiltins(CompilerContext& ctx) {
             auto* p = llvm::PointerType::get(ctx.context,0); \
             llvm::Value* a = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) \
                                               : llvm::Constant::getNullValue(p); \
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {a})); \
+            /* spec/61 §7: owned rc-string result → register as owned string temp (moved by a consuming */ \
+            /* decl/set, decref'd at stmt end if transient) — else the initial ref leaks (hash.* surface). */ \
+            llvm::Value* hres = ctx.builder.CreateCall(fn, {a}); \
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) ctx.stmtTempStack.back().push_back(hres); \
+            return ctx.ir_gen->wrap(hres); \
         };
 
 /* Buffer-aware hex digest: if the argument is a buffer<u8>, hash its raw bytes
@@ -5029,10 +5040,15 @@ void registerBuiltins(CompilerContext& ctx) {
                     llvm::FunctionType::get(p, {p, p, i32}, false), \
                     llvm::Function::ExternalLinkage, "aiml_hash_hex_buf", ctx.module); \
                 llvm::Value* algo = ctx.builder.CreateGlobalStringPtr(aimlName); \
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(bf, {algo, dataP, lenV})); \
+                llvm::Value* hbres = ctx.builder.CreateCall(bf, {algo, dataP, lenV}); \
+                if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) ctx.stmtTempStack.back().push_back(hbres); \
+                return ctx.ir_gen->wrap(hbres); \
             } \
             auto* fn = declHash1(cName); \
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {a})); \
+            /* spec/61 §7: owned rc-string → register as owned string temp (round3 §1/§2 leak class). */ \
+            llvm::Value* hsres = ctx.builder.CreateCall(fn, {a}); \
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) ctx.stmtTempStack.back().push_back(hsres); \
+            return ctx.ir_gen->wrap(hsres); \
         };
 
 #define REG_HASH2(aimlName, cName) \
@@ -5043,7 +5059,10 @@ void registerBuiltins(CompilerContext& ctx) {
                                                : llvm::Constant::getNullValue(p); \
             llvm::Value* a1 = args.size() > 1 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])) \
                                                : llvm::Constant::getNullValue(p); \
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {a0, a1})); \
+            /* spec/61 §7: owned rc-string → register as owned string temp (round3 §1/§2 leak class). */ \
+            llvm::Value* h2res = ctx.builder.CreateCall(fn, {a0, a1}); \
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) ctx.stmtTempStack.back().push_back(h2res); \
+            return ctx.ir_gen->wrap(h2res); \
         };
 
         REG_HASH1B("sha256",       "aiml_hash_sha256")
@@ -5085,7 +5104,13 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Value* a0 = args.size() > 0 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])) : llvm::Constant::getNullValue(p);
             llvm::Value* a1 = args.size() > 1 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])) : llvm::Constant::getNullValue(p);
             llvm::Value* a2 = args.size() > 2 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2])) : ctx.builder.getInt32(0);
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {a0, a1, a2}));
+            // spec/61 §7: aiml_hash_pbkdf2 returns an OWNED refcounted string (to_hex_rc). Register it
+            // as an owned string temp (see math.random_hex) so a consuming decl/set MOVES it — else the
+            // derived-key reference leaks (auth hash_password_new/verify_password: 73 B/call, round3 §2).
+            llvm::Value* pkres = ctx.builder.CreateCall(fn, {a0, a1, a2});
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+                ctx.stmtTempStack.back().push_back(pkres);
+            return ctx.ir_gen->wrap(pkres);
         };
 
 #undef REG_HASH1

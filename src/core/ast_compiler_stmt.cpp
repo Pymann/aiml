@@ -3364,6 +3364,15 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
             || ctx.ownsReturnMatches(shortName, ctx.currentFunctionReturnType))
             retFreshOwned = true;
     }
+    // spec/61 §6.2: `return "..${x}.."` — a string INTERPOLATION allocates a FRESH str_concat buffer
+    // that cannot alias any of this function's locals (it copies their content), exactly like a
+    // producer-call return. Without this, safeToCleanup stays false for an interpolation return and
+    // the function's owned-string locals read by the interpolation are never dropped on the return
+    // path → leak (hash_password_new salt+derived, leak_probes/round3 §2; any producer returning a
+    // composed string). Marking it fresh-owned lets emitReturnCleanup drop those siblings (mayDrop-
+    // gated, so a still-shared view is not freed); the returned concat temp is moved out, not dropped.
+    if (dynamic_cast<StringInterpolationExpr*>(retStmt->value.get()))
+        retFreshOwned = true;
     // spec/61 §6.2 (T1): `return <owned value-model LOCAL>.<string field>` hands back a string that
     // ALIASES the local's heap. The generic owner-exemption in emitReturnCleanup (below) would skip
     // the WHOLE local's drop to protect that returned string → leaking its SIBLING heap fields on
