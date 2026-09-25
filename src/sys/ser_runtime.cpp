@@ -984,6 +984,25 @@ extern "C" void aiml_ser_deep_copy(void*               dst,
     free(blob);
 }
 
+// spec/61 §4.4.5: deep-copy src into an ALREADY-INITIALISED dst (a model FIELD or a reassigned local
+// that already holds heap). Unlike aiml_ser_deep_copy (whose precondition is a zero-init dst), this
+// RELEASES dst's previous heap first so the overwrite does not orphan it. Order matters: encode src
+// into the blob BEFORE freeing dst, so a self-copy (src == dst, or src aliasing dst's heap) is safe —
+// the source bytes are captured before dst is torn down. Fixes the match-view per-poll leak
+// (`set out.match = view_buf`: MatchResp.match's default-init container handles were leaked every poll)
+// and any reassigned value-model field/local. A zero-init dst frees to a no-op (all-null slots).
+extern "C" void aiml_ser_deep_copy_replace(void*               dst,
+                                           const void*         src,
+                                           const AimlTypeNode* nodes,
+                                           int32_t             n_nodes) {
+    if (!dst || !src || !nodes || n_nodes <= 0) return;
+    char* blob = aiml_ser_encode(src, nodes, n_nodes);
+    if (!blob) return;
+    aiml_ser_free_decoded(dst, nodes, n_nodes);   // release dst's PREVIOUS heap (null-safe on zero-init)
+    aiml_ser_decode(blob, dst, nodes, n_nodes);   // decode the captured src into the now-cleared dst
+    free(blob);
+}
+
 // ── spec/61 §5.1 / round4 §2 memoized deep-clone ──────────────────────────────
 // `ownedMemo` maps a source OWNED object → its clone, so a shared sub-object reached by several
 // owning edges is cloned once (DAG preserved) and a cycle terminates (the back-edge finds the

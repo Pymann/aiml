@@ -276,6 +276,23 @@ struct Analyzer {
                         if (kManagedStringLocals && sid != NoOwnership
                             && tyIt != slotType.end() && tyIt->second == "string")
                             sp.transfer = Transfer::DeepCopy;
+                        // spec/61 §4.2/§4.4.5: a VALUE-MODEL local with heap fields stored into a model
+                        // FIELD must be a DEEP COPY (independent), not a shallow Move. A Move shallow-
+                        // copies the struct (aliasing the source's container/string heap) and marks the
+                        // source Moved (strikes its drop) — but if the FIELD held a previous value
+                        // (default-init empty container handles, or a prior assignment) that heap is
+                        // orphaned → per-store leak (the match-view `set out.match = view_buf` class,
+                        // ~persistent list-handle leak per poll). DeepCopy routes to
+                        // aiml_ser_deep_copy_replace (frees the field's old heap first, then decodes an
+                        // independent copy); the source keeps its own drop. Safe: two independent heaps,
+                        // two balanced drops (no double-free). Refcount models (%M* refs) are excluded —
+                        // they rebind by reference (incref-new/decref-old) below, not by value copy.
+                        else if (sid != NoOwnership && tyIt != slotType.end()) {
+                            auto ci = ctx.classes.find(tyIt->second);
+                            if (ci != ctx.classes.end() && ci->second.hasHeapFields
+                                && ci->second.serNodesVar && !ctx.isRefcountModel(tyIt->second))
+                                sp.transfer = Transfer::DeepCopy;
+                        }
                     }
                     plan.statements[set] = sp;
                     // Finding #4: once an owned local is MOVED into a member it no longer owns its
