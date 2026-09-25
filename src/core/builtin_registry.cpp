@@ -173,6 +173,17 @@ void registerBuiltins(CompilerContext& ctx) {
         jsInfo.members["pretty"]  = mk(i32, 0, "i32");
         jsInfo.members["indent"]  = mk(p,   1, "string");
         jsInfo.members["newline"] = mk(p,   2, "string");
+        // spec/61 §7/§6.1: JsonStyle was already registered (context.h) and registerTypes built its
+        // heap-field RELEASE metadata (hasHeapFields + serNodes) before compile→registerBuiltins runs.
+        // Overwriting the ClassInfo wholesale dropped that metadata (new entry defaults
+        // hasHeapFields=false, serNodesVar=null) → the model scope-drop for its owned `indent`/
+        // `newline` string fields was never registered → 21 B leaked per `set style.indent/.newline`
+        // (leak_probes/round6 §2). Preserve the built descriptors when re-registering.
+        if (auto ex = ctx.classes.find("JsonStyle"); ex != ctx.classes.end()) {
+            jsInfo.hasHeapFields = ex->second.hasHeapFields;
+            jsInfo.serNodesVar   = ex->second.serNodesVar;
+            jsInfo.serNodesCount = ex->second.serNodesCount;
+        }
         ctx.classes["JsonStyle"] = std::move(jsInfo);
     }
 
