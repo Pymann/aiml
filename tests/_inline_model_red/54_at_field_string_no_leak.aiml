@@ -1,0 +1,47 @@
+# static-check: off
+# spec/61 §4/§5.4 regression: `at(list, i, .stringfield)` (and at(model, .stringfield)) must NOT leak.
+# BUG (fixed 2026-09-25, leak_probes/round5_interpolation §1): visitAtExpr's string-field branch
+# (ast_compiler_expr.cpp) incref'd the borrowed field string to make an owned alias but did NOT register
+# it as an owned stmt-temp (unlike the list<string> element path) → the incref'd ref leaked 12 B/access,
+# whether consumed by a local, a borrowed call arg, or a string interpolation.
+# FIX: register the alias on stmtTempStack right after the incref (a consuming decl MOVES it; a transient
+# is decref'd at stmt end). KV-free → clean hard-leak-gate GREEN.
+- model: { name: Card, fields: [[iid, string], [nam, string]] }
+- model: { name: State, fields: [[hand, list<Card>]] }
+- def:
+    name: use_iid
+    args: [[sval, string]]
+    return: i32
+    body:
+      - return: sval.len
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [stt, State]
+      - decl: [seed, i32, 0]
+      - while:
+          condition: { lt: [seed, 3] }
+          body:
+            - decl: [crd, Card]
+            - set: [crd.iid, "iid-${seed}"]
+            - set: [crd.nam, "name-of-card-${seed}"]
+            - call: [stt.hand.push, crd]
+            - set: [seed, { +: [seed, 1] }]
+      - decl: [tot, i32, 0]
+      - decl: [itr, i32, 0]
+      - while:
+          condition: { lt: [itr, 400] }
+          body:
+            # (a) local binding of an at-field string
+            - decl: [lid, string, { at: [stt.hand, 0, .iid] }]
+            - set: [tot, { +: [tot, lid.len] }]
+            # (b) borrowed call arg
+            - set: [tot, { +: [tot, { call: [use_iid, { at: [stt.hand, 1, .nam] }] }] }]
+            # (c) string interpolation of two at-field reads
+            - decl: [line, string, "first=${ { at: [stt.hand, 0, .iid] } }:${ { at: [stt.hand, 2, .nam] } }"]
+            - set: [tot, { +: [tot, line.len] }]
+            - set: [itr, { +: [itr, 1] }]
+      - if: { condition: { lt: [tot, 1] }, then: [{ print: ["FAIL tot=${tot}"] }, { return: 1 }] }
+      - print: ["PASS 54 at_field_string_no_leak"]
+      - return: 0

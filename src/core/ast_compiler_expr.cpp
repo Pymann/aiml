@@ -1265,6 +1265,15 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
             if (fldTypeName == "string") {   // borrowing a string out adds an alias → incref (see below)
                 llvm::Function* incref = ctx.getFunction("aiml_str_incref", ctx.builder.getVoidTy(), {i8p});
                 ctx.builder.CreateCall(incref, {fv});
+                // spec/61 §4/§5.4: this incref made a FRESH owned alias of the field string — register
+                // it as an owned stmt-temp (exactly like the list<string> element path below). A
+                // `decl x = at(list,i,.field)` then MOVES it (one owned ref); a transient (interpolation
+                // `"${at(..,.field)}"`, a borrowed call arg) is decref'd at statement end → balanced.
+                // Without this the incref'd alias leaked 12 B/access (leak_probes/round5 §1:
+                // at_field_borrow/local/interpolation_1000). The incref stays: a receiving local must
+                // still read the string after the source list is released.
+                if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+                    ctx.stmtTempStack.back().push_back(fv);
             }
             return ctx.ir_gen->wrap(fv);
         }

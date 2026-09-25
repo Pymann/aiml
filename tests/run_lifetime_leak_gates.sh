@@ -25,6 +25,7 @@ GREEN=(
   tests/_inline_model_red/p3_copyretain_survives_source_drop.aiml
   tests/_inline_model_red/52_model_strfield_share_no_leak.aiml
   tests/_inline_model_red/53_nested_model_field_copy_no_leak.aiml
+  tests/_inline_model_red/54_at_field_string_no_leak.aiml
 )
 # RED: known open findings (documented) — run + report, but do NOT fail the gate yet.
 RED=(
