@@ -1,0 +1,25 @@
+# static-check: off
+# spec/61 §7/§6.1 regression: setting JsonStyle's owned string fields must NOT leak.
+# BUG (fixed 2026-09-25, leak_probes/round6 §2): registerBuiltins (builtin_registry.cpp) re-registered
+# the JsonStyle ClassInfo from scratch, clobbering the hasHeapFields/serNodes metadata that
+# registerTypes had already built → no model scope-drop for JsonStyle's indent/newline string fields
+# → 21 B leaked per set. FIX: preserve the existing built descriptors when re-registering.
+# KV-free → clean hard-leak-gate GREEN.
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [tot, i32, 0]
+      - decl: [itr, i32, 0]
+      - while:
+          condition: { lt: [itr, 400] }
+          body:
+            - decl: [sty, JsonStyle]
+            - set: [sty.pretty, 1]
+            - set: [sty.indent, "  "]
+            - set: [sty.newline, "\n"]
+            - set: [tot, { +: [tot, sty.indent.len] }]
+            - set: [itr, { +: [itr, 1] }]
+      - if: { condition: { neq: [tot, 800] }, then: [{ print: ["FAIL tot=${tot} (expected 800)"] }, { return: 1 }] }
+      - print: ["PASS 55 jsonstyle_field_no_leak"]
+      - return: 0
