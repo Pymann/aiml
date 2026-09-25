@@ -3114,7 +3114,12 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                             IRValue* srcAddr = emitLValueAddress(setStmt->value.get(), lvTy);
                             if (srcAddr) {
                                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
-                                llvm::Function* fn = ctx.getFunction("aiml_ser_deep_copy",
+                                // spec/61 §4.4.5: RELEASE the member's previous heap before overwriting —
+                                // else a re-assigned / default-init value-model FIELD leaks its old
+                                // container handles (the match-view per-poll leak: `set out.match =
+                                // view_buf`). *_replace encodes src FIRST, then frees dst, so a self/
+                                // aliasing copy stays safe; a zero-init field frees to a no-op.
+                                llvm::Function* fn = ctx.getFunction("aiml_ser_deep_copy_replace",
                                     ctx.builder.getVoidTy(), {ptrTy, ptrTy, ptrTy, ctx.builder.getInt32Ty()});
                                 ctx.builder.CreateCall(fn, {
                                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(targetGep)),
@@ -3138,7 +3143,10 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                                                  && cIt->second.hasHeapFields
                                                  && cIt->second.serNodesVar;
                             if (needsDeepCopy) {
-                                llvm::Function* fn = ctx.getFunction("aiml_ser_deep_copy",
+                                // spec/61 §4.4.5: release the member's previous heap first (see the
+                                // fast-path above) — a re-assigned / default-init value-model field
+                                // otherwise leaks its old container handles per store (match-view leak).
+                                llvm::Function* fn = ctx.getFunction("aiml_ser_deep_copy_replace",
                                     ctx.builder.getVoidTy(),
                                     {ptrTy, ptrTy, ptrTy, ctx.builder.getInt32Ty()});
                                 ctx.builder.CreateCall(fn, {

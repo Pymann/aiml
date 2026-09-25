@@ -1,0 +1,68 @@
+# static-check: off
+# spec/61 §4.2/§4.4.5 regression: `set model.modelfield = srcModel` (value-model into a MODEL field)
+# must NOT leak the field's container handles per store. This is the 9rooms match-view per-poll leak
+# (`set out.match = view_buf`: MatchResp.match : MatchSession with list<PlayerState>/list<ZoneEntry>)
+# — the server grew ~549 KB/min during a live match.
+# BUG (fixed 2026-09-25): a value-model member-store was classified as a shallow Move (plain-local src)
+# or deep-copied without freeing the field's OLD heap (member/view src) → the field's default-init
+# (or prior) nested container handles were orphaned every store.
+# FIX: (a) new runtime aiml_ser_deep_copy_replace = encode src FIRST, then aiml_ser_free_decoded(dst),
+# then decode (self/aliasing-copy safe; no-op free on a zero-init field); the model-field deep-copy
+# member-store sites use it. (b) ownership_analyzer classifies a value-model (heap-field) member-store
+# source as DeepCopy (independent copy, source keeps its drop) instead of a shallow Move.
+# Both the member/view-source (DeepCopy) and plain-local (formerly Move) paths are now 0-leak,
+# no double-free. KV-free → clean hard-leak-gate GREEN.
+- model: { name: Entry,   fields: [[iid, string], [buffs, list<i32>]] }
+- model: { name: Zone,    fields: [[nam, string], [entries, list<Entry>]] }
+- model: { name: Session, fields: [[match_id, string], [zones, list<Zone>]] }
+- model: { name: Resp,    fields: [[okflag, i32], [match, Session]] }
+- class:
+    name: Svc
+    members: [[view_buf, Session]]
+    methods:
+      - def:
+          name: setup
+          body:
+            - set: [<.view_buf.match_id, "m1"]
+            - decl: [zix, i32, 0]
+            - while:
+                condition: { lt: [zix, 2] }
+                body:
+                  - decl: [zon, Zone]
+                  - set: [zon.nam, "z-${zix}"]
+                  - decl: [eix, i32, 0]
+                  - while:
+                      condition: { lt: [eix, 3] }
+                      body:
+                        - decl: [ent, Entry]
+                        - set: [ent.iid, "e-${zix}-${eix}"]
+                        - call: [ent.buffs.push, eix]
+                        - call: [zon.entries.push, ent]
+                        - set: [eix, { +: [eix, 1] }]
+                  - call: [<.view_buf.zones.push, zon]
+                  - set: [zix, { +: [zix, 1] }]
+      - def:
+          name: poll
+          return: { type: Resp, lifetime: producer }
+          body:
+            - decl: [out, Resp]
+            - set: [out.okflag, 1]
+            - set: [out.match, <.view_buf]     # MEMBER-source DeepCopy (the exact match pattern)
+            - return: out
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [svc, Svc]
+      - call: [svc.setup]
+      - decl: [acc, i32, 0]
+      - decl: [itr, i32, 0]
+      - while:
+          condition: { lt: [itr, 200] }
+          body:
+            - decl: [rsp, Resp, { call: [svc.poll] }]
+            - set: [acc, { +: [acc, rsp.match.zones.len] }]
+            - set: [itr, { +: [itr, 1] }]
+      - if: { condition: { neq: [acc, 400] }, then: [{ print: ["FAIL acc=${acc} (expected 400)"] }, { return: 1 }] }
+      - print: ["PASS 53 nested_model_field_copy_no_leak"]
+      - return: 0
