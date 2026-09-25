@@ -7,6 +7,7 @@
 // duplication, guaranteed-identical digests across web / native / ./media.
 
 #include "sha256.h"
+#include "string_runtime.h"   // aiml_str_alloc: refcounted result (rc-header, no Invalid-read/leak)
 #include <cstring>
 #include <cstdlib>
 
@@ -77,7 +78,12 @@ void final(Ctx* c, uint8_t* hash) {
 }
 
 char* hex(const uint8_t* bytes, size_t len) {
-    char* s = (char*)malloc(len * 2 + 1);
+    // spec/61: return a REFCOUNTED string (aiml_str_alloc → rc-header at ptr-8, NUL-terminated) —
+    // aiml_sha256_hex/aiml_hash_sha256 feed the `hash.sha256` surface + card_art_uploader, whose
+    // callers use aiml_str_incref/decref. A raw malloc buffer had no header, so those read/free 8
+    // bytes before the allocation (Invalid read) and never released it (leak: auth legacy verify +
+    // artwork upload, leak_probes/round3 §1). aiml_str_alloc allocates payload len*2 (+ NUL, rc=1).
+    char* s = aiml_str_alloc(len * 2);
     if (!s) return nullptr;
     static const char hx[] = "0123456789abcdef";
     for (size_t i = 0; i < len; ++i) { s[i*2] = hx[bytes[i] >> 4]; s[i*2+1] = hx[bytes[i] & 0xF]; }

@@ -1305,6 +1305,12 @@ bool isSerializable(CompilerContext& ctx, const std::string& typeName){
 llvm::Value* serialize(CompilerContext& ctx, llvm::Value* val,
                        const std::string& typeName, llvm::Value* stylePtr){
     llvm::Value* json = nullptr;
+    // spec/61 §7: track whether `json` is a FRESH OWNED rc-string (aiml_jw_done from a compound
+    // struct/list/map) so it is registered as an owned string temp below — else the serialized JSON
+    // leaks per call (HTTP /servers.json `set list_json = sys.serialize(lst)`, leak_probes/round3 §3).
+    // Only the compound paths are marked: the `string` branch is a passthrough (borrow, must NOT be
+    // registered) and the scalar *ToString paths are handled by their own managed-string lifetime.
+    bool jsonOwned = false;
 
     // Enums → plain integer string
     if(ctx.enums.count(typeName))
@@ -1325,17 +1331,17 @@ llvm::Value* serialize(CompilerContext& ctx, llvm::Value* val,
     // Compound types — val is a raw pointer (alloca / heap struct)
     else if(ctx.classes.count(typeName)){
         llvm::Function* fn=emitSerializeStruct(ctx,typeName);
-        if (fn) json = ctx.builder.CreateCall(fn,{val},"ser_r");
+        if (fn) { json = ctx.builder.CreateCall(fn,{val},"ser_r"); jsonOwned = true; }
         else json = ctx.builder.CreateGlobalStringPtr("{}");
     }
     else if(isListType(typeName)){
         llvm::Function* fn=emitSerializeList(ctx,typeName);
-        if (fn) json = ctx.builder.CreateCall(fn,{val},"ser_r");
+        if (fn) { json = ctx.builder.CreateCall(fn,{val},"ser_r"); jsonOwned = true; }
         else json = ctx.builder.CreateGlobalStringPtr("{}");
     }
     else if(isMapType(typeName)){
         llvm::Function* fn=emitSerializeMap(ctx,typeName);
-        if (fn) json = ctx.builder.CreateCall(fn,{val},"ser_r");
+        if (fn) { json = ctx.builder.CreateCall(fn,{val},"ser_r"); jsonOwned = true; }
         else json = ctx.builder.CreateGlobalStringPtr("{}");
     }
 
@@ -1348,9 +1354,22 @@ llvm::Value* serialize(CompilerContext& ctx, llvm::Value* val,
         llvm::Value* prettyVal = ctx.builder.CreateLoad(i32T(ctx), prettyPtr, "jsonstyle_pretty");
         llvm::Value* indentVal = ctx.builder.CreateLoad(i8pT(ctx), indentPtr, "jsonstyle_indent");
         llvm::Value* newlineVal = ctx.builder.CreateLoad(i8pT(ctx), newlinePtr, "jsonstyle_newline");
-        json = ctx.builder.CreateCall(gJsonStyleFmt(ctx), {json, prettyVal, indentVal, newlineVal}, "ser_style");
+        // aiml_json_style_format returns a FRESH owned rc-string and does NOT free its input, so an
+        // owned compound `json` would leak here — release it before replacing (the styled result is
+        // itself owned → stays registered below).
+        llvm::Value* styled = ctx.builder.CreateCall(gJsonStyleFmt(ctx), {json, prettyVal, indentVal, newlineVal}, "ser_style");
+        if (jsonOwned && ctx.lifetimeDropsEnabled) {
+            llvm::Function* dref = ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {i8pT(ctx)});
+            ctx.builder.CreateCall(dref, { json });
+        }
+        json = styled;
+        jsonOwned = true;
     }
 
+    // spec/61 §7: register a fresh owned JSON rc-string as an owned string temp so a consuming
+    // decl/set MOVES it (one drop) and a transient is decref'd at stmt end — else it leaks (round3 §3).
+    if (jsonOwned && ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+        ctx.stmtTempStack.back().push_back(json);
     return json;
 }
 
