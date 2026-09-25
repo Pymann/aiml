@@ -35,6 +35,10 @@
 #include <execinfo.h>
 #include <thread>
 #include <chrono>
+#ifndef __EMSCRIPTEN__
+#include <malloc.h>     // mallinfo2: distinguish a real malloc leak (uordblks grows) from arena
+#include <unistd.h>     // fragmentation (uordblks flat, RSS grows). Native only.
+#endif
 #else
 #include <emscripten.h>
 #endif
@@ -233,6 +237,20 @@ extern "C" long long aiml_memdiff_dump(void) {
              " (top %d by growth since last dump)\n",
              ts, total, g_total_live_count, snapshot.size(), kTopSites);
     txt += line;
+#ifndef __EMSCRIPTEN__
+    {
+        // Total malloc accounting vs RSS: if uordblks tracks RSS growth → a real (untracked-type)
+        // malloc leak; if uordblks is flat while RSS climbs → glibc arena fragmentation, not a leak.
+        struct mallinfo2 mi = mallinfo2();
+        long rss_kb = 0;
+        FILE* sf = fopen("/proc/self/statm", "r");
+        if (sf) { long tot = 0, res = 0; if (fscanf(sf, "%ld %ld", &tot, &res) == 2) rss_kb = res * (sysconf(_SC_PAGESIZE) / 1024); fclose(sf); }
+        snprintf(line, sizeof(line),
+                 "  [malloc] uordblks(in-use)=%zu arena(brk)=%zu hblkhd(mmap)=%zu fordblks(free)=%zu | RSS=%ld KB\n",
+                 (size_t)mi.uordblks, (size_t)mi.arena, (size_t)mi.hblkhd, (size_t)mi.fordblks, rss_kb);
+        txt += line;
+    }
+#endif
     int shown = 0;
     for (const auto& s : snapshot) {
         if (shown++ >= kTopSites) break;
