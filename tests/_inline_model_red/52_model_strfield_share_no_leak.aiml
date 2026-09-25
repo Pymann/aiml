@@ -1,0 +1,33 @@
+# static-check: off
+# spec/61 §7 regression: `set model.strfield = <owned string local>` must NOT leak per iteration.
+# BUG (fixed 2026-09-25): the ownership analyzer classified a member-store of an Origin::Owned source
+# as a MOVE (ownership_analyzer.cpp:264) → marked the source Moved → struck its scope-drop. But the
+# codegen SHARES a managed-string source into the member (incref, ast_compiler_stmt.cpp:3195) and does
+# NOT consumeLocalDrop it (:2374). Analyzer=move vs codegen=share → the shared RC buffer nets one
+# decref short → 22 B leaked per iteration. This is the dominant handle_validate server residual
+# (`set out.email = eml`; repro tests/_mem_sanitize/handle_validate_sibling.aiml, 11,000 B/500 calls).
+# FIX: the analyzer forces DeepCopy (keeps the source drop) for a managed-string member-store source,
+# mirroring the plain-local-rebind managed-string exception. Safe (codegen always increfs a VariableExpr
+# string source into a member → kept source-drop + member drop exactly balance the incref; no double-free).
+# KV-independent (this file needs no Kv) → a clean hard-leak-gate GREEN: 0 definite + 0 indirect.
+- model: { name: Rec, fields: [[num, i32], [msg, string]] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [base, string, "hans"]
+      - decl: [tot, i32, 0]
+      - decl: [itr, i32, 0]
+      - while:
+          condition: { lt: [itr, 400] }
+          body:
+            - decl: [out, Rec]
+            - decl: [sib, string, "${base}@franz.de"]   # owned heap string local
+            - set: [out.msg, sib]                         # share into model member (incref)
+            - set: [tot, { +: [tot, sib.len] }]           # read sib after → forces share, not move
+            - set: [tot, { +: [tot, out.msg.len] }]
+            - set: [itr, { +: [itr, 1] }]
+            # out + sib drop at loop-body scope: both must release the shared buffer exactly once
+      - if: { condition: { neq: [tot, 10400] }, then: [{ print: ["FAIL tot=${tot} (expected 10400)"] }, { return: 1 }] }
+      - print: ["PASS 52 model_strfield_share_no_leak"]
+      - return: 0

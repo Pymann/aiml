@@ -480,7 +480,21 @@ einen eigenen Fix (Kv-Lifetime / `close`-Operator).
 inert ggü. meiner Änderung: das .o des Tests enthält keinen `aiml_db_kv_get`/`kv_get_own`-Bezug),
 Game + Client bauen sauber mit neuer ABI. 9rooms-Verhaltenstest-Suite lief mit. → committet.
 
-## 14. Value-Model String-Member-Store Leak (der EIGENTLICHE handle_validate-Residual) — PRE-EXISTING, LOKALISIERT, NOCH OFFEN (Claude, 2026-09-25)
+## 14. Value-Model String-Member-Store Leak (der EIGENTLICHE handle_validate-Residual) — ✅ GEFIXT + GEGATET (Claude, 2026-09-25)
+
+> **STATUS-UPDATE (nach dem Fix):** Root Cause gefunden UND behoben. Der unten dokumentierte
+> Analyzer-vs-Codegen-Mismatch war die Ursache. **Fix:** [ownership_analyzer.cpp:264](../src/core/ownership_analyzer.cpp#L264)
+> — ein managed-string-Member-Store-Source wird jetzt als `Transfer::DeepCopy` (Share) statt `Move`
+> klassifiziert, so bleibt der scope-drop der Quelle erhalten (spiegelt die plain-local-rebind-
+> Ausnahme). Verifiziert: `share.aiml` (KV-frei) 8.800/400 → **0 lost, 0 invalid**; `handle_validate_sibling`
+> 11.000/500 → per-call **0** (nur die 2 einmaligen KV-Handles bleiben); KEIN Invalid read/write/free.
+> Gates: mem-sanitizer PASS (44/44), Korpus 422/1-preexisting, Leak-Gate 0 (neuer GREEN-Test
+> [tests/_inline_model_red/52_model_strfield_share_no_leak.aiml](../tests/_inline_model_red/52_model_strfield_share_no_leak.aiml)),
+> Game+Client bauen sauber. 9rooms-Verhaltenssuite: 8 Fails, ALLE als PRE-EXISTING bewiesen (Baseline
+> ohne den Fix = identische Fails: 5 JIT-Compile-Timeouts rc=124 + 3 alte Game-Logik-Bugs
+> reaction_state/soulmage_defense/trigger_stage2, u.a. ein pre-existing garbage-iid-UAF im Game-Code)
+> → 0 Regressionen. **Der handle_validate-Server-Residual ist damit geschlossen.** Die folgende
+> Analyse ist der Befund VOR dem Fix (historisch, erklärt die Root Cause):
 
 Beim Verifizieren des get_copy-Fixes gegen den echten `handle_validate`-Repro
 ([tests/_mem_sanitize/handle_validate_sibling.aiml](../tests/_mem_sanitize/handle_validate_sibling.aiml))

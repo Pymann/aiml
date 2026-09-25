@@ -262,6 +262,21 @@ struct Analyzer {
                     // A ref<T> (weak) target never moves the source; a copy into it is neither Move nor a
                     // deep-copy of an owned heap — treat as DeepCopy (no source consumption downstream).
                     sp.transfer = (!refField && srcO == Origin::Owned) ? Transfer::Move : Transfer::DeepCopy;
+                    // §7: a MANAGED STRING local source is SHARED into the member, NOT moved: the codegen
+                    // increfs it (ast_compiler_stmt.cpp:3195) and deliberately does NOT consumeLocalDrop it
+                    // (:2374), so the source keeps its owning ref + null-safe scope-drop. Classifying it as
+                    // Move would strike the source's drop (below) while the codegen increfs → the shared
+                    // buffer nets one decref short → 22 B/call leak (handle_validate `out.email = eml`;
+                    // repro tests/_mem_sanitize/handle_validate_sibling.aiml). Force DeepCopy so the drop is
+                    // kept, mirroring the plain-local-rebind managed-string exception below. Safe (no double-
+                    // free): the codegen ALWAYS increfs a VariableExpr string source into a member, so the
+                    // kept source-drop + the member's own drop exactly balance the incref.
+                    {
+                        auto tyIt = slotType.find(sid);
+                        if (kManagedStringLocals && sid != NoOwnership
+                            && tyIt != slotType.end() && tyIt->second == "string")
+                            sp.transfer = Transfer::DeepCopy;
+                    }
                     plan.statements[set] = sp;
                     // Finding #4: once an owned local is MOVED into a member it no longer owns its
                     // heap — mark it moved so a SECOND member-store of the same local classifies as
