@@ -43,16 +43,32 @@ struct Analyzer {
         const std::string& t = d->typeName;
         if (t.rfind("list<", 0) == 0 && !t.empty() && t.back() == '>') {
             if (!d->initialValue) return true;
-            // spec/61 return-ownership for LIST producers: a call to an `owns_return: true`
-            // function returns a freshly-built INDEPENDENT list the caller owns (e.g.
-            // active_match_ids / take_gone_players → list<string>). Drop it at scope exit
-            // (kind-2) unless moved. Matched by the call's trailing identifier, like the model
-            // and box cases. MUST stay in lockstep with the list-drop registration in
-            // visitDeclStmt. (Assignment / at / get inits are views → left non-owned = safe leak.)
-            if (auto* c = dynamic_cast<CallExpr*>(d->initialValue.get())) {
+            // spec/61 §5/§5.7: a list local ALWAYS owns exactly one handle ref — emitListHandleDecl
+            // (ast_compiler_stmt.cpp) increfs a SHARE source (a plain local, a model member, or an
+            // at-element) or adopts a FRESH handle (copy/clone/slice/owns_return) and registers a
+            // balancing kind-2 scope-drop. That drop is mayDrop-gated at fall-through, so any init
+            // form left non-owned here has its drop SUPPRESSED → one leaked ref per call
+            // (leak_probes/round6_general §5: list_member_read/slice/copy). Classify every OWNING
+            // init as fresh-owned so the drop fires; mayDrop still suppresses genuinely moved-out
+            // handles → no double-free. (`return` was already clean: emitReturnCleanup exempts
+            // isListHandle unconditionally, which is why a `return: []` variant masked the leak.)
+            Expr* iv = d->initialValue.get();
+            // SHARE: incref of a VISIBLE handle (plain-local alias, `obj.field`, at-element) →
+            // the source keeps its own ref, this local owns an INDEPENDENT one → safe to drop.
+            if (dynamic_cast<VariableExpr*>(iv)) return true;
+            if (dynamic_cast<AtExpr*>(iv)) return true;
+            if (auto* c = dynamic_cast<CallExpr*>(iv)) {
                 const std::string& fn = c->functionName;
                 size_t dp = fn.rfind('.');
                 std::string shortName = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                // Fresh producers: {copy}/{clone} build an independent-spine handle; `.slice`
+                // returns a freshly-allocated handle (ListImpl::slice). All owned.
+                if (fn == "sys.copy" || fn == "sys.clone" || shortName == "slice") return true;
+                // spec/61 return-ownership for LIST producers: an `owns_return: true` function
+                // hands back a freshly-built INDEPENDENT list (e.g. active_match_ids /
+                // take_gone_players → list<string>). A generic user call may instead return a
+                // BORROW of a member field, so it stays gated on owns_return (the two-sided
+                // return-ownership contract — findings §1/§3 — not broadened here).
                 if (ctx.ownsReturnMatches(shortName, t)) return true;
             }
             return false;
@@ -291,6 +307,20 @@ struct Analyzer {
                             auto ci = ctx.classes.find(tyIt->second);
                             if (ci != ctx.classes.end() && ci->second.hasHeapFields
                                 && ci->second.serNodesVar && !ctx.isRefcountModel(tyIt->second))
+                                sp.transfer = Transfer::DeepCopy;
+                            // spec/61 §5.5: a CONTAINER local (list/map/buffer handle) stored into a
+                            // container FIELD must be a DEEP COPY, never a shallow Move. The Move path
+                            // (ast_compiler_stmt.cpp struct-copy) frees the field's OLD handle with the
+                            // unconditional aiml_list_free and shallow-memcpys the source struct — but
+                            // when the source is an ALIAS of that very field (`decl lst=<.events; set
+                            // <.events=lst`, the isShareVar/isShareAt read-alias made owned by
+                            // freshOwned), the "old" handle IS the aliased handle → self-move
+                            // use-after-free (test_class_list_struct_scalar_writeback SIGSEGV). DeepCopy
+                            // routes to the self-copy-safe clone path (release-old decref, then clone the
+                            // still-live source into an INDEPENDENT field handle); the source keeps its
+                            // own scope-drop → refcount-balanced, no double-free, no leak. (Proper §5
+                            // handle-SHARE for this store is leak_probes/round6 finding 4, still open.)
+                            else if (ctx.memV3 && ctx.isMemV3ContainerHandle(tyIt->second))
                                 sp.transfer = Transfer::DeepCopy;
                         }
                     }

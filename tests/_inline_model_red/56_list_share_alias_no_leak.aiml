@@ -1,0 +1,50 @@
+# static-check: off
+# spec/61 §5/§5.7 regression: a list local that receives a container HANDLE by SHARE (incref of a
+# plain-local, a model member, or an at-element) OR by a fresh producer (copy/clone/slice) OWNS an
+# independent ref and MUST be dropped at NORMAL (fall-through) block exit — not only on an explicit
+# `return`. This is leak_probes/round6_general §5 (list_member_read_1000: 40 B/call = 24 B handle +
+# 16 B buffer). Confirmed the same leak for slice- and copy-init list locals.
+# BUG (fixed 2026-09-25): ownership_analyzer::freshOwned classified a list decl WITH an initializer as
+# owned only for a no-init list or an owns_return call — every SHARE/copy/clone/slice init fell to
+# `false`. emitListHandleDecl (ast_compiler_stmt.cpp:~575) always increfs/adopts a ref AND registers a
+# kind-2 scope-drop, but visitBlock's fall-through drop is mayDrop-gated → the analyzer's `false` made
+# it suppress the drop → one leaked ref per call. (emitReturnCleanup exempts isListHandle → an explicit
+# `return` was already clean, which is why `return: []` masked it.)
+# FIX: freshOwned returns true for a list local initialized by SHARE (VariableExpr / AtExpr) or by a
+# fresh producer (sys.copy / sys.clone / *.slice). A generic user call that may return a BORROW stays
+# gated on owns_return (return-contract, findings §1/§3). mayDrop still suppresses genuinely moved-out
+# handles → no double-free. KV-free → clean hard-leak-gate GREEN.
+- model: { name: ListBox, fields: [[items, list<i32>]] }
+- def:
+    name: tick
+    return: i32
+    body:
+      # (a) plain-local alias (SHARE / incref)
+      - decl: [src, list<i32>]
+      - call: [src.push, 7]
+      - call: [src.push, 8]
+      - decl: [ali, list<i32>, src]
+      # (b) model-member alias (SHARE / incref)
+      - decl: [box, ListBox]
+      - call: [box.items.push, 9]
+      - decl: [mem, list<i32>, box.items]
+      # (c) fresh copy
+      - decl: [cpy, list<i32>, { copy: src }]
+      # (d) fresh slice
+      - decl: [sli, list<i32>, { call: [src.slice, 0, 1] }]
+      - return: { +: [{ +: [ali.len, mem.len] }, { +: [cpy.len, sli.len] }] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [tot, i32, 0]
+      - decl: [itr, i32, 0]
+      - while:
+          condition: { lt: [itr, 400] }
+          body:
+            - set: [tot, { +: [tot, { call: [tick] }] }]
+            - set: [itr, { +: [itr, 1] }]
+      # per call: ali=2, mem=1, cpy=2, sli=1 → 6 ; 6*400 = 2400
+      - if: { condition: { neq: [tot, 2400] }, then: [{ print: ["FAIL tot=${tot} (expected 2400)"] }, { return: 1 }] }
+      - print: ["PASS 56 list_share_alias_no_leak"]
+      - return: 0
