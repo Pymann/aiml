@@ -395,10 +395,24 @@ void Compiler::checkStringComparisons(Program* prog) {
 // Real-world repro: record_death({'&':[mat]}, ...) where mat is ptr<MatchSession>.
 void Compiler::checkPtrIndirection(Program* prog) {
     if (!prog) return;
-    // ptr-depth of a declared type = number of leading `ptr<` wrappers.
+    // Indirection depth of a declared type = number of leading pointer wrappers.
+    // spec/61: ref<T> and shared<T> are POINTERS at the ABI (a reference/handle to T) — the SAME
+    // indirection level as ptr<T>. Counting only `ptr<` made a ref<T>/shared<T> parameter look like
+    // depth 0, so a ptr<T> argument (depth 1) or an `&value` (depth 1; for a memV3 refcount value-
+    // model `&x` LOADS the stored %M*, not the slot address) passed to a ref<T> parameter falsely
+    // tripped "over-indirected" — all correct at codegen (the ref ABI IS a pointer; coerceArgs /
+    // visitUnary reconcile ptr↔ref and &value↔ref). Counting ref</shared< equally removes those
+    // false positives while REAL over-indirection still exceeds the param depth and warns:
+    // `&ptr`/`&ref` (address of a pointer → depth 2) and `ptr<ptr<T>>`/`ref<ptr<T>>` (depth 2) → ref<T>
+    // (depth 1). A by-value `T` parameter stays depth 0, so a ptr<T> passed to it still warns.
     auto ptrDepth = [](const std::string& t) {
         int d = 0; size_t p = 0;
-        while (t.compare(p, 4, "ptr<") == 0) { d++; p += 4; }
+        for (;;) {
+            if      (t.compare(p, 4, "ptr<")    == 0) { d++; p += 4; }
+            else if (t.compare(p, 4, "ref<")    == 0) { d++; p += 4; }
+            else if (t.compare(p, 7, "shared<") == 0) { d++; p += 7; }
+            else break;
+        }
         return d;
     };
     // Signatures of free functions (no receiver) → param type list, for the exact
