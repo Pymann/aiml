@@ -41,9 +41,13 @@ struct Analyzer {
     bool freshOwned(const DeclStmt* d) const {
         if (d->lifetime == "persistent" || d->is_extern) return false;
         const std::string& t = d->typeName;
-        if (t.rfind("list<", 0) == 0 && !t.empty() && t.back() == '>') {
+        if ((t.rfind("list<", 0) == 0 && !t.empty() && t.back() == '>')
+            || (ctx.memV3 && ctx.isMemV3ContainerHandle(t))) {
             if (!d->initialValue) return true;
-            // spec/61 §5/§5.7: a list local ALWAYS owns exactly one handle ref — emitListHandleDecl
+            // spec/61 §5/§5.7: list/map/buffer locals own one handle reference.
+            // Their emit*HandleDecl paths register matching scope drops. In particular map/buffer
+            // fall-through must not suppress the source drop after a member SHARE.
+            // A list local ALWAYS owns exactly one handle ref — emitListHandleDecl
             // (ast_compiler_stmt.cpp) increfs a SHARE source (a plain local, a model member, or an
             // at-element) or adopts a FRESH handle (copy/clone/slice/owns_return) and registers a
             // balancing kind-2 scope-drop. That drop is mayDrop-gated at fall-through, so any init
@@ -322,20 +326,10 @@ struct Analyzer {
                             if (ci != ctx.classes.end() && ci->second.hasHeapFields
                                 && ci->second.serNodesVar && !ctx.isRefcountModel(tyIt->second))
                                 sp.transfer = Transfer::DeepCopy;
-                            // spec/61 §5.5: a CONTAINER local (list/map/buffer handle) stored into a
-                            // container FIELD must be a DEEP COPY, never a shallow Move. The Move path
-                            // (ast_compiler_stmt.cpp struct-copy) frees the field's OLD handle with the
-                            // unconditional aiml_list_free and shallow-memcpys the source struct — but
-                            // when the source is an ALIAS of that very field (`decl lst=<.events; set
-                            // <.events=lst`, the isShareVar/isShareAt read-alias made owned by
-                            // freshOwned), the "old" handle IS the aliased handle → self-move
-                            // use-after-free (test_class_list_struct_scalar_writeback SIGSEGV). DeepCopy
-                            // routes to the self-copy-safe clone path (release-old decref, then clone the
-                            // still-live source into an INDEPENDENT field handle); the source keeps its
-                            // own scope-drop → refcount-balanced, no double-free, no leak. (Proper §5
-                            // handle-SHARE for this store is leak_probes/round6 finding 4, still open.)
+                            // spec/61 §5: named container assignment shares its handle.
+                            // The source stays live; codegen retains before releasing the old field.
                             else if (ctx.memV3 && ctx.isMemV3ContainerHandle(tyIt->second))
-                                sp.transfer = Transfer::DeepCopy;
+                                sp.transfer = Transfer::Share;
                         }
                     }
                     plan.statements[set] = sp;

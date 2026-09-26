@@ -2378,11 +2378,15 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     // consume runs BEFORE the value is loaded (nulling here would feed null to the store). So skip it
     // for a managed string source; the source keeps its owned ref + null-safe drop.
     bool srcIsManagedString = false;
+    Symbol* memberHandleSource = nullptr;
     if (auto* sv = dynamic_cast<VariableExpr*>(setStmt->value.get())) {
         if (sv->name.find('.') == std::string::npos && sv->name.find('<') == std::string::npos) {
             auto sit = ctx.symbol_table.find(sv->name);
             if (sit != ctx.symbol_table.end() && isManagedStringLocalSym(sit->second))
                 srcIsManagedString = true;
+            if (ctx.memV3 && !propName.empty() && sit != ctx.symbol_table.end()
+                && ctx.isMemV3ContainerHandle(sit->second.typeName))
+                memberHandleSource = &sit->second;
         }
     }
     // spec/61 §8/§5.4 (F3): re-binding a `ref<T>` borrow (`set: [view, owner]`) must NOT transfer
@@ -2407,7 +2411,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 targetIsRefBorrow = true;
         }
     }
-    if (setStmt->value && !memberDeepCopy && !srcIsManagedString && !targetIsRefBorrow)
+    if (setStmt->value && !memberDeepCopy && !memberHandleSource && !srcIsManagedString && !targetIsRefBorrow)
         consumeLocalDrop(setStmt->value.get());
 
     // Expose the target variable's type so db.open_kv / sys.deserialize can infer
@@ -2435,7 +2439,18 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         ctx.deserializeTargetType.clear();
         return;
     }
-    IRValue* val = visitExpression(setStmt->value.get());
+    // The ordinary variable reader materializes the legacy container struct. A member
+    // assignment needs the owning handle instead (also for by-reference parameters).
+    IRValue* val = nullptr;
+    if (memberHandleSource) {
+        llvm::Value* slot = memberHandleSource->ir_alloca_inst
+            ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(memberHandleSource->ir_alloca_inst))
+            : memberHandleSource->alloca_inst;
+        val = ctx.ir_gen->wrap(ctx.builder.CreateLoad(
+            llvm::PointerType::get(ctx.context, 0), slot, "setf_source_handle"));
+    } else {
+        val = visitExpression(setStmt->value.get());
+    }
     ctx.deserializeTargetType.clear();
     // spec/61 §7: was the RHS an OWNED string temp (interpolation/producer)? Captured BEFORE
     // consumeStringTemp clears it — a managed set MOVES an owned temp (assign_move) and COPIES a

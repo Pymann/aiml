@@ -1,0 +1,42 @@
+# static-check: off
+# TIER: T0
+# Replacing owned container fields releases their strings/nested handles by descriptor.
+- model:
+    name: RecursiveBox
+    fields: [[words, list<string>], [nested, list<list<string>>], [lookup, "map<string:string>"]]
+- def:
+    name: tick
+    body:
+      - decl: [box, RecursiveBox]
+      - call: [box.words.push, "old words"]
+      - decl: [inner, list<string>]
+      - call: [inner.push, "old inner"]
+      - call: [box.nested.push, inner]
+      - call: [box.lookup.put, "old key", "old value"]
+      - decl: [words, list<string>]
+      - call: [words.push, "new words"]
+      - decl: [nested, list<list<string>>]
+      - call: [nested.push, words]
+      - decl: [lookup, "map<string:string>"]
+      - call: [lookup.put, "new key", "new value"]
+      - set: [box.words, words]
+      - set: [box.nested, nested]
+      - set: [box.lookup, lookup]
+      - call: [words.push, "shared"]
+      - call: [lookup.put, "another key", "another value"]
+      - if: { condition: { neq: [box.words.len, 2] }, then: [{ call: [sys.exit, 21] }] }
+      - if: { condition: { neq: [box.lookup.len, 2] }, then: [{ call: [sys.exit, 22] }] }
+      - set: [box.nested, nested]
+      - set: [box.lookup, lookup]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 1000] }
+          body:
+            - call: [tick]
+            - set: [idx, { +: [idx, 1] }]
+      - print: ["PASS recursive member SHARE"]
+      - return: 0

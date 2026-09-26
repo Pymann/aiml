@@ -1,0 +1,174 @@
+# test_ws_media.aiml — end-{ at: [to, end] } for buffer.ws_recv / buffer.ws_send / ws.send_kv_blob
+#
+# A minimal media server on a spawned thread: chunked binary upload → aiondb
+# blob store (one KV entry per chunk) → { at: [zero, copy] } chunked download streamed
+# straight from the mmap'd blob.  Exercises the new binary transport primitives
+# plus kv.set_blob, in both directions, single-request-in-flight.
+#
+# Protocol (all binary frames):
+#   control frames  : [i32 type, ...]      (type 1 = PUT_BEGIN[nchunks], 3 = GET)
+#   data frames     : raw chunk bytes        (state machine knows how many follow)
+#   server replies  : [i32 100]  after PUT  /  [i32 200, i32 nchunks] before GET data
+#
+# Expected exit code: 0
+
+- def:
+    name: media_server
+    args: []
+    body:
+      - decl: [store, "Kv<string:string>", { call: [db.open_kv, "test_ws_media_blob"] }]
+      - decl: [srv, ws_handle, { call: [ws.server, "127.0.0.1", 19923] }]
+      - decl: [conn, ws_handle, { call: [ws.accept, srv] }]
+      - decl: [ctrl, buffer]
+      - call: [ctrl.alloc, 131072]
+      - decl: [num_chunks, i32, 0]
+      - decl: [alive, i32, 1]
+      - while:
+          condition: { eq: [alive, 1] }
+          body:
+            - decl: [got, i32, { call: [ctrl.ws_recv, conn] }]
+            - if:
+                condition: { "<=": [got, 0] }
+                then:
+                  - set: [alive, 0]
+                else:
+                  - call: [ctrl.seek, 0]
+                  - decl: [mtype, i32, { call: [ctrl.read, i32] }]
+                  - if:
+                      condition: { eq: [mtype, 1] }
+                      then:
+                        - set: [num_chunks, { call: [ctrl.read, i32] }]
+                        - decl: [put_idx, i32, 0]
+                        - while:
+                            condition: { "<": [put_idx, num_chunks] }
+                            body:
+                              - decl: [chunk, buffer]
+                              - call: [chunk.alloc, 131072]
+                              - decl: [cbytes, i32, { call: [chunk.ws_recv, conn] }]
+                              - decl: [put_key, string, "blob#${put_idx}"]
+                              - call: [store.set_blob, put_key, chunk]
+                              - set: [put_idx, { +: [put_idx, 1] }]
+                        - decl: [okb, buffer]
+                        - call: [okb.alloc, 16]
+                        - call: [okb.write, 100, i32]
+                        - call: [okb.ws_send, conn]
+                  - if:
+                      condition: { eq: [mtype, 3] }
+                      then:
+                        - decl: [beg, buffer]
+                        - call: [beg.alloc, 16]
+                        - call: [beg.write, 200, i32]
+                        - call: [beg.write, num_chunks, i32]
+                        - call: [beg.ws_send, conn]
+                        - decl: [get_idx, i32, 0]
+                        - while:
+                            condition: { "<": [get_idx, num_chunks] }
+                            body:
+                              - decl: [get_key, string, "blob#${get_idx}"]
+                              - call: [ws.send_kv_blob, conn, store, get_key]
+                              - set: [get_idx, { +: [get_idx, 1] }]
+                        - set: [alive, 0]
+      - call: [ws.close, conn]
+      - call: [ws.close, srv]
+
+# ── main / client ────────────────────────────────────────────────────────────
+- decl: [pass, i32, 0]
+- decl: [fail, i32, 0]
+
+- decl: [srv_t, thread_handle]
+- set: [srv_t, { spawn: [media_server] }]
+- call: [time.sleep_ms, 200]
+
+- decl: [cli, ws_handle, { call: [ws.connect, "127.0.0.1", 19923, "/"] }]
+
+# ── Upload: PUT_BEGIN[3] + 3 chunks of 4 i32 each (base = idx*100) ────────────
+- decl: [pbeg, buffer]
+- call: [pbeg.alloc, 16]
+- call: [pbeg.write, 1, i32]
+- call: [pbeg.write, 3, i32]
+- call: [pbeg.ws_send, cli]
+
+- decl: [snd_idx, i32, 0]
+- while:
+    condition: { "<": [snd_idx, 3] }
+    body:
+      - decl: [cbuf, buffer]
+      - call: [cbuf.alloc, 64]
+      - decl: [base, i32, { "*": [snd_idx, 100] }]
+      - call: [cbuf.write, { "+": [base, 0] }, i32]
+      - call: [cbuf.write, { "+": [base, 1] }, i32]
+      - call: [cbuf.write, { "+": [base, 2] }, i32]
+      - call: [cbuf.write, { "+": [base, 3] }, i32]
+      - call: [cbuf.ws_send, cli]
+      - set: [snd_idx, { +: [snd_idx, 1] }]
+
+# ── Ack ──────────────────────────────────────────────────────────────────────
+- decl: [okr, buffer]
+- call: [okr.alloc, 64]
+- decl: [okn, i32, { call: [okr.ws_recv, cli] }]
+- call: [okr.seek, 0]
+- decl: [okcode, i32, { call: [okr.read, i32] }]
+- if:
+    condition: { eq: [okcode, 100] }
+    then:
+      - print: ["PASS: upload ack=100"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: upload ack=${okcode} expected 100"]
+      - set: [fail, { +: [fail, 1] }]
+
+# ── Download: GET → BEGIN[200, nch] → nch raw chunks ─────────────────────────
+- decl: [gbeg, buffer]
+- call: [gbeg.alloc, 16]
+- call: [gbeg.write, 3, i32]
+- call: [gbeg.ws_send, cli]
+
+- decl: [begr, buffer]
+- call: [begr.alloc, 64]
+- decl: [begn, i32, { call: [begr.ws_recv, cli] }]
+- call: [begr.seek, 0]
+- decl: [begcode, i32, { call: [begr.read, i32] }]
+- decl: [dl_nch, i32, { call: [begr.read, i32] }]
+- if:
+    condition: { "&&": [{ eq: [begcode, 200] }, { eq: [dl_nch, 3] }] }
+    then:
+      - print: ["PASS: download begin code=200 nch=3"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: download begin code=${begcode} nch=${dl_nch}"]
+      - set: [fail, { +: [fail, 1] }]
+
+- decl: [rcv_idx, i32, 0]
+- decl: [ok_all, i32, 1]
+- while:
+    condition: { "<": [rcv_idx, dl_nch] }
+    body:
+      - decl: [dlbuf, buffer]
+      - call: [dlbuf.alloc, 131072]
+      - decl: [dln, i32, { call: [dlbuf.ws_recv, cli] }]
+      - call: [dlbuf.seek, 0]
+      - decl: [dbase, i32, { "*": [rcv_idx, 100] }]
+      - decl: [dv0, i32, { call: [dlbuf.read, i32] }]
+      - decl: [dv1, i32, { call: [dlbuf.read, i32] }]
+      - decl: [dv2, i32, { call: [dlbuf.read, i32] }]
+      - decl: [dv3, i32, { call: [dlbuf.read, i32] }]
+      - if:
+          condition: { "||": [{ neq: [dln, 16] }, { "||": [{ neq: [dv0, dbase] }, { neq: [dv3, { "+": [dbase, 3] }] }] }] }
+          then:
+            - print: ["FAIL: chunk ${rcv_idx} len=${dln} v0=${dv0} v3=${dv3} (base=${dbase})"]
+            - set: [ok_all, 0]
+      - set: [rcv_idx, { +: [rcv_idx, 1] }]
+- if:
+    condition: { eq: [ok_all, 1] }
+    then:
+      - print: ["PASS: all downloaded chunks match uploaded bytes"]
+      - set: [pass, { +: [pass, 1] }]
+    else:
+      - print: ["FAIL: downloaded chunk mismatch"]
+      - set: [fail, { +: [fail, 1] }]
+
+- call: [ws.close, cli]
+- call: [srv_t.join]
+
+- print: [""]
+- print: ["=== test_ws_media: ${pass} passed, ${fail} failed ==="]
