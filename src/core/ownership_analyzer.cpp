@@ -97,6 +97,15 @@ struct Analyzer {
         auto ci = ctx.classes.find(t);
         if (ci != ctx.classes.end() && ci->second.hasHeapFields && ci->second.serNodesVar) {
             if (!d->initialValue) return true;
+            // spec/61 §5.4/§7 CopyRetain (endphase-crash fix): a value-model materialised from a
+            // sharing VIEW (at / obj.field / a container accessor) is OWNED — codegen retains its
+            // shareable field handles so x holds its own refs; it must drop them at scope exit (else a
+            // later member-store's release-old freed a handle the container still referenced:
+            // mana_choice double-free). Lockstep with is_view_alias retain/drop in ast_compiler_stmt.cpp.
+            if (dynamic_cast<const AtExpr*>(d->initialValue.get())) return true;
+            if (auto* ve = dynamic_cast<const VariableExpr*>(d->initialValue.get()))
+                if (ve->name.find('.') != std::string::npos || ve->name.find('<') != std::string::npos)
+                    return true;
             if (auto* c = dynamic_cast<CallExpr*>(d->initialValue.get())) {
                 // spec/61 §5.1: `{ clone: X }` / `{ copy: X }` produce a FRESH, INDEPENDENT owned
                 // value model → owned, dropped at scope exit (else the cloned heap leaks; probes
@@ -119,6 +128,9 @@ struct Analyzer {
                 size_t dp = fn.rfind('.');
                 std::string shortName = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
                 if (ctx.ownsReturnMatches(shortName, t)) return true;
+                if ((shortName == "at" || shortName == "get" || shortName == "first" || shortName == "last")
+                    && !ctx.ownsReturnMatches(shortName, t))
+                    return true;   // CopyRetain view-accessor (lockstep with is_view_alias)
             }
         }
         // spec/61: owned box `decl [x, ptr<T>, INIT]` where x owns the pointee → drop at scope
