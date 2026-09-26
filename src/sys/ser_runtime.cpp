@@ -238,6 +238,22 @@ static void dec(const uint8_t* blob, int& pos, int end,
 static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data);
 extern "C" void aiml_trace_fre_log(const char* tag, void* h, int rc);  // AIML_TRACE_FRE (string_runtime)
 
+// Diagnostic guard (opt-in via AIML_SER_FRE_GUARD=1): the recursive free (fre) AND encode (enc) walk
+// a value model by its descriptor. If the model's state is corrupt (a garbage container size or a
+// near-null handle pointer — the endphase-crash signature: SIGSEGV @0x28 in fre / (nil) in enc, map
+// keys=0x21 values=0x1, list len>16M), the walk dereferences wild memory and crashes. When enabled,
+// this validates each container size / handle pointer before use, logs the offending node
+// (idx/kind/offset + value) so the corrupt field is named, and SKIPS it (free: skip; encode: emit
+// empty) so the server keeps running instead of segfaulting. Off by default → no behaviour change.
+// See memory endphase-crash-nested-free.
+static bool ser_fre_guard() {
+    static int on = -1;
+    if (on < 0) { const char* e = getenv("AIML_SER_FRE_GUARD"); on = (e && *e && *e != '0') ? 1 : 0; }
+    return on;
+}
+static inline bool ser_size_bad(long sz)  { return sz < 0 || sz > (1L << 24); }        // >16M elems = impossible
+static inline bool ser_ptr_bad(const void* p) { return p != nullptr && (uintptr_t)p < 0x1000; } // near-null garbage
+
 // ── Encode (recursive) ────────────────────────────────────────────────────────
 
 static void enc(std::vector<uint8_t>& buf,
@@ -292,6 +308,12 @@ static void enc(std::vector<uint8_t>& buf,
     case AIML_TD_LIST: {
         // data points directly to the inline SerList struct
         const SerList* list = (const SerList*)data;
+        if (ser_fre_guard() && (ser_size_bad(list->size) || ser_ptr_bad(list->data))) {
+            fprintf(stderr, "[SER_FRE_GUARD] corrupt LIST (encode) node idx=%d offset=%d size=%ld data=%p — emitting empty\n",
+                    idx, n.offset, (long)list->size, (void*)list->data);
+            w_i32(buf, 0);
+            break;
+        }
         int32_t count = (list->size > 0) ? list->size : 0;
         w_i32(buf, count);
         if (count > 0 && list->data) {
@@ -308,6 +330,12 @@ static void enc(std::vector<uint8_t>& buf,
         // Dense format: write count, then for each entry 0..count-1: key then value.
         // map->keys is a dense array (no holes), indexed 0..size-1.
         const SerMap* map = (const SerMap*)data;
+        if (ser_fre_guard() && (ser_size_bad(map->size) || ser_ptr_bad(map->keys) || ser_ptr_bad(map->values))) {
+            fprintf(stderr, "[SER_FRE_GUARD] corrupt MAP (encode) node idx=%d offset=%d size=%ld keys=%p values=%p — emitting empty\n",
+                    idx, n.offset, (long)map->size, (void*)map->keys, (void*)map->values);
+            w_i32(buf, 0);
+            break;
+        }
         int32_t count = (map->size > 0) ? map->size : 0;
         w_i32(buf, count);
         if (count > 0 && map->keys && map->values) {
@@ -324,6 +352,12 @@ static void enc(std::vector<uint8_t>& buf,
     case AIML_TD_BUFFER: {
         // data points directly to the inline SerBuffer struct
         const SerBuffer* b = (const SerBuffer*)data;
+        if (ser_fre_guard() && (ser_size_bad(b->size) || ser_ptr_bad(b->data))) {
+            fprintf(stderr, "[SER_FRE_GUARD] corrupt BUFFER (encode) node idx=%d offset=%d size=%ld data=%p — emitting empty\n",
+                    idx, n.offset, (long)b->size, (void*)b->data);
+            w_i32(buf, 0);
+            break;
+        }
         int32_t sz = (b->size > 0) ? b->size : 0;
         w_i32(buf, sz);
         if (sz > 0 && b->data) {
@@ -613,21 +647,6 @@ static void dec(const uint8_t* blob, int& pos, int end,
 }
 
 // ── Free decoded heap fields (recursive) ─────────────────────────────────────
-
-// Diagnostic guard (opt-in via AIML_SER_FRE_GUARD=1): the recursive free walks a decoded value
-// model by its descriptor. If the model's state is corrupt (a garbage container size or a near-null
-// handle pointer — the endphase-crash signature: SIGSEGV @0x28, list len=1105581576), the walk
-// dereferences wild memory and crashes. When enabled, this validates each container size / handle
-// pointer before use, logs the offending node (idx/kind/offset + value) so the corrupt field is
-// named, and SKIPS that free (the server keeps running) instead of segfaulting. Off by default → no
-// behaviour change. See memory endphase-crash-nested-free.
-static bool ser_fre_guard() {
-    static int on = -1;
-    if (on < 0) { const char* e = getenv("AIML_SER_FRE_GUARD"); on = (e && *e && *e != '0') ? 1 : 0; }
-    return on;
-}
-static inline bool ser_size_bad(long sz)  { return sz < 0 || sz > (1L << 24); }        // >16M elems = impossible
-static inline bool ser_ptr_bad(const void* p) { return p != nullptr && (uintptr_t)p < 0x1000; } // near-null garbage
 
 static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
     if (idx < 0 || idx >= nn) return;
