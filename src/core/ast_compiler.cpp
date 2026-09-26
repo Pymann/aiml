@@ -5316,9 +5316,11 @@ void Compiler::visitFunction(FunctionDecl* func) {
     auto _saved_decorators   = std::move(ctx.currentFunctionDecorators);
     auto _saved_return_type  = std::move(ctx.currentFunctionReturnType);
     bool _saved_owns_return  = ctx.currentFunctionOwnsReturn;
+    auto _saved_static_off   = std::move(ctx.currentFunctionStaticOff);
     ctx.currentFunctionDecorators = func->decorators;
     ctx.currentFunctionReturnType = func->returnType;
     ctx.currentFunctionOwnsReturn = func->ownsReturn;   // spec/61 §3.2 (producer)
+    ctx.currentFunctionStaticOff  = func->staticOff;    // per-def static-check opt-outs (diagnostics)
 
     ctx.validateIdentifier(func->name, "function", func->sourceNode);
 
@@ -5734,6 +5736,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
     ctx.currentFunctionDecorators = std::move(_saved_decorators);
     ctx.currentFunctionReturnType = std::move(_saved_return_type);
     ctx.currentFunctionOwnsReturn = _saved_owns_return;
+    ctx.currentFunctionStaticOff  = std::move(_saved_static_off);
 }
 Symbol* Compiler::resolveVariable(const std::string& name) {
     if (ctx.currentScope) {
