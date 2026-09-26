@@ -586,6 +586,10 @@ namespace AIML {
     // Decorator list of the function currently being compiled (spec/55).
     // Set at visitFunction entry, restored at exit.  Empty vector = plain fn.
     std::vector<std::string> currentFunctionDecorators;
+    // Per-def `static_off: [...]` opt-outs of the function currently being compiled — for
+    // codegen-time diagnostics (e.g. "fresh_string_return"). Set at visitFunction entry, restored
+    // at exit. (The parser-pass static checks read FunctionDecl::staticOff directly.)
+    std::vector<std::string> currentFunctionStaticOff;
     // Return type name of the current function (e.g. "string", "i32") — the
     // return-wrap logic needs it to know whether e.g. `vocab` applies.
     std::string              currentFunctionReturnType;
