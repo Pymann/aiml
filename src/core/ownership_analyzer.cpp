@@ -158,6 +158,13 @@ struct Analyzer {
                 // since it resolves this decl's type first; the codegen side null-guards regardless).
                 if (ctx.interfaces.count(boxed) > 0)
                     return true;
+                // spec/61 §6.2 (round8 §4): a POD box — a plain class with NO heap fields — still
+                // OWNS its outer `new` allocation and gets a SHELL-ONLY kind-4 drop. Classify it as
+                // fresh-owned so that drop is not suppressed. classgroup/cascade borrows excluded.
+                // MUST stay in lockstep with the box-drop registration in visitDeclStmt.
+                if (bi != ctx.classes.end() && bi->second.type
+                    && !ctx.classGroupContainers.count(boxed) && !ctx.cascadeClasses.count(boxed))
+                    return true;
             }
         }
         return false;
