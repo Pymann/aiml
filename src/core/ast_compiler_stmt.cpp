@@ -3341,14 +3341,24 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     // Suppress a deliberate case with `static_off: ["fresh_string_return"]`.
     if (retFreshOwned && ctx.currentFunctionReturnType == "string" && !ctx.currentFunctionOwnsReturn
         && std::find(ctx.currentFunctionStaticOff.begin(), ctx.currentFunctionStaticOff.end(),
-                     "fresh_string_return") == ctx.currentFunctionStaticOff.end())
+                     "fresh_string_return") == ctx.currentFunctionStaticOff.end()) {
+        // Show the source name with a dot: method names are stored as `Class_method`
+        // (ast_compiler.cpp: `cls->name + "_" + method`), so split on the KNOWN class name
+        // (unambiguous — class names may themselves contain '_'). Free functions stay as-is.
+        std::string dispName = ctx.currentFunctionName;
+        if (!ctx.currentClassName.empty()) {
+            const std::string pfx = ctx.currentClassName + "_";
+            if (dispName.rfind(pfx, 0) == 0)
+                dispName = ctx.currentClassName + "." + dispName.substr(pfx.size());
+        }
         LOG_WARNING(ctx.fmtLoc() + "fresh string return without `lifetime: producer`: '" +
-            ctx.currentFunctionName + "' creates a new string and returns it. Without `producer` the "
+            dispName + "' creates a new string and returns it. Without `producer` the "
             "caller assumes the string belongs to someone else and keeps its own copy, so the new "
             "string is never freed and leaks on every call (spec/61 §4/§8). Declare the return "
             "`{ type: string, lifetime: producer }` so the caller takes ownership. If the string is "
             "deliberately borrowed (returned from somewhere else, not newly created), suppress this "
             "with static_off [\"fresh_string_return\"].");
+    }
     // spec/61 §6.2 (T1): `return <owned value-model LOCAL>.<string field>` hands back a string that
     // ALIASES the local's heap. The generic owner-exemption in emitReturnCleanup (below) would skip
     // the WHOLE local's drop to protect that returned string → leaking its SIBLING heap fields on
