@@ -3407,11 +3407,24 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
             }
         }
     }
+    // spec/61 §4/§8 (producer materialization): a `lifetime: producer` STRING function that returns a
+    // BORROWED value — a string param, or a string field of a borrowed base (retBaseOwned == false),
+    // and not already fresh (retFreshOwned) nor the owned-model-field incref case
+    // (retStrFieldOfOwnedModel) — must MATERIALIZE the producer's freshness guarantee: dup the
+    // returned string so the caller adopts an INDEPENDENT owned buffer. Without it the result shares
+    // the borrowed buffer and the caller's adopt-then-drop double-frees / reads freed memory (the
+    // `return: eff` / `return: cnt` UAF: assemble_ability, pluralize — leak_probes round8 §1/§2).
+    // Only under producer (the caller ADOPTS the result); a non-producer string return stays a borrow
+    // the caller increfs. This honors an EXPLICIT annotation — NOT a general return auto-classifier.
+    bool retProducerBorrowedString =
+        ctx.currentFunctionOwnsReturn && ctx.currentFunctionReturnType == "string"
+        && !retFreshOwned && !retStrFieldOfOwnedModel && !retBaseOwned
+        && dynamic_cast<VariableExpr*>(retStmt->value.get()) != nullptr;
     // AIML v2 (P4): returning a refcount model is alias-safe to clean up — the returned object is
     // exempted by retModelAddr (a move), and every other local's kind-7 decref is order-independent.
     bool safeToCleanup = (retTy && retTy->isVoidTy()) || retScalar || retBaseOwned
                          || (retModelAddr != nullptr) || (retContainerSlot != nullptr)
-                         || retFreshOwned || retStrFieldOfOwnedModel;
+                         || retFreshOwned || retStrFieldOfOwnedModel || retProducerBorrowedString;
     // spec/61 §6.2 (T1): the returned value only aliases the owner's heap when the return TYPE is a
     // pointer/struct (`return x.field` handing out x's sub-heap). For a SCALAR/void return the value
     // is a copy that cannot alias — e.g. `return str_local.len` yields an i32 — so the owner must NOT
@@ -3516,6 +3529,19 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         IRValue* val = visitExpression(retStmt->value.get());
         // spec/61: a returned string temp is moved to the caller → not a statement temp.
         if (val) consumeStringTemp(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)));
+        // spec/61 §4/§8 (producer materialization): dup a BORROWED string returned by a `producer`
+        // function so the caller adopts an INDEPENDENT owned buffer (see retProducerBorrowedString).
+        // Runs BEFORE emitReturnCleanup so the fresh dup cannot alias any dropped local; the borrowed
+        // source (a param) stays owned by the caller. aiml_str_dup is null/immortal-safe.
+        if (retProducerBorrowedString && val) {
+            llvm::Value* rs = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+            if (rs && rs->getType()->isPointerTy()) {
+                auto* i8pD = llvm::PointerType::get(ctx.context, 0);
+                llvm::Value* dup = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_str_dup", i8pD, {i8pD}), { rs }, "producer_ret_dup");
+                val = ctx.ir_gen->wrap(dup);
+            }
+        }
         // spec/61 §5.7: returning a container FIELD/member (`return obj.field`, `return xref.field`)
         // or an at-element is a SHARE — the source still OWNS it → incref the returned handle, else
         // the caller's binding and the source both free the rc-1 handle (double-free; df7). A returned
