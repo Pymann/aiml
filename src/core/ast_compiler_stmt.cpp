@@ -2017,6 +2017,15 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                             initRaw,
                             ctx.getSizeConst(sz)
                         });
+                        // sys.deserialize returns a fresh malloc'd carrier (__aiml_deser_T); the memcpy
+                        // moved its bytes (inner heap pointers included) into the inline value-model slot,
+                        // which now owns them and frees them at its scope-drop. Free the abandoned carrier
+                        // shell here, else it leaks sizeof(T) per call (spec/61 §3/§6.1).
+                        if (auto* dc = llvm::dyn_cast<llvm::CallInst>(initRaw))
+                            if (auto* cf = dc->getCalledFunction())
+                                if (cf->getName().startswith("__aiml_deser_"))
+                                    ctx.builder.CreateCall(
+                                        ctx.getFunction("free", ctx.builder.getVoidTy(), {ptrTy}), {initRaw});
                     }
                     ctx.kvGetCopy = false;  // reset; only applies to this decl
                 } else {
@@ -2651,6 +2660,12 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                     rawVal,
                     ctx.getSizeConst(structSize)
                 });
+                // Free the abandoned sys.deserialize carrier shell (see visitDeclStmt, spec/61 §3/§6.1).
+                if (auto* dc = llvm::dyn_cast<llvm::CallInst>(rawVal))
+                    if (auto* cf = dc->getCalledFunction())
+                        if (cf->getName().startswith("__aiml_deser_"))
+                            ctx.builder.CreateCall(
+                                ctx.getFunction("free", ctx.builder.getVoidTy(), {ptrTy}), {rawVal});
                 return;
             }
         }
