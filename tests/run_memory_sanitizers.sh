@@ -159,7 +159,7 @@ probe "list<Model> scope-drop (elemKind 2): per-element heap + buffer freed, no 
     "$AIML_BIN" -r tests/_mem_sanitize/list_model_drop.aiml
 probe "consumed on interface method (match): compiles + runs, no double-free" "cifc" \
     "$AIML_BIN" -r tests/_mem_sanitize/consumed_iface_ok.aiml
-probe "borrow-escape warning: warns but compiles (non-breaking), memory-safe" "besc" \
+probe "borrow-escape via ref<T> weak back-edge: compiles + memory-safe (owning-member escape is now an error)" "besc" \
     "$AIML_BIN" -r tests/_mem_sanitize/borrow_escape_warn.aiml
 probe "get_copy_at: correctness + corrupt→-1 + refill + final-drop" "gca" \
     "$AIML_BIN" -r tests/test_kv_get_copy_at.aiml

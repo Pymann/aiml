@@ -4,13 +4,13 @@
 - class:
     name: Holder
     members:
-      - [kept, ptr<Node>]
+      - [kept, ref<Node>]   # spec/61 §6.2: weak back-edge — storing a borrow here is sanctioned
     methods:
       - def:
           name: hold
           args: [[node, ptr<Node>]]
           body:
-            - set: [<.kept, node]   # borrow-escape → WARNING, still compiles
+            - set: [<.kept, node]   # ref<T> member → weak store, no borrow-escape (does not own/free)
 - def:
     name: main
     return: i32
@@ -18,5 +18,5 @@
       - decl: [hld, ptr<Holder>, { new: Holder }]
       - decl: [node2, ptr<Node>, { new: Node }]
       - call: [hld.hold, node2]
-      - print: ["PASS borrow_escape_warn (compiled with warning)"]
+      - print: ["PASS borrow_escape_warn (ref<Node> weak back-edge — memory-safe)"]
       - return: 0

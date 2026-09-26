@@ -1480,6 +1480,23 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     sd.ownershipId = declOid;
                     sd.debugName = decl->varName; sd.debugType = decl->typeName;
                     ctx.cleanupStack.back().push_back(sd);
+                } else if (bi != ctx.classes.end() && bi->second.type
+                           && !ctx.classGroupContainers.count(boxed)
+                           && !ctx.cascadeClasses.count(boxed)) {
+                    // spec/61 §6.2 (round8 §4): a POD box — a plain class with NO heap fields
+                    // (serNodesVar == null) — still OWNS its outer heap allocation. Register a
+                    // SHELL-ONLY kind-4 drop (serNodes null → emitScopeDrop skips the field
+                    // deep-free, just frees the box). Without this the `new` allocation leaked
+                    // (pod_box: 4 B/instance). Safe now that borrow-escape into an owning ptr
+                    // member is a hard error (no aliased second owner). classgroup/cascade excluded.
+                    CompilerContext::ScopeDrop sd;
+                    sd.addr = unwrappedAlloca;
+                    sd.kind = 4;
+                    sd.serNodes = nullptr;
+                    sd.serNodesCount = 0;
+                    sd.ownershipId = declOid;
+                    sd.debugName = decl->varName; sd.debugType = decl->typeName;
+                    ctx.cleanupStack.back().push_back(sd);
                 }
             }
         }
@@ -2149,14 +2166,18 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     std::string baseName = (sepPos != std::string::npos) ? targetStr.substr(0, sepPos) : targetStr;
     std::string propName = (sepPos != std::string::npos) ? targetStr.substr(sepPos + 1) : "";
 
-    // spec/61 §7.1 borrow-escape (WARNING — non-breaking; becomes an error under Migration A):
-    // storing a borrowed ptr/ref PARAMETER into one of THIS object's members lets the pointee
-    // (owned by the caller) be reached after the call returns, when it may already be gone.
-    // Copy the pointee, or take ownership via a { lifetime: consumed } parameter instead.
+    // spec/61 §7.1 borrow-escape (ERROR — Migration A): storing a borrowed ptr/ref PARAMETER into
+    // one of THIS object's OWNING members lets the pointee (owned by the caller) be reached after the
+    // call returns, when it may already be gone — spec/61 §5.1/§6.2: "a borrow must not … store it".
+    // Under the scope-default `new`-box auto-release this is a genuine double-free/UAF hazard, so it
+    // is rejected. Fixes: declare the member ref<T> (weak back-edge, §6.2), copy the pointee, or take
+    // ownership with a { lifetime: consumed } parameter. A `consumed` param is a MOVE-IN (the caller
+    // gives up ownership), NOT a borrow → exempt it.
     if (!isDash && baseName == "this" && !propName.empty() && setStmt->value) {
         if (auto* ve = dynamic_cast<VariableExpr*>(setStmt->value.get())) {
             auto vit = ctx.symbol_table.find(ve->name);
             if (vit != ctx.symbol_table.end() && vit->second.is_param
+                && vit->second.lifetime != "consumed"
                 && (vit->second.typeName.rfind("ptr<", 0) == 0
                     || vit->second.typeName.rfind("ref<", 0) == 0)) {
                 // spec/61 §5.2/§6.2: a `ref<T>` MEMBER is a declared WEAK back-reference — it does not
@@ -2174,12 +2195,14 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                             targetIsWeakRef = true;
                     }
                 }
-                if (!targetIsWeakRef)
-                    LOG_WARNING(ctx.fmtLoc() + "borrow-escape: storing borrowed parameter '" + ve->name +
+                if (!targetIsWeakRef) {
+                    LOG_ERROR(ctx.fmtLoc() + "borrow-escape: storing borrowed parameter '" + ve->name +
                         "' (" + vit->second.typeName + ") into OWNING member '<." + propName + "'. Its "
                         "pointee is owned by the caller and may not outlive this object (spec/61 §6.2). "
                         "Declare the member ref<T> (weak back-edge), copy it, or take ownership with a "
                         "{ lifetime: consumed } parameter.");
+                    return;
+                }
             }
         }
     }
@@ -2892,98 +2915,29 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 // source handle (resolveProperty loads a container field/local's handle).
                 if (ctx.memV3 && ctx.isMemV3ContainerHandle(finalTypeName)) {
                     auto* i8p = llvm::PointerType::get(ctx.context, 0);
-                    llvm::Type* i32Ty = ctx.builder.getInt32Ty();
-                    llvm::Type* i64Ty = ctx.builder.getInt64Ty();
-                    // targetGep is the LOADED handle (receiver form); re-resolve to the SLOT so we
-                    // can store the shared handle into the field.
+                    // Resolve the storage slot, not the loaded receiver handle.
                     std::string slotTy;
-                    IRValue* slotIR = resolvePropertyWritePtr(&tmpBaseSym, propName, slotTy, /*wantContainerSlot=*/true);
+                    IRValue* slotIR = resolvePropertyWritePtr(&tmpBaseSym, propName, slotTy, true);
                     llvm::Value* dstSlot = slotIR ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(slotIR)) : nullptr;
-                    llvm::Value* newH    = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
-                    // spec/61 §5/§7.0: install semantics must match the ownership plan (probe traces
-                    // list=MOVE vs map=DeepCopy for the SAME `set:[obj.field, freshLocal]`).
-                    //   • memberDeepCopy → the field gets an INDEPENDENT deep clone; the source keeps
-                    //     its owning ref + scope-drop.  A plain SHARE (incref) here aliased the source
-                    //     into the field → both freed it → DOUBLE-FREE (test_typed_card_persist
-                    //     `set:[orig.mana_cost, cost]`, rc139).
-                    //   • a consumed plain-local (Move: consumeLocalDrop erased its drop above) →
-                    //     store the handle, NO incref (the field took over its single ref; an incref
-                    //     leaves rc one too high → leak).
-                    //   • a borrow source (member/at, drop NOT erased) → SHARE (incref).
-                    bool srcIsPlainLocal = false;
-                    if (auto* sv = dynamic_cast<VariableExpr*>(setStmt->value.get()))
-                        srcIsPlainLocal = sv->name.find('.') == std::string::npos
-                                       && sv->name.find('<') == std::string::npos;
-                    bool srcMovedLocal = ctx.lifetimeDropsEnabled && srcIsPlainLocal
-                        && !memberDeepCopy && !srcIsManagedString && !targetIsRefBorrow;
-                    if (!dstSlot) { /* fall through to generic path */ } else
-                    if (memberDeepCopy && srcIsPlainLocal) {
-                        // Independent deep clone of the source container into the field. Release the
-                        // field's previous handle first, then the clone walker writes dstSlot.
+                    llvm::Value* newH = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                    // Some legacy builtins (ai.embedding_lookup) still return inline structs.
+                    // Keep their existing lowering; named container sources above are handles.
+                    if (dstSlot && newH && newH->getType()->isPointerTy()) {
+                        std::string kind = finalTypeName.rfind("map<", 0) == 0 ? "map"
+                            : ((finalTypeName == "buffer" || finalTypeName.rfind("buffer<", 0) == 0) ? "buffer" : "list");
+                        // Secure the new reference before dropping the old one, including self-aliases.
+                        ctx.builder.CreateCall(ctx.getFunction("aiml_" + kind + "_handle_incref",
+                            ctx.builder.getVoidTy(), {i8p}), {newH});
                         if (ctx.lifetimeDropsEnabled) {
-                            std::string kind2 = finalTypeName.rfind("map<",0)==0 ? "map"
-                                : ((finalTypeName=="buffer"||finalTypeName.rfind("buffer<",0)==0) ? "buffer" : "list");
-                            llvm::Value* oldH = ctx.builder.CreateLoad(i8p, dstSlot, "setf_old_dc");
-                            llvm::Value* nullp = llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p));
-                            if (kind2 == "buffer") {
-                                ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_release", ctx.builder.getVoidTy(), {i8p}), { oldH });
-                            } else if (kind2 == "list") {
-                                std::string en = finalTypeName.rfind("cascade<",0)==0 ? "i32" : finalTypeName.substr(5, finalTypeName.size()-6);
-                                int ek = (en=="string")?1 : (ctx.isRefcountModel(en)?3:0);
-                                ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_release", ctx.builder.getVoidTy(), {i8p, i32Ty, i64Ty, i8p, i32Ty}),
-                                    { oldH, ctx.builder.getInt32(ek), ctx.builder.getInt64(8), nullp, ctx.builder.getInt32(0) });
-                            } else {
-                                std::string inr = finalTypeName.substr(4, finalTypeName.size()-5);
-                                size_t col = inr.find(':');
-                                std::string kn = col==std::string::npos?inr:inr.substr(0,col);
-                                std::string vn = col==std::string::npos?std::string("i32"):inr.substr(col+1);
-                                int kk = (kn=="string")?1:0; int vk = (vn=="string")?1:(ctx.isRefcountModel(vn)?3:0);
-                                ctx.builder.CreateCall(ctx.getFunction("aiml_map_handle_release", ctx.builder.getVoidTy(), {i8p, i32Ty, i64Ty, i32Ty, i64Ty, i8p, i32Ty}),
-                                    { oldH, ctx.builder.getInt32(kk), ctx.builder.getInt64(8), ctx.builder.getInt32(vk), ctx.builder.getInt64(8), nullp, ctx.builder.getInt32(0) });
+                            int nc = 0;
+                            llvm::GlobalVariable* descriptor = elemHandleSerNodes(finalTypeName, nc);
+                            if (!descriptor) {
+                                LOG_ERROR(ctx.fmtLoc() + "Missing container release descriptor: " + finalTypeName);
+                                return;
                             }
-                            ctx.builder.CreateStore(nullp, dstSlot);
-                        }
-                        Symbol* srcSym = resolveVariable(static_cast<VariableExpr*>(setStmt->value.get())->name);
-                        llvm::Value* srcSlot = srcSym ? (srcSym->ir_alloca_inst
-                            ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(srcSym->ir_alloca_inst)) : srcSym->alloca_inst) : nullptr;
-                        if (srcSlot) { emitContainerCloneDeep(dstSlot, srcSlot, finalTypeName); return; }
-                        // no source slot → fall through to share below
-                    }
-                    if (newH && newH->getType()->isPointerTy()) {
-                        std::string kind = finalTypeName.rfind("map<",0)==0 ? "map"
-                            : ((finalTypeName=="buffer"||finalTypeName.rfind("buffer<",0)==0) ? "buffer" : "list");
-                        // incref-new BEFORE decref-old (self-assign safe) — SHARE sources only; a
-                        // moved plain-local already transferred its single ref (no incref).
-                        if (!srcMovedLocal) {
-                            llvm::Function* inc = ctx.getFunction("aiml_"+kind+"_handle_incref", ctx.builder.getVoidTy(), {i8p});
-                            ctx.builder.CreateCall(inc, { newH });
-                        }
-                        if (ctx.lifetimeDropsEnabled) {
-                            llvm::Value* oldH = ctx.builder.CreateLoad(i8p, dstSlot, "setf_old_conh");
-                            llvm::Value* nullp = llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p));
-                            if (kind == "buffer") {
-                                llvm::Function* rel = ctx.getFunction("aiml_buffer_handle_release", ctx.builder.getVoidTy(), {i8p});
-                                ctx.builder.CreateCall(rel, { oldH });
-                            } else if (kind == "list") {
-                                std::string en = finalTypeName.rfind("cascade<",0)==0 ? "i32"
-                                    : finalTypeName.substr(5, finalTypeName.size()-6);
-                                int ek = (en=="string")?1 : (ctx.isRefcountModel(en)?3:0);
-                                llvm::Function* rel = ctx.getFunction("aiml_list_handle_release", ctx.builder.getVoidTy(),
-                                    {i8p, i32Ty, i64Ty, i8p, i32Ty});
-                                ctx.builder.CreateCall(rel, { oldH, ctx.builder.getInt32(ek),
-                                    ctx.builder.getInt64(8), nullp, ctx.builder.getInt32(0) });
-                            } else { // map
-                                llvm::Function* rel = ctx.getFunction("aiml_map_handle_release", ctx.builder.getVoidTy(),
-                                    {i8p, i32Ty, i64Ty, i32Ty, i64Ty, i8p, i32Ty});
-                                std::string inr = finalTypeName.substr(4, finalTypeName.size()-5);
-                                size_t col = inr.find(':');
-                                std::string kn = col==std::string::npos?inr:inr.substr(0,col);
-                                std::string vn = col==std::string::npos?std::string("i32"):inr.substr(col+1);
-                                int kk = (kn=="string")?1:0;
-                                int vk = (vn=="string")?1:(ctx.isRefcountModel(vn)?3:0);
-                                ctx.builder.CreateCall(rel, { oldH, ctx.builder.getInt32(kk), ctx.builder.getInt64(8),
-                                    ctx.builder.getInt32(vk), ctx.builder.getInt64(8), nullp, ctx.builder.getInt32(0) });
-                            }
+                            ctx.builder.CreateCall(ctx.getFunction("aiml_ser_free_decoded",
+                                ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()}),
+                                {dstSlot, descriptor, ctx.builder.getInt32(nc)});
                         }
                         ctx.builder.CreateStore(newH, dstSlot);
                         return;
@@ -3998,11 +3952,16 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         }
     } else if (it.kind == 4) {
         // owned new-box: the alloca holds a heap pointer (calloc'd in visitNewExpr).
-        // Load it, deep-free the pointee's heap fields, then free the shell.
+        // Load it, deep-free the pointee's heap fields (if any), then free the shell.
         llvm::Value* boxptr = ctx.builder.CreateLoad(i8p, it.addr, "drop_box");
-        llvm::Function* fn = ctx.getFunction("aiml_ser_free_decoded",
-            ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
-        ctx.builder.CreateCall(fn, { boxptr, it.serNodes, ctx.builder.getInt32(it.serNodesCount) });
+        // spec/61 §6.2: a POD box (T has NO heap fields → serNodes == null) needs only the SHELL
+        // free — skip the recursive field deep-free (round8 §4: `new` of a heap-field-less class
+        // leaked its outer allocation because no drop was registered at all).
+        if (it.serNodes) {
+            llvm::Function* fn = ctx.getFunction("aiml_ser_free_decoded",
+                ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
+            ctx.builder.CreateCall(fn, { boxptr, it.serNodes, ctx.builder.getInt32(it.serNodesCount) });
+        }
         llvm::Function* fr = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
         ctx.builder.CreateCall(fr, { boxptr });
     } else if (it.kind == 5) {
