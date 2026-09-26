@@ -21,6 +21,10 @@ command -v valgrind >/dev/null 2>&1 || { echo "FAIL: valgrind not installed (man
 
 # GREEN: must be 0 definite + 0 indirect lost, native exit 0, no valgrind error.
 GREEN=(
+  tests/lifetime/61_member_handle_share.aiml
+  tests/lifetime/62_member_share_recursive_release.aiml
+  tests/lifetime/63_deserialize_carrier_no_leak.aiml
+  tests/lifetime/64_local_new_box_no_leak.aiml
   tests/_inline_model_red/p2_retain_coverage.aiml
   tests/_inline_model_red/p3_copyretain_survives_source_drop.aiml
   tests/_inline_model_red/52_model_strfield_share_no_leak.aiml

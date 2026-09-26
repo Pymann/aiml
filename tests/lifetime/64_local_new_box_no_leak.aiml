@@ -1,0 +1,32 @@
+# static-check: off
+# TIER: T0
+# spec/61 §6.1 (step 3) / §9.1: a fresh, non-persistent, non-moved `new` box (ptr<T>) is released
+# at scope exit — the shell block ALWAYS (step 3), plus a recursive field-free when T owns heap
+# fields (step 2). Covers a POD box (no heap fields → shell-only kind-4 drop) and a heap-field box
+# (string field → recursive field-free + shell), both new'd per call and used locally (not escaping),
+# mirroring the ability-text renderer boxes (new EffRender/CostRender/TrigRender). Confirms d5458aa.
+- model: { name: PodBox,  fields: [[count, i32]] }
+- model: { name: HeapBox, fields: [[label, string]] }
+
+- def:
+    name: tick
+    body:
+      - decl: [pod, ptr<PodBox>, { new: PodBox }]
+      - set: [pod.count, 5]
+      - if: { condition: { neq: [pod.count, 5] }, then: [{ call: [sys.exit, 11] }] }
+      - decl: [hep, ptr<HeapBox>, { new: HeapBox }]
+      - set: [hep.label, "abc:body"]
+      - if: { condition: { neq: [hep.label.len, 8] }, then: [{ call: [sys.exit, 12] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 200] }
+          body:
+            - call: [tick]
+            - set: [idx, { +: [idx, 1] }]
+      - print: ["PASS local new box no leak"]
+      - return: 0

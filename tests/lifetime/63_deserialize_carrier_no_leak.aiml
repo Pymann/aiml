@@ -1,0 +1,36 @@
+# static-check: off
+# TIER: T0
+# spec/61 §3/§6.1: sys.deserialize of a value model decodes into an inline stack value. The
+# compiler must free the internal malloc'd carrier shell (__aiml_deser_T) after copying the struct
+# into the slot — else sizeof(T) leaks per call. Value model has string heap fields (serNodes
+# non-null). NOTE: only the decl-with-init form is a leak-clean gate; the decl-then-set form still
+# leaks the decoded inner strings (drop suppressed on plain-local rebind) — a separate deferred
+# finding entangled with the nested-shared-container recursive-free (test_list_list_inner_values).
+- model:
+    name: DeserBox
+    fields:
+      - [name, string]
+      - [tag, string]
+      - [num, i32]
+
+- def:
+    name: tick
+    args: [[json, string]]
+    body:
+      - decl: [box_a, DeserBox, { call: [sys.deserialize, json, "DeserBox"] }]
+      - if: { condition: { neq: [box_a.name, "alpha"] }, then: [{ call: [sys.exit, 11] }] }
+      - if: { condition: { neq: [box_a.tag, "t1"] }, then: [{ call: [sys.exit, 12] }] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [json, string, '{"__type":"DeserBox","name":"alpha","tag":"t1","num":3}']
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 200] }
+          body:
+            - call: [tick, json]
+            - set: [idx, { +: [idx, 1] }]
+      - print: ["PASS deserialize carrier no leak"]
+      - return: 0
