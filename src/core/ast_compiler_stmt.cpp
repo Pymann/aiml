@@ -1410,7 +1410,11 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 if (ctx.ownsReturnMatches(shortName, decl->typeName)) modelOwnedInit = true;
             }
         }
-        if (modelOwnedInit && decl->lifetime != "persistent"
+        // spec/61 §5.4/§7 CopyRetain: a value-model materialised from a sharing VIEW (is_view_alias)
+        // retains its shareable field handles below → it OWNS its own refs and must drop them at scope
+        // exit (else release-old on a member-store frees a still-shared handle: mana_choice double-free,
+        // endphase-crash). Lockstep with freshOwned (ownership_analyzer) + the retain below.
+        if ((modelOwnedInit || sym.is_view_alias) && decl->lifetime != "persistent"
             && decl->typeName.rfind("ptr<", 0) != 0
             && decl->typeName.rfind("ref<", 0) != 0
             && !ctx.cleanupStack.empty()) {
@@ -2026,6 +2030,19 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                                 if (cf->getName().startswith("__aiml_deser_"))
                                     ctx.builder.CreateCall(
                                         ctx.getFunction("free", ctx.builder.getVoidTy(), {ptrTy}), {initRaw});
+                        // spec/61 §5.4/§7 CopyRetain (endphase-crash fix): value-model materialised from
+                        // a sharing VIEW (is_view_alias) via a pointer/memcpy — retain its shareable field
+                        // handles so this local holds its OWN refs; its scope-drop (registered above) then
+                        // balances a later member-store's release-old (mana_choice double-free). Not a
+                        // deserialize carrier (freed above; mutually exclusive with a view init).
+                        Symbol* _vsym_mc = resolveVariable(decl->varName);
+                        if (_vsym_mc && _vsym_mc->is_view_alias && ciIt != ctx.classes.end()
+                            && ciIt->second.hasHeapFields && ciIt->second.serNodesVar) {
+                            llvm::Function* rf = ctx.getFunction("aiml_ser_retain", ctx.builder.getVoidTy(),
+                                {ptrTy, ptrTy, ctx.builder.getInt32Ty()});
+                            ctx.builder.CreateCall(rf, { unwrappedAlloca, ciIt->second.serNodesVar,
+                                ctx.builder.getInt32(ciIt->second.serNodesCount) });
+                        }
                     }
                     ctx.kvGetCopy = false;  // reset; only applies to this decl
                 } else {
@@ -2078,6 +2095,24 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                         }
                     }
                     ctx.ir_gen->createStore(initVal, alloca);
+                    // spec/61 §5.4/§7 CopyRetain (endphase-crash fix): value-model materialised from a
+                    // sharing VIEW (is_view_alias) via a LOADED struct value (at on an inline value-model
+                    // list element returns the struct, not a pointer — the memcpy branch is skipped).
+                    // Retain its shareable field handles so this local holds its OWN refs; its scope-drop
+                    // (registered above) balances a later member-store's release-old (mana_choice
+                    // double-free). Lockstep with the memcpy-path retain + freshOwned.
+                    Symbol* _vsym_st = resolveVariable(decl->varName);
+                    if (_vsym_st && _vsym_st->is_view_alias) {
+                        auto vmi = ctx.classes.find(decl->typeName);
+                        if (vmi != ctx.classes.end() && vmi->second.hasHeapFields && vmi->second.serNodesVar) {
+                            llvm::Type* ptrTy2 = llvm::PointerType::get(ctx.context, 0);
+                            llvm::Value* aRaw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca));
+                            llvm::Function* rf = ctx.getFunction("aiml_ser_retain", ctx.builder.getVoidTy(),
+                                {ptrTy2, ptrTy2, ctx.builder.getInt32Ty()});
+                            ctx.builder.CreateCall(rf, { aRaw, vmi->second.serNodesVar,
+                                ctx.builder.getInt32(vmi->second.serNodesCount) });
+                        }
+                    }
                 }
             }
         }

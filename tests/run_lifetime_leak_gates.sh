@@ -25,6 +25,7 @@ GREEN=(
   tests/lifetime/62_member_share_recursive_release.aiml
   tests/lifetime/63_deserialize_carrier_no_leak.aiml
   tests/lifetime/64_local_new_box_no_leak.aiml
+  tests/lifetime/65_value_model_at_field_replace.aiml
   tests/_inline_model_red/p2_retain_coverage.aiml
   tests/_inline_model_red/p3_copyretain_survives_source_drop.aiml
   tests/_inline_model_red/52_model_strfield_share_no_leak.aiml
@@ -38,10 +39,6 @@ RED=(
   tests/_inline_model_red/49_value_survives_remove.aiml
   tests/_inline_model_red/50_share_semantics.aiml
   tests/_inline_model_red/p2_array_field_leak_RED.aiml
-  # endphase-crash: value-model from `at` whose map FIELD is replaced (set c.choice=empty) then
-  # written back → double-free (mana_choice, regression d5458aa). RED until the spec/61 §5.4/§7
-  # CopyRetain compiler fix (see leak_probes/endphase_crash_20260926/README.md). Move to GREEN then.
-  tests/lifetime/65_value_model_at_field_replace.aiml
 )
 
 run_probe() {   # $1 = file ; prints "def/ind" ; returns valgrind rc
