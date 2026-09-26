@@ -99,6 +99,13 @@ struct Analyzer {
                 // 14/15/34). MUST stay in lockstep with modelOwnedInit in ast_compiler_stmt.cpp.
                 if (c->functionName == "sys.clone" || c->functionName == "sys.copy") return true;
                 if (endsWith(c->functionName, ".get_copy")) return true;
+                // spec/61 §4 (round5 Finding B / live-match server leak): `sys.deserialize(json, "T")`
+                // decodes a FRESH, INDEPENDENT owned value model (ser_decode allocates its string/
+                // container heap). Without an owned classification no scope-drop fires → the decoded
+                // heap leaks 71 B/call (probe class2_deser). get_copy (also a decode) proves the kind-0
+                // model-drop releases the decoded heap cleanly → classify sys.deserialize the same.
+                // MUST stay in lockstep with modelOwnedInit in ast_compiler_stmt.cpp.
+                if (c->functionName == "sys.deserialize") return true;
                 // spec/61 return-ownership for VALUE models: a call to an `owns_return: true`
                 // function returns a freshly-built INDEPENDENT model (e.g. DeckService.list →
                 // DeckListResp in every RPC handler's `resp`). The caller owns it → drop at scope
