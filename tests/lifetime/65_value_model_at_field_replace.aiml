@@ -1,0 +1,43 @@
+# static-check: off
+# Reduced endphase-crash repro: value-model copy from a list element (at) whose map FIELD is then
+# REPLACED (set c.choice = empty → release-old on the still-shared handle), then written back (idx).
+# Mirrors reset_round_flags `set plr.mana_choice = empty_choice`. Must be RED (double-free) pre-fix.
+- model: { name: Cell, fields: [[choice, map<string:i32>], [flag, i32]] }
+- model: { name: Box,  fields: [[cells, list<Cell>]] }
+
+- def:
+    name: reset_cells
+    args: [[box, ref<Box>]]
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, box.cells.len] }
+          body:
+            - decl: [cell, Cell, { at: [box.cells, idx] }]
+            - set: [cell.flag, 0]
+            - decl: [empty, map<string:i32>]
+            - set: [cell.choice, empty]
+            - idx: [box.cells, idx, cell]
+            - set: [idx, { +: [idx, 1] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [box, Box]
+      - decl: [seed, Cell]
+      - call: [seed.choice.put, "1", 5]
+      - set: [seed.flag, 1]
+      - call: [box.cells.push, seed]
+      - decl: [itr, i32, 0]
+      - while:
+          condition: { lt: [itr, 50] }
+          body:
+            - call: [reset_cells, {'&': [box]}]
+            # re-populate so the next reset has a shared map to replace again
+            - decl: [cz0, Cell, { at: [box.cells, 0] }]
+            - call: [cz0.choice.put, "1", 5]
+            - idx: [box.cells, 0, cz0]
+            - set: [itr, { +: [itr, 1] }]
+      - print: ["DONE rf"]
+      - return: 0
