@@ -13,7 +13,13 @@
 /* ── Helpers ────────────────────────────────────────────────────────────── */
 
 static char* to_hex(const uint8_t* bytes, size_t len) {
-    char* s = (char*)malloc(len * 2 + 1);
+    // spec/61 §4: hash builtins (sha512/sha3/blake2/md5/ripemd160/keccak256/hmac/hex_buf) feed the
+    // `hash.*` surface whose results are managed strings — a caller may store one in a model field,
+    // where the owner's teardown (fre → aiml_str_decref) reads the rc header at (s-8). A raw malloc
+    // buffer has no header → that read is 8 bytes before the allocation (Invalid read → heap
+    // corruption / crash), exactly like the sha256 hex() bug (sha256.cpp). Allocate with the rc
+    // header, matching to_hex_rc / aiml_sha256_hex.
+    char* s = aiml_str_alloc(len * 2);
     if (!s) return nullptr;
     static const char hex[] = "0123456789abcdef";
     for (size_t i = 0; i < len; i++) {
