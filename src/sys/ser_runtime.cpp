@@ -614,6 +614,21 @@ static void dec(const uint8_t* blob, int& pos, int end,
 
 // ── Free decoded heap fields (recursive) ─────────────────────────────────────
 
+// Diagnostic guard (opt-in via AIML_SER_FRE_GUARD=1): the recursive free walks a decoded value
+// model by its descriptor. If the model's state is corrupt (a garbage container size or a near-null
+// handle pointer — the endphase-crash signature: SIGSEGV @0x28, list len=1105581576), the walk
+// dereferences wild memory and crashes. When enabled, this validates each container size / handle
+// pointer before use, logs the offending node (idx/kind/offset + value) so the corrupt field is
+// named, and SKIPS that free (the server keeps running) instead of segfaulting. Off by default → no
+// behaviour change. See memory endphase-crash-nested-free.
+static bool ser_fre_guard() {
+    static int on = -1;
+    if (on < 0) { const char* e = getenv("AIML_SER_FRE_GUARD"); on = (e && *e && *e != '0') ? 1 : 0; }
+    return on;
+}
+static inline bool ser_size_bad(long sz)  { return sz < 0 || sz > (1L << 24); }        // >16M elems = impossible
+static inline bool ser_ptr_bad(const void* p) { return p != nullptr && (uintptr_t)p < 0x1000; } // near-null garbage
+
 static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
     if (idx < 0 || idx >= nn) return;
     const AimlTypeNode& n = ns[idx];
@@ -646,6 +661,11 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
     case AIML_TD_LIST: {
         // data points directly to the inline SerList struct
         SerList* list = (SerList*)data;
+        if (ser_fre_guard() && (ser_size_bad(list->size) || ser_ptr_bad(list->data))) {
+            fprintf(stderr, "[SER_FRE_GUARD] corrupt LIST node idx=%d offset=%d size=%ld data=%p elem_size=%d — skipping free\n",
+                    idx, n.offset, (long)list->size, (void*)list->data, n.elem_size);
+            break;
+        }
         if (list->data && list->size > 0) {
             int esz = n.elem_size;
             uint8_t* base = (uint8_t*)list->data;
@@ -665,6 +685,11 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         // data points directly to the inline SerMap struct
         // Dense: free heap allocations for entries 0..size-1, then free arrays.
         SerMap* map = (SerMap*)data;
+        if (ser_fre_guard() && (ser_size_bad(map->size) || ser_ptr_bad(map->keys) || ser_ptr_bad(map->values))) {
+            fprintf(stderr, "[SER_FRE_GUARD] corrupt MAP node idx=%d offset=%d size=%ld keys=%p values=%p — skipping free\n",
+                    idx, n.offset, (long)map->size, (void*)map->keys, (void*)map->values);
+            break;
+        }
         if (map->size > 0 && map->keys && map->values) {
             int ksz = key_stride(n.param1, ns, nn);
             int vsz = n.elem_size;
@@ -684,6 +709,11 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
     case AIML_TD_BUFFER: {
         // data points directly to the inline SerBuffer struct
         SerBuffer* b = (SerBuffer*)data;
+        if (ser_fre_guard() && (ser_size_bad(b->size) || ser_ptr_bad(b->data))) {
+            fprintf(stderr, "[SER_FRE_GUARD] corrupt BUFFER node idx=%d offset=%d size=%ld data=%p — skipping free\n",
+                    idx, n.offset, (long)b->size, (void*)b->data);
+            break;
+        }
         if (b->data && b->size > 0) {
             int esz = n.elem_size > 0 ? n.elem_size : 1;
             uint8_t* base = (uint8_t*)b->data;
@@ -702,6 +732,11 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         // itself.  data is the pointer slot.
         void* obj = nullptr;
         memcpy(&obj, data, sizeof(void*));
+        if (ser_fre_guard() && ser_ptr_bad(obj)) {
+            fprintf(stderr, "[SER_FRE_GUARD] corrupt PTR_STRUCT handle node idx=%d offset=%d obj=%p — skipping free\n",
+                    idx, n.offset, obj);
+            break;
+        }
         if (obj) {
             // Cycle guard: skip a box already freed on this teardown (a back-ref that closes a
             // recursive-ptr cycle) — otherwise the follow re-enters and double-frees / overflows.
@@ -722,6 +757,11 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         // nulled so a second free is a null no-op.
         void* obj = nullptr;
         memcpy(&obj, data, sizeof(void*));
+        if (ser_fre_guard() && ser_ptr_bad(obj)) {
+            fprintf(stderr, "[SER_FRE_GUARD] corrupt MODEL handle node idx=%d offset=%d obj=%p — skipping free\n",
+                    idx, n.offset, obj);
+            break;
+        }
         if (obj && aiml_model_dec_hits_zero(obj)) {
             fre(n.param1, ns, nn, (uint8_t*)obj);
             aiml_model_free_shell(obj);
@@ -738,6 +778,11 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         // header; at rc 0 free the container's arrays/elements (fre at the inner node) and block.
         void* obj = nullptr;
         memcpy(&obj, data, sizeof(void*));
+        if (ser_fre_guard() && ser_ptr_bad(obj)) {
+            fprintf(stderr, "[SER_FRE_GUARD] corrupt CONTAINER_PTR handle node idx=%d offset=%d kind=%d obj=%p — skipping free\n",
+                    idx, n.offset, (int)n.kind, obj);
+            break;
+        }
         if (obj) {
             int32_t* rc = (int32_t*)((char*)obj - 8);
             aiml_trace_fre_log("FRE_PTR", obj, *rc - 1);
