@@ -1401,6 +1401,10 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 // value → the local owns it and must free it at scope exit (else the cloned heap —
                 // strings, containers, cloned tensors, shared sub-objects — leaks; probes 15/34).
                 if (fn == "sys.clone" || fn == "sys.copy") modelOwnedInit = true;
+                // spec/61 §4 (round5 Finding B): `sys.deserialize(json, "T")` decodes a fresh owned
+                // value model whose ser_decode heap must be released at scope exit (else 71 B/call
+                // leak, probe class2_deser). Lockstep with freshOwned in ownership_analyzer.cpp.
+                if (fn == "sys.deserialize") modelOwnedInit = true;
                 size_t dp = fn.rfind('.');
                 std::string shortName = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
                 if (ctx.ownsReturnMatches(shortName, decl->typeName)) modelOwnedInit = true;
