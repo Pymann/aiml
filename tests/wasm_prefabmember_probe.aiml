@@ -1,0 +1,38 @@
+- model:
+    name: MockCard
+    fields: [[card_id, string, ""], [power, i32, 0]]
+- class:
+    name: EditorScreen
+    members:
+      - [initialized, i32]
+      - [scene,       prefab_instance]
+      - [is_visible,  i32]
+      - [library,     list<MockCard>]
+      - [lib_page,    i32]
+    methods:
+      - def:
+          name: reload
+          body:
+            - decl: [empty_lib, list<MockCard>]
+            - set: [<.library, empty_lib]
+      - def:
+          name: add_card
+          body:
+            - decl: [card_one, MockCard]
+            - set: [card_one.card_id, "fire"]
+            - call: [<.library.push, card_one]
+      - def: { name: lib_len, return: i32, body: [{ return: <.library.len }] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [scr, ptr<EditorScreen>, { new: EditorScreen }]
+      - call: [scr.reload]
+      - call: [scr.add_card]
+      - call: [scr.add_card]
+      - decl: [lib_count, i32, { call: [scr.lib_len] }]
+      - print: ["library.len = ${lib_count} (want 2)"]
+      - free: scr
+      - if: { condition: { neq: [lib_count, 2] }, then: [{ print: ["FAIL prefab-member list broken"] }, { return: 1 }] }
+      - print: ["PASS prefabmember"]
+      - return: 0

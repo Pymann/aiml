@@ -1,0 +1,38 @@
+# static-check: off
+# TIER: T0
+# spec/61 §5: member assignment shares; repeated/self-alias replacement preserves owners.
+- model: { name: ShareBox, fields: [[items, list<i32>]] }
+- def:
+    name: tick
+    body:
+      - decl: [src, list<i32>]
+      - call: [src.push, 7]
+      - decl: [box, ShareBox]
+      - call: [box.items.push, 99]
+      - set: [box.items, src]
+      - call: [src.push, 8]
+      - if: { condition: { neq: [box.items.len, 2] }, then: [{ call: [sys.exit, 11] }] }
+      - set: [box.items, src]
+      - decl: [alias, list<i32>, box.items]
+      - set: [box.items, alias]
+      - set: [box.items, box.items]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 100] }
+          body:
+            - call: [box.items.push, idx]
+            - set: [idx, { +: [idx, 1] }]
+      - if: { condition: { neq: [src.len, 102] }, then: [{ call: [sys.exit, 12] }] }
+      - if: { condition: { neq: [alias.len, 102] }, then: [{ call: [sys.exit, 13] }] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 1000] }
+          body:
+            - call: [tick]
+            - set: [idx, { +: [idx, 1] }]
+      - print: ["PASS member handle SHARE"]
+      - return: 0

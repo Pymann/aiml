@@ -1,0 +1,34 @@
+- model:
+    name: Card
+    fields: [[name, string, ""], [power, i32, 0]]
+- class:
+    name: Screen
+    members:
+      - [library, list<Card>]
+    methods:
+      - def:
+          name: reload
+          body:
+            - decl: [empty_lib, list<Card>]
+            - set: [<.library, empty_lib]
+      - def:
+          name: fill
+          body:
+            - decl: [card_one, Card]
+            - set: [card_one.name, "fireball"]
+            - call: [<.library.push, card_one]
+      - def: { name: lib_len, return: i32, body: [{ return: <.library.len }] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [screen, ptr<Screen>, { new: Screen }]
+      - call: [screen.reload]
+      - call: [screen.fill]
+      - call: [screen.fill]
+      - decl: [lib_count, i32, { call: [screen.lib_len] }]
+      - print: ["library.len after reload+2 fills = ${lib_count} (want 2)"]
+      - free: screen
+      - if: { condition: { neq: [lib_count, 2] }, then: [{ print: ["FAIL set-member-list broken"] }, { return: 1 }] }
+      - print: ["PASS setmember"]
+      - return: 0

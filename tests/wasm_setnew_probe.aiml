@@ -1,0 +1,40 @@
+- model:
+    name: MockCard
+    fields: [[card_id, string, ""], [power, i32, 0]]
+- class:
+    name: EditorScreen
+    members:
+      - [library, list<MockCard>]
+    methods:
+      - def:
+          name: reload
+          body:
+            - decl: [empty_lib, list<MockCard>]
+            - set: [<.library, empty_lib]
+      - def: { name: add_card, body: [{ decl: [card_one, MockCard] }, { set: [card_one.card_id, "x"] }, { call: [<.library.push, card_one] }] }
+      - def: { name: lib_len, return: i32, body: [{ return: <.library.len }] }
+- class:
+    name: App
+    members:
+      - [editor, ptr<EditorScreen>]
+    methods:
+      - def:
+          name: setup
+          body:
+            - set: [<.editor, { new: EditorScreen }]
+      - def: { name: run_load, return: i32, body: [
+          { call: [<.editor.reload] },
+          { call: [<.editor.add_card] },
+          { call: [<.editor.add_card] },
+          { return: { call: [<.editor.lib_len] } } ] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [app, ptr<App>, { new: App }]
+      - call: [app.setup]
+      - decl: [lib_count, i32, { call: [app.run_load] }]
+      - print: ["library.len = ${lib_count} (want 2)"]
+      - if: { condition: { neq: [lib_count, 2] }, then: [{ print: ["FAIL set-new member init broken"] }, { return: 1 }] }
+      - print: ["PASS setnew"]
+      - return: 0

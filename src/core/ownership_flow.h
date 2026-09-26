@@ -53,6 +53,7 @@ struct FlowState {
 enum class Transfer : std::uint8_t {
     None,          // no ownership effect (scalar / side-effect-only)
     SelfAssign,    // set:[x,x] — no-op
+    Share,         // retain a handle; source remains live and keeps its drop
     DeepCopy,      // independent copy into the target
     Move,          // ownership moved into a longer-lived sink (member/container/return/consumed)
     BindView,      // target binds a shallow view of another owner's heap — must NOT free it
