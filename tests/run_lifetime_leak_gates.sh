@@ -26,6 +26,7 @@ GREEN=(
   tests/lifetime/63_deserialize_carrier_no_leak.aiml
   tests/lifetime/64_local_new_box_no_leak.aiml
   tests/lifetime/65_value_model_at_field_replace.aiml
+  tests/lifetime/66_value_model_field_reassign_no_leak.aiml
   tests/_inline_model_red/p2_retain_coverage.aiml
   tests/_inline_model_red/p3_copyretain_survives_source_drop.aiml
   tests/_inline_model_red/52_model_strfield_share_no_leak.aiml

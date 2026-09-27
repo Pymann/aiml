@@ -1,0 +1,33 @@
+# static-check: off
+# producer value-model (with nested list<Inner{string}>) reassigned into a FIELD per iteration.
+# Mirrors board-screen storing a fresh MockState each poll. Old field value must be freed on reassign.
+- model: { name: Inner,  fields: [[iname, string], [tags, list<string>]] }
+- model: { name: Outer,  fields: [[label, string], [kids, list<Inner>]] }
+- model: { name: Holder, fields: [[cur, Outer]] }
+
+- def:
+    name: make_outer
+    args: [[num, i32]]
+    return: { type: Outer, lifetime: producer }
+    body:
+      - decl: [out, Outer]
+      - set: [out.label, "state_${num}"]
+      - decl: [kid, Inner]
+      - set: [kid.iname, "kid_${num}_longname_padding"]
+      - call: [kid.tags.push, "alpha"]
+      - call: [out.kids.push, kid]
+      - return: out
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [hld, Holder]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 300] }
+          body:
+            - set: [hld.cur, { call: [make_outer, idx] }]
+            - set: [idx, { +: [idx, 1] }]
+      - print: ["DONE vmstore cur=${hld.cur.label}"]
+      - return: 0
