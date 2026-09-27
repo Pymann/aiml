@@ -3181,6 +3181,19 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                                 return;
                             }
                             uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(structTy);
+                            // spec/61 §5.5/§4.4.5: this is the MOVE path (an owned/producer struct value,
+                            // not a borrowed/view/param source — those took deep_copy_replace above). Before
+                            // overwriting the field, RELEASE its previous heap, else a re-assigned value-model
+                            // FIELD leaks its old container/string handles per store (the per-poll render-tree
+                            // leak: `set holder.cur = mock_state_from_match(...)`, fill_hand→MockState). src is
+                            // an INDEPENDENT producer/owned temp (never a view of dst here), so free-before-
+                            // copy is safe; the distinct-IR-value guard skips a trivial self-store.
+                            if (cIt->second.hasHeapFields && cIt->second.serNodesVar && dstPtr != srcPtr) {
+                                llvm::Function* frf = ctx.getFunction("aiml_ser_free_decoded",
+                                    ctx.builder.getVoidTy(), {ptrTy, ptrTy, ctx.builder.getInt32Ty()});
+                                ctx.builder.CreateCall(frf, { dstPtr, cIt->second.serNodesVar,
+                                    ctx.builder.getInt32(cIt->second.serNodesCount) });
+                            }
                             llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy,
                                 {ptrTy, ptrTy, ctx.getSizeType()});
                             ctx.builder.CreateCall(mcf, {dstPtr, srcPtr, ctx.getSizeConst(sz)});
@@ -3271,6 +3284,27 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                     llvm::Function* dc = ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {i8p});
                     ctx.builder.CreateCall(dc, { oldv });
                     return;
+                }
+                // spec/61 §5.5/§4.4.5: a value-model struct-VALUE store into a heap-owning field (a
+                // producer/owned-move source reaches this loaded-struct path — views/params were
+                // deep_copy_replace'd above). RELEASE the field's previous heap before overwriting, else
+                // the old value's container/string handles leak per re-assign (the per-poll render-tree
+                // leak: `set holder.cur = mock_state_from_match(...)`, fill_hand→MockState). NOT for a
+                // view-alias base (extract-mutate-writeback shares the element's heap → would double-free),
+                // mirroring the string guard above. src is an independent producer/move value here.
+                {
+                    llvm::Value* sv2 = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                    auto fci = ctx.classes.find(finalTypeName);
+                    if (ctx.memV3 && ctx.lifetimeDropsEnabled && sv2 && sv2->getType()->isStructTy()
+                        && fci != ctx.classes.end() && fci->second.hasHeapFields && fci->second.serNodesVar
+                        && !(sym && sym->is_view_alias)) {
+                        llvm::Type* p8 = llvm::PointerType::get(ctx.context, 0);
+                        llvm::Value* tg2 = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(targetGep));
+                        llvm::Function* frf = ctx.getFunction("aiml_ser_free_decoded",
+                            ctx.builder.getVoidTy(), {p8, p8, ctx.builder.getInt32Ty()});
+                        ctx.builder.CreateCall(frf, { tg2, fci->second.serNodesVar,
+                            ctx.builder.getInt32(fci->second.serNodesCount) });
+                    }
                 }
                 ctx.ir_gen->createStore(val, targetGep);
                 return;
