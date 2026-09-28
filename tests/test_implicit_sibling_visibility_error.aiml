@@ -1,0 +1,12 @@
+# Negative (spec/21 §3): a file sees only its own transitive import closure.
+# vis_user_lib.aiml uses VisThing without importing vis_type_lib.aiml; that the
+# entry point imports both must NOT make VisThing visible there → compile error.
+- import: "tests/_cross/vis_type_lib.aiml"
+- import: "tests/_cross/vis_user_lib.aiml"
+
+- def:
+    name: main
+    body:
+      - decl: [box, "ptr<VisBox>", { new: VisBox }]
+      - print: ["weight=${call: [vis_weight]} heavy=${call: [box.heavy]}"]
+      - free: [box]

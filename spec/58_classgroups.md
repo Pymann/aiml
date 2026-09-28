@@ -127,6 +127,13 @@ subclass with the same full cross-edge API (§5.1).  This keeps the group body l
 (just `class`/`instance`/`sees`) while each coordinator carries its own methods in its
 own file.  An unknown `group:` or `instance:` is a hard error.
 
+Visibility (`21_namespaces.md` §2.1): the methods are folded and emitted in the unit
+that **defines** the group, so that unit must import every `groupmethods:` file of
+its group (directly or transitively); a block outside its closure is not folded.  The
+`groupmethods:` file itself does **not** import the defining file — that would be an
+import cycle, and its own unit never resolves the `group:` name.  It imports only
+what its method bodies use (models, helpers, the instance base classes).
+
 ## 2. Desugaring — an instance *is* a synthesized subclass
 
 Each entry lowers to a real subclass. `match_svc` above becomes exactly:

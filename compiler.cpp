@@ -849,9 +849,9 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     ctx.ir_gen = AIML::createLLVMGenerator(ctx);
 
     // Register builtins (classes, interfaces, namespace fns) BEFORE the
-    // sibling-import / header-scan phase parses any user code.  Otherwise a
+    // header-scan phase parses any user code.  Otherwise a
     // class header that says `implements: [mirror.RpcHandler]` fires
-    // "unknown interface" during sibling registration — that early visit
+    // "unknown interface" during import registration — that early visit
     // runs registerTypes but never reaches the AST::Compiler::compile()
     // call that normally seeds builtins.
     registerBuiltins(ctx);
@@ -865,8 +865,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     auto headerDone = std::make_shared<std::unordered_set<std::string>>();
 
     // Deferred import compilation: record paths during registerTypes, compile
-    // to .o AFTER all types from all imports are known.  This prevents errors
-    // when file A references types defined in sibling import file B.
+    // to .o AFTER all types from all imports are known.
     auto deferredImports = std::make_shared<std::vector<std::string>>();
 
     // Per-run guard for the *parser* phase (not the .o cache; that uses
@@ -1069,146 +1068,9 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
 
             AIML::AST::Compiler astCompiler(ctx);
 
-            // Sibling import injection (sub-compiler only):
-            // Two-phase: first register types from ALL siblings + self,
-            // then register function signatures + class methods.
-            if (!siblingImports.empty()) {
-                bool prevHeaderOnly = ctx.headerOnlyMode;
-                ctx.headerOnlyMode = true;
-
-                // Collect parsed programs (reused in both phases)
-                struct SibProg { std::string path; std::unique_ptr<AIML::AST::Program> prog; };
-                std::vector<SibProg> sibProgs;
-                for (const auto& sibPath : siblingImports) {
-                    AIML::AST::Builder sb;
-                    std::ifstream sf(sibPath);
-                    if (!sf.is_open()) continue;
-                    try {
-                        logAimlFileSizeDiagnostic(sibPath, seenFileSizeDiagnostics.get());
-                        logAimlDeclCountDiagnostic(sibPath);
-                        YAML::Parser sp(sf);
-                        sp.HandleNextDocument(sb);
-                        auto p = sb.takeProgram();
-                        if (p) sibProgs.push_back({sibPath, std::move(p)});
-                    } catch (...) {}
-                }
-
-                // Phase A: register type definitions (class/model/enum) from
-                // self + all siblings.  No function forward-declarations yet.
-                // Uses fixed-point iteration: repeat until no new types are
-                // registered in a full pass.  This handles cross-file model
-                // inheritance (e.g. "model HandCardView inherits Card" where
-                // Card lives in a sibling file).
-                {
-                    bool progress = true;
-                    while (progress) {
-                        size_t before = ctx.classes.size();
-                        // Sibling types
-                        for (auto& sp : sibProgs) {
-                            AIML::AST::Compiler sc(ctx);
-                            for (const auto& decl : sp.prog->declarations) {
-                                if (dynamic_cast<AIML::AST::ClassDecl*>(decl.get()) ||
-                                    dynamic_cast<AIML::AST::ModelDecl*>(decl.get()) ||
-                                    dynamic_cast<AIML::AST::EnumDecl*>(decl.get()) ||
-                                    dynamic_cast<AIML::AST::InterfaceDecl*>(decl.get()) ||
-                                    dynamic_cast<AIML::AST::GroupMethodsDecl*>(decl.get()) ||
-                                    dynamic_cast<AIML::AST::ImportDecl*>(decl.get()))
-                                    sc.registerTypeDecl(decl.get());
-                            }
-                        }
-                        // Self types
-                        for (const auto& decl : programAST->declarations) {
-                            if (dynamic_cast<AIML::AST::ClassDecl*>(decl.get()) ||
-                                dynamic_cast<AIML::AST::ModelDecl*>(decl.get()) ||
-                                dynamic_cast<AIML::AST::EnumDecl*>(decl.get()) ||
-                                dynamic_cast<AIML::AST::InterfaceDecl*>(decl.get()) ||
-                                dynamic_cast<AIML::AST::ImportDecl*>(decl.get()))
-                                astCompiler.registerTypeDecl(decl.get());
-                        }
-                        progress = (ctx.classes.size() > before);
-                    }
-                }
-
-                // Phase B: full registerTypes on self (now knows all types
-                // from siblings, so function forward-declarations resolve).
-                astCompiler.registerTypes(programAST.get());
-
-                // Phase C: register function signatures + class methods from siblings.
-                // Also register top-level DeclStmts as ExternalLinkage globals so
-                // cross-file references (e.g. g_selected_deckset_id declared in
-                // deckset_picker.aiml but used in board_screen.aiml) resolve correctly.
-                //
-                // Pre-scan: collect this file's own decl names so we skip same-name
-                // globals from siblings (own definition takes precedence, avoids
-                // linker conflicts for private variables with identical names).
-                std::unordered_set<std::string> ownDeclVars;
-                for (const auto& decl : programAST->declarations) {
-                    if (auto d = dynamic_cast<AIML::AST::DeclStmt*>(decl.get()))
-                        ownDeclVars.insert(d->varName);
-                }
-
-                for (auto& sp : sibProgs) {
-                    AIML::AST::Compiler sc(ctx);
-                    for (const auto& decl_node : sp.prog->declarations) {
-                        if (auto func = dynamic_cast<AIML::AST::FunctionDecl*>(decl_node.get())) {
-                            logAimlFunctionSizeDiagnostic(sp.path, func);
-                            logAimlFunctionArgCountDiagnostic(sp.path, func);
-                            sc.visitFunction(func);
-                        } else if (auto cls = dynamic_cast<AIML::AST::ClassDecl*>(decl_node.get()))
-                            sc.visitTopLevel(cls);
-                        else if (auto mod = dynamic_cast<AIML::AST::ModelDecl*>(decl_node.get()))
-                            sc.visitTopLevel(mod);
-                        else if (auto d = dynamic_cast<AIML::AST::DeclStmt*>(decl_node.get())) {
-                            // Skip: current file owns this name (its Pass-1 def takes precedence).
-                            if (ownDeclVars.count(d->varName)) continue;
-                            // Skip: already registered from an earlier sibling.
-                            if (ctx.symbol_table.count(d->varName)) continue;
-                            AIML::IRType* ty = ctx.ir_gen->resolveType(d->typeName);
-                            if (!ty) continue;
-                            llvm::Type* llvmTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ty));
-                            // Match the name used in the sibling's Pass-1 definition.
-                            std::string symName;
-                            if (d->is_extern) {
-                                symName = "__lib_" + d->varName;
-                            } else {
-                                std::string sibSuffix;
-                                for (char c : sp.path) sibSuffix += (std::isalnum(c) ? c : '_');
-                                symName = "__lib_" + sibSuffix + "_" + d->varName;
-                            }
-                            llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(symName);
-                            if (!gv) {
-                                gv = new llvm::GlobalVariable(
-                                    ctx.module, llvmTy, false,
-                                    llvm::GlobalValue::ExternalLinkage,
-                                    nullptr,
-                                    symName);
-                            }
-                            Symbol sym;
-                            sym.ir_alloca_inst = ctx.ir_gen->wrap(static_cast<llvm::Value*>(gv));
-                            sym.ir_type        = ctx.ir_gen->getPointerTy();
-                            sym.ir_element_type = ty;
-                            sym.typeName       = d->typeName;
-                            sym.is_const       = d->is_const;
-                            sym.is_volatile    = d->is_volatile;
-                            ctx.symbol_table[d->varName] = sym;
-                        }
-                    }
-                }
-
-                // spec/58 §11: keep sibling ASTs alive for the rest of this
-                // compile — ctx.pendingGroupMethods holds raw pointers into them
-                // (from Phase A) that mergeGroupMethods folds into this file's
-                // classgroup below in astCompiler.compile().
-                for (auto& sp : sibProgs)
-                    ctx.astKeepAlive.push_back(std::shared_ptr<void>(
-                        sp.prog.release(),
-                        [](void* p){ delete static_cast<AIML::AST::Program*>(p); }));
-
-                ctx.headerOnlyMode = prevHeaderOnly;
-            } else {
-                // Normal (non-sub-compiler) path: just register types
-                astCompiler.registerTypes(programAST.get());
-            }
+            // A unit sees exactly its own transitive import closure (spec/21 §2.1):
+            // imported types/signatures arrive through its own import directives.
+            astCompiler.registerTypes(programAST.get());
 
             for (const auto& decl : programAST->declarations) {
                 if (auto func = dynamic_cast<AIML::AST::FunctionDecl*>(decl.get())) {
@@ -1225,7 +1087,6 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
             // Pass 1.5: Compile deferred imports to .o files.
             // Now all types from ALL imports are registered in ctx, so
             // sub-compilers can resolve cross-import type references.
-            this->siblingImports = *deferredImports;
             for (const auto& importPath : *deferredImports) {
                 this->resolveImport(importPath);
             }
@@ -3197,7 +3058,6 @@ void AIMLCompiler::collectTransitiveImports(const std::string& path,
 }
 
 std::string AIMLCompiler::computeImportCacheKey(const std::string& sourcePath,
-                                                const std::vector<std::string>& siblings,
                                                 bool libMode) const {
     std::stringstream keyText;
     keyText << "source=" << normalizePath(sourcePath) << "\n";
@@ -3210,15 +3070,6 @@ std::string AIMLCompiler::computeImportCacheKey(const std::string& sourcePath,
     keyText << "transitive_count=" << transitive.size() << "\n";
     for (const auto& tp : transitive) {
         keyText << "  " << tp << "|" << fileHash(tp) << "\n";
-    }
-
-    // Sibling imports (sorted, normalized)
-    std::set<std::string> sibSet;
-    for (const auto& s : siblings) sibSet.insert(normalizePath(s));
-    sibSet.erase(normalizePath(sourcePath));
-    keyText << "sibling_count=" << sibSet.size() << "\n";
-    for (const auto& sp : sibSet) {
-        keyText << "  " << sp << "|" << fileHash(sp) << "\n";
     }
 
     keyText << "library_mode=" << (libMode ? 1 : 0) << "\n";
@@ -3238,7 +3089,6 @@ static std::string keyedObjectPath(const std::string& cacheDir,
 
 // Hit iff the keyed object exists: the file name carries the key (spec/37 §3).
 bool AIMLCompiler::checkCache(const std::string& sourcePath,
-                              const std::vector<std::string>& siblings,
                               bool libMode,
                               std::string& outCacheKey,
                               std::string& outObjPath) {
@@ -3246,7 +3096,7 @@ bool AIMLCompiler::checkCache(const std::string& sourcePath,
         LOG_ERROR(sourcePath + ": Import source not found");
         return false;
     }
-    outCacheKey = computeImportCacheKey(sourcePath, siblings, libMode);
+    outCacheKey = computeImportCacheKey(sourcePath, libMode);
     if (outCacheKey.empty()) return false;
     outObjPath = keyedObjectPath(cacheRevDir(compilerPath), sourcePath, outCacheKey);
     return fs::exists(outObjPath);
@@ -3263,7 +3113,7 @@ void AIMLCompiler::resolveImport(const std::string& path) {
     std::string objPath;
 
     if (!noCache) {
-        if (checkCache(path, this->siblingImports, /*libMode=*/true, cacheKey, objPath)) {
+        if (checkCache(path, /*libMode=*/true, cacheKey, objPath)) {
             LOG_INFO("Cache HIT for import: " + path + " [" + cacheKey.substr(0,12) + "]");
             // Per-instance compiledKeys guard: avoid duplicate add to linkedObjects
             if (compiledKeys->insert(cacheKey).second) {
@@ -3302,9 +3152,8 @@ void AIMLCompiler::resolveImport(const std::string& path) {
         return;
     }
 
-    // Create isolated compiler instance for the imported file.
-    // Pass sibling imports so the sub-compiler can resolve types from other
-    // import files (e.g. GameState defined in models.aiml, used in effects.aiml).
+    // Create isolated compiler instance for the imported file; it sees only its
+    // own import closure (spec/21 §2.1).
     AIMLCompiler subCompiler;
     subCompiler.compilerPath = this->compilerPath;
     subCompiler.libraryMode = true;
@@ -3321,12 +3170,6 @@ void AIMLCompiler::resolveImport(const std::string& path) {
     // the same store.  Without this the sub-compiler's scan("") would clear
     // the singleton and every literal lookup would fail.
     subCompiler.assetRootsStr = this->assetRootsStr;
-    // Give the sub-compiler all known sibling imports (excluding itself).
-    for (const auto& sib : this->siblingImports) {
-        if (sib != path)
-            subCompiler.siblingImports.push_back(sib);
-    }
-
     // Emit into a temp file and publish by rename only if the import (and its own
     // imports) compiled cleanly: a failed compile must never become a cache hit, and
     // concurrent runs only ever see complete objects (spec/37 §3).

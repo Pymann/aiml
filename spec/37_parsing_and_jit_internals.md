@@ -59,13 +59,13 @@ is unchanged. The key is `sha256` (hex) over a normalized text block of:
 1. `source_path`        (canonicalized)
 2. `source_hash`        (sha256 of file content)
 3. `transitive_hash`    (sorted `path|sha256` of all transitive imports)
-4. `sibling_hash`       (sorted `path|sha256` of all `siblingImports`)
-5. `library_mode`       (header-only / library vs entrypoint)
-6. `compiler_rev`       (size + mtime of the `aiml` binary itself)
+4. `library_mode`       (header-only / library vs entrypoint)
+5. `compiler_rev`       (size + mtime of the `aiml` binary itself)
 
-A path-only key produces false hits whenever a sibling or transitive import changes —
-sub-compilers see those types injected into their context, so the produced IR depends
-on them.
+A file sees exactly its transitive import closure (`21_namespaces.md` §2.1), so its
+object depends on nothing else: the other files of the program that pulls it in are
+not part of the key, and the same import yields the same object in every program.
+A path-only key would produce false hits whenever a transitive import changes.
 
 All hashing is done in-process (LLVM `SHA256`); computing a key spawns no processes
 and writes nothing to stdout.
@@ -79,14 +79,14 @@ and writes nothing to stdout.
 ```
 
 `<sanitized_path>` is the import path with every non-alphanumeric character replaced
-by `_`. Different semantic contexts of the same source get different keys and
-therefore different object files; any number of them coexist.
+by `_`. Every change to the source or its closure yields a new key and therefore a
+new object file; old ones stay until the revision sweep.
 
 ### Hit Rule
 
 An import is a cache **hit** iff its keyed object file exists. The file name carries
 the key, so there is no manifest and no other lookup state: runs with different
-sibling sets never evict each other's objects.
+programs never evict each other's objects.
 
 ### Publishing
 
@@ -114,9 +114,9 @@ keeps its directory.
 ### Per-Run Compilation Guard
 
 Each `AIMLCompiler` instance owns a `compiledKeys` set (shared with its sub-compilers
-via `shared_ptr`). It is keyed on the full `cache_key`, not the path, so diamond
-imports under different sibling sets do not cross-pollinate. There is no
-process-wide static guard.
+via `shared_ptr`). It is keyed on the full `cache_key`, so a diamond import
+(A→B, A→C, B→D, C→D) compiles D once per run. There is no process-wide static
+guard.
 
 ### Cycle Protection
 

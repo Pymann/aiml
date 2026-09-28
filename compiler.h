@@ -71,17 +71,15 @@ public:
     
     // Dependency & Caching Methods
     void resolveImport(const std::string& path);
-    // Compute the full semantic cache key for an import: source hash +
-    // transitive imports + sibling imports + library mode + compiler binary id.
+    // Compute the cache key for an import (spec/37 §3): source hash +
+    // transitive imports + library mode + compiler binary id.
     // outObjPath is set to the keyed object path (always; whether hit or miss).
     bool checkCache(const std::string& sourcePath,
-                    const std::vector<std::string>& siblings,
                     bool libMode,
                     std::string& outCacheKey,
                     std::string& outObjPath);
     // Helpers
     std::string computeImportCacheKey(const std::string& sourcePath,
-                                      const std::vector<std::string>& siblings,
                                       bool libMode) const;
     void collectTransitiveImports(const std::string& path,
                                   std::set<std::string>& visited) const;
@@ -130,9 +128,6 @@ public:
     bool noCache = false;
     // Output directory for import .o files (used when noCache=true).
     std::string outputDir;
-    // Sibling import files for cross-import type resolution.
-    // Set by the parent compiler so sub-compilers can header-only parse them.
-    std::vector<std::string> siblingImports;
     // Per-instance guard: each compile root has its own "already-compiled-this-run"
     // set, keyed by full cache_key (not just path). Prevents stale cross-run reuse
     // and avoids the prior process-wide static that ignored semantic context.

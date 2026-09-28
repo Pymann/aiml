@@ -109,8 +109,7 @@ Implementation: `countFileLines` in `compiler.cpp`.
 
 The file rule applies not only to the entry file, but also to:
 
-- directly imported AIML files
-- sibling files loaded in the compile context
+- every AIML file in the entry file's transitive import closure
 
 This makes large imported modules visible, not just the
 top-level entry point file.
@@ -697,8 +696,8 @@ Maximum is 3; split this file into smaller modules.
 
 ### 14.4 Scope
 
-The rule fires for the entry file AND every directly imported / sibling
-file in the same way the file-size rule does.  Each path is reported
+The rule fires for the entry file AND every file in its transitive import
+closure in the same way the file-size rule does.  Each path is reported
 at most once per compile.
 
 ### 14.5 No `static_off` Escape
@@ -717,8 +716,8 @@ models + 1 class in one file and must exit with code `1`.
 
 ## 15. `main` Composition for Multi-File Projects (always-on)
 
-When a compile spans **`3` or more** AIML project files (entry +
-imports + siblings), the entry file MUST:
+When a compile spans **`3` or more** AIML project files (the entry
+file plus its transitive import closure), the entry file MUST:
 
 1. declare a top-level `- def: name: main` function, AND
 2. that `main` function must instantiate (via `{ new: ClassName }`)

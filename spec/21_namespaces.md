@@ -25,6 +25,22 @@ any such namespace declaration raises a CompilationError:
 - **Class members** are **private** by default (see `03_modifiers.md`).
 - Duplicate FQNs across imported files raise `NamespaceCollisionError` at compile time.
 
+### 2.1 Visibility Scope — the import closure
+
+A file sees its own declarations plus the public declarations of every file in its
+**transitive import closure** (the files it imports, the files those import, …) —
+and nothing else.  Being part of the same program is not enough: if `main.aiml`
+imports both `a.aiml` and `b.aiml`, then `a.aiml` sees `b.aiml` only if it imports it
+(directly or transitively).  Using a symbol from outside the closure is a compile
+error in the using file.
+
+Consequently a file compiles to the same object in every program that includes it;
+its compiled form depends only on its own closure (see the cache key,
+`37_parsing_and_jit_internals.md` §3).
+
+Class groups follow the same rule; for `groupmethods:` files see
+`58_classgroups.md` §1.1.
+
 ## 3. Importing Modules
 The `import` command loads another AIML file.
 - Each file is compiled **at most once** — the `__aiml_cache` tracks already-compiled files.
