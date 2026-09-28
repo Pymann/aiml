@@ -1,0 +1,30 @@
+# static-check: off
+# spec/61 §8: `lifetime: producer` is part of the function's SIGNATURE — callers must see it
+# regardless of definition order. Here the producer is defined AFTER its caller (9rooms
+# EffRender.eff_text → eff_finalize), which previously treated the fresh result as borrowed.
+- def:
+    name: caller_text
+    args: [[num, i32]]
+    return: { type: string, lifetime: producer }
+    body:
+      - decl: [txt, string, { call: [late_text, num] }]
+      - return: txt
+
+- def:
+    name: late_text
+    args: [[num, i32]]
+    return: { type: string, lifetime: producer }
+    body:
+      - return: "value=${num}"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 200] }
+          body:
+            - decl: [out, string, { call: [caller_text, idx] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: 0

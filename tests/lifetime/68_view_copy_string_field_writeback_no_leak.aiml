@@ -1,0 +1,35 @@
+# static-check: off
+# spec/61 §5.4/§5.5: `decl e = at(list,i)` materialises an owning copy (fields retained);
+# `set e.name = v` must release e's OLD reference before storing (secure-new-then-release-old),
+# then the write-back `idx` replaces the slot. 9rooms ConnRegistry.touch leaked one string/call.
+- model: { name: Entry, fields: [[peer_id, i32], [player_id, string]] }
+
+- def:
+    name: touch_all
+    args: [[entries, list<Entry>], [player_id, string]]
+    body:
+      - decl: [tci, i32, 0]
+      - while:
+          condition: { lt: [tci, entries.len] }
+          body:
+            - decl: [ent, Entry, { at: [entries, tci] }]
+            - set: [ent.player_id, player_id]
+            - idx: [entries, tci, ent]
+            - set: [tci, { +: [tci, 1] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [entries, list<Entry>]
+      - decl: [first, Entry]
+      - set: [first.peer_id, 1]
+      - set: [first.player_id, "player_${1}@example.com"]
+      - call: [entries.push, first]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 200] }
+          body:
+            - call: [touch_all, entries, "player_${idx}@example.com"]
+            - set: [idx, { +: [idx, 1] }]
+      - return: 0

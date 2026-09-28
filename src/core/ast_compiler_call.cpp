@@ -1584,6 +1584,16 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                                          if (d.addr == a && d.kind == 0) { moveOwned = true; break; }
                              }
                          }
+                     } else if (auto* ce = dynamic_cast<CallExpr*>(call->args[0].get())) {
+                         // spec/61 §5.4: a FRESH owned result (producer / clone / copy / deserialize)
+                         // has no other owner — a genuine move source. Deep-copying it orphaned the
+                         // temp's heap (tests/lifetime/67, 9rooms players.push(player_to_mock(...))).
+                         const std::string& fn = ce->functionName;
+                         size_t dp = fn.rfind('.');
+                         std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                         if (fn == "sys.clone" || fn == "sys.copy" || fn == "sys.deserialize"
+                             || ctx.ownsReturnMatches(sn, listElemName))
+                             moveOwned = true;
                      }
                      if (!moveOwned) {
                          // Source address for the deep-copy: pushVal is either already an element

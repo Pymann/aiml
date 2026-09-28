@@ -4518,6 +4518,14 @@ void Compiler::registerTypeDecl(Node* node) {
         LOG_DEBUG("AST Registered Prefab (static): " + prefab->name +
                   " (" + std::to_string(kids.size()) + " children)");
     } else if (auto func = dynamic_cast<FunctionDecl*>(node)) {
+        // spec/61 §8: `lifetime: producer` is part of the signature — register it with the
+        // forward decl, before any body is emitted, so callers earlier in the file see it
+        // (tests/lifetime/69). visitFunction re-inserts idempotently.
+        if (func->ownsReturn) {
+            ctx.ownsReturnFns.insert(func->name);
+            ctx.ownsReturnFnTypes[func->name].insert(func->returnType);
+            if (func->returnType == "string") ctx.stringProducerFns.insert(func->name);
+        }
         // Forward-declare function signature so forward references resolve.
         std::string mangledName = ctx.qualify(func->name);
         if (ctx.module.getFunction(mangledName)) return; // already declared
