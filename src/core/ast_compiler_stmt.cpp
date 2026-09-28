@@ -2173,6 +2173,13 @@ static bool modelsInheritanceRelated(CompilerContext& ctx, const std::string& a,
 }
 
 void Compiler::visitSetStmt(SetStmt* setStmt) {
+    // spec/61 §5.5/§7: the ownership plan decides whether a local rebind releases the old value.
+    const char* rebindCopyFn = "aiml_ser_deep_copy";
+    if (ctx.ownershipPlan) {
+        auto pit = ctx.ownershipPlan->statements.find(setStmt);
+        if (pit != ctx.ownershipPlan->statements.end() && pit->second.rebindReleaseOld)
+            rebindCopyFn = "aiml_ser_deep_copy_replace";
+    }
     // Reset any leaked kv-dispatch flags from prior statements before evaluating
     // the rhs. visitCall on a `kv.get_copy(...)` inside the rhs will re-set
     // ctx.kvGetCopy = true, which the struct-assignment branch below honors
@@ -2341,14 +2348,11 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         LOG_ERROR(ctx.fmtLoc() + "Cannot assign to const variable " + targetStr);
                         return;
                     }
-                    // NOTE (§4.4.5, deferred): deep_copy overwrites the target without freeing
-                    // its previous heap → a reassigned target leaks the old heap (under-drop,
-                    // safe). A freshly-decl'd local (the §4.2 case) has none. Free-old-target
-                    // + a fallible-copy contract (§4.4.6) come with the assignment-dataflow step.
+                    // §4.4.5: an owned target releases its old heap (rebindCopyFn = _replace).
                     llvm::Value* dst = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
                     llvm::Value* src = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(ssym->ir_alloca_inst));
                     llvm::Type* p = llvm::PointerType::get(ctx.context, 0);
-                    llvm::Function* dc = ctx.getFunction("aiml_ser_deep_copy",
+                    llvm::Function* dc = ctx.getFunction(rebindCopyFn,
                         ctx.builder.getVoidTy(), {p, p, p, ctx.builder.getInt32Ty()});
                     ctx.builder.CreateCall(dc, { dst, src, tci->second.serNodesVar,
                                                  ctx.builder.getInt32(tci->second.serNodesCount) });
@@ -2387,7 +2391,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         srcAddr = tmp;
                     }
                     llvm::Value* dst = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
-                    llvm::Function* dc = ctx.getFunction("aiml_ser_deep_copy",
+                    llvm::Function* dc = ctx.getFunction(rebindCopyFn,
                         ctx.builder.getVoidTy(), {p, p, p, ctx.builder.getInt32Ty()});
                     ctx.builder.CreateCall(dc, { dst, srcAddr, tci->second.serNodesVar,
                                                  ctx.builder.getInt32(tci->second.serNodesCount) });
@@ -2560,7 +2564,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         srcAddr = tmp;
                     }
                     llvm::Value* dst = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
-                    llvm::Function* dc = ctx.getFunction("aiml_ser_deep_copy",
+                    llvm::Function* dc = ctx.getFunction(rebindCopyFn,
                         ctx.builder.getVoidTy(), {p, p, p, ctx.builder.getInt32Ty()});
                     ctx.builder.CreateCall(dc, { dst, srcAddr, tciView->second.serNodesVar,
                                                  ctx.builder.getInt32(tciView->second.serNodesCount) });

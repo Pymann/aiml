@@ -1,0 +1,24 @@
+# static-check: off
+# spec/61 §5.4: list<Model>.remove(i) drops the removed element (release members).
+- model: {name: Item, fields: [[text, string]]}
+- def:
+    name: make_item
+    return: {type: Item, lifetime: producer}
+    body:
+      - decl: [item, Item]
+      - set: [item.text, "value=${42}"]
+      - return: item
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [items, list<Item>]
+            - decl: [src, Item, {call: [make_item]}]
+            - call: [items.push, src]
+            - call: [items.remove, 0]
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0
