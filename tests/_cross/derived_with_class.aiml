@@ -1,4 +1,6 @@
 # static-check: off
+- import: "tests/_cross/base_model.aiml"   # Base
+
 - model:
     name: Derived
     inherits: Base

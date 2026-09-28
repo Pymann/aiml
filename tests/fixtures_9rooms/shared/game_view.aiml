@@ -3,6 +3,7 @@
 # Shared between server (host) and client (replica).
 # Server writes fields → mirror auto-syncs → client reads fields.
 
+- import: "tests/fixtures_9rooms/models/models.aiml"   # Card (HandCardView inherits)
 - import: "tests/fixtures_9rooms/shared/event_view.aiml"
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -224,6 +224,10 @@ for TEST in $TEST_FILES; do
         # Negative test: assigning a string literal to an enum-typed slot must
         # be a compile error (enum is i32 — a string would coerce to garbage).
         EXPECTED_CODE=1
+    elif [[ "$TEST" == *"test_implicit_sibling_visibility_error.aiml" ]]; then
+        # Negative test (spec/21 §3): a symbol from a file outside the using
+        # file's own import closure is not visible, even if the entry imports it.
+        EXPECTED_CODE=1
     elif [[ "$TEST" == *"test_ptr_bind_get_borrow_error.aiml" ]]; then
         # Negative test (spec/61 §5.4): binding a container/store .get/.at read
         # (a ref<T> borrow) to ptr<T> (a unique owner) must be a compile error —
@@ -237,6 +241,12 @@ for TEST in $TEST_FILES; do
           "$TEST" == *"test_ptr_call_push_into_value_list_error.aiml" ||
           "$TEST" == *"test_list_model_nested_get_push_repro.aiml" ]]; then
         if ! tail -n "+$((TEST_LOG_START + 1))" "$OUTPUT_FILE" | grep -q "pointer instead of a value"; then
+            EXIT_CODE=99
+        fi
+    fi
+
+    if [[ "$TEST" == *"test_implicit_sibling_visibility_error.aiml" ]]; then
+        if ! tail -n "+$((TEST_LOG_START + 1))" "$OUTPUT_FILE" | grep -q "VisThing"; then
             EXIT_CODE=99
         fi
     fi

@@ -1,0 +1,15 @@
+- model:
+    name: VisThing
+    fields:
+      - [weight, i32, 7]
+
+- class:
+    name: VisBox
+    models: [VisThing]
+    methods:
+      - def:
+          name: heavy
+          return: i32
+          args: []
+          body:
+            - return: { "*": [<.weight, 2] }

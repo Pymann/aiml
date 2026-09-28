@@ -84,6 +84,16 @@ else
   bad "layout + revision sweep (layout=$layout_ok)"; echo "$objs" | head -5; ls "$AIML_CACHE"
 fi
 
+# 6. The key depends only on the import's own closure: lib_a is shared by both programs.
+fresh
+run root_a "$W/k1"; run root_ab "$W/k2"
+n=$(find "$AIML_CACHE" -type f -name '*lib_a_aiml__*.o' | wc -l)
+if [ "$n" -eq 1 ] && grep -qx 'a=1' "$W/k1.out" && grep -qx 'ab=2' "$W/k2.out"; then
+  ok "one object per source across programs"
+else
+  bad "one object per source across programs (lib_a objects: $n)"
+fi
+
 rm -rf "$W" /tmp/aiml_cache_test.*
 echo "cache tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
