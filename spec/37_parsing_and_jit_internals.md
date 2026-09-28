@@ -54,46 +54,69 @@ build graph themselves.
 ### Cache Key
 
 An import's `.o` is reusable only if **everything the compiler reads** to produce it
-is unchanged. The key is `sha512` over a normalized text block of:
+is unchanged. The key is `sha256` (hex) over a normalized text block of:
 
 1. `source_path`        (canonicalized)
-2. `source_hash`        (sha512 of file content)
-3. `transitive_hash`    (sorted `path|sha512` of all transitive imports)
-4. `sibling_hash`       (sorted `path|sha512` of all `siblingImports`)
+2. `source_hash`        (sha256 of file content)
+3. `transitive_hash`    (sorted `path|sha256` of all transitive imports)
+4. `sibling_hash`       (sorted `path|sha256` of all `siblingImports`)
 5. `library_mode`       (header-only / library vs entrypoint)
 6. `compiler_rev`       (size + mtime of the `aiml` binary itself)
 
-A path-only key (the previous implementation) produces false hits whenever a sibling
-or transitive import changes — sub-compilers see those types injected into their
-context, so the produced IR depends on them.
+A path-only key produces false hits whenever a sibling or transitive import changes —
+sub-compilers see those types injected into their context, so the produced IR depends
+on them.
 
-### Manifest Schema
+All hashing is done in-process (LLVM `SHA256`); computing a key spawns no processes
+and writes nothing to stdout.
 
-`__aiml_cache/compilations.yaml` is a per-source map:
+### Layout
 
-```yaml
-/abs/path/file.aiml:
-  cache_key:    "<sha512>"
-  source_hash:  "<sha512>"
-  object_path:  "__aiml_cache/_abs_path_file_aiml__a1b2c3d4.o"
-  library_mode: 1
+```
+<cache>/                           # $AIML_CACHE, default ./__aiml_cache
+  rev_<compiler_rev>/              # one directory per compiler binary revision
+    <sanitized_path>__<key32>.o    # key32 = first 32 hex chars of the cache key
 ```
 
-The legacy scalar schema (`path: hash`) is silently dropped on load — the cache is
-disposable by design, no migration logic.
+`<sanitized_path>` is the import path with every non-alphanumeric character replaced
+by `_`. Different semantic contexts of the same source get different keys and
+therefore different object files; any number of them coexist.
 
-### Keyed Object Paths
+### Hit Rule
 
-Object filenames carry a 12-char prefix of the cache key:
-`__aiml_cache/<sanitized_path>__<key12>.o`. Different semantic contexts of the same
-source therefore never share an object file.
+An import is a cache **hit** iff its keyed object file exists. The file name carries
+the key, so there is no manifest and no other lookup state: runs with different
+sibling sets never evict each other's objects.
+
+### Publishing
+
+An object is compiled to a temporary file in the same directory
+(`<object>.tmp.<pid>`) and published by an atomic `rename` **only if the import
+compiled without errors**. Consequences:
+
+- A failed compile publishes nothing. The next run misses, recompiles and reports the
+  same error again — it never loads a partial or empty object.
+- Concurrent `aiml` invocations sharing one cache are safe. Two writers of the same
+  key produce equivalent objects; whichever `rename` lands last wins, readers see
+  either no file or a complete one.
+- A killed run leaves at most a stale `*.tmp.*` file, which is never read and is
+  removed by the revision sweep below.
+
+### Revision Sweep
+
+At startup the compiler touches its own `rev_<compiler_rev>/` directory and removes
+every other `rev_*` directory not touched for more than one hour, plus `*.tmp.*` files
+older than one hour in its own directory. Rebuilding the
+compiler therefore frees the previous revision's objects automatically, while a
+second compiler binary used concurrently on the same cache (e.g. a worktree build)
+keeps its directory.
 
 ### Per-Run Compilation Guard
 
 Each `AIMLCompiler` instance owns a `compiledKeys` set (shared with its sub-compilers
 via `shared_ptr`). It is keyed on the full `cache_key`, not the path, so diamond
 imports under different sibling sets do not cross-pollinate. There is no
-process-wide static guard; parallel `aiml` invocations are independent.
+process-wide static guard.
 
 ### Cycle Protection
 

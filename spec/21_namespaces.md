@@ -70,13 +70,12 @@ The `import` command loads another AIML file.
 - **Import Paths**: Relative to the directory of the importing file.
     - `import: "src/utils/math.aiml"` → resolved from the importing file's directory.
 - **JIT Cache Directory** (`-r` mode only): `__aiml_cache/` in the CWD (or `$AIML_CACHE` if set).
-    - File names are sanitized (non-alphanumeric chars replaced with `_`) to avoid path issues.
-    - Source: `src/utils/math.aiml` → Object: `__aiml_cache/src_utils_math_aiml.o`
-    - SHA-512 hash-based manifest: `__aiml_cache/compilations.yaml`
+  Objects are content-keyed; key, layout, hit rule and publishing are specified in
+  `37_parsing_and_jit_internals.md` §3.
 - **AOT Cache** (`-o` mode): No `__aiml_cache` used. Import objects are stored in the build
   directory (same as the main `.o` file). The build system (exodus) handles incremental
   compilation via file timestamps.
-- **Dependency Tracking**: JIT mode uses SHA-512 hashes; AOT mode relies on exodus timestamps.
+- **Dependency Tracking**: JIT mode uses content hashes (spec/37 §3); AOT mode relies on exodus timestamps.
 
 ## 6. Scopes and Module-Level State
 
@@ -154,12 +153,5 @@ Top-level `decl:` statements in the imported file become **module-level globals*
 
 ## 7. Integrity and Consistency
 
-- **Manifest File**: `__aiml_cache/compilations.yaml`
-
-- **Content**: Mapping of source file names to SHA512 hashes.
-- **Process**:
-    1. Before compiling, SHA512 of source file is computed.
-    2. Checked against `compilations.yaml`.
-    3. If hash differs from stored entry → compilation **aborts** with an error.
-    4. On success, new hash is written to manifest.
-- File names must be globally unique regardless of folder location.
+The JIT import cache never serves an object whose inputs changed and never serves the
+result of a failed compile; see `37_parsing_and_jit_internals.md` §3.

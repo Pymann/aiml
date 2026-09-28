@@ -1,0 +1,6 @@
+- def:
+    name: twice
+    args: [[value, i32]]
+    return: i32
+    body:
+      - return: { "*": [value, 2] }

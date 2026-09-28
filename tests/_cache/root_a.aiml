@@ -1,0 +1,4 @@
+- import: "tests/_cache/lib_a.aiml"
+
+- decl: [box, CounterBox]
+- print: ["a=${call: [box.bump]}"]

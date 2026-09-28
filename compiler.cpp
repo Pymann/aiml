@@ -3065,71 +3065,43 @@ llvm::Function* AIMLCompiler::getPrintfPrototype(llvm::Module& module, llvm::IRB
 #include <filesystem>
 #include <unistd.h>
 #include <yaml-cpp/yaml.h>
+#include <llvm/Support/SHA256.h>
+#include <llvm/ADT/StringExtras.h>
 #include "compiler.h"
 
 namespace fs = std::filesystem;
 
-static std::string getCacheDir() {
-    const char* envCache = std::getenv("AIML_CACHE");
-    if (envCache && std::strlen(envCache) > 0) {
-        return std::string(envCache);
-    }
-    return "__aiml_cache";
+// ── JIT import cache (spec/37 §3) ────────────────────────────────────────────
+
+static std::string sha256Hex(llvm::StringRef data) {
+    auto digest = llvm::SHA256::hash(llvm::arrayRefFromStringRef(data));
+    return llvm::toHex(digest, /*LowerCase=*/true);
 }
 
-static std::string computeSHA512(const std::string& path) {
-    // Memoize by (path, size, mtime). Without this, computeImportCacheKey
-    // re-fork+execs sha512sum on every transitive file for every cache check,
-    // which on large projects (9rooms) blows up to multi-GB RSS and minutes
-    // of CPU before main.aiml even finishes parsing.
+// Memoized by (path, size, mtime): computeImportCacheKey hashes every transitive
+// file for every import, so re-reading unchanged files would dominate large graphs.
+static std::string fileHash(const std::string& path) {
     struct Entry { uintmax_t sz; long long mt; std::string hash; };
     static std::unordered_map<std::string, Entry> cache;
 
     uintmax_t sz = 0;
     long long mt = 0;
     try {
-        if (fs::exists(path)) {
-            sz = fs::file_size(path);
-            mt = fs::last_write_time(path).time_since_epoch().count();
-        }
-    } catch (...) {}
+        if (!fs::exists(path)) return "";
+        sz = fs::file_size(path);
+        mt = fs::last_write_time(path).time_since_epoch().count();
+    } catch (...) { return ""; }
 
     auto it = cache.find(path);
-    if (it != cache.end() && it->second.sz == sz && it->second.mt == mt) {
+    if (it != cache.end() && it->second.sz == sz && it->second.mt == mt)
         return it->second.hash;
-    }
 
-    std::string command = "sha512sum \"" + path + "\" 2>/dev/null";
-    char buffer[128];
-    std::string result = "";
-    FILE* pipe = popen(command.c_str(), "r");
-    if (!pipe) return "";
-    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-        result += buffer;
-    }
-    pclose(pipe);
-    size_t spacePos = result.find(' ');
-    std::string hash = (spacePos != std::string::npos) ? result.substr(0, spacePos) : result;
+    std::ifstream in(path, std::ios::binary);
+    std::string data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::string hash = sha256Hex(data);
     cache[path] = Entry{sz, mt, hash};
     return hash;
 }
-
-// ── Import Cache (semantic key) ──────────────────────────────────────────────
-//
-// The cache key for an imported file must reflect EVERYTHING the compiler reads
-// to produce its .o, not just the file's own bytes. The previous (path-only)
-// key produced false hits whenever a sibling or transitive import changed.
-//
-// Key components:
-//   1. source_hash         — sha512 of the file itself
-//   2. transitive_hash     — sha512 over sorted [path|sha512] of all transitive imports
-//   3. sibling_hash        — sha512 over sorted [path|sha512] of all siblingImports
-//   4. library_mode        — bool flag (header-only / lib vs entrypoint)
-//   5. compiler_rev        — mtime+size of the aiml binary itself; rebuilding
-//                            the compiler invalidates all caches
-//
-// The keyed object file lives at <cache>/<sanitized>__<key12>.o so different
-// semantic contexts of the same source path never collide.
 
 static std::string normalizePath(const std::string& p) {
     try {
@@ -3138,25 +3110,6 @@ static std::string normalizePath(const std::string& p) {
     } catch (...) {
         return p;
     }
-}
-
-static std::string sha512OfString(const std::string& data) {
-    // Pipe through sha512sum.  Avoids pulling in OpenSSL just for this path.
-    std::string cmd = "sha512sum 2>/dev/null";
-    FILE* pipe = popen(cmd.c_str(), "w");
-    if (!pipe) return "";
-    // popen with "w" only — we need bidi.  Fall back to a temp file.
-    pclose(pipe);
-
-    char tmpl[] = "/tmp/aiml_keyXXXXXX";
-    int fd = mkstemp(tmpl);
-    if (fd < 0) return "";
-    ssize_t wrote = write(fd, data.data(), data.size());
-    (void)wrote;
-    close(fd);
-    std::string out = computeSHA512(tmpl);
-    unlink(tmpl);
-    return out;
 }
 
 static std::string compilerBinaryRev(const std::string& compilerPath) {
@@ -3170,6 +3123,41 @@ static std::string compilerBinaryRev(const std::string& compilerPath) {
     } catch (...) {
         return "unknown";
     }
+}
+
+static std::string cacheBaseDir() {
+    const char* envCache = std::getenv("AIML_CACHE");
+    if (envCache && std::strlen(envCache) > 0) return std::string(envCache);
+    return "__aiml_cache";
+}
+
+// Removes other revisions' directories and own stale temp files not touched for an
+// hour; a concurrently used second compiler binary keeps its directory.
+static void sweepCache(const fs::path& base, const fs::path& own) {
+    auto cutoff = fs::file_time_type::clock::now() - std::chrono::hours(1);
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(base, ec)) {
+        std::string name = e.path().filename().string();
+        if (e.path() == own || name.rfind("rev_", 0) != 0 || !e.is_directory(ec)) continue;
+        if (fs::last_write_time(e.path(), ec) < cutoff) fs::remove_all(e.path(), ec);
+    }
+    for (const auto& e : fs::directory_iterator(own, ec)) {
+        if (e.path().filename().string().find(".tmp.") == std::string::npos) continue;
+        if (fs::last_write_time(e.path(), ec) < cutoff) fs::remove(e.path(), ec);
+    }
+}
+
+static std::string cacheRevDir(const std::string& compilerPath) {
+    static std::string dir;
+    if (!dir.empty()) return dir;
+    fs::path base = cacheBaseDir();
+    fs::path own = base / ("rev_" + compilerBinaryRev(compilerPath));
+    std::error_code ec;
+    fs::create_directories(own, ec);
+    fs::last_write_time(own, fs::file_time_type::clock::now(), ec);
+    sweepCache(base, own);
+    dir = own.string();
+    return dir;
 }
 
 void AIMLCompiler::collectTransitiveImports(const std::string& path,
@@ -3213,7 +3201,7 @@ std::string AIMLCompiler::computeImportCacheKey(const std::string& sourcePath,
                                                 bool libMode) const {
     std::stringstream keyText;
     keyText << "source=" << normalizePath(sourcePath) << "\n";
-    keyText << "source_hash=" << computeSHA512(sourcePath) << "\n";
+    keyText << "source_hash=" << fileHash(sourcePath) << "\n";
 
     // Transitive imports (sorted, normalized, hashed individually)
     std::set<std::string> transitive;
@@ -3221,7 +3209,7 @@ std::string AIMLCompiler::computeImportCacheKey(const std::string& sourcePath,
     transitive.erase(normalizePath(sourcePath));   // exclude self
     keyText << "transitive_count=" << transitive.size() << "\n";
     for (const auto& tp : transitive) {
-        keyText << "  " << tp << "|" << computeSHA512(tp) << "\n";
+        keyText << "  " << tp << "|" << fileHash(tp) << "\n";
     }
 
     // Sibling imports (sorted, normalized)
@@ -3230,13 +3218,13 @@ std::string AIMLCompiler::computeImportCacheKey(const std::string& sourcePath,
     sibSet.erase(normalizePath(sourcePath));
     keyText << "sibling_count=" << sibSet.size() << "\n";
     for (const auto& sp : sibSet) {
-        keyText << "  " << sp << "|" << computeSHA512(sp) << "\n";
+        keyText << "  " << sp << "|" << fileHash(sp) << "\n";
     }
 
     keyText << "library_mode=" << (libMode ? 1 : 0) << "\n";
     keyText << "compiler_rev=" << compilerBinaryRev(compilerPath) << "\n";
 
-    return sha512OfString(keyText.str());
+    return sha256Hex(keyText.str());
 }
 
 static std::string keyedObjectPath(const std::string& cacheDir,
@@ -3245,10 +3233,10 @@ static std::string keyedObjectPath(const std::string& cacheDir,
     std::string sanitized;
     for (char c : sourcePath)
         sanitized += (std::isalnum(c) ? c : '_');
-    std::string keyShort = cacheKey.substr(0, 12);
-    return cacheDir + "/" + sanitized + "__" + keyShort + ".o";
+    return cacheDir + "/" + sanitized + "__" + cacheKey.substr(0, 32) + ".o";
 }
 
+// Hit iff the keyed object exists: the file name carries the key (spec/37 §3).
 bool AIMLCompiler::checkCache(const std::string& sourcePath,
                               const std::vector<std::string>& siblings,
                               bool libMode,
@@ -3258,33 +3246,10 @@ bool AIMLCompiler::checkCache(const std::string& sourcePath,
         LOG_ERROR(sourcePath + ": Import source not found");
         return false;
     }
-
     outCacheKey = computeImportCacheKey(sourcePath, siblings, libMode);
     if (outCacheKey.empty()) return false;
-
-    std::string cacheDir = getCacheDir();
-    if (!fs::exists(cacheDir)) fs::create_directories(cacheDir);
-
-    outObjPath = keyedObjectPath(cacheDir, sourcePath, outCacheKey);
-
-    std::string manifestPath = cacheDir + "/compilations.yaml";
-    YAML::Node manifest;
-    if (fs::exists(manifestPath)) {
-        try { manifest = YAML::LoadFile(manifestPath); } catch (...) {}
-    }
-
-    // New manifest schema: per-source map with cache_key + object_path.
-    // Old scalar schema is implicitly invalidated (.as<map>() throws → miss).
-    YAML::Node entry = manifest[sourcePath];
-    if (entry && entry.IsMap() && entry["cache_key"]) {
-        try {
-            std::string storedKey = entry["cache_key"].as<std::string>();
-            if (storedKey == outCacheKey && fs::exists(outObjPath)) {
-                return true;
-            }
-        } catch (...) {}
-    }
-    return false;
+    outObjPath = keyedObjectPath(cacheRevDir(compilerPath), sourcePath, outCacheKey);
+    return fs::exists(outObjPath);
 }
 
 void AIMLCompiler::resolveImport(const std::string& path) {
@@ -3311,8 +3276,8 @@ void AIMLCompiler::resolveImport(const std::string& path) {
         LOG_INFO("Compiling import (no-cache): " + path);
     }
 
-    // Output dir: use outputDir (build dir) when noCache, else __aiml_cache
-    std::string outDir = (noCache && !outputDir.empty()) ? outputDir : getCacheDir();
+    // Output dir: use outputDir (build dir) when noCache, else the cache revision dir
+    std::string outDir = (noCache && !outputDir.empty()) ? outputDir : cacheRevDir(compilerPath);
     if (!fs::exists(outDir)) fs::create_directories(outDir);
 
     // Object filename: keyed in JIT mode (collision-safe across contexts),
@@ -3362,16 +3327,26 @@ void AIMLCompiler::resolveImport(const std::string& path) {
             subCompiler.siblingImports.push_back(sib);
     }
 
+    // Emit into a temp file and publish by rename only if the import (and its own
+    // imports) compiled cleanly: a failed compile must never become a cache hit, and
+    // concurrent runs only ever see complete objects (spec/37 §3).
+    const int errorsBefore = Logger::instance().errorCount();
     subCompiler.compile(path, "/dev/null");
-    if (reportPrefabsMode) {
-        // Analysis-only: skip object/IR emission — we only want the wiring
-        // facts (merged below).
-    } else if (emitImportsAsLL) {
-        // Text IR for external toolchains (emcc). Library imports don't need
-        // a main() entry point so we skip generateEntryPoint here.
-        subCompiler.saveModule(objPath);
-    } else {
-        subCompiler.compileToObject(path, objPath);
+    if (!reportPrefabsMode && Logger::instance().errorCount() == errorsBefore) {
+        const std::string tmpPath = objPath + ".tmp." + std::to_string(getpid());
+        if (emitImportsAsLL) {
+            // Text IR for external toolchains (emcc). Library imports don't need
+            // a main() entry point so we skip generateEntryPoint here.
+            subCompiler.saveModule(tmpPath);
+        } else {
+            subCompiler.compileToObject(path, tmpPath);
+        }
+        std::error_code ec;
+        if (Logger::instance().errorCount() == errorsBefore) {
+            fs::rename(tmpPath, objPath, ec);
+            if (ec) LOG_ERROR("Could not publish " + objPath + ": " + ec.message());
+        }
+        fs::remove(tmpPath, ec);
     }
 
     // Propagate transitive linked objects from sub-compiler
@@ -3400,24 +3375,6 @@ void AIMLCompiler::resolveImport(const std::string& path) {
     if (reportPrefabsMode)
         allPrefabReport.insert(allPrefabReport.end(),
             subCompiler.allPrefabReport.begin(), subCompiler.allPrefabReport.end());
-
-    // Update cache manifest (JIT mode only) — new structured schema.
-    if (!noCache) {
-        std::string manifestPath = getCacheDir() + "/compilations.yaml";
-        YAML::Node manifest;
-        if (fs::exists(manifestPath)) {
-            try { manifest = YAML::LoadFile(manifestPath); } catch (...) {}
-        }
-        // If existing entry is the old scalar form, drop it implicitly by reassigning.
-        YAML::Node entry;
-        entry["cache_key"]   = cacheKey;
-        entry["source_hash"] = computeSHA512(path);
-        entry["object_path"] = objPath;
-        entry["library_mode"] = 1;
-        manifest[path] = entry;
-        std::ofstream fout(manifestPath);
-        fout << manifest;
-    }
 
     linkedObjects.push_back(objPath);
 }
