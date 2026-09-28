@@ -65,6 +65,9 @@ struct StatementPlan {
     OwnershipId source = NoOwnership;
     OwnershipId target = NoOwnership;
     OwnFact result;
+    // spec/61 §5.5/§7: `set [local, rhs]` deep-copies into a local that OWNED its previous
+    // value → codegen releases the old heap (aiml_ser_deep_copy_replace).
+    bool rebindReleaseOld = false;
 };
 
 struct OwnershipPlan {

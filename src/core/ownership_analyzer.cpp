@@ -218,6 +218,31 @@ struct Analyzer {
     }
 
     // target string → plain local name, or "" if it is a member/index/deref target
+    // Mirrors visitSetStmt's deep-copy paths for `set [local, rhs]` on a heap value-model local:
+    // a same-type plain local, an `at` element, an at/get/first/last view call, or a member access.
+    bool rebindDeepCopies(const std::string& type, const Expr* rhs) {
+        auto ci = ctx.classes.find(type);
+        if (ci == ctx.classes.end() || !ci->second.hasHeapFields || !ci->second.serNodesVar
+            || ctx.isRefcountModel(type))
+            return false;
+        if (dynamic_cast<const AtExpr*>(rhs)) return true;
+        if (auto* ce = dynamic_cast<const CallExpr*>(rhs)) {
+            const std::string& fn = ce->functionName;
+            size_t dp = fn.rfind('.');
+            std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+            return (sn == "at" || sn == "get" || sn == "first" || sn == "last")
+                && !ctx.ownsReturnMatches(sn, type);
+        }
+        if (auto* ve = dynamic_cast<const VariableExpr*>(rhs)) {
+            if (ve->name.find('.') != std::string::npos || ve->name.find('<') != std::string::npos)
+                return true;
+            OwnershipId rid = lookup(ve->name);
+            auto rt = slotType.find(rid);
+            return rid != NoOwnership && rt != slotType.end() && rt->second == type;
+        }
+        return false;
+    }
+
     static std::string plainLocalTarget(const std::string& target) {
         if (target.find('.') != std::string::npos) return "";
         if (target.find('-') != std::string::npos) return "";
@@ -384,8 +409,14 @@ struct Analyzer {
                                 it->second.life = Live;
                                 it->second.resources.insert(res->second);
                             }
-                        } else if (it != st.slots.end() && it->second.origin == Origin::Owned) {
-                            it->second.origin = Origin::Unknown;   // rebound → not provably owned
+                        } else if (it != st.slots.end()) {
+                            // spec/61 §7: a view / same-type local RHS is DEEP-COPIED into the local
+                            // (codegen), so the local owns its new value: it stays Owned and releases
+                            // the old one (tests/lifetime/71, 72). Any other RHS may share → Unknown.
+                            bool indep = tyIt != slotType.end() && rebindDeepCopies(tyIt->second, set->value.get());
+                            plan.statements[set].rebindReleaseOld = indep && it->second.origin == Origin::Owned;
+                            if (!indep && it->second.origin == Origin::Owned)
+                                it->second.origin = Origin::Unknown;   // rebound → not provably owned
                         }
                     }
                 }
