@@ -45,9 +45,9 @@
 
 namespace {
 
-constexpr int kCaptureFrames = 12;   // frames grabbed per allocation
+constexpr int kCaptureFrames = 28;   // frames grabbed per allocation (deep ser_decode nesting eats ~8)
 constexpr int kSkipFrames    = 2;    // drop aiml_memdiff_record + the leaf allocator frame
-constexpr int kPrintFrames   = 6;    // frames shown per site in the dump
+constexpr int kPrintFrames   = 22;   // frames shown per site in the dump
 constexpr int kTopSites      = 30;   // sites listed per dump
 
 struct LiveBlock { size_t size; uint64_t site; };
@@ -55,7 +55,7 @@ struct Site {
     void*  frames[kCaptureFrames];
     int    n_frames = 0;
 #ifdef __EMSCRIPTEN__
-    char   stack_text[1024] = {0};   // WASM has no backtrace() → a textual callstack per site instead
+    char   stack_text[4096] = {0};   // WASM has no backtrace() → a textual callstack per site instead
 #endif
     size_t live_count = 0;
     size_t live_bytes = 0;
@@ -144,7 +144,7 @@ extern "C" void aiml_memdiff_record(void* ptr, size_t size) {
     // WASM: no execinfo backtrace → capture a TEXTUAL callstack (emscripten builds it from a JS
     // Error stack; with the client's -g2 the frames carry function names). The site key is the FNV
     // hash of that text, so identical stacks aggregate into one site — real per-callstack attribution.
-    static thread_local char stkbuf[1024];
+    static thread_local char stkbuf[4096];
     stkbuf[0] = 0;
     emscripten_get_callstack(EM_LOG_C_STACK | EM_LOG_NO_PATHS, stkbuf, (int)sizeof(stkbuf));
     uint64_t h = 1469598103934665603ull;                      // FNV-1a over the stack text
@@ -272,7 +272,7 @@ extern "C" long long aiml_memdiff_dump(void) {
         {
             const char* p = s.stack_text;
             int shown_frames = 0;
-            while (*p && shown_frames < 12) {
+            while (*p && shown_frames < 24) {
                 const char* nl = strchr(p, '\n');
                 size_t seg = nl ? (size_t)(nl - p) : strlen(p);
                 txt += "        "; txt.append(p, seg); txt += "\n";

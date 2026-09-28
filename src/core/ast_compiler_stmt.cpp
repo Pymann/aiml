@@ -3270,13 +3270,11 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 // was already dup'd (literal) / incref'd (VariableExpr) / is an owned transfer
                 // (interp/call) above, so loading the old value, storing the new, then decref-ing the
                 // old is self-assign safe. memV3-gated → OFF/v2 codegen byte-identical.
-                // spec/61 §6.3: NOT for a VIEW-alias base (`ecur = at(list,i)` shares the element's
-                // string pointers, no incref). Decref-ing the old value here would free a string the
-                // real element still owns → double-free when the element is later dropped (the
-                // extract-mutate-writeback idiom on a value-model element). A view is deep-copied at
-                // the write-back (idx/set escape), which owns the free; here we just overwrite.
-                if (ctx.memV3 && ctx.lifetimeDropsEnabled && finalTypeName == "string"
-                    && !(sym && sym->is_view_alias)) {
+                // spec/61 §5.4: this includes a VIEW-alias base (`ecur = at(list,i)`): CopyRetain
+                // incref'd its string fields at the decl, so the old value is ecur's OWN reference —
+                // skipping the decref leaked it once the write-back replaced the slot
+                // (9rooms ConnRegistry.touch, tests/lifetime/68).
+                if (ctx.memV3 && ctx.lifetimeDropsEnabled && finalTypeName == "string") {
                     llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
                     llvm::Value* tg  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(targetGep));
                     llvm::Value* oldv = ctx.builder.CreateLoad(i8p, tg, "str_field_old");
@@ -3289,15 +3287,14 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 // producer/owned-move source reaches this loaded-struct path — views/params were
                 // deep_copy_replace'd above). RELEASE the field's previous heap before overwriting, else
                 // the old value's container/string handles leak per re-assign (the per-poll render-tree
-                // leak: `set holder.cur = mock_state_from_match(...)`, fill_hand→MockState). NOT for a
-                // view-alias base (extract-mutate-writeback shares the element's heap → would double-free),
-                // mirroring the string guard above. src is an independent producer/move value here.
+                // leak: `set holder.cur = mock_state_from_match(...)`, fill_hand→MockState). Includes a
+                // view-alias base: CopyRetain owns its field refs (like the string case above;
+                // tests/lifetime/70). src is an independent producer/move value here.
                 {
                     llvm::Value* sv2 = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
                     auto fci = ctx.classes.find(finalTypeName);
                     if (ctx.memV3 && ctx.lifetimeDropsEnabled && sv2 && sv2->getType()->isStructTy()
-                        && fci != ctx.classes.end() && fci->second.hasHeapFields && fci->second.serNodesVar
-                        && !(sym && sym->is_view_alias)) {
+                        && fci != ctx.classes.end() && fci->second.hasHeapFields && fci->second.serNodesVar) {
                         llvm::Type* p8 = llvm::PointerType::get(ctx.context, 0);
                         llvm::Value* tg2 = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(targetGep));
                         llvm::Function* frf = ctx.getFunction("aiml_ser_free_decoded",
