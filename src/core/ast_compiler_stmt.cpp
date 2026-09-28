@@ -2509,6 +2509,23 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
              LOG_ERROR(ctx.fmtLoc() + "Cannot assign to const variable " + targetStr);
              return;
         }
+        // spec/61 §5.5/§8: a fresh owned call result moved into an OWNED value-model local — release
+        // the old value, then store (tests/lifetime/75, 9rooms `set [mat, match_get(...)]`).
+        if (std::string(rebindCopyFn) == "aiml_ser_deep_copy_replace" && !sym->is_byref_arg
+            && dynamic_cast<CallExpr*>(setStmt->value.get())) {
+            auto tci = ctx.classes.find(sym->typeName);
+            llvm::Value* nv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+            if (tci != ctx.classes.end() && tci->second.serNodesVar && tci->second.type
+                && nv && nv->getType() == tci->second.type) {
+                llvm::Type* p = llvm::PointerType::get(ctx.context, 0);
+                llvm::Value* dst = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+                ctx.builder.CreateCall(ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
+                    {p, p, ctx.builder.getInt32Ty()}),
+                    { dst, tci->second.serNodesVar, ctx.builder.getInt32(tci->second.serNodesCount) });
+                ctx.builder.CreateStore(nv, dst);
+                return;
+            }
+        }
         // Enum-typed target must not receive a string (enum is i32 under the
         // hood — a string would silently coerce to garbage).  Require an
         // enum-literal (EnumName.value) or an int.
@@ -2603,6 +2620,16 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 if (auto* rv = dynamic_cast<VariableExpr*>(rhs))
                     borrowSrc = (rv->name.find('.') != std::string::npos || rv->name.find('<') != std::string::npos);
                 else if (dynamic_cast<AtExpr*>(rhs)) borrowSrc = true;
+                else if (auto* ce = dynamic_cast<CallExpr*>(rhs)) {
+                    // spec/61 §5.7: `.get`/`.at` of a nested container element is identical to `at` —
+                    // the element keeps its handle, the binding increfs (test_list_list_inner_values).
+                    const std::string& fn = ce->functionName;
+                    size_t dp = fn.rfind('.');
+                    std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                    borrowSrc = dp != std::string::npos
+                        && (sn == "get" || sn == "at" || sn == "first" || sn == "last")
+                        && !ctx.ownsReturnMatches(sn, sym->typeName);
+                }
                 if (borrowSrc)   // incref-new BEFORE release-old (self-assign safe)
                     ctx.builder.CreateCall(ctx.getFunction("aiml_"+kind+"_handle_incref", ctx.builder.getVoidTy(), {i8p}), { newH });
                 llvm::Value* oldH = ctx.builder.CreateLoad(i8p, slot, "seth_old");

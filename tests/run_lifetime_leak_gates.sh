@@ -33,6 +33,10 @@ GREEN=(
   tests/lifetime/70_view_copy_model_field_writeback_no_leak.aiml
   tests/lifetime/71_local_model_set_copy_no_leak.aiml
   tests/lifetime/72_local_model_set_overwrite_no_leak.aiml
+  tests/lifetime/75_local_model_set_producer_no_leak.aiml
+  tests/lifetime/73_list_model_clear_no_leak.aiml
+  tests/lifetime/74_list_model_remove_no_leak.aiml
+  tests/_inline_model_red/49_value_survives_remove.aiml
   tests/_inline_model_red/p2_retain_coverage.aiml
   tests/_inline_model_red/p3_copyretain_survives_source_drop.aiml
   tests/_inline_model_red/52_model_strfield_share_no_leak.aiml
@@ -43,9 +47,6 @@ GREEN=(
 )
 # RED: known open findings (documented) — run + report, but do NOT fail the gate yet.
 RED=(
-  tests/lifetime/73_list_model_clear_no_leak.aiml      # Paket 5: kind-2 element release
-  tests/lifetime/74_list_model_remove_no_leak.aiml
-  tests/_inline_model_red/49_value_survives_remove.aiml
   tests/_inline_model_red/50_share_semantics.aiml
   tests/_inline_model_red/p2_array_field_leak_RED.aiml
 )
