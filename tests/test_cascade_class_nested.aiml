@@ -46,7 +46,7 @@
     rules:
       - before: []
         on: deal_dmg
-        def: { name: begin, args: [[carry, list<string>]], return: list<string>, body: [ { return: carry } ] }
+        def: { name: begin, args: [[carry, list<string>]], body: [{ return: [] }] }
 
 - class:
     name: OwnerRefText
@@ -55,7 +55,7 @@
       # explicit member selection — matches the flattened sub-opcode tokens exactly
       - before: ["*"]
         on: [player, opponent, in_zone]
-        def: { name: owner, args: [[carry, list<string>]], return: list<string>, body: [ { return: carry } ] }
+        def: { name: owner, args: [[carry, list<string>]], body: [{ return: [] }] }
 
 - class:
     name: ZoneText
@@ -64,7 +64,7 @@
       # only reachable via the in_zone branch — proves sub-field flattening
       - before: ["*"]
         on: ZoneType
-        def: { name: zone, args: [[carry, list<string>]], return: list<string>, body: [ { return: carry } ] }
+        def: { name: zone, args: [[carry, list<string>]], body: [{ return: [] }] }
 
 - cascade_class:
     name: EffText

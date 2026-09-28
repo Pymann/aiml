@@ -420,6 +420,15 @@ namespace AIML {
     // spec/61: does a producer named `shortName` return a value whose type matches an owned local of
     // declared type `declType`? Guards the return-ownership classification against short-name
     // collisions (container `.get`/`.at` builtins vs user producer methods).
+    // spec/61 §3: ref<list|map|buffer> is not a valid type — a container is already a shared handle.
+    static bool isRefContainerType(const std::string& t) {
+        return t.rfind("ref<list<", 0) == 0 || t.rfind("ref<map<", 0) == 0
+            || t == "ref<buffer>" || t.rfind("ref<buffer<", 0) == 0;
+    }
+    std::string refContainerError(const std::string& what, const std::string& t) const {
+        return what + " has type '" + t + "' — ref<" + t.substr(4, t.size() - 5) + "> is not a valid type:"
+            " a container is already a shared handle, use '" + t.substr(4, t.size() - 5) + "' (spec/61 §3)";
+    }
     bool ownsReturnMatches(const std::string& shortName, const std::string& declType) const {
         if (ownsReturnFns.count(shortName) == 0) return false;
         auto it = ownsReturnFnTypes.find(shortName);

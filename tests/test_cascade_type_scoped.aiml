@@ -32,15 +32,15 @@
       # opcode → opc slot (only the first element; fields have a non-empty prefix)
       - before: []
         on: "*"
-        def: { name: op_set, args: [[carry, Draft]], return: Draft, body: [ { set: [carry.opc, { call: [<.field] }] }, { return: carry } ] }
+        def: { name: op_set, args: [[carry, ref<Draft>]], body: [ { set: [carry.opc, { call: [<.field] }] } ] }
       # OwnRef nested-cascade nodes (owner_a/owner_b) → own slot
       - before: ["*"]
         on: OwnRef
-        def: { name: ref_h, args: [[carry, Draft]], return: Draft, body: [ { set: [carry.own, { call: [<.field] }] }, { return: carry } ] }
+        def: { name: ref_h, args: [[carry, ref<Draft>]], body: [ { set: [carry.own, { call: [<.field] }] } ] }
       # PlRel flat enum field → own slot (shares names with OwnRef but must not collide)
       - before: ["*"]
         on: PlRel
-        def: { name: rel_h, args: [[carry, Draft]], return: Draft, body: [ { set: [carry.own, { call: [<.field] }] }, { return: carry } ] }
+        def: { name: rel_h, args: [[carry, ref<Draft>]], body: [ { set: [carry.own, { call: [<.field] }] } ] }
 
 - cascade_class:
     name: EffT

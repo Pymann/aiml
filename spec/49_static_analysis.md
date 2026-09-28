@@ -1214,3 +1214,54 @@ asset load guarded so it cannot recur per frame).
   second callback chain that opts out via `static_off: ["frame_blocking"]` (no
   warning); a non-frame `def` that blocks freely (no warning — blocking is only
   illegal *in* frame context); the program compiles + runs (exit `0`).
+
+---
+
+## 21. Value Round-Trip Through a Call (always-on **error**)
+
+```yaml
+- set: [mat, { call: [advance_phase_auto, mat] }]     # error
+```
+
+Assigning a call result back to a variable that is itself passed **by value** to that call is a
+hard compiler error when the variable is a **value model with heap-owning members** (a model
+whose fields include a `string`, a container, a nested model with such fields, …).
+
+### 21.1 Rationale
+
+The idiom "copy in, modified copy out" hands the whole aggregate to the callee by value (a
+member-wise share, `61_memory_management_DRAFT.md` §7), lets the callee mutate its parameter and
+return it, and rebinds the caller's variable to the result. Under spec/61 the ownership of that
+result is ambiguous: the returned value still shares the caller's heap, so releasing the old
+value (§5.5) frees what the result references, and not releasing it leaks the whole aggregate on
+every call. It also copies the entire aggregate twice per call.
+
+The intended forms are:
+
+- a `ref<T>` parameter that mutates in place and returns nothing:
+  `- call: [advance_phase_auto, {'&': [mat]}]`, or
+- a method on the model's class.
+
+### 21.2 What Counts
+
+- `set: [X, { call: [F, …] }]` where `X` is a plain local or parameter (no `.` / `<.` path),
+- `X`'s declared type is a value model with heap-owning members (not `ptr<>`, `ref<>`,
+  `shared<>`, a refcount model, a scalar, `string` or a container),
+- and `X` appears **by value** as a direct argument of `F` (a bare `X`; `{'&': [X]}` is a borrow
+  and does not count). `F` may be a function or a method.
+- Cascade handlers are covered by `57_function_cascades.md` §3a (carrier by reference, no return).
+
+### 21.3 Diagnostics
+
+```
+<file>:<line>: 'mat' (MatchSession) is passed by value to 'advance_phase_auto' and reassigned
+from its result — pass ref<MatchSession> and mutate in place (spec/49 §21)
+```
+
+### 21.4 `static_off`
+
+None — the rule cannot be disabled.
+
+### 21.5 Negative Test
+
+`tests/test_static_value_roundtrip_error.aiml` must fail with the diagnostic above.

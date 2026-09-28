@@ -1,0 +1,11 @@
+# Negative (spec/61 §3): ref<list|map|buffer> is not a valid type — a container is already a
+# shared handle; take list<T> to mutate it in place.
+- def:
+    name: add_name
+    args: [[names, ref<list<string>>]]
+    body:
+      - call: [names.push, "extra"]
+
+- decl: [names, list<string>]
+- call: [add_name, names]
+- print: ["len=${names.len}"]

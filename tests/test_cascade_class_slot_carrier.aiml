@@ -33,35 +33,29 @@
         on: [deal_damage, heal_damage]
         def:
           name: begin
-          args: [[carry, Draft]]
-          return: Draft
+          args: [[carry, ref<Draft>]]
           body:
             - if: { condition: { eq: [{ call: [<.field] }, EffCode.deal_damage] }, then: [{ set: [carry.verb, "Deal"] }] }
             - if: { condition: { eq: [{ call: [<.field] }, EffCode.heal_damage] }, then: [{ set: [carry.verb, "Heal"] }] }
-            - return: carry
       - before: ["*"]
         on: TgtType
         after: ["*"]
         def:
           name: tgt
-          args: [[carry, Draft]]
-          return: Draft
+          args: [[carry, ref<Draft>]]
           body:
             - set: [carry.target, { call: [enums.name, "TgtType", { call: [<.field] }] }]
-            - return: carry
       - before: ["*"]
         on: [fixed]
         after: ["*"]
-        def: { name: vfix, args: [[carry, Draft]], return: Draft, body: [ { return: carry } ] }
+        def: { name: vfix, args: [[carry, ref<Draft>]], body: [{ return: [] }] }
       - before: ["*"]
         on: i32
         def:
           name: vamt
-          args: [[carry, Draft]]
-          return: Draft
+          args: [[carry, ref<Draft>]]
           body:
             - set: [carry.amount, { call: [<.field] }]
-            - return: carry
 
 - cascade_class:
     name: EffT

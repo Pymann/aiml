@@ -224,6 +224,15 @@ for TEST in $TEST_FILES; do
         # Negative test: assigning a string literal to an enum-typed slot must
         # be a compile error (enum is i32 — a string would coerce to garbage).
         EXPECTED_CODE=1
+    elif [[ "$TEST" == *"test_ref_container_error.aiml" ]]; then
+        # Negative test (spec/61 §3): ref<list|map|buffer> is not a valid type.
+        EXPECTED_CODE=1
+    elif [[ "$TEST" == *"test_cascade_handler_byvalue_error.aiml" ]]; then
+        # Negative test (spec/57 §3a): cascade handler must take ref<carrier>, no return.
+        EXPECTED_CODE=1
+    elif [[ "$TEST" == *"test_static_value_roundtrip_error.aiml" ]]; then
+        # Negative test (spec/49 §21): value round-trip through a call is a compile error.
+        EXPECTED_CODE=1
     elif [[ "$TEST" == *"test_implicit_sibling_visibility_error.aiml" ]]; then
         # Negative test (spec/21 §3): a symbol from a file outside the using
         # file's own import closure is not visible, even if the entry imports it.
@@ -245,6 +254,21 @@ for TEST in $TEST_FILES; do
         fi
     fi
 
+    if [[ "$TEST" == *"test_ref_container_error.aiml" ]]; then
+        if ! tail -n "+$((TEST_LOG_START + 1))" "$OUTPUT_FILE" | grep -q "is not a valid type"; then
+            EXIT_CODE=99
+        fi
+    fi
+    if [[ "$TEST" == *"test_cascade_handler_byvalue_error.aiml" ]]; then
+        if ! tail -n "+$((TEST_LOG_START + 1))" "$OUTPUT_FILE" | grep -q "spec/57 §3a"; then
+            EXIT_CODE=99
+        fi
+    fi
+    if [[ "$TEST" == *"test_static_value_roundtrip_error.aiml" ]]; then
+        if ! tail -n "+$((TEST_LOG_START + 1))" "$OUTPUT_FILE" | grep -q "spec/49 §21"; then
+            EXIT_CODE=99
+        fi
+    fi
     if [[ "$TEST" == *"test_implicit_sibling_visibility_error.aiml" ]]; then
         if ! tail -n "+$((TEST_LOG_START + 1))" "$OUTPUT_FILE" | grep -q "VisThing"; then
             EXIT_CODE=99

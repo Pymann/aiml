@@ -353,7 +353,7 @@
     name: ListPush<T>
     implements: OnClick
     members:
-      - [target, ref<list<T>>]                  # Die zu modifizierende Liste
+      - [target, list<T>]                       # geteiltes Handle (spec/61 §3: kein ref<list>)
     methods:
       - def:
           name: fire
@@ -366,7 +366,7 @@
     name: ListPop<T>
     implements: OnClick
     members:
-      - [target, ref<list<T>>]
+      - [target, list<T>]
     methods:
       - def:
           name: fire

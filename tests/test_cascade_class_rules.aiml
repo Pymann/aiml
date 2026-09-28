@@ -38,10 +38,10 @@
     rules:
       - before: []
         on: [deal_dmg, heal_dmg]                 # selection Mask
-        def: { name: begin_dmg, args: [[carry, DraftBuf]], return: DraftBuf, body: [ { return: carry } ] }
+        def: { name: begin_dmg, args: [[carry, ref<DraftBuf>]], body: [{ return: [] }] }
       - before: []
         on: revive                               # scalar Mask
-        def: { name: begin_rev, args: [[carry, DraftBuf]], return: DraftBuf, body: [ { return: carry } ] }
+        def: { name: begin_rev, args: [[carry, ref<DraftBuf>]], body: [{ return: [] }] }
 
 # OwnerRef stage handler: generic (wildcard context) + a more-specific override for
 # revive's SECOND OwnerRef (ordered before + terminal after) — specificity wins, no tie.
@@ -51,12 +51,12 @@
     rules:
       - before: ["*"]                            # any non-start position
         on: OwnerRef
-        def: { name: own_generic, args: [[carry, DraftBuf]], return: DraftBuf, body: [ { return: carry } ] }
+        def: { name: own_generic, args: [[carry, ref<DraftBuf>]], body: [{ return: [] }] }
       - before: [revive, OwnerRef]               # ordered: 2nd OwnerRef in revive
         on: OwnerRef
         after: []                                # terminal
         weight: 5
-        def: { name: own_grave, args: [[carry, DraftBuf]], return: DraftBuf, body: [ { return: carry } ] }
+        def: { name: own_grave, args: [[carry, ref<DraftBuf>]], body: [{ return: [] }] }
 
 - cascade_class:
     name: EffText
