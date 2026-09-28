@@ -218,8 +218,9 @@ struct Analyzer {
     }
 
     // target string → plain local name, or "" if it is a member/index/deref target
-    // Mirrors visitSetStmt's deep-copy paths for `set [local, rhs]` on a heap value-model local:
-    // a same-type plain local, an `at` element, an at/get/first/last view call, or a member access.
+    // `set [local, rhs]` on a heap value-model local yields an INDEPENDENT value: visitSetStmt deep-copies
+    // a same-type plain local, an `at` element, an at/get/first/last view call or a member access, and
+    // moves a fresh owned call result.
     bool rebindDeepCopies(const std::string& type, const Expr* rhs) {
         auto ci = ctx.classes.find(type);
         if (ci == ctx.classes.end() || !ci->second.hasHeapFields || !ci->second.serNodesVar
@@ -230,8 +231,10 @@ struct Analyzer {
             const std::string& fn = ce->functionName;
             size_t dp = fn.rfind('.');
             std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
-            return (sn == "at" || sn == "get" || sn == "first" || sn == "last")
-                && !ctx.ownsReturnMatches(sn, type);
+            // a FRESH owned result (producer / clone / copy / deserialize) is moved in (tests/lifetime/75)
+            if (fn == "sys.clone" || fn == "sys.copy" || fn == "sys.deserialize" || ctx.ownsReturnMatches(sn, type))
+                return true;
+            return (sn == "at" || sn == "get" || sn == "first" || sn == "last");
         }
         if (auto* ve = dynamic_cast<const VariableExpr*>(rhs)) {
             if (ve->name.find('.') != std::string::npos || ve->name.find('<') != std::string::npos)

@@ -1,0 +1,25 @@
+# static-check: off
+# spec/61 §5.5/§8: `set [local, producer()]` moves a FRESH owned value into an owned model local →
+# the old value is released and the new one dropped at scope exit (9rooms phase_coordinator
+# `set [mat, match_get(...)]`).
+- model: {name: Item, fields: [[text, string]]}
+- def:
+    name: make_item
+    args: [[num, i32]]
+    return: {type: Item, lifetime: producer}
+    body:
+      - decl: [item, Item]
+      - set: [item.text, "value=${num}"]
+      - return: item
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [cur, Item, {call: [make_item, counter]}]
+            - set: [cur, {call: [make_item, {+: [counter, 1]}]}]
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0
