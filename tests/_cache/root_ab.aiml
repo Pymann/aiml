@@ -1,0 +1,10 @@
+- import: "tests/_cache/lib_a.aiml"
+- import: "tests/_cache/lib_b.aiml"
+
+- def:
+    name: main
+    body:
+      - decl: [box, "ptr<CounterBox>", { new: CounterBox }]
+      - decl: [bumped, i32, { call: [box.bump] }]
+      - print: ["ab=${call: [twice, bumped]}"]
+      - free: [box]

@@ -1,0 +1,6 @@
+- def:
+    name: broken
+    args: [[value, i32]]
+    return: i32
+    body:
+      - return: { call: [__cache_test_no_such_fn, value] }

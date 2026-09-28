@@ -1,0 +1,16 @@
+- model:
+    name: Counter
+    fields:
+      - [count, i32, 0]
+
+- class:
+    name: CounterBox
+    models: [Counter]
+    methods:
+      - def:
+          name: bump
+          return: i32
+          args: []
+          body:
+            - set: [<.count, { +: [<.count, 1] }]
+            - return: <.count
