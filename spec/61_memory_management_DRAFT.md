@@ -1247,6 +1247,9 @@ aggregate (fresh strings/containers/`ptr` boxes/clonable resources) use `clone` 
 - **Container parameter** (`x: list<T>` / `map` / `buffer`): the handle is passed and
   **incref'd** — the callee shares the caller's container; mutations are visible (this is the
   reference semantics of §5, and resolves the old by-value/by-reference question §11.2).
+  **`ref<list|map|buffer>` is not a valid type** — as a parameter, return type, field or local it is a compile
+  error: the container is already a shared handle, so `list<T>` is the borrow-and-mutate form, and
+  a function that must hand back a different container returns it (`producer`).
 - **`ptr<T>` parameter = MOVE (the one rule).** Passing a `ptr<T>` by value **transfers
   ownership to the callee** — the caller's box is **moved-out** (use-after-move afterward, §10),
   exactly as §6.2 says of every `ptr` handoff. The callee now owns it (releases it by its own

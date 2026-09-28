@@ -943,6 +943,8 @@ static bool modelIsMoveOnly(CompilerContext& ctx, const std::string& className) 
 }
 
 void Compiler::visitDeclStmt(DeclStmt* decl) {
+    if (ctx.isRefContainerType(decl->typeName))
+        LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + ctx.refContainerError("variable '" + decl->varName + "'", decl->typeName));
     ctx.validateIdentifier(decl->varName, "variable", decl->sourceNode);
 
     IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
@@ -2264,6 +2266,27 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         return;
     }
 
+    // spec/49 §21: `set [X, F(..., X, ...)]` — a heap value model passed by value and reassigned
+    // from the call's result is a hard error (use ref<T> + in-place mutation).
+    if (propName.empty() && !isDash) {
+        if (auto* rc = dynamic_cast<CallExpr*>(setStmt->value.get())) {
+            auto tci = ctx.classes.find(sym->typeName);
+            bool heapValueModel = tci != ctx.classes.end() && tci->second.hasHeapFields
+                && tci->second.serNodesVar && !tci->second.isBuiltin && !ctx.isRefcountModel(sym->typeName);
+            if (heapValueModel) {
+                for (const auto& a : rc->args) {
+                    auto* av = dynamic_cast<VariableExpr*>(a.get());
+                    if (av && av->name == baseName) {
+                        LOG_ERROR(ctx.fmtLoc(setStmt->sourceNode) + "'" + baseName + "' (" + sym->typeName +
+                            ") is passed by value to '" + rc->functionName + "' and reassigned from its result"
+                            " — pass ref<" + sym->typeName + "> and mutate in place (spec/49 §21)");
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
     // spec/61 §5.4/§7 (memV3): a VALUE-COPY into a whole MOVE-ONLY value Model duplicates a unique
     // owner (ptr<T>/tensor) → double-free/dangling. The concrete crash was `set: [<.inner, an_inner]`
     // copying a tensor-bearing model per-field (dropped the tensor / would double-free). Reject the
@@ -2515,10 +2538,13 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             && dynamic_cast<CallExpr*>(setStmt->value.get())) {
             auto tci = ctx.classes.find(sym->typeName);
             llvm::Value* nv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
-            if (tci != ctx.classes.end() && tci->second.serNodesVar && tci->second.type
-                && nv && nv->getType() == tci->second.type) {
+            // A method call may hand back its result through a pointer instead of a struct value.
+            if (tci != ctx.classes.end() && tci->second.serNodesVar && tci->second.type && nv
+                && (nv->getType() == tci->second.type || nv->getType()->isPointerTy())) {
                 llvm::Type* p = llvm::PointerType::get(ctx.context, 0);
                 llvm::Value* dst = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+                if (nv->getType()->isPointerTy())   // capture before the release (alias-safe)
+                    nv = ctx.builder.CreateLoad(tci->second.type, nv, "rebind_fresh");
                 ctx.builder.CreateCall(ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
                     {p, p, ctx.builder.getInt32Ty()}),
                     { dst, tci->second.serNodesVar, ctx.builder.getInt32(tci->second.serNodesCount) });
@@ -3022,8 +3048,18 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         std::string kind = finalTypeName.rfind("map<", 0) == 0 ? "map"
                             : ((finalTypeName == "buffer" || finalTypeName.rfind("buffer<", 0) == 0) ? "buffer" : "list");
                         // Secure the new reference before dropping the old one, including self-aliases.
-                        ctx.builder.CreateCall(ctx.getFunction("aiml_" + kind + "_handle_incref",
-                            ctx.builder.getVoidTy(), {i8p}), {newH});
+                        // A FRESH owned call result has no other owner → adopt it (tests/lifetime/77).
+                        bool adoptFresh = false;
+                        if (auto* fc = dynamic_cast<CallExpr*>(setStmt->value.get())) {
+                            const std::string& fn = fc->functionName;
+                            size_t dp = fn.rfind('.');
+                            std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+                            adoptFresh = fn == "sys.clone" || fn == "sys.copy" || fn == "sys.deserialize"
+                                || sn == "slice" || ctx.ownsReturnMatches(sn, finalTypeName);
+                        }
+                        if (!adoptFresh)
+                            ctx.builder.CreateCall(ctx.getFunction("aiml_" + kind + "_handle_incref",
+                                ctx.builder.getVoidTy(), {i8p}), {newH});
                         if (ctx.lifetimeDropsEnabled) {
                             int nc = 0;
                             llvm::GlobalVariable* descriptor = elemHandleSerNodes(finalTypeName, nc);

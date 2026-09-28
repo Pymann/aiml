@@ -39,7 +39,7 @@
     rules:
       - before: []
         on: deal_dmg
-        def: { name: bdeal, args: [[carry, list<string>]], return: list<string>, body: [ { call: [carry.push, "deal"] }, { return: carry } ] }
+        def: { name: bdeal, args: [[carry, list<string>]], body: [ { call: [carry.push, "deal"] } ] }
 
 - class:
     name: OwnerRefText
@@ -47,7 +47,7 @@
     rules:
       - before: ["*"]
         on: [player, opponent, in_zone]
-        def: { name: owner, args: [[carry, list<string>]], return: list<string>, body: [ { decl: [oval, i32, { call: [<.field] }] }, { call: [carry.push, "own${oval}"] }, { return: carry } ] }
+        def: { name: owner, args: [[carry, list<string>]], body: [ { decl: [oval, i32, { call: [<.field] }] }, { call: [carry.push, "own${oval}"] } ] }
 
 - class:
     name: ZoneText
@@ -55,7 +55,7 @@
     rules:
       - before: ["*"]
         on: ZoneType
-        def: { name: zone, args: [[carry, list<string>]], return: list<string>, body: [ { decl: [zval, i32, { call: [<.field] }] }, { call: [carry.push, "z${zval}"] }, { return: carry } ] }
+        def: { name: zone, args: [[carry, list<string>]], body: [ { decl: [zval, i32, { call: [<.field] }] }, { call: [carry.push, "z${zval}"] } ] }
 
 - cascade_class:
     name: EffText

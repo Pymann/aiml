@@ -159,7 +159,7 @@ Opaque handle (`i8*`) to a live prefab instance.
 | `.focus(child)` | `(string) -> void` | (text_input) Give this input keyboard focus programmatically (e.g. re-focus the chat box after the Send button stole focus). No-op if the child isn't a `text_input`. |
 | `.scroll_to_end(child)` | `(string) -> void` | (textbox / scrollable container) Pin the child to its bottom (newest line / last row) and re-arm a textbox's `tail` follow. |
 | `.child(child_name)` | `(string) -> prefab_instance` | Child as its own instance for direct manipulation |
-| `.text_value(child)` | `(string) -> string` | (text_input) Current text of an input field |
+| `.text_value(child)` | `(string) -> string` | (text_input) Current text of an input field — an owned copy (spec/61 §8), freed by the receiving local |
 | `.child_clicked(child)` | `(string) -> i32` | (button) `1` if button was clicked this frame, else `0` |
 | `.child_contains(child, sx, sy)` | `(string, f32, f32) -> i32` | `1` if the SCREEN point `(sx,sy)` is inside the child's bounds. Works for ANY child type (incl. non-interactive `rect`s), unlike `child_clicked` which only tracks widgets. Handles window scaling. Used for drop-target hit tests. |
 | `.child_focused(child)` | `(string) -> i32` | (text_input) `1` if input has keyboard focus, else `0` |

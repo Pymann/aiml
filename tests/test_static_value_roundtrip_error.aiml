@@ -1,0 +1,19 @@
+# Negative (spec/49 §21): a heap value model passed by value to a call and reassigned from its
+# result is a compile error — pass ref<T> and mutate in place.
+- model:
+    name: Session
+    fields:
+      - [label, string]
+      - [turn, i32]
+
+- def:
+    name: advance
+    args: [[sess, Session]]
+    return: Session
+    body:
+      - set: [sess.turn, { +: [sess.turn, 1] }]
+      - return: sess
+
+- decl: [cur, Session]
+- set: [cur, { call: [advance, cur] }]
+- print: ["turn=${cur.turn}"]

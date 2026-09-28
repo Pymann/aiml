@@ -87,6 +87,12 @@ static llvm::BasicBlock* emitGuard(CompilerContext& ctx, llvm::Value* flag,
 // registerBuiltins
 // ---------------------------------------------------------------------------
 void registerBuiltins(CompilerContext& ctx) {
+    // spec/61 §8: builtins that hand back an OWNED string (aiml_str_dup) — the receiving local drops it.
+    for (const char* fn : {"text_value"}) {
+        ctx.ownsReturnFns.insert(fn);
+        ctx.ownsReturnFnTypes[fn].insert("string");
+        ctx.stringProducerFns.insert(fn);
+    }
     ctx.enums["yaml"] = {{"null", 0}, {"scalar", 1}, {"sequence", 2}, {"mapping", 3}};
 
     // -----------------------------------------------------------------------

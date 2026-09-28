@@ -128,6 +128,8 @@ A **carrier** (accumulator) flows through the pipeline; the class declares its e
 type `carrier: <T>` and its exit type `taker: <T>`. The rule the user requires:
 
 > **The return type of the element-i function == the carrier parameter of the element-(i+1) function.**
+>
+> (Current binding form: all stages share one carrier type, passed by reference — §3a.)
 
 The carrier is **type-transforming (variant (b))**: every element function may change
 the carried type; the compiler checks each seam. (A uniform accumulator is the special
@@ -144,6 +146,32 @@ The compiler verifies **per opcode variant** along its schema (all static — se
 
 Thus the chain is **statically type-continuous** — exactly the requested guarantee, and
 `carrier`/`taker` being explicit lets the compiler check every signature seam.
+
+### 3a. Carrier passing — by reference (binding)
+
+The carrier is threaded **by reference**, never copied in and out of each handler. Every
+element handler has the signature
+
+```yaml
+def: { name: f_mana, args: [[carry, ref<CostDraft>]], body: [ ... ] }   # no return
+```
+
+- The first parameter is `ref<carrier>` for a value-model carrier (`61_memory_management_DRAFT.md`
+  §3: `ref<T>` is the tool for in-place mutation). A container carrier (`list`/`map`/`buffer`) is
+  already a shared handle with reference semantics (spec/61 §5) and is taken as the plain
+  container type (`[carry, list<string>]`). Either way the handler **mutates the carrier in
+  place** and **returns nothing**.
+- A handler that declares a return type, or takes the carrier by value, is a compile error.
+  This is the cascade form of `49_static_analysis.md` §21 (no value round-trip through a call):
+  copying the whole carrier into and out of every handler costs a copy per element and makes
+  the ownership of the result ambiguous.
+- The synthesized dispatch calls each handler as a plain call (`call: [<.handler, carry]`).
+- The synthesized `render(carrier, block) -> taker` first takes an **independent copy** of the
+  entry carrier into a local, runs the dispatch on that local, and returns it as `producer`.
+  The caller's carrier is never mutated, and the taker is a fresh owned value.
+
+Consequently `carrier` and `taker` must be the **same type**. A type-transforming chain (§3,
+variant (b)) needs a multi-typed carrier and is rejected until that exists.
 
 ## 4. Runtime flow (proposed)
 

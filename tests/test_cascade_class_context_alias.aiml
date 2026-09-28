@@ -23,39 +23,33 @@
     rules:
       - before: []
         on: [mana_cost, lp_cost]
-        def: { name: c_pay, args: [[carry, list<string>]], return: list<string>, body: [ { call: [carry.push, "Pay"] }, { return: carry } ] }
+        def: { name: c_pay, args: [[carry, list<string>]], body: [ { call: [carry.push, "Pay"] } ] }
       - before: ["*"]
         on: ManaCol
         after: ["*"]
         def:
           name: c_col
           args: [[carry, list<string>]]
-          return: list<string>
           body:
             - call: [carry.push, { call: [enums.name, "ManaCol", { call: [<.field] }] }]
-            - return: carry
       # context: CNT after mana_cost's ManaCol → "xN"
       - before: [mana_cost, ManaCol]
         on: CNT
         def:
           name: c_cmana
           args: [[carry, list<string>]]
-          return: list<string>
           body:
             - decl: [num, i32, { call: [<.field] }]
             - call: [carry.push, "x${num}"]
-            - return: carry
       # context: CNT right after lp_cost → "N LP"
       - before: [lp_cost]
         on: CNT
         def:
           name: c_clp
           args: [[carry, list<string>]]
-          return: list<string>
           body:
             - decl: [num, i32, { call: [<.field] }]
             - call: [carry.push, "${num} LP"]
-            - return: carry
 
 - cascade_class:
     name: CstText

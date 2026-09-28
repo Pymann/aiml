@@ -27,10 +27,10 @@
     rules:
       - before: []
         on: deal_dmg
-        def: { name: b_deal, args: [[carry, list<string>]], return: list<string>, body: [ { call: [carry.push, "deal"] }, { return: carry } ] }
+        def: { name: b_deal, args: [[carry, list<string>]], body: [ { call: [carry.push, "deal"] } ] }
       - before: []
         on: heal_dmg
-        def: { name: b_heal, args: [[carry, list<string>]], return: list<string>, body: [ { call: [carry.push, "heal"] }, { return: carry } ] }
+        def: { name: b_heal, args: [[carry, list<string>]], body: [ { call: [carry.push, "heal"] } ] }
 
 - class:
     name: TgtText
@@ -40,7 +40,7 @@
       # after the handler is folded into the synthesized pool class).
       - before: ["*"]
         on: TargetT
-        def: { name: tgt, args: [[carry, list<string>]], return: list<string>, body: [ { decl: [tval, i32, { call: [<.field] }] }, { call: [carry.push, "t${tval}"] }, { return: carry } ] }
+        def: { name: tgt, args: [[carry, list<string>]], body: [ { decl: [tval, i32, { call: [<.field] }] }, { call: [carry.push, "t${tval}"] } ] }
 
 - cascade_class:
     name: EffText

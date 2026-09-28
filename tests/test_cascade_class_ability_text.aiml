@@ -41,10 +41,10 @@
     rules:
       - before: []
         on: deal_damage
-        def: { name: bdeal, args: [[carry, list<string>]], return: list<string>, body: [ { call: [carry.push, "Deal"] }, { return: carry } ] }
+        def: { name: bdeal, args: [[carry, list<string>]], body: [ { call: [carry.push, "Deal"] } ] }
       - before: []
         on: heal_damage
-        def: { name: bheal, args: [[carry, list<string>]], return: list<string>, body: [ { call: [carry.push, "Heal"] }, { return: carry } ] }
+        def: { name: bheal, args: [[carry, list<string>]], body: [ { call: [carry.push, "Heal"] } ] }
 
 - class:
     name: TargetText
@@ -55,11 +55,9 @@
         def:
           name: tgt
           args: [[carry, list<string>]]
-          return: list<string>
           body:
             - decl: [tnm, string, { call: [enums.name, "TargetType", { call: [<.field] }] }]
             - call: [carry.push, "to the ${tnm}"]
-            - return: carry
 
 - class:
     name: ValueText
@@ -67,17 +65,15 @@
     rules:
       - before: ["*"]
         on: fixed
-        def: { name: vfix, args: [[carry, list<string>]], return: list<string>, body: [ { return: carry } ] }   # Value opcode stage → no word
+        def: { name: vfix, args: [[carry, list<string>]], body: [{ return: [] }] }   # Value opcode stage → no word
       - before: ["*"]
         on: i32
         def:
           name: vamt
           args: [[carry, list<string>]]
-          return: list<string>
           body:
             - decl: [amt, i32, { call: [<.field] }]
             - call: [carry.push, "${amt} damage"]
-            - return: carry
 
 - cascade_class:
     name: EffText

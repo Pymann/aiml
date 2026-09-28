@@ -34,6 +34,8 @@ GREEN=(
   tests/lifetime/71_local_model_set_copy_no_leak.aiml
   tests/lifetime/72_local_model_set_overwrite_no_leak.aiml
   tests/lifetime/75_local_model_set_producer_no_leak.aiml
+  tests/lifetime/76_method_rebind_producer_no_leak.aiml
+  tests/lifetime/77_member_container_from_producer_no_leak.aiml
   tests/lifetime/73_list_model_clear_no_leak.aiml
   tests/lifetime/74_list_model_remove_no_leak.aiml
   tests/_inline_model_red/49_value_survives_remove.aiml

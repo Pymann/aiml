@@ -1,0 +1,36 @@
+# static-check: off
+# spec/61 §5/§8: storing a FRESH owned container (producer result) into a container FIELD adopts
+# its reference — an extra incref leaked the whole list per store (9rooms-style response fields).
+- model: { name: Resp, fields: [[success, i32], [names, list<string>]] }
+
+- def:
+    name: collect_names
+    args: [[num, i32]]
+    return: { type: list<string>, lifetime: producer }
+    body:
+      - decl: [ids, list<string>]
+      - call: [ids.push, "name_${num}_a"]
+      - call: [ids.push, "name_${num}_b"]
+      - return: ids
+
+- def:
+    name: build
+    args: [[num, i32]]
+    return: { type: Resp, lifetime: producer }
+    body:
+      - decl: [out, Resp]
+      - set: [out.success, 1]
+      - set: [out.names, { call: [collect_names, num] }]
+      - return: out
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 200] }
+          body:
+            - decl: [res, Resp, { call: [build, idx] }]
+            - set: [idx, { +: [idx, 1] }]
+      - return: 0

@@ -2086,18 +2086,26 @@ void Compiler::checkCascadeClassSemantics(Program* prog) {
         }
         if (rules.empty()) continue;
 
-        // Carrier accessors (nominal string types).
-        auto carryIn  = [](RuleDecl* r) -> std::string {
-            return (r && r->def && !r->def->args.empty()) ? r->def->args[0].second : "";
-        };
-        auto carryOut = [](RuleDecl* r) -> std::string {
-            return (r && r->def) ? r->def->returnType : "";
-        };
         // Dedup identical diagnostics across the many enumerated paths.
         std::set<std::string> emitted;
         auto emit = [&](const std::string& msg) {
             if (emitted.insert(msg).second) LOG_ERROR(msg);
         };
+        // spec/57 §3a: one carrier type, passed by reference; handlers mutate it and return nothing.
+        if (pool.carrier != pool.taker)
+            emit("cascade_class '" + pool.name + "': carrier '" + pool.carrier + "' and taker '" +
+                 pool.taker + "' must be the same type (spec/57 §3a).");
+        // A container carrier is already a shared handle → taken as the plain container type.
+        const std::string refCarrier = ctx.isMemV3ContainerHandle(pool.carrier)
+            ? pool.carrier : "ref<" + pool.carrier + ">";
+        for (auto* r : rules) {
+            if (!r || !r->def) continue;
+            bool refArg = !r->def->args.empty() && r->def->args[0].second == refCarrier;
+            bool noRet = r->def->returnType.empty() || r->def->returnType == "void";
+            if (!refArg || !noRet)
+                emit("cascade_class '" + pool.name + "': handler '" + r->def->name + "' must take [carry, " +
+                     refCarrier + "] and return nothing — mutate the carrier in place (spec/57 §3a).");
+        }
         // Field type → cascade registry key ("" if not a cascade).
         auto cascKey = [&](const std::string& tn) -> std::string {
             if (ctx.cascades.count(tn)) return tn;
@@ -2166,22 +2174,6 @@ void Compiler::checkCascadeClassSemantics(Program* prog) {
                          opcodeName + "' element '" + path[i] + "' — add `weight:` or make one "
                          "context more specific.");
                 resolved[i] = best;
-            }
-            for (size_t i = 0; i < resolved.size(); ++i) {
-                if (!resolved[i]) continue;
-                if (i > 0 && !resolved[i - 1]) continue;
-                std::string in   = carryIn(resolved[i]);
-                std::string want = (i == 0) ? pool.carrier : carryOut(resolved[i - 1]);
-                if (in != want)
-                    emit("cascade_class '" + pool.name + "': carrier break at opcode '" +
-                         opcodeName + "' element '" + path[i] + "' — handler takes '" + in +
-                         "' but the chain carries '" + want + "'.");
-            }
-            if (!resolved.empty() && resolved.back()) {
-                std::string out = carryOut(resolved.back());
-                if (out != pool.taker)
-                    emit("cascade_class '" + pool.name + "': terminal carrier at opcode '" +
-                         opcodeName + "' is '" + out + "' but taker is '" + pool.taker + "'.");
             }
         };
 
@@ -2359,7 +2351,7 @@ void Compiler::synthesizeCascadeClasses(Program* prog) {
                 if (!opRule) { ok = false; return dm; }
                 body += "      - if:\n          condition: { eq: [dspv, " + std::to_string(N.id) +
                         "] }\n          then:\n";
-                body += "            - set: [carry, { call: [<." + handlerMethod(opRule) + ", carry] }]\n";
+                body += "            - call: [<." + handlerMethod(opRule) + ", carry]\n";
                 body += "            - set: [<.idx, { +: [<.idx, 1] }]\n";
                 std::vector<std::string> curPrefix = prefix; curPrefix.push_back(N.name);
                 for (size_t fi = 0; fi < N.fields.size(); ++fi) {
@@ -2370,36 +2362,37 @@ void Compiler::synthesizeCascadeClasses(Program* prog) {
                     if (!ck.empty()) {                      // nested cascade → recurse
                         std::string subM = genDispatch(ctx.cascades[ck], curPrefix);
                         if (!ok) return dm;
-                        body += "            - set: [carry, { call: [<." + subM + ", carry] }]\n";
+                        body += "            - call: [<." + subM + ", carry]\n";
                     } else {                                // flat enum/alias field
                         RuleDecl* fr = resolve(f.typeName, curPrefix, after);
                         if (!fr) { ok = false; return dm; }
-                        body += "            - set: [carry, { call: [<." + handlerMethod(fr) + ", carry] }]\n";
+                        body += "            - call: [<." + handlerMethod(fr) + ", carry]\n";
                         body += "            - set: [<.idx, { +: [<.idx, 1] }]\n";
                     }
                     curPrefix.push_back(f.typeName);
                 }
-                body += "            - return: carry\n";
+                body += "            - return: []\n";
             }
-            body += "      - return: carry\n";
             dispatchDefs.push_back(
-                "- def:\n    name: " + dm + "\n    args: [[carry, " + pool.carrier +
-                "]]\n    return: " + pool.taker + "\n    body:\n" + body);
+                "- def:\n    name: " + dm + "\n    args: [[carry, " +
+                (ctx.isMemV3ContainerHandle(pool.carrier) ? pool.carrier : "ref<" + pool.carrier + ">") +
+                "]]\n    body:\n" + body);
             return dm;
         };
 
         std::string topDispatch = genDispatch(casc, {});
         if (!ok) continue;   // gaps/ties already reported by the semantic pass
 
-        // spec/61 §3.2: render produces a FRESH owned taker (the cascade dispatch deep-clones the
-        // carrier through the rule chain — see aiml_clone_deep), so it is a `producer`: the caller
-        // owns the returned value and deep-frees its heap fields at scope exit. Without this the
-        // taker's cloned string/list fields leak on every render call (mkp_*_cascade pools).
+        // spec/57 §3a: render clones the entry carrier into an owned local, runs the dispatch on it
+        // by reference and returns that local as a fresh `producer` taker (the caller's carrier is
+        // never mutated; spec/61 §3.2 — the caller deep-frees the taker at scope exit).
         std::string renderText =
             "- def:\n    name: render\n    args: [[carry, " + pool.carrier +
             "], [block, list<i32>]]\n    return: { type: " + pool.taker + ", lifetime: producer }"
             "\n    body:\n      - set: [<.blk, block]\n      - set: [<.idx, 0]\n"
-            "      - return: { call: [<." + topDispatch + ", carry] }\n";
+            "      - decl: [acc, " + pool.carrier + ", { clone: carry }]\n"
+            "      - call: [<." + topDispatch + ", acc]\n"
+            "      - return: acc\n";
         auto renderFn = parseDefSnippet(renderText);
         if (!renderFn) {
             LOG_ERROR("cascade_class '" + pool.name + "': internal — failed to synthesize render.");
@@ -3885,6 +3878,10 @@ void Compiler::registerTypeDecl(Node* node) {
     } else if (auto cls = dynamic_cast<ClassDecl*>(node)) {
         std::string className = ctx.qualify(cls->name);
         ctx.validateIdentifier(cls->name, "class", cls->sourceNode);
+        if (!ctx.headerOnlyMode)
+            for (const auto& m : cls->members)
+                if (ctx.isRefContainerType(m.type))
+                    LOG_ERROR(ctx.fmtLoc(cls->sourceNode) + ctx.refContainerError("member '" + cls->name + "." + m.name + "'", m.type));
         if (ctx.classes.count(className)) {
             // Hard-error if a model with the same name already exists.
             // Models hold data; classes hold behavior — sharing a name conflates
@@ -4132,6 +4129,10 @@ void Compiler::registerTypeDecl(Node* node) {
     } else if (auto mod = dynamic_cast<ModelDecl*>(node)) {
         std::string modelName = ctx.qualify(mod->name);
         ctx.validateIdentifier(mod->name, "model", mod->sourceNode);
+        if (!ctx.headerOnlyMode)
+            for (const auto& f : mod->fields)
+                if (ctx.isRefContainerType(f.type))
+                    LOG_ERROR(ctx.fmtLoc(mod->sourceNode) + ctx.refContainerError("field '" + mod->name + "." + f.name + "'", f.type));
         if (ctx.classes.count(modelName)) {
             // Mirror check: if a class registered first under the same name,
             // hard-error.  (See ClassDecl branch above for full rationale.)
@@ -5452,6 +5453,8 @@ void Compiler::visitFunction(FunctionDecl* func) {
         ctx.ir_gen->setInsertPoint(oldBlock);
         return;
     }
+    if (ctx.isRefContainerType(func->returnType))
+        LOG_ERROR(ctx.fmtLoc(func->sourceNode) + ctx.refContainerError(func->name + ": return", func->returnType));
     for (size_t i = 0; i < argNames.size(); ++i) {
         if (ctx.symbol_table.count(argNames[i])) {
             LOG_ERROR("Variable shadowing is not allowed: function argument '" + argNames[i]
@@ -5479,6 +5482,9 @@ void Compiler::visitFunction(FunctionDecl* func) {
         // AIML_ALLOW_PTR_CONTAINER when double indirection is intended.
         {
             const std::string& ptn = func->args[i].second;
+            if (ctx.isRefContainerType(ptn))
+                LOG_ERROR(ctx.fmtLoc(func->sourceNode) + ctx.refContainerError(
+                    func->name + ": parameter '" + argNames[i] + "'", ptn));
             if ((ptn.rfind("ptr<list<", 0) == 0 || ptn.rfind("ptr<map<", 0) == 0)
                 && ptn.size() > 5 && !std::getenv("AIML_ALLOW_PTR_CONTAINER")) {
                 LOG_WARNING(func->name + ": parameter '" + argNames[i] + "' is '" + ptn +

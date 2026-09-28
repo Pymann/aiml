@@ -1,0 +1,50 @@
+# static-check: off
+# spec/61 §5.5/§8: set [local, <.producer_method()] inside a method releases the old value — a method
+# may return through a pointer (9rooms confirm_phase: set [mat, <.match_get(...)]).
+- model: { name: Sess, fields: [[label, string], [turn, i32], [tags, list<string>]] }
+- model: { name: Resp, fields: [[success, i32], [sess, Sess]] }
+
+- class:
+    name: Svc
+    members: [[store, list<Sess>]]
+    methods:
+      - def:
+          name: sess_get
+          args: [[num, i32]]
+          return: { type: Sess, lifetime: producer }
+          body:
+            - decl: [out, Sess]
+            - set: [out.label, "sess_${num}"]
+            - call: [out.tags.push, "tag_${num}"]
+            - return: out
+      - def:
+          name: sess_set
+          args: [[sess, Sess]]
+          body:
+            - if: { condition: { lt: [sess.turn, 0] }, then: [{ print: ["neg"] }] }
+      - def:
+          name: confirm
+          args: [[num, i32]]
+          return: { type: Resp, lifetime: producer }
+          body:
+            - decl: [out, Resp]
+            - decl: [cur, Sess, { call: [<.sess_get, num] }]
+            - call: [<.sess_set, cur]
+            - set: [cur, { call: [<.sess_get, { +: [num, 1] }] }]
+            - set: [out.success, 1]
+            - set: [out.sess, cur]
+            - return: out
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [svc, ptr<Svc>, { new: Svc }]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 200] }
+          body:
+            - decl: [res, Resp, { call: [svc.confirm, idx] }]
+            - set: [idx, { +: [idx, 1] }]
+      - free: [svc]
+      - return: 0
