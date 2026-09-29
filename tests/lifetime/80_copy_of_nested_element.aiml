@@ -1,0 +1,18 @@
+# static-check: off
+# spec/61 §5.1: {copy: {at: [outer, i]}} yields an independent outer copy of the inner list (was empty).
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [outer, list<list<i32>>]
+      - decl: [row, list<i32>]
+      - call: [row.push, 42]
+      - call: [outer.push, row]
+      - decl: [result, list<i32>, {copy: {at: [outer, 0]}}]
+      - print: ["len=${result.len}"]
+      - if: {condition: {neq: [result.len, 1]}, then: [{return: 10}]}
+      - decl: [value, i32, {at: [result, 0]}]
+      - if: {condition: {neq: [value, 42]}, then: [{return: 11}]}
+      - call: [result.push, 99]
+      - if: {condition: {neq: [row.len, 1]}, then: [{return: 12}]}
+      - return: 0

@@ -1,0 +1,19 @@
+# static-check: off
+# spec/61 §5.1: copy of a bound inner list (control for 80).
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [outer, list<list<i32>>]
+      - decl: [row, list<i32>]
+      - call: [row.push, 42]
+      - call: [outer.push, row]
+      - decl: [source_row, list<i32>, {at: [outer, 0]}]
+      - decl: [result, list<i32>, {copy: source_row}]
+      - print: ["len=${result.len}"]
+      - if: {condition: {neq: [result.len, 1]}, then: [{return: 10}]}
+      - decl: [value, i32, {at: [result, 0]}]
+      - if: {condition: {neq: [value, 42]}, then: [{return: 11}]}
+      - call: [result.push, 99]
+      - if: {condition: {neq: [row.len, 1]}, then: [{return: 12}]}
+      - return: 0

@@ -17,10 +17,14 @@ a value that the caller will continue to mutate.
 - decl: [y, T, { call: [sys.clone, x] }]
 ```
 
-- The argument **must be a bare variable name** (resolves via the symbol
-  table).  Literals, computed expressions, and chained property accesses are
-  not accepted — the compiler needs the symbol's declared type to build
-  type descriptors.
+- The argument (the same applies to the shallow `{ copy: x }`, `61_memory_management_DRAFT.md`
+  §5.1) may be a **variable**, an **`at` element** (`{ at: [outer, i] }`), a container accessor
+  (`.get` / `.at` / `.first` / `.last`), a **member access** (`obj.field`) or a **call** result.
+  For anything but a plain variable the compiler takes the type from the typed target
+  (`decl: [y, T, { clone: {at: …} }]` / `set: [y, …]`) and checks it against the operand.
+- The operand is evaluated **exactly once**; the source stays alive while it is copied.
+- An unsupported operand form, or a missing target type, is a **compile error** — never a silent
+  empty or null result. (A genuinely empty source still yields an empty copy.)
 - The result type matches the argument type.
 - Returns a fresh value, suitable as init-value for `decl: [y, T, ...]` or
   as RHS of `set: [y, ...]`.

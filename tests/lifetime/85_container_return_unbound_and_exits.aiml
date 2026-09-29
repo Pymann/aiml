@@ -1,0 +1,49 @@
+# static-check: off
+# spec/61 §8: the owning reference of a container return is dropped on every path — call argument, discarded result, overwrite, loop iteration, early return.
+- def:
+    name: make_row
+    args: [[width, i32]]
+    return: list<i32>
+    body:
+      - decl: [row, list<i32>]
+      - decl: [pos, i32, 0]
+      - while:
+          condition: {lt: [pos, width]}
+          body:
+            - call: [row.push, pos]
+            - set: [pos, {+: [pos, 1]}]
+      - return: row
+- def:
+    name: count_row
+    args: [[row, list<i32>]]
+    return: i32
+    body:
+      - return: row.len
+- def:
+    name: early_exit
+    args: [[flag, i32]]
+    return: i32
+    body:
+      - decl: [held, list<i32>, {call: [make_row, 4]}]
+      - if: {condition: {eq: [flag, 1]}, then: [{return: held.len}]}
+      - return: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [total, i32, 0]
+      - decl: [slot, list<i32>, {call: [make_row, 1]}]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - set: [total, {+: [total, {call: [count_row, {call: [make_row, 3]}]}]}]
+            - call: [make_row, 2]
+            - set: [slot, {call: [make_row, 5]}]
+            - set: [total, {+: [total, {call: [early_exit, 1]}]}]
+            - set: [total, {+: [total, {call: [early_exit, 0]}]}]
+            - decl: [inner, list<i32>, {call: [make_row, 2]}]
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [total, 1400]}, then: [{return: 30}]}
+      - if: {condition: {neq: [slot.len, 5]}, then: [{return: 31}]}
+      - return: 0

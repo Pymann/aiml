@@ -61,20 +61,9 @@ struct Analyzer {
             // the source keeps its own ref, this local owns an INDEPENDENT one → safe to drop.
             if (dynamic_cast<VariableExpr*>(iv)) return true;
             if (dynamic_cast<AtExpr*>(iv)) return true;
-            if (auto* c = dynamic_cast<CallExpr*>(iv)) {
-                const std::string& fn = c->functionName;
-                size_t dp = fn.rfind('.');
-                std::string shortName = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
-                // Fresh producers: {copy}/{clone} build an independent-spine handle; `.slice`
-                // returns a freshly-allocated handle (ListImpl::slice). All owned.
-                if (fn == "sys.copy" || fn == "sys.clone" || shortName == "slice") return true;
-                // spec/61 return-ownership for LIST producers: an `owns_return: true` function
-                // hands back a freshly-built INDEPENDENT list (e.g. active_match_ids /
-                // take_gone_players → list<string>). A generic user call may instead return a
-                // BORROW of a member field, so it stays gated on owns_return (the two-sided
-                // return-ownership contract — findings §1/§3 — not broadened here).
-                if (ctx.ownsReturnMatches(shortName, t)) return true;
-            }
+            // spec/61 §8: a container return is always an owning reference (copy/clone/slice fresh,
+            // accessors incref'd at the decl, any other call moves its ref) → the caller drops it.
+            if (dynamic_cast<CallExpr*>(iv)) return true;
             return false;
         }
         // spec/61 §7: managed string-local ownership (kill-switch kManagedStringLocals). ON → every
