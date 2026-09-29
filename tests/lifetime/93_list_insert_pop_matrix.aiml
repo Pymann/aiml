@@ -1,0 +1,62 @@
+# static-check: off
+# spec/61 §4/§5.4/§8: insert owns its element (start/middle/end, growth, source from the same list); pop results are owned on every use.
+- def:
+    name: observe
+    args: [[text, string]]
+    return: i32
+    body:
+      - return: text.len
+- def:
+    name: take_last
+    args: [[lines, list<string>]]
+    return: { type: string, lifetime: producer }
+    body:
+      - return: {call: [lines.pop]}
+- class:
+    name: Sink
+    members:
+      - [seen, i32]
+    methods:
+      - def:
+          name: feed
+          args: [[text, string]]
+          body:
+            - set: [<.seen, {+: [<.seen, text.len]}]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [sink, Sink]
+      - decl: [counter, i32, 0]
+      - decl: [total, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [lines, list<string>]
+            - decl: [mid, string, "mid=${counter}"]
+            - call: [lines.insert, 0, "a=${1}"]
+            - call: [lines.insert, 1, "z=${9}"]
+            - call: [lines.insert, 1, mid]
+            - call: [lines.insert, 0, {at: [lines, 2]}]
+            - decl: [pos, i32, 0]
+            - while:
+                condition: {lt: [pos, 6]}
+                body:
+                  - call: [lines.insert, 2, "g=${pos}"]
+                  - set: [pos, {+: [pos, 1]}]
+            - if: {condition: {neq: [lines.len, 10]}, then: [{return: 110}]}
+            - if: {condition: {neq: [{at: [lines, 0]}, "z=9"]}, then: [{return: 111}]}
+            - decl: [bound, string, {call: [lines.pop]}]
+            - if: {condition: {neq: [bound, "z=9"]}, then: [{return: 112}]}
+            - set: [bound, {call: [lines.pop]}]
+            - set: [total, {+: [total, {call: [observe, {call: [lines.pop]}]}]}]
+            - call: [sink.feed, {call: [lines.pop]}]
+            - decl: [ret, string, {call: [take_last, lines]}]
+            - decl: [both, string, "${{ call: [lines.pop] }}+${{ call: [lines.pop] }}"]
+            - call: [lines.push, {call: [lines.pop]}]
+            - call: [lines.insert, 0, {call: [lines.pop]}]
+            - call: [lines.pop]
+            - if: {condition: {neq: [lines.len, 2]}, then: [{return: 113}]}
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {lt: [total, 1]}, then: [{return: 114}]}
+      - return: 0

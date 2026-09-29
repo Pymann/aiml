@@ -1,0 +1,68 @@
+# static-check: off
+# spec/61 §5.4/§5.5/§5.7: map remove/replace release by value class — repeated replace, growth, put(k,get(k)), source from another slot, shared + nested values, live co-owner.
+- model: {name: Tag, fields: [[label, string]]}
+- model:
+    name: Card
+    fields:
+      - [title, string]
+      - [tags, list<string>]
+      - [tag, Tag]
+- def:
+    name: make_card
+    args: [[title, string]]
+    return: { type: Card, lifetime: producer }
+    body:
+      - decl: [out, Card]
+      - set: [out.title, "${title}"]
+      - call: [out.tags.push, "t-${title}"]
+      - set: [out.tag.label, "l-${title}"]
+      - return: out
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [keeper, shared<Tag>, {share: {new: Tag}}]
+      - set: [keeper.label, "kept=${1}"]
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [cards, "map<string:Card>"]
+            - decl: [pos, i32, 0]
+            - while:
+                condition: {lt: [pos, 9]}
+                body:
+                  - call: [cards.put, "k${pos}", {call: [make_card, "c${pos}"]}]
+                  - set: [pos, {+: [pos, 1]}]
+            - call: [cards.put, "k3", {call: [make_card, "again"]}]
+            - call: [cards.put, "k3", {call: [make_card, "twice"]}]
+            - call: [cards.put, "k4", {call: [cards.get, "k4"]}]
+            - call: [cards.put, "k5", {call: [cards.get, "k6"]}]
+            - call: [cards.remove, "k0"]
+            - call: [cards.remove, "k8"]
+            - call: [cards.remove, "missing"]
+            - if: {condition: {neq: [cards.len, 7]}, then: [{return: 100}]}
+            - decl: [card_k3, Card, {call: [cards.get, "k3"]}]
+            - if: {condition: {neq: [card_k3.title, "twice"]}, then: [{return: 101}]}
+            - decl: [card_k4, Card, {call: [cards.get, "k4"]}]
+            - if: {condition: {neq: [card_k4.tag.label, "l-c4"]}, then: [{return: 102}]}
+            - decl: [card_k5, Card, {call: [cards.get, "k5"]}]
+            - if: {condition: {neq: [card_k5.title, "c6"]}, then: [{return: 103}]}
+            - decl: [shared_map, "map<i32:shared<Tag>>"]
+            - call: [shared_map.put, 1, keeper]
+            - decl: [other, shared<Tag>, {share: {new: Tag}}]
+            - set: [other.label, "other=${2}"]
+            - call: [shared_map.put, 1, other]
+            - call: [shared_map.put, 2, keeper]
+            - call: [shared_map.remove, 2]
+            - decl: [rows, "map<string:list<i32>>"]
+            - decl: [row, list<i32>]
+            - call: [row.push, 5]
+            - call: [rows.put, "a", row]
+            - call: [rows.put, "b", row]
+            - call: [rows.remove, "a"]
+            - call: [rows.put, "b", {call: [rows.get, "b"]}]
+            - if: {condition: {neq: [row.len, 1]}, then: [{return: 104}]}
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [keeper.label, "kept=1"]}, then: [{return: 105}]}
+      - return: 0

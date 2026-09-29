@@ -413,7 +413,9 @@ extern "C" void aiml_map_free(void* map_ptr, int32_t keyKind, int64_t keyStride,
     // by put — walking it read past the never-grown occ buffer, the old "Invalid read of size 1").
     // Reclaim over the dense range [0,size): put OWNS its string keys/values via dup (§8), so one
     // decref per live entry balances that dup exactly.
-    if (keyKind == 1 || valKind == 1 || valKind == 2) {
+    // Release pass whenever a key OR value kind owns something (independent of the key type).
+    bool valueNeedsRelease = (valKind == 1 || valKind == 2 || valKind == 3);
+    if (keyKind == 1 || valueNeedsRelease) {
         char* keyBase = reinterpret_cast<char*>(m->keys);
         char* valBase = reinterpret_cast<char*>(m->vals);
         for (int32_t i = 0; i < m->size; ++i) {
@@ -494,6 +496,10 @@ extern "C" void* aiml_map_handle_copy(void* src, int64_t keyStride, int64_t valS
     } else if (valKind == 3 && d->vals) {
         char* vb = reinterpret_cast<char*>(d->vals);
         for (int32_t i = 0; i < n; ++i) { void* v = *reinterpret_cast<void**>(vb + (int64_t)i*valStride); if (v) aiml_model_incref(v); }
+    } else if (valKind == 4 && d->vals) {
+        // spec/61 §5.7: shallow copy shares each nested container handle (rc at h-8 for list/map/buffer).
+        char* vb = reinterpret_cast<char*>(d->vals);
+        for (int32_t i = 0; i < n; ++i) { void* v = *reinterpret_cast<void**>(vb + (int64_t)i*valStride); if (v) aiml_list_handle_incref(v); }
     }
     return h;
 }

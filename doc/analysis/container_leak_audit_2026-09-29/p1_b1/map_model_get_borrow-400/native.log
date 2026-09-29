@@ -1,0 +1,11 @@
+
+=== AIML CRASH (signal 11 at addr=(nil) tid=100373) ===
+backtrace: 8 frames
+/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/out/libaiml/libaiml.so(+0x903a33)[0x7587d8103a33]
+/lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x7587d7445330]
+/lib/x86_64-linux-gnu/libc.so.6(+0x18b32b)[0x7587d758b32b]
+/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_model_get_borrow-400/bin(+0x14ca)[0x64cdfc4704ca]
+/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_model_get_borrow-400/bin(+0x167b)[0x64cdfc47067b]
+/lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca)[0x7587d742a1ca]
+/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x7587d742a28b]
+/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_model_get_borrow-400/bin(+0x1185)[0x64cdfc470185]

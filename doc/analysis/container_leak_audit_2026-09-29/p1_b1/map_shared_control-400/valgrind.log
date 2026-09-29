@@ -1,0 +1,35 @@
+==99966== Memcheck, a memory error detector
+==99966== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==99966== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==99966== Command: /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_shared_control-400/bin
+==99966== Parent PID: 99837
+==99966== 
+==99966== 
+==99966== HEAP SUMMARY:
+==99966==     in use at exit: 159,329 bytes in 3,127 blocks
+==99966==   total heap usage: 5,969 allocs, 2,842 frees, 493,381 bytes allocated
+==99966== 
+==99966== 7,600 bytes in 400 blocks are indirectly lost in loss record 2,325 of 2,327
+==99966==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==99966==    by 0x512B087: aiml_str_alloc (string_runtime.cpp:54)
+==99966==    by 0x10955D: __aiml_str_concat (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_shared_control-400/bin)
+==99966==    by 0x10934C: __aiml_user_main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_shared_control-400/bin)
+==99966==    by 0x1095BA: main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_shared_control-400/bin)
+==99966== 
+==99966== 14,000 (6,400 direct, 7,600 indirect) bytes in 400 blocks are definitely lost in loss record 2,326 of 2,327
+==99966==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==99966==    by 0x512703C: aiml_model_alloc (model_runtime.cpp:71)
+==99966==    by 0x109324: __aiml_user_main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_shared_control-400/bin)
+==99966==    by 0x1095BA: main (in /media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/test/aiml/doc/analysis/container_leak_audit_2026-09-29/p1_b1/map_shared_control-400/bin)
+==99966== 
+==99966== LEAK SUMMARY:
+==99966==    definitely lost: 6,400 bytes in 400 blocks
+==99966==    indirectly lost: 7,600 bytes in 400 blocks
+==99966==      possibly lost: 0 bytes in 0 blocks
+==99966==    still reachable: 145,329 bytes in 2,327 blocks
+==99966==         suppressed: 0 bytes in 0 blocks
+==99966== Reachable blocks (those to which a pointer was found) are not shown.
+==99966== To see them, rerun with: --leak-check=full --show-leak-kinds=all
+==99966== 
+==99966== For lists of detected and suppressed errors, rerun with: -s
+==99966== ERROR SUMMARY: 2 errors from 2 contexts (suppressed: 0 from 0)

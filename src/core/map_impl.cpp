@@ -128,8 +128,23 @@ namespace MapImpl {
         ctx.builder.CreateCall(dec, { asP });
     }
 
+    // Release the value stored in valSlot per relKind (see map_impl.h).
+    static void releaseValSlot(CompilerContext& ctx, llvm::Value* valSlot, llvm::Type* valType,
+                               llvm::Value* relDesc, int relN, int relKind) {
+        if (!relDesc || relKind == 0) return;
+        auto* i8p = llvm::PointerType::get(ctx.context, 0);
+        if (relKind == 1) {
+            ctx.builder.CreateCall(ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
+                {i8p, i8p, ctx.builder.getInt32Ty()}), { valSlot, relDesc, ctx.builder.getInt32(relN) });
+        } else if (relKind == 2 && valType->isPointerTy()) {
+            llvm::Value* v = ctx.builder.CreateLoad(valType, valSlot, "map_rel_obj");
+            ctx.builder.CreateCall(ctx.getFunction("aiml_model_decref", ctx.builder.getVoidTy(),
+                {i8p, i8p, ctx.builder.getInt32Ty()}), { v, relDesc, ctx.builder.getInt32(relN) });
+        }
+    }
+
     void put(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Value* valVal, llvm::StructType* mapType, bool valIsString,
-             llvm::Value* oldHandleDesc, int oldHandleDescN) {
+             llvm::Value* relDesc, int relN, int relKind) {
         // Implement Put (Linear Scan)
         llvm::Value* sizePtr = ctx.builder.CreateStructGEP(mapType, mapPtr, 0, "sizePtr");
         llvm::Value* capPtr = ctx.builder.CreateStructGEP(mapType, mapPtr, 1, "capPtr");
@@ -184,12 +199,8 @@ namespace MapImpl {
             llvm::Value* oldVal = ctx.builder.CreateLoad(valType, valSlot, "map_old_val");
             decrefIfString(ctx, oldVal, true);
         }
-        if (oldHandleDesc && valType->isPointerTy()) {
-            // spec/61 §5.5/§5.7 replace-old: the new reference is already secured → always release the old.
-            auto* i8p = llvm::PointerType::get(ctx.context, 0);
-            ctx.builder.CreateCall(ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
-                {i8p, i8p, ctx.builder.getInt32Ty()}), { valSlot, oldHandleDesc, ctx.builder.getInt32(oldHandleDescN) });
-        }
+        // spec/61 §5.5 replace-old: the new value is already secured → always release the old one.
+        releaseValSlot(ctx, valSlot, valType, relDesc, relN, relKind);
         ctx.builder.CreateStore(dupIfString(ctx, valVal, valIsString), valSlot);
         ctx.builder.CreateBr(endBB);
 
@@ -264,7 +275,7 @@ namespace MapImpl {
         ctx.builder.SetInsertPoint(endBB);
     }
 
-    llvm::Value* get(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Type* valType, llvm::StructType* mapType) {
+    llvm::Value* get(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Type* valType, llvm::StructType* mapType, bool slotAddr) {
         // Return Value* (loaded) or default (0)
         llvm::Value* sizeVal = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), ctx.builder.CreateStructGEP(mapType, mapPtr, 0));
         llvm::Value* keysPtr = ctx.builder.CreateLoad(llvm::PointerType::get(ctx.context, 0), ctx.builder.CreateStructGEP(mapType, mapPtr, 3));
@@ -282,10 +293,11 @@ namespace MapImpl {
         ctx.builder.CreateStore(ctx.builder.getInt32(0), iVar);
         
         // Result var
-        llvm::Value* resVar = ctx.createEntryAlloca(valType, "res_get");
+        llvm::Type* resTy = slotAddr ? llvm::PointerType::get(ctx.context, 0) : valType;
+        llvm::Value* resVar = ctx.createEntryAlloca(resTy, "res_get");
         // Default value: 0 or empty string?
         // use generic null
-        ctx.builder.CreateStore(llvm::Constant::getNullValue(valType), resVar);
+        ctx.builder.CreateStore(llvm::Constant::getNullValue(resTy), resVar);
 
         ctx.builder.CreateBr(loopBB);
         
@@ -305,7 +317,7 @@ namespace MapImpl {
         
         ctx.builder.SetInsertPoint(foundBB);
         llvm::Value* valSlot = ctx.builder.CreateInBoundsGEP(valType, valsPtr, iVal);
-        llvm::Value* val = ctx.builder.CreateLoad(valType, valSlot);
+        llvm::Value* val = slotAddr ? valSlot : ctx.builder.CreateLoad(valType, valSlot);
         ctx.builder.CreateStore(val, resVar);
         ctx.builder.CreateBr(endBB);
         
@@ -315,7 +327,7 @@ namespace MapImpl {
         ctx.builder.CreateBr(loopBB);
         
         ctx.builder.SetInsertPoint(endBB);
-        return ctx.builder.CreateLoad(valType, resVar, "get_res");
+        return ctx.builder.CreateLoad(resTy, resVar, "get_res");
     }
 
     llvm::Value* contains(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::StructType* mapType) {
@@ -365,7 +377,8 @@ namespace MapImpl {
         return ctx.builder.CreateLoad(ctx.builder.getInt1Ty(), resVar);
     }
     
-    void remove(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Type* valType, llvm::StructType* mapType, bool valIsString) {
+    void remove(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Type* valType, llvm::StructType* mapType, bool valIsString,
+                llvm::Value* relDesc, int relN, int relKind) {
         llvm::Value* sizePtr = ctx.builder.CreateStructGEP(mapType, mapPtr, 0, "sizePtr");
         llvm::Value* sizeVal = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), sizePtr);
         
@@ -408,6 +421,8 @@ namespace MapImpl {
             llvm::Value* remVal = ctx.builder.CreateLoad(valType, remValSlot, "rm_val");
             decrefIfString(ctx, remVal, true);
         }
+        // spec/61 §5.4/§5.7: release the removed value per its class BEFORE the shift (moved entries are not re-released).
+        releaseValSlot(ctx, ctx.builder.CreateInBoundsGEP(valType, valsPtr, iVal), valType, relDesc, relN, relKind);
         // Found: Shift [i+1, size] to [i]
 
         llvm::Value* nextIdx = ctx.builder.CreateAdd(iVal, ctx.builder.getInt32(1));

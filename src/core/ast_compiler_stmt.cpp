@@ -685,7 +685,8 @@ void Compiler::emitMapHandleDecl(DeclStmt* decl) {
     std::string kName = (colon == std::string::npos) ? inner : inner.substr(0, colon);
     std::string vName = (colon == std::string::npos) ? std::string("i32") : inner.substr(colon + 1);
     llvm::Type* kTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(kName)));
-    llvm::Type* vTyRaw = ctx.isRefcountModel(vName)
+    // spec/61 §5.7: a nested container value is a HANDLE slot (pointer stride), like a refcount model.
+    llvm::Type* vTyRaw = (ctx.isRefcountModel(vName) || ctx.isMemV3ContainerHandle(vName))
         ? i8p
         : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
     if (!kTy) kTy = i32Ty;
@@ -697,6 +698,7 @@ void Compiler::emitMapHandleDecl(DeclStmt* decl) {
     int64_t keyStride = (kName == "string") ? 8 : (int64_t)dl.getTypeAllocSize(kTy);
     int valKind; int64_t valStride; llvm::GlobalVariable* valNodes = nullptr; int32_t valNodesCount = 0;
     if (vName == "string") { valKind = 1; valStride = 8; }
+    else if (ctx.isMemV3ContainerHandle(vName)) { valKind = 4; valStride = (int64_t)dl.getPointerSize(); }
     else if (ctx.isRefcountModel(vName)) {
         valKind = 3; valStride = 8;
         // Bare-class key: a memV3 map<K:shared<V>> has vName "shared<V>" (see emitListHandleDecl).
@@ -883,7 +885,7 @@ void Compiler::emitMapHandleDecl(DeclStmt* decl) {
             // spec/61 §5.7 outer drop: decref each nested container value via its handle-rooted descriptor.
             int nc = 0;
             if (llvm::GlobalVariable* hd = elemHandleSerNodes(vName, nc)) {
-                sd.elemKind = 2; sd.elemSize = 8; sd.serNodes = hd; sd.serNodesCount = nc;
+                sd.elemKind = 2; sd.elemSize = valStride; sd.serNodes = hd; sd.serNodesCount = nc;
             }
         }
         sd.ownershipId = declOid;
