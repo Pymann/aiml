@@ -1,0 +1,64 @@
+# static-check: off
+# spec/61 §8: a producer returning a nested container element hands out a FRESH list on every
+# path (never the callee's live handle) — correct content, no leak (9rooms combat_zone_at).
+- model: { name: Ent,  fields: [[iid, string], [card_id, string]] }
+- model: { name: Sess, fields: [[mid, string], [zones, list<list<Ent>>]] }
+
+- def:
+    name: zone_at
+    args: [[mat, ref<Sess>], [zix, i32]]
+    return: { type: list<Ent>, lifetime: producer }
+    body:
+      - decl: [zone_cp, list<Ent>]
+      - if:
+          condition: { lt: [zix, mat.zones.len] }
+          then:
+            - decl: [zone_src, list<Ent>, { at: [mat.zones, zix] }]
+            - decl: [zci, i32, 0]
+            - while:
+                condition: { lt: [zci, zone_src.len] }
+                body:
+                  - call: [zone_cp.push, { at: [zone_src, zci] }]
+                  - set: [zci, { +: [zci, 1] }]
+      - return: zone_cp
+
+- def:
+    name: count_ids
+    args: [[mat, Sess]]
+    return: i32
+    body:
+      - decl: [total, i32, 0]
+      - decl: [zix, i32, 0]
+      - while:
+          condition: { lt: [zix, 3] }
+          body:
+            - decl: [zon, list<Ent>, { call: [zone_at, mat, zix] }]
+            - set: [total, { +: [total, zon.len] }]
+            - set: [zix, { +: [zix, 1] }]
+      - return: total
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [mat, Sess]
+      - set: [mat.mid, "match_${1}"]
+      - decl: [zon0, list<Ent>]
+      - decl: [ent, Ent]
+      - set: [ent.iid, "iid_${1}"]
+      - set: [ent.card_id, "card_${1}"]
+      - call: [zon0.push, ent]
+      - call: [mat.zones.push, zon0]
+      - decl: [zon1, list<Ent>]
+      - call: [mat.zones.push, zon1]
+      - decl: [idx, i32, 0]
+      - decl: [acc, i32, 0]
+      - while:
+          condition: { lt: [idx, 200] }
+          body:
+            - set: [acc, { +: [acc, { call: [count_ids, mat] }] }]
+            - set: [idx, { +: [idx, 1] }]
+      - decl: [chk, list<Ent>, { at: [mat.zones, 0] }]
+      - decl: [first, Ent, { at: [chk, 0] }]
+      - print: ["acc=${acc} iid=${first.iid}"]
+      - return: 0

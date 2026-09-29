@@ -1,0 +1,29 @@
+# static-check: off
+# spec/61 §8: a container return hands the caller one owning reference on every path (shared or fresh), with or without producer — the caller drops it.
+- def:
+    name: choose_row
+    args: [[source, list<list<i32>>], [which, i32]]
+    return: list<i32>
+    body:
+      - if: {condition: {eq: [which, 0]}, then: [{return: {at: [source, 0]}}]}
+      - decl: [fresh, list<i32>]
+      - call: [fresh.push, 7]
+      - return: fresh
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [outer, list<list<i32>>]
+      - decl: [seed, list<i32>]
+      - call: [seed.push, 42]
+      - call: [outer.push, seed]
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [alias_row, list<i32>, {call: [choose_row, outer, 0]}]
+            - decl: [fresh_row, list<i32>, {call: [choose_row, outer, 1]}]
+            - if: {condition: {neq: [alias_row.len, 1]}, then: [{return: 20}]}
+            - if: {condition: {neq: [fresh_row.len, 1]}, then: [{return: 21}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

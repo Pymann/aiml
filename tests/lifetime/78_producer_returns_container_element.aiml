@@ -1,0 +1,41 @@
+# static-check: off
+# spec/61 §4/§8: a producer that returns a BORROWED container element ({ call: [map.get, k] })
+# must hand out an independent copy — the caller adopted the map's own string before (9rooms
+# ability_block_cached: freed cache entry → garbage ability texts + double free).
+- decl: [g_cache, map<string:string>]
+
+- def:
+    name: cached_text
+    args: [[num, i32]]
+    return: { type: string, lifetime: producer }
+    body:
+      - decl: [key, string, "k${num}"]
+      - if:
+          condition: { eq: [{ call: [g_cache.contains, key] }, 1] }
+          then: [{ return: { call: [g_cache.get, key] } }]
+      - decl: [blk, string, "text_${num}_padding_padding"]
+      - call: [g_cache.put, key, blk]
+      - return: blk
+
+- def:
+    name: build
+    args: [[num, i32]]
+    return: { type: string, lifetime: producer }
+    body:
+      - decl: [out_txt, string, ""]
+      - decl: [blk, string, { call: [cached_text, num] }]
+      - if:
+          condition: { gt: [blk.len, 0] }
+          then: [{ set: [out_txt, blk] }]
+      - return: out_txt
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [ta1, string, { call: [build, 1] }]
+      - decl: [ta2, string, { call: [build, 1] }]
+      - decl: [tb1, string, { call: [build, 2] }]
+      - decl: [ta3, string, { call: [build, 1] }]
+      - print: ["${ta1} ${ta2} ${tb1} ${ta3}"]
+      - return: 0

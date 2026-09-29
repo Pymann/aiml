@@ -329,6 +329,55 @@ void Compiler::classifyListElem(const std::string& elemName, int& elemKind, int6
     }
 }
 
+// spec/29_3 §2 / spec/61 §5.1: the copy/clone operand may be any expression, evaluated exactly once.
+// A plain local yields its own slot; anything else is evaluated into a temp slot. A fresh owned call
+// result (not a container accessor) is owned by the temp and released after the copy.
+llvm::Value* Compiler::containerCopySource(Expr* arg, DeclStmt* decl, llvm::Value*& tempSlot, bool& tempOwned) {
+    llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+    tempSlot = nullptr; tempOwned = false;
+    if (auto* av = dynamic_cast<VariableExpr*>(arg)) {
+        if (av->name.find('.') == std::string::npos && av->name.find('<') == std::string::npos)
+            if (Symbol* src = resolveVariable(av->name))
+                return src->ir_alloca_inst
+                    ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(src->ir_alloca_inst)) : src->alloca_inst;
+    }
+    IRValue* v = visitExpression(arg);
+    llvm::Value* h = v ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v)) : nullptr;
+    if (!h || !h->getType()->isPointerTy()) {
+        LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "copy/clone operand of '" + decl->varName +
+            "' does not evaluate to a " + decl->typeName + " (spec/29_3 §2).");
+        return nullptr;
+    }
+    tempSlot = ctx.createEntryAlloca(i8p, "copy_src");
+    ctx.builder.CreateStore(h, tempSlot);
+    if (auto* oc = dynamic_cast<CallExpr*>(arg)) {
+        const std::string& fn = oc->functionName;
+        size_t dp = fn.rfind('.');
+        std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+        tempOwned = !(dp != std::string::npos && (sn == "get" || sn == "at" || sn == "first" || sn == "last"));
+    }
+    return tempSlot;
+}
+
+void Compiler::releaseContainerCopyTemp(llvm::Value* tempSlot, bool tempOwned, const std::string& typeName) {
+    if (!tempSlot || !tempOwned) return;
+    llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+    int nc = 0; llvm::GlobalVariable* d = elemHandleSerNodes(typeName, nc);
+    if (d) ctx.builder.CreateCall(ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
+               {i8p, i8p, ctx.builder.getInt32Ty()}), { tempSlot, d, ctx.builder.getInt32(nc) });
+}
+
+// spec/61 §5.7/§8: `.get/.at/.first/.last` on a container yields a BORROWED element handle; every
+// other container-returning call hands the caller an owning reference (producer or not).
+static bool isContainerAccessorCall(const CompilerContext& ctx, const Expr* e, const std::string& type) {
+    auto* ce = dynamic_cast<const CallExpr*>(e);
+    if (!ce) return false;
+    size_t dp = ce->functionName.rfind('.');
+    if (dp == std::string::npos) return false;
+    std::string sn = ce->functionName.substr(dp + 1);
+    return (sn == "get" || sn == "at" || sn == "first" || sn == "last") && !ctx.ownsReturnMatches(sn, type);
+}
+
 void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
     auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
     llvm::Type* i32Ty = ctx.builder.getInt32Ty();
@@ -456,12 +505,15 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
                 auto dot = ce->functionName.rfind('.');
                 std::string meth = (dot == std::string::npos) ? ce->functionName
                                                               : ce->functionName.substr(dot + 1);
-                if (meth == "get" && dot != std::string::npos
-                    && ctx.memV3 && ctx.isMemV3ContainerHandle(decl->typeName))
+                (void)meth;
+                if (ctx.memV3 && ctx.isMemV3ContainerHandle(decl->typeName)
+                    && isContainerAccessorCall(ctx, ce, decl->typeName))
                     isShareAt = true;
             }
         }
     }
+
+    llvm::Value* copyTempSlot = nullptr; bool copyTempOwned = false;
 
     llvm::Value* handle = nullptr;
     if (isShareVar) {
@@ -493,16 +545,9 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
         // new handle into `slot`. This is the correct path for move-only (ptr<T>) elements: each
         // element is an independent owner, so the two containers never double-free.
         auto* ce = static_cast<CallExpr*>(iv);
-        llvm::Value* srcSlot = nullptr;
-        if (!ce->args.empty()) {
-            if (auto* av = dynamic_cast<VariableExpr*>(ce->args[0].get())) {
-                Symbol* src = resolveVariable(av->name);
-                if (src) srcSlot = src->ir_alloca_inst
-                    ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(src->ir_alloca_inst))
-                    : src->alloca_inst;
-            }
-        }
+        llvm::Value* srcSlot = ce->args.empty() ? nullptr : containerCopySource(ce->args[0].get(), decl, copyTempSlot, copyTempOwned);
         if (srcSlot) emitContainerCloneDeep(slot, srcSlot, decl->typeName);
+        releaseContainerCopyTemp(copyTempSlot, copyTempOwned, decl->typeName);
         handle = nullptr;   // emitContainerCloneDeep wrote `slot` directly
     } else if (isCopy) {
         // spec/61 §10: shallow `{ copy: L }` of a container whose element is MOVE-ONLY (ptr<T>,
@@ -516,23 +561,14 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
         // { copy: L } → independent-spine handle with a SHALLOW element copy. For scalar/string
         // elements copy and clone coincide (fresh data buffer; strings shared).
         auto* ce = static_cast<CallExpr*>(iv);
-        llvm::Value* srcHandle = nullptr;
-        if (!ce->args.empty()) {
-            if (auto* av = dynamic_cast<VariableExpr*>(ce->args[0].get())) {
-                Symbol* src = resolveVariable(av->name);
-                if (src) {
-                    llvm::Value* srcSlot = src->ir_alloca_inst
-                        ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(src->ir_alloca_inst))
-                        : src->alloca_inst;
-                    srcHandle = ctx.builder.CreateLoad(i8p, srcSlot, "listh_copysrc");
-                }
-            }
-        }
+        llvm::Value* srcSlot = ce->args.empty() ? nullptr : containerCopySource(ce->args[0].get(), decl, copyTempSlot, copyTempOwned);
+        llvm::Value* srcHandle = srcSlot ? ctx.builder.CreateLoad(i8p, srcSlot, "listh_copysrc") : nullptr;
         llvm::Function* cp = ctx.getFunction("aiml_list_handle_copy", i8p, {i8p, i64Ty, i32Ty});
         handle = ctx.builder.CreateCall(cp, { srcHandle ? srcHandle
                                               : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)),
                                               ctx.builder.getInt64(elemSize),
                                               ctx.builder.getInt32(elemKind) }, "listh_copy");
+        releaseContainerCopyTemp(copyTempSlot, copyTempOwned, decl->typeName);
     } else if (isAdoptExpr) {
         // spec/61 §5: a slice expression returns a FRESH owned handle (aiml_list_handle_new inside
         // ListImpl::slice) → adopt the pointer directly, no incref.
@@ -666,6 +702,7 @@ void Compiler::emitMapHandleDecl(DeclStmt* decl) {
         if (ce->functionName == "sys.copy")  isCopy  = true;
         if (ce->functionName == "sys.clone") isClone = true;
     }
+    if (!isCopy && !isClone && isContainerAccessorCall(ctx, iv, decl->typeName)) isShareMember = true;
 
     llvm::Value* handle = nullptr;
     if (isShareVar) {
@@ -692,13 +729,10 @@ void Compiler::emitMapHandleDecl(DeclStmt* decl) {
         // once each). The walker reads the source handle from srcSlot and writes a fresh handle into
         // `slot`. Required for move-only value types so the two maps never double-free a value.
         auto* ce = static_cast<CallExpr*>(iv);
-        llvm::Value* srcSlot = nullptr;
-        if (!ce->args.empty()) if (auto* av = dynamic_cast<VariableExpr*>(ce->args[0].get())) {
-            Symbol* src = resolveVariable(av->name);
-            if (src) srcSlot = src->ir_alloca_inst
-                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(src->ir_alloca_inst)) : src->alloca_inst;
-        }
+        llvm::Value* tmpSlot = nullptr; bool tmpOwned = false;
+        llvm::Value* srcSlot = ce->args.empty() ? nullptr : containerCopySource(ce->args[0].get(), decl, tmpSlot, tmpOwned);
         if (srcSlot) emitContainerCloneDeep(slot, srcSlot, decl->typeName);
+        releaseContainerCopyTemp(tmpSlot, tmpOwned, decl->typeName);
         handle = nullptr;   // emitContainerCloneDeep wrote `slot` directly
     } else if (isCopy) {
         if (vName.rfind("ptr<", 0) == 0) {
@@ -707,20 +741,15 @@ void Compiler::emitMapHandleDecl(DeclStmt* decl) {
                 "owner into two maps (double free). Use {clone} (deep) instead (§10/§5.1).");
         }
         auto* ce = static_cast<CallExpr*>(iv);
-        llvm::Value* srcHandle = nullptr;
-        if (!ce->args.empty()) if (auto* av = dynamic_cast<VariableExpr*>(ce->args[0].get())) {
-            Symbol* src = resolveVariable(av->name);
-            if (src) {
-                llvm::Value* srcSlot = src->ir_alloca_inst
-                    ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(src->ir_alloca_inst)) : src->alloca_inst;
-                srcHandle = ctx.builder.CreateLoad(i8p, srcSlot, "maph_copysrc");
-            }
-        }
+        llvm::Value* tmpSlot = nullptr; bool tmpOwned = false;
+        llvm::Value* srcSlot = ce->args.empty() ? nullptr : containerCopySource(ce->args[0].get(), decl, tmpSlot, tmpOwned);
+        llvm::Value* srcHandle = srcSlot ? ctx.builder.CreateLoad(i8p, srcSlot, "maph_copysrc") : nullptr;
         llvm::Function* cp = ctx.getFunction("aiml_map_handle_copy", i8p, {i8p, i64Ty, i64Ty, i32Ty, i32Ty});
         handle = ctx.builder.CreateCall(cp, { srcHandle ? srcHandle
                                               : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)),
                                               ctx.builder.getInt64(keyStride), ctx.builder.getInt64(valStride),
                                               ctx.builder.getInt32(keyKind), ctx.builder.getInt32(valKind) }, "maph_copy");
+        releaseContainerCopyTemp(tmpSlot, tmpOwned, decl->typeName);
     } else if (iv && dynamic_cast<CallExpr*>(iv)) {
         // spec/61 §5 (memV3): init from a call that RETURNS a map → the callee handed us a handle
         // (moved). Use it directly; no fresh alloc, no incref (we own the returned rc).
@@ -845,6 +874,7 @@ void Compiler::emitBufferHandleDecl(DeclStmt* decl) {
     bool isCopyClone = false;
     if (iv) if (auto* ce = dynamic_cast<CallExpr*>(iv))
         isCopyClone = (ce->functionName == "sys.copy" || ce->functionName == "sys.clone");
+    if (!isCopyClone && isContainerAccessorCall(ctx, iv, decl->typeName)) isShareMember = true;
 
     llvm::Value* handle = nullptr;
     if (isShareVar) {
@@ -866,18 +896,13 @@ void Compiler::emitBufferHandleDecl(DeclStmt* decl) {
         }
     } else if (isCopyClone) {
         auto* ce = static_cast<CallExpr*>(iv);
-        llvm::Value* srcHandle = nullptr;
-        if (!ce->args.empty()) if (auto* av = dynamic_cast<VariableExpr*>(ce->args[0].get())) {
-            Symbol* src = resolveVariable(av->name);
-            if (src) {
-                llvm::Value* srcSlot = src->ir_alloca_inst
-                    ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(src->ir_alloca_inst)) : src->alloca_inst;
-                srcHandle = ctx.builder.CreateLoad(i8p, srcSlot, "bufh_copysrc");
-            }
-        }
+        llvm::Value* tmpSlot = nullptr; bool tmpOwned = false;
+        llvm::Value* srcSlot = ce->args.empty() ? nullptr : containerCopySource(ce->args[0].get(), decl, tmpSlot, tmpOwned);
+        llvm::Value* srcHandle = srcSlot ? ctx.builder.CreateLoad(i8p, srcSlot, "bufh_copysrc") : nullptr;
         llvm::Function* cp = ctx.getFunction("aiml_buffer_handle_copy", i8p, {i8p});
         handle = ctx.builder.CreateCall(cp, { srcHandle ? srcHandle
                                               : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)) }, "bufh_copy");
+        releaseContainerCopyTemp(tmpSlot, tmpOwned, decl->typeName);
     } else if (iv && dynamic_cast<CallExpr*>(iv)) {
         // spec/61 §5 (memV3): init from a call that RETURNS a buffer → use the returned handle.
         IRValue* cv = visitExpression(iv);
@@ -3049,14 +3074,9 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                             : ((finalTypeName == "buffer" || finalTypeName.rfind("buffer<", 0) == 0) ? "buffer" : "list");
                         // Secure the new reference before dropping the old one, including self-aliases.
                         // A FRESH owned call result has no other owner → adopt it (tests/lifetime/77).
-                        bool adoptFresh = false;
-                        if (auto* fc = dynamic_cast<CallExpr*>(setStmt->value.get())) {
-                            const std::string& fn = fc->functionName;
-                            size_t dp = fn.rfind('.');
-                            std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
-                            adoptFresh = fn == "sys.clone" || fn == "sys.copy" || fn == "sys.deserialize"
-                                || sn == "slice" || ctx.ownsReturnMatches(sn, finalTypeName);
-                        }
+                        // spec/61 §8: any non-accessor call result is an owning reference.
+                        bool adoptFresh = dynamic_cast<CallExpr*>(setStmt->value.get())
+                            && !isContainerAccessorCall(ctx, setStmt->value.get(), finalTypeName);
                         if (!adoptFresh)
                             ctx.builder.CreateCall(ctx.getFunction("aiml_" + kind + "_handle_incref",
                                 ctx.builder.getVoidTy(), {i8p}), {newH});
@@ -3449,7 +3469,8 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
             if (dot == std::string::npos && bs->is_byref_arg
                 && ctx.isMemV3ContainerHandle(bs->typeName) && bs->ir_alloca_inst) {
                 retContainerSlot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bs->ir_alloca_inst));
-                retContainerIsParam = bs->is_param;   // borrowed arg → the caller still owns it
+                // borrowed arg / global / persistent local keeps its own ref → share
+                retContainerIsParam = bs->is_param || bs->is_global || bs->lifetime == "persistent";
             }
         }
     }
@@ -3561,10 +3582,22 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     // `return: eff` / `return: cnt` UAF: assemble_ability, pluralize — leak_probes round8 §1/§2).
     // Only under producer (the caller ADOPTS the result); a non-producer string return stays a borrow
     // the caller increfs. This honors an EXPLICIT annotation — NOT a general return auto-classifier.
+    // A container accessor (`at`, `.get/.at/.first/.last`) yields the container's own element — a
+    // borrow even though it is a call (spec/61 §8: a producer never returns the callee's live handle).
+    bool retAccessorBorrow = dynamic_cast<AtExpr*>(retStmt->value.get()) != nullptr;
+    if (auto* rc = dynamic_cast<CallExpr*>(retStmt->value.get())) {
+        const std::string& fn = rc->functionName;
+        size_t dp = fn.rfind('.');
+        std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
+        retAccessorBorrow = dp != std::string::npos
+            && (sn == "get" || sn == "at" || sn == "first" || sn == "last")
+            && !ctx.ownsReturnMatches(sn, "string");
+    }
     bool retProducerBorrowedString =
         ctx.currentFunctionOwnsReturn && ctx.currentFunctionReturnType == "string"
-        && !retFreshOwned && !retStrFieldOfOwnedModel && !retBaseOwned
-        && dynamic_cast<VariableExpr*>(retStmt->value.get()) != nullptr;
+        && !retStrFieldOfOwnedModel
+        && ((!retFreshOwned && !retBaseOwned && dynamic_cast<VariableExpr*>(retStmt->value.get()) != nullptr)
+            || retAccessorBorrow);
     // AIML v2 (P4): returning a refcount model is alias-safe to clean up — the returned object is
     // exempted by retModelAddr (a move), and every other local's kind-7 decref is order-independent.
     bool safeToCleanup = (retTy && retTy->isVoidTy()) || retScalar || retBaseOwned
@@ -3687,11 +3720,11 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                 val = ctx.ir_gen->wrap(dup);
             }
         }
-        // spec/61 §5.7: returning a container FIELD/member (`return obj.field`, `return xref.field`)
-        // or an at-element is a SHARE — the source still OWNS it → incref the returned handle, else
-        // the caller's binding and the source both free the rc-1 handle (double-free; df7). A returned
-        // owned-LOCAL (retContainerSlot, move — drop consumed) and a call-result (already an owned rc)
-        // are NOT incref'd.
+        // spec/61 §5.7/§8: returning a container FIELD/member (`return obj.field`, `return xref.field`)
+        // or an at-element is a SHARE — the caller receives an owning reference (with or without
+        // producer) while the source still owns it → incref the returned handle, else the caller's
+        // binding and the source both free the rc-1 handle (double-free; df7). A returned owned-LOCAL
+        // (retContainerSlot, move — drop consumed) and a call-result (already an owned rc) are NOT incref'd.
         if (ctx.memV3 && val && !retContainerSlot
             && ctx.isMemV3ContainerHandle(ctx.currentFunctionReturnType)) {
             bool shareRet = false;
