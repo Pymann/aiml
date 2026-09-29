@@ -359,6 +359,25 @@ llvm::Value* Compiler::containerCopySource(Expr* arg, DeclStmt* decl, llvm::Valu
     return tempSlot;
 }
 
+// spec/61 §8: container type of a user call whose result is an owning reference ("" otherwise).
+static bool isContainerAccessorCall(const CompilerContext& ctx, const Expr* e, const std::string& type);
+std::string Compiler::ownedContainerCallType(Expr* e) {
+    auto* ce = dynamic_cast<CallExpr*>(e);
+    if (!ce || !ctx.memV3) return "";
+    CompilerContext::FunctionInfo* fi = resolveFunction(ce->functionName);
+    if (!fi || !ctx.isMemV3ContainerHandle(fi->returnTypeName)) return "";
+    if (isContainerAccessorCall(ctx, ce, fi->returnTypeName)) return "";
+    return fi->returnTypeName;
+}
+
+void Compiler::releaseContainerHandle(llvm::Value* handle, const std::string& typeName) {
+    if (!handle || !ctx.lifetimeDropsEnabled) return;
+    llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+    llvm::Value* slot = ctx.createEntryAlloca(i8p, "ctr_tmp");
+    ctx.builder.CreateStore(handle, slot);
+    releaseContainerCopyTemp(slot, true, typeName);
+}
+
 void Compiler::releaseContainerCopyTemp(llvm::Value* tempSlot, bool tempOwned, const std::string& typeName) {
     if (!tempSlot || !tempOwned) return;
     llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
@@ -3423,8 +3442,10 @@ void Compiler::visitExprStmt(ExprStmt* exprStmt) {
     }
     bool savedPop = ctx.popResultDiscarded;
     ctx.popResultDiscarded = popDiscard;
-    visitExpression(exprStmt->expr.get());
+    IRValue* dv = visitExpression(exprStmt->expr.get());
     ctx.popResultDiscarded = savedPop;
+    std::string ct = ownedContainerCallType(exprStmt->expr.get());   // discarded owning container ref
+    if (dv && !ct.empty()) releaseContainerHandle(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(dv)), ct);
 }
 static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop& it);  // defined below
 void Compiler::visitRetStmt(RetStmt* retStmt) {

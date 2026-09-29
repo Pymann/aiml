@@ -43,6 +43,7 @@ GREEN=(
   tests/lifetime/80_copy_of_nested_element.aiml
   tests/lifetime/81_clone_of_nested_element.aiml
   tests/lifetime/84_container_return_shared_or_fresh.aiml
+  tests/lifetime/85_container_return_unbound_and_exits.aiml
   tests/lifetime/73_list_model_clear_no_leak.aiml
   tests/lifetime/74_list_model_remove_no_leak.aiml
   tests/_inline_model_red/49_value_survives_remove.aiml
@@ -56,7 +57,6 @@ GREEN=(
 )
 # RED: known open findings (documented) — run + report, but do NOT fail the gate yet.
 RED=(
-  tests/lifetime/85_container_return_unbound_and_exits.aiml
   tests/_inline_model_red/50_share_semantics.aiml
   tests/_inline_model_red/p2_array_field_leak_RED.aiml
 )
