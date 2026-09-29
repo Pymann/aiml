@@ -3878,6 +3878,15 @@ void Compiler::registerTypeDecl(Node* node) {
     } else if (auto cls = dynamic_cast<ClassDecl*>(node)) {
         std::string className = ctx.qualify(cls->name);
         ctx.validateIdentifier(cls->name, "class", cls->sourceNode);
+        // spec/61 §8: a method's `lifetime: producer` is part of its signature — register it with
+        // the forward decl so callers compiled before the class body (e.g. a synthesized cascade
+        // pool appended last) adopt the result. visitTopLevel re-inserts idempotently.
+        for (const auto& m : cls->methods) {
+            if (!m->ownsReturn) continue;
+            ctx.ownsReturnFns.insert(m->name);
+            ctx.ownsReturnFnTypes[m->name].insert(m->returnType);
+            if (m->returnType == "string") ctx.stringProducerFns.insert(m->name);
+        }
         if (!ctx.headerOnlyMode)
             for (const auto& m : cls->members)
                 if (ctx.isRefContainerType(m.type))

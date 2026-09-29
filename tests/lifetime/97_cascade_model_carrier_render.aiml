@@ -1,0 +1,56 @@
+# static-check: off
+# spec/57/61: rendering through a value-model carrier frees the pool shell, the carrier clone and every string the handlers stored.
+- enum:
+    name: TargetT
+    values: [ {creature: 1} ]
+- enum:
+    name: EffCode
+    values: [ {deal_dmg: 1}, {heal_dmg: 2} ]
+- cascade:
+    name: EffPipe
+    opcode: EffCode
+    nodes:
+      - [deal_dmg, TargetT]
+      - [heal_dmg, TargetT]
+- model:
+    name: Draft
+    fields:
+      - [opcode, i32]
+      - [val, string]
+      - [tgt, string]
+- class:
+    name: DraftSkel
+    renders: EffPipe
+    rules:
+      - { before: [], on: "*", def: { name: op_set, args: [[car, ref<Draft>]], body: [ { set: [car.opcode, { call: [<.field] }] } ] } }
+      - { before: ["*"], on: TargetT, def: { name: tgt_set, args: [[car, ref<Draft>]], body: [ { set: [car.val, "${{ call: [<.field] }}"] }, { set: [car.tgt, "t${{ call: [<.field] }}"] } ] } }
+- cascade_class:
+    name: DraftText
+    binds_cascade: EffPipe
+    carrier: Draft
+    taker:   Draft
+    members: [DraftSkel]
+- def:
+    name: draft_text
+    args: [[row, list<i32>]]
+    return: { type: string, lifetime: producer }
+    body:
+      - decl: [pool, ptr<DraftText>, { new: DraftText }]
+      - decl: [dft, Draft]
+      - decl: [out, Draft, { call: [pool.render, dft, row] }]
+      - return: "${out.opcode}:${out.val}:${out.tgt}"
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [row, list<i32>]
+      - call: [row.push, 1]
+      - call: [row.push, 7]
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [txt, string, { call: [draft_text, row] }]
+            - if: {condition: {neq: [txt, "1:7:t7"]}, then: [{print: ["got ${txt}"]}, {return: 150}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

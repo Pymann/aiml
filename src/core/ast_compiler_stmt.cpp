@@ -1549,6 +1549,20 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 std::string boxed = decl->typeName.substr(4, decl->typeName.size() - 5);
                 auto bi = ctx.classes.find(boxed);
                 auto ii = ctx.interfaces.find(boxed);
+                // spec/57/58: a cascade_class instance owns only its shell (the cascade rows are a
+                // shared borrow) → release the shell alone at owner drop (kind 11, every path).
+                if (ctx.cascadeClasses.count(boxed) && dynamic_cast<NewExpr*>(decl->initialValue.get())
+                    && ctx.lifetimeDropsEnabled && !ctx.cleanupStack.empty()) {
+                    CompilerContext::ScopeDrop sd;
+                    sd.addr = unwrappedAlloca;
+                    sd.kind = 11;
+                    if (bi != ctx.classes.end() && bi->second.hasHeapFields && bi->second.serNodesVar) {
+                        sd.serNodes = bi->second.serNodesVar;          // its own fields (blk share)
+                        sd.serNodesCount = bi->second.serNodesCount;
+                    }
+                    sd.debugName = decl->varName; sd.debugType = decl->typeName;
+                    ctx.cleanupStack.back().push_back(sd);
+                }
                 if (bi != ctx.classes.end() && bi->second.hasHeapFields && bi->second.serNodesVar
                     && bi->second.type && !ctx.classGroupContainers.count(boxed)
                     // spec/58: cascade_class instances borrow the shared, loaded-once cascade buffer
@@ -3741,7 +3755,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     emitScopeDrop(ctx, *it);
                     continue;
                 }
-                if (it->kind == 10) { emitScopeDrop(ctx, *it); continue; }   // iterator: null-safe single release
+                if (it->kind == 10 || it->kind == 11) { emitScopeDrop(ctx, *it); continue; }   // null-safe single release
                 // spec/61 §5 (memV3): the returned container handle is MOVED to the caller → skip its
                 // decref/free on the return path (kind 2 list / 3 map / 8 buffer, isListHandle).
                 if (retContainerSlot && it->addr == retContainerSlot
@@ -4349,6 +4363,24 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         llvm::Value* rawptr = ctx.builder.CreateLoad(i8p, it.addr, "drop_dynarr");
         llvm::Function* fr = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
         ctx.builder.CreateCall(fr, { rawptr });
+    } else if (it.kind == 11) {
+        // cascade_class instance: release its own fields (the block share), then the shell; the
+        // cascade rows themselves are global. Null-safe; null the slot (single release).
+        llvm::Value* shell = ctx.builder.CreateLoad(i8p, it.addr, "drop_ccshell");
+        if (it.serNodes) {
+            llvm::BasicBlock* cur = ctx.builder.GetInsertBlock();
+            llvm::Function* fn = cur->getParent();
+            llvm::BasicBlock* relBB = llvm::BasicBlock::Create(ctx.context, "ccshell_rel", fn);
+            llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx.context, "ccshell_done", fn);
+            ctx.builder.CreateCondBr(ctx.builder.CreateIsNotNull(shell), relBB, doneBB);
+            ctx.builder.SetInsertPoint(relBB);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
+                {i8p, i8p, ctx.builder.getInt32Ty()}), { shell, it.serNodes, ctx.builder.getInt32(it.serNodesCount) });
+            ctx.builder.CreateBr(doneBB);
+            ctx.builder.SetInsertPoint(doneBB);
+        }
+        ctx.builder.CreateCall(ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p}), { shell });
+        ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
     } else if (it.kind == 10) {
         // spec/61 class 4: iterator<T> — aiml_iter_free is null-safe; null the slot (single release).
         llvm::Value* itp = ctx.builder.CreateLoad(i8p, it.addr, "drop_iter");
