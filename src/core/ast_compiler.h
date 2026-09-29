@@ -86,6 +86,8 @@ private:
     // spec/29_3 §2 / spec/61 §5.1: copy/clone operand → source slot (temp slot for expressions).
     llvm::Value* containerCopySource(Expr* arg, DeclStmt* decl, llvm::Value*& tempSlot, bool& tempOwned);
     void releaseContainerCopyTemp(llvm::Value* tempSlot, bool tempOwned, const std::string& typeName);
+    std::string ownedContainerCallType(Expr* e);
+    void releaseContainerHandle(llvm::Value* handle, const std::string& typeName);
     // spec/61 §5.4: classify a list ELEMENT type into its scope-drop kind (see free_list_elem_at /
     // aiml_list_free): 0 scalar/POD, 1 string, 2 value-model INLINE, 3 refcount model, 4 ptr<T> box,
     // 5 nested-container handle, 6 iface fat-ptr. Fills the runtime free args. Shared by

@@ -523,6 +523,14 @@ IRValue* Compiler::visitCall(CallExpr* call) {
     // consumeLocalDrop only drops a matching plain-local's drop, so at worst a leak, never a
     // double-free).  All consumed params are pointer/handle types (validated at the def), so
     // the callee receives the same handle — a true move, not a copy.
+    // spec/61 §8: an owning container call result passed to a non-consumed param is released after the call.
+    std::vector<std::pair<llvm::Value*, std::string>> ctrArgTemps;
+    if (funcInfo && ctx.lifetimeDropsEnabled)
+        for (size_t i = 0; i < call->args.size() && i < argVals.size(); ++i) {
+            if (i < funcInfo->argLifetimes.size() && funcInfo->argLifetimes[i] == "consumed") continue;
+            std::string ct = ownedContainerCallType(call->args[i].get());
+            if (!ct.empty()) ctrArgTemps.push_back({static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[i])), ct});
+        }
     if (funcInfo && ctx.lifetimeDropsEnabled && !funcInfo->argLifetimes.empty()) {
         for (size_t i = 0; i < call->args.size() && i < funcInfo->argLifetimes.size(); ++i) {
             if (funcInfo->argLifetimes[i] != "consumed") continue;
@@ -723,6 +731,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
         LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "Unknown function: " + funcName);
         return nullptr;
     }
+    for (auto& t : ctrArgTemps) releaseContainerHandle(t.first, t.second);
     // spec/61 §3.2 Part 2: a `producer` free function returning a fresh STRING, used as a TRANSIENT
     // sub-expression (e.g. `set_text(…, build_card_text(card))`), must be decref'd at statement end.
     // Register it as an owned stmt-temp; a consuming decl/set/push/return removes it via
