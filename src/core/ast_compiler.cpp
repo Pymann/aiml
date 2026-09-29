@@ -5596,6 +5596,16 @@ void Compiler::visitFunction(FunctionDecl* func) {
                 }
             }
         }
+        // spec/61 class 4: an iterator parameter was moved in → the callee releases it at body exit.
+        bool iterParam = false;
+        for (auto& fa : func->args)
+            if (fa.first == argNames[i]) { iterParam = fa.second.rfind("iterator<", 0) == 0; break; }
+        if (iterParam && ctx.lifetimeDropsEnabled && argAlloca) {
+            CompilerContext::ScopeDrop sd;
+            sd.addr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argAlloca));
+            sd.kind = 10;
+            ctx.pendingParamDrops.push_back(sd);
+        }
         ctx.symbol_table[argNames[i]] = sym;
     }
     if (shadowError) {

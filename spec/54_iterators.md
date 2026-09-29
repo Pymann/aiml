@@ -26,7 +26,7 @@ yield entity IDs from a `Store<T>`.
 
 `iterator<T>` is an **opaque heap pointer** (`i8*`), regardless of `T`.
 The backing C struct (`AimlIterator`) is allocated by the creation function and
-must be explicitly freed by the caller.
+owned by the `iterator<T>` local (spec/61 class 4, unique resource).
 
 ---
 
@@ -61,14 +61,14 @@ Future sources (not yet implemented):
 
 ## 5. Lifecycle and `free`
 
-The iterator must be freed explicitly when no longer needed:
+An `iterator<T>` is a **class-4 unique resource** (spec/61 §2): it is released
+exactly once when its owner drops — at scope exit, on every return path.
 
-```aiml
-- call: [free, it]
-```
-
-This releases the iterator handle. After `free`, any further call to `next()`,
-`has_next()`, or `reset()` is **undefined behavior**.
+- `- call: [free, it]` is an optional **early release**; it nulls the slot, so the
+  owner drop is a no-op. After `free`, any further call to `next()`, `has_next()`
+  or `reset()` is **undefined behavior**.
+- Passing an iterator to a parameter **moves** it: the callee owns and releases it,
+  the caller must not use it afterwards.
 
 ---
 
@@ -109,7 +109,7 @@ Both cases are **contract violations by the caller**, not runtime conditions to
 handle. An `is_valid()` method would give a false sense of safety while adding
 cost to the hot path.
 
-**Rule of thumb:** call `free` exactly once, as the last operation on the iterator.
+**Rule of thumb:** let the owner drop release the iterator; use `free` only to release it early.
 
 > **TODO:** An `is_valid()` method may be needed in the future when iterators are
 > used in more complex scenarios (e.g. long-lived iterators across function

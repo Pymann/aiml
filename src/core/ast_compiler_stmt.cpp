@@ -399,6 +399,14 @@ bool Compiler::isOwningContainerCall(Expr* e, const std::string& type) {
     return dynamic_cast<CallExpr*>(e) && !isContainerAccessorCall(ctx, e, type);
 }
 
+// spec/61 class 4: an iterator<T> local passed to a user call is moved (the callee releases it).
+void Compiler::moveIteratorArg(Expr* arg) {
+    auto* ve = dynamic_cast<VariableExpr*>(arg);
+    if (!ve || ve->name.find('.') != std::string::npos || ve->name.find('<') != std::string::npos) return;
+    Symbol* s = resolveVariable(ve->name);
+    if (s && s->typeName.rfind("iterator<", 0) == 0) consumeLocalDrop(arg);
+}
+
 void Compiler::releaseContainerHandle(llvm::Value* handle, const std::string& typeName) {
     if (!handle || !ctx.lifetimeDropsEnabled) return;
     llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
@@ -1708,6 +1716,16 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             sd.addr = unwrappedAlloca;
             sd.kind = 9;                 // raw heap pointer → free(load(slot))
             sd.ownershipId = declOid;
+            sd.debugName = decl->varName; sd.debugType = decl->typeName;
+            ctx.cleanupStack.back().push_back(sd);
+        }
+        // spec/61 class 4: an iterator<T> local owns its iterator → released at owner drop (kind 10);
+        // `free` is an early release that nulls the slot, a call argument moves it into the callee.
+        if (decl->typeName.rfind("iterator<", 0) == 0 && decl->initialValue
+            && decl->lifetime != "persistent" && !decl->is_extern && !ctx.cleanupStack.empty()) {
+            CompilerContext::ScopeDrop sd;
+            sd.addr = unwrappedAlloca;
+            sd.kind = 10;
             sd.debugName = decl->varName; sd.debugType = decl->typeName;
             ctx.cleanupStack.back().push_back(sd);
         }
@@ -3652,10 +3670,15 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
             if (dot != std::string::npos && rv->name.find('<') == std::string::npos) {
                 std::string mbase = rv->name.substr(0, dot);
                 if (Symbol* mbs = resolveVariable(mbase)) {
-                    auto ci = ctx.classes.find(mbs->typeName);
+                    // an owned ptr<T> box local (kind-4 box drop) is handled like an owned value model
+                    std::string mtn = mbs->typeName;
+                    bool boxBase = mtn.rfind("ptr<", 0) == 0 && mtn.back() == '>';
+                    if (boxBase) mtn = mtn.substr(4, mtn.size() - 5);
+                    auto ci = ctx.classes.find(mtn);
                     if (!mbs->is_byref_arg && ci != ctx.classes.end()
-                        && ci->second.isModel && ci->second.hasHeapFields && !ci->second.isBuiltin
-                        && !ctx.isRefcountModel(mbs->typeName))
+                        && (ci->second.isModel || boxBase) && ci->second.hasHeapFields && !ci->second.isBuiltin
+                        && !ctx.classGroupContainers.count(mtn) && !ctx.cascadeClasses.count(mtn)
+                        && !ctx.isRefcountModel(mtn))
                         retStrFieldOfOwnedModel = true;
                 }
             }
@@ -3718,6 +3741,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     emitScopeDrop(ctx, *it);
                     continue;
                 }
+                if (it->kind == 10) { emitScopeDrop(ctx, *it); continue; }   // iterator: null-safe single release
                 // spec/61 §5 (memV3): the returned container handle is MOVED to the caller → skip its
                 // decref/free on the return path (kind 2 list / 3 map / 8 buffer, isListHandle).
                 if (retContainerSlot && it->addr == retContainerSlot
@@ -4325,6 +4349,11 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         llvm::Value* rawptr = ctx.builder.CreateLoad(i8p, it.addr, "drop_dynarr");
         llvm::Function* fr = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
         ctx.builder.CreateCall(fr, { rawptr });
+    } else if (it.kind == 10) {
+        // spec/61 class 4: iterator<T> — aiml_iter_free is null-safe; null the slot (single release).
+        llvm::Value* itp = ctx.builder.CreateLoad(i8p, it.addr, "drop_iter");
+        ctx.builder.CreateCall(ctx.getFunction("aiml_iter_free", ctx.builder.getVoidTy(), {i8p}), { itp });
+        ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
     } else {
         llvm::Function* fn = ctx.getFunction("aiml_ser_free_decoded",
             ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});

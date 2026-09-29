@@ -67,6 +67,8 @@ GREEN=(
   tests/lifetime/91_map_shared_values_all_keys.aiml
   tests/lifetime/92_map_remove_replace_matrix.aiml
   tests/lifetime/93_list_insert_pop_matrix.aiml
+  tests/lifetime/94_iterator_owner_drop.aiml
+  tests/lifetime/95_producer_returns_box_string_field.aiml
   tests/lifetime/73_list_model_clear_no_leak.aiml
   tests/lifetime/74_list_model_remove_no_leak.aiml
   tests/_inline_model_red/49_value_survives_remove.aiml
