@@ -1,0 +1,29 @@
+==76721== Memcheck, a memory error detector
+==76721== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==76721== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==76721== Command: /tmp/aiml-container-review-results/map_model_remove-200/bin
+==76721== Parent PID: 76465
+==76721== 
+==76721== 
+==76721== HEAP SUMMARY:
+==76721==     in use at exit: 149,129 bytes in 2,527 blocks
+==76721==   total heap usage: 4,569 allocs, 2,042 frees, 466,381 bytes allocated
+==76721== 
+==76721== 3,800 bytes in 200 blocks are definitely lost in loss record 2,325 of 2,326
+==76721==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==76721==    by 0x522CED5: aiml_str_alloc (string_runtime.cpp:54)
+==76721==    by 0x1095DD: __aiml_str_concat (in /tmp/aiml-container-review-results/map_model_remove-200/bin)
+==76721==    by 0x109331: __aiml_user_main (in /tmp/aiml-container-review-results/map_model_remove-200/bin)
+==76721==    by 0x10963A: main (in /tmp/aiml-container-review-results/map_model_remove-200/bin)
+==76721== 
+==76721== LEAK SUMMARY:
+==76721==    definitely lost: 3,800 bytes in 200 blocks
+==76721==    indirectly lost: 0 bytes in 0 blocks
+==76721==      possibly lost: 0 bytes in 0 blocks
+==76721==    still reachable: 145,329 bytes in 2,327 blocks
+==76721==         suppressed: 0 bytes in 0 blocks
+==76721== Reachable blocks (those to which a pointer was found) are not shown.
+==76721== To see them, rerun with: --leak-check=full --show-leak-kinds=all
+==76721== 
+==76721== For lists of detected and suppressed errors, rerun with: -s
+==76721== ERROR SUMMARY: 1 errors from 1 contexts (suppressed: 0 from 0)

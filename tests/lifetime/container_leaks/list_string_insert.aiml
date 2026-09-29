@@ -1,0 +1,18 @@
+# static-check: off
+# Spec 61 container audit: B2; target: correct content, 0 lost bytes, no memory errors.
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [lines, list<string>]
+            - decl: [text, string, "value=${42}"]
+            - call: [lines.insert, 0, text]
+            - if: {condition: {neq: [lines.len, 1]}, then: [{return: 23}]}
+            - if: {condition: {neq: [text, "value=42"]}, then: [{return: 25}]}
+            - if: {condition: {neq: [{at: [lines, 0]}, "value=42"]}, then: [{return: 26}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

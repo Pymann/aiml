@@ -1,0 +1,22 @@
+==77074== Memcheck, a memory error detector
+==77074== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==77074== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==77074== Command: /tmp/aiml-container-review-results/list_nested_control-400/bin
+==77074== Parent PID: 76465
+==77074== 
+==77074== 
+==77074== HEAP SUMMARY:
+==77074==     in use at exit: 145,329 bytes in 2,327 blocks
+==77074==   total heap usage: 5,569 allocs, 3,242 frees, 520,981 bytes allocated
+==77074== 
+==77074== LEAK SUMMARY:
+==77074==    definitely lost: 0 bytes in 0 blocks
+==77074==    indirectly lost: 0 bytes in 0 blocks
+==77074==      possibly lost: 0 bytes in 0 blocks
+==77074==    still reachable: 145,329 bytes in 2,327 blocks
+==77074==         suppressed: 0 bytes in 0 blocks
+==77074== Reachable blocks (those to which a pointer was found) are not shown.
+==77074== To see them, rerun with: --leak-check=full --show-leak-kinds=all
+==77074== 
+==77074== For lists of detected and suppressed errors, rerun with: -s
+==77074== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
