@@ -1,6 +1,7 @@
 # CONTROL probe for the memory-sanitizer harness (run_memory_sanitizers.sh).
 # Deliberately double-frees an iterator handle (aiml_iter_free = C++ delete) from
 # AIML-generated code → valgrind memcheck MUST report an "Invalid free / delete".
+# `free` nulls its own slot (spec/61 class 4), so the second release goes through an ALIAS slot.
 # If the harness does NOT flag this, valgrind is not actually instrumenting the
 # generated-code memory ops and the WP-C acceptance gate would be worthless.
 #
@@ -14,6 +15,7 @@
       - decl: [kvd, Kv<string:i32>, { call: [db.open_kv, "ctl_df", {persist: false}] }]
       - call: [kvd.set, "a", 1]
       - decl: [ite, iterator<string>, { call: [kvd.iter] }]
+      - decl: [alias_ite, iterator<string>, ite]
       - call: [free, ite]
-      - call: [free, ite]          # DOUBLE FREE → valgrind "Invalid free() / delete"
+      - call: [free, alias_ite]    # DOUBLE FREE → valgrind "Invalid free() / delete"
       - return: 0

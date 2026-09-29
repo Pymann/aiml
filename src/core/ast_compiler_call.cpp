@@ -420,6 +420,11 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                  llvm::Value* itPtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
                  if (itPtr->getType() != i8p) itPtr = ctx.builder.CreateBitCast(itPtr, i8p);
                  ctx.builder.CreateCall(itFree, {itPtr});
+                 // spec/61 class 4: early release → null the slot so the owner drop is a no-op.
+                 llvm::Value* itSlot = itSym->ir_alloca_inst
+                     ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(itSym->ir_alloca_inst)) : itSym->alloca_inst;
+                 if (itSlot && itVarE->name.find('.') == std::string::npos)
+                     ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), itSlot);
                  return ctx.ir_gen->getInt32(0);
              }
          }
@@ -531,6 +536,8 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             std::string ct = ownedContainerCallType(call->args[i].get());
             if (!ct.empty()) ctrArgTemps.push_back({static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[i])), ct});
         }
+    if (funcInfo && ctx.lifetimeDropsEnabled)   // spec/61 class 4: an iterator argument moves into the callee
+        for (auto& a : call->args) moveIteratorArg(a.get());
     if (funcInfo && ctx.lifetimeDropsEnabled && !funcInfo->argLifetimes.empty()) {
         for (size_t i = 0; i < call->args.size() && i < funcInfo->argLifetimes.size(); ++i) {
             if (funcInfo->argLifetimes[i] != "consumed") continue;
@@ -3029,7 +3036,12 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
 
         if (methodName == "next") {
             llvm::Function* f = ctx.getFunction("aiml_iter_next", i8p, {i8p});
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {iterPtr}));
+            llvm::Value* raw = ctx.builder.CreateCall(f, {iterPtr});
+            // spec/54 §4 / spec/61 §4: next() yields a string VALUE — the runtime returns a borrowed
+            // key c_str (no rc header), so materialize an owned rc string as a statement temp.
+            llvm::Value* own = ctx.builder.CreateCall(ctx.getFunction("aiml_str_dup", i8p, {i8p}), {raw}, "iter_key_own");
+            if (!ctx.stmtTempStack.empty()) ctx.stmtTempStack.back().push_back(own);
+            return ctx.ir_gen->wrap(own);
 
         } else if (methodName == "has_next") {
             llvm::Function* f = ctx.getFunction("aiml_iter_has_next", i32, {i8p});
@@ -3323,6 +3335,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          std::vector<std::pair<llvm::Value*, std::string>> ctrArgTemps;   // spec/61 §8 (see free-function path)
          if (ctx.lifetimeDropsEnabled) {
              auto mfit = ctx.functions.find(resolvedMangled);
+             for (auto& a : call->args) moveIteratorArg(a.get());   // spec/61 class 4: iterator argument moves
              for (size_t j = 0; j < call->args.size() && j < argVals.size(); ++j) {
                  if (mfit != ctx.functions.end() && (j + 1) < mfit->second.argLifetimes.size()
                      && mfit->second.argLifetimes[j + 1] == "consumed") continue;
