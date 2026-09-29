@@ -1,0 +1,64 @@
+# static-check: off
+# spec/61 §8/§9.2: a producer value-model result is owned by the caller — dropped when discarded or bound in a nested branch.
+- model:
+    name: Session
+    fields:
+      - [label, string]
+      - [cards, list<string>]
+- model:
+    name: Reply
+    fields:
+      - [success, i32]
+      - [note, string]
+      - [state, Session]
+- def:
+    name: make_reply
+    args: [[tag, string]]
+    return: { type: Reply, lifetime: producer }
+    body:
+      - decl: [out, Reply]
+      - decl: [sess, Session]
+      - set: [sess.label, "s-${tag}"]
+      - call: [sess.cards.push, "c-${tag}"]
+      - set: [out.success, 1]
+      - set: [out.note, "n-${tag}"]
+      - set: [out.state, sess]
+      - return: out
+- class:
+    name: ReplyDesk
+    members:
+      - [serial, i32]
+    methods:
+      - def:
+          name: issue
+          args: [[tag, string]]
+          return: { type: Reply, lifetime: producer }
+          body:
+            - set: [<.serial, {+: [<.serial, 1]}]
+            - return: {call: [make_reply, tag]}
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [desk, ReplyDesk]
+      - decl: [counter, i32, 0]
+      - decl: [more, i32, 1]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - call: [make_reply, "a"]
+            - call: [desk.issue, "d"]
+            - if: {condition: {gt: [counter, 1]}, then: [{call: [desk.issue, "e"]}]}
+            - if:
+                condition: {eq: [more, 0]}
+                then: [{set: [more, 1]}]
+                else:
+                  - decl: [res, Reply, {call: [make_reply, "b"]}]
+                  - if:
+                      condition: {neq: [res.success, 1]}
+                      then: [{return: 50}]
+                      else:
+                        - decl: [lbl, string, res.state.label]
+                        - if: {condition: {neq: [lbl.len, 3]}, then: [{return: 51}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

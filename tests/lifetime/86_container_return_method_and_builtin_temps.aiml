@@ -1,0 +1,58 @@
+# static-check: off
+# spec/61 §8/§5.7: owning container call results are dropped or moved exactly once — method calls, method args, push/put/idx of a call result.
+- class:
+    name: RowShop
+    members:
+      - [width, i32]
+    methods:
+      - def:
+          name: make
+          return: list<i32>
+          body:
+            - decl: [row, list<i32>]
+            - decl: [pos, i32, 0]
+            - while:
+                condition: {lt: [pos, <.width]}
+                body:
+                  - call: [row.push, pos]
+                  - set: [pos, {+: [pos, 1]}]
+            - return: row
+      - def:
+          name: count
+          args: [[row, list<i32>]]
+          return: i32
+          body:
+            - return: row.len
+- def:
+    name: make_row
+    args: [[width, i32]]
+    return: list<i32>
+    body:
+      - decl: [row, list<i32>]
+      - call: [row.push, width]
+      - return: row
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [shop, RowShop]
+      - set: [shop.width, 3]
+      - decl: [grid, list<list<i32>>]
+      - decl: [index, map<string:list<i32>>]
+      - call: [grid.push, {call: [make_row, 0]}]
+      - decl: [counter, i32, 0]
+      - decl: [total, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - call: [shop.make]
+            - set: [total, {+: [total, {call: [shop.count, {call: [shop.make]}]}]}]
+            - set: [total, {+: [total, {call: [shop.count, {call: [make_row, 1]}]}]}]
+            - call: [grid.push, {call: [make_row, 2]}]
+            - call: [grid.push, {call: [shop.make]}]
+            - call: [index.put, "k", {call: [make_row, 4]}]
+            - idx: [grid, 0, {call: [make_row, 5]}]
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [total, 800]}, then: [{return: 40}]}
+      - if: {condition: {neq: [grid.len, 401]}, then: [{return: 41}]}
+      - return: 0

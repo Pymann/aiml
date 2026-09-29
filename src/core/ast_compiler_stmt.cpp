@@ -364,10 +364,39 @@ static bool isContainerAccessorCall(const CompilerContext& ctx, const Expr* e, c
 std::string Compiler::ownedContainerCallType(Expr* e) {
     auto* ce = dynamic_cast<CallExpr*>(e);
     if (!ce || !ctx.memV3) return "";
-    CompilerContext::FunctionInfo* fi = resolveFunction(ce->functionName);
+    CompilerContext::FunctionInfo* fi = resolveCallTarget(ce->functionName);
     if (!fi || !ctx.isMemV3ContainerHandle(fi->returnTypeName)) return "";
     if (isContainerAccessorCall(ctx, ce, fi->returnTypeName)) return "";
     return fi->returnTypeName;
+}
+
+// Free function, or `recv.method` / `<.method` resolved through the receiver class chain.
+CompilerContext::FunctionInfo* Compiler::resolveCallTarget(const std::string& functionName) {
+    if (auto* fi = resolveFunction(functionName)) return fi;
+    size_t dp = functionName.rfind('.');
+    if (dp == std::string::npos) return nullptr;
+    std::string base = functionName.substr(0, dp), meth = functionName.substr(dp + 1), cls;
+    if (base == "<" || base == "this") cls = ctx.currentClassName;
+    else if (base.find('.') == std::string::npos) {
+        if (Symbol* s = resolveVariable(base)) {
+            cls = s->typeName;
+            size_t lt = cls.find('<');
+            if (lt != std::string::npos && cls.back() == '>'
+                && (cls.rfind("ptr<", 0) == 0 || cls.rfind("ref<", 0) == 0 || cls.rfind("shared<", 0) == 0))
+                cls = cls.substr(lt + 1, cls.size() - lt - 2);
+        }
+    }
+    while (!cls.empty() && ctx.classes.count(cls)) {
+        auto it = ctx.functions.find(cls + "_" + meth);
+        if (it != ctx.functions.end()) return &it->second;
+        cls = ctx.classes[cls].parentName;
+    }
+    return nullptr;
+}
+
+// spec/61 §5.7: a non-accessor call yields a reference the consumer takes over (no incref).
+bool Compiler::isOwningContainerCall(Expr* e, const std::string& type) {
+    return dynamic_cast<CallExpr*>(e) && !isContainerAccessorCall(ctx, e, type);
 }
 
 void Compiler::releaseContainerHandle(llvm::Value* handle, const std::string& typeName) {
@@ -850,6 +879,13 @@ void Compiler::emitMapHandleDecl(DeclStmt* decl) {
         sd.elemSize = valStride;  // kind 3 uses elemSize as the VALUE stride
         sd.serNodes = valNodes;
         sd.serNodesCount = valNodesCount;
+        if (ctx.memV3 && ctx.isMemV3ContainerHandle(vName)) {
+            // spec/61 §5.7 outer drop: decref each nested container value via its handle-rooted descriptor.
+            int nc = 0;
+            if (llvm::GlobalVariable* hd = elemHandleSerNodes(vName, nc)) {
+                sd.elemKind = 2; sd.elemSize = 8; sd.serNodes = hd; sd.serNodesCount = nc;
+            }
+        }
         sd.ownershipId = declOid;
         sd.debugName = decl->varName; sd.debugType = decl->typeName;
         ctx.cleanupStack.back().push_back(sd);
@@ -3446,6 +3482,35 @@ void Compiler::visitExprStmt(ExprStmt* exprStmt) {
     ctx.popResultDiscarded = savedPop;
     std::string ct = ownedContainerCallType(exprStmt->expr.get());   // discarded owning container ref
     if (dv && !ct.empty()) releaseContainerHandle(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(dv)), ct);
+    // spec/61 §9.2: a discarded producer value-model result is owned by the caller → free its heap.
+    auto* dc = dynamic_cast<CallExpr*>(exprStmt->expr.get());
+    if (dv && dc && ctx.lifetimeDropsEnabled) {
+        std::string mt;
+        if (auto* fi = resolveCallTarget(dc->functionName)) { if (fi->ownsReturn) mt = fi->returnTypeName; }
+        else {
+            size_t dp = dc->functionName.rfind('.');
+            std::string sn = (dp == std::string::npos) ? dc->functionName : dc->functionName.substr(dp + 1);
+            auto it = ctx.ownsReturnFnTypes.find(sn);
+            if (ctx.ownsReturnFns.count(sn) && it != ctx.ownsReturnFnTypes.end() && it->second.size() == 1)
+                mt = *it->second.begin();
+        }
+        auto ci = mt.empty() ? ctx.classes.end() : ctx.classes.find(mt);
+        llvm::Value* rv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(dv));
+        if (ci != ctx.classes.end() && ci->second.hasHeapFields && ci->second.serNodesVar && ci->second.type
+            && !ctx.isRefcountModel(mt) && !ctx.classGroupContainers.count(mt) && rv) {
+            llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* addr = nullptr;
+            if (rv->getType()->isStructTy()) {
+                addr = ctx.createEntryAlloca(rv->getType(), "discard_model");
+                ctx.builder.CreateStore(rv, addr);
+            } else if (rv->getType()->isPointerTy()) {
+                addr = rv;   // method path: struct already spilled to a temp
+            }
+            if (addr) ctx.builder.CreateCall(ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
+                          {i8p, i8p, ctx.builder.getInt32Ty()}),
+                          { addr, ci->second.serNodesVar, ctx.builder.getInt32(ci->second.serNodesCount) });
+        }
+    }
 }
 static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop& it);  // defined below
 void Compiler::visitRetStmt(RetStmt* retStmt) {
@@ -4835,7 +4900,8 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
             const char* incF = (elemName.rfind("map<", 0) == 0) ? "aiml_map_handle_incref"
                 : (elemName == "buffer" || elemName.rfind("buffer<", 0) == 0) ? "aiml_buffer_handle_incref"
                 : "aiml_list_handle_incref";
-            ctx.builder.CreateCall(ctx.getFunction(incF, ctx.builder.getVoidTy(), {i8p}), { newHp });
+            if (!isOwningContainerCall(idx->value.get(), elemName))
+                ctx.builder.CreateCall(ctx.getFunction(incF, ctx.builder.getVoidTy(), {i8p}), { newHp });
             if (ctx.lifetimeDropsEnabled) {
                 int nc = 0; llvm::GlobalVariable* ed = elemHandleSerNodes(elemName, nc);
                 if (ed) {

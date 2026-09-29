@@ -951,9 +951,9 @@ slot is just another place an owning reference lives):
 | `pop(outer)` / `take` | **transfer** the slot's owning reference into the result: remove it from the container and hand back its existing owning handle. **No decref** of the returned element — ownership moves to the caller. |
 | `remove(outer, i)` / replace-old / **outer drop** | **decref** the inner handle; its recursive drop (releasing the inner container's own elements + block) runs only at **its** rc 0. |
 
-A **borrowed** (non-owning) view of an inner element — `ref<list<T>>` from an explicitly borrowing
-access — is defined separately (it never increfs and is never freed through); it is not the
-owning-value `at` above.
+There is **no** borrowed (non-owning) container view: `ref<list|map|buffer>` is not a valid type
+(§8). Every read of a nested-container element binds an owning, aliasing handle as above; `.first`
+and `.last` behave like `at`/`.get`.
 
 **The write-back pattern** `sez = at(outer, i); …mutate sez…; idx(outer, i, sez)` stays correct but
 becomes **semantically redundant**: `at` already returns an owning handle aliasing the inner
