@@ -69,6 +69,8 @@ GREEN=(
   tests/lifetime/93_list_insert_pop_matrix.aiml
   tests/lifetime/94_iterator_owner_drop.aiml
   tests/lifetime/95_producer_returns_box_string_field.aiml
+  tests/lifetime/96_ref_member_string_overwrite.aiml
+  tests/lifetime/97_cascade_model_carrier_render.aiml
   tests/lifetime/73_list_model_clear_no_leak.aiml
   tests/lifetime/74_list_model_remove_no_leak.aiml
   tests/_inline_model_red/49_value_survives_remove.aiml

@@ -1,0 +1,38 @@
+# static-check: off
+# spec/61 §4/§5.5: a string member store through ref<T> releases the old value (int→string, concat, lone part, call result).
+- model:
+    name: Draft
+    fields:
+      - [val, string]
+      - [dur, string]
+      - [count, i32]
+- def:
+    name: label_of
+    args: [[num, i32]]
+    return: { type: string, lifetime: producer }
+    body:
+      - return: "n${num}"
+- def:
+    name: fill_val
+    args: [[car, ref<Draft>], [num, i32]]
+    body:
+      - set: [car.val, "${num}"]
+      - set: [car.val, "${car.val}d${num}"]
+      - set: [car.dur, { call: [label_of, num] }]
+      - set: [car.dur, "${car.dur}"]
+      - set: [car.count, { +: [car.count, 1] }]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [dft, Draft]
+            - call: [fill_val, dft, 6]
+            - call: [fill_val, dft, 7]
+            - if: {condition: {neq: [dft.val, "7d7"]}, then: [{return: 140}]}
+            - if: {condition: {neq: [dft.dur, "n7"]}, then: [{return: 141}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0
