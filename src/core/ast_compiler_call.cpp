@@ -1533,7 +1533,8 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                      const char* incF = (listElemName.rfind("map<", 0) == 0) ? "aiml_map_handle_incref"
                          : (listElemName == "buffer" || listElemName.rfind("buffer<", 0) == 0) ? "aiml_buffer_handle_incref"
                          : "aiml_list_handle_incref";
-                     ctx.builder.CreateCall(ctx.getFunction(incF, ctx.builder.getVoidTy(), {i8p}), { hp });
+                     if (!isOwningContainerCall(call->args[0].get(), listElemName))   // call result: move in
+                         ctx.builder.CreateCall(ctx.getFunction(incF, ctx.builder.getVoidTy(), {i8p}), { hp });
                      ListImpl::push(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), hp);
                  }
                  return nullptr;
@@ -2127,7 +2128,25 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              if (keyVal->getType()->isPointerTy() && keyVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
                  keyVal = ctx.builder.CreateBitCast(keyVal, ctx.builder.getInt8Ty()->getPointerTo());
              }
-             MapImpl::put(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, valVal, mapStructTy, valIsString);
+             llvm::GlobalVariable* oldDesc = nullptr; int oldDescN = 0;
+             if (ctx.memV3 && ctx.lifetimeDropsEnabled && ctx.isMemV3ContainerHandle(vName)) {
+                 oldDesc = elemHandleSerNodes(vName, oldDescN);
+                 // spec/61 §5.7: a copy source (member / at / accessor) is co-owned → incref.
+                 Expr* src = call->args[1].get();
+                 auto* sv = dynamic_cast<VariableExpr*>(src);
+                 bool copySrc = dynamic_cast<AtExpr*>(src) != nullptr
+                     || (sv && (sv->name.find('.') != std::string::npos || sv->name.find('<') != std::string::npos))
+                     || (dynamic_cast<CallExpr*>(src) && !isOwningContainerCall(src, vName));
+                 if (copySrc && valVal->getType()->isPointerTy()) {
+                     const char* incF = (vName.rfind("map<", 0) == 0) ? "aiml_map_handle_incref"
+                         : (vName == "buffer" || vName.rfind("buffer<", 0) == 0) ? "aiml_buffer_handle_incref"
+                         : "aiml_list_handle_incref";
+                     auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                     ctx.builder.CreateCall(ctx.getFunction(incF, ctx.builder.getVoidTy(), {i8p}), { valVal });
+                 }
+             }
+             MapImpl::put(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, valVal, mapStructTy, valIsString,
+                          oldDesc, oldDescN);
              return nullptr;
          } else if ((methodName == "get" || methodName == "get_copy") && argVals.size() > 0) {
              // spec/61 §5.4: get_copy returns an independent copy of the value. For a value/scalar
@@ -3189,8 +3208,15 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          // `consumed` parameter is moved into the callee — remove the caller's scope-drop
          // (safe: at worst a leak, never a double-free). argLifetimes includes the implicit
          // `this` at index 0, so explicit call->args[j] lines up with argLifetimes[j+1].
+         std::vector<std::pair<llvm::Value*, std::string>> ctrArgTemps;   // spec/61 §8 (see free-function path)
          if (ctx.lifetimeDropsEnabled) {
              auto mfit = ctx.functions.find(resolvedMangled);
+             for (size_t j = 0; j < call->args.size() && j < argVals.size(); ++j) {
+                 if (mfit != ctx.functions.end() && (j + 1) < mfit->second.argLifetimes.size()
+                     && mfit->second.argLifetimes[j + 1] == "consumed") continue;
+                 std::string ct = ownedContainerCallType(call->args[j].get());
+                 if (!ct.empty()) ctrArgTemps.push_back({static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[j])), ct});
+             }
              if (mfit != ctx.functions.end() && !mfit->second.argLifetimes.empty()) {
                  const auto& lifos = mfit->second.argLifetimes;
                  for (size_t j = 0; j < call->args.size() && (j + 1) < lifos.size(); ++j) {
@@ -3307,6 +3333,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          } else {
              callResult = ctx.ir_gen->createCall(func->getName().str(), methodArgs, "call_method");
          }
+         for (auto& t : ctrArgTemps) releaseContainerHandle(t.first, t.second);
          // If the method returns a struct (list<T>, model, etc.), store the value
          // into a temporary alloca and return the pointer.  This matches what
          // builtin handlers do and what visitSetStmt/visitDeclStmt expect for

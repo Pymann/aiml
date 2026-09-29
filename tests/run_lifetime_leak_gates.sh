@@ -21,6 +21,11 @@ command -v valgrind >/dev/null 2>&1 || { echo "FAIL: valgrind not installed (man
 
 # GREEN: must be 0 definite + 0 indirect lost, native exit 0, no valgrind error.
 GREEN=(
+  tests/lifetime/container_leaks/map_model_control.aiml
+  tests/lifetime/container_leaks/map_string_control.aiml
+  tests/lifetime/container_leaks/map_shared_string_key_control.aiml
+  tests/lifetime/container_leaks/list_nested_control.aiml
+  tests/lifetime/container_leaks/list_pop_discard.aiml
   tests/lifetime/61_member_handle_share.aiml
   tests/lifetime/62_member_share_recursive_release.aiml
   tests/lifetime/63_deserialize_carrier_no_leak.aiml
@@ -44,6 +49,10 @@ GREEN=(
   tests/lifetime/81_clone_of_nested_element.aiml
   tests/lifetime/84_container_return_shared_or_fresh.aiml
   tests/lifetime/85_container_return_unbound_and_exits.aiml
+  tests/lifetime/86_container_return_method_and_builtin_temps.aiml
+  tests/lifetime/87_producer_model_result_discarded_or_nested.aiml
+  tests/lifetime/88_conditional_move_and_borrow_in_loop.aiml
+  tests/lifetime/89_kv_get_copy_service_patterns.aiml
   tests/lifetime/73_list_model_clear_no_leak.aiml
   tests/lifetime/74_list_model_remove_no_leak.aiml
   tests/_inline_model_red/49_value_survives_remove.aiml
@@ -57,6 +66,16 @@ GREEN=(
 )
 # RED: known open findings (documented) — run + report, but do NOT fail the gate yet.
 RED=(
+  tests/lifetime/container_leaks/map_nested_control.aiml
+  tests/lifetime/container_leaks/map_nested_self_put.aiml
+  tests/lifetime/container_leaks/list_string_insert.aiml
+  tests/lifetime/container_leaks/map_shared_control.aiml
+  tests/lifetime/container_leaks/map_nested_remove.aiml
+  tests/lifetime/container_leaks/map_model_remove.aiml
+  tests/lifetime/container_leaks/map_model_replace.aiml
+  tests/lifetime/container_leaks/list_pop_bound.aiml
+  tests/lifetime/container_leaks/list_pop_arg.aiml
+  tests/lifetime/container_leaks/map_model_get_borrow.aiml
   tests/_inline_model_red/50_share_semantics.aiml
   tests/_inline_model_red/p2_array_field_leak_RED.aiml
 )

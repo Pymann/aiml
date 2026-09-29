@@ -128,7 +128,8 @@ namespace MapImpl {
         ctx.builder.CreateCall(dec, { asP });
     }
 
-    void put(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Value* valVal, llvm::StructType* mapType, bool valIsString) {
+    void put(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Value* valVal, llvm::StructType* mapType, bool valIsString,
+             llvm::Value* oldHandleDesc, int oldHandleDescN) {
         // Implement Put (Linear Scan)
         llvm::Value* sizePtr = ctx.builder.CreateStructGEP(mapType, mapPtr, 0, "sizePtr");
         llvm::Value* capPtr = ctx.builder.CreateStructGEP(mapType, mapPtr, 1, "capPtr");
@@ -182,6 +183,12 @@ namespace MapImpl {
         if (valIsString) {
             llvm::Value* oldVal = ctx.builder.CreateLoad(valType, valSlot, "map_old_val");
             decrefIfString(ctx, oldVal, true);
+        }
+        if (oldHandleDesc && valType->isPointerTy()) {
+            // spec/61 §5.5/§5.7 replace-old: the new reference is already secured → always release the old.
+            auto* i8p = llvm::PointerType::get(ctx.context, 0);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
+                {i8p, i8p, ctx.builder.getInt32Ty()}), { valSlot, oldHandleDesc, ctx.builder.getInt32(oldHandleDescN) });
         }
         ctx.builder.CreateStore(dupIfString(ctx, valVal, valIsString), valSlot);
         ctx.builder.CreateBr(endBB);

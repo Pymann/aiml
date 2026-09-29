@@ -1,0 +1,85 @@
+# static-check: off
+# spec/61 §4/§8: Kv get_copy results are owned by the caller — conditional push, producer return of get_copy, value-model arg.
+- model:
+    name: Deck
+    fields:
+      - [owner, string]
+      - [total, i32]
+      - [cards, list<string>]
+- model:
+    name: DeckList
+    fields:
+      - [success, i32]
+      - [decks, list<Deck>]
+- class:
+    name: DeckStore
+    members:
+      - [decks, Kv<string:Deck>]
+    methods:
+      - def:
+          name: open
+          body:
+            - set: [<.decks, { call: [db.open_kv, "lt89", {persist: true, path: "/tmp/lt89_kv/"}] }]
+      - def:
+          name: add
+          args: [[key, string], [owner, string]]
+          body:
+            - decl: [deck, Deck]
+            - set: [deck.owner, owner]
+            - call: [deck.cards.push, "card-${key}"]
+            - call: [<.decks.set, key, deck]
+      - def:
+          name: list
+          args: [[want, string]]
+          return: { type: DeckList, lifetime: producer }
+          body:
+            - decl: [out, DeckList]
+            - set: [out.success, 1]
+            - decl: [iter, iterator<string>, { call: [<.decks.iter] }]
+            - while:
+                condition: { gt: [{ call: [iter.has_next] }, 0] }
+                body:
+                  - decl: [key, string, { call: [iter.next] }]
+                  - decl: [deck, Deck, { call: [<.decks.get_copy, key] }]
+                  - if:
+                      condition: { eq: [deck.owner, want] }
+                      then:
+                        - set: [deck.total, deck.cards.len]
+                        - call: [out.decks.push, deck]
+            - call: [free, iter]
+            - return: out
+      - def:
+          name: get_raw
+          args: [[key, string]]
+          return: { type: Deck, lifetime: producer }
+          body:
+            - if: { condition: { eq: [{ call: [<.decks.has, key] }, 1] }, then: [{ return: { call: [<.decks.get_copy, key] } }] }
+            - decl: [empty_deck, Deck]
+            - return: empty_deck
+- def:
+    name: send_len
+    args: [[resp, DeckList]]
+    return: i32
+    body:
+      - return: resp.decks.len
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [store, DeckStore]
+      - call: [store.open]
+      - call: [store.add, "d1", "me"]
+      - call: [store.add, "d2", "other"]
+      - call: [store.add, "d3", "other"]
+      - decl: [counter, i32, 0]
+      - decl: [total, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [resp, DeckList, { call: [store.list, "me"] }]
+            - set: [total, {+: [total, {call: [send_len, resp]}]}]
+            - decl: [raw, Deck, { call: [store.get_raw, "d2"] }]
+            - set: [total, {+: [total, raw.cards.len]}]
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [total, 400]}, then: [{return: 70}]}
+      - return: 0

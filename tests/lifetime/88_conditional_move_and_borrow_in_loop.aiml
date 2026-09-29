@@ -1,0 +1,66 @@
+# static-check: off
+# spec/61 §4/§10: an owned value-model local moved on one path only is still dropped on the other; a `&` borrow never suppresses the drop.
+- model:
+    name: Deck
+    fields:
+      - [owner, string]
+      - [cards, list<string>]
+- model:
+    name: DeckList
+    fields:
+      - [decks, list<Deck>]
+- def:
+    name: make_deck
+    args: [[owner, string]]
+    return: { type: Deck, lifetime: producer }
+    body:
+      - decl: [out, Deck]
+      - set: [out.owner, "${owner}"]
+      - call: [out.cards.push, "card-${owner}"]
+      - return: out
+- def:
+    name: owner_len
+    args: [[deck, ref<Deck>]]
+    return: i32
+    body:
+      - return: deck.owner.len
+- def:
+    name: collect
+    args: [[want, string]]
+    return: { type: DeckList, lifetime: producer }
+    body:
+      - decl: [out, DeckList]
+      - decl: [pos, i32, 0]
+      - while:
+          condition: {lt: [pos, 4]}
+          body:
+            - decl: [deck, Deck, {call: [make_deck, {call: [pick_owner, pos]}]}]
+            - if:
+                condition: {eq: [deck.owner, want]}
+                then:
+                  - call: [out.decks.push, deck]
+            - set: [pos, {+: [pos, 1]}]
+      - return: out
+- def:
+    name: pick_owner
+    args: [[pos, i32]]
+    return: string
+    body:
+      - if: {condition: {eq: [pos, 0]}, then: [{return: "me"}]}
+      - return: "other"
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [total, i32, 0]
+      - while:
+          condition: {lt: [counter, 100]}
+          body:
+            - decl: [mine, DeckList, {call: [collect, "me"]}]
+            - set: [total, {+: [total, mine.decks.len]}]
+            - decl: [probe, Deck, {call: [make_deck, "abc"]}]
+            - set: [total, {+: [total, {call: [owner_len, {'&': [probe]}]}]}]
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [total, 400]}, then: [{return: 60}]}
+      - return: 0
