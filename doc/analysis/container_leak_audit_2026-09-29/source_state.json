@@ -1,0 +1,12 @@
+{
+  "head": "be736b3ce23fe204e20bbb3e0b8a3c518c711051",
+  "source_sha256": {
+    "spec/61_memory_management_DRAFT.md": "da2ebe5e89498134c2a46bf853462aa9302e5b2944e0c6f6434b2eca0fb0bd88",
+    "src/core/ast_compiler_call.cpp": "b63f5d37771ec64d4fb56e8ea2977ac1792a087e915b227127cd90fce7f37b88",
+    "src/core/ast_compiler_stmt.cpp": "c4dde26a2786a9f22648d7b518eb44200ecea1c6580cda4f19e31746c25bfce3",
+    "src/core/map_impl.cpp": "427789f49385d20a811821ce259c313f901436b0086ed17d7669f0161c8b3f5f",
+    "src/sys/string_runtime.cpp": "c25e903596b90f91ef9fb1404e10d3292e96f6919bf2d7694e599a5aab035ebb",
+    "src/sys/ser_runtime.cpp": "4f8eb3218c012a0736ab1653d8c0772184423789457e91a4d5fb7132737d458f"
+  },
+  "note": "Source hashes captured after builds/tests; compiler/runtime before/after hashes are in each run provenance."
+}

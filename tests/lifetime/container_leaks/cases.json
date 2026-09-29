@@ -1,0 +1,62 @@
+{
+  "map_nested_control": {
+    "finding": "B1",
+    "historical_result": "safety"
+  },
+  "map_nested_self_put": {
+    "finding": "B1",
+    "historical_result": "safety"
+  },
+  "list_string_insert": {
+    "finding": "B2",
+    "historical_result": "safety"
+  },
+  "map_shared_control": {
+    "finding": "B3",
+    "historical_result": "leak"
+  },
+  "map_nested_remove": {
+    "finding": "B4",
+    "historical_result": "leak"
+  },
+  "map_model_remove": {
+    "finding": "B4",
+    "historical_result": "leak"
+  },
+  "map_model_replace": {
+    "finding": "B5",
+    "historical_result": "leak"
+  },
+  "list_pop_bound": {
+    "finding": "B6",
+    "historical_result": "leak"
+  },
+  "list_pop_arg": {
+    "finding": "B6",
+    "historical_result": "leak"
+  },
+  "map_model_control": {
+    "finding": "control",
+    "historical_result": "clean"
+  },
+  "map_string_control": {
+    "finding": "control",
+    "historical_result": "clean"
+  },
+  "map_shared_string_key_control": {
+    "finding": "control",
+    "historical_result": "clean"
+  },
+  "list_nested_control": {
+    "finding": "control",
+    "historical_result": "clean"
+  },
+  "list_pop_discard": {
+    "finding": "control",
+    "historical_result": "clean"
+  },
+  "map_model_get_borrow": {
+    "finding": "B7",
+    "historical_result": "safety"
+  }
+}

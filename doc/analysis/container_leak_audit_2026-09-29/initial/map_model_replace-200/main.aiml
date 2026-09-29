@@ -1,0 +1,23 @@
+# static-check: off
+# Spec 61 container audit: B5; target: correct content, 0 lost bytes, no memory errors.
+- model: {name: Item, fields: [[text, string]]}
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [index, "map<string:Item>"]
+            - decl: [first, Item]
+            - set: [first.text, "first=${42}"]
+            - call: [index.put, "key", first]
+            - decl: [second, Item]
+            - set: [second.text, "second=${42}"]
+            - call: [index.put, "key", second]
+            - if: {condition: {neq: [index.len, 1]}, then: [{return: 21}]}
+            - decl: [view, ref<Item>, {call: [index.get, "key"]}]
+            - if: {condition: {neq: [view.text, "second=42"]}, then: [{return: 28}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

@@ -1,0 +1,22 @@
+==78386== Memcheck, a memory error detector
+==78386== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==78386== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==78386== Command: /tmp/aiml-container-review-final-targeted/map_model_control-400/bin
+==78386== Parent PID: 78317
+==78386== 
+==78386== 
+==78386== HEAP SUMMARY:
+==78386==     in use at exit: 145,329 bytes in 2,327 blocks
+==78386==   total heap usage: 6,769 allocs, 4,442 frees, 546,181 bytes allocated
+==78386== 
+==78386== LEAK SUMMARY:
+==78386==    definitely lost: 0 bytes in 0 blocks
+==78386==    indirectly lost: 0 bytes in 0 blocks
+==78386==      possibly lost: 0 bytes in 0 blocks
+==78386==    still reachable: 145,329 bytes in 2,327 blocks
+==78386==         suppressed: 0 bytes in 0 blocks
+==78386== Reachable blocks (those to which a pointer was found) are not shown.
+==78386== To see them, rerun with: --leak-check=full --show-leak-kinds=all
+==78386== 
+==78386== For lists of detected and suppressed errors, rerun with: -s
+==78386== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

@@ -1,0 +1,47 @@
+==76520== Memcheck, a memory error detector
+==76520== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==76520== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==76520== Command: /tmp/aiml-container-review-results/map_nested_control-400/bin
+==76520== Parent PID: 76465
+==76520== 
+==76520== Invalid read of size 4
+==76520==    at 0x52316B7: fre(int, AimlTypeNode const*, int, unsigned char*) (ser_runtime.cpp:807)
+==76520==    by 0x5233F0D: aiml_ser_free_decoded (ser_runtime.cpp:1430)
+==76520==    by 0x522DFC1: aiml_map_free (string_runtime.cpp:428)
+==76520==    by 0x522E247: aiml_map_handle_release (string_runtime.cpp:468)
+==76520==    by 0x10945E: __aiml_user_main (in /tmp/aiml-container-review-results/map_nested_control-400/bin)
+==76520==    by 0x10950A: main (in /tmp/aiml-container-review-results/map_nested_control-400/bin)
+==76520==  Address 0x3fffffff9 is not stack'd, malloc'd or (recently) free'd
+==76520== 
+==76520== 
+==76520== Process terminating with default action of signal 11 (SIGSEGV)
+==76520==    at 0x5899C0C: __pthread_kill_implementation (pthread_kill.c:44)
+==76520==    by 0x5899C0C: __pthread_kill_internal (pthread_kill.c:78)
+==76520==    by 0x5899C0C: pthread_kill@@GLIBC_2.34 (pthread_kill.c:89)
+==76520==    by 0x584027D: raise (raise.c:26)
+==76520==    by 0x521BB28: aiml_crash_handler(int, siginfo_t*, void*) (mirror_runtime.cpp:124)
+==76520==    by 0x584032F: ??? (in /usr/lib/x86_64-linux-gnu/libc.so.6)
+==76520==    by 0x52316B6: fre(int, AimlTypeNode const*, int, unsigned char*) (ser_runtime.cpp:807)
+==76520==    by 0x5233F0D: aiml_ser_free_decoded (ser_runtime.cpp:1430)
+==76520==    by 0x522DFC1: aiml_map_free (string_runtime.cpp:428)
+==76520==    by 0x522E247: aiml_map_handle_release (string_runtime.cpp:468)
+==76520==    by 0x10945E: __aiml_user_main (in /tmp/aiml-container-review-results/map_nested_control-400/bin)
+==76520==    by 0x10950A: main (in /tmp/aiml-container-review-results/map_nested_control-400/bin)
+==76520== 
+==76520== HEAP SUMMARY:
+==76520==     in use at exit: 373,181 bytes in 2,955 blocks
+==76520==   total heap usage: 3,181 allocs, 226 frees, 437,421 bytes allocated
+==76520== 
+==76520== LEAK SUMMARY:
+==76520==    definitely lost: 0 bytes in 0 blocks
+==76520==    indirectly lost: 0 bytes in 0 blocks
+==76520==      possibly lost: 2,464 bytes in 3 blocks
+==76520==    still reachable: 370,717 bytes in 2,952 blocks
+==76520==                       of which reachable via heuristic:
+==76520==                         newarray           : 24 bytes in 1 blocks
+==76520==         suppressed: 0 bytes in 0 blocks
+==76520== Reachable blocks (those to which a pointer was found) are not shown.
+==76520== To see them, rerun with: --leak-check=full --show-leak-kinds=all
+==76520== 
+==76520== For lists of detected and suppressed errors, rerun with: -s
+==76520== ERROR SUMMARY: 1 errors from 1 contexts (suppressed: 0 from 0)

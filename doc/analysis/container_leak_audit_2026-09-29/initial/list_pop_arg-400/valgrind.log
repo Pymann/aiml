@@ -1,0 +1,29 @@
+==76890== Memcheck, a memory error detector
+==76890== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==76890== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==76890== Command: /tmp/aiml-container-review-results/list_pop_arg-400/bin
+==76890== Parent PID: 76465
+==76890== 
+==76890== 
+==76890== HEAP SUMMARY:
+==76890==     in use at exit: 152,129 bytes in 2,727 blocks
+==76890==   total heap usage: 5,169 allocs, 2,442 frees, 478,581 bytes allocated
+==76890== 
+==76890== 6,800 bytes in 400 blocks are definitely lost in loss record 2,325 of 2,326
+==76890==    at 0x4846828: malloc (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==76890==    by 0x522CED5: aiml_str_alloc (string_runtime.cpp:54)
+==76890==    by 0x522CFB4: aiml_str_dup (string_runtime.cpp:88)
+==76890==    by 0x109363: __aiml_user_main (in /tmp/aiml-container-review-results/list_pop_arg-400/bin)
+==76890==    by 0x10952A: main (in /tmp/aiml-container-review-results/list_pop_arg-400/bin)
+==76890== 
+==76890== LEAK SUMMARY:
+==76890==    definitely lost: 6,800 bytes in 400 blocks
+==76890==    indirectly lost: 0 bytes in 0 blocks
+==76890==      possibly lost: 0 bytes in 0 blocks
+==76890==    still reachable: 145,329 bytes in 2,327 blocks
+==76890==         suppressed: 0 bytes in 0 blocks
+==76890== Reachable blocks (those to which a pointer was found) are not shown.
+==76890== To see them, rerun with: --leak-check=full --show-leak-kinds=all
+==76890== 
+==76890== For lists of detected and suppressed errors, rerun with: -s
+==76890== ERROR SUMMARY: 1 errors from 1 contexts (suppressed: 0 from 0)

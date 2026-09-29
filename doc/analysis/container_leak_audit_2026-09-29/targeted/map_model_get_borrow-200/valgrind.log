@@ -1,0 +1,41 @@
+==78440== Memcheck, a memory error detector
+==78440== Copyright (C) 2002-2022, and GNU GPL'd, by Julian Seward et al.
+==78440== Using Valgrind-3.22.0 and LibVEX; rerun with -h for copyright info
+==78440== Command: /tmp/aiml-container-review-final-targeted/map_model_get_borrow-200/bin
+==78440== Parent PID: 78317
+==78440== 
+==78440== Invalid read of size 1
+==78440==    at 0x4850364: strcmp (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==78440==    by 0x1094C9: __aiml_user_main (in /tmp/aiml-container-review-final-targeted/map_model_get_borrow-200/bin)
+==78440==    by 0x10967A: main (in /tmp/aiml-container-review-final-targeted/map_model_get_borrow-200/bin)
+==78440==  Address 0x3d64616f6c796170 is not stack'd, malloc'd or (recently) free'd
+==78440== 
+==78440== 
+==78440== Process terminating with default action of signal 11 (SIGSEGV)
+==78440==    at 0x5899C0C: __pthread_kill_implementation (pthread_kill.c:44)
+==78440==    by 0x5899C0C: __pthread_kill_internal (pthread_kill.c:78)
+==78440==    by 0x5899C0C: pthread_kill@@GLIBC_2.34 (pthread_kill.c:89)
+==78440==    by 0x584027D: raise (raise.c:26)
+==78440==    by 0x521BB28: aiml_crash_handler(int, siginfo_t*, void*) (mirror_runtime.cpp:124)
+==78440==    by 0x584032F: ??? (in /usr/lib/x86_64-linux-gnu/libc.so.6)
+==78440==    by 0x4850363: strcmp (in /usr/libexec/valgrind/vgpreload_memcheck-amd64-linux.so)
+==78440==    by 0x1094C9: __aiml_user_main (in /tmp/aiml-container-review-final-targeted/map_model_get_borrow-200/bin)
+==78440==    by 0x10967A: main (in /tmp/aiml-container-review-final-targeted/map_model_get_borrow-200/bin)
+==78440== 
+==78440== HEAP SUMMARY:
+==78440==     in use at exit: 373,020 bytes in 2,953 blocks
+==78440==   total heap usage: 3,179 allocs, 226 frees, 437,268 bytes allocated
+==78440== 
+==78440== LEAK SUMMARY:
+==78440==    definitely lost: 0 bytes in 0 blocks
+==78440==    indirectly lost: 0 bytes in 0 blocks
+==78440==      possibly lost: 2,495 bytes in 5 blocks
+==78440==    still reachable: 370,525 bytes in 2,948 blocks
+==78440==                       of which reachable via heuristic:
+==78440==                         newarray           : 40 bytes in 1 blocks
+==78440==         suppressed: 0 bytes in 0 blocks
+==78440== Reachable blocks (those to which a pointer was found) are not shown.
+==78440== To see them, rerun with: --leak-check=full --show-leak-kinds=all
+==78440== 
+==78440== For lists of detected and suppressed errors, rerun with: -s
+==78440== ERROR SUMMARY: 1 errors from 1 contexts (suppressed: 0 from 0)
