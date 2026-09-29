@@ -1,0 +1,68 @@
+# static-check: off
+# spec/61 §5.7: nested container map values are handle slots — growth, numeric keys, map-of-map, alias past drop, copy/clone, KV roundtrip.
+- model:
+    name: Holder
+    fields:
+      - [rows, map<string:list<i32>>]
+- def:
+    name: fill
+    args: [[count, i32]]
+    return: map<i32:list<string>>
+    body:
+      - decl: [out, map<i32:list<string>>]
+      - decl: [pos, i32, 0]
+      - while:
+          condition: {lt: [pos, count]}
+          body:
+            - decl: [row, list<string>]
+            - call: [row.push, "v${pos}"]
+            - call: [out.put, pos, row]
+            - set: [pos, {+: [pos, 1]}]
+      - return: out
+- def:
+    name: alias_after_drop
+    return: list<string>
+    body:
+      - decl: [grid, map<i32:list<string>>, {call: [fill, 9]}]
+      - decl: [kept, list<string>, {call: [grid.get, 7]}]
+      - return: kept
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [store, Kv<string:Holder>]
+      - set: [store, { call: [db.open_kv, "lt90", {persist: true, path: "/tmp/lt90_kv/"}] }]
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [grid, map<i32:list<string>>, {call: [fill, 9]}]
+            - if: {condition: {neq: [grid.len, 9]}, then: [{return: 80}]}
+            - decl: [row5, list<string>, {call: [grid.get, 5]}]
+            - if: {condition: {neq: [{at: [row5, 0]}, "v5"]}, then: [{return: 81}]}
+            - decl: [kept, list<string>, {call: [alias_after_drop]}]
+            - if: {condition: {neq: [{at: [kept, 0]}, "v7"]}, then: [{return: 82}]}
+            - decl: [nested, map<string:map<string:i32>>]
+            - decl: [inner, map<string:i32>]
+            - call: [inner.put, "a", 1]
+            - call: [nested.put, "x", inner]
+            - call: [nested.put, "y", inner]
+            - decl: [back, map<string:i32>, {call: [nested.get, "y"]}]
+            - if: {condition: {neq: [back.len, 1]}, then: [{return: 83}]}
+            - decl: [shallow, map<i32:list<string>>, {copy: grid}]
+            - decl: [deep, map<i32:list<string>>, {clone: grid}]
+            - call: [row5.push, "extra"]
+            - decl: [srow, list<string>, {call: [shallow.get, 5]}]
+            - if: {condition: {neq: [srow.len, 2]}, then: [{return: 84}]}
+            - decl: [drow, list<string>, {call: [deep.get, 5]}]
+            - if: {condition: {neq: [drow.len, 1]}, then: [{return: 85}]}
+            - decl: [hold, Holder]
+            - decl: [hrow, list<i32>]
+            - call: [hrow.push, 11]
+            - call: [hold.rows.put, "r", hrow]
+            - call: [store.set, "h", hold]
+            - decl: [again, Holder, {call: [store.get_copy, "h"]}]
+            - decl: [arow, list<i32>, {call: [again.rows.get, "r"]}]
+            - if: {condition: {neq: [{at: [arow, 0]}, 11]}, then: [{return: 86}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

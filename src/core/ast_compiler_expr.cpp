@@ -80,6 +80,16 @@ IRValue* Compiler::visitStringInterpolation(StringInterpolationExpr* expr) {
             if (!ctx.stmtTempStack.empty()) ctx.stmtTempStack.back().push_back(currentStr);
         }
     }
+    // spec/61 §7: an interpolation is always a FRESH owned string — a lone string part ("${x}") would
+    // otherwise alias its operand while consumers adopt it as owned (UAF once the source is freed).
+    if (currentStr && currentStr->getType()->isPointerTy() && !ctx.stmtTempStack.empty()) {
+        auto& fr = ctx.stmtTempStack.back();
+        if (std::find(fr.begin(), fr.end(), currentStr) == fr.end()) {
+            llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
+            currentStr = ctx.builder.CreateCall(ctx.getFunction("aiml_str_dup", i8p, {i8p}), { currentStr }, "interp_own");
+            fr.push_back(currentStr);
+        }
+    }
     return ctx.ir_gen->wrap(currentStr);
 }
 IRValue* Compiler::visitNewArrayExpr(NewArrayExpr* na) {

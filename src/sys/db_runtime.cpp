@@ -441,20 +441,22 @@ extern "C" const char* aiml_db_get_path(void) {
 }
 
 // Global registry for db.checkpoint_all — protected by g_db_mutex
+// spec/61 class 6: the runtime owns these singletons for the whole process — the registries are
+// never destroyed (no exit-time destructor drops the only reference to a live handle).
 static std::mutex                      g_db_mutex;
-static std::vector<AimlStore*>         g_persistent_stores;
-static std::vector<AimlKv*>            g_persistent_kvs;
-static std::vector<AimlTimeSeries*>    g_persistent_ts;
-static std::vector<AimlVecStore*>      g_persistent_vecs;
+static std::vector<AimlStore*>&        g_persistent_stores = *new std::vector<AimlStore*>();
+static std::vector<AimlKv*>&           g_persistent_kvs    = *new std::vector<AimlKv*>();
+static std::vector<AimlTimeSeries*>&   g_persistent_ts     = *new std::vector<AimlTimeSeries*>();
+static std::vector<AimlVecStore*>&     g_persistent_vecs   = *new std::vector<AimlVecStore*>();
 
 // Global name-based registries: base_path+name → open handle (singleton reuse)
-static std::unordered_map<std::string, AimlStore*>      g_persistent_stores_by_name;
-static std::unordered_map<std::string, AimlKv*>         g_persistent_kvs_by_name;
-static std::unordered_map<std::string, AimlTimeSeries*> g_persistent_ts_by_name;
-static std::unordered_map<std::string, AimlVecStore*>   g_persistent_vecs_by_name;
+static std::unordered_map<std::string, AimlStore*>&      g_persistent_stores_by_name = *new std::unordered_map<std::string, AimlStore*>();
+static std::unordered_map<std::string, AimlKv*>&         g_persistent_kvs_by_name    = *new std::unordered_map<std::string, AimlKv*>();
+static std::unordered_map<std::string, AimlTimeSeries*>& g_persistent_ts_by_name     = *new std::unordered_map<std::string, AimlTimeSeries*>();
+static std::unordered_map<std::string, AimlVecStore*>&   g_persistent_vecs_by_name   = *new std::unordered_map<std::string, AimlVecStore*>();
 // In-memory (non-persistent) KV registry: name → singleton handle, shared across calls.
 // Ensures db.open_kv("name", {persist: false}) returns the same instance on every call.
-static std::unordered_map<std::string, AimlKv*>         g_non_persist_kvs_by_name;
+static std::unordered_map<std::string, AimlKv*>&         g_non_persist_kvs_by_name   = *new std::unordered_map<std::string, AimlKv*>();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Column Layout helpers

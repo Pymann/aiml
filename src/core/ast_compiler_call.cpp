@@ -1734,7 +1734,13 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                      return nullptr;
                  }
              }
-             return ctx.ir_gen->wrap(ListImpl::pop(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), llvmListElemType));
+             llvm::Value* popped = ListImpl::pop(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), llvmListElemType);
+             // spec/61 §5.4/§8: pop transfers the slot's owning string ref → an owned temp (a binding
+             // adopts it, a transient use is released at statement end).
+             if (listElemName == "string" && popped && popped->getType()->isPointerTy()
+                 && ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+                 ctx.stmtTempStack.back().push_back(popped);
+             return ctx.ir_gen->wrap(popped);
          } else if (methodName == "slice" && !argVals.empty()) {
              // spec/01/§5.4: list.slice(start, end) — shallow COPY of [start, end) into a fresh heap
              // handle (start inclusive, end exclusive; end optional → to len). Dash-free form of
@@ -1804,7 +1810,31 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              }
              return ctx.ir_gen->wrap(ListImpl::get(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), llvmListElemType));
          } else if (methodName == "insert" && argVals.size() > 1) {
-             ListImpl::insert(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1])));
+             // spec/61 §4/§5.4/§5.7: insert acquires its own element reference exactly like push —
+             // secured BEFORE the shift/realloc (source may live in this list).
+             llvm::Value* insVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
+             auto* i8p = llvm::PointerType::get(ctx.context, 0);
+             if (listElemName == "string" && insVal && insVal->getType()->isPointerTy()) {
+                 llvm::Value* asP = insVal->getType() == i8p ? insVal : ctx.builder.CreateBitCast(insVal, i8p);
+                 insVal = ctx.builder.CreateCall(ctx.getFunction("aiml_str_dup", i8p, {i8p}), { asP }, "list_ins_own");
+             } else if (ctx.memV3 && ctx.isMemV3ContainerHandle(listElemName)) {
+                 if (auto* ve = dynamic_cast<VariableExpr*>(call->args[1].get()))
+                     if (ve->name.find('.') == std::string::npos && ve->name.find('<') == std::string::npos)
+                         if (Symbol* s = resolveVariable(ve->name)) {
+                             llvm::Value* slot = s->ir_alloca_inst
+                                 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(s->ir_alloca_inst)) : s->alloca_inst;
+                             if (slot) insVal = ctx.builder.CreateLoad(i8p, slot, "ins_innerh");
+                         }
+                 if (insVal && insVal->getType()->isPointerTy() && !isOwningContainerCall(call->args[1].get(), listElemName)) {
+                     const char* incF = (listElemName.rfind("map<", 0) == 0) ? "aiml_map_handle_incref"
+                         : (listElemName == "buffer" || listElemName.rfind("buffer<", 0) == 0) ? "aiml_buffer_handle_incref"
+                         : "aiml_list_handle_incref";
+                     ctx.builder.CreateCall(ctx.getFunction(incF, ctx.builder.getVoidTy(), {i8p}), { insVal });
+                 }
+             } else if (ctx.isRefcountModel(listElemName) && insVal && insVal->getType()->isPointerTy()) {
+                 ctx.builder.CreateCall(ctx.getFunction("aiml_model_incref", ctx.builder.getVoidTy(), {i8p}), { insVal });
+             }
+             ListImpl::insert(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), insVal);
              return nullptr;
          } else if (methodName == "remove" && argVals.size() > 0) {
              // AIML v2 P3: a list<Model> stores %M* REFERENCES (stride 8, NOT the struct size). The
@@ -2075,9 +2105,51 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          // AIML v2 P3: a map<K:Model> stores %M* references (pointer values).
          bool refVal = ctx.isRefcountModel(vName);
          if (refVal) vTy = ctx.builder.getInt8Ty()->getPointerTo();
+         // spec/61 §5.7: nested container values are handle slots (same classification as the decl).
+         bool handleVal = ctx.memV3 && ctx.isMemV3ContainerHandle(vName);
+         if (handleVal) vTy = ctx.builder.getInt8Ty()->getPointerTo();
+         // spec/61 §5.4/§5.5/§5.7: how a stored value is released on replace/remove.
+         llvm::GlobalVariable* relDesc = nullptr; int relN = 0, relKind = 0;
+         bool inlineModelVal = false;
+         {
+             auto ci = ctx.classes.find(vName);
+             inlineModelVal = !refVal && !handleVal && ci != ctx.classes.end() && ci->second.hasHeapFields
+                 && ci->second.serNodesVar && ci->second.type;
+         }
+         if (ctx.lifetimeDropsEnabled) {
+             if (handleVal) { relDesc = elemHandleSerNodes(vName, relN); relKind = relDesc ? 1 : 0; }
+             else if (refVal) {
+                 std::string bare = vName;
+                 if (bare.rfind("shared<", 0) == 0 && bare.back() == '>') bare = bare.substr(7, bare.size() - 8);
+                 auto ci = ctx.classes.find(bare);
+                 if (ci != ctx.classes.end() && ci->second.serNodesVar) {
+                     relDesc = ci->second.serNodesVar; relN = ci->second.serNodesCount; relKind = 2;
+                 }
+             } else {
+                 auto ci = ctx.classes.find(vName);
+                 if (ci != ctx.classes.end() && ci->second.hasHeapFields && ci->second.serNodesVar && ci->second.type) {
+                     relDesc = ci->second.serNodesVar; relN = ci->second.serNodesCount; relKind = 1;
+                 }
+             }
+         }
          if (methodName == "put" && argVals.size() > 1) {
              llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
              llvm::Value* valVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[1]));
+             if (handleVal) {
+                 // The handle of a container local lives in its slot (the expression value is the struct).
+                 auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                 if (auto* ve = dynamic_cast<VariableExpr*>(call->args[1].get()))
+                     if (ve->name.find('.') == std::string::npos && ve->name.find('<') == std::string::npos)
+                         if (Symbol* s = resolveVariable(ve->name)) {
+                             llvm::Value* slot = s->ir_alloca_inst
+                                 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(s->ir_alloca_inst)) : s->alloca_inst;
+                             if (slot) valVal = ctx.builder.CreateLoad(i8p, slot, "put_valh");
+                         }
+                 if (!valVal || !valVal->getType()->isPointerTy()) {
+                     LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "map<" + inner + ">.put: container value is not a handle (spec/61 §5.7)");
+                     return nullptr;
+                 }
+             }
              bool valIsString = (vName == "string");
              // AIML v2 P3: refcount-model value → incref + store the %M* (share). The map OWNS a
              // reference (balanced by the map-free valKind-3 decref); the source keeps its own.
@@ -2089,7 +2161,8 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  ctx.builder.CreateCall(inc, { objp });
                  if (keyVal->getType()->isPointerTy() && keyVal->getType() != i8p)
                      keyVal = ctx.builder.CreateBitCast(keyVal, i8p);
-                 MapImpl::put(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, objp, mapStructTy, false);
+                 MapImpl::put(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, objp, mapStructTy, false,
+                              relDesc, relN, relKind);
                  return nullptr;
              }
              // spec/61 §8: MapImpl::put now DUPS string keys and string values (map owns its own
@@ -2100,9 +2173,44 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              // was freed under the map → all mana colors collapsed into one slot).
              // NON-string values (model/ptr) still MOVE into the map (stored raw): suppress the
              // caller's drop for those, exactly as before.
-             if (!valIsString) {
+             bool deepCopyModel = false;
+             if (inlineModelVal) {
+                 // spec/61 §5.4/§7: a named local with its own drop MOVES in, an owning call is adopted,
+                 // anything else (member / at / get view) is deep-copied so the map owns an independent value.
+                 Expr* src = call->args[1].get();
+                 bool moveLocal = false;
+                 if (auto* ve = dynamic_cast<VariableExpr*>(src))
+                     if (ve->name.find('.') == std::string::npos && ve->name.find('<') == std::string::npos)
+                         if (Symbol* s = resolveVariable(ve->name)) {
+                             llvm::Value* a = s->ir_alloca_inst
+                                 ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(s->ir_alloca_inst)) : s->alloca_inst;
+                             for (auto& frame : ctx.cleanupStack)
+                                 for (auto& d : frame) if (a && d.addr == a && d.kind == 0) moveLocal = true;
+                         }
+                 bool adoptCall = isOwningContainerCall(src, vName);
+                 deepCopyModel = !moveLocal && !adoptCall;
+                 if (moveLocal) consumeLocalDrop(src);
+             } else if (!valIsString && !handleVal) {
                  consumeStringTemp(valVal);
                  if (call->args.size() > 1) consumeLocalDrop(call->args[1].get());
+             }
+             if (deepCopyModel && valVal) {
+                 auto ci = ctx.classes.find(vName);
+                 llvm::Type* mt = ci->second.type;
+                 auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                 llvm::Value* srcAddr = valVal;
+                 if (!valVal->getType()->isPointerTy()) {
+                     srcAddr = ctx.createEntryAlloca(valVal->getType(), "put_src");
+                     ctx.builder.CreateStore(valVal, srcAddr);
+                 }
+                 llvm::Value* tmp = ctx.createEntryAlloca(mt, "put_copy");
+                 ctx.builder.CreateStore(llvm::ConstantAggregateZero::get(mt), tmp);
+                 ctx.builder.CreateCall(ctx.getFunction("aiml_ser_deep_copy", ctx.builder.getVoidTy(),
+                     {i8p, i8p, i8p, ctx.builder.getInt32Ty()}),
+                     { tmp, srcAddr, ci->second.serNodesVar, ctx.builder.getInt32(ci->second.serNodesCount) });
+                 valVal = ctx.builder.CreateLoad(mt, tmp, "put_copy_val");
+             } else if (inlineModelVal && valVal && valVal->getType()->isPointerTy()) {
+                 valVal = ctx.builder.CreateLoad(ctx.classes.find(vName)->second.type, valVal, "put_val");
              }
              // Interface-Upcast für put(key, ptr<Concrete>) wenn V = ptr<Interface>.
              // Zentralisiert in Compiler::buildInterfaceUpcast.
@@ -2128,15 +2236,14 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              if (keyVal->getType()->isPointerTy() && keyVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
                  keyVal = ctx.builder.CreateBitCast(keyVal, ctx.builder.getInt8Ty()->getPointerTo());
              }
-             llvm::GlobalVariable* oldDesc = nullptr; int oldDescN = 0;
              if (ctx.memV3 && ctx.lifetimeDropsEnabled && ctx.isMemV3ContainerHandle(vName)) {
-                 oldDesc = elemHandleSerNodes(vName, oldDescN);
                  // spec/61 §5.7: a copy source (member / at / accessor) is co-owned → incref.
                  Expr* src = call->args[1].get();
                  auto* sv = dynamic_cast<VariableExpr*>(src);
-                 bool copySrc = dynamic_cast<AtExpr*>(src) != nullptr
-                     || (sv && (sv->name.find('.') != std::string::npos || sv->name.find('<') != std::string::npos))
-                     || (dynamic_cast<CallExpr*>(src) && !isOwningContainerCall(src, vName));
+                 // spec/61 §5.7: any named/viewed source (local, member, at, accessor) is co-owned → incref;
+                 // only an owning call result moves in.
+                 (void)sv;
+                 bool copySrc = !isOwningContainerCall(src, vName);
                  if (copySrc && valVal->getType()->isPointerTy()) {
                      const char* incF = (vName.rfind("map<", 0) == 0) ? "aiml_map_handle_incref"
                          : (vName == "buffer" || vName.rfind("buffer<", 0) == 0) ? "aiml_buffer_handle_incref"
@@ -2146,7 +2253,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  }
              }
              MapImpl::put(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, valVal, mapStructTy, valIsString,
-                          oldDesc, oldDescN);
+                          relDesc, relN, relKind);
              return nullptr;
          } else if ((methodName == "get" || methodName == "get_copy") && argVals.size() > 0) {
              // spec/61 §5.4: get_copy returns an independent copy of the value. For a value/scalar
@@ -2156,13 +2263,18 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              if (keyVal->getType()->isPointerTy() && keyVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
                  keyVal = ctx.builder.CreateBitCast(keyVal, ctx.builder.getInt8Ty()->getPointerTo());
              }
-             return ctx.ir_gen->wrap(MapImpl::get(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, vTy, mapStructTy));
+             // spec/61 §5.4: binding an inline value-model slot as ref<V>/ptr<V> borrows the slot itself.
+             const std::string& tgt = ctx.deserializeTargetType;
+             bool slotView = inlineModelVal && methodName == "get"
+                 && (tgt == "ref<" + vName + ">" || tgt == "ptr<" + vName + ">");
+             return ctx.ir_gen->wrap(MapImpl::get(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, vTy, mapStructTy, slotView));
          } else if (methodName == "remove" && argVals.size() > 0) {
              llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
              if (keyVal->getType()->isPointerTy() && keyVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
                  keyVal = ctx.builder.CreateBitCast(keyVal, ctx.builder.getInt8Ty()->getPointerTo());
              }
-             MapImpl::remove(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, vTy, mapStructTy, vName == "string");
+             MapImpl::remove(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), keyVal, vTy, mapStructTy, vName == "string",
+                             relDesc, relN, relKind);
              return nullptr;
          } else if (methodName == "contains" && argVals.size() > 0) {
              llvm::Value* keyVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
