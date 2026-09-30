@@ -649,6 +649,9 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
                                               : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)),
                                               ctx.builder.getInt64(elemSize),
                                               ctx.builder.getInt32(elemKind) }, "listh_copy");
+        if (elemKind == 2 && serNodes)   // inline value models: member-wise share (§5.1)
+            ctx.builder.CreateCall(ctx.getFunction("aiml_list_retain_elems", ctx.builder.getVoidTy(),
+                {i8p, i64Ty, i8p, i32Ty}), { handle, ctx.builder.getInt64(elemSize), serNodes, ctx.builder.getInt32(serNodesCount) });
         releaseContainerCopyTemp(copyTempSlot, copyTempOwned, decl->typeName);
     } else if (isAdoptExpr) {
         // spec/61 §5: a slice expression returns a FRESH owned handle (aiml_list_handle_new inside
@@ -2101,6 +2104,9 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                                     srcType = "ptr<" + srcType + ">";  // promote to ptr-form
                                 }
                             }
+                        } else if (auto* ne = dynamic_cast<NewExpr*>(decl->initialValue.get())) {
+                            // `decl: [s, ptr<Iface>, {new: Concrete}]` — upcast the fresh box directly.
+                            if (ctx.classes.count(ne->typeName)) srcType = "ptr<" + ne->typeName + ">";
                         }
                         if (!srcType.empty() && objPtr) {
                             auto* fpTy = llvm::cast<llvm::StructType>(declTy);
@@ -2328,6 +2334,13 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         auto pit = ctx.ownershipPlan->statements.find(setStmt);
         if (pit != ctx.ownershipPlan->statements.end() && pit->second.rebindReleaseOld)
             rebindCopyFn = "aiml_ser_deep_copy_replace";
+    }
+    // spec/61 §5.5: a GLOBAL heap value model always owns its value (not tracked by the local
+    // ownership plan) → a rebind releases the old heap too.
+    if (setStmt->target.find('.') == std::string::npos && setStmt->target.find('<') == std::string::npos) {
+        if (Symbol* gs = resolveVariable(setStmt->target))
+            if (gs->is_global && gs->lifetime != "persistent" && ctx.isOwnedValueReturn(gs->typeName))
+                rebindCopyFn = "aiml_ser_deep_copy_replace";
     }
     // Reset any leaked kv-dispatch flags from prior statements before evaluating
     // the rhs. visitCall on a `kv.get_copy(...)` inside the rhs will re-set
@@ -3058,7 +3071,11 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         // ability_block_cached / CardArtCache_fetch). An owned temp (interpolation/producer) is MOVED
         // (assign_move: store + decref old); a borrow is COPIED (assign_copy: dup + decref old). The
         // exact self-assignment `set:[x,x]` was already returned as a no-op above.
-        if (ctx.lifetimeDropsEnabled && isManagedStringLocalSym(*sym)) {
+        // spec/61 §4 rule 3: a GLOBAL string slot also owns one ref (decl init is normalised) → a
+        // rebind releases the old value exactly like a managed local.
+        bool globalStringSlot = ctx.memV3 && sym->is_global && sym->typeName == "string"
+            && sym->lifetime != "persistent" && !sym->is_byref_arg;
+        if (ctx.lifetimeDropsEnabled && (isManagedStringLocalSym(*sym) || globalStringSlot)) {
             if (sym->is_const) {
                 LOG_ERROR(ctx.fmtLoc() + "Cannot assign to const variable " + targetStr);
                 return;

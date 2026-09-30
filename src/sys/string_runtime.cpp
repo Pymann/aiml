@@ -177,6 +177,7 @@ extern "C" char* aiml_str_take_local(char** src) {
 // original alloc.  Idempotent: nulls the struct so a double-drop (should not happen
 // given move-detection) is a no-op, not a crash.
 extern "C" void aiml_ser_free_decoded(void* obj, void* nodes, int32_t node_count);
+extern "C" void aiml_ser_retain(void* obj, const void* nodes, int32_t n_nodes);
 // AIML v2: decref a %M* reference element/value (frees inner heap + shell at refcount 0).
 extern "C" void aiml_model_decref(void* obj, const void* nodes, int32_t n_nodes);
 extern "C" void aiml_model_incref(void* obj);
@@ -355,6 +356,15 @@ extern "C" void* aiml_list_handle_copy(void* src, int64_t elemSize, int32_t elem
             if (e[i]) ++(*reinterpret_cast<int32_t*>(static_cast<char*>(e[i]) - 8));
     }
     return h;
+}
+
+// spec/61 §5.1: after a bit-copy of inline value-model elements (shallow `copy` / `slice`), retain
+// each element member-wise (strings/handles incref'd) so both lists own balanced references.
+extern "C" void aiml_list_retain_elems(void* list, int64_t elemSize, const void* nodes, int32_t n_nodes) {
+    if (!list || !nodes) return;
+    AimlListRaw* l = static_cast<AimlListRaw*>(list);
+    char* base = reinterpret_cast<char*>(l->data);
+    for (int32_t i = 0; base && i < l->size; ++i) aiml_ser_retain(base + (int64_t)i * elemSize, nodes, n_nodes);
 }
 
 // ── spec/61 §5 Option B (memV3): buffer as a refcounted HANDLE ────────────────

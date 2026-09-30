@@ -1,0 +1,55 @@
+# static-check: off
+- model: {name: Item, fields: [[label, string], [tags, list<string>]]}
+- def:
+    name: make_item
+    args: [[num, i32]]
+    return: { type: Item, lifetime: producer }
+    body:
+      - decl: [out, Item]
+      - set: [out.label, "item-${num}"]
+      - call: [out.tags.push, "tag-${num}"]
+      - return: out
+
+- class:
+    name: Keeper
+    members:
+      - [items, list<Item>]
+      - [names, list<string>]
+      - [index, "map<string:Item>"]
+      - [best, Item]
+    methods:
+      - def:
+          name: add
+          args: [[num, i32]]
+          body:
+            - call: [<.items.push, {call: [make_item, num]}]
+            - call: [<.names.push, "n-${num}"]
+            - call: [<.index.put, "k${num}", {call: [make_item, num]}]
+            - set: [<.best, {call: [make_item, num]}]
+            - if: {condition: {gt: [<.items.len, 3]}, then: [{call: [<.items.remove, 0]}, {call: [<.names.remove, 0]}]}
+            - if: {condition: {gt: [<.index.len, 3]}, then: [{call: [<.index.remove, "k${{ '-': [num, 3] }}"]}]}
+      - def:
+          name: top_label
+          return: string
+          body:
+            - return: <.best.label
+      - def:
+          name: snapshot
+          return: list<string>
+          body:
+            - return: <.names
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [keeper, Keeper]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - call: [keeper.add, counter]
+            - decl: [lbl, string, {call: [keeper.top_label]}]
+            - decl: [snap, list<string>, {call: [keeper.snapshot]}]
+            - call: [snap.push, "s"]
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0
