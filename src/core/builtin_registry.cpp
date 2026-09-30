@@ -7703,8 +7703,10 @@ void registerBuiltins(CompilerContext& ctx) {
             AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
-                ctx.getFunction("aiml_prefab_text_value", i8p, {i8p, i8p}), {base, name}));
+            // spec/61 §4: the runtime returns a fresh dup → owned statement temp (a binding adopts it).
+            llvm::Value* own = ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_text_value", i8p, {i8p, i8p}), {base, name});
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) ctx.stmtTempStack.back().push_back(own);
+            return ctx.ir_gen->wrap(own);
         };
 
         // child_clicked(child_name) → i32 (1 if button child clicked this frame)
@@ -7783,8 +7785,10 @@ void registerBuiltins(CompilerContext& ctx) {
             AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(
-                ctx.getFunction("aiml_prefab_dropdown_value", i8p, {i8p, i8p}), {base, name}));
+            // spec/61 §4: the runtime returns a fresh dup → owned statement temp (a binding adopts it).
+            llvm::Value* own = ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_dropdown_value", i8p, {i8p, i8p}), {base, name});
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) ctx.stmtTempStack.back().push_back(own);
+            return ctx.ir_gen->wrap(own);
         };
 
         // dropdown_enum(child_name) → i32 — selected option's real enum member
