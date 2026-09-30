@@ -732,6 +732,14 @@ void Compiler::emitMapHandleDecl(DeclStmt* decl) {
     int valKind; int64_t valStride; llvm::GlobalVariable* valNodes = nullptr; int32_t valNodesCount = 0;
     if (vName == "string") { valKind = 1; valStride = 8; }
     else if (ctx.isMemV3ContainerHandle(vName)) { valKind = 4; valStride = (int64_t)dl.getPointerSize(); }
+    else if (vName.rfind("ptr<", 0) == 0 && vName.back() == '>' && ctx.classes.count(vName.substr(4, vName.size() - 5))
+             && !ctx.classGroupContainers.count(vName.substr(4, vName.size() - 5))
+             && !ctx.cascadeClasses.count(vName.substr(4, vName.size() - 5))) {
+        // owning box value: drop frees fields + shell (valKind 5)
+        valKind = 5; valStride = (int64_t)dl.getPointerSize();
+        auto bci = ctx.classes.find(vName.substr(4, vName.size() - 5));
+        if (bci->second.hasHeapFields && bci->second.serNodesVar) { valNodes = bci->second.serNodesVar; valNodesCount = bci->second.serNodesCount; }
+    }
     else if (ctx.isRefcountModel(vName)) {
         valKind = 3; valStride = 8;
         // Bare-class key: a memV3 map<K:shared<V>> has vName "shared<V>" (see emitListHandleDecl).
@@ -3230,6 +3238,45 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                             }
                         }
                         ctx.builder.CreateStore(newObj, dstSlot);
+                        return;
+                    }
+                }
+                // spec/61 §5.5/§6.1: an owning ptr<T> FIELD receiving a fresh box (`{new: T}`, an owning
+                // call) or a moved ptr local: secure the new box, release the old one, store.
+                if (ctx.memV3 && ctx.lifetimeDropsEnabled && finalTypeName.rfind("ptr<", 0) == 0
+                    && finalTypeName.back() == '>') {
+                    std::string boxed = finalTypeName.substr(4, finalTypeName.size() - 5);
+                    auto bci = ctx.classes.find(boxed);
+                    Expr* rv = setStmt->value.get();
+                    bool fresh = dynamic_cast<NewExpr*>(rv) != nullptr;
+                    if (auto* fc = dynamic_cast<CallExpr*>(rv)) {
+                        size_t dp = fc->functionName.rfind('.');
+                        std::string sn = (dp == std::string::npos) ? fc->functionName : fc->functionName.substr(dp + 1);
+                        fresh = ctx.ownsReturnMatches(sn, finalTypeName);
+                    }
+                    if (auto* ve = dynamic_cast<VariableExpr*>(rv))
+                        if (ve->name.find('.') == std::string::npos)
+                            if (Symbol* rs = resolveVariable(ve->name)) fresh = rs->typeName == finalTypeName && !rs->is_param;
+                    llvm::Value* dstSlot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(targetGep));
+                    llvm::Value* newP = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                    if (fresh && bci != ctx.classes.end() && bci->second.type && !ctx.classGroupContainers.count(boxed)
+                        && !ctx.cascadeClasses.count(boxed) && dstSlot && newP && newP->getType()->isPointerTy()) {
+                        auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                        llvm::Value* oldP = ctx.builder.CreateLoad(i8p, dstSlot, "fbox_old");
+                        llvm::Function* fn = ctx.builder.GetInsertBlock()->getParent();
+                        llvm::BasicBlock* relBB = llvm::BasicBlock::Create(ctx.context, "fbox_rel", fn);
+                        llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx.context, "fbox_done", fn);
+                        ctx.builder.CreateCondBr(ctx.builder.CreateAnd(ctx.builder.CreateIsNotNull(oldP),
+                                                 ctx.builder.CreateICmpNE(oldP, newP)), relBB, doneBB);
+                        ctx.builder.SetInsertPoint(relBB);
+                        if (bci->second.hasHeapFields && bci->second.serNodesVar)
+                            ctx.builder.CreateCall(ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
+                                {i8p, i8p, ctx.builder.getInt32Ty()}),
+                                { oldP, bci->second.serNodesVar, ctx.builder.getInt32(bci->second.serNodesCount) });
+                        ctx.builder.CreateCall(ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p}), { oldP });
+                        ctx.builder.CreateBr(doneBB);
+                        ctx.builder.SetInsertPoint(doneBB);
+                        ctx.builder.CreateStore(newP, dstSlot);
                         return;
                     }
                 }

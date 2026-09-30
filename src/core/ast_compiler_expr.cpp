@@ -788,6 +788,11 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
                     }
                 } else if (auto* lit = dynamic_cast<LiteralExpr*>(expr)) {
                     name = lit->type;
+                } else if (dynamic_cast<StringInterpolationExpr*>(expr)) {
+                    name = "string";
+                } else if (auto* ce = dynamic_cast<CallExpr*>(expr)) {
+                    // spec/39 §4: a string-returning call compares by content, not identity
+                    if (auto* fi = resolveCallTarget(ce->functionName)) name = fi->returnTypeName;
                 }
                 return name;
             };

@@ -2139,6 +2139,14 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  if (ci != ctx.classes.end() && ci->second.serNodesVar) {
                      relDesc = ci->second.serNodesVar; relN = ci->second.serNodesCount; relKind = 2;
                  }
+             } else if (vName.rfind("ptr<", 0) == 0 && vName.back() == '>') {
+                 std::string boxed = vName.substr(4, vName.size() - 5);
+                 auto bci = ctx.classes.find(boxed);
+                 if (bci != ctx.classes.end() && bci->second.type && !ctx.classGroupContainers.count(boxed)
+                     && !ctx.cascadeClasses.count(boxed)) {
+                     relKind = 3;
+                     if (bci->second.hasHeapFields && bci->second.serNodesVar) { relDesc = bci->second.serNodesVar; relN = bci->second.serNodesCount; }
+                 }
              } else {
                  auto ci = ctx.classes.find(vName);
                  if (ci != ctx.classes.end() && ci->second.hasHeapFields && ci->second.serNodesVar && ci->second.type) {

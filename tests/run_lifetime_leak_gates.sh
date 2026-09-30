@@ -92,6 +92,17 @@ GREEN=(
   tests/lifetime/116_idx_string.aiml
   tests/lifetime/117_idx_model_producer.aiml
   tests/lifetime/118_str_map_replace.aiml
+  tests/lifetime/119_nested_member_store.aiml
+  tests/lifetime/120_list_of_lists.aiml
+  tests/lifetime/121_map_of_model_lists.aiml
+  tests/lifetime/122_model_map_field.aiml
+  tests/lifetime/123_string_builtins.aiml
+  tests/lifetime/124_serialize_roundtrip.aiml
+  tests/lifetime/125_nested_interpolation.aiml
+  tests/lifetime/126_ptr_field_replace.aiml
+  tests/lifetime/127_ptr_list_map_replace.aiml
+  tests/lifetime/128_producer_in_condition.aiml
+  tests/lifetime/129_copy_clone_nested.aiml
   tests/lifetime/73_list_model_clear_no_leak.aiml
   tests/lifetime/74_list_model_remove_no_leak.aiml
   tests/_inline_model_red/49_value_survives_remove.aiml
