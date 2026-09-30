@@ -1,0 +1,43 @@
+# static-check: off
+# spec/61 §6/§8: a `return "<literal>"` path still drops owned locals; `return {at: [list, i]}` hands out the element exactly once.
+- def:
+    name: pick_card
+    args: [[hand, list<string>], [want, i32]]
+    return: string
+    body:
+      - decl: [target, string, ""]
+      - decl: [pos, i32, 0]
+      - while:
+          condition: { lt: [pos, hand.len] }
+          body:
+            - decl: [cid, string, { at: [hand, pos] }]
+            - set: [target, cid]
+            - set: [pos, { +: [pos, 1] }]
+      - if: { condition: { eq: [want, 0] }, then: [{ return: "" }] }
+      - return: target
+- def:
+    name: card_at
+    args: [[hand, list<string>], [idx, i32]]
+    return: string
+    body:
+      - if: { condition: { ge: [idx, hand.len] }, then: [{ return: "" }] }
+      - return: { at: [hand, idx] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [hand, list<string>]
+      - call: [hand.push, "card-${1}"]
+      - call: [hand.push, "card-${2}"]
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [none, string, { call: [pick_card, hand, 0] }]
+            - decl: [last, string, { call: [pick_card, hand, 1] }]
+            - if: {condition: {neq: [last, "card-2"]}, then: [{return: 180}]}
+            - if: {condition: {neq: [none.len, 0]}, then: [{return: 181}]}
+            - decl: [first, string, { call: [card_at, hand, 0] }]
+            - if: {condition: {neq: [first, "card-1"]}, then: [{return: 182}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0
