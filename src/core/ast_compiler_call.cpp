@@ -943,6 +943,10 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             llvm::Value* res = ctx.builder.CreateCall(fnTy, fnPtr, callArgs,
                 retTy->isVoidTy() ? "" : "iface_call");
             if (retTy->isVoidTy()) return nullptr;
+            // spec/61 §4/§8: a string return is owning → owned statement temp (adopted by a binding,
+            // released after a transient use), same as the direct method path.
+            if (m.returnType == "string" && ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+                ctx.stmtTempStack.back().push_back(res);
             return ctx.ir_gen->wrap(res);
         }
     }

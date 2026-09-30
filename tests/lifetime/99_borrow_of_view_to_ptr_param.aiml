@@ -1,0 +1,71 @@
+# static-check: off
+# spec/61 §8: `&view` is a borrow — passing it (to a ref<T> or a ptr<T> parameter) never removes the view's own drop — also when the call returns a string borrowed from it.
+- model:
+    name: Seat
+    fields:
+      - [player_id, string]
+      - [nick, string]
+      - [hand, list<string>]
+- model:
+    name: Session
+    fields:
+      - [seats, list<Seat>]
+- def:
+    name: count_ref
+    args: [[seat, ref<Seat>]]
+    return: i32
+    body:
+      - return: seat.hand.len
+- def:
+    name: count_ptr
+    args: [[seat, ptr<Seat>]]
+    return: i32
+    body:
+      - return: seat.hand.len
+- def:
+    name: first_card
+    args: [[seat, ref<Seat>], [want, i32]]
+    return: string
+    body:
+      - decl: [pos, i32, 0]
+      - while:
+          condition: { lt: [pos, seat.hand.len] }
+          body:
+            - decl: [cid, string, { at: [seat.hand, pos] }]
+            - if: { condition: { eq: [want, 1] }, then: [{ return: cid }] }
+            - set: [pos, { +: [pos, 1] }]
+      - return: ""
+- def:
+    name: make_session
+    return: { type: Session, lifetime: producer }
+    body:
+      - decl: [out, Session]
+      - decl: [seat, Seat]
+      - set: [seat.player_id, "p-${1}"]
+      - set: [seat.nick, "n-${1}"]
+      - call: [seat.hand.push, "c-${1}"]
+      - call: [out.seats.push, seat]
+      - return: out
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [total, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [ses, Session, { call: [make_session] }]
+            - if:
+                condition: { gt: [ses.seats.len, 0] }
+                then:
+                  - decl: [view_a, Seat, { at: [ses.seats, 0] }]
+                  - set: [total, { +: [total, { call: [count_ref, {'&': [view_a]}] }] }]
+                  - decl: [view_b, Seat, { at: [ses.seats, 0] }]
+                  - set: [total, { +: [total, { call: [count_ptr, {'&': [view_b]}] }] }]
+                  - decl: [view_c, Seat, { at: [ses.seats, 0] }]
+                  - decl: [card, string, { call: [first_card, {'&': [view_c]}, 1] }]
+                  - if: { condition: { neq: [card, "c-1"] }, then: [{ return: 171 }] }
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [total, 400]}, then: [{return: 170}]}
+      - return: 0
