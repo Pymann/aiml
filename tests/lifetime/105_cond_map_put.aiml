@@ -1,0 +1,25 @@
+# static-check: off
+- model: {name: Item, fields: [[label, string], [tags, list<string>]]}
+- def:
+    name: make_item
+    args: [[num, i32]]
+    return: { type: Item, lifetime: producer }
+    body:
+      - decl: [out, Item]
+      - set: [out.label, "item-${num}"]
+      - call: [out.tags.push, "tag-${num}"]
+      - return: out
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [idx, "map<string:Item>"]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [one, Item, {call: [make_item, counter]}]
+            - if: {condition: {eq: [{ '%': [counter, 2]}, 0]}, then: [{call: [idx.put, "k${counter}", one]}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

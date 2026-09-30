@@ -1,0 +1,26 @@
+# static-check: off
+- model: {name: Item, fields: [[label, string], [tags, list<string>]]}
+- def:
+    name: make_item
+    args: [[num, i32]]
+    return: { type: Item, lifetime: producer }
+    body:
+      - decl: [out, Item]
+      - set: [out.label, "item-${num}"]
+      - call: [out.tags.push, "tag-${num}"]
+      - return: out
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [boxes, list<ptr<Item>>]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [box_new, ptr<Item>, {new: Item}]
+            - set: [box_new.label, "n-${counter}"]
+            - call: [boxes.push, box_new]
+            - if: {condition: {gt: [boxes.len, 3]}, then: [{call: [boxes.remove, 0]}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0
