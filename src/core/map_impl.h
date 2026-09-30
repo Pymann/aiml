@@ -12,7 +12,8 @@ namespace MapImpl {
     llvm::Value* compareKeys(CompilerContext& ctx, llvm::Value* k1, llvm::Value* k2, llvm::Type* keyType);
     llvm::Value* getSize(CompilerContext& ctx, llvm::Value* mapPtr, llvm::StructType* mapType);
     // relKind (spec/61 §5.5/§5.7 value release): 0 none, 1 aiml_ser_free_decoded(slot) (inline model fields /
-    // container handle slot), 2 aiml_model_decref(value) (shared model). Strings use valIsString.
+    // container handle slot), 2 aiml_model_decref(value) (shared model), 3 owning ptr<T> box (fields + shell).
+    // Strings use valIsString.
     void put(CompilerContext& ctx, llvm::Value* mapPtr, llvm::Value* keyVal, llvm::Value* valVal, llvm::StructType* mapType, bool valIsString = false,
              llvm::Value* relDesc = nullptr, int relN = 0, int relKind = 1);
     // slotAddr: return the value SLOT address (null when missing) — the §5.4 borrow view for ref<V>.

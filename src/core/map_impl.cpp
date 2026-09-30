@@ -131,8 +131,23 @@ namespace MapImpl {
     // Release the value stored in valSlot per relKind (see map_impl.h).
     static void releaseValSlot(CompilerContext& ctx, llvm::Value* valSlot, llvm::Type* valType,
                                llvm::Value* relDesc, int relN, int relKind) {
-        if (!relDesc || relKind == 0) return;
+        if (relKind == 0 || (!relDesc && relKind != 3)) return;
         auto* i8p = llvm::PointerType::get(ctx.context, 0);
+        if (relKind == 3 && valType->isPointerTy()) {
+            // owning ptr<T> box value: free its fields (if any) and the shell
+            llvm::Value* box = ctx.builder.CreateLoad(valType, valSlot, "map_rel_box");
+            llvm::Function* fn = ctx.builder.GetInsertBlock()->getParent();
+            llvm::BasicBlock* relBB = llvm::BasicBlock::Create(ctx.context, "map_box_rel", fn);
+            llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx.context, "map_box_done", fn);
+            ctx.builder.CreateCondBr(ctx.builder.CreateIsNotNull(box), relBB, doneBB);
+            ctx.builder.SetInsertPoint(relBB);
+            if (relDesc) ctx.builder.CreateCall(ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
+                {i8p, i8p, ctx.builder.getInt32Ty()}), { box, relDesc, ctx.builder.getInt32(relN) });
+            ctx.builder.CreateCall(ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p}), { box });
+            ctx.builder.CreateBr(doneBB);
+            ctx.builder.SetInsertPoint(doneBB);
+            return;
+        }
         if (relKind == 1) {
             ctx.builder.CreateCall(ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
                 {i8p, i8p, ctx.builder.getInt32Ty()}), { valSlot, relDesc, ctx.builder.getInt32(relN) });

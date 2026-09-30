@@ -1,0 +1,35 @@
+# static-check: off
+- model: {name: Item, fields: [[label, string], [tags, list<string>]]}
+- model: {name: Outer, fields: [[inner, Item], [name, string], [dict, "map<string:string>"], [items, list<Item>]]}
+- model: {name: Node, fields: [[label, string], [child, ptr<Node>]]}
+- def:
+    name: make_item
+    args: [[num, i32]]
+    return: { type: Item, lifetime: producer }
+    body:
+      - decl: [out, Item]
+      - set: [out.label, "item-${num}"]
+      - call: [out.tags.push, "tag-${num}"]
+      - return: out
+- def:
+    name: name_of
+    args: [[num, i32]]
+    return: string
+    body:
+      - return: "name-${num}"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [outer, Outer]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - set: [outer.inner.label, "l-${counter}"]
+            - set: [outer.name, {call: [name_of, counter]}]
+            - set: [outer.inner, {call: [make_item, counter]}]
+            - call: [outer.inner.tags.push, "x-${counter}"]
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0
