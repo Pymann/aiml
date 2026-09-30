@@ -789,6 +789,15 @@ namespace AIML {
         return it->second.hasHeapFields;
     }
 
+    // spec/61 §8: a by-value return of a value model/class with heap fields hands the caller an
+    // owning value (the callee moves a local or deep-copies a borrowed/aliased source).
+    bool isOwnedValueReturn(const std::string& t) const {
+        auto it = classes.find(t);
+        return it != classes.end() && it->second.hasHeapFields && !it->second.isBuiltin
+            && !isRefcountModel(t) && !classGroupContainers.count(t) && !interfaces.count(t)
+            && !cascadeClasses.count(t);
+    }
+
     // spec/61 §5 Option B (memV3): true iff `typeName` is a container that is represented as a
     // refcounted HANDLE (an 8-byte pointer) under memV3 — list<T>/map<K:V>/cascade<X>/buffer.
     // Used wherever a container crosses a value boundary as a POINTER (function return type, and

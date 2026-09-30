@@ -1,0 +1,52 @@
+# static-check: off
+- model: {name: Item, fields: [[label, string], [tags, list<string>]]}
+- def:
+    name: make_item
+    args: [[num, i32]]
+    return: { type: Item, lifetime: producer }
+    body:
+      - decl: [out, Item]
+      - set: [out.label, "item-${num}"]
+      - call: [out.tags.push, "tag-${num}"]
+      - return: out
+
+- def:
+    name: nested_find
+    args: [[grid, list<list<string>>], [want, string]]
+    return: i32
+    body:
+      - decl: [row_i, i32, 0]
+      - while:
+          condition: { lt: [row_i, grid.len] }
+          body:
+            - decl: [row, list<string>, { at: [grid, row_i] }]
+            - decl: [scratch, Item, {call: [make_item, row_i]}]
+            - decl: [col_i, i32, 0]
+            - while:
+                condition: { lt: [col_i, row.len] }
+                body:
+                  - decl: [cell, string, { at: [row, col_i] }]
+                  - decl: [lookup, "map<string:i32>"]
+                  - call: [lookup.put, cell, col_i]
+                  - if: { condition: { eq: [cell, want] }, then: [{ return: col_i }] }
+                  - set: [col_i, { +: [col_i, 1] }]
+            - set: [row_i, { +: [row_i, 1] }]
+      - return: -1
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [grid, list<list<string>>]
+      - decl: [row, list<string>]
+      - call: [row.push, "a-${1}"]
+      - call: [row.push, "b-${1}"]
+      - call: [grid.push, row]
+      - call: [grid.push, row]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [hit, i32, {call: [nested_find, grid, "b-1"]}]
+            - decl: [miss, i32, {call: [nested_find, grid, "zz"]}]
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

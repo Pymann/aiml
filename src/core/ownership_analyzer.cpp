@@ -406,8 +406,20 @@ struct Analyzer {
                             // (codegen), so the local owns its new value: it stays Owned and releases
                             // the old one (tests/lifetime/71, 72). Any other RHS may share → Unknown.
                             bool indep = tyIt != slotType.end() && rebindDeepCopies(tyIt->second, set->value.get());
+                            // spec/61 §5.5: an owned ptr<T> box rebound to a fresh box stays Owned
+                            // (codegen releases the old box, the new one is dropped at scope exit).
+                            bool keepBoxOwned = false;
+                            if (tyIt != slotType.end() && tyIt->second.rfind("ptr<", 0) == 0) {
+                                bool freshBox = dynamic_cast<const NewExpr*>(set->value.get()) != nullptr;
+                                if (auto* fc = dynamic_cast<const CallExpr*>(set->value.get())) {
+                                    size_t dp = fc->functionName.rfind('.');
+                                    std::string sn = (dp == std::string::npos) ? fc->functionName : fc->functionName.substr(dp + 1);
+                                    freshBox = ctx.ownsReturnMatches(sn, tyIt->second);
+                                }
+                                keepBoxOwned = freshBox && it->second.origin == Origin::Owned;
+                            }
                             plan.statements[set].rebindReleaseOld = indep && it->second.origin == Origin::Owned;
-                            if (!indep && it->second.origin == Origin::Owned)
+                            if (!indep && !keepBoxOwned && it->second.origin == Origin::Owned)
                                 it->second.origin = Origin::Unknown;   // rebound → not provably owned
                         }
                     }

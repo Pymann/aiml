@@ -89,6 +89,8 @@ private:
     std::string ownedContainerCallType(Expr* e);
     bool isOwningContainerCall(Expr* e, const std::string& type);
     void moveIteratorArg(Expr* arg);
+    std::string ownedModelCallType(Expr* e);
+    void releaseModelValue(llvm::Value* v, const std::string& typeName);
     CompilerContext::FunctionInfo* resolveCallTarget(const std::string& functionName);
     void releaseContainerHandle(llvm::Value* handle, const std::string& typeName);
     // spec/61 §5.4: classify a list ELEMENT type into its scope-drop kind (see free_list_elem_at /

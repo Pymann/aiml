@@ -75,6 +75,23 @@ GREEN=(
   tests/lifetime/99_borrow_of_view_to_ptr_param.aiml
   tests/lifetime/100_literal_return_drops_locals.aiml
   tests/lifetime/101_conditional_return_in_loop_keeps_drops.aiml
+  tests/lifetime/102_model_returns_and_temps.aiml
+  tests/lifetime/103_cond_push_model.aiml
+  tests/lifetime/104_cond_member_store.aiml
+  tests/lifetime/105_cond_map_put.aiml
+  tests/lifetime/106_cond_consumed.aiml
+  tests/lifetime/107_nested_loop_return.aiml
+  tests/lifetime/108_box_reassign_and_list.aiml
+  tests/lifetime/109_shared_patterns.aiml
+  tests/lifetime/110_idx_replace_and_str_map.aiml
+  tests/lifetime/111_throw_paths.aiml
+  tests/lifetime/112_box_reassign.aiml
+  tests/lifetime/113_box_list_remove.aiml
+  tests/lifetime/114_shared_rebind.aiml
+  tests/lifetime/115_shared_list_remove.aiml
+  tests/lifetime/116_idx_string.aiml
+  tests/lifetime/117_idx_model_producer.aiml
+  tests/lifetime/118_str_map_replace.aiml
   tests/lifetime/73_list_model_clear_no_leak.aiml
   tests/lifetime/74_list_model_remove_no_leak.aiml
   tests/_inline_model_red/49_value_survives_remove.aiml

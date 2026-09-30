@@ -1,0 +1,30 @@
+# static-check: off
+- model: {name: Item, fields: [[label, string], [tags, list<string>]]}
+- def:
+    name: make_item
+    args: [[num, i32]]
+    return: { type: Item, lifetime: producer }
+    body:
+      - decl: [out, Item]
+      - set: [out.label, "item-${num}"]
+      - call: [out.tags.push, "tag-${num}"]
+      - return: out
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [shared_list, list<shared<Item>>]
+      - decl: [keep, shared<Item>, {share: {new: Item}}]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [shr_one, shared<Item>, {share: {new: Item}}]
+            - set: [shr_one.label, "s-${counter}"]
+            - call: [shared_list.push, shr_one]
+            - call: [shared_list.push, keep]
+            - set: [keep, shr_one]
+            - if: {condition: {gt: [shared_list.len, 4]}, then: [{call: [shared_list.remove, 0]}, {call: [shared_list.remove, 0]}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

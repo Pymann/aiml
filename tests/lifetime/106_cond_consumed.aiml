@@ -1,0 +1,30 @@
+# static-check: off
+- model: {name: Item, fields: [[label, string], [tags, list<string>]]}
+- def:
+    name: make_item
+    args: [[num, i32]]
+    return: { type: Item, lifetime: producer }
+    body:
+      - decl: [out, Item]
+      - set: [out.label, "item-${num}"]
+      - call: [out.tags.push, "tag-${num}"]
+      - return: out
+
+- def:
+    name: keep
+    args: [[sink, list<string>], [val, string, { lifetime: consumed }]]
+    body:
+      - call: [sink.push, val]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [sink, list<string>]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [txt, string, "v-${counter}"]
+            - if: {condition: {eq: [{ '%': [counter, 2]}, 0]}, then: [{call: [keep, sink, txt]}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

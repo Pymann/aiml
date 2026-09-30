@@ -3882,7 +3882,7 @@ void Compiler::registerTypeDecl(Node* node) {
         // the forward decl so callers compiled before the class body (e.g. a synthesized cascade
         // pool appended last) adopt the result. visitTopLevel re-inserts idempotently.
         for (const auto& m : cls->methods) {
-            if (m->returnType == "string") m->ownsReturn = true;   // §4/§8: a string return is owning
+            if (m->returnType == "string" || ctx.isOwnedValueReturn(m->returnType)) m->ownsReturn = true;   // §4/§8
             if (!m->ownsReturn) continue;
             ctx.ownsReturnFns.insert(m->name);
             ctx.ownsReturnFnTypes[m->name].insert(m->returnType);
@@ -4532,7 +4532,7 @@ void Compiler::registerTypeDecl(Node* node) {
         // spec/61 §8: `lifetime: producer` is part of the signature — register it with the
         // forward decl, before any body is emitted, so callers earlier in the file see it
         // (tests/lifetime/69). visitFunction re-inserts idempotently.
-        if (func->returnType == "string") func->ownsReturn = true;   // §4/§8: a string return is owning
+        if (func->returnType == "string" || ctx.isOwnedValueReturn(func->returnType)) func->ownsReturn = true;   // §4/§8
         if (func->ownsReturn) {
             ctx.ownsReturnFns.insert(func->name);
             ctx.ownsReturnFnTypes[func->name].insert(func->returnType);
@@ -4680,7 +4680,7 @@ void Compiler::visitTopLevel(Node* node) {
             //     method->ownsReturn = true;
             // spec/61 return-ownership: capture the ORIGINAL method name (pre-mangle) so a
             // call site `<.recv.get_base` matches by its trailing identifier.
-            if (method->returnType == "string") method->ownsReturn = true;   // §4/§8
+            if (method->returnType == "string" || ctx.isOwnedValueReturn(method->returnType)) method->ownsReturn = true;   // §4/§8
             if (method->ownsReturn) {
                 ctx.ownsReturnFns.insert(oldName);
                 ctx.ownsReturnFnTypes[oldName].insert(method->returnType);   // spec/61: name→return type (collision guard)
@@ -5331,7 +5331,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
     // if (!func->ownsReturn && classifyOwnedStringReturn(func, ctx)) func->ownsReturn = true;
     // spec/61 §4/§8 (2026-09-30): every string return hands the caller an owning reference — the
     // producer machinery dups borrowed returns, moves owned locals, increfs fields of dropped owners.
-    if (func->returnType == "string") func->ownsReturn = true;
+    if (func->returnType == "string" || ctx.isOwnedValueReturn(func->returnType)) func->ownsReturn = true;
 
     /* Snapshot + install decorator context so visitRetStmt can consult it
      * without needing a pointer back to the FunctionDecl.  Cleared on exit

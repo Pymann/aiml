@@ -1,0 +1,48 @@
+# static-check: off
+- model: {name: Item, fields: [[label, string], [tags, list<string>]]}
+- def:
+    name: make_item
+    args: [[num, i32]]
+    return: { type: Item, lifetime: producer }
+    body:
+      - decl: [out, Item]
+      - set: [out.label, "item-${num}"]
+      - call: [out.tags.push, "tag-${num}"]
+      - return: out
+
+- def:
+    name: plain_mk
+    args: [[num, i32]]
+    return: Item
+    body:
+      - decl: [out, Item]
+      - set: [out.label, "plain-${num}"]
+      - call: [out.tags.push, "t-${num}"]
+      - return: out
+- def:
+    name: pass_through
+    args: [[src, Item]]
+    return: Item
+    body:
+      - return: src
+- def:
+    name: label_len
+    args: [[item, Item]]
+    return: i32
+    body:
+      - return: item.label.len
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [val_a, Item, {call: [plain_mk, counter]}]
+            - decl: [val_b, Item, {call: [pass_through, val_a]}]
+            - decl: [val_c, i32, {call: [label_len, {call: [make_item, counter]}]}]
+            - decl: [val_d, i32, {call: [label_len, {call: [plain_mk, counter]}]}]
+            - call: [plain_mk, counter]
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

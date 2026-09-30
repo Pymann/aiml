@@ -529,12 +529,14 @@ IRValue* Compiler::visitCall(CallExpr* call) {
     // double-free).  All consumed params are pointer/handle types (validated at the def), so
     // the callee receives the same handle — a true move, not a copy.
     // spec/61 §8: an owning container call result passed to a non-consumed param is released after the call.
-    std::vector<std::pair<llvm::Value*, std::string>> ctrArgTemps;
+    std::vector<std::pair<llvm::Value*, std::string>> ctrArgTemps, modelArgTemps;
     if (funcInfo && ctx.lifetimeDropsEnabled)
         for (size_t i = 0; i < call->args.size() && i < argVals.size(); ++i) {
             if (i < funcInfo->argLifetimes.size() && funcInfo->argLifetimes[i] == "consumed") continue;
             std::string ct = ownedContainerCallType(call->args[i].get());
             if (!ct.empty()) ctrArgTemps.push_back({static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[i])), ct});
+            std::string mt = ownedModelCallType(call->args[i].get());
+            if (!mt.empty()) modelArgTemps.push_back({static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[i])), mt});
         }
     if (funcInfo && ctx.lifetimeDropsEnabled)   // spec/61 class 4: an iterator argument moves into the callee
         for (auto& a : call->args) moveIteratorArg(a.get());
@@ -739,6 +741,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
         return nullptr;
     }
     for (auto& t : ctrArgTemps) releaseContainerHandle(t.first, t.second);
+    for (auto& t : modelArgTemps) releaseModelValue(t.first, t.second);   // spec/61 §8 owned model temp
     // spec/61 §3.2 Part 2: a `producer` free function returning a fresh STRING, used as a TRANSIENT
     // sub-expression (e.g. `set_text(…, build_card_text(card))`), must be decref'd at statement end.
     // Register it as an owned stmt-temp; a consuming decl/set/push/return removes it via
@@ -2195,8 +2198,10 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                          if (Symbol* s = resolveVariable(ve->name)) {
                              llvm::Value* a = s->ir_alloca_inst
                                  ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(s->ir_alloca_inst)) : s->alloca_inst;
-                             for (auto& frame : ctx.cleanupStack)
-                                 for (auto& d : frame) if (a && d.addr == a && d.kind == 0) moveLocal = true;
+                             // same rule as push: only a drop in the innermost frame dominates the scope exit;
+                             // a put inside a nested/conditional block deep-copies (the source keeps its drop).
+                             if (a && !ctx.cleanupStack.empty())
+                                 for (auto& d : ctx.cleanupStack.back()) if (d.addr == a && d.kind == 0) moveLocal = true;
                          }
                  bool adoptCall = isOwningContainerCall(src, vName);
                  deepCopyModel = !moveLocal && !adoptCall;
@@ -3336,7 +3341,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          // `consumed` parameter is moved into the callee — remove the caller's scope-drop
          // (safe: at worst a leak, never a double-free). argLifetimes includes the implicit
          // `this` at index 0, so explicit call->args[j] lines up with argLifetimes[j+1].
-         std::vector<std::pair<llvm::Value*, std::string>> ctrArgTemps;   // spec/61 §8 (see free-function path)
+         std::vector<std::pair<llvm::Value*, std::string>> ctrArgTemps, modelArgTemps;   // spec/61 §8 (see free-function path)
          if (ctx.lifetimeDropsEnabled) {
              auto mfit = ctx.functions.find(resolvedMangled);
              for (auto& a : call->args) moveIteratorArg(a.get());   // spec/61 class 4: iterator argument moves
@@ -3345,6 +3350,8 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                      && mfit->second.argLifetimes[j + 1] == "consumed") continue;
                  std::string ct = ownedContainerCallType(call->args[j].get());
                  if (!ct.empty()) ctrArgTemps.push_back({static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[j])), ct});
+                 std::string mt = ownedModelCallType(call->args[j].get());
+                 if (!mt.empty()) modelArgTemps.push_back({static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[j])), mt});
              }
              if (mfit != ctx.functions.end() && !mfit->second.argLifetimes.empty()) {
                  const auto& lifos = mfit->second.argLifetimes;
@@ -3463,6 +3470,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              callResult = ctx.ir_gen->createCall(func->getName().str(), methodArgs, "call_method");
          }
          for (auto& t : ctrArgTemps) releaseContainerHandle(t.first, t.second);
+         for (auto& t : modelArgTemps) releaseModelValue(t.first, t.second);
          // If the method returns a struct (list<T>, model, etc.), store the value
          // into a temporary alloca and return the pointer.  This matches what
          // builtin handlers do and what visitSetStmt/visitDeclStmt expect for
