@@ -1,0 +1,44 @@
+# static-check: off
+- model: {name: Item, fields: [[label, string], [tags, list<string>]]}
+- def:
+    name: make_item
+    args: [[num, i32]]
+    return: { type: Item, lifetime: producer }
+    body:
+      - decl: [out, Item]
+      - set: [out.label, "item-${num}"]
+      - call: [out.tags.push, "tag-${num}"]
+      - return: out
+
+- interface:
+    name: Source
+    methods:
+      - [title, string, []]
+      - [rows, list<string>, []]
+      - [card, Item, []]
+- class:
+    name: Impl
+    implements: [Source]
+    members:
+      - [seed, i32]
+      - [cache, list<string>]
+    methods:
+      - def: { name: title, return: string, body: [{ return: "t-${<.seed}" }] }
+      - def: { name: rows, return: list<string>, body: [{ call: [<.cache.push, "r"] }, { return: <.cache }] }
+      - def: { name: card, return: Item, body: [{ return: {call: [make_item, <.seed]} }] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [src, ptr<Source>, {new: Impl}]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [ttl, string, {call: [src.title]}]
+            - decl: [rws, list<string>, {call: [src.rows]}]
+            - decl: [crd, Item, {call: [src.card]}]
+            - if: {condition: {eq: [{call: [src.title]}, "x"]}, then: [{return: 1}]}
+            - if: {condition: {gt: [rws.len, 5]}, then: [{call: [rws.clear]}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

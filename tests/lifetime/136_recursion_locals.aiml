@@ -1,0 +1,33 @@
+# static-check: off
+- model: {name: Item, fields: [[label, string], [tags, list<string>]]}
+- def:
+    name: make_item
+    args: [[num, i32]]
+    return: { type: Item, lifetime: producer }
+    body:
+      - decl: [out, Item]
+      - set: [out.label, "item-${num}"]
+      - call: [out.tags.push, "tag-${num}"]
+      - return: out
+
+- def:
+    name: depth_sum
+    args: [[level, i32]]
+    return: i32
+    body:
+      - decl: [loc, Item, {call: [make_item, level]}]
+      - decl: [bag, list<string>]
+      - call: [bag.push, "d-${level}"]
+      - if: {condition: {le: [level, 0]}, then: [{return: 0}]}
+      - return: {+: [bag.len, {call: [depth_sum, {-: [level, 1]}]}]}
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [total, i32, {call: [depth_sum, 5]}]
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

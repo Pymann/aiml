@@ -1794,7 +1794,18 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              else if (ctx.memV3 && listElemName.rfind("map<", 0) == 0)          retainFn = "aiml_map_handle_incref";
              else if (ctx.memV3 && (listElemName == "buffer"
                                     || listElemName.rfind("buffer<", 0) == 0))  retainFn = "aiml_buffer_handle_incref";
-             return ctx.ir_gen->wrap(ListImpl::slice(ctx, listP, startV, endV, sliceElemTy, retainFn));
+             llvm::Value* sl = ListImpl::slice(ctx, listP, startV, endV, sliceElemTy, retainFn);
+             // spec/61 §5.1: inline value-model elements were bit-copied → retain each member-wise.
+             auto sci = ctx.classes.find(listElemName);
+             if (sl && !retainFn && sci != ctx.classes.end() && sci->second.hasHeapFields && sci->second.serNodesVar
+                 && sci->second.type && !ctx.isRefcountModel(listElemName)) {
+                 auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                 uint64_t esz = ctx.module.getDataLayout().getTypeAllocSize(sci->second.type);
+                 ctx.builder.CreateCall(ctx.getFunction("aiml_list_retain_elems", ctx.builder.getVoidTy(),
+                     {i8p, ctx.builder.getInt64Ty(), i8p, ctx.builder.getInt32Ty()}),
+                     { sl, ctx.builder.getInt64(esz), sci->second.serNodesVar, ctx.builder.getInt32(sci->second.serNodesCount) });
+             }
+             return ctx.ir_gen->wrap(sl);
          } else if (methodName == "get" && argVals.size() > 0) {
              // AIML v2 P3: a list<Model> element is a %M* — LOAD it (stride 8) and return the
              // reference. It is a pointer-to-struct, the same shape v1's getElementPtr yields for a

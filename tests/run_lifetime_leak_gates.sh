@@ -103,6 +103,14 @@ GREEN=(
   tests/lifetime/127_ptr_list_map_replace.aiml
   tests/lifetime/128_producer_in_condition.aiml
   tests/lifetime/129_copy_clone_nested.aiml
+  tests/lifetime/130_class_member_containers.aiml
+  tests/lifetime/131_class_instance_in_loop.aiml
+  tests/lifetime/132_interface_returns.aiml
+  tests/lifetime/133_model_list_slice_copy.aiml
+  tests/lifetime/134_list_string_helpers.aiml
+  tests/lifetime/135_globals_rebind.aiml
+  tests/lifetime/136_recursion_locals.aiml
+  tests/lifetime/137_rebind_clone_copy.aiml
   tests/lifetime/73_list_model_clear_no_leak.aiml
   tests/lifetime/74_list_model_remove_no_leak.aiml
   tests/_inline_model_red/49_value_survives_remove.aiml
