@@ -1274,6 +1274,10 @@ aggregate (fresh strings/containers/`ptr` boxes/clonable resources) use `clone` 
   copy** — and the callee's locals drop as usual (rc balances). `lifetime: producer` (§9.2)
   affirms the **outer** result is not aliased into the callee's state (shallow independence);
   **deep/transitive independence needs `clone`** (§9.2 depth note).
+- **Return `string`**: the caller always receives an **owning** reference (§4) and drops it — a
+  fresh or owned local string is moved out, a borrowed one (parameter, field, container element)
+  is shared by the callee (incref/dup). Because strings are immutable this already gives outer
+  independence, so `lifetime: producer` is implied for every string return.
 - **Return a move-only value** (a model with a `ptr`/resource field): a copy is impossible, so
   the return is a **move** — the callee's local is moved out (its scope drop suppressed), the
   caller receives sole ownership. This is a `producer` (§9.2) by construction.

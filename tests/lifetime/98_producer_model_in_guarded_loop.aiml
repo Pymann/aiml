@@ -1,0 +1,99 @@
+# static-check: off
+# spec/61 §8: producer model locals in a guarded while loop (borrows, at-views, nested else, second fetch) are dropped every iteration.
+- model:
+    name: Seat
+    fields:
+      - [player_id, string]
+      - [hand, list<string>]
+- model:
+    name: Session
+    fields:
+      - [match_id, string]
+      - [seats, list<Seat>]
+- class:
+    name: SessionStore
+    members:
+      - [serial, i32]
+    methods:
+      - def:
+          name: get_raw
+          args: [[mid, string]]
+          return: { type: Session, lifetime: producer }
+          body:
+            - if: { condition: { gt: [mid.len, 0] }, then: [{ return: { call: [<.build, mid] } }] }
+            - decl: [empty_ses, Session]
+            - return: empty_ses
+      - def:
+          name: build
+          args: [[mid, string]]
+          return: { type: Session, lifetime: producer }
+          body:
+            - decl: [out, Session]
+            - set: [out.match_id, "${mid}"]
+            - decl: [seat, Seat]
+            - set: [seat.player_id, "p-${mid}"]
+            - call: [seat.hand.push, "card-${mid}"]
+            - call: [out.seats.push, seat]
+            - return: out
+- def:
+    name: find_seat
+    args: [[ses, ref<Session>], [who, string]]
+    return: i32
+    body:
+      - decl: [pos, i32, 0]
+      - while:
+          condition: { lt: [pos, ses.seats.len] }
+          body:
+            - decl: [cand, Seat, { at: [ses.seats, pos] }]
+            - if: { condition: { eq: [cand.player_id, who] }, then: [{ return: pos }] }
+            - set: [pos, { +: [pos, 1] }]
+      - return: -1
+- def:
+    name: pick_card
+    args: [[seat, ref<Seat>], [round, i32]]
+    return: { type: string, lifetime: producer }
+    body:
+      - if: { condition: { gt: [round, 2] }, then: [{ return: "" }] }
+      - return: "${{ at: [seat.hand, 0] }}"
+- def:
+    name: drive
+    args: [[store, ref<SessionStore>], [mid, string]]
+    return: i32
+    body:
+      - decl: [more, i32, 1]
+      - decl: [guard, i32, 0]
+      - decl: [played, i32, 0]
+      - while:
+          condition: { '&&': [{ eq: [more, 1] }, { lt: [guard, 6] }] }
+          body:
+            - set: [guard, { +: [guard, 1] }]
+            - decl: [cur, Session, { call: [store.get_raw, mid] }]
+            - decl: [seat_i, i32, { call: [find_seat, {'&': [cur]}, "p-${mid}"] }]
+            - if:
+                condition: { lt: [seat_i, 0] }
+                then: [{ set: [more, 0] }]
+                else:
+                  - decl: [seat, Seat, { at: [cur.seats, seat_i] }]
+                  - decl: [cid, string, { call: [pick_card, {'&': [seat]}, guard] }]
+                  - if:
+                      condition: { eq: [cid.len, 0] }
+                      then: [{ set: [more, 0] }]
+                      else:
+                        - set: [played, { +: [played, 1] }]
+                        - decl: [cur2, Session, { call: [store.get_raw, mid] }]
+                        - if: { condition: { gt: [cur2.seats.len, 5] }, then: [{ set: [more, 0] }] }
+      - return: played
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [store, SessionStore]
+      - decl: [counter, i32, 0]
+      - decl: [total, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - set: [total, { +: [total, { call: [drive, store, "m1"] }] }]
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [total, 400]}, then: [{return: 160}]}
+      - return: 0
