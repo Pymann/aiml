@@ -3548,6 +3548,10 @@ void Compiler::visitExprStmt(ExprStmt* exprStmt) {
 }
 static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop& it);  // defined below
 void Compiler::visitRetStmt(RetStmt* retStmt) {
+    // The move below only applies to THIS return path: paths compiled after it (e.g. the rest of a
+    // loop body around a conditional `return x`) must keep x's drop → restore the frames afterwards.
+    struct CleanupRestore { CompilerContext& c; std::vector<std::vector<CompilerContext::ScopeDrop>> saved;
+                            ~CleanupRestore() { c.cleanupStack = std::move(saved); } } cleanupRestore{ctx, ctx.cleanupStack};
     // spec/61 (A3): returning a local moves it to the caller → do not drop it here. This runs BEFORE
     // the value is loaded, so a managed string return uses ERASE mode (nullManagedStringSlot=false):
     // the value is captured afterwards and the returned value's owner is exempted from cleanup.
@@ -3727,7 +3731,9 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     // exempted by retModelAddr (a move), and every other local's kind-7 decref is order-independent.
     bool safeToCleanup = (retTy && retTy->isVoidTy()) || retScalar || retBaseOwned
                          || (retModelAddr != nullptr) || (retContainerSlot != nullptr)
-                         || retFreshOwned || retStrFieldOfOwnedModel || retProducerBorrowedString;
+                         || retFreshOwned || retStrFieldOfOwnedModel || retProducerBorrowedString
+                         // a literal (static string / number) cannot alias any local heap
+                         || dynamic_cast<LiteralExpr*>(retStmt->value.get()) != nullptr;
     // spec/61 §6.2 (T1): the returned value only aliases the owner's heap when the return TYPE is a
     // pointer/struct (`return x.field` handing out x's sub-heap). For a SCALAR/void return the value
     // is a copy that cannot alias — e.g. `return str_local.len` yields an i32 — so the owner must NOT
@@ -3831,13 +3837,16 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         ctx.ir_gen->createRet(ctx.ir_gen->wrap(handle));
     } else if (retStmt->value) {
         IRValue* val = visitExpression(retStmt->value.get());
+        // An owned statement temp (e.g. a string `at` that already retained the element) is moved
+        // out as-is — dup'ing it again would orphan that reference.
+        bool retWasOwnedTemp = val && inStringTempStack(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)));
         // spec/61: a returned string temp is moved to the caller → not a statement temp.
         if (val) consumeStringTemp(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)));
         // spec/61 §4/§8 (producer materialization): dup a BORROWED string returned by a `producer`
         // function so the caller adopts an INDEPENDENT owned buffer (see retProducerBorrowedString).
         // Runs BEFORE emitReturnCleanup so the fresh dup cannot alias any dropped local; the borrowed
         // source (a param) stays owned by the caller. aiml_str_dup is null/immortal-safe.
-        if (retProducerBorrowedString && val) {
+        if (retProducerBorrowedString && val && !retWasOwnedTemp) {
             llvm::Value* rs = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
             if (rs && rs->getType()->isPointerTy()) {
                 auto* i8pD = llvm::PointerType::get(ctx.context, 0);

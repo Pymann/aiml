@@ -73,6 +73,8 @@ GREEN=(
   tests/lifetime/97_cascade_model_carrier_render.aiml
   tests/lifetime/98_producer_model_in_guarded_loop.aiml
   tests/lifetime/99_borrow_of_view_to_ptr_param.aiml
+  tests/lifetime/100_literal_return_drops_locals.aiml
+  tests/lifetime/101_conditional_return_in_loop_keeps_drops.aiml
   tests/lifetime/73_list_model_clear_no_leak.aiml
   tests/lifetime/74_list_model_remove_no_leak.aiml
   tests/_inline_model_red/49_value_survives_remove.aiml
