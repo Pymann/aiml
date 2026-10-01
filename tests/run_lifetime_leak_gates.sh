@@ -122,6 +122,10 @@ GREEN=(
   tests/lifetime/146_cascade_in_containers.aiml
   tests/lifetime/147_cascade_model_copy_kv.aiml
   tests/lifetime/148_getter_fn_iface_throw.aiml
+  tests/lifetime/149_throw_with_container_params.aiml
+  tests/lifetime/150_map_of_list_param.aiml
+  tests/lifetime/151_param_rebind_string_model_shared.aiml
+  tests/lifetime/152_model_param_escape.aiml
   tests/lifetime/cascade_params/direct.aiml
   tests/lifetime/cascade_params/dispatch.aiml
   tests/lifetime/cascade_params/indirect.aiml

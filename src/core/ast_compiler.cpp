@@ -5318,6 +5318,22 @@ static bool classifyOwnedStringReturn(FunctionDecl* fn, CompilerContext& ctx) {
     return true;
 }
 
+// spec/61 §8: does the body rebind plain local `name` (set: [name, …]) anywhere?
+static bool bodyRebinds(const BlockStmt* b, const std::string& name);
+static bool stmtRebinds(const Stmt* s, const std::string& name) {
+    if (auto* st = dynamic_cast<const SetStmt*>(s)) return st->target == name;
+    if (auto* i = dynamic_cast<const IfStmt*>(s)) return bodyRebinds(i->thenBranch.get(), name) || bodyRebinds(i->elseBranch.get(), name);
+    if (auto* w = dynamic_cast<const WhileStmt*>(s)) return bodyRebinds(w->body.get(), name);
+    if (auto* t = dynamic_cast<const TryStmt*>(s)) return bodyRebinds(t->tryBlock.get(), name) || bodyRebinds(t->catchBlock.get(), name);
+    if (auto* b = dynamic_cast<const BlockStmt*>(s)) return bodyRebinds(b, name);
+    return false;
+}
+static bool bodyRebinds(const BlockStmt* b, const std::string& name) {
+    if (!b) return false;
+    for (auto& st : b->statements) if (stmtRebinds(st.get(), name)) return true;
+    return false;
+}
+
 void Compiler::visitFunction(FunctionDecl* func) {
     // Basic mapping using our old context structure for now
     std::string mangledName = ctx.qualify(func->name);
@@ -5631,6 +5647,76 @@ void Compiler::visitFunction(FunctionDecl* func) {
                 sd.debugName = argNames[i];
                 sd.paramRef = !consumedParam;
                 ctx.pendingParamDrops.push_back(sd);
+            }
+        }
+        // spec/61 §8: a string parameter the body rebinds holds its own reference for the call
+        // (incref on entry; the managed slot releases whatever it holds on every exit).
+        if (ctx.memV3 && ctx.lifetimeDropsEnabled && argAlloca && func->body) {
+            std::string ptn;
+            for (auto& fa : func->args) if (fa.first == argNames[i]) { ptn = fa.second; break; }
+            bool consumedParam = i < argLifetimes.size() && argLifetimes[i] == "consumed";
+            if (ptn == "string" && !consumedParam && bodyRebinds(func->body.get(), argNames[i])) {
+                auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                llvm::Value* pslot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argAlloca));
+                ctx.builder.CreateCall(ctx.getFunction("aiml_str_incref", ctx.builder.getVoidTy(), {i8p}),
+                                       { ctx.builder.CreateLoad(i8p, pslot, argNames[i] + "_s") });
+                CompilerContext::ScopeDrop sd;
+                sd.addr = pslot;
+                sd.kind = 1;
+                sd.managedStringSlot = true;
+                sd.paramRef = true;
+                sd.debugName = argNames[i]; sd.debugType = ptn;
+                ctx.pendingParamDrops.push_back(sd);
+                sym.paramOwnsRef = true;
+            }
+        }
+        // spec/61 §8: a shared<T> parameter co-owns for the call (incref, decref on every exit);
+        // a `consumed` one took over the caller's reference.
+        if (ctx.memV3 && ctx.lifetimeDropsEnabled && argAlloca && i < argIsRefModel.size() && argIsRefModel[i]) {
+            std::string ptn;
+            for (auto& fa : func->args) if (fa.first == argNames[i]) { ptn = fa.second; break; }
+            std::string bare = ptn;
+            if (bare.rfind("shared<", 0) == 0 && bare.back() == '>') bare = bare.substr(7, bare.size() - 8);
+            auto bci = ctx.classes.find(bare);
+            auto* i8p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* pslot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argAlloca));
+            bool consumedParam = i < argLifetimes.size() && argLifetimes[i] == "consumed";
+            if (!consumedParam)
+                ctx.builder.CreateCall(ctx.getFunction("aiml_model_incref", ctx.builder.getVoidTy(), {i8p}),
+                                       { ctx.builder.CreateLoad(i8p, pslot, argNames[i] + "_m") });
+            CompilerContext::ScopeDrop sd;
+            sd.addr = pslot;
+            sd.kind = 7;
+            if (bci != ctx.classes.end()) { sd.serNodes = bci->second.serNodesVar; sd.serNodesCount = bci->second.serNodesCount; }
+            sd.paramRef = !consumedParam;
+            sd.debugName = argNames[i]; sd.debugType = ptn;
+            ctx.pendingParamDrops.push_back(sd);
+        }
+        // spec/61 §8: a copyable value-model parameter is a member-wise share of the caller's value —
+        // the callee co-owns its fields for the call (retain on entry, released on every exit).
+        if (ctx.memV3 && ctx.lifetimeDropsEnabled && argAlloca && !(i < argIsByref.size() && argIsByref[i])
+            && !(i < argIsRefModel.size() && argIsRefModel[i])) {
+            std::string ptn;
+            for (auto& fa : func->args) if (fa.first == argNames[i]) { ptn = fa.second; break; }
+            auto pci = ctx.classes.find(ptn);
+            llvm::Type* lt = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(argTypes[i]));
+            if (pci != ctx.classes.end() && pci->second.hasHeapFields && pci->second.serNodesVar && pci->second.type
+                && !pci->second.isBuiltin && lt && lt->isStructTy() && !ctx.classGroupContainers.count(ptn)
+                && !ctx.cascadeClasses.count(ptn) && !aimlModelIsMoveOnly(ctx, ptn)) {
+                auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                llvm::Value* pslot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argAlloca));
+                ctx.builder.CreateCall(ctx.getFunction("aiml_ser_retain", ctx.builder.getVoidTy(),
+                    {i8p, i8p, ctx.builder.getInt32Ty()}),
+                    { pslot, pci->second.serNodesVar, ctx.builder.getInt32(pci->second.serNodesCount) });
+                CompilerContext::ScopeDrop sd;
+                sd.addr = pslot;
+                sd.kind = 0;
+                sd.serNodes = pci->second.serNodesVar;
+                sd.serNodesCount = pci->second.serNodesCount;
+                sd.paramRef = true;
+                sd.debugName = argNames[i]; sd.debugType = ptn;
+                ctx.pendingParamDrops.push_back(sd);
+                sym.paramOwnsRef = true;
             }
         }
         // spec/61 class 4: an iterator parameter was moved in → the callee releases it at body exit.

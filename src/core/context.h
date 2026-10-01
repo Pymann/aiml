@@ -61,7 +61,8 @@ namespace AIML {
         // must be deep-copied so the caller does not double-free the aliased buffer with the
         // container's own drop (9rooms load_entry_at / creature-cost helpers → drive_ai_combat).
         bool is_view_alias = false;
-        llvm::AllocaInst* excRecordSlot = nullptr;   // catch var: its caught exception record slot (spec/61 §9.3)
+        llvm::AllocaInst* excRecordSlot = nullptr;
+        bool paramOwnsRef = false;   // spec/61 §8: a value-model/shared param retained its own refs (moves like a local)   // catch var: its caught exception record slot (spec/61 §9.3)
         AccessLevel access = AccessLevel::Public; // Default for vars
     };
 
@@ -1282,4 +1283,5 @@ namespace AIML {
 namespace AIML { namespace AST {
 // spec/61 §9.3: unwind destination for a call/throw at the current point (defined in ast_compiler_stmt.cpp).
 llvm::BasicBlock* aimlUnwindDest(CompilerContext& ctx, bool userCallee);
+bool aimlModelIsMoveOnly(CompilerContext& ctx, const std::string& className);
 } }

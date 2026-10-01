@@ -1239,6 +1239,11 @@ aggregate (fresh strings/containers/`ptr` boxes/clonable resources) use `clone` 
 
 - **Value parameter** (`x: T` for scalar/**copyable** model): pass-by-value (§3) — a copy on the
   callee stack; string and container fields **incref'd** (shared, §4/§5), scalars value-copied.
+  The callee's copy co-owns those fields for the call and releases them on every exit; assigning
+  a field of the parameter (`set: [x.f, …]`) changes only the callee's copy.
+- **String parameter** (`s: string`): shares the caller's string (§4); `set: [s, …]` rebinds only
+  the callee's slot (the new value is released at the callee's exit, the caller's string is
+  untouched).
 - **Move-only model parameter** (a model/struct/`array` with a `ptr` or by-value resource field,
   §7): a value copy is **impossible**, so passing it by value is a **move** — the caller's value
   is **moved-out** (use-after-move afterward, §10) and the callee owns it. To *borrow* it

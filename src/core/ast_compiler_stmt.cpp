@@ -1118,6 +1118,9 @@ static bool modelIsMoveOnly(CompilerContext& ctx, const std::string& className) 
     std::set<std::string> seen;
     return modelIsMoveOnly(ctx, className, seen);
 }
+bool aimlModelIsMoveOnly(CompilerContext& ctx, const std::string& className) {
+    return modelIsMoveOnly(ctx, className);
+}
 
 void Compiler::visitDeclStmt(DeclStmt* decl) {
     if (ctx.isRefContainerType(decl->typeName))
@@ -3151,7 +3154,8 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         // rebind releases the old value exactly like a managed local.
         bool globalStringSlot = ctx.memV3 && sym->is_global && sym->typeName == "string"
             && sym->lifetime != "persistent" && !sym->is_byref_arg;
-        if (ctx.lifetimeDropsEnabled && (isManagedStringLocalSym(*sym) || globalStringSlot)) {
+        bool ownedStringParam = sym->is_param && sym->paramOwnsRef && sym->typeName == "string";
+        if (ctx.lifetimeDropsEnabled && (isManagedStringLocalSym(*sym) || globalStringSlot || ownedStringParam)) {
             if (sym->is_const) {
                 LOG_ERROR(ctx.fmtLoc() + "Cannot assign to const variable " + targetStr);
                 return;
@@ -3992,6 +3996,8 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     continue;
                 }
                 if (it->kind == 10 || it->kind == 11) { emitScopeDrop(ctx, *it); continue; }   // null-safe single release
+                // spec/61 §8: a parameter's own call reference (the returned container slot is moved above)
+                if (it->paramRef && !(retContainerSlot && it->addr == retContainerSlot)) { emitScopeDrop(ctx, *it); continue; }
                 // spec/61 §5 (memV3): the returned container handle is MOVED to the caller → skip its
                 // decref/free on the return path (kind 2 list / 3 map / 8 buffer, isListHandle).
                 if (retContainerSlot && it->addr == retContainerSlot
@@ -4240,7 +4246,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                                     retIsView = true;
                                 } else if (Symbol* rsym = resolveVariable(ve->name)) {
                                     // a parameter, global or persistent local stays owned elsewhere → copy out
-                                    if (rsym->is_view_alias || rsym->is_param || rsym->is_global
+                                    if (rsym->is_view_alias || (rsym->is_param && !rsym->paramOwnsRef) || rsym->is_global
                                         || rsym->lifetime == "persistent")
                                         retIsView = true;
                                 }
@@ -4290,7 +4296,8 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                         if (ve->name.find('.') != std::string::npos || ve->name.find('<') != std::string::npos)
                             retIsBorrow = true;                       // member/field view
                         else if (Symbol* rsym = resolveVariable(ve->name))
-                            retIsBorrow = rsym->is_param;             // borrowed parameter (no owned ref)
+                            // memV3: a shared<T> parameter co-owns for the call (§8) → its ref moves out
+                            retIsBorrow = rsym->is_param && !(ctx.memV3 && ctx.lifetimeDropsEnabled);
                     } else if (auto* ce = dynamic_cast<CallExpr*>(rv)) {
                         const std::string& fn = ce->functionName; size_t dp = fn.rfind('.');
                         std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
@@ -4315,7 +4322,8 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     if (auto* ve = dynamic_cast<VariableExpr*>(retStmt->value.get()))
                         if (ve->name.find('.') == std::string::npos && ve->name.find('<') == std::string::npos)
                             if (Symbol* rsym = resolveVariable(ve->name))
-                                borrowedSrc = rsym->is_param || rsym->is_global || rsym->lifetime == "persistent";
+                                borrowedSrc = (rsym->is_param && !rsym->paramOwnsRef) || rsym->is_global
+                                              || rsym->lifetime == "persistent";
                     if (borrowedSrc && ciV->second.serNodesVar) {
                         auto* ptrTy = llvm::PointerType::get(ctx.context, 0);
                         llvm::Value* src = ctx.createEntryAlloca(raw->getType(), "ret_param_src");
@@ -4687,7 +4695,7 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
 }
 // spec/61 §9.3: drops released on every exit regardless of the ownership plan (order-independent).
 static bool unconditionalDrop(const CompilerContext::ScopeDrop& d) {
-    return d.kind == 7 || d.kind == 10 || d.kind == 11 || d.kind == 12
+    return d.paramRef || d.kind == 7 || d.kind == 10 || d.kind == 11 || d.kind == 12
         || (d.isListHandle && (d.kind == 2 || d.kind == 3 || d.kind == 8));
 }
 
