@@ -52,14 +52,18 @@ static void emitThrow(CompilerContext& ctx) {
             "__cxa_throw", ctx.module);
     }
 
-    llvm::Value* excAlloc = ctx.builder.CreateCall(allocFn, {ctx.builder.getInt64(8)}, "exc_alloc");
+    // spec/61 §9.3 record layout {object, free thunk}; a runtime throw carries neither.
+    llvm::Value* excAlloc = ctx.builder.CreateCall(allocFn, {ctx.builder.getInt64(16)}, "exc_alloc");
     ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ptrTy), excAlloc);
+    ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ptrTy),
+        ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), excAlloc, 8));
     llvm::Value* null = llvm::ConstantPointerNull::get(ptrTy);
 
-    if (ctx.catchBlock) {
+    llvm::BasicBlock* ud = AIML::AST::aimlUnwindDest(ctx, true);
+    if (ud) {
         llvm::Function* fn = ctx.builder.GetInsertBlock()->getParent();
         llvm::BasicBlock* unreachBB = llvm::BasicBlock::Create(ctx.context, "throw_unreach", fn);
-        ctx.builder.CreateInvoke(throwFn, unreachBB, ctx.catchBlock, {excAlloc, null, null});
+        ctx.builder.CreateInvoke(throwFn, unreachBB, ud, {excAlloc, null, null});
         ctx.builder.SetInsertPoint(unreachBB);
     } else {
         ctx.builder.CreateCall(throwFn, {excAlloc, null, null});

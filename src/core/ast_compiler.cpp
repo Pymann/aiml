@@ -137,8 +137,9 @@ void Compiler::initClassContainerMembers(llvm::Value* basePtr,
         const std::string& mt = m.typeName;
         llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(
             info.type, basePtr, m.index, memberName + "_init_gep");
-        if (mt.rfind("list<", 0) == 0 && mt.back() == '>') {
-            std::string elemName = mt.substr(5, mt.length() - 6);
+        bool cascadeField = ctx.memV3 && mt.rfind("cascade<", 0) == 0 && mt.back() == '>';   // a list<i32> row
+        if ((mt.rfind("list<", 0) == 0 && mt.back() == '>') || cascadeField) {
+            std::string elemName = cascadeField ? std::string("i32") : mt.substr(5, mt.length() - 6);
             // AIML v2 P3/P6: a list<Model> field stores %M* references → pointer element stride.
             llvm::Type* elemTy = ctx.isRefcountModel(elemName)
                 ? llvm::PointerType::get(ctx.context, 0)
@@ -3164,6 +3165,8 @@ static bool serHasHeap(const std::string& typeName, CompilerContext& ctx) {
     // spec/61 §5 Option B (memV3): bare `buffer` is a Class-3 rc handle → heap-bearing, so a model
     // with a buffer field gets serNodes + a drop. OFF keeps the old value-header classification.
     if (ctx.memV3 && typeName == "buffer") return true;
+    // spec/61 §2.1: cascade<X> is a Class-3 rc container (list<i32> row) like list.
+    if (ctx.memV3 && typeName.rfind("cascade<", 0) == 0 && typeName.back() == '>') return true;
     // round4 §3 (memV3): an owned `tensor` field is a Class-4 resource → the model owns it and must
     // close it at scope drop (fre → aiml_tensor_free). So a tensor-field model needs serNodes + drop.
     if (ctx.memV3 && typeName == "tensor") return true;
@@ -4106,8 +4109,7 @@ void Compiler::registerTypeDecl(Node* node) {
                 for (const auto& arg : method->args) {
                     // AIML v2 P4: refcount-MODEL arg is by-ref (%M*), like list/map. MUST match
                     // the method definition (visitFunction) or signatures mismatch at the call.
-                    bool byref = (arg.second.rfind("list<", 0) == 0 ||
-                                  arg.second.rfind("map<",  0) == 0);
+                    bool byref = CompilerContext::isByrefParamType(arg.second);
                     if (byref || ctx.isRefcountModel(arg.second)) { paramTys.push_back(i8p); continue; }
                     IRType* irt = ctx.ir_gen->resolveType(arg.second);
                     llvm::Type* t = irt
@@ -4769,7 +4771,7 @@ void Compiler::visitTopLevel(Node* node) {
                     // a refcount-model (incl. memV3 shared<>) is a %M* pointer — otherwise the
                     // declared type. Keeps the interface check consistent under memV3.
                     const std::string& at = m.args[ai].second;
-                    bool byref = CompilerContext::isByrefParamType(at) || at.rfind("cascade<", 0) == 0;
+                    bool byref = CompilerContext::isByrefParamType(at);
                     bool refModel = ctx.isRefcountModel(at);
                     llvm::Type* expectedArg = (byref || refModel)
                         ? static_cast<llvm::Type*>(i8p)
@@ -5609,6 +5611,26 @@ void Compiler::visitFunction(FunctionDecl* func) {
                         ctx.pendingParamDrops.push_back(sd);
                     }
                 }
+            }
+        }
+        // spec/61 §8: a container parameter holds its own reference for the call (incref on entry,
+        // released on every exit); a `consumed` one was moved in by the caller (no incref).
+        if (ctx.memV3 && ctx.lifetimeDropsEnabled && argAlloca && i < argIsByref.size() && argIsByref[i]) {
+            std::string ptn;
+            for (auto& fa : func->args) if (fa.first == argNames[i]) { ptn = fa.second; break; }
+            CompilerContext::ScopeDrop sd;
+            llvm::Value* pslot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argAlloca));
+            if (ctx.isMemV3ContainerHandle(ptn) && makeHandleDrop(ptn, pslot, sd)) {
+                bool consumedParam = i < argLifetimes.size() && argLifetimes[i] == "consumed";
+                if (!consumedParam) {
+                    std::string kind = (sd.kind == 3) ? "map" : (sd.kind == 8) ? "buffer" : "list";
+                    auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                    ctx.builder.CreateCall(ctx.getFunction("aiml_" + kind + "_handle_incref", ctx.builder.getVoidTy(), {i8p}),
+                                           { ctx.builder.CreateLoad(i8p, pslot, argNames[i] + "_h") });
+                }
+                sd.debugName = argNames[i];
+                sd.paramRef = !consumedParam;
+                ctx.pendingParamDrops.push_back(sd);
             }
         }
         // spec/61 class 4: an iterator parameter was moved in → the callee releases it at body exit.

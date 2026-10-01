@@ -1,0 +1,66 @@
+# static-check: off
+# spec/61 §8/§9.3: getter returning a member container, fn<> container return, throw through interface dispatch.
+- class:
+    name: Shelf
+    members:
+      - [rows, list<string>]
+    methods:
+      - def:
+          name: rows_view
+          return: list<string>
+          body:
+            - return: <.rows
+- def:
+    name: build_rows
+    args: [[count, i32]]
+    return: list<string>
+    body:
+      - decl: [made, list<string>]
+      - call: [made.push, "n${count}"]
+      - return: made
+- interface:
+    name: Risky
+    methods:
+      - [poke, i32, [[level, i32]]]
+- class:
+    name: Poker
+    implements: [Risky]
+    methods:
+      - def:
+          name: poke
+          args: [[level, i32]]
+          return: i32
+          body:
+            - decl: [inner, list<string>]
+            - call: [inner.push, "p${level}"]
+            - throw: {new: Exception, message: "poke-${level}"}
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [shelf, Shelf]
+      - call: [shelf.rows.push, "s"]
+      - decl: [maker, "fn<i32:list<string>>"]
+      - set: [maker, build_rows]
+      - decl: [risky, ptr<Risky>, {new: Poker}]
+      - decl: [counter, i32, 0]
+      - decl: [caught, i32, 0]
+      - while:
+          condition: {lt: [counter, 50]}
+          body:
+            - decl: [view, list<string>, {call: [shelf.rows_view]}]
+            - call: [view.push, "v"]
+            - decl: [made, list<string>, {call: [maker, counter]}]
+            - if: {condition: {neq: [made.len, 1]}, then: [{return: 1}]}
+            - try:
+                body:
+                  - decl: [res, i32, {call: [risky.poke, counter]}]
+                catch:
+                  - type: Exception
+                    var: err
+                    body:
+                      - set: [caught, {+: [caught, 1]}]
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [caught, 50]}, then: [{return: 2}]}
+      - if: {condition: {neq: [shelf.rows.len, 51]}, then: [{return: 3}]}
+      - return: 0

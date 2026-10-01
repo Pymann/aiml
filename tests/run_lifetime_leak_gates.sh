@@ -115,6 +115,19 @@ GREEN=(
   tests/lifetime/139_return_inside_try.aiml
   tests/lifetime/140_list_of_maps.aiml
   tests/lifetime/141_buffer_handle_set_and_param.aiml
+  tests/lifetime/142_cascade_param_handle.aiml
+  tests/lifetime/143_throw_unwind_matrix.aiml
+  tests/lifetime/144_container_param_escape.aiml
+  tests/lifetime/145_cascade_model_field_drop.aiml
+  tests/lifetime/146_cascade_in_containers.aiml
+  tests/lifetime/147_cascade_model_copy_kv.aiml
+  tests/lifetime/148_getter_fn_iface_throw.aiml
+  tests/lifetime/cascade_params/direct.aiml
+  tests/lifetime/cascade_params/dispatch.aiml
+  tests/lifetime/cascade_params/indirect.aiml
+  tests/lifetime/cascade_params/rebind.aiml
+  tests/lifetime/cascade_params/owner_rebind.aiml
+  tests/lifetime/cascade_params/param_rebind_matrix.aiml
   tests/lifetime/73_list_model_clear_no_leak.aiml
   tests/lifetime/74_list_model_remove_no_leak.aiml
   tests/_inline_model_red/49_value_survives_remove.aiml

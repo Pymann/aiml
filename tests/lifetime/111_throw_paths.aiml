@@ -18,7 +18,7 @@
       - decl: [loc, Item, {call: [make_item, num]}]
       - decl: [lst, list<string>]
       - call: [lst.push, "r-${num}"]
-      - if: { condition: { eq: [{ '%': [num, 3] }, 0] }, then: [{ throw: { type: Exception, message: "boom" } }] }
+      - if: { condition: { eq: [{ '%': [num, 3] }, 0] }, then: [{ throw: {new: Exception, message: "boom"} }] }
       - return: loc.label.len
 - def:
     name: main
@@ -33,6 +33,10 @@
                 body:
                   - decl: [res, i32, {call: [risky, counter]}]
                 catch:
-                  - set: [caught, {+: [caught, 1]}]
+                  - type: Exception
+                    var: err
+                    body:
+                      - set: [caught, {+: [caught, 1]}]
             - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [caught, 67]}, then: [{return: 110}]}
       - return: 0

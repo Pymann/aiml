@@ -50,6 +50,9 @@
 
 ## Exception Propagation
 
+- `throw: e` throws an existing exception object (a `ptr<E>` local or the catch `var`);
+  inside a `catch` body, `throw: <var>` rethrows the caught object to the next handler.
+  Ownership of thrown/caught objects: spec/61 §9.3.
 - Unhandled exceptions propagate up the call stack to the caller.
 - If no `catch` block matches at any level, the program calls `sys.exit(2)` and prints
   the exception message to stderr.

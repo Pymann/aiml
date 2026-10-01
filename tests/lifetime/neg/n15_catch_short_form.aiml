@@ -1,0 +1,12 @@
+# EXPECT-ERROR: catch entries are {type, var, body}
+# spec/22: a catch is a list of {type, var, body} entries — a bare statement list is rejected.
+- def:
+    name: main
+    return: i32
+    body:
+      - try:
+          body:
+            - throw: {new: Exception, message: "x"}
+          catch:
+            - return: 1
+      - return: 0

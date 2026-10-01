@@ -61,6 +61,7 @@ namespace AIML {
         // must be deep-copied so the caller does not double-free the aliased buffer with the
         // container's own drop (9rooms load_entry_at / creature-cost helpers → drive_ai_combat).
         bool is_view_alias = false;
+        llvm::AllocaInst* excRecordSlot = nullptr;   // catch var: its caught exception record slot (spec/61 §9.3)
         AccessLevel access = AccessLevel::Public; // Default for vars
     };
 
@@ -340,10 +341,18 @@ namespace AIML {
         // list handle (not an inline struct) → drop = aiml_list_handle_release (decref; free
         // data+block at rc 0) after loading the pointer from the slot.
         bool                  isListHandle = false;
+        bool                  paramRef = false;      // spec/61 §8: a parameter's own call reference (caller keeps its ref)
         std::string           debugName;             // AIML_TRACE_SYMBOL: source var name for lifetime tracing
         std::string           debugType;             // AIML_TRACE_SYMBOL: declared type name (list<>/map<>/model)
     };
     std::vector<std::vector<ScopeDrop>> cleanupStack;
+    // spec/61 §9.3: exception unwind. kind 12 = caught exception record slot (end_catch + free
+    // the object via the record's free thunk; elemKind 1 = rethrown → end_catch only).
+    struct TryFrame { llvm::BasicBlock* dispatch; llvm::AllocaInst* excSlot; size_t frameBase; };
+    std::vector<TryFrame> tryStack;
+    std::vector<std::set<llvm::Value*>> stmtDropSnapshot;   // drops bound before the current statement
+    std::vector<const AIML::AST::Stmt*> stmtStack;
+    std::map<std::string, llvm::BasicBlock*> unwindPadCache;
     std::map<llvm::Value*, std::string> traceDeclarationSites; // diagnostic-only source locations
 
 
@@ -423,7 +432,7 @@ namespace AIML {
     // spec/61 §3: ref<list|map|buffer> is not a valid type — a container is already a shared handle.
     static bool isRefContainerType(const std::string& t) {
         return t.rfind("ref<list<", 0) == 0 || t.rfind("ref<map<", 0) == 0
-            || t == "ref<buffer>" || t.rfind("ref<buffer<", 0) == 0;
+            || t == "ref<buffer>" || t.rfind("ref<buffer<", 0) == 0 || t.rfind("ref<cascade<", 0) == 0;
     }
     std::string refContainerError(const std::string& what, const std::string& t) const {
         return what + " has type '" + t + "' — ref<" + t.substr(4, t.size() - 5) + "> is not a valid type:"
@@ -802,9 +811,10 @@ namespace AIML {
     // refcounted HANDLE (an 8-byte pointer) under memV3 — list<T>/map<K:V>/cascade<X>/buffer.
     // Used wherever a container crosses a value boundary as a POINTER (function return type, and
     // — see §5 — model fields / by-ref params already handle this). OFF → always false.
-    // spec/61 §8: container parameters pass the handle (list/map/buffer).
+    // spec/61 §8: container parameters pass the handle (list/map/buffer/cascade).
     static bool isByrefParamType(const std::string& t) {
-        return t.rfind("list<", 0) == 0 || t.rfind("map<", 0) == 0 || t == "buffer" || t.rfind("buffer<", 0) == 0;
+        return t.rfind("list<", 0) == 0 || t.rfind("map<", 0) == 0 || t == "buffer" || t.rfind("buffer<", 0) == 0
+            || t.rfind("cascade<", 0) == 0;
     }
     bool isMemV3ContainerHandle(const std::string& typeName) const {
         if (!memV3) return false;
@@ -1268,3 +1278,8 @@ namespace AIML {
         return func;
     }
 };
+
+namespace AIML { namespace AST {
+// spec/61 §9.3: unwind destination for a call/throw at the current point (defined in ast_compiler_stmt.cpp).
+llvm::BasicBlock* aimlUnwindDest(CompilerContext& ctx, bool userCallee);
+} }

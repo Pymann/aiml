@@ -1,0 +1,24 @@
+# static-check: off
+# spec/61 §5.7: cascade<X> handles as list/map elements — share, replace, get, remove, pop.
+- cascade: {name: ProbeCode, nodes: [{value: [1, i32]}]}
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 50]}
+          body:
+            - decl: [codes, list<cascade<ProbeCode>>]
+            - decl: [named, map<string:cascade<ProbeCode>>]
+            - decl: [one, cascade<ProbeCode>]
+            - call: [one.push, 1]
+            - call: [codes.push, one]
+            - call: [named.put, "a", one]
+            - call: [named.put, "a", one]
+            - decl: [got, cascade<ProbeCode>, {call: [named.get, "a"]}]
+            - if: {condition: {neq: [got.len, 1]}, then: [{return: 1}]}
+            - call: [named.remove, "a"]
+            - call: [codes.pop]
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

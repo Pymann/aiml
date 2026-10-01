@@ -336,6 +336,8 @@ std::unique_ptr<Node> StatementBuilder::finish() {
         // OFF: fall through to the historical nullptr drop.
     }
     if (type == "throw") {
+         if (!exprArg && !args.empty())   // `throw: err` — rethrow / throw an existing object (spec/22)
+             exprArg = parseScalarExpr(args[0].first, args[0].second);
          if (exprArg) {
              auto t = std::make_unique<ThrowStmt>(std::move(exprArg));
              t->sourceLine = capturedLine;

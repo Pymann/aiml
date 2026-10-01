@@ -1,0 +1,13 @@
+# EXPECT-ERROR: is not a valid type
+# spec/61 §8: a cascade is already a shared handle — ref<cascade<X>> is rejected.
+- cascade: {name: ProbeCode, nodes: [{value: [1, i32]}]}
+- def:
+    name: grow
+    args: [[row, ref<cascade<ProbeCode>>]]
+    body:
+      - call: [row.push, 1]
+- def:
+    name: main
+    return: i32
+    body:
+      - return: 0

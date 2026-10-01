@@ -9,6 +9,7 @@
 #include <iostream>
 #include <cstdlib>   // std::getenv (AIML_SIZETRACE)
 #include <vector>
+#include <llvm/TargetParser/Triple.h>
 
 namespace AIML {
 namespace AST {
@@ -223,6 +224,12 @@ static bool isManagedStringLocalSym(const Symbol& s);  // spec/61 §7 (defined b
 void Compiler::visitStatement(Stmt* stmt) {
     if (stmt->sourceLine > 0) ctx.currentLine = stmt->sourceLine;
     ctx.stmtTempStack.emplace_back();   // spec/61: per-statement owned-string-temp frame
+    {   // spec/61 §9.3: only drops bound before this statement are released on unwind
+        std::set<llvm::Value*> snap;
+        for (auto& fr : ctx.cleanupStack) for (auto& d : fr) snap.insert(d.addr);
+        ctx.stmtDropSnapshot.push_back(std::move(snap));
+        ctx.stmtStack.push_back(stmt);
+    }
     if (auto decl = dynamic_cast<DeclStmt*>(stmt)) {
         visitDeclStmt(decl);
         if (sizetrace_active(ctx.currentFunctionName)) emitSizeTrace(ctx, decl->varName);
@@ -255,6 +262,8 @@ void Compiler::visitStatement(Stmt* stmt) {
         }
     }
     if (!ctx.stmtTempStack.empty()) ctx.stmtTempStack.pop_back();
+    if (!ctx.stmtDropSnapshot.empty()) ctx.stmtDropSnapshot.pop_back();
+    if (!ctx.stmtStack.empty()) ctx.stmtStack.pop_back();
 }
 // AIML_TRACE_SYMBOL lifetime-value tracing (defined below, used by decl/set/drop).
 static bool aimlTraceSymbol(const std::string& name);
@@ -710,29 +719,14 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
 // spec/61 §5 Option B (memV3): a map<K:V> value-local becomes a refcounted HANDLE, mirroring the
 // list-handle path. Fresh init → aiml_map_handle_new + initMap; init from another map var → SHARE
 // (incref); { copy: M } → independent-spine map; scope-exit decref (kind 3, isListHandle→map).
-void Compiler::emitMapHandleDecl(DeclStmt* decl) {
-    auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-    llvm::Type* i32Ty = ctx.builder.getInt32Ty();
-    llvm::Type* i64Ty = ctx.builder.getInt64Ty();
-
-    // Parse map<K:V>.
-    std::string inner = decl->typeName.substr(4, decl->typeName.length() - 5);
-    size_t colon = inner.find(':');
-    std::string kName = (colon == std::string::npos) ? inner : inner.substr(0, colon);
-    std::string vName = (colon == std::string::npos) ? std::string("i32") : inner.substr(colon + 1);
-    llvm::Type* kTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(kName)));
-    // spec/61 §5.7: a nested container value is a HANDLE slot (pointer stride), like a refcount model.
-    llvm::Type* vTyRaw = (ctx.isRefcountModel(vName) || ctx.isMemV3ContainerHandle(vName))
-        ? i8p
-        : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
-    if (!kTy) kTy = i32Ty;
-    if (!vTyRaw) vTyRaw = i32Ty;
+// spec/61 §5: key/value release classification of a map<K:V> handle (copy + drop descriptors).
+void Compiler::classifyMapKV(const std::string& kName, const std::string& vName, llvm::Type* kTy, llvm::Type* vTyRaw,
+                             int& keyKind, int64_t& keyStride, int& valKind, int64_t& valStride,
+                             llvm::GlobalVariable*& valNodes, int32_t& valNodesCount) {
     llvm::DataLayout dl(&ctx.module);
-
-    // Key/value classification for copy + release.
-    int keyKind = (kName == "string") ? 1 : 0;
-    int64_t keyStride = (kName == "string") ? 8 : (int64_t)dl.getTypeAllocSize(kTy);
-    int valKind; int64_t valStride; llvm::GlobalVariable* valNodes = nullptr; int32_t valNodesCount = 0;
+    keyKind = (kName == "string") ? 1 : 0;
+    keyStride = (kName == "string") ? 8 : (int64_t)dl.getTypeAllocSize(kTy);
+    valNodes = nullptr; valNodesCount = 0;
     if (vName == "string") { valKind = 1; valStride = 8; }
     else if (ctx.isMemV3ContainerHandle(vName)) { valKind = 4; valStride = (int64_t)dl.getPointerSize(); }
     else if (vName.rfind("ptr<", 0) == 0 && vName.back() == '>' && ctx.classes.count(vName.substr(4, vName.size() - 5))
@@ -760,6 +754,63 @@ void Compiler::emitMapHandleDecl(DeclStmt* decl) {
             valKind = 0; valStride = (int64_t)dl.getTypeAllocSize(vTyRaw);
         }
     }
+
+}
+
+// spec/61 §8: release descriptor of a container handle held in `slot` (list/cascade/map/buffer).
+bool Compiler::makeHandleDrop(const std::string& type, llvm::Value* slot, CompilerContext::ScopeDrop& sd) {
+    sd = CompilerContext::ScopeDrop{};
+    sd.addr = slot;
+    sd.isListHandle = true;
+    sd.debugType = type;
+    if (type == "buffer" || type.rfind("buffer<", 0) == 0) { sd.kind = 8; return true; }
+    if (type.rfind("list<", 0) == 0 || type.rfind("cascade<", 0) == 0) {
+        std::string en = type.rfind("cascade<", 0) == 0 ? "i32" : type.substr(5, type.size() - 6);
+        sd.kind = 2;
+        classifyListElem(en, sd.elemKind, sd.elemSize, sd.serNodes, sd.serNodesCount);
+        return true;
+    }
+    if (type.rfind("map<", 0) == 0) {
+        auto* i8p = llvm::PointerType::get(ctx.context, 0);
+        std::string inner = type.substr(4, type.size() - 5);
+        size_t colon = inner.find(':');
+        std::string kName = (colon == std::string::npos) ? inner : inner.substr(0, colon);
+        std::string vName = (colon == std::string::npos) ? std::string("i32") : inner.substr(colon + 1);
+        llvm::Type* kTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(kName)));
+        llvm::Type* vTyRaw = (ctx.isRefcountModel(vName) || ctx.isMemV3ContainerHandle(vName))
+            ? i8p : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
+        if (!kTy) kTy = ctx.builder.getInt32Ty();
+        if (!vTyRaw) vTyRaw = ctx.builder.getInt32Ty();
+        sd.kind = 3;
+        classifyMapKV(kName, vName, kTy, vTyRaw, sd.keyKind, sd.keyStride, sd.elemKind, sd.elemSize,
+                      sd.serNodes, sd.serNodesCount);
+        return true;
+    }
+    return false;
+}
+
+void Compiler::emitMapHandleDecl(DeclStmt* decl) {
+    auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+    llvm::Type* i32Ty = ctx.builder.getInt32Ty();
+    llvm::Type* i64Ty = ctx.builder.getInt64Ty();
+
+    // Parse map<K:V>.
+    std::string inner = decl->typeName.substr(4, decl->typeName.length() - 5);
+    size_t colon = inner.find(':');
+    std::string kName = (colon == std::string::npos) ? inner : inner.substr(0, colon);
+    std::string vName = (colon == std::string::npos) ? std::string("i32") : inner.substr(colon + 1);
+    llvm::Type* kTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(kName)));
+    // spec/61 §5.7: a nested container value is a HANDLE slot (pointer stride), like a refcount model.
+    llvm::Type* vTyRaw = (ctx.isRefcountModel(vName) || ctx.isMemV3ContainerHandle(vName))
+        ? i8p
+        : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
+    if (!kTy) kTy = i32Ty;
+    if (!vTyRaw) vTyRaw = i32Ty;
+    llvm::DataLayout dl(&ctx.module);
+
+    int keyKind; int64_t keyStride; int valKind; int64_t valStride;
+    llvm::GlobalVariable* valNodes = nullptr; int32_t valNodesCount = 0;
+    classifyMapKV(kName, vName, kTy, vTyRaw, keyKind, keyStride, valKind, valStride, valNodes, valNodesCount);
 
     // Pointer slot. A memV3 container GLOBAL reuses its existing pointer-typed global var (§5).
     IRType* ptrTy = ctx.ir_gen->getPointerTy();
@@ -2691,8 +2742,14 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             }
         }
     }
+    // spec/61 §8: a container param/global source is shared (incref in the handle-set path), never moved
+    bool srcIsSharedHandle = false;
+    if (auto* sv = dynamic_cast<VariableExpr*>(setStmt->value.get()))
+        if (sv->name.find('.') == std::string::npos && sv->name.find('<') == std::string::npos)
+            if (Symbol* ss = resolveVariable(sv->name))
+                srcIsSharedHandle = (ss->is_param || ss->is_global) && ctx.isMemV3ContainerHandle(ss->typeName);
     if (setStmt->value && !memberDeepCopy && !memberHandleSource && !srcIsManagedString && !targetIsRefBorrow
-        && !targetIsRcShare)
+        && !targetIsRcShare && !srcIsSharedHandle)
         consumeLocalDrop(setStmt->value.get());
 
     // Expose the target variable's type so db.open_kv / sys.deserialize can infer
@@ -2876,8 +2933,12 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                     : ((sym->typeName=="buffer"||sym->typeName.rfind("buffer<",0)==0) ? "buffer" : "list");
                 Expr* rhs = setStmt->value.get();
                 bool borrowSrc = false;
-                if (auto* rv = dynamic_cast<VariableExpr*>(rhs))
+                if (auto* rv = dynamic_cast<VariableExpr*>(rhs)) {
                     borrowSrc = (rv->name.find('.') != std::string::npos || rv->name.find('<') != std::string::npos);
+                    if (!borrowSrc)
+                        if (Symbol* ss = resolveVariable(rv->name))
+                            borrowSrc = ss->is_param || ss->is_global;   // spec/61 §8: share, the source keeps its ref
+                }
                 else if (dynamic_cast<AtExpr*>(rhs)) borrowSrc = true;
                 else if (auto* ce = dynamic_cast<CallExpr*>(rhs)) {
                     // spec/61 §5.7: `.get`/`.at` of a nested container element is identical to `at` —
@@ -3760,8 +3821,10 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
             if (dot == std::string::npos && bs->is_byref_arg
                 && ctx.isMemV3ContainerHandle(bs->typeName) && bs->ir_alloca_inst) {
                 retContainerSlot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bs->ir_alloca_inst));
-                // borrowed arg / global / persistent local keeps its own ref → share
-                retContainerIsParam = bs->is_param || bs->is_global || bs->lifetime == "persistent";
+                // a parameter's own call reference moves out (spec/61 §8); a global / persistent
+                // local keeps its ref → share
+                retContainerIsParam = bs->is_global || bs->lifetime == "persistent"
+                    || (bs->is_param && !(ctx.memV3 && ctx.lifetimeDropsEnabled));
             }
         }
     }
@@ -4074,6 +4137,12 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         // §6/P2a: cleanup after the value is in an SSA register / its owner is exempted, only
         // for alias-safe return shapes; the value the branches below build then stays valid.
         if (safeToCleanup) emitReturnCleanup();
+        else if (ctx.lifetimeDropsEnabled) {
+            // a parameter's call reference never aliases away the caller's container → always released
+            for (auto fit = ctx.cleanupStack.rbegin(); fit != ctx.cleanupStack.rend(); ++fit)
+                for (auto it = fit->rbegin(); it != fit->rend(); ++it)
+                    if (it->paramRef) emitScopeDrop(ctx, *it);
+        }
         if (val) {
             // Struct-by-value return (list/buffer/map): visitExpression often
             // yields an alloca-pointer to the struct (e.g. from `str.split` or
@@ -4582,6 +4651,29 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         }
         ctx.builder.CreateCall(ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p}), { shell });
         ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
+    } else if (it.kind == 12) {
+        // spec/61 §9.3: caught exception — free the object via the record's thunk (null after a
+        // rethrow), end the catch, null the slot (single release).
+        llvm::Value* rec = ctx.builder.CreateLoad(i8p, it.addr, "drop_exc");
+        llvm::Function* fn = ctx.builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* relBB = llvm::BasicBlock::Create(ctx.context, "exc_rel", fn);
+        llvm::BasicBlock* freeBB = llvm::BasicBlock::Create(ctx.context, "exc_free", fn);
+        llvm::BasicBlock* endBB = llvm::BasicBlock::Create(ctx.context, "exc_end", fn);
+        llvm::BasicBlock* doneBB = llvm::BasicBlock::Create(ctx.context, "exc_done", fn);
+        ctx.builder.CreateCondBr(ctx.builder.CreateIsNotNull(rec), relBB, doneBB);
+        ctx.builder.SetInsertPoint(relBB);
+        llvm::Value* thunkSlot = ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), rec, 8);
+        llvm::Value* thunk = ctx.builder.CreateLoad(i8p, thunkSlot, "exc_thunk");
+        ctx.builder.CreateCondBr(ctx.builder.CreateIsNotNull(thunk), freeBB, endBB);
+        ctx.builder.SetInsertPoint(freeBB);
+        llvm::Value* obj = ctx.builder.CreateLoad(i8p, rec, "exc_obj");
+        ctx.builder.CreateCall(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p}, false), thunk, { obj });
+        ctx.builder.CreateBr(endBB);
+        ctx.builder.SetInsertPoint(endBB);
+        ctx.builder.CreateCall(ctx.getFunction("__cxa_end_catch", ctx.builder.getVoidTy(), {}), {});
+        ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
+        ctx.builder.CreateBr(doneBB);
+        ctx.builder.SetInsertPoint(doneBB);
     } else if (it.kind == 10) {
         // spec/61 class 4: iterator<T> — aiml_iter_free is null-safe; null the slot (single release).
         llvm::Value* itp = ctx.builder.CreateLoad(i8p, it.addr, "drop_iter");
@@ -4593,6 +4685,72 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         ctx.builder.CreateCall(fn, { it.addr, it.serNodes, ctx.builder.getInt32(it.serNodesCount) });
     }
 }
+// spec/61 §9.3: drops released on every exit regardless of the ownership plan (order-independent).
+static bool unconditionalDrop(const CompilerContext::ScopeDrop& d) {
+    return d.kind == 7 || d.kind == 10 || d.kind == 11 || d.kind == 12
+        || (d.isListHandle && (d.kind == 2 || d.kind == 3 || d.kind == 8));
+}
+
+static bool unwindCleanupEnabled(CompilerContext& ctx) {
+    static const bool envOff = [] { const char* e = std::getenv("AIML_UNWIND"); return e && std::string(e) == "0"; }();
+    return !envOff && !llvm::Triple(ctx.module.getTargetTriple()).isWasm();
+}
+
+// spec/61 §9.3: unwind destination for a call/throw at the current point — a landing pad that
+// releases the locals bound so far (up to the enclosing try) and then enters that try's catch or
+// resumes unwinding. nullptr → a plain call (nothing to release, no handler).
+llvm::BasicBlock* Compiler::unwindDest(bool userCallee) { return aimlUnwindDest(ctx, userCallee); }
+
+llvm::BasicBlock* aimlUnwindDest(CompilerContext& ctx, bool userCallee) {
+    bool inTry = !ctx.tryStack.empty();
+    bool enabled = unwindCleanupEnabled(ctx);
+    if (!inTry && (!userCallee || !enabled || !ctx.lifetimeDropsEnabled)) return nullptr;
+    std::vector<const CompilerContext::ScopeDrop*> drops;
+    size_t base = inTry ? ctx.tryStack.back().frameBase : 0;
+    if (enabled && ctx.lifetimeDropsEnabled) {
+        const std::set<llvm::Value*>* snap = ctx.stmtDropSnapshot.empty() ? nullptr : &ctx.stmtDropSnapshot.back();
+        const FlowState* st = nullptr;
+        if (ctx.ownershipPlan && !ctx.stmtStack.empty()) {
+            auto se = ctx.ownershipPlan->stmtEntry.find(ctx.stmtStack.back());
+            if (se != ctx.ownershipPlan->stmtEntry.end()) st = &se->second;
+        }
+        for (size_t f = ctx.cleanupStack.size(); f-- > base;)
+            for (auto it = ctx.cleanupStack[f].rbegin(); it != ctx.cleanupStack[f].rend(); ++it) {
+                if (snap && !snap->count(it->addr)) continue;
+                if (!unconditionalDrop(*it)
+                    && !(ctx.ownershipPlan && st && mayDrop(*ctx.ownershipPlan, *st, it->ownershipId)))
+                    continue;
+                drops.push_back(&*it);
+            }
+    }
+    if (!inTry && drops.empty()) return nullptr;
+    llvm::Function* fn = ctx.builder.GetInsertBlock()->getParent();
+    std::string key = std::to_string(reinterpret_cast<uintptr_t>(fn)) + "|"
+        + std::to_string(inTry ? reinterpret_cast<uintptr_t>(ctx.tryStack.back().dispatch) : 0);
+    for (auto* d : drops) key += "|" + std::to_string(reinterpret_cast<uintptr_t>(d->addr)) + ":" + std::to_string(d->kind);
+    auto hit = ctx.unwindPadCache.find(key);
+    if (hit != ctx.unwindPadCache.end()) return hit->second;
+    if (!fn->hasPersonalityFn())
+        fn->setPersonalityFn(llvm::cast<llvm::Constant>(ctx.getPersonalityFunction().getCallee()));
+    llvm::IRBuilderBase::InsertPointGuard guard(ctx.builder);
+    llvm::BasicBlock* pad = llvm::BasicBlock::Create(ctx.context, "unwind_pad", fn);
+    ctx.builder.SetInsertPoint(pad);
+    llvm::PointerType* ptrTy = llvm::PointerType::getUnqual(ctx.context);
+    llvm::StructType* lpTy = llvm::StructType::get(ctx.context, {ptrTy, ctx.builder.getInt32Ty()});
+    llvm::LandingPadInst* lp = ctx.builder.CreateLandingPad(lpTy, 1, "unwind_lp");
+    if (inTry) lp->addClause(llvm::ConstantPointerNull::get(ptrTy));
+    else lp->setCleanup(true);
+    for (auto* d : drops) emitScopeDrop(ctx, *d);
+    if (inTry) {
+        ctx.builder.CreateStore(ctx.builder.CreateExtractValue(lp, 0, "exc_ptr"), ctx.tryStack.back().excSlot);
+        ctx.builder.CreateBr(ctx.tryStack.back().dispatch);
+    } else {
+        ctx.builder.CreateResume(lp);
+    }
+    ctx.unwindPadCache[key] = pad;
+    return pad;
+}
+
 void Compiler::visitBlockStmt(BlockStmt* block) {
     auto savedSymbols = ctx.symbol_table;
     ctx.cleanupStack.emplace_back();            // spec/61: per-block cleanup frame
@@ -4726,190 +4884,174 @@ void Compiler::visitWhileStmt(WhileStmt* whileStmt) {
     ctx.ir_gen->setInsertPoint(endBB);
 }
 void Compiler::visitTry(TryStmt* tryStmt) {
-    LOG_DEBUG("Compiling TryStmt. Has TryBlock: " + std::to_string(tryStmt->tryBlock != nullptr));
     if (!tryStmt->tryBlock) {
         LOG_ERROR(ctx.fmtLoc() + "AST Error: Try statement is missing a body. The try block will not execute.");
-        return; 
+        return;
     }
-
     llvm::Function* func = ctx.builder.GetInsertBlock()->getParent();
-
+    if (!func->hasPersonalityFn())
+        func->setPersonalityFn(llvm::cast<llvm::Constant>(ctx.getPersonalityFunction().getCallee()));
+    llvm::PointerType* ptrTy = llvm::PointerType::getUnqual(ctx.context);
     llvm::BasicBlock* tryBlock = llvm::BasicBlock::Create(ctx.context, "try_block", func);
     llvm::BasicBlock* catchBlock = llvm::BasicBlock::Create(ctx.context, "catch_block", func);
     llvm::BasicBlock* contBlock = llvm::BasicBlock::Create(ctx.context, "try_cont", func);
+    llvm::AllocaInst* excSlot = ctx.createEntryAlloca(ptrTy, "try_exc");
 
     ctx.builder.CreateBr(tryBlock);
     ctx.builder.SetInsertPoint(tryBlock);
-
-    // Save previous catch block logically if we implement nested tries.
-    // For now, assume top-level single try/catch handling via IRGen's context or just emit blocks.
-    // To properly support invoke, any call inside tryBlock must be an invoke.
-    // Since we don't know which call throws, we need to instruct ir_gen to use invoke instead of call!
-    // We'll set a state in ctx to emit invokes to our catch block.
-    
+    // spec/22: every call inside the try is an invoke (unwindDest → pad → catchBlock).
+    // spec/61 §9.3: the pads release the try-body locals bound so far before entering the catch.
     llvm::BasicBlock* oldCatch = ctx.catchBlock;
     ctx.catchBlock = catchBlock;
-
-    if (tryStmt->tryBlock) {
-        visitBlockStmt(tryStmt->tryBlock.get());
-    }
-    
-    // Jump to contBlock if we haven't returned/thrown
-    if (!ctx.builder.GetInsertBlock()->getTerminator()) {
+    ctx.tryStack.push_back({catchBlock, excSlot, ctx.cleanupStack.size()});
+    visitBlockStmt(tryStmt->tryBlock.get());
+    if (!ctx.builder.GetInsertBlock()->getTerminator())
         ctx.builder.CreateBr(contBlock);
-    }
-
-    // Restore catch block
+    ctx.tryStack.pop_back();
     ctx.catchBlock = oldCatch;
 
     ctx.builder.SetInsertPoint(catchBlock);
-    
-    // Set Personality Function
-    llvm::Function* parentFunc = ctx.builder.GetInsertBlock()->getParent();
-    if (!parentFunc->hasPersonalityFn()) {
-        llvm::Function* persFunc = ctx.module.getFunction("__gxx_personality_v0");
-        if (!persFunc) {
-            llvm::FunctionType* fty = llvm::FunctionType::get(ctx.builder.getInt32Ty(), true);
-            persFunc = llvm::Function::Create(fty, llvm::Function::ExternalLinkage, "__gxx_personality_v0", ctx.module);
+    llvm::Value* excPtr = ctx.builder.CreateLoad(ptrTy, excSlot, "exc_ptr");
+    llvm::Value* rawExc = ctx.builder.CreateCall(ctx.getFunction("__cxa_begin_catch", ptrTy, {ptrTy}), {excPtr}, "raw_exc");
+    // spec/61 §9.3: the catch owns the exception object — kind-12 drop on every exit of the handler.
+    llvm::AllocaInst* recSlot = ctx.createEntryAlloca(ptrTy, "caught_exc");
+    ctx.builder.CreateStore(rawExc, recSlot);
+    ctx.cleanupStack.emplace_back();
+    {
+        CompilerContext::ScopeDrop sd;
+        sd.addr = recSlot;
+        sd.kind = 12;
+        sd.debugName = tryStmt->catchVar;
+        ctx.cleanupStack.back().push_back(sd);
+    }
+    if (tryStmt->catchBlock) {
+        if (!tryStmt->catchVar.empty()) {
+            llvm::Value* userExc = ctx.builder.CreateLoad(ptrTy, rawExc, "actual_exc_ptr");
+            IRType* targetTy = ctx.ir_gen->wrapType(ptrTy);
+            IRValue* alloca = ctx.ir_gen->createAlloca(targetTy, tryStmt->catchVar);
+            ctx.builder.CreateStore(userExc, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca)));
+            Symbol sym;
+            sym.ir_alloca_inst = alloca;
+            sym.ir_type = ctx.ir_gen->getPointerTy();
+            sym.ir_element_type = targetTy;
+            sym.typeName = tryStmt->catchType;
+            sym.excRecordSlot = recSlot;
+            ctx.symbol_table[tryStmt->catchVar] = sym;
         }
-        parentFunc->setPersonalityFn(persFunc);
-    }
-
-    // Emit LandingPad
-    llvm::PointerType* ptrTy = llvm::PointerType::getUnqual(ctx.context);
-    llvm::StructType* landingPadTy = llvm::StructType::get(ctx.context, {ptrTy, ctx.builder.getInt32Ty()});
-    llvm::LandingPadInst* lpad = ctx.builder.CreateLandingPad(landingPadTy, 1, "lpad");
-    
-    // We only catch C++ exceptions (or our own type) roughly.
-    // We need typeinfo of __cxa_exceptio n or equivalent.
-    // Null catches all in C++ LLVM IR usually: `catch i8* null`
-    lpad->addClause(llvm::ConstantPointerNull::get(ptrTy));
-    lpad->setCleanup(false); // We are catching it.
-    
-    // Extract exception pointer
-    llvm::Value* excPtr = ctx.builder.CreateExtractValue(lpad, 0, "exc_ptr");
-
-    // Begin Catch
-    llvm::Function* beginCatchFunc = ctx.module.getFunction("__cxa_begin_catch");
-    if (!beginCatchFunc) {
-        llvm::FunctionType* fty = llvm::FunctionType::get(ptrTy, {ptrTy}, false);
-        beginCatchFunc = llvm::Function::Create(fty, llvm::Function::ExternalLinkage, "__cxa_begin_catch", ctx.module);
-    }
-    
-    llvm::Value* rawExc = ctx.builder.CreateCall(beginCatchFunc, {excPtr}, "raw_exc");
-    
-    // If catch type specified, cast to it. 
-    // Wait, AIML dynamic typing or we cast to an Object base?
-    // For MVP we just give them the pointer and let them cast, or assume it is an Exception object.
-    
-    if (tryStmt->catchBlock && !tryStmt->catchVar.empty()) {
-        // Assume exception is a ptr to `catchType` struct
-        llvm::Type* excType = ctx.getLLVMType(tryStmt->catchType);
-        if (!excType) excType = ctx.builder.getInt8Ty(); // fallback
-        
-        // Since we allocated 8 bytes in __cxa_allocate_exception and stored the actual object ptr inside it,
-        // we must load the object ptr from the returned envelope.
-        llvm::Value* userExc = ctx.builder.CreateLoad(ptrTy, rawExc, "actual_exc_ptr");
-        
-        // Register variable in scope
-        IRType* targetTy = ctx.ir_gen->wrapType(ptrTy); // Opaque pointer
-        IRValue* alloca = ctx.ir_gen->createAlloca(targetTy, tryStmt->catchVar);
-        ctx.builder.CreateStore(userExc, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(alloca)));
-        
-        Symbol sym;
-        sym.ir_alloca_inst = alloca;
-        sym.ir_type = ctx.ir_gen->getPointerTy();
-        sym.ir_element_type = targetTy;
-        sym.typeName = tryStmt->catchType;
-        ctx.symbol_table[tryStmt->catchVar] = sym;
-        
         visitBlockStmt(tryStmt->catchBlock.get());
     }
-
-    // End Catch
-    llvm::Function* endCatchFunc = ctx.module.getFunction("__cxa_end_catch");
-    if (!endCatchFunc) {
-        llvm::FunctionType* fty = llvm::FunctionType::get(ctx.builder.getVoidTy(), false);
-        endCatchFunc = llvm::Function::Create(fty, llvm::Function::ExternalLinkage, "__cxa_end_catch", ctx.module);
-    }
-    
     if (!ctx.builder.GetInsertBlock()->getTerminator()) {
-        ctx.builder.CreateCall(endCatchFunc);
+        emitScopeDrop(ctx, ctx.cleanupStack.back().front());
         ctx.builder.CreateBr(contBlock);
-    } else {
-        // If it terminates, we still need to end catch before returning/throwing?
-        // Actually C++ requires invoking end_catch before returning from catch!
-        // This is complex for MVP, we'll assume people don't branch directly out of catch without it manually, 
-        // or we just put it right before.
     }
-
+    ctx.cleanupStack.pop_back();
     ctx.builder.SetInsertPoint(contBlock);
 }
+// spec/61 §9.3: per-class release of a thrown object (stored in the exception record).
+llvm::Function* Compiler::excFreeThunk(const std::string& cls) {
+    auto ci = ctx.classes.find(cls);
+    if (cls.empty() || ci == ctx.classes.end() || !ci->second.type) return nullptr;
+    std::string name = "__aiml_exc_free_" + cls;
+    if (llvm::Function* f = ctx.module.getFunction(name)) return f;
+    llvm::PointerType* i8p = llvm::PointerType::getUnqual(ctx.context);
+    llvm::Function* f = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p}, false),
+        llvm::Function::InternalLinkage, name, ctx.module);
+    llvm::IRBuilderBase::InsertPointGuard guard(ctx.builder);
+    ctx.builder.SetInsertPoint(llvm::BasicBlock::Create(ctx.context, "entry", f));
+    llvm::Value* obj = f->getArg(0);
+    llvm::Type* i32 = ctx.builder.getInt32Ty();
+    llvm::Value* nodes = ci->second.serNodesVar ? static_cast<llvm::Value*>(ci->second.serNodesVar)
+                                                : llvm::ConstantPointerNull::get(i8p);
+    llvm::Value* n = ctx.builder.getInt32(ci->second.serNodesCount);
+    if (ctx.isRefcountModel(cls)) {
+        ctx.builder.CreateCall(ctx.getFunction("aiml_model_decref", ctx.builder.getVoidTy(), {i8p, i8p, i32}), {obj, nodes, n});
+    } else {
+        if (ci->second.serNodesVar) {
+            ctx.builder.CreateCall(ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(), {i8p, i8p, i32}), {obj, nodes, n});
+        } else {
+            for (auto& [mname, mem] : ci->second.members)
+                if (mem.typeName == "string") {
+                    llvm::Value* fp = ctx.builder.CreateStructGEP(ci->second.type, obj, mem.index);
+                    ctx.builder.CreateCall(ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {i8p}),
+                                           {ctx.builder.CreateLoad(i8p, fp)});
+                }
+        }
+        ctx.builder.CreateCall(ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p}), {obj});
+    }
+    ctx.builder.CreateRetVoid();
+    return f;
+}
+
 void Compiler::visitThrow(ThrowStmt* throwStmt) {
     if (!throwStmt->value) return;
-    
-    IRValue* excVal = visitExpression(throwStmt->value.get());
-    if (!excVal) return;
-
-    llvm::Value* rawObj = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(excVal));
     llvm::PointerType* ptrTy = llvm::PointerType::getUnqual(ctx.context);
-
-    llvm::Function* allocExcFunc = ctx.module.getFunction("__cxa_allocate_exception");
-    if (!allocExcFunc) {
-        llvm::FunctionType* fty = llvm::FunctionType::get(ptrTy, {ctx.builder.getInt64Ty()}, false);
-        allocExcFunc = llvm::Function::Create(fty, llvm::Function::ExternalLinkage, "__cxa_allocate_exception", ctx.module);
-    }
-
-    llvm::Function* throwFunc = ctx.module.getFunction("__cxa_throw");
-    if (!throwFunc) {
-        llvm::FunctionType* fty = llvm::FunctionType::get(ctx.builder.getVoidTy(), 
-            {ptrTy, ptrTy, ptrTy}, false);
-        throwFunc = llvm::Function::Create(fty, llvm::Function::ExternalLinkage, "__cxa_throw", ctx.module);
-    }
-
-    const llvm::DataLayout& dl = ctx.module.getDataLayout();
-    uint64_t excSize = 8; // Pointer size for thrown object reference
-    
-    llvm::Value* excAlloc = ctx.builder.CreateCall(allocExcFunc, {ctx.builder.getInt64(excSize)}, "exc_alloc");
-    
-    // cast rawObj to i8* and store it in excAlloc? No, AIML uses objects. We can just store the pointer.
-    // With Opaque Pointers, excAlloc is `ptr`. `rawObj` is `ptr`.
-    ctx.builder.CreateStore(rawObj, excAlloc);
-
-    // Record the exception's `message` (offset 0, an i8* — every exception
-    // extends Exception whose sole member `message` sits first) so the
-    // top-level uncaught handler in jitRun can print it (spec/22).  Harmless
-    // when the throw IS caught; the value is simply overwritten by the next throw.
-    {
-        llvm::Function* noteFunc = ctx.module.getFunction("aiml_note_thrown_message");
-        if (!noteFunc) {
-            llvm::FunctionType* nfty = llvm::FunctionType::get(ctx.builder.getVoidTy(), {ptrTy}, false);
-            noteFunc = llvm::Function::Create(nfty, llvm::Function::ExternalLinkage, "aiml_note_thrown_message", ctx.module);
+    // spec/61 §9.3: the thrown value moves into the exception; rethrowing a catch var moves it on.
+    std::string excClass;
+    llvm::AllocaInst* rethrowRec = nullptr;
+    VariableExpr* thrownLocal = nullptr;
+    if (auto* ne = dynamic_cast<NewExpr*>(throwStmt->value.get())) {
+        excClass = ne->typeName;
+    } else if (auto* ve = dynamic_cast<VariableExpr*>(throwStmt->value.get())) {
+        if (ve->name.find('.') == std::string::npos && ve->name.find('<') == std::string::npos) {
+            if (Symbol* vs = resolveVariable(ve->name)) {
+                if (vs->excRecordSlot) rethrowRec = vs->excRecordSlot;
+                else {
+                    excClass = vs->typeName;
+                    if (excClass.rfind("ptr<", 0) == 0 && excClass.back() == '>') excClass = excClass.substr(4, excClass.size() - 5);
+                    thrownLocal = ve;
+                }
+            }
         }
-        llvm::Value* msgCharPtr = ctx.builder.CreateLoad(ptrTy, rawObj, "exc_msg_ptr");
-        ctx.builder.CreateCall(noteFunc, {msgCharPtr});
     }
 
-    llvm::Value* nullTypeInfo = llvm::ConstantPointerNull::get(ptrTy);
-    llvm::Value* nullDtor = llvm::ConstantPointerNull::get(ptrTy);
+    IRValue* excVal = visitExpression(throwStmt->value.get());
+    if (!excVal) {
+        LOG_ERROR(ctx.fmtLoc() + "throw expects { new: <ExceptionClass>, message: ... } (spec/22)");
+        return;
+    }
+    llvm::Value* rawObj = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(excVal));
+    if (thrownLocal) consumeLocalDrop(thrownLocal);
 
-    if (ctx.catchBlock) {
-        llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
-        llvm::BasicBlock* unreachableBB = llvm::BasicBlock::Create(ctx.context, "throw_unreachable", currentFunc);
-        ctx.builder.CreateInvoke(throwFunc, unreachableBB, ctx.catchBlock, {excAlloc, nullTypeInfo, nullDtor});
-        ctx.builder.SetInsertPoint(unreachableBB);
-        ctx.builder.CreateUnreachable();
-        // Move insert point to a dead block so any subsequent statements in the same
-        // scope don't append instructions after the unreachable terminator.
-        llvm::BasicBlock* deadBB = llvm::BasicBlock::Create(ctx.context, "throw_dead", currentFunc);
-        ctx.builder.SetInsertPoint(deadBB);
+    llvm::Value* excAlloc = ctx.builder.CreateCall(
+        ctx.getFunction("__cxa_allocate_exception", ptrTy, {ctx.builder.getInt64Ty()}),
+        {ctx.builder.getInt64(16)}, "exc_alloc");
+    ctx.builder.CreateStore(rawObj, excAlloc);
+    llvm::Value* thunk;
+    if (rethrowRec) {
+        llvm::Value* rec = ctx.builder.CreateLoad(ptrTy, rethrowRec, "rethrow_rec");
+        llvm::Value* oldThunkSlot = ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), rec, 8);
+        thunk = ctx.builder.CreateLoad(ptrTy, oldThunkSlot, "rethrow_thunk");
+        ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ptrTy), oldThunkSlot);
     } else {
-        llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
-        ctx.builder.CreateCall(throwFunc, {excAlloc, nullTypeInfo, nullDtor});
-        ctx.builder.CreateUnreachable();
-        llvm::BasicBlock* deadBB = llvm::BasicBlock::Create(ctx.context, "throw_dead", currentFunc);
-        ctx.builder.SetInsertPoint(deadBB);
+        llvm::Function* tf = excFreeThunk(excClass);
+        thunk = tf ? static_cast<llvm::Value*>(tf) : llvm::ConstantPointerNull::get(ptrTy);
     }
+    ctx.builder.CreateStore(thunk, ctx.builder.CreateConstGEP1_64(ctx.builder.getInt8Ty(), excAlloc, 8));
+
+    // Record the exception's `message` (offset 0 of every Exception) for the top-level
+    // uncaught handler in jitRun (spec/22).
+    llvm::Value* msgCharPtr = ctx.builder.CreateLoad(ptrTy, rawObj, "exc_msg_ptr");
+    ctx.builder.CreateCall(ctx.getFunction("aiml_note_thrown_message", ctx.builder.getVoidTy(), {ptrTy}), {msgCharPtr});
+
+    // the throw statement never ends normally → release its own string temps now
+    if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) {
+        for (llvm::Value* t : ctx.stmtTempStack.back())
+            ctx.builder.CreateCall(ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {ptrTy}), {t});
+        ctx.stmtTempStack.back().clear();
+    }
+    llvm::Function* throwFunc = ctx.getFunction("__cxa_throw", ctx.builder.getVoidTy(), {ptrTy, ptrTy, ptrTy});
+    llvm::Value* nullp = llvm::ConstantPointerNull::get(ptrTy);
+    llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
+    if (llvm::BasicBlock* ud = unwindDest(true)) {
+        llvm::BasicBlock* unreachableBB = llvm::BasicBlock::Create(ctx.context, "throw_unreachable", currentFunc);
+        ctx.builder.CreateInvoke(throwFunc, unreachableBB, ud, {excAlloc, nullp, nullp});
+        ctx.builder.SetInsertPoint(unreachableBB);
+    } else {
+        ctx.builder.CreateCall(throwFunc, {excAlloc, nullp, nullp});
+    }
+    ctx.builder.CreateUnreachable();
+    // a dead block keeps later statements of this scope off the terminated block
+    ctx.builder.SetInsertPoint(llvm::BasicBlock::Create(ctx.context, "throw_dead", currentFunc));
 }
 
 void Compiler::visitIdxStmt(IdxStmt* idx) {
