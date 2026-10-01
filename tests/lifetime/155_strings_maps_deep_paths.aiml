@@ -1,0 +1,51 @@
+# static-check: off
+# spec/61 §4/§5: self-building strings, chained string builtins, map remove, deep field paths, model copy, fn<Model>.
+- model: {name: Leaf, fields: [[text, string], [marks, list<string>]]}
+- model: {name: Branch, fields: [[leaf, Leaf], [name, string]]}
+- model: {name: Tree, fields: [[branch, Branch], [tags, map<string:string>]]}
+- def:
+    name: shout
+    args: [[word, string]]
+    return: string
+    body:
+      - return: {call: [word.upper]}
+- def:
+    name: tree_score
+    args: [[tree, Tree]]
+    return: i32
+    body:
+      - return: tree.branch.leaf.text.len
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [scorer, "fn<Tree:i32>"]
+      - set: [scorer, tree_score]
+      - while:
+          condition: {lt: [counter, 50]}
+          body:
+            - decl: [acc, string, "s"]
+            - decl: [pos, i32, 0]
+            - while:
+                condition: {lt: [pos, 5]}
+                body:
+                  - set: [acc, "${acc}-${pos}"]
+                  - set: [pos, {+: [pos, 1]}]
+            - decl: [loud, string, {call: [shout, {call: [acc.replace, "-", "+"]}]}]
+            - if: {condition: {neq: [loud.len, 11]}, then: [{return: 1}]}
+            - decl: [tree, Tree]
+            - set: [tree.branch.leaf.text, "leaf-${counter}"]
+            - call: [tree.branch.leaf.marks.push, "m"]
+            - set: [tree.branch.name, loud]
+            - set: [tree.branch.leaf.text, "again-${counter}"]
+            - call: [tree.tags.put, "a", "x"]
+            - call: [tree.tags.put, "b", "y"]
+            - call: [tree.tags.remove, "a"]
+            - decl: [copy_tree, Tree]
+            - set: [copy_tree, tree]
+            - set: [copy_tree.branch.leaf.text, "copy"]
+            - if: {condition: {eq: [tree.branch.leaf.text, "copy"]}, then: [{return: 2}]}
+            - if: {condition: {lt: [{call: [scorer, tree]}, 7]}, then: [{return: 3}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

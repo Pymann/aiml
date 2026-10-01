@@ -823,7 +823,13 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
     // a singleton so builtin_registry can validate string-literal lookups and
     // the JIT-runtime can resolve stems via the same in-memory tables.
     AIML::AssetScanner::instance().scan(assetRootsStr);
-    YAML::Node config = YAML::LoadFile(filename);
+    YAML::Node config;
+    try {
+        config = YAML::LoadFile(filename);
+    } catch (const YAML::Exception& e) {
+        LOG_ERROR(filename + ": YAML parse error: " + std::string(e.what()));
+        return;
+    }
     auto seenFileSizeDiagnostics = std::make_shared<std::unordered_set<std::string>>();
     logAimlFileSizeDiagnostic(filename, seenFileSizeDiagnostics.get());
     logAimlDeclCountDiagnostic(filename);

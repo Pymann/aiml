@@ -1,0 +1,8 @@
+# EXPECT-ERROR: YAML parse error
+# Invalid YAML is reported as a compile error (no compiler abort).
+- def:
+    name: main
+    return: i32
+    body:
+      - return: {call: [main]}.len
+      - decl: [bad, i32, {lt: [1, {x: 1}.y]}]
