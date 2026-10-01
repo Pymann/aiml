@@ -140,6 +140,19 @@ IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
         // block (not a value calloc), so it becomes a co-owned handle. The target type carries
         // the `shared<>` wrapper (deserializeTargetType is set to the decl type during init).
         bool sharedTarget = ctx.isRefcountModel(ctx.deserializeTargetType);
+        // spec/61 §9.3: evaluate field initializers before allocating — one that throws leaves no
+        // half-built object behind.
+        std::map<std::string, llvm::Value*> preInit;
+        for (auto& [name, member] : classInfo.members) {
+             if (!newExpr->initValues.count(name)) continue;
+             IRValue* fieldInitV = visitExpression(newExpr->initValues[name].get());
+             llvm::Value* iv = fieldInitV ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldInitV)) : nullptr;
+             if (!iv) {
+                 LOG_ERROR(ctx.fmtLoc(newExpr->sourceNode) + "Failed to compile AST expression for initialization of member: " + name);
+                 continue;
+             }
+             preInit[name] = iv;
+        }
         if (ctx.isRefcountModel(className) || sharedTarget) {
             // AIML v2 (doc/aiml_v2_impl_plan.md P1): a heap-field model is a refcounted MODL
             // object. Allocate the shell via aiml_model_alloc (8-byte {magic,refcount=1} header,
@@ -171,17 +184,9 @@ IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
         // Apply per-instantiation overrides (`{ new: T, field: val }`) on top of
         // the defaults so an explicit init still wins.
         for (auto& [name, member] : classInfo.members) {
-             if (!newExpr->initValues.count(name)) continue;
-             IRValue* fieldInitV = visitExpression(newExpr->initValues[name].get());
-             if (!fieldInitV) {
-                 LOG_ERROR(ctx.fmtLoc(newExpr->sourceNode) + "Failed to compile AST expression for initialization of member: " + name);
-                 continue;
-             }
-             llvm::Value* initVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fieldInitV));
-             if (!initVal) {
-                 LOG_ERROR(ctx.fmtLoc(newExpr->sourceNode) + "Null LLVM value evaluated for initialization of member: " + name);
-                 continue;
-             }
+             auto pv = preInit.find(name);
+             if (pv == preInit.end()) continue;
+             llvm::Value* initVal = pv->second;
              llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(classInfo.type, rawPtrCast, member.index, name + "_gep");
              // spec/61 §4: the field owns its string — adopt an owned statement temp, share anything else.
              if (member.typeName == "string" && initVal->getType()->isPointerTy() && ctx.lifetimeDropsEnabled) {

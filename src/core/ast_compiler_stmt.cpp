@@ -2773,6 +2773,16 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 }
             }
         }
+    } else if (propName.find('.') == std::string::npos) {
+        // spec/29 §5: a typed field target (`obj.field`) also fixes the deserialized type
+        std::string bcls = sym->typeName;
+        if ((bcls.rfind("ptr<", 0) == 0 || bcls.rfind("ref<", 0) == 0) && bcls.back() == '>')
+            bcls = bcls.substr(4, bcls.size() - 5);
+        auto cit = ctx.classes.find(bcls);
+        if (cit != ctx.classes.end()) {
+            auto mit = cit->second.members.find(propName);
+            if (mit != cit->second.members.end()) ctx.deserializeTargetType = mit->second.typeName;
+        }
     }
     if (rejectVoidCallInit(ctx, setStmt->value.get(),
             "cannot assign to '" + targetStr + "'",
@@ -2822,8 +2832,13 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 && (nv->getType() == tci->second.type || nv->getType()->isPointerTy())) {
                 llvm::Type* p = llvm::PointerType::get(ctx.context, 0);
                 llvm::Value* dst = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
-                if (nv->getType()->isPointerTy())   // capture before the release (alias-safe)
+                if (nv->getType()->isPointerTy()) {   // capture before the release (alias-safe)
+                    llvm::Value* carrier = nv;
                     nv = ctx.builder.CreateLoad(tci->second.type, nv, "rebind_fresh");
+                    // sys.deserialize hands back a malloc'd carrier — its fields moved, free the shell
+                    if (static_cast<CallExpr*>(setStmt->value.get())->functionName == "sys.deserialize")
+                        ctx.builder.CreateCall(ctx.getFunction("free", ctx.builder.getVoidTy(), {p}), { carrier });
+                }
                 ctx.builder.CreateCall(ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
                     {p, p, ctx.builder.getInt32Ty()}),
                     { dst, tci->second.serNodesVar, ctx.builder.getInt32(tci->second.serNodesCount) });
@@ -3570,6 +3585,20 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                             // source (memberDeepCopy) → the member owns an INDEPENDENT heap, so a
                             // later recursive free of the aggregate cannot double-free a shared
                             // sub-heap (fixes the shared value-model member-store double-free).
+                            // spec/61 §5.5: a sys.deserialize carrier is a fresh owned value → move its
+                            // fields into the member (old field released first), free the shell
+                            if (auto* dce = dynamic_cast<CallExpr*>(setStmt->value.get()))
+                                if (dce->functionName == "sys.deserialize" && cIt->second.serNodesVar) {
+                                    uint64_t dsz = ctx.module.getDataLayout().getTypeAllocSize(structTy);
+                                    ctx.builder.CreateCall(ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
+                                        {ptrTy, ptrTy, ctx.builder.getInt32Ty()}),
+                                        { dstPtr, cIt->second.serNodesVar, ctx.builder.getInt32(cIt->second.serNodesCount) });
+                                    ctx.builder.CreateCall(ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()}),
+                                        {dstPtr, srcPtr, ctx.getSizeConst(dsz)});
+                                    ctx.builder.CreateCall(ctx.getFunction("free", ctx.builder.getVoidTy(), {ptrTy}), {srcPtr});
+                                    ctx.kvGetCopy = false;
+                                    return;
+                                }
                             bool needsDeepCopy = (ctx.kvGetCopy || memberDeepCopy)
                                                  && cIt->second.hasHeapFields
                                                  && cIt->second.serNodesVar;
