@@ -224,7 +224,8 @@ struct Analyzer {
             size_t dp = fn.rfind('.');
             std::string sn = (dp == std::string::npos) ? fn : fn.substr(dp + 1);
             // a FRESH owned result (producer / clone / copy / deserialize) is moved in (tests/lifetime/75)
-            if (fn == "sys.clone" || fn == "sys.copy" || fn == "sys.deserialize" || ctx.ownsReturnMatches(sn, type))
+            if (fn == "sys.clone" || fn == "sys.copy" || fn == "sys.deserialize" || sn == "get_copy"
+                || ctx.ownsReturnMatches(sn, type))
                 return true;
             return (sn == "at" || sn == "get" || sn == "first" || sn == "last");
         }
