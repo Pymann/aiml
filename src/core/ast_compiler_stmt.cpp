@@ -2823,8 +2823,8 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         }
         // spec/61 §5.5/§8: a fresh owned call result moved into an OWNED value-model local — release
         // the old value, then store (tests/lifetime/75, 9rooms `set [mat, match_get(...)]`).
-        if (std::string(rebindCopyFn) == "aiml_ser_deep_copy_replace" && !sym->is_byref_arg
-            && dynamic_cast<CallExpr*>(setStmt->value.get())) {
+        if (std::string(rebindCopyFn) == "aiml_ser_deep_copy_replace" && !sym->is_byref_arg && !ctx.kvGetCopy
+            && dynamic_cast<CallExpr*>(setStmt->value.get())) {   // get_copy yields the cache entry → deep copy below
             auto tci = ctx.classes.find(sym->typeName);
             llvm::Value* nv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
             // A method call may hand back its result through a pointer instead of a struct value.
@@ -3061,8 +3061,9 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                                      && classIt->second.hasHeapFields
                                      && classIt->second.serNodesVar;
                 if (needsDeepCopy) {
-                    // Encode + decode round-trip → fresh heap allocations independent of cache.
-                    llvm::Function* fn = ctx.getFunction("aiml_ser_deep_copy",
+                    // Encode + decode round-trip → fresh heap allocations independent of cache;
+                    // the plan decides whether the slot's old value is released (spec/61 §5.5).
+                    llvm::Function* fn = ctx.getFunction(rebindCopyFn,
                         ctx.builder.getVoidTy(),
                         {ptrTy, ptrTy, ptrTy, ctx.builder.getInt32Ty()});
                     ctx.builder.CreateCall(fn, {
