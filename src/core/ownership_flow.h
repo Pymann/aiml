@@ -76,6 +76,7 @@ struct OwnershipPlan {
     std::map<const Expr*, OwnFact>         expressions;
     std::map<const BlockStmt*, FlowState>  normalExits;   // state BEFORE dropping block-locals
     std::map<const Stmt*, FlowState>       earlyExits;    // e.g. return-statement exit state
+    std::map<const Stmt*, FlowState>       stmtEntry;     // state before each statement (unwind pads)
     std::set<ResourceId> suppressNewDrops;                // resources a warning has made unsafe to free
     bool suppressFunctionDrops = false;                   // unresolved alias/retain → no new drops at all
 };

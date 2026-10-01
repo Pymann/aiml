@@ -1,0 +1,33 @@
+# spec/61 sections 2.1, 5, 8: all call paths share one cascade handle.
+- cascade: {name: ProbeCode, nodes: [{value: [1, i32]}]}
+- def:
+    name: append_direct
+    args: [[row, cascade<ProbeCode>]]
+    body:
+      - call: [row.push, 11]
+- interface:
+    name: RowWriter
+    methods:
+      - [append, void, [[row, cascade<ProbeCode>]]]
+- class:
+    name: Writer
+    implements: [RowWriter]
+    methods:
+      - def:
+          name: append
+          args: [[row, cascade<ProbeCode>]]
+          body:
+            - call: [append_direct, row]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [row, cascade<ProbeCode>]
+      - decl: [writer, ptr<Writer>, {new: Writer}]
+      - decl: [iface, ptr<RowWriter>, {new: Writer}]
+      - call: [append_direct, row]
+      - call: [writer.append, row]
+      - call: [iface.append, row]
+      - if: {condition: {neq: [row.len, 3]}, then: [{return: 1}]}
+      - if: {condition: {neq: [{call: [row.get, 2]}, 11]}, then: [{return: 2}]}
+      - return: 0

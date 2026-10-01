@@ -23,18 +23,24 @@
             - decl: [inside, list<string>]
             - call: [inside.push, "i-${num}"]
             - if: {condition: {gt: [num, 50]}, then: [{return: inside.len}]}
-            - if: {condition: {eq: [{ '%': [num, 5]}, 0]}, then: [{ throw: { type: Exception, message: "x" } }]}
+            - if: {condition: {eq: [{ '%': [num, 5]}, 0]}, then: [{ throw: {new: Exception, message: "x"} }]}
           catch:
-            - return: -1
+            - type: Exception
+              var: err
+              body:
+                - return: -1
       - return: outside.label.len
 - def:
     name: main
     return: i32
     body:
       - decl: [counter, i32, 0]
+      - decl: [caught, i32, 0]
       - while:
           condition: {lt: [counter, 200]}
           body:
             - decl: [res, i32, {call: [guarded, counter]}]
+            - if: {condition: {eq: [res, -1]}, then: [{set: [caught, {+: [caught, 1]}]}]}
             - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [caught, 11]}, then: [{return: 139}]}
       - return: 0

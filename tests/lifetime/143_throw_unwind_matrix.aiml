@@ -1,0 +1,139 @@
+# static-check: off
+# spec/61 §9.3: unwind is a scope exit — every frame between throw and catch releases its
+# locals; the catch owns the exception object and releases it on every exit; rethrow moves on.
+- model: {name: Item, fields: [[label, string], [tags, list<string>]]}
+- def:
+    name: make_item
+    args: [[num, i32]]
+    return: { type: Item, lifetime: producer }
+    body:
+      - decl: [out, Item]
+      - set: [out.label, "item-${num}"]
+      - call: [out.tags.push, "tag-${num}"]
+      - return: out
+- def:
+    name: deep_throw
+    args: [[depth_num, i32]]
+    return: i32
+    body:
+      - decl: [deep_item, Item, {call: [make_item, depth_num]}]
+      - decl: [deep_rows, list<string>]
+      - call: [deep_rows.push, "d-${depth_num}"]
+      - decl: [deep_note, string, "note-${depth_num}"]
+      - if: {condition: {gt: [depth_num, -1]}, then: [{throw: {new: Exception, message: "deep-${depth_num}"}}]}
+      - return: deep_note.len
+- def:
+    name: middle
+    args: [[mid_num, i32]]
+    return: i32
+    body:
+      - decl: [mid_item, Item, {call: [make_item, mid_num]}]
+      - decl: [mid_map, map<string:i32>]
+      - call: [mid_map.put, "m", mid_num]
+      - return: {call: [deep_throw, mid_num]}
+- def:
+    name: throw_box
+    args: [[box_num, i32]]
+    return: i32
+    body:
+      - decl: [boxed, ptr<Exception>, {new: Exception, message: "boxed-${box_num}"}]
+      - throw: boxed
+- class:
+    name: Thrower
+    members:
+      - [hits, i32]
+    methods:
+      - def:
+          name: fire
+          args: [[num, i32]]
+          return: i32
+          body:
+            - decl: [meth_item, Item, {call: [make_item, num]}]
+            - set: [<.hits, {+: [<.hits, 1]}]
+            - throw: {new: Exception, message: "method-${num}"}
+- def:
+    name: catch_return
+    args: [[ret_num, i32]]
+    return: i32
+    body:
+      - decl: [outer_item, Item, {call: [make_item, ret_num]}]
+      - try:
+          body:
+            - decl: [inner_rows, list<string>]
+            - call: [inner_rows.push, "x"]
+            - decl: [res, i32, {call: [middle, ret_num]}]
+          catch:
+            - type: Exception
+              var: err
+              body:
+                - return: err.message.len
+      - return: 0
+- def:
+    name: rethrow
+    args: [[re_num, i32]]
+    return: i32
+    body:
+      - try:
+          body:
+            - decl: [res, i32, {call: [deep_throw, re_num]}]
+          catch:
+            - type: Exception
+              var: err
+              body:
+                - decl: [local_note, string, "re-${re_num}"]
+                - throw: err
+      - return: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [caught, i32, 0]
+      - decl: [lens, i32, 0]
+      - decl: [thrower, Thrower]
+      - while:
+          condition: {lt: [counter, 50]}
+          body:
+            - set: [lens, {+: [lens, {call: [catch_return, counter]}]}]
+            - try:
+                body:
+                  - decl: [res, i32, {call: [rethrow, counter]}]
+                catch:
+                  - type: Exception
+                    var: err
+                    body:
+                      - if: {condition: {eq: [err.message, "deep-${counter}"]}, then: [{set: [caught, {+: [caught, 1]}]}]}
+            - try:
+                body:
+                  - decl: [res2, i32, {call: [throw_box, counter]}]
+                catch:
+                  - type: Exception
+                    var: err
+                    body:
+                      - set: [caught, {+: [caught, 1]}]
+            - try:
+                body:
+                  - decl: [res3, i32, {call: [thrower.fire, counter]}]
+                catch:
+                  - type: Exception
+                    var: err
+                    body:
+                      - set: [caught, {+: [caught, 1]}]
+            - decl: [loops, i32, 0]
+            - while:
+                condition: {lt: [loops, 3]}
+                body:
+                  - try:
+                      body:
+                        - decl: [res4, i32, {call: [deep_throw, loops]}]
+                      catch:
+                        - type: Exception
+                          var: err
+                          body:
+                            - set: [loops, 10]
+                  - set: [loops, {+: [loops, 1]}]
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [caught, 150]}, then: [{return: 143}]}
+      - if: {condition: {neq: [thrower.hits, 50]}, then: [{return: 144}]}
+      - if: {condition: {lt: [lens, 300]}, then: [{return: 145}]}
+      - return: 0

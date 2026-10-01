@@ -19,6 +19,7 @@ class TryBuilder : public StateHandler {
     std::string currentKey;
     bool expectingKey = true;
     int depth = 0;
+    bool inCatch = false;
     
 public:
     TryBuilder(Builder* b) : StateHandler(b), tryStmt(std::make_unique<TryStmt>()), capturedLine(b->currentLine) {}
@@ -62,6 +63,10 @@ public:
 
     bool OnScalar(const std::string& value, const std::string& tag) override {
         if (expectingKey) {
+            if (inCatch && value != "type" && value != "var" && value != "body")
+                LOG_ERROR("line " + std::to_string(builder->currentLine) + ": catch entries are "
+                          "{type, var, body} (spec/22) — '" + value + "' is not allowed here");
+            if (value == "catch") inCatch = true;
             currentKey = value;
             expectingKey = false;
             

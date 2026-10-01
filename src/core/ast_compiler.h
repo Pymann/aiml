@@ -116,6 +116,12 @@ private:
     void visitIfStmt(IfStmt* ifStmt);
     void visitWhileStmt(WhileStmt* whileStmt);
     void visitTry(TryStmt* tryStmt);
+    llvm::BasicBlock* unwindDest(bool userCallee);
+    llvm::Function* excFreeThunk(const std::string& cls);
+    void classifyMapKV(const std::string& kName, const std::string& vName, llvm::Type* kTy, llvm::Type* vTyRaw,
+                       int& keyKind, int64_t& keyStride, int& valKind, int64_t& valStride,
+                       llvm::GlobalVariable*& valNodes, int32_t& valNodesCount);
+    bool makeHandleDrop(const std::string& type, llvm::Value* slot, CompilerContext::ScopeDrop& sd);
     void visitThrow(ThrowStmt* throwStmt);
     void visitIdxStmt(IdxStmt* idx);
     void visitStoreStmt(StoreStmt* st);

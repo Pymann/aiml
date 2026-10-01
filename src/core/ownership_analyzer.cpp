@@ -251,8 +251,10 @@ struct Analyzer {
         scopes.emplace_back();
         std::vector<OwnershipId> blockLocals;
         FlowState st = std::move(in);
-        for (const auto& s : block->statements)
+        for (const auto& s : block->statements) {
+            plan.stmtEntry[s.get()] = st;
             st = analyzeStmt(s.get(), std::move(st), blockLocals);
+        }
         plan.normalExits[block] = st;                    // BEFORE removing block-locals
         for (OwnershipId id : blockLocals) st.slots.erase(id);
         scopes.pop_back();

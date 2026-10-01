@@ -1,0 +1,26 @@
+# Positive ABI control: forwarding and growth must update the caller's container.
+- cascade: {name: ProbeCode, nodes: [{value: [1, i32]}]}
+- def:
+    name: grow
+    args: [[row, cascade<ProbeCode>]]
+    body:
+      - decl: [pos, i32, 0]
+      - while:
+          condition: {lt: [pos, 40]}
+          body:
+            - call: [row.push, 11]
+            - set: [pos, {+: [pos, 1]}]
+- def:
+    name: forward
+    args: [[row, cascade<ProbeCode>]]
+    body:
+      - call: [grow, row]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [row, cascade<ProbeCode>]
+      - call: [forward, row]
+      - if: {condition: {neq: [row.len, 40]}, then: [{return: 1}]}
+      - if: {condition: {neq: [{call: [row.get, 39]}, 11]}, then: [{return: 2}]}
+      - return: 0

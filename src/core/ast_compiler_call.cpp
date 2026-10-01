@@ -16,6 +16,19 @@
 namespace AIML {
 namespace AST {
 
+// spec/22 + spec/61 §9.3: an indirect call to user code unwinds through the current cleanup pad.
+static llvm::CallBase* callOrInvoke(CompilerContext& ctx, llvm::FunctionType* fty, llvm::Value* callee,
+                                    llvm::ArrayRef<llvm::Value*> args, const std::string& name) {
+    if (llvm::BasicBlock* ud = aimlUnwindDest(ctx, true)) {
+        llvm::BasicBlock* cont = llvm::BasicBlock::Create(ctx.context, "invoke_cont",
+                                                          ctx.builder.GetInsertBlock()->getParent());
+        llvm::InvokeInst* inv = ctx.builder.CreateInvoke(fty, callee, cont, ud, args, name);
+        ctx.builder.SetInsertPoint(cont);
+        return inv;
+    }
+    return ctx.builder.CreateCall(fty, callee, args, name);
+}
+
 // Reconstruct an expression back to single-line AIML flow-YAML.  Function
 // bodies are built by the event-based parser, which keeps only a source Mark
 // (no DOM) on each node — so YAML::Dump(sourceNode) is empty.  We render from
@@ -642,13 +655,13 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             for (auto& av : argVals)
                 rawArgs.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(av)));
 
-            if (ctx.catchBlock) {
+            if (llvm::BasicBlock* ud = unwindDest(true)) {
                 llvm::Function* cur = ctx.builder.GetInsertBlock()->getParent();
                 llvm::BasicBlock* cont =
                     llvm::BasicBlock::Create(ctx.context, "invoke_cont", cur);
                 llvm::Value* invRes = ctx.builder.CreateInvoke(
-                    f->getFunctionType(), fp, cont, ctx.catchBlock, rawArgs,
-                    funcName + "_inv");
+                    f->getFunctionType(), fp, cont, ud, rawArgs,
+                    f->getReturnType()->isVoidTy() ? "" : funcName + "_inv");
                 callRes = ctx.ir_gen->wrap(invRes);
                 ctx.builder.SetInsertPoint(cont);
             } else {
@@ -664,7 +677,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             // / JIT top-level).  This branch previously emitted a plain call and
             // silently broke try/catch around any fptable-eligible user function.
             coerceArgs();
-            if (ctx.catchBlock) {
+            if (llvm::BasicBlock* ud = unwindDest(true)) {
                 llvm::Function* cur = ctx.builder.GetInsertBlock()->getParent();
                 llvm::BasicBlock* cont =
                     llvm::BasicBlock::Create(ctx.context, "invoke_cont", cur);
@@ -672,7 +685,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                 for (auto& av : argVals)
                     rawArgs.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(av)));
                 llvm::Value* invRes = ctx.builder.CreateInvoke(
-                    f, cont, ctx.catchBlock, rawArgs, funcName + "_inv");
+                    f, cont, ud, rawArgs, f->getReturnType()->isVoidTy() ? "" : funcName + "_inv");
                 callRes = ctx.ir_gen->wrap(invRes);
                 ctx.builder.SetInsertPoint(cont);
             } else {
@@ -686,7 +699,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                       ". Expected " + std::to_string(f->arg_size()) +
                       ", got " + std::to_string(argVals.size()));
         coerceArgs();
-        if (ctx.catchBlock) {
+        if (llvm::BasicBlock* ud = unwindDest(funcInfo != nullptr)) {
             llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
             llvm::BasicBlock* invokeCont =
                 llvm::BasicBlock::Create(ctx.context, "invoke_cont", currentFunc);
@@ -694,7 +707,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             for (auto arg : argVals)
                 rawArgs.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(arg)));
             llvm::Value* invRes = ctx.builder.CreateInvoke(
-                f, invokeCont, ctx.catchBlock, rawArgs, funcName + "_inv");
+                f, invokeCont, ud, rawArgs, f->getReturnType()->isVoidTy() ? "" : funcName + "_inv");
             callRes = ctx.ir_gen->wrap(invRes);
             ctx.builder.SetInsertPoint(invokeCont);
         } else {
@@ -716,22 +729,36 @@ IRValue* Compiler::visitCall(CallExpr* call) {
 
             // Build LLVM FunctionType from the fn<params:ret> annotation
             FnTypeInfo fi = parseFnType(fnSym->typeName);
+            // same parameter ABI as the concrete target (visitFunction): containers and rc models
+            // travel as handle pointers (spec/61 §8)
             std::vector<llvm::Type*> paramTys;
+            std::vector<bool> handleParam;
             for (auto& pt : fi.paramTypes) {
-                llvm::Type* t = ctx.getLLVMType(pt);
+                bool h = CompilerContext::isByrefParamType(pt) || ctx.isRefcountModel(pt);
+                llvm::Type* t = h ? i8p : ctx.getLLVMType(pt);
                 paramTys.push_back(t ? t : i8p);
+                handleParam.push_back(h);
             }
             llvm::Type* retTy = (fi.retType.empty() || fi.retType == "void")
                 ? llvm::Type::getVoidTy(ctx.context)
+                : (ctx.isRefcountModel(fi.retType) || ctx.isMemV3ContainerHandle(fi.retType)) ? i8p
                 : (ctx.getLLVMType(fi.retType) ? ctx.getLLVMType(fi.retType) : i8p);
 
             llvm::FunctionType* fnTy = llvm::FunctionType::get(retTy, paramTys, false);
 
             std::vector<llvm::Value*> rawArgs;
-            for (auto& av : argVals)
-                rawArgs.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(av)));
+            for (size_t ai = 0; ai < argVals.size(); ++ai) {
+                llvm::Value* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[ai]));
+                if (ai < handleParam.size() && handleParam[ai] && raw && raw->getType()->isStructTy()
+                    && ai < call->args.size()) {
+                    std::string lvTy;
+                    if (IRValue* addr = emitLValueAddress(call->args[ai].get(), lvTy))
+                        raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(addr));
+                }
+                rawArgs.push_back(raw);
+            }
 
-            llvm::Value* res = ctx.builder.CreateCall(fnTy, fnPtr, rawArgs, funcName + "_icall");
+            llvm::Value* res = callOrInvoke(ctx, fnTy, fnPtr, rawArgs, retTy->isVoidTy() ? "" : funcName + "_icall");
             return ctx.ir_gen->wrap(res);
         }
     }
@@ -854,7 +881,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             paramTys.push_back(i8p); // this
             for (const auto& a : m.args) {
                 const std::string& at = a.second;
-                bool byref = CompilerContext::isByrefParamType(at) || at.rfind("cascade<", 0) == 0;
+                bool byref = CompilerContext::isByrefParamType(at);
                 if (byref || ctx.isRefcountModel(at)) { paramTys.push_back(i8p); continue; }
                 IRType* irt = ctx.ir_gen->resolveType(at);
                 paramTys.push_back(irt ? static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(irt)) : i8p);
@@ -933,7 +960,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 sretCallArgs.push_back(sretSlot);
                 for (auto* v : callArgs) sretCallArgs.push_back(v);
 
-                llvm::CallInst* ci = ctx.builder.CreateCall(sretFnTy, fnPtr, sretCallArgs);
+                llvm::CallBase* ci = callOrInvoke(ctx, sretFnTy, fnPtr, sretCallArgs, "");
                 ci->addParamAttr(0, llvm::Attribute::getWithStructRetType(ctx.context, retTy));
 
                 llvm::Value* loaded = ctx.builder.CreateLoad(retTy, sretSlot, "iface_call");
@@ -941,7 +968,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             }
 
             // LLVM verbietet Namens-Suffix auf void-Calls, daher Name nur bei non-void.
-            llvm::Value* res = ctx.builder.CreateCall(fnTy, fnPtr, callArgs,
+            llvm::Value* res = callOrInvoke(ctx, fnTy, fnPtr, callArgs,
                 retTy->isVoidTy() ? "" : "iface_call");
             if (retTy->isVoidTy()) return nullptr;
             // spec/61 §4/§8: a string return is owning → owned statement temp (adopted by a binding,
@@ -3477,12 +3504,12 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          // persist_from_req → InvalidCascadeException) sails past the handler
          // (uncaught → AOT std::terminate).  Same fix as the free-function path.
          IRValue* callResult;
-         if (ctx.catchBlock) {
+         if (llvm::BasicBlock* ud = unwindDest(true)) {
              llvm::BasicBlock* contBB = llvm::BasicBlock::Create(
                  ctx.context, "invoke_cont",
                  ctx.builder.GetInsertBlock()->getParent());
              IRBlock* contWrapped  = ctx.ir_gen->wrapBlock(contBB);
-             IRBlock* catchWrapped = ctx.ir_gen->wrapBlock(ctx.catchBlock);
+             IRBlock* catchWrapped = ctx.ir_gen->wrapBlock(ud);
              const std::string invName =
                  func->getReturnType()->isVoidTy() ? "" : "call_method";
              callResult = ctx.ir_gen->createInvoke(

@@ -183,6 +183,14 @@ IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
                  continue;
              }
              llvm::Value* fieldPtr = ctx.builder.CreateStructGEP(classInfo.type, rawPtrCast, member.index, name + "_gep");
+             // spec/61 §4: the field owns its string — adopt an owned statement temp, share anything else.
+             if (member.typeName == "string" && initVal->getType()->isPointerTy() && ctx.lifetimeDropsEnabled) {
+                 bool ownedTemp = false;
+                 for (auto& fr : ctx.stmtTempStack) for (llvm::Value* t : fr) if (t == initVal) ownedTemp = true;
+                 if (ownedTemp) consumeStringTemp(initVal);
+                 else ctx.builder.CreateCall(ctx.getFunction("aiml_str_incref", ctx.builder.getVoidTy(),
+                          {llvm::PointerType::get(ctx.context, 0)}), { initVal });
+             }
              ctx.builder.CreateStore(initVal, fieldPtr);
         }
 

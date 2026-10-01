@@ -1244,10 +1244,14 @@ aggregate (fresh strings/containers/`ptr` boxes/clonable resources) use `clone` 
   is **moved-out** (use-after-move afterward, §10) and the callee owns it. To *borrow* it
   without transfer, the parameter must be **`ref<T>`** (as with `ptr`, §8 below). A pass-by-value
   parameter of a move-only type is thus a sink; use `ref<T>` for a read/mutate borrow.
-- **Container parameter** (`x: list<T>` / `map` / `buffer`): the handle is passed and
+- **Container parameter** (`x: list<T>` / `map` / `buffer` / `cascade<X>`): the handle is passed and
   **incref'd** — the callee shares the caller's container; mutations are visible (this is the
   reference semantics of §5, and resolves the old by-value/by-reference question §11.2).
-  **`ref<list|map|buffer>` is not a valid type** — as a parameter, return type, field or local it is a compile
+  The callee **holds that reference for the call** (§9.2 "borrowed for the call") and releases
+  it on every exit (return, fall-through, throw). `set` on the parameter rebinds only the
+  callee's handle (§5.5: secure the new one, release the callee's old reference) — the caller's
+  handle, its contents and its own reference are untouched.
+  **`ref<list|map|buffer|cascade>` is not a valid type** — as a parameter, return type, field or local it is a compile
   error: the container is already a shared handle, so `list<T>` is the borrow-and-mutate form, and
   a function that must hand back a different container returns it (`producer`).
 - **`ptr<T>` parameter = MOVE (the one rule).** Passing a `ptr<T>` by value **transfers
@@ -1355,7 +1359,8 @@ their *independence/retention* meaning below.
 ### 9.1 Drop timing — `scope` (default) and `persistent`
 
 - **`scope` — the default for every `ptr<T>` box.** The box is released automatically at scope
-  exit on **every** path (fall-through, `return`, `break`, `continue`, early error return) —
+  exit on **every** path (fall-through, `return`, `break`, `continue`, early error return,
+  **`throw`/exception unwind** — §9.3) —
   C++ `unique_ptr` semantics. Writing `lifetime: scope` is optional and only for emphasis.
   - **Move-out suppresses the drop.** On a path where the box is handed off — returned,
     stored into a longer-lived owner, or passed to an owning `ptr<T>` parameter — the scope
@@ -1370,6 +1375,23 @@ their *independence/retention* meaning below.
   compiler cannot see as a move (anchored somewhere untracked). No auto-free here; the new
   owner is responsible. If a `persistent` box does **not** actually escape, the leak lint warns
   (§10).
+
+### 9.3 Exceptions — unwind is a scope exit
+
+A `throw` (spec/22) leaves every scope between the throw point and the handling `catch` exactly
+like a `return` leaves them: each scope releases its owned locals (every class of §2.1, by the
+same drop rules), including the call reference a container parameter holds (§8). A function
+with no matching handler releases all its locals and propagates. Only locals whose declaration
+has completed are released — a local whose initializer throws was never bound.
+
+- **The thrown value moves into the exception.** `throw: { new: E, … }` hands the fresh object
+  over; `throw: e` with an owned local `e` moves it out (use-after-move afterward, §10).
+- **The handling `catch` owns the exception object.** Its `var` borrows it for the catch body;
+  the object (and its heap fields) is released when the catch is left on **any** path
+  (fall-through, `return`, `break`/`continue`, a `throw` out of the handler).
+- **Rethrow moves on.** `throw: var` inside the catch passes the same object to the next
+  handler instead of releasing it.
+- An uncaught exception terminates the process (spec/22); no release is required on that path.
 
 ### 9.2 Boundary contracts — `producer` (return) and `consumed` (parameter)
 

@@ -1,0 +1,8 @@
+# EXPECT-ERROR: throw expects { new: <ExceptionClass>
+# spec/22: throw takes { new: E, message: ... } or an exception variable.
+- def:
+    name: main
+    return: i32
+    body:
+      - throw: {type: Exception, message: "x"}
+      - return: 0

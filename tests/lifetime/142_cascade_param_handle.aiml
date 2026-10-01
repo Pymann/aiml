@@ -1,0 +1,39 @@
+# static-check: off
+# spec/61 §8: a cascade<X> parameter passes the handle — callee growth (realloc) is visible, no dangling caller.
+- enum: { name: DeckType, values: [main, fate] }
+- cascade:
+    name: EffectCode
+    nodes:
+      - draw_card:    [1, DeckType, i32]
+      - counter_trap: [48]
+- def:
+    name: grow
+    args: [[code, cascade<EffectCode>]]
+    body:
+      - decl: [pos, i32, 0]
+      - while:
+          condition: {lt: [pos, 40]}
+          body:
+            - call: [code.push, 48]
+            - set: [pos, {+: [pos, 1]}]
+- def:
+    name: peek
+    args: [[code, cascade<EffectCode>]]
+    return: i32
+    body:
+      - return: code.len
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 50]}
+          body:
+            - decl: [eff, cascade<EffectCode>]
+            - call: [eff.push, 1]
+            - call: [grow, eff]
+            - if: {condition: {neq: [{call: [peek, eff]}, 41]}, then: [{return: 150}]}
+            - if: {condition: {neq: [eff.len, 41]}, then: [{return: 151}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

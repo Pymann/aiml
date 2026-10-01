@@ -1,0 +1,98 @@
+# static-check: off
+# spec/61 §8: a container parameter's call reference — returned (moves out), shared into a local,
+# a field or a container (survives the caller scope), consumed, and through interface dispatch.
+- model: {name: Holder, fields: [[rows, list<string>]]}
+- def:
+    name: echo_rows
+    args: [[rows, list<string>]]
+    return: list<string>
+    body:
+      - return: rows
+- def:
+    name: alias_then_rebind
+    args: [[items, list<string>]]
+    return: i32
+    body:
+      - decl: [alias, list<string>]
+      - set: [alias, items]
+      - call: [alias.push, "a"]
+      - decl: [other, list<string>]
+      - set: [alias, other]
+      - return: items.len
+- def:
+    name: store_into
+    args: [[lines, list<string>], [hold, ref<Holder>], [bag, list<list<string>>]]
+    body:
+      - set: [hold.rows, lines]
+      - call: [bag.push, lines]
+- def:
+    name: sink
+    args: [[taken, list<string>, { lifetime: consumed }], [hold, ref<Holder>]]
+    body:
+      - set: [hold.rows, taken]
+- def:
+    name: sink_unused
+    args: [[unused, list<string>, { lifetime: consumed }]]
+    return: i32
+    body:
+      - return: unused.len
+- def:
+    name: fresh_rows
+    return: list<string>
+    body:
+      - decl: [made, list<string>]
+      - call: [made.push, "f"]
+      - return: made
+- interface:
+    name: RowSink
+    methods:
+      - [take, i32, [[row, list<string>]]]
+- class:
+    name: Counter
+    implements: [RowSink]
+    methods:
+      - def:
+          name: take
+          args: [[row, list<string>]]
+          return: i32
+          body:
+            - decl: [fresh, list<string>]
+            - set: [row, fresh]
+            - return: row.len
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [hold, Holder]
+      - decl: [bag, list<list<string>>]
+      - decl: [sinker, ptr<RowSink>, {new: Counter}]
+      - while:
+          condition: {lt: [counter, 100]}
+          body:
+            - decl: [rows, list<string>]
+            - call: [rows.push, "r"]
+            - call: [echo_rows, rows]
+            - decl: [back, list<string>, {call: [echo_rows, rows]}]
+            - call: [back.push, "b"]
+            - if: {condition: {neq: [rows.len, 2]}, then: [{return: 10}]}
+            - if: {condition: {neq: [{call: [alias_then_rebind, rows]}, 3]}, then: [{return: 11}]}
+            - if:
+                condition: true
+                then:
+                  - decl: [scoped, list<string>]
+                  - call: [scoped.push, "s"]
+                  - call: [store_into, scoped, hold, bag]
+            - if: {condition: {neq: [{at: [hold.rows, 0]}, "s"]}, then: [{return: 12}]}
+            - decl: [given, list<string>]
+            - call: [given.push, "g"]
+            - call: [sink, given, hold]
+            - if: {condition: {neq: [{at: [hold.rows, 0]}, "g"]}, then: [{return: 13}]}
+            - if: {condition: {neq: [{call: [sink_unused, {call: [fresh_rows]}]}, 1]}, then: [{return: 14}]}
+            - decl: [via, list<string>]
+            - call: [via.push, "v"]
+            - if: {condition: {neq: [{call: [sinker.take, via]}, 0]}, then: [{return: 15}]}
+            - if: {condition: {neq: [via.len, 1]}, then: [{return: 16}]}
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [bag.len, 100]}, then: [{return: 17}]}
+      - return: 0

@@ -1,0 +1,102 @@
+# static-check: off
+# spec/61 §8/§5.5: a container parameter holds its own reference for the call — rebinding it
+# (fall-through, early return, throw) never touches the caller's handle or contents.
+- model: {name: Box, fields: [[rows, list<string>]]}
+- def:
+    name: rebind_list
+    args: [[rows, list<string>], [early, i32]]
+    return: i32
+    body:
+      - decl: [fresh, list<string>]
+      - call: [fresh.push, "f"]
+      - set: [rows, fresh]
+      - call: [rows.push, "g"]
+      - if: {condition: {eq: [early, 1]}, then: [{return: rows.len}]}
+      - if: {condition: {eq: [early, 2]}, then: [{throw: {new: Exception, message: "x"}}]}
+      - return: 0
+- def:
+    name: guarded_list
+    args: [[items, list<string>]]
+    return: i32
+    body:
+      - try:
+          body:
+            - decl: [res, i32, {call: [rebind_list, items, 2]}]
+          catch:
+            - type: Exception
+              var: err
+              body:
+                - return: -1
+      - return: 0
+- def:
+    name: rebind_map
+    args: [[tags, map<string:i32>]]
+    body:
+      - decl: [fresh, map<string:i32>]
+      - call: [fresh.put, "f", 1]
+      - set: [tags, fresh]
+      - call: [tags.put, "g", 2]
+- def:
+    name: rebind_buffer
+    args: [[bytes, buffer]]
+    body:
+      - decl: [fresh, buffer]
+      - call: [fresh.alloc, 32]
+      - set: [bytes, fresh]
+      - call: [bytes.write, 9, i32]
+- def:
+    name: twice
+    args: [[first, list<string>], [second, list<string>]]
+    body:
+      - decl: [fresh, list<string>]
+      - set: [first, fresh]
+      - call: [second.push, "t"]
+- def:
+    name: owner_rebind
+    args: [[lines, list<string>], [box, ref<Box>]]
+    return: i32
+    body:
+      - decl: [fresh, list<string>]
+      - call: [fresh.push, "n"]
+      - set: [box.rows, fresh]
+      - call: [lines.push, "o2"]
+      - if: {condition: {neq: [{at: [lines, 0]}, "o1"]}, then: [{return: 1}]}
+      - return: lines.len
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 100]}
+          body:
+            - decl: [rows, list<string>]
+            - call: [rows.push, "keep"]
+            - decl: [res0, i32, {call: [rebind_list, rows, 0]}]
+            - decl: [res1, i32, {call: [rebind_list, rows, 1]}]
+            - if: {condition: {neq: [res1, 2]}, then: [{return: 10}]}
+            - if: {condition: {neq: [{call: [guarded_list, rows]}, -1]}, then: [{return: 11}]}
+            - if: {condition: {neq: [rows.len, 1]}, then: [{return: 12}]}
+            - if: {condition: {neq: [{at: [rows, 0]}, "keep"]}, then: [{return: 13}]}
+            - decl: [tags, map<string:i32>]
+            - call: [tags.put, "k", 7]
+            - call: [rebind_map, tags]
+            - if: {condition: {neq: [tags.len, 1]}, then: [{return: 20}]}
+            - if: {condition: {neq: [{call: [tags.get, "k"]}, 7]}, then: [{return: 21}]}
+            - decl: [bytes, buffer]
+            - call: [bytes.alloc, 8]
+            - call: [rebind_buffer, bytes]
+            - if: {condition: {neq: [bytes.len, 0]}, then: [{return: 30}]}
+            - call: [twice, rows, rows]
+            - if: {condition: {neq: [rows.len, 2]}, then: [{return: 40}]}
+            - decl: [box, Box]
+            - if:
+                condition: true
+                then:
+                  - decl: [seed, list<string>]
+                  - call: [seed.push, "o1"]
+                  - set: [box.rows, seed]
+            - if: {condition: {neq: [{call: [owner_rebind, box.rows, box]}, 2]}, then: [{return: 50}]}
+            - if: {condition: {neq: [{at: [box.rows, 0]}, "n"]}, then: [{return: 51}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

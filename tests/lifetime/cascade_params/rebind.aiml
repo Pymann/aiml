@@ -1,0 +1,20 @@
+# Rebinding a callee handle must leave the caller's handle and contents intact.
+- cascade: {name: ProbeCode, nodes: [{value: [1, i32]}]}
+- def:
+    name: replace_local
+    args: [[row, cascade<ProbeCode>]]
+    body:
+      - decl: [fresh, cascade<ProbeCode>]
+      - call: [fresh.push, 22]
+      - set: [row, fresh]
+      - call: [row.push, 33]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [row, cascade<ProbeCode>]
+      - call: [row.push, 11]
+      - call: [replace_local, row]
+      - if: {condition: {neq: [row.len, 1]}, then: [{return: 1}]}
+      - if: {condition: {neq: [{call: [row.get, 0]}, 11]}, then: [{return: 2}]}
+      - return: 0

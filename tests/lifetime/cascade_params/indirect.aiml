@@ -1,0 +1,20 @@
+# fn signatures must use the same parameter ABI as their concrete targets.
+- cascade: {name: ProbeCode, nodes: [{value: [1, i32]}]}
+- def:
+    name: append
+    args: [[row, cascade<ProbeCode>]]
+    return: i32
+    body:
+      - call: [row.push, 11]
+      - return: row.len
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [row, cascade<ProbeCode>]
+      - decl: [callback, "fn<cascade<ProbeCode>:i32>"]
+      - set: [callback, append]
+      - decl: [length, i32, {call: [callback, row]}]
+      - if: {condition: {neq: [length, 1]}, then: [{return: 1}]}
+      - if: {condition: {neq: [row.len, 1]}, then: [{return: 2}]}
+      - return: 0
