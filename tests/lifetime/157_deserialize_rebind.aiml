@@ -1,0 +1,26 @@
+# static-check: off
+# spec/61 §5.5/§8: sys.deserialize yields a fresh owned value — decl, local rebind and field store release the carrier.
+- model: {name: Entry, fields: [[name, string], [tags, list<string>], [meta, map<string:string>]]}
+- model: {name: Holder, fields: [[entry, Entry], [label, string]]}
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [holder, Holder]
+      - while:
+          condition: {lt: [counter, 40]}
+          body:
+            - decl: [entry, Entry]
+            - set: [entry.name, "e-${counter}"]
+            - call: [entry.tags.push, "t"]
+            - call: [entry.meta.put, "k", "v-${counter}"]
+            - decl: [wire, string, { call: [sys.serialize, entry] }]
+            - decl: [back, Entry, { call: [sys.deserialize, wire] }]
+            - if: {condition: {neq: [back.name, "e-${counter}"]}, then: [{return: 1}]}
+            - set: [back, { call: [sys.deserialize, wire] }]
+            - if: {condition: {neq: [back.tags.len, 1]}, then: [{return: 2}]}
+            - set: [holder.entry, { call: [sys.deserialize, wire] }]
+            - if: {condition: {neq: [holder.entry.name, "e-${counter}"]}, then: [{return: 3}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

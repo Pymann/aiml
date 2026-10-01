@@ -129,6 +129,8 @@ GREEN=(
   tests/lifetime/153_ptr_ref_class_params.aiml
   tests/lifetime/154_condition_temps.aiml
   tests/lifetime/155_strings_maps_deep_paths.aiml
+  tests/lifetime/156_unwind_loops_nested_new_init.aiml
+  tests/lifetime/157_deserialize_rebind.aiml
   tests/lifetime/cascade_params/direct.aiml
   tests/lifetime/cascade_params/dispatch.aiml
   tests/lifetime/cascade_params/indirect.aiml
