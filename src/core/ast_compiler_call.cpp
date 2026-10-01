@@ -854,9 +854,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             paramTys.push_back(i8p); // this
             for (const auto& a : m.args) {
                 const std::string& at = a.second;
-                bool byref = at.rfind("list<", 0) == 0 || at.rfind("map<", 0) == 0
-                             || at == "buffer" || at.rfind("buffer<", 0) == 0
-                             || at.rfind("cascade<", 0) == 0;
+                bool byref = CompilerContext::isByrefParamType(at) || at.rfind("cascade<", 0) == 0;
                 if (byref || ctx.isRefcountModel(at)) { paramTys.push_back(i8p); continue; }
                 IRType* irt = ctx.ir_gen->resolveType(at);
                 paramTys.push_back(irt ? static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(irt)) : i8p);
@@ -2651,6 +2649,11 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 for (auto& [fname, mem] : indexedFields) {
                     emitIndexOp("add", fname, mem, valPtr);
                 }
+            }
+            // spec/61 §8: set encodes a copy — an owned model temp argument is released.
+            if (valSize != 0 && call->args.size() >= 2) {
+                std::string mt = ownedModelCallType(call->args[1].get());
+                if (!mt.empty()) releaseModelValue(valPtr, mt);
             }
             return nullptr;
 

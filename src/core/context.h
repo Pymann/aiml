@@ -802,6 +802,10 @@ namespace AIML {
     // refcounted HANDLE (an 8-byte pointer) under memV3 — list<T>/map<K:V>/cascade<X>/buffer.
     // Used wherever a container crosses a value boundary as a POINTER (function return type, and
     // — see §5 — model fields / by-ref params already handle this). OFF → always false.
+    // spec/61 §8: container parameters pass the handle (list/map/buffer).
+    static bool isByrefParamType(const std::string& t) {
+        return t.rfind("list<", 0) == 0 || t.rfind("map<", 0) == 0 || t == "buffer" || t.rfind("buffer<", 0) == 0;
+    }
     bool isMemV3ContainerHandle(const std::string& typeName) const {
         if (!memV3) return false;
         return (typeName.rfind("list<", 0) == 0 && typeName.back() == '>')
