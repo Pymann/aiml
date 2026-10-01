@@ -111,6 +111,10 @@ GREEN=(
   tests/lifetime/135_globals_rebind.aiml
   tests/lifetime/136_recursion_locals.aiml
   tests/lifetime/137_rebind_clone_copy.aiml
+  tests/lifetime/138_kv_set_producer_temp.aiml
+  tests/lifetime/139_return_inside_try.aiml
+  tests/lifetime/140_list_of_maps.aiml
+  tests/lifetime/141_buffer_handle_set_and_param.aiml
   tests/lifetime/73_list_model_clear_no_leak.aiml
   tests/lifetime/74_list_model_remove_no_leak.aiml
   tests/_inline_model_red/49_value_survives_remove.aiml
@@ -134,7 +138,7 @@ run_probe() {   # $1 = file ; prints "def/ind" ; returns valgrind rc
     echo "BUILD-FAIL"; rm -rf "$d"; return 98; fi
   if ! g++ "$d"/*.o -o "$d/bin" -L"$LIB" -Wl,-rpath,"$RPATH" -laiml -lyaml-cpp -lpthread -lssl -lcrypto -ldl >"$d/link.log" 2>&1; then
     echo "LINK-FAIL"; rm -rf "$d"; return 97; fi
-  AIML_MEM_V3=1 AIML_LIFETIME_DROPS=1 $VG --log-file="$d/vg.txt" "$d/bin" >/dev/null 2>&1; local rc=$?
+  ( ulimit -v 6000000; AIML_MEM_V3=1 AIML_LIFETIME_DROPS=1 timeout 300 $VG --log-file="$d/vg.txt" "$d/bin" >/dev/null 2>&1 ); local rc=$?
   local def ind
   def=$(grep -aE 'definitely lost:' "$d/vg.txt" | tail -1 | grep -aoE '[0-9,]+ bytes' | head -1)
   ind=$(grep -aE 'indirectly lost:' "$d/vg.txt" | tail -1 | grep -aoE '[0-9,]+ bytes' | head -1)

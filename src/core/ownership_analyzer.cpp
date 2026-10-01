@@ -192,6 +192,9 @@ struct Analyzer {
             assignIds(i->elseBranch.get());
         } else if (auto* w = dynamic_cast<const WhileStmt*>(s)) {
             assignIds(w->body.get());
+        } else if (auto* t = dynamic_cast<const TryStmt*>(s)) {
+            assignIds(t->tryBlock.get());
+            assignIds(t->catchBlock.get());
         } else if (auto* b = dynamic_cast<const BlockStmt*>(s)) {
             assignIds(b);
         }
@@ -442,6 +445,13 @@ struct Analyzer {
             }
             plan.suppressFunctionDrops = true;   // did not converge → suppress all new drops
             return head;
+        }
+        if (auto* t = dynamic_cast<const TryStmt*>(s)) {
+            // the catch may be entered from any point of the try body → start from the join
+            FlowState done = t->tryBlock ? analyzeBlock(t->tryBlock.get(), st) : st;
+            if (!t->catchBlock) return done;
+            FlowState caught = analyzeBlock(t->catchBlock.get(), joinStates(st, done));
+            return joinStates(done, caught);
         }
         if (auto* b = dynamic_cast<const BlockStmt*>(s)) {
             return analyzeBlock(b, std::move(st));

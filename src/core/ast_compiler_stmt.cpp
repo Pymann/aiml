@@ -2857,6 +2857,20 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             llvm::Type* i64Ty = ctx.builder.getInt64Ty();
             llvm::Value* slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));  // holds the handle ptr
             llvm::Value* newH = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+            // a buffer local evaluates to its loaded struct — take the handle from the source slot
+            bool srcSlotBorrow = false;
+            if (newH && !newH->getType()->isPointerTy()) {
+                if (auto* rv = dynamic_cast<VariableExpr*>(setStmt->value.get())) {
+                    Symbol* ss = (rv->name.find('.') == std::string::npos && rv->name.find('<') == std::string::npos)
+                        ? resolveVariable(rv->name) : nullptr;
+                    if (ss && ctx.isMemV3ContainerHandle(ss->typeName)) {
+                        llvm::Value* sa = ss->alloca_inst ? static_cast<llvm::Value*>(ss->alloca_inst)
+                                                          : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(ss->ir_alloca_inst));
+                        if (sa) newH = ctx.builder.CreateLoad(i8p, sa, "seth_src");
+                        srcSlotBorrow = ss->is_param || ss->is_global;   // borrow → share, not adopt
+                    }
+                }
+            }
             if (newH && newH->getType()->isPointerTy()) {
                 std::string kind = sym->typeName.rfind("map<",0)==0 ? "map"
                     : ((sym->typeName=="buffer"||sym->typeName.rfind("buffer<",0)==0) ? "buffer" : "list");
@@ -2875,6 +2889,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         && (sn == "get" || sn == "at" || sn == "first" || sn == "last")
                         && !ctx.ownsReturnMatches(sn, sym->typeName);
                 }
+                borrowSrc = borrowSrc || srcSlotBorrow;
                 if (borrowSrc)   // incref-new BEFORE release-old (self-assign safe)
                     ctx.builder.CreateCall(ctx.getFunction("aiml_"+kind+"_handle_incref", ctx.builder.getVoidTy(), {i8p}), { newH });
                 llvm::Value* oldH = ctx.builder.CreateLoad(i8p, slot, "seth_old");

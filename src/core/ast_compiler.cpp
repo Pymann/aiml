@@ -4548,7 +4548,7 @@ void Compiler::registerTypeDecl(Node* node) {
             // SAME byref policy as visitFunction: list/map args become opaque ptr.
             // AIML v2 (P4): a refcount MODEL arg is likewise an opaque ptr (%M* by-ref). MUST match
             // visitFunction's predicate or the definition/forward-decl signatures mismatch.
-            bool byref = (arg.second.rfind("list<", 0) == 0 || arg.second.rfind("map<", 0) == 0);
+            bool byref = CompilerContext::isByrefParamType(arg.second);
             if (byref || ctx.isRefcountModel(arg.second)) {
                 paramTys.push_back(i8p);
                 continue;
@@ -4769,7 +4769,7 @@ void Compiler::visitTopLevel(Node* node) {
                     // a refcount-model (incl. memV3 shared<>) is a %M* pointer — otherwise the
                     // declared type. Keeps the interface check consistent under memV3.
                     const std::string& at = m.args[ai].second;
-                    bool byref = at.rfind("list<", 0) == 0 || at.rfind("map<", 0) == 0;
+                    bool byref = CompilerContext::isByrefParamType(at) || at.rfind("cascade<", 0) == 0;
                     bool refModel = ctx.isRefcountModel(at);
                     llvm::Type* expectedArg = (byref || refModel)
                         ? static_cast<llvm::Type*>(i8p)
@@ -5363,7 +5363,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
         // Logik (sonst signature mismatch).  Spec/22_call_semantics.md.
         // AIML v2 (P4): a refcount MODEL arg is likewise passed by-ref as a %M* (borrow) — the
         // callee shares the caller's object; in-place mutation is visible to the caller.
-        bool byref = (arg.second.rfind("list<", 0) == 0 || arg.second.rfind("map<", 0) == 0);
+        bool byref = CompilerContext::isByrefParamType(arg.second);
         bool refModel = ctx.isRefcountModel(arg.second);
         IRType* t = (byref || refModel) ? ctx.ir_gen->getPointerTy() : ctx.ir_gen->resolveType(arg.second);
         if (t) {
