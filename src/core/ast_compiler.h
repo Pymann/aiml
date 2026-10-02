@@ -122,6 +122,7 @@ private:
                        int& keyKind, int64_t& keyStride, int& valKind, int64_t& valStride,
                        llvm::GlobalVariable*& valNodes, int32_t& valNodesCount);
     bool makeHandleDrop(const std::string& type, llvm::Value* slot, CompilerContext::ScopeDrop& sd);
+    void movePtrArg(Expr* arg, const std::string& paramType, const std::string& fname, const std::string& pname);
     void visitThrow(ThrowStmt* throwStmt);
     void visitIdxStmt(IdxStmt* idx);
     void visitStoreStmt(StoreStmt* st);

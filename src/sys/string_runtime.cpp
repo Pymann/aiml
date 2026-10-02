@@ -438,7 +438,7 @@ extern "C" void aiml_map_free(void* map_ptr, int32_t keyKind, int64_t keyStride,
     // Reclaim over the dense range [0,size): put OWNS its string keys/values via dup (§8), so one
     // decref per live entry balances that dup exactly.
     // Release pass whenever a key OR value kind owns something (independent of the key type).
-    bool valueNeedsRelease = (valKind == 1 || valKind == 2 || valKind == 3 || valKind == 5);
+    bool valueNeedsRelease = (valKind == 1 || valKind == 2 || valKind == 3 || valKind == 5 || valKind == 6);
     if (keyKind == 1 || valueNeedsRelease) {
         char* keyBase = reinterpret_cast<char*>(m->keys);
         char* valBase = reinterpret_cast<char*>(m->vals);
@@ -456,6 +456,8 @@ extern "C" void aiml_map_free(void* map_ptr, int32_t keyKind, int64_t keyStride,
                 // spec/61 §6.1: owning ptr<T> box value → free fields (if any) + shell
                 void* v = *reinterpret_cast<void**>(valBase + (int64_t)i * valStride);
                 if (v) { if (valNodes) aiml_ser_free_decoded(v, valNodes, valNodesCount); free(v); }
+            } else if (valKind == 6 && valBase) {
+                aiml_free_iface_elem(valBase + (int64_t)i * valStride, valNodesCount);   // interface fat pointer
             } else if (valKind == 3 && valBase && valNodes) {
                 // AIML v2 P3: map<K:Model> value is a %M* reference — decref it.
                 char* v = *reinterpret_cast<char**>(valBase + (int64_t)i * valStride);

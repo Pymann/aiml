@@ -131,8 +131,13 @@ namespace MapImpl {
     // Release the value stored in valSlot per relKind (see map_impl.h).
     static void releaseValSlot(CompilerContext& ctx, llvm::Value* valSlot, llvm::Type* valType,
                                llvm::Value* relDesc, int relN, int relKind) {
-        if (relKind == 0 || (!relDesc && relKind != 3)) return;
+        if (relKind == 0 || (!relDesc && relKind != 3 && relKind != 6)) return;
         auto* i8p = llvm::PointerType::get(ctx.context, 0);
+        if (relKind == 6) {   // owning interface fat pointer {obj, vtable}
+            ctx.builder.CreateCall(ctx.getFunction("aiml_iface_elem_free", ctx.builder.getVoidTy(),
+                {i8p, ctx.builder.getInt32Ty()}), { valSlot, ctx.builder.getInt32(relN) });
+            return;
+        }
         if (relKind == 3 && valType->isPointerTy()) {
             // owning ptr<T> box value: free its fields (if any) and the shell
             llvm::Value* box = ctx.builder.CreateLoad(valType, valSlot, "map_rel_box");

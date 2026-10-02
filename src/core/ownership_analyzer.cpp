@@ -482,7 +482,19 @@ struct Analyzer {
         assignIds(fn.body.get());
         FlowState entry;
         entry.reachable = true;
-        for (OwnershipId id : paramIds) entry.slots[id] = OwnFact{Origin::Borrowed, Live, {}};
+        for (size_t i = 0; i < paramIds.size(); ++i) {
+            OwnershipId id = paramIds[i];
+            plan.params[fn.args[i].first] = id;
+            const std::string& t = fn.args[i].second;
+            // spec/61 §8: a ptr<T> parameter is moved in — the callee owns the box
+            if (t.size() > 5 && t.rfind("ptr<", 0) == 0 && t.back() == '>') {
+                ResourceId r = nextRes++;
+                ownedResource[id] = r;
+                entry.slots[id] = OwnFact{Origin::Owned, Live, {r}};
+            } else {
+                entry.slots[id] = OwnFact{Origin::Borrowed, Live, {}};
+            }
+        }
         analyzeBlock(fn.body.get(), std::move(entry));
         scopes.pop_back();
         return std::move(plan);

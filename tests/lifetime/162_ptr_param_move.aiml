@@ -1,0 +1,97 @@
+# static-check: off
+# spec/61 §8: a ptr<T> parameter is a MOVE — the callee owns the box (freed unless stored/returned),
+# the caller's local is moved out; also for a fresh {new} argument, interface boxes, fn<> calls and on unwind.
+- model: {name: Card, fields: [[title, string], [tags, list<string>]]}
+- model: {name: Deck, fields: [[boxes, list<ptr<Card>>]]}
+- interface:
+    name: Shape
+    methods:
+      - [area, i32, []]
+- class:
+    name: Square
+    implements: [Shape]
+    members:
+      - [side, i32]
+      - [label, string]
+    methods:
+      - def: {name: area, return: i32, body: [{return: {'*': [<.side, <.side]}}]}
+- def:
+    name: sink_card
+    args: [[sunk, ptr<Card>]]
+    return: i32
+    body:
+      - return: sunk.title.len
+- def:
+    name: keep_card
+    args: [[kept, ptr<Card>], [deck, ref<Deck>]]
+    body:
+      - call: [deck.boxes.push, kept]
+- def:
+    name: pass_card
+    args: [[passed, ptr<Card>]]
+    return: ptr<Card>
+    body:
+      - set: [passed.title, "passed"]
+      - return: passed
+- def:
+    name: eat_card
+    args: [[eaten, ptr<Card>, { lifetime: consumed }]]
+    return: i32
+    body:
+      - return: eaten.tags.len
+- def:
+    name: sink_shape
+    args: [[shape, ptr<Shape>]]
+    return: i32
+    body:
+      - return: {call: [shape.area]}
+- def:
+    name: throw_with_box
+    args: [[held, ptr<Card>]]
+    return: i32
+    body:
+      - throw: {new: Exception, message: "held-${held.title.len}"}
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [deck, Deck]
+      - decl: [sinker, "fn<ptr<Card>:i32>"]
+      - set: [sinker, sink_card]
+      - decl: [counter, i32, 0]
+      - decl: [total, i32, 0]
+      - while:
+          condition: {lt: [counter, 40]}
+          body:
+            - decl: [first, ptr<Card>, {new: Card}]
+            - set: [first.title, "f-${counter}"]
+            - call: [first.tags.push, "t"]
+            - set: [total, {+: [total, {call: [sink_card, first]}]}]
+            - decl: [second, ptr<Card>, {new: Card}]
+            - call: [keep_card, second, deck]
+            - decl: [third, ptr<Card>, {new: Card}]
+            - decl: [back, ptr<Card>, {call: [pass_card, third]}]
+            - if: {condition: {neq: [back.title, "passed"]}, then: [{return: 1}]}
+            - set: [total, {+: [total, {call: [sink_card, {new: Card, title: "n-${counter}"}]}]}]
+            - decl: [fourth, ptr<Card>, {new: Card}]
+            - call: [fourth.tags.push, "e"]
+            - set: [total, {+: [total, {call: [eat_card, fourth]}]}]
+            - decl: [shape, ptr<Shape>, {new: Square, side: 2, label: "s-${counter}"}]
+            - set: [total, {+: [total, {call: [sink_shape, shape]}]}]
+            - decl: [via_fn, ptr<Card>, {new: Card}]
+            - set: [via_fn.title, "v"]
+            - set: [total, {+: [total, {call: [sinker, via_fn]}]}]
+            - decl: [fifth, ptr<Card>, {new: Card}]
+            - set: [fifth.title, "x"]
+            - try:
+                body:
+                  - decl: [res, i32, {call: [throw_with_box, fifth]}]
+                catch:
+                  - type: Exception
+                    var: err
+                    body:
+                      - set: [total, {+: [total, 1]}]
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [deck.boxes.len, 40]}, then: [{return: 2}]}
+      - if: {condition: {lt: [total, 400]}, then: [{return: 3}]}
+      - return: 0

@@ -1,0 +1,81 @@
+# static-check: off
+# spec/61 §8/§9.2: ownership at a call does not depend on definition order — a later-defined
+# producer method's temp is released, later-defined consumed / ptr<T> parameters move.
+- model: {name: Card, fields: [[title, string], [tags, list<string>]]}
+- class:
+    name: Zone
+    members:
+      - [hits, i32]
+    methods:
+      - def:
+          name: tick
+          args: [[level, i32]]
+          return: i32
+          body:
+            - return: {call: [<.lp_delta, {call: [<.get_passives, level]}]}
+      - def:
+          name: lp_delta
+          args: [[passives, list<i32>]]
+          return: i32
+          body:
+            - return: passives.len
+      - def:
+          name: get_passives
+          args: [[count, i32]]
+          return: { type: list<i32>, lifetime: producer }
+          body:
+            - decl: [made, list<i32>]
+            - call: [made.push, count]
+            - return: made
+- def:
+    name: early_caller
+    args: [[num, i32]]
+    return: i32
+    body:
+      - decl: [box, ptr<Card>, {new: Card}]
+      - set: [box.title, "b-${num}"]
+      - decl: [rows, list<string>]
+      - call: [rows.push, "r"]
+      - set: [num, {+: [{call: [late_sink, box]}, {call: [late_eat, rows]}]}]
+      - return: {call: [late_count, {call: [late_rows, num]}]}
+- def:
+    name: late_sink
+    args: [[sunk, ptr<Card>]]
+    return: i32
+    body:
+      - return: sunk.title.len
+- def:
+    name: late_eat
+    args: [[eaten, list<string>, { lifetime: consumed }]]
+    return: i32
+    body:
+      - return: eaten.len
+- def:
+    name: late_rows
+    args: [[width, i32]]
+    return: list<string>
+    body:
+      - decl: [out, list<string>]
+      - call: [out.push, "w${width}"]
+      - return: out
+- def:
+    name: late_count
+    args: [[given, list<string>]]
+    return: i32
+    body:
+      - return: given.len
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [zone, Zone]
+      - decl: [counter, i32, 0]
+      - decl: [total, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - set: [total, {+: [total, {call: [zone.tick, counter]}]}]
+            - set: [total, {+: [total, {call: [early_caller, counter]}]}]
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [total, 400]}, then: [{return: 1}]}
+      - return: 0
