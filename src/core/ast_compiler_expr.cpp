@@ -980,6 +980,11 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
 
     // 2. Evaluate arguments
     std::vector<llvm::Value*> argVals;
+    // spec/61 §8: a ptr<T> parameter of the thread function takes the box (moved into the thread)
+    if (fi && ctx.memV3 && ctx.lifetimeDropsEnabled)
+        for (size_t ai = 0; ai < spawn->args.size() && ai < fi->argTypeNames.size(); ++ai)
+            movePtrArg(spawn->args[ai].get(), fi->argTypeNames[ai], spawn->functionName,
+                       ai < fi->argNames.size() ? fi->argNames[ai] : "");
     for (auto& arg : spawn->args) {
         IRValue* v = visitExpression(arg.get());
         if (v) argVals.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v)));
