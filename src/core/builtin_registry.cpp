@@ -1222,6 +1222,13 @@ void registerBuiltins(CompilerContext& ctx) {
         AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
         if (call->args.size() < 1) return ctx.ir_gen->getInt32(0);
         IRValue* sizeVal = evalExpr(call->args[0].get());
+        if (sizeVal && ctx.memV3) {
+            // spec/61 §5: re-allocating releases the previous data block (a fresh handle's is null)
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Value* dataSlot = ctx.builder.CreateStructGEP(ctx.getLLVMType("buffer"), baseAlloca, 4);
+            ctx.builder.CreateCall(ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p}),
+                                   { ctx.builder.CreateLoad(i8p, dataSlot, "buf_old_data") });
+        }
         if (sizeVal) BufferImpl::alloc(ctx, baseAlloca, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sizeVal)));
         return ctx.ir_gen->getInt32(0);
     };

@@ -1,0 +1,75 @@
+# static-check: off
+# spec/61 §5/§8/§9.3: class members rebound from params/producers, member map put, getter copy, throw mid-mutation.
+- model: {name: Card, fields: [[title, string], [tags, list<string>]]}
+- def:
+    name: make_card
+    args: [[num, i32]]
+    return: Card
+    body:
+      - decl: [out, Card]
+      - set: [out.title, "c-${num}"]
+      - call: [out.tags.push, "t"]
+      - return: out
+- class:
+    name: Desk
+    members:
+      - [rows, list<string>]
+      - [current, Card]
+      - [name, string]
+      - [index, map<string:list<string>>]
+    methods:
+      - def:
+          name: adopt_rows
+          args: [[incoming, list<string>]]
+          body:
+            - set: [<.rows, incoming]
+      - def:
+          name: refresh
+          args: [[num, i32]]
+          body:
+            - set: [<.current, {call: [make_card, num]}]
+            - set: [<.name, "desk-${num}"]
+            - decl: [bucket, list<string>]
+            - call: [bucket.push, "b${num}"]
+            - call: [<.index.put, "k", bucket]
+      - def:
+          name: risky
+          args: [[num, i32]]
+          body:
+            - set: [<.name, "before-${num}"]
+            - if: {condition: {eq: [{ '%': [num, 2]}, 0]}, then: [{throw: {new: Exception, message: "r${num}"}}]}
+            - set: [<.name, "after-${num}"]
+      - def:
+          name: rows_copy
+          return: list<string>
+          body:
+            - return: <.rows
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [desk, Desk]
+      - decl: [counter, i32, 0]
+      - decl: [caught, i32, 0]
+      - while:
+          condition: {lt: [counter, 40]}
+          body:
+            - decl: [incoming, list<string>]
+            - call: [incoming.push, "i${counter}"]
+            - call: [desk.adopt_rows, incoming]
+            - call: [incoming.push, "j"]
+            - if: {condition: {neq: [desk.rows.len, 2]}, then: [{return: 1}]}
+            - call: [desk.refresh, counter]
+            - decl: [snap, list<string>, {call: [desk.rows_copy]}]
+            - try:
+                body:
+                  - call: [desk.risky, counter]
+                catch:
+                  - type: Exception
+                    var: err
+                    body:
+                      - set: [caught, {+: [caught, 1]}]
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [caught, 20]}, then: [{return: 2}]}
+      - if: {condition: {neq: [desk.current.title, "c-39"]}, then: [{return: 3}]}
+      - return: 0
