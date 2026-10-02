@@ -1703,7 +1703,11 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  if (auto* varExpr = dynamic_cast<VariableExpr*>(call->args[0].get())) {
                      if (Symbol* srcSym = resolveVariable(varExpr->name)) {
                          std::string srcTy = srcSym->typeName;
-                         if (pushVal && !pushVal->getType()->isPointerTy()) {
+                         bool srcIsFat = srcTy.rfind("ptr<", 0) == 0 && srcTy.back() == '>'
+                                         && ctx.interfaces.count(srcTy.substr(4, srcTy.size() - 5));
+                         if (srcIsFat) {
+                             // already an owning fat pointer (moved in above) — store as is
+                         } else if (pushVal && !pushVal->getType()->isPointerTy()) {
                              // Source is a VALUE-MODEL local (struct). The list element is an owning fat
                              // pointer whose obj is freed by the elemKind-6 scope-drop — so it MUST point
                              // at HEAP, not the stack local (else the drop frees a stack address →
@@ -1728,7 +1732,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                              pushVal = heapBox;
                              srcTy = "ptr<" + srcTy + ">";
                          }
-                         llvm::Value* fat = buildInterfaceUpcast(pushVal, srcTy,
+                         llvm::Value* fat = srcIsFat ? nullptr : buildInterfaceUpcast(pushVal, srcTy,
                                                                   llvm::cast<llvm::StructType>(llvmListElemType));
                          if (fat) pushVal = fat;
                      }
@@ -1918,6 +1922,26 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  }
                  // Shift with POINTER stride (i8p), and do NOT str-decref.
                  ListImpl::remove(ctx, listP, idxV, i8p, /*elemIsString=*/false);
+                 return nullptr;
+             }
+             // spec/61 §5.5: list<ptr<Interface>> element = an owning fat pointer → release it via the
+             // vtable free slot, shift by the fat-pointer stride.
+             if (ctx.memV3 && listElemName.rfind("ptr<", 0) == 0 && listElemName.back() == '>'
+                 && ctx.interfaces.count(listElemName.substr(4, listElemName.size() - 5))) {
+                 auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                 llvm::Type* fatTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(listElemName)));
+                 llvm::Value* listP = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
+                 llvm::Value* idxV  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
+                 if (ctx.lifetimeDropsEnabled && fatTy) {
+                     llvm::StructType* lstTy = ListImpl::getListStructType(ctx);
+                     llvm::Value* dataP = ctx.builder.CreateLoad(i8p,
+                         ctx.builder.CreateStructGEP(lstTy, listP, 2, "rm_dataPtr"), "rm_dataBase");
+                     llvm::Value* slot = ctx.builder.CreateInBoundsGEP(fatTy, dataP, idxV, "rm_fatslot");
+                     int mc = (int)ctx.interfaces[listElemName.substr(4, listElemName.size() - 5)].methods.size();
+                     ctx.builder.CreateCall(ctx.getFunction("aiml_iface_elem_free", ctx.builder.getVoidTy(),
+                         {i8p, ctx.builder.getInt32Ty()}), { slot, ctx.builder.getInt32(mc) });
+                 }
+                 ListImpl::remove(ctx, listP, idxV, fatTy ? fatTy : i8p, /*elemIsString=*/false);
                  return nullptr;
              }
              // spec/61 §5.5 (memV3): list<ptr<T>> element = an OWNING box → remove RELEASES it

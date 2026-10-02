@@ -316,6 +316,7 @@ void Compiler::classifyListElem(const std::string& elemName, int& elemKind, int6
             elemKind = 6;
             llvm::Type* et = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
             elemSize = et ? (int64_t)ctx.module.getDataLayout().getTypeAllocSize(et) : 16;
+            serNodesCount = (int32_t)ctx.interfaces[boxed].methods.size();   // vtable free-slot index
         } else {
             auto ci = ctx.classes.find(boxed);
             if (ci != ctx.classes.end()) { serNodes = ci->second.serNodesVar; serNodesCount = ci->second.serNodesCount; }
@@ -513,6 +514,7 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
             elemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
             if (!elemTy) elemTy = i8p;
             elemSize = (int64_t)ctx.module.getDataLayout().getTypeAllocSize(elemTy);
+            serNodesCount = (int32_t)ctx.interfaces[boxed].methods.size();   // vtable free-slot index
         } else {
             auto ci = ctx.classes.find(boxed);
             if (ci != ctx.classes.end()) { serNodes = ci->second.serNodesVar; serNodesCount = ci->second.serNodesCount; }
@@ -5363,6 +5365,24 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
         // it → the OLD box is released (deep-free its fields + free the shell) BEFORE the new box's
         // pointer is stored (the new box is moved in). Without this the replaced box + its heap
         // leaked (probe 05: the "bolt" Card). Plain-pointer elemTy → not the struct/model path below.
+        // spec/61 §5.5: list<ptr<Interface>> element = an owning fat pointer {obj, vtable} → release
+        // the old object through its vtable free slot, store the new fat pointer (moved in).
+        if (ctx.memV3 && elemName.rfind("ptr<", 0) == 0 && elemName.back() == '>'
+            && ctx.interfaces.count(elemName.substr(4, elemName.size() - 5)) && storeVal->getType()->isStructTy()) {
+            std::string iface = elemName.substr(4, elemName.size() - 5);
+            llvm::Value* slot = ListImpl::getElementPtr(ctx, listPtr, indexVals[0], storeVal->getType());
+            if (ctx.lifetimeDropsEnabled) {
+                CompilerContext::ScopeDrop old;
+                old.addr = slot;
+                old.kind = 5;
+                old.fatPtrType = storeVal->getType();
+                old.ifaceMethodCount = (int)ctx.interfaces[iface].methods.size();
+                emitScopeDrop(ctx, old);
+            }
+            ctx.builder.CreateStore(storeVal, slot);
+            consumeLocalDrop(idx->value.get());
+            return;
+        }
         if (ctx.memV3 && elemName.rfind("ptr<", 0) == 0 && elemName.back() == '>') {
             auto* i8p = llvm::PointerType::get(ctx.context, 0);
             std::string boxed = elemName.substr(4, elemName.size() - 5);

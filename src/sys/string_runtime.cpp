@@ -178,6 +178,22 @@ extern "C" char* aiml_str_take_local(char** src) {
 // given move-detection) is a no-op, not a crash.
 extern "C" void aiml_ser_free_decoded(void* obj, void* nodes, int32_t node_count);
 extern "C" void aiml_ser_retain(void* obj, const void* nodes, int32_t n_nodes);
+// spec/61 §5.5: release one owning interface fat pointer {obj, vtable}. The vtable's trailing slot
+// (index = interface method count) is the concrete class's __free_ (fields + shell); without a
+// vtable / method count the shell is freed shallow.
+static void aiml_free_iface_elem(char* slot, int32_t methodCount) {
+    void* obj = *reinterpret_cast<void**>(slot);
+    if (!obj) return;
+    void** vt = *reinterpret_cast<void***>(slot + sizeof(void*));
+    if (vt && methodCount > 0 && vt[methodCount]) {
+        reinterpret_cast<void (*)(void*)>(vt[methodCount])(obj);
+        return;
+    }
+    free(obj);
+}
+extern "C" void aiml_iface_elem_free(void* slot, int32_t methodCount) {
+    if (slot) aiml_free_iface_elem(static_cast<char*>(slot), methodCount);
+}
 // AIML v2: decref a %M* reference element/value (frees inner heap + shell at refcount 0).
 extern "C" void aiml_model_decref(void* obj, const void* nodes, int32_t n_nodes);
 extern "C" void aiml_model_incref(void* obj);
@@ -227,10 +243,8 @@ extern "C" void aiml_list_free(void* list_ptr, int32_t elemKind,
         // to deep-free the obj's own heap fields here; the obj shell is freed shallow (behaviors are
         // field-less — a stateful implementor's inner heap fields would leak, not corrupt).
         char* base = reinterpret_cast<char*>(lst->data);
-        for (int32_t i = 0; i < lst->size; ++i) {
-            void* obj = *reinterpret_cast<void**>(base + (int64_t)i * elemSize);  // field 0 = obj
-            if (obj) free(obj);
-        }
+        for (int32_t i = 0; i < lst->size; ++i)
+            aiml_free_iface_elem(base + (int64_t)i * elemSize, serNodesCount);
     }
     if (lst->data && aiml_trace_fre())
         fprintf(stderr, "[FRE] %-10s h=%p rc=%d  (elemKind=%d size=%d)\n", "LDATA", lst->data, elemKind, elemKind, lst->size);
@@ -255,7 +269,7 @@ static void free_list_elem_at(char* slot, int32_t elemKind, int64_t /*elemSize*/
         case 4: { char* box = *reinterpret_cast<char**>(slot);
                   if (box) { if (serNodes) aiml_ser_free_decoded(box, serNodes, serNodesCount); free(box); } break; }
         case 5: { if (serNodes) aiml_ser_free_decoded(slot, serNodes, serNodesCount); break; }  // nested handle (slot-rooted)
-        case 6: { void* obj = *reinterpret_cast<void**>(slot); if (obj) free(obj); break; }      // iface obj (field 0)
+        case 6: { aiml_free_iface_elem(slot, serNodesCount); break; }                          // iface fat pointer
         case 2: { if (serNodes) aiml_ser_free_decoded(slot, serNodes, serNodesCount); break; }
         default: break;  // elemKind 0: scalar/POD, nothing to free
     }

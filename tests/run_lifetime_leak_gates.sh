@@ -132,6 +132,8 @@ GREEN=(
   tests/lifetime/156_unwind_loops_nested_new_init.aiml
   tests/lifetime/157_deserialize_rebind.aiml
   tests/lifetime/158_kv_get_copy_targets.aiml
+  tests/lifetime/159_class_member_rebinds.aiml
+  tests/lifetime/160_iface_list_ops_buffer_field.aiml
   tests/lifetime/cascade_params/direct.aiml
   tests/lifetime/cascade_params/dispatch.aiml
   tests/lifetime/cascade_params/indirect.aiml
