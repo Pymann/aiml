@@ -3,8 +3,11 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <cstdio>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -21,10 +24,24 @@ struct YamlDocument {
 static char* copyString(const std::string& value) {
     return aiml_str_ndup(value.c_str(), value.size());
 }
-static YamlDocument* asDocument(void* raw) { return static_cast<YamlDocument*>(raw); }
+// spec/60 §3/§8: live-handle registry — yaml.free really releases a document (spec/61 Class 4),
+// and a use of a freed/invalid handle is diagnosed instead of dereferencing freed memory.
+static std::mutex g_yamlMtx;
+static std::unordered_set<const void*> g_liveDocs, g_liveNodes;
+static void invalidHandle(const char* what, const void* raw) {
+    fprintf(stderr, "[aiml] yaml: invalid or freed %s handle %p\n", what, raw);
+}
+static YamlDocument* asDocument(void* raw) {
+    if (!raw) return nullptr;
+    std::lock_guard<std::mutex> lk(g_yamlMtx);
+    if (!g_liveDocs.count(raw)) { invalidHandle("yaml_doc", raw); return nullptr; }
+    return static_cast<YamlDocument*>(raw);
+}
 static YamlNode* asNode(void* raw) {
-    auto* node = static_cast<YamlNode*>(raw);
-    return node && node->document && node->document->active ? node : nullptr;
+    if (!raw) return nullptr;
+    std::lock_guard<std::mutex> lk(g_yamlMtx);
+    if (!g_liveNodes.count(raw)) { invalidHandle("yaml_node", raw); return nullptr; }
+    return static_cast<YamlNode*>(raw);
 }
 static void* makeNode(YamlDocument* document, const YAML::Node& value) {
     if (!document || !document->active || !value.IsDefined()) return nullptr;
@@ -33,6 +50,8 @@ static void* makeNode(YamlDocument* document, const YAML::Node& value) {
     node->value = value;
     void* raw = node.get();
     document->nodes.push_back(std::move(node));
+    std::lock_guard<std::mutex> lk(g_yamlMtx);
+    g_liveNodes.insert(raw);
     return raw;
 }
 static int32_t kindOf(const YAML::Node& node) {
@@ -61,6 +80,8 @@ static YamlDocument* parseDocument(const char* source, bool fromFile) {
         document->root = YAML::Node();
         document->error = error.what();
     }
+    std::lock_guard<std::mutex> lk(g_yamlMtx);
+    g_liveDocs.insert(document);
     return document;
 }
 } // namespace
@@ -73,10 +94,13 @@ extern "C" char* aiml_yaml_error(void* raw) {
 }
 extern "C" void aiml_yaml_free(void* raw) {
     auto* document = asDocument(raw);
-    if (!document || !document->active) return;
-    document->active = false;
-    document->root = YAML::Node();
-    // Keep node handle tombstones alive so post-free calls cannot dereference freed memory.
+    if (!document) return;
+    {
+        std::lock_guard<std::mutex> lk(g_yamlMtx);
+        for (auto& n : document->nodes) g_liveNodes.erase(n.get());
+        g_liveDocs.erase(document);
+    }
+    delete document;
 }
 extern "C" void* aiml_yaml_root(void* raw) {
     auto* document = asDocument(raw);

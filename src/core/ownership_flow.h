@@ -5,6 +5,7 @@
 // zero effect on emission. Design: doc/plans/ownership_dataflow_implementation_packet_2026-09-10.md
 #include <cstdint>
 #include <map>
+#include <string>
 #include <set>
 #include <vector>
 
@@ -77,6 +78,7 @@ struct OwnershipPlan {
     std::map<const BlockStmt*, FlowState>  normalExits;   // state BEFORE dropping block-locals
     std::map<const Stmt*, FlowState>       earlyExits;    // e.g. return-statement exit state
     std::map<const Stmt*, FlowState>       stmtEntry;     // state before each statement (unwind pads)
+    std::map<std::string, OwnershipId>     params;        // parameter name → id (ptr<T> params are owned, §8)
     std::set<ResourceId> suppressNewDrops;                // resources a warning has made unsafe to free
     bool suppressFunctionDrops = false;                   // unresolved alias/retain → no new drops at all
 };

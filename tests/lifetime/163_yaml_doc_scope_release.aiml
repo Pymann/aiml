@@ -1,0 +1,46 @@
+# static-check: off
+# spec/61 §2.1 Class 4 / spec/60 §3: a yaml_doc is released at owner drop on every exit; yaml.free is an early release.
+- def:
+    name: make_doc
+    args: [[num, i32]]
+    return: ptr<yaml_doc>
+    body:
+      - decl: [built, ptr<yaml_doc>, { call: [yaml.parse, "n: ${num}"] }]
+      - return: built
+- def:
+    name: first_key
+    args: [[source, string], [early, i32]]
+    return: string
+    body:
+      - decl: [document, ptr<yaml_doc>, { call: [yaml.parse, source] }]
+      - decl: [root, ptr<yaml_node>, { call: [yaml.root, document] }]
+      - if: {condition: {eq: [early, 1]}, then: [{return: "early"}]}
+      - if: {condition: {eq: [early, 2]}, then: [{throw: {new: Exception, message: "x"}}]}
+      - return: { call: [yaml.key, root, 0] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [caught, i32, 0]
+      - while:
+          condition: {lt: [counter, 40]}
+          body:
+            - decl: [key, string, {call: [first_key, "name: Ada\nitems: [1, 2]", 0]}]
+            - if: {condition: {neq: [key, "name"]}, then: [{return: 1}]}
+            - decl: [early, string, {call: [first_key, "a: 1", 1]}]
+            - try:
+                body:
+                  - decl: [thrown, string, {call: [first_key, "a: 1", 2]}]
+                catch:
+                  - type: Exception
+                    var: err
+                    body:
+                      - set: [caught, {+: [caught, 1]}]
+            - decl: [freed, ptr<yaml_doc>, { call: [yaml.parse, "z: 1"] }]
+            - call: [yaml.free, freed]
+            - decl: [made, ptr<yaml_doc>, {call: [make_doc, counter]}]
+            - if: {condition: {neq: [{call: [yaml.error, made]}, ""]}, then: [{return: 2}]}
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [caught, 40]}, then: [{return: 3}]}
+      - return: 0

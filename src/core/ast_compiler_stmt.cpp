@@ -442,6 +442,32 @@ void Compiler::moveIteratorArg(Expr* arg) {
     if (s && s->typeName.rfind("iterator<", 0) == 0) consumeLocalDrop(arg);
 }
 
+// spec/61 §8: an argument for an owning ptr<T> parameter is moved — a ptr<T> local/parameter is
+// moved out, a fresh value passes; a borrow (&x, field, element, ref/value local, global) is rejected.
+void Compiler::movePtrArg(Expr* arg, const std::string& paramType, const std::string& fname, const std::string& pname) {
+    if (!(paramType.size() > 5 && paramType.rfind("ptr<", 0) == 0 && paramType.back() == '>')) return;
+    std::string boxed = paramType.substr(4, paramType.size() - 5);
+    auto bci = ctx.classes.find(boxed);
+    bool userBox = ctx.interfaces.count(boxed)
+        || (bci != ctx.classes.end() && !bci->second.isBuiltin && bci->second.type
+            && !ctx.classGroupContainers.count(boxed) && !ctx.cascadeClasses.count(boxed));
+    if (!userBox || !arg) return;
+    auto reject = [&]() {
+        LOG_ERROR(ctx.fmtLoc() + "'" + fname + "': argument for parameter '" + pname + "' is a borrow, but '" + pname
+            + "' is an owning ptr<T> parameter (it takes the box) — declare it ref<" + boxed + "> or pass an owned box (spec/61 §8)");
+    };
+    if (auto* u = dynamic_cast<UnaryExpr*>(arg)) { if (u->op == "&") reject(); return; }
+    if (dynamic_cast<AtExpr*>(arg)) { reject(); return; }
+    auto* ve = dynamic_cast<VariableExpr*>(arg);
+    if (!ve) return;   // new / producer call / literal: a fresh value is moved in
+    if (ve->name == "null") return;
+    if (ve->name.find('.') != std::string::npos || ve->name.find('<') != std::string::npos) { reject(); return; }
+    Symbol* s = resolveVariable(ve->name);
+    if (!s) return;
+    if (s->is_global || s->typeName.rfind("ptr<", 0) != 0) { reject(); return; }
+    consumeLocalDrop(arg);
+}
+
 void Compiler::releaseContainerHandle(llvm::Value* handle, const std::string& typeName) {
     if (!handle || !ctx.lifetimeDropsEnabled) return;
     llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
@@ -731,6 +757,10 @@ void Compiler::classifyMapKV(const std::string& kName, const std::string& vName,
     valNodes = nullptr; valNodesCount = 0;
     if (vName == "string") { valKind = 1; valStride = 8; }
     else if (ctx.isMemV3ContainerHandle(vName)) { valKind = 4; valStride = (int64_t)dl.getPointerSize(); }
+    else if (vName.rfind("ptr<", 0) == 0 && vName.back() == '>' && ctx.interfaces.count(vName.substr(4, vName.size() - 5))) {
+        valKind = 6; valStride = (int64_t)dl.getTypeAllocSize(vTyRaw);   // fat pointer
+        valNodesCount = (int32_t)ctx.interfaces[vName.substr(4, vName.size() - 5)].methods.size();
+    }
     else if (vName.rfind("ptr<", 0) == 0 && vName.back() == '>' && ctx.classes.count(vName.substr(4, vName.size() - 5))
              && !ctx.classGroupContainers.count(vName.substr(4, vName.size() - 5))
              && !ctx.cascadeClasses.count(vName.substr(4, vName.size() - 5))) {
@@ -1614,6 +1644,22 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             }
         }
 
+        // spec/61 Class 4 / spec/60 §3: an owned yaml_doc (yaml.parse / yaml.parse_file / a user call
+        // returning ptr<yaml_doc>) is released at owner drop on every exit.
+        if (decl->typeName == "ptr<yaml_doc>" && decl->lifetime != "persistent" && ctx.lifetimeDropsEnabled
+            && !ctx.cleanupStack.empty() && !sym.is_global) {
+            if (auto* yc = dynamic_cast<CallExpr*>(decl->initialValue.get())) {
+                CompilerContext::FunctionInfo* yfi = resolveCallTarget(yc->functionName);
+                if (yc->functionName == "yaml.parse" || yc->functionName == "yaml.parse_file"
+                    || (yfi && yfi->returnTypeName == "ptr<yaml_doc>")) {
+                    CompilerContext::ScopeDrop sd;
+                    sd.addr = unwrappedAlloca;
+                    sd.kind = 13;
+                    sd.debugName = decl->varName; sd.debugType = decl->typeName;
+                    ctx.cleanupStack.back().push_back(sd);
+                }
+            }
+        }
         // spec/61: OWNED box — `decl [box, ptr<T>, INIT]` where `box` owns the pointee → register
         // a kind-4 drop: deep-free the pointee (aiml_ser_free_decoded) then free the heap shell.
         // Removed by consumeLocalDrop when the box is MOVED (return/member-store/push/put — e.g.
@@ -4027,9 +4073,9 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     emitScopeDrop(ctx, *it);
                     continue;
                 }
-                if (it->kind == 10 || it->kind == 11) { emitScopeDrop(ctx, *it); continue; }   // null-safe single release
+                if (it->kind == 10 || it->kind == 11 || it->kind == 13) { emitScopeDrop(ctx, *it); continue; }   // null-safe single release
                 // spec/61 §8: a parameter's own call reference (the returned container slot is moved above)
-                if (it->paramRef && !(retContainerSlot && it->addr == retContainerSlot)) { emitScopeDrop(ctx, *it); continue; }
+                if ((it->paramRef || it->ownedParamBox) && !(retContainerSlot && it->addr == retContainerSlot)) { emitScopeDrop(ctx, *it); continue; }
                 // spec/61 §5 (memV3): the returned container handle is MOVED to the caller → skip its
                 // decref/free on the return path (kind 2 list / 3 map / 8 buffer, isListHandle).
                 if (retContainerSlot && it->addr == retContainerSlot
@@ -4174,7 +4220,8 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         }
         // §6/P2a: cleanup after the value is in an SSA register / its owner is exempted, only
         // for alias-safe return shapes; the value the branches below build then stays valid.
-        if (safeToCleanup) emitReturnCleanup();
+        // an owned statement temp is a fresh allocation — it cannot alias a local being dropped
+        if (safeToCleanup || retWasOwnedTemp) emitReturnCleanup();
         else if (ctx.lifetimeDropsEnabled) {
             // a parameter's call reference never aliases away the caller's container → always released
             for (auto fit = ctx.cleanupStack.rbegin(); fit != ctx.cleanupStack.rend(); ++fit)
@@ -4714,6 +4761,11 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
         ctx.builder.CreateBr(doneBB);
         ctx.builder.SetInsertPoint(doneBB);
+    } else if (it.kind == 13) {
+        // spec/61 Class 4 / spec/60 §3: owned yaml_doc — aiml_yaml_free is null-safe; null the slot.
+        llvm::Value* doc = ctx.builder.CreateLoad(i8p, it.addr, "drop_yamldoc");
+        ctx.builder.CreateCall(ctx.getFunction("aiml_yaml_free", ctx.builder.getVoidTy(), {i8p}), { doc });
+        ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
     } else if (it.kind == 10) {
         // spec/61 class 4: iterator<T> — aiml_iter_free is null-safe; null the slot (single release).
         llvm::Value* itp = ctx.builder.CreateLoad(i8p, it.addr, "drop_iter");
@@ -4727,7 +4779,7 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
 }
 // spec/61 §9.3: drops released on every exit regardless of the ownership plan (order-independent).
 static bool unconditionalDrop(const CompilerContext::ScopeDrop& d) {
-    return d.paramRef || d.kind == 7 || d.kind == 10 || d.kind == 11 || d.kind == 12
+    return d.paramRef || d.ownedParamBox || d.kind == 7 || d.kind == 13 || d.kind == 10 || d.kind == 11 || d.kind == 12
         || (d.isListHandle && (d.kind == 2 || d.kind == 3 || d.kind == 8));
 }
 

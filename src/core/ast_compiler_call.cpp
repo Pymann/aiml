@@ -321,6 +321,16 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             ctx.currentCall = call;
             IRValue* sysResult = visitSysNamespaceCall(baseName, methodName, argVals);
             ctx.currentCall = prevCall;
+            // spec/60 §3: yaml.free on a local is an early release — null it so the scope release is a no-op
+            if (sysResult && baseName == "yaml" && methodName == "free" && !call->args.empty())
+                if (auto* fv = dynamic_cast<VariableExpr*>(call->args[0].get()))
+                    if (fv->name.find('.') == std::string::npos)
+                        if (Symbol* fs = resolveVariable(fv->name)) {
+                            llvm::Value* slot = fs->ir_alloca_inst
+                                ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fs->ir_alloca_inst)) : fs->alloca_inst;
+                            auto* i8p = llvm::PointerType::get(ctx.context, 0);
+                            if (slot) ctx.builder.CreateStore(llvm::ConstantPointerNull::get(i8p), slot);
+                        }
             if (sysResult) return sysResult;
         }
         // For standard compilation, we just emit a call to their mangled C names.
@@ -553,6 +563,12 @@ IRValue* Compiler::visitCall(CallExpr* call) {
         }
     if (funcInfo && ctx.lifetimeDropsEnabled)   // spec/61 class 4: an iterator argument moves into the callee
         for (auto& a : call->args) moveIteratorArg(a.get());
+    if (funcInfo && ctx.memV3 && ctx.lifetimeDropsEnabled)   // spec/61 §8: ptr<T> parameters take the box
+        for (size_t i = 0; i < call->args.size() && i < funcInfo->argTypeNames.size(); ++i) {
+            if (i < funcInfo->argLifetimes.size() && funcInfo->argLifetimes[i] == "consumed") continue;
+            movePtrArg(call->args[i].get(), funcInfo->argTypeNames[i], funcName,
+                       i < funcInfo->argNames.size() ? funcInfo->argNames[i] : "");
+        }
     if (funcInfo && ctx.lifetimeDropsEnabled && !funcInfo->argLifetimes.empty()) {
         for (size_t i = 0; i < call->args.size() && i < funcInfo->argLifetimes.size(); ++i) {
             if (funcInfo->argLifetimes[i] != "consumed") continue;
@@ -746,6 +762,10 @@ IRValue* Compiler::visitCall(CallExpr* call) {
 
             llvm::FunctionType* fnTy = llvm::FunctionType::get(retTy, paramTys, false);
 
+            // spec/61 §8: a ptr<T> parameter of the target takes the box (same rule as direct calls)
+            if (ctx.memV3 && ctx.lifetimeDropsEnabled)
+                for (size_t ai = 0; ai < call->args.size() && ai < fi.paramTypes.size(); ++ai)
+                    movePtrArg(call->args[ai].get(), fi.paramTypes[ai], funcName, "#" + std::to_string(ai + 1));
             std::vector<llvm::Value*> rawArgs;
             for (size_t ai = 0; ai < argVals.size(); ++ai) {
                 llvm::Value* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[ai]));
@@ -905,6 +925,11 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                     if (m.argLifetimes[ai] == "consumed")
                         consumeLocalDrop(call->args[ai].get());
             }
+            if (ctx.memV3 && ctx.lifetimeDropsEnabled)   // spec/61 §8: ptr<T> parameters take the box
+                for (size_t ai = 0; ai < call->args.size() && ai < m.args.size(); ++ai) {
+                    if (ai < m.argLifetimes.size() && m.argLifetimes[ai] == "consumed") continue;
+                    movePtrArg(call->args[ai].get(), m.args[ai].second, m.name, m.args[ai].first);
+                }
 
             // Eagerly eval call args.
             std::vector<llvm::Value*> callArgs;
@@ -2199,6 +2224,10 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  if (ci != ctx.classes.end() && ci->second.serNodesVar) {
                      relDesc = ci->second.serNodesVar; relN = ci->second.serNodesCount; relKind = 2;
                  }
+             } else if (vName.rfind("ptr<", 0) == 0 && vName.back() == '>'
+                        && ctx.interfaces.count(vName.substr(4, vName.size() - 5))) {
+                 relKind = 6;   // owning interface fat pointer → vtable free slot
+                 relN = (int)ctx.interfaces[vName.substr(4, vName.size() - 5)].methods.size();
              } else if (vName.rfind("ptr<", 0) == 0 && vName.back() == '>') {
                  std::string boxed = vName.substr(4, vName.size() - 5);
                  auto bci = ctx.classes.find(boxed);
@@ -3435,6 +3464,14 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                      // free-function path) — remove it from the statement-temp decref list.
                      if (j < argVals.size())
                          consumeStringTemp(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[j])));
+                 }
+             }
+             if (ctx.memV3 && mfit != ctx.functions.end()) {   // spec/61 §8: ptr<T> parameters take the box
+                 const auto& mf = mfit->second;
+                 for (size_t j = 0; j < call->args.size() && (j + 1) < mf.argTypeNames.size(); ++j) {
+                     if ((j + 1) < mf.argLifetimes.size() && mf.argLifetimes[j + 1] == "consumed") continue;
+                     movePtrArg(call->args[j].get(), mf.argTypeNames[j + 1], methodName,
+                                (j + 1) < mf.argNames.size() ? mf.argNames[j + 1] : "");
                  }
              }
          }

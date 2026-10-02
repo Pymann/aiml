@@ -343,6 +343,7 @@ namespace AIML {
         // data+block at rc 0) after loading the pointer from the slot.
         bool                  isListHandle = false;
         bool                  paramRef = false;      // spec/61 §8: a parameter's own call reference (caller keeps its ref)
+        bool                  ownedParamBox = false; // spec/61 §8: a ptr<T> parameter's box (moved in; freed unless moved on)
         std::string           debugName;             // AIML_TRACE_SYMBOL: source var name for lifetime tracing
         std::string           debugType;             // AIML_TRACE_SYMBOL: declared type name (list<>/map<>/model)
     };
@@ -801,6 +802,16 @@ namespace AIML {
 
     // spec/61 §8: a by-value return of a value model/class with heap fields hands the caller an
     // owning value (the callee moves a local or deep-copies a borrowed/aliased source).
+    // spec/61 §8: a plain ptr<T> return (user class / interface box) hands the caller ownership.
+    bool isOwnedBoxReturn(const std::string& t) const {
+        if (!(t.size() > 5 && t.rfind("ptr<", 0) == 0 && t.back() == '>')) return false;
+        std::string b = t.substr(4, t.size() - 5);
+        if (interfaces.count(b)) return true;
+        auto it = classes.find(b);
+        return it != classes.end() && !it->second.isBuiltin && it->second.type
+            && !classGroupContainers.count(b) && !cascadeClasses.count(b);
+    }
+    bool isOwningReturnType(const std::string& t) const { return t == "string" || isOwnedValueReturn(t) || isOwnedBoxReturn(t); }
     bool isOwnedValueReturn(const std::string& t) const {
         auto it = classes.find(t);
         return it != classes.end() && it->second.hasHeapFields && !it->second.isBuiltin

@@ -3861,6 +3861,31 @@ bool Compiler::emitContainerFieldDeepCopy(llvm::Value* dstPtr, llvm::Value* srcP
     return true;
 }
 
+// Signature pre-pass: a forward-declared function/method gets its call-relevant FunctionInfo
+// (argument names/types/lifetimes, return type, producer) before ANY body is emitted, so a call
+// to a later definition resolves ownership exactly like one to an earlier definition.
+static void registerForwardInfo(CompilerContext& ctx, const std::string& key, llvm::Function* f,
+                                const FunctionDecl* fn, const std::string& thisType) {
+    if (!f || ctx.functions.count(key)) return;
+    CompilerContext::FunctionInfo fi;
+    fi.func = f;
+    if (!thisType.empty()) {
+        fi.argNames.push_back("this");
+        fi.argTypeNames.push_back(thisType);
+        fi.argLifetimes.push_back("scope");
+    }
+    for (size_t i = 0; i < fn->args.size(); ++i) {
+        fi.argNames.push_back(fn->args[i].first);
+        fi.argTypeNames.push_back(fn->args[i].second);
+        fi.argLifetimes.push_back(i < fn->argMods.size() ? fn->argMods[i].lifetime : "scope");
+    }
+    fi.returnTypeName = fn->returnType;
+    fi.ownsReturn = fn->ownsReturn;
+    fi.version = fn->version;
+    fi.compiled_version = fn->version;
+    ctx.functions[key] = fi;
+}
+
 void Compiler::registerTypeDecl(Node* node) {
     if (auto ns = dynamic_cast<NamespaceDecl*>(node)) {
         ctx.currentNamespace = ns->name;
@@ -3885,7 +3910,7 @@ void Compiler::registerTypeDecl(Node* node) {
         // the forward decl so callers compiled before the class body (e.g. a synthesized cascade
         // pool appended last) adopt the result. visitTopLevel re-inserts idempotently.
         for (const auto& m : cls->methods) {
-            if (m->returnType == "string" || ctx.isOwnedValueReturn(m->returnType)) m->ownsReturn = true;   // §4/§8
+            if (ctx.isOwningReturnType(m->returnType)) m->ownsReturn = true;   // §4/§8
             if (!m->ownsReturn) continue;
             ctx.ownsReturnFns.insert(m->name);
             ctx.ownsReturnFnTypes[m->name].insert(m->returnType);
@@ -4132,8 +4157,11 @@ void Compiler::registerTypeDecl(Node* node) {
                 }
                 llvm::FunctionType* ft =
                     llvm::FunctionType::get(retTy, paramTys, false);
-                llvm::Function::Create(ft, llvm::Function::ExternalLinkage,
+                llvm::Function* mf = llvm::Function::Create(ft, llvm::Function::ExternalLinkage,
                                        mangled, ctx.module);
+                if (ctx.isOwningReturnType(method->returnType))
+                    method->ownsReturn = true;   // §4/§8 (same rule as visitFunction)
+                registerForwardInfo(ctx, mangled, mf, method.get(), "ref<" + className + ">");   // same receiver as visitTopLevel
                 LOG_DEBUG("registerTypeDecl: forward-declared class method " +
                           mangled);
             }
@@ -4534,7 +4562,7 @@ void Compiler::registerTypeDecl(Node* node) {
         // spec/61 §8: `lifetime: producer` is part of the signature — register it with the
         // forward decl, before any body is emitted, so callers earlier in the file see it
         // (tests/lifetime/69). visitFunction re-inserts idempotently.
-        if (func->returnType == "string" || ctx.isOwnedValueReturn(func->returnType)) func->ownsReturn = true;   // §4/§8
+        if (ctx.isOwningReturnType(func->returnType)) func->ownsReturn = true;   // §4/§8
         if (func->ownsReturn) {
             ctx.ownsReturnFns.insert(func->name);
             ctx.ownsReturnFnTypes[func->name].insert(func->returnType);
@@ -4571,7 +4599,8 @@ void Compiler::registerTypeDecl(Node* node) {
             retTy = irt ? static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(irt)) : i8p;
         }
         llvm::FunctionType* ft = llvm::FunctionType::get(retTy, paramTys, false);
-        llvm::Function::Create(ft, llvm::Function::ExternalLinkage, mangledName, ctx.module);
+        llvm::Function* ff = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, mangledName, ctx.module);
+        registerForwardInfo(ctx, mangledName, ff, func, "");
         LOG_DEBUG("registerTypeDecl: forward-declared " + mangledName);
     }
 }
@@ -4682,7 +4711,7 @@ void Compiler::visitTopLevel(Node* node) {
             //     method->ownsReturn = true;
             // spec/61 return-ownership: capture the ORIGINAL method name (pre-mangle) so a
             // call site `<.recv.get_base` matches by its trailing identifier.
-            if (method->returnType == "string" || ctx.isOwnedValueReturn(method->returnType)) method->ownsReturn = true;   // §4/§8
+            if (ctx.isOwningReturnType(method->returnType)) method->ownsReturn = true;   // §4/§8
             if (method->ownsReturn) {
                 ctx.ownsReturnFns.insert(oldName);
                 ctx.ownsReturnFnTypes[oldName].insert(method->returnType);   // spec/61: name→return type (collision guard)
@@ -5349,7 +5378,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
     // if (!func->ownsReturn && classifyOwnedStringReturn(func, ctx)) func->ownsReturn = true;
     // spec/61 §4/§8 (2026-09-30): every string return hands the caller an owning reference — the
     // producer machinery dups borrowed returns, moves owned locals, increfs fields of dropped owners.
-    if (func->returnType == "string" || ctx.isOwnedValueReturn(func->returnType)) func->ownsReturn = true;
+    if (ctx.isOwningReturnType(func->returnType)) func->ownsReturn = true;
 
     /* Snapshot + install decorator context so visitRetStmt can consult it
      * without needing a pointer back to the FunctionDecl.  Cleared on exit
@@ -5668,6 +5697,38 @@ void Compiler::visitFunction(FunctionDecl* func) {
                 sd.debugName = argNames[i]; sd.debugType = ptn;
                 ctx.pendingParamDrops.push_back(sd);
                 sym.paramOwnsRef = true;
+            }
+        }
+        // spec/61 §8: a ptr<T> parameter is a move — the callee owns the box and frees it unless it
+        // moves it on (return / store / owning call).
+        if (ctx.memV3 && ctx.lifetimeDropsEnabled && argAlloca && !(i < argIsRefModel.size() && argIsRefModel[i])) {
+            std::string ptn;
+            for (auto& fa : func->args) if (fa.first == argNames[i]) { ptn = fa.second; break; }
+            if (ptn.size() > 5 && ptn.rfind("ptr<", 0) == 0 && ptn.back() == '>') {
+                std::string boxed = ptn.substr(4, ptn.size() - 5);
+                auto bci = ctx.classes.find(boxed);
+                llvm::Value* pslot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argAlloca));
+                CompilerContext::ScopeDrop sd;
+                sd.addr = pslot;
+                sd.ownedParamBox = true;
+                sd.debugName = argNames[i]; sd.debugType = ptn;
+                bool ok = false;
+                if (ctx.interfaces.count(boxed)) {
+                    llvm::Type* ft = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(argTypes[i]));
+                    if (ft && ft->isStructTy()) {
+                        sd.kind = 5; sd.fatPtrType = ft;
+                        sd.ifaceMethodCount = (int)ctx.interfaces[boxed].methods.size();
+                        ok = true;
+                    }
+                } else if (bci != ctx.classes.end() && !bci->second.isBuiltin && bci->second.type
+                           && !ctx.classGroupContainers.count(boxed) && !ctx.cascadeClasses.count(boxed)) {
+                    sd.kind = 4;
+                    if (bci->second.hasHeapFields && bci->second.serNodesVar) {
+                        sd.serNodes = bci->second.serNodesVar; sd.serNodesCount = bci->second.serNodesCount;
+                    }
+                    ok = true;
+                }
+                if (ok) ctx.pendingParamDrops.push_back(sd);
             }
         }
         // spec/61 §8: a shared<T> parameter co-owns for the call (incref, decref on every exit);

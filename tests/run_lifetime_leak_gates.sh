@@ -134,6 +134,10 @@ GREEN=(
   tests/lifetime/158_kv_get_copy_targets.aiml
   tests/lifetime/159_class_member_rebinds.aiml
   tests/lifetime/160_iface_list_ops_buffer_field.aiml
+  tests/lifetime/161_iface_map_values.aiml
+  tests/lifetime/162_ptr_param_move.aiml
+  tests/lifetime/163_yaml_doc_scope_release.aiml
+  tests/lifetime/164_forward_signature_ownership.aiml
   tests/lifetime/cascade_params/direct.aiml
   tests/lifetime/cascade_params/dispatch.aiml
   tests/lifetime/cascade_params/indirect.aiml

@@ -14,7 +14,8 @@ namespace fs = std::filesystem;
 // Maps normalized path strings → heap-allocated char* (stable, never freed).
 // Pointers are used as path identity: p1 == p2  ↔  same address.
 
-static std::unordered_map<std::string, const char*> g_intern;
+// runtime-owned intern table (spec/61 Class 2 path) — never destroyed, so interned strings stay reachable
+static auto& g_intern = *new std::unordered_map<std::string, const char*>();
 static std::mutex g_mutex;
 
 static const char* g_empty_path = "";  // sentinel for empty paths

@@ -1,5 +1,5 @@
 # static-check: off
-# spec/61 §8: `&view` is a borrow — passing it (to a ref<T> or a ptr<T> parameter) never removes the view's own drop — also when the call returns a string borrowed from it.
+# spec/61 §8: `&view` is a borrow — passing it to a ref<T> parameter never removes the view's own drop — also when the call returns a string borrowed from it.
 - model:
     name: Seat
     fields:
@@ -18,10 +18,10 @@
       - return: seat.hand.len
 - def:
     name: count_ptr
-    args: [[seat, ptr<Seat>]]
+    args: [[place, ref<Seat>]]
     return: i32
     body:
-      - return: seat.hand.len
+      - return: place.hand.len
 - def:
     name: first_card
     args: [[seat, ref<Seat>], [want, i32]]

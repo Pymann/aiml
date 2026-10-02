@@ -56,6 +56,12 @@ whether to report the error, continue, or call `sys.exit`.
 from it.  It is safe to call once with a null pointer; using an invalidated
 non-null node is a runtime error.
 
+A `yaml_doc` is a unique owned resource (spec/61 §2.1 Class 4): the `ptr<yaml_doc>`
+returned by `yaml.parse` / `yaml.parse_file` is released automatically when its owning
+local goes out of scope (every exit, spec/61 §9.1).  `yaml.free` on a local is an early
+release that nulls the local, so the scope release is then a no-op.  A `yaml_node` is a
+non-owning view into its document and is never released on its own.
+
 ## 4. Root And Node Inspection
 
 ```yaml

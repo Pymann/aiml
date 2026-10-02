@@ -1,0 +1,19 @@
+# EXPECT-ERROR: owning ptr<T> parameter
+# spec/61 §8: `&view` is a borrow — it cannot be passed to an owning ptr<T> parameter (use ref<T>).
+- model: {name: Seat, fields: [[nick, string], [hand, list<string>]]}
+- def:
+    name: count_ptr
+    args: [[seat, ptr<Seat>]]
+    return: i32
+    body:
+      - return: seat.hand.len
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [seats, list<Seat>]
+      - decl: [one, Seat]
+      - call: [seats.push, one]
+      - decl: [view, Seat, {at: [seats, 0]}]
+      - decl: [res, i32, {call: [count_ptr, {'&': [view]}]}]
+      - return: 0
