@@ -61,7 +61,7 @@
 - def:
     name: big_worker_loop
     args:
-      - [var_wh, "ptr<BigWorker>"]
+      - [var_wh, "ref<BigWorker>"]
     return: void
     body:
       # Lese n_workers aus embedded struct via 3-level chain

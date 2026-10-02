@@ -12,7 +12,7 @@
 
 - def:
     name: fill_inner
-    args: [[dst, ptr<Inner>]]
+    args: [[dst, ref<Inner>]]
     body:
       - set: [dst.label, "filled"]
       - set: [dst.xval, 42]

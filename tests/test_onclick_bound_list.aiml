@@ -11,7 +11,7 @@
 - interface:
     name: OnClick
     methods:
-      - [fire, void, [[ctx, ptr<ClickCtx>]]]
+      - [fire, void, [[ctx, ref<ClickCtx>]]]
 
 # Wrapper model that owns the list — needed because members with type
 # list<T> get struct-copied on set:; a ptr<Model> gives shared access.
@@ -29,7 +29,7 @@
     methods:
       - def:
           name: fire
-          args: [[ctx, ptr<ClickCtx>]]
+          args: [[ctx, ref<ClickCtx>]]
           body:
             - decl: [row, list<i32>]
             - call: [row.push, <.default_id]
@@ -43,7 +43,7 @@
     methods:
       - def:
           name: fire
-          args: [[ctx, ptr<ClickCtx>]]
+          args: [[ctx, ref<ClickCtx>]]
           body:
             - if: { condition: { gt: [<.target.items.len, 0] }, then: [{ call: [<.target.items.pop] }] }
 

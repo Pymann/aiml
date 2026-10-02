@@ -15,7 +15,7 @@
 # Free function → resolvable callee, so the exact depth compare applies.
 - def:
     name: sink
-    args: [[obj, ptr<Thing>]]
+    args: [[obj, ref<Thing>]]
     body: [{ return }]
 
 - class:
@@ -24,18 +24,18 @@
       # `&pobj` where pobj is ptr<Thing> → depth 2 vs param depth 1 → WARNING.
       - def:
           name: trigger_it
-          args: [[pobj, ptr<Thing>]]
+          args: [[pobj, ref<Thing>]]
           body: [{ call: [sink, {'&': [pobj]}] }]
       # Same over-indirection, but suppressed → NO warning.
       - def:
           name: suppressed_ok
           static_off: ["ptr_indirection"]
-          args: [[pobj, ptr<Thing>]]
+          args: [[pobj, ref<Thing>]]
           body: [{ call: [sink, {'&': [pobj]}] }]
       # Correct: pobj (ptr) passed directly → depth 1 == param 1 → NO warning.
       - def:
           name: correct_ok
-          args: [[pobj, ptr<Thing>]]
+          args: [[pobj, ref<Thing>]]
           body: [{ call: [sink, pobj] }]
 
 - def:

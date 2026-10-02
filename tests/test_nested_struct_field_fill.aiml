@@ -15,7 +15,7 @@
 
 - def:
     name: fill_card
-    args: [[dst, ptr<Card2>]]
+    args: [[dst, ref<Card2>]]
     body:
       - set: [dst.card_id, "ID42"]
       - set: [dst.attack, 5]

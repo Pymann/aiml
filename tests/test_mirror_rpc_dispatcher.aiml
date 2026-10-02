@@ -27,7 +27,7 @@
 - interface:
     name: RpcHandler
     methods:
-      - [run, void, [[rpc, rpc_event], [sess, mirror_session], [player, ptr<NetPlayer>]]]
+      - [run, void, [[rpc, rpc_event], [sess, mirror_session], [player, ref<NetPlayer>]]]
 
 # Handler-Klasse: implements RpcHandler + models RpcCast.
 # `<.name`, `<.amount`, `<.tags` sind durch das Model-Mixin verfügbar.
@@ -38,7 +38,7 @@
     methods:
       - def:
           name: run
-          args: [[rpc, rpc_event], [sess, mirror_session], [player, ptr<NetPlayer>]]
+          args: [[rpc, rpc_event], [sess, mirror_session], [player, ref<NetPlayer>]]
           body:
             - decl: [var_rc, i32, { call: [sess.decode_rpc, rpc, this] }]
             - if:
@@ -78,7 +78,7 @@
           body: [{ call: [<.handlers.put, name, var_h] }]
       - def:
           name: dispatch
-          args: [[rpc, rpc_event], [sess, mirror_session], [player, ptr<NetPlayer>]]
+          args: [[rpc, rpc_event], [sess, mirror_session], [player, ref<NetPlayer>]]
           body:
             - if:
                 condition: { eq: [{ call: [<.handlers.contains, rpc.method] }, 0] }

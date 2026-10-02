@@ -22,7 +22,7 @@
 # 3. Function taking 'Model'
 - def:
     name: process_model
-    args: [[var_m, ptr<TestModel>]]
+    args: [[var_m, ref<TestModel>]]
     return: void
     body:
       - print: ["Processing Model: ${var_m.name}"]

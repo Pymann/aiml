@@ -13,7 +13,7 @@
 - interface:
     name: Filler
     methods:
-      - [fill, void, [[dst, ptr<Box>]]]
+      - [fill, void, [[dst, ref<Box>]]]
 
 - class:
     name: AImpl
@@ -22,7 +22,7 @@
     methods:
       - def:
           name: fill
-          args: [[dst, ptr<Box>]]
+          args: [[dst, ref<Box>]]
           return: void
           body: [{ set: [dst.val, 42] }]
 

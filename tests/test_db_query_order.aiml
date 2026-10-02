@@ -46,7 +46,7 @@
 # where predicate + order_by desc
 - def:
     name: above_40
-    args: [[var_p, ptr<Score>]]
+    args: [[var_p, ref<Score>]]
     return: i32
     body:
       - if:

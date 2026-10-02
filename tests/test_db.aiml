@@ -195,7 +195,7 @@
 # System function: prints var_hp of entities with BOTH stores active
 - def:
     name: tick_hp
-    args: [[var_h, ptr<Health>]]
+    args: [[var_h, ref<Health>]]
     return: void
     body:
       - print: ["sys var_hp: ${var_h.var_hp}"]
@@ -203,7 +203,7 @@
 # Predicate: returns 1 if var_hp > 50
 - def:
     name: is_high_hp
-    args: [[var_h, ptr<Health>]]
+    args: [[var_h, ref<Health>]]
     return: i32
     body:
       - if:
