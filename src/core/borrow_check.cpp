@@ -74,8 +74,12 @@ struct BorrowChecker {
     }
     bool tracked(const std::string& n) const { return ptrLocals.count(n) != 0; }
 
+    std::set<std::string> reported;   // name|line|how — a loop re-pass must not repeat a diagnostic
     void flagUse(const std::string& n, int line, const char* how) {
+        std::string key = n + "|" + std::to_string(line) + "|" + how;
         auto it = state.find(n);
+        bool bad = (it != state.end() && (it->second == St::Moved || it->second == St::Freed));
+        if (bad && !reported.insert(key).second) return;
         if (it != state.end()) {
             if (it->second == St::Moved)
                 LOG_ERROR(loc(line) + "use-after-move: '" + n + "' was moved out and is used here ("
@@ -128,6 +132,27 @@ struct BorrowChecker {
         if (auto* ne = dynamic_cast<const NewExpr*>(e)) { for (auto& kv : ne->initValues) scanUses(kv.second.get(), line); return; }
         if (auto* na = dynamic_cast<const NewArrayExpr*>(e)) { scanUses(na->countExpr.get(), line); return; }
         if (auto* dl = dynamic_cast<const DictLiteralExpr*>(e)) { for (auto& kv : dl->entriesExpr) scanUses(kv.second.get(), line); return; }
+    }
+
+    // Declared type of a dotted member target (`a.b.c`), "" when unknown.
+    std::string memberTypeOf(const std::string& target) {
+        size_t dot = target.find('.');
+        if (dot == std::string::npos) return "";
+        std::string base = baseName(target.substr(0, dot));
+        std::string t = declTypes.count(base) ? declTypes[base] : "";
+        std::string rest = target.substr(dot + 1);
+        while (!t.empty()) {
+            if ((t.rfind("ptr<", 0) == 0 || t.rfind("ref<", 0) == 0 || t.rfind("shared<", 0) == 0) && t.back() == '>')
+                t = t.substr(t.find('<') + 1, t.size() - t.find('<') - 2);
+            auto ci = ctx.classes.find(t);
+            if (ci == ctx.classes.end()) return "";
+            size_t d = rest.find('.');
+            auto mi = ci->second.members.find(rest.substr(0, d));
+            if (mi == ci->second.members.end()) return "";
+            if (d == std::string::npos) return mi->second.typeName;
+            t = mi->second.typeName; rest = rest.substr(d + 1);
+        }
+        return "";
     }
 
     // If `e` is a bare tracked-ptr variable, return its name; else "".
@@ -185,8 +210,15 @@ struct BorrowChecker {
             bool plainTarget = (set->target.find_first_of(".-<") == std::string::npos);
             // A member/index target (`p.child = …`) writes THROUGH p → that is a USE of p.
             if (!plainTarget && tracked(tb)) flagUse(tb, line, "write through");
-            // Storing a ptr local INTO a member/container slot moves it (§7 aggregate ownership).
-            if (!plainTarget) { std::string src = asPtrVar(set->value.get()); if (!src.empty()) markMoved(src, line); }
+            // Storing a ptr local INTO a member/container slot moves it (§7 aggregate ownership); a
+            // ref<T> member only borrows it (§6.2 weak back-edge, `{ ref: x }`).
+            if (!plainTarget) {
+                std::string src = asPtrVar(set->value.get());
+                if (!src.empty()) {
+                    if (isRefTargetType(memberTypeOf(set->target))) flagUse(src, line, "borrow");
+                    else markMoved(src, line);
+                }
+            }
             // rebind of a ptr local from another ptr local (target is ptr<T> or shared<T>): move src.
             if (plainTarget && tracked(tb)) {
                 std::string src = asPtrVar(set->value.get());
@@ -282,6 +314,19 @@ struct BorrowChecker {
             scanUses(w->condition.get(), line);
             auto pre = state; auto preRef = refInvalid;
             run(w->body.get());       // catch in-body violations (from the pre-loop state)
+            // spec/61 §10: a ptr moved/freed by the end of the body (and not re-bound) starts the
+            // NEXT iteration dead — re-run the body from that state so its uses are reported.
+            bool carried = false;
+            auto next = pre;
+            for (auto& kv : state)
+                if (kv.second != St::Live && (!pre.count(kv.first) || pre[kv.first] == St::Live)) {
+                    next[kv.first] = kv.second; carried = true;
+                }
+            if (carried) {
+                state = next; refInvalid = preRef;
+                scanUses(w->condition.get(), line);
+                run(w->body.get());
+            }
             state = pre; refInvalid = preRef;   // conservative: body effects do not escape the loop
             return;
         }
@@ -322,12 +367,39 @@ struct BorrowChecker {
         // §6.2/§8/§3.1 (free functions): a ptr<T> local passed to a by-value ptr<T> param MOVES it
         // (n11); a `consumed` param also moves; ref<T>/shared<T> params do not. argTypeNames tells them apart.
         auto fit = ctx.functions.find(fn);
+        size_t argOffset = 0;   // a method's FunctionInfo starts with the implicit this
+        if (fit == ctx.functions.end()) {
+            // spec/61 §8: direct method (Class_method) or interface method on a typed local
+            size_t dot = fn.rfind('.');
+            if (dot != std::string::npos) {
+                std::string base = baseName(fn.substr(0, dot)), method = fn.substr(dot + 1);
+                std::string t = declTypes.count(base) ? declTypes[base] : "";
+                if ((t.rfind("ptr<", 0) == 0 || t.rfind("ref<", 0) == 0 || t.rfind("shared<", 0) == 0) && t.back() == '>')
+                    t = t.substr(t.find('<') + 1, t.size() - t.find('<') - 2);
+                auto ii = ctx.interfaces.find(t);
+                if (ii != ctx.interfaces.end()) {
+                    for (const auto& m : ii->second.methods) {
+                        if (m.name != method) continue;
+                        for (size_t j = 0; j < c.args.size() && j < m.args.size(); ++j) {
+                            bool consumed = j < m.argLifetimes.size() && m.argLifetimes[j] == "consumed";
+                            if (consumed || m.args[j].second.rfind("ptr<", 0) == 0) {
+                                std::string src = asPtrVar(c.args[j].get()); if (!src.empty()) markMoved(src, line);
+                            }
+                        }
+                    }
+                    return;
+                }
+                fit = ctx.functions.find(t + "_" + method);
+                argOffset = 1;
+            }
+        }
         if (fit != ctx.functions.end()) {
             const auto& lifos = fit->second.argLifetimes;
             const auto& tys   = fit->second.argTypeNames;
             for (size_t j = 0; j < c.args.size(); ++j) {
-                bool consumed = (j < lifos.size() && lifos[j] == "consumed");
-                bool ptrParam = (j < tys.size() && tys[j].rfind("ptr<", 0) == 0);
+                size_t k = j + argOffset;
+                bool consumed = (k < lifos.size() && lifos[k] == "consumed");
+                bool ptrParam = (k < tys.size() && tys[k].rfind("ptr<", 0) == 0);
                 if (consumed || ptrParam) { std::string src = asPtrVar(c.args[j].get()); if (!src.empty()) markMoved(src, line); }
             }
         }

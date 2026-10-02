@@ -4,11 +4,7 @@
 # Frage: kann eine list<BaseCard> Instanzen von CreatureCard UND ManaCard
 # gleichzeitig halten und beim get korrekt die base-Felder liefern?
 #
-# Erwartung: entweder funktioniert (Base-Slice-Semantik) oder wir sehen
-# einen Compile/Runtime-Fehler.  Beides ist informativ.
-#
-# auch mit list<any> funktioniert es nicht.
-# Es bleibt zu entscheiden, wie der compiler hinsichtlich Typisierung gestaltet wird.
+# spec/02 + spec/13 §4: list<any> ist verboten — heterogen über die gemeinsame Basis list<ptr<BaseCard>>.
 
 - model:
     name: BaseCard
@@ -34,28 +30,28 @@
 - class:
     name: Runner
     members:
-      - [bases, list<any>]
+      - [bases, list<ptr<BaseCard>>]
     methods:
       - def:
           name: run
           return: i32
           body:
-            - decl: [crt, CreatureCard]
+            - decl: [crt, ptr<CreatureCard>, { new: CreatureCard }]
             - set: [crt.nam,       "Dragon"]
             - set: [crt.card_type, "creature"]
             - set: [crt.mkp,       5]
             - set: [crt.attack,    4]
             - set: [crt.defense,   3]
             - call: [<.bases.push, crt]
-            - decl: [man, ManaCard]
+            - decl: [man, ptr<ManaCard>, { new: ManaCard }]
             - set: [man.nam,             "FireMana"]
             - set: [man.card_type,       "mana"]
             - set: [man.mkp,             1]
             - set: [man.provides_color,  0]
             - set: [man.provides_amount, 2]
             - call: [<.bases.push, man]
-            - decl: [bas0, BaseCard, { call: [<.bases.get, 0] }]
-            - decl: [bas1, BaseCard, { call: [<.bases.get, 1] }]
+            - decl: [bas0, ref<BaseCard>, { call: [<.bases.get, 0] }]
+            - decl: [bas1, ref<BaseCard>, { call: [<.bases.get, 1] }]
             - print: ["A[0]: name='${bas0.nam}' type='${bas0.card_type}' mkp=${bas0.mkp}"]
             - print: ["A[1]: name='${bas1.nam}' type='${bas1.card_type}' mkp=${bas1.mkp}"]
             - decl: [fails, i32, 0]

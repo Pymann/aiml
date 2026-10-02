@@ -23,7 +23,7 @@
 
 - def:
     name: make_action
-    args: [[a_req, ptr<Req>]]
+    args: [[a_req, ref<Req>]]
     return: Action
     body:
       - decl: [var_a, Action]

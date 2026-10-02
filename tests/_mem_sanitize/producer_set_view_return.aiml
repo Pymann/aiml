@@ -42,7 +42,7 @@
       - def:
           name: load_entry
           static_off: ["same_arg"]
-          args: [[brd, ptr<Board>]]
+          args: [[brd, ref<Board>]]
           return: { type: Zen, lifetime: producer }
           body:
             - decl: [out, Zen]

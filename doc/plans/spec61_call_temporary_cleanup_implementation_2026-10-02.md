@@ -12,6 +12,16 @@ Stand: 02.10.2026, nach Review implementiert auf Basis `572603f`. Die historisch
 Validierung: `exodus build --all` im AIML-Verzeichnis ist für den endgültigen Stand erfolgreich abgeschlossen (Exitcode 0; Build-Log: `/tmp/aiml-spec61-build-final.log`). 44 Regressionstestprogramme samt Import-Fixture sind unter `tests/lifetime/call_temporaries/` ergänzt und über ein gemeinsames Manifest in die funktionale Lifetime-Suite, das AOT-Leak-Gate und die Memory-Safety-Suite eingebunden. Abdeckung und Status stehen in `tests/lifetime/call_temporaries/README.md`. Die neuen Testprogramme wurden weder kompiliert noch ausgeführt. Keine Tests, Leak-Gates, Sanitizer-Läufe oder 9rooms-Builds/Messungen ausgeführt. Die unten beschriebenen Abnahmekriterien sind deshalb offen; kein Leak-Muster wird allein aufgrund der Bauprüfung als GREEN markiert.
 
 
+### Abnahme (2026-10-02, Nachtrag)
+
+Alle 44 Regressionen kompiliert und unter Valgrind ausgeführt: Exit 0, 0 definitiv/indirekt verlorene
+Bytes, keine Speicherfehler. Dafür nötig waren Testkorrekturen (gültiges AIML, siehe README) und drei
+Compiler-Fixes: `fn<…>`-Aufrufe übergeben bei `ref<T>`/`ptr<T>`-Parametern die Adresse; der `ptr<T>`-Move
+wird erst beim Betreten des Callees wirksam (der Slot des Locals wird nach der Argumentauswertung
+genullt, statt den Drop beim Übersetzen zu entfernen) — ein vorher werfendes Argument lässt die Box beim
+Aufrufer; `spawn` verschiebt erst nach der Argumentauswertung. Zusätzlich erkennt der Borrow-Checker
+schleifenübergreifendes use-after-move und Moves an Methoden-/Interface-Parameter (neg n20/n21).
+
 ## Ziel und Abgrenzung
 
 Alle sechs bestätigten Fehlerbilder beheben: Methoden-Vorwärtsreferenz, Producer über verschachtelten Receiver, Producer über Funktionszeiger, Interface-Consumer, Funktionszeiger-Consumer und temporärer Caller-Owner bei Exception im Consumer. Vorrang hat spec/61_memory_management_DRAFT.md, besonders §§5, 8, 9.2 und 9.3. Der gültige Originalausdruck in 9rooms muss ohne zusätzliche lokale Variable leakfrei werden.

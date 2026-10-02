@@ -69,7 +69,7 @@
 # then let it drop at scope exit (NO explicit free — this is the real handler).
 - def:
     name: handle_request
-    args: [[svc, ptr<CardSvc>], [num, i32]]
+    args: [[svc, ref<CardSvc>], [num, i32]]
     return: i32
     body:
       - decl: [resp, Bundle, { call: [svc.list_bundle, num] }]

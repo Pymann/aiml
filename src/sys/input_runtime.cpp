@@ -72,10 +72,16 @@ struct AimlInputState {
     /* Per-frame "rising edge already consumed" flags for key_pressed_once.
      * Cleared each frame in aiml_input_update; set on first _once read. */
     uint8_t consumed_press[AIML_MAX_KEYS];
+    /* spec/44: latched key edges since the last frame (press+release inside one poll is not lost) */
+    uint8_t key_press_latch[AIML_MAX_KEYS];
+    uint8_t key_release_latch[AIML_MAX_KEYS];
 
     /* Mouse buttons */
     uint8_t curr_mouse[AIML_MAX_MOUSE];
     uint8_t prev_mouse[AIML_MAX_MOUSE];
+    /* spec/44: latched edges since the last frame (a press+release inside one poll is not lost) */
+    uint8_t press_latch[AIML_MAX_MOUSE];
+    uint8_t release_latch[AIML_MAX_MOUSE];
 
     /* Mouse position and delta */
     double curr_pos_x, curr_pos_y;
@@ -308,17 +314,15 @@ static bool curr_key_active(const char* name) {
     return g_input->curr_keys[k] != 0;
 }
 
-static bool prev_key_active(const char* name) {
+/* Latched edge (press_latch / release_latch) for a key name, aliases cover both physical keys. */
+static bool key_latched(const char* name, const uint8_t* latch) {
     if (!g_input) return false;
-    if (strcmp(name,"Shift")==0)
-        return g_input->prev_keys[GLFW_KEY_LEFT_SHIFT] || g_input->prev_keys[GLFW_KEY_RIGHT_SHIFT];
-    if (strcmp(name,"Ctrl")==0)
-        return g_input->prev_keys[GLFW_KEY_LEFT_CONTROL] || g_input->prev_keys[GLFW_KEY_RIGHT_CONTROL];
-    if (strcmp(name,"Alt")==0)
-        return g_input->prev_keys[GLFW_KEY_LEFT_ALT] || g_input->prev_keys[GLFW_KEY_RIGHT_ALT];
+    if (strcmp(name,"Shift")==0) return latch[GLFW_KEY_LEFT_SHIFT]   || latch[GLFW_KEY_RIGHT_SHIFT];
+    if (strcmp(name,"Ctrl")==0)  return latch[GLFW_KEY_LEFT_CONTROL] || latch[GLFW_KEY_RIGHT_CONTROL];
+    if (strcmp(name,"Alt")==0)   return latch[GLFW_KEY_LEFT_ALT]     || latch[GLFW_KEY_RIGHT_ALT];
     int k = key_name_to_glfw(name);
     if (k < 0 || k >= AIML_MAX_KEYS) return false;
-    return g_input->prev_keys[k] != 0;
+    return latch[k] != 0;
 }
 
 /* ── GLFW callbacks ───────────────────────────────────────────────────────── */
@@ -331,10 +335,13 @@ static void glfw_scroll_cb(GLFWwindow*, double x, double y) {
 
 static void glfw_key_cb(GLFWwindow*, int key, int /*scan*/, int action, int /*mods*/) {
     if (!g_input || key < 0 || key >= AIML_MAX_KEYS) return;
-    if (action == GLFW_PRESS || action == GLFW_REPEAT)
+    if (action == GLFW_PRESS || action == GLFW_REPEAT) {
+        if (action == GLFW_PRESS) g_input->key_press_latch[key] = 1;
         g_input->curr_keys[key] = 1;
-    else if (action == GLFW_RELEASE)
+    } else if (action == GLFW_RELEASE) {
         g_input->curr_keys[key] = 0;
+        g_input->key_release_latch[key] = 1;
+    }
     if (action == GLFW_REPEAT) return;  /* only push events for press/release */
 
     AimlInputEvent ev = {};
@@ -399,8 +406,8 @@ static void glfw_cursor_cb(GLFWwindow*, double x, double y) {
 
 static void glfw_mbtn_cb(GLFWwindow*, int btn, int action, int /*mods*/) {
     if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return;
-    if (action == GLFW_PRESS)   g_input->curr_mouse[btn] = 1;
-    if (action == GLFW_RELEASE) g_input->curr_mouse[btn] = 0;
+    if (action == GLFW_PRESS)   { g_input->curr_mouse[btn] = 1; g_input->press_latch[btn] = 1; }
+    if (action == GLFW_RELEASE) { g_input->curr_mouse[btn] = 0; g_input->release_latch[btn] = 1; }
     AimlInputEvent ev = {};
     ev.type  = (action == GLFW_PRESS) ? "mouse_button_down" : "mouse_button_up";
     ev.btn   = btn;
@@ -474,6 +481,10 @@ void aiml_input_update(void) {
     /* 1. Save prev state */
     memcpy(g_input->prev_keys,  g_input->curr_keys,  AIML_MAX_KEYS);
     memcpy(g_input->prev_mouse, g_input->curr_mouse, AIML_MAX_MOUSE);
+    memset(g_input->press_latch,   0, AIML_MAX_MOUSE);
+    memset(g_input->release_latch, 0, AIML_MAX_MOUSE);
+    memset(g_input->key_press_latch,   0, AIML_MAX_KEYS);
+    memset(g_input->key_release_latch, 0, AIML_MAX_KEYS);
     /* New frame → rising-edge consumption for key_pressed_once resets, so the
      * first _once read this frame sees the edge (subsequent reads get 0). */
     memset(g_input->consumed_press, 0, AIML_MAX_KEYS);
@@ -538,8 +549,8 @@ void aiml_input_set_capture(int32_t on) {
 /* ── Raw polling: keyboard ───────────────────────────────────────────────── */
 
 int32_t aiml_input_key_down    (const char* k) { return curr_key_active(k) ? 1 : 0; }
-int32_t aiml_input_key_pressed (const char* k) { return (curr_key_active(k) && !prev_key_active(k)) ? 1 : 0; }
-int32_t aiml_input_key_released(const char* k) { return (!curr_key_active(k) && prev_key_active(k)) ? 1 : 0; }
+int32_t aiml_input_key_pressed (const char* k) { return (g_input && key_latched(k, g_input->key_press_latch)) ? 1 : 0; }
+int32_t aiml_input_key_released(const char* k) { return (g_input && key_latched(k, g_input->key_release_latch)) ? 1 : 0; }
 
 /* System clipboard (text_input copy/paste).  Backed by the GLFW window; empty
  * string when no window/clipboard is available. */
@@ -569,7 +580,7 @@ static int consume_slot_for(const char* name) {
  * (skip, toggles); key_pressed stays idempotent for queries. */
 int32_t aiml_input_key_pressed_once(const char* k) {
     if (!g_input) return 0;
-    if (!(curr_key_active(k) && !prev_key_active(k))) return 0;   /* not a rising edge */
+    if (!key_latched(k, g_input->key_press_latch)) return 0;      /* not a rising edge */
     int slot = consume_slot_for(k);
     if (slot < 0) return 1;                       /* edge but unmappable → report, no dedup */
     if (g_input->consumed_press[slot]) return 0;  /* already consumed this frame */
@@ -592,11 +603,11 @@ int32_t aiml_input_mouse_button  (int32_t b) {
 }
 int32_t aiml_input_mouse_pressed (int32_t b) {
     if (!g_input || b < 0 || b >= AIML_MAX_MOUSE) return 0;
-    return (g_input->curr_mouse[b] && !g_input->prev_mouse[b]) ? 1 : 0;
+    return g_input->press_latch[b] ? 1 : 0;
 }
 int32_t aiml_input_mouse_released(int32_t b) {
     if (!g_input || b < 0 || b >= AIML_MAX_MOUSE) return 0;
-    return (!g_input->curr_mouse[b] && g_input->prev_mouse[b]) ? 1 : 0;
+    return g_input->release_latch[b] ? 1 : 0;
 }
 
 /* ── Raw polling: gamepad ────────────────────────────────────────────────── */
@@ -877,16 +888,26 @@ struct BrowserInputState {
     double curr_pos_x, curr_pos_y;
     double prev_pos_x, prev_pos_y;
     float  delta_x, delta_y;
-    uint8_t curr_mouse[AIML_MAX_MOUSE];
+    uint8_t curr_mouse[AIML_MAX_MOUSE];   // per-frame snapshot (spec/44)
     uint8_t prev_mouse[AIML_MAX_MOUSE];
+    uint8_t raw_mouse[AIML_MAX_MOUSE];    // live state, written by the DOM handlers
+    uint8_t pend_press[AIML_MAX_MOUSE];   // edges since the last snapshot
+    uint8_t pend_release[AIML_MAX_MOUSE];
+    uint8_t frame_press[AIML_MAX_MOUSE];  // edges visible this frame
+    uint8_t frame_release[AIML_MAX_MOUSE];
     float   scroll_accum_x, scroll_accum_y;
     float   scroll_this_x, scroll_this_y;
     BrowserDrag drag[AIML_MAX_MOUSE];
     float   drag_threshold;
     void*   drag_payload;
     /* keyboard */
-    uint8_t curr_keys[AIML_MAX_KEYS];  // indexed by emscripten DOM_PK_* keyCode mod-256
+    uint8_t curr_keys[AIML_MAX_KEYS];  // per-frame snapshot (spec/44), indexed by name_to_slot
     uint8_t prev_keys[AIML_MAX_KEYS];
+    uint8_t raw_keys[AIML_MAX_KEYS];        // live state, written by the DOM handlers
+    uint8_t pend_kpress[AIML_MAX_KEYS];     // edges since the last snapshot
+    uint8_t pend_krelease[AIML_MAX_KEYS];
+    uint8_t frame_kpress[AIML_MAX_KEYS];    // edges visible this frame
+    uint8_t frame_krelease[AIML_MAX_KEYS];
     uint8_t consumed_press[AIML_MAX_KEYS];  // per-frame edge consumption (key_pressed_once)
     /* event queue for "text" + "key_down" — consumed by ui_runtime */
     std::deque<AimlInputEvent> events;
@@ -952,7 +973,7 @@ static EM_BOOL bin_mousedown(int /*type*/, const EmscriptenMouseEvent* e, void* 
     if (!g_b) return EM_FALSE;
     int b = e->button; /* 0=left 1=middle 2=right */
     if (b < 0 || b >= AIML_MAX_MOUSE) return EM_TRUE;
-    g_b->curr_mouse[b] = 1;
+    g_b->raw_mouse[b] = 1; g_b->pend_press[b] = 1;
     double mx, my; bin_event_xy(e->clientX, e->clientY, &mx, &my);
     g_b->curr_pos_x = mx; g_b->curr_pos_y = my;
     auto& ds = g_b->drag[b];
@@ -966,7 +987,8 @@ static EM_BOOL bin_mouseup(int /*type*/, const EmscriptenMouseEvent* e, void* /*
     if (!g_b) return EM_FALSE;
     int b = e->button;
     if (b < 0 || b >= AIML_MAX_MOUSE) return EM_TRUE;
-    g_b->curr_mouse[b] = 0;
+    if (g_b->raw_mouse[b]) g_b->pend_release[b] = 1;   // mouseup is window-wide: only after our mousedown
+    g_b->raw_mouse[b] = 0;
     auto& ds = g_b->drag[b];
     if (ds.active) ds.ended_this_frame = true;
     ds.held = false; ds.active = false;
@@ -989,12 +1011,13 @@ static EM_BOOL bin_touchstart(int /*type*/, const EmscriptenTouchEvent* e, void*
     if (!g_b || e->numTouches <= 0) return EM_FALSE;
     if (e->numTouches >= 2) {   /* two fingers = pan/zoom gesture (shell), not game
                                  * input — release any in-progress single-tap press. */
-        g_b->curr_mouse[0] = 0; g_b->drag[0].held = false; g_b->drag[0].active = false;
+        if (g_b->raw_mouse[0]) g_b->pend_release[0] = 1;
+        g_b->raw_mouse[0] = 0; g_b->drag[0].held = false; g_b->drag[0].active = false;
         return EM_FALSE;
     }
     double mx, my; bin_event_xy(e->touches[0].clientX, e->touches[0].clientY, &mx, &my);
     g_b->curr_pos_x = mx; g_b->curr_pos_y = my;
-    g_b->curr_mouse[0] = 1;
+    g_b->raw_mouse[0] = 1; g_b->pend_press[0] = 1;
     auto& ds = g_b->drag[0];
     ds.held = true; ds.active = false;
     ds.started_this_frame = ds.ended_this_frame = false;
@@ -1023,7 +1046,8 @@ static EM_BOOL bin_touchmove(int /*type*/, const EmscriptenTouchEvent* e, void* 
  * no longer contains the lifted finger). */
 static EM_BOOL bin_touchend(int /*type*/, const EmscriptenTouchEvent* /*e*/, void* /*ud*/) {
     if (!g_b) return EM_FALSE;
-    g_b->curr_mouse[0] = 0;
+    if (g_b->raw_mouse[0]) g_b->pend_release[0] = 1;
+    g_b->raw_mouse[0] = 0;
     auto& ds = g_b->drag[0];
     if (ds.active) ds.ended_this_frame = true;
     ds.held = false; ds.active = false;
@@ -1051,7 +1075,10 @@ static EM_BOOL bin_keydown(int /*type*/, const EmscriptenKeyboardEvent* e, void*
      * input.key_down("up") sees the same slot we wrote here when the user
      * pressed ArrowUp. */
     int slot = name_to_slot(e->key);
-    if (slot >= 0) g_b->curr_keys[slot] = 1;
+    if (slot >= 0) {
+        if (!g_b->raw_keys[slot]) g_b->pend_kpress[slot] = 1;   // auto-repeat is no new press
+        g_b->raw_keys[slot] = 1;
+    }
     /* Swallow Backspace/Tab so the browser doesn't navigate or change focus
      * while the user types.  Also swallow Arrow keys / PageUp/PageDown /
      * Space so the page doesn't scroll while the user navigates a graph. */
@@ -1087,7 +1114,10 @@ static EM_BOOL bin_keyup(int /*type*/, const EmscriptenKeyboardEvent* e, void* /
     ev.key  = bin_keep_string(e->key);
     g_b->events.push_back(ev);
     int slot = name_to_slot(e->key);
-    if (slot >= 0) g_b->curr_keys[slot] = 0;
+    if (slot >= 0) {
+        if (g_b->raw_keys[slot]) g_b->pend_krelease[slot] = 1;
+        g_b->raw_keys[slot] = 0;
+    }
     return EM_FALSE;
 }
 
@@ -1258,7 +1288,17 @@ void aiml_input_init(void* /*win*/) {
 void aiml_input_update(void) {
     if (!g_b) return;
     memcpy(g_b->prev_mouse, g_b->curr_mouse, AIML_MAX_MOUSE);
+    memcpy(g_b->curr_mouse, g_b->raw_mouse, AIML_MAX_MOUSE);
+    memcpy(g_b->frame_press, g_b->pend_press, AIML_MAX_MOUSE);
+    memcpy(g_b->frame_release, g_b->pend_release, AIML_MAX_MOUSE);
+    memset(g_b->pend_press, 0, AIML_MAX_MOUSE);
+    memset(g_b->pend_release, 0, AIML_MAX_MOUSE);
     memcpy(g_b->prev_keys,  g_b->curr_keys,  AIML_MAX_KEYS);
+    memcpy(g_b->curr_keys, g_b->raw_keys, AIML_MAX_KEYS);
+    memcpy(g_b->frame_kpress, g_b->pend_kpress, AIML_MAX_KEYS);
+    memcpy(g_b->frame_krelease, g_b->pend_krelease, AIML_MAX_KEYS);
+    memset(g_b->pend_kpress, 0, AIML_MAX_KEYS);
+    memset(g_b->pend_krelease, 0, AIML_MAX_KEYS);
     memset(g_b->consumed_press, 0, AIML_MAX_KEYS);  // new frame → reset _once edges
     g_b->delta_x = (float)(g_b->curr_pos_x - g_b->prev_pos_x);
     g_b->delta_y = (float)(g_b->curr_pos_y - g_b->prev_pos_y);
@@ -1334,13 +1374,13 @@ int32_t aiml_input_key_pressed (const char* k) {
     if (!g_b) return 0;
     int slot = name_to_slot(k);
     if (slot < 0) return 0;
-    return (g_b->curr_keys[slot] && !g_b->prev_keys[slot]) ? 1 : 0;
+    return g_b->frame_kpress[slot] ? 1 : 0;
 }
 int32_t aiml_input_key_pressed_once(const char* k) {
     if (!g_b) return 0;
     int slot = name_to_slot(k);
     if (slot < 0) return 0;
-    if (!(g_b->curr_keys[slot] && !g_b->prev_keys[slot])) return 0;  /* not a rising edge */
+    if (!g_b->frame_kpress[slot]) return 0;                           /* not a rising edge */
     if (g_b->consumed_press[slot]) return 0;                          /* consumed this frame */
     g_b->consumed_press[slot] = 1;
     return 1;
@@ -1349,7 +1389,7 @@ int32_t aiml_input_key_released(const char* k) {
     if (!g_b) return 0;
     int slot = name_to_slot(k);
     if (slot < 0) return 0;
-    return (!g_b->curr_keys[slot] && g_b->prev_keys[slot]) ? 1 : 0;
+    return g_b->frame_krelease[slot] ? 1 : 0;
 }
 
 float   aiml_input_mouse_pos_x   (void) { return g_b ? (float)g_b->curr_pos_x : 0.f; }
@@ -1362,11 +1402,11 @@ int32_t aiml_input_mouse_button  (int32_t b) {
 }
 int32_t aiml_input_mouse_pressed (int32_t b) {
     if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0;
-    return (g_b->curr_mouse[b] && !g_b->prev_mouse[b]) ? 1 : 0;
+    return g_b->frame_press[b] ? 1 : 0;
 }
 int32_t aiml_input_mouse_released(int32_t b) {
     if (!g_b || b < 0 || b >= AIML_MAX_MOUSE) return 0;
-    return (!g_b->curr_mouse[b] && g_b->prev_mouse[b]) ? 1 : 0;
+    return g_b->frame_release[b] ? 1 : 0;
 }
 float   aiml_input_mouse_scroll_x(void) { return g_b ? g_b->scroll_this_x : 0.f; }
 float   aiml_input_mouse_scroll_y(void) { return g_b ? g_b->scroll_this_y : 0.f; }

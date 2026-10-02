@@ -13,6 +13,7 @@ namespace ChanImpl {
 //   6: i64        tail        (buffered: next write index)
 //   7: i8*        buffer      (element array; always 1 slot for rendezvous)
 //   8: [48 x i8]  cond_taken  (rendezvous only: sender waits here for recv ack)
+//   9: i64        rc          (spec/61 Class 5 atomic refcount; AimlChanBlock in ser_runtime.cpp)
 
 llvm::StructType* getStructType(CompilerContext& ctx) {
     if (auto* existing = llvm::StructType::getTypeByName(ctx.context, "__aiml_chan_struct"))
@@ -29,6 +30,7 @@ llvm::StructType* getStructType(CompilerContext& ctx) {
         i64,                            // 6: tail
         i8->getPointerTo(),             // 7: buffer (i8*, element array)
         llvm::ArrayType::get(i8, 48),   // 8: cond_taken (rendezvous ack)
+        i64,                            // 9: rc
     }, "__aiml_chan_struct");
 }
 
@@ -354,6 +356,7 @@ void init(CompilerContext& ctx, llvm::Value* chanAlloca, llvm::Value* capacity) 
     builder.CreateStore(builder.getInt64(0), gep(4)); // size
     builder.CreateStore(builder.getInt64(0), gep(5)); // head
     builder.CreateStore(builder.getInt64(0), gep(6)); // tail
+    builder.CreateStore(builder.getInt64(1), gep(9)); // rc
 
     // Buffer: rendezvous needs 1 handoff slot; buffered needs cap slots
     auto* isRv  = builder.CreateICmpEQ(capacity, builder.getInt64(0), "is_rv");

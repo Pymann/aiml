@@ -43,27 +43,16 @@ While implicit casts handle common pointer scenarios, explicit casting will be r
 - set: [val, { cast: [any_val, MyStruct] }] # Copies data from pointer
 ```
 
-## 4. Heterogeneous Collections (`map<K:any>`, `list<any>`)
+## 4. Heterogeneous Collections
 
-Collections with `any` value type store values as **tagged variants** — the runtime
-preserves the real type of each value alongside the value itself.
-
-**Storing**: The value is stored with its runtime type tag. No explicit annotation needed.
-
-**Retrieving**: `get()` / index access **auto-unboxes**. The returned value has the
-real runtime type, not `any`. The receiving variable (via `set:`) inherits this type.
+`any` is not allowed as a container element type: `list<any>`, `map<K:any>`, `map<any:V>`,
+`buffer<any>`, `chan<any>`, `array<any:N>`, `dyn_array<any>`, `iterator<any>` and `cascade<any>`
+are compile errors (spec/02). An element's type class decides how it is retained and released
+(spec/61 §2.1); an untyped element has none. Use an interface (spec/19 §2) or a common base model:
 
 ```yaml
-- decl: [m, map<string:any>]
-- decl: [myStruct, MyStruct]
-- call: [m.put, "key", myStruct]            # stored as MyStruct (tagged)
-- set: [retrieved, { call: [m.get, "key"] }] # retrieved is MyStruct — auto-unboxed
-- set: [retrieved.field, 99]                # works because real type is known
+- decl: [cards, list<ptr<BaseCard>>]      # or list<ptr<CardIface>> for an interface
 ```
-
-This means `map<string:any>` behaves like a **Python dict**: you put values of any type in,
-you get the real type back out. Comparisons and field access work on the retrieved value
-without any explicit `cast:`.
 
 ## 5. Dereferencing (Accessing Values)
 

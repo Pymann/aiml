@@ -1,6 +1,6 @@
 # static-check: off
 # spec/61 regression: typed list temps, producer/consumer/later-argument throws, nested handlers, free+method+interface+fn
-# Status: NOT RUN. Expected: exit 0; zero definite/indirect leaks; no memory errors.
+# Status: verified 2026-10-02 — exit 0, 0 definite/indirect leaks, no memory errors.
 - def:
     name: make_value
     args:
@@ -13,13 +13,13 @@
         condition:
           eq: [fail, 1]
         then:
-        - throw: {new: Exception, message: producer}
+        - throw: {new: Exception, message: "producer"}
     - {return: value}
 - def:
     name: later
     return: i32
     body:
-    - throw: {new: Exception, message: later}
+    - throw: {new: Exception, message: "later"}
     - {return: 0}
 - def:
     name: sink
@@ -39,7 +39,7 @@
         condition:
           eq: [fail, 1]
         then:
-        - throw: {new: Exception, message: sink}
+        - throw: {new: Exception, message: "sink"}
     - {return: 1}
 - interface:
     name: Sink
@@ -70,8 +70,344 @@
             condition:
               eq: [fail, 1]
             then:
-            - throw: {new: Exception, message: sink}
+            - throw: {new: Exception, message: "sink"}
         - {return: 1}
+- def:
+    name: main_part_1
+    static_off: ["str_cmp"]
+    args: [[obj, 'ref<Sink>'], [sinkfn, 'fn<list<i32>,i32:i32>']]
+    return: i32
+    body:
+    - decl: [caught, i32, 0]
+    - if:
+        condition:
+          neq:
+          - call:
+            - sink
+            - call: [make_value, 0]
+            - 0
+          - 1
+        then:
+        - {return: 22}
+    - try:
+        body:
+        - call:
+          - sink
+          - call: [make_value, 0]
+          - 1
+        - {return: 90}
+        catch:
+        - type: Exception
+          var: error
+          body:
+          - if:
+              condition:
+                neq: [error.message, "sink"]
+              then:
+              - {return: 91}
+          - set:
+            - caught
+            - +: [caught, 1]
+    - try:
+        body:
+        - call:
+          - sink
+          - call: [make_value, 0]
+          - call: [later]
+        - {return: 90}
+        catch:
+        - type: Exception
+          var: error
+          body:
+          - if:
+              condition:
+                neq: [error.message, "later"]
+              then:
+              - {return: 91}
+          - set:
+            - caught
+            - +: [caught, 1]
+    - try:
+        body:
+        - call:
+          - sink
+          - call: [make_value, 1]
+          - 0
+        - {return: 90}
+        catch:
+        - type: Exception
+          var: error
+          body:
+          - if:
+              condition:
+                neq: [error.message, "producer"]
+              then:
+              - {return: 91}
+          - set:
+            - caught
+            - +: [caught, 1]
+    - if:
+        condition:
+          neq:
+          - call:
+            - obj.read
+            - call: [make_value, 0]
+            - 0
+          - 1
+        then:
+        - {return: 22}
+    - try:
+        body:
+        - call:
+          - obj.read
+          - call: [make_value, 0]
+          - 1
+        - {return: 90}
+        catch:
+        - type: Exception
+          var: error
+          body:
+          - if:
+              condition:
+                neq: [error.message, "sink"]
+              then:
+              - {return: 91}
+          - set:
+            - caught
+            - +: [caught, 1]
+    - try:
+        body:
+        - call:
+          - obj.read
+          - call: [make_value, 0]
+          - call: [later]
+        - {return: 90}
+        catch:
+        - type: Exception
+          var: error
+          body:
+          - if:
+              condition:
+                neq: [error.message, "later"]
+              then:
+              - {return: 91}
+          - set:
+            - caught
+            - +: [caught, 1]
+    - try:
+        body:
+        - call:
+          - obj.read
+          - call: [make_value, 1]
+          - 0
+        - {return: 90}
+        catch:
+        - type: Exception
+          var: error
+          body:
+          - if:
+              condition:
+                neq: [error.message, "producer"]
+              then:
+              - {return: 91}
+          - set:
+            - caught
+            - +: [caught, 1]
+    - if:
+        condition:
+          neq:
+          - call:
+            - sinkfn
+            - call: [make_value, 0]
+            - 0
+          - 1
+        then:
+        - {return: 22}
+    - try:
+        body:
+        - call:
+          - sinkfn
+          - call: [make_value, 0]
+          - 1
+        - {return: 90}
+        catch:
+        - type: Exception
+          var: error
+          body:
+          - if:
+              condition:
+                neq: [error.message, "sink"]
+              then:
+              - {return: 91}
+          - set:
+            - caught
+            - +: [caught, 1]
+    - {return: caught}
+- def:
+    name: main_part_2
+    static_off: ["str_cmp"]
+    args: [[direct, 'ref<SinkImpl>'], [sinkfn, 'fn<list<i32>,i32:i32>']]
+    return: i32
+    body:
+    - decl: [caught, i32, 0]
+    - try:
+        body:
+        - call:
+          - sinkfn
+          - call: [make_value, 0]
+          - call: [later]
+        - {return: 90}
+        catch:
+        - type: Exception
+          var: error
+          body:
+          - if:
+              condition:
+                neq: [error.message, "later"]
+              then:
+              - {return: 91}
+          - set:
+            - caught
+            - +: [caught, 1]
+    - try:
+        body:
+        - call:
+          - sinkfn
+          - call: [make_value, 1]
+          - 0
+        - {return: 90}
+        catch:
+        - type: Exception
+          var: error
+          body:
+          - if:
+              condition:
+                neq: [error.message, "producer"]
+              then:
+              - {return: 91}
+          - set:
+            - caught
+            - +: [caught, 1]
+    - if:
+        condition:
+          neq:
+          - call:
+            - direct.read
+            - call: [make_value, 0]
+            - 0
+          - 1
+        then:
+        - {return: 22}
+    - try:
+        body:
+        - call:
+          - direct.read
+          - call: [make_value, 0]
+          - 1
+        - {return: 90}
+        catch:
+        - type: Exception
+          var: error
+          body:
+          - if:
+              condition:
+                neq: [error.message, "sink"]
+              then:
+              - {return: 91}
+          - set:
+            - caught
+            - +: [caught, 1]
+    - try:
+        body:
+        - call:
+          - direct.read
+          - call: [make_value, 0]
+          - call: [later]
+        - {return: 90}
+        catch:
+        - type: Exception
+          var: error
+          body:
+          - if:
+              condition:
+                neq: [error.message, "later"]
+              then:
+              - {return: 91}
+          - set:
+            - caught
+            - +: [caught, 1]
+    - try:
+        body:
+        - call:
+          - direct.read
+          - call: [make_value, 1]
+          - 0
+        - {return: 90}
+        catch:
+        - type: Exception
+          var: error
+          body:
+          - if:
+              condition:
+                neq: [error.message, "producer"]
+              then:
+              - {return: 91}
+          - set:
+            - caught
+            - +: [caught, 1]
+    - decl:
+      - outer
+      - list<i32>
+      - call: [make_value, 0]
+    - try:
+        body:
+        - try:
+            body:
+            - call:
+              - sink
+              - call: [make_value, 0]
+              - 1
+            - {return: 90}
+            catch:
+            - type: Exception
+              var: error
+              body:
+              - if:
+                  condition:
+                    neq: [error.message, "sink"]
+                  then:
+                  - {return: 91}
+              - set:
+                - caught
+                - +: [caught, 1]
+        - if:
+            condition:
+              neq:
+              - at: [outer, 0]
+              - 7
+            then:
+            - {return: 23}
+        - throw: {new: Exception, message: "outer"}
+        catch:
+        - type: Exception
+          var: error
+          body:
+          - if:
+              condition:
+                neq: [error.message, "outer"]
+              then:
+              - {return: 24}
+          - set:
+            - caught
+            - +: [caught, 1]
+    - if:
+        condition:
+          neq:
+          - at: [outer, 0]
+          - 7
+        then:
+        - {return: 25}
+    - {return: caught}
 - def:
     name: main
     return: i32
@@ -92,326 +428,12 @@
         condition:
           lt: [counter, 40]
         body:
-        - if:
-            condition:
-              neq:
-              - call:
-                - sink
-                - call: [make_value, 0]
-                - 0
-              - 1
-            then:
-            - {return: 22}
-        - try:
-            body:
-            - call:
-              - sink
-              - call: [make_value, 0]
-              - 1
-            - {return: 90}
-            catch:
-            - type: Exception
-              var: error
-              body:
-              - if:
-                  condition:
-                    neq: [error.message, sink]
-                  then:
-                  - {return: 91}
-              - set:
-                - caught
-                - +: [caught, 1]
-        - try:
-            body:
-            - call:
-              - sink
-              - call: [make_value, 0]
-              - call: [later]
-            - {return: 90}
-            catch:
-            - type: Exception
-              var: error
-              body:
-              - if:
-                  condition:
-                    neq: [error.message, later]
-                  then:
-                  - {return: 91}
-              - set:
-                - caught
-                - +: [caught, 1]
-        - try:
-            body:
-            - call:
-              - sink
-              - call: [make_value, 1]
-              - 0
-            - {return: 90}
-            catch:
-            - type: Exception
-              var: error
-              body:
-              - if:
-                  condition:
-                    neq: [error.message, producer]
-                  then:
-                  - {return: 91}
-              - set:
-                - caught
-                - +: [caught, 1]
-        - if:
-            condition:
-              neq:
-              - call:
-                - obj.read
-                - call: [make_value, 0]
-                - 0
-              - 1
-            then:
-            - {return: 22}
-        - try:
-            body:
-            - call:
-              - obj.read
-              - call: [make_value, 0]
-              - 1
-            - {return: 90}
-            catch:
-            - type: Exception
-              var: error
-              body:
-              - if:
-                  condition:
-                    neq: [error.message, sink]
-                  then:
-                  - {return: 91}
-              - set:
-                - caught
-                - +: [caught, 1]
-        - try:
-            body:
-            - call:
-              - obj.read
-              - call: [make_value, 0]
-              - call: [later]
-            - {return: 90}
-            catch:
-            - type: Exception
-              var: error
-              body:
-              - if:
-                  condition:
-                    neq: [error.message, later]
-                  then:
-                  - {return: 91}
-              - set:
-                - caught
-                - +: [caught, 1]
-        - try:
-            body:
-            - call:
-              - obj.read
-              - call: [make_value, 1]
-              - 0
-            - {return: 90}
-            catch:
-            - type: Exception
-              var: error
-              body:
-              - if:
-                  condition:
-                    neq: [error.message, producer]
-                  then:
-                  - {return: 91}
-              - set:
-                - caught
-                - +: [caught, 1]
-        - if:
-            condition:
-              neq:
-              - call:
-                - sinkfn
-                - call: [make_value, 0]
-                - 0
-              - 1
-            then:
-            - {return: 22}
-        - try:
-            body:
-            - call:
-              - sinkfn
-              - call: [make_value, 0]
-              - 1
-            - {return: 90}
-            catch:
-            - type: Exception
-              var: error
-              body:
-              - if:
-                  condition:
-                    neq: [error.message, sink]
-                  then:
-                  - {return: 91}
-              - set:
-                - caught
-                - +: [caught, 1]
-        - try:
-            body:
-            - call:
-              - sinkfn
-              - call: [make_value, 0]
-              - call: [later]
-            - {return: 90}
-            catch:
-            - type: Exception
-              var: error
-              body:
-              - if:
-                  condition:
-                    neq: [error.message, later]
-                  then:
-                  - {return: 91}
-              - set:
-                - caught
-                - +: [caught, 1]
-        - try:
-            body:
-            - call:
-              - sinkfn
-              - call: [make_value, 1]
-              - 0
-            - {return: 90}
-            catch:
-            - type: Exception
-              var: error
-              body:
-              - if:
-                  condition:
-                    neq: [error.message, producer]
-                  then:
-                  - {return: 91}
-              - set:
-                - caught
-                - +: [caught, 1]
-        - if:
-            condition:
-              neq:
-              - call:
-                - direct.read
-                - call: [make_value, 0]
-                - 0
-              - 1
-            then:
-            - {return: 22}
-        - try:
-            body:
-            - call:
-              - direct.read
-              - call: [make_value, 0]
-              - 1
-            - {return: 90}
-            catch:
-            - type: Exception
-              var: error
-              body:
-              - if:
-                  condition:
-                    neq: [error.message, sink]
-                  then:
-                  - {return: 91}
-              - set:
-                - caught
-                - +: [caught, 1]
-        - try:
-            body:
-            - call:
-              - direct.read
-              - call: [make_value, 0]
-              - call: [later]
-            - {return: 90}
-            catch:
-            - type: Exception
-              var: error
-              body:
-              - if:
-                  condition:
-                    neq: [error.message, later]
-                  then:
-                  - {return: 91}
-              - set:
-                - caught
-                - +: [caught, 1]
-        - try:
-            body:
-            - call:
-              - direct.read
-              - call: [make_value, 1]
-              - 0
-            - {return: 90}
-            catch:
-            - type: Exception
-              var: error
-              body:
-              - if:
-                  condition:
-                    neq: [error.message, producer]
-                  then:
-                  - {return: 91}
-              - set:
-                - caught
-                - +: [caught, 1]
-        - decl:
-          - outer
-          - list<i32>
-          - call: [make_value, 0]
-        - try:
-            body:
-            - try:
-                body:
-                - call:
-                  - sink
-                  - call: [make_value, 0]
-                  - 1
-                - {return: 90}
-                catch:
-                - type: Exception
-                  var: error
-                  body:
-                  - if:
-                      condition:
-                        neq: [error.message, sink]
-                      then:
-                      - {return: 91}
-                  - set:
-                    - caught
-                    - +: [caught, 1]
-            - if:
-                condition:
-                  neq:
-                  - at: [outer, 0]
-                  - 7
-                then:
-                - {return: 23}
-            - throw: {new: Exception, message: outer}
-            catch:
-            - type: Exception
-              var: error
-              body:
-              - if:
-                  condition:
-                    neq: [error.message, outer]
-                  then:
-                  - {return: 24}
-              - set:
-                - caught
-                - +: [caught, 1]
-        - if:
-            condition:
-              neq:
-              - at: [outer, 0]
-              - 7
-            then:
-            - {return: 25}
+        - decl: [part_1, i32, {call: [main_part_1, obj, sinkfn]}]
+        - if: {condition: {gt: [part_1, 20]}, then: [{return: part_1}]}
+        - set: [caught, {+: [caught, part_1]}]
+        - decl: [part_2, i32, {call: [main_part_2, direct, sinkfn]}]
+        - if: {condition: {gt: [part_2, 20]}, then: [{return: part_2}]}
+        - set: [caught, {+: [caught, part_2]}]
         - set:
           - counter
           - +: [counter, 1]

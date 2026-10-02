@@ -20,7 +20,7 @@
 
 - def:
     name: mk_entry
-    args: [[plr, ptr<Player>], [tag, string]]
+    args: [[plr, ref<Player>], [tag, string]]
     body:
       - decl: [ent, Entry]
       - set:  [ent.iid,        "IID_${tag}"]

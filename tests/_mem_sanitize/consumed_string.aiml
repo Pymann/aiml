@@ -11,7 +11,7 @@
 
 - def:
     name: keep_into
-    args: [[snk, ptr<Sink>], [txt, string, { lifetime: consumed }]]
+    args: [[snk, ref<Sink>], [txt, string, { lifetime: consumed }]]
     body:
       - call: [snk.bag.push, txt]
 

@@ -6,7 +6,7 @@
 - model: { name: Bag,   fields: [[prim, list<Inner>], [dup, list<Inner>]] }
 - def:
     name: build
-    args: [[out, ptr<Bag>]]
+    args: [[out, ref<Bag>]]
     body:
       - decl: [inr, Inner]
       - set: [inr.label, "x"]

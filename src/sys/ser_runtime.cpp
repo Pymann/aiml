@@ -16,6 +16,38 @@ extern "C" void  aiml_buffer_handle_incref(void*);
 #include <cstdio>
 #include <unistd.h>
 #include <unordered_set>
+#include <pthread.h>
+
+// spec/61 Class 5: mirror of ChanImpl's __aiml_chan_struct (chan_impl.cpp) — keep in lockstep.
+struct AimlChanBlock {
+    char    mutex[40]; char cond_put[48]; char cond_get[48];
+    int64_t capacity, size, head, tail;
+    void*   buffer;
+    char    cond_taken[48];
+    int64_t rc;
+};
+extern "C" void aiml_chan_retain(void* ch) {
+    if (ch) __atomic_fetch_add(&static_cast<AimlChanBlock*>(ch)->rc, 1, __ATOMIC_RELAXED);
+}
+extern "C" void aiml_chan_release(void* ch) {
+    if (!ch) return;
+    auto* c = static_cast<AimlChanBlock*>(ch);
+    if (__atomic_fetch_sub(&c->rc, 1, __ATOMIC_ACQ_REL) != 1) return;
+    pthread_mutex_destroy(reinterpret_cast<pthread_mutex_t*>(c->mutex));
+    pthread_cond_destroy(reinterpret_cast<pthread_cond_t*>(c->cond_put));
+    pthread_cond_destroy(reinterpret_cast<pthread_cond_t*>(c->cond_get));
+    pthread_cond_destroy(reinterpret_cast<pthread_cond_t*>(c->cond_taken));
+    free(c->buffer);
+    free(c);
+}
+// spec/61 Class 4: thread_handle {i64 tid, i8 joined, i8 detached} — an unjoined thread is detached.
+struct AimlThreadHandle { int64_t tid; int8_t joined; int8_t detached; };
+extern "C" void aiml_thread_handle_drop(void* h) {
+    if (!h) return;
+    auto* t = static_cast<AimlThreadHandle*>(h);
+    if (!t->joined && !t->detached) pthread_detach(static_cast<pthread_t>(t->tid));
+    free(t);
+}
 
 // Thread-local decode-error flag — set when a structural error (absurd count etc.) is detected.
 // Reset at the start of aiml_ser_decode; checked at the end to return an error code.
@@ -268,6 +300,11 @@ static void enc(std::vector<uint8_t>& buf,
     // Skip explicitly (rather than silently) so the blob layout is well-defined; dec mirrors this.
     case AIML_TD_TENSOR:
     case AIML_TD_WEAK_REF:
+    case AIML_TD_THREAD:
+        break;
+    // in-process only (chan models are not wire-serialisable): the pointer, retained by dec
+    case AIML_TD_CHAN:
+        w_raw(buf, data, sizeof(void*));
         break;
 
     case AIML_TD_I8:
@@ -427,6 +464,14 @@ static void dec(const uint8_t* blob, int& pos, int end,
     // leaves the (zero-initialised) slot null. A tensor/weak field does not survive a wire round-trip.
     case AIML_TD_TENSOR:
     case AIML_TD_WEAK_REF:
+    case AIML_TD_THREAD:
+        break;
+    case AIML_TD_CHAN:
+        if (end - pos >= (int)sizeof(void*)) {
+            void* ch = nullptr; memcpy(&ch, blob + pos, sizeof(ch)); pos += sizeof(ch);
+            aiml_chan_retain(ch);
+            memcpy(out, &ch, sizeof(ch));
+        } else { g_dec_error = true; }
         break;
 
     // Truncated scalar = corrupt blob → flag it (F1); a valid blob always has all
@@ -852,6 +897,18 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         t = nullptr; memcpy(data, &t, sizeof(t));
         break;
     }
+    case AIML_TD_CHAN: {
+        void* c = nullptr; memcpy(&c, data, sizeof(c));
+        aiml_chan_release(c);
+        c = nullptr; memcpy(data, &c, sizeof(c));
+        break;
+    }
+    case AIML_TD_THREAD: {
+        void* t = nullptr; memcpy(&t, data, sizeof(t));
+        aiml_thread_handle_drop(t);
+        t = nullptr; memcpy(data, &t, sizeof(t));
+        break;
+    }
 
     // I8/I16/I32/I64/RAWBYTES — no heap allocations
     default:
@@ -892,6 +949,11 @@ static void ret(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         if (o && n.param2 != 0) aiml_model_incref(o);
         // param2==0 = a unique ptr<T> box: move-only, §7 forbids sharing it — no incref (a value
         // model carrying one is not copyable; this path should not be reached for a share).
+        break;
+    }
+    case AIML_TD_CHAN: {
+        void* c = nullptr; memcpy(&c, data, sizeof(c));
+        aiml_chan_retain(c);
         break;
     }
     // AIML_TD_PTR_STRUCT (unique box) / AIML_TD_TENSOR (resource) are move-only (§7) → not shared.
@@ -1299,6 +1361,17 @@ static void clw(int idx, const AimlTypeNode* ns, int nn,
         break;
     }
 
+    case AIML_TD_CHAN: {   // Class 5: a clone co-owns the channel
+        void* c = nullptr; memcpy(&c, src, sizeof(c));
+        aiml_chan_retain(c);
+        memcpy(dst, &c, sizeof(c));
+        break;
+    }
+    case AIML_TD_THREAD: {   // Class 4, move-only: the clone has no thread
+        void* t = nullptr;
+        memcpy(dst, &t, sizeof(t));
+        break;
+    }
     case AIML_TD_TENSOR: {
         // round4 §3: an owned `tensor` handle — deep-clone via the tensor runtime (data/views/meta),
         // never a shared alias. Record the clone in `relocated` so an internal weak ref<tensor> can

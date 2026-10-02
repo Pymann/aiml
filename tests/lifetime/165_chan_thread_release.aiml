@@ -1,0 +1,78 @@
+# static-check: off
+# spec/61 §2.1: chan<T> is Class 5 (atomic rc: copy/field store/spawn argument retain, owner drop
+# releases), thread_handle is Class 4 (owner drop detaches an unjoined thread, frees the handle).
+- model:
+    name: Pipe
+    fields:
+      - [inbox, "chan<i32>", 0]
+      - [label, string, ""]
+- model:
+    name: Runner
+    fields:
+      - [pipe, ptr<Pipe>, 0]
+      - [thread, thread_handle, 0]
+- def:
+    name: pump
+    args: [[outbox, chan<i32>], [count, i32]]
+    return: void
+    body:
+      - call: [outbox.send, count]
+- def:
+    name: drain
+    args: [[runner, ref<Runner>]]
+    return: void
+    body:
+      - decl: [got, i32, { call: [runner.pipe.inbox.recv] }]
+- def:
+    name: idle
+    args: [[seed, i32]]
+    return: void
+    body:
+      - decl: [twice, i32, { +: [seed, seed] }]
+- def:
+    name: local_round
+    args: [[round, i32]]
+    return: i32
+    body:
+      - decl: [line, chan<i32>]
+      - decl: [worker, thread_handle, { spawn: [pump, line, round] }]
+      - decl: [got, i32, { call: [line.recv] }]
+      - call: [worker.join]
+      - return: got
+- def:
+    name: field_round
+    args: [[num, i32]]
+    return: i32
+    body:
+      - decl: [side, chan<i32>]
+      - decl: [pipe, ptr<Pipe>, { new: Pipe }]
+      - set: [pipe.inbox, side]
+      - decl: [runner, ptr<Runner>, { new: Runner }]
+      - set: [runner.pipe, pipe]
+      - set: [runner.thread, { spawn: [drain, runner] }]
+      - call: [side.send, num]
+      - call: [runner.thread.join]
+      - return: num
+- def:
+    name: detach_round
+    args: [[tick, i32]]
+    return: i32
+    body:
+      - decl: [loose, thread_handle]
+      - set: [loose, { spawn: [idle, tick] }]
+      - set: [loose, { spawn: [idle, tick] }]
+      - return: tick
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 30]}
+          body:
+            - if: {condition: {neq: [{call: [local_round, counter]}, counter]}, then: [{return: 1}]}
+            - if: {condition: {neq: [{call: [field_round, counter]}, counter]}, then: [{return: 2}]}
+            - if: {condition: {neq: [{call: [detach_round, counter]}, counter]}, then: [{return: 3}]}
+            - set: [counter, {+: [counter, 1]}]
+      - print: ["PASS chan/thread release"]
+      - return: 0

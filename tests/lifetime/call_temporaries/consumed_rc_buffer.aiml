@@ -1,6 +1,6 @@
 # static-check: off
 # spec/61 regression: consumed buffer: both owner-release orders, retained temporary, throw, all four dispatch paths
-# Status: NOT RUN. Expected: exit 0; zero definite/indirect leaks; no memory errors.
+# Status: verified 2026-10-02 — exit 0, 0 definite/indirect leaks, no memory errors.
 - model:
     name: Holder
     fields:
@@ -11,6 +11,7 @@
     body:
     - decl: [value, buffer]
     - call: [value.alloc, 16]
+    - call: [value.zero]
     - {return: value}
 - def:
     name: keep
@@ -27,7 +28,7 @@
         condition:
           eq: [fail, 1]
         then:
-        - throw: {new: Exception, message: retained}
+        - throw: {new: Exception, message: "retained"}
     - {return: 1}
 - interface:
     name: Keeper
@@ -58,7 +59,7 @@
             condition:
               eq: [fail, 1]
             then:
-            - throw: {new: Exception, message: retained}
+            - throw: {new: Exception, message: "retained"}
         - {return: 1}
 - def:
     name: seed
@@ -74,6 +75,7 @@
         call: [keep, local, holder, 0]
 - def:
     name: main
+    static_off: ["str_cmp"]
     return: i32
     body:
     - decl: [holder, Holder]
@@ -127,7 +129,7 @@
               body:
               - if:
                   condition:
-                    neq: [error.message, retained]
+                    neq: [error.message, "retained"]
                   then:
                   - {return: 91}
               - set:
@@ -187,7 +189,7 @@
               body:
               - if:
                   condition:
-                    neq: [error.message, retained]
+                    neq: [error.message, "retained"]
                   then:
                   - {return: 91}
               - set:
@@ -247,7 +249,7 @@
               body:
               - if:
                   condition:
-                    neq: [error.message, retained]
+                    neq: [error.message, "retained"]
                   then:
                   - {return: 91}
               - set:
@@ -307,7 +309,7 @@
               body:
               - if:
                   condition:
-                    neq: [error.message, retained]
+                    neq: [error.message, "retained"]
                   then:
                   - {return: 91}
               - set:

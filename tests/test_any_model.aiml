@@ -38,12 +38,3 @@
 
 - print: ["--- Calling print_any_id directly ---"]
 - call: [print_any_id, myModel]
-
-- print: ["--- Map<String, Any> Test ---"]
-- decl: [genericMap, "map<string:any>"]
-- call: [genericMap.put, "item", myModel] # Store model as any
-- decl: [retrieved, any]
-- set: [retrieved, { call: [genericMap.get, "item"] }]
-- decl: [restored, ptr<TestModel>]
-- set: [restored, retrieved]
-- print: ["Restored Type ID: ${restored.var_id}"]

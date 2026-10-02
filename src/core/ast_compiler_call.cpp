@@ -852,7 +852,9 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             std::vector<llvm::Value*> rawArgs;
             for (size_t ai = 0; ai < argVals.size(); ++ai) {
                 llvm::Value* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[ai]));
-                if (ai < handleParam.size() && handleParam[ai] && raw && raw->getType()->isStructTy()
+                // a handle / ref<T> / ptr<T> parameter takes the address of a value argument (as coerceArgs)
+                bool wantPtr = ai < paramTys.size() && paramTys[ai]->isPointerTy();
+                if (ai < handleParam.size() && (handleParam[ai] || wantPtr) && raw && raw->getType()->isStructTy()
                     && ai < call->args.size()) {
                     std::string lvTy;
                     if (IRValue* addr = emitLValueAddress(call->args[ai].get(), lvTy))
@@ -2514,6 +2516,11 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
             if (cap->getType()->isIntegerTy(32))
                 cap = ctx.builder.CreateZExt(cap, ctx.builder.getInt64Ty(), "cap_i64");
+            if (ctx.memV3 && ctx.lifetimeDropsEnabled) {   // spec/61 Class 5: re-init releases the old channel
+                auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                ctx.builder.CreateCall(ctx.getFunction("aiml_chan_release", ctx.builder.getVoidTy(), {i8p}),
+                    { ctx.builder.CreateLoad(i8p, rawAlloca, "chan_old") });
+            }
             ChanImpl::init(ctx, rawAlloca, cap);
             return nullptr;
         }

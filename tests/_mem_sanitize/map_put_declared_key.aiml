@@ -6,7 +6,7 @@
 - model: { name: Card, fields: [[produces, map<string:i32>]] }
 - def:
     name: populate
-    args: [[crd, ptr<Card>], [color, i32], [amount, i32]]
+    args: [[crd, ref<Card>], [color, i32], [amount, i32]]
     body:
       - decl: [colkey, string, "${color}"]
       - call: [crd.produces.put, colkey, amount]
