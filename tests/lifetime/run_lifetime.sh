@@ -27,7 +27,12 @@ esac
 
 echo "── lifetime lab — MODE=$MODE  (spec61 = target; expect RED until the compiler rewrite) ──"
 fail=0; pass=0
-for f in tests/lifetime/[0-9]*.aiml; do
+source tests/lifetime/call_temporaries/cases.sh
+lifetime_probes=(tests/lifetime/[0-9]*.aiml)
+if [ "$MODE" = "spec61" ]; then
+  lifetime_probes+=("${CALL_TEMPORARY_PROBES[@]}")
+fi
+for f in "${lifetime_probes[@]}"; do
   base=$(basename "$f")
   [ -n "$ONLY" ] && [[ "$base" != *"$ONLY"* ]] && continue
   tier=$(grep -m1 -oE '# TIER: T[0-2]' "$f" | grep -oE 'T[0-2]' || echo "--")

@@ -1,0 +1,168 @@
+# static-check: off
+# spec/61 regression: unique boxes: free / named+fresh / normal+callee throw+later argument throw
+# Status: NOT RUN. Expected: exit 0; zero definite/indirect leaks; no memory errors.
+- model:
+    name: Card
+    fields:
+    - [title, string]
+    - [tags, list<string>]
+- def:
+    name: make_box
+    return: ptr<Card>
+    body:
+    - decl:
+      - box
+      - ptr<Card>
+      - {new: Card, title: owned}
+    - call: [box.tags.push, 'tag-${1}']
+    - {return: box}
+- def:
+    name: later
+    return: i32
+    body:
+    - throw: {new: Exception, message: later}
+    - {return: 0}
+- def:
+    name: sink
+    args:
+    - [box, ptr<Card>]
+    - [fail, i32]
+    return: i32
+    body:
+    - if:
+        condition:
+          neq: [box.title, owned]
+        then:
+        - {return: 11}
+    - if:
+        condition:
+          eq: [fail, 1]
+        then:
+        - throw: {new: Exception, message: sink}
+    - {return: 5}
+- def:
+    name: main
+    return: i32
+    body:
+    - decl: [counter, i32, 0]
+    - decl: [caught, i32, 0]
+    - while:
+        condition:
+          lt: [counter, 40]
+        body:
+        - decl:
+          - normal
+          - ptr<Card>
+          - call: [make_box]
+        - if:
+            condition:
+              neq:
+              - call: [sink, normal, 0]
+              - 5
+            then:
+            - {return: 12}
+        - if:
+            condition:
+              neq:
+              - call:
+                - sink
+                - call: [make_box]
+                - 0
+              - 5
+            then:
+            - {return: 13}
+        - decl:
+          - throwing
+          - ptr<Card>
+          - call: [make_box]
+        - try:
+            body:
+            - call: [sink, throwing, 1]
+            - {return: 90}
+            catch:
+            - type: Exception
+              var: error
+              body:
+              - if:
+                  condition:
+                    neq: [error.message, sink]
+                  then:
+                  - {return: 91}
+              - set:
+                - caught
+                - +: [caught, 1]
+        - try:
+            body:
+            - call:
+              - sink
+              - call: [make_box]
+              - 1
+            - {return: 90}
+            catch:
+            - type: Exception
+              var: error
+              body:
+              - if:
+                  condition:
+                    neq: [error.message, sink]
+                  then:
+                  - {return: 91}
+              - set:
+                - caught
+                - +: [caught, 1]
+        - try:
+            body:
+            - call:
+              - sink
+              - call: [make_box]
+              - call: [later]
+            - {return: 90}
+            catch:
+            - type: Exception
+              var: error
+              body:
+              - if:
+                  condition:
+                    neq: [error.message, later]
+                  then:
+                  - {return: 91}
+              - set:
+                - caught
+                - +: [caught, 1]
+        - decl:
+          - retained
+          - ptr<Card>
+          - call: [make_box]
+        - try:
+            body:
+            - call:
+              - sink
+              - retained
+              - call: [later]
+            - {return: 90}
+            catch:
+            - type: Exception
+              var: error
+              body:
+              - if:
+                  condition:
+                    neq: [error.message, later]
+                  then:
+                  - {return: 91}
+              - set:
+                - caught
+                - +: [caught, 1]
+        - if:
+            condition:
+              neq: [retained.title, owned]
+            then:
+            - {return: 14}
+        - set:
+          - counter
+          - +: [counter, 1]
+    - if:
+        condition:
+          neq: [caught, 160]
+        then:
+        - {return: 15}
+    - {return: 0}

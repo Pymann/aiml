@@ -1,0 +1,29 @@
+# static-check: off
+- model: {name: Item, fields: [[label, string], [tags, list<string>]]}
+- model: {name: Holder, fields: [[name, string], [box, ptr<Item>]]}
+- def:
+    name: make_item
+    args: [[num, i32]]
+    return: { type: Item, lifetime: producer }
+    body:
+      - decl: [out, Item]
+      - set: [out.label, "item-${num}"]
+      - call: [out.tags.push, "tag-${num}"]
+      - return: out
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [shared_idx, "map<string:shared<Item>>"]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [one, shared<Item>, {share: {new: Item}}]
+            - set: [one.label, "s-${counter}"]
+            - call: [shared_idx.put, "k${{ '%': [counter, 3] }}", one]
+            - decl: [back, shared<Item>, {call: [shared_idx.get, "k1"]}]
+            - if: {condition: {pneq: [back, null]}, then: [{set: [back.label, "b-${counter}"]}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

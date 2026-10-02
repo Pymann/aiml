@@ -1,0 +1,39 @@
+# static-check: off
+- model: {name: Item, fields: [[label, string], [tags, list<string>]]}
+- model: {name: Holder, fields: [[name, string], [box, ptr<Item>]]}
+- def:
+    name: make_item
+    args: [[num, i32]]
+    return: { type: Item, lifetime: producer }
+    body:
+      - decl: [out, Item]
+      - set: [out.label, "item-${num}"]
+      - call: [out.tags.push, "tag-${num}"]
+      - return: out
+
+- def:
+    name: guarded
+    args: [[num, i32]]
+    return: i32
+    body:
+      - decl: [outside, Item, {call: [make_item, num]}]
+      - try:
+          body:
+            - decl: [inside, list<string>]
+            - call: [inside.push, "i-${num}"]
+            - if: {condition: {gt: [num, 50]}, then: [{return: inside.len}]}
+            - if: {condition: {eq: [{ '%': [num, 5]}, 0]}, then: [{ throw: { type: Exception, message: "x" } }]}
+          catch:
+            - return: -1
+      - return: outside.label.len
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [res, i32, {call: [guarded, counter]}]
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

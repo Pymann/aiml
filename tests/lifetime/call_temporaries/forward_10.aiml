@@ -1,0 +1,50 @@
+# static-check: off
+# spec/61 regression: method definition order must not change temporary ownership
+# Status: NOT RUN. Expected: exit 0; zero definite/indirect leaks; no memory errors.
+- class:
+    name: Zone
+    methods:
+    - def:
+        name: tick
+        return: i32
+        body:
+        - return:
+            call:
+            - <.read
+            - call: [<.make]
+    - def:
+        name: read
+        args:
+        - [values, list<i32>]
+        return: i32
+        body:
+        - return:
+            at: [values, 0]
+    - def:
+        name: make
+        return: list<i32>
+        body:
+        - decl: [values, list<i32>]
+        - call: [values.push, 7]
+        - {return: values}
+- def:
+    name: main
+    return: i32
+    body:
+    - decl: [zone, Zone]
+    - decl: [counter, i32, 0]
+    - while:
+        condition:
+          lt: [counter, 10]
+        body:
+        - if:
+            condition:
+              neq:
+              - call: [zone.tick]
+              - 7
+            then:
+            - {return: 1}
+        - set:
+          - counter
+          - +: [counter, 1]
+    - {return: 0}

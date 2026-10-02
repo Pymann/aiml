@@ -177,8 +177,141 @@ void coerceOrStoreFieldDefault(CompilerContext& ctx,
 }
 }
 
+// Slots survive compile-time consume/release: ownership is represented by a zero
+// value at runtime, so a pad remains correct on all incoming paths.
+static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop& drop);
+static void resetTemp(CompilerContext& ctx, const CompilerContext::StatementTemp& temp) {
+    ctx.builder.CreateStore(llvm::Constant::getNullValue(temp.storedType), temp.drop.addr);
+}
+static void addTempResetPoint(CompilerContext& ctx) {
+    if (!ctx.lifetimeDropsEnabled || ctx.statementTemps.empty() || !ctx.builder.GetInsertBlock()) return;
+    auto& frame = ctx.statementTemps.back();
+    auto* marker = ctx.builder.CreateCall(llvm::Intrinsic::getDeclaration(&ctx.module, llvm::Intrinsic::donothing));
+    frame.resetPoints.push_back(marker);
+    llvm::IRBuilderBase::InsertPointGuard guard(ctx.builder);
+    ctx.builder.SetInsertPoint(marker);
+    for (const auto& temp : frame.temps) resetTemp(ctx, temp);
+}
+static void registerStatementTemp(CompilerContext& ctx, llvm::Value* value,
+                                  llvm::Value* stored, CompilerContext::ScopeDrop drop) {
+    if (!ctx.lifetimeDropsEnabled || !value || !stored || ctx.statementTemps.empty()) return;
+    auto& frame = ctx.statementTemps.back();
+    if (frame.function != ctx.builder.GetInsertBlock()->getParent()) return;
+    for (const auto& temp : frame.temps) if (temp.value == value) return;
+    auto* slot = ctx.createEntryAlloca(stored->getType(), "statement_temp");
+    drop.addr = slot;
+    CompilerContext::StatementTemp temp{value, stored->getType(), drop};
+    {
+        llvm::IRBuilderBase::InsertPointGuard guard(ctx.builder);
+        for (auto* marker : frame.resetPoints) {
+            ctx.builder.SetInsertPoint(marker);
+            resetTemp(ctx, temp);
+        }
+    }
+    ctx.builder.CreateStore(stored, slot);
+    frame.temps.push_back(temp);
+}
+static bool consumeStatementTemp(CompilerContext& ctx, llvm::Value* value, bool release) {
+    if (!ctx.lifetimeDropsEnabled || !ctx.builder.GetInsertBlock()) return false;
+    for (auto& frame : ctx.statementTemps) {
+        if (frame.function != ctx.builder.GetInsertBlock()->getParent()) continue;
+        for (auto& temp : frame.temps) if (temp.value == value) {
+            if (release) emitScopeDrop(ctx, temp.drop);
+            resetTemp(ctx, temp);
+            return true;
+        }
+    }
+    return false;
+}
+void aimlTrackStringTemp(CompilerContext& ctx, llvm::Value* value) {
+    if (!value || ctx.stmtTempStack.empty()) return;
+    auto& values = ctx.stmtTempStack.back();
+    if (std::find(values.begin(), values.end(), value) != values.end()) return;
+    values.push_back(value);
+    CompilerContext::ScopeDrop drop;
+    drop.kind = 1;
+    drop.managedStringSlot = true;
+    registerStatementTemp(ctx, value, value, drop);
+}
+void Compiler::trackCallArgument(Expr* expression, IRValue* value) {
+    if (!value || !ctx.memV3 || !ctx.lifetimeDropsEnabled) return;
+    auto* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(value));
+    CompilerContext::ScopeDrop drop;
+    auto type = ownedContainerCallType(expression);
+    if (!type.empty() && makeHandleDrop(type, nullptr, drop)) {
+        registerStatementTemp(ctx, raw, raw, drop);
+        return;
+    }
+    type = ownedModelCallType(expression);
+    if (!type.empty()) {
+        auto& ci = ctx.classes.at(type);
+        drop.kind = 0;
+        drop.serNodes = ci.serNodesVar;
+        drop.serNodesCount = ci.serNodesCount;
+        auto* stored = raw;
+        if (raw->getType()->isPointerTy()) stored = ctx.builder.CreateLoad(ci.type, raw, "temp_model_value");
+        registerStatementTemp(ctx, raw, stored, drop);
+        return;
+    }
+    if (auto* call = dynamic_cast<CallExpr*>(expression)) {
+        auto sig = resolveCallSignature(call->functionName);
+        if (sig.valid && sig.ownsReturn) type = sig.returnType;
+    } else if (auto* alloc = dynamic_cast<NewExpr*>(expression)) {
+        type = ctx.isRefcountModel(alloc->typeName) ? alloc->typeName
+            : ctx.isRefcountModel(ctx.deserializeTargetType) ? ctx.deserializeTargetType
+            : "ptr<" + alloc->typeName + ">";
+    }
+    bool unique = type.rfind("ptr<", 0) == 0 && type.back() == '>';
+    bool shared = type.rfind("shared<", 0) == 0 && type.back() == '>';
+    std::string bare = unique ? type.substr(4, type.size() - 5)
+        : shared ? type.substr(7, type.size() - 8) : type;
+    auto iface = ctx.interfaces.find(bare);
+    if (unique && iface != ctx.interfaces.end() && raw->getType()->isStructTy()) {
+        drop.kind = 5;
+        drop.fatPtrType = raw->getType();
+        drop.ifaceMethodCount = iface->second.methods.size();
+        registerStatementTemp(ctx, raw, raw, drop);
+        return;
+    }
+    auto ci = ctx.classes.find(bare);
+    if (ci == ctx.classes.end() || ci->second.isBuiltin || !raw->getType()->isPointerTy()
+        || ctx.classGroupContainers.count(bare) || ctx.cascadeClasses.count(bare)) return;
+    if (unique) drop.kind = 4;
+    else if (shared || ctx.isRefcountModel(type)) drop.kind = 7;
+    else return;
+    drop.serNodes = ci->second.serNodesVar;
+    drop.serNodesCount = ci->second.serNodesCount;
+    registerStatementTemp(ctx, raw, raw, drop);
+}
+void Compiler::transferCallArgumentTemps(const ResolvedCallSignature& signature,
+                                         const std::vector<IRValue*>& values) {
+    for (size_t i = 0; i < values.size() && i < signature.parameterTypes.size(); ++i) {
+        const auto& type = signature.parameterTypes[i];
+        if (!ctx.isOwnedBoxReturn(type)) continue;
+        // The callee owns unique boxes from the instant the call is entered,
+        // including when it throws. Earlier-argument pads still own this slot.
+        consumeStatementTemp(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(values[i])), false);
+    }
+}
+void Compiler::finishCallArguments(CallExpr* call, const std::vector<IRValue*>& values) {
+    for (size_t i = values.size(); i-- > 0;) {
+        auto* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(values[i]));
+        // Strings have always lived through the full statement; bindings and
+        // string consumers use consumeStringTemp to adopt that reference.
+        bool stringTemp = false;
+        for (const auto& frame : ctx.stmtTempStack)
+            if (std::find(frame.begin(), frame.end(), raw) != frame.end()) stringTemp = true;
+        if (!stringTemp && consumeStatementTemp(ctx, raw, true)) continue;
+        auto type = ownedContainerCallType(call->args[i].get());
+        if (!type.empty()) releaseContainerHandle(raw, type);
+        type = ownedModelCallType(call->args[i].get());
+        if (!type.empty()) releaseModelValue(raw, type);
+    }
+}
+
 void Compiler::consumeStringTemp(llvm::Value* v) {
     if (!v) return;
+    consumeStatementTemp(ctx, v, false);
     for (auto& frame : ctx.stmtTempStack) {
         for (size_t i = 0; i < frame.size(); ) {
             if (frame[i] == v) frame.erase(frame.begin() + (long)i);
@@ -206,11 +339,11 @@ static void decrefCurrentStmtTemps(CompilerContext& ctx) {
     if (!ctx.lifetimeDropsEnabled || ctx.stmtTempStack.empty()) return;
     auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
     if (!bb || bb->getTerminator()) return;
-    llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
-    for (llvm::Value* t : ctx.stmtTempStack.back()) {
-        llvm::Function* dc = ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {i8p});
-        ctx.builder.CreateCall(dc, { t });
-    }
+    if (!ctx.statementTemps.empty())
+        for (auto it = ctx.statementTemps.back().temps.rbegin(); it != ctx.statementTemps.back().temps.rend(); ++it) {
+            emitScopeDrop(ctx, it->drop);
+            resetTemp(ctx, *it);
+        }
     ctx.stmtTempStack.back().clear();
 }
 static void traceSymbolTarget(CompilerContext& ctx, const char* phase, const std::string& target);
@@ -224,6 +357,10 @@ static bool isManagedStringLocalSym(const Symbol& s);  // spec/61 §7 (defined b
 void Compiler::visitStatement(Stmt* stmt) {
     if (stmt->sourceLine > 0) ctx.currentLine = stmt->sourceLine;
     ctx.stmtTempStack.emplace_back();   // spec/61: per-statement owned-string-temp frame
+    ctx.statementTemps.emplace_back();
+    if (ctx.builder.GetInsertBlock())
+        ctx.statementTemps.back().function = ctx.builder.GetInsertBlock()->getParent();
+    addTempResetPoint(ctx);
     {   // spec/61 §9.3: only drops bound before this statement are released on unwind
         std::set<llvm::Value*> snap;
         for (auto& fr : ctx.cleanupStack) for (auto& d : fr) snap.insert(d.addr);
@@ -249,18 +386,9 @@ void Compiler::visitStatement(Stmt* stmt) {
     else if (auto throwStmt = dynamic_cast<ThrowStmt*>(stmt)) visitThrow(throwStmt);
     else if (auto idxStmt = dynamic_cast<IdxStmt*>(stmt)) visitIdxStmt(idxStmt);
     else if (auto storeStmt = dynamic_cast<StoreStmt*>(stmt)) visitStoreStmt(storeStmt);
-    // spec/61: decref owned string temporaries not consumed by this statement (e.g.
-    // interpolation results passed as borrowed call args that the callee copied).
-    {
-        auto* bb = static_cast<llvm::BasicBlock*>(ctx.ir_gen->unwrapBlock(ctx.ir_gen->getInsertBlock()));
-        if (bb && !bb->getTerminator() && !ctx.stmtTempStack.empty() && ctx.lifetimeDropsEnabled) {
-            llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
-            for (llvm::Value* t : ctx.stmtTempStack.back()) {
-                llvm::Function* dc = ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {i8p});
-                ctx.builder.CreateCall(dc, { t });
-            }
-        }
-    }
+    decrefCurrentStmtTemps(ctx);
+    for (auto* marker : ctx.statementTemps.back().resetPoints) marker->eraseFromParent();
+    ctx.statementTemps.pop_back();
     if (!ctx.stmtTempStack.empty()) ctx.stmtTempStack.pop_back();
     if (!ctx.stmtDropSnapshot.empty()) ctx.stmtDropSnapshot.pop_back();
     if (!ctx.stmtStack.empty()) ctx.stmtStack.pop_back();
@@ -374,34 +502,13 @@ static bool isContainerAccessorCall(const CompilerContext& ctx, const Expr* e, c
 std::string Compiler::ownedContainerCallType(Expr* e) {
     auto* ce = dynamic_cast<CallExpr*>(e);
     if (!ce || !ctx.memV3) return "";
-    CompilerContext::FunctionInfo* fi = resolveCallTarget(ce->functionName);
-    if (!fi || !ctx.isMemV3ContainerHandle(fi->returnTypeName)) return "";
-    if (isContainerAccessorCall(ctx, ce, fi->returnTypeName)) return "";
-    return fi->returnTypeName;
+    auto sig = resolveCallSignature(ce->functionName);
+    return sig.valid && ctx.isMemV3ContainerHandle(sig.returnType) ? sig.returnType : "";
 }
 
 // Free function, or `recv.method` / `<.method` resolved through the receiver class chain.
 CompilerContext::FunctionInfo* Compiler::resolveCallTarget(const std::string& functionName) {
-    if (auto* fi = resolveFunction(functionName)) return fi;
-    size_t dp = functionName.rfind('.');
-    if (dp == std::string::npos) return nullptr;
-    std::string base = functionName.substr(0, dp), meth = functionName.substr(dp + 1), cls;
-    if (base == "<" || base == "this") cls = ctx.currentClassName;
-    else if (base.find('.') == std::string::npos) {
-        if (Symbol* s = resolveVariable(base)) {
-            cls = s->typeName;
-            size_t lt = cls.find('<');
-            if (lt != std::string::npos && cls.back() == '>'
-                && (cls.rfind("ptr<", 0) == 0 || cls.rfind("ref<", 0) == 0 || cls.rfind("shared<", 0) == 0))
-                cls = cls.substr(lt + 1, cls.size() - lt - 2);
-        }
-    }
-    while (!cls.empty() && ctx.classes.count(cls)) {
-        auto it = ctx.functions.find(cls + "_" + meth);
-        if (it != ctx.functions.end()) return &it->second;
-        cls = ctx.classes[cls].parentName;
-    }
-    return nullptr;
+    return resolveCallSignature(functionName).function;
 }
 
 // spec/61 §5.7: a non-accessor call yields a reference the consumer takes over (no incref).
@@ -413,14 +520,15 @@ bool Compiler::isOwningContainerCall(Expr* e, const std::string& type) {
 std::string Compiler::ownedModelCallType(Expr* e) {
     auto* ce = dynamic_cast<CallExpr*>(e);
     if (!ce) return "";
-    CompilerContext::FunctionInfo* fi = resolveCallTarget(ce->functionName);
-    if (!fi || !fi->ownsReturn || !ctx.isOwnedValueReturn(fi->returnTypeName)) return "";
-    auto ci = ctx.classes.find(fi->returnTypeName);
-    return (ci != ctx.classes.end() && ci->second.serNodesVar && ci->second.type) ? fi->returnTypeName : "";
+    auto sig = resolveCallSignature(ce->functionName);
+    if (!sig.valid || !sig.ownsReturn || !ctx.isOwnedValueReturn(sig.returnType)) return "";
+    auto ci = ctx.classes.find(sig.returnType);
+    return (ci != ctx.classes.end() && ci->second.serNodesVar && ci->second.type) ? sig.returnType : "";
 }
 
 // Free the heap of a value-model VALUE (struct) or of the struct a pointer addresses.
 void Compiler::releaseModelValue(llvm::Value* v, const std::string& typeName) {
+    if (consumeStatementTemp(ctx, v, true)) return;
     auto ci = ctx.classes.find(typeName);
     if (!v || !ctx.lifetimeDropsEnabled || ci == ctx.classes.end() || !ci->second.serNodesVar) return;
     llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
@@ -469,6 +577,7 @@ void Compiler::movePtrArg(Expr* arg, const std::string& paramType, const std::st
 }
 
 void Compiler::releaseContainerHandle(llvm::Value* handle, const std::string& typeName) {
+    if (consumeStatementTemp(ctx, handle, true)) return;
     if (!handle || !ctx.lifetimeDropsEnabled) return;
     llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
     llvm::Value* slot = ctx.createEntryAlloca(i8p, "ctr_tmp");
@@ -4199,14 +4308,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         // TERMINATES the block, so that loop is skipped (it guards on !getTerminator()). Decref them
         // here, before the terminator, so they are not leaked (the `return <local>` form avoids this
         // because its interpolation ran in the non-terminating decl statement).
-        if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) {
-            llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
-            for (llvm::Value* t : ctx.stmtTempStack.back()) {
-                llvm::Function* dc = ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {i8p});
-                ctx.builder.CreateCall(dc, { t });
-            }
-            ctx.stmtTempStack.back().clear();
-        }
+        decrefCurrentStmtTemps(ctx);
         // spec/61 §6.2 (T1): incref the returned STRING FIELD of an owned value-model local BEFORE
         // the cleanup so the owner's deep-free (now un-exempted) does not release it — net refcount
         // unchanged, sibling heap fields freed. aiml_str_incref is null/rodata/immortal-safe.
@@ -4815,11 +4917,24 @@ llvm::BasicBlock* aimlUnwindDest(CompilerContext& ctx, bool userCallee) {
                 drops.push_back(&*it);
             }
     }
-    if (!inTry && drops.empty()) return nullptr;
+    // Statement temporaries are created AFTER the local snapshot. Their reset slots
+    // dominate each invoke, including a throw while evaluating a subsequent argument.
+    std::vector<const CompilerContext::StatementTemp*> temps;
+    if (enabled && ctx.lifetimeDropsEnabled) {
+        size_t tempBase = inTry ? ctx.tryStack.back().tempFrameBase : 0;
+        for (size_t i = ctx.statementTemps.size(); i-- > tempBase;) {
+            const auto& frame = ctx.statementTemps[i];
+            if (frame.function != ctx.builder.GetInsertBlock()->getParent()) continue;
+            for (auto it = frame.temps.rbegin(); it != frame.temps.rend(); ++it) temps.push_back(&*it);
+        }
+    }
+    if (!inTry && drops.empty() && temps.empty()) return nullptr;
     llvm::Function* fn = ctx.builder.GetInsertBlock()->getParent();
     std::string key = std::to_string(reinterpret_cast<uintptr_t>(fn)) + "|"
         + std::to_string(inTry ? reinterpret_cast<uintptr_t>(ctx.tryStack.back().dispatch) : 0);
     for (auto* d : drops) key += "|" + std::to_string(reinterpret_cast<uintptr_t>(d->addr)) + ":" + std::to_string(d->kind);
+    for (auto* temp : temps)
+        key += "|temp:" + std::to_string(reinterpret_cast<uintptr_t>(temp->drop.addr)) + ":" + std::to_string(temp->drop.kind);
     auto hit = ctx.unwindPadCache.find(key);
     if (hit != ctx.unwindPadCache.end()) return hit->second;
     if (!fn->hasPersonalityFn())
@@ -4832,6 +4947,10 @@ llvm::BasicBlock* aimlUnwindDest(CompilerContext& ctx, bool userCallee) {
     llvm::LandingPadInst* lp = ctx.builder.CreateLandingPad(lpTy, 1, "unwind_lp");
     if (inTry) lp->addClause(llvm::ConstantPointerNull::get(ptrTy));
     else lp->setCleanup(true);
+    for (auto* temp : temps) {
+        emitScopeDrop(ctx, temp->drop);
+        resetTemp(ctx, *temp);
+    }
     for (auto* d : drops) emitScopeDrop(ctx, *d);
     if (inTry) {
         ctx.builder.CreateStore(ctx.builder.CreateExtractValue(lp, 0, "exc_ptr"), ctx.tryStack.back().excSlot);
@@ -4948,6 +5067,7 @@ void Compiler::visitWhileStmt(WhileStmt* whileStmt) {
     
     // Loop Check
     ctx.ir_gen->setInsertPoint(loopBB);
+    addTempResetPoint(ctx);
     IRValue* condVal = visitExpression(whileStmt->condition.get());
     if (!condVal) return;
     
@@ -4995,7 +5115,7 @@ void Compiler::visitTry(TryStmt* tryStmt) {
     // spec/61 §9.3: the pads release the try-body locals bound so far before entering the catch.
     llvm::BasicBlock* oldCatch = ctx.catchBlock;
     ctx.catchBlock = catchBlock;
-    ctx.tryStack.push_back({catchBlock, excSlot, ctx.cleanupStack.size()});
+    ctx.tryStack.push_back({catchBlock, excSlot, ctx.cleanupStack.size(), ctx.statementTemps.size()});
     visitBlockStmt(tryStmt->tryBlock.get());
     if (!ctx.builder.GetInsertBlock()->getTerminator())
         ctx.builder.CreateBr(contBlock);
@@ -5125,12 +5245,7 @@ void Compiler::visitThrow(ThrowStmt* throwStmt) {
     llvm::Value* msgCharPtr = ctx.builder.CreateLoad(ptrTy, rawObj, "exc_msg_ptr");
     ctx.builder.CreateCall(ctx.getFunction("aiml_note_thrown_message", ctx.builder.getVoidTy(), {ptrTy}), {msgCharPtr});
 
-    // the throw statement never ends normally → release its own string temps now
-    if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) {
-        for (llvm::Value* t : ctx.stmtTempStack.back())
-            ctx.builder.CreateCall(ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {ptrTy}), {t});
-        ctx.stmtTempStack.back().clear();
-    }
+    decrefCurrentStmtTemps(ctx);
     llvm::Function* throwFunc = ctx.getFunction("__cxa_throw", ctx.builder.getVoidTy(), {ptrTy, ptrTy, ptrTy});
     llvm::Value* nullp = llvm::ConstantPointerNull::get(ptrTy);
     llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();

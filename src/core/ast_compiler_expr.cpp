@@ -72,12 +72,12 @@ IRValue* Compiler::visitStringInterpolation(StringInterpolationExpr* expr) {
         // decl/push/set/return (removed from the list); the intermediates are decref'd at
         // statement end — this reclaims the int→string + intermediate-concat temporaries.
         if (strVal != val && !ctx.stmtTempStack.empty()) {
-            ctx.stmtTempStack.back().push_back(strVal);      // fresh conversion result
+            aimlTrackStringTemp(ctx, strVal);      // fresh conversion result
         }
         if (!currentStr) currentStr = strVal;
         else {
             currentStr = StringUtils::concat(ctx, currentStr, strVal);
-            if (!ctx.stmtTempStack.empty()) ctx.stmtTempStack.back().push_back(currentStr);
+            if (!ctx.stmtTempStack.empty()) aimlTrackStringTemp(ctx, currentStr);
         }
     }
     // spec/61 §7: an interpolation is always a FRESH owned string — a lone string part ("${x}") would
@@ -87,7 +87,7 @@ IRValue* Compiler::visitStringInterpolation(StringInterpolationExpr* expr) {
         if (std::find(fr.begin(), fr.end(), currentStr) == fr.end()) {
             llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
             currentStr = ctx.builder.CreateCall(ctx.getFunction("aiml_str_dup", i8p, {i8p}), { currentStr }, "interp_own");
-            fr.push_back(currentStr);
+            aimlTrackStringTemp(ctx, currentStr);
         }
     }
     return ctx.ir_gen->wrap(currentStr);
@@ -1301,7 +1301,7 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
                 // at_field_borrow/local/interpolation_1000). The incref stays: a receiving local must
                 // still read the string after the source list is released.
                 if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
-                    ctx.stmtTempStack.back().push_back(fv);
+                    aimlTrackStringTemp(ctx, fv);
             }
             return ctx.ir_gen->wrap(fv);
         }
@@ -1346,7 +1346,7 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
             // left leaking when both x's drop and the list release decref only once (grai
             // match_key_of). A transient `at(..)` read is decref'd at statement end → balanced.
             if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
-                ctx.stmtTempStack.back().push_back(val);
+                aimlTrackStringTemp(ctx, val);
         }
         return ctx.ir_gen->wrap(val);
     }

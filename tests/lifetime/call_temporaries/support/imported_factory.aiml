@@ -1,0 +1,12 @@
+# static-check: off
+# Imported signature fixture, not a standalone test program.
+- class:
+    name: BaseFactory
+    methods:
+    - def:
+        name: make
+        return: list<i32>
+        body:
+        - decl: [values, list<i32>]
+        - call: [values.push, 7]
+        - {return: values}

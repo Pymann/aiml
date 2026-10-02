@@ -1,0 +1,141 @@
+# static-check: off
+# spec/61 regression: interface void/sret/shared return and fn void must all release their argument owners
+# Status: NOT RUN. Expected: exit 0; zero definite/indirect leaks; no memory errors.
+- model:
+    name: Stats
+    fields:
+    - [hits, i32]
+- model:
+    name: Payload
+    fields:
+    - [label, string]
+    - [rows, list<string>]
+- def:
+    name: make_values
+    return: list<i32>
+    body:
+    - decl: [values, list<i32>]
+    - call: [values.push, 7]
+    - {return: values}
+- def:
+    name: touch
+    args:
+    - [values, list<i32>]
+    - [stats, ref<Stats>]
+    return: void
+    body:
+    - set:
+      - stats.hits
+      - +: [stats.hits, values.len]
+- interface:
+    name: Sink
+    methods:
+    - - touch
+      - void
+      - - [values, list<i32>]
+        - [stats, ref<Stats>]
+    - - record
+      - Payload
+      - - [values, list<i32>]
+    - - echo
+      - list<i32>
+      - - [values, list<i32>]
+- class:
+    name: SinkImpl
+    implements: [Sink]
+    methods:
+    - def:
+        name: touch
+        args:
+        - [values, list<i32>]
+        - [stats, ref<Stats>]
+        return: void
+        body:
+        - set:
+          - stats.hits
+          - +: [stats.hits, values.len]
+    - def:
+        name: record
+        args:
+        - [values, list<i32>]
+        return: Payload
+        body:
+        - decl: [out, Payload]
+        - set: [out.label, 'result-${3}']
+        - call: [out.rows.push, 'result-${3}']
+        - {return: out}
+    - def:
+        name: echo
+        args:
+        - [values, list<i32>]
+        return: list<i32>
+        body:
+        - {return: values}
+- def:
+    name: main
+    return: i32
+    body:
+    - decl:
+      - sink
+      - ptr<Sink>
+      - {new: SinkImpl}
+    - decl: [stats, Stats]
+    - decl: [touchfn, 'fn<list<i32>,ref<Stats>:void>']
+    - set: [touchfn, touch]
+    - decl: [counter, i32, 0]
+    - while:
+        condition:
+          lt: [counter, 40]
+        body:
+        - call:
+          - sink.touch
+          - call: [make_values]
+          - stats
+        - call:
+          - touchfn
+          - call: [make_values]
+          - stats
+        - decl:
+          - record
+          - Payload
+          - call:
+            - sink.record
+            - call: [make_values]
+        - if:
+            condition:
+              neq: [record.label, result-3]
+            then:
+            - {return: 51}
+        - if:
+            condition:
+              neq: [record.rows.len, 1]
+            then:
+            - {return: 52}
+        - decl:
+          - echoed
+          - list<i32>
+          - call:
+            - sink.echo
+            - call: [make_values]
+        - call: [echoed.push, 9]
+        - if:
+            condition:
+              neq: [echoed.len, 2]
+            then:
+            - {return: 53}
+        - if:
+            condition:
+              neq:
+              - at: [echoed, 0]
+              - 7
+            then:
+            - {return: 54}
+        - set:
+          - counter
+          - +: [counter, 1]
+    - if:
+        condition:
+          neq: [stats.hits, 80]
+        then:
+        - {return: 55}
+    - {return: 0}

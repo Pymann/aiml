@@ -1,0 +1,48 @@
+# static-check: off
+- model: {name: Card, fields: [[title, string], [tags, list<string>]]}
+- model: {name: Node, fields: [[label, string]]}
+- def:
+    name: rename
+    args: [[name, string]]
+    return: i32
+    body:
+      - set: [name, "renamed-${1}"]
+      - return: name.len
+- def:
+    name: retitle
+    args: [[card, Card]]
+    return: i32
+    body:
+      - set: [card.title, "new-${2}"]
+      - call: [card.tags.push, "t"]
+      - return: card.title.len
+- def:
+    name: swap_shared
+    args: [[node, shared<Node>]]
+    return: i32
+    body:
+      - decl: [other, shared<Node>, {share: {new: Node}}]
+      - set: [other.label, "o-${3}"]
+      - set: [node, other]
+      - return: node.label.len
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 60]}
+          body:
+            - decl: [name, string, "orig-${counter}"]
+            - decl: [res1, i32, {call: [rename, name]}]
+            - if: {condition: {neq: [name, "orig-${counter}"]}, then: [{return: 1}]}
+            - decl: [card, Card]
+            - set: [card.title, "t-${counter}"]
+            - decl: [res2, i32, {call: [retitle, card]}]
+            - if: {condition: {neq: [card.title, "t-${counter}"]}, then: [{return: 2}]}
+            - decl: [node, shared<Node>, {share: {new: Node}}]
+            - set: [node.label, "n-${counter}"]
+            - decl: [res3, i32, {call: [swap_shared, node]}]
+            - if: {condition: {neq: [node.label, "n-${counter}"]}, then: [{return: 3}]}
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

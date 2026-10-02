@@ -1369,7 +1369,7 @@ llvm::Value* serialize(CompilerContext& ctx, llvm::Value* val,
     // spec/61 §7: register a fresh owned JSON rc-string as an owned string temp so a consuming
     // decl/set MOVES it (one drop) and a transient is decref'd at stmt end — else it leaks (round3 §3).
     if (jsonOwned && ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
-        ctx.stmtTempStack.back().push_back(json);
+        AIML::AST::aimlTrackStringTemp(ctx, json);
     return json;
 }
 
