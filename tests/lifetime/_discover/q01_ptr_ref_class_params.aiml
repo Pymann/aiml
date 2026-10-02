@@ -1,0 +1,67 @@
+# static-check: off
+- model: {name: Card, fields: [[title, string], [tags, list<string>]]}
+- model: {name: Deck, fields: [[boxes, list<ptr<Card>>]]}
+- class:
+    name: Bag
+    members:
+      - [items, list<string>]
+      - [label, string]
+- def:
+    name: drop_box
+    args: [[box, ptr<Card>]]
+    return: i32
+    body:
+      - return: box.title.len
+- def:
+    name: pass_box
+    args: [[moved_box, ptr<Card>]]
+    return: ptr<Card>
+    body:
+      - set: [moved_box.title, "passed"]
+      - return: moved_box
+- def:
+    name: keep_box
+    args: [[kept_box, ptr<Card>], [deck, ref<Deck>]]
+    body:
+      - call: [deck.boxes.push, kept_box]
+- def:
+    name: retitle_ref
+    args: [[view, ref<Card>]]
+    body:
+      - set: [view.title, "ref-${1}"]
+      - call: [view.tags.push, "r"]
+- def:
+    name: count_bag
+    args: [[bag, Bag]]
+    return: i32
+    body:
+      - call: [bag.items.push, "b"]
+      - set: [bag.label, "changed"]
+      - return: bag.items.len
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [deck, Deck]
+      - decl: [bag, Bag]
+      - set: [bag.label, "orig"]
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 60]}
+          body:
+            - decl: [first, ptr<Card>, {new: Card}]
+            - set: [first.title, "f-${counter}"]
+            - decl: [len1, i32, {call: [drop_box, first]}]
+            - decl: [second, ptr<Card>, {new: Card}]
+            - set: [second.title, "s-${counter}"]
+            - decl: [back, ptr<Card>, {call: [pass_box, second]}]
+            - if: {condition: {neq: [back.title, "passed"]}, then: [{return: 1}]}
+            - decl: [card, Card]
+            - set: [card.title, "c"]
+            - call: [retitle_ref, card]
+            - if: {condition: {neq: [card.title, "ref-1"]}, then: [{return: 2}]}
+            - decl: [bag_len, i32, {call: [count_bag, bag]}]
+            - if: {condition: {neq: [bag.label, "orig"]}, then: [{return: 3}]}
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [bag.items.len, 60]}, then: [{return: 5}]}
+      - return: 0

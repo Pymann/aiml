@@ -182,11 +182,20 @@ for f in "${GREEN[@]}"; do
   if [ $rc -eq 0 ]; then printf "  ok   [GREEN] %-55s %s\n" "$(basename "$f")" "$out"
   else printf "  FAIL [GREEN] %-55s rc=%d %s\n" "$(basename "$f")" "$rc" "$out"; fail=$((fail+1)); fi
 done
+# Newly authored targets are gating, but have not been measured/approved as GREEN.
+source tests/lifetime/call_temporaries/cases.sh
+echo "── call-temporary regressions (required; previously unverified) ──"
+for f in "${CALL_TEMPORARY_PROBES[@]}"; do
+  [ -f "$f" ] || { echo "  FAIL [REGRESSION] $f — missing"; fail=$((fail+1)); continue; }
+  out=$(run_probe "$f"); rc=$?
+  if [ $rc -eq 0 ]; then printf "  ok   [REGRESSION] %-55s %s\n" "$(basename "$f")" "$out"
+  else printf "  FAIL [REGRESSION] %-55s rc=%d %s\n" "$(basename "$f")" "$rc" "$out"; fail=$((fail+1)); fi
+done
 echo "── known RED targets (reported, not gating until fixed) ──"
 for f in "${RED[@]}"; do
   [ -f "$f" ] || { echo "  --   [RED]   $f — missing"; continue; }
   out=$(run_probe "$f"); rc=$?
   printf "  red? [RED]   %-55s rc=%d %s\n" "$(basename "$f")" "$rc" "$out"
 done
-echo "── leak-gate: $fail GREEN failure(s) ──"
+echo "── leak-gate: $fail required failure(s) ──"
 [ $fail -eq 0 ]

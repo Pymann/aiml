@@ -4,6 +4,12 @@ Small, **self-verifying** probes that pin down the memory behavior mandated by
 `spec/61_memory_management_DRAFT.md`. Each probe defines its own types, performs one
 lifetime operation, checks the survivors, and returns exit code 0 (PASS) / 1 (FAIL).
 
+## Call-temporary regression package (2026-10-02)
+
+[44 new call-temporary probes](call_temporaries/README.md) cover the reviewed
+spec/61 plan and are included in the semantic, AOT leak, and memory-safety runners.
+They have **not been compiled or run** and are required acceptance targets, not verified GREEN results.
+
 ## Implementation status (branch `mem-v3-compiler`, gate `AIML_MEM_V3`)
 
 These probes are the spec/61 **acceptance target**. Implementation progress under

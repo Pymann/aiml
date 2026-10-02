@@ -1,0 +1,41 @@
+# static-check: off
+# spec/61 §5: buffer is a Class-3 rc handle — set shares/moves the handle, never the struct.
+- def:
+    name: keep_from
+    args: [[src, buffer]]
+    return: i32
+    body:
+      - decl: [local, buffer]
+      - call: [local.alloc, 4]
+      - set: [local, src]
+      - return: local.len
+- def:
+    name: write_into
+    args: [[dst, buffer]]
+    body:
+      - call: [dst.write, 7, i32]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [total, i32, 0]
+      - decl: [keep, buffer]
+      - call: [keep.alloc, 8]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [bytes, buffer]
+            - call: [bytes.alloc, 16]
+            - call: [bytes.zero]
+            - decl: [dup, buffer, {copy: bytes}]
+            - set: [total, {+: [total, {call: [keep_from, bytes]}]}]
+            - decl: [out, buffer]
+            - call: [out.alloc, 8]
+            - call: [write_into, out]
+            - if: {condition: {neq: [out.len, 4]}, then: [{return: 142}]}
+            - set: [keep, bytes]
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [keep.len, 16]}, then: [{return: 140}]}
+      - if: {condition: {neq: [total, 3200]}, then: [{return: 141}]}
+      - return: 0

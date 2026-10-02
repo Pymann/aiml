@@ -1,0 +1,359 @@
+# static-check: off
+# spec/61 regression: consumed string: both owner-release orders, retained temporary, throw, all four dispatch paths
+# Status: NOT RUN. Expected: exit 0; zero definite/indirect leaks; no memory errors.
+- model:
+    name: Holder
+    fields:
+    - [saved, string]
+- def:
+    name: make_value
+    return: {type: string, lifetime: producer}
+    body:
+    - decl: [value, string, 'value-${3}']
+    - {return: value}
+- def:
+    name: keep
+    args:
+    - - value
+      - string
+      - {lifetime: consumed}
+    - [holder, ref<Holder>]
+    - [fail, i32]
+    return: i32
+    body:
+    - set: [holder.saved, value]
+    - if:
+        condition:
+          eq: [fail, 1]
+        then:
+        - throw: {new: Exception, message: retained}
+    - {return: 1}
+- interface:
+    name: Keeper
+    methods:
+    - - keep
+      - i32
+      - - - value
+          - string
+          - {lifetime: consumed}
+        - [holder, ref<Holder>]
+        - [fail, i32]
+- class:
+    name: KeeperImpl
+    implements: [Keeper]
+    methods:
+    - def:
+        name: keep
+        args:
+        - - value
+          - string
+          - {lifetime: consumed}
+        - [holder, ref<Holder>]
+        - [fail, i32]
+        return: i32
+        body:
+        - set: [holder.saved, value]
+        - if:
+            condition:
+              eq: [fail, 1]
+            then:
+            - throw: {new: Exception, message: retained}
+        - {return: 1}
+- def:
+    name: seed
+    args:
+    - [holder, ref<Holder>]
+    return: i32
+    body:
+    - decl:
+      - local
+      - string
+      - call: [make_value]
+    - return:
+        call: [keep, local, holder, 0]
+- def:
+    name: main
+    return: i32
+    body:
+    - decl: [holder, Holder]
+    - decl:
+      - keeper
+      - ptr<Keeper>
+      - {new: KeeperImpl}
+    - decl:
+      - direct
+      - ptr<KeeperImpl>
+      - {new: KeeperImpl}
+    - decl: [keepfn, 'fn<string,ref<Holder>,i32:i32>']
+    - set: [keepfn, keep]
+    - decl: [counter, i32, 0]
+    - decl: [caught, i32, 0]
+    - while:
+        condition:
+          lt: [counter, 40]
+        body:
+        - decl:
+          - caller
+          - string
+          - call: [make_value]
+        - if:
+            condition:
+              neq:
+              - call: [keep, caller, holder, 0]
+              - 1
+            then:
+            - {return: 31}
+        - if:
+            condition:
+              neq: [holder.saved, value-3]
+            then:
+            - {return: 32}
+        - set:
+          - holder.saved
+          - call: [make_value]
+        - if:
+            condition:
+              neq: [caller, value-3]
+            then:
+            - {return: 33}
+        - try:
+            body:
+            - call: [keep, caller, holder, 1]
+            - {return: 90}
+            catch:
+            - type: Exception
+              var: error
+              body:
+              - if:
+                  condition:
+                    neq: [error.message, retained]
+                  then:
+                  - {return: 91}
+              - set:
+                - caught
+                - +: [caught, 1]
+        - set:
+          - holder.saved
+          - call: [make_value]
+        - if:
+            condition:
+              neq: [caller, value-3]
+            then:
+            - {return: 34}
+        - if:
+            condition:
+              neq:
+              - call:
+                - keep
+                - call: [make_value]
+                - holder
+                - 0
+              - 1
+            then:
+            - {return: 35}
+        - if:
+            condition:
+              neq: [holder.saved, value-3]
+            then:
+            - {return: 36}
+        - if:
+            condition:
+              neq:
+              - call: [direct.keep, caller, holder, 0]
+              - 1
+            then:
+            - {return: 31}
+        - if:
+            condition:
+              neq: [holder.saved, value-3]
+            then:
+            - {return: 32}
+        - set:
+          - holder.saved
+          - call: [make_value]
+        - if:
+            condition:
+              neq: [caller, value-3]
+            then:
+            - {return: 33}
+        - try:
+            body:
+            - call: [direct.keep, caller, holder, 1]
+            - {return: 90}
+            catch:
+            - type: Exception
+              var: error
+              body:
+              - if:
+                  condition:
+                    neq: [error.message, retained]
+                  then:
+                  - {return: 91}
+              - set:
+                - caught
+                - +: [caught, 1]
+        - set:
+          - holder.saved
+          - call: [make_value]
+        - if:
+            condition:
+              neq: [caller, value-3]
+            then:
+            - {return: 34}
+        - if:
+            condition:
+              neq:
+              - call:
+                - direct.keep
+                - call: [make_value]
+                - holder
+                - 0
+              - 1
+            then:
+            - {return: 35}
+        - if:
+            condition:
+              neq: [holder.saved, value-3]
+            then:
+            - {return: 36}
+        - if:
+            condition:
+              neq:
+              - call: [keeper.keep, caller, holder, 0]
+              - 1
+            then:
+            - {return: 31}
+        - if:
+            condition:
+              neq: [holder.saved, value-3]
+            then:
+            - {return: 32}
+        - set:
+          - holder.saved
+          - call: [make_value]
+        - if:
+            condition:
+              neq: [caller, value-3]
+            then:
+            - {return: 33}
+        - try:
+            body:
+            - call: [keeper.keep, caller, holder, 1]
+            - {return: 90}
+            catch:
+            - type: Exception
+              var: error
+              body:
+              - if:
+                  condition:
+                    neq: [error.message, retained]
+                  then:
+                  - {return: 91}
+              - set:
+                - caught
+                - +: [caught, 1]
+        - set:
+          - holder.saved
+          - call: [make_value]
+        - if:
+            condition:
+              neq: [caller, value-3]
+            then:
+            - {return: 34}
+        - if:
+            condition:
+              neq:
+              - call:
+                - keeper.keep
+                - call: [make_value]
+                - holder
+                - 0
+              - 1
+            then:
+            - {return: 35}
+        - if:
+            condition:
+              neq: [holder.saved, value-3]
+            then:
+            - {return: 36}
+        - if:
+            condition:
+              neq:
+              - call: [keepfn, caller, holder, 0]
+              - 1
+            then:
+            - {return: 31}
+        - if:
+            condition:
+              neq: [holder.saved, value-3]
+            then:
+            - {return: 32}
+        - set:
+          - holder.saved
+          - call: [make_value]
+        - if:
+            condition:
+              neq: [caller, value-3]
+            then:
+            - {return: 33}
+        - try:
+            body:
+            - call: [keepfn, caller, holder, 1]
+            - {return: 90}
+            catch:
+            - type: Exception
+              var: error
+              body:
+              - if:
+                  condition:
+                    neq: [error.message, retained]
+                  then:
+                  - {return: 91}
+              - set:
+                - caught
+                - +: [caught, 1]
+        - set:
+          - holder.saved
+          - call: [make_value]
+        - if:
+            condition:
+              neq: [caller, value-3]
+            then:
+            - {return: 34}
+        - if:
+            condition:
+              neq:
+              - call:
+                - keepfn
+                - call: [make_value]
+                - holder
+                - 0
+              - 1
+            then:
+            - {return: 35}
+        - if:
+            condition:
+              neq: [holder.saved, value-3]
+            then:
+            - {return: 36}
+        - if:
+            condition:
+              neq:
+              - call: [seed, holder]
+              - 1
+            then:
+            - {return: 37}
+        - if:
+            condition:
+              neq: [holder.saved, value-3]
+            then:
+            - {return: 38}
+        - set:
+          - counter
+          - +: [counter, 1]
+    - if:
+        condition:
+          neq: [caught, 160]
+        then:
+        - {return: 39}
+    - {return: 0}

@@ -1,0 +1,54 @@
+# static-check: off
+- interface:
+    name: Shape
+    methods:
+      - [describe, string, []]
+      - [area, i32, []]
+- class:
+    name: Square
+    implements: [Shape]
+    members:
+      - [side, i32]
+      - [label, string]
+    methods:
+      - def: {name: describe, return: string, body: [{return: "sq-${<.side}"}]}
+      - def: {name: area, return: i32, body: [{return: {'*': [<.side, <.side]}}]}
+- model: {name: Packet, fields: [[payload, buffer], [tag, string]]}
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [total, i32, 0]
+      - while:
+          condition: {lt: [counter, 40]}
+          body:
+            - decl: [shapes, list<ptr<Shape>>]
+            - decl: [one, ptr<Shape>, {new: Square, side: 2, label: "a-${counter}"}]
+            - call: [shapes.push, one]
+            - decl: [two, ptr<Shape>, {new: Square, side: 3}]
+            - call: [shapes.push, two]
+            - decl: [first, ref<Shape>, {at: [shapes, 0]}]
+            - decl: [desc, string, {call: [first.describe]}]
+            - set: [total, {+: [total, desc.len]}]
+            - call: [shapes.remove, 0]
+            - decl: [three, ptr<Shape>, {new: Square, side: 4}]
+            - idx: [shapes, 0, three]
+            - decl: [four, ptr<Shape>, {new: Square, side: 5, label: "f-${counter}"}]
+            - call: [shapes.push, four]
+            - call: [shapes.pop]
+            - decl: [five, ptr<Shape>, {new: Square, side: 6, label: "g"}]
+            - call: [shapes.push, five]
+            - call: [shapes.clear]
+            - if: {condition: {neq: [shapes.len, 0]}, then: [{return: 3}]}
+            - decl: [pkt, Packet]
+            - call: [pkt.payload.alloc, 8]
+            - call: [pkt.payload.write, 5, i32]
+            - set: [pkt.tag, "p-${counter}"]
+            - decl: [dup, Packet]
+            - set: [dup, pkt]
+            - set: [dup.tag, "d"]
+            - if: {condition: {neq: [pkt.tag, "p-${counter}"]}, then: [{return: 1}]}
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [total, 160]}, then: [{return: 2}]}
+      - return: 0

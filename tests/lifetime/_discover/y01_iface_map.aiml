@@ -1,0 +1,38 @@
+# static-check: off
+- interface:
+    name: Shape
+    methods:
+      - [describe, string, []]
+      - [area, i32, []]
+- class:
+    name: Square
+    implements: [Shape]
+    members:
+      - [side, i32]
+      - [label, string]
+    methods:
+      - def: {name: describe, return: string, body: [{return: "sq-${<.side}"}]}
+      - def: {name: area, return: i32, body: [{return: {'*': [<.side, <.side]}}]}
+- model: {name: Packet, fields: [[payload, buffer], [tag, string]]}
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [total, i32, 0]
+      - while:
+          condition: {lt: [counter, 40]}
+          body:
+            - decl: [named, map<string:ptr<Shape>>]
+            - decl: [one, ptr<Shape>, {new: Square, side: 2, label: "a-${counter}"}]
+            - call: [named.put, "a", one]
+            - decl: [two, ptr<Shape>, {new: Square, side: 3, label: "b"}]
+            - call: [named.put, "a", two]
+            - decl: [three, ptr<Shape>, {new: Square, side: 4}]
+            - call: [named.put, "c", three]
+            - decl: [got, ref<Shape>, {call: [named.get, "a"]}]
+            - set: [total, {+: [total, {call: [got.area]}]}]
+            - call: [named.remove, "c"]
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [total, 360]}, then: [{return: 1}]}
+      - return: 0

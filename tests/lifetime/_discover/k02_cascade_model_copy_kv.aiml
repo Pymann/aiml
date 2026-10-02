@@ -1,0 +1,33 @@
+# static-check: off
+- cascade: {name: ProbeCode, nodes: [{value: [1, i32]}]}
+- model: {name: Card, fields: [[cost, i32], [code, cascade<ProbeCode>]]}
+- def:
+    name: make_card
+    args: [[num, i32]]
+    return: Card
+    body:
+      - decl: [out, Card]
+      - set: [out.cost, num]
+      - call: [out.code.push, num]
+      - return: out
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [store, Kv<string:Card>]
+      - set: [store, { call: [db.open_kv, "k02", {persist: false}] }]
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 50]}
+          body:
+            - decl: [card, Card, {call: [make_card, counter]}]
+            - decl: [dup, Card, {copy: card}]
+            - decl: [deep, Card, {clone: card}]
+            - call: [deep.code.push, 9]
+            - if: {condition: {neq: [card.code.len, 1]}, then: [{return: 1}]}
+            - call: [store.set, "c", card]
+            - decl: [back, Card, {call: [store.get_copy, "c"]}]
+            - if: {condition: {neq: [back.code.len, 1]}, then: [{return: 2}]}
+            - set: [card, {call: [make_card, 7]}]
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

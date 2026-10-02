@@ -1,0 +1,72 @@
+# static-check: off
+- model: {name: Box, fields: [[label, string], [rows, list<string>]]}
+- def:
+    name: label_or_throw
+    args: [[num, i32]]
+    return: string
+    body:
+      - if: {condition: {eq: [{ '%': [num, 4] }, 3]}, then: [{throw: {new: Exception, message: "bad-${num}"}}]}
+      - return: "ok-${num}"
+- def:
+    name: loop_body_throw
+    args: [[limit, i32]]
+    return: i32
+    body:
+      - decl: [done, i32, 0]
+      - try:
+          body:
+            - decl: [pos, i32, 0]
+            - while:
+                condition: {lt: [pos, limit]}
+                body:
+                  - decl: [rows, list<string>]
+                  - call: [rows.push, "r${pos}"]
+                  - decl: [boxed, ptr<Box>, {new: Box, label: {call: [label_or_throw, pos]}}]
+                  - set: [done, {+: [done, 1]}]
+                  - set: [pos, {+: [pos, 1]}]
+          catch:
+            - type: Exception
+              var: err
+              body:
+                - set: [done, {+: [done, 100]}]
+      - return: done
+- def:
+    name: inner_guard
+    args: [[level, i32]]
+    return: i32
+    body:
+      - decl: [keep, list<string>]
+      - try:
+          body:
+            - decl: [txt, string, {call: [label_or_throw, level]}]
+            - return: txt.len
+          catch:
+            - type: Exception
+              var: err
+              body:
+                - call: [keep.push, err.message]
+                - throw: err
+      - return: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [total, i32, 0]
+      - decl: [rethrown, i32, 0]
+      - while:
+          condition: {lt: [counter, 40]}
+          body:
+            - set: [total, {+: [total, {call: [loop_body_throw, 6]}]}]
+            - try:
+                body:
+                  - decl: [got, i32, {call: [inner_guard, counter]}]
+                catch:
+                  - type: Exception
+                    var: err
+                    body:
+                      - set: [rethrown, {+: [rethrown, 1]}]
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [total, 4120]}, then: [{return: 1}]}
+      - if: {condition: {neq: [rethrown, 10]}, then: [{return: 2}]}
+      - return: 0

@@ -1,0 +1,36 @@
+# static-check: off
+- model: {name: Entry, fields: [[name, string], [tags, list<string>], [meta, map<string:string>]]}
+- def:
+    name: read_name
+    args: [[source, string]]
+    return: string
+    body:
+      - decl: [document, ptr<yaml_doc>, { call: [yaml.parse, source] }]
+      - decl: [root, ptr<yaml_node>, { call: [yaml.root, document] }]
+      - decl: [name_node, ref<yaml_node>, { call: [yaml.get, root, "name"] }]
+      - decl: [value, string, { call: [yaml.scalar, name_node] }]
+      - decl: [first_key, string, { call: [yaml.key, root, 0] }]
+      - return: value
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: {lt: [counter, 40]}
+          body:
+            - decl: [txt, string, {call: [read_name, "name: Ada${counter}\nitems:\n  - red"]}]
+            - if: {condition: {neq: [txt, "Ada${counter}"]}, then: [{return: 1}]}
+            - decl: [bad, ptr<yaml_doc>, { call: [yaml.parse, "a: [1"] }]
+            - decl: [err, string, { call: [yaml.error, bad] }]
+            - if: {condition: {eq: [err, ""]}, then: [{return: 2}]}
+            - decl: [entry, Entry]
+            - set: [entry.name, "e-${counter}"]
+            - call: [entry.tags.push, "t"]
+            - call: [entry.meta.put, "k", "v-${counter}"]
+            - decl: [wire, string, { call: [sys.serialize, entry] }]
+            - decl: [back, Entry, { call: [sys.deserialize, wire] }]
+            - if: {condition: {neq: [back.name, "e-${counter}"]}, then: [{return: 3}]}
+            - set: [back, { call: [sys.deserialize, wire] }]
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

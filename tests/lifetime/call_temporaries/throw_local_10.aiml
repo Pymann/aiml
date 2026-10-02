@@ -1,0 +1,66 @@
+# static-check: off
+# spec/61 regression: original throw with named-owner control
+# Status: NOT RUN. Expected: exit 0; zero definite/indirect leaks; no memory errors.
+- def:
+    name: make_values
+    return: {type: list<i32>, lifetime: producer}
+    body:
+    - decl: [values, list<i32>]
+    - call: [values.push, 7]
+    - {return: values}
+- def:
+    name: consume_values
+    args:
+    - [values, list<i32>]
+    return: i32
+    body:
+    - {return: values.len}
+- def:
+    name: fail_values
+    args:
+    - [values, list<i32>]
+    return: i32
+    body:
+    - throw: {new: Exception, message: expected}
+- def:
+    name: main
+    return: i32
+    body:
+    - decl: [caught, i32, 0]
+    - decl: [loopidx, i32, 0]
+    - while:
+        condition:
+          lt: [loopidx, 10]
+        body:
+        - try:
+            body:
+            - decl:
+              - temporary
+              - list<i32>
+              - call: [make_values]
+            - decl:
+              - result
+              - i32
+              - call: [fail_values, temporary]
+            - {return: 90}
+            catch:
+            - type: Exception
+              var: error
+              body:
+              - if:
+                  condition:
+                    neq: [error.message, expected]
+                  then:
+                  - {return: 91}
+              - set:
+                - caught
+                - +: [caught, 1]
+        - set:
+          - loopidx
+          - +: [loopidx, 1]
+    - if:
+        condition:
+          neq: [caught, 10]
+        then:
+        - {return: 92}
+    - {return: 0}

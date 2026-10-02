@@ -1,0 +1,60 @@
+# static-check: off
+- model: {name: Holder, fields: [[rows, list<string>]]}
+- def:
+    name: inner_throw
+    args: [[deep_rows, list<string>], [deep_tags, map<string:i32>]]
+    return: i32
+    body:
+      - call: [deep_rows.push, "x"]
+      - decl: [local_copy, list<string>]
+      - set: [local_copy, deep_rows]
+      - throw: {new: Exception, message: "inner"}
+- def:
+    name: outer_pass
+    args: [[mid_rows, list<string>], [mid_tags, map<string:i32>]]
+    return: i32
+    body:
+      - decl: [scratch, list<string>]
+      - call: [scratch.push, "s"]
+      - return: {call: [inner_throw, mid_rows, mid_tags]}
+- def:
+    name: consume_then_throw
+    args: [[taken, list<string>, { lifetime: consumed }], [hold, ref<Holder>], [fail, i32]]
+    body:
+      - if: {condition: {eq: [fail, 1]}, then: [{throw: {new: Exception, message: "early"}}]}
+      - set: [hold.rows, taken]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [caught, i32, 0]
+      - decl: [hold, Holder]
+      - while:
+          condition: {lt: [counter, 60]}
+          body:
+            - decl: [rows, list<string>]
+            - decl: [tags, map<string:i32>]
+            - call: [tags.put, "k", 1]
+            - try:
+                body:
+                  - decl: [res, i32, {call: [outer_pass, rows, tags]}]
+                catch:
+                  - type: Exception
+                    var: err
+                    body:
+                      - set: [caught, {+: [caught, 1]}]
+            - if: {condition: {neq: [rows.len, 1]}, then: [{return: 1}]}
+            - decl: [given, list<string>]
+            - call: [given.push, "g"]
+            - try:
+                body:
+                  - call: [consume_then_throw, given, hold, {'%': [counter, 2]}]
+                catch:
+                  - type: Exception
+                    var: err
+                    body:
+                      - set: [caught, {+: [caught, 1]}]
+            - set: [counter, {+: [counter, 1]}]
+      - if: {condition: {neq: [caught, 90]}, then: [{return: 2}]}
+      - return: 0

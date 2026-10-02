@@ -932,7 +932,7 @@ void registerBuiltins(CompilerContext& ctx) {
         // binding local MOVES it (freed by its scope-drop) instead of the decl-init treating it as a
         // borrow and increfing it (→ leak). Same as the yaml/str string builtins.
         if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
-            ctx.stmtTempStack.back().push_back(phi);
+            AIML::AST::aimlTrackStringTemp(ctx, phi);
         return ctx.ir_gen->wrap(phi);
     };
 
@@ -1939,7 +1939,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* res = ctx.builder.CreateCall(function, {
                     static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]))});
                 if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
-                    ctx.stmtTempStack.back().push_back(res);
+                    AIML::AST::aimlTrackStringTemp(ctx, res);
                 return ctx.ir_gen->wrap(res);
             };
         };
@@ -1984,7 +1984,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0])),
                 static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]))});
             if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
-                ctx.stmtTempStack.back().push_back(res);
+                AIML::AST::aimlTrackStringTemp(ctx, res);
             return ctx.ir_gen->wrap(res);
         };
         yaml.builtinFuncs["get"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
@@ -4425,7 +4425,7 @@ void registerBuiltins(CompilerContext& ctx) {
             // reference leaks (auth hash_password_new salt: 41 B/call, leak_probes/round3 §2).
             llvm::Value* rhres = ctx.builder.CreateCall(fn, {n});
             if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
-                ctx.stmtTempStack.back().push_back(rhres);
+                AIML::AST::aimlTrackStringTemp(ctx, rhres);
             return ctx.ir_gen->wrap(rhres);
         };
 
@@ -5046,7 +5046,7 @@ void registerBuiltins(CompilerContext& ctx) {
             /* spec/61 §7: owned rc-string result → register as owned string temp (moved by a consuming */ \
             /* decl/set, decref'd at stmt end if transient) — else the initial ref leaks (hash.* surface). */ \
             llvm::Value* hres = ctx.builder.CreateCall(fn, {a}); \
-            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) ctx.stmtTempStack.back().push_back(hres); \
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) AIML::AST::aimlTrackStringTemp(ctx, hres); \
             return ctx.ir_gen->wrap(hres); \
         };
 
@@ -5069,13 +5069,13 @@ void registerBuiltins(CompilerContext& ctx) {
                     llvm::Function::ExternalLinkage, "aiml_hash_hex_buf", ctx.module); \
                 llvm::Value* algo = ctx.builder.CreateGlobalStringPtr(aimlName); \
                 llvm::Value* hbres = ctx.builder.CreateCall(bf, {algo, dataP, lenV}); \
-                if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) ctx.stmtTempStack.back().push_back(hbres); \
+                if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) AIML::AST::aimlTrackStringTemp(ctx, hbres); \
                 return ctx.ir_gen->wrap(hbres); \
             } \
             auto* fn = declHash1(cName); \
             /* spec/61 §7: owned rc-string → register as owned string temp (round3 §1/§2 leak class). */ \
             llvm::Value* hsres = ctx.builder.CreateCall(fn, {a}); \
-            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) ctx.stmtTempStack.back().push_back(hsres); \
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) AIML::AST::aimlTrackStringTemp(ctx, hsres); \
             return ctx.ir_gen->wrap(hsres); \
         };
 
@@ -5089,7 +5089,7 @@ void registerBuiltins(CompilerContext& ctx) {
                                                : llvm::Constant::getNullValue(p); \
             /* spec/61 §7: owned rc-string → register as owned string temp (round3 §1/§2 leak class). */ \
             llvm::Value* h2res = ctx.builder.CreateCall(fn, {a0, a1}); \
-            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) ctx.stmtTempStack.back().push_back(h2res); \
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) AIML::AST::aimlTrackStringTemp(ctx, h2res); \
             return ctx.ir_gen->wrap(h2res); \
         };
 
@@ -5137,7 +5137,7 @@ void registerBuiltins(CompilerContext& ctx) {
             // derived-key reference leaks (auth hash_password_new/verify_password: 73 B/call, round3 §2).
             llvm::Value* pkres = ctx.builder.CreateCall(fn, {a0, a1, a2});
             if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
-                ctx.stmtTempStack.back().push_back(pkres);
+                AIML::AST::aimlTrackStringTemp(ctx, pkres);
             return ctx.ir_gen->wrap(pkres);
         };
 
@@ -7716,7 +7716,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
             // spec/61 §4: the runtime returns a fresh dup → owned statement temp (a binding adopts it).
             llvm::Value* own = ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_text_value", i8p, {i8p, i8p}), {base, name});
-            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) ctx.stmtTempStack.back().push_back(own);
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) AIML::AST::aimlTrackStringTemp(ctx, own);
             return ctx.ir_gen->wrap(own);
         };
 
@@ -7798,7 +7798,7 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Value* name = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
             // spec/61 §4: the runtime returns a fresh dup → owned statement temp (a binding adopts it).
             llvm::Value* own = ctx.builder.CreateCall(ctx.getFunction("aiml_prefab_dropdown_value", i8p, {i8p, i8p}), {base, name});
-            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) ctx.stmtTempStack.back().push_back(own);
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) AIML::AST::aimlTrackStringTemp(ctx, own);
             return ctx.ir_gen->wrap(own);
         };
 

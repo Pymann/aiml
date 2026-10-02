@@ -1,0 +1,45 @@
+# static-check: off
+# spec/61 regression: original fnptr with named-owner control
+# Status: NOT RUN. Expected: exit 0; zero definite/indirect leaks; no memory errors.
+- def:
+    name: make_values
+    return: {type: list<i32>, lifetime: producer}
+    body:
+    - decl: [values, list<i32>]
+    - call: [values.push, 7]
+    - {return: values}
+- def:
+    name: consume_values
+    args:
+    - [values, list<i32>]
+    return: i32
+    body:
+    - {return: values.len}
+- def:
+    name: main
+    return: i32
+    body:
+    - decl: [maker, 'fn<:list<i32>>']
+    - set: [maker, make_values]
+    - decl: [loopidx, i32, 0]
+    - while:
+        condition:
+          lt: [loopidx, 10]
+        body:
+        - decl:
+          - temporary
+          - list<i32>
+          - call: [maker]
+        - decl:
+          - result
+          - i32
+          - call: [consume_values, temporary]
+        - if:
+            condition:
+              neq: [result, 1]
+            then:
+            - {return: 1}
+        - set:
+          - loopidx
+          - +: [loopidx, 1]
+    - {return: 0}

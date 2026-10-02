@@ -86,6 +86,19 @@ private:
     // spec/29_3 §2 / spec/61 §5.1: copy/clone operand → source slot (temp slot for expressions).
     llvm::Value* containerCopySource(Expr* arg, DeclStmt* decl, llvm::Value*& tempSlot, bool& tempOwned);
     void releaseContainerCopyTemp(llvm::Value* tempSlot, bool tempOwned, const std::string& typeName);
+    struct ResolvedCallSignature {
+        CompilerContext::FunctionInfo* function = nullptr;
+        bool valid = false;
+        bool ownsReturn = false;
+        std::string returnType;
+        std::vector<std::string> parameterTypes;
+        std::vector<std::string> lifetimes;
+    };
+    ResolvedCallSignature resolveCallSignature(const std::string& name);
+    bool isCoownedArgument(const std::string& type);
+    void trackCallArgument(Expr* expression, IRValue* value);
+    void transferCallArgumentTemps(const ResolvedCallSignature& signature, const std::vector<IRValue*>& values);
+    void finishCallArguments(CallExpr* call, const std::vector<IRValue*>& values);
     std::string ownedContainerCallType(Expr* e);
     bool isOwningContainerCall(Expr* e, const std::string& type);
     void moveIteratorArg(Expr* arg);

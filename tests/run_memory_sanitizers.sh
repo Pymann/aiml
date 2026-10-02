@@ -216,6 +216,14 @@ probe "value-model set from a VIEW deep-copies (spec/61 §4.2): a producer that 
 probe "nested model-list push+index-writeback (9rooms add_buff→buffs.push + idx:[zone,i,ent]): a model with list<Buff> (Buff = string + list<i32> + list<Model>) built via extract→build→push→writeback→free must keep the inner string intact and be memory-safe (bounded RSS)" "nml" \
     "$AIML_BIN" -r tests/_mem_sanitize/nested_model_list_deepcopy.aiml
 
+# spec/61 call-temporary matrix: same fixtures as the semantic and AOT leak gates.
+source tests/lifetime/call_temporaries/cases.sh
+for case_file in "${CALL_TEMPORARY_PROBES[@]}"; do
+    case_name=$(basename "$case_file" .aiml)
+    probe "call temporaries: $case_name (unverified acceptance target)" "calltemp_$case_name" \
+        env AIML_MEM_V3=1 AIML_LIFETIME_DROPS=1 "$AIML_BIN" -r "$case_file"
+done
+
 echo "────────────────────────────────────────"
 if [ "$fails" -eq 0 ]; then
     echo "PASS: control detected + all probes correct + memory-safe"

@@ -109,6 +109,91 @@ static FnTypeInfo parseFnType(const std::string& typeName) {
     return info;
 }
 
+// Signature-only resolution: walking receiver fields must not emit IR or evaluate
+// the receiver a second time. Explicit parameter lists never contain implicit this.
+Compiler::ResolvedCallSignature Compiler::resolveCallSignature(const std::string& name) {
+    ResolvedCallSignature sig;
+    auto ownsResult = [&](const std::string& type) {
+        return ctx.isOwningReturnType(type) || ctx.isMemV3ContainerHandle(type)
+            || ctx.isRefcountModel(type);
+    };
+    auto fromFunction = [&](CompilerContext::FunctionInfo* fi, bool method) {
+        sig.valid = true;
+        sig.function = fi;
+        sig.returnType = fi->returnTypeName;
+        sig.ownsReturn = fi->ownsReturn || ownsResult(sig.returnType);
+        size_t start = method ? 1 : 0;
+        for (size_t i = start; i < fi->argTypeNames.size(); ++i) {
+            sig.parameterTypes.push_back(fi->argTypeNames[i]);
+            sig.lifetimes.push_back(i < fi->argLifetimes.size() ? fi->argLifetimes[i] : "scope");
+        }
+    };
+    if (auto* fi = resolveFunction(name)) { fromFunction(fi, false); return sig; }
+    auto unwrap = [](std::string type) {
+        if (type.size() > 5 && type.back() == '>') {
+            size_t n = type.rfind("shared<", 0) == 0 ? 7
+                : (type.rfind("ptr<", 0) == 0 || type.rfind("ref<", 0) == 0) ? 4 : 0;
+            if (n) type = type.substr(n, type.size() - n - 1);
+        }
+        return type;
+    };
+    size_t dot = name.find('.');
+    std::string root = name.substr(0, dot), type;
+    if (root == "<" || root == "this") type = ctx.currentClassName;
+    else if (auto* sym = resolveVariable(root)) type = sym->typeName;
+    if (dot == std::string::npos) {
+        if (type.rfind("fn<", 0) == 0 && type.back() == '>') {
+            auto fn = parseFnType(type);
+            sig.valid = true;
+            sig.returnType = fn.retType;
+            sig.parameterTypes = fn.paramTypes;
+            sig.lifetimes.resize(fn.paramTypes.size(), "scope");
+            sig.ownsReturn = ownsResult(sig.returnType);
+        }
+        return sig;
+    }
+    size_t last = name.rfind('.');
+    while (dot < last) {
+        size_t next = name.find('.', dot + 1);
+        std::string field = name.substr(dot + 1, next - dot - 1), cls = unwrap(type);
+        type.clear();
+        while (!cls.empty()) {
+            auto ci = ctx.classes.find(cls);
+            if (ci == ctx.classes.end()) break;
+            auto mi = ci->second.members.find(field);
+            if (mi != ci->second.members.end()) { type = mi->second.typeName; break; }
+            cls = ci->second.parentName;
+        }
+        if (type.empty()) return sig;
+        dot = next;
+    }
+    std::string cls = unwrap(type), method = name.substr(last + 1);
+    auto iface = ctx.interfaces.find(cls);
+    if (iface != ctx.interfaces.end()) {
+        for (const auto& m : iface->second.methods) if (m.name == method) {
+            sig.valid = true;
+            sig.returnType = m.returnType;
+            sig.ownsReturn = ownsResult(m.returnType);
+            for (const auto& arg : m.args) sig.parameterTypes.push_back(arg.second);
+            sig.lifetimes = m.argLifetimes;
+            return sig;
+        }
+    }
+    while (!cls.empty()) {
+        auto ci = ctx.classes.find(cls);
+        if (ci == ctx.classes.end()) break;
+        auto fi = ctx.functions.find(cls + "_" + method);
+        if (fi != ctx.functions.end()) { fromFunction(&fi->second, true); return sig; }
+        cls = ci->second.parentName;
+    }
+    return sig;
+}
+
+bool Compiler::isCoownedArgument(const std::string& type) {
+    return ctx.memV3 && (type == "string" || ctx.isMemV3ContainerHandle(type)
+        || type.rfind("shared<", 0) == 0 || ctx.isRefcountModel(type));
+}
+
 IRValue* Compiler::visitCall(CallExpr* call) {
     std::string funcName = call->functionName;
 
@@ -356,11 +441,13 @@ IRValue* Compiler::visitCall(CallExpr* call) {
     }
 
     // Eagerly evaluate arguments for system functions and standard functions
+    const auto callSignature = resolveCallSignature(funcName);
     std::vector<IRValue*> argVals;
     for (size_t i = 0; i < call->args.size(); ++i) {
         IRValue* val = visitExpression(call->args[i].get());
         if (val) {
             argVals.push_back(val);
+            if (callSignature.valid) trackCallArgument(call->args[i].get(), val);
         } else {
             LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "Failed to evaluate argument " + std::to_string(i) + " for call to: " + funcName);
             return ctx.ir_gen->getInt32(0);
@@ -552,26 +639,17 @@ IRValue* Compiler::visitCall(CallExpr* call) {
     // double-free).  All consumed params are pointer/handle types (validated at the def), so
     // the callee receives the same handle — a true move, not a copy.
     // spec/61 §8: an owning container call result passed to a non-consumed param is released after the call.
-    std::vector<std::pair<llvm::Value*, std::string>> ctrArgTemps, modelArgTemps;
-    if (funcInfo && ctx.lifetimeDropsEnabled)
-        for (size_t i = 0; i < call->args.size() && i < argVals.size(); ++i) {
-            if (i < funcInfo->argLifetimes.size() && funcInfo->argLifetimes[i] == "consumed") continue;
-            std::string ct = ownedContainerCallType(call->args[i].get());
-            if (!ct.empty()) ctrArgTemps.push_back({static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[i])), ct});
-            std::string mt = ownedModelCallType(call->args[i].get());
-            if (!mt.empty()) modelArgTemps.push_back({static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[i])), mt});
-        }
     if (funcInfo && ctx.lifetimeDropsEnabled)   // spec/61 class 4: an iterator argument moves into the callee
         for (auto& a : call->args) moveIteratorArg(a.get());
     if (funcInfo && ctx.memV3 && ctx.lifetimeDropsEnabled)   // spec/61 §8: ptr<T> parameters take the box
         for (size_t i = 0; i < call->args.size() && i < funcInfo->argTypeNames.size(); ++i) {
-            if (i < funcInfo->argLifetimes.size() && funcInfo->argLifetimes[i] == "consumed") continue;
             movePtrArg(call->args[i].get(), funcInfo->argTypeNames[i], funcName,
                        i < funcInfo->argNames.size() ? funcInfo->argNames[i] : "");
         }
     if (funcInfo && ctx.lifetimeDropsEnabled && !funcInfo->argLifetimes.empty()) {
         for (size_t i = 0; i < call->args.size() && i < funcInfo->argLifetimes.size(); ++i) {
             if (funcInfo->argLifetimes[i] != "consumed") continue;
+            if (i < funcInfo->argTypeNames.size() && (isCoownedArgument(funcInfo->argTypeNames[i]) || funcInfo->argTypeNames[i].rfind("ptr<", 0) == 0)) continue;
             consumeLocalDrop(call->args[i].get());                 // moved-out local: no scope-drop
             // A directly-passed interpolation temp ("x-${i}") is also moved into the callee —
             // remove it from the statement-temp decref list, else the caller frees it at stmt end
@@ -581,6 +659,11 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                 consumeStringTemp(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[i])));
         }
     }
+
+    // Keep original values for ownership lookup; ABI coercion can replace an
+    // aggregate value with its address.
+    const auto evaluatedArgs = argVals;
+    if (callSignature.valid) transferCallArgumentTemps(callSignature, evaluatedArgs);
 
     // Coerce argument types (pointer/struct adjustments) — shared for both paths
     auto coerceArgs = [&]() {
@@ -682,7 +765,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                 ctx.builder.SetInsertPoint(cont);
             } else {
                 llvm::Value* res = ctx.builder.CreateCall(
-                    f->getFunctionType(), fp, rawArgs, funcName + "_icall");
+                    f->getFunctionType(), fp, rawArgs, f->getReturnType()->isVoidTy() ? "" : funcName + "_icall");
                 callRes = ctx.ir_gen->wrap(res);
             }
         } else {
@@ -779,7 +862,9 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             }
 
             llvm::Value* res = callOrInvoke(ctx, fnTy, fnPtr, rawArgs, retTy->isVoidTy() ? "" : funcName + "_icall");
-            return ctx.ir_gen->wrap(res);
+            finishCallArguments(call, evaluatedArgs);
+            if (fi.retType == "string") aimlTrackStringTemp(ctx, res);
+            return retTy->isVoidTy() ? nullptr : ctx.ir_gen->wrap(res);
         }
     }
 
@@ -787,8 +872,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
         LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "Unknown function: " + funcName);
         return nullptr;
     }
-    for (auto& t : ctrArgTemps) releaseContainerHandle(t.first, t.second);
-    for (auto& t : modelArgTemps) releaseModelValue(t.first, t.second);   // spec/61 §8 owned model temp
+    if (callSignature.valid) finishCallArguments(call, evaluatedArgs);
     // spec/61 §3.2 Part 2: a `producer` free function returning a fresh STRING, used as a TRANSIENT
     // sub-expression (e.g. `set_text(…, build_card_text(card))`), must be decref'd at statement end.
     // Register it as an owned stmt-temp; a consuming decl/set/push/return removes it via
@@ -796,8 +880,9 @@ IRValue* Compiler::visitCall(CallExpr* call) {
     if (callRes && ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) {
         size_t dp = funcName.rfind('.');
         std::string shortName = (dp == std::string::npos) ? funcName : funcName.substr(dp + 1);
-        if (ctx.stringProducerFns.count(shortName) > 0)
-            ctx.stmtTempStack.back().push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(callRes)));
+        if ((callSignature.valid && callSignature.returnType == "string" && callSignature.ownsReturn)
+            || (!callSignature.valid && ctx.stringProducerFns.count(shortName) > 0))
+            aimlTrackStringTemp(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(callRes)));
     }
     return callRes;
 }
@@ -917,32 +1002,16 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 {ctx.builder.getInt32(0), ctx.builder.getInt32(slot)}, "vtbl_slot");
             llvm::Value* fnPtr = ctx.builder.CreateLoad(i8p, slotPtr, "vtbl_fn");
 
-            // spec/61 §3.1 caller-move on interface (vtable) dispatch: an argument passed
-            // to a `consumed` interface-method parameter is moved into the callee — drop the
-            // caller's ownership. m.argLifetimes is parallel to call->args (no implicit this).
-            if (ctx.lifetimeDropsEnabled && !m.argLifetimes.empty()) {
-                for (size_t ai = 0; ai < call->args.size() && ai < m.argLifetimes.size(); ++ai)
-                    if (m.argLifetimes[ai] == "consumed")
-                        consumeLocalDrop(call->args[ai].get());
-            }
-            if (ctx.memV3 && ctx.lifetimeDropsEnabled)   // spec/61 §8: ptr<T> parameters take the box
-                for (size_t ai = 0; ai < call->args.size() && ai < m.args.size(); ++ai) {
-                    if (ai < m.argLifetimes.size() && m.argLifetimes[ai] == "consumed") continue;
-                    movePtrArg(call->args[ai].get(), m.args[ai].second, m.name, m.args[ai].first);
-                }
-
             // Eagerly eval call args.
             std::vector<llvm::Value*> callArgs;
+            std::vector<IRValue*> evaluatedArgs;
             callArgs.push_back(objPtr);
             for (size_t ai = 0; ai < call->args.size(); ++ai) {
                 IRValue* av = visitExpression(call->args[ai].get());
-                if (!av) continue;
+                if (!av) return nullptr;
                 llvm::Value* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(av));
-                // spec/61 §3.1: a directly-passed interpolation temp moved into a consumed
-                // interface-method parameter must leave the caller's statement-temp decref list.
-                if (ctx.lifetimeDropsEnabled && ai < m.argLifetimes.size()
-                    && m.argLifetimes[ai] == "consumed")
-                    consumeStringTemp(raw);
+                evaluatedArgs.push_back(av);
+                trackCallArgument(call->args[ai].get(), av);
                 // "expected ptr, got struct" coercion for the vtable-dispatch
                 // path — mirrors coerceArgs()/the direct-method path.  A struct
                 // lvalue (plain variable OR member-access) passed where the
@@ -961,6 +1030,19 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 }
                 callArgs.push_back(raw);
             }
+
+            if (ctx.lifetimeDropsEnabled) {
+                for (size_t ai = 0; ai < call->args.size() && ai < m.args.size(); ++ai) {
+                    moveIteratorArg(call->args[ai].get());
+                    if (ctx.memV3) movePtrArg(call->args[ai].get(), m.args[ai].second, m.name, m.args[ai].first);
+                    if (ai < m.argLifetimes.size() && m.argLifetimes[ai] == "consumed"
+                        && !isCoownedArgument(m.args[ai].second)
+                        && m.args[ai].second.rfind("ptr<", 0) != 0)
+                        consumeLocalDrop(call->args[ai].get());
+                }
+            }
+
+            transferCallArgumentTemps(resolveCallSignature(call->functionName), evaluatedArgs);
 
             // Struct return: vtable points to a sret-stub (see getOrCreateSretStub
             // in ast_compiler.cpp).  Match the stub's signature here — allocate
@@ -989,17 +1071,19 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 ci->addParamAttr(0, llvm::Attribute::getWithStructRetType(ctx.context, retTy));
 
                 llvm::Value* loaded = ctx.builder.CreateLoad(retTy, sretSlot, "iface_call");
+                finishCallArguments(call, evaluatedArgs);
                 return ctx.ir_gen->wrap(loaded);
             }
 
             // LLVM verbietet Namens-Suffix auf void-Calls, daher Name nur bei non-void.
             llvm::Value* res = callOrInvoke(ctx, fnTy, fnPtr, callArgs,
                 retTy->isVoidTy() ? "" : "iface_call");
+            finishCallArguments(call, evaluatedArgs);
             if (retTy->isVoidTy()) return nullptr;
             // spec/61 §4/§8: a string return is owning → owned statement temp (adopted by a binding,
             // released after a transient use), same as the direct method path.
             if (m.returnType == "string" && ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
-                ctx.stmtTempStack.back().push_back(res);
+                aimlTrackStringTemp(ctx, res);
             return ctx.ir_gen->wrap(res);
         }
     }
@@ -1311,11 +1395,14 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
     ctx.kvGetValueType.clear();
 
     // Eagerly evaluate arguments for collection and class methods.
+    const auto methodSignature = resolveCallSignature(call->functionName);
     std::vector<IRValue*> argVals;
     for (auto& arg : call->args) {
         IRValue* val = visitExpression(arg.get());
-        if (val) argVals.push_back(val);
-        else return ctx.ir_gen->getInt32(0);
+        if (val) {
+            argVals.push_back(val);
+            if (methodSignature.valid) trackCallArgument(arg.get(), val);
+        } else return ctx.ir_gen->getInt32(0);
     }
 
     // String methods (substr, starts_with, index_of, lower, trim, replace, split)
@@ -1330,7 +1417,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         // transient is decref'd at statement end. (starts_with/index_of return i32; split returns a list.)
         auto ownStr = [&](llvm::Value* fresh) -> IRValue* {
             if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
-                ctx.stmtTempStack.back().push_back(fresh);
+                aimlTrackStringTemp(ctx, fresh);
             return ctx.ir_gen->wrap(fresh);
         };
         if (methodName == "substr") {
@@ -1807,7 +1894,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              // adopts it, a transient use is released at statement end).
              if (listElemName == "string" && popped && popped->getType()->isPointerTy()
                  && ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
-                 ctx.stmtTempStack.back().push_back(popped);
+                 aimlTrackStringTemp(ctx, popped);
              return ctx.ir_gen->wrap(popped);
          } else if (methodName == "slice" && !argVals.empty()) {
              // spec/01/§5.4: list.slice(start, end) — shallow COPY of [start, end) into a fresh heap
@@ -2763,7 +2850,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 // decl x = stringkv.get_copy(k)). A consuming decl/set/push/return removes it via
                 // consumeStringTemp (one owned ref); an unconsumed transient is decref'd at stmt end.
                 if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
-                    ctx.stmtTempStack.back().push_back(owned);
+                    aimlTrackStringTemp(ctx, owned);
                 return ctx.ir_gen->wrap(owned); // string: owned char*
             } else if (vName == "f32") {
                 return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getFloatTy(), retPtr, "kv_f32"));
@@ -3151,7 +3238,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             // spec/54 §4 / spec/61 §4: next() yields a string VALUE — the runtime returns a borrowed
             // key c_str (no rc header), so materialize an owned rc string as a statement temp.
             llvm::Value* own = ctx.builder.CreateCall(ctx.getFunction("aiml_str_dup", i8p, {i8p}), {raw}, "iter_key_own");
-            if (!ctx.stmtTempStack.empty()) ctx.stmtTempStack.back().push_back(own);
+            if (!ctx.stmtTempStack.empty()) aimlTrackStringTemp(ctx, own);
             return ctx.ir_gen->wrap(own);
 
         } else if (methodName == "has_next") {
@@ -3443,22 +3530,15 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          // `consumed` parameter is moved into the callee — remove the caller's scope-drop
          // (safe: at worst a leak, never a double-free). argLifetimes includes the implicit
          // `this` at index 0, so explicit call->args[j] lines up with argLifetimes[j+1].
-         std::vector<std::pair<llvm::Value*, std::string>> ctrArgTemps, modelArgTemps;   // spec/61 §8 (see free-function path)
          if (ctx.lifetimeDropsEnabled) {
              auto mfit = ctx.functions.find(resolvedMangled);
              for (auto& a : call->args) moveIteratorArg(a.get());   // spec/61 class 4: iterator argument moves
-             for (size_t j = 0; j < call->args.size() && j < argVals.size(); ++j) {
-                 if (mfit != ctx.functions.end() && (j + 1) < mfit->second.argLifetimes.size()
-                     && mfit->second.argLifetimes[j + 1] == "consumed") continue;
-                 std::string ct = ownedContainerCallType(call->args[j].get());
-                 if (!ct.empty()) ctrArgTemps.push_back({static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[j])), ct});
-                 std::string mt = ownedModelCallType(call->args[j].get());
-                 if (!mt.empty()) modelArgTemps.push_back({static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[j])), mt});
-             }
              if (mfit != ctx.functions.end() && !mfit->second.argLifetimes.empty()) {
                  const auto& lifos = mfit->second.argLifetimes;
                  for (size_t j = 0; j < call->args.size() && (j + 1) < lifos.size(); ++j) {
                      if (lifos[j + 1] != "consumed") continue;
+                     if ((j + 1) < mfit->second.argTypeNames.size()
+                         && (isCoownedArgument(mfit->second.argTypeNames[j + 1]) || mfit->second.argTypeNames[j + 1].rfind("ptr<", 0) == 0)) continue;
                      consumeLocalDrop(call->args[j].get());
                      // directly-passed interpolation temp moved into the callee (see the
                      // free-function path) — remove it from the statement-temp decref list.
@@ -3469,7 +3549,6 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              if (ctx.memV3 && mfit != ctx.functions.end()) {   // spec/61 §8: ptr<T> parameters take the box
                  const auto& mf = mfit->second;
                  for (size_t j = 0; j < call->args.size() && (j + 1) < mf.argTypeNames.size(); ++j) {
-                     if ((j + 1) < mf.argLifetimes.size() && mf.argLifetimes[j + 1] == "consumed") continue;
                      movePtrArg(call->args[j].get(), mf.argTypeNames[j + 1], methodName,
                                 (j + 1) < mf.argNames.size() ? mf.argNames[j + 1] : "");
                  }
@@ -3564,6 +3643,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          // catch landingpad — otherwise an exception thrown by the callee (e.g.
          // persist_from_req → InvalidCascadeException) sails past the handler
          // (uncaught → AOT std::terminate).  Same fix as the free-function path.
+         transferCallArgumentTemps(methodSignature, argVals);
          IRValue* callResult;
          if (llvm::BasicBlock* ud = unwindDest(true)) {
              llvm::BasicBlock* contBB = llvm::BasicBlock::Create(
@@ -3579,8 +3659,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
          } else {
              callResult = ctx.ir_gen->createCall(func->getName().str(), methodArgs, "call_method");
          }
-         for (auto& t : ctrArgTemps) releaseContainerHandle(t.first, t.second);
-         for (auto& t : modelArgTemps) releaseModelValue(t.first, t.second);
+         finishCallArguments(call, argVals);
          // If the method returns a struct (list<T>, model, etc.), store the value
          // into a temporary alloca and return the pointer.  This matches what
          // builtin handlers do and what visitSetStmt/visitDeclStmt expect for
@@ -3597,7 +3676,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              // consuming decl/set/push/return removes it via consumeStringTemp first.
              if (ctx.lifetimeDropsEnabled && ctx.stringProducerFns.count(methodName) > 0
                  && !ctx.stmtTempStack.empty())
-                 ctx.stmtTempStack.back().push_back(raw);
+                 aimlTrackStringTemp(ctx, raw);
          }
          return callResult;
     }

@@ -3866,9 +3866,12 @@ bool Compiler::emitContainerFieldDeepCopy(llvm::Value* dstPtr, llvm::Value* srcP
 // to a later definition resolves ownership exactly like one to an earlier definition.
 static void registerForwardInfo(CompilerContext& ctx, const std::string& key, llvm::Function* f,
                                 const FunctionDecl* fn, const std::string& thisType) {
-    if (!f || ctx.functions.count(key)) return;
-    CompilerContext::FunctionInfo fi;
+    if (!f) return;
+    auto& fi = ctx.functions[key];
     fi.func = f;
+    fi.argNames.clear();
+    fi.argTypeNames.clear();
+    fi.argLifetimes.clear();
     if (!thisType.empty()) {
         fi.argNames.push_back("this");
         fi.argTypeNames.push_back(thisType);
@@ -4128,7 +4131,11 @@ void Compiler::registerTypeDecl(Node* node) {
             auto* i8p = llvm::PointerType::get(ctx.context, 0);
             for (const auto& method : cls->methods) {
                 std::string mangled = className + "_" + method->name;
-                if (ctx.module.getFunction(mangled)) continue;
+                if (auto* existing = ctx.module.getFunction(mangled)) {
+                    if (ctx.isOwningReturnType(method->returnType)) method->ownsReturn = true;
+                    registerForwardInfo(ctx, mangled, existing, method.get(), "ref<" + className + ">");
+                    continue;
+                }
                 std::vector<llvm::Type*> paramTys;
                 paramTys.push_back(i8p);   /* implicit this */
                 for (const auto& arg : method->args) {
@@ -4570,7 +4577,10 @@ void Compiler::registerTypeDecl(Node* node) {
         }
         // Forward-declare function signature so forward references resolve.
         std::string mangledName = ctx.qualify(func->name);
-        if (ctx.module.getFunction(mangledName)) return; // already declared
+        if (auto* existing = ctx.module.getFunction(mangledName)) {
+            registerForwardInfo(ctx, mangledName, existing, func, "");
+            return;
+        }
 
         auto* i8p = llvm::PointerType::get(ctx.context, 0);
         std::vector<llvm::Type*> paramTys;
@@ -5643,13 +5653,8 @@ void Compiler::visitFunction(FunctionDecl* func) {
                             "a reference/handle type (ptr<T>, list, map, string, or a handle "
                             "built-in). For a value model/class pass ptr<" + paramType +
                             "> instead; a scalar owns no heap. (spec/61 §3.1)");
-                    } else if (paramType == "string" && ctx.lifetimeDropsEnabled) {
-                        // callee-drop safety net for an un-consumed `consumed` string param:
-                        // decref at function-body exit (kind 1) unless push/return/store moves
-                        // it out first.  Only string has a drop primitive today; ptr/list/map
-                        // consumed params rely on caller-move + are freed by whoever they are
-                        // moved into (leak-on-unconsumed only, never double-free). Staged here,
-                        // drained into the body frame by the next visitBlockStmt.
+                    } else if (!ctx.memV3 && paramType == "string" && ctx.lifetimeDropsEnabled) {
+                        // Keep the legacy caller-transfer convention when memV3 is disabled.
                         CompilerContext::ScopeDrop sd;
                         sd.addr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argAlloca));
                         sd.kind = 1;
@@ -5659,22 +5664,21 @@ void Compiler::visitFunction(FunctionDecl* func) {
             }
         }
         // spec/61 §8: a container parameter holds its own reference for the call (incref on entry,
-        // released on every exit); a `consumed` one was moved in by the caller (no incref).
+        // released on every exit), including consumed RC parameters (§9.2 co-owned).
         if (ctx.memV3 && ctx.lifetimeDropsEnabled && argAlloca && i < argIsByref.size() && argIsByref[i]) {
             std::string ptn;
             for (auto& fa : func->args) if (fa.first == argNames[i]) { ptn = fa.second; break; }
             CompilerContext::ScopeDrop sd;
             llvm::Value* pslot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argAlloca));
             if (ctx.isMemV3ContainerHandle(ptn) && makeHandleDrop(ptn, pslot, sd)) {
-                bool consumedParam = i < argLifetimes.size() && argLifetimes[i] == "consumed";
-                if (!consumedParam) {
+                {
                     std::string kind = (sd.kind == 3) ? "map" : (sd.kind == 8) ? "buffer" : "list";
                     auto* i8p = llvm::PointerType::get(ctx.context, 0);
                     ctx.builder.CreateCall(ctx.getFunction("aiml_" + kind + "_handle_incref", ctx.builder.getVoidTy(), {i8p}),
                                            { ctx.builder.CreateLoad(i8p, pslot, argNames[i] + "_h") });
                 }
                 sd.debugName = argNames[i];
-                sd.paramRef = !consumedParam;
+                sd.paramRef = true;
                 ctx.pendingParamDrops.push_back(sd);
             }
         }
@@ -5684,7 +5688,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
             std::string ptn;
             for (auto& fa : func->args) if (fa.first == argNames[i]) { ptn = fa.second; break; }
             bool consumedParam = i < argLifetimes.size() && argLifetimes[i] == "consumed";
-            if (ptn == "string" && !consumedParam && bodyRebinds(func->body.get(), argNames[i])) {
+            if (ptn == "string" && (consumedParam || bodyRebinds(func->body.get(), argNames[i]))) {
                 auto* i8p = llvm::PointerType::get(ctx.context, 0);
                 llvm::Value* pslot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argAlloca));
                 ctx.builder.CreateCall(ctx.getFunction("aiml_str_incref", ctx.builder.getVoidTy(), {i8p}),
@@ -5732,7 +5736,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
             }
         }
         // spec/61 §8: a shared<T> parameter co-owns for the call (incref, decref on every exit);
-        // a `consumed` one took over the caller's reference.
+        // consumed also co-owns: the caller retains its own reference (§9.2).
         if (ctx.memV3 && ctx.lifetimeDropsEnabled && argAlloca && i < argIsRefModel.size() && argIsRefModel[i]) {
             std::string ptn;
             for (auto& fa : func->args) if (fa.first == argNames[i]) { ptn = fa.second; break; }
@@ -5741,15 +5745,13 @@ void Compiler::visitFunction(FunctionDecl* func) {
             auto bci = ctx.classes.find(bare);
             auto* i8p = llvm::PointerType::get(ctx.context, 0);
             llvm::Value* pslot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argAlloca));
-            bool consumedParam = i < argLifetimes.size() && argLifetimes[i] == "consumed";
-            if (!consumedParam)
-                ctx.builder.CreateCall(ctx.getFunction("aiml_model_incref", ctx.builder.getVoidTy(), {i8p}),
+            ctx.builder.CreateCall(ctx.getFunction("aiml_model_incref", ctx.builder.getVoidTy(), {i8p}),
                                        { ctx.builder.CreateLoad(i8p, pslot, argNames[i] + "_m") });
             CompilerContext::ScopeDrop sd;
             sd.addr = pslot;
             sd.kind = 7;
             if (bci != ctx.classes.end()) { sd.serNodes = bci->second.serNodesVar; sd.serNodesCount = bci->second.serNodesCount; }
-            sd.paramRef = !consumedParam;
+            sd.paramRef = true;
             sd.debugName = argNames[i]; sd.debugType = ptn;
             ctx.pendingParamDrops.push_back(sd);
         }

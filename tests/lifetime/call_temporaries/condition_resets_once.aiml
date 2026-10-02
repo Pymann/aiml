@@ -1,0 +1,106 @@
+# static-check: off
+# spec/61 regression: loop-condition slots reset per iteration; nested producer evaluated once; early return
+# Status: NOT RUN. Expected: exit 0; zero definite/indirect leaks; no memory errors.
+- class:
+    name: Factory
+    members:
+    - [hits, i32]
+    methods:
+    - def:
+        name: make
+        args:
+        - [number, i32]
+        return: list<i32>
+        body:
+        - set:
+          - <.hits
+          - +: [<.hits, 1]
+        - decl: [values, list<i32>]
+        - call: [values.push, number]
+        - {return: values}
+- class:
+    name: Holder
+    members:
+    - [factory, ptr<Factory>]
+- def:
+    name: read
+    args:
+    - [values, list<i32>]
+    return: i32
+    body:
+    - return:
+        at: [values, 0]
+- def:
+    name: early
+    args:
+    - [holder, ref<Holder>]
+    return: i32
+    body:
+    - decl: [pos, i32, 0]
+    - while:
+        condition:
+          lt:
+          - call:
+            - read
+            - call: [holder.factory.make, pos]
+          - 10
+        body:
+        - if:
+            condition:
+              eq: [pos, 3]
+            then:
+            - {return: pos}
+        - set:
+          - pos
+          - +: [pos, 1]
+    - {return: -1}
+- def:
+    name: main
+    return: i32
+    body:
+    - decl:
+      - holder
+      - ptr<Holder>
+      - {new: Holder}
+    - set:
+      - holder.factory
+      - {new: Factory}
+    - decl: [counter, i32, 0]
+    - while:
+        condition:
+          lt:
+          - call:
+            - read
+            - call: [holder.factory.make, counter]
+          - 40
+        body:
+        - if:
+            condition:
+              neq:
+              - call:
+                - read
+                - call: [holder.factory.make, counter]
+              - counter
+            then:
+            - {return: 42}
+        - set:
+          - counter
+          - +: [counter, 1]
+    - if:
+        condition:
+          neq: [holder.factory.hits, 81]
+        then:
+        - {return: 43}
+    - if:
+        condition:
+          neq:
+          - call: [early, holder]
+          - 3
+        then:
+        - {return: 44}
+    - if:
+        condition:
+          neq: [holder.factory.hits, 85]
+        then:
+        - {return: 45}
+    - {return: 0}

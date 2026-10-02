@@ -350,7 +350,7 @@ namespace AIML {
     std::vector<std::vector<ScopeDrop>> cleanupStack;
     // spec/61 §9.3: exception unwind. kind 12 = caught exception record slot (end_catch + free
     // the object via the record's free thunk; elemKind 1 = rethrown → end_catch only).
-    struct TryFrame { llvm::BasicBlock* dispatch; llvm::AllocaInst* excSlot; size_t frameBase; };
+    struct TryFrame { llvm::BasicBlock* dispatch; llvm::AllocaInst* excSlot; size_t frameBase; size_t tempFrameBase; };
     std::vector<TryFrame> tryStack;
     std::vector<std::set<llvm::Value*>> stmtDropSnapshot;   // drops bound before the current statement
     std::vector<const AIML::AST::Stmt*> stmtStack;
@@ -378,6 +378,20 @@ namespace AIML {
     // statement end.  This reclaims the unnamed `"${…}"` temporaries that drive the
     // client render-`populate` leak, which decl-local drops cannot reach.
     std::vector<std::vector<llvm::Value*>> stmtTempStack;
+    // Runtime ownership of statement temporaries. Slots are reset on EVERY execution,
+    // including loop conditions; pads only load slots, never branch-local SSA values.
+    struct StatementTemp {
+        llvm::Value* value;
+        llvm::Type* storedType;
+        ScopeDrop drop;
+    };
+    struct StatementTempFrame {
+        llvm::Function* function = nullptr;
+        std::vector<llvm::Instruction*> resetPoints;
+        std::vector<StatementTemp> temps;
+    };
+    std::vector<StatementTempFrame> statementTemps;
+
 
     // spec/61: master switch for automatic drop/decref EMISSION.  OFF by default —
     // the model/string scope-drops + render-temp decrefs are correct on the aiml test
@@ -1294,5 +1308,6 @@ namespace AIML {
 namespace AIML { namespace AST {
 // spec/61 §9.3: unwind destination for a call/throw at the current point (defined in ast_compiler_stmt.cpp).
 llvm::BasicBlock* aimlUnwindDest(CompilerContext& ctx, bool userCallee);
+void aimlTrackStringTemp(CompilerContext& ctx, llvm::Value* value);
 bool aimlModelIsMoveOnly(CompilerContext& ctx, const std::string& className);
 } }

@@ -1,0 +1,43 @@
+# static-check: off
+- model: {name: Item, fields: [[label, string], [tags, list<string>]]}
+- model: {name: Holder, fields: [[name, string], [box, ptr<Item>]]}
+- def:
+    name: make_item
+    args: [[num, i32]]
+    return: { type: Item, lifetime: producer }
+    body:
+      - decl: [out, Item]
+      - set: [out.label, "item-${num}"]
+      - call: [out.tags.push, "tag-${num}"]
+      - return: out
+
+- def:
+    name: pick_even
+    args: [[src, list<Item>]]
+    return: list<Item>
+    body:
+      - decl: [out, list<Item>]
+      - decl: [pos, i32, 0]
+      - while:
+          condition: {lt: [pos, src.len]}
+          body:
+            - decl: [one, Item, {at: [src, pos]}]
+            - if: {condition: {eq: [{ '%': [pos, 2]}, 0]}, then: [{call: [out.push, one]}]}
+            - set: [pos, {+: [pos, 1]}]
+      - return: out
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - decl: [pool, list<Item>]
+      - call: [pool.push, {call: [make_item, 1]}]
+      - call: [pool.push, {call: [make_item, 2]}]
+      - call: [pool.push, {call: [make_item, 3]}]
+      - while:
+          condition: {lt: [counter, 200]}
+          body:
+            - decl: [evens, list<Item>, {call: [pick_even, pool]}]
+            - decl: [again, list<Item>, {call: [pick_even, {call: [pick_even, pool]}]}]
+            - set: [counter, {+: [counter, 1]}]
+      - return: 0

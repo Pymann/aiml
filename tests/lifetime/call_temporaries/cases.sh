@@ -1,0 +1,47 @@
+# spec/61 call-temporary acceptance targets. Authored, NOT RUN; not a GREEN claim.
+CALL_TEMPORARY_PROBES=(
+  tests/lifetime/call_temporaries/chain_10.aiml
+  tests/lifetime/call_temporaries/chain_1000.aiml
+  tests/lifetime/call_temporaries/chain_local_10.aiml
+  tests/lifetime/call_temporaries/chain_local_1000.aiml
+  tests/lifetime/call_temporaries/condition_resets_once.aiml
+  tests/lifetime/call_temporaries/consumed_rc_buffer.aiml
+  tests/lifetime/call_temporaries/consumed_rc_cascade.aiml
+  tests/lifetime/call_temporaries/consumed_rc_list.aiml
+  tests/lifetime/call_temporaries/consumed_rc_map.aiml
+  tests/lifetime/call_temporaries/consumed_rc_shared.aiml
+  tests/lifetime/call_temporaries/consumed_rc_string.aiml
+  tests/lifetime/call_temporaries/fnptr_10.aiml
+  tests/lifetime/call_temporaries/fnptr_1000.aiml
+  tests/lifetime/call_temporaries/fnptr_consumer_10.aiml
+  tests/lifetime/call_temporaries/fnptr_consumer_1000.aiml
+  tests/lifetime/call_temporaries/fnptr_consumer_local_10.aiml
+  tests/lifetime/call_temporaries/fnptr_consumer_local_1000.aiml
+  tests/lifetime/call_temporaries/fnptr_local_10.aiml
+  tests/lifetime/call_temporaries/fnptr_local_1000.aiml
+  tests/lifetime/call_temporaries/forward_10.aiml
+  tests/lifetime/call_temporaries/forward_1000.aiml
+  tests/lifetime/call_temporaries/forward_local_10.aiml
+  tests/lifetime/call_temporaries/forward_local_1000.aiml
+  tests/lifetime/call_temporaries/forward_reordered_10.aiml
+  tests/lifetime/call_temporaries/forward_reordered_1000.aiml
+  tests/lifetime/call_temporaries/iface_consumer_10.aiml
+  tests/lifetime/call_temporaries/iface_consumer_1000.aiml
+  tests/lifetime/call_temporaries/iface_consumer_local_10.aiml
+  tests/lifetime/call_temporaries/iface_consumer_local_1000.aiml
+  tests/lifetime/call_temporaries/imported_inherited_signature.aiml
+  tests/lifetime/call_temporaries/ptr_dispatch_fn.aiml
+  tests/lifetime/call_temporaries/ptr_dispatch_free.aiml
+  tests/lifetime/call_temporaries/ptr_dispatch_interface.aiml
+  tests/lifetime/call_temporaries/ptr_dispatch_method.aiml
+  tests/lifetime/call_temporaries/throw_10.aiml
+  tests/lifetime/call_temporaries/throw_1000.aiml
+  tests/lifetime/call_temporaries/throw_local_10.aiml
+  tests/lifetime/call_temporaries/throw_local_1000.aiml
+  tests/lifetime/call_temporaries/unwind_buffer.aiml
+  tests/lifetime/call_temporaries/unwind_list.aiml
+  tests/lifetime/call_temporaries/unwind_map.aiml
+  tests/lifetime/call_temporaries/unwind_model.aiml
+  tests/lifetime/call_temporaries/unwind_string.aiml
+  tests/lifetime/call_temporaries/void_sret_alias_returns.aiml
+)
