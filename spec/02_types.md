@@ -23,28 +23,12 @@
 
 # Dynamic Typing — the 'any' type
 #
-# 'any' is a tagged variant type. It stores the value together with its runtime type tag.
-# This allows heterogeneous containers (list<any>, map<string:any>) to preserve
-# the original type of each stored element.
+# 'any' is a single untyped value (a generic pointer / tagged scalar). It is NOT allowed as an
+# element type: list<any>, map<K:any>, map<any:V>, buffer<any>, chan<any>, array<any:N>,
+# dyn_array<any>, iterator<any> and cascade<any> are compile errors. A container's element class
+# drives its release (spec/61 §2.1); an untyped element has none. Heterogeneous collections use
+# an interface (spec/19 §2, list<ptr<Iface>>) or a common base model (list<ptr<Base>>).
 #
-# Auto-unboxing:
-# When a value is retrieved from a collection with 'any' value type,
-# the runtime reads the type tag and returns the value as its REAL type.
-# The receiving variable (via set:) inherits this real type.
-#
-# Example:
-- decl: [m, map<string:any>]
-- call: [m.put, "age", 30]         # stored as i32, tagged
-- call: [m.put, "name", "Alice"]   # stored as string, tagged
-- set: [age, { call: [m.get, "age"] }]    # age is i32 — auto-unboxed
-- set: [name, { call: [m.get, "name"] }]  # name is string — auto-unboxed
-
-# Comparisons work on auto-unboxed values:
-- if:
-    condition: { eq: [age, 30] }   # OK: age is i32
-    then:
-      - print: ["age is 30"]
-
 # When declared explicitly as 'any', comparisons require explicit cast:
 # because the static type is unknown at compile time.
 - decl: [dynamic_val, any]
@@ -61,7 +45,6 @@
 
 | Context | Behaviour |
 |---------|-----------|
-| Stored in `list<any>` / `map<K:any>` | Tagged with runtime type; auto-unboxed on retrieval |
-| Retrieved via `get()` / index access | Returns **real type** — `set:` infers the correct type |
+| As a container element type (`list<any>`, `map<K:any>`, `buffer<any>`, `chan<any>`, `array<any:N>`, …) | **Compile error** — use an interface (spec/19 §2) or a base model |
 | Explicit `decl: [x, any]` | Static type unknown; requires `cast:` for type-specific operations |
 | Comparing `any` vs specific type directly | `TypeMismatchException` at runtime unless cast first |

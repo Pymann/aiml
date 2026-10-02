@@ -27,7 +27,7 @@
 # mirrors add_buff: push a by-value Buff into ent.buffs (deep-copy path)
 - def:
     name: nml_add_buff
-    args: [[ent, ptr<EntX>], [buff, BuffX]]
+    args: [[ent, ref<EntX>], [buff, BuffX]]
     body:
       - call: [ent.buffs.push, buff]
 

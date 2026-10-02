@@ -980,17 +980,33 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
 
     // 2. Evaluate arguments
     std::vector<llvm::Value*> argVals;
+    for (auto& arg : spawn->args) {
+        IRValue* v = visitExpression(arg.get());
+        if (v) argVals.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v)));
+    }
     // spec/61 §8: a ptr<T> parameter of the thread function takes the box (moved into the thread)
     if (fi && ctx.memV3 && ctx.lifetimeDropsEnabled)
         for (size_t ai = 0; ai < spawn->args.size() && ai < fi->argTypeNames.size(); ++ai)
             movePtrArg(spawn->args[ai].get(), fi->argTypeNames[ai], spawn->functionName,
                        ai < fi->argNames.size() ? fi->argNames[ai] : "");
-    for (auto& arg : spawn->args) {
-        IRValue* v = visitExpression(arg.get());
-        if (v) argVals.push_back(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v)));
-    }
 
     llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+
+    // spec/61 Class 5: the thread co-owns each chan argument (retained here, released by the trampoline)
+    std::vector<bool> chanArg(argVals.size(), false);
+    if (ctx.memV3 && ctx.lifetimeDropsEnabled)
+        for (size_t ai = 0; ai < argVals.size() && ai < fi->argTypeNames.size(); ++ai) {
+            const std::string& at = fi->argTypeNames[ai];
+            if (at.rfind("chan<", 0) == 0 && at.back() == '>' && argVals[ai]->getType()->isPointerTy()) {
+                chanArg[ai] = true;
+                ctx.builder.CreateCall(ctx.getFunction("aiml_chan_retain", ctx.builder.getVoidTy(), {i8p}), { argVals[ai] });
+            }
+        }
+    auto releaseChanArgs = [&](const std::vector<llvm::Value*>& vals) {
+        for (size_t i = 0; i < vals.size() && i < chanArg.size(); ++i)
+            if (chanArg[i])
+                ctx.builder.CreateCall(ctx.getFunction("aiml_chan_release", ctx.builder.getVoidTy(), {i8p}), { vals[i] });
+    };
 
     // 3. Build or reuse a trampoline: void*(void*) that unpacks args and calls targetFn
     std::string trampolineName = "__aiml_spawn_" + spawn->functionName;
@@ -1032,6 +1048,7 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
             ctx.builder.CreateInvoke(targetFn, normalBB, catchBB, callArgs);
 
             ctx.builder.SetInsertPoint(normalBB);
+            releaseChanArgs(callArgs);
             llvm::Function* freeFn = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
             ctx.builder.CreateCall(freeFn, {rawArgPtr});
             ctx.builder.CreateRet(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)));
@@ -1054,6 +1071,7 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
         llvm::Function* endCatch = ctx.getFunction("__cxa_end_catch", ctx.builder.getVoidTy(), {});
         ctx.builder.CreateCall(endCatch, {});
         if (argStructTy) {
+            releaseChanArgs(callArgs);
             llvm::Function* freeFn2 = ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p});
             ctx.builder.CreateCall(freeFn2, {rawArgPtr});
         }

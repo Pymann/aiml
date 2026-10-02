@@ -3170,6 +3170,9 @@ static bool serHasHeap(const std::string& typeName, CompilerContext& ctx) {
     // round4 §3 (memV3): an owned `tensor` field is a Class-4 resource → the model owns it and must
     // close it at scope drop (fre → aiml_tensor_free). So a tensor-field model needs serNodes + drop.
     if (ctx.memV3 && typeName == "tensor") return true;
+    // spec/61 Class 5 chan<T> / Class 4 thread_handle field: released with the owning model.
+    if (ctx.memV3 && (typeName == "thread_handle"
+                      || (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>'))) return true;
     // spec/61 §6.2 (memV3): a `shared<T>` (refcounted co-owned) or `ptr<T>` (unique owner) FIELD owns
     // heap → the model must decref/free it at scope drop. Without this a model whose ONLY heap-bearing
     // fields are shared/ptr (no string/list/tensor) got hasHeapFields=false → no drop → leak (probe
@@ -3280,6 +3283,10 @@ static std::vector<AimlTypeNode> serBuildSubtree(
     if (ctx.memV3) {
         if (typeName == "tensor")
             { res.push_back({AIML_TD_TENSOR, 0,0,offset,0,0}); return res; }
+        if (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>')
+            { res.push_back({AIML_TD_CHAN, 0,0,offset,0,0}); return res; }
+        if (typeName == "thread_handle")
+            { res.push_back({AIML_TD_THREAD, 0,0,offset,0,0}); return res; }
         if (purpose == DescriptorPurpose::Clone
             && typeName.rfind("ref<", 0) == 0 && typeName.back() == '>')
             { res.push_back({AIML_TD_WEAK_REF, 0,0,offset,0,0}); return res; }
@@ -3920,9 +3927,12 @@ void Compiler::registerTypeDecl(Node* node) {
             if (m->returnType == "string") ctx.stringProducerFns.insert(m->name);
         }
         if (!ctx.headerOnlyMode)
-            for (const auto& m : cls->members)
+            for (const auto& m : cls->members) {
                 if (ctx.isRefContainerType(m.type))
                     LOG_ERROR(ctx.fmtLoc(cls->sourceNode) + ctx.refContainerError("member '" + cls->name + "." + m.name + "'", m.type));
+                if (!ctx.anyElementContainer(m.type).empty())
+                    LOG_ERROR(ctx.fmtLoc(cls->sourceNode) + ctx.anyElementError("member '" + cls->name + "." + m.name + "'", m.type));
+            }
         if (ctx.classes.count(className)) {
             // Hard-error if a model with the same name already exists.
             // Models hold data; classes hold behavior — sharing a name conflates
@@ -4177,9 +4187,12 @@ void Compiler::registerTypeDecl(Node* node) {
         std::string modelName = ctx.qualify(mod->name);
         ctx.validateIdentifier(mod->name, "model", mod->sourceNode);
         if (!ctx.headerOnlyMode)
-            for (const auto& f : mod->fields)
+            for (const auto& f : mod->fields) {
                 if (ctx.isRefContainerType(f.type))
                     LOG_ERROR(ctx.fmtLoc(mod->sourceNode) + ctx.refContainerError("field '" + mod->name + "." + f.name + "'", f.type));
+                if (!ctx.anyElementContainer(f.type).empty())
+                    LOG_ERROR(ctx.fmtLoc(mod->sourceNode) + ctx.anyElementError("field '" + mod->name + "." + f.name + "'", f.type));
+            }
         if (ctx.classes.count(modelName)) {
             // Mirror check: if a class registered first under the same name,
             // hard-error.  (See ClassDecl branch above for full rationale.)
@@ -5527,6 +5540,8 @@ void Compiler::visitFunction(FunctionDecl* func) {
     }
     if (ctx.isRefContainerType(func->returnType))
         LOG_ERROR(ctx.fmtLoc(func->sourceNode) + ctx.refContainerError(func->name + ": return", func->returnType));
+    if (!ctx.anyElementContainer(func->returnType).empty())
+        LOG_ERROR(ctx.fmtLoc(func->sourceNode) + ctx.anyElementError(func->name + ": return", func->returnType));
     for (size_t i = 0; i < argNames.size(); ++i) {
         if (ctx.symbol_table.count(argNames[i])) {
             LOG_ERROR("Variable shadowing is not allowed: function argument '" + argNames[i]
@@ -5556,6 +5571,9 @@ void Compiler::visitFunction(FunctionDecl* func) {
             const std::string& ptn = func->args[i].second;
             if (ctx.isRefContainerType(ptn))
                 LOG_ERROR(ctx.fmtLoc(func->sourceNode) + ctx.refContainerError(
+                    func->name + ": parameter '" + argNames[i] + "'", ptn));
+            if (!ctx.anyElementContainer(ptn).empty())
+                LOG_ERROR(ctx.fmtLoc(func->sourceNode) + ctx.anyElementError(
                     func->name + ": parameter '" + argNames[i] + "'", ptn));
             if ((ptn.rfind("ptr<list<", 0) == 0 || ptn.rfind("ptr<map<", 0) == 0)
                 && ptn.size() > 5 && !std::getenv("AIML_ALLOW_PTR_CONTAINER")) {

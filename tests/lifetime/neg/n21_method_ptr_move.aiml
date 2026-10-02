@@ -1,0 +1,22 @@
+# EXPECT-ERROR: use-after-move
+# spec/61 §8/§10: passing a ptr<T> to a method's ptr<T> parameter moves it; a later use is an error.
+- model: {name: Card, fields: [[title, string]]}
+- class:
+    name: Desk
+    members:
+      - [hits, i32]
+    methods:
+      - def:
+          name: take
+          args: [[taken, ptr<Card>]]
+          body:
+            - set: [<.hits, {+: [<.hits, taken.title.len]}]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [desk, Desk]
+      - decl: [box, ptr<Card>, {new: Card}]
+      - call: [desk.take, box]
+      - set: [box.title, "again"]
+      - return: 0

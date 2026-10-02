@@ -1,6 +1,6 @@
 # static-check: off
 # spec/61 regression: imported inherited producer through field chain; same-named scalar method must not affect ownership
-# Status: NOT RUN. Expected: exit 0; zero definite/indirect leaks; no memory errors.
+# Status: verified 2026-10-02 — exit 0, 0 definite/indirect leaks, no memory errors.
 - {import: tests/lifetime/call_temporaries/support/imported_factory.aiml}
 - class: {name: DerivedFactory, extends: BaseFactory}
 - class:

@@ -1,6 +1,6 @@
 # static-check: off
 # spec/61 regression: original chain with temporary argument
-# Status: NOT RUN. Expected: exit 0; zero definite/indirect leaks; no memory errors.
+# Status: verified 2026-10-02 — exit 0, 0 definite/indirect leaks, no memory errors.
 - def:
     name: make_values
     return: {type: list<i32>, lifetime: producer}

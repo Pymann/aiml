@@ -9,6 +9,7 @@
 #include <cstdlib>   // std::getenv (modelRefcount env-read in ctor)
 #include <memory>
 #include <vector>
+#include <cctype>
 #include <functional>
 #include <yaml-cpp/yaml.h>
 #include "../../compiler.h" // For Symbol struct
@@ -453,6 +454,32 @@ namespace AIML {
     std::string refContainerError(const std::string& what, const std::string& t) const {
         return what + " has type '" + t + "' — ref<" + t.substr(4, t.size() - 5) + "> is not a valid type:"
             " a container is already a shared handle, use '" + t.substr(4, t.size() - 5) + "' (spec/61 §3)";
+    }
+    // spec/02 + spec/13 §4: `any` is never a container element type (no release class, spec/61 §2.1).
+    // Returns the offending container name ("" = ok).
+    static std::string anyElementContainer(const std::string& t) {
+        static const char* kContainers[] = {"list", "map", "buffer", "chan", "array", "dyn_array", "iterator", "cascade"};
+        std::vector<std::string> open;
+        for (size_t i = 0; i < t.size(); ++i) {
+            char c = t[i];
+            if (c == '<') {
+                size_t b = i;
+                while (b > 0 && (std::isalnum((unsigned char)t[b - 1]) || t[b - 1] == '_')) --b;
+                open.push_back(t.substr(b, i - b));
+            } else if (c == '>') {
+                if (!open.empty()) open.pop_back();
+            } else if (!open.empty() && t.compare(i, 3, "any") == 0
+                       && (i == 0 || !(std::isalnum((unsigned char)t[i - 1]) || t[i - 1] == '_'))
+                       && (i + 3 >= t.size() || !(std::isalnum((unsigned char)t[i + 3]) || t[i + 3] == '_'))) {
+                for (const char* k : kContainers) if (open.back() == k) return open.back();
+            }
+        }
+        return "";
+    }
+    std::string anyElementError(const std::string& what, const std::string& t) const {
+        return what + " has type '" + t + "' — 'any' is not allowed as a container element type"
+            " (spec/02, spec/13 §4). For heterogeneous elements declare an `- interface:` (spec/19 §2) that"
+            " the element classes implement and use list<ptr<MyIface>>, or a common base model (list<ptr<Base>>)";
     }
     bool ownsReturnMatches(const std::string& shortName, const std::string& declType) const {
         if (ownsReturnFns.count(shortName) == 0) return false;

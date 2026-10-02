@@ -5,7 +5,7 @@
 - model: { name: Bundle, fields: [[creatures, list<Card>]] }
 - def:
     name: fake_decode
-    args: [[out, ptr<Bundle>]]
+    args: [[out, ref<Bundle>]]
     body:
       - decl: [idx, i32, 0]
       - while:

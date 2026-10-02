@@ -61,6 +61,10 @@ prefer the mapping layer in game code.
 | `input.key_pressed_once(key: string)` | `bool` | Rising edge, **consumed on first read per frame**: the first poll this frame returns `true`, every later poll returns `false` until the edge resets next frame. Use for edge-triggered *actions* (skip, toggle, confirm) in code paths that may run more than once per frame — e.g. an input handler invoked from `render()`, which is often called several times per frame (once per reactive redraw after an action). Polling `key_pressed` there would fire the action once per redraw. |
 | `input.key_released(key: string)` | `bool` | Key came up **this frame** (falling edge) |
 
+Key state follows the same per-frame snapshot as mouse buttons (below): a key pressed and released
+between two frame boundaries reports `key_pressed`/`key_pressed_once` **and** `key_released` in the
+next frame; auto-repeat produces no further press edges.
+
 > **Which press call?** Use `key_pressed` for *queries* (highlight a key, show a hint) — it is idempotent and safe to read from multiple systems. Use `key_pressed_once` for *actions that must happen exactly once per physical press*, especially when the polling site can run multiple times per frame. Because `key_pressed_once` consumes the edge, only the first reader in a frame sees it — do not use it if two independent systems must both react to the same key in the same frame.
 
 ### 2.2 Mouse
@@ -73,6 +77,12 @@ prefer the mapping layer in game code.
 | `input.mouse_pressed(btn: i32)` | `bool` | Button went down this frame |
 | `input.mouse_released(btn: i32)` | `bool` | Button came up this frame |
 | `input.mouse_scroll()` | `vec2` | Scroll delta this frame (x=horizontal, y=vertical) |
+
+Button state is a per-frame snapshot: every consumer in one frame sees the same `mouse_button` /
+`mouse_pressed` / `mouse_released` values, even when events arrive mid-frame (e.g. during a
+blocking network call). Edges are latched, never lost: a press and release that both happen
+between two frame boundaries report `mouse_pressed` **and** `mouse_released` in the next frame
+(`mouse_button` is then already false).
 
 Mouse button indices: `0` = left, `1` = right, `2` = middle.
 

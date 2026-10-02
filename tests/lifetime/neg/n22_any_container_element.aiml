@@ -1,0 +1,22 @@
+# EXPECT-ERROR: not allowed as a container element type
+# spec/02 + spec/13 §4: `any` is never a container element type (no release class, spec/61 §2.1).
+- model:
+    name: Holder
+    fields:
+      - [items, list<any>]
+      - [lookup, map<string:any>]
+- def:
+    name: take
+    args: [[inbox, chan<any>]]
+    return: i32
+    body:
+      - return: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [keyed, map<any:i32>]
+      - decl: [bytes, buffer<any>]
+      - decl: [fixed, array<any:4>]
+      - decl: [heap, dyn_array<any>]
+      - return: 0

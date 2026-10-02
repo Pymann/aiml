@@ -75,7 +75,7 @@
 
 - def:
     name: resolve_token_pid
-    args: [[svc, ptr<AuthSvc>], [token, string]]
+    args: [[svc, ref<AuthSvc>], [token, string]]
     return: { type: string, lifetime: producer }
     body:
       - decl: [res, AuthResult, { call: [svc.handle_validate, token] }]

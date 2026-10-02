@@ -1,6 +1,6 @@
 # static-check: off
 # spec/61 regression: loop-condition slots reset per iteration; nested producer evaluated once; early return
-# Status: NOT RUN. Expected: exit 0; zero definite/indirect leaks; no memory errors.
+# Status: verified 2026-10-02 — exit 0, 0 definite/indirect leaks, no memory errors.
 - class:
     name: Factory
     members:

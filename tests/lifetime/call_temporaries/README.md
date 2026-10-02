@@ -1,8 +1,9 @@
 # Spec-61-Aufruf-Temporaries: Regressionen
 
-Status: **44 eigenständige Testprogramme geschrieben und eingebunden, nicht ausgeführt.**
-Auch die AIML-Kompilierung dieser Proben wurde nicht durchgeführt. Der zuvor erfolgreiche
-Compiler-Build ist keine Laufzeit- oder Leak-Abnahme dieser Tests.
+Status (2026-10-02): **alle 44 Programme kompiliert und ausgeführt — Exit 0, 0 definitiv/indirekt
+verlorene Bytes, keine Valgrind-Fehler.** Vor dem ersten Lauf wurden die Programme in gültiges AIML
+gebracht (fehlende String-Anführungszeichen, abgeschaffte Bindestrich-Schreibweise, sieben `main`
+über 300 Zeilen in `main_part_1/2` aufgeteilt, `buffer.len`-Erwartung nach spec/11 mit `zero`).
 
 Alle Programme erwarten Exitcode 0. Das AOT-Leak-Gate verlangt zusätzlich
 0 definitiv und 0 indirekt verlorene Bytes sowie keine Valgrind-Fehler.
@@ -32,11 +33,11 @@ Das explizite Manifest `cases.sh` wird von allen drei vorhandenen Runnern verwen
 - `tests/run_lifetime_leak_gates.sh`: verpflichtender Abschnitt `REGRESSION`, getrennt von bereits als `GREEN` geführten Fällen. Ein Fehler lässt das Gate scheitern; ungetestet bedeutet nicht optional.
 - `tests/run_memory_sanitizers.sh`: normale Ausführung plus Valgrind-Memory-Safety mit aktivem memV3 und Lifetime-Drops.
 
-Beispiel für eine spätere gezielte Ausführung (in dieser Änderung **nicht ausgeführt**):
+Gezielte Ausführung:
 
 ```sh
 ONLY=ptr_dispatch bash tests/lifetime/run_lifetime.sh
 ```
 
-Offen bleiben tatsächliche Resultate aller neuen Proben, die vollständige Gate-Abnahme,
-9rooms-End-to-End-Prüfung und die geplanten Compilezeit-/Binärgrößenmessungen.
+Offen: vollständige Gate-Abnahme im Gesamtlauf, 9rooms-End-to-End-Prüfung und die geplanten
+Compilezeit-/Binärgrößenmessungen.

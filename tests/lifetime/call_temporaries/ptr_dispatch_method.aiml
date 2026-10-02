@@ -1,6 +1,6 @@
 # static-check: off
 # spec/61 regression: unique boxes: method / named+fresh / normal+callee throw+later argument throw
-# Status: NOT RUN. Expected: exit 0; zero definite/indirect leaks; no memory errors.
+# Status: verified 2026-10-02 — exit 0, 0 definite/indirect leaks, no memory errors.
 - model:
     name: Card
     fields:
@@ -13,14 +13,14 @@
     - decl:
       - box
       - ptr<Card>
-      - {new: Card, title: owned}
+      - {new: Card, title: "owned"}
     - call: [box.tags.push, 'tag-${1}']
     - {return: box}
 - def:
     name: later
     return: i32
     body:
-    - throw: {new: Exception, message: later}
+    - throw: {new: Exception, message: "later"}
     - {return: 0}
 - class:
     name: SinkImpl
@@ -34,17 +34,18 @@
         body:
         - if:
             condition:
-              neq: [box.title, owned]
+              neq: [box.title, "owned"]
             then:
             - {return: 11}
         - if:
             condition:
               eq: [fail, 1]
             then:
-            - throw: {new: Exception, message: sink}
+            - throw: {new: Exception, message: "sink"}
         - {return: 5}
 - def:
     name: main
+    static_off: ["str_cmp"]
     return: i32
     body:
     - decl:
@@ -92,7 +93,7 @@
               body:
               - if:
                   condition:
-                    neq: [error.message, sink]
+                    neq: [error.message, "sink"]
                   then:
                   - {return: 91}
               - set:
@@ -111,7 +112,7 @@
               body:
               - if:
                   condition:
-                    neq: [error.message, sink]
+                    neq: [error.message, "sink"]
                   then:
                   - {return: 91}
               - set:
@@ -130,7 +131,7 @@
               body:
               - if:
                   condition:
-                    neq: [error.message, later]
+                    neq: [error.message, "later"]
                   then:
                   - {return: 91}
               - set:
@@ -153,7 +154,7 @@
               body:
               - if:
                   condition:
-                    neq: [error.message, later]
+                    neq: [error.message, "later"]
                   then:
                   - {return: 91}
               - set:
@@ -161,7 +162,7 @@
                 - +: [caught, 1]
         - if:
             condition:
-              neq: [retained.title, owned]
+              neq: [retained.title, "owned"]
             then:
             - {return: 14}
         - set:

@@ -1,6 +1,6 @@
 # static-check: off
 # spec/61 regression: consumed shared: both owner-release orders, retained temporary, throw, all four dispatch paths
-# Status: NOT RUN. Expected: exit 0; zero definite/indirect leaks; no memory errors.
+# Status: verified 2026-10-02 — exit 0, 0 definite/indirect leaks, no memory errors.
 - model:
     name: Node
     fields:
@@ -34,7 +34,7 @@
         condition:
           eq: [fail, 1]
         then:
-        - throw: {new: Exception, message: retained}
+        - throw: {new: Exception, message: "retained"}
     - {return: 1}
 - interface:
     name: Keeper
@@ -65,7 +65,7 @@
             condition:
               eq: [fail, 1]
             then:
-            - throw: {new: Exception, message: retained}
+            - throw: {new: Exception, message: "retained"}
         - {return: 1}
 - def:
     name: seed
@@ -81,6 +81,7 @@
         call: [keep, local, holder, 0]
 - def:
     name: main
+    static_off: ["str_cmp"]
     return: i32
     body:
     - decl: [holder, Holder]
@@ -113,7 +114,7 @@
             - {return: 31}
         - if:
             condition:
-              neq: [holder.saved.label, value-3]
+              neq: [holder.saved.label, "value-3"]
             then:
             - {return: 32}
         - set:
@@ -121,7 +122,7 @@
           - call: [make_value]
         - if:
             condition:
-              neq: [caller.label, value-3]
+              neq: [caller.label, "value-3"]
             then:
             - {return: 33}
         - try:
@@ -134,7 +135,7 @@
               body:
               - if:
                   condition:
-                    neq: [error.message, retained]
+                    neq: [error.message, "retained"]
                   then:
                   - {return: 91}
               - set:
@@ -145,7 +146,7 @@
           - call: [make_value]
         - if:
             condition:
-              neq: [caller.label, value-3]
+              neq: [caller.label, "value-3"]
             then:
             - {return: 34}
         - if:
@@ -161,7 +162,7 @@
             - {return: 35}
         - if:
             condition:
-              neq: [holder.saved.label, value-3]
+              neq: [holder.saved.label, "value-3"]
             then:
             - {return: 36}
         - if:
@@ -173,7 +174,7 @@
             - {return: 31}
         - if:
             condition:
-              neq: [holder.saved.label, value-3]
+              neq: [holder.saved.label, "value-3"]
             then:
             - {return: 32}
         - set:
@@ -181,7 +182,7 @@
           - call: [make_value]
         - if:
             condition:
-              neq: [caller.label, value-3]
+              neq: [caller.label, "value-3"]
             then:
             - {return: 33}
         - try:
@@ -194,7 +195,7 @@
               body:
               - if:
                   condition:
-                    neq: [error.message, retained]
+                    neq: [error.message, "retained"]
                   then:
                   - {return: 91}
               - set:
@@ -205,7 +206,7 @@
           - call: [make_value]
         - if:
             condition:
-              neq: [caller.label, value-3]
+              neq: [caller.label, "value-3"]
             then:
             - {return: 34}
         - if:
@@ -221,7 +222,7 @@
             - {return: 35}
         - if:
             condition:
-              neq: [holder.saved.label, value-3]
+              neq: [holder.saved.label, "value-3"]
             then:
             - {return: 36}
         - if:
@@ -233,7 +234,7 @@
             - {return: 31}
         - if:
             condition:
-              neq: [holder.saved.label, value-3]
+              neq: [holder.saved.label, "value-3"]
             then:
             - {return: 32}
         - set:
@@ -241,7 +242,7 @@
           - call: [make_value]
         - if:
             condition:
-              neq: [caller.label, value-3]
+              neq: [caller.label, "value-3"]
             then:
             - {return: 33}
         - try:
@@ -254,7 +255,7 @@
               body:
               - if:
                   condition:
-                    neq: [error.message, retained]
+                    neq: [error.message, "retained"]
                   then:
                   - {return: 91}
               - set:
@@ -265,7 +266,7 @@
           - call: [make_value]
         - if:
             condition:
-              neq: [caller.label, value-3]
+              neq: [caller.label, "value-3"]
             then:
             - {return: 34}
         - if:
@@ -281,7 +282,7 @@
             - {return: 35}
         - if:
             condition:
-              neq: [holder.saved.label, value-3]
+              neq: [holder.saved.label, "value-3"]
             then:
             - {return: 36}
         - if:
@@ -293,7 +294,7 @@
             - {return: 31}
         - if:
             condition:
-              neq: [holder.saved.label, value-3]
+              neq: [holder.saved.label, "value-3"]
             then:
             - {return: 32}
         - set:
@@ -301,7 +302,7 @@
           - call: [make_value]
         - if:
             condition:
-              neq: [caller.label, value-3]
+              neq: [caller.label, "value-3"]
             then:
             - {return: 33}
         - try:
@@ -314,7 +315,7 @@
               body:
               - if:
                   condition:
-                    neq: [error.message, retained]
+                    neq: [error.message, "retained"]
                   then:
                   - {return: 91}
               - set:
@@ -325,7 +326,7 @@
           - call: [make_value]
         - if:
             condition:
-              neq: [caller.label, value-3]
+              neq: [caller.label, "value-3"]
             then:
             - {return: 34}
         - if:
@@ -341,7 +342,7 @@
             - {return: 35}
         - if:
             condition:
-              neq: [holder.saved.label, value-3]
+              neq: [holder.saved.label, "value-3"]
             then:
             - {return: 36}
         - if:
@@ -353,7 +354,7 @@
             - {return: 37}
         - if:
             condition:
-              neq: [holder.saved.label, value-3]
+              neq: [holder.saved.label, "value-3"]
             then:
             - {return: 38}
         - set:

@@ -17,7 +17,7 @@
 
 - def:
     name: fill_rec
-    args: [[rec, ptr<Rec>], [num, i32]]
+    args: [[rec, ref<Rec>], [num, i32]]
     body:
       # ~512-byte dynamic string so a leaked reference is well above RSS/arena noise with
       # relatively few iterations (keeps the harness valgrind run — cost ∝ alloc count — cheap).

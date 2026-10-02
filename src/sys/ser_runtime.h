@@ -56,7 +56,16 @@ typedef enum {
                              //   target (via CloneContext.relocated); no incref, not freed at drop.
     AIML_TD_TENSOR     = 17, // round4 §3 (memV3 CLONE descriptors only): an owned `tensor` handle. A
                              //   leaf; the clone walker deep-copies it via aiml_tensor_clone.
+    AIML_TD_CHAN       = 18, // spec/61 Class 5 (memV3): a chan<T> pointer slot. Leaf; free = atomic
+                             //   release, share/clone = retain, in-process copy keeps the pointer.
+    AIML_TD_THREAD     = 19, // spec/61 Class 4 (memV3): a thread_handle pointer slot. Leaf; free =
+                             //   detach if unjoined + free, never shared (a copy leaves it null).
 } AimlTDKind;
+
+// spec/61 Class 5 / Class 4 resource handles (ser_runtime.cpp).
+void aiml_chan_retain(void* ch);
+void aiml_chan_release(void* ch);
+void aiml_thread_handle_drop(void* h);
 
 // Each node is 24 bytes.  The whole descriptor for a type is an array of these.
 typedef struct {

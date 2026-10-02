@@ -23,6 +23,9 @@
 # After the thread exits, the OS reclaims its stack and thread-local storage.
 - call: [t1.detach]
 
+# Owner drop (spec/61 Class 4): a thread_handle neither joined nor detached is detached
+# when its owner goes out of scope (never an implicit join); the handle block is freed.
+
 # id: System thread ID. Property access — no call: required.
 - decl: [id, i32]
 - set: [id, t1.id]

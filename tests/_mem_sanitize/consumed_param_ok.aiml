@@ -25,7 +25,7 @@
 
 - def:
     name: read_const
-    args: [[card, ptr<Card>, { const: true }]]
+    args: [[card, ref<Card>, { const: true }]]
     body:
       - print: ["read_const"]
 

@@ -552,6 +552,54 @@ void Compiler::moveIteratorArg(Expr* arg) {
 
 // spec/61 §8: an argument for an owning ptr<T> parameter is moved — a ptr<T> local/parameter is
 // moved out, a fresh value passes; a borrow (&x, field, element, ref/value local, global) is rejected.
+// spec/61 Class 5/4 bind of a chan / thread_handle from `rhs`: a chan from a named source co-owns it
+// (retain; a call/spawn result is already owned), a thread_handle from a named source moves (source
+// slot nulled). dst == nullptr (return): only a non-local chan source is retained — a returned local
+// moves via consumeLocalDrop.
+void Compiler::emitResourceBindTransfer(const std::string& typeName, Expr* rhs, llvm::Value* dst) {
+    bool isChan = typeName.rfind("chan<", 0) == 0 && typeName.back() == '>';
+    if ((!isChan && typeName != "thread_handle") || !rhs) return;
+    if (dynamic_cast<CallExpr*>(rhs) || dynamic_cast<SpawnExpr*>(rhs) || dynamic_cast<LiteralExpr*>(rhs)) return;
+    auto* var = dynamic_cast<VariableExpr*>(rhs);
+    Symbol* plain = (var && var->name.find('.') == std::string::npos && var->name.find('<') == std::string::npos)
+        ? resolveVariable(var->name) : nullptr;
+    auto* i8p = llvm::PointerType::get(ctx.context, 0);
+    if (isChan) {
+        llvm::Value* ch = nullptr;
+        if (dst) ch = ctx.builder.CreateLoad(i8p, dst, "chan_bind");
+        else {
+            if (plain && !plain->is_param && !plain->is_global) return;
+            std::string lt;
+            IRValue* a = emitLValueAddress(rhs, lt);
+            if (!a) return;
+            ch = ctx.builder.CreateLoad(i8p, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)), "chan_ret");
+        }
+        ctx.builder.CreateCall(ctx.getFunction("aiml_chan_retain", ctx.builder.getVoidTy(), {i8p}), { ch });
+        return;
+    }
+    if (!dst || !var || (plain && (plain->is_param || plain->is_global))) return;
+    std::string lt;
+    IRValue* a = emitLValueAddress(rhs, lt);
+    if (a) ctx.builder.CreateStore(llvm::ConstantPointerNull::get(i8p), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)));
+}
+// spec/61 Class 5/4 rebind of a chan / thread_handle slot: secure the new value (retain a shared chan
+// source / null a moved thread_handle source), release the old one, store.
+bool Compiler::emitResourceStore(const std::string& typeName, Expr* rhs, llvm::Value* newV, llvm::Value* slot) {
+    bool isChan = typeName.rfind("chan<", 0) == 0 && typeName.back() == '>';
+    if ((!isChan && typeName != "thread_handle") || !newV || !slot || !newV->getType()->isPointerTy()) return false;
+    auto* i8p = llvm::PointerType::get(ctx.context, 0);
+    if (isChan) {
+        if (!dynamic_cast<CallExpr*>(rhs) && !dynamic_cast<LiteralExpr*>(rhs))
+            ctx.builder.CreateCall(ctx.getFunction("aiml_chan_retain", ctx.builder.getVoidTy(), {i8p}), { newV });
+    } else {
+        emitResourceBindTransfer(typeName, rhs, slot);   // moved source slot → null
+    }
+    llvm::Value* oldV = ctx.builder.CreateLoad(i8p, slot, "res_old");
+    ctx.builder.CreateCall(ctx.getFunction(isChan ? "aiml_chan_release" : "aiml_thread_handle_drop",
+        ctx.builder.getVoidTy(), {i8p}), { oldV });
+    ctx.builder.CreateStore(newV, slot);
+    return true;
+}
 void Compiler::movePtrArg(Expr* arg, const std::string& paramType, const std::string& fname, const std::string& pname) {
     if (!(paramType.size() > 5 && paramType.rfind("ptr<", 0) == 0 && paramType.back() == '>')) return;
     std::string boxed = paramType.substr(4, paramType.size() - 5);
@@ -573,7 +621,14 @@ void Compiler::movePtrArg(Expr* arg, const std::string& paramType, const std::st
     Symbol* s = resolveVariable(ve->name);
     if (!s) return;
     if (s->is_global || s->typeName.rfind("ptr<", 0) != 0) { reject(); return; }
-    consumeLocalDrop(arg);
+    // The move takes effect when the callee is entered: called after all arguments are evaluated,
+    // it empties the local's slot (its drop stays and is null-safe). A throw while evaluating a
+    // later argument therefore leaves the box with the caller (spec/61 §9.3).
+    llvm::Value* slot = s->ir_alloca_inst ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(s->ir_alloca_inst))
+                                          : static_cast<llvm::Value*>(s->alloca_inst);
+    auto* ai = llvm::dyn_cast_or_null<llvm::AllocaInst>(slot);
+    if (!ai) { consumeLocalDrop(arg); return; }
+    ctx.builder.CreateStore(llvm::Constant::getNullValue(ai->getAllocatedType()), ai);
 }
 
 void Compiler::releaseContainerHandle(llvm::Value* handle, const std::string& typeName) {
@@ -1246,7 +1301,7 @@ static bool modelIsMoveOnly(CompilerContext& ctx, const std::string& className,
     for (auto& mkv : it->second.members) {
         const std::string& t = mkv.second.typeName;
         if (t.rfind("ptr<", 0) == 0) return true;       // unique owning box
-        if (t == "tensor") return true;                 // Class-4 unique resource
+        if (t == "tensor" || t == "thread_handle") return true;   // Class-4 unique resource
         // A bare nested value-model field: recurse (a ptr<>/ref<>/shared<> wrapper is not a value
         // nesting — ptr is caught above, ref/shared are borrow/co-own, neither makes the parent
         // move-only through a value copy of this slot).
@@ -1266,6 +1321,8 @@ bool aimlModelIsMoveOnly(CompilerContext& ctx, const std::string& className) {
 void Compiler::visitDeclStmt(DeclStmt* decl) {
     if (ctx.isRefContainerType(decl->typeName))
         LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + ctx.refContainerError("variable '" + decl->varName + "'", decl->typeName));
+    if (!ctx.anyElementContainer(decl->typeName).empty())
+        LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + ctx.anyElementError("variable '" + decl->varName + "'", decl->typeName));
     ctx.validateIdentifier(decl->varName, "variable", decl->sourceNode);
 
     IRType* ty = ctx.ir_gen->resolveType(decl->typeName);
@@ -1631,7 +1688,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         }
     } else if (tName.find("chan<") == 0 && tName.back() == '>') {
         // Auto-init with capacity=0 (true rendezvous). Use chan.init(N) for buffered.
-        ChanImpl::init(ctx, unwrappedAlloca, ctx.builder.getInt64(0));
+        if (!decl->initialValue) ChanImpl::init(ctx, unwrappedAlloca, ctx.builder.getInt64(0));
     } else if (tName.rfind("buffer<", 0) == 0 && tName.back() == '>') {
         // Auto-alloc when there is no initializer OR when the initializer is a
         // buffer literal [v1, v2, ...] (which expands to push calls, not a struct copy).
@@ -1768,6 +1825,17 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     ctx.cleanupStack.back().push_back(sd);
                 }
             }
+        }
+        // spec/61 Class 5 chan<T> (kind 15, atomic release) / Class 4 thread_handle (kind 14, detach if
+        // unjoined + free): released at owner drop on every exit; null-safe.
+        if ((decl->typeName == "thread_handle" || (decl->typeName.rfind("chan<", 0) == 0 && decl->typeName.back() == '>'))
+            && ctx.memV3 && ctx.lifetimeDropsEnabled && decl->lifetime != "persistent" && !decl->is_extern
+            && !ctx.cleanupStack.empty() && !sym.is_global) {
+            CompilerContext::ScopeDrop sd;
+            sd.addr = unwrappedAlloca;
+            sd.kind = decl->typeName == "thread_handle" ? 14 : 15;
+            sd.debugName = decl->varName; sd.debugType = decl->typeName;
+            ctx.cleanupStack.back().push_back(sd);
         }
         // spec/61: OWNED box — `decl [box, ptr<T>, INIT]` where `box` owns the pointee → register
         // a kind-4 drop: deep-free the pointee (aiml_ser_free_decoded) then free the heap shell.
@@ -2016,7 +2084,8 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     const std::string& mtn = member.typeName;
                     bool isContainerField = (mtn.rfind("list<", 0) == 0 && mtn.back() == '>')
                         || (mtn.rfind("map<", 0) == 0 && mtn.back() == '>')
-                        || mtn == "buffer" || (mtn.rfind("buffer<", 0) == 0 && mtn.back() == '>');
+                        || mtn == "buffer" || (mtn.rfind("buffer<", 0) == 0 && mtn.back() == '>')
+                        || (mtn.rfind("chan<", 0) == 0 && mtn.back() == '>');
                     if (ctx.memV3 && isContainerField) continue;
                 }
                 IRValue* fieldInitV = visitExpression(member.initValue.get());
@@ -2483,6 +2552,8 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             }
         }
     }
+    if (decl->initialValue && ctx.memV3 && ctx.lifetimeDropsEnabled && unwrappedAlloca && !isPrePromotedGlobal)
+        emitResourceBindTransfer(decl->typeName, decl->initialValue.get(), unwrappedAlloca);
     // AIML_TRACE_SYMBOL: log the symbol's value at declaration (birth of its lifetime).
     if (aimlTraceSymbol(decl->varName)) {
         auto sit = ctx.symbol_table.find(decl->varName);
@@ -2565,6 +2636,19 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     ctx.kvGetCopy = false;
     ctx.kvGetValueType.clear();
 
+    if (ctx.memV3 && ctx.lifetimeDropsEnabled && setStmt->value && setStmt->target.find('.') == std::string::npos
+        && setStmt->target.find('<') == std::string::npos) {
+        Symbol* rs = resolveVariable(setStmt->target);
+        if (rs && !rs->is_byref_arg && (rs->typeName == "thread_handle"
+                   || (rs->typeName.rfind("chan<", 0) == 0 && rs->typeName.back() == '>'))) {
+            llvm::Value* slot = rs->ir_alloca_inst ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rs->ir_alloca_inst))
+                                                   : static_cast<llvm::Value*>(rs->alloca_inst);
+            IRValue* v = visitExpression(setStmt->value.get());
+            if (v && emitResourceStore(rs->typeName, setStmt->value.get(),
+                                       static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v)), slot))
+                return;
+        }
+    }
     // spec/61 §5.5/§6.1: rebinding an OWNED ptr<T> box local to a fresh box (`{new: T}` or an owning
     // call) secures the new box, then releases the old one (fields + shell), then stores.
     if (ctx.memV3 && ctx.lifetimeDropsEnabled && setStmt->target.find('.') == std::string::npos
@@ -2908,8 +2992,17 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         if (sv->name.find('.') == std::string::npos && sv->name.find('<') == std::string::npos)
             if (Symbol* ss = resolveVariable(sv->name))
                 srcIsSharedHandle = (ss->is_param || ss->is_global) && ctx.isMemV3ContainerHandle(ss->typeName);
+    // spec/61 Class 5/4: a chan source is shared (retain), a thread_handle source is nulled at runtime
+    // (emitResourceStore) — both keep their null-safe drop.
+    bool srcIsResource = false;
+    if (ctx.memV3 && ctx.lifetimeDropsEnabled)
+        if (auto* sv = dynamic_cast<VariableExpr*>(setStmt->value.get()))
+            if (sv->name.find('.') == std::string::npos && sv->name.find('<') == std::string::npos)
+                if (Symbol* ss = resolveVariable(sv->name))
+                    srcIsResource = ss->typeName == "thread_handle"
+                        || (ss->typeName.rfind("chan<", 0) == 0 && ss->typeName.back() == '>');
     if (setStmt->value && !memberDeepCopy && !memberHandleSource && !srcIsManagedString && !targetIsRefBorrow
-        && !targetIsRcShare && !srcIsSharedHandle)
+        && !targetIsRcShare && !srcIsSharedHandle && !srcIsResource)
         consumeLocalDrop(setStmt->value.get());
 
     // Expose the target variable's type so db.open_kv / sys.deserialize can infer
@@ -3471,6 +3564,11 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         return;
                     }
                 }
+                if (ctx.memV3 && ctx.lifetimeDropsEnabled
+                    && emitResourceStore(finalTypeName, setStmt->value.get(),
+                                         static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)),
+                                         static_cast<llvm::Value*>(ctx.ir_gen->unwrap(targetGep))))
+                    return;
                 // AIML v2 P5b: store into a refcount-MODEL field (`set:[parent.model_field, m]`). The
                 // slot holds a %M*; store the new pointer with incref-new-BEFORE-decref-old (self-alias
                 // safe). A borrow source (variable/at/member) is incref'd (share); an owned temp
@@ -3974,6 +4072,9 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     // spec/61 (A3): returning a local moves it to the caller → do not drop it here. This runs BEFORE
     // the value is loaded, so a managed string return uses ERASE mode (nullManagedStringSlot=false):
     // the value is captured afterwards and the returned value's owner is exempted from cleanup.
+    if (retStmt->value && ctx.memV3 && ctx.lifetimeDropsEnabled
+        && ctx.currentFunctionReturnType.rfind("chan<", 0) == 0)
+        emitResourceBindTransfer(ctx.currentFunctionReturnType, retStmt->value.get(), nullptr);
     if (retStmt->value) consumeLocalDrop(retStmt->value.get(), /*nullManagedStringSlot=*/false);
     llvm::Function* currentFunc = ctx.builder.GetInsertBlock()->getParent();
     llvm::Type* retTy = currentFunc->getReturnType();
@@ -4182,7 +4283,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     emitScopeDrop(ctx, *it);
                     continue;
                 }
-                if (it->kind == 10 || it->kind == 11 || it->kind == 13) { emitScopeDrop(ctx, *it); continue; }   // null-safe single release
+                if (it->kind == 10 || it->kind == 11 || it->kind == 13 || it->kind == 14 || it->kind == 15) { emitScopeDrop(ctx, *it); continue; }   // null-safe single release
                 // spec/61 §8: a parameter's own call reference (the returned container slot is moved above)
                 if ((it->paramRef || it->ownedParamBox) && !(retContainerSlot && it->addr == retContainerSlot)) { emitScopeDrop(ctx, *it); continue; }
                 // spec/61 §5 (memV3): the returned container handle is MOVED to the caller → skip its
@@ -4868,6 +4969,13 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         llvm::Value* doc = ctx.builder.CreateLoad(i8p, it.addr, "drop_yamldoc");
         ctx.builder.CreateCall(ctx.getFunction("aiml_yaml_free", ctx.builder.getVoidTy(), {i8p}), { doc });
         ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
+    } else if (it.kind == 14 || it.kind == 15) {
+        // spec/61 Class 4 thread_handle (detach if unjoined + free) / Class 5 chan (atomic release);
+        // both null-safe; null the slot (single release).
+        llvm::Value* h = ctx.builder.CreateLoad(i8p, it.addr, "drop_res");
+        ctx.builder.CreateCall(ctx.getFunction(it.kind == 14 ? "aiml_thread_handle_drop" : "aiml_chan_release",
+            ctx.builder.getVoidTy(), {i8p}), { h });
+        ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
     } else if (it.kind == 10) {
         // spec/61 class 4: iterator<T> — aiml_iter_free is null-safe; null the slot (single release).
         llvm::Value* itp = ctx.builder.CreateLoad(i8p, it.addr, "drop_iter");
@@ -4881,7 +4989,7 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
 }
 // spec/61 §9.3: drops released on every exit regardless of the ownership plan (order-independent).
 static bool unconditionalDrop(const CompilerContext::ScopeDrop& d) {
-    return d.paramRef || d.ownedParamBox || d.kind == 7 || d.kind == 13 || d.kind == 10 || d.kind == 11 || d.kind == 12
+    return d.paramRef || d.ownedParamBox || d.kind == 7 || d.kind == 13 || d.kind == 14 || d.kind == 15 || d.kind == 10 || d.kind == 11 || d.kind == 12
         || (d.isListHandle && (d.kind == 2 || d.kind == 3 || d.kind == 8));
 }
 

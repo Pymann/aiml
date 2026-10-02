@@ -1,6 +1,6 @@
 # static-check: off
 # spec/61 regression: interface void/sret/shared return and fn void must all release their argument owners
-# Status: NOT RUN. Expected: exit 0; zero definite/indirect leaks; no memory errors.
+# Status: verified 2026-10-02 — exit 0, 0 definite/indirect leaks, no memory errors.
 - model:
     name: Stats
     fields:
@@ -103,7 +103,7 @@
             - call: [make_values]
         - if:
             condition:
-              neq: [record.label, result-3]
+              neq: [record.label, "result-3"]
             then:
             - {return: 51}
         - if:

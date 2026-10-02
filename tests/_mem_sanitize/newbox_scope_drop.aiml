@@ -21,7 +21,7 @@
 
 - def:
     name: fill_rec
-    args: [[rec, ptr<Rec>], [num, i32]]
+    args: [[rec, ref<Rec>], [num, i32]]
     body:
       - set: [rec.name, "rec-${num}-payload-string-for-the-heap"]
       - decl: [jdx, i32, 0]
