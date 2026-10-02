@@ -119,7 +119,7 @@
     methods:
       - def:
           name: __eq__
-          args: [[other, ptr<Point>]]
+          args: [[other, ref<Point>]]
           return: i32
           body:
             - if:
