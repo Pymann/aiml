@@ -179,6 +179,10 @@ Opaque handle (`i8*`) to a live prefab instance.
 | `.set_dropdown_selected(child, value)` | `(string, string) -> void` | (dropdown) Set selection by matching an option label. |
 | `.set_dropdown_options(child, opts)` | `(string, string) -> void` | (dropdown) Replace the pipe-separated option list. |
 
+A click (button, checkbox, radio, dropdown) is a press **and** release of mouse button 0 both inside
+the widget's hit rect. It survives the widget being destroyed and re-created between press and
+release (e.g. a screen rebuild): the new instance at the same rect receives the click.
+
 ---
 
 ## 5b. Enum-Bound Dropdowns

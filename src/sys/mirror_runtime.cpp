@@ -1431,8 +1431,9 @@ int32_t aiml_mirror_session_send_and_await(
                        (const uint8_t*)blob, total_len);
     free(blob);
 
-    /* 2. poll-loop with 20ms ticks until match or timeout */
-    const int32_t tick_ms = 20;
+    /* 2. poll-loop with 2ms ticks until match or timeout (a 20ms tick added up to
+     *    ~20ms latency per RPC even on localhost). */
+    const int32_t tick_ms = 2;
     int32_t tries = (timeout_ms <= 0) ? 1 : ((timeout_ms + tick_ms - 1) / tick_ms);
     /* One-shot mid-wait trace: if the response has not arrived after ~2s the RPC
      * is behaving oddly (server silent / lost) — dump a stack so we see it even

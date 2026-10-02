@@ -1394,6 +1394,12 @@ static float g_render_scale_x = 1.0f, g_render_scale_y = 1.0f;
  * list element.  The spawned instance's `bound_list` is set to the
  * corresponding inner list<i32> (the cascade row) so its own children
  * can bind scalar fields to slots of that row. */
+// spec/61 §5.7 (memV3): a list<list<i32>> / list<cascade<X>> stores its rows as HANDLE pointers
+// (pointer stride), not inline {size,cap,data} structs — same rule as aiml_cascade_persist_row.
+static void* cascade_row_handle(void* outer_data, int32_t idx) {
+    return outer_data ? *(void**)((char*)outer_data + (size_t)idx * sizeof(void*)) : nullptr;
+}
+
 static void container_sync(AimlPrefabInstance* inst) {
     if (!inst) return;
     /* AIML list<T> layout: { i32 size, i32 capacity, ptr data }.
@@ -1494,8 +1500,7 @@ static void container_sync(AimlPrefabInstance* inst) {
                 if (sub.type != CHILD_DROPDOWN && sub.type != CHILD_CASCADE) continue;
                 if (sub.last_node_id != -1)                                  break;
                 if (i >= outer->size)                                        break;
-                ListHdr* inner = (ListHdr*)((char*)outer->data +
-                                            (size_t)i * sizeof(ListHdr));
+                ListHdr* inner = (ListHdr*)cascade_row_handle(outer->data, i);
                 if (!inner || inner->size < 1 || !inner->data)               break;
                 int32_t stored_id = ((int32_t*)inner->data)[0];
                 int32_t opt = aiml_prefab_cascade_opt_idx_for(
@@ -1633,7 +1638,7 @@ static void cascade_payload_sync(AimlPrefabInstance* inst) {
             struct ListHdr { int32_t size; int32_t capacity; void* data; };
             ListHdr* outer = (ListHdr*)row->bound_list;
             if (outer && row->bound_index < outer->size) {
-                ListHdr* inner = (ListHdr*)((char*)outer->data + row->bound_index * sizeof(ListHdr));
+                ListHdr* inner = (ListHdr*)cascade_row_handle(outer->data, row->bound_index);
                 if (inner && inner->data && inner->size >= 1) {
                     ((int32_t*)inner->data)[0] = node_id;
                 }
@@ -1645,7 +1650,7 @@ static void cascade_payload_sync(AimlPrefabInstance* inst) {
             if (outer2) {
                 fprintf(stderr, "[cascade] model=[");
                 for (int32_t r = 0; r < outer2->size; ++r) {
-                    ListHdr* inner = (ListHdr*)((char*)outer2->data + r * sizeof(ListHdr));
+                    ListHdr* inner = (ListHdr*)cascade_row_handle(outer2->data, r);
                     fprintf(stderr, r ? ", [" : "[");
                     for (int32_t k = 0; inner && k < inner->size; ++k) {
                         fprintf(stderr, k ? ",%d" : "%d", ((int32_t*)inner->data)[k]);
@@ -1691,8 +1696,7 @@ static void cascade_payload_sync(AimlPrefabInstance* inst) {
             ListHdrIn* outer_r = (ListHdrIn*)inst->bound_list;
             if (outer_r && inst->bound_index >= 0 &&
                 inst->bound_index < outer_r->size) {
-                ListHdrIn* inner_r = (ListHdrIn*)((char*)outer_r->data +
-                                    (size_t)inst->bound_index * sizeof(ListHdrIn));
+                ListHdrIn* inner_r = (ListHdrIn*)cascade_row_handle(outer_r->data, inst->bound_index);
                 if (inner_r) {
                     stored_wire = (int32_t*)inner_r->data;
                     stored_size = inner_r->size;
@@ -5295,6 +5299,14 @@ void aiml_prefab_update_hover(float mx, float my) {
      * a transparent panel must still let widgets through their own bbox. */
     int32_t mb_pressed  = aiml_input_mouse_pressed(0);
     int32_t mb_released = aiml_input_mouse_released(0);
+    /* spec/44_6: a click = press + release inside the widget rect, independent of the instance —
+     * a rebuild between press and release (board reload) must not swallow it. */
+    static bool  s_press_valid = false;
+    static float s_press_x = 0.f, s_press_y = 0.f;
+    if (mb_pressed) { s_press_valid = true; s_press_x = (float)mx; s_press_y = (float)my; }
+    auto press_origin_in = [&](float rx, float ry, float rw, float rh) {
+        return s_press_valid && s_press_x >= rx && s_press_x < rx + rw && s_press_y >= ry && s_press_y < ry + rh;
+    };
 
     /* Click-resolution: if the mouse is being pressed, we'll set focus to
      * the topmost text_input under the cursor (else clear focus). */
@@ -5384,7 +5396,7 @@ void aiml_prefab_update_hover(float mx, float my) {
             if (ch.type == CHILD_BUTTON) {
                 if (mb_pressed && over) ch.pressed_now = true;
                 if (mb_released) {
-                    if (ch.pressed_now && over) {
+                    if ((ch.pressed_now || press_origin_in(hx, hy, hw, hh)) && over) {
                         ch.clicked_frame = true;
                         if (!ch.on_click_fn.empty())
                             prefab_invoke_callback(ch.on_click_fn, inst);
@@ -5394,7 +5406,7 @@ void aiml_prefab_update_hover(float mx, float my) {
             } else if (ch.type == CHILD_CHECKBOX) {
                 if (mb_pressed && over) ch.pressed_now = true;
                 if (mb_released) {
-                    if (ch.pressed_now && over) {
+                    if ((ch.pressed_now || press_origin_in(hx, hy, hw, hh)) && over) {
                         ch.checked = !ch.checked;
                         ch.clicked_frame = true;
                         /* on_click fires on any toggle; on_change too if set. */
@@ -5410,7 +5422,7 @@ void aiml_prefab_update_hover(float mx, float my) {
                  * the same group name across the scene. */
                 if (mb_pressed && over) ch.pressed_now = true;
                 if (mb_released) {
-                    if (ch.pressed_now && over) {
+                    if ((ch.pressed_now || press_origin_in(hx, hy, hw, hh)) && over) {
                         ch.clicked_frame = true;
                         if (!ch.checked || !ch.group.empty()) {
                             /* Deselect siblings first. */
@@ -5610,6 +5622,8 @@ void aiml_prefab_update_hover(float mx, float my) {
             }
         }
     }
+
+    if (mb_released) s_press_valid = false;
 
     /* Apply focus changes on mouse-press only. */
     if (mb_pressed) {

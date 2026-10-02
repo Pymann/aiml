@@ -446,7 +446,7 @@ which collapses the send + poll-loop + decode triple into one call:
 - if: { condition: { neq: [resp.success, 1] }, then: [<error-handler>] }
 ```
 
-Internally drives `update + poll-queue + decode_rpc` in 20ms ticks until
+Internally drives `update + poll-queue + decode_rpc` in 2ms ticks until
 either a matching `set_result` arrives or `timeout_ms` elapses.  Unrelated
 RPCs received during the wait window are **preserved** (re-queued in arrival
 order), so in-band server→client push-notifications interleaved with
