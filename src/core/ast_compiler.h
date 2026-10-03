@@ -19,6 +19,7 @@ public:
     // container/subclass ClassDecls to prog->declarations for the caller to visit
     // in header-only mode).  Method BODIES are emitted only in the defining unit.
     void synthesizeImportedGroups(Program* prog);
+    void synthesizeRpcMethods(Program* prog);       // spec/44_5 §7.1: rpc: wrappers/thunks/args (before registerTypes)
     void registerTypeDecl(Node* node);
     void visitFunction(FunctionDecl* func);
     void visitTopLevel(Node* node);

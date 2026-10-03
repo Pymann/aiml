@@ -34,7 +34,7 @@ bool ClassBuilder::OnMapStart() {
         expectingKey = true;
         return true; 
     }
-    if (insideMembers || insideModels || insideImplements) {
+    if (insideMembers || insideModels || insideImplements || insideRpc) {
         return true;
     }
     
@@ -67,7 +67,7 @@ bool ClassBuilder::OnScalar(const std::string& value, const std::string& tag) {
         return true;
     }
     
-    if (!insideMembers && !insideMethods && !insideModels && !insideImplements && !insideRules) {
+    if (!insideMembers && !insideMethods && !insideModels && !insideImplements && !insideRules && !insideRpc) {
         if (currentKey == "name") classNode->name = value;
         else if (currentKey == "renders") classNode->renders = value;
         else if (currentKey == "extends") classNode->parentName = value;
@@ -85,6 +85,12 @@ bool ClassBuilder::OnScalar(const std::string& value, const std::string& tag) {
         else if (currentKey == "models") {
             if (!value.empty()) classNode->models.push_back(value);
         }
+        else if (currentKey == "rpc") {
+            if (!value.empty()) classNode->rpcMethods.push_back(value);
+        }
+    }
+    else if (insideRpc) {
+        if (!value.empty()) classNode->rpcMethods.push_back(value);
     }
     else if (insideModels) {
         if (!value.empty()) classNode->models.push_back(value);
@@ -133,7 +139,7 @@ bool ClassBuilder::OnScalar(const std::string& value, const std::string& tag) {
         }
     }
     
-    if (!insideMembers && !insideMethods && !insideModels && !insideImplements && !insideRules) expectingKey = true;
+    if (!insideMembers && !insideMethods && !insideModels && !insideImplements && !insideRules && !insideRpc) expectingKey = true;
     return true;
 }
 
@@ -157,6 +163,10 @@ bool ClassBuilder::OnSequenceStart() {
     }
     else if (currentKey == "rules") {
         insideRules = true;
+        currentKey = ""; // consumed
+    }
+    else if (currentKey == "rpc") {
+        insideRpc = true;
         currentKey = ""; // consumed
     }
     else if (insideMembers) {
@@ -211,6 +221,9 @@ bool ClassBuilder::OnSequenceEnd() {
         expectingKey = true;
     } else if (insideImplements) {
         insideImplements = false;
+        expectingKey = true;
+    } else if (insideRpc) {
+        insideRpc = false;
         expectingKey = true;
     }
     return true;

@@ -1,0 +1,151 @@
+# spec/44_5 §7 routing: no implicit relay, exact targets, peer ids never reused.
+#   - client A's RPCs (also a "set_result") never reach client B
+#   - host send_rpc(peer A) reaches only A; target 0 reaches both; unknown / negative targets nothing
+#   - after A disconnects, a new client C gets a fresh peer id (not A's)
+#
+# Expected exit code: 0
+
+- model:
+    name: Note
+    fields: [[text, string], [num, i32]]
+
+- decl: [g_pid_a, i32, 0]
+- decl: [g_pid_b, i32, 0]
+- decl: [g_pid_c, i32, 0]
+- decl: [g_host_got_secret, i32, 0]
+
+- def:
+    name: relay_server
+    static_off: ["str_cmp"]
+    body:
+      - decl: [sess, mirror_session, { call: [mirror.listen, "ws://127.0.0.1:19992"] }]
+      - decl: [sent_fanout, i32, 0]
+      - decl: [tries, i32, 0]
+      - while:
+          condition: { '&&': [{ eq: [g_pid_c, 0] }, { lt: [tries, 800] }] }
+          body:
+            - call: [sess.update]
+            - if:
+                condition: { gt: [{ call: [sess.has_rpc] }, 0] }
+                then:
+                  - decl: [rpc, rpc_event, { call: [sess.next_rpc] }]
+                  - if: { condition: { '&&': [{ eq: [rpc.method, "iam"] }, { eq: [rpc.arg, 1] }] }, then: [{ set: [g_pid_a, rpc.peer_id] }] }
+                  - if: { condition: { '&&': [{ eq: [rpc.method, "iam"] }, { eq: [rpc.arg, 2] }] }, then: [{ set: [g_pid_b, rpc.peer_id] }] }
+                  - if: { condition: { '&&': [{ eq: [rpc.method, "iam"] }, { eq: [rpc.arg, 3] }] }, then: [{ set: [g_pid_c, rpc.peer_id] }] }
+                  - if: { condition: { eq: [rpc.method, "secret"] }, then: [{ set: [g_host_got_secret, 1] }] }
+            - if:
+                condition: { '&&': [{ eq: [sent_fanout, 0] }, { '&&': [{ gt: [g_pid_a, 0] }, { '&&': [{ gt: [g_pid_b, 0] }, { eq: [g_host_got_secret, 1] }] }] }] }
+                then:
+                  - decl: [msg, Note]
+                  - set: [msg.text, "only-a"]
+                  - call: [sess.send_rpc, g_pid_a, "only_a", 1, msg]
+                  - set: [msg.text, "all"]
+                  - call: [sess.send_rpc, 0, "all", 2, msg]
+                  - set: [msg.text, "nobody"]
+                  - call: [sess.send_rpc, 999, "nobody", 3, msg]
+                  - call: [sess.send_rpc, -1, "negative", 4]
+                  - set: [sent_fanout, 1]
+            - call: [time.sleep_ms, 5]
+            - set: [tries, { +: [tries, 1] }]
+      - decl: [drain, i32, 0]
+      - while:
+          condition: { lt: [drain, 20] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 5]
+            - set: [drain, { +: [drain, 1] }]
+      - call: [sess.close]
+
+- def:
+    name: relay_fail
+    args: [[msg, string]]
+    body:
+      - print: ["FAIL ${msg}"]
+      - call: [sys.exit, 1]
+
+- def:
+    name: pump_both
+    args: [[cli_a, mirror_session], [cli_b, mirror_session], [rounds, i32]]
+    body:
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, rounds] }
+          body:
+            - call: [cli_a.update]
+            - call: [cli_b.update]
+            - call: [time.sleep_ms, 10]
+            - set: [round, { +: [round, 1] }]
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    body:
+      - decl: [host_th, thread_handle, { spawn: [relay_server] }]
+      - call: [time.sleep_ms, 150]
+      - decl: [cli_a, mirror_session, { call: [mirror.connect_timeout, "ws://127.0.0.1:19992", 3000] }]
+      - decl: [cli_b, mirror_session, { call: [mirror.connect_timeout, "ws://127.0.0.1:19992", 3000] }]
+      - call: [pump_both, cli_a, cli_b, 5]
+      - call: [cli_a.send_rpc, 0, "iam", 1]
+      - call: [cli_b.send_rpc, 0, "iam", 2]
+      - decl: [secret, Note]
+      - set: [secret.text, "private"]
+      - call: [cli_a.send_rpc, 0, "secret", 7, secret]
+      - decl: [fake, Note]
+      - set: [fake.text, "forged-result"]
+      - call: [cli_a.send_rpc, 0, "set_result", 0, fake]
+      - call: [pump_both, cli_a, cli_b, 40]
+      - if: { condition: { eq: [g_host_got_secret, 0] }, then: [{ call: [relay_fail, "host never received A's RPC"] }] }
+      - if: { condition: { '||': [{ eq: [g_pid_a, g_pid_b] }, { le: [g_pid_a, 0] }] }, then: [{ call: [relay_fail, "peer ids a=${g_pid_a} b=${g_pid_b}"] }] }
+
+      # B: exactly one RPC ("all") — nothing from A, no "only_a", no unknown/negative targets
+      - decl: [b_count, i32, 0]
+      - decl: [b_all, i32, 0]
+      - decl: [b_bad, i32, 0]
+      - decl: [b_more, i32, 1]
+      - while:
+          condition: { eq: [b_more, 1] }
+          body:
+            - decl: [ev_b, rpc_event, { call: [cli_b.poll_rpc] }]
+            - if:
+                condition: { eq: [ev_b.method, ""] }
+                then: [{ set: [b_more, 0] }]
+                else:
+                  - set: [b_count, { +: [b_count, 1] }]
+                  - if: { condition: { eq: [ev_b.method, "all"] }, then: [{ set: [b_all, 1] }], else: [{ set: [b_bad, 1] }] }
+      - if: { condition: { '||': [{ neq: [b_count, 1] }, { '||': [{ neq: [b_all, 1] }, { neq: [b_bad, 0] }] }] }, then: [{ call: [relay_fail, "client B received ${b_count} RPCs (all=${b_all} bad=${b_bad})"] }] }
+
+      # A: "only_a" and "all", nothing else
+      - decl: [a_count, i32, 0]
+      - decl: [a_only, i32, 0]
+      - decl: [a_more, i32, 1]
+      - while:
+          condition: { eq: [a_more, 1] }
+          body:
+            - decl: [ev_a, rpc_event, { call: [cli_a.poll_rpc] }]
+            - if:
+                condition: { eq: [ev_a.method, ""] }
+                then: [{ set: [a_more, 0] }]
+                else:
+                  - set: [a_count, { +: [a_count, 1] }]
+                  - if: { condition: { eq: [ev_a.method, "only_a"] }, then: [{ set: [a_only, 1] }] }
+      - if: { condition: { '||': [{ neq: [a_count, 2] }, { neq: [a_only, 1] }] }, then: [{ call: [relay_fail, "client A received ${a_count} RPCs (only_a=${a_only})"] }] }
+
+      # peer ids are never reused: A leaves, C must get a fresh id
+      - call: [cli_a.close]
+      - call: [pump_both, cli_b, cli_b, 10]
+      - decl: [cli_c, mirror_session, { call: [mirror.connect_timeout, "ws://127.0.0.1:19992", 3000] }]
+      - call: [pump_both, cli_b, cli_c, 5]
+      - call: [cli_c.send_rpc, 0, "iam", 3]
+      - decl: [c_wait, i32, 0]
+      - while:
+          condition: { '&&': [{ eq: [g_pid_c, 0] }, { lt: [c_wait, 200] }] }
+          body:
+            - call: [cli_c.update]
+            - call: [time.sleep_ms, 10]
+            - set: [c_wait, { +: [c_wait, 1] }]
+      - if: { condition: { '||': [{ eq: [g_pid_c, g_pid_a] }, { eq: [g_pid_c, g_pid_b] }] }, then: [{ call: [relay_fail, "peer id reused: c=${g_pid_c} a=${g_pid_a} b=${g_pid_b}"] }] }
+
+      - call: [host_th.join]
+      - call: [cli_b.close]
+      - call: [cli_c.close]
+      - print: ["mirror rpc no_relay PASS"]

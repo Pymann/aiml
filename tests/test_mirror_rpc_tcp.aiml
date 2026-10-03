@@ -1,0 +1,97 @@
+# spec/44_5 §10 TCP framing: i32 and typed RPCs over tcp://, a burst of RPCs written back to back,
+# a large payload split across many TCP reads, and send_and_await request/response over TCP.
+#
+# Expected exit code: 0
+
+- model:
+    name: TcpBig
+    fields: [[name, string], [rows, list<string>]]
+
+- model:
+    name: TcpAns
+    fields: [[success, i32], [rows, i32], [sum, i32]]
+
+- decl: [g_tcp_i32_sum, i32, 0]
+- decl: [g_tcp_rows, i32, 0]
+
+- def:
+    name: tcp_server
+    static_off: ["str_cmp"]
+    body:
+      - decl: [sess, mirror_session, { call: [mirror.listen, "tcp://127.0.0.1:19995"] }]
+      - decl: [done, i32, 0]
+      - decl: [tries, i32, 0]
+      - while:
+          condition: { '&&': [{ eq: [done, 0] }, { lt: [tries, 1000] }] }
+          body:
+            - call: [sess.update]
+            - decl: [more, i32, 1]
+            - while:
+                condition: { eq: [more, 1] }
+                body:
+                  - decl: [rpc, rpc_event, { call: [sess.poll_rpc] }]
+                  - if:
+                      condition: { eq: [rpc.method, ""] }
+                      then: [{ set: [more, 0] }]
+                      else:
+                        - if: { condition: { eq: [rpc.method, "add"] }, then: [{ set: [g_tcp_i32_sum, { +: [g_tcp_i32_sum, rpc.arg] }] }] }
+                        - if:
+                            condition: { eq: [rpc.method, "big"] }
+                            then:
+                              - decl: [big, TcpBig]
+                              - if: { condition: { eq: [{ call: [sess.decode_rpc, rpc, big] }, 0] }, then: [{ set: [g_tcp_rows, big.rows.len] }] }
+                        - if:
+                            condition: { eq: [rpc.method, "ask"] }
+                            then:
+                              - decl: [ans, TcpAns]
+                              - set: [ans.success, 1]
+                              - set: [ans.rows, g_tcp_rows]
+                              - set: [ans.sum, g_tcp_i32_sum]
+                              - call: [sess.reply_rpc, rpc, "set_result", 0, ans]
+                              - set: [done, 1]
+            - call: [time.sleep_ms, 2]
+            - set: [tries, { +: [tries, 1] }]
+      - decl: [drain, i32, 0]
+      - while:
+          condition: { lt: [drain, 30] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 5]
+            - set: [drain, { +: [drain, 1] }]
+      - call: [sess.close]
+
+- def:
+    name: main
+    body:
+      - decl: [host_th, thread_handle, { spawn: [tcp_server] }]
+      - call: [time.sleep_ms, 150]
+      - decl: [client, mirror_session, { call: [mirror.connect_timeout, "tcp://127.0.0.1:19995", 3000] }]
+      - call: [client.update]
+      # burst: 50 i32 RPCs back to back (several per TCP segment)
+      - decl: [add_i, i32, 1]
+      - while:
+          condition: { le: [add_i, 50] }
+          body:
+            - call: [client.send_rpc, 0, "add", add_i]
+            - set: [add_i, { +: [add_i, 1] }]
+      # large typed payload (~ 300 KB → many reads on the server)
+      - decl: [big, TcpBig]
+      - set: [big.name, "bulk"]
+      - decl: [row_i, i32, 0]
+      - while:
+          condition: { lt: [row_i, 4000] }
+          body:
+            - call: [big.rows.push, "row-${row_i}-padding-padding-padding-padding-padding-padding-padding"]
+            - set: [row_i, { +: [row_i, 1] }]
+      - call: [client.send_rpc, 0, "big", 0, big]
+      # request/response over TCP
+      - decl: [ask, TcpBig]
+      - set: [ask.name, "ask"]
+      - decl: [ans, ptr<TcpAns>, { new: TcpAns }]
+      - decl: [got, i32, { call: [client.send_and_await, 0, "ask", ask, ans, 5000] }]
+      - call: [host_th.join]
+      - call: [client.close]
+      - if: { condition: { neq: [got, 1] }, then: [{ print: ["FAIL tcp send_and_await got=${got}"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [ans.sum, 1275] }, then: [{ print: ["FAIL tcp i32 burst sum=${ans.sum} (expected 1275)"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { neq: [ans.rows, 4000] }, then: [{ print: ["FAIL tcp big payload rows=${ans.rows}"] }, { call: [sys.exit, 1] }] }
+      - print: ["mirror rpc tcp PASS"]

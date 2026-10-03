@@ -70,11 +70,16 @@ void aiml_mirror_session_set_sync_rate  (void* session, void* obj, float hz);
 void aiml_mirror_session_sync_now       (void* session, void* obj);
 void aiml_mirror_session_set_sync_mode  (void* session, void* obj, const char* mode);
 void aiml_mirror_session_set_rpc_target (void* session, void* obj, const char* method, const char* target);
+/* spec/44_5 §7.1 automatic object RPCs: compiler-emitted rpc table for a registered object
+ * ({method, args_nodes, n_nodes, args_size, thunk} × count) and the wrapper's routing call
+ * (0 = run locally, 1 = handled remotely only). */
+void    aiml_mirror_session_set_rpc_table(void* session, void* obj, const void* table, int32_t count);
+int32_t aiml_mirror_object_call(void* obj, const char* method, void* args);
 
 /* ── RPC ──────────────────────────────────────────────────────────────────── */
 
-/* Client: send an RPC call to the owner of net_id.
- * arg is a single i32 (v1 limitation). */
+/* Send a push RPC (spec/44_5 §7).  Client: always to the server.  Host: target > 0 = exactly that
+ * peer (unknown → nothing sent), 0 = broadcast to all peers, < 0 = rejected. */
 void    aiml_mirror_session_send_rpc(void* session, int32_t net_id, const char* method, int32_t arg);
 
 /* Send an RPC whose payload is a typed model instance encoded via aiml_ser_encode.
@@ -91,20 +96,42 @@ void    aiml_mirror_session_send_rpc_model(void* session, int32_t net_id,
  * aiml_ser_free_decoded() when no longer needed. Returns 0 on success, -1 on error. */
 int32_t aiml_rpc_event_decode_into(void* ev, void* out,
                                    const AimlTypeNode* nodes, int32_t n_nodes);
+/* Transactional decode (spec/44_5): failure leaves `out` untouched; success releases its old heap. */
+int32_t aiml_rpc_event_decode_tx(void* ev, void* out, int64_t out_size,
+                                 const AimlTypeNode* nodes, int32_t n_nodes);
 
-/* Host: poll pending RPC calls (PKT_RPC received from peers) */
+/* Poll pending RPCs (PKT_RPC received from peers).  Event lifetime: the AimlRpcEvent* returned by
+ * next_rpc/poll_rpc is BORROWED until the next next_rpc/poll_rpc call or session close (the runtime
+ * frees it then).  Never free it yourself. */
 int32_t aiml_mirror_session_has_rpc (void* session);
-/* Returns AimlRpcEvent* — caller owns the pointer, must not be freed (freed on session close) */
 void*   aiml_mirror_session_next_rpc(void* session);
 /* Combines has_rpc + next_rpc. Returns AimlRpcEvent* with method=="" if queue empty. Never null. */
 void*   aiml_mirror_session_poll_rpc(void* session);
 
-/* Client convenience: send a typed-RPC request to `net_id`, then poll the
- * incoming queue for up to `timeout_ms` (in 20ms ticks) waiting for an
- * RPC whose method == `expect_method` (typically "set_result"). On match,
- * decode the payload into `out` (which MUST be zero-initialised by the
- * compiler glue) and return 1.  Return 0 on timeout.  Drops other RPCs
- * silently — caller is responsible for ordering invariants.
+/* spec/44_5 session.take_rpc(method, target): remove + decode the FIRST queued RPC with `method`
+ * whose payload is of the target's model type; every other event keeps its position.  A queue
+ * filter for pushes / legacy replies — NOT a request correlation (use request ids for that).
+ * 1 = taken, 0 = none (target untouched). */
+int32_t aiml_mirror_session_take_rpc(void* session, const char* method, void* out, int64_t out_size,
+                                     const AimlTypeNode* nodes, int32_t n_nodes);
+
+/* spec/44_5 §7 request/response (RPC v3).  reply_rpc answers the request in `ev` (sender peer +
+ * request id from the event); obj/nodes may be null for an i32-only reply. */
+void    aiml_mirror_session_reply_rpc(void* session, void* ev, const char* method, int32_t arg_i32,
+                                      const void* obj, const AimlTypeNode* nodes, int32_t n_nodes);
+/* Async request: id > 0, or 0 when not sent (no v3 peer).  take_response: 1 = decoded,
+ * 0 = not yet, -1 = protocol error (request finished).  cancel_request drops interest. */
+int64_t aiml_mirror_session_send_request(void* session, int32_t target, const char* method, int32_t arg_i32,
+                                         const void* obj, const AimlTypeNode* nodes, int32_t n_nodes);
+int32_t aiml_mirror_session_take_response(void* session, int64_t id, const char* expect_method,
+                                          void* out, int64_t out_size,
+                                          const AimlTypeNode* nodes, int32_t n_nodes);
+void    aiml_mirror_session_cancel_request(void* session, int64_t id);
+
+/* Client convenience: send a typed-RPC request to the server, then wait up to `timeout_ms`
+ * for the reply of THIS request (see spec/44_5 for the correlation rules).  On a match the
+ * payload is decoded into `out` and 1 is returned; 0 on timeout / error.  Unrelated RPCs
+ * stay queued in their order.
  *
  * Used by the `session.send_and_await(...)` compiler-builtin so AIML
  * code doesn't have to hand-roll the send + poll-loop + decode triple
@@ -114,7 +141,7 @@ int32_t aiml_mirror_session_send_and_await(
     const char* method, int32_t arg_i32,
     const void* req_obj, const AimlTypeNode* req_nodes, int32_t req_n_nodes,
     const char* expect_method,
-    void* out_obj,       const AimlTypeNode* out_nodes, int32_t out_n_nodes,
+    void* out_obj, int64_t out_size, const AimlTypeNode* out_nodes, int32_t out_n_nodes,
     int32_t timeout_ms);
 
 /* ── mirror_event field accessors ─────────────────────────────────────────── */

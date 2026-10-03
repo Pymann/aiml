@@ -70,7 +70,6 @@
 - model:
     name: GameStateRootMut
     sync: [match, participants, zones, card_instances]
-    rpc: [select_card]
     fields:
       - [match, MatchState]
       - [participants, list<ParticipantState>]

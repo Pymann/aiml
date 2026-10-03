@@ -39,11 +39,12 @@
                               - decl: [resp, EchoResp]
                               - set: [resp.success, 1]
                               - set: [resp.echoed, "got: ${req.message}"]
-                              - call: [sess.send_rpc, rpc.peer_id, "set_result", 0, resp]
+                              - call: [sess.reply_rpc, rpc, "set_result", 0, resp]
                               - set: [running, 0]
             - call: [time.sleep_ms, 20]
             - set: [tries, { +: [tries, 1] }]
             - if: { condition: { gt: [tries, 200] }, then: [{ set: [running, 0] }] }
+      - call: [sess.close]
 
 - def:
     name: main

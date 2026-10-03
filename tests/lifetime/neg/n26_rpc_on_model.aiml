@@ -1,0 +1,12 @@
+# EXPECT-ERROR: models have no methods
+# spec/44_5 §7.1: rpc: belongs on a class; a model has no methods.
+- model:
+    name: Ghost
+    rpc: [haunt]
+    fields:
+      - [level, i32, 0]
+- def:
+    name: main
+    return: i32
+    body:
+      - return: 0

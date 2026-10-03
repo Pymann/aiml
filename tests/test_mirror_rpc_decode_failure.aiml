@@ -1,0 +1,87 @@
+# spec/44_5 §7/§10 transactional decode: a payload of a foreign model type is rejected (-1) and the
+# target keeps its existing strings/lists; a matching payload replaces the content.
+#
+# Expected exit code: 0
+
+- model:
+    name: PayloadA
+    fields: [[label, string], [count, i32]]
+
+- model:
+    name: PayloadB
+    fields: [[title, string], [items, list<string>], [score, i32]]
+
+- decl: [g_df_result, i32, -9]
+
+- def:
+    name: decode_server
+    static_off: ["str_cmp"]
+    body:
+      - decl: [sess, mirror_session, { call: [mirror.listen, "ws://127.0.0.1:19994"] }]
+      - decl: [tries, i32, 0]
+      - decl: [phase, i32, 0]
+      - while:
+          condition: { '&&': [{ lt: [phase, 2] }, { lt: [tries, 400] }] }
+          body:
+            - call: [sess.update]
+            - if:
+                condition: { gt: [{ call: [sess.has_rpc] }, 0] }
+                then:
+                  - decl: [rpc, rpc_event, { call: [sess.next_rpc] }]
+                  - decl: [target, PayloadB]
+                  - set: [target.title, "keep-me"]
+                  - call: [target.items.push, "old-1"]
+                  - call: [target.items.push, "old-2"]
+                  - set: [target.score, 5]
+                  - decl: [rc_val, i32, { call: [sess.decode_rpc, rpc, target] }]
+                  - if:
+                      condition: { eq: [rpc.method, "wrong"] }
+                      then:
+                        # foreign type → -1, target untouched
+                        - if:
+                            condition: { '&&': [{ eq: [rc_val, -1] }, { '&&': [{ eq: [target.title, "keep-me"] }, { '&&': [{ eq: [target.items.len, 2] }, { eq: [target.score, 5] }] }] }] }
+                            then: [{ set: [g_df_result, 1] }]
+                            else: [{ set: [g_df_result, 100] }]
+                        - set: [phase, 1]
+                      else:
+                        # matching type → replaced
+                        - if:
+                            condition: { '&&': [{ eq: [rc_val, 0] }, { '&&': [{ eq: [target.title, "fresh"] }, { '&&': [{ eq: [target.items.len, 1] }, { eq: [target.score, 77] }] }] }] }
+                            then: [{ set: [g_df_result, { +: [g_df_result, 1] }] }]
+                            else: [{ set: [g_df_result, 200] }]
+                        - set: [phase, 2]
+            - call: [time.sleep_ms, 5]
+            - set: [tries, { +: [tries, 1] }]
+      - call: [sess.close]
+
+- def:
+    name: main
+    body:
+      - decl: [host_th, thread_handle, { spawn: [decode_server] }]
+      - call: [time.sleep_ms, 150]
+      - decl: [client, mirror_session, { call: [mirror.connect_timeout, "ws://127.0.0.1:19994", 3000] }]
+      - call: [time.sleep_ms, 30]
+      - decl: [pay_a, PayloadA]
+      - set: [pay_a.label, "not-b"]
+      - set: [pay_a.count, 3]
+      - call: [client.send_rpc, 0, "wrong", 0, pay_a]
+      - decl: [pay_b, PayloadB]
+      - set: [pay_b.title, "fresh"]
+      - call: [pay_b.items.push, "new-1"]
+      - set: [pay_b.score, 77]
+      - call: [client.send_rpc, 0, "right", 0, pay_b]
+      - decl: [pump_i, i32, 0]
+      - while:
+          condition: { lt: [pump_i, 60] }
+          body:
+            - call: [client.update]
+            - call: [time.sleep_ms, 5]
+            - set: [pump_i, { +: [pump_i, 1] }]
+      - call: [host_th.join]
+      - call: [client.close]
+      - if:
+          condition: { neq: [g_df_result, 2] }
+          then:
+            - print: ["FAIL decode_failure result=${g_df_result} (100 = wrong type mutated/accepted, 200 = right type not applied)"]
+            - call: [sys.exit, 1]
+      - print: ["mirror rpc decode_failure PASS"]

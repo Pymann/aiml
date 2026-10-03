@@ -257,26 +257,59 @@ Other peers receive updates and may only read `sync:` fields.
 
 ## 7. RPCs
 
-RPC methods are called like regular methods.
-Internally, the compiler-generated stub serializes the arguments and sends them.
+### 7.1 RPC methods (automatic object RPCs)
+
+A **class** lists the methods that may be called across the network:
 
 ```aiml
-# On the calling peer (owner or any peer depending on RPC target):
-- call: [player.take_damage, 25]
-
-# On the target peer, take_damage(25) is executed
+- class:
+    name: Player
+    rpc: [take_damage, say]
+    members:
+      - [health, i32, 100]
+    methods:
+      - def:
+          name: take_damage
+          args: [[amount, i32]]
+          body:
+            - set: [<.health, { -: [<.health, amount] }]
 ```
 
-### RPC Direction
+```aiml
+# any peer, normal method-call syntax:
+- call: [player.take_damage, 25]
+```
 
-| Call | Description |
-|--------|--------------|
-| `session.set_rpc_target(obj, method: string, target: string)` | `"owner"` (default), `"all"`, `"others"`, `"server"` |
+**Rules (compile time).**  Every `rpc:` entry must be a method defined in that class (a subclass
+inherits the parent's RPC methods); it must return `void` and all parameters must be serializable
+values (Chapter 45) — anything else is a compile error.  Return values stay with the explicit
+request/response API (`send_and_await`, `reply_rpc`).  `rpc:` on a `model` is a compile error
+(models have no methods).
 
-- **`"owner"`**: RPC is forwarded to the owner of the object (most common case: client → server)
-- **`"all"`**: RPC is sent to all peers including local execution
-- **`"others"`**: RPC is sent to all other peers, not executed locally
-- **`"server"`**: always to the host (even if the caller itself is the host → local)
+**Calls.**  Direct calls, inherited calls and interface (vtable) calls all go through the same
+routing step; receiver and arguments are evaluated exactly once.  An object that is **not
+registered** with a mirror session behaves like a plain local call.
+
+**Targets** (`session.set_rpc_target(obj, method, target)`; default `"owner"`).  Objects are owned
+by the host that registered them (the host assigns the network ids; clients hold replicas):
+
+| target | executes on |
+|--------|-------------|
+| `"owner"` | the owner (the host) — locally if the caller is the host |
+| `"server"` | the host — locally on the host |
+| `"all"` | every participating peer, including the caller, exactly once |
+| `"others"` | every participating peer except the caller (the host included when it is not the caller) |
+
+A client never sends to other clients: it sends an **object call** (RPC v3 `kind = object_call`,
+header `net_id` = object id) to the host, and only the host forwards.  The host routes by **its own**
+target setting for that object/method — a client's local `set_rpc_target` cannot widen it — and
+only for registered objects with that method; the sender identity is the connection.  On receipt
+the arguments are decoded (size-aware) and the method body runs directly (never the network
+wrapper again, so nothing is re-sent).  Object calls are never queued for `poll_rpc`.
+`set_rpc_target` with an unknown method or target, or on an unregistered object, reports an error
+and changes nothing.  Registering the same object in two sessions is rejected for RPC routing.
+
+### 7.2 Low-level RPCs
 
 ### RPC Queue (host-side, low-level)
 
@@ -295,7 +328,18 @@ model:
     - [arg_blob, ptr]        # internal blob pointer; AIML code uses decode_rpc instead
     - [arg_blob_len, i32]    # length of the payload blob in bytes
     - [peer_id, i32]         # unique per-connection sender id (host-assigned at accept) — use this, NOT net_id, to identify the sender in multi-client servers
+    - [kind, i32]            # 0 push, 1 request, 2 response, 3 object_call (RPC v3; v2 packets arrive as push)
+    - [request_id, i64]      # request/response correlation id (0 = none); answer requests with reply_rpc
 ```
+
+**Routing (no implicit relay).**  A low-level RPC goes from a client **only to the server**; the
+host never forwards a client's RPC to other clients.  Server handlers decide explicitly about
+answers (`reply_rpc`) and fan-out (`send_rpc` per receiver, or target `0` = broadcast).
+
+**Queue.**  `next_rpc` / `poll_rpc` hand out events in arrival order; `take_rpc`, `take_response` and
+`send_and_await` remove only their match — every other event keeps its position.  Per sender peer at
+most 4096 events / 64 MiB may be queued; a peer exceeding this is disconnected with a diagnostic
+(events of other consumers are never dropped to make room).
 
 ### Multi-Client Safety: `peer_id` vs `net_id`
 
@@ -311,10 +355,10 @@ indistinguishable by that field alone.
 
 To identify which client a packet came from, use **`peer_id`**:
 
-- `peer_id` is assigned by the host the moment a connection is accepted
-  (`mirror_try_accept` sets `peer->id = peers.size() + 1`)
-- It is unique per active connection and remains stable until the peer
-  disconnects
+- `peer_id` is assigned by the host the moment a connection is accepted from a
+  per-session counter (1, 2, 3, …)
+- It is unique within the session and never reused — after a disconnect the old id addresses
+  nobody
 - It is populated on all `mirror_event` (`peer_connected`,
   `peer_disconnected`, `object_registered`, `object_unregistered`) and
   on every `rpc_event` emitted by the host's `process_packet`
@@ -331,16 +375,16 @@ silently the moment a second client connects.
 On the host side, `session.send_rpc(target, method, …)` uses the first
 argument as a **peer-routing key**:
 
-- `target > 0` and a connected peer with `peer->id == target` exists →
-  the packet is sent **only to that peer**.
-- `target == 0` or no matching peer found → fallback to broadcast (all
-  connected peers receive the packet).
+- `target > 0` → the packet is sent **only to that peer**; if no connected peer has that id,
+  nothing is sent (never a broadcast).
+- `target == 0` → explicit broadcast to all connected peers.
+- `target < 0` → rejected (nothing sent, diagnostic).
 
-This makes replying to a specific client trivial — just pass
-`rpc.peer_id`:
+Answering a request uses `reply_rpc`, which takes the sender from the connection and echoes the
+request id (§ Request / Response below):
 
 ```aiml
-- call: [sess.send_rpc, rpc.peer_id, "set_result", 0, result]   # 1:1 reply
+- call: [sess.reply_rpc, rpc, "set_result", 0, result]   # answer exactly this request
 ```
 
 For multi-recipient fanout (e.g. realm chat), iterate the known peer
@@ -355,10 +399,30 @@ need to avoid.
 | `session.has_rpc()` | `i32` | Number of pending RPCs in the queue |
 | `session.next_rpc()` | `rpc_event` | Consume next RPC (queue must not be empty — UB if empty) |
 | `session.poll_rpc()` | `rpc_event` | Consume next RPC, or empty sentinel (`method == ""`) if queue is empty |
-| `session.send_rpc(target, method, arg)` | - | Send legacy RPC.  `target` is interpreted on the host side as a **peer_id** for targeted delivery (only the matching peer receives the packet); `0` or non-matching falls back to broadcast.  Clients (`is_host=false`) always send to the single server peer. |
+| `session.take_rpc(method, target_model)` | `i32` | Remove and decode the **first queued push** with `method` whose payload is of `target_model`'s type; every other event keeps its position. `1` = taken (the target's previous heap is released), `0` = none (target untouched). A queue filter for pushes — it never consumes correlated responses and is no request correlation. |
+| `session.send_rpc(target, method, arg)` | - | Send a push RPC.  Host: `target > 0` = exactly that peer (unknown id → nothing sent), `0` = broadcast, `< 0` = rejected.  Clients always send to the server. |
+| `session.reply_rpc(ev, method, arg[, model])` | - | Answer the request `ev`: sent to `ev`'s sender peer (from the connection), as a response carrying `ev.request_id`.  If `ev` was not a request, the reply is a plain push to the sender. |
+| `session.send_request(target, method, arg, model)` | `i64` | Async request: returns the request id (`> 0`), or `0` if it could not be sent (no peer with RPC v3 yet). |
+| `session.take_response(id, target_model)` | `i32` | `1` = the response of request `id` was decoded into `target_model`; `0` = not arrived yet; `-1` = protocol error (wrong method/type, undecodable — the request is finished). |
+| `session.cancel_request(id)` | - | Drop interest in request `id`; a late response is then discarded on arrival. |
 | `session.send_rpc(target, method, arg, model)` | - | Send RPC with `i32` plus typed model payload (same routing rule as above) |
-| `session.decode_rpc(ev, target_model)` | `i32` | Decode model payload from `ev` into `target_model`; `0` = ok, `-1` = wrong type / decode error |
-| `session.send_and_await(target, method, req_model, out_model, timeout_ms)` | `i32` | Client convenience: encode `req_model`, `send_rpc(target, method, 0, req)`, then poll the incoming queue for up to `timeout_ms` waiting for an RPC with `method=="set_result"`.  On match, decode into `out_model` (typically `ptr<RespModel>`) and return `1`.  Return `0` on timeout / decode failure.  **Unrelated inbound RPCs are preserved** (re-queued in order), not dropped — so server-initiated pushes that race an in-flight request/response survive and remain available to a later `has_rpc()` / `poll_rpc()` drain.  This makes event-driven server→client push reliable alongside the request/response pattern. |
+| `session.decode_rpc(ev, target_model)` | `i32` | Decode model payload from `ev` into `target_model`, transactionally: `0` = ok (the target's previous heap is released), `-1` = wrong type / decode error (target untouched) |
+| `session.send_and_await(target, method, req_model, out_model, timeout_ms)` | `i32` | Client convenience: send `req_model` as a request and wait up to `timeout_ms` (monotonic clock, including update/decode time) for **its** response — matched by request id and responding peer, then checked for `method=="set_result"` and `out_model`'s type.  `1` = decoded into `out_model`; `0` = timeout, peer without RPC v3, or a correlated but unusable response (finishes the request — no endless rescanning).  A response arriving after the timeout is discarded.  **Unrelated inbound RPCs keep their position.** |
+
+### Request / Response (RPC v3)
+
+Correlation is by **request id**, never by method name or payload schema (those are additional
+checks).  Request ids are per session, monotonic, never 0 and never reused while outstanding.
+
+- A request (`send_and_await`, `send_request`) is only sent to a peer whose HELLO announced RPC
+  v3 (spec §10).  Before that, `send_and_await` keeps pumping `update()` (up to 1.5 s or the
+  timeout); a peer without HELLO is v2 and the call reports missing support instead of falling back
+  to unsafe method matching.
+- The server answers with `reply_rpc(ev, …)`: target = `ev.peer_id`, `kind = response`,
+  `request_id = ev.request_id`.  A plain `send_rpc` is a push and never fulfils a request.
+- On the requester, a response is accepted only for an outstanding request id; late, duplicate and
+  unknown responses are dropped on arrival (logged) without touching pushes.  An already queued
+  response of the same type can never fulfil a *new* request (different id).
 
 ### RPC Payload v2
 
@@ -430,6 +494,10 @@ Notes:
 - The target model is internally zero-initialized before decoding.
 - Models with `string`, `list<T>` or `map<K:V>` are allowed; decoding uses heap serialization from Chapter 45.
 - If `rpc.arg_kind != 1`, the model type does not match, or the blob is corrupt, `decode_rpc(...)` returns `-1`.
+- Type match: every typed RPC payload carries a structural schema fingerprint (field kinds and nesting —
+  not offsets or sizes, so a 32-bit WASM peer and a 64-bit native peer agree). A payload of another
+  model type is rejected with `-1` and the target model stays empty (valid empty containers); `send_and_await` keeps
+  waiting for a reply of the expected type. (The KV fingerprint, spec/45, is separate and unchanged.)
 
 ### Convenience: One-Shot Send + Await
 
@@ -446,12 +514,32 @@ which collapses the send + poll-loop + decode triple into one call:
 - if: { condition: { neq: [resp.success, 1] }, then: [<error-handler>] }
 ```
 
-Internally drives `update + poll-queue + decode_rpc` in 2ms ticks until
-either a matching `set_result` arrives or `timeout_ms` elapses.  Unrelated
-RPCs received during the wait window are **preserved** (re-queued in arrival
-order), so in-band server→client push-notifications interleaved with
-request/response are safe: a message that arrives mid-`send_and_await` is not
-lost and shows up on the next `has_rpc()` / `poll_rpc()` drain.  A typical
+Internally sends a v3 request and pumps `update()` in 2ms ticks until the response with the
+request's id arrives from the target peer or `timeout_ms` (monotonic clock) elapses.  Unrelated
+RPCs received during the wait keep their position in the queue, so in-band server→client
+push-notifications interleaved with request/response are safe: a message that arrives
+mid-`send_and_await` is not lost and shows up on the next `has_rpc()` / `poll_rpc()` drain.
+
+The server side answers with `reply_rpc` (never with a plain `send_rpc`):
+
+```aiml
+- decl: [rpc, rpc_event, { call: [sess.poll_rpc] }]
+- if:
+    condition: { eq: [rpc.method, "create_card"] }
+    then:
+      - decl: [req, CreateCardReq]
+      - if: { condition: { eq: [{ call: [sess.decode_rpc, rpc, req] }, 0] }, then: [ ... ] }
+      - call: [sess.reply_rpc, rpc, "set_result", 0, resp]
+```
+
+For asynchronous clients (no blocking per frame) use `send_request` + `take_response`:
+
+```aiml
+- set: [<.req_id, { call: [sess.send_request, 0, "list_decks", 0, req] }]
+# … every frame:
+- decl: [got, i32, { call: [sess.take_response, <.req_id, decks_resp] }]
+- if: { condition: { eq: [got, 1] }, then: [ ... ] }
+```  A typical
 event-driven client therefore uses `send_and_await` for its own requests and,
 each frame, drains `poll_rpc()` for server pushes (chat, presence, live match
 updates) — no polling of the server required.
@@ -631,25 +719,51 @@ a simple poll loop works well:
 
 ## 10. Packet Format (binary)
 
-```
-Header (6 bytes):
-  [net_id:   u32]   Object ID
-  [type:     u8]    0x01=delta, 0x02=rpc, 0x03=register, 0x04=unregister
-  [reserved: u8]
+All integers are little-endian.  Every packet starts with the same 6-byte header:
 
-Delta packet:
-  [field_mask: u32]   Bitmask of which fields are included (max. 32 sync fields)
-  [field_data: ...]   Serialized field values in declaration order
-
-RPC packet:
-  [method_id: u8]     Index of the RPC method in the rpc: list
-  [arg_data:  ...]    Serialized arguments
+```text
+[net_id:u32][type:u8][reserved:u8]
 ```
 
-Primitive types are encoded little-endian.
-`vec3` = 3 × f32 (12 bytes), `mat4` = 16 × f32 (64 bytes), `string` = u16 length + UTF-8 bytes.
+| type | name | body after the header | total length |
+|------|------|------------------------|--------------|
+| 0x01 | DELTA (typed, reserved=1) | serialization blob (Chapter 45) incl. its 4-byte length prefix | 6 + 4 + prefix |
+| 0x01 | DELTA (raw, reserved=0) | raw struct bytes | 6 + registered object size (TCP); the whole message (WebSocket) |
+| 0x02 | RPC v2 | `[method_len:u8][method][arg_kind:u8][arg_i32:i32][blob_len:u32][blob]` | 6 + 1 + N + 9 + M |
+| 0x03 | REGISTER | `[net_id:i32][obj_size:i32]` | 14 |
+| 0x04 | UNREGISTER | — | 6 |
+| 0x05 | RPC v3 (`reserved` = version 3) | `[total_len:u32][kind:u8][flags:u8][request_id:u64][method_len:u8][method][arg_kind:u8][arg_i32:i32][blob_len:u32][blob]` | `total_len` = 30 + N + M |
+| 0x06 | HELLO (`reserved` = highest supported RPC version) | — | 6 |
 
----
+**Validation (every RPC, v2 and v3).**  A frame is accepted only if all of these hold, otherwise
+the sending peer is disconnected with a diagnostic (`[mirror] invalid frame …`); nothing of the
+frame is applied:
+
+- the frame length is exactly the computed total length (a WebSocket message carries exactly one
+  packet; trailing bytes are an error); total length ≤ 8 MiB + 512;
+- `method_len` is 1–255 and the method contains no NUL byte (senders refuse longer names instead
+  of truncating);
+- `arg_kind` is 0 or 1; `arg_kind = 0` requires `blob_len = 0`; `arg_kind = 1` requires
+  `blob_len ≥ 4` and the blob's own length prefix to equal `blob_len − 4`;
+- v3 only: `kind` ∈ {0 push, 1 request, 2 response, 3 object_call}, `flags = 0`, and a typed blob
+  must carry the RPC magic + structural fingerprint (spec 44_5 §7 "Type match").  v2 typed blobs
+  without the tag are accepted as legacy.
+
+**Decoding** of any network blob (RPC payloads and typed DELTAs) is size-aware: the blob is decoded
+with its received length as the hard bound, every byte must be consumed, container counts may not
+exceed the remaining bytes, nesting is limited to 64 levels and one decode may allocate at most
+64 MiB.  A failed decode never mutates the destination (transactional decode into a temporary).
+
+**TCP framing.**  TCP peers keep a per-peer receive buffer; complete packets are consumed by the
+same parser as WebSocket messages, partial packets wait for the next `update()`, so several packets
+per read and packets split across reads are both handled.  Partial sends are buffered per peer and
+flushed on the next `update()`; a peer whose unsent backlog exceeds 64 MiB is disconnected.
+
+**HELLO / capabilities.**  Both sides send HELLO right after the connection is established.  RPC v3
+(request/response correlation, §7) is used towards a peer only after its HELLO announced
+version ≥ 3; until then a client keeps pumping `update()` inside `send_and_await`.  A peer without
+HELLO is treated as v2: one-way pushes work, `send_and_await` reports missing support and returns 0
+instead of falling back to unsafe method matching.
 
 ## 11. Implementation Notes
 

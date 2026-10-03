@@ -5,7 +5,6 @@
 - model:
     name: NetPlayer
     sync: [health, score]
-    rpc:  [take_damage]
     fields:
       - [health, i32]
       - [score, i32]

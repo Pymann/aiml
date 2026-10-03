@@ -27,7 +27,6 @@
 - model:
     name: Item
     sync: [name, tags]
-    rpc:  [cast]
     fields:
       - [item_id,     string]
       - [name,        string]
@@ -73,7 +72,6 @@
 
 - model:
     name: Detail
-    rpc: [request_detail, deliver_detail]
     fields:
       - [creature_id, string]
       - [items,       list<ptr<ItemImpl>>]

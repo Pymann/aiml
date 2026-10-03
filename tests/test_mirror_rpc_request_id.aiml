@@ -1,0 +1,152 @@
+# spec/44_5 §7 request/response: correlation by request id, never by method/schema.
+#   1. a late response to a timed-out request never fulfils the next request of the same schema
+#   2. async send_request/take_response with swapped answer order: each id gets its own answer
+#   3. a same-schema push "set_result" never fulfils a request and stays queued for take_rpc
+#
+# Expected exit code: 0
+
+- model:
+    name: NumReq
+    fields: [[tag, string]]
+
+- model:
+    name: NumResp
+    fields: [[value, i32], [tag, string]]
+
+- def:
+    name: rid_server
+    static_off: ["str_cmp"]
+    body:
+      - decl: [sess, mirror_session, { call: [mirror.listen, "ws://127.0.0.1:19991"] }]
+      - decl: [slow_ev, rpc_event]
+      - decl: [have_slow, i32, 0]
+      - decl: [q1_ev, rpc_event]
+      - decl: [have_q1, i32, 0]
+      - decl: [done, i32, 0]
+      - decl: [tries, i32, 0]
+      - while:
+          condition: { '&&': [{ eq: [done, 0] }, { lt: [tries, 400] }] }
+          body:
+            - call: [sess.update]
+            - if:
+                condition: { gt: [{ call: [sess.has_rpc] }, 0] }
+                then:
+                  - decl: [rpc, rpc_event, { call: [sess.next_rpc] }]
+                  - decl: [req, NumReq]
+                  - decl: [rc_d, i32, { call: [sess.decode_rpc, rpc, req] }]
+                  - decl: [resp, NumResp]
+                  - set: [resp.tag, req.tag]
+                  # "slow": hold it — answered only after the client's timeout
+                  - if: { condition: { eq: [req.tag, "slow"] }, then: [{ set: [slow_ev, rpc] }, { set: [have_slow, 1] }] }
+                  - if:
+                      condition: { eq: [req.tag, "fast"] }
+                      then:
+                        # late answer to "slow" first (must be dropped by the client) …
+                        - if:
+                            condition: { eq: [have_slow, 1] }
+                            then:
+                              - decl: [late, NumResp]
+                              - set: [late.value, 111]
+                              - set: [late.tag, "slow"]
+                              - call: [sess.reply_rpc, slow_ev, "set_result", 0, late]
+                        # … a same-schema PUSH (must not fulfil the request) …
+                        - decl: [push, NumResp]
+                        - set: [push.value, 99]
+                        - set: [push.tag, "push"]
+                        - call: [sess.send_rpc, rpc.peer_id, "set_result", 0, push]
+                        # … then the real answer
+                        - set: [resp.value, 222]
+                        - call: [sess.reply_rpc, rpc, "set_result", 0, resp]
+                  - if: { condition: { eq: [req.tag, "q1"] }, then: [{ set: [q1_ev, rpc] }, { set: [have_q1, 1] }] }
+                  - if:
+                      condition: { eq: [req.tag, "q2"] }
+                      then:
+                        # swapped order: q2 is answered before q1
+                        - set: [resp.value, 2]
+                        - call: [sess.reply_rpc, rpc, "set_result", 0, resp]
+                        - decl: [resp_q1, NumResp]
+                        - set: [resp_q1.value, 1]
+                        - set: [resp_q1.tag, "q1"]
+                        - call: [sess.reply_rpc, q1_ev, "set_result", 0, resp_q1]
+                        - set: [done, 1]
+            - call: [time.sleep_ms, 5]
+            - set: [tries, { +: [tries, 1] }]
+      # let the last packets leave before closing
+      - decl: [drain, i32, 0]
+      - while:
+          condition: { lt: [drain, 20] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 5]
+            - set: [drain, { +: [drain, 1] }]
+      - call: [sess.close]
+
+- def:
+    name: rid_fail
+    args: [[msg, string]]
+    body:
+      - print: ["FAIL ${msg}"]
+      - call: [sys.exit, 1]
+
+- def:
+    name: main
+    body:
+      - decl: [host_th, thread_handle, { spawn: [rid_server] }]
+      - call: [time.sleep_ms, 150]
+      - decl: [client, mirror_session, { call: [mirror.connect_timeout, "ws://127.0.0.1:19991", 3000] }]
+      - call: [time.sleep_ms, 50]
+      - call: [client.update]
+
+      # 1. slow request times out; the late answer must not satisfy "fast"
+      - decl: [req_msg, NumReq]
+      - set: [req_msg.tag, "slow"]
+      - decl: [r_slow, ptr<NumResp>, { new: NumResp }]
+      - decl: [got_slow, i32, { call: [client.send_and_await, 0, "num", req_msg, r_slow, 300] }]
+      - if: { condition: { neq: [got_slow, 0] }, then: [{ call: [rid_fail, "slow request did not time out"] }] }
+      - set: [req_msg.tag, "fast"]
+      - decl: [r_fast, ptr<NumResp>, { new: NumResp }]
+      - decl: [got_fast, i32, { call: [client.send_and_await, 0, "num", req_msg, r_fast, 3000] }]
+      - if: { condition: { neq: [got_fast, 1] }, then: [{ call: [rid_fail, "fast request got no answer"] }] }
+      - if: { condition: { neq: [r_fast.value, 222] }, then: [{ call: [rid_fail, "fast got value ${r_fast.value} (late/push answer accepted)"] }] }
+
+      # 3. the push is still queued and only take_rpc sees it
+      - decl: [pushed, NumResp]
+      - decl: [got_push, i32, 0]
+      - decl: [push_wait, i32, 0]
+      - while:
+          condition: { '&&': [{ eq: [got_push, 0] }, { lt: [push_wait, 100] }] }
+          body:
+            - call: [client.update]
+            - set: [got_push, { call: [client.take_rpc, "set_result", pushed] }]
+            - call: [time.sleep_ms, 5]
+            - set: [push_wait, { +: [push_wait, 1] }]
+      - if: { condition: { neq: [got_push, 1] }, then: [{ call: [rid_fail, "push set_result lost"] }] }
+      - if: { condition: { neq: [pushed.value, 99] }, then: [{ call: [rid_fail, "take_rpc got value ${pushed.value}"] }] }
+
+      # 2. async requests answered in swapped order
+      - set: [req_msg.tag, "q1"]
+      - decl: [id1, i64, { call: [client.send_request, 0, "num", 0, req_msg] }]
+      - set: [req_msg.tag, "q2"]
+      - decl: [id2, i64, { call: [client.send_request, 0, "num", 0, req_msg] }]
+      - if: { condition: { '||': [{ le: [id1, 0] }, { eq: [id1, id2] }] }, then: [{ call: [rid_fail, "bad request ids ${id1} ${id2}"] }] }
+      - decl: [ans1, NumResp]
+      - decl: [ans2, NumResp]
+      - decl: [got1, i32, 0]
+      - decl: [got2, i32, 0]
+      - decl: [ans_wait, i32, 0]
+      - while:
+          condition: { '&&': [{ lt: [{ +: [got1, got2] }, 2] }, { lt: [ans_wait, 400] }] }
+          body:
+            - call: [client.update]
+            - if: { condition: { eq: [got1, 0] }, then: [{ set: [got1, { call: [client.take_response, id1, ans1] }] }] }
+            - if: { condition: { eq: [got2, 0] }, then: [{ set: [got2, { call: [client.take_response, id2, ans2] }] }] }
+            - call: [time.sleep_ms, 5]
+            - set: [ans_wait, { +: [ans_wait, 1] }]
+      - if: { condition: { '||': [{ neq: [got1, 1] }, { neq: [got2, 1] }] }, then: [{ call: [rid_fail, "async answers missing got1=${got1} got2=${got2}"] }] }
+      - if: { condition: { '||': [{ neq: [ans1.value, 1] }, { neq: [ans2.value, 2] }] }, then: [{ call: [rid_fail, "swapped answers ans1=${ans1.value} ans2=${ans2.value}"] }] }
+      # a finished id is unknown afterwards
+      - if: { condition: { neq: [{ call: [client.take_response, id1, ans1] }, -1] }, then: [{ call: [rid_fail, "finished id still pending"] }] }
+
+      - call: [host_th.join]
+      - call: [client.close]
+      - print: ["mirror rpc request_id PASS"]

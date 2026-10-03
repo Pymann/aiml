@@ -879,6 +879,19 @@ namespace AIML {
     }
 
     // Helper: Get LLVM Type from string
+    // spec/44_5 rpc_event — the ONE LLVM layout, mirrors AimlRpcEvent (mirror_runtime.cpp, static_asserts
+    // there): { i8* method, i32 net_id, i32 arg, i32 arg_kind, i8* arg_blob, i32 arg_blob_len,
+    //           i32 peer_id, i32 kind, i64 request_id }.  Natural alignment on both 64-bit and wasm32.
+// spec/44_5 §7.1: per class, its rpc methods after synthesis (method, args model, receive thunk).
+    struct RpcMethodEntry { std::string method, argsModel, thunk; std::vector<std::pair<std::string, std::string>> params; };
+    std::map<std::string, std::vector<RpcMethodEntry>> rpcMethodsByClass;
+        llvm::StructType* rpcEventType() {
+        if (auto* t = llvm::StructType::getTypeByName(context, "rpc_event")) return t;
+        auto* i8p = llvm::Type::getInt8Ty(context)->getPointerTo();
+        auto* i32 = llvm::Type::getInt32Ty(context);
+        auto* i64 = llvm::Type::getInt64Ty(context);
+        return llvm::StructType::create(context, {i8p, i32, i32, i32, i8p, i32, i32, i32, i64}, "rpc_event");
+    }
     llvm::Type* getLLVMType(const std::string& typeName) {
         if (typeName == "" || typeName == "<.balance" || typeName == "${ { +: [a, b] } }") {
              LOG_ERROR(fmtLoc() + "CRITICAL ERROR: getLLVMType called with invalid typeName: '" + typeName + "'");
@@ -1240,18 +1253,7 @@ namespace AIML {
             }
             return t;
         }
-        if (typeName == "rpc_event") {
-            // Real struct: {i8*(method), i32(net_id), i32(arg)}
-            llvm::StructType* t = llvm::StructType::getTypeByName(context, "rpc_event");
-            if (!t) {
-                t = llvm::StructType::create(context,
-                    {llvm::Type::getInt8Ty(context)->getPointerTo(),
-                     llvm::Type::getInt32Ty(context),
-                     llvm::Type::getInt32Ty(context)},
-                    "rpc_event");
-            }
-            return t;
-        }
+        if (typeName == "rpc_event") return rpcEventType();
 
         // ui types
         if (typeName == "ui_font") return llvm::Type::getInt8Ty(context)->getPointerTo();

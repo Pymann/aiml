@@ -1,0 +1,149 @@
+# spec/44_5 §7.1 automatic object RPCs: normal method-call syntax, routing matrix, exact execution
+# counts.  Host + two clients in one process; each side registers a different class with the same
+# rpc method `bump`, whose body adds to that side's own counter — so every execution is attributable.
+#   owner/server from a client → host only; all → everyone once; others → everyone but the caller;
+#   all/others from the host; an interface call; an inherited rpc method; an unregistered object
+#   runs locally; set_rpc_target rejects unknown methods/targets.
+#
+# Expected exit code: 0
+
+- import: "tests/mirror_rpc_auto_lib1.aiml"
+- import: "tests/mirror_rpc_auto_lib2.aiml"
+
+- def:
+    name: auto_host
+    body:
+      - decl: [sess, mirror_session, { call: [mirror.listen, "ws://127.0.0.1:19997"] }]
+      - decl: [ctr, ptr<HostCounter>, { new: HostCounter }]
+      - set: [g_nid, { call: [sess.register, ctr] }]
+      - decl: [tries, i32, 0]
+      - while:
+          condition: { '&&': [{ lt: [g_phase, 99] }, { lt: [tries, 4000] }] }
+          body:
+            - call: [sess.update]
+            - if:
+                condition: { eq: [g_phase, 10] }
+                then:
+                  - call: [sess.set_rpc_target, ctr, "bump", "owner"]
+                  - set: [g_phase, 11]
+            - if:
+                condition: { eq: [g_phase, 20] }
+                then:
+                  - call: [sess.set_rpc_target, ctr, "bump", "all"]
+                  - set: [g_phase, 21]
+            - if:
+                condition: { eq: [g_phase, 30] }
+                then:
+                  - call: [sess.set_rpc_target, ctr, "bump", "others"]
+                  - set: [g_phase, 31]
+            - if:
+                condition: { eq: [g_phase, 40] }
+                then:
+                  - call: [sess.set_rpc_target, ctr, "bump", "server"]
+                  - set: [g_phase, 41]
+            - if:
+                condition: { eq: [g_phase, 50] }
+                then:
+                  # host-side calls: all, then others
+                  - call: [sess.set_rpc_target, ctr, "bump", "all"]
+                  - call: [ctr.bump, 10000]
+                  - call: [sess.set_rpc_target, ctr, "bump", "others"]
+                  - call: [ctr.bump, 100000]
+                  # invalid target / method: rejected, nothing changes
+                  - call: [sess.set_rpc_target, ctr, "bump", "everyone"]
+                  - call: [sess.set_rpc_target, ctr, "nope", "all"]
+                  - set: [g_phase, 51]
+            - call: [time.sleep_ms, 2]
+            - set: [tries, { +: [tries, 1] }]
+      - call: [sess.unregister, ctr]
+      - call: [sess.close]
+
+- def:
+    name: auto_pump
+    args: [[cli_a, mirror_session], [cli_b, mirror_session], [rounds, i32]]
+    body:
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, rounds] }
+          body:
+            - call: [cli_a.update]
+            - call: [cli_b.update]
+            - call: [time.sleep_ms, 4]
+            - set: [round, { +: [round, 1] }]
+
+- def:
+    name: auto_wait_phase
+    args: [[want, i32], [cli_a, mirror_session], [cli_b, mirror_session]]
+    body:
+      - decl: [spin, i32, 0]
+      - while:
+          condition: { '&&': [{ neq: [g_phase, want] }, { lt: [spin, 500] }] }
+          body:
+            - call: [auto_pump, cli_a, cli_b, 1]
+            - set: [spin, { +: [spin, 1] }]
+
+- def:
+    name: auto_fail
+    args: [[msg, string]]
+    body:
+      - print: ["FAIL ${msg} (host=${g_host_hits} a=${g_a_hits} b=${g_b_hits})"]
+      - call: [sys.exit, 1]
+
+- def:
+    name: main
+    body:
+      # an unregistered object behaves like a plain local call
+      - decl: [loose, ptr<ReplicaA>, { new: ReplicaA }]
+      - call: [loose.bump, 7]
+      - if: { condition: { neq: [g_a_hits, 7] }, then: [{ call: [auto_fail, "unregistered object did not run locally"] }] }
+      - set: [g_a_hits, 0]
+
+      - decl: [host_th, thread_handle, { spawn: [auto_host] }]
+      - call: [time.sleep_ms, 200]
+      - decl: [cli_a, mirror_session, { call: [mirror.connect_timeout, "ws://127.0.0.1:19997", 3000] }]
+      - decl: [cli_b, mirror_session, { call: [mirror.connect_timeout, "ws://127.0.0.1:19997", 3000] }]
+      - call: [auto_pump, cli_a, cli_b, 20]
+      - if: { condition: { eq: [g_nid, 0] }, then: [{ call: [auto_fail, "host did not register"] }] }
+      - decl: [rep_a, ptr<ReplicaA>, { new: ReplicaA }]
+      - decl: [rep_b, ptr<ReplicaB>, { new: ReplicaB }]
+      - call: [cli_a.register_id, rep_a, g_nid]
+      - call: [cli_b.register_id, rep_b, g_nid]
+      - call: [auto_pump, cli_a, cli_b, 10]
+
+      # owner (default) from A → host only
+      - set: [g_phase, 10]
+      - call: [auto_wait_phase, 11, cli_a, cli_b]
+      - call: [rep_a.bump, 1]
+      - call: [auto_pump, cli_a, cli_b, 30]
+      # all from A → host, A, B once each
+      - set: [g_phase, 20]
+      - call: [auto_wait_phase, 21, cli_a, cli_b]
+      - call: [cli_a.set_rpc_target, rep_a, "bump", "all"]
+      - call: [rep_a.bump, 10]
+      - call: [auto_pump, cli_a, cli_b, 30]
+      # others from A → host and B, not A (called through the interface)
+      - set: [g_phase, 30]
+      - call: [auto_wait_phase, 31, cli_a, cli_b]
+      - call: [cli_a.set_rpc_target, rep_a, "bump", "others"]
+      - decl: [as_iface, ref<Bumpable>, rep_a]
+      - call: [as_iface.bump, 100]
+      - call: [auto_pump, cli_a, cli_b, 30]
+      # server from A → host only
+      - set: [g_phase, 40]
+      - call: [auto_wait_phase, 41, cli_a, cli_b]
+      - call: [cli_a.set_rpc_target, rep_a, "bump", "server"]
+      - call: [rep_a.bump, 1000]
+      - call: [auto_pump, cli_a, cli_b, 30]
+      # host-side all (+10000 everywhere) and others (+100000 on clients)
+      - set: [g_phase, 50]
+      - call: [auto_wait_phase, 51, cli_a, cli_b]
+      - call: [auto_pump, cli_a, cli_b, 30]
+
+      - set: [g_phase, 99]
+      - call: [host_th.join]
+      - call: [cli_a.close]
+      - call: [cli_b.close]
+      - if: { condition: { neq: [g_host_hits, 11111] }, then: [{ call: [auto_fail, "host executions"] }] }
+      - if: { condition: { neq: [g_a_hits, 110010] }, then: [{ call: [auto_fail, "client A executions"] }] }
+      - if: { condition: { neq: [g_b_hits, 110110] }, then: [{ call: [auto_fail, "client B executions"] }] }
+      - print: ["mirror rpc auto_dispatch PASS"]

@@ -4619,6 +4619,18 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     }
                 }
                 raw = apply_decorators(raw);
+                // Scalar return coercion: an integer/float value of another width (e.g. the literal
+                // `return: 0` in an i64 function) is converted to the declared return type —
+                // `ret i32 0` in an i64 function is invalid IR (the wasm backend rejects it).
+                if (raw && retTy && raw->getType() != retTy) {
+                    llvm::Type* rt = raw->getType();
+                    if (rt->isIntegerTy() && retTy->isIntegerTy())
+                        raw = ctx.builder.CreateIntCast(raw, retTy, rt->getIntegerBitWidth() != 1, "ret_icast");
+                    else if (rt->isIntegerTy() && retTy->isFloatingPointTy())
+                        raw = ctx.builder.CreateSIToFP(raw, retTy, "ret_i2f");
+                    else if (rt->isFloatingPointTy() && retTy->isFloatingPointTy())
+                        raw = ctx.builder.CreateFPCast(raw, retTy, "ret_fcast");
+                }
                 ctx.ir_gen->createRet(ctx.ir_gen->wrap(raw));
             }
         } else {

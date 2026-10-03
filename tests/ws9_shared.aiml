@@ -2,7 +2,6 @@
 - model:
     name: GameViewWs9
     sync: [round, p1_name, p2_name, hand_count, p1_hp, p2_hp]
-    rpc: [draw]
     fields:
       - [round, i32, 0]
       - [p1_name, string]

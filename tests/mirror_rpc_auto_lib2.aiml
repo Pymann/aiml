@@ -1,0 +1,23 @@
+# Requires: library
+# Shared types for test_mirror_rpc_auto_dispatch (inherited rpc method).
+
+- import: "tests/mirror_rpc_auto_lib1.aiml"
+
+- class:
+    name: ReplicaBase
+    rpc: [bump]
+    members:
+      - [hits, i32, 0]
+    methods:
+      - def:
+          name: bump
+          args: [[amount, i32]]
+          body:
+            - set: [g_b_hits, { +: [g_b_hits, amount] }]
+
+- class:
+    name: ReplicaB
+    extends: ReplicaBase
+    members:
+      - [extra, i32, 0]
+

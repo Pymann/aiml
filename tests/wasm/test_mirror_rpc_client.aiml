@@ -14,7 +14,6 @@
 - model:
     name: Item
     sync: [name, tags]
-    rpc:  [cast]
     fields:
       - [name, string]
       - [tags, list<string>]
@@ -34,7 +33,6 @@
 
 - model:
     name: RpcCast
-    rpc: [cast]
     fields:
       - [name, string]
       - [amount, i32]
@@ -44,7 +42,6 @@
 # same shape: a list<ptr<X>> where each X has a list<string> field.
 - model:
     name: Detail
-    rpc: [request_detail, deliver_detail]
     fields:
       - [creature_id, string]
       - [items,       list<ptr<ItemImpl>>]

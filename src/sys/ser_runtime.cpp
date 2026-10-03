@@ -52,6 +52,17 @@ extern "C" void aiml_thread_handle_drop(void* h) {
 // Thread-local decode-error flag — set when a structural error (absurd count etc.) is detected.
 // Reset at the start of aiml_ser_decode; checked at the end to return an error code.
 static thread_local bool g_dec_error = false;
+// spec/44_5 (AP1): decode limits for untrusted (network) blobs.  SIZE_MAX / 64 = unlimited for
+// trusted local data; aiml_ser_decode_sized arms a finite allocation budget.
+static thread_local size_t g_dec_budget = SIZE_MAX;
+static thread_local int    g_dec_nest   = 0;
+static const int    kDecMaxNest   = 64;
+static const size_t kDecRpcBudget = (size_t)64 << 20;   // total heap one RPC decode may allocate
+static bool dec_budget(size_t n) {
+    if (n > g_dec_budget) { g_dec_error = true; return false; }
+    g_dec_budget -= n;
+    return true;
+}
 
 // spec/61 §5.1 (memV3): cycle guard for the free walker. A recursive UNIQUE ptr<T> graph can form a
 // runtime CYCLE — e.g. Owner owns ptr<Child> and Child holds a ptr<Owner> back-ref to that same
@@ -82,6 +93,14 @@ static thread_local int g_ser_depth = 0;
 // call but n_nodes is tiny (struct field count).  Set AIML_SER_NOGUARD=1 to
 // bypass the check (emergency read of legacy data).
 static const uint32_t AIML_SER_MAGIC = 0xA1F5C0DEu;
+// spec/44_5: typed-RPC payload header [RPC_MAGIC][rpc_fp] — structural, layout-independent type check.
+static const uint32_t AIML_RPC_MAGIC = 0xA1F5C0DFu;
+static thread_local bool g_ser_rpc = false;
+extern "C" int aiml_ser_set_rpc(int on) {
+    int prev = g_ser_rpc ? 1 : 0;
+    g_ser_rpc = (on != 0);
+    return prev;
+}
 static int g_ser_noguard = (getenv("AIML_SER_NOGUARD") != nullptr) ? 1 : 0;
 
 // The guard is OPT-IN per operation via this thread-local flag — enabled ONLY by
@@ -138,6 +157,36 @@ static void aiml_ser_fp_walk(const AimlTypeNode* nodes, int32_t n,
             break;
         default: break;                                  // primitives: kind already mixed in
     }
+}
+// spec/44_5: RPC fingerprint — kinds + nesting only (no offset/elem_size/registry ids), so a 32-bit
+// WASM peer and a 64-bit native peer compute the same value for the same model.
+static void aiml_ser_rpc_fp_walk(const AimlTypeNode* nodes, int32_t n, int32_t idx, uint32_t& h, int depth) {
+    if (idx < 0 || idx >= n || depth > 64) { h = (h ^ 0xDEADBEEFu) * 16777619u; return; }
+    const AimlTypeNode& nd = nodes[idx];
+    h = (h ^ (uint32_t)nd.kind) * 16777619u;
+    switch (nd.kind) {
+        case AIML_TD_STRUCT:
+            h = (h ^ (uint32_t)nd.param1) * 16777619u;
+            for (int i = 0; i < nd.param1; i++) aiml_ser_rpc_fp_walk(nodes, n, nd.param2 + i, h, depth + 1);
+            break;
+        case AIML_TD_LIST: case AIML_TD_BUFFER: case AIML_TD_PTR_STRUCT: case AIML_TD_MODEL:
+        case AIML_TD_LIST_PTR: case AIML_TD_MAP_PTR: case AIML_TD_BUFFER_PTR:
+            aiml_ser_rpc_fp_walk(nodes, n, nd.param1, h, depth + 1);
+            break;
+        case AIML_TD_MAP:
+            aiml_ser_rpc_fp_walk(nodes, n, nd.param1, h, depth + 1);
+            aiml_ser_rpc_fp_walk(nodes, n, nd.param2, h, depth + 1);
+            break;
+        case AIML_TD_RAWBYTES:
+            h = (h ^ (uint32_t)nd.param1) * 16777619u;   // wire byte count
+            break;
+        default: break;
+    }
+}
+static uint32_t aiml_ser_rpc_fp(const AimlTypeNode* nodes, int32_t n_nodes) {
+    uint32_t h = 2166136261u;
+    aiml_ser_rpc_fp_walk(nodes, n_nodes, 0, h, 0);
+    return h;
 }
 static uint32_t aiml_ser_schema_fp(const AimlTypeNode* nodes, int32_t n_nodes) {
     uint32_t h = 2166136261u;               // FNV-1a offset basis
@@ -221,7 +270,7 @@ static void w_raw(std::vector<uint8_t>& b, const void* data, size_t n) {
 // ── Read helpers (little-endian) ──────────────────────────────────────────────
 
 static int32_t r_i32(const uint8_t* blob, int& pos, int end) {
-    if (pos + 4 > end) { g_dec_error = true; return 0; }  // truncated length/count prefix (F1)
+    if (end - pos < 4) { g_dec_error = true; return 0; }  // truncated length/count prefix (F1), overflow-safe
     uint32_t u = (uint32_t)blob[pos]
               | ((uint32_t)blob[pos+1] <<  8)
               | ((uint32_t)blob[pos+2] << 16)
@@ -452,9 +501,19 @@ static void enc(std::vector<uint8_t>& buf,
 
 // ── Decode (recursive) ────────────────────────────────────────────────────────
 
+static void dec_node(const uint8_t* blob, int& pos, int end,
+                     int idx, const AimlTypeNode* ns, int nn, uint8_t* out);
+// Depth-guarded entry (AP1): a hostile blob cannot drive unbounded recursion.
 static void dec(const uint8_t* blob, int& pos, int end,
                 int idx, const AimlTypeNode* ns, int nn,
                 uint8_t* out) {
+    if (++g_dec_nest > kDecMaxNest) { g_dec_error = true; --g_dec_nest; return; }
+    dec_node(blob, pos, end, idx, ns, nn, out);
+    --g_dec_nest;
+}
+
+static void dec_node(const uint8_t* blob, int& pos, int end,
+                     int idx, const AimlTypeNode* ns, int nn, uint8_t* out) {
     if (idx < 0 || idx >= nn) return;
     const AimlTypeNode& n = ns[idx];
 
@@ -499,7 +558,7 @@ static void dec(const uint8_t* blob, int& pos, int end,
         // and pos+len can signed-overflow, defeating the check → giant aiml_str_alloc /
         // OOB memcpy.  pos<=end holds by construction, so compare against remaining
         // bytes (end-pos, always >=0).
-        if (len > 0 && len <= end - pos) {
+        if (len > 0 && len <= end - pos && dec_budget((size_t)len)) {
             // Refcounted alloc — when aiml_ser_free_decoded later releases
             // this slot, it uses aiml_str_decref; if the user has aliased
             // the pointer to a local variable (incref'd), the string survives.
@@ -538,9 +597,13 @@ static void dec(const uint8_t* blob, int& pos, int end,
     case AIML_TD_LIST: {
         int32_t count = r_i32(blob, pos, end);
         int esz = n.elem_size;
-        if (count < 0 || count > 65536) {
-            fprintf(stderr, "[ser-ERROR] absurd LIST count=%d idx=%d off=%d esz=%d pos=%d end=%d — aborting decode\n",
-                    count, idx, n.offset, esz, pos - 4, end);
+        // Every element occupies >= 1 wire byte → a count above the remaining bytes is a lie (AP1:
+        // a small frame must not drive a huge allocation).
+        if (count < 0 || count > 65536 || count > end - pos
+            || !dec_budget((size_t)(count > 0 ? count : 4) * (size_t)(esz > 0 ? esz : 1))) {
+            if (count < 0 || count > 65536)
+                fprintf(stderr, "[ser-ERROR] absurd LIST count=%d idx=%d off=%d esz=%d pos=%d end=%d — aborting decode\n",
+                        count, idx, n.offset, esz, pos - 4, end);
             g_dec_error = true;
             pos = end;  // skip remaining blob data; subsequent fields all read as 0
             count = 0;
@@ -565,7 +628,7 @@ static void dec(const uint8_t* blob, int& pos, int end,
     case AIML_TD_MAP: {
         // Dense format: read count, then decode each key+value into slots 0..count-1.
         int32_t count = r_i32(blob, pos, end);
-        if (count < 0 || count > 65536) {
+        if (count < 0 || count > 65536 || count > end - pos) {
             fprintf(stderr, "[ser-ERROR] absurd MAP count=%d idx=%d off=%d pos=%d end=%d — aborting decode\n",
                     count, idx, n.offset, pos - 4, end);
             g_dec_error = true;
@@ -577,6 +640,7 @@ static void dec(const uint8_t* blob, int& pos, int end,
         int cap       = count > 0 ? count : 4;
         int ksz       = key_stride(n.param1, ns, nn);
         int vsz       = n.elem_size;
+        if (!dec_budget((size_t)cap * (size_t)(1 + (ksz > 0 ? ksz : 1) + (vsz > 0 ? vsz : 1)))) { count = 0; cap = 4; pos = end; }
         map->size     = count;
         map->capacity = cap;
         map->occupied = (int8_t*)calloc((size_t)cap, 1);
@@ -602,7 +666,8 @@ static void dec(const uint8_t* blob, int& pos, int end,
         // Validate BEFORE allocating (P0.2): non-negative size, and the payload must
         // fit in the remaining bytes.  Overflow-safe: compare via division instead of
         // computing sz*esz (which can overflow) or pos+bytes (signed overflow).
-        if (sz < 0 || (sz > 0 && (size_t)sz > (size_t)(end - pos) / (size_t)esz)) {
+        if (sz < 0 || (sz > 0 && (size_t)sz > (size_t)(end - pos) / (size_t)esz)
+            || !dec_budget((size_t)(sz > 0 ? sz : 4) * (size_t)esz)) {
             g_dec_error = true;
             b->size = 0; b->capacity = 4;
             b->data = calloc((size_t)b->capacity, (size_t)esz);
@@ -642,7 +707,8 @@ static void dec(const uint8_t* blob, int& pos, int end,
         void* obj = nullptr;
         if (marker != 0) {
             size_t inner_sz = (size_t)(n.elem_size > 0 ? n.elem_size : (int32_t)sizeof(void*));
-            obj = (n.kind == AIML_TD_MODEL) ? aiml_model_alloc(inner_sz) : calloc(1, inner_sz);
+            if (dec_budget(inner_sz))
+                obj = (n.kind == AIML_TD_MODEL) ? aiml_model_alloc(inner_sz) : calloc(1, inner_sz);
             if (obj) {
                 dec(blob, pos, end, n.param1, ns, nn, (uint8_t*)obj);
             }
@@ -1067,18 +1133,18 @@ extern "C" char* aiml_ser_encode(const void*         obj,
     payload.reserve(256);
     enc(payload, 0, nodes, n_nodes, (const uint8_t*)obj);
     int32_t data_len = (int32_t)payload.size();
-    if (g_ser_guard && !g_ser_noguard) {
+    if (g_ser_rpc || (g_ser_guard && !g_ser_noguard)) {
         // Guarded (KV) blob: prepend [MAGIC(4)][schema_fp(4)] to the payload.  The
         // outer [len(4)][payload] envelope is unchanged (len includes the 8-byte
         // header) → storage/WAL layer unaffected; only guarded decode inspects it.
         int32_t total = data_len + 8;
-        uint32_t fp = aiml_ser_schema_fp(nodes, n_nodes);
+        uint32_t fp = g_ser_rpc ? aiml_ser_rpc_fp(nodes, n_nodes) : aiml_ser_schema_fp(nodes, n_nodes);
         char* blob = (char*)malloc((size_t)total + 4);
         blob[0] = (char)( total        & 0xFF);
         blob[1] = (char)((total >>  8) & 0xFF);
         blob[2] = (char)((total >> 16) & 0xFF);
         blob[3] = (char)((total >> 24) & 0xFF);
-        memcpy(blob + 4, &AIML_SER_MAGIC, 4);   // [MAGIC]
+        memcpy(blob + 4, g_ser_rpc ? &AIML_RPC_MAGIC : &AIML_SER_MAGIC, 4);   // [MAGIC]
         memcpy(blob + 8, &fp,             4);   // [schema_fp]
         if (data_len > 0) memcpy(blob + 12, payload.data(), (size_t)data_len);
         return blob;
@@ -1401,6 +1467,102 @@ extern "C" void aiml_clone_deep(void*               dst,
     g_clone_ctx = prev;
 }
 
+// spec/44_5: 1 = payload is of this model type (or an untagged legacy blob), 0 = foreign type.
+extern "C" int aiml_ser_rpc_blob_matches(const char* blob, const AimlTypeNode* nodes, int32_t n_nodes) {
+    if (!blob || !nodes || n_nodes <= 0) return 0;
+    const uint8_t* b = (const uint8_t*)blob;
+    int32_t data_len = (int32_t)((uint32_t)b[0] | ((uint32_t)b[1] << 8)
+                               | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24));
+    if (data_len < 8) return 1;
+    uint32_t m = (uint32_t)b[4] | ((uint32_t)b[5] << 8) | ((uint32_t)b[6] << 16) | ((uint32_t)b[7] << 24);
+    if (m != AIML_RPC_MAGIC) return 1;
+    uint32_t f = (uint32_t)b[8] | ((uint32_t)b[9] << 8) | ((uint32_t)b[10] << 16) | ((uint32_t)b[11] << 24);
+    return f == aiml_ser_rpc_fp(nodes, n_nodes) ? 1 : 0;
+}
+
+// spec/44_5 (AP1): size-aware decode for UNTRUSTED blobs (network).  The 4-byte prefix must equal
+// blob_size-4, every byte must be consumed, nesting/allocation are bounded.  An RPC-tagged blob must
+// carry this model's structural fingerprint (-2 otherwise).  `out` must be zero-initialised.
+extern "C" int aiml_ser_decode_sized(const char* blob, size_t blob_size, void* out,
+                                     const AimlTypeNode* nodes, int32_t n_nodes) {
+    if (!blob || !out || !nodes || n_nodes <= 0 || blob_size < 4) return -1;
+    const uint8_t* b = (const uint8_t*)blob;
+    uint32_t data_len = (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+    if (data_len == 0 || data_len != blob_size - 4 || data_len > (uint32_t)INT32_MAX) return -1;
+    size_t start = 4, dlen = data_len;
+    if (data_len >= 8) {
+        uint32_t m = (uint32_t)b[4] | ((uint32_t)b[5] << 8) | ((uint32_t)b[6] << 16) | ((uint32_t)b[7] << 24);
+        if (m == AIML_RPC_MAGIC) {
+            uint32_t f = (uint32_t)b[8] | ((uint32_t)b[9] << 8) | ((uint32_t)b[10] << 16) | ((uint32_t)b[11] << 24);
+            if (f != aiml_ser_rpc_fp(nodes, n_nodes)) return -2;
+            start = 12; dlen = data_len - 8;
+        }
+    }
+    g_dec_error = false;
+    size_t saved_budget = g_dec_budget;
+    int saved_nest = g_dec_nest;
+    g_dec_budget = kDecRpcBudget;
+    g_dec_nest = 0;
+    int pos = 0;
+    dec(b + start, pos, (int)dlen, 0, nodes, n_nodes, (uint8_t*)out);
+    g_dec_budget = saved_budget;
+    g_dec_nest = saved_nest;
+    if (g_dec_error || pos != (int)dlen) return -1;
+    return 0;
+}
+
+// Bounded best-effort decode for object replication (DELTA): same hard bounds as decode_sized
+// (received length, nesting, allocation budget) but a schema mismatch still applies what decoded —
+// the replication contract between peers with different model versions (spec/44_5 §10).
+extern "C" int aiml_ser_decode_bounded(const char* blob, size_t blob_size, void* out,
+                                       const AimlTypeNode* nodes, int32_t n_nodes) {
+    if (!blob || !out || !nodes || n_nodes <= 0 || blob_size < 4) return -1;
+    const uint8_t* b = (const uint8_t*)blob;
+    uint32_t data_len = (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+    if (data_len != blob_size - 4 || data_len > (uint32_t)INT32_MAX) return -1;
+    g_dec_error = false;
+    size_t saved_budget = g_dec_budget;
+    int saved_nest = g_dec_nest;
+    g_dec_budget = kDecRpcBudget;
+    g_dec_nest = 0;
+    int pos = 0;
+    dec(b + 4, pos, (int)data_len, 0, nodes, n_nodes, (uint8_t*)out);
+    g_dec_budget = saved_budget;
+    g_dec_nest = saved_nest;
+    return g_dec_error ? -1 : 0;
+}
+
+// Transactional variant (AP1): decode into a zeroed temporary; on error free its partial heap and
+// leave `out` untouched; on success release out's previous heap (release_old) and move the result
+// in.  out_size = the target struct's size (compiler metadata).  release_old = 0 for a target whose
+// current content was never decoded by us (a fresh mirror replica).
+extern "C" int aiml_ser_decode_sized_tx(const char* blob, size_t blob_size, void* out, size_t out_size,
+                                        const AimlTypeNode* nodes, int32_t n_nodes, int release_old) {
+    if (!out || out_size == 0) return -1;
+    void* tmp = calloc(1, out_size);
+    if (!tmp) return -1;
+    int rc = aiml_ser_decode_sized(blob, blob_size, tmp, nodes, n_nodes);
+    if (rc != 0) {
+        aiml_ser_free_decoded(tmp, nodes, n_nodes);
+        free(tmp);
+        return rc;
+    }
+    if (release_old) aiml_ser_free_decoded(out, nodes, n_nodes);
+    memcpy(out, tmp, out_size);
+    free(tmp);
+    return 0;
+}
+
+// Size-aware type check (AP1): 1 = blob is a well-formed RPC blob of this type (or untagged legacy).
+extern "C" int aiml_ser_rpc_blob_matches_sized(const char* blob, size_t blob_size,
+                                               const AimlTypeNode* nodes, int32_t n_nodes) {
+    if (!blob || blob_size < 4) return 0;
+    const uint8_t* b = (const uint8_t*)blob;
+    uint32_t data_len = (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+    if (data_len != blob_size - 4) return 0;
+    return aiml_ser_rpc_blob_matches(blob, nodes, n_nodes);
+}
+
 extern "C" int aiml_ser_decode(const char*         blob,
                                 void*               out,
                                 const AimlTypeNode* nodes,
@@ -1415,6 +1577,18 @@ extern "C" int aiml_ser_decode(const char*         blob,
                                | ((uint32_t)b[3] << 24));
     if (data_len <= 0) return -1;
     int pos = 0;
+    // spec/44_5: typed-RPC payload → structural type check; a foreign type leaves `out` untouched.
+    if (data_len >= 8) {
+        uint32_t rmagic = (uint32_t)b[4] | ((uint32_t)b[5] << 8)
+                        | ((uint32_t)b[6] << 16) | ((uint32_t)b[7] << 24);
+        if (rmagic == AIML_RPC_MAGIC) {
+            uint32_t sfp = (uint32_t)b[8] | ((uint32_t)b[9] << 8)
+                         | ((uint32_t)b[10] << 16) | ((uint32_t)b[11] << 24);
+            if (sfp != aiml_ser_rpc_fp(nodes, n_nodes)) return -2;
+            dec(b + 12, pos, data_len - 8, 0, nodes, n_nodes, (uint8_t*)out);
+            return g_dec_error ? -1 : 0;
+        }
+    }
     // Format guard: a GUARDED blob starts (after the len prefix) with
     // [MAGIC(4)][schema_fp(4)].  Verify the fingerprint so stale data written by
     // an incompatible struct layout is refused with a clear diagnostic instead of

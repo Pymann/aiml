@@ -1,0 +1,17 @@
+# EXPECT-ERROR: is not a method of this class
+# spec/44_5 §7.1: every rpc: entry must be a method of the class.
+- class:
+    name: Door
+    rpc: [open_wide]
+    members:
+      - [opened, i32, 0]
+    methods:
+      - def:
+          name: open_door
+          body:
+            - set: [<.opened, 1]
+- def:
+    name: main
+    return: i32
+    body:
+      - return: 0

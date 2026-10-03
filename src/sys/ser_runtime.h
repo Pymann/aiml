@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <cstddef>
 
 #ifdef __cplusplus
 extern "C" {
@@ -87,6 +88,19 @@ typedef struct {
                        // Primitives / RAWBYTES: 0 (size implied by kind or param1)
     int32_t _pad;      // padding — must be 0
 } AimlTypeNode;
+
+int  aiml_ser_set_rpc(int on);   // spec/44_5: typed-RPC header on encode (save/restore)
+int  aiml_ser_rpc_blob_matches(const char* blob, const AimlTypeNode* nodes, int32_t n_nodes);
+// spec/44_5 (AP1) size-aware decode for untrusted blobs (exact length, bounded nesting/allocation).
+int  aiml_ser_decode_sized(const char* blob, size_t blob_size, void* out,
+                           const AimlTypeNode* nodes, int32_t n_nodes);
+int  aiml_ser_decode_sized_tx(const char* blob, size_t blob_size, void* out, size_t out_size,
+                              const AimlTypeNode* nodes, int32_t n_nodes, int release_old);
+int  aiml_ser_decode_bounded(const char* blob, size_t blob_size, void* out,
+                             const AimlTypeNode* nodes, int32_t n_nodes);
+int  aiml_ser_rpc_blob_matches_sized(const char* blob, size_t blob_size,
+                                     const AimlTypeNode* nodes, int32_t n_nodes);
+
 
 // ── Encode ────────────────────────────────────────────────────────────────────
 //

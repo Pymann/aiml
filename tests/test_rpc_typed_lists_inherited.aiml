@@ -91,7 +91,7 @@
                               - set: [fuel0.label, "FireSource"]
                               - set: [fuel0.color, "red"]
                               - call: [resp.fuels.push, fuel0]
-                              - call: [sess.send_rpc, rpc.peer_id, "set_result", 0, resp]
+                              - call: [sess.reply_rpc, rpc, "set_result", 0, resp]
                               - set: [running, 0]
             - call: [time.sleep_ms, 20]
             - set: [tries, { +: [tries, 1] }]
