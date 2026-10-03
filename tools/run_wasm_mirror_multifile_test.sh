@@ -34,17 +34,9 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# 1. Start native server.
-echo "[1/4] starting native server (multi-file)..."
-"$AIML_BIN" "$SERVER_AIML" >"$SERVER_LOG" 2>&1 &
-SERVER_PID=$!
-sleep 0.6
-
-if ! grep -q "listening on ws" "$SERVER_LOG"; then sleep 0.5; fi
-
 # 2. Compile the client (its `- import:` is resolved internally by aiml,
 #    generating one .ll per imported file as a side effect).
-echo "[2/4] compiling client (imports resolved internally)..."
+echo "[1/4] compiling client (imports resolved internally)..."
 CLIENT_LL="$BUILD_DIR/client.ll"
 JS="$BUILD_DIR/client.js"
 
@@ -52,9 +44,9 @@ JS="$BUILD_DIR/client.js"
 
 # Find any sibling .ll files emitted alongside (one per import).
 SIBLINGS=$(find "$BUILD_DIR" -name "*.ll" ! -name "client.ll" 2>/dev/null)
-echo "[2.5/4] sibling .ll from imports: $(echo $SIBLINGS | wc -w) files"
+echo "[1.5/4] sibling .ll from imports: $(echo $SIBLINGS | wc -w) files"
 
-echo "[3/4] linking with emcc..."
+echo "[2/4] linking with emcc..."
 "$EMCC" "$CLIENT_LL" $SIBLINGS -o "$JS" \
     -Lout/aiml_wasm/aiml_wasm -laiml_wasm \
     -lwebsocket.js \
@@ -63,8 +55,12 @@ echo "[3/4] linking with emcc..."
     >>"$CLIENT_LOG" 2>&1 || {
         echo "ERROR: emcc link failed. Tail of $CLIENT_LOG:"; tail -30 "$CLIENT_LOG"; exit 1; }
 
-# 4. Run.
-echo "[4/4] running WASM client..."
+# 4. Start the native server only now (it lives for a fixed time), then run the client.
+echo "[4/4] starting native server (multi-file) + running WASM client..."
+"$AIML_BIN" "$SERVER_AIML" >"$SERVER_LOG" 2>&1 &
+SERVER_PID=$!
+sleep 0.6
+if ! grep -q "listening on ws" "$SERVER_LOG"; then sleep 0.5; fi
 "$NODE" "$JS" 2>&1 | tee -a "$CLIENT_LOG"
 CLIENT_EXIT=${PIPESTATUS[0]}
 

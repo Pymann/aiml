@@ -159,6 +159,7 @@ struct AimlMirrorPeer {
     std::vector<uint8_t> rx;  size_t rx_off = 0;
     std::vector<uint8_t> tx;  size_t tx_off = 0;
     int32_t rpc_version = 0;   /* from the peer's HELLO: 0 = none/v2, 3 = RPC v3 */
+    std::deque<std::vector<uint8_t>> held_deltas;   /* AIML_MIRROR_TEST_HOLD_DELTA */
     bool    dead        = false;   /* invalid frame / overload / send error → disconnect */
     const char* dead_reason = nullptr;
 };
@@ -171,13 +172,15 @@ struct AimlMirrorRegistered {
     bool     is_owner = false;
     float    sync_rate   = 0.0f;   /* Hz; 0 = every update */
     bool     manual_sync = false;
-    /* Typed serialization (heap-field structs) */
+    /* Typed serialization (spec/44_5 §10 DELTA format 2) */
     const AimlTypeNode* ser_nodes   = nullptr;
     int32_t             ser_n       = 0;
-    bool                has_decoded = false;  /* true after first aiml_ser_decode */
-    /* Typed delta received before register_id_typed: stash raw blob here */
+    uint64_t            snapshot_revision = 0;  /* remote snapshots applied successfully */
+    int32_t             last_decode_error = 0;  /* 0 ok, -1 decode, -2 schema/format */
+    /* DELTA received before register_id: kept with its format, applied at binding time */
     uint8_t*            pending_blob     = nullptr;
     int32_t             pending_blob_len = 0;
+    uint8_t             pending_format   = 0;
     /* Typed dirty tracking: last serialized blob (detects deep heap mutations) */
     uint8_t*            shadow_blob      = nullptr;
     int32_t             shadow_blob_len  = 0;
@@ -448,11 +451,13 @@ static PktParse mirror_packet_length(AimlMirrorSession* s, const uint8_t* d, siz
     size_t t = 0;
     switch (d[4]) {
     case PKT_DELTA:
-        if (d[5] == 1) {
+        if (d[5] == 2) {
             if (avail < 10) return more;
             uint32_t dl = read_u32_le(d + 6);
-            if (dl > kMaxRpcFrame) return PKT_INVALID;
+            if (dl < 8 || dl > kMaxRpcFrame) return PKT_INVALID;
             t = 10 + (size_t)dl;
+        } else if (d[5] != 0) {
+            return PKT_INVALID;   /* incl. the untagged former format 1 */
         } else if (framed) {
             t = avail;   /* raw struct bytes: the message is the packet */
         } else {
@@ -515,60 +520,119 @@ static void send_unregister_pkt(AimlMirrorSession* s, int32_t net_id, AimlMirror
     broadcast_pkt(s, pkt, 6, exclude);
 }
 
-/* Send a delta packet to a single peer (typed or untyped).
- * Does NOT update the shadow. */
-static void send_delta_to_peer(AimlMirrorPeer* peer, AimlMirrorRegistered* reg) {
-    if (!peer || !reg || !reg->obj_ptr) return;
-    if (reg->ser_nodes) {
-        /* Typed: encode struct → blob, reserved byte = 1 */
-        char* blob = aiml_ser_encode(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
-        if (!blob) return;
-        int32_t data_len;
-        memcpy(&data_len, blob, 4);
-        uint32_t total_blob = 4 + (uint32_t)data_len;
-        std::vector<uint8_t> pkt(6 + total_blob);
-        write_u32_le(pkt.data(), (uint32_t)reg->net_id);
-        pkt[4] = PKT_DELTA; pkt[5] = 1;  /* reserved=1: typed/serialized */
-        memcpy(pkt.data() + 6, blob, total_blob);
-        free(blob);
-        mirror_send(peer, pkt.data(), pkt.size());
-    } else {
-        /* Untyped: raw struct bytes, reserved byte = 0 — ONE packet (spec/44_5 §10) */
-        std::vector<uint8_t> pkt(6 + (size_t)reg->obj_size);
-        write_u32_le(pkt.data(), (uint32_t)reg->net_id);
-        pkt[4] = PKT_DELTA; pkt[5] = 0;
-        memcpy(pkt.data() + 6, reg->obj_ptr, (size_t)reg->obj_size);
-        mirror_send(peer, pkt.data(), pkt.size());
+/* spec/44_5 §10 test hook (optional, production code): while the file named by
+ * AIML_MIRROR_TEST_HOLD_DELTA does not exist, outgoing DELTAs are held per peer, in order. */
+static bool delta_hold_active() {
+    static const char* path = getenv("AIML_MIRROR_TEST_HOLD_DELTA");
+    return path && *path && access(path, F_OK) != 0;
+}
+
+static void flush_held_deltas(AimlMirrorPeer* peer) {
+    while (!peer->held_deltas.empty()) {
+        mirror_send(peer, peer->held_deltas.front().data(), peer->held_deltas.front().size());
+        peer->held_deltas.pop_front();
     }
 }
 
-static void send_delta_pkt(AimlMirrorSession* s, AimlMirrorRegistered* reg, AimlMirrorPeer* exclude) {
-    if (!reg || !reg->obj_ptr) return;
+static void send_delta_bytes(AimlMirrorPeer* peer, const std::vector<uint8_t>& pkt) {
+    if (!peer || peer->dead) return;
+    if (delta_hold_active()) { peer->held_deltas.push_back(pkt); return; }
+    flush_held_deltas(peer);
+    mirror_send(peer, pkt.data(), pkt.size());
+}
+
+/* Encode a typed registration as a DELTA format 2 blob ([len][magic][fp][fields]); the caller
+ * owns the returned blob.  nullptr if encoding fails or the blob exceeds the frame limit. */
+static char* encode_delta_blob(AimlMirrorRegistered* reg, size_t* blob_len) {
+    char* blob = aiml_ser_encode_wire(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
+    if (!blob) return nullptr;
+    size_t len = (size_t)read_u32_le((const uint8_t*)blob) + 4;
+    if (len < 12 || len - 4 > kMaxRpcFrame) {
+        fprintf(stderr, "[mirror] DELTA net_id=%d too large (%zu bytes), not sent\n", reg->net_id, len);
+        free(blob);
+        return nullptr;
+    }
+    *blob_len = len;
+    return blob;
+}
+
+static std::vector<uint8_t> make_delta_packet(int32_t net_id, uint8_t format, const void* body, size_t len) {
+    std::vector<uint8_t> pkt(6 + len);
+    write_u32_le(pkt.data(), (uint32_t)net_id);
+    pkt[4] = PKT_DELTA; pkt[5] = format;
+    if (len) memcpy(pkt.data() + 6, body, len);
+    return pkt;
+}
+
+/* The current DELTA of a registration: format 2 for typed, raw format 0 for the legacy C API.
+ * `blob_out` (typed only) receives the encoded blob for dirty tracking; else it is freed. */
+static bool build_delta(AimlMirrorRegistered* reg, std::vector<uint8_t>& pkt, char** blob_out, size_t* blob_len) {
+    if (!reg || !reg->obj_ptr) return false;
     if (reg->ser_nodes) {
-        char* blob = aiml_ser_encode(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
-        if (!blob) return;
-        int32_t data_len;
-        memcpy(&data_len, blob, 4);
-        uint32_t total_blob = 4 + (uint32_t)data_len;
-        std::vector<uint8_t> pkt(6 + total_blob);
-        write_u32_le(pkt.data(), (uint32_t)reg->net_id);
-        pkt[4] = PKT_DELTA; pkt[5] = 1;
-        memcpy(pkt.data() + 6, blob, total_blob);
-        broadcast_pkt(s, pkt.data(), pkt.size(), exclude);
-        /* update shadow_blob for typed dirty tracking */
+        size_t len = 0;
+        char* blob = encode_delta_blob(reg, &len);
+        if (!blob) return false;
+        pkt = make_delta_packet(reg->net_id, 2, blob, len);
+        if (blob_out) { *blob_out = blob; *blob_len = len; } else free(blob);
+        return true;
+    }
+    pkt = make_delta_packet(reg->net_id, 0, reg->obj_ptr, (size_t)reg->obj_size);
+    return true;
+}
+
+static void remember_sent(AimlMirrorRegistered* reg, char* blob, size_t len) {
+    if (blob) {
         free(reg->shadow_blob);
         reg->shadow_blob = (uint8_t*)blob;
-        reg->shadow_blob_len = (int32_t)total_blob;
-    } else {
-        size_t total = 6 + (size_t)reg->obj_size;
-        std::vector<uint8_t> pkt(total);
-        write_u32_le(pkt.data(), (uint32_t)reg->net_id);
-        pkt[4] = PKT_DELTA; pkt[5] = 0;
-        memcpy(pkt.data() + 6, reg->obj_ptr, (size_t)reg->obj_size);
-        broadcast_pkt(s, pkt.data(), total, exclude);
+        reg->shadow_blob_len = (int32_t)len;
     }
-    /* update shadow (raw pointer-value copy for dirty detection) */
     memcpy(reg->shadow, reg->obj_ptr, (size_t)reg->obj_size);
+}
+
+/* Send the current state to a single peer.  Does NOT update the shadow. */
+static void send_delta_to_peer(AimlMirrorPeer* peer, AimlMirrorRegistered* reg) {
+    if (!peer) return;
+    std::vector<uint8_t> pkt;
+    if (build_delta(reg, pkt, nullptr, nullptr)) send_delta_bytes(peer, pkt);
+}
+
+static void send_delta_pkt(AimlMirrorSession* s, AimlMirrorRegistered* reg, AimlMirrorPeer* exclude) {
+    std::vector<uint8_t> pkt;
+    char* blob = nullptr; size_t len = 0;
+    if (!build_delta(reg, pkt, &blob, &len)) return;
+    for (auto* peer : s->peers) if (peer != exclude) send_delta_bytes(peer, pkt);
+    remember_sent(reg, blob, len);
+}
+
+/* spec/44_5 §10: complete, bounded, transactional apply; the replica changes only on success. */
+static int apply_typed_delta(AimlMirrorRegistered* reg, const uint8_t* blob, size_t len) {
+    if (!reg->obj_ptr || reg->obj_size <= 0 || !reg->ser_nodes || reg->ser_n <= 0)
+        return reg->last_decode_error = -1;
+    if (reg->snapshot_revision == UINT64_MAX) return reg->last_decode_error = -1;
+    int rc = aiml_ser_decode_delta_tx((const char*)blob, len, reg->obj_ptr, (size_t)reg->obj_size,
+                                      reg->ser_nodes, reg->ser_n);
+    reg->last_decode_error = rc;
+    if (rc != 0) return rc;
+    ++reg->snapshot_revision;
+    if (reg->shadow) memcpy(reg->shadow, reg->obj_ptr, (size_t)reg->obj_size);
+    return 0;
+}
+
+/* Remove a registration from every lookup and free what the session allocated for it.  The
+ * object and its fields belong to the AIML caller (spec/44_5 §4: the session borrows). */
+static void erase_registration(AimlMirrorSession* s, AimlMirrorRegistered* reg) {
+    if (!reg) return;
+    if (reg->obj_ptr) {
+        rpc_obj_forget(reg->obj_ptr, s);
+        auto it = s->by_ptr.find(reg->obj_ptr);
+        if (it != s->by_ptr.end() && it->second == reg) s->by_ptr.erase(it);
+    }
+    auto nit = s->by_net_id.find(reg->net_id);
+    if (nit != s->by_net_id.end() && nit->second == reg) s->by_net_id.erase(nit);
+    free(reg->shadow);
+    free(reg->shadow_blob);
+    free(reg->pending_blob);
+    delete reg;
 }
 
 /* ── Packet processing ────────────────────────────────────────────────────── */
@@ -582,68 +646,56 @@ static void process_packet(AimlMirrorSession* s, AimlMirrorPeer* from_peer,
 
     if (type == PKT_DELTA) {
         uint8_t reserved = data[5];
+        bool accepted = false;   /* spec/44_5 §10: the host forwards only what it accepted or cannot judge */
         auto it = s->by_net_id.find(net_id);
         if (it != s->by_net_id.end()) {
             AimlMirrorRegistered* reg = it->second;
             if (!reg->is_owner && reg->obj_ptr) {
-                if (reg->ser_nodes && reserved == 1) {
-                    /* Typed: decode blob (data+6 = blob with 4-byte length prefix) */
-                    /* spec/44_5 §10: bounded best-effort decode (replication between model versions) */
-                    if (reg->has_decoded) {
-                        aiml_ser_free_decoded(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
-                        /* decode expects zeroed slots; a partial decode must not leave freed pointers */
-                        memset(reg->obj_ptr, 0, (size_t)reg->obj_size);
+                if (reg->ser_nodes) {
+                    if (reserved != 2) {
+                        reg->last_decode_error = -2;   /* raw bytes never reach a typed object */
+                    } else if (apply_typed_delta(reg, data + 6, (size_t)(data_len - 6)) == 0) {
+                        accepted = true;
                     }
-                    int dec_rc = aiml_ser_decode_bounded((const char*)(data + 6), (size_t)(data_len - 6),
-                                                         reg->obj_ptr, reg->ser_nodes, reg->ser_n);
-                    reg->has_decoded = true;
-                    if (dec_rc == 0) {
-                        reg->has_decoded = true;
-                        AIML_DBG("recv_delta net_id=%d typed=1 len=%d ok", net_id, data_len - 6);
-                    } else {
-                        fprintf(stderr, "[mirror-ERROR] ser_decode failed (schema mismatch?) — discarding packet\n");
-                    }
-                } else {
-                    /* Untyped: raw memcpy */
+                    if (!accepted)
+                        fprintf(stderr, "[mirror] DELTA rejected net_id=%d rc=%d\n", net_id, reg->last_decode_error);
+                } else if (reserved == 0) {
+                    /* legacy C API raw object */
                     int payload_len = data_len - 6;
                     int copy_len = (reg->obj_size > 0 && payload_len > 0)
                         ? (payload_len < (int)reg->obj_size ? payload_len : (int)reg->obj_size)
                         : 0;
                     if (copy_len > 0) memcpy(reg->obj_ptr, data + 6, (size_t)copy_len);
-                    AIML_DBG("recv_delta net_id=%d typed=0 len=%d", net_id, copy_len);
-                }
-                if (reg->shadow && (reserved != 1 || reg->has_decoded)) {
-                    memcpy(reg->shadow, reg->obj_ptr, (size_t)reg->obj_size);
-                }
-            } else if (!reg->is_owner && !reg->obj_ptr && reg->shadow) {
-                /* register_id not yet called */
-                if (reserved == 1) {
-                    /* Typed delta: stash raw blob for decode once register_id_typed sets ser_nodes */
-                    int blob_len = data_len - 6;
-                    AIML_DBG("recv_delta net_id=%d typed=1 len=%d — PENDING (register_id not yet called)", net_id, blob_len);
-                    if (blob_len > 0) {
-                        free(reg->pending_blob);
-                        reg->pending_blob = (uint8_t*)malloc((size_t)blob_len);
-                        if (reg->pending_blob) {
-                            memcpy(reg->pending_blob, data + 6, (size_t)blob_len);
-                            reg->pending_blob_len = blob_len;
-                        }
-                    }
+                    if (reg->shadow) memcpy(reg->shadow, reg->obj_ptr, (size_t)reg->obj_size);
+                    accepted = true;
                 } else {
-                    /* Untyped delta: cache raw struct bytes in shadow */
-                    int payload_len = data_len - 6;
-                    int copy_len = (reg->obj_size > 0 && payload_len > 0)
-                        ? (payload_len < (int)reg->obj_size ? payload_len : (int)reg->obj_size)
-                        : 0;
+                    reg->last_decode_error = -2;
+                }
+            } else if (!reg->is_owner && !reg->obj_ptr) {
+                /* register_id not yet called: keep the latest DELTA with its format */
+                int blob_len = data_len - 6;
+                if (blob_len > 0) {
+                    uint8_t* copy = (uint8_t*)malloc((size_t)blob_len);
+                    if (copy) {
+                        memcpy(copy, data + 6, (size_t)blob_len);
+                        free(reg->pending_blob);
+                        reg->pending_blob = copy;
+                        reg->pending_blob_len = blob_len;
+                        reg->pending_format = reserved;
+                    }
+                }
+                if (reserved == 0 && reg->shadow) {
+                    /* raw cache for a later untyped register_id */
+                    int copy_len = (reg->obj_size > 0 && blob_len > 0)
+                        ? (blob_len < (int)reg->obj_size ? blob_len : (int)reg->obj_size) : 0;
                     if (copy_len > 0) memcpy(reg->shadow, data + 6, (size_t)copy_len);
                 }
+                accepted = true;   /* placeholder: the bound receivers validate */
             }
+        } else {
+            accepted = true;       /* unknown here: forward, receivers validate */
         }
-        /* If host: forward delta to all other peers */
-        if (s->is_host) {
-            size_t total = (size_t)data_len;
-            broadcast_pkt(s, data, total, from_peer);
-        }
+        if (s->is_host && accepted) broadcast_pkt(s, data, (size_t)data_len, from_peer);
     }
     else if (type == PKT_REGISTER) {
         if (data_len < 14) return;
@@ -675,15 +727,7 @@ static void process_packet(AimlMirrorSession* s, AimlMirrorPeer* from_peer,
         auto it = s->by_net_id.find(net_id);
         if (it != s->by_net_id.end()) {
             AimlMirrorRegistered* reg = it->second;
-            if (!reg->is_owner) {
-                if (reg->ser_nodes && reg->has_decoded && reg->obj_ptr)
-                    aiml_ser_free_decoded(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
-                free(reg->shadow);
-                free(reg->shadow_blob);
-                free(reg->pending_blob);
-                delete reg;
-                s->by_net_id.erase(it);
-            }
+            if (!reg->is_owner) erase_registration(s, reg);
         }
         auto* ev = new AimlMirrorEvent();
         ev->type    = "object_unregistered";
@@ -838,12 +882,15 @@ static void mirror_recv_from_peers(AimlMirrorSession* s) {
         if (peer->transport.type == MT_TCP) {
             /* Non-blocking: read what is there, keep partial packets for the next update. */
             tcp_flush(peer);
-            uint8_t chunk[65536];
             bool closed = false;
             for (int iter = 0; iter < 64 && !peer->dead; ++iter) {
-                ssize_t n = recv(peer->transport.tcp_fd, chunk, sizeof(chunk), 0);
+                /* read straight into the receive buffer — a 64 KiB stack chunk overflows the
+                 * 64 KiB WASM stack */
+                const size_t kChunk = 65536, have = peer->rx.size();
+                peer->rx.resize(have + kChunk);
+                ssize_t n = recv(peer->transport.tcp_fd, peer->rx.data() + have, kChunk, 0);
+                peer->rx.resize(have + (n > 0 ? (size_t)n : 0));
                 if (n > 0) {
-                    peer->rx.insert(peer->rx.end(), chunk, chunk + n);
                     tcp_consume(s, peer);
                     continue;
                 }
@@ -1073,15 +1120,8 @@ void aiml_mirror_session_close(void* session) {
         else if (s->listener.ws_ptr)
             aiml_ws_close(s->listener.ws_ptr);
     }
-    /* Free registered objects */
-    for (auto& [id, reg] : s->by_net_id) {
-        if (reg->obj_ptr) rpc_obj_forget(reg->obj_ptr, s);
-        if (!reg->is_owner && reg->ser_nodes && reg->has_decoded && reg->obj_ptr)
-            aiml_ser_free_decoded(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
-        free(reg->shadow);
-        free(reg->shadow_blob);
-        delete reg;
-    }
+    /* Drop all registrations (the objects themselves stay with their owners) */
+    while (!s->by_net_id.empty()) erase_registration(s, s->by_net_id.begin()->second);
     /* Free the last events still borrowed by AIML (not yet freed by a later poll). */
     aiml_free_rpc_event(s->last_consumed_rpc);      s->last_consumed_rpc   = nullptr;
     aiml_free_mirror_event(s->last_consumed_event); s->last_consumed_event = nullptr;
@@ -1121,27 +1161,20 @@ void aiml_mirror_session_update(void* session) {
         if (!reg->is_owner || reg->obj_ptr == nullptr || reg->obj_size == 0) continue;
         if (reg->manual_sync) continue;
         if (reg->ser_nodes) {
-            /* Typed: compare serialized blobs — detects deep heap mutations
-             * (e.g. list element field changes where the list pointer is stable) */
-            char* blob = aiml_ser_encode(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
+            /* Typed: compare exactly the blob that is sent — detects deep heap mutations */
+            size_t total = 0;
+            char* blob = encode_delta_blob(reg, &total);
             if (!blob) continue;
-            int32_t dl; memcpy(&dl, blob, 4);
-            int32_t total = 4 + dl;
-            bool dirty = (total != reg->shadow_blob_len) ||
-                         memcmp(blob, reg->shadow_blob, (size_t)total) != 0;
+            bool dirty = ((int32_t)total != reg->shadow_blob_len) ||
+                         memcmp(blob, reg->shadow_blob, total) != 0;
             if (dirty) {
-                AIML_DBG("  dirty net_id=%d typed=1 blob=%d — sending delta", id, total);
-                std::vector<uint8_t> pkt(6 + (size_t)total);
-                write_u32_le(pkt.data(), (uint32_t)id);
-                pkt[4] = PKT_DELTA; pkt[5] = 1;
-                memcpy(pkt.data() + 6, blob, (size_t)total);
-                broadcast_pkt(s, pkt.data(), pkt.size(), nullptr);
-                free(reg->shadow_blob);
-                reg->shadow_blob = (uint8_t*)blob; blob = nullptr;
-                reg->shadow_blob_len = total;
-                memcpy(reg->shadow, reg->obj_ptr, (size_t)reg->obj_size);
+                AIML_DBG("  dirty net_id=%d typed=1 blob=%d — sending delta", id, (int)total);
+                std::vector<uint8_t> pkt = make_delta_packet(id, 2, blob, total);
+                for (auto* peer : s->peers) send_delta_bytes(peer, pkt);
+                remember_sent(reg, blob, total);
+            } else {
+                free(blob);
             }
-            if (blob) free(blob);
         } else {
             /* Untyped: shallow memcmp on inline struct bytes */
             if (memcmp(reg->obj_ptr, reg->shadow, (size_t)reg->obj_size) != 0) {
@@ -1151,7 +1184,9 @@ void aiml_mirror_session_update(void* session) {
             }
         }
     }
-    /* 4. Flush unsent TCP backlogs (spec/44_5 §10) */
+    /* 4. Release held DELTAs (test hook) and flush unsent TCP backlogs (spec/44_5 §10) */
+    if (!delta_hold_active())
+        for (auto* peer : s->peers) flush_held_deltas(peer);
     for (auto* peer : s->peers) tcp_flush(peer);
 }
 
@@ -1237,25 +1272,23 @@ void aiml_mirror_session_unregister(void* session, void* obj) {
     if (pit == s->by_ptr.end()) return;
 
     AimlMirrorRegistered* reg = pit->second;
-    int32_t nid = reg->net_id;
-    rpc_obj_forget(obj, s);
-
-    send_unregister_pkt(s, nid, nullptr);
-
-    s->by_net_id.erase(nid);
-    s->by_ptr.erase(pit);
-    /* Owners never have has_decoded set (they're only encoded) */
-    free(reg->shadow);
-    free(reg->shadow_blob);
-    delete reg;
+    send_unregister_pkt(s, reg->net_id, nullptr);
+    erase_registration(s, reg);
 }
 
 /* ── Typed registration ───────────────────────────────────────────────────── */
+
+static bool typed_syncable(const AimlTypeNode* nodes, int32_t n_nodes) {
+    if (aiml_ser_wire_syncable(nodes, n_nodes)) return true;
+    fprintf(stderr, "[mirror] register: model has a recursive or resource field and cannot be synchronized\n");
+    return false;
+}
 
 int32_t aiml_mirror_session_register_typed(void* session, void* obj, int64_t obj_size,
                                             const AimlTypeNode* nodes, int32_t n_nodes) {
     auto* s = (AimlMirrorSession*)session;
     if (!s || !obj || obj_size <= 0) return -1;
+    if (!typed_syncable(nodes, n_nodes)) return -1;
     int32_t nid = s->next_net_id++;
     aiml_mirror_session_register_id_typed(session, obj, obj_size, nid, nodes, n_nodes);
     return nid;
@@ -1266,6 +1299,7 @@ void aiml_mirror_session_register_id_typed(void* session, void* obj, int64_t obj
                                             const AimlTypeNode* nodes, int32_t n_nodes) {
     auto* s = (AimlMirrorSession*)session;
     if (!s || !obj || obj_size <= 0) return;
+    if (!typed_syncable(nodes, n_nodes)) return;
 
     /* Ensure next_net_id stays ahead of any explicitly assigned id */
     if (id >= s->next_net_id) s->next_net_id = id + 1;
@@ -1282,18 +1316,21 @@ void aiml_mirror_session_register_id_typed(void* session, void* obj, int64_t obj
              * PKT_REGISTER used server's sizeof — may differ from client's sizeof.
              * memcpy(shadow, obj, obj_size) would overflow a too-small shadow. */
             if (existing->shadow) free(existing->shadow);
-            existing->shadow = (uint8_t*)calloc(1, (size_t)obj_size);
-            /* Decode any typed delta that arrived before register_id_typed was called */
-            if (existing->pending_blob && existing->pending_blob_len > 0) {
-                aiml_ser_decode_bounded((const char*)existing->pending_blob, (size_t)existing->pending_blob_len,
-                                        obj, nodes, n_nodes);
-                existing->has_decoded = true;
-                memcpy(existing->shadow, obj, (size_t)obj_size);
+            existing->shadow = (uint8_t*)malloc((size_t)obj_size);
+            if (existing->shadow) memcpy(existing->shadow, obj, (size_t)obj_size);
+            s->by_ptr[obj] = existing;
+            /* A DELTA that arrived before binding: same rules as a live one (spec/44_5 §10) */
+            if (existing->pending_blob) {
+                int rc = existing->pending_format == 2
+                    ? apply_typed_delta(existing, existing->pending_blob, (size_t)existing->pending_blob_len)
+                    : (existing->last_decode_error = -2);
+                if (rc != 0)
+                    fprintf(stderr, "[mirror] initial DELTA rejected net_id=%d rc=%d\n", id, rc);
                 free(existing->pending_blob);
                 existing->pending_blob     = nullptr;
                 existing->pending_blob_len = 0;
+                existing->pending_format   = 0;
             }
-            s->by_ptr[obj] = existing;
         }
         return;
     }
@@ -1309,12 +1346,9 @@ void aiml_mirror_session_register_id_typed(void* session, void* obj, int64_t obj
     memcpy(reg->shadow, obj, (size_t)obj_size);
     /* Initialize shadow_blob for typed dirty tracking (owner side only) */
     if (reg->is_owner && nodes && n_nodes > 0) {
-        char* blob = aiml_ser_encode(obj, nodes, n_nodes);
-        if (blob) {
-            int32_t dl; memcpy(&dl, blob, 4);
-            reg->shadow_blob_len = 4 + dl;
-            reg->shadow_blob = (uint8_t*)blob;
-        }
+        size_t len = 0;
+        char* blob = encode_delta_blob(reg, &len);
+        if (blob) { reg->shadow_blob = (uint8_t*)blob; reg->shadow_blob_len = (int32_t)len; }
     }
 
     s->by_net_id[id] = reg;
@@ -1328,6 +1362,21 @@ void aiml_mirror_session_register_id_typed(void* session, void* obj, int64_t obj
         send_register_pkt(peer, id, (int32_t)obj_size);
         send_delta_to_peer(peer, reg);
     }
+}
+
+/* spec/44_5 §4 readiness: snapshots applied to a registration / the last snapshot result. */
+uint64_t aiml_mirror_session_snapshot_revision(void* session, int32_t net_id) {
+    auto* s = (AimlMirrorSession*)session;
+    if (!s) return 0;
+    auto it = s->by_net_id.find(net_id);
+    return it == s->by_net_id.end() ? 0 : it->second->snapshot_revision;
+}
+
+int32_t aiml_mirror_session_snapshot_error(void* session, int32_t net_id) {
+    auto* s = (AimlMirrorSession*)session;
+    if (!s) return -3;
+    auto it = s->by_net_id.find(net_id);
+    return it == s->by_net_id.end() ? -3 : it->second->last_decode_error;
 }
 
 /* ── Event queue ──────────────────────────────────────────────────────────── */

@@ -1,42 +1,32 @@
-# Same shared module, but host and client are compiled as separate top-level
-# processes with different import sets. This is the real reproduction shape.
+# Host and client compiled as separate processes whose SharedCard differs (with/without
+# rarity): the view snapshot is rejected in both directions (spec/44_5 §10, DELTA format 2).
+# Expected exit code: 0
 
-- decl: [argv_host, list<string>]
-- call: [argv_host.push, "./out/aiml/aiml"]
-- call: [argv_host.push, "-r"]
-- call: [argv_host.push, "tests/ws_context_host_process.aiml"]
+- def:
+    name: ctx_pair
+    args: [[host_file, string], [client_file, string], [label, string]]
+    body:
+      - decl: [argv_host, list<string>]
+      - call: [argv_host.push, "./out/aiml/aiml"]
+      - call: [argv_host.push, "-r"]
+      - call: [argv_host.push, host_file]
+      - decl: [host, process, { call: [sys.exe, argv_host] }]
+      # Give the host enough time to compile and start listening before the client connects.
+      - call: [time.sleep_ms, 600]
+      - decl: [argv_client, list<string>]
+      - call: [argv_client.push, "./out/aiml/aiml"]
+      - call: [argv_client.push, "-r"]
+      - call: [argv_client.push, client_file]
+      - decl: [client, process, { call: [sys.exe, argv_client] }]
+      - decl: [client_rc, i32, { call: [client.wait] }]
+      - decl: [host_rc, i32, { call: [host.wait] }]
+      - print: ["ctx-main ${label}: client_rc=${client_rc} host_rc=${host_rc}"]
+      - if:
+          condition: { '||': [{ neq: [client_rc, 0] }, { neq: [host_rc, 0] }] }
+          then:
+            - print: ["FAIL ctx-main ${label}"]
+            - call: [sys.exit, 1]
 
-- decl: [host, process]
-- set: [host, { call: [sys.exe, argv_host] }]
-# Give the host enough time to compile and start listening before the client connects.
-- call: [time.sleep_ms, 600]
-
-- decl: [argv_client, list<string>]
-- call: [argv_client.push, "./out/aiml/aiml"]
-- call: [argv_client.push, "-r"]
-- call: [argv_client.push, "tests/ws_context_client_process.aiml"]
-
-- decl: [client, process]
-- set: [client, { call: [sys.exe, argv_client] }]
-
-- decl: [client_rc, i32]
-- set: [client_rc, { call: [client.wait] }]
-
-- decl: [host_rc, i32]
-- set: [host_rc, { call: [host.wait] }]
-
-- print: ["ctx-main: client_rc=${client_rc} host_rc=${host_rc}"]
-
-- if:
-    condition: { neq: [client_rc, 0] }
-    then:
-      - print: ["FAIL ctx-main: client_rc=${client_rc}"]
-      - call: [sys.exit, 1]
-
-- if:
-    condition: { neq: [host_rc, 0] }
-    then:
-      - print: ["FAIL ctx-main: host_rc=${host_rc}"]
-      - call: [sys.exit, 1]
-
+- call: [ctx_pair, "tests/ws_context_host_process.aiml", "tests/ws_context_client_process.aiml", "A->B"]
+- call: [ctx_pair, "tests/ws_context_host_process_b.aiml", "tests/ws_context_client_process_a.aiml", "B->A"]
 - print: ["WS shared-module context mismatch PASS"]

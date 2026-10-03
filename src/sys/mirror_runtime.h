@@ -55,6 +55,9 @@ int32_t aiml_mirror_session_register_typed   (void* session, void* obj, int64_t 
 void    aiml_mirror_session_register_id_typed(void* session, void* obj, int64_t obj_size,
                                               int32_t id,
                                               const AimlTypeNode* nodes, int32_t n_nodes);
+/* spec/44_5 §4 readiness: successful remote snapshots / last result (0, -1, -2; -3 unknown) */
+uint64_t aiml_mirror_session_snapshot_revision(void* session, int32_t net_id);
+int32_t  aiml_mirror_session_snapshot_error   (void* session, int32_t net_id);
 
 /* ── Event queue ──────────────────────────────────────────────────────────── */
 

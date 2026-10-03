@@ -1,0 +1,38 @@
+# static-check: off
+# Host-side entrypoint compiled with import set B (SharedCard with rarity).
+
+- import: "tests/ws_context_host_top_b.aiml"
+
+- decl: [sess, mirror_session]
+- set: [sess, { call: [mirror.listen, "ws://127.0.0.1:19923"] }]
+
+- decl: [var_v, SharedViewWsCtx]
+- decl: [cards, list<SharedCard>]
+- set: [var_v.cards, cards]
+- set: [var_v.round, 9]
+- set: [var_v.title, "ctx-check"]
+
+- decl: [var_c0, SharedCard]
+- set: [var_c0.name, "Canopy Viper"]
+- set: [var_c0.cost, 3]
+- call: [var_v.cards.push, var_c0]
+- decl: [var_c1, SharedCard]
+- set: [var_c1.name, "Stone Warden"]
+- set: [var_c1.cost, 5]
+- call: [var_v.cards.push, var_c1]
+- set: [var_v.card_count, 2]
+
+- decl: [nid, i32]
+- set: [nid, { call: [sess.register, var_v] }]
+- print: ["ctx-host: registered net_id=${nid}"]
+
+- decl: [var_i, i32, 0]
+- while:
+    condition: { lt: [var_i, 400] }
+    body:
+      - call: [sess.update]
+      - call: [time.sleep_ms, 10]
+      - set: [var_i, { +: [var_i, 1] }]
+
+- call: [sess.close]
+- print: ["ctx-host: done"]

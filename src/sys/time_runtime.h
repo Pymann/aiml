@@ -4,6 +4,7 @@
 extern "C" {
     // time.now() -> milliseconds since epoch
     int64_t time_now_ms();
+    int64_t time_mono_ms();   // monotonic ms (deadlines)
     
     // time.sleep_ms()
     void time_sleep_ms(int32_t ms);

@@ -118,6 +118,15 @@
       - call: [bad6.write, 7, u8]
       - call: [bad6.ws_send, raw6]
 
+      # 7. DELTA with the untagged former format 1 (spec/44_5 §10: invalid frame)
+      - decl: [raw7, ws_handle, { call: [ws.connect, "127.0.0.1", 19996, "/"] }]
+      - decl: [bad7, buffer]
+      - call: [bad7.alloc, 32]
+      - call: [put_hdr, bad7, 1, 1]
+      - call: [bad7.write, 4, i32]
+      - call: [bad7.write, 0, i32]
+      - call: [bad7.ws_send, raw7]
+
       - call: [time.sleep_ms, 400]
 
       # a well-behaved client still gets served
@@ -135,7 +144,8 @@
       - call: [raw4.close]
       - call: [raw5.close]
       - call: [raw6.close]
+      - call: [raw7.close]
       - if: { condition: { neq: [got, 1] }, then: [{ print: ["FAIL valid client not served after malformed frames"] }, { call: [sys.exit, 1] }] }
       - if: { condition: { neq: [g_mf_rpcs, 1] }, then: [{ print: ["FAIL host queued ${g_mf_rpcs} RPCs (malformed frames must queue nothing)"] }, { call: [sys.exit, 1] }] }
-      - if: { condition: { lt: [g_mf_disconnects, 6] }, then: [{ print: ["FAIL only ${g_mf_disconnects} of 6 malformed peers were disconnected"] }, { call: [sys.exit, 1] }] }
+      - if: { condition: { lt: [g_mf_disconnects, 7] }, then: [{ print: ["FAIL only ${g_mf_disconnects} of 7 malformed peers were disconnected"] }, { call: [sys.exit, 1] }] }
       - print: ["mirror rpc malformed PASS"]

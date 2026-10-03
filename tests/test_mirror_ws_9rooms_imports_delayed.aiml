@@ -1,0 +1,30 @@
+# WS9 handshake with a deterministic gap between REGISTER and the first snapshot: the child runs
+# with AIML_MIRROR_TEST_HOLD_DELTA (spec/44_5 §10 test hook) — every DELTA is held until the host
+# creates the release file 150 ms after binding (live apply instead of the pending path).
+# Expected exit code: 0
+
+- decl: [flag, string, "out/ws9_hold_release.flag"]
+- if: { condition: { call: [io.exists, flag] }, then: [{ call: [io.remove, flag] }] }
+
+- decl: [argv_child, list<string>]
+- call: [argv_child.push, "env"]
+- call: [argv_child.push, "AIML_MIRROR_TEST_HOLD_DELTA=${flag}"]
+- call: [argv_child.push, "./out/aiml/aiml"]
+- call: [argv_child.push, "-r"]
+- call: [argv_child.push, "tests/test_mirror_ws_9rooms_imports.aiml"]
+- decl: [child, process, { call: [sys.exe, argv_child] }]
+- decl: [child_rc, i32, { call: [child.wait] }]
+- decl: [released, i32, { call: [io.exists, flag] }]
+- if: { condition: { call: [io.exists, flag] }, then: [{ call: [io.remove, flag] }] }
+
+- if:
+    condition: { neq: [child_rc, 0] }
+    then:
+      - print: ["FAIL ws9-delayed: child rc=${child_rc}"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { eq: [released, 0] }
+    then:
+      - print: ["FAIL ws9-delayed: the host never released the held DELTAs"]
+      - call: [sys.exit, 1]
+- print: ["WS 9rooms imports delayed PASS"]

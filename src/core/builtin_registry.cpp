@@ -209,6 +209,14 @@ static std::string mirrorInnerType(const std::string& t) {
     return t;
 }
 
+// spec/44_5 §4/§10: a registered user type must have a serializer descriptor (no raw fallback).
+static bool mirrorSyncableType(CompilerContext& ctx, const std::string& tn) {
+    auto it = ctx.classes.find(tn);
+    if (tn.empty() || it == ctx.classes.end() || it->second.isBuiltin || it->second.serNodesVar) return true;
+    LOG_ERROR(ctx.fmtLoc() + "mirror_session: '" + tn + "' has no serializer descriptor and cannot be synchronized");
+    return false;
+}
+
 void registerBuiltins(CompilerContext& ctx) {
     // spec/61 §8: builtins that hand back an OWNED string (aiml_str_dup) — the receiving local drops it.
     for (const char* fn : {"text_value"}) {
@@ -1250,6 +1258,11 @@ void registerBuiltins(CompilerContext& ctx) {
 
     time.builtinFuncs["now"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
         llvm::Function* f = ctx.getFunction("time_now_ms", ctx.builder.getInt64Ty(), {});
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f));
+    };
+
+    time.builtinFuncs["mono_ms"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+        llvm::Function* f = ctx.getFunction("time_mono_ms", ctx.builder.getInt64Ty(), {});
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(f));
     };
 
@@ -9944,9 +9957,10 @@ void registerBuiltins(CompilerContext& ctx) {
             if (!_av2) return nullptr; \
             llvm::Value* _v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(_av2)); \
             if (_v->getType()->isPointerTy()) return ctx.builder.CreateBitCast(_v, i8p); \
-            llvm::AllocaInst* _tmp = ctx.createEntryAlloca(_v->getType(), "reg_tmp"); \
-            ctx.builder.CreateStore(_v, _tmp); \
-            return ctx.builder.CreateBitCast(_tmp, i8p); \
+            /* spec/44_5 §4: the session borrows the object — a temporary would be gone */ \
+            LOG_ERROR(ctx.fmtLoc() + "mirror_session needs an addressable object (variable, global, " \
+                      "ptr/ref/shared), not a temporary value"); \
+            return nullptr; \
         }())
 
         {
@@ -9978,6 +9992,27 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.builtinMethods["peer_count"]   = mkI320("aiml_mirror_session_peer_count");
             ci.builtinMethods["has_event"]    = mkI320("aiml_mirror_session_has_event");
 
+            // spec/44_5 §4 readiness: snapshot_revision(net_id) → u64, snapshot_error(net_id) → i32
+            auto mkSnapshot = [i8p, i32](const char* fn, const char* name, llvm::Type* retTy) -> MH {
+                return [fn, name, i8p, i32, retTy](CompilerContext& ctx, llvm::Value* base,
+                    AIML::AST::CallExpr* call, EvalFn evalExpr) -> IRValue* {
+                    if (!call || call->args.size() != 1) {
+                        LOG_ERROR(ctx.fmtLoc() + "mirror_session." + name + " expects one argument: net_id (i32)");
+                        return ctx.ir_gen->wrap(llvm::ConstantInt::get(retTy, 0));
+                    }
+                    llvm::Value* id = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                    if (!id || !id->getType()->isIntegerTy()) {
+                        LOG_ERROR(ctx.fmtLoc() + "mirror_session." + name + ": net_id must be an integer");
+                        return ctx.ir_gen->wrap(llvm::ConstantInt::get(retTy, 0));
+                    }
+                    if (!id->getType()->isIntegerTy(32)) id = ctx.builder.CreateIntCast(id, i32, true);
+                    llvm::Value* s = ctx.builder.CreateLoad(i8p, base, "sess_ptr");
+                    return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction(fn, retTy, {i8p, i32}), {s, id}));
+                };
+            };
+            ci.builtinMethods["snapshot_revision"] = mkSnapshot("aiml_mirror_session_snapshot_revision", "snapshot_revision", i64);
+            ci.builtinMethods["snapshot_error"]    = mkSnapshot("aiml_mirror_session_snapshot_error", "snapshot_error", i32);
+
             // session.peer_ip(peer_id) → string  (dotted IP of a peer, captured at accept)
             ci.builtinMethods["peer_ip"] = [i8p, i32](CompilerContext& ctx, llvm::Value* base,
                 AIML::AST::CallExpr* call, EvalFn evalExpr) -> IRValue* {
@@ -10003,9 +10038,9 @@ void registerBuiltins(CompilerContext& ctx) {
                     objSize = (int64_t)dl.getTypeAllocSize(ctx.classes[tn].type);
                 }
                 // (v2 %M* deref handled in MIRROR_FIND_OBJ_PTR — objPtr is the object.)
-                // Spec 45: typed register for heap-containing structs.
-                if (!tn.empty() && ctx.classes.count(tn)
-                        && ctx.classes[tn].hasHeapFields && ctx.classes[tn].serNodesVar) {
+                // spec/44_5 §10: every serializable model travels as DELTA format 2.
+                if (!mirrorSyncableType(ctx, tn)) return ctx.ir_gen->getInt32(-1);
+                if (!tn.empty() && ctx.classes.count(tn) && ctx.classes[tn].serNodesVar) {
                     auto& ci2 = ctx.classes[tn];
                     llvm::Value* nodesPtr = ci2.serNodesVar;
                     llvm::Value* nNodes   = ctx.builder.getInt32((uint32_t)ci2.serNodesCount);
@@ -10042,9 +10077,9 @@ void registerBuiltins(CompilerContext& ctx) {
                     objSize = (int64_t)dl.getTypeAllocSize(ctx.classes[tn].type);
                 }
                 // (v2 %M* deref handled in MIRROR_FIND_OBJ_PTR — objPtr is the object.)
-                // Spec 45: typed register_id for heap-containing structs.
-                if (!tn.empty() && ctx.classes.count(tn)
-                        && ctx.classes[tn].hasHeapFields && ctx.classes[tn].serNodesVar) {
+                // spec/44_5 §10: every serializable model travels as DELTA format 2.
+                if (!mirrorSyncableType(ctx, tn)) return ctx.ir_gen->wrap(ctx.builder.getInt32(0));
+                if (!tn.empty() && ctx.classes.count(tn) && ctx.classes[tn].serNodesVar) {
                     auto& ci2 = ctx.classes[tn];
                     llvm::Value* nodesPtr = ci2.serNodesVar;
                     llvm::Value* nNodes   = ctx.builder.getInt32((uint32_t)ci2.serNodesCount);

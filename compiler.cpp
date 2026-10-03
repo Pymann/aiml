@@ -1781,6 +1781,7 @@ int AIMLCompiler::jitRun() {
 
     // Runtime Library Symbols
     llvm::sys::DynamicLibrary::AddSymbol("time_now_ms", (void*)(intptr_t)time_now_ms);
+    llvm::sys::DynamicLibrary::AddSymbol("time_mono_ms", (void*)(intptr_t)time_mono_ms);
     llvm::sys::DynamicLibrary::AddSymbol("time_sleep_ms", (void*)(intptr_t)time_sleep_ms);
     llvm::sys::DynamicLibrary::AddSymbol("sys_exe_runtime", (void*)(intptr_t)sys_exe_runtime);
 
@@ -2601,6 +2602,8 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_update",             (void*)(intptr_t)aiml_mirror_session_update);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_is_connected",       (void*)(intptr_t)aiml_mirror_session_is_connected);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_peer_count",         (void*)(intptr_t)aiml_mirror_session_peer_count);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_snapshot_revision",  (void*)(intptr_t)aiml_mirror_session_snapshot_revision);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_snapshot_error",     (void*)(intptr_t)aiml_mirror_session_snapshot_error);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_register",            (void*)(intptr_t)aiml_mirror_session_register);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_register_id",         (void*)(intptr_t)aiml_mirror_session_register_id);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_mirror_session_register_typed",      (void*)(intptr_t)aiml_mirror_session_register_typed);

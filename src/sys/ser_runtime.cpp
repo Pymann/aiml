@@ -1511,31 +1511,10 @@ extern "C" int aiml_ser_decode_sized(const char* blob, size_t blob_size, void* o
     return 0;
 }
 
-// Bounded best-effort decode for object replication (DELTA): same hard bounds as decode_sized
-// (received length, nesting, allocation budget) but a schema mismatch still applies what decoded —
-// the replication contract between peers with different model versions (spec/44_5 §10).
-extern "C" int aiml_ser_decode_bounded(const char* blob, size_t blob_size, void* out,
-                                       const AimlTypeNode* nodes, int32_t n_nodes) {
-    if (!blob || !out || !nodes || n_nodes <= 0 || blob_size < 4) return -1;
-    const uint8_t* b = (const uint8_t*)blob;
-    uint32_t data_len = (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
-    if (data_len != blob_size - 4 || data_len > (uint32_t)INT32_MAX) return -1;
-    g_dec_error = false;
-    size_t saved_budget = g_dec_budget;
-    int saved_nest = g_dec_nest;
-    g_dec_budget = kDecRpcBudget;
-    g_dec_nest = 0;
-    int pos = 0;
-    dec(b + 4, pos, (int)data_len, 0, nodes, n_nodes, (uint8_t*)out);
-    g_dec_budget = saved_budget;
-    g_dec_nest = saved_nest;
-    return g_dec_error ? -1 : 0;
-}
-
 // Transactional variant (AP1): decode into a zeroed temporary; on error free its partial heap and
 // leave `out` untouched; on success release out's previous heap (release_old) and move the result
-// in.  out_size = the target struct's size (compiler metadata).  release_old = 0 for a target whose
-// current content was never decoded by us (a fresh mirror replica).
+// in.  out_size = the target struct's size (compiler metadata).  release_old = 0 only for a target
+// that holds no heap of its own (zeroed); initialised models always use 1.
 extern "C" int aiml_ser_decode_sized_tx(const char* blob, size_t blob_size, void* out, size_t out_size,
                                         const AimlTypeNode* nodes, int32_t n_nodes, int release_old) {
     if (!out || out_size == 0) return -1;
@@ -1551,6 +1530,36 @@ extern "C" int aiml_ser_decode_sized_tx(const char* blob, size_t blob_size, void
     memcpy(out, tmp, out_size);
     free(tmp);
     return 0;
+}
+
+extern "C" char* aiml_ser_encode_wire(const void* obj, const AimlTypeNode* nodes, int32_t n_nodes) {
+    struct RestoreMode {
+        int previous = aiml_ser_set_rpc(1);
+        ~RestoreMode() { aiml_ser_set_rpc(previous); }
+    } restore;
+    return aiml_ser_encode(obj, nodes, n_nodes);
+}
+
+static uint32_t wire_u32(const uint8_t* p) {
+    return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
+}
+
+extern "C" int aiml_ser_decode_delta_tx(const char* blob, size_t len, void* out, size_t out_size,
+                                        const AimlTypeNode* nodes, int32_t n_nodes) {
+    if (!blob || !out || !nodes || n_nodes <= 0 || out_size == 0 || len < 12) return -1;
+    const uint8_t* b = (const uint8_t*)blob;
+    if ((size_t)wire_u32(b) != len - 4) return -1;
+    // the general decoder accepts untagged legacy blobs — a DELTA must carry the envelope
+    if (wire_u32(b + 4) != AIML_RPC_MAGIC) return -2;
+    if (wire_u32(b + 8) != aiml_ser_rpc_fp(nodes, n_nodes)) return -2;
+    return aiml_ser_decode_sized_tx(blob, len, out, out_size, nodes, n_nodes, 1);
+}
+
+extern "C" int aiml_ser_wire_syncable(const AimlTypeNode* nodes, int32_t n_nodes) {
+    if (!nodes || n_nodes <= 0) return 0;
+    for (int32_t i = 0; i < n_nodes; i++)
+        if (nodes[i].kind >= AIML_TD_PTR_REF) return 0;
+    return 1;
 }
 
 // Size-aware type check (AP1): 1 = blob is a well-formed RPC blob of this type (or untagged legacy).

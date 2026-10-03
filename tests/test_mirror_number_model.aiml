@@ -1,0 +1,107 @@
+# spec/44_5 §10: a plain-number model also travels as DELTA format 2 (serializer descriptor on both
+# sides).  Initial snapshot applies; an unchanged owner sends nothing more (revision stays); a
+# change sends exactly the new state.
+#
+# Expected exit code: 0
+
+- model:
+    name: NumState
+    fields:
+      - [xpos, i32, 0]
+      - [speed, f32, 0.0]
+      - [ticks, i64, 0]
+
+- decl: [g_ns_phase, i32, 0]
+
+- def:
+    name: ns_fail
+    args: [[msg, string]]
+    body:
+      - print: ["FAIL ${msg}"]
+      - call: [sys.exit, 1]
+
+- def:
+    name: ns_host
+    body:
+      - decl: [sess, mirror_session, { call: [mirror.listen, "ws://127.0.0.1:19986"] }]
+      - decl: [state, NumState]
+      - set: [state.xpos, 11]
+      - set: [state.speed, 2.5]
+      - set: [state.ticks, 5000000000]
+      - call: [sess.register, state]
+      - decl: [deadline, i64, { +: [{ call: [time.mono_ms] }, 10000] }]
+      - while:
+          condition: { lt: [g_ns_phase, 9] }
+          body:
+            - call: [sess.update]
+            - if:
+                condition: { eq: [g_ns_phase, 1] }
+                then:
+                  - set: [state.xpos, 42]
+                  - set: [g_ns_phase, 2]
+            - if: { condition: { gt: [{ call: [time.mono_ms] }, deadline] }, then: [{ call: [ns_fail, "host timeout in phase ${g_ns_phase}"] }] }
+            - call: [time.sleep_ms, 2]
+      - call: [sess.close]
+
+- def:
+    name: ns_pump
+    args: [[cli, mirror_session], [millis, i32]]
+    body:
+      - decl: [until, i64, { +: [{ call: [time.mono_ms] }, millis] }]
+      - while:
+          condition: { lt: [{ call: [time.mono_ms] }, until] }
+          body:
+            - call: [cli.update]
+            - call: [time.sleep_ms, 2]
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    body:
+      - decl: [host_th, thread_handle, { spawn: [ns_host] }]
+      - call: [time.sleep_ms, 150]
+      - decl: [cli, mirror_session, { call: [mirror.connect_timeout, "ws://127.0.0.1:19986", 3000] }]
+      - decl: [nid, i32, -1]
+      - decl: [deadline, i64, { +: [{ call: [time.mono_ms] }, 4000] }]
+      - while:
+          condition: { lt: [nid, 0] }
+          body:
+            - call: [cli.update]
+            - decl: [evt, mirror_event, { call: [cli.poll_event] }]
+            - if: { condition: { eq: [evt.type, "object_registered"] }, then: [{ set: [nid, evt.net_id] }] }
+            - if: { condition: { gt: [{ call: [time.mono_ms] }, deadline] }, then: [{ call: [ns_fail, "no REGISTER"] }] }
+            - call: [time.sleep_ms, 2]
+      - decl: [replica, NumState]
+      - call: [cli.register_id, replica, nid]
+      - set: [deadline, { +: [{ call: [time.mono_ms] }, 4000] }]
+      - while:
+          condition: { eq: [{ call: [cli.snapshot_revision, nid] }, 0] }
+          body:
+            - call: [cli.update]
+            - if: { condition: { neq: [{ call: [cli.snapshot_error, nid] }, 0] }, then: [{ call: [ns_fail, "snapshot error ${ { call: [cli.snapshot_error, nid] } }"] }] }
+            - if: { condition: { gt: [{ call: [time.mono_ms] }, deadline] }, then: [{ call: [ns_fail, "no initial snapshot"] }] }
+            - call: [time.sleep_ms, 2]
+      - if: { condition: { '||': [{ neq: [replica.xpos, 11] }, { '||': [{ neq: [replica.speed, 2.5] }, { neq: [replica.ticks, 5000000000] }] }] }, then: [{ call: [ns_fail, "initial snapshot xpos=${replica.xpos} speed=${replica.speed} ticks=${replica.ticks}"] }] }
+
+      # unchanged owner: no further DELTA
+      - call: [ns_pump, cli, 300]
+      - if: { condition: { neq: [{ call: [cli.snapshot_revision, nid] }, 1] }, then: [{ call: [ns_fail, "unchanged owner resent: revision=${ { call: [cli.snapshot_revision, nid] } }"] }] }
+
+      # one change → exactly one more snapshot
+      - set: [g_ns_phase, 1]
+      - set: [deadline, { +: [{ call: [time.mono_ms] }, 4000] }]
+      - while:
+          condition: { lt: [{ call: [cli.snapshot_revision, nid] }, 2] }
+          body:
+            - call: [cli.update]
+            - if: { condition: { gt: [{ call: [time.mono_ms] }, deadline] }, then: [{ call: [ns_fail, "change not replicated"] }] }
+            - call: [time.sleep_ms, 2]
+      - call: [ns_pump, cli, 300]
+      - if: { condition: { neq: [{ call: [cli.snapshot_revision, nid] }, 2] }, then: [{ call: [ns_fail, "revision after one change=${ { call: [cli.snapshot_revision, nid] } }"] }] }
+      - if: { condition: { neq: [replica.xpos, 42] }, then: [{ call: [ns_fail, "changed xpos=${replica.xpos}"] }] }
+
+      - set: [g_ns_phase, 9]
+      - call: [host_th.join]
+      - call: [cli.close]
+      - if: { condition: { neq: [replica.xpos, 42] }, then: [{ call: [ns_fail, "replica lost after close"] }] }
+      - print: ["mirror number model PASS"]
