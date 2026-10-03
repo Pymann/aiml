@@ -203,7 +203,7 @@ EM_ASYNC_JS(int, js_art_pick_source, (), {
         if (Module.__artSrc) { try { Module.__artSrc.close(); } catch (e) {} }
         Module.__artSrc = bmp;
         return 1;
-    } catch (e) { return 0; }
+    } catch (e) { console.warn('[art] pick_source failed:', e); return 0; }
 });
 
 // Compute a cover/stretch crop rect of the stashed source at (panx,pany) and draw
@@ -245,7 +245,7 @@ EM_JS(int, js_art_source_draw, (int tex_id, int dw, int dh, int mode, double pan
 EM_ASYNC_JS(int, js_art_encode_source, (char* dst, int cap, int dw, int dh, int mode, double panx, double pany), {
     try {
         const bmp = Module.__artSrc;
-        if (!bmp) return 0;
+        if (!bmp) { console.warn('[art] encode_source: no picked source'); return 0; }
         const iw = bmp.width, ih = bmp.height;
         let cw = iw, ch = ih, sx = 0, sy = 0;
         if (mode !== 1) {
@@ -259,12 +259,17 @@ EM_ASYNC_JS(int, js_art_encode_source, (char* dst, int cap, int dw, int dh, int 
         cv.width = dw; cv.height = dh;
         cv.getContext('2d').drawImage(bmp, sx, sy, cw, ch, 0, 0, dw, dh);
         const outBlob = await new Promise((res) => cv.toBlob(res, 'image/webp', 0.9));
-        if (!outBlob) return 0;
+        if (!outBlob) { console.warn('[art] encode_source: canvas.toBlob(image/webp) returned null'); return 0; }
+        if (outBlob.type !== 'image/webp')
+            console.warn('[art] encode_source: browser produced ' + outBlob.type + ' instead of image/webp');
         const outBuf = new Uint8Array(await outBlob.arrayBuffer());
-        if (outBuf.length <= 0 || outBuf.length > cap) return 0;
+        if (outBuf.length <= 0 || outBuf.length > cap) {
+            console.warn('[art] encode_source: ' + outBuf.length + ' bytes, buffer capacity ' + cap);
+            return 0;
+        }
         HEAPU8.set(outBuf, dst);
         return outBuf.length;
-    } catch (e) { return 0; }
+    } catch (e) { console.warn('[art] encode_source failed:', e); return 0; }
 });
 
 extern "C" int32_t aiml_art_pick_source(void) { return js_art_pick_source(); }

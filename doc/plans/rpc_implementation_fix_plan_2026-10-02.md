@@ -373,3 +373,148 @@ Empfangs-Dispatch und Autorisierung gehören zusammen.
 - `rpc:` und alle dokumentierten Targets wirken bei normalen Methodenaufrufen.
 - `spec/44_5_mirror.md`, Runtime-Header und Compiler-Builtins stimmen überein;
   v2/v3-Migration und Grenzen sind explizit dokumentiert.
+
+## 11. Entscheidung vom 2026-10-03: DELTA, Replika-Anfangszustand und WS9-Test
+
+Status: verbindliche Präzisierung des Plans; die nachstehenden Runtime-/Test-
+Korrekturen sind damit noch nicht implementiert. Die Implementierung ist seit
+Erstellung dieses Plans weiterentwickelt worden; dieser Abschnitt bezieht sich
+auf den am 2026-10-03 geprüften Stand.
+
+### 11.1 Auch DELTA wird strikt und transaktional
+
+**Entscheidung: keine implizite Best-effort-Ausnahme für DELTA.** Empfangene
+Snapshots werden vollständig validiert und entweder vollständig übernommen oder
+vollständig verworfen. Bei einem Fehler bleiben der letzte gültige Zustand bzw.
+der gültige lokale Default-Zustand unverändert. Schemaabweichungen müssen sichtbar
+werden; ein Verbindungsabbruch ist bei einem Schemafehler nicht zwingend, ein
+Erfolgs-/Ready-Signal ist jedoch verboten.
+
+Begründung anhand der tatsächlichen Fixtures:
+
+- `tests/ws_context_card_a.aiml`: `SharedCard = {name:string, cost:i32}`.
+- `tests/ws_context_card_b.aiml`: zusätzlich `rarity:i32`.
+- `tests/ws_context_shared_view.aiml`: enthält `list<SharedCard>`.
+- `test_mirror_ws_shared_module_context_mismatch` prüft also wirklich verschiedene
+  verschachtelte Schemata, nicht lediglich verschiedene lokale Compiler-Typ-IDs.
+  Er verwendet nur ein Kartenelement und prüft die bereits gelesenen Präfixfelder.
+
+Das positionsbasierte Wireformat enthält keine Feld-IDs oder Längengrenze pro
+Struct-Element. Schon bei zwei Karten kann der Empfänger das fehlende `rarity`
+aus den Bytes des nächsten Elements lesen. Ein begrenzter Bufferzugriff macht
+solche Daten weder kompatibel noch semantisch richtig. Der bestehende grüne Test
+ist deshalb keine Grundlage für einen Versionskompatibilitätsvertrag.
+
+**Konkrete Umsetzung:**
+
+1. `src/sys/mirror_runtime.cpp`, `process_packet`, DELTA-Zweig um Zeile 590:
+   `aiml_ser_decode_bounded` und vorheriges Free/Memset durch transaktionales
+   Decodieren ersetzen. `has_decoded`, Shadow und eventuelle Ready-Meldung nur
+   nach erfolgreichem Commit aktualisieren.
+2. `aiml_mirror_session_register_id_typed`, Pending-Blob-Zweig um Zeile 1287:
+   denselben zentralen Apply-Helper verwenden. Rückgabewert prüfen, Fehler nicht
+   als erfolgreichen Anfangssnapshot markieren. Pending-Blob in jedem Fall
+   geordnet freigeben, Fehler diagnostizieren.
+3. Auch die Schemaidentität prüfen: bloßes vollständiges Konsumieren der Bytes
+   erkennt z.B. gleich große, unterschiedlich interpretierte Felder nicht.
+   Für DELTA einen strukturellen Wire-Schema-Fingerprint übertragen/abgleichen,
+   der unabhängig von nativen Offsets, Pointerbreite und lokalen Registry-IDs
+   ist. Gleiche Wire-Schemata aus verschiedenen Importkontexten müssen passen.
+   DELTA-Formatänderung ausdrücklich versionieren bzw. aushandeln; vorhandene
+   ungetaggte Frames niemals fälschlich als schemaverifiziert bezeichnen.
+4. Den bisherigen Mismatch-Erfolgstest in einen negativen Test überführen:
+   unterschiedliches Schema wird abgelehnt, Default-/Vorherzustand bleibt
+   unverändert, und ein beobachtbares Decode-/Schemafehler-Ergebnis entsteht.
+   Beide Richtungen und mindestens zwei verschachtelte Listenelemente prüfen.
+5. Separaten positiven Importkontext-Test mit identischem Wire-Schema, aber
+   unterschiedlichen Importsets/Compiler-Kontexten erhalten.
+
+Soll später Schema-Evolution unterstützt werden, braucht sie ein separates,
+versioniertes Format mit eindeutigen Feldgrenzen/IDs oder explizite Migrationen.
+Dabei bleibt das Decodieren strikt: erst Quellschema validieren, dann definiert
+migrieren. Ein stilles Best-effort-Fallback wird nicht eingeführt.
+
+### 11.2 Ungültiger Replika-Anfangszustand bleibt ein eigener Fehler
+
+**Entscheidung: gültige lokale Initialisierung ist Voraussetzung der Replikation;
+`release_old = 0` und Fehler-Toleranz sind keine dauerhafte Reparatur.**
+
+Gesicherte Befunde im aktuellen Runtime-Code:
+
+- `process_packet` setzt `has_decoded = true`, auch wenn der Decoder scheitert.
+- `register_id_typed` ignoriert beim Pending-Blob den Decode-Rückgabewert.
+- Beim ersten Decode wird direkt in ein bereits vorhandenes Modell geschrieben;
+  der bisherige Default-/Heap-Inhalt hat keinen einheitlichen Ersetzungsvertrag.
+- `session.close` und `PKT_UNREGISTER` geben teilweise Modellfelder frei,
+  während Compiler-Scope-Cleanup ebenfalls Ownership besitzt. Diese Zuständigkeit
+  muss vor einer pauschalen Änderung zu `release_old = 1` geklärt werden.
+
+Die konkrete Ursache des gemeldeten ungültigen Zustands vor dem ersten Decode
+ist durch diese Analyse noch nicht isoliert. Nicht als behoben deklarieren.
+
+**Umsetzung und Abnahme:**
+
+1. Minimalreproduktion ohne Netzwerk: dasselbe Replika-Modell deklarieren,
+   String-/Listen-/Map-Defaults lesen, serialisieren und verlassen. Lokal,
+   importiert-global und bei aktivierter Refcount-Repräsentation testen.
+2. C++-Anker: `Compiler::initClassContainerMembers` in
+   `src/core/ast_compiler.cpp:131`, globale Initialisierung in derselben Datei;
+   `src/core/ast_compiler_stmt.cpp` um Zeile 1711 und ScopeDrop-Registrierung;
+   `builtin_registry.cpp`, `MIRROR_FIND_OBJ_PTR` und `register_id`.
+   Initialisierung, richtige Objektadresse und erzeugte Serializer-Deskriptoren
+   gegeneinander prüfen. Keine pauschale Nullinitialisierung lebender Container.
+3. Ziel-Ownership festlegen: Mirror registriert ein vom AIML-Aufrufer besessenes
+   Objekt als Borrow. Erfolgreiches Apply ersetzt dessen Felder korrekt; Close
+   und Unregister lösen die Registrierung und Runtime-Buffer, zerstören aber
+   nicht heimlich das weiterhin lebende AIML-Modell. Den Compiler-Scope-Drop
+   und den bestehenden Runtime-Free-Pfad darauf abstimmen.
+4. Bereitschaft getrennt von gültiger Initialisierung behandeln:
+   `WaitingForSnapshot` ist ein gültiges lokales Objekt; `Ready` bedeutet einen
+   erfolgreich übernommenen Snapshot. Ein fehlerhafter Snapshot darf weder
+   Bereitschaft noch erfolgreiche Decode-Historie erzeugen.
+5. Regressionen für DELTA vor/nach `register_id`, erstes DELTA ungültig, gültig →
+   ungültig → gültig, Close vor dem ersten DELTA und Modellzugriff nach Close.
+   ASan/UBSan plus Leak-/Double-Free-Prüfung; bestehende Defaults müssen bei
+   abgewiesenem Snapshot erhalten bleiben.
+
+### 11.3 Timing-Abhängigkeit im WS9-Test entfernen
+
+Prüfung am 2026-10-03: `test_mirror_ws_9rooms_imports.aiml` mit dem vorhandenen
+Binary 16-mal seriell ausgeführt, 16/16 erfolgreich. Logs liegen lokal unter
+`/tmp/aiml-ws9-review/run-*.log`. Das reproduziert weder die berichtete Fehlerrate
+noch widerlegt es die Race-Stelle.
+
+**Konkrete Race-Stelle:** Im Host-Zweig des Tests werden nach
+`object_registered` lediglich 16 ms gewartet und zweimal `sess.update` aufgerufen.
+Danach setzt der Test `got_ci = 1` und kopiert `player_name` in den View.
+REGISTER bestätigt jedoch weder den Empfang noch das erfolgreiche Anwenden des
+folgenden DELTA. Kommt dieses später, wird der View mit dem alten Namen gefüllt
+und anschließend nicht mehr berichtigt.
+
+**Entscheidung: Zustands-/Acknowledgement-Synchronisierung statt längerer Sleeps.**
+
+1. Nach REGISTER nur die Replika binden. In der Update-Schleife bis zur Deadline
+   auf erfolgreich angewandtes ClientInfo warten; im konkreten Test zusätzlich
+   `player_name == "Nikolai"`, `deckset_id == "deckset-alpha"` und
+   `player_id == "token-123"` prüfen. Erst dann View füllen und `got_ci` setzen.
+2. Generisch ist ein Ready-/Snapshot-Zähler aus einem erfolgreichen Apply besser
+   als ein Feldwert als Signal. Ein leerer Name kann im echten Programm legitim
+   sein; die oben genannten Werte sind ausschließlich Test-Prädikate.
+3. Host bis zur Client-Bestätigung des vollständig geprüften View weiterpumpen.
+   Client bestätigt über explizites RPC; Host validiert seine eigenen
+   ClientInfo-Felder vor der Bestätigung. Die derzeitigen 40 festen
+   Abschluss-Updates ersetzen keine Empfangsbestätigung.
+4. Keine unsynchronisierten Reads von Host-Globals durch den Client-Thread.
+   Host prüft Serverfelder selbst; dessen Ergebnis nach Thread-Join auswerten
+   bzw. über einen synchronisierten Kanal übertragen. Objekt-Lifetime beim
+   Session-Close darf nicht mit den Assertions konkurrieren.
+5. Timeouts in jeder Phase müssen den tatsächlich wartenden Zustand benennen
+   und als Fehler enden. Sleep dient höchstens der Poll-Taktung, nicht dem
+   Nachweis der Bereitschaft.
+6. Zusätzlich zum Wiederholungslauf DELTA gezielt nach REGISTER verzögern,
+   z.B. über einen Test-Transport/Proxy. Der Test muss auch mit deutlich mehr
+   als 16 ms Verzögerung bestehen. Danach 50–100 serielle Läufe; ein zufällig
+   grüner Lauf allein ist keine Abnahme. Fester Port verlangt isolierte Ausführung.
+
+Konkrete C++-Änderungen, API-Signaturen und Code-Snippets zu Abschnitt 11:
+[DELTA-/Replika-/WS9-Implementierungsplan](delta_replica_ws9_implementation_plan_2026-10-03.md).
