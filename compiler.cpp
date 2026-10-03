@@ -953,6 +953,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                 auto subProg = subBuilder.takeProgram();
                 if (subProg) {
                     AIML::AST::Compiler subCompiler(ctx);
+                    subCompiler.synthesizeRpcMethods(subProg.get());
                     subCompiler.registerTypes(subProg.get());
                     // spec/58 §11: synthesize any classgroup DEFINED in this
                     // imported file so its container + subclass TYPES are visible
@@ -1076,6 +1077,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
 
             // A unit sees exactly its own transitive import closure (spec/21 §2.1):
             // imported types/signatures arrive through its own import directives.
+            astCompiler.synthesizeRpcMethods(programAST.get());
             astCompiler.registerTypes(programAST.get());
 
             for (const auto& decl : programAST->declarations) {
@@ -1267,6 +1269,7 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source) {
             }
 
             AIML::AST::Compiler astCompiler(ctx);
+            astCompiler.synthesizeRpcMethods(programAST.get());
             astCompiler.registerTypes(programAST.get());
             astCompiler.compile(programAST.get());
         } else {

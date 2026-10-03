@@ -12,7 +12,6 @@
 - model:
     name: NetPlayer
     sync: [health, score]
-    rpc: [cast]
     fields:
       - [health, i32]
       - [score, i32]
@@ -111,7 +110,7 @@
 
       - decl: [var_i, i32, 0]
       - while:
-          condition: { lt: [var_i, 35] }
+          condition: { lt: [var_i, 20] }
           body:
             - call: [sess.update]
             - call: [time.sleep_ms, 10]

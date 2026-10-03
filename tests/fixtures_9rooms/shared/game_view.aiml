@@ -201,9 +201,6 @@
            interaction_mode, interaction_source_iid, interaction_source_zone,
            interaction_owner, interaction_prompt, interaction_target_mask,
            interaction_cancelable]
-    rpc: [draw, play, play_mana, pass_turn, attack, move, trap, equip, unequip, unequip_slot,
-          begin_attack, commit_target, cancel_interaction, pass_reaction, react_spell,
-          use_ability]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Hand accessor — 1-basierter Slot-Index, gibt ptr<HandCardView> oder null

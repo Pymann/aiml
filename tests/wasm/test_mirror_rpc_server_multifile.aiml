@@ -81,7 +81,7 @@
                         - call: [it2.tags.push, "rare"]
                         - call: [reply.items.push, it2]
                         - print: ["server: sending deliver_detail (items=${reply.items.len})"]
-                        - call: [sess.send_rpc, rpc_ev.net_id, "deliver_detail", 0, reply]
+                        - call: [sess.send_rpc, rpc_ev.peer_id, "deliver_detail", 0, reply]
                         - set: [rpc_count, { "+": [rpc_count, 1] }]
       - call: [time.sleep_ms, 10]
       - set: [var_i, { "+": [var_i, 1] }]

@@ -1,4 +1,5 @@
 #define DEBUG_MODE
+#include "serialize_impl.h"
 #include "ast_compiler.h"
 #include "ast_builder.h"
 #include "ownership_analyzer.h"   // spec/61 §4: per-function ownership plan
@@ -1391,6 +1392,14 @@ void Compiler::compile(Program* prog) {
 
     registerBuiltins(ctx);
 
+    // spec/44_5 §7.1: rpc method parameters must be serializable values.
+    for (auto& [cls, entries] : ctx.rpcMethodsByClass)
+        for (auto& e : entries)
+            for (auto& prm : e.params)
+                if (!SerializeImpl::isSerializable(ctx, prm.second))
+                    LOG_ERROR("class '" + cls + "': rpc method '" + e.method + "' parameter '" + prm.first
+                              + "' has non-serializable type '" + prm.second + "' (spec/44_5 §7.1)");
+
     // Function cascades (spec/57): validate pools/rules (M1/M2), then synthesize the
     // pool `render` class (M3).  Runs BEFORE the visitTopLevel loop so `{new: Pool}` /
     // `pool.render(...)` in user code resolve the registered type + forward-declared
@@ -2200,6 +2209,102 @@ static std::unique_ptr<FunctionDecl> parseDefSnippet(const std::string& yamlText
         if (dynamic_cast<FunctionDecl*>(d.get()))
             return std::unique_ptr<FunctionDecl>(static_cast<FunctionDecl*>(d.release()));
     return nullptr;
+}
+
+// spec/44_5 §7.1 — desugar a class's `rpc:` methods (parsed snippets → ordinary AST, ordinary
+// calling conventions):  the user body becomes `<m>_rpc_body`; a same-signature `<m>` asks the
+// runtime whether to route the call (mirror.object_call) and otherwise runs the body locally; a free
+// `rpc_thunk_<C>_<m>(obj, args)` is what the receiver runs (straight into the body, never the
+// wrapper → no re-send); `RpcArgs_<C>_<m>` carries the parameters.  Runs before registerTypes.
+static std::unique_ptr<Node> parseDeclSnippet(const std::string& yamlText) {
+    AIML::AST::Builder b;
+    std::istringstream ss(yamlText);
+    YAML::Parser parser(ss);
+    if (!parser.HandleNextDocument(b)) return nullptr;
+    auto prog = b.takeProgram();
+    if (!prog || prog->declarations.empty()) return nullptr;
+    return std::move(prog->declarations.front());
+}
+
+void Compiler::synthesizeRpcMethods(Program* prog) {
+    if (!prog) return;
+    auto q = [](const std::string& t) { return "\"" + t + "\""; };
+    std::vector<std::unique_ptr<Node>> toAppend;
+    for (auto& d : prog->declarations) {
+        if (auto* md = dynamic_cast<ModelDecl*>(d.get())) {
+            if (!md->rpcMethods.empty())
+                LOG_ERROR(ctx.fmtLoc(md->sourceNode) + "model '" + md->name + "' declares rpc: — models have no "
+                          "methods; declare rpc: on a class (spec/44_5 §7.1)");
+            continue;
+        }
+        auto* cd = dynamic_cast<ClassDecl*>(d.get());
+        if (!cd || cd->rpcMethods.empty()) continue;
+        std::set<std::string> seen;
+        for (const std::string& mname : cd->rpcMethods) {
+            if (!seen.insert(mname).second) continue;
+            FunctionDecl* f = nullptr;
+            for (auto& m : cd->methods) if (m && m->name == mname) { f = m.get(); break; }
+            if (!f) {
+                LOG_ERROR(ctx.fmtLoc(cd->sourceNode) + "class '" + cd->name + "': rpc method '" + mname
+                          + "' is not a method of this class (declare rpc: on the class that defines it, spec/44_5 §7.1)");
+                continue;
+            }
+            if (!f->returnType.empty() && f->returnType != "void") {
+                LOG_ERROR(ctx.fmtLoc(cd->sourceNode) + "class '" + cd->name + "': rpc method '" + mname
+                          + "' returns '" + f->returnType + "' — rpc methods must return void; use "
+                          "send_and_await/reply_rpc for results (spec/44_5 §7.1)");
+                continue;
+            }
+            const std::string body  = mname + "_rpc_body";
+            const std::string model = "RpcArgs_" + cd->name + "_" + mname;
+            const std::string thunk = "rpc_thunk_" + cd->name + "_" + mname;
+
+            // argument model
+            std::string my = "- model:\n    name: " + model + "\n    fields:\n";
+            if (f->args.empty()) my += "      - [rpc_unused, i32, 0]\n";
+            for (auto& a : f->args) my += "      - [" + a.first + ", " + q(a.second) + "]\n";
+            auto modelNode = parseDeclSnippet(my);
+
+            // routing wrapper (same signature; args/argMods copied verbatim afterwards)
+            std::string callArgs;
+            for (auto& a : f->args) callArgs += ", " + a.first;
+            std::string wy = "- def:\n    name: " + mname + "\n    return: void\n"
+                             "    static_off: [\"same_arg\", \"str_cmp\", \"lines\"]\n    body:\n"
+                             "      - decl: [rpcargs, " + model + "]\n";
+            for (auto& a : f->args) wy += "      - set: [rpcargs." + a.first + ", " + a.first + "]\n";
+            wy += "      - if:\n          condition: { eq: [{ call: [mirror.object_call, <, " + q(mname) + ", { '&': [rpcargs] }] }, 0] }\n"
+                  "          then:\n            - call: [<." + body + callArgs + "]\n";
+            auto wrapper = parseDefSnippet(wy);
+
+            // receive thunk: straight into the body
+            std::string ta;
+            for (auto& a : f->args) ta += ", rpcargs." + a.first;
+            std::string ty = "- def:\n    name: " + thunk + "\n    return: void\n"
+                             "    static_off: [\"same_arg\", \"str_cmp\", \"lines\"]\n"
+                             "    args: [[rpcobj, " + q("ref<" + cd->name + ">") + "], [rpcargs, " + q("ref<" + model + ">") + "]]\n"
+                             "    body:\n      - call: [rpcobj." + body + ta + "]\n";
+            auto thunkNode = parseDefSnippet(ty);
+
+            if (!modelNode || !wrapper || !thunkNode) {
+                LOG_ERROR(ctx.fmtLoc(cd->sourceNode) + "class '" + cd->name + "': could not synthesize rpc method '" + mname + "'");
+                continue;
+            }
+            wrapper->args    = f->args;
+            wrapper->argMods = f->argMods;
+            f->name = body;
+            cd->methods.push_back(std::move(wrapper));
+            toAppend.push_back(std::move(modelNode));
+            toAppend.push_back(std::move(thunkNode));
+            auto& entries = ctx.rpcMethodsByClass[cd->name];
+            bool known = false;
+            for (auto& e : entries) if (e.method == mname) known = true;
+            if (!known) entries.push_back({mname, model, thunk, f->args});
+        }
+    }
+    // args models must be registered before the classes that use them
+    for (auto it = toAppend.rbegin(); it != toAppend.rend(); ++it)
+        if (dynamic_cast<ModelDecl*>(it->get())) prog->declarations.insert(prog->declarations.begin(), std::move(*it));
+    for (auto& n : toAppend) if (n) prog->declarations.push_back(std::move(n));
 }
 
 // M3a — synthesize each function-cascade pool's `render(carrier, block) -> taker` as a

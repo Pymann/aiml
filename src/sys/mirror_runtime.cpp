@@ -23,11 +23,16 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
+#include <chrono>
+#include <mutex>
 #include <queue>
+#include <deque>
 #include <algorithm>
 
 /* POSIX */
@@ -150,6 +155,12 @@ struct AimlMirrorPeer {
     AimlMirrorTransport transport;
     int32_t id = 0;
     std::string ip;   /* dotted peer IP, captured at accept (for rate-limit / bans) */
+    /* spec/44_5 §10 TCP framing: per-peer receive buffer + unsent backlog */
+    std::vector<uint8_t> rx;  size_t rx_off = 0;
+    std::vector<uint8_t> tx;  size_t tx_off = 0;
+    int32_t rpc_version = 0;   /* from the peer's HELLO: 0 = none/v2, 3 = RPC v3 */
+    bool    dead        = false;   /* invalid frame / overload / send error → disconnect */
+    const char* dead_reason = nullptr;
 };
 
 struct AimlMirrorRegistered {
@@ -170,6 +181,14 @@ struct AimlMirrorRegistered {
     /* Typed dirty tracking: last serialized blob (detects deep heap mutations) */
     uint8_t*            shadow_blob      = nullptr;
     int32_t             shadow_blob_len  = 0;
+    /* spec/44_5 §7.1 automatic object RPCs: the class's rpc table + per-method target */
+    struct RpcMethod {
+        std::string name;
+        const AimlTypeNode* nodes = nullptr; int32_t n_nodes = 0; int64_t args_size = 0;
+        void (*thunk)(void* obj, void* args) = nullptr;
+        int target = 0;   /* 0 owner, 1 server, 2 all, 3 others */
+    };
+    std::vector<RpcMethod> rpc;
 };
 
 struct AimlMirrorEvent {
@@ -179,30 +198,39 @@ struct AimlMirrorEvent {
     int32_t         peer_id = 0;   /* Unique per-connection peer id (1..N), host-assigned at accept */
 };
 
-/* Layout MUST match the LLVM `rpc_event` struct in builtin_registry.cpp:
-   { i8*, i32, i32, i32, i8*, i32 } — natural alignment.
-   Fields after `arg` are additive (RPC payload v2). */
+/* Layout MUST match the LLVM `rpc_event` struct (CompilerContext::rpcEventType, context.h):
+   { i8*, i32, i32, i32, i8*, i32, i32, i32, i64 } — natural alignment (pinned below). */
 struct AimlRpcEvent {
     const char*    method        = nullptr;  /* heap-allocated, freed on session close */
-    int32_t        net_id        = 0;
+    int32_t        net_id        = 0;        /* object id (object_call) — never a sender identity */
     int32_t        arg           = 0;        /* legacy i32 arg (also valid for arg_kind=0) */
     int32_t        arg_kind      = 0;        /* 0=i32 only, 1=model blob */
     const uint8_t* arg_blob      = nullptr;  /* heap-allocated payload (typed ser blob WITH 4B prefix) */
     int32_t        arg_blob_len  = 0;        /* length of arg_blob in bytes */
     int32_t        peer_id       = 0;        /* Unique per-connection sender id (host-assigned at accept) */
+    int32_t        kind          = 0;        /* spec/44_5: 0 push, 1 request, 2 response, 3 object_call */
+    uint64_t       request_id    = 0;        /* request/response correlation (0 = none) */
 };
+static_assert(offsetof(AimlRpcEvent, peer_id) == (sizeof(void*) == 8 ? 36 : 24), "rpc_event layout");
+static_assert(offsetof(AimlRpcEvent, request_id) == (sizeof(void*) == 8 ? 48 : 32), "rpc_event layout");
+static_assert(sizeof(AimlRpcEvent) == (sizeof(void*) == 8 ? 56 : 40), "rpc_event layout");
 
 struct AimlMirrorSession {
     AimlMirrorTransport  listener;        /* server socket for accept loop */
     bool                 is_host = false;
     int32_t              max_peers = 64;
     int32_t              next_net_id = 1;
+    int32_t              next_peer_id = 1;   /* spec/44_5 §7: peer ids are never reused in a session */
 
     std::vector<AimlMirrorPeer*>                     peers;
     std::unordered_map<int32_t, AimlMirrorRegistered*> by_net_id;
     std::unordered_map<void*,   AimlMirrorRegistered*> by_ptr;
     std::queue<AimlMirrorEvent*>                      event_queue;
-    std::queue<AimlRpcEvent*>                         rpc_queue;
+    std::deque<AimlRpcEvent*>                         rpc_queue;   /* spec/44_5 §7: stable order, take-by-predicate */
+    std::unordered_map<int32_t, size_t>               rpc_q_count; /* queued events per sender peer */
+    std::unordered_map<int32_t, size_t>               rpc_q_bytes; /* queued bytes per sender peer */
+    uint64_t                                          next_request_id = 1;
+    std::unordered_set<uint64_t>                      outstanding; /* request ids awaiting a response */
     /* Last event/rpc handed to AIML via the next/poll accessors.  The returned heap
      * object is borrowed by the caller until its NEXT poll (its method/arg_blob
      * pointers are aliased into the AIML struct and read/decoded before then); we free
@@ -211,9 +239,23 @@ struct AimlMirrorSession {
     AimlMirrorEvent*                                 last_consumed_event = nullptr;
 };
 
+/* spec/44_5 §7.1: object → session for automatic object RPCs (an object routes in ONE session). */
+static std::mutex g_rpc_obj_mu;
+static std::unordered_map<void*, AimlMirrorSession*> g_rpc_obj_session;
+static void rpc_obj_forget(void* obj, AimlMirrorSession* s) {
+    std::lock_guard<std::mutex> lk(g_rpc_obj_mu);
+    auto it = g_rpc_obj_session.find(obj);
+    if (it != g_rpc_obj_session.end() && (!s || it->second == s)) g_rpc_obj_session.erase(it);
+}
+
 /* Free helpers for consumed queue objects (defined after the empty sentinels). */
 static void aiml_free_rpc_event(AimlRpcEvent* ev);
 static void aiml_free_mirror_event(AimlMirrorEvent* ev);
+struct AimlMirrorPeer;
+static bool rpc_enqueue(AimlMirrorSession* s, AimlMirrorPeer* from, AimlRpcEvent* ev);
+static AimlRpcEvent* rpc_take_at(AimlMirrorSession* s, size_t idx);
+struct RpcFields;
+static void rpc_receive_object_call(AimlMirrorSession* s, AimlMirrorPeer* from, int32_t net_id, const RpcFields& f);
 
 /* ── URL parsing ──────────────────────────────────────────────────────────── */
 
@@ -256,27 +298,7 @@ static bool tcp_readable(int fd) {
     return select(fd + 1, &fds, nullptr, nullptr, &tv) == 1;
 }
 
-/* Read exactly `n` bytes from fd; returns n on success, <n on error/eof */
-static ssize_t tcp_recv_all(int fd, void* buf, size_t n) {
-    size_t got = 0;
-    while (got < n) {
-        ssize_t r = recv(fd, (char*)buf + got, n - got, 0);
-        if (r <= 0) return (ssize_t)got;
-        got += (size_t)r;
-    }
-    return (ssize_t)got;
-}
 
-/* Send exactly `n` bytes to fd */
-static ssize_t tcp_send_all(int fd, const void* buf, size_t n) {
-    size_t sent = 0;
-    while (sent < n) {
-        ssize_t s = send(fd, (const char*)buf + sent, n - sent, MSG_NOSIGNAL);
-        if (s <= 0) return (ssize_t)sent;
-        sent += (size_t)s;
-    }
-    return (ssize_t)sent;
-}
 
 /* ── Packet helpers ───────────────────────────────────────────────────────── */
 
@@ -284,6 +306,13 @@ static ssize_t tcp_send_all(int fd, const void* buf, size_t n) {
 #define PKT_RPC        0x02
 #define PKT_REGISTER   0x03
 #define PKT_UNREGISTER 0x04
+#define PKT_RPC_V3     0x05
+#define PKT_HELLO      0x06
+
+#define AIML_RPC_VERSION 3                                /* highest RPC protocol we speak */
+static const size_t kMaxRpcFrame   = (size_t)8 << 20;    /* spec/44_5 §10: max RPC / object payload */
+static const size_t kMaxPacket     = kMaxRpcFrame + 512; /* + headers / method name */
+static const size_t kMaxTxBacklog  = (size_t)64 << 20;   /* unsent bytes per peer before disconnect */
 
 static void write_u32_le(uint8_t* p, uint32_t v) {
     p[0]=(v)&0xFF; p[1]=(v>>8)&0xFF; p[2]=(v>>16)&0xFF; p[3]=(v>>24)&0xFF;
@@ -296,35 +325,169 @@ static int32_t read_i32_le(const uint8_t* p)    { return (int32_t)read_u32_le(p)
 
 /* ── Transport send/recv ──────────────────────────────────────────────────── */
 
+static void mirror_mark_dead(AimlMirrorPeer* peer, const char* why) {
+    if (!peer || peer->dead) return;
+    peer->dead = true;
+    peer->dead_reason = why;
+    fprintf(stderr, "[mirror] peer %d: %s — disconnecting\n", peer->id, why);
+}
+
+/* Flush a TCP peer's unsent backlog (non-blocking; the rest waits for the next update). */
+static void tcp_flush(AimlMirrorPeer* peer) {
+    if (!peer || peer->dead || peer->transport.type != MT_TCP) return;
+    int fd = peer->transport.tcp_fd;
+    while (peer->tx_off < peer->tx.size()) {
+        ssize_t n = send(fd, peer->tx.data() + peer->tx_off, peer->tx.size() - peer->tx_off, MSG_NOSIGNAL);
+        if (n > 0) { peer->tx_off += (size_t)n; continue; }
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+        mirror_mark_dead(peer, "send failed");
+        return;
+    }
+    if (peer->tx_off == peer->tx.size()) { peer->tx.clear(); peer->tx_off = 0; }
+    else if (peer->tx_off > ((size_t)1 << 20)) {
+        peer->tx.erase(peer->tx.begin(), peer->tx.begin() + (long)peer->tx_off);
+        peer->tx_off = 0;
+    }
+}
+
 static void mirror_send(AimlMirrorPeer* peer, const void* buf, size_t len) {
-    if (!peer) return;
+    if (!peer || peer->dead) return;
     if (peer->transport.type == MT_TCP) {
-        tcp_send_all(peer->transport.tcp_fd, buf, len);
+        /* spec/44_5 §10: never lose a short send — queue the rest, flush on the next update */
+        const uint8_t* p = (const uint8_t*)buf;
+        size_t done = 0;
+        if (peer->tx_off == peer->tx.size()) {
+            while (done < len) {
+                ssize_t n = send(peer->transport.tcp_fd, p + done, len - done, MSG_NOSIGNAL);
+                if (n > 0) { done += (size_t)n; continue; }
+                if (n < 0 && errno == EINTR) continue;
+                if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
+                mirror_mark_dead(peer, "send failed");
+                return;
+            }
+        }
+        if (done < len) {
+            if (peer->tx.size() - peer->tx_off + (len - done) > kMaxTxBacklog) {
+                mirror_mark_dead(peer, "send backlog over 64 MiB (slow peer)");
+                return;
+            }
+            peer->tx.insert(peer->tx.end(), p + done, p + len);
+        }
     } else if (peer->transport.ws_ptr) {
         aiml_ws_send_raw(peer->transport.ws_ptr, buf, (int32_t)len);
     }
 }
 
-/* Returns bytes received into `buf` (max `max_len`); 0 = no data yet */
-static int mirror_recv_available(AimlMirrorPeer* peer, void* buf, int max_len) {
-    if (!peer) return 0;
-    if (peer->transport.type == MT_TCP) {
-        int fd = peer->transport.tcp_fd;
-        if (!tcp_readable(fd)) return 0;
-        ssize_t n = recv(fd, buf, (size_t)max_len, 0);
-        return (n > 0) ? (int)n : -1;   /* -1 = disconnected */
-    } else if (peer->transport.ws_ptr) {
-        int ws_fd = aiml_ws_fd(peer->transport.ws_ptr);
-        if (ws_fd < 0 || !tcp_readable(ws_fd)) return 0;
-        int32_t msg_len = 0;
-        void* msg = aiml_ws_recv_raw(peer->transport.ws_ptr, &msg_len);
-        if (!msg || msg_len <= 0) return -1;
-        int copy = (msg_len < max_len) ? msg_len : max_len;
-        memcpy(buf, msg, (size_t)copy);
-        free(msg);
-        return copy;
+
+/* ── Packet parser (spec/44_5 §10) ────────────────────────────────────────── */
+
+enum PktParse { PKT_NEED_MORE, PKT_COMPLETE, PKT_INVALID };
+
+/* Total length of the packet at d (avail bytes).  framed = one WebSocket message carries exactly one
+ * packet: a raw DELTA then spans the whole message, and NEED_MORE means a truncated frame. */
+static PktParse mirror_packet_length(AimlMirrorSession* s, const uint8_t* d, size_t avail,
+                                     bool framed, size_t* total);
+
+struct RpcFields {
+    int      version    = 2;
+    uint8_t  kind       = 0;
+    uint64_t request_id = 0;
+    const char* method  = nullptr;  size_t method_len = 0;
+    uint8_t  arg_kind   = 0;
+    int32_t  arg_i32    = 0;
+    const uint8_t* blob = nullptr;  uint32_t blob_len = 0;
+};
+
+static uint64_t read_u64_le(const uint8_t* p) {
+    return (uint64_t)read_u32_le(p) | ((uint64_t)read_u32_le(p + 4) << 32);
+}
+static void write_u64_le(uint8_t* p, uint64_t v) {
+    write_u32_le(p, (uint32_t)v); write_u32_le(p + 4, (uint32_t)(v >> 32));
+}
+
+/* Validate a complete RPC packet (v2 or v3) of exactly len bytes; fills f on success. */
+static bool mirror_parse_rpc(const uint8_t* d, size_t len, RpcFields& f) {
+    size_t o;
+    if (d[4] == PKT_RPC) {
+        if (len < 7) return false;
+        f.version = 2;
+        f.method_len = d[6];
+        f.method = (const char*)(d + 7);
+        o = 7 + f.method_len;
+    } else {
+        if (len < 30 || d[5] != 3 || read_u32_le(d + 6) != len) return false;
+        f.version = 3;
+        f.kind = d[10];
+        if (f.kind > 3 || d[11] != 0) return false;
+        f.request_id = read_u64_le(d + 12);
+        f.method_len = d[20];
+        f.method = (const char*)(d + 21);
+        o = 21 + f.method_len;
     }
-    return 0;
+    if (f.method_len == 0 || memchr(f.method, 0, f.method_len)) return false;
+    if (len < o || len - o < 9) return false;
+    f.arg_kind = d[o];
+    f.arg_i32  = read_i32_le(d + o + 1);
+    f.blob_len = read_u32_le(d + o + 5);
+    if (f.blob_len != len - o - 9) return false;
+    f.blob = f.blob_len ? d + o + 9 : nullptr;
+    if (f.arg_kind > 1) return false;
+    if (f.arg_kind == 0 && f.blob_len != 0) return false;
+    if (f.arg_kind == 1) {
+        if (f.blob_len < 4 || read_u32_le(f.blob) != f.blob_len - 4) return false;
+        if (f.version == 3 && (f.blob_len < 12 || read_u32_le(f.blob + 4) != 0xA1F5C0DFu)) return false;
+    }
+    return true;
+}
+
+static PktParse mirror_packet_length(AimlMirrorSession* s, const uint8_t* d, size_t avail,
+                                     bool framed, size_t* total) {
+    const PktParse more = framed ? PKT_INVALID : PKT_NEED_MORE;
+    if (avail < 6) return more;
+    size_t t = 0;
+    switch (d[4]) {
+    case PKT_DELTA:
+        if (d[5] == 1) {
+            if (avail < 10) return more;
+            uint32_t dl = read_u32_le(d + 6);
+            if (dl > kMaxRpcFrame) return PKT_INVALID;
+            t = 10 + (size_t)dl;
+        } else if (framed) {
+            t = avail;   /* raw struct bytes: the message is the packet */
+        } else {
+            auto it = s->by_net_id.find(read_i32_le(d));
+            size_t osz = (it != s->by_net_id.end() && it->second->obj_size > 0) ? (size_t)it->second->obj_size : 0;
+            t = 6 + osz;
+        }
+        break;
+    case PKT_REGISTER:   t = 14; break;
+    case PKT_UNREGISTER: t = 6;  break;
+    case PKT_HELLO:      t = 6;  break;
+    case PKT_RPC: {
+        if (avail < 7) return more;
+        size_t o = 7 + (size_t)d[6];
+        if (avail < o + 9) return more;
+        uint32_t bl = read_u32_le(d + o + 5);
+        if (bl > kMaxRpcFrame) return PKT_INVALID;
+        t = o + 9 + (size_t)bl;
+        break;
+    }
+    case PKT_RPC_V3: {
+        if (avail < 10) return more;
+        uint32_t tl = read_u32_le(d + 6);
+        if (tl < 30 || tl > kMaxPacket) return PKT_INVALID;
+        t = tl;
+        break;
+    }
+    default:
+        return PKT_INVALID;
+    }
+    if (t > kMaxPacket) return PKT_INVALID;
+    if (avail < t) return more;
+    if (framed && t != avail) return PKT_INVALID;   /* exactly one packet per message */
+    *total = t;
+    return PKT_COMPLETE;
 }
 
 /* ── Packet send helpers ──────────────────────────────────────────────────── */
@@ -370,12 +533,12 @@ static void send_delta_to_peer(AimlMirrorPeer* peer, AimlMirrorRegistered* reg) 
         free(blob);
         mirror_send(peer, pkt.data(), pkt.size());
     } else {
-        /* Untyped: raw struct bytes, reserved byte = 0 */
-        uint8_t hdr[6];
-        write_u32_le(hdr, (uint32_t)reg->net_id);
-        hdr[4] = PKT_DELTA; hdr[5] = 0;
-        mirror_send(peer, hdr, 6);
-        mirror_send(peer, reg->obj_ptr, (size_t)reg->obj_size);
+        /* Untyped: raw struct bytes, reserved byte = 0 — ONE packet (spec/44_5 §10) */
+        std::vector<uint8_t> pkt(6 + (size_t)reg->obj_size);
+        write_u32_le(pkt.data(), (uint32_t)reg->net_id);
+        pkt[4] = PKT_DELTA; pkt[5] = 0;
+        memcpy(pkt.data() + 6, reg->obj_ptr, (size_t)reg->obj_size);
+        mirror_send(peer, pkt.data(), pkt.size());
     }
 }
 
@@ -410,6 +573,7 @@ static void send_delta_pkt(AimlMirrorSession* s, AimlMirrorRegistered* reg, Aiml
 
 /* ── Packet processing ────────────────────────────────────────────────────── */
 
+/* `data` is ONE complete packet of exactly data_len bytes (mirror_packet_length). */
 static void process_packet(AimlMirrorSession* s, AimlMirrorPeer* from_peer,
                             const uint8_t* data, int data_len) {
     if (data_len < 6) return;
@@ -424,11 +588,15 @@ static void process_packet(AimlMirrorSession* s, AimlMirrorPeer* from_peer,
             if (!reg->is_owner && reg->obj_ptr) {
                 if (reg->ser_nodes && reserved == 1) {
                     /* Typed: decode blob (data+6 = blob with 4-byte length prefix) */
+                    /* spec/44_5 §10: bounded best-effort decode (replication between model versions) */
                     if (reg->has_decoded) {
                         aiml_ser_free_decoded(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
+                        /* decode expects zeroed slots; a partial decode must not leave freed pointers */
+                        memset(reg->obj_ptr, 0, (size_t)reg->obj_size);
                     }
-                    int dec_rc = aiml_ser_decode((const char*)(data + 6), reg->obj_ptr,
-                                                 reg->ser_nodes, reg->ser_n);
+                    int dec_rc = aiml_ser_decode_bounded((const char*)(data + 6), (size_t)(data_len - 6),
+                                                         reg->obj_ptr, reg->ser_nodes, reg->ser_n);
+                    reg->has_decoded = true;
                     if (dec_rc == 0) {
                         reg->has_decoded = true;
                         AIML_DBG("recv_delta net_id=%d typed=1 len=%d ok", net_id, data_len - 6);
@@ -481,6 +649,10 @@ static void process_packet(AimlMirrorSession* s, AimlMirrorPeer* from_peer,
         if (data_len < 14) return;
         int32_t new_net_id  = read_i32_le(data + 6);
         int32_t new_obj_size = read_i32_le(data + 10);
+        if (new_obj_size <= 0 || (size_t)new_obj_size > kMaxRpcFrame) {
+            mirror_mark_dead(from_peer, "invalid REGISTER object size");
+            return;
+        }
         if (s->by_net_id.find(new_net_id) == s->by_net_id.end()) {
             AimlMirrorRegistered* reg = new AimlMirrorRegistered();
             reg->net_id  = new_net_id;
@@ -521,47 +693,56 @@ static void process_packet(AimlMirrorSession* s, AimlMirrorPeer* from_peer,
         s->event_queue.push(ev);
         if (s->is_host) broadcast_pkt(s, data, (size_t)data_len, from_peer);
     }
-    else if (type == PKT_RPC) {
-        /* RPC payload v2:
-         *   [method_len:u8][method:N][arg_kind:u8][arg_i32:i32le][blob_len:u32le][blob:M]
-         * arg_kind: 0 = legacy i32 only (blob_len must be 0)
-         *           1 = typed model blob (full ser blob WITH 4-byte length prefix) */
-        if (data_len < 6 + 1 + 0 + 1 + 4 + 4) return;
-        uint8_t method_len = data[6];
-        int hdr_off = 7 + (int)method_len;
-        if (data_len < hdr_off + 1 + 4 + 4) return;
-        uint8_t  arg_kind = data[hdr_off];
-        int32_t  arg_i32  = read_i32_le(data + hdr_off + 1);
-        uint32_t blob_len = read_u32_le(data + hdr_off + 1 + 4);
-        if (data_len < hdr_off + 1 + 4 + 4 + (int)blob_len) return;
-
-        char* method = (char*)malloc((size_t)method_len + 1);
-        if (!method) return;
-        memcpy(method, data + 7, method_len);
-        method[method_len] = '\0';
-
-        uint8_t* blob = nullptr;
-        if (blob_len > 0) {
-            blob = (uint8_t*)malloc(blob_len);
-            if (!blob) { free(method); return; }
-            memcpy(blob, data + hdr_off + 1 + 4 + 4, blob_len);
+    else if (type == PKT_HELLO) {
+        /* spec/44_5 §10: the peer announces its highest RPC protocol version */
+        if (from_peer) from_peer->rpc_version = data[5];
+    }
+    else if (type == PKT_RPC || type == PKT_RPC_V3) {
+        RpcFields f;
+        if (!mirror_parse_rpc(data, (size_t)data_len, f)) {
+            mirror_mark_dead(from_peer, "invalid RPC frame");
+            return;
         }
-
+        if (f.version == 3 && f.kind == 3) {   /* spec/44_5 §7.1: object call → dispatch, never queued */
+            rpc_receive_object_call(s, from_peer, net_id, f);
+            return;
+        }
+        char* method = (char*)malloc(f.method_len + 1);
+        if (!method) return;
+        memcpy(method, f.method, f.method_len);
+        method[f.method_len] = '\0';
+        uint8_t* blob = nullptr;
+        if (f.blob_len > 0) {
+            blob = (uint8_t*)malloc(f.blob_len);
+            if (!blob) { free(method); return; }
+            memcpy(blob, f.blob, f.blob_len);
+        }
         auto* ev = new AimlRpcEvent();
         ev->method       = method;
         ev->net_id       = net_id;
-        ev->arg          = arg_i32;
-        ev->arg_kind     = (int32_t)arg_kind;
+        ev->arg          = f.arg_i32;
+        ev->arg_kind     = (int32_t)f.arg_kind;
         ev->arg_blob     = blob;
-        ev->arg_blob_len = (int32_t)blob_len;
+        ev->arg_blob_len = (int32_t)f.blob_len;
         ev->peer_id      = from_peer ? from_peer->id : 0;
-        s->rpc_queue.push(ev);
-        /* Host: forward to other peers (multi-host relay, byte-level passthrough) */
-        if (s->is_host) broadcast_pkt(s, data, (size_t)data_len, from_peer);
+        ev->kind         = (int32_t)f.kind;
+        ev->request_id   = f.request_id;
+        /* spec/44_5 §7: a response must belong to a request we are still waiting for; late,
+         * duplicate or unknown responses are dropped here (pushes are never affected). */
+        if (ev->kind == 2 && ev->request_id != 0 && !s->outstanding.count(ev->request_id)) {
+            aiml_free_rpc_event(ev);
+            return;
+        }
+        rpc_enqueue(s, from_peer, ev);
     }
 }
 
 /* ── Peer accept ──────────────────────────────────────────────────────────── */
+
+static void mirror_send_hello(AimlMirrorPeer* peer) {
+    uint8_t pkt[6] = {0, 0, 0, 0, PKT_HELLO, AIML_RPC_VERSION};
+    mirror_send(peer, pkt, 6);
+}
 
 static void mirror_try_accept(AimlMirrorSession* s) {
     if (!s->is_host) return;
@@ -579,9 +760,10 @@ static void mirror_try_accept(AimlMirrorSession* s) {
         auto* peer = new AimlMirrorPeer();
         peer->transport.type   = MT_TCP;
         peer->transport.tcp_fd = client_fd;
-        peer->id = (int32_t)s->peers.size() + 1;
+        peer->id = s->next_peer_id++;
         peer->ip = inet_ntoa(addr.sin_addr);
         s->peers.push_back(peer);
+        mirror_send_hello(peer);
 
         /* Send all known objects to new peer */
         for (auto& [id, reg] : s->by_net_id) {
@@ -607,9 +789,10 @@ static void mirror_try_accept(AimlMirrorSession* s) {
         auto* peer = new AimlMirrorPeer();
         peer->transport.type   = s->listener.type;
         peer->transport.ws_ptr = ws_client;
-        peer->id = (int32_t)s->peers.size() + 1;
+        peer->id = s->next_peer_id++;
         peer->ip = aiml_ws_peer_ip(ws_client);
         s->peers.push_back(peer);
+        mirror_send_hello(peer);
 
         /* Send all known objects to new peer */
         for (auto& [id, reg] : s->by_net_id) {
@@ -630,74 +813,51 @@ static void mirror_try_accept(AimlMirrorSession* s) {
 
 /* ── Peer receive loop ────────────────────────────────────────────────────── */
 
+/* Consume every complete packet in a TCP peer's receive buffer (spec/44_5 §10). */
+static void tcp_consume(AimlMirrorSession* s, AimlMirrorPeer* peer) {
+    while (!peer->dead) {
+        size_t avail = peer->rx.size() - peer->rx_off;
+        size_t total = 0;
+        PktParse r = mirror_packet_length(s, peer->rx.data() + peer->rx_off, avail, false, &total);
+        if (r == PKT_NEED_MORE) break;
+        if (r == PKT_INVALID) { mirror_mark_dead(peer, "invalid frame"); break; }
+        process_packet(s, peer, peer->rx.data() + peer->rx_off, (int)total);
+        peer->rx_off += total;
+    }
+    if (peer->rx_off == peer->rx.size()) { peer->rx.clear(); peer->rx_off = 0; }
+    else if (peer->rx_off > 0) {
+        peer->rx.erase(peer->rx.begin(), peer->rx.begin() + (long)peer->rx_off);
+        peer->rx_off = 0;
+    }
+}
+
 static void mirror_recv_from_peers(AimlMirrorSession* s) {
     std::vector<AimlMirrorPeer*> disconnected;
     for (auto* peer : s->peers) {
-        /* Read packets in a loop until no more data */
-        for (int iter = 0; iter < 64; ++iter) {
-            /* Read 6-byte header first */
-            uint8_t hdr[6];
-            int fd = (peer->transport.type == MT_TCP) ? peer->transport.tcp_fd : -1;
-
-            if (peer->transport.type == MT_TCP) {
-                if (!tcp_readable(fd)) break;
-                ssize_t n = tcp_recv_all(fd, hdr, 6);
-                if (n < 6) { disconnected.push_back(peer); break; }
-
-                uint8_t pkt_type = hdr[4];
-                uint8_t reserved = hdr[5];
-                size_t  payload_len = 0;
-                if (pkt_type == PKT_DELTA && reserved == 1) {
-                    /* Typed delta: payload = blob (starts with 4-byte data_len) */
-                    uint8_t len_buf[4];
-                    if (tcp_recv_all(fd, len_buf, 4) < 4) { disconnected.push_back(peer); break; }
-                    int32_t blob_data_len = (int32_t)read_u32_le(len_buf);
-                    size_t full_size = 6 + 4 + (size_t)blob_data_len;
-                    std::vector<uint8_t> full(full_size);
-                    memcpy(full.data(), hdr, 6);
-                    memcpy(full.data() + 6, len_buf, 4);
-                    if (blob_data_len > 0) {
-                        ssize_t got = tcp_recv_all(fd, full.data() + 10, (size_t)blob_data_len);
-                        if ((size_t)got < (size_t)blob_data_len) { disconnected.push_back(peer); break; }
-                    }
-                    process_packet(s, peer, full.data(), (int)full.size());
-                    continue;
-                } else if (pkt_type == PKT_DELTA) {
-                    /* Untyped delta: payload = raw struct bytes, size from registered obj */
-                    int32_t nid = read_i32_le(hdr);
-                    auto it = s->by_net_id.find(nid);
-                    payload_len = (it != s->by_net_id.end()) ? (size_t)it->second->obj_size : 0;
-                } else if (pkt_type == PKT_REGISTER) {
-                    payload_len = 8;  /* net_id(4) + obj_size(4) */
-                } else if (pkt_type == PKT_RPC) {
-                    /* Read method_len byte first to know total payload size */
-                    uint8_t method_len_byte = 0;
-                    if (tcp_recv_all(fd, &method_len_byte, 1) < 1) { disconnected.push_back(peer); break; }
-                    /* payload = [method_len:1][method:N][arg:4]; we already consumed the first byte */
-                    payload_len = 1 + (size_t)method_len_byte + 4;
-                    std::vector<uint8_t> full2(6 + payload_len);
-                    memcpy(full2.data(), hdr, 6);
-                    full2[6] = method_len_byte;
-                    size_t remaining = (size_t)method_len_byte + 4;
-                    if (remaining > 0) {
-                        ssize_t got = tcp_recv_all(fd, full2.data() + 7, remaining);
-                        if ((size_t)got < remaining) { disconnected.push_back(peer); break; }
-                    }
-                    process_packet(s, peer, full2.data(), (int)full2.size());
+        if (peer->dead) { disconnected.push_back(peer); continue; }
+        if (peer->transport.type == MT_TCP) {
+            /* Non-blocking: read what is there, keep partial packets for the next update. */
+            tcp_flush(peer);
+            uint8_t chunk[65536];
+            bool closed = false;
+            for (int iter = 0; iter < 64 && !peer->dead; ++iter) {
+                ssize_t n = recv(peer->transport.tcp_fd, chunk, sizeof(chunk), 0);
+                if (n > 0) {
+                    peer->rx.insert(peer->rx.end(), chunk, chunk + n);
+                    tcp_consume(s, peer);
                     continue;
                 }
-
-                std::vector<uint8_t> full(6 + payload_len);
-                memcpy(full.data(), hdr, 6);
-                if (payload_len > 0) {
-                    ssize_t got = tcp_recv_all(fd, full.data() + 6, payload_len);
-                    if ((size_t)got < payload_len) { disconnected.push_back(peer); break; }
-                }
-                process_packet(s, peer, full.data(), (int)full.size());
-            } else {
-                /* WS: drain all available frames. Use aiml_ws_poll instead of
-                 * tcp_readable(aiml_ws_fd) — the "fd" is target-specific
-                 * (real socket on native, opaque handle on wasm/emscripten). */
+                if (n == 0) { closed = true; break; }
+                if (errno == EINTR) continue;
+                if (errno != EAGAIN && errno != EWOULDBLOCK) closed = true;
+                break;
+            }
+            if (closed || peer->dead) disconnected.push_back(peer);
+        } else {
+            /* WS: drain available frames; every message must be exactly one valid packet.
+             * aiml_ws_poll instead of tcp_readable(aiml_ws_fd) — the "fd" is target-specific
+             * (real socket on native, opaque handle on wasm/emscripten). */
+            for (int iter = 0; iter < 64; ++iter) {
                 if (!peer->transport.ws_ptr) break;
                 int pr = aiml_ws_poll(peer->transport.ws_ptr, 0);
                 if (pr == 0) break;                       /* no data ready */
@@ -706,15 +866,24 @@ static void mirror_recv_from_peers(AimlMirrorSession* s) {
                 const char* _rr_prev = g_rt_rpc_phase; g_rt_rpc_phase = "ws.recv_raw";
                 void* msg = aiml_ws_recv_raw(peer->transport.ws_ptr, &msg_len);
                 g_rt_rpc_phase = _rr_prev;
-                if (!msg || msg_len <= 0) { disconnected.push_back(peer); break; }
+                if (!msg || msg_len <= 0) { free(msg); disconnected.push_back(peer); break; }
+                size_t total = 0;
+                if (mirror_packet_length(s, (const uint8_t*)msg, (size_t)msg_len, true, &total) != PKT_COMPLETE) {
+                    free(msg);
+                    mirror_mark_dead(peer, "invalid frame");
+                    disconnected.push_back(peer);
+                    break;
+                }
                 process_packet(s, peer, (const uint8_t*)msg, msg_len);
                 free(msg);
-                /* continue: check for more frames */
+                if (peer->dead) { disconnected.push_back(peer); break; }
             }
         }
     }
 
-    /* Handle disconnected peers */
+    /* Handle disconnected peers (each once) */
+    std::sort(disconnected.begin(), disconnected.end());
+    disconnected.erase(std::unique(disconnected.begin(), disconnected.end()), disconnected.end());
     for (auto* peer : disconnected) {
         auto* ev = new AimlMirrorEvent();
         ev->type    = "peer_disconnected";
@@ -875,6 +1044,7 @@ void* aiml_mirror_connect_timeout(const char* url, int32_t ms) {
     }
 
     s->peers.push_back(peer);
+    mirror_send_hello(peer);
     /* Note: no peer_connected event on client side — connection success is
      * implicit (connect_timeout returned non-null). The server will send
      * object_registered events via update() for any already-registered objects. */
@@ -905,6 +1075,7 @@ void aiml_mirror_session_close(void* session) {
     }
     /* Free registered objects */
     for (auto& [id, reg] : s->by_net_id) {
+        if (reg->obj_ptr) rpc_obj_forget(reg->obj_ptr, s);
         if (!reg->is_owner && reg->ser_nodes && reg->has_decoded && reg->obj_ptr)
             aiml_ser_free_decoded(reg->obj_ptr, reg->ser_nodes, reg->ser_n);
         free(reg->shadow);
@@ -920,11 +1091,8 @@ void aiml_mirror_session_close(void* session) {
         s->event_queue.pop();
     }
     /* Drain RPC queue (free method string + payload blob + event). */
-    while (!s->rpc_queue.empty()) {
-        AimlRpcEvent* ev = s->rpc_queue.front();
-        s->rpc_queue.pop();
-        aiml_free_rpc_event(ev);
-    }
+    for (AimlRpcEvent* ev : s->rpc_queue) aiml_free_rpc_event(ev);
+    s->rpc_queue.clear();
     delete s;
 }
 
@@ -983,6 +1151,8 @@ void aiml_mirror_session_update(void* session) {
             }
         }
     }
+    /* 4. Flush unsent TCP backlogs (spec/44_5 §10) */
+    for (auto* peer : s->peers) tcp_flush(peer);
 }
 
 int32_t aiml_mirror_session_is_connected(void* session) {
@@ -1051,11 +1221,12 @@ void aiml_mirror_session_register_id(void* session, void* obj, int64_t obj_size,
     /* Notify all peers of new object */
     for (auto* peer : s->peers) {
         send_register_pkt(peer, id, (int32_t)obj_size);
-        /* Send current state as initial delta */
-        uint8_t hdr[6]; write_u32_le(hdr, (uint32_t)id);
-        hdr[4] = PKT_DELTA; hdr[5] = 0;
-        mirror_send(peer, hdr, 6);
-        mirror_send(peer, obj, (size_t)obj_size);
+        /* Send current state as initial delta — ONE packet (spec/44_5 §10) */
+        std::vector<uint8_t> dpkt(6 + (size_t)obj_size);
+        write_u32_le(dpkt.data(), (uint32_t)id);
+        dpkt[4] = PKT_DELTA; dpkt[5] = 0;
+        memcpy(dpkt.data() + 6, obj, (size_t)obj_size);
+        mirror_send(peer, dpkt.data(), dpkt.size());
     }
 }
 
@@ -1067,6 +1238,7 @@ void aiml_mirror_session_unregister(void* session, void* obj) {
 
     AimlMirrorRegistered* reg = pit->second;
     int32_t nid = reg->net_id;
+    rpc_obj_forget(obj, s);
 
     send_unregister_pkt(s, nid, nullptr);
 
@@ -1113,7 +1285,8 @@ void aiml_mirror_session_register_id_typed(void* session, void* obj, int64_t obj
             existing->shadow = (uint8_t*)calloc(1, (size_t)obj_size);
             /* Decode any typed delta that arrived before register_id_typed was called */
             if (existing->pending_blob && existing->pending_blob_len > 0) {
-                aiml_ser_decode((const char*)existing->pending_blob, obj, nodes, n_nodes);
+                aiml_ser_decode_bounded((const char*)existing->pending_blob, (size_t)existing->pending_blob_len,
+                                        obj, nodes, n_nodes);
                 existing->has_decoded = true;
                 memcpy(existing->shadow, obj, (size_t)obj_size);
                 free(existing->pending_blob);
@@ -1166,7 +1339,7 @@ void aiml_mirror_session_register_id_typed(void* session, void* obj, int64_t obj
  * The caller never receives a null pointer, so no null-check needed on AIML side.
  */
 static AimlMirrorEvent s_empty_mirror_event = { "", nullptr, 0, 0 };
-static AimlRpcEvent    s_empty_rpc_event    = { "", 0, 0, 0, nullptr, 0, 0 };
+static AimlRpcEvent    s_empty_rpc_event    = { "", 0, 0, 0, nullptr, 0, 0, 0, 0 };
 
 /* Free a consumed RPC event: method string + payload blob (both malloc'd) + the
  * heap event itself.  Never touches the static empty sentinel. */
@@ -1203,9 +1376,8 @@ void* aiml_mirror_session_poll_rpc(void* session) {
     /* Previous rpc borrowed by AIML is done now (next poll) — free it. */
     aiml_free_rpc_event(s->last_consumed_rpc);
     s->last_consumed_rpc = nullptr;
-    if (s->rpc_queue.empty()) return &s_empty_rpc_event;
-    AimlRpcEvent* ev = s->rpc_queue.front();
-    s->rpc_queue.pop();
+    AimlRpcEvent* ev = rpc_take_at(s, 0);
+    if (!ev) return &s_empty_rpc_event;
     s->last_consumed_rpc = ev;
     AIML_DBG("poll_rpc method=%s net_id=%d arg=%d arg_kind=%d",
              ev->method ? ev->method : "", ev->net_id, ev->arg, ev->arg_kind);
@@ -1255,9 +1427,66 @@ void aiml_mirror_session_set_sync_mode(void* session, void* obj, const char* mod
         it->second->manual_sync = (strcmp(mode, "manual") == 0);
 }
 
+/* spec/44_5 §7.1: attach the class's rpc table (compiler-emitted) to a registered object. */
+struct AimlRpcTableEntry {
+    const char* method; const AimlTypeNode* nodes; int32_t n_nodes; int64_t args_size;
+    void (*thunk)(void*, void*);
+};
+void aiml_mirror_session_set_rpc_table(void* session, void* obj, const void* table, int32_t count) {
+    auto* s = (AimlMirrorSession*)session;
+    if (!s || !obj || !table || count <= 0) return;
+    auto it = s->by_ptr.find(obj);
+    if (it == s->by_ptr.end()) return;
+    {
+        std::lock_guard<std::mutex> lk(g_rpc_obj_mu);
+        auto g = g_rpc_obj_session.find(obj);
+        if (g != g_rpc_obj_session.end() && g->second != s) {
+            fprintf(stderr, "[mirror] rpc: object %p is already registered in another session — rpc routing refused\n", obj);
+            return;
+        }
+        g_rpc_obj_session[obj] = s;
+    }
+    AimlMirrorRegistered* reg = it->second;
+    reg->rpc.clear();
+    const auto* rows = (const AimlRpcTableEntry*)table;
+    for (int32_t i = 0; i < count; ++i) {
+        AimlMirrorRegistered::RpcMethod m;
+        m.name = rows[i].method ? rows[i].method : "";
+        m.nodes = rows[i].nodes; m.n_nodes = rows[i].n_nodes; m.args_size = rows[i].args_size;
+        m.thunk = rows[i].thunk;
+        reg->rpc.push_back(m);
+    }
+}
+
+static AimlMirrorRegistered::RpcMethod* rpc_find_method(AimlMirrorRegistered* reg, const char* method) {
+    if (!reg || !method) return nullptr;
+    for (auto& m : reg->rpc) if (m.name == method) return &m;
+    return nullptr;
+}
+
 void aiml_mirror_session_set_rpc_target(void* session, void* obj, const char* method, const char* target) {
-    /* Infrastructure stub in v1 — RPC interception is v2 */
-    (void)session; (void)obj; (void)method; (void)target;
+    auto* s = (AimlMirrorSession*)session;
+    if (!s || !obj || !method || !target) return;
+    auto it = s->by_ptr.find(obj);
+    if (it == s->by_ptr.end()) {
+        fprintf(stderr, "[mirror] set_rpc_target: object is not registered in this session\n");
+        return;
+    }
+    auto* m = rpc_find_method(it->second, method);
+    if (!m) {
+        fprintf(stderr, "[mirror] set_rpc_target: '%s' is not an rpc method of this object\n", method);
+        return;
+    }
+    int t = -1;
+    if      (!strcmp(target, "owner"))  t = 0;
+    else if (!strcmp(target, "server")) t = 1;
+    else if (!strcmp(target, "all"))    t = 2;
+    else if (!strcmp(target, "others")) t = 3;
+    if (t < 0) {
+        fprintf(stderr, "[mirror] set_rpc_target: unknown target '%s' (owner|server|all|others)\n", target);
+        return;
+    }
+    m->target = t;
 }
 
 /* ── mirror_event accessors ───────────────────────────────────────────────── */
@@ -1288,73 +1517,241 @@ int32_t aiml_mirror_event_net_id(void* ev) {
     return e ? e->net_id : 0;
 }
 
-/* ── RPC ──────────────────────────────────────────────────────────────────── */
+/* ── RPC (spec/44_5 §7) ───────────────────────────────────────────────────── */
 
-/* Internal: build + send a v2 PKT_RPC packet. */
-/* Send RPC.  The first arg is interpreted as a **target peer_id** on the
- * host side:
- *   - target > 0 AND a peer with peer->id == target exists → send ONLY to
- *     that peer (targeted multi-client routing).
- *   - target == 0, or no matching peer found → broadcast to all peers
- *     (backwards-compatible / single-client / replica-sync path).
- *
- * The wire still carries `target` in the net_id header field — the receiver
- * stores it in `rpc_event.net_id` but does not use it for routing (clients
- * dispatch by `rpc_event.method`).  Multi-client servers MUST pass the
- * sender's `rpc.peer_id` here when replying to a specific client; broadcasts
- * (e.g. chat fanout) iterate `online_nids` and call this once per receiver.
- */
-static void mirror_send_rpc_v2(AimlMirrorSession* s, int32_t target,
-                               const char* method, uint8_t arg_kind,
-                               int32_t arg_i32,
-                               const uint8_t* blob, uint32_t blob_len)
-{
-    if (!s || !method) return;
-    uint8_t method_len = (uint8_t)(strlen(method) & 0xFF);
-    size_t pkt_size = 6 + 1 + (size_t)method_len + 1 + 4 + 4 + (size_t)blob_len;
-    std::vector<uint8_t> pkt(pkt_size);
+/* RPC kinds (v3 header) */
+enum { RPC_PUSH = 0, RPC_REQUEST = 1, RPC_RESPONSE = 2, RPC_OBJECT_CALL = 3 };
+
+/* Receive-side queue limits per sender peer (AP4): overload disconnects THAT peer, visibly;
+ * events of other consumers are never dropped to make room. */
+static const size_t kMaxQueuedPerPeer      = 4096;
+static const size_t kMaxQueuedBytesPerPeer = (size_t)64 << 20;
+
+static size_t rpc_ev_bytes(const AimlRpcEvent* ev) {
+    return sizeof(AimlRpcEvent) + (ev->method ? strlen(ev->method) + 1 : 0) + (size_t)ev->arg_blob_len;
+}
+
+static bool rpc_enqueue(AimlMirrorSession* s, AimlMirrorPeer* from, AimlRpcEvent* ev) {
+    size_t& cnt = s->rpc_q_count[ev->peer_id];
+    size_t& byt = s->rpc_q_bytes[ev->peer_id];
+    size_t b = rpc_ev_bytes(ev);
+    if (cnt + 1 > kMaxQueuedPerPeer || byt + b > kMaxQueuedBytesPerPeer) {
+        fprintf(stderr, "[mirror] rpc queue overload from peer %d (%zu events, %zu bytes)\n",
+                ev->peer_id, cnt, byt);
+        mirror_mark_dead(from, "rpc queue overload");
+        aiml_free_rpc_event(ev);
+        return false;
+    }
+    cnt += 1; byt += b;
+    s->rpc_queue.push_back(ev);
+    return true;
+}
+
+/* Remove the event at idx (others keep their positions) and release its accounting. */
+static AimlRpcEvent* rpc_take_at(AimlMirrorSession* s, size_t idx) {
+    if (idx >= s->rpc_queue.size()) return nullptr;
+    AimlRpcEvent* ev = s->rpc_queue[idx];
+    s->rpc_queue.erase(s->rpc_queue.begin() + (long)idx);
+    size_t& cnt = s->rpc_q_count[ev->peer_id];
+    size_t& byt = s->rpc_q_bytes[ev->peer_id];
+    size_t b = rpc_ev_bytes(ev);
+    cnt = cnt > 0 ? cnt - 1 : 0;
+    byt = byt > b ? byt - b : 0;
+    return ev;
+}
+
+/* AP4: the one search-and-remove helper (send_and_await, take_rpc, take_response). */
+template <class Pred>
+static AimlRpcEvent* rpc_take_matching(AimlMirrorSession* s, Pred pred) {
+    for (size_t i = 0; i < s->rpc_queue.size(); ++i)
+        if (s->rpc_queue[i] && pred(s->rpc_queue[i])) return rpc_take_at(s, i);
+    return nullptr;
+}
+
+static uint64_t rpc_new_request_id(AimlMirrorSession* s) {
+    uint64_t id = s->next_request_id++;
+    if (s->next_request_id == 0) s->next_request_id = 1;   /* 0 = push / no correlation */
+    while (s->outstanding.count(id) || id == 0) id = s->next_request_id++;
+    return id;
+}
+
+static std::vector<uint8_t> rpc_build_v2(int32_t target, const char* method, uint8_t arg_kind,
+                                         int32_t arg_i32, const uint8_t* blob, uint32_t blob_len) {
+    size_t mlen = strlen(method);
+    std::vector<uint8_t> pkt(6 + 1 + mlen + 1 + 4 + 4 + (size_t)blob_len);
     write_u32_le(pkt.data(), (uint32_t)target);
     pkt[4] = PKT_RPC; pkt[5] = 0;
-    pkt[6] = method_len;
-    memcpy(pkt.data() + 7, method, method_len);
-    int o = 7 + (int)method_len;
+    pkt[6] = (uint8_t)mlen;
+    memcpy(pkt.data() + 7, method, mlen);
+    size_t o = 7 + mlen;
     pkt[o] = arg_kind;
     write_i32_le(pkt.data() + o + 1, arg_i32);
-    write_u32_le(pkt.data() + o + 1 + 4, blob_len);
-    if (blob_len && blob) memcpy(pkt.data() + o + 1 + 4 + 4, blob, blob_len);
+    write_u32_le(pkt.data() + o + 5, blob_len);
+    if (blob_len && blob) memcpy(pkt.data() + o + 9, blob, blob_len);
+    return pkt;
+}
 
-    /* Targeted: send only to the peer whose peer->id == target (if any).
-     * If no matching peer or target == 0, fall back to broadcast. */
-    if (s->is_host && target > 0) {
-        for (auto* peer : s->peers) {
-            if (peer && peer->id == target) {
-                mirror_send(peer, pkt.data(), pkt_size);
-                return;
-            }
+static std::vector<uint8_t> rpc_build_v3(int32_t object_id, uint8_t kind, uint64_t request_id,
+                                         const char* method, uint8_t arg_kind, int32_t arg_i32,
+                                         const uint8_t* blob, uint32_t blob_len) {
+    size_t mlen = strlen(method);
+    size_t total = 30 + mlen + (size_t)blob_len;
+    std::vector<uint8_t> pkt(total);
+    write_u32_le(pkt.data(), (uint32_t)object_id);
+    pkt[4] = PKT_RPC_V3; pkt[5] = 3;
+    write_u32_le(pkt.data() + 6, (uint32_t)total);
+    pkt[10] = kind; pkt[11] = 0;
+    write_u64_le(pkt.data() + 12, request_id);
+    pkt[20] = (uint8_t)mlen;
+    memcpy(pkt.data() + 21, method, mlen);
+    size_t o = 21 + mlen;
+    pkt[o] = arg_kind;
+    write_i32_le(pkt.data() + o + 1, arg_i32);
+    write_u32_le(pkt.data() + o + 5, blob_len);
+    if (blob_len && blob) memcpy(pkt.data() + o + 9, blob, blob_len);
+    return pkt;
+}
+
+/* Send one RPC.  Routing (spec/44_5 §7, AP3): a client sends to the server only; the host sends
+ * to `target` (> 0: exactly that peer — an unknown id sends nothing; 0: explicit broadcast).
+ * Per destination: v3 if its HELLO announced >= 3, else v2.  A request (needs correlation) is
+ * never downgraded — returns the number of peers the packet went to. */
+static int mirror_send_rpc_any(AimlMirrorSession* s, int32_t target, uint8_t kind, uint64_t request_id,
+                               const char* method, uint8_t arg_kind, int32_t arg_i32,
+                               const uint8_t* blob, uint32_t blob_len)
+{
+    if (!s || !method) return 0;
+    size_t mlen = strlen(method);
+    if (mlen == 0 || mlen > 255) {   /* spec/44_5 §10: refuse instead of truncating */
+        fprintf(stderr, "[mirror] send_rpc: method name length %zu not in 1..255 — not sent\n", mlen);
+        return 0;
+    }
+    if (target < 0) {
+        fprintf(stderr, "[mirror] send_rpc: negative target %d — not sent\n", target);
+        return 0;
+    }
+    if (blob_len > kMaxRpcFrame) {
+        fprintf(stderr, "[mirror] send_rpc: payload %u bytes over the 8 MiB frame limit — not sent\n", blob_len);
+        return 0;
+    }
+    std::vector<uint8_t> v2, v3;
+    int sent = 0;
+    for (auto* peer : s->peers) {
+        if (!peer || peer->dead) continue;
+        if (s->is_host && target > 0 && peer->id != target) continue;
+        if (peer->rpc_version >= 3) {
+            if (v3.empty()) v3 = rpc_build_v3(0, kind, request_id, method, arg_kind, arg_i32, blob, blob_len);
+            mirror_send(peer, v3.data(), v3.size());
+        } else {
+            if (kind == RPC_REQUEST) continue;   /* no correlation possible on v2 */
+            if (v2.empty()) v2 = rpc_build_v2(target, method, arg_kind, arg_i32, blob, blob_len);
+            mirror_send(peer, v2.data(), v2.size());
         }
-        /* No matching peer found — silently drop instead of broadcasting,
-         * since broadcasting would leak the message to all clients (the
-         * exact bug we are fixing). */
+        ++sent;
+    }
+    if (s->is_host && target > 0 && sent == 0)
         AIML_DBG("send_rpc target peer_id=%d not found, dropping", target);
+    return sent;
+}
+
+/* Encode a typed payload with the RPC fingerprint header; returns malloc'd blob or null. */
+static char* rpc_encode(const void* obj, const AimlTypeNode* nodes, int32_t n_nodes, uint32_t* total) {
+    int prev_rpc = aiml_ser_set_rpc(1);
+    char* blob = aiml_ser_encode(obj, nodes, n_nodes);
+    aiml_ser_set_rpc(prev_rpc);
+    if (!blob) return nullptr;
+    *total = (uint32_t)read_i32_le((const uint8_t*)blob) + 4;
+    return blob;
+}
+
+/* ── automatic object RPCs (spec/44_5 §7.1) ─────────────────────────────── */
+
+/* arg_i32 of an object call: 1 = the sender already ran the method locally. */
+static void rpc_send_object_call(AimlMirrorSession* s, int32_t net_id, const char* method, int32_t ran_locally,
+                                 const uint8_t* blob, uint32_t len, int32_t exclude_peer) {
+    std::vector<uint8_t> pkt = rpc_build_v3(net_id, RPC_OBJECT_CALL, 0, method, 1, ran_locally, blob, len);
+    for (auto* peer : s->peers) {
+        if (!peer || peer->dead || peer->rpc_version < 3) continue;
+        if (exclude_peer >= 0 && peer->id == exclude_peer) continue;
+        mirror_send(peer, pkt.data(), pkt.size());
+    }
+}
+
+static void rpc_execute(AimlMirrorRegistered* reg, AimlMirrorRegistered::RpcMethod* m,
+                        const uint8_t* blob, uint32_t len) {
+    if (!reg->obj_ptr || !m->thunk || m->args_size <= 0) return;
+    void* args = calloc(1, (size_t)m->args_size);
+    if (!args) return;
+    if (aiml_ser_decode_sized((const char*)blob, len, args, m->nodes, m->n_nodes) == 0)
+        m->thunk(reg->obj_ptr, args);
+    else
+        fprintf(stderr, "[mirror] object call '%s': undecodable arguments — not executed\n", m->name.c_str());
+    aiml_ser_free_decoded(args, m->nodes, m->n_nodes);
+    free(args);
+}
+
+static void rpc_receive_object_call(AimlMirrorSession* s, AimlMirrorPeer* from, int32_t net_id, const RpcFields& f) {
+    auto it = s->by_net_id.find(net_id);
+    std::string method(f.method, f.method_len);
+    AimlMirrorRegistered::RpcMethod* m = (it != s->by_net_id.end()) ? rpc_find_method(it->second, method.c_str()) : nullptr;
+    if (!m || f.arg_kind != 1) {
+        fprintf(stderr, "[mirror] object call '%s' on object %d: not a registered rpc method — dropped\n",
+                method.c_str(), net_id);
         return;
     }
-    /* Non-host (client sending to server) OR target == 0 (broadcast). */
-    for (auto* peer : s->peers)
-        mirror_send(peer, pkt.data(), pkt_size);
+    AimlMirrorRegistered* reg = it->second;
+    if (s->is_host) {
+        /* route by the HOST's target (a client cannot widen it); the host is never the caller here */
+        int32_t sender = from ? from->id : -1;
+        if (m->target == 2)        /* all: everyone once — the sender only if it did not run it yet */
+            rpc_send_object_call(s, net_id, method.c_str(), 1, f.blob, f.blob_len, f.arg_i32 ? sender : -1);
+        else if (m->target == 3)   /* others: everyone except the caller */
+            rpc_send_object_call(s, net_id, method.c_str(), 1, f.blob, f.blob_len, sender);
+    }
+    rpc_execute(reg, m, f.blob, f.blob_len);
+}
+
+/* Called by the synthesized rpc wrapper: 0 = run the body locally (also for unregistered objects),
+ * 1 = handled by other peers only. */
+int32_t aiml_mirror_object_call(void* obj, const char* method, void* args) {
+    AimlMirrorSession* s = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(g_rpc_obj_mu);
+        auto g = g_rpc_obj_session.find(obj);
+        if (g == g_rpc_obj_session.end()) return 0;
+        s = g->second;
+    }
+    auto it = s->by_ptr.find(obj);
+    if (it == s->by_ptr.end()) return 0;
+    AimlMirrorRegistered* reg = it->second;
+    AimlMirrorRegistered::RpcMethod* m = rpc_find_method(reg, method);
+    if (!m || !m->nodes) return 0;
+    bool send, local;
+    if (s->is_host) {   /* the host owns its objects */
+        send  = (m->target == 2 || m->target == 3);
+        local = (m->target != 3);
+    } else {            /* a client replica: everything goes via the host */
+        send  = true;
+        local = (m->target == 2);
+    }
+    if (send) {
+        uint32_t total = 0;
+        char* blob = rpc_encode(args, m->nodes, m->n_nodes, &total);
+        if (blob) {
+            rpc_send_object_call(s, reg->net_id, method, local ? 1 : 0, (const uint8_t*)blob, total, -1);
+            free(blob);
+        }
+    }
+    return local ? 0 : 1;
 }
 
 void aiml_mirror_session_send_rpc(void* session, int32_t net_id,
                                   const char* method, int32_t arg) {
     AIML_DBG("send_rpc net_id=%d method=%s arg=%d", net_id, method ? method : "", arg);
-    mirror_send_rpc_v2((AimlMirrorSession*)session, net_id, method,
-                       /*arg_kind=*/0, arg, nullptr, 0);
+    mirror_send_rpc_any((AimlMirrorSession*)session, net_id, RPC_PUSH, 0, method, 0, arg, nullptr, 0);
 }
 
-/* Send an RPC whose payload is a typed model instance.
- * `obj`     — pointer to the model struct (caller-owned).
- * `nodes/n` — model schema (pass __aiml_sernodes_<Type> + count).
- * The arg_i32 is sent alongside the blob for backwards compatibility / quick discriminator.
- */
+/* Send an RPC whose payload is a typed model instance (push). */
 void aiml_mirror_session_send_rpc_model(void* session, int32_t net_id,
                                         const char* method, int32_t arg_i32,
                                         const void* obj,
@@ -1364,121 +1761,227 @@ void aiml_mirror_session_send_rpc_model(void* session, int32_t net_id,
     auto* s = (AimlMirrorSession*)session;
     if (!s || !method || !obj || !nodes || n_nodes <= 0) return;
     AIML_DBG("send_rpc_model net_id=%d method=%s arg_i32=%d nodes=%d", net_id, method, arg_i32, n_nodes);
-    char* blob = aiml_ser_encode(obj, nodes, n_nodes);
+    uint32_t total = 0;
+    char* blob = rpc_encode(obj, nodes, n_nodes, &total);
     if (!blob) return;
-    /* aiml_ser_encode prefixes the blob with a 4-byte little-endian length
-       (NOT including the prefix itself); we ship the entire blob (prefix + payload). */
-    int32_t payload_len = read_i32_le((const uint8_t*)blob);
-    uint32_t total_len  = (uint32_t)(payload_len + 4);
-    mirror_send_rpc_v2(s, net_id, method, /*arg_kind=*/1, arg_i32,
-                       (const uint8_t*)blob, total_len);
+    mirror_send_rpc_any(s, net_id, RPC_PUSH, 0, method, 1, arg_i32, (const uint8_t*)blob, total);
     free(blob);
 }
 
-/* Decode a received typed-RPC payload into a caller-allocated, zero-initialised
- * struct. Returns 0 on success, -1 on error / wrong arg_kind. The decoded struct
- * may contain heap allocations (strings, lists, maps, buffers); the caller must
- * release them with `aiml_ser_free_decoded()` when done. */
+/* spec/44_5 §7 session.reply_rpc(ev, method, arg[, model]): answer the request in `ev` — to the
+ * sender peer (from the connection, never from payload fields), echoing its request id. */
+void aiml_mirror_session_reply_rpc(void* session, void* ev_ptr, const char* method, int32_t arg_i32,
+                                   const void* obj, const AimlTypeNode* nodes, int32_t n_nodes)
+{
+    auto* s  = (AimlMirrorSession*)session;
+    auto* ev = (AimlRpcEvent*)ev_ptr;
+    if (!s || !ev || !method) return;
+    uint8_t  kind = (ev->kind == RPC_REQUEST) ? RPC_RESPONSE : RPC_PUSH;
+    uint64_t rid  = (ev->kind == RPC_REQUEST) ? ev->request_id : 0;
+    int32_t  target = s->is_host ? ev->peer_id : 0;
+    if (s->is_host && target <= 0) return;   /* no sender identity → nobody to answer */
+    if (obj && nodes && n_nodes > 0) {
+        uint32_t total = 0;
+        char* blob = rpc_encode(obj, nodes, n_nodes, &total);
+        if (!blob) return;
+        mirror_send_rpc_any(s, target, kind, rid, method, 1, arg_i32, (const uint8_t*)blob, total);
+        free(blob);
+    } else {
+        mirror_send_rpc_any(s, target, kind, rid, method, 0, arg_i32, nullptr, 0);
+    }
+}
+
+/* Async request (spec/44_5 §7): returns the request id (> 0) or 0 when it could not be sent
+ * (no peer with RPC v3 yet).  Pair with take_response(id, target). */
+int64_t aiml_mirror_session_send_request(void* session, int32_t target, const char* method, int32_t arg_i32,
+                                         const void* obj, const AimlTypeNode* nodes, int32_t n_nodes)
+{
+    auto* s = (AimlMirrorSession*)session;
+    if (!s || !method) return 0;
+    uint64_t id = rpc_new_request_id(s);
+    int sent;
+    if (obj && nodes && n_nodes > 0) {
+        uint32_t total = 0;
+        char* blob = rpc_encode(obj, nodes, n_nodes, &total);
+        if (!blob) return 0;
+        sent = mirror_send_rpc_any(s, target, RPC_REQUEST, id, method, 1, arg_i32, (const uint8_t*)blob, total);
+        free(blob);
+    } else {
+        sent = mirror_send_rpc_any(s, target, RPC_REQUEST, id, method, 0, arg_i32, nullptr, 0);
+    }
+    if (sent <= 0) return 0;
+    s->outstanding.insert(id);
+    return (int64_t)id;
+}
+
+/* Take the response of request `id`: 1 = decoded into out, 0 = not arrived yet, -1 = protocol
+ * error (wrong method/type/undecodable — the request is finished either way). */
+int32_t aiml_mirror_session_take_response(void* session, int64_t id, const char* expect_method,
+                                          void* out, int64_t out_size,
+                                          const AimlTypeNode* nodes, int32_t n_nodes)
+{
+    auto* s = (AimlMirrorSession*)session;
+    if (!s || id <= 0 || !out || out_size <= 0 || !nodes || n_nodes <= 0) return -1;
+    uint64_t rid = (uint64_t)id;
+    if (!s->outstanding.count(rid)) return -1;
+    AimlRpcEvent* ev = rpc_take_matching(s, [rid](AimlRpcEvent* e) {
+        return e->kind == RPC_RESPONSE && e->request_id == rid;
+    });
+    if (!ev) return 0;
+    s->outstanding.erase(rid);
+    int32_t rc = -1;
+    if (ev->method && (!expect_method || !*expect_method || std::strcmp(ev->method, expect_method) == 0)
+        && ev->arg_kind == 1 && ev->arg_blob
+        && aiml_ser_decode_sized_tx((const char*)ev->arg_blob, (size_t)ev->arg_blob_len,
+                                    out, (size_t)out_size, nodes, n_nodes, 1) == 0)
+        rc = 1;
+    else
+        fprintf(stderr, "[mirror] take_response id=%lld: response '%s' is not the expected '%s' payload\n",
+                (long long)id, ev->method ? ev->method : "?", expect_method ? expect_method : "");
+    aiml_free_rpc_event(ev);
+    return rc;
+}
+
+/* Forget a request whose response is no longer wanted (a late response is then dropped). */
+void aiml_mirror_session_cancel_request(void* session, int64_t id) {
+    auto* s = (AimlMirrorSession*)session;
+    if (s && id > 0) s->outstanding.erase((uint64_t)id);
+}
+
+/* Decode a received typed-RPC payload into a caller-allocated, zero-initialised struct
+ * (legacy entry; the compiler uses aiml_rpc_event_decode_tx).  0 = ok, -1 = error. */
 int32_t aiml_rpc_event_decode_into(void* ev_ptr, void* out,
                                    const AimlTypeNode* nodes, int32_t n_nodes)
 {
     auto* ev = (AimlRpcEvent*)ev_ptr;
     if (!ev || !out || !nodes || n_nodes <= 0) return -1;
     if (ev->arg_kind != 1 || !ev->arg_blob || ev->arg_blob_len <= 0) return -1;
-    return aiml_ser_decode((const char*)ev->arg_blob, out, nodes, n_nodes);
+    int rc = aiml_ser_decode_sized((const char*)ev->arg_blob, (size_t)ev->arg_blob_len, out, nodes, n_nodes);
+    if (rc == 0) return 0;
+    aiml_ser_free_decoded(out, nodes, n_nodes);
+    aiml_ser_init_empty_containers(out, nodes, n_nodes);
+    return -1;
 }
 
-/* Convenience: send a typed-RPC request, then poll for up to timeout_ms
- * waiting for an incoming RPC whose method matches `expect_method`. On hit,
- * decode payload into `out` and return 1.  On timeout, return 0.
- *
- * Internally drives aiml_mirror_session_update + has_rpc + next_rpc in a
- * 20ms-tick loop.  Other RPC types arriving during the wait are dropped —
- * if the caller needs ordering or unsolicited push-RPCs they have to use
- * the lower-level next_rpc/decode_rpc primitives.
- *
- * Implements the AIML `session.send_and_await(...)` builtin so client-
- * side test code doesn't have to hand-roll the loop for every request
- * type.  `out` MUST be zero-initialised by the caller (the compiler glue
- * does this for typed slots — same convention as decode_rpc). */
+/* spec/44_5 (AP1): transactional decode — a failed decode leaves `out` untouched; on success the
+ * target's previous heap is released and replaced.  out_size = target struct size (compiler). */
+int32_t aiml_rpc_event_decode_tx(void* ev_ptr, void* out, int64_t out_size,
+                                 const AimlTypeNode* nodes, int32_t n_nodes)
+{
+    auto* ev = (AimlRpcEvent*)ev_ptr;
+    if (!ev || !out || out_size <= 0 || !nodes || n_nodes <= 0) return -1;
+    if (ev->arg_kind != 1 || !ev->arg_blob || ev->arg_blob_len <= 0) return -1;
+    return aiml_ser_decode_sized_tx((const char*)ev->arg_blob, (size_t)ev->arg_blob_len,
+                                    out, (size_t)out_size, nodes, n_nodes, 1) == 0 ? 0 : -1;
+}
+
+/* spec/44_5 session.take_rpc(method, target): remove + decode the FIRST queued push (or
+ * uncorrelated reply) with this method whose payload is of the target's type; every other event
+ * keeps its position.  A queue filter — not a request correlation.  1 = taken, 0 = none. */
+int32_t aiml_mirror_session_take_rpc(void* session, const char* method, void* out, int64_t out_size,
+                                     const AimlTypeNode* nodes, int32_t n_nodes)
+{
+    auto* s = (AimlMirrorSession*)session;
+    if (!s || !method || !out || out_size <= 0 || !nodes || n_nodes <= 0) return 0;
+    AimlRpcEvent* ev = rpc_take_matching(s, [&](AimlRpcEvent* e) {
+        return (e->kind == RPC_PUSH || (e->kind == RPC_RESPONSE && e->request_id == 0))
+            && e->method && std::strcmp(e->method, method) == 0 && e->arg_kind == 1 && e->arg_blob
+            && aiml_ser_rpc_blob_matches_sized((const char*)e->arg_blob, (size_t)e->arg_blob_len, nodes, n_nodes);
+    });
+    if (!ev) return 0;
+    int rc = aiml_ser_decode_sized_tx((const char*)ev->arg_blob, (size_t)ev->arg_blob_len,
+                                      out, (size_t)out_size, nodes, n_nodes, 1);
+    aiml_free_rpc_event(ev);
+    return rc == 0 ? 1 : 0;
+}
+
+/* Find the peer an expected response comes from: the host's target peer, or the client's server. */
+static AimlMirrorPeer* rpc_peer_for(AimlMirrorSession* s, int32_t target) {
+    for (auto* p : s->peers)
+        if (p && !p->dead && (!s->is_host || p->id == target)) return p;
+    return nullptr;
+}
+
+/* Client convenience (spec/44_5 §7): send a typed request and wait for ITS response (request id +
+ * responding peer), up to timeout_ms on a monotonic clock.  1 = decoded into out, 0 = timeout,
+ * no v3 peer, or a correlated but unusable response.  Unrelated events stay queued in order. */
 int32_t aiml_mirror_session_send_and_await(
     void* session, int32_t net_id,
     const char* method, int32_t arg_i32,
     const void* req_obj, const AimlTypeNode* req_nodes, int32_t req_n_nodes,
     const char* expect_method,
-    void* out_obj,       const AimlTypeNode* out_nodes, int32_t out_n_nodes,
+    void* out_obj, int64_t out_size, const AimlTypeNode* out_nodes, int32_t out_n_nodes,
     int32_t timeout_ms)
 {
     auto* s = (AimlMirrorSession*)session;
     if (!s || !method || !req_obj || !req_nodes || req_n_nodes <= 0
-          || !out_obj || !out_nodes || out_n_nodes <= 0
-          || !expect_method)
+          || !out_obj || out_size <= 0 || !out_nodes || out_n_nodes <= 0)
         return 0;
 
-    /* Watchdog breadcrumb: name the in-flight method while we block here so the
-     * render-loop watchdog can report exactly where a frozen frame is stuck.
-     * Save/restore the previous phase (send_and_await can be nested inside a
-     * render op that owns the outer breadcrumb). */
+    /* Watchdog breadcrumb: name the in-flight method while we block here. */
     const char* prev_phase = g_rt_rpc_phase;
     g_rt_rpc_phase = method;
-
-    /* 1. encode + send the request — mirrors aiml_mirror_session_send_rpc_model */
-    char* blob = aiml_ser_encode(req_obj, req_nodes, req_n_nodes);
-    if (!blob) { g_rt_rpc_phase = prev_phase; return 0; }
-    int32_t  payload_len = read_i32_le((const uint8_t*)blob);
-    uint32_t total_len   = (uint32_t)(payload_len + 4);
-    mirror_send_rpc_v2(s, net_id, method, /*arg_kind=*/1, arg_i32,
-                       (const uint8_t*)blob, total_len);
-    free(blob);
-
-    /* 2. poll-loop with 2ms ticks until match or timeout (a 20ms tick added up to
-     *    ~20ms latency per RPC even on localhost). */
+    using clk = std::chrono::steady_clock;
+    const auto t0 = clk::now();
+    const auto deadline = t0 + std::chrono::milliseconds(timeout_ms > 0 ? timeout_ms : 0);
+    auto elapsed_ms = [&]() {
+        return (int32_t)std::chrono::duration_cast<std::chrono::milliseconds>(clk::now() - t0).count();
+    };
     const int32_t tick_ms = 2;
-    int32_t tries = (timeout_ms <= 0) ? 1 : ((timeout_ms + tick_ms - 1) / tick_ms);
-    /* One-shot mid-wait trace: if the response has not arrived after ~2s the RPC
-     * is behaving oddly (server silent / lost) — dump a stack so we see it even
-     * before the full timeout. */
+
+    /* 1. Capability: correlation needs RPC v3 on the responding peer (its HELLO arrives with the
+     *    first update after connecting).  A v2 peer never sends HELLO → report, do not guess. */
+    AimlMirrorPeer* peer = rpc_peer_for(s, net_id);
+    const auto cap_deadline = t0 + std::chrono::milliseconds(timeout_ms < 1500 ? (timeout_ms > 0 ? timeout_ms : 0) : 1500);
+    while (peer && peer->rpc_version < 3 && clk::now() < cap_deadline) {
+        aiml_mirror_session_update(s);
+        peer = rpc_peer_for(s, net_id);
+        if (peer && peer->rpc_version >= 3) break;
+        time_sleep_ms(tick_ms);
+    }
+    if (!peer || peer->rpc_version < 3) {
+        fprintf(stderr, "[mirror] send_and_await '%s': peer does not support RPC v3 request/response\n", method);
+        g_rt_rpc_phase = prev_phase;
+        return 0;
+    }
+    const int32_t responder = peer->id;
+
+    /* 2. Send the request. */
+    int64_t id = aiml_mirror_session_send_request(s, net_id, method, arg_i32, req_obj, req_nodes, req_n_nodes);
+    if (id <= 0) { g_rt_rpc_phase = prev_phase; return 0; }
+    const uint64_t rid = (uint64_t)id;
+
+    /* 3. Wait for response(id) from that peer. */
     const int32_t warn_after_ms = 2000;
     bool warned = false;
-    /* Unrelated inbound RPCs (e.g. server-initiated pushes like chat) must NOT
-     * be dropped — otherwise event-driven push is unreliable whenever a push
-     * races an in-flight request/response.  Carry them across the scan and
-     * restore them to the queue so the caller's own has_rpc/next_rpc drain
-     * still sees them.  Only pointers are moved (never decoded/freed here). */
-    std::vector<AimlRpcEvent*> carry;
-    for (int32_t i = 0; i < tries; ++i) {
+    for (;;) {
         aiml_mirror_session_update(s);
-        int32_t found = -1;
-        while (!s->rpc_queue.empty()) {
-            AimlRpcEvent* ev = s->rpc_queue.front();
-            s->rpc_queue.pop();
-            if (ev && ev->method && std::strcmp(ev->method, expect_method) == 0) {
-                /* method matches — try to decode into the caller's expected type */
-                int32_t rc = aiml_rpc_event_decode_into(ev, out_obj, out_nodes, out_n_nodes);
-                /* Decoded into the caller's object (deep copy) → event is done, free it. */
-                if (rc == 0) { aiml_free_rpc_event(ev); found = 1; break; }
-                /* Method matched but the payload is a DIFFERENT type — a straggler
-                 * reply belonging to another request.  ALL replies share the
-                 * generic method "set_result", so the async lobby poller's
-                 * fire-only requests leave replies in the queue that a later
-                 * blocking send_and_await (deck editor, board) would otherwise
-                 * mis-consume and fail on.  The decoder validates the type
-                 * (rc != 0 on mismatch), so treat this as "not ours": carry it
-                 * back and keep waiting for the reply that decodes cleanly.       */
-                carry.push_back(ev);
-                continue;
-            }
-            carry.push_back(ev);
+        AimlRpcEvent* ev = rpc_take_matching(s, [&](AimlRpcEvent* e) {
+            return e->kind == RPC_RESPONSE && e->request_id == rid && e->peer_id == responder;
+        });
+        if (ev) {
+            s->outstanding.erase(rid);
+            int32_t ok = 0;
+            if (ev->method && (!expect_method || std::strcmp(ev->method, expect_method) == 0)
+                && ev->arg_kind == 1 && ev->arg_blob
+                && aiml_ser_decode_sized_tx((const char*)ev->arg_blob, (size_t)ev->arg_blob_len,
+                                            out_obj, (size_t)out_size, out_nodes, out_n_nodes, 1) == 0)
+                ok = 1;
+            else
+                fprintf(stderr, "[mirror] send_and_await '%s': response is not the expected '%s' payload\n",
+                        method, expect_method ? expect_method : "");
+            aiml_free_rpc_event(ev);
+            g_rt_rpc_phase = prev_phase;
+            return ok;
         }
-        for (AimlRpcEvent* kept : carry) s->rpc_queue.push(kept);
-        carry.clear();
-        if (found >= 0) { g_rt_rpc_phase = prev_phase; return found; }
-        if (!warned && (i * tick_ms) >= warn_after_ms) {
+        if (clk::now() >= deadline) break;
+        if (!warned && elapsed_ms() >= warn_after_ms) {
             warned = true;
-            aiml_rpc_stall_trace("SLOW-NO-RESPONSE", method, i * tick_ms);
+            aiml_rpc_stall_trace("SLOW-NO-RESPONSE", method, elapsed_ms());
         }
         time_sleep_ms(tick_ms);
     }
+    s->outstanding.erase(rid);   /* a late response is dropped on arrival */
     aiml_rpc_stall_trace("TIMEOUT", method, timeout_ms);
     g_rt_rpc_phase = prev_phase;
     return 0;
@@ -1494,9 +1997,8 @@ void* aiml_mirror_session_next_rpc(void* session) {
     if (!s) return nullptr;
     aiml_free_rpc_event(s->last_consumed_rpc);
     s->last_consumed_rpc = nullptr;
-    if (s->rpc_queue.empty()) return nullptr;
-    AimlRpcEvent* ev = s->rpc_queue.front();
-    s->rpc_queue.pop();
+    AimlRpcEvent* ev = rpc_take_at(s, 0);
+    if (!ev) return nullptr;
     s->last_consumed_rpc = ev;
     return ev;
 }

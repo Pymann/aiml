@@ -7,7 +7,6 @@
 - model:
     name: NetPlayer
     sync: [score]
-    rpc: [pay]
     fields:
       - [score, i32]
 

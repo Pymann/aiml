@@ -1,0 +1,39 @@
+# Requires: library
+# Shared types for test_mirror_rpc_auto_dispatch (interface, counters, host/replica A classes).
+
+- interface:
+    name: Bumpable
+    methods:
+      - [bump, void, [[amount, i32]]]
+
+- decl: [g_host_hits, i32, 0]
+- decl: [g_a_hits, i32, 0]
+- decl: [g_b_hits, i32, 0]
+- decl: [g_phase, i32, 0]
+- decl: [g_nid, i32, 0]
+
+- class:
+    name: HostCounter
+    rpc: [bump]
+    members:
+      - [hits, i32, 0]
+    methods:
+      - def:
+          name: bump
+          args: [[amount, i32]]
+          body:
+            - set: [g_host_hits, { +: [g_host_hits, amount] }]
+
+- class:
+    name: ReplicaA
+    implements: [Bumpable]
+    rpc: [bump]
+    members:
+      - [hits, i32, 0]
+    methods:
+      - def:
+          name: bump
+          args: [[amount, i32]]
+          body:
+            - set: [g_a_hits, { +: [g_a_hits, amount] }]
+

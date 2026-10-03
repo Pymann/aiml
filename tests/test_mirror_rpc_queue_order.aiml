@@ -1,0 +1,116 @@
+# spec/44_5 §7 queue: take_rpc removes only its match, everything else keeps its position;
+# no silent dropping — more than 64 unclaimed pushes all survive in order.
+#
+# Expected exit code: 0
+
+- model:
+    name: QNote
+    fields: [[text, string], [num, i32]]
+
+- decl: [g_q_ready, i32, 0]
+
+- def:
+    name: queue_server
+    body:
+      - decl: [sess, mirror_session, { call: [mirror.listen, "ws://127.0.0.1:19993"] }]
+      - decl: [peer, i32, 0]
+      - decl: [tries, i32, 0]
+      - while:
+          condition: { '&&': [{ eq: [peer, 0] }, { lt: [tries, 400] }] }
+          body:
+            - call: [sess.update]
+            - if:
+                condition: { gt: [{ call: [sess.has_rpc] }, 0] }
+                then:
+                  - decl: [rpc, rpc_event, { call: [sess.next_rpc] }]
+                  - set: [peer, rpc.peer_id]
+            - call: [time.sleep_ms, 5]
+            - set: [tries, { +: [tries, 1] }]
+      # A, Result, B, then 100 bulk pushes
+      - call: [sess.send_rpc, peer, "evt", 1]
+      - decl: [res, QNote]
+      - set: [res.text, "the-result"]
+      - set: [res.num, 42]
+      - call: [sess.send_rpc, peer, "set_result", 0, res]
+      - call: [sess.send_rpc, peer, "evt", 2]
+      - decl: [bulk_i, i32, 0]
+      - while:
+          condition: { lt: [bulk_i, 100] }
+          body:
+            - call: [sess.send_rpc, peer, "bulk", bulk_i]
+            - set: [bulk_i, { +: [bulk_i, 1] }]
+      - decl: [drain, i32, 0]
+      - while:
+          condition: { lt: [drain, 40] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 5]
+            - set: [drain, { +: [drain, 1] }]
+      - set: [g_q_ready, 1]
+      - decl: [linger, i32, 0]
+      - while:
+          condition: { lt: [linger, 40] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 5]
+            - set: [linger, { +: [linger, 1] }]
+      - call: [sess.close]
+
+- def:
+    name: queue_fail
+    args: [[msg, string]]
+    body:
+      - print: ["FAIL ${msg}"]
+      - call: [sys.exit, 1]
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    body:
+      - decl: [host_th, thread_handle, { spawn: [queue_server] }]
+      - call: [time.sleep_ms, 150]
+      - decl: [client, mirror_session, { call: [mirror.connect_timeout, "ws://127.0.0.1:19993", 3000] }]
+      - call: [time.sleep_ms, 30]
+      - call: [client.send_rpc, 0, "hello", 0]
+      - decl: [wait_i, i32, 0]
+      - while:
+          condition: { '&&': [{ eq: [g_q_ready, 0] }, { lt: [wait_i, 400] }] }
+          body:
+            - call: [client.update]
+            - call: [time.sleep_ms, 5]
+            - set: [wait_i, { +: [wait_i, 1] }]
+      - decl: [more_i, i32, 0]
+      - while:
+          condition: { lt: [more_i, 20] }
+          body:
+            - call: [client.update]
+            - call: [time.sleep_ms, 5]
+            - set: [more_i, { +: [more_i, 1] }]
+      - if: { condition: { neq: [{ call: [client.has_rpc] }, 103] }, then: [{ call: [queue_fail, "queued ${client.has_rpc} events, expected 103"] }] }
+
+      # take the Result out of the middle
+      - decl: [got, QNote]
+      - if: { condition: { neq: [{ call: [client.take_rpc, "set_result", got] }, 1] }, then: [{ call: [queue_fail, "take_rpc found no result"] }] }
+      - if: { condition: { neq: [got.num, 42] }, then: [{ call: [queue_fail, "result num ${got.num}"] }] }
+      # a second take finds nothing; the queue is untouched
+      - decl: [again, QNote]
+      - if: { condition: { neq: [{ call: [client.take_rpc, "set_result", again] }, 0] }, then: [{ call: [queue_fail, "second take_rpc took something"] }] }
+
+      # remaining order: evt 1, evt 2, bulk 0..99
+      - decl: [ev1, rpc_event, { call: [client.poll_rpc] }]
+      - if: { condition: { '||': [{ neq: [ev1.method, "evt"] }, { neq: [ev1.arg, 1] }] }, then: [{ call: [queue_fail, "first event ${ev1.method}/${ev1.arg}"] }] }
+      - decl: [ev2, rpc_event, { call: [client.poll_rpc] }]
+      - if: { condition: { '||': [{ neq: [ev2.method, "evt"] }, { neq: [ev2.arg, 2] }] }, then: [{ call: [queue_fail, "second event ${ev2.method}/${ev2.arg}"] }] }
+      - decl: [expect, i32, 0]
+      - while:
+          condition: { lt: [expect, 100] }
+          body:
+            - decl: [evb, rpc_event, { call: [client.poll_rpc] }]
+            - if: { condition: { '||': [{ neq: [evb.method, "bulk"] }, { neq: [evb.arg, expect] }] }, then: [{ call: [queue_fail, "bulk #${expect} got ${evb.method}/${evb.arg}"] }] }
+            - set: [expect, { +: [expect, 1] }]
+      - decl: [tail, rpc_event, { call: [client.poll_rpc] }]
+      - if: { condition: { neq: [tail.method, ""] }, then: [{ call: [queue_fail, "unexpected trailing ${tail.method}"] }] }
+
+      - call: [host_th.join]
+      - call: [client.close]
+      - print: ["mirror rpc queue_order PASS"]

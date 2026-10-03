@@ -1,0 +1,18 @@
+# EXPECT-ERROR: non-serializable type
+# spec/44_5 §7.1: rpc parameters must be serializable values.
+- class:
+    name: Piper
+    rpc: [attach]
+    members:
+      - [count, i32, 0]
+    methods:
+      - def:
+          name: attach
+          args: [[pipe, chan<i32>]]
+          body:
+            - set: [<.count, 1]
+- def:
+    name: main
+    return: i32
+    body:
+      - return: 0

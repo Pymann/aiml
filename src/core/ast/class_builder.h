@@ -20,6 +20,7 @@ class ClassBuilder : public StateHandler {
     bool insideModels = false;
     bool insideImplements = false;
     bool insideRules = false;   // function-cascade `rules:` (spec/57)
+    bool insideRpc = false;     // mirror `rpc: [method, …]` (spec/44_5 §7.1)
     int mapDepth = 0; // Start at 0
     int sequenceDepth = 0;
     int memberAttrIndex = 0; // Tracks which column [name, type, default, modifiers]

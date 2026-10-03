@@ -1,0 +1,19 @@
+# EXPECT-ERROR: rpc methods must return void
+# spec/44_5 §7.1: an rpc method returns void (results go through send_and_await/reply_rpc).
+- class:
+    name: Scorer
+    rpc: [score]
+    members:
+      - [total, i32, 0]
+    methods:
+      - def:
+          name: score
+          args: [[points, i32]]
+          return: i32
+          body:
+            - return: points
+- def:
+    name: main
+    return: i32
+    body:
+      - return: 0

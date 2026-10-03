@@ -90,6 +90,125 @@ static llvm::BasicBlock* emitGuard(CompilerContext& ctx, llvm::Value* flag,
 // ---------------------------------------------------------------------------
 // registerBuiltins
 // ---------------------------------------------------------------------------
+// spec/44_5 (AP1/AP5): resolve an RPC operand.  Model: value model → its storage; ptr<T>/ref<T>/
+// shared<T> → the loaded object pointer; a refcount MODEL local holds a %M* → load it (a pointer slot
+// is never treated as the object).  Event: the rpc_event variable's storage.
+struct RpcModelArg {
+    llvm::Value* ptr = nullptr; llvm::Value* nodes = nullptr; llvm::Value* n = nullptr;
+    uint64_t size = 0; std::string tn;
+};
+static Symbol* rpcLookupSymbol(CompilerContext& ctx, const std::string& name) {
+    std::string vname = (name == "<") ? std::string("this") : name;
+    CompilerContext::Scope* sc = ctx.currentScope;
+    while (sc) {
+        auto it = sc->variables.find(vname);
+        if (it != sc->variables.end()) return &it->second;
+        sc = sc->parent;
+    }
+    auto it = ctx.symbol_table.find(vname);
+    return it != ctx.symbol_table.end() ? &it->second : nullptr;
+}
+static llvm::Value* rpcSymbolStorage(CompilerContext& ctx, Symbol* sym) {
+    return sym->alloca_inst ? static_cast<llvm::Value*>(sym->alloca_inst)
+                            : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
+}
+static bool rpcModelArg(CompilerContext& ctx, AIML::AST::Expr* expr, RpcModelArg& out) {
+    auto* vx = dynamic_cast<AIML::AST::VariableExpr*>(expr);
+    if (!vx) return false;
+    Symbol* sym = rpcLookupSymbol(ctx, vx->name);
+    if (!sym) return false;
+    std::string tn = sym->typeName;
+    bool indirect = false;
+    for (const char* w : {"ptr<", "ref<", "shared<"}) {
+        size_t wl = strlen(w);
+        if (tn.size() > wl && tn.compare(0, wl, w) == 0 && tn.back() == '>') {
+            tn = tn.substr(wl, tn.size() - wl - 1); indirect = true; break;
+        }
+    }
+    auto ci = ctx.classes.find(tn);
+    if (ci == ctx.classes.end() || !ci->second.serNodesVar || !ci->second.type) return false;
+    if (!indirect && ctx.isRefcountModel(tn)) indirect = true;
+    llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+    llvm::Value* av = rpcSymbolStorage(ctx, sym);
+    out.ptr   = indirect ? ctx.builder.CreateLoad(i8p, av, "rpc_obj") : ctx.builder.CreateBitCast(av, i8p);
+    out.nodes = ci->second.serNodesVar;
+    out.n     = ctx.builder.getInt32((uint32_t)ci->second.serNodesCount);
+    out.size  = ctx.module.getDataLayout().getTypeAllocSize(ci->second.type);
+    out.tn    = tn;
+    return true;
+}
+static llvm::Value* rpcEventArg(CompilerContext& ctx, AIML::AST::Expr* expr) {
+    auto* vx = dynamic_cast<AIML::AST::VariableExpr*>(expr);
+    if (!vx) return nullptr;
+    Symbol* sym = rpcLookupSymbol(ctx, vx->name);
+    if (!sym || sym->typeName != "rpc_event") return nullptr;
+    return ctx.builder.CreateBitCast(rpcSymbolStorage(ctx, sym), ctx.builder.getInt8Ty()->getPointerTo());
+}
+
+// spec/44_5 §7.1: hand the runtime the rpc table of a registered object's class (own + inherited
+// methods): { i8* method, i8* args_nodes, i32 n_nodes, i64 args_size, i8* thunk } per entry.
+static void emitRpcTableRegistration(CompilerContext& ctx, llvm::Value* sess, llvm::Value* objPtr,
+                                     const std::string& className) {
+    std::vector<const CompilerContext::RpcMethodEntry*> ents;
+    std::set<std::string> names;
+    std::string c = className;
+    for (const char* w : {"ptr<", "ref<", "shared<"}) {
+        size_t wl = strlen(w);
+        if (c.size() > wl && c.compare(0, wl, w) == 0 && c.back() == '>') { c = c.substr(wl, c.size() - wl - 1); break; }
+    }
+    for (int guard = 0; !c.empty() && guard < 32; ++guard) {
+        auto it = ctx.rpcMethodsByClass.find(c);
+        if (it != ctx.rpcMethodsByClass.end())
+            for (auto& e : it->second) if (names.insert(e.method).second) ents.push_back(&e);
+        auto ci = ctx.classes.find(c);
+        if (ci == ctx.classes.end()) break;
+        c = ci->second.parentName;
+    }
+    if (ents.empty()) return;
+    llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+    llvm::Type* i32 = ctx.builder.getInt32Ty();
+    llvm::Type* i64 = ctx.builder.getInt64Ty();
+    llvm::StructType* entTy = llvm::StructType::get(ctx.context, {i8p, i8p, i32, i64, i8p});
+    std::vector<llvm::Constant*> rows;
+    for (auto* e : ents) {
+        auto ai = ctx.classes.find(e->argsModel);
+        if (ai == ctx.classes.end() || !ai->second.serNodesVar || !ai->second.type) {
+            LOG_ERROR("rpc table: argument model '" + e->argsModel + "' has no serialization descriptor");
+            continue;
+        }
+        llvm::Function* th = ctx.module.getFunction(e->thunk);
+        if (!th)
+            th = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p}, false),
+                                        llvm::Function::ExternalLinkage, e->thunk, ctx.module);
+        uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(ai->second.type);
+        rows.push_back(llvm::ConstantStruct::get(entTy, {
+            ctx.builder.CreateGlobalStringPtr(e->method, "rpc_m"),
+            llvm::cast<llvm::Constant>(ai->second.serNodesVar),
+            llvm::ConstantInt::get(i32, (uint64_t)ai->second.serNodesCount),
+            llvm::ConstantInt::get(i64, sz),
+            th }));
+    }
+    if (rows.empty()) return;
+    auto* arrTy = llvm::ArrayType::get(entTy, rows.size());
+    auto* gv = new llvm::GlobalVariable(ctx.module, arrTy, true, llvm::GlobalValue::PrivateLinkage,
+                                        llvm::ConstantArray::get(arrTy, rows), "__aiml_rpc_table_" + className);
+    ctx.builder.CreateCall(
+        ctx.getFunction("aiml_mirror_session_set_rpc_table", ctx.builder.getVoidTy(), {i8p, i8p, i8p, i32}),
+        {sess, objPtr, ctx.builder.CreateBitCast(gv, i8p), ctx.builder.getInt32((uint32_t)rows.size())});
+}
+
+// ptr<T>/ref<T>/shared<T> variables hold the object pointer — mirror operations act on the object.
+static bool mirrorIsPtrLike(const std::string& t) {
+    return !t.empty() && t.back() == '>' && (t.rfind("ptr<", 0) == 0 || t.rfind("ref<", 0) == 0 || t.rfind("shared<", 0) == 0);
+}
+static std::string mirrorInnerType(const std::string& t) {
+    for (const char* w : {"ptr<", "ref<", "shared<"}) {
+        size_t wl = strlen(w);
+        if (t.size() > wl && t.compare(0, wl, w) == 0 && t.back() == '>') return t.substr(wl, t.size() - wl - 1);
+    }
+    return t;
+}
+
 void registerBuiltins(CompilerContext& ctx) {
     // spec/61 §8: builtins that hand back an OWNED string (aiml_str_dup) — the receiving local drops it.
     for (const char* fn : {"text_value"}) {
@@ -9706,18 +9825,15 @@ void registerBuiltins(CompilerContext& ctx) {
         }
 
         // ── rpc_event (isBuiltin=false — real struct, layout MUST mirror AimlRpcEvent in mirror_runtime.cpp)
-        //   { i8* method, i32 net_id, i32 arg, i32 arg_kind, i8* arg_blob, i32 arg_blob_len, i32 peer_id }
-        // Natural alignment inserts 4-byte padding between arg_kind (idx 3) and
-        // arg_blob (idx 4) — matches the C struct on x86-64 / aarch64.
+        //   { i8* method, i32 net_id, i32 arg, i32 arg_kind, i8* arg_blob, i32 arg_blob_len, i32 peer_id,
+        //     i32 kind, i64 request_id } — one definition: CompilerContext::rpcEventType().
         //
         // peer_id is the unique per-connection sender id (host-assigned at
         // accept-time); multi-client servers MUST use this — NOT net_id —
         // to identify the sender, since clients can race-allocate the same
         // net_id for their respective AuthRequest objects.
         {
-            llvm::StructType* evTy = llvm::StructType::getTypeByName(ctx.context, "rpc_event");
-            if (!evTy)
-                evTy = llvm::StructType::create(ctx.context, {i8p, i32, i32, i32, i8p, i32, i32}, "rpc_event");
+            llvm::StructType* evTy = ctx.rpcEventType();
 
             CI ci; ci.name = "rpc_event"; ci.type = evTy; ci.isBuiltin = false;
             auto mk = [](llvm::Type* t, int idx, const std::string& tn) {
@@ -9730,6 +9846,8 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.members["arg_blob"]     = mk(i8p, 4, "ptr");
             ci.members["arg_blob_len"] = mk(i32, 5, "i32");
             ci.members["peer_id"]      = mk(i32, 6, "i32");
+            ci.members["kind"]         = mk(i32, 7, "i32");   // 0 push, 1 request, 2 response, 3 object_call
+            ci.members["request_id"]   = mk(ctx.builder.getInt64Ty(), 8, "i64");
 
             // (decode is exposed as mirror_session.decode_rpc(ev, target) — see below.)
 #if 0
@@ -9811,7 +9929,7 @@ void registerBuiltins(CompilerContext& ctx) {
                         ? static_cast<llvm::Value*>(_os.alloca_inst) \
                         : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(_os.ir_alloca_inst)); \
                     llvm::Value* _mp = ctx.builder.CreateBitCast(_av, i8p); \
-                    if (ctx.isRefcountModel(_os.typeName)) _mp = ctx.builder.CreateLoad(i8p, _mp, "mirror_modelptr"); \
+                    if (ctx.isRefcountModel(_os.typeName) || mirrorIsPtrLike(_os.typeName)) _mp = ctx.builder.CreateLoad(i8p, _mp, "mirror_modelptr"); \
                     return _mp; } _sc = _sc->parent; } \
                 if (ctx.symbol_table.count(_vx->name)) { \
                     Symbol& _os = ctx.symbol_table[_vx->name]; \
@@ -9819,7 +9937,7 @@ void registerBuiltins(CompilerContext& ctx) {
                         ? static_cast<llvm::Value*>(_os.alloca_inst) \
                         : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(_os.ir_alloca_inst)); \
                     llvm::Value* _mp = ctx.builder.CreateBitCast(_av, i8p); \
-                    if (ctx.isRefcountModel(_os.typeName)) _mp = ctx.builder.CreateLoad(i8p, _mp, "mirror_modelptr"); \
+                    if (ctx.isRefcountModel(_os.typeName) || mirrorIsPtrLike(_os.typeName)) _mp = ctx.builder.CreateLoad(i8p, _mp, "mirror_modelptr"); \
                     return _mp; } \
             } \
             IRValue* _av2 = evalExpr(call->args[(call_arg_idx)].get()); \
@@ -9879,7 +9997,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 if (!objPtr) return ctx.ir_gen->getInt32(-1);
 
                 int64_t objSize = 8;
-                const std::string& tn = ctx.deserializeTargetType;
+                const std::string tn = mirrorInnerType(ctx.deserializeTargetType);
                 if (!tn.empty() && ctx.classes.count(tn) && ctx.classes[tn].type) {
                     llvm::DataLayout dl(&ctx.module);
                     objSize = (int64_t)dl.getTypeAllocSize(ctx.classes[tn].type);
@@ -9891,14 +10009,18 @@ void registerBuiltins(CompilerContext& ctx) {
                     auto& ci2 = ctx.classes[tn];
                     llvm::Value* nodesPtr = ci2.serNodesVar;
                     llvm::Value* nNodes   = ctx.builder.getInt32((uint32_t)ci2.serNodesCount);
-                    return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    llvm::Value* nidT = ctx.builder.CreateCall(
                         ctx.getFunction("aiml_mirror_session_register_typed",
                             i32, {i8p, i8p, i64, i8p, i32}),
-                        {s, objPtr, ctx.builder.getInt64(objSize), nodesPtr, nNodes}));
+                        {s, objPtr, ctx.builder.getInt64(objSize), nodesPtr, nNodes});
+                    emitRpcTableRegistration(ctx, s, objPtr, tn);
+                    return ctx.ir_gen->wrap(nidT);
                 }
-                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                llvm::Value* nidU = ctx.builder.CreateCall(
                     ctx.getFunction("aiml_mirror_session_register", i32, {i8p, i8p, i64}),
-                    {s, objPtr, ctx.builder.getInt64(objSize)}));
+                    {s, objPtr, ctx.builder.getInt64(objSize)});
+                if (!tn.empty()) emitRpcTableRegistration(ctx, s, objPtr, tn);
+                return ctx.ir_gen->wrap(nidU);
             };
 
             // ── register_id(obj, id: i32) → void ─────────────────────────────
@@ -9914,7 +10036,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 if (!objPtr) return ctx.ir_gen->wrap(ctx.builder.getInt32(0));
 
                 int64_t objSize = 8;
-                const std::string& tn = ctx.deserializeTargetType;
+                const std::string tn = mirrorInnerType(ctx.deserializeTargetType);
                 if (!tn.empty() && ctx.classes.count(tn) && ctx.classes[tn].type) {
                     llvm::DataLayout dl(&ctx.module);
                     objSize = (int64_t)dl.getTypeAllocSize(ctx.classes[tn].type);
@@ -9930,11 +10052,13 @@ void registerBuiltins(CompilerContext& ctx) {
                         ctx.getFunction("aiml_mirror_session_register_id_typed",
                             vd, {i8p, i8p, i64, i32, i8p, i32}),
                         {s, objPtr, ctx.builder.getInt64(objSize), idVal, nodesPtr, nNodes});
+                    emitRpcTableRegistration(ctx, s, objPtr, tn);
                     return ctx.ir_gen->wrap(ctx.builder.getInt32(0));
                 }
                 ctx.builder.CreateCall(
                     ctx.getFunction("aiml_mirror_session_register_id", vd, {i8p, i8p, i64, i32}),
                     {s, objPtr, ctx.builder.getInt64(objSize), idVal});
+                if (!tn.empty()) emitRpcTableRegistration(ctx, s, objPtr, tn);
                 return ctx.ir_gen->wrap(ctx.builder.getInt32(0));
             };
 
@@ -10039,87 +10163,128 @@ void registerBuiltins(CompilerContext& ctx) {
             // schema mismatch. Heap fields inside `target` (strings/lists/maps)
             // are newly allocated by aiml_ser_decode and must be released by
             // the caller via the model lifetime (currently leaked — see Stufe 1).
-            ci.builtinMethods["decode_rpc"] = [i8p, i32, vd](CompilerContext& ctx,
-                llvm::Value* /*base*/, AIML::AST::CallExpr* call, EvalFn evalExpr) -> IRValue* {
+            // decode_rpc(ev, target) → i32: transactional (spec/44_5) — a failed decode leaves the
+            // target untouched; success releases its previous heap.  0 = ok, -1 = wrong type/error.
+            ci.builtinMethods["decode_rpc"] = [i8p, i32](CompilerContext& ctx,
+                llvm::Value* /*base*/, AIML::AST::CallExpr* call, EvalFn) -> IRValue* {
                 if (call->args.size() < 2) return ctx.ir_gen->getInt32(-1);
-
-                // Arg 0: rpc_event variable — get its alloca address as i8*.
-                llvm::Value* evPtr = nullptr;
-                if (auto* vx = dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get())) {
-                    Symbol* sym = nullptr;
-                    CompilerContext::Scope* sc = ctx.currentScope;
-                    while (sc) {
-                        if (sc->variables.count(vx->name)) { sym = &sc->variables[vx->name]; break; }
-                        sc = sc->parent;
-                    }
-                    if (!sym && ctx.symbol_table.count(vx->name)) sym = &ctx.symbol_table[vx->name];
-                    if (sym) {
-                        llvm::Value* av = sym->alloca_inst
-                            ? static_cast<llvm::Value*>(sym->alloca_inst)
-                            : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
-                        evPtr = ctx.builder.CreateBitCast(av, i8p);
-                    }
-                }
-                if (!evPtr) return ctx.ir_gen->getInt32(-1);
-
-                // Arg 1: target model variable — alloca + type name.
-                llvm::Value* outPtr = nullptr;
-                std::string  outTn;
-                if (auto* vx = dynamic_cast<AIML::AST::VariableExpr*>(call->args[1].get())) {
-                    // `<` als standalone this-Referenz (analog visitVariable).
-                    std::string vname = (vx->name == "<") ? std::string("this") : vx->name;
-                    Symbol* sym = nullptr;
-                    CompilerContext::Scope* sc = ctx.currentScope;
-                    while (sc) {
-                        if (sc->variables.count(vname)) { sym = &sc->variables[vname]; break; }
-                        sc = sc->parent;
-                    }
-                    if (!sym && ctx.symbol_table.count(vname)) sym = &ctx.symbol_table[vname];
-                    if (sym) {
-                        llvm::Value* av = sym->alloca_inst
-                            ? static_cast<llvm::Value*>(sym->alloca_inst)
-                            : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
-                        outPtr = ctx.builder.CreateBitCast(av, i8p);
-                        outTn  = sym->typeName;
-                        // ref<T>/ptr<T> sind heute funktional identisch
-                        // (siehe spec/18_refs_and_pointers.md).  In beiden
-                        // Fällen ist die alloca ein Pointer auf den Object-
-                        // Pointer — wir müssen ihn dereferenzieren und den
-                        // Class-Namen aus den Brackets extrahieren.
-                        if ((outTn.rfind("ref<", 0) == 0 || outTn.rfind("ptr<", 0) == 0) &&
-                            outTn.back() == '>') {
-                            outTn = outTn.substr(4, outTn.size() - 5);
-                            llvm::Value* ptrLoaded = ctx.builder.CreateLoad(i8p,
-                                static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
-                                    sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst))),
-                                "deref_obj");
-                            outPtr = ctx.builder.CreateBitCast(ptrLoaded, i8p);
-                        }
-                    }
-                }
-                if (!outPtr || outTn.empty()
-                    || !ctx.classes.count(outTn)
-                    || !ctx.classes[outTn].serNodesVar)
+                llvm::Value* evPtr = rpcEventArg(ctx, call->args[0].get());
+                RpcModelArg m;
+                if (!evPtr || !rpcModelArg(ctx, call->args[1].get(), m)) {
+                    LOG_ERROR(ctx.fmtLoc() + "decode_rpc: expected (rpc_event variable, serializable model variable)");
                     return ctx.ir_gen->getInt32(-1);
-
-                auto& ci2 = ctx.classes[outTn];
-                // Zero-init: aiml_ser_decode requires `out` to be zero-initialised.
-                // Critical for models with list/map/string members so the heap-field
-                // pointers start null and the decode pass can populate them safely.
-                llvm::DataLayout dl(&ctx.module);
-                uint64_t outSz = dl.getTypeAllocSize(ci2.type);
-                ctx.builder.CreateMemSet(
-                    outPtr, ctx.builder.getInt8(0),
-                    ctx.builder.getInt64(outSz),
-                    llvm::MaybeAlign(1));
-
-                llvm::Value* nodesPtr = ci2.serNodesVar;
-                llvm::Value* nNodes   = ctx.builder.getInt32((uint32_t)ci2.serNodesCount);
+                }
                 llvm::Value* r = ctx.builder.CreateCall(
-                    ctx.getFunction("aiml_rpc_event_decode_into",
-                        i32, {i8p, i8p, i8p, i32}),
-                    {evPtr, outPtr, nodesPtr, nNodes});
+                    ctx.getFunction("aiml_rpc_event_decode_tx", i32, {i8p, i8p, ctx.builder.getInt64Ty(), i8p, i32}),
+                    {evPtr, m.ptr, ctx.builder.getInt64(m.size), m.nodes, m.n});
                 return ctx.ir_gen->wrap(r);
+            };
+
+            // ── take_rpc(method, target) → i32 (spec/44_5): first queued push of `method` whose
+            // payload is of the target's type; others keep their position.  1 = taken, 0 = none.
+            ci.builtinMethods["take_rpc"] = [i8p, i32](CompilerContext& ctx,
+                llvm::Value* base, AIML::AST::CallExpr* call, EvalFn evalExpr) -> IRValue* {
+                if (call->args.size() < 2) return ctx.ir_gen->getInt32(0);
+                llvm::Value* s = ctx.builder.CreateLoad(i8p, base, "sess_ptr");
+                llvm::Value* method = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                RpcModelArg m;
+                if (!rpcModelArg(ctx, call->args[1].get(), m)) {
+                    LOG_ERROR(ctx.fmtLoc() + "take_rpc: second argument must be a serializable model variable");
+                    return ctx.ir_gen->getInt32(0);
+                }
+                llvm::Value* r = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_mirror_session_take_rpc", i32, {i8p, i8p, i8p, ctx.builder.getInt64Ty(), i8p, i32}),
+                    {s, method, m.ptr, ctx.builder.getInt64(m.size), m.nodes, m.n});
+                return ctx.ir_gen->wrap(r);
+            };
+
+            // ── reply_rpc(ev, method, arg[, model]) (spec/44_5): answer the request in `ev` — to its
+            // sender peer, echoing its request id (a push when `ev` was not a request).
+            ci.builtinMethods["reply_rpc"] = [i8p, i32, vd](CompilerContext& ctx,
+                llvm::Value* base, AIML::AST::CallExpr* call, EvalFn evalExpr) -> IRValue* {
+                if (call->args.size() < 3) {
+                    LOG_ERROR(ctx.fmtLoc() + "reply_rpc: expected (rpc_event, method, arg[, model])");
+                    return ctx.ir_gen->getInt32(0);
+                }
+                llvm::Value* s = ctx.builder.CreateLoad(i8p, base, "sess_ptr");
+                llvm::Value* evPtr = rpcEventArg(ctx, call->args[0].get());
+                if (!evPtr) {
+                    LOG_ERROR(ctx.fmtLoc() + "reply_rpc: first argument must be the rpc_event variable");
+                    return ctx.ir_gen->getInt32(0);
+                }
+                llvm::Value* method = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+                llvm::Value* arg    = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[2].get())));
+                if (arg->getType() != i32 && arg->getType()->isIntegerTy()) arg = ctx.builder.CreateIntCast(arg, i32, true);
+                llvm::Value* nullp = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(i8p));
+                llvm::Value *obj = nullp, *nodes = nullp, *n = ctx.builder.getInt32(0);
+                if (call->args.size() >= 4) {
+                    RpcModelArg m;
+                    if (!rpcModelArg(ctx, call->args[3].get(), m)) {
+                        LOG_ERROR(ctx.fmtLoc() + "reply_rpc: 4th argument must be a serializable model variable");
+                        return ctx.ir_gen->getInt32(0);
+                    }
+                    obj = m.ptr; nodes = m.nodes; n = m.n;
+                }
+                ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_mirror_session_reply_rpc", vd, {i8p, i8p, i8p, i32, i8p, i8p, i32}),
+                    {s, evPtr, method, arg, obj, nodes, n});
+                return ctx.ir_gen->getInt32(0);
+            };
+
+            // ── send_request(target, method, arg, model) → i64 request id (0 = not sent) ──
+            ci.builtinMethods["send_request"] = [i8p, i32](CompilerContext& ctx,
+                llvm::Value* base, AIML::AST::CallExpr* call, EvalFn evalExpr) -> IRValue* {
+                llvm::Type* i64 = ctx.builder.getInt64Ty();
+                if (call->args.size() < 4) {
+                    LOG_ERROR(ctx.fmtLoc() + "send_request: expected (target, method, arg, model)");
+                    return ctx.ir_gen->wrap(ctx.builder.getInt64(0));
+                }
+                llvm::Value* s = ctx.builder.CreateLoad(i8p, base, "sess_ptr");
+                llvm::Value* target = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                llvm::Value* method = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
+                llvm::Value* arg    = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[2].get())));
+                if (target->getType() != i32 && target->getType()->isIntegerTy()) target = ctx.builder.CreateIntCast(target, i32, true);
+                if (arg->getType() != i32 && arg->getType()->isIntegerTy()) arg = ctx.builder.CreateIntCast(arg, i32, true);
+                RpcModelArg m;
+                if (!rpcModelArg(ctx, call->args[3].get(), m)) {
+                    LOG_ERROR(ctx.fmtLoc() + "send_request: 4th argument must be a serializable model variable");
+                    return ctx.ir_gen->wrap(ctx.builder.getInt64(0));
+                }
+                llvm::Value* r = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_mirror_session_send_request", i64, {i8p, i32, i8p, i32, i8p, i8p, i32}),
+                    {s, target, method, arg, m.ptr, m.nodes, m.n});
+                return ctx.ir_gen->wrap(r);
+            };
+
+            // ── take_response(id, target) → i32: 1 = decoded, 0 = not yet, -1 = protocol error ──
+            ci.builtinMethods["take_response"] = [i8p, i32](CompilerContext& ctx,
+                llvm::Value* base, AIML::AST::CallExpr* call, EvalFn evalExpr) -> IRValue* {
+                llvm::Type* i64 = ctx.builder.getInt64Ty();
+                if (call->args.size() < 2) return ctx.ir_gen->getInt32(-1);
+                llvm::Value* s  = ctx.builder.CreateLoad(i8p, base, "sess_ptr");
+                llvm::Value* id = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                if (id->getType() != i64 && id->getType()->isIntegerTy()) id = ctx.builder.CreateIntCast(id, i64, true);
+                RpcModelArg m;
+                if (!rpcModelArg(ctx, call->args[1].get(), m)) {
+                    LOG_ERROR(ctx.fmtLoc() + "take_response: second argument must be a serializable model variable");
+                    return ctx.ir_gen->getInt32(-1);
+                }
+                llvm::Value* r = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_mirror_session_take_response", i32, {i8p, i64, i8p, i8p, i64, i8p, i32}),
+                    {s, id, ctx.builder.CreateGlobalStringPtr("set_result"), m.ptr, ctx.builder.getInt64(m.size), m.nodes, m.n});
+                return ctx.ir_gen->wrap(r);
+            };
+
+            // ── cancel_request(id): drop interest (a late response is then discarded) ──
+            ci.builtinMethods["cancel_request"] = [i8p, vd](CompilerContext& ctx,
+                llvm::Value* base, AIML::AST::CallExpr* call, EvalFn evalExpr) -> IRValue* {
+                llvm::Type* i64 = ctx.builder.getInt64Ty();
+                if (call->args.size() < 1) return ctx.ir_gen->getInt32(0);
+                llvm::Value* s  = ctx.builder.CreateLoad(i8p, base, "sess_ptr");
+                llvm::Value* id = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
+                if (id->getType() != i64 && id->getType()->isIntegerTy()) id = ctx.builder.CreateIntCast(id, i64, true);
+                ctx.builder.CreateCall(ctx.getFunction("aiml_mirror_session_cancel_request", vd, {i8p, i64}), {s, id});
+                return ctx.ir_gen->getInt32(0);
             };
 
             // ── send_and_await(target_peer, method, req, out, timeout_ms) → i32
@@ -10148,82 +10313,27 @@ void registerBuiltins(CompilerContext& ctx) {
                 llvm::Value* s        = ctx.builder.CreateLoad(i8p, base, "sess_ptr");
                 llvm::Value* targetId = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[0].get())));
                 llvm::Value* method   = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[1].get())));
-
-                auto extractModelPtr = [&](AIML::AST::Expr* expr,
-                                           llvm::Value*& outPtr,
-                                           llvm::Value*& outNodesPtr,
-                                           llvm::Value*& outNNodes,
-                                           uint64_t& outSizeBytes,
-                                           std::string& outTypeName,
-                                           bool zeroInit) -> bool
-                {
-                    auto* vx = dynamic_cast<AIML::AST::VariableExpr*>(expr);
-                    if (!vx) return false;
-                    Symbol* sym = nullptr;
-                    CompilerContext::Scope* sc = ctx.currentScope;
-                    while (sc) {
-                        if (sc->variables.count(vx->name)) { sym = &sc->variables[vx->name]; break; }
-                        sc = sc->parent;
-                    }
-                    if (!sym && ctx.symbol_table.count(vx->name)) sym = &ctx.symbol_table[vx->name];
-                    if (!sym) return false;
-                    std::string tn = sym->typeName;
-                    bool isPtr = (tn.size() > 4 && tn.substr(0,4) == "ptr<" && tn.back() == '>');
-                    bool isRef = (tn.size() > 4 && tn.substr(0,4) == "ref<" && tn.back() == '>');
-                    if (isPtr || isRef) tn = tn.substr(4, tn.size() - 5);
-                    if (!ctx.classes.count(tn) || !ctx.classes[tn].serNodesVar) return false;
-                    auto& ci2 = ctx.classes[tn];
-
-                    llvm::Value* av = sym->alloca_inst
-                        ? static_cast<llvm::Value*>(sym->alloca_inst)
-                        : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
-                    if (isPtr || isRef) {
-                        outPtr = ctx.builder.CreateLoad(i8p, av, "obj_deref");
-                    } else {
-                        outPtr = ctx.builder.CreateBitCast(av, i8p);
-                    }
-                    outNodesPtr = ci2.serNodesVar;
-                    outNNodes   = ctx.builder.getInt32((uint32_t)ci2.serNodesCount);
-                    llvm::DataLayout dl(&ctx.module);
-                    outSizeBytes = dl.getTypeAllocSize(ci2.type);
-                    outTypeName  = tn;
-                    if (zeroInit) {
-                        ctx.builder.CreateMemSet(
-                            outPtr, ctx.builder.getInt8(0),
-                            ctx.builder.getInt64(outSizeBytes),
-                            llvm::MaybeAlign(1));
-                    }
-                    return true;
-                };
-
-                llvm::Value *reqPtr=nullptr, *reqNodes=nullptr, *reqN=nullptr;
-                llvm::Value *outPtr=nullptr, *outNodes=nullptr, *outN=nullptr;
-                uint64_t reqSz=0, outSz=0;
-                std::string reqTn, outTn;
-
-                if (!extractModelPtr(call->args[2].get(), reqPtr, reqNodes, reqN, reqSz, reqTn, /*zeroInit=*/false)) {
+                RpcModelArg req, out;
+                if (!rpcModelArg(ctx, call->args[2].get(), req)) {
                     LOG_ERROR(ctx.fmtLoc() + "send_and_await: 3rd arg must be a serializable model variable");
                     return ctx.ir_gen->getInt32(0);
                 }
-                if (!extractModelPtr(call->args[3].get(), outPtr, outNodes, outN, outSz, outTn, /*zeroInit=*/true)) {
+                // The out model is decoded transactionally (spec/44_5): no pre-zeroing here — a
+                // failed/absent reply leaves it untouched, a reply replaces its previous heap.
+                if (!rpcModelArg(ctx, call->args[3].get(), out)) {
                     LOG_ERROR(ctx.fmtLoc() + "send_and_await: 4th arg must be a serializable model variable (typically ptr<Model>)");
                     return ctx.ir_gen->getInt32(0);
                 }
-
                 llvm::Value* timeoutMs = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(evalExpr(call->args[4].get())));
-
-                // Filter-method is hard-coded to "set_result" — the dominant
-                // pattern across all known callers.  Future signature could
-                // accept a 6th arg if needed.
                 llvm::Value* expectMethod = ctx.builder.CreateGlobalStringPtr("set_result");
-
+                llvm::Type* i64 = ctx.builder.getInt64Ty();
                 llvm::Value* r = ctx.builder.CreateCall(
                     ctx.getFunction("aiml_mirror_session_send_and_await",
-                        i32, {i8p, i32, i8p, i32, i8p, i8p, i32, i8p, i8p, i8p, i32, i32}),
+                        i32, {i8p, i32, i8p, i32, i8p, i8p, i32, i8p, i8p, i64, i8p, i32, i32}),
                     {s, targetId, method, ctx.builder.getInt32(0),
-                     reqPtr, reqNodes, reqN,
+                     req.ptr, req.nodes, req.n,
                      expectMethod,
-                     outPtr, outNodes, outN,
+                     out.ptr, ctx.builder.getInt64(out.size), out.nodes, out.n,
                      timeoutMs});
                 return ctx.ir_gen->wrap(r);
             };
@@ -10349,6 +10459,21 @@ void registerBuiltins(CompilerContext& ctx) {
         // ── mirror namespace (factory functions) ──────────────────────────────
         {
             auto& mir = ctx.namespaces["mirror"];
+
+            // mirror.object_call(obj, method, &args) → i32 (spec/44_5 §7.1, used by synthesized rpc
+            // wrappers): 1 = routed to other peers only, 0 = run the method body locally.
+            mir.builtinFuncs["object_call"] = [i8p](CompilerContext& ctx,
+                const std::vector<IRValue*>& args) -> IRValue* {
+                if (args.size() < 3) return ctx.ir_gen->getInt32(0);
+                llvm::Value* obj = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+                llvm::Value* m   = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+                llvm::Value* a   = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]));
+                if (!obj || !obj->getType()->isPointerTy() || !a || !a->getType()->isPointerTy())
+                    return ctx.ir_gen->getInt32(0);
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_mirror_object_call", ctx.builder.getInt32Ty(), {i8p, i8p, i8p}),
+                    {obj, m, a}));
+            };
 
             mir.builtinFuncs["listen"] = [i8p](CompilerContext& ctx,
                 const std::vector<IRValue*>& args) -> IRValue* {
