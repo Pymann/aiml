@@ -1,0 +1,211 @@
+# spec/44_5 §4/§10 DELTA format 2 on a typed replica (here: the host's replica of a client-
+# registered object).  A raw websocket peer sends well-formed frames with a wrong magic, a wrong
+# schema fingerprint and raw format-0 bytes: each is rejected (snapshot_error = -2), revision and
+# content stay unchanged, nothing overwrites the replica's heap pointers.  Valid → invalid → valid
+# changes state only on success.  A defective first DELTA leaves the defaults (revision 0).  Remote
+# UNREGISTER and close keep the borrowed objects readable; scope end frees them once (valgrind).
+#
+# Expected exit code: 0
+
+- model:
+    name: DrState
+    fields:
+      - [label, string, "init"]
+      - [vals, list<i32>]
+      - [score, i32, 0]
+
+- decl: [g_dr_phase, i32, 0]
+
+- def:
+    name: dr_fail
+    args: [[msg, string]]
+    body:
+      - print: ["FAIL ${msg}"]
+      - call: [sys.exit, 1]
+
+- def:
+    name: dr_pump
+    args: [[sess, mirror_session], [millis, i32]]
+    body:
+      - decl: [until, i64, { +: [{ call: [time.mono_ms] }, millis] }]
+      - while:
+          condition: { lt: [{ call: [time.mono_ms] }, until] }
+          body:
+            - call: [sess.update]
+            - call: [time.sleep_ms, 2]
+
+- def:
+    name: dr_host
+    static_off: ["str_cmp"]
+    body:
+      - decl: [sess, mirror_session, { call: [mirror.listen, "ws://127.0.0.1:19988"] }]
+      - decl: [rep_a, DrState]
+      - decl: [rep_b, DrState]
+      - decl: [rev1, u64, 0]
+      - decl: [deadline, i64, { +: [{ call: [time.mono_ms] }, 15000] }]
+      - while:
+          condition: { lt: [g_dr_phase, 9] }
+          body:
+            - call: [sess.update]
+            - decl: [evt, mirror_event, { call: [sess.poll_event] }]
+            - if:
+                condition: { '&&': [{ eq: [evt.type, "object_registered"] }, { eq: [evt.net_id, 500] }] }
+                then: [{ call: [sess.register_id, rep_a, 500] }]
+            - if:
+                condition: { '&&': [{ eq: [evt.type, "object_registered"] }, { eq: [evt.net_id, 600] }] }
+                then:
+                  - call: [dr_pump, sess, 250]
+                  - call: [sess.register_id, rep_b, 600]
+            # 0 → 1: first valid snapshot
+            - if:
+                condition: { '&&': [{ eq: [g_dr_phase, 0] }, { gt: [{ call: [sess.snapshot_revision, 500] }, 0] }] }
+                then:
+                  - if: { condition: { neq: [{ call: [sess.snapshot_error, 500] }, 0] }, then: [{ call: [dr_fail, "first snapshot error"] }] }
+                  - if: { condition: { '||': [{ neq: [rep_a.label, "v1"] }, { '||': [{ neq: [rep_a.vals.len, 2] }, { neq: [rep_a.score, 10] }] }] }, then: [{ call: [dr_fail, "first snapshot content label='${rep_a.label}'"] }] }
+                  - set: [rev1, { call: [sess.snapshot_revision, 500] }]
+                  - set: [g_dr_phase, 1]
+            # 2 → 3: three rejected frames
+            - if:
+                condition: { eq: [g_dr_phase, 2] }
+                then:
+                  - call: [dr_pump, sess, 60]
+                  - decl: [err_a, i32, { call: [sess.snapshot_error, 500] }]
+                  - if: { condition: { neq: [err_a, -2] }, then: [{ call: [dr_fail, "defective frames: snapshot_error=${err_a}, expected -2"] }] }
+                  - if: { condition: { neq: [{ call: [sess.snapshot_revision, 500] }, rev1] }, then: [{ call: [dr_fail, "defective frames changed the revision"] }] }
+                  - if: { condition: { '||': [{ neq: [rep_a.label, "v1"] }, { '||': [{ neq: [rep_a.vals.len, 2] }, { neq: [rep_a.score, 10] }] }] }, then: [{ call: [dr_fail, "defective frames mutated the replica label='${rep_a.label}'"] }] }
+                  - if: { condition: { neq: [{ at: [rep_a.vals, 1] }, 2] }, then: [{ call: [dr_fail, "defective frames mutated vals"] }] }
+                  - set: [g_dr_phase, 3]
+            # 3 → 4: valid again
+            - if:
+                condition: { '&&': [{ eq: [g_dr_phase, 3] }, { gt: [{ call: [sess.snapshot_revision, 500] }, rev1] }] }
+                then:
+                  - if: { condition: { neq: [{ call: [sess.snapshot_error, 500] }, 0] }, then: [{ call: [dr_fail, "success did not clear snapshot_error"] }] }
+                  - if: { condition: { '||': [{ neq: [rep_a.label, "v2"] }, { '||': [{ neq: [rep_a.vals.len, 1] }, { neq: [rep_a.score, 20] }] }] }, then: [{ call: [dr_fail, "second snapshot content label='${rep_a.label}'"] }] }
+                  - set: [g_dr_phase, 4]
+            # 5 → 6: defective first DELTA (pending or live) keeps the defaults
+            - if:
+                condition: { eq: [g_dr_phase, 5] }
+                then:
+                  - call: [dr_pump, sess, 120]
+                  - if: { condition: { neq: [{ call: [sess.snapshot_error, 600] }, -2] }, then: [{ call: [dr_fail, "defective first DELTA: snapshot_error=${ { call: [sess.snapshot_error, 600] } }"] }] }
+                  - if: { condition: { neq: [{ call: [sess.snapshot_revision, 600] }, 0] }, then: [{ call: [dr_fail, "defective first DELTA counted as snapshot"] }] }
+                  - if: { condition: { '||': [{ neq: [rep_b.label, "init"] }, { '||': [{ neq: [rep_b.vals.len, 0] }, { neq: [rep_b.score, 0] }] }] }, then: [{ call: [dr_fail, "defective first DELTA changed the defaults label='${rep_b.label}'"] }] }
+                  - set: [g_dr_phase, 6]
+            # 7 → 8: remote UNREGISTER removes the registration, the object stays readable
+            - if:
+                condition: { '&&': [{ eq: [g_dr_phase, 7] }, { eq: [{ call: [sess.snapshot_error, 500] }, -3] }] }
+                then:
+                  - if: { condition: { '||': [{ neq: [rep_a.label, "v2"] }, { neq: [rep_a.vals.len, 1] }] }, then: [{ call: [dr_fail, "remote UNREGISTER destroyed the replica label='${rep_a.label}'"] }] }
+                  - set: [g_dr_phase, 8]
+            - if: { condition: { gt: [{ call: [time.mono_ms] }, deadline] }, then: [{ call: [dr_fail, "host timeout in phase ${g_dr_phase}"] }] }
+            - call: [time.sleep_ms, 2]
+      - call: [sess.close]
+      - if: { condition: { '||': [{ neq: [rep_a.label, "v2"] }, { neq: [{ at: [rep_a.vals, 0] }, 3] }] }, then: [{ call: [dr_fail, "close destroyed rep_a"] }] }
+      - if: { condition: { neq: [rep_b.label, "init"] }, then: [{ call: [dr_fail, "close destroyed rep_b"] }] }
+
+# [net_id:u32][type:u8][reserved:u8]
+- def:
+    name: dr_hdr
+    args: [[buf, buffer], [nid, i32], [ptype, i32], [reserved, i32]]
+    body:
+      - call: [buf.write, nid, i32]
+      - call: [buf.write, ptype, u8]
+      - call: [buf.write, reserved, u8]
+
+- def:
+    name: dr_wait_phase
+    args: [[cli, mirror_session], [want, i32]]
+    body:
+      - decl: [until, i64, { +: [{ call: [time.mono_ms] }, 8000] }]
+      - while:
+          condition: { neq: [g_dr_phase, want] }
+          body:
+            - call: [cli.update]
+            - call: [time.sleep_ms, 2]
+            - if: { condition: { gt: [{ call: [time.mono_ms] }, until] }, then: [{ call: [dr_fail, "client timeout waiting for phase ${want} (at ${g_dr_phase})"] }] }
+
+- def:
+    name: main
+    body:
+      - decl: [host_th, thread_handle, { spawn: [dr_host] }]
+      - call: [time.sleep_ms, 150]
+      - decl: [cli, mirror_session, { call: [mirror.connect_timeout, "ws://127.0.0.1:19988", 3000] }]
+      - decl: [raw, ws_handle, { call: [ws.connect, "127.0.0.1", 19988, "/"] }]
+      - decl: [obj, DrState]
+      - set: [obj.label, "v1"]
+      - call: [obj.vals.push, 1]
+      - call: [obj.vals.push, 2]
+      - set: [obj.score, 10]
+      - call: [cli.register_id, obj, 500]
+      - call: [dr_wait_phase, cli, 1]
+
+      # wrong magic (frame well-formed: payload_len = 8 + 4)
+      - decl: [bad_magic, buffer]
+      - call: [bad_magic.alloc, 64]
+      - call: [dr_hdr, bad_magic, 500, 1, 2]
+      - call: [bad_magic.write, 12, i32]
+      - call: [bad_magic.write, 305419896, i32]
+      - call: [bad_magic.write, 0, i32]
+      - call: [bad_magic.write, 0, i32]
+      - call: [bad_magic.ws_send, raw]
+      # right magic, wrong fingerprint
+      - decl: [bad_fp, buffer]
+      - call: [bad_fp.alloc, 64]
+      - call: [dr_hdr, bad_fp, 500, 1, 2]
+      - call: [bad_fp.write, 12, i32]
+      - call: [bad_fp.write, -1577729825, i32]
+      - call: [bad_fp.write, 7, i32]
+      - call: [bad_fp.write, 0, i32]
+      - call: [bad_fp.ws_send, raw]
+      # raw format-0 bytes aimed at a typed replica (would overwrite heap pointers)
+      - decl: [bad_raw, buffer]
+      - call: [bad_raw.alloc, 64]
+      - call: [dr_hdr, bad_raw, 500, 1, 0]
+      - decl: [fill_i, i32, 0]
+      - while:
+          condition: { lt: [fill_i, 8] }
+          body:
+            - call: [bad_raw.write, 1094795585, i32]
+            - set: [fill_i, { +: [fill_i, 1] }]
+      - call: [bad_raw.ws_send, raw]
+      - call: [time.sleep_ms, 20]
+      - set: [g_dr_phase, 2]
+      - call: [dr_wait_phase, cli, 3]
+
+      # valid again
+      - set: [obj.label, "v2"]
+      - call: [obj.vals.clear]
+      - call: [obj.vals.push, 3]
+      - set: [obj.score, 20]
+      - call: [cli.sync_now, obj]
+      - call: [dr_wait_phase, cli, 4]
+
+      # defective first DELTA for a fresh net id
+      - decl: [reg600, buffer]
+      - call: [reg600.alloc, 32]
+      - call: [dr_hdr, reg600, 600, 3, 0]
+      - call: [reg600.write, 600, i32]
+      - call: [reg600.write, 64, i32]
+      - call: [reg600.ws_send, raw]
+      - decl: [bad600, buffer]
+      - call: [bad600.alloc, 64]
+      - call: [dr_hdr, bad600, 600, 1, 2]
+      - call: [bad600.write, 12, i32]
+      - call: [bad600.write, 305419896, i32]
+      - call: [bad600.write, 0, i32]
+      - call: [bad600.write, 0, i32]
+      - call: [bad600.ws_send, raw]
+      - set: [g_dr_phase, 5]
+      - call: [dr_wait_phase, cli, 6]
+
+      # remote UNREGISTER
+      - call: [cli.unregister, obj]
+      - call: [cli.update]
+      - set: [g_dr_phase, 7]
+      - call: [dr_wait_phase, cli, 8]
+
+      - set: [g_dr_phase, 9]
+      - call: [host_th.join]
+      - call: [cli.close]
+      - call: [raw.close]
+      - print: ["mirror delta reject PASS"]

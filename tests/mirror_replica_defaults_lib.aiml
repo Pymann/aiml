@@ -1,0 +1,20 @@
+# Requires: library
+
+- model:
+    name: RdInner
+    fields:
+      - [tag, string]
+      - [level, i32, 0]
+
+- model:
+    name: RdModel
+    fields:
+      - [plain, string]
+      - [named, string, "dflt"]
+      - [items, list<string>]
+      - [table, map<string:i32>]
+      - [inner, RdInner]
+      - [parts, list<RdInner>]
+      - [count, i32, 5]
+
+- decl: [g_rd_global, RdModel]

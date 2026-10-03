@@ -1,0 +1,254 @@
+# Replica initial state + teardown (delta_replica_ws9 plan, commit 1).  One model with a string
+# without default, a string with default, a list, a map, a nested model and a scalar default, in
+# five variants: local, imported global, main-file global, ptr<>, shared<>.
+#   A  defaults hold before any network call; JSON serialization agrees across variants
+#   B  decode_rpc (transactional, releases the old heap) into each default-state variant
+#   C  each variant bound as a mirror replica: snapshot applied, fields still readable after the
+#      session is closed (mirror borrows the object), scope end frees exactly once (valgrind)
+#
+# Expected exit code: 0
+
+- import: "tests/mirror_replica_defaults_lib.aiml"
+
+- decl: [g_rd_stage, i32, 0]
+- decl: [g_rd_main, RdModel]
+
+- def:
+    name: rd_fail
+    args: [[msg, string]]
+    body:
+      - print: ["FAIL ${msg}"]
+      - call: [sys.exit, 1]
+
+- def:
+    name: rd_check_defaults
+    args: [[label, string], [mdl, ref<RdModel>]]
+    static_off: ["str_cmp", "same_arg"]
+    body:
+      - if: { condition: { neq: [mdl.plain, ""] }, then: [{ call: [rd_fail, "${label}: plain='${mdl.plain}'"] }] }
+      - if: { condition: { neq: [mdl.named, "dflt"] }, then: [{ call: [rd_fail, "${label}: named='${mdl.named}'"] }] }
+      - if: { condition: { neq: [mdl.items.len, 0] }, then: [{ call: [rd_fail, "${label}: items.len=${mdl.items.len}"] }] }
+      - if: { condition: { neq: [mdl.table.len, 0] }, then: [{ call: [rd_fail, "${label}: table.len=${mdl.table.len}"] }] }
+      - if: { condition: { neq: [mdl.inner.tag, ""] }, then: [{ call: [rd_fail, "${label}: inner.tag='${mdl.inner.tag}'"] }] }
+      - if: { condition: { neq: [mdl.inner.level, 0] }, then: [{ call: [rd_fail, "${label}: inner.level=${mdl.inner.level}"] }] }
+      - if: { condition: { neq: [mdl.parts.len, 0] }, then: [{ call: [rd_fail, "${label}: parts.len=${mdl.parts.len}"] }] }
+      - if: { condition: { neq: [mdl.count, 5] }, then: [{ call: [rd_fail, "${label}: count=${mdl.count}"] }] }
+
+- def:
+    name: rd_fill
+    args: [[mdl, ref<RdModel>], [val, i32]]
+    static_off: ["same_arg"]
+    body:
+      - set: [mdl.plain, "p${val}"]
+      - set: [mdl.named, "n${val}"]
+      - call: [mdl.items.push, "a${val}"]
+      - call: [mdl.items.push, "b${val}"]
+      - call: [mdl.table.put, "k${val}", val]
+      - set: [mdl.inner.tag, "t${val}"]
+      - set: [mdl.inner.level, { +: [val, 1] }]
+      - decl: [part, RdInner]
+      - set: [part.tag, "q${val}"]
+      - set: [part.level, val]
+      - call: [mdl.parts.push, part]
+      - set: [mdl.count, val]
+
+- def:
+    name: rd_check_values
+    args: [[label, string], [mdl, ref<RdModel>], [val, i32]]
+    static_off: ["str_cmp", "same_arg"]
+    body:
+      - if: { condition: { neq: [mdl.plain, "p${val}"] }, then: [{ call: [rd_fail, "${label}: plain='${mdl.plain}' want p${val}"] }] }
+      - if: { condition: { neq: [mdl.named, "n${val}"] }, then: [{ call: [rd_fail, "${label}: named='${mdl.named}' want n${val}"] }] }
+      - if: { condition: { neq: [mdl.items.len, 2] }, then: [{ call: [rd_fail, "${label}: items.len=${mdl.items.len}"] }] }
+      - if: { condition: { neq: [{ at: [mdl.items, 1] }, "b${val}"] }, then: [{ call: [rd_fail, "${label}: items[1]"] }] }
+      - if: { condition: { neq: [mdl.table.len, 1] }, then: [{ call: [rd_fail, "${label}: table.len=${mdl.table.len}"] }] }
+      - if: { condition: { neq: [{ call: [mdl.table.get, "k${val}"] }, val] }, then: [{ call: [rd_fail, "${label}: table[k${val}]"] }] }
+      - if: { condition: { neq: [mdl.inner.tag, "t${val}"] }, then: [{ call: [rd_fail, "${label}: inner.tag='${mdl.inner.tag}'"] }] }
+      - if: { condition: { neq: [mdl.inner.level, { +: [val, 1] }] }, then: [{ call: [rd_fail, "${label}: inner.level=${mdl.inner.level}"] }] }
+      - if: { condition: { neq: [mdl.parts.len, 1] }, then: [{ call: [rd_fail, "${label}: parts.len=${mdl.parts.len}"] }] }
+      - if: { condition: { neq: [{ at: [mdl.parts, 0, .tag] }, "q${val}"] }, then: [{ call: [rd_fail, "${label}: parts[0].tag"] }] }
+      - if: { condition: { neq: [mdl.count, val] }, then: [{ call: [rd_fail, "${label}: count=${mdl.count}"] }] }
+
+# ── A: no network ─────────────────────────────────────────────────────────────
+- def:
+    name: rd_stage_a
+    static_off: ["str_cmp"]
+    body:
+      - decl: [loc, RdModel]
+      - decl: [heap, ptr<RdModel>, { new: RdModel }]
+      - decl: [shrd, shared<RdModel>, { share: { new: RdModel } }]
+      - call: [rd_check_defaults, "A local", loc]
+      - call: [rd_check_defaults, "A global", g_rd_global]
+      - call: [rd_check_defaults, "A main global", g_rd_main]
+      - call: [rd_check_defaults, "A ptr", heap]
+      - call: [rd_check_defaults, "A shared", shrd]
+      - decl: [js_loc, string, { call: [sys.serialize, loc] }]
+      - decl: [js_glob, string, { call: [sys.serialize, g_rd_global] }]
+      - decl: [js_main, string, { call: [sys.serialize, g_rd_main] }]
+      - decl: [js_heap, string, { call: [sys.serialize, heap] }]
+      - if: { condition: { neq: [js_loc, js_glob] }, then: [{ call: [rd_fail, "A json local/global: ${js_loc} vs ${js_glob}"] }] }
+      - if: { condition: { neq: [js_loc, js_main] }, then: [{ call: [rd_fail, "A json local/main global: ${js_loc} vs ${js_main}"] }] }
+      - if: { condition: { neq: [js_loc, js_heap] }, then: [{ call: [rd_fail, "A json local/ptr: ${js_loc} vs ${js_heap}"] }] }
+      - free: heap
+
+# ── host: B pushes four RdModel payloads, C owns four registered objects ────
+- def:
+    name: rd_host
+    body:
+      - decl: [sess, mirror_session, { call: [mirror.listen, "ws://127.0.0.1:19989"] }]
+      - decl: [src1, RdModel]
+      - decl: [src2, RdModel]
+      - decl: [src3, RdModel]
+      - decl: [src4, RdModel]
+      - decl: [src5, RdModel]
+      - call: [rd_fill, src1, 1]
+      - call: [rd_fill, src2, 2]
+      - call: [rd_fill, src3, 3]
+      - call: [rd_fill, src4, 4]
+      - call: [rd_fill, src5, 5]
+      - decl: [peer, i32, 0]
+      - decl: [tries, i32, 0]
+      - while:
+          condition: { '&&': [{ lt: [g_rd_stage, 9] }, { lt: [tries, 2000] }] }
+          body:
+            - call: [sess.update]
+            - if:
+                condition: { '&&': [{ eq: [peer, 0] }, { gt: [{ call: [sess.has_rpc] }, 0] }] }
+                then:
+                  - decl: [hello, rpc_event, { call: [sess.next_rpc] }]
+                  - set: [peer, hello.peer_id]
+                  - call: [sess.send_rpc, peer, "rd", 1, src1]
+                  - call: [sess.send_rpc, peer, "rd", 2, src2]
+                  - call: [sess.send_rpc, peer, "rd", 3, src3]
+                  - call: [sess.send_rpc, peer, "rd", 4, src4]
+            - if:
+                condition: { eq: [g_rd_stage, 2] }
+                then:
+                  - call: [sess.register, src1]
+                  - call: [sess.register, src2]
+                  - call: [sess.register, src3]
+                  - call: [sess.register, src4]
+                  - call: [sess.register, src5]
+                  - set: [g_rd_stage, 3]
+            - call: [time.sleep_ms, 2]
+            - set: [tries, { +: [tries, 1] }]
+      - call: [sess.unregister, src1]
+      - call: [sess.unregister, src2]
+      - call: [sess.unregister, src3]
+      - call: [sess.unregister, src4]
+      - call: [sess.unregister, src5]
+      - call: [sess.close]
+
+- def:
+    name: rd_pump
+    args: [[cli, mirror_session], [rounds, i32]]
+    body:
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, rounds] }
+          body:
+            - call: [cli.update]
+            - call: [time.sleep_ms, 3]
+            - set: [round, { +: [round, 1] }]
+
+- def:
+    name: rd_stage_bc
+    static_off: ["str_cmp"]
+    body:
+      - decl: [host_th, thread_handle, { spawn: [rd_host] }]
+      - call: [time.sleep_ms, 150]
+      - decl: [cli, mirror_session, { call: [mirror.connect_timeout, "ws://127.0.0.1:19989", 3000] }]
+      - call: [rd_pump, cli, 10]
+      - call: [cli.send_rpc, 0, "hello", 0]
+
+      # B: decode_rpc into default-state variants
+      - decl: [loc, RdModel]
+      - decl: [heap, ptr<RdModel>, { new: RdModel }]
+      - decl: [shrd, shared<RdModel>, { share: { new: RdModel } }]
+      - decl: [got, i32, 0]
+      - decl: [spin, i32, 0]
+      - while:
+          condition: { '&&': [{ lt: [got, 4] }, { lt: [spin, 500] }] }
+          body:
+            - call: [cli.update]
+            - decl: [rpc, rpc_event, { call: [cli.poll_rpc] }]
+            - if:
+                condition: { eq: [rpc.method, "rd"] }
+                then:
+                  - decl: [rc_val, i32, -9]
+                  - if: { condition: { eq: [rpc.arg, 1] }, then: [{ set: [rc_val, { call: [cli.decode_rpc, rpc, loc] }] }] }
+                  - if: { condition: { eq: [rpc.arg, 2] }, then: [{ set: [rc_val, { call: [cli.decode_rpc, rpc, g_rd_global] }] }] }
+                  - if: { condition: { eq: [rpc.arg, 3] }, then: [{ set: [rc_val, { call: [cli.decode_rpc, rpc, heap] }] }] }
+                  - if: { condition: { eq: [rpc.arg, 4] }, then: [{ set: [rc_val, { call: [cli.decode_rpc, rpc, shrd] }] }] }
+                  - if: { condition: { neq: [rc_val, 0] }, then: [{ call: [rd_fail, "B decode_rpc arg=${rpc.arg} rc=${rc_val}"] }] }
+                  - set: [got, { +: [got, 1] }]
+            - call: [time.sleep_ms, 3]
+            - set: [spin, { +: [spin, 1] }]
+      - if: { condition: { neq: [got, 4] }, then: [{ call: [rd_fail, "B received ${got}/4 payloads"] }] }
+      - call: [rd_check_values, "B local", loc, 1]
+      - call: [rd_check_values, "B global", g_rd_global, 2]
+      - call: [rd_check_values, "B ptr", heap, 3]
+      - call: [rd_check_values, "B shared", shrd, 4]
+      - free: heap
+
+      # C: fresh default-state variants bound as replicas
+      - decl: [rloc, RdModel]
+      - decl: [rheap, ptr<RdModel>, { new: RdModel }]
+      - decl: [rco, shared<RdModel>, { share: { new: RdModel } }]
+      - set: [g_rd_stage, 2]
+      - decl: [nids, list<i32>]
+      - set: [spin, 0]
+      - while:
+          condition: { '&&': [{ lt: [nids.len, 5] }, { lt: [spin, 500] }] }
+          body:
+            - call: [cli.update]
+            - decl: [evt, mirror_event, { call: [cli.poll_event] }]
+            - if: { condition: { eq: [evt.type, "object_registered"] }, then: [{ call: [nids.push, evt.net_id] }] }
+            - call: [time.sleep_ms, 3]
+            - set: [spin, { +: [spin, 1] }]
+      - if: { condition: { neq: [nids.len, 5] }, then: [{ call: [rd_fail, "C saw ${nids.len}/5 registrations"] }] }
+      - call: [rd_check_defaults, "C local before bind", rloc]
+      - call: [rd_check_defaults, "C main global before bind", g_rd_main]
+      - call: [cli.register_id, rloc, { at: [nids, 0] }]
+      - call: [cli.register_id, rheap, { at: [nids, 2] }]
+      - call: [cli.register_id, rco, { at: [nids, 3] }]
+      - call: [cli.register_id, g_rd_global, { at: [nids, 1] }]
+      - call: [cli.register_id, g_rd_main, { at: [nids, 4] }]
+      - decl: [ready, i32, 0]
+      - decl: [until, i64, { +: [{ call: [time.mono_ms] }, 5000] }]
+      - while:
+          condition: { lt: [ready, 5] }
+          body:
+            - call: [cli.update]
+            - set: [ready, 0]
+            - decl: [slot, i32, 0]
+            - while:
+                condition: { lt: [slot, 5] }
+                body:
+                  - if: { condition: { gt: [{ call: [cli.snapshot_revision, { at: [nids, slot] }] }, 0] }, then: [{ set: [ready, { +: [ready, 1] }] }] }
+                  - set: [slot, { +: [slot, 1] }]
+            - if: { condition: { gt: [{ call: [time.mono_ms] }, until] }, then: [{ call: [rd_fail, "C only ${ready}/5 snapshots applied"] }] }
+            - call: [time.sleep_ms, 2]
+      - call: [rd_check_values, "C local", rloc, 1]
+      - call: [rd_check_values, "C ptr", rheap, 3]
+      - call: [rd_check_values, "C shared", rco, 4]
+      - call: [rd_check_values, "C global", g_rd_global, 2]
+      - call: [rd_check_values, "C main global", g_rd_main, 5]
+
+      - set: [g_rd_stage, 9]
+      - call: [host_th.join]
+      - call: [cli.close]
+      # mirror borrowed the replicas: their fields survive the session
+      - call: [rd_check_values, "C local after close", rloc, 1]
+      - call: [rd_check_values, "C ptr after close", rheap, 3]
+      - call: [rd_check_values, "C shared after close", rco, 4]
+      - call: [rd_check_values, "C global after close", g_rd_global, 2]
+      - call: [rd_check_values, "C main global after close", g_rd_main, 5]
+      - free: rheap
+
+- def:
+    name: main
+    body:
+      - call: [rd_stage_a]
+      - call: [rd_stage_bc]
+      - print: ["mirror replica defaults PASS"]

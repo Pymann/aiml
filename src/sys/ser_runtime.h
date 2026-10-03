@@ -96,10 +96,17 @@ int  aiml_ser_decode_sized(const char* blob, size_t blob_size, void* out,
                            const AimlTypeNode* nodes, int32_t n_nodes);
 int  aiml_ser_decode_sized_tx(const char* blob, size_t blob_size, void* out, size_t out_size,
                               const AimlTypeNode* nodes, int32_t n_nodes, int release_old);
-int  aiml_ser_decode_bounded(const char* blob, size_t blob_size, void* out,
-                             const AimlTypeNode* nodes, int32_t n_nodes);
 int  aiml_ser_rpc_blob_matches_sized(const char* blob, size_t blob_size,
                                      const AimlTypeNode* nodes, int32_t n_nodes);
+// spec/44_5 §10 DELTA format 2: wire-mode blob [len][RPC magic][structural fp][fields] (caller frees).
+char* aiml_ser_encode_wire(const void* obj, const AimlTypeNode* nodes, int32_t n_nodes);
+// Transactional DELTA apply: 0 ok, -1 decode error, -2 missing magic / foreign fingerprint.
+// `out` must be a fully initialised model owned by the caller; its previous heap is released
+// only on success, on failure it is untouched.
+int   aiml_ser_decode_delta_tx(const char* blob, size_t blob_size, void* out, size_t out_size,
+                               const AimlTypeNode* nodes, int32_t n_nodes);
+// 1 if the descriptor can travel as a DELTA (no recursive PTR_REF / weak / tensor / resource leaf).
+int   aiml_ser_wire_syncable(const AimlTypeNode* nodes, int32_t n_nodes);
 
 
 // ── Encode ────────────────────────────────────────────────────────────────────

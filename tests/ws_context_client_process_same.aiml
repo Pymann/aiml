@@ -1,0 +1,62 @@
+# Requires: library
+# Client-side entrypoint compiled with import set A + an unrelated module.  Same wire schema as the host: the snapshot must apply.
+
+- import: "tests/ws_context_client_top_same.aiml"
+
+- decl: [client, mirror_session]
+- set: [client, { call: [mirror.connect_timeout, "ws://127.0.0.1:19921", 4000] }]
+
+- decl: [view_nid, i32, -1]
+- decl: [deadline, i64, { +: [{ call: [time.mono_ms] }, 6000] }]
+- while:
+    condition: { lt: [view_nid, 0] }
+    body:
+      - call: [client.update]
+      - decl: [var_ev, mirror_event, { call: [client.poll_event] }]
+      - if: { condition: { eq: [var_ev.type, "object_registered"] }, then: [{ set: [view_nid, var_ev.net_id] }] }
+      - if:
+          condition: { gt: [{ call: [time.mono_ms] }, deadline] }
+          then:
+            - print: ["FAIL ctx-client: no object_registered event"]
+            - call: [sys.exit, 1]
+      - call: [time.sleep_ms, 5]
+
+- decl: [replica, SharedViewWsCtx]
+- call: [client.register_id, replica, view_nid]
+
+- set: [deadline, { +: [{ call: [time.mono_ms] }, 4000] }]
+- while:
+    condition: { eq: [{ call: [client.snapshot_revision, view_nid] }, 0] }
+    body:
+      - call: [client.update]
+      - decl: [snap_err, i32, { call: [client.snapshot_error, view_nid] }]
+      - if:
+          condition: { neq: [snap_err, 0] }
+          then:
+            - print: ["FAIL ctx-client: same wire schema rejected, error=${snap_err}"]
+            - call: [sys.exit, 1]
+      - if:
+          condition: { gt: [{ call: [time.mono_ms] }, deadline] }
+          then:
+            - print: ["FAIL ctx-client: no snapshot within 4 s"]
+            - call: [sys.exit, 1]
+      - call: [time.sleep_ms, 5]
+
+- if:
+    condition: { '||': [{ neq: [replica.round, 9] }, { '||': [{ neq: [replica.title, "ctx-check"] }, { '||': [{ neq: [replica.card_count, 2] }, { neq: [replica.cards.len, 2] }] }] }] }
+    then:
+      - print: ["FAIL ctx-client: round=${replica.round} title='${replica.title}' card_count=${replica.card_count} cards.len=${replica.cards.len}"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { '||': [{ neq: [{ at: [replica.cards, 1, .name] }, "Stone Warden"] }, { neq: [{ at: [replica.cards, 1, .cost] }, 5] }] }
+    then:
+      - print: ["FAIL ctx-client: card1 name='${ { at: [replica.cards, 1, .name] } }'"]
+      - call: [sys.exit, 1]
+- if:
+    condition: { '||': [{ neq: [{ at: [replica.cards, 0, .name] }, "Canopy Viper"] }, { neq: [{ at: [replica.cards, 0, .cost] }, 3] }] }
+    then:
+      - print: ["FAIL ctx-client: card0 name='${ { at: [replica.cards, 0, .name] } }' cost=${ { at: [replica.cards, 0, .cost] } }"]
+      - call: [sys.exit, 1]
+
+- call: [client.close]
+- print: ["ctx-client: PASS"]

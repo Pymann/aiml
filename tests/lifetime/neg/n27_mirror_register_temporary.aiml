@@ -1,0 +1,23 @@
+# EXPECT-ERROR: needs an addressable object
+# spec/44_5 §4: the session borrows the registered object until unregister/close — a temporary
+# model value would be gone after the statement.
+- model:
+    name: Beacon
+    fields:
+      - [label, string]
+      - [level, i32, 0]
+- def:
+    name: make_beacon
+    return: Beacon
+    body:
+      - decl: [bcn, Beacon]
+      - set: [bcn.level, 3]
+      - return: [bcn]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [sess, mirror_session, { call: [mirror.listen, "ws://127.0.0.1:19987"] }]
+      - decl: [nid, i32, { call: [sess.register, { call: [make_beacon] }] }]
+      - call: [sess.close]
+      - return: [nid]

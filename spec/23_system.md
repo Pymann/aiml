@@ -46,6 +46,9 @@
 - set: [ts, { call: [time.now] }]
 - print: [ts]
 
+# Monotonic milliseconds (never jumps with the wall clock) — for timeouts and deadlines
+- decl: [deadline, i64, { +: [{ call: [time.mono_ms] }, 5000] }]
+
 # Sleep (Execution Pause)
 - call: [time.sleep_ms, 1000] # Sleep 1s
 

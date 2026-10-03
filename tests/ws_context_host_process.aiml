@@ -16,7 +16,11 @@
 - set: [var_c0.name, "Canopy Viper"]
 - set: [var_c0.cost, 3]
 - call: [var_v.cards.push, var_c0]
-- set: [var_v.card_count, 1]
+- decl: [var_c1, SharedCard]
+- set: [var_c1.name, "Stone Warden"]
+- set: [var_c1.cost, 5]
+- call: [var_v.cards.push, var_c1]
+- set: [var_v.card_count, 2]
 
 - decl: [nid, i32]
 - set: [nid, { call: [sess.register, var_v] }]
@@ -24,7 +28,7 @@
 
 - decl: [var_i, i32, 0]
 - while:
-    condition: { lt: [var_i, 180] }
+    condition: { lt: [var_i, 400] }
     body:
       - call: [sess.update]
       - call: [time.sleep_ms, 10]

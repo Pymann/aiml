@@ -129,7 +129,7 @@
 - print: ["client: first_item.tags.len=${first_item.tags.len}"]
 
 # CRITICAL: via vtable, like DataCreatures' hover.
-- decl: [iview, ptr<Tagged>, first_item]
+- decl: [iview, ref<Tagged>, first_item]
 - decl: [igot, list<string>, { call: [iview.tags] }]
 - print: ["client: vtable igot.len=${igot.len}"]
 - decl: [ift0, string, { at: [igot, 0] }]

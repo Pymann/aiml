@@ -223,10 +223,29 @@ the IP is the peer socket address; behind a reverse proxy it is the proxy's addr
 | `session.register(obj)` | `i32` | Register object; returns a network-wide ID |
 | `session.register_id(obj, id: i32)` | — | Register object with fixed ID (for predefined objects such as world entities) |
 | `session.unregister(obj)` | — | Remove object from synchronization |
+| `session.snapshot_revision(net_id: i32)` | `u64` | Number of remote snapshots successfully applied to this registration (0 = none yet) |
+| `session.snapshot_error(net_id: i32)` | `i32` | Last snapshot result: 0 = ok / none, −1 = decode error, −2 = schema or format mismatch, −3 = unknown registration |
 
 Registration automatically notifies peers that this object exists.
 The registering peer is the **owner** — only they send updates.
 Other peers receive updates and may only read `sync:` fields.
+
+**Objects.**  `register`/`register_id` take an addressable model object (a variable, global,
+`ptr<>`, `ref<>` or `shared<>` — the object itself, never a pointer slot or a temporary value; a
+temporary is a compile error).  Every serializable model is synchronized through its serializer
+descriptor (§10, DELTA format 2), plain-number models included; the raw byte path exists only for
+the legacy C API.
+
+**Ownership.**  The session **borrows** the object: registration, unregistration and session
+close never free its fields; the normal lifetime (scope end, `free`, last `shared` release) stays
+the owner.  The object must outlive its registration (until `unregister` or `close`).
+
+**Readiness.**  A replica is up to date once `snapshot_revision(net_id) > 0` — not when
+`object_registered` arrives, not after `register_id`, and not after a number of `update()` calls.
+A snapshot is applied completely or not at all (§10); a rejected snapshot leaves the replica and its
+revision unchanged and sets `snapshot_error`, the next success clears it.  `register_id` before the
+first snapshot is allowed: the object keeps its own initial values until a snapshot is applied.
+Both queries are answered from the session thread (no implicit thread safety).
 
 ---
 
@@ -727,8 +746,8 @@ All integers are little-endian.  Every packet starts with the same 6-byte header
 
 | type | name | body after the header | total length |
 |------|------|------------------------|--------------|
-| 0x01 | DELTA (typed, reserved=1) | serialization blob (Chapter 45) incl. its 4-byte length prefix | 6 + 4 + prefix |
-| 0x01 | DELTA (raw, reserved=0) | raw struct bytes | 6 + registered object size (TCP); the whole message (WebSocket) |
+| 0x01 | DELTA (typed, `reserved` = format 2) | `[payload_len:u32][wire_magic:u32][schema_fp:u32][encoded fields]` | 10 + `payload_len` |
+| 0x01 | DELTA (raw, `reserved` = 0, legacy C API only) | raw struct bytes | 6 + registered object size (TCP); the whole message (WebSocket) |
 | 0x02 | RPC v2 | `[method_len:u8][method][arg_kind:u8][arg_i32:i32][blob_len:u32][blob]` | 6 + 1 + N + 9 + M |
 | 0x03 | REGISTER | `[net_id:i32][obj_size:i32]` | 14 |
 | 0x04 | UNREGISTER | — | 6 |
@@ -748,6 +767,37 @@ frame is applied:
 - v3 only: `kind` ∈ {0 push, 1 request, 2 response, 3 object_call}, `flags = 0`, and a typed blob
   must carry the RPC magic + structural fingerprint (spec 44_5 §7 "Type match").  v2 typed blobs
   without the tag are accepted as legacy.
+
+**DELTA (format 2).**  The body is the serialization blob in wire mode: the RPC envelope
+(`wire_magic = 0xA1F5C0DF` + structural fingerprint, §7 "Type match") followed by the encoded
+fields; `payload_len` counts everything after itself (≥ 8, ≤ 8 MiB).  Persisted KV blobs are not
+affected.  Rules:
+
+- a registration bound with a serializer descriptor accepts only format 2; format 0 (raw) and the
+  untagged former format 1 are rejected (`snapshot_error = −2`) — raw bytes never reach a typed
+  object; a raw registration rejects format 2; any other `reserved` value is an invalid frame;
+- the magic and the fingerprint must match the receiver's descriptor (−2), then the payload is
+  decoded completely, bounded and transactionally (below; −1 on failure); only then is the
+  replica's previous content released and replaced, and its `snapshot_revision` incremented;
+- the fingerprint covers serializer kinds and nesting, not field names or every semantic type
+  (`i32`/`f32` share a kind) and is no authentication: wire-schema compatibility is guaranteed, model
+  versions that differ in their wire schema are rejected; migration between model versions is not
+  part of the mirror;
+- a DELTA that arrives before `register_id` is kept (with its format) and applied with the same
+  rules at binding time;
+- the host forwards a client's DELTA only if it accepted it itself, or if it holds just a
+  placeholder for that net id (the bound receiver validates);
+- dirty tracking compares exactly the blob that is sent.
+
+DELTA format 2 needs both peers on the same version: there is no capability negotiation for it (RPC
+v3 / HELLO does not imply it) and no fallback — client and host (native and WASM, including cached
+browser builds) are upgraded together.
+
+**Test hook (optional, production code).**  With `AIML_MIRROR_TEST_HOLD_DELTA=<path>` set in a
+process, its sessions hold every outgoing DELTA (in order, per peer) while the file `<path>` does
+not exist; REGISTER and all other packets pass.  Creating the file releases the held DELTAs on the
+next `update()`.  Off by default; meant only for tests that need a deterministic gap between
+REGISTER and the first snapshot.
 
 **Decoding** of any network blob (RPC payloads and typed DELTAs) is size-aware: the blob is decoded
 with its received length as the hard bound, every byte must be consumed, container counts may not
@@ -769,10 +819,9 @@ instead of falling back to unsafe method matching.
 
 ### 11.1 Dirty Tracking
 
-For each registered object, the mirror layer maintains a shadow buffer
-of the last sent `sync:` field values. `session.update()` compares
-the current state with the shadow → produces a `field_mask` for changed fields →
-sends a delta packet only if at least one field changed.
+For each owned object the mirror layer keeps the last sent DELTA blob; `session.update()`
+encodes the object (format 2) and sends a DELTA only if the blob differs from the last one sent
+(this also detects deep changes inside lists and nested models).
 
 ### 11.2 Transport Abstraction
 

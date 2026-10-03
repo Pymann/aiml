@@ -1,0 +1,7 @@
+# Requires: library
+
+- model:
+    name: WsCtxUnrelated
+    fields:
+      - [label, string]
+      - [weight, i32, 0]

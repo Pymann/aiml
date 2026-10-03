@@ -16,6 +16,16 @@ extern "C" int64_t time_now_ms() {
     return (int64_t)tv.tv_sec * 1000 + (int64_t)tv.tv_usec / 1000;
 }
 
+extern "C" int64_t time_mono_ms() {
+#ifdef __EMSCRIPTEN__
+    return (int64_t)emscripten_get_now();
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + (int64_t)ts.tv_nsec / 1000000;
+#endif
+}
+
 extern "C" char* time_format_utc(int64_t ms) {
     time_t secs = (time_t)(ms / 1000);
     struct tm tmv;

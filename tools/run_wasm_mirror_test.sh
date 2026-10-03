@@ -47,25 +47,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# 1. Spawn the native server in the background.
-echo "[1/3] starting native server..."
-"$AIML_BIN" "$SERVER_AIML" >"$SERVER_LOG" 2>&1 &
-SERVER_PID=$!
-
-# Give it ~500ms to bind the port.
-sleep 0.6
-if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-    echo "ERROR: server died on startup. Log:"
-    cat "$SERVER_LOG"
-    exit 1
-fi
-if ! grep -q "listening on ws" "$SERVER_LOG"; then
-    echo "WARN: server hasn't logged 'listening' yet, sleeping a bit more..."
-    sleep 0.5
-fi
-
-# 2. Build the client to WASM and run via node.
-echo "[2/3] building WASM client + running..."
+# 1. Build the client to WASM first (slow) — the server only lives for a fixed time.
+echo "[1/3] building WASM client..."
 BUILD_DIR="$LOG_DIR/build"
 mkdir -p "$BUILD_DIR"
 LL="$BUILD_DIR/client.ll"
@@ -80,6 +63,23 @@ JS="$BUILD_DIR/client.js"
     -sALLOW_MEMORY_GROWTH=1 -sASSERTIONS=2 \
     >>"$CLIENT_LOG" 2>&1 || {
         echo "ERROR: emcc link failed. Tail of $CLIENT_LOG:"; tail -30 "$CLIENT_LOG"; exit 1; }
+
+# 2. Spawn the native server in the background, then run the client via node.
+echo "[2/3] starting native server + running client..."
+"$AIML_BIN" "$SERVER_AIML" >"$SERVER_LOG" 2>&1 &
+SERVER_PID=$!
+
+# Give it ~500ms to bind the port.
+sleep 0.6
+if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    echo "ERROR: server died on startup. Log:"
+    cat "$SERVER_LOG"
+    exit 1
+fi
+if ! grep -q "listening on ws" "$SERVER_LOG"; then
+    echo "WARN: server hasn't logged 'listening' yet, sleeping a bit more..."
+    sleep 0.5
+fi
 
 "$NODE" "$JS" 2>&1 | tee -a "$CLIENT_LOG"
 CLIENT_EXIT=${PIPESTATUS[0]}
