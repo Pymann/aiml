@@ -1,0 +1,64 @@
+# spec/61 §5: a list<string> local rebound in a loop from a loop-scoped list (`set: [acc, step]`,
+# plus `set: [step, acc]` on a skip path) is released exactly once on every exit — the last
+# rebound list must not survive the producer return.
+# Expected exit code: 0
+- class:
+    name: Expander
+    members: [[calls, i32]]
+    methods:
+      - def:
+          name: expand
+          access: public
+          static_off: ["str_cmp"]
+          args: [[pattern, string]]
+          return: { type: list<string>, lifetime: producer }
+          body:
+            - decl: [segments, list<string>, { call: [pattern.split, "/"] }]
+            - decl: [bases, list<string>]
+            - call: [bases.push, ""]
+            - decl: [seg_i, i32, 0]
+            - while:
+                condition: { lt: [seg_i, segments.len] }
+                body:
+                  - decl: [segment, string, { at: [segments, seg_i] }]
+                  - decl: [next, list<string>]
+                  - if:
+                      condition: { eq: [segment, ""] }
+                      then:
+                        - set: [next, bases]
+                      else:
+                        - decl: [bidx, i32, 0]
+                        - while:
+                            condition: { lt: [bidx, bases.len] }
+                            body:
+                              - decl: [base, string, { at: [bases, bidx] }]
+                              - call: [next.push, "${base}/${segment}"]
+                              - set: [bidx, { +: [bidx, 1] }]
+                  - set: [bases, next]
+                  - set: [seg_i, { +: [seg_i, 1] }]
+            - decl: [out, list<string>]
+            - decl: [cur, i32, 0]
+            - while:
+                condition: { lt: [cur, bases.len] }
+                body:
+                  - decl: [cand, string, { at: [bases, cur] }]
+                  - call: [out.push, cand]
+                  - set: [cur, { +: [cur, 1] }]
+            - set: [<.calls, { +: [<.calls, 1] }]
+            - return: out
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [expander, ptr<Expander>, { new: Expander }]
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, 10] }
+          body:
+            - decl: [res, list<string>, { call: [expander.expand, "alpha//beta/gamma"] }]
+            - if: { condition: { neq: [res.len, 1] }, then: [{ print: ["FAIL len ${res.len}"] }, { return: 1 }] }
+            - decl: [first, string, { at: [res, 0] }]
+            - if: { condition: { neq: [first, "/alpha/beta/gamma"] }, then: [{ print: ["FAIL '${first}'"] }, { return: 1 }] }
+            - set: [round, { +: [round, 1] }]
+      - print: ["PASS list_rebind_in_loop"]
+      - return: 0

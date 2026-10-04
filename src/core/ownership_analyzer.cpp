@@ -395,7 +395,16 @@ struct Analyzer {
                         auto tyIt = slotType.find(id);
                         bool isString = kManagedStringLocals
                             && (tyIt != slotType.end() && tyIt->second == "string");
-                        if (isString) {
+                        // spec/61 §5: a container-handle local rebound from another plain local shares
+                        // (codegen increfs) → the slot holds its own reference and keeps its drop.
+                        bool handleShare = false;
+                        if (ctx.memV3 && tyIt != slotType.end() && ctx.isMemV3ContainerHandle(tyIt->second))
+                            if (auto* rv = dynamic_cast<const VariableExpr*>(set->value.get()))
+                                if (rv->name.find('.') == std::string::npos && rv->name.find('<') == std::string::npos) {
+                                    auto rt = slotType.find(lookup(rv->name));
+                                    handleShare = rt != slotType.end() && ctx.isMemV3ContainerHandle(rt->second);
+                                }
+                        if (isString || handleShare) {
                             // §7: a managed string local stays Owned across a rebind — codegen
                             // dup's a borrowed RHS / moves an owned temp, so the slot always holds an
                             // independent RC ref; its null-safe scope-drop must still fire on the

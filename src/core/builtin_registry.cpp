@@ -1252,7 +1252,10 @@ void registerBuiltins(CompilerContext& ctx) {
         llvm::Type* i32   = ctx.builder.getInt32Ty();
         llvm::Type* voidT = llvm::Type::getVoidTy(ctx.module.getContext());
         llvm::StructType* listTy = ListImpl::getListStructType(ctx);
-        auto* listAlloca = ctx.createEntryAlloca(listTy, "f32arr_alloca");
+        // spec/61 §5: owned heap list under memV3 (caller adopts the rc).
+        llvm::Value* listAlloca = ctx.memV3
+            ? static_cast<llvm::Value*>(ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, "f32arr_h"))
+            : ctx.createEntryAlloca(listTy, "f32arr_alloca");
         llvm::Value* nVal = (args.size() >= 2) ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1])) : ctx.builder.getInt32(0);
         if (nVal->getType()->isIntegerTy(64)) nVal = ctx.builder.CreateTrunc(nVal, i32);
         ListImpl::initList(ctx, listAlloca, ctx.builder.getFloatTy(), 1);
@@ -1930,6 +1933,16 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Value* pv   = loadPath(ctx, alloca);
             return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {pv}));
         };
+        // Same, for runtime fns returning a fresh owned rc string (statement temp, spec/61 §7)
+        auto callP2S = [loadPath](CompilerContext& ctx, llvm::Value* alloca,
+                                  const char* fn_name) -> IRValue* {
+            llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            llvm::Function* f = ctx.getFunction(fn_name, i8p, {i8p});
+            llvm::Value* fresh = ctx.builder.CreateCall(f, {loadPath(ctx, alloca)});
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+                AIML::AST::aimlTrackStringTemp(ctx, fresh);
+            return ctx.ir_gen->wrap(fresh);
+        };
         // Helper: emit call to path runtime fn(i8*) -> i32
         auto callP2I = [loadPath](CompilerContext& ctx, llvm::Value* alloca,
                                   const char* fn_name) -> IRValue* {
@@ -1972,25 +1985,25 @@ void registerBuiltins(CompilerContext& ctx) {
             AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
             return callP2P(ctx, alloca, "aiml_path_parent");
         };
-        pi.builtinMethods["name"] = [callP2P](CompilerContext& ctx, llvm::Value* alloca,
+        pi.builtinMethods["name"] = [callP2S](CompilerContext& ctx, llvm::Value* alloca,
             AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
-            return callP2P(ctx, alloca, "aiml_path_name");
+            return callP2S(ctx, alloca, "aiml_path_name");
         };
-        pi.builtinMethods["stem"] = [callP2P](CompilerContext& ctx, llvm::Value* alloca,
+        pi.builtinMethods["stem"] = [callP2S](CompilerContext& ctx, llvm::Value* alloca,
             AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
-            return callP2P(ctx, alloca, "aiml_path_stem");
+            return callP2S(ctx, alloca, "aiml_path_stem");
         };
-        pi.builtinMethods["extension"] = [callP2P](CompilerContext& ctx, llvm::Value* alloca,
+        pi.builtinMethods["extension"] = [callP2S](CompilerContext& ctx, llvm::Value* alloca,
             AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
-            return callP2P(ctx, alloca, "aiml_path_extension");
+            return callP2S(ctx, alloca, "aiml_path_extension");
         };
         pi.builtinMethods["root"] = [callP2P](CompilerContext& ctx, llvm::Value* alloca,
             AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
             return callP2P(ctx, alloca, "aiml_path_root");
         };
-        pi.builtinMethods["to_string"] = [callP2P](CompilerContext& ctx, llvm::Value* alloca,
+        pi.builtinMethods["to_string"] = [callP2S](CompilerContext& ctx, llvm::Value* alloca,
             AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
-            return callP2P(ctx, alloca, "aiml_path_to_string");
+            return callP2S(ctx, alloca, "aiml_path_to_string");
         };
         pi.builtinMethods["normalize"] = [callP2P](CompilerContext& ctx, llvm::Value* alloca,
             AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {
@@ -2277,8 +2290,14 @@ void registerBuiltins(CompilerContext& ctx) {
             llvm::Type* i32ty = ctx.builder.getInt32Ty();
             llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
 
-            llvm::StructType* listTy = ListImpl::getListStructType(ctx);
-            llvm::Value* listAlloca  = ctx.createEntryAlloca(listTy, "listdir_alloca");
+            // spec/61 §5 (memV3): the result is an owned list HANDLE, never a stack alloca (its
+            // scope drop would free stack memory — "free(): invalid size"); cf. field_indices.
+            llvm::Value* listAlloca;
+            if (ctx.memV3) {
+                listAlloca = ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, "listdir_h");
+            } else {
+                listAlloca = ctx.createEntryAlloca(ListImpl::getListStructType(ctx), "listdir_alloca");
+            }
             ListImpl::initList(ctx, listAlloca, i8p, 8);
 
             llvm::Function* fillFn = ctx.getFunction("aiml_io_list_dir_fill", i32ty, {i8p, ptrTy});
@@ -5473,7 +5492,9 @@ void registerBuiltins(CompilerContext& ctx) {
         compress.builtinFuncs["zip_entries"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             auto* p   = llvm::PointerType::get(ctx.context, 0);
             llvm::StructType* listTy = ListImpl::getListStructType(ctx);
-            llvm::Value* listAlloca  = ctx.createEntryAlloca(listTy, "zip_entries_list");
+            llvm::Value* listAlloca  = ctx.memV3
+                ? static_cast<llvm::Value*>(ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new", p, {}), {}, "zip_entries_h"))
+                : ctx.createEntryAlloca(listTy, "zip_entries_list");
             ListImpl::initList(ctx, listAlloca, p, 8);
             llvm::Value* pathStr = args.empty() ? llvm::Constant::getNullValue(p)
                                                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
@@ -5487,7 +5508,9 @@ void registerBuiltins(CompilerContext& ctx) {
         compress.builtinFuncs["tar_entries"] = [](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             auto* p   = llvm::PointerType::get(ctx.context, 0);
             llvm::StructType* listTy = ListImpl::getListStructType(ctx);
-            llvm::Value* listAlloca  = ctx.createEntryAlloca(listTy, "tar_entries_list");
+            llvm::Value* listAlloca  = ctx.memV3
+                ? static_cast<llvm::Value*>(ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new", p, {}), {}, "tar_entries_h"))
+                : ctx.createEntryAlloca(listTy, "tar_entries_list");
             ListImpl::initList(ctx, listAlloca, p, 8);
             llvm::Value* pathStr = args.empty() ? llvm::Constant::getNullValue(p)
                                                 : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
@@ -5551,7 +5574,9 @@ void registerBuiltins(CompilerContext& ctx) {
 
             // Allocate result list<f32>: {size=dim, capacity=dim, data=malloc(dim*4)}
             llvm::StructType* listTy = ListImpl::getListStructType(ctx);
-            llvm::Value* listAlloca = ctx.createEntryAlloca(listTy, "emb_lookup_list");
+            llvm::Value* listAlloca = ctx.memV3
+                ? static_cast<llvm::Value*>(ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new", ptrTy, {}), {}, "emb_lookup_h"))
+                : ctx.createEntryAlloca(listTy, "emb_lookup_list");
             ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 0));
             ctx.builder.CreateStore(dim, ctx.builder.CreateStructGEP(listTy, listAlloca, 1));
             llvm::Value* totalBytes = ctx.builder.CreateMul(
@@ -5564,6 +5589,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 ctx.builder.getVoidTy(), {i8p, i32ty, i32ty, ptrTy});
             ctx.builder.CreateCall(lookupFn, {flatPtr, tokenId, dim, dataPtr});
 
+            if (ctx.memV3) return ctx.ir_gen->wrap(listAlloca);
             llvm::Value* listVal = ctx.builder.CreateLoad(listTy, listAlloca, "emb_lookup_result");
             return ctx.ir_gen->wrap(listVal);
         };

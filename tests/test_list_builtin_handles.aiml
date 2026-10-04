@@ -1,0 +1,56 @@
+# spec/61 §5: list-returning builtins hand back an owned heap list under memV3. Called
+# repeatedly from helpers (result dropped at scope end, or reassigned), each list is released
+# exactly once: io.read_f32_array, ai.embedding_lookup. (db.query: spec/31 vs spec/61 ptr-vs-ref
+# element ownership open; zip/tar_entries: element release open — shaper findings W7/D23.)
+# Expected exit code: 0
+- class:
+    name: Probe
+    members: [[calls, i32]]
+    methods:
+      - def:
+          name: f32_count
+          access: public
+          args: [[file_name, string]]
+          return: i32
+          body:
+            - decl: [handle, file_handle, { call: [io.open, file_name, "rb"] }]
+            - decl: [vals, list<f32>, { call: [io.read_f32_array, handle, 3] }]
+            - call: [io.close, handle]
+            - set: [<.calls, { +: [<.calls, 1] }]
+            - return: vals.len
+      - def:
+          name: emb_count
+          access: public
+          args: [[table, "buffer<u8>"]]
+          return: i32
+          body:
+            - decl: [vec, list<f32>, { call: [ai.embedding_lookup, table, 1, 4] }]
+            - set: [vec, { call: [ai.embedding_lookup, table, 0, 4] }]
+            - return: vec.len
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [table, "buffer<u8>"]
+      - call: [table.alloc, 32]
+      - call: [table.zero]
+      - call: [table.seek, 0]
+      - call: [table.write, 1.0, f32]
+      - call: [table.write, 2.0, f32]
+      - call: [table.write, 3.0, f32]
+      - call: [table.write, 4.0, f32]
+      - decl: [out_file, file_handle, { call: [io.open, "/tmp/aiml_test_lbh.bin", "wb"] }]
+      - call: [table.write_to, out_file]
+      - call: [io.close, out_file]
+      - decl: [probe, ptr<Probe>, { new: Probe }]
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, 20] }
+          body:
+            - decl: [cnt_nf, i32, { call: [probe.f32_count, "/tmp/aiml_test_lbh.bin"] }]
+            - if: { condition: { neq: [cnt_nf, 3] }, then: [{ print: ["FAIL f32 ${cnt_nf}"] }, { return: 1 }] }
+            - decl: [cnt_ne, i32, { call: [probe.emb_count, table] }]
+            - if: { condition: { neq: [cnt_ne, 4] }, then: [{ print: ["FAIL emb ${cnt_ne}"] }, { return: 1 }] }
+            - set: [round, { +: [round, 1] }]
+      - print: ["PASS list_builtin_handles"]
+      - return: 0

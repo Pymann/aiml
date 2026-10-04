@@ -1,4 +1,5 @@
 #include "path_runtime.h"
+#include "../sys/string_runtime.h"
 #include <filesystem>
 #include <unordered_map>
 #include <mutex>
@@ -69,25 +70,24 @@ extern "C" const char* aiml_path_parent(const char* p) {
     } catch (...) { return g_empty_path; }
 }
 
+// spec/61 §7: string results are owned rc strings (header at ptr-8), never raw malloc.
 static char* dup_string(const std::string& s) {
-    char* buf = static_cast<char*>(std::malloc(s.size() + 1));
-    if (buf) std::memcpy(buf, s.c_str(), s.size() + 1);
-    return buf;
+    return aiml_str_ndup(s.c_str(), s.size());
 }
 
 extern "C" const char* aiml_path_name(const char* p) {
-    if (!p || p[0] == '\0') return "";
-    try { return dup_string(fs::path(p).filename().string()); } catch (...) { return ""; }
+    if (!p || p[0] == '\0') return aiml_str_dup("");
+    try { return dup_string(fs::path(p).filename().string()); } catch (...) { return aiml_str_dup(""); }
 }
 
 extern "C" const char* aiml_path_stem(const char* p) {
-    if (!p || p[0] == '\0') return "";
-    try { return dup_string(fs::path(p).stem().string()); } catch (...) { return ""; }
+    if (!p || p[0] == '\0') return aiml_str_dup("");
+    try { return dup_string(fs::path(p).stem().string()); } catch (...) { return aiml_str_dup(""); }
 }
 
 extern "C" const char* aiml_path_extension(const char* p) {
-    if (!p || p[0] == '\0') return "";
-    try { return dup_string(fs::path(p).extension().string()); } catch (...) { return ""; }
+    if (!p || p[0] == '\0') return aiml_str_dup("");
+    try { return dup_string(fs::path(p).extension().string()); } catch (...) { return aiml_str_dup(""); }
 }
 
 extern "C" const char* aiml_path_root(const char* p) {
@@ -154,7 +154,7 @@ extern "C" const char* aiml_path_safe_join(const char* base, const char* rhs) {
 // ── Conversion ───────────────────────────────────────────────────────────────
 
 extern "C" const char* aiml_path_to_string(const char* p) {
-    return p ? p : g_empty_path;
+    return aiml_str_dup(p ? p : g_empty_path);
 }
 
 // ── Platform directories ─────────────────────────────────────────────────────
