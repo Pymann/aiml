@@ -1,0 +1,55 @@
+# static-check: off
+# spec/61 §6.2/§8: a ref<T> parameter forwarded into another ref<T> call (recursion) keeps borrowing the
+# caller's object; `at` borrows into its list<Model> field and nested reads stay valid.
+- model: { name: Node, fields: [[label, string], [kids, list<i32>], [weight, f64]] }
+- model: { name: Tree, fields: [[nodes, list<Node>], [title, string]] }
+- model: { name: Frame, fields: [[depth, i32], [scale, f64]] }
+- class:
+    name: Walker
+    members: [[visited, i32]]
+    methods:
+      - def:
+          name: walk
+          access: public
+          args: [[tree, ref<Tree>], [index, i32], [parent, ref<Frame>]]
+          return: i32
+          body:
+            - decl: [node, ref<Node>, { at: [tree.nodes, index] }]
+            - decl: [here, Frame]
+            - set: [here.depth, { +: [parent.depth, 1] }]
+            - set: [<.visited, { +: [<.visited, 1] }]
+            - decl: [total, i32, here.depth]
+            - decl: [cur, i32, 0]
+            - while:
+                condition: { lt: [cur, node.kids.len] }
+                body:
+                  - decl: [kid, i32, { at: [node.kids, cur] }]
+                  - set: [total, { +: [total, { call: [<.walk, tree, kid, here] }] }]
+                  - set: [cur, { +: [cur, 1] }]
+            - return: total
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [tree, Tree]
+      - decl: [root, Node]
+      - set: [root.label, "root"]
+      - call: [root.kids.push, 1]
+      - call: [root.kids.push, 2]
+      - call: [tree.nodes.push, root]
+      - decl: [leaf_a, Node]
+      - set: [leaf_a.label, "a"]
+      - call: [leaf_a.kids.push, 3]
+      - call: [tree.nodes.push, leaf_a]
+      - decl: [leaf_b, Node]
+      - set: [leaf_b.label, "b"]
+      - call: [tree.nodes.push, leaf_b]
+      - decl: [leaf_c, Node]
+      - set: [leaf_c.label, "c"]
+      - call: [tree.nodes.push, leaf_c]
+      - decl: [walker, Walker]
+      - decl: [start, Frame]
+      - decl: [total, i32, { call: [walker.walk, tree, 0, start] }]
+      - if: { condition: { neq: [total, 8] }, then: [{ print: ["FAIL total ${total}"] }, { return: 1 }] }
+      - print: ["PASS 166 forward_ref_param_at"]
+      - return: 0

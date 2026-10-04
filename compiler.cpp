@@ -900,6 +900,14 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                     cur = cur.parent_path();
                 }
             } catch (...) {}
+            // Keep the relative spelling exodus derives side-object names from (see below) when the
+            // file resolved from an absolute importer path lies under the working directory.
+            try {
+                std::filesystem::path abs = std::filesystem::weakly_canonical(path);
+                std::filesystem::path cwd = std::filesystem::current_path();
+                auto rel = abs.lexically_relative(cwd);
+                if (!rel.empty() && *rel.begin() != "..") path = rel.string();
+            } catch (...) {}
         }
 
         // Normalize ONLY for dedup. Keep the original (resolved-but-not-canonical)
@@ -2909,6 +2917,14 @@ int AIMLCompiler::jitRun(int argc, char** argv) {
     gvArgs[1].PointerVal = argv;
 
     aiml_set_active_context(compiler_ctx_, engine);
+    // Link (relocate) before running: an unresolved or duplicate symbol makes RuntimeDyld zero the
+    // whole relocation batch and main would jump to address 0. Report it instead.
+    engine->getPointerToFunction(mainFunc);
+    if (engine->hasError()) {
+        aiml_set_active_context(nullptr, nullptr);
+        LOG_ERROR("JIT link failed: " + engine->getErrorMessage());
+        return 1;
+    }
     // Top-level guard — see the no-arg jitRun() above.
     llvm::GenericValue result;
     try {

@@ -6400,8 +6400,21 @@ IRValue* Compiler::emitLValueAddress(Expr* e, std::string& outTypeName) {
     if (auto* at = dynamic_cast<AtExpr*>(e)) {
         auto* cv = dynamic_cast<VariableExpr*>(at->container.get());
         if (!cv || at->indices.empty()) return nullptr;
-        Symbol* csym = resolveVariable(cv->name);
-        if (!csym) return nullptr;
+        std::string cname = cv->name;
+        if (cname.rfind("<.", 0) == 0) cname = "this." + cname.substr(2);
+        Symbol* csym = resolveVariable(cname);
+        Symbol fieldSym;   // member path (`<.doc.items`, `obj.list`): resolve like visitAtExpr does
+        if (!csym) {
+            size_t dot = cname.find('.');
+            Symbol* baseSym = (dot == std::string::npos) ? nullptr : resolveVariable(cname.substr(0, dot));
+            if (!baseSym) return nullptr;
+            std::string fieldType;
+            IRValue* fieldPtr = resolvePropertyWritePtr(baseSym, cname.substr(dot + 1), fieldType);
+            if (!fieldPtr || fieldType.empty()) return nullptr;
+            fieldSym.typeName = fieldType;
+            fieldSym.ir_alloca_inst = fieldPtr;   // memV3: already the container handle
+            csym = &fieldSym;
+        }
         const std::string& ctn = csym->typeName;
         if (ctn.rfind("list<", 0) != 0 || ctn.back() != '>') return nullptr;
         std::string elemName = ctn.substr(5, ctn.size() - 6);

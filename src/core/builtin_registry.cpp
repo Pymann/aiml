@@ -1402,6 +1402,19 @@ void registerBuiltins(CompilerContext& ctx) {
         return ctx.ir_gen->wrap(ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), sizePtr, "buf_len"));
     };
 
+    // buffer.write_to(f) — spec/11: bytes [0, len) to a file handle; len, or -1 on null/short write.
+    bufInfo.builtinMethods["write_to"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+        if (call->args.empty()) return ctx.ir_gen->getInt32(-1);
+        IRValue* fh = evalExpr(call->args[0].get());
+        if (!fh) return ctx.ir_gen->getInt32(-1);
+        auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Value* handle = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fh));
+        if (handle->getType() != i8p) handle = ctx.builder.CreateBitCast(handle, i8p);
+        llvm::Function* fn = ctx.getFunction("aiml_buffer_write_to", ctx.builder.getInt32Ty(), {i8p, i8p});
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {baseAlloca, handle}));
+    };
+
     // buffer.zero() — memset(data, 0, capacity), then size = capacity, writeIndex = capacity
     bufInfo.builtinMethods["zero"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
         AIML::AST::CallExpr*, std::function<IRValue*(AIML::AST::Expr*)>) -> IRValue* {

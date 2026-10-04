@@ -3227,9 +3227,12 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                     ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_release", ctx.builder.getVoidTy(), {i8p}), { oldH });
                 } else if (kind == "list") {
                     std::string en = sym->typeName.rfind("cascade<",0)==0 ? "i32" : sym->typeName.substr(5, sym->typeName.size()-6);
-                    int ek = (en=="string")?1 : (ctx.isRefcountModel(en)?3 : (ctx.isMemV3ContainerHandle(en)?5:0));
+                    // spec/61 §5.5: release the old elements by their class (value models with heap
+                    // fields included — elemKind 2 + descriptor), exactly like the scope drop.
+                    int ek = 0; int64_t es = 8; llvm::GlobalVariable* sn = nullptr; int32_t snc = 0;
+                    classifyListElem(en, ek, es, sn, snc);
                     ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_release", ctx.builder.getVoidTy(), {i8p, i32Ty, i64Ty, i8p, i32Ty}),
-                        { oldH, ctx.builder.getInt32(ek), ctx.builder.getInt64(8), nullp, ctx.builder.getInt32(0) });
+                        { oldH, ctx.builder.getInt32(ek), ctx.builder.getInt64(es), sn ? static_cast<llvm::Value*>(sn) : nullp, ctx.builder.getInt32(snc) });
                 } else {
                     std::string inr = sym->typeName.substr(4, sym->typeName.size()-5);
                     size_t col = inr.find(':');
@@ -3996,6 +3999,24 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                             ctx.builder.getInt32(fci->second.serNodesCount) });
                     }
                 }
+                // spec/13 §6: numeric value conversion into the field's type (never raw bits)
+                {
+                    llvm::Value* sv3 = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                    llvm::Type* fty = ctx.getLLVMType(finalTypeName);
+                    if (sv3 && fty && sv3->getType() != fty) {
+                        llvm::Type* sty = sv3->getType();
+                        if (fty->isFloatingPointTy() && sty->isIntegerTy() && !sty->isIntegerTy(1))
+                            val = ctx.ir_gen->wrap(ctx.builder.CreateSIToFP(sv3, fty, "fld_i2f"));
+                        else if (fty->isFloatingPointTy() && sty->isFloatingPointTy())
+                            val = ctx.ir_gen->wrap(ctx.builder.CreateFPCast(sv3, fty, "fld_fcast"));
+                        else if (fty->isIntegerTy() && sty->isIntegerTy()) {
+                            unsigned db = fty->getIntegerBitWidth(), sb = sty->getIntegerBitWidth();
+                            val = ctx.ir_gen->wrap(db < sb ? ctx.builder.CreateTrunc(sv3, fty, "fld_trunc")
+                                : sb == 1 ? ctx.builder.CreateZExt(sv3, fty, "fld_zext")
+                                : ctx.builder.CreateSExt(sv3, fty, "fld_sext"));
+                        }
+                    }
+                }
                 ctx.ir_gen->createStore(val, targetGep);
                 return;
             }
@@ -4251,9 +4272,22 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
             || retAccessorBorrow);
     // AIML v2 (P4): returning a refcount model is alias-safe to clean up — the returned object is
     // exempted by retModelAddr (a move), and every other local's kind-7 decref is order-independent.
+    // A member of `this` (`<.field`) lives in the object, not in this frame: dropping the frame's
+    // locals cannot free it (a value-model member is shared to the caller below, §8).
+    bool retThisMember = false;
+    if (auto* rve = dynamic_cast<VariableExpr*>(retStmt->value.get()))
+        retThisMember = rve->name.rfind("<.", 0) == 0 || rve->name.rfind("this.", 0) == 0;
+    // A value model without heap fields is plain bytes: it cannot alias any local's heap.
+    bool retPodModel = false;
+    {
+        auto pci = ctx.classes.find(ctx.currentFunctionReturnType);
+        retPodModel = pci != ctx.classes.end() && !pci->second.isBuiltin && pci->second.type
+                      && !pci->second.hasHeapFields && !ctx.isRefcountModel(ctx.currentFunctionReturnType);
+    }
     bool safeToCleanup = (retTy && retTy->isVoidTy()) || retScalar || retBaseOwned
                          || (retModelAddr != nullptr) || (retContainerSlot != nullptr)
                          || retFreshOwned || retStrFieldOfOwnedModel || retProducerBorrowedString
+                         || retThisMember || retPodModel
                          // a literal (static string / number) cannot alias any local heap
                          || dynamic_cast<LiteralExpr*>(retStmt->value.get()) != nullptr;
     // spec/61 §6.2 (T1): the returned value only aliases the owner's heap when the return TYPE is a
@@ -4601,11 +4635,25 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     && ctx.isOwnedValueReturn(ctx.currentFunctionReturnType)) {
                     auto ciV = ctx.classes.find(ctx.currentFunctionReturnType);
                     bool borrowedSrc = false;
-                    if (auto* ve = dynamic_cast<VariableExpr*>(retStmt->value.get()))
-                        if (ve->name.find('.') == std::string::npos && ve->name.find('<') == std::string::npos)
+                    bool memberView = false;
+                    if (auto* ve = dynamic_cast<VariableExpr*>(retStmt->value.get())) {
+                        if (ve->name.find('.') == std::string::npos && ve->name.find('<') == std::string::npos) {
                             if (Symbol* rsym = resolveVariable(ve->name))
                                 borrowedSrc = (rsym->is_param && !rsym->paramOwnsRef) || rsym->is_global
                                               || rsym->lifetime == "persistent";
+                        } else {
+                            memberView = true;   // <.field / obj.field: its owner keeps its references
+                        }
+                    }
+                    // spec/61 §8: a by-value return of a member SHARES its heap fields (incref each)
+                    if (memberView && ciV->second.serNodesVar) {
+                        auto* ptrTy = llvm::PointerType::get(ctx.context, 0);
+                        llvm::Value* tmp = ctx.createEntryAlloca(raw->getType(), "ret_member_share");
+                        ctx.builder.CreateStore(raw, tmp);
+                        ctx.builder.CreateCall(ctx.getFunction("aiml_ser_retain", ctx.builder.getVoidTy(),
+                            {ptrTy, ptrTy, ctx.builder.getInt32Ty()}),
+                            { tmp, ciV->second.serNodesVar, ctx.builder.getInt32(ciV->second.serNodesCount) });
+                    }
                     if (borrowedSrc && ciV->second.serNodesVar) {
                         auto* ptrTy = llvm::PointerType::get(ctx.context, 0);
                         llvm::Value* src = ctx.createEntryAlloca(raw->getType(), "ret_param_src");
@@ -5115,8 +5163,11 @@ void Compiler::visitBlockStmt(BlockStmt* block) {
                 if (pe != plan->normalExits.end()) exit = &pe->second;
             }
             for (auto it = frame.rbegin(); it != frame.rend(); ++it) {
-                // AIML v2: refcount MODEL decref (kind 7) is always safe → never suppressed.
-                if (it->kind != 7 && plan && exit && it->ownershipId != NoOwnership
+                // AIML v2: refcount MODEL decref (kind 7) is always safe → never suppressed. The same
+                // holds for every order-independent release the return path emits unconditionally
+                // (container handles etc., unconditionalDrop): a handle local re-bound to a producer
+                // result is not tracked as owned by the plan, yet owns the new handle.
+                if (!unconditionalDrop(*it) && plan && exit && it->ownershipId != NoOwnership
                     && !mayDrop(*plan, *exit, it->ownershipId))
                     continue;   // not provably owned at this exit → suppress (leak, never UAF)
                 emitScopeDrop(ctx, *it);
@@ -5574,6 +5625,55 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
             IRValue* fldPtr = resolvePropertyWritePtr(&elemSym, joined, fldTypeName);
             if (!fldPtr || fldTypeName.empty()) {
                 LOG_ERROR(ctx.fmtLoc() + "idx: member path '" + joined + "' unresolved on element of " + tName);
+                return;
+            }
+            // spec/61 §5.5/§5.7: a container FIELD of the element holds a handle. Replace it like
+            // `set: [obj.field, src]`: secure the new handle (incref; the source keeps its own), then
+            // release the old one, then store — never write the value over the container block.
+            if (ctx.memV3 && ctx.isMemV3ContainerHandle(fldTypeName)) {
+                auto* p8 = llvm::PointerType::get(ctx.context, 0);
+                std::string slotType;
+                IRValue* slotIR = resolvePropertyWritePtr(&elemSym, joined, slotType, /*wantContainerSlot=*/true);
+                llvm::Value* newH = nullptr;
+                if (auto* ve = dynamic_cast<VariableExpr*>(idx->value.get())) {
+                    if (Symbol* vs = resolveVariable(ve->name)) {
+                        llvm::Value* vslot = vs->ir_alloca_inst
+                            ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(vs->ir_alloca_inst)) : vs->alloca_inst;
+                        if (vslot && vs->typeName == fldTypeName) newH = ctx.builder.CreateLoad(p8, vslot, "idx_fld_newh");
+                    }
+                }
+                if (!slotIR || !newH) {
+                    LOG_ERROR(ctx.fmtLoc() + "idx: replacing the container field '" + joined +
+                        "' needs a local " + fldTypeName + " variable as the value");
+                    return;
+                }
+                llvm::Value* slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(slotIR));
+                std::string kind = fldTypeName.rfind("map<", 0) == 0 ? "map"
+                    : (fldTypeName == "buffer" || fldTypeName.rfind("buffer<", 0) == 0) ? "buffer" : "list";
+                ctx.builder.CreateCall(ctx.getFunction("aiml_" + kind + "_handle_incref", ctx.builder.getVoidTy(), {p8}), { newH });
+                llvm::Value* oldH = ctx.builder.CreateLoad(p8, slot, "idx_fld_oldh");
+                llvm::Type* i32Ty = ctx.builder.getInt32Ty();
+                llvm::Type* i64Ty = ctx.builder.getInt64Ty();
+                llvm::Value* nullp = llvm::ConstantPointerNull::get(p8);
+                if (kind == "buffer") {
+                    ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_release", ctx.builder.getVoidTy(), {p8}), { oldH });
+                } else if (kind == "list") {
+                    std::string en = fldTypeName.substr(5, fldTypeName.size() - 6);
+                    int ek = 0; int64_t es = 8; llvm::GlobalVariable* sn = nullptr; int32_t snc = 0;
+                    classifyListElem(en, ek, es, sn, snc);
+                    ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_release", ctx.builder.getVoidTy(), {p8, i32Ty, i64Ty, p8, i32Ty}),
+                        { oldH, ctx.builder.getInt32(ek), ctx.builder.getInt64(es), sn ? static_cast<llvm::Value*>(sn) : nullp, ctx.builder.getInt32(snc) });
+                } else {
+                    std::string inr = fldTypeName.substr(4, fldTypeName.size() - 5);
+                    size_t col = inr.find(':');
+                    std::string kn = col == std::string::npos ? inr : inr.substr(0, col);
+                    std::string vn = col == std::string::npos ? std::string("i32") : inr.substr(col + 1);
+                    int kk = (kn == "string") ? 1 : 0;
+                    int vk = (vn == "string") ? 1 : (ctx.isRefcountModel(vn) ? 3 : 0);
+                    ctx.builder.CreateCall(ctx.getFunction("aiml_map_handle_release", ctx.builder.getVoidTy(), {p8, i32Ty, i64Ty, i32Ty, i64Ty, p8, i32Ty}),
+                        { oldH, ctx.builder.getInt32(kk), ctx.builder.getInt64(8), ctx.builder.getInt32(vk), ctx.builder.getInt64(8), nullp, ctx.builder.getInt32(0) });
+                }
+                ctx.builder.CreateStore(newH, slot);
                 return;
             }
             llvm::Type* fldTy = ctx.getLLVMType(fldTypeName);

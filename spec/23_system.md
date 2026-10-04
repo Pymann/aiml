@@ -8,6 +8,8 @@
 # - io.stdout
 # - io.stderr
 # - io.stdin
+# Each is the process's own C standard stream (the same handle on every access; stderr keeps
+# its C buffering, i.e. unbuffered). They are runtime-owned: never closed by scope exit.
 
 # Writing to Stdout / Stderr
 - call: [io.write, io.stdout, "Normal Output\n"]
@@ -223,7 +225,7 @@
 For large binary model imports, the current text-oriented `io.open/io.read/io.read_all`
 API is not sufficient. The following additions are proposed.
 
-Status: **proposed, not implemented**
+Status: **implemented** (see the table below; only `io.read_u64_le` is missing)
 
 ```yaml
 # Binary open
@@ -249,23 +251,26 @@ Status: **proposed, not implemented**
 - decl: [t, f64, { call: [io.read_f64_le, f] }]
 ```
 
-### Proposed Functions
+### Binary Read Functions
+
+Implemented in `src/sys/binary_io_runtime.cpp` and tested by `tests/test_binary_io.aiml`,
+except `io.read_u64_le`. Binary output goes through `buffer.write_to(f)` (spec/11).
 
 | Function | Signature | Status | Description |
 |----------|-----------|--------|-------------|
-| `io.open_binary` | `io.open_binary(path: string\|path) -> file_handle` | not implemented | Opens a file in binary read mode. |
-| `io.read_bytes` | `io.read_bytes(f: file_handle, n: i32) -> buffer<u8>` | not implemented | Reads exactly `n` bytes or fewer at EOF into a byte buffer. |
-| `io.tell` | `io.tell(f: file_handle) -> i64` | not implemented | Returns current file position in bytes. |
-| `io.seek` | `io.seek(f: file_handle, pos: i64) -> void` | not implemented | Moves the file position to `pos`. |
-| `io.skip` | `io.skip(f: file_handle, delta: i64) -> void` | not implemented | Moves the file position forward by `delta`. |
-| `io.read_at` | `io.read_at(f: file_handle, offset: i64, n: i32) -> buffer<u8>` | not implemented | Reads a byte range without relying on the shared sequential cursor. |
-| `io.read_bool` | `io.read_bool(f: file_handle) -> i32` | not implemented | Reads one boolean byte and advances the cursor. |
-| `io.read_i32_le` | `io.read_i32_le(f: file_handle) -> i32` | not implemented | Reads one little-endian `i32` and advances the cursor. |
-| `io.read_u32_le` | `io.read_u32_le(f: file_handle) -> i64` | not implemented | Reads one little-endian unsigned `u32`. |
-| `io.read_i64_le` | `io.read_i64_le(f: file_handle) -> i64` | not implemented | Reads one little-endian `i64`. |
+| `io.open_binary` | `io.open_binary(path: string\|path) -> file_handle` | implemented | Opens a file in binary read mode. |
+| `io.read_bytes` | `io.read_bytes(f: file_handle, n: i32) -> buffer<u8>` | implemented | Reads exactly `n` bytes or fewer at EOF into a byte buffer. |
+| `io.tell` | `io.tell(f: file_handle) -> i64` | implemented | Returns current file position in bytes. |
+| `io.seek` | `io.seek(f: file_handle, pos: i64) -> void` | implemented | Moves the file position to `pos`. |
+| `io.skip` | `io.skip(f: file_handle, delta: i64) -> void` | implemented | Moves the file position forward by `delta`. |
+| `io.read_at` | `io.read_at(f: file_handle, offset: i64, n: i32) -> buffer<u8>` | implemented | Reads a byte range without relying on the shared sequential cursor. |
+| `io.read_bool` | `io.read_bool(f: file_handle) -> i32` | implemented | Reads one boolean byte and advances the cursor. |
+| `io.read_i32_le` | `io.read_i32_le(f: file_handle) -> i32` | implemented | Reads one little-endian `i32` and advances the cursor. |
+| `io.read_u32_le` | `io.read_u32_le(f: file_handle) -> i64` | implemented | Reads one little-endian unsigned `u32`. |
+| `io.read_i64_le` | `io.read_i64_le(f: file_handle) -> i64` | implemented | Reads one little-endian `i64`. |
 | `io.read_u64_le` | `io.read_u64_le(f: file_handle) -> i64` | not implemented | Reads one little-endian unsigned `u64`. |
-| `io.read_f32_le` | `io.read_f32_le(f: file_handle) -> f32` | not implemented | Reads one IEEE754 `f32`. |
-| `io.read_f64_le` | `io.read_f64_le(f: file_handle) -> f64` | not implemented | Reads one IEEE754 `f64`. |
+| `io.read_f32_le` | `io.read_f32_le(f: file_handle) -> f32` | implemented | Reads one IEEE754 `f32`. |
+| `io.read_f64_le` | `io.read_f64_le(f: file_handle) -> f64` | implemented | Reads one IEEE754 `f64`. |
 
 ### Design Notes
 

@@ -1,0 +1,75 @@
+# static-check: off
+# spec/61 §5.7/§7: a list<Model> field of a value-model MEMBER (`<.doc.items`) — push of a local, push of a
+# method result, `at` borrow read, `idx … .field` replace of a container field, through the two-level
+# member path; no corruption, no leak.
+- model: { name: Entry, fields: [[name, string], [weight, f64], [tags, list<string>]] }
+- model: { name: Doc, fields: [[title, string], [items, list<Entry>]] }
+- class:
+    name: Store
+    members: [[doc, Doc]]
+    methods:
+      - def:
+          name: make
+          access: public
+          args: [[num, i32]]
+          return: Entry
+          body:
+            - decl: [out, Entry]
+            - set: [out.name, "made-${num}"]
+            - call: [out.tags.push, "t${num}"]
+            - return: out
+      - def:
+          name: fill
+          access: public
+          args: [[num, i32]]
+          body:
+            - decl: [fresh, Doc]
+            - set: [<.doc, fresh]
+            - set: [<.doc.title, "doc-${num}"]
+            - call: [<.doc.items.push, { call: [<.make, num] }]
+            - decl: [local, Entry]
+            - set: [local.name, "local-${num}"]
+            - call: [<.doc.items.push, local]
+            - decl: [tags, list<string>]
+            - call: [tags.push, "x${num}"]
+            - call: [tags.push, "y${num}"]
+            - idx: [<.doc.items, 1, .tags, tags]
+      - def:
+          name: tag_count
+          access: public
+          args: [[idx, i32]]
+          return: i32
+          body:
+            - decl: [ent, ref<Entry>, { at: [<.doc.items, idx] }]
+            - return: ent.tags.len
+      - def:
+          name: find
+          access: public
+          args: [[want, string]]
+          return: i32
+          body:
+            - decl: [cur, i32, 0]
+            - while:
+                condition: { lt: [cur, <.doc.items.len] }
+                body:
+                  - decl: [ent, ref<Entry>, { at: [<.doc.items, cur] }]
+                  - if: { condition: { eq: [ent.name, want] }, then: [{ return: cur }] }
+                  - set: [cur, { +: [cur, 1] }]
+            - return: -1
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: { lt: [counter, 50] }
+          body:
+            - decl: [store, Store]
+            - call: [store.fill, counter]
+            - call: [store.fill, { +: [counter, 1] }]
+            - if: { condition: { neq: [{ call: [store.find, "made-${ { +: [counter, 1] } }"] }, 0] }, then: [{ print: ["FAIL made"] }, { return: 1 }] }
+            - if: { condition: { neq: [{ call: [store.find, "local-${ { +: [counter, 1] } }"] }, 1] }, then: [{ print: ["FAIL local"] }, { return: 1 }] }
+            - if: { condition: { neq: [{ call: [store.tag_count, 1] }, 2] }, then: [{ print: ["FAIL idx .field list"] }, { return: 1 }] }
+            - set: [counter, { +: [counter, 1] }]
+      - print: ["PASS 165 nested_member_list_model"]
+      - return: 0

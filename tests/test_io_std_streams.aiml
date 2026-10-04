@@ -1,0 +1,19 @@
+# spec/23: io.stdout / io.stderr are the process's standard streams — the same handle on every
+# access (no new stream per use), so repeated writes neither accumulate memory nor lose output.
+# Expected exit code: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [first, file_handle, io.stderr]
+      - decl: [count, i32, 0]
+      - while:
+          condition: { lt: [count, 100] }
+          body:
+            - decl: [again, file_handle, io.stderr]
+            - if: { condition: { neq: [again, first] }, then: [{ print: ["FAIL io.stderr changed"] }, { return: 1 }] }
+            - call: [io.write, io.stderr, ""]
+            - set: [count, { +: [count, 1] }]
+      - if: { condition: { eq: [io.stdout, io.stderr] }, then: [{ print: ["FAIL stdout == stderr"] }, { return: 1 }] }
+      - print: ["PASS io_std_streams"]
+      - return: 0

@@ -382,15 +382,12 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
             return ctx.ir_gen->wrap(llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()));
         }
         if (baseName == "io" && (propName == "stdout" || propName == "stderr" || propName == "stdin")) {
+            // spec/23: the process's own standard stream — never a fresh fdopen per access (that
+            // leaked one buffered FILE per use and lost output that was never flushed).
             int fd = (propName == "stdin") ? 0 : (propName == "stdout" ? 1 : 2);
-            std::string fmode = (propName == "stdin") ? "r" : "w";
-            llvm::Function* fdopenFunc = ctx.module.getFunction("fdopen");
-            if (!fdopenFunc) {
-                llvm::FunctionType* fdType = llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt32Ty(), ctx.builder.getInt8Ty()->getPointerTo()}, false);
-                fdopenFunc = llvm::Function::Create(fdType, llvm::Function::ExternalLinkage, "fdopen", ctx.module);
-            }
-            llvm::Value* modeStr = ctx.builder.CreateGlobalStringPtr(fmode);
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fdopenFunc, {ctx.builder.getInt32(fd), modeStr}));
+            llvm::Function* stdFn = ctx.getFunction("aiml_io_std_stream",
+                ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt32Ty()});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(stdFn, {ctx.builder.getInt32(fd)}));
         }
 
         // Check if varName is an AIML function used as a function pointer / callback.
