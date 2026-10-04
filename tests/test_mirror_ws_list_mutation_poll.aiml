@@ -97,12 +97,12 @@
             - call: [time.sleep_ms, 10]
             - set: [var_i, { +: [var_i, 1] }]
 
-      - decl: [var_p1, ptr<ParticipantState>]
+      - decl: [var_p1, ref<ParticipantState>]
       - set: [var_p1, { call: [root.participants.get, 1] }]
       - set: [var_p1.var_hp, 17]
       - set: [var_p1.is_active, 1]
 
-      - decl: [var_z0, ptr<ZoneState>]
+      - decl: [var_z0, ref<ZoneState>]
       - set: [var_z0, { call: [root.zones.get, 0] }]
       - call: [var_z0.cards.remove, 0]
       - decl: [new_ref, VisibleCardRef]

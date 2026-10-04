@@ -35,7 +35,7 @@
       - set: [var_kv, { call: [db.open_kv, "deckset_heap_ser", {persist: true, path: "/tmp/aiml_test_deckset_heap_ser/"}] }]
       - call: [var_kv.set, "ds_a", ds1]
 
-      - decl: [got1, ptr<DeckSet>]
+      - decl: [got1, ref<DeckSet>]
       - set: [got1, { call: [var_kv.get, "ds_a"] }]
       - if:
           condition: { eq: [{ eq: [got1.name, "Starter"] }, 0] }
@@ -53,7 +53,7 @@
       - set: [ds2, { call: [sys.deserialize, json2, "DeckSet"] }]
       - call: [var_kv.set, "ds_a", ds2]
 
-      - decl: [got2, ptr<DeckSet>]
+      - decl: [got2, ref<DeckSet>]
       - set: [got2, { call: [var_kv.get, "ds_a"] }]
       - if:
           condition: { eq: [{ eq: [got2.name, "Starter B"] }, 0] }

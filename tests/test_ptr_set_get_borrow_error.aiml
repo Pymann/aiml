@@ -1,0 +1,25 @@
+# static-check: off
+# Negative test (spec/61 §5.4): like test_ptr_bind_get_borrow_error, but the borrow read is bound
+# by a later `set:` — `decl: [p, ptr<T>]` then `set: [p, store.get(…)]` is the same illegal
+# ptr-owner-of-a-borrow binding and must not compile.
+#
+# Expected: compilation fails (exit 1).
+
+- class:
+    name: Player
+    members: [[score, i32]]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [players, Store<Player>]
+      - set: [players, { call: [db.open, "ptr_set_borrow_players"] }]
+      - decl: [one, Player]
+      - set: [one.score, 3]
+      - call: [players.insert, one]
+      - decl: [bad, ptr<Player>]
+      # ERROR: store `.get` yields ref<Player>, not ptr<Player>.
+      - set: [bad, { call: [players.get, 1] }]
+      - print: ["UNEXPECTED_RUNTIME: ptr-set borrow compiled ${bad.score}"]
+      - return: 0

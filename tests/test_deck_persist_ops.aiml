@@ -45,7 +45,7 @@
             - print: ["FAIL has_d1=${has1}"]
             - call: [sys.exit, 1]
 
-      - decl: [got2, ptr<Deck>]
+      - decl: [got2, ref<Deck>]
       - set: [got2, { call: [var_kv.get, "var_d2"] }]
       - if:
           condition: { eq: [{ eq: [got2.name, "Deck Two"] }, 0] }

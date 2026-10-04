@@ -1,4 +1,5 @@
 #include "compress_runtime.h"
+#include "string_runtime.h"
 
 #include <zlib.h>
 #include <brotli/encode.h>
@@ -744,9 +745,8 @@ extern "C" void aiml_compress_zip_entries_fill(const char* path, void* list_ptr)
         if (!e) continue;
 
         size_t nlen = st.name ? strlen(st.name) : 0;
-        e->name = static_cast<char*>(malloc(nlen + 1));
-        if (e->name) { memcpy(e->name, st.name ? st.name : "", nlen + 1); }
-        else           { e->name = static_cast<char*>(strdup("")); }
+        e->name = aiml_str_dup(st.name ? st.name : "");   // spec/61 §7: owned rc string
+        if (!e->name) { free(e); continue; }
 
         e->size            = (st.valid & ZIP_STAT_SIZE)      ? (int64_t)st.size      : 0;
         e->compressed_size = (st.valid & ZIP_STAT_COMP_SIZE) ? (int64_t)st.comp_size : 0;
@@ -795,7 +795,7 @@ extern "C" void aiml_compress_tar_entries_fill(const char* path, void* list_ptr)
 
         AimlTarEntry* e = static_cast<AimlTarEntry*>(malloc(sizeof(AimlTarEntry)));
         if (!e) break;
-        e->name   = strdup(name);
+        e->name   = aiml_str_dup(name);   // spec/61 §7: owned rc string
         e->size   = (int64_t)sz;
         e->is_dir = (type == '5') ? 1 : 0;
         e->mode   = (int32_t)mode;
@@ -803,7 +803,7 @@ extern "C" void aiml_compress_tar_entries_fill(const char* path, void* list_ptr)
         if (count >= cap) {
             cap *= 2;
             void** nd = static_cast<void**>(realloc(data, (size_t)cap * sizeof(void*)));
-            if (!nd) { free(e->name); free(e); break; }
+            if (!nd) { aiml_str_decref(e->name); free(e); break; }
             data = nd;
         }
         data[count++] = e;

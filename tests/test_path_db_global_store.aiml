@@ -24,7 +24,7 @@
 - set: [var_n, { call: [players.len] }]
 - print: ["global_store_len=${var_n}"]
 
-- decl: [got, ptr<GlobalStorePlayer>]
+- decl: [got, ref<GlobalStorePlayer>]
 - set: [got, { call: [players.get, var_id] }]
 - if:
     condition: { eq: [got, null] }

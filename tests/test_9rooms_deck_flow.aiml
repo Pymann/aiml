@@ -111,7 +111,7 @@
       - decl: [mk_n, i32, var_d.card_ids.len]
       - decl: [mk_cid, string]
       - decl: [mk_has, i32]
-      - decl: [mk_cp, ptr<Card>]
+      - decl: [mk_cp, ref<Card>]
       - while:
           condition: { lt: [mk_i, mk_n] }
           body:
@@ -136,7 +136,7 @@
       - set: [decks_kv, { call: [db.open_kv, "9r_decks_test", {persist: true, path: "/tmp/aiml_test_9rooms_deck_flow/"}] }]
       - call: [decks_kv.set, "deck_a", var_d]
 
-      - decl: [got, ptr<Deck>]
+      - decl: [got, ref<Deck>]
       - set: [got, { call: [decks_kv.get, "deck_a"] }]
       - if:
           condition: { eq: [{ eq: [got.name, "Mana Starter"] }, 0] }

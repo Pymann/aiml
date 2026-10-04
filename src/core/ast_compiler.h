@@ -179,6 +179,8 @@ private:
     IRValue* visitStringInterpolation(StringInterpolationExpr* expr);
     IRValue* visitBinary(BinaryExpr* bin);
     IRValue* visitCast(BinaryExpr* bin);
+    bool rejectPtrBindOfBorrow(Expr* value, const std::string& varName, const std::string& ptrType,
+                               const YAML::Node& where);
     IRValue* visitUnary(UnaryExpr* unary);
     IRValue* visitSpawn(SpawnExpr* spawn);
 

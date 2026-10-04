@@ -70,7 +70,7 @@
       - set: [var_kv, { call: [db.open_kv, "inner_values", {persist: true, path: db_dir}] }]
       - call: [var_kv.set, "ab1", var_ab]
 
-      - decl: [got, ptr<Ability>]
+      - decl: [got, ref<Ability>]
       - set: [got, { call: [var_kv.get, "ab1"] }]
       - if:
           condition: { eq: [got, null] }

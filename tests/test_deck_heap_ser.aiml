@@ -49,7 +49,7 @@
       - set: [var_kv, { call: [db.open_kv, "deck_heap_ser", {persist: true, path: "/tmp/aiml_test_deck_heap_ser/"}] }]
       - call: [var_kv.set, "deck_a", var_d1]
 
-      - decl: [got1, ptr<Deck>]
+      - decl: [got1, ref<Deck>]
       - set: [got1, { call: [var_kv.get, "deck_a"] }]
       - if:
           condition: { eq: [{ eq: [got1.name, "Mana Alpha"] }, 0] }
@@ -72,7 +72,7 @@
       - set: [var_d2, { call: [sys.deserialize, json2, "Deck"] }]
       - call: [var_kv.set, "deck_a", var_d2]
 
-      - decl: [got2, ptr<Deck>]
+      - decl: [got2, ref<Deck>]
       - set: [got2, { call: [var_kv.get, "deck_a"] }]
       - if:
           condition: { eq: [{ eq: [got2.name, "Mana Beta"] }, 0] }

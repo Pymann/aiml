@@ -267,6 +267,25 @@ namespace AIML {
         jsInfo.members["indent"] = indentMember;
         jsInfo.members["newline"] = newlineMember;
         classes["JsonStyle"] = std::move(jsInfo);
+        // spec/33_2 archive entries: registered here (like JsonStyle) so registerTypes builds their
+        // release descriptor — a list<ptr<zip_entry>> frees each box and decrefs its name string.
+        llvm::Type* i64 = llvm::Type::getInt64Ty(context);
+        auto entryInfo = [&](const char* nm, std::vector<llvm::Type*> fields,
+                             std::vector<std::pair<const char*, const char*>> names) {
+            llvm::StructType* st = llvm::StructType::getTypeByName(context, nm);
+            if (!st) st = llvm::StructType::create(context, fields, nm);
+            ClassInfo ci; ci.name = nm; ci.type = st; ci.isBuiltin = false;
+            for (size_t k = 0; k < names.size(); ++k) {
+                StructMember m; m.index = (int)k; m.type = fields[k]; m.typeName = names[k].second;
+                ci.members[names[k].first] = m;
+            }
+            classes[nm] = std::move(ci);
+        };
+        entryInfo("zip_entry", {p, i64, i64, i32, i32, i32, i32},
+                  {{"name", "string"}, {"size", "i64"}, {"compressed_size", "i64"}, {"is_dir", "i32"},
+                   {"crc32", "i32"}, {"method", "i32"}, {"_pad", "i32"}});
+        entryInfo("tar_entry", {p, i64, i32, i32},
+                  {{"name", "string"}, {"size", "i64"}, {"is_dir", "i32"}, {"mode", "i32"}});
     }
 
     // Original constructor was:

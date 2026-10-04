@@ -1,0 +1,52 @@
+# spec/47 §1 + spec/61 §11.10: db handles are Class-6 runtime-owned singletons — opening the same
+# name again (in-memory Store/Kv/VecStore/TimeSeries) returns the SAME handle, and the runtime keeps
+# it (no user free, nothing lost at exit).
+# Expected exit code: 0
+- class:
+    name: Probe
+    members: [[pts, i32]]
+- class:
+    name: Sample
+    members: [[value, i32]]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [store_a, Store<Probe>]
+      - set: [store_a, { call: [db.open, "singleton_store"] }]
+      - decl: [store_b, Store<Probe>]
+      - set: [store_b, { call: [db.open, "singleton_store"] }]
+      - decl: [row, Probe]
+      - set: [row.pts, 7]
+      - call: [store_a.insert, row]
+      - decl: [store_len, i32, { call: [store_b.len] }]
+      - if: { condition: { neq: [store_len, 1] }, then: [{ print: ["FAIL store ${store_len}"] }, { return: 1 }] }
+      - decl: [kv_a, Kv<string:i32>]
+      - set: [kv_a, { call: [db.open_kv, "singleton_kv"] }]
+      - decl: [kv_b, Kv<string:i32>]
+      - set: [kv_b, { call: [db.open_kv, "singleton_kv"] }]
+      - call: [kv_a.set, "one", 1]
+      - decl: [kv_len, i32, { call: [kv_b.len] }]
+      - if: { condition: { neq: [kv_len, 1] }, then: [{ print: ["FAIL kv ${kv_len}"] }, { return: 1 }] }
+      - decl: [vec_a, VecStore]
+      - set: [vec_a, { call: [db.open_vec, "singleton_vec", 3] }]
+      - decl: [vec_b, VecStore]
+      - set: [vec_b, { call: [db.open_vec, "singleton_vec", 3] }]
+      - decl: [emb, list<f32>]
+      - call: [emb.push, 1.0]
+      - call: [emb.push, 0.0]
+      - call: [emb.push, 0.0]
+      - call: [vec_a.insert, "doc", emb]
+      - decl: [vec_len, i32, { call: [vec_b.len] }]
+      - if: { condition: { neq: [vec_len, 1] }, then: [{ print: ["FAIL vec ${vec_len}"] }, { return: 1 }] }
+      - decl: [ts_a, TimeSeries<Sample>]
+      - set: [ts_a, { call: [db.open_timeseries, "singleton_ts"] }]
+      - decl: [ts_b, TimeSeries<Sample>]
+      - set: [ts_b, { call: [db.open_timeseries, "singleton_ts"] }]
+      - decl: [smp, Sample]
+      - set: [smp.value, 3]
+      - call: [ts_a.append, smp, 1000]
+      - decl: [ts_len, i32, { call: [ts_b.len] }]
+      - if: { condition: { neq: [ts_len, 1] }, then: [{ print: ["FAIL ts ${ts_len}"] }, { return: 1 }] }
+      - print: ["PASS db_singleton_handles"]
+      - return: 0

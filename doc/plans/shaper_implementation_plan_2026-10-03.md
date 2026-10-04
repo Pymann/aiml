@@ -2,6 +2,10 @@
 
 Stand: 2026-10-03. Planungsstand, noch keine shaper-Implementierung.
 
+**Historischer Ausgangsplan:** Shaper und glbview sind inzwischen implementiert.
+Die ursprünglichen Fehlstellen unten sind keine aktuelle Restarbeitenliste.
+Siehe [Statusabgleich vom 2026-10-04](shaper_open_topics_2026-10-04.md).
+
 ## 1. Ziel und vereinbarter Umfang
 
 Shaper wird ein eigenständiges AIML-Programm. Es liest eine deklarative

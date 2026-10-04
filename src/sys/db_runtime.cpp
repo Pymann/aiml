@@ -457,6 +457,10 @@ static std::unordered_map<std::string, AimlVecStore*>&   g_persistent_vecs_by_na
 // In-memory (non-persistent) KV registry: name → singleton handle, shared across calls.
 // Ensures db.open_kv("name", {persist: false}) returns the same instance on every call.
 static std::unordered_map<std::string, AimlKv*>&         g_non_persist_kvs_by_name   = *new std::unordered_map<std::string, AimlKv*>();
+// spec/47 §1, spec/61 §11.10: in-memory Store/VecStore/TimeSeries are Class-6 singletons too.
+static std::unordered_map<std::string, AimlStore*>&      g_non_persist_stores_by_name = *new std::unordered_map<std::string, AimlStore*>();
+static std::unordered_map<std::string, AimlVecStore*>&   g_non_persist_vecs_by_name   = *new std::unordered_map<std::string, AimlVecStore*>();
+static std::unordered_map<std::string, AimlTimeSeries*>& g_non_persist_ts_by_name     = *new std::unordered_map<std::string, AimlTimeSeries*>();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Column Layout helpers
@@ -497,9 +501,14 @@ static void store_col_delete(AimlStore* s, int32_t idx) {
 
 extern "C" void* aiml_db_store_open(const char* name, const char* type_name, int64_t elem_size) {
     if (elem_size <= 0) return nullptr;
+    std::string nm = name ? name : "store";
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    auto it = g_non_persist_stores_by_name.find(nm);
+    if (it != g_non_persist_stores_by_name.end()) return it->second;
     AimlStore* s = new AimlStore();
     s->type_name = type_name ? type_name : "";
     s->elem_size = elem_size;
+    g_non_persist_stores_by_name[nm] = s;
     return s;
 }
 
@@ -512,11 +521,16 @@ extern "C" void* aiml_db_store_open_typed(const char* name, const char* type_nam
                                           int64_t elem_size,
                                           const AimlTypeNode* nodes, int32_t n_nodes) {
     if (elem_size <= 0) return nullptr;
+    std::string nm = name ? name : "store";
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    auto it = g_non_persist_stores_by_name.find(nm);
+    if (it != g_non_persist_stores_by_name.end()) return it->second;
     AimlStore* s = new AimlStore();
     s->type_name = type_name ? type_name : "";
     s->elem_size = elem_size;
     s->ser_nodes = nodes;   // in-memory (not persistent) → typed_persistent stays false
     s->ser_n = n_nodes;
+    g_non_persist_stores_by_name[nm] = s;
     return s;
 }
 
@@ -648,7 +662,12 @@ extern "C" void* aiml_db_store_open_col(const char* name, const char* type_name,
                                           int32_t n_fields, const int32_t* field_sizes,
                                           int64_t elem_size) {
     if (elem_size <= 0 || n_fields <= 0 || !field_sizes) return nullptr;
+    std::string nm = name ? name : "store";
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    auto found = g_non_persist_stores_by_name.find(nm);
+    if (found != g_non_persist_stores_by_name.end()) return found->second;
     AimlStore* s = new AimlStore();
+    g_non_persist_stores_by_name[nm] = s;
     s->type_name    = type_name ? type_name : "";
     s->elem_size    = elem_size;
     s->column_layout = true;
@@ -2032,8 +2051,13 @@ extern "C" void aiml_iter_free(void* iter_ptr) {
 
 extern "C" void* aiml_db_vec_open(const char* name, int32_t dims) {
     if (dims <= 0) return nullptr;
+    std::string nm = name ? name : "vec";
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    auto it = g_non_persist_vecs_by_name.find(nm);
+    if (it != g_non_persist_vecs_by_name.end()) return it->second;
     AimlVecStore* vs = new AimlVecStore();
     vs->dims = dims;
+    g_non_persist_vecs_by_name[nm] = vs;
     return vs;
 }
 
@@ -2186,8 +2210,13 @@ extern "C" int32_t aiml_db_vec_len(void* vs_ptr) {
 
 extern "C" void* aiml_db_ts_open(const char* name, int64_t elem_size) {
     if (elem_size <= 0) return nullptr;
+    std::string nm = name ? name : "ts";
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    auto it = g_non_persist_ts_by_name.find(nm);
+    if (it != g_non_persist_ts_by_name.end()) return it->second;
     AimlTimeSeries* ts = new AimlTimeSeries();
     ts->elem_size = elem_size;
+    g_non_persist_ts_by_name[nm] = ts;
     return ts;
 }
 

@@ -40,7 +40,7 @@
 
       - call: [var_kv.set, "bag", bag]
 
-      - decl: [got, ptr<ManaBag>]
+      - decl: [got, ref<ManaBag>]
       - set: [got, { call: [var_kv.get, "bag"] }]
       - if:
           condition: { eq: [got, null] }

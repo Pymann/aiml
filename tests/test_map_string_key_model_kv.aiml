@@ -41,7 +41,7 @@
       - set: [var_kv, { call: [db.open_kv, "map_string_key_model_kv", {persist: true, path: db_dir}] }]
       - call: [var_kv.set, "mana", var_c1]
 
-      - decl: [got, ptr<CardLike>]
+      - decl: [got, ref<CardLike>]
       - set: [got, { call: [var_kv.get, "mana"] }]
       - if:
           condition: { eq: [got, null] }
