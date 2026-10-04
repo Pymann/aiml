@@ -604,6 +604,11 @@ void* aiml_gltf_tex_image(void* tex) {
     return ref;
 }
 
+/* spec/61 Class 4: the handle block from tex.image() is released at owner drop (null-safe). */
+void aiml_gltf_image_release(void* img) {
+    free(img);
+}
+
 const char* aiml_gltf_tex_wrap_s(void* tex) {
     auto* t = (cgltf_texture*)tex;
     return (t && t->sampler) ? wrap_str(t->sampler->wrap_s) : "REPEAT";

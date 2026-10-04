@@ -1,0 +1,65 @@
+# spec/43_1 §6 + spec/61 Class 4: tex.image() handles are released at owner drop (valgrind: no
+# program leak over repeated calls); a returned handle moves to the caller and stays usable.
+# Expected exit code: 0
+- class:
+    name: ImageProbe
+    members: [[total, i32]]
+    methods:
+      - def:
+          name: width_of
+          access: public
+          args: [[tex, gltf_texture]]
+          return: i32
+          body:
+            - decl: [img, gltf_image, { call: [tex.image] }]
+            - return: { call: [img.width] }
+
+      # a pointer-typed return (not alias-safe for the generic cleanup) still releases the handle
+      - def:
+          name: through
+          access: public
+          args: [[tex, gltf_texture]]
+          return: gltf_texture
+          body:
+            - decl: [img, gltf_image, { call: [tex.image] }]
+            - set: [<.total, { +: [<.total, { call: [img.width] }] }]
+            - return: tex
+
+      - def:
+          name: image_of
+          access: public
+          args: [[tex, gltf_texture]]
+          return: gltf_image
+          body:
+            - decl: [img, gltf_image, { call: [tex.image] }]
+            - return: img
+
+      - def:
+          name: run
+          access: public
+          body:
+            - decl: [file_path, path, "tests/cube_textured.glb"]
+            - decl: [scene, gltf_scene, { call: [gltf.load, file_path] }]
+            - decl: [mats, list<gltf_material>, { call: [scene.materials] }]
+            - decl: [mat, gltf_material, { call: [mats.get, 0] }]
+            - decl: [tex, gltf_texture, { call: [mat.base_color_texture] }]
+            - decl: [round, i32, 0]
+            - while:
+                condition: { lt: [round, 50] }
+                body:
+                  - set: [<.total, { +: [<.total, { call: [<.width_of, tex] }] }]
+                  - decl: [moved, gltf_image, { call: [<.image_of, tex] }]
+                  - set: [<.total, { +: [<.total, { call: [moved.height] }] }]
+                  - decl: [same, gltf_texture, { call: [<.through, tex] }]
+                  - if: { condition: { eq: [same, null] }, then: [{ set: [<.total, -100000] }] }
+                  - set: [round, { +: [round, 1] }]
+            - call: [scene.free]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [probe, ptr<ImageProbe>, { new: ImageProbe }]
+      - call: [probe.run]
+      - if: { condition: { le: [probe.total, 0] }, then: [{ print: ["FAIL total ${probe.total}"] }, { return: 1 }] }
+      - print: ["PASS gltf_image_owned ${probe.total}"]
+      - return: 0
