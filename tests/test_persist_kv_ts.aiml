@@ -55,7 +55,7 @@
 - set: [tlen, { call: [var_ts.len] }]
 - print: ["var_ts len: ${tlen}"]
 
-- decl: [var_tp, ptr<Reading>]
+- decl: [var_tp, ref<Reading>]
 - set: [var_tp, { call: [var_ts.at, 1500] }]
 - print: ["at 1500: ${var_tp.val}"]
 

@@ -75,7 +75,7 @@
       - set: [var_kv, { call: [db.open_kv, "card_heap_persist", {persist: true, path: "/tmp/aiml_test_card_heap_persist/"}] }]
       - call: [var_kv.set, "var_c1", var_c1]
 
-      - decl: [got, ptr<Card>]
+      - decl: [got, ref<Card>]
       - set: [got, { call: [var_kv.get, "var_c1"] }]
       - if:
           condition: { eq: [{ eq: [got.name, "Red Pyromancer IV"] }, 0] }

@@ -83,6 +83,10 @@ struct Analyzer {
             }
             return false;
         }
+        // spec/61 §5.6: a dyn_array<T> from new_array owns its single malloc (kind-9 drop registered
+        // at the decl, ast_compiler_stmt.cpp); `.free` nulls the slot → the drop is a null no-op.
+        if (ctx.memV3 && t.rfind("dyn_array<", 0) == 0 && t.back() == '>')
+            return d->initialValue && dynamic_cast<const NewArrayExpr*>(d->initialValue.get());
         auto ci = ctx.classes.find(t);
         if (ci != ctx.classes.end() && ci->second.hasHeapFields && ci->second.serNodesVar) {
             if (!d->initialValue) return true;

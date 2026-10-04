@@ -60,7 +60,7 @@
             - print: ["FAIL ts_reuse_len base=${ts_base} got=${ts_len_b}"]
             - call: [sys.exit, 1]
 
-      - decl: [sample_b, ptr<PersistReading>]
+      - decl: [sample_b, ref<PersistReading>]
       - set: [sample_b, { call: [ts_b.at, 987654321] }]
       - if:
           condition: { neq: [sample_b.val, 321] }

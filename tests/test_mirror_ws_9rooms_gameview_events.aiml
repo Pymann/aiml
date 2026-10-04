@@ -71,17 +71,17 @@
             - call: [time.sleep_ms, 10]
             - set: [var_i, { +: [var_i, 1] }]
 
-      - decl: [ge0_ptr, ptr<GameEventView>]
+      - decl: [ge0_ptr, ref<GameEventView>]
       - set: [ge0_ptr, { call: [var_v.events.get, 0] }]
       - set: [ge0_ptr.text, "Round start updated"]
       - set: [ge0_ptr.target_iid, "tgt-1b"]
 
-      - decl: [at0_ptr, ptr<TriggerEventView>]
+      - decl: [at0_ptr, ref<TriggerEventView>]
       - set: [at0_ptr, { call: [var_v.active_triggers.get, 0] }]
       - set: [at0_ptr.resolved, 1]
       - set: [at0_ptr.text, "On draw resolved"]
 
-      - decl: [rt0_ptr, ptr<TriggerEventView>]
+      - decl: [rt0_ptr, ref<TriggerEventView>]
       - set: [rt0_ptr, { call: [var_v.reactable_triggers.get, 0] }]
       - set: [rt0_ptr.expired, 1]
       - set: [rt0_ptr.text, "On draw expired"]

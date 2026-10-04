@@ -81,7 +81,7 @@
       - set: [var_kv, { call: [db.open_kv, "card_value_from_kv_get", {persist: true, path: db_dir}] }]
       - call: [var_kv.set, "mana", src]
 
-      - decl: [gotp, ptr<Card>]
+      - decl: [gotp, ref<Card>]
       - set: [gotp, { call: [var_kv.get, "mana"] }]
       - if:
           condition: { eq: [gotp, null] }

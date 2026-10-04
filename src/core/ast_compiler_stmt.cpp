@@ -1383,46 +1383,9 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
     // and freed on drop/reassign (the test_model / db-reopen double-free class). Bind `ref<T>` to
     // borrow, or use `get_copy` for an independent owned copy (which already exists — §5.4). Scoped to
     // KNOWN borrow-returning receivers so a user method happening to be named `get` is not caught.
-    if (ctx.memV3 && decl->initialValue && decl->typeName.rfind("ptr<", 0) == 0) {
-        // Determine (accessor-name, receiver-name, receiver-type) for either the method form
-        // `{ call: [recv.get, i] }` or the shorthand `{ at: [recv, i] }` (both are §5.4 borrow reads;
-        // ref<Iface> from a ptr-list element now shares the fat-pointer representation, so the pervasive
-        // `list<ptr<Iface>>` dispatch idiom migrates to ref<Iface> cleanly).
-        std::string meth, recv, rt;
-        if (auto* ce = dynamic_cast<CallExpr*>(decl->initialValue.get())) {
-            const std::string& fn = ce->functionName;
-            size_t dp = fn.rfind('.');
-            if (dp != std::string::npos) {
-                std::string m = fn.substr(dp + 1);
-                if (m == "get" || m == "at" || m == "first" || m == "last") { meth = m; recv = fn.substr(0, dp); }
-            }
-        } else if (auto* ax = dynamic_cast<AtExpr*>(decl->initialValue.get())) {
-            // `{ at: [c, i] }` with NO trailing member path is exactly `c.at(i)` — a borrow read.
-            if (ax->memberPath.empty())
-                if (auto* cv = dynamic_cast<VariableExpr*>(ax->container.get()))
-                    if (cv->name.find('.') == std::string::npos) { meth = "at"; recv = cv->name; }
-        }
-        if (!meth.empty()) {
-            if (recv == "yaml") rt = "yaml";   // builtin namespace: yaml.get → node view (borrow)
-            else if (Symbol* rs = resolveVariable(recv)) rt = rs->typeName;
-            bool borrowSource = rt == "yaml"
-                || rt.rfind("list<", 0) == 0 || rt.rfind("map<", 0) == 0
-                || rt.rfind("cascade<", 0) == 0 || rt.rfind("array<", 0) == 0
-                || rt.rfind("Kv<", 0) == 0 || rt.rfind("Store<", 0) == 0
-                || rt.rfind("TimeSeries<", 0) == 0 || rt == "VecStore";
-            if (borrowSource) {
-                std::string inner = decl->typeName.substr(4, decl->typeName.size() - 5);
-                LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "decl: '" + decl->varName + "' binds a "
-                    "'" + meth + "' read to ptr<" + inner + ">, but '" + meth + "' yields a "
-                    "ref<" + inner + "> BORROW (the container/store keeps ownership; it never "
-                    "hands out a second owner). A ptr<T> is a UNIQUE OWNER, so this would free a "
-                    "box it does not own (double-free on drop/reassign). Bind 'ref<" + inner +
-                    ">' to borrow it, or use '" + recv + ".get_copy(…)' for an independent owned "
-                    "copy (§5.4).");
-                return;
-            }
-        }
-    }
+    if (ctx.memV3 && decl->initialValue && decl->typeName.rfind("ptr<", 0) == 0
+        && rejectPtrBindOfBorrow(decl->initialValue.get(), decl->varName, decl->typeName, decl->sourceNode))
+        return;
 
     // ── spec/61 §5 Option B (memV3): list<T>/cascade<X> value-LOCAL = refcounted HANDLE ──────────
     // The slot holds a POINTER to a heap block [i32 rc][i32 pad][{size,cap,data}]; the stored
@@ -2630,6 +2593,48 @@ static bool modelsInheritanceRelated(CompilerContext& ctx, const std::string& a,
     return modelIsAncestor(ctx, a, b) || modelIsAncestor(ctx, b, a);
 }
 
+// spec/61 §5.4: `.get`/`.at`/`.first`/`.last` on a container (list/map/cascade) or a Class-6 store
+// (Kv/Store/TimeSeries/VecStore) yields a `ref<T>` BORROW — it never hands out a second owner. So
+// binding the read to a `ptr<T>` (a UNIQUE OWNER) — by `decl` or by `set` — is illegal: the borrow
+// would be treated as owned and freed on drop/reassign (the test_model / db-reopen double-free
+// class). Scoped to KNOWN borrow-returning receivers so a user method named `get` is not caught.
+// Returns true (and reports) when `value` is such a read.
+bool Compiler::rejectPtrBindOfBorrow(Expr* value, const std::string& varName, const std::string& ptrType,
+                                     const YAML::Node& where) {
+    std::string meth, recv, rt;
+    if (auto* ce = dynamic_cast<CallExpr*>(value)) {
+        const std::string& fn = ce->functionName;
+        size_t dp = fn.rfind('.');
+        if (dp != std::string::npos) {
+            std::string m = fn.substr(dp + 1);
+            if (m == "get" || m == "at" || m == "first" || m == "last") { meth = m; recv = fn.substr(0, dp); }
+        }
+    } else if (auto* ax = dynamic_cast<AtExpr*>(value)) {
+        // `{ at: [c, i] }` with NO trailing member path is exactly `c.at(i)` — a borrow read.
+        if (ax->memberPath.empty())
+            if (auto* cv = dynamic_cast<VariableExpr*>(ax->container.get()))
+                if (cv->name.find('.') == std::string::npos) { meth = "at"; recv = cv->name; }
+    }
+    if (meth.empty()) return false;
+    if (recv == "yaml") rt = "yaml";   // builtin namespace: yaml.get → node view (borrow)
+    else if (Symbol* rs = resolveVariable(recv)) rt = rs->typeName;
+    bool borrowSource = rt == "yaml"
+        || rt.rfind("list<", 0) == 0 || rt.rfind("map<", 0) == 0
+        || rt.rfind("cascade<", 0) == 0 || rt.rfind("array<", 0) == 0
+        || rt.rfind("Kv<", 0) == 0 || rt.rfind("Store<", 0) == 0
+        || rt.rfind("TimeSeries<", 0) == 0 || rt == "VecStore";
+    if (!borrowSource) return false;
+    std::string inner = ptrType.substr(4, ptrType.size() - 5);
+    LOG_ERROR(ctx.fmtLoc(where) + "'" + varName + "' binds a "
+        "'" + meth + "' read to ptr<" + inner + ">, but '" + meth + "' yields a "
+        "ref<" + inner + "> BORROW (the container/store keeps ownership; it never "
+        "hands out a second owner). A ptr<T> is a UNIQUE OWNER, so this would free a "
+        "box it does not own (double-free on drop/reassign). Declare it 'ref<" + inner +
+        ">' to borrow, or use '" + recv + ".get_copy(…)' for an independent owned "
+        "copy (§5.4).");
+    return true;
+}
+
 // spec/61 §5: `set: [local, other_local]` on memV3 container handles shares (incref), never moves.
 static bool setTargetSharesLocalHandle(SetStmt* setStmt) {
     const std::string& t = setStmt->target;
@@ -2638,6 +2643,13 @@ static bool setTargetSharesLocalHandle(SetStmt* setStmt) {
 }
 
 void Compiler::visitSetStmt(SetStmt* setStmt) {
+    // spec/61 §5.4: a ptr<T> local must not be (re)bound to a container/store borrow read either.
+    if (ctx.memV3 && setStmt->value && setStmt->target.find('.') == std::string::npos
+        && setStmt->target.find('<') == std::string::npos)
+        if (Symbol* ts = resolveVariable(setStmt->target))
+            if (ts->typeName.rfind("ptr<", 0) == 0 && ts->typeName.back() == '>'
+                && rejectPtrBindOfBorrow(setStmt->value.get(), setStmt->target, ts->typeName, setStmt->sourceNode))
+                return;
     // spec/61 §5.5/§7: the ownership plan decides whether a local rebind releases the old value.
     const char* rebindCopyFn = "aiml_ser_deep_copy";
     if (ctx.ownershipPlan) {

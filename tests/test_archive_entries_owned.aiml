@@ -1,0 +1,49 @@
+# spec/33_2 + spec/61 §5.5: compress.zip_entries / tar_entries return list<ptr<zip_entry|tar_entry>>
+# — the list owns each entry box and its name string; repeated listing in a helper releases all.
+# Expected exit code: 0
+- class:
+    name: Lister
+    members: [[calls, i32]]
+    methods:
+      - def:
+          name: zip_first
+          access: public
+          args: [[archive, string]]
+          return: { type: string, lifetime: producer }
+          body:
+            - decl: [ents, list<ptr<zip_entry>>, { call: [compress.zip_entries, archive] }]
+            - decl: [first, ref<zip_entry>, { at: [ents, 0] }]
+            - decl: [label, string, "${first.name}:${first.size}"]
+            - set: [<.calls, { +: [<.calls, 1] }]
+            - return: label
+      - def:
+          name: tar_first
+          access: public
+          args: [[archive, string]]
+          return: { type: string, lifetime: producer }
+          body:
+            - decl: [ents, list<ptr<tar_entry>>, { call: [compress.tar_entries, archive] }]
+            - decl: [first, ref<tar_entry>, { at: [ents, 0] }]
+            - return: "${first.name}:${first.size}"
+- def:
+    name: main
+    return: i32
+    body:
+      - call: [io.write_file, "/tmp/aiml_test_aeo_src.txt", "hello archive"]
+      - decl: [src, path, "/tmp/aiml_test_aeo_src.txt"]
+      - decl: [zip_dst, path, "/tmp/aiml_test_aeo.zip"]
+      - decl: [tar_dst, path, "/tmp/aiml_test_aeo.tar.gz"]
+      - call: [compress.zip, src, zip_dst]
+      - call: [compress.tar_gz, src, tar_dst]
+      - decl: [lister, ptr<Lister>, { new: Lister }]
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, 20] }
+          body:
+            - decl: [zip_label, string, { call: [lister.zip_first, "/tmp/aiml_test_aeo.zip"] }]
+            - if: { condition: { eq: [{ call: [zip_label.ends_with, ":13"] }, 0] }, then: [{ print: ["FAIL zip ${zip_label}"] }, { return: 1 }] }
+            - decl: [tar_label, string, { call: [lister.tar_first, "/tmp/aiml_test_aeo.tar.gz"] }]
+            - if: { condition: { eq: [{ call: [tar_label.ends_with, ":13"] }, 0] }, then: [{ print: ["FAIL tar ${tar_label}"] }, { return: 1 }] }
+            - set: [round, { +: [round, 1] }]
+      - print: ["PASS archive_entries_owned"]
+      - return: 0

@@ -19,7 +19,7 @@
 - set: [var_p.var_z, 60]
 - call: [parts.insert, var_p]
 
-- decl: [got, ptr<Particle>]
+- decl: [got, ref<Particle>]
 - set: [got, { call: [parts.get, 1] }]
 - print: ["p1: ${got.var_x}, ${got.var_y}, ${got.var_z}"]
 

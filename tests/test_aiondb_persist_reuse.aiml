@@ -36,7 +36,7 @@
             - print: ["FAIL store_reuse_len base=${base_count} got=${count_b}"]
             - call: [sys.exit, 1]
 
-      - decl: [ent_b, ptr<PersistEntity>]
+      - decl: [ent_b, ref<PersistEntity>]
       - set: [ent_b, { call: [players_b.get, eid] }]
       - if:
           condition: { neq: [ent_b.score, 777] }

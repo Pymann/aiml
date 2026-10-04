@@ -27,7 +27,7 @@
       - set: [var_n, { call: [players.len] }]
       - print: ["rel_main_len=${var_n}"]
 
-      - decl: [got, ptr<RelativeMainPlayer>]
+      - decl: [got, ref<RelativeMainPlayer>]
       - set: [got, { call: [players.get, var_id] }]
       - if:
           condition: { eq: [got, null] }

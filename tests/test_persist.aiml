@@ -43,7 +43,7 @@
             - print: ["FAIL persist_len=${var_n1}"]
             - call: [sys.exit, 1]
 
-      - decl: [got, ptr<Player>]
+      - decl: [got, ref<Player>]
       - set: [got, { call: [players.get, 1] }]
       - if:
           condition: { eq: [got, null] }

@@ -23,12 +23,12 @@
 - call: [players.set, "bob", var_p2]
 
 # Get and verify
-- decl: [got, ptr<Player>]
+- decl: [got, ref<Player>]
 - set: [got, { call: [players.get, "alice"] }]
 - print: ["Phase A alice name: ${got.name}"]
 - print: ["Phase A alice score: ${got.score}"]
 
-- decl: [got2, ptr<Player>]
+- decl: [got2, ref<Player>]
 - set: [got2, { call: [players.get, "bob"] }]
 - print: ["Phase A bob name: ${got2.name}"]
 - print: ["Phase A bob score: ${got2.score}"]
@@ -72,7 +72,7 @@
 - set: [var_px.score, 99]
 - call: [kv2.set, "cx", var_px]
 
-- decl: [got3, ptr<Player>]
+- decl: [got3, ref<Player>]
 - set: [got3, { call: [kv2.get, "cx"] }]
 - print: ["Phase B overwrite name: ${got3.name}"]
 - print: ["Phase B overwrite score: ${got3.score}"]
@@ -88,7 +88,7 @@
 - set: [var_pe.score, 77]
 - call: [pdb.set, "eve", var_pe]
 
-- decl: [gpe, ptr<Player>]
+- decl: [gpe, ref<Player>]
 - set: [gpe, { call: [pdb.get, "eve"] }]
 - print: ["Phase C persist name: ${gpe.name}"]
 - print: ["Phase C persist score: ${gpe.score}"]

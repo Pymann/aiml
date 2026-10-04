@@ -52,13 +52,13 @@
             - call: [time.sleep_ms, 10]
             - set: [var_i, { +: [var_i, 1] }]
 
-      - decl: [fx0_ptr, ptr<EffectLiteDeep>]
+      - decl: [fx0_ptr, ref<EffectLiteDeep>]
       - set: [fx0_ptr, { call: [root.effects.get, 0] }]
       - set: [fx0_ptr.amount, 9]
       - set: [fx0_ptr.remaining_turns, 0]
       - set: [fx0_ptr.key, "paralyze_done"]
 
-      - decl: [fx1_ptr, ptr<EffectLiteDeep>]
+      - decl: [fx1_ptr, ref<EffectLiteDeep>]
       - set: [fx1_ptr, { call: [root.effects.get, 1] }]
       - set: [fx1_ptr.amount, 8]
       - set: [fx1_ptr.remaining_turns, 4]

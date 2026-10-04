@@ -361,6 +361,11 @@ void registerBuiltins(CompilerContext& ctx) {
         zi.members["is_dir"]          = mk(i32, 3, "i32");
         zi.members["crc32"]           = mk(i32, 4, "i32");
         zi.members["method"]          = mk(i32, 5, "i32");
+        if (auto ex = ctx.classes.find("zip_entry"); ex != ctx.classes.end()) {   // keep release descriptor (context.h)
+            zi.hasHeapFields = ex->second.hasHeapFields;
+            zi.serNodesVar   = ex->second.serNodesVar;
+            zi.serNodesCount = ex->second.serNodesCount;
+        }
         ctx.classes["zip_entry"] = std::move(zi);
     }
 
@@ -385,6 +390,11 @@ void registerBuiltins(CompilerContext& ctx) {
         ti.members["size"]   = mk(i64, 1, "i64");
         ti.members["is_dir"] = mk(i32, 2, "i32");
         ti.members["mode"]   = mk(i32, 3, "i32");
+        if (auto ex = ctx.classes.find("tar_entry"); ex != ctx.classes.end()) {   // keep release descriptor (context.h)
+            ti.hasHeapFields = ex->second.hasHeapFields;
+            ti.serNodesVar   = ex->second.serNodesVar;
+            ti.serNodesCount = ex->second.serNodesCount;
+        }
         ctx.classes["tar_entry"] = std::move(ti);
     }
 

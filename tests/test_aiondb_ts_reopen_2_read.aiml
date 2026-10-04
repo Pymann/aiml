@@ -28,7 +28,7 @@
             - print: ["FAIL ts_reopen_read_len=${var_n}"]
             - call: [sys.exit, 1]
 
-      - decl: [var_r1, ptr<ReopenReading>]
+      - decl: [var_r1, ref<ReopenReading>]
       - set: [var_r1, { call: [var_ts.at, 150] }]
       - if:
           condition: { neq: [var_r1.val, 11] }
@@ -36,7 +36,7 @@
             - print: ["FAIL ts_reopen_read_150=${var_r1.val}"]
             - call: [sys.exit, 1]
 
-      - decl: [var_r2, ptr<ReopenReading>]
+      - decl: [var_r2, ref<ReopenReading>]
       - set: [var_r2, { call: [var_ts.at, 250] }]
       - if:
           condition: { neq: [var_r2.val, 22] }

@@ -28,7 +28,7 @@
             - print: ["FAIL store_reopen_read_len=${var_n}"]
             - call: [sys.exit, 1]
 
-      - decl: [var_p, ptr<ReopenPlayer>]
+      - decl: [var_p, ref<ReopenPlayer>]
       - set: [var_p, { call: [players.get, 1] }]
       - if:
           condition: { neq: [var_p.score, 456] }
