@@ -2609,6 +2609,13 @@ static bool modelsInheritanceRelated(CompilerContext& ctx, const std::string& a,
     return modelIsAncestor(ctx, a, b) || modelIsAncestor(ctx, b, a);
 }
 
+// spec/61 §5: `set: [local, other_local]` on memV3 container handles shares (incref), never moves.
+static bool setTargetSharesLocalHandle(SetStmt* setStmt) {
+    const std::string& t = setStmt->target;
+    return t.find('.') == std::string::npos && t.find('<') == std::string::npos
+        && t.find('-') == std::string::npos;
+}
+
 void Compiler::visitSetStmt(SetStmt* setStmt) {
     // spec/61 §5.5/§7: the ownership plan decides whether a local rebind releases the old value.
     const char* rebindCopyFn = "aiml_ser_deep_copy";
@@ -2986,12 +2993,14 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             }
         }
     }
-    // spec/61 §8: a container param/global source is shared (incref in the handle-set path), never moved
+    // spec/61 §8: a container param/global source is shared (incref in the handle-set path), never moved.
+    // §5: so is a plain local source rebound into a plain local (`set: [a, b]`) — b keeps its drop.
     bool srcIsSharedHandle = false;
     if (auto* sv = dynamic_cast<VariableExpr*>(setStmt->value.get()))
         if (sv->name.find('.') == std::string::npos && sv->name.find('<') == std::string::npos)
             if (Symbol* ss = resolveVariable(sv->name))
-                srcIsSharedHandle = (ss->is_param || ss->is_global) && ctx.isMemV3ContainerHandle(ss->typeName);
+                srcIsSharedHandle = (ss->is_param || ss->is_global || setTargetSharesLocalHandle(setStmt))
+                    && ctx.isMemV3ContainerHandle(ss->typeName);
     // spec/61 Class 5/4: a chan source is shared (retain), a thread_handle source is nulled at runtime
     // (emitResourceStore) — both keep their null-safe drop.
     bool srcIsResource = false;
@@ -3192,7 +3201,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         llvm::Value* sa = ss->alloca_inst ? static_cast<llvm::Value*>(ss->alloca_inst)
                                                           : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(ss->ir_alloca_inst));
                         if (sa) newH = ctx.builder.CreateLoad(i8p, sa, "seth_src");
-                        srcSlotBorrow = ss->is_param || ss->is_global;   // borrow → share, not adopt
+                        srcSlotBorrow = ss->is_param || ss->is_global || setTargetSharesLocalHandle(setStmt);   // borrow → share, not adopt
                     }
                 }
             }
@@ -3205,7 +3214,8 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                     borrowSrc = (rv->name.find('.') != std::string::npos || rv->name.find('<') != std::string::npos);
                     if (!borrowSrc)
                         if (Symbol* ss = resolveVariable(rv->name))
-                            borrowSrc = ss->is_param || ss->is_global;   // spec/61 §8: share, the source keeps its ref
+                            borrowSrc = ss->is_param || ss->is_global   // spec/61 §8: share, the source keeps its ref
+                                || (setTargetSharesLocalHandle(setStmt) && ctx.isMemV3ContainerHandle(ss->typeName));
                 }
                 else if (dynamic_cast<AtExpr*>(rhs)) borrowSrc = true;
                 else if (auto* ce = dynamic_cast<CallExpr*>(rhs)) {

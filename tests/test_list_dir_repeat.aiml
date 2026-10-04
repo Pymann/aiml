@@ -1,0 +1,54 @@
+# spec/42 / spec/61 §5: io.list_dir returns an owned list<path>; calling it repeatedly from a
+# helper (several directories, an empty one, a nested one) releases every list exactly once.
+# Expected exit code: 0
+- class:
+    name: Lister
+    members: [[calls, i32]]
+    methods:
+      - def:
+          name: names
+          access: public
+          args: [[dir_text, string]]
+          return: { type: list<string>, lifetime: producer }
+          body:
+            - decl: [out, list<string>]
+            - decl: [dir, path, dir_text]
+            - decl: [listing, list<path>, { call: [io.list_dir, dir] }]
+            - decl: [cur, i32, 0]
+            - while:
+                condition: { lt: [cur, listing.len] }
+                body:
+                  - decl: [entry, path, { at: [listing, cur] }]
+                  - decl: [entry_name, string, { call: [entry.name] }]
+                  - call: [out.push, entry_name]
+                  - set: [cur, { +: [cur, 1] }]
+            - set: [<.calls, { +: [<.calls, 1] }]
+            - return: out
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [root, path, "/tmp/aiml_test_list_dir_repeat"]
+      - call: [io.remove_all, root]
+      - decl: [deep, path, "/tmp/aiml_test_list_dir_repeat/a/b"]
+      - call: [io.mkdir_all, deep]
+      - decl: [empty_dir, path, "/tmp/aiml_test_list_dir_repeat/empty"]
+      - call: [io.mkdir_all, empty_dir]
+      - call: [io.write_file, "/tmp/aiml_test_list_dir_repeat/a/b/one.txt", "1"]
+      - call: [io.write_file, "/tmp/aiml_test_list_dir_repeat/two.txt", "2"]
+      - decl: [lister, ptr<Lister>, { new: Lister }]
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, 20] }
+          body:
+            - decl: [top, list<string>, { call: [lister.names, "/tmp/aiml_test_list_dir_repeat"] }]
+            - decl: [mid, list<string>, { call: [lister.names, "/tmp/aiml_test_list_dir_repeat/a"] }]
+            - decl: [low, list<string>, { call: [lister.names, "/tmp/aiml_test_list_dir_repeat/a/b"] }]
+            - decl: [none, list<string>, { call: [lister.names, "/tmp/aiml_test_list_dir_repeat/empty"] }]
+            - if: { condition: { neq: [top.len, 3] }, then: [{ print: ["FAIL top ${top.len}"] }, { return: 1 }] }
+            - if: { condition: { neq: [low.len, 1] }, then: [{ print: ["FAIL low ${low.len}"] }, { return: 1 }] }
+            - if: { condition: { neq: [none.len, 0] }, then: [{ print: ["FAIL empty ${none.len}"] }, { return: 1 }] }
+            - set: [round, { +: [round, 1] }]
+      - call: [io.remove_all, root]
+      - print: ["PASS list_dir_repeat"]
+      - return: 0
