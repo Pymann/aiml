@@ -19,8 +19,8 @@
 - set: [eid, { call: [entities.insert, var_e] }]
 - print: ["inserted var_id: ${eid}"]
 
-# Get entity back via ptr
-- decl: [var_p, ptr<Entity>]
+# Get entity back as a ref<Entity> borrow (spec/61 §5.4)
+- decl: [var_p, ref<Entity>]
 - set: [var_p, { call: [entities.get, 1] }]
 - print: ["var_hp: ${var_p.var_hp}"]
 
@@ -128,7 +128,7 @@
 - decl: [results, list<ptr<VecResult>>]
 - set: [results, { call: [var_vs.search, var_q, 2] }]
 
-- decl: [var_r, ptr<VecResult>]
+- decl: [var_r, ref<VecResult>]
 - set: [var_r, { call: [results.get, 0] }]
 - print: ["top var_id: ${var_r.id}"]
 
@@ -154,7 +154,7 @@
 - set: [tlen, { call: [history.len] }]
 - print: ["ts len: ${tlen}"]
 
-- decl: [var_tp, ptr<GameState>]
+- decl: [var_tp, ref<GameState>]
 - set: [var_tp, { call: [history.at, 1500] }]
 - print: ["score at 1500: ${var_tp.score}"]
 
@@ -217,7 +217,7 @@
 - call: [db.run_system, tick_hp, hp_store, pos_store]
 
 # db.query with function predicate — only var_hp=80 qualifies
-- decl: [high_hp, list<ptr<Health>>]
+- decl: [high_hp, list<ref<Health>>]
 - set: [high_hp, { call: [db.query, hp_store, {where: is_high_hp}] }]
 - decl: [qlen, i32]
 - set: [qlen, { call: [high_hp.len] }]

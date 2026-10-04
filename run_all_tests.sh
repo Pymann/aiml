@@ -242,6 +242,10 @@ for TEST in $TEST_FILES; do
         # (a ref<T> borrow) to ptr<T> (a unique owner) must be a compile error —
         # it would free a box it does not own. Use ref<T> or get_copy.
         EXPECTED_CODE=1
+    elif [[ "$TEST" == *"test_db_query_ptr_list_error.aiml" ]]; then
+        # Negative test (spec/31 §4.1, spec/61 §5.4): db.query yields store borrows;
+        # binding it to list<ptr<T>> must be a compile error. Use list<ref<T>>.
+        EXPECTED_CODE=1
     fi
 
     # These negatives must fail at compile time, not via the old runtime corruption.

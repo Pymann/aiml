@@ -1,0 +1,50 @@
+# spec/31 §4.1 + spec/61 §5.4: db.query returns a weak list<ref<T>> — the list handle is owned and
+# released at scope end / rebind, the records stay owned by the store. Queried repeatedly inside a
+# method; afterwards every record is still intact.
+# Expected exit code: 0
+- class:
+    name: Score
+    members: [[pts, i32]]
+- class:
+    name: Ranking
+    members: [[calls, i32]]
+    methods:
+      - def:
+          name: best_two
+          access: public
+          args: [[scores, Store<Score>]]
+          return: i32
+          body:
+            - decl: [rows, list<ref<Score>>, { call: [db.query, scores, {order_by: pts}, {dir: desc}] }]
+            - set: [rows, { call: [db.query, scores, {order_by: pts}, {dir: desc}, {limit: 2}] }]
+            - decl: [top, ref<Score>, { at: [rows, 0] }]
+            - decl: [next, ref<Score>, { at: [rows, 1] }]
+            - set: [<.calls, { +: [<.calls, 1] }]
+            - return: { +: [top.pts, next.pts] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [scores, Store<Score>]
+      - set: [scores, { call: [db.open, "weak_list_scores"] }]
+      - decl: [row, Score]
+      - set: [row.pts, 50]
+      - call: [scores.insert, row]
+      - set: [row.pts, 100]
+      - call: [scores.insert, row]
+      - set: [row.pts, 30]
+      - call: [scores.insert, row]
+      - decl: [ranking, ptr<Ranking>, { new: Ranking }]
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, 20] }
+          body:
+            - decl: [sum, i32, { call: [ranking.best_two, scores] }]
+            - if: { condition: { neq: [sum, 150] }, then: [{ print: ["FAIL sum ${sum}"] }, { return: 1 }] }
+            - set: [round, { +: [round, 1] }]
+      - decl: [all_rows, list<ref<Score>>, { call: [db.query, scores, {order_by: pts}] }]
+      - if: { condition: { neq: [all_rows.len, 3] }, then: [{ print: ["FAIL len ${all_rows.len}"] }, { return: 1 }] }
+      - decl: [low, ref<Score>, { at: [all_rows, 0] }]
+      - if: { condition: { neq: [low.pts, 30] }, then: [{ print: ["FAIL records ${low.pts}"] }, { return: 1 }] }
+      - print: ["PASS db_query_weak_list"]
+      - return: 0

@@ -1,0 +1,20 @@
+# static-check: off
+# Negative test (spec/31 §4.1, spec/61 §5.4): db.query yields store borrows — binding the result to
+# list<ptr<T>> (unique owners of the store's records) is a compile error. Use list<ref<T>>.
+#
+# Expected: compilation fails (exit 1).
+
+- class:
+    name: Score
+    members: [[pts, i32]]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [scores, Store<Score>]
+      - set: [scores, { call: [db.open, "ptr_list_error_scores"] }]
+      # ERROR: db.query yields list<ref<Score>>, not list<ptr<Score>>.
+      - decl: [bad, list<ptr<Score>>, { call: [db.query, scores, {order_by: pts}] }]
+      - print: ["UNEXPECTED_RUNTIME: ptr list compiled ${bad.len}"]
+      - return: 0
