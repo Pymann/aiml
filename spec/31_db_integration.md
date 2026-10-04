@@ -17,8 +17,9 @@ Every step costs time and memory.
 
 AionDB eliminates this boundary entirely:
 
-- **Zero-Copy Reads**: A database pointer `ptr<Entity>` is a real machine pointer
-  into the database's memory region. Nothing is copied, nothing is deserialized.
+- **Zero-Copy Reads**: A store read is a `ref<Entity>` borrow (spec/61 §5.4) — a real machine
+  pointer into the database's memory region. Nothing is copied, nothing is deserialized; the
+  store keeps ownership.
 - **Type safety without mapping**: Because the compiler knows the AIML class `Entity`,
   you don't need to write an ORM. The class *is* the schema.
 - **Schema evolution for free**: When a class is updated from `version: 1` to `version: 2`
@@ -80,8 +81,8 @@ is not scattered on the heap, but organized in **pages** (contiguous memory bloc
 - set: [e.hp, 100]
 - call: [entities.insert, e]
 
-# Read by ID (zero-copy — returns a pointer into store memory):
-- decl: [p, ptr<Entity>]
+# Read by ID (zero-copy — a ref<Entity> borrow into store memory):
+- decl: [p, ref<Entity>]
 - set:  [p, { call: [entities.get, 1] }]
 - print: ["Entity hp: ${p.hp}"]
 ```
@@ -203,7 +204,7 @@ no runtime dispatch, no string parsing:
 # Movement system: no eid needed — pure data transformation
 - fn:
     name: move_system
-    args: [[pos, ptr<Position>], [vel, ptr<Velocity>]]
+    args: [[pos, ref<Position>], [vel, ref<Velocity>]]
     body:
       - set: [pos.x, { call: [pos.x + vel.dx] }]
       - set: [pos.y, { call: [pos.y + vel.dy] }]
@@ -211,7 +212,7 @@ no runtime dispatch, no string parsing:
 # Damage system: eid needed — deletes entity from multiple stores
 - fn:
     name: damage_system
-    args: [[eid, i32], [h, ptr<Health>]]
+    args: [[eid, i32], [h, ref<Health>]]
     body:
       - if:
           condition: { call: [h.hp <= 0] }
@@ -220,10 +221,10 @@ no runtime dispatch, no string parsing:
             - call: [positions.delete, eid]
             - call: [velocities.delete, eid]
 
-# Compiler sees ptr<Position> + ptr<Velocity> → iterates over positions ∩ velocities
+# Compiler sees ref<Position> + ref<Velocity> → iterates over positions ∩ velocities
 - call: [db.run_system, move_system, positions, velocities]
 
-# Compiler sees only ptr<Health> → iterates over health alone
+# Compiler sees only ref<Health> → iterates over health alone
 - call: [db.run_system, damage_system, health]
 ```
 
@@ -395,14 +396,14 @@ no parser, direct IR:
 # Predicate function — compiled to LLVM IR by the compiler:
 - def:
     name: is_alive
-    args: [[e, ptr<Entity>]]
+    args: [[e, ref<Entity>]]
     return: i32
     body:
       - return: { >: [e.hp, 0] }
 
 - def:
     name: is_active_enemy
-    args: [[e, ptr<Entity>]]
+    args: [[e, ref<Entity>]]
     return: i32
     body:
       - decl: [alive, i32]
@@ -412,7 +413,7 @@ no parser, direct IR:
       - return: { and: [alive, enemy] }
 
 # All living entities, sorted by pos_x, at most 100:
-- decl: [alive, list<ptr<Entity>>]
+- decl: [alive, list<ref<Entity>>]
 - set:  [alive, { call: [db.query, entities,
     {where: is_alive},
     {order_by: "pos_x"},
@@ -420,11 +421,18 @@ no parser, direct IR:
   ]}]
 ```
 
+The result is a **weak list** `list<ref<T>>` (spec/61 §5.4/§5.5): every element is a borrow into
+the store, the store keeps ownership. The list itself is an owned container handle — releasing it
+(scope end, rebind) frees only the list, never a record. An element dangles when its record is
+deleted from the store. Binding the result to `list<ptr<T>>` is a **compile error** (a `ptr<T>`
+element is a unique owner and would free the store's record); for independent owned copies use
+`store.get_copy` per element. The `where` function receives each record as `ref<T>`.
+
 ### 4.2 Available Operators
 
 | Operator   | Description | Example |
 |------------|-------------|---------|
-| `where`    | Filter function `(ptr<T>) → i32` | `{where: is_alive}` |
+| `where`    | Filter function `(ref<T>) → i32` | `{where: is_alive}` |
 | `order_by` | Field name (compile-time validated) | `{order_by: "pos_x", dir: "asc"}` |
 | `limit`    | Maximum results | `{limit: 100}` |
 | `offset`   | Skip results | `{offset: 50}` |
@@ -440,7 +448,7 @@ For queries across multiple stores (ECS archetype intersection), use
 `db.run_system`. See §3.2 for the full explanation with examples.
 
 ```aiml
-# Compiler sees ptr<Position> + ptr<Velocity> → iterates over intersection
+# Compiler sees ref<Position> + ref<Velocity> → iterates over intersection
 - call: [db.run_system, move_system, positions, velocities]
 ```
 
@@ -502,7 +510,7 @@ on next start and restore the state.
 Both `Store<T>` and `Kv<K,V>` are **mmap-backed**:
 
 - **`Store<T>`** stores rows in **pages** (default 4 KB) on disk, mapped
-  into process memory via mmap. A `ptr<Entity>` points directly into
+  into process memory via mmap. A `ref<Entity>` read points directly into
   the mapped page.
 - **`Kv<K,V>`** maps the WAL file itself (sparse-extended to an initial
   reserve of 16 MB; `mremap`'d to grow). All values live exclusively in
@@ -712,7 +720,7 @@ storage class:
 > grow` boundaries. For long-lived references in typed mode, copy the
 > struct fields you need.
 
-### 6.7.1 Typed Kv Access Patterns (`kv.get`, `kv.get_copy`, `ptr<T>`)
+### 6.7.1 Typed Kv Access Patterns (`kv.get`, `kv.get_copy`, `ref<T>`)
 
 Typed `Kv<K:T>` where `T` is a struct with heap fields (strings, lists,
 maps, buffers) requires **explicit choice** between three access patterns,
@@ -720,10 +728,11 @@ enforced at compile time:
 
 | Pattern | Declaration | Semantics | When to use |
 |---|---|---|---|
-| **Zero-copy view** | `decl: [p, ptr<T>, kv.get(k)]` | `p` aliases the decoded_cache slot. Mutations land directly in the cache. `kv.set(k, p)` encodes the cache and writes WAL; eviction is skipped because the cache IS the canonical state. | Read-only fast access, or in-place updates that persist back to the same key. |
+| **Zero-copy view** | `decl: [p, ref<T>, kv.get(k)]` | `p` is a borrow of the decoded_cache slot (spec/61 §5.4). Mutations land directly in the cache. `kv.set(k, p)` encodes the cache and writes WAL; eviction is skipped because the cache IS the canonical state. | Read-only fast access, or in-place updates that persist back to the same key. |
 | **Deep-copy value** | `decl: [p, T, kv.get_copy(k)]` | `p` has its own malloc'd heap allocations (encode-then-decode roundtrip at decl site). Mutations to `p` do NOT touch the cache. `kv.set(k, p)` encodes `p`, then evicts the cache. | Local mutations that might or might not be persisted; or when you want isolation from cache state. |
-| **— ERROR —** | `decl: [p, T, kv.get(k)]` | Would do shallow memcpy → `p` shares heap pointers with cache → use-after-free on mutate-and-set-same-key (see `doc/issue/kv_get_mutate_set_same_key_crash.md`). | **Compiler rejects** with diagnostic suggesting `ptr<T> + kv.get` or `T + kv.get_copy`. |
-| **— ERROR —** | `decl: [p, ptr<T>, kv.get_copy(k)]` | Semantically contradictory: deep-copy wasted on a pointer view. | **Compiler rejects** with diagnostic suggesting `T + kv.get_copy` or `ptr<T> + kv.get`. |
+| **— ERROR —** | `decl: [p, T, kv.get(k)]` | Would do shallow memcpy → `p` shares heap pointers with cache → use-after-free on mutate-and-set-same-key (see `doc/issue/kv_get_mutate_set_same_key_crash.md`). | **Compiler rejects** with diagnostic suggesting `ref<T> + kv.get` or `T + kv.get_copy`. |
+| **— ERROR —** | `decl: [p, ref<T>, kv.get_copy(k)]` | Semantically contradictory: deep-copy wasted on a borrow. | **Compiler rejects** with diagnostic suggesting `T + kv.get_copy` or `ref<T> + kv.get`. |
+| **— ERROR —** | `decl: [p, ptr<T>, kv.get(k)]` | A `ptr<T>` is a unique owner; the cache slot is owned by the store (spec/61 §5.4). | **Compiler rejects** with diagnostic suggesting `ref<T>` or `get_copy`. |
 
 ```aiml
 - model:
@@ -733,7 +742,7 @@ enforced at compile time:
       - [creature_ids, list<string>]
 
 # (1) Zero-copy view — cheapest path, mutations propagate to cache.
-- decl: [p, ptr<Player>, { call: [players.get, "n@g.de"] }]
+- decl: [p, ref<Player>, { call: [players.get, "n@g.de"] }]
 - call: [p.creature_ids.push, "c-1"]
 - call: [players.set, "n@g.de", p]      # safe — cache is canonical
 
@@ -750,12 +759,12 @@ the Kv method dispatch in `ast_compiler_call.cpp`. Primitive types
 are exempt — there's nothing to share/free.
 
 For struct types `T` registered without heap fields (only primitive members),
-both `ptr<T>+get` and `T+get` are safe; the compiler does not emit a
+both `ref<T>+get` and `T+get` are safe; the compiler does not emit a
 diagnostic.
 
 `kv.set` is uniform — it inspects the value's type at compile time:
 - value-type `T` arg → spill to temp alloca, encode struct bytes
-- `ptr<T>` arg → pass pointer through directly (no temp alloca; encode reads
+- `ref<T>` arg → pass pointer through directly (no temp alloca; encode reads
   through the pointer)
 
 At runtime, `aiml_db_kv_set` additionally checks if `val` aliases the
@@ -960,7 +969,7 @@ If it detects a higher version with new fields, it applies **in-place migration*
 # Column layout → SIMD processes 8 pos_x values simultaneously
 - def:
     name: move_system
-    args: [[pos, ptr<Position>], [vel, ptr<Velocity>]]
+    args: [[pos, ref<Position>], [vel, ref<Velocity>]]
     body:
       - set: [pos.x, { +: [pos.x, vel.dx] }]
       - set: [pos.y, { +: [pos.y, vel.dy] }]
@@ -968,7 +977,7 @@ If it detects a higher version with new fields, it applies **in-place migration*
 # Damage system: eid needed — deletes entity from multiple stores
 - def:
     name: damage_system
-    args: [[eid, i32], [h, ptr<Health>]]
+    args: [[eid, i32], [h, ref<Health>]]
     body:
       - if: [{ <=: [h.hp, 0] }, true]
         then:
@@ -1036,7 +1045,7 @@ If it detects a higher version with new fields, it applies **in-place migration*
 # Mini-batch for training (random 64 samples):
 - def:
     name: sample_batch
-    return: list<ptr<Observation>>
+    return: list<ref<Observation>>
     body:
       - return: { call: [replay_buffer.sample_random, 64] }
 ```
@@ -1080,7 +1089,7 @@ If it detects a higher version with new fields, it applies **in-place migration*
       - decl: [m, VecResult]
       - for: [m, matches]
         body:
-          - decl: [d, ptr<Document>]
+          - decl: [d, ref<Document>]
           - set:  [d, { call: [docs.get, m.id] }]
           - call: [result.push, d]
       - return: result
@@ -1174,7 +1183,7 @@ awkward or too memory-coupled:
 - range scans over sorted keys
 - secondary indexes
 - remote or partially local storage
-- workloads where direct `ptr<T>` into mapped pages is not the dominant advantage
+- workloads where direct `ref<T>` borrows into mapped pages are not the dominant advantage
 
 `aiondb` remains the natural choice for:
 
@@ -1238,7 +1247,7 @@ Allowed models for `aiondb2`:
 
 - page-pinned pointer valid for the current transaction/snapshot
 - decoded object view backed by an internal cache
-- iterator/cursor API instead of raw `ptr<T>`
+- iterator/cursor API instead of raw `ref<T>` borrows
 - streaming reads from block storage
 
 This means `aiondb2` is free to read data:

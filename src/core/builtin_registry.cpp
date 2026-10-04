@@ -3519,9 +3519,19 @@ void registerBuiltins(CompilerContext& ctx) {
                 }
             }
 
+            // spec/31 §4.1 + spec/61 §5.4: the result is a weak list<ref<T>> of store borrows.
+            const std::string& target = ctx.deserializeTargetType;
+            if (target.rfind("list<ptr<", 0) == 0) {
+                std::string inner = target.substr(9, target.size() - 11);
+                LOG_ERROR(ctx.fmtLoc() + "db.query yields list<ref<" + inner + ">> (borrows into the store, "
+                    "which keeps ownership); binding it to " + target + " would make every element a unique "
+                    "owner of a store record. Use list<ref<" + inner + ">> (spec/31 §4.1, spec/61 §5.4).");
+            }
             // Allocate result list
             llvm::StructType* listTy = ListImpl::getListStructType(ctx);
-            llvm::Value* listAlloca  = ctx.createEntryAlloca(listTy, "query_list");
+            llvm::Value* listAlloca  = ctx.memV3
+                ? static_cast<llvm::Value*>(ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new", i8p, {}), {}, "query_h"))
+                : ctx.createEntryAlloca(listTy, "query_list");
             ListImpl::initList(ctx, listAlloca, ptrTy, 8);
 
             // Call C runtime

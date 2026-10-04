@@ -1,0 +1,52 @@
+# spec/61 §5/§8: a method returning a builtin value type (mat4/vec3) still drops its local
+# container handles (buffer, list) on the return path.
+# Expected exit code: 0
+- class:
+    name: MatBuilder
+    members: [[calls, i32]]
+    methods:
+      - def:
+          name: from_values
+          access: public
+          return: mat4
+          body:
+            - decl: [raw, buffer<f32>, [1.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 0.0, 1.0]]
+            - decl: [names, list<string>]
+            - call: [names.push, "diag"]
+            - decl: [out, mat4, { call: [math.mat4_identity] }]
+            - decl: [cell, i32, 0]
+            - while:
+                condition: { lt: [cell, 16] }
+                body:
+                  - call: [raw.seek, { "*": [cell, 4] }]
+                  - decl: [val, f32, { call: [raw.read, f32] }]
+                  - call: [out.set, { "%": [cell, 4] }, { "/": [cell, 4] }, val]
+                  - set: [cell, { +: [cell, 1] }]
+            - set: [<.calls, { +: [<.calls, 1] }]
+            - return: out
+      - def:
+          name: axis
+          access: public
+          return: vec3
+          body:
+            - decl: [parts, list<f32>]
+            - call: [parts.push, 1.0]
+            - return: { call: [math.vec3, 0.0, { at: [parts, 0] }, 0.0] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [builder, ptr<MatBuilder>, { new: MatBuilder }]
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, 20] }
+          body:
+            - decl: [mtx, mat4, { call: [builder.from_values] }]
+            - decl: [three, f32, 3.0]
+            - if: { condition: { neq: [{ call: [mtx.get, 2, 2] }, three] }, then: [{ print: ["FAIL m22"] }, { return: 1 }] }
+            - decl: [up_axis, vec3, { call: [builder.axis] }]
+            - decl: [one, f32, 1.0]
+            - if: { condition: { neq: [up_axis.y, one] }, then: [{ print: ["FAIL axis"] }, { return: 1 }] }
+            - set: [round, { +: [round, 1] }]
+      - print: ["PASS value_return_drops_handles"]
+      - return: 0

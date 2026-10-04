@@ -862,7 +862,9 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
     } else if (iv && dynamic_cast<CallExpr*>(iv)) {
         // spec/61 §5 (memV3): init from a call that RETURNS a list → the callee handed us a handle
         // (moved). Use it directly; no fresh alloc, no incref (we own the returned rc).
+        ctx.deserializeTargetType = decl->typeName;   // lets builtins (db.query) check the target type
         IRValue* cv = visitExpression(iv);
+        ctx.deserializeTargetType.clear();
         handle = cv ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(cv)) : nullptr;
     } else {
         // Fresh empty list: new handle + initList on the heap struct.
@@ -2342,9 +2344,9 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 // value types with heap fields.  See doc/issue/kv_get_mutate_set_same_key_crash.md.
                 //
                 //   decl: [p, T,      kv.get_copy(k)]  → OK (deep-copy below)
-                //   decl: [p, ptr<T>, kv.get(k)]       → OK (zero-copy view)
+                //   decl: [p, ref<T>, kv.get(k)]       → OK (zero-copy borrow, spec/61 §5.4)
                 //   decl: [p, T,      kv.get(k)]       → ERROR
-                //   decl: [p, ptr<T>, kv.get_copy(k)]  → ERROR
+                //   decl: [p, ref<T>, kv.get_copy(k)]  → ERROR
                 //
                 // ptr<T> / primitive-only structs are excluded from the check
                 // because their lifetime model is unaffected.
@@ -2360,16 +2362,16 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     if (isHeapClass) {
                         if (ctx.kvGetCopy && isPtrTarget) {
                             LOG_ERROR(ctx.fmtLoc(decl->sourceNode) +
-                                "kv.get_copy must be assigned to a value-type, not ptr<" + innerName + ">. "
-                                "Deep-copy is wasted on a pointer view. "
+                                "kv.get_copy must be assigned to a value-type, not " + decl->typeName.substr(0, 4) + innerName + ">. "
+                                "Deep-copy is wasted on a borrow. "
                                 "Use 'decl: [" + decl->varName + ", " + innerName + ", kv.get_copy(k)]' "
-                                "or use 'kv.get' (without _copy) for a zero-copy view.");
+                                "or use 'kv.get' (without _copy) bound to ref<" + innerName + "> for a zero-copy borrow.");
                         } else if (!ctx.kvGetCopy && !isPtrTarget) {
                             LOG_ERROR(ctx.fmtLoc(decl->sourceNode) +
-                                "kv.get of struct '" + innerName + "' must be assigned to ptr<" + innerName + "> (zero-copy view), "
+                                "kv.get of struct '" + innerName + "' must be assigned to ref<" + innerName + "> (zero-copy borrow), "
                                 "not to a value-type. A shallow memcpy into a value-type shares heap "
                                 "pointers with the kv decoded_cache and crashes on mutate-and-set-same-key. "
-                                "Use 'decl: [" + decl->varName + ", ptr<" + innerName + ">, kv.get(k)]' "
+                                "Use 'decl: [" + decl->varName + ", ref<" + innerName + ">, kv.get(k)]' "
                                 "for a view, or 'decl: [" + decl->varName + ", " + innerName + ", kv.get_copy(k)]' "
                                 "for an independent deep-copy.");
                         }
@@ -4312,6 +4314,9 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         auto pci = ctx.classes.find(ctx.currentFunctionReturnType);
         retPodModel = pci != ctx.classes.end() && !pci->second.isBuiltin && pci->second.type
                       && !pci->second.hasHeapFields && !ctx.isRefcountModel(ctx.currentFunctionReturnType);
+        // spec/43_0: the math value types are plain f32/i32 structs (builtin only for their methods)
+        static const std::set<std::string> mathValues = {"vec2", "vec3", "vec4", "quat", "mat4", "ivec2", "ivec3"};
+        if (mathValues.count(ctx.currentFunctionReturnType)) retPodModel = true;
     }
     bool safeToCleanup = (retTy && retTy->isVoidTy()) || retScalar || retBaseOwned
                          || (retModelAddr != nullptr) || (retContainerSlot != nullptr)
