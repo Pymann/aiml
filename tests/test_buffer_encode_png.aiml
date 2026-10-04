@@ -1,0 +1,84 @@
+# spec/11: buffer.encode_png — lossless RGBA PNG; round trip through decode_image; error cases;
+# a class-member buffer as source.
+# Expected exit code: 0
+- class:
+    name: Canvas
+    members: [[pixels, buffer]]
+    methods:
+      - def:
+          name: encode
+          access: public
+          args: [[out, buffer]]
+          return: i32
+          body:
+            - call: [<.pixels.alloc, 16]
+            - decl: [grey, u8, 99]
+            - decl: [cur, i32, 0]
+            - while:
+                condition: { lt: [cur, 16] }
+                body:
+                  - call: [<.pixels.write, grey, u8]
+                  - set: [cur, { +: [cur, 1] }]
+            - return: { call: [out.encode_png, <.pixels, 2, 2] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [width, i32, 3]
+      - decl: [height, i32, 2]
+      - decl: [pixels, buffer]
+      - call: [pixels.alloc, 24]
+      - decl: [cur, i32, 0]
+      - while:
+          condition: { lt: [cur, 24] }
+          body:
+            - decl: [byte, u8, { "%": [{ "*": [cur, 37] }, 256] }]
+            - call: [pixels.write, byte, u8]
+            - set: [cur, { +: [cur, 1] }]
+      - decl: [png, buffer]
+      - call: [png.alloc, 1054]
+      - decl: [written, i32, { call: [png.encode_png, pixels, width, height] }]
+      - if: { condition: { le: [written, 0] }, then: [{ print: ["FAIL encode ${written}"] }, { return: 1 }] }
+      - if: { condition: { neq: [png.len, written] }, then: [{ print: ["FAIL len ${png.len}"] }, { return: 1 }] }
+      - call: [png.seek, 0]
+      - decl: [sig0, u8, { call: [png.read, u8] }]
+      - decl: [sig_p, u8, { call: [png.read, u8] }]
+      - decl: [sig_n, u8, { call: [png.read, u8] }]
+      - decl: [sig_g, u8, { call: [png.read, u8] }]
+      - decl: [want_p, u8, 80]
+      - decl: [want_n, u8, 78]
+      - decl: [want_g, u8, 71]
+      - if: { condition: { neq: [sig_p, want_p] }, then: [{ print: ["FAIL signature P"] }, { return: 1 }] }
+      - if: { condition: { neq: [sig_n, want_n] }, then: [{ print: ["FAIL signature N"] }, { return: 1 }] }
+      - if: { condition: { neq: [sig_g, want_g] }, then: [{ print: ["FAIL signature G"] }, { return: 1 }] }
+      - decl: [back, buffer]
+      - call: [back.alloc, 24]
+      - decl: [dims, i64, { call: [back.decode_image, png] }]
+      - decl: [base, i64, 65536]
+      - decl: [want_dims, i64, 3]
+      - set: [want_dims, { +: [{ "*": [{ "*": [want_dims, base] }, base] }, 2] }]
+      - if: { condition: { neq: [dims, want_dims] }, then: [{ print: ["FAIL dims ${dims}"] }, { return: 1 }] }
+      - call: [pixels.seek, 0]
+      - call: [back.seek, 0]
+      - set: [cur, 0]
+      - while:
+          condition: { lt: [cur, 24] }
+          body:
+            - decl: [orig, u8, { call: [pixels.read, u8] }]
+            - decl: [round, u8, { call: [back.read, u8] }]
+            - if: { condition: { neq: [orig, round] }, then: [{ print: ["FAIL pixel byte ${cur}"] }, { return: 1 }] }
+            - set: [cur, { +: [cur, 1] }]
+      - decl: [tiny, buffer]
+      - call: [tiny.alloc, 8]
+      - if: { condition: { neq: [{ call: [tiny.encode_png, pixels, width, height] }, 0] }, then: [{ print: ["FAIL small target"] }, { return: 1 }] }
+      - decl: [zero_w, i32, 0]
+      - if: { condition: { neq: [{ call: [png.encode_png, pixels, zero_w, height] }, 0] }, then: [{ print: ["FAIL zero width"] }, { return: 1 }] }
+      - decl: [too_big, i32, 9]
+      - if: { condition: { neq: [{ call: [png.encode_png, pixels, too_big, height] }, 0] }, then: [{ print: ["FAIL short source"] }, { return: 1 }] }
+      - decl: [canvas, ptr<Canvas>, { new: Canvas }]
+      - decl: [member_png, buffer]
+      - call: [member_png.alloc, 1044]
+      - if: { condition: { le: [{ call: [canvas.encode, member_png] }, 0] }, then: [{ print: ["FAIL member source"] }, { return: 1 }] }
+      - print: ["PASS buffer_encode_png"]
+      - return: 0
