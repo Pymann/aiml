@@ -116,6 +116,7 @@ int32_t     aiml_gltf_mat_double_sided                  (void* mat);
 
 /* gltf_texture handles are AimlGltfTexRef* (ptr + scene backref) */
 void*       aiml_gltf_tex_image      (void* tex);  /* AimlGltfImageRef* or NULL */
+void        aiml_gltf_image_release        (void* img);
 const char* aiml_gltf_tex_wrap_s     (void* tex);
 const char* aiml_gltf_tex_wrap_t     (void* tex);
 const char* aiml_gltf_tex_min_filter (void* tex);

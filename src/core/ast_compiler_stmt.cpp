@@ -1810,6 +1810,23 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 }
             }
         }
+        // spec/61 Class 4 / spec/43_1 §6: an owned gltf_image (tex.image() or a user call returning
+        // gltf_image) is released at owner drop (kind 16); a move (return/push/store) erases the drop.
+        if (decl->typeName == "gltf_image" && decl->lifetime != "persistent" && ctx.lifetimeDropsEnabled
+            && !ctx.cleanupStack.empty() && !sym.is_global) {
+            if (auto* gc = dynamic_cast<CallExpr*>(decl->initialValue.get())) {
+                const std::string& fnm = gc->functionName;
+                bool texImage = fnm.size() > 6 && fnm.compare(fnm.size() - 6, 6, ".image") == 0;
+                CompilerContext::FunctionInfo* gfi = resolveCallTarget(fnm);
+                if (texImage || (gfi && gfi->returnTypeName == "gltf_image")) {
+                    CompilerContext::ScopeDrop sd;
+                    sd.addr = unwrappedAlloca;
+                    sd.kind = 16;
+                    sd.debugName = decl->varName; sd.debugType = decl->typeName;
+                    ctx.cleanupStack.back().push_back(sd);
+                }
+            }
+        }
         // spec/61 Class 5 chan<T> (kind 15, atomic release) / Class 4 thread_handle (kind 14, detach if
         // unjoined + free): released at owner drop on every exit; null-safe.
         if ((decl->typeName == "thread_handle" || (decl->typeName.rfind("chan<", 0) == 0 && decl->typeName.back() == '>'))
@@ -4363,7 +4380,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     emitScopeDrop(ctx, *it);
                     continue;
                 }
-                if (it->kind == 10 || it->kind == 11 || it->kind == 13 || it->kind == 14 || it->kind == 15) { emitScopeDrop(ctx, *it); continue; }   // null-safe single release
+                if (it->kind == 10 || it->kind == 11 || it->kind == 13 || it->kind == 14 || it->kind == 15 || it->kind == 16) { emitScopeDrop(ctx, *it); continue; }   // null-safe single release
                 // spec/61 §8: a parameter's own call reference (the returned container slot is moved above)
                 if ((it->paramRef || it->ownedParamBox) && !(retContainerSlot && it->addr == retContainerSlot)) { emitScopeDrop(ctx, *it); continue; }
                 // spec/61 §5 (memV3): the returned container handle is MOVED to the caller → skip its
@@ -4506,10 +4523,11 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         // an owned statement temp is a fresh allocation — it cannot alias a local being dropped
         if (safeToCleanup || retWasOwnedTemp) emitReturnCleanup();
         else if (ctx.lifetimeDropsEnabled) {
-            // a parameter's call reference never aliases away the caller's container → always released
+            // a parameter's call reference never aliases away the caller's container → always released;
+            // so is an owned gltf_image handle block (kind 16): no returned value can alias it
             for (auto fit = ctx.cleanupStack.rbegin(); fit != ctx.cleanupStack.rend(); ++fit)
                 for (auto it = fit->rbegin(); it != fit->rend(); ++it)
-                    if (it->paramRef) emitScopeDrop(ctx, *it);
+                    if (it->paramRef || it->kind == 16) emitScopeDrop(ctx, *it);
         }
         if (val) {
             // Struct-by-value return (list/buffer/map): visitExpression often
@@ -5075,6 +5093,11 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         llvm::Value* doc = ctx.builder.CreateLoad(i8p, it.addr, "drop_yamldoc");
         ctx.builder.CreateCall(ctx.getFunction("aiml_yaml_free", ctx.builder.getVoidTy(), {i8p}), { doc });
         ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
+    } else if (it.kind == 16) {
+        // spec/61 Class 4 gltf_image (spec/43_1 §6): free the handle block; null-safe; null the slot.
+        llvm::Value* img = ctx.builder.CreateLoad(i8p, it.addr, "drop_gltf_image");
+        ctx.builder.CreateCall(ctx.getFunction("aiml_gltf_image_release", ctx.builder.getVoidTy(), {i8p}), { img });
+        ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
     } else if (it.kind == 14 || it.kind == 15) {
         // spec/61 Class 4 thread_handle (detach if unjoined + free) / Class 5 chan (atomic release);
         // both null-safe; null the slot (single release).
@@ -5095,7 +5118,7 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
 }
 // spec/61 §9.3: drops released on every exit regardless of the ownership plan (order-independent).
 static bool unconditionalDrop(const CompilerContext::ScopeDrop& d) {
-    return d.paramRef || d.ownedParamBox || d.kind == 7 || d.kind == 13 || d.kind == 14 || d.kind == 15 || d.kind == 10 || d.kind == 11 || d.kind == 12
+    return d.paramRef || d.ownedParamBox || d.kind == 7 || d.kind == 13 || d.kind == 14 || d.kind == 15 || d.kind == 16 || d.kind == 10 || d.kind == 11 || d.kind == 12
         || (d.isListHandle && (d.kind == 2 || d.kind == 3 || d.kind == 8));
 }
 
