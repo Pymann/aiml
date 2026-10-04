@@ -41,7 +41,7 @@ It swaps prev/curr state, flushes the scroll accumulator into the queue, and set
 
 | Call | Description |
 |------|-------------|
-| `input.init(win: ptr)` | Register GLFW window; call once before the game loop |
+| `input.init(win: window_handle)` | Register the window (from `engine.create_window`; a raw GLFW `ptr` from FFI is accepted too); call once before the game loop |
 | `input.update()` | Swap frame state; called automatically by `engine.swap()` |
 | `input.set_capture(on: bool)` | Hide cursor and lock it to the window (FPS look); `false` = visible |
 
