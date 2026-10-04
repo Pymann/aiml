@@ -178,6 +178,7 @@ private:
     IRValue* visitNewArrayExpr(NewArrayExpr* na);
     IRValue* visitStringInterpolation(StringInterpolationExpr* expr);
     IRValue* visitBinary(BinaryExpr* bin);
+    IRValue* visitCast(BinaryExpr* bin);
     IRValue* visitUnary(UnaryExpr* unary);
     IRValue* visitSpawn(SpawnExpr* spawn);
 

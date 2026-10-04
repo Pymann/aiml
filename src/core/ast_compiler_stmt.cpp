@@ -1251,6 +1251,25 @@ void Compiler::emitBufferHandleDecl(DeclStmt* decl) {
         handle = ctx.builder.CreateCall(cp, { srcHandle ? srcHandle
                                               : llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)) }, "bufh_copy");
         releaseContainerCopyTemp(tmpSlot, tmpOwned, decl->typeName);
+    } else if (auto* bufLit = dynamic_cast<BufferLiteralExpr*>(iv)) {
+        // [v1, v2, ...] → fresh handle, one write per element (spec/11, spec/44_3 §3.1).
+        llvm::Function* nw = ctx.getFunction("aiml_buffer_handle_new", i8p, {});
+        handle = ctx.builder.CreateCall(nw, {}, "bufh_lit");
+        BufferImpl::alloc(ctx, handle, ctx.builder.getInt32(4096));
+        std::string elemName = decl->typeName.substr(7, decl->typeName.size() - 8);
+        llvm::Type* elemTy = ctx.getLLVMType(elemName);
+        for (auto& elem : bufLit->elements) {
+            IRValue* ev = visitExpression(elem.get());
+            if (!ev) continue;
+            llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(ev));
+            if (elemTy && v->getType() != elemTy) {
+                if (elemTy->isFloatingPointTy() && v->getType()->isFloatingPointTy())
+                    v = ctx.builder.CreateFPCast(v, elemTy, "fp_cast");
+                else if (elemTy->isIntegerTy() && v->getType()->isIntegerTy())
+                    v = ctx.builder.CreateZExtOrTrunc(v, elemTy, "int_cast");
+            }
+            BufferImpl::write(ctx, handle, v, elemTy ? elemTy : v->getType());
+        }
     } else if (iv && dynamic_cast<CallExpr*>(iv)) {
         // spec/61 §5 (memV3): init from a call that RETURNS a buffer → use the returned handle.
         IRValue* cv = visitExpression(iv);

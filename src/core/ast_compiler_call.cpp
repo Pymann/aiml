@@ -3640,6 +3640,14 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                      }
                  }
              }
+             // A struct-returning call used as a by-value struct argument arrives as the pointer to
+             // its result temp (method_struct_tmp above) → load the value.
+             if (expected && expected->isStructTy() && i < call->args.size()
+                 && dynamic_cast<CallExpr*>(call->args[i].get())) {
+                 auto* tmp = llvm::dyn_cast_or_null<llvm::AllocaInst>(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)));
+                 if (tmp && tmp->getAllocatedType() == expected)
+                     a = ctx.ir_gen->wrap(ctx.builder.CreateLoad(expected, tmp, "struct_arg_val"));
+             }
              // Hard type-mismatch guard (mirrors coerceArgs() for free functions):
              // a numeric parameter (i32/enum/bool/float) receiving a pointer value
              // (e.g. a string literal) is never valid — report it HERE with a

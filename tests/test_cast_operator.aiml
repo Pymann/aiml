@@ -1,0 +1,40 @@
+# spec/04_1 §7: { cast: [value, type] } — every conversion of the table.
+# Expected exit code: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [small, i32, -7]
+      - decl: [wide, i64, { cast: [small, i64] }]
+      - decl: [big, i64, { cast: [5000000000, i64] }]
+      - decl: [back, i32, { cast: [wide, i32] }]
+      - if: { condition: { neq: [back, -7] }, then: [{ print: ["FAIL i64->i32 ${back}"] }, { return: 1 }] }
+      - decl: [low_bits, i32, { cast: [big, i32] }]
+      - if: { condition: { neq: [low_bits, 705032704] }, then: [{ print: ["FAIL truncate ${low_bits}"] }, { return: 1 }] }
+      - decl: [as_f64, f64, { cast: [small, f64] }]
+      - decl: [minus_seven, f64, -7.0]
+      - if: { condition: { neq: [as_f64, minus_seven] }, then: [{ print: ["FAIL i32->f64 ${as_f64}"] }, { return: 1 }] }
+      - decl: [frac, f64, -2.75]
+      - decl: [toward_zero, i32, { cast: [frac, i32] }]
+      - if: { condition: { neq: [toward_zero, -2] }, then: [{ print: ["FAIL f64->i32 ${toward_zero}"] }, { return: 1 }] }
+      - decl: [zero_f, f64, 0.0]
+      - decl: [nan_val, f64, { /: [zero_f, zero_f] }]
+      - decl: [from_nan, i32, { cast: [nan_val, i32] }]
+      - if: { condition: { neq: [from_nan, 0] }, then: [{ print: ["FAIL NaN->i32 ${from_nan}"] }, { return: 1 }] }
+      - decl: [single, f32, 0.5]
+      - decl: [double_v, f64, { cast: [single, f64] }]
+      - decl: [half, f64, 0.5]
+      - if: { condition: { neq: [double_v, half] }, then: [{ print: ["FAIL f32->f64 ${double_v}"] }, { return: 1 }] }
+      - decl: [narrow, f32, { cast: [double_v, f32] }]
+      - if: { condition: { neq: [narrow, single] }, then: [{ print: ["FAIL f64->f32 ${narrow}"] }, { return: 1 }] }
+      - decl: [flag, bool, true]
+      - decl: [flag_int, i32, { cast: [flag, i32] }]
+      - if: { condition: { neq: [flag_int, 1] }, then: [{ print: ["FAIL bool->i32 ${flag_int}"] }, { return: 1 }] }
+      - decl: [count, i32, 3]
+      - decl: [as_flag, bool, { cast: [count, bool] }]
+      - if: { condition: { neq: [{ cast: [as_flag, i32] }, 1] }, then: [{ print: ["FAIL i32->bool"] }, { return: 1 }] }
+      - decl: [literal, f64, { cast: [1000, f64] }]
+      - decl: [thousand, f64, 1000.0]
+      - if: { condition: { neq: [literal, thousand] }, then: [{ print: ["FAIL literal ${literal}"] }, { return: 1 }] }
+      - print: ["PASS cast_operator"]
+      - return: 0
