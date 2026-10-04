@@ -120,7 +120,14 @@
 - decl: [alpha, string, { call: [mat.alpha_mode] }]
 - decl: [alpha_cutoff, f32, { call: [mat.alpha_cutoff] }]
 - decl: [double_sided, i8, { call: [mat.double_sided] }]
+
+# Application data: the material's glTF `extras` as JSON text ("" when absent).
+# JSON is YAML, so it can be read with yaml.parse (spec/60).
+- decl: [extras, string, { call: [mat.extras] }]
 ```
+
+All string getters of the glTF classes (`name`, `error`, `alpha_mode`, `wrap_s`, …, `extras`)
+return an **owned** `string` (spec/61 §7): a copy that stays valid after `scene.free`.
 
 ---
 
@@ -166,6 +173,9 @@
 # World transform matrix (column-major f32[16], for direct upload to OpenGL/Vulkan)
 - decl: [matrix, buffer<f32>, { call: [node.world_matrix] }]
 
+# Local transform matrix (column-major f32[16]): the node's `matrix`, else T·R·S
+- decl: [local, buffer<f32>, { call: [node.local_matrix] }]
+
 # Children
 - decl: [children, list<gltf_node>, { call: [node.children] }]
 - decl: [mesh, gltf_mesh, { call: [node.mesh] }]    # null if no mesh
@@ -194,10 +204,26 @@
 - decl: [rz, f32, { call: [anim.sample_rotation_z, node, 0.5] }]
 - decl: [rw, f32, { call: [anim.sample_rotation_w, node, 0.5] }]
 
+# The node's local matrix at time t (column-major f32[16]): animated TRS
+# properties replaced by the clip, the others kept (glTF channel semantics)
+- decl: [local_t, buffer<f32>, { call: [anim.sample_local_matrix, node, 0.5] }]
+
 # Or: all transforms at once as a matrix buffer (for GPU upload)
 # Returns list<buffer<f32>> — one buffer<f32>[16] per node
 - decl: [pose, list<buffer<f32>>, { call: [anim.sample_pose, 0.5] }]
 ```
+
+Sampling rules:
+
+- `t` is clamped to the channel's key range (no wrap-around; a viewer loops by taking
+  `t mod duration`).
+- `LINEAR` interpolation: translation component-wise; rotation by spherical linear
+  interpolation along the shorter arc, result normalised. `STEP` holds the earlier key.
+- A property the clip does not animate for that node yields the node's own value
+  (`translation_*` / `rotation_*` from the node; identity when the node has neither).
+- A node with `matrix` is not animatable (glTF); `sample_local_matrix` returns its matrix.
+- `sample_local_matrix` / `local_matrix` / `world_matrix` return a fresh owned buffer
+  (Class 4, spec/61), released at scope end.
 
 ---
 
@@ -252,6 +278,17 @@
 | `skins` | `list<gltf_skin>` | All skeletons |
 | `images` | `list<gltf_image>` | All images |
 | `free` | — | Releases all resources |
+
+### `gltf_node` / `gltf_animation` Methods (transforms)
+
+| Method | Return | Description |
+|--------|--------|-------------|
+| `node.local_matrix` | `buffer<f32>` | 16 values, column-major: `matrix` or T·R·S |
+| `node.world_matrix` | `buffer<f32>` | 16 values, column-major: product of the parent chain |
+| `anim.duration` | `f32` | Largest key time of all channels (seconds) |
+| `anim.sample_translation_x/y/z(node, t)` | `f32` | Sampled translation (§8 rules) |
+| `anim.sample_rotation_x/y/z/w(node, t)` | `f32` | Sampled rotation quaternion (§8 rules) |
+| `anim.sample_local_matrix(node, t)` | `buffer<f32>` | Local matrix at `t` (§8 rules) |
 
 ### `gltf_primitive` Methods (Vertex Data)
 

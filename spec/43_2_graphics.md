@@ -138,6 +138,10 @@ the VAO with a fixed attribute layout:
 | 0           | position  | 3 × f32     | 12 B   |
 | 1           | uv        | 2 × f32     | 8 B    |
 | 2           | normal    | 3 × f32     | 12 B   |
+| 3           | tangent   | 4 × f32 (xyz + handedness w) | 16 B   |
+
+Attribute 3 is filled by `prim.to_gl_mesh()` when the glTF primitive has `TANGENT`
+(normal mapping); `gl.create_mesh` leaves it unset.
 
 **From glTF primitive (shorthand):**
 
@@ -301,6 +305,7 @@ Internally: stb_image decodes directly → `glTexImage2D`, no AIML-side pixel bu
 
 # Face culling
 - call: [gl.enable_cull_face]
+- call: [gl.disable_cull_face]   # off again
 - call: [gl.cull_front]     # GL_FRONT
 - call: [gl.cull_back]      # GL_BACK (default)
 
@@ -531,6 +536,7 @@ in just a few lines. Manual VBO/VAO setup is entirely unnecessary.
 | `gl.enable_blend` | — | — | Alpha blending (SRC_ALPHA, ONE_MINUS_SRC_ALPHA) |
 | `gl.disable_blend` | — | — | |
 | `gl.enable_cull_face` | — | — | Face culling on |
+| `gl.disable_cull_face` | — | — | Face culling off (both sides drawn) |
 | `gl.cull_back` | — | — | GL_BACK (default) |
 | `gl.cull_front` | — | — | GL_FRONT |
 | `gl.wireframe` | `on: i8` | — | Polygon mode LINE / FILL |

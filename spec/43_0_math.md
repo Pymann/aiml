@@ -341,6 +341,9 @@ When passed to functions, a copy is made (analogous to `i32`).
 | `{ "*": [m, v] }` | `mat4` + `vec4` | `vec4` |
 | `{ ==: [a, b] }` | `vec2/3/4` + same | `i8` |
 
+Operands may be any expression of the type: variables, parameters, fields, builtin calls and
+calls of user methods/functions returning the math type.
+
 ### Vector Functions (math namespace)
 | Call | Return |
 |------|--------|

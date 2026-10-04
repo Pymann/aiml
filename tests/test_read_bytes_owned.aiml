@@ -1,0 +1,38 @@
+# spec/23 + spec/61 §5: io.read_bytes / io.read_at return an owned buffer (memV3 handle) — read
+# repeatedly in a helper, dropped at scope end, without invalid free or leak.
+# Expected exit code: 0
+- class:
+    name: ByteReader
+    members: [[calls, i32]]
+    methods:
+      - def:
+          name: sum_two
+          access: public
+          args: [[file, string]]
+          return: i32
+          body:
+            - decl: [handle, file_handle, { call: [io.open_binary, file] }]
+            - decl: [head, buffer<u8>, { call: [io.read_bytes, handle, 4] }]
+            - decl: [tail, buffer<u8>, { call: [io.read_at, handle, 2, 2] }]
+            - call: [io.close, handle]
+            - call: [head.seek, 0]
+            - decl: [first, u8, { call: [head.read, u8] }]
+            - call: [tail.seek, 1]
+            - decl: [fourth, u8, { call: [tail.read, u8] }]
+            - set: [<.calls, { +: [<.calls, 1] }]
+            - return: { +: [head.len, tail.len] }
+- def:
+    name: main
+    return: i32
+    body:
+      - call: [io.write_file, "/tmp/aiml_test_read_bytes_owned.bin", "ABCDEFGH"]
+      - decl: [reader, ptr<ByteReader>, { new: ByteReader }]
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, 20] }
+          body:
+            - decl: [got, i32, { call: [reader.sum_two, "/tmp/aiml_test_read_bytes_owned.bin"] }]
+            - if: { condition: { neq: [got, 6] }, then: [{ print: ["FAIL lengths ${got}"] }, { return: 1 }] }
+            - set: [round, { +: [round, 1] }]
+      - print: ["PASS read_bytes_owned"]
+      - return: 0
