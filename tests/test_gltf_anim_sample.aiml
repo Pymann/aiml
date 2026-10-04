@@ -1,0 +1,85 @@
+# spec/43_1 §7/§8: node.local_matrix, anim.sample_* rules (clamp, slerp normalised, unanimated →
+# node value) and anim.sample_local_matrix. tests/anim_legs.glb comes from shaper tests/p8/ok/legs.shaml:
+# shaper → leg_l@chain → leg_l (T 0.3 1 0; rot x 30/-30/30 at 0/0.5/1) …, leg_r@chain (matrix, x mirror).
+# Expected exit code: 0
+- class:
+    name: AnimProbe
+    members: [[fails, i32]]
+    methods:
+      - def:
+          name: expect
+          access: public
+          args: [[label, string], [got, f32], [want, f32]]
+          body:
+            - decl: [diff, f32, { -: [got, want] }]
+            - if: { condition: { lt: [diff, 0.0] }, then: [{ set: [diff, { -: [0.0, diff] }] }] }
+            - if: { condition: { gt: [diff, 0.0001] }, then: [{ print: ["FAIL ${label}: ${got} != ${want}"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }
+
+      - def:
+          name: cell
+          access: public
+          args: [[raw, buffer<f32>], [index, i32]]
+          return: f32
+          body:
+            - call: [raw.seek, { "*": [index, 4] }]
+            - return: { call: [raw.read, f32] }
+
+      - def:
+          name: run
+          access: public
+          body:
+            - decl: [file_path, path, "tests/anim_legs.glb"]
+            - decl: [scene, gltf_scene, { call: [gltf.load, file_path] }]
+            - if: { condition: { eq: [{ call: [scene.valid] }, 0] }, then: [{ print: ["FAIL load"] }, { set: [<.fails, 1] }, { return: }] }
+            - decl: [roots, list<gltf_node>, { call: [scene.nodes] }]
+            - decl: [root, gltf_node, { call: [roots.get, 0] }]
+            - decl: [chains, list<gltf_node>, { call: [root.children] }]
+            - decl: [left_chain, gltf_node, { call: [chains.get, 0] }]
+            - decl: [right_chain, gltf_node, { call: [chains.get, 1] }]
+            - decl: [left_kids, list<gltf_node>, { call: [left_chain.children] }]
+            - decl: [leg_l, gltf_node, { call: [left_kids.get, 0] }]
+            - decl: [right_kids, list<gltf_node>, { call: [right_chain.children] }]
+            - decl: [leg_r, gltf_node, { call: [right_kids.get, 0] }]
+            - decl: [knee_chains, list<gltf_node>, { call: [leg_r.children] }]
+            - decl: [knee_chain, gltf_node, { call: [knee_chains.get, 0] }]
+            - decl: [knees, list<gltf_node>, { call: [knee_chain.children] }]
+            - decl: [knee_r, gltf_node, { call: [knees.get, 0] }]
+            - decl: [mirror, buffer<f32>, { call: [right_chain.local_matrix] }]
+            - call: [<.expect, "mirror m0", { call: [<.cell, mirror, 0] }, -1.0]
+            - call: [<.expect, "mirror m15", { call: [<.cell, mirror, 15] }, 1.0]
+            - decl: [rest, buffer<f32>, { call: [leg_l.local_matrix] }]
+            - call: [<.expect, "rest m12", { call: [<.cell, rest, 12] }, 0.3]
+            - call: [<.expect, "rest m13", { call: [<.cell, rest, 13] }, 1.0]
+            - call: [<.expect, "rest m5", { call: [<.cell, rest, 5] }, 1.0]
+            - decl: [anims, list<gltf_animation>, { call: [scene.animations] }]
+            - decl: [walk, gltf_animation, { call: [anims.get, 0] }]
+            - call: [<.expect, "duration", { call: [walk.duration] }, 1.0]
+            - call: [<.expect, "slerp mid x", { call: [walk.sample_rotation_x, leg_l, 0.25] }, 0.0]
+            - call: [<.expect, "slerp mid w", { call: [walk.sample_rotation_w, leg_l, 0.25] }, 1.0]
+            - call: [<.expect, "slerp 1/4 x", { call: [walk.sample_rotation_x, leg_l, 0.125] }, 0.130526]
+            - call: [<.expect, "clamp", { call: [walk.sample_rotation_x, leg_l, 5.0] }, 0.258819]
+            - call: [<.expect, "rest translation", { call: [walk.sample_translation_x, leg_l, 0.3] }, 0.3]
+            - call: [<.expect, "rest translation y", { call: [walk.sample_translation_y, leg_l, 0.3] }, 1.0]
+            - call: [<.expect, "rest rotation", { call: [walk.sample_rotation_w, leg_r, 0.3] }, 1.0]
+            - call: [<.expect, "knee w", { call: [walk.sample_rotation_w, knee_r, 0.5] }, 0.92388]
+            - decl: [posed, buffer<f32>, { call: [walk.sample_local_matrix, leg_l, 0.125] }]
+            - call: [<.expect, "posed m12", { call: [<.cell, posed, 12] }, 0.3]
+            - call: [<.expect, "posed m5", { call: [<.cell, posed, 5] }, 0.965926]
+            - call: [<.expect, "posed m6", { call: [<.cell, posed, 6] }, 0.258819]
+            - decl: [fixed, buffer<f32>, { call: [walk.sample_local_matrix, right_chain, 0.5] }]
+            - call: [<.expect, "matrix node", { call: [<.cell, fixed, 0] }, -1.0]
+            - call: [scene.free]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [probe, ptr<AnimProbe>, { new: AnimProbe }]
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, 10] }
+          body:
+            - call: [probe.run]
+            - if: { condition: { gt: [probe.fails, 0] }, then: [{ return: 1 }] }
+            - set: [round, { +: [round, 1] }]
+      - print: ["PASS gltf_anim_sample"]
+      - return: 0

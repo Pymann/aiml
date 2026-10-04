@@ -1214,6 +1214,8 @@ void registerBuiltins(CompilerContext& ctx) {
         llvm::Type* sz  = ctx.getSizeType();
         llvm::Type* bt  = ctx.getLLVMType("buffer");
         if (args.size() < 2) {
+            if (ctx.memV3)   // spec/61 §5: empty owned buffer handle
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_new", i8p, {}), {}, "binbuf_h"));
             auto* z = ctx.createEntryAlloca(bt, "binbuf_empty");
             ctx.builder.CreateMemSet(z, ctx.builder.getInt8(0), ctx.module.getDataLayout().getTypeAllocSize(bt), llvm::MaybeAlign());
             return ctx.ir_gen->wrap(z);
@@ -1224,8 +1226,15 @@ void registerBuiltins(CompilerContext& ctx) {
         if (n->getType()->isIntegerTy(64)) n = ctx.builder.CreateTrunc(n, i32);
         llvm::Value* heapPtr = ctx.builder.CreateCall(fn, {f, n});
         llvm::Function* mcf  = ctx.getFunction("memcpy", i8p, {i8p, i8p, sz});
-        auto* out = ctx.createEntryAlloca(bt, "binbuf_alloca");
         uint64_t szBytes = ctx.module.getDataLayout().getTypeAllocSize(bt);
+        if (ctx.memV3) {
+            // spec/61 §5: the runtime's heap struct becomes an owned buffer handle (data moves along).
+            llvm::Value* h = ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_new", i8p, {}), {}, "binbuf_alloca_h");
+            ctx.builder.CreateCall(mcf, {h, heapPtr, ctx.getSizeConst(szBytes)});
+            ctx.builder.CreateCall(ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p}), {heapPtr});
+            return ctx.ir_gen->wrap(h);
+        }
+        auto* out = ctx.createEntryAlloca(bt, "binbuf_alloca");
         ctx.builder.CreateCall(mcf, {out, heapPtr, ctx.getSizeConst(szBytes)});
         return ctx.ir_gen->wrap(out);
     };
@@ -1238,6 +1247,8 @@ void registerBuiltins(CompilerContext& ctx) {
         llvm::Type* sz  = ctx.getSizeType();
         llvm::Type* bt  = ctx.getLLVMType("buffer");
         if (args.size() < 3) {
+            if (ctx.memV3)   // spec/61 §5: empty owned buffer handle
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_new", i8p, {}), {}, "binbuf_h"));
             auto* z = ctx.createEntryAlloca(bt, "binbuf_empty");
             ctx.builder.CreateMemSet(z, ctx.builder.getInt8(0), ctx.module.getDataLayout().getTypeAllocSize(bt), llvm::MaybeAlign());
             return ctx.ir_gen->wrap(z);
@@ -1250,8 +1261,15 @@ void registerBuiltins(CompilerContext& ctx) {
         if (n->getType()->isIntegerTy(64))      n      = ctx.builder.CreateTrunc(n, i32);
         llvm::Value* heapPtr = ctx.builder.CreateCall(fn, {f, offset, n});
         llvm::Function* mcf  = ctx.getFunction("memcpy", i8p, {i8p, i8p, sz});
-        auto* out = ctx.createEntryAlloca(bt, "binat_alloca");
         uint64_t szBytes = ctx.module.getDataLayout().getTypeAllocSize(bt);
+        if (ctx.memV3) {
+            // spec/61 §5: the runtime's heap struct becomes an owned buffer handle (data moves along).
+            llvm::Value* h = ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_new", i8p, {}), {}, "binat_alloca_h");
+            ctx.builder.CreateCall(mcf, {h, heapPtr, ctx.getSizeConst(szBytes)});
+            ctx.builder.CreateCall(ctx.getFunction("free", ctx.builder.getVoidTy(), {i8p}), {heapPtr});
+            return ctx.ir_gen->wrap(h);
+        }
+        auto* out = ctx.createEntryAlloca(bt, "binat_alloca");
         ctx.builder.CreateCall(mcf, {out, heapPtr, ctx.getSizeConst(szBytes)});
         return ctx.ir_gen->wrap(out);
     };
@@ -2256,9 +2274,13 @@ void registerBuiltins(CompilerContext& ctx) {
         io.builtinFuncs["read_file"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
             llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             llvm::Function* f = ctx.getFunction("aiml_io_read_file", i8p, {i8p});
-            if (args.empty()) return ctx.ir_gen->wrap(ctx.builder.CreateGlobalStringPtr(""));
-            llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {v}));
+            llvm::Value* v = args.empty()
+                ? static_cast<llvm::Value*>(ctx.builder.CreateGlobalStringPtr(""))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            llvm::Value* owned = ctx.builder.CreateCall(f, {v}, "file_text");   // owned rc string
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty())
+                AIML::AST::aimlTrackStringTemp(ctx, owned);
+            return ctx.ir_gen->wrap(owned);
         };
 
         // io.read_asset(stem) → string content from data-Kind asset store
@@ -5941,12 +5963,17 @@ void registerBuiltins(CompilerContext& ctx) {
 
         // ── Simple method macros ────────────────────────────────────────────
         // ci: ClassInfo&, aimlName: string literal, cName: C symbol string literal
+// spec/43_1 + spec/61 §7: the runtime hands out cgltf-owned char*; the result is an owned rc copy
+// (statement temp), valid after scene.free.
 #define GLTF_STR(ci, aimlName, cName) \
         (ci).builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
             AIML::AST::CallExpr*, auto) -> IRValue* { \
             auto* p = llvm::PointerType::get(ctx.context, 0); \
-            return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
-                ctx.getFunction(cName, p, {p}), {base})); \
+            llvm::Value* raw = ctx.builder.CreateCall(ctx.getFunction(cName, p, {p}), {base}); \
+            llvm::Value* owned = ctx.builder.CreateCall(ctx.getFunction("aiml_str_dup", p, {p}), {raw}, "gltf_str"); \
+            if (ctx.lifetimeDropsEnabled && !ctx.stmtTempStack.empty()) \
+                AIML::AST::aimlTrackStringTemp(ctx, owned); \
+            return ctx.ir_gen->wrap(owned); \
         };
 
 #define GLTF_I32M(ci, aimlName, cName) \
@@ -6049,6 +6076,7 @@ void registerBuiltins(CompilerContext& ctx) {
             GLTF_PTRM(ci, "skin",          "aiml_gltf_node_skin")
             GLTF_LIST(ci, "children",      "aiml_gltf_node_children_fill")
             GLTF_BUFM(ci, "world_matrix",  "aiml_gltf_node_world_matrix")
+            GLTF_BUFM(ci, "local_matrix",  "aiml_gltf_node_local_matrix")
 
             ctx.classes["gltf_node"] = std::move(ci);
         }
@@ -6128,6 +6156,7 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.preLoadBase = true;
 
             GLTF_STR (ci, "name",          "aiml_gltf_mat_name")
+            GLTF_STR (ci, "extras",        "aiml_gltf_mat_extras")
             GLTF_F32M(ci, "base_color_r",  "aiml_gltf_mat_base_color_r")
             GLTF_F32M(ci, "base_color_g",  "aiml_gltf_mat_base_color_g")
             GLTF_F32M(ci, "base_color_b",  "aiml_gltf_mat_base_color_b")
@@ -6219,6 +6248,26 @@ void registerBuiltins(CompilerContext& ctx) {
             GLTF_SAMPLE(ci, "sample_rotation_z",    "aiml_gltf_anim_sample_rotation_z")
             GLTF_SAMPLE(ci, "sample_rotation_w",    "aiml_gltf_anim_sample_rotation_w")
 #undef GLTF_SAMPLE
+
+            // spec/43_1 §8: (node, t) → owned buffer<f32>[16]
+            ci.builtinMethods["sample_local_matrix"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* f32 = ctx.builder.getFloatTy();
+                llvm::Value* nodeArg = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p));
+                llvm::Value* tArg = llvm::ConstantFP::get(f32, 0.0);
+                if (call && call->args.size() >= 1) {
+                    IRValue* a = evalExpr(call->args[0].get());
+                    if (a) nodeArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                }
+                if (call && call->args.size() >= 2) {
+                    IRValue* a = evalExpr(call->args[1].get());
+                    if (a) tArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                }
+                llvm::Value* hp = ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_gltf_anim_sample_local_matrix", p, {p, p, f32}), {base, nodeArg, tArg});
+                return ctx.ir_gen->wrap(GLTF_HEAP_TO_ALLOCA(hp));
+            };
 
             ctx.classes["gltf_animation"] = std::move(ci);
         }
@@ -6593,6 +6642,7 @@ void registerBuiltins(CompilerContext& ctx) {
             GL_NS_VOID0("enable_blend",        "aiml_gl_enable_blend")
             GL_NS_VOID0("disable_blend",       "aiml_gl_disable_blend")
             GL_NS_VOID0("enable_cull_face",    "aiml_gl_enable_cull_face")
+            GL_NS_VOID0("disable_cull_face",   "aiml_gl_disable_cull_face")
             GL_NS_VOID0("cull_back",           "aiml_gl_cull_back")
             GL_NS_VOID0("cull_front",          "aiml_gl_cull_front")
             GL_NS_VOID0("bind_default_framebuffer", "aiml_gl_bind_default_framebuffer")

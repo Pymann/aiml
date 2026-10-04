@@ -1,0 +1,49 @@
+# spec/43_0 operator overloads: operands may be calls of user methods returning a math type
+# (mat4 · method(), method() · mat4, mat4 parameter · method(), vec3 + method()).
+# Expected exit code: 0
+- class:
+    name: MathOps
+    members: [[shift, f32]]
+    methods:
+      - def:
+          name: move_by
+          access: public
+          args: [[dist, f32]]
+          return: mat4
+          body:
+            - return: { call: [math.mat4_translate, { call: [math.vec3, dist, 0.0, 0.0] }] }
+
+      - def:
+          name: offset
+          access: public
+          return: vec3
+          body:
+            - return: { call: [math.vec3, 0.0, <.shift, 0.0] }
+
+      - def:
+          name: chain
+          access: public
+          args: [[parent, mat4]]
+          return: mat4
+          body:
+            - return: { "*": [parent, { call: [<.move_by, 2.0] }] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [ops, ptr<MathOps>, { new: MathOps }]
+      - set: [ops.shift, 5.0]
+      - decl: [base, mat4, { call: [math.mat4_translate, { call: [math.vec3, 1.0, 0.0, 0.0] }] }]
+      - decl: [left, mat4, { "*": [base, { call: [ops.move_by, 3.0] }] }]
+      - decl: [right, mat4, { "*": [{ call: [ops.move_by, 3.0] }, base] }]
+      - decl: [nested, mat4, { call: [ops.chain, base] }]
+      - decl: [point, vec4, { "*": [left, { call: [math.vec4, 0.0, 0.0, 0.0, 1.0] }] }]
+      - decl: [other, vec4, { "*": [right, { call: [math.vec4, 0.0, 0.0, 0.0, 1.0] }] }]
+      - decl: [third, vec4, { "*": [nested, { call: [math.vec4, 0.0, 0.0, 0.0, 1.0] }] }]
+      - decl: [moved, vec3, { +: [{ call: [math.vec3, 1.0, 1.0, 1.0] }, { call: [ops.offset] }] }]
+      - if: { condition: { neq: [point.x, 4.0] }, then: [{ print: ["FAIL left ${point.x}"] }, { return: 1 }] }
+      - if: { condition: { neq: [other.x, 4.0] }, then: [{ print: ["FAIL right ${other.x}"] }, { return: 1 }] }
+      - if: { condition: { neq: [third.x, 3.0] }, then: [{ print: ["FAIL nested ${third.x}"] }, { return: 1 }] }
+      - if: { condition: { neq: [moved.y, 6.0] }, then: [{ print: ["FAIL vec3 ${moved.y}"] }, { return: 1 }] }
+      - print: ["PASS math_op_call_operands"]
+      - return: 0

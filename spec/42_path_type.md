@@ -255,6 +255,9 @@ The `io` namespace accepts only `path`, never `string`:
 # Exception: path context inference — literals in a path context are parsed as path:
 # (if io.read_file expects path, "/etc/hosts" is a path literal, not a string literal)
 
+# io.read_file(p) → string: the whole file content as an owned string (spec/61 §7);
+# "" when the file cannot be read (use io.is_file to tell a missing file from an empty one).
+
 # Filesystem operations
 - decl: [exists, bool]
 - set: [exists, { call: [io.exists, p] }]

@@ -620,6 +620,19 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
     IRValue* lhs = visitExpression(bin->lhs.get());
     IRValue* rhs = visitExpression(bin->rhs.get());
     if (!lhs || !rhs) return nullptr;
+    // spec/43_0 operators: a user call returning a math struct arrives as the pointer to its
+    // result temp (method_struct_tmp) → operate on the value.
+    auto loadMathTemp = [&](IRValue* side, Expr* expr) -> IRValue* {
+        if (!dynamic_cast<CallExpr*>(expr)) return side;
+        auto* tmp = llvm::dyn_cast_or_null<llvm::AllocaInst>(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(side)));
+        auto* st = tmp ? llvm::dyn_cast<llvm::StructType>(tmp->getAllocatedType()) : nullptr;
+        if (!st || !st->hasName()) return side;
+        std::string nm = st->getName().str();
+        if (nm != "vec2" && nm != "vec3" && nm != "vec4" && nm != "quat" && nm != "mat4") return side;
+        return ctx.ir_gen->wrap(ctx.builder.CreateLoad(st, tmp, "math_call_val"));
+    };
+    lhs = loadMathTemp(lhs, bin->lhs.get());
+    rhs = loadMathTemp(rhs, bin->rhs.get());
 
     llvm::Type* lTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(lhs->getType()));
     llvm::Type* rTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(rhs->getType()));

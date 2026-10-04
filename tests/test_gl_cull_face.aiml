@@ -1,0 +1,18 @@
+# spec/43_2 §7/§12: gl.enable_cull_face / gl.disable_cull_face / gl.cull_front / gl.cull_back.
+# Requires: display
+# Expected exit code: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 320, 240, "cull_face"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ print: ["FAIL create_window"] }, { return: 1 }] }
+      - call: [gl.enable_cull_face]
+      - call: [gl.cull_front]
+      - call: [gl.cull_back]
+      - call: [gl.disable_cull_face]
+      - call: [gl.clear_all, 0.0, 0.0, 0.0, 1.0]
+      - call: [engine.swap, win]
+      - call: [engine.destroy_window, win]
+      - print: ["PASS gl_cull_face"]
+      - return: 0

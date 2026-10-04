@@ -21,6 +21,7 @@ void aiml_gl_disable_depth_test(void);
 void aiml_gl_enable_blend(void);
 void aiml_gl_disable_blend(void);
 void aiml_gl_enable_cull_face(void);
+void aiml_gl_disable_cull_face(void);
 void aiml_gl_cull_back(void);
 void aiml_gl_cull_front(void);
 void aiml_gl_wireframe(int8_t on);
@@ -95,6 +96,7 @@ void aiml_gl_bind_texture(void* tex, int32_t slot);
  * normals_buf may be NULL — attrib 2 is skipped in that case.
  */
 void* aiml_gl_create_mesh(void* pos_buf, void* uvs_buf, void* normals_buf, void* idx_buf);
+void  aiml_gl_mesh_set_tangents(void* mesh, void* tan_buf);
 
 void    aiml_gl_mesh_draw       (void* mesh);               /* GL_TRIANGLES, all indices */
 void    aiml_gl_mesh_draw_count (void* mesh, int32_t count);/* GL_TRIANGLES, count indices */

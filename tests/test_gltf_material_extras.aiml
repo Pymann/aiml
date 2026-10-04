@@ -1,0 +1,49 @@
+# spec/43_1 §5: mat.extras returns the material's glTF extras as JSON text; glTF string getters
+# return owned strings (valid after scene.free, no header misreads). Read repeatedly in a helper.
+# Expected exit code: 0
+- class:
+    name: ExtrasProbe
+    members: [[calls, i32]]
+    methods:
+      - def:
+          name: summary
+          access: public
+          args: [[file, string]]
+          return: { type: string, lifetime: producer }
+          body:
+            - decl: [file_path, path, file]
+            - decl: [scene, gltf_scene, { call: [gltf.load, file_path] }]
+            - if: { condition: { eq: [{ call: [scene.valid] }, 0] }, then: [{ return: "load failed" }] }
+            - decl: [meshes, list<gltf_mesh>, { call: [scene.meshes] }]
+            - decl: [mesh, gltf_mesh, { call: [meshes.get, 0] }]
+            - decl: [prim, gltf_primitive, { call: [mesh.primitive, 0] }]
+            - decl: [mat, gltf_material, { call: [prim.material] }]
+            - decl: [mat_name, string, { call: [mat.name] }]
+            - decl: [extras, string, { call: [mat.extras] }]
+            - decl: [mesh_name, string, { call: [mesh.name] }]
+            - call: [scene.free]
+            - decl: [doc, ptr<yaml_doc>, { call: [yaml.parse, extras] }]
+            - decl: [root, ref<yaml_node>, { call: [yaml.root, doc] }]
+            - decl: [shader, ref<yaml_node>, { call: [yaml.get, root, "shader"] }]
+            - decl: [passes, ref<yaml_node>, { call: [yaml.get, shader, "passes"] }]
+            - decl: [first, ref<yaml_node>, { call: [yaml.item, passes, 0] }]
+            - decl: [cull, string, { call: [yaml.scalar, { call: [yaml.get, first, "cull"] }] }]
+            - decl: [params, ref<yaml_node>, { call: [yaml.get, first, "params"] }]
+            - decl: [width, string, { call: [yaml.scalar, { call: [yaml.get, params, "width"] }] }]
+            - decl: [count, i32, { call: [yaml.size, passes] }]
+            - set: [<.calls, { +: [<.calls, 1] }]
+            - return: "${mat_name}/${mesh_name}/${count}/${cull}/${width}"
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [probe, ptr<ExtrasProbe>, { new: ExtrasProbe }]
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, 20] }
+          body:
+            - decl: [got, string, { call: [probe.summary, "tests/material_extras.glb"] }]
+            - if: { condition: { neq: [got, "painted/tri/2/front/0.01"] }, then: [{ print: ["FAIL ${got}"] }, { return: 1 }] }
+            - set: [round, { +: [round, 1] }]
+      - print: ["PASS gltf_material_extras"]
+      - return: 0

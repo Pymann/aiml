@@ -63,6 +63,7 @@ void*       aiml_gltf_node_skin           (void* node);   /* gltf_skin* or NULL 
 void        aiml_gltf_node_children_fill  (void* node, void* list_ptr);
 /* Returns heap-alloc'd AimlGltfBuffer* (16 f32 column-major matrix) */
 void*       aiml_gltf_node_world_matrix   (void* node);
+void*       aiml_gltf_node_local_matrix   (void* node);
 
 /* ── gltf_mesh ────────────────────────────────────────────────────────────── */
 
@@ -91,6 +92,7 @@ void*   aiml_gltf_prim_to_gl_mesh   (void* prim);
 
 /* ── gltf_material ───────────────────────────────────────────────────────── */
 
+const char* aiml_gltf_mat_extras(void* mat);
 const char* aiml_gltf_mat_name                          (void* mat);
 float       aiml_gltf_mat_base_color_r                  (void* mat);
 float       aiml_gltf_mat_base_color_g                  (void* mat);
@@ -141,6 +143,7 @@ float       aiml_gltf_anim_sample_rotation_x   (void* anim, void* node, float t)
 float       aiml_gltf_anim_sample_rotation_y   (void* anim, void* node, float t);
 float       aiml_gltf_anim_sample_rotation_z   (void* anim, void* node, float t);
 float       aiml_gltf_anim_sample_rotation_w   (void* anim, void* node, float t);
+void*       aiml_gltf_anim_sample_local_matrix (void* anim, void* node, float t);
 
 /* ── gltf_skin ───────────────────────────────────────────────────────────── */
 

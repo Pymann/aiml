@@ -1,0 +1,35 @@
+# spec/42 + spec/61 §7: io.read_file returns the content as an owned string ("" when unreadable);
+# read repeatedly in a helper without leak or header misread.
+# Expected exit code: 0
+- class:
+    name: Reader
+    members: [[calls, i32]]
+    methods:
+      - def:
+          name: first_line
+          access: public
+          args: [[file, string]]
+          return: { type: string, lifetime: producer }
+          body:
+            - decl: [src, path, file]
+            - decl: [text, string, { call: [io.read_file, src] }]
+            - decl: [lines, list<string>, { call: [text.split, "\n"] }]
+            - set: [<.calls, { +: [<.calls, 1] }]
+            - return: "${text.len}:${{ at: [lines, 0] }}"
+- def:
+    name: main
+    return: i32
+    body:
+      - call: [io.write_file, "/tmp/aiml_test_read_file_owned.txt", "alpha\nbeta\n"]
+      - decl: [reader, ptr<Reader>, { new: Reader }]
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, 20] }
+          body:
+            - decl: [got, string, { call: [reader.first_line, "/tmp/aiml_test_read_file_owned.txt"] }]
+            - if: { condition: { neq: [got, "11:alpha"] }, then: [{ print: ["FAIL ${got}"] }, { return: 1 }] }
+            - decl: [none, string, { call: [reader.first_line, "/tmp/aiml_test_read_file_owned_missing.txt"] }]
+            - if: { condition: { neq: [none, "0:"] }, then: [{ print: ["FAIL missing '${none}'"] }, { return: 1 }] }
+            - set: [round, { +: [round, 1] }]
+      - print: ["PASS read_file_owned"]
+      - return: 0

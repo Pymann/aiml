@@ -233,54 +233,6 @@ static void node_world_matrix_impl(const cgltf_data* data,
 
 /* ── Animation sampling ──────────────────────────────────────────────────── */
 
-/* Linear interpolation between two scalar keyframe arrays. */
-static float anim_sample_scalar(const cgltf_animation_sampler* sampler,
-                                 float t, int component) {
-    const cgltf_accessor* input  = sampler->input;
-    const cgltf_accessor* output = sampler->output;
-    if (!input || !output || input->count < 2) {
-        /* Return first value */
-        float v = 0.f;
-        if (output && output->count > 0)
-            cgltf_accessor_read_float(output, 0, &v + component, 1);
-        return v;
-    }
-
-    /* Clamp */
-    float t0 = 0.f, t1 = 0.f;
-    cgltf_accessor_read_float(input, 0, &t0, 1);
-    cgltf_accessor_read_float(input, input->count - 1, &t1, 1);
-    t = t < t0 ? t0 : (t > t1 ? t1 : t);
-
-    /* Find segment */
-    cgltf_size seg = 0;
-    for (cgltf_size i = 0; i + 1 < input->count; ++i) {
-        float ta = 0.f, tb = 0.f;
-        cgltf_accessor_read_float(input, i,     &ta, 1);
-        cgltf_accessor_read_float(input, i + 1, &tb, 1);
-        if (t >= ta && t <= tb) { seg = i; break; }
-    }
-
-    float ta = 0.f, tb = 0.f;
-    cgltf_accessor_read_float(input, seg,     &ta, 1);
-    cgltf_accessor_read_float(input, seg + 1, &tb, 1);
-    float alpha = (tb > ta) ? ((t - ta) / (tb - ta)) : 0.f;
-
-    int nc = (int)cgltf_num_components(output->type);
-    float va = 0.f, vb = 0.f;
-    {
-        float tmp[4] = {};
-        cgltf_accessor_read_float(output, seg,     tmp, (cgltf_size)nc);
-        va = tmp[component];
-    }
-    {
-        float tmp[4] = {};
-        cgltf_accessor_read_float(output, seg + 1, tmp, (cgltf_size)nc);
-        vb = tmp[component];
-    }
-    return va + alpha * (vb - va);
-}
-
 /* ────────────────────────────────────────────────────────────────────────── */
 /* Public API                                                                 */
 /* ────────────────────────────────────────────────────────────────────────── */
@@ -452,6 +404,13 @@ void aiml_gltf_node_children_fill(void* node, void* list_ptr) {
     for (cgltf_size i = 0; i < n->children_count; ++i)
         list_push_ptr(lst, n->children[i]);
 }
+void* aiml_gltf_node_local_matrix(void* node) {
+    auto* n = (cgltf_node*)node;
+    if (!n) return make_empty_buffer();
+    AimlGltfBuffer* b = make_buffer(16 * sizeof(float));
+    node_local_matrix(n, (float*)b->data);
+    return b;
+}
 void* aiml_gltf_node_world_matrix(void* node) {
     /* We need the cgltf_data* for parent traversal — walk parent chain to root */
     auto* n = (cgltf_node*)node;
@@ -532,6 +491,10 @@ void* aiml_gltf_prim_material(void* prim) {
 const char* aiml_gltf_mat_name(void* mat) {
     auto* m = (cgltf_material*)mat;
     return (m && m->name) ? m->name : "";
+}
+const char* aiml_gltf_mat_extras(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return (m && m->extras.data) ? m->extras.data : "";
 }
 float aiml_gltf_mat_base_color_r(void* mat) {
     auto* m = (cgltf_material*)mat;
@@ -790,41 +753,121 @@ static const cgltf_animation_sampler* find_channel_sampler(
     return nullptr;
 }
 
-float aiml_gltf_anim_sample_translation_x(void* anim, void* node, float t) {
+/* spec/43_1 §8: value of one animated property at t; false when the clip does not animate it. */
+static bool anim_sample_vec(const cgltf_animation* a, const cgltf_node* n,
+                            cgltf_animation_path_type path, float t, float* out) {
+    const cgltf_animation_sampler* s = find_channel_sampler(a, n, path);
+    if (!s || !s->input || !s->output || s->input->count == 0) return false;
+    int nc = (int)cgltf_num_components(s->output->type);
+    if (nc > 4) nc = 4;
+    bool cubic = s->interpolation == cgltf_interpolation_type_cubic_spline;
+    cgltf_size cnt = s->input->count;
+    cgltf_size have = cubic ? s->output->count / 3 : s->output->count;
+    if (have < cnt) cnt = have;
+    if (cnt == 0) return false;
+    auto read_key = [&](cgltf_size k, float* dst) {
+        cgltf_accessor_read_float(s->output, cubic ? 3 * k + 1 : k, dst, (cgltf_size)nc);
+    };
+    float t0 = 0.f, t1 = 0.f;
+    cgltf_accessor_read_float(s->input, 0, &t0, 1);
+    cgltf_accessor_read_float(s->input, cnt - 1, &t1, 1);
+    if (cnt == 1 || t <= t0) { read_key(0, out); return true; }
+    if (t >= t1) { read_key(cnt - 1, out); return true; }
+    cgltf_size seg = 0;
+    for (cgltf_size i = 0; i + 1 < cnt; ++i) {
+        float ta = 0.f;
+        cgltf_accessor_read_float(s->input, i, &ta, 1);
+        if (ta <= t) seg = i; else break;
+    }
+    float ta = 0.f, tb = 0.f;
+    cgltf_accessor_read_float(s->input, seg, &ta, 1);
+    cgltf_accessor_read_float(s->input, seg + 1, &tb, 1);
+    float va[4] = {}, vb[4] = {};
+    read_key(seg, va);
+    read_key(seg + 1, vb);
+    if (s->interpolation == cgltf_interpolation_type_step) {
+        memcpy(out, va, sizeof(float) * (size_t)nc);
+        return true;
+    }
+    float f = (tb > ta) ? (t - ta) / (tb - ta) : 0.f;
+    if (path == cgltf_animation_path_type_rotation && nc == 4) {
+        double dot = 0.0;
+        for (int c = 0; c < 4; ++c) dot += (double)va[c] * vb[c];
+        if (dot < 0.0) { for (int c = 0; c < 4; ++c) vb[c] = -vb[c]; dot = -dot; }
+        double wa = 1.0 - f, wb = f;
+        if (dot < 0.9995) {
+            double th = acos(dot), st = sin(th);
+            wa = sin((1.0 - f) * th) / st;
+            wb = sin(f * th) / st;
+        }
+        double len = 0.0, q[4];
+        for (int c = 0; c < 4; ++c) { q[c] = wa * va[c] + wb * vb[c]; len += q[c] * q[c]; }
+        len = len > 0.0 ? sqrt(len) : 1.0;
+        for (int c = 0; c < 4; ++c) out[c] = (float)(q[c] / len);
+        return true;
+    }
+    for (int c = 0; c < nc; ++c) out[c] = va[c] + f * (vb[c] - va[c]);
+    return true;
+}
+
+static void node_rest_vec(const cgltf_node* n, cgltf_animation_path_type path, float* out) {
+    float zero[4] = {0.f, 0.f, 0.f, 1.f}, one[3] = {1.f, 1.f, 1.f};
+    if (path == cgltf_animation_path_type_translation)
+        memcpy(out, n && n->has_translation ? n->translation : zero, 3 * sizeof(float));
+    else if (path == cgltf_animation_path_type_rotation)
+        memcpy(out, n && n->has_rotation ? n->rotation : zero, 4 * sizeof(float));
+    else
+        memcpy(out, n && n->has_scale ? n->scale : one, 3 * sizeof(float));
+}
+
+static float anim_component(void* anim, void* node, cgltf_animation_path_type path,
+                            int comp, float t) {
+    float v[4] = {0.f, 0.f, 0.f, 1.f};
     auto* a = (cgltf_animation*)anim; auto* n = (cgltf_node*)node;
-    if (!a || !n) return 0.f;
-    auto* s = find_channel_sampler(a, n, cgltf_animation_path_type_translation);
-    return s ? anim_sample_scalar(s, t, 0) : 0.f;
+    if (!a || !n || !anim_sample_vec(a, n, path, t, v)) node_rest_vec(n, path, v);
+    return v[comp];
+}
+
+float aiml_gltf_anim_sample_translation_x(void* anim, void* node, float t) {
+    return anim_component(anim, node, cgltf_animation_path_type_translation, 0, t);
 }
 float aiml_gltf_anim_sample_translation_y(void* anim, void* node, float t) {
-    auto* a = (cgltf_animation*)anim; auto* n = (cgltf_node*)node;
-    auto* s = find_channel_sampler(a, n, cgltf_animation_path_type_translation);
-    return s ? anim_sample_scalar(s, t, 1) : 0.f;
+    return anim_component(anim, node, cgltf_animation_path_type_translation, 1, t);
 }
 float aiml_gltf_anim_sample_translation_z(void* anim, void* node, float t) {
-    auto* a = (cgltf_animation*)anim; auto* n = (cgltf_node*)node;
-    auto* s = find_channel_sampler(a, n, cgltf_animation_path_type_translation);
-    return s ? anim_sample_scalar(s, t, 2) : 0.f;
+    return anim_component(anim, node, cgltf_animation_path_type_translation, 2, t);
 }
 float aiml_gltf_anim_sample_rotation_x(void* anim, void* node, float t) {
-    auto* a = (cgltf_animation*)anim; auto* n = (cgltf_node*)node;
-    auto* s = find_channel_sampler(a, n, cgltf_animation_path_type_rotation);
-    return s ? anim_sample_scalar(s, t, 0) : 0.f;
+    return anim_component(anim, node, cgltf_animation_path_type_rotation, 0, t);
 }
 float aiml_gltf_anim_sample_rotation_y(void* anim, void* node, float t) {
-    auto* a = (cgltf_animation*)anim; auto* n = (cgltf_node*)node;
-    auto* s = find_channel_sampler(a, n, cgltf_animation_path_type_rotation);
-    return s ? anim_sample_scalar(s, t, 1) : 0.f;
+    return anim_component(anim, node, cgltf_animation_path_type_rotation, 1, t);
 }
 float aiml_gltf_anim_sample_rotation_z(void* anim, void* node, float t) {
-    auto* a = (cgltf_animation*)anim; auto* n = (cgltf_node*)node;
-    auto* s = find_channel_sampler(a, n, cgltf_animation_path_type_rotation);
-    return s ? anim_sample_scalar(s, t, 2) : 0.f;
+    return anim_component(anim, node, cgltf_animation_path_type_rotation, 2, t);
 }
 float aiml_gltf_anim_sample_rotation_w(void* anim, void* node, float t) {
+    return anim_component(anim, node, cgltf_animation_path_type_rotation, 3, t);
+}
+
+void* aiml_gltf_anim_sample_local_matrix(void* anim, void* node, float t) {
     auto* a = (cgltf_animation*)anim; auto* n = (cgltf_node*)node;
-    auto* s = find_channel_sampler(a, n, cgltf_animation_path_type_rotation);
-    return s ? anim_sample_scalar(s, t, 3) : 1.f;
+    if (!n) return make_empty_buffer();
+    AimlGltfBuffer* b = make_buffer(16 * sizeof(float));
+    cgltf_node tmp = *n;
+    if (!n->has_matrix) {
+        const cgltf_animation_path_type paths[3] = {cgltf_animation_path_type_translation,
+            cgltf_animation_path_type_rotation, cgltf_animation_path_type_scale};
+        float* dst[3] = {tmp.translation, tmp.rotation, tmp.scale};
+        for (int k = 0; k < 3; ++k) {
+            float v[4] = {0.f, 0.f, 0.f, 1.f};
+            if (!a || !anim_sample_vec(a, n, paths[k], t, v)) node_rest_vec(n, paths[k], v);
+            memcpy(dst[k], v, (k == 1 ? 4 : 3) * sizeof(float));
+        }
+        tmp.has_translation = tmp.has_rotation = tmp.has_scale = 1;
+    }
+    node_local_matrix(&tmp, (float*)b->data);
+    return b;
 }
 
 /* ── gltf_skin ───────────────────────────────────────────────────────────── */
@@ -858,6 +901,9 @@ void* aiml_gltf_prim_to_gl_mesh(void* prim) {
     void* idx  = aiml_gltf_prim_indices(prim);
 
     void* mesh = aiml_gl_create_mesh(pos, uvs, norm, idx);
+    void* tan  = aiml_gltf_prim_tangents(prim);
+    if (mesh && tan) aiml_gl_mesh_set_tangents(mesh, tan);
+    if (tan)  { free(((AimlGltfBuffer*)tan)->data);  free(tan); }
 
     /* Free intermediate heap buffers — gl_create_mesh has already uploaded to GPU */
     if (pos)  { free(((AimlGltfBuffer*)pos)->data);  free(pos); }

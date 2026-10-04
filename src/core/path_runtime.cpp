@@ -249,16 +249,17 @@ extern "C" int aiml_io_rename(const char* src, const char* dst) {
     try { fs::rename(src, dst); return 0; } catch (...) { return -1; }
 }
 
+// spec/42 + spec/61 §7: owned rc string; "" when the file cannot be read.
 extern "C" char* aiml_io_read_file(const char* p) {
-    if (!p || p[0] == '\0') return nullptr;
+    if (!p || p[0] == '\0') return aiml_str_dup("");
     FILE* f = std::fopen(p, "rb");
-    if (!f) return nullptr;
-    if (std::fseek(f, 0, SEEK_END) != 0) { std::fclose(f); return nullptr; }
+    if (!f) return aiml_str_dup("");
+    if (std::fseek(f, 0, SEEK_END) != 0) { std::fclose(f); return aiml_str_dup(""); }
     long sz = std::ftell(f);
-    if (sz < 0) { std::fclose(f); return nullptr; }
+    if (sz < 0) { std::fclose(f); return aiml_str_dup(""); }
     std::rewind(f);
-    char* buf = static_cast<char*>(std::malloc(static_cast<size_t>(sz) + 1));
-    if (!buf) { std::fclose(f); return nullptr; }
+    char* buf = aiml_str_alloc(static_cast<size_t>(sz));
+    if (!buf) { std::fclose(f); return aiml_str_dup(""); }
     size_t rd = std::fread(buf, 1, static_cast<size_t>(sz), f);
     buf[rd] = '\0';
     std::fclose(f);

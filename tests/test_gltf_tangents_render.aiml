@@ -1,0 +1,52 @@
+# spec/43_2 §3.4 + spec/43_1 §4: prim.to_gl_mesh uploads TANGENT as attribute 3; a shader reading
+# aTangent renders the mesh (glTF from shaper with a normal map).
+# Requires: display
+# Expected exit code: 0
+- text: tan_vert
+  value: |
+    #version 330 core
+    layout(location = 0) in vec3 aPos;
+    layout(location = 3) in vec4 aTangent;
+    uniform mat4 uMvp;
+    out vec4 vTan;
+    void main() { vTan = aTangent; gl_Position = uMvp * vec4(aPos, 1.0); }
+- text: tan_frag
+  value: |
+    #version 330 core
+    in vec4 vTan;
+    out vec4 fragColor;
+    void main() { fragColor = vec4(abs(vTan.xyz), 1.0); }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 320, 240, "tangents"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ print: ["FAIL window"] }, { return: 1 }] }
+      - decl: [file_path, path, "tests/tangent_tire.glb"]
+      - decl: [scene, gltf_scene, { call: [gltf.load, file_path] }]
+      - if: { condition: { eq: [{ call: [scene.valid] }, 0] }, then: [{ print: ["FAIL load"] }, { return: 1 }] }
+      - decl: [meshes, list<gltf_mesh>, { call: [scene.meshes] }]
+      - decl: [mesh, gltf_mesh, { call: [meshes.get, 0] }]
+      - decl: [prim, gltf_primitive, { call: [mesh.primitive, 0] }]
+      - decl: [tangents, buffer<f32>, { call: [prim.tangents] }]
+      - if: { condition: { eq: [tangents.len, 0] }, then: [{ print: ["FAIL no TANGENT in fixture"] }, { return: 1 }] }
+      - decl: [gpu_mesh, gl_mesh, { call: [prim.to_gl_mesh] }]
+      - decl: [shader, gl_shader, { call: [gl.compile_shader, tan_vert, tan_frag] }]
+      - if: { condition: { eq: [shader, null] }, then: [{ print: ["FAIL shader"] }, { return: 1 }] }
+      - decl: [mvp, mat4, { call: [math.mat4_identity] }]
+      - decl: [frame, i32, 0]
+      - while:
+          condition: { lt: [frame, 5] }
+          body:
+            - call: [gl.clear_all, 0.0, 0.0, 0.0, 1.0]
+            - call: [shader.use]
+            - call: [shader.uniform_mat4, "uMvp", mvp]
+            - call: [gpu_mesh.draw]
+            - call: [engine.swap, win]
+            - set: [frame, { +: [frame, 1] }]
+      - call: [gpu_mesh.delete]
+      - call: [shader.delete]
+      - call: [scene.free]
+      - call: [engine.destroy_window, win]
+      - print: ["PASS gltf_tangents_render"]
+      - return: 0

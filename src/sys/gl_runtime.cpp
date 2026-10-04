@@ -98,6 +98,7 @@ struct AimlGLMesh {
     GLuint vbo_pos;
     GLuint vbo_uv;
     GLuint vbo_norm;   /* 0 if no normals */
+    GLuint vbo_tan;    /* 0 if no tangents (attrib 3) */
     GLuint ibo;
     int32_t index_count;
 };
@@ -210,6 +211,7 @@ void aiml_gl_enable_blend(void) {
 void aiml_gl_disable_blend(void)  { glDisable(GL_BLEND); }
 
 void aiml_gl_enable_cull_face(void) { glEnable(GL_CULL_FACE); }
+void aiml_gl_disable_cull_face(void) { glDisable(GL_CULL_FACE); }
 void aiml_gl_cull_back(void)   { glCullFace(GL_BACK); }
 void aiml_gl_cull_front(void)  { glCullFace(GL_FRONT); }
 
@@ -736,6 +738,21 @@ int32_t aiml_gl_mesh_index_count(void* mesh) {
     return mesh ? ((AimlGLMesh*)mesh)->index_count : 0;
 }
 
+/* spec/43_2 §3.4: attrib 3 = tangent (xyzw, 4×f32, stride 16), e.g. glTF TANGENT */
+void aiml_gl_mesh_set_tangents(void* mesh, void* tan_buf) {
+    auto* m = (AimlGLMesh*)mesh;
+    auto* t = (AimlGLRawBuf*)tan_buf;
+    if (!m || !t || !t->data || t->size <= 0) return;
+    if (m->vbo_tan) glDeleteBuffers(1, &m->vbo_tan);
+    m->vbo_tan = upload_vbo(t);
+    glBindVertexArray(m->vao);
+    glBindBuffer(GL_ARRAY_BUFFER, m->vbo_tan);
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, 16, (void*)0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+}
+
 void aiml_gl_mesh_delete(void* mesh) {
     if (!mesh) return;
     auto* m = (AimlGLMesh*)mesh;
@@ -744,5 +761,6 @@ void aiml_gl_mesh_delete(void* mesh) {
     if (m->vbo_pos)  glDeleteBuffers(1, &m->vbo_pos);
     if (m->vbo_uv)   glDeleteBuffers(1, &m->vbo_uv);
     if (m->vbo_norm) glDeleteBuffers(1, &m->vbo_norm);
+    if (m->vbo_tan)  glDeleteBuffers(1, &m->vbo_tan);
     delete m;
 }
