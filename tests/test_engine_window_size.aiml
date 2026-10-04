@@ -1,0 +1,18 @@
+# spec/44_1 §2: engine.window_size(win) → ivec2 (current window size in pixels).
+# Requires: display
+# Expected exit code: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 640, 480, "window_size"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ print: ["FAIL create_window"] }, { return: 1 }] }
+      - decl: [size, ivec2, { call: [engine.window_size, win] }]
+      - decl: [width, i32, size.x]
+      - decl: [height, i32, size.y]
+      - if: { condition: { neq: [width, { call: [engine.window_size_x, win] }] }, then: [{ print: ["FAIL x ${width}"] }, { return: 1 }] }
+      - if: { condition: { neq: [height, { call: [engine.window_size_y, win] }] }, then: [{ print: ["FAIL y ${height}"] }, { return: 1 }] }
+      - if: { condition: { lt: [width, 1] }, then: [{ print: ["FAIL width ${width}"] }, { return: 1 }] }
+      - call: [engine.destroy_window, win]
+      - print: ["PASS engine_window_size ${width}x${height}"]
+      - return: 0

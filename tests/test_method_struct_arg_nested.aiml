@@ -1,0 +1,67 @@
+# spec/16 + spec/61 §3: a value-model result of a method call passed directly as a by-value
+# argument of another method (`cross(sub(a, b), sub(c, d))`) — no intermediate local.
+# Expected exit code: 0
+- model: { name: Vec3d, fields: [[xval, f64], [yval, f64], [zval, f64]] }
+- class:
+    name: VecMath
+    members: [[calls, i32]]
+    methods:
+      - def:
+          name: make
+          access: public
+          args: [[xval, f64], [yval, f64], [zval, f64]]
+          return: Vec3d
+          body:
+            - decl: [out, Vec3d]
+            - set: [out.xval, xval]
+            - set: [out.yval, yval]
+            - set: [out.zval, zval]
+            - return: out
+      - def:
+          name: sub
+          access: public
+          args: [[lhs, Vec3d], [rhs, Vec3d]]
+          return: Vec3d
+          body:
+            - decl: [out, Vec3d]
+            - set: [out.xval, { -: [lhs.xval, rhs.xval] }]
+            - set: [out.yval, { -: [lhs.yval, rhs.yval] }]
+            - set: [out.zval, { -: [lhs.zval, rhs.zval] }]
+            - return: out
+      - def:
+          name: cross
+          access: public
+          args: [[lhs, Vec3d], [rhs, Vec3d]]
+          return: Vec3d
+          body:
+            - decl: [out, Vec3d]
+            - set: [out.xval, { -: [{ "*": [lhs.yval, rhs.zval] }, { "*": [lhs.zval, rhs.yval] }] }]
+            - set: [out.yval, { -: [{ "*": [lhs.zval, rhs.xval] }, { "*": [lhs.xval, rhs.zval] }] }]
+            - set: [out.zval, { -: [{ "*": [lhs.xval, rhs.yval] }, { "*": [lhs.yval, rhs.xval] }] }]
+            - return: out
+      - def:
+          name: dot
+          access: public
+          args: [[lhs, Vec3d], [rhs, Vec3d]]
+          return: f64
+          body:
+            - return: { +: [{ +: [{ "*": [lhs.xval, rhs.xval] }, { "*": [lhs.yval, rhs.yval] }] }, { "*": [lhs.zval, rhs.zval] }] }
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [vmath, ptr<VecMath>, { new: VecMath }]
+      - decl: [one, f64, 1.0]
+      - decl: [two, f64, 2.0]
+      - decl: [three, f64, 3.0]
+      - decl: [org, Vec3d, { call: [vmath.make, one, one, one] }]
+      - decl: [axis_x, Vec3d, { call: [vmath.make, two, one, one] }]
+      - decl: [axis_y, Vec3d, { call: [vmath.make, one, three, one] }]
+      - decl: [nrm, Vec3d, { call: [vmath.cross, { call: [vmath.sub, axis_x, org] }, { call: [vmath.sub, axis_y, org] }] }]
+      - decl: [want, f64, 2.0]
+      - if: { condition: { neq: [nrm.zval, want] }, then: [{ print: ["FAIL cross z=${nrm.zval}"] }, { return: 1 }] }
+      - decl: [len_sq, f64, { call: [vmath.dot, { call: [vmath.sub, axis_y, org] }, { call: [vmath.sub, axis_y, org] }] }]
+      - decl: [four, f64, 4.0]
+      - if: { condition: { neq: [len_sq, four] }, then: [{ print: ["FAIL dot ${len_sq}"] }, { return: 1 }] }
+      - print: ["PASS method_struct_arg_nested"]
+      - return: 0

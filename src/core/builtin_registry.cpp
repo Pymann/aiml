@@ -4246,6 +4246,9 @@ void registerBuiltins(CompilerContext& ctx) {
 
         // Store a loaded struct value to a temp alloca and return the alloca ptr
         auto storeToTmp = [](CompilerContext& ctx, llvm::Value* val, llvm::Type* ty) -> llvm::Value* {
+            // a struct-returning method call arrives as the pointer to its result temp
+            if (auto* res = llvm::dyn_cast<llvm::AllocaInst>(val))
+                if (res->getAllocatedType() == ty) return res;
             llvm::AllocaInst* a = ctx.createEntryAlloca(ty, "mtmp");
             ctx.builder.CreateStore(val, a);
             return a;
@@ -5897,15 +5900,22 @@ void registerBuiltins(CompilerContext& ctx) {
     // =======================================================================
     {
         // ── Helper: memcpy a heap AimlGltfBuffer* into a stack alloca ──────
+// spec/61 §5 (memV3): the runtime's heap AimlGltfBuffer becomes an owned buffer handle (struct
+// moved into the handle, header freed); the data block belongs to the handle.
 #define GLTF_HEAP_TO_ALLOCA(heapPtr) \
         ([&]() -> llvm::Value* { \
             auto* _p  = llvm::PointerType::get(ctx.context, 0); \
             auto* _i64= ctx.builder.getInt64Ty(); \
             auto* _bt = ctx.getLLVMType("buffer"); \
-            auto* _out= ctx.createEntryAlloca(_bt, "gltf_buf"); \
             uint64_t _sz = ctx.module.getDataLayout().getTypeAllocSize(_bt); \
+            llvm::Value* _hp = (heapPtr); \
+            llvm::Value* _out = ctx.memV3 \
+                ? static_cast<llvm::Value*>(ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_new", _p, {}), {}, "gltf_buf_h")) \
+                : static_cast<llvm::Value*>(ctx.createEntryAlloca(_bt, "gltf_buf")); \
             ctx.builder.CreateCall(ctx.getFunction("memcpy", _p, {_p, _p, _i64}), \
-                {_out, (heapPtr), ctx.builder.getInt64(_sz)}); \
+                {_out, _hp, ctx.builder.getInt64(_sz)}); \
+            if (ctx.memV3) \
+                ctx.builder.CreateCall(ctx.getFunction("free", ctx.builder.getVoidTy(), {_p}), {_hp}); \
             return _out; \
         }())
 
@@ -5962,7 +5972,9 @@ void registerBuiltins(CompilerContext& ctx) {
             auto* p  = llvm::PointerType::get(ctx.context, 0); \
             auto* vt = ctx.builder.getVoidTy(); \
             llvm::StructType* lt = ListImpl::getListStructType(ctx); \
-            llvm::Value* la = ctx.createEntryAlloca(lt, "gltf_list"); \
+            llvm::Value* la = ctx.memV3 \
+                ? static_cast<llvm::Value*>(ctx.builder.CreateCall(ctx.getFunction("aiml_list_handle_new", p, {}), {}, "gltf_list_h")) \
+                : static_cast<llvm::Value*>(ctx.createEntryAlloca(lt, "gltf_list")); \
             ListImpl::initList(ctx, la, p, 8); \
             ctx.builder.CreateCall(ctx.getFunction(cName, vt, {p, p}), {base, la}); \
             return ctx.ir_gen->wrap(la); \
@@ -7128,9 +7140,21 @@ void registerBuiltins(CompilerContext& ctx) {
             return nullptr;
         };
 
-        // engine.window_size(win) → ivec2  (return {w, h} as i32 pair)
-        // We expose as two functions here; ivec2 construction requires math types
-        // For now: engine.window_size_x / engine.window_size_y returning i32
+        // engine.window_size(win) → ivec2 (spec/44_1 §2); _x/_y/_xf/_yf are scalar shortcuts.
+        eng.builtinFuncs["window_size"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* w = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* sx = ctx.builder.CreateCall(ctx.getFunction("aiml_engine_window_size_x", i32, {p}), {w});
+            llvm::Value* sy = ctx.builder.CreateCall(ctx.getFunction("aiml_engine_window_size_y", i32, {p}), {w});
+            llvm::Value* v = llvm::UndefValue::get(ctx.getLLVMType("ivec2"));
+            v = ctx.builder.CreateInsertValue(v, sx, 0);
+            v = ctx.builder.CreateInsertValue(v, sy, 1);
+            return ctx.ir_gen->wrap(v);
+        };
         eng.builtinFuncs["window_size_x"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             auto* p = llvm::PointerType::get(ctx.context, 0);

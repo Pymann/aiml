@@ -547,6 +547,59 @@ static llvm::Value* coerceToBool(CompilerContext& ctx, llvm::Value* v) {
     return nullptr;
 }
 
+// spec/04_1 §7: { cast: [value, type] } — exactly the conversions of the table.
+IRValue* Compiler::visitCast(BinaryExpr* bin) {
+    auto* target = dynamic_cast<VariableExpr*>(bin->rhs.get());
+    if (!target) {
+        LOG_ERROR(ctx.fmtLoc(bin->sourceNode) + "cast: second operand must be a type name");
+        return nullptr;
+    }
+    IRValue* src = visitExpression(bin->lhs.get());
+    if (!src) return nullptr;
+    llvm::Value* val = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(src));
+    llvm::Type* from = val->getType();
+    const std::string& to = target->name;
+    auto& bld = ctx.builder;
+    auto unsupported = [&]() -> IRValue* {
+        std::string fromName;
+        llvm::raw_string_ostream os(fromName);
+        from->print(os);
+        LOG_ERROR(ctx.fmtLoc(bin->sourceNode) + "cast: unsupported conversion " + os.str() + " -> " + to
+                  + " (spec/04_1 §7)");
+        return nullptr;
+    };
+    bool fromBool = from->isIntegerTy(1) || from->isIntegerTy(8);   // bool is stored as i8
+    bool fromInt = from->isIntegerTy(32) || from->isIntegerTy(64);
+    if (to == "i32" || to == "i64") {
+        llvm::Type* dst = to == "i32" ? bld.getInt32Ty() : bld.getInt64Ty();
+        if (fromBool && to == "i32") return ctx.ir_gen->wrap(bld.CreateZExt(val, dst, "cast_b"));
+        if (fromInt) return ctx.ir_gen->wrap(bld.CreateSExtOrTrunc(val, dst, "cast_i"));
+        if (from->isDoubleTy() && to == "i32") {
+            llvm::Value* isNan = bld.CreateFCmpUNO(val, val, "cast_nan");
+            llvm::Value* conv = bld.CreateFPToSI(bld.CreateSelect(isNan, llvm::ConstantFP::get(from, 0.0), val), dst, "cast_f");
+            return ctx.ir_gen->wrap(conv);
+        }
+        return unsupported();
+    }
+    if (to == "f64") {
+        if (from->isIntegerTy(32)) return ctx.ir_gen->wrap(bld.CreateSIToFP(val, bld.getDoubleTy(), "cast_if"));
+        if (from->isFloatTy()) return ctx.ir_gen->wrap(bld.CreateFPExt(val, bld.getDoubleTy(), "cast_ff"));
+        if (from->isDoubleTy()) return src;
+        return unsupported();
+    }
+    if (to == "f32") {
+        if (from->isDoubleTy()) return ctx.ir_gen->wrap(bld.CreateFPTrunc(val, bld.getFloatTy(), "cast_ft"));
+        if (from->isFloatTy()) return src;
+        return unsupported();
+    }
+    if (to == "bool") {
+        if (from->isIntegerTy(32)) return ctx.ir_gen->wrap(bld.CreateICmpNE(val, bld.getInt32(0), "cast_ib"));
+        if (fromBool) return ctx.ir_gen->wrap(bld.CreateICmpNE(val, llvm::ConstantInt::get(from, 0), "cast_bb"));
+        return unsupported();
+    }
+    return unsupported();
+}
+
 IRValue* Compiler::visitBinary(BinaryExpr* bin) {
     // `{ at: [container, index] }` in an expression/interpolation context (e.g. `${ { at: [x, i] } }`)
     // is produced by the parser as a BinaryExpr op="at", not an AtExpr. Route it to element-access
@@ -563,10 +616,11 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
         bin->rhs = std::move(tmp.indices[0]);
         return r;
     }
+    if (bin->op == "cast") return visitCast(bin);
     IRValue* lhs = visitExpression(bin->lhs.get());
     IRValue* rhs = visitExpression(bin->rhs.get());
     if (!lhs || !rhs) return nullptr;
-    
+
     llvm::Type* lTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(lhs->getType()));
     llvm::Type* rTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(rhs->getType()));
     

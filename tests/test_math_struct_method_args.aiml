@@ -1,0 +1,46 @@
+# spec/43_0: a vec3/mat4 returned by a method call is a valid argument of math builtins
+# (mat4_lookat, vec3 ops) without an intermediate local.
+# Expected exit code: 0
+- class:
+    name: Cam
+    members:
+      - [center, vec3]
+    methods:
+      - def:
+          name: init
+          access: public
+          body:
+            - set: [<.center, { call: [math.vec3, 0.0, 0.0, 0.0] }]
+      - def:
+          name: eye
+          access: public
+          return: vec3
+          body:
+            - return: { call: [math.vec3, 0.0, 0.0, 5.0] }
+      - def:
+          name: variant
+          access: public
+          args: [[mode, i32]]
+          return: f32
+          body:
+            - decl: [upward, vec3, { call: [math.vec3, 0.0, 1.0, 0.0] }]
+            - decl: [origin, vec3, { call: [math.vec3, 0.0, 0.0, 0.0] }]
+            - decl: [eye_local, vec3, { call: [<.eye] }]
+            - decl: [out, mat4, { call: [math.mat4_identity] }]
+            - if: { condition: { eq: [mode, 1] }, then: [{ set: [out, { call: [math.mat4_lookat, eye_local, origin, upward] }] }] }
+            - if: { condition: { eq: [mode, 2] }, then: [{ set: [out, { call: [math.mat4_lookat, { call: [<.eye] }, origin, upward] }] }] }
+            - if: { condition: { eq: [mode, 3] }, then: [{ set: [out, { call: [math.mat4_lookat, eye_local, <.center, upward] }] }] }
+            - return: { call: [out.get, 2, 3] }
+- decl: [cam, ptr<Cam>, { new: Cam }]
+- call: [cam.init]
+- decl: [res_a, f32, { call: [cam.variant, 1] }]
+- decl: [res_b, f32, { call: [cam.variant, 2] }]
+- decl: [res_c, f32, { call: [cam.variant, 3] }]
+- decl: [want, f32, -5.0]
+- if: { condition: { neq: [res_a, want] }, then: [{ print: ["FAIL local ${res_a}"] }, { call: [sys.exit, 1] }] }
+- if: { condition: { neq: [res_b, want] }, then: [{ print: ["FAIL method-call arg ${res_b}"] }, { call: [sys.exit, 1] }] }
+- if: { condition: { neq: [res_c, want] }, then: [{ print: ["FAIL member arg ${res_c}"] }, { call: [sys.exit, 1] }] }
+- decl: [dist, f32, { call: [math.length, { call: [cam.eye] }] }]
+- decl: [five, f32, 5.0]
+- if: { condition: { neq: [dist, five] }, then: [{ print: ["FAIL length ${dist}"] }, { call: [sys.exit, 1] }] }
+- print: ["PASS math_struct_method_args"]
