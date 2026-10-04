@@ -20,12 +20,15 @@ struct AimlImgBuf { int32_t size, cap, rIdx, wIdx; char* data; };
 extern "C" {
 int64_t aiml_img_decode(void*, const void*, int32_t) { return 0; }
 int32_t aiml_img_encode_webp(void*, const void*, int32_t, int32_t, int32_t, int32_t) { return 0; }
+int32_t aiml_img_encode_png(void*, const void*, int32_t, int32_t, int32_t) { return 0; }
 int32_t aiml_img_resize_crop(void*, const void*, int32_t, int32_t, int32_t, int32_t, int32_t, int32_t, float, float) { return 0; }
 }
 
 #else // ─── native ───────────────────────────────────────────────────────────
 
 #include <stb/stb_image.h>          // declarations only (impl in gltf_runtime.cpp)
+#include <zlib.h>
+#include <vector>
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include <stb/stb_image_resize.h>   // impl owned here (no other TU defines it)
 #include <webp/decode.h>
@@ -90,6 +93,53 @@ int32_t aiml_img_encode_webp(void* dst_buf, const void* src_data, int32_t src_le
     dst->size = (int32_t)n; dst->wIdx = (int32_t)n; dst->rIdx = 0;
     WebPFree(out);
     return (int32_t)n;
+}
+
+// Encode tightly-packed RGBA (w*h*4 bytes, rows top to bottom) as a lossless 8-bit RGBA PNG into
+// dst (spec/11 encode_png): IHDR + one zlib IDAT (filter 0 per row) + IEND. Returns the byte
+// count, or 0 when sizes are invalid, src is too short, dst is too small or deflate fails.
+static void png_put32(uint8_t* p, uint32_t v) { p[0] = v >> 24; p[1] = v >> 16; p[2] = v >> 8; p[3] = v; }
+
+int32_t aiml_img_encode_png(void* dst_buf, const void* src_data, int32_t src_len,
+                            int32_t width, int32_t height) {
+    if (!dst_buf || !src_data || width <= 0 || height <= 0) return 0;
+    AimlImgBuf* dst = (AimlImgBuf*)dst_buf;
+    if (!dst->data || dst->cap <= 0) return 0;
+    const int64_t row = (int64_t)width * 4;
+    if (row * height > (int64_t)src_len) return 0;
+    const int64_t raw_len = (row + 1) * height;
+    if (raw_len > 0x7fffffff) return 0;
+    std::vector<uint8_t> raw((size_t)raw_len);
+    for (int32_t y = 0; y < height; ++y) {
+        raw[(size_t)(y * (row + 1))] = 0;
+        memcpy(&raw[(size_t)(y * (row + 1) + 1)], (const uint8_t*)src_data + y * row, (size_t)row);
+    }
+    uLongf zlen = compressBound((uLong)raw_len);
+    std::vector<uint8_t> z(zlen);
+    if (compress2(z.data(), &zlen, raw.data(), (uLong)raw_len, 6) != Z_OK) return 0;
+    const int64_t total = 8 + (12 + 13) + (12 + (int64_t)zlen) + 12;
+    if (total > (int64_t)dst->cap) return 0;
+    uint8_t* out = (uint8_t*)dst->data;
+    static const uint8_t sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+    memcpy(out, sig, 8);
+    size_t pos = 8;
+    auto chunk = [&](const char* type, const uint8_t* body, uint32_t len) {
+        png_put32(out + pos, len);
+        memcpy(out + pos + 4, type, 4);
+        if (len) memcpy(out + pos + 8, body, len);
+        uLong crc = crc32(0L, out + pos + 4, len + 4);
+        png_put32(out + pos + 8 + len, (uint32_t)crc);
+        pos += 12 + len;
+    };
+    uint8_t ihdr[13];
+    png_put32(ihdr, (uint32_t)width);
+    png_put32(ihdr + 4, (uint32_t)height);
+    ihdr[8] = 8; ihdr[9] = 6; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;   // 8-bit RGBA, no interlace
+    chunk("IHDR", ihdr, 13);
+    chunk("IDAT", z.data(), (uint32_t)zlen);
+    chunk("IEND", nullptr, 0);
+    dst->size = (int32_t)pos; dst->wIdx = (int32_t)pos; dst->rIdx = 0;
+    return (int32_t)pos;
 }
 
 // Resize RGBA `src` (sw×sh) to EXACTLY dw×dh into `dst`.  mode 0 = COVER-crop

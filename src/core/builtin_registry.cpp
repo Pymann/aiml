@@ -217,6 +217,20 @@ static bool mirrorSyncableType(CompilerContext& ctx, const std::string& tn) {
     return false;
 }
 
+// A buffer argument arrives as a loaded {size, cap, rIdx, wIdx, data} struct (local) or as a
+// pointer to it (member / handle): read data pointer and size either way.
+static void bufferArgDataLen(CompilerContext& ctx, llvm::Value* v, llvm::Value*& data, llvm::Value*& len) {
+    llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+    if (v->getType()->isStructTy()) {
+        data = ctx.builder.CreateExtractValue(v, {4}, "buf_arg_data");
+        len  = ctx.builder.CreateExtractValue(v, {0}, "buf_arg_len");
+    } else {
+        llvm::Type* bufTy = ctx.getLLVMType("buffer");
+        data = ctx.builder.CreateLoad(i8p, ctx.builder.CreateStructGEP(bufTy, v, 4), "buf_arg_data");
+        len  = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), ctx.builder.CreateStructGEP(bufTy, v, 0), "buf_arg_len");
+    }
+}
+
 void registerBuiltins(CompilerContext& ctx) {
     // spec/61 §8: builtins that hand back an OWNED string (aiml_str_dup) — the receiving local drops it.
     for (const char* fn : {"text_value"}) {
@@ -1591,14 +1605,34 @@ void registerBuiltins(CompilerContext& ctx) {
         IRValue* qV   = evalExpr(call->args[3].get());
         if (!srcV || !wV || !hV || !qV) return ctx.ir_gen->getInt32(0);
         llvm::Value* srcVal  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(srcV));
-        llvm::Value* srcData = ctx.builder.CreateExtractValue(srcVal, {4}, "src_data");
-        llvm::Value* srcLen  = ctx.builder.CreateExtractValue(srcVal, {0}, "src_len");
+        llvm::Value* srcData = nullptr; llvm::Value* srcLen = nullptr;
+        bufferArgDataLen(ctx, srcVal, srcData, srcLen);
         llvm::Value* wVal = ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(wV)), i32);
         llvm::Value* hVal = ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(hV)), i32);
         llvm::Value* qVal = ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(qV)), i32);
         llvm::Function* f = ctx.getFunction("aiml_img_encode_webp", i32, {i8p, i8p, i32, i32, i32, i32});
         llvm::Value* dstP = ctx.builder.CreateBitCast(baseAlloca, i8p);
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {dstP, srcData, srcLen, wVal, hVal, qVal}));
+    };
+
+    // buffer.encode_png(src: buffer, w: i32, h: i32) → i32 — spec/11: RGBA in `src` → PNG bytes here.
+    bufInfo.builtinMethods["encode_png"] = [](CompilerContext& ctx, llvm::Value* baseAlloca,
+        AIML::AST::CallExpr* call, std::function<IRValue*(AIML::AST::Expr*)> evalExpr) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        if (call->args.size() < 3) return ctx.ir_gen->getInt32(0);
+        IRValue* srcV = evalExpr(call->args[0].get());
+        IRValue* wV   = evalExpr(call->args[1].get());
+        IRValue* hV   = evalExpr(call->args[2].get());
+        if (!srcV || !wV || !hV) return ctx.ir_gen->getInt32(0);
+        llvm::Value* srcVal  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(srcV));
+        llvm::Value* srcData = nullptr; llvm::Value* srcLen = nullptr;
+        bufferArgDataLen(ctx, srcVal, srcData, srcLen);
+        llvm::Value* wVal = ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(wV)), i32);
+        llvm::Value* hVal = ctx.builder.CreateZExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(hV)), i32);
+        llvm::Function* f = ctx.getFunction("aiml_img_encode_png", i32, {i8p, i8p, i32, i32, i32});
+        llvm::Value* dstP = ctx.builder.CreateBitCast(baseAlloca, i8p);
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {dstP, srcData, srcLen, wVal, hVal}));
     };
 
     // buffer.resize_crop(src, sw, sh, dw, dh, mode) → i32 — resize RGBA in `src`
