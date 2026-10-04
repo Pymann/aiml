@@ -1,8 +1,8 @@
 # Chapter 43.2 — `gl` Namespace (OpenGL 3.3+ Core Profile)
 
 > **Core idea:** AIML provides a native, typed wrapper around OpenGL 3.3 Core via the `gl`
-> namespace. Window creation and context management are handled by SDL2 or GLFW via FFI
-> (Chapter 35). Shaders, buffers, textures, and draw calls are fully expressible in AIML.
+> namespace. Windows and GL contexts come from `engine.create_window` (Chapter 44.1) or from
+> GLFW/SDL2 via FFI (Chapter 35). Shaders, buffers, textures, and draw calls are fully expressible in AIML.
 > Vulkan support is described in the final section as an outlook.
 
 ---
@@ -26,8 +26,9 @@ enabling NULL semantics and lifetime tracking.
 
 ## 2. Initialization
 
-The OpenGL context is created via SDL2 or GLFW (FFI, Chapter 35).
-Afterwards, `gl.init()` must be called once to load GLAD/GLEW:
+With `engine.create_window` (Chapter 44.1) everything is set up already — **no `gl.init` call**.
+Only a window/context created yourself via FFI (GLFW or SDL2, Chapter 35) needs `gl.init()`
+once, after the context has been made current:
 
 ```aiml
 # SDL2 window + OpenGL context (via FFI, abbreviated)
@@ -42,14 +43,22 @@ Afterwards, `gl.init()` must be called once to load GLAD/GLEW:
 - decl: [win, ptr, { call: [SDL_CreateWindow, "AIML Game", 100, 100, 800, 600, 0x00000002] }]
 - decl: [ctx, ptr, { call: [SDL_GL_CreateContext, win] }]
 
-# AIML side: initialize GLAD + set base state
+# AIML side: load the GL functions + set base state
 - call: [gl.init]
 - call: [gl.viewport, 0, 0, 800, 600]
 - call: [gl.enable_depth_test]
 ```
 
-`gl.init` internally calls `gladLoadGLLoader(SDL_GL_GetProcAddress)`.
-On error (e.g. OpenGL < 3.3) → exception `gl.InitError`.
+`gl.init` loads the OpenGL functions with GLEW (`glewInit`, desktop) for the context that is
+current; under WebGL2 (WASM) no loader is needed and the call does nothing.
+
+On failure (no current context, OpenGL < 3.3, driver error) `gl.init` prints
+`[aiml_gl] glewInit failed: <reason>` to stderr and returns normally — **no exception, no status
+value**. Later `gl.*` calls are then undefined (typically a crash or no output).
+
+> **Possible future improvement:** report the failure to the program — e.g. an exception
+> `gl.InitError` or an `i32` status returned by `gl.init` — so it can exit cleanly instead of
+> failing at the next GL call.
 
 ---
 
