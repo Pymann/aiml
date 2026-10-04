@@ -166,3 +166,22 @@ extern "C" AimlBinBuffer* aiml_io_read_at(void* f, int64_t offset, int32_t n) {
     }
     return b;
 }
+
+/* ── binary write (spec/11 buffer.write_to) ──────────────────────────────── */
+
+extern "C" int32_t aiml_buffer_write_to(const void* buf, void* f) {
+    if (!buf || !f) return -1;
+    const AimlBinBuffer* view = (const AimlBinBuffer*)buf;
+    if (view->size < 0 || (view->size > 0 && !view->data)) return -1;
+    size_t want = (size_t)view->size;
+    size_t done = want ? fwrite(view->data, 1, want, (FILE*)f) : 0;
+    if (done != want) return -1;
+    if (fflush((FILE*)f) != 0) return -1;
+    return view->size;
+}
+
+/* ── standard streams (spec/23: the process's own stdin/stdout/stderr) ───────── */
+
+extern "C" void* aiml_io_std_stream(int32_t fd) {
+    return fd == 0 ? (void*)stdin : fd == 1 ? (void*)stdout : (void*)stderr;
+}

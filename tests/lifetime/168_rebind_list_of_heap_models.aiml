@@ -1,0 +1,47 @@
+# static-check: off
+# spec/61 §5.5/§6.1: re-binding a list<Model> local (Model with heap fields) to another list releases
+# the old list's elements by their class (their strings/lists are freed), also via idx .field on a
+# list<Model> container field. Valgrind-checked in the shaper acceptance (no per-iteration loss).
+- model: { name: Shape, fields: [[name, string], [pts, list<f64>]] }
+- model: { name: Holder, fields: [[shapes, list<Shape>]] }
+- def:
+    name: make
+    args: [[count, i32]]
+    return: { type: list<Shape>, lifetime: producer }
+    body:
+      - decl: [out, list<Shape>]
+      - decl: [cur, i32, 0]
+      - while:
+          condition: { lt: [cur, count] }
+          body:
+            - decl: [shp, Shape]
+            - set: [shp.name, "s${cur}"]
+            - decl: [val, f64, cur]
+            - call: [shp.pts.push, val]
+            - call: [out.push, shp]
+            - set: [cur, { +: [cur, 1] }]
+      - return: out
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: { lt: [counter, 40] }
+          body:
+            - decl: [acc, list<Shape>, { call: [make, 3] }]
+            - decl: [next, list<Shape>, { call: [make, 2] }]
+            - set: [acc, next]
+            - if: { condition: { neq: [acc.len, 2] }, then: [{ print: ["FAIL rebind"] }, { return: 1 }] }
+            - decl: [holders, list<Holder>]
+            - decl: [hld, Holder]
+            - call: [holders.push, hld]
+            - decl: [first, list<Shape>, { call: [make, 4] }]
+            - idx: [holders, 0, .shapes, first]
+            - decl: [second, list<Shape>, { call: [make, 1] }]
+            - idx: [holders, 0, .shapes, second]
+            - decl: [hshapes, list<Shape>, { at: [holders, 0, .shapes] }]
+            - if: { condition: { neq: [hshapes.len, 1] }, then: [{ print: ["FAIL idx field"] }, { return: 1 }] }
+            - set: [counter, { +: [counter, 1] }]
+      - print: ["PASS 168 rebind_list_of_heap_models"]
+      - return: 0

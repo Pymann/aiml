@@ -1,0 +1,91 @@
+# spec/13 §6: assigning an integer to a float slot (and f32 <-> f64) converts the VALUE on every
+# store path: decl init, local set, member set (free fn, method this), list element .field idx,
+# model field default, function argument and return.
+# Expected exit code: 0
+- model: { name: Sample, fields: [[dval, f64], [fval, f32], [count, i32]] }
+- class:
+    name: Holder
+    members: [[stored, f64]]
+    methods:
+      - def:
+          name: put
+          access: public
+          args: [[num, i32]]
+          body:
+            - set: [<.stored, num]
+      - def:
+          name: make
+          access: public
+          args: [[num, i32]]
+          return: Sample
+          body:
+            - decl: [out, Sample]
+            - set: [out.dval, { +: [num, 1] }]
+            - set: [out.fval, num]
+            - return: out
+      - def:
+          name: value
+          access: public
+          return: f64
+          body:
+            - return: <.stored
+- def:
+    name: as_f64
+    args: [[val, f64]]
+    return: f64
+    body:
+      - return: val
+- def:
+    name: int_ret
+    args: [[num, i32]]
+    return: f64
+    body:
+      - return: num
+- def:
+    name: expect
+    args: [[got, f64], [want, f64], [what, string]]
+    body:
+      - if:
+          condition: { neq: [got, want] }
+          then:
+            - print: ["FAIL ${what}: ${got} != ${want}"]
+            - call: [sys.exit, 1]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [num, i32, 99]
+      - decl: [big, i64, 5000000000]
+      - decl: [want, f64, 99]
+      - call: [expect, want, want, "decl from int literal"]
+      - decl: [from_var, f64, num]
+      - call: [expect, from_var, want, "decl from i32 var"]
+      - decl: [loc, f64]
+      - set: [loc, num]
+      - call: [expect, loc, want, "set local"]
+      - decl: [from_big, f64, big]
+      - decl: [want_big, f64, 5000000000]
+      - call: [expect, from_big, want_big, "decl from i64 var"]
+      - decl: [smp, Sample]
+      - set: [smp.dval, num]
+      - call: [expect, smp.dval, want, "set member"]
+      - decl: [narrow, f32, from_var]
+      - decl: [wide, f64, narrow]
+      - call: [expect, wide, want, "f64 -> f32 -> f64"]
+      - decl: [holder, Holder]
+      - call: [holder.put, num]
+      - call: [expect, { call: [holder.value] }, want, "method this-store"]
+      - decl: [made, Sample, { call: [holder.make, 98] }]
+      - call: [expect, made.dval, want, "method member-store of int expr"]
+      - decl: [made_f, f64, made.fval]
+      - decl: [want98, f64, 98]
+      - call: [expect, made_f, want98, "f32 member from int"]
+      - decl: [rows, list<Sample>]
+      - call: [rows.push, smp]
+      - idx: [rows, 0, .dval, num]
+      - decl: [row_d, f64, { at: [rows, 0, .dval] }]
+      - call: [expect, row_d, want, "idx .field"]
+      - call: [expect, { call: [as_f64, num] }, want, "int argument to f64 param"]
+      - call: [expect, { call: [int_ret, num] }, want, "int return from f64 fn"]
+      - print: ["PASS numeric_store_widening"]
+      - return: 0

@@ -62,3 +62,20 @@ To access the value pointed to by a pointer (e.g. `any` cast to `ptr<T>`), use t
 - decl: [val, i32]
 - set: [val, { '?': [p] }] # Reads value from pointer p
 ```
+
+## 6. Numeric Conversion on Assignment
+
+Whenever a numeric value is stored into a numeric slot of a different type — `decl` initializer,
+`set` of a local or a model/class field (including `<.field` and nested paths), `idx` of a list
+element or element field, a function or method argument, and a `return` value — the compiler
+converts the **value**, never the bit pattern:
+
+| Source → target | Conversion |
+|---|---|
+| integer → `f32`/`f64` | signed integer to floating point (`bool` → `0.0`/`1.0`) |
+| `f32` ↔ `f64` | floating-point extend / round to nearest |
+| integer → wider integer | sign extension (`bool`: zero extension) |
+| integer → narrower integer | truncation |
+
+Floating point → integer is not an implicit argument conversion; use an explicit conversion
+where one is provided. Arithmetic operands are not covered by this section.

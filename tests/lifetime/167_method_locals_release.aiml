@@ -1,0 +1,108 @@
+# static-check: off
+# spec/61 §8/§9.1: locals of a METHOD are released on every exit — a yaml_doc box, a string from a
+# runtime call, a container bound from a producer METHOD, a container local re-bound to a producer
+# result — also when the method returns a value-model member (`return: <.field`). Leak-checked under
+# valgrind (shaper acceptance): no definite/indirect loss per iteration.
+- model: { name: Pair, fields: [[label, string], [values, list<f64>]] }
+- model: { name: Vec2d, fields: [[xval, f64], [yval, f64]] }
+- class:
+    name: Worker
+    members: [[state, Pair]]
+    methods:
+      - def:
+          name: numbers
+          access: public
+          args: [[count, i32]]
+          return: { type: list<f64>, lifetime: producer }
+          body:
+            - decl: [out, list<f64>]
+            - decl: [cur, i32, 0]
+            - while:
+                condition: { lt: [cur, count] }
+                body:
+                  - decl: [val, f64, cur]
+                  - call: [out.push, val]
+                  - set: [cur, { +: [cur, 1] }]
+            - return: out
+      - def:
+          name: bound_from_method
+          access: public
+          return: i32
+          body:
+            - decl: [vals, list<f64>, { call: [<.numbers, 3] }]
+            - return: vals.len
+      - def:
+          name: rebound_local
+          access: public
+          return: i32
+          body:
+            - decl: [seed, list<f64>]
+            - decl: [vals, list<f64>, seed]
+            - if: { condition: { eq: [seed.len, 0] }, then: [{ set: [vals, { call: [<.numbers, 4] }] }] }
+            - return: vals.len
+      - def:
+          name: pod_from_producer
+          access: public
+          return: Vec2d
+          body:
+            - decl: [vals, list<f64>, { call: [<.numbers, 2] }]
+            - decl: [out, Vec2d]
+            - set: [out.xval, { at: [vals, 0] }]
+            - set: [out.yval, { at: [vals, 1] }]
+            - return: out
+      - def:
+          name: param_rebind
+          access: public
+          args: [[given, list<f64>]]
+          return: i32
+          body:
+            - decl: [use, list<f64>, given]
+            - if: { condition: { eq: [given.len, 0] }, then: [{ set: [use, { call: [<.numbers, 5] }] }] }
+            - decl: [total, i32, use.len]
+            - return: total
+      - def:
+          name: param_rebind_void
+          access: public
+          args: [[given, list<f64>], [sink, list<i32>]]
+          body:
+            - decl: [use, list<f64>, given]
+            - if: { condition: { eq: [given.len, 0] }, then: [{ set: [use, { call: [<.numbers, 6] }] }] }
+            - call: [sink.push, use.len]
+      - def:
+          name: parse_and_return_member
+          access: public
+          args: [[source, string]]
+          return: { type: Pair, lifetime: producer }
+          body:
+            - decl: [fresh, Pair]
+            - set: [<.state, fresh]
+            - decl: [one, f64, 1]
+            - call: [<.state.values.push, one]
+            - decl: [document, ptr<yaml_doc>, { call: [yaml.parse, source] }]
+            - decl: [err, string, { call: [yaml.error, document] }]
+            - if: { condition: { neq: [err, ""] }, then: [{ return: <.state }] }
+            - set: [<.state.label, { call: [yaml.key, { call: [yaml.root, document] }, 0] }]
+            - return: <.state
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: { lt: [counter, 30] }
+          body:
+            - decl: [worker, Worker]
+            - if: { condition: { neq: [{ call: [worker.bound_from_method] }, 3] }, then: [{ print: ["FAIL bound"] }, { return: 1 }] }
+            - if: { condition: { neq: [{ call: [worker.rebound_local] }, 4] }, then: [{ print: ["FAIL rebound"] }, { return: 1 }] }
+            - decl: [pod, Vec2d, { call: [worker.pod_from_producer] }]
+            - decl: [empty, list<f64>]
+            - if: { condition: { neq: [{ call: [worker.param_rebind, empty] }, 5] }, then: [{ print: ["FAIL param_rebind"] }, { return: 1 }] }
+            - decl: [sink, list<i32>]
+            - call: [worker.param_rebind_void, empty, sink]
+            - if: { condition: { neq: [{ at: [sink, 0] }, 6] }, then: [{ print: ["FAIL param_rebind_void"] }, { return: 1 }] }
+            - decl: [good, Pair, { call: [worker.parse_and_return_member, "name: Ada"] }]
+            - if: { condition: { neq: [good.label, "name"] }, then: [{ print: ["FAIL label ${good.label}"] }, { return: 1 }] }
+            - decl: [bad, Pair, { call: [worker.parse_and_return_member, "a: [unclosed"] }]
+            - set: [counter, { +: [counter, 1] }]
+      - print: ["PASS 167 method_locals_release"]
+      - return: 0

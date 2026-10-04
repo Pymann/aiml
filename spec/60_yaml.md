@@ -1,4 +1,4 @@
-# 60 - YAML Documents [PROPOSAL]
+# 60 - YAML Documents
 
 ## 1. Goal
 
@@ -12,13 +12,18 @@ application schema.
 
 ## 2. Types
 
-`yaml_doc` and `yaml_node` are opaque language types.  They may be stored only
-behind pointers:
+`yaml_doc` and `yaml_node` are opaque language types.  A document is owned through
+`ptr<yaml_doc>`; a node is a non-owning view into its document and is bound as
+`ref<yaml_node>` (spec/61 §2.1 borrowed view, §5.4):
 
 ```yaml
 - decl: [doc, ptr<yaml_doc>]
-- decl: [node, ptr<yaml_node>]
+- decl: [node, ref<yaml_node>]
 ```
+
+Binding `yaml.get` to `ptr<yaml_node>` is a compile error (spec/61 §5.4: a read yields a
+borrow, never a second owner).  `yaml.root`, `yaml.item` and `yaml.value` still accept a
+`ptr<yaml_node>` binding for existing code; that form is deprecated.
 
 Nodes have one of these kinds:
 
@@ -65,7 +70,7 @@ non-owning view into its document and is never released on its own.
 ## 4. Root And Node Inspection
 
 ```yaml
-- decl: [root, ptr<yaml_node>, { call: [yaml.root, doc] }]
+- decl: [root, ref<yaml_node>, { call: [yaml.root, doc] }]
 - decl: [kind, i32, { call: [yaml.kind, root] }]
 - decl: [count, i32, { call: [yaml.size, root] }]
 - decl: [text, string, { call: [yaml.scalar, root] }]
@@ -97,7 +102,7 @@ nodes.
 ## 5. Sequence Access
 
 ```yaml
-- decl: [child, ptr<yaml_node>, { call: [yaml.item, node, index] }]
+- decl: [child, ref<yaml_node>, { call: [yaml.item, node, index] }]
 ```
 
 `yaml.item` returns the zero-based item of a sequence.  Negative or out-of-range
@@ -105,8 +110,8 @@ indexes, and calls on non-sequence nodes, return null.
 
 ```yaml
 - decl: [doc, ptr<yaml_doc>, { call: [yaml.parse, "[one, two]"] }]
-- decl: [root, ptr<yaml_node>, { call: [yaml.root, doc] }]
-- decl: [second, ptr<yaml_node>, { call: [yaml.item, root, 1] }]
+- decl: [root, ref<yaml_node>, { call: [yaml.root, doc] }]
+- decl: [second, ref<yaml_node>, { call: [yaml.item, root, 1] }]
 - print: [{ call: [yaml.scalar, second] }]  # two
 - call: [yaml.free, doc]
 ```
@@ -115,8 +120,8 @@ indexes, and calls on non-sequence nodes, return null.
 
 ```yaml
 - decl: [entry_key, string, { call: [yaml.key, node, index] }]
-- decl: [entry_value, ptr<yaml_node>, { call: [yaml.value, node, index] }]
-- decl: [named_value, ptr<yaml_node>, { call: [yaml.get, node, entry_key] }]
+- decl: [entry_value, ref<yaml_node>, { call: [yaml.value, node, index] }]
+- decl: [named_value, ref<yaml_node>, { call: [yaml.get, node, entry_key] }]
 ```
 
 `yaml.key` and `yaml.value` access the same zero-based mapping entry.  Invalid
@@ -132,8 +137,8 @@ Mapping iteration is deterministic for one parsed document: `key(node, i)` and
 
 ```yaml
 - decl: [doc, ptr<yaml_doc>, { call: [yaml.parse, "name: Ada\nrank: 7"] }]
-- decl: [root, ptr<yaml_node>, { call: [yaml.root, doc] }]
-- decl: [name_node, ptr<yaml_node>, { call: [yaml.get, root, "name"] }]
+- decl: [root, ref<yaml_node>, { call: [yaml.root, doc] }]
+- decl: [name_node, ref<yaml_node>, { call: [yaml.get, root, "name"] }]
 - print: [{ call: [yaml.scalar, name_node] }]  # Ada
 - call: [yaml.free, doc]
 ```
@@ -174,5 +179,5 @@ on these primitive document operations.
 
 ## 10. Status
 
-This is a language-library proposal.  It defines AIML-visible YAML types and
-namespace behavior; no implementation is implied by this chapter.
+Implemented (`src/sys/yaml_runtime.cpp`); tests `tests/test_yaml_documents.aiml` and
+`tests/lifetime/163_yaml_doc_scope_release.aiml`.

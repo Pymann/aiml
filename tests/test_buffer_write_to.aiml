@@ -1,0 +1,48 @@
+# spec/11: buffer.write_to(f) writes [0, len) binary-safe; -1 on null handle or short write.
+# Expected exit code: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [target, string, "/tmp/aiml_test_buffer_write_to.bin"]
+      - decl: [bytes, buffer]
+      - call: [bytes.alloc, 16]
+      - decl: [zero_byte, u8, 0]
+      - decl: [magic, u32, 0x46546C67]
+      - decl: [half, f32, 0.5]
+      - call: [bytes.write, zero_byte, u8]
+      - call: [bytes.write, magic, u32]
+      - call: [bytes.write, half, f32]
+      - call: [bytes.write, zero_byte, u8]
+      - if: { condition: { neq: [bytes.len, 10] }, then: [{ print: ["FAIL len ${bytes.len}"] }, { return: 1 }] }
+
+      - decl: [out_file, file_handle, { call: [io.open, target, "wb"] }]
+      - decl: [written, i32, { call: [bytes.write_to, out_file] }]
+      - call: [io.close, out_file]
+      - if: { condition: { neq: [written, 10] }, then: [{ print: ["FAIL written ${written}"] }, { return: 1 }] }
+      - decl: [file_bytes, i64, { call: [io.file_size, target] }]
+      - if: { condition: { neq: [file_bytes, 10] }, then: [{ print: ["FAIL size ${file_bytes}"] }, { return: 1 }] }
+
+      - decl: [in_file, file_handle, { call: [io.open_binary, target] }]
+      - decl: [first, i32, { call: [io.read_u8, in_file] }]
+      - decl: [got_magic, i32, { call: [io.read_i32_le, in_file] }]
+      - decl: [got_half, f32, { call: [io.read_f32_le, in_file] }]
+      - decl: [last, i32, { call: [io.read_u8, in_file] }]
+      - call: [io.close, in_file]
+      - if: { condition: { neq: [first, 0] }, then: [{ print: ["FAIL first"] }, { return: 1 }] }
+      - if: { condition: { neq: [got_magic, 0x46546C67] }, then: [{ print: ["FAIL magic ${got_magic}"] }, { return: 1 }] }
+      - if: { condition: { neq: [got_half, half] }, then: [{ print: ["FAIL half"] }, { return: 1 }] }
+      - if: { condition: { neq: [last, 0] }, then: [{ print: ["FAIL last"] }, { return: 1 }] }
+
+      - decl: [no_file, file_handle, { call: [io.open, "/nonexistent_dir_aiml/x.bin", "wb"] }]
+      - decl: [null_res, i32, { call: [bytes.write_to, no_file] }]
+      - if: { condition: { neq: [null_res, -1] }, then: [{ print: ["FAIL null handle ${null_res}"] }, { return: 1 }] }
+
+      - decl: [full_file, file_handle, { call: [io.open, "/dev/full", "wb"] }]
+      - decl: [full_res, i32, { call: [bytes.write_to, full_file] }]
+      - call: [io.close, full_file]
+      - if: { condition: { neq: [full_res, -1] }, then: [{ print: ["FAIL short write ${full_res}"] }, { return: 1 }] }
+
+      - call: [io.remove, target]
+      - print: ["PASS buffer_write_to"]
+      - return: 0

@@ -702,6 +702,11 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             // Float promotion: f32 → f64
             if (expectedTy->isDoubleTy() && actualTy->isFloatTy())
                 argVals[i] = ctx.ir_gen->wrap(ctx.builder.CreateFPExt(actualVal, expectedTy, "arg_fpext"));
+            // spec/13 §6: an integer argument for a float parameter converts its value
+            if (expectedTy->isFloatingPointTy() && actualTy->isIntegerTy() && !actualTy->isIntegerTy(1))
+                argVals[i] = ctx.ir_gen->wrap(ctx.builder.CreateSIToFP(actualVal, expectedTy, "arg_i2f"));
+            if (expectedTy->isFloatTy() && actualTy->isDoubleTy())
+                argVals[i] = ctx.ir_gen->wrap(ctx.builder.CreateFPTrunc(actualVal, expectedTy, "arg_fptrunc"));
 
             // Hard type-mismatch guard: after all coercions, a numeric parameter
             // (i32/enum/bool/float) that receives a pointer value (e.g. a string
@@ -1587,6 +1592,9 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              // duplicate a unique owner (double-free). Reject at compile time (test_ptr_call/member_
              // push_into_value_list_error, test_list_model_nested_get_push_repro). The check catches
              // Call/Member/At exprs the VariableExpr-only move check missed.
+             // A method call returning the element model BY VALUE comes back as its sret slot
+             // pointer; it is a fresh value (§5.4 push = copy/move in), loaded below.
+             bool valueCallResult = false;
              if (!call->args.empty() && ctx.classes.count(listElemName)
                  && !ctx.classes[listElemName].isBuiltin && ctx.classes[listElemName].type
                  && !ctx.isRefcountModel(listElemName)) {
@@ -1610,8 +1618,12 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                                      if (ctx.classes.count(el) && !ctx.isRefcountModel(el)) argTy = "ptr<" + el + ">";
                                  }
                              }
+                         } else {
+                             auto sig = resolveCallSignature(fn);
+                             if (sig.valid) argTy = sig.returnType;
                          }
                      }
+                     valueCallResult = (argTy == listElemName);
                  } else if (auto* ve = dynamic_cast<VariableExpr*>(ax)) {
                      std::string nm = ve->name;
                      size_t dot = nm.find('.');
@@ -1798,6 +1810,9 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              const bool interfaceValue = aggregateValue &&
                  llvm::cast<llvm::StructType>(llvmListElemType)->hasName() &&
                  llvm::cast<llvm::StructType>(llvmListElemType)->getName().startswith("AimlFatPtr_");
+             if (aggregateValue && !interfaceValue && valueCallResult && pushVal
+                 && pushVal->getType()->isPointerTy())
+                 pushVal = ctx.builder.CreateLoad(llvmListElemType, pushVal, "push_callval");
              if (aggregateValue && !interfaceValue && pushVal && pushVal->getType()->isPointerTy()) {
                  LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
                      "list<" + listElemName + ">.push() got a pointer instead of a value: "

@@ -1,0 +1,47 @@
+# static-check: off
+# spec/61 §8: returning a value-model MEMBER by value (`return: <.field`) shares its string/container
+# fields with the caller (incref); the object keeps its own reference. Both drop independently —
+# no double free, no leak. Also via a producer and a plain return type, in a loop.
+- model: { name: Payload, fields: [[label, string], [items, list<i32>], [names, list<string>]] }
+- class:
+    name: Holder
+    members: [[data, Payload]]
+    methods:
+      - def:
+          name: fill
+          access: public
+          args: [[num, i32]]
+          body:
+            - set: [<.data.label, "label-${num}"]
+            - call: [<.data.items.push, num]
+            - call: [<.data.names.push, "name-${num}"]
+      - def:
+          name: get_plain
+          access: public
+          return: Payload
+          body:
+            - return: <.data
+      - def:
+          name: get_producer
+          access: public
+          return: { type: Payload, lifetime: producer }
+          body:
+            - return: <.data
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [counter, i32, 0]
+      - while:
+          condition: { lt: [counter, 50] }
+          body:
+            - decl: [holder, Holder]
+            - call: [holder.fill, counter]
+            - decl: [first, Payload, { call: [holder.get_plain] }]
+            - decl: [second, Payload, { call: [holder.get_producer] }]
+            - call: [holder.fill, 1]
+            - if: { condition: { neq: [first.items.len, 2] }, then: [{ print: ["FAIL shared items ${first.items.len}"] }, { return: 1 }] }
+            - if: { condition: { neq: [second.label, "label-${counter}"] }, then: [{ print: ["FAIL label ${second.label}"] }, { return: 1 }] }
+            - set: [counter, { +: [counter, 1] }]
+      - print: ["PASS 164 return_member_value_model"]
+      - return: 0

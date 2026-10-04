@@ -1,0 +1,87 @@
+# static-check: off
+# spec/61 §5.4/§8: pushing a value-model CALL RESULT (free function or method, scalar-only or
+# heap-field model) into list<Model> stores the value; the result is a fresh owned value (move in).
+# Expected exit code: 0
+- model: { name: PointRec, fields: [[xval, f64], [yval, f64]] }
+- model: { name: Tag, fields: [[label, string], [ids, list<i32>]] }
+- class:
+    name: Maker
+    members: [[base, i32]]
+    methods:
+      - def:
+          name: point
+          access: public
+          args: [[num, i32]]
+          return: PointRec
+          body:
+            - decl: [out, PointRec]
+            - set: [out.xval, { +: [<.base, num] }]
+            - return: out
+      - def:
+          name: tag
+          access: public
+          args: [[num, i32]]
+          return: { type: Tag, lifetime: producer }
+          body:
+            - decl: [out, Tag]
+            - set: [out.label, "t${num}"]
+            - call: [out.ids.push, num]
+            - return: out
+      - def:
+          name: plain_tag
+          access: public
+          args: [[num, i32]]
+          return: Tag
+          body:
+            - decl: [out, Tag]
+            - set: [out.label, "p${num}"]
+            - call: [out.ids.push, num]
+            - return: out
+      - def:
+          name: fill
+          access: public
+          args: [[pts, list<PointRec>], [tags, list<Tag>], [num, i32]]
+          body:
+            - call: [pts.push, { call: [<.point, num] }]
+            - call: [tags.push, { call: [<.tag, num] }]
+            - call: [tags.push, { call: [<.plain_tag, num] }]
+- def:
+    name: free_point
+    args: [[num, i32]]
+    return: PointRec
+    body:
+      - decl: [out, PointRec]
+      - set: [out.yval, num]
+      - return: out
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [maker, Maker]
+      - decl: [pts, list<PointRec>]
+      - decl: [tags, list<Tag>]
+      - decl: [cnt, i32, 0]
+      - while:
+          condition: { lt: [cnt, 100] }
+          body:
+            - call: [pts.push, { call: [maker.point, cnt] }]
+            - call: [pts.push, { call: [free_point, cnt] }]
+            - call: [tags.push, { call: [maker.tag, cnt] }]
+            - call: [tags.push, { call: [maker.plain_tag, cnt] }]
+            - call: [maker.fill, pts, tags, cnt]
+            - set: [cnt, { +: [cnt, 1] }]
+      - if: { condition: { neq: [pts.len, 300] }, then: [{ print: ["FAIL pts ${pts.len}"] }, { return: 1 }] }
+      - if: { condition: { neq: [tags.len, 400] }, then: [{ print: ["FAIL tags ${tags.len}"] }, { return: 1 }] }
+      - decl: [want, f64, 99]
+      - decl: [last, PointRec, { at: [pts, 297] }]
+      - if: { condition: { neq: [last.xval, want] }, then: [{ print: ["FAIL method point ${last.xval} ${last.yval}"] }, { return: 1 }] }
+      - decl: [mid, PointRec, { at: [pts, 298] }]
+      - if: { condition: { neq: [mid.yval, want] }, then: [{ print: ["FAIL free point"] }, { return: 1 }] }
+      - decl: [ltag, ref<Tag>, { at: [tags, 398] }]
+      - if: { condition: { neq: [ltag.label, "t99"] }, then: [{ print: ["FAIL tag ${ltag.label}"] }, { return: 1 }] }
+      - decl: [ptag, ref<Tag>, { at: [tags, 399] }]
+      - if: { condition: { neq: [ptag.label, "p99"] }, then: [{ print: ["FAIL plain tag ${ptag.label}"] }, { return: 1 }] }
+      - decl: [mtag, ref<Tag>, { at: [tags, 397] }]
+      - if: { condition: { neq: [mtag.label, "p99"] }, then: [{ print: ["FAIL plain method tag ${mtag.label}"] }, { return: 1 }] }
+      - print: ["PASS push_value_model_call_result"]
+      - return: 0

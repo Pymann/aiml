@@ -68,6 +68,7 @@
 | `seek` | `buffer.seek(pos: i32)` | Sets both readIndex and writeIndex to `pos` (byte offset). |
 | `zero` | `buffer.zero()` | `memset(data, 0, capacity)` + sets size and writeIndex to capacity. |
 | `len` | `buffer.len → i32` | Returns current size (number of bytes written). Property access, no `call:` needed. |
+| `write_to` | `buffer.write_to(f: file_handle) → i32` | Writes bytes `[0, len)` unchanged (binary-safe, `0x00` included) to `f` at its current position and flushes. Returns `len` on success, `-1` if `f` is null, the write is short, or the flush fails. Does not close `f`; the buffer is unchanged. |
 | `ws_send` | `buffer.ws_send(conn: ws_handle) → i32` | Send the written bytes (`wIdx`) as one WebSocket binary frame. See chapter 32_4 §5.1. |
 | `ws_recv` | `buffer.ws_recv(conn: ws_handle) → i32` | Receive the next WebSocket frame into this buffer (updates size/wIdx, resets rIdx). See chapter 32_4 §5.1. |
 | `decode_image` | `buffer.decode_image(src: buffer) → i64` | Decode PNG/JPG/WebP bytes in `src` into this buffer as tightly-packed RGBA. Returns `(width << 32) | height`, or `0` on failure. Native only (WASM decodes in-browser). |
