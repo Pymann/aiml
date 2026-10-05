@@ -24,7 +24,8 @@ bool isKnownBinaryOperator(const std::string& op) {
     static const std::unordered_set<std::string> kBinaryOps = {
         "+", "-", "*", "/", "%", "add", "sub", "mul", "div",
         "eq", "neq", "lt", "gt", "le", "lte", "ge", "gte", "peq", "pneq",
-        "and", "&&", "or", "||"
+        "and", "&&", "or", "||",
+        "band", "bor", "bxor", "shl", "shr", "ushr"
     };
     return kBinaryOps.count(op) > 0;
 }
