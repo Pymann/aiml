@@ -104,3 +104,17 @@ extern "C" void process_kill(void* handlePtr) {
     ProcessHandle* handle = (ProcessHandle*)handlePtr;
     kill(handle->pid, SIGKILL);
 }
+
+// spec/23: absolute path of the running executable, "" when unknown; runtime-owned.
+extern "C" const char* aiml_sys_exe_path(void) {
+    static char path[4096] = {0};
+    static bool done = false;
+    if (!done) {
+        done = true;
+#if defined(__linux__)
+        ssize_t n = readlink("/proc/self/exe", path, sizeof(path) - 1);
+        path[n > 0 ? n : 0] = '\0';
+#endif
+    }
+    return path;
+}

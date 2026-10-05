@@ -1,9 +1,9 @@
 # 43.5 - Rendering interfaces for the ShapeML 2 pipeline
 
 Status: implementation contract, 2026-10-05. No new AIML grammar is required.
-Implemented (desktop GL, V1): §3, §4, §6, §7, §8, §9 `gl.read_rgba8`; tests
-`test_gltf_texture_info`, `test_gl_studio_formats`. Open: §5 cubemaps and §9 timer
-queries (V2/V6); web/Android paths of §8 report `wait_events` as unsupported.
+Implemented (desktop GL): §3, §4, §5, §6, §7, §8, §9 `gl.read_rgba8`; tests
+`test_gltf_texture_info`, `test_gl_studio_formats`, `test_gl_cubemap`. Open: §9 timer
+queries (V6); web/Android paths of §8 report `wait_events` as unsupported.
 
 Consumers: [ShapeML 2](../../shaper/doc/spec/visual_pipeline_v2.md),
 [glbview studio renderer](../../glbview/doc/spec/studio_renderer_v2.md).

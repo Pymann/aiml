@@ -69,6 +69,11 @@
 - decl: [first_arg, string]
 - set: [first_arg, { call: [sys.get_arg, 1] }]
 
+# Absolute path of the running executable (Linux: /proc/self/exe), "" when unknown
+# (web, JIT runs report the compiler binary). Runtime-owned like sys.get_arg — for locating
+# assets installed next to the program, independent of the working directory.
+- decl: [exe, string, { call: [sys.exe_path] }]
+
 # sys.arg_dump
 # Parses CLI flags directly into an existing struct/model variable.
 # Signature: sys.arg_dump(target: ModelOrStruct) -> void

@@ -1196,3 +1196,111 @@ void* aiml_gl_read_rgba8(int32_t x, int32_t y, int32_t w, int32_t h) {
     out->data = px; out->size = (int32_t)n; out->capacity = (int32_t)n; out->write_idx = (int32_t)n;
     return out;
 }
+
+/* ── spec/43_5 §5: cubemaps (RGBA16F, Class 4) ──────────────────────────── */
+
+#ifndef GL_TEXTURE_CUBE_MAP_SEAMLESS
+#  define GL_TEXTURE_CUBE_MAP_SEAMLESS 0x884F
+#endif
+
+struct AimlGLCubemap {
+    GLuint id;
+    int    size;
+    int    levels;
+};
+
+static GLenum cube_face_target(int32_t face) {
+    if (face >= 0 && face < 6) return GL_TEXTURE_CUBE_MAP_POSITIVE_X + (GLenum)face;
+    if (face >= (int32_t)GL_TEXTURE_CUBE_MAP_POSITIVE_X && face <= (int32_t)GL_TEXTURE_CUBE_MAP_NEGATIVE_Z)
+        return (GLenum)face;
+    return 0;
+}
+
+void* aiml_gl_create_cubemap(int32_t size, int32_t levels) {
+    GLint max_cube = 0;
+    glGetIntegerv(GL_MAX_CUBE_MAP_TEXTURE_SIZE, &max_cube);
+    if (size <= 0 || size > max_cube || levels < 1 || levels > mip_levels(size, size)) {
+        fprintf(stderr, "[aiml_gl] create_cubemap: invalid size %d / levels %d\n", size, levels);
+        return nullptr;
+    }
+    GLint prev = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_CUBE_MAP, &prev);
+    gl_clear_errors();
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, id);
+    std::vector<float> zeros((size_t)size * size * 4, 0.0f);
+    for (int lvl = 0; lvl < levels; ++lvl) {
+        int dim = size >> lvl; if (dim < 1) dim = 1;
+        for (int f = 0; f < 6; ++f)
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, lvl, GL_RGBA16F, dim, dim, 0, GL_RGBA, GL_FLOAT, zeros.data());
+    }
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, levels > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_BASE_LEVEL, 0);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAX_LEVEL, levels - 1);
+#ifndef __EMSCRIPTEN__
+    glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+#endif
+    GLenum err = glGetError();
+    glBindTexture(GL_TEXTURE_CUBE_MAP, (GLuint)prev);
+    if (err != GL_NO_ERROR) {
+        fprintf(stderr, "[aiml_gl] create_cubemap failed: GL error 0x%x\n", err);
+        glDeleteTextures(1, &id);
+        return nullptr;
+    }
+    AimlGLCubemap* c = new AimlGLCubemap();
+    c->id = id; c->size = size; c->levels = levels;
+    return c;
+}
+
+int32_t aiml_gl_cubemap_upload_face(void* cube, int32_t face, int32_t level, void* px_buf) {
+    auto* c = (AimlGLCubemap*)cube;
+    GLenum target = cube_face_target(face);
+    if (!c || !target || level < 0 || level >= c->levels) {
+        fprintf(stderr, "[aiml_gl] upload_face: invalid face %d / level %d\n", face, level);
+        return 0;
+    }
+    int dim = c->size >> level; if (dim < 1) dim = 1;
+    auto* b = (AimlGLRawBuf*)px_buf;
+    int64_t need = (int64_t)dim * dim * 4 * (int64_t)sizeof(float);
+    if (!b || !b->data || (int64_t)b->size != need) {
+        fprintf(stderr, "[aiml_gl] upload_face: expected %lld bytes, got %d\n", (long long)need, b ? b->size : -1);
+        return 0;
+    }
+    const float* f = (const float*)b->data;
+    for (int64_t i = 0; i < (int64_t)dim * dim * 4; ++i)
+        if (!std::isfinite(f[i])) { fprintf(stderr, "[aiml_gl] upload_face: non-finite value\n"); return 0; }
+    GLint prev = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_CUBE_MAP, &prev);
+    gl_clear_errors();
+    glBindTexture(GL_TEXTURE_CUBE_MAP, c->id);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexSubImage2D(target, level, 0, 0, dim, dim, GL_RGBA, GL_FLOAT, f);
+    GLenum err = glGetError();
+    glBindTexture(GL_TEXTURE_CUBE_MAP, (GLuint)prev);
+    return err == GL_NO_ERROR ? 1 : 0;
+}
+
+void aiml_gl_bind_cubemap(void* cube, int32_t unit) {
+    if (!cube) return;
+    GLint units = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &units);
+    if (unit < 0 || unit >= units) {
+        fprintf(stderr, "[aiml_gl] bind_cubemap: unit %d out of range\n", unit);
+        return;
+    }
+    glActiveTexture(GL_TEXTURE0 + (GLenum)unit);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, ((AimlGLCubemap*)cube)->id);
+}
+
+/* Owner drop / cube.delete(): null-safe single close. */
+void aiml_gl_cubemap_release(void* cube) {
+    if (!cube) return;
+    auto* c = (AimlGLCubemap*)cube;
+    glDeleteTextures(1, &c->id);
+    delete c;
+}
