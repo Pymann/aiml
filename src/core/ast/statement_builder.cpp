@@ -46,6 +46,13 @@ bool StatementBuilder::OnScalar(const std::string& value, const std::string& tag
         return true;
     }
 
+    // print: scalars and expression maps keep their source order (spec/09 §print).
+    if (type == "print") {
+        orderedCallArgs.push_back(parseScalarExpr(value, tag));
+        args.pop_back();
+        return true;
+    }
+
     if (type == "idx" && args.size() > 1) {
         if (!value.empty() && value[0] == '.') idxParts.push_back({value.substr(1), nullptr});
         else idxParts.push_back({"", parseScalarExpr(value, tag)});
@@ -127,7 +134,7 @@ bool StatementBuilder::OnMapStart() {
 
 void StatementBuilder::receiveChildNode(std::unique_ptr<Node> node) {
     if (auto e = dynamic_cast<Expr*>(node.release())) {
-        if (type == "call") {
+        if (type == "call" || type == "print") {
             orderedCallArgs.push_back(std::unique_ptr<Expr>(e));
         } else if (type == "idx") {
             idxParts.push_back({"", std::unique_ptr<Expr>(e)});
@@ -296,13 +303,9 @@ std::unique_ptr<Node> StatementBuilder::finish() {
          exprStmt->sourceLine = capturedLine;
          return exprStmt;
     }
-    if (type == "print" && args.size() >= 1) {
+    if (type == "print" && !orderedCallArgs.empty()) {
          auto call = std::make_unique<CallExpr>("print");
-         for (size_t i = 0; i < args.size(); ++i) {
-             const std::string& val = args[i].first;
-             const std::string& tag = args[i].second;
-             call->args.push_back(parseScalarExpr(val, tag));
-         }
+         for (auto& ea : orderedCallArgs) call->args.push_back(std::move(ea));
          call->sourceLine = capturedLine;
          auto exprStmt = std::make_unique<ExprStmt>(std::move(call));
          exprStmt->sourceLine = capturedLine;

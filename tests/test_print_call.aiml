@@ -1,0 +1,46 @@
+# spec/09 §print: call arguments returning string are printed (owned results released, spec/61 §3.2).
+# Expected exit code: 0
+- class:
+    name: Greeter
+    members: [[name, string]]
+    methods:
+      - def:
+          name: owned_line
+          access: public
+          return: { type: string, lifetime: producer }
+          body:
+            - return: "hello ${<.name}"
+      - def:
+          name: borrowed_name
+          access: public
+          return: string
+          body:
+            - return: <.name
+
+- def:
+    name: make_line
+    args: [[count, i32]]
+    return: { type: string, lifetime: producer }
+    body:
+      - return: "count ${count}"
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [greeter, Greeter]
+      - set: [greeter.name, "aiml"]
+      - print: [{ call: [make_line, 3] }]
+      - print: [{ call: [greeter.owned_line] }]
+      - print: [{ call: [greeter.borrowed_name] }]
+      - print: ["name: ", { call: [greeter.borrowed_name] }]
+      - decl: [text, string, "abcdef"]
+      - print: [{ call: [text.substr, 2, 3] }]
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, 3] }
+          body:
+            - print: [{ call: [make_line, round] }]
+            - set: [round, { +: [round, 1] }]
+      - print: ["${ { call: [text.len] } } chars"]
+      - return: 0

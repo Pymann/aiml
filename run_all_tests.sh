@@ -220,6 +220,9 @@ for TEST in $TEST_FILES; do
         # into a value-struct slot corrupts the heap / SIGSEGVs on serialize.
         # Must be a compile error (deref { '?': [x] } or use list<ptr<T>>).
         EXPECTED_CODE=1
+    elif [[ "$TEST" == *"test_print_call_nonstring_error.aiml" ]]; then
+        # Negative test (spec/09 §print): a call argument must return string.
+        EXPECTED_CODE=1
     elif [[ "$TEST" == *"test_string_to_enum_typecheck.aiml" ]]; then
         # Negative test: assigning a string literal to an enum-typed slot must
         # be a compile error (enum is i32 — a string would coerce to garbage).
