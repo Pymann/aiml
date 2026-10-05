@@ -1,0 +1,55 @@
+# A mat4 local reassigned from a method returning mat4 (also inside if) keeps the returned value.
+# Expected exit code: 0
+- class:
+    name: Holder
+    members:
+      - [worlds, list<mat4>]
+    methods:
+      - def:
+          name: world_of
+          access: public
+          args: [[index, i32]]
+          return: mat4
+          body:
+            - decl: [cur, i32, 0]
+            - while:
+                condition: { lt: [cur, <.worlds.len] }
+                body:
+                  - if: { condition: { eq: [cur, index] }, then: [{ return: { at: [<.worlds, cur] } }] }
+                  - set: [cur, { +: [cur, 1] }]
+            - return: { call: [math.mat4_identity] }
+
+- class:
+    name: Owner
+    members:
+      - [holder, Holder]
+    methods:
+      - def:
+          name: probe
+          access: public
+          return: f32
+          body:
+            - decl: [found, mat4, { call: [math.mat4_identity] }]
+            - decl: [want, i32, 1]
+            - if: { condition: { gt: [want, 0] }, then: [{ set: [found, { call: [<.holder.world_of, want] }] }] }
+            - return: { call: [found.get, 0, 3] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [owner, Owner]
+      - decl: [moved, mat4, { call: [math.mat4_identity] }]
+      - call: [moved.set, 0, 3, 5.0]
+      - call: [owner.holder.worlds.push, { call: [math.mat4_identity] }]
+      - call: [owner.holder.worlds.push, moved]
+      - decl: [via_at, mat4, { at: [owner.holder.worlds, 1] }]
+      - if: { condition: { neq: [{ call: [via_at.get, 0, 3] }, 5.0] }, then: [{ call: [io.write, io.stderr, "FAIL at read\n"] }, { return: 3 }] }
+      - decl: [via_decl, mat4, { call: [owner.holder.world_of, 1] }]
+      - if: { condition: { neq: [{ call: [via_decl.get, 0, 3] }, 5.0] }, then: [{ call: [io.write, io.stderr, "FAIL decl from call\n"] }, { return: 4 }] }
+      - decl: [direct, mat4, { call: [math.mat4_identity] }]
+      - set: [direct, { call: [owner.holder.world_of, 1] }]
+      - if: { condition: { neq: [{ call: [direct.get, 0, 3] }, 5.0] }, then: [{ call: [io.write, io.stderr, "FAIL direct set\n"] }, { return: 1 }] }
+      - decl: [got, f32, { call: [owner.probe] }]
+      - if: { condition: { neq: [got, 5.0] }, then: [{ call: [io.write, io.stderr, "FAIL set in if: ${got}\n"] }, { return: 2 }] }
+      - return: 0

@@ -34,6 +34,10 @@ void* aiml_gltf_load(const char* path);
 
 /* gltf_scene methods */
 int32_t     aiml_gltf_scene_valid(void* scene);
+int32_t     aiml_gltf_scene_node_count(void* scene);            /* spec/43_1: nodes by glTF index */
+void*       aiml_gltf_scene_node_at(void* scene, int32_t index);  /* null when out of range */
+int32_t     aiml_gltf_scene_image_count(void* scene);
+void*       aiml_gltf_scene_image_at(void* scene, int32_t index); /* owned gltf_image handle, null out of range */
 const char* aiml_gltf_scene_error(void* scene);
 void        aiml_gltf_scene_free(void* scene);
 

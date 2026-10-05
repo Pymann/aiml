@@ -2284,6 +2284,10 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mesh_name",                    (void*)(intptr_t)aiml_gltf_mesh_name);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mesh_primitive_count",         (void*)(intptr_t)aiml_gltf_mesh_primitive_count);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_mesh_primitive",               (void*)(intptr_t)aiml_gltf_mesh_primitive);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_scene_node_count",             (void*)(intptr_t)aiml_gltf_scene_node_count);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_scene_node_at",                (void*)(intptr_t)aiml_gltf_scene_node_at);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_scene_image_count",            (void*)(intptr_t)aiml_gltf_scene_image_count);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_scene_image_at",               (void*)(intptr_t)aiml_gltf_scene_image_at);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_positions",               (void*)(intptr_t)aiml_gltf_prim_positions);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_normals",                 (void*)(intptr_t)aiml_gltf_prim_normals);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_tangents",                (void*)(intptr_t)aiml_gltf_prim_tangents);
@@ -2402,6 +2406,7 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_to_gl_mesh",              (void*)(intptr_t)aiml_gltf_prim_to_gl_mesh);
     // engine namespace
     llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_create_window",              (void*)(intptr_t)aiml_engine_create_window);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_mesh_set_attribute",             (void*)(intptr_t)aiml_gl_mesh_set_attribute);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_create_window_fullscreen",   (void*)(intptr_t)aiml_engine_create_window_fullscreen);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_destroy_window",             (void*)(intptr_t)aiml_engine_destroy_window);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_set_title",                  (void*)(intptr_t)aiml_engine_set_title);

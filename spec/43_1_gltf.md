@@ -285,6 +285,10 @@ Sampling rules:
 | `valid` | `i8` | 1 = successfully loaded |
 | `error` | `string` | Error message when `valid == 0` |
 | `nodes` | `list<gltf_node>` | Root nodes of the first scene |
+| `node_count` | `i32` | Number of nodes in the file (all scenes) |
+| `node_at(index)` | `gltf_node` | Node by glTF index, `null` when out of range |
+| `image_count` | `i32` | Number of images |
+| `image_at(index)` | `gltf_image` | Owned image handle by glTF index (like `tex.image()`, spec/61 Class 4), `null` when out of range |
 | `meshes` | `list<gltf_mesh>` | All meshes (flat) |
 | `materials` | `list<gltf_material>` | All materials |
 | `animations` | `list<gltf_animation>` | All animation clips |
