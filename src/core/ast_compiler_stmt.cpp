@@ -874,6 +874,31 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
         llvm::Function* nw = ctx.getFunction("aiml_list_handle_new", i8p, {});
         handle = ctx.builder.CreateCall(nw, {}, "listh_new");
         ListImpl::initList(ctx, handle, elemTy, 4);
+        // spec/10 list literal `[v1, v2, ...]`: one push per element, converted to the element
+        // type (spec/13). Was silently dropped → an empty list.
+        auto* listLit = dynamic_cast<BufferLiteralExpr*>(iv);
+        if (listLit && !listLit->elements.empty()) {
+            if (!elemTy || !(elemTy->isIntegerTy() || elemTy->isFloatingPointTy())) {
+                LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "list literal: element type '" + elemName +
+                          "' not supported (numeric elements only); push the elements instead");
+            } else {
+                for (auto& elem : listLit->elements) {
+                    IRValue* ev = visitExpression(elem.get());
+                    if (!ev) continue;
+                    llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(ev));
+                    llvm::Type* vt = v->getType();
+                    if (elemTy->isIntegerTy() && vt->isIntegerTy() && vt != elemTy)
+                        v = ctx.builder.CreateSExtOrTrunc(v, elemTy, "llit_v");
+                    else if (elemTy->isIntegerTy() && vt->isFloatingPointTy())
+                        v = ctx.builder.CreateFPToSI(v, elemTy, "llit_v");
+                    else if (elemTy->isFloatingPointTy() && vt->isIntegerTy())
+                        v = ctx.builder.CreateSIToFP(v, elemTy, "llit_v");
+                    else if (elemTy->isFloatingPointTy() && vt->isFloatingPointTy() && vt != elemTy)
+                        v = ctx.builder.CreateFPCast(v, elemTy, "llit_v");
+                    ListImpl::push(ctx, handle, v);
+                }
+            }
+        }
     }
     if (handle) ctx.builder.CreateStore(handle, slot);
 
@@ -2232,7 +2257,13 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         }
         // Buffer literal: decl: [name, buffer<T>, [v1, v2, ...]]
         // Buffer is already alloc'd above; emit one write per element.
-        if (auto* bufLit = dynamic_cast<BufferLiteralExpr*>(decl->initialValue.get())) {
+        auto* bufLit = dynamic_cast<BufferLiteralExpr*>(decl->initialValue.get());
+        if (bufLit && tName.rfind("list<", 0) == 0 && !bufLit->elements.empty()) {
+            LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "list literal: '" + decl->varName +
+                      "' is not a local or global list handle (memV3); push the elements instead");
+            return;
+        }
+        if (bufLit) {
             std::string elemName = tName.substr(7, tName.size() - 8); // strip "buffer<" + ">"
             llvm::Type* elemTy = ctx.getLLVMType(elemName);
             for (auto& elem : bufLit->elements) {

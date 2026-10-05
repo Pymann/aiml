@@ -13,6 +13,12 @@
 # Out-of-bounds access raises IndexOutOfBoundsException.
 - decl: [scores, list<i32>]
 
+# List-Literal-Init: [v1, v2, ...] als 3. Element des decl. Der Compiler emittiert einen push
+# pro Element; jedes Element wird in den Elementtyp konvertiert (spec/13, z.B. -1 → i32,
+# 2 → f64). Nur numerische Elementtypen (Ganzzahl, Gleitkomma, Enum); andere Elementtypen →
+# Compile-Fehler (Elemente per push anhängen). `[]` ist für jeden Elementtyp die leere Liste.
+- decl: [ring_x, list<i32>, [0, 1, 1, 1, 0, -1, -1, -1]]
+
 # Standard List Methods
 - call: [scores.push, 100]       # Add to end
 - call: [scores.pop]             # Remove from end (returns value)

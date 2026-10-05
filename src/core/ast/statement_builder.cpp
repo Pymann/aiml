@@ -186,10 +186,10 @@ std::unique_ptr<Node> StatementBuilder::finish() {
              }
              decl->initialValue = std::move(exprArg);
          } else if (innerSeqStart >= 0
-                    && typeName.rfind("buffer<", 0) == 0
+                    && (typeName.rfind("buffer<", 0) == 0 || typeName.rfind("list<", 0) == 0)
                     && typeName.back() == '>') {
-             // Buffer literal: decl: [name, buffer<T>, [v1, v2, ...]]
-             // Expand into a BufferLiteralExpr — visitDeclStmt emits push calls.
+             // Buffer/list literal: decl: [name, buffer<T>|list<T>, [v1, v2, ...]] (spec/10, spec/11)
+             // Expand into a BufferLiteralExpr — visitDeclStmt emits write/push calls.
              auto lit = std::make_unique<BufferLiteralExpr>();
              for (int i = innerSeqStart; i < (int)args.size(); ++i)
                  lit->elements.push_back(parseScalarExpr(args[i].first, args[i].second));
