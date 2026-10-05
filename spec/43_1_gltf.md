@@ -154,6 +154,10 @@ return an **owned** `string` (spec/61 §7): a copy that stays valid after `scene
 - decl: [mag_filter, string, { call: [albedo_tex.mag_filter] }]
 ```
 
+Wraps default to `"REPEAT"` (glTF default) when the texture has no sampler. A filter
+that the file leaves undefined (no sampler, or no `minFilter`/`magFilter`) reads as
+`""`: glTF leaves that choice to the viewer.
+
 `tex.image()` returns an owned `gltf_image` handle (spec/61 Class 4): each call creates one, it is
 released at owner drop (scope exit, unless moved by return / push / member store) and is valid only
 while its scene is loaded.

@@ -183,7 +183,7 @@ static const char* filter_str(int f) {
         case 9985: return "LINEAR_MIPMAP_NEAREST";
         case 9986: return "NEAREST_MIPMAP_LINEAR";
         case 9987: return "LINEAR_MIPMAP_LINEAR";
-        default:   return "LINEAR";
+        default:   return "";   /* undefined: the viewer chooses (glTF 2.0 §5.26) */
     }
 }
 
@@ -708,11 +708,11 @@ const char* aiml_gltf_tex_wrap_t(void* tex) {
 }
 const char* aiml_gltf_tex_min_filter(void* tex) {
     auto* t = (cgltf_texture*)tex;
-    return (t && t->sampler) ? filter_str(t->sampler->min_filter) : "LINEAR";
+    return (t && t->sampler) ? filter_str(t->sampler->min_filter) : "";
 }
 const char* aiml_gltf_tex_mag_filter(void* tex) {
     auto* t = (cgltf_texture*)tex;
-    return (t && t->sampler) ? filter_str(t->sampler->mag_filter) : "LINEAR";
+    return (t && t->sampler) ? filter_str(t->sampler->mag_filter) : "";
 }
 
 /* ── gltf_image ──────────────────────────────────────────────────────────── */
