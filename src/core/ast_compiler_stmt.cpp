@@ -558,7 +558,7 @@ void Compiler::moveIteratorArg(Expr* arg) {
 // moves via consumeLocalDrop.
 void Compiler::emitResourceBindTransfer(const std::string& typeName, Expr* rhs, llvm::Value* dst) {
     bool isChan = typeName.rfind("chan<", 0) == 0 && typeName.back() == '>';
-    if ((!isChan && typeName != "thread_handle" && typeName != "gl_texture" && typeName != "gl_cubemap") || !rhs) return;
+    if ((!isChan && typeName != "thread_handle" && typeName != "gl_texture" && typeName != "gl_cubemap" && typeName != "gl_timer_query") || !rhs) return;
     if (dynamic_cast<CallExpr*>(rhs) || dynamic_cast<SpawnExpr*>(rhs) || dynamic_cast<LiteralExpr*>(rhs)) return;
     auto* var = dynamic_cast<VariableExpr*>(rhs);
     Symbol* plain = (var && var->name.find('.') == std::string::npos && var->name.find('<') == std::string::npos)
@@ -586,7 +586,7 @@ void Compiler::emitResourceBindTransfer(const std::string& typeName, Expr* rhs, 
 // source / null a moved thread_handle source), release the old one, store.
 bool Compiler::emitResourceStore(const std::string& typeName, Expr* rhs, llvm::Value* newV, llvm::Value* slot) {
     bool isChan = typeName.rfind("chan<", 0) == 0 && typeName.back() == '>';
-    if ((!isChan && typeName != "thread_handle" && typeName != "gl_texture" && typeName != "gl_cubemap") || !newV || !slot || !newV->getType()->isPointerTy()) return false;
+    if ((!isChan && typeName != "thread_handle" && typeName != "gl_texture" && typeName != "gl_cubemap" && typeName != "gl_timer_query") || !newV || !slot || !newV->getType()->isPointerTy()) return false;
     auto* i8p = llvm::PointerType::get(ctx.context, 0);
     if (isChan) {
         if (!dynamic_cast<CallExpr*>(rhs) && !dynamic_cast<LiteralExpr*>(rhs))
@@ -597,7 +597,8 @@ bool Compiler::emitResourceStore(const std::string& typeName, Expr* rhs, llvm::V
     llvm::Value* oldV = ctx.builder.CreateLoad(i8p, slot, "res_old");
     ctx.builder.CreateCall(ctx.getFunction(isChan ? "aiml_chan_release"
         : typeName == "gl_texture" ? "aiml_gl_texture_release"
-        : typeName == "gl_cubemap" ? "aiml_gl_cubemap_release" : "aiml_thread_handle_drop",
+        : typeName == "gl_cubemap" ? "aiml_gl_cubemap_release"
+        : typeName == "gl_timer_query" ? "aiml_gl_timer_query_release" : "aiml_thread_handle_drop",
         ctx.builder.getVoidTy(), {i8p}), { oldV });
     ctx.builder.CreateStore(newV, slot);
     return true;
@@ -1324,7 +1325,7 @@ static bool modelIsMoveOnly(CompilerContext& ctx, const std::string& className,
     for (auto& mkv : it->second.members) {
         const std::string& t = mkv.second.typeName;
         if (t.rfind("ptr<", 0) == 0) return true;       // unique owning box
-        if (t == "tensor" || t == "thread_handle" || t == "gl_texture" || t == "gl_cubemap") return true;   // Class-4 unique resource
+        if (t == "tensor" || t == "thread_handle" || t == "gl_texture" || t == "gl_cubemap" || t == "gl_timer_query") return true;   // Class-4 unique resource
         // A bare nested value-model field: recurse (a ptr<>/ref<>/shared<> wrapper is not a value
         // nesting — ptr is caught above, ref/shared are borrow/co-own, neither makes the parent
         // move-only through a value copy of this slot).
@@ -1853,16 +1854,18 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
         }
         // spec/43_5 §5 / spec/61 Class 4: a gl_cubemap from gl.create_cubemap or a producer call
         // is released at owner drop (kind 18).
-        if (decl->typeName == "gl_cubemap" && decl->lifetime != "persistent" && ctx.lifetimeDropsEnabled
+        if ((decl->typeName == "gl_cubemap" || decl->typeName == "gl_timer_query") && decl->lifetime != "persistent" && ctx.lifetimeDropsEnabled
             && !ctx.cleanupStack.empty() && !sym.is_global) {
             if (auto* cc = dynamic_cast<CallExpr*>(decl->initialValue.get())) {
                 const std::string& fnm = cc->functionName;
                 size_t dp = fnm.rfind('.');
                 std::string shortName = (dp == std::string::npos) ? fnm : fnm.substr(dp + 1);
-                if (fnm == "gl.create_cubemap" || ctx.ownsReturnMatches(shortName, "gl_cubemap")) {
+                bool query = decl->typeName == "gl_timer_query";
+                if (query ? (fnm == "gl.create_timer_query" || ctx.ownsReturnMatches(shortName, "gl_timer_query"))
+                          : (fnm == "gl.create_cubemap" || ctx.ownsReturnMatches(shortName, "gl_cubemap"))) {
                     CompilerContext::ScopeDrop sd;
                     sd.addr = unwrappedAlloca;
-                    sd.kind = 18;
+                    sd.kind = query ? 19 : 18;
                     sd.debugName = decl->varName; sd.debugType = decl->typeName;
                     ctx.cleanupStack.back().push_back(sd);
                 }
@@ -4395,6 +4398,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     // spec/61 Class 4: an opaque resource handle returned as a plain local (moved out above) or a
     // call result cannot alias another local's heap.
     bool retResourceHandle = (ctx.currentFunctionReturnType == "gl_texture" || ctx.currentFunctionReturnType == "gl_cubemap"
+                              || ctx.currentFunctionReturnType == "gl_timer_query"
                               || ctx.currentFunctionReturnType == "gltf_image")
         && retStmt->value && (dynamic_cast<CallExpr*>(retStmt->value.get())
             || (dynamic_cast<VariableExpr*>(retStmt->value.get())
@@ -4432,7 +4436,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     emitScopeDrop(ctx, *it);
                     continue;
                 }
-                if (it->kind == 10 || it->kind == 11 || it->kind == 13 || it->kind == 14 || it->kind == 15 || it->kind == 16 || it->kind == 17 || it->kind == 18) { emitScopeDrop(ctx, *it); continue; }   // null-safe single release
+                if (it->kind == 10 || it->kind == 11 || it->kind == 13 || it->kind == 14 || it->kind == 15 || it->kind == 16 || it->kind == 17 || it->kind == 18 || it->kind == 19) { emitScopeDrop(ctx, *it); continue; }   // null-safe single release
                 // spec/61 §8: a parameter's own call reference (the returned container slot is moved above)
                 if ((it->paramRef || it->ownedParamBox) && !(retContainerSlot && it->addr == retContainerSlot)) { emitScopeDrop(ctx, *it); continue; }
                 // spec/61 §5 (memV3): the returned container handle is MOVED to the caller → skip its
@@ -4579,7 +4583,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
             // so is an owned gltf_image handle block (kind 16): no returned value can alias it
             for (auto fit = ctx.cleanupStack.rbegin(); fit != ctx.cleanupStack.rend(); ++fit)
                 for (auto it = fit->rbegin(); it != fit->rend(); ++it)
-                    if (it->paramRef || it->kind == 16 || it->kind == 17 || it->kind == 18) emitScopeDrop(ctx, *it);
+                    if (it->paramRef || it->kind == 16 || it->kind == 17 || it->kind == 18 || it->kind == 19) emitScopeDrop(ctx, *it);
         }
         if (val) {
             // Struct-by-value return (list/buffer/map): visitExpression often
@@ -5150,6 +5154,11 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         llvm::Value* img = ctx.builder.CreateLoad(i8p, it.addr, "drop_gltf_image");
         ctx.builder.CreateCall(ctx.getFunction("aiml_gltf_image_release", ctx.builder.getVoidTy(), {i8p}), { img });
         ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
+    } else if (it.kind == 19) {
+        // spec/43_5 §9: owned gl_timer_query — release (ends an active query); null the slot.
+        llvm::Value* query = ctx.builder.CreateLoad(i8p, it.addr, "drop_gl_timer_query");
+        ctx.builder.CreateCall(ctx.getFunction("aiml_gl_timer_query_release", ctx.builder.getVoidTy(), {i8p}), { query });
+        ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
     } else if (it.kind == 18) {
         // spec/43_5 §5: owned gl_cubemap — delete (null-safe); null the slot.
         llvm::Value* cube = ctx.builder.CreateLoad(i8p, it.addr, "drop_gl_cubemap");
@@ -5180,7 +5189,7 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
 }
 // spec/61 §9.3: drops released on every exit regardless of the ownership plan (order-independent).
 static bool unconditionalDrop(const CompilerContext::ScopeDrop& d) {
-    return d.paramRef || d.ownedParamBox || d.kind == 7 || d.kind == 13 || d.kind == 14 || d.kind == 15 || d.kind == 16 || d.kind == 17 || d.kind == 18 || d.kind == 10 || d.kind == 11 || d.kind == 12
+    return d.paramRef || d.ownedParamBox || d.kind == 7 || d.kind == 13 || d.kind == 14 || d.kind == 15 || d.kind == 16 || d.kind == 17 || d.kind == 18 || d.kind == 19 || d.kind == 10 || d.kind == 11 || d.kind == 12
         || (d.isListHandle && (d.kind == 2 || d.kind == 3 || d.kind == 8));
 }
 

@@ -150,6 +150,12 @@ void*   aiml_gl_create_cubemap(int32_t size, int32_t levels);
 int32_t aiml_gl_cubemap_upload_face(void* cube, int32_t face, int32_t level, void* px_buf);
 void    aiml_gl_bind_cubemap(void* cube, int32_t unit);
 void    aiml_gl_cubemap_release(void* cube);
+void*   aiml_gl_create_timer_query(void);
+int32_t aiml_gl_timer_query_begin(void* query);
+int32_t aiml_gl_timer_query_end(void* query);
+int32_t aiml_gl_timer_query_ready(void* query);
+int64_t aiml_gl_timer_query_result_ns(void* query);
+void    aiml_gl_timer_query_release(void* query);
 
 #ifdef __cplusplus
 }

@@ -1146,7 +1146,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 IRValue* res = methodIt->second(ctx, baseForHandler, call, evalExpr);
                 // spec/43_2 §5.5: delete() is the early close of an owned gl_texture — null the
                 // variable/field so its later owner drop is a no-op.
-                if ((className == "gl_texture" || className == "gl_cubemap") && methodName == "delete" && classIt->second.preLoadBase
+                if ((className == "gl_texture" || className == "gl_cubemap" || className == "gl_timer_query") && methodName == "delete" && classIt->second.preLoadBase
                     && (llvm::isa<llvm::AllocaInst>(rawAlloca) || llvm::isa<llvm::GetElementPtrInst>(rawAlloca)
                         || llvm::isa<llvm::GlobalVariable>(rawAlloca)))
                     ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ctx.builder.getPtrTy()), rawAlloca);

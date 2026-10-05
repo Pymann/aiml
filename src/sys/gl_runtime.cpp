@@ -1120,7 +1120,7 @@ int32_t aiml_gl_supports(const char* feature) {
     if (!strcmp(feature, "rgba16f_renderable")) return probe_rgba16f_renderable();
     if (!strcmp(feature, "rgba16f_filterable")) return desktop || has_gl_extension("OES_texture_float_linear") || has_gl_extension("GL_OES_texture_float_linear") ? 1 : 0;
     if (!strcmp(feature, "cubemap_float"))      return 1;
-    if (!strcmp(feature, "timer_query"))        return desktop || has_gl_extension("EXT_disjoint_timer_query_webgl2") ? 1 : 0;
+    if (!strcmp(feature, "timer_query"))        return desktop ? 1 : 0;   // WebGL disjoint-timer path not implemented
     if (!strcmp(feature, "framebuffer_srgb"))   return desktop ? 1 : 0;
     fprintf(stderr, "[aiml_gl] supports: unknown feature '%s'\n", feature);
     return 0;
@@ -1298,6 +1298,73 @@ void aiml_gl_bind_cubemap(void* cube, int32_t unit) {
 }
 
 /* Owner drop / cube.delete(): null-safe single close. */
+#ifndef __EMSCRIPTEN__
+// spec/43_5 §9: TIME_ELAPSED queries; one active at a time, results never waited for.
+struct AimlGLTimerQuery { GLuint id; int state; int64_t result; };   // state 0 idle, 1 active, 2 pending, 3 done
+static AimlGLTimerQuery* g_active_timer = nullptr;
+
+void* aiml_gl_create_timer_query(void) {
+    if (!aiml_gl_supports("timer_query")) return nullptr;
+    auto* q = new AimlGLTimerQuery{0, 0, -1};
+    glGenQueries(1, &q->id);
+    if (!q->id) { delete q; return nullptr; }
+    return q;
+}
+
+int32_t aiml_gl_timer_query_begin(void* query) {
+    auto* q = (AimlGLTimerQuery*)query;
+    if (!q || g_active_timer || q->state == 2) return 0;
+    glBeginQuery(GL_TIME_ELAPSED, q->id);
+    q->state = 1; q->result = -1;
+    g_active_timer = q;
+    return 1;
+}
+
+int32_t aiml_gl_timer_query_end(void* query) {
+    auto* q = (AimlGLTimerQuery*)query;
+    if (!q || q->state != 1 || g_active_timer != q) return 0;
+    glEndQuery(GL_TIME_ELAPSED);
+    q->state = 2;
+    g_active_timer = nullptr;
+    return 1;
+}
+
+int32_t aiml_gl_timer_query_ready(void* query) {
+    auto* q = (AimlGLTimerQuery*)query;
+    if (!q || q->state == 0 || q->state == 1) return 0;
+    if (q->state == 3) return 1;
+    GLint avail = 0;
+    glGetQueryObjectiv(q->id, GL_QUERY_RESULT_AVAILABLE, &avail);
+    if (!avail) return 0;
+    GLuint64 ns = 0;
+    glGetQueryObjectui64v(q->id, GL_QUERY_RESULT, &ns);
+    q->result = (int64_t)ns;
+    q->state = 3;
+    return 1;
+}
+
+int64_t aiml_gl_timer_query_result_ns(void* query) {
+    auto* q = (AimlGLTimerQuery*)query;
+    if (!q || !aiml_gl_timer_query_ready(q)) return -1;
+    return q->result;
+}
+
+void aiml_gl_timer_query_release(void* query) {
+    if (!query) return;
+    auto* q = (AimlGLTimerQuery*)query;
+    if (g_active_timer == q) { glEndQuery(GL_TIME_ELAPSED); g_active_timer = nullptr; }
+    glDeleteQueries(1, &q->id);
+    delete q;
+}
+#else
+void* aiml_gl_create_timer_query(void) { return nullptr; }
+int32_t aiml_gl_timer_query_begin(void*) { return 0; }
+int32_t aiml_gl_timer_query_end(void*) { return 0; }
+int32_t aiml_gl_timer_query_ready(void*) { return 0; }
+int64_t aiml_gl_timer_query_result_ns(void*) { return -1; }
+void aiml_gl_timer_query_release(void*) {}
+#endif
+
 void aiml_gl_cubemap_release(void* cube) {
     if (!cube) return;
     auto* c = (AimlGLCubemap*)cube;
