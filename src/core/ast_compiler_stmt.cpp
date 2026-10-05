@@ -1838,13 +1838,14 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 }
             }
         }
-        // spec/61 Class 4 / spec/43_1 §6: an owned gltf_image (tex.image() or a user call returning
+        // spec/61 Class 4 / spec/43_1 §6: an owned gltf_image (tex.image(), scene.image_at() or a user call returning
         // gltf_image) is released at owner drop (kind 16); a move (return/push/store) erases the drop.
         if (decl->typeName == "gltf_image" && decl->lifetime != "persistent" && ctx.lifetimeDropsEnabled
             && !ctx.cleanupStack.empty() && !sym.is_global) {
             if (auto* gc = dynamic_cast<CallExpr*>(decl->initialValue.get())) {
                 const std::string& fnm = gc->functionName;
-                bool texImage = fnm.size() > 6 && fnm.compare(fnm.size() - 6, 6, ".image") == 0;
+                bool texImage = (fnm.size() > 6 && fnm.compare(fnm.size() - 6, 6, ".image") == 0)
+                    || (fnm.size() > 9 && fnm.compare(fnm.size() - 9, 9, ".image_at") == 0);
                 CompilerContext::FunctionInfo* gfi = resolveCallTarget(fnm);
                 if (texImage || (gfi && gfi->returnTypeName == "gltf_image")) {
                     CompilerContext::ScopeDrop sd;
@@ -3655,6 +3656,15 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 } else {
                     LOG_ERROR(ctx.fmtLoc() + "Invalid list index for set: " + propName);
                     return;
+        {
+            // a struct-returning call yields its temp's address: a math-value local (mat4/vec/quat)
+            // copies the value, not the address (same as the member store, f5ef53b)
+            static const std::set<std::string> mathLocals = {"vec2", "vec3", "vec4", "quat", "mat4", "ivec2", "ivec3"};
+            llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+            llvm::Type* lty = ctx.getLLVMType(sym->typeName);
+            if (sv && lty && lty->isStructTy() && sv->getType()->isPointerTy() && mathLocals.count(sym->typeName))
+                val = ctx.ir_gen->wrap(ctx.builder.CreateLoad(lty, sv, "set_struct_val"));
+        }
                 }
             }
             

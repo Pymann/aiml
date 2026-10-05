@@ -132,6 +132,8 @@ static AimlGLBuffer* make_buffer(GLenum target, const AimlGLRawBuf* src, GLenum 
     glBindBuffer(target, 0);
     if (target == GL_ELEMENT_ARRAY_BUFFER && prev_vao)
         glBindVertexArray((GLuint)prev_vao);
+    GLuint vbo_extra[4];      /* set_attribute VBOs (locations 6..15), 0 = unused */
+    int32_t extra_loc[4];
     return b;
 }
 
@@ -974,9 +976,36 @@ static bool fb_build(AimlGLFramebuffer* fb, int32_t w, int32_t h) {
     }
     fb->fbo = fbo; fb->color_tex = color; fb->depth_rbo = depth; fb->w = w; fb->h = h;
     return true;
+int32_t aiml_gl_mesh_set_attribute(void* mesh, int32_t location, int32_t components, void* data_buf) {
+    auto* m = (AimlGLMesh*)mesh;
+    auto* d = (AimlGLRawBuf*)data_buf;
+    if (!m || !d || !d->data || d->size <= 0) return 0;
+    if (location < 6 || location > 15 || components < 1 || components > 4) return 0;
+    if (d->size % (components * 4) != 0) return 0;
+    int slot = -1;
+    for (int i = 0; i < 4; ++i) if (m->vbo_extra[i] && m->extra_loc[i] == location) slot = i;
+    if (slot < 0) for (int i = 0; i < 4 && slot < 0; ++i) if (!m->vbo_extra[i]) slot = i;
+    if (slot < 0) return 0;
+    GLuint vbo = upload_vbo(d);
+    if (!vbo) return 0;
+    if (m->vbo_extra[slot]) glDeleteBuffers(1, &m->vbo_extra[slot]);
+    m->vbo_extra[slot] = vbo;
+    m->extra_loc[slot] = location;
+    GLint prev_vao = 0;
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prev_vao);
+    glBindVertexArray(m->vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glEnableVertexAttribArray((GLuint)location);
+    glVertexAttribPointer((GLuint)location, components, GL_FLOAT, GL_FALSE, components * 4, (void*)0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray((GLuint)prev_vao);
+    return 1;
+}
+
 }
 
 void* aiml_gl_create_framebuffer_format(int32_t w, int32_t h, int32_t format, int32_t depth) {
+    for (int i = 0; i < 4; ++i) if (m->vbo_extra[i]) glDeleteBuffers(1, &m->vbo_extra[i]);
     if (format != GL_RGBA8 && format != GL_RGBA16F) {
         fprintf(stderr, "[aiml_gl] create_framebuffer_format: unsupported format 0x%x\n", format);
         return nullptr;

@@ -162,6 +162,18 @@ vertex shader blends `uBones[int(aJoints[i])]` by `aWeights[i]`, see `uniform_ma
 - call: [mesh.draw_count, 36]        # override: draw only n indices
 ```
 
+**Extra attributes** (locations 6..15, e.g. a second UV set at 6 for VFX surface flow):
+
+```aiml
+- decl: [uv1, buffer<f32>, { call: [prim.uvs, 1] }]
+- decl: [ok, bool, { call: [mesh.set_attribute, 6, 2, uv1] }]   # location, components 1..4, f32 data
+```
+
+The data is borrowed for the call and uploaded into a mesh-owned VBO (freed by `mesh.delete`);
+setting the same location again replaces it. Returns `false` (no GPU change) for a location
+outside 6..15, components outside 1..4, empty data, a byte size that is not a multiple of
+`components * 4`, or more than 4 extra attributes per mesh. Locations 0..5 keep the fixed layout.
+
 **Cleanup:**
 
 ```aiml

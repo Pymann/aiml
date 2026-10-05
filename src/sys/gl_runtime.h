@@ -106,6 +106,8 @@ void    aiml_gl_mesh_delete     (void* mesh);
 
 /* ── Draw calls ────────────────────────────────────────────────────────────── */
 
+/* spec/43_2 §3.4: extra f32 vertex attribute at location 6..15 (e.g. TEXCOORD_1 flow UVs); 1 ok */
+int32_t aiml_gl_mesh_set_attribute(void* mesh, int32_t location, int32_t components, void* data_buf);
 void aiml_gl_draw_arrays      (void* vao, int32_t count);          /* GL_TRIANGLES */
 void aiml_gl_draw_elements    (void* vao, int32_t count);          /* GL_TRIANGLES, GL_UNSIGNED_INT */
 void aiml_gl_draw_lines       (void* vao, int32_t count);          /* GL_LINES,     GL_UNSIGNED_INT */

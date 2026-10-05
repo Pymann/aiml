@@ -460,6 +460,28 @@ int32_t aiml_gltf_mesh_primitive_count(void* mesh) {
     auto* m = (cgltf_mesh*)mesh;
     return m ? (int32_t)m->primitives_count : 0;
 }
+int32_t aiml_gltf_scene_node_count(void* scene) {
+    auto* s = (AimlGltfScene*)scene;
+    return (s && s->data) ? (int32_t)s->data->nodes_count : 0;
+}
+int32_t aiml_gltf_scene_image_count(void* scene) {
+    auto* s = (AimlGltfScene*)scene;
+    return (s && s->data) ? (int32_t)s->data->images_count : 0;
+}
+void* aiml_gltf_scene_image_at(void* scene, int32_t index) {
+    auto* s = (AimlGltfScene*)scene;
+    if (!s || !s->data || index < 0 || (cgltf_size)index >= s->data->images_count) return nullptr;
+    AimlGltfImageRef* ref = (AimlGltfImageRef*)malloc(sizeof(AimlGltfImageRef));
+    if (!ref) return nullptr;
+    ref->ptr  = &s->data->images[index];
+    ref->data = s->data;
+    return ref;
+}
+void* aiml_gltf_scene_node_at(void* scene, int32_t index) {
+    auto* s = (AimlGltfScene*)scene;
+    if (!s || !s->data || index < 0 || (cgltf_size)index >= s->data->nodes_count) return nullptr;
+    return &s->data->nodes[index];
+}
 void* aiml_gltf_mesh_primitive(void* mesh, int32_t idx) {
     auto* m = (cgltf_mesh*)mesh;
     if (!m || idx < 0 || (cgltf_size)idx >= m->primitives_count) return nullptr;

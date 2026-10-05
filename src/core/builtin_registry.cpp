@@ -6171,6 +6171,36 @@ void registerBuiltins(CompilerContext& ctx) {
             GLTF_F32M(ci, "translation_y", "aiml_gltf_node_translation_y")
             GLTF_F32M(ci, "translation_z", "aiml_gltf_node_translation_z")
             GLTF_F32M(ci, "rotation_x",    "aiml_gltf_node_rotation_x")
+            GLTF_I32M(ci, "node_count",  "aiml_gltf_scene_node_count")
+            GLTF_I32M(ci, "image_count", "aiml_gltf_scene_image_count")
+
+            // scene.image_at(index: i32) → owned gltf_image (spec/61 Class 4), null out of range
+            ci.builtinMethods["image_at"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* i32 = ctx.builder.getInt32Ty();
+                llvm::Value* idx = ctx.builder.getInt32(0);
+                if (call && !call->args.empty()) {
+                    IRValue* a = evalExpr(call->args[0].get());
+                    if (a) idx = ctx.builder.CreateSExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)), i32);
+                }
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_gltf_scene_image_at", p, {p, i32}), {base, idx}));
+            };
+
+            // scene.node_at(index: i32) → gltf_node (null when out of range), spec/43_1
+            ci.builtinMethods["node_at"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* i32 = ctx.builder.getInt32Ty();
+                llvm::Value* idx = ctx.builder.getInt32(0);
+                if (call && !call->args.empty()) {
+                    IRValue* a = evalExpr(call->args[0].get());
+                    if (a) idx = ctx.builder.CreateSExtOrTrunc(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)), i32);
+                }
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall(
+                    ctx.getFunction("aiml_gltf_scene_node_at", p, {p, i32}), {base, idx}));
+            };
             GLTF_F32M(ci, "rotation_y",    "aiml_gltf_node_rotation_y")
             GLTF_F32M(ci, "rotation_z",    "aiml_gltf_node_rotation_z")
             GLTF_F32M(ci, "rotation_w",    "aiml_gltf_node_rotation_w")
@@ -7292,6 +7322,38 @@ void registerBuiltins(CompilerContext& ctx) {
     // ==========================================================================
     // engine — cross-platform window + game loop
     // ==========================================================================
+            // mesh.set_attribute(location: i32, components: i32, data: buffer<f32>) → bool (spec/43_2 §3.4)
+            ci.builtinMethods["set_attribute"] = [](CompilerContext& ctx, llvm::Value* base,
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* {
+                auto* p   = llvm::PointerType::get(ctx.context, 0);
+                auto* i32 = ctx.builder.getInt32Ty();
+                if (!call || call->args.size() != 3) {
+                    LOG_ERROR(std::string(call ? ctx.fmtLoc(call->sourceNode) : "") + "gl_mesh.set_attribute expects (location: i32, components: i32, data: buffer<f32>)");
+                    return nullptr;
+                }
+                IRValue* a0 = evalExpr(call->args[0].get());
+                IRValue* a1 = evalExpr(call->args[1].get());
+                IRValue* a2 = evalExpr(call->args[2].get());
+                if (!a0 || !a1 || !a2) return nullptr;
+                llvm::Value* loc  = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a0));
+                llvm::Value* comp = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a1));
+                llvm::Value* data = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a2));
+                if (data->getType()->isStructTy()) {
+                    /* buffer<T> struct value — store to an alloca and pass its address (as gl.create_mesh) */
+                    auto* tmp = ctx.createEntryAlloca(data->getType(), "attr_buf");
+                    ctx.builder.CreateStore(data, tmp);
+                    data = tmp;
+                }
+                if (!loc->getType()->isIntegerTy() || !comp->getType()->isIntegerTy() || !data->getType()->isPointerTy()) {
+                    LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "gl_mesh.set_attribute expects (location: i32, components: i32, data: buffer<f32>)");
+                    return nullptr;
+                }
+                loc  = ctx.builder.CreateSExtOrTrunc(loc, i32);
+                comp = ctx.builder.CreateSExtOrTrunc(comp, i32);
+                llvm::Value* res = ctx.builder.CreateCall(ctx.getFunction("aiml_gl_mesh_set_attribute",
+                    i32, {p, i32, i32, p}), {base, loc, comp, data});
+                return ctx.ir_gen->wrap(ctx.builder.CreateICmpNE(res, ctx.builder.getInt32(0)));
+            };
     {
         // ── window_handle type ───────────────────────────────────────────────
         {
