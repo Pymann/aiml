@@ -265,6 +265,20 @@ void Compiler::initClassContainerMembers(llvm::Value* basePtr,
                         llvm::Function* dupFn = ctx.getFunction("aiml_str_dup", i8p, {i8p});
                         raw = ctx.builder.CreateCall(dupFn, { raw }, "str_default_dup");
                     }
+                    // spec/15: the default takes the field's type (a `90.0` literal is f32, the field
+                    // may be f64; storing the narrower value would leave half the slot garbage).
+                    llvm::Type* slotTy = m.type;
+                    llvm::Type* valTy = raw->getType();
+                    if (slotTy && valTy != slotTy) {
+                        if (slotTy->isFloatingPointTy() && valTy->isFloatingPointTy())
+                            raw = ctx.builder.CreateFPCast(raw, slotTy, "default_fp");
+                        else if (slotTy->isFloatingPointTy() && valTy->isIntegerTy())
+                            raw = ctx.builder.CreateSIToFP(raw, slotTy, "default_itofp");
+                        else if (slotTy->isIntegerTy() && valTy->isIntegerTy())
+                            raw = ctx.builder.CreateSExtOrTrunc(raw, slotTy, "default_int");
+                        else if (slotTy->isIntegerTy() && valTy->isFloatingPointTy())
+                            raw = ctx.builder.CreateFPToSI(raw, slotTy, "default_fptoi");
+                    }
                     ctx.builder.CreateStore(raw, fieldPtr);
                 }
             }
@@ -3277,7 +3291,7 @@ static bool serHasHeap(const std::string& typeName, CompilerContext& ctx) {
     if (ctx.memV3 && typeName == "tensor") return true;
     // spec/61 Class 5 chan<T> / Class 4 thread_handle field: released with the owning model.
     if (ctx.memV3 && (typeName == "thread_handle" || typeName == "gl_texture" || typeName == "gl_cubemap"
-                      || typeName == "gl_timer_query"
+                      || typeName == "gl_timer_query" || typeName == "gl_buffer" || typeName == "gl_vao"
                       || (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>'))) return true;
     // spec/61 §6.2 (memV3): a `shared<T>` (refcounted co-owned) or `ptr<T>` (unique owner) FIELD owns
     // heap → the model must decref/free it at scope drop. Without this a model whose ONLY heap-bearing
@@ -3397,6 +3411,10 @@ static std::vector<AimlTypeNode> serBuildSubtree(
             { res.push_back({AIML_TD_GLTEX, 0,0,offset,0,0}); return res; }
         if (typeName == "gl_cubemap")
             { res.push_back({AIML_TD_GLCUBE, 0,0,offset,0,0}); return res; }
+        if (typeName == "gl_buffer")
+            { res.push_back({AIML_TD_GLBUFFER, 0,0,offset,0,0}); return res; }
+        if (typeName == "gl_vao")
+            { res.push_back({AIML_TD_GLVAO, 0,0,offset,0,0}); return res; }
         if (typeName == "gl_timer_query")
             { res.push_back({AIML_TD_GLQUERY, 0,0,offset,0,0}); return res; }
         if (purpose == DescriptorPurpose::Clone
@@ -3754,8 +3772,42 @@ static void rebuildSerNodesFor(CompilerContext& ctx, const std::string& typeName
 // via a LIST_PTR/MAP_PTR/BUFFER_PTR-rooted descriptor + the memoized clone walker. One
 // aiml_clone_deep call = one memo table for the whole container + its element DAG (so shared
 // elements clone once). memV3-only (serFieldSubtree emits the *_PTR root only under the gate).
+// spec/61 section 7: GL owners have no deep-clone operation, also when nested
+// through otherwise-shareable containers or owning ptr/shared edges.
+bool Compiler::containsVfxResource(const std::string& type) {
+    std::set<std::string> seen;
+    std::function<bool(const std::string&)> visit = [&](const std::string& t) {
+        if (t == "gl_buffer" || t == "gl_vao") return true;
+        if (!seen.insert(t).second || t.rfind("ref<", 0) == 0) return false;
+        auto open = t.find('<');
+        if (open != std::string::npos && t.back() == '>') {
+            std::string inner = t.substr(open + 1, t.size() - open - 2);
+            int depth = 0; size_t start = 0;
+            for (size_t i = 0; i <= inner.size(); ++i) {
+                if (i == inner.size() || ((inner[i] == ':' || inner[i] == ',') && !depth)) {
+                    if (visit(inner.substr(start, i - start))) return true;
+                    start = i + 1;
+                } else if (inner[i] == '<') ++depth;
+                else if (inner[i] == '>') --depth;
+            }
+            return false;
+        }
+        auto ci = ctx.classes.find(t);
+        if (ci != ctx.classes.end() && !ci->second.isBuiltin)
+            for (const auto& member : ci->second.members)
+                if (visit(member.second.typeName)) return true;
+        return false;
+    };
+    return visit(type);
+}
+
 void Compiler::emitContainerCloneDeep(llvm::Value* dstSlot, llvm::Value* srcSlot,
                                       const std::string& containerType) {
+    if (containsVfxResource(containerType)) {
+        LOG_ERROR(ctx.fmtLoc() + "spec/61: cannot clone an owned GL resource");
+        return;
+    }
+
     if (!dstSlot || !srcSlot) return;
     auto* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
     auto* i32  = ctx.builder.getInt32Ty();
@@ -6777,6 +6829,10 @@ IRValue* Compiler::visitSysCloneCall(CallExpr* call) {
         return ctx.ir_gen->getInt32(0);
     }
 
+    if (containsVfxResource(argType)) {
+        LOG_ERROR(ctx.fmtLoc() + "spec/61: cannot clone an owned GL resource");
+        return nullptr;
+    }
     // Resolve LLVM struct type so we know dst's size.
     llvm::Type* dstLlvmTy = ctx.getLLVMType(argType);
     if (!dstLlvmTy) {
