@@ -1,0 +1,42 @@
+# A buffer<u8> parameter read as f32 values into a fresh buffer<f32> that is returned, repeatedly
+# (the read index advances on the caller's buffer).
+# Expected exit code: 0
+- class:
+    name: Unpack
+    methods:
+      - def:
+          name: floats
+          access: public
+          args: [[raw, buffer<u8>], [count, i32]]
+          return: buffer<f32>
+          body:
+            - decl: [out, buffer<f32>]
+            - call: [out.alloc, { "*": [count, 4] }]
+            - decl: [cur, i32, 0]
+            - while:
+                condition: { lt: [cur, count] }
+                body:
+                  - call: [out.write, { call: [raw.read, f32] }, f32]
+                  - set: [cur, { +: [cur, 1] }]
+            - return: out
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [raw, buffer<u8>]
+      - call: [raw.alloc, 400000]
+      - decl: [cur, i32, 0]
+      - while:
+          condition: { lt: [cur, 100000] }
+          body:
+            - call: [raw.write, cur, f32]
+            - set: [cur, { +: [cur, 1] }]
+      - decl: [unpack, Unpack]
+      - decl: [first, buffer<f32>, { call: [unpack.floats, raw, 27] }]
+      - decl: [rest, buffer<f32>, { call: [unpack.floats, raw, 65536] }]
+      - call: [rest.seek, 0]
+      - decl: [value, f32, { call: [rest.read, f32] }]
+      - if: { condition: { neq: [value, 27.0] }, then: [{ print: ["FAIL value ${value}"] }, { return: 1 }] }
+      - print: ["PASS buffer_param_floats"]
+      - return: 0
