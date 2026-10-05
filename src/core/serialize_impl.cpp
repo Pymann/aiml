@@ -454,7 +454,7 @@ static void emitWriteField(CompilerContext& ctx, llvm::Value* writer,
 
     // ── scalar field ──────────────────────────────────────────────────────────
     llvm::Value* fp = ctx.builder.CreateStructGEP(structLLVMTy,structPtr,fm.index,"fp");
-    if(tn=="string"){
+    if(tn=="string"||tn=="path"){   // spec/42: a path serialises as its text
         llvm::Value* v=ctx.builder.CreateLoad(i8pT(ctx),fp,"sv");
         ctx.builder.CreateCall(gJwSetStr(ctx),{writer,fkey,v});
     } else if(tn=="i64"||tn=="u64"){
@@ -635,6 +635,11 @@ static void emitReadScalar(CompilerContext& ctx, llvm::Value* reader, llvm::Valu
                            llvm::Value* dst, const std::string& tn, llvm::Type* fmType){
     llvm::Value* v;
     if(tn=="string")        v=ctx.builder.CreateCall(gJrStr(ctx),{reader,fkey},"sv");
+    else if(tn=="path"){    // spec/42: read the text, store the interned path, drop the reader's dup
+        llvm::Value* text=ctx.builder.CreateCall(gJrStr(ctx),{reader,fkey},"ptext");
+        v=ctx.builder.CreateCall(ctx.getFunction("aiml_path_intern",i8pT(ctx),{i8pT(ctx)}),{text},"pv");
+        ctx.builder.CreateCall(ctx.getFunction("aiml_str_decref",ctx.builder.getVoidTy(),{i8pT(ctx)}),{text});
+    }
     else if(tn=="i64"||tn=="u64") v=ctx.builder.CreateCall(gJrI64(ctx),{reader,fkey},"sv");
     else if(tn=="f32")      v=ctx.builder.CreateCall(gJrF32(ctx),{reader,fkey},"sv");
     else if(tn=="f64")      v=ctx.builder.CreateCall(gJrF64(ctx),{reader,fkey},"sv");

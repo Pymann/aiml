@@ -1,0 +1,24 @@
+# spec/29 §5 + spec/42: a path model field serialises as its text and deserialises to the interned path.
+# Expected exit code: 0
+- model:
+    name: Asset
+    fields:
+      - [name, string]
+      - [file, path]
+      - [size, i32]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [item, Asset]
+      - set: [item.name, "crate"]
+      - set: [item.file, "models/crate.glb"]
+      - set: [item.size, 3]
+      - decl: [json, string, { call: [sys.serialize, item] }]
+      - if: { condition: { lt: [{ call: [json.index_of, "models/crate.glb"] }, 0] }, then: [{ call: [io.write, io.stderr, "FAIL json ${json}\n"] }, { return: 1 }] }
+      - decl: [back, Asset, { call: [sys.deserialize, json, "Asset"] }]
+      - decl: [want, path, "models/crate.glb"]
+      - if: { condition: { neq: [back.file, want] }, then: [{ call: [io.write, io.stderr, "FAIL path round trip\n"] }, { return: 2 }] }
+      - if: { condition: { neq: [back.size, 3] }, then: [{ return: 3 }] }
+      - return: 0
