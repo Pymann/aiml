@@ -1,0 +1,48 @@
+# spec/43_5 §9: gl_timer_query — begin/end ordering, nonblocking ready/result_ns, repeated reads,
+# one active elapsed query at a time, owner drop (Class 4).
+# Requires: display
+# Expected exit code: 0
+- def:
+    name: probe
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - if: { condition: { eq: [{ call: [gl.supports, "timer_query"] }, 0] }, then: [{ print: ["timer_query unsupported: skipped"] }, { return: 0 }] }
+      - decl: [first, gl_timer_query, { call: [gl.create_timer_query] }]
+      - decl: [second, gl_timer_query, { call: [gl.create_timer_query] }]
+      - if: { condition: { "||": [{ eq: [first, null] }, { eq: [second, null] }] }, then: [{ print: ["FAIL create"] }, { return: 1 }] }
+      - if: { condition: { eq: [{ call: [first.end] }, true] }, then: [{ print: ["FAIL end before begin"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [{ call: [first.result_ns] }, -1] }, then: [{ print: ["FAIL result before begin"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { eq: [{ call: [first.begin] }, false] }, then: [{ print: ["FAIL begin"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { eq: [{ call: [second.begin] }, true] }, then: [{ print: ["FAIL second active elapsed query"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { eq: [{ call: [first.ready] }, true] }, then: [{ print: ["FAIL ready while active"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - call: [gl.clear_all, 0.1, 0.2, 0.3, 1.0]
+      - if: { condition: { eq: [{ call: [first.end] }, false] }, then: [{ print: ["FAIL end"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - decl: [polls, i32, 0]
+      - while:
+          condition: { "&&": [{ eq: [{ call: [first.ready] }, false] }, { lt: [polls, 2000] }] }
+          body:
+            - call: [time.sleep_ms, 1]
+            - set: [polls, { +: [polls, 1] }]
+      - decl: [elapsed, i64, { call: [first.result_ns] }]
+      - if: { condition: { lt: [elapsed, 0] }, then: [{ print: ["FAIL result ${elapsed}"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { neq: [{ call: [first.result_ns] }, elapsed] }, then: [{ print: ["FAIL repeated read"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - if: { condition: { eq: [{ call: [second.begin] }, false] }, then: [{ print: ["FAIL begin after the first ended"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - call: [second.delete]
+      - if: { condition: { neq: [second, null] }, then: [{ print: ["FAIL delete keeps slot"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - decl: [third, gl_timer_query, { call: [gl.create_timer_query] }]
+      - if: { condition: { eq: [{ call: [third.begin] }, false] }, then: [{ print: ["FAIL delete did not end the active query"] }, { set: [fails, { +: [fails, 1] }] }] }
+      - call: [third.end]
+      - return: fails
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 64, 64, "timer"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ print: ["FAIL window"] }, { return: 1 }] }
+      - decl: [fails, i32, { call: [probe] }]
+      - call: [engine.destroy_window, win]
+      - if: { condition: { gt: [fails, 0] }, then: [{ return: 1 }] }
+      - print: ["timer query ok"]
+      - return: 0

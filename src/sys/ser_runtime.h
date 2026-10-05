@@ -64,6 +64,7 @@ typedef enum {
     AIML_TD_GLTEX      = 20, // spec/43_2 §5.5 Class 4: a gl_texture pointer slot. Leaf; free =
                              //   aiml_gl_texture_release, move-only (a copy leaves it null).
     AIML_TD_GLCUBE     = 21, // spec/43_5 §5 Class 4: a gl_cubemap pointer slot, like AIML_TD_GLTEX.
+    AIML_TD_GLQUERY    = 22, // spec/43_5 §9 Class 4: a gl_timer_query pointer slot, like AIML_TD_GLTEX.
 } AimlTDKind;
 
 // spec/61 Class 5 / Class 4 resource handles (ser_runtime.cpp).
@@ -72,6 +73,7 @@ void aiml_chan_release(void* ch);
 void aiml_thread_handle_drop(void* h);
 void aiml_gl_texture_release(void* tex);
 void aiml_gl_cubemap_release(void* cube);
+void aiml_gl_timer_query_release(void* query);
 
 // Each node is 24 bytes.  The whole descriptor for a type is an array of these.
 typedef struct {

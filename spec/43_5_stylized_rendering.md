@@ -239,6 +239,12 @@ Results can be read repeatedly until next begin. Begin while a prior result is
 pending fails; renderer skips a sample instead of blocking. Disjoint GPU timing
 invalidates samples on affected backends. Implement 64-bit native query retrieval,
 not truncated 32-bit milliseconds. Profiling must never issue glFinish.
+Ownership as gl_cubemap (spec/61 Class 4): a local from gl.create_timer_query or an
+owning producer is released at owner drop (an active query is ended first); delete()
+nulls the slot; model fields release with the model and are move-only. Desktop GL
+reports no disjoint state, so valid results are never marked invalid there. The web
+build reports timer_query unsupported (create returns null) until the disjoint path exists.
+Test: tests/test_gl_timer_query.aiml.
 
 `gl.read_rgba8(x:i32,y:i32,w:i32,h:i32) -> buffer<u8>` copies the currently bound
 read framebuffer region after rendering; positive in-bounds rectangle required.

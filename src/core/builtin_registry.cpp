@@ -252,7 +252,8 @@ static llvm::Value* gl43Arg(CompilerContext& ctx, llvm::Value* v, char k) {
 }
 
 static llvm::Type* gl43Ty(CompilerContext& ctx, char k) {
-    if (k == 'i') return ctx.builder.getInt32Ty();
+    if (k == 'i' || k == 'z') return ctx.builder.getInt32Ty();
+    if (k == 'l') return ctx.builder.getInt64Ty();
     if (k == 'f') return ctx.builder.getFloatTy();
     if (k == 'v') return ctx.builder.getVoidTy();
     return llvm::PointerType::get(ctx.context, 0);
@@ -270,6 +271,7 @@ static IRValue* gl43Emit(CompilerContext& ctx, const char* cName, const std::str
     for (char k : sig) tys.push_back(gl43Ty(ctx, k));
     llvm::Value* r = ctx.builder.CreateCall(ctx.getFunction(cName, gl43Ty(ctx, ret == 'B' ? 'p' : ret), tys), vals);
     if (ret == 'v') return nullptr;
+    if (ret == 'z') return ctx.ir_gen->wrap(ctx.builder.CreateICmpNE(r, ctx.builder.getInt32(0), "gl43_bool"));
     if (ret == 'B') {
         auto* p   = llvm::PointerType::get(ctx.context, 0);
         auto* bt  = ctx.getLLVMType("buffer");
@@ -6736,6 +6738,18 @@ void registerBuiltins(CompilerContext& ctx) {
             ctx.classes["gl_cubemap"] = std::move(ci);
         }
 
+        // ── gl_timer_query (spec/43_5 §9) ───────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name = "gl_timer_query"; ci.isBuiltin = true; ci.preLoadBase = true;
+            ci.builtinMethods["begin"]     = gl43Method("aiml_gl_timer_query_begin", "p", 'z');
+            ci.builtinMethods["end"]       = gl43Method("aiml_gl_timer_query_end", "p", 'z');
+            ci.builtinMethods["ready"]     = gl43Method("aiml_gl_timer_query_ready", "p", 'z');
+            ci.builtinMethods["result_ns"] = gl43Method("aiml_gl_timer_query_result_ns", "p", 'l');
+            GL_VOID0(ci, "delete", "aiml_gl_timer_query_release")
+            ctx.classes["gl_timer_query"] = std::move(ci);
+        }
+
         // ── gl_framebuffer ──────────────────────────────────────────────────
         {
             CompilerContext::ClassInfo ci;
@@ -7190,6 +7204,7 @@ void registerBuiltins(CompilerContext& ctx) {
             gl.builtinFuncs["limit"]               = gl43Fn("aiml_gl_limit", "p", 'i');
             gl.builtinFuncs["read_rgba8"]          = gl43Fn("aiml_gl_read_rgba8", "iiii", 'B');
             gl.builtinFuncs["create_cubemap"]      = gl43Fn("aiml_gl_create_cubemap", "ii", 'p');
+            gl.builtinFuncs["create_timer_query"]  = gl43Fn("aiml_gl_create_timer_query", "", 'p');
             gl.builtinFuncs["bind_cubemap"]        = gl43Fn("aiml_gl_bind_cubemap", "pi", 'v');
 
             // gl.bind_framebuffer(fbo) → void
