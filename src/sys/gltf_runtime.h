@@ -111,6 +111,17 @@ void*       aiml_gltf_mat_occlusion_texture             (void* mat);
 const char* aiml_gltf_mat_alpha_mode                    (void* mat);
 float       aiml_gltf_mat_alpha_cutoff                  (void* mat);
 int32_t     aiml_gltf_mat_double_sided                  (void* mat);
+/* spec/43_5 §3 */
+int32_t     aiml_gltf_mat_index                         (void* mat);
+float       aiml_gltf_mat_normal_scale                  (void* mat);
+float       aiml_gltf_mat_occlusion_strength            (void* mat);
+float       aiml_gltf_mat_emissive_strength             (void* mat);
+int32_t     aiml_gltf_mat_texture_coord                 (void* mat, const char* slot);
+int32_t     aiml_gltf_mat_texture_has_transform         (void* mat, const char* slot);
+void        aiml_gltf_scene_extensions_used_fill        (void* scene, void* list_ptr);
+void        aiml_gltf_scene_extensions_required_fill    (void* scene, void* list_ptr);
+const char* aiml_gltf_scene_extras                      (void* scene);
+int32_t     aiml_gltf_tex_image_index                   (void* tex);
 
 /* ── gltf_texture ────────────────────────────────────────────────────────── */
 

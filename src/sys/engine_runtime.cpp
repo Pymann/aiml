@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <atomic>
 
 /* ── Platform includes ───────────────────────────────────────────────────── */
 
@@ -53,6 +54,8 @@ struct AimlWindow {
     int64_t frame_count;
     float   target_frame_ms;   /* 0 = unlimited */
     int     quit_requested;
+    double  frame_mark;        /* end of the previous limited frame (spec/43_5 §8) */
+    int     dt_reset;          /* next swap reports dt=0 */
 
     /* FPS tracking — rolling average of last 60 frame durations */
     float   fps_samples[60];
@@ -63,6 +66,10 @@ struct AimlWindow {
 /* ── Globals ──────────────────────────────────────────────────────────────── */
 
 static AimlWindow*  g_win          = nullptr;
+/* spec/43_5 §8 wake reasons since the last wait_events: 1 input, 2 resize/expose,
+ * 4 focus/visibility, 8 close. */
+static std::atomic<int32_t> g_evt_flags{0};
+extern "C" void aiml_engine_note_event(int32_t flag) { g_evt_flags.fetch_or(flag); }
 static void       (*g_input_update)(void) = nullptr;
 
 /* ── Helper: get current time in seconds ─────────────────────────────────── */
@@ -74,6 +81,26 @@ static double now_sec() {
     return 0.0; /* stub */
 #else
     return glfwGetTime();
+#endif
+}
+
+/* Sleeps the rest of the frame budget measured from the previous frame end, so render
+ * and a blocking VSync swap count against the cap (no additive full-frame sleep). */
+static void limit_frame(AimlWindow* win) {
+#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+    double now = now_sec();
+    if (win->target_frame_ms > 0.0f && win->frame_mark > 0.0) {
+        double sleep_ms = (double)win->target_frame_ms - (now - win->frame_mark) * 1000.0;
+        if (sleep_ms > 0.5) {
+            struct timespec ts;
+            ts.tv_sec  = (time_t)(sleep_ms / 1000.0);
+            ts.tv_nsec = (long)((sleep_ms - (double)ts.tv_sec * 1000.0) * 1e6);
+            nanosleep(&ts, nullptr);
+        }
+    }
+    win->frame_mark = now_sec();
+#else
+    (void)win;
 #endif
 }
 
@@ -188,7 +215,12 @@ void* aiml_engine_create_window(int32_t w, int32_t h, const char* title) {
      * maximizes the window.  scene_init's re-init-Branch updated nur
      * screen_w/h + Projection — design_w/h bleibt vom ersten Aufruf
      * → ratio (screen/design) ≠ 1 → UI skaliert mit. */
+    glfwSetWindowRefreshCallback(glfw, [](GLFWwindow*) { aiml_engine_note_event(2); });
+    glfwSetWindowFocusCallback(glfw, [](GLFWwindow*, int) { aiml_engine_note_event(4); });
+    glfwSetWindowIconifyCallback(glfw, [](GLFWwindow*, int) { aiml_engine_note_event(4); });
+    glfwSetWindowCloseCallback(glfw, [](GLFWwindow*) { aiml_engine_note_event(8); });
     glfwSetFramebufferSizeCallback(glfw, [](GLFWwindow*, int fbw, int fbh) {
+        aiml_engine_note_event(2);
         glViewport(0, 0, fbw, fbh);
         /* scene_resize updated nur screen_w/h — design_w/h bleibt fixed
          * vom ersten scene_init.  Wichtig: nicht scene_init nutzen, sonst
@@ -475,18 +507,7 @@ void aiml_engine_run(void* win_ptr, void* update_fn, void* render_fn) {
         engine_tick(win, update, render);
         glfwSwapBuffers(win->glfw);
         glfwPollEvents();
-
-        /* Frame limiter */
-        if (win->target_frame_ms > 0.0f) {
-            double elapsed_ms = (now_sec() - win->last_time) * 1000.0;
-            double sleep_ms   = (double)win->target_frame_ms - elapsed_ms;
-            if (sleep_ms > 0.5) {
-                struct timespec ts;
-                ts.tv_sec  = 0;
-                ts.tv_nsec = (long)(sleep_ms * 1e6);
-                nanosleep(&ts, nullptr);
-            }
-        }
+        limit_frame(win);
     }
 #endif
 }
@@ -510,7 +531,8 @@ void aiml_engine_swap(void* win_ptr) {
     /* Update timing for manual-loop style */
     double now = now_sec();
     float  raw = (float)(now - win->last_time);
-    win->dt    = (raw < 0.1f) ? raw : 0.1f;
+    win->dt    = win->dt_reset ? 0.0f : ((raw < 0.1f) ? raw : 0.1f);
+    win->dt_reset  = 0;
     win->last_time = now;
     win->frame_count++;
 
@@ -519,18 +541,7 @@ void aiml_engine_swap(void* win_ptr) {
 #if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
     glfwSwapBuffers(win->glfw);
     glfwPollEvents();
-
-    /* Frame limiter (same as engine.run) */
-    if (win->target_frame_ms > 0.0f) {
-        double elapsed_ms = (now_sec() - win->last_time) * 1000.0;
-        double sleep_ms   = (double)win->target_frame_ms - elapsed_ms;
-        if (sleep_ms > 0.5) {
-            struct timespec ts;
-            ts.tv_sec  = 0;
-            ts.tv_nsec = (long)(sleep_ms * 1e6);
-            nanosleep(&ts, nullptr);
-        }
-    }
+    limit_frame(win);
 #endif
 }
 
@@ -571,6 +582,66 @@ int32_t aiml_engine_is_visible(void* win_ptr) {
 #else
     return glfwGetWindowAttrib(win->glfw, GLFW_VISIBLE) ? 1 : 0;
 #endif
+}
+
+/* ── spec/43_5 §8: render pixels, event waiting, clock reset ──────────────── */
+
+int32_t aiml_engine_framebuffer_size_x(void* win_ptr) {
+    if (!win_ptr) return 0;
+    AimlWindow* win = (AimlWindow*)win_ptr;
+#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+    int w = 0, h = 0; glfwGetFramebufferSize(win->glfw, &w, &h);
+    return w;
+#elif defined(__EMSCRIPTEN__)
+    int w = 0, h = 0; emscripten_get_canvas_element_size(win->canvas_id, &w, &h);
+    return w;
+#else
+    return win->width;
+#endif
+}
+
+int32_t aiml_engine_framebuffer_size_y(void* win_ptr) {
+    if (!win_ptr) return 0;
+    AimlWindow* win = (AimlWindow*)win_ptr;
+#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+    int w = 0, h = 0; glfwGetFramebufferSize(win->glfw, &w, &h);
+    return h;
+#elif defined(__EMSCRIPTEN__)
+    int w = 0, h = 0; emscripten_get_canvas_element_size(win->canvas_id, &w, &h);
+    return h;
+#else
+    return win->height;
+#endif
+}
+
+int32_t aiml_engine_wait_events(void* win_ptr, int32_t timeout_ms) {
+    if (!win_ptr) return 0;
+    if (timeout_ms < 0 || timeout_ms > 1000) {
+        fprintf(stderr, "[engine] wait_events: timeout %d outside 0..1000\n", timeout_ms);
+        timeout_ms = timeout_ms < 0 ? 0 : 1000;
+    }
+#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+    AimlWindow* win = (AimlWindow*)win_ptr;
+    glfwPollEvents();
+    if (g_evt_flags.load() == 0 && timeout_ms > 0)
+        glfwWaitEventsTimeout((double)timeout_ms / 1000.0);
+    if (glfwWindowShouldClose(win->glfw) || win->quit_requested) aiml_engine_note_event(8);
+    return g_evt_flags.exchange(0);
+#else
+    static int warned = 0;
+    if (!warned) { fprintf(stderr, "[engine] wait_events: unsupported on this platform\n"); warned = 1; }
+    return g_evt_flags.exchange(0);
+#endif
+}
+
+void aiml_engine_reset_frame_clock(void* win_ptr) {
+    if (!win_ptr) return;
+    AimlWindow* win = (AimlWindow*)win_ptr;
+    double now = now_sec();
+    win->last_time  = now;
+    win->frame_mark = now;
+    win->dt         = 0.0f;
+    win->dt_reset   = 1;
 }
 
 /* ── Frame timing ─────────────────────────────────────────────────────────── */

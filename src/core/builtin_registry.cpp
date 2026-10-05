@@ -231,6 +231,85 @@ static void bufferArgDataLen(CompilerContext& ctx, llvm::Value* v, llvm::Value*&
     }
 }
 
+// spec/43_5 call lowering. sig chars: i=i32 (bool too), f=f32, p=pointer/string/handle,
+// b=buffer (address). ret: v=void, i=i32, p=pointer, B=owned heap buffer -> buffer value.
+static llvm::Value* gl43Arg(CompilerContext& ctx, llvm::Value* v, char k) {
+    auto* i32 = ctx.builder.getInt32Ty();
+    if (k == 'i') {
+        if (v->getType()->isIntegerTy(1) || v->getType()->isIntegerTy(8)) return ctx.builder.CreateZExt(v, i32);
+        return ctx.builder.CreateSExtOrTrunc(v, i32);
+    }
+    if (k == 'f') {
+        if (v->getType()->isIntegerTy()) return ctx.builder.CreateSIToFP(v, ctx.builder.getFloatTy());
+        return v->getType()->isFloatTy() ? v : ctx.builder.CreateFPCast(v, ctx.builder.getFloatTy());
+    }
+    if (k == 'b' && !v->getType()->isPointerTy()) {
+        auto* a = ctx.createEntryAlloca(ctx.getLLVMType("buffer"), "gl43_buf_in");
+        ctx.builder.CreateStore(v, a);
+        return a;
+    }
+    return v;
+}
+
+static llvm::Type* gl43Ty(CompilerContext& ctx, char k) {
+    if (k == 'i') return ctx.builder.getInt32Ty();
+    if (k == 'f') return ctx.builder.getFloatTy();
+    if (k == 'v') return ctx.builder.getVoidTy();
+    return llvm::PointerType::get(ctx.context, 0);
+}
+
+static llvm::Value* gl43Default(CompilerContext& ctx, char k) {
+    if (k == 'i') return ctx.builder.getInt32(0);
+    if (k == 'f') return llvm::ConstantFP::get(ctx.builder.getFloatTy(), 0.0);
+    return llvm::ConstantPointerNull::get(llvm::PointerType::get(ctx.context, 0));
+}
+
+static IRValue* gl43Emit(CompilerContext& ctx, const char* cName, const std::string& sig, char ret,
+                         std::vector<llvm::Value*> vals) {
+    std::vector<llvm::Type*> tys;
+    for (char k : sig) tys.push_back(gl43Ty(ctx, k));
+    llvm::Value* r = ctx.builder.CreateCall(ctx.getFunction(cName, gl43Ty(ctx, ret == 'B' ? 'p' : ret), tys), vals);
+    if (ret == 'v') return nullptr;
+    if (ret == 'B') {
+        auto* p   = llvm::PointerType::get(ctx.context, 0);
+        auto* bt  = ctx.getLLVMType("buffer");
+        uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(bt);
+        llvm::Value* out = ctx.memV3
+            ? static_cast<llvm::Value*>(ctx.builder.CreateCall(ctx.getFunction("aiml_buffer_handle_new", p, {}), {}, "gl43_buf_h"))
+            : static_cast<llvm::Value*>(ctx.createEntryAlloca(bt, "gl43_buf"));
+        ctx.builder.CreateCall(ctx.getFunction("memcpy", p, {p, p, ctx.builder.getInt64Ty()}),
+            {out, r, ctx.builder.getInt64(sz)});
+        ctx.builder.CreateCall(ctx.getFunction("free", ctx.builder.getVoidTy(), {p}), {r});
+        return ctx.ir_gen->wrap(out);
+    }
+    return ctx.ir_gen->wrap(r);
+}
+
+static CompilerContext::FuncHandler gl43Fn(const char* cName, std::string sig, char ret) {
+    return [cName, sig, ret](CompilerContext& ctx, const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+        std::vector<llvm::Value*> vals;
+        for (size_t i = 0; i < sig.size(); ++i)
+            vals.push_back(i < args.size()
+                ? gl43Arg(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[i])), sig[i])
+                : gl43Default(ctx, sig[i]));
+        return gl43Emit(ctx, cName, sig, ret, vals);
+    };
+}
+
+// Method: the receiver is the leading 'p' of sig.
+static CompilerContext::MethodHandler gl43Method(const char* cName, std::string sig, char ret) {
+    return [cName, sig, ret](CompilerContext& ctx, llvm::Value* base, AIML::AST::CallExpr* call,
+                             std::function<AIML::IRValue*(AIML::AST::Expr*)> evalExpr) -> AIML::IRValue* {
+        std::vector<llvm::Value*> vals{base};
+        for (size_t i = 1; i < sig.size(); ++i) {
+            IRValue* a = (call && call->args.size() >= i) ? evalExpr(call->args[i - 1].get()) : nullptr;
+            vals.push_back(a ? gl43Arg(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)), sig[i])
+                             : gl43Default(ctx, sig[i]));
+        }
+        return gl43Emit(ctx, cName, sig, ret, vals);
+    };
+}
+
 void registerBuiltins(CompilerContext& ctx) {
     // spec/61 §8: builtins that hand back an OWNED string (aiml_str_dup) — the receiving local drops it.
     for (const char* fn : {"text_value"}) {
@@ -6042,6 +6121,9 @@ void registerBuiltins(CompilerContext& ctx) {
             GLTF_LIST(ci, "animations",  "aiml_gltf_scene_animations_fill")
             GLTF_LIST(ci, "skins",       "aiml_gltf_scene_skins_fill")
             GLTF_LIST(ci, "images",      "aiml_gltf_scene_images_fill")
+            GLTF_LIST(ci, "extensions_used",     "aiml_gltf_scene_extensions_used_fill")
+            GLTF_LIST(ci, "extensions_required", "aiml_gltf_scene_extensions_required_fill")
+            GLTF_STR (ci, "extras",      "aiml_gltf_scene_extras")
 
             ci.builtinMethods["free"] = [](CompilerContext& ctx, llvm::Value* base,
                 AIML::AST::CallExpr*, auto) -> IRValue* {
@@ -6174,6 +6256,28 @@ void registerBuiltins(CompilerContext& ctx) {
             GLTF_STR (ci, "alpha_mode",    "aiml_gltf_mat_alpha_mode")
             GLTF_F32M(ci, "alpha_cutoff",  "aiml_gltf_mat_alpha_cutoff")
             GLTF_I32M(ci, "double_sided",  "aiml_gltf_mat_double_sided")
+            GLTF_I32M(ci, "index",              "aiml_gltf_mat_index")
+            GLTF_F32M(ci, "normal_scale",       "aiml_gltf_mat_normal_scale")
+            GLTF_F32M(ci, "occlusion_strength", "aiml_gltf_mat_occlusion_strength")
+            GLTF_F32M(ci, "emissive_strength",  "aiml_gltf_mat_emissive_strength")
+
+            // texture_coord(slot) / texture_has_transform(slot): (mat, string) → i32
+#define GLTF_SLOT(ci, aimlName, cName) \
+            (ci).builtinMethods[aimlName] = [](CompilerContext& ctx, llvm::Value* base, \
+                AIML::AST::CallExpr* call, auto evalExpr) -> IRValue* { \
+                auto* p   = llvm::PointerType::get(ctx.context, 0); \
+                auto* i32 = ctx.builder.getInt32Ty(); \
+                llvm::Value* slot = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p)); \
+                if (call && !call->args.empty()) { \
+                    IRValue* a = evalExpr(call->args[0].get()); \
+                    if (a) slot = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)); \
+                } \
+                return ctx.ir_gen->wrap(ctx.builder.CreateCall( \
+                    ctx.getFunction(cName, i32, {p, p}), {base, slot})); \
+            };
+            GLTF_SLOT(ci, "texture_coord",         "aiml_gltf_mat_texture_coord")
+            GLTF_SLOT(ci, "texture_has_transform", "aiml_gltf_mat_texture_has_transform")
+#undef GLTF_SLOT
 
             ctx.classes["gltf_material"] = std::move(ci);
         }
@@ -6186,6 +6290,7 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.preLoadBase = true;
 
             GLTF_PTRM(ci, "image",      "aiml_gltf_tex_image")
+            GLTF_I32M(ci, "image_index", "aiml_gltf_tex_image_index")
             GLTF_STR (ci, "wrap_s",     "aiml_gltf_tex_wrap_s")
             GLTF_STR (ci, "wrap_t",     "aiml_gltf_tex_wrap_t")
             GLTF_STR (ci, "min_filter", "aiml_gltf_tex_min_filter")
@@ -6550,6 +6655,7 @@ void registerBuiltins(CompilerContext& ctx) {
                 return nullptr;
             };
 
+            ci.builtinMethods["uniform_vec3_array"] = gl43Method("aiml_gl_shader_uniform_vec3_array", "ppbi", 'i');
             GL_VOID0(ci, "delete", "aiml_gl_shader_delete")
 
             ctx.classes["gl_shader"] = std::move(ci);
@@ -6591,6 +6697,10 @@ void registerBuiltins(CompilerContext& ctx) {
             };
 
             GL_VOID0(ci, "gen_mipmaps", "aiml_gl_texture_gen_mipmaps")
+            ci.builtinMethods["width"]  = gl43Method("aiml_gl_texture_width",  "p", 'i');
+            ci.builtinMethods["height"] = gl43Method("aiml_gl_texture_height", "p", 'i');
+            ci.builtinMethods["format"] = gl43Method("aiml_gl_texture_format", "p", 'i');
+            ci.builtinMethods["levels"] = gl43Method("aiml_gl_texture_levels", "p", 'i');
             GL_VOID0(ci, "delete",      "aiml_gl_texture_delete")
 
             ctx.classes["gl_texture"] = std::move(ci);
@@ -6616,6 +6726,11 @@ void registerBuiltins(CompilerContext& ctx) {
                     ctx.builder.getVoidTy(), {p, i32, i32}), {base, g(0), g(1)});
                 return nullptr;
             };
+            ci.builtinMethods["bind_color_texture"] = gl43Method("aiml_gl_framebuffer_bind_color_texture", "pi", 'v');
+            ci.builtinMethods["resize_checked"] = gl43Method("aiml_gl_framebuffer_resize_checked", "pii", 'i');
+            ci.builtinMethods["width"]  = gl43Method("aiml_gl_framebuffer_width",  "p", 'i');
+            ci.builtinMethods["height"] = gl43Method("aiml_gl_framebuffer_height", "p", 'i');
+            ci.builtinMethods["format"] = gl43Method("aiml_gl_framebuffer_format", "p", 'i');
             GL_VOID0(ci, "delete", "aiml_gl_framebuffer_delete")
 
             ctx.classes["gl_framebuffer"] = std::move(ci);
@@ -7032,6 +7147,19 @@ void registerBuiltins(CompilerContext& ctx) {
                     ctx.getFunction("aiml_gl_create_framebuffer", p, {i32, i32}), {g32(0), g32(1)}));
             };
 
+            // spec/43_5 §4/§6/§7/§9
+            gl.builtinFuncs["create_texture_format"]     = gl43Fn("aiml_gl_create_texture_format", "iibii", 'p');
+            gl.builtinFuncs["create_texture_f32"]        = gl43Fn("aiml_gl_create_texture_f32", "iibi", 'p');
+            gl.builtinFuncs["create_framebuffer_format"] = gl43Fn("aiml_gl_create_framebuffer_format", "iiii", 'p');
+            gl.builtinFuncs["depth_write"]         = gl43Fn("aiml_gl_depth_write", "i", 'v');
+            gl.builtinFuncs["depth_func"]          = gl43Fn("aiml_gl_depth_func", "i", 'v');
+            gl.builtinFuncs["front_face"]          = gl43Fn("aiml_gl_front_face", "i", 'v');
+            gl.builtinFuncs["blend_func_separate"] = gl43Fn("aiml_gl_blend_func_separate", "iiii", 'v');
+            gl.builtinFuncs["framebuffer_srgb"]    = gl43Fn("aiml_gl_framebuffer_srgb", "i", 'i');
+            gl.builtinFuncs["supports"]            = gl43Fn("aiml_gl_supports", "p", 'i');
+            gl.builtinFuncs["limit"]               = gl43Fn("aiml_gl_limit", "p", 'i');
+            gl.builtinFuncs["read_rgba8"]          = gl43Fn("aiml_gl_read_rgba8", "iiii", 'B');
+
             // gl.bind_framebuffer(fbo) → void
             gl.builtinFuncs["bind_framebuffer"] = [](CompilerContext& ctx,
                 const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
@@ -7225,6 +7353,23 @@ void registerBuiltins(CompilerContext& ctx) {
             v = ctx.builder.CreateInsertValue(v, sy, 1);
             return ctx.ir_gen->wrap(v);
         };
+        // spec/43_5 §8
+        eng.builtinFuncs["framebuffer_size"] = [](CompilerContext& ctx,
+            const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
+            auto* p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* w = args.empty()
+                ? llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(p))
+                : static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+            auto* i32 = ctx.builder.getInt32Ty();
+            llvm::Value* sx = ctx.builder.CreateCall(ctx.getFunction("aiml_engine_framebuffer_size_x", i32, {p}), {w});
+            llvm::Value* sy = ctx.builder.CreateCall(ctx.getFunction("aiml_engine_framebuffer_size_y", i32, {p}), {w});
+            llvm::Value* v = llvm::UndefValue::get(ctx.getLLVMType("ivec2"));
+            v = ctx.builder.CreateInsertValue(v, sx, 0);
+            v = ctx.builder.CreateInsertValue(v, sy, 1);
+            return ctx.ir_gen->wrap(v);
+        };
+        eng.builtinFuncs["wait_events"]       = gl43Fn("aiml_engine_wait_events", "pi", 'i');
+        eng.builtinFuncs["reset_frame_clock"] = gl43Fn("aiml_engine_reset_frame_clock", "p", 'v');
         eng.builtinFuncs["window_size_x"] = [](CompilerContext& ctx,
             const std::vector<AIML::IRValue*>& args) -> AIML::IRValue* {
             auto* p = llvm::PointerType::get(ctx.context, 0);

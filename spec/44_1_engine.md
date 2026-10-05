@@ -123,6 +123,12 @@ Equivalent to `engine.run` on desktop and Android. **Not recommended for browser
 
 ### 4.3 Frame Timing
 
+Event waiting (`engine.wait_events`), framebuffer pixel dimensions
+(`engine.framebuffer_size`) and clock reset (`engine.reset_frame_clock`) for idle
+rendering are specified in [43.5 §8](43_5_stylized_rendering.md). The target-FPS cap
+counts render and swap time against the frame budget. Existing VSync and target-FPS
+APIs below are reused, not replaced.
+
 | Call | Return | Description |
 |------|--------|-------------|
 | `engine.dt()` | `f32` | Delta time in seconds since last frame; `0.016` on first frame |

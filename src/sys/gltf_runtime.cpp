@@ -22,6 +22,10 @@
 #include <cstring>
 #include <cmath>
 #include <cstdio>
+#include <mutex>
+#include <vector>
+
+extern "C" char* aiml_str_dup(const char* s);
 
 /* ── Internal helpers ────────────────────────────────────────────────────── */
 
@@ -41,6 +45,30 @@ struct AimlGltfTexRef {
     cgltf_texture* ptr;
     cgltf_data*    data;
 };
+
+/* Loaded scenes, for scene-local indices of raw material/texture pointers (spec/43_5 §3). */
+static std::mutex             g_live_mu;
+static std::vector<cgltf_data*> g_live;
+
+static void live_add(cgltf_data* d) {
+    std::lock_guard<std::mutex> lk(g_live_mu);
+    g_live.push_back(d);
+}
+static void live_remove(cgltf_data* d) {
+    std::lock_guard<std::mutex> lk(g_live_mu);
+    for (size_t i = 0; i < g_live.size(); ++i)
+        if (g_live[i] == d) { g_live.erase(g_live.begin() + (long)i); return; }
+}
+template <typename T>
+static int32_t live_index(const T* elem, T* cgltf_data::*arr, cgltf_size cgltf_data::*count) {
+    if (!elem) return -1;
+    std::lock_guard<std::mutex> lk(g_live_mu);
+    for (cgltf_data* d : g_live) {
+        T* base = d->*arr;
+        if (base && elem >= base && elem < base + d->*count) return (int32_t)(elem - base);
+    }
+    return -1;
+}
 
 /* ── Buffer helpers ──────────────────────────────────────────────────────── */
 
@@ -261,6 +289,7 @@ void* aiml_gltf_load(const char* path) {
         s->data = nullptr;
         return s;
     }
+    live_add(s->data);
     return s;
 }
 
@@ -277,7 +306,7 @@ const char* aiml_gltf_scene_error(void* scene) {
 void aiml_gltf_scene_free(void* scene) {
     auto* s = (AimlGltfScene*)scene;
     if (!s) return;
-    if (s->data)      cgltf_free(s->data);
+    if (s->data) { live_remove(s->data); cgltf_free(s->data); }
     if (s->error_msg) free(s->error_msg);
     free(s);
 }
@@ -592,6 +621,61 @@ int32_t aiml_gltf_mat_double_sided(void* mat) {
     return (m && m->double_sided) ? 1 : 0;
 }
 
+/* spec/43_5 §3: textureInfo of one material binding, not the shared cgltf_texture. */
+static const cgltf_texture_view* mat_slot(void* mat, const char* slot) {
+    auto* m = (cgltf_material*)mat;
+    if (!m || !slot) return nullptr;
+    const cgltf_texture_view* v = nullptr;
+    if      (!strcmp(slot, "base_color"))         v = &m->pbr_metallic_roughness.base_color_texture;
+    else if (!strcmp(slot, "metallic_roughness")) v = &m->pbr_metallic_roughness.metallic_roughness_texture;
+    else if (!strcmp(slot, "normal"))             v = &m->normal_texture;
+    else if (!strcmp(slot, "occlusion"))          v = &m->occlusion_texture;
+    else if (!strcmp(slot, "emissive"))           v = &m->emissive_texture;
+    else fprintf(stderr, "gltf_material: unknown texture slot '%s'\n", slot);
+    return (v && v->texture) ? v : nullptr;
+}
+
+int32_t aiml_gltf_mat_index(void* mat) {
+    return live_index((const cgltf_material*)mat, &cgltf_data::materials, &cgltf_data::materials_count);
+}
+float aiml_gltf_mat_normal_scale(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return (m && m->normal_texture.texture) ? m->normal_texture.scale : 1.0f;
+}
+float aiml_gltf_mat_occlusion_strength(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return (m && m->occlusion_texture.texture) ? m->occlusion_texture.scale : 1.0f;
+}
+float aiml_gltf_mat_emissive_strength(void* mat) {
+    auto* m = (cgltf_material*)mat;
+    return (m && m->has_emissive_strength) ? m->emissive_strength.emissive_strength : 1.0f;
+}
+int32_t aiml_gltf_mat_texture_coord(void* mat, const char* slot) {
+    const cgltf_texture_view* v = mat_slot(mat, slot);
+    return v ? (int32_t)v->texcoord : -1;
+}
+int32_t aiml_gltf_mat_texture_has_transform(void* mat, const char* slot) {
+    const cgltf_texture_view* v = mat_slot(mat, slot);
+    return (v && v->has_transform) ? 1 : 0;
+}
+
+static void fill_names(char** names, cgltf_size n, void* list_ptr) {
+    auto* lst = (AimlGltfListRaw*)list_ptr;
+    for (cgltf_size i = 0; i < n; ++i) list_push_ptr(lst, aiml_str_dup(names[i] ? names[i] : ""));
+}
+void aiml_gltf_scene_extensions_used_fill(void* scene, void* list_ptr) {
+    auto* s = (AimlGltfScene*)scene;
+    if (s && s->data) fill_names(s->data->extensions_used, s->data->extensions_used_count, list_ptr);
+}
+void aiml_gltf_scene_extensions_required_fill(void* scene, void* list_ptr) {
+    auto* s = (AimlGltfScene*)scene;
+    if (s && s->data) fill_names(s->data->extensions_required, s->data->extensions_required_count, list_ptr);
+}
+const char* aiml_gltf_scene_extras(void* scene) {
+    auto* s = (AimlGltfScene*)scene;
+    return (s && s->data && s->data->extras.data) ? s->data->extras.data : "";
+}
+
 /* ── gltf_texture ────────────────────────────────────────────────────────── */
 
 void* aiml_gltf_tex_image(void* tex) {
@@ -602,6 +686,11 @@ void* aiml_gltf_tex_image(void* tex) {
     ref->ptr  = t->image;
     ref->data = nullptr; /* No scene backref from texture path — decode from URI if needed */
     return ref;
+}
+
+int32_t aiml_gltf_tex_image_index(void* tex) {
+    auto* t = (cgltf_texture*)tex;
+    return t ? live_index((const cgltf_image*)t->image, &cgltf_data::images, &cgltf_data::images_count) : -1;
 }
 
 /* spec/61 Class 4: the handle block from tex.image() is released at owner drop (null-safe). */

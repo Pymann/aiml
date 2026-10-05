@@ -29,6 +29,7 @@
 #include <stb/stb_image.h>
 
 #include <cstdlib>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <unordered_map>
@@ -83,6 +84,9 @@ struct AimlGLTexture {
     GLuint id;
     int    width  = 0;
     int    height = 0;
+    int    channels_unused = 0;   /* keeps ui_runtime's mirror layout */
+    GLenum format = 0;            /* spec/43_5 §4; 0 = legacy path */
+    int    levels = 0;
 };
 
 struct AimlGLFramebuffer {
@@ -90,6 +94,8 @@ struct AimlGLFramebuffer {
     GLuint color_tex;
     GLuint depth_rbo;
     int    w, h;
+    GLenum format = GL_RGBA8;
+    bool   has_depth = true;
 };
 
 /* gl_mesh: VAO + up to 3 VBOs (pos, uv, normals) + IBO */
@@ -397,8 +403,12 @@ void aiml_gl_shader_uniform_mat4(void* shader, const char* name, float* m) {
 
 void aiml_gl_shader_uniform_mat4_array(void* shader, const char* name,
                                         void* buf, int32_t count) {
-    if (!shader || !buf || count <= 0) return;
+    if (!shader || count == 0) return;
     AimlGLRawBuf* b = (AimlGLRawBuf*)buf;
+    if (count < 0 || !b || !b->data || (int64_t)b->size < (int64_t)count * 16 * (int64_t)sizeof(float)) {
+        fprintf(stderr, "[aiml_gl] uniform_mat4_array '%s': buffer too short for %d\n", name ? name : "", count);
+        return;
+    }
     glUniformMatrix4fv(((AimlGLShader*)shader)->location(name),
                        count, GL_FALSE, (const float*)b->data);
 }
@@ -416,6 +426,7 @@ void aiml_gl_shader_delete(void* shader) {
 // browser GL context (no GLFW), so just always upload.
 #ifndef AIML_WASM_BUILD
 extern "C" void* glfwGetCurrentContext(void);
+extern "C" void  glfwGetFramebufferSize(void* win, int* w, int* h);
 static inline bool aiml_gl_has_context() { return glfwGetCurrentContext() != nullptr; }
 #else
 static inline bool aiml_gl_has_context() { return true; }
@@ -495,6 +506,7 @@ void* aiml_gl_load_texture(const char* path) {
 
 void* aiml_gl_create_texture(int32_t w, int32_t h, void* px_buf) {
     AimlGLTexture*  t   = new AimlGLTexture();
+    t->width = w; t->height = h;
     glGenTextures(1, &t->id);
     if (px_buf) {
         AimlGLRawBuf* b = (AimlGLRawBuf*)px_buf;
@@ -788,4 +800,381 @@ void aiml_gl_mesh_delete(void* mesh) {
     if (m->vbo_joint)  glDeleteBuffers(1, &m->vbo_joint);
     if (m->vbo_weight) glDeleteBuffers(1, &m->vbo_weight);
     delete m;
+}
+
+/* ── spec/43_5: explicit formats, HDR targets, state, capabilities, readback ── */
+
+#ifndef GL_FRAMEBUFFER_SRGB
+#  define GL_FRAMEBUFFER_SRGB 0x8DB9
+#endif
+
+static void gl_clear_errors() { while (glGetError() != GL_NO_ERROR) {} }
+
+static int32_t gl_max_texture_size() {
+    GLint v = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &v);
+    return v;
+}
+
+static int32_t mip_levels(int32_t w, int32_t h) {
+    int32_t m = w > h ? w : h, n = 1;
+    while (m > 1) { m >>= 1; ++n; }
+    return n;
+}
+
+/* Validates dims and the exact element count of `buf` (comp bytes per channel, 4 channels). */
+static bool tex_input_ok(const char* fn, int32_t w, int32_t h, const AimlGLRawBuf* b, int32_t comp) {
+    if (w <= 0 || h <= 0 || w > gl_max_texture_size() || h > gl_max_texture_size()) {
+        fprintf(stderr, "[aiml_gl] %s: invalid size %dx%d\n", fn, w, h);
+        return false;
+    }
+    int64_t need = (int64_t)w * h * 4 * comp;
+    if (!b || !b->data || (int64_t)b->size != need) {
+        fprintf(stderr, "[aiml_gl] %s: expected %lld bytes, got %d\n", fn,
+                (long long)need, b ? b->size : -1);
+        return false;
+    }
+    return true;
+}
+
+static AimlGLTexture* tex_alloc(int32_t w, int32_t h, GLenum ifmt, GLenum type,
+                                const void* px, bool mipmaps) {
+    GLint prev = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev);
+    gl_clear_errors();
+    GLuint id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)ifmt, w, h, 0, GL_RGBA, type, px);
+    if (mipmaps) glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, mipmaps ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    if (!mipmaps) glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    GLenum err = glGetError();
+    glBindTexture(GL_TEXTURE_2D, (GLuint)prev);
+    if (err != GL_NO_ERROR) {
+        fprintf(stderr, "[aiml_gl] texture upload failed: GL error 0x%x\n", err);
+        glDeleteTextures(1, &id);
+        return nullptr;
+    }
+    AimlGLTexture* t = new AimlGLTexture();
+    t->id = id; t->width = w; t->height = h; t->format = ifmt;
+    t->levels = mipmaps ? mip_levels(w, h) : 1;
+    return t;
+}
+
+void* aiml_gl_create_texture_format(int32_t w, int32_t h, void* px_buf, int32_t format, int32_t mipmaps) {
+    if (format != GL_RGBA8 && format != GL_SRGB8_ALPHA8) {
+        fprintf(stderr, "[aiml_gl] create_texture_format: unsupported format 0x%x\n", format);
+        return nullptr;
+    }
+    auto* b = (AimlGLRawBuf*)px_buf;
+    if (!tex_input_ok("create_texture_format", w, h, b, 1)) return nullptr;
+    return tex_alloc(w, h, (GLenum)format, GL_UNSIGNED_BYTE, b->data, mipmaps != 0);
+}
+
+void* aiml_gl_create_texture_f32(int32_t w, int32_t h, void* px_buf, int32_t mipmaps) {
+    auto* b = (AimlGLRawBuf*)px_buf;
+    if (!tex_input_ok("create_texture_f32", w, h, b, 4)) return nullptr;
+    const float* f = (const float*)b->data;
+    for (int64_t i = 0, n = (int64_t)w * h * 4; i < n; ++i)
+        if (!std::isfinite(f[i])) {
+            fprintf(stderr, "[aiml_gl] create_texture_f32: non-finite component %lld\n", (long long)i);
+            return nullptr;
+        }
+    return tex_alloc(w, h, GL_RGBA16F, GL_FLOAT, f, mipmaps != 0);
+}
+
+int32_t aiml_gl_texture_width (void* tex) { return tex ? ((AimlGLTexture*)tex)->width : 0; }
+int32_t aiml_gl_texture_height(void* tex) { return tex ? ((AimlGLTexture*)tex)->height : 0; }
+int32_t aiml_gl_texture_format(void* tex) {
+    if (!tex) return 0;
+    auto* t = (AimlGLTexture*)tex;
+    return t->format ? (int32_t)t->format : (t->id ? GL_RGBA8 : 0);
+}
+int32_t aiml_gl_texture_levels(void* tex) { return tex ? ((AimlGLTexture*)tex)->levels : 0; }
+
+/* Allocates color (+ optional depth) storage for fb's current ids; false + GL objects intact on error. */
+static bool fb_storage(GLuint color, GLuint depth, int32_t w, int32_t h, GLenum fmt) {
+    gl_clear_errors();
+    glBindTexture(GL_TEXTURE_2D, color);
+    glTexImage2D(GL_TEXTURE_2D, 0, (GLint)fmt, w, h, 0, GL_RGBA,
+                 fmt == GL_RGBA16F ? GL_FLOAT : GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    if (depth) {
+        glBindRenderbuffer(GL_RENDERBUFFER, depth);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
+        glBindRenderbuffer(GL_RENDERBUFFER, 0);
+    }
+    return glGetError() == GL_NO_ERROR;
+}
+
+struct GlBindSave {
+    GLint tex = 0, draw = 0, read = 0;
+    GlBindSave() {
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &tex);
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw);
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &read);
+    }
+    ~GlBindSave() {
+        glBindTexture(GL_TEXTURE_2D, (GLuint)tex);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)draw);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)read);
+    }
+};
+
+/* Builds a complete fbo for (w,h,fmt,depth); all-or-nothing. */
+static bool fb_build(AimlGLFramebuffer* fb, int32_t w, int32_t h) {
+    GLuint color = 0, depth = 0, fbo = 0;
+    glGenTextures(1, &color);
+    if (fb->has_depth) glGenRenderbuffers(1, &depth);
+    bool ok = fb_storage(color, depth, w, h, fb->format);
+    if (ok) {
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
+        if (depth)
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, depth);
+        GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (st != GL_FRAMEBUFFER_COMPLETE) {
+            fprintf(stderr, "[aiml_gl] framebuffer incomplete: 0x%x\n", st);
+            ok = false;
+        }
+    }
+    if (!ok) {
+        if (fbo) glDeleteFramebuffers(1, &fbo);
+        glDeleteTextures(1, &color);
+        if (depth) glDeleteRenderbuffers(1, &depth);
+        return false;
+    }
+    fb->fbo = fbo; fb->color_tex = color; fb->depth_rbo = depth; fb->w = w; fb->h = h;
+    return true;
+}
+
+void* aiml_gl_create_framebuffer_format(int32_t w, int32_t h, int32_t format, int32_t depth) {
+    if (format != GL_RGBA8 && format != GL_RGBA16F) {
+        fprintf(stderr, "[aiml_gl] create_framebuffer_format: unsupported format 0x%x\n", format);
+        return nullptr;
+    }
+    if (w <= 0 || h <= 0 || w > gl_max_texture_size() || h > gl_max_texture_size()) {
+        fprintf(stderr, "[aiml_gl] create_framebuffer_format: invalid size %dx%d\n", w, h);
+        return nullptr;
+    }
+    GlBindSave save;
+    AimlGLFramebuffer* fb = new AimlGLFramebuffer();
+    fb->format = (GLenum)format;
+    fb->has_depth = depth != 0;
+    if (!fb_build(fb, w, h)) { delete fb; return nullptr; }
+    return fb;
+}
+
+void aiml_gl_framebuffer_bind_color_texture(void* fbo, int32_t unit) {
+    if (!fbo) return;
+    auto* fb = (AimlGLFramebuffer*)fbo;
+    GLint draw = 0, units = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &draw);
+    glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &units);
+    if ((GLuint)draw == fb->fbo) {
+        fprintf(stderr, "[aiml_gl] bind_color_texture: framebuffer is the current draw target\n");
+        return;
+    }
+    if (unit < 0 || unit >= units) {
+        fprintf(stderr, "[aiml_gl] bind_color_texture: unit %d out of range\n", unit);
+        return;
+    }
+    glActiveTexture(GL_TEXTURE0 + (GLenum)unit);
+    glBindTexture(GL_TEXTURE_2D, fb->color_tex);
+}
+
+int32_t aiml_gl_framebuffer_resize_checked(void* fbo, int32_t w, int32_t h) {
+    if (!fbo) return 0;
+    auto* fb = (AimlGLFramebuffer*)fbo;
+    if (w <= 0 || h <= 0 || w > gl_max_texture_size() || h > gl_max_texture_size()) return 0;
+    GlBindSave save;
+    AimlGLFramebuffer fresh = *fb;
+    if (!fb_build(&fresh, w, h)) return 0;
+    glDeleteFramebuffers(1, &fb->fbo);
+    glDeleteTextures(1, &fb->color_tex);
+    if (fb->depth_rbo) glDeleteRenderbuffers(1, &fb->depth_rbo);
+    *fb = fresh;
+    return 1;
+}
+
+int32_t aiml_gl_framebuffer_width (void* fbo) { return fbo ? ((AimlGLFramebuffer*)fbo)->w : 0; }
+int32_t aiml_gl_framebuffer_height(void* fbo) { return fbo ? ((AimlGLFramebuffer*)fbo)->h : 0; }
+int32_t aiml_gl_framebuffer_format(void* fbo) { return fbo ? (int32_t)((AimlGLFramebuffer*)fbo)->format : 0; }
+
+void aiml_gl_depth_write(int32_t on) { glDepthMask(on ? GL_TRUE : GL_FALSE); }
+void aiml_gl_depth_func(int32_t mode) {
+    if (mode != GL_LESS && mode != GL_LEQUAL) {
+        fprintf(stderr, "[aiml_gl] depth_func: unsupported mode 0x%x\n", mode);
+        return;
+    }
+    glDepthFunc((GLenum)mode);
+}
+void aiml_gl_front_face(int32_t mode) {
+    if (mode != GL_CW && mode != GL_CCW) {
+        fprintf(stderr, "[aiml_gl] front_face: unsupported mode 0x%x\n", mode);
+        return;
+    }
+    glFrontFace((GLenum)mode);
+}
+static bool blend_factor_ok(int32_t f) {
+    return f == GL_ZERO || f == GL_ONE || f == GL_SRC_ALPHA || f == GL_ONE_MINUS_SRC_ALPHA;
+}
+void aiml_gl_blend_func_separate(int32_t src_rgb, int32_t dst_rgb, int32_t src_a, int32_t dst_a) {
+    if (!blend_factor_ok(src_rgb) || !blend_factor_ok(dst_rgb) ||
+        !blend_factor_ok(src_a) || !blend_factor_ok(dst_a)) {
+        fprintf(stderr, "[aiml_gl] blend_func_separate: unsupported factor\n");
+        return;
+    }
+    glBlendFuncSeparate((GLenum)src_rgb, (GLenum)dst_rgb, (GLenum)src_a, (GLenum)dst_a);
+}
+int32_t aiml_gl_framebuffer_srgb(int32_t on) {
+#ifdef __EMSCRIPTEN__
+    return on ? 0 : 1;
+#else
+    if (on) glEnable(GL_FRAMEBUFFER_SRGB); else glDisable(GL_FRAMEBUFFER_SRGB);
+    return 1;
+#endif
+}
+
+int32_t aiml_gl_shader_uniform_vec3_array(void* shader, const char* name, void* buf, int32_t count) {
+    if (!shader || !name || count < 0) {
+        fprintf(stderr, "[aiml_gl] uniform_vec3_array: invalid arguments\n");
+        return 0;
+    }
+    if (count == 0) return 1;
+    auto* b = (AimlGLRawBuf*)buf;
+    if (!b || !b->data || (int64_t)b->size < (int64_t)count * 3 * (int64_t)sizeof(float)) {
+        fprintf(stderr, "[aiml_gl] uniform_vec3_array '%s': buffer too short for %d\n", name, count);
+        return 0;
+    }
+    GLint loc = ((AimlGLShader*)shader)->location(name);
+    if (loc >= 0) glUniform3fv(loc, count, (const float*)b->data);
+    return 1;
+}
+
+/* Probes a complete RGBA16F target once per context. */
+static int32_t probe_rgba16f_renderable() {
+    static void* probed_ctx = nullptr;
+    static int32_t result = 0;
+#ifndef AIML_WASM_BUILD
+    void* cur = glfwGetCurrentContext();
+#else
+    void* cur = (void*)1;
+#endif
+    if (cur == probed_ctx) return result;
+    GlBindSave save;
+    AimlGLFramebuffer fb;
+    fb.format = GL_RGBA16F; fb.has_depth = false;
+    result = fb_build(&fb, 4, 4) ? 1 : 0;
+    if (result) { glDeleteFramebuffers(1, &fb.fbo); glDeleteTextures(1, &fb.color_tex); }
+    probed_ctx = cur;
+    return result;
+}
+
+static bool has_gl_extension(const char* name) {
+    GLint n = 0;
+    glGetIntegerv(GL_NUM_EXTENSIONS, &n);
+    for (GLint i = 0; i < n; ++i) {
+        const char* e = (const char*)glGetStringi(GL_EXTENSIONS, (GLuint)i);
+        if (e && !strcmp(e, name)) return true;
+    }
+    return false;
+}
+
+int32_t aiml_gl_supports(const char* feature) {
+    if (!feature) return 0;
+#ifdef __EMSCRIPTEN__
+    const bool desktop = false;
+#else
+    const bool desktop = true;
+#endif
+    if (!strcmp(feature, "srgb_texture"))       return 1;
+    if (!strcmp(feature, "rgba16f_renderable")) return probe_rgba16f_renderable();
+    if (!strcmp(feature, "rgba16f_filterable")) return desktop || has_gl_extension("OES_texture_float_linear") || has_gl_extension("GL_OES_texture_float_linear") ? 1 : 0;
+    if (!strcmp(feature, "cubemap_float"))      return 1;
+    if (!strcmp(feature, "timer_query"))        return desktop || has_gl_extension("EXT_disjoint_timer_query_webgl2") ? 1 : 0;
+    if (!strcmp(feature, "framebuffer_srgb"))   return desktop ? 1 : 0;
+    fprintf(stderr, "[aiml_gl] supports: unknown feature '%s'\n", feature);
+    return 0;
+}
+
+int32_t aiml_gl_limit(const char* name) {
+    GLint v = -1;
+    if (!name) return -1;
+    if      (!strcmp(name, "max_texture_size"))            glGetIntegerv(GL_MAX_TEXTURE_SIZE, &v);
+    else if (!strcmp(name, "max_cube_size"))               glGetIntegerv(GL_MAX_CUBE_MAP_TEXTURE_SIZE, &v);
+    else if (!strcmp(name, "max_fragment_texture_units"))  glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &v);
+    else if (!strcmp(name, "max_vertex_uniform_components")) glGetIntegerv(GL_MAX_VERTEX_UNIFORM_COMPONENTS, &v);
+    else fprintf(stderr, "[aiml_gl] limit: unknown name '%s'\n", name);
+    return v;
+}
+
+/* Pixel size of the bound read framebuffer (attachment 0 or the default drawable). */
+static void read_target_size(int32_t* w, int32_t* h) {
+    GLint rfb = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &rfb);
+#ifndef AIML_WASM_BUILD
+    if (rfb == 0) {
+        int fw = 0, fh = 0;
+        if (void* win = glfwGetCurrentContext()) glfwGetFramebufferSize(win, &fw, &fh);
+        *w = fw; *h = fh;
+        return;
+    }
+    GLint type = 0, name = 0;
+    glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &type);
+    glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &name);
+    if (type == GL_TEXTURE) {
+        GLint prev = 0, tw = 0, th = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)name);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &tw);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &th);
+        glBindTexture(GL_TEXTURE_2D, (GLuint)prev);
+        *w = tw; *h = th;
+        return;
+    }
+#endif
+    GLint vp[4] = {0, 0, 0, 0};
+    glGetIntegerv(GL_VIEWPORT, vp);
+    *w = vp[0] + vp[2]; *h = vp[1] + vp[3];
+}
+
+/* Owned buffer<u8> of w*h*4 bytes, top row first; empty on invalid input. */
+void* aiml_gl_read_rgba8(int32_t x, int32_t y, int32_t w, int32_t h) {
+    auto* out = (AimlGLRawBuf*)calloc(1, sizeof(AimlGLRawBuf));
+    int32_t lim_w = 0, lim_h = 0;
+    read_target_size(&lim_w, &lim_h);
+    if (x < 0 || y < 0 || w <= 0 || h <= 0 || (int64_t)x + w > lim_w || (int64_t)y + h > lim_h) {
+        fprintf(stderr, "[aiml_gl] read_rgba8: rectangle %d,%d %dx%d outside %dx%d\n", x, y, w, h, lim_w, lim_h);
+        return out;
+    }
+    size_t row = (size_t)w * 4, n = row * (size_t)h;
+    uint8_t* px = (uint8_t*)malloc(n);
+    uint8_t* tmp = (uint8_t*)malloc(row);
+    if (!px || !tmp) { free(px); free(tmp); return out; }
+    GLint pack = 4;
+    glGetIntegerv(GL_PACK_ALIGNMENT, &pack);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(x, y, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    glPixelStorei(GL_PACK_ALIGNMENT, pack);
+    for (int32_t r = 0; r < h / 2; ++r) {
+        memcpy(tmp, px + (size_t)r * row, row);
+        memcpy(px + (size_t)r * row, px + (size_t)(h - 1 - r) * row, row);
+        memcpy(px + (size_t)(h - 1 - r) * row, tmp, row);
+    }
+    free(tmp);
+    out->data = px; out->size = (int32_t)n; out->capacity = (int32_t)n; out->write_idx = (int32_t)n;
+    return out;
 }

@@ -121,6 +121,30 @@ void* aiml_gl_framebuffer_color_texture(void* fbo);
 void  aiml_gl_framebuffer_resize    (void* fbo, int32_t w, int32_t h);
 void  aiml_gl_framebuffer_delete    (void* fbo);
 
+/* ── spec/43_5 ─────────────────────────────────────────────────────────────── */
+
+void*   aiml_gl_create_texture_format(int32_t w, int32_t h, void* px_buf, int32_t format, int32_t mipmaps);
+void*   aiml_gl_create_texture_f32   (int32_t w, int32_t h, void* px_buf, int32_t mipmaps);
+int32_t aiml_gl_texture_width (void* tex);
+int32_t aiml_gl_texture_height(void* tex);
+int32_t aiml_gl_texture_format(void* tex);
+int32_t aiml_gl_texture_levels(void* tex);
+void*   aiml_gl_create_framebuffer_format(int32_t w, int32_t h, int32_t format, int32_t depth);
+void    aiml_gl_framebuffer_bind_color_texture(void* fbo, int32_t unit);
+int32_t aiml_gl_framebuffer_resize_checked(void* fbo, int32_t w, int32_t h);
+int32_t aiml_gl_framebuffer_width (void* fbo);
+int32_t aiml_gl_framebuffer_height(void* fbo);
+int32_t aiml_gl_framebuffer_format(void* fbo);
+void    aiml_gl_depth_write(int32_t on);
+void    aiml_gl_depth_func(int32_t mode);
+void    aiml_gl_front_face(int32_t mode);
+void    aiml_gl_blend_func_separate(int32_t src_rgb, int32_t dst_rgb, int32_t src_a, int32_t dst_a);
+int32_t aiml_gl_framebuffer_srgb(int32_t on);
+int32_t aiml_gl_shader_uniform_vec3_array(void* shader, const char* name, void* buf, int32_t count);
+int32_t aiml_gl_supports(const char* feature);
+int32_t aiml_gl_limit(const char* name);
+void*   aiml_gl_read_rgba8(int32_t x, int32_t y, int32_t w, int32_t h);
+
 #ifdef __cplusplus
 }
 #endif

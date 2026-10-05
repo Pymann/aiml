@@ -328,12 +328,14 @@ static bool key_latched(const char* name, const uint8_t* latch) {
 /* ── GLFW callbacks ───────────────────────────────────────────────────────── */
 
 static void glfw_scroll_cb(GLFWwindow*, double x, double y) {
+    aiml_engine_note_event(1);
     if (!g_input) return;
     g_input->scroll_accum_x += (float)x;
     g_input->scroll_accum_y += (float)y;
 }
 
 static void glfw_key_cb(GLFWwindow*, int key, int /*scan*/, int action, int /*mods*/) {
+    aiml_engine_note_event(1);
     if (!g_input || key < 0 || key >= AIML_MAX_KEYS) return;
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
         if (action == GLFW_PRESS) g_input->key_press_latch[key] = 1;
@@ -351,6 +353,7 @@ static void glfw_key_cb(GLFWwindow*, int key, int /*scan*/, int action, int /*mo
 }
 
 static void glfw_char_cb(GLFWwindow*, unsigned int cp) {
+    aiml_engine_note_event(1);
     if (!g_input) return;
     AimlInputEvent ev = {};
     ev.type = "text";
@@ -364,6 +367,7 @@ static void glfw_char_cb(GLFWwindow*, unsigned int cp) {
 }
 
 static void glfw_cursor_cb(GLFWwindow*, double x, double y) {
+    aiml_engine_note_event(1);
     if (!g_input) return;
     g_input->curr_pos_x = x;
     g_input->curr_pos_y = y;
@@ -405,6 +409,7 @@ static void glfw_cursor_cb(GLFWwindow*, double x, double y) {
 }
 
 static void glfw_mbtn_cb(GLFWwindow*, int btn, int action, int /*mods*/) {
+    aiml_engine_note_event(1);
     if (!g_input || btn < 0 || btn >= AIML_MAX_MOUSE) return;
     if (action == GLFW_PRESS)   { g_input->curr_mouse[btn] = 1; g_input->press_latch[btn] = 1; }
     if (action == GLFW_RELEASE) { g_input->curr_mouse[btn] = 0; g_input->release_latch[btn] = 1; }
