@@ -30,7 +30,7 @@
 
 # Valid: Call public method
 - call: [var_b.deposit, 100]
-- print: ["Balance: ", {call: [var_b.getBalance]}]
+- print: ["Balance: ${ { call: [var_b.getBalance] } }"]
 
 
 
