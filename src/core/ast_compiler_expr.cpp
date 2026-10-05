@@ -759,6 +759,24 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
     if (bin->op == "/") return ctx.ir_gen->createSDiv(lhs, rhs);
     if (bin->op == "%") return ctx.ir_gen->createSRem(lhs, rhs);
 
+    // spec/04_1 §5: bitwise operators on integers (operands already widened to one type above).
+    if (bin->op == "band" || bin->op == "bor" || bin->op == "bxor" ||
+        bin->op == "shl" || bin->op == "shr" || bin->op == "ushr") {
+        llvm::Value* lv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs));
+        llvm::Value* rv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs));
+        if (!lv->getType()->isIntegerTy() || !rv->getType()->isIntegerTy()) {
+            LOG_ERROR(ctx.fmtLoc(bin->sourceNode) + "bitwise operator '" + bin->op + "' needs integer operands");
+            return nullptr;
+        }
+        if (rv->getType() != lv->getType()) rv = ctx.builder.CreateSExtOrTrunc(rv, lv->getType(), "bit_rhs");
+        if (bin->op == "band") return ctx.ir_gen->wrap(ctx.builder.CreateAnd(lv, rv, "band"));
+        if (bin->op == "bor")  return ctx.ir_gen->wrap(ctx.builder.CreateOr(lv, rv, "bor"));
+        if (bin->op == "bxor") return ctx.ir_gen->wrap(ctx.builder.CreateXor(lv, rv, "bxor"));
+        if (bin->op == "shl")  return ctx.ir_gen->wrap(ctx.builder.CreateShl(lv, rv, "shl"));
+        if (bin->op == "shr")  return ctx.ir_gen->wrap(ctx.builder.CreateAShr(lv, rv, "shr"));
+        return ctx.ir_gen->wrap(ctx.builder.CreateLShr(lv, rv, "ushr"));
+    }
+
     // `peq` / `pneq` — raw pointer/integer identity comparison (address equality).
     // Use these when you explicitly want to compare pointer addresses, not content.
     if (bin->op == "peq" || bin->op == "pneq") {
@@ -1046,6 +1064,18 @@ IRValue* Compiler::visitUnary(UnaryExpr* unary) {
             return nullptr;
         }
         return ctx.ir_gen->wrap(ctx.builder.CreateNot(bv, "not"));
+    }
+
+    // spec/04_1 §5: bitwise NOT
+    if (unary->op == "bnot") {
+        IRValue* val = visitExpression(unary->operand.get());
+        if (!val) return nullptr;
+        llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+        if (!v->getType()->isIntegerTy()) {
+            LOG_ERROR(ctx.fmtLoc(unary->sourceNode) + "bitwise operator 'bnot' needs an integer operand");
+            return nullptr;
+        }
+        return ctx.ir_gen->wrap(ctx.builder.CreateNot(v, "bnot"));
     }
 
     LOG_ERROR(ctx.fmtLoc(unary->sourceNode) + "Unknown unary operator: " + unary->op);

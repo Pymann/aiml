@@ -1,0 +1,26 @@
+# spec/04_1 §5: band/bor/bxor/bnot/shl/shr/ushr on i32 and i64 (mixed widths widen to the larger).
+# Expected exit code: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [flags, i32, { bor: [0x01, 0x04] }]
+      - if: { condition: { neq: [flags, 5] }, then: [{ call: [io.write, io.stderr, "FAIL bor ${flags}\n"] }, { return: 1 }] }
+      - if: { condition: { neq: [{ band: [0xF3, 0x3F] }, 0x33] }, then: [{ call: [io.write, io.stderr, "FAIL band\n"] }, { return: 1 }] }
+      - if: { condition: { neq: [{ bxor: [12, 10] }, 6] }, then: [{ call: [io.write, io.stderr, "FAIL bxor\n"] }, { return: 1 }] }
+      - if: { condition: { neq: [{ shl: [1, 8] }, 256] }, then: [{ call: [io.write, io.stderr, "FAIL shl\n"] }, { return: 1 }] }
+      - if: { condition: { neq: [{ bnot: [0] }, -1] }, then: [{ call: [io.write, io.stderr, "FAIL bnot\n"] }, { return: 1 }] }
+      - decl: [neg, i32, -16]
+      - if: { condition: { neq: [{ shr: [neg, 2] }, -4] }, then: [{ call: [io.write, io.stderr, "FAIL shr\n"] }, { return: 1 }] }
+      - if: { condition: { neq: [{ ushr: [neg, 28] }, 15] }, then: [{ call: [io.write, io.stderr, "FAIL ushr\n"] }, { return: 1 }] }
+      # u32 mixer step on i64: (x * c) mod 2^32 without overflow
+      - decl: [state, i64, 4294967295]
+      - decl: [mask32, i64, 4294967295]
+      - decl: [low16, i64, 65535]
+      - decl: [factor, i64, 2221713035]
+      - decl: [part_lo, i64, { "*": [state, { band: [factor, low16] }] }]
+      - decl: [part_hi, i64, { band: [{ "*": [state, { ushr: [factor, 16] }] }, low16] }]
+      - decl: [product, i64, { band: [{ +: [part_lo, { shl: [part_hi, 16] }] }, mask32] }]
+      - decl: [want, i64, 2073254261]
+      - if: { condition: { neq: [product, want] }, then: [{ call: [io.write, io.stderr, "FAIL mulmod ${product}\n"] }, { return: 1 }] }
+      - return: 0
