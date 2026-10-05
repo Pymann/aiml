@@ -945,6 +945,11 @@ void registerBuiltins(CompilerContext& ctx) {
 
     // sys.get_arg uses a special outlined helper — registered separately because
     // it needs the __argc/__argv globals (eagerly evaluated index passed as arg).
+    // spec/23: sys.exe_path() → runtime-owned string
+    sys.builtinFuncs["exe_path"] = [](CompilerContext& ctx, const std::vector<IRValue*>&) -> IRValue* {
+        auto* p = llvm::PointerType::get(ctx.context, 0);
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(ctx.getFunction("aiml_sys_exe_path", p, {}), {}));
+    };
     sys.builtinFuncs["get_arg"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
         if (args.empty()) return ctx.ir_gen->createGlobalStringPtr("");
         llvm::Value* indexVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
@@ -6722,6 +6727,15 @@ void registerBuiltins(CompilerContext& ctx) {
             ctx.classes["gl_texture"] = std::move(ci);
         }
 
+        // ── gl_cubemap (spec/43_5 §5) ───────────────────────────────────────
+        {
+            CompilerContext::ClassInfo ci;
+            ci.name = "gl_cubemap"; ci.isBuiltin = true; ci.preLoadBase = true;
+            ci.builtinMethods["upload_face"] = gl43Method("aiml_gl_cubemap_upload_face", "piib", 'i');
+            GL_VOID0(ci, "delete", "aiml_gl_cubemap_release")
+            ctx.classes["gl_cubemap"] = std::move(ci);
+        }
+
         // ── gl_framebuffer ──────────────────────────────────────────────────
         {
             CompilerContext::ClassInfo ci;
@@ -7175,6 +7189,8 @@ void registerBuiltins(CompilerContext& ctx) {
             gl.builtinFuncs["supports"]            = gl43Fn("aiml_gl_supports", "p", 'i');
             gl.builtinFuncs["limit"]               = gl43Fn("aiml_gl_limit", "p", 'i');
             gl.builtinFuncs["read_rgba8"]          = gl43Fn("aiml_gl_read_rgba8", "iiii", 'B');
+            gl.builtinFuncs["create_cubemap"]      = gl43Fn("aiml_gl_create_cubemap", "ii", 'p');
+            gl.builtinFuncs["bind_cubemap"]        = gl43Fn("aiml_gl_bind_cubemap", "pi", 'v');
 
             // gl.bind_framebuffer(fbo) → void
             gl.builtinFuncs["bind_framebuffer"] = [](CompilerContext& ctx,

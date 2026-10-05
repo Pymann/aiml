@@ -377,6 +377,12 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
         if (propName == "ONE")                    return i(0x0001);
         if (propName == "SRC_ALPHA")              return i(0x0302);
         if (propName == "ONE_MINUS_SRC_ALPHA")    return i(0x0303);
+        if (propName == "POSITIVE_X")             return i(0x8515);
+        if (propName == "NEGATIVE_X")             return i(0x8516);
+        if (propName == "POSITIVE_Y")             return i(0x8517);
+        if (propName == "NEGATIVE_Y")             return i(0x8518);
+        if (propName == "POSITIVE_Z")             return i(0x8519);
+        if (propName == "NEGATIVE_Z")             return i(0x851A);
     }
 
     // 1. Unambiguous Enum Check

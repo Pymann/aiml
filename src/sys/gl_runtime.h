@@ -146,6 +146,10 @@ int32_t aiml_gl_shader_uniform_vec3_array(void* shader, const char* name, void* 
 int32_t aiml_gl_supports(const char* feature);
 int32_t aiml_gl_limit(const char* name);
 void*   aiml_gl_read_rgba8(int32_t x, int32_t y, int32_t w, int32_t h);
+void*   aiml_gl_create_cubemap(int32_t size, int32_t levels);
+int32_t aiml_gl_cubemap_upload_face(void* cube, int32_t face, int32_t level, void* px_buf);
+void    aiml_gl_bind_cubemap(void* cube, int32_t unit);
+void    aiml_gl_cubemap_release(void* cube);
 
 #ifdef __cplusplus
 }

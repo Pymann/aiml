@@ -1245,6 +1245,7 @@ namespace AIML {
         if (typeName == "gl_vao")          return llvm::Type::getInt8Ty(context)->getPointerTo();
         if (typeName == "gl_shader")       return llvm::Type::getInt8Ty(context)->getPointerTo();
         if (typeName == "gl_texture")      return llvm::Type::getInt8Ty(context)->getPointerTo();
+        if (typeName == "gl_cubemap")      return llvm::Type::getInt8Ty(context)->getPointerTo();
         if (typeName == "gl_framebuffer")  return llvm::Type::getInt8Ty(context)->getPointerTo();
         if (typeName == "gl_renderbuffer") return llvm::Type::getInt8Ty(context)->getPointerTo();
         if (typeName == "gl_mesh")         return llvm::Type::getInt8Ty(context)->getPointerTo();
