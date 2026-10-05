@@ -94,6 +94,11 @@
 
 ## 5. Material
 
+Texture-info and material accessors for the studio renderer (`index`,
+`normal_scale`, `occlusion_strength`, `emissive_strength`, `texture_coord`,
+`texture_has_transform`, `gltf_texture.image_index`, scene `extensions_used`,
+`extensions_required`, `extras`) are specified in [43.5 §3](43_5_stylized_rendering.md).
+
 ```aiml
 - decl: [mat, gltf_material, { call: [prim.material] }]
 - decl: [mat_name, string, { call: [mat.name] }]

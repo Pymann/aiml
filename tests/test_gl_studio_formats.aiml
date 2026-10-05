@@ -1,0 +1,181 @@
+# spec/43_5 §4/§6/§7/§8/§9: explicit sRGB/float textures, HDR targets with owned attachment
+# binding, capability queries, uniform array validation, readback, framebuffer size, event wait
+# and frame-clock reset.
+# Requires: display
+# Expected exit code: 0
+- text: quad_vert
+  value: |
+    #version 330 core
+    void main() {
+      vec2 pos = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
+      gl_Position = vec4(pos * 2.0 - 1.0, 0.0, 1.0);
+    }
+- text: sample_frag
+  value: |
+    #version 330 core
+    uniform sampler2D uTex;
+    uniform float uScale;
+    uniform vec3 uTint[2];
+    out vec4 fragColor;
+    void main() {
+      vec4 c = texture(uTex, vec2(0.5));
+      fragColor = vec4(c.rgb * uScale + uTint[1] * 0.0, c.a);
+    }
+- class:
+    name: FormatProbe
+    members: [[fails, i32], [vao, gl_vao], [shader, gl_shader]]
+    methods:
+      - def:
+          name: check
+          access: public
+          args: [[label, string], [got, i32], [low, i32], [high, i32]]
+          body:
+            - if:
+                condition: { or: [{ lt: [got, low] }, { gt: [got, high] }] }
+                then:
+                  - print: ["FAIL ${label}: ${got} not in [${low}, ${high}]"]
+                  - set: [<.fails, { +: [<.fails, 1] }]
+
+      - def:
+          name: gray
+          access: public
+          args: [[value, i32], [alpha, i32]]
+          return: buffer<u8>
+          body:
+            - decl: [pixels, buffer<u8>]
+            - call: [pixels.alloc, 4]
+            - call: [pixels.write, value, u8]
+            - call: [pixels.write, value, u8]
+            - call: [pixels.write, value, u8]
+            - call: [pixels.write, alpha, u8]
+            - return: pixels
+
+      # Draws `tex` sampled at its centre, scaled, into `target`; returns pixel (1,1) channel `chan`.
+      - def:
+          name: sample
+          access: public
+          args: [[tex, gl_texture], [target, gl_framebuffer], [scale, f32], [chan, i32]]
+          return: i32
+          body:
+            - call: [gl.bind_framebuffer, target]
+            - call: [gl.clear_all, 0.0, 0.0, 0.0, 0.0]
+            - call: [<.shader.use]
+            - call: [gl.bind_texture, tex, 0]
+            - call: [<.shader.uniform_i32, "uTex", 0]
+            - call: [<.shader.uniform_f32, "uScale", scale]
+            - call: [gl.draw_arrays, <.vao, 3]
+            - decl: [pixels, buffer<u8>, { call: [gl.read_rgba8, 1, 1, 1, 1] }]
+            - call: [gl.bind_default_framebuffer]
+            - return: { cast: [{ call: [pixels.get, chan] }, i32] }
+
+      - def:
+          name: run
+          access: public
+          args: [[win, window_handle]]
+          body:
+            - set: [<.vao, { call: [gl.create_vao] }]
+            - set: [<.shader, { call: [gl.compile_shader, quad_vert, sample_frag] }]
+            - call: [<.check, "srgb_texture", { call: [gl.supports, "srgb_texture"] }, 1, 1]
+            - call: [<.check, "unknown_feature", { call: [gl.supports, "teleport"] }, 0, 0]
+            - call: [<.check, "max_texture_size", { call: [gl.limit, "max_texture_size"] }, 1024, 1000000]
+            - call: [<.check, "units", { call: [gl.limit, "max_fragment_texture_units"] }, 7, 1000]
+            - call: [<.check, "unknown_limit", { call: [gl.limit, "fuel"] }, -1, -1]
+
+            - decl: [target, gl_framebuffer, { call: [gl.create_framebuffer_format, 4, 4, gl.RGBA8, false] }]
+            - call: [<.check, "target_format", { call: [target.format] }, 32856, 32856]
+            - decl: [srgb, gl_texture, { call: [gl.create_texture_format, 1, 1, { call: [<.gray, 188, 188] }, gl.SRGB8_ALPHA8, false] }]
+            - decl: [linear, gl_texture, { call: [gl.create_texture_format, 1, 1, { call: [<.gray, 188, 188] }, gl.RGBA8, false] }]
+            - call: [<.check, "srgb_format", { call: [srgb.format] }, 35907, 35907]
+            - call: [<.check, "srgb_levels", { call: [srgb.levels] }, 1, 1]
+            - call: [<.check, "srgb_decoded", { call: [<.sample, srgb, target, 1.0, 0] }, 125, 131]
+            - call: [<.check, "srgb_alpha", { call: [<.sample, srgb, target, 1.0, 3] }, 188, 188]
+            - call: [<.check, "linear_raw", { call: [<.sample, linear, target, 1.0, 0] }, 188, 188]
+
+            - decl: [wide, buffer<u8>]
+            - call: [wide.alloc, 32]
+            - decl: [fill, i32, 0]
+            - while:
+                condition: { lt: [fill, 32] }
+                body:
+                  - call: [wide.write, 255, u8]
+                  - set: [fill, { +: [fill, 1] }]
+            - decl: [mipped, gl_texture, { call: [gl.create_texture_format, 4, 2, wide, gl.SRGB8_ALPHA8, true] }]
+            - call: [<.check, "mip_levels", { call: [mipped.levels] }, 3, 3]
+            - call: [<.check, "mip_width", { call: [mipped.width] }, 4, 4]
+            - decl: [short, gl_texture, { call: [gl.create_texture_format, 2, 2, { call: [<.gray, 1, 1] }, gl.SRGB8_ALPHA8, false] }]
+            - if: { condition: { neq: [short, null] }, then: [{ print: ["FAIL short buffer accepted"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }
+            - decl: [badfmt, gl_texture, { call: [gl.create_texture_format, 1, 1, { call: [<.gray, 1, 1] }, gl.RGBA16F, false] }]
+            - if: { condition: { neq: [badfmt, null] }, then: [{ print: ["FAIL format accepted"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }
+
+            - decl: [hot, buffer<f32>]
+            - call: [hot.alloc, 16]
+            - call: [hot.write, 3.0, f32]
+            - call: [hot.write, 0.5, f32]
+            - call: [hot.write, 0.0, f32]
+            - call: [hot.write, 1.0, f32]
+            - decl: [hot_tex, gl_texture, { call: [gl.create_texture_f32, 1, 1, hot, false] }]
+            - call: [<.check, "f16_format", { call: [hot_tex.format] }, 34842, 34842]
+            - decl: [hdr, gl_framebuffer, { call: [gl.create_framebuffer_format, 4, 4, gl.RGBA16F, true] }]
+            - if: { condition: { eq: [hdr, null] }, then: [{ print: ["FAIL hdr target"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }
+            - call: [gl.bind_framebuffer, hdr]
+            - call: [gl.clear_all, 0.0, 0.0, 0.0, 0.0]
+            - call: [<.shader.use]
+            - call: [gl.bind_texture, hot_tex, 0]
+            - call: [<.shader.uniform_i32, "uTex", 0]
+            - call: [<.shader.uniform_f32, "uScale", 1.0]
+            - call: [gl.draw_arrays, <.vao, 3]
+            - call: [gl.bind_framebuffer, target]
+            - call: [gl.clear_all, 0.0, 0.0, 0.0, 0.0]
+            - call: [hdr.bind_color_texture, 0]
+            - call: [<.shader.uniform_f32, "uScale", 0.25]
+            - call: [gl.draw_arrays, <.vao, 3]
+            - decl: [pixels, buffer<u8>, { call: [gl.read_rgba8, 1, 1, 1, 1] }]
+            - call: [<.check, "hdr_kept", { cast: [{ call: [pixels.get, 0] }, i32] }, 189, 193]
+            - call: [<.check, "hdr_green", { cast: [{ call: [pixels.get, 1] }, i32] }, 30, 34]
+            - decl: [outside, buffer<u8>, { call: [gl.read_rgba8, 2, 2, 4, 4] }]
+            - call: [<.check, "read_outside", { call: [outside.len] }, 0, 0]
+            - call: [gl.bind_default_framebuffer]
+
+            - call: [<.check, "resize_ok", { call: [hdr.resize_checked, 8, 6] }, 1, 1]
+            - call: [<.check, "resize_w", { call: [hdr.width] }, 8, 8]
+            - call: [<.check, "resize_fmt", { call: [hdr.format] }, 34842, 34842]
+            - call: [<.check, "resize_bad", { call: [hdr.resize_checked, -1, 6] }, 0, 0]
+            - call: [<.check, "resize_kept", { call: [hdr.height] }, 6, 6]
+
+            - decl: [tints, buffer<f32>]
+            - call: [tints.alloc, 3]
+            - call: [tints.write, 1.0, f32]
+            - call: [tints.write, 1.0, f32]
+            - call: [tints.write, 1.0, f32]
+            - call: [<.check, "vec3_short", { call: [<.shader.uniform_vec3_array, "uTint", tints, 2] }, 0, 0]
+            - call: [<.check, "vec3_ok", { call: [<.shader.uniform_vec3_array, "uTint", tints, 1] }, 1, 1]
+            - call: [<.check, "vec3_zero", { call: [<.shader.uniform_vec3_array, "uTint", tints, 0] }, 1, 1]
+
+            - decl: [fb_size, ivec2, { call: [engine.framebuffer_size, win] }]
+            - call: [<.check, "fb_width", fb_size.x, 1, 100000]
+            - call: [<.check, "wait_poll", { call: [engine.wait_events, win, 0] }, 0, 15]
+            - call: [engine.reset_frame_clock, win]
+            - call: [engine.swap, win]
+            - decl: [after_reset, f32, { call: [engine.dt] }]
+            - if: { condition: { neq: [after_reset, 0.0] }, then: [{ print: ["FAIL dt after reset ${after_reset}"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }
+
+            - call: [srgb.delete]
+            - call: [linear.delete]
+            - call: [mipped.delete]
+            - call: [hot_tex.delete]
+            - call: [hdr.delete]
+            - call: [target.delete]
+            - call: [<.shader.delete]
+            - call: [<.vao.delete]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [probe, ptr<FormatProbe>, { new: FormatProbe }]
+      - decl: [win, window_handle, { call: [engine.create_window, 160, 120, "formats"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ print: ["FAIL window"] }, { return: 1 }] }
+      - call: [probe.run, win]
+      - call: [engine.destroy_window, win]
+      - if: { condition: { gt: [probe.fails, 0] }, then: [{ return: 1 }] }
+      - print: ["PASS gl_studio_formats"]
+      - return: 0

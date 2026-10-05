@@ -365,6 +365,18 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
         if (propName == "NEAREST_MIPMAP_LINEAR")  return i(0x2702);
         if (propName == "LINEAR_MIPMAP_NEAREST")  return i(0x2701);
         if (propName == "NEAREST_MIPMAP_NEAREST") return i(0x2700);
+        // spec/43_5 §4/§6
+        if (propName == "RGBA8")                  return i(0x8058);
+        if (propName == "SRGB8_ALPHA8")           return i(0x8C43);
+        if (propName == "RGBA16F")                return i(0x881A);
+        if (propName == "LESS")                   return i(0x0201);
+        if (propName == "LEQUAL")                 return i(0x0203);
+        if (propName == "CW")                     return i(0x0900);
+        if (propName == "CCW")                    return i(0x0901);
+        if (propName == "ZERO")                   return i(0x0000);
+        if (propName == "ONE")                    return i(0x0001);
+        if (propName == "SRC_ALPHA")              return i(0x0302);
+        if (propName == "ONE_MINUS_SRC_ALPHA")    return i(0x0303);
     }
 
     // 1. Unambiguous Enum Check

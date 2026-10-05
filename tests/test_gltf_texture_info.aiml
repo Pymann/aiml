@@ -1,0 +1,83 @@
+# spec/43_5 §3: material/texture-info accessors read the material's textureInfo (texCoord, scale,
+# strength, transform per binding), scene-local indices and scene extensions/extras.
+# tests/texture_info.glb comes from tests/gen_texture_info_glb.py.
+# Expected exit code: 0
+- class:
+    name: InfoProbe
+    members: [[fails, i32]]
+    methods:
+      - def:
+          name: expect_i
+          access: public
+          args: [[label, string], [got, i32], [want, i32]]
+          body:
+            - if:
+                condition: { neq: [got, want] }
+                then:
+                  - print: ["FAIL ${label}: got ${got} want ${want}"]
+                  - set: [<.fails, { +: [<.fails, 1] }]
+
+      - def:
+          name: expect_f
+          access: public
+          args: [[label, string], [got, f32], [want, f32]]
+          body:
+            - decl: [diff, f32, { -: [got, want] }]
+            - if:
+                condition: { or: [{ gt: [diff, 0.0001] }, { lt: [diff, -0.0001] }] }
+                then:
+                  - print: ["FAIL ${label}: got ${got} want ${want}"]
+                  - set: [<.fails, { +: [<.fails, 1] }]
+
+      - def:
+          name: run
+          access: public
+          body:
+            - decl: [file_path, path, "tests/texture_info.glb"]
+            - decl: [scene, gltf_scene, { call: [gltf.load, file_path] }]
+            - call: [<.expect_i, "valid", { call: [scene.valid] }, 1]
+            - decl: [mats, list<gltf_material>, { call: [scene.materials] }]
+            - decl: [probe, gltf_material, { call: [mats.get, 0] }]
+            - decl: [plain, gltf_material, { call: [mats.get, 1] }]
+            - call: [<.expect_i, "index0", { call: [probe.index] }, 0]
+            - call: [<.expect_i, "index1", { call: [plain.index] }, 1]
+
+            - decl: [base, gltf_texture, { call: [probe.base_color_texture] }]
+            - decl: [nrm, gltf_texture, { call: [probe.normal_texture] }]
+            - call: [<.expect_i, "base_image", { call: [base.image_index] }, 1]
+            - call: [<.expect_i, "normal_image", { call: [nrm.image_index] }, 0]
+
+            - call: [<.expect_f, "normal_scale", { call: [probe.normal_scale] }, 0.5]
+            - call: [<.expect_f, "occlusion_strength", { call: [probe.occlusion_strength] }, 0.25]
+            - call: [<.expect_f, "emissive_strength", { call: [probe.emissive_strength] }, 2.5]
+            - call: [<.expect_f, "plain_normal_scale", { call: [plain.normal_scale] }, 1.0]
+            - call: [<.expect_f, "plain_occlusion", { call: [plain.occlusion_strength] }, 1.0]
+            - call: [<.expect_f, "plain_emissive", { call: [plain.emissive_strength] }, 1.0]
+
+            - call: [<.expect_i, "uv_base", { call: [probe.texture_coord, "base_color"] }, 0]
+            - call: [<.expect_i, "uv_mr", { call: [probe.texture_coord, "metallic_roughness"] }, 1]
+            - call: [<.expect_i, "uv_absent", { call: [plain.texture_coord, "normal"] }, -1]
+            - call: [<.expect_i, "uv_bad_slot", { call: [probe.texture_coord, "albedo"] }, -1]
+            - decl: [emi_tf, bool, { call: [probe.texture_has_transform, "emissive"] }]
+            - decl: [base_tf, bool, { call: [probe.texture_has_transform, "base_color"] }]
+            - if: { condition: { neq: [emi_tf, 1] }, then: [{ print: ["FAIL emissive transform"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }
+            - if: { condition: { neq: [base_tf, 0] }, then: [{ print: ["FAIL base transform"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }
+
+            - decl: [used, list<string>, { call: [scene.extensions_used] }]
+            - decl: [needed, list<string>, { call: [scene.extensions_required] }]
+            - call: [<.expect_i, "used_len", { call: [used.len] }, 2]
+            - call: [<.expect_i, "required_len", { call: [needed.len] }, 1]
+            - decl: [first_req, string, { call: [needed.get, 0] }]
+            - if: { condition: { eq: [{ eq: [first_req, "KHR_texture_transform"] }, 0] }, then: [{ print: ["FAIL required ${first_req}"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }
+            - decl: [extras, string, { call: [scene.extras] }]
+            - if: { condition: { lt: [{ call: [extras.index_of, "studio"] }, 0] }, then: [{ print: ["FAIL extras '${extras}'"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }
+            - call: [scene.free]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [probe, ptr<InfoProbe>, { new: InfoProbe }]
+      - call: [probe.run]
+      - if: { condition: { gt: [probe.fails, 0] }, then: [{ return: 1 }] }
+      - print: ["PASS gltf_texture_info"]
+      - return: 0

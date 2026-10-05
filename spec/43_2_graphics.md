@@ -229,6 +229,9 @@ manual `mat4_to_buffer` required.
 
 ## 5. Textures
 
+Explicit color formats, HDR targets, render state, capabilities and readback are
+specified in [43.5](43_5_stylized_rendering.md) (cubemaps and timer queries still open),
+separately from the API below.
 
 ### 5.1 Load from File
 

@@ -42,6 +42,11 @@ int32_t aiml_engine_running(void* win);
 void    aiml_engine_swap   (void* win);
 void    aiml_engine_quit   (void* win);
 int32_t aiml_engine_is_iconified(void* win);
+int32_t aiml_engine_framebuffer_size_x(void* win);
+int32_t aiml_engine_framebuffer_size_y(void* win);
+int32_t aiml_engine_wait_events(void* win, int32_t timeout_ms);
+void    aiml_engine_reset_frame_clock(void* win);
+void    aiml_engine_note_event(int32_t flag);
 int32_t aiml_engine_is_focused  (void* win);
 int32_t aiml_engine_is_visible  (void* win);
 
