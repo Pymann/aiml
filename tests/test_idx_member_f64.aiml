@@ -1,0 +1,56 @@
+# idx: [<.member, i, value] on a list<f64> class member stores a double at element i (spec/10),
+# also for a value computed by a call, an index given as an expression and a local list.
+# Expected exit code: 0
+- class:
+    name: Track
+    members: [[values, list<f64>]]
+    methods:
+      - def:
+          name: twice
+          access: public
+          args: [[base, f64]]
+          return: f64
+          body:
+            - return: { +: [base, base] }
+
+      - def:
+          name: fill
+          access: public
+          body:
+            - decl: [cur, i32, 0]
+            - decl: [zero, f64, 0.0]
+            - decl: [two, f64, 2.0]
+            - while:
+                condition: { lt: [cur, 8] }
+                body:
+                  - call: [<.values.push, zero]
+                  - set: [cur, { +: [cur, 1] }]
+            - set: [cur, 0]
+            - while:
+                condition: { lt: [cur, 8] }
+                body:
+                  - decl: [half, f64, { /: [{ cast: [cur, f64] }, two] }]
+                  - idx: [<.values, cur, { call: [<.twice, half] }]
+                  - set: [cur, { +: [cur, 1] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [track, Track]
+      - call: [track.fill]
+      - decl: [seven, f64, { at: [track.values, 7] }]
+      - decl: [want, f64, 7.0]
+      - if: { condition: { neq: [seven, want] }, then: [{ print: ["FAIL element 7 = ${seven}"] }, { return: 1 }] }
+      - decl: [flags, list<i32>]
+      - call: [flags.push, 0]
+      - call: [flags.push, 0]
+      - decl: [base, i32, 3]
+      - idx: [flags, { -: [base, 2] }, 5]
+      - decl: [flag, i32, { at: [flags, 1] }]
+      - if: { condition: { neq: [flag, 5] }, then: [{ print: ["FAIL expression index ${flag}"] }, { return: 1 }] }
+      - idx: [track.values, { +: [{ "*": [base, 2] }, 0] }, want]
+      - decl: [six, f64, { at: [track.values, 6] }]
+      - if: { condition: { neq: [six, want] }, then: [{ print: ["FAIL member expression index ${six}"] }, { return: 1 }] }
+      - print: ["PASS idx_member_f64"]
+      - return: 0

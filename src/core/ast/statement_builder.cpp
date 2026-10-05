@@ -46,6 +46,13 @@ bool StatementBuilder::OnScalar(const std::string& value, const std::string& tag
         return true;
     }
 
+    if (type == "idx" && args.size() > 1) {
+        if (!value.empty() && value[0] == '.') idxParts.push_back({value.substr(1), nullptr});
+        else idxParts.push_back({"", parseScalarExpr(value, tag)});
+        args.pop_back();   // keep only the container in args
+        return true;
+    }
+
     if (type == "set" && args.size() == 1) {
         // After reading `x`, the next thing might be an expression map instead of a scalar
         expectingValue = true; 
@@ -122,6 +129,8 @@ void StatementBuilder::receiveChildNode(std::unique_ptr<Node> node) {
     if (auto e = dynamic_cast<Expr*>(node.release())) {
         if (type == "call") {
             orderedCallArgs.push_back(std::unique_ptr<Expr>(e));
+        } else if (type == "idx") {
+            idxParts.push_back({"", std::unique_ptr<Expr>(e)});
         } else {
             exprArg = std::unique_ptr<Expr>(e);
         }
@@ -260,25 +269,21 @@ std::unique_ptr<Node> StatementBuilder::finish() {
     // (container + index).  Without this fallback the whole idx statement was
     // silently dropped when the value was an inline expression like
     // `idx: [list, i, { call: [...] }]`.
-    if (type == "idx" && (args.size() >= 3 || (args.size() >= 2 && exprArg))) {
+    // Parts after the container keep their source order, so index and value may each be a scalar
+    // or an expression map: idx: [arr, { -: [i, 1] }, 42.0].
+    if (type == "idx" && args.size() >= 1 && idxParts.size() >= 2) {
          auto idx = std::make_unique<IdxStmt>(args[0].first);
-         // Middle args are INDICES, then optional DOT-PREFIXED member names (.field), then the value.
+         // Middle parts are INDICES, then optional DOT-PREFIXED member names (.field), then the value.
          // idx: [container, i, .field, value] writes element[i].field = value (dash-free element-set).
-         auto pushIdxOrMember = [&](size_t i) {
-             const std::string& s = args[i].first;
-             if (!s.empty() && s[0] == '.') idx->memberPath.push_back(s.substr(1));
-             else idx->indices.push_back(parseScalarExpr(args[i].first, args[i].second));
-         };
-         size_t lastScalar = args.size() - 1;
-         if (exprArg) {
-             // Value was an expression map: idx: [arr, i, { "+": [a, b] }]
-             for (size_t i = 1; i < args.size(); ++i) pushIdxOrMember(i);
-             idx->value = std::move(exprArg);
-         } else {
-             // Value is last scalar: idx: [arr, i, 42.0]
-             for (size_t i = 1; i < lastScalar; ++i) pushIdxOrMember(i);
-             idx->value = parseScalarExpr(args[lastScalar].first, args[lastScalar].second);
+         for (size_t i = 0; i + 1 < idxParts.size(); ++i) {
+             if (idxParts[i].second) idx->indices.push_back(std::move(idxParts[i].second));
+             else idx->memberPath.push_back(idxParts[i].first);
          }
+         if (!idxParts.back().second) {
+             LOG_ERROR("line " + std::to_string(capturedLine) + ": idx: the last element must be the value");
+             return nullptr;
+         }
+         idx->value = std::move(idxParts.back().second);
          idx->sourceLine = capturedLine;
          return idx;
     }
