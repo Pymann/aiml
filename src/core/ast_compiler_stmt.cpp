@@ -4172,6 +4172,16 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         }
 
         // Builtin property setter for handle types (e.g. resp.status, resp.body)
+                // spec/42: a path field holds the interned (immortal) path, like a path local — never
+                // the borrowed string it was assigned from (that string dies with its owner)
+                if (finalTypeName == "path") {
+                    llvm::Value* pv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                    if (pv && pv->getType()->isPointerTy()) {
+                        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                        llvm::Function* internFn = ctx.getFunction("aiml_path_intern", i8p, {i8p});
+                        val = ctx.ir_gen->wrap(ctx.builder.CreateCall(internFn, {pv}, "fld_path_interned"));
+                    }
+                }
         if (!className.empty() && ctx.classes.count(className)) {
             auto& classInfo = ctx.classes[className];
             if (classInfo.isBuiltin && classInfo.builtinSetters.count(propName)) {

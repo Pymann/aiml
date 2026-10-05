@@ -1,0 +1,39 @@
+# A path model field assigned from a string local keeps its text after the local's scope ends and
+# after the model was pushed into a list (spec/61: the field owns its value).
+# Expected exit code: 0
+- model:
+    name: Entry
+    fields:
+      - [ident, string]
+      - [file, path]
+
+- class:
+    name: Reader
+    members:
+      - [entries, list<Entry>]
+    methods:
+      - def:
+          name: read
+          access: public
+          args: [[base, string], [name, string]]
+          body:
+            - decl: [item, Entry]
+            - set: [item.ident, name]
+            - decl: [text, string, "${base}/${name}.png"]
+            - set: [item.file, text]
+            - call: [<.entries.push, item]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [reader, Reader]
+      - call: [reader.read, "/tmp/some/dir", "first"]
+      - call: [reader.read, "/tmp/other", "second"]
+      - decl: [entry, ref<Entry>, { at: [reader.entries, 0] }]
+      - decl: [shown, string, { call: [entry.file.to_string] }]
+      - if: { condition: { neq: [shown, "/tmp/some/dir/first.png"] }, then: [{ call: [io.write, io.stderr, "FAIL first '${shown}'\n"] }, { return: 1 }] }
+      - decl: [later, ref<Entry>, { at: [reader.entries, 1] }]
+      - decl: [shown2, string, { call: [later.file.to_string] }]
+      - if: { condition: { neq: [shown2, "/tmp/other/second.png"] }, then: [{ call: [io.write, io.stderr, "FAIL second '${shown2}'\n"] }, { return: 2 }] }
+      - return: 0
