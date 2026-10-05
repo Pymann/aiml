@@ -1,0 +1,55 @@
+# spec/15 Default Field Initialization: explicit field defaults apply to fields of nested models too —
+# stack decl, { new: }, a producer return and a model inside a list element.
+# Expected exit code: 0
+- model:
+    name: InnerOpts
+    fields:
+      - [limit, f64, 90.0]
+      - [count, i32, 40]
+      - [label, string, "inner"]
+
+- model:
+    name: OuterDoc
+    fields:
+      - [name, string]
+      - [opts, InnerOpts]
+
+- def:
+    name: make_doc
+    return: { type: OuterDoc, lifetime: producer }
+    body:
+      - decl: [doc, OuterDoc]
+      - set: [doc.name, "made"]
+      - return: doc
+
+- def:
+    name: check
+    static_off: ["str_cmp"]
+    args: [[limit_v, f64], [count_v, i32], [label_v, string], [where, string]]
+    return: i32
+    body:
+      - decl: [limit, f64, 90.0]
+      - if: { condition: { neq: [limit_v, limit] }, then: [{ call: [io.write, io.stderr, "FAIL ${where}: limit\n"] }] }
+      - if: { condition: { neq: [count_v, 40] }, then: [{ call: [io.write, io.stderr, "FAIL ${where}: count ${count_v}\n"] }] }
+      - if: { condition: { neq: [label_v, "inner"] }, then: [{ call: [io.write, io.stderr, "FAIL ${where}: label\n"] }, { return: 1 }] }
+      - return: 0
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+      - decl: [stack_doc, OuterDoc]
+      - set: [fails, { +: [fails, { call: [check, stack_doc.opts.limit, stack_doc.opts.count, stack_doc.opts.label, "stack"] }] }]
+      - decl: [heap_doc, ptr<OuterDoc>, { new: OuterDoc }]
+      - set: [fails, { +: [fails, { call: [check, heap_doc.opts.limit, heap_doc.opts.count, heap_doc.opts.label, "heap"] }] }]
+      - decl: [made, OuterDoc, { call: [make_doc] }]
+      - set: [fails, { +: [fails, { call: [check, made.opts.limit, made.opts.count, made.opts.label, "producer"] }] }]
+      - decl: [docs, list<OuterDoc>]
+      - decl: [item, OuterDoc]
+      - call: [docs.push, item]
+      - decl: [first, OuterDoc, { at: [docs, 0] }]
+      - set: [fails, { +: [fails, { call: [check, first.opts.limit, first.opts.count, first.opts.label, "list element"] }] }]
+      - if: { condition: { gt: [fails, 0] }, then: [{ return: 1 }] }
+      - return: 0
