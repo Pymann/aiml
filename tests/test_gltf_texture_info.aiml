@@ -47,6 +47,14 @@
             - call: [<.expect_i, "base_image", { call: [base.image_index] }, 1]
             - call: [<.expect_i, "normal_image", { call: [nrm.image_index] }, 0]
 
+            - decl: [base_min, string, { call: [base.min_filter] }]
+            - decl: [base_wrap, string, { call: [base.wrap_t] }]
+            - decl: [nrm_min, string, { call: [nrm.min_filter] }]
+            - decl: [nrm_wrap, string, { call: [nrm.wrap_s] }]
+            - if: { condition: { eq: [{ eq: [base_min, "LINEAR_MIPMAP_LINEAR"] }, 0] }, then: [{ print: ["FAIL base min '${base_min}'"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }
+            - if: { condition: { eq: [{ eq: [base_wrap, "MIRRORED_REPEAT"] }, 0] }, then: [{ print: ["FAIL base wrap '${base_wrap}'"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }
+            - if: { condition: { eq: [{ eq: [nrm_min, ""] }, 0] }, then: [{ print: ["FAIL undefined min '${nrm_min}'"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }
+            - if: { condition: { eq: [{ eq: [nrm_wrap, "REPEAT"] }, 0] }, then: [{ print: ["FAIL default wrap '${nrm_wrap}'"] }, { set: [<.fails, { +: [<.fails, 1] }] }] }
             - call: [<.expect_f, "normal_scale", { call: [probe.normal_scale] }, 0.5]
             - call: [<.expect_f, "occlusion_strength", { call: [probe.occlusion_strength] }, 0.25]
             - call: [<.expect_f, "emissive_strength", { call: [probe.emissive_strength] }, 2.5]
