@@ -1,0 +1,27 @@
+# A float literal (f32) or an integer pushed/stored into a list<f64> becomes a double element
+# (element type wins), so `at` reads back the value and growth uses the element size.
+# Expected exit code: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [vals, list<f64>]
+      - decl: [cur, i32, 0]
+      - while:
+          condition: { lt: [cur, 9] }
+          body:
+            - call: [vals.push, 1.5]
+            - call: [vals.push, cur]
+            - set: [cur, { +: [cur, 1] }]
+      - idx: [vals, 1, 2.5]
+      - decl: [first, f64, { at: [vals, 0] }]
+      - decl: [second, f64, { at: [vals, 1] }]
+      - decl: [last, f64, { at: [vals, 17] }]
+      - decl: [want_first, f64, 1.5]
+      - decl: [want_second, f64, 2.5]
+      - decl: [want_last, f64, 8.0]
+      - if: { condition: { neq: [first, want_first] }, then: [{ print: ["FAIL first ${first}"] }, { return: 1 }] }
+      - if: { condition: { neq: [second, want_second] }, then: [{ print: ["FAIL second ${second}"] }, { return: 1 }] }
+      - if: { condition: { neq: [last, want_last] }, then: [{ print: ["FAIL last ${last}"] }, { return: 1 }] }
+      - print: ["PASS list_f64_literals"]
+      - return: 0

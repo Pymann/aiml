@@ -138,6 +138,8 @@ models/classes (structs). The storage semantics depend on `T`:
 **Implementation**: `list.push(val)` does `CreateStore(val, &data[size])` — the LLVM value
 is stored directly into the data array. For structs this is a full byte-for-byte copy
 (`sizeof(MyModel)` bytes per element). For pointers it is a target-pointer-sized copy (4 bytes on wasm32, 8 bytes on a 64-bit native target).
+A numeric value is first converted to the element type: `[vals.push, 1.5]` on a `list<f64>`
+stores a double (a float literal is `f32`), an integer pushed into a float list converts its value.
 
 A pointer expression cannot be pushed directly into an aggregate value list. This is
 a compile-time error for variables, members and nested calls alike. For example,

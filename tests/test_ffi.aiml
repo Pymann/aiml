@@ -63,4 +63,27 @@
 - decl: [sym, ptr, { call: [sys.load_sym, lib, "strlen"] }]
 - print: ["sys.load_sym returned non-null"]
 
+# ── Phase F: f64 arguments/result — typed like any function (idx into list<f64>, arithmetic) ──
+
+- extern: "C"
+  defs:
+    - def: { name: sqrt, args: [[var_x, f64]], return: f64 }
+    - def: { name: hypot, args: [[var_a, f64], [var_b, f64]], return: f64 }
+
+- decl: [roots, list<f64>]
+- call: [roots.push, 0.0]
+- idx: [roots, 0, { call: [sqrt, 16.0] }]
+- decl: [four, f64, { at: [roots, 0] }]
+- decl: [five, f64, { call: [hypot, 3.0, 4.0] }]
+- decl: [want_four, f64, 4.0]
+- decl: [want_five, f64, 5.0]
+- if: { condition: { "||": [{ neq: [four, want_four] }, { neq: [five, want_five] }] }, then: [{ print: ["FAIL f64 extern ${four} ${five}"] }, { return: 1 }] }
+- decl: [legs, list<f64>]
+- call: [legs.push, 6.0]
+- call: [legs.push, 8.0]
+- decl: [ten, f64, { call: [hypot, { at: [legs, 0] }, { at: [legs, 1] }] }]
+- decl: [want_ten, f64, 10.0]
+- if: { condition: { neq: [ten, want_ten] }, then: [{ print: ["FAIL f64 extern from list ${ten}"] }, { return: 1 }] }
+- print: ["f64 extern ok"]
+
 - print: ["ffi tests passed"]

@@ -1889,6 +1889,17 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  llvm::Function* dup = ctx.getFunction("aiml_str_dup", i8p, {i8p});
                  pushVal = ctx.builder.CreateCall(dup, { asP }, "list_str_own");
              }
+             // A scalar of another width/kind is stored as the element type (an f32 literal pushed into a
+             // list<f64> must occupy a double slot, not a float one).
+             if (pushVal && llvmListElemType && pushVal->getType() != llvmListElemType) {
+                 llvm::Type* vt = pushVal->getType();
+                 if (vt->isFloatingPointTy() && llvmListElemType->isFloatingPointTy())
+                     pushVal = ctx.builder.CreateFPCast(pushVal, llvmListElemType, "push_fcast");
+                 else if (vt->isIntegerTy() && llvmListElemType->isFloatingPointTy() && !vt->isIntegerTy(1))
+                     pushVal = ctx.builder.CreateSIToFP(pushVal, llvmListElemType, "push_i2f");
+                 else if (vt->isIntegerTy() && llvmListElemType->isIntegerTy())
+                     pushVal = ctx.builder.CreateSExtOrTrunc(pushVal, llvmListElemType, "push_icast");
+             }
              ListImpl::push(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)), pushVal);
              return nullptr;
          } else if (methodName == "pop") {
