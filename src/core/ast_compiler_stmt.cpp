@@ -816,6 +816,7 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
     } else if (isShareAt) {
         // spec/61 §5.7: `{at:[outer,i]}` returns the inner container's HANDLE pointer (visitAtExpr,
         // memV3 nested-container branch). Bind it as an owning alias → incref (matching the outer
+    BufferLiteralExpr* literalPush = nullptr;
         // container's decref-per-element at drop). Scope-drop below balances this incref.
         IRValue* v = visitExpression(iv);
         handle = v ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v)) : nullptr;
@@ -879,8 +880,7 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
         auto* listLit = dynamic_cast<BufferLiteralExpr*>(iv);
         if (listLit && !listLit->elements.empty()) {
             if (!elemTy || !(elemTy->isIntegerTy() || elemTy->isFloatingPointTy())) {
-                LOG_ERROR(ctx.fmtLoc(decl->sourceNode) + "list literal: element type '" + elemName +
-                          "' not supported (numeric elements only); push the elements instead");
+                literalPush = listLit;   // other element types: one `push` call each, after the symbol exists
             } else {
                 for (auto& elem : listLit->elements) {
                     IRValue* ev = visitExpression(elem.get());
@@ -953,6 +953,16 @@ void Compiler::classifyMapKV(const std::string& kName, const std::string& vName,
     else if (ctx.isMemV3ContainerHandle(vName)) { valKind = 4; valStride = (int64_t)dl.getPointerSize(); }
     else if (vName.rfind("ptr<", 0) == 0 && vName.back() == '>' && ctx.interfaces.count(vName.substr(4, vName.size() - 5))) {
         valKind = 6; valStride = (int64_t)dl.getTypeAllocSize(vTyRaw);   // fat pointer
+    // spec/10 list literal of strings/models/…: the elements enter exactly like `push` (spec/61 ownership)
+    if (literalPush) {
+        for (auto& elem : literalPush->elements) {
+            CallExpr push(decl->varName + ".push");
+            push.sourceNode = decl->sourceNode;
+            push.args.push_back(std::move(elem));
+            visitCall(&push);
+        }
+        literalPush->elements.clear();
+    }
         valNodesCount = (int32_t)ctx.interfaces[vName.substr(4, vName.size() - 5)].methods.size();
     }
     else if (vName.rfind("ptr<", 0) == 0 && vName.back() == '>' && ctx.classes.count(vName.substr(4, vName.size() - 5))
