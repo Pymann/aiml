@@ -5747,6 +5747,17 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
             }
             llvm::Type* fldTy = ctx.getLLVMType(fldTypeName);
             llvm::Value* fp = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(fldPtr));
+            // spec/61 §5.5/§7: a STRING field of the element owns its string — secure the new one
+            // (adopt an owned temp, else dup), release the old one, store (as list<string> set(i)).
+            if (fldTypeName == "string" && ctx.lifetimeDropsEnabled && storeVal->getType()->isPointerTy()) {
+                auto* p8 = llvm::PointerType::get(ctx.context, 0);
+                llvm::Value* newS = idxValOwnedTemp ? storeVal
+                    : ctx.builder.CreateCall(ctx.getFunction("aiml_str_dup", p8, {p8}), { storeVal }, "idx_fld_str_own");
+                llvm::Value* oldS = ctx.builder.CreateLoad(p8, fp, "idx_fld_old_str");
+                ctx.builder.CreateCall(ctx.getFunction("aiml_str_decref", ctx.builder.getVoidTy(), {p8}), { oldS });
+                ctx.builder.CreateStore(newS, fp);
+                return;
+            }
             if (storeVal->getType() != fldTy) {
                 if (fldTy->isIntegerTy() && storeVal->getType()->isIntegerTy())
                     storeVal = ctx.builder.CreateZExtOrTrunc(storeVal, fldTy, "idx_mp_icast");

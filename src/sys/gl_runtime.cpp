@@ -99,6 +99,8 @@ struct AimlGLMesh {
     GLuint vbo_uv;
     GLuint vbo_norm;   /* 0 if no normals */
     GLuint vbo_tan;    /* 0 if no tangents (attrib 3) */
+    GLuint vbo_joint;  /* 0 if not skinned (attrib 4) */
+    GLuint vbo_weight; /* 0 if not skinned (attrib 5) */
     GLuint ibo;
     int32_t index_count;
 };
@@ -753,6 +755,27 @@ void aiml_gl_mesh_set_tangents(void* mesh, void* tan_buf) {
     glBindVertexArray(0);
 }
 
+/* spec/43_2 §3.4: attrib 4 = joint indices, attrib 5 = weights (4×f32 each, stride 16), glTF skin */
+void aiml_gl_mesh_set_skin(void* mesh, void* joint_buf, void* weight_buf) {
+    auto* m = (AimlGLMesh*)mesh;
+    auto* j = (AimlGLRawBuf*)joint_buf;
+    auto* w = (AimlGLRawBuf*)weight_buf;
+    if (!m || !j || !w || !j->data || !w->data || j->size <= 0 || j->size != w->size) return;
+    if (m->vbo_joint)  glDeleteBuffers(1, &m->vbo_joint);
+    if (m->vbo_weight) glDeleteBuffers(1, &m->vbo_weight);
+    m->vbo_joint  = upload_vbo(j);
+    m->vbo_weight = upload_vbo(w);
+    glBindVertexArray(m->vao);
+    glBindBuffer(GL_ARRAY_BUFFER, m->vbo_joint);
+    glEnableVertexAttribArray(4);
+    glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, 16, (void*)0);
+    glBindBuffer(GL_ARRAY_BUFFER, m->vbo_weight);
+    glEnableVertexAttribArray(5);
+    glVertexAttribPointer(5, 4, GL_FLOAT, GL_FALSE, 16, (void*)0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+}
+
 void aiml_gl_mesh_delete(void* mesh) {
     if (!mesh) return;
     auto* m = (AimlGLMesh*)mesh;
@@ -762,5 +785,7 @@ void aiml_gl_mesh_delete(void* mesh) {
     if (m->vbo_uv)   glDeleteBuffers(1, &m->vbo_uv);
     if (m->vbo_norm) glDeleteBuffers(1, &m->vbo_norm);
     if (m->vbo_tan)  glDeleteBuffers(1, &m->vbo_tan);
+    if (m->vbo_joint)  glDeleteBuffers(1, &m->vbo_joint);
+    if (m->vbo_weight) glDeleteBuffers(1, &m->vbo_weight);
     delete m;
 }

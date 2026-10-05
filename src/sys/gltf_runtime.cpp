@@ -909,6 +909,11 @@ void* aiml_gltf_prim_to_gl_mesh(void* prim) {
     void* tan  = aiml_gltf_prim_tangents(prim);
     if (mesh && tan) aiml_gl_mesh_set_tangents(mesh, tan);
     if (tan)  { free(((AimlGltfBuffer*)tan)->data);  free(tan); }
+    void* jnt = accessor_to_float_buf(find_attr((cgltf_primitive*)prim, cgltf_attribute_type_joints, 0));
+    void* wgt = accessor_to_float_buf(find_attr((cgltf_primitive*)prim, cgltf_attribute_type_weights, 0));
+    if (mesh && jnt && wgt) aiml_gl_mesh_set_skin(mesh, jnt, wgt);
+    if (jnt) { free(((AimlGltfBuffer*)jnt)->data); free(jnt); }
+    if (wgt) { free(((AimlGltfBuffer*)wgt)->data); free(wgt); }
 
     /* Free intermediate heap buffers — gl_create_mesh has already uploaded to GPU */
     if (pos)  { free(((AimlGltfBuffer*)pos)->data);  free(pos); }
