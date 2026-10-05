@@ -7,5 +7,5 @@
     args: []
     return: i32
     body:
-      - print: ["Custom entry point works! Version: ", {call: [sys.config_version]}]
+      - print: ["Custom entry point works!"]
       - return: 0
