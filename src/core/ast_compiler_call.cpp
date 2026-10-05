@@ -459,6 +459,21 @@ IRValue* Compiler::visitCall(CallExpr* call) {
          std::vector<IRValue*> printArgs;
          std::string formatStr = "";
          
+         // spec/09 §print: a call argument must return string; other results go through "${…}".
+         for (size_t i = 0; i < call->args.size(); ++i) {
+             auto* argCall = dynamic_cast<CallExpr*>(call->args[i].get());
+             if (!argCall) continue;
+             auto argSig = resolveCallSignature(argCall->functionName);
+             IRValue* got = i < argVals.size() ? argVals[i] : nullptr;
+             bool isString = argSig.valid
+                 ? argSig.returnType == "string"
+                 : (got && static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(got->getType()))->isPointerTy());
+             if (!isString) {
+                 std::string what = argSig.valid ? (argSig.returnType.empty() ? "no value" : "'" + argSig.returnType + "'") : "a non-string value";
+                 LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "print: call '" + argCall->functionName + "' returns " + what
+                     + ", not string; interpolate it instead: \"${ { call: [...] } }\" (spec/09 §print)");
+             }
+         }
          // Build format string and arguments list
          for (size_t i = 0; i < argVals.size(); ++i) {
              IRValue* argVal = argVals[i];

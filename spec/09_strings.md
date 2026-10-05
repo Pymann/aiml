@@ -294,3 +294,24 @@ The following escape sequences are supported inside string literals:
 | `\xHH` | Byte with hex value HH (e.g. `\x41` = `A`) |
 
 All other `\X` sequences are a CompilationError.
+
+## `print`
+
+**Transitional:** `print` is scheduled for removal. New code logs with the `log`
+namespace (spec/46); program/tool output that belongs on stdout uses
+`io.write(io.stdout, "…")` (spec/23). Existing `print` keeps the rules below until then.
+
+`print: [arg, …]` writes its arguments in order, followed by one newline. A string
+argument is written as text (a null string as `(null)`), an integer as decimal.
+An argument may be an expression map; a call `{ call: [...] }` must return `string`:
+
+```yaml
+- print: [{ call: [<.stats_line] }]          # ok: the method returns string
+- print: ["${ { call: [count_items] } }"]    # non-string results go through interpolation
+```
+
+A call whose return type is not `string` (number, bool, model, container, handle or
+no value) is a CompilationError — interpolate it instead. A `producer`/owning string
+result is a statement temporary and is released at statement end (spec/61 §3.2);
+a borrowed string result (e.g. a returned member) is not released.
+Tests: tests/test_print_call.aiml, tests/test_print_call_nonstring_error.aiml.

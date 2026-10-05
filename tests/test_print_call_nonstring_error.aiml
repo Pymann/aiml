@@ -1,0 +1,14 @@
+# static-check: off
+# Expected: compile error, print of a call that does not return string (spec/09 §print).
+- def:
+    name: count_items
+    return: i32
+    body:
+      - return: 3
+
+- def:
+    name: main
+    return: i32
+    body:
+      - print: [{ call: [count_items] }]
+      - return: 0
