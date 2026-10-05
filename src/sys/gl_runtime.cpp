@@ -87,6 +87,7 @@ struct AimlGLTexture {
     int    channels_unused = 0;   /* keeps ui_runtime's mirror layout */
     GLenum format = 0;            /* spec/43_5 §4; 0 = legacy path */
     int    levels = 0;
+    int    owned = 1;             /* spec/43_2 §5.5: 1 owned, 0 runtime-held, 2 view of an attachment */
 };
 
 struct AimlGLFramebuffer {
@@ -556,6 +557,21 @@ void aiml_gl_texture_delete(void* tex) {
     delete t;
 }
 
+/* spec/43_2 §5.5: owner drop / tex.delete(): deletes an owned texture, frees only a view block,
+ * leaves a runtime-held texture alone. */
+void aiml_gl_texture_release(void* tex) {
+    if (!tex) return;
+    AimlGLTexture* t = (AimlGLTexture*)tex;
+    if (t->owned == 0) return;
+    if (t->owned == 1) glDeleteTextures(1, &t->id);
+    delete t;
+}
+
+/* The runtime (asset cache, preview) keeps the texture; the program's drop no longer deletes it. */
+void aiml_gl_texture_disown(void* tex) {
+    if (tex && ((AimlGLTexture*)tex)->owned == 1) ((AimlGLTexture*)tex)->owned = 0;
+}
+
 void aiml_gl_bind_texture(void* tex, int32_t slot) {
     if (!tex) return;
     glActiveTexture(GL_TEXTURE0 + (GLenum)slot);
@@ -642,6 +658,8 @@ void* aiml_gl_framebuffer_color_texture(void* fbo) {
     AimlGLFramebuffer* fb = (AimlGLFramebuffer*)fbo;
     AimlGLTexture* t = new AimlGLTexture();
     t->id = fb->color_tex;
+    t->width = fb->w; t->height = fb->h;
+    t->owned = 2;
     return t;
 }
 

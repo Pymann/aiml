@@ -13,6 +13,7 @@
 // Loaders from sibling runtimes.  Declared here so we don't drag in the full
 // gl_runtime / ui_runtime / audio_runtime headers.
 extern "C" void* aiml_gl_load_texture(const char* path);
+extern "C" void  aiml_gl_texture_disown(void* tex);
 extern "C" void* aiml_ui_load_font(void* path_ptr, float size);
 extern "C" void* aiml_audio_load(const char* path);
 extern "C" void* aiml_audio_load_stream(const char* path);
@@ -37,6 +38,7 @@ extern "C" void* aiml_asset_get_texture(const char* stem) {
         return nullptr;
     }
     void* tex = aiml_gl_load_texture(abs);
+    aiml_gl_texture_disown(tex);
     g_tex_cache[stem] = tex;
     return tex;
 }
@@ -47,6 +49,7 @@ extern "C" void* aiml_asset_get_texture(const char* stem) {
 extern "C" void aiml_asset_register_texture(const char* stem, void* tex) {
     if (!stem || !tex) return;
     std::lock_guard<std::mutex> lk(g_mtx);
+    aiml_gl_texture_disown(tex);
     g_tex_cache[stem] = tex;
 }
 

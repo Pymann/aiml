@@ -1,0 +1,26 @@
+# spec/11: buffer.write(value, type) converts the value to `type` — an i32 literal written as u8
+# stores one byte, an integer written as f32 a float.
+# Expected exit code: 0
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [bytes, buffer<u8>]
+      - call: [bytes.alloc, 4]
+      - call: [bytes.write, 200, u8]
+      - call: [bytes.write, 7, u8]
+      - call: [bytes.write, 513, u16]
+      - if: { condition: { neq: [bytes.len, 4] }, then: [{ print: ["FAIL len ${bytes.len}"] }, { return: 1 }] }
+      - decl: [first, i32, { cast: [{ call: [bytes.get, 0] }, i32] }]
+      - decl: [second, i32, { cast: [{ call: [bytes.get, 1] }, i32] }]
+      - decl: [low, i32, { cast: [{ call: [bytes.get, 2] }, i32] }]
+      - if: { condition: { "||": [{ neq: [first, 200] }, { neq: [second, 7] }] }, then: [{ print: ["FAIL bytes ${first} ${second}"] }, { return: 1 }] }
+      - if: { condition: { neq: [low, 1] }, then: [{ print: ["FAIL u16 low ${low}"] }, { return: 1 }] }
+      - decl: [floats, buffer<f32>]
+      - call: [floats.alloc, 4]
+      - call: [floats.write, 2, f32]
+      - call: [floats.seek, 0]
+      - decl: [two, f32, { call: [floats.read, f32] }]
+      - if: { condition: { neq: [two, 2.0] }, then: [{ print: ["FAIL float ${two}"] }, { return: 1 }] }
+      - print: ["PASS buffer_write_width"]
+      - return: 0

@@ -275,6 +275,28 @@ Internally: stb_image decodes directly → `glTexImage2D`, no AIML-side pixel bu
 - call: [gl.bind_texture, normal_tex, 1]  # slot 1 → uniform uNormal=1
 ```
 
+### 5.5 Ownership (spec/61 Class 4)
+
+A `gl_texture` from `gl.load_texture`, `gl.create_texture`, `gl.create_texture_format`,
+`gl.create_texture_f32`, `gl.decode_texture`, `img.to_gl_texture` or a user function whose
+return is `lifetime: producer` (spec/61 §3.2) is **owned**: it is
+move-only and deleted exactly once when its owner drops — a local at scope exit, a model
+field with the model (spec/61 §6.1). Return, `push`, a member/field store and binding
+from a named local **move** it (the source becomes null); storing into a field deletes
+the field's previous owned texture. A model with a `gl_texture` field is move-only
+(borrow it with `ref<T>`). A local initialised from any other expression (a field, a
+user call without `producer`, `gl.tex`) is a borrow and is not dropped.
+
+`tex.delete()` is the optional early close: it deletes the owned texture and nulls the
+variable or field, so the later drop is a no-op.
+
+Not owned by the program: `gl.tex(stem)` (asset cache), `gl.source_texture` (one
+runtime-held preview texture), `fbo.color_texture()` (a view of the framebuffer's
+attachment — the local holding it frees only the view at drop or `delete()`, never the
+attachment).
+`gl.register_texture(stem, tex)` hands the texture to the asset cache, which keeps it
+for the process; the program's later drop of `tex` does not delete it.
+
 ---
 
 ## 6. Draw Calls

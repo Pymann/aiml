@@ -120,6 +120,8 @@ void  aiml_gl_bind_default_framebuffer(void);
 void* aiml_gl_framebuffer_color_texture(void* fbo);
 void  aiml_gl_framebuffer_resize    (void* fbo, int32_t w, int32_t h);
 void  aiml_gl_framebuffer_delete    (void* fbo);
+void  aiml_gl_texture_release(void* tex);   /* spec/43_2 §5.5 owner drop / delete() */
+void  aiml_gl_texture_disown(void* tex);
 
 /* ── spec/43_5 ─────────────────────────────────────────────────────────────── */
 

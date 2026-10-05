@@ -1495,7 +1495,23 @@ void registerBuiltins(CompilerContext& ctx) {
         IRValue* val = evalExpr(call->args[0].get());
         std::string typeName = extractTypeName(call->args[1].get());
         llvm::Type* ty = ctx.getLLVMType(typeName);
-        if (ty && val) BufferImpl::write(ctx, baseAlloca, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)), ty);
+        if (!ty || !val) return ctx.ir_gen->getInt32(0);
+        // spec/11: the value is written as `type` — convert a scalar of another width/kind first
+        // (an i32 literal written as u8 must store one byte, not four).
+        llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+        llvm::Type* vt = v->getType();
+        bool unsignedTy = typeName == "u8" || typeName == "u16" || typeName == "u32" || typeName == "u64";
+        if (vt != ty) {
+            if (vt->isIntegerTy() && ty->isIntegerTy())
+                v = ctx.builder.CreateSExtOrTrunc(v, ty);
+            else if (vt->isIntegerTy() && ty->isFloatingPointTy())
+                v = ctx.builder.CreateSIToFP(v, ty);
+            else if (vt->isFloatingPointTy() && ty->isFloatingPointTy())
+                v = ctx.builder.CreateFPCast(v, ty);
+            else if (vt->isFloatingPointTy() && ty->isIntegerTy())
+                v = unsignedTy ? ctx.builder.CreateFPToUI(v, ty) : ctx.builder.CreateFPToSI(v, ty);
+        }
+        BufferImpl::write(ctx, baseAlloca, v, ty);
         return ctx.ir_gen->getInt32(0);
     };
 
@@ -6701,7 +6717,7 @@ void registerBuiltins(CompilerContext& ctx) {
             ci.builtinMethods["height"] = gl43Method("aiml_gl_texture_height", "p", 'i');
             ci.builtinMethods["format"] = gl43Method("aiml_gl_texture_format", "p", 'i');
             ci.builtinMethods["levels"] = gl43Method("aiml_gl_texture_levels", "p", 'i');
-            GL_VOID0(ci, "delete",      "aiml_gl_texture_delete")
+            GL_VOID0(ci, "delete",      "aiml_gl_texture_release")   // spec/43_2 §5.5 early close
 
             ctx.classes["gl_texture"] = std::move(ci);
         }

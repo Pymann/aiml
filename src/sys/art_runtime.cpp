@@ -40,6 +40,7 @@ extern "C" {
     void*   aiml_gl_create_texture(int32_t w, int32_t h, void* px_buf);
     void*   aiml_gl_create_texture_raw(int32_t w, int32_t h, const uint8_t* rgba);
     void    aiml_gl_texture_delete(void* tex);
+    void    aiml_gl_texture_disown(void* tex);
 }
 
 // Allocate a scratch AimlArtBuf with `cap` bytes of data.  Returns nullptr on OOM.
@@ -286,6 +287,7 @@ extern "C" void* aiml_art_source_texture(int32_t dw, int32_t dh, int32_t mode,
         aiml_gl_texture_delete(t); return nullptr;
     }
     t->width = dw; t->height = dh;
+    aiml_gl_texture_disown(t);
     g_art_preview_tex = t;
     return t;
 }
@@ -443,6 +445,7 @@ extern "C" void* aiml_art_source_texture(int32_t dw, int32_t dh, int32_t mode,
     if (g_art_preview_tex) { aiml_gl_texture_delete(g_art_preview_tex); g_art_preview_tex = nullptr; }
     void* tex = aiml_gl_create_texture_raw(dw, dh, (const uint8_t*)fit->data);
     art_scratch_free(fit);
+    aiml_gl_texture_disown(tex);
     g_art_preview_tex = tex;
     return tex;
 }

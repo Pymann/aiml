@@ -7,7 +7,8 @@
 
 # Unified Write Method
 # Syntax: buffer.write(value, type)
-# - For primitives (i32, f64, etc.): writes raw bytes (Little Endian).
+# - For primitives (i32, f64, etc.): writes raw bytes (Little Endian). The value is
+#   converted to `type` first: `[buf.write, 200, u8]` stores one byte, `[buf.write, 2, f32]` a float.
 # - For complex types (structs, lists, maps): recursively serializes content (Deep Copy).
 #   (A simple memcpy would fail for types containing pointers/references)
 

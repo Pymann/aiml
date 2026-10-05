@@ -558,7 +558,7 @@ void Compiler::moveIteratorArg(Expr* arg) {
 // moves via consumeLocalDrop.
 void Compiler::emitResourceBindTransfer(const std::string& typeName, Expr* rhs, llvm::Value* dst) {
     bool isChan = typeName.rfind("chan<", 0) == 0 && typeName.back() == '>';
-    if ((!isChan && typeName != "thread_handle") || !rhs) return;
+    if ((!isChan && typeName != "thread_handle" && typeName != "gl_texture") || !rhs) return;
     if (dynamic_cast<CallExpr*>(rhs) || dynamic_cast<SpawnExpr*>(rhs) || dynamic_cast<LiteralExpr*>(rhs)) return;
     auto* var = dynamic_cast<VariableExpr*>(rhs);
     Symbol* plain = (var && var->name.find('.') == std::string::npos && var->name.find('<') == std::string::npos)
@@ -586,7 +586,7 @@ void Compiler::emitResourceBindTransfer(const std::string& typeName, Expr* rhs, 
 // source / null a moved thread_handle source), release the old one, store.
 bool Compiler::emitResourceStore(const std::string& typeName, Expr* rhs, llvm::Value* newV, llvm::Value* slot) {
     bool isChan = typeName.rfind("chan<", 0) == 0 && typeName.back() == '>';
-    if ((!isChan && typeName != "thread_handle") || !newV || !slot || !newV->getType()->isPointerTy()) return false;
+    if ((!isChan && typeName != "thread_handle" && typeName != "gl_texture") || !newV || !slot || !newV->getType()->isPointerTy()) return false;
     auto* i8p = llvm::PointerType::get(ctx.context, 0);
     if (isChan) {
         if (!dynamic_cast<CallExpr*>(rhs) && !dynamic_cast<LiteralExpr*>(rhs))
@@ -595,7 +595,8 @@ bool Compiler::emitResourceStore(const std::string& typeName, Expr* rhs, llvm::V
         emitResourceBindTransfer(typeName, rhs, slot);   // moved source slot → null
     }
     llvm::Value* oldV = ctx.builder.CreateLoad(i8p, slot, "res_old");
-    ctx.builder.CreateCall(ctx.getFunction(isChan ? "aiml_chan_release" : "aiml_thread_handle_drop",
+    ctx.builder.CreateCall(ctx.getFunction(isChan ? "aiml_chan_release"
+        : typeName == "gl_texture" ? "aiml_gl_texture_release" : "aiml_thread_handle_drop",
         ctx.builder.getVoidTy(), {i8p}), { oldV });
     ctx.builder.CreateStore(newV, slot);
     return true;
@@ -1322,7 +1323,7 @@ static bool modelIsMoveOnly(CompilerContext& ctx, const std::string& className,
     for (auto& mkv : it->second.members) {
         const std::string& t = mkv.second.typeName;
         if (t.rfind("ptr<", 0) == 0) return true;       // unique owning box
-        if (t == "tensor" || t == "thread_handle") return true;   // Class-4 unique resource
+        if (t == "tensor" || t == "thread_handle" || t == "gl_texture") return true;   // Class-4 unique resource
         // A bare nested value-model field: recurse (a ptr<>/ref<>/shared<> wrapper is not a value
         // nesting — ptr is caught above, ref/shared are borrow/co-own, neither makes the parent
         // move-only through a value copy of this slot).
@@ -1822,6 +1823,28 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     CompilerContext::ScopeDrop sd;
                     sd.addr = unwrappedAlloca;
                     sd.kind = 16;
+                    sd.debugName = decl->varName; sd.debugType = decl->typeName;
+                    ctx.cleanupStack.back().push_back(sd);
+                }
+            }
+        }
+        // spec/43_2 §5.5 / spec/61 Class 4: a gl_texture from an owning constructor or a producer
+        // call is released at owner drop (kind 17); other initialisers are borrows.
+        if (decl->typeName == "gl_texture" && decl->lifetime != "persistent" && ctx.lifetimeDropsEnabled
+            && !ctx.cleanupStack.empty() && !sym.is_global) {
+            if (auto* tc = dynamic_cast<CallExpr*>(decl->initialValue.get())) {
+                const std::string& fnm = tc->functionName;
+                size_t dp = fnm.rfind('.');
+                std::string shortName = (dp == std::string::npos) ? fnm : fnm.substr(dp + 1);
+                bool owning = fnm == "gl.load_texture" || fnm == "gl.create_texture"
+                    || fnm == "gl.create_texture_format" || fnm == "gl.create_texture_f32"
+                    || fnm == "gl.decode_texture" || shortName == "to_gl_texture"
+                    || shortName == "color_texture"
+                    || ctx.ownsReturnMatches(shortName, "gl_texture");
+                if (owning) {
+                    CompilerContext::ScopeDrop sd;
+                    sd.addr = unwrappedAlloca;
+                    sd.kind = 17;
                     sd.debugName = decl->varName; sd.debugType = decl->typeName;
                     ctx.cleanupStack.back().push_back(sd);
                 }
@@ -4347,7 +4370,13 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
         static const std::set<std::string> mathValues = {"vec2", "vec3", "vec4", "quat", "mat4", "ivec2", "ivec3"};
         if (mathValues.count(ctx.currentFunctionReturnType)) retPodModel = true;
     }
-    bool safeToCleanup = (retTy && retTy->isVoidTy()) || retScalar || retBaseOwned
+    // spec/61 Class 4: an opaque resource handle returned as a plain local (moved out above) or a
+    // call result cannot alias another local's heap.
+    bool retResourceHandle = (ctx.currentFunctionReturnType == "gl_texture" || ctx.currentFunctionReturnType == "gltf_image")
+        && retStmt->value && (dynamic_cast<CallExpr*>(retStmt->value.get())
+            || (dynamic_cast<VariableExpr*>(retStmt->value.get())
+                && static_cast<VariableExpr*>(retStmt->value.get())->name.find_first_of(".<") == std::string::npos));
+    bool safeToCleanup = (retTy && retTy->isVoidTy()) || retScalar || retBaseOwned || retResourceHandle
                          || (retModelAddr != nullptr) || (retContainerSlot != nullptr)
                          || retFreshOwned || retStrFieldOfOwnedModel || retProducerBorrowedString
                          || retThisMember || retPodModel
@@ -4380,7 +4409,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     emitScopeDrop(ctx, *it);
                     continue;
                 }
-                if (it->kind == 10 || it->kind == 11 || it->kind == 13 || it->kind == 14 || it->kind == 15 || it->kind == 16) { emitScopeDrop(ctx, *it); continue; }   // null-safe single release
+                if (it->kind == 10 || it->kind == 11 || it->kind == 13 || it->kind == 14 || it->kind == 15 || it->kind == 16 || it->kind == 17) { emitScopeDrop(ctx, *it); continue; }   // null-safe single release
                 // spec/61 §8: a parameter's own call reference (the returned container slot is moved above)
                 if ((it->paramRef || it->ownedParamBox) && !(retContainerSlot && it->addr == retContainerSlot)) { emitScopeDrop(ctx, *it); continue; }
                 // spec/61 §5 (memV3): the returned container handle is MOVED to the caller → skip its
@@ -4527,7 +4556,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
             // so is an owned gltf_image handle block (kind 16): no returned value can alias it
             for (auto fit = ctx.cleanupStack.rbegin(); fit != ctx.cleanupStack.rend(); ++fit)
                 for (auto it = fit->rbegin(); it != fit->rend(); ++it)
-                    if (it->paramRef || it->kind == 16) emitScopeDrop(ctx, *it);
+                    if (it->paramRef || it->kind == 16 || it->kind == 17) emitScopeDrop(ctx, *it);
         }
         if (val) {
             // Struct-by-value return (list/buffer/map): visitExpression often
@@ -5098,6 +5127,11 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         llvm::Value* img = ctx.builder.CreateLoad(i8p, it.addr, "drop_gltf_image");
         ctx.builder.CreateCall(ctx.getFunction("aiml_gltf_image_release", ctx.builder.getVoidTy(), {i8p}), { img });
         ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
+    } else if (it.kind == 17) {
+        // spec/43_2 §5.5: owned gl_texture — delete (null-safe; views/runtime-held handled); null the slot.
+        llvm::Value* tex = ctx.builder.CreateLoad(i8p, it.addr, "drop_gl_texture");
+        ctx.builder.CreateCall(ctx.getFunction("aiml_gl_texture_release", ctx.builder.getVoidTy(), {i8p}), { tex });
+        ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
     } else if (it.kind == 14 || it.kind == 15) {
         // spec/61 Class 4 thread_handle (detach if unjoined + free) / Class 5 chan (atomic release);
         // both null-safe; null the slot (single release).
@@ -5118,7 +5152,7 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
 }
 // spec/61 §9.3: drops released on every exit regardless of the ownership plan (order-independent).
 static bool unconditionalDrop(const CompilerContext::ScopeDrop& d) {
-    return d.paramRef || d.ownedParamBox || d.kind == 7 || d.kind == 13 || d.kind == 14 || d.kind == 15 || d.kind == 16 || d.kind == 10 || d.kind == 11 || d.kind == 12
+    return d.paramRef || d.ownedParamBox || d.kind == 7 || d.kind == 13 || d.kind == 14 || d.kind == 15 || d.kind == 16 || d.kind == 17 || d.kind == 10 || d.kind == 11 || d.kind == 12
         || (d.isListHandle && (d.kind == 2 || d.kind == 3 || d.kind == 8));
 }
 
@@ -5246,18 +5280,24 @@ void Compiler::visitBlockStmt(BlockStmt* block) {
     ctx.cleanupStack.pop_back();
     ctx.symbol_table = savedSymbols;
 }
+// A condition is true when non-zero: bool (i8), any integer width, float, or non-null pointer.
+static IRValue* conditionToI1(CompilerContext& ctx, IRValue* cond, const char* name) {
+    llvm::Value* v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(cond));
+    llvm::Type* ty = v->getType();
+    if (ty->isIntegerTy(1)) return cond;
+    if (ty->isIntegerTy()) return ctx.ir_gen->wrap(ctx.builder.CreateICmpNE(v, llvm::ConstantInt::get(ty, 0), name));
+    if (ty->isFloatingPointTy()) return ctx.ir_gen->wrap(ctx.builder.CreateFCmpUNE(v, llvm::ConstantFP::get(ty, 0.0), name));
+    if (ty->isPointerTy()) return ctx.ir_gen->wrap(ctx.builder.CreateIsNotNull(v, name));
+    return ctx.ir_gen->createICmpNE(cond, ctx.ir_gen->getInt32(0), name);
+}
+
 void Compiler::visitIfStmt(IfStmt* ifStmt) {
     if (!ifStmt->condition) return;
     
     IRValue* condVal = visitExpression(ifStmt->condition.get());
     if (!condVal) return;
     
-    // Ensure the condition is boolean (i1). In AIML, any non-zero is true.
-    // For now assume strictly typed, or cast:
-    if (ctx.ir_gen->unwrapType(condVal->getType()) != ctx.builder.getInt1Ty()) {
-        IRValue* zero = ctx.ir_gen->getInt32(0); // Assuming 32-bit compare for now
-        condVal = ctx.ir_gen->createICmpNE(condVal, zero, "to_bool");
-    }
+    condVal = conditionToI1(ctx, condVal, "to_bool");
     // spec/61 (T1c): free the condition's owned-string temps before branching (the boolean is already
     // computed), so a terminating then/else branch cannot leak them (CardArtCache `if has_texture(
     // "@art:${hsh}") return 1` leaked the concat every cache-hit frame).
@@ -5311,10 +5351,7 @@ void Compiler::visitWhileStmt(WhileStmt* whileStmt) {
     IRValue* condVal = visitExpression(whileStmt->condition.get());
     if (!condVal) return;
     
-    if (ctx.ir_gen->unwrapType(condVal->getType()) != ctx.builder.getInt1Ty()) {
-        IRValue* zero = ctx.ir_gen->getInt32(0);
-        condVal = ctx.ir_gen->createICmpNE(condVal, zero, "while_cond_bool");
-    }
+    condVal = conditionToI1(ctx, condVal, "while_cond_bool");
     // spec/61 (T1c): free the while-condition's owned-string temps each iteration (evaluated here in
     // loopBB), before entering the body/exit — a condition interpolation temp would otherwise leak
     // once per iteration, and the per-statement decref (after the loop) would only see the last value.

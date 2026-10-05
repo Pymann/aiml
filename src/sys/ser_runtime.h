@@ -61,12 +61,15 @@ typedef enum {
                              //   release, share/clone = retain, in-process copy keeps the pointer.
     AIML_TD_THREAD     = 19, // spec/61 Class 4 (memV3): a thread_handle pointer slot. Leaf; free =
                              //   detach if unjoined + free, never shared (a copy leaves it null).
+    AIML_TD_GLTEX      = 20, // spec/43_2 §5.5 Class 4: a gl_texture pointer slot. Leaf; free =
+                             //   aiml_gl_texture_release, move-only (a copy leaves it null).
 } AimlTDKind;
 
 // spec/61 Class 5 / Class 4 resource handles (ser_runtime.cpp).
 void aiml_chan_retain(void* ch);
 void aiml_chan_release(void* ch);
 void aiml_thread_handle_drop(void* h);
+void aiml_gl_texture_release(void* tex);
 
 // Each node is 24 bytes.  The whole descriptor for a type is an array of these.
 typedef struct {

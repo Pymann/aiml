@@ -1143,7 +1143,14 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                 auto evalExpr = [this](AIML::AST::Expr* e) -> IRValue* {
                     return this->visitExpression(e);
                 };
-                return methodIt->second(ctx, baseForHandler, call, evalExpr);
+                IRValue* res = methodIt->second(ctx, baseForHandler, call, evalExpr);
+                // spec/43_2 §5.5: delete() is the early close of an owned gl_texture — null the
+                // variable/field so its later owner drop is a no-op.
+                if (className == "gl_texture" && methodName == "delete" && classIt->second.preLoadBase
+                    && (llvm::isa<llvm::AllocaInst>(rawAlloca) || llvm::isa<llvm::GetElementPtrInst>(rawAlloca)
+                        || llvm::isa<llvm::GlobalVariable>(rawAlloca)))
+                    ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ctx.builder.getPtrTy()), rawAlloca);
+                return res;
             }
 
             // Chained method dispatch: methodName contains a dot (e.g., "headers.put" on resp)
