@@ -4104,7 +4104,11 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 {
                     llvm::Value* sv3 = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
                     llvm::Type* fty = ctx.getLLVMType(finalTypeName);
-                    if (sv3 && fty && sv3->getType() != fty) {
+                    static const std::set<std::string> mathValues = {"vec2", "vec3", "vec4", "quat", "mat4", "ivec2", "ivec3"};
+                    if (sv3 && fty && fty->isStructTy() && sv3->getType()->isPointerTy() && mathValues.count(finalTypeName))
+                        // a struct-returning call yields its temp's address: copy the value, not the address
+                        val = ctx.ir_gen->wrap(ctx.builder.CreateLoad(fty, sv3, "fld_struct_val"));
+                    else if (sv3 && fty && sv3->getType() != fty) {
                         llvm::Type* sty = sv3->getType();
                         if (fty->isFloatingPointTy() && sty->isIntegerTy() && !sty->isIntegerTy(1))
                             val = ctx.ir_gen->wrap(ctx.builder.CreateSIToFP(sv3, fty, "fld_i2f"));

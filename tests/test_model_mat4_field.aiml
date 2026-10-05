@@ -1,0 +1,47 @@
+# A mat4 / vec3 field of a local value model set from a call result keeps its value, also when
+# the model is passed as ref<T> to a method.
+# Expected exit code: 0
+- model:
+    name: Frame
+    fields:
+      - [proj, mat4]
+      - [eye, vec3]
+      - [left, i32]
+
+- class:
+    name: Camera
+    methods:
+      - def:
+          name: projection
+          access: public
+          args: [[aspect, f32]]
+          return: mat4
+          body:
+            - return: { call: [math.mat4_scale, { call: [math.vec3, aspect, 2.0, 3.0] }] }
+
+      - def:
+          name: scale_of
+          access: public
+          args: [[frame, ref<Frame>]]
+          return: f32
+          body:
+            - return: { call: [frame.proj.get, 0, 0] }
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [cam, Camera]
+      - decl: [frame, Frame]
+      - set: [frame.proj, { call: [cam.projection, 1.5] }]
+      - set: [frame.eye, { call: [math.vec3, 1.0, 2.0, 3.0] }]
+      - set: [frame.left, 7]
+      - decl: [ref_proj, mat4, { call: [cam.projection, 1.5] }]
+      - decl: [want, f32, { call: [ref_proj.get, 0, 0] }]
+      - decl: [direct, f32, { call: [frame.proj.get, 0, 0] }]
+      - decl: [through, f32, { call: [cam.scale_of, frame] }]
+      - if: { condition: { neq: [direct, want] }, then: [{ print: ["FAIL direct ${direct} want ${want}"] }, { return: 1 }] }
+      - if: { condition: { neq: [through, want] }, then: [{ print: ["FAIL through ref ${through} want ${want}"] }, { return: 1 }] }
+      - if: { condition: { neq: [frame.eye.y, 2.0] }, then: [{ print: ["FAIL eye ${frame.eye.y}"] }, { return: 1 }] }
+      - print: ["PASS model_mat4_field"]
+      - return: 0
