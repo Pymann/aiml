@@ -97,6 +97,7 @@ void aiml_gl_bind_texture(void* tex, int32_t slot);
  */
 void* aiml_gl_create_mesh(void* pos_buf, void* uvs_buf, void* normals_buf, void* idx_buf);
 void  aiml_gl_mesh_set_tangents(void* mesh, void* tan_buf);
+void  aiml_gl_mesh_set_skin(void* mesh, void* joint_buf, void* weight_buf);
 
 void    aiml_gl_mesh_draw       (void* mesh);               /* GL_TRIANGLES, all indices */
 void    aiml_gl_mesh_draw_count (void* mesh, int32_t count);/* GL_TRIANGLES, count indices */

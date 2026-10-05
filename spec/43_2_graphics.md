@@ -139,9 +139,13 @@ the VAO with a fixed attribute layout:
 | 1           | uv        | 2 × f32     | 8 B    |
 | 2           | normal    | 3 × f32     | 12 B   |
 | 3           | tangent   | 4 × f32 (xyz + handedness w) | 16 B   |
+| 4           | joints    | 4 × f32 (joint indices of the skin, from `JOINTS_0` u8/u16) | 16 B |
+| 5           | weights   | 4 × f32 (from `WEIGHTS_0`) | 16 B |
 
 Attribute 3 is filled by `prim.to_gl_mesh()` when the glTF primitive has `TANGENT`
-(normal mapping); `gl.create_mesh` leaves it unset.
+(normal mapping); attributes 4 and 5 when it has `JOINTS_0` and `WEIGHTS_0` (skinning: the
+vertex shader blends `uBones[int(aJoints[i])]` by `aWeights[i]`, see `uniform_mat4_array`);
+`gl.create_mesh` leaves them unset.
 
 **From glTF primitive (shorthand):**
 
@@ -224,6 +228,7 @@ manual `mat4_to_buffer` required.
 ---
 
 ## 5. Textures
+
 
 ### 5.1 Load from File
 

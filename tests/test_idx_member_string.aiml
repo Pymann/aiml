@@ -1,0 +1,54 @@
+# spec/61 §5.5/§7: `idx: [list, i, .field, value]` into a string field of a list element secures the
+# new string (dup, or adopts an owned temp) and releases the old one — the element owns its string
+# after the source local is gone (it used to keep a dangling pointer to the freed local).
+# Expected exit code: 0
+- model:
+    name: Labelled
+    fields:
+      - [label, string]
+      - [count, i32]
+- class:
+    name: LabelStore
+    members: [[items, list<Labelled>]]
+    methods:
+      - def:
+          name: rename
+          access: public
+          args: [[pos, i32], [stem, string], [num, i32]]
+          body:
+            - decl: [text, string, "${stem}_${num}"]
+            - idx: [<.items, pos, .label, text]
+
+      - def:
+          name: churn
+          access: public
+          body:
+            - decl: [round, i32, 0]
+            - while:
+                condition: { lt: [round, 50] }
+                body:
+                  - decl: [noise, string, "noise ${round} noise ${round} noise"]
+                  - set: [round, { +: [{ call: [noise.len] }, { -: [round, { call: [noise.len] }] }] }]
+                  - set: [round, { +: [round, 1] }]
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [store, ptr<LabelStore>, { new: LabelStore }]
+      - decl: [blank, Labelled]
+      - call: [store.items.push, blank]
+      - call: [store.items.push, blank]
+      - decl: [step, i32, 0]
+      - while:
+          condition: { lt: [step, 20] }
+          body:
+            - call: [store.rename, 0, "body", step]
+            - call: [store.rename, 1, "neck", { +: [step, 100] }]
+            - call: [store.churn]
+            - set: [step, { +: [step, 1] }]
+      - decl: [first, string, { at: [store.items, 0, .label] }]
+      - decl: [second, string, { at: [store.items, 1, .label] }]
+      - if: { condition: { neq: [first, "body_19"] }, then: [{ print: ["FAIL first '${first}'"] }, { return: 1 }] }
+      - if: { condition: { neq: [second, "neck_119"] }, then: [{ print: ["FAIL second '${second}'"] }, { return: 1 }] }
+      - print: ["PASS idx_member_string"]
+      - return: 0
