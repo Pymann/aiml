@@ -1213,10 +1213,12 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         llvm::Type* ptrTy    = llvm::PointerType::get(ctx.context, 0);
         llvm::Value* buf     = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca));
 
-        // Eagerly evaluate args for these methods
+        // Eagerly evaluate args for these methods (once — the fallback handler reuses them)
         std::vector<IRValue*> bArgVals;
+        std::map<AIML::AST::Expr*, IRValue*> evaluated;
         for (auto& arg : call->args) {
             IRValue* v = visitExpression(arg.get());
+            evaluated[arg.get()] = v;
             if (v) bArgVals.push_back(v);
         }
 
@@ -1285,7 +1287,11 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             if (classIt != ctx.classes.end()) {
                 auto methodIt = classIt->second.builtinMethods.find(methodName);
                 if (methodIt != classIt->second.builtinMethods.end()) {
-                    auto evalExpr = [this](AIML::AST::Expr* e) -> IRValue* { return this->visitExpression(e); };
+                    // an argument with side effects (e.g. src.read) must not run twice
+                    auto evalExpr = [this, &evaluated](AIML::AST::Expr* e) -> IRValue* {
+                        auto hit = evaluated.find(e);
+                        return (hit != evaluated.end() && hit->second) ? hit->second : this->visitExpression(e);
+                    };
                     return methodIt->second(ctx, buf, call, evalExpr);
                 }
             }
