@@ -3276,7 +3276,7 @@ static bool serHasHeap(const std::string& typeName, CompilerContext& ctx) {
     // close it at scope drop (fre → aiml_tensor_free). So a tensor-field model needs serNodes + drop.
     if (ctx.memV3 && typeName == "tensor") return true;
     // spec/61 Class 5 chan<T> / Class 4 thread_handle field: released with the owning model.
-    if (ctx.memV3 && (typeName == "thread_handle"
+    if (ctx.memV3 && (typeName == "thread_handle" || typeName == "gl_texture"
                       || (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>'))) return true;
     // spec/61 §6.2 (memV3): a `shared<T>` (refcounted co-owned) or `ptr<T>` (unique owner) FIELD owns
     // heap → the model must decref/free it at scope drop. Without this a model whose ONLY heap-bearing
@@ -3392,6 +3392,8 @@ static std::vector<AimlTypeNode> serBuildSubtree(
             { res.push_back({AIML_TD_CHAN, 0,0,offset,0,0}); return res; }
         if (typeName == "thread_handle")
             { res.push_back({AIML_TD_THREAD, 0,0,offset,0,0}); return res; }
+        if (typeName == "gl_texture")
+            { res.push_back({AIML_TD_GLTEX, 0,0,offset,0,0}); return res; }
         if (purpose == DescriptorPurpose::Clone
             && typeName.rfind("ref<", 0) == 0 && typeName.back() == '>')
             { res.push_back({AIML_TD_WEAK_REF, 0,0,offset,0,0}); return res; }

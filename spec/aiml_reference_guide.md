@@ -378,6 +378,8 @@ AIML utilizes YAML for Abstract Syntax Tree representations. All statements are 
 
 ### 5.2 Control Flow (`if`, `while`, `for`)
 Control structures execute block lists dynamically based on strictly boolean conditions.
+A `bool` value (variable, member, call result) is a condition by itself, e.g.
+`condition: ready`; comparisons and `not`/`&&`/`||` yield `bool`.
 - **`if`**: Branching execution. `else` is optional. The `true` placeholder validates standard YAML map constraints in shorthand forms.
   ```yaml
   - if: [{ lt: [x, 10] }, true]

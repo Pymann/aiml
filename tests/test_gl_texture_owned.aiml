@@ -1,0 +1,110 @@
+# spec/43_2 §5.5 + spec/61 Class 4: an owned gl_texture is deleted once at owner drop (local,
+# model field), moves (return, push, field store) transfer it, delete() is an early close, a
+# framebuffer's color_texture() view never deletes the attachment. Run under valgrind: no
+# program leak, no invalid free.
+# Requires: display
+# Expected exit code: 0
+- model:
+    name: Swatch
+    fields:
+      - [label, i32]
+      - [texture, gl_texture]
+
+- class:
+    name: TextureProbe
+    members: [[total, i32], [shelf, list<Swatch>]]
+    methods:
+      - def:
+          name: make
+          access: public
+          args: [[side, i32]]
+          return: { type: gl_texture, lifetime: producer }
+          body:
+            - decl: [pixels, buffer<u8>]
+            - call: [pixels.alloc, { "*": [{ "*": [side, side] }, 4] }]
+            - decl: [cur, i32, 0]
+            - while:
+                condition: { lt: [cur, { "*": [{ "*": [side, side] }, 4] }] }
+                body:
+                  - call: [pixels.write, 200, u8]
+                  - set: [cur, { +: [cur, 1] }]
+            - decl: [tex, gl_texture, { call: [gl.create_texture_format, side, side, pixels, gl.RGBA8, false] }]
+            - return: tex
+
+      # a dropped local: created, used, released at scope exit
+      - def:
+          name: scratch
+          access: public
+          body:
+            - decl: [tex, gl_texture, { call: [<.make, 2] }]
+            - decl: [temp, gl_texture, { call: [gl.create_texture, 2, 2, null] }]
+            - set: [<.total, { +: [<.total, { call: [tex.width] }] }]
+
+      # a model field owns its texture; the model drop releases it
+      - def:
+          name: swatch_local
+          access: public
+          body:
+            - decl: [one, Swatch]
+            - set: [one.texture, { call: [<.make, 3] }]
+            - set: [<.total, { +: [<.total, { call: [one.texture.width] }] }]
+            - set: [one.texture, { call: [<.make, 4] }]
+            - set: [<.total, { +: [<.total, { call: [one.texture.width] }] }]
+
+      # push moves the model (and its texture) into the member list
+      - def:
+          name: keep
+          access: public
+          body:
+            - decl: [kept, Swatch]
+            - decl: [tex, gl_texture, { call: [<.make, 5] }]
+            - set: [kept.texture, tex]
+            - call: [<.shelf.push, kept]
+
+      - def:
+          name: early_close
+          access: public
+          body:
+            - decl: [tex, gl_texture, { call: [<.make, 2] }]
+            - call: [tex.delete]
+
+      - def:
+          name: view_of_target
+          access: public
+          body:
+            - decl: [target, gl_framebuffer, { call: [gl.create_framebuffer_format, 4, 4, gl.RGBA8, false] }]
+            - decl: [view, gl_texture, { call: [target.color_texture] }]
+            - call: [view.delete]
+            - decl: [again, gl_texture, { call: [target.color_texture] }]
+            - call: [gl.bind_framebuffer, target]
+            - call: [gl.clear_all, 0.0, 1.0, 0.0, 1.0]
+            - decl: [pixels, buffer<u8>, { call: [gl.read_rgba8, 0, 0, 1, 1] }]
+            - call: [gl.bind_default_framebuffer]
+            - set: [<.total, { +: [<.total, { cast: [{ call: [pixels.get, 1] }, i32] }] }]
+            - call: [target.delete]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [win, window_handle, { call: [engine.create_window, 64, 64, "textures"] }]
+      - if: { condition: { eq: [win, null] }, then: [{ print: ["FAIL window"] }, { return: 1 }] }
+      - decl: [probe, ptr<TextureProbe>, { new: TextureProbe }]
+      - decl: [round, i32, 0]
+      - while:
+          condition: { lt: [round, 20] }
+          body:
+            - call: [probe.scratch]
+            - call: [probe.swatch_local]
+            - call: [probe.early_close]
+            - set: [round, { +: [round, 1] }]
+      - call: [probe.keep]
+      - call: [probe.view_of_target]
+      - decl: [kept, ref<Swatch>, { at: [probe.shelf, 0] }]
+      - decl: [kept_w, i32, { call: [kept.texture.width] }]
+      - if: { condition: { neq: [kept_w, 5] }, then: [{ print: ["FAIL kept width ${kept_w}"] }, { return: 1 }] }
+      - if: { condition: { neq: [probe.total, 435] }, then: [{ print: ["FAIL total ${probe.total}"] }, { return: 1 }] }
+      - free: probe
+      - call: [engine.destroy_window, win]
+      - print: ["PASS gl_texture_owned"]
+      - return: 0

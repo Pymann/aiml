@@ -1,0 +1,41 @@
+# A bool variable, member or call result is a condition on its own (if/while), also under
+# not/&&/||; bool is stored as i8 (spec/04_1).
+# Expected exit code: 0
+- class:
+    name: Flags
+    members: [[ready, bool], [hits, i32]]
+    methods:
+      - def:
+          name: is_ready
+          access: public
+          return: bool
+          body:
+            - return: <.ready
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [yes, bool, true]
+      - decl: [nope, bool, false]
+      - decl: [hits, i32, 0]
+      - if: { condition: yes, then: [{ set: [hits, { +: [hits, 1] }] }] }
+      - if: { condition: nope, then: [{ return: 1 }] }
+      - if: { condition: { not: [nope] }, then: [{ set: [hits, { +: [hits, 1] }] }] }
+      - if: { condition: { "&&": [yes, { not: [nope] }] }, then: [{ set: [hits, { +: [hits, 1] }] }] }
+      - if: { condition: { "||": [nope, yes] }, then: [{ set: [hits, { +: [hits, 1] }] }] }
+      - decl: [flags, Flags]
+      - set: [flags.ready, true]
+      - if: { condition: flags.ready, then: [{ set: [hits, { +: [hits, 1] }] }] }
+      - if: { condition: { call: [flags.is_ready] }, then: [{ set: [hits, { +: [hits, 1] }] }] }
+      - decl: [going, bool, true]
+      - decl: [laps, i32, 0]
+      - while:
+          condition: going
+          body:
+            - set: [laps, { +: [laps, 1] }]
+            - if: { condition: { ge: [laps, 3] }, then: [{ set: [going, false] }] }
+      - if: { condition: { neq: [laps, 3] }, then: [{ print: ["FAIL laps ${laps}"] }, { return: 1 }] }
+      - if: { condition: { neq: [hits, 6] }, then: [{ print: ["FAIL hits ${hits}"] }, { return: 1 }] }
+      - print: ["PASS bool_condition"]
+      - return: 0
