@@ -7,7 +7,7 @@
     members:
       - [scores, "map<string:i32>"]
 
-- decl: [box, ref<MapBox>, { new: MapBox }]
+- decl: [box, ptr<MapBox>, { new: MapBox }]   # spec/18: `new` -> ptr<T>
 
 - call: [box.scores.put, "alice", 7]
 - call: [box.scores.put, "bob", 9]

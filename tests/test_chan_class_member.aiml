@@ -15,7 +15,7 @@
       - call: [worker_box.var_ch.send, 42]
       - call: [worker_box.var_ch.send, 99]
 
-- decl: [box, ref<ChannelBox>, { new: ChannelBox }]
+- decl: [box, ptr<ChannelBox>, { new: ChannelBox }]   # spec/18: `new` -> ptr<T>
 - decl: [var_th, thread_handle, { spawn: [channel_box_producer, box] }]
 
 - decl: [var_v1, i32, { call: [box.var_ch.recv] }]

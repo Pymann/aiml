@@ -7,7 +7,7 @@
     members:
       - [var_xs, list<i32>]
 
-- decl: [box, ref<ListBox>, { new: ListBox }]
+- decl: [box, ptr<ListBox>, { new: ListBox }]   # spec/18: `new` -> ptr<T>
 
 - call: [box.var_xs.push, 10]
 - call: [box.var_xs.push, 20]
