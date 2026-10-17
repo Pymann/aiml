@@ -1,3 +1,4 @@
+# SPEC: 44_5_mirror
 # spec/44_5 §7.1 automatic object RPCs: normal method-call syntax, routing matrix, exact execution
 # counts.  Host + two clients in one process; each side registers a different class with the same
 # rpc method `bump`, whose body adds to that side's own counter — so every execution is attributable.

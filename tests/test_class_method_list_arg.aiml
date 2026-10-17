@@ -1,3 +1,4 @@
+# SPEC?: 16_classes   # aus dem Dateinamen, zu bestaetigen
 # Repro: class method that accepts list<T> as argument crashes when the
 # caller passes a local variable (alloca → loaded value).
 #

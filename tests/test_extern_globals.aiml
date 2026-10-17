@@ -1,3 +1,4 @@
+# SPEC?: 35_ffi   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 - import: "tests/lib_extern_a.aiml"
 - import: "tests/lib_extern_b.aiml"

@@ -1,3 +1,4 @@
+# SPEC: 44_5_mirror
 # spec/44_5 §10 frame validation: malformed frames disconnect only the sending peer — no crash, no
 # partial effect — and a well-behaved client keeps being served.  The raw clients stay OPEN, so every
 # host-side disconnect is the host rejecting the frame.

@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration,45_db_indexed_fields   # aus dem Dateinamen, zu bestaetigen
 # AionDB db_indexed with unique:true — finding_by("field", ...) returns var_a single string
 # instead of list<string>.  Verifies: lookup, no-match → "", update moves the
 # unique mapping.

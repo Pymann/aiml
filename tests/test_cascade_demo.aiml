@@ -1,3 +1,4 @@
+# SPEC?: 57_function_cascades   # aus dem Dateinamen, zu bestaetigen
 # Requires: display
 # End-to-end demo: cascade type + nested cascade payload + list<cascade<X>>
 # + prefab container that spawns one row per effect + on-the-fly grow/shrink.

@@ -1,3 +1,4 @@
+# SPEC?: 43_1_gltf   # aus dem Dateinamen, zu bestaetigen
 # GLTF render test: texturierten Würfel aus cube_textured.glb laden und anzeigen.
 #
 # Testet die vollständige Pipeline von einer .glb-Datei bis zum fertigen Render:

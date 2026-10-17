@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §4/§5.4 regression: `at(list, i, .stringfield)` (and at(model, .stringfield)) must NOT leak.
 # BUG (fixed 2026-09-25, leak_probes/round5_interpolation §1): visitAtExpr's string-field branch

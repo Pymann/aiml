@@ -1,3 +1,4 @@
+# SPEC?: 09_strings   # aus dem Dateinamen, zu bestaetigen
 - decl: [name, string, "OpenAI"]
 - decl: [length, i32, { call: [name.len] }]
 - print: ["Length: ${length}"]

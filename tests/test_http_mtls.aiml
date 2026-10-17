@@ -1,3 +1,4 @@
+# SPEC: 32_2_network_http_s,32_network
 # Expected exit code: 0
 # mutual-TLS: srv.require_client_cert(ca) makes the HTTPS server demand a client
 # certificate signed by the given CA bundle (spec/32_2 §3.11). A client presenting

@@ -1,3 +1,4 @@
+# SPEC?: 15_models,09_strings   # aus dem Dateinamen, zu bestaetigen
 # Repro Erweiterung 3: String kommt aus einer INTERPOLATION (nicht Literal).
 # Hypothese: interpolated strings sind temporär und werden nicht deep-copiert
 # ins Model.

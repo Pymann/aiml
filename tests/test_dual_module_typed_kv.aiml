@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
 # Repro für DataCreatures-Crash: zwei Module öffnen dasselbe
 # `Kv<string:T>` mit T = tief verschachtelte Klasse (mehrere nested
 # Structs, viele list<>-Felder).

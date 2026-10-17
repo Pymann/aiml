@@ -1,3 +1,4 @@
+# SPEC: 44_5_mirror
 # static-check: off
 # 9rooms-like websocket mirror repro with imported globals on both sides (spec/44_5 §4 readiness).
 # Host: REGISTER only binds the ClientInfo replica; it is ready once snapshot_revision > 0 and all

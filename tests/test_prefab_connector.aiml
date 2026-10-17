@@ -1,3 +1,4 @@
+# SPEC?: 44_6_prefabs   # aus dem Dateinamen, zu bestaetigen
 # Requires: display
 # Smoke-test for the connector (cable) API: type resolution, engine.connect,
 # connector methods, and instance.set_connector_anchor.  Needs var_a GL context,

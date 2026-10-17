@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration,42_path_type   # aus dem Dateinamen, zu bestaetigen
 # db.get_path() — Single Source of Truth fuer den AionDB-Root.
 # Verifiziert die Resolution-Hierarchie: env > set_path > Default.
 # Expected exit code: 0

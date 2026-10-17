@@ -1,3 +1,4 @@
+# SPEC: 53_dyn_arrays
 # static-check: off
 # TIER: T2
 # CONSTRUCT: the remaining container/aggregate built-ins and their disciplines (§2.1, §5).

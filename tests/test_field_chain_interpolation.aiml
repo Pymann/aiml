@@ -1,3 +1,4 @@
+# SPEC?: 09_1_string_expansions   # aus dem Dateinamen, zu bestaetigen
 # Regression target: field/index chains inside string interpolation should work.
 # Expected exit code: 0
 

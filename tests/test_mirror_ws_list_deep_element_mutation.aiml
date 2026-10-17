@@ -1,3 +1,4 @@
+# SPEC?: 44_5_mirror,32_4_network_websockets   # aus dem Dateinamen, zu bestaetigen
 # Regression test: websocket mirror must propagate in-place mutations of existing list<model> elements.
 # Expected exit code: 0
 

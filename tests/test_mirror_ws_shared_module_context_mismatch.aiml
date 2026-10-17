@@ -1,3 +1,4 @@
+# SPEC: 44_5_mirror
 # Host and client compiled as separate processes whose SharedCard differs (with/without
 # rarity): the view snapshot is rejected in both directions (spec/44_5 §10, DELTA format 2).
 # Expected exit code: 0

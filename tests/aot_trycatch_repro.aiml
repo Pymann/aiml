@@ -1,3 +1,4 @@
+# SPEC?: 22_exceptions   # aus dem Dateinamen, zu bestaetigen
 # AOT try/catch repro — mirrors the 9rooms server crash:
 # a function/method throws a user Exception subtype that is caught by-type in a
 # try/catch in the caller.  JIT (aiml -r) catches it fine; the AOT executable

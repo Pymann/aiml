@@ -1,3 +1,4 @@
+# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
 # tests/test_embedded_model_large.aiml — Repro: Grosse embedded struct + multi-level ptr-chain
 #
 # Mimt die PfJobQueue / TulTrainCfg Situation:

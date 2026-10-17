@@ -1,3 +1,4 @@
+# SPEC: 44_8_prefab_static,44_8_vocab
 # Positive test (Tier 3, dead-prefab): ein deklariertes Prefab, das NIRGENDS
 # instanziiert wird, erzeugt eine Compiler-WARNUNG (kein Fehler) — die
 # Kompilierung läuft normal durch.  Ein genutztes Prefab wird NICHT gemeldet.

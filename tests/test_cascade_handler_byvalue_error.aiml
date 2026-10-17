@@ -1,3 +1,4 @@
+# SPEC: 57_function_cascades
 # Negative (spec/57 §3a): a cascade handler must take the carrier as ref<carrier> and return
 # nothing — `b_deal` still uses the old copy-in/copy-out signature → compile error.
 

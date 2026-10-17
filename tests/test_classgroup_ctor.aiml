@@ -1,3 +1,4 @@
+# SPEC: 58_classgroups
 # M2a — per-instance `constructor:` (a base-class method) runs in PHASE 0, before
 # any sees wiring, and receives group `params:` as arguments.  The constructor is
 # sees-blind (the base class has no sees members).  Group params become container

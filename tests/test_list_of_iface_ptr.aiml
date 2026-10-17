@@ -1,3 +1,4 @@
+# SPEC?: 18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 # Repro: list<ptr<Interface>> + iterate + dispatch corrupts heap.
 #
 # Symptom: `malloc(): corrupted top size` after a few dispatch calls.

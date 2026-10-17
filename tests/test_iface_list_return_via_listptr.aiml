@@ -1,3 +1,4 @@
+# SPEC?: 18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 # Repro: same as test_iface_list_return.aiml but the class pointer comes from
 # a `list<ptr<T>>` (loaded via `at:` instead of held directly) and is upcast
 # from the loaded slot — mirrors how DataCreatures resolves a `ptr<Tileable>`:

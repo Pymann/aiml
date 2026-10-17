@@ -1,3 +1,4 @@
+# SPEC: 58_classgroups
 # { at: [M2b, 2] } negative — a cross-group `sees` targeting a NON-exported subgroup
 # instance must hard-fail (spec/58 §6 encapsulation).  `hidden` exists in Engine
 # but is not in its `export:` list, so App may not see it.

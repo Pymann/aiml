@@ -1,3 +1,4 @@
+# SPEC?: 46_log   # aus dem Dateinamen, zu bestaetigen
 # Tests for log namespace (Spec 46 — leveled logging)
 # Expected exit code: 0
 

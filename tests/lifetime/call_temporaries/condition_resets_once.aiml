@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 regression: loop-condition slots reset per iteration; nested producer evaluated once; early return
 # Status: verified 2026-10-02 — exit 0, 0 definite/indirect leaks, no memory errors.

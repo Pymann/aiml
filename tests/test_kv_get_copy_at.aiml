@@ -1,3 +1,4 @@
+# SPEC: 31_db_integration
 # Akzeptanz-Test für kv.get_copy_at (spec/31 §6.7.2).  Spec-first: definiert das
 # Zielverhalten; läuft grün, sobald get_copy_at implementiert ist.
 #

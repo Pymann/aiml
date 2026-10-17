@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # TIER: T0
 # spec/61 §5: member assignment shares; repeated/self-alias replacement preserves owners.

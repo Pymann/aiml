@@ -1,3 +1,4 @@
+# SPEC?: 04_1_precedence   # aus dem Dateinamen, zu bestaetigen
 # Tests for operator rework: eq/neq/lt/gt/lte/gte/peq/pneq + __eq__ overload
 # Expected exit code: 0
 

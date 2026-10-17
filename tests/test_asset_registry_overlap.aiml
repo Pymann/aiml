@@ -1,3 +1,4 @@
+# SPEC?: 44_7_asset_registry   # aus dem Dateinamen, zu bestaetigen
 # Asset Registry: überlappende Roots (parent + child) → derselbe abs_path
 # wird genau EINMAL registriert; keine spurious Duplicate-Stem-Errors.
 # Spiegelt das DataCreatures-Setup (exodus-client.json hat sowohl

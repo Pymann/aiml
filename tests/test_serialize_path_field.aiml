@@ -1,3 +1,4 @@
+# SPEC: 29_serialize,42_path_type
 # spec/29 §5 + spec/42: a path model field serialises as its text and deserialises to the interned path.
 # Expected exit code: 0
 - model:

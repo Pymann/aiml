@@ -1,3 +1,4 @@
+# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
 # Test: model: with primary_key + Store<T>.get_by_key
 # Expected exit code: 0
 

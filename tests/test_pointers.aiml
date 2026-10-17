@@ -1,3 +1,4 @@
+# SPEC?: 12_pointers   # aus dem Dateinamen, zu bestaetigen
 - decl: [var_x, i32, 10]
 - print: ["Original X: ${var_x}"]
 

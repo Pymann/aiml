@@ -1,3 +1,4 @@
+# SPEC: 15_models
 # spec/15 Default Field Initialization: explicit field defaults apply to fields of nested models too —
 # stack decl, { new: }, a producer return and a model inside a list element.
 # Expected exit code: 0

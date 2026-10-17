@@ -1,3 +1,4 @@
+# SPEC?: 44_5_mirror   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Requires: peer
 # WASM side of the mirror RPC test.

@@ -1,3 +1,4 @@
+# SPEC: 44_5_mirror
 # spec/44_5 §4/§10 DELTA format 2 on a typed replica (here: the host's replica of a client-
 # registered object).  A raw websocket peer sends well-formed frames with a wrong magic, a wrong
 # schema fingerprint and raw format-0 bytes: each is rejected (snapshot_error = -2), revision and

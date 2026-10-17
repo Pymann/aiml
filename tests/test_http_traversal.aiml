@@ -1,3 +1,4 @@
+# SPEC: 32_2_network_http_s,32_network
 # Expected exit code: 0
 # Static-file serving must not allow path traversal outside the served root
 # (spec/32_2 §3.10): "..", percent-encoded "..", and symlink escapes are rejected.

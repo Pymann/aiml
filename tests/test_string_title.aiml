@@ -1,3 +1,4 @@
+# SPEC?: 09_strings   # aus dem Dateinamen, zu bestaetigen
 # string.title() — Python-style title case.
 # Word separator = whitespace ONLY.  `-`/`_` are NOT word breaks; they stay
 # as-is.  For snake_case → display labels, chain with `.replace`:

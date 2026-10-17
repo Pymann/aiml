@@ -1,3 +1,4 @@
+# SPEC?: 44_5_mirror   # aus dem Dateinamen, zu bestaetigen
 # Test the session.send_and_await(...) builtin — one-shot RPC roundtrip.
 #
 # Spawns a host thread that accepts an "echo" RPC and replies with

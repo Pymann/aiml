@@ -1,3 +1,4 @@
+# SPEC?: 57_function_cascades,16_classes   # aus dem Dateinamen, zu bestaetigen
 # M3a + M3b — EXECUTABLE render with self.field.  render(carrier, block) is synthesized:
 # it switches on block[0], stores the block, and before each handler sets the current
 # index so handlers read the actual element via `<.field()`.  The carrier is threaded

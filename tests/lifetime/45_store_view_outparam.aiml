@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # TIER: T2
 # Spec 61 §7 + §8: `store: [ref<Model>, view]` where Model is a VALUE model with heap fields

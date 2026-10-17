@@ -1,3 +1,4 @@
+# SPEC: 14_enums
 # Negative test: ein String-Literal wird an ein enum-typisiertes Methoden-
 # Argument übergeben.  Das ist ein HARTER Compiler-Fehler an der Call-Site —
 # mit Quell-Location und Hinweis, das Enum-Symbol (EnumType.<value>) zu nutzen.

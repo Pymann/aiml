@@ -1,3 +1,4 @@
+# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # RED bis Paket 3/5 — doc/spec61_inline_value_model_release_plan_2026-09-24.md §4/§9.1.
 # Vertrag (Spec 61 §5.4): eine Value-Kopie TEILT ihre Container-Felder (retain = incref des Handles),

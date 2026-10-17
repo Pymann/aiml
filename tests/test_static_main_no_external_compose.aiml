@@ -1,3 +1,4 @@
+# SPEC: 49_static_analysis,49_static_off
 # Negative test: project spans 3 AIML files (this entry + 2 siblings),
 # the entry defines a `main` function but `main` does NOT instantiate
 # any class from the sibling files.  Static-check must fail.

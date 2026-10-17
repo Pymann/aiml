@@ -1,3 +1,4 @@
+# SPEC: 10_collections
 # idx: [<.member, i, value] on a list<f64> class member stores a double at element i (spec/10),
 # also for a value computed by a call, an index given as an expression and a local list.
 # Expected exit code: 0

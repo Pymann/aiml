@@ -1,3 +1,4 @@
+# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
 - model:
     name: Base
     fields:

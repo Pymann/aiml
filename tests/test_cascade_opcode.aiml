@@ -1,3 +1,4 @@
+# SPEC?: 57_function_cascades   # aus dem Dateinamen, zu bestaetigen
 # cascade `opcode:` — element 0 (node id) is typed by an enum.  The node head is
 # the enum member; the compiler resolves the id from the enum AND verifies
 # id == enum-value / name == member.  Three node spellings are accepted:

@@ -1,3 +1,4 @@
+# SPEC: 04_1_precedence,04_math
 # A bool variable, member or call result is a condition on its own (if/while), also under
 # not/&&/||; bool is stored as i8 (spec/04_1).
 # Expected exit code: 0

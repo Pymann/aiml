@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §8: the owning reference of a container return is dropped on every path — call argument, discarded result, overwrite, loop iteration, early return.
 - def:

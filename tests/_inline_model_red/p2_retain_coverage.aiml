@@ -1,3 +1,4 @@
+# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Paket 2 (doc/spec61_inline_value_model_release_plan_2026-09-24.md §2/§3): auditiert die Typ-
 # abdeckung von `aiml_ser_retain` über den BESTEHENDEN `store: [ref<Model>, at(list,i)]`-Pfad

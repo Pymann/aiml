@@ -1,3 +1,4 @@
+# SPEC: 43_0_math
 # spec/43_0 operator overloads: operands may be calls of user methods returning a math type
 # (mat4 · method(), method() · mat4, mat4 parameter · method(), vec3 + method()).
 # Expected exit code: 0

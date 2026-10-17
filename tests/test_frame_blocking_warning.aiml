@@ -1,3 +1,4 @@
+# SPEC: 49_static_analysis,49_static_off
 # ExpectedStderr: per-frame
 # FEATURE: blocking-call-in-frame-context (spec/49 §20).  A blocking primitive
 # (session.send_and_await / time.sleep_ms / ws.recv) whose enclosing def is

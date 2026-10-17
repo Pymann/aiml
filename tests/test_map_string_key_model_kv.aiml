@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration,15_models,09_strings   # aus dem Dateinamen, zu bestaetigen
 # Regression test: typed persistent Kv with model field map<string:i32>.
 # Expected exit code: 0
 

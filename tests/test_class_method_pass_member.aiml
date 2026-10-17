@@ -1,3 +1,4 @@
+# SPEC?: 16_classes   # aus dem Dateinamen, zu bestaetigen
 # Repro: class method passes class-member (list/map) as arg to another class
 # method.  Causes runtime memory corruption / SIGSEGV.
 #

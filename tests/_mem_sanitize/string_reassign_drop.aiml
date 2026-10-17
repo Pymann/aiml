@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # spec/61 §7: a plain string LOCAL owns its value. Two coupled behaviors this probe pins:
 #   (copy)  `set:[dst, <borrow>]` increfs the source → dst owns an INDEPENDENT ref (so a later drop
 #           of the source does not dangle dst — the 9rooms ability_block_cached `set:[blk, line]`

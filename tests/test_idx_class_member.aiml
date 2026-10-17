@@ -1,3 +1,4 @@
+# SPEC?: 16_classes   # aus dem Dateinamen, zu bestaetigen
 # Repro: idx: [<.member_list, i, val] on class-member list
 - class:
     name: Store

@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT,24_time,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # TIER: T2
 # Spec 61 §7: `string.substr` must return a REFCOUNTED string (aiml_str_alloc header at { at: [ptr, 8] }).

@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 - model: {name: Item, fields: [[label, string], [tags, list<string>]]}
 - model: {name: Outer, fields: [[inner, Item], [name, string], [dict, "map<string:string>"], [items, list<Item>]]}

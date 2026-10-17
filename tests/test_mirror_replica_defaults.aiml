@@ -1,3 +1,4 @@
+# SPEC?: 44_5_mirror   # aus dem Dateinamen, zu bestaetigen
 # Replica initial state + teardown (delta_replica_ws9 plan, commit 1).  One model with a string
 # without default, a string with default, a list, a map, a nested model and a scalar default, in
 # five variants: local, imported global, main-file global, ptr<>, shared<>.

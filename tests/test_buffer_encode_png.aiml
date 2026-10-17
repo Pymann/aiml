@@ -1,3 +1,4 @@
+# SPEC: 11_buffer
 # spec/11: buffer.encode_png — lossless RGBA PNG; round trip through decode_image; error cases;
 # a class-member buffer as source.
 # Expected exit code: 0

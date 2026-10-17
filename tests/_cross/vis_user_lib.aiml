@@ -1,3 +1,4 @@
+# SPEC: 21_namespaces
 # Uses VisThing WITHOUT importing vis_type_lib.aiml (spec/21 §3 violation).
 - def:
     name: vis_weight

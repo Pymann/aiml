@@ -1,3 +1,4 @@
+# SPEC?: 18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # BUG-Repro: peq/pneq auf einem INTERFACE-Pointer (Fat-Pointer
 # AimlFatPtr_<Iface> = {obj, vtable}) gegen null lässt den Compiler mit einer

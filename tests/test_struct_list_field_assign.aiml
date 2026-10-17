@@ -1,3 +1,4 @@
+# SPEC?: 10_collections,02_types   # aus dem Dateinamen, zu bestaetigen
 # Repro: assignment einer list<string>-Variable in ein list<string>-Struct-
 # Feld macht shallow copy → der data-Pointer ist dangling sobald die Quelle
 # out-of-scope geht.  Symptom in der realen App: beim Serialisieren der

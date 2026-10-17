@@ -1,3 +1,4 @@
+# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Repro for the 9rooms server per-request leak (list_cards handler).
 # Exact shape of the leaking path:

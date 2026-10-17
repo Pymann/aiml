@@ -1,3 +1,4 @@
+# SPEC?: 44_6_prefabs   # aus dem Dateinamen, zu bestaetigen
 # Requires: display
 # Phase 6d: CHILD_CONTAINER with bind_list + spawn.  After binding a list
 # with N rows and running one draw pass, the parent's child_instances

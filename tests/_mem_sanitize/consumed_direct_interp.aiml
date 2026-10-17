@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # spec/61 §3.1 (P1): a DIRECTLY-PASSED interpolation temp to a `consumed` parameter must be
 # MOVED (caller-move must consumeStringTemp it, not only consumeLocalDrop) — else the caller
 # frees it at statement end AND the callee frees/owns it → double-free/dangling. Covers the

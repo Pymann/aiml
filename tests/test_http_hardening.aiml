@@ -1,3 +1,4 @@
+# SPEC: 32_2_network_http_s,32_network
 # Expected exit code: 0
 # HTTP server hardening (spec/32_2 §Server hardening): parser limits (413 oversized
 # body, 400 malformed Content-Length, 431 header flood) + slowloris read timeout (408).

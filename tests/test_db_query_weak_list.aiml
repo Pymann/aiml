@@ -1,3 +1,4 @@
+# SPEC: 31_db_integration,61_memory_management_DRAFT
 # spec/31 §4.1 + spec/61 §5.4: db.query returns a weak list<ref<T>> — the list handle is owned and
 # released at scope end / rebind, the records stay owned by the store. Queried repeatedly inside a
 # method; afterwards every record is still intact.

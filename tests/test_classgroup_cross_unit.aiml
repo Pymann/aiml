@@ -1,3 +1,4 @@
+# SPEC: 58_classgroups
 # spec/58 §11 — a classgroup's synthesized container + subclass types are visible
 # in an IMPORTING unit: `{new: CrossRuntime}` and `rt.coord.combined` resolve here
 # even though CrossRuntime is DEFINED in tests/_cross/cg_lib.aiml.  This exercises

@@ -1,3 +1,4 @@
+# SPEC?: 18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Repro: model with MULTIPLE list<ptr<T>> fields side-by-side.
 # Bug: when var_a CreatureDetail-style model has three list<ptr<...>> fields,

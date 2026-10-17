@@ -1,3 +1,4 @@
+# SPEC: 44_5_mirror
 # EXPECT-ERROR: rpc methods must return void
 # spec/44_5 §7.1: an rpc method returns void (results go through send_and_await/reply_rpc).
 - class:

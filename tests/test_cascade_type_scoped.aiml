@@ -1,3 +1,4 @@
+# SPEC: 57_function_cascades
 # Type-scoped dispatch (spec/57): a flat enum whose members share NAMES + VALUES with
 # a cascade's nodes must NOT collide in rule dispatch.  This is the value-identical
 # subset-enum pattern (e.g. 9rooms PlayerRelation mirrors OwnerType/OwnerRef names for

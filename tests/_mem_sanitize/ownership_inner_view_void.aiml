@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # spec/61 §4: a VOID function binds a local list to a view of a model's inner list, then falls
 # off the end (normal block exit). Before the ownership gate this double-freed (vieww's list-drop
 # + the model's recursive drop both free the shared buffer). The analyzer must classify vieww as

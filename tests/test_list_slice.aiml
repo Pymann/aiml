@@ -1,3 +1,4 @@
+# SPEC?: 10_collections   # aus dem Dateinamen, zu bestaetigen
 - print: ["Testing List Slicing..."]
 - decl: [lst, list<i32>]
 - call: [lst.push, 10]

@@ -1,3 +1,4 @@
+# SPEC?: 33_2_compress   # aus dem Dateinamen, zu bestaetigen
 # Tests für compress namespace: gzip, deflate, zlib, brotli, zstd, lz4, tar.var_gz, zip
 # Expected exit code: 0
 

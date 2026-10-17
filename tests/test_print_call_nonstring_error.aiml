@@ -1,3 +1,4 @@
+# SPEC: 09_strings
 # static-check: off
 # Expected: compile error, print of a call that does not return string (spec/09 §print).
 - def:

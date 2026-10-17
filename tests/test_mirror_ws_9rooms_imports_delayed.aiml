@@ -1,3 +1,4 @@
+# SPEC: 44_5_mirror
 # WS9 handshake with a deterministic gap between REGISTER and the first snapshot: the child runs
 # with AIML_MIRROR_TEST_HOLD_DELTA (spec/44_5 §10 test hook) — every DELTA is held until the host
 # creates the release file 150 ms after binding (live apply instead of the pending path).

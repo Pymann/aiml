@@ -1,3 +1,4 @@
+# SPEC?: 44_5_mirror   # aus dem Dateinamen, zu bestaetigen
 # Regression test: legacy mirror RPC keeps working with rpc_event v2 fields present
 # Expected exit code: 0
 

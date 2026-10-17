@@ -1,3 +1,4 @@
+# SPEC?: 32_1_network_tls   # aus dem Dateinamen, zu bestaetigen
 # Tests for tls namespace + tls_socket_handle
 # Expected exit code: 0
 

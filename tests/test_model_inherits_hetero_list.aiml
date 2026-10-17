@@ -1,3 +1,4 @@
+# SPEC: 02_types,13_cast
 # static-check: off
 # Test A: pure model inheritance mit heterogener list<BaseCard>.
 #

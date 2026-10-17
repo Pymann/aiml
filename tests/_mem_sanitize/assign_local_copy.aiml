@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # spec/61 §4.2/§4.6: local→local assignment of a heap-bearing model must be a DEEP COPY
 # (source stays valid after the shorter-lived target is dropped), and self-assignment is a
 # no-op. Before the fix, `set:[y,x]` shallow-copied + dropped x → x dangled when inner y was

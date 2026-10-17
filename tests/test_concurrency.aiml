@@ -1,3 +1,4 @@
+# SPEC?: 26_concurrency   # aus dem Dateinamen, zu bestaetigen
 - def:
     name: worker
     args: [[var_id, i32]]

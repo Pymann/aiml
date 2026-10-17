@@ -1,3 +1,4 @@
+# SPEC?: 23_2_storage   # aus dem Dateinamen, zu bestaetigen
 # test_media_store.aiml — Phase 1 { at: [media, store] } core ({ at: [in, process] } server + client).
 #
 # Proves the real { at: [media, server] } logic on top of the transport primitives:

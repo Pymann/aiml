@@ -1,3 +1,4 @@
+# SPEC: 43_0_math
 # spec/43_0: a vec3/mat4 returned by a method call is a valid argument of math builtins
 # (mat4_lookat, vec3 ops) without an intermediate local.
 # Expected exit code: 0

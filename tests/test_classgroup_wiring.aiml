@@ -1,3 +1,4 @@
+# SPEC: 58_classgroups
 # M1 — classgroup desugars each instance to a subclass of its base, injects the
 # `sees` targets as members, and adds `functions` as methods.  A coordination
 # function uses BOTH an inherited base method (<.raw) AND a wired sibling (<.log).

@@ -1,3 +1,4 @@
+# SPEC?: 21_namespaces   # aus dem Dateinamen, zu bestaetigen
 - import: tests/namespaces/math_lib.aiml
 
 - def:

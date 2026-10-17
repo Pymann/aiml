@@ -1,3 +1,4 @@
+# SPEC?: 23_2_storage   # aus dem Dateinamen, zu bestaetigen
 # Regression check: reopen the persistent Store<T> from a separate run.
 # Run after test_aiondb_store_reopen_1_write.aiml.
 # Expected exit code: 0

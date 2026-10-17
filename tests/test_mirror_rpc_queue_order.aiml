@@ -1,3 +1,4 @@
+# SPEC: 44_5_mirror
 # spec/44_5 §7 queue: take_rpc removes only its match, everything else keeps its position;
 # no silent dropping — more than 64 unclaimed pushes all survive in order.
 #

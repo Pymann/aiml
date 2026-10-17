@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration,45_db_indexed_fields   # aus dem Dateinamen, zu bestaetigen
 # AionDB db_indexed: basic string-field secondary index.
 # Validates: insert / set new key / find returns matching keys / delete removes
 # the id from the index.

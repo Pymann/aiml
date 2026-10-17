@@ -1,3 +1,4 @@
+# SPEC?: 57_function_cascades,16_classes   # aus dem Dateinamen, zu bestaetigen
 # De-risk Phase C mechanics: (1) a rule matching an ALIAS stage (on: CNT), and
 # (2) CONTEXT rules (before: […]) that disambiguate the SAME alias stage by the
 # preceding opcode — the αAβ power needed for compositional cost/effect text.

@@ -1,3 +1,4 @@
+# SPEC?: 44_5_mirror,15_models   # aus dem Dateinamen, zu bestaetigen
 # Regression test: mirror RPC can carry a typed model payload over WebSocket
 # Expected exit code: 0
 

@@ -1,3 +1,4 @@
+# SPEC?: 02_types   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Probe: model + class via `models:` + `implements:` für Interface-Polymorphismus.
 # Saubere Architektur: Modell hält Daten, Klasse referenziert via `models:` das

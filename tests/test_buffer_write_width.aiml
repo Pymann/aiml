@@ -1,3 +1,4 @@
+# SPEC: 11_buffer
 # spec/11: buffer.write(value, type) converts the value to `type` — an i32 literal written as u8
 # stores one byte, an integer written as f32 a float.
 # Expected exit code: 0

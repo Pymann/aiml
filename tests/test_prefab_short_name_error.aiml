@@ -1,3 +1,4 @@
+# SPEC: 44_8_prefab_static,44_8_vocab
 # Negative test: a prefab child name shorter than 5 characters.  Prefab and
 # child names are the UI's cross-file wiring vocabulary (spawn:/set_text/
 # child_clicked address them by name), so they must be >=5 chars — stricter

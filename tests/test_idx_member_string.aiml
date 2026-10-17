@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # spec/61 §5.5/§7: `idx: [list, i, .field, value]` into a string field of a list element secures the
 # new string (dup, or adopts an owned temp) and releases the old one — the element owns its string
 # after the source local is gone (it used to keep a dangling pointer to the freed local).

@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration,45_db_indexed_fields   # aus dem Dateinamen, zu bestaetigen
 # AionDB db_indexed: phase 2 — same persistent path, but the model now declares
 # `name` as db_indexed.  Implementation must detect the missing/stale index
 # sidecar Kv and backfill it from the existing main-Kv records before the

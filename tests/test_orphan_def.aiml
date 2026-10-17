@@ -1,3 +1,4 @@
+# SPEC?: 07_functions   # aus dem Dateinamen, zu bestaetigen
 # Test: ein verwaistes `- def:` (ohne `name:`-Feld) muss zu einem klaren
 # Compile-Fehler fuehren, NICHT still durchgehen.
 #

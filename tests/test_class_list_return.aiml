@@ -1,3 +1,4 @@
+# SPEC?: 16_classes   # aus dem Dateinamen, zu bestaetigen
 # Test: class method returning list<string>
 # Expected exit code: 0
 

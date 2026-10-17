@@ -1,3 +1,4 @@
+# SPEC?: 55_decorators,44_8_vocab   # aus dem Dateinamen, zu bestaetigen
 # Test: `decorator: [vocab]` wraps string returns with vocab.lookup.
 # Deckt Phase 3 der Vocab-Feature ab.  Decorators werden zur Compile-Zeit
 # angewandt — kein runtime-Overhead wenn die Liste leer ist.

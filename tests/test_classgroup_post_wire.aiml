@@ -1,3 +1,4 @@
+# SPEC: 58_classgroups
 # M3 — a group-function named `on_wired` is a POST-WIRE hook: __ctor calls it
 # automatically after { at: [phase, 1] } sees back-patch, so it may use sees collaborators.
 # This is the clean home for init that intertwines intrinsic setup with a

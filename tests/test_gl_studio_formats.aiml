@@ -1,3 +1,4 @@
+# SPEC: 43_5_stylized_rendering
 # spec/43_5 §4/§6/§7/§8/§9: explicit sRGB/float textures, HDR targets with owned attachment
 # binding, capability queries, uniform array validation, readback, framebuffer size, event wait
 # and frame-clock reset.

@@ -1,3 +1,4 @@
+# SPEC: 58_classgroups
 # { at: [M2b, 2] } — a parent instance may `sees` a subgroup's EXPORTED instance via a
 # dotted target `subgroup.instance`.  The sees member is base-typed and wired to
 # the child's instance, so the parent's coordination function drives the child.

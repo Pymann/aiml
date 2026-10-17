@@ -1,3 +1,4 @@
+# SPEC: 18_instantiation,18_refs_and_pointers
 # Repro: heap-allocated class instances do not auto-initialize list<T> members yet.
 # Expected exit code after the future fix: 0
 

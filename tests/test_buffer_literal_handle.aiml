@@ -1,3 +1,4 @@
+# SPEC: 11_buffer,44_3_ui
 # spec/11 + spec/44_3 §3.1: decl: [b, buffer<f32>, [v1, v2, ...]] writes every element (len = n·4)
 # under memV3 (buffer = handle), at top level and inside a method; values read back in order.
 # Expected exit code: 0

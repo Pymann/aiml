@@ -1,3 +1,4 @@
+# SPEC?: 57_function_cascades   # aus dem Dateinamen, zu bestaetigen
 # TDD: cascade.validate(name, row) → -1 valid | >=0 bad-index | -2 unknown cascade.
 # Prüft OwnerType/CardKind-Enum-Membership, Node-id-Lookup, Arity (Truncation +
 # Trailing).  cascade.explain liefert einen Grund-String (leer wenn valid).

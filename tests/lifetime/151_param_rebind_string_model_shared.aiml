@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §8: rebinding a string, a value-model field or a shared<T> parameter never touches the caller.
 - model: {name: Card, fields: [[title, string], [tags, list<string>]]}

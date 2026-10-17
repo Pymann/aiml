@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT,24_time,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # TIER: T2
 # CONSTRUCT: a Zone owning cards, each Card weak-referencing its Zone (§5.2).

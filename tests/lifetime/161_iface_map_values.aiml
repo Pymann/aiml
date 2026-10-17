@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §5.5: map<K:ptr<Interface>> values released via the vtable free slot on replace, remove and map drop.
 - interface:

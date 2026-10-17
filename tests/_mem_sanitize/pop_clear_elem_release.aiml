@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # Regression: spec/61 §5.4 — a DISCARDED `list.pop` and `list.clear` must release each drained
 # element's OWNED heap mid-lifetime, not only at the list's scope drop. The 9rooms card-editor

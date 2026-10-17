@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # spec/61 §3.1 memory-safety probe (run under valgrind): a `consumed` STRING parameter,
 # exercised on the free-function call path (caller-move covers it).
 #   - keep_into: consumed txt is MOVED into a member list (push consumes → callee-drop removed).

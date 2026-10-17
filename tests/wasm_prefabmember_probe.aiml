@@ -1,3 +1,4 @@
+# SPEC?: 44_6_prefabs   # aus dem Dateinamen, zu bestaetigen
 - model:
     name: MockCard
     fields: [[card_id, string, ""], [power, i32, 0]]

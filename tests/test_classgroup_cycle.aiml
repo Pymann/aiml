@@ -1,3 +1,4 @@
+# SPEC: 58_classgroups
 # M1 — a `sees` CYCLE (ping sees pong, pong sees ping) wires cleanly, because
 # { at: [phase, 1] } wiring is address-only: both instances are allocated in phase 0, then
 # both sees pointers are back-patched.  No topological order exists, and none is

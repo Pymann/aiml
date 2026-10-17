@@ -1,3 +1,4 @@
+# SPEC?: 09_strings   # aus dem Dateinamen, zu bestaetigen
 # Tests for string.substr, string.starts_with, string.index_of
 
 - decl: [pass, i32, 0]

@@ -1,3 +1,4 @@
+# SPEC: 32_2_network_http_s,32_network
 # HTTP byte-range serving (spec/32_2 §Server file serving / Range).
 # serve_file honours a `Range: bytes=START-END` header → 206 Partial Content with
 # Content-Range + exact Content-Length; a full GET advertises Accept-Ranges; an

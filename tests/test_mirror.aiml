@@ -1,3 +1,4 @@
+# SPEC?: 44_5_mirror   # aus dem Dateinamen, zu bestaetigen
 # Tests for mirror namespace (44.5 — network object synchronisation)
 # Expected exit code: 0
 

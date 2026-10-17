@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT   # aus dem Dateinamen, zu bestaetigen
 # Nested deep-copy repro matching 9rooms: player = {at:[players,i]} deep-copies a
 # PlayerState that CONTAINS a list<Entry> (spell_zone).  Each Entry has strings +
 # a map + a list<string>.  If the WASM deep-copy of nested list<Model>-in-Model

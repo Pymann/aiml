@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
 # Test: db.query with order_by, dir, limit, offset
 # Expected exit code: 0
 

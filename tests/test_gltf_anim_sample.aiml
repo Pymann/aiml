@@ -1,3 +1,4 @@
+# SPEC: 43_1_gltf
 # spec/43_1 §7/§8: node.local_matrix, anim.sample_* rules (clamp, slerp normalised, unanimated →
 # node value) and anim.sample_local_matrix. tests/anim_legs.glb comes from shaper tests/p8/ok/legs.shaml:
 # shaper → leg_l@chain → leg_l (T 0.3 1 0; rot x 30/-30/30 at 0/0.5/1) …, leg_r@chain (matrix, x mirror).

@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT,11_buffer,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 - interface:
     name: Shape

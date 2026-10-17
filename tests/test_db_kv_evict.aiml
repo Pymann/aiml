@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
 # Tests for db.kv_evict — free in-memory map, lazy-reload from WAL on next read
 # Expected exit code: 0
 

@@ -1,3 +1,4 @@
+# SPEC: 58_classgroups
 # M3 — a `sees` target whose name matches an EXISTING base-class member wires
 # that member instead of synthesizing a new one.  This lets ordinary BASE methods
 # use the collaborator via `<.dep` — the shape the real 9rooms MatchService needs

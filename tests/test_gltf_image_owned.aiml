@@ -1,3 +1,4 @@
+# SPEC: 43_1_gltf,61_memory_management_DRAFT
 # spec/43_1 §6 + spec/61 Class 4: tex.image() handles are released at owner drop (valgrind: no
 # program leak over repeated calls); a returned handle moves to the caller and stays usable.
 # Expected exit code: 0

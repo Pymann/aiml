@@ -1,3 +1,4 @@
+# SPEC: 44_5_mirror
 # Host and client compiled as separate processes with different import sets but the same wire
 # schema: the view snapshot applies (spec/44_5 §10).
 # Expected exit code: 0

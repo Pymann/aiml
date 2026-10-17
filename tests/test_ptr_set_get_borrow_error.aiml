@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # Negative test (spec/61 §5.4): like test_ptr_bind_get_borrow_error, but the borrow read is bound
 # by a later `set:` — `decl: [p, ptr<T>]` then `set: [p, store.get(…)]` is the same illegal

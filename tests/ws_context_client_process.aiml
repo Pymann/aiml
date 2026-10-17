@@ -1,3 +1,4 @@
+# SPEC?: 23_system   # aus dem Dateinamen, zu bestaetigen
 # Requires: library
 # Client-side entrypoint compiled with import set B.  The host uses set A (SharedCard without rarity).
 

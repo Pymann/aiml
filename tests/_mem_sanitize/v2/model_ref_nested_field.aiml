@@ -1,3 +1,4 @@
+# SPEC?: 15_models,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 - model:
     name: Buff
     fields:

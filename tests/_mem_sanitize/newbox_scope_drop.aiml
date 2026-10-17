@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # spec/61: an OWNED new-box local — `decl [box, ptr<Rec>, { new: Rec }]` (Rec has heap
 # fields) — must be DEEP-dropped at scope exit (aiml_ser_free_decoded on the pointee, then
 # free the calloc'd shell), exactly like a value-model local.  Before the fix, new-boxes

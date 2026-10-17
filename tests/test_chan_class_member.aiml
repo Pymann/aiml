@@ -1,3 +1,4 @@
+# SPEC: 18_instantiation,18_refs_and_pointers
 # Test: chan<T> works as a class member and can be shared with a spawned thread.
 # Expected exit code: 0
 

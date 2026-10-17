@@ -1,3 +1,4 @@
+# SPEC: 44_1_engine
 # spec/44_1 §2: engine.window_size(win) → ivec2 (current window size in pixels).
 # Requires: display
 # Expected exit code: 0

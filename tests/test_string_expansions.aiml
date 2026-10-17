@@ -1,3 +1,4 @@
+# SPEC?: 09_strings   # aus dem Dateinamen, zu bestaetigen
 - import: "tests/lib.aiml"
 
 - def:

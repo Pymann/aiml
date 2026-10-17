@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 regression: original fnptr with temporary argument
 # Status: verified 2026-10-02 — exit 0, 0 definite/indirect leaks, no memory errors.

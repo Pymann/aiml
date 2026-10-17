@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §8: a ptr<T> parameter is a MOVE — the callee owns the box (freed unless stored/returned),
 # the caller's local is moved out; also for a fresh {new} argument, interface boxes, fn<> calls and on unwind.

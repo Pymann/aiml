@@ -1,3 +1,4 @@
+# SPEC?: 10_collections   # aus dem Dateinamen, zu bestaetigen
 # multi-line unquoted
 - def:
     name: main

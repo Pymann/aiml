@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT,15_models,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Spec 61 container audit: B7; target: correct content, 0 lost bytes, no memory errors.
 - model: {name: Item, fields: [[text, string]]}

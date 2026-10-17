@@ -1,3 +1,4 @@
+# SPEC?: 15_models,16_classes   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # REPRO: cross-file class composition fails.
 #

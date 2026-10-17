@@ -1,3 +1,4 @@
+# SPEC: 18_instantiation,18_refs_and_pointers
 # Repro candidate: heap-allocated class instances may fail to auto-initialize buffer members.
 # Expected exit code after the future fix: 0
 

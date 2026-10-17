@@ -1,3 +1,4 @@
+# SPEC?: 33_1_hash,11_buffer   # aus dem Dateinamen, zu bestaetigen
 # test_hash_buffer.aiml — hash.sha256 on a buffer<u8> is binary-safe (length-aware).
 #
 # A buffer whose first byte is 0x00 would hash as the EMPTY string if the runtime

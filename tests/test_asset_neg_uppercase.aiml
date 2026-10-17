@@ -1,3 +1,4 @@
+# SPEC?: 44_7_asset_registry   # aus dem Dateinamen, zu bestaetigen
 # Negative: Datei mit Großbuchstaben (Sword.png) wird vom Scanner gewarnt+skipped.
 # Lookup auf den (skipped) Stem → Compile-Hard-Error wie bei unknown_stem.
 # "hammer.png" (lowercase) ist im selben Root und wird normal registriert.

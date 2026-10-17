@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT,15_models,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 - model: {name: Card, fields: [[title, string], [tags, list<string>]]}
 - model: {name: Deck, fields: [[top, Card], [cards, list<Card>]]}

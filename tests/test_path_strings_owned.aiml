@@ -1,3 +1,4 @@
+# SPEC: 42_path_type,61_memory_management_DRAFT
 # spec/42 + spec/61 §7: path.name/stem/extension/to_string return an owned rc string — bound,
 # reassigned, interpolated and dropped repeatedly without leak or header misread (valgrind clean).
 # Expected exit code: 0

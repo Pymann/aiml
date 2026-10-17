@@ -1,3 +1,4 @@
+# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Paket 3 PROTOTYP (doc/spec61_inline_value_model_release_plan_2026-09-24.md §3): beweist die
 # CopyRetain-Mechanik ISOLIERT — eine retain-Kopie (hier via den bestehenden store-retain-Pfad,
