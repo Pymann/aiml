@@ -298,19 +298,49 @@ extern "C" int aiml_io_link(const char* src, const char* dst) {
 }
 
 // spec/42 + spec/61 §7: owned rc string; "" when the file cannot be read.
+// Virtuelle Dateien (/proc, /sys) melden GROESSE 0 und liefern trotzdem Inhalt.  Wer die
+// Groesse zum Dimensionieren nimmt, bekommt dort eine leere Zeichenkette — gemessen
+// 17.10.2026 an `/proc/self/stat` (cosmos doc/spec/109 wollte die eigene CPU-Last lesen
+// und bekam 0).  Darum: Groesse als HINWEIS fuer die erste Allokation, gelesen wird bis
+// EOF.  Fuer gewoehnliche Dateien bleibt es bei genau einem `fread`.
+static char* aiml_io_read_stream(FILE* f, size_t hint) {
+    size_t cap = hint > 0 ? hint : 4096;
+    size_t len = 0;
+    char* buf = aiml_str_alloc(cap);
+    if (!buf) return nullptr;
+    for (;;) {
+        size_t room = cap - len;
+        if (room == 0) {
+            size_t ncap = cap * 2;
+            char* nbuf = aiml_str_alloc(ncap);
+            if (!nbuf) { aiml_str_decref(buf); return nullptr; }
+            std::memcpy(nbuf, buf, len);
+            aiml_str_decref(buf);
+            buf = nbuf;
+            cap = ncap;
+            room = cap - len;
+        }
+        size_t rd = std::fread(buf + len, 1, room, f);
+        len += rd;
+        if (rd < room) break;          // EOF oder Fehler
+    }
+    buf[len] = '\0';
+    return buf;
+}
+
 extern "C" char* aiml_io_read_file(const char* p) {
     if (!p || p[0] == '\0') return aiml_str_dup("");
     FILE* f = std::fopen(p, "rb");
     if (!f) return aiml_str_dup("");
-    if (std::fseek(f, 0, SEEK_END) != 0) { std::fclose(f); return aiml_str_dup(""); }
-    long sz = std::ftell(f);
-    if (sz < 0) { std::fclose(f); return aiml_str_dup(""); }
-    std::rewind(f);
-    char* buf = aiml_str_alloc(static_cast<size_t>(sz));
-    if (!buf) { std::fclose(f); return aiml_str_dup(""); }
-    size_t rd = std::fread(buf, 1, static_cast<size_t>(sz), f);
-    buf[rd] = '\0';
+    long sz = 0;
+    if (std::fseek(f, 0, SEEK_END) == 0) {
+        sz = std::ftell(f);
+        std::rewind(f);
+    }
+    if (sz < 0) sz = 0;
+    char* buf = aiml_io_read_stream(f, static_cast<size_t>(sz));
     std::fclose(f);
+    if (!buf) return aiml_str_dup("");
     return buf;
 }
 
