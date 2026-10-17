@@ -2,7 +2,6 @@
 #include "clearance_builtins.h"
 #include "clearance_exports.h"
 #include "ast_compiler.h"
-#include "purity.h"
 #include "list_impl.h"
 #include "map_impl.h"
 #include "buffer_impl.h"
