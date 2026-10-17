@@ -1,13 +1,15 @@
 # tests/clearance — acceptance probes for spec/65 (symbol clearance)
 
-**Status 17.10.2026: `STAGE=guard` ist GRUEN** (4 positive, 14 negative
-Proben). Die 6 Proben mit `# NEEDS: host` sind AUSSTEHEND — sie brauchen einen Wirt mit
-Export-Tabelle (spec/65 Schritt 6); die Schreibseite (§5b) ist ebenfalls noch nicht gebaut.
+**Status 17.10.2026: `STAGE=writedown` ist GRUEN** (12 positive, 25 negative Proben), also
+alle Stufen bis Schritt 8. AUSSTEHEND sind **zwei**, und zwar nicht wegen dieses Kapitels:
+`11_create_allowed` und `neg/n20` brauchen spec/29_2 §4.3 (`# NEEDS: dynload`).
 
 Die Proben wurden **vor** dem Code geschrieben (Arbeitsprinzip 3: Spec und Tests zuerst) und
-halten die Entscheidungen fest, die man spaeter leicht falsch macht. Schritt 2 und 3 sind
-inzwischen gebaut und gegen den Korpus gemessen (847 Tests, keine Regression); der Rest steht
-weiter als Anforderung ohne Umsetzung — und das ist hier vermerkt, statt von einem fehlenden
+halten die Entscheidungen fest, die man spaeter leicht falsch macht — mehrfach haben sie einen
+Entwurfsfehler aufgedeckt, bevor es Code gab (F65-26 haette jedes Skript verboten; die
+Zugriffspruefung brauchte erst die Export-Tabelle; F65-38s Kriterium war unmoeglich wie
+spezifiziert). Gemessen gegen den Korpus: 869 Tests, keine Regression — und das ist hier
+vermerkt, statt von einem fehlenden
 Test angedeutet zu werden.
 
 ```
@@ -224,7 +226,11 @@ replace_level). Ein Eintrag in der Export-Tabelle ist das **Angebot des Wirts**,
 ist sein Vorrecht — wer `AIML_EXPORTS` setzt, ist der Wirt, dieselbe Begruendung wie bei
 `AIML_CLEARANCE`.
 
-Die drei `host`-Proben tragen jetzt einen Vermerk **UMBAU NOETIG**: sie definieren ihre Symbole
-noch selbst mit `level:`, was seit F65-27 Selbstbeglaubigung ist. Sie sind bewusst nicht
-„repariert" worden — eine Probe ohne Wirt kann die Aussage „ein Symbol, das ich nicht erreichen
-darf" nicht treffen, und ein stiller Umbau haette den fehlenden Wirt verdeckt.
+Die drei `host`-Proben trugen bis 17.10.2026 den Vermerk **UMBAU NOETIG**, weil sie ihre
+Symbole noch selbst mit `level:` definierten — seit F65-27 Selbstbeglaubigung. Sie wurden
+bewusst nicht vorher „repariert": eine Probe ohne Wirt kann die Aussage „ein Symbol, das ich
+nicht erreichen darf" nicht treffen, und ein stiller Umbau haette den fehlenden Wirt verdeckt.
+Mit Schritt 6b laufen sie gegen die echte Vorrichtung (`sys.export_symbol` + Buendel in
+eingeschraenkter Sitzung); der Vermerk ist weg. Dass `grants:` in `03` tragend ist, ist
+gegengeprueft: ohne die Annotation scheitert die Datei mit `clearance-flow` samt Weg
+`user_script -> restart_agent -> kill_process`.
