@@ -797,7 +797,7 @@ static void mirror_try_accept(AimlMirrorSession* s) {
         if (srv_fd < 0) return;
         if (!tcp_readable(srv_fd)) return;
         struct sockaddr_in addr{}; socklen_t len = sizeof(addr);
-        int client_fd = accept(srv_fd, (struct sockaddr*)&addr, &len);
+        int client_fd = accept4(srv_fd, (struct sockaddr*)&addr, &len, SOCK_CLOEXEC);
         if (client_fd < 0) return;
         tcp_set_nonblocking(client_fd);
 
@@ -972,7 +972,7 @@ static void* mirror_listen_impl(const char* url, int32_t max_peers,
     s->max_peers = max_peers;
 
     if (pu.type == MT_TCP) {
-        int srv = socket(AF_INET, SOCK_STREAM, 0);
+        int srv = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
         if (srv < 0) { delete s; return nullptr; }
         int opt = 1;
         setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -1046,7 +1046,7 @@ void* aiml_mirror_connect_timeout(const char* url, int32_t ms) {
     peer->id = 0;  /* server is peer 0 */
 
     if (pu.type == MT_TCP) {
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
         if (fd < 0) { delete peer; delete s; return nullptr; }
         struct addrinfo hints{}, *res = nullptr;
         hints.ai_family   = AF_INET;

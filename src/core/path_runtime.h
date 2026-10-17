@@ -60,6 +60,11 @@ int         aiml_io_mkdir_all(const char* p);      // mkdir -p
 int         aiml_io_remove(const char* p);         // unlink/rmdir
 int         aiml_io_remove_all(const char* p);     // rm -rf
 int         aiml_io_rename(const char* src, const char* dst);
+int         aiml_io_link(const char* src, const char* dst);   /* harter Link, kein Kopieren */
+int         aiml_io_set_exec(const char* p, int on);          /* Ausführbar-Bit */
+int         aiml_io_symlink(const char* target, const char* link_path);
+int         aiml_io_is_symlink(const char* p);
+char*       aiml_io_read_link(const char* p);                 /* owned rc-string, "" bei Fehler */
 char*       aiml_io_read_file(const char* p);      // malloc'd content, caller frees
 int         aiml_io_write_file(const char* p, const char* content); // 0=ok, -1=error
 // Fill a pre-allocated AimlList {i32 size, i32 capacity, void* data} with interned path entries.

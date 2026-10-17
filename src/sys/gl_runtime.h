@@ -37,6 +37,8 @@ void* aiml_gl_create_buffer_dynamic(void* data_buf);  /* GL_DYNAMIC_DRAW */
 void* aiml_gl_create_index_buffer  (void* data_buf);  /* IBO, GL_STATIC_DRAW */
 
 void  aiml_gl_buffer_update      (void* buf, void* data_buf);
+int32_t aiml_gl_buffer_reserve_bytes(void* buf, int32_t capacity);
+int32_t aiml_gl_buffer_update_range(void* buf, int32_t offset, void* data_buf);
 void  aiml_gl_buffer_delete      (void* buf);
 
 /* ── VAO ───────────────────────────────────────────────────────────────────── */
@@ -48,6 +50,7 @@ void  aiml_gl_vao_attrib   (void* vao, int32_t idx, int32_t components,
                              int32_t stride, int32_t offset);
 void  aiml_gl_vao_attrib_i (void* vao, int32_t idx, int32_t components,
                              int32_t stride, int32_t offset);
+int32_t aiml_gl_vao_attrib_divisor(void* vao, int32_t location, int32_t divisor);
 void  aiml_gl_vao_delete   (void* vao);
 
 /* ── Shader ────────────────────────────────────────────────────────────────── */
@@ -103,13 +106,14 @@ void    aiml_gl_mesh_draw       (void* mesh);               /* GL_TRIANGLES, all
 void    aiml_gl_mesh_draw_count (void* mesh, int32_t count);/* GL_TRIANGLES, count indices */
 int32_t aiml_gl_mesh_index_count(void* mesh);
 void    aiml_gl_mesh_delete     (void* mesh);
+/* spec/43_2 §3.4: extra f32 vertex attribute at location 6..15 (e.g. TEXCOORD_1 flow UVs); 1 ok */
+int32_t aiml_gl_mesh_set_attribute(void* mesh, int32_t location, int32_t components, void* data_buf);
 
 /* ── Draw calls ────────────────────────────────────────────────────────────── */
 
-/* spec/43_2 §3.4: extra f32 vertex attribute at location 6..15 (e.g. TEXCOORD_1 flow UVs); 1 ok */
-int32_t aiml_gl_mesh_set_attribute(void* mesh, int32_t location, int32_t components, void* data_buf);
 void aiml_gl_draw_arrays      (void* vao, int32_t count);          /* GL_TRIANGLES */
 void aiml_gl_draw_elements    (void* vao, int32_t count);          /* GL_TRIANGLES, GL_UNSIGNED_INT */
+int32_t aiml_gl_draw_elements_instanced(void* vao, int32_t index_count, int32_t instance_count);
 void aiml_gl_draw_lines       (void* vao, int32_t count);          /* GL_LINES,     GL_UNSIGNED_INT */
 void aiml_gl_draw_arrays_mode (void* vao, int32_t mode, int32_t count);
 

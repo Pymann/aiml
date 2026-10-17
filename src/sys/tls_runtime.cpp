@@ -89,7 +89,7 @@ extern "C" void* aiml_tls_socket(void) {
     // Load system CA store
     SSL_CTX_set_default_verify_paths(ctx);
 
-    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) {
         SSL_CTX_free(ctx);
         return nullptr;
@@ -130,7 +130,7 @@ extern "C" int32_t aiml_tls_fd(void* sock) {
 extern "C" int aiml_tls_set_cert(void* sock, const char* cert_path, const char* key_path) {
     if (!sock || !cert_path || !key_path) return -1;
     AimlTlsSocket* s = to_tls(sock);
-    if (SSL_CTX_use_certificate_file(s->ctx, cert_path, SSL_FILETYPE_PEM) != 1) return -1;
+    if (SSL_CTX_use_certificate_chain_file(s->ctx, cert_path) != 1) return -1;
     if (SSL_CTX_use_PrivateKey_file(s->ctx, key_path, SSL_FILETYPE_PEM) != 1) return -1;
     return SSL_CTX_check_private_key(s->ctx) == 1 ? 0 : -1;
 }
@@ -255,8 +255,8 @@ extern "C" void* aiml_tls_accept(void* sock) {
 
     struct sockaddr_in client_addr{};
     socklen_t len = sizeof(client_addr);
-    int client_fd = ::accept(srv->fd,
-                             reinterpret_cast<struct sockaddr*>(&client_addr), &len);
+    int client_fd = ::accept4(srv->fd,
+                             reinterpret_cast<struct sockaddr*>(&client_addr), &len, SOCK_CLOEXEC);
     if (client_fd < 0) return nullptr;
 
     // ── TLS handshake on accepted connection ───────────────────────────────

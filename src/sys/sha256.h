@@ -16,5 +16,8 @@ extern "C" {
 // Lowercase-hex SHA-256 of `len` raw bytes → a malloc'd C string (borrowed by the
 // runtime, not refcounted — matches the native to_hex() contract).  Binary-safe.
 char* aiml_sha256_hex(const void* data, int32_t len);
+/* Datei-Inhalt blockweise hashen (1 MiB) — Speicher unabhängig von der Größe.
+ * "" wenn die Datei nicht lesbar ist (eine leere Datei ergibt e3b0c442…). */
+char* aiml_sha256_file(const char* path);
 
 }

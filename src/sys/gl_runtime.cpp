@@ -18,14 +18,14 @@
 #  include <GL/glew.h>
 #endif
 
-/* stb_image
- *   Native build:  declarations only — implementation lives in gltf_runtime.cpp.
- *   Web build:     gltf_runtime is not part of libaiml_wasm.a (assimp/cgltf
- *                  deps don't compile under emcc), so we own the implementation
- *                  here. */
-#ifdef __EMSCRIPTEN__
-#  define STB_IMAGE_IMPLEMENTATION
-#endif
+/* stb_image: declarations only — the implementation lives in gltf_runtime.cpp,
+ * in BOTH builds.
+ *
+ * Bis 2026-10-15 besass der Web-Build sie hier, mit der Begruendung, cgltf
+ * lasse sich unter emcc nicht uebersetzen.  Das stimmt nicht: gltf_runtime.cpp
+ * uebersetzt unveraendert (gemessen), es stand nur nicht in der Quellenliste
+ * von exodus-wasm-runtime.json.  Seit es drinsteht, waeren es zwei
+ * Implementierungen — der Linker meldete prompt doppelte Symbole. */
 #include <stb/stb_image.h>
 
 #include <cstdlib>
@@ -35,6 +35,8 @@
 #include <unordered_map>
 #include <string>
 #include <vector>
+#include <algorithm>
+#include <new>
 
 /* WebP-Texturdecode für gl.tex:
  *   Native — libwebp (WebPDecodeRGBA), wie img_runtime; libwebp ist verlinkt.
@@ -59,14 +61,34 @@ struct AimlGLRawBuf {
 struct AimlGLBuffer {
     GLuint   id;
     GLenum   target;  /* GL_ARRAY_BUFFER or GL_ELEMENT_ARRAY_BUFFER */
+    int32_t capacity = 0;
+    // Only index buffers need a CPU shadow for checked indexed draws.
+    std::vector<uint8_t> indices;
 };
 
+struct AimlGLAttrib {
+    AimlGLBuffer* buffer = nullptr;
+    int32_t components = 0, stride = 0, offset = 0, divisor = 0;
+    bool integer = false;
+};
 struct AimlGLVao {
     GLuint   id;
     GLuint   vbo_id;
     GLuint   ibo_id;
     bool     has_ibo;
+    std::vector<AimlGLAttrib> attributes;
+    AimlGLBuffer* current_vbo = nullptr;
+    AimlGLBuffer* index_buffer = nullptr;
 };
+
+// Non-owning lookup tables: entries are removed by the unique owner's delete.
+// All operations run on the thread with the owning GL context current.
+static std::vector<AimlGLVao*> gl_vaos;
+
+static bool valid_upload(const AimlGLRawBuf* src) {
+    return src && src->size >= 0 && src->capacity >= src->size
+        && (src->size == 0 || src->data);
+}
 
 struct AimlGLShader {
     GLuint   prog;
@@ -110,30 +132,30 @@ struct AimlGLMesh {
     GLuint vbo_weight; /* 0 if not skinned (attrib 5) */
     GLuint ibo;
     int32_t index_count;
+    GLuint vbo_extra[4];      /* set_attribute VBOs (locations 6..15), 0 = unused */
+    int32_t extra_loc[4];
 };
 
 /* ── Hilfsfunktionen ────────────────────────────────────────────────────── */
 
 static AimlGLBuffer* make_buffer(GLenum target, const AimlGLRawBuf* src, GLenum usage) {
-    AimlGLBuffer* b = new AimlGLBuffer();
+    if (src && !valid_upload(src)) return nullptr;
+    auto* b = new (std::nothrow) AimlGLBuffer();
+    if (!b) return nullptr;
     b->target = target;
+    b->capacity = src ? src->size : 0;
+    try {
+        if (target == GL_ELEMENT_ARRAY_BUFFER && b->capacity)
+            b->indices.assign(src->data, src->data + b->capacity);
+    } catch (const std::bad_alloc&) { delete b; return nullptr; }
+    GLint previous = 0;
+    glGetIntegerv(GL_COPY_WRITE_BUFFER_BINDING, &previous);
     glGenBuffers(1, &b->id);
-    /* For element array buffers, temporarily unbind any active VAO.
-       In OpenGL Core Profile the GL_ELEMENT_ARRAY_BUFFER binding is stored
-       per-VAO; glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0) at the end of this
-       function would otherwise silently clear the currently-bound VAO's IBO. */
-    GLint prev_vao = 0;
-    if (target == GL_ELEMENT_ARRAY_BUFFER) {
-        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prev_vao);
-        if (prev_vao) glBindVertexArray(0);
-    }
-    glBindBuffer(target, b->id);
-    glBufferData(target, src ? src->size : 0, src ? src->data : nullptr, usage);
-    glBindBuffer(target, 0);
-    if (target == GL_ELEMENT_ARRAY_BUFFER && prev_vao)
-        glBindVertexArray((GLuint)prev_vao);
-    GLuint vbo_extra[4];      /* set_attribute VBOs (locations 6..15), 0 = unused */
-    int32_t extra_loc[4];
+    glBindBuffer(GL_COPY_WRITE_BUFFER, b->id);
+    glBufferData(GL_COPY_WRITE_BUFFER, b->capacity, src ? src->data : nullptr, usage);
+    bool ok = glGetError() == GL_NO_ERROR && b->id;
+    glBindBuffer(GL_COPY_WRITE_BUFFER, previous);
+    if (!ok) { glDeleteBuffers(1, &b->id); delete b; return nullptr; }
     return b;
 }
 
@@ -253,18 +275,104 @@ void* aiml_gl_create_index_buffer(void* data_buf) {
     return make_buffer(GL_ELEMENT_ARRAY_BUFFER, (AimlGLRawBuf*)data_buf, GL_STATIC_DRAW);
 }
 
+int32_t aiml_gl_buffer_update_range(void* buf, int32_t offset, void* data_buf) {
+    auto* b = static_cast<AimlGLBuffer*>(buf);
+    auto* src = static_cast<AimlGLRawBuf*>(data_buf);
+    if (!b || !valid_upload(src) || offset < 0 || offset > b->capacity
+        || src->size > b->capacity - offset) return 0;
+    if (src->size == 0) return 1;
+    GLint previous = 0;
+    glGetIntegerv(GL_COPY_WRITE_BUFFER_BINDING, &previous);
+    glBindBuffer(GL_COPY_WRITE_BUFFER, b->id);
+    glBufferSubData(GL_COPY_WRITE_BUFFER, offset, src->size, src->data);
+    bool ok = glGetError() == GL_NO_ERROR;
+    glBindBuffer(GL_COPY_WRITE_BUFFER, previous);
+    if (ok && b->target == GL_ELEMENT_ARRAY_BUFFER)
+        memcpy(b->indices.data() + offset, src->data, src->size);
+    return ok;
+}
+
 void aiml_gl_buffer_update(void* buf, void* data_buf) {
-    if (!buf || !data_buf) return;
-    AimlGLBuffer*   b   = (AimlGLBuffer*)buf;
-    AimlGLRawBuf*   src = (AimlGLRawBuf*)data_buf;
-    glBindBuffer(b->target, b->id);
-    glBufferSubData(b->target, 0, src->size, src->data);
-    glBindBuffer(b->target, 0);
+    // Legacy void signature retained; invalid/oversized writes are ignored.
+    aiml_gl_buffer_update_range(buf, 0, data_buf);
+}
+
+int32_t aiml_gl_buffer_reserve_bytes(void* buf, int32_t capacity) {
+    auto* b = static_cast<AimlGLBuffer*>(buf);
+    if (!b || capacity < 0) return 0;
+    if (capacity <= b->capacity) return 1;
+    std::vector<uint8_t> indices;
+    try {
+        if (b->target == GL_ELEMENT_ARRAY_BUFFER) {
+            indices = b->indices;
+            indices.resize(capacity, 0);
+        }
+    } catch (const std::bad_alloc&) { return 0; }
+    GLint read = 0, write = 0, vao = 0, array = 0;
+    glGetIntegerv(GL_COPY_READ_BUFFER_BINDING, &read);
+    glGetIntegerv(GL_COPY_WRITE_BUFFER_BINDING, &write);
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &array);
+    GLuint replacement = 0;
+    glGenBuffers(1, &replacement);
+    glBindBuffer(GL_COPY_WRITE_BUFFER, replacement);
+    glBufferData(GL_COPY_WRITE_BUFFER, capacity,
+        indices.empty() ? nullptr : indices.data(), GL_DYNAMIC_DRAW);
+    bool ok = glGetError() == GL_NO_ERROR && replacement;
+    if (ok && b->capacity && b->target != GL_ELEMENT_ARRAY_BUFFER) {
+        glBindBuffer(GL_COPY_READ_BUFFER, b->id);
+        glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, 0, 0, b->capacity);
+        ok = glGetError() == GL_NO_ERROR;
+    }
+    if (!ok) {
+        glBindBuffer(GL_COPY_READ_BUFFER, read);
+        glBindBuffer(GL_COPY_WRITE_BUFFER, write);
+        glDeleteBuffers(1, &replacement);
+        return 0; // Existing storage and every VAO remain untouched.
+    }
+    GLuint old = b->id;
+    // Preserve logical buffer identity for every managed VAO referencing it.
+    for (auto* v : gl_vaos) {
+        bool used = v->current_vbo == b || v->index_buffer == b;
+        for (const auto& a : v->attributes) used = used || a.buffer == b;
+        if (!used) continue;
+        glBindVertexArray(v->id);
+        if (v->current_vbo == b) v->vbo_id = replacement;
+        if (v->index_buffer == b) {
+            v->ibo_id = replacement;
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, replacement);
+        }
+        for (size_t i = 0; i < v->attributes.size(); ++i) {
+            auto& a = v->attributes[i];
+            if (a.buffer != b) continue;
+            glBindBuffer(GL_ARRAY_BUFFER, replacement);
+            if (a.integer) glVertexAttribIPointer(i, a.components, GL_INT, a.stride,
+                reinterpret_cast<const void*>(static_cast<intptr_t>(a.offset)));
+            else glVertexAttribPointer(i, a.components, GL_FLOAT, GL_FALSE, a.stride,
+                reinterpret_cast<const void*>(static_cast<intptr_t>(a.offset)));
+        }
+    }
+    glBindVertexArray(vao);
+    glBindBuffer(GL_ARRAY_BUFFER, static_cast<GLuint>(array) == old ? replacement : array);
+    glBindBuffer(GL_COPY_READ_BUFFER, static_cast<GLuint>(read) == old ? replacement : read);
+    glBindBuffer(GL_COPY_WRITE_BUFFER, static_cast<GLuint>(write) == old ? replacement : write);
+    b->id = replacement;
+    b->capacity = capacity;
+    b->indices.swap(indices);
+    glDeleteBuffers(1, &old);
+    return 1;
 }
 
 void aiml_gl_buffer_delete(void* buf) {
     if (!buf) return;
-    AimlGLBuffer* b = (AimlGLBuffer*)buf;
+    auto* b = static_cast<AimlGLBuffer*>(buf);
+    // VAOs borrow buffer bindings, never the C++ wrapper. Invalidate stale
+    // metadata before GL can reuse an ID; checked draws then fail safely.
+    for (auto* v : gl_vaos) {
+        if (v->current_vbo == b) { v->current_vbo = nullptr; v->vbo_id = 0; }
+        if (v->index_buffer == b) { v->index_buffer = nullptr; v->ibo_id = 0; v->has_ibo = false; }
+        for (auto& a : v->attributes) if (a.buffer == b) a.buffer = nullptr;
+    }
     glDeleteBuffers(1, &b->id);
     delete b;
 }
@@ -275,6 +383,10 @@ void* aiml_gl_create_vao(void) {
     AimlGLVao* v = new AimlGLVao();
     v->vbo_id = 0; v->ibo_id = 0; v->has_ibo = false;
     glGenVertexArrays(1, &v->id);
+    GLint limit = 0;
+    glGetIntegerv(GL_MAX_VERTEX_ATTRIBS, &limit);
+    v->attributes.resize(limit);
+    gl_vaos.push_back(v);
     return v;
 }
 
@@ -282,6 +394,8 @@ void aiml_gl_vao_bind_vbo(void* vao, void* vbo) {
     if (!vao || !vbo) return;
     AimlGLVao*    v = (AimlGLVao*)vao;
     AimlGLBuffer* b = (AimlGLBuffer*)vbo;
+    if (b->target != GL_ARRAY_BUFFER) return;
+    v->current_vbo = b;
     v->vbo_id = b->id;
     glBindVertexArray(v->id);
     glBindBuffer(GL_ARRAY_BUFFER, b->id);
@@ -292,6 +406,8 @@ void aiml_gl_vao_bind_ibo(void* vao, void* ibo) {
     if (!vao || !ibo) return;
     AimlGLVao*    v = (AimlGLVao*)vao;
     AimlGLBuffer* b = (AimlGLBuffer*)ibo;
+    if (b->target != GL_ELEMENT_ARRAY_BUFFER) return;
+    v->index_buffer = b;
     v->ibo_id  = b->id;
     v->has_ibo = true;
     glBindVertexArray(v->id);
@@ -302,6 +418,11 @@ void aiml_gl_vao_attrib(void* vao, int32_t idx, int32_t components,
                          int32_t stride, int32_t offset) {
     if (!vao) return;
     AimlGLVao* v = (AimlGLVao*)vao;
+    if (idx < 0 || static_cast<size_t>(idx) >= v->attributes.size()
+        || components < 1 || components > 4 || stride < 0 || offset < 0 || !v->vbo_id) return;
+    auto& a = v->attributes[idx];
+    a.buffer = v->current_vbo; a.components = components; a.stride = stride;
+    a.offset = offset; a.integer = false;
     glBindVertexArray(v->id);
     glBindBuffer(GL_ARRAY_BUFFER, v->vbo_id);
     glVertexAttribPointer((GLuint)idx, components, GL_FLOAT, GL_FALSE,
@@ -313,6 +434,11 @@ void aiml_gl_vao_attrib_i(void* vao, int32_t idx, int32_t components,
                            int32_t stride, int32_t offset) {
     if (!vao) return;
     AimlGLVao* v = (AimlGLVao*)vao;
+    if (idx < 0 || static_cast<size_t>(idx) >= v->attributes.size()
+        || components < 1 || components > 4 || stride < 0 || offset < 0 || !v->vbo_id) return;
+    auto& a = v->attributes[idx];
+    a.buffer = v->current_vbo; a.components = components; a.stride = stride;
+    a.offset = offset; a.integer = true;
     glBindVertexArray(v->id);
     glBindBuffer(GL_ARRAY_BUFFER, v->vbo_id);
     glVertexAttribIPointer((GLuint)idx, components, GL_INT,
@@ -320,9 +446,24 @@ void aiml_gl_vao_attrib_i(void* vao, int32_t idx, int32_t components,
     glEnableVertexAttribArray((GLuint)idx);
 }
 
+int32_t aiml_gl_vao_attrib_divisor(void* vao, int32_t location, int32_t divisor) {
+    auto* v = static_cast<AimlGLVao*>(vao);
+    if (!v || location < 0 || static_cast<size_t>(location) >= v->attributes.size()
+        || divisor < 0) return 0;
+    GLint previous = 0;
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &previous);
+    glBindVertexArray(v->id);
+    glVertexAttribDivisor(location, divisor);
+    bool ok = glGetError() == GL_NO_ERROR;
+    glBindVertexArray(previous);
+    if (ok) v->attributes[location].divisor = divisor;
+    return ok;
+}
+
 void aiml_gl_vao_delete(void* vao) {
     if (!vao) return;
     AimlGLVao* v = (AimlGLVao*)vao;
+    gl_vaos.erase(std::remove(gl_vaos.begin(), gl_vaos.end(), v), gl_vaos.end());
     glDeleteVertexArrays(1, &v->id);
     delete v;
 }
@@ -594,6 +735,33 @@ void aiml_gl_draw_elements(void* vao, int32_t count) {
     glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, nullptr);
 }
 
+int32_t aiml_gl_draw_elements_instanced(void* vao, int32_t count, int32_t instances) {
+    if (count < 0 || instances < 0) return 0;
+    if (count == 0 || instances == 0) return 1;
+    auto* v = static_cast<AimlGLVao*>(vao);
+    if (!v || !v->has_ibo) return 0;
+    auto* ib = v->index_buffer;
+    if (!ib || static_cast<uint64_t>(count) * 4 > ib->indices.size()) return 0;
+    uint32_t maximum = 0;
+    for (int32_t i = 0; i < count; ++i) {
+        uint32_t index;
+        memcpy(&index, ib->indices.data() + static_cast<size_t>(i) * 4, 4);
+        maximum = std::max(maximum, index);
+    }
+    for (const auto& a : v->attributes) {
+        if (!a.components) continue; // Disabled attribute uses GL's constant value.
+        auto* vb = a.buffer;
+        if (!vb) return 0;
+        uint64_t last = a.divisor ? static_cast<uint64_t>(instances - 1) / a.divisor : maximum;
+        uint64_t width = static_cast<uint64_t>(a.components) * 4;
+        uint64_t stride = a.stride ? a.stride : width;
+        if (static_cast<uint64_t>(a.offset) + last * stride + width > static_cast<uint64_t>(vb->capacity)) return 0;
+    }
+    glBindVertexArray(v->id);
+    glDrawElementsInstanced(GL_TRIANGLES, count, GL_UNSIGNED_INT, nullptr, instances);
+    return glGetError() == GL_NO_ERROR;
+}
+
 void aiml_gl_draw_lines(void* vao, int32_t count) {
     if (!vao) return;
     glBindVertexArray(((AimlGLVao*)vao)->id);
@@ -808,9 +976,36 @@ void aiml_gl_mesh_set_skin(void* mesh, void* joint_buf, void* weight_buf) {
     glBindVertexArray(0);
 }
 
+int32_t aiml_gl_mesh_set_attribute(void* mesh, int32_t location, int32_t components, void* data_buf) {
+    auto* m = (AimlGLMesh*)mesh;
+    auto* d = (AimlGLRawBuf*)data_buf;
+    if (!m || !d || !d->data || d->size <= 0) return 0;
+    if (location < 6 || location > 15 || components < 1 || components > 4) return 0;
+    if (d->size % (components * 4) != 0) return 0;
+    int slot = -1;
+    for (int i = 0; i < 4; ++i) if (m->vbo_extra[i] && m->extra_loc[i] == location) slot = i;
+    if (slot < 0) for (int i = 0; i < 4 && slot < 0; ++i) if (!m->vbo_extra[i]) slot = i;
+    if (slot < 0) return 0;
+    GLuint vbo = upload_vbo(d);
+    if (!vbo) return 0;
+    if (m->vbo_extra[slot]) glDeleteBuffers(1, &m->vbo_extra[slot]);
+    m->vbo_extra[slot] = vbo;
+    m->extra_loc[slot] = location;
+    GLint prev_vao = 0;
+    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prev_vao);
+    glBindVertexArray(m->vao);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glEnableVertexAttribArray((GLuint)location);
+    glVertexAttribPointer((GLuint)location, components, GL_FLOAT, GL_FALSE, components * 4, (void*)0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray((GLuint)prev_vao);
+    return 1;
+}
+
 void aiml_gl_mesh_delete(void* mesh) {
     if (!mesh) return;
     auto* m = (AimlGLMesh*)mesh;
+    for (int i = 0; i < 4; ++i) if (m->vbo_extra[i]) glDeleteBuffers(1, &m->vbo_extra[i]);
     glDeleteVertexArrays(1, &m->vao);
     glDeleteBuffers(1, &m->ibo);
     if (m->vbo_pos)  glDeleteBuffers(1, &m->vbo_pos);
@@ -976,36 +1171,9 @@ static bool fb_build(AimlGLFramebuffer* fb, int32_t w, int32_t h) {
     }
     fb->fbo = fbo; fb->color_tex = color; fb->depth_rbo = depth; fb->w = w; fb->h = h;
     return true;
-int32_t aiml_gl_mesh_set_attribute(void* mesh, int32_t location, int32_t components, void* data_buf) {
-    auto* m = (AimlGLMesh*)mesh;
-    auto* d = (AimlGLRawBuf*)data_buf;
-    if (!m || !d || !d->data || d->size <= 0) return 0;
-    if (location < 6 || location > 15 || components < 1 || components > 4) return 0;
-    if (d->size % (components * 4) != 0) return 0;
-    int slot = -1;
-    for (int i = 0; i < 4; ++i) if (m->vbo_extra[i] && m->extra_loc[i] == location) slot = i;
-    if (slot < 0) for (int i = 0; i < 4 && slot < 0; ++i) if (!m->vbo_extra[i]) slot = i;
-    if (slot < 0) return 0;
-    GLuint vbo = upload_vbo(d);
-    if (!vbo) return 0;
-    if (m->vbo_extra[slot]) glDeleteBuffers(1, &m->vbo_extra[slot]);
-    m->vbo_extra[slot] = vbo;
-    m->extra_loc[slot] = location;
-    GLint prev_vao = 0;
-    glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prev_vao);
-    glBindVertexArray(m->vao);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glEnableVertexAttribArray((GLuint)location);
-    glVertexAttribPointer((GLuint)location, components, GL_FLOAT, GL_FALSE, components * 4, (void*)0);
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindVertexArray((GLuint)prev_vao);
-    return 1;
-}
-
 }
 
 void* aiml_gl_create_framebuffer_format(int32_t w, int32_t h, int32_t format, int32_t depth) {
-    for (int i = 0; i < 4; ++i) if (m->vbo_extra[i]) glDeleteBuffers(1, &m->vbo_extra[i]);
     if (format != GL_RGBA8 && format != GL_RGBA16F) {
         fprintf(stderr, "[aiml_gl] create_framebuffer_format: unsupported format 0x%x\n", format);
         return nullptr;

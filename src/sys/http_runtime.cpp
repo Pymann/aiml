@@ -30,6 +30,8 @@
 #include <unordered_map>
 #include <ctime>
 #include <ctime>              // time() — request read deadline (slowloris defence)
+#include <poll.h>
+#include <chrono>
 #include "string_runtime.h"   // aiml_str_dup: refcounted copy (AIML decref frees it, no leak)
 
 /* ────────────────────────────────────────────────────────────────
@@ -256,7 +258,7 @@ static int tcp_connect(const char* host, int port, int timeout_ms) {
     if (getaddrinfo(host, port_str, &hints, &res) != 0) return -1;
     int fd = -1;
     for (struct addrinfo* p = res; p; p = p->ai_next) {
-        fd = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        fd = ::socket(p->ai_family, p->ai_socktype | SOCK_CLOEXEC, p->ai_protocol);
         if (fd < 0) continue;
         if (timeout_ms > 0) {
             // non-blocking connect with timeout
@@ -1228,6 +1230,28 @@ struct ConnGuard {
     ~ConnGuard() { srv->active_conns.fetch_sub(1, std::memory_order_relaxed); }
 };
 
+// Non-blocking SSL_accept bounded by a total deadline (spec/32_2 §3.10).
+static bool tls_accept_deadline(SSL* ssl, int fd, int timeout_ms) {
+    auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    int fl = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    bool ok = false;
+    for (;;) {
+        ERR_clear_error();
+        int r = SSL_accept(ssl);
+        if (r == 1) { ok = true; break; }
+        int e = SSL_get_error(ssl, r);
+        short ev = e == SSL_ERROR_WANT_READ ? POLLIN : e == SSL_ERROR_WANT_WRITE ? POLLOUT : 0;
+        if (!ev) break;
+        auto rem = std::chrono::duration_cast<std::chrono::milliseconds>(
+            end - std::chrono::steady_clock::now()).count();
+        struct pollfd pfd = { fd, ev, 0 };
+        if (rem <= 0 || ::poll(&pfd, 1, (int)rem) <= 0) break;
+    }
+    fcntl(fd, F_SETFL, fl);
+    return ok;
+}
+
 static void* handle_connection(void* arg) {
     ConnCtx* ctx = static_cast<ConnCtx*>(arg);
     int fd = ctx->fd;
@@ -1242,6 +1266,16 @@ static void* handle_connection(void* arg) {
     int to_secs = srv->read_timeout_secs > 0 ? srv->read_timeout_secs : 15;
     struct timeval rtv = { to_secs, 0 };
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rtv, sizeof(rtv));
+
+    // TLS handshake here, not on the accept loop: a silent client only stalls its own thread.
+    if (srv->ssl_ctx) {
+        ssl = SSL_new(srv->ssl_ctx);
+        SSL_set_fd(ssl, fd);
+        if (!tls_accept_deadline(ssl, fd, to_secs * 1000)) {
+            SSL_free(ssl); ::close(fd);
+            return nullptr;
+        }
+    }
 
     AimlHttpRequest* req = parse_http_request(fd, ssl, to_secs);
 
@@ -1403,7 +1437,7 @@ static void* accept_loop(void* arg) {
     while (srv->running) {
         struct sockaddr_in addr{};
         socklen_t len = sizeof(addr);
-        int cfd = ::accept(srv->listen_fd, reinterpret_cast<sockaddr*>(&addr), &len);
+        int cfd = ::accept4(srv->listen_fd, reinterpret_cast<sockaddr*>(&addr), &len, SOCK_CLOEXEC);
         if (cfd < 0) {
             if (srv->running) continue;
             break;
@@ -1429,16 +1463,8 @@ static void* accept_loop(void* arg) {
             continue;
         }
 
-        SSL* cssl = nullptr;
-        if (srv->ssl_ctx) {
-            cssl = SSL_new(srv->ssl_ctx);
-            SSL_set_fd(cssl, cfd);
-            if (SSL_accept(cssl) <= 0) {
-                SSL_free(cssl); ::close(cfd); continue;
-            }
-        }
         srv->active_conns.fetch_add(1, std::memory_order_relaxed);
-        ConnCtx* c = new ConnCtx{cfd, cssl, srv, peer_ip};
+        ConnCtx* c = new ConnCtx{cfd, nullptr, srv, peer_ip};
         pthread_t tid;
         pthread_create(&tid, nullptr, handle_connection, c);
         pthread_detach(tid);
@@ -1448,7 +1474,7 @@ static void* accept_loop(void* arg) {
 
 extern "C" void* aiml_http_server(const char* host, int32_t port) {
     signal(SIGPIPE, SIG_IGN);
-    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) return nullptr;
     int yes = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
@@ -1481,7 +1507,7 @@ extern "C" void* aiml_http_server_tls(const char* host, int32_t port,
     // Hardened server defaults shared with the WSS server (see tls_runtime.cpp):
     // min TLS 1.2, no SSLv2/3/TLS1.0/1.1, no compression, server cipher preference.
     aiml_tls_harden_server_ctx(ctx);
-    if (SSL_CTX_use_certificate_file(ctx, cert_path, SSL_FILETYPE_PEM) <= 0 ||
+    if (SSL_CTX_use_certificate_chain_file(ctx, cert_path) <= 0 ||
         SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) <= 0) {
         SSL_CTX_free(ctx); delete srv; return nullptr;
     }

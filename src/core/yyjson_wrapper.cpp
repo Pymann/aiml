@@ -325,11 +325,16 @@ int32_t aiml_jr_i32(void* rv, const char* key) {
     return v ? (int32_t)yyjson_get_int(v) : 0;
 }
 
+// yyjson_get_sint, NICHT yyjson_get_int: letzteres liefert ein 32-Bit `int`
+// und schnitt jeden i64-Wert ab — ein Zeitstempel kam als Unsinn zurueck, ohne
+// dass irgendetwas scheiterte (gemessen 2026-10-13:
+// 1760000000000 -> -936591360).  Ein stiller Zahlenfehler ueber die Leitung ist
+// die unangenehmste Sorte: nichts stuerzt ab, alles sieht aus wie Daten.
 int64_t aiml_jr_i64(void* rv, const char* key) {
     auto* r = (aiml_jr_t*)rv;
     if (!r || !r->val) return 0;
     yyjson_val* v = yyjson_obj_get(r->val, key);
-    return v ? (int64_t)yyjson_get_int(v) : 0;
+    return v ? yyjson_get_sint(v) : 0;
 }
 
 float aiml_jr_f32(void* rv, const char* key) {
@@ -384,7 +389,7 @@ int32_t aiml_jr_arr_i32(void* rv, const char* key, int idx) {
 int64_t aiml_jr_arr_i64(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
     yyjson_val* v = yyjson_arr_get(jr_arr(r, key), (size_t)idx);
-    return v ? (int64_t)yyjson_get_int(v) : 0;
+    return v ? yyjson_get_sint(v) : 0;
 }
 
 float aiml_jr_arr_f32(void* rv, const char* key, int idx) {
@@ -472,7 +477,7 @@ int32_t aiml_jr_map_val_i32(void* rv, const char* key, int idx) {
 int64_t aiml_jr_map_val_i64(void* rv, const char* key, int idx) {
     auto* r = (aiml_jr_t*)rv;
     yyjson_val* v = jr_map_nth_val(jr_map_obj(r, key), idx);
-    return v ? (int64_t)yyjson_get_int(v) : 0;
+    return v ? yyjson_get_sint(v) : 0;
 }
 
 float aiml_jr_map_val_f32(void* rv, const char* key, int idx) {
@@ -520,7 +525,7 @@ int64_t aiml_jr_val_i64(void* rv, int idx) {
     auto* r = (aiml_jr_t*)rv;
     if (!r || !r->val) return 0;
     yyjson_val* v = yyjson_arr_get(r->val, (size_t)idx);
-    return v ? (int64_t)yyjson_get_int(v) : 0;
+    return v ? yyjson_get_sint(v) : 0;
 }
 
 float aiml_jr_val_f32(void* rv, int idx) {

@@ -1,4 +1,5 @@
 #include "db_runtime.h"
+#include "string_runtime.h"
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
@@ -152,6 +153,13 @@ struct AimlKv {
     void*       wal_mmap      = nullptr;   // base pointer (initial KV_MMAP_RESERVE_INITIAL)
     size_t      wal_mmap_size = 0;         // grow via kv_mmap_grow
     uint64_t    wal_used      = 0;         // naechster freier Offset im WAL
+    // ── Einblick fuer die Betriebssicht (cosmos doc/spec/99 F99-5) ──────────
+    // Name und ein SCHREIBZAEHLER.  Bewusst ein Zaehler und kein Zeitstempel:
+    // ein Zeitstempel kostet je Schreibvorgang einen Uhrzugriff auf dem heissen
+    // Pfad, waehrend die Sicht ohnehin zwei Schnappschuesse vergleicht — die
+    // Differenz sagt "bewegt sich", der Schnappschuss-Zeitpunkt sagt "wie alt".
+    std::string store_name;
+    uint64_t    writes = 0;
 };
 
 struct AimlVecStore {
@@ -386,6 +394,33 @@ static void path_ensure_trailing_slash(std::string& s) {
     if (!s.empty() && s.back() != '/') s += '/';
 }
 
+// `mkdir -p` fuer den aufgeloesten Store-Pfad.
+//
+// Einstufiges `mkdir` genuegt nicht: spec/31 erlaubt `path: "sub/dir/"`
+// ausdruecklich (Beispiel dort: `runs/trajectory.kvwal`), und ein solcher
+// Unterbau existiert beim ersten Oeffnen noch nicht.  Das einstufige mkdir
+// scheiterte dann mit ENOENT, der open-Pfad lief weiter, und der Store blieb
+// still leer — gefunden 2026-10-15 an cosmos' `cas_action_test` unter einem
+// frischen AIONDB_PATH.
+static void db_mkdir_p(const std::string& dir) {
+    if (dir.empty()) return;
+    std::string acc;
+    acc.reserve(dir.size());
+    if (dir[0] == '/') acc = "/";
+    size_t i = (dir[0] == '/') ? 1 : 0;
+    while (i < dir.size()) {
+        size_t sl = dir.find('/', i);
+        std::string part = dir.substr(i, (sl == std::string::npos ? dir.size() : sl) - i);
+        if (!part.empty()) {
+            if (!acc.empty() && acc.back() != '/') acc += "/";
+            acc += part;
+            mkdir(acc.c_str(), 0755);   // existiert schon → EEXIST, egal
+        }
+        if (sl == std::string::npos) break;
+        i = sl + 1;
+    }
+}
+
 // Resolve AionDB-Verzeichnis fuer einen open-Call.
 // Caller bekommt einen Pfad mit Trailing-Slash.
 static std::string resolve_aiondb_dir(const char* sub_path) {
@@ -555,9 +590,9 @@ extern "C" void* aiml_db_store_open_persist(const char* name, const char* type_n
     std::string db_path  = bp + nm + ".db";
     std::string wal_path = bp + nm + ".wal";
 
-    mkdir(bp.c_str(), 0755);  // create dir (ignore if exists)
+    db_mkdir_p(bp);  // create dir (ignore if exists)
 
-    s->db_fd = open(db_path.c_str(), O_RDWR | O_CREAT, 0644);
+    s->db_fd = open(db_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
     if (s->db_fd < 0) { delete s; return nullptr; }
 
     const size_t hdr_sz = sizeof(AimlDbHeader);
@@ -607,7 +642,7 @@ extern "C" void* aiml_db_store_open_persist(const char* name, const char* type_n
         s->active_ptr = (uint8_t*)ptr + hdr_sz + (size_t)init_cap * s->elem_size;
     }
 
-    s->wal_fd = open(wal_path.c_str(), O_RDWR | O_CREAT, 0644);
+    s->wal_fd = open(wal_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
     if (s->wal_fd >= 0) {
         struct stat ws;
         fstat(s->wal_fd, &ws);
@@ -631,7 +666,7 @@ extern "C" void* aiml_db_store_open_typed_persist(const char* name, const char* 
     auto it = g_persistent_stores_by_name.find(registry_key);
     if (it != g_persistent_stores_by_name.end()) return it->second;
 
-    mkdir(dir.c_str(), 0755);
+    db_mkdir_p(dir);
     AimlStore* s = new AimlStore();
     s->type_name = type_name ? type_name : "";
     s->elem_size = elem_size;
@@ -641,7 +676,7 @@ extern "C" void* aiml_db_store_open_typed_persist(const char* name, const char* 
     s->ser_n = n_nodes;
 
     std::string wal_path = dir + nm + ".wal";
-    s->wal_fd = open(wal_path.c_str(), O_RDWR | O_CREAT, 0644);
+    s->wal_fd = open(wal_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
     if (s->wal_fd >= 0) {
         struct stat ws;
         fstat(s->wal_fd, &ws);
@@ -1254,7 +1289,7 @@ static bool kv_wal_check_header(int fd, const std::string& path) {
 // failed. On header-mismatch this function does not return — it _exit()s.
 static int kv_wal_open_with_header(const std::string& path, bool typed,
                                     int64_t val_size) {
-    int fd = open(path.c_str(), O_RDWR | O_CREAT, 0644);
+    int fd = open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
     if (fd < 0) return -1;
     struct stat st;
     if (fstat(fd, &st) != 0) { close(fd); return -1; }
@@ -1315,7 +1350,7 @@ extern "C" void* aiml_db_kv_open_persist(const char* name, int64_t val_size,
     auto it = g_persistent_kvs_by_name.find(registry_key);
     if (it != g_persistent_kvs_by_name.end()) return it->second;
 
-    mkdir(dir.c_str(), 0755);
+    db_mkdir_p(dir);
     AimlKv* kv    = new AimlKv();
     kv->val_size   = val_size;
     kv->persistent = true;
@@ -1344,6 +1379,7 @@ extern "C" void* aiml_db_kv_open_persist(const char* name, int64_t val_size,
         }
         kv_wal_replay(kv);
     }
+    kv->store_name = registry_key;
     g_persistent_kvs_by_name[registry_key] = kv;
     g_persistent_kvs.push_back(kv);
     return kv;
@@ -1365,7 +1401,7 @@ extern "C" int32_t aiml_db_kv_checkpoint(void* kv_ptr) {
     unlink(temp_path.c_str());
 
     // 2. Open temp file, write header, ftruncate to initial reserve, mmap
-    int temp_fd = open(temp_path.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
+    int temp_fd = open(temp_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_TRUNC, 0644);
     if (temp_fd < 0) {
         fprintf(stderr,
             "[AionDB] FATAL: kv_checkpoint: cannot create temp '%s' (errno=%d)\n",
@@ -1496,7 +1532,7 @@ extern "C" void* aiml_db_kv_open_typed_persist(const char* name, int64_t val_siz
     auto it = g_persistent_kvs_by_name.find(registry_key);
     if (it != g_persistent_kvs_by_name.end()) return it->second;
 
-    mkdir(dir.c_str(), 0755);
+    db_mkdir_p(dir);
     AimlKv* kv    = new AimlKv();
     kv->val_size   = val_size;
     kv->ser_nodes  = nodes;
@@ -1523,6 +1559,7 @@ extern "C" void aiml_db_kv_set(void* kv_ptr, const char* key, const void* val, i
     SerGuardOn _sg_;
     if (!kv_ptr || !key) return;
     AimlKv* kv = static_cast<AimlKv*>(kv_ptr);
+    ++kv->writes;   // doc/spec/99 F99-5: Zaehler, kein Zeitstempel (kein Uhrzugriff)
     std::lock_guard<std::mutex> lock(kv->mtx);
     // A crippled persistent KV (its WAL could not be opened — see aiml_db_kv_open_persist)
     // has no backing store.  Refuse the write LOUDLY (once) instead of dereferencing a
@@ -1541,29 +1578,18 @@ extern "C" void aiml_db_kv_set(void* kv_ptr, const char* key, const void* val, i
         // Typed: encode struct → blob, then invalidate decoded cache.
         //
         // Order is critical: encode MUST run before evict because `val` can
-        // alias into the decoded_cache (decl: [p, ptr<T>, kv.get] = direct
-        // pointer; decl: [p, T, kv.get] = shallow memcpy → shared heap
-        // pointers). If evict ran first it would free buffers the encoder
-        // still needs to read → use-after-free SIGSEGV in strlen.
+        // alias into the decoded_cache. If evict ran first it would free
+        // buffers the encoder still needs to read → use-after-free in strlen.
         // See doc/issue/kv_get_mutate_set_same_key_crash.md
         char* blob = aiml_ser_encode(val, kv->ser_nodes, kv->ser_n);
         if (!blob) return;
-        // Detect "val is the cache slot for this key" — the ptr<T> sync
-        // pattern. In that case the cache is already canonical (all
-        // mutations went through the pointer), and freeing it would also
-        // free user-pushed string literals or other non-decoded data the
-        // user wrote into it. Just drop the cache entry without freeing
-        // its heap allocs — they're effectively owned by the user now;
-        // next kv.get will re-decode fresh from WAL.
+        // Self-write: `val` is this key's own cache slot (a ref<T> from kv.get).
+        // The slot is canonical and stays — the borrow remains valid and the slot
+        // keeps owning its fields (spec/61 §5.5 step 0, spec/31 §6.7).
         auto dc = kv->decoded_cache.find(key);
         bool val_is_cache = (dc != kv->decoded_cache.end() && dc->second.data() == val);
         if (val_is_cache) {
-            kv->decoded_cache.erase(dc);
-            auto pos = kv->decoded_lru_pos.find(key);
-            if (pos != kv->decoded_lru_pos.end()) {
-                kv->decoded_lru.erase(pos->second);
-                kv->decoded_lru_pos.erase(pos);
-            }
+            kv_decoded_touch(kv, key);
         } else {
             kv_decoded_evict(kv, key);
         }
@@ -1642,6 +1668,9 @@ extern "C" void* aiml_db_kv_get(void* kv_ptr, const char* key) {
                 // (Zeroed slot rather than nullptr → ptr<T> view callers don't null-deref.)
                 aiml_ser_free_decoded(decoded.data(), kv->ser_nodes, kv->ser_n);
                 decoded.assign((size_t)kv->val_size, 0);
+                // Container-Handles wiederherstellen — ein genulltes Feld ist nie
+                // gueltig (siehe get_copy_at).  Ohne das stuerzt der erste `.len` ab.
+                aiml_ser_init_empty_containers(decoded.data(), kv->ser_nodes, kv->ser_n);
             }
             auto& cached = kv->decoded_cache[key];
             cached = std::move(decoded);
@@ -1667,6 +1696,12 @@ extern "C" void* aiml_db_kv_get(void* kv_ptr, const char* key) {
                             decoded.data(), kv->ser_nodes, kv->ser_n) != 0) {
             aiml_ser_free_decoded(decoded.data(), kv->ser_nodes, kv->ser_n);
             decoded.assign((size_t)kv->val_size, 0);   // clean zeroed, no garbage (P0.3)
+            // spec/61 §5 (memV3): zeroing nulled every container-handle field, but a
+            // container FIELD is never null — the caller's next `.len`/`.at` derefs it.
+            // Without this the "safe, no crash" path of a schema-mismatch (-2) still
+            // SIGSEGVs on the first access (measured 2026-10-13: cosmos after adding a
+            // field to PipelineStage).  Same repair as the get_copy_at path below.
+            aiml_ser_init_empty_containers(decoded.data(), kv->ser_nodes, kv->ser_n);
         }
         auto& cached = kv->decoded_cache[key];
         cached = std::move(decoded);
@@ -1709,6 +1744,9 @@ extern "C" void* aiml_db_kv_get_copy(void* kv_ptr, const char* key) {
                 // Corrupt blob: free partial heap, publish a CLEAN zeroed slot (P0.3).
                 aiml_ser_free_decoded(decoded.data(), kv->ser_nodes, kv->ser_n);
                 decoded.assign((size_t)kv->val_size, 0);
+                // Container-Handles wiederherstellen — ein genulltes Feld ist nie
+                // gueltig (siehe get_copy_at).  Ohne das stuerzt der erste `.len` ab.
+                aiml_ser_init_empty_containers(decoded.data(), kv->ser_nodes, kv->ser_n);
             }
             auto& slot = kv->decoded_cache[key];
             slot = std::move(decoded);
@@ -2100,12 +2138,12 @@ extern "C" void* aiml_db_vec_open_persist(const char* name, int32_t dims,
     auto it = g_persistent_vecs_by_name.find(registry_key);
     if (it != g_persistent_vecs_by_name.end()) return it->second;
 
-    mkdir(dir.c_str(), 0755);
+    db_mkdir_p(dir);
     AimlVecStore* vs = new AimlVecStore();
     vs->dims       = dims;
     vs->persistent = true;
     vs->wal_path   = dir + nm + ".vecwal";
-    int fd = open(vs->wal_path.c_str(), O_RDWR | O_CREAT, 0644);
+    int fd = open(vs->wal_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
     if (fd >= 0) {
         vs->wal_fd = fd;
         vec_wal_replay(vs);
@@ -2231,12 +2269,12 @@ extern "C" void* aiml_db_ts_open_persist(const char* name, int64_t elem_size,
     auto it = g_persistent_ts_by_name.find(registry_key);
     if (it != g_persistent_ts_by_name.end()) return it->second;
 
-    mkdir(dir.c_str(), 0755);
+    db_mkdir_p(dir);
     AimlTimeSeries* ts = new AimlTimeSeries();
     ts->elem_size   = elem_size;
     ts->persistent  = true;
     ts->log_path    = dir + nm + ".tslog";
-    int fd = open(ts->log_path.c_str(), O_RDWR | O_CREAT, 0644);
+    int fd = open(ts->log_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0644);
     if (fd >= 0) {
         ts->log_fd = fd;
         // Replay: each record = [int64 timestamp][elem_size bytes]
@@ -2670,3 +2708,60 @@ extern "C" const char* aiml_db_index_finding(void* idx_ptr, const char* field_va
     }
     return empty;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Einblick in die GEOEFFNETEN Speicher (cosmos doc/spec/99 §99.2)
+//
+// Gezeigt werden nur offene, persistente Speicher — ein Speicher, den niemand
+// geoeffnet hat, ist kein Betriebszustand, sondern eine Datei (F99-6).  Und nur
+// KENNZAHLEN, nie Inhalte: eine Oberflaeche, die KV-Werte zeigt, zeigt frueher
+// oder spaeter ein Geheimnis (F99-7).
+// ─────────────────────────────────────────────────────────────────────────────
+
+extern "C" int32_t aiml_db_kv_open_count(void) {
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    return (int32_t)g_persistent_kvs.size();
+}
+
+static AimlKv* kv_at_index(int32_t idx) {
+    if (idx < 0 || idx >= (int32_t)g_persistent_kvs.size()) return nullptr;
+    return g_persistent_kvs[(size_t)idx];
+}
+
+extern "C" char* aiml_db_kv_open_name(int32_t idx) {
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    AimlKv* kv = kv_at_index(idx);
+    const std::string nm = kv ? kv->store_name : std::string();
+    char* out = aiml_str_alloc(nm.size());
+    if (!nm.empty()) memcpy(out, nm.data(), nm.size());
+    return out;
+}
+
+extern "C" char* aiml_db_kv_open_path(int32_t idx) {
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    AimlKv* kv = kv_at_index(idx);
+    const std::string pth = kv ? kv->wal_path : std::string();
+    char* out = aiml_str_alloc(pth.size());
+    if (!pth.empty()) memcpy(out, pth.data(), pth.size());
+    return out;
+}
+
+extern "C" int64_t aiml_db_kv_open_wal_used(int32_t idx) {
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    AimlKv* kv = kv_at_index(idx);
+    return kv ? (int64_t)kv->wal_used : 0;
+}
+
+extern "C" int64_t aiml_db_kv_open_entries(int32_t idx) {
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    AimlKv* kv = kv_at_index(idx);
+    if (!kv) return 0;
+    return (int64_t)(kv->persistent ? kv->index.size() : kv->map.size());
+}
+
+extern "C" int64_t aiml_db_kv_open_writes(int32_t idx) {
+    std::lock_guard<std::mutex> lock(g_db_mutex);
+    AimlKv* kv = kv_at_index(idx);
+    return kv ? (int64_t)kv->writes : 0;
+}
+

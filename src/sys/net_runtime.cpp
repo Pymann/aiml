@@ -47,7 +47,7 @@ static int send_all(int fd, const char* buf, int len) {
 
 extern "C" void* aiml_net_socket(const char* proto) {
     int type = (proto && std::strcmp(proto, "udp") == 0) ? SOCK_DGRAM : SOCK_STREAM;
-    int fd = ::socket(AF_INET, type, 0);
+    int fd = ::socket(AF_INET, type | SOCK_CLOEXEC, 0);
     if (fd < 0) return nullptr;
     int yes = 1;
     ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
@@ -162,8 +162,8 @@ extern "C" void* aiml_net_accept(void* sock) {
     if (!sock) return nullptr;
     struct sockaddr_in client_addr{};
     socklen_t len = sizeof(client_addr);
-    int client_fd = ::accept(to_sock(sock)->fd,
-                             reinterpret_cast<struct sockaddr*>(&client_addr), &len);
+    int client_fd = ::accept4(to_sock(sock)->fd,
+                             reinterpret_cast<struct sockaddr*>(&client_addr), &len, SOCK_CLOEXEC);
     if (client_fd < 0) return nullptr;
     return new AimlSocket{client_fd};
 }

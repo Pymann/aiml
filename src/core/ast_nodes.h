@@ -582,6 +582,8 @@ struct PrefabChildInfo {
     std::string texture;
     std::string anchor;    // "left", "center", "right"
     std::string valign;    // "top", "center" (default), "bottom"
+    std::string font;      // "" = scene font; else a name from engine.prefab_add_font
+    bool gutter = false;   // multi-line text_input: line-number column (spec/44_6 §5g)
 
     // UI-widget style (button, text_input, rect)
     uint32_t bg_color      = 0;
@@ -620,6 +622,16 @@ struct PrefabChildInfo {
     // its value to multiples of `snap` during drag — useful for discrete
     // ranges like "mana amount 0..3".
     float slider_snap = 0.0f;
+    // Slider lower bound (spec/44_6).  `bar` ignores it and always treats 0
+    // as the lower bound.
+    float slider_min  = 0.0f;
+    // Start state of the child (spec/44_6).  `false` means instantiate hidden;
+    // set_visible reveals it later.
+    bool  is_visible  = true;
+    // container: engine-managed row window + native scrollbar (spec/44_6 §5c).
+    bool  scrollable  = false;
+    // textbox: keep the view pinned to the newest line (spec/44_6 §5f).
+    bool  tail        = false;
     std::string label;        // button label / static label text
     bool     is_secret     = false; // text_input password mode
 

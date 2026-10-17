@@ -140,6 +140,8 @@ struct PrefabChildDef {
     std::string texture_path;
     std::string anchor;              /* "left", "center", "right" */
     std::string valign;              /* "top", "center" (default), "bottom" */
+    std::string font_name;           /* "" = scene font; else a name from prefab_add_font */
+    bool gutter = false;             /* line-number column (spec/44_6 §5g) */
 
     /* ── UI-widget style fields (button, text_input, rect with frame) ───── */
     uint32_t bg_color      = 0;      /* 0xRRGGBBAA */
@@ -235,6 +237,10 @@ struct PrefabChildDef {
      * visible rows re-pack contiguously from the container origin each frame.
      * Lets AIML filter a list purely via set_visible without leaving gaps. */
     bool        compact = false;
+    /* spec/44_6: a child may be declared hidden and revealed later via
+     * set_visible.  Declaring the start state beats instantiating visible and
+     * hiding it in the first frame — that shows one frame of the wrong thing. */
+    bool        visible = true;
     bool        scrollable = false;  /* container: engine-managed row window + visible scrollbar (track+thumb, wheel+drag) */
     bool        tail = false;         /* textbox: stick to bottom as content grows (chat) */
     int32_t     tb_prev_max = -1;     /* textbox: last max scroll offset (for tail-follow detection) */
@@ -294,6 +300,15 @@ struct Material {
 /* Forward — PrefabChild::spawned holds pointers to instances of THIS type. */
 struct AimlPrefabInstance;
 
+/* spec/44_6: Treffer-Spur, standardmäßig aus (prefab.trace_hits). */
+extern "C" void aiml_log_info(const char* msg, const char* loc);
+static bool g_trace_hits = false;
+/* Letzte aufgeloeste Treffer, "|"-getrennt.  "" = Druck traf nichts,
+ * "?" = nicht erhoben (Tracing aus).  Die Erhebung laeuft nur bei aktivem
+ * Tracing, damit sie fremden Apps nichts kostet; "?" verhindert, dass eine
+ * Pruefung auf "nichts getroffen" dann aus dem falschen Grund besteht. */
+static std::string g_last_hits;
+
 struct PrefabChild {
     std::string name;
     PrefabChildType type;
@@ -302,6 +317,11 @@ struct PrefabChild {
     uint32_t color;        /* RGBA packed i32 */
     GLuint texture;        /* 0 = no texture */
     std::string text;      /* label text */
+    std::string font_name; /* "" = scene font (spec/44_6: per-child font) */
+    bool gutter = false;   /* line-number column for a multi-line field */
+    /* Colour runs: flat triples (start, len, rgba) over the field's TEXT bytes
+     * — the same offsets caret/selection and yaml.tokens use (spec/44_6 §5g). */
+    std::vector<int32_t> color_runs;
     bool visible;
 
     /* ── UI-widget style (copied from def at instantiate time) ──────────── */
@@ -402,6 +422,17 @@ struct PrefabChild {
     int32_t     tb_prev_max = -1;     /* textbox: last max scroll offset (for tail-follow detection) */
     int32_t     tb_total = 0;         /* textbox render cache: wrapped line count (read by input) */
     int32_t     tb_visible = 0;       /* textbox render cache: visible line count (read by input) */
+    /* textbox selection (read-only text, spec/44_6 §5f).  Caret stops are
+     * cached per VISIBLE line during render, exactly like text_input's
+     * caret_x/caret_byte, but 2D: tb_row_start[r] indexes into tb_caret_* for
+     * visible row r, and tb_row_y[r] is that row's top screen-y.  Byte values
+     * are offsets into ch.text (the SOURCE), so Ctrl+C copies verbatim. */
+    std::vector<float>   tb_caret_x;
+    std::vector<int32_t> tb_caret_byte;
+    std::vector<int32_t> tb_row_start;   /* size = visible rows + 1 (last = end sentinel) */
+    std::vector<float>   tb_row_y;       /* size = visible rows */
+    float       tb_row_h = 0.0f;         /* screen line height (for row hit-test) */
+    bool        tb_sel_dragging = false; /* mouse drag-select in progress */
     /* Set by a NESTED cascade_payload_sync when one of our spawned_payload
      * instances respawned (its width changed).  Cleared after we re-layout
      * our own siblings.  Guards the whole cascade_payload_sync body so it
@@ -556,6 +587,11 @@ struct PrefabScene {
 
     AimlUIFont* font;          /* base font (set via prefab_set_font) */
     std::unordered_map<int, AimlUIFont*> font_cache; /* key = round(font_size*10) */
+    /* Named extra fonts (prefab_add_font) + their size caches.  A code box
+     * needs a monospace face while the rest of the UI stays proportional
+     * (cosmos spec/98 F98-15), and one global font cannot serve both. */
+    std::unordered_map<std::string, AimlUIFont*> named_fonts;
+    std::unordered_map<std::string, std::unordered_map<int, AimlUIFont*>> named_cache;
 
     /* prefab registry */
     std::unordered_map<std::string, PrefabDef*> defs;
@@ -1041,51 +1077,125 @@ static float text_width_font(AimlUIFont* font, const char* text) {
     return w;
 }
 
-static std::vector<std::string> wrap_text_lines(AimlUIFont* font, const char* text, float max_w) {
+/* Word-wrap `text` into rendered lines.
+ *
+ * `spans` (optional) receives, per emitted line, the SOURCE byte range
+ * [begin, end) that the line covers.  Rendered lines are not plain slices of
+ * the source (runs of spaces collapse to one, `\n`/`|` separators vanish), so
+ * selection needs this mapping to turn a click into a source byte index —
+ * see tb_build_caret_stops.  spans->size() always equals lines.size().
+ *
+ * Whitespace is kept VERBATIM — leading indentation and runs between words
+ * alike.  Collapsing runs is a prose habit and it destroys the two things this
+ * widget is actually used for: indented source and column-aligned logs
+ * (spec/44_6, cosmos spec/98 F98-14).  The only whitespace that disappears is
+ * the run at which a line was wrapped, because a continuation line starts at
+ * the left edge. */
+static std::vector<std::string> wrap_text_lines(AimlUIFont* font, const char* text, float max_w,
+                                                std::vector<std::pair<int32_t,int32_t>>* spans = nullptr) {
     std::vector<std::string> lines;
+    if (spans) spans->clear();
     if (!font || !text || !*text) return lines;
 
     std::string current_line;
     std::string current_word;
+    std::string pending_ws;      /* whitespace seen before the next word, kept verbatim */
+    int32_t line_begin = 0, line_end = 0, word_begin = 0;
 
     auto flush_line = [&]() {
         lines.push_back(current_line);
+        if (spans) spans->push_back({line_begin, line_end});
         current_line.clear();
     };
-    auto append_word = [&]() {
+    auto append_word = [&](int32_t word_end) {
         if (current_word.empty()) return;
-        std::string candidate = current_line.empty() ? current_word : current_line + " " + current_word;
-        if (max_w > 0.0f && !current_line.empty() && text_width_font(font, candidate.c_str()) > max_w) {
+        std::string candidate = current_line + pending_ws + current_word;
+        if (max_w > 0.0f && !current_line.empty() &&
+            text_width_font(font, candidate.c_str()) > max_w) {
             flush_line();
-            current_line = current_word;
+            current_line = current_word;   /* the break whitespace is dropped */
+            line_begin   = word_begin;
         } else {
+            if (current_line.empty() && pending_ws.empty()) line_begin = word_begin;
             current_line = candidate;
         }
+        pending_ws.clear();
+        line_end = word_end;
         current_word.clear();
     };
 
     const char* p = text;
+    int32_t pos = 0;
     while (*p) {
         char c = *p++;
+        int32_t cpos = pos++;
         if (c == '\n' || c == '|') {
-            append_word();
+            append_word(cpos);
             flush_line();
+            pending_ws.clear();
+            line_begin = pos; line_end = pos;
             continue;
         }
         if (c == ' ') {
-            append_word();
+            append_word(cpos);
+            pending_ws += ' ';
+            line_end = pos;
             continue;
         }
+        if (current_word.empty()) word_begin = cpos;
         current_word += c;
         if (max_w > 0.0f && current_line.empty() && text_width_font(font, current_word.c_str()) > max_w) {
             lines.push_back(current_word);
+            if (spans) spans->push_back({word_begin, pos});
             current_word.clear();
+            line_begin = pos; line_end = pos;
+            pending_ws.clear();
         }
     }
-    append_word();
-    if (!current_line.empty()) lines.push_back(current_line);
-    if (lines.empty()) lines.push_back("");
+    append_word(pos);
+    if (!current_line.empty()) flush_line();
+    if (lines.empty()) {
+        lines.push_back("");
+        if (spans) spans->push_back({0, 0});
+    }
     return lines;
+}
+
+/* Caret stops for ONE wrapped textbox line (spec/44_6 §5f): for every codepoint
+ * boundary of the RENDERED line, its screen-x and the matching SOURCE byte
+ * offset.  Since wrap_text_lines keeps whitespace verbatim, a rendered line is
+ * now a plain slice of the source and the walk is 1:1 — with one exception: a
+ * continuation line produced by wrapping starts AFTER the whitespace at which
+ * the break happened, so that run is skipped once at the start.  Byte offsets
+ * stay monotonic and clamped to the line's span, so a click never lands
+ * outside its own line. */
+static void tb_build_caret_stops(AimlUIFont* font, const std::string& src,
+                                 int32_t span_b, int32_t span_e,
+                                 const std::string& line, float x0,
+                                 std::vector<float>& out_x,
+                                 std::vector<int32_t>& out_byte)
+{
+    auto src_is_ws = [&](int32_t i) {
+        return i < span_e && (src[(size_t)i] == ' ' || src[(size_t)i] == '\n' || src[(size_t)i] == '|');
+    };
+    int32_t si = span_b;
+    /* Dropped break whitespace: only when the rendered line does NOT itself
+     * start with a space — otherwise that space is real content. */
+    if (line.empty() || line[0] != ' ') {
+        while (src_is_ws(si)) ++si;
+    }
+    out_x.push_back(x0);
+    out_byte.push_back(si);
+    size_t ri = 0;
+    while (ri < line.size()) {
+        size_t rn = ri + 1;
+        while (rn < line.size() && ((unsigned char)line[rn] & 0xC0) == 0x80) ++rn;
+        si += (int32_t)(rn - ri);
+        if (si > span_e) si = span_e;
+        out_x.push_back(x0 + text_width_font(font, line.substr(0, rn).c_str()));
+        out_byte.push_back(si);
+        ri = rn;
+    }
 }
 
 /* Forward-decl — vocab runtime lives in vocab_runtime.cpp. */
@@ -1304,6 +1414,8 @@ static std::vector<PrefabChildDef> parse_children_json(const char* json) {
             else if (key == "width") cd.width = (float)parse_json_number(p);
             else if (key == "height") cd.height = (float)parse_json_number(p);
             else if (key == "font_size") cd.font_size = (float)parse_json_number(p);
+            else if (key == "font")      cd.font_name = parse_json_string(p);
+            else if (key == "gutter")    cd.gutter = parse_json_number(p) != 0;
             else if (key == "color") cd.color = (uint32_t)parse_json_number(p);
             /* UI-widget style fields */
             else if (key == "bg_color")      cd.bg_color = (uint32_t)parse_json_number(p);
@@ -1344,6 +1456,7 @@ static std::vector<PrefabChildDef> parse_children_json(const char* json) {
             else if (key == "layout")        cd.layout = parse_json_string(p);
             else if (key == "gap")           cd.gap = (float)parse_json_number(p);
             else if (key == "compact")       cd.compact = (parse_json_number(p) != 0);
+            else if (key == "visible")       cd.visible = (parse_json_number(p) != 0);
             else if (key == "scrollable")    cd.scrollable = (parse_json_number(p) != 0);
             else if (key == "tail")          cd.tail = (parse_json_number(p) != 0);
             else if (key == "cascade_type")  cd.cascade_type = parse_json_string(p);
@@ -1381,6 +1494,10 @@ static void rotate_batch_verts(DrawBatch& batch, size_t start_idx,
 /* ── Render one instance ─────────────────────────────────────────────────── */
 
 static AimlUIFont* font_for_size(PrefabScene* s, float font_size);
+/* Named per-child font (spec/44_6; cosmos spec/98 F98-15).  Falls back to the
+ * scene font when the name is unknown, so a missing asset degrades to the
+ * default face instead of drawing nothing. */
+static AimlUIFont* font_for_size_named(PrefabScene* s, const std::string& name, float font_size);
 
 /* Parent-transform applied to the instance currently being rendered. Set while
  * recursing into nested child instances; identity for top-level instances. */
@@ -2505,7 +2622,7 @@ static void render_instance(AimlPrefabInstance* inst) {
              * Reads ch.text so the AIML side can re-label a button via set_text. */
             if (!ch.text.empty() && s->font) {
                 float target_size = ch.font_size > 0.0f ? ch.font_size * sx : 0.0f;
-                AimlUIFont* lf = (target_size > 0.0f) ? font_for_size(s, target_size) : s->font;
+                AimlUIFont* lf = (target_size > 0.0f) ? font_for_size_named(s, ch.font_name, target_size) : s->font;
                 if (lf) {
                     DrawBatch batch;
                     batch.tex  = lf->atlas_tex;
@@ -2563,7 +2680,7 @@ static void render_instance(AimlPrefabInstance* inst) {
                                         ? std::string(ch.text.size(), '*')
                                         : ch.text;
                 float target_size = ch.font_size > 0.0f ? ch.font_size * sx : 0.0f;
-                AimlUIFont* lf = (target_size > 0.0f) ? font_for_size(s, target_size) : s->font;
+                AimlUIFont* lf = (target_size > 0.0f) ? font_for_size_named(s, ch.font_name, target_size) : s->font;
                 if (lf) {
                     float padding    = 8.0f * sx;
                     float inner_w    = cw - 2.0f * padding;
@@ -2650,11 +2767,62 @@ static void render_instance(AimlPrefabInstance* inst) {
                         float vpad = 4.0f * sx;
                         int visible_lines = (int)floorf((ch_h - 2.0f * vpad) / line_h);
                         if (visible_lines < 1) visible_lines = 1;
-                        std::vector<std::string> pre_lines =
-                            wrap_text_lines(lf, display.substr(0, cpos0).c_str(), inner_w);
-                        int   caret_line = pre_lines.empty() ? 0 : (int)pre_lines.size() - 1;
-                        float caret_lx   = pre_lines.empty() ? 0.0f
-                                           : text_width_font(lf, pre_lines.back().c_str());
+                        /* EINE Umbruch-Rechnung fuer alles: Zeichnen, Cursor und
+                         * Klick-Karte.  Vorher wurde fuer den Cursor der PRAEFIX
+                         * allein umgebrochen (`display.substr(0, cpos0)`) — ein
+                         * Praefix bricht anders als derselbe Text mit dem Rest
+                         * dahinter, also stand der Cursor auf einer anderen Zeile
+                         * und Spalte als das Zeichen, zu dem er gehoert.  Zusammen
+                         * mit der fehlenden Gutter-Breite (unten) ergab das den
+                         * „wild hin und her hoppsenden" Cursor. */
+                        std::vector<std::pair<int32_t,int32_t>> cspans;
+                        std::vector<std::string> clines =
+                            wrap_text_lines(lf, display.c_str(), inner_w, &cspans);
+                        /* Breite der Nummernspalte.  Sie haengt an der ZEILENZAHL
+                         * ("9 " vs "16 ") und aendert sich damit beim Tippen —
+                         * wer sie beim Cursor weglaesst, laesst ihn springen. */
+                        float cgut = 0.0f;
+                        if (ch.gutter) {
+                            int src_total = 1;
+                            for (char dc : display) if (dc == '\n') ++src_total;
+                            char wbuf[16];
+                            snprintf(wbuf, sizeof(wbuf), "%d ", src_total);
+                            cgut = text_width_font(lf, wbuf) + 8.0f * sx;
+                        }
+                        /* Cursor-Halte je Zeile, RELATIV zum Textanfang — eine
+                         * Quelle fuer Cursor-Position und Klick-Zuordnung. */
+                        std::vector<float>   all_cx;
+                        std::vector<int32_t> all_cb;
+                        std::vector<int32_t> all_rows;
+                        const bool map_ok = (display == ch.text);
+                        if (map_ok) {
+                            for (size_t li = 0; li < clines.size(); ++li) {
+                                all_rows.push_back((int32_t)all_cx.size());
+                                int32_t sb = (li < cspans.size()) ? cspans[li].first  : 0;
+                                int32_t se = (li < cspans.size()) ? cspans[li].second : 0;
+                                tb_build_caret_stops(lf, ch.text, sb, se, clines[li],
+                                                     0.0f, all_cx, all_cb);
+                            }
+                            all_rows.push_back((int32_t)all_cx.size());
+                        }
+                        int   caret_line = 0;
+                        float caret_lx   = 0.0f;
+                        if (map_ok && !all_cx.empty()) {
+                            size_t best = 0;
+                            for (size_t k = 0; k < all_cb.size(); ++k)
+                                if (all_cb[k] <= cpos0) best = k;
+                            caret_lx = all_cx[best];
+                            for (size_t r = 0; r + 1 < all_rows.size(); ++r)
+                                if ((int32_t)best >= all_rows[r]) caret_line = (int)r;
+                        } else {
+                            /* secret-Modus: die gezeichneten Punkte sagen nichts
+                             * ueber die Bytes — dann die alte Naeherung. */
+                            std::vector<std::string> pre_lines =
+                                wrap_text_lines(lf, display.substr(0, cpos0).c_str(), inner_w);
+                            caret_line = pre_lines.empty() ? 0 : (int)pre_lines.size() - 1;
+                            caret_lx   = pre_lines.empty() ? 0.0f
+                                         : text_width_font(lf, pre_lines.back().c_str());
+                        }
                         int scroll_line = (int)ch.text_scroll_y;
                         if (!ch.focused) {
                             scroll_line = 0;
@@ -2664,22 +2832,123 @@ static void render_instance(AimlPrefabInstance* inst) {
                             if (scroll_line < 0) scroll_line = 0;
                         }
                         ch.text_scroll_y = (float)scroll_line;
-                        /* Minimal caret cache — multi-line click-positioning falls
-                         * back to the start; typing/caret movement stay correct. */
+                        /* spec/44_6: Klick-Positionierung im MEHRZEILIGEN Feld.
+                         * Hier stand bis 2026-10-15 genau EIN Halt (Byte 0): jeder
+                         * Klick sprang an den Dokumentanfang.  Jetzt das sichtbare
+                         * Fenster derselben Karte, aus der auch der Cursor kommt —
+                         * mit der Gutter-Breite im Startpunkt. */
                         ch.caret_byte.clear();
                         ch.caret_x.clear();
                         ch.caret_byte.push_back(0);
                         ch.caret_x.push_back(text_start);
+                        ch.tb_caret_x.clear();
+                        ch.tb_caret_byte.clear();
+                        ch.tb_row_start.clear();
+                        ch.tb_row_y.clear();
+                        ch.tb_row_h = line_h;
+                        if (map_ok && !all_rows.empty()) {
+                            float crow_y = cy + vpad;
+                            for (int li = scroll_line;
+                                 li < scroll_line + visible_lines && li + 1 < (int)all_rows.size(); ++li) {
+                                ch.tb_row_start.push_back((int32_t)ch.tb_caret_x.size());
+                                ch.tb_row_y.push_back(crow_y);
+                                for (int32_t k = all_rows[(size_t)li]; k < all_rows[(size_t)li + 1]; ++k) {
+                                    ch.tb_caret_x.push_back(text_start + cgut + all_cx[(size_t)k]);
+                                    ch.tb_caret_byte.push_back(all_cb[(size_t)k]);
+                                }
+                                crow_y += line_h;
+                            }
+                            ch.tb_row_start.push_back((int32_t)ch.tb_caret_x.size());
+                        }
                         if (!display.empty()) {
-                            DrawBatch batch; batch.tex = lf->atlas_tex; batch.mode = 2;
                             float top_y = cy + vpad - (float)scroll_line * line_h;
-                            push_text_batch(batch, lf, display.c_str(),
-                                            text_start, top_y, inner_w, col, "left");
-                            rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
-                            flush_batch(batch);
+                            if (!ch.gutter && ch.color_runs.empty()) {
+                                DrawBatch batch; batch.tex = lf->atlas_tex; batch.mode = 2;
+                                push_text_batch(batch, lf, display.c_str(),
+                                                text_start, top_y, inner_w, col, "left");
+                                rotate_batch_verts(batch, 0, rot_cx, rot_cy, rot);
+                                flush_batch(batch);
+                            } else {
+                                /* spec/44_6 §5g: Gutter und/oder Farb-Laeufe — Zeile
+                                 * fuer Zeile, weil beide pro Zeile bzw. pro
+                                 * Byte-Abschnitt gelten.  Weil wrap_text_lines den
+                                 * Leerraum woertlich erhaelt, ist eine gerenderte
+                                 * Zeile ein glatter Ausschnitt der Quelle — die
+                                 * Abbildung Lauf→Zeile ist damit eine reine
+                                 * Schnittmenge, ohne zweite Zaehlweise. */
+                                /* DIESELBE Umbruch-Rechnung und Gutter-Breite wie
+                                 * oben (Cursor + Klick-Karte).  Hier stand eine
+                                 * zweite Kopie — und genau solche Kopien liefen
+                                 * auseinander, sobald eine davon etwas mehr
+                                 * beruecksichtigen musste. */
+                                const std::vector<std::pair<int32_t,int32_t>>& spans = cspans;
+                                const std::vector<std::string>& dl = clines;
+                                const float gut_w = cgut;
+                                float tx0 = text_start + gut_w;
+                                int src_line = 1;
+                                for (size_t li = 0; li < dl.size(); ++li) {
+                                    float ly = top_y + (float)li * line_h;
+                                    int32_t sb = spans[li].first;
+                                    /* Nummern zaehlen QUELLzeilen: eine umbrochene
+                                     * Zeile behaelt ihre Nummer (spec/44_6 §5g). */
+                                    bool starts_src = (sb == 0) ||
+                                        (sb > 0 && (size_t)sb <= display.size() &&
+                                         display[(size_t)sb - 1] == '\n');
+                                    if (starts_src && li > 0) ++src_line;
+                                    if (ch.gutter && starts_src) {
+                                        char nbuf[16];
+                                        snprintf(nbuf, sizeof(nbuf), "%d", src_line);
+                                        float nw = text_width_font(lf, nbuf);
+                                        DrawBatch gb; gb.tex = lf->atlas_tex; gb.mode = 2;
+                                        push_text_batch(gb, lf, nbuf,
+                                                        text_start + gut_w - 8.0f * sx - nw,
+                                                        ly, 1.0e9f, rgba32_to_gl(0x667788FF, alpha), "left");
+                                        rotate_batch_verts(gb, 0, rot_cx, rot_cy, rot);
+                                        flush_batch(gb);
+                                    }
+                                    const std::string& ln = dl[li];
+                                    if (ln.empty()) continue;
+                                    if (ch.color_runs.empty()) {
+                                        DrawBatch tb; tb.tex = lf->atlas_tex; tb.mode = 2;
+                                        push_text_batch(tb, lf, ln.c_str(), tx0, ly, 1.0e9f, col, "left");
+                                        rotate_batch_verts(tb, 0, rot_cx, rot_cy, rot);
+                                        flush_batch(tb);
+                                        continue;
+                                    }
+                                    /* Pro Byte die Farbe bestimmen (spaetere Laeufe
+                                     * gewinnen), dann gleichfarbige Nachbarn in einem
+                                     * Zug zeichnen. */
+                                    size_t n = ln.size();
+                                    std::vector<uint32_t> cols(n, col);
+                                    for (size_t r = 0; r + 2 < ch.color_runs.size(); r += 3) {
+                                        int32_t rs = ch.color_runs[r], rl = ch.color_runs[r+1];
+                                        uint32_t rc = (uint32_t)ch.color_runs[r+2];
+                                        int32_t a = rs > sb ? rs : sb;
+                                        int32_t b = (rs + rl) < (sb + (int32_t)n) ? (rs + rl) : (sb + (int32_t)n);
+                                        for (int32_t q = a; q < b; ++q)
+                                            cols[(size_t)(q - sb)] = rgba32_to_gl(rc, alpha);
+                                    }
+                                    size_t seg = 0;
+                                    float px = tx0;
+                                    while (seg < n) {
+                                        size_t e = seg + 1;
+                                        while (e < n && cols[e] == cols[seg]) ++e;
+                                        std::string part = ln.substr(seg, e - seg);
+                                        DrawBatch tb; tb.tex = lf->atlas_tex; tb.mode = 2;
+                                        push_text_batch(tb, lf, part.c_str(), px, ly, 1.0e9f, cols[seg], "left");
+                                        rotate_batch_verts(tb, 0, rot_cx, rot_cy, rot);
+                                        flush_batch(tb);
+                                        px += text_width_font(lf, part.c_str());
+                                        seg = e;
+                                    }
+                                }
+                            }
                         }
                         if (ch.focused) {
-                            float bx = text_start + caret_lx;
+                            /* MIT der Nummernspalte: der Text wird um `cgut`
+                             * nach rechts gezeichnet, ein Cursor ohne diesen
+                             * Versatz stuende neben dem Zeichen, das er meint. */
+                            float bx = text_start + cgut + caret_lx;
                             float by = cy + vpad + (float)(caret_line - scroll_line) * line_h;
                             DrawBatch cbatch; cbatch.tex = s->white_tex; cbatch.mode = 0;
                             push_quad(cbatch, bx, by, 1.5f * sx, line_h, 0,0,1,1, col);
@@ -2708,11 +2977,13 @@ static void render_instance(AimlPrefabInstance* inst) {
                 flush_batch(bb);
             }
             float tb_target = ch.font_size > 0.0f ? ch.font_size * sx : 0.0f;
-            AimlUIFont* lf = (tb_target > 0.0f) ? font_for_size(s, tb_target) : s->font;
+            AimlUIFont* lf = (tb_target > 0.0f) ? font_for_size_named(s, ch.font_name, tb_target)
+                                                : s->font;
             if (!lf) break;
             float pad     = 6.0f * sx;
             float inner_w = cw - 2.0f * pad - 8.0f * sx;     /* leave room for the scrollbar */
-            std::vector<std::string> lines = wrap_text_lines(lf, ch.text.c_str(), inner_w);
+            std::vector<std::pair<int32_t,int32_t>> spans;
+            std::vector<std::string> lines = wrap_text_lines(lf, ch.text.c_str(), inner_w, &spans);
             int   total   = (int)lines.size();
             float line_h  = lf->line_height;
             int   visible = (line_h > 0.0f) ? (int)((ch_h - 2.0f * pad) / line_h) : total;
@@ -2727,16 +2998,101 @@ static void render_instance(AimlPrefabInstance* inst) {
             }
             if (ch.scroll_offset > max_off) ch.scroll_offset = max_off;
             if (ch.scroll_offset < 0)       ch.scroll_offset = 0;
+            /* Caret-Stops je sichtbarer Zeile cachen (wie text_input, nur 2D) —
+             * der Input-Pass macht daraus Klick/Drag → Quell-Byte-Index. */
+            ch.tb_caret_x.clear();
+            ch.tb_caret_byte.clear();
+            ch.tb_row_start.clear();
+            ch.tb_row_y.clear();
+            ch.tb_row_h = line_h;
             {
-                DrawBatch tbx; tbx.tex = lf->atlas_tex; tbx.mode = 2;
+                float ty0 = cy + pad;
+                for (int li = ch.scroll_offset; li < ch.scroll_offset + visible && li < total; ++li) {
+                    ch.tb_row_start.push_back((int32_t)ch.tb_caret_x.size());
+                    ch.tb_row_y.push_back(ty0);
+                    int32_t sb = (li < (int)spans.size()) ? spans[(size_t)li].first  : 0;
+                    int32_t se = (li < (int)spans.size()) ? spans[(size_t)li].second : 0;
+                    tb_build_caret_stops(lf, ch.text, sb, se, lines[(size_t)li],
+                                         cx + pad, ch.tb_caret_x, ch.tb_caret_byte);
+                    ty0 += line_h;
+                }
+                ch.tb_row_start.push_back((int32_t)ch.tb_caret_x.size());   /* Endmarke */
+            }
+            /* Markierung ZUERST (hinter dem Text), eine Fläche je sichtbarer Zeile. */
+            if (ch.focused && ch.sel_anchor != ch.cursor_pos) {
+                int32_t lo = ch.sel_anchor < ch.cursor_pos ? ch.sel_anchor : ch.cursor_pos;
+                int32_t hi = ch.sel_anchor < ch.cursor_pos ? ch.cursor_pos : ch.sel_anchor;
+                DrawBatch hb; hb.tex = s->white_tex; hb.mode = 0;
+                uint32_t hc = rgba32_to_gl(0x3A5FA0FF, alpha);
+                int rows = (int)ch.tb_row_y.size();
+                for (int r = 0; r < rows; ++r) {
+                    int32_t a = ch.tb_row_start[(size_t)r];
+                    int32_t b = ch.tb_row_start[(size_t)r + 1];
+                    if (b <= a) continue;
+                    float xlo = -1.0f, xhi = -1.0f;
+                    for (int32_t k = a; k < b; ++k) {
+                        int32_t by = ch.tb_caret_byte[(size_t)k];
+                        if (by >= lo && by <= hi) {
+                            if (xlo < 0.0f) xlo = ch.tb_caret_x[(size_t)k];
+                            xhi = ch.tb_caret_x[(size_t)k];
+                        }
+                    }
+                    if (xlo < 0.0f || xhi <= xlo) continue;
+                    push_quad(hb, xlo, ch.tb_row_y[(size_t)r], xhi - xlo, line_h,
+                              0,0,1,1, hc);
+                }
+                rotate_batch_verts(hb, 0, rot_cx, rot_cy, rot);
+                flush_batch(hb);
+            }
+            {
                 uint32_t col = rgba32_to_gl(ch.color ? ch.color : 0xFFFFFFFF, alpha);
                 float ty = cy + pad;
-                for (int li = ch.scroll_offset; li < ch.scroll_offset + visible && li < total; ++li) {
-                    push_text_batch(tbx, lf, lines[li].c_str(), cx + pad, ty, inner_w, col, "left");
-                    ty += line_h;
+                if (ch.color_runs.empty()) {
+                    DrawBatch tbx; tbx.tex = lf->atlas_tex; tbx.mode = 2;
+                    for (int li = ch.scroll_offset; li < ch.scroll_offset + visible && li < total; ++li) {
+                        push_text_batch(tbx, lf, lines[li].c_str(), cx + pad, ty, inner_w, col, "left");
+                        ty += line_h;
+                    }
+                    rotate_batch_verts(tbx, 0, rot_cx, rot_cy, rot);
+                    flush_batch(tbx);
+                } else {
+                    /* spec/44_6 §5g: Farb-Laeufe gelten auch fuer die ANZEIGE,
+                     * nicht nur fuer das Eingabefeld.  Farbe ist eine
+                     * Eigenschaft von Text, nicht von Editierbarkeit — eine
+                     * Statusspalte (cosmos doc/spec/97 F97-17) braucht sie in
+                     * einer Textbox genauso.  Gleiche Logik wie im
+                     * text_input-Pfad: je Byte die Farbe bestimmen, dann
+                     * gleichfarbige Nachbarn in einem Zug zeichnen. */
+                    for (int li = ch.scroll_offset; li < ch.scroll_offset + visible && li < total; ++li) {
+                        const std::string& ln = lines[(size_t)li];
+                        int32_t sb = (li < (int)spans.size()) ? (int32_t)spans[(size_t)li].first : 0;
+                        size_t n = ln.size();
+                        if (n == 0) { ty += line_h; continue; }
+                        std::vector<uint32_t> cols(n, col);
+                        for (size_t r = 0; r + 2 < ch.color_runs.size(); r += 3) {
+                            int32_t rs = ch.color_runs[r], rl = ch.color_runs[r+1];
+                            uint32_t rc = (uint32_t)ch.color_runs[r+2];
+                            int32_t a = rs > sb ? rs : sb;
+                            int32_t b = (rs + rl) < (sb + (int32_t)n) ? (rs + rl) : (sb + (int32_t)n);
+                            for (int32_t q = a; q < b; ++q)
+                                cols[(size_t)(q - sb)] = rgba32_to_gl(rc, alpha);
+                        }
+                        size_t seg = 0;
+                        float px = cx + pad;
+                        while (seg < n) {
+                            size_t e = seg + 1;
+                            while (e < n && cols[e] == cols[seg]) ++e;
+                            std::string part = ln.substr(seg, e - seg);
+                            DrawBatch tb; tb.tex = lf->atlas_tex; tb.mode = 2;
+                            push_text_batch(tb, lf, part.c_str(), px, ty, 1.0e9f, cols[seg], "left");
+                            rotate_batch_verts(tb, 0, rot_cx, rot_cy, rot);
+                            flush_batch(tb);
+                            px += text_width_font(lf, part.c_str());
+                            seg = e;
+                        }
+                        ty += line_h;
+                    }
                 }
-                rotate_batch_verts(tbx, 0, rot_cx, rot_cy, rot);
-                flush_batch(tbx);
             }
             if (total > visible) {
                 float sb_w    = 6.0f * sx;
@@ -2880,7 +3236,7 @@ static void render_instance(AimlPrefabInstance* inst) {
             /* Label to the right of the box, vertically centered. */
             if (!ch.text.empty() && s->font) {
                 float target_size = ch.font_size > 0.0f ? ch.font_size * sx : 0.0f;
-                AimlUIFont* lf = (target_size > 0.0f) ? font_for_size(s, target_size) : s->font;
+                AimlUIFont* lf = (target_size > 0.0f) ? font_for_size_named(s, ch.font_name, target_size) : s->font;
                 if (lf) {
                     DrawBatch tb;
                     tb.tex  = lf->atlas_tex;
@@ -2932,7 +3288,7 @@ static void render_instance(AimlPrefabInstance* inst) {
                     }
                 }
                 float target_size = ch.font_size > 0.0f ? ch.font_size * sx : 0.0f;
-                AimlUIFont* lf = (target_size > 0.0f) ? font_for_size(s, target_size) : s->font;
+                AimlUIFont* lf = (target_size > 0.0f) ? font_for_size_named(s, ch.font_name, target_size) : s->font;
                 if (lf) {
                     DrawBatch tb;
                     tb.tex  = lf->atlas_tex;
@@ -3007,7 +3363,7 @@ static void render_instance(AimlPrefabInstance* inst) {
             }
             if (!ch.text.empty() && s->font) {
                 float target_size = ch.font_size > 0.0f ? ch.font_size * sx : 0.0f;
-                AimlUIFont* lf = (target_size > 0.0f) ? font_for_size(s, target_size) : s->font;
+                AimlUIFont* lf = (target_size > 0.0f) ? font_for_size_named(s, ch.font_name, target_size) : s->font;
                 if (lf) {
                     DrawBatch tb;
                     tb.tex  = lf->atlas_tex;
@@ -3029,7 +3385,7 @@ static void render_instance(AimlPrefabInstance* inst) {
             /* Select font for this label's font_size (cached per size). */
             float target_size = ch.font_size > 0.0f ? ch.font_size * sx : 0.0f;
             AimlUIFont* lf = (target_size > 0.0f)
-                             ? font_for_size(s, target_size)
+                             ? font_for_size_named(s, ch.font_name, target_size)
                              : s->font;
             if (!lf) break;
             /* Auto-fit: In eine „kurze" Box (Titel-Höhe ≈ eine Zeile) würde ein
@@ -3358,8 +3714,10 @@ void* aiml_prefab_instantiate(const char* prefab_name) {
         child.width = cd.width;
         child.height = cd.height;
         child.font_size = cd.font_size;
+        child.font_name = cd.font_name;
+        child.gutter    = cd.gutter;
         child.color = cd.color;
-        child.visible = true;
+        child.visible = cd.visible;
         child.texture = 0;
 
         if (!cd.texture_path.empty()) {
@@ -3885,6 +4243,26 @@ void aiml_prefab_set_color(void* inst, const char* child_name, int32_t color) {
 /* Generic child fill/border color setters (mirror set_color).  For a rect the
  * visible fill is bg_color (color is usually 0) — needed to flash a whole panel
  * (e.g. the Soulmage banner on hit/heal). */
+/* spec/44_6 §5g: Farb-Laeufe setzen — flache Tripel (start, len, rgba) ueber
+ * die TEXT-Bytes des Feldes.  Ein Lauf, der ueber das Textende hinausreicht,
+ * wird beim Zeichnen beschnitten statt abgelehnt: ein Highlighter, der dem
+ * Tippen einen Frame hinterherhinkt, darf kein Fehler sein. */
+void aiml_prefab_set_color_runs(void* inst, const char* child_name,
+                                const void* triples, int32_t count) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (!ch) return;
+    ch->color_runs.clear();
+    const int32_t* src = static_cast<const int32_t*>(triples);
+    if (!src || count <= 0) return;
+    int32_t n = (count / 3) * 3;
+    ch->color_runs.assign(src, src + n);
+}
+
+void aiml_prefab_clear_color_runs(void* inst, const char* child_name) {
+    PrefabChild* ch = find_child(inst, child_name);
+    if (ch) ch->color_runs.clear();
+}
+
 void aiml_prefab_set_bg_color(void* inst, const char* child_name, int32_t color) {
     PrefabChild* ch = find_child(inst, child_name);
     if (ch) ch->bg_color = (uint32_t)color;
@@ -5164,6 +5542,57 @@ static void apply_text_events_to_focus() {
     int32_t idx = g_scene->focused_input_child_idx;
     if (idx < 0 || idx >= (int32_t)inst->children.size()) return;
     PrefabChild& ch = inst->children[idx];
+
+    /* Textbox (spec/44_6 §5f): read-only — markieren und kopieren, nie tippen.
+     * Eigener Zweig, damit kein Editier-Pfad versehentlich Text verändert. */
+    if (ch.type == CHILD_TEXTBOX) {
+        int32_t tlen = (int32_t)ch.text.size();
+        if (ch.cursor_pos > tlen) ch.cursor_pos = tlen;
+        if (ch.cursor_pos < 0)    ch.cursor_pos = 0;
+        if (ch.sel_anchor > tlen) ch.sel_anchor = tlen;
+        if (ch.sel_anchor < 0)    ch.sel_anchor = 0;
+        bool alt_h  = aiml_input_key_down("lalt") || aiml_input_key_down("ralt");
+        bool ctrl_h = (aiml_input_key_down("lctrl") || aiml_input_key_down("rctrl")) && !alt_h;
+        bool shift_h = aiml_input_key_down("lshift") || aiml_input_key_down("rshift");
+        while (aiml_input_has_event()) {
+            void* ev = aiml_input_next_event();
+            const char* type = aiml_input_event_type(ev);
+            if (!type || strcmp(type, "key_down") != 0) continue;   /* "text" verwerfen */
+            const char* key = aiml_input_event_key(ev);
+            if (!key) continue;
+            int32_t lo = ch.sel_anchor < ch.cursor_pos ? ch.sel_anchor : ch.cursor_pos;
+            int32_t hi = ch.sel_anchor < ch.cursor_pos ? ch.cursor_pos : ch.sel_anchor;
+            if (ctrl_h && strcmp(key, "A") == 0) {
+                ch.sel_anchor = 0; ch.cursor_pos = tlen;
+            } else if (ctrl_h && strcmp(key, "C") == 0) {
+                /* Ohne Auswahl den GANZEN Inhalt kopieren — bei einer Log-/
+                 * Ausgabe-Box ist das praktisch immer das Gemeinte. */
+                if (lo != hi) aiml_input_clipboard_set(ch.text.substr((size_t)lo, (size_t)(hi - lo)).c_str());
+                else          aiml_input_clipboard_set(ch.text.c_str());
+            } else if (strcmp(key, "Left") == 0) {
+                if (!shift_h && lo != hi) ch.cursor_pos = lo;
+                else                      ch.cursor_pos = utf8_prev(ch.text, ch.cursor_pos);
+                if (!shift_h) ch.sel_anchor = ch.cursor_pos;
+            } else if (strcmp(key, "Right") == 0) {
+                if (!shift_h && lo != hi) ch.cursor_pos = hi;
+                else                      ch.cursor_pos = utf8_next(ch.text, ch.cursor_pos);
+                if (!shift_h) ch.sel_anchor = ch.cursor_pos;
+            } else if (strcmp(key, "Home") == 0) {
+                ch.cursor_pos = 0; if (!shift_h) ch.sel_anchor = 0;
+            } else if (strcmp(key, "End") == 0) {
+                ch.cursor_pos = tlen; if (!shift_h) ch.sel_anchor = tlen;
+            } else if (strcmp(key, "Escape") == 0) {
+                ch.focused = false;
+                ch.sel_anchor = ch.cursor_pos;
+                g_scene->focused_input_inst = nullptr;
+                g_scene->focused_input_child_idx = -1;
+            }
+        }
+        if (ch.cursor_pos < 0) ch.cursor_pos = 0; if (ch.cursor_pos > tlen) ch.cursor_pos = tlen;
+        if (ch.sel_anchor < 0) ch.sel_anchor = 0; if (ch.sel_anchor > tlen) ch.sel_anchor = tlen;
+        return;
+    }
+
     if (ch.type != CHILD_TEXT_INPUT) return;
 
     /* Defensive: the text may have been shrunk externally (set_text) since the
@@ -5304,6 +5733,51 @@ void aiml_prefab_update_hover(float mx, float my) {
     static bool  s_press_valid = false;
     static float s_press_x = 0.f, s_press_y = 0.f;
     if (mb_pressed) { s_press_valid = true; s_press_x = (float)mx; s_press_y = (float)my; }
+
+    /* spec/44_6: Treffer-Spur.  Nennt JEDES Widget, dessen Fläche den Druckpunkt
+     * enthält — nicht ein einzelnes "Ziel": der Widget-Durchlauf unten gated
+     * bewusst nicht darauf, welche Instanz den Cursor besitzt, also können
+     * überlappende Widgets beide feuern.  Die Spur zeigt das, statt es zu
+     * verdecken.  "miss" ist ein eigener, prüfbarer Ausgang.  Ohne diese Zeilen
+     * ist "Button tut nichts" nicht von "Klick kam nie an" zu unterscheiden. */
+    if (mb_pressed && g_scene && !g_trace_hits) {
+        /* Tracing aus (Normalfall jeder App): nichts erheben.  "?" heisst
+         * "nicht erhoben" und ist von "" (echter Fehlschlag) unterscheidbar —
+         * sonst bestaende eine Pruefung auf "nichts getroffen" bei
+         * abgeschaltetem Tracing aus dem falschen Grund. */
+        g_last_hits = "?";
+    } else if (mb_pressed && g_scene) {
+        g_last_hits.clear();
+        for (size_t ii = 0; ii < g_scene->instances.size(); ii++) {
+            auto* inst = g_scene->instances[ii];
+            if (!inst || !inst->visible) continue;
+            for (auto& ch : inst->children) {
+                if (!ch.visible) continue;
+                float bx, by, bw, bh;
+                child_screen_bbox(inst, ch, bx, by, bw, bh);
+                if (s_press_x < bx || s_press_x >= bx + bw
+                 || s_press_y < by || s_press_y >= by + bh) continue;
+                char addr[224];
+                snprintf(addr, sizeof addr, "%s[%zu]/%s",
+                    inst->def ? inst->def->name.c_str() : "?", ii, ch.name.c_str());
+                if (!g_last_hits.empty()) g_last_hits += "|";
+                g_last_hits += addr;
+                if (g_trace_hits) {
+                    char tbuf[320];
+                    snprintf(tbuf, sizeof tbuf, "[prefab] hit %s at (%.1f,%.1f) kind=%d",
+                             addr, s_press_x, s_press_y, (int)ch.type);
+                    aiml_log_info(tbuf, "prefab_runtime.cpp");
+                }
+            }
+        }
+        if (g_trace_hits && g_last_hits.empty()) {
+            char tbuf[128];
+            snprintf(tbuf, sizeof tbuf, "[prefab] miss at (%.1f,%.1f)",
+                     s_press_x, s_press_y);
+            aiml_log_info(tbuf, "prefab_runtime.cpp");
+        }
+    }
+
     auto press_origin_in = [&](float rx, float ry, float rw, float rh) {
         return s_press_valid && s_press_x >= rx && s_press_x < rx + rw && s_press_y >= ry && s_press_y < ry + rh;
     };
@@ -5517,15 +5991,37 @@ void aiml_prefab_update_hover(float mx, float my) {
                     }
                     return best;
                 };
+                /* Mehrzeilig: erst die ZEILE aus y, dann die Spalte aus x — eine
+                 * reine x-Suche wuerde ueber alle Zeilen hinweg den naechsten
+                 * Halt nehmen und damit fast immer in der falschen Zeile landen. */
+                auto idx_from_xy = [&](float x, float y) -> int32_t {
+                    int rows = (int)ch.tb_row_y.size();
+                    if (rows <= 0 || ch.tb_row_start.size() < (size_t)rows + 1)
+                        return idx_from_x(x);
+                    int r = 0;
+                    for (int k = 0; k < rows; ++k)
+                        if (y >= ch.tb_row_y[(size_t)k]) r = k;
+                    if (y < ch.tb_row_y[0]) r = 0;
+                    int32_t a = ch.tb_row_start[(size_t)r];
+                    int32_t b = ch.tb_row_start[(size_t)r + 1];
+                    if (b <= a) return idx_from_x(x);
+                    int32_t best = ch.tb_caret_byte[(size_t)a];
+                    float   bd   = fabsf(ch.tb_caret_x[(size_t)a] - x);
+                    for (int32_t k = a + 1; k < b; ++k) {
+                        float d = fabsf(ch.tb_caret_x[(size_t)k] - x);
+                        if (d < bd) { bd = d; best = ch.tb_caret_byte[(size_t)k]; }
+                    }
+                    return best;
+                };
                 if (mb_pressed && over) {
                     new_focus_inst = inst;
                     new_focus_idx  = (int32_t)i;
-                    int32_t ci = idx_from_x(mx);
+                    int32_t ci = idx_from_xy(mx, my);
                     ch.cursor_pos = ci;
                     ch.sel_anchor = ci;          /* click → collapsed cursor */
                     ch.sel_dragging = true;
                 } else if (ch.sel_dragging && ch.focused && aiml_input_mouse_button(0)) {
-                    ch.cursor_pos = idx_from_x(mx);   /* drag → extend selection (anchor stays) */
+                    ch.cursor_pos = idx_from_xy(mx, my);   /* drag → extend selection (anchor stays) */
                 }
                 if (mb_released) ch.sel_dragging = false;
             } else if (ch.type == CHILD_CONTAINER) {
@@ -5567,6 +6063,53 @@ void aiml_prefab_update_hover(float mx, float my) {
                 }
                 if (mb_released) ch.sb_dragging = false;
             } else if (ch.type == CHILD_TEXTBOX) {
+                /* Auswahl (spec/44_6 §5f): Klick setzt Fokus + Cursor, Ziehen
+                 * erweitert, Ctrl+C kopiert (apply_text_events_to_focus).
+                 * Caret-Stops kommen aus dem Render-Pass.  Die Textbox ist
+                 * NICHT editierbar — nur markieren und kopieren. */
+                auto tb_idx_from_xy = [&](float x, float y) -> int32_t {
+                    int rows = (int)ch.tb_row_y.size();
+                    if (rows <= 0 || ch.tb_row_start.size() < (size_t)rows + 1) return ch.cursor_pos;
+                    int r = 0;
+                    if (ch.tb_row_h > 0.0f) {
+                        for (int k = 0; k < rows; ++k) {
+                            if (y >= ch.tb_row_y[(size_t)k]) r = k;
+                        }
+                        if (y < ch.tb_row_y[0]) r = 0;
+                    }
+                    int32_t a = ch.tb_row_start[(size_t)r];
+                    int32_t b = ch.tb_row_start[(size_t)r + 1];
+                    if (b <= a) return ch.cursor_pos;
+                    int32_t best = ch.tb_caret_byte[(size_t)a];
+                    float   bd   = fabsf(ch.tb_caret_x[(size_t)a] - x);
+                    for (int32_t k = a + 1; k < b; ++k) {
+                        float d = fabsf(ch.tb_caret_x[(size_t)k] - x);
+                        if (d < bd) { bd = d; best = ch.tb_caret_byte[(size_t)k]; }
+                    }
+                    return best;
+                };
+                bool on_scrollbar = false;
+                {   /* Klicks auf den Scrollbalken bleiben Scrollen, nicht Auswahl. */
+                    float scx2 = (ch.width > 0.0f) ? bw / ch.width : 1.0f;
+                    float sb_w = 6.0f * scx2 + 4.0f * scx2;
+                    if (mx >= bx + bw - sb_w) on_scrollbar = true;
+                }
+                if (mb_pressed && over && !on_scrollbar) {
+                    new_focus_inst = inst;
+                    new_focus_idx  = (int32_t)i;
+                    int32_t ci = tb_idx_from_xy(mx, my);
+                    ch.cursor_pos = ci;
+                    ch.sel_anchor = ci;
+                    ch.tb_sel_dragging = true;
+                } else if (ch.tb_sel_dragging && ch.focused && aiml_input_mouse_button(0)) {
+                    ch.cursor_pos = tb_idx_from_xy(mx, my);
+                    /* Ziehen über den Rand hinaus scrollt mit. */
+                    int max_off_sel = ch.tb_total > ch.tb_visible ? ch.tb_total - ch.tb_visible : 0;
+                    if (my < by && ch.scroll_offset > 0)                    ch.scroll_offset--;
+                    else if (my > by + bh && ch.scroll_offset < max_off_sel) ch.scroll_offset++;
+                }
+                if (mb_released) ch.tb_sel_dragging = false;
+
                 /* Scrollable text area: wheel over it + drag the thumb.  Line
                  * counts come from the render pass (tb_total / tb_visible). */
                 int total = ch.tb_total, visible = ch.tb_visible;
@@ -6070,6 +6613,72 @@ int32_t aiml_prefab_child_clicked(void* inst, const char* child_name) {
     return (ch && ch->clicked_frame) ? 1 : 0;
 }
 
+/* spec/44_6 §5f — selection of a textbox/text_input, programmatically.
+ * select_all gives the widget focus too, so a following Ctrl+C in the widget
+ * copies it; `selection` hands back the marked text ("" when nothing is
+ * marked), which an app can pass to input.clipboard_set from a button. */
+void aiml_prefab_select_all(void* inst, const char* child_name) {
+    auto* ch = find_child(inst, child_name);
+    if (!ch) return;
+    if (ch->type != CHILD_TEXTBOX && ch->type != CHILD_TEXT_INPUT) return;
+    ch->sel_anchor = 0;
+    ch->cursor_pos = (int32_t)ch->text.size();
+    ch->focused    = true;
+    if (g_scene) {
+        auto* pi = (AimlPrefabInstance*)inst;
+        auto it = pi->child_index.find(child_name ? child_name : "");
+        if (it != pi->child_index.end()) {
+            /* Vorherigen Fokus einsammeln, damit nicht zwei Widgets fokussiert sind. */
+            if (g_scene->focused_input_inst && g_scene->focused_input_child_idx >= 0) {
+                auto* old = g_scene->focused_input_inst;
+                int32_t oi = g_scene->focused_input_child_idx;
+                if (oi < (int32_t)old->children.size() && (old != pi || oi != it->second)) {
+                    old->children[oi].focused    = false;
+                    old->children[oi].sel_anchor = old->children[oi].cursor_pos;
+                }
+            }
+            g_scene->focused_input_inst      = pi;
+            g_scene->focused_input_child_idx = it->second;
+        }
+    }
+}
+
+/* spec/44_0 §2.5 — was ein Ctrl+C im gerade fokussierten Widget kopieren würde:
+ * die Auswahl, bei einer textbox ohne Auswahl der ganze Inhalt.  Der Browser
+ * muss das INNERHALB des keydown wissen (Clipboard-Schreiben verlangt eine
+ * laufende Nutzer-Interaktion), während die aiml-Frameschleife erst danach
+ * läuft — darum dieser synchrone Hook für input_runtime. */
+extern "C" const char* aiml_focused_copy_text(void) {
+    if (!g_scene || !g_scene->focused_input_inst) return "";
+    AimlPrefabInstance* inst = g_scene->focused_input_inst;
+    int32_t idx = g_scene->focused_input_child_idx;
+    if (idx < 0 || idx >= (int32_t)inst->children.size()) return "";
+    PrefabChild& ch = inst->children[idx];
+    if (ch.type != CHILD_TEXTBOX && ch.type != CHILD_TEXT_INPUT) return "";
+    int32_t len = (int32_t)ch.text.size();
+    int32_t lo = ch.sel_anchor < ch.cursor_pos ? ch.sel_anchor : ch.cursor_pos;
+    int32_t hi = ch.sel_anchor < ch.cursor_pos ? ch.cursor_pos : ch.sel_anchor;
+    if (lo < 0) lo = 0;
+    if (hi > len) hi = len;
+    static std::string out;
+    if (hi > lo)                       out = ch.text.substr((size_t)lo, (size_t)(hi - lo));
+    else if (ch.type == CHILD_TEXTBOX) out = ch.text;    /* ohne Auswahl: ganze Box */
+    else                               out.clear();
+    return out.c_str();
+}
+
+const char* aiml_prefab_selection(void* inst, const char* child_name) {
+    auto* ch = find_child(inst, child_name);
+    if (!ch) return aiml_str_dup("");
+    int32_t len = (int32_t)ch->text.size();
+    int32_t lo = ch->sel_anchor < ch->cursor_pos ? ch->sel_anchor : ch->cursor_pos;
+    int32_t hi = ch->sel_anchor < ch->cursor_pos ? ch->cursor_pos : ch->sel_anchor;
+    if (lo < 0) lo = 0;
+    if (hi > len) hi = len;
+    if (hi <= lo) return aiml_str_dup("");
+    return aiml_str_dup(ch->text.substr((size_t)lo, (size_t)(hi - lo)).c_str());
+}
+
 /* Point-in-child test in SCREEN coords — works for ANY child type (incl.
  * non-interactive `rect`s like the deck-set slots), unlike child_clicked which
  * only tracks interactive widgets.  Uses the same screen-bbox as click hit-
@@ -6084,6 +6693,38 @@ int32_t aiml_prefab_child_contains(void* inst_p, const char* child_name,
     child_screen_bbox(inst, inst->children[it->second], bx, by, bw, bh);
     return (sx >= bx && sx < bx + bw && sy >= by && sy < by + bh) ? 1 : 0;
 }
+
+/* spec/44_6: Trefferfläche eines Kindes in Bildschirmkoordinaten — die Umkehrung
+ * von child_contains, das nur einen Punkt prüft, den man schon hat.  Nötig, damit
+ * ein Testtreiber "Button X" in eine Cursorposition auflösen kann (spec/44_9).
+ * -1 heisst "Kind existiert nicht"; es ist keine gültige Koordinate und dadurch
+ * von einer echten Fläche unterscheidbar. */
+static int32_t child_bbox_or_fail(void* inst_p, const char* child_name,
+                                  float& bx, float& by, float& bw, float& bh) {
+    auto* inst = (AimlPrefabInstance*)inst_p;
+    if (!inst || !child_name) return 0;
+    auto it = inst->child_index.find(child_name);
+    if (it == inst->child_index.end()) return 0;
+    child_screen_bbox(inst, inst->children[it->second], bx, by, bw, bh);
+    return 1;
+}
+#define PREFAB_RECT_GETTER(fn, field)                                          \
+    extern "C" float fn(void* inst_p, const char* child_name) {                \
+        float bx, by, bw, bh;                                                  \
+        if (!child_bbox_or_fail(inst_p, child_name, bx, by, bw, bh)) return -1.f; \
+        return field;                                                          \
+    }
+PREFAB_RECT_GETTER(aiml_prefab_child_rect_x, bx)
+PREFAB_RECT_GETTER(aiml_prefab_child_rect_y, by)
+PREFAB_RECT_GETTER(aiml_prefab_child_rect_w, bw)
+PREFAB_RECT_GETTER(aiml_prefab_child_rect_h, bh)
+#undef PREFAB_RECT_GETTER
+
+extern "C" void aiml_prefab_trace_hits(int32_t on) { g_trace_hits = (on != 0); }
+/* spec/44_6: die aufgeloesten Treffer des letzten Drucks, "|"-getrennt.
+ * "" = der Druck traf nichts.  Damit ist `expect_hit` (spec/44_9) ohne
+ * Log-Parsing pruefbar — das Log ist fuer Menschen, das hier fuer Tests. */
+extern "C" const char* aiml_prefab_last_hit(void) { return g_last_hits.c_str(); }
 
 int32_t aiml_prefab_child_focused(void* inst, const char* child_name) {
     auto* ch = find_child(inst, child_name);
@@ -6342,8 +6983,30 @@ static AimlUIFont* font_for_size(PrefabScene* s, float font_size) {
     return f;
 }
 
+static AimlUIFont* font_for_size_named(PrefabScene* s, const std::string& name, float font_size) {
+    if (name.empty()) return font_for_size(s, font_size);
+    auto base = s->named_fonts.find(name);
+    if (base == s->named_fonts.end() || !base->second) return font_for_size(s, font_size);
+    int key = (int)roundf(font_size * 10.0f);
+    auto& cache = s->named_cache[name];
+    auto it = cache.find(key);
+    if (it != cache.end()) return it->second;
+    AimlUIFont* f = (AimlUIFont*)aiml_ui_bake_font_for_size(base->second, font_size);
+    if (f) cache[key] = f;
+    return f;
+}
+
 void aiml_prefab_set_font(void* font) {
     if (!g_scene) return;
     clear_font_cache(g_scene);
     g_scene->font = (AimlUIFont*)font;
+}
+
+/* Register an additional named font for `font:` on a child (spec/44_6). */
+void aiml_prefab_add_font(const char* name, void* font) {
+    if (!g_scene || !name || !*name) return;
+    auto& cache = g_scene->named_cache[name];
+    for (auto& kv : cache) aiml_ui_free_font(kv.second);
+    cache.clear();
+    g_scene->named_fonts[name] = (AimlUIFont*)font;
 }

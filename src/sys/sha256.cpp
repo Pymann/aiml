@@ -10,6 +10,7 @@
 #include "string_runtime.h"   // aiml_str_alloc: refcounted result (rc-header, no Invalid-read/leak)
 #include <cstring>
 #include <cstdlib>
+#include <cstdio>   // aiml_sha256_file: blockweises Lesen
 
 namespace {
 
@@ -107,6 +108,33 @@ char* aiml_sha256_hex(const void* data, int32_t len) {
 // string arg).  Lives here so native + WASM share one implementation.
 char* aiml_hash_sha256(const char* s) {
     return aiml_sha256_hex(s, s ? (int32_t)strlen(s) : 0);
+}
+
+// Content-address of a FILE, read in 1 MiB blocks: memory use is independent of
+// the file size, so a multi-hundred-MB artifact can be hashed without holding it
+// (hash.sha256(buffer) would need the whole content in RAM — see spec/33_1 and
+// cosmos doc/spec/92 §92.4, which needs this for its CAS blob ids).
+//
+// Returns the 64-char lowercase hex digest, or an EMPTY string when the file
+// cannot be opened or read — never null, so AIML callers never see a null
+// string.  "" is unambiguous: an empty FILE hashes to e3b0c442….
+char* aiml_sha256_file(const char* path) {
+    if (!path || !*path) return hex(nullptr, 0);
+    FILE* fobj = fopen(path, "rbe");       // e: close-on-exec, like io.open
+    if (!fobj) return hex(nullptr, 0);
+    const size_t chunk = 1u << 20;         // 1 MiB
+    uint8_t* buf = (uint8_t*)malloc(chunk);
+    if (!buf) { fclose(fobj); return hex(nullptr, 0); }
+    Ctx c; init(&c);
+    size_t got;
+    while ((got = fread(buf, 1, chunk, fobj)) > 0) update(&c, buf, got);
+    const bool failed = ferror(fobj) != 0;
+    free(buf);
+    fclose(fobj);
+    if (failed) return hex(nullptr, 0);
+    uint8_t digest[32];
+    final(&c, digest);
+    return hex(digest, 32);
 }
 
 } // extern "C"

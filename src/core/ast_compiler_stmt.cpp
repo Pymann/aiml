@@ -61,12 +61,12 @@ static void emitSizeTrace(CompilerContext& ctx, const std::string& symName) {
     llvm::Value* allocaV = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(s.ir_alloca_inst));
     llvm::Type*  elemTy  = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(s.ir_element_type));
     if (!allocaV || !elemTy) return;
-    uint64_t size = ctx.module.getDataLayout().getTypeAllocSize(elemTy);
+    uint64_t size = ctx.module().getDataLayout().getTypeAllocSize(elemTy);
     std::string typeStr = s.typeName.empty() ? "?" : s.typeName;
 
     llvm::PointerType* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
     llvm::Type*        i64t = ctx.builder.getInt64Ty();
-    llvm::FunctionCallee fn = ctx.module.getOrInsertFunction(
+    llvm::FunctionCallee fn = ctx.module().getOrInsertFunction(
         "aiml_sizetrace",
         llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p, i8p, i64t, i8p}, false));
     llvm::Value* fnameV = ctx.builder.CreateGlobalStringPtr(ctx.currentFunctionName, "sz_fn");
@@ -93,11 +93,31 @@ bool rejectVoidCallInit(CompilerContext& ctx, Expr* initExpr,
     if (!call) return false;
     // Method/namespace calls are routed through different visit handlers;
     // their typing is checked elsewhere.  Only catch the direct-call form.
-    if (call->functionName.find('.') != std::string::npos) return false;
-    llvm::Function* fn = ctx.module.getFunction(call->functionName);
+    if (call->functionName.find('.') != std::string::npos) {
+        // Ein METHODEN- oder Namensraum-Aufruf.  Seine Typregeln liegen
+        // anderswo — hier ist nur wichtig, dass er nicht void liefert, wenn
+        // sein Wert gespeichert werden soll.  Ein in DIESER Einheit bekannter
+        // Methodenname wird deshalb geprueft; alles andere faellt wie bisher
+        // durch (ein Builtin hat keine llvm::Function unter diesem Namen).
+        //
+        // Grund: ohne diese Pruefung landet ein void-Wert in einer typisierten
+        // Stelle, und LLVM stuerzt spaeter in getPrefTypeAlignment ab statt
+        // etwas zu melden (gemessen 2026-10-12 am cosmos-RunsScreen).
+        const std::string base = call->functionName.substr(0, call->functionName.rfind('.'));
+        const std::string meth = call->functionName.substr(call->functionName.rfind('.') + 1);
+        (void)base;
+        auto fit = ctx.functions.find(meth);
+        if (fit == ctx.functions.end() || !fit->second.func) return false;
+        if (!fit->second.func->getReturnType()->isVoidTy()) return false;
+        LOG_ERROR(ctx.fmtLoc(srcNode) + targetDesc +
+            " from a void-returning method '" + call->functionName +
+            "()' — void values cannot be stored into a typed location.");
+        return true;
+    }
+    llvm::Function* fn = ctx.module().getFunction(call->functionName);
     if (!fn) {
         // Try qualified name (current namespace).
-        fn = ctx.module.getFunction(ctx.qualify(call->functionName));
+        fn = ctx.module().getFunction(ctx.qualify(call->functionName));
     }
     if (!fn) return false;
     if (!fn->getReturnType()->isVoidTy()) return false;
@@ -143,7 +163,7 @@ void coerceOrStoreFieldDefault(CompilerContext& ctx,
         (targetTy && targetTy->isStructTy() && storeVal->getType()->isPointerTy());
 
     if (copyByMemcpy) {
-        uint64_t structSize = ctx.module.getDataLayout().getTypeAllocSize(targetTy);
+        uint64_t structSize = ctx.module().getDataLayout().getTypeAllocSize(targetTy);
         llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
         llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
         ctx.builder.CreateCall(memcpyFunc, {
@@ -186,7 +206,7 @@ static void resetTemp(CompilerContext& ctx, const CompilerContext::StatementTemp
 static void addTempResetPoint(CompilerContext& ctx) {
     if (!ctx.lifetimeDropsEnabled || ctx.statementTemps.empty() || !ctx.builder.GetInsertBlock()) return;
     auto& frame = ctx.statementTemps.back();
-    auto* marker = ctx.builder.CreateCall(llvm::Intrinsic::getDeclaration(&ctx.module, llvm::Intrinsic::donothing));
+    auto* marker = ctx.builder.CreateCall(llvm::Intrinsic::getDeclaration(&ctx.module(), llvm::Intrinsic::donothing));
     frame.resetPoints.push_back(marker);
     llvm::IRBuilderBase::InsertPointGuard guard(ctx.builder);
     ctx.builder.SetInsertPoint(marker);
@@ -237,6 +257,12 @@ void Compiler::trackCallArgument(Expr* expression, IRValue* value) {
     if (!value || !ctx.memV3 || !ctx.lifetimeDropsEnabled) return;
     auto* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(value));
     CompilerContext::ScopeDrop drop;
+    auto resource = dynamic_cast<CallExpr*>(expression) ? glOperandType(expression) : "";
+    if (resource == "gl_buffer" || resource == "gl_vao") {
+        drop.kind = resource == "gl_buffer" ? 20 : 21;
+        registerStatementTemp(ctx, raw, raw, drop);
+        return;
+    }
     auto type = ownedContainerCallType(expression);
     if (!type.empty() && makeHandleDrop(type, nullptr, drop)) {
         registerStatementTemp(ctx, raw, raw, drop);
@@ -427,23 +453,26 @@ static int aimlTraceKind(CompilerContext& ctx, const std::string& tn) {
 // resolve it separately).
 void Compiler::classifyListElem(const std::string& elemName, int& elemKind, int64_t& elemSize,
                                 llvm::GlobalVariable*& serNodes, int32_t& serNodesCount) {
-    elemKind = 0; elemSize = 8; serNodes = nullptr; serNodesCount = 0;
+    // spec/61 §5.7: zeigergrosse Slots striden mit ctx.ptrStride() (4 auf wasm32),
+    // nie mit einem literalen 8 — das kostete den WASM-Client (2026-10-15).
+    elemKind = 0; elemSize = ctx.ptrStride(); serNodes = nullptr; serNodesCount = 0;
     if (elemName == "string") {
-        elemKind = 1; elemSize = 8;
+        elemKind = 1; elemSize = ctx.ptrStride();
     } else if (ctx.isRefcountModel(elemName)) {
-        elemKind = 3; elemSize = 8;
+        elemKind = 3; elemSize = ctx.ptrStride();
         std::string bareElem = elemName;
         if (bareElem.rfind("shared<", 0) == 0 && bareElem.back() == '>')
             bareElem = bareElem.substr(7, bareElem.size() - 8);
         auto ci = ctx.classes.find(bareElem);
         if (ci != ctx.classes.end()) { serNodes = ci->second.serNodesVar; serNodesCount = ci->second.serNodesCount; }
     } else if (elemName.rfind("ptr<", 0) == 0 && elemName.back() == '>') {
-        elemKind = 4; elemSize = 8;
+        elemKind = 4; elemSize = ctx.ptrStride();
         std::string boxed = elemName.substr(4, elemName.size() - 5);
         if (ctx.interfaces.count(boxed)) {
             elemKind = 6;
             llvm::Type* et = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
-            elemSize = et ? (int64_t)ctx.module.getDataLayout().getTypeAllocSize(et) : 16;
+            elemSize = et ? (int64_t)ctx.module().getDataLayout().getTypeAllocSize(et)
+                          : 2 * ctx.ptrStride();   // fat pointer {obj, vtable}
             serNodesCount = (int32_t)ctx.interfaces[boxed].methods.size();   // vtable free-slot index
         } else {
             auto ci = ctx.classes.find(boxed);
@@ -451,18 +480,19 @@ void Compiler::classifyListElem(const std::string& elemName, int& elemKind, int6
         }
     } else if (ctx.memV3 && ctx.isMemV3ContainerHandle(elemName)) {
         elemKind = 5;
-        elemSize = (int64_t)ctx.module.getDataLayout().getPointerSize();
+        elemSize = (int64_t)ctx.module().getDataLayout().getPointerSize();
         int nc = 0; serNodes = elemHandleSerNodes(elemName, nc); serNodesCount = (int32_t)nc;
     } else {
         auto ci = ctx.classes.find(elemName);
         if (ci != ctx.classes.end() && ci->second.hasHeapFields && ci->second.serNodesVar && ci->second.type) {
             elemKind = 2;
             serNodes = ci->second.serNodesVar; serNodesCount = ci->second.serNodesCount;
-            elemSize = (int64_t)ctx.module.getDataLayout().getTypeAllocSize(ci->second.type);
+            elemSize = (int64_t)ctx.module().getDataLayout().getTypeAllocSize(ci->second.type);
         } else {
             elemKind = 0;
             llvm::Type* et = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
-            elemSize = et ? (int64_t)ctx.module.getDataLayout().getTypeAllocSize(et) : 8;
+            elemSize = et ? (int64_t)ctx.module().getDataLayout().getTypeAllocSize(et)
+                          : ctx.ptrStride();
         }
     }
 }
@@ -558,11 +588,15 @@ void Compiler::moveIteratorArg(Expr* arg) {
 // moves via consumeLocalDrop.
 void Compiler::emitResourceBindTransfer(const std::string& typeName, Expr* rhs, llvm::Value* dst) {
     bool isChan = typeName.rfind("chan<", 0) == 0 && typeName.back() == '>';
-    if ((!isChan && typeName != "thread_handle" && typeName != "gl_texture" && typeName != "gl_cubemap" && typeName != "gl_timer_query") || !rhs) return;
+    if ((!isChan && typeName != "thread_handle" && typeName != "gl_texture" && typeName != "gl_cubemap" && typeName != "gl_timer_query" && typeName != "gl_buffer" && typeName != "gl_vao" && typeName != "process") || !rhs) return;
     if (dynamic_cast<CallExpr*>(rhs) || dynamic_cast<SpawnExpr*>(rhs) || dynamic_cast<LiteralExpr*>(rhs)) return;
     auto* var = dynamic_cast<VariableExpr*>(rhs);
     Symbol* plain = (var && var->name.find('.') == std::string::npos && var->name.find('<') == std::string::npos)
         ? resolveVariable(var->name) : nullptr;
+    if ((typeName == "gl_buffer" || typeName == "gl_vao" || typeName == "process") && plain && plain->is_param) {
+        LOG_ERROR(ctx.fmtLoc() + "spec/61: cannot move a borrowed " + typeName + " into an owner");
+        return;
+    }
     auto* i8p = llvm::PointerType::get(ctx.context, 0);
     if (isChan) {
         llvm::Value* ch = nullptr;
@@ -586,7 +620,7 @@ void Compiler::emitResourceBindTransfer(const std::string& typeName, Expr* rhs, 
 // source / null a moved thread_handle source), release the old one, store.
 bool Compiler::emitResourceStore(const std::string& typeName, Expr* rhs, llvm::Value* newV, llvm::Value* slot) {
     bool isChan = typeName.rfind("chan<", 0) == 0 && typeName.back() == '>';
-    if ((!isChan && typeName != "thread_handle" && typeName != "gl_texture" && typeName != "gl_cubemap" && typeName != "gl_timer_query") || !newV || !slot || !newV->getType()->isPointerTy()) return false;
+    if ((!isChan && typeName != "thread_handle" && typeName != "gl_texture" && typeName != "gl_cubemap" && typeName != "gl_timer_query" && typeName != "gl_buffer" && typeName != "gl_vao" && typeName != "process") || !newV || !slot || !newV->getType()->isPointerTy()) return false;
     auto* i8p = llvm::PointerType::get(ctx.context, 0);
     if (isChan) {
         if (!dynamic_cast<CallExpr*>(rhs) && !dynamic_cast<LiteralExpr*>(rhs))
@@ -595,9 +629,17 @@ bool Compiler::emitResourceStore(const std::string& typeName, Expr* rhs, llvm::V
         emitResourceBindTransfer(typeName, rhs, slot);   // moved source slot → null
     }
     llvm::Value* oldV = ctx.builder.CreateLoad(i8p, slot, "res_old");
+    if (typeName == "gl_buffer" || typeName == "gl_vao" || typeName == "process") {
+        // Self-move has already nulled its source slot. Other aliases are not owners.
+        oldV = ctx.builder.CreateSelect(ctx.builder.CreateICmpEQ(oldV, newV),
+            llvm::ConstantPointerNull::get(i8p), oldV);
+    }
     ctx.builder.CreateCall(ctx.getFunction(isChan ? "aiml_chan_release"
         : typeName == "gl_texture" ? "aiml_gl_texture_release"
         : typeName == "gl_cubemap" ? "aiml_gl_cubemap_release"
+        : typeName == "process" ? "aiml_process_release"
+        : typeName == "gl_buffer" ? "aiml_gl_buffer_delete"
+        : typeName == "gl_vao" ? "aiml_gl_vao_delete"
         : typeName == "gl_timer_query" ? "aiml_gl_timer_query_release" : "aiml_thread_handle_drop",
         ctx.builder.getVoidTy(), {i8p}), { oldV });
     ctx.builder.CreateStore(newV, slot);
@@ -622,15 +664,27 @@ void Compiler::movePtrArg(Expr* arg, const std::string& paramType, const std::st
     if (ve->name == "null") return;
     if (ve->name.find('.') != std::string::npos || ve->name.find('<') != std::string::npos) { reject(); return; }
     Symbol* s = resolveVariable(ve->name);
-    if (!s) return;
-    if (s->is_global || s->typeName.rfind("ptr<", 0) != 0) { reject(); return; }
+    // Ein Name, der sich hier NICHT aufloesen laesst, ist typischerweise ein
+    // Global aus einer importierten Datei (spec/21 §2.1: die Datei sieht nur
+    // ihren eigenen Import-Abschluss).  Frueher fiel er durch diese Pruefung
+    // und wurde stillschweigend VERSCHOBEN — das Global war danach frei.  Genau
+    // so sind zwei WASM-Abstuerze entstanden (2026-10-13/14: cosmos
+    // `<.apply, g_live_cluster` und `<.apply_agents, g_live_agents`, beide
+    // gruen uebersetzt).  Unbekannt heisst ab jetzt ABGELEHNT, nicht erlaubt:
+    // ein Besitzuebergang, den der Compiler nicht nachvollziehen kann, ist
+    // keiner, den er durchwinken darf.
+    if (!s || s->is_global || s->typeName.rfind("ptr<", 0) != 0) { reject(); return; }
     // The move takes effect when the callee is entered: called after all arguments are evaluated,
     // it empties the local's slot (its drop stays and is null-safe). A throw while evaluating a
     // later argument therefore leaves the box with the caller (spec/61 §9.3).
     llvm::Value* slot = s->ir_alloca_inst ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(s->ir_alloca_inst))
                                           : static_cast<llvm::Value*>(s->alloca_inst);
+    // Die SPEICHERFORM entscheidet, nicht das is_global-Flag: ein echtes Local
+    // hat ein Alloca, ein Global (auch ein importiertes) hat keins.  Das Flag
+    // ist bei importierten Globalen nicht gesetzt — deshalb rutschte
+    // `<.apply_agents, g_live_agents` durch und gab das Global frei.
     auto* ai = llvm::dyn_cast_or_null<llvm::AllocaInst>(slot);
-    if (!ai) { consumeLocalDrop(arg); return; }
+    if (!ai) { reject(); return; }
     ctx.builder.CreateStore(llvm::Constant::getNullValue(ai->getAllocatedType()), ai);
 }
 
@@ -673,10 +727,10 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
     int elemKind; int64_t elemSize; llvm::GlobalVariable* serNodes = nullptr; int32_t serNodesCount = 0;
     llvm::Type* elemTy;
     if (elemName == "string") {
-        elemKind = 1; elemSize = 8;
+        elemKind = 1; elemSize = ctx.ptrStride();     // spec/61 §5.7
         elemTy = i8p;
     } else if (ctx.isRefcountModel(elemName)) {
-        elemKind = 3; elemSize = 8;
+        elemKind = 3; elemSize = ctx.ptrStride();
         // ctx.classes is keyed by the BARE class; a memV3 `list<shared<T>>` has elemName
         // "shared<T>". Strip the wrapper so the element's serNodes are found — otherwise the
         // scope-drop's per-element decref runs with a null descriptor and never frees the
@@ -690,7 +744,7 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
     } else if (elemName.rfind("ptr<", 0) == 0 && elemName.back() == '>') {
         // spec/61 §5.5 (memV3): list<ptr<T>> elements are OWNING boxes (unique owner). Scope-drop
         // deep-frees each box + fields (elemKind 4) via T's serNodes — else the boxes leaked.
-        elemKind = 4; elemSize = 8;
+        elemKind = 4; elemSize = ctx.ptrStride();
         std::string boxed = elemName.substr(4, elemName.size() - 5);
         if (ctx.interfaces.count(boxed)) {
             // interface polymorphism: `list<ptr<Interface>>` elements are 16-byte fat pointers
@@ -706,7 +760,7 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
             elemKind = 6;
             elemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
             if (!elemTy) elemTy = i8p;
-            elemSize = (int64_t)ctx.module.getDataLayout().getTypeAllocSize(elemTy);
+            elemSize = (int64_t)ctx.module().getDataLayout().getTypeAllocSize(elemTy);
             serNodesCount = (int32_t)ctx.interfaces[boxed].methods.size();   // vtable free-slot index
         } else {
             auto ci = ctx.classes.find(boxed);
@@ -719,7 +773,7 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
         // its handle-rooted descriptor (aiml_ser_free_decoded → LIST_PTR/MAP_PTR/BUFFER_PTR fre →
         // decref the inner handle, recursively freeing at its rc 0).
         elemKind = 5;
-        elemSize = (int64_t)ctx.module.getDataLayout().getPointerSize();
+        elemSize = (int64_t)ctx.module().getDataLayout().getPointerSize();
         int nc = 0; serNodes = elemHandleSerNodes(elemName, nc); serNodesCount = (int32_t)nc;
         elemTy = i8p;
     } else {
@@ -727,12 +781,12 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
         if (ci != ctx.classes.end() && ci->second.hasHeapFields && ci->second.serNodesVar && ci->second.type) {
             elemKind = 2;
             serNodes = ci->second.serNodesVar; serNodesCount = ci->second.serNodesCount;
-            elemSize = (int64_t)ctx.module.getDataLayout().getTypeAllocSize(ci->second.type);
+            elemSize = (int64_t)ctx.module().getDataLayout().getTypeAllocSize(ci->second.type);
             elemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
         } else {
             elemKind = 0;
             elemTy = static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(elemName)));
-            elemSize = elemTy ? (int64_t)ctx.module.getDataLayout().getTypeAllocSize(elemTy) : 8;
+            elemSize = elemTy ? (int64_t)ctx.module().getDataLayout().getTypeAllocSize(elemTy) : 8;
         }
     }
     if (!elemTy) elemTy = i8p;
@@ -799,6 +853,7 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
     }
 
     llvm::Value* copyTempSlot = nullptr; bool copyTempOwned = false;
+    BufferLiteralExpr* literalPush = nullptr;
 
     llvm::Value* handle = nullptr;
     if (isShareVar) {
@@ -816,7 +871,6 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
     } else if (isShareAt) {
         // spec/61 §5.7: `{at:[outer,i]}` returns the inner container's HANDLE pointer (visitAtExpr,
         // memV3 nested-container branch). Bind it as an owning alias → incref (matching the outer
-    BufferLiteralExpr* literalPush = nullptr;
         // container's decref-per-element at drop). Scope-drop below balances this incref.
         IRValue* v = visitExpression(iv);
         handle = v ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v)) : nullptr;
@@ -936,23 +990,6 @@ void Compiler::emitListHandleDecl(DeclStmt* decl, bool isCascade) {
         sd.debugName = decl->varName; sd.debugType = decl->typeName;
         ctx.cleanupStack.back().push_back(sd);
     }
-}
-
-// spec/61 §5 Option B (memV3): a map<K:V> value-local becomes a refcounted HANDLE, mirroring the
-// list-handle path. Fresh init → aiml_map_handle_new + initMap; init from another map var → SHARE
-// (incref); { copy: M } → independent-spine map; scope-exit decref (kind 3, isListHandle→map).
-// spec/61 §5: key/value release classification of a map<K:V> handle (copy + drop descriptors).
-void Compiler::classifyMapKV(const std::string& kName, const std::string& vName, llvm::Type* kTy, llvm::Type* vTyRaw,
-                             int& keyKind, int64_t& keyStride, int& valKind, int64_t& valStride,
-                             llvm::GlobalVariable*& valNodes, int32_t& valNodesCount) {
-    llvm::DataLayout dl(&ctx.module);
-    keyKind = (kName == "string") ? 1 : 0;
-    keyStride = (kName == "string") ? 8 : (int64_t)dl.getTypeAllocSize(kTy);
-    valNodes = nullptr; valNodesCount = 0;
-    if (vName == "string") { valKind = 1; valStride = 8; }
-    else if (ctx.isMemV3ContainerHandle(vName)) { valKind = 4; valStride = (int64_t)dl.getPointerSize(); }
-    else if (vName.rfind("ptr<", 0) == 0 && vName.back() == '>' && ctx.interfaces.count(vName.substr(4, vName.size() - 5))) {
-        valKind = 6; valStride = (int64_t)dl.getTypeAllocSize(vTyRaw);   // fat pointer
     // spec/10 list literal of strings/models/…: the elements enter exactly like `push` (spec/61 ownership)
     if (literalPush) {
         for (auto& elem : literalPush->elements) {
@@ -963,6 +1000,23 @@ void Compiler::classifyMapKV(const std::string& kName, const std::string& vName,
         }
         literalPush->elements.clear();
     }
+}
+
+// spec/61 §5 Option B (memV3): a map<K:V> value-local becomes a refcounted HANDLE, mirroring the
+// list-handle path. Fresh init → aiml_map_handle_new + initMap; init from another map var → SHARE
+// (incref); { copy: M } → independent-spine map; scope-exit decref (kind 3, isListHandle→map).
+// spec/61 §5: key/value release classification of a map<K:V> handle (copy + drop descriptors).
+void Compiler::classifyMapKV(const std::string& kName, const std::string& vName, llvm::Type* kTy, llvm::Type* vTyRaw,
+                             int& keyKind, int64_t& keyStride, int& valKind, int64_t& valStride,
+                             llvm::GlobalVariable*& valNodes, int32_t& valNodesCount) {
+    llvm::DataLayout dl(&ctx.module());
+    keyKind = (kName == "string") ? 1 : 0;
+    keyStride = (kName == "string") ? 8 : (int64_t)dl.getTypeAllocSize(kTy);
+    valNodes = nullptr; valNodesCount = 0;
+    if (vName == "string") { valKind = 1; valStride = 8; }
+    else if (ctx.isMemV3ContainerHandle(vName)) { valKind = 4; valStride = (int64_t)dl.getPointerSize(); }
+    else if (vName.rfind("ptr<", 0) == 0 && vName.back() == '>' && ctx.interfaces.count(vName.substr(4, vName.size() - 5))) {
+        valKind = 6; valStride = (int64_t)dl.getTypeAllocSize(vTyRaw);   // fat pointer
         valNodesCount = (int32_t)ctx.interfaces[vName.substr(4, vName.size() - 5)].methods.size();
     }
     else if (vName.rfind("ptr<", 0) == 0 && vName.back() == '>' && ctx.classes.count(vName.substr(4, vName.size() - 5))
@@ -1042,7 +1096,7 @@ void Compiler::emitMapHandleDecl(DeclStmt* decl) {
         : static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(ctx.ir_gen->resolveType(vName)));
     if (!kTy) kTy = i32Ty;
     if (!vTyRaw) vTyRaw = i32Ty;
-    llvm::DataLayout dl(&ctx.module);
+    llvm::DataLayout dl(&ctx.module());
 
     int keyKind; int64_t keyStride; int valKind; int64_t valStride;
     llvm::GlobalVariable* valNodes = nullptr; int32_t valNodesCount = 0;
@@ -1360,7 +1414,7 @@ static bool modelIsMoveOnly(CompilerContext& ctx, const std::string& className,
     for (auto& mkv : it->second.members) {
         const std::string& t = mkv.second.typeName;
         if (t.rfind("ptr<", 0) == 0) return true;       // unique owning box
-        if (t == "tensor" || t == "thread_handle" || t == "gl_texture" || t == "gl_cubemap" || t == "gl_timer_query") return true;   // Class-4 unique resource
+        if (t == "tensor" || t == "thread_handle" || t == "gl_texture" || t == "gl_cubemap" || t == "gl_timer_query" || t == "gl_buffer" || t == "gl_vao" || t == "process") return true;   // Class-4 unique resource
         // A bare nested value-model field: recurse (a ptr<>/ref<>/shared<> wrapper is not a value
         // nesting — ptr is caught above, ref/shared are borrow/co-own, neither makes the parent
         // move-only through a value copy of this slot).
@@ -1527,7 +1581,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             // No initializer: allocate a fresh, default-initialised model (refcount 1).
             uint64_t allocSize = (ci != ctx.classes.end() && ci->second.padded_size > 0)
                 ? (uint64_t)ci->second.padded_size
-                : ctx.module.getDataLayout().getTypeAllocSize(ci->second.type);
+                : ctx.module().getDataLayout().getTypeAllocSize(ci->second.type);
             llvm::Function* allocFn = ctx.getFunction("aiml_model_alloc", i8p, { ctx.getSizeType() });
             objPtr = ctx.builder.CreateCall(allocFn, { ctx.getSizeConst(allocSize) }, "refmodel_alloc");
             initClassContainerMembers(objPtr, bareModelClass);
@@ -1574,7 +1628,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 uint64_t allocSize = (ci != ctx.classes.end() && ci->second.padded_size > 0)
                     ? (uint64_t)ci->second.padded_size
                     : (ci != ctx.classes.end() && ci->second.type
-                        ? ctx.module.getDataLayout().getTypeAllocSize(ci->second.type) : 0);
+                        ? ctx.module().getDataLayout().getTypeAllocSize(ci->second.type) : 0);
                 llvm::Function* adoptFn = ctx.getFunction("aiml_model_adopt", i8p, { i8p, ctx.getSizeType() });
                 objPtr = ctx.builder.CreateCall(adoptFn, { objPtr, ctx.getSizeConst(allocSize) }, "model_adopt");
                 // The source ptr<T> is moved-out: null its slot + drop its scope-cleanup so the
@@ -1587,7 +1641,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 // refcounted MODL shell so this local owns a decref-safe, independent reference.
                 uint64_t allocSize = (ci->second.padded_size > 0)
                     ? (uint64_t)ci->second.padded_size
-                    : ctx.module.getDataLayout().getTypeAllocSize(ci->second.type);
+                    : ctx.module().getDataLayout().getTypeAllocSize(ci->second.type);
                 llvm::Function* allocFn = ctx.getFunction("aiml_model_alloc", i8p, { ctx.getSizeType() });
                 llvm::Value* newObj = ctx.builder.CreateCall(allocFn, { ctx.getSizeConst(allocSize) }, "kv_model_alloc");
                 llvm::Type* ptrT = llvm::PointerType::get(ctx.context, 0);
@@ -1888,6 +1942,17 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 }
             }
         }
+        // spec/61 Class 4: buffer/VAO locals own their slot, including moved-in
+        // values and initially-null slots filled later. Parameters are borrowed.
+        if ((decl->typeName == "gl_buffer" || decl->typeName == "gl_vao" || decl->typeName == "process")
+            && decl->lifetime != "persistent" && ctx.lifetimeDropsEnabled
+            && !ctx.cleanupStack.empty() && !sym.is_global && !decl->is_extern) {
+            CompilerContext::ScopeDrop sd;
+            sd.addr = unwrappedAlloca;
+            sd.kind = decl->typeName == "gl_buffer" ? 20 : decl->typeName == "gl_vao" ? 21 : 22;
+            sd.debugName = decl->varName; sd.debugType = decl->typeName;
+            ctx.cleanupStack.back().push_back(sd);
+        }
         // spec/43_5 §5 / spec/61 Class 4: a gl_cubemap from gl.create_cubemap or a producer call
         // is released at owner drop (kind 18).
         if ((decl->typeName == "gl_cubemap" || decl->typeName == "gl_timer_query") && decl->lifetime != "persistent" && ctx.lifetimeDropsEnabled
@@ -2086,7 +2151,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 auto ci = ctx.classes.find(bareElem);
                 sd.elemKind = 3;
                 if (ci != ctx.classes.end()) { sd.serNodes = ci->second.serNodesVar; sd.serNodesCount = ci->second.serNodesCount; }
-                sd.elemSize = 8;                       // pointer stride
+                sd.elemSize = ctx.ptrStride();         // pointer stride (spec/61 §5.7)
             } else {
                 // list<Model> whose element type carries heap fields → free each element's
                 // heap (elemKind 2) using the class's serNodes + struct stride. Otherwise a
@@ -2097,7 +2162,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                     sd.elemKind = 2;
                     sd.serNodes = ci->second.serNodesVar;
                     sd.serNodesCount = ci->second.serNodesCount;
-                    sd.elemSize = (int64_t)ctx.module.getDataLayout().getTypeAllocSize(ci->second.type);
+                    sd.elemSize = (int64_t)ctx.module().getDataLayout().getTypeAllocSize(ci->second.type);
                 } else {
                     sd.elemKind = 0;                   // scalar/POD: free the buffer only
                 }
@@ -2366,7 +2431,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
             // buffer<u8>: handler returns a fresh alloca → memcpy struct content into target alloca
             if (decl->typeName.find("buffer<") == 0) {
                 llvm::Type* bufTy = ctx.getLLVMType("buffer");
-                uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(bufTy);
+                uint64_t sz = ctx.module().getDataLayout().getTypeAllocSize(bufTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                 llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
                 ctx.builder.CreateCall(mcf, {
@@ -2385,7 +2450,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                 } else if (rawInitVal->getType()->isPointerTy()) {
                     // Builtin handler returns alloca ptr → memcpy struct contents
                     llvm::StructType* listStructTy = ListImpl::getListStructType(ctx);
-                    uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(listStructTy);
+                    uint64_t sz = ctx.module().getDataLayout().getTypeAllocSize(listStructTy);
                     llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                     llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
                     ctx.builder.CreateCall(mcf, {
@@ -2536,7 +2601,7 @@ void Compiler::visitDeclStmt(DeclStmt* decl) {
                             ctx.cleanupStack.back().push_back(sd);
                         }
                     } else {
-                        uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(declTy);
+                        uint64_t sz = ctx.module().getDataLayout().getTypeAllocSize(declTy);
                         llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
                         ctx.builder.CreateCall(mcf, {
                             unwrappedAlloca,
@@ -2782,7 +2847,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
     if (ctx.memV3 && ctx.lifetimeDropsEnabled && setStmt->value && setStmt->target.find('.') == std::string::npos
         && setStmt->target.find('<') == std::string::npos) {
         Symbol* rs = resolveVariable(setStmt->target);
-        if (rs && !rs->is_byref_arg && (rs->typeName == "thread_handle"
+        if (rs && !rs->is_byref_arg && (rs->typeName == "thread_handle" || rs->typeName == "process"
                    || (rs->typeName.rfind("chan<", 0) == 0 && rs->typeName.back() == '>'))) {
             llvm::Value* slot = rs->ir_alloca_inst ? static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rs->ir_alloca_inst))
                                                    : static_cast<llvm::Value*>(rs->alloca_inst);
@@ -3397,7 +3462,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
             if (rawVal->getType()->isPointerTy()) {
                 // Builtin handler / alloca ptr → memcpy struct contents
                 llvm::StructType* listStructTy = ListImpl::getListStructType(ctx);
-                uint64_t structSize = ctx.module.getDataLayout().getTypeAllocSize(listStructTy);
+                uint64_t structSize = ctx.module().getDataLayout().getTypeAllocSize(listStructTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                 llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
                 ctx.builder.CreateCall(memcpyFunc, {
@@ -3414,7 +3479,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         if (sym->typeName.find("buffer<") == 0) {
             llvm::Type* bufTy = ctx.getLLVMType("buffer");
             if (bufTy) {
-                uint64_t structSize = ctx.module.getDataLayout().getTypeAllocSize(bufTy);
+                uint64_t structSize = ctx.module().getDataLayout().getTypeAllocSize(bufTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                 llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
                 ctx.builder.CreateCall(memcpyFunc, {
@@ -3428,7 +3493,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         if (sym->typeName.find("map<") == 0) {
             llvm::Type* mapTy = ctx.getLLVMType(sym->typeName);
             if (mapTy) {
-                uint64_t structSize = ctx.module.getDataLayout().getTypeAllocSize(mapTy);
+                uint64_t structSize = ctx.module().getDataLayout().getTypeAllocSize(mapTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                 llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
                 ctx.builder.CreateCall(memcpyFunc, {
@@ -3451,7 +3516,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         if (classIt != ctx.classes.end() && !classIt->second.isBuiltin && classIt->second.type
             && !ctx.isRefcountModel(sym->typeName)) {
             llvm::StructType* structTy = classIt->second.type;
-            uint64_t structSize = ctx.module.getDataLayout().getTypeAllocSize(structTy);
+            uint64_t structSize = ctx.module().getDataLayout().getTypeAllocSize(structTy);
             llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
             llvm::Value* rawVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
             // Only act when the value is a pointer (i8* from deserializer), not a struct value
@@ -3638,6 +3703,15 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 return;
             }
         }
+        {
+            // a struct-returning call yields its temp's address: a math-value local (mat4/vec/quat)
+            // copies the value, not the address (same as the member store, f5ef53b)
+            static const std::set<std::string> mathLocals = {"vec2", "vec3", "vec4", "quat", "mat4", "ivec2", "ivec3"};
+            llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+            llvm::Type* lty = ctx.getLLVMType(sym->typeName);
+            if (sv && lty && lty->isStructTy() && sv->getType()->isPointerTy() && mathLocals.count(sym->typeName))
+                val = ctx.ir_gen->wrap(ctx.builder.CreateLoad(lty, sv, "set_struct_val"));
+        }
         ctx.ir_gen->createStore(val, baseAlloca);
     } else {
         std::string className = sym->typeName;
@@ -3666,15 +3740,6 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 } else {
                     LOG_ERROR(ctx.fmtLoc() + "Invalid list index for set: " + propName);
                     return;
-        {
-            // a struct-returning call yields its temp's address: a math-value local (mat4/vec/quat)
-            // copies the value, not the address (same as the member store, f5ef53b)
-            static const std::set<std::string> mathLocals = {"vec2", "vec3", "vec4", "quat", "mat4", "ivec2", "ivec3"};
-            llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
-            llvm::Type* lty = ctx.getLLVMType(sym->typeName);
-            if (sv && lty && lty->isStructTy() && sv->getType()->isPointerTy() && mathLocals.count(sym->typeName))
-                val = ctx.ir_gen->wrap(ctx.builder.CreateLoad(lty, sv, "set_struct_val"));
-        }
                 }
             }
             
@@ -3923,7 +3988,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                         // value was already released by the centralized member-field free above, so
                         // this memcpy writes into a zeroed field; the moved-in source's own scope-drop
                         // was consumed by consumeLocalDrop → no double-free, no leak.
-                        uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(fieldTy);
+                        uint64_t sz = ctx.module().getDataLayout().getTypeAllocSize(fieldTy);
                         llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                         llvm::Function* mcf = ctx.getFunction("memcpy", ptrTy,
                             {ptrTy, ptrTy, ctx.getSizeType()});
@@ -4003,7 +4068,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                             // fields into the member (old field released first), free the shell
                             if (auto* dce = dynamic_cast<CallExpr*>(setStmt->value.get()))
                                 if (dce->functionName == "sys.deserialize" && cIt->second.serNodesVar) {
-                                    uint64_t dsz = ctx.module.getDataLayout().getTypeAllocSize(structTy);
+                                    uint64_t dsz = ctx.module().getDataLayout().getTypeAllocSize(structTy);
                                     ctx.builder.CreateCall(ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
                                         {ptrTy, ptrTy, ctx.builder.getInt32Ty()}),
                                         { dstPtr, cIt->second.serNodesVar, ctx.builder.getInt32(cIt->second.serNodesCount) });
@@ -4031,7 +4096,7 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                                 ctx.kvGetCopy = false;
                                 return;
                             }
-                            uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(structTy);
+                            uint64_t sz = ctx.module().getDataLayout().getTypeAllocSize(structTy);
                             // spec/61 §5.5/§4.4.5: this is the MOVE path (an owned/producer struct value,
                             // not a borrowed/view/param source — those took deep_copy_replace above). Before
                             // overwriting the field, RELEASE its previous heap, else a re-assigned value-model
@@ -4154,6 +4219,16 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                             ctx.builder.getInt32(fci->second.serNodesCount) });
                     }
                 }
+                // spec/42: a path field holds the interned (immortal) path, like a path local — never
+                // the borrowed string it was assigned from (that string dies with its owner)
+                if (finalTypeName == "path") {
+                    llvm::Value* pv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
+                    if (pv && pv->getType()->isPointerTy()) {
+                        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+                        llvm::Function* internFn = ctx.getFunction("aiml_path_intern", i8p, {i8p});
+                        val = ctx.ir_gen->wrap(ctx.builder.CreateCall(internFn, {pv}, "fld_path_interned"));
+                    }
+                }
                 // spec/13 §6: numeric value conversion into the field's type (never raw bits)
                 {
                     llvm::Value* sv3 = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
@@ -4182,16 +4257,6 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
         }
 
         // Builtin property setter for handle types (e.g. resp.status, resp.body)
-                // spec/42: a path field holds the interned (immortal) path, like a path local — never
-                // the borrowed string it was assigned from (that string dies with its owner)
-                if (finalTypeName == "path") {
-                    llvm::Value* pv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
-                    if (pv && pv->getType()->isPointerTy()) {
-                        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-                        llvm::Function* internFn = ctx.getFunction("aiml_path_intern", i8p, {i8p});
-                        val = ctx.ir_gen->wrap(ctx.builder.CreateCall(internFn, {pv}, "fld_path_interned"));
-                    }
-                }
         if (!className.empty() && ctx.classes.count(className)) {
             auto& classInfo = ctx.classes[className];
             if (classInfo.isBuiltin && classInfo.builtinSetters.count(propName)) {
@@ -4221,6 +4286,20 @@ void Compiler::visitExprStmt(ExprStmt* exprStmt) {
     ctx.popResultDiscarded = popDiscard;
     IRValue* dv = visitExpression(exprStmt->expr.get());
     ctx.popResultDiscarded = savedPop;
+    auto resource = dynamic_cast<CallExpr*>(exprStmt->expr.get()) ? glOperandType(exprStmt->expr.get()) : "";
+    if (auto* pc = dynamic_cast<CallExpr*>(exprStmt->expr.get()))
+        if (pc->functionName == "sys.exe" || pc->functionName == "sys.process_attach") resource = "process";
+    if (dv && ctx.lifetimeDropsEnabled && resource == "process") {   // spec/23 §5.2: discarded handle
+        ctx.builder.CreateCall(ctx.getFunction("aiml_process_release", ctx.builder.getVoidTy(), {ctx.builder.getPtrTy()}),
+            {static_cast<llvm::Value*>(ctx.ir_gen->unwrap(dv))});
+        return;
+    }
+    if (dv && ctx.lifetimeDropsEnabled && (resource == "gl_buffer" || resource == "gl_vao")) {
+        auto* raw = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(dv));
+        ctx.builder.CreateCall(ctx.getFunction(resource == "gl_buffer" ? "aiml_gl_buffer_delete" : "aiml_gl_vao_delete",
+            ctx.builder.getVoidTy(), {ctx.builder.getPtrTy()}), {raw});
+        return;
+    }
     std::string ct = ownedContainerCallType(exprStmt->expr.get());   // discarded owning container ref
     if (dv && !ct.empty()) releaseContainerHandle(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(dv)), ct);
     // spec/61 §9.2: a discarded producer value-model result is owned by the caller → free its heap.
@@ -4460,6 +4539,8 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
     // call result cannot alias another local's heap.
     bool retResourceHandle = (ctx.currentFunctionReturnType == "gl_texture" || ctx.currentFunctionReturnType == "gl_cubemap"
                               || ctx.currentFunctionReturnType == "gl_timer_query"
+                              || ctx.currentFunctionReturnType == "gl_buffer" || ctx.currentFunctionReturnType == "gl_vao"
+                              || ctx.currentFunctionReturnType == "process"
                               || ctx.currentFunctionReturnType == "gltf_image")
         && retStmt->value && (dynamic_cast<CallExpr*>(retStmt->value.get())
             || (dynamic_cast<VariableExpr*>(retStmt->value.get())
@@ -4497,7 +4578,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                     emitScopeDrop(ctx, *it);
                     continue;
                 }
-                if (it->kind == 10 || it->kind == 11 || it->kind == 13 || it->kind == 14 || it->kind == 15 || it->kind == 16 || it->kind == 17 || it->kind == 18 || it->kind == 19) { emitScopeDrop(ctx, *it); continue; }   // null-safe single release
+                if (it->kind == 10 || it->kind == 11 || it->kind == 13 || it->kind == 14 || it->kind == 15 || it->kind == 16 || it->kind == 17 || it->kind == 18 || it->kind == 19 || it->kind == 20 || it->kind == 21 || it->kind == 22) { emitScopeDrop(ctx, *it); continue; }   // null-safe single release
                 // spec/61 §8: a parameter's own call reference (the returned container slot is moved above)
                 if ((it->paramRef || it->ownedParamBox) && !(retContainerSlot && it->addr == retContainerSlot)) { emitScopeDrop(ctx, *it); continue; }
                 // spec/61 §5 (memV3): the returned container handle is MOVED to the caller → skip its
@@ -4540,11 +4621,11 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
                 if (!raw->getType()->isPointerTy() ||
                     ctx.currentFunctionReturnType != "string") continue;
                 auto* p8 = llvm::PointerType::get(ctx.context, 0);
-                llvm::Function* fn = ctx.module.getFunction("aiml_vocab_lookup");
+                llvm::Function* fn = ctx.module().getFunction("aiml_vocab_lookup");
                 if (!fn) fn = llvm::Function::Create(
                     llvm::FunctionType::get(p8, {p8}, false),
                     llvm::Function::ExternalLinkage, "aiml_vocab_lookup",
-                    ctx.module);
+                    ctx.module());
                 raw = ctx.builder.CreateCall(fn, {raw}, "vocab_wrapped");
             }
         }
@@ -4644,7 +4725,7 @@ void Compiler::visitRetStmt(RetStmt* retStmt) {
             // so is an owned gltf_image handle block (kind 16): no returned value can alias it
             for (auto fit = ctx.cleanupStack.rbegin(); fit != ctx.cleanupStack.rend(); ++fit)
                 for (auto it = fit->rbegin(); it != fit->rend(); ++it)
-                    if (it->paramRef || it->kind == 16 || it->kind == 17 || it->kind == 18 || it->kind == 19) emitScopeDrop(ctx, *it);
+                    if (it->paramRef || it->kind == 16 || it->kind == 17 || it->kind == 18 || it->kind == 19 || it->kind == 20 || it->kind == 21 || it->kind == 22) emitScopeDrop(ctx, *it);
         }
         if (val) {
             // Struct-by-value return (list/buffer/map): visitExpression often
@@ -4960,7 +5041,7 @@ static void emitSymbolValueTrace(CompilerContext& ctx, const char* phase, const 
     if (!addr) return;
     llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);
     llvm::FunctionType* pfTy = llvm::FunctionType::get(ctx.builder.getInt32Ty(), {i8p}, /*varArg=*/true);
-    llvm::FunctionCallee pf = ctx.module.getOrInsertFunction("printf", pfTy);
+    llvm::FunctionCallee pf = ctx.module().getOrInsertFunction("printf", pfTy);
     std::string site = ctx.currentFunctionName + " | " + ctx.fmtLoc();
     auto declaration = ctx.traceDeclarationSites.find(addr);
     if (declaration != ctx.traceDeclarationSites.end()) site += "decl=" + declaration->second;
@@ -5215,6 +5296,16 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
         llvm::Value* img = ctx.builder.CreateLoad(i8p, it.addr, "drop_gltf_image");
         ctx.builder.CreateCall(ctx.getFunction("aiml_gltf_image_release", ctx.builder.getVoidTy(), {i8p}), { img });
         ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
+    } else if (it.kind == 22) {
+        // spec/23 §5.2 / spec/61 Class 4: owned process handle — release (pipes, handle); null the slot.
+        llvm::Value* proc = ctx.builder.CreateLoad(i8p, it.addr, "drop_process");
+        ctx.builder.CreateCall(ctx.getFunction("aiml_process_release", ctx.builder.getVoidTy(), {i8p}), { proc });
+        ctx.builder.CreateStore(llvm::ConstantPointerNull::get(static_cast<llvm::PointerType*>(i8p)), it.addr);
+    } else if (it.kind == 20 || it.kind == 21) {
+        llvm::Value* handle = ctx.builder.CreateLoad(i8p, it.addr, "drop_gl_resource");
+        ctx.builder.CreateCall(ctx.getFunction(it.kind == 20 ? "aiml_gl_buffer_delete" : "aiml_gl_vao_delete",
+            ctx.builder.getVoidTy(), {i8p}), {handle});
+        ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ctx.builder.getPtrTy()), it.addr);
     } else if (it.kind == 19) {
         // spec/43_5 §9: owned gl_timer_query — release (ends an active query); null the slot.
         llvm::Value* query = ctx.builder.CreateLoad(i8p, it.addr, "drop_gl_timer_query");
@@ -5250,13 +5341,13 @@ static void emitScopeDrop(CompilerContext& ctx, const CompilerContext::ScopeDrop
 }
 // spec/61 §9.3: drops released on every exit regardless of the ownership plan (order-independent).
 static bool unconditionalDrop(const CompilerContext::ScopeDrop& d) {
-    return d.paramRef || d.ownedParamBox || d.kind == 7 || d.kind == 13 || d.kind == 14 || d.kind == 15 || d.kind == 16 || d.kind == 17 || d.kind == 18 || d.kind == 19 || d.kind == 10 || d.kind == 11 || d.kind == 12
+    return d.paramRef || d.ownedParamBox || d.kind == 7 || d.kind == 13 || d.kind == 14 || d.kind == 15 || d.kind == 16 || d.kind == 17 || d.kind == 18 || d.kind == 19 || d.kind == 20 || d.kind == 21 || d.kind == 22 || d.kind == 10 || d.kind == 11 || d.kind == 12
         || (d.isListHandle && (d.kind == 2 || d.kind == 3 || d.kind == 8));
 }
 
 static bool unwindCleanupEnabled(CompilerContext& ctx) {
     static const bool envOff = [] { const char* e = std::getenv("AIML_UNWIND"); return e && std::string(e) == "0"; }();
-    return !envOff && !llvm::Triple(ctx.module.getTargetTriple()).isWasm();
+    return !envOff && !llvm::Triple(ctx.module().getTargetTriple()).isWasm();
 }
 
 // spec/61 §9.3: unwind destination for a call/throw at the current point — a landing pad that
@@ -5539,10 +5630,10 @@ llvm::Function* Compiler::excFreeThunk(const std::string& cls) {
     auto ci = ctx.classes.find(cls);
     if (cls.empty() || ci == ctx.classes.end() || !ci->second.type) return nullptr;
     std::string name = "__aiml_exc_free_" + cls;
-    if (llvm::Function* f = ctx.module.getFunction(name)) return f;
+    if (llvm::Function* f = ctx.module().getFunction(name)) return f;
     llvm::PointerType* i8p = llvm::PointerType::getUnqual(ctx.context);
     llvm::Function* f = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p}, false),
-        llvm::Function::InternalLinkage, name, ctx.module);
+        llvm::Function::InternalLinkage, name, ctx.module());
     llvm::IRBuilderBase::InsertPointGuard guard(ctx.builder);
     ctx.builder.SetInsertPoint(llvm::BasicBlock::Create(ctx.context, "entry", f));
     llvm::Value* obj = f->getArg(0);
@@ -5735,7 +5826,7 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
             if (elemTy->isPointerTy() && storeVal->getType()->isPointerTy()) {
                 storeVal = ctx.builder.CreatePointerCast(storeVal, elemTy, "idx_pcast");
             } else if (elemTy->isStructTy() && storeVal->getType()->isPointerTy()) {
-                uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(elemTy);
+                uint64_t sz = ctx.module().getDataLayout().getTypeAllocSize(elemTy);
                 llvm::Value* tmp = ctx.createEntryAlloca(elemTy);
                 llvm::Type* ptrTy = llvm::PointerType::get(ctx.context, 0);
                 llvm::Function* memcpyFunc = ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
@@ -6061,7 +6152,7 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
                 ctx.builder.CreateCall(ctx.getFunction("aiml_ser_free_decoded", ctx.builder.getVoidTy(),
                     {ptrTy, ptrTy, ctx.builder.getInt32Ty()}),
                     { elemPtr, ciElem->second.serNodesVar, ctx.builder.getInt32(ciElem->second.serNodesCount) });
-                uint64_t fsz = ctx.module.getDataLayout().getTypeAllocSize(elemTy);
+                uint64_t fsz = ctx.module().getDataLayout().getTypeAllocSize(elemTy);
                 ctx.builder.CreateCall(ctx.getFunction("memcpy", ptrTy, {ptrTy, ptrTy, ctx.getSizeType()}),
                     { elemPtr, srcAddr, ctx.getSizeConst(fsz) });
                 return;
@@ -6081,7 +6172,7 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
                 // very slot being written. So deep-copy the source into an INDEPENDENT temp FIRST
                 // (while the source is still valid), THEN free the old slot, THEN move the temp in.
                 // Freeing the slot before the copy would read freed memory in enc() → SIGSEGV.
-                uint64_t esz = ctx.module.getDataLayout().getTypeAllocSize(elemTy);
+                uint64_t esz = ctx.module().getDataLayout().getTypeAllocSize(elemTy);
                 llvm::AllocaInst* indep = ctx.createEntryAlloca(elemTy, "idx_indep");
                 ctx.builder.CreateStore(llvm::ConstantAggregateZero::get(elemTy), indep);
                 llvm::Function* dc = ctx.getFunction("aiml_ser_deep_copy",
@@ -6097,7 +6188,7 @@ void Compiler::visitIdxStmt(IdxStmt* idx) {
                 return;
             }
             if (storeVal->getType()->isPointerTy()) {
-                uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(elemTy);
+                uint64_t sz = ctx.module().getDataLayout().getTypeAllocSize(elemTy);
                 llvm::Function* memcpyFunc = ctx.getFunction("memcpy",
                     ptrTy, {ptrTy, ptrTy, ctx.getSizeType()});
                 ctx.builder.CreateCall(memcpyFunc,
@@ -6238,7 +6329,7 @@ void Compiler::visitStoreStmt(StoreStmt* st) {
                     ctx.builder.getVoidTy(), {i8p, i8p, ctx.builder.getInt32Ty()});
                 ctx.builder.CreateCall(freeFn, { cur, vci->second.serNodesVar,
                                                  ctx.builder.getInt32(vci->second.serNodesCount) });
-                uint64_t vsz = ctx.module.getDataLayout().getTypeAllocSize(vci->second.type);
+                uint64_t vsz = ctx.module().getDataLayout().getTypeAllocSize(vci->second.type);
                 ctx.builder.CreateMemCpy(cur, llvm::MaybeAlign(8), srcAddr, llvm::MaybeAlign(8),
                                          ctx.builder.getInt64(vsz));
                 llvm::Function* rtn = ctx.getFunction("aiml_ser_retain",

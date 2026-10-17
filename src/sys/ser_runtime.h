@@ -36,7 +36,9 @@ typedef enum {
                              //   subtree; elem_size=sizeof(inner struct).
     AIML_TD_LIST_PTR   = 12, // spec/61 §5 Option B (memV3 only): a list<T> FIELD stored as a
                              //   POINTER to a refcounted handle ([rc][pad][{size,cap,data}]).
-                             //   param1=the inner AIML_TD_LIST node index. The slot is 8 bytes.
+                             //   param1=the inner AIML_TD_LIST node index. The slot is one
+                             //   TARGET pointer (8 on 64-bit, 4 on wasm32) — the runtime reads it
+                             //   with sizeof(void*) and ignores elem_size for this kind.
                              //   Emitted only under memV3 → OFF/deployed descriptors never carry it.
     AIML_TD_MAP_PTR    = 13, // spec/61 §5 Option B (memV3 only): a map<K:V> FIELD stored as a
                              //   POINTER to a refcounted handle ([rc][pad][{size,cap,occ,keys,vals}]).
@@ -65,6 +67,10 @@ typedef enum {
                              //   aiml_gl_texture_release, move-only (a copy leaves it null).
     AIML_TD_GLCUBE     = 21, // spec/43_5 §5 Class 4: a gl_cubemap pointer slot, like AIML_TD_GLTEX.
     AIML_TD_GLQUERY    = 22, // spec/43_5 §9 Class 4: a gl_timer_query pointer slot, like AIML_TD_GLTEX.
+    AIML_TD_GLBUFFER   = 23, // spec/61 Class 4: unique GL buffer.
+    AIML_TD_GLVAO      = 24, // spec/61 Class 4: unique vertex array.
+    AIML_TD_PROCESS    = 25, // spec/23 §5.2 Class 4: a process handle slot. Leaf; free =
+                             //   aiml_process_release, move-only (a copy leaves it null).
 } AimlTDKind;
 
 // spec/61 Class 5 / Class 4 resource handles (ser_runtime.cpp).
@@ -74,6 +80,9 @@ void aiml_thread_handle_drop(void* h);
 void aiml_gl_texture_release(void* tex);
 void aiml_gl_cubemap_release(void* cube);
 void aiml_gl_timer_query_release(void* query);
+void aiml_gl_buffer_delete(void* buffer);
+void aiml_gl_vao_delete(void* vao);
+void aiml_process_release(void* handle);
 
 // Each node is 24 bytes.  The whole descriptor for a type is an array of these.
 typedef struct {

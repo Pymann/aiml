@@ -18,11 +18,11 @@ public:
         llvm::Value* path = resolveValue(ctx, args[1]);
         llvm::Value* mode = resolveValue(ctx, args[2]);
 
-        llvm::Function* fopenFunc = ctx.module.getFunction("fopen");
+        llvm::Function* fopenFunc = ctx.module().getFunction("fopen");
         if (!fopenFunc) {
             std::vector<llvm::Type*> fopenArgs = { ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo() };
             llvm::FunctionType* fopenType = llvm::FunctionType::get(getFilePtrTy(ctx), fopenArgs, false);
-            fopenFunc = llvm::Function::Create(fopenType, llvm::Function::ExternalLinkage, "fopen", ctx.module);
+            fopenFunc = llvm::Function::Create(fopenType, llvm::Function::ExternalLinkage, "fopen", ctx.module());
         }
 
         return ctx.builder.CreateCall(fopenFunc, {path, mode});
@@ -37,11 +37,11 @@ public:
 
         llvm::Value* handle = resolveValue(ctx, args[1]);
 
-        llvm::Function* fcloseFunc = ctx.module.getFunction("fclose");
+        llvm::Function* fcloseFunc = ctx.module().getFunction("fclose");
         if (!fcloseFunc) {
             std::vector<llvm::Type*> fcloseArgs = { getFilePtrTy(ctx) };
             llvm::FunctionType* fcloseType = llvm::FunctionType::get(ctx.builder.getInt32Ty(), fcloseArgs, false);
-            fcloseFunc = llvm::Function::Create(fcloseType, llvm::Function::ExternalLinkage, "fclose", ctx.module);
+            fcloseFunc = llvm::Function::Create(fcloseType, llvm::Function::ExternalLinkage, "fclose", ctx.module());
         }
 
         return ctx.builder.CreateCall(fcloseFunc, {handle});
@@ -69,11 +69,11 @@ public:
         }
 
         if (isSpecialHandle) {
-             llvm::Function* fdopenFunc = ctx.module.getFunction("fdopen");
+             llvm::Function* fdopenFunc = ctx.module().getFunction("fdopen");
              if (!fdopenFunc) {
                  std::vector<llvm::Type*> fdArgs = { ctx.builder.getInt32Ty(), ctx.builder.getInt8Ty()->getPointerTo() };
                  llvm::FunctionType* fdType = llvm::FunctionType::get(getFilePtrTy(ctx), fdArgs, false);
-                 fdopenFunc = llvm::Function::Create(fdType, llvm::Function::ExternalLinkage, "fdopen", ctx.module);
+                 fdopenFunc = llvm::Function::Create(fdType, llvm::Function::ExternalLinkage, "fdopen", ctx.module());
              }
              llvm::Value* mode = ctx.builder.CreateGlobalStringPtr("w");
              handle = ctx.builder.CreateCall(fdopenFunc, {ctx.builder.getInt32(fd), mode});
@@ -84,16 +84,16 @@ public:
         llvm::Value* text = resolveValue(ctx, args[2]);
 
         // Calculate strlen of text
-        llvm::Function* strlenFunc = ctx.module.getFunction("strlen");
+        llvm::Function* strlenFunc = ctx.module().getFunction("strlen");
         if (!strlenFunc) {
             std::vector<llvm::Type*> strArgs = { ctx.builder.getInt8Ty()->getPointerTo() };
             llvm::FunctionType* strType = llvm::FunctionType::get(ctx.builder.getInt64Ty(), strArgs, false);
-            strlenFunc = llvm::Function::Create(strType, llvm::Function::ExternalLinkage, "strlen", ctx.module);
+            strlenFunc = llvm::Function::Create(strType, llvm::Function::ExternalLinkage, "strlen", ctx.module());
         }
         llvm::Value* len = ctx.builder.CreateCall(strlenFunc, {text});
 
         // fwrite(ptr, size, nmemb, stream)
-        llvm::Function* fwriteFunc = ctx.module.getFunction("fwrite");
+        llvm::Function* fwriteFunc = ctx.module().getFunction("fwrite");
         if (!fwriteFunc) {
             std::vector<llvm::Type*> fwArgs = { 
                 ctx.builder.getInt8Ty()->getPointerTo(), 
@@ -102,7 +102,7 @@ public:
                 getFilePtrTy(ctx)
             };
             llvm::FunctionType* fwType = llvm::FunctionType::get(ctx.builder.getInt64Ty(), fwArgs, false);
-            fwriteFunc = llvm::Function::Create(fwType, llvm::Function::ExternalLinkage, "fwrite", ctx.module);
+            fwriteFunc = llvm::Function::Create(fwType, llvm::Function::ExternalLinkage, "fwrite", ctx.module());
         }
 
         return ctx.builder.CreateCall(fwriteFunc, {text, ctx.builder.getInt64(1), len, handle});
@@ -125,11 +125,11 @@ public:
         }
 
         if (isSpecialHandle) {
-             llvm::Function* fdopenFunc = ctx.module.getFunction("fdopen");
+             llvm::Function* fdopenFunc = ctx.module().getFunction("fdopen");
              if (!fdopenFunc) {
                  std::vector<llvm::Type*> fdArgs = { ctx.builder.getInt32Ty(), ctx.builder.getInt8Ty()->getPointerTo() };
                  llvm::FunctionType* fdType = llvm::FunctionType::get(getFilePtrTy(ctx), fdArgs, false);
-                 fdopenFunc = llvm::Function::Create(fdType, llvm::Function::ExternalLinkage, "fdopen", ctx.module);
+                 fdopenFunc = llvm::Function::Create(fdType, llvm::Function::ExternalLinkage, "fdopen", ctx.module());
              }
              llvm::Value* mode = ctx.builder.CreateGlobalStringPtr("r");
              handle = ctx.builder.CreateCall(fdopenFunc, {ctx.builder.getInt32(fd), mode});
@@ -140,17 +140,17 @@ public:
         llvm::Value* size = resolveValue(ctx, args[2]);
         
         // Allocate buffer: malloc(size + 1)
-        llvm::Function* mallocFunc = ctx.module.getFunction("malloc");
+        llvm::Function* mallocFunc = ctx.module().getFunction("malloc");
         if (!mallocFunc) {
             llvm::FunctionType* mallocType = llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt64Ty()}, false);
-            mallocFunc = llvm::Function::Create(mallocType, llvm::Function::ExternalLinkage, "malloc", ctx.module);
+            mallocFunc = llvm::Function::Create(mallocType, llvm::Function::ExternalLinkage, "malloc", ctx.module());
         }
         
         llvm::Value* sizePlus1 = ctx.builder.CreateAdd(size, ctx.builder.getInt64(1));
         llvm::Value* buffer = ctx.builder.CreateCall(mallocFunc, {sizePlus1});
 
         // fread(buffer, 1, size, handle)
-         llvm::Function* freadFunc = ctx.module.getFunction("fread");
+         llvm::Function* freadFunc = ctx.module().getFunction("fread");
         if (!freadFunc) {
             std::vector<llvm::Type*> frArgs = { 
                 ctx.builder.getInt8Ty()->getPointerTo(), 
@@ -159,7 +159,7 @@ public:
                 getFilePtrTy(ctx)
             };
             llvm::FunctionType* frType = llvm::FunctionType::get(ctx.builder.getInt64Ty(), frArgs, false);
-            freadFunc = llvm::Function::Create(frType, llvm::Function::ExternalLinkage, "fread", ctx.module);
+            freadFunc = llvm::Function::Create(frType, llvm::Function::ExternalLinkage, "fread", ctx.module());
         }
         
         llvm::Value* readBytes = ctx.builder.CreateCall(freadFunc, {buffer, ctx.builder.getInt64(1), size, handle});
@@ -185,19 +185,19 @@ public:
         llvm::Type* i32Ty = ctx.builder.getInt32Ty();
 
         // fseek
-        llvm::Function* fseekFunc = ctx.module.getFunction("fseek");
+        llvm::Function* fseekFunc = ctx.module().getFunction("fseek");
         if (!fseekFunc) {
-             fseekFunc = llvm::Function::Create(llvm::FunctionType::get(i32Ty, {filePtrTy, i64Ty, i32Ty}, false), llvm::Function::ExternalLinkage, "fseek", ctx.module);
+             fseekFunc = llvm::Function::Create(llvm::FunctionType::get(i32Ty, {filePtrTy, i64Ty, i32Ty}, false), llvm::Function::ExternalLinkage, "fseek", ctx.module());
         }
         // ftell
-        llvm::Function* ftellFunc = ctx.module.getFunction("ftell");
+        llvm::Function* ftellFunc = ctx.module().getFunction("ftell");
         if (!ftellFunc) {
-             ftellFunc = llvm::Function::Create(llvm::FunctionType::get(i64Ty, {filePtrTy}, false), llvm::Function::ExternalLinkage, "ftell", ctx.module);
+             ftellFunc = llvm::Function::Create(llvm::FunctionType::get(i64Ty, {filePtrTy}, false), llvm::Function::ExternalLinkage, "ftell", ctx.module());
         }
         // rewind
-        llvm::Function* rewindFunc = ctx.module.getFunction("rewind");
+        llvm::Function* rewindFunc = ctx.module().getFunction("rewind");
         if (!rewindFunc) {
-             rewindFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {filePtrTy}, false), llvm::Function::ExternalLinkage, "rewind", ctx.module);
+             rewindFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {filePtrTy}, false), llvm::Function::ExternalLinkage, "rewind", ctx.module());
         }
 
         // fseek(f, 0, SEEK_END (2))
@@ -210,20 +210,20 @@ public:
         ctx.builder.CreateCall(rewindFunc, {handle});
 
         // malloc(size + 1)
-        llvm::Function* mallocFunc = ctx.module.getFunction("malloc");
+        llvm::Function* mallocFunc = ctx.module().getFunction("malloc");
          if (!mallocFunc) {
             llvm::FunctionType* mallocType = llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {i64Ty}, false);
-            mallocFunc = llvm::Function::Create(mallocType, llvm::Function::ExternalLinkage, "malloc", ctx.module);
+            mallocFunc = llvm::Function::Create(mallocType, llvm::Function::ExternalLinkage, "malloc", ctx.module());
         }
         llvm::Value* sizePlus1 = ctx.builder.CreateAdd(size, ctx.builder.getInt64(1));
         llvm::Value* buffer = ctx.builder.CreateCall(mallocFunc, {sizePlus1});
 
         // fread(buffer, 1, size, f)
-        llvm::Function* freadFunc = ctx.module.getFunction("fread");
+        llvm::Function* freadFunc = ctx.module().getFunction("fread");
          if (!freadFunc) {
             std::vector<llvm::Type*> frArgs = { ctx.builder.getInt8Ty()->getPointerTo(), i64Ty, i64Ty, filePtrTy };
             llvm::FunctionType* frType = llvm::FunctionType::get(i64Ty, frArgs, false);
-            freadFunc = llvm::Function::Create(frType, llvm::Function::ExternalLinkage, "fread", ctx.module);
+            freadFunc = llvm::Function::Create(frType, llvm::Function::ExternalLinkage, "fread", ctx.module());
         }
         llvm::Value* readBytes = ctx.builder.CreateCall(freadFunc, {buffer, ctx.builder.getInt64(1), size, handle});
         

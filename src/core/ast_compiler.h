@@ -97,6 +97,8 @@ private:
     };
     ResolvedCallSignature resolveCallSignature(const std::string& name);
     bool isCoownedArgument(const std::string& type);
+    std::string glOperandType(Expr* expression);
+    bool containsVfxResource(const std::string& type);
     void trackCallArgument(Expr* expression, IRValue* value);
     void transferCallArgumentTemps(const ResolvedCallSignature& signature, const std::vector<IRValue*>& values);
     void finishCallArguments(CallExpr* call, const std::vector<IRValue*>& values);
@@ -153,8 +155,13 @@ private:
     IRValue* visitSysSerializeCall(const std::string& method, CallExpr* call);
     IRValue* visitSysCloneCall(CallExpr* call);
     IRValue* visitSysBundleCall(CallExpr* call);
+    IRValue* visitSysCodeFromCall(CallExpr* call);   // spec/29_2 §13
 
-    // Build a fat-pointer struct {obj_ptr, vtable_ptr} for interface upcasts.
+    // Declared type of an expression WITHOUT emitting IR (variable, dotted
+    // member access incl. classgroup instances, `{new: C}`).  "" = unresolvable.
+    std::string declaredTypeOfExpr(Expr* e);
+
+    // Build a fat-pointer struct {obj_ptr, vtable_ptr} for interface upcasts.    // Build a fat-pointer struct {obj_ptr, vtable_ptr} for interface upcasts.
     // Returns the loaded fat-pointer value, or nullptr if the upcast is invalid
     // (interface not registered, class does not implement the interface, etc.).
     //   srcValue       — raw object pointer of the concrete class

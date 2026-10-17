@@ -370,10 +370,52 @@ std::unique_ptr<Node> StatementBuilder::finish() {
              return nullptr;
          }
     }
-    // Fallthrough: some valid statements (e.g. builtin `exit:`) are handled on
-    // a later path and legitimately return nullptr here, so we do NOT hard-error
-    // on an unknown key — that produced false positives.  The bare-scalar case
-    // (the actual footgun) is caught earlier in BlockBuilder::OnScalar.
+    // spec/49 §2a: an unknown statement key is an ERROR, not a no-op.
+    //
+    // Until 2026-10-15 this fell through to a silent `return nullptr`, and
+    // BlockBuilder dropped the result without a word — the statement simply
+    // vanished.  The comment here claimed `exit:` was "handled on a later
+    // path"; it was not.  `- exit: [1]` did nothing, in 54 places in the test
+    // corpus, so every FAIL branch returned 0 and the suite reported PASS.
+    // `- continue: []` (which aiml does not have) vanished the same way.
+    //
+    // A key that reaches this point with too FEW arguments was already
+    // diagnosed above, so everything left here is an unknown key.
+    {
+        static const std::map<std::string, std::string> kHints = {
+            {"clearance", "clearance-self-certify: die Freigabe setzt der WIRT, nicht die Quelle (spec/65 F65-6)"},
+            {"exit",     "use `call: [sys.exit, N]` (spec/23)"},
+            {"continue", "aiml has no `continue`; restructure the loop body with `if:`"},
+            {"break",    "aiml has no `break`; use the loop condition (spec/06)"},
+            {"for",      "aiml has `while:` (spec/06)"},
+            {"else",     "`else:` belongs INSIDE `if:`, next to `then:` (spec/05)"},
+            {"log",      "use `call: [log.info, ...]` (spec/46)"},
+            {"assert",   "use `if:` with a `throw:` or `call: [sys.exit, N]`"},
+            {"let",      "use `decl: [name, type, value]`"},
+            {"var",      "use `decl: [name, type, value]`"},
+            {"spawn",    "`spawn:` is an expression: `decl: [h, thread_handle, { spawn: [fn, args] }]` (spec/26)"},
+        };
+        // Ein BEKANNTER Schluessel, der hier landet, ist nicht unbekannt, sondern
+        // unvollstaendig (`decl:` mit einem Argument, `call:` ohne Namen, …).
+        // Beides zu vermengen schickt den Leser in die falsche Richtung.
+        static const std::set<std::string> kKnown = {
+            "decl", "set", "store", "idx", "call", "print", "return", "throw"
+        };
+        std::string msg;
+        if (kKnown.count(type)) {
+            msg = "malformed '" + type + "' statement: not enough arguments to build it.";
+        } else if (type == "free") {
+            msg = "malformed 'free' statement: expected `free: [p]` (spec/20).";
+        } else {
+            msg = "unknown statement '" + type + "' — not an aiml statement.";
+            auto hint = kHints.find(type);
+            if (hint != kHints.end()) msg += "  " + hint->second + ".";
+            else msg += "  Statements are: decl, set, store, idx, call, print, return, free,"
+                        " throw, if, while, ret, try, text.";
+        }
+        if (capturedLine > 0) msg = "line " + std::to_string(capturedLine) + ": " + msg;
+        LOG_ERROR(msg);
+    }
     return nullptr;
 }
 

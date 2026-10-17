@@ -281,6 +281,12 @@ void aiml_prefab_dock_y(void* inst, int32_t row, int32_t rowspan);
 
 /* Set the font used for label children. font = AimlUIFont* from ui.load_font(). */
 void aiml_prefab_set_font(void* font);
+/* spec/44_6: extra named font, selected per child with `font: "<name>"`. */
+void aiml_prefab_add_font(const char* name, void* font);
+/* spec/44_6 §5g: colour runs over a text field — triples (start, len, rgba). */
+void aiml_prefab_set_color_runs(void* inst, const char* child_name,
+                                const void* triples, int32_t count);
+void aiml_prefab_clear_color_runs(void* inst, const char* child_name);
 
 /* ── UI-widget callbacks ─────────────────────────────────────────────── */
 
@@ -314,6 +320,9 @@ void aiml_material_register(const char* name, const char* shader_path,
 /* Returns the current text contents of a text_input child. Lifetime: valid
  * until the next aiml_prefab_set_text or destroy on this child. */
 const char* aiml_prefab_text_value(void* inst, const char* child_name);
+/* spec/44_6 §5f — Auswahl eines textbox/text_input programmatisch setzen/lesen. */
+void        aiml_prefab_select_all(void* inst, const char* child_name);
+const char* aiml_prefab_selection(void* inst, const char* child_name);
 /* Returns 1 if a button child has been clicked this frame, 0 otherwise. */
 int32_t     aiml_prefab_child_clicked(void* inst, const char* child_name);
 int32_t     aiml_prefab_child_contains(void* inst, const char* child_name, float sx, float sy);

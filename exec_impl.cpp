@@ -10,6 +10,7 @@
 //   3. Execute start_call via fptable_current (or engine lookup fallback)
 
 #include "exec_impl.h"
+#include "src/core/yaml_dump.h"
 #include "compiler.h"                  // AIMLCompiler (for aiml_isolated_exec)
 #include "src/core/context.h"
 #include "src/core/fptable.h"          // AIML_MAX_VERSIONS
@@ -17,6 +18,7 @@
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
 #include <llvm/Support/DynamicLibrary.h>
 #include <yaml-cpp/yaml.h>
+#include <memory>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -183,7 +185,7 @@ static uint64_t compileYamlChunk(ExecList* cc, const std::string& funcName) {
             if (chunk.IsDefined() && !chunk.IsNull())
                 seq.push_back(chunk);
         }
-        yaml_source = YAML::Dump(seq);
+        yaml_source = aiml::dumpPreservingQuotes(seq);
     } catch (...) {
         LOG_ERROR("compileYamlChunk: YAML parse error for bundle of '" + funcName + "'");
         return 0;
@@ -226,6 +228,66 @@ static std::string parseStartCallFuncName(const char* sc) {
 //   3. Create a new AIMLCompiler, compile + JIT-run the source.
 //   4. Restore the caller's active context/engine.
 
+// ── Bibliotheks-Registry (spec/29_2 §15) ─────────────────────────────────────
+// Prozessweit, bewusst ohne Handle: ein Agent laedt beim Start seine Bibliothek
+// und faehrt danach Schritte.  Mehrere voneinander isolierte Kontexte waeren der
+// naechste Schritt (ein `exec_context` als eindeutige Ressource), brauchen aber
+// ein rebindbares ctx.module() — heute eine Referenz an 601 Stellen.
+//
+// Gehalten wird zweierlei: der Compiler (damit seine Engine und damit die
+// registrierten Adressen am Leben bleiben) und der Quelltext (um je Lauf nur
+// die DEKLARATIONEN zu wiederholen, nicht die Rumpfe).
+static std::vector<std::unique_ptr<AIMLCompiler>> g_lib_compilers;
+static std::vector<std::string>                   g_lib_sources;
+
+// Hilfsfunktion: YAML-Quelltext aus den code_chunks eines Bundles bauen.
+//
+// NICHT durch Verketten: ein Chunk ist ein eigenes YAML-Dokument, und
+// aneinandergehaengt ergeben mehrere Dokumente kein gueltiges Dokument mit
+// mehreren Eintraegen — der Compiler sah dann nur den ersten `- def:`.
+// (Genau dieser Fehler liess `sys.lib_load` nur EIN Symbol registrieren,
+// obwohl das Bundle vier Funktionen enthielt.)  Stattdessen wie
+// aiml_isolated_exec: jeden Chunk parsen und in EINE Sequenz legen.
+static std::string exec_chunks_to_yaml(ExecCode* code) {
+    ExecList* cc = code ? code->code_chunks : nullptr;
+    if (!cc || cc->size == 0) return std::string();
+    try {
+        YAML::Node seq(YAML::NodeType::Sequence);
+        for (int i = 0; i < cc->size; i++) {
+            if (!cc->data[i]) continue;
+            YAML::Node chunk = YAML::Load(std::string(cc->data[i]));
+            if (!chunk.IsDefined() || chunk.IsNull()) continue;
+            if (chunk.IsSequence()) {
+                for (const auto& item : chunk) seq.push_back(item);
+            } else {
+                seq.push_back(chunk);
+            }
+        }
+        return aiml::dumpPreservingQuotes(seq);
+    } catch (const std::exception& e) {
+        LOG_ERROR(std::string("exec_chunks_to_yaml: ") + e.what());
+        return std::string();
+    }
+}
+
+extern "C" int aiml_lib_load(void* raw) {
+    if (!raw) return -2;
+    ExecCode* code = static_cast<ExecCode*>(raw);
+    std::string src = exec_chunks_to_yaml(code);
+    if (src.empty()) {
+        LOG_WARNING("aiml_lib_load: leeres Bundle — nichts zu laden");
+        return 0;
+    }
+    auto comp = std::make_unique<AIMLCompiler>();
+    int n = comp->compileLibraryAndRegister(src);
+    if (n < 0) return -1;
+    g_lib_compilers.push_back(std::move(comp));
+    g_lib_sources.push_back(src);
+    return n;
+}
+
+extern "C" int aiml_lib_count(void) { return (int)g_lib_sources.size(); }
+
 extern "C" int aiml_isolated_exec(void* raw) {
     if (!raw) return -2;
     ExecCode* code = static_cast<ExecCode*>(raw);
@@ -262,7 +324,7 @@ extern "C" int aiml_isolated_exec(void* raw) {
             }
         }
 
-        yaml_source = YAML::Dump(seq);
+        yaml_source = aiml::dumpPreservingQuotes(seq);
     } catch (const std::exception& e) {
         LOG_ERROR("aiml_isolated_exec: failed to build YAML source: " + std::string(e.what()));
         return -1;
@@ -282,6 +344,10 @@ extern "C" int aiml_isolated_exec(void* raw) {
         AIMLCompiler iso;
         if (g_active_context)
             iso.compilerPath = g_active_context->compilerPath;
+        // Geladene Bibliotheken nur DEKLARIEREN (spec/29_2 §15): Signaturen
+        // werden bekannt, die Rumpfe wurden beim Laden einmal uebersetzt und
+        // sind ueber DynamicLibrary::AddSymbol erreichbar.
+        for (const auto& lib : g_lib_sources) iso.compileDeclarationsOnly(lib);
         rc = iso.compileAndRun(yaml_source);
     } // iso destructor frees its LLVMContext, Module, IRBuilder, CompilerContext
 

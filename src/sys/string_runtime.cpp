@@ -283,7 +283,7 @@ extern "C" void aiml_list_clear_elems(void* list_ptr, int32_t elemKind, int64_t 
     AimlListRaw* lst = static_cast<AimlListRaw*>(list_ptr);
     if (lst->data && elemKind != 0) {
         char* base = reinterpret_cast<char*>(lst->data);
-        int64_t stride = elemSize > 0 ? elemSize : 8;
+        int64_t stride = elemSize > 0 ? elemSize : (int64_t)sizeof(void*);  // spec/61 §5.7
         for (int32_t i = 0; i < lst->size; ++i)
             free_list_elem_at(base + (int64_t)i * stride, elemKind, elemSize,
                               serNodes, serNodesCount);
@@ -301,7 +301,7 @@ extern "C" void aiml_list_pop_free(void* list_ptr, int32_t elemKind, int64_t ele
     if (lst->size <= 0) return;
     if (lst->data && elemKind != 0) {
         char* base = reinterpret_cast<char*>(lst->data);
-        int64_t stride = elemSize > 0 ? elemSize : 8;
+        int64_t stride = elemSize > 0 ? elemSize : (int64_t)sizeof(void*);  // spec/61 §5.7
         free_list_elem_at(base + (int64_t)(lst->size - 1) * stride, elemKind, elemSize,
                           serNodes, serNodesCount);
     }

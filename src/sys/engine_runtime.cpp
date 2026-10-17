@@ -303,6 +303,33 @@ void aiml_engine_maximize_window(void* win_ptr) {
 #endif
 }
 
+/* spec/44_1: Fensterposition auf dem Bildschirm.  Gebraucht, um eine
+ * Widget-Fläche (Fenster-Pixel) in Bildschirmkoordinaten umzurechnen, wie sie
+ * die OS-Ebenen-Injektion braucht (spec/44_0 §8.5).  0 ohne Fenster bzw. dort,
+ * wo das Konzept nicht existiert (Browser/Android: das Canvas sitzt im
+ * Dokument, nicht auf einem Bildschirm). */
+int32_t aiml_engine_window_pos_x(void* win_ptr) {
+    if (!win_ptr) return 0;
+#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+    AimlWindow* win = (AimlWindow*)win_ptr;
+    int x = 0, y = 0; glfwGetWindowPos(win->glfw, &x, &y);
+    return x;
+#else
+    return 0;
+#endif
+}
+
+int32_t aiml_engine_window_pos_y(void* win_ptr) {
+    if (!win_ptr) return 0;
+#if !defined(__EMSCRIPTEN__) && !defined(__ANDROID__)
+    AimlWindow* win = (AimlWindow*)win_ptr;
+    int x = 0, y = 0; glfwGetWindowPos(win->glfw, &x, &y);
+    return y;
+#else
+    return 0;
+#endif
+}
+
 int32_t aiml_engine_window_size_x(void* win_ptr) {
     if (!win_ptr) return 0;
     AimlWindow* win = (AimlWindow*)win_ptr;

@@ -4,6 +4,9 @@
 #include <mutex>
 #include <chrono>
 #include <iomanip>
+#include <sstream>
+#include <vector>
+#include <cstring>
 
 enum class LogLevel {
     VERBOSE,
@@ -40,8 +43,26 @@ public:
     void setSuppressed(bool s) { suppressed_ = s; }
     bool isSuppressed() const { return suppressed_; }
 
+    // --check (spec/49): Befunde strukturiert mitschneiden statt nur zu drucken.
+    // Gesammelt wird der fertige Meldungstext samt "file:line:col: "-Praefix plus
+    // die Stelle im Compiler, die ihn ausgeloest hat — letztere ist heute die
+    // einzige stabile Kennung eines Checks (siehe spec/49, offener Punkt Codes).
+    struct Diag { const char* sev; std::string text; std::string origin; };
+    void setCollect(bool c) { collect_ = c; }
+    const std::vector<Diag>& diags() const { return diags_; }
+
     template<typename T>
     void log(LogLevel level, const T& msg, const char* file = nullptr, int line = 0) {
+        if (collect_ && (level == LogLevel::ERROR || level == LogLevel::WARNING)) {
+            std::ostringstream os; os << msg;
+            std::string org;
+            if (file) {
+                const char* base = std::strrchr(file, '/');
+                org = (base ? base + 1 : file);
+                org += ":" + std::to_string(line);
+            }
+            diags_.push_back({level == LogLevel::ERROR ? "error" : "warning", os.str(), org});
+        }
         if (level < level_) return;
         if (suppressed_) {
             if (level == LogLevel::ERROR) errorCount_++;
@@ -85,9 +106,11 @@ public:
     }
 
 private:
-    Logger() : level_(LogLevel::INFO), errorCount_(0), suppressed_(false) {}
+    Logger() : level_(LogLevel::INFO), errorCount_(0), suppressed_(false), collect_(false) {}
     LogLevel level_;
     int errorCount_;
+    bool collect_;
+    std::vector<Diag> diags_;
     bool suppressed_;
     std::mutex mutex_;
 };

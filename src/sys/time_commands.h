@@ -10,10 +10,10 @@ public:
         // time.now() -> i64 (milliseconds since epoch)
         // Delegate to runtime function: int64_t time_now_ms()
         
-        llvm::Function* timeFunc = ctx.module.getFunction("time_now_ms");
+        llvm::Function* timeFunc = ctx.module().getFunction("time_now_ms");
         if (!timeFunc) {
             llvm::FunctionType* funcType = llvm::FunctionType::get(ctx.builder.getInt64Ty(), false);
-            timeFunc = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "time_now_ms", ctx.module);
+            timeFunc = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "time_now_ms", ctx.module());
         }
         
         return ctx.builder.CreateCall(timeFunc);
@@ -26,11 +26,11 @@ public:
          // time.sleep_ms(ms)
          // Delegate to runtime function: void time_sleep_ms(int32_t ms)
          
-         llvm::Function* sleepFunc = ctx.module.getFunction("time_sleep_ms");
+         llvm::Function* sleepFunc = ctx.module().getFunction("time_sleep_ms");
          if (!sleepFunc) {
             std::vector<llvm::Type*> args = { ctx.builder.getInt32Ty() };
             llvm::FunctionType* funcType = llvm::FunctionType::get(ctx.builder.getVoidTy(), args, false);
-            sleepFunc = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "time_sleep_ms", ctx.module);
+            sleepFunc = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, "time_sleep_ms", ctx.module());
          }
          
          if (args.size() > 1) {
