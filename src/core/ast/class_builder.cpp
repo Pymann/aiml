@@ -1,3 +1,4 @@
+#include "../clearance.h"
 #include "../../../logger.h"
 #include "../ast_builder.h"
 #include "class_builder.h"
@@ -69,6 +70,11 @@ bool ClassBuilder::OnScalar(const std::string& value, const std::string& tag) {
     
     if (!insideMembers && !insideMethods && !insideModels && !insideImplements && !insideRules && !insideRpc) {
         if (currentKey == "name") classNode->name = value;
+        else if (currentKey == "level") {   // spec/65 F65-19
+            int parsed = aiml::clearance::kAbsent;
+            if (aiml::clearance::parseLevel(value, "class " + classNode->name, parsed))
+                classNode->level = parsed;
+        }
         else if (currentKey == "renders") classNode->renders = value;
         else if (currentKey == "extends") classNode->parentName = value;
         else if (currentKey == "version") {
@@ -122,6 +128,10 @@ bool ClassBuilder::OnScalar(const std::string& value, const std::string& tag) {
                 if (!expectingKey) {
                     if (currentKey == "version") {
                         try { currentVersion = std::stoull(value); } catch(...) {}
+                    } else if (currentKey == "level") {   // spec/65 F65-33
+                        int parsed = aiml::clearance::kAbsent;
+                        if (aiml::clearance::parseLevel(value, "class-Mitglied " + currentField, parsed))
+                            currentLevel = parsed;
                     } else if (currentKey == "access") {
                         currentAccess = value;
                     } else if (currentKey == "const") {
@@ -202,8 +212,10 @@ bool ClassBuilder::OnSequenceEnd() {
                 m.access = currentAccess;
                 m.is_const = currentConst;
                 m.is_volatile = currentVolatile;
+                m.level = currentLevel;
                 classNode->members.push_back(std::move(m));
                 currentField = ""; currentType = "";
+                currentLevel = -1;   // spec/65: nicht ans naechste Mitglied vererben
                 return true;
             }
         } else if (sequenceDepth == 0) {

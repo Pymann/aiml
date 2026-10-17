@@ -24,6 +24,7 @@ class StatementBuilder : public StateHandler {
     bool is_volatile = false;
     bool is_extern = false;
     std::string decl_lifetime = "scope";   // {lifetime: scope|persistent|consumed} (spec/61)
+    int decl_level = -1;                   // {level: N} (spec/65 F65-19); -1 = absent
     int seqDepth = 0;       // nesting depth of sequences seen
     int innerSeqStart = -1; // args[] index where inner sequence elements begin
     int capturedLine = -1;  // 1-based line of this statement in the AIML source

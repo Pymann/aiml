@@ -1,3 +1,4 @@
+#include "../clearance.h"
 #include "../../../logger.h"
 #include "../ast_builder.h"
 #include "model_builder.h"
@@ -52,6 +53,10 @@ bool ModelBuilder::OnScalar(const std::string& value, const std::string& tag) {
             // "false" leaves curDbIndexed = false (default).
         } else if (modifierKey == "unique") {
             curDbIndexedUnique = (value == "true");
+        } else if (modifierKey == "level") {   // spec/65: pruefen, nicht durchsetzen
+            int parsed = aiml::clearance::kAbsent;
+            if (aiml::clearance::parseLevel(value, "model-Feld " + currentField, parsed))
+                curLevel = parsed;
         } else if (modifierKey == "skip_empty") {
             curDbIndexedSkipEmpty = (value == "true");
         }
@@ -75,6 +80,11 @@ bool ModelBuilder::OnScalar(const std::string& value, const std::string& tag) {
         }
     }
     else if (currentKey == "primary_key") modelNode->primaryKey = value;
+    else if (currentKey == "level") {   // spec/65 F65-19
+        int parsed = aiml::clearance::kAbsent;
+        if (aiml::clearance::parseLevel(value, "model " + modelNode->name, parsed))
+            modelNode->level = parsed;
+    }
     else if (insideSync) {
         modelNode->syncFields.push_back(value);
         return true;
@@ -152,12 +162,14 @@ bool ModelBuilder::OnSequenceEnd() {
             m.db_indexed_mode       = curDbIndexedMode;
             m.db_indexed_unique     = curDbIndexedUnique;
             m.db_indexed_skip_empty = curDbIndexedSkipEmpty;
+            m.level                 = curLevel;
             modelNode->fields.push_back(std::move(m));
             currentField = ""; currentType = "";
             memberAttrIndex = 0;
             currentAccess = "public";
             curDbIndexed = false; curDbIndexedMode.clear();
             curDbIndexedUnique = false; curDbIndexedSkipEmpty = false;
+            curLevel = -1;   // spec/65: nicht ans naechste Feld vererben
             return true;
         } else {
             insideFields = false;

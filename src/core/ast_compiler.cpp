@@ -5641,6 +5641,8 @@ void Compiler::visitFunction(FunctionDecl* func) {
     for (const auto& a : func->args) funcInfo.argTypeNames.push_back(a.second);  // §6.2/§8 borrow-check
     funcInfo.returnTypeName = func->returnType;  // §6.2/§10 (value-list push check)
     funcInfo.version = func->version;
+    funcInfo.clearance_level  = func->level;    // spec/65 F65-9
+    funcInfo.clearance_grants = func->grants;
     funcInfo.compiled_version = func->version;  // locked at compile time
     // Assign fptable slot — preserve any pre-existing index (e.g. from an alias entry)
     if (ctx.functions.count(mangledName) && ctx.functions[mangledName].fptable_index >= 0)

@@ -1,4 +1,5 @@
 #pragma once
+#include "clearance.h"
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/IRBuilder.h>
@@ -105,6 +106,10 @@ namespace AIML {
             // to move a `consumed` argument out of the caller (drop the caller's ownership).
             std::vector<std::string> argLifetimes;
             AccessLevel access = AccessLevel::Public;
+            // spec/65 F65-9: Level/Gateway der Funktion, aus FunctionDecl uebernommen.
+            // -1 = keine Annotation (NICHT Level 0, siehe F65-5/F65-22).
+            int clearance_level  = -1;
+            int clearance_grants = -1;
             uint64_t version = 1;             // Latest version (updated by visitTopLevel re-def)
             uint64_t compiled_version = 1;    // Version actually compiled into IR (set once in visitFunction)
             int fptable_index = -1;           // Index in __aiml_fptable / fptable_current (-1 = not in table)
@@ -247,6 +252,10 @@ namespace AIML {
         // modelRefcount above — every context, incl. header-only sub-compilers, must agree). Under
         // this gate the compiler emits the spec/61 target behavior incrementally (first: string
         // assignment = share/incref, §4). Default OFF → deployed/OFF path byte-identical.
+        // spec/65 F65-22: die Freigabe JETZT lesen, nicht erst wenn eine Annotation
+        // vorkommt — eine ungueltige AIML_CLEARANCE muss auch eine Quelle OHNE `level:`
+        // zum Scheitern bringen, sonst faellt sie still auf vertrauenswuerdig zurueck.
+        (void)aiml::clearance::sessionClearance();
         if (const char* mv = std::getenv("AIML_MEM_V3")) {
             std::string s = mv;
             memV3 = !(s.empty() || s == "0" || s == "off" || s == "OFF" || s == "false" || s == "FALSE");

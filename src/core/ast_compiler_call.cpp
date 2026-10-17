@@ -1,5 +1,8 @@
 #define DEBUG_MODE
+#include "clearance_builtins.h"
+#include "clearance_exports.h"
 #include "ast_compiler.h"
+#include "purity.h"
 #include "list_impl.h"
 #include "map_impl.h"
 #include "buffer_impl.h"
@@ -402,10 +405,73 @@ IRValue* Compiler::visitCall(CallExpr* call) {
 
         // Dispatch any registered namespace (sys, io, time, path, and future ones)
         if (ctx.namespaces.count(baseName)) {
+            // spec/62 §10.2 / F62-102: aufzeichnen, WELCHES Builtin dieser
+            // Rumpf ruft.  Die Reinheitspruefung passiert beim Buendeln, also
+            // spaeter — hier ist die einzige Stelle, an der Namensraum,
+            // Funktion, Ort UND ein konstantes erstes Argument zusammen
+            // vorliegen (F62-19 vs F62-20 haengt genau am letzten).
+            if (!ctx.bundleTrackingTarget.empty() &&
+                ctx.functions.count(ctx.bundleTrackingTarget)) {
+                CompilerContext::FunctionInfo::BuiltinUse use;
+                use.ns  = baseName;
+                use.fn  = methodName;
+                use.loc = ctx.fmtLoc(call->sourceNode);
+                if (!call->args.empty()) {
+                    if (auto* lit = dynamic_cast<LiteralExpr*>(call->args[0].get())) {
+                        use.firstArgIsLiteral = true;
+                        use.firstArgLiteral   = lit->value;
+                    }
+                }
+                ctx.functions[ctx.bundleTrackingTarget].referencedBuiltins.push_back(use);
+            }
+            // spec/65 F65-35/F65-12: Builtins sind von Grund auf zu.  Geprueft wird
+            // nur, was wirklich ein Builtin-Namensraum IST — ein Namensraum des
+            // Nutzers geht hier unberuehrt durch.
+            if (aiml::clearance::restricted() && ctx.namespaces.count(baseName) &&
+                !aiml::clearance::builtinReachable(baseName, methodName)) {
+                LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
+                          "clearance-builtin: `" + baseName + "." + methodName +
+                          "` ist fuer diese Sitzung nicht erreichbar (Freigabe " +
+                          std::to_string(aiml::clearance::sessionClearance()) +
+                          ", Level " + std::to_string(aiml::clearance::builtinLevel(baseName, methodName)) +
+                          ").  Builtins sind von Grund auf zu; der Wirt oeffnet sie "
+                          "ausdruecklich (spec/65 F65-35).");
+            }
+            // spec/23 §5.1: `sys.exe` nimmt argv als `list<string>`.  Ein String als
+            // erstes Argument ist in LLVM ebenfalls ein `i8*` und rutschte daher durch
+            // die Zeiger-Weiche des Builtins; die Laufzeit las ihn als `GenericList*`
+            // und stuerzte ab (SIGSEGV, gemessen 16.10.2026).  Lieber laut scheitern.
+            //
+            // Geprueft wird, was statisch bekannt ist: ein Literal ist nie eine Liste
+            // (Listenliterale gibt es nur als `decl`-Initialisierer, spec/10), und bei
+            // einer Variablen steht der deklarierte Typ im Symbol.  Ein zusammen-
+            // gesetzter Ausdruck bleibt ungeprueft — lieber keine Diagnose als eine
+            // falsche.
+            if (baseName == "sys" && methodName == "exe" && !call->args.empty()) {
+                std::string arg_type;
+                if (dynamic_cast<AIML::AST::LiteralExpr*>(call->args[0].get())) {
+                    arg_type = "Literal";
+                } else if (auto* argv_var =
+                               dynamic_cast<AIML::AST::VariableExpr*>(call->args[0].get())) {
+                    if (Symbol* argv_sym = resolveVariable(argv_var->name))
+                        arg_type = argv_sym->typeName;
+                }
+                if (!arg_type.empty() && arg_type.rfind("list<", 0) != 0) {
+                    LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
+                              "sys.exe erwartet argv als `list<string>` (spec/23 §5.1), "
+                              "bekommen: '" + arg_type + "'.  Ein String ist ebenfalls ein "
+                              "Zeiger und wuerde zur Laufzeit als Liste gelesen — Absturz. "
+                              "Richtig: `decl: [argv, list<string>, [\"prog\", \"arg\"]]` und "
+                              "dann `call: [sys.exe, argv]`.");
+                }
+            }
             AIML::AST::CallExpr* prevCall = ctx.currentCall;
             ctx.currentCall = call;
             IRValue* sysResult = visitSysNamespaceCall(baseName, methodName, argVals);
             ctx.currentCall = prevCall;
+            if (baseName == "gl" && (methodName == "draw_elements_instanced"
+                || methodName == "create_buffer" || methodName == "create_buffer_dynamic"
+                || methodName == "create_index_buffer")) finishCallArguments(call, argVals);
             // spec/60 §3: yaml.free on a local is an early release — null it so the scope release is a no-op
             if (sysResult && baseName == "yaml" && methodName == "free" && !call->args.empty())
                 if (auto* fv = dynamic_cast<VariableExpr*>(call->args[0].get()))
@@ -891,6 +957,36 @@ IRValue* Compiler::visitCall(CallExpr* call) {
     }
 
     if (!callRes) {
+        // spec/65 F65-4/F65-5/F65-12: in einer eingeschraenkten Sitzung entscheidet
+        // die Export-Tabelle des Wirts, nicht die Abwesenheit einer Deklaration.
+        // Ein verweigertes Symbol wird als VERWEIGERT gemeldet und nicht als
+        // „unbekannt" — eine irrefuehrende Diagnose ist schlimmer als eine
+        // Absage, und verbergen muss hier nichts (F65-16: Level sind nicht geheim).
+        if (aiml::clearance::restricted()) {
+            const int lvl = aiml::clearance::exportedLevel(funcName);
+            const int own = aiml::clearance::sessionClearance();
+            if (lvl == aiml::clearance::kAbsent) {
+                LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
+                          "clearance-denied: `" + funcName + "` ist nicht erreichbar — der "
+                          "Wirt bietet es nicht an (Auslassen gewaehrt nie, spec/65 F65-5). "
+                          "Entweder ein Tippfehler, oder es gehoert nicht zur angebotenen "
+                          "Oberflaeche.");
+            } else if (own > lvl) {
+                LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
+                          "clearance-denied: `" + funcName + "` liegt auf Level " +
+                          std::to_string(lvl) + ", diese Sitzung hat Freigabe " +
+                          std::to_string(own) + " (spec/65 F65-4: erreichbar ist nur, was "
+                          "`Freigabe <= Level` erfuellt).");
+            } else {
+                LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
+                          "clearance: `" + funcName + "` ist freigegeben (Level " +
+                          std::to_string(lvl) + "), aber der Wirt hat keine SIGNATUR dafuer "
+                          "angemeldet — ohne sie kann der Aufruf nicht uebersetzt werden "
+                          "(spec/65 F65-24: Signatur und Adresse sind die zweite Haelfte "
+                          "der Uebergabe).");
+            }
+            return nullptr;
+        }
         LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "Unknown function: " + funcName);
         return nullptr;
     }

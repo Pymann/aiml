@@ -36,6 +36,7 @@ class ModelBuilder : public StateHandler {
     std::string curDbIndexedMode;
     bool curDbIndexedUnique = false;
     bool curDbIndexedSkipEmpty = false;
+    int  curLevel = -1;            // spec/65 F65-33: Mitglieds-Level; -1 = absent
 public:
     ModelBuilder(Builder* b) : StateHandler(b) { modelNode = std::make_unique<ModelDecl>(); }
     bool OnMapStart() override;

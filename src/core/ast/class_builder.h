@@ -31,6 +31,7 @@ class ClassBuilder : public StateHandler {
     std::unique_ptr<Expr> currentInitValue;
     uint64_t currentVersion = 1;
     std::string currentAccess = "public";
+    int currentLevel = -1;                 // spec/65 F65-33; -1 = absent
     bool currentConst = false;
     bool currentVolatile = false;
 public:

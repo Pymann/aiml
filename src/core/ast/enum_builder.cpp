@@ -1,3 +1,4 @@
+#include "../clearance.h"
 #include "../../../logger.h"
 #include "../ast_builder.h"
 #include "enum_builder.h"
@@ -97,6 +98,11 @@ bool EnumBuilder::OnScalar(const std::string& value, const std::string& tag) {
         return true;
     }
     if (currentKey == "name" && !insideValues) enumNode->name = value;
+    else if (currentKey == "level" && !insideValues) {   // spec/65 F65-19
+        int parsed = aiml::clearance::kAbsent;
+        if (aiml::clearance::parseLevel(value, "enum " + enumNode->name, parsed))
+            enumNode->level = parsed;
+    }
     else if (insideValues) {
         if (inFullValueMap) {
             if (fullValueKey == "id") {

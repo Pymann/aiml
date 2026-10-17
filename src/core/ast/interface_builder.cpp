@@ -1,3 +1,4 @@
+#include "../clearance.h"
 #include "../../../logger.h"
 #include "../ast_builder.h"
 #include "interface_builder.h"
@@ -51,6 +52,10 @@ bool InterfaceBuilder::OnScalar(const std::string& value, const std::string& tag
             }
         }
         // methodDepth == 2 → args sub-sequence container, scalars there ignored
+    } else if (currentKey == "level") {   // spec/65 F65-19
+        int parsed = aiml::clearance::kAbsent;
+        if (aiml::clearance::parseLevel(value, "interface " + interfaceNode->name, parsed))
+            interfaceNode->level = parsed;
     } else if (currentKey == "name") {
         interfaceNode->name = value;
     }

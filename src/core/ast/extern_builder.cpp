@@ -1,3 +1,4 @@
+#include "../clearance_exports.h"
 #include "../../../logger.h"
 #include "../ast_builder.h"
 #include "extern_builder.h"
@@ -32,6 +33,25 @@ namespace AST {
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 static void commitFunc(ExternBlock* block, ExternFuncDecl& f) {
+    // spec/65 F65-13: `extern` umgeht JEDE Symboltabelle des Uebersetzers von
+    // Bauart — das Skript nennt die Signatur selbst, und der JIT loest den Namen
+    // gegen den Prozess auf (LoadLibraryPermanently(nullptr)).  Eine
+    // eingeschraenkte Sitzung darf darum nur Namen deklarieren, die der Wirt
+    // ausdruecklich angeboten hat — die Export-Tabelle (spec/65 §5a).  Ohne Tabelle
+    // ist die zulaessige Menge leer (fail closed), mit Tabelle entscheidet das Level.
+    if (!f.name.empty() && aiml::clearance::restricted() &&
+        !aiml::clearance::exportReachable(f.name)) {
+        const int lvl = aiml::clearance::exportedLevel(f.name);
+        const std::string why =
+            (lvl == aiml::clearance::kAbsent)
+                ? std::string("der Wirt bietet diesen Namen nicht an")
+                : ("Level " + std::to_string(lvl) + " liegt unter der Freigabe " +
+                   std::to_string(aiml::clearance::sessionClearance()));
+        LOG_ERROR("clearance-extern: `extern` auf '" + f.name + "' ist nicht zugelassen — " +
+                  why + ".  Eine eingeschraenkte Sitzung darf nur Namen aus der "
+                  "Export-Tabelle des Wirts deklarieren (spec/65 F65-13); `extern` umgeht "
+                  "sonst jede Symboltabelle des Uebersetzers von Bauart.");
+    }
     if (!f.name.empty())
         block->funcs.push_back(f);
     f = ExternFuncDecl{};

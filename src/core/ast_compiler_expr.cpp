@@ -1,4 +1,5 @@
 #define DEBUG_MODE
+#include "clearance.h"
 #include "ast_compiler.h"
 #include "list_impl.h"
 #include "map_impl.h"
@@ -577,6 +578,25 @@ IRValue* Compiler::visitCast(BinaryExpr* bin) {
     llvm::Value* val = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(src));
     llvm::Type* from = val->getType();
     const std::string& to = target->name;
+
+    // spec/65 F65-14: eine eingeschraenkte Sitzung bekommt KEINEN Zeiger-Cast.
+    // Mit Zeigerarithmetik erreicht Code im selben Prozess jedes Byte, unabhaengig
+    // von jeder Namensregel — auch den Laufzeitzustand des Wirts.  Eine Level-
+    // Pruefung, die das zulaesst, prueft die Haustuer eines Hauses ohne Waende.
+    if (aiml::clearance::restricted()) {
+        const bool to_ptr  = (to.rfind("ptr<", 0) == 0) || to == "ptr";
+        const bool from_ptr = from->isPointerTy();
+        static const std::set<std::string> kIntTypes = {
+            "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "isize"
+        };
+        if (to_ptr || (from_ptr && kIntTypes.count(to))) {
+            LOG_ERROR(ctx.fmtLoc(bin->sourceNode) +
+                      "clearance-dialect: `cast:` auf/aus einem Zeiger ist in einer "
+                      "eingeschraenkten Sitzung nicht zulaessig (spec/65 F65-14) — "
+                      "Zeigerarithmetik erreicht im selben Prozess jedes Byte.");
+            return nullptr;
+        }
+    }
     auto& bld = ctx.builder;
     auto unsupported = [&]() -> IRValue* {
         std::string fromName;

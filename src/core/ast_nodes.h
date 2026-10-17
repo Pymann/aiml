@@ -171,6 +171,10 @@ public:
     std::string lifetime = "scope";  // {lifetime: scope|persistent|consumed} — spec/61.
                                      // Ownership metadata; drop emission is a later step.
 
+    // spec/65 F65-19/F65-34: 4.-Positions-Modifier `{ level: N }`.  -1 = keine
+    // Annotation (NICHT Level 0).  Hier nur getragen, nicht durchgesetzt.
+    int level = -1;
+
     DeclStmt(std::string n, std::string t) : varName(n), typeName(t) {}
     std::string toString() const override { return "Decl(" + typeName + " " + varName + ")"; }
 };
@@ -321,6 +325,10 @@ public:
     // are ignored (forward-compatible).  Parsed from `meta: [...]`.
     std::vector<std::string> meta;
 
+    // spec/65 F65-19/F65-10: `level:`/`grants:` als def-Schluessel.  -1 = absent.
+    int level = -1;
+    int grants = -1;
+
     std::string toString() const override { return "FunctionDecl(" + name + ")"; }
 };
 
@@ -331,6 +339,7 @@ struct StructMember {
     uint64_t version = 1;
     std::string access = "public";
     bool is_const = false;
+    int level = -1;              // spec/65 F65-33: Bindung, nicht Typ.  -1 = absent.
     bool is_volatile = false;
     // classgroup sees-member: a wired COLLABORATOR pointer, not owned data.
     // Serialization skips it (spec/58 §9: skip / re-inject on load), which also
@@ -377,6 +386,7 @@ public:
 
 class ClassDecl : public Node {
 public:
+    int level = -1;   // spec/65 F65-19: Typform traegt `level:`.  -1 = absent.
     std::string name;
     std::string parentName; // for "extends"
     uint64_t version = 1;
@@ -396,6 +406,7 @@ public:
 
 class ModelDecl : public Node {
 public:
+    int level = -1;   // spec/65 F65-19: Typform traegt `level:`.  -1 = absent.
     std::string name;
     std::string parentName;   // for "inherits"
     uint64_t version = 1;
@@ -409,6 +420,7 @@ public:
 
 class InterfaceDecl : public Node {
 public:
+    int level = -1;   // spec/65 F65-19: Typform traegt `level:`.  -1 = absent.
     std::string name;
     std::vector<MethodSignature> methods;
 
@@ -417,6 +429,7 @@ public:
 
 class EnumDecl : public Node {
 public:
+    int level = -1;   // spec/65 F65-19: Typform traegt `level:`.  -1 = absent.
     std::string name;
     std::vector<std::pair<std::string, int>> values; // enum name, integer value
     // Optional map: id → display label.  If empty, labels are derived from
@@ -446,6 +459,7 @@ struct CascadeNode {
 
 class CascadeDecl : public Node {
 public:
+    int level = -1;   // spec/65 F65-19: Typform traegt `level:`.  -1 = absent.
     std::string name;                    // "EffectCode", "ValueType", ...
     std::string opcode;                  // optional: enum typing element 0 (node id).
                                          // When set, node ids/names are resolved and
@@ -464,6 +478,7 @@ public:
 // classes, wired in a later milestone).
 class CascadeClassDecl : public Node {
 public:
+    int level = -1;   // spec/65 F65-19: Typform traegt `level:`.  -1 = absent.
     std::string name;
     std::string bindsCascade;   // exactly one of bindsCascade / bindsEnum is set
     std::string bindsEnum;
@@ -498,6 +513,7 @@ struct ClassGroupInstance {
 // + phase 1 sees back-patch) via a synthesized __ctor invoked on {new: <group>}.
 class ClassGroupDecl : public Node {
 public:
+    int level = -1;   // spec/65 F65-19: Typform traegt `level:`.  -1 = absent.
     std::string name;
     // External config the group needs (name, type) — becomes container members,
     // set at {new: <group>, param: val}, and readable by constructors in phase 0.
