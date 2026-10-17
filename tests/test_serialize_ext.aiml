@@ -1,3 +1,4 @@
+# SPEC?: 29_serialize   # aus dem Dateinamen, zu bestaetigen
 # Extended serialization tests: structs, enums, lists, maps, round-trips
 
 # --- Type definitions ---

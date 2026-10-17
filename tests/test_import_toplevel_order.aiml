@@ -1,3 +1,4 @@
+# SPEC?: 21_namespaces   # aus dem Dateinamen, zu bestaetigen
 # Regression test: top-level statements in imported library files run in
 # SOURCE ORDER, not "all decls first then all imperative statements" (the
 # former libraryMode hoisting bug fixed in commit 2026-06-04).

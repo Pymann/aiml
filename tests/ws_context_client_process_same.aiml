@@ -1,3 +1,4 @@
+# SPEC?: 23_system   # aus dem Dateinamen, zu bestaetigen
 # Requires: library
 # Client-side entrypoint compiled with import set A + an unrelated module.  Same wire schema as the host: the snapshot must apply.
 

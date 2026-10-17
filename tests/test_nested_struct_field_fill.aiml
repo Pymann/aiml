@@ -1,3 +1,4 @@
+# SPEC?: 02_types   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Charakterisiert, wie man ein VERSCHACHTELTES Struct-Feld (resp.card: Card)
 # korrekt befüllt.  9rooms_v2 Card-Refactor: CardResp.card blieb leer.

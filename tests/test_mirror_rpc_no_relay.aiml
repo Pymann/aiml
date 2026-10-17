@@ -1,3 +1,4 @@
+# SPEC: 44_5_mirror
 # spec/44_5 §7 routing: no implicit relay, exact targets, peer ids never reused.
 #   - client A's RPCs (also a "set_result") never reach client B
 #   - host send_rpc(peer A) reaches only A; target 0 reaches both; unknown / negative targets nothing

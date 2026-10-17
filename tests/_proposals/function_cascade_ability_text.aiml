@@ -1,3 +1,4 @@
+# SPEC: 57_function_cascades
 # ============================================================================
 # DESIGN SKETCH (PROPOSAL) — "Function Cascades": a typed, context-sensitive
 # function pipeline over a cascade bytecode.  NOT compilable; lives under

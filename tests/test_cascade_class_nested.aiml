@@ -1,3 +1,4 @@
+# SPEC?: 57_function_cascades,16_classes   # aus dem Dateinamen, zu bestaetigen
 # M2 slice 2 — nested-cascade FLATTENING with a sub-field.
 #
 # OwnerRef.in_zone carries a ZoneType sub-field, so flattening EffPipe.deal_dmg

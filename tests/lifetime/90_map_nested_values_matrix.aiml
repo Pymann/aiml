@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §5.7: nested container map values are handle slots — growth, numeric keys, map-of-map, alias past drop, copy/clone, KV roundtrip.
 - model:

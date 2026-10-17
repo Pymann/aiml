@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §8: `lifetime: producer` is part of the function's SIGNATURE — callers must see it
 # regardless of definition order. Here the producer is defined AFTER its caller (9rooms

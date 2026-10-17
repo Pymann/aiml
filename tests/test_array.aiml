@@ -1,3 +1,4 @@
+# SPEC?: 52_arrays   # aus dem Dateinamen, zu bestaetigen
 # test_array.aiml — Tests for array<T:N> type, { at: [...] } read, idx: [...] write
 - model:
     name: ArrayPoint

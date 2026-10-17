@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # EXPECT-ERROR: use-after-move
 # spec/61 §8/§10: a ptr<T> moved into a parameter inside a loop is gone in the next iteration.
 - model: {name: Card, fields: [[title, string]]}

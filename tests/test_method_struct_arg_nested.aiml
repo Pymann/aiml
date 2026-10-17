@@ -1,3 +1,4 @@
+# SPEC: 16_classes,61_memory_management_DRAFT
 # spec/16 + spec/61 §3: a value-model result of a method call passed directly as a by-value
 # argument of another method (`cross(sub(a, b), sub(c, d))`) — no intermediate local.
 # Expected exit code: 0

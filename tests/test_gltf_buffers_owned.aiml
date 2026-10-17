@@ -1,3 +1,4 @@
+# SPEC: 43_1_gltf,61_memory_management_DRAFT
 # spec/43_1 + spec/61 §5: glTF accessor buffers (positions, normals, indices, world_matrix) and
 # node/mesh lists are owned containers — read in a helper, dropped at scope end, repeatedly.
 # Expected exit code: 0

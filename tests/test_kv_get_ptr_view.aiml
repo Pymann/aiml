@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 # Regression: var_kv.get returning ptr<T> as a sync view.
 #
 # When the user declares `decl: [p, ptr<T>, var_kv.get(k)]`, p points directly at

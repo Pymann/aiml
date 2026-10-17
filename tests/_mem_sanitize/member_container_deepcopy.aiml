@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # spec/61 §7.0 — a map/list/buffer FIELD stored from a BORROWED source must be DEEP-copied,
 # not shallow-memcpy'd. Else the dest model's scope-drop double-frees the buffer the source's
 # owner also frees. `persist(req)` takes req by value (borrow); `dat.produces = req.produces`

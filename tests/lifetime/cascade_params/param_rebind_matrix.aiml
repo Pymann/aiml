@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §8/§5.5: a container parameter holds its own reference for the call — rebinding it
 # (fall-through, early return, throw) never touches the caller's handle or contents.

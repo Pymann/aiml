@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §8: kv.set encodes a copy — an owned producer temp argument is released.
 - model: {name: Item, fields: [[label, string], [tags, list<string>]]}

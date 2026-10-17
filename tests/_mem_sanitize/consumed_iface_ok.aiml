@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # spec/61 §3.1: interface + concrete BOTH declare `consumed` → allowed (both dispatch paths move).
 - interface:
     name: Keeper

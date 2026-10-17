@@ -1,3 +1,4 @@
+# SPEC: 43_1_gltf
 # spec/43_1 §5: mat.extras returns the material's glTF extras as JSON text; glTF string getters
 # return owned strings (valid after scene.free, no header misreads). Read repeatedly in a helper.
 # Expected exit code: 0

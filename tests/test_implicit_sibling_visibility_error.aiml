@@ -1,3 +1,4 @@
+# SPEC: 21_namespaces
 # Negative (spec/21 §3): a file sees only its own transitive import closure.
 # vis_user_lib.aiml uses VisThing without importing vis_type_lib.aiml; that the
 # entry point imports both must NOT make VisThing visible there → compile error.

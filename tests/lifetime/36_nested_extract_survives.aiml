@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # TIER: T2
 # Spec 61 §5.7: an inner container handle co-owned elsewhere (rc>1) survives the outer's drop —

@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # spec/61 §7.0 (Increment C): a value-model (Leaf) passed by-value to a method and stored into
 # a member is SHALLOW by default → two Holders would share base's inner heap → free_decoded of
 # the owning aggregate double-frees it. C deep-copies the borrowed source into the member so the

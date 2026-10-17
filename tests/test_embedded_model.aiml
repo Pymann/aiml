@@ -1,3 +1,4 @@
+# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
 # tests/test_embedded_model.aiml — Repro-Test: Embedded Model Struct (by-value field in Model)
 #
 # Testet:

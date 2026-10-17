@@ -1,3 +1,4 @@
+# SPEC: 47_thread_safety,61_memory_management_DRAFT
 # spec/47 §1 + spec/61 §11.10: db handles are Class-6 runtime-owned singletons — opening the same
 # name again (in-memory Store/Kv/VecStore/TimeSeries) returns the SAME handle, and the runtime keeps
 # it (no user free, nothing lost at exit).

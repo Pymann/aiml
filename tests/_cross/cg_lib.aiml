@@ -1,3 +1,4 @@
+# SPEC: 58_classgroups
 # Helper for test_classgroup_cross_unit.aiml (spec/58 §11 + §1.1).  Defines a
 # classgroup in ITS OWN file; the test imports it and reaches the synthesized
 # container + subclass types cross-unit.  CoordSvc is an EMPTY base — `sees: [data]`

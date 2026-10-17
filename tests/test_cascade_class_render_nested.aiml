@@ -1,3 +1,4 @@
+# SPEC?: 57_function_cascades,16_classes   # aus dem Dateinamen, zu bestaetigen
 # M3c — EXECUTABLE render with RUNTIME nested-cascade dispatch.
 #
 # OwnerRef.in_zone carries a ZoneType sub-field, so render must, at runtime, read the

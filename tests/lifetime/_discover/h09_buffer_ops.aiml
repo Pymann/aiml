@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §5: buffer is a Class-3 rc handle — set shares/moves the handle, never the struct.
 - def:

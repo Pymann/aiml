@@ -1,3 +1,4 @@
+# SPEC: 22_exceptions
 # EXPECT-ERROR: throw expects { new: <ExceptionClass>
 # spec/22: throw takes { new: E, message: ... } or an exception variable.
 - def:

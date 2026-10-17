@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
 # Repro-Lib: library file that opens a typed Kv via lib_init.
 # Used by test_typed_kv_lib_init_target_type.aiml.
 - model:

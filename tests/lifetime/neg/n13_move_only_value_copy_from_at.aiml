@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # NEGATIVE (§5.4/§7): binding a VALUE move-only model to an `at`/`get` read materialises a
 # value-copy, which would duplicate the model's unique `ptr<T>` owner into two owners (double-free).

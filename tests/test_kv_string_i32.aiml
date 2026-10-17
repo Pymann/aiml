@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration,09_strings   # aus dem Dateinamen, zu bestaetigen
 # Test: Kv<string:i32> — scalar integer values in Kv store
 
 - decl: [pass, i32, 0]

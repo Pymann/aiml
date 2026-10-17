@@ -1,3 +1,4 @@
+# SPEC?: 19_inheritance   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Test: inherited defaults survive model inheritance and class model composition
 # Expected exit code: 0

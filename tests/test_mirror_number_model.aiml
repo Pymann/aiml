@@ -1,3 +1,4 @@
+# SPEC: 44_5_mirror
 # spec/44_5 §10: a plain-number model also travels as DELTA format 2 (serializer descriptor on both
 # sides).  Initial snapshot applies; an unchanged owner sends nothing more (revision stays); a
 # change sends exactly the new state.

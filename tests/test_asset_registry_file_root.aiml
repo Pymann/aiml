@@ -1,3 +1,4 @@
+# SPEC?: 44_7_asset_registry   # aus dem Dateinamen, zu bestaetigen
 # Asset Registry: ein einzelnes File als Root (kein Directory).
 # Spiegelt das DataCreatures-Setup (exodus-client.json enthält
 # resources/skills/skill_default.png direkt als asset_directory-Eintrag).

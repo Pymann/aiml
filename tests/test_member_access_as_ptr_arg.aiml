@@ -1,3 +1,4 @@
+# SPEC?: 18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # BUG #4: ein verschachteltes Struct-Feld (outer.inner) als Argument an einen
 # `ptr<T>`-Parameter übergeben.  Implicit-ref (struct→ptr<T>) greift bisher

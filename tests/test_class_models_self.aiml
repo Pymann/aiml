@@ -1,3 +1,4 @@
+# SPEC?: 15_models,16_classes   # aus dem Dateinamen, zu bestaetigen
 # Probe: can var_a class use `models: [SameName]` to compose with var_a same-name model?
 
 - model:

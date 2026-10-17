@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT,24_time,10_collections   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # TIER: T2
 # CONSTRUCT: map<K:V> is a refcounted handle (§5, Option B) — same discipline as list.

@@ -1,3 +1,4 @@
+# SPEC?: 10_collections   # aus dem Dateinamen, zu bestaetigen
 # Tests for io.write_file and io.list_dir
 # Expected exit code: 0
 

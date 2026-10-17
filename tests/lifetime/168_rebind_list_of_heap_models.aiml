@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §5.5/§6.1: re-binding a list<Model> local (Model with heap fields) to another list releases
 # the old list's elements by their class (their strings/lists are freed), also via idx .field on a

@@ -1,3 +1,4 @@
+# SPEC: 54_iterators,61_memory_management_DRAFT
 # static-check: off
 # spec/61 class 4 / spec/54 §5: an iterator is released at owner drop — no free, early free, moved into a callee (free fn, method, <.method), early return.
 - def:

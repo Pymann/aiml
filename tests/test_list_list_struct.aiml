@@ -1,3 +1,4 @@
+# SPEC?: 10_collections,02_types   # aus dem Dateinamen, zu bestaetigen
 # Test: list<list<Struct>> serialize and deserialize via JSON
 # Expected exit code: 0
 

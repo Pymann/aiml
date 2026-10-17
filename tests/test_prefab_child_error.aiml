@@ -1,3 +1,4 @@
+# SPEC: 44_8_prefab_static,44_8_vocab
 # Negative test (Tier 2, child-known): v.set_text("<child>", …) mit einem
 # Child-Namen, der NICHT in der `children:`-Liste des Prefabs deklariert ist,
 # aus dem v instanziiert wurde.  Zur Laufzeit → find_child NULL → silent no-op;

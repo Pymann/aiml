@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §4/§8: a producer that returns a BORROWED container element ({ call: [map.get, k] })
 # must hand out an independent copy — the caller adopted the map's own string before (9rooms

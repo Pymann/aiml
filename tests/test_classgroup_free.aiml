@@ -1,3 +1,4 @@
+# SPEC: 58_classgroups,61_memory_management_DRAFT
 # spec/58 + spec/61 §10: a classgroup instance is heap-owned by its container. `free`ing the
 # container (or its scope-drop) must run the synthesized __dtor to release each owned instance
 # (deep-free its heap fields), not just the container shell. Instances here carry a `string` heap

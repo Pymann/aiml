@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
 # Repro: full path that fails in DataCreatures:
 #   1. Function takes `ptr<Req>` where Req has var_a list<string> field.
 #   2. Build an Action struct, set Action.list_field = req.list_field.

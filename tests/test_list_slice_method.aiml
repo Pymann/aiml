@@ -1,3 +1,4 @@
+# SPEC: 01_primitive_types
 # spec/01/§5.4: list.slice(start, end) — dash-free replacement for the deprecated `lst-a-b` slice
 # notation. start inclusive, end exclusive; end optional → to len; negative end counts from the end.
 # Shallow copy into a fresh heap handle. Deterministic; expected exit 0.

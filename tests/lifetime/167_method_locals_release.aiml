@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §8/§9.1: locals of a METHOD are released on every exit — a yaml_doc box, a string from a
 # runtime call, a container bound from a producer METHOD, a container local re-bound to a producer

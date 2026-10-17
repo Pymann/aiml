@@ -1,3 +1,4 @@
+# SPEC?: 06_loops   # aus dem Dateinamen, zu bestaetigen
 - decl: [var_x, i32, 10]
 - decl: [var_y, i32, 20]
 

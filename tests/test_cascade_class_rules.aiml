@@ -1,3 +1,4 @@
+# SPEC?: 57_function_cascades,16_classes   # aus dem Dateinamen, zu bestaetigen
 # M1b + M2 — a well-formed function-cascade pool: parses the full Mask syntax AND
 # passes the static pass (every stage covered by exactly one rule, carrier chain
 # type-continuous carrier→…→taker).

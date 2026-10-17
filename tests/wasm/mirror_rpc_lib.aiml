@@ -1,3 +1,4 @@
+# SPEC?: 44_5_mirror   # aus dem Dateinamen, zu bestaetigen
 # Requires: library
 # Shared interface + class + models for the multi-file WASM mirror test.
 # Mirrors DataCreatures' Item model layout: multiple string fields, an

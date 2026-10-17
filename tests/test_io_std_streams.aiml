@@ -1,3 +1,4 @@
+# SPEC: 23_system
 # spec/23: io.stdout / io.stderr are the process's standard streams — the same handle on every
 # access (no new stream per use), so repeated writes neither accumulate memory nor lose output.
 # Expected exit code: 0

@@ -1,3 +1,4 @@
+# SPEC?: 18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 # Repro: function returns ptr<Interface> (fat pointer); caller assigns to
 # local and dispatches var_a method.  This is the pattern the datacreatures
 # client's grid_tile_at + refresh_grid pair uses.

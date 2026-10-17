@@ -1,3 +1,4 @@
+# SPEC?: 11_buffer   # aus dem Dateinamen, zu bestaetigen
 # test_buffer_f32.aiml — Buffer als f32-Array fuer Embedding-Tables
 # Testet alle Funktionalitaeten die fuer EmbeddingTable noetig sind:
 # alloc, sequentielles write, seek+read (random access), seek+write (random update), len

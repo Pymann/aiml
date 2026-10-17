@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
 # Test: Store<T> with column layout ({layout: "column"})
 # Expected exit code: 0
 

@@ -1,3 +1,4 @@
+# SPEC?: 26_concurrency,61_memory_management_DRAFT,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # TIER: T2
 # CONSTRUCT: cross-thread memory model P (§5.3) — move-send + shared + lock + spawn.

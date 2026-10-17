@@ -1,3 +1,4 @@
+# SPEC?: 18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Expected: compile error, pointer expression cannot be pushed into a value list.
 - model: { name: Payload, fields: [[marker, i32], [title, string]] }

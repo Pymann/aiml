@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §8/§9.3: container parameters (plain and consumed) are released when a throw unwinds through them.
 - model: {name: Holder, fields: [[rows, list<string>]]}

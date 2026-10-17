@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration,45_db_indexed_fields   # aus dem Dateinamen, zu bestaetigen
 # AionDB db_indexed: phase 2 — re-open the persistent Kv from a separate run
 # and verify findings_by_name() still resolves to the IDs written before.
 # Run AFTER test_db_indexed_reopen_1_write.aiml.

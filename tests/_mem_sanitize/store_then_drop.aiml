@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # Memory-safety probe (run under valgrind by run_memory_sanitizers.sh): exercises the
 # get_copy → store-into-member → scope-drop pattern that spec/61 A1+A2 must make safe.
 # Each loop iteration: deep-copy a record into a local, store it into a member (must be an

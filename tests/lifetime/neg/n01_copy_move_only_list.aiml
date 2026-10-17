@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # NEGATIVE (§10): shallow {copy} of a container whose element is move-only (ptr<T>) is a
 # COMPILE ERROR — it would duplicate a unique owner into two containers (double free). Use {clone}.

@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §5.5/§8: sys.deserialize yields a fresh owned value — decl, local rebind and field store release the carrier.
 - model: {name: Entry, fields: [[name, string], [tags, list<string>], [meta, map<string:string>]]}

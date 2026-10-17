@@ -1,3 +1,4 @@
+# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
 # Test: model field defaults are applied on decl instancing and { new: Model }
 # Expected exit code: 0
 

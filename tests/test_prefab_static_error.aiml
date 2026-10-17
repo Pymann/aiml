@@ -1,3 +1,4 @@
+# SPEC: 44_8_prefab_static,44_8_vocab
 # Negative test: engine.instantiate("<Name>") mit einem Namen, für den KEIN
 # `- prefab:` deklariert (oder importiert) ist.  Das erzeugt zur Laufzeit eine
 # unsichtbare Null-Instanz (silent no-op) und MUSS daher ein HARTER Compiler-

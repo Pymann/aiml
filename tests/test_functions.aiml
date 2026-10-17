@@ -1,3 +1,4 @@
+# SPEC?: 07_functions   # aus dem Dateinamen, zu bestaetigen
 - def:
     name: add_two
     args: [[var_a, i32], [var_b, i32]]

@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
 # tests/test_kv_nonpersist_singleton.aiml — Repro: db.open_kv non-persistent singleton-by-name
 #
 # Testet: db.open_kv("name", {persist: false}) gibt bei gleichem Namen dieselbe

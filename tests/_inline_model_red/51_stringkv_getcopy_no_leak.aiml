@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §7 regression: `decl v = stringkv.get_copy(k)` (string-valued Kv) must NOT leak per call.
 # BUG (fixed 2026-09-25): a string-valued Kv get/get_copy lowers to aiml_db_kv_get (borrow) +

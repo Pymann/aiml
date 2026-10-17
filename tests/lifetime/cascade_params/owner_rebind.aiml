@@ -1,3 +1,4 @@
+# SPEC?: 57_function_cascades,61_memory_management_DRAFT,24_time   # aus dem Dateinamen, zu bestaetigen
 # A parameter must keep the old handle alive when its original owner is rebound.
 - cascade: {name: ProbeCode, nodes: [{value: [1, i32]}]}
 - model: {name: Holder, fields: [[row, cascade<ProbeCode>]]}

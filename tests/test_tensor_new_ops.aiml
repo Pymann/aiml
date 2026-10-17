@@ -1,3 +1,4 @@
+# SPEC?: 50_tensor_runtime   # aus dem Dateinamen, zu bestaetigen
 # Tests for tensor.abs, tensor.sign, tensor.step, tensor.weighted_cross_entropy
 # Expected exit code: 0
 

@@ -1,3 +1,4 @@
+# SPEC?: 10_collections   # aus dem Dateinamen, zu bestaetigen
 # Repro: direkte Return-Expression mit list-erzeugendem Builtin schlägt fehl.
 #
 # Beobachtet im DataCreatures itemgen-Refactor (model.aiml::load_vocab_list):

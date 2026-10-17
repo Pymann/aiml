@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
 # Tests for bounded LRU on decoded_cache (Schritt 7).
 # Writes more typed entries than MAX_DECODED_LRU (1024), reads them back —
 # correctness must hold despite cache eviction. Re-reads of evicted keys

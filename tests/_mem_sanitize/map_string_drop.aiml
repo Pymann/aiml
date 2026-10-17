@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # spec/61 §8: map<string:string> built by put with interpolated keys/values. map.put moves the
 # temps into the map (consumeStringTemp) so the build is UAF-free (was a strcmp UAF). The map
 # scope-drop itself is DEFERRED (aiml_map_free occ-walk needs a grow/rehash audit), so this

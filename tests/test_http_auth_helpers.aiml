@@ -1,3 +1,4 @@
+# SPEC: 32_2_network_http_s,32_network
 # Expected exit code: 0
 # Priority-E auth/session primitives (spec/32_2 §3.13):
 #   resp.set_cookie  — Set-Cookie with secure defaults (HttpOnly/Secure/SameSite/Path)

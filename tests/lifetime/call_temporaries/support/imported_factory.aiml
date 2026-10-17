@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT,21_namespaces,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Imported signature fixture, not a standalone test program.
 - class:

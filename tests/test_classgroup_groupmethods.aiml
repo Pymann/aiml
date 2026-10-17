@@ -1,3 +1,4 @@
+# SPEC: 58_classgroups
 # spec/58 — external `groupmethods:` block: an instance's coordination methods
 # live OUTSIDE the classgroup body (in their own block/file), folded in by
 # mergeGroupMethods() before synthesis.  The classgroup body stays lean (only

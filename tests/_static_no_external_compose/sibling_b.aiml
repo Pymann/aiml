@@ -1,3 +1,4 @@
+# SPEC?: 49_static_analysis   # aus dem Dateinamen, zu bestaetigen
 # Second import for the 3-file project — same shape as sibling_a.
 
 - class:

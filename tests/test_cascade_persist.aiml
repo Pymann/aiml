@@ -1,3 +1,4 @@
+# SPEC?: 57_function_cascades   # aus dem Dateinamen, zu bestaetigen
 # Headless unit tests for the cascade row-persistence helper.  Exercises
 # the same code path the widget-runtime hits every frame, without needing
 # a real window / GL context / user clicks.

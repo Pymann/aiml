@@ -1,3 +1,4 @@
+# SPEC?: 10_collections   # aus dem Dateinamen, zu bestaetigen
 # test_list_builtins — contains/index_of/count/extend/remove_value (M1)
 # + reverse/sort/sort_desc/shuffle (M2).  Bei erster Abweichung: print + exit 1.
 

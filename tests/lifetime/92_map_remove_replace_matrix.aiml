@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §5.4/§5.5/§5.7: map remove/replace release by value class — repeated replace, growth, put(k,get(k)), source from another slot, shared + nested values, live co-owner.
 - model: {name: Tag, fields: [[label, string]]}

@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT,24_time,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # NEGATIVE Spec 61 §8: a plain ptr<T> parameter moves ownership, without consumed.
 # EXPECT-ERROR: use-after-move

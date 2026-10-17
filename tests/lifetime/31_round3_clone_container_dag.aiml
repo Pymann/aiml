@@ -1,3 +1,4 @@
+# SPEC?: 29_3_sys_clone,61_memory_management_DRAFT,24_time   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # TIER: T2
 # Spec 61 §5.1: clone preserves internal DAG sharing while becoming independent of the source.

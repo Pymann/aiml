@@ -1,3 +1,4 @@
+# SPEC: 23_system,43_5_stylized_rendering
 # spec/43_5 §5: gl_cubemap — RGBA16F faces/levels, face orientation (u, v in [-1, 1]:
 # +X (1,-v,-u), -X (-1,-v,u), +Y (u,1,v), -Y (u,-1,-v), +Z (u,-v,1), -Z (-u,-v,-1)),
 # explicit level sampling, input validation, early close; sys.exe_path (spec/23).

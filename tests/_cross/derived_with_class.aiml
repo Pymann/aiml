@@ -1,3 +1,4 @@
+# SPEC?: 16_classes   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 - import: "tests/_cross/base_model.aiml"   # Base
 

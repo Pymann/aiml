@@ -1,3 +1,4 @@
+# SPEC?: 16_classes   # aus dem Dateinamen, zu bestaetigen
 # Repro: passing a class-member of map<K:V> (or other complex collection
 # type) as argument to a free function triggers LLVM IR verification:
 #

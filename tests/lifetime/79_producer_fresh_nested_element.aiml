@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §8: a producer returning a nested container element hands out a FRESH list on every
 # path (never the callee's live handle) — correct content, no leak (9rooms combat_zone_at).

@@ -1,3 +1,4 @@
+# SPEC?: 43_1_gltf   # aus dem Dateinamen, zu bestaetigen
 # Tests für gltf namespace: load, scene, node, mesh, primitive, material
 # Expected exit code: 0
 

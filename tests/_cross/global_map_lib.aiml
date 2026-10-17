@@ -1,3 +1,4 @@
+# SPEC?: 10_collections   # aus dem Dateinamen, zu bestaetigen
 # Fixture for tests/test_cross_file_global_map.aiml — a memV3 container GLOBAL (map<Enum:i32>)
 # defined + populated here (lib A) and read from the importing unit (lib B / entry). Regression
 # for the cross-file handle-type bug: the consumer's extern view was declared with the inline map

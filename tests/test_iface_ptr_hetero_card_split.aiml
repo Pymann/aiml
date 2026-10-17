@@ -1,3 +1,4 @@
+# SPEC?: 18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Test B: interface + class Polymorphie mit heterogener list<ptr<CardBase>>.
 #

@@ -1,3 +1,4 @@
+# SPEC: 43_5_stylized_rendering
 # spec/43_5 §3: material/texture-info accessors read the material's textureInfo (texCoord, scale,
 # strength, transform per binding), scene-local indices and scene extensions/extras.
 # tests/texture_info.glb comes from tests/gen_texture_info_glb.py.

@@ -1,3 +1,4 @@
+# SPEC: 44_5_mirror
 # EXPECT-ERROR: needs an addressable object
 # spec/44_5 §4: the session borrows the registered object until unregister/close — a temporary
 # model value would be gone after the statement.

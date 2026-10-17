@@ -1,3 +1,4 @@
+# SPEC?: 44_5_mirror,29_serialize   # aus dem Dateinamen, zu bestaetigen
 # Multi-file variant: imports the shared lib (mirrors DataCreatures').
 # Same behaviour as test_mirror_rpc_server.aiml but classes live in a
 # separately-compiled library file.  Bug suspect: per-file private sret

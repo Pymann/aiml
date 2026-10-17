@@ -1,3 +1,4 @@
+# SPEC?: 56_meta   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # FEATURE: `meta: [deprecated]` auf einer def/Methode → der Compiler gibt an
 # JEDER Nutzungsstelle eine WARNING mit Source-Location aus (kein Fehler; das

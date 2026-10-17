@@ -1,3 +1,4 @@
+# SPEC: 43_1_gltf,43_2_graphics
 # spec/43_2 §3.4 + spec/43_1 §4: prim.to_gl_mesh uploads TANGENT as attribute 3; a shader reading
 # aTangent renders the mesh (glTF from shaper with a normal map).
 # Requires: display

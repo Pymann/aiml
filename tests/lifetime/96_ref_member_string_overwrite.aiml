@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §4/§5.5: a string member store through ref<T> releases the old value (int→string, concat, lone part, call result).
 - model:

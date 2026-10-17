@@ -1,3 +1,4 @@
+# SPEC?: 14_enums,21_namespaces   # aus dem Dateinamen, zu bestaetigen
 # Helfer-Modul (import-only, `_`-Präfix → vom Test-Runner übersprungen).
 # Definiert ein Enum, dessen Member NUR im Entry referenziert werden — testet
 # den Whole-Program-Merge (Decl im Import, Use im Entry).

@@ -1,3 +1,4 @@
+# SPEC: 43_5_stylized_rendering
 # spec/43_5 §9: gl_timer_query — begin/end ordering, nonblocking ready/result_ns, repeated reads,
 # one active elapsed query at a time, owner drop (Class 4).
 # Requires: display

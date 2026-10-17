@@ -1,3 +1,4 @@
+# SPEC: 15_models
 # Regression (Heap-Variante): spec/15_models.md §"Default Field Initialization"
 # garantiert Default-Init "für BOTH stack decls AND { new: Model } heap
 # allocations".  Der bestehende test_model_string_field_default_init deckt nur

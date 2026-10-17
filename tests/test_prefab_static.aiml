@@ -1,3 +1,4 @@
+# SPEC: 44_8_prefab_static,44_8_vocab
 # Positive test: statischer Prefab-Check (spec/44_8) darf bei KORREKTER
 # Verwendung nicht anschlagen —
 #   Tier 1: engine.instantiate("<Name>") mit deklariertem Prefab-Namen,

@@ -1,3 +1,4 @@
+# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # RED bis Paket 5 — doc/spec61_inline_value_model_release_plan_2026-09-24.md §1/§7.
 # Vertrag (Spec 61 §5.4): eine Value-Bindung `decl copy = at(list,i)` (Model) ist eine EIGENE inline

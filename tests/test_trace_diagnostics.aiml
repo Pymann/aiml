@@ -1,3 +1,4 @@
+# SPEC?: 48_trace   # aus dem Dateinamen, zu bestaetigen
 # Run with AIML_TRACE=trace_args,trace_numbers and AIML_TRACE_SYMBOL=all, both lifetime modes.
 # Pointer formatting must not read memory through null or model pointers.
 - interface:

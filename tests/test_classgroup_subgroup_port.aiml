@@ -1,3 +1,4 @@
+# SPEC: 58_classgroups
 # M2d — subgroup PORTS (injected dependencies).  A subgroup declares the external
 # instances it consumes via `requires: [[port, BaseClass]]`; the parent BINDS each
 # port to one of its own instances at embed time

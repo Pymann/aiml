@@ -1,3 +1,4 @@
+# SPEC: 44_5_mirror
 # spec/44_5 §7 request/response: correlation by request id, never by method/schema.
 #   1. a late response to a timed-out request never fulfils the next request of the same schema
 #   2. async send_request/take_response with swapped answer order: each id gets its own answer

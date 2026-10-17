@@ -1,3 +1,4 @@
+# SPEC?: 44_5_mirror   # aus dem Dateinamen, zu bestaetigen
 # Repro: ItemImpl with list<string> goes through real mirror.register →
 # wire encode (aiml_ser_encode) → wire decode (aiml_ser_decode) roundtrip,
 # matching DataCreatures' WS-RPC binary serializer path.  After roundtrip,

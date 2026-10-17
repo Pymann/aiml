@@ -1,3 +1,4 @@
+# SPEC: 58_classgroups
 # M1 negative — a `sees` target that names no instance in the group MUST be a
 # hard compile error (spec/58 §7).  Here `resolver` sees `logg`, but the only
 # log instance is named `log`.  The compiler must reject this (exit 1); it must

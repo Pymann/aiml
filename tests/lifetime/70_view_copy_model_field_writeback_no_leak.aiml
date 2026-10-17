@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §5.4/§5.5: like 68, but the replaced field is a nested VALUE MODEL with a heap field.
 # The view copy retained the old nested value; the member store must release it.

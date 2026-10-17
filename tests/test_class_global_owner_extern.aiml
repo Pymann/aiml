@@ -1,3 +1,4 @@
+# SPEC?: 16_classes   # aus dem Dateinamen, zu bestaetigen
 # Test: when one file owns the class instance global (no extern) and other
 # files import + extern-decl it, the defaults from the class declaration
 # ARE applied by the owner's { at: [Phase, 2] } init.

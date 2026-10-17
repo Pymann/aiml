@@ -1,3 +1,4 @@
+# SPEC: 57_function_cascades
 # BUG-Repro + regression: `set target = <.method(container)` where a sibling class
 # method takes a container (list/map) arg AND returns a container, and the result is
 # reassigned to a variable, CRASHED (SIGSEGV in JIT).

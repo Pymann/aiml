@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 regression: consumed cascade: both owner-release orders, retained temporary, throw, all four dispatch paths
 # Status: verified 2026-10-02 — exit 0, 0 definite/indirect leaks, no memory errors.

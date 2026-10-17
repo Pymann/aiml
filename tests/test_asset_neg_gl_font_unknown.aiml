@@ -1,3 +1,4 @@
+# SPEC?: 44_7_asset_registry   # aus dem Dateinamen, zu bestaetigen
 # Negative: gl.font mit string-literalem unbekanntem Stem → Compile-Hard-Error.
 # Counterpart zu test_asset_neg_unknown_stem (gl.tex) — eigenes Kind-Store.
 #

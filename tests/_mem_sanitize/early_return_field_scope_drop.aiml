@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # Regression: spec/61 §6.2 (T1) — a PRODUCER function that EARLY-RETURNS a STRING FIELD of an
 # owned value-model LOCAL must deep-free the local's SIBLING heap fields on that return path.

@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # spec/61 §3.2 — a function that RETURNS a fresh value model (`return: { type: T, lifetime:
 # producer }`) transfers ownership to the caller: the caller's receiving local must deep-free the
 # returned model's heap fields (list/string) at scope exit. Without producer-return deep-free the

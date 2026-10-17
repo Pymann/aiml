@@ -1,3 +1,4 @@
+# SPEC: 58_classgroups
 # static-check: relaxed
 # M2c — a sees edge may be typed as an INTERFACE via `inst:Iface`.  The edge
 # member becomes ptr<Iface> (fat pointer) and cross-edge calls dispatch through

@@ -1,3 +1,4 @@
+# SPEC?: 44_6_prefabs   # aus dem Dateinamen, zu bestaetigen
 # Requires: display
 # Phase 6c smoke: bind_list FFI round-trip.  Attach a list<list<i32>> to a
 # prefab-instance, read it back via bound_list(), verify pointer equality

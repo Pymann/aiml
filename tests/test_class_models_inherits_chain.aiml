@@ -1,3 +1,4 @@
+# SPEC?: 15_models,16_classes,19_inheritance   # aus dem Dateinamen, zu bestaetigen
 # Probe: class with `models: [DerivedModel]` where DerivedModel inherits from
 # another model in the same file.  This exercises the single-pass registration
 # order: ParentModel → DerivedModel (deferred until parent ready) → Behavior class

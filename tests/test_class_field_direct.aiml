@@ -1,3 +1,4 @@
+# SPEC?: 16_classes   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # PROBE: externer DIREKTER Feldzugriff (read+write) auf eine class-mit-models?
 - model: { name: BarData, fields: [[num, i32]] }

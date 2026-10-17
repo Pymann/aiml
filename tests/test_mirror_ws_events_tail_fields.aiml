@@ -1,3 +1,4 @@
+# SPEC?: 44_5_mirror,32_4_network_websockets   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Regression probe: typed websocket mirror with list<model> followed by more synced fields.
 # Reproduces the 9rooms suspicion around GameView.events and fields after it.

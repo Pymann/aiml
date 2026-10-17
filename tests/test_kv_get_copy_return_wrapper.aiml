@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration   # aus dem Dateinamen, zu bestaetigen
 # Regression: a wrapper method `return kv.get_copy(k)` (NOT a direct decl-site).
 #
 # The 2026-05 fix deep-copies get_copy results only at the DECL site

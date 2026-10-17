@@ -1,3 +1,4 @@
+# SPEC: 11_buffer
 # spec/11: buffer.write_to(f) writes [0, len) binary-safe; -1 on null handle or short write.
 # Expected exit code: 0
 - def:

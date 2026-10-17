@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration,42_path_type   # aus dem Dateinamen, zu bestaetigen
 # Control case: literal persistent db path.
 # Expected exit code: 0
 

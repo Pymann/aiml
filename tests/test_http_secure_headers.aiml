@@ -1,3 +1,4 @@
+# SPEC: 32_2_network_http_s,32_network
 # Expected exit code: 0
 # srv.secure_headers(hsts) adds nosniff / X-Frame-Options / Referrer-Policy (+ HSTS)
 # to EVERY response — normal 200 AND parser-reject errors (spec/32_2 §3.10).

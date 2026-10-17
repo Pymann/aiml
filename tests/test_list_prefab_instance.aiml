@@ -1,3 +1,4 @@
+# SPEC?: 44_6_prefabs   # aus dem Dateinamen, zu bestaetigen
 # test_list_prefab_instance.aiml — verifies that list<prefab_instance>
 # can be declared, pushed to, and read back. Discovered during datacreatures
 # DnD work that `decl: [x, list<prefab_instance>]` reliably traps in wasm

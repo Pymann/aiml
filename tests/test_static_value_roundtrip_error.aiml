@@ -1,3 +1,4 @@
+# SPEC: 49_static_analysis,49_static_off
 # Negative (spec/49 §21): a heap value model passed by value to a call and reassigned from its
 # result is a compile error — pass ref<T> and mutate in place.
 - model:

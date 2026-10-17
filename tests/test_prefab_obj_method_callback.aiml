@@ -1,3 +1,4 @@
+# SPEC?: 44_6_prefabs   # aus dem Dateinamen, zu bestaetigen
 # Verifies the compiler emits a trampoline for `on_click: obj.method` so
 # prefab UI buttons can target class methods on a global instance.
 # Expected exit code: 0

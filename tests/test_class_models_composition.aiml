@@ -1,3 +1,4 @@
+# SPEC?: 15_models,16_classes   # aus dem Dateinamen, zu bestaetigen
 # Probe: model + class via `models:` composition.  Class hat anderen Namen
 # als Modell, referenziert das Modell explizit und fügt Methoden hinzu.
 

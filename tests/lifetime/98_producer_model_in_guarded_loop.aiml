@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §8: producer model locals in a guarded while loop (borrows, at-views, nested else, second fetch) are dropped every iteration.
 - model:

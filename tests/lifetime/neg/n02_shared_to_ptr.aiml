@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT,24_time,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # NEGATIVE (§6.2/§10): shared<T> → ptr<T> is a forbidden cross-kind assignment — you cannot
 # extract unique ownership from a co-owned object. Borrow (ref<T>) or co-own (shared<T>) instead.

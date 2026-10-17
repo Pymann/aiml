@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Faithful repro of 9rooms ConnRegistry.touch: a value-model element is read from a list via `at`,
 # a STRING field is mutated, and the element is written back via `idx` — in a loop over the same

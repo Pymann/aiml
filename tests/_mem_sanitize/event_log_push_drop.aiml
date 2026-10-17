@@ -1,3 +1,4 @@
+# SPEC?: 46_log   # aus dem Dateinamen, zu bestaetigen
 # Mirrors 9rooms event-log (sources/match/event_log.aiml log_event): a helper takes a string
 # PARAM and pushes it into a model's list<string>; callers invoke it with an INTERPOLATION TEMP
 # ("${a} attacks ${b}"). The live regression was "event-logs komisch bis kaputt": list<string>.push

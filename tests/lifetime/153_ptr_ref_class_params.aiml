@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §8: ptr<T> param read/return, ref<T> param field writes, class instance by value (field writes stay local).
 - model: {name: Card, fields: [[title, string], [tags, list<string>]]}

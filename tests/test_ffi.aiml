@@ -1,3 +1,4 @@
+# SPEC?: 35_ffi   # aus dem Dateinamen, zu bestaetigen
 # Tests for extern "C" FFI
 # Expected exit code: 0
 

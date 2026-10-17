@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Faithful repro of 9rooms AuthService.handle_validate: a PRODUCER that returns a whole value-model
 # `out`, but along the way binds SIBLING owned value-model locals from member get_copy (`eml` string,

@@ -1,3 +1,4 @@
+# SPEC?: 15_models   # aus dem Dateinamen, zu bestaetigen
 # Isolates the 9rooms card_states/enchantment_picker crash class: a model (EntX) with a list<BuffX>,
 # where BuffX has a STRING + nested scalar-list + nested model-list (the Buff shape). The game builds
 # a buff, push-deep-copies it into ent.buffs (add_buff), then idx-writes ent back into a container

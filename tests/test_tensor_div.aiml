@@ -1,3 +1,4 @@
+# SPEC?: 50_tensor_runtime   # aus dem Dateinamen, zu bestaetigen
 # Tests for tensor.div (elementwise division)
 # Expected exit code: 0
 

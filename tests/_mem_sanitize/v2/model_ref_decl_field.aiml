@@ -1,3 +1,4 @@
+# SPEC?: 15_models,18_refs_and_pointers   # aus dem Dateinamen, zu bestaetigen
 # v2 refcount-model probe: decl {new} + field read/write auto-deref + scope decref.
 # Run with AIML_MODEL_REFCOUNT=1 AIML_LIFETIME_DROPS=1 (v2 reference semantics).
 - model:

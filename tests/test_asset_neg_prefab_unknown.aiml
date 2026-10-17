@@ -1,3 +1,4 @@
+# SPEC?: 44_6_prefabs   # aus dem Dateinamen, zu bestaetigen
 # Negative: Prefab-Spec mit Stem der nicht im texture-Store existiert →
 # Compile-Hard-Error (Typo wird zur Build-Zeit gefangen statt als
 # Black-Square zur Runtime).

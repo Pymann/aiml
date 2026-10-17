@@ -1,3 +1,4 @@
+# SPEC?: 61_memory_management_DRAFT   # aus dem Dateinamen, zu bestaetigen
 # Regression repro for the 9rooms_v2 login/deckset break ("something fundamental with KV").
 # Mimics: a service method get_copy's a model and returns it (login reads User); then the
 # SAME key is read again (decksets after login).  If the scope-drop of the first copy frees

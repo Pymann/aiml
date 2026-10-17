@@ -1,3 +1,4 @@
+# SPEC: 43_1_gltf,43_2_graphics
 # spec/43_2 §3.4 + spec/43_1 §9: prim.to_gl_mesh uploads JOINTS_0 / WEIGHTS_0 as attributes 4 / 5;
 # a skinning shader blends uBones (uniform_mat4_array) by them. tests/skin_tube.glb comes from
 # shaper tests/p10/ok/skin_blend.shaml (6 bones, smooth weights).

@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # Tests for AionDB: Store<T>, Kv<K:V>, VecStore + VecResult
 # Expected exit code: 0

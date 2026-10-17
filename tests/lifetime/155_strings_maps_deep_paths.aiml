@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §4/§5: self-building strings, chained string builtins, map remove, deep field paths, model copy, fn<Model>.
 - model: {name: Leaf, fields: [[text, string], [marks, list<string>]]}

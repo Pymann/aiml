@@ -1,3 +1,4 @@
+# SPEC?: 44_5_mirror,32_4_network_websockets   # aus dem Dateinamen, zu bestaetigen
 # static-check: off
 # Probe: same as test_mirror_ws_list_mutation, but give the WS client time to drain
 # multiple queued frames before asserting on the mutated replica state.

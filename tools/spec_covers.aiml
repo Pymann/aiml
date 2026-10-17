@@ -1,0 +1,167 @@
+# spec_covers.aiml — welcher Test beansprucht welches Spec-Kapitel?
+#
+# Drei Arten von Treffern, strikt getrennt (tools/spec_covers_rules.txt):
+#   A = AUSGEWIESEN  der Test nennt `spec/NN` selbst im Text   -> eine ZUSAGE
+#   N = NAME         der Dateiname nennt das Thema             -> starker Hinweis
+#   D = BENUTZT      der Rumpf benutzt ein Konstrukt           -> schwacher Hinweis
+#
+# Nur A ist eine Zusage.  Ein Kapitel mit ausschliesslich D-Treffern ist NICHT
+# abgedeckt, es wird nur beruehrt.  Diese Trennung ist der Zweck des Werkzeugs:
+# ohne sie taeuscht die Liste Abdeckung vor, und genau das soll sie aufdecken.
+#
+# Ausgabe je Datei:  <pfad>\tA=<kapitel,...>\tN=<kapitel,...>\tD=<kapitel,...>
+
+- model:
+    name: Rule
+    fields:
+      - [kind, i32, 0]            # 0=A  1=N  2=D
+      - [mark, string, ""]
+      - [chap, string, ""]
+
+- class:
+    name: Covers
+    members:
+      - [rules, list<Rule>, null, { access: public }]
+    methods:
+      - def:
+          name: load
+          args: [[rules_file, string]]
+          return: i32
+          body:
+            - decl: [rule_path, path, { call: [path.from_string, rules_file] }]
+            - decl: [raw, string, { call: [io.read_file, rule_path] }]
+            - decl: [lines, list<string>, { call: [raw.split, "\n"] }]
+            - decl: [idx, i32, 0]
+            - while:
+                condition: { lt: [idx, { call: [lines.len] }] }
+                body:
+                  - decl: [one, string, { at: [lines, idx] }]
+                  - decl: [is_cmt, bool, { call: [one.starts_with, "#"] }]
+                  - decl: [bar, i32, { call: [one.index_of, "|"] }]
+                  - if:
+                      condition: { "&&": [{ eq: [is_cmt, false] }, { gt: [bar, 0] }] }
+                      then:
+                        - decl: [parts, list<string>, { call: [one.split, "|"] }]
+                        - if:
+                            condition: { eq: [{ call: [parts.len] }, 3] }
+                            then:
+                              - decl: [row, Rule]
+                              - decl: [which, i32, 2]
+                              - if:
+                                  condition: { call: [one.starts_with, "A|"] }
+                                  then:
+                                    - set: [which, 0]
+                              - if:
+                                  condition: { call: [one.starts_with, "N|"] }
+                                  then:
+                                    - set: [which, 1]
+                              - set: [row.kind, which]
+                              - set: [row.mark, { at: [parts, 1] }]
+                              - set: [row.chap, { at: [parts, 2] }]
+                              - call: [<.rules.push, row]
+                  - set: [idx, { +: [idx, 1] }]
+            - return: [{ call: [<.rules.len] }]
+
+      # Kapitel EINER Art, die in `text` vorkommen, als "a,b,c".
+      - def:
+          name: hits_for
+          args: [[text, string], [want_kind, i32]]
+          return: string
+          body:
+            - decl: [out, string, ""]
+            - decl: [idx, i32, 0]
+            - while:
+                condition: { lt: [idx, { call: [<.rules.len] }] }
+                body:
+                  - decl: [row, Rule, { at: [<.rules, idx] }]
+                  - if:
+                      condition: { eq: [row.kind, want_kind] }
+                      then:
+                        - decl: [pos, i32, { call: [text.index_of, row.mark] }]
+                        - if:
+                            condition: { gte: [pos, 0] }
+                            then:
+                              - decl: [seen, i32, { call: [out.index_of, row.chap] }]
+                              - if:
+                                  condition: { lt: [seen, 0] }
+                                  then:
+                                    - if:
+                                        condition: { gt: [{ call: [out.len] }, 0] }
+                                        then:
+                                          - set: [out, "${out},"]
+                                    - set: [out, "${out}${row.chap}"]
+                  - set: [idx, { +: [idx, 1] }]
+            - return: [out]
+
+      - def:
+          name: report_one
+          args: [[fpath, string]]
+          return: i32
+          body:
+            - decl: [file_path, path, { call: [path.from_string, fpath] }]
+            - decl: [text, string, { call: [io.read_file, file_path] }]
+            - decl: [auth, string, { call: [<.hits_for, text, 0] }]
+            - decl: [byname, string, { call: [<.hits_for, fpath, 1] }]
+            - decl: [used, string, { call: [<.hits_for, text, 2] }]
+            - call: [io.write, io.stdout, "${fpath}\tA=${auth}\tN=${byname}\tD=${used}\n"]
+            - return: [0]
+
+      # Arbeitsliste statt Rekursion: gefundene Unterverzeichnisse werden angehaengt.
+      - def:
+          name: walk
+          args: [[root_dir, string]]
+          return: i32
+          body:
+            - decl: [dirs, list<string>]
+            - call: [dirs.push, root_dir]
+            - decl: [dir_idx, i32, 0]
+            - decl: [seen_files, i32, 0]
+            - while:
+                condition: { lt: [dir_idx, { call: [dirs.len] }] }
+                body:
+                  - decl: [dir_str, string, { at: [dirs, dir_idx] }]
+                  - decl: [dir_path, path, { call: [path.from_string, dir_str] }]
+                  - decl: [ents, list<path>, { call: [io.list_dir, dir_path] }]
+                  - decl: [ent_idx, i32, 0]
+                  - while:
+                      condition: { lt: [ent_idx, { call: [ents.len] }] }
+                      body:
+                        - decl: [ent, path, { at: [ents, ent_idx] }]
+                        - decl: [ent_str, string, { call: [ent.to_string] }]
+                        - decl: [is_cache, i32, { call: [ent_str.index_of, "__aiml_cache"] }]
+                        - if:
+                            condition: { lt: [is_cache, 0] }
+                            then:
+                              - if:
+                                  condition: { call: [io.is_dir, ent] }
+                                  then:
+                                    - call: [dirs.push, ent_str]
+                                  else:
+                                    - if:
+                                        condition: { call: [ent_str.ends_with, ".aiml"] }
+                                        then:
+                                          - call: [<.report_one, ent_str]
+                                          - set: [seen_files, { +: [seen_files, 1] }]
+                        - set: [ent_idx, { +: [ent_idx, 1] }]
+                  - set: [dir_idx, { +: [dir_idx, 1] }]
+            - return: [seen_files]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [tool, Covers]
+      - decl: [rule_count, i32, { call: [tool.load, "tools/spec_covers_rules.txt"] }]
+      - if:
+          condition: { lt: [rule_count, 10] }
+          then:
+            - call: [log.error, "spec_covers: Regeltabelle leer oder unlesbar (${rule_count})"]
+            - return: [1]
+      - decl: [scan_root, string, { call: [sys.get_arg, 1] }]
+      - if:
+          condition: { eq: [{ call: [scan_root.len] }, 0] }
+          then:
+            - set: [scan_root, "tests"]
+      - decl: [done, i32, { call: [tool.walk, scan_root] }]
+      - call: [io.write, io.stderr, "spec_covers: ${rule_count} Regeln, ${done} Dateien in ${scan_root}\n"]
+      - return: [0]

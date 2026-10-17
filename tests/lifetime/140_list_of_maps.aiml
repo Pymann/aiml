@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §5.7: list<map> elements are handles — growth, nested put, drop.
 - model: {name: Item, fields: [[label, string], [tags, list<string>]]}

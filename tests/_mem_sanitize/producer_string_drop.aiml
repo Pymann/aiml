@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # spec/61: a `producer` function returning a FRESH string hands ownership to the caller, which must
 # drop it. This probe reproduces the 9rooms deckset-editor leak shapes that a naive concat-local
 # return does NOT (freshOwned already handles that one):

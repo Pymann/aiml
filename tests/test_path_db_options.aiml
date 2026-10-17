@@ -1,3 +1,4 @@
+# SPEC?: 31_db_integration,42_path_type   # aus dem Dateinamen, zu bestaetigen
 # Tests path values used inside db option bags. This is aimed at the current
 # persistence/path regression where literal paths behave differently from path
 # variables passed as {path: ...}.

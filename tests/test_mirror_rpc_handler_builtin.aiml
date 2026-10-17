@@ -1,3 +1,4 @@
+# SPEC?: 44_5_mirror   # aus dem Dateinamen, zu bestaetigen
 # Verifies that `mirror.RpcHandler` is a builtin interface — projects can
 # write `implements: [mirror.RpcHandler]` without redefining the interface.
 # Expected exit code: 0

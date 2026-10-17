@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # spec/61 §7.0: pushing a BORROWED string (a member/field access like `ent.pid` / `<.name`) into a
 # list must INCREF — the list takes its own reference. Otherwise the list aliases the source model's
 # refcounted buffer, and dropping the list (e.g. a `producer` return the caller drops) frees a string

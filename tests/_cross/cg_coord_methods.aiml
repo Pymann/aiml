@@ -1,3 +1,4 @@
+# SPEC: 58_classgroups
 # Helper: an external `groupmethods:` block (spec/58 §1.1) for CrossRuntime.coord,
 # in a DIFFERENT file than the classgroup (which is in cg_lib.aiml).  Proves the
 # cross-file merge: the method is folded onto the synthesized CoordSvc subclass and

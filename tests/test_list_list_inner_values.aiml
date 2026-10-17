@@ -1,3 +1,4 @@
+# SPEC?: 10_collections   # aus dem Dateinamen, zu bestaetigen
 # Test: list<list<i32>> inner values preserved through JSON deserialize and WAL var_kv
 # Expected exit code: 0
 

@@ -1,3 +1,4 @@
+# SPEC: 61_memory_management_DRAFT
 # static-check: off
 # spec/61 §4/§8: Kv get_copy results are owned by the caller — conditional push, producer return of get_copy, value-model arg.
 - model:

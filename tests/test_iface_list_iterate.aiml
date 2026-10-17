@@ -1,3 +1,4 @@
+# SPEC: 18_instantiation,18_refs_and_pointers
 # Probe: list<ptr<Class>> iteration + upcast to ptr<Interface> per element.
 # Saubere Architektur: Modell hält Daten, Klasse mit anderem Namen referenziert
 # via `models:` das Modell und implementiert das Interface.
