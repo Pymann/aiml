@@ -1,0 +1,35 @@
+# SPEC: 08_entrypoint,65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: session
+# TIER: T1
+# CLEARANCE: 7
+# CONSTRUCT: spec/65 F65-26 (korrigiert 17.10.2026) — eine ISOLIERTE Sitzung definiert ihre
+#            eigenen Symbole frei.  Sie sind lokal zu ihrem frischen Kontext und erreichen die
+#            Tabelle des Wirts nie; `create_level` regelt nur das Hinzufuegen BEIM WIRT.
+# COVERS: eigener `def` in einer eingeschraenkten Sitzung ohne `create_level`; Aufruf der
+#         eigenen Schoepfung (moeglich, weil ihr Level die clearance IST, F65-27);
+#         kein `level:` in der Quelle (das waere Selbstbeglaubigung, neg/n16).
+# WARUM DIESE PROBE EXISTIERT: der frueher hier stehende Entwurf verlangte `create_level` fuer
+#         JEDE Definition — und weil jedes aiml-Programm ein `- def: main` braucht (spec/08),
+#         haette die Vorgabe 0 jedes Skript verboten.  Diese Probe haelt die Korrektur fest.
+# EXPECT: exit 0.
+
+- def:
+    name: my_helper
+    return: i32
+    body:
+      - return: [4]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [got, i32, { call: [my_helper] }]
+      - if:
+          condition: { neq: [got, 4] }
+          then:
+            - call: [log.error, "my_helper lieferte ${got}, erwartet 4"]
+            - return: [1]
+      - call: [log.info, "PASS 06 isolierte Sitzung definiert frei"]
+      - return: [0]

@@ -1,0 +1,16 @@
+# SPEC: 65_symbol_clearance
+# Requires: driver
+# static-check: off
+# NEEDS: exports
+# CLEARANCE: 7
+# EXPORTS: tests/clearance/host_exports.txt
+# NEGATIVE (spec/65 F65-4): der Wirt bietet `wipe_queue` auf Level 2 an; diese Sitzung
+# hat Freigabe 7.  Erreichbar ist nur, was `Freigabe <= Level` erfuellt.
+# Die Probe DEFINIERT nichts — sie darf es nicht: ein `level:` in eigener Quelle waere
+# Selbstbeglaubigung (F65-27), und genau darum muss das Level vom Wirt kommen.
+# EXPECT-ERROR: clearance-denied
+- def:
+    name: main
+    return: i32
+    body:
+      - return: [{ call: [wipe_queue] }]

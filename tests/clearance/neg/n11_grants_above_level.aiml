@@ -1,0 +1,20 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: step2
+# CLEARANCE: none
+# NEGATIVE (spec/65 F65-10, F65-21): a gateway may only DROP privilege. `grants:` above `level:`
+# is meaningless and is far more likely a typo than an intention.
+# EXPECT-ERROR: invalid-grants
+- def:
+    name: restart_agent
+    level: 7
+    grants: 200                              # ← 200 > 7: grants nothing, hides a mistake
+    return: i32
+    body:
+      - return: [0]
+- def:
+    name: main
+    return: i32
+    body:
+      - return: [{ call: [restart_agent] }]

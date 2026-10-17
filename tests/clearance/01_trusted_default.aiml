@@ -1,0 +1,56 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: step2
+# TIER: T1
+# CLEARANCE: none
+# CONSTRUCT: spec/65 F65-1 — the single-binary case. Annotations are PRESENT and are validated
+#            for syntax, but nothing is enforced: no clearance is set, so the pass never runs.
+# COVERS: `level:` accepted on a def; `grants:` accepted; a call edge that WOULD violate F65-9
+#         (level 200 calling level 2 without `grants:`) compiles anyway, because the flow check
+#         is opt-in (F65-17) and off here. This is the probe that proves the feature is ABSENT
+#         by default rather than merely permissive.
+# EXPECT: exit 0.
+
+- def:
+    name: wipe_queue
+    level: 2
+    return: i32
+    body:
+      - return: [7]
+
+- def:
+    name: open_to_all
+    level: 200
+    return: i32
+    body:
+      # F65-9 would reject this edge (200 -> 2) under the opt-in rule; in a trusted build it is
+      # not even examined.
+      - return: [{ call: [wipe_queue] }]
+
+- def:
+    name: with_gateway
+    level: 200
+    grants: 2
+    return: i32
+    body:
+      - return: [{ call: [wipe_queue] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [via, i32, { call: [open_to_all] }]
+      - decl: [gate, i32, { call: [with_gateway] }]
+      - if:
+          condition: { neq: [via, 7] }
+          then:
+            - call: [log.error, "open_to_all lieferte ${via}, erwartet 7"]
+            - return: [1]
+      - if:
+          condition: { neq: [gate, 7] }
+          then:
+            - call: [log.error, "with_gateway lieferte ${gate}, erwartet 7"]
+            - return: [1]
+      - call: [log.info, "PASS 01 trusted default: Annotationen inert"]
+      - return: [0]

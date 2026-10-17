@@ -1,0 +1,16 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: guard
+# CLEARANCE: 7
+# NEGATIVE (spec/65 F65-14): with pointer arithmetic, in-process code reaches every byte
+# regardless of any name rule. A level system that admits this checks the front door of a house
+# without walls.
+# EXPECT-ERROR: clearance-dialect
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [adr, i64, 140737488355328]
+      - decl: [peek, ptr<i32>, { cast: [adr, ptr<i32>] }]    # ← integer -> pointer
+      - return: [0]

@@ -1,0 +1,19 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: step2
+# CLEARANCE: none
+# NEGATIVE (spec/65 F65-17, F65-21): `invalid-level` fires in EVERY build, trusted included —
+# an annotation is never silently ignored, or it rots.
+# EXPECT-ERROR: invalid-level
+- def:
+    name: some_work
+    level: "high"                            # ← not an integer 0…255
+    return: i32
+    body:
+      - return: [0]
+- def:
+    name: main
+    return: i32
+    body:
+      - return: [{ call: [some_work] }]

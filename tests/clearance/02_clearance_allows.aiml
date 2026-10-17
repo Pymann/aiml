@@ -1,0 +1,43 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: host
+# UMBAU NOETIG: diese Probe definiert ihre Symbole noch selbst MIT `level:` — seit
+#   F65-27 ist das Selbstbeglaubigung.  Sie braucht die Wirtsvorrichtung aus Schritt 6b
+#   (Signatur + Adresse, F65-24): die Level kommen dann aus der Export-Tabelle und die
+#   Rumpfe vom Wirt.  Bis dahin AUSSTEHEND und bewusst nicht "repariert", weil eine
+#   Probe ohne Wirt die Aussage nicht treffen kann.
+# TIER: T1
+# CLEARANCE: 7
+# CONSTRUCT: spec/65 F65-4 — the ordering. A session at clearance 7 reaches a symbol at level 7
+#            (equal is allowed) and one at level 255, but nothing below 7 (see neg/n01).
+# COVERS: `session_clearance <= symbol_level`; equality is access; the open end (255).
+# EXPECT: exit 0.
+
+- def:
+    name: read_status
+    level: 7
+    return: i32
+    body:
+      - return: [3]
+
+- def:
+    name: say_hello
+    level: 255
+    return: i32
+    body:
+      - return: [4]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [sta, i32, { call: [read_status] }]
+      - decl: [hey, i32, { call: [say_hello] }]
+      - if:
+          condition: { neq: [{ +: [sta, hey] }, 7] }
+          then:
+            - call: [log.error, "Summe ${sta}+${hey} falsch"]
+            - return: [1]
+      - call: [log.info, "PASS 02 clearance 7 erreicht Level 7 und 255"]
+      - return: [0]

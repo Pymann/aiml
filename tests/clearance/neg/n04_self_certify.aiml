@@ -1,0 +1,14 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: session
+# CLEARANCE: 7
+# NEGATIVE (spec/65 F65-6): source may carry `level:` on what it DEFINES, never the clearance it
+# RUNS AT. Self-certification would be a one-line escalation.
+# EXPECT-ERROR: clearance-self-certify
+- clearance: 0                              # ← not a thing; the host decides this
+- def:
+    name: main
+    return: i32
+    body:
+      - return: [0]

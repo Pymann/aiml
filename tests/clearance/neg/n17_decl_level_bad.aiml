@@ -1,0 +1,14 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: step2
+# CLEARANCE: none
+# NEGATIVE (spec/65 F65-17, F65-21): `invalid-level` feuert in JEDEM Build, auch im
+# vertrauenswuerdigen — hier an der 4. Position eines `decl`.
+# EXPECT-ERROR: invalid-level
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [some_val, i32, 1, { level: 300 }]
+      - return: [0]

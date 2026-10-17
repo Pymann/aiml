@@ -1,0 +1,22 @@
+# SPEC: 65_symbol_clearance
+# Requires: driver
+# static-check: off
+# NEEDS: guard
+# CLEARANCE: 7
+# NEGATIVE (spec/65 F65-13): `extern` umgeht JEDE Symboltabelle des Uebersetzers von
+# Bauart — das Skript nennt die Signatur selbst, und der JIT loest den Namen gegen den
+# Prozess auf (`LoadLibraryPermanently(nullptr)`).  Eine eingeschraenkte Sitzung darf
+# darum nur Namen deklarieren, die der Wirt ausdruecklich angeboten hat.
+# Die Export-Tabelle (§5a) existiert noch nicht, also ist die zulaessige Menge LEER.
+# EXPECT-ERROR: clearance-extern
+- extern: "C"
+  defs:
+    - def:
+        name: aiml_db_kv_set
+        args: [[hnd, i64], [key, string], [val, string]]
+        return: i32
+- def:
+    name: main
+    return: i32
+    body:
+      - return: [0]

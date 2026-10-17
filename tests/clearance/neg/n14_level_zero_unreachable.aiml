@@ -1,0 +1,15 @@
+# SPEC: 65_symbol_clearance
+# Requires: driver
+# static-check: off
+# NEEDS: exports
+# CLEARANCE: 1
+# EXPORTS: tests/clearance/host_exports.txt
+# NEGATIVE (spec/65 F65-5, F65-22): Level 0 ist das geschlossene Ende — erreichbar fuer
+# NIEMANDEN, auch nicht fuer die Freigabe 1, denn `1 <= 0` ist falsch.  Das ist die
+# Symbolseite der Asymmetrie: am Symbol heisst 0 „niemand", als Freigabe ist 0 ungueltig.
+# EXPECT-ERROR: clearance-denied
+- def:
+    name: main
+    return: i32
+    body:
+      - return: [{ call: [never_exposed] }]
