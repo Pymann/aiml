@@ -1,0 +1,46 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: host
+# UMBAU NOETIG: diese Probe definiert ihre Symbole noch selbst MIT `level:` — seit
+#   F65-27 ist das Selbstbeglaubigung.  Sie braucht die Wirtsvorrichtung aus Schritt 6b
+#   (Signatur + Adresse, F65-24): die Level kommen dann aus der Export-Tabelle und die
+#   Rumpfe vom Wirt.  Bis dahin AUSSTEHEND und bewusst nicht "repariert", weil eine
+#   Probe ohne Wirt die Aussage nicht treffen kann.
+# TIER: T1
+# CLEARANCE: 1
+# CONSTRUCT: spec/65 F65-7 — "no clearance" and "the most privileged clearance" are DIFFERENT
+#            states. Clearance 1 is the admin console: it reaches every ANNOTATED level...
+# COVERS: ...which is the reachability half. The other two halves are neg/n12 (the dropped
+#         dialect still applies at clearance 1) and neg/n14 (level 0 is reachable by nobody,
+#         not even by admin). Three probes, one requirement — one of them must compile and the
+#         other two must not.
+# EXPECT: exit 0.
+
+- def:
+    name: deep_work
+    level: 1
+    return: i32
+    body:
+      - return: [5]
+
+- def:
+    name: say_hello
+    level: 255
+    return: i32
+    body:
+      - return: [6]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [low, i32, { call: [deep_work] }]
+      - decl: [hey, i32, { call: [say_hello] }]
+      - if:
+          condition: { neq: [{ +: [low, hey] }, 11] }
+          then:
+            - call: [log.error, "Summe ${low}+${hey} falsch"]
+            - return: [1]
+      - call: [log.info, "PASS 05 clearance 1 erreicht Level 1 und 255"]
+      - return: [0]

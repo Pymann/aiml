@@ -1,0 +1,63 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: step3
+# TIER: T1
+# CLEARANCE: none
+# STATIC-CLEARANCE: on
+# CONSTRUCT: spec/65 F65-17 — the opt-in consistency check in a TRUSTED build. Nothing is
+#            restricted (no clearance), but the annotations are checked against each other so
+#            they cannot rot before a console exists.
+# COVERS: a monotone chain (255 -> 200 -> 7 -> 7) passes; equal levels are fine; a call to an
+#         UNANNOTATED helper from a level-0 body is fine (unannotated == 0, F65-5).
+# EXPECT: exit 0.
+
+- def:
+    name: helper
+    return: i32
+    body:
+      - return: [1]
+
+- def:
+    name: deep_work
+    level: 0
+    return: i32
+    body:
+      - return: [{ call: [helper] }]
+
+- def:
+    name: mid_work
+    level: 7
+    grants: 0
+    return: i32
+    body:
+      - return: [{ call: [deep_work] }]
+
+- def:
+    name: outer_work
+    level: 200
+    grants: 7
+    return: i32
+    body:
+      - return: [{ call: [mid_work] }]
+
+- def:
+    name: top_work
+    level: 255
+    grants: 200
+    return: i32
+    body:
+      - return: [{ call: [outer_work] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [val, i32, { call: [top_work] }]
+      - if:
+          condition: { neq: [val, 1] }
+          then:
+            - call: [log.error, "Kette lieferte ${val}, erwartet 1"]
+            - return: [1]
+      - call: [log.info, "PASS 04 Flussprüfung sauber"]
+      - return: [0]

@@ -1,0 +1,15 @@
+# SPEC: 65_symbol_clearance
+# Requires: driver
+# static-check: off
+# NEEDS: exports
+# CLEARANCE: 7
+# EXPORTS: tests/clearance/host_exports.txt
+# NEGATIVE (spec/65 F65-5): nichts wird durch Auslassen erreichbar.  `new_helper` steht
+# nicht in der Export-Tabelle — also ist es nicht erreichbar, und ein neuer `def` beim
+# Wirt weitet nicht stillschweigend aus, was eine Konsole erreicht.
+# EXPECT-ERROR: clearance-denied
+- def:
+    name: main
+    return: i32
+    body:
+      - return: [{ call: [new_helper] }]

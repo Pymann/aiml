@@ -1,0 +1,26 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: step3
+# CLEARANCE: none
+# STATIC-CLEARANCE: on
+# NEGATIVE (spec/65 F65-9): an open function reaching a restricted one by detour. Without
+# `grants:` this is a defect in the HOST's API surface and is reported in the host build.
+# EXPECT-ERROR: clearance-flow
+- def:
+    name: wipe_queue
+    level: 2
+    return: i32
+    body:
+      - return: [1]
+- def:
+    name: open_to_all
+    level: 200
+    return: i32
+    body:
+      - return: [{ call: [wipe_queue] }]    # ← 200 -> 2 without `grants:`
+- def:
+    name: main
+    return: i32
+    body:
+      - return: [{ call: [open_to_all] }]

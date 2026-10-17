@@ -1,0 +1,24 @@
+# SPEC: 65_symbol_clearance
+# Requires: driver
+# static-check: off
+# NEEDS: exports
+# TIER: T1
+# CLEARANCE: 7
+# EXPORTS: tests/clearance/host_exports.txt
+# CONSTRUCT: spec/65 F65-13 — die Kehrseite von neg/n05.  Der Wirt bietet `aiml_str_dup`
+#            auf Level 7 an, die Sitzung hat Freigabe 7: die `extern`-Deklaration ist
+#            damit ZUGELASSEN.  Ohne die Tabelle war jede abgelehnt; mit ihr entscheidet
+#            das Level, und das ist der Unterschied zwischen „fail closed" und „zu".
+# EXPECT: exit 0.
+- extern: "C"
+  defs:
+    - def:
+        name: aiml_str_dup
+        args: [[src, string]]
+        return: string
+- def:
+    name: main
+    return: i32
+    body:
+      - call: [log.info, "PASS 08 extern aus der Export-Tabelle zugelassen"]
+      - return: [0]

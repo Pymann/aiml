@@ -1,0 +1,18 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: step2
+# CLEARANCE: none
+# NEGATIVE (spec/65 F65-4, F65-21): the range is 0…255.
+# EXPECT-ERROR: invalid-level
+- def:
+    name: some_work
+    level: 999
+    return: i32
+    body:
+      - return: [0]
+- def:
+    name: main
+    return: i32
+    body:
+      - return: [{ call: [some_work] }]

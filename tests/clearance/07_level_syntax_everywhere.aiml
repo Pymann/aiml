@@ -1,0 +1,80 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: step2
+# TIER: T1
+# CLEARANCE: none
+# CONSTRUCT: spec/65 §8 (F65-19) — `level` ist ein MODIFIER an den Stellen, an denen aiml
+#            Qualifier ohnehin fuehrt.  Diese Probe prueft die ANNAHME der Syntax in allen
+#            Formen bei abgeschalteter Durchsetzung (F65-1): nichts wird eingeschraenkt,
+#            aber jede Form muss den Schluessel kennen.
+# COVERS: decl 4. Position (mit und ohne lifetime); def-Schluessel; class-Ebene + Mitglied;
+#         model-Ebene + Feld; enum; interface; classgroup.
+# EXPECT: exit 0.
+
+- enum:
+    name: Phase
+    level: 7
+    values:
+      - idle: 0
+      - busy: 1
+
+- model:
+    name: JobRec
+    level: 7
+    fields:
+      - [job_id, string]
+      - [secret, string, "", { level: 2 }]
+
+- interface:
+    name: Store
+    level: 2
+    methods:
+      - def: { name: put, args: [[key, string]], return: i32 }
+
+- class:
+    name: Session
+    level: 7
+    members:
+      - [user_id, i32, 0, { access: public, level: 7 }]
+      - [token,   i32, 0, { access: private, level: 2 }]
+    methods:
+      - def:
+          name: renew
+          access: public
+          level: 7
+          return: i32
+          body:
+            - return: [1]
+
+- def:
+    name: deep_work
+    level: 2
+    return: i32
+    body:
+      - return: [2]
+
+- def:
+    name: gateway
+    level: 7
+    grants: 2
+    return: i32
+    body:
+      - return: [{ call: [deep_work] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [plain_one, i32, 1, { level: 7 }]
+      - decl: [with_life, string, "", { lifetime: persistent, level: 2 }]
+      - decl: [no_init, i32, null, { level: 255 }]
+      - decl: [ses, Session]
+      - decl: [got, i32, { call: [gateway] }]
+      - if:
+          condition: { neq: [{ +: [got, plain_one] }, 3] }
+          then:
+            - call: [log.error, "Summe falsch: ${got}+${plain_one}"]
+            - return: [1]
+      - call: [log.info, "PASS 07 level-Syntax in allen Formen angenommen"]
+      - return: [0]

@@ -1,0 +1,46 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: host
+# UMBAU NOETIG: diese Probe definiert ihre Symbole noch selbst MIT `level:` — seit
+#   F65-27 ist das Selbstbeglaubigung.  Sie braucht die Wirtsvorrichtung aus Schritt 6b
+#   (Signatur + Adresse, F65-24): die Level kommen dann aus der Export-Tabelle und die
+#   Rumpfe vom Wirt.  Bis dahin AUSSTEHEND und bewusst nicht "repariert", weil eine
+#   Probe ohne Wirt die Aussage nicht treffen kann.
+# TIER: T1
+# CLEARANCE: 7
+# STATIC-CLEARANCE: on
+# CONSTRUCT: spec/65 F65-10 — the deliberate gateway. `restart_agent` is callable by an operator
+#            (level 7) and says in ONE place that it performs level-2 work inside. The flow check
+#            is ENABLED here, so this probe also proves `grants:` actually relaxes F65-9.
+# COVERS: `grants:` admits a lower edge inside the body only; callers are checked against
+#         `level:`, not against `grants:`; the audit list is readable (one annotation).
+# EXPECT: exit 0.
+
+- def:
+    name: kill_process
+    level: 2
+    return: i32
+    body:
+      - return: [11]
+
+- def:
+    name: restart_agent
+    level: 7
+    grants: 2
+    return: i32
+    body:
+      - return: [{ call: [kill_process] }]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [res, i32, { call: [restart_agent] }]
+      - if:
+          condition: { neq: [res, 11] }
+          then:
+            - call: [log.error, "restart_agent lieferte ${res}, erwartet 11"]
+            - return: [1]
+      - call: [log.info, "PASS 03 grants-Gateway"]
+      - return: [0]

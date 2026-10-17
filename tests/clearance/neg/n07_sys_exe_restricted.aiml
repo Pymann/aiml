@@ -1,0 +1,16 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: guard
+# CLEARANCE: 7
+# NEGATIVE (spec/65 F65-12 pt.2, F65-35): Builtins sind von Grund auf zu.  Eine Shell ist eine
+# vollstaendige Umgehung in einer Zeile, also ausser Reichweite, solange der Wirt sie nicht
+# ausdruecklich oeffnet.
+# EXPECT-ERROR: clearance-builtin
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [argv, list<string>, ["id"]]
+      - decl: [proc, process, { call: [sys.exe, argv] }]
+      - return: [0]

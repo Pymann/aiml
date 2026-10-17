@@ -1,0 +1,17 @@
+# SPEC: 03_modifiers,65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: step2
+# CLEARANCE: none
+# NEGATIVE (spec/65 F65-17, F65-21): dieselbe Pruefung am Klassenmitglied — der Modifier-Block
+# an 4. Position ist dieselbe Stelle wie beim `decl` (spec/03).
+# EXPECT-ERROR: invalid-level
+- class:
+    name: Holder
+    members:
+      - [field_a, i32, 0, { access: public, level: nope }]
+- def:
+    name: main
+    return: i32
+    body:
+      - return: [0]

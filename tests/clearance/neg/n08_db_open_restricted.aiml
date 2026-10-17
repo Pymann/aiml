@@ -1,0 +1,14 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: guard
+# CLEARANCE: 7
+# NEGATIVE (spec/65 F65-14): direct store access bypasses the host's API entirely and breaks the
+# single-writer rule of the KV at the same time.
+# EXPECT-ERROR: clearance-builtin
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [kvh, i64, { call: [db.open_kv, "jobs"] }]
+      - return: [0]

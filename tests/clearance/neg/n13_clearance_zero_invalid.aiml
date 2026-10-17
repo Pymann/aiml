@@ -1,0 +1,14 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: session
+# CLEARANCE: 0
+# NEGATIVE (spec/65 F65-22): `0` is what a forgotten field holds, so it is not a valid clearance.
+# Were it the privileged end, every zeroed struct and missing column in a user record would
+# silently be an administrator. The session is refused before the source matters.
+# EXPECT-ERROR: invalid-clearance
+- def:
+    name: main
+    return: i32
+    body:
+      - return: [0]
