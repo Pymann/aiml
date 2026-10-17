@@ -1,3 +1,4 @@
+#include "../clearance.h"
 #include "../../../logger.h"
 #include "../ast_builder.h"
 #include "function_builder.h"
@@ -229,6 +230,16 @@ bool FunctionBuilder::OnScalar(const std::string& value, const std::string& tag)
         else if (currentKey == "version") {
             try { func->version = std::stoull(value); } catch (...) {}
         }
+        else if (currentKey == "level") {   // spec/65 F65-19: pruefen, nicht durchsetzen
+            int parsed = aiml::clearance::kAbsent;
+            if (aiml::clearance::parseLevel(value, "def " + func->name, parsed))
+                func->level = parsed;
+        }
+        else if (currentKey == "grants") {  // spec/65 F65-10
+            int parsed = aiml::clearance::kAbsent;
+            if (aiml::clearance::parseGrants(value, "def " + func->name, parsed))
+                func->grants = parsed;
+        }
 
         expectingKey = true;
         expectingValue = false;
@@ -259,6 +270,8 @@ std::unique_ptr<Node> FunctionBuilder::finish() {
                   ": ein '- def:'-Mapping muss mindestens 'name: <funktionsname>' enthalten. "
                   "Vermutlich ist hier ein verwaistes '- def:' uebrig (z.B. nach Refactor).");
     }
+    // spec/65 F65-10: ein Gateway darf Privilegien nur fallen lassen.
+    aiml::clearance::checkGrants(func->level, func->grants, "def " + func->name);
     return std::move(func);
 }
 

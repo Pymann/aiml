@@ -1,3 +1,4 @@
+#include "../clearance.h"
 #include "classgroup_builder.h"
 #include "function_builder.h"
 #include "../ast_builder.h"
@@ -158,6 +159,11 @@ bool ClassGroupBuilder::OnScalar(const std::string& value, const std::string& /*
         else if (currentKey == "constructor") cur_.constructor.push_back(value);
     } else if (depth == 1) {
         if (currentKey == "name") node_->name = value;
+        else if (currentKey == "level") {   // spec/65 F65-19
+            int parsed = aiml::clearance::kAbsent;
+            if (aiml::clearance::parseLevel(value, "classgroup " + node_->name, parsed))
+                node_->level = parsed;
+        }
     }
     expectingKey = true;
     return true;

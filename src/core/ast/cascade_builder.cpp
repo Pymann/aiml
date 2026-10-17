@@ -1,3 +1,4 @@
+#include "../clearance.h"
 #include "cascade_builder.h"
 #include "../ast_builder.h"
 #include "../../../logger.h"
@@ -145,6 +146,11 @@ bool CascadeBuilder::OnScalar(const std::string& value, const std::string& /*tag
             } else {
                 if (topKey == "name") { node_->name = value; }
                 else if (topKey == "opcode") { node_->opcode = value; }
+                else if (topKey == "level") {   // spec/65 F65-19
+                    int parsed = aiml::clearance::kAbsent;
+                    if (aiml::clearance::parseLevel(value, "cascade " + node_->name, parsed))
+                        node_->level = parsed;
+                }
                 expectingKey = true;
             }
             return true;

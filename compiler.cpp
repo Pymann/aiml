@@ -1,4 +1,5 @@
 #include "compiler.h"
+#include "src/core/clearance_flow.h"
 #include "exec_impl.h"
 #include "src/core/builtin_registry.h"
 #include "src/core/asset_scanner.h"
@@ -1142,6 +1143,22 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
 
             // Pass 2: Full Code Generation
             astCompiler.compile(programAST.get());
+            // spec/65 F65-9 (opt-in, F65-17): Privilegienfluss ueber die Aufrufkanten.
+            // Laeuft je uebersetzter Datei; datei-UEBERGREIFENDE Kanten deckt das noch
+            // nicht ab (dafuer braucht es die Propagation wie bei den Enum-Mengen).
+            if (aiml::clearance::flowCheckEnabled()) {
+                std::map<std::string, aiml::clearance::FlowNode> flowGraph;
+                for (const auto& kv : ctx.functions) {
+                    // Nur eigene Ruempfe: eine Deklaration traegt hier kein Level.
+                    if (!kv.second.func || kv.second.func->isDeclaration()) continue;   // spec/65
+                    aiml::clearance::FlowNode n;
+                    n.level  = kv.second.clearance_level;
+                    n.grants = kv.second.clearance_grants;
+                    n.calls  = kv.second.referencedFuncs;
+                    flowGraph.emplace(kv.first, std::move(n));
+                }
+                aiml::clearance::checkFlow(flowGraph);
+            }
 
             // Tier-3 dead-prefab (spec/44_8): fold THIS module's prefab decls
             // and instantiation sites into the merged sets.  Sub-compilers have
@@ -1280,6 +1297,22 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source) {
             astCompiler.synthesizeRpcMethods(programAST.get());
             astCompiler.registerTypes(programAST.get());
             astCompiler.compile(programAST.get());
+            // spec/65 F65-9 (opt-in, F65-17): Privilegienfluss ueber die Aufrufkanten.
+            // Laeuft je uebersetzter Datei; datei-UEBERGREIFENDE Kanten deckt das noch
+            // nicht ab (dafuer braucht es die Propagation wie bei den Enum-Mengen).
+            if (aiml::clearance::flowCheckEnabled()) {
+                std::map<std::string, aiml::clearance::FlowNode> flowGraph;
+                for (const auto& kv : ctx.functions) {
+                    // Nur eigene Ruempfe: eine Deklaration traegt hier kein Level.
+                    if (!kv.second.func || kv.second.func->isDeclaration()) continue;   // spec/65
+                    aiml::clearance::FlowNode n;
+                    n.level  = kv.second.clearance_level;
+                    n.grants = kv.second.clearance_grants;
+                    n.calls  = kv.second.referencedFuncs;
+                    flowGraph.emplace(kv.first, std::move(n));
+                }
+                aiml::clearance::checkFlow(flowGraph);
+            }
         } else {
             LOG_ERROR("<memory>: compileFromString: AST builder produced no program");
         }

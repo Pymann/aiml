@@ -1,6 +1,9 @@
+#include "../clearance.h"
 #include "../../../logger.h"
 #include "../ast_builder.h"
 #include "statement_builder.h"
+#include <map>
+#include <set>
 #include "expression_builder.h"
 #include <cstdlib>   // std::getenv — spec/61 §10 memV3 gate for materializing `free:`
 
@@ -77,11 +80,15 @@ class ModifierBuilder : public StateHandler {
     bool* is_volatile;
     bool* is_extern;
     std::string* lifetime;
+    int* level;                 // spec/65 F65-19: `{ level: N }` an 4. Position
+    std::string where;          // Fundstelle fuer die Diagnose
     bool expectingKey = true;
     std::string currentKey;
 public:
-    ModifierBuilder(Builder* b, bool* ic, bool* iv, bool* ie, std::string* lt)
-        : StateHandler(b), is_const(ic), is_volatile(iv), is_extern(ie), lifetime(lt) {}
+    ModifierBuilder(Builder* b, bool* ic, bool* iv, bool* ie, std::string* lt,
+                    int* lv, std::string wh)
+        : StateHandler(b), is_const(ic), is_volatile(iv), is_extern(ie), lifetime(lt),
+          level(lv), where(std::move(wh)) {}
     bool OnMapStart() override { expectingKey = true; return true; }
     bool OnMapEnd() override { builder->popState(); return true; }
     bool OnScalar(const std::string& value, const std::string& tag) override {
@@ -98,6 +105,11 @@ public:
                 } else {
                     LOG_ERROR("decl lifetime must be scope|persistent|consumed, got '" + value + "'");
                 }
+            }
+            if (currentKey == "level") {     // spec/65: pruefen, nicht durchsetzen
+                int parsed = aiml::clearance::kAbsent;
+                if (aiml::clearance::parseLevel(value, where, parsed) && level)
+                    *level = parsed;
             }
             expectingKey = true;
         }
@@ -120,7 +132,8 @@ bool StatementBuilder::OnMapStart() {
         // grow `args`, so a following map is the modifier). Fixes spec/61
         // `[name, type, {new:T}, {lifetime: persistent}]`.
         if (args.size() >= 3 || exprArg) {
-            builder->pushState(std::make_unique<ModifierBuilder>(builder, &is_const, &is_volatile, &is_extern, &decl_lifetime));
+            builder->pushState(std::make_unique<ModifierBuilder>(builder, &is_const, &is_volatile, &is_extern, &decl_lifetime, &decl_level,
+                                   "decl " + (args.empty() ? std::string("(?)") : args[0].first)));
             return true;
         }
     }
@@ -167,7 +180,8 @@ std::unique_ptr<Node> StatementBuilder::finish() {
                  if (auto* dict = dynamic_cast<DictLiteralExpr*>(exprArg.get())) {
                      bool modifierOnly = !dict->entries.empty();
                      for (const auto& [k, v] : dict->entries) {
-                         if (k != "const" && k != "volatile" && k != "extern" && k != "lifetime") {
+                         if (k != "const" && k != "volatile" && k != "extern" && k != "lifetime" &&
+                             k != "level") {
                              modifierOnly = false;
                              break;
                          }
@@ -202,6 +216,7 @@ std::unique_ptr<Node> StatementBuilder::finish() {
          decl->is_volatile = is_volatile;
          decl->is_extern   = is_extern;
          decl->lifetime    = decl_lifetime;
+         decl->level       = decl_level;
          decl->sourceLine  = capturedLine;
          return decl;
     }
