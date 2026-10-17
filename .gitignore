@@ -35,3 +35,11 @@ out/aot_repro/
 aot_trycatch_repro
 
 out-asan/
+
+# Treiber-Binaries: tests/bundle_socket/run.sh baut sie ins Wurzelverzeichnis
+# (eigene exodus-*.json, deshalb von `exodus gitignore --all` nicht erfasst).
+bs_listener
+bs_sender
+
+# Build-/Suite-/Messprotokolle und Staging-Kopien (11 MB, 223 Dateien).
+logs/
