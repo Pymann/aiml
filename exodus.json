@@ -1,986 +1,1273 @@
 {
-  "jobs": 16,
-  "$schema": "exodus.project.config-1.0",
-  "name": "aiml",
-  "version": "0.1.0",
-  "license": [],
-  "dependencies": [],
-  "apt_packages": [
-    {
-      "name": "libyaml-cpp-dev",
-      "version": "0.8.0+dfsg-6build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "1b5a9ef5de12f24a6f99168f054346614a7a6060934c47067a9495cb239a8f51"
-    },
-    {
-      "name": "llvm-18-dev",
-      "version": "1:18.1.3-1ubuntu1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "1e68b8c3f788832c5c83d56a1b3dbbba1ee148407f61c873ed659bb373ae6388"
-    },
-    {
-      "name": "libssl-dev",
-      "version": "3.0.13-0ubuntu3.7",
-      "arch": "amd64",
-      "required": true,
-      "digest": "5b58822de937202c6c7881f63ac6ccc1933109953075c9d158b45afcac90cbf2"
-    },
-    {
-      "name": "libc6-dev",
-      "version": "2.39-0ubuntu8.7",
-      "arch": "amd64",
-      "required": true,
-      "digest": "bbf5a155039042634961a61276650631ee47b9e721f91f8dbb731b0bbe046df3"
-    },
-    {
-      "name": "zlib1g-dev",
-      "version": "1:1.3.dfsg-3.1ubuntu2.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "023cbe9dbf0af87f10e54e342c67571874e412b9950d89c6cd7b010be2e67c3c"
-    },
-    {
-      "name": "libbrotli-dev",
-      "version": "1.1.0-2build2",
-      "arch": "amd64",
-      "required": true,
-      "digest": "2d56213247be7aca429c55c6136e371b670e2275c8d455ef3fe6a737f5b7da7b"
-    },
-    {
-      "name": "libzstd-dev",
-      "version": "1.5.5+dfsg2-2build1.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "6c9d2b5677a4677e9ead62f74723bb919113621a8028ed543a4d78952d54d165"
-    },
-    {
-      "name": "liblz4-dev",
-      "version": "1.9.4-1build1.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "92144951b88d2bb4dd6ea5b85cab6a63e86109a1a6bb0953ada7ba9714ea0042"
-    },
-    {
-      "name": "libzip-dev",
-      "version": "1.7.3-1.1ubuntu2",
-      "arch": "amd64",
-      "required": true,
-      "digest": "52ced731d063588760c18dcb767f23dbb1d6d139facd8752fd97fd43822cc978"
-    },
-    {
-      "name": "libzip4t64",
-      "version": "1.7.3-1.1ubuntu2",
-      "arch": "amd64",
-      "required": true,
-      "digest": "d7484efd8d9968ecab9e488fde59980fc633e0eb2bbf7f1ea8e33bf71c9ff1fb"
-    },
-    {
-      "name": "libassimp-dev",
-      "version": "5.3.1+ds-2build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "1452eb1c16393c06dde5bc1c9896c2acf792dfbf4a9d2f5c54d5094d9fc57091"
-    },
-    {
-      "name": "libassimp5",
-      "version": "5.3.1+ds-2build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "50d66b281bc7dd3994f2394ba4b8fc4a2699f6d966b89d8d9c7b6c45b6d608f1"
-    },
-    {
-      "name": "libgl-dev",
-      "version": "1.7.0-1build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "b7145fd8f8abe20d5cb436d2eae9b3235bd91be6fbddac581620d16763bd9250"
-    },
-    {
-      "name": "libglfw3-dev",
-      "version": "3.3.10-1build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "f443edfb2a591c81e13292eebf177c08b8a1cc98be5c877cb7e088ab6e6b6377"
-    },
-    {
-      "name": "libglfw3",
-      "version": "3.3.10-1build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "40b75a7cf3c6afa6dcc9732f84dd4c044228e449a09bfcca169ab1631baaf096"
-    },
-    {
-      "name": "libvulkan-dev",
-      "version": "1.3.275.0-1build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "9577a2c5379372ca8231e700728390fa7d4991a0d8c6484ad83da849c728e76e"
-    },
-    {
-      "name": "libglm-dev",
-      "version": "0.9.9.8+ds-7",
-      "arch": "all",
-      "required": true,
-      "digest": "d7e562958558cdb72ebb100bc9d1ff5b8b07292e04761821198f79130350b712"
-    },
-    {
-      "name": "libpng-dev",
-      "version": "1.6.43-5ubuntu0.5",
-      "arch": "amd64",
-      "required": true,
-      "digest": "b665b8040e3a2bd8cbb25435d3c682e5e6a6bde90fa19d96ccf5642b36cc0f9e"
-    },
-    {
-      "name": "libpng16-16t64",
-      "version": "1.6.43-5ubuntu0.5",
-      "arch": "amd64",
-      "required": true,
-      "digest": "074c954a7a01069c3b3db9146911666f6ac75c1277e034eba901ee274554dadc"
-    },
-    {
-      "name": "libstb-dev",
-      "version": "0.0~git20230129.5736b15+ds-1.2",
-      "arch": "amd64",
-      "required": true,
-      "digest": "6b1359d666fc9a48dfcdb8f3cc6f14c4e5dc6a8fea2d1cf0501e1a58046e1865"
-    },
-    {
-      "name": "libglew-dev",
-      "version": "2.2.0-4build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "3a359b7fbb18e853e494bf6a21b6b7ad4f95bb2ce04c79e8f49cb4350d753186"
-    },
-    {
-      "name": "libglew2.2",
-      "version": "2.2.0-4build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "ffef730aac883b1cb1641eae6149da4091a890330d786916f29ea10de362ba9e"
-    },
-    {
-      "name": "libglu1-mesa-dev",
-      "version": "9.0.2-1.1build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "d1dcb06e6e09645e9ba0a3f6cab4f732a5c7bf72728032be0b41fa6c0932a396"
-    },
-    {
-      "name": "libglu1-mesa",
-      "version": "9.0.2-1.1build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "4288833eebfbf6b00d1ae98159f429e1f7f6398288c9305edeeb185d9ed048d9"
-    },
-    {
-      "name": "libssl3t64",
-      "version": "3.0.13-0ubuntu3.7",
-      "arch": "amd64",
-      "required": true,
-      "digest": "f9d19e6c1500cc58d90a001ef299ffa3b711e17dc5e95bf9962fb5fe1899264a"
-    },
-    {
-      "name": "zlib1g",
-      "version": "1:1.3.dfsg-3.1ubuntu2.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "7074b6a2f6367a10d280c00a1cb02e74277709180bab4f2491a2f355ab2d6c20"
-    },
-    {
-      "name": "libbrotli1",
-      "version": "1.1.0-2build2",
-      "arch": "amd64",
-      "required": true,
-      "digest": "74492419b8fda803774b8c9acef6afc5d2f9ff31782635aae212906adae7b277"
-    },
-    {
-      "name": "libzstd1",
-      "version": "1.5.5+dfsg2-2build1.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "dfcf25061e07aad7efd3f4f880ba5ad4d4d09ebe7fc8cc77ab6b8a161d6d4727"
-    },
-    {
-      "name": "liblz4-1",
-      "version": "1.9.4-1build1.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "319331270d5cc52d5ebffe51c941d7b01b432bc402c2924b557209a64d4ecbad"
-    },
-    {
-      "name": "libvulkan1",
-      "version": "1.3.275.0-1build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "ccf4fe8f4461442f27ea2494c7ae650b60bd396fec2688b0c44a27d66a222f74"
-    },
-    {
-      "name": "libgl1",
-      "version": "1.7.0-1build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "e2b2fadeb883f073b566ad1d7874f6702397514d258473e96152a89d4d502a09"
-    },
-    {
-      "name": "libyaml-cpp0.8",
-      "version": "0.8.0+dfsg-6build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "2be57b812a1b082011d1b9bf6140fb875f19e153730be1ba965185b890b387f5"
-    },
-    {
-      "name": "llvm-18",
-      "version": "1:18.1.3-1ubuntu1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "139cb82e16e75fcdd4a56562804ff9bfb482b65d0929580d621d28088075a27e"
-    },
-    {
-      "name": "llvm-18-runtime",
-      "version": "1:18.1.3-1ubuntu1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "1ad04ff658929491f8bf30fcf6454e07b1815a2b04164f1894156e92c91ef895"
-    },
-    {
-      "name": "libllvm18",
-      "version": "1:18.1.3-1ubuntu1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "af6197096ce3b89aab86de59f01c1b5feb008b2ae1514a03906c0664edb8b0b1"
-    },
-    {
-      "name": "libedit2",
-      "version": "3.1-20230828-1build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "3afbc8ddf835049dd4d88275b9d13680e4c4cdd59e191cbd63424152cc08e00e"
-    },
-    {
-      "name": "libbsd0",
-      "version": "0.12.1-1build1.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "f3857b0863ac5cfd4263e9bf6cfb1d4be88d5321e4070d5bc2b62b0949e6c86f"
-    },
-    {
-      "name": "libmd0",
-      "version": "1.1.0-2build1.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "e5ba01d3c41f256aaf57ec59aa0554857162e3e7f97cdfbff1ed2c0e8d720ee7"
-    },
-    {
-      "name": "libtinfo6",
-      "version": "6.4+20240113-1ubuntu2",
-      "arch": "amd64",
-      "required": true,
-      "digest": "53e1e1753729d04cf65b05e6e58abe06e2bb76cc07eff0e1b2a638a638ca209b"
-    },
-    {
-      "name": "libffi8",
-      "version": "3.4.6-1build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "637e6a7744de08cd331a41f4efd0d24e6ea9064843dea9d1c6ca87bdb5f038a2"
-    },
-    {
-      "name": "libxml2",
-      "version": "2.9.14+dfsg-1.3ubuntu3.7",
-      "arch": "amd64",
-      "required": true,
-      "digest": "74ab8be7aa487e5cc7d9d228212f538ff96658afcb080335c02fe0f3e384ff7c"
-    },
-    {
-      "name": "libicu74",
-      "version": "74.2-1ubuntu3.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "c9a70989678660eed9a1e904c74fa043da8bec8e2036856fc16e31ced79b04f8"
-    },
-    {
-      "name": "liblzma5",
-      "version": "5.6.1+really5.4.5-1ubuntu0.2",
-      "arch": "amd64",
-      "required": true,
-      "digest": "4c31cc76391ca47dbb4585edc740728f43fe7b6b090f5b3947fc8072db698aca"
-    },
-    {
-      "name": "llvm-18-linker-tools",
-      "version": "1:18.1.3-1ubuntu1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "50f0bcfa784e42f8bf0eac31aeb6a20798fb6174cc31efe021f12ae71af91b23"
-    },
-    {
-      "name": "libcurl4t64",
-      "version": "8.5.0-2ubuntu10.7",
-      "arch": "amd64",
-      "required": true,
-      "digest": "29303e6720274ddc62e4c0969e02d4a94f7ab65b5e16d96ce52009a05c6d64cb"
-    },
-    {
-      "name": "libgssapi-krb5-2",
-      "version": "1.20.1-6ubuntu2.6",
-      "arch": "amd64",
-      "required": true,
-      "digest": "0f1b296f6731dc51569350dcb2971629f36e78a21015c73165eddc5af5c978ad"
-    },
-    {
-      "name": "libkrb5-3",
-      "version": "1.20.1-6ubuntu2.6",
-      "arch": "amd64",
-      "required": true,
-      "digest": "e8c20d16598108c88495fde116eadb4be568f47ae2ab93cabccfbb220e6e926b"
-    },
-    {
-      "name": "libkrb5support0",
-      "version": "1.20.1-6ubuntu2.6",
-      "arch": "amd64",
-      "required": true,
-      "digest": "e649ebef274cce86e6133144ce5f587db101f06828dbd88cb73350fe98160b0e"
-    },
-    {
-      "name": "libcom-err2",
-      "version": "1.47.0-2.4~exp1ubuntu4.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "7ab24d3057dabf86db8f771ad6e43f073ed86b6b950d6e8ba22cb9fe6707bbc9"
-    },
-    {
-      "name": "libk5crypto3",
-      "version": "1.20.1-6ubuntu2.6",
-      "arch": "amd64",
-      "required": true,
-      "digest": "5c3eb1fc954af26da4190204098af489eb558552a89cf5cf099e0ea6aab157c5"
-    },
-    {
-      "name": "libkeyutils1",
-      "version": "1.6.3-3build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "0679f198b0128179e46cdf956fb2022c23c758664c00bc8efa0382d509683a8a"
-    },
-    {
-      "name": "libidn2-0",
-      "version": "2.3.7-2build1.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "46bfd10df095a23b65f58115de47a547c9a2d14627749bd0423ae78c14be77d3"
-    },
-    {
-      "name": "libunistring5",
-      "version": "1.1-2build1.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "203d7657b5f54633fba1a9c9b784d556ef83c9f6787b3185ba55a88e07b865a3"
-    },
-    {
-      "name": "libldap2",
-      "version": "2.6.7+dfsg-1~exp1ubuntu8.2",
-      "arch": "amd64",
-      "required": true,
-      "digest": null
-    },
-    {
-      "name": "libnghttp2-14",
-      "version": "1.59.0-1ubuntu0.2",
-      "arch": "amd64",
-      "required": true,
-      "digest": "2f8a90953ba5c5671249fb3e414582ede4a7111872eaaa08119a560a29c65a1f"
-    },
-    {
-      "name": "libpsl5t64",
-      "version": "0.21.2-1.1build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "a6c85d1303ae90b6a3209d73c4f047f82c27cdc963c48adfd95dd7abca64f039"
-    },
-    {
-      "name": "librtmp1",
-      "version": "2.4+20151223.gitfa8646d.1-2build7",
-      "arch": "amd64",
-      "required": true,
-      "digest": "967a39dbc14236d1580ede01d80fd78444668572e716734e1ac66c175052594e"
-    },
-    {
-      "name": "libgmp10",
-      "version": "2:6.3.0+dfsg-2ubuntu6.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "285f8a505dfa8e1b33f357a9d8d3477ad35bf18c0b34771a6df4c25923f3ae0d"
-    },
-    {
-      "name": "libssh-4",
-      "version": "0.10.6-2ubuntu0.3",
-      "arch": "amd64",
-      "required": true,
-      "digest": "c106a89296d5f4593cdf7e3b97bf57d4d93ebf8ace1b37408bd52e2aa7cb1df0"
-    },
-    {
-      "name": "libpfm4",
-      "version": "4.13.0+git32-g0d4ed0e-1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "037cdd0aad754b70df1df39aae34a9f857daa78fdfa132673b476c256e33ad52"
-    },
-    {
-      "name": "llvm-18-tools",
-      "version": "1:18.1.3-1ubuntu1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "e7fd06b3b8ba4b9327bebfc1b0f2293ceaf6896da9d054bf3fdc510f21445df5"
-    },
-    {
-      "name": "python3",
-      "version": "3.12.3-0ubuntu2.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "e691b9cc40841c41bbdc50bd794c876cb1b1801306ea27b06e9a1458180df1e9"
-    },
-    {
-      "name": "python3.12",
-      "version": "3.12.3-1ubuntu0.11",
-      "arch": "amd64",
-      "required": true,
-      "digest": "b52914fc0bf668f89aab76858906d38924ac3ef84a043ef1bfbbff5b5d8ff78b"
-    },
-    {
-      "name": "python3.12-minimal",
-      "version": "3.12.3-1ubuntu0.11",
-      "arch": "amd64",
-      "required": true,
-      "digest": "f2b4ddcfc61a5f6477f070a43f574bb34a3367514b1f01eca572cf8012fc0166"
-    },
-    {
-      "name": "libpython3.12-minimal",
-      "version": "3.12.3-1ubuntu0.11",
-      "arch": "amd64",
-      "required": true,
-      "digest": "d51dc3146270dd5eda6d7c8e97b09a38e373b702a41affe2b895b3fe3a4ddfee"
-    },
-    {
-      "name": "libexpat1",
-      "version": "2.6.1-2ubuntu0.4",
-      "arch": "amd64",
-      "required": true,
-      "digest": "126a5612e652bdc2edee19ae8fe4308db72b5b3b0a5581bf885b44a093baf3e5"
-    },
-    {
-      "name": "libpython3.12-stdlib",
-      "version": "3.12.3-1ubuntu0.11",
-      "arch": "amd64",
-      "required": true,
-      "digest": "0f88ad8eae89963e80fb5327d1cdb9817e71c76b7fcf84dfaaf6531fb6c1c3bc"
-    },
-    {
-      "name": "media-types",
-      "version": "10.1.0",
-      "arch": "amd64",
-      "required": true,
-      "digest": "31bfb7eec55ab6d34a50ba995150e1498d4cb897714085d8025e330d3b529747"
-    },
-    {
-      "name": "netbase",
-      "version": "6.4",
-      "arch": "amd64",
-      "required": true,
-      "digest": "8cdbc9c3dca01e660759bf9d840f72e45ac72faf5d19ca1faecacaf6a60c1a87"
-    },
-    {
-      "name": "tzdata",
-      "version": "2025b-0ubuntu0.24.04.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "b68ee1f3cd510054313e63d45713ac5a4a816c0c9227c607b44c0ac810b7d8b6"
-    },
-    {
-      "name": "debconf",
-      "version": "1.5.86ubuntu1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "bb390da466a7461bfc87aa3e6b7cd145dae84af3e26bf437f2c0c218ba226294"
-    },
-    {
-      "name": "libbz2-1.0",
-      "version": "1.0.8-5.1build0.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "d557ab12b42ab370249142099fae3cbb979948934e4dfa58c2ab59bf5bbbda73"
-    },
-    {
-      "name": "libcrypt1",
-      "version": "1:4.4.36-4build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "9474785cd6f398512bf8c305c3901dbb111569dccb6f5832002373c0a8ac5832"
-    },
-    {
-      "name": "libdb5.3t64",
-      "version": "5.3.28+dfsg2-7",
-      "arch": "amd64",
-      "required": true,
-      "digest": "a78a25c8fad8fdd0b7bc6b297da5d5685579be1e57732aa47870830e4a13161e"
-    },
-    {
-      "name": "libncursesw6",
-      "version": "6.4+20240113-1ubuntu2",
-      "arch": "amd64",
-      "required": true,
-      "digest": "96d1e64bb1a80f2005f41c4112d10e4756a222a6c245e9383fc8da924bd40bf9"
-    },
-    {
-      "name": "libreadline8t64",
-      "version": "8.2-4build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "563977a16df03b611f5239cc1e9a0426e86479fcc616b5c9e200ea32063119e5"
-    },
-    {
-      "name": "readline-common",
-      "version": "8.2-4build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "879bfd7f8a9bc4c0f7cdc777cdd8bc6de5f8c4a2ac80c060322a1b22f13504bb"
-    },
-    {
-      "name": "libsqlite3-0",
-      "version": "3.45.1-1ubuntu2.5",
-      "arch": "amd64",
-      "required": true,
-      "digest": "9e4569a5b992e70899527023ec1871b5abe92afb41c9eb53b38c2ccae056f6db"
-    },
-    {
-      "name": "libpython3-stdlib",
-      "version": "3.12.3-0ubuntu2.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "57ebb378c59d2f9ef479bee0abc933c560878cc10e2c3af8e05d6fdb2ed63da4"
-    },
-    {
-      "name": "python3-pygments",
-      "version": "2.17.2+dfsg-1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "c26c308f21f99cd7543bc71e9a31cebff8a1eb0077b02800b73bf43dfd616ad0"
-    },
-    {
-      "name": "python3-pkg-resources",
-      "version": "68.1.2-2ubuntu1.2",
-      "arch": "amd64",
-      "required": true,
-      "digest": "13caaa69d5ba8b02e90087d4bcef714c0581e591e820804d15d12f582055147a"
-    },
-    {
-      "name": "python3-yaml",
-      "version": "6.0.1-2build2",
-      "arch": "amd64",
-      "required": true,
-      "digest": "315e59500af855f23ee4e95525b99009bd798c4d2658af8eb4b2d66a8a91ec23"
-    },
-    {
-      "name": "libyaml-0-2",
-      "version": "0.2.5-1build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "f5271b120d936dcc7ddf17b9e718df41d55386a6075555d0c634925eaef0b2ac"
-    },
-    {
-      "name": "libclang-cpp18",
-      "version": "1:18.1.3-1ubuntu1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "e91eda104813ee0468d145d010a4a4e142401f3f17f9a65596c66d416298d018"
-    },
-    {
-      "name": "libc-dev-bin",
-      "version": "2.39-0ubuntu8.7",
-      "arch": "amd64",
-      "required": true,
-      "digest": "83291a1d9b26262ac8f44a3bb188ce2cb796a0543134aae00e19db066c84dfdd"
-    },
-    {
-      "name": "rpcsvc-proto",
-      "version": "1.4.2-0ubuntu7",
-      "arch": "amd64",
-      "required": true,
-      "digest": "7eb710fe148d224c159ddec1ceb0ba53ead52a80a6793dcdae1474acf20d8f71"
-    },
-    {
-      "name": "libx11-6",
-      "version": "2:1.8.7-1build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "397f84347476a3c5786b39f3ff6f0f82866eb3d8be6d2ad3efeadf019efe5b80"
-    },
-    {
-      "name": "libxcb1",
-      "version": "1.15-1ubuntu2",
-      "arch": "amd64",
-      "required": true,
-      "digest": "e1c6611d11ad7398326f1bf028afc34c3b14c51d917a3426b966ed4b9687fa58"
-    },
-    {
-      "name": "libxau6",
-      "version": "1:1.0.9-1build6",
-      "arch": "amd64",
-      "required": true,
-      "digest": "e40d29f1d1a62393bacaedebe0da3d9006084152a9f7e5e029293f08ce1c5c80"
-    },
-    {
-      "name": "libxdmcp6",
-      "version": "1:1.1.3-0ubuntu6",
-      "arch": "amd64",
-      "required": true,
-      "digest": "bcd336fce11ce2a45f34d0f95e6980af22529f22147e8f98c156e5cee8ee42bb"
-    },
-    {
-      "name": "libx11-data",
-      "version": "2:1.8.7-1build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "9ae01f7747e7f479394c697c55acf11d3baf139e8e54b7c4adfb55ef9c50de08"
-    },
-    {
-      "name": "libopengl0",
-      "version": "1.7.0-1build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "da36bd4d30c13b40b697fa8b72cc09d309ff36a5bd9750341ef78492bf3f3966"
-    },
-    {
-      "name": "libglvnd0",
-      "version": "1.7.0-1build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "33f5e07c74f73c2bfb44086ae0f9e6da52acd6c104d30ffe8fd768d8253d5e82"
-    },
-    {
-      "name": "libglx0",
-      "version": "1.7.0-1build1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "aa4953182f30abde90cb5b072e83d7286b557b325769b8686196a7bd396d8795"
-    },
-    {
-      "name": "libglx-mesa0",
-      "version": "25.0.7-0ubuntu0.24.04.2",
-      "arch": "amd64",
-      "required": true,
-      "digest": null
-    },
-    {
-      "name": "libopenblas-serial-dev",
-      "version": "0.3.26+ds-1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "e530f91d688d0603efe5a402fc5c76f0ae7323487617eaa0eecfe655f2d693b8"
-    },
-    {
-      "name": "libopenblas0-serial",
-      "version": "0.3.26+ds-1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "18bc35bb2cb8a20db1774400386e49f257ba46b4935b8ab233c42055e349b16a"
-    },
-    {
-      "name": "libgfortran5",
-      "version": "14.2.0-4ubuntu2~24.04.1",
-      "arch": "amd64",
-      "required": true,
-      "digest": "2b05896c477275ad3473bb63a5ac5a5b8a7e4a6ad6ed7cb23c442ccd1abc28f5"
-    },
-    {
-      "name": "libwebp-dev",
-      "version": "1.3.2-0.4build3",
-      "arch": "amd64",
-      "required": true,
-      "digest": "7ba3a6f29d2656b89d5600322c959d6bc7841f1a88e1fa2770c60d639379effe"
-    },
-    {
-      "name": "libwebp7",
-      "version": "1.3.2-0.4build3",
-      "arch": "amd64",
-      "required": true,
-      "digest": "c86f6439f0bbc531f7199794654231f3b29327d6585958511b958795d51c2484"
-    },
-    {
-      "name": "libwebpdemux2",
-      "version": "1.3.2-0.4build3",
-      "arch": "amd64",
-      "required": true,
-      "digest": "15e98f127e1fdbf0889cf4b2f5604b60a6da0b988f20bf34731c9a2307d490d6"
-    },
-    {
-      "name": "libwebpmux3",
-      "version": "1.3.2-0.4build3",
-      "arch": "amd64",
-      "required": true,
-      "digest": "0dd0f2de0fbbda7239209332ddfe512f4383d0489dd3f9fb25398f58c1621724"
-    },
-    {
-      "name": "libwebpdecoder3",
-      "version": "1.3.2-0.4build3",
-      "arch": "amd64",
-      "required": true,
-      "digest": "b1fa298b942141acec1cf14ef70870dd43393ba28c4409c8badb6ad681753548"
-    },
-    {
-      "name": "libsharpyuv0",
-      "version": "1.3.2-0.4build3",
-      "arch": "amd64",
-      "required": true,
-      "digest": "4e1763494e5b9d34192313aa88e38201fc67b3f13ea96ca268d26401a3002791"
+    "$schema": "exodus.project.config-1.0",
+    "name": "aiml",
+    "version": "0.1.0",
+    "license": [],
+    "dependencies": [],
+    "apt_packages": [
+        {
+            "name": "libyaml-cpp-dev",
+            "version": "0.8.0+dfsg-6build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "1b5a9ef5de12f24a6f99168f054346614a7a6060934c47067a9495cb239a8f51"
+        },
+        {
+            "name": "llvm-18-dev",
+            "version": "1:18.1.3-1ubuntu1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "1e68b8c3f788832c5c83d56a1b3dbbba1ee148407f61c873ed659bb373ae6388"
+        },
+        {
+            "name": "libssl-dev",
+            "version": "3.0.13-0ubuntu3.7",
+            "arch": "amd64",
+            "required": true,
+            "digest": "5b58822de937202c6c7881f63ac6ccc1933109953075c9d158b45afcac90cbf2"
+        },
+        {
+            "name": "libc6-dev",
+            "version": "2.39-0ubuntu8.7",
+            "arch": "amd64",
+            "required": true,
+            "digest": "bbf5a155039042634961a61276650631ee47b9e721f91f8dbb731b0bbe046df3"
+        },
+        {
+            "name": "zlib1g-dev",
+            "version": "1:1.3.dfsg-3.1ubuntu2.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "023cbe9dbf0af87f10e54e342c67571874e412b9950d89c6cd7b010be2e67c3c"
+        },
+        {
+            "name": "libbrotli-dev",
+            "version": "1.1.0-2build2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "2d56213247be7aca429c55c6136e371b670e2275c8d455ef3fe6a737f5b7da7b"
+        },
+        {
+            "name": "libzstd-dev",
+            "version": "1.5.5+dfsg2-2build1.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "6c9d2b5677a4677e9ead62f74723bb919113621a8028ed543a4d78952d54d165"
+        },
+        {
+            "name": "liblz4-dev",
+            "version": "1.9.4-1build1.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "92144951b88d2bb4dd6ea5b85cab6a63e86109a1a6bb0953ada7ba9714ea0042"
+        },
+        {
+            "name": "libzip-dev",
+            "version": "1.7.3-1.1ubuntu2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "52ced731d063588760c18dcb767f23dbb1d6d139facd8752fd97fd43822cc978"
+        },
+        {
+            "name": "libzip4t64",
+            "version": "1.7.3-1.1ubuntu2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "d7484efd8d9968ecab9e488fde59980fc633e0eb2bbf7f1ea8e33bf71c9ff1fb"
+        },
+        {
+            "name": "libassimp-dev",
+            "version": "5.3.1+ds-2build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "1452eb1c16393c06dde5bc1c9896c2acf792dfbf4a9d2f5c54d5094d9fc57091"
+        },
+        {
+            "name": "libassimp5",
+            "version": "5.3.1+ds-2build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "50d66b281bc7dd3994f2394ba4b8fc4a2699f6d966b89d8d9c7b6c45b6d608f1"
+        },
+        {
+            "name": "libgl-dev",
+            "version": "1.7.0-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "b7145fd8f8abe20d5cb436d2eae9b3235bd91be6fbddac581620d16763bd9250"
+        },
+        {
+            "name": "libglfw3-dev",
+            "version": "3.3.10-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "f443edfb2a591c81e13292eebf177c08b8a1cc98be5c877cb7e088ab6e6b6377"
+        },
+        {
+            "name": "libglfw3",
+            "version": "3.3.10-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "40b75a7cf3c6afa6dcc9732f84dd4c044228e449a09bfcca169ab1631baaf096"
+        },
+        {
+            "name": "libvulkan-dev",
+            "version": "1.3.275.0-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "9577a2c5379372ca8231e700728390fa7d4991a0d8c6484ad83da849c728e76e"
+        },
+        {
+            "name": "libglm-dev",
+            "version": "0.9.9.8+ds-7",
+            "arch": "all",
+            "required": true,
+            "digest": "d7e562958558cdb72ebb100bc9d1ff5b8b07292e04761821198f79130350b712"
+        },
+        {
+            "name": "libpng-dev",
+            "version": "1.6.43-5ubuntu0.5",
+            "arch": "amd64",
+            "required": true,
+            "digest": "b665b8040e3a2bd8cbb25435d3c682e5e6a6bde90fa19d96ccf5642b36cc0f9e"
+        },
+        {
+            "name": "libpng16-16t64",
+            "version": "1.6.43-5ubuntu0.5",
+            "arch": "amd64",
+            "required": true,
+            "digest": "074c954a7a01069c3b3db9146911666f6ac75c1277e034eba901ee274554dadc"
+        },
+        {
+            "name": "libstb-dev",
+            "version": "0.0~git20230129.5736b15+ds-1.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "6b1359d666fc9a48dfcdb8f3cc6f14c4e5dc6a8fea2d1cf0501e1a58046e1865"
+        },
+        {
+            "name": "libglew-dev",
+            "version": "2.2.0-4build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "3a359b7fbb18e853e494bf6a21b6b7ad4f95bb2ce04c79e8f49cb4350d753186"
+        },
+        {
+            "name": "libglew2.2",
+            "version": "2.2.0-4build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "ffef730aac883b1cb1641eae6149da4091a890330d786916f29ea10de362ba9e"
+        },
+        {
+            "name": "libglu1-mesa-dev",
+            "version": "9.0.2-1.1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "d1dcb06e6e09645e9ba0a3f6cab4f732a5c7bf72728032be0b41fa6c0932a396"
+        },
+        {
+            "name": "libglu1-mesa",
+            "version": "9.0.2-1.1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "4288833eebfbf6b00d1ae98159f429e1f7f6398288c9305edeeb185d9ed048d9"
+        },
+        {
+            "name": "libssl3t64",
+            "version": "3.0.13-0ubuntu3.7",
+            "arch": "amd64",
+            "required": true,
+            "digest": "f9d19e6c1500cc58d90a001ef299ffa3b711e17dc5e95bf9962fb5fe1899264a"
+        },
+        {
+            "name": "zlib1g",
+            "version": "1:1.3.dfsg-3.1ubuntu2.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "7074b6a2f6367a10d280c00a1cb02e74277709180bab4f2491a2f355ab2d6c20"
+        },
+        {
+            "name": "libbrotli1",
+            "version": "1.1.0-2build2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "74492419b8fda803774b8c9acef6afc5d2f9ff31782635aae212906adae7b277"
+        },
+        {
+            "name": "libzstd1",
+            "version": "1.5.5+dfsg2-2build1.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "dfcf25061e07aad7efd3f4f880ba5ad4d4d09ebe7fc8cc77ab6b8a161d6d4727"
+        },
+        {
+            "name": "liblz4-1",
+            "version": "1.9.4-1build1.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "319331270d5cc52d5ebffe51c941d7b01b432bc402c2924b557209a64d4ecbad"
+        },
+        {
+            "name": "libvulkan1",
+            "version": "1.3.275.0-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "ccf4fe8f4461442f27ea2494c7ae650b60bd396fec2688b0c44a27d66a222f74"
+        },
+        {
+            "name": "libgl1",
+            "version": "1.7.0-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e2b2fadeb883f073b566ad1d7874f6702397514d258473e96152a89d4d502a09"
+        },
+        {
+            "name": "libyaml-cpp0.8",
+            "version": "0.8.0+dfsg-6build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "2be57b812a1b082011d1b9bf6140fb875f19e153730be1ba965185b890b387f5"
+        },
+        {
+            "name": "llvm-18",
+            "version": "1:18.1.3-1ubuntu1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "139cb82e16e75fcdd4a56562804ff9bfb482b65d0929580d621d28088075a27e"
+        },
+        {
+            "name": "llvm-18-runtime",
+            "version": "1:18.1.3-1ubuntu1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "1ad04ff658929491f8bf30fcf6454e07b1815a2b04164f1894156e92c91ef895"
+        },
+        {
+            "name": "libllvm18",
+            "version": "1:18.1.3-1ubuntu1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "af6197096ce3b89aab86de59f01c1b5feb008b2ae1514a03906c0664edb8b0b1"
+        },
+        {
+            "name": "libedit2",
+            "version": "3.1-20230828-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "3afbc8ddf835049dd4d88275b9d13680e4c4cdd59e191cbd63424152cc08e00e"
+        },
+        {
+            "name": "libbsd0",
+            "version": "0.12.1-1build1.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "f3857b0863ac5cfd4263e9bf6cfb1d4be88d5321e4070d5bc2b62b0949e6c86f"
+        },
+        {
+            "name": "libmd0",
+            "version": "1.1.0-2build1.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e5ba01d3c41f256aaf57ec59aa0554857162e3e7f97cdfbff1ed2c0e8d720ee7"
+        },
+        {
+            "name": "libtinfo6",
+            "version": "6.4+20240113-1ubuntu2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "53e1e1753729d04cf65b05e6e58abe06e2bb76cc07eff0e1b2a638a638ca209b"
+        },
+        {
+            "name": "libffi8",
+            "version": "3.4.6-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "637e6a7744de08cd331a41f4efd0d24e6ea9064843dea9d1c6ca87bdb5f038a2"
+        },
+        {
+            "name": "libxml2",
+            "version": "2.9.14+dfsg-1.3ubuntu3.7",
+            "arch": "amd64",
+            "required": true,
+            "digest": "74ab8be7aa487e5cc7d9d228212f538ff96658afcb080335c02fe0f3e384ff7c"
+        },
+        {
+            "name": "libicu74",
+            "version": "74.2-1ubuntu3.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "c9a70989678660eed9a1e904c74fa043da8bec8e2036856fc16e31ced79b04f8"
+        },
+        {
+            "name": "liblzma5",
+            "version": "5.6.1+really5.4.5-1ubuntu0.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "4c31cc76391ca47dbb4585edc740728f43fe7b6b090f5b3947fc8072db698aca"
+        },
+        {
+            "name": "llvm-18-linker-tools",
+            "version": "1:18.1.3-1ubuntu1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "50f0bcfa784e42f8bf0eac31aeb6a20798fb6174cc31efe021f12ae71af91b23"
+        },
+        {
+            "name": "libcurl4t64",
+            "version": "8.5.0-2ubuntu10.7",
+            "arch": "amd64",
+            "required": true,
+            "digest": "29303e6720274ddc62e4c0969e02d4a94f7ab65b5e16d96ce52009a05c6d64cb"
+        },
+        {
+            "name": "libgssapi-krb5-2",
+            "version": "1.20.1-6ubuntu2.6",
+            "arch": "amd64",
+            "required": true,
+            "digest": "0f1b296f6731dc51569350dcb2971629f36e78a21015c73165eddc5af5c978ad"
+        },
+        {
+            "name": "libkrb5-3",
+            "version": "1.20.1-6ubuntu2.6",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e8c20d16598108c88495fde116eadb4be568f47ae2ab93cabccfbb220e6e926b"
+        },
+        {
+            "name": "libkrb5support0",
+            "version": "1.20.1-6ubuntu2.6",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e649ebef274cce86e6133144ce5f587db101f06828dbd88cb73350fe98160b0e"
+        },
+        {
+            "name": "libcom-err2",
+            "version": "1.47.0-2.4~exp1ubuntu4.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "7ab24d3057dabf86db8f771ad6e43f073ed86b6b950d6e8ba22cb9fe6707bbc9"
+        },
+        {
+            "name": "libk5crypto3",
+            "version": "1.20.1-6ubuntu2.6",
+            "arch": "amd64",
+            "required": true,
+            "digest": "5c3eb1fc954af26da4190204098af489eb558552a89cf5cf099e0ea6aab157c5"
+        },
+        {
+            "name": "libkeyutils1",
+            "version": "1.6.3-3build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "0679f198b0128179e46cdf956fb2022c23c758664c00bc8efa0382d509683a8a"
+        },
+        {
+            "name": "libidn2-0",
+            "version": "2.3.7-2build1.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "46bfd10df095a23b65f58115de47a547c9a2d14627749bd0423ae78c14be77d3"
+        },
+        {
+            "name": "libunistring5",
+            "version": "1.1-2build1.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "203d7657b5f54633fba1a9c9b784d556ef83c9f6787b3185ba55a88e07b865a3"
+        },
+        {
+            "name": "libldap2",
+            "version": "2.6.7+dfsg-1~exp1ubuntu8.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": null
+        },
+        {
+            "name": "libnghttp2-14",
+            "version": "1.59.0-1ubuntu0.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "2f8a90953ba5c5671249fb3e414582ede4a7111872eaaa08119a560a29c65a1f"
+        },
+        {
+            "name": "libpsl5t64",
+            "version": "0.21.2-1.1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "a6c85d1303ae90b6a3209d73c4f047f82c27cdc963c48adfd95dd7abca64f039"
+        },
+        {
+            "name": "librtmp1",
+            "version": "2.4+20151223.gitfa8646d.1-2build7",
+            "arch": "amd64",
+            "required": true,
+            "digest": "967a39dbc14236d1580ede01d80fd78444668572e716734e1ac66c175052594e"
+        },
+        {
+            "name": "libgmp10",
+            "version": "2:6.3.0+dfsg-2ubuntu6.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "285f8a505dfa8e1b33f357a9d8d3477ad35bf18c0b34771a6df4c25923f3ae0d"
+        },
+        {
+            "name": "libpfm4",
+            "version": "4.13.0+git32-g0d4ed0e-1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "037cdd0aad754b70df1df39aae34a9f857daa78fdfa132673b476c256e33ad52"
+        },
+        {
+            "name": "llvm-18-tools",
+            "version": "1:18.1.3-1ubuntu1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e7fd06b3b8ba4b9327bebfc1b0f2293ceaf6896da9d054bf3fdc510f21445df5"
+        },
+        {
+            "name": "python3",
+            "version": "3.12.3-0ubuntu2.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e691b9cc40841c41bbdc50bd794c876cb1b1801306ea27b06e9a1458180df1e9"
+        },
+        {
+            "name": "python3.12",
+            "version": "3.12.3-1ubuntu0.11",
+            "arch": "amd64",
+            "required": true,
+            "digest": "b52914fc0bf668f89aab76858906d38924ac3ef84a043ef1bfbbff5b5d8ff78b"
+        },
+        {
+            "name": "python3.12-minimal",
+            "version": "3.12.3-1ubuntu0.11",
+            "arch": "amd64",
+            "required": true,
+            "digest": "f2b4ddcfc61a5f6477f070a43f574bb34a3367514b1f01eca572cf8012fc0166"
+        },
+        {
+            "name": "libpython3.12-minimal",
+            "version": "3.12.3-1ubuntu0.11",
+            "arch": "amd64",
+            "required": true,
+            "digest": "d51dc3146270dd5eda6d7c8e97b09a38e373b702a41affe2b895b3fe3a4ddfee"
+        },
+        {
+            "name": "libexpat1",
+            "version": "2.6.1-2ubuntu0.4",
+            "arch": "amd64",
+            "required": true,
+            "digest": "126a5612e652bdc2edee19ae8fe4308db72b5b3b0a5581bf885b44a093baf3e5"
+        },
+        {
+            "name": "libpython3.12-stdlib",
+            "version": "3.12.3-1ubuntu0.11",
+            "arch": "amd64",
+            "required": true,
+            "digest": "0f88ad8eae89963e80fb5327d1cdb9817e71c76b7fcf84dfaaf6531fb6c1c3bc"
+        },
+        {
+            "name": "media-types",
+            "version": "10.1.0",
+            "arch": "amd64",
+            "required": true,
+            "digest": "31bfb7eec55ab6d34a50ba995150e1498d4cb897714085d8025e330d3b529747"
+        },
+        {
+            "name": "netbase",
+            "version": "6.4",
+            "arch": "amd64",
+            "required": true,
+            "digest": "8cdbc9c3dca01e660759bf9d840f72e45ac72faf5d19ca1faecacaf6a60c1a87"
+        },
+        {
+            "name": "tzdata",
+            "version": "2025b-0ubuntu0.24.04.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "b68ee1f3cd510054313e63d45713ac5a4a816c0c9227c607b44c0ac810b7d8b6"
+        },
+        {
+            "name": "debconf",
+            "version": "1.5.86ubuntu1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "bb390da466a7461bfc87aa3e6b7cd145dae84af3e26bf437f2c0c218ba226294"
+        },
+        {
+            "name": "libbz2-1.0",
+            "version": "1.0.8-5.1build0.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "d557ab12b42ab370249142099fae3cbb979948934e4dfa58c2ab59bf5bbbda73"
+        },
+        {
+            "name": "libcrypt1",
+            "version": "1:4.4.36-4build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "9474785cd6f398512bf8c305c3901dbb111569dccb6f5832002373c0a8ac5832"
+        },
+        {
+            "name": "libdb5.3t64",
+            "version": "5.3.28+dfsg2-7",
+            "arch": "amd64",
+            "required": true,
+            "digest": "a78a25c8fad8fdd0b7bc6b297da5d5685579be1e57732aa47870830e4a13161e"
+        },
+        {
+            "name": "libncursesw6",
+            "version": "6.4+20240113-1ubuntu2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "96d1e64bb1a80f2005f41c4112d10e4756a222a6c245e9383fc8da924bd40bf9"
+        },
+        {
+            "name": "libreadline8t64",
+            "version": "8.2-4build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "563977a16df03b611f5239cc1e9a0426e86479fcc616b5c9e200ea32063119e5"
+        },
+        {
+            "name": "readline-common",
+            "version": "8.2-4build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "879bfd7f8a9bc4c0f7cdc777cdd8bc6de5f8c4a2ac80c060322a1b22f13504bb"
+        },
+        {
+            "name": "libsqlite3-0",
+            "version": "3.45.1-1ubuntu2.5",
+            "arch": "amd64",
+            "required": true,
+            "digest": "9e4569a5b992e70899527023ec1871b5abe92afb41c9eb53b38c2ccae056f6db"
+        },
+        {
+            "name": "libpython3-stdlib",
+            "version": "3.12.3-0ubuntu2.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "57ebb378c59d2f9ef479bee0abc933c560878cc10e2c3af8e05d6fdb2ed63da4"
+        },
+        {
+            "name": "python3-pygments",
+            "version": "2.17.2+dfsg-1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "c26c308f21f99cd7543bc71e9a31cebff8a1eb0077b02800b73bf43dfd616ad0"
+        },
+        {
+            "name": "python3-pkg-resources",
+            "version": "68.1.2-2ubuntu1.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "13caaa69d5ba8b02e90087d4bcef714c0581e591e820804d15d12f582055147a"
+        },
+        {
+            "name": "python3-yaml",
+            "version": "6.0.1-2build2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "315e59500af855f23ee4e95525b99009bd798c4d2658af8eb4b2d66a8a91ec23"
+        },
+        {
+            "name": "libyaml-0-2",
+            "version": "0.2.5-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "f5271b120d936dcc7ddf17b9e718df41d55386a6075555d0c634925eaef0b2ac"
+        },
+        {
+            "name": "libclang-cpp18",
+            "version": "1:18.1.3-1ubuntu1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e91eda104813ee0468d145d010a4a4e142401f3f17f9a65596c66d416298d018"
+        },
+        {
+            "name": "libc-dev-bin",
+            "version": "2.39-0ubuntu8.7",
+            "arch": "amd64",
+            "required": true,
+            "digest": "83291a1d9b26262ac8f44a3bb188ce2cb796a0543134aae00e19db066c84dfdd"
+        },
+        {
+            "name": "rpcsvc-proto",
+            "version": "1.4.2-0ubuntu7",
+            "arch": "amd64",
+            "required": true,
+            "digest": "7eb710fe148d224c159ddec1ceb0ba53ead52a80a6793dcdae1474acf20d8f71"
+        },
+        {
+            "name": "libx11-6",
+            "version": "2:1.8.7-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "397f84347476a3c5786b39f3ff6f0f82866eb3d8be6d2ad3efeadf019efe5b80"
+        },
+        {
+            "name": "libxcb1",
+            "version": "1.15-1ubuntu2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e1c6611d11ad7398326f1bf028afc34c3b14c51d917a3426b966ed4b9687fa58"
+        },
+        {
+            "name": "libxau6",
+            "version": "1:1.0.9-1build6",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e40d29f1d1a62393bacaedebe0da3d9006084152a9f7e5e029293f08ce1c5c80"
+        },
+        {
+            "name": "libxdmcp6",
+            "version": "1:1.1.3-0ubuntu6",
+            "arch": "amd64",
+            "required": true,
+            "digest": "bcd336fce11ce2a45f34d0f95e6980af22529f22147e8f98c156e5cee8ee42bb"
+        },
+        {
+            "name": "libx11-data",
+            "version": "2:1.8.7-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "9ae01f7747e7f479394c697c55acf11d3baf139e8e54b7c4adfb55ef9c50de08"
+        },
+        {
+            "name": "libopengl0",
+            "version": "1.7.0-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "da36bd4d30c13b40b697fa8b72cc09d309ff36a5bd9750341ef78492bf3f3966"
+        },
+        {
+            "name": "libglvnd0",
+            "version": "1.7.0-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "33f5e07c74f73c2bfb44086ae0f9e6da52acd6c104d30ffe8fd768d8253d5e82"
+        },
+        {
+            "name": "libglx0",
+            "version": "1.7.0-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "aa4953182f30abde90cb5b072e83d7286b557b325769b8686196a7bd396d8795"
+        },
+        {
+            "name": "libglx-mesa0",
+            "version": "25.0.7-0ubuntu0.24.04.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": null
+        },
+        {
+            "name": "libopenblas-serial-dev",
+            "version": "0.3.26+ds-1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e530f91d688d0603efe5a402fc5c76f0ae7323487617eaa0eecfe655f2d693b8"
+        },
+        {
+            "name": "libopenblas0-serial",
+            "version": "0.3.26+ds-1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "18bc35bb2cb8a20db1774400386e49f257ba46b4935b8ab233c42055e349b16a"
+        },
+        {
+            "name": "libgfortran5",
+            "version": "14.2.0-4ubuntu2~24.04.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "2b05896c477275ad3473bb63a5ac5a5b8a7e4a6ad6ed7cb23c442ccd1abc28f5"
+        },
+        {
+            "name": "libwebp-dev",
+            "version": "1.3.2-0.4build3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "7ba3a6f29d2656b89d5600322c959d6bc7841f1a88e1fa2770c60d639379effe"
+        },
+        {
+            "name": "libwebp7",
+            "version": "1.3.2-0.4build3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "c86f6439f0bbc531f7199794654231f3b29327d6585958511b958795d51c2484"
+        },
+        {
+            "name": "libwebpdemux2",
+            "version": "1.3.2-0.4build3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "15e98f127e1fdbf0889cf4b2f5604b60a6da0b988f20bf34731c9a2307d490d6"
+        },
+        {
+            "name": "libwebpmux3",
+            "version": "1.3.2-0.4build3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "0dd0f2de0fbbda7239209332ddfe512f4383d0489dd3f9fb25398f58c1621724"
+        },
+        {
+            "name": "libwebpdecoder3",
+            "version": "1.3.2-0.4build3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "b1fa298b942141acec1cf14ef70870dd43393ba28c4409c8badb6ad681753548"
+        },
+        {
+            "name": "libsharpyuv0",
+            "version": "1.3.2-0.4build3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "4e1763494e5b9d34192313aa88e38201fc67b3f13ea96ca268d26401a3002791"
+        },
+        {
+            "name": "libcap-dev",
+            "version": "1:2.66-5ubuntu2.4",
+            "arch": "amd64",
+            "required": true,
+            "digest": "07f2462867569a2119a2ad0f1593232663f2d1612b791c230d22a8d73a15abee"
+        },
+        {
+            "name": "libseccomp-dev",
+            "version": "2.5.5-1ubuntu3.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "26421f22f2150986735b79ece61d811400debab7fa505b08b731ec5a7917e45f"
+        },
+        {
+            "name": "libcap2",
+            "version": "1:2.66-5ubuntu2.4",
+            "arch": "amd64",
+            "required": true,
+            "digest": "23c627c77c66552a658e62852f244f4946dc543898e0ec5428d5dc6bffde2d6a"
+        },
+        {
+            "name": "libseccomp2",
+            "version": "2.5.5-1ubuntu3.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "33fc96f1e008d27c042a3db9bcd16f7f4d49e866f7a3141b758a799328dbdc3f"
+        },
+        {
+            "name": "libxtst-dev",
+            "version": "2:1.2.3-1.1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "5e58b091af5e7de9b59ce75eb1a942aed5cacd6a515b8d83876319f5a30b716e"
+        },
+        {
+            "name": "xvfb",
+            "version": "2:21.1.12-1ubuntu1.8",
+            "arch": "amd64",
+            "required": true,
+            "digest": "712429d9342c7d6cef63afb33ccfcd2bd477a69371b5c9941a9c6dde31a4cd3c"
+        },
+        {
+            "name": "libxtst6",
+            "version": "2:1.2.3-1.1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "632d74c760f0a4e844c499e7bc1eca4c709aa096fde783a7a6807604aef77545"
+        },
+        {
+            "name": "libxext6",
+            "version": "2:1.3.4-1build2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "45783969a9ece9d7b7b733b8c60981584c53c6bc5ee3b42d295d2f80d1285679"
+        },
+        {
+            "name": "x11-common",
+            "version": "1:7.7+23ubuntu3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "b545fa5196dd7467ba3770d6ce575abcd7941071961ea9f7535a319d9d20fd46"
+        },
+        {
+            "name": "xserver-common",
+            "version": "2:21.1.12-1ubuntu1.5",
+            "arch": "amd64",
+            "required": true,
+            "digest": "90ac3bbd61e8f7b60c81abf6831a82eadcc2f6e30841c0a12b3eb71517d2739f"
+        },
+        {
+            "name": "xkb-data",
+            "version": "2.41-2ubuntu1.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e99f2a0b4c56cdf35dec489e56b6a8418826cab8ce6306ec6d0bd98e2cd0014a"
+        },
+        {
+            "name": "x11-xkb-utils",
+            "version": "7.7+8build2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "69df4191e165f8b89d067f6234fcce89a4923d27d1e66dd92e6d63d6da93cdb0"
+        },
+        {
+            "name": "libxaw7",
+            "version": "2:1.0.14-1build2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "2a9cdc82ecf566de76e05394efc604c9cced49e12c28b10e1ca101062b47bac0"
+        },
+        {
+            "name": "libxmu6",
+            "version": "2:1.1.3-3build2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "05c13bce0e9a80139dfa72cc8e7a695b4f7d58b1884423929eade62179d99853"
+        },
+        {
+            "name": "libxpm4",
+            "version": "1:3.5.17-1ubuntu0.24.04.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e14b1581dc675ded6519132f5fccb31b39d534117399d3153082e353b6fe2704"
+        },
+        {
+            "name": "libxt6t64",
+            "version": "1:1.2.1-1.2build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "2e4317d5ae1a45e517771ea0b8d93519b5f915ab08983facecd480d64dbd1489"
+        },
+        {
+            "name": "libice6",
+            "version": "2:1.0.10-1build3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "ad1edb5303574fee154e487947177e5bd15363aa71b92f78f5a2a7145fdb81c5"
+        },
+        {
+            "name": "libsm6",
+            "version": "2:1.2.3-1build3",
+            "arch": "amd64",
+            "required": true,
+            "digest": "1d27ebc381b499075a28c504be4d7d424c63b6866354736ac7f8d25813860cdf"
+        },
+        {
+            "name": "libuuid1",
+            "version": "2.39.3-9ubuntu6.6",
+            "arch": "amd64",
+            "required": true,
+            "digest": "7e2992d3a79fc05514dc5966558ee9c66a7214a47edf2a36017b9e2777528665"
+        },
+        {
+            "name": "libxkbfile1",
+            "version": "1:1.1.0-1build4",
+            "arch": "amd64",
+            "required": true,
+            "digest": "22ac5b7dca740e606261cebdfaf1a07738e92ad3d123570694374ddb4d5afea2"
+        },
+        {
+            "name": "libxrandr2",
+            "version": "2:1.5.2-2build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "f2955a5e594f5724b58ad241d9231ea191cb36574a0d5e5ca6b661cd41d6256d"
+        },
+        {
+            "name": "libxrender1",
+            "version": "1:0.9.10-1.1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "d70bd831aebe8d4834b5dd2ed98df26dd6bd27f1042c47543bd7f66df1ae22ea"
+        },
+        {
+            "name": "libaudit1",
+            "version": "1:3.1.2-2.1build1.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": null
+        },
+        {
+            "name": "libgcrypt20",
+            "version": "1.10.3-2ubuntu0.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "957b9eeaa83cf6f2d5d5d76dbb8aa31d3297e6781d8a02fa08dcc897ae650a0b"
+        },
+        {
+            "name": "libgpg-error0",
+            "version": "1.47-3build2.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "93654ee8180a73a0363f25c51dc673d67cbabcbecd164187b8a2deb54d007aef"
+        },
+        {
+            "name": "libpixman-1-0",
+            "version": "0.42.2-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "d9c2931c4c424615eeab9dd5ae08bfc608b84e803c1d3ccddf319270db213421"
+        },
+        {
+            "name": "libselinux1",
+            "version": "3.5-2ubuntu2.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "6abaa6c26f46ef17764c4a753e0e84de1cdadde5634fd2987621fdc617988d19"
+        },
+        {
+            "name": "libpcre2-8-0",
+            "version": "10.42-4ubuntu2.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "110a797a57673d3ee497a141cf988199258058c57525799c63194d81822529a0"
+        },
+        {
+            "name": "libsystemd0",
+            "version": "255.4-1ubuntu8.17",
+            "arch": "amd64",
+            "required": true,
+            "digest": "4776d2ac7e21efe2ae31f3f7955a7ccd97277225eecf36910a26faf4544979ae"
+        },
+        {
+            "name": "libunwind8",
+            "version": "1.6.2-3build1.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "825cb8724bb6b3389587e30c03ab3381f56a2422cafe3b1945f37e055c65e942"
+        },
+        {
+            "name": "libxfont2",
+            "version": "1:2.0.6-1+deb13u1build0.24.04.2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "e2ed49a20ccff6ffa52719a6cd118538e24c434d9035acd7fb736e7e4f8d6485"
+        },
+        {
+            "name": "libfontenc1",
+            "version": "1:1.1.8-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "0c5d57211cac9659e7f4c856f5e1922c4a522fe8bcf5776e9707b2811f965702"
+        },
+        {
+            "name": "libfreetype6",
+            "version": "2.13.2+dfsg-1ubuntu0.1",
+            "arch": "amd64",
+            "required": true,
+            "digest": null
+        },
+        {
+            "name": "xauth",
+            "version": "1:1.1.2-1build1",
+            "arch": "amd64",
+            "required": true,
+            "digest": "037e70571f39384e28c4ad0db07b44de11f0911ee6c02445560979b417012650"
+        },
+        {
+            "name": "libxmuu1",
+            "version": "2:1.1.3-3build2",
+            "arch": "amd64",
+            "required": true,
+            "digest": "27428f8d7b63c38424177d5b3b8b2b89d519956ccfe969927cd0a20cdec977c0"
+        },
+        {
+            "name": "libssh-dev",
+            "version": "0.10.6-2ubuntu0.5",
+            "arch": "amd64",
+            "required": true,
+            "digest": "dce0ace33a2543bacaa327c9a6ad76cb02d12716fee58ab9233036cb79c180ff"
+        },
+        {
+            "name": "libssh-4",
+            "version": "0.10.6-2ubuntu0.5",
+            "arch": "amd64",
+            "required": true,
+            "digest": "2448ce5f99e49721d12f8b227f2472dd08ed7a78184dd819fd03a42693024a16"
+        }
+    ],
+    "conan_packages": [],
+    "git_packages": [],
+    "output_type": "executable",
+    "asset_directories": [],
+    "artifact_in_cwd": false,
+    "optimization": "0",
+    "debug": true,
+    "warnings": [],
+    "werror": false,
+    "jobs": 16,
+    "misra_profile": "cpp2008",
+    "misra_heuristics": {
+        "rule_2_10_1": {
+            "enabled": true,
+            "suppressions": [],
+            "min_identifier_length": 3,
+            "case_insensitive": true,
+            "confusable_groups": [
+                "o0",
+                "il1",
+                "s5",
+                "z2",
+                "b8",
+                "g6",
+                "q9"
+            ]
+        },
+        "rule_20_9": {
+            "enabled": true,
+            "suppressions": [],
+            "allowed_undefined_macros": [
+                "_MSC_VER",
+                "_CRT_SECURE_NO_DEPRECATE",
+                "__GNUC__",
+                "__GNUC_MINOR__",
+                "__GNUC_PATCHLEVEL__",
+                "__clang__",
+                "__clang_major__",
+                "__clang_minor__",
+                "__clang_patchlevel__",
+                "__STDC__",
+                "__STDC_VERSION__",
+                "__STDC_HOSTED__",
+                "__cplusplus",
+                "__has_include",
+                "__has_feature",
+                "__has_extension",
+                "__has_builtin"
+            ]
+        }
+    },
+    "clang_library_file": "/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/exodus/__exodus_cache/apt/libclang1-20/amd64/1:20.1.2-0ubuntu1~24.04.2/payload/usr/lib/x86_64-linux-gnu/libclang-20.so.20",
+    "clang_node_limit": 50000,
+    "clang_worker_timeout_sec": 120,
+    "clang_worker_parallelism": 4,
+    "clang_parse_only_on_timeout": true,
+    "clang_parse_only_on_crash": true,
+    "project_headers_only": true,
+    "source_root": ".",
+    "build_root": "out",
+    "search_paths": [
+        "__exodus_cache/apt/libyaml-cpp-dev/amd64/0.8.0+dfsg-6build1/payload/usr/include",
+        "__exodus_cache/apt/llvm-18-dev/amd64/1:18.1.3-1ubuntu1/payload/usr/include/llvm-18",
+        "__exodus_cache/apt/llvm-18-dev/amd64/1:18.1.3-1ubuntu1/payload/usr/include/llvm-c-18",
+        "__exodus_cache/apt/libssl-dev/amd64/3.0.13-0ubuntu3.7/payload/usr/include",
+        "__exodus_cache/apt/libc6-dev/amd64/2.39-0ubuntu8.7/payload/usr/include",
+        "__exodus_cache/apt/zlib1g-dev/amd64/1:1.3.dfsg-3.1ubuntu2.1/payload/usr/include",
+        "__exodus_cache/apt/libbrotli-dev/amd64/1.1.0-2build2/payload/usr/include",
+        "__exodus_cache/apt/libzstd-dev/amd64/1.5.5+dfsg2-2build1.1/payload/usr/include",
+        "__exodus_cache/apt/liblz4-dev/amd64/1.9.4-1build1.1/payload/usr/include",
+        "__exodus_cache/apt/libzip-dev/amd64/1.7.3-1.1ubuntu2/payload/usr/include",
+        "__exodus_cache/apt/libassimp-dev/amd64/5.3.1+ds-2build1/payload/usr/include",
+        "__exodus_cache/apt/libgl-dev/amd64/1.7.0-1build1/payload/usr/include",
+        "__exodus_cache/apt/libglfw3-dev/amd64/3.3.10-1build1/payload/usr/include",
+        "__exodus_cache/apt/libvulkan-dev/amd64/1.3.275.0-1build1/payload/usr/include",
+        "__exodus_cache/apt/libglm-dev/all/0.9.9.8+ds-7/payload/usr/include",
+        "__exodus_cache/apt/libpng-dev/amd64/1.6.43-5ubuntu0.5/payload/usr/include",
+        "__exodus_cache/apt/libstb-dev/amd64/0.0~git20230129.5736b15+ds-1.2/payload/usr/include",
+        "__exodus_cache/apt/libglew-dev/amd64/2.2.0-4build1/payload/usr/include",
+        "__exodus_cache/apt/libglu1-mesa-dev/amd64/9.0.2-1.1build1/payload/usr/include",
+        "__exodus_cache/apt/rpcsvc-proto/amd64/1.4.2-0ubuntu7/payload/usr/include",
+        "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/include",
+        "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/include/x86_64-linux-gnu/openblas-serial",
+        "__exodus_cache/apt/libwebp-dev/amd64/1.3.2-0.4build3/payload/usr/include",
+        "__exodus_cache/apt/libcap-dev/amd64/1:2.66-5ubuntu2.4/payload/usr/include",
+        "__exodus_cache/apt/libseccomp-dev/amd64/2.5.5-1ubuntu3.1/payload/usr/include",
+        "__exodus_cache/apt/libxtst-dev/amd64/2:1.2.3-1.1build1/payload/usr/include",
+        "__exodus_cache/apt/libssh-dev/amd64/0.10.6-2ubuntu0.5/payload/usr/include"
+    ],
+    "sources": [
+        "*.c",
+        "*.cpp",
+        "*.cc",
+        "src/**/*.cpp"
+    ],
+    "src_pattern_for_headers": [
+        "*.h",
+        "src/core/**/*.h",
+        "src/sys/**/*.h"
+    ],
+    "defines": {},
+    "env": {},
+    "pre_compilation": "hook_example.py",
+    "pre_linkage": null,
+    "architecture": {
+        "arch": "x86_64",
+        "cpu": null,
+        "fpu": null,
+        "float_abi": null
+    },
+    "compiler": {
+        "name": "g++",
+        "path": null,
+        "lang_standard": null,
+        "flags": [
+            "-std=c++17",
+            "-D__STDC_CONSTANT_MACROS",
+            "-D__STDC_FORMAT_MACROS",
+            "-D__STDC_LIMIT_MACROS",
+            "-w"
+        ],
+        "additional_compilers": [],
+        "common_interface_defined": true,
+        "integer_division_documented": false
+    },
+    "linker": {
+        "name": "g++",
+        "path": null,
+        "script": null,
+        "map_file": null,
+        "flags": [
+            "-rdynamic",
+            "-Wl,-rpath,__exodus_cache/apt/libzip4t64/amd64/1.7.3-1.1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
+            "-Wl,-rpath,__exodus_cache/apt/libassimp5/amd64/5.3.1+ds-2build1/payload/usr/lib/x86_64-linux-gnu",
+            "-Wl,-rpath,__exodus_cache/apt/libglfw3/amd64/3.3.10-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "-Wl,-rpath,__exodus_cache/apt/libpng16-16t64/amd64/1.6.43-5ubuntu0.5/payload/usr/lib/x86_64-linux-gnu",
+            "-Wl,-rpath,__exodus_cache/apt/libglew2.2/amd64/2.2.0-4build1/payload/usr/lib/x86_64-linux-gnu",
+            "-Wl,-rpath,__exodus_cache/apt/libopenblas0-serial/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu/openblas-serial"
+        ],
+        "libraries": [
+            "yaml-cpp",
+            "LLVM-18",
+            "pthread",
+            "ssl",
+            "crypto",
+            "z",
+            "brotlienc",
+            "brotlidec",
+            "brotlicommon",
+            "zstd",
+            "lz4",
+            "zip",
+            "assimp",
+            "GL",
+            "glfw",
+            "png",
+            "webp",
+            "sharpyuv",
+            "GLEW",
+            "m",
+            "dl",
+            "openblas",
+            "Xtst",
+            "X11",
+            ":libssh.so.4"
+        ],
+        "library_paths": [
+            "__exodus_cache/apt/libyaml-cpp-dev/amd64/0.8.0+dfsg-6build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/llvm-18-dev/amd64/1:18.1.3-1ubuntu1/payload/usr/lib/llvm-18/lib",
+            "__exodus_cache/apt/libssl-dev/amd64/3.0.13-0ubuntu3.7/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libc6-dev/amd64/2.39-0ubuntu8.7/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/zlib1g-dev/amd64/1:1.3.dfsg-3.1ubuntu2.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libbrotli-dev/amd64/1.1.0-2build2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libzstd-dev/amd64/1.5.5+dfsg2-2build1.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/liblz4-dev/amd64/1.9.4-1build1.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libzip-dev/amd64/1.7.3-1.1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libc6-dev/amd64/2.39-0ubuntu8.7/payload/usr/share/gdb/auto-load/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libzip4t64/amd64/1.7.3-1.1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libassimp5/amd64/5.3.1+ds-2build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libglfw3/amd64/3.3.10-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libpng-dev/amd64/1.6.43-5ubuntu0.5/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libpng16-16t64/amd64/1.6.43-5ubuntu0.5/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libstb-dev/amd64/0.0~git20230129.5736b15+ds-1.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libglew-dev/amd64/2.2.0-4build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libglew2.2/amd64/2.2.0-4build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libglu1-mesa-dev/amd64/9.0.2-1.1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libglu1-mesa/amd64/9.0.2-1.1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libassimp-dev/amd64/5.3.1+ds-2build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libgl-dev/amd64/1.7.0-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libglfw3-dev/amd64/3.3.10-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libvulkan-dev/amd64/1.3.275.0-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libssl3t64/amd64/3.0.13-0ubuntu3.7/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/zlib1g/amd64/1:1.3.dfsg-3.1ubuntu2.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libbrotli1/amd64/1.1.0-2build2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libzstd1/amd64/1.5.5+dfsg2-2build1.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/liblz4-1/amd64/1.9.4-1build1.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libvulkan1/amd64/1.3.275.0-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libgl1/amd64/1.7.0-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libyaml-cpp0.8/amd64/0.8.0+dfsg-6build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libmd0/amd64/1.1.0-2build1.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libbsd0/amd64/0.12.1-1build1.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libtinfo6/amd64/6.4+20240113-1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libedit2/amd64/3.1-20230828-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libffi8/amd64/3.4.6-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libicu74/amd64/74.2-1ubuntu3.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/liblzma5/amd64/5.6.1+really5.4.5-1ubuntu0.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxml2/amd64/2.9.14+dfsg-1.3ubuntu3.7/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libllvm18/amd64/1:18.1.3-1ubuntu1/payload/usr/lib/llvm-18/lib",
+            "__exodus_cache/apt/libllvm18/amd64/1:18.1.3-1ubuntu1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/llvm-18-linker-tools/amd64/1:18.1.3-1ubuntu1/payload/usr/lib/llvm-18/lib",
+            "__exodus_cache/apt/libkrb5support0/amd64/1.20.1-6ubuntu2.6/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libcom-err2/amd64/1.47.0-2.4~exp1ubuntu4.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libk5crypto3/amd64/1.20.1-6ubuntu2.6/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libkeyutils1/amd64/1.6.3-3build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libkrb5-3/amd64/1.20.1-6ubuntu2.6/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libgssapi-krb5-2/amd64/1.20.1-6ubuntu2.6/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libunistring5/amd64/1.1-2build1.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libidn2-0/amd64/2.3.7-2build1.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libnghttp2-14/amd64/1.59.0-1ubuntu0.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libpsl5t64/amd64/0.21.2-1.1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libgmp10/amd64/2:6.3.0+dfsg-2ubuntu6.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/librtmp1/amd64/2.4+20151223.gitfa8646d.1-2build7/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libcurl4t64/amd64/8.5.0-2ubuntu10.7/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libpfm4/amd64/4.13.0+git32-g0d4ed0e-1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libexpat1/amd64/2.6.1-2ubuntu0.4/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libbz2-1.0/amd64/1.0.8-5.1build0.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libcrypt1/amd64/1:4.4.36-4build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libdb5.3t64/amd64/5.3.28+dfsg2-7/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libncursesw6/amd64/6.4+20240113-1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libreadline8t64/amd64/8.2-4build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libsqlite3-0/amd64/3.45.1-1ubuntu2.5/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libyaml-0-2/amd64/0.2.5-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libclang-cpp18/amd64/1:18.1.3-1ubuntu1/payload/usr/lib/llvm-18/lib",
+            "__exodus_cache/apt/libclang-cpp18/amd64/1:18.1.3-1ubuntu1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxau6/amd64/1:1.0.9-1build6/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxdmcp6/amd64/1:1.1.3-0ubuntu6/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxcb1/amd64/1.15-1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libx11-6/amd64/2:1.8.7-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libglvnd0/amd64/1.7.0-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libopengl0/amd64/1.7.0-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libglx0/amd64/1.7.0-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libgfortran5/amd64/14.2.0-4ubuntu2~24.04.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libopenblas0-serial/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu/openblas-serial",
+            "__exodus_cache/apt/libopenblas0-serial/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu/openblas-serial",
+            "__exodus_cache/apt/libwebpdemux2/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libwebpmux3/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libwebpdecoder3/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libwebp-dev/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libsharpyuv0/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libwebp7/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libcap2/amd64/1:2.66-5ubuntu2.4/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libcap-dev/amd64/1:2.66-5ubuntu2.4/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libseccomp2/amd64/2.5.5-1ubuntu3.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libseccomp-dev/amd64/2.5.5-1ubuntu3.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxext6/amd64/2:1.3.4-1build2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxtst6/amd64/2:1.2.3-1.1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxtst-dev/amd64/2:1.2.3-1.1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxmu6/amd64/2:1.1.3-3build2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxpm4/amd64/1:3.5.17-1ubuntu0.24.04.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libice6/amd64/2:1.0.10-1build3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libuuid1/amd64/2.39.3-9ubuntu6.6/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libsm6/amd64/2:1.2.3-1build3/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxt6t64/amd64/1:1.2.1-1.2build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxaw7/amd64/2:1.0.14-1build2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxkbfile1/amd64/1:1.1.0-1build4/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxrender1/amd64/1:0.9.10-1.1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxrandr2/amd64/2:1.5.2-2build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libgpg-error0/amd64/1.47-3build2.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libgcrypt20/amd64/1.10.3-2ubuntu0.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libpixman-1-0/amd64/0.42.2-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libpcre2-8-0/amd64/10.42-4ubuntu2.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libselinux1/amd64/3.5-2ubuntu2.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libsystemd0/amd64/255.4-1ubuntu8.17/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libunwind8/amd64/1.6.2-3build1.1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libfontenc1/amd64/1:1.1.8-1build1/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxfont2/amd64/1:2.0.6-1+deb13u1build0.24.04.2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libxmuu1/amd64/2:1.1.3-3build2/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libssh-dev/amd64/0.10.6-2ubuntu0.5/payload/usr/lib/x86_64-linux-gnu",
+            "__exodus_cache/apt/libssh-4/amd64/0.10.6-2ubuntu0.5/payload/usr/lib/x86_64-linux-gnu"
+        ],
+        "rpath": true
     }
-  ],
-  "conan_packages": [],
-  "git_packages": [],
-  "output_type": "executable",
-  "asset_directories": [],
-  "artifact_in_cwd": false,
-  "optimization": "0",
-  "debug": true,
-  "warnings": [],
-  "werror": false,
-  "misra_profile": "cpp2008",
-  "misra_heuristics": {
-    "rule_2_10_1": {
-      "enabled": true,
-      "suppressions": [],
-      "min_identifier_length": 3,
-      "case_insensitive": true,
-      "confusable_groups": [
-        "o0",
-        "il1",
-        "s5",
-        "z2",
-        "b8",
-        "g6",
-        "q9"
-      ]
-    },
-    "rule_20_9": {
-      "enabled": true,
-      "suppressions": [],
-      "allowed_undefined_macros": [
-        "_MSC_VER",
-        "_CRT_SECURE_NO_DEPRECATE",
-        "__GNUC__",
-        "__GNUC_MINOR__",
-        "__GNUC_PATCHLEVEL__",
-        "__clang__",
-        "__clang_major__",
-        "__clang_minor__",
-        "__clang_patchlevel__",
-        "__STDC__",
-        "__STDC_VERSION__",
-        "__STDC_HOSTED__",
-        "__cplusplus",
-        "__has_include",
-        "__has_feature",
-        "__has_extension",
-        "__has_builtin"
-      ]
-    }
-  },
-  "clang_library_file": "/media/nikolai/95a208ef-ffa2-478b-abdd-ff394baa6a76/projects/python/exodus/__exodus_cache/apt/libclang1-20/amd64/1:20.1.2-0ubuntu1~24.04.2/payload/usr/lib/x86_64-linux-gnu/libclang-20.so.20",
-  "clang_node_limit": 50000,
-  "clang_worker_timeout_sec": 120,
-  "clang_worker_parallelism": 4,
-  "clang_parse_only_on_timeout": true,
-  "clang_parse_only_on_crash": true,
-  "project_headers_only": true,
-  "source_root": ".",
-  "build_root": "out",
-  "search_paths": [
-    "__exodus_cache/apt/libyaml-cpp-dev/amd64/0.8.0+dfsg-6build1/payload/usr/include",
-    "__exodus_cache/apt/llvm-18-dev/amd64/1:18.1.3-1ubuntu1/payload/usr/include/llvm-18",
-    "__exodus_cache/apt/llvm-18-dev/amd64/1:18.1.3-1ubuntu1/payload/usr/include/llvm-c-18",
-    "__exodus_cache/apt/libssl-dev/amd64/3.0.13-0ubuntu3.7/payload/usr/include",
-    "__exodus_cache/apt/libc6-dev/amd64/2.39-0ubuntu8.7/payload/usr/include",
-    "__exodus_cache/apt/zlib1g-dev/amd64/1:1.3.dfsg-3.1ubuntu2.1/payload/usr/include",
-    "__exodus_cache/apt/libbrotli-dev/amd64/1.1.0-2build2/payload/usr/include",
-    "__exodus_cache/apt/libzstd-dev/amd64/1.5.5+dfsg2-2build1.1/payload/usr/include",
-    "__exodus_cache/apt/liblz4-dev/amd64/1.9.4-1build1.1/payload/usr/include",
-    "__exodus_cache/apt/libzip-dev/amd64/1.7.3-1.1ubuntu2/payload/usr/include",
-    "__exodus_cache/apt/libassimp-dev/amd64/5.3.1+ds-2build1/payload/usr/include",
-    "__exodus_cache/apt/libgl-dev/amd64/1.7.0-1build1/payload/usr/include",
-    "__exodus_cache/apt/libglfw3-dev/amd64/3.3.10-1build1/payload/usr/include",
-    "__exodus_cache/apt/libvulkan-dev/amd64/1.3.275.0-1build1/payload/usr/include",
-    "__exodus_cache/apt/libglm-dev/all/0.9.9.8+ds-7/payload/usr/include",
-    "__exodus_cache/apt/libpng-dev/amd64/1.6.43-5ubuntu0.5/payload/usr/include",
-    "__exodus_cache/apt/libstb-dev/amd64/0.0~git20230129.5736b15+ds-1.2/payload/usr/include",
-    "__exodus_cache/apt/libglew-dev/amd64/2.2.0-4build1/payload/usr/include",
-    "__exodus_cache/apt/libglu1-mesa-dev/amd64/9.0.2-1.1build1/payload/usr/include",
-    "__exodus_cache/apt/rpcsvc-proto/amd64/1.4.2-0ubuntu7/payload/usr/include",
-    "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/include",
-    "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/include/x86_64-linux-gnu/openblas-serial",
-    "__exodus_cache/apt/libwebp-dev/amd64/1.3.2-0.4build3/payload/usr/include"
-  ],
-  "sources": [
-    "*.c",
-    "*.cpp",
-    "*.cc",
-    "src/**/*.cpp"
-  ],
-  "src_pattern_for_headers": [
-    "*.h",
-    "src/core/**/*.h",
-    "src/sys/**/*.h"
-  ],
-  "defines": {},
-  "env": {},
-  "pre_compilation": "hook_example.py",
-  "pre_linkage": null,
-  "architecture": {
-    "arch": "x86_64",
-    "cpu": null,
-    "fpu": null,
-    "float_abi": null
-  },
-  "compiler": {
-    "name": "g++",
-    "path": null,
-    "lang_standard": null,
-    "flags": [
-      "-std=c++17",
-      "-D__STDC_CONSTANT_MACROS",
-      "-D__STDC_FORMAT_MACROS",
-      "-D__STDC_LIMIT_MACROS",
-      "-w"
-    ],
-    "additional_compilers": [],
-    "common_interface_defined": true,
-    "integer_division_documented": false
-  },
-  "linker": {
-    "name": "g++",
-    "path": null,
-    "script": null,
-    "map_file": null,
-    "flags": [
-      "-rdynamic",
-      "-Wl,-rpath,__exodus_cache/apt/libzip4t64/amd64/1.7.3-1.1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
-      "-Wl,-rpath,__exodus_cache/apt/libassimp5/amd64/5.3.1+ds-2build1/payload/usr/lib/x86_64-linux-gnu",
-      "-Wl,-rpath,__exodus_cache/apt/libglfw3/amd64/3.3.10-1build1/payload/usr/lib/x86_64-linux-gnu",
-      "-Wl,-rpath,__exodus_cache/apt/libpng16-16t64/amd64/1.6.43-5ubuntu0.5/payload/usr/lib/x86_64-linux-gnu",
-      "-Wl,-rpath,__exodus_cache/apt/libglew2.2/amd64/2.2.0-4build1/payload/usr/lib/x86_64-linux-gnu",
-      "-Wl,-rpath,__exodus_cache/apt/libopenblas0-serial/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu/openblas-serial"
-    ],
-    "libraries": [
-      "yaml-cpp",
-      "LLVM-18",
-      "pthread",
-      "ssl",
-      "crypto",
-      "z",
-      "brotlienc",
-      "brotlidec",
-      "brotlicommon",
-      "zstd",
-      "lz4",
-      "zip",
-      "assimp",
-      "GL",
-      "glfw",
-      "png",
-      "webp",
-      "sharpyuv",
-      "GLEW",
-      "m",
-      "dl",
-      "openblas"
-    ],
-    "library_paths": [
-      "__exodus_cache/apt/libyaml-cpp-dev/amd64/0.8.0+dfsg-6build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/llvm-18-dev/amd64/1:18.1.3-1ubuntu1/payload/usr/lib/llvm-18/lib",
-      "__exodus_cache/apt/libssl-dev/amd64/3.0.13-0ubuntu3.7/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libc6-dev/amd64/2.39-0ubuntu8.7/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/zlib1g-dev/amd64/1:1.3.dfsg-3.1ubuntu2.1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libbrotli-dev/amd64/1.1.0-2build2/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libzstd-dev/amd64/1.5.5+dfsg2-2build1.1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/liblz4-dev/amd64/1.9.4-1build1.1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libzip-dev/amd64/1.7.3-1.1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libc6-dev/amd64/2.39-0ubuntu8.7/payload/usr/share/gdb/auto-load/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libzip4t64/amd64/1.7.3-1.1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libassimp5/amd64/5.3.1+ds-2build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libglfw3/amd64/3.3.10-1build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libpng-dev/amd64/1.6.43-5ubuntu0.5/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libpng16-16t64/amd64/1.6.43-5ubuntu0.5/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libstb-dev/amd64/0.0~git20230129.5736b15+ds-1.2/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libglew-dev/amd64/2.2.0-4build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libglew2.2/amd64/2.2.0-4build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libglu1-mesa-dev/amd64/9.0.2-1.1build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libglu1-mesa/amd64/9.0.2-1.1build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libassimp-dev/amd64/5.3.1+ds-2build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libgl-dev/amd64/1.7.0-1build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libglfw3-dev/amd64/3.3.10-1build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libvulkan-dev/amd64/1.3.275.0-1build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libssl3t64/amd64/3.0.13-0ubuntu3.7/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/zlib1g/amd64/1:1.3.dfsg-3.1ubuntu2.1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libbrotli1/amd64/1.1.0-2build2/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libzstd1/amd64/1.5.5+dfsg2-2build1.1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/liblz4-1/amd64/1.9.4-1build1.1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libvulkan1/amd64/1.3.275.0-1build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libgl1/amd64/1.7.0-1build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libyaml-cpp0.8/amd64/0.8.0+dfsg-6build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libmd0/amd64/1.1.0-2build1.1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libbsd0/amd64/0.12.1-1build1.1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libtinfo6/amd64/6.4+20240113-1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libedit2/amd64/3.1-20230828-1build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libffi8/amd64/3.4.6-1build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libicu74/amd64/74.2-1ubuntu3.1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/liblzma5/amd64/5.6.1+really5.4.5-1ubuntu0.2/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libxml2/amd64/2.9.14+dfsg-1.3ubuntu3.7/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libllvm18/amd64/1:18.1.3-1ubuntu1/payload/usr/lib/llvm-18/lib",
-      "__exodus_cache/apt/libllvm18/amd64/1:18.1.3-1ubuntu1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/llvm-18-linker-tools/amd64/1:18.1.3-1ubuntu1/payload/usr/lib/llvm-18/lib",
-      "__exodus_cache/apt/libkrb5support0/amd64/1.20.1-6ubuntu2.6/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libcom-err2/amd64/1.47.0-2.4~exp1ubuntu4.1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libk5crypto3/amd64/1.20.1-6ubuntu2.6/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libkeyutils1/amd64/1.6.3-3build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libkrb5-3/amd64/1.20.1-6ubuntu2.6/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libgssapi-krb5-2/amd64/1.20.1-6ubuntu2.6/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libunistring5/amd64/1.1-2build1.1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libidn2-0/amd64/2.3.7-2build1.1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libnghttp2-14/amd64/1.59.0-1ubuntu0.2/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libpsl5t64/amd64/0.21.2-1.1build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libgmp10/amd64/2:6.3.0+dfsg-2ubuntu6.1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/librtmp1/amd64/2.4+20151223.gitfa8646d.1-2build7/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libssh-4/amd64/0.10.6-2ubuntu0.3/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libcurl4t64/amd64/8.5.0-2ubuntu10.7/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libpfm4/amd64/4.13.0+git32-g0d4ed0e-1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libexpat1/amd64/2.6.1-2ubuntu0.4/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libbz2-1.0/amd64/1.0.8-5.1build0.1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libcrypt1/amd64/1:4.4.36-4build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libdb5.3t64/amd64/5.3.28+dfsg2-7/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libncursesw6/amd64/6.4+20240113-1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libreadline8t64/amd64/8.2-4build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libsqlite3-0/amd64/3.45.1-1ubuntu2.5/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libyaml-0-2/amd64/0.2.5-1build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libclang-cpp18/amd64/1:18.1.3-1ubuntu1/payload/usr/lib/llvm-18/lib",
-      "__exodus_cache/apt/libclang-cpp18/amd64/1:18.1.3-1ubuntu1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libxau6/amd64/1:1.0.9-1build6/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libxdmcp6/amd64/1:1.1.3-0ubuntu6/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libxcb1/amd64/1.15-1ubuntu2/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libx11-6/amd64/2:1.8.7-1build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libglvnd0/amd64/1.7.0-1build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libopengl0/amd64/1.7.0-1build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libglx0/amd64/1.7.0-1build1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libgfortran5/amd64/14.2.0-4ubuntu2~24.04.1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libopenblas0-serial/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libopenblas-serial-dev/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu/openblas-serial",
-      "__exodus_cache/apt/libopenblas0-serial/amd64/0.3.26+ds-1/payload/usr/lib/x86_64-linux-gnu/openblas-serial",
-      "__exodus_cache/apt/libwebpdemux2/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libwebpmux3/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libwebpdecoder3/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libwebp-dev/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libsharpyuv0/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu",
-      "__exodus_cache/apt/libwebp7/amd64/1.3.2-0.4build3/payload/usr/lib/x86_64-linux-gnu"
-    ],
-    "rpath": true
-  }
 }
