@@ -7,7 +7,7 @@
     members:
       - [buf, buffer]
 
-- decl: [box, ref<BufferBox>, { new: BufferBox }]
+- decl: [box, ptr<BufferBox>, { new: BufferBox }]   # spec/18: `new` -> ptr<T>
 
 - call: [box.buf.write, 0x12345678, i32]
 - decl: [got, i32, { call: [box.buf.read, i32] }]
