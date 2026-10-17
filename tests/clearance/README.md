@@ -123,6 +123,15 @@ Schreibseite gemessen statt nur spezifiziert — `# NEEDS: write`:
   Kopf jener Probe mit der zweiten, inline gemessenen Richtung — eine Probe allein
   unterscheidet „gekappt" nicht von „Aufruf ignoriert".
 
+**F65-34 / `clearance-writedown`** (Schritt 8, `# NEEDS: writedown`) hat drei Proben:
+`13_writedown_clean` fuer die erlaubten Richtungen (gleich und strenger), `neg/n26` fuer das
+Beispiel des Kapitels und `neg/n27` fuer die naheliegendste Umgehung — ein unannotiertes `tmp`
+in der Mitte. `n27` ist die wichtigere der beiden Negativen: wenn eine Lokale ohne `level:` die
+Herkunft vergaesse, waere die Regel mit einem Zwischenschritt erledigt.
+Die sechs benannten Grenzen des Durchlaufs stehen in spec/65 §9 Schritt 8 — darunter die, dass
+eine unannotierte Huellfunktion wascht und dass eine Schleifen-Rueckwaertskante einen Fluss
+verdecken kann.
+
 Zwei Anforderungen bleiben spezifiziert und UNGEPRUEFT, und das steht hier, statt von einem
 fehlenden Test angedeutet zu werden:
 
@@ -149,9 +158,11 @@ im Kopf den Umsetzungsschritt, den sie braucht, und der Runner bewertet nur den 
 # NEEDS: exports   Export-Tabelle des Wirts, Erwartung ist eine Diagnose (F65-23)
 # NEEDS: host      Wirt mit AUFRUFBAREN Symbolen: Signatur + Adresse (F65-24/F65-37)
 # NEEDS: write     die Schreibseite: create/replace/Kollision/Leser (F65-26 … F65-32)
+# NEEDS: writedown die Write-down-Regel (F65-34), Wertfluss IM Rumpf
+# NEEDS: dynload   braucht spec/29_2 §4.3 — nicht dieses Kapitel
 
 STAGE=step2 bash tests/clearance/run.sh     # Vorgabe
-STAGE=write bash tests/clearance/run.sh     # alles
+STAGE=writedown bash tests/clearance/run.sh # alles
 ```
 
 Proben oberhalb von `STAGE` melden **AUSSTEHEND** und zaehlen nicht als Fehlschlag.

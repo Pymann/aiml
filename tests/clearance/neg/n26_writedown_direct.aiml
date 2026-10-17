@@ -1,0 +1,24 @@
+# SPEC: 65_symbol_clearance
+# Requires: driver
+# static-check: off
+# NEEDS: writedown
+# STATIC-CLEARANCE: on
+# NEGATIVE (spec/65 F65-34): das Beispiel des Kapitels.  `read_secret` liegt auf Level 2,
+# `open_log` ist auf Level 255 deklariert — also fuer jeden lesbar.  Ohne diese Regel ist ein
+# eingeschraenkter Wert in EINER Zuweisung gewaschen: dort lesen, wo man darf, dort ablegen,
+# wo jeder darf.
+# EXPECT-ERROR: clearance-writedown
+- def:
+    name: read_secret
+    level: 2
+    return: i32
+    body:
+      - return: [42]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [open_log, i32, 0, { level: 255 }]
+      - set: [open_log, { call: [read_secret] }]
+      - return: [0]

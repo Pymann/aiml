@@ -1,5 +1,6 @@
 #include "compiler.h"
 #include "src/core/clearance_flow.h"
+#include "src/core/clearance_writedown.h"
 #include "src/core/pipeline_expand.h"
 #include "exec_impl.h"
 #include "src/core/builtin_registry.h"
@@ -1191,6 +1192,9 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                     flowGraph.emplace(kv.first, std::move(n));
                 }
                 aiml::clearance::checkFlow(flowGraph);
+                // spec/65 F65-34: Write-down im Rumpf — derselbe Hebel, weil beides derselbe
+                // Wunsch ist („pruefe die Privilegien statisch"), nicht zwei Entscheidungen.
+                aiml::clearance::checkWritedown(programAST.get());
             }
 
             // Tier-3 dead-prefab (spec/44_8): fold THIS module's prefab decls
@@ -1345,6 +1349,9 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source) {
                     flowGraph.emplace(kv.first, std::move(n));
                 }
                 aiml::clearance::checkFlow(flowGraph);
+                // spec/65 F65-34: Write-down im Rumpf — derselbe Hebel, weil beides derselbe
+                // Wunsch ist („pruefe die Privilegien statisch"), nicht zwei Entscheidungen.
+                aiml::clearance::checkWritedown(programAST.get());
             }
         } else {
             LOG_ERROR("<memory>: compileFromString: AST builder produced no program");

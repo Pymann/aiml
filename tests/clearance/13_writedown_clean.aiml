@@ -1,0 +1,41 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: writedown
+# TIER: T1
+# STATIC-CLEARANCE: on
+# CONSTRUCT: spec/65 F65-34 — die erlaubte Richtung.  Ein Wert von Level 2 darf in eine Lokale
+#            auf Level 2 (gleich) und in eine auf Level 0 (strenger) laufen.  Verboten ist nur
+#            das Speichern in eine WENIGER eingeschraenkte Lokale.
+# COVERS: Gleichheit ist erlaubt; nach unten (strenger) ist erlaubt; eine Lokale ohne
+#         Annotation und ohne eingeschraenkte Herkunft traegt KEIN Level, also ist ein Literal
+#         in eine annotierte Lokale kein Verstoss — eine Regel, die jedes Programm bricht,
+#         schuetzt nichts.
+# EXPECT: exit 0.
+
+- def:
+    name: read_secret
+    level: 2
+    return: i32
+    body:
+      - return: [42]
+
+- def:
+    name: main
+    return: i32
+    body:
+      # gleiches Level: erlaubt
+      - decl: [same, i32, 0, { level: 2 }]
+      - set: [same, { call: [read_secret] }]
+      # strenger: erlaubt
+      - decl: [tighter, i32, 0, { level: 0 }]
+      - set: [tighter, { call: [read_secret] }]
+      # Literal in eine annotierte Lokale: keine eingeschraenkte Herkunft, kein Verstoss
+      - decl: [open_num, i32, 7, { level: 255 }]
+      - if:
+          condition: { neq: [{ +: [same, tighter] }, 84] }
+          then:
+            - call: [log.error, "Summe falsch: ${same}+${tighter}"]
+            - return: [1]
+      - call: [log.info, "PASS 13 Write-down: erlaubte Richtungen ${open_num}"]
+      - return: [0]

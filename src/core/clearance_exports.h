@@ -27,7 +27,9 @@
 namespace aiml {
 namespace clearance {
 
-inline const std::map<std::string, int>& exportTable() {
+// Nicht-konstant, weil der Wirt zur Laufzeit Zeilen HINZUFUEGT (F65-37).  Die Datei aus
+// `AIML_EXPORTS` wird einmal eingelesen, danach ist die Tabelle das Gedaechtnis des Prozesses.
+inline std::map<std::string, int>& exportTable() {
     static std::map<std::string, int> table;
     static bool loaded = false;
     if (loaded) return table;
@@ -58,9 +60,16 @@ inline const std::map<std::string, int>& exportTable() {
 // Level des angebotenen Symbols, oder kAbsent, wenn der Wirt es nicht anbietet.
 // F65-5: Auslassen gewaehrt nie — „nicht angeboten" ist nicht „offen".
 inline int exportedLevel(const std::string& name) {
-    const auto& table = exportTable();
+    auto& table = exportTable();
     auto it = table.find(name);
     return it == table.end() ? kAbsent : it->second;
+}
+
+// F65-37: der Wirt traegt eine Zeile ein (Name + Level).  Die Adresse hat der Aufrufer
+// schon per `AddSymbol` angemeldet; hier kommt die Richtlinie dazu, damit beides aus
+// EINEM Aufruf stammt und nicht driften kann (F65-23).
+inline void registerExport(const std::string& name, int level) {
+    exportTable()[name] = level;
 }
 
 inline bool exportReachable(const std::string& name) {

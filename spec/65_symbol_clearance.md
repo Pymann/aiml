@@ -1,11 +1,15 @@
 # 65 — Symbol Clearance (Levels) [PROPOSAL]
 
-> Status: PROPOSAL, teilweise umgesetzt (17.10.2026): die Schritte **2 bis 7** sind gebaut und
-> gemessen (Labor `tests/clearance/` bei `STAGE=write`: 11 positive, 23 negative Proben gruen;
-> Korpus 865 Tests, 729 passed, 1 vorbestehender Fail — keine Regression).
+> Status: PROPOSAL, **alle Schritte 2 bis 8 gebaut** (17.10.2026) und gemessen (Labor
+> `tests/clearance/` bei `STAGE=writedown`: 12 positive, 25 negative Proben gruen).
 > **Ausstehend sind zwei**, und zwar nicht wegen dieses Kapitels: `clearance-create` ist
 > gebaut, aber unerreichbar, solange spec/29_2 §4.3 (dynamisches Nachladen) fehlt — siehe §9
-> Schritt 7.  Offen ist Schritt 8 (Write-down).
+> Schritt 7.
+> **Zwei Teile sind opt-in und bleiben es:** die Flusspruefung (F65-17) und die
+> Write-down-Regel (F65-34), beide an `AIML_STATIC_CLEARANCE`.  Fuer Write-down ist die
+> Auflage „nach Messung am Korpus" NICHT erfuellt: der Korpus benutzt `level:` an keiner
+> Stelle, ein Lauf zeigt also nur, dass die Regel nichts zu sehen hat.  Die benannten
+> Grenzen stehen in §9 Schritt 8, nicht im Code versteckt.
 >
 >
 > Derived from `doc/analysis/symbol_clearance_2026-10-16.md`, which holds the
@@ -493,6 +497,21 @@ storage is allowed to hold. This is the heaviest part of the chapter — it need
 a body, not just the call graph of F65-9 — and it is therefore **last** in §9 and opt-in like
 F65-17 until it has been measured on the corpus.
 
+**Zwei Bedeutungen, die auseinandergehalten werden muessen**, sonst ist die Regel in einem
+Zwischenschritt umgangen:
+
+- Das `level:` einer Lokalen ist die **Schranke fuer das Speichern** — was darf hier hinein.
+- Was eine Lokale **traegt**, ist das Strengste, was je hineingeschrieben wurde, und das
+  reist weiter.  Eine Lokale OHNE Annotation traegt darum ebenfalls ein Level, sobald ein
+  eingeschraenkter Wert hineinlaeuft; sonst wuerde `tmp = read_secret()` die Herkunft
+  vergessen und `open_log = tmp` waere erlaubt.  Genau diese zwei Zeilen sind die
+  naheliegendste Umgehung, nicht die Zuweisung aus dem Beispiel oben.
+
+Ohne Annotation und ohne eingeschraenkte Herkunft traegt eine Lokale **kein** Level — nicht
+Level 0.  Das ist der Unterschied zu F65-5: dort ist 0 die fail-closed-Vorgabe fuer den
+ZUGRIFF, hier wuerde 0 bedeuten, dass jedes Literal in jede annotierte Lokale ein Verstoss
+waere.  Eine Regel, die jedes Programm bricht, schuetzt nichts.
+
 **F65-35: Builtins are closed from the ground up.** Every builtin namespace and function is
 level `0` unless the table (§5 checkpoint 2) explicitly raises it. Earlier drafts of this chapter
 named `sys`, `db`, `io`, `net` as the closed ones, which was the wrong shape: it made a list of
@@ -601,8 +620,37 @@ F65-26 for the write side. One rule, three places, no exceptions to remember.
    ungeprueft, und das steht da, statt von einem fehlenden Test angedeutet zu werden.
    **F65-27** haengt am selben Punkt: ohne §4.3 wird ein angelegtes Symbol nie aufrufbar, sein
    Level also nie beobachtbar.  Wer §4.3 baut, muss beides dort einloesen.
-8. Zuletzt, nach Messung am Korpus: die Write-down-Regel (F65-34), die Wertfluss im Rumpf
-   braucht und bis dahin opt-in bleibt wie F65-17.
+8. ✅ **gebaut 17.10.2026** — die Write-down-Regel (F65-34) in `src/core/clearance_writedown.h`,
+   ein Vorwaertsdurchlauf ueber den AST je Rumpf.  Sie haengt am GLEICHEN Hebel wie die
+   Flusspruefung (`AIML_STATIC_CLEARANCE`) und an derselben Stelle in `compiler.cpp`: beides
+   ist derselbe Wunsch („pruefe die Privilegien statisch"), also ein Schalter und nicht zwei.
+   Zwei Karten je Rumpf, weil eine Lokale zwei Bedeutungen hat: `bound` ist die Schranke aus
+   `level:`, `carried` ist das Strengste, was je hineinlief.
+
+   **Sechs Grenzen, benannt statt angedeutet** — alle folgen unmittelbar aus der Form des
+   Durchlaufs, sind also gelesen und nicht vermutet:
+   (a) **Nur innerhalb einer Datei**, wie die Flusspruefung und aus demselben Grund: eine
+   importierte Deklaration traegt kein Level.
+   (b) **Ein Vorwaertsdurchlauf in Textreihenfolge.**  Eine Rueckwaertskante kann einen Fluss
+   verdecken: steht in einem `while` das Lesen VOR dem Schreiben, das die Herkunft setzt, wird
+   es nicht gesehen.  Ein Fixpunkt ueber Schleifen waere das Richtige und ist nicht gebaut.
+   (c) **Eine unannotierte Huellfunktion wascht.**  `exprLevel` nimmt das Level einer Funktion
+   aus der Tabelle; eine Funktion ohne `level:` steht nicht darin, ihr Rueckgabewert traegt also
+   nichts.  Und F65-9 greift hier nicht: fuer einen unannotierten Aufrufer (Level 0) ist
+   `level(callee) >= 0` immer wahr.  Das Loch zu schliessen braucht Rueckgabe-Level ueber
+   Funktionsgrenzen — interprozedural, und damit ein eigener Schritt.
+   (d) **Parameter tragen kein Level.**  Nur `decl`-Schranken und Globale.
+   (e) **Member-Ziele sind nicht erfasst.**  `bound` ist nach dem Namen aus der `decl`
+   geschluesselt; ein Ziel mit Punktpfad trifft keinen Eintrag.
+   (f) **Container-Elemente werden am Behaelter gemessen**, nicht je Element — `idx:` prueft
+   gegen das Level des Behaelters.
+
+   **Und die Auflage aus diesem Punkt ist NICHT erfuellt:** „nach Messung am Korpus" kann die
+   Regel heute nicht einloesen, denn der Korpus benutzt den Modifier `level:` an keiner
+   einzigen Stelle (gemessen 17.10.2026: die zwei Treffer in `tests/` sind Kommentartext).
+   Ein Durchlauf mit gesetztem Hebel zeigt also nur, dass die Regel nichts zu sehen hat — und
+   das ist kein Beleg, dass sie leise ist.  Sie bleibt darum **opt-in**, und wer sie zur
+   Vorgabe machen will, braucht zuerst einen Korpus, der sie benutzt.
 
 Two prerequisites sit **outside** this chapter and belong to whoever builds the first console:
 
@@ -610,8 +658,9 @@ Two prerequisites sit **outside** this chapter and belong to whoever builds the 
   16.10.2026) — a console would otherwise cache compiled scripts under `rev_unknown`;
 - one process per user (F65-25), because the compiler keeps one JIT context at a time.
 
-And last, after everything above has been measured on the corpus: the write-down rule (F65-34),
-which needs value flow inside a body and is opt-in until it has proven quiet.
+(Der letzte Absatz dieses Abschnitts nannte die Write-down-Regel noch als offen; sie ist
+Punkt 8 oben und seit 17.10.2026 gebaut — opt-in, mit der dort benannten unerfuellten
+Auflage.)
 
 Neither is a clearance problem, and neither may be discovered after the fact.
 
