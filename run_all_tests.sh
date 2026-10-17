@@ -85,7 +85,16 @@ echo "======================" | tee -a "$OUTPUT_FILE"
 # by tests/lifetime/run_lifetime.sh (which is MODE-aware). This generic runner
 # has no MODE/neg semantics and scored the compile-error ones as failures
 # (Expected 0), so they belong to the lifetime suite, not the corpus.
-TEST_FILES=$(find tests/ -name "*.aiml" | grep -v "__aiml_cache" | grep -v "build" | grep -v "out" | grep -v "/_" | grep -v "lifetime/neg" | sort)
+# Verzeichnisse ausschliessen, nicht NAMEN: `grep -v "out"` traf jeden Test mit
+# "out" im Namen ("layout", "routes", "outparam") und verschluckte 5 Tests seit
+# immer (gemessen 17.10.2026).
+TEST_FILES=$(find tests/ -name "*.aiml" \
+    -not -path "*/__aiml_cache/*" -not -path "*/build/*" -not -path "*/out/*" \
+    -not -path "*/_*" -not -path "tests/lifetime/neg/*" | sort)
+if [ -n "$ONLY" ]; then
+    TEST_FILES=$(echo "$TEST_FILES" | grep -E -- "$ONLY")
+    echo "Filter --only '$ONLY': $(echo "$TEST_FILES" | grep -c . ) Test(s)" | tee -a "$OUTPUT_FILE"
+fi
 
 TOTAL=0
 PASSED=0
