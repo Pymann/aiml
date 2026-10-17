@@ -95,22 +95,45 @@ isolierte Definitionen sind frei — geregelt ist nur, was in die **Tabelle des 
 Die frueher hier stehende Probe `n15_create_forbidden` ist entfallen; ihr Nachfolger braucht einen
 Wirt und steht unten.
 
-**Braucht eine Wirtsvorrichtung, die es noch nicht gibt** — ein kleines Wirtsprogramm, das eine
-eingeschraenkte Sitzung gegen seine eigene Export-Tabelle oeffnet. Bis dahin sind diese
-Anforderungen spezifiziert und ungeprueft, und das steht hier, statt von einem fehlenden Test
-angedeutet zu werden:
+**Die Wirtsvorrichtung gibt es seit 17.10.2026** (`09_host_exports_callable`): ein Wirt in einer
+Datei, der eigene `def`s per `sys.export_symbol` mit Adresse und Level anmeldet und ein Buendel
+in einer eingeschraenkten Sitzung dagegen laufen laesst. Damit sind die Anforderungen der
+Schreibseite gemessen statt nur spezifiziert — `# NEEDS: write`:
 
 - **F65-26 / `clearance-create`** — ein Symbol in die Tabelle des Wirts legen (nur im geteilten
-  Kontext moeglich, F65-31) ohne `create_level`.
-- **F65-28 / `clearance-replace`** — einen Rumpf fuer ein Wirtssymbol liefern ohne `replace_level`.
-  Die kuerzeste Eskalation des Kapitels: `wipe_queue` mit `level: 255` nachladen.
-- **F65-29** — ein `version:` in ankommendem Code ist Eingabe, nicht Berechtigung (spec/29_2 §4.2).
-- **F65-30 / `clearance-collision`** — ein Name, den der Wirt schon hat, muss ein Fehler sein; die
-  heutige Skip-Logik gaebe dem Skript stillschweigend die Funktion *des Wirts*.
+  Kontext moeglich, F65-31) ohne `create_level`. Der Waechter ist gebaut, aber **heute nicht
+  erreichbar**, und das ist ein Befund ueber die Sprachmittel, nicht ueber die Anforderung:
+  `sys.bundle` nimmt den NAMEN einer Funktion, die der Wirt selbst uebersetzt hat, also traegt
+  jedes Buendel einen Namen, den der Wirt SCHON HAT — und landet im ERSETZEN-Zweig. Gemessen
+  17.10.2026 an `fresh_helper`. Die beiden Proben (`11_create_allowed`, `neg/n20`) stehen
+  darum auf `# NEEDS: dynload` und melden AUSSTEHEND, bis spec/29_2 §4.3 existiert.
+- **F65-28 / `clearance-replace`** — einen Rumpf fuer ein Wirtssymbol liefern ohne
+  `replace_level`: `neg/n21`. Dort ist `create_level` ERTEILT und `replace_level` nicht — das
+  ist der Punkt: die beiden Rechte sind getrennt, und das eine erteilt nicht das andere.
+- **F65-29** — ein `version:` in ankommendem Code ist Eingabe, nicht Berechtigung
+  (spec/29_2 §4.2): `neg/n23` mit `version: 99` und ohne `replace_level`. Die Reihenfolge der
+  Pruefungen IST der Inhalt: zuerst die Berechtigung, dann entscheidet die Version.
+- **F65-30 / `clearance-collision`** — ein Name, den der Wirt schon hat, muss ein Fehler sein;
+  die Skip-Logik gaebe dem Skript stillschweigend die Funktion *des Wirts*: `neg/n22`, mit
+  erteiltem `replace_level`, damit nicht die Berechtigung die Aussage traegt.
+- **F65-32** — die Richtlinie ist lesbar, nie schreibbar: `12_policy_readable` (die drei Leser)
+  und `neg/n24` (ein Griff nach einem Setzer nennt den Grund, statt wie ein Tippfehler
+  auszusehen). Die Verschaerfungsregel ist `neg/n25`: die Umgebung kappt ein verlangtes
+  `replace_level`. Dass es immer das STRENGERE gewinnt, egal aus welcher Quelle, steht im
+  Kopf jener Probe mit der zweiten, inline gemessenen Richtung — eine Probe allein
+  unterscheidet „gekappt" nicht von „Aufruf ignoriert".
 
-`F65-31` (eingeschraenkte Sitzungen laufen isoliert; ein AOT-Wirt kann ueberhaupt nicht
-hot-reloaden, weil `context = false` dort `-2` liefert) ist eine Eigenschaft des Wirts-Aufbaus,
-ebenfalls keine Probe.
+Zwei Anforderungen bleiben spezifiziert und UNGEPRUEFT, und das steht hier, statt von einem
+fehlenden Test angedeutet zu werden:
+
+- **F65-27** (das Level eines angelegten Symbols IST die Freigabe der Sitzung) haengt am
+  selben Punkt: ohne §4.3 wird ein angelegtes Symbol nie aufrufbar, also ist sein Level nicht
+  beobachtbar. Wer §4.3 baut, loest beide Proben ein — und muss F65-27 dort einloesen.
+- **F65-31** (eingeschraenkte Sitzungen laufen isoliert; ein AOT-Wirt kann ueberhaupt nicht
+  hot-reloaden, weil `context = false` dort `-2` liefert) ist eine Eigenschaft des
+  Wirts-Aufbaus. Baulich erfuellt: `aiml_exec_code` kehrt fuer den isolierten Kontext um,
+  BEVOR die Schreibseite ueberhaupt erreicht wird — die Pruefungen sitzen hinter dieser
+  Abzweigung, nicht davor.
 
 ## STAGE: warum dieses Labor nicht einfach „rot" ist
 
@@ -121,14 +144,17 @@ im Kopf den Umsetzungsschritt, den sie braucht, und der Runner bewertet nur den 
 ```
 # NEEDS: step2     Syntax annehmen + `level`/`grants` validieren (immer an, F65-17/F65-21)
 # NEEDS: step3     opt-in Flusspruefung (AIML_STATIC_CLEARANCE, F65-9/F65-17)
-# NEEDS: session   eingeschraenkte Sitzung + Schreibseite (F65-4 … F65-32)
+# NEEDS: session   eingeschraenkte Sitzung (F65-4 … F65-22)
+# NEEDS: guard     Waechter ohne Wirt: Builtins, Dialekt, `extern` (F65-13/F65-14/F65-35)
+# NEEDS: exports   Export-Tabelle des Wirts, Erwartung ist eine Diagnose (F65-23)
+# NEEDS: host      Wirt mit AUFRUFBAREN Symbolen: Signatur + Adresse (F65-24/F65-37)
+# NEEDS: write     die Schreibseite: create/replace/Kollision/Leser (F65-26 … F65-32)
 
 STAGE=step2 bash tests/clearance/run.sh     # Vorgabe
-STAGE=session bash tests/clearance/run.sh   # alles
+STAGE=write bash tests/clearance/run.sh     # alles
 ```
 
-Proben oberhalb von `STAGE` melden **AUSSTEHEND** und zaehlen nicht als Fehlschlag. Verteilung
-heute: 7 × step2, 2 × step3, 16 × session.
+Proben oberhalb von `STAGE` melden **AUSSTEHEND** und zaehlen nicht als Fehlschlag.
 
 ### Was step2 prueft
 

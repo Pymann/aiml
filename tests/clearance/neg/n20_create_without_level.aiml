@@ -1,0 +1,33 @@
+# SPEC: 65_symbol_clearance
+# Requires: driver
+# static-check: off
+# NEEDS: dynload
+# NICHT MESSBAR, solange spec/29_2 §4.3 fehlt — und das liegt nicht an dieser Probe:
+#   `sys.bundle` nimmt den NAMEN einer Funktion, die der Wirt selbst uebersetzt hat.  Damit
+#   traegt jedes Buendel aus einer Datei einen Namen, den der Wirt SCHON HAT, und landet im
+#   ERSETZEN-Zweig (`clearance-replace`) statt im ANLEGEN-Zweig.  Gemessen 17.10.2026:
+#   `fresh_helper` wurde genau so abgelehnt.
+#   Der Waechter `clearance-create` ist gebaut und steht fail-closed richtig; erreichbar wird
+#   er erst, wenn ein Wirt fremden Code mit einem FREMDEN Namen annehmen kann.  Wer §4.3 baut,
+#   loest diese Probe ein — und F65-27 gleich mit, das am selben Punkt haengt.
+# NEGATIVE (spec/65 F65-26): dieselbe Lage wie 11, nur ohne das Recht.  Die Richtlinie ist
+# (7) — Freigabe 7, `create_level` fehlt und ist damit 0, was nach F65-22 NIEMAND heisst.
+# Ein neuer Name im GETEILTEN Kontext gelangt in die Tabelle des Wirts und wird verweigert.
+#
+# Warum „fail closed" hier das Richtige ist: wer die Richtlinie nicht ausspricht, hat sich
+# ueber das Schreibrecht keine Gedanken gemacht — und dann ist Nein die einzige Antwort, die
+# nicht von einem Versehen abhaengt.
+# EXPECT-ERROR: clearance-create
+- def:
+    name: fresh_helper
+    return: i32
+    body:
+      - return: [0]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pkg, Code, { call: [sys.bundle, "fresh_helper", { context: false }] }]
+      - decl: [rcx, i32, { call: [sys.exec, pkg, 7] }]
+      - return: [rcx]

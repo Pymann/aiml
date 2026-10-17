@@ -1,0 +1,46 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: dynload
+# NICHT MESSBAR, solange spec/29_2 §4.3 fehlt — und das liegt nicht an dieser Probe:
+#   `sys.bundle` nimmt den NAMEN einer Funktion, die der Wirt selbst uebersetzt hat.  Damit
+#   traegt jedes Buendel aus einer Datei einen Namen, den der Wirt SCHON HAT, und landet im
+#   ERSETZEN-Zweig (`clearance-replace`) statt im ANLEGEN-Zweig.  Gemessen 17.10.2026:
+#   `fresh_helper` wurde genau so abgelehnt.
+#   Der Waechter `clearance-create` ist gebaut und steht fail-closed richtig; erreichbar wird
+#   er erst, wenn ein Wirt fremden Code mit einem FREMDEN Namen annehmen kann.  Wer §4.3 baut,
+#   loest diese Probe ein — und F65-27 gleich mit, das am selben Punkt haengt.
+# TIER: T1
+# CONSTRUCT: spec/65 F65-26 — `create_level` regelt, was in die Tabelle des WIRTS gelangt, und
+#            das kann nur im GETEILTEN Kontext passieren (F65-31).  Hier erteilt der Wirt das
+#            Recht: Richtlinie (7, 7, 0) heisst Freigabe 7, darf anlegen, darf NICHT ersetzen.
+# COVERS: die Richtlinie reist als Dreier am `sys.exec` (F65-36), in der Reihenfolge der
+#         F65-26-Tabelle; mit erteiltem `create_level` ist ein NEUER Name zugelassen.
+#         Das Gegenstueck ist neg/n20 — ohne das Recht dieselbe Lage, aber `clearance-create`.
+#         GRENZE: dass der neue Name danach auch AUFRUFBAR wird, ist spec/29_2 §4.3
+#         („dynamic loading not yet supported") und nicht Sache dieses Kapitels.  Geprueft ist
+#         hier die BERECHTIGUNG, nicht das Nachladen — sonst behauptete die Probe mehr als sie
+#         messen kann.
+# EXPECT: exit 0.
+
+- def:
+    name: fresh_helper
+    return: i32
+    body:
+      # 0, damit ein nichtnulliges Ergebnis NUR von der Verweigerung kommen kann:
+      # `sys.exec` liefert den Rueckgabewert des `start_call`.
+      - return: [0]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pkg, Code, { call: [sys.bundle, "fresh_helper", { context: false }] }]
+      - decl: [rcx, i32, { call: [sys.exec, pkg, 7, 7, 0] }]
+      - if:
+          condition: { neq: [rcx, 0] }
+          then:
+            - call: [log.error, "Anlegen mit create_level 7 lieferte ${rcx}, erwartet 0"]
+            - return: [1]
+      - call: [log.info, "PASS 11 create_level erteilt"]
+      - return: [0]

@@ -1,0 +1,37 @@
+# SPEC: 65_symbol_clearance
+# Requires: driver
+# static-check: off
+# NEEDS: write
+# REPLACE-LEVEL: 3
+# NEGATIVE (spec/65 F65-32): die Umgebung ist die Vorgabe des PROZESSES und darf nur
+# VERSCHAERFEN.  Der Wirt setzt `AIML_REPLACE_LEVEL=3`; der Aufruf verlangt 7 — und bekommt 3.
+#
+# Hier laeuft „strenger" in die ANDERE Richtung als bei der Freigabe, weil der Vergleich
+# gegenlaeufig ist (`clearance <= replace_level`): strenger ist die KLEINERE Zahl.  Genau
+# deshalb ist „nicht gesetzt" nicht 0, sondern „keine Vorgabe" — waere es 0, koennte die
+# Umgebung das Recht nur abschalten und nie erteilen.
+#
+# Unterschied zu n22: dort IST das Recht erteilt und die Version traegt die Aussage
+# (`clearance-collision`).  Hier wird das Recht von der Umgebung gekappt, also kommt es nie
+# bis zur Version — die Pruefungsreihenfolge aus F65-29 wird hier noch einmal sichtbar.
+#
+# Die Regel hat ZWEI Richtungen, und diese Probe deckt nur eine.  Die andere ist am 17.10.2026
+# gemessen, weil eine Probe allein nicht zwischen „gekappt" und „Aufruf ignoriert"
+# unterscheidet:
+#   AIML_REPLACE_LEVEL=7 + Aufruf 0 → effektiv 0, clearance-replace  (der Aufruf verschaerft)
+#   AIML_REPLACE_LEVEL=7 + Aufruf 7 → erteilt, dann clearance-collision (n22-Datei)
+# Es gewinnt also immer das Strengere, aus welcher Quelle es auch kommt.
+# EXPECT-ERROR: clearance-replace
+- def:
+    name: wipe_queue
+    return: i32
+    body:
+      - return: [0]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pkg, Code, { call: [sys.bundle, "wipe_queue", { context: false }] }]
+      - decl: [rcx, i32, { call: [sys.exec, pkg, 7, 7, 7] }]
+      - return: [rcx]

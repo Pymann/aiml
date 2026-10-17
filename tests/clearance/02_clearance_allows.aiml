@@ -2,16 +2,14 @@
 # static-check: off
 # Requires: driver
 # NEEDS: host
-# UMBAU NOETIG: diese Probe definiert ihre Symbole noch selbst MIT `level:` — seit
-#   F65-27 ist das Selbstbeglaubigung.  Sie braucht die Wirtsvorrichtung aus Schritt 6b
-#   (Signatur + Adresse, F65-24): die Level kommen dann aus der Export-Tabelle und die
-#   Rumpfe vom Wirt.  Bis dahin AUSSTEHEND und bewusst nicht "repariert", weil eine
-#   Probe ohne Wirt die Aussage nicht treffen kann.
 # TIER: T1
-# CLEARANCE: 7
-# CONSTRUCT: spec/65 F65-4 — the ordering. A session at clearance 7 reaches a symbol at level 7
-#            (equal is allowed) and one at level 255, but nothing below 7 (see neg/n01).
-# COVERS: `session_clearance <= symbol_level`; equality is access; the open end (255).
+# CONSTRUCT: spec/65 F65-4 — die Ordnung, am echten Wirt.  Der Wirt bietet `read_status` auf
+#            Level 7 und `say_hello` auf Level 255 an; das Skript laeuft in einer Sitzung mit
+#            Freigabe 7 und erreicht beide.  Die Freigabe kommt am `sys.exec` (F65-36), die
+#            Level aus der Export-Tabelle (F65-23) — nicht aus der Skriptquelle, das waere
+#            Selbstbeglaubigung (F65-27).
+# COVERS: `session_clearance <= symbol_level`; Gleichheit ist Zugriff; das offene Ende (255).
+#         Die Gegenprobe zur unteren Schranke ist neg/n19 (Level 2 bei Freigabe 7).
 # EXPECT: exit 0.
 
 - def:
@@ -28,8 +26,9 @@
     body:
       - return: [4]
 
+# Laeuft im BUENDEL, also in der eingeschraenkten Sitzung mit Freigabe 7.
 - def:
-    name: main
+    name: user_script
     return: i32
     body:
       - decl: [sta, i32, { call: [read_status] }]
@@ -39,5 +38,26 @@
           then:
             - call: [log.error, "Summe ${sta}+${hey} falsch"]
             - return: [1]
-      - call: [log.info, "PASS 02 clearance 7 erreicht Level 7 und 255"]
+      - return: [0]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fp_status, fn<:i32>]
+      - set: [fp_status, read_status]
+      - call: [sys.export_symbol, "read_status", fp_status, 7]
+
+      - decl: [fp_hello, fn<:i32>]
+      - set: [fp_hello, say_hello]
+      - call: [sys.export_symbol, "say_hello", fp_hello, 255]
+
+      - decl: [pkg, Code, { call: [sys.bundle, "user_script", { context: true }] }]
+      - decl: [rcx, i32, { call: [sys.exec, pkg, 7] }]
+      - if:
+          condition: { neq: [rcx, 0] }
+          then:
+            - call: [log.error, "Buendel lieferte ${rcx}, erwartet 0"]
+            - return: [1]
+      - call: [log.info, "PASS 02 Freigabe 7 erreicht Level 7 und 255"]
       - return: [0]

@@ -4288,6 +4288,31 @@ IRValue* Compiler::visitSysSerializeCall(const std::string& method, CallExpr* ca
 namespace {
 
 // DFS post-order: dependencies are inserted before the node that references them.
+// spec/65 F65-38: von einem EXPORTIERTEN Symbol traegt ein Buendel die Signatur, nicht den
+// Rumpf.  Nimmt es den Rumpf mit (so wie fuer jede andere gerufene Funktion, spec/29_2 §16),
+// bekommt das Skript eine KOPIE und fuehrt sie mit dem Level der Sitzung aus — die
+// Zugriffspruefung haette dann nichts mehr zu verweigern und saehe nur noch aus wie Schutz.
+//
+// Die erzeugte Form ist `extern: "C"`, weil genau dafuer die Zulassung aus F65-13 das Tor ist:
+// der Name muss in der Export-Tabelle stehen, sonst lehnt die eingeschraenkte Sitzung ihn ab.
+// Die Adresse hat der Wirt per `sys.export_symbol` angemeldet (F65-37).
+static std::string exportedDeclYaml(const std::string& name,
+                                    const CompilerContext::FunctionInfo& fi) {
+    std::string out = "- extern: \"C\"\n  defs:\n    - def:\n        name: " + name + "\n";
+    out += "        args: [";
+    for (size_t i = 0; i < fi.argTypeNames.size(); ++i) {
+        if (i) out += ", ";
+        const std::string an = (i < fi.argNames.size() && !fi.argNames[i].empty())
+                                   ? fi.argNames[i]
+                                   : ("arg" + std::to_string(i));
+        out += "[" + an + ", " + fi.argTypeNames[i] + "]";
+    }
+    out += "]\n";
+    if (!fi.returnTypeName.empty() && fi.returnTypeName != "void")
+        out += "        return: " + fi.returnTypeName + "\n";
+    return out;
+}
+
 static void dfsCollect(CompilerContext& ctx,
                        const std::string& name,
                        std::set<std::string>& visited,
@@ -4303,7 +4328,22 @@ static void dfsCollect(CompilerContext& ctx,
         // Bundle unvollstaendig und faellt erst beim Empfaenger auf.
         // Kopie, weil dfsCollect ctx.functions veraendern kann.
         std::set<std::string> callees = fi.referencedFuncs;
-        for (auto& dep : callees) dfsCollect(ctx, dep, visited, result, missing, funcNames);
+        for (auto& dep : callees) {
+            // F65-38: exportiertes Symbol -> Signatur statt Rumpf, und NICHT absteigen.
+            // Kriterium ist das `level:` am `def` — NICHT die Export-Tabelle: `sys.bundle`
+            // laeuft zur UEBERSETZUNGSZEIT, `sys.export_symbol` zur Laufzeit; die Tabelle ist
+            // hier noch leer.  Ein `def` mit Level gehoert zur angebotenen Oberflaeche.
+            if (ctx.functions.count(dep) &&
+                ctx.functions[dep].clearance_level != aiml::clearance::kAbsent) {
+
+                if (visited.insert(dep).second) {
+                    result.push_back(exportedDeclYaml(dep, ctx.functions[dep]));
+                    if (funcNames) funcNames->push_back(dep);
+                }
+                continue;
+            }
+            dfsCollect(ctx, dep, visited, result, missing, funcNames);
+        }
         // spec/29_2 §22: auch den benutzten GLOBALEN folgen.  Ohne das meldet
         // der Empfaenger "Undefined variable", sobald eine mitgebuendelte
         // Funktion eine globale Variable anfasst — gemessen mit einer
@@ -4616,6 +4656,43 @@ IRValue* Compiler::visitSysExecCall(CallExpr* call) {
 
     // Emit call to __aiml_code_exec(i8*) → i32 via CodeImpl::exec
     llvm::Value* codePtr = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(codeVal));
+
+    // spec/65 F65-36: die optionalen Argumente 2..4 sind die RICHTLINIE dieser Sitzung, in
+    // der Reihenfolge der F65-26-Tabelle: clearance, create_level, replace_level.  Sie gehoert
+    // an die Ausfuehrung, nicht an das Buendel — derselbe Code muss fuer zwei Nutzer mit
+    // verschiedenen Rechten laufen koennen.  Fehlende hintere Werte sind 0, also NIEMAND
+    // (F65-22): wer nichts sagt, darf nichts schreiben.  Jeder ist ein gewoehnlicher
+    // Ausdruck, weil eine Konsole die Richtlinie je Nutzer zur Laufzeit bildet.
+    if (call->args.size() >= 2) {
+        if (call->args.size() > 4) {
+            LOG_ERROR("sys.exec: hoechstens (pkg, clearance, create_level, replace_level) — "
+                      "spec/65 F65-26/F65-36");
+            return ctx.ir_gen->getInt32(-1);
+        }
+        llvm::Type* i32t = ctx.builder.getInt32Ty();
+        static const char* kWhich[] = { "clearance", "create_level", "replace_level" };
+        llvm::Value* pol[3] = { nullptr, nullptr, nullptr };
+        for (size_t i = 1; i < call->args.size(); ++i) {
+            IRValue* v = visitExpression(call->args[i].get());
+            if (!v) {
+                LOG_ERROR(std::string("sys.exec: Argument `") + kWhich[i - 1] +
+                          "` nicht auswertbar — spec/65 F65-36");
+                return ctx.ir_gen->getInt32(-1);
+            }
+            llvm::Value* iv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(v));
+            if (iv->getType()->isIntegerTy() && !iv->getType()->isIntegerTy(32))
+                iv = ctx.builder.CreateIntCast(iv, i32t, true);
+            pol[i - 1] = iv;
+        }
+        for (int i = 0; i < 3; ++i)
+            if (!pol[i]) pol[i] = ctx.builder.getInt32(0);
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Function* fn = ctx.getFunction("aiml_exec_code_policy", i32t,
+                                             {i8p, i32t, i32t, i32t});
+        llvm::Value* cp = ctx.builder.CreateBitCast(codePtr, i8p);
+        return ctx.ir_gen->wrap(
+            ctx.builder.CreateCall(fn, {cp, pol[0], pol[1], pol[2]}, "code_exec_pol"));
+    }
     return ctx.ir_gen->wrap(CodeImpl::exec(ctx, codePtr));
 }
 

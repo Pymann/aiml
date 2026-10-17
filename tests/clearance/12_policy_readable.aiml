@@ -1,0 +1,42 @@
+# SPEC: 65_symbol_clearance
+# static-check: off
+# Requires: driver
+# NEEDS: write
+# TIER: T1
+# CLEARANCE: 7
+# CREATE-LEVEL: 7
+# REPLACE-LEVEL: 3
+# CONSTRUCT: spec/65 F65-32 — die Richtlinie ist LESBAR, nie schreibbar.  Lesen ist harmlos und
+#            nuetzlich: nur so kann ein Skript eine brauchbare Fehlermeldung geben, statt an
+#            einer Diagnose des Compilers zu scheitern.  Level sind ohnehin nicht geheim
+#            (F65-16).
+# COVERS: `clearance.level`, `clearance.create_level`, `clearance.replace_level` in einer
+#         eingeschraenkten Sitzung.  Hier kommt die Richtlinie aus der Umgebung (F65-20) —
+#         das ist der Fall, in dem der WIRT sie prozessweit vorgibt.
+#         Das Gegenstueck ist neg/n24: ein SETZER existiert nicht und wird abgewiesen.
+# EXPECT: exit 0.
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [clr, i32, { call: [clearance.level] }]
+      - decl: [crt, i32, { call: [clearance.create_level] }]
+      - decl: [rpl, i32, { call: [clearance.replace_level] }]
+      - if:
+          condition: { neq: [clr, 7] }
+          then:
+            - call: [log.error, "clearance.level = ${clr}, erwartet 7"]
+            - return: [1]
+      - if:
+          condition: { neq: [crt, 7] }
+          then:
+            - call: [log.error, "clearance.create_level = ${crt}, erwartet 7"]
+            - return: [1]
+      - if:
+          condition: { neq: [rpl, 3] }
+          then:
+            - call: [log.error, "clearance.replace_level = ${rpl}, erwartet 3"]
+            - return: [1]
+      - call: [log.info, "PASS 12 Richtlinie lesbar"]
+      - return: [0]
