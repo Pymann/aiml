@@ -115,6 +115,26 @@ namespace AIML {
             int fptable_index = -1;           // Index in __aiml_fptable / fptable_current (-1 = not in table)
             std::string sourceYaml;           // YAML dump of the function AST node (for sys.bundle)
             std::set<std::string> referencedTypes; // User-defined types referenced in the body
+            // spec/29_2 §16: benutzerdefinierte Funktionen, die dieser Rumpf AUFRUFT.
+            // Ohne das war ein Bundle unvollstaendig — der Empfaenger meldete
+            // "Unknown function", nachdem es schon unterwegs war.
+            std::set<std::string> referencedFuncs;
+            // spec/62 §10.2: welche eingebauten Funktionen dieser Rumpf ruft.
+            // Gebraucht fuer die Reinheitspruefung beim Buendeln (F62-102); die
+            // Stelle und ein konstantes erstes Argument stehen dabei, weil
+            // F62-19/F62-20 genau daran unterscheiden.
+            struct BuiltinUse {
+                std::string ns;
+                std::string fn;
+                std::string loc;
+                std::string firstArgLiteral;
+                bool        firstArgIsLiteral = false;
+            };
+            std::vector<BuiltinUse> referencedBuiltins;
+            // spec/29_2 §22: welche GLOBALEN dieser Rumpf anfasst.  Ohne das ist ein
+            // Bundle unvollstaendig, sobald eine mitgebuendelte Funktion eine
+            // globale Variable liest oder schreibt (gemessen: 'Undefined variable').
+            std::set<std::string> referencedGlobals;
             bool deprecated = false;          // meta: [deprecated] → warn at each call site
             bool ownsReturn = false;          // spec/61 return-ownership: returns an owned heap box
         };
@@ -236,7 +256,7 @@ namespace AIML {
         };
         
     CompilerContext(llvm::LLVMContext& ctx, llvm::Module& mod, llvm::IRBuilder<>& b)
-        : context(ctx), module(mod), builder(b) {
+        : context(ctx), modulePtr(&mod), builder(b) {
         // AIML v2: read AIML_MODEL_REFCOUNT HERE, at construction, so `modelRefcount` is set
         // consistently in EVERY context from birth — including the header-only import sub-compilers
         // (which share/copy a context and register types BEFORE compile() runs its own env-read).
@@ -306,14 +326,34 @@ namespace AIML {
     // For now, we'll assume the new members are added alongside the existing structure.
 
     llvm::LLVMContext& context;
-    llvm::Module& module;
+    // spec/29_2 §15: ZEIGER, nicht Referenz — damit ein Kontext nacheinander
+    // mehrere Module bedienen kann (Bibliothek laden, dann Pipelines dagegen).
+    // Eine Referenz liess sich nicht neu binden; das war der Grund, warum ein
+    // wiederverwendbarer Kontext bisher nicht ging.
+    llvm::Module* modulePtr;
+    llvm::Module& module() const { return *modulePtr; }
+
+    /// spec/61 §5.7: die Schrittweite EINES zeigergrossen Element-Slots — ein
+    /// String, ein Modell-Handle, eine `ptr<T>`-Box, ein verschachtelter
+    /// Container.  8 auf x86_64, **4 auf wasm32**, und immer aus dem ZIEL-
+    /// DataLayout, nie aus `sizeof(...)` des Wirts (der ist stets 64-bit).
+    ///
+    /// EINE benannte Groesse statt eines Literals an jeder Fundstelle: die
+    /// Literale `8` liefen auseinander und kosteten am 2026-10-15 den
+    /// WASM-Client (list<string>.clear lief mit doppelter Schrittweite ueber
+    /// das Ende, Firefox: "index out of bounds").  Wer eine neue Stelle mit
+    /// Zeiger-Slots schreibt, nimmt diese Funktion.
+    int64_t ptrStride() const {
+        return (int64_t)module().getDataLayout().getPointerSize();
+    }
+    void setModule(llvm::Module& mod) { modulePtr = &mod; }
     llvm::IRBuilder<>& builder;
     std::unique_ptr<AIML::IRGenerator> ir_gen;
 
     // Helper: target's size_t-equivalent int type. i64 on x86_64, i32 on wasm32.
     // Use for libc-call args/returns (strlen, malloc, memcpy size, …) so the
     // call signature matches the target's libc.
-    llvm::Type*  getSizeType()              { return builder.getIntNTy(module.getDataLayout().getPointerSizeInBits()); }
+    llvm::Type*  getSizeType()              { return builder.getIntNTy(module().getDataLayout().getPointerSizeInBits()); }
     llvm::Value* getSizeConst(uint64_t v)   { return llvm::ConstantInt::get(getSizeType(), v); }
 
     // Helper: alloca in function entry block (prevents stack growth in loops)
@@ -334,7 +374,7 @@ namespace AIML {
         llvm::FunctionType* persType = llvm::FunctionType::get(
             llvm::Type::getInt32Ty(context), true // varargs (i32 (...))
         );
-        return module.getOrInsertFunction("__gxx_personality_v0", persType);
+        return module().getOrInsertFunction("__gxx_personality_v0", persType);
     }
 
     // Symbol Table (Scope-aware in future)
@@ -525,6 +565,11 @@ namespace AIML {
     std::map<std::string, std::map<std::string, int>> enums; // Enum Registry
     std::map<std::string, std::map<int, std::string>> enumLabels; // enum name → id → display label
     std::map<std::string, std::string> enumSources;          // enum name → YAML source (for sys.bundle)
+    // spec/29_2 §22: Quelltext jedes Top-Level-`decl`, damit sys.bundle eine
+    // benutzte globale Variable mitschicken kann.  Ohne das ist ein Bundle
+    // unvollstaendig, sobald eine mitgebuendelte Funktion eine Globale anfasst
+    // (gemessen: "Undefined variable (set target)").
+    std::map<std::string, std::string> globalSources;        // global var → YAML source
 
     /// Unused-enumerator analysis (spec/49): every enum member declared in THIS
     /// module (qualified enum name → set of member names), the members actually
@@ -712,7 +757,12 @@ namespace AIML {
         if (node.IsDefined()) {
             int ln = node.Mark().line;
             if (ln >= 0) {
+                /* file:line:col — die Spalte lag schon in Mark() bereit und wurde
+                 * nie ausgegeben, also konnte ein Werkzeug einen Befund nur der
+                 * Zeile zuordnen, nicht dem Token (cosmos spec/98 F98-9). */
                 loc += ":" + std::to_string(ln + 1);
+                int cl = node.Mark().column;
+                if (cl >= 0) loc += ":" + std::to_string(cl + 1);
                 return loc + ": ";
             }
         }
@@ -724,6 +774,20 @@ namespace AIML {
         if (!currentFunctionName.empty())
             loc += " (in " + currentFunctionName + ")";
         return loc + ": ";
+    }
+
+    // Same, with an explicit fallback line for AST nodes whose `sourceNode` was
+    // never filled in.  A `- call:` statement carries its line only in
+    // `sourceLine` (statement_builder), so fmtLoc(node) alone fell back to
+    // `currentLine` — which, in an AST pass that runs after parsing, points at
+    // the END of the file.  A diagnostic that names the wrong line costs exactly
+    // the time it was meant to save (gemessen 2026-10-15 am Prefab-Kindcheck:
+    // Fundstelle Zeile 29, gemeldet Zeile 120 = letzte Zeile).
+    std::string fmtLoc(const YAML::Node& node, int fallbackLine) const {
+        if (node.IsDefined() && node.Mark().line >= 0) return fmtLoc(node);
+        if (!currentSourceFile.empty() && fallbackLine > 0)
+            return currentSourceFile + ":" + std::to_string(fallbackLine) + ": ";
+        return fmtLoc(node);
     }
 
     // Lint: identifiers (variable/arg/field/function/class/interface names) must
@@ -765,6 +829,15 @@ namespace AIML {
     // getLLVMType uses this to record transitive type dependencies for sys.bundle.
     std::string bundleTrackingTarget;
 
+    // Typnamen, die nicht aufgeloest werden konnten.  resolveType meldet den
+    // Fehler und faellt auf i32 zurueck, damit die Uebersetzung weiterlaeuft —
+    // sonst stuende nur der erste Fehler je Datei.  Der Preis ist eine
+    // KASKADE: jede Methode auf so einer Variablen meldet erneut.  Wer hier
+    // eintraegt, erlaubt den Folgemeldungen, zu schweigen (spec/49).
+    std::set<std::string> unknownTypeNames;
+    // Variablen, deren Typ nicht aufgeloest werden konnte.
+    std::set<std::string> unknownTypedVars;
+
     // When non-empty, the type name of the current set-statement target variable.
     // Used by sys.deserialize to infer the type without an explicit second argument.
     std::string deserializeTargetType;
@@ -774,6 +847,17 @@ namespace AIML {
     bool        dbOpenPersist      = false;
     bool        dbOpenColumnLayout = false;
     llvm::Value* dbOpenBasePathVal = nullptr;  // null = default "./aiondb/"
+
+    // spec/23 §5.1: sys.exe option bag, set by visitCall before the sys.exe builtin runs.
+    struct ExeOptions {
+        llvm::Value* cwd = nullptr;
+        llvm::Value* env = nullptr;
+        llvm::Value* timeout = nullptr;
+        llvm::Value* stdoutPath = nullptr;
+        llvm::Value* stderrPath = nullptr;
+        llvm::Value* statusFile = nullptr;
+        bool shell = false, capture = false, detach = false;
+    } exeOpts;
 
     // Tracking for Kv.get / Kv.get_copy dispatch so visitDeclStmt can enforce
     // the correct decl-type ↔ method pairing:
@@ -1232,6 +1316,9 @@ namespace AIML {
         if (typeName == "socket_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlSocket*
         if (typeName == "tls_socket_handle") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlTlsSocket*
         if (typeName == "ws_handle") return llvm::Type::getInt8Ty(context)->getPointerTo();          // AimlWs*
+        if (typeName == "ssh_session") return llvm::Type::getInt8Ty(context)->getPointerTo();     // AimlSshSession* (spec/32_6)
+        if (typeName == "ssh_channel") return llvm::Type::getInt8Ty(context)->getPointerTo();     // AimlSshChannel*
+        if (typeName == "ssh_test_server") return llvm::Type::getInt8Ty(context)->getPointerTo(); // AimlSshTestServer* (Testbereich)
         if (typeName == "audio_handle") return llvm::Type::getInt8Ty(context)->getPointerTo();       // V1 sentinel (asset registry)
         if (typeName == "prefab_instance") return llvm::Type::getInt8Ty(context)->getPointerTo();  // AimlPrefabInstance*
         if (typeName == "connector") return llvm::Type::getInt8Ty(context)->getPointerTo();      // AimlConnector*
@@ -1349,16 +1436,26 @@ namespace AIML {
         if (typeName == "Code")
             return llvm::Type::getInt8Ty(context)->getPointerTo();
 
-        LOG_ERROR(fmtLoc() + "Unknown Type: '" + typeName + "' -> defaulting to i32");
-        return llvm::Type::getInt32Ty(context); // Default
+        // spec/62 §13.5: zusammensetzbare Pipelines — ebenfalls opake Handles.
+        // Die Struktur waechst (Schritte, Achsen), also traegt sie kein Struct.
+        if (typeName == "step" || typeName == "stage" || typeName == "pipeline")
+            return llvm::Type::getInt8Ty(context)->getPointerTo();
+
+        // Nur EINMAL je Name melden: derselbe unbekannte Typ taucht in einer
+        // Datei typischerweise mehrfach auf (decl, Argument, Rueckgabe).
+        if (!unknownTypeNames.count(typeName)) {
+            unknownTypeNames.insert(typeName);
+            LOG_ERROR(fmtLoc() + "Unknown Type: '" + typeName + "'");
+        }
+        return llvm::Type::getInt32Ty(context); // Ersatz, damit es weitergeht
     }
 
     // Helper to declare external C functions
     llvm::Function* getFunction(const std::string& name, llvm::Type* retTy, const std::vector<llvm::Type*>& args, bool varArgs = false) {
-        llvm::Function* func = module.getFunction(name);
+        llvm::Function* func = module().getFunction(name);
         if (!func) {
             llvm::FunctionType* funcTy = llvm::FunctionType::get(retTy, args, varArgs);
-            func = llvm::Function::Create(funcTy, llvm::Function::ExternalLinkage, name, module);
+            func = llvm::Function::Create(funcTy, llvm::Function::ExternalLinkage, name, module());
         }
         return func;
     }

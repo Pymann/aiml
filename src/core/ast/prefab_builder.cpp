@@ -88,6 +88,13 @@ bool PrefabBuilder::OnScalar(const std::string& value, const std::string& tag) {
             else if (childKey == "width")     currentChild.width = strtof(value.c_str(), nullptr);
             else if (childKey == "height")    currentChild.height = strtof(value.c_str(), nullptr);
             else if (childKey == "font_size") currentChild.font_size = strtof(value.c_str(), nullptr);
+            else if (childKey == "gutter")    currentChild.gutter = (value == "true" || value == "1");
+            else if (childKey == "font") {
+                // Stem-only wie texture (spec/22): ein Tippfehler ist ein
+                // Build-Fehler, kein stiller Rückfall auf den Szenen-Font.
+                validate_asset_field("font", value, AIML::AssetKind::Font);
+                currentChild.font = value;
+            }
             else if (childKey == "color")     currentChild.color = parse_color(value);
             /* UI-widget style fields */
             else if (childKey == "bg_color")      currentChild.bg_color = parse_color(value);
@@ -107,6 +114,10 @@ bool PrefabBuilder::OnScalar(const std::string& value, const std::string& tag) {
             else if (childKey == "frame_border_size")    currentChild.frame_border_size = strtof(value.c_str(), nullptr);
             else if (childKey == "flip_h")             currentChild.flip_h = (value == "true" || value == "1");
             else if (childKey == "snap")               currentChild.slider_snap = strtof(value.c_str(), nullptr);
+            else if (childKey == "min")                currentChild.slider_min = strtof(value.c_str(), nullptr);
+            else if (childKey == "visible")            currentChild.is_visible = (value == "true" || value == "1");
+            else if (childKey == "scrollable")         currentChild.scrollable = (value == "true" || value == "1");
+            else if (childKey == "tail")               currentChild.tail = (value == "true" || value == "1");
             else if (childKey == "label")         currentChild.label = value;
             else if (childKey == "secret")        currentChild.is_secret = (value == "true" || value == "1");
             else if (childKey == "value")         currentChild.bar_value = strtof(value.c_str(), nullptr);
@@ -127,6 +138,18 @@ bool PrefabBuilder::OnScalar(const std::string& value, const std::string& tag) {
             else if (childKey == "cascade_type")  currentChild.cascade_type = value;
             else if (childKey == "payload_spawn") currentChild.payload_spawn = value;
             else if (childKey == "enum")          currentChild.enum_type = value;
+            /* spec/44_6 §4: an unknown child attribute is a compile ERROR, never a
+             * silently dropped key.  A dropped key is invisible: `password: true`
+             * on a text_input left a sudo password readable on screen, because the
+             * masking key is `secret` and nothing said so.  Typos in attribute
+             * names are caught here, at build time, like a typo in an asset stem. */
+            else {
+                LOG_ERROR("prefab child '" + currentChild.name + "' (type '" +
+                          currentChild.type + "'): unknown attribute '" + childKey +
+                          "' — see spec/44_6 §4 for the attribute list" +
+                          (childKey == "password"
+                               ? " (text_input masking is 'secret')" : ""));
+            }
             childExpectingKey = true;
         }
         return true;

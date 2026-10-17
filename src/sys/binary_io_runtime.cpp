@@ -6,8 +6,20 @@
 
 /* ── open / close ─────────────────────────────────────────────────────────── */
 
+// spec/23 §5.1: io.open — fopen with close-on-exec ("e"), so a sys.exe child never inherits it.
+extern "C" void* aiml_io_open(const char* path, const char* mode) {
+    if (!path || !mode) return nullptr;
+    char m[16];
+    size_t n = strlen(mode);
+    if (n > sizeof(m) - 2) return fopen(path, mode);
+    memcpy(m, mode, n);
+    if (!memchr(mode, 'e', n)) m[n++] = 'e';
+    m[n] = '\0';
+    return fopen(path, m);
+}
+
 extern "C" void* aiml_io_open_binary(const char* path) {
-    return fopen(path, "rb");
+    return fopen(path, "rbe");   // e: close-on-exec (spec/23 §5.1)
 }
 
 extern "C" void aiml_io_close(void* f) {
@@ -178,6 +190,20 @@ extern "C" int32_t aiml_buffer_write_to(const void* buf, void* f) {
     if (done != want) return -1;
     if (fflush((FILE*)f) != 0) return -1;
     return view->size;
+}
+
+/* spec/11: buffer.write_string — append the string's bytes at write_idx. */
+extern "C" int32_t aiml_buffer_write_string(void* buf, const char* s) {
+    if (!buf || !s) return -1;
+    AimlBinBuffer* b = (AimlBinBuffer*)buf;
+    size_t n = strlen(s);
+    if (n == 0) return 0;
+    if (!b->data || b->write_idx < 0 || b->capacity < 0) return -1;
+    if ((int64_t)b->write_idx + (int64_t)n > (int64_t)b->capacity) return -1;  // no silent truncation
+    memcpy(b->data + b->write_idx, s, n);
+    b->write_idx += (int32_t)n;
+    if (b->write_idx > b->size) b->size = b->write_idx;
+    return (int32_t)n;
 }
 
 /* ── standard streams (spec/23: the process's own stdin/stdout/stderr) ───────── */

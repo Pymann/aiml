@@ -127,7 +127,7 @@ extern "C" void aiml_log_set_file(const char* path) {
     std::lock_guard<std::mutex> lock(g_log_mutex);
     if (g_log_file) { fclose(g_log_file); g_log_file = nullptr; }
     if (path && path[0] != '\0') {
-        g_log_file = fopen(path, "a");
+        g_log_file = fopen(path, "ae");   // e: close-on-exec (spec/23 §5.1)
     }
 }
 

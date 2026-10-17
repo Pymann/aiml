@@ -12,7 +12,7 @@ void emitFptable(CompilerContext& ctx) {
     // Skip if no user functions were compiled (e.g. header-only mode)
     if (ctx.fptable_next_index == 0) return;
 
-    auto& M   = ctx.module;
+    auto& M   = ctx.module();
     auto& C   = ctx.context;
     auto* i8p = llvm::PointerType::get(C, 0);  // opaque pointer (LLVM 18+)
     auto* i32 = llvm::Type::getInt32Ty(C);

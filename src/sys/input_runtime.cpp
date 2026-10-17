@@ -450,6 +450,70 @@ static void glfw_mbtn_cb(GLFWwindow*, int btn, int action, int /*mods*/) {
     }
 }
 
+/* ── Input injection (spec/44_0 §8) ─────────────────────────────────────────
+ *
+ * Deliberately routed through the SAME callbacks a real event takes, with a
+ * null window: latches, drag accumulators and the event queue are then filled
+ * by one code path only.  A parallel implementation would be a test that
+ * exercises the test harness instead of the program.
+ *
+ * In-process: the OS cursor is never moved, so a running test cannot steal the
+ * pointer from whoever is at the machine (spec/44_0 §8.1). */
+extern "C" void aiml_input_post_mouse_move(float x, float y) {
+    if (!g_input) return;
+    glfw_cursor_cb(nullptr, (double)x, (double)y);
+}
+extern "C" void aiml_input_post_mouse_down(int32_t btn) {
+    if (!g_input) return;
+    glfw_mbtn_cb(nullptr, (int)btn, GLFW_PRESS, 0);
+}
+extern "C" void aiml_input_post_mouse_up(int32_t btn) {
+    if (!g_input) return;
+    glfw_mbtn_cb(nullptr, (int)btn, GLFW_RELEASE, 0);
+}
+extern "C" void aiml_input_post_scroll(float dx, float dy) {
+    if (!g_input) return;
+    glfw_scroll_cb(nullptr, (double)dx, (double)dy);
+}
+extern "C" void aiml_input_post_key_down(const char* name) {
+    if (!g_input || !name) return;
+    int k = key_name_to_glfw(name);
+    if (k < 0 || k >= AIML_MAX_KEYS) {
+        fprintf(stderr, "[input] post_key_down: unknown key name '%s'\n", name);
+        return;
+    }
+    glfw_key_cb(nullptr, k, 0, GLFW_PRESS, 0);
+}
+extern "C" void aiml_input_post_key_up(const char* name) {
+    if (!g_input || !name) return;
+    int k = key_name_to_glfw(name);
+    if (k < 0 || k >= AIML_MAX_KEYS) {
+        fprintf(stderr, "[input] post_key_up: unknown key name '%s'\n", name);
+        return;
+    }
+    glfw_key_cb(nullptr, k, 0, GLFW_RELEASE, 0);
+}
+/* One "text" event per code point, exactly as typing produces them — decoding
+ * UTF-8 so a multi-byte character arrives as ONE event, not as its bytes. */
+extern "C" void aiml_input_post_text(const char* s) {
+    if (!g_input || !s) return;
+    const unsigned char* p = (const unsigned char*)s;
+    while (*p) {
+        unsigned int cp = 0;
+        int len = 1;
+        if      (*p < 0x80)        { cp = *p;            len = 1; }
+        else if ((*p & 0xE0)==0xC0){ cp = *p & 0x1F;     len = 2; }
+        else if ((*p & 0xF0)==0xE0){ cp = *p & 0x0F;     len = 3; }
+        else if ((*p & 0xF8)==0xF0){ cp = *p & 0x07;     len = 4; }
+        for (int i = 1; i < len; i++) {
+            if ((p[i] & 0xC0) != 0x80) { len = i; break; }   /* truncated → stop */
+            cp = (cp << 6) | (p[i] & 0x3F);
+        }
+        glfw_char_cb(nullptr, cp);
+        p += len;
+    }
+}
+
 /* ── Lifecycle ───────────────────────────────────────────────────────────── */
 
 void aiml_input_init(void* win_handle) {
@@ -468,8 +532,18 @@ void aiml_input_init(void* win_handle) {
     g_input->prev_pos_y = g_input->curr_pos_y;
 
     glfwSetScrollCallback  (glfw, glfw_scroll_cb);
+#ifndef __EMSCRIPTEN__
+    /* Tastatur: im Browser besitzt sie der eigene Backend-Pfad (bin_keydown /
+     * bin_keypress auf dem window-Target, siehe unten) — der liefert kanonische
+     * Tastennamen, die Zwischenablage und das paste-Ereignis.  Registrierte man
+     * hier ZUSAETZLICH die GLFW-Rueckrufe, meldete jeder Tastendruck ZWEI
+     * Ereignisse: der Cursor sprang pro Pfeiltaste zwei Zeichen weit und ein
+     * getipptes Zeichen erschien doppelt (gemeldet 2026-10-15 am cosmos-
+     * Quelltextfeld; nativ fiel es nie auf, weil es dort nur diese eine Quelle
+     * gibt).  EINE Quelle je Ereignis — sonst zaehlt jemand doppelt. */
     glfwSetKeyCallback     (glfw, glfw_key_cb);
     glfwSetCharCallback    (glfw, glfw_char_cb);
+#endif
     glfwSetCursorPosCallback(glfw, glfw_cursor_cb);
     glfwSetMouseButtonCallback(glfw, glfw_mbtn_cb);
 
@@ -1062,6 +1136,10 @@ static EM_BOOL bin_touchend(int /*type*/, const EmscriptenTouchEvent* /*e*/, voi
 /* Forward declaration — defined further below in this same WASM section. */
 static int32_t name_to_slot(const char* k);
 
+/* Ziel des 'paste'-Listeners (in aiml_input_init registriert, gefüllt von JS,
+ * ausgelesen von aiml_input_paste_ready). */
+static char g_em_paste_buf[65536];
+
 /* Stash a string in the persistent backing store and return a stable ptr. */
 static const char* bin_keep_string(const char* s) {
     if (!g_b || !s) return "";
@@ -1069,17 +1147,99 @@ static const char* bin_keep_string(const char* s) {
     return g_b->key_strings.back().c_str();
 }
 
+/* JS-Tastennamen auf den NATIVEN Kanon bringen (vgl. glfw_key_to_name):
+ * Buchstaben GROSS, ArrowX → X, " " → Space, Control/Shift/Alt → LCtrl/LShift/
+ * LAlt.  Ohne das schlägt jedes strcmp(key, "C") / "Left" / … im Browser fehl —
+ * genau daran waren Ctrl+C/Ctrl+V/Ctrl+A und die Pfeiltasten in text_input
+ * wirkungslos, während sie nativ funktionierten. */
+static const char* bin_key_canon(const char* k) {
+    if (!k || !k[0]) return "";
+    if (!k[1]) {
+        if (k[0] >= 'a' && k[0] <= 'z') {
+            static char up[2];                    /* wie glfw_key_to_name: nicht thread-safe */
+            up[0] = (char)(k[0] - 32); up[1] = '\0';
+            return up;
+        }
+        if (k[0] == ' ') return "Space";
+        return k;
+    }
+    if (strcmp(k, "ArrowUp")    == 0) return "Up";
+    if (strcmp(k, "ArrowDown")  == 0) return "Down";
+    if (strcmp(k, "ArrowLeft")  == 0) return "Left";
+    if (strcmp(k, "ArrowRight") == 0) return "Right";
+    if (strcmp(k, "Control")    == 0) return "LCtrl";
+    if (strcmp(k, "Shift")      == 0) return "LShift";
+    if (strcmp(k, "Alt")        == 0) return "LAlt";
+    return k;
+}
+
+/* Modifier-Zustand aus den Event-Flags übernehmen.  Verlässlicher als die
+ * keydown/keyup-Paare: hält der Nutzer Ctrl schon, BEVOR das Canvas den Fokus
+ * bekommt, fehlt dessen keydown sonst für immer. */
+static void bin_sync_mods(const EmscriptenKeyboardEvent* e) {
+    if (!g_b) return;
+    const char* names[6] = {"lctrl", "rctrl", "lshift", "rshift", "lalt", "ralt"};
+    bool on[6] = { (bool)e->ctrlKey,  (bool)e->ctrlKey,
+                   (bool)e->shiftKey, (bool)e->shiftKey,
+                   (bool)e->altKey,   (bool)e->altKey };
+    for (int i = 0; i < 6; ++i) {
+        int s = name_to_slot(names[i]);
+        if (s >= 0) g_b->raw_keys[s] = on[i] ? 1 : 0;
+    }
+}
+
+/* Später definiert (Clipboard-Block) — hier schon gebraucht. */
+extern "C" void aiml_input_clipboard_set(const char* s);
+
+/* Was ein Ctrl+C im fokussierten Widget kopieren würde — implementiert in
+ * prefab_runtime.cpp.  Der Browser braucht die Antwort SYNCHRON innerhalb der
+ * Tasten-Interaktion (siehe unten), die aiml-Frameschleife läuft erst später. */
+extern "C" const char* aiml_focused_copy_text(void);
+
 static EM_BOOL bin_keydown(int /*type*/, const EmscriptenKeyboardEvent* e, void* /*ud*/) {
     if (!g_b) return EM_FALSE;
-    /* Push a "key_down" event with the key name (e->key — e.g. "a", "Backspace") */
+    bin_sync_mods(e);
+    const char* canon = bin_key_canon(e->key);
+    bool single = (canon[0] != '\0' && canon[1] == '\0');
+    /* Ctrl+C/Ctrl+X: der Clipboard-Write MUSS hier passieren, nicht später in
+     * der Frameschleife — Firefox verlangt für writeText eine laufende
+     * Nutzer-Interaktion, und execCommand('copy') ebenso.  Wir lesen dazu den
+     * aktuellen Auswahl-Zustand des fokussierten Widgets. */
+    if (e->ctrlKey && single && (canon[0] == 'C' || canon[0] == 'X')) {
+        const char* sel = aiml_focused_copy_text();
+        if (sel && *sel) {
+            aiml_input_clipboard_set(sel);
+            /* Die Browser-Standardaktion unterdrücken: sie würde die (leere)
+             * Seiten-Auswahl des Canvas kopieren und unsere gerade geschriebene
+             * Ablage wieder überschreiben.  Das "C"/"X" wird trotzdem
+             * eingereiht, damit die aiml-Seite ihren Zustand mitführt.
+             * Bei Ctrl+V NICHT unterdrücken — sonst bleibt das 'paste'-Event aus. */
+            AimlInputEvent cev = {};
+            cev.type = "key_down";
+            cev.key  = bin_keep_string(canon);
+            g_b->events.push_back(cev);
+            int cslot = name_to_slot(canon);
+            if (cslot >= 0) { if (!g_b->raw_keys[cslot]) g_b->pend_kpress[cslot] = 1; g_b->raw_keys[cslot] = 1; }
+            return EM_TRUE;
+        }
+    }
+    /* Ctrl+V: NICHT einreihen.  Der Browser liefert den Inhalt erst im
+     * anschliessenden 'paste'-Event; ein jetzt eingereihtes "V" würde den
+     * ALTEN Ablage-Inhalt einfügen.  Der paste-Handler reicht das "V" nach. */
+    if (e->ctrlKey && single && canon[0] == 'V') {
+        int vslot = name_to_slot(canon);
+        if (vslot >= 0) { if (!g_b->raw_keys[vslot]) g_b->pend_kpress[vslot] = 1; g_b->raw_keys[vslot] = 1; }
+        return EM_FALSE;
+    }
+    /* Push a "key_down" event with the key name (canonical — e.g. "C", "Backspace") */
     AimlInputEvent ev = {};
     ev.type = "key_down";
-    ev.key  = bin_keep_string(e->key);
+    ev.key  = bin_keep_string(canon);
     g_b->events.push_back(ev);
     /* Update curr_keys using name_to_slot so that polling
      * input.key_down("up") sees the same slot we wrote here when the user
      * pressed ArrowUp. */
-    int slot = name_to_slot(e->key);
+    int slot = name_to_slot(canon);
     if (slot >= 0) {
         if (!g_b->raw_keys[slot]) g_b->pend_kpress[slot] = 1;   // auto-repeat is no new press
         g_b->raw_keys[slot] = 1;
@@ -1114,11 +1274,13 @@ static EM_BOOL bin_keydown(int /*type*/, const EmscriptenKeyboardEvent* e, void*
 
 static EM_BOOL bin_keyup(int /*type*/, const EmscriptenKeyboardEvent* e, void* /*ud*/) {
     if (!g_b) return EM_FALSE;
+    bin_sync_mods(e);
+    const char* canon = bin_key_canon(e->key);
     AimlInputEvent ev = {};
     ev.type = "key_up";
-    ev.key  = bin_keep_string(e->key);
+    ev.key  = bin_keep_string(canon);
     g_b->events.push_back(ev);
-    int slot = name_to_slot(e->key);
+    int slot = name_to_slot(canon);
     if (slot >= 0) {
         if (g_b->raw_keys[slot]) g_b->pend_krelease[slot] = 1;
         g_b->raw_keys[slot] = 0;
@@ -1286,6 +1448,27 @@ void aiml_input_init(void* /*win*/) {
     emscripten_set_keydown_callback (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_keydown);
     emscripten_set_keyup_callback   (EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_keyup);
     emscripten_set_keypress_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_TRUE, bin_keypress);
+    /* Einfügen: der Browser gibt den Ablage-Inhalt NUR im 'paste'-Event heraus
+     * (navigator.clipboard.readText ist asynchron und damit aus einer
+     * synchronen Abfrage nicht nutzbar).  Der Handler legt den Text ab und
+     * reicht das "V" nach, das bin_keydown bewusst nicht eingereiht hat. */
+    /* `document` existiert nur im Browser.  Ohne die Abfrage reisst
+     * input.init die ganze Anwendung in jeder DOM-freien Umgebung
+     * (node/ENVIRONMENT=node) mit "ReferenceError: document is not defined"
+     * ab — und zwar bevor irgendetwas davon gebraucht wird. */
+    EM_ASM({
+        if (typeof document === 'undefined') return;
+        var buf = $0;
+        var cap = $1;
+        document.addEventListener('paste', function(ev) {
+            try {
+                var txt = ((ev.clipboardData || window.clipboardData).getData('text')) || "";
+                stringToUTF8(txt, buf, cap);
+                Module._aiml_input_paste_ready();
+                ev.preventDefault();
+            } catch (err) { /* keine Ablage-Rechte → nichts einfügen */ }
+        });
+    }, g_em_paste_buf, (int)sizeof(g_em_paste_buf));
     /* Register per-frame update with the engine — same hook as desktop. */
     aiml_engine_register_input_update(aiml_input_update);
 }
@@ -1369,6 +1552,101 @@ static int32_t name_to_slot(const char* k) {
     for (const char* p = canon; *p; ++p) h = h * 131u + (uint8_t)*p;
     return (int32_t)(h % AIML_MAX_KEYS);
 }
+/* ── Input injection, browser (spec/44_0 §8) ─────────────────────────────────
+ *
+ * Writes raw_* + pend_* exactly as the DOM handlers do (bin_mousedown etc.),
+ * so the per-frame snapshot in aiml_input_update picks injected edges up the
+ * same way as real ones.  Coordinates are already in the engine's
+ * backing-store space, so bin_event_xy (CSS→backing conversion) is NOT applied
+ * here — a caller feeding .child_rect_* values is in that space already. */
+extern "C" void aiml_input_post_mouse_move(float x, float y) {
+    if (!g_b) return;
+    g_b->curr_pos_x = (double)x;
+    g_b->curr_pos_y = (double)y;
+    for (int b = 0; b < AIML_MAX_MOUSE; b++) {
+        auto& ds = g_b->drag[b];
+        if (!ds.held) continue;
+        ds.acc_x = x - ds.origin_x;
+        ds.acc_y = y - ds.origin_y;
+        float dist = sqrtf(ds.acc_x * ds.acc_x + ds.acc_y * ds.acc_y);
+        if (!ds.active && dist >= g_b->drag_threshold) {
+            ds.active = true; ds.started_this_frame = true;
+        }
+    }
+}
+extern "C" void aiml_input_post_mouse_down(int32_t btn) {
+    if (!g_b || btn < 0 || btn >= AIML_MAX_MOUSE) return;
+    /* raw = gehalten (ueberlebt das naechste Snapshot), curr + frame_press =
+     * JETZT sichtbar.  pend_press bleibt bewusst 0: sonst feuerte die Kante
+     * zweimal — jetzt und nach dem naechsten update.  Damit gilt derselbe
+     * Frame-Vertrag wie auf dem Desktop (spec/44_0 §8.3): injizieren, lesen,
+     * beim naechsten update weg. */
+    g_b->raw_mouse[btn] = 1;
+    g_b->curr_mouse[btn] = 1;
+    g_b->frame_press[btn] = 1;
+    auto& ds = g_b->drag[btn];
+    ds.held = true; ds.active = false;
+    ds.started_this_frame = ds.ended_this_frame = false;
+    ds.origin_x = (float)g_b->curr_pos_x; ds.origin_y = (float)g_b->curr_pos_y;
+    ds.acc_x = ds.acc_y = 0.f;
+}
+extern "C" void aiml_input_post_mouse_up(int32_t btn) {
+    if (!g_b || btn < 0 || btn >= AIML_MAX_MOUSE) return;
+    g_b->raw_mouse[btn] = 0;
+    g_b->curr_mouse[btn] = 0;
+    g_b->frame_release[btn] = 1;
+    auto& ds = g_b->drag[btn];
+    if (ds.active) ds.ended_this_frame = true;
+    ds.held = false; ds.active = false;
+}
+extern "C" void aiml_input_post_scroll(float dx, float dy) {
+    if (!g_b) return;
+    /* scroll_this ist der Wert, den dieser Frame sieht; accum wuerde erst beim
+     * naechsten update gedrained (gleiche Begruendung wie bei den Tasten). */
+    g_b->scroll_this_x += dx;
+    g_b->scroll_this_y += dy;
+}
+extern "C" void aiml_input_post_key_down(const char* name) {
+    if (!g_b || !name) return;
+    int slot = name_to_slot(name);
+    if (slot < 0) return;
+    if (!g_b->raw_keys[slot]) g_b->frame_kpress[slot] = 1;
+    g_b->raw_keys[slot]  = 1;
+    g_b->curr_keys[slot] = 1;
+    AimlInputEvent ev = {};
+    ev.type = "key_down";
+    g_b->key_strings.push_back(name);
+    ev.key = g_b->key_strings.back().c_str();
+    g_b->events.push_back(ev);
+}
+extern "C" void aiml_input_post_key_up(const char* name) {
+    if (!g_b || !name) return;
+    int slot = name_to_slot(name);
+    if (slot < 0) return;
+    if (g_b->raw_keys[slot]) g_b->frame_krelease[slot] = 1;
+    g_b->raw_keys[slot]  = 0;
+    g_b->curr_keys[slot] = 0;
+}
+extern "C" void aiml_input_post_text(const char* s) {
+    if (!g_b || !s) return;
+    const unsigned char* p = (const unsigned char*)s;
+    while (*p) {
+        int len = 1;
+        if      (*p < 0x80)         len = 1;
+        else if ((*p & 0xE0)==0xC0) len = 2;
+        else if ((*p & 0xF0)==0xE0) len = 3;
+        else if ((*p & 0xF8)==0xF0) len = 4;
+        AimlInputEvent ev = {};
+        ev.type = "text";
+        for (int i = 0; i < len && i < 4; i++) {
+            if (i && (p[i] & 0xC0) != 0x80) { len = i; break; }
+            ev.char_buf[i] = (char)p[i];
+        }
+        g_b->events.push_back(ev);
+        p += len;
+    }
+}
+
 int32_t aiml_input_key_down    (const char* k) {
     if (!g_b) return 0;
     int slot = name_to_slot(k);
@@ -1483,14 +1761,58 @@ void    aiml_input_drag_set_payload  (void* p) { if (g_b) g_b->drag_payload = p;
 void*   aiml_input_drag_get_payload  (void)    { return g_b ? g_b->drag_payload : nullptr; }
 void    aiml_input_drag_set_threshold(float t) { if (g_b) g_b->drag_threshold = t; }
 
-/* Browser clipboard: an in-page buffer so within-app copy/paste works during a
- * session without the async navigator.clipboard permission flow.  The real
- * system clipboard (navigator.clipboard.read/writeText) is a later polish. */
+/* Browser clipboard.  The in-page buffer keeps within-app copy/paste working
+ * (paste needs navigator.clipboard.readText, which is async — not usable from a
+ * synchronous getter).  WRITING additionally goes to the real system clipboard
+ * so copied text reaches other applications; navigator.clipboard.writeText
+ * needs a secure context (https or localhost) and a user gesture (a button
+ * click or Ctrl+C qualifies), with a textarea + execCommand fallback. */
 static std::string g_em_clipboard;
+/* Vom paste-Listener gerufen: Inhalt übernehmen und das "V" nachreichen. */
+extern "C" EMSCRIPTEN_KEEPALIVE void aiml_input_paste_ready(void) {
+    if (!g_b) return;
+    g_em_paste_buf[sizeof(g_em_paste_buf) - 1] = '\0';
+    g_em_clipboard = g_em_paste_buf;
+    AimlInputEvent ev = {};
+    ev.type = "key_down";
+    ev.key  = bin_keep_string("V");
+    g_b->events.push_back(ev);
+}
 extern "C" const char* aiml_input_clipboard_get(void)         { return g_em_clipboard.c_str(); }
-extern "C" void        aiml_input_clipboard_set(const char* s) { g_em_clipboard = s ? s : ""; }
+extern "C" void        aiml_input_clipboard_set(const char* s) {
+    g_em_clipboard = s ? s : "";
+    EM_ASM({
+        var txt = UTF8ToString($0);
+        try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(txt);
+                return;
+            }
+        } catch (e) { /* fall through to the legacy path */ }
+        try {
+            var ta = document.createElement('textarea');
+            ta.value = txt;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+        } catch (e2) { /* clipboard unavailable — in-page buffer still holds it */ }
+    }, g_em_clipboard.c_str());
+}
 
 #else /* __ANDROID__ */
+
+/* spec/44_0 §8: Injektion auf dieser Plattform nicht umgesetzt. */
+void aiml_input_post_mouse_move(float, float) {}
+void aiml_input_post_mouse_down(int32_t) {}
+void aiml_input_post_mouse_up  (int32_t) {}
+void aiml_input_post_scroll    (float, float) {}
+void aiml_input_post_key_down  (const char*) {}
+void aiml_input_post_key_up    (const char*) {}
+void aiml_input_post_text      (const char*) {}
 
 void    aiml_input_init       (void* /*win*/)   { /* TODO: platform */ }
 void    aiml_input_update     (void)            { /* TODO: platform */ }

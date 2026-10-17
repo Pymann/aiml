@@ -22,6 +22,7 @@ typedef struct {
 void*   aiml_io_open_binary(const char* path);   /* → FILE* (NULL on error) */
 void    aiml_io_close(void* f);
 int32_t aiml_buffer_write_to(const void* buf, void* f);
+int32_t aiml_buffer_write_string(void* buf, const char* s);
 void*   aiml_io_std_stream(int32_t fd);
 
 /* Position control */

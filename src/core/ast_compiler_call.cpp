@@ -2,6 +2,7 @@
 #include "clearance_builtins.h"
 #include "clearance_exports.h"
 #include "ast_compiler.h"
+#include "purity.h"
 #include "list_impl.h"
 #include "map_impl.h"
 #include "buffer_impl.h"
@@ -196,8 +197,55 @@ bool Compiler::isCoownedArgument(const std::string& type) {
         || type.rfind("shared<", 0) == 0 || ctx.isRefcountModel(type));
 }
 
+// Type-only GL validation: do not evaluate borrowed upload expressions twice.
+std::string Compiler::glOperandType(Expr* expression) {
+    if (auto* call = dynamic_cast<CallExpr*>(expression)) {
+        auto signature = resolveCallSignature(call->functionName);
+        if (signature.valid) return signature.returnType;
+        if (call->functionName == "gl.create_vao") return "gl_vao";
+        if (call->functionName == "gl.create_buffer" || call->functionName == "gl.create_buffer_dynamic"
+            || call->functionName == "gl.create_index_buffer") return "gl_buffer";
+        if (call->functionName == "gl.read_rgba8") return "buffer<u8>";
+        return "";
+    }
+    auto* variable = dynamic_cast<VariableExpr*>(expression);
+    if (!variable) return "";
+    auto unwrap = [](std::string type) {
+        if (type.rfind("ref<", 0) == 0 || type.rfind("ptr<", 0) == 0)
+            return type.substr(4, type.size() - 5);
+        if (type.rfind("shared<", 0) == 0) return type.substr(7, type.size() - 8);
+        return type;
+    };
+    const std::string& name = variable->name;
+    size_t dot = name.find('.');
+    std::string root = name.substr(0, dot), type;
+    if (root == "<" || root == "this") type = ctx.currentClassName;
+    else if (auto* symbol = resolveVariable(root)) type = symbol->typeName;
+    while (dot != std::string::npos) {
+        size_t next = name.find('.', dot + 1);
+        std::string field = name.substr(dot + 1, next - dot - 1), cls = unwrap(type);
+        type.clear();
+        while (!cls.empty()) {
+            auto ci = ctx.classes.find(cls);
+            if (ci == ctx.classes.end()) break;
+            auto member = ci->second.members.find(field);
+            if (member != ci->second.members.end()) { type = member->second.typeName; break; }
+            cls = ci->second.parentName;
+        }
+        dot = next;
+    }
+    return type;
+}
+
 IRValue* Compiler::visitCall(CallExpr* call) {
     std::string funcName = call->functionName;
+    if (funcName == "gl.draw_elements_instanced" && call->args.size() == 3) {
+        auto* literal = dynamic_cast<LiteralExpr*>(call->args[0].get());
+        if ((!literal || literal->value != "null") && glOperandType(call->args[0].get()) != "gl_vao") {
+            LOG_ERROR(ctx.fmtLoc() + "gl.draw_elements_instanced: expected gl_vao");
+            return nullptr;
+        }
+    }
 
     // ── __builtin_tolerance(a, b, eps) → i1: |a - b| <= eps ──────────────
     if (funcName == "__builtin_tolerance" && call->args.size() == 3) {
@@ -299,6 +347,20 @@ IRValue* Compiler::visitCall(CallExpr* call) {
         }
         if (baseName == "sys" && methodName == "exec") {
             return visitSysExecCall(call);
+        }
+        if (baseName == "sys" && methodName == "code_from") {
+            return visitSysCodeFromCall(call);
+        }
+        if (baseName == "sys" && methodName == "lib_load") {
+            // spec/29_2 §15: Bibliothek EINMAL uebersetzen; spaetere sys.exec
+            // bekommen nur noch ihre Deklarationen.
+            auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+            auto* i32 = ctx.builder.getInt32Ty();
+            if (call->args.empty()) return ctx.ir_gen->getInt32(-2);
+            llvm::Value* codeV = static_cast<llvm::Value*>(
+                ctx.ir_gen->unwrap(visitExpression(call->args[0].get())));
+            llvm::Function* fn = ctx.getFunction("aiml_lib_load", i32, {i8p});
+            return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {codeV}, "lib_load"));
         }
         if (baseName == "sys" && methodName == "arg_dump") {
             return visitSysArgDumpCall(call);
@@ -459,9 +521,17 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                 if (auto* u = dynamic_cast<AIML::AST::UnaryExpr*>(arg.get()))
                     if (kDbOpts.count(u->op)) continue;
             }
+            if (baseName == "sys" && methodName == "exe") {
+                if (auto* u = dynamic_cast<AIML::AST::UnaryExpr*>(arg.get()))
+                    if (kExeOpts.count(u->op)) continue;
+            }
             IRValue* val = visitExpression(arg.get());
-            if (val) argVals.push_back(val);
-            else return ctx.ir_gen->getInt32(0);
+            if (val) {
+                argVals.push_back(val);
+                if (baseName == "gl" && (methodName == "draw_elements_instanced"
+                    || methodName == "create_buffer" || methodName == "create_buffer_dynamic"
+                    || methodName == "create_index_buffer")) trackCallArgument(arg.get(), val);
+            } else return ctx.ir_gen->getInt32(0);
         }
 
         // Spec 46: inject source location as hidden 2nd argument for log.* calls
@@ -558,13 +628,13 @@ IRValue* Compiler::visitCall(CallExpr* call) {
         }
         // For standard compilation, we just emit a call to their mangled C names.
         std::string mangledSys = baseName + "_" + methodName;
-        if (ctx.module.getFunction(mangledSys)) {
+        if (ctx.module().getFunction(mangledSys)) {
              return ctx.ir_gen->createCall(mangledSys, argVals, "call_sys");
         }
         
         // FQN Fallback (e.g. my.math.add)
         CompilerContext::FunctionInfo* fInfo = resolveFunction(funcName);
-        llvm::Function* f = fInfo ? fInfo->func : ctx.module.getFunction(funcName);
+        llvm::Function* f = fInfo ? fInfo->func : ctx.module().getFunction(funcName);
         if (f) {
             std::vector<llvm::Value*> finalArgs;
             for (size_t i = 0; i < argVals.size(); ++i) {
@@ -637,10 +707,10 @@ IRValue* Compiler::visitCall(CallExpr* call) {
          IRValue* fmt = ctx.ir_gen->createGlobalStringPtr(formatStr);
          printArgs.insert(printArgs.begin(), fmt);
          
-         llvm::Function* printfFunc = ctx.module.getFunction("printf");
+         llvm::Function* printfFunc = ctx.module().getFunction("printf");
          if (!printfFunc) {
              llvm::FunctionType* printfType = llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, true);
-             printfFunc = llvm::Function::Create(printfType, llvm::Function::ExternalLinkage, "printf", ctx.module);
+             printfFunc = llvm::Function::Create(printfType, llvm::Function::ExternalLinkage, "printf", ctx.module());
          }
          return ctx.ir_gen->createCall("printf", printArgs, "print_call");
     } else if (funcName == "free" && !ctx.functions.count("free")) {
@@ -691,8 +761,8 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                  return ctx.ir_gen->getInt32(0);
              }
          }
-         llvm::Function* freeFunc = ctx.module.getFunction("free");
-         if (!freeFunc) freeFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "free", ctx.module);
+         llvm::Function* freeFunc = ctx.module().getFunction("free");
+         if (!freeFunc) freeFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(), {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "free", ctx.module());
          llvm::Value* ptrVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
          if (ptrVal->getType() != ctx.builder.getInt8Ty()->getPointerTo()) {
              ptrVal = ctx.builder.CreateBitCast(ptrVal, ctx.builder.getInt8Ty()->getPointerTo());
@@ -736,7 +806,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                  if (ctx.classGroupContainers.count(boxed)) {
                      // spec/58: a classgroup owns heap instances but has no ser descriptor — run its
                      // synthesized __dtor to release them (recurses into subgroups) before the shell free.
-                     llvm::Function* dtor = ctx.module.getFunction(boxed + "___dtor");
+                     llvm::Function* dtor = ctx.module().getFunction(boxed + "___dtor");
                      if (dtor) ctx.builder.CreateCall(dtor, { ptrVal });
                  } else {
                      auto bi = ctx.classes.find(boxed);
@@ -777,7 +847,15 @@ IRValue* Compiler::visitCall(CallExpr* call) {
     // Normal Call — prefer indirect call via fptable_current for hot-reload support
     IRValue* callRes = nullptr;
     CompilerContext::FunctionInfo* funcInfo = resolveFunction(funcName);
-    llvm::Function* f = funcInfo ? funcInfo->func : ctx.module.getFunction(funcName);
+    // spec/29_2 §16: gerufene Funktion beim gerade uebersetzten Rumpf vermerken,
+    // damit sys.bundle sie mitnimmt.  Gleiche Mechanik wie referencedTypes:
+    // bundleTrackingTarget zeigt auf die Funktion, die gerade entsteht.
+    if (funcInfo && !ctx.bundleTrackingTarget.empty() &&
+        ctx.bundleTrackingTarget != funcName &&
+        ctx.functions.count(ctx.bundleTrackingTarget)) {
+        ctx.functions[ctx.bundleTrackingTarget].referencedFuncs.insert(funcName);
+    }
+    llvm::Function* f = funcInfo ? funcInfo->func : ctx.module().getFunction(funcName);
 
     // meta: [deprecated] → warn at this call site (one per usage location).
     // Emit the full call YAML node so callers can grep/parse+replace the output.
@@ -843,6 +921,31 @@ IRValue* Compiler::visitCall(CallExpr* call) {
                     actualTy   = actualVal->getType();
                 }
             }
+            // spec/58 §5.2 + spec/61 §8: ein interface-typisierter Parameter
+            // (ptr<Iface> wie ref<Iface>) ist ein FAT POINTER {obj, vtable}.  Ein
+            // konkreter Klassenzeiger muss hier aufwärtsgewandelt werden.  Fehlte
+            // das, kam das Objekt als nackter Zeiger an, der Aufgerufene las die
+            // vtable von der falschen Stelle und der erste Interface-Aufruf
+            // dereferenzierte null — Absturz in jitRun (addr=nil), bzw. bei
+            // ref<Iface> ein IR-Verifier-Fehler.  Nur EINGEBAUTE Interfaces
+            // (mirror.RpcHandler) funktionierten, weil sie einen anderen Pfad
+            // nehmen; jedes selbst deklarierte `- interface:` stürzte ab.
+            if (auto* fatTy = llvm::dyn_cast<llvm::StructType>(expectedTy)) {
+                if (actualTy->isPointerTy() && fatTy->hasName() &&
+                    fatTy->getName().startswith("AimlFatPtr_")) {
+                    const std::string srcTy = declaredTypeOfExpr(call->args[i].get());
+                    llvm::Value* fat = srcTy.empty()
+                        ? nullptr : buildInterfaceUpcast(actualVal, srcTy, fatTy);
+                    if (fat) { argVals[i] = ctx.ir_gen->wrap(fat); continue; }
+                    const std::string iface = fatTy->getName().str().substr(11);
+                    LOG_ERROR(ctx.fmtLoc() + "'" + funcName + "': argument " +
+                              std::to_string(i + 1) + " cannot be passed as " + iface +
+                              (srcTy.empty()
+                                 ? " — the argument's type is not resolvable here; pass a typed local"
+                                 : " — '" + srcTy + "' does not declare `implements: [" + iface + "]`"));
+                    continue;
+                }
+            }
             if (expectedTy->isPointerTy() && actualTy->isPointerTy() && expectedTy != actualTy)
                 argVals[i] = ctx.ir_gen->wrap(ctx.builder.CreateBitCast(actualVal, expectedTy));
             // list<T>/map<T> field access returns ptr to struct; load by value when callee expects struct
@@ -891,7 +994,7 @@ IRValue* Compiler::visitCall(CallExpr* call) {
     if (f && funcInfo && funcInfo->fptable_index >= 0) {
         // ── Indirect call via __aiml_fptable_current[idx] ────────────────────
         llvm::GlobalVariable* cur_gv =
-            ctx.module.getNamedGlobal("__aiml_fptable_current");
+            ctx.module().getNamedGlobal("__aiml_fptable_current");
         if (cur_gv) {
             coerceArgs();
             if (!f->isVarArg() && argVals.size() < f->arg_size())
@@ -1083,11 +1186,11 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         llvm::Value* ptrAlloca = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(
             sym->ir_alloca_inst ? sym->ir_alloca_inst : ctx.ir_gen->wrap(sym->alloca_inst)));
         llvm::Value* rawPtr = ctx.builder.CreateLoad(i8p, ptrAlloca, "darr_free_ptr");
-        llvm::Function* freeFn = ctx.module.getFunction("free");
+        llvm::Function* freeFn = ctx.module().getFunction("free");
         if (!freeFn) {
             llvm::FunctionType* ft = llvm::FunctionType::get(
                 ctx.builder.getVoidTy(), {i8p}, false);
-            freeFn = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "free", ctx.module);
+            freeFn = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "free", ctx.module());
         }
         ctx.builder.CreateCall(freeFn, {rawPtr});
         // spec/61 §5.6 (memV3): `.free` is an EARLY release — null the slot so the Class-4
@@ -1323,13 +1426,31 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             // Direct method match
             auto methodIt = bm.find(methodName);
             if (methodIt != bm.end()) {
-                auto evalExpr = [this](AIML::AST::Expr* e) -> IRValue* {
-                    return this->visitExpression(e);
+                bool uploadBorrow = className == "gl_buffer" && methodName == "update_range";
+                std::vector<IRValue*> uploadArguments;
+                auto evalExpr = [this, uploadBorrow, &uploadArguments](AIML::AST::Expr* e) -> IRValue* {
+                    IRValue* value = this->visitExpression(e);
+                    if (uploadBorrow && value) {
+                        trackCallArgument(e, value);
+                        uploadArguments.push_back(value);
+                    }
+                    return value;
                 };
+                if (className == "gl_buffer" && methodName == "update_range" && call->args.size() == 2
+                    && glOperandType(call->args[1].get()) != "buffer<u8>") {
+                    LOG_ERROR(ctx.fmtLoc() + "gl_buffer.update_range: expected buffer<u8>");
+                    return nullptr;
+                }
+                if ((className == "gl_buffer" || className == "gl_vao") && methodName == "delete"
+                    && (sym->is_param || sym->typeName.rfind("ref<", 0) == 0)) {
+                    LOG_ERROR(ctx.fmtLoc() + "spec/61: cannot delete a borrowed GL resource");
+                    return nullptr;
+                }
                 IRValue* res = methodIt->second(ctx, baseForHandler, call, evalExpr);
+                if (uploadBorrow) finishCallArguments(call, uploadArguments);
                 // spec/43_2 §5.5: delete() is the early close of an owned gl_texture — null the
                 // variable/field so its later owner drop is a no-op.
-                if ((className == "gl_texture" || className == "gl_cubemap" || className == "gl_timer_query") && methodName == "delete" && classIt->second.preLoadBase
+                if ((className == "gl_texture" || className == "gl_cubemap" || className == "gl_timer_query" || className == "gl_buffer" || className == "gl_vao") && methodName == "delete" && classIt->second.preLoadBase
                     && (llvm::isa<llvm::AllocaInst>(rawAlloca) || llvm::isa<llvm::GetElementPtrInst>(rawAlloca)
                         || llvm::isa<llvm::GlobalVariable>(rawAlloca)))
                     ctx.builder.CreateStore(llvm::ConstantPointerNull::get(ctx.builder.getPtrTy()), rawAlloca);
@@ -1358,23 +1479,23 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                     // Dispatch map operations on the field value (AimlHttpMap*)
                     llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
                     if (subMethod == "put" && argRaw.size() >= 2) {
-                        llvm::Function* fn = ctx.module.getFunction("aiml_http_map_put");
+                        llvm::Function* fn = ctx.module().getFunction("aiml_http_map_put");
                         if (!fn) fn = llvm::Function::Create(
                             llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p, i8p}, false),
-                            llvm::Function::ExternalLinkage, "aiml_http_map_put", ctx.module);
+                            llvm::Function::ExternalLinkage, "aiml_http_map_put", ctx.module());
                         ctx.builder.CreateCall(fn, {fieldVal, argRaw[0], argRaw[1]});
                         return nullptr;
                     } else if (subMethod == "get" && argRaw.size() >= 1) {
-                        llvm::Function* fn = ctx.module.getFunction("aiml_http_map_get");
+                        llvm::Function* fn = ctx.module().getFunction("aiml_http_map_get");
                         if (!fn) fn = llvm::Function::Create(
                             llvm::FunctionType::get(i8p, {i8p, i8p}, false),
-                            llvm::Function::ExternalLinkage, "aiml_http_map_get", ctx.module);
+                            llvm::Function::ExternalLinkage, "aiml_http_map_get", ctx.module());
                         return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {fieldVal, argRaw[0]}));
                     } else if (subMethod == "len") {
-                        llvm::Function* fn = ctx.module.getFunction("aiml_http_map_len");
+                        llvm::Function* fn = ctx.module().getFunction("aiml_http_map_len");
                         if (!fn) fn = llvm::Function::Create(
                             llvm::FunctionType::get(ctx.builder.getInt32Ty(), {i8p}, false),
-                            llvm::Function::ExternalLinkage, "aiml_http_map_len", ctx.module);
+                            llvm::Function::ExternalLinkage, "aiml_http_map_len", ctx.module());
                         return ctx.ir_gen->wrap(ctx.builder.CreateCall(fn, {fieldVal}));
                     }
                     LOG_ERROR("Unknown chained sub-method: " + subMethod + " on field " + fieldName);
@@ -1421,7 +1542,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         } else if (methodName == "get" && !bArgVals.empty()) {
             llvm::Value* idxVal = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(bArgVals[0]));
             if (!elemTy) { LOG_ERROR("buffer<T>.get: unknown elem type " + elemName); return ctx.ir_gen->getInt32(0); }
-            llvm::DataLayout dl(&ctx.module);
+            llvm::DataLayout dl(&ctx.module());
             uint64_t esz    = dl.getTypeAllocSize(elemTy);
             llvm::Value* idx64    = ctx.builder.CreateZExtOrTrunc(idxVal, ctx.builder.getInt64Ty(), "bidx64");
             llvm::Value* byteOff  = ctx.builder.CreateMul(idx64, ctx.builder.getInt64(esz), "byte_off");
@@ -1485,10 +1606,10 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
 
     // String.to_int() — no args, like len
     if (className == "string" && methodName == "to_int") {
-        llvm::Function* atoiFn = ctx.module.getFunction("atoi");
+        llvm::Function* atoiFn = ctx.module().getFunction("atoi");
         if (!atoiFn) atoiFn = llvm::Function::Create(
             llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo()}, false),
-            llvm::Function::ExternalLinkage, "atoi", ctx.module);
+            llvm::Function::ExternalLinkage, "atoi", ctx.module());
         llvm::Value* strPtr = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(),
                                                      static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
         llvm::Value* zero = ctx.builder.getInt32(0);
@@ -1513,10 +1634,10 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
     // String.parse_i32() — lazy, null-safe, uses strtol (handles negative, hex-prefix etc.)
     if (className == "string" && methodName == "parse_i32") {
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-        llvm::Function* fn = ctx.module.getFunction("aiml_str_parse_i32");
+        llvm::Function* fn = ctx.module().getFunction("aiml_str_parse_i32");
         if (!fn) fn = llvm::Function::Create(
             llvm::FunctionType::get(ctx.builder.getInt32Ty(), {i8p}, false),
-            llvm::Function::ExternalLinkage, "aiml_str_parse_i32", ctx.module);
+            llvm::Function::ExternalLinkage, "aiml_str_parse_i32", ctx.module());
         llvm::Value* strPtr = ctx.builder.CreateLoad(i8p,
             static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
         llvm::Value* isNull = ctx.builder.CreateIsNull(strPtr, "pi32_null");
@@ -1540,10 +1661,10 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
     // String.parse_f32() — lazy, null-safe, uses strtof
     if (className == "string" && methodName == "parse_f32") {
         llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-        llvm::Function* fn = ctx.module.getFunction("aiml_str_parse_f32");
+        llvm::Function* fn = ctx.module().getFunction("aiml_str_parse_f32");
         if (!fn) fn = llvm::Function::Create(
             llvm::FunctionType::get(ctx.builder.getFloatTy(), {i8p}, false),
-            llvm::Function::ExternalLinkage, "aiml_str_parse_f32", ctx.module);
+            llvm::Function::ExternalLinkage, "aiml_str_parse_f32", ctx.module());
         llvm::Value* strPtr = ctx.builder.CreateLoad(i8p,
             static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
         llvm::Value* isNull = ctx.builder.CreateIsNull(strPtr, "pf32_null");
@@ -1567,9 +1688,9 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
     // String.len (lazy — needs only the alloca, no args)
     if (className == "string" && methodName == "len") {
         // size_t = target pointer-width int (i32 on WASM, i64 on x86_64).
-        llvm::Type* sizeTy = ctx.module.getDataLayout().getIntPtrType(ctx.context);
-        llvm::Function* strlenFunc = ctx.module.getFunction("strlen");
-        if (!strlenFunc) strlenFunc = llvm::Function::Create(llvm::FunctionType::get(sizeTy, {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "strlen", ctx.module);
+        llvm::Type* sizeTy = ctx.module().getDataLayout().getIntPtrType(ctx.context);
+        llvm::Function* strlenFunc = ctx.module().getFunction("strlen");
+        if (!strlenFunc) strlenFunc = llvm::Function::Create(llvm::FunctionType::get(sizeTy, {ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "strlen", ctx.module());
         llvm::Value* strPtr = ctx.builder.CreateLoad(ctx.builder.getInt8Ty()->getPointerTo(), static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
         // Null-safe: if strPtr is null, return 0
         llvm::Value* isNull = ctx.builder.CreateIsNull(strPtr, "str_is_null");
@@ -1627,7 +1748,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             // size_t = platform pointer-width int (i32 on WASM, i64 on x86_64).
             // Linking against libc strndup with hardcoded i64 trips wasm-ld's
             // signature-mismatch check on the WASM target.
-            llvm::Type* sizeTy = ctx.module.getDataLayout().getIntPtrType(ctx.context);
+            llvm::Type* sizeTy = ctx.module().getDataLayout().getIntPtrType(ctx.context);
             llvm::Value* start = ctx.builder.CreateSExtOrTrunc(
                 static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0])), sizeTy);
             llvm::Value* offsetPtr = ctx.builder.CreateGEP(ctx.builder.getInt8Ty(), strPtr, start);
@@ -1651,16 +1772,16 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         } else if (methodName == "starts_with") {
             // starts_with(prefix) → i32 (1 or 0)
             // size_t must match target ABI: i32 on WASM, i64 on x86_64.
-            llvm::Type* sizeTy = ctx.module.getDataLayout().getIntPtrType(ctx.context);
-            llvm::Function* strncmpFn = ctx.module.getFunction("strncmp");
+            llvm::Type* sizeTy = ctx.module().getDataLayout().getIntPtrType(ctx.context);
+            llvm::Function* strncmpFn = ctx.module().getFunction("strncmp");
             if (!strncmpFn) strncmpFn = llvm::Function::Create(
                 llvm::FunctionType::get(ctx.builder.getInt32Ty(),
                     {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo(), sizeTy}, false),
-                llvm::Function::ExternalLinkage, "strncmp", ctx.module);
-            llvm::Function* strlenFn = ctx.module.getFunction("strlen");
+                llvm::Function::ExternalLinkage, "strncmp", ctx.module());
+            llvm::Function* strlenFn = ctx.module().getFunction("strlen");
             if (!strlenFn) strlenFn = llvm::Function::Create(
                 llvm::FunctionType::get(sizeTy, {ctx.builder.getInt8Ty()->getPointerTo()}, false),
-                llvm::Function::ExternalLinkage, "strlen", ctx.module);
+                llvm::Function::ExternalLinkage, "strlen", ctx.module());
             llvm::Value* prefix = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
             llvm::Value* prefixLen = ctx.builder.CreateCall(strlenFn, {prefix});
             llvm::Value* cmp = ctx.builder.CreateCall(strncmpFn, {strPtr, prefix, prefixLen});
@@ -1668,16 +1789,16 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             return ctx.ir_gen->wrap(ctx.builder.CreateZExt(eq, ctx.builder.getInt32Ty()));
         } else if (methodName == "ends_with") {
             // ends_with(suffix) → i32 (1 or 0)
-            llvm::Type* sizeTy = ctx.module.getDataLayout().getIntPtrType(ctx.context);
-            llvm::Function* strncmpFn = ctx.module.getFunction("strncmp");
+            llvm::Type* sizeTy = ctx.module().getDataLayout().getIntPtrType(ctx.context);
+            llvm::Function* strncmpFn = ctx.module().getFunction("strncmp");
             if (!strncmpFn) strncmpFn = llvm::Function::Create(
                 llvm::FunctionType::get(ctx.builder.getInt32Ty(),
                     {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo(), sizeTy}, false),
-                llvm::Function::ExternalLinkage, "strncmp", ctx.module);
-            llvm::Function* strlenFn = ctx.module.getFunction("strlen");
+                llvm::Function::ExternalLinkage, "strncmp", ctx.module());
+            llvm::Function* strlenFn = ctx.module().getFunction("strlen");
             if (!strlenFn) strlenFn = llvm::Function::Create(
                 llvm::FunctionType::get(sizeTy, {ctx.builder.getInt8Ty()->getPointerTo()}, false),
-                llvm::Function::ExternalLinkage, "strlen", ctx.module);
+                llvm::Function::ExternalLinkage, "strlen", ctx.module());
             llvm::Value* suffix = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
             llvm::Value* strLen = ctx.builder.CreateCall(strlenFn, {strPtr});
             llvm::Value* suffixLen = ctx.builder.CreateCall(strlenFn, {suffix});
@@ -1692,11 +1813,11 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             return ctx.ir_gen->wrap(result);
         } else if (methodName == "index_of") {
             // index_of(needle) → i32 (-1 if not found)
-            llvm::Function* strstrFn = ctx.module.getFunction("strstr");
+            llvm::Function* strstrFn = ctx.module().getFunction("strstr");
             if (!strstrFn) strstrFn = llvm::Function::Create(
                 llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(),
                     {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo()}, false),
-                llvm::Function::ExternalLinkage, "strstr", ctx.module);
+                llvm::Function::ExternalLinkage, "strstr", ctx.module());
             llvm::Value* needle = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(argVals[0]));
             llvm::Value* found = ctx.builder.CreateCall(strstrFn, {strPtr, needle});
             llvm::Value* isNull = ctx.builder.CreateICmpEQ(found, llvm::ConstantPointerNull::get(ctx.builder.getInt8Ty()->getPointerTo()));
@@ -2046,7 +2167,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                              int64_t boxSz = 8;
                              auto sci = ctx.classes.find(srcSym->typeName);
                              if (sci != ctx.classes.end() && sci->second.type) {
-                                 llvm::DataLayout dl(&ctx.module);
+                                 llvm::DataLayout dl(&ctx.module());
                                  boxSz = (int64_t)dl.getTypeAllocSize(sci->second.type);
                              }
                              llvm::Function* mallocF = ctx.getFunction("malloc", i8pT, {ctx.getSizeType()});
@@ -2099,7 +2220,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              bool popDiscarded = ctx.popResultDiscarded;
              ctx.popResultDiscarded = false;   // consume: nested pops are not this discard
              if (popDiscarded && ctx.lifetimeDropsEnabled) {
-                 int ek = 0; int64_t esz = 8; llvm::GlobalVariable* sn = nullptr; int32_t snc = 0;
+                 int ek = 0; int64_t esz = ctx.ptrStride(); llvm::GlobalVariable* sn = nullptr; int32_t snc = 0;
                  classifyListElem(listElemName, ek, esz, sn, snc);
                  if (ek != 0) {
                      auto* i8p = llvm::PointerType::get(ctx.context, 0);
@@ -2165,7 +2286,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              if (sl && !retainFn && sci != ctx.classes.end() && sci->second.hasHeapFields && sci->second.serNodesVar
                  && sci->second.type && !ctx.isRefcountModel(listElemName)) {
                  auto* i8p = llvm::PointerType::get(ctx.context, 0);
-                 uint64_t esz = ctx.module.getDataLayout().getTypeAllocSize(sci->second.type);
+                 uint64_t esz = ctx.module().getDataLayout().getTypeAllocSize(sci->second.type);
                  ctx.builder.CreateCall(ctx.getFunction("aiml_list_retain_elems", ctx.builder.getVoidTy(),
                      {i8p, ctx.builder.getInt64Ty(), i8p, ctx.builder.getInt32Ty()}),
                      { sl, ctx.builder.getInt64(esz), sci->second.serNodesVar, ctx.builder.getInt32(sci->second.serNodesCount) });
@@ -2331,7 +2452,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              // spec/61 §5.4: a VALUE-MODEL element (inline at struct stride) releases its members before
              // the shift (tests/lifetime/74). A value copy taken from it (CopyRetain) owns its refs.
              if (ctx.lifetimeDropsEnabled && llvmListElemType && llvmListElemType->isStructTy()) {
-                 int ek = 0; int64_t esz = 8; llvm::GlobalVariable* sn = nullptr; int32_t snc = 0;
+                 int ek = 0; int64_t esz = ctx.ptrStride(); llvm::GlobalVariable* sn = nullptr; int32_t snc = 0;
                  classifyListElem(listElemName, ek, esz, sn, snc);
                  if (ek == 2 && sn) {
                      auto* i8p = llvm::PointerType::get(ctx.context, 0);
@@ -2353,7 +2474,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              // silently leaks all elements (it only zeroed size). Every element kind releases here,
              // incl. elemKind 2 (value-model inline, tests/lifetime/73).
              if (ctx.lifetimeDropsEnabled) {
-                 int ek = 0; int64_t esz = 8; llvm::GlobalVariable* sn = nullptr; int32_t snc = 0;
+                 int ek = 0; int64_t esz = ctx.ptrStride(); llvm::GlobalVariable* sn = nullptr; int32_t snc = 0;
                  classifyListElem(listElemName, ek, esz, sn, snc);
                  if (ek != 0) {
                      auto* i8p = llvm::PointerType::get(ctx.context, 0);
@@ -2783,9 +2904,9 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             }
             if (!elemPtr) return ctx.ir_gen->getInt32(-1);
 
-            int64_t elemSize = 8;
+            int64_t elemSize = ctx.ptrStride();   // spec/61 §5.7
             if (ctx.classes.count(elemName) && ctx.classes[elemName].type) {
-                llvm::DataLayout dl(&ctx.module);
+                llvm::DataLayout dl(&ctx.module());
                 elemSize = static_cast<int64_t>(dl.getTypeAllocSize(ctx.classes[elemName].type));
             } else if (ctx.classes.count(elemName) && ctx.classes[elemName].packed_size > 0) {
                 elemSize = static_cast<int64_t>(ctx.classes[elemName].packed_size);
@@ -2819,9 +2940,9 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             }
             if (!elemPtr) return ctx.ir_gen->getInt32(-1);
 
-            int64_t elemSize = 8;
+            int64_t elemSize = ctx.ptrStride();   // spec/61 §5.7
             if (ctx.classes.count(elemName) && ctx.classes[elemName].type) {
-                llvm::DataLayout dl(&ctx.module);
+                llvm::DataLayout dl(&ctx.module());
                 elemSize = static_cast<int64_t>(dl.getTypeAllocSize(ctx.classes[elemName].type));
             } else if (ctx.classes.count(elemName) && ctx.classes[elemName].packed_size > 0) {
                 elemSize = static_cast<int64_t>(ctx.classes[elemName].packed_size);
@@ -2845,7 +2966,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
             auto& pkMember = ci.members[ci.primaryKey];
             int32_t keyOffset = 0, keySize = 0;
             if (ci.type) {
-                llvm::DataLayout dl(&ctx.module);
+                llvm::DataLayout dl(&ctx.module());
                 auto* sl  = dl.getStructLayout(llvm::cast<llvm::StructType>(ci.type));
                 keyOffset = (int32_t)sl->getElementOffset((unsigned)pkMember.index);
                 keySize   = (int32_t)dl.getTypeAllocSize(pkMember.type);
@@ -2898,7 +3019,7 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         else if (vName == "f32")    valSize = 4;
         else if (vName == "f64")    valSize = 8;
         else if (ctx.classes.count(vName) && ctx.classes[vName].type) {
-            llvm::DataLayout dl(&ctx.module);
+            llvm::DataLayout dl(&ctx.module());
             valSize = static_cast<int64_t>(dl.getTypeAllocSize(ctx.classes[vName].type));
         }
 
@@ -3611,9 +3732,9 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
         };
 
         // Compute elem size from class info
-        int64_t elemSize = 8;
+        int64_t elemSize = ctx.ptrStride();   // spec/61 §5.7
         if (ctx.classes.count(elemName) && ctx.classes[elemName].type) {
-            llvm::DataLayout dl(&ctx.module);
+            llvm::DataLayout dl(&ctx.module());
             elemSize = (int64_t)dl.getTypeAllocSize(ctx.classes[elemName].type);
         }
 
@@ -3679,14 +3800,14 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
     else if (!className.empty() && ctx.classes.count(className)) {
          std::string mangledName = className + "_" + methodName;
          std::string resolvedMangled = mangledName;  // the name whose FunctionInfo we actually call
-         llvm::Function* func = ctx.module.getFunction(mangledName);
+         llvm::Function* func = ctx.module().getFunction(mangledName);
          if (!func) {
              std::string currClass = className;
              while (!currClass.empty() && ctx.classes.count(currClass)) {
                  std::string pName = ctx.classes[currClass].parentName;
                  if (!pName.empty()) {
                      currClass = pName;
-                     func = ctx.module.getFunction(currClass + "_" + methodName);
+                     func = ctx.module().getFunction(currClass + "_" + methodName);
                      if (func) { resolvedMangled = currClass + "_" + methodName; break; }
                  } else {
                      break;
@@ -3810,15 +3931,18 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  if (expectedSt->hasName() &&
                      expectedSt->getName().startswith("AimlFatPtr_") &&
                      i < call->args.size()) {
-                     if (auto* ve = dynamic_cast<VariableExpr*>(call->args[i].get())) {
-                         Symbol* srcSym = resolveVariable(ve->name);
-                         if (srcSym) {
-                             llvm::Value* rawArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
-                             llvm::Value* fat = buildInterfaceUpcast(rawArg, srcSym->typeName, expectedSt);
-                             if (fat) {
-                                 a = ctx.ir_gen->wrap(fat);
-                             }
-                         }
+                     // declaredTypeOfExpr statt resolveVariable: so greift der
+                     // Upcast auch bei GEPUNKTETEM Zugriff — insbesondere auf
+                     // eine classgroup-Instanz (`grp.handler`), deren Typ in
+                     // keinem Symbol steht, sondern im Member der Container-
+                     // Klasse.  Ohne das kam die Instanz als nackter Zeiger an
+                     // und der IR-Verifier schlug fehl (Fat Pointer erwartet).
+                     const std::string srcTy =
+                         declaredTypeOfExpr(call->args[i].get());
+                     if (!srcTy.empty()) {
+                         llvm::Value* rawArg = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                         if (llvm::Value* fat = buildInterfaceUpcast(rawArg, srcTy, expectedSt))
+                             a = ctx.ir_gen->wrap(fat);
                      }
                  }
              }
@@ -3854,6 +3978,23 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                  auto* tmp = llvm::dyn_cast_or_null<llvm::AllocaInst>(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a)));
                  if (tmp && tmp->getAllocatedType() == expected)
                      a = ctx.ir_gen->wrap(ctx.builder.CreateLoad(expected, tmp, "struct_arg_val"));
+             }
+             // Ganzzahl-BREITE angleichen, wie coerceArgs() es fuer freie
+             // Funktionen tut.  Ohne das kommt ein Literal als i32 an einem
+             // i64-Parameter an, und die IR-Pruefung scheitert mit "Call
+             // parameter type does not match function signature" — der Aufruf
+             // sieht im Quelltext voellig richtig aus (gemessen 2026-10-13 an
+             // StepScheduler.claim(…, 30000, …); tests/test_int_width_method_arg.aiml).
+             if (expected && expected->isIntegerTy()) {
+                 llvm::Value* rawA = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(a));
+                 if (rawA && rawA->getType()->isIntegerTy() &&
+                     rawA->getType()->getIntegerBitWidth() != expected->getIntegerBitWidth()) {
+                     llvm::Value* fitted =
+                         (expected->getIntegerBitWidth() > rawA->getType()->getIntegerBitWidth())
+                             ? ctx.builder.CreateSExt(rawA, expected, "arg_sext")
+                             : ctx.builder.CreateTrunc(rawA, expected, "arg_trunc");
+                     a = ctx.ir_gen->wrap(fitted);
+                 }
              }
              // Hard type-mismatch guard (mirrors coerceArgs() for free functions):
              // a numeric parameter (i32/enum/bool/float) receiving a pointer value
@@ -3911,13 +4052,47 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
              // spec/61 §3.2 Part 2: a `producer` METHOD returning a fresh STRING used as a transient
              // sub-expression must be decref'd at statement end (see the free-function path). A
              // consuming decl/set/push/return removes it via consumeStringTemp first.
-             if (ctx.lifetimeDropsEnabled && ctx.stringProducerFns.count(methodName) > 0
+             //
+             // Gefragt wird die KLASSE DES EMPFAENGERS, nicht der blosse
+             // Methodenname: `stringProducerFns` ist flach nach Namen
+             // verschluesselt, und gleichnamige Methoden in verschiedenen
+             // Klassen sind der Normalfall (`render`, `init`, `run`, `size`).
+             // Vorher genuegte EINE string-liefernde `render`-Methode
+             // irgendwo in der Uebersetzungseinheit, damit ein VOID-Aufruf
+             // `screen.render` als String-Temporaere verfolgt wurde — und der
+             // Compiler stuerzte in createEntryAlloca ab (SIGSEGV, gemessen
+             // 2026-10-12; tests/test_same_method_name_two_classes.aiml).
+             bool producerHere = false;
+             if (sym && !sym->className.empty() && ctx.classes.count(sym->className)) {
+                 auto& recvClass = ctx.classes[sym->className];
+                 auto mit = recvClass.methods.find(methodName);
+                 if (mit != recvClass.methods.end())
+                     producerHere = (mit->second.returnTypeName == "string");
+                 else
+                     producerHere = ctx.stringProducerFns.count(methodName) > 0;
+             } else {
+                 producerHere = ctx.stringProducerFns.count(methodName) > 0;
+             }
+             // Zusaetzlich die Schranke am Wert selbst: ein void-Aufruf hat
+             // nichts zu verfolgen.  Eine Namensauflösung kann irren, ein
+             // Absturz darf daraus nicht werden.
+             if (ctx.lifetimeDropsEnabled && producerHere
+                 && !func->getReturnType()->isVoidTy()
+                 && raw->getType()->isPointerTy()
                  && !ctx.stmtTempStack.empty())
                  aimlTrackStringTemp(ctx, raw);
          }
          return callResult;
     }
 
+    // Folgemeldung unterdruecken, wenn der TYP der Variablen schon als
+    // unbekannt gemeldet wurde: sonst erzeugt ein einziger Typfehler eine
+    // Meldung je Methodenaufruf, und die eigentliche Ursache geht darin unter
+    // (gemessen: 5 Typfehler -> 8 Folgefehler).  spec/49.
+    if (Symbol* baseSym = resolveVariable(baseName)) {
+        if (ctx.unknownTypeNames.count(baseSym->typeName))
+            return ctx.ir_gen->getInt32(0);
+    }
     LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "Unknown method: " + methodName + " on variable " + baseName);
     return ctx.ir_gen->getInt32(0);
 }
@@ -4116,13 +4291,37 @@ namespace {
 static void dfsCollect(CompilerContext& ctx,
                        const std::string& name,
                        std::set<std::string>& visited,
-                       std::vector<std::string>& result) {
+                       std::vector<std::string>& result,
+                       std::set<std::string>* missing = nullptr,
+                       std::vector<std::string>* funcNames = nullptr) {
     if (!visited.insert(name).second) return;
 
     if (ctx.functions.count(name)) {
         auto& fi = ctx.functions[name];
-        for (auto& dep : fi.referencedTypes) dfsCollect(ctx, dep, visited, result);
+        for (auto& dep : fi.referencedTypes) dfsCollect(ctx, dep, visited, result, missing, funcNames);
+        // spec/29_2 §16: auch gerufenen Funktionen folgen — sonst ist das
+        // Bundle unvollstaendig und faellt erst beim Empfaenger auf.
+        // Kopie, weil dfsCollect ctx.functions veraendern kann.
+        std::set<std::string> callees = fi.referencedFuncs;
+        for (auto& dep : callees) dfsCollect(ctx, dep, visited, result, missing, funcNames);
+        // spec/29_2 §22: auch den benutzten GLOBALEN folgen.  Ohne das meldet
+        // der Empfaenger "Undefined variable", sobald eine mitgebuendelte
+        // Funktion eine globale Variable anfasst — gemessen mit einer
+        // Controller-Hilfsfunktion, die einen Zaehler fuehrt.
+        std::set<std::string> globals = fi.referencedGlobals;
+        for (const auto& gname : globals) {
+            if (!visited.insert("global:" + gname).second) continue;
+            auto git = ctx.globalSources.find(gname);
+            if (git != ctx.globalSources.end()) result.push_back(git->second);
+            else if (missing) missing->insert(gname);
+        }
+        if (funcNames) funcNames->push_back(name);
         if (!fi.sourceYaml.empty()) result.push_back(fi.sourceYaml);
+        // spec/29_2 §18: eine gerufene Funktion OHNE hinterlegte Quelle kann
+        // nicht mitgebuendelt werden — der Empfaenger bekaeme "Unknown
+        // function".  Hier ist der einzige Punkt, an dem das noch zur BAUZEIT
+        // sichtbar ist.
+        else if (missing) missing->insert(name);
     } else if (ctx.classes.count(name)) {
         auto& ci = ctx.classes[name];
         if (!ci.isBuiltin) {
@@ -4146,11 +4345,77 @@ static void dfsCollect(CompilerContext& ctx,
 // Transitively collect YAML source strings for rootName.
 // Dependencies come before the root in the result vector (post-order DFS).
 static std::vector<std::string> collectCodeChunks(CompilerContext& ctx,
-                                                   const std::string& rootName) {
+                                                   const std::string& rootName,
+                                                   std::set<std::string>* missing = nullptr,
+                                                   std::vector<std::string>* funcNames = nullptr) {
     std::set<std::string>    visited;
     std::vector<std::string> result;
-    dfsCollect(ctx, rootName, visited, result);
+    dfsCollect(ctx, rootName, visited, result, missing, funcNames);
     return result;
+}
+
+// spec/62 §10.2 / F62-102: die Reinheitspruefung.  Sie laeuft beim BUENDELN,
+// weil das die Stelle ist, an der der Compiler den Rumpf in der Hand hat —
+// `set_cache(CacheClass.pure)` steht erst zur Laufzeit fest (§13.5d).
+static void checkBundlePurity(CompilerContext& ctx, AIML::AST::CallExpr* call,
+                              const std::string& selector,
+                              const std::vector<std::string>& funcNames,
+                              bool assertPure) {
+    for (const auto& fname : funcNames) {
+        auto it = ctx.functions.find(fname);
+        if (it == ctx.functions.end()) continue;
+        for (const auto& use : it->second.referencedBuiltins) {
+            std::string what = use.ns + "." + use.fn;
+            std::string where = use.loc.empty() ? ctx.fmtLoc(call->sourceNode) : use.loc;
+            switch (aiml::classifyCall(use.ns, use.fn, use.firstArgIsLiteral, use.firstArgLiteral)) {
+                case aiml::PurityVerdict::Allowed:
+                    break;
+                case aiml::PurityVerdict::NeedsAssert:
+                    // F62-22: das eine erlaubte unreine Ding — aber nur mit der
+                    // Unterschrift.  Der Compiler kann nicht in ein Programm
+                    // sehen, also muss ein Mensch dafuer einstehen.
+                    if (!assertPure)
+                        LOG_ERROR(where + "sys.bundle('" + selector + "', pure: true): '" +
+                                  what + "' in einem reinen Rumpf verlangt assert_pure: true " +
+                                  "(spec/62 F62-22) — niemand kann in ein Programm sehen.");
+                    break;
+                case aiml::PurityVerdict::IoConstOutside:
+                    // F62-19: ein konstanter absoluter Pfad macht das Ergebnis
+                    // wirtsabhaengig, und das ist statisch entscheidbar.
+                    LOG_ERROR(where + "sys.bundle('" + selector + "', pure: true): '" +
+                              what + "' auf den festen Pfad '" + use.firstArgLiteral +
+                              "' ausserhalb des Arbeitsbereichs (spec/62 F62-19).");
+                    break;
+                case aiml::PurityVerdict::IoComputed:
+                    // F62-20: NICHT entscheidbar — darum Warnung.  Etwas
+                    // anderes zu behaupten waere unehrlich.
+                    LOG_WARNING(where + "sys.bundle('" + selector + "', pure: true): '" +
+                                what + "' mit berechnetem Pfad — statisch nicht entscheidbar, " +
+                                "ob er im Arbeitsbereich liegt (spec/62 F62-20).");
+                    break;
+                case aiml::PurityVerdict::Impure:
+                    LOG_ERROR(where + "sys.bundle('" + selector + "', pure: true): '" +
+                              what + "' ist unrein (spec/62 F62-18) — ein unklassifiziertes " +
+                              "Builtin gilt ebenfalls als unrein.");
+                    break;
+            }
+        }
+    }
+}
+
+// spec/29_2 §18: Vollstaendigkeitspruefung.  Ein Bundle, dem eine gerufene
+// Funktion fehlt, faellt sonst erst beim EMPFAENGER auf ("Unknown function"),
+// nachdem es schon ueber die Leitung ging.  Hier ist der letzte Punkt, an dem
+// der Autor es erfaehrt — und `--check` sammelt die Warnung ein (spec/49).
+static void warnIfIncomplete(CompilerContext& ctx, AIML::AST::CallExpr* call,
+                             const std::string& selector,
+                             const std::set<std::string>& missing) {
+    if (missing.empty()) return;
+    std::string names;
+    for (const auto& m : missing) { names += " "; names += m; }
+    LOG_WARNING(ctx.fmtLoc(call->sourceNode) + "sys.bundle('" + selector +
+                "'): unvollstaendig — gerufene Funktion(en) ohne hinterlegte Quelle:" +
+                names + ".  Der Empfaenger meldet dafuer 'Unknown function'.");
 }
 
 // FNV-1a 32-bit hash, returned as 8-char hex string.
@@ -4179,7 +4444,7 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
 
     // Helper: malloc a new empty GenericList, init it, return raw i8*
     llvm::StructType* listTy  = ListImpl::getListStructType(ctx);
-    llvm::DataLayout  dl(&ctx.module);
+    llvm::DataLayout  dl(&ctx.module());
     uint64_t          listBytes = dl.getTypeAllocSize(listTy);
     llvm::Function*   mallocFn  = ctx.getFunction("malloc", i8p, {sz});
 
@@ -4194,7 +4459,35 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
     // ── Case 1: string literal → function/class bundle ─────────────────────
     if (auto* lit = dynamic_cast<LiteralExpr*>(call->args[0].get())) {
         std::string selector = lit->value;
-        std::vector<std::string> chunks = collectCodeChunks(ctx, selector);
+        std::set<std::string> missing;
+        std::vector<std::string> bundledFuncs;
+        std::vector<std::string> chunks = collectCodeChunks(ctx, selector, &missing, &bundledFuncs);
+        warnIfIncomplete(ctx, call, selector, missing);
+
+        // spec/62 §13.5d: `pure: true` loest die Pruefungen aus §10.2 aus.
+        // Ohne die Angabe prueft niemand etwas — dann ist `cache: pure` eine
+        // Behauptung ohne Deckung (F62-103 macht daraus eine Laufzeitwarnung).
+        {
+            bool wantPure = false, assertPure = false;
+            if (call->args.size() >= 2) {
+                if (auto* opts = dynamic_cast<DictLiteralExpr*>(call->args[1].get())) {
+                    auto pit = opts->entries.find("pure");
+                    if (pit != opts->entries.end() && pit->second == "true") wantPure = true;
+                    auto ait = opts->entries.find("assert_pure");
+                    if (ait != opts->entries.end() && ait->second == "true") assertPure = true;
+                }
+            }
+            if (wantPure) {
+                checkBundlePurity(ctx, call, selector, bundledFuncs, assertPure);
+                // F62-103: vermerken, DASS geprueft wurde — die Laufzeit warnt
+                // sonst bei `cache: pure` ueber eine unbewiesene Behauptung.
+                llvm::Value* pureId = ctx.builder.CreateGlobalStringPtr(fnv1a_hex(
+                    [&]{ std::string all; for (auto& c : chunks) all += c; return all; }()), "b_pid");
+                ctx.builder.CreateCall(ctx.getFunction("aiml_code_mark_pure",
+                    llvm::Type::getVoidTy(ctx.context),
+                    {ctx.builder.getInt8Ty()->getPointerTo()}), {pureId});
+            }
+        }
 
         if (chunks.empty()) {
             LOG_ERROR("sys.bundle: no YAML source found for '" + selector + "'");
@@ -4242,7 +4535,9 @@ IRValue* Compiler::visitSysBundleCall(CallExpr* call) {
         }
         std::string typeName = sym->typeName;
 
-        std::vector<std::string> chunks = collectCodeChunks(ctx, typeName);
+        std::set<std::string> missing;
+        std::vector<std::string> chunks = collectCodeChunks(ctx, typeName, &missing);
+        warnIfIncomplete(ctx, call, typeName, missing);
         if (chunks.empty()) {
             LOG_ERROR("sys.bundle: no YAML source found for type '" + typeName + "'");
             return ctx.ir_gen->getInt32(0);
@@ -4376,7 +4671,7 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
     if (numFields == 0) return ctx.ir_gen->getInt32(0);
 
     // Compute byte offsets via DataLayout
-    const auto& dl = ctx.module.getDataLayout();
+    const auto& dl = ctx.module().getDataLayout();
     const auto* sl = dl.getStructLayout(ci.type);
 
     // Determine type codes: 0=i32, 1=f32, 2=string(i8*), 3=i64
@@ -4423,8 +4718,8 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
     Value* structAlloca = static_cast<Value*>(ctx.ir_gen->unwrap(sym->ir_alloca_inst));
 
     // Load __argc and __argv globals
-    GlobalVariable* argcVar = ctx.module.getGlobalVariable("__argc", true);
-    GlobalVariable* argvVar = ctx.module.getGlobalVariable("__argv", true);
+    GlobalVariable* argcVar = ctx.module().getGlobalVariable("__argc", true);
+    GlobalVariable* argvVar = ctx.module().getGlobalVariable("__argv", true);
     if (!argcVar || !argvVar) {
         LOG_ERROR("sys.arg_dump: __argc/__argv globals not found (is this a JIT context?)");
         return ctx.ir_gen->getInt32(0);
@@ -4439,14 +4734,14 @@ IRValue* Compiler::visitSysArgDumpCall(CallExpr* call) {
     Value* structName = ctx.builder.CreateGlobalStringPtr(typeName);
 
     // Declare aiml_arg_dump_impl if not yet in module
-    Function* implFn = ctx.module.getFunction("aiml_arg_dump_impl");
+    Function* implFn = ctx.module().getFunction("aiml_arg_dump_impl");
     if (!implFn) {
         FunctionType* ft = FunctionType::get(
             ctx.builder.getVoidTy(),
             {i8p, i8pp, i32Ty->getPointerTo(), i32Ty->getPointerTo(),
              i32Ty, i8p, i32Ty, i8pp},
             false);
-        implFn = Function::Create(ft, Function::ExternalLinkage, "aiml_arg_dump_impl", ctx.module);
+        implFn = Function::Create(ft, Function::ExternalLinkage, "aiml_arg_dump_impl", ctx.module());
     }
 
     // Cast struct alloca to i8*
@@ -4489,7 +4784,7 @@ IRValue* Compiler::visitDbRunSystem(CallExpr* call) {
         return ctx.ir_gen->getInt32(0);
     }
 
-    llvm::Function* sysFn = ctx.module.getFunction(fnName);
+    llvm::Function* sysFn = ctx.module().getFunction(fnName);
     if (!sysFn) {
         LOG_ERROR("db.run_system: function '" + fnName + "' not found in module");
         return ctx.ir_gen->getInt32(0);
@@ -4607,6 +4902,38 @@ IRValue* Compiler::visitDbRunSystem(CallExpr* call) {
     // rs_exit: continue after loop
     ctx.builder.SetInsertPoint(exitBB);
     return nullptr;
+}
+
+// ── sys.code_from (spec/29_2 §13) ─────────────────────────────────────────────
+// Gegenstueck zu pkg.toString(): baut aus aiml-Quelltext wieder ein Code-Objekt,
+// damit ein Bundle ueber eine Verbindung reisen kann.  Optionen spiegeln
+// sys.bundle absichtlich — `context: true` ist das einzige, was in einem
+// AOT-Binary laeuft (spec/29_2 §11).
+IRValue* Compiler::visitSysCodeFromCall(CallExpr* call) {
+    if (call->args.empty()) {
+        LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
+                  "sys.code_from: requires 1 argument (aiml source string)");
+        return ctx.ir_gen->getInt32(0);
+    }
+    llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+    llvm::Type* i8  = ctx.builder.getInt8Ty();
+    llvm::Value* src = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(visitExpression(call->args[0].get())));
+    std::string startName;
+    int8_t newCtxVal = 0;
+    if (call->args.size() >= 2) {
+        if (auto* dict = dynamic_cast<DictLiteralExpr*>(call->args[1].get())) {
+            auto itc = dict->entries.find("context");
+            if (itc != dict->entries.end() && itc->second == "true") newCtxVal = 1;
+            auto its = dict->entries.find("start");
+            if (its != dict->entries.end()) startName = its->second;
+        }
+    }
+    llvm::Value* startV = static_cast<llvm::Value*>(
+        ctx.ir_gen->unwrap(ctx.ir_gen->createGlobalStringPtr(startName)));
+    if (startV->getType() != i8p) startV = ctx.builder.CreateBitCast(startV, i8p);
+    llvm::Function* fn = ctx.getFunction("aiml_code_from_string", i8p, {i8p, i8p, i8});
+    llvm::Value* codePtr = ctx.builder.CreateCall(fn, {src, startV, ctx.builder.getInt8(newCtxVal)}, "code_from");
+    return ctx.ir_gen->wrap(codePtr);
 }
 
 } // namespace AST

@@ -249,6 +249,54 @@ extern "C" int aiml_io_rename(const char* src, const char* dst) {
     try { fs::rename(src, dst); return 0; } catch (...) { return -1; }
 }
 
+// spec/42: Ausführbar-Bit setzen/entfernen.  Für inhaltsadressierte Bäume ist es
+// das EINZIGE Modus-Bit, das im Hash steckt (doc/spec/92 §92.2): es ändert das
+// Verhalten, während uid/gid/Zeitstempel Builds nur unreproduzierbar machen.
+extern "C" int aiml_io_set_exec(const char* p, int on) {
+    if (!p || !*p) return -1;
+    try {
+        const fs::perms bits = fs::perms::owner_exec | fs::perms::group_exec
+                             | fs::perms::others_exec;
+        fs::permissions(p, bits,
+                        on ? fs::perm_options::add : fs::perm_options::remove);
+        return 0;
+    } catch (...) { return -1; }
+}
+
+// spec/42: symbolischer Link.  `target` darf relativ sein und muss (noch) nicht
+// existieren — genau das braucht die Materialisierung eines Baums, dessen
+// Link-Ziel erst später entsteht.
+extern "C" int aiml_io_symlink(const char* target, const char* link_path) {
+    if (!target || !link_path || !*target || !*link_path) return -1;
+    try { fs::create_symlink(target, link_path); return 0; } catch (...) { return -1; }
+}
+
+// spec/42: ist der Pfad SELBST ein symbolischer Link (ohne ihm zu folgen)?
+extern "C" int aiml_io_is_symlink(const char* p) {
+    if (!p || !*p) return 0;
+    try { return fs::is_symlink(fs::symlink_status(p)) ? 1 : 0; } catch (...) { return 0; }
+}
+
+// spec/42 + spec/61 §7: Ziel eines symbolischen Links als owned rc-string;
+// "" wenn der Pfad keiner ist oder nicht gelesen werden kann.
+extern "C" char* aiml_io_read_link(const char* p) {
+    if (!p || !*p) return aiml_str_dup("");
+    try {
+        if (!fs::is_symlink(fs::symlink_status(p))) return aiml_str_dup("");
+        return aiml_str_dup(fs::read_symlink(p).string().c_str());
+    } catch (...) { return aiml_str_dup(""); }
+}
+
+// spec/42: harter Link — zwei Namen auf denselben Inhalt, ohne zu kopieren.
+// Grundlage für inhaltsadressierte Ablagen: eine Datei in den Store aufnehmen
+// und einen Baum daraus materialisieren kostet so keinen zweiten Datenblock.
+// -1 auch bei Dateisystem-Grenze (dann muss der Aufrufer kopieren) oder wenn
+// das Ziel existiert — der Aufrufer entscheidet, ob das ein Fehler ist.
+extern "C" int aiml_io_link(const char* src, const char* dst) {
+    if (!src || !dst || !*src || !*dst) return -1;
+    try { fs::create_hard_link(src, dst); return 0; } catch (...) { return -1; }
+}
+
 // spec/42 + spec/61 §7: owned rc string; "" when the file cannot be read.
 extern "C" char* aiml_io_read_file(const char* p) {
     if (!p || p[0] == '\0') return aiml_str_dup("");

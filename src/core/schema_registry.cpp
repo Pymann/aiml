@@ -8,7 +8,7 @@
 namespace AIML {
 
 void emitSchemaRegistry(CompilerContext& ctx) {
-    auto& M  = ctx.module;
+    auto& M  = ctx.module();
     auto& C  = ctx.context;
     auto* i8p = llvm::PointerType::get(C, 0);  // opaque pointer (LLVM 18+)
     auto* i32 = llvm::Type::getInt32Ty(C);

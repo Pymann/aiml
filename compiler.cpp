@@ -1,5 +1,6 @@
 #include "compiler.h"
 #include "src/core/clearance_flow.h"
+#include "src/core/pipeline_expand.h"
 #include "exec_impl.h"
 #include "src/core/builtin_registry.h"
 #include "src/core/asset_scanner.h"
@@ -1008,12 +1009,12 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                                 for (char c : path) importSuffix += (std::isalnum(c) ? c : '_');
                                 symName = "__lib_" + importSuffix + "_" + d->varName;
                             }
-                            llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(symName);
+                            llvm::GlobalVariable* gv = ctx.module().getGlobalVariable(symName);
                             if (gv && gv->getValueType() != llvmTy) {
                                 // A prior reference created it with the wrong (inline struct) type.
                                 gv->setName(symName + ".mismatch");
                                 auto* fixed = new llvm::GlobalVariable(
-                                    ctx.module, llvmTy, false,
+                                    ctx.module(), llvmTy, false,
                                     llvm::GlobalValue::ExternalLinkage, nullptr, symName);
                                 gv->replaceAllUsesWith(
                                     llvm::ConstantExpr::getBitCast(fixed, gv->getType()));
@@ -1022,7 +1023,7 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
                             }
                             if (!gv) {
                                 gv = new llvm::GlobalVariable(
-                                    ctx.module, llvmTy, false,
+                                    ctx.module(), llvmTy, false,
                                     llvm::GlobalValue::ExternalLinkage,
                                     nullptr,
                                     symName);
@@ -1057,21 +1058,53 @@ void AIMLCompiler::compile(const std::string& filename, const std::string& outpu
 
     // 4. Parse YAML to AST & Compile (Two-Pass)
     AIML::AST::Builder astBuilder;
+    // spec/62 §13.5f: eine deklarierte Pipeline wird VOR dem Uebersetzen in
+    // die zusammengesetzte Form umgeschrieben.  Nur Dateien, die eine
+    // enthalten, laufen durch die Umschreibung — jede andere nimmt
+    // unveraendert den gewohnten Weg.
+    std::string expandedSource;
+    bool usedExpansion = false;
     try {
-        std::ifstream fin(filename);
-        if (!fin.is_open()) {
-             LOG_ERROR(filename + ": Could not open file");
-             return;
+        std::ifstream probe(filename);
+        if (probe.is_open()) {
+            std::stringstream raw;
+            raw << probe.rdbuf();
+            const std::string rawText = raw.str();
+            if (aiml::sourceHasPipelineDecl(rawText)) {
+                if (aiml::expandPipelineDeclarations(rawText, filename, expandedSource)) {
+                    usedExpansion = true;
+                } else {
+                    LOG_ERROR(filename + ": pipeline-Deklaration konnte nicht umgeschrieben werden");
+                    return;
+                }
+            }
         }
-        YAML::Parser parser(fin);
-        parser.HandleNextDocument(astBuilder);
+    } catch (const std::exception& e) {
+        LOG_ERROR(filename + std::string(": pipeline-Umschreibung: ") + e.what());
+        return;
+    }
+    try {
+        if (usedExpansion) {
+            std::istringstream ein(expandedSource);
+            YAML::Parser parser(ein);
+            parser.HandleNextDocument(astBuilder);
+        } else {
+            std::ifstream fin(filename);
+            if (!fin.is_open()) {
+                 LOG_ERROR(filename + ": Could not open file");
+                 return;
+            }
+            YAML::Parser parser(fin);
+            parser.HandleNextDocument(astBuilder);
+        }
 
         auto programAST = astBuilder.takeProgram();
         if (programAST) {
             // Assign sourceNode to each top-level declaration for sys.bundle.
             // Load the file as a YAML tree and zip entries with AST nodes.
             try {
-                YAML::Node rawSeq = YAML::LoadFile(filename);
+                YAML::Node rawSeq = usedExpansion ? YAML::Load(expandedSource)
+                                                  : YAML::LoadFile(filename);
                 if (rawSeq.IsSequence()) {
                     size_t n = std::min(rawSeq.size(), programAST->declarations.size());
                     for (size_t i = 0; i < n; ++i)
@@ -1325,9 +1358,76 @@ void AIMLCompiler::compileFromString(const std::string& yaml_source) {
 }
 
 int AIMLCompiler::compileAndRun(const std::string& yaml_source) {
+    // Fehlerstand VOR dem Uebersetzen merken: der Aufrufer (z.B. ein Agent, der
+    // schon Bundles ausgefuehrt hat) kann bereits Fehler gezaehlt haben; uns
+    // interessieren nur die aus DIESEM Lauf.
+    int errsBefore = Logger::instance().errorCount();
     compileFromString(yaml_source);
     generateEntryPoint();
+    // spec/29_2 §17: ohne diese Pruefung meldete ein Bundle mit
+    // Uebersetzungsfehlern (z.B. "Unknown function") trotzdem rc=0 — der
+    // Empfaenger haette einen Schritt als erfolgreich gemeldet, der nie lief.
+    if (Logger::instance().errorCount() > errsBefore) {
+        LOG_ERROR("compileAndRun: Bundle hat Uebersetzungsfehler — wird nicht ausgefuehrt");
+        return -3;
+    }
     return jitRun();
+}
+
+// ── compileLibraryAndRegister (spec/29_2 §15) ────────────────────────────────
+// Eine Bibliothek EINMAL uebersetzen und ihre Funktionen prozessweit bekannt
+// machen.  Spaetere Bundles brauchen dann nur noch die DEKLARATIONEN (siehe
+// compileDeclarationsOnly) — ihre Aufrufe werden zu externen Symbolen, die
+// MCJIT ueber DynamicLibrary aufloest.  Das ist der Unterschied zwischen
+// "Bibliothek je Schritt mituebersetzen" und "einmal uebersetzen, oft rufen".
+int AIMLCompiler::compileLibraryAndRegister(const std::string& yaml_source) {
+    compileFromString(yaml_source);
+
+    llvm::sys::DynamicLibrary::LoadLibraryPermanently(nullptr);
+    std::string errStr;
+    module_->setTargetTriple(llvm::sys::getDefaultTargetTriple());
+
+    llvm::EngineBuilder eb(std::move(module_));
+    eb.setErrorStr(&errStr);
+    eb.setEngineKind(llvm::EngineKind::JIT);
+    llvm::ExecutionEngine* eng = eb.create();
+    if (!eng) {
+        LOG_ERROR("compileLibraryAndRegister: engine creation failed: " + errStr);
+        return -1;
+    }
+    eng->finalizeObject();
+
+    CompilerContext* c = static_cast<CompilerContext*>(compiler_ctx_);
+    int registered = 0;
+    std::string missed;
+    if (c) {
+        for (const auto& kv : c->functions) {
+            if (kv.first.empty()) continue;
+            uint64_t addr = eng->getFunctionAddress(kv.first);
+            if (!addr) { missed += " " + kv.first; continue; }
+            llvm::sys::DynamicLibrary::AddSymbol(kv.first, (void*)(intptr_t)addr);
+            ++registered;
+        }
+    }
+    if (!missed.empty())
+        LOG_WARNING("compileLibraryAndRegister: ohne Adresse:" + missed);
+    // Engine festhalten: sonst wird der Code freigegeben und die eben
+    // registrierten Adressen zeigen ins Leere.
+    engine_ = eng;
+    LOG_WARNING("compileLibraryAndRegister: " + std::to_string(registered) + " von " +
+                std::to_string(c ? c->functions.size() : 0) + " Eintraegen registriert");
+    return registered;
+}
+
+// ── compileDeclarationsOnly (spec/29_2 §15) ──────────────────────────────────
+// Signaturen uebernehmen, Rumpfe NICHT erzeugen.  Billig, weil die teure
+// Codeerzeugung entfaellt; die Aufrufe landen als externe Symbole im Modul.
+void AIMLCompiler::compileDeclarationsOnly(const std::string& yaml_source) {
+    CompilerContext* c = static_cast<CompilerContext*>(compiler_ctx_);
+    bool prev = c ? c->headerOnlyMode : false;
+    if (c) c->headerOnlyMode = true;
+    compileFromString(yaml_source);
+    if (c) c->headerOnlyMode = prev;
 }
 
 uint64_t AIMLCompiler::compileChunkAndGetAddress(const std::string& yaml_source,
@@ -1605,6 +1705,43 @@ void AIMLCompiler::setAssetRoots(const std::string& commaList) {
 }
 
 void AIMLCompiler::saveModule(const std::string& outputFilename) {
+    // IR wird VOR dem Schreiben geprueft — genau wie im JIT-Pfad und in
+    // compileToObject.  Vorher ging dieser Pfad ungeprueft auf die Platte, und
+    // das ist der Pfad, den exodus fuer .ll-Ausgabe benutzt: ein Aufruf mit
+    // falscher Argumentzahl landete so im Build, ohne dass jemand etwas sagte.
+    //
+    // Gemessen 2026-10-14 (cosmos): eine Methode bekam einen Parameter, drei
+    // Aufrufstellen blieben unveraendert — der Build war GRUEN, und im
+    // erzeugten .ll standen beide Formen nebeneinander:
+    //   call void @AgentsScreen_apply_output(ptr %this_ptr)
+    //   call void @AgentsScreen_apply_output(ptr %this_ptr22, ptr %agents_val)
+    // Dieselbe Quelle als JIT-Lauf wurde korrekt abgelehnt.  Ein Pfad, der
+    // weniger prueft als der andere, ist schlimmer als keiner: er erzeugt
+    // Vertrauen in ein Binary, das niemand geprueft hat.
+    {
+        bool anyFail = false;
+        for (auto& F : *module_) {
+            std::string errMsg;
+            llvm::raw_string_ostream errStream(errMsg);
+            if (llvm::verifyFunction(F, &errStream)) {
+                LOG_ERROR("Function '" + F.getName().str() + "' verification FAILED before saveModule: " + errMsg);
+                anyFail = true;
+            }
+        }
+        std::string modErr;
+        llvm::raw_string_ostream modStream(modErr);
+        if (llvm::verifyModule(*module_, &modStream)) {
+            LOG_ERROR("Module verification FAILED before saveModule: " + modErr);
+            anyFail = true;
+        }
+        if (anyFail) {
+            // NICHT schreiben: eine fehlerhafte .ll wuerde sonst weiterverarbeitet
+            // oder — schlimmer — eine alte, gueltige Datei stehen lassen und den
+            // Build gruen erscheinen lassen.
+            LOG_ERROR("saveModule: refusing to write invalid IR to " + outputFilename);
+            return;
+        }
+    }
     std::error_code EC;
     llvm::raw_fd_ostream dest(outputFilename, EC, llvm::sys::fs::OF_None);
     if (EC) {
@@ -1946,6 +2083,7 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_fd",              (void*)(intptr_t)aiml_ws_fd);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_poll",            (void*)(intptr_t)aiml_ws_poll);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_poll_listener",   (void*)(intptr_t)aiml_ws_poll_listener);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_ws_set_timeout",     (void*)(intptr_t)aiml_ws_set_timeout);
 
     // db namespace (AionDB)
     llvm::sys::DynamicLibrary::AddSymbol("aiml_db_store_open",          (void*)(intptr_t)aiml_db_store_open);
@@ -2393,6 +2531,10 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_create_buffer",                  (void*)(intptr_t)aiml_gl_create_buffer);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_create_buffer_dynamic",          (void*)(intptr_t)aiml_gl_create_buffer_dynamic);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_create_index_buffer",            (void*)(intptr_t)aiml_gl_create_index_buffer);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_buffer_reserve_bytes", (void*)(intptr_t)aiml_gl_buffer_reserve_bytes);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_buffer_update_range", (void*)(intptr_t)aiml_gl_buffer_update_range);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_vao_attrib_divisor", (void*)(intptr_t)aiml_gl_vao_attrib_divisor);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_draw_elements_instanced", (void*)(intptr_t)aiml_gl_draw_elements_instanced);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_buffer_update",                  (void*)(intptr_t)aiml_gl_buffer_update);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_buffer_delete",                  (void*)(intptr_t)aiml_gl_buffer_delete);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_create_vao",                     (void*)(intptr_t)aiml_gl_create_vao);
@@ -2435,11 +2577,11 @@ int AIMLCompiler::jitRun() {
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_mesh_draw_count",                (void*)(intptr_t)aiml_gl_mesh_draw_count);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_mesh_index_count",               (void*)(intptr_t)aiml_gl_mesh_index_count);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_mesh_delete",                    (void*)(intptr_t)aiml_gl_mesh_delete);
+    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_mesh_set_attribute",             (void*)(intptr_t)aiml_gl_mesh_set_attribute);
     // gltf prim.to_gl_mesh
     llvm::sys::DynamicLibrary::AddSymbol("aiml_gltf_prim_to_gl_mesh",              (void*)(intptr_t)aiml_gltf_prim_to_gl_mesh);
     // engine namespace
     llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_create_window",              (void*)(intptr_t)aiml_engine_create_window);
-    llvm::sys::DynamicLibrary::AddSymbol("aiml_gl_mesh_set_attribute",             (void*)(intptr_t)aiml_gl_mesh_set_attribute);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_create_window_fullscreen",   (void*)(intptr_t)aiml_engine_create_window_fullscreen);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_destroy_window",             (void*)(intptr_t)aiml_engine_destroy_window);
     llvm::sys::DynamicLibrary::AddSymbol("aiml_engine_set_title",                  (void*)(intptr_t)aiml_engine_set_title);

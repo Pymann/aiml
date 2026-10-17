@@ -104,7 +104,7 @@ namespace AIML {
             for (auto* t : argTys) rawArgTys.push_back(unwrapLocal(t));
             
             llvm::FunctionType* funcType = llvm::FunctionType::get(unwrapLocal(retTy), rawArgTys, false);
-            llvm::Function* func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, name, ctx.module);
+            llvm::Function* func = llvm::Function::Create(funcType, llvm::Function::ExternalLinkage, name, ctx.module());
             return wrapLocal(func);
         }
 
@@ -120,7 +120,7 @@ namespace AIML {
         }
 
         IRValue* createCall(const std::string& funcName, const std::vector<IRValue*>& args, const std::string& name) override {
-            llvm::Function* func = ctx.module.getFunction(funcName);
+            llvm::Function* func = ctx.module().getFunction(funcName);
             if (!func) return nullptr;
             std::vector<llvm::Value*> rawArgs;
             for (auto* a : args) rawArgs.push_back(unwrapLocal(a));
@@ -136,7 +136,7 @@ namespace AIML {
         }
 
         IRValue* createInvoke(const std::string& funcName, IRBlock* normalBlock, IRBlock* unwindBlock, const std::vector<IRValue*>& args, const std::string& name) override {
-            llvm::Function* func = ctx.module.getFunction(funcName);
+            llvm::Function* func = ctx.module().getFunction(funcName);
             if (!func) return nullptr;
             std::vector<llvm::Value*> rawArgs;
             for (auto* a : args) rawArgs.push_back(unwrapLocal(a));

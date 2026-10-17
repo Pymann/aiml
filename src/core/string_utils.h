@@ -15,7 +15,7 @@ namespace StringUtils {
         // size_t-equivalent: i64 on x86_64, i32 on wasm32. Must match target libc.
         llvm::Type* sz = ctx.getSizeType();
 
-        llvm::Function* impl = ctx.module.getFunction("__aiml_str_concat");
+        llvm::Function* impl = ctx.module().getFunction("__aiml_str_concat");
         if (!impl) {
             llvm::Function* strlenFunc    = ctx.getFunction("strlen", sz, {i8Ptr});
             llvm::Function* strAllocFunc  = ctx.getFunction("aiml_str_alloc", i8Ptr, {sz});
@@ -24,7 +24,7 @@ namespace StringUtils {
 
             llvm::IRBuilder<>::InsertPoint savedIP = ctx.builder.saveIP();
             llvm::FunctionType* ft = llvm::FunctionType::get(i8Ptr, {i8Ptr, i8Ptr}, false);
-            impl = llvm::Function::Create(ft, llvm::Function::InternalLinkage, "__aiml_str_concat", ctx.module);
+            impl = llvm::Function::Create(ft, llvm::Function::InternalLinkage, "__aiml_str_concat", ctx.module());
             impl->addFnAttr(llvm::Attribute::NoInline);
             llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx.context, "entry", impl);
             ctx.builder.SetInsertPoint(entry);
@@ -54,14 +54,14 @@ namespace StringUtils {
         llvm::PointerType* i8Ptr = ctx.builder.getInt8Ty()->getPointerTo();
         llvm::Type* sz = ctx.getSizeType();
 
-        llvm::Function* impl = ctx.module.getFunction("__aiml_int_to_string");
+        llvm::Function* impl = ctx.module().getFunction("__aiml_int_to_string");
         if (!impl) {
             llvm::Function* strAllocFunc = ctx.getFunction("aiml_str_alloc", i8Ptr, {sz});
             llvm::Function* sprintfFunc  = ctx.getFunction("sprintf", ctx.builder.getInt32Ty(), {i8Ptr, i8Ptr}, true);
 
             llvm::IRBuilder<>::InsertPoint savedIP = ctx.builder.saveIP();
             llvm::FunctionType* ft = llvm::FunctionType::get(i8Ptr, {ctx.builder.getInt32Ty()}, false);
-            impl = llvm::Function::Create(ft, llvm::Function::InternalLinkage, "__aiml_int_to_string", ctx.module);
+            impl = llvm::Function::Create(ft, llvm::Function::InternalLinkage, "__aiml_int_to_string", ctx.module());
             impl->addFnAttr(llvm::Attribute::NoInline);
             llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx.context, "entry", impl);
             ctx.builder.SetInsertPoint(entry);
@@ -82,14 +82,14 @@ namespace StringUtils {
         llvm::Type* i64 = ctx.builder.getInt64Ty();  // function arg type — actual i64 value
         llvm::Type* sz  = ctx.getSizeType();           // size_t for malloc
 
-        llvm::Function* impl = ctx.module.getFunction("__aiml_int64_to_string");
+        llvm::Function* impl = ctx.module().getFunction("__aiml_int64_to_string");
         if (!impl) {
             llvm::Function* strAllocFunc = ctx.getFunction("aiml_str_alloc", i8Ptr, {sz});
             llvm::Function* sprintfFunc  = ctx.getFunction("sprintf", ctx.builder.getInt32Ty(), {i8Ptr, i8Ptr}, true);
 
             llvm::IRBuilder<>::InsertPoint savedIP = ctx.builder.saveIP();
             llvm::FunctionType* ft = llvm::FunctionType::get(i8Ptr, {i64}, false);
-            impl = llvm::Function::Create(ft, llvm::Function::InternalLinkage, "__aiml_int64_to_string", ctx.module);
+            impl = llvm::Function::Create(ft, llvm::Function::InternalLinkage, "__aiml_int64_to_string", ctx.module());
             impl->addFnAttr(llvm::Attribute::NoInline);
             llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx.context, "entry", impl);
             ctx.builder.SetInsertPoint(entry);
@@ -110,13 +110,13 @@ namespace StringUtils {
         llvm::Type* sz  = ctx.getSizeType();
         llvm::Type*        f32  = ctx.builder.getFloatTy();
 
-        llvm::Function* impl = ctx.module.getFunction("__aiml_f32_to_string");
+        llvm::Function* impl = ctx.module().getFunction("__aiml_f32_to_string");
         if (!impl) {
             llvm::Function* strAllocFn = ctx.getFunction("aiml_str_alloc", i8p, {sz});
             llvm::Function* sprintfFn  = ctx.getFunction("sprintf", ctx.builder.getInt32Ty(), {i8p, i8p}, true);
             llvm::IRBuilder<>::InsertPoint savedIP = ctx.builder.saveIP();
             llvm::FunctionType* ft = llvm::FunctionType::get(i8p, {f32}, false);
-            impl = llvm::Function::Create(ft, llvm::Function::InternalLinkage, "__aiml_f32_to_string", ctx.module);
+            impl = llvm::Function::Create(ft, llvm::Function::InternalLinkage, "__aiml_f32_to_string", ctx.module());
             impl->addFnAttr(llvm::Attribute::NoInline);
             llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx.context, "entry", impl);
             ctx.builder.SetInsertPoint(entry);
@@ -138,13 +138,13 @@ namespace StringUtils {
         llvm::Type* sz  = ctx.getSizeType();
         llvm::Type*        f64 = ctx.builder.getDoubleTy();
 
-        llvm::Function* impl = ctx.module.getFunction("__aiml_f64_to_string");
+        llvm::Function* impl = ctx.module().getFunction("__aiml_f64_to_string");
         if (!impl) {
             llvm::Function* strAllocFn = ctx.getFunction("aiml_str_alloc", i8p, {sz});
             llvm::Function* sprintfFn  = ctx.getFunction("sprintf", ctx.builder.getInt32Ty(), {i8p, i8p}, true);
             llvm::IRBuilder<>::InsertPoint savedIP = ctx.builder.saveIP();
             llvm::FunctionType* ft = llvm::FunctionType::get(i8p, {f64}, false);
-            impl = llvm::Function::Create(ft, llvm::Function::InternalLinkage, "__aiml_f64_to_string", ctx.module);
+            impl = llvm::Function::Create(ft, llvm::Function::InternalLinkage, "__aiml_f64_to_string", ctx.module());
             impl->addFnAttr(llvm::Attribute::NoInline);
             llvm::BasicBlock* entry = llvm::BasicBlock::Create(ctx.context, "entry", impl);
             ctx.builder.SetInsertPoint(entry);

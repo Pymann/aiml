@@ -62,7 +62,7 @@ namespace BufferImpl {
         llvm::Value* writeIdx = ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), writeIdxPtr);
         
         // Calculate Size of Type
-        const llvm::DataLayout& dl = ctx.module.getDataLayout();
+        const llvm::DataLayout& dl = ctx.module().getDataLayout();
         uint64_t typeSize = dl.getTypeAllocSize(type);
         llvm::Value* typeSizeVal = ctx.builder.getInt32(typeSize);
         
@@ -138,7 +138,7 @@ namespace BufferImpl {
         }
         
         // Update Read Index
-        const llvm::DataLayout& dl = ctx.module.getDataLayout();
+        const llvm::DataLayout& dl = ctx.module().getDataLayout();
         uint64_t typeSize = dl.getTypeAllocSize(type);
         llvm::Value* newReadIdx = ctx.builder.CreateAdd(readIdx, ctx.builder.getInt32(typeSize));
         ctx.builder.CreateStore(newReadIdx, readIdxPtr);

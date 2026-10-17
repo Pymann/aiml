@@ -58,7 +58,7 @@ public:
         }
         
         // Declare runtime function
-        llvm::Function* runtimeFunc = ctx.module.getFunction("sys_exe_runtime");
+        llvm::Function* runtimeFunc = ctx.module().getFunction("sys_exe_runtime");
         if (!runtimeFunc) {
             std::vector<llvm::Type*> runArgs = { 
                 ctx.builder.getInt8Ty()->getPointerTo(), // list
@@ -69,7 +69,7 @@ public:
                 ctx.builder.getInt1Ty()  // capture
             };
             llvm::FunctionType* runType = llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), runArgs, false);
-            runtimeFunc = llvm::Function::Create(runType, llvm::Function::ExternalLinkage, "sys_exe_runtime", ctx.module);
+            runtimeFunc = llvm::Function::Create(runType, llvm::Function::ExternalLinkage, "sys_exe_runtime", ctx.module());
         }
         
         return ctx.builder.CreateCall(runtimeFunc, {argvList, cwd, env, shell, timeout, capture});

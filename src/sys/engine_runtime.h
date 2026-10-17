@@ -26,6 +26,10 @@ void  aiml_engine_set_title               (void* win, const char* title);
 void  aiml_engine_maximize_window         (void* win);
 int32_t aiml_engine_window_size_x         (void* win);
 int32_t aiml_engine_window_size_y         (void* win);
+/* Fensterposition auf dem Bildschirm — fuer Widget-Flaeche → Bildschirmkoordinate
+ * bei der OS-Ebenen-Injektion (spec/44_0 §8.5). */
+int32_t aiml_engine_window_pos_x          (void* win);
+int32_t aiml_engine_window_pos_y          (void* win);
 
 /* ── GL context ──────────────────────────────────────────────────────────── */
 

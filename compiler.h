@@ -66,6 +66,17 @@ public:
     // For classes/models (no callable function), returns 1 as a success sentinel.
     // The internal JIT engine is kept alive as long as this AIMLCompiler exists.
     // Used by compileYamlChunk in exec_impl.cpp for hot-reload.
+    // spec/29_2 §15: eine Bibliothek EINMAL uebersetzen und ihre Funktionen
+    // prozessweit als Symbole bekannt machen.  Die Engine bleibt an diesem
+    // Compiler haengen, damit die Adressen gueltig bleiben.
+    // Rueckgabe: Zahl der registrierten Funktionen, -1 bei Fehler.
+    int compileLibraryAndRegister(const std::string& yaml_source);
+
+    // Nur Deklarationen uebernehmen (headerOnlyMode): Signaturen werden bekannt,
+    // Rumpfe werden NICHT erzeugt — das ist der billige Teil, der je Lauf
+    // wiederholt wird, waehrend die Rumpfe nur einmal uebersetzt wurden.
+    void compileDeclarationsOnly(const std::string& yaml_source);
+
     uint64_t compileChunkAndGetAddress(const std::string& yaml_source,
                                         const std::string& funcName);
     

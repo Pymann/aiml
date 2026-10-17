@@ -37,52 +37,52 @@ llvm::StructType* getStructType(CompilerContext& ctx) {
 // ── pthread helpers ───────────────────────────────────────────────────────────
 
 static llvm::Function* getMalloc(CompilerContext& ctx) {
-    if (auto* f = ctx.module.getFunction("malloc")) return f;
+    if (auto* f = ctx.module().getFunction("malloc")) return f;
     auto* ty = llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(),
                                        {ctx.builder.getInt64Ty()}, false);
-    return llvm::Function::Create(ty, llvm::Function::ExternalLinkage, "malloc", ctx.module);
+    return llvm::Function::Create(ty, llvm::Function::ExternalLinkage, "malloc", ctx.module());
 }
 static llvm::Function* getMutexInit(CompilerContext& ctx) {
-    if (auto* f = ctx.module.getFunction("pthread_mutex_init")) return f;
+    if (auto* f = ctx.module().getFunction("pthread_mutex_init")) return f;
     auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
     return llvm::Function::Create(
         llvm::FunctionType::get(ctx.builder.getInt32Ty(), {i8p, i8p}, false),
-        llvm::Function::ExternalLinkage, "pthread_mutex_init", ctx.module);
+        llvm::Function::ExternalLinkage, "pthread_mutex_init", ctx.module());
 }
 static llvm::Function* getCondInit(CompilerContext& ctx) {
-    if (auto* f = ctx.module.getFunction("pthread_cond_init")) return f;
+    if (auto* f = ctx.module().getFunction("pthread_cond_init")) return f;
     auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
     return llvm::Function::Create(
         llvm::FunctionType::get(ctx.builder.getInt32Ty(), {i8p, i8p}, false),
-        llvm::Function::ExternalLinkage, "pthread_cond_init", ctx.module);
+        llvm::Function::ExternalLinkage, "pthread_cond_init", ctx.module());
 }
 static llvm::Function* getMutexLock(CompilerContext& ctx) {
-    if (auto* f = ctx.module.getFunction("pthread_mutex_lock")) return f;
+    if (auto* f = ctx.module().getFunction("pthread_mutex_lock")) return f;
     auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
     return llvm::Function::Create(
         llvm::FunctionType::get(ctx.builder.getInt32Ty(), {i8p}, false),
-        llvm::Function::ExternalLinkage, "pthread_mutex_lock", ctx.module);
+        llvm::Function::ExternalLinkage, "pthread_mutex_lock", ctx.module());
 }
 static llvm::Function* getMutexUnlock(CompilerContext& ctx) {
-    if (auto* f = ctx.module.getFunction("pthread_mutex_unlock")) return f;
+    if (auto* f = ctx.module().getFunction("pthread_mutex_unlock")) return f;
     auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
     return llvm::Function::Create(
         llvm::FunctionType::get(ctx.builder.getInt32Ty(), {i8p}, false),
-        llvm::Function::ExternalLinkage, "pthread_mutex_unlock", ctx.module);
+        llvm::Function::ExternalLinkage, "pthread_mutex_unlock", ctx.module());
 }
 static llvm::Function* getCondWait(CompilerContext& ctx) {
-    if (auto* f = ctx.module.getFunction("pthread_cond_wait")) return f;
+    if (auto* f = ctx.module().getFunction("pthread_cond_wait")) return f;
     auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
     return llvm::Function::Create(
         llvm::FunctionType::get(ctx.builder.getInt32Ty(), {i8p, i8p}, false),
-        llvm::Function::ExternalLinkage, "pthread_cond_wait", ctx.module);
+        llvm::Function::ExternalLinkage, "pthread_cond_wait", ctx.module());
 }
 static llvm::Function* getCondSignal(CompilerContext& ctx) {
-    if (auto* f = ctx.module.getFunction("pthread_cond_signal")) return f;
+    if (auto* f = ctx.module().getFunction("pthread_cond_signal")) return f;
     auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
     return llvm::Function::Create(
         llvm::FunctionType::get(ctx.builder.getInt32Ty(), {i8p}, false),
-        llvm::Function::ExternalLinkage, "pthread_cond_signal", ctx.module);
+        llvm::Function::ExternalLinkage, "pthread_cond_signal", ctx.module());
 }
 
 // ── Field addresses (all computed in entry BB, dominate all other blocks) ─────
@@ -129,7 +129,7 @@ static ChanFields computeFields(llvm::IRBuilder<>& builder, llvm::StructType* st
 //   signal cond_get → wait while size!=0 (cond_taken) → unlock
 
 static llvm::Function* emitSendFn(CompilerContext& ctx) {
-    if (auto* f = ctx.module.getFunction("__aiml_chan_send_i64")) return f;
+    if (auto* f = ctx.module().getFunction("__aiml_chan_send_i64")) return f;
 
     auto& builder  = ctx.builder;
     auto* i8p      = builder.getInt8Ty()->getPointerTo();
@@ -138,7 +138,7 @@ static llvm::Function* emitSendFn(CompilerContext& ctx) {
 
     auto* fn = llvm::Function::Create(
         llvm::FunctionType::get(builder.getVoidTy(), {i8p, i64Ty}, false),
-        llvm::Function::InternalLinkage, "__aiml_chan_send_i64", ctx.module);
+        llvm::Function::InternalLinkage, "__aiml_chan_send_i64", ctx.module());
     auto* chanArg = fn->getArg(0); chanArg->setName("chan");
     auto* valArg  = fn->getArg(1); valArg->setName("val");
 
@@ -241,7 +241,7 @@ static llvm::Function* emitSendFn(CompilerContext& ctx) {
 //   signal cond_taken + cond_put → unlock → ret
 
 static llvm::Function* emitRecvFn(CompilerContext& ctx) {
-    if (auto* f = ctx.module.getFunction("__aiml_chan_recv_i64")) return f;
+    if (auto* f = ctx.module().getFunction("__aiml_chan_recv_i64")) return f;
 
     auto& builder  = ctx.builder;
     auto* i8p      = builder.getInt8Ty()->getPointerTo();
@@ -250,7 +250,7 @@ static llvm::Function* emitRecvFn(CompilerContext& ctx) {
 
     auto* fn = llvm::Function::Create(
         llvm::FunctionType::get(i64Ty, {i8p}, false),
-        llvm::Function::InternalLinkage, "__aiml_chan_recv_i64", ctx.module);
+        llvm::Function::InternalLinkage, "__aiml_chan_recv_i64", ctx.module());
     auto* chanArg = fn->getArg(0); chanArg->setName("chan");
 
     auto savedIP = builder.saveIP();
@@ -337,7 +337,7 @@ void init(CompilerContext& ctx, llvm::Value* chanAlloca, llvm::Value* capacity) 
     auto* structTy = getStructType(ctx);
     auto* null8p   = llvm::ConstantPointerNull::get(i8p);
 
-    uint64_t structSize = ctx.module.getDataLayout().getTypeAllocSize(structTy);
+    uint64_t structSize = ctx.module().getDataLayout().getTypeAllocSize(structTy);
     auto* rawPtr    = builder.CreateCall(getMalloc(ctx), {builder.getInt64(structSize)}, "chan_raw");
     auto* structPtr = builder.CreateBitCast(rawPtr, structTy->getPointerTo(), "chan_struct");
     builder.CreateStore(rawPtr, chanAlloca);

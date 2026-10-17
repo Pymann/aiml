@@ -15,8 +15,8 @@ public:
         llvm::Value* indexVal = resolveValue(ctx, args[1]); // i64 or i32
         
         // Ensure globals exist (created in Compiler::compile)
-        llvm::GlobalVariable* argvVar = ctx.module.getGlobalVariable("__argv", true);
-        llvm::GlobalVariable* argcVar = ctx.module.getGlobalVariable("__argc", true);
+        llvm::GlobalVariable* argvVar = ctx.module().getGlobalVariable("__argv", true);
+        llvm::GlobalVariable* argcVar = ctx.module().getGlobalVariable("__argc", true);
         
         if (!argvVar || !argcVar) {
              // Fallback or error?
@@ -87,7 +87,7 @@ public:
             std::string typeName = args[1].as<std::string>();
             llvm::Type* targetType = ctx.getLLVMType(typeName);
             if (targetType) {
-                llvm::DataLayout dl(&ctx.module);
+                llvm::DataLayout dl(&ctx.module());
                 uint64_t size = dl.getTypeAllocSize(targetType);
                 return ctx.builder.getInt64(size);
             }
@@ -100,7 +100,7 @@ public:
                  std::string varName = callNode[1].as<std::string>();
                  if (ctx.symbol_table.count(varName)) {
                       llvm::Type* symType = ctx.symbol_table[varName].type;
-                      llvm::DataLayout dl(&ctx.module);
+                      llvm::DataLayout dl(&ctx.module());
                       uint64_t size = dl.getTypeAllocSize(symType);
                       return ctx.builder.getInt64(size);
                  }
@@ -112,7 +112,7 @@ public:
         if (!val) return ctx.builder.getInt64(0);
         
         llvm::Type* type = val->getType();
-        llvm::DataLayout dl(&ctx.module);
+        llvm::DataLayout dl(&ctx.module());
         
         // Note: For pointers, this returns pointer size (8).
         uint64_t size = dl.getTypeAllocSize(type);

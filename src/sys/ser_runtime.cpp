@@ -353,6 +353,9 @@ static void enc(std::vector<uint8_t>& buf,
     case AIML_TD_GLTEX:
     case AIML_TD_GLCUBE:
     case AIML_TD_GLQUERY:
+    case AIML_TD_GLBUFFER:
+    case AIML_TD_GLVAO:
+    case AIML_TD_PROCESS:
         break;
     // in-process only (chan models are not wire-serialisable): the pointer, retained by dec
     case AIML_TD_CHAN:
@@ -530,6 +533,9 @@ static void dec_node(const uint8_t* blob, int& pos, int end,
     case AIML_TD_GLTEX:
     case AIML_TD_GLCUBE:
     case AIML_TD_GLQUERY:
+    case AIML_TD_GLBUFFER:
+    case AIML_TD_GLVAO:
+    case AIML_TD_PROCESS:
         break;
     case AIML_TD_CHAN:
         if (end - pos >= (int)sizeof(void*)) {
@@ -985,6 +991,22 @@ static void fre(int idx, const AimlTypeNode* ns, int nn, uint8_t* data) {
         void* t = nullptr; memcpy(&t, data, sizeof(t));
         aiml_gl_texture_release(t);
         t = nullptr; memcpy(data, &t, sizeof(t));
+        break;
+    }
+    case AIML_TD_PROCESS: {
+        void* p = nullptr; memcpy(&p, data, sizeof(p));
+#ifndef __EMSCRIPTEN__   // no process runtime in wasm
+        aiml_process_release(p);
+#endif
+        p = nullptr; memcpy(data, &p, sizeof(p));
+        break;
+    }
+    case AIML_TD_GLBUFFER:
+    case AIML_TD_GLVAO: {
+        void* h = nullptr; memcpy(&h, data, sizeof(h));
+        if (n.kind == AIML_TD_GLBUFFER) aiml_gl_buffer_delete(h);
+        else aiml_gl_vao_delete(h);
+        h = nullptr; memcpy(data, &h, sizeof(h));
         break;
     }
     case AIML_TD_GLQUERY: {
@@ -1460,6 +1482,9 @@ static void clw(int idx, const AimlTypeNode* ns, int nn,
     case AIML_TD_GLTEX:      // Class 4, move-only: the clone has no texture
     case AIML_TD_GLCUBE:
     case AIML_TD_GLQUERY:
+    case AIML_TD_GLBUFFER:
+    case AIML_TD_GLVAO:
+    case AIML_TD_PROCESS:
     case AIML_TD_THREAD: {   // Class 4, move-only: the clone has no thread
         void* t = nullptr;
         memcpy(dst, &t, sizeof(t));

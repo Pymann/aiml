@@ -1,6 +1,8 @@
 #define DEBUG_MODE
 #include "serialize_impl.h"
+#include <cctype>   // std::isdigit (classgroup-constructor-Literale)
 #include "ast_compiler.h"
+#include "yaml_dump.h"
 #include "ast_builder.h"
 #include "ownership_analyzer.h"   // spec/61 §4: per-function ownership plan
 #include "borrow_check.h"         // spec/61 §10: memV3-only ownership diagnostics
@@ -44,7 +46,7 @@ namespace AST {
 static llvm::Function* getOrCreateSretStub(CompilerContext& ctx,
                                            llvm::Function* realFn) {
     std::string stubName = realFn->getName().str() + "__sret_stub";
-    if (auto* existing = ctx.module.getFunction(stubName)) return existing;
+    if (auto* existing = ctx.module().getFunction(stubName)) return existing;
 
     llvm::FunctionType* realTy = realFn->getFunctionType();
     llvm::Type* retTy = realTy->getReturnType();
@@ -58,7 +60,7 @@ static llvm::Function* getOrCreateSretStub(CompilerContext& ctx,
         llvm::Type::getVoidTy(ctx.context), stubParams, false);
 
     auto* stub = llvm::Function::Create(
-        stubTy, llvm::GlobalValue::PrivateLinkage, stubName, ctx.module);
+        stubTy, llvm::GlobalValue::PrivateLinkage, stubName, ctx.module());
     stub->addParamAttr(0, llvm::Attribute::getWithStructRetType(ctx.context, retTy));
 
     // Body: forward args to real fn, copy result through sret via memcpy.
@@ -81,7 +83,7 @@ static llvm::Function* getOrCreateSretStub(CompilerContext& ctx,
     llvm::Value* res = ctx.builder.CreateCall(realFn, realArgs);
     ctx.builder.CreateStore(res, tmpSlot);
 
-    auto& DL = ctx.module.getDataLayout();
+    auto& DL = ctx.module().getDataLayout();
     uint64_t structSize = DL.getTypeAllocSize(retTy);
     ctx.builder.CreateMemCpy(sretSlot, llvm::MaybeAlign(4),
                              tmpSlot,  llvm::MaybeAlign(4),
@@ -100,11 +102,11 @@ static llvm::Function* getOrCreateSretStub(CompilerContext& ctx,
 // on its concrete type (kind-5 ScopeDrop). Idempotent (one per class, reused across interfaces).
 static llvm::Function* getOrCreateClassFree(CompilerContext& ctx, const std::string& className) {
     std::string name = "__free_" + className;
-    if (auto* existing = ctx.module.getFunction(name)) return existing;
+    if (auto* existing = ctx.module().getFunction(name)) return existing;
     auto* i8p = llvm::PointerType::get(ctx.context, 0);
     auto* fnTy = llvm::FunctionType::get(llvm::Type::getVoidTy(ctx.context), {i8p}, false);
     auto* fn = llvm::Function::Create(
-        fnTy, llvm::GlobalValue::LinkOnceODRLinkage, name, ctx.module);
+        fnTy, llvm::GlobalValue::LinkOnceODRLinkage, name, ctx.module());
     auto savedIP = ctx.builder.saveIP();
     auto* entry = llvm::BasicBlock::Create(ctx.context, "entry", fn);
     ctx.builder.SetInsertPoint(entry);
@@ -215,7 +217,7 @@ void Compiler::initClassContainerMembers(llvm::Value* basePtr,
                     auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
                     uint64_t allocSize = (ci->second.padded_size > 0)
                         ? (uint64_t)ci->second.padded_size
-                        : ctx.module.getDataLayout().getTypeAllocSize(ci->second.type);
+                        : ctx.module().getDataLayout().getTypeAllocSize(ci->second.type);
                     llvm::Function* allocFn = ctx.getFunction("aiml_model_alloc", i8p, { ctx.getSizeType() });
                     llvm::Value* obj = ctx.builder.CreateCall(allocFn, { ctx.getSizeConst(allocSize) }, "field_model_alloc");
                     ctx.builder.CreateStore(obj, fieldPtr);
@@ -817,6 +819,17 @@ void Compiler::checkPrefabUsage(Program* prog) {
             return v.substr(1, v.size() - 2);
         return v;
     };
+    // Nearest enclosing statement line.  A CallExpr carries `sourceLine` only
+    // when it IS the statement (`- call:`); inside an `if` condition or a
+    // `decl:` initializer it carries nothing, and fmtLoc would fall back to
+    // `currentLine` — the end of the file in a post-parse pass.  The walks are
+    // depth-first and synchronous, so a single cursor updated at each statement
+    // yields the right line at every call site.
+    int curStmtLine = -1;
+    auto locOf = [&](CallExpr* c) -> std::string {
+        int ln = (c && c->sourceLine > 0) ? c->sourceLine : curStmtLine;
+        return ctx.fmtLoc(c ? c->sourceNode : YAML::Node(), ln);
+    };
     std::function<void(Expr*)> scanExpr;
     std::function<void(Stmt*)> scanStmt;
     scanExpr = [&](Expr* e) {
@@ -831,9 +844,9 @@ void Compiler::checkPrefabUsage(Program* prog) {
                     ctx.prefabUses.insert(pname);
                     if (ctx.reportPrefabs)
                         ctx.prefabReportLines.push_back(
-                            "I\t" + pname + "\t" + ctx.fmtLoc(call->sourceNode));
+                            "I\t" + pname + "\t" + locOf(call));
                     if (!ctx.prefabDecls.count(pname)) {
-                        LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
+                        LOG_ERROR(locOf(call) +
                             "engine.instantiate(\"" + pname + "\") refers to an unknown "
                             "prefab — no `- prefab:` with that name is declared or imported "
                             "in this module. Declare it, fix the name, or add the missing "
@@ -882,6 +895,7 @@ void Compiler::checkPrefabUsage(Program* prog) {
     };
     scanStmt = [&](Stmt* s) {
         if (!s) return;
+        if (s->sourceLine > 0) curStmtLine = s->sourceLine;
         if (auto* b = dynamic_cast<BlockStmt*>(s)) {
             for (auto& st : b->statements) scanStmt(st.get());
         } else if (auto* d = dynamic_cast<DeclStmt*>(s)) {
@@ -933,9 +947,26 @@ void Compiler::checkPrefabUsage(Program* prog) {
     // {call:[engine.instantiate,"X"]}]` bindings only — conservative, so a
     // runtime-computed name is never falsely flagged), then verify every
     // `v.<child-method>("<child>", …)` against prefab X's declared children.
+    // ALLE Methoden, die ihren ersten Parameter durch das Laufzeit-`find_child`
+    // schicken (abgeglichen gegen src/sys/prefab_runtime.cpp, 2026-10-15).  Vorher
+    // standen hier 6 von 30 — die uebrigen 24 hatten genau dieselbe Fehlklasse,
+    // nur ohne Pruefung: `set_bg_color("stat_dot")` auf einen getippten Namen
+    // wirft zur Laufzeit (WASM: Programmabbruch), `is_checked("hakenx")` liefert
+    // stumm 0.  EINE Liste fuer Tier 2 und Tier 2b, damit nicht wieder zwei
+    // Haelften auseinanderlaufen.
     const std::set<std::string> childMethods = {
-        "set_text", "set_texture", "set_child_visible",
-        "set_child_font_size", "set_dropdown_options", "set_compact"
+        // schreibend — ein falscher Name WIRFT
+        "set_text", "set_texture", "set_child_visible", "set_child_font_size",
+        "set_dropdown_options", "set_dropdown_index", "set_dropdown_selected",
+        "set_compact", "set_bg_color", "set_border_color", "set_color",
+        "set_color_runs", "clear_color_runs", "set_checked", "set_focus",
+        "set_bar_value", "set_bar_max", "set_bar_fill",
+        "set_slider_value", "set_slider_min", "set_slider_max",
+        "focus", "select_all", "scroll_to_end", "bind_list",
+        // lesend — ein falscher Name liefert stumm einen Vorgabewert
+        "child_clicked", "text_value", "child_focused", "is_checked",
+        "dropdown_value", "dropdown_index", "dropdown_enum",
+        "get_slider_value", "selection", "container_row_count"
     };
     // Is `e` exactly `engine.instantiate("<literal>")`?  Yields the prefab name.
     auto asInstantiate = [&](Expr* e, std::string& outName) -> bool {
@@ -969,10 +1000,10 @@ void Compiler::checkPrefabUsage(Program* prog) {
                         if (ctx.reportPrefabs)
                             ctx.prefabReportLines.push_back(
                                 "C\t" + bound[base] + "\t" + child + "\t" +
-                                ctx.fmtLoc(call->sourceNode));
+                                locOf(call));
                         const auto& kids = ctx.prefabDecls[bound[base]];
                         if (!kids.count(child)) {
-                            LOG_ERROR(ctx.fmtLoc(call->sourceNode) +
+                            LOG_ERROR(locOf(call) +
                                 "'" + base + "'." + method + "(\"" + child + "\") "
                                 "addresses an unknown child of prefab '" + bound[base] +
                                 "' — no child with that name is declared in its "
@@ -1000,6 +1031,7 @@ void Compiler::checkPrefabUsage(Program* prog) {
     };
     t2Stmt = [&](Stmt* s, BoundMap& bound) {
         if (!s) return;
+        if (s->sourceLine > 0) curStmtLine = s->sourceLine;
         if (auto* b = dynamic_cast<BlockStmt*>(s)) {
             for (auto& st : b->statements) t2Stmt(st.get(), bound);
         } else if (auto* d = dynamic_cast<DeclStmt*>(s)) {
@@ -1047,6 +1079,152 @@ void Compiler::checkPrefabUsage(Program* prog) {
             checkFnT2(fn);
         } else if (auto* cd = dynamic_cast<ClassDecl*>(d.get())) {
             for (const auto& m : cd->methods) checkFnT2(m.get());
+        }
+    }
+
+    // ── Tier 2b: member-held instances + reading methods (spec/44_8) ─────
+    // Tier 2 above only sees a scene in a LOCAL variable.  No screen is built
+    // that way: it instantiates once in `init`, keeps the instance in a class
+    // member and addresses children from every other method — so the entire
+    // production shape sat outside the check (gefunden 2026-10-11, geschlossen
+    // 2026-10-15, nachdem ein veraltetes `<.scene.set_texture("logo_img")` den
+    // WASM-Client von cosmos im ersten Rahmen abbrach: dort sind Ausnahmen aus,
+    // der Wurf aus find_child wird zum Programmabbruch).
+    //
+    // Second half of the same gap sits in `childMethods` above: the READING
+    // methods.  A typo in child_clicked is a silently dead button and one in
+    // text_value a silently empty input field — no throw, no message, because a
+    // missing child legitimately reads as "not clicked" / "empty".
+    // Generic call walker: invoke `cb` on every CallExpr in a statement tree.
+    std::function<void(Expr*, const std::function<void(CallExpr*)>&)> walkCallsE;
+    std::function<void(Stmt*, const std::function<void(CallExpr*)>&)> walkCallsS;
+    walkCallsE = [&](Expr* e, const std::function<void(CallExpr*)>& cb) {
+        if (!e) return;
+        if (auto* call = dynamic_cast<CallExpr*>(e)) {
+            cb(call);
+            for (auto& a : call->args) walkCallsE(a.get(), cb);
+        } else if (auto* bin = dynamic_cast<BinaryExpr*>(e)) {
+            walkCallsE(bin->lhs.get(), cb); walkCallsE(bin->rhs.get(), cb);
+        } else if (auto* un = dynamic_cast<UnaryExpr*>(e)) {
+            walkCallsE(un->operand.get(), cb);
+        } else if (auto* interp = dynamic_cast<StringInterpolationExpr*>(e)) {
+            for (auto& p : interp->parts) walkCallsE(p.get(), cb);
+        } else if (auto* ne = dynamic_cast<NewExpr*>(e)) {
+            for (auto& kv : ne->initValues) walkCallsE(kv.second.get(), cb);
+        } else if (auto* na = dynamic_cast<NewArrayExpr*>(e)) {
+            walkCallsE(na->countExpr.get(), cb);
+        } else if (auto* sp = dynamic_cast<SpawnExpr*>(e)) {
+            for (auto& a : sp->args) walkCallsE(a.get(), cb);
+        } else if (auto* at = dynamic_cast<AtExpr*>(e)) {
+            walkCallsE(at->container.get(), cb);
+            for (auto& i : at->indices) walkCallsE(i.get(), cb);
+        } else if (auto* bl = dynamic_cast<BufferLiteralExpr*>(e)) {
+            for (auto& el : bl->elements) walkCallsE(el.get(), cb);
+        } else if (auto* dl = dynamic_cast<DictLiteralExpr*>(e)) {
+            for (auto& kv : dl->entriesExpr) walkCallsE(kv.second.get(), cb);
+        }
+    };
+    walkCallsS = [&](Stmt* s, const std::function<void(CallExpr*)>& cb) {
+        if (!s) return;
+        if (s->sourceLine > 0) curStmtLine = s->sourceLine;
+        if (auto* b = dynamic_cast<BlockStmt*>(s)) {
+            for (auto& st : b->statements) walkCallsS(st.get(), cb);
+        } else if (auto* d = dynamic_cast<DeclStmt*>(s)) {
+            walkCallsE(d->initialValue.get(), cb);
+        } else if (auto* st = dynamic_cast<SetStmt*>(s)) {
+            walkCallsE(st->value.get(), cb);
+        } else if (auto* so = dynamic_cast<StoreStmt*>(s)) {
+            walkCallsE(so->value.get(), cb);
+        } else if (auto* ix = dynamic_cast<IdxStmt*>(s)) {
+            for (auto& i : ix->indices) walkCallsE(i.get(), cb);
+            walkCallsE(ix->value.get(), cb);
+        } else if (auto* es = dynamic_cast<ExprStmt*>(s)) {
+            walkCallsE(es->expr.get(), cb);
+        } else if (auto* iff = dynamic_cast<IfStmt*>(s)) {
+            walkCallsE(iff->condition.get(), cb);
+            walkCallsS(iff->thenBranch.get(), cb);
+            walkCallsS(iff->elseBranch.get(), cb);
+        } else if (auto* wh = dynamic_cast<WhileStmt*>(s)) {
+            walkCallsE(wh->condition.get(), cb);
+            walkCallsS(wh->body.get(), cb);
+        } else if (auto* rs = dynamic_cast<RetStmt*>(s)) {
+            walkCallsE(rs->value.get(), cb);
+        } else if (auto* th = dynamic_cast<ThrowStmt*>(s)) {
+            walkCallsE(th->value.get(), cb);
+        } else if (auto* tr = dynamic_cast<TryStmt*>(s)) {
+            walkCallsS(tr->tryBlock.get(), cb);
+            walkCallsS(tr->catchBlock.get(), cb);
+        }
+    };
+    // Collect `set: [<.field, engine.instantiate("X")]` bindings in a stmt tree.
+    std::function<void(Stmt*, const std::function<void(const std::string&, const std::string&)>&)> walkFieldBinds;
+    walkFieldBinds = [&](Stmt* s, const std::function<void(const std::string&, const std::string&)>& cb) {
+        if (!s) return;
+        if (auto* b = dynamic_cast<BlockStmt*>(s)) {
+            for (auto& st : b->statements) walkFieldBinds(st.get(), cb);
+        } else if (auto* st = dynamic_cast<SetStmt*>(s)) {
+            const std::string& t = st->target;
+            if (t.size() > 2 && t[0] == '<' && t[1] == '.' &&
+                t.find('.', 2) == std::string::npos) {
+                std::string pn;
+                if (asInstantiate(st->value.get(), pn)) cb(t.substr(2), pn);
+            }
+        } else if (auto* iff = dynamic_cast<IfStmt*>(s)) {
+            walkFieldBinds(iff->thenBranch.get(), cb);
+            walkFieldBinds(iff->elseBranch.get(), cb);
+        } else if (auto* wh = dynamic_cast<WhileStmt*>(s)) {
+            walkFieldBinds(wh->body.get(), cb);
+        } else if (auto* tr = dynamic_cast<TryStmt*>(s)) {
+            walkFieldBinds(tr->tryBlock.get(), cb);
+            walkFieldBinds(tr->catchBlock.get(), cb);
+        }
+    };
+    for (const auto& d : prog->declarations) {
+        auto* cd = dynamic_cast<ClassDecl*>(d.get());
+        if (!cd) continue;
+        // Pass 1 — field → prefab, over ALL methods of the class: the binding
+        // lives in `init`, the uses live in `render`.  A field bound to two
+        // DIFFERENT prefabs is not statically decidable, so it is dropped from
+        // tracking entirely — a check that guesses reports falsely and gets
+        // switched off.
+        std::map<std::string, std::string> fieldPrefab;
+        std::set<std::string> ambiguous;
+        auto note = [&](const std::string& field, const std::string& pname) {
+            auto it = fieldPrefab.find(field);
+            if (it == fieldPrefab.end()) fieldPrefab[field] = pname;
+            else if (it->second != pname) ambiguous.insert(field);
+        };
+        for (const auto& m : cd->methods)
+            if (m && m->body) walkFieldBinds(m->body.get(), note);
+        if (fieldPrefab.empty()) continue;
+        // Pass 2 — verify every `<.field.<child-method>("<child>", …)`.
+        for (const auto& m : cd->methods) {
+            if (!m || !m->body) continue;
+            walkCallsS(m->body.get(), [&](CallExpr* call) {
+                const std::string& fn = call->functionName;
+                if (fn.size() <= 2 || fn[0] != '<' || fn[1] != '.') return;
+                size_t ld = fn.rfind('.');
+                if (ld == std::string::npos || ld <= 2) return;
+                std::string field  = fn.substr(2, ld - 2);
+                std::string method = fn.substr(ld + 1);
+                // No chained receivers: `<.state.menu.scene.set_text` names a
+                // field of ANOTHER object, whose binding lives in another class.
+                if (field.find('.') != std::string::npos) return;
+                if (!childMethods.count(method)) return;
+                if (ambiguous.count(field)) return;
+                auto fit = fieldPrefab.find(field);
+                if (fit == fieldPrefab.end() || call->args.empty()) return;
+                auto* lit = dynamic_cast<LiteralExpr*>(call->args[0].get());
+                if (!lit || lit->type != "string") return;
+                std::string child = unquote(lit->value);
+                const auto& kids = ctx.prefabDecls[fit->second];
+                if (kids.count(child)) return;
+                LOG_ERROR(locOf(call) +
+                    "'<." + field + "'." + method + "(\"" + child + "\") addresses an "
+                    "unknown child of prefab '" + fit->second + "' — no child with that "
+                    "name is declared in its `children:` list. Fix the child name or add "
+                    "the child to the prefab declaration.");
+            });
         }
     }
 
@@ -1375,6 +1553,39 @@ static void serEmitGlobal(const std::string& name, const std::vector<AimlTypeNod
 // round4 (forward-ref fix): rebuild a type's serNodes after the registration fixpoint (defined below).
 static void rebuildSerNodesFor(CompilerContext& ctx, const std::string& typeName);
 
+// spec/21 §6.2 Regel 5: ein modulweites Global ist ein GERUCH, kein Fehler.
+// Zustand gehoert in eine Klasse oder eine Gruppen-Instanz; ein Global hat keinen
+// Eigentuemer.  Ein BESITZENDES Global (ptr<T>) ist der schlimmste Fall: wird es an
+// einen ptr<T>-Parameter gereicht, wandert der Besitz weg und jeder andere Leser
+// haelt einen toten Zeiger (gemessen in cosmos, zwei WASM-Abstuerze 2026-10-13/14).
+//
+// EINE Funktion fuer BEIDE Registrierungsstellen: zwei Kopien derselben Pruefung
+// laufen auseinander (so entstand der memV3-Doppelgate-Fehler), und eine Haelfte,
+// die schweigt, ist schlimmer als keine Pruefung.
+static void lintModuleGlobal(CompilerContext& ctx, const DeclStmt* decl) {
+    if (!decl) return;
+    const char* lintEnv = getenv("AIML_LINT_GLOBALS");
+    if (lintEnv && (lintEnv[0] == '0' || lintEnv[0] == 'n' || lintEnv[0] == 'f')) return;
+    // Eine KONSTANTE ist kein Zustand (User 2026-10-14): nie zugewiesen, nie
+    // weitergereicht, besitzt nichts — ein benanntes Literal.  Dafuer zu warnen
+    // hiesse, das Benennen zu bestrafen und eine nackte Zahl zu belohnen.
+    // Nicht-const bleibt gemeldet: ein schreibbares Primitiv ist geteilter
+    // veraenderlicher Zustand.
+    static const std::set<std::string> kPrimitive = {
+        "i8","i16","i32","i64","u8","u16","u32","u64",
+        "f32","f64","bool","string","char"
+    };
+    if (decl->is_const && kPrimitive.count(decl->typeName)) return;
+    bool owning = decl->typeName.rfind("ptr<", 0) == 0;
+    LOG_WARNING(ctx.fmtLoc() + "module-level global '" + decl->varName + "' ("
+        + decl->typeName + ")" + (owning
+            ? " OWNS its value: passing it to a ptr<T> parameter moves it out and every"
+              " other reader is left with a dangling pointer"
+            : " has no owner")
+        + " — state belongs in a class or a classgroup instance (spec/21 §6.2);"
+          " set AIML_LINT_GLOBALS=0 to silence");
+}
+
 void Compiler::compile(Program* prog) {
     if (!prog) return;
 
@@ -1447,7 +1658,7 @@ void Compiler::compile(Program* prog) {
         auto* voidTy_ = llvm::Type::getVoidTy(ctx.context);
         auto* ft_ = llvm::FunctionType::get(voidTy_, false);
         llvm::Function* libInitFunc = llvm::Function::Create(
-            ft_, llvm::Function::ExternalLinkage, initName, ctx.module);
+            ft_, llvm::Function::ExternalLinkage, initName, ctx.module());
         auto* libInitEntryBB = llvm::BasicBlock::Create(ctx.context, "entry", libInitFunc);
         ctx.ir_gen->setInsertPoint(ctx.ir_gen->wrapBlock(libInitEntryBB));
 
@@ -1498,7 +1709,7 @@ void Compiler::compile(Program* prog) {
             auto linkage = decl->is_extern
                 ? llvm::GlobalValue::WeakAnyLinkage
                 : llvm::GlobalValue::ExternalLinkage;
-            llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(symName);
+            llvm::GlobalVariable* gv = ctx.module().getGlobalVariable(symName);
             // A prior lazy reference may have created this global with the WRONG value type (inline
             // container struct instead of the memV3 ptr handle). Recreate it as the ptr handle so its
             // type and null initializer agree — else module verification rejects the mismatch.
@@ -1506,7 +1717,7 @@ void Compiler::compile(Program* prog) {
                 std::string tmpName = symName + ".mismatch";
                 gv->setName(tmpName);
                 auto* fixed = new llvm::GlobalVariable(
-                    ctx.module, llvmTy, /*isConstant=*/false, linkage,
+                    ctx.module(), llvmTy, /*isConstant=*/false, linkage,
                     llvm::Constant::getNullValue(llvmTy), symName);
                 gv->replaceAllUsesWith(
                     llvm::ConstantExpr::getBitCast(fixed, gv->getType()));
@@ -1519,7 +1730,7 @@ void Compiler::compile(Program* prog) {
                 gv->setLinkage(linkage);
             } else {
                 gv = new llvm::GlobalVariable(
-                    ctx.module, llvmTy, /*isConstant=*/false,
+                    ctx.module(), llvmTy, /*isConstant=*/false,
                     linkage,
                     llvm::Constant::getNullValue(llvmTy),
                     symName);
@@ -1533,6 +1744,7 @@ void Compiler::compile(Program* prog) {
             sym.is_const        = decl->is_const;
             sym.is_volatile     = decl->is_volatile;
             sym.is_global       = true;
+            lintModuleGlobal(ctx, decl);
             if (memV3HandleGlobal) sym.is_byref_arg = true;
             ctx.symbol_table[decl->varName] = sym;
 
@@ -1652,7 +1864,7 @@ void Compiler::compile(Program* prog) {
         for (const auto& libInitName : ctx.libInitFuncNames) {
             auto* vd = llvm::Type::getVoidTy(ctx.context);
             auto* ft = llvm::FunctionType::get(vd, false);
-            llvm::FunctionCallee fc = ctx.module.getOrInsertFunction(libInitName, ft);
+            llvm::FunctionCallee fc = ctx.module().getOrInsertFunction(libInitName, ft);
             ctx.builder.CreateCall(fc);
         }
 
@@ -1683,16 +1895,20 @@ void Compiler::compile(Program* prog) {
             std::string symName = decl->is_extern
                 ? "__lib_" + decl->varName
                 : "__global_" + decl->varName;
+            // spec/29_2 §22: Quelltext merken, damit sys.bundle eine benutzte
+            // Globale mitschicken kann.
+            if (decl->sourceNode && ctx.globalSources.find(decl->varName) == ctx.globalSources.end())
+                ctx.globalSources[decl->varName] = aiml::dumpPreservingQuotes(decl->sourceNode);
             auto linkage = decl->is_extern
                 ? llvm::GlobalValue::WeakAnyLinkage
                 : llvm::GlobalValue::ExternalLinkage;
-            llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(symName);
+            llvm::GlobalVariable* gv = ctx.module().getGlobalVariable(symName);
             // A prior lazy reference may have created this global with the inline container struct
             // type instead of the memV3 ptr handle. Recreate it as ptr so type + null init agree.
             if (gv && gv->getValueType() != llvmTy) {
                 gv->setName(symName + ".mismatch");
                 auto* fixed = new llvm::GlobalVariable(
-                    ctx.module, llvmTy, /*isConstant=*/false, linkage,
+                    ctx.module(), llvmTy, /*isConstant=*/false, linkage,
                     llvm::Constant::getNullValue(llvmTy), symName);
                 gv->replaceAllUsesWith(llvm::ConstantExpr::getBitCast(fixed, gv->getType()));
                 gv->eraseFromParent();
@@ -1704,7 +1920,7 @@ void Compiler::compile(Program* prog) {
                 gv->setLinkage(linkage);
             } else {
                 gv = new llvm::GlobalVariable(
-                    ctx.module, llvmTy, /*isConstant=*/false,
+                    ctx.module(), llvmTy, /*isConstant=*/false,
                     linkage,
                     llvm::Constant::getNullValue(llvmTy),
                     symName);
@@ -1718,6 +1934,7 @@ void Compiler::compile(Program* prog) {
             sym.is_const        = decl->is_const;
             sym.is_volatile     = decl->is_volatile;
             sym.is_global       = true;
+            lintModuleGlobal(ctx, decl);
             // memV3 container global: slot holds the handle pointer → route all access through the
             // same by-ref deref path as local handles (§5 storage-location invariance).
             if (memV3HandleGlobal) sym.is_byref_arg = true;
@@ -1874,7 +2091,7 @@ void Compiler::compile(Program* prog) {
             if (bbInit && !bbInit->getTerminator()) {
                 auto* i32 = ctx.builder.getInt32Ty();
                 auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
-                llvm::DataLayout dl(&ctx.module);
+                llvm::DataLayout dl(&ctx.module());
                 llvm::Function* regF = ctx.getFunction("aiml_ser_register_type",
                     ctx.builder.getVoidTy(), {i32, i8p, i32, i32});
                 for (auto& [tname, tid] : ctx.modelTypeIds) {
@@ -3013,7 +3230,26 @@ void Compiler::synthesizeClassGroups(Program* prog) {
                                    inst.constructor[0];
                 for (size_t ai = 1; ai < inst.constructor.size(); ++ai) {
                     const std::string& arg = inst.constructor[ai];
-                    line += ", " + (paramNames.count(arg) ? ("<." + arg) : arg);
+                    if (paramNames.count(arg)) { line += ", <." + arg; continue; }
+                    // spec/58 §4: was kein Gruppen-Parameter ist, ist ein LITERAL.
+                    // Die YAML-Analyse hat die Anführungszeichen eines Strings
+                    // bereits entfernt, also müssen sie hier zurück — sonst
+                    // emittiert `constructor: [init, "cas"]` ein nacktes `cas`,
+                    // das der Compiler als Typnamen liest ("Unknown Type: 'cas'").
+                    // Zahlen, Booleans und qualifizierte Namen (Enum-Member wie
+                    // `Kind.file`, sowie Fliesskommazahlen) gehen unverändert durch.
+                    auto looksNumeric = [](const std::string& s) {
+                        if (s.empty()) return false;
+                        size_t i = (s[0] == '-' || s[0] == '+') ? 1 : 0;
+                        if (i >= s.size()) return false;
+                        for (; i < s.size(); ++i)
+                            if (!std::isdigit(static_cast<unsigned char>(s[i]))) return false;
+                        return true;
+                    };
+                    const bool passthrough = looksNumeric(arg) || arg == "true" ||
+                                             arg == "false" ||
+                                             arg.find('.') != std::string::npos;
+                    line += passthrough ? (", " + arg) : (", \"" + arg + "\"");
                 }
                 line += "]\n";
                 body += line;
@@ -3187,6 +3423,40 @@ void Compiler::registerTypes(Program* prog) {
         };
     }
 
+    // Inject built-in enum: YamlTok — die Arten von yaml.tokens (spec/60).
+    // Werte MUESSEN zu YamlTokKind in src/sys/yaml_runtime.cpp passen.
+    if (!ctx.enums.count("YamlTok")) {
+        ctx.enums["YamlTok"] = {
+            {"text", 0}, {"comment", 1}, {"key", 2}, {"string", 3}, {"number", 4},
+            {"keyword", 5}, {"punct", 6}, {"anchor", 7}, {"tag", 8}, {"directive", 9}
+        };
+    }
+
+    // spec/62 §7: CacheClass — die Wiederverwendungsklasse eines Schritts.
+    // Werte MUESSEN zu pipeline_runtime.cpp passen (0=opaque 1=resolved 2=pure).
+    if (!ctx.enums.count("CacheClass")) {
+        ctx.enums["CacheClass"] = { {"opaque", 0}, {"resolved", 1}, {"pure", 2} };
+    }
+    // spec/62 §5.6: Reichweite eines Fehlschlags (F62-39).
+    if (!ctx.enums.count("OnFail")) {
+        ctx.enums["OnFail"] = { {"lane", 0}, {"pipeline", 1}, {"proceed", 2} };
+    }
+    // spec/62 §5.7: StepStatus — sechs Werte, die Bedeutungen sind offen
+    // (F62-42, §16 Punkt 6).  Die Reihenfolge hier ist NUR die Nummerierung,
+    // nicht die Praezedenz; die steht in pipeline_runtime.cpp (F62-93).
+    // spec/62 §5.5: laeuft ein Schritt je Lane oder einmal fuer die Matrix?
+    if (!ctx.enums.count("Per")) {
+        ctx.enums["Per"] = { {"lane", 0}, {"once", 1} };
+    }
+    // spec/62 §5.9: Lebenszyklus, getrennt vom Ausgang (F62-44 ergaenzt).
+    if (!ctx.enums.count("Lifecycle")) {
+        ctx.enums["Lifecycle"] = { {"pending", 0}, {"running", 1}, {"paused", 2}, {"done", 3} };
+    }
+    if (!ctx.enums.count("StepStatus")) {
+        ctx.enums["StepStatus"] = { {"red", 0}, {"green", 1}, {"blue", 2},
+                                    {"yellow", 3}, {"cyan", 4}, {"magenta", 5} };
+    }
+
     // Inject BuiltIn Exception Classes
     std::vector<std::string> builtinExceptions = {
         "Exception", "NullPointerException", "TypeMismatchException", "IndexOutOfBoundsException",
@@ -3291,7 +3561,7 @@ static bool serHasHeap(const std::string& typeName, CompilerContext& ctx) {
     if (ctx.memV3 && typeName == "tensor") return true;
     // spec/61 Class 5 chan<T> / Class 4 thread_handle field: released with the owning model.
     if (ctx.memV3 && (typeName == "thread_handle" || typeName == "gl_texture" || typeName == "gl_cubemap"
-                      || typeName == "gl_timer_query" || typeName == "gl_buffer" || typeName == "gl_vao"
+                      || typeName == "gl_timer_query" || typeName == "gl_buffer" || typeName == "gl_vao" || typeName == "process"
                       || (typeName.rfind("chan<", 0) == 0 && typeName.back() == '>'))) return true;
     // spec/61 §6.2 (memV3): a `shared<T>` (refcounted co-owned) or `ptr<T>` (unique owner) FIELD owns
     // heap → the model must decref/free it at scope drop. Without this a model whose ONLY heap-bearing
@@ -3411,6 +3681,8 @@ static std::vector<AimlTypeNode> serBuildSubtree(
             { res.push_back({AIML_TD_GLTEX, 0,0,offset,0,0}); return res; }
         if (typeName == "gl_cubemap")
             { res.push_back({AIML_TD_GLCUBE, 0,0,offset,0,0}); return res; }
+        if (typeName == "process")
+            { res.push_back({AIML_TD_PROCESS, 0,0,offset,0,0}); return res; }
         if (typeName == "gl_buffer")
             { res.push_back({AIML_TD_GLBUFFER, 0,0,offset,0,0}); return res; }
         if (typeName == "gl_vao")
@@ -3438,7 +3710,11 @@ static std::vector<AimlTypeNode> serBuildSubtree(
         if (ctx.isMemV3ContainerHandle(inner)) {
             esz = (int32_t)dl.getPointerSize();  // §5.7: nested container element = HANDLE (ptr stride)
         } else if (ctx.isRefcountModel(inner)) {
-            esz = 8;  // AIML v2 P3/P6: list<Model> stores %M* references (pointer stride)
+            // spec/61 §5.7: list<Model> stores %M* references — a TARGET-pointer stride
+            // (8 on 64-bit, 4 on wasm32), never a literal 8.  A hardcoded 8 let the decoder
+            // write element i at base+8i while wasm32 list indexing read it at base+4i:
+            // index 0 agreed by accident, every later element was a garbage handle.
+            esz = (int32_t)dl.getPointerSize();
         } else if (ctx.classes.count(inner) && ctx.classes[inner].type) {
             esz = (int32_t)dl.getTypeAllocSize(ctx.classes[inner].type);
         } else if (ctx.enums.count(inner)) {
@@ -3455,8 +3731,9 @@ static std::vector<AimlTypeNode> serBuildSubtree(
         } else if (!inner.empty() && std::isupper((unsigned char)inner[0])) {
             // Unregistered user-defined type during Phase-A — use placeholder.
             // The model depending on this list<T> should also have been deferred,
-            // so this branch is a last-resort safety net.
-            esz = 8;
+            // so this branch is a last-resort safety net.  Pointer-sized per §5.7:
+            // a user-defined element is a model handle, and the stride is the TARGET's.
+            esz = (int32_t)dl.getPointerSize();
         } else {
             llvm::Type* iT = ctx.getLLVMType(inner);
             esz = iT ? (int32_t)dl.getTypeAllocSize(iT) : 8;
@@ -3491,7 +3768,7 @@ static std::vector<AimlTypeNode> serBuildSubtree(
         // AIML v2 P3/P6: map<K:Model> stores %M* references (pointer value stride).
         int32_t vsz;
         if (ctx.isMemV3ContainerHandle(vT)) vsz = (int32_t)dl.getPointerSize();  // §5.7 nested handle value
-        else if (ctx.isRefcountModel(vT)) vsz = 8;
+        else if (ctx.isRefcountModel(vT)) vsz = (int32_t)dl.getPointerSize();  // §5.7 target stride
         else { llvm::Type* vLT = ctx.getLLVMType(vT); vsz = vLT ? (int32_t)dl.getTypeAllocSize(vLT) : 0; }
         res.push_back({AIML_TD_MAP, 1, 1+kc, offset, vsz, 0});
         for (auto& n : ksub) res.push_back(snShift(n, 1));
@@ -3716,12 +3993,12 @@ static void serEmitGlobal(
     // (forward-ref-unvollständige) per RAUW umbiegen + entfernen — semantisch wie vor dem Dedup,
     // nur ohne die dead-Duplikate.
     std::string symName = "__aiml_sernodes_" + name;
-    llvm::GlobalVariable* old = ctx.module.getNamedGlobal(symName);
+    llvm::GlobalVariable* old = ctx.module().getNamedGlobal(symName);
     llvm::GlobalVariable* gv = nullptr;
     if (old && old->hasInitializer() && old->getInitializer() == init) {
         gv = old;
     } else {
-        gv = new llvm::GlobalVariable(ctx.module, arrTy, /*isConstant=*/true,
+        gv = new llvm::GlobalVariable(ctx.module(), arrTy, /*isConstant=*/true,
             llvm::GlobalValue::LinkOnceODRLinkage, init, old ? "" : symName);
         if (old) {
             old->replaceAllUsesWith(llvm::ConstantExpr::getBitCast(gv, old->getType()));
@@ -3749,7 +4026,7 @@ static void rebuildSerNodesFor(CompilerContext& ctx, const std::string& typeName
     if (it == ctx.classes.end()) return;
     CompilerContext::ClassInfo& ci = it->second;
     if (ci.isBuiltin || !ci.type) return;
-    llvm::DataLayout dl(&ctx.module);
+    llvm::DataLayout dl(&ctx.module());
     const llvm::StructLayout* sl = dl.getStructLayout(ci.type);
     int32_t sz = (int32_t)dl.getTypeAllocSize(ci.type);
     bool anyHeap = false;
@@ -3811,7 +4088,7 @@ void Compiler::emitContainerCloneDeep(llvm::Value* dstSlot, llvm::Value* srcSlot
     if (!dstSlot || !srcSlot) return;
     auto* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
     auto* i32  = ctx.builder.getInt32Ty();
-    llvm::DataLayout dl(&ctx.module);
+    llvm::DataLayout dl(&ctx.module());
     std::vector<AimlTypeNode> nodes = serFieldSubtree(containerType, 0, ctx, dl, DescriptorPurpose::Clone);
     if (nodes.empty()) return;
     // Emit a LinkOnceODR descriptor global (mirrors visitSysCloneCall).
@@ -3827,9 +4104,9 @@ void Compiler::emitContainerCloneDeep(llvm::Value* dstSlot, llvm::Value* srcSlot
     llvm::ArrayType* arrTy = llvm::ArrayType::get(nodeTy, elems.size());
     std::string sym = "__aiml_clonenodes_" + containerType;
     for (char& c : sym) if (c=='<'||c=='>'||c==':'||c==' '||c==','||c=='/') c='_';
-    llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(sym);
+    llvm::GlobalVariable* gv = ctx.module().getGlobalVariable(sym);
     if (!gv) {
-        gv = new llvm::GlobalVariable(ctx.module, arrTy, /*const=*/true,
+        gv = new llvm::GlobalVariable(ctx.module(), arrTy, /*const=*/true,
             llvm::GlobalValue::LinkOnceODRLinkage, llvm::ConstantArray::get(arrTy, elems), sym);
         gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
         gv->setVisibility(llvm::GlobalValue::HiddenVisibility);
@@ -3843,7 +4120,7 @@ void Compiler::emitContainerCloneDeep(llvm::Value* dstSlot, llvm::Value* srcSlot
 // when the type has no descriptor.
 static llvm::GlobalVariable* getFieldSerNodesGlobal(CompilerContext& ctx, const std::string& typeName,
                                                     int& nodeCount) {
-    llvm::DataLayout dl(&ctx.module);
+    llvm::DataLayout dl(&ctx.module());
     std::vector<AimlTypeNode> nodes = serBuildSubtree(typeName, 0, ctx, dl);
     nodeCount = (int)nodes.size();
     if (nodes.empty()) return nullptr;
@@ -3852,7 +4129,7 @@ static llvm::GlobalVariable* getFieldSerNodesGlobal(CompilerContext& ctx, const 
     llvm::StructType* nodeTy = llvm::StructType::get(lctx, {i32Ty,i32Ty,i32Ty,i32Ty,i32Ty,i32Ty});
     std::string symName = "__aiml_sernodes_fieldcopy_" + typeName;
     for (char& c : symName) if (c=='<'||c=='>'||c==':'||c==' '||c==','||c=='/') c = '_';
-    llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(symName);
+    llvm::GlobalVariable* gv = ctx.module().getGlobalVariable(symName);
     if (!gv) {
         std::vector<llvm::Constant*> elems;
         for (auto& n : nodes) {
@@ -3867,7 +4144,7 @@ static llvm::GlobalVariable* getFieldSerNodesGlobal(CompilerContext& ctx, const 
             elems.push_back(llvm::ConstantStruct::get(nodeTy, f));
         }
         llvm::ArrayType* arrTy = llvm::ArrayType::get(nodeTy, elems.size());
-        gv = new llvm::GlobalVariable(ctx.module, arrTy, /*isConstant=*/true,
+        gv = new llvm::GlobalVariable(ctx.module(), arrTy, /*isConstant=*/true,
             llvm::GlobalValue::LinkOnceODRLinkage,
             llvm::ConstantArray::get(arrTy, elems), symName);
         gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
@@ -3882,7 +4159,7 @@ static llvm::GlobalVariable* getFieldSerNodesGlobal(CompilerContext& ctx, const 
 // recursively releasing at its rc 0). Distinct symbol from the inline getFieldSerNodesGlobal.
 static llvm::GlobalVariable* getElemHandleSerNodesGlobal(CompilerContext& ctx, const std::string& typeName,
                                                          int& nodeCount) {
-    llvm::DataLayout dl(&ctx.module);
+    llvm::DataLayout dl(&ctx.module());
     std::vector<AimlTypeNode> nodes = serFieldSubtree(typeName, 0, ctx, dl);
     nodeCount = (int)nodes.size();
     if (nodes.empty()) return nullptr;
@@ -3891,7 +4168,7 @@ static llvm::GlobalVariable* getElemHandleSerNodesGlobal(CompilerContext& ctx, c
     llvm::StructType* nodeTy = llvm::StructType::get(lctx, {i32Ty,i32Ty,i32Ty,i32Ty,i32Ty,i32Ty});
     std::string symName = "__aiml_sernodes_elemh_" + typeName;
     for (char& c : symName) if (c=='<'||c=='>'||c==':'||c==' '||c==','||c=='/') c = '_';
-    llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(symName);
+    llvm::GlobalVariable* gv = ctx.module().getGlobalVariable(symName);
     if (!gv) {
         std::vector<llvm::Constant*> elems;
         for (auto& n : nodes) {
@@ -3902,7 +4179,7 @@ static llvm::GlobalVariable* getElemHandleSerNodesGlobal(CompilerContext& ctx, c
             elems.push_back(llvm::ConstantStruct::get(nodeTy, f));
         }
         llvm::ArrayType* arrTy = llvm::ArrayType::get(nodeTy, elems.size());
-        gv = new llvm::GlobalVariable(ctx.module, arrTy, /*isConstant=*/true,
+        gv = new llvm::GlobalVariable(ctx.module(), arrTy, /*isConstant=*/true,
             llvm::GlobalValue::LinkOnceODRLinkage, llvm::ConstantArray::get(arrTy, elems), symName);
         gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
         gv->setVisibility(llvm::GlobalValue::HiddenVisibility);
@@ -3944,7 +4221,7 @@ bool Compiler::emitContainerFieldFree(llvm::Value* dstPtr, llvm::Value* srcPtr,
                     elemKind = 2;
                     nodes = static_cast<llvm::Value*>(ci->second.serNodesVar);
                     nodeCount = ci->second.serNodesCount;
-                    elemSize = (int64_t)ctx.module.getDataLayout().getTypeAllocSize(ci->second.type);
+                    elemSize = (int64_t)ctx.module().getDataLayout().getTypeAllocSize(ci->second.type);
                 }
             }
             llvm::Function* lf = ctx.getFunction("aiml_list_free", ctx.builder.getVoidTy(),
@@ -3994,7 +4271,7 @@ bool Compiler::emitContainerFieldFree(llvm::Value* dstPtr, llvm::Value* srcPtr,
         // aiml_ser_deep_copy) into a clean field, and any redundant downstream free (e.g.
         // emitContainerFieldDeepCopy's own guarded free) becomes a no-op on the nulled pointers.
         if (llvm::Type* fieldTy = ctx.getLLVMType(typeName)) {
-            uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(fieldTy);
+            uint64_t sz = ctx.module().getDataLayout().getTypeAllocSize(fieldTy);
             llvm::Function* memsetF = ctx.getFunction("memset", ptrTy, {ptrTy, i32Ty, ctx.getSizeType()});
             ctx.builder.CreateCall(memsetF, { dstPtr, ctx.builder.getInt32(0), ctx.getSizeConst(sz) });
         }
@@ -4007,7 +4284,7 @@ bool Compiler::emitContainerFieldFree(llvm::Value* dstPtr, llvm::Value* srcPtr,
 bool Compiler::emitContainerFieldDeepCopy(llvm::Value* dstPtr, llvm::Value* srcPtr,
                                           const std::string& typeName) {
     if (!dstPtr || !srcPtr) return false;
-    llvm::DataLayout dl(&ctx.module);
+    llvm::DataLayout dl(&ctx.module());
     llvm::LLVMContext& lctx = ctx.context;
     llvm::Type* i32Ty = llvm::Type::getInt32Ty(lctx);
     llvm::Type* ptrTy = llvm::PointerType::get(lctx, 0);
@@ -4128,7 +4405,7 @@ void Compiler::registerTypeDecl(Node* node) {
         classInfo.parentName = cls->parentName;
         classInfo.interfaces = cls->interfaces;     // implements: list
         classInfo.usedModels = cls->models;         // models:     list
-        classInfo.sourceYaml = YAML::Dump(cls->sourceNode);
+        classInfo.sourceYaml = aiml::dumpPreservingQuotes(cls->sourceNode);
         
         std::vector<std::pair<std::string, CompilerContext::StructMember>> orderedMembers;
         int currentIndex = 0;
@@ -4244,7 +4521,7 @@ void Compiler::registerTypeDecl(Node* node) {
 
         // Compute packed_size / padded_size for hot-reload calloc padding
         {
-            int packed = (int)ctx.module.getDataLayout().getTypeAllocSize(structType);
+            int packed = (int)ctx.module().getDataLayout().getTypeAllocSize(structType);
             classInfo.packed_size = packed;
             int padded = 1;
             while (padded < packed) padded <<= 1;
@@ -4260,7 +4537,7 @@ void Compiler::registerTypeDecl(Node* node) {
             for (auto& [mn, mem] : classInfo.members)
                 if (serHasHeap(mem.typeName, ctx)) { anyHeap = true; break; }
             classInfo.hasHeapFields = anyHeap;
-            const llvm::DataLayout& dl = ctx.module.getDataLayout();
+            const llvm::DataLayout& dl = ctx.module().getDataLayout();
             const llvm::StructLayout* sl = dl.getStructLayout(structType);
             int32_t sz = (int32_t)dl.getTypeAllocSize(structType);
             bool onPathC = g_serActivePath.insert(className).second;  // seed cycle guard
@@ -4305,7 +4582,7 @@ void Compiler::registerTypeDecl(Node* node) {
             auto* i8p = llvm::PointerType::get(ctx.context, 0);
             for (const auto& method : cls->methods) {
                 std::string mangled = className + "_" + method->name;
-                if (auto* existing = ctx.module.getFunction(mangled)) {
+                if (auto* existing = ctx.module().getFunction(mangled)) {
                     if (ctx.isOwningReturnType(method->returnType)) method->ownsReturn = true;
                     registerForwardInfo(ctx, mangled, existing, method.get(), "ref<" + className + ">");
                     continue;
@@ -4339,7 +4616,7 @@ void Compiler::registerTypeDecl(Node* node) {
                 llvm::FunctionType* ft =
                     llvm::FunctionType::get(retTy, paramTys, false);
                 llvm::Function* mf = llvm::Function::Create(ft, llvm::Function::ExternalLinkage,
-                                       mangled, ctx.module);
+                                       mangled, ctx.module());
                 if (ctx.isOwningReturnType(method->returnType))
                     method->ownsReturn = true;   // §4/§8 (same rule as visitFunction)
                 registerForwardInfo(ctx, mangled, mf, method.get(), "ref<" + className + ">");   // same receiver as visitTopLevel
@@ -4483,7 +4760,7 @@ void Compiler::registerTypeDecl(Node* node) {
 
         // Compute packed_size / padded_size for hot-reload calloc padding
         {
-            int packed = (int)ctx.module.getDataLayout().getTypeAllocSize(structType);
+            int packed = (int)ctx.module().getDataLayout().getTypeAllocSize(structType);
             classInfo.packed_size = packed;
             int padded = 1;
             while (padded < packed) padded <<= 1;
@@ -4497,7 +4774,7 @@ void Compiler::registerTypeDecl(Node* node) {
             for (auto& [mn, mem] : classInfo.members)
                 if (serHasHeap(mem.typeName, ctx)) { anyHeap = true; break; }
             classInfo.hasHeapFields = anyHeap;
-            const llvm::DataLayout& dl = ctx.module.getDataLayout();
+            const llvm::DataLayout& dl = ctx.module().getDataLayout();
             const llvm::StructLayout* sl = dl.getStructLayout(structType);
             int32_t sz = (int32_t)dl.getTypeAllocSize(structType);
             std::vector<std::pair<std::string, CompilerContext::StructMember>> sm;
@@ -4531,7 +4808,7 @@ void Compiler::registerTypeDecl(Node* node) {
         if (!enm->labels.empty()) {
             ctx.enumLabels[enumName] = enm->labels;
         }
-        ctx.enumSources[enumName] = YAML::Dump(enm->sourceNode);
+        ctx.enumSources[enumName] = aiml::dumpPreservingQuotes(enm->sourceNode);
         // Unused-enumerator analysis: record every declared member + the enum's
         // source location (block-level; EnumDecl has no per-member source node).
         // Uses are collected in resolveEnum / resolvePropertyOrEnum under the same
@@ -4651,7 +4928,7 @@ void Compiler::registerTypeDecl(Node* node) {
             info.nodes.push_back(std::move(n));
         }
         ctx.cascades[casName] = std::move(info);
-        ctx.cascadeSources[casName] = YAML::Dump(casc->sourceNode);
+        ctx.cascadeSources[casName] = aiml::dumpPreservingQuotes(casc->sourceNode);
         LOG_DEBUG("AST Registered Cascade: " + casName + " with " +
                   std::to_string(ctx.cascades[casName].nodes.size()) + " nodes");
 
@@ -4710,7 +4987,7 @@ void Compiler::registerTypeDecl(Node* node) {
     } else if (auto iface = dynamic_cast<InterfaceDecl*>(node)) {
         std::string ifaceName = ctx.qualify(iface->name);
         ctx.validateIdentifier(iface->name, "interface", iface->sourceNode);
-        ctx.interfaceSources[ifaceName] = YAML::Dump(iface->sourceNode);
+        ctx.interfaceSources[ifaceName] = aiml::dumpPreservingQuotes(iface->sourceNode);
         // Register the interface in ctx.interfaces so ptr<Interface> can be
         // resolved as a fat pointer type and method calls can find the
         // corresponding vtable slot.
@@ -4754,7 +5031,7 @@ void Compiler::registerTypeDecl(Node* node) {
         }
         // Forward-declare function signature so forward references resolve.
         std::string mangledName = ctx.qualify(func->name);
-        if (auto* existing = ctx.module.getFunction(mangledName)) {
+        if (auto* existing = ctx.module().getFunction(mangledName)) {
             registerForwardInfo(ctx, mangledName, existing, func, "");
             return;
         }
@@ -4786,7 +5063,7 @@ void Compiler::registerTypeDecl(Node* node) {
             retTy = irt ? static_cast<llvm::Type*>(ctx.ir_gen->unwrapType(irt)) : i8p;
         }
         llvm::FunctionType* ft = llvm::FunctionType::get(retTy, paramTys, false);
-        llvm::Function* ff = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, mangledName, ctx.module);
+        llvm::Function* ff = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, mangledName, ctx.module());
         registerForwardInfo(ctx, mangledName, ff, func, "");
         LOG_DEBUG("registerTypeDecl: forward-declared " + mangledName);
     }
@@ -4821,16 +5098,16 @@ void Compiler::visitExternBlock(ExternBlock* ext) {
         }
 
         // Skip if already declared (e.g. extern block appears twice)
-        if (ctx.module.getFunction(fd.name)) {
+        if (ctx.module().getFunction(fd.name)) {
             LOG_DEBUG("visitExternBlock: " + fd.name + " already declared, skipping");
             continue;
         }
 
         llvm::FunctionType* ft = llvm::FunctionType::get(retTy, paramTys, false);
         llvm::Function* f = llvm::Function::Create(
-            ft, llvm::Function::ExternalLinkage, fd.name, ctx.module);
+            ft, llvm::Function::ExternalLinkage, fd.name, ctx.module());
 
-        // Store in context so visitCall can find it via resolveFunction / ctx.module.getFunction
+        // Store in context so visitCall can find it via resolveFunction / ctx.module().getFunction
         CompilerContext::FunctionInfo fi;
         fi.func           = f;
         fi.fptable_index  = -1;   // external → no fptable slot
@@ -4864,7 +5141,7 @@ void Compiler::visitTopLevel(Node* node) {
             auto& fi = ctx.functions[mangledName];
             if (func->version > fi.version) {
                 fi.version    = func->version;
-                fi.sourceYaml = YAML::Dump(func->sourceNode);
+                fi.sourceYaml = aiml::dumpPreservingQuotes(func->sourceNode);
                 if (ctx.functions.count(func->name))
                     ctx.functions[func->name] = fi;
                 LOG_INFO("visitTopLevel: updated sourceYaml for " + mangledName +
@@ -4882,10 +5159,10 @@ void Compiler::visitTopLevel(Node* node) {
         std::string qualName = ctx.qualify(cls->name);
         if (ctx.classes.count(qualName) && cls->version > ctx.classes[qualName].version) {
             ctx.classes[qualName].version    = cls->version;
-            ctx.classes[qualName].sourceYaml = YAML::Dump(cls->sourceNode);
+            ctx.classes[qualName].sourceYaml = aiml::dumpPreservingQuotes(cls->sourceNode);
             if (ctx.classes.count(cls->name)) {
                 ctx.classes[cls->name].version    = cls->version;
-                ctx.classes[cls->name].sourceYaml = YAML::Dump(cls->sourceNode);
+                ctx.classes[cls->name].sourceYaml = aiml::dumpPreservingQuotes(cls->sourceNode);
             }
             LOG_INFO("visitTopLevel: updated sourceYaml for " + cls->name + " to v"
                      + std::to_string(cls->version));
@@ -4944,7 +5221,7 @@ void Compiler::visitTopLevel(Node* node) {
             bool anyError = false;   // collect, then skip vtable emission on error
             for (const auto& m : iface.methods) {
                 std::string mangled = cls->name + "_" + m.name;
-                llvm::Function* fn = ctx.module.getFunction(mangled);
+                llvm::Function* fn = ctx.module().getFunction(mangled);
                 if (!fn) {
                     LOG_ERROR(ctx.fmtLoc(cls->sourceNode) +
                         "class '" + cls->name + "' is missing method '" +
@@ -5031,7 +5308,7 @@ void Compiler::visitTopLevel(Node* node) {
             // Konflikte falls dieselbe Klasse aus mehreren imports auftaucht.
             // Vorher: PrivateLinkage → silent-null in cross-file upcast → SIGSEGV
             // bei interface-method dispatch.
-            if (auto* existing = ctx.module.getNamedGlobal(vtableName)) {
+            if (auto* existing = ctx.module().getNamedGlobal(vtableName)) {
                 // Forward-decl (from cross-file upcast) wurde schon emitted.
                 // Jetzt mit Definition aufrüsten.
                 if (!existing->hasInitializer()) {
@@ -5039,7 +5316,7 @@ void Compiler::visitTopLevel(Node* node) {
                     existing->setLinkage(llvm::GlobalValue::LinkOnceODRLinkage);
                 }
             } else {
-                new llvm::GlobalVariable(ctx.module, arrTy, /*isConstant=*/true,
+                new llvm::GlobalVariable(ctx.module(), arrTy, /*isConstant=*/true,
                     llvm::GlobalValue::LinkOnceODRLinkage, init, vtableName);
                 LOG_DEBUG("visitTopLevel: emitted " + vtableName + " (" + std::to_string(slots.size()) + " slots)");
             }
@@ -5103,7 +5380,7 @@ void Compiler::visitTopLevel(Node* node) {
                     } else {
                         auto& bmem = mit->second;
                         const llvm::StructLayout* sl =
-                            ctx.module.getDataLayout().getStructLayout(bci.type);
+                            ctx.module().getDataLayout().getStructLayout(bci.type);
                         bindOffset = (int)sl->getElementOffset((unsigned)bmem.index);
                         const std::string& tn = bmem.typeName;
                         if (tn == "i32")            bindTag = 0;
@@ -5139,6 +5416,12 @@ void Compiler::visitTopLevel(Node* node) {
                 "\"width\":" + std::to_string(c.width) + ","
                 "\"height\":" + std::to_string(c.height) + ","
                 "\"font_size\":" + std::to_string(c.font_size) + ","
+                "\"font\":\"" + escape_json(c.font) + "\","
+                "\"gutter\":" + std::string(c.gutter ? "1" : "0") + ","
+                "\"min\":" + std::to_string(c.slider_min) + ","
+                "\"visible\":" + std::string(c.is_visible ? "1" : "0") + ","
+                "\"scrollable\":" + std::string(c.scrollable ? "1" : "0") + ","
+                "\"tail\":" + std::string(c.tail ? "1" : "0") + ","
                 "\"color\":" + std::to_string(c.color) + ","
                 "\"texture\":\"" + escape_json(c.texture) + "\","
                 "\"anchor\":\"" + escape_json(c.anchor) + "\","
@@ -5233,23 +5516,23 @@ void Compiler::visitTopLevel(Node* node) {
                     continue;
                 }
                 std::string mangled = className + "_" + methodName;
-                llvm::Function* methodFn = ctx.module.getFunction(mangled);
+                llvm::Function* methodFn = ctx.module().getFunction(mangled);
                 if (!methodFn) {
                     // Forward-decl: (this*, p*) -> void.
                     auto* fn_ty = llvm::FunctionType::get(vd, {i8p, i8p}, false);
                     methodFn = llvm::Function::Create(
                         fn_ty, llvm::Function::ExternalLinkage,
-                        mangled, &ctx.module);
+                        mangled, &ctx.module());
                 }
                 // Emit trampoline __cb_<obj>__<method>(void* inst):
                 //   methodFn(<obj_gv>, inst); ret void
                 std::string trampName = "__cb_" + objName + "__" + methodName;
-                cb_fn = ctx.module.getFunction(trampName);
+                cb_fn = ctx.module().getFunction(trampName);
                 if (!cb_fn) {
                     auto* tr_ty = llvm::FunctionType::get(vd, {i8p}, false);
                     cb_fn = llvm::Function::Create(
                         tr_ty, llvm::Function::InternalLinkage,
-                        trampName, &ctx.module);
+                        trampName, &ctx.module());
                     auto* savedBB = ctx.builder.GetInsertBlock();
                     auto* trBB = llvm::BasicBlock::Create(ctx.context, "entry", cb_fn);
                     ctx.builder.SetInsertPoint(trBB);
@@ -5261,12 +5544,12 @@ void Compiler::visitTopLevel(Node* node) {
                     ctx.builder.SetInsertPoint(savedBB);
                 }
             } else {
-                cb_fn = ctx.module.getFunction(cb);
+                cb_fn = ctx.module().getFunction(cb);
                 if (!cb_fn) {
                     /* Forward-declare void(i8*) — definition supplied later by visitFunction. */
                     auto* cb_ty = llvm::FunctionType::get(vd, {i8p}, false);
                     cb_fn = llvm::Function::Create(cb_ty, llvm::Function::ExternalLinkage,
-                                                   cb, &ctx.module);
+                                                   cb, &ctx.module());
                 }
             }
             llvm::Value* cb_name_str = ctx.builder.CreateGlobalStringPtr(cb, "prefab_cb_name");
@@ -5620,7 +5903,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
     
     // Reuse forward-declared function if it exists (from registerTypeDecl), else create new
     IRValue* funcVal = nullptr;
-    llvm::Function* existingFunc = ctx.module.getFunction(mangledName);
+    llvm::Function* existingFunc = ctx.module().getFunction(mangledName);
     if (existingFunc && existingFunc->empty()) {
         // Forward declaration exists — reuse it
         funcVal = ctx.ir_gen->wrap(static_cast<llvm::Value*>(existingFunc));
@@ -5649,7 +5932,7 @@ void Compiler::visitFunction(FunctionDecl* func) {
         funcInfo.fptable_index = ctx.functions[mangledName].fptable_index;
     else
         funcInfo.fptable_index = ctx.fptable_next_index++;
-    funcInfo.sourceYaml = YAML::Dump(func->sourceNode);
+    funcInfo.sourceYaml = aiml::dumpPreservingQuotes(func->sourceNode);
     funcInfo.deprecated = std::find(func->meta.begin(), func->meta.end(),
                                     "deprecated") != func->meta.end();
     funcInfo.ownsReturn = func->ownsReturn;   // spec/61 return-ownership
@@ -5991,10 +6274,10 @@ void Compiler::visitFunction(FunctionDecl* func) {
         llvm::PointerType* i8p  = ctx.builder.getInt8Ty()->getPointerTo();
         llvm::Type*        i32t = ctx.builder.getInt32Ty();
 
-        llvm::FunctionCallee traceActiveFn = ctx.module.getOrInsertFunction(
+        llvm::FunctionCallee traceActiveFn = ctx.module().getOrInsertFunction(
             "aiml_trace_active",
             llvm::FunctionType::get(i32t, {i8p}, false));
-        llvm::FunctionCallee traceFn = ctx.module.getOrInsertFunction(
+        llvm::FunctionCallee traceFn = ctx.module().getOrInsertFunction(
             "aiml_trace_format",
             llvm::FunctionType::get(ctx.builder.getVoidTy(), {i8p, i8p}, true));
 
@@ -6133,25 +6416,37 @@ void Compiler::visitFunction(FunctionDecl* func) {
     ctx.currentFunctionStaticOff  = std::move(_saved_static_off);
 }
 Symbol* Compiler::resolveVariable(const std::string& name) {
+    // spec/29_2 §22: eine benutzte GLOBALE gehoert ins Bundle.  Hier ist die
+    // einzige Stelle, die Lesen, Schreiben und Interpolation gleich behandelt —
+    // darum wird genau hier aufgezeichnet, und nur fuer Symbole, die wirklich
+    // global sind (Symbol::is_global).
+    auto trackGlobal = [this](const std::string& n, Symbol* sym) -> Symbol* {
+        if (sym && sym->is_global && !ctx.bundleTrackingTarget.empty() &&
+            ctx.functions.count(ctx.bundleTrackingTarget))
+            ctx.functions[ctx.bundleTrackingTarget].referencedGlobals.insert(n);
+        return sym;
+    };
     if (ctx.currentScope) {
         CompilerContext::Scope* scope = ctx.currentScope;
         while (scope) {
-            if (scope->variables.count(name)) return &scope->variables[name];
+            if (scope->variables.count(name))
+                return trackGlobal(name, &scope->variables[name]);
             scope = scope->parent;
         }
     }
     
     // Check namespace globals
     if (ctx.currentNs && ctx.currentNs->globals.count(name)) {
-        return &ctx.currentNs->globals[name];
+        return trackGlobal(name, &ctx.currentNs->globals[name]);
     }
     
     // Legacy fallback during transition
-    if (ctx.symbol_table.count(name)) return &ctx.symbol_table[name];
+    if (ctx.symbol_table.count(name)) return trackGlobal(name, &ctx.symbol_table[name]);
     
     // Check FQN fallback (e.g. `math.pi` -> `my.math.pi`)
     std::string qualifiedName = ctx.qualify(name);
-    if (ctx.symbol_table.count(qualifiedName)) return &ctx.symbol_table[qualifiedName];
+    if (ctx.symbol_table.count(qualifiedName))
+        return trackGlobal(name, &ctx.symbol_table[qualifiedName]);
     
     return nullptr;
 }
@@ -6226,12 +6521,12 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
         }
     } else if (className == "string") {
         if (propName == "len") {
-            llvm::Function* strlenFunc = ctx.module.getFunction("strlen");
+            llvm::Function* strlenFunc = ctx.module().getFunction("strlen");
             if (!strlenFunc)
                 strlenFunc = llvm::Function::Create(
                     llvm::FunctionType::get(ctx.getSizeType(),
                         {ctx.builder.getInt8Ty()->getPointerTo()}, false),
-                    llvm::Function::ExternalLinkage, "strlen", ctx.module);
+                    llvm::Function::ExternalLinkage, "strlen", ctx.module());
             llvm::Value* strVal = ctx.builder.CreateLoad(
                 ctx.builder.getInt8Ty()->getPointerTo(),
                 static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)));
@@ -6448,6 +6743,10 @@ IRValue* Compiler::resolveProperty(Symbol* baseSym, const std::string& propName)
         }
     }
 
+    // Folgemeldung unterdruecken, wenn der TYP selbst schon als unbekannt
+    // gemeldet wurde — sonst meldet jede Eigenschaft erneut dieselbe Ursache
+    // (spec/49: eine Kaskade verdeckt die Zeile, auf die es ankommt).
+    if (ctx.unknownTypeNames.count(className)) return nullptr;
     LOG_ERROR("Undefined property: " + propName + " on type " + className);
     return nullptr;
 }
@@ -6694,6 +6993,63 @@ IRValue* Compiler::resolvePropertyWritePtr(Symbol* baseSym, const std::string& p
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// declaredTypeOfExpr — den DEKLARIERTEN Typ eines Ausdrucks bestimmen, ohne IR
+// zu erzeugen (anders als emitLValueAddress, das Adressen emittiert).  Gebraucht
+// an der Argumentgrenze, um einen Interface-Upcast bauen zu können: dort liegt
+// der Objektzeiger schon vor, es fehlt nur der konkrete Klassenname.
+// Deckt ab: einfache Variable, gepunkteter Member-Zugriff (auch mehrstufig, z.B.
+// eine classgroup-Instanz `grp.handler`) und `{new: Konkret}`.
+// Leerer String = nicht auflösbar; der Aufrufer meldet das als Fehler.
+std::string Compiler::declaredTypeOfExpr(Expr* e) {
+    auto classMemberType = [&](const std::string& clsName,
+                               const std::string& field) -> std::string {
+        auto it = ctx.classes.find(clsName);
+        if (it == ctx.classes.end()) return "";
+        auto mit = it->second.members.find(field);
+        return mit == it->second.members.end() ? std::string() : mit->second.typeName;
+    };
+    auto strip = [](const std::string& t) {
+        if ((t.rfind("ptr<", 0) == 0 || t.rfind("ref<", 0) == 0) && t.back() == '>')
+            return t.substr(4, t.size() - 5);
+        return t;
+    };
+
+    if (auto* ne = dynamic_cast<NewExpr*>(e))
+        return ctx.classes.count(ne->typeName) ? ("ptr<" + ne->typeName + ">") : std::string();
+
+    auto* ve = dynamic_cast<VariableExpr*>(e);
+    if (!ve) return "";
+    const std::string& full = ve->name;
+    size_t dot = full.find('.');
+    if (dot == std::string::npos) {
+        Symbol* s = resolveVariable(full);
+        if (!s) return "";
+        // Eine Klassen-Instanz per Wert verhält sich am Argument wie ptr<T>.
+        if (s->typeName.rfind("ptr<", 0) != 0 && s->typeName.rfind("ref<", 0) != 0 &&
+            ctx.classes.count(s->typeName))
+            return "ptr<" + s->typeName + ">";
+        return s->typeName;
+    }
+    // Gepunktet: Basis auflösen, dann Feld für Feld durch die Klassen laufen.
+    Symbol* base = resolveVariable(full.substr(0, dot));
+    if (!base) return "";
+    std::string curType = base->typeName;
+    size_t pos = dot;
+    while (pos != std::string::npos) {
+        size_t next = full.find('.', pos + 1);
+        const std::string field = full.substr(pos + 1,
+            next == std::string::npos ? std::string::npos : next - pos - 1);
+        const std::string memberTy = classMemberType(strip(curType), field);
+        if (memberTy.empty()) return "";
+        curType = memberTy;
+        pos = next;
+    }
+    if (curType.rfind("ptr<", 0) != 0 && curType.rfind("ref<", 0) != 0 &&
+        ctx.classes.count(curType))
+        return "ptr<" + curType + ">";
+    return curType;
+}
+
 // buildInterfaceUpcast — emit fat-pointer struct {obj_ptr, vtable_ptr} for
 // passing a `ptr<ConcreteClass>` into a slot that expects `ptr<Interface>`.
 //
@@ -6733,7 +7089,7 @@ llvm::Value* Compiler::buildInterfaceUpcast(llvm::Value* srcValue,
     // visitTopLevel(ClassDecl).  Without this, cross-file iface dispatch
     // got a null vtable slot and SIGSEGV'd on first method call.
     std::string vtableName = "__vtable_" + concrete + "_" + ifaceName;
-    llvm::GlobalVariable* vtbl = ctx.module.getNamedGlobal(vtableName);
+    llvm::GlobalVariable* vtbl = ctx.module().getNamedGlobal(vtableName);
     if (!vtbl) {
         // Validate that the concrete class actually implements the interface
         // in ctx — otherwise emitting an extern would just defer the error to
@@ -6752,7 +7108,7 @@ llvm::Value* Compiler::buildInterfaceUpcast(llvm::Value* srcValue,
         size_t methodCount = (ctx.interfaces.count(ifaceName)
             ? ctx.interfaces[ifaceName].methods.size() : 1) + 1;
         auto* arrTy = llvm::ArrayType::get(i8p_local, methodCount);
-        vtbl = new llvm::GlobalVariable(ctx.module, arrTy, /*isConstant=*/true,
+        vtbl = new llvm::GlobalVariable(ctx.module(), arrTy, /*isConstant=*/true,
             llvm::GlobalValue::ExternalLinkage, /*initializer=*/nullptr, vtableName);
     }
 
@@ -6798,7 +7154,7 @@ IRValue* Compiler::visitSysCloneCall(CallExpr* call) {
     llvm::Type* voidTy = ctx.builder.getVoidTy();
 
     if (call->args.empty()) {
-        LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.clone: requires one argument");
+        LOG_ERROR(ctx.fmtLoc(call->sourceNode, call->sourceLine) + "sys.clone: requires one argument");
         return ctx.ir_gen->getInt32(0);
     }
 
@@ -6813,7 +7169,7 @@ IRValue* Compiler::visitSysCloneCall(CallExpr* call) {
     bool inlineBorrow = false;
     if (var) {
         if (!argSym) {
-            LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.clone: unknown variable '" + var->name + "'");
+            LOG_ERROR(ctx.fmtLoc(call->sourceNode, call->sourceLine) + "sys.clone: unknown variable '" + var->name + "'");
             return ctx.ir_gen->getInt32(0);
         }
         argType = argSym->typeName;
@@ -6821,13 +7177,13 @@ IRValue* Compiler::visitSysCloneCall(CallExpr* call) {
         argType = ctx.deserializeTargetType;   // clone of an inline expression → the declared target type
         inlineBorrow = true;
         if (argType.empty()) {
-            LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.clone: an inline argument (e.g. {at:…}) needs a "
+            LOG_ERROR(ctx.fmtLoc(call->sourceNode, call->sourceLine) + "sys.clone: an inline argument (e.g. {at:…}) needs a "
                 "typed target — use `decl: [x, <Type>, { clone: {at:…} }]`.");
             return ctx.ir_gen->getInt32(0);
         }
     }
     if (argType.empty() || argType == "any") {
-        LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.clone: type '" + argType + "' is not cloneable");
+        LOG_ERROR(ctx.fmtLoc(call->sourceNode, call->sourceLine) + "sys.clone: type '" + argType + "' is not cloneable");
         return ctx.ir_gen->getInt32(0);
     }
 
@@ -6838,17 +7194,17 @@ IRValue* Compiler::visitSysCloneCall(CallExpr* call) {
     // Resolve LLVM struct type so we know dst's size.
     llvm::Type* dstLlvmTy = ctx.getLLVMType(argType);
     if (!dstLlvmTy) {
-        LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.clone: unknown LLVM type for '" + argType + "'");
+        LOG_ERROR(ctx.fmtLoc(call->sourceNode, call->sourceLine) + "sys.clone: unknown LLVM type for '" + argType + "'");
         return ctx.ir_gen->getInt32(0);
     }
 
     // Build TypeNodes for the argument type and emit them as a global constant. round4 §1: this is a
     // CLONE descriptor (ref<T>→WEAK_REF, tensor→TENSOR under memV3). The Clone leaf branch is itself
     // memV3-gated, so under OFF this yields the identical Existing descriptor (byte-identical deploy).
-    llvm::DataLayout dl(&ctx.module);
+    llvm::DataLayout dl(&ctx.module());
     std::vector<AimlTypeNode> nodes = serBuildSubtree(argType, 0, ctx, dl, DescriptorPurpose::Clone);
     if (nodes.empty()) {
-        LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.clone: failed to build TypeNodes for '" + argType + "'");
+        LOG_ERROR(ctx.fmtLoc(call->sourceNode, call->sourceLine) + "sys.clone: failed to build TypeNodes for '" + argType + "'");
         return ctx.ir_gen->getInt32(0);
     }
     // Emit a private global once per (typeName, callsite) — LinkOnceODR merges duplicates.
@@ -6871,9 +7227,9 @@ IRValue* Compiler::visitSysCloneCall(CallExpr* call) {
     // get merged by the linker (LinkOnceODR).
     std::string symName = "__aiml_sernodes_clone_" + argType;
     for (char& c : symName) if (c=='<'||c=='>'||c==':'||c==' '||c==','||c=='/') c = '_';
-    llvm::GlobalVariable* gv = ctx.module.getGlobalVariable(symName);
+    llvm::GlobalVariable* gv = ctx.module().getGlobalVariable(symName);
     if (!gv) {
-        gv = new llvm::GlobalVariable(ctx.module, arrTy, /*isConstant=*/true,
+        gv = new llvm::GlobalVariable(ctx.module(), arrTy, /*isConstant=*/true,
             llvm::GlobalValue::LinkOnceODRLinkage,
             llvm::ConstantArray::get(arrTy, elems),
             symName);
@@ -6904,7 +7260,7 @@ IRValue* Compiler::visitSysCloneCall(CallExpr* call) {
             ctx.builder.CreateStore(srcPtr, tmp);
             srcPtr = tmp;
         }
-        if (!srcPtr) { LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.clone: could not evaluate the borrow argument"); return ctx.ir_gen->getInt32(0); }
+        if (!srcPtr) { LOG_ERROR(ctx.fmtLoc(call->sourceNode, call->sourceLine) + "sys.clone: could not evaluate the borrow argument"); return ctx.ir_gen->getInt32(0); }
     } else {
         IRValue* srcBase = argSym->ir_alloca_inst ? argSym->ir_alloca_inst
                                                   : ctx.ir_gen->wrap(argSym->alloca_inst);

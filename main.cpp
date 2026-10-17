@@ -17,6 +17,7 @@ int main(int argc, char** argv) {
     bool runMode = false;
     bool emitMain = false;
     bool reportPrefabs = false;
+    bool checkOnly = false;   // --check: nur prüfen, maschinenlesbar melden (spec/49)
     std::string reportFilter;
     std::string targetTriple;
     std::string assetRoots;  // raw comma-separated string, parsed in compile()
@@ -45,6 +46,8 @@ int main(int argc, char** argv) {
             runMode = true;
         } else if (arg == "--emit-main") {
             emitMain = true;
+        } else if (arg == "--check") {
+            checkOnly = true;
         } else if (arg == "--prefab-report") {
             reportPrefabs = true;
         } else if (arg.rfind("--prefab-report=", 0) == 0) {
@@ -126,6 +129,44 @@ int main(int argc, char** argv) {
     
     bool isObjectFile = outputFile.length() >= 2 && outputFile.substr(outputFile.length() - 2) == ".o";
     LOG_DEBUG("isObjectFile=" + std::to_string(isObjectFile));
+
+    if (checkOnly) {
+        // --check (spec/49, cosmos spec/98 F98-8): nur analysieren, nichts
+        // erzeugen — dieselbe Bauart wie --prefab-report.  Ausgabe ist
+        // tab-getrennt, weil Meldungen Doppelpunkte und Leerzeichen enthalten
+        // und ein Aufrufer sonst wieder raten muesste.
+        // Menschliche Ausgabe stumm: --check liefert AUSSCHLIESSLICH die
+        // tab-getrennten Datensaetze, sonst muss ein Aufrufer wieder filtern.
+        Logger::instance().setCollect(true);
+        Logger::instance().setSuppressed(true);
+        compiler.noCache = true;
+        compiler.compile(inputFile, "/dev/null");
+        int errs = 0;
+        for (const auto& d : Logger::instance().diags()) {
+            std::string file = "-", line = "0", col = "0", msg = d.text;
+            // "datei:zeile[:spalte]: text" aufspalten; was nicht passt, bleibt Text.
+            size_t c1 = msg.find(".aiml:");
+            if (c1 != std::string::npos) {
+                size_t p0 = msg.rfind(' ', c1);
+                size_t beg = (p0 == std::string::npos) ? 0 : p0 + 1;
+                size_t c2 = msg.find(": ", c1);
+                if (c2 != std::string::npos) {
+                    std::string loc = msg.substr(beg, c2 - beg);
+                    msg = msg.substr(c2 + 2);
+                    size_t f1 = loc.find(':');
+                    file = loc.substr(0, f1);
+                    std::string rest = loc.substr(f1 + 1);
+                    size_t f2 = rest.find(':');
+                    if (f2 == std::string::npos) { line = rest; }
+                    else { line = rest.substr(0, f2); col = rest.substr(f2 + 1); }
+                }
+            }
+            if (std::string(d.sev) == "error") ++errs;
+            std::cout << d.sev << '\t' << file << '\t' << line << '\t' << col
+                      << '\t' << d.origin << '\t' << msg << std::endl;
+        }
+        return errs > 0 ? 1 : 0;
+    }
 
     if (reportPrefabs) {
         // --prefab-report: analysis-only.  Walk the whole import graph and print

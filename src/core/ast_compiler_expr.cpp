@@ -95,7 +95,7 @@ IRValue* Compiler::visitStringInterpolation(StringInterpolationExpr* expr) {
 }
 IRValue* Compiler::visitNewArrayExpr(NewArrayExpr* na) {
     llvm::Type* elemTy   = ctx.getLLVMType(na->elemTypeName);
-    uint64_t    elemSize = ctx.module.getDataLayout().getTypeAllocSize(elemTy);
+    uint64_t    elemSize = ctx.module().getDataLayout().getTypeAllocSize(elemTy);
 
     IRValue* countIR = visitExpression(na->countExpr.get());
     if (!countIR) { LOG_ERROR("new_array: could not evaluate count"); return ctx.ir_gen->getInt32(0); }
@@ -103,11 +103,11 @@ IRValue* Compiler::visitNewArrayExpr(NewArrayExpr* na) {
     if (count->getType()->isIntegerTy(32))
         count = ctx.builder.CreateZExt(count, ctx.builder.getInt64Ty(), "darr_count64");
 
-    llvm::Function* mallocFn = ctx.module.getFunction("malloc");
+    llvm::Function* mallocFn = ctx.module().getFunction("malloc");
     if (!mallocFn) {
         llvm::FunctionType* ft = llvm::FunctionType::get(
             ctx.builder.getInt8Ty()->getPointerTo(), {ctx.builder.getInt64Ty()}, false);
-        mallocFn = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "malloc", ctx.module);
+        mallocFn = llvm::Function::Create(ft, llvm::Function::ExternalLinkage, "malloc", ctx.module());
     }
     llvm::Value* bytes = ctx.builder.CreateMul(count, ctx.builder.getInt64(elemSize), "darr_bytes");
     llvm::Value* ptr   = ctx.builder.CreateCall(mallocFn, {bytes}, "darr_ptr");
@@ -116,6 +116,18 @@ IRValue* Compiler::visitNewArrayExpr(NewArrayExpr* na) {
 
 IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
     std::string className = newExpr->typeName;
+    // spec/29_2 §20: `new X` hier aufzeichnen, damit X mitgebuendelt wird.
+    // visitNewExpr schlaegt die Klasse direkt in ctx.classes nach und umgeht
+    // damit resolveType, wo das Bundle-Tracking haengt (context.h).  Folge war:
+    // eine Klasse, die NUR in einem `new` vorkommt — typisch
+    // `throw: { new: StepFailed }` — fehlte im Bundle, und der Empfaenger
+    // meldete `Unknown class for new`.  Gemessen in
+    // tests/test_bundle_exec_semantics.aiml.
+    if (!className.empty() && ctx.classes.count(className) &&
+        !ctx.classes[className].isBuiltin &&
+        !ctx.bundleTrackingTarget.empty() &&
+        ctx.functions.count(ctx.bundleTrackingTarget))
+        ctx.functions[ctx.bundleTrackingTarget].referencedTypes.insert(className);
     if (!className.empty() && ctx.classes.count(className)) {
         auto& classInfo = ctx.classes[className];
         llvm::StructType* structTy = classInfo.type;
@@ -124,16 +136,16 @@ IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
         // fields fit without reallocation (new slots are zero-initialized by calloc).
         uint64_t allocSize = (classInfo.padded_size > 0)
             ? (uint64_t)classInfo.padded_size
-            : ctx.module.getDataLayout().getTypeAllocSize(structTy);
+            : ctx.module().getDataLayout().getTypeAllocSize(structTy);
 
         // Ensure calloc exists.  size_t width is target-dependent (i64 on
         // x86-64, i32 on wasm32) — using ctx.getSizeType() makes the linker
         // signature match libc's.
         llvm::Type* sz = ctx.getSizeType();
-        llvm::Function* callocFunc = ctx.module.getFunction("calloc");
+        llvm::Function* callocFunc = ctx.module().getFunction("calloc");
         if (!callocFunc) {
              llvm::FunctionType* callocType = llvm::FunctionType::get(ctx.builder.getInt8Ty()->getPointerTo(), {sz, sz}, false);
-             llvm::Function::Create(callocType, llvm::Function::ExternalLinkage, "calloc", ctx.module);
+             llvm::Function::Create(callocType, llvm::Function::ExternalLinkage, "calloc", ctx.module());
         }
 
         IRValue* rawPtr;
@@ -205,7 +217,7 @@ IRValue* Compiler::visitNewExpr(NewExpr* newExpr) {
         // back-patched (phase 1).  Nothing else auto-invokes methods on {new:}.
         if (ctx.classGroupContainers.count(className)) {
             std::string ctorName = className + "___ctor";
-            if (ctx.module.getFunction(ctorName))
+            if (ctx.module().getFunction(ctorName))
                 ctx.ir_gen->createCall(ctorName, { rawPtr }, "");
         }
         return rawPtr;
@@ -417,7 +429,7 @@ IRValue* Compiler::visitVariable(VariableExpr* var) {
             auto fit = ctx.functions.find(varName);
             if (fit != ctx.functions.end() && fit->second.func)
                 fn = fit->second.func;
-            if (!fn) fn = ctx.module.getFunction(varName);
+            if (!fn) fn = ctx.module().getFunction(varName);
             if (fn) {
                 llvm::Value* fp = ctx.builder.CreateBitCast(fn, i8p, varName + "_fnptr");
                 return ctx.ir_gen->wrap(fp);
@@ -540,8 +552,8 @@ IRValue* Compiler::visitStringCompare(bool negate, llvm::Value* rawLhs, llvm::Va
     ctx.builder.SetInsertPoint(checkNullBB);
     ctx.builder.CreateBr(mergeBB);
     ctx.builder.SetInsertPoint(doStrcmpBB);
-    llvm::Function* strcmpFunc = ctx.module.getFunction("strcmp");
-    if (!strcmpFunc) strcmpFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "strcmp", ctx.module);
+    llvm::Function* strcmpFunc = ctx.module().getFunction("strcmp");
+    if (!strcmpFunc) strcmpFunc = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(), {ctx.builder.getInt8Ty()->getPointerTo(), ctx.builder.getInt8Ty()->getPointerTo()}, false), llvm::Function::ExternalLinkage, "strcmp", ctx.module());
     llvm::Value* cmpRes    = ctx.builder.CreateCall(strcmpFunc, {rawLhs, rawRhs});
     llvm::Value* strResult = negate
         ? ctx.builder.CreateICmpNE(cmpRes, ctx.builder.getInt32(0))
@@ -606,33 +618,70 @@ IRValue* Compiler::visitCast(BinaryExpr* bin) {
                   + " (spec/04_1 §7)");
         return nullptr;
     };
-    bool fromBool = from->isIntegerTy(1) || from->isIntegerTy(8);   // bool is stored as i8
-    bool fromInt = from->isIntegerTy(32) || from->isIntegerTy(64);
+    bool fromBool  = from->isIntegerTy(1) || from->isIntegerTy(8);   // bool is stored as i8
+    bool fromInt   = from->isIntegerTy(32) || from->isIntegerTy(64);
+    bool fromFloat = from->isFloatTy() || from->isDoubleTy();
+
+    /* float → integer.  Two inputs have no integer image, and leaving them to
+     * CreateFPToSI means poison at IR level — a build could then legitimately
+     * produce any value.  So both are defined here (spec/04_1 §7):
+     *   NaN            → 0
+     *   out of range   → clamped to the target's range
+     * The clamp is done in floating point BEFORE the conversion, because
+     * comparing after it would already be comparing poison. */
+    auto floatToInt = [&](llvm::Type* dst) -> IRValue* {
+        unsigned bits = dst->getIntegerBitWidth();
+        double lo = (bits == 32) ? -2147483648.0 : -9223372036854775808.0;
+        double hi = (bits == 32) ?  2147483647.0 :  9223372036854775807.0;
+        llvm::Value* zero   = llvm::ConstantFP::get(from, 0.0);
+        llvm::Value* isNan  = bld.CreateFCmpUNO(val, val, "cast_nan");
+        llvm::Value* safe   = bld.CreateSelect(isNan, zero, val, "cast_nan0");
+        /* Grenzen im Quelltyp bilden: bei f32 sind sie nicht exakt
+         * darstellbar und werden gerundet — genau deshalb wird GEKLAMMERT und
+         * nicht nur verglichen. */
+        llvm::Value* loV = llvm::ConstantFP::get(from, lo);
+        llvm::Value* hiV = llvm::ConstantFP::get(from, hi);
+        safe = bld.CreateSelect(bld.CreateFCmpOLT(safe, loV), loV, safe, "cast_clamp_lo");
+        safe = bld.CreateSelect(bld.CreateFCmpOGT(safe, hiV), hiV, safe, "cast_clamp_hi");
+        llvm::Value* conv = bld.CreateFPToSI(safe, dst, "cast_f2i");
+        /* Nach dem Klammern kann FPToSI am oberen Rand noch überlaufen (die
+         * gerundete Grenze liegt ggf. über hi) → auf hi festnageln. */
+        llvm::Value* atHi = bld.CreateFCmpOGE(safe, hiV, "cast_at_hi");
+        llvm::Value* hiI  = llvm::ConstantInt::getSigned(dst, (bits == 32)
+                              ? (int64_t)2147483647 : INT64_MAX);
+        return ctx.ir_gen->wrap(bld.CreateSelect(atHi, hiI, conv, "cast_f2i_sat"));
+    };
+
     if (to == "i32" || to == "i64") {
-        llvm::Type* dst = to == "i32" ? bld.getInt32Ty() : bld.getInt64Ty();
-        if (fromBool && to == "i32") return ctx.ir_gen->wrap(bld.CreateZExt(val, dst, "cast_b"));
-        if (fromInt) return ctx.ir_gen->wrap(bld.CreateSExtOrTrunc(val, dst, "cast_i"));
-        if (from->isDoubleTy() && to == "i32") {
-            llvm::Value* isNan = bld.CreateFCmpUNO(val, val, "cast_nan");
-            llvm::Value* conv = bld.CreateFPToSI(bld.CreateSelect(isNan, llvm::ConstantFP::get(from, 0.0), val), dst, "cast_f");
-            return ctx.ir_gen->wrap(conv);
+        llvm::Type* dst = (to == "i32") ? bld.getInt32Ty() : bld.getInt64Ty();
+        if (fromBool)  return ctx.ir_gen->wrap(bld.CreateZExt(val, dst, "cast_b2i"));
+        if (fromInt)   return ctx.ir_gen->wrap(bld.CreateSExtOrTrunc(val, dst, "cast_i2i"));
+        if (fromFloat) return floatToInt(dst);
+        return unsupported();
+    }
+    if (to == "f32" || to == "f64") {
+        llvm::Type* dst = (to == "f32") ? bld.getFloatTy() : bld.getDoubleTy();
+        /* bool zuerst: es ist als i8 gespeichert, also wäre SIToFP auf dem
+         * Rohwert zwar meist richtig, aber true ist garantiert 0/1 nur über
+         * die Null-Prüfung. */
+        if (fromBool) {
+            llvm::Value* one = bld.CreateICmpNE(val, llvm::ConstantInt::get(from, 0), "cast_b_nz");
+            return ctx.ir_gen->wrap(bld.CreateUIToFP(one, dst, "cast_b2f"));
         }
-        return unsupported();
-    }
-    if (to == "f64") {
-        if (from->isIntegerTy(32)) return ctx.ir_gen->wrap(bld.CreateSIToFP(val, bld.getDoubleTy(), "cast_if"));
-        if (from->isFloatTy()) return ctx.ir_gen->wrap(bld.CreateFPExt(val, bld.getDoubleTy(), "cast_ff"));
-        if (from->isDoubleTy()) return src;
-        return unsupported();
-    }
-    if (to == "f32") {
-        if (from->isDoubleTy()) return ctx.ir_gen->wrap(bld.CreateFPTrunc(val, bld.getFloatTy(), "cast_ft"));
-        if (from->isFloatTy()) return src;
+        if (fromInt)   return ctx.ir_gen->wrap(bld.CreateSIToFP(val, dst, "cast_i2f"));
+        if (from == dst) return src;
+        if (fromFloat) return ctx.ir_gen->wrap(from->isDoubleTy()
+                               ? bld.CreateFPTrunc(val, dst, "cast_f2f_t")
+                               : bld.CreateFPExt(val, dst, "cast_f2f_e"));
         return unsupported();
     }
     if (to == "bool") {
-        if (from->isIntegerTy(32)) return ctx.ir_gen->wrap(bld.CreateICmpNE(val, bld.getInt32(0), "cast_ib"));
-        if (fromBool) return ctx.ir_gen->wrap(bld.CreateICmpNE(val, llvm::ConstantInt::get(from, 0), "cast_bb"));
+        if (fromBool) return ctx.ir_gen->wrap(bld.CreateICmpNE(val, llvm::ConstantInt::get(from, 0), "cast_b2b"));
+        if (fromInt)  return ctx.ir_gen->wrap(bld.CreateICmpNE(val, llvm::ConstantInt::get(from, 0), "cast_i2b"));
+        /* ONE, nicht UNE: NaN ist damit false — dieselbe Antwort, die
+         * coerceToBool einer Bedingung gibt.  `cast` und `if` dürfen über
+         * denselben Wert nicht verschieden urteilen (spec/04_1 §7). */
+        if (fromFloat) return ctx.ir_gen->wrap(bld.CreateFCmpONE(val, llvm::ConstantFP::get(from, 0.0), "cast_f2b"));
         return unsupported();
     }
     return unsupported();
@@ -653,6 +702,53 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
         bin->lhs = std::move(tmp.container);
         bin->rhs = std::move(tmp.indices[0]);
         return r;
+    }
+    // spec/04_1 §4: `and` / `or` werten KURZ aus — "if first operand is false,
+    // remaining operands are not evaluated".  Das MUSS hier stehen, vor der
+    // Auswertung der Operanden: bis 2026-10-15 wurden beide Seiten ausgewertet
+    // und erst danach bitweise verknuepft (CreateAnd/CreateOr), die Spec-Regel
+    // war also schlicht nicht umgesetzt.  Damit war das haeufigste Schutzmuster
+    // der Sprache wirkungslos:
+    //     { '&&': [{ pneq: [p, null] }, { gt: [{ call: [p.has] }, 0] }] }
+    // Die Wache bestand, der zweite Operand lief trotzdem → SIGSEGV (gemessen
+    // im cosmos-Client, addr=0x8).  `equiv`/`xor` brauchen beide Seiten und
+    // bleiben unten.
+    if (bin->op == "and" || bin->op == "&&" || bin->op == "or" || bin->op == "||") {
+        const bool isAnd = (bin->op == "and" || bin->op == "&&");
+        IRValue* lhsV = visitExpression(bin->lhs.get());
+        if (!lhsV) return nullptr;
+        llvm::Value* lb = coerceToBool(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhsV)));
+        if (!lb) {
+            LOG_ERROR(ctx.fmtLoc(bin->sourceNode, bin->sourceLine) +
+                "Cannot apply logical operator '" + bin->op + "' to non-scalar type");
+            return nullptr;
+        }
+        llvm::BasicBlock* decideBB = ctx.builder.GetInsertBlock();
+        llvm::Function* fnOwner = decideBB ? decideBB->getParent() : nullptr;
+        if (!fnOwner) return nullptr;
+        llvm::BasicBlock* rhsBB  = llvm::BasicBlock::Create(ctx.context, isAnd ? "and.rhs" : "or.rhs", fnOwner);
+        llvm::BasicBlock* endBB  = llvm::BasicBlock::Create(ctx.context, isAnd ? "and.end" : "or.end", fnOwner);
+        // AND: nur weiterrechnen, wenn links wahr.  OR: nur, wenn links falsch.
+        if (isAnd) ctx.builder.CreateCondBr(lb, rhsBB, endBB);
+        else       ctx.builder.CreateCondBr(lb, endBB, rhsBB);
+        ctx.builder.SetInsertPoint(rhsBB);
+        IRValue* rhsV = visitExpression(bin->rhs.get());
+        if (!rhsV) return nullptr;
+        llvm::Value* rb = coerceToBool(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhsV)));
+        if (!rb) {
+            LOG_ERROR(ctx.fmtLoc(bin->sourceNode, bin->sourceLine) +
+                "Cannot apply logical operator '" + bin->op + "' to non-scalar type");
+            return nullptr;
+        }
+        // Der rechte Operand darf selbst Bloecke erzeugt haben — der Sprung
+        // kommt aus dem AKTUELLEN Block, nicht aus rhsBB.
+        llvm::BasicBlock* rhsEndBB = ctx.builder.GetInsertBlock();
+        if (!rhsEndBB->getTerminator()) ctx.builder.CreateBr(endBB);
+        ctx.builder.SetInsertPoint(endBB);
+        llvm::PHINode* phi = ctx.builder.CreatePHI(ctx.builder.getInt1Ty(), 2, isAnd ? "and" : "or");
+        phi->addIncoming(ctx.builder.getInt1(!isAnd), decideBB);   // AND→false, OR→true
+        phi->addIncoming(rb, rhsEndBB);
+        return ctx.ir_gen->wrap(phi);
     }
     if (bin->op == "cast") return visitCast(bin);
     IRValue* lhs = visitExpression(bin->lhs.get());
@@ -690,6 +786,57 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
             lhs = ctx.ir_gen->wrap(ctx.builder.CreateIntToPtr(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs)), rTy));
         } else if (lTy->isPointerTy() && rTy->isPointerTy()) {
             rhs = ctx.ir_gen->wrap(ctx.builder.CreateBitCast(static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs)), lTy));
+        } else if ((lTy->isFloatingPointTy() || lTy->isIntegerTy()) &&
+                   (rTy->isFloatingPointTy() || rTy->isIntegerTy())) {
+            /* spec/04_1 §7a: ein LITERAL hat keinen eigenen Typ — es wird im Typ
+             * des anderen Operanden gebildet.  Das wandelt nichts zur Laufzeit
+             * um (die Konstante entsteht direkt im Zieltyp), ist also kein
+             * impliziter Cast.  Zwei TYPISIERTE Werte verschiedener Breite sind
+             * dagegen ein Fehler: ob f64→f32 (Genauigkeit) oder f32→i32 (Bruch)
+             * verloren gehen darf, entscheidet der Autor.
+             *
+             * Ohne diesen Zweig fiel das Paar unverändert durch und erreichte
+             * LLVM als Instruktion mit zwei Operandentypen → die Modul-Prüfung
+             * scheiterte ("Both operands ... not of the same type!"), statt die
+             * hier zugesagte Meldung zu geben. */
+            auto* lv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(lhs));
+            auto* rv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(rhs));
+
+            /* Konstante im Zieltyp neu bilden; nullptr, wenn es keine ist. */
+            auto asFloatConst = [&](llvm::Value* v, llvm::Type* dstTy) -> llvm::Value* {
+                if (auto* cfp = llvm::dyn_cast<llvm::ConstantFP>(v)) {
+                    llvm::APFloat apf = cfp->getValueAPF();
+                    bool lost = false;
+                    apf.convert(dstTy->getFltSemantics(), llvm::APFloat::rmNearestTiesToEven, &lost);
+                    return llvm::ConstantFP::get(dstTy->getContext(), apf);
+                }
+                if (auto* ci = llvm::dyn_cast<llvm::ConstantInt>(v))
+                    return llvm::ConstantFP::get(dstTy, (double)ci->getSExtValue());
+                return nullptr;
+            };
+
+            bool handled = false;
+            if (lTy->isFloatingPointTy()) {
+                if (llvm::Value* c = asFloatConst(rv, lTy)) { rhs = ctx.ir_gen->wrap(c); handled = true; }
+            }
+            if (!handled && rTy->isFloatingPointTy()) {
+                if (llvm::Value* c = asFloatConst(lv, rTy)) { lhs = ctx.ir_gen->wrap(c); handled = true; }
+            }
+            if (!handled) {
+                auto typeName = [](llvm::Type* t) -> const char* {
+                    if (t->isDoubleTy())      return "f64";
+                    if (t->isFloatTy())       return "f32";
+                    if (t->isIntegerTy(64))   return "i64";
+                    if (t->isIntegerTy(32))   return "i32";
+                    if (t->isIntegerTy(1) || t->isIntegerTy(8)) return "bool";
+                    return "numeric";
+                };
+                LOG_ERROR(ctx.fmtLoc(bin->sourceNode) + "operator '" + bin->op
+                          + "': operands have different types (" + typeName(lTy) + " vs "
+                          + typeName(rTy) + ") — convert one side explicitly with "
+                          + "{ cast: [value, " + typeName(lTy) + "] } (spec/04_1 §3, §7a)");
+                return nullptr;
+            }
         }
         // The operation dispatch below must see the coerced LLVM types, not the
         // original pre-cast pair, otherwise CreateICmp* can still observe
@@ -710,8 +857,8 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
             llvm::AllocaInst* a = ctx.createEntryAlloca(ty); ctx.builder.CreateStore(val,a); return a;
         };
         auto callVoidFn = [&](const char* nm, std::vector<llvm::Type*> pts, std::vector<llvm::Value*> xs, llvm::Type* outTy) -> llvm::Value* {
-            llvm::Function* fn = ctx.module.getFunction(nm);
-            if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),pts,false),llvm::Function::ExternalLinkage,nm,ctx.module);
+            llvm::Function* fn = ctx.module().getFunction(nm);
+            if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),pts,false),llvm::Function::ExternalLinkage,nm,ctx.module());
             llvm::AllocaInst* out = ctx.createEntryAlloca(outTy);
             xs.push_back(out);
             ctx.builder.CreateCall(fn,xs);
@@ -735,8 +882,8 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
             if (bin->op == "*" &&  rhsIsScalar) return ctx.ir_gen->wrap(callVoidFn((pre+"scale").c_str(),{op,ctx.builder.getFloatTy(),op},{store(lv,structTy),rv},structTy));
             if (bin->op == "/" &&  rhsIsScalar) return ctx.ir_gen->wrap(callVoidFn((pre+"div").c_str(),{op,ctx.builder.getFloatTy(),op},{store(lv,structTy),rv},structTy));
             if (bin->op == "eq") {
-                llvm::Function* fn=ctx.module.getFunction((pre+"eq").c_str());
-                if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(),{op,op},false),llvm::Function::ExternalLinkage,(pre+"eq").c_str(),ctx.module);
+                llvm::Function* fn=ctx.module().getFunction((pre+"eq").c_str());
+                if (!fn) fn=llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getInt32Ty(),{op,op},false),llvm::Function::ExternalLinkage,(pre+"eq").c_str(),ctx.module());
                 llvm::Value* res=ctx.builder.CreateCall(fn,{store(lv,structTy),store(rv,structTy)});
                 return ctx.ir_gen->wrap(ctx.builder.CreateICmpNE(res,ctx.builder.getInt32(0)));
             }
@@ -848,7 +995,7 @@ IRValue* Compiler::visitBinary(BinaryExpr* bin) {
                                  llvm::Value* thisRaw, llvm::Value* otherRaw) -> IRValue* {
             if (typeName.empty()) return nullptr;
             std::string eqFnName = typeName + "___eq__";
-            llvm::Function* eqFn = ctx.module.getFunction(eqFnName);
+            llvm::Function* eqFn = ctx.module().getFunction(eqFnName);
             if (!eqFn || eqFn->arg_size() != 2) return nullptr;
             if (thisRaw->getType() != eqFn->getFunctionType()->getParamType(0))
                 thisRaw = ctx.builder.CreateBitCast(thisRaw, eqFn->getFunctionType()->getParamType(0));
@@ -1059,9 +1206,9 @@ IRValue* Compiler::visitUnary(UnaryExpr* unary) {
             std::string sn = structTy->getName().str();
             std::string nm = "aiml_math_" + sn + "_neg";
             auto op2 = llvm::PointerType::get(ctx.context,0);
-            llvm::Function* fn = ctx.module.getFunction(nm.c_str());
+            llvm::Function* fn = ctx.module().getFunction(nm.c_str());
             if (!fn) fn = llvm::Function::Create(llvm::FunctionType::get(ctx.builder.getVoidTy(),{op2,op2},false),
-                llvm::Function::ExternalLinkage,nm.c_str(),ctx.module);
+                llvm::Function::ExternalLinkage,nm.c_str(),ctx.module());
             llvm::AllocaInst* src = ctx.createEntryAlloca(structTy);
             ctx.builder.CreateStore(v, src);
             llvm::AllocaInst* out = ctx.createEntryAlloca(structTy);
@@ -1142,7 +1289,7 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
 
     // 3. Build or reuse a trampoline: void*(void*) that unpacks args and calls targetFn
     std::string trampolineName = "__aiml_spawn_" + spawn->functionName;
-    llvm::Function* trampoline = ctx.module.getFunction(trampolineName);
+    llvm::Function* trampoline = ctx.module().getFunction(trampolineName);
     if (!trampoline) {
         std::vector<llvm::Type*> argTypes;
         for (auto* v : argVals) argTypes.push_back(v->getType());
@@ -1151,7 +1298,7 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
 
         llvm::FunctionType* trampolineTy = llvm::FunctionType::get(i8p, {i8p}, false);
         trampoline = llvm::Function::Create(trampolineTy,
-            llvm::Function::InternalLinkage, trampolineName, ctx.module);
+            llvm::Function::InternalLinkage, trampolineName, ctx.module());
 
         llvm::IRBuilder<>::InsertPoint savedIP = ctx.builder.saveIP();
         llvm::BasicBlock* tBB     = llvm::BasicBlock::Create(ctx.context, "entry",  trampoline);
@@ -1159,11 +1306,11 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
         llvm::BasicBlock* catchBB  = llvm::BasicBlock::Create(ctx.context, "catch",  trampoline);
 
         // Give trampoline a personality so it can have a landingpad
-        llvm::Function* persPtr = ctx.module.getFunction("__gxx_personality_v0");
+        llvm::Function* persPtr = ctx.module().getFunction("__gxx_personality_v0");
         if (!persPtr) {
             llvm::FunctionType* persTy = llvm::FunctionType::get(ctx.builder.getInt32Ty(), true);
             persPtr = llvm::Function::Create(persTy, llvm::Function::ExternalLinkage,
-                                             "__gxx_personality_v0", ctx.module);
+                                             "__gxx_personality_v0", ctx.module());
         }
         trampoline->setPersonalityFn(persPtr);
 
@@ -1219,7 +1366,7 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
         std::vector<llvm::Type*> argTypes;
         for (auto* v : argVals) argTypes.push_back(v->getType());
         llvm::StructType* argStructTy = llvm::StructType::get(ctx.context, argTypes);
-        llvm::DataLayout dl(&ctx.module);
+        llvm::DataLayout dl(&ctx.module());
         uint64_t argStructSize = dl.getTypeAllocSize(argStructTy);
 
         llvm::Function* mallocFn = ctx.getFunction("malloc", i8p, {ctx.builder.getInt64Ty()});
@@ -1240,7 +1387,7 @@ IRValue* Compiler::visitSpawn(SpawnExpr* spawn) {
         LOG_ERROR(ctx.fmtLoc(spawn->sourceNode) + "spawn: thread_handle type not found");
         return nullptr;
     }
-    llvm::DataLayout dl(&ctx.module);
+    llvm::DataLayout dl(&ctx.module());
     llvm::Function* mallocFn = ctx.getFunction("malloc", i8p, {ctx.builder.getInt64Ty()});
     llvm::Value* rawHandle = ctx.builder.CreateCall(mallocFn,
         {ctx.builder.getInt64(dl.getTypeAllocSize(handleTy))}, "handle_raw");
@@ -1488,11 +1635,11 @@ IRValue* Compiler::visitAtExpr(AtExpr* at) {
         if (elemName == "string") {
             auto* i8p = ctx.builder.getInt8Ty()->getPointerTo();
             auto* voidTy = llvm::Type::getVoidTy(ctx.context);
-            llvm::Function* incref = ctx.module.getFunction("aiml_str_incref");
+            llvm::Function* incref = ctx.module().getFunction("aiml_str_incref");
             if (!incref) {
                 auto* fty = llvm::FunctionType::get(voidTy, {i8p}, false);
                 incref = llvm::Function::Create(fty, llvm::Function::ExternalLinkage,
-                                                "aiml_str_incref", ctx.module);
+                                                "aiml_str_incref", ctx.module());
             }
             ctx.builder.CreateCall(incref, {val});
             // spec/61 §7: this incref made a FRESH owned alias — register it as an owned stmt-temp

@@ -116,6 +116,7 @@ void* aiml_wss_connect(const char* host, int32_t port, const char* path) {
 void* aiml_ws_server(const char*, int32_t)                                  { errno = ENOTSUP; return nullptr; }
 void* aiml_wss_server(const char*, int32_t, const char*, const char*)       { errno = ENOTSUP; return nullptr; }
 void* aiml_ws_accept(void*)                                                 { errno = ENOTSUP; return nullptr; }
+int32_t aiml_ws_set_timeout(void*, int32_t)                                 { errno = ENOTSUP; return -1; }
 const char* aiml_ws_peer_ip(void*)                                          { return ""; }
 void aiml_ws_set_client_insecure(int32_t)                                   { /* browser TLS is enforced by the browser */ }
 int32_t aiml_ws_client_insecure()                                           { return 0; }
@@ -277,6 +278,10 @@ int aiml_ws_poll_listener(void*, int32_t) { errno = ENOTSUP; return -1; }
 #include <mutex>
 #include <signal.h>
 #include <poll.h>
+#include <deque>
+#include <string>
+#include <vector>
+#include <algorithm>
 
 // ══════════════════════════════════════════════════════════════════════════════
 // SHA-1  (FIPS 180-4 / RFC 3174)  — no external dependency
@@ -397,6 +402,8 @@ static uint32_t ws_next_mask() {
 // Internal struct
 // ══════════════════════════════════════════════════════════════════════════════
 
+struct WsPending;
+
 struct AimlWs {
     int      fd;
     SSL*     ssl;            // null = plain TCP
@@ -404,6 +411,8 @@ struct AimlWs {
     bool     is_listener;    // true = server listen socket
     bool     is_client_side; // true = WS client role (must mask outgoing frames)
     char     ip[46];         // accepted peer's IP (dotted); "" unless set at accept
+    int32_t    hs_timeout_ms = 5000;  // listener: per-connection handshake timeout (spec/32_4 §5.1)
+    WsPending* pend = nullptr;        // listener: in-flight handshakes + ready clients
 };
 
 static AimlWs* to_ws(void* p) { return static_cast<AimlWs*>(p); }
@@ -514,28 +523,159 @@ static int ws_client_handshake(AimlWs* ws, const char* host, int32_t port, const
     return ok ? 0 : -1;
 }
 
-static int ws_server_handshake(AimlWs* ws) {
-    char* req = read_http_head(ws);
-    if (!req) return -1;
+// ── Asynchronous server handshake (spec/32_4 §5.1) ─────────────────────────────
+// The listener drives every incoming connection's TLS handshake + HTTP upgrade
+// non-blocking; only fully handshaken clients are handed out by accept.
 
-    char* client_key = hdr_get(req, "Sec-WebSocket-Key");
-    free(req);
-    if (!client_key) return -1;
+static const size_t kMaxPendingHandshakes = 64;
 
-    char accept[29];
-    ws_accept_key(client_key, accept);
-    free(client_key);
+static int64_t ws_mono_ms() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
 
-    char resp[512];
-    snprintf(resp, sizeof(resp),
-        "HTTP/1.1 101 Switching Protocols\r\n"
-        "Upgrade: websocket\r\n"
-        "Connection: Upgrade\r\n"
-        "Sec-WebSocket-Accept: %s\r\n"
-        "\r\n",
-        accept);
+struct WsHs {
+    AimlWs*     ws;
+    int64_t     deadline;
+    int         stage;        // 0 = TLS, 1 = read upgrade request, 2 = write 101
+    short       ev = POLLIN;  // readiness the stalled step waits for
+    std::string head;
+    std::string out;
+    size_t      out_off = 0;
+};
 
-    return ws_write_n(ws, resp, (int)strlen(resp)) > 0 ? 0 : -1;
+struct WsPending {
+    std::mutex            mtx;
+    std::vector<WsHs*>    hs;
+    std::deque<AimlWs*>   ready;
+};
+
+static void ws_free_conn(AimlWs* ws) {
+    if (ws->ssl) SSL_free(ws->ssl);
+    ::close(ws->fd);
+    delete ws;
+}
+
+// Map a non-positive I/O result to "would block" (0, h->ev set) or hard error (-1).
+static int hs_blocked(WsHs* h, int r, bool wr) {
+    if (h->ws->ssl) {
+        int e = SSL_get_error(h->ws->ssl, r);
+        if (e == SSL_ERROR_WANT_READ)  { h->ev = POLLIN;  return 0; }
+        if (e == SSL_ERROR_WANT_WRITE) { h->ev = POLLOUT; return 0; }
+        return -1;
+    }
+    if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+        h->ev = wr ? POLLOUT : POLLIN;
+        return 0;
+    }
+    return -1;
+}
+
+// 1 = handshake complete (fd back to blocking), 0 = in progress, -1 = failed.
+static int hs_step(WsHs* h) {
+    AimlWs* ws = h->ws;
+    if (h->stage == 0) {
+        ERR_clear_error();
+        int r = SSL_accept(ws->ssl);
+        if (r != 1) return hs_blocked(h, r, false);
+        h->stage = 1;
+    }
+    if (h->stage == 1) {
+        for (;;) {
+            char c;
+            if (ws->ssl) ERR_clear_error();
+            int r = ws->ssl ? SSL_read(ws->ssl, &c, 1) : (int)::recv(ws->fd, &c, 1, 0);
+            if (r <= 0) return hs_blocked(h, r, false);
+            h->head.push_back(c);
+            if (h->head.size() > 8192) return -1;
+            size_t n = h->head.size();
+            if (n >= 4 && h->head.compare(n - 4, 4, "\r\n\r\n") == 0) break;
+        }
+        char* key = hdr_get(h->head.c_str(), "Sec-WebSocket-Key");
+        if (!key) return -1;
+        char accept[29];
+        ws_accept_key(key, accept);
+        free(key);
+        h->out = std::string("HTTP/1.1 101 Switching Protocols\r\n"
+                             "Upgrade: websocket\r\n"
+                             "Connection: Upgrade\r\n"
+                             "Sec-WebSocket-Accept: ") + accept + "\r\n\r\n";
+        h->stage = 2;
+    }
+    while (h->out_off < h->out.size()) {
+        const char* b = h->out.data() + h->out_off;
+        int n = (int)(h->out.size() - h->out_off);
+        if (ws->ssl) ERR_clear_error();
+        int r = ws->ssl ? SSL_write(ws->ssl, b, n) : (int)::send(ws->fd, b, n, MSG_NOSIGNAL);
+        if (r <= 0) return hs_blocked(h, r, true);
+        h->out_off += r;
+    }
+    int fl = fcntl(ws->fd, F_GETFL, 0);
+    fcntl(ws->fd, F_SETFL, fl & ~O_NONBLOCK);
+    return 1;
+}
+
+// Accept new connections, advance pending handshakes, drop failed/expired ones.
+// Caller holds p->mtx.
+static void ws_pump(AimlWs* srv, WsPending* p) {
+    for (;;) {
+        struct sockaddr_in addr{};
+        socklen_t len = sizeof(addr);
+        int cfd = ::accept4(srv->fd, (sockaddr*)&addr, &len, SOCK_CLOEXEC | SOCK_NONBLOCK);
+        if (cfd < 0) break;
+        if (p->hs.size() >= kMaxPendingHandshakes) { ::close(cfd); continue; }
+        AimlWs* c = new AimlWs{cfd, nullptr, nullptr, false, false, {0}};
+        inet_ntop(AF_INET, &addr.sin_addr, c->ip, sizeof(c->ip));
+        if (srv->ctx) {
+            c->ssl = SSL_new(srv->ctx);
+            SSL_set_fd(c->ssl, cfd);
+        }
+        p->hs.push_back(new WsHs{c, ws_mono_ms() + srv->hs_timeout_ms, srv->ctx ? 0 : 1});
+    }
+    int64_t now = ws_mono_ms();
+    for (size_t i = 0; i < p->hs.size(); ) {
+        WsHs* h = p->hs[i];
+        int r = hs_step(h);
+        if (r == 0 && now < h->deadline) { ++i; continue; }
+        if (r == 1) p->ready.push_back(h->ws);
+        else        ws_free_conn(h->ws);
+        delete h;
+        p->hs.erase(p->hs.begin() + i);
+    }
+}
+
+// 1 = a handshaken client is ready, 0 = timeout, -1 = error. timeout_ms < 0 waits forever.
+static int ws_listener_wait(AimlWs* srv, int32_t timeout_ms) {
+    if (!srv->is_listener) return -1;
+    if (!srv->pend) srv->pend = new WsPending();
+    WsPending* p = srv->pend;
+    int64_t end = timeout_ms < 0 ? INT64_MAX : ws_mono_ms() + timeout_ms;
+    std::vector<struct pollfd> fds;
+    for (;;) {
+        int64_t wait;
+        {
+            std::lock_guard<std::mutex> g(p->mtx);
+            ws_pump(srv, p);
+            if (!p->ready.empty()) return 1;
+            int64_t now = ws_mono_ms();
+            if (now >= end) return 0;
+            wait = end - now;
+            fds.assign(1, { srv->fd, POLLIN, 0 });
+            for (WsHs* h : p->hs) {
+                fds.push_back({ h->ws->fd, h->ev, 0 });
+                wait = std::min(wait, std::max<int64_t>(h->deadline - now, 0));
+            }
+        }
+        if (::poll(fds.data(), fds.size(), (int)std::min<int64_t>(wait, INT32_MAX)) < 0 && errno != EINTR)
+            return -1;
+    }
+}
+
+static void ws_pending_free(WsPending* p) {
+    for (WsHs* h : p->hs) { ws_free_conn(h->ws); delete h; }
+    for (AimlWs* c : p->ready) ws_free_conn(c);
+    delete p;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -611,6 +751,15 @@ static char* ws_recv_frame_raw(AimlWs* ws, uint8_t* out_opcode, size_t* out_len)
         for (int i = 0; i < 8; i++) plen = (plen << 8) | e[i];
     }
 
+    // Hard frame-size ceiling (spec/32_4 §6): reject an attacker-declared length BEFORE any
+    // allocation.  Without this, plen is client-controlled up to 2^64-1 → malloc(plen+1) wraps
+    // (plen=2^64-1 → malloc(0)), (int)plen truncates to -1 (skipping the short-read guard), and
+    // the mask-XOR / payload[plen]='\0' then write out of bounds → unauthenticated remote crash
+    // (tests/test_ws_oversized_frame.aiml).  64 MiB is above any legitimate single frame (Mirror
+    // RPCs ≤ 8 MiB, media/KV blobs) and well below the overflow/truncation danger (< 2^31).
+    static const uint64_t WS_MAX_FRAME = (uint64_t)64 << 20;
+    if (plen > WS_MAX_FRAME) return nullptr;
+
     uint8_t mk[4] = {};
     if (masked && ws_read_n(ws, mk, 4) < 0) return nullptr;
 
@@ -643,7 +792,7 @@ static int tcp_connect(const char* host, int32_t port, int32_t timeout_ms = 5000
     hints.ai_family   = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     if (getaddrinfo(host, ps, &hints, &res) != 0 || !res) return -1;
-    int fd = ::socket(res->ai_family, SOCK_STREAM, 0);
+    int fd = ::socket(res->ai_family, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) { freeaddrinfo(res); return -1; }
 
     /* Switch to non-blocking so connect() returns immediately */
@@ -690,7 +839,7 @@ static std::once_flag g_ws_sigpipe_once;
 static void ws_ignore_sigpipe() { signal(SIGPIPE, SIG_IGN); }
 
 static int tcp_server_fd(const char* host, int32_t port) {
-    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    int fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) return -1;
     int yes = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
@@ -784,6 +933,7 @@ extern "C" void* aiml_ws_server(const char* host, int32_t port) {
     std::call_once(g_ws_sigpipe_once, ws_ignore_sigpipe);
     int fd = tcp_server_fd(host, port);
     if (fd < 0) return nullptr;
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
     return new AimlWs{fd, nullptr, nullptr, true, false};
 }
 
@@ -797,13 +947,14 @@ extern "C" void* aiml_wss_server(const char* host, int32_t port,
     aiml_tls_harden_server_ctx(ctx);
     // Fail loudly if the cert/key cannot be loaded — otherwise the listener
     // would come up with no usable certificate and every handshake would fail.
-    if (SSL_CTX_use_certificate_file(ctx, cert, SSL_FILETYPE_PEM) <= 0 ||
+    if (SSL_CTX_use_certificate_chain_file(ctx, cert) <= 0 ||
         SSL_CTX_use_PrivateKey_file(ctx, key, SSL_FILETYPE_PEM) <= 0) {
         SSL_CTX_free(ctx); return nullptr;
     }
 
     int fd = tcp_server_fd(host, port);
     if (fd < 0) { SSL_CTX_free(ctx); return nullptr; }
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
     // ctx stored in listener socket; used when accepting clients
     return new AimlWs{fd, nullptr, ctx, true, false};
 }
@@ -811,29 +962,25 @@ extern "C" void* aiml_wss_server(const char* host, int32_t port,
 extern "C" void* aiml_ws_accept(void* srv_ptr) {
     if (!srv_ptr) return nullptr;
     AimlWs* srv = to_ws(srv_ptr);
+    if (ws_listener_wait(srv, -1) != 1) return nullptr;
+    std::lock_guard<std::mutex> g(srv->pend->mtx);
+    AimlWs* c = srv->pend->ready.front();
+    srv->pend->ready.pop_front();
+    return c;
+}
 
-    struct sockaddr_in addr{};
-    socklen_t len = sizeof(addr);
-    int cfd = ::accept(srv->fd, (sockaddr*)&addr, &len);
-    if (cfd < 0) return nullptr;
-
-    SSL* ssl = nullptr;
-    if (srv->ctx) {
-        // wss: do TLS handshake first
-        ssl = SSL_new(srv->ctx);
-        SSL_set_fd(ssl, cfd);
-        if (SSL_accept(ssl) != 1) {
-            SSL_free(ssl); ::close(cfd); return nullptr;
-        }
+extern "C" int32_t aiml_ws_set_timeout(void* p, int32_t ms) {
+    if (!p) return -1;
+    AimlWs* ws = to_ws(p);
+    if (ws->is_listener) {
+        ws->hs_timeout_ms = ms > 0 ? ms : 5000;
+        return 0;
     }
-
-    AimlWs* client = new AimlWs{cfd, ssl, nullptr, false, false, {0}};
-    inet_ntop(AF_INET, &addr.sin_addr, client->ip, sizeof(client->ip));
-    if (ws_server_handshake(client) < 0) {
-        if (ssl) SSL_free(ssl);
-        ::close(cfd); delete client; return nullptr;
-    }
-    return client;
+    struct timeval tv = { ms / 1000, (ms % 1000) * 1000 };
+    if (ms < 0) tv = { 0, 0 };
+    if (setsockopt(ws->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) return -1;
+    if (setsockopt(ws->fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) < 0) return -1;
+    return 0;
 }
 
 // Peer IP (dotted) of a client returned by aiml_ws_accept; "" if unknown.
@@ -868,8 +1015,12 @@ extern "C" char* aiml_ws_recv(void* p) {
         switch (opcode) {
             case 0x0:  // continuation
             case 0x1:  // text
-            case 0x2:  // binary
-                return payload;
+            case 0x2: {  // binary — refcounted AIML string, like the wasm path
+                char* out = aiml_str_alloc(len);
+                memcpy(out, payload, len);
+                free(payload);
+                return out;
+            }
             case 0x8:  // close — echo close frame, return null
                 ws_send_frame(ws, 0x8, "", 0, ws->is_client_side);
                 free(payload); return nullptr;
@@ -991,6 +1142,7 @@ extern "C" int aiml_ws_close(void* p) {
     AimlWs* ws = to_ws(p);
     if (!ws->is_listener)
         ws_send_frame(ws, 0x8, "\x03\xE8", 2, ws->is_client_side); // close code 1000
+    if (ws->pend) ws_pending_free(ws->pend);
     if (ws->ssl) { SSL_shutdown(ws->ssl); SSL_free(ws->ssl); }
     if (ws->ctx) SSL_CTX_free(ws->ctx);
     ::close(ws->fd);
@@ -1016,11 +1168,7 @@ extern "C" int aiml_ws_poll(void* p, int32_t timeout_ms) {
  * Returns 1 if a client is waiting, 0 if timeout, -1 on error. */
 extern "C" int aiml_ws_poll_listener(void* srv_ptr, int32_t timeout_ms) {
     if (!srv_ptr) return -1;
-    AimlWs* ws = to_ws(srv_ptr);
-    if (!ws->is_listener) return -1;
-    struct pollfd pfd = { ws->fd, POLLIN, 0 };
-    int r = ::poll(&pfd, 1, timeout_ms);
-    return r > 0 ? 1 : (r == 0 ? 0 : -1);
+    return ws_listener_wait(to_ws(srv_ptr), timeout_ms);
 }
 
 #endif // __EMSCRIPTEN__

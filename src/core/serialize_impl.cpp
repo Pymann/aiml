@@ -325,10 +325,10 @@ static llvm::Value* memv3LoadContainerHandleOrEmpty(CompilerContext& ctx, llvm::
     auto* ptr = ptrT(ctx);
     llvm::Value* h = ctx.builder.CreateLoad(ptr, fp, "conh");
     const char* gname = "__aiml_container_zero64";
-    llvm::GlobalVariable* zg = ctx.module.getGlobalVariable(gname);
+    llvm::GlobalVariable* zg = ctx.module().getGlobalVariable(gname);
     if(!zg){
         llvm::ArrayType* at = llvm::ArrayType::get(i8T(ctx), 64);
-        zg = new llvm::GlobalVariable(ctx.module, at, /*const=*/true,
+        zg = new llvm::GlobalVariable(ctx.module(), at, /*const=*/true,
             llvm::GlobalValue::PrivateLinkage, llvm::ConstantAggregateZero::get(at), gname);
     }
     llvm::Value* isn = ctx.builder.CreateICmpEQ(h, llvm::Constant::getNullValue(ptr), "conh_null");
@@ -485,14 +485,14 @@ static void emitWriteField(CompilerContext& ctx, llvm::Value* writer,
 static llvm::Function* emitSerializeStruct(CompilerContext& ctx,
                                            const std::string& typeName){
     std::string fnName = "__aiml_ser_"+typeName;
-    if(auto* f=ctx.module.getFunction(fnName)) return f;
+    if(auto* f=ctx.module().getFunction(fnName)) return f;
     if(!ctx.classes.count(typeName)) return nullptr;
     llvm::StructType* st = ctx.classes[typeName].type;
     if(!st) return nullptr;
 
     auto savedIP = ctx.builder.saveIP();
     auto* ft = llvm::FunctionType::get(i8pT(ctx),{ptrT(ctx)},false);
-    auto* fn = llvm::Function::Create(ft,llvm::Function::InternalLinkage,fnName,ctx.module);
+    auto* fn = llvm::Function::Create(ft,llvm::Function::InternalLinkage,fnName,ctx.module());
     fn->addFnAttr(llvm::Attribute::NoInline);
     fn->getArg(0)->setName("sp");
     auto* entry = llvm::BasicBlock::Create(ctx.context,"entry",fn);
@@ -512,14 +512,14 @@ static llvm::Function* emitSerializeStruct(CompilerContext& ctx,
 static llvm::Function* emitSerializeList(CompilerContext& ctx,
                                          const std::string& listTn){
     std::string fnName = "__aiml_ser_"+sanitize(listTn);
-    if(auto* f=ctx.module.getFunction(fnName)) return f;
+    if(auto* f=ctx.module().getFunction(fnName)) return f;
     std::string elemTn = listElem(listTn);
     llvm::Type* elemTy = ctx.getLLVMType(elemTn);
     llvm::Type* listTy = ctx.getLLVMType(listTn);
 
     auto savedIP = ctx.builder.saveIP();
     auto* ft = llvm::FunctionType::get(i8pT(ctx),{ptrT(ctx)},false);
-    auto* fn = llvm::Function::Create(ft,llvm::Function::InternalLinkage,fnName,ctx.module);
+    auto* fn = llvm::Function::Create(ft,llvm::Function::InternalLinkage,fnName,ctx.module());
     fn->addFnAttr(llvm::Attribute::NoInline);
     fn->getArg(0)->setName("lp");
     auto* entry = llvm::BasicBlock::Create(ctx.context,"entry",fn);
@@ -547,7 +547,7 @@ static llvm::Function* emitSerializeList(CompilerContext& ctx,
 static llvm::Function* emitSerializeMap(CompilerContext& ctx,
                                         const std::string& mapTn){
     std::string fnName = "__aiml_ser_"+sanitize(mapTn);
-    if(auto* f=ctx.module.getFunction(fnName)) return f;
+    if(auto* f=ctx.module().getFunction(fnName)) return f;
     std::string keyTn = mapKeyTn(mapTn);
     std::string valTn = mapValTn(mapTn);
     bool intKey = (keyTn != "string");
@@ -555,7 +555,7 @@ static llvm::Function* emitSerializeMap(CompilerContext& ctx,
 
     auto savedIP = ctx.builder.saveIP();
     auto* ft = llvm::FunctionType::get(i8pT(ctx),{ptrT(ctx)},false);
-    auto* fn = llvm::Function::Create(ft,llvm::Function::InternalLinkage,fnName,ctx.module);
+    auto* fn = llvm::Function::Create(ft,llvm::Function::InternalLinkage,fnName,ctx.module());
     fn->addFnAttr(llvm::Attribute::NoInline);
     fn->getArg(0)->setName("mp");
     auto* entry = llvm::BasicBlock::Create(ctx.context,"entry",fn);
@@ -705,7 +705,7 @@ static void emitReadValListElements(CompilerContext& ctx, llvm::Value* subReader
 
     if(ctx.classes.count(elemTn) && ctx.classes[elemTn].type){
         llvm::StructType* subSt = ctx.classes[elemTn].type;
-        uint64_t subSz = ctx.module.getDataLayout().getTypeAllocSize(subSt);
+        uint64_t subSz = ctx.module().getDataLayout().getTypeAllocSize(subSt);
         llvm::Value* sr = ctx.builder.CreateCall(gJrValSub(ctx), {subReader, idx}, "sr");
         auto* srOk   = llvm::BasicBlock::Create(ctx.context, lbl+"_srok",   parentFn);
         auto* srDone = llvm::BasicBlock::Create(ctx.context, lbl+"_srdone", parentFn);
@@ -727,7 +727,7 @@ static void emitReadValListElements(CompilerContext& ctx, llvm::Value* subReader
         std::string innerTn = isRefType(elemTn) ? refInner(elemTn) : ptrInner(elemTn);
         if(ctx.classes.count(innerTn) && ctx.classes[innerTn].type){
             llvm::StructType* subSt = ctx.classes[innerTn].type;
-            uint64_t subSz = ctx.module.getDataLayout().getTypeAllocSize(subSt);
+            uint64_t subSz = ctx.module().getDataLayout().getTypeAllocSize(subSt);
             llvm::Value* sr = ctx.builder.CreateCall(gJrValSub(ctx), {subReader, idx}, "sr");
             auto* srOk   = llvm::BasicBlock::Create(ctx.context, lbl+"_rsrok",   parentFn);
             auto* srNull = llvm::BasicBlock::Create(ctx.context, lbl+"_rsrnull", parentFn);
@@ -737,12 +737,12 @@ static void emitReadValListElements(CompilerContext& ctx, llvm::Value* subReader
                 srOk, srNull);
             // calloc(1, subSz) — heap-allocate inner struct, zero-init
             ctx.builder.SetInsertPoint(srOk);
-            llvm::Function* callocFn = ctx.module.getFunction("calloc");
+            llvm::Function* callocFn = ctx.module().getFunction("calloc");
             if(!callocFn){
                 llvm::FunctionType* ct = llvm::FunctionType::get(
                     ptrT(ctx), {ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty()}, false);
                 callocFn = llvm::Function::Create(ct, llvm::Function::ExternalLinkage,
-                    "calloc", ctx.module);
+                    "calloc", ctx.module());
             }
             llvm::Value* heap = ctx.builder.CreateCall(callocFn,
                 {ctx.builder.getInt64(1), ctx.builder.getInt64(subSz)}, "rheap");
@@ -853,7 +853,7 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
                 auto& ci2 = ctx.classes[elemTn];
                 uint64_t subSz = (ci2.padded_size > 0)
                     ? (uint64_t)ci2.padded_size
-                    : ctx.module.getDataLayout().getTypeAllocSize(ci2.type);
+                    : ctx.module().getDataLayout().getTypeAllocSize(ci2.type);
                 llvm::Value* sr = ctx.builder.CreateCall(gJrArrSub(ctx),{reader,fkey,idx},"msr");
                 llvm::BasicBlock* srOk   = llvm::BasicBlock::Create(ctx.context,fname+"_msrok",parentFn);
                 llvm::BasicBlock* srNull = llvm::BasicBlock::Create(ctx.context,fname+"_msrnull",parentFn);
@@ -874,7 +874,7 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
             } else if(ctx.classes.count(elemTn) && ctx.classes[elemTn].type){
                 // list<Struct>: sub-reader per element
                 llvm::StructType* subSt = ctx.classes[elemTn].type;
-                uint64_t subSz = ctx.module.getDataLayout().getTypeAllocSize(subSt);
+                uint64_t subSz = ctx.module().getDataLayout().getTypeAllocSize(subSt);
                 llvm::Value* sr = ctx.builder.CreateCall(gJrArrSub(ctx),{reader,fkey,idx},"sr");
                 // null-safe: skip if sub-reader is null
                 llvm::BasicBlock* srOk = llvm::BasicBlock::Create(ctx.context,fname+"_srok",parentFn);
@@ -901,7 +901,7 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
                 std::string innerTn = isRefType(elemTn) ? refInner(elemTn) : ptrInner(elemTn);
                 if(ctx.classes.count(innerTn) && ctx.classes[innerTn].type){
                     llvm::StructType* subSt = ctx.classes[innerTn].type;
-                    uint64_t subSz = ctx.module.getDataLayout().getTypeAllocSize(subSt);
+                    uint64_t subSz = ctx.module().getDataLayout().getTypeAllocSize(subSt);
                     llvm::Value* sr = ctx.builder.CreateCall(gJrArrSub(ctx),{reader,fkey,idx},"rsr");
                     llvm::BasicBlock* srOk   = llvm::BasicBlock::Create(ctx.context,fname+"_rsrok",parentFn);
                     llvm::BasicBlock* srNull = llvm::BasicBlock::Create(ctx.context,fname+"_rsrnull",parentFn);
@@ -909,12 +909,12 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
                     ctx.builder.CreateCondBr(
                         ctx.builder.CreateICmpNE(sr,llvm::Constant::getNullValue(ptrT(ctx))),srOk,srNull);
                     ctx.builder.SetInsertPoint(srOk);
-                    llvm::Function* callocFn = ctx.module.getFunction("calloc");
+                    llvm::Function* callocFn = ctx.module().getFunction("calloc");
                     if(!callocFn){
                         llvm::FunctionType* ct = llvm::FunctionType::get(
                             ptrT(ctx), {ctx.builder.getInt64Ty(), ctx.builder.getInt64Ty()}, false);
                         callocFn = llvm::Function::Create(ct, llvm::Function::ExternalLinkage,
-                            "calloc", ctx.module);
+                            "calloc", ctx.module());
                     }
                     llvm::Value* heap = ctx.builder.CreateCall(callocFn,
                         {ctx.builder.getInt64(1), ctx.builder.getInt64(subSz)}, "rheap");
@@ -1054,14 +1054,14 @@ static void emitDeserStructFields(CompilerContext& ctx, llvm::Value* reader,
 static llvm::Function* emitDeserializeStruct(CompilerContext& ctx,
                                              const std::string& typeName){
     std::string fnName = "__aiml_deser_"+typeName;
-    if(auto* f=ctx.module.getFunction(fnName)) return f;
+    if(auto* f=ctx.module().getFunction(fnName)) return f;
     if(!ctx.classes.count(typeName)) return nullptr;
     llvm::StructType* st = ctx.classes[typeName].type;
     if(!st) return nullptr;
 
     auto savedIP = ctx.builder.saveIP();
     auto* ft = llvm::FunctionType::get(ptrT(ctx),{i8pT(ctx)},false);
-    auto* fn = llvm::Function::Create(ft,llvm::Function::InternalLinkage,fnName,ctx.module);
+    auto* fn = llvm::Function::Create(ft,llvm::Function::InternalLinkage,fnName,ctx.module());
     fn->addFnAttr(llvm::Attribute::NoInline);
     fn->getArg(0)->setName("json");
     auto* entry = llvm::BasicBlock::Create(ctx.context,"entry",fn);
@@ -1069,7 +1069,7 @@ static llvm::Function* emitDeserializeStruct(CompilerContext& ctx,
 
     llvm::Value* reader = ctx.builder.CreateCall(gJrParse(ctx),{fn->getArg(0)},"r");
     llvm::Function* mallocFn = ctx.getFunction("malloc",ptrT(ctx),{szT(ctx)});
-    uint64_t sz = ctx.module.getDataLayout().getTypeAllocSize(st);
+    uint64_t sz = ctx.module().getDataLayout().getTypeAllocSize(st);
     llvm::Value* heap = ctx.builder.CreateCall(mallocFn,{llvm::ConstantInt::get(szT(ctx), sz)},"hp");
     // zero-init entire struct — prevents null pointers for string/list/map fields
     ctx.builder.CreateMemSet(heap,ctx.builder.getInt8(0),sz,llvm::MaybeAlign(8));
@@ -1086,14 +1086,14 @@ static llvm::Function* emitDeserializeStruct(CompilerContext& ctx,
 static llvm::Function* emitDeserializeList(CompilerContext& ctx,
                                            const std::string& listTn){
     std::string fnName = "__aiml_deser_"+sanitize(listTn);
-    if(auto* f=ctx.module.getFunction(fnName)) return f;
+    if(auto* f=ctx.module().getFunction(fnName)) return f;
     std::string elemTn = listElem(listTn);
     llvm::Type* elemTy = listElemStrideTy(ctx, elemTn);  // §5.7 nested container element = ptr stride
     llvm::Type* listTy = ctx.getLLVMType(listTn);
 
     auto savedIP = ctx.builder.saveIP();
     auto* ft = llvm::FunctionType::get(ptrT(ctx),{i8pT(ctx)},false);
-    auto* fn = llvm::Function::Create(ft,llvm::Function::InternalLinkage,fnName,ctx.module);
+    auto* fn = llvm::Function::Create(ft,llvm::Function::InternalLinkage,fnName,ctx.module());
     fn->addFnAttr(llvm::Attribute::NoInline);
     fn->getArg(0)->setName("json");
     auto* entry = llvm::BasicBlock::Create(ctx.context,"entry",fn);
@@ -1101,7 +1101,7 @@ static llvm::Function* emitDeserializeList(CompilerContext& ctx,
 
     llvm::Value* reader = ctx.builder.CreateCall(gJrParse(ctx),{fn->getArg(0)},"r");
     llvm::Function* mallocFn = ctx.getFunction("malloc",ptrT(ctx),{i64T(ctx)});
-    uint64_t lsz = ctx.module.getDataLayout().getTypeAllocSize(listTy);
+    uint64_t lsz = ctx.module().getDataLayout().getTypeAllocSize(listTy);
     llvm::Value* heap = ctx.builder.CreateCall(mallocFn,{ctx.builder.getInt64(lsz)},"hp");
     ListImpl::initList(ctx,heap,elemTy,4);
 
@@ -1121,7 +1121,7 @@ static llvm::Function* emitDeserializeList(CompilerContext& ctx,
     if(ctx.classes.count(elemTn) && ctx.classes[elemTn].type){
         // list<Struct>: sub-reader, deserialize into temp alloca, push
         llvm::StructType* subSt = ctx.classes[elemTn].type;
-        uint64_t subSz = ctx.module.getDataLayout().getTypeAllocSize(subSt);
+        uint64_t subSz = ctx.module().getDataLayout().getTypeAllocSize(subSt);
         llvm::Value* sr = ctx.builder.CreateCall(gJrArrSub(ctx),{reader,vk,idx},"sr");
         llvm::BasicBlock* srOk = llvm::BasicBlock::Create(ctx.context,"dl_srok",fn);
         llvm::BasicBlock* srDone = llvm::BasicBlock::Create(ctx.context,"dl_srdone",fn);
@@ -1192,7 +1192,7 @@ static llvm::Function* emitDeserializeList(CompilerContext& ctx,
 static llvm::Function* emitDeserializeMap(CompilerContext& ctx,
                                           const std::string& mapTn){
     std::string fnName = "__aiml_deser_"+sanitize(mapTn);
-    if(auto* f=ctx.module.getFunction(fnName)) return f;
+    if(auto* f=ctx.module().getFunction(fnName)) return f;
     std::string keyTn = mapKeyTn(mapTn);
     std::string valTn = mapValTn(mapTn);
     bool intKey = (keyTn != "string");
@@ -1202,7 +1202,7 @@ static llvm::Function* emitDeserializeMap(CompilerContext& ctx,
 
     auto savedIP = ctx.builder.saveIP();
     auto* ft = llvm::FunctionType::get(ptrT(ctx),{i8pT(ctx)},false);
-    auto* fn = llvm::Function::Create(ft,llvm::Function::InternalLinkage,fnName,ctx.module);
+    auto* fn = llvm::Function::Create(ft,llvm::Function::InternalLinkage,fnName,ctx.module());
     fn->addFnAttr(llvm::Attribute::NoInline);
     fn->getArg(0)->setName("json");
     auto* entry = llvm::BasicBlock::Create(ctx.context,"entry",fn);
@@ -1210,7 +1210,7 @@ static llvm::Function* emitDeserializeMap(CompilerContext& ctx,
 
     llvm::Value* reader = ctx.builder.CreateCall(gJrParse(ctx),{fn->getArg(0)},"r");
     llvm::Function* mallocFn = ctx.getFunction("malloc",ptrT(ctx),{i64T(ctx)});
-    uint64_t msz = ctx.module.getDataLayout().getTypeAllocSize(mapTy);
+    uint64_t msz = ctx.module().getDataLayout().getTypeAllocSize(mapTy);
     llvm::Value* heap = ctx.builder.CreateCall(mallocFn,{ctx.builder.getInt64(msz)},"hp");
     MapImpl::initMap(ctx,heap,keyTy,valTy,8);
 

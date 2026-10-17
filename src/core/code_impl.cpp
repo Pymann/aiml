@@ -30,7 +30,7 @@ llvm::StructType* getStructType(CompilerContext& ctx) {
 // Allocates __aiml_code_t on the heap, stores all 5 fields, returns raw i8*.
 // ---------------------------------------------------------------------------
 static llvm::Function* emitNewFn(CompilerContext& ctx) {
-    if (auto* f = ctx.module.getFunction("__aiml_code_new")) return f;
+    if (auto* f = ctx.module().getFunction("__aiml_code_new")) return f;
 
     llvm::Type*       i8p    = llvm::Type::getInt8Ty(ctx.context)->getPointerTo();
     llvm::Type*       i8     = llvm::Type::getInt8Ty(ctx.context);
@@ -42,13 +42,13 @@ static llvm::Function* emitNewFn(CompilerContext& ctx) {
 
     auto* ft = llvm::FunctionType::get(i8p, {i8p, i8p, i8p, i8p, i8}, false);
     auto* fn = llvm::Function::Create(ft, llvm::Function::InternalLinkage,
-                                      "__aiml_code_new", ctx.module);
+                                      "__aiml_code_new", ctx.module());
     fn->addFnAttr(llvm::Attribute::NoInline);
 
     auto* entry = llvm::BasicBlock::Create(ctx.context, "entry", fn);
     ctx.builder.SetInsertPoint(entry);
 
-    llvm::DataLayout dl(&ctx.module);
+    llvm::DataLayout dl(&ctx.module());
     uint64_t structBytes = dl.getTypeAllocSize(codeTy);
     llvm::Function* mallocFn = ctx.getFunction("malloc", i8p, {sz});
     llvm::Value* raw     = ctx.builder.CreateCall(mallocFn,
@@ -76,7 +76,7 @@ static llvm::Function* emitNewFn(CompilerContext& ctx) {
 // Delegates to C runtime: int aiml_exec_code(void*)
 // ---------------------------------------------------------------------------
 static llvm::Function* emitExecFn(CompilerContext& ctx) {
-    if (auto* f = ctx.module.getFunction("__aiml_code_exec")) return f;
+    if (auto* f = ctx.module().getFunction("__aiml_code_exec")) return f;
 
     llvm::Type* i8p = llvm::Type::getInt8Ty(ctx.context)->getPointerTo();
     llvm::Type* i32 = llvm::Type::getInt32Ty(ctx.context);
@@ -85,7 +85,7 @@ static llvm::Function* emitExecFn(CompilerContext& ctx) {
 
     auto* ft = llvm::FunctionType::get(i32, {i8p}, false);
     auto* fn = llvm::Function::Create(ft, llvm::Function::InternalLinkage,
-                                      "__aiml_code_exec", ctx.module);
+                                      "__aiml_code_exec", ctx.module());
     fn->addFnAttr(llvm::Attribute::NoInline);
 
     auto* entry = llvm::BasicBlock::Create(ctx.context, "entry", fn);
@@ -104,7 +104,7 @@ static llvm::Function* emitExecFn(CompilerContext& ctx) {
 // Delegates to C runtime: int aiml_code_contains(void*, const char*)
 // ---------------------------------------------------------------------------
 static llvm::Function* emitContainsFn(CompilerContext& ctx) {
-    if (auto* f = ctx.module.getFunction("__aiml_code_contains")) return f;
+    if (auto* f = ctx.module().getFunction("__aiml_code_contains")) return f;
 
     llvm::Type* i8p = llvm::Type::getInt8Ty(ctx.context)->getPointerTo();
     llvm::Type* i8  = llvm::Type::getInt8Ty(ctx.context);
@@ -114,7 +114,7 @@ static llvm::Function* emitContainsFn(CompilerContext& ctx) {
 
     auto* ft = llvm::FunctionType::get(i8, {i8p, i8p}, false);
     auto* fn = llvm::Function::Create(ft, llvm::Function::InternalLinkage,
-                                      "__aiml_code_contains", ctx.module);
+                                      "__aiml_code_contains", ctx.module());
     fn->addFnAttr(llvm::Attribute::NoInline);
 
     auto* entry = llvm::BasicBlock::Create(ctx.context, "entry", fn);
@@ -133,7 +133,7 @@ static llvm::Function* emitContainsFn(CompilerContext& ctx) {
 // Delegates to C runtime: char* aiml_code_tostring(void*)
 // ---------------------------------------------------------------------------
 static llvm::Function* emitToStringFn(CompilerContext& ctx) {
-    if (auto* f = ctx.module.getFunction("__aiml_code_tostring")) return f;
+    if (auto* f = ctx.module().getFunction("__aiml_code_tostring")) return f;
 
     llvm::Type* i8p = llvm::Type::getInt8Ty(ctx.context)->getPointerTo();
 
@@ -141,7 +141,7 @@ static llvm::Function* emitToStringFn(CompilerContext& ctx) {
 
     auto* ft = llvm::FunctionType::get(i8p, {i8p}, false);
     auto* fn = llvm::Function::Create(ft, llvm::Function::InternalLinkage,
-                                      "__aiml_code_tostring", ctx.module);
+                                      "__aiml_code_tostring", ctx.module());
     fn->addFnAttr(llvm::Attribute::NoInline);
 
     auto* entry = llvm::BasicBlock::Create(ctx.context, "entry", fn);
@@ -160,7 +160,7 @@ static llvm::Function* emitToStringFn(CompilerContext& ctx) {
 // Returns strlen(tostring(code)).
 // ---------------------------------------------------------------------------
 static llvm::Function* emitSizeFn(CompilerContext& ctx) {
-    if (auto* f = ctx.module.getFunction("__aiml_code_size")) return f;
+    if (auto* f = ctx.module().getFunction("__aiml_code_size")) return f;
 
     llvm::Function* toStringFn = emitToStringFn(ctx);
 
@@ -172,7 +172,7 @@ static llvm::Function* emitSizeFn(CompilerContext& ctx) {
 
     auto* ft = llvm::FunctionType::get(i64, {i8p}, false);
     auto* fn = llvm::Function::Create(ft, llvm::Function::InternalLinkage,
-                                      "__aiml_code_size", ctx.module);
+                                      "__aiml_code_size", ctx.module());
     fn->addFnAttr(llvm::Attribute::NoInline);
 
     auto* entry = llvm::BasicBlock::Create(ctx.context, "entry", fn);
@@ -195,7 +195,7 @@ static llvm::Function* emitSizeFn(CompilerContext& ctx) {
 // Delegates to C runtime: void* aiml_code_merge(void*, void*)
 // ---------------------------------------------------------------------------
 static llvm::Function* emitMergeFn(CompilerContext& ctx) {
-    if (auto* f = ctx.module.getFunction("__aiml_code_merge")) return f;
+    if (auto* f = ctx.module().getFunction("__aiml_code_merge")) return f;
 
     llvm::Type* i8p = llvm::Type::getInt8Ty(ctx.context)->getPointerTo();
 
@@ -203,7 +203,7 @@ static llvm::Function* emitMergeFn(CompilerContext& ctx) {
 
     auto* ft = llvm::FunctionType::get(i8p, {i8p, i8p}, false);
     auto* fn = llvm::Function::Create(ft, llvm::Function::InternalLinkage,
-                                      "__aiml_code_merge", ctx.module);
+                                      "__aiml_code_merge", ctx.module());
     fn->addFnAttr(llvm::Attribute::NoInline);
 
     auto* entry = llvm::BasicBlock::Create(ctx.context, "entry", fn);
