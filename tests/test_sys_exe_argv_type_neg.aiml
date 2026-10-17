@@ -1,0 +1,24 @@
+# SPEC: 23_system
+# Expected exit code: 1
+# static-check: off
+#
+# Negativ (spec/23 §5.1): `sys.exe` nimmt argv als `list<string>`.
+#
+# Bis 17.10.2026 war ein String als erstes Argument KEIN Fehler, sondern ein
+# SIGSEGV: ein String ist in LLVM ebenfalls ein `i8*`, rutschte daher durch die
+# Zeiger-Weiche des Builtins und wurde von der Laufzeit als `GenericList*`
+# gelesen.  Gefunden, weil eine eigene Probe das Argument falsch herum hatte —
+# ein Absturz ist die falsche Antwort auf einen Typfehler.
+#
+# Zwei Faelle, beide muessen eine Diagnose geben:
+#   1. ein String-Literal
+#   2. eine Variable mit falschem deklarierten Typ
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [proc_a, process, { call: [sys.exe, "id"] }]
+      - decl: [not_argv, string, "id"]
+      - decl: [proc_b, process, { call: [sys.exe, not_argv] }]
+      - return: [0]
