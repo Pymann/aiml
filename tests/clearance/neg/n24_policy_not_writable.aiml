@@ -1,0 +1,17 @@
+# SPEC: 65_symbol_clearance
+# Requires: driver
+# static-check: off
+# NEEDS: write
+# CLEARANCE: 7
+# NEGATIVE (spec/65 F65-32): die Richtlinie ist lesbar, nie schreibbar.  Ein Builtin, das
+# `create_level` SETZT, waere Selbstbeglaubigung (F65-6) — das Skript erteilte sich selbst ein
+# Recht.  Es gibt daher keinen Setzer, und damit das kein stilles „unbekannte Funktion" wird,
+# ist der Namensraum `clearance` von Grund auf zu (F65-35) und nur die drei Leser sind offen:
+# ein Griff nach einem Setzer nennt den Grund, statt wie ein Tippfehler auszusehen.
+# EXPECT-ERROR: clearance-builtin
+- def:
+    name: main
+    return: i32
+    body:
+      - call: [clearance.set_level, 1]
+      - return: [0]

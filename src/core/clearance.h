@@ -20,12 +20,23 @@ constexpr int kMax    = 255;
 // der Hebel fuer Proben.  Rueckgabe 0 heisst "keine Sitzung" = vertrauenswuerdig
 // (F65-1/F65-7) und NICHT "Freigabe 0": 0 ist als Freigabe ungueltig, weil es der Wert
 // eines vergessenen Feldes ist und das nie "Admin" heissen darf (F65-22).
+// Der Speicher der aktuellen Freigabe.  -2 heisst "noch nicht aus der Umgebung gelesen".
+//
+// KEIN einmaliger Zwischenspeicher mehr (F65-36): ein Wirt fuehrt Skripte fuer verschiedene
+// Nutzer aus, und eine Freigabe, die einmal gelesen und gemerkt wird, ist keine Eigenschaft
+// einer SITZUNG, sondern des Prozesses.  `sys.exec` setzt sie fuer die Dauer eines Laufs und
+// stellt sie danach zurueck.
+inline int& clearanceSlot() {
+    static int slot = -2;
+    return slot;
+}
+
 inline int sessionClearance() {
-    static int cached = -2;                 // -2 = noch nicht gelesen
-    if (cached != -2) return cached;
-    cached = 0;
+    int& slot = clearanceSlot();
+    if (slot != -2) return slot;
+    slot = 0;
     const char* v = std::getenv("AIML_CLEARANCE");
-    if (!v || !*v) return cached;           // vertrauenswuerdiger Normalfall
+    if (!v || !*v) return slot;           // vertrauenswuerdiger Normalfall
     std::string s = v;
     size_t pos = 0;
     long val = 0;
@@ -35,13 +46,104 @@ inline int sessionClearance() {
         LOG_ERROR("invalid-clearance: AIML_CLEARANCE=" + s +
                   " — gueltig ist 1..255.  0 ist der Wert eines vergessenen Feldes und "
                   "darf nie Admin bedeuten (spec/65 F65-22)");
-        return cached;
+        return slot;
     }
-    cached = static_cast<int>(val);
-    return cached;
+    slot = static_cast<int>(val);
+    return slot;
+}
+
+// F65-36: Freigabe fuer EINE Sitzung setzen.  Darf nur VERSCHAERFEN (hoehere Zahl =
+// weniger Rechte), damit ein Aufruf sich nicht mehr nehmen kann als die Prozess-Vorgabe.
+// Rueckgabe ist die vorige Freigabe, damit der Aufrufer sie zurueckstellen kann.
+inline int pushSessionClearance(int requested) {
+    const int before = sessionClearance();
+    if (requested >= 1 && requested <= kMax) {
+        int& slot = clearanceSlot();
+        slot = (before >= 1 && before > requested) ? before : requested;
+    }
+    return before;
+}
+
+inline void popSessionClearance(int previous) {
+    clearanceSlot() = previous;
 }
 
 inline bool restricted() { return sessionClearance() >= 1; }
+
+// ── §5b: die SCHREIBSEITE der Richtlinie (F65-26) ──────────────────────────────
+//
+// `create_level` und `replace_level` werden GEGENLAEUFIG verglichen: erlaubt ist
+// `clearance <= create_level`, also ist die KLEINERE Zahl die strengere und 0 heisst
+// niemand (F65-22).  Darum ist "nicht gesetzt" hier NICHT 0, sondern "keine Vorgabe":
+// waere es 0, koennte die Umgebung das Recht nur abschalten und nie erteilen, weil die
+// Verschaerfungsregel aus F65-32 dann jeden Wert am Minimum festhielte.
+constexpr int kPolicyUnset = -1;
+
+inline int readEnvPolicy(const char* var) {
+    const char* v = std::getenv(var);
+    if (!v || !*v) return kPolicyUnset;
+    std::string s = v;
+    size_t pos = 0;
+    long val = 0;
+    try { val = std::stol(s, &pos); } catch (...) { pos = 0; }
+    if (pos != s.size() || val < 0 || val > kMax) {
+        LOG_ERROR("invalid-level: " + std::string(var) + "=" + s +
+                  " — gueltig ist 0..255 (spec/65 F65-26)");
+        return kPolicyUnset;
+    }
+    return static_cast<int>(val);
+}
+
+inline int envCreateLevel() {
+    static int v = readEnvPolicy("AIML_CREATE_LEVEL");
+    return v;
+}
+inline int envReplaceLevel() {
+    static int v = readEnvPolicy("AIML_REPLACE_LEVEL");
+    return v;
+}
+
+inline int& createSlot() {
+    static int slot = (envCreateLevel() == kPolicyUnset) ? 0 : envCreateLevel();
+    return slot;
+}
+inline int& replaceSlot() {
+    static int slot = (envReplaceLevel() == kPolicyUnset) ? 0 : envReplaceLevel();
+    return slot;
+}
+
+inline int createLevel()  { return createSlot(); }
+inline int replaceLevel() { return replaceSlot(); }
+
+// F65-26: die drei Werte reisen zusammen, weil sie drei Antworten auf EINE Frage sind.
+struct Policy { int clearance; int create; int replace; };
+
+// F65-32: die Umgebung ist die Vorgabe des Prozesses und darf nur VERSCHAERFEN —
+// bei den Schreibrechten also nach unten.  Ohne Vorgabe gilt der Wunsch der Sitzung.
+inline int tightenWrite(int envDefault, int requested) {
+    if (requested < 0 || requested > kMax) requested = 0;
+    return (envDefault == kPolicyUnset) ? requested
+                                        : (envDefault < requested ? envDefault : requested);
+}
+
+inline Policy pushSessionPolicy(int clearance, int create, int replace) {
+    Policy before{ sessionClearance(), createSlot(), replaceSlot() };
+    pushSessionClearance(clearance);
+    createSlot()  = tightenWrite(envCreateLevel(),  create);
+    replaceSlot() = tightenWrite(envReplaceLevel(), replace);
+    return before;
+}
+
+inline void popSessionPolicy(const Policy& before) {
+    clearanceSlot() = before.clearance;
+    createSlot()    = before.create;
+    replaceSlot()   = before.replace;
+}
+
+// Darf diese Sitzung in die Tabelle des Wirts schreiben?  `restricted()` davor: ohne
+// Sitzung gibt es keine Grenze und damit nichts zu pruefen (F65-1).
+inline bool mayCreate()  { return !restricted() || sessionClearance() <= createLevel(); }
+inline bool mayReplace() { return !restricted() || sessionClearance() <= replaceLevel(); }
 
 // Reine SYNTAXpruefung: Ganzzahl 0..255, ohne jede Sitzungs-Richtlinie.
 //

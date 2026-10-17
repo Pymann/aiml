@@ -5,6 +5,7 @@
 #   STAGE=step3 bash tests/clearance/run.sh  # + opt-in Flusspruefung
 #   STAGE=session ...                                  # + eingeschraenkte Sitzung
 #   STAGE=host ...                                     # + Proben, die einen Wirt brauchen
+#   STAGE=write ...                                    # + Schreibseite (create/replace/collision)
 #   ONLY=07 ...                                        # nur passende Proben
 #
 # Jede Probe nennt im Kopf, welchen Umsetzungsschritt sie braucht:
@@ -15,6 +16,12 @@
 #                      aufrufbaren Adressen — die Erwartung ist eine Diagnose
 #   # NEEDS: host    -> braucht einen WIRT mit AUFRUFBAREN Symbolen (Signatur + Adresse),
 #                      und `level:` in eigener Quelle ist Selbstbeglaubigung (F65-27)
+#   # NEEDS: write   -> die SCHREIBSEITE (§5b): `create_level`/`replace_level`, der
+#                      Kollisionsfehler und die Hot-Reload-Berechtigung (F65-26 … F65-32)
+#   # NEEDS: dynload -> braucht spec/29_2 §4.3 (dynamisches Nachladen).  Nicht dieses
+#                      Kapitel: `sys.bundle` kann nur eine Funktion buendeln, die der Wirt
+#                      SELBST uebersetzt hat — ein NEUER Name ist damit nicht ins Buendel
+#                      zu bekommen, und der `clearance-create`-Zweig bleibt unerreichbar.
 # Proben oberhalb von STAGE werden als AUSSTEHEND gemeldet und zaehlen NICHT
 # als Fehlschlag — sonst waere das Labor dauerhaft rot und damit wertlos.
 #
@@ -27,7 +34,7 @@ AIML="${AIML:-out/aiml/aiml}"
 ONLY="${ONLY:-}"
 STAGE="${STAGE:-step2}"
 
-rank() { case "$1" in step2) echo 1;; step3) echo 2;; session) echo 3;; guard) echo 4;; exports) echo 5;; host) echo 6;; *) echo 1;; esac; }
+rank() { case "$1" in step2) echo 1;; step3) echo 2;; session) echo 3;; guard) echo 4;; exports) echo 5;; host) echo 6;; write) echo 7;; dynload) echo 8;; *) echo 1;; esac; }
 WANT=$(rank "$STAGE")
 
 session_env() {

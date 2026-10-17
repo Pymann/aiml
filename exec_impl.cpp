@@ -12,6 +12,7 @@
 #include "exec_impl.h"
 #include "src/core/yaml_dump.h"
 #include "compiler.h"                  // AIMLCompiler (for aiml_isolated_exec)
+#include "src/core/clearance.h"         // spec/65 F65-36: Freigabe je Sitzung
 #include "src/core/context.h"
 #include "src/core/fptable.h"          // AIML_MAX_VERSIONS
 #include "src/core/schema_registry.h"  // AimlClassSchema, AIML_MAX_FIELDS
@@ -378,6 +379,9 @@ extern "C" int aiml_exec_code(void* raw) {
     cache_fptable_globals();
 
     // ── 1. Code chunks: version-guarded hot-reload ────────────────────────────
+    // spec/65 §5b: eine verweigerte Schreibberechtigung bricht den Lauf ab.  Nur zu loggen
+    // und weiterzulaufen waere die stille Variante, die F65-30 gerade abschafft.
+    bool policy_denied = false;
     ExecList* cc = code->code_chunks;
     if (cc && cc->size > 0 && g_active_context) {
         for (int i = 0; i < cc->size; i++) {
@@ -407,7 +411,37 @@ extern "C" int aiml_exec_code(void* raw) {
                             ? (uint64_t)g_fptable_versions[fidx]
                             : table.at(nm).compiled_version;
 
+                        // spec/65 F65-28/F65-29: ZUERST die Berechtigung, DANN entscheidet die
+                        // Version.  Die Version schreibt der Urheber des Buendels — an einer
+                        // Vertrauensgrenze ist sie Eingabe, nie Erlaubnis.
+                        if (!aiml::clearance::mayReplace()) {
+                            LOG_ERROR("clearance-replace: `" + nm + "` existiert im Wirt; ein "
+                                      "Rumpf dafuer ist ERSETZEN, und diese Sitzung (Freigabe " +
+                                      std::to_string(aiml::clearance::sessionClearance()) +
+                                      ") hat replace_level " +
+                                      std::to_string(aiml::clearance::replaceLevel()) +
+                                      " — spec/65 F65-28.  Ein `version:` im Buendel erteilt "
+                                      "das Recht nicht (F65-29).");
+                            policy_denied = true;
+                            return;
+                        }
+
                         if (bundle_ver <= cur_ver) {
+                            // F65-30: in einer eingeschraenkten Sitzung ist das ein FEHLER, kein
+                            // Ueberspringen — sonst bekaeme das Skript stillschweigend die
+                            // Funktion DES WIRTS.  Verschatten darf an einer Grenze nicht still
+                            // geschehen; es ist eine Ueberraschung in der Korrektheit, bevor es
+                            // eine in der Sicherheit ist.
+                            if (aiml::clearance::restricted()) {
+                                LOG_ERROR("clearance-collision: `" + nm + "` existiert im Wirt "
+                                          "schon (live v" + std::to_string(cur_ver) +
+                                          ", Buendel v" + std::to_string(bundle_ver) +
+                                          ").  Die Definition zu UEBERSPRINGEN wuerde dem Skript "
+                                          "stillschweigend das Symbol des Wirts geben — "
+                                          "spec/65 F65-30.");
+                                policy_denied = true;
+                                return;
+                            }
                             LOG_INFO("sys.exec: skip " + nm +
                                      " (v" + std::to_string(bundle_ver) +
                                      " <= live v" + std::to_string(cur_ver) + ")");
@@ -434,6 +468,20 @@ extern "C" int aiml_exec_code(void* raw) {
                                         " — stays at v" + std::to_string(cur_ver));
                         }
                     } else {
+                        // spec/65 F65-26: ein NEUER Name gelangt hier in die Tabelle des Wirts
+                        // (nur im geteilten Kontext ueberhaupt moeglich, F65-31).  Das ist der
+                        // Akt, den `create_level` regelt — eine eigene, isolierte Definition ist
+                        // dagegen frei, weil sie den Wirt nie erreicht.
+                        if (!aiml::clearance::mayCreate()) {
+                            LOG_ERROR("clearance-create: `" + nm + "` waere ein NEUES Symbol in "
+                                      "der Tabelle des Wirts; diese Sitzung (Freigabe " +
+                                      std::to_string(aiml::clearance::sessionClearance()) +
+                                      ") hat create_level " +
+                                      std::to_string(aiml::clearance::createLevel()) +
+                                      " — spec/65 F65-26.");
+                            policy_denied = true;
+                            return;
+                        }
                         LOG_WARNING("sys.exec: new " + key + " '" + nm +
                                     "' — dynamic loading not yet supported");
                     }
@@ -446,6 +494,9 @@ extern "C" int aiml_exec_code(void* raw) {
 
             } catch (...) {}
         }
+        // -3 wie bei der verweigerten Freigabe (F65-4): eine Verweigerung ist eine
+        // Verweigerung, egal auf welcher Seite der Grenze sie entsteht.
+        if (policy_denied) return -3;
     }
 
     // ── 2. data_chunks: deferred ──────────────────────────────────────────────
@@ -512,4 +563,30 @@ extern "C" int aiml_exec_code(void* raw) {
     }
     typedef int32_t (*I32Fn)();
     return ((I32Fn)(intptr_t)addr)();
+}
+
+// spec/65 F65-36: `sys.exec(pkg, freigabe)` — dieselbe Ausfuehrung, aber mit einer Freigabe,
+// die NUR fuer diesen Lauf gilt.  Ein Wirt fuehrt Skripte fuer verschiedene Nutzer aus; eine
+// prozessweit gemerkte Freigabe koennte das nicht ausdruecken.
+//
+// `pushSessionClearance` verschaerft nur (hoehere Zahl = weniger Rechte), damit ein Aufruf sich
+// nicht mehr nehmen kann als die Prozess-Vorgabe erlaubt.  Zurueckgestellt wird in jedem Fall,
+// auch wenn der Lauf scheitert — sonst bliebe die Einschraenkung am Wirt haengen.
+// spec/65 F65-26/F65-36: die Richtlinie EINER Sitzung — drei Werte, zusammen uebergeben, in
+// der Reihenfolge der F65-26-Tabelle.  Sie gilt fuer die Dauer dieses Laufs und wird danach
+// zurueckgestellt, auch bei Ausnahme: eine Richtlinie, die haengen bleibt, ist eine
+// Eigenschaft des Prozesses und keine der Sitzung.
+extern "C" int aiml_exec_code_policy(void* raw, int clearance, int create_level,
+                                     int replace_level) {
+    const aiml::clearance::Policy before =
+        aiml::clearance::pushSessionPolicy(clearance, create_level, replace_level);
+    int rc;
+    try {
+        rc = aiml_exec_code(raw);
+    } catch (...) {
+        aiml::clearance::popSessionPolicy(before);
+        throw;
+    }
+    aiml::clearance::popSessionPolicy(before);
+    return rc;
 }

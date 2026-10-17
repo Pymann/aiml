@@ -2,19 +2,16 @@
 # static-check: off
 # Requires: driver
 # NEEDS: host
-# UMBAU NOETIG: diese Probe definiert ihre Symbole noch selbst MIT `level:` — seit
-#   F65-27 ist das Selbstbeglaubigung.  Sie braucht die Wirtsvorrichtung aus Schritt 6b
-#   (Signatur + Adresse, F65-24): die Level kommen dann aus der Export-Tabelle und die
-#   Rumpfe vom Wirt.  Bis dahin AUSSTEHEND und bewusst nicht "repariert", weil eine
-#   Probe ohne Wirt die Aussage nicht treffen kann.
 # TIER: T1
-# CLEARANCE: 7
 # STATIC-CLEARANCE: on
-# CONSTRUCT: spec/65 F65-10 — the deliberate gateway. `restart_agent` is callable by an operator
-#            (level 7) and says in ONE place that it performs level-2 work inside. The flow check
-#            is ENABLED here, so this probe also proves `grants:` actually relaxes F65-9.
-# COVERS: `grants:` admits a lower edge inside the body only; callers are checked against
-#         `level:`, not against `grants:`; the audit list is readable (one annotation).
+# CONSTRUCT: spec/65 F65-10 — das bewusste Gateway, am echten Wirt.  `restart_agent` ist fuer
+#            einen Operator (Level 7) aufrufbar und sagt an EINER Stelle, dass es intern
+#            Level-2-Arbeit tut.  Die Flusspruefung ist hier AN, also beweist die Probe auch,
+#            dass `grants:` die Kantenregel F65-9 tatsaechlich lockert.
+# COVERS: `grants:` laesst eine niedrigere Kante nur INNERHALB des Rumpfes zu; Aufrufer werden
+#         gegen `level:` geprueft, nicht gegen `grants:`.  `kill_process` wird NICHT exportiert
+#         — das Buendel traegt nur die Deklaration von `restart_agent` (F65-38), die innere
+#         Kante bleibt beim Wirt.  Das ist der Sinn des Gateways: eine pruefbare Stelle.
 # EXPECT: exit 0.
 
 - def:
@@ -32,8 +29,9 @@
     body:
       - return: [{ call: [kill_process] }]
 
+# Laeuft im BUENDEL mit Freigabe 7: erreicht das Gateway, nie `kill_process`.
 - def:
-    name: main
+    name: user_script
     return: i32
     body:
       - decl: [res, i32, { call: [restart_agent] }]
@@ -42,5 +40,24 @@
           then:
             - call: [log.error, "restart_agent lieferte ${res}, erwartet 11"]
             - return: [1]
-      - call: [log.info, "PASS 03 grants-Gateway"]
+      - return: [0]
+
+- def:
+    name: main
+    return: i32
+    body:
+      # Nur das Gateway wird angeboten.  `kill_process` bleibt ausserhalb der Tabelle und ist
+      # damit fuer jede Sitzung unerreichbar, unabhaengig von ihrer Freigabe.
+      - decl: [fp_restart, fn<:i32>]
+      - set: [fp_restart, restart_agent]
+      - call: [sys.export_symbol, "restart_agent", fp_restart, 7]
+
+      - decl: [pkg, Code, { call: [sys.bundle, "user_script", { context: true }] }]
+      - decl: [rcx, i32, { call: [sys.exec, pkg, 7] }]
+      - if:
+          condition: { neq: [rcx, 0] }
+          then:
+            - call: [log.error, "Buendel lieferte ${rcx}, erwartet 0"]
+            - return: [1]
+      - call: [log.info, "PASS 03 grants-Gateway am Wirt"]
       - return: [0]

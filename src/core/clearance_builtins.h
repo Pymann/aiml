@@ -21,9 +21,11 @@ inline int builtinLevel(const std::string& ns, const std::string& fn) {
     static const std::set<std::string> kOpenNs = {
         "math", "hash", "enums", "compress", "cascade", "log"
     };
-    // Ausnahmen je Funktion kommen hierher, sobald eine gebraucht wird; die
-    // Signatur fuehrt `fn` deshalb schon mit.
-    (void)fn;
+    // F65-32: die Richtlinie ist LESBAR, nie schreibbar.  Der Namensraum bleibt
+    // darum ZU und nur die drei Leser sind offen — so nennt ein Griff nach einem
+    // Setzer den Grund (`clearance-builtin`), statt wie ein Tippfehler auszusehen.
+    if (ns == "clearance")
+        return (fn == "level" || fn == "create_level" || fn == "replace_level") ? kMax : 0;
     if (kOpenNs.count(ns)) return kMax;
     return 0;
 }

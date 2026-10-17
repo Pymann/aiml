@@ -989,6 +989,51 @@ void registerBuiltins(CompilerContext& ctx) {
         return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {pid, st}));
     };
 
+    // spec/65 F65-37: sys.export_symbol(name, fn, level) → i32
+    // Der Wirt bietet ein eigenes Symbol an.  EIN Aufruf fuer beide Haelften der
+    // Uebergabe: Adresse (AddSymbol, damit der JIT auflöst) und Name+Level (die
+    // Export-Tabelle, aus der die Zugriffspruefung liest).  Zwei Aufrufe waeren zwei
+    // Listen, die driften (F65-23).
+    //
+    // Kein eigener Waechter noetig: `sys` ist als Namensraum zu (F65-35), eine
+    // eingeschraenkte Sitzung wird schon an der Dispatch-Stelle mit `clearance-builtin`
+    // abgelehnt.  Ein Skript, das sich selbst exportieren koennte, setzte sein eigenes Level.
+    sys.builtinFuncs["export_symbol"] = [](CompilerContext& ctx, const std::vector<IRValue*>& args) -> IRValue* {
+        llvm::Type* i8p = ctx.builder.getInt8Ty()->getPointerTo();
+        llvm::Type* i32 = ctx.builder.getInt32Ty();
+        if (args.size() < 3) {
+            LOG_ERROR("sys.export_symbol erwartet (name, fn, level) — spec/65 F65-37");
+            return ctx.ir_gen->getInt32(-1);
+        }
+        llvm::Value* nm = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[0]));
+        llvm::Value* fp = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[1]));
+        llvm::Value* lv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(args[2]));
+        if (nm->getType()->isPointerTy()) nm = ctx.builder.CreateBitCast(nm, i8p);
+        if (fp->getType()->isPointerTy()) fp = ctx.builder.CreateBitCast(fp, i8p);
+        if (lv->getType()->isIntegerTy() && !lv->getType()->isIntegerTy(32))
+            lv = ctx.builder.CreateIntCast(lv, i32, true);
+        llvm::Function* f = ctx.getFunction("aiml_clearance_export", i32, {i8p, i8p, i32});
+        return ctx.ir_gen->wrap(ctx.builder.CreateCall(f, {nm, fp, lv}));
+    };
+
+    // spec/65 F65-32: die Richtlinie der Sitzung ist LESBAR, nie schreibbar.  Ein Setzer
+    // waere Selbstbeglaubigung (F65-6) — das Skript erteilte sich selbst ein Recht.  Lesen
+    // ist harmlos (Level sind nicht geheim, F65-16) und noetig, damit ein Skript eine
+    // brauchbare Meldung geben kann statt an einer Compiler-Diagnose zu scheitern.
+    // Der Namensraum bleibt in `clearance_builtins.h` ZU; nur diese drei sind offen.
+    {
+        auto& clr = ctx.namespaces["clearance"];
+        auto reader = [](const char* rt) {
+            return [rt](CompilerContext& c, const std::vector<IRValue*>&) -> IRValue* {
+                llvm::Type* i32 = c.builder.getInt32Ty();
+                return c.ir_gen->wrap(c.builder.CreateCall(c.getFunction(rt, i32, {}), {}));
+            };
+        };
+        clr.builtinFuncs["level"]         = reader("aiml_clearance_level");
+        clr.builtinFuncs["create_level"]  = reader("aiml_clearance_create_level");
+        clr.builtinFuncs["replace_level"] = reader("aiml_clearance_replace_level");
+    }
+
     // sys.get_arg uses a special outlined helper — registered separately because
     // it needs the __argc/__argv globals (eagerly evaluated index passed as arg).
     // spec/23: sys.exe_path() → runtime-owned string

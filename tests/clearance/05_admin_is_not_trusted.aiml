@@ -2,19 +2,14 @@
 # static-check: off
 # Requires: driver
 # NEEDS: host
-# UMBAU NOETIG: diese Probe definiert ihre Symbole noch selbst MIT `level:` — seit
-#   F65-27 ist das Selbstbeglaubigung.  Sie braucht die Wirtsvorrichtung aus Schritt 6b
-#   (Signatur + Adresse, F65-24): die Level kommen dann aus der Export-Tabelle und die
-#   Rumpfe vom Wirt.  Bis dahin AUSSTEHEND und bewusst nicht "repariert", weil eine
-#   Probe ohne Wirt die Aussage nicht treffen kann.
 # TIER: T1
-# CLEARANCE: 1
-# CONSTRUCT: spec/65 F65-7 — "no clearance" and "the most privileged clearance" are DIFFERENT
-#            states. Clearance 1 is the admin console: it reaches every ANNOTATED level...
-# COVERS: ...which is the reachability half. The other two halves are neg/n12 (the dropped
-#         dialect still applies at clearance 1) and neg/n14 (level 0 is reachable by nobody,
-#         not even by admin). Three probes, one requirement — one of them must compile and the
-#         other two must not.
+# CONSTRUCT: spec/65 F65-7 — „keine Freigabe" und „die hoechstprivilegierte Freigabe" sind
+#            VERSCHIEDENE Zustaende.  Freigabe 1 ist die Admin-Konsole: sie erreicht jedes
+#            ANNOTIERTE Level, hier Level 1 und Level 255 am echten Wirt.
+# COVERS: die Erreichbarkeits-Haelfte.  Die anderen beiden Haelften sind neg/n12 (der
+#         fallengelassene Dialekt gilt auch bei Freigabe 1) und neg/n14 (Level 0 erreicht
+#         niemand, auch der Admin nicht).  Drei Proben, eine Anforderung — eine muss
+#         uebersetzen, die beiden anderen nicht.
 # EXPECT: exit 0.
 
 - def:
@@ -31,8 +26,9 @@
     body:
       - return: [6]
 
+# Laeuft im BUENDEL mit Freigabe 1 — der Admin-Sitzung.
 - def:
-    name: main
+    name: user_script
     return: i32
     body:
       - decl: [low, i32, { call: [deep_work] }]
@@ -42,5 +38,26 @@
           then:
             - call: [log.error, "Summe ${low}+${hey} falsch"]
             - return: [1]
-      - call: [log.info, "PASS 05 clearance 1 erreicht Level 1 und 255"]
+      - return: [0]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fp_deep, fn<:i32>]
+      - set: [fp_deep, deep_work]
+      - call: [sys.export_symbol, "deep_work", fp_deep, 1]
+
+      - decl: [fp_hello, fn<:i32>]
+      - set: [fp_hello, say_hello]
+      - call: [sys.export_symbol, "say_hello", fp_hello, 255]
+
+      - decl: [pkg, Code, { call: [sys.bundle, "user_script", { context: true }] }]
+      - decl: [rcx, i32, { call: [sys.exec, pkg, 1] }]
+      - if:
+          condition: { neq: [rcx, 0] }
+          then:
+            - call: [log.error, "Buendel lieferte ${rcx}, erwartet 0"]
+            - return: [1]
+      - call: [log.info, "PASS 05 Freigabe 1 erreicht Level 1 und 255"]
       - return: [0]

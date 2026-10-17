@@ -1,0 +1,25 @@
+# SPEC: 65_symbol_clearance
+# Requires: driver
+# static-check: off
+# NEEDS: write
+# NEGATIVE (spec/65 F65-30): der stille Fallstrick aus spec/29_2 §4.2.  Hier ist `replace_level`
+# ERTEILT (Richtlinie 7, 7, 7), die Berechtigung ist also nicht das Thema — die Version ist es:
+# bei gleicher oder niedrigerer Version wuerde die heutige Logik die ankommende Definition
+# stillschweigend UEBERSPRINGEN.  Das Skript bekaeme dann das `wipe_queue` DES WIRTS, ohne es
+# zu merken: eine Ueberraschung in der Korrektheit, bevor sie eine in der Sicherheit ist.
+#
+# An einer Vertrauensgrenze ist Verschatten nichts, was still passieren darf — also ein Fehler.
+# EXPECT-ERROR: clearance-collision
+- def:
+    name: wipe_queue
+    return: i32
+    body:
+      - return: [0]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pkg, Code, { call: [sys.bundle, "wipe_queue", { context: false }] }]
+      - decl: [rcx, i32, { call: [sys.exec, pkg, 7, 7, 7] }]
+      - return: [rcx]

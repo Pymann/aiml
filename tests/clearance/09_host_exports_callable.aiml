@@ -1,0 +1,66 @@
+# SPEC: 65_symbol_clearance
+# Requires: driver
+# static-check: off
+# NEEDS: host
+# TIER: T1
+# CONSTRUCT: spec/65 §5c (F65-36/37/38) — ein WIRT in einer Datei.  Er definiert eigene `def`s
+#            mit Level, meldet sie mit Adresse an und laesst ein Buendel in einer
+#            eingeschraenkten Sitzung dagegen laufen.  Das ist die Vorrichtung, die den drei
+#            alten `host`-Proben (02/03/05) gefehlt hat — und die eine cosmos-Konsole braucht.
+# COVERS: `sys.export_symbol` (Adresse + Name + Level in EINEM Aufruf, F65-37);
+#         Freigabe am Buendel statt in der Umgebung (F65-36);
+#         ein exportiertes Symbol wird DEKLARIERT gebuendelt, nicht als Rumpf kopiert (F65-38)
+#         — sonst liefe die Zugriffspruefung ins Leere;
+#         erreichbar ist `read_status` (Level 7) bei Freigabe 7, `wipe_queue` (Level 2) nicht.
+# EXPECT: exit 0.
+
+- def:
+    name: read_status
+    level: 7
+    return: i32
+    body:
+      - return: [3]
+
+- def:
+    name: wipe_queue
+    level: 2
+    return: i32
+    body:
+      - return: [9]
+
+# Laeuft im BUENDEL, also in der eingeschraenkten Sitzung mit Freigabe 7.
+- def:
+    name: user_script
+    return: i32
+    body:
+      - decl: [sta, i32, { call: [read_status] }]
+      - if:
+          condition: { neq: [sta, 3] }
+          then:
+            - return: [1]
+      - return: [0]
+
+- def:
+    name: main
+    return: i32
+    body:
+      # Beide Haelften der Uebergabe in einem Aufruf: Adresse aus dem Funktionszeiger
+      # auf den eigenen `def` (spec/12_1), Name und Level in die Export-Tabelle.
+      - decl: [fp_status, fn<:i32>]
+      - set: [fp_status, read_status]
+      - call: [sys.export_symbol, "read_status", fp_status, 7]
+
+      # `wipe_queue` wird ABSICHTLICH auf Level 2 angeboten: erreichbar nur fuer Freigabe <= 2.
+      - decl: [fp_wipe, fn<:i32>]
+      - set: [fp_wipe, wipe_queue]
+      - call: [sys.export_symbol, "wipe_queue", fp_wipe, 2]
+
+      - decl: [pkg, Code, { call: [sys.bundle, "user_script", { context: true }] }]
+      - decl: [rcx, i32, { call: [sys.exec, pkg, 7] }]
+      - if:
+          condition: { neq: [rcx, 0] }
+          then:
+            - call: [log.error, "Buendel lieferte ${rcx}, erwartet 0"]
+            - return: [1]
+      - call: [log.info, "PASS 09 Wirt bietet aufrufbare Symbole an"]
+      - return: [0]

@@ -1,9 +1,11 @@
 # 65 — Symbol Clearance (Levels) [PROPOSAL]
 
-> Status: PROPOSAL, teilweise umgesetzt (17.10.2026): die Schritte **2 bis 5** sind gebaut und
-> gemessen (Labor `tests/clearance/` bei `STAGE=guard`: 4 positive, 14 negative Proben gruen;
-> Korpus 854 Tests ohne Regression).  Offen sind Schritt 6 (Export-Tabelle, und erst damit die
-> Zugriffspruefung F65-4/F65-5), Schritt 7 (Schreibseite) und Schritt 8 (Write-down).
+> Status: PROPOSAL, teilweise umgesetzt (17.10.2026): die Schritte **2 bis 7** sind gebaut und
+> gemessen (Labor `tests/clearance/` bei `STAGE=write`: 11 positive, 23 negative Proben gruen;
+> Korpus 865 Tests, 729 passed, 1 vorbestehender Fail — keine Regression).
+> **Ausstehend sind zwei**, und zwar nicht wegen dieses Kapitels: `clearance-create` ist
+> gebaut, aber unerreichbar, solange spec/29_2 §4.3 (dynamisches Nachladen) fehlt — siehe §9
+> Schritt 7.  Offen ist Schritt 8 (Write-down).
 >
 >
 > Derived from `doc/analysis/symbol_clearance_2026-10-16.md`, which holds the
@@ -235,6 +237,11 @@ replace_level  0 … 255     may it REPLACE existing host symbols?          (cle
 
 Both of the latter default to `0`, which under F65-22 means **nobody**.
 
+Die drei gehen **zusammen am `sys.exec`** hinaus, in der Reihenfolge dieser Tabelle (F65-36)
+— nicht ueber drei Umgebungsvariablen, denn drei getrennte Hebel fuer eine Entscheidung sind
+die Drift aus F65-23.  Die Umgebung bleibt die prozessweite Vorgabe und darf nur
+verschaerfen (F65-32).
+
 **An earlier draft of this requirement was wrong, and the acceptance probes are what exposed it.**
 It read "may this session DEFINE new symbols", with the default `0` forbidding all definition.
 Every aiml program needs a `- def: main` (spec/08), so that default forbade *every script* —
@@ -293,6 +300,104 @@ itself a permission. A builtin that *reads* it is harmless and useful for a dece
 and is allowed, since levels are not secret (F65-16). The environment lever of F65-20 extends to
 `create_level`/`replace_level` with the same restriction: it may only make a session **stricter**,
 never looser, and never lift it out of a restriction the host imposed.
+
+## 5c. Wie ein Wirt anbietet — die zwei fehlenden Sprachmittel
+
+§5a sagt, dass Signatur und Adresse die zweite Haelfte der Uebergabe sind (F65-24).  Gebaut ist
+bisher nur die erste: Name und Level.  Fuer die zweite fehlen zwei Sprachmittel, und ihr
+Fehlen ist der Grund, warum die drei `host`-Proben nicht laufen koennen.
+
+**F65-36: Die Freigabe gehoert an die AUSFUEHRUNG, nicht an das Buendel.**
+
+```yaml
+- decl: [pkg, Code, { call: [sys.bundle, "user_script", { context: true }] }]
+- decl: [rc,  i32,  { call: [sys.exec, pkg, 7] }]         # nur Freigabe: 7, nichts schreiben
+- decl: [rc2, i32,  { call: [sys.exec, pkg, 7, 7, 0] }]   # ... darf anlegen, nicht ersetzen
+```
+
+Die drei Werte der Richtlinie aus F65-26 stehen **in der Reihenfolge jener Tabelle** —
+`clearance`, `create_level`, `replace_level` — und sie reisen zusammen, als ein Vorgang.
+Fehlende hintere Werte sind `0`, was nach F65-22 **niemand** heisst: wer nichts sagt, darf
+nichts schreiben (fail closed).  Jeder der drei ist ein gewoehnlicher Ausdruck und kein
+Literal, weil eine Konsole die Richtlinie **je Nutzer zur Laufzeit** bildet; eine
+Richtlinie, die nur als Literal in der Quelle stehen koennte, waere fuer den eigentlichen
+Fall unbrauchbar.
+
+Ein Buendel ist **Code**, eine Sitzung ist eine **Handlung**.  Derselbe Code muss fuer zwei
+Nutzer mit verschiedenen Freigaben ausfuehrbar sein — die Richtlinie an das `Code`-Objekt zu
+haengen wuerde das verbieten, obwohl genau das der Fall ist, um den es geht.
+
+(Die erste Fassung dieser Anforderung stellte die Freigabe an `sys.bundle`, mit der Begruendung,
+das `Code`-Objekt beschreibe die Sitzung, weil es schon `context` traegt.  Das war falsch
+herum: `context` beschreibt, WIE uebersetzt wird, und ist eine Eigenschaft des Codes; die
+Freigabe beschreibt, WER ausfuehrt.  Nebenbei haette es ein sechstes Feld in einer Struktur
+gebraucht, deren Layout an drei Stellen gespiegelt ist — LLVM-Struct, C-Struct in `exec_impl`
+und `__aiml_code_new` —, wo eine Abweichung still falsche Daten liest.)
+
+`AIML_CLEARANCE`, `AIML_CREATE_LEVEL` und `AIML_REPLACE_LEVEL` bleiben die Vorgabe des
+Prozesses und der Hebel fuer Proben (F65-20); die Argumente an `sys.exec` gelten fuer diese
+eine Sitzung und duerfen nur STRENGER sein als die Vorgabe.  „Strenger" laeuft bei den beiden
+Schreibrechten in die ANDERE Richtung als bei der Freigabe, weil die Vergleiche
+gegenlaeufig sind (`clearance <= create_level`): strenger ist dort die KLEINERE Zahl, und 0
+ist das Minimum, also niemand.  Eine nicht gesetzte Umgebungsvariable ist deshalb keine 0,
+sondern „keine Vorgabe" — sonst waere das Recht nie erteilbar, nur abschaltbar.
+Damit kann `sessionClearance()` seinen prozessweiten Zwischenspeicher nicht behalten: eine
+Freigabe, die einmal gelesen und gemerkt wird, ist keine Eigenschaft einer Sitzung.
+
+**F65-37: `sys.export_symbol(name, fn, level)` — eine Zeile, ein Aufruf.**
+
+```yaml
+- def: { name: read_status, level: 7, return: i32, body: [{ return: [3] }] }
+- decl: [fpr, fn<:i32>]
+- set:  [fpr, read_status]
+- call: [sys.export_symbol, "read_status", fpr, 7]
+```
+
+Der Aufruf macht beide Haelften in einem Zug: er meldet die **Adresse** an
+(`DynamicLibrary::AddSymbol`, damit der JIT den Namen aufloest) und traegt **Name und Level** in
+die Export-Tabelle (§5a).  Zwei getrennte Aufrufe waeren zwei Listen, die driften — genau das
+verbietet F65-23.  Die Adresse kommt aus einem Funktionszeiger auf den eigenen `def` (spec/12_1),
+nicht aus `dlsym`: so braucht es kein `-rdynamic`, und bei einem statischen Build funktioniert es
+ueberhaupt nur so (gemessen: 0 von 38 aiml-Funktionen stehen in `.dynsym`).
+
+**Nur im vertrauenswuerdigen Zustand.** In einer eingeschraenkten Sitzung ist
+`sys.export_symbol` abzulehnen (`clearance-builtin`): ein Skript, das sich selbst exportieren
+darf, setzt sein eigenes Level — Selbstbeglaubigung in ihrer schaedlichsten Form.  Das `level`
+dieses Aufrufs ist deshalb auch nicht an das `level:` des `def` gebunden: der Wirt entscheidet,
+was er anbietet, und darf weniger anbieten als die Funktion traegt.
+
+**F65-38: Ein Buendel traegt von einem exportierten Symbol die DEKLARATION, nicht den Rumpf.**
+`sys.bundle` nimmt heute die Quelltexte der gerufenen Funktionen mit (`referencedFuncs`,
+spec/29_2 §16) — sonst meldete der Empfaenger „Unknown function".  Fuer ein Symbol aus der
+Export-Tabelle ist das aber falsch: das Skript bekaeme eine **Kopie** und wuerde sie im eigenen
+Kontext ausfuehren, mit dem Level der Sitzung statt dem des Wirts.  Die Zugriffspruefung liefe
+dann ins Leere, weil es nichts mehr zu verweigern gibt.
+
+**Das Kriterium ist das `level:` am `def`, nicht die Export-Tabelle.**  Das sieht nach einer
+Feinheit aus und ist der Kern: `sys.bundle` laeuft zur **UEBERSETZUNGSZEIT**,
+`sys.export_symbol` zur **Laufzeit**.  Wer beim Buendeln die Tabelle befragt, befragt sie leer —
+gemessen am 17.10.2026 an `09_host_exports_callable`: der Rumpf wurde mitgebuendelt, und in der
+eingeschraenkten Sitzung schlug sein `level:` als Selbstbeglaubigung an (F65-27).  Ein Umweg
+ueber die Tabelle ist hier nicht moeglich, weil sie zu diesem Zeitpunkt noch nicht existiert.
+
+Darum: traegt ein gerufener `def` ein `level:`, gehoert er zur angebotenen Oberfläche, und der
+Wirt buendelt seine Signatur statt seines Rumpfs.  Was der Wirt dann tatsaechlich anbietet,
+entscheidet `sys.export_symbol` zur Laufzeit — er darf WENIGER anbieten als die Annotation
+sagt (F65-37), und was er nicht anbietet, scheitert beim Empfaenger an der `extern`-Zulassung.
+Die beiden Zeitpunkte sind damit klar getrennt: die Annotation sagt „gehoert zur Oberfläche",
+die Tabelle sagt „ist jetzt erreichbar, und auf welchem Level".
+
+Urspruenglicher Text (das Kriterium war falsch): steht ein gerufener Name in der Export-Tabelle
+Darum: steht ein gerufener Name in der Export-Tabelle, buendelt der Wirt seine Signatur und
+nicht seinen Rumpf.  Das ist dieselbe Trennung wie in F65-24 (Signatur ueber eine Deklaration,
+Adresse ueber `AddSymbol`) — und es ist der Grund, warum ein exportiertes Symbol beim
+Aufrufer AUSFUEHRBAR ist, ohne dass er es LESEN kann.
+
+**Was damit NICHT kommt.** Die Signatur reist weiter ueber eine Deklaration, nicht ueber dieses
+Builtin — der Wirt gibt dem Skript eine Datei mit `- extern: "C"`-Deklarationen der angebotenen
+Namen, und die `extern`-Zulassung aus F65-13 ist genau das Tor dafuer.  Eine Signatur in einen
+String zu kodieren waere eine zweite Typsprache neben aiml; das Deklarationsmittel gibt es schon
+(`compileDeclarationsOnly`, spec/29_2 §15).
 
 ## 6. What a restricted dialect must drop, or this chapter is decoration
 
@@ -433,7 +538,28 @@ F65-26 for the write side. One rule, three places, no exceptions to remember.
    Buffer-Indizieren ausserhalb der geprueften Formen ist offen.  `cast:` ist der Hauptweg,
    ueber den ein Wert zum Zeiger wird — „Hauptweg" ist aber nicht „alle".
    Builtin-Tabelle (F65-35) und die `extern`-Zulassung (F65-13).
-6. Die Export-Tabelle (§5a): eine Zeile je angebotenem Symbol mit Adresse, Signatur und Level
+6a. ✅ **gebaut 17.10.2026** — die Export-Tabelle mit Name und Level (`AIML_EXPORTS`, eine
+   Zeile je Symbol).  Damit entstehen die Zugriffspruefung F65-4/F65-5 und die
+   `extern`-Zulassung F65-13 — beide lesen dieselbe Tabelle (F65-23).  Ein verweigertes
+   Symbol wird als VERWEIGERT gemeldet, nicht als „unbekannt" (F65-12).
+6b. ✅ **gebaut 17.10.2026** — Signatur und Adresse (F65-24), und damit kann ein Skript ein
+   Wirts-Symbol AUFRUFEN.  Die beiden Haelften der Uebergabe gehen in EINEM Aufruf hinaus,
+   damit Name, Level und Adresse nicht auseinanderlaufen koennen: `sys.export_symbol`
+   (F65-37) nimmt Name, Funktionszeiger (`fn<…>`, spec/12_1) und Level, prueft das Level,
+   meldet die Adresse per `AddSymbol` an und schreibt denselben Eintrag in die Tabelle aus
+   6a — `src/sys/clearance_runtime.cpp`.
+   Die Freigabe haengt am `sys.exec(pkg, clearance)` (F65-36) und nicht in der Umgebung:
+   ein Buendel ist Code, eine Sitzung ist ein Vorgang.  Dass `pushSessionClearance` nur
+   verschaerfen kann, ist die Regel dahinter.
+   Ein exportiertes Symbol wird DEKLARIERT gebuendelt statt als Rumpf kopiert (F65-38) —
+   sonst liefe die Zugriffspruefung gegen die mitgereiste Kopie und nicht gegen das Angebot
+   des Wirts.  Kriterium ist das `level:` am `def` zur **Uebersetzungszeit**, nicht die
+   Export-Tabelle: `sys.bundle` laeuft beim Uebersetzen, `sys.export_symbol` erst zur
+   Laufzeit, die Tabelle ist beim Buendeln also noch leer.  Die Proben haben das erzwungen.
+   Die drei `# NEEDS: host`-Proben (02, 03, 05) laufen jetzt gegen diese Vorrichtung statt
+   ihre Symbole selbst mit `level:` zu definieren; `UMBAU NOETIG` ist weg.
+   Urspruenglicher Text dieses Punktes (die Reihenfolge-Korrektur, die die Proben erzwungen
+   haben): eine Zeile je angebotenem Symbol mit Adresse, Signatur und Level
    (F65-23, F65-24).  **Erst hier kann die Zugriffspruefung aus F65-4/F65-5 ueberhaupt
    entstehen** — vorher gibt es keine Wirts-Symbole, die ein Level tragen.
 
@@ -442,9 +568,39 @@ F65-26 for the write side. One rule, three places, no exceptions to remember.
    erreichen darf".  Eine einzelne Datei hat kein solches Symbol — und seit F65-27 darf sie
    sich auch keines schreiben.  Die Zugriffspruefung ohne Export-Tabelle zu bauen hiesse, sie
    gegen die eigenen Definitionen des Skripts zu richten, wo sie nichts schuetzt.
-7. Die Schreibseite (§5b): `create_level`/`replace_level`, der Kollisionsfehler, isoliert als
-   Vorgabe (F65-26 … F65-31).  Die Berechtigung zum Hot-Reload gehoert hierher, nicht in
-   spec/29_2 §4.
+7. ✅ **gebaut 17.10.2026** — die Schreibseite (§5b).  Sie sitzt an der einen Stelle, an der
+   fremder Code in die Tabelle des Wirts gelangt: `tryHotReload` in `exec_impl.cpp`, hinter
+   der Abzweigung in den isolierten Kontext.  Damit ist F65-31 baulich erfuellt und nicht
+   durch eine Pruefung — eine isolierte Sitzung erreicht die Schreibseite gar nicht.
+   - **Die Richtlinie** als Dreier (F65-26) in `clearance.h`: `pushSessionPolicy` /
+     `popSessionPolicy`, und `mayCreate()`/`mayReplace()` als die zwei Fragen.  Die Umgebung
+     bleibt prozessweite Vorgabe und darf nur verschaerfen (F65-32) — bei den Schreibrechten
+     nach UNTEN, weil der Vergleich gegenlaeufig ist.  „Nicht gesetzt" ist deshalb nicht 0,
+     sondern `kPolicyUnset`: waere es 0, koennte die Umgebung das Recht nur abschalten und
+     nie erteilen.
+   - **Die Reihenfolge** der Pruefungen ist der Inhalt von F65-29: zuerst `replace_level`,
+     DANN entscheidet die Version, ob sich etwas aendert.  Ein `version:` im Buendel erteilt
+     kein Recht, es ist Eingabe.
+   - **Der Kollisionsfehler** (F65-30) ersetzt den stillen Skip-Zweig — aber nur in einer
+     eingeschraenkten Sitzung; fuer Code aus derselben Quelle bleibt spec/29_2 §4.2 gueltig.
+   - **Die Leser** (F65-32): `clearance.level`/`create_level`/`replace_level`.  Der
+     Namensraum `clearance` ist in der Builtin-Tabelle ZU und nur diese drei sind offen, damit
+     ein Griff nach einem Setzer `clearance-builtin` nennt und nicht „unbekannte Funktion".
+
+   **Befund 17.10.2026: `clearance-create` ist gebaut und heute UNERREICHBAR.**  Nicht wegen
+   eines Fehlers im Waechter, sondern wegen der Sprachmittel: `sys.bundle` nimmt den NAMEN
+   einer Funktion, die der Wirt selbst uebersetzt hat (spec/29_2 §16).  Damit traegt jedes
+   Buendel einen Namen, den der Wirt SCHON HAT, und landet im ERSETZEN-Zweig — gemessen an
+   `fresh_helper`, das mit `clearance-replace` abgelehnt wurde, obwohl die Probe das Anlegen
+   meinte.  Ein NEUER Name im Buendel setzt voraus, dass ein Wirt fremden Code mit einem
+   fremden Namen annehmen kann, und das ist spec/29_2 §4.3 („dynamic loading not yet
+   supported"), nicht dieses Kapitel.
+   Der Waechter bleibt stehen: fail closed ist dann richtig, wenn §4.3 kommt, und ein Gate,
+   das erst mit dem Feature entsteht, wird beim Bau des Features vergessen.  Die beiden Proben
+   stehen auf `# NEEDS: dynload` und melden AUSSTEHEND — die Anforderung ist spezifiziert und
+   ungeprueft, und das steht da, statt von einem fehlenden Test angedeutet zu werden.
+   **F65-27** haengt am selben Punkt: ohne §4.3 wird ein angelegtes Symbol nie aufrufbar, sein
+   Level also nie beobachtbar.  Wer §4.3 baut, muss beides dort einloesen.
 8. Zuletzt, nach Messung am Korpus: die Write-down-Regel (F65-34), die Wertfluss im Rumpf
    braucht und bis dahin opt-in bleibt wie F65-17.
 

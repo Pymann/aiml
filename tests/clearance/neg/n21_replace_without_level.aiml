@@ -1,0 +1,26 @@
+# SPEC: 65_symbol_clearance
+# Requires: driver
+# static-check: off
+# NEEDS: write
+# NEGATIVE (spec/65 F65-28): die kuerzeste Eskalation des Kapitels.  Das Buendel liefert einen
+# Rumpf fuer `wipe_queue` — einen Namen, den der Wirt SCHON HAT — in den GETEILTEN Kontext.
+# Die Richtlinie erteilt `create_level` 7, aber `replace_level` bleibt 0: ERSETZEN ist etwas
+# anderes als ANLEGEN, und zwar das gefaehrlichere, weil jeder spaetere Aufrufer im Wirt den
+# neuen Rumpf mit den Rechten des WIRTS ausfuehrt.
+#
+# Dass hier `create_level` erteilt ist, ist der Punkt: die beiden Rechte sind getrennt, und
+# das eine erteilt nicht das andere.  Waere nur eines da, waere diese Probe nicht zu bauen.
+# EXPECT-ERROR: clearance-replace
+- def:
+    name: wipe_queue
+    return: i32
+    body:
+      - return: [0]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pkg, Code, { call: [sys.bundle, "wipe_queue", { context: false }] }]
+      - decl: [rcx, i32, { call: [sys.exec, pkg, 7, 7, 0] }]
+      - return: [rcx]

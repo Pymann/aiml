@@ -1,0 +1,44 @@
+# SPEC: 65_symbol_clearance
+# Requires: driver
+# static-check: off
+# NEEDS: step2
+# TIER: T1
+# CLEARANCE: none
+# CONSTRUCT: spec/65 F65-37 — `sys.export_symbol(name, fn, level)`.  Prueft den Aufruf selbst,
+#            ohne eingeschraenkte Sitzung: gueltig -> 0, ungueltiges Level -> -1.
+# COVERS: Adresse aus einem Funktionszeiger auf den eigenen `def` (spec/12_1); Rueckgabewert
+#         als beobachtbare Wirkung (eine Lese-Abfrage auf die Tabelle gibt es noch nicht,
+#         F65-32 erlaubt sie, gebaut ist sie nicht);
+#         Level ausserhalb 0..255 wird abgelehnt statt stillschweigend geklemmt.
+# EXPECT: exit 0.
+
+- def:
+    name: read_status
+    level: 7
+    return: i32
+    body:
+      - return: [3]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [fp_status, fn<:i32>]
+      - set: [fp_status, read_status]
+
+      - decl: [ok_rc, i32, { call: [sys.export_symbol, "read_status", fp_status, 7] }]
+      - if:
+          condition: { neq: [ok_rc, 0] }
+          then:
+            - call: [log.error, "gueltiger Export lieferte ${ok_rc}, erwartet 0"]
+            - return: [1]
+
+      - decl: [bad_rc, i32, { call: [sys.export_symbol, "zu_hoch", fp_status, 300] }]
+      - if:
+          condition: { neq: [bad_rc, -1] }
+          then:
+            - call: [log.error, "Level 300 lieferte ${bad_rc}, erwartet -1"]
+            - return: [1]
+
+      - call: [log.info, "PASS 10 sys.export_symbol"]
+      - return: [0]

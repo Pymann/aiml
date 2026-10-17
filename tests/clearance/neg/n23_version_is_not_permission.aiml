@@ -1,0 +1,25 @@
+# SPEC: 65_symbol_clearance
+# Requires: driver
+# static-check: off
+# NEEDS: write
+# NEGATIVE (spec/65 F65-29): ein `version:` im ankommenden Code ist EINGABE, nicht Berechtigung.
+# Die Zahl schreibt derjenige, der das Buendel geschrieben hat — an einer Vertrauensgrenze darf
+# sie darum nichts erlauben.  `version: 99` sieht nach spec/29_2 §4.2 wie ein Hot-Reload aus;
+# ohne `replace_level` ist es trotzdem keiner, und die Reihenfolge der Pruefungen ist der ganze
+# Inhalt dieser Anforderung: ZUERST die Berechtigung, DANN entscheidet die Version, ob sich
+# ueberhaupt etwas aendert.
+# EXPECT-ERROR: clearance-replace
+- def:
+    name: wipe_queue
+    version: 99
+    return: i32
+    body:
+      - return: [0]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [pkg, Code, { call: [sys.bundle, "wipe_queue", { context: false }] }]
+      - decl: [rcx, i32, { call: [sys.exec, pkg, 7] }]
+      - return: [rcx]
