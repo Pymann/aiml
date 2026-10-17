@@ -12,3 +12,7 @@ read_status|7
 say_hello|255
 never_exposed|0
 aiml_str_dup|7
+# Wirt als Shared Library (fixtures/libclearance_host.so, F65-24 zweiter Weg):
+# Name und Level hier, Adresse aus der vorgeladenen Bibliothek.
+clearance_host_answer|7
+clearance_host_secret|2
