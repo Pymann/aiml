@@ -1,0 +1,28 @@
+# SPEC: 65_symbol_clearance
+# Requires: driver
+# static-check: off
+# NEEDS: host
+# CLEARANCE: 7
+# EXPORTS: tests/clearance/host_exports.txt
+# PRELOAD: tests/clearance/fixtures/libclearance_host.so
+# NEGATIVE (spec/65 F65-13/F65-4): das Symbol `clearance_host_secret` ist im Prozess
+# VORHANDEN — dieselbe vorgeladene Bibliothek, dieselbe Adresse, auffindbar.  Angeboten ist
+# es aber auf Level 2, und die Sitzung hat Freigabe 7.
+#
+# Darum ist diese Probe wichtiger als sie aussieht: sie zeigt, dass die Zulassung an der
+# TABELLE haengt und nicht an der Auffindbarkeit.  Haette ein Wirt sein Angebot nur durch
+# „was liegt im Prozess" bestimmt, waere jede Bibliothek, die er fuer sich selbst braucht,
+# automatisch das Angebot an jeden Nutzer.
+# EXPECT-ERROR: clearance-denied
+- extern: "C"
+  defs:
+    - def:
+        name: clearance_host_secret
+        args: []
+        return: i32
+
+- def:
+    name: main
+    return: i32
+    body:
+      - return: [{ call: [clearance_host_secret] }]

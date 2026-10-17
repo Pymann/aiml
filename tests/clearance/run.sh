@@ -44,14 +44,27 @@ session_env() {
   cr=$(grep -m1 -oE '^# CREATE-LEVEL: *[0-9]+'  "$f" | awk '{print $3}')
   rp=$(grep -m1 -oE '^# REPLACE-LEVEL: *[0-9]+' "$f" | awk '{print $3}')
   ex=$(grep -m1 -oE '^# EXPORTS: *[^ ]+' "$f" | awk '{print $3}')
+  # F65-24 zweiter Weg: die ADRESSE kommt aus einer vorgeladenen Bibliothek, nicht aus
+  # `sys.export_symbol`.  Das ist der Weg eines Wirts, der fremden Quelltext uebersetzen
+  # laesst — er kennt das Skript erst zur Laufzeit (cosmos doc/spec/108 F108-9).
+  pl=$(grep -m1 -oE '^# PRELOAD: *[^ ]+' "$f" | awk '{print $3}')
   st=$(grep -m1 -oE '^# STATIC-CLEARANCE: *on'  "$f")
   [ -n "${cl:-}" ] && [ "$cl" != "none" ] && echo "AIML_CLEARANCE=$cl"
   [ -n "${cr:-}" ] && echo "AIML_CREATE_LEVEL=$cr"
   [ -n "${rp:-}" ] && echo "AIML_REPLACE_LEVEL=$rp"
   [ -n "${ex:-}" ] && echo "AIML_EXPORTS=$ex"
+  [ -n "${pl:-}" ] && echo "LD_PRELOAD=$pl"
   [ -n "${st:-}" ] && echo "AIML_STATIC_CLEARANCE=1"
 }
 needs_of() { grep -m1 -oE '^# NEEDS: *[a-z0-9]+' "$1" | awk '{print $3}'; }
+
+# Die Wirts-Bibliothek fuer die PRELOAD-Proben: einmal bauen, nicht je Probe.  gcc vom
+# System ist dafuer in Ordnung (Nutzer-Entscheid 2026-10-16).
+HOSTLIB=tests/clearance/fixtures/libclearance_host.so
+HOSTSRC=tests/clearance/fixtures/host_lib.c
+if [ -f "$HOSTSRC" ] && { [ ! -f "$HOSTLIB" ] || [ "$HOSTSRC" -nt "$HOSTLIB" ]; }; then
+  gcc -shared -fPIC -o "$HOSTLIB" "$HOSTSRC" || echo "  !! Wirts-Bibliothek nicht baubar"
+fi
 
 pass=0; fail=0; pend=0
 echo "── spec/65 Clearance-Labor (STAGE=$STAGE) ──"

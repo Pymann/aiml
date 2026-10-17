@@ -1,0 +1,39 @@
+# SPEC: 65_symbol_clearance
+# Requires: driver
+# static-check: off
+# NEEDS: host
+# TIER: T1
+# CLEARANCE: 7
+# EXPORTS: tests/clearance/host_exports.txt
+# PRELOAD: tests/clearance/fixtures/libclearance_host.so
+# CONSTRUCT: spec/65 F65-24, der ZWEITE Weg zur Adresse — und der einzige, der fuer eine
+#            Konsole taugt.  Probe 09 laesst den Wirt seine eigenen `def`s per
+#            `sys.export_symbol` anmelden; das setzt voraus, dass der Wirt den Code beim
+#            UEBERSETZEN schon hatte.  Ein Wirt, der fremden Quelltext uebersetzen laesst,
+#            IST der Uebersetzer und kennt das Skript erst zur Laufzeit.  Dort kommt die
+#            Adresse aus einer vorgeladenen Bibliothek und das Level aus der Tabelle.
+# COVERS: ein zugelassenes `extern` ist auch AUFRUFBAR — Probe 08 deklariert nur und ruft
+#         nie, belegt also die halbe Anforderung.  Hier wird der Wert geprueft (42).
+#         Das Gegenstueck ist neg/n28: dieselbe Bibliothek, dasselbe vorhandene Symbol,
+#         aber auf Level 2 angeboten → abgelehnt.  Zusammen zeigen die zwei, dass die
+#         Zulassung an der TABELLE haengt und nicht daran, ob das Symbol auffindbar ist.
+# EXPECT: exit 0.
+- extern: "C"
+  defs:
+    - def:
+        name: clearance_host_answer
+        args: []
+        return: i32
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [ans, i32, { call: [clearance_host_answer] }]
+      - if:
+          condition: { neq: [ans, 42] }
+          then:
+            - call: [log.error, "Wirtsfunktion lieferte ${ans}, erwartet 42"]
+            - return: [1]
+      - call: [log.info, "PASS 14 vorgeladenes Wirts-Symbol aufrufbar"]
+      - return: [0]

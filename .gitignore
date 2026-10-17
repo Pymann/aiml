@@ -43,3 +43,6 @@ bs_sender
 
 # Build-/Suite-/Messprotokolle und Staging-Kopien (11 MB, 223 Dateien).
 logs/
+
+# Wirts-Bibliothek der Clearance-Proben: wird von run.sh aus der .c gebaut (F65-39).
+tests/clearance/fixtures/*.so

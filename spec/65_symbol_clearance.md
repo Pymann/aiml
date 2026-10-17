@@ -348,6 +348,38 @@ sondern „keine Vorgabe" — sonst waere das Recht nie erteilbar, nur abschaltb
 Damit kann `sessionClearance()` seinen prozessweiten Zwischenspeicher nicht behalten: eine
 Freigabe, die einmal gelesen und gemerkt wird, ist keine Eigenschaft einer Sitzung.
 
+**F65-39: Eine Adresse kommt auf ZWEI Wegen, und der zweite ist der fuer eine Konsole.**
+`sys.export_symbol` (F65-37) setzt voraus, dass der Wirt den Code beim **Uebersetzen** schon
+hatte — er meldet einen eigenen `def` an.  Ein Wirt, der **fremden** Quelltext uebersetzen
+laesst, kann das nicht: er IST der Uebersetzer und kennt das Skript erst zur Laufzeit.  Fuer
+ihn gilt:
+
+| | Name + Level | Adresse |
+|---|---|---|
+| eigener Code (F65-37) | `sys.export_symbol` | derselbe Aufruf |
+| fremder Quelltext | Export-Tabelle (`AIML_EXPORTS`) | vorgeladene Bibliothek im Prozess |
+
+Beide Haelften aus F65-24 sind damit auch im zweiten Fall da, nur aus zwei Quellen — und das
+ist hier richtig, nicht die Drift aus F65-23: die **Politik** steht an einer Stelle (der
+Tabelle), die Adresse ist eine Eigenschaft des Prozesses.  Entscheidend ist die Richtung:
+die Zulassung haengt an der TABELLE, nicht an der Auffindbarkeit des Symbols.  Sonst waere
+jede Bibliothek, die ein Wirt fuer sich selbst laedt, automatisch sein Angebot an jeden
+Nutzer.
+
+Gemessen 17.10.2026: `14_extern_preloaded_callable` (Level 7 angeboten, Freigabe 7 → Aufruf
+liefert 42) und `neg/n28_preloaded_symbol_too_low` (dieselbe Bibliothek, Symbol auf Level 2
+→ `clearance-denied`, obwohl die Adresse im Prozess liegt).  Probe `08` belegte nur die
+Zulassung und rief nie auf — die halbe Anforderung.
+
+**F65-40: Ein zugelassenes `extern` ohne aufloesbares Symbol stuerzt heute ab.**  Gemessen
+am selben Tag: dieselbe Probe ohne `LD_PRELOAD` endet mit **SIGSEGV**, nicht mit einer
+Diagnose — der Aufruf geht auf eine nicht aufgeloeste Adresse.  Das ist kein
+Clearance-Loch (die Zulassung hat korrekt entschieden), aber fuer einen Wirt, der fremden
+Quelltext uebersetzt, ist es eines: eine vergessene oder falsch gepfadete Bibliothek nimmt
+den Prozess mit, statt dem Nutzer zu sagen, was fehlt.  Gehoert geprueft, wo die
+`extern`-Zulassung ohnehin schon entscheidet — dort ist der Name bekannt und `dlsym` eine
+Zeile.  **Noch nicht gebaut**, und das steht hier, statt in einem Absturzbericht aufzutauchen.
+
 **F65-37: `sys.export_symbol(name, fn, level)` — eine Zeile, ein Aufruf.**
 
 ```yaml
