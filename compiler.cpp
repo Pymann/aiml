@@ -3039,17 +3039,49 @@ static std::string normalizePath(const std::string& p) {
     }
 }
 
-static std::string compilerBinaryRev(const std::string& compilerPath) {
-    if (compilerPath.empty() || !fs::exists(compilerPath)) return "unknown";
+// Revision eines Artefakts als "<groesse>_<mtime>".  Leer, wenn nicht ermittelbar.
+static std::string artifactRev(const std::string& file) {
+    if (file.empty() || !fs::exists(file)) return "";
     try {
-        auto sz = fs::file_size(compilerPath);
-        auto mt = fs::last_write_time(compilerPath).time_since_epoch().count();
         std::stringstream ss;
-        ss << sz << "_" << mt;
+        ss << fs::file_size(file) << "_"
+           << fs::last_write_time(file).time_since_epoch().count();
         return ss.str();
     } catch (...) {
-        return "unknown";
+        return "";
     }
+}
+
+// spec/29_2 §12 (Befund 17.10.2026): der Cache-Schluessel muss die Revision des
+// UEBERSETZERS benennen.  `compilerPath` gibt es nur im JIT-Lauf; in einem
+// AOT-Binary ist `g_active_context` null, der Pfad bleibt leer, und vorher fiel
+// der Schluessel auf "unknown" zurueck — ein gemeinsamer Eimer fuer ALLE
+// Compiler-Versionen, aus dem nach einem libaiml-Update veralteter Code kommen
+// konnte.
+//
+// Zweiter Weg statt Platzhalter: `dladdr` auf eine Funktion dieser
+// Uebersetzungseinheit liefert die Datei, die den Uebersetzer tatsaechlich
+// enthaelt — im JIT-Lauf das `aiml`-Binary, im AOT-Binary die `libaiml.so`.
+// Bleibt auch das erfolglos, ist die Rueckgabe LEER und der Aufrufer schaltet
+// den Cache ab (fail closed) — ein Cache ohne Versionsschluessel ist schlimmer
+// als keiner.
+static std::string compilerBinaryRev(const std::string& compilerPath) {
+    static std::string cached;
+    static bool haveCached = false;
+    if (haveCached) return cached;
+
+    std::string rev = artifactRev(compilerPath);
+    if (rev.empty()) {
+        Dl_info info;
+        if (dladdr(reinterpret_cast<void*>(&artifactRev), &info) && info.dli_fname)
+            rev = artifactRev(info.dli_fname);
+    }
+    if (rev.empty())
+        LOG_WARNING("Objekt-Cache abgeschaltet: Revision des Uebersetzers nicht "
+                    "ermittelbar (spec/29_2 §12)");
+    cached = rev;
+    haveCached = true;
+    return cached;
 }
 
 static std::string cacheBaseDir() {
@@ -3078,7 +3110,10 @@ static std::string cacheRevDir(const std::string& compilerPath) {
     static std::string dir;
     if (!dir.empty()) return dir;
     fs::path base = cacheBaseDir();
-    fs::path own = base / ("rev_" + compilerBinaryRev(compilerPath));
+    // Ohne Schluessel wird nie etwas GELESEN (computeImportCacheKey gibt "" zurueck);
+    // das Verzeichnis dient dann nur als Ablage und wird von sweepCache geraeumt.
+    const std::string rev_tag = compilerBinaryRev(compilerPath);
+    fs::path own = base / ("rev_" + (rev_tag.empty() ? std::string("nokey") : rev_tag));
     std::error_code ec;
     fs::create_directories(own, ec);
     fs::last_write_time(own, fs::file_time_type::clock::now(), ec);
@@ -3139,7 +3174,11 @@ std::string AIMLCompiler::computeImportCacheKey(const std::string& sourcePath,
     }
 
     keyText << "library_mode=" << (libMode ? 1 : 0) << "\n";
-    keyText << "compiler_rev=" << compilerBinaryRev(compilerPath) << "\n";
+    // spec/29_2 §12: ohne Revision des Uebersetzers KEIN Schluessel — ein leerer
+    // Schluessel laesst checkCache() scheitern und schaltet den Cache damit ab.
+    const std::string comp_rev = compilerBinaryRev(compilerPath);
+    if (comp_rev.empty()) return "";
+    keyText << "compiler_rev=" << comp_rev << "\n";
 
     return sha256Hex(keyText.str());
 }

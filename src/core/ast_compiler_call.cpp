@@ -377,6 +377,79 @@ IRValue* Compiler::visitCall(CallExpr* call) {
             }
         }
 
+        // spec/23 §5.1: sys.exe option bag — bools are compile-time literals, the rest expressions.
+        static const std::set<std::string> kExeOpts = {
+            "cwd","env","shell","timeout","capture","stdout","stderr","detach","status_file"};
+        ctx.exeOpts = CompilerContext::ExeOptions();
+        if (baseName == "sys" && methodName == "exe") {
+            auto applyExeOpt = [&](const std::string& key, Expr* valExpr, const std::string& raw) {
+                if (!kExeOpts.count(key)) {
+                    LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.exe: unknown option '" + key
+                        + "' (cwd, env, shell, timeout, capture, stdout, stderr, detach, status_file — spec/23 §5.1)");
+                    return;
+                }
+                if (key == "shell" || key == "capture" || key == "detach") {
+                    std::string lit = raw;
+                    if (valExpr) {
+                        auto* le = dynamic_cast<LiteralExpr*>(valExpr);
+                        lit = le ? le->value : "";
+                    }
+                    if (lit != "true" && lit != "false") {
+                        LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.exe: option '" + key + "' must be a literal true/false (spec/23 §5.1)");
+                        return;
+                    }
+                    bool on = lit == "true";
+                    if (key == "shell") ctx.exeOpts.shell = on;
+                    else if (key == "capture") ctx.exeOpts.capture = on;
+                    else ctx.exeOpts.detach = on;
+                    return;
+                }
+                llvm::Value* v = nullptr;
+                if (valExpr) {
+                    if (IRValue* iv = visitExpression(valExpr)) v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(iv));
+                } else if (resolveVariable(raw)) {
+                    VariableExpr tmp(raw);
+                    if (IRValue* iv = visitExpression(&tmp)) v = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(iv));
+                } else if (key == "timeout") {
+                    try { v = ctx.builder.getInt32(std::stoi(raw)); } catch (...) {}
+                } else if (key != "env") {
+                    v = ctx.builder.CreateGlobalStringPtr(raw);
+                }
+                if (!v) {
+                    LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.exe: cannot evaluate option '" + key + "'");
+                    return;
+                }
+                if (key == "env" && v->getType()->isStructTy()) {
+                    llvm::AllocaInst* tmp = ctx.createEntryAlloca(v->getType());
+                    ctx.builder.CreateStore(v, tmp);
+                    v = tmp;
+                }
+                if (key == "timeout" && v->getType()->isIntegerTy() && !v->getType()->isIntegerTy(32))
+                    v = ctx.builder.CreateIntCast(v, ctx.builder.getInt32Ty(), true);
+                if (key == "cwd") ctx.exeOpts.cwd = v;
+                else if (key == "env") ctx.exeOpts.env = v;
+                else if (key == "timeout") ctx.exeOpts.timeout = v;
+                else if (key == "stdout") ctx.exeOpts.stdoutPath = v;
+                else if (key == "stderr") ctx.exeOpts.stderrPath = v;
+                else ctx.exeOpts.statusFile = v;
+            };
+            for (size_t i = 1; i < call->args.size(); i++) {
+                if (auto* d = dynamic_cast<AIML::AST::DictLiteralExpr*>(call->args[i].get())) {
+                    if (!d->entriesExpr.empty())
+                        for (auto& [k, e] : d->entriesExpr) applyExeOpt(k, e.get(), "");
+                    else
+                        for (auto& [k, v] : d->entries) applyExeOpt(k, nullptr, v);
+                } else if (auto* u = dynamic_cast<AIML::AST::UnaryExpr*>(call->args[i].get())) {
+                    if (kExeOpts.count(u->op)) applyExeOpt(u->op, u->operand.get(), "");
+                }
+            }
+            if (ctx.exeOpts.capture && ctx.exeOpts.detach)
+                LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.exe: capture: true cannot be combined with detach: true "
+                    "(a detached process outlives its pipes — redirect with stdout/stderr, spec/23 §5.4)");
+            if (ctx.exeOpts.statusFile && !ctx.exeOpts.detach)
+                LOG_ERROR(ctx.fmtLoc(call->sourceNode) + "sys.exe: status_file requires detach: true (spec/23 §5.4)");
+        }
+
         // Eagerly evaluate arguments; skip option bags (DictLiteralExpr or db UnaryExpr options).
         static const std::set<std::string> kDbOpts = {
             "persist","layout","where","order_by","dir","limit","offset","path"};
