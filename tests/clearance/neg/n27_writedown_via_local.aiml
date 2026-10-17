@@ -1,0 +1,27 @@
+# SPEC: 65_symbol_clearance
+# Requires: driver
+# static-check: off
+# NEEDS: writedown
+# STATIC-CLEARANCE: on
+# NEGATIVE (spec/65 F65-34): die naheliegendste Umgehung, und darum die wichtigere Probe.
+# `tmp` traegt keine Annotation — wenn eine Lokale ohne `level:` die Herkunft vergisst, ist die
+# Regel mit einem Zwischenschritt umgangen: `tmp = read_secret()` und dann `open_log = tmp`.
+#
+# Deshalb hat eine Lokale ZWEI Bedeutungen: `level:` ist die Schranke fuer das Speichern, und
+# was sie TRAEGT, ist das Strengste, was je hineinlief — und das reist weiter.
+# EXPECT-ERROR: clearance-writedown
+- def:
+    name: read_secret
+    level: 2
+    return: i32
+    body:
+      - return: [42]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [tmp, i32, { call: [read_secret] }]
+      - decl: [open_log, i32, 0, { level: 255 }]
+      - set: [open_log, tmp]
+      - return: [0]

@@ -18,6 +18,7 @@
 #                      und `level:` in eigener Quelle ist Selbstbeglaubigung (F65-27)
 #   # NEEDS: write   -> die SCHREIBSEITE (§5b): `create_level`/`replace_level`, der
 #                      Kollisionsfehler und die Hot-Reload-Berechtigung (F65-26 … F65-32)
+#   # NEEDS: writedown -> die Write-down-Regel (F65-34), Wertfluss IM Rumpf
 #   # NEEDS: dynload -> braucht spec/29_2 §4.3 (dynamisches Nachladen).  Nicht dieses
 #                      Kapitel: `sys.bundle` kann nur eine Funktion buendeln, die der Wirt
 #                      SELBST uebersetzt hat — ein NEUER Name ist damit nicht ins Buendel
@@ -34,7 +35,7 @@ AIML="${AIML:-out/aiml/aiml}"
 ONLY="${ONLY:-}"
 STAGE="${STAGE:-step2}"
 
-rank() { case "$1" in step2) echo 1;; step3) echo 2;; session) echo 3;; guard) echo 4;; exports) echo 5;; host) echo 6;; write) echo 7;; dynload) echo 8;; *) echo 1;; esac; }
+rank() { case "$1" in step2) echo 1;; step3) echo 2;; session) echo 3;; guard) echo 4;; exports) echo 5;; host) echo 6;; write) echo 7;; writedown) echo 8;; dynload) echo 9;; *) echo 1;; esac; }
 WANT=$(rank "$STAGE")
 
 session_env() {

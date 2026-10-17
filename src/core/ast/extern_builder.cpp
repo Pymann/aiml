@@ -42,15 +42,21 @@ static void commitFunc(ExternBlock* block, ExternFuncDecl& f) {
     if (!f.name.empty() && aiml::clearance::restricted() &&
         !aiml::clearance::exportReachable(f.name)) {
         const int lvl = aiml::clearance::exportedLevel(f.name);
-        const std::string why =
-            (lvl == aiml::clearance::kAbsent)
-                ? std::string("der Wirt bietet diesen Namen nicht an")
-                : ("Level " + std::to_string(lvl) + " liegt unter der Freigabe " +
-                   std::to_string(aiml::clearance::sessionClearance()));
-        LOG_ERROR("clearance-extern: `extern` auf '" + f.name + "' ist nicht zugelassen — " +
-                  why + ".  Eine eingeschraenkte Sitzung darf nur Namen aus der "
-                  "Export-Tabelle des Wirts deklarieren (spec/65 F65-13); `extern` umgeht "
-                  "sonst jede Symboltabelle des Uebersetzers von Bauart.");
+        if (lvl == aiml::clearance::kAbsent) {
+            // Der Wirt bietet den Namen nicht an: das ist die `extern`-Zulassung (F65-13).
+            LOG_ERROR("clearance-extern: `extern` auf '" + f.name + "' ist nicht zugelassen — "
+                      "der Wirt bietet diesen Namen nicht an.  Eine eingeschraenkte Sitzung "
+                      "darf nur Namen aus der Export-Tabelle deklarieren (spec/65 F65-13); "
+                      "`extern` umgeht sonst jede Symboltabelle des Uebersetzers von Bauart.");
+        } else {
+            // Angeboten, aber ueber der Freigabe: das ist die ZUGRIFFSpruefung, und F65-12
+            // verlangt, dass sie als VERWEIGERUNG erscheint — nicht unter einer zweiten
+            // Kennung, nur weil der Weg hierher eine Deklaration war.
+            LOG_ERROR("clearance-denied: `" + f.name + "` liegt auf Level " +
+                      std::to_string(lvl) + ", diese Sitzung hat Freigabe " +
+                      std::to_string(aiml::clearance::sessionClearance()) +
+                      " (spec/65 F65-4: erreichbar ist nur, was `Freigabe <= Level` erfuellt).");
+        }
     }
     if (!f.name.empty())
         block->funcs.push_back(f);
