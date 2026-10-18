@@ -2767,9 +2767,8 @@ static bool modelsInheritanceRelated(CompilerContext& ctx, const std::string& a,
 // would be treated as owned and freed on drop/reassign (the test_model / db-reopen double-free
 // class). Scoped to KNOWN borrow-returning receivers so a user method named `get` is not caught.
 // Returns true (and reports) when `value` is such a read.
-bool Compiler::rejectPtrBindOfBorrow(Expr* value, const std::string& varName, const std::string& ptrType,
-                                     const YAML::Node& where) {
-    std::string meth, recv, rt;
+bool Compiler::borrowReadInfo(Expr* value, std::string& meth, std::string& recv) {
+    meth.clear(); recv.clear();
     if (auto* ce = dynamic_cast<CallExpr*>(value)) {
         const std::string& fn = ce->functionName;
         size_t dp = fn.rfind('.');
@@ -2784,14 +2783,29 @@ bool Compiler::rejectPtrBindOfBorrow(Expr* value, const std::string& varName, co
                 if (cv->name.find('.') == std::string::npos) { meth = "at"; recv = cv->name; }
     }
     if (meth.empty()) return false;
+    std::string rt;
     if (recv == "yaml") rt = "yaml";   // builtin namespace: yaml.get → node view (borrow)
     else if (Symbol* rs = resolveVariable(recv)) rt = rs->typeName;
+    // Scoped to KNOWN borrow-returning receivers so a user method happening to be named
+    // `get` is not caught.
     bool borrowSource = rt == "yaml"
         || rt.rfind("list<", 0) == 0 || rt.rfind("map<", 0) == 0
         || rt.rfind("cascade<", 0) == 0 || rt.rfind("array<", 0) == 0
         || rt.rfind("Kv<", 0) == 0 || rt.rfind("Store<", 0) == 0
         || rt.rfind("TimeSeries<", 0) == 0 || rt == "VecStore";
-    if (!borrowSource) return false;
+    if (!borrowSource) { meth.clear(); recv.clear(); return false; }
+    return true;
+}
+
+bool Compiler::isContainerBorrowRead(Expr* value) {
+    std::string meth, recv;
+    return borrowReadInfo(value, meth, recv);
+}
+
+bool Compiler::rejectPtrBindOfBorrow(Expr* value, const std::string& varName, const std::string& ptrType,
+                                     const YAML::Node& where) {
+    std::string meth, recv;
+    if (!borrowReadInfo(value, meth, recv)) return false;
     std::string inner = ptrType.substr(4, ptrType.size() - 5);
     LOG_ERROR(ctx.fmtLoc(where) + "'" + varName + "' binds a "
         "'" + meth + "' read to ptr<" + inner + ">, but '" + meth + "' yields a "
@@ -4150,9 +4164,20 @@ void Compiler::visitSetStmt(SetStmt* setStmt) {
                 // the parent's decref frees a string still owned elsewhere (the do_deal_damage
                 // `mst.source_iid = ctx.source_iid` premature-free: mst's decref freed ctx's iid, so
                 // the next effect's read saw garbage). OFF: isRefcountModel=false → v1 condition.
+                // spec/61 §5.4: the same applies to a container/store READ (`map.get`,
+                // `list.at`, `kv.get`, …).  It is a CALL, so the VariableExpr test below misses
+                // it, and the "a call result is a fresh owned temp that transfers its single
+                // reference" assumption is wrong for it: the container keeps the only ownership.
+                // Without an incref the field dangles as soon as the source container is released
+                // (aidoc: `set: [entry.name, { call: [methods.get, last] }]` printed a chart id
+                // out of the reused block).  An owned temp is never incref'd — it is in the
+                // statement-temp list, which the borrow read is not.
+                bool borrowReadSrc = isContainerBorrowRead(setStmt->value.get())
+                    && !inStringTempStack(ctx, static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val)));
                 if (finalTypeName == "string"
-                    && dynamic_cast<VariableExpr*>(setStmt->value.get())
-                    && (memberDeepCopy || srcIsManagedString || ctx.isRefcountModel(sym->typeName))) {
+                    && ((dynamic_cast<VariableExpr*>(setStmt->value.get())
+                         && (memberDeepCopy || srcIsManagedString || ctx.isRefcountModel(sym->typeName)))
+                        || borrowReadSrc)) {
                     llvm::Value* sv = static_cast<llvm::Value*>(ctx.ir_gen->unwrap(val));
                     if (sv && sv->getType()->isPointerTy()) {
                         llvm::Type* i8p = llvm::PointerType::get(ctx.context, 0);

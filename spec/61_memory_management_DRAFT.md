@@ -1196,6 +1196,15 @@ array element) copied **per its class**:
 - a **nested aggregate** member (`array<U:N>`, a value model/struct) recurses into **this** same
   rule.
 
+**Storing into a field.** A field store makes the field an owner of what it holds, so the
+source decides what the store emits: a **borrow** is shared (**incref**), a freshly produced
+value **transfers** its single reference. Borrowed sources are a named local, a parameter, a
+field — **and a container/store read** (`map.get`, `list.at`, `kv.get`, §5.4). The read is the
+one that is easy to miss, because it *looks* like a producing call while the container keeps
+the only ownership: a field that stores it without increfing dangles the moment the container
+is released. Produced sources (string interpolation, a `producer` call, §9.2) must **not** be
+incref'd — that would leak the transferred reference.
+
 **Move-only propagation (the composition).** An aggregate is **copyable** iff **every** member
 is copyable; it is **move-only** if **any** member is move-only (`ptr<T>`, a by-value Class-4
 resource, or a move-only nested aggregate). Drop releases every member per its class,
