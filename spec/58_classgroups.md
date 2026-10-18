@@ -236,7 +236,7 @@ cycles need no diagnostic.  Covers same-group and cross-group
 (`subgroup.instance`) edges.
 
 **sees onto a base member (base-typed).**  If a sees target's name matches a
-member the base class **already declares** (`Consumer` has `dep: ptr<Dep>` and
+member the base class **already declares** (`Consumer` has `dep: ref<Dep>` and
 `sees: [dep]`), the classgroup wires that existing member instead of synthesizing
 a subclass-typed one.  That member keeps its declared (base) type, so this is the
 path for ordinary **base methods** that use `<.dep` (a base method is compiled
@@ -244,8 +244,18 @@ against the base class and cannot see a subclass-synthesized member).  Use this
 when the collaboration lives in base methods; use a synthesized subclass-typed
 member (above) when it lives in group `functions`.
 
+**The wired base member is a BORROW — declare it `ref<T>`, never `ptr<T>`.**  The
+group owns its instances and releases them when the group is freed; a `ptr<T>`
+member is a *unique owner* (spec/61 §5.2), so the same instance would be released
+twice — a double free in `aiml_ser_free_decoded` at `free: <group>`.  Ownership is
+carried by the **type**, and wiring does not change it (spec/61 §9): a collaborator
+borrows.  The compiler rejects an owning `ptr<T>` member as a `sees` target and names
+the `ref<T>` form in the diagnostic.  (Synthesized edges — the `sees` targets with no
+matching base member — are generated as collaborators and are exempt: they are never
+released and never serialized, §9.)
+
 **sees onto a base member.**  If a sees target's name matches a member the base
-class **already declares** (e.g. `Consumer` has `dep: ptr<Dep>` and `sees: [dep]`),
+class **already declares** (e.g. `Consumer` has `dep: ref<Dep>` and `sees: [dep]`),
 the classgroup **wires that existing member** in phase 1 instead of synthesizing a
 new one.  This lets ordinary **base methods** use the collaborator via `<.dep` —
 the shape the real 9rooms `MatchService` needs (base methods use `<.cards_ref`
