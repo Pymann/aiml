@@ -504,7 +504,8 @@ namespace ListImpl {
         return ctx.builder.CreateLoad(ctx.builder.getInt32Ty(), cntVar, "lcnt_result");
     }
 
-    void extend(CompilerContext& ctx, llvm::Value* dstPtr, llvm::Value* srcPtr, llvm::Type* elemType) {
+    void extend(CompilerContext& ctx, llvm::Value* dstPtr, llvm::Value* srcPtr, llvm::Type* elemType,
+                const char* retainFnName, llvm::Value* serNodes, int32_t serNodesCount) {
         llvm::Function* pf = ctx.builder.GetInsertBlock()->getParent();
         // Snapshot src length BEFORE any push: self.extend(self) must append only
         // the ORIGINAL elements, and push may realloc.  get()/push re-load the
@@ -521,6 +522,18 @@ namespace ListImpl {
         ctx.builder.CreateCondBr(ctx.builder.CreateICmpSLT(iVal, srcLen), body, exit);
         ctx.builder.SetInsertPoint(body);
         llvm::Value* elem = get(ctx, srcPtr, iVal, elemType);   // by-value copy
+        // The copy is a second owner of the same referent: without this incref the appended
+        // element dangles as soon as the source list is released (spec/61 §5.4).
+        if (retainFnName) {
+            auto* i8p = llvm::PointerType::get(ctx.context, 0);
+            ctx.builder.CreateCall(ctx.getFunction(retainFnName, ctx.builder.getVoidTy(), {i8p}), { elem });
+        } else if (serNodes && serNodesCount > 0) {
+            auto* i8p = llvm::PointerType::get(ctx.context, 0);
+            llvm::Value* slot = getElementPtr(ctx, srcPtr, iVal, elemType);
+            ctx.builder.CreateCall(ctx.getFunction("aiml_ser_retain", ctx.builder.getVoidTy(),
+                {i8p, i8p, ctx.builder.getInt32Ty()}),
+                { slot, serNodes, ctx.builder.getInt32(serNodesCount) });
+        }
         push(ctx, dstPtr, elem);
         ctx.builder.CreateStore(ctx.builder.CreateAdd(iVal, ctx.builder.getInt32(1)), iVar);
         ctx.builder.CreateBr(head);

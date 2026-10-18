@@ -13,6 +13,41 @@
             - call: [sys.exit, 1]
 
 - def:
+    name: check_str
+    args: [[label, string], [got, string], [want, string]]
+    body:
+      - if:
+          condition: { neq: [got, want] }
+          then:
+            - print: ["FAIL ${label}: got '${got}' want '${want}'"]
+            - call: [sys.exit, 1]
+
+# Fuellt eine lokale Liste und haengt sie an `dst`; die Quelle stirbt beim Rueckkehren.
+- def:
+    name: fill_and_extend
+    args: [[dst, list<string>]]
+    body:
+      - decl: [tmp, list<string>]
+      - call: [tmp.push, "alpha_value"]
+      - call: [tmp.push, "beta_value"]
+      - call: [dst.extend, tmp]
+
+# Allokiert kraeftig, damit ein freigegebener Block wiederverwendet wuerde.
+- def:
+    name: churn_heap
+    return: string
+    body:
+      - decl: [sink, string, ""]
+      - decl: [cdx, i32, 0]
+      - while:
+          condition: { lt: [cdx, 60] }
+          body:
+            - decl: [tmp, string, "filler_${cdx}_xxxxxxxx"]
+            - set: [sink, tmp]
+            - set: [cdx, { +: [cdx, 1] }]
+      - return: sink
+
+- def:
     name: main
     return: i32
     body:
@@ -86,6 +121,17 @@
       - call: [check, "self_1", { at: [self_e, 1] }, 8]
       - call: [check, "self_2", { at: [self_e, 2] }, 7]
       - call: [check, "self_3", { at: [self_e, 3] }, 8]
+
+      # ── extend mit String-Elementen: die Kopien muessen MITBESITZEN ──
+      # spec/10 "value-copies" + spec/61 §5.4: ohne incref haelt das Ziel nach dem
+      # Scope-Ende der Quelle freigegebene Zeiger (use-after-free, erst unter valgrind
+      # sichtbar — der Inhalt steht zufaellig noch da).
+      - decl: [kept, list<string>]
+      - call: [fill_and_extend, kept]
+      - decl: [churned, string, { call: [churn_heap] }]
+      - call: [check, "ext_str_len", kept.len, 2]
+      - call: [check_str, "ext_str_0", { at: [kept, 0] }, "alpha_value"]
+      - call: [check_str, "ext_str_1", { at: [kept, 1] }, "beta_value"]
 
       # ── M2: reverse ──
       - decl: [rv0, list<i32>]

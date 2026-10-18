@@ -2583,9 +2583,29 @@ IRValue* Compiler::visitObjectMethodCall(const std::string& baseName, const std:
                      ", got " + argTypeName);
                  return nullptr;
              }
+             // Same co-ownership rule as slice (spec/61 §5.4): rc-bearing elements are
+             // incref'd, an inline value model is retained member-wise via its ser nodes.
+             const char* extRetainFn = nullptr;
+             if (listElemName == "string")                       extRetainFn = "aiml_str_incref";
+             else if (ctx.isRefcountModel(listElemName))         extRetainFn = "aiml_model_incref";
+             else if (ctx.memV3 && (listElemName.rfind("list<", 0) == 0
+                                    || listElemName.rfind("cascade<", 0) == 0)) extRetainFn = "aiml_list_handle_incref";
+             else if (ctx.memV3 && listElemName.rfind("map<", 0) == 0)          extRetainFn = "aiml_map_handle_incref";
+             else if (ctx.memV3 && (listElemName == "buffer"
+                                    || listElemName.rfind("buffer<", 0) == 0))  extRetainFn = "aiml_buffer_handle_incref";
+             llvm::Value* extSerNodes = nullptr;
+             int32_t extSerCount = 0;
+             if (!extRetainFn) {
+                 auto eci = ctx.classes.find(listElemName);
+                 if (eci != ctx.classes.end() && eci->second.hasHeapFields && eci->second.serNodesVar
+                     && eci->second.type && !ctx.isRefcountModel(listElemName)) {
+                     extSerNodes = eci->second.serNodesVar;
+                     extSerCount = eci->second.serNodesCount;
+                 }
+             }
              ListImpl::extend(ctx,
                  static_cast<llvm::Value*>(ctx.ir_gen->unwrap(baseAlloca)),
-                 srcPtr, llvmListElemType);
+                 srcPtr, llvmListElemType, extRetainFn, extSerNodes, extSerCount);
              return nullptr;
          }
          else if (methodName == "reverse" || methodName == "shuffle") {
