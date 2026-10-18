@@ -46,7 +46,14 @@ namespace ListImpl {
                          llvm::Type* elemType, const std::string& elemTypeName);
     llvm::Value* count(CompilerContext& ctx, llvm::Value* listPtr, llvm::Value* needle,
                        llvm::Type* elemType, const std::string& elemTypeName);
-    void extend(CompilerContext& ctx, llvm::Value* dstPtr, llvm::Value* srcPtr, llvm::Type* elemType);
+    // retainFnName/serNodes (spec/10 "value-copies" + spec/61 §5.4): the appended copies must
+    // CO-OWN each rc-bearing element, exactly as `slice` does — pass the element's incref
+    // (aiml_str_incref / aiml_model_incref / aiml_{list,map,buffer}_handle_incref), or, for an
+    // inline value model, its ser-node descriptor so each copied struct's heap fields are retained.
+    // Both nullptr = scalar elements (no retain).
+    void extend(CompilerContext& ctx, llvm::Value* dstPtr, llvm::Value* srcPtr, llvm::Type* elemType,
+                const char* retainFnName = nullptr, llvm::Value* serNodes = nullptr,
+                int32_t serNodesCount = 0);
     // M2: in-place ordering.  sortList = stable insertion sort (ascending or
     // descending); shuffle = Fisher-Yates via aiml_math_random_int.
     void reverse(CompilerContext& ctx, llvm::Value* listPtr, llvm::Type* elemType);

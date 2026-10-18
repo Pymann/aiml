@@ -42,6 +42,11 @@
 - call: [scores.extend, more]    # append value-copies of another list<i32>
                                  # (self.extend(self) is defined; realloc-safe).
                                  # A different list<U> is a compile error.
+                                 # Refcounted elements (string, Modelle, verschachtelte
+                                 # Container) werden MIT-BESESSEN: jede angehaengte Kopie
+                                 # bekommt ein incref (spec/61 §5.4), wie bei `slice`.
+                                 # Sonst haelt das Ziel freigegebene Zeiger, sobald die
+                                 # Quelle stirbt.
 - call: [scores.reverse]         # in-place reverse
 - call: [scores.sort]            # in-place ascending, stable insertion sort
 - call: [scores.sort_desc]       # in-place descending
