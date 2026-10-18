@@ -124,14 +124,18 @@ extern "C" int32_t aiml_yaml_tokens(const char* text, void* out_list) {
                 key_done = true;
                 continue;
             }
+            /* '-' direkt vor einer Ziffer gehoert zur Zahl, nicht zum Strich. */
+            bool neg = false;
             if (is_punct(c)) {
-                /* '-' direkt vor einer Ziffer gehoert zur Zahl, nicht zum Strich. */
-                bool neg = (c == '-' && p + 1 < line_end &&
-                            src[(size_t)p+1] >= '0' && src[(size_t)p+1] <= '9');
+                neg = (c == '-' && p + 1 < line_end &&
+                       src[(size_t)p+1] >= '0' && src[(size_t)p+1] <= '9');
                 if (!neg) { emit(out, p, 1, kTokPunct); ++p; continue; }
             }
-            /* Skalar bis zum naechsten Trenner. */
+            /* Skalar bis zum naechsten Trenner.  Das fuehrende '-' einer negativen
+               Zahl wird mitgenommen — sonst steht die Schleife (es ist Interpunktion)
+               und die aeussere Schleife liest dasselbe Zeichen endlos erneut. */
             int32_t st = p;
+            if (neg) ++p;
             while (p < line_end && !is_punct(src[(size_t)p]) && src[(size_t)p] != '#') ++p;
             int32_t e = p;
             while (e > st && (src[(size_t)e-1] == ' ' || src[(size_t)e-1] == '\t')) --e;
