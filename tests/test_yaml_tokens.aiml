@@ -1,0 +1,124 @@
+# SPEC: 60_yaml
+# spec/60 yaml.tokens — fehlertoleranter Lexer fuer Hervorhebung.
+# Geprueft wird vor allem der VERTRAG: vollstaendig, ueberschneidungsfrei,
+# zeilenlokal, und niemals ein Fehlschlag — denn der halb getippte Zustand ist
+# der Normalfall, nicht der Ausnahmefall.
+# Expected exit code: 0
+
+- def:
+    name: expect
+    args: [[what, string], [cond, i32]]
+    return: i32
+    body:
+      - if:
+          condition: { eq: [cond, 1] }
+          then: [{ print: ["  ok   ${what}"] }, { return: 0 }]
+      - print: ["  FAIL ${what}"]
+      - return: 1
+
+# kind_at: die Art des Tokens, das Byte `pos` enthaelt; -1 wenn keines.
+- def:
+    name: kind_at
+    args: [[toks, list<i32>], [pos, i32]]
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, toks.len] }
+          body:
+            - decl: [beg, i32, { at: [toks, idx] }]
+            - decl: [tln, i32, { at: [toks, { +: [idx, 1] }] }]
+            - if:
+                condition: { '&&': [{ ge: [pos, beg] }, { lt: [pos, { +: [beg, tln] }] }] }
+                then: [{ return: { at: [toks, { +: [idx, 2] }] } }]
+            - set: [idx, { +: [idx, 3] }]
+      - return: -1
+
+# covered: Summe der Token-Laengen plus Zwischenraum muss den Text ergeben;
+# zugleich duerfen sich Tokens nicht ueberschneiden und nicht rueckwaerts gehen.
+- def:
+    name: covered_ok
+    args: [[toks, list<i32>], [total, i32]]
+    return: i32
+    body:
+      - decl: [idx, i32, 0]
+      - decl: [prev_end, i32, 0]
+      - while:
+          condition: { lt: [idx, toks.len] }
+          body:
+            - decl: [beg, i32, { at: [toks, idx] }]
+            - decl: [tln, i32, { at: [toks, { +: [idx, 1] }] }]
+            - if: { condition: { lt: [beg, prev_end] }, then: [{ return: 0 }] }
+            - if: { condition: { le: [tln, 0] }, then: [{ return: 0 }] }
+            - if: { condition: { gt: [{ +: [beg, tln] }, total] }, then: [{ return: 0 }] }
+            - set: [prev_end, { +: [beg, tln] }]
+            - set: [idx, { +: [idx, 3] }]
+      - return: 1
+
+- def:
+    name: main
+    static_off: ["str_cmp"]
+    return: i32
+    body:
+      - decl: [fails, i32, 0]
+
+      # ── Grundfall: Schluessel, Wert, Kommentar ───────────────────────────
+      - decl: [src, string, "name: build_matrix  # ein Kommentar\n"]
+      - decl: [toks, list<i32>, { call: [yaml.tokens, src] }]
+      - set: [fails, { +: [fails, { call: [expect, "Tripel-Vielfaches von 3", { eq: [{ '%': [toks.len, 3] }, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "ueberschneidungsfrei und in Reihenfolge", { call: [covered_ok, toks, src.len] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "'name' ist ein Schluessel", { eq: [{ call: [kind_at, toks, 0] }, YamlTok.key] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "':' ist Interpunktion", { eq: [{ call: [kind_at, toks, 4] }, YamlTok.punct] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "'#' beginnt einen Kommentar", { eq: [{ call: [kind_at, toks, 20] }, YamlTok.comment] }] }] }]
+
+      # ── Zeilenlokal: kein Token ueberspannt ein \n ───────────────────────
+      - decl: [two, string, "a: 1\nb: 2\n"]
+      - decl: [tk2, list<i32>, { call: [yaml.tokens, two] }]
+      - set: [fails, { +: [fails, { call: [expect, "kein Token am \\n (Zeile 1 endet)", { eq: [{ call: [kind_at, tk2, 4] }, -1] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "zweite Zeile hat eigenen Schluessel", { eq: [{ call: [kind_at, tk2, 5] }, YamlTok.key] }] }] }]
+
+      # ── Fehlertoleranz: abgeschnittener Schluessel ──────────────────────
+      # Der haeufigste Zustand waehrend des Tippens.  Ein Parser liefert hier
+      # NICHTS; der Lexer muss trotzdem faerben.
+      - decl: [half, string, "pipeline:\n  nam"]
+      - decl: [tk3, list<i32>, { call: [yaml.tokens, half] }]
+      - set: [fails, { +: [fails, { call: [expect, "halber Text liefert Tokens", { gt: [tk3.len, 0] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "halber Text bleibt ueberschneidungsfrei", { call: [covered_ok, tk3, half.len] }] }] }]
+
+      # ── Fehlertoleranz: nicht geschlossener String ──────────────────────
+      - decl: [unq, string, "name: \"offen\nnext: 1\n"]
+      - decl: [tk4, list<i32>, { call: [yaml.tokens, unq] }]
+      - set: [fails, { +: [fails, { call: [expect, "offener String endet an der Zeile", { eq: [{ call: [kind_at, tk4, 6] }, YamlTok.string] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "naechste Zeile wird wieder normal gelesen", { eq: [{ call: [kind_at, tk4, 13] }, YamlTok.key] }] }] }]
+
+      # ── Leerer Text ist kein Fehler ─────────────────────────────────────
+      - decl: [tk5, list<i32>, { call: [yaml.tokens, ""] }]
+      - set: [fails, { +: [fails, { call: [expect, "leerer Text liefert leere Liste", { eq: [tk5.len, 0] }] }] }]
+
+      # ── Arten ───────────────────────────────────────────────────────────
+      - decl: [kinds, string, "- [a, 1, true, 'q', &anc, !tag]\n"]
+      - decl: [tk6, list<i32>, { call: [yaml.tokens, kinds] }]
+      - set: [fails, { +: [fails, { call: [expect, "Zahl erkannt", { eq: [{ call: [kind_at, tk6, 6] }, YamlTok.number] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "Schluesselwort erkannt", { eq: [{ call: [kind_at, tk6, 9] }, YamlTok.keyword] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "einfache Anfuehrung erkannt", { eq: [{ call: [kind_at, tk6, 15] }, YamlTok.string] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "Anker erkannt", { eq: [{ call: [kind_at, tk6, 20] }, YamlTok.anchor] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "Tag erkannt", { eq: [{ call: [kind_at, tk6, 26] }, YamlTok.tag] }] }] }]
+
+      # ── Negative Zahl ───────────────────────────────────────────────────
+      # Regression: der Skalar-Zweig ruecke bei fuehrendem '-' nicht vor (das '-'
+      # ist Interpunktion) und drehte endlos — jede Quelle mit `-1` liess den
+      # Lexer haengen, entgegen dem "Never fails"-Vertrag von spec/60.
+      - decl: [negs, string, "gt: [open, -1]\n"]
+      - decl: [tk7, list<i32>, { call: [yaml.tokens, negs] }]
+      - set: [fails, { +: [fails, { call: [expect, "negative Zahl erkannt", { eq: [{ call: [kind_at, tk7, 11] }, YamlTok.number] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "negative Zahl: Ziffer gehoert zum Token", { eq: [{ call: [kind_at, tk7, 12] }, YamlTok.number] }] }] }]
+      - set: [fails, { +: [fails, { call: [expect, "negative Zahl: ueberschneidungsfrei", { call: [covered_ok, tk7, negs.len] }] }] }]
+      - decl: [bare, string, "-1\n"]
+      - decl: [tk8, list<i32>, { call: [yaml.tokens, bare] }]
+      - set: [fails, { +: [fails, { call: [expect, "blosses -1 liefert ein Token", { eq: [{ call: [kind_at, tk8, 0] }, YamlTok.number] }] }] }]
+
+      - if:
+          condition: { neq: [fails, 0] }
+          then: [{ print: ["test_yaml_tokens FAIL (${fails})"] }, { return: 1 }]
+      - print: ["test_yaml_tokens PASS"]
+      - return: 0
