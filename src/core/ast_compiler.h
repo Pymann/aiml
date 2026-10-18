@@ -188,6 +188,13 @@ private:
     IRValue* visitCast(BinaryExpr* bin);
     bool rejectPtrBindOfBorrow(Expr* value, const std::string& varName, const std::string& ptrType,
                                const YAML::Node& where);
+    // spec/61 §5.4: is `value` a container/store READ (`get`/`at`/`first`/`last` on
+    // list/map/cascade/array/Kv/Store/TimeSeries/VecStore/yaml)?  Such a read hands back a
+    // BORROW — the container keeps the only ownership — so a sink that will release the value
+    // itself has to take its own reference.  `borrowReadInfo` also reports method + receiver
+    // for diagnostics.
+    bool borrowReadInfo(Expr* value, std::string& meth, std::string& recv);
+    bool isContainerBorrowRead(Expr* value);
     IRValue* visitUnary(UnaryExpr* unary);
     IRValue* visitSpawn(SpawnExpr* spawn);
 

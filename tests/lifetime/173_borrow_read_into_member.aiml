@@ -1,0 +1,147 @@
+# SPEC: 61_memory_management_DRAFT
+# static-check: off
+# spec/61 §5.4 + §7: ein Container-/Store-LESEN (`get`/`at`/`first`/`last`) liefert einen
+# BORROW — der Container behaelt das Eigentum.  Wird so ein Borrow in eine Senke gelegt, die
+# ihn spaeter selbst freigibt (Modellfeld, Listenelement, Map-Wert), muss die Senke eine
+# EIGENE Referenz nehmen (incref).  Sonst haelt sie freigegebenen Speicher, sobald der
+# Quell-Container stirbt — ein use-after-free, der meist unsichtbar bleibt, weil der Inhalt
+# noch dasteht.  Darum liegt zwischen Quelltod und Pruefung Heap-Churn.
+#
+# Gegenprobe im selben Lauf: eine OWNED Quelle (Interpolation, Literal) darf NICHT zusaetzlich
+# increft werden — sie uebertraegt ihre einzige Referenz.  Das prueft hier der Inhalt; ein
+# falsches incref wuerde als Leck auffallen (Leak-Gate), nicht als falscher Text.
+
+- model:
+    name: Rec
+    fields:
+      - [name, string, ""]
+
+# Allokiert kraeftig, damit ein freigegebener Block wiederverwendet wuerde.
+- def:
+    name: churn
+    return: i32
+    body:
+      - decl: [sink, string, ""]
+      - decl: [idx, i32, 0]
+      - while:
+          condition: { lt: [idx, 60] }
+          body:
+            - decl: [tmp, string, "filler_${idx}_xxxxxxxxxxxx"]
+            - set: [sink, tmp]
+            - set: [idx, { +: [idx, 1] }]
+      - return: sink.len
+
+# 1) map.get -> Modellfeld
+- def:
+    name: map_into_field
+    static_off: ["same_arg"]
+    args: [[recs, list<Rec>]]
+    body:
+      - decl: [names, map<string:string>]
+      - call: [names.put, "key", "map_value"]
+      - decl: [rec, Rec]
+      - set: [rec.name, { call: [names.get, "key"] }]
+      - call: [recs.push, rec]
+
+# 2) list.at -> Modellfeld
+- def:
+    name: list_into_field
+    static_off: ["same_arg"]
+    args: [[recs, list<Rec>]]
+    body:
+      - decl: [words, list<string>]
+      - call: [words.push, "list_value"]
+      - decl: [rec, Rec]
+      - set: [rec.name, { at: [words, 0] }]
+      - call: [recs.push, rec]
+
+# 3) map.get -> list.push
+- def:
+    name: map_into_list
+    static_off: ["same_arg"]
+    args: [[out, list<string>]]
+    body:
+      - decl: [names, map<string:string>]
+      - call: [names.put, "key", "pushed_value"]
+      - call: [out.push, { call: [names.get, "key"] }]
+
+# 4) map.get -> idx: (Listenelement ueberschreiben)
+- def:
+    name: map_into_idx
+    static_off: ["same_arg"]
+    args: [[out, list<string>]]
+    body:
+      - decl: [names, map<string:string>]
+      - call: [names.put, "key", "indexed_value"]
+      - call: [out.push, "placeholder"]
+      - idx: [out, { -: [out.len, 1] }, { call: [names.get, "key"] }]
+
+# 5) map.get -> map.put (andere Map)
+- def:
+    name: map_into_map
+    args: [[out, map<string:string>]]
+    body:
+      - decl: [names, map<string:string>]
+      - call: [names.put, "key", "copied_value"]
+      - call: [out.put, "key", { call: [names.get, "key"] }]
+
+# 6) Gegenprobe: OWNED Quellen (Interpolation, Literal) ins Modellfeld
+- def:
+    name: owned_into_field
+    static_off: ["same_arg"]
+    args: [[recs, list<Rec>]]
+    body:
+      - decl: [part, string, "owned"]
+      - decl: [rec, Rec]
+      - set: [rec.name, "${part}_value"]
+      - call: [recs.push, rec]
+      - decl: [lit, Rec]
+      - set: [lit.name, "literal_value"]
+      - call: [recs.push, lit]
+
+- def:
+    name: expect
+    args: [[label, string], [got, string], [want, string]]
+    return: i32
+    body:
+      - if:
+          condition: { neq: [got, want] }
+          then:
+            - print: ["FAIL ${label}: got '${got}' want '${want}'"]
+            - return: 1
+      - return: 0
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [recs, list<Rec>]
+      - call: [map_into_field, recs]
+      - call: [list_into_field, recs]
+      - call: [owned_into_field, recs]
+      - decl: [words, list<string>]
+      - call: [map_into_list, words]
+      - decl: [slots, list<string>]
+      - call: [map_into_idx, slots]
+      - decl: [copies, map<string:string>]
+      - call: [map_into_map, copies]
+      # Die Quell-Container sind tot; jetzt den Heap umwaelzen.
+      - decl: [burned, i32, { call: [churn] }]
+      - decl: [fails, i32, 0]
+      - decl: [rec0, Rec, { at: [recs, 0] }]
+      - set: [fails, { +: [fails, { call: [expect, "map.get -> field", rec0.name, "map_value"] }] }]
+      - decl: [rec1, Rec, { at: [recs, 1] }]
+      - set: [fails, { +: [fails, { call: [expect, "list.at -> field", rec1.name, "list_value"] }] }]
+      - decl: [rec2, Rec, { at: [recs, 2] }]
+      - set: [fails, { +: [fails, { call: [expect, "interpolation -> field", rec2.name, "owned_value"] }] }]
+      - decl: [rec3, Rec, { at: [recs, 3] }]
+      - set: [fails, { +: [fails, { call: [expect, "literal -> field", rec3.name, "literal_value"] }] }]
+      - decl: [pushed, string, { at: [words, 0] }]
+      - set: [fails, { +: [fails, { call: [expect, "map.get -> push", pushed, "pushed_value"] }] }]
+      - decl: [indexed, string, { at: [slots, 0] }]
+      - set: [fails, { +: [fails, { call: [expect, "map.get -> idx", indexed, "indexed_value"] }] }]
+      - decl: [copied, string, { call: [copies.get, "key"] }]
+      - set: [fails, { +: [fails, { call: [expect, "map.get -> map.put", copied, "copied_value"] }] }]
+      - if: { condition: { neq: [fails, 0] }, then: [{ print: ["173_borrow_read_into_member FAIL (${fails})"] }, { return: 1 }] }
+      - print: ["173_borrow_read_into_member PASS"]
+      - return: 0
