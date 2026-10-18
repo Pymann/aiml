@@ -3126,8 +3126,25 @@ void Compiler::synthesizeClassGroups(Program* prog) {
                 // duplicate — so ordinary base methods can use the collaborator via
                 // `<.name` (spec/58 §5.1).  Only for concrete edges.
                 if (iface.empty() && ctx.classes.count(inst.className) &&
-                    ctx.classes[inst.className].members.count(mName))
+                    ctx.classes[inst.className].members.count(mName)) {
+                    // The wired member is a BORROW: the group owns its instances and releases
+                    // them at `free: <group>`.  An owning `ptr<T>` member would release the same
+                    // instance a second time — a double free in aiml_ser_free_decoded (spec/58
+                    // §5.1, spec/61 §5.2: ownership is carried by the type, wiring never changes
+                    // it).  A synthesized edge is marked is_collaborator and exempt; an existing
+                    // base member keeps its declared type, so it must be declared as a borrow.
+                    const std::string& wiredType = ctx.classes[inst.className].members[mName].typeName;
+                    if (wiredType.rfind("ptr<", 0) == 0 && wiredType.back() == '>') {
+                        std::string inner = wiredType.substr(4, wiredType.size() - 5);
+                        LOG_ERROR(ctx.fmtLoc() + "classgroup '" + g->name + "': instance '" +
+                            inst.instanceName + "' sees '" + s + "', which wires the existing member '" +
+                            mName + ": " + wiredType + "' of class '" + inst.className + "'. A sees edge is a "
+                            "BORROWED collaborator, but ptr<" + inner + "> is a UNIQUE OWNER — the group "
+                            "already releases that instance, so freeing the group would free it twice. "
+                            "Declare the member as 'ref<" + inner + ">' (spec/58 §5.1, spec/61 §5.2).");
+                    }
                     continue;
+                }
                 StructMember m;
                 m.name = mName;
                 if (!iface.empty()) {

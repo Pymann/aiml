@@ -1,0 +1,39 @@
+# SPEC: 58_classgroups
+# Negativtest (spec/58 §5.1): ein sees-Ziel, das ein vorhandenes Basismember verdrahtet,
+# muss ein BORROW sein.  Hier ist `dep` als `ptr<Dep>` deklariert — ein Eigentuemer
+# (spec/61 §5.2).  Die Gruppe gibt ihre Instanzen selbst frei; ein zweiter Eigentuemer
+# fuehrt beim `free:` der Gruppe zum Double-Free.  Der Compiler muss das zurueckweisen.
+#
+# Expected exit code: 1
+
+- class:
+    name: Dep
+    members:
+      - [val, i32]
+    methods:
+      - def: { name: get_v, return: i32, body: [{ return: <.val }] }
+
+- class:
+    name: Consumer
+    members:
+      - [dep, ptr<Dep>]          # FEHLER: owning ptr als sees-Ziel
+    methods:
+      - def: { name: read_dep, return: i32, body: [{ return: { call: [<.dep.get_v] } }] }
+
+- classgroup:
+    name: Rtg
+    instances:
+      - class: Dep
+        instance: dep
+      - class: Consumer
+        instance: usr
+        sees: [dep]
+
+- def:
+    name: main
+    return: i32
+    body:
+      - decl: [rtg, ptr<Rtg>, { new: Rtg }]
+      - decl: [got, i32, { call: [rtg.usr.read_dep] }]
+      - free: rtg
+      - return: 0
